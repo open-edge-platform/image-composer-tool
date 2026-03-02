@@ -85,9 +85,11 @@ func executeInspect(cmd *cobra.Command, args []string) error {
 	}
 
 	inspectSBOM := extractFlagSet || resolvedSBOMOutPath != ""
-	inspector := newInspector(false)
+	var inspector inspector
 	if inspectSBOM {
 		inspector = newInspectorWithSBOM(false, true)
+	} else {
+		inspector = newInspector(false)
 	}
 
 	inspectionResults, err := inspector.Inspect(imageFile)

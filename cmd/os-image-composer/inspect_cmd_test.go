@@ -297,6 +297,100 @@ func TestInspectCommand_ExtractSBOMWithoutValue(t *testing.T) {
 	}
 }
 
+func TestExecuteInspect_InspectorSelection(t *testing.T) {
+	defer resetInspectFlags()
+
+	t.Run("UsesRegularInspectorWhenExtractNotRequested", func(t *testing.T) {
+		resetInspectFlags()
+		regularCalled := false
+		sbomInspectorCalled := false
+
+		newInspector = func(hash bool) inspector {
+			regularCalled = true
+			return &fakeInspector{summary: &imageinspect.ImageSummary{File: "fake.img", SizeBytes: 1}}
+		}
+		newInspectorWithSBOM = func(hash bool, inspectSBOM bool) inspector {
+			sbomInspectorCalled = true
+			return &fakeInspector{summary: &imageinspect.ImageSummary{File: "fake.img", SizeBytes: 1}}
+		}
+
+		cmd := createInspectCommand()
+		cmd.SetOut(&bytes.Buffer{})
+		cmd.SetErr(&bytes.Buffer{})
+
+		err := executeInspect(cmd, []string{"fake.img"})
+		if err != nil {
+			t.Fatalf("expected success, got error: %v", err)
+		}
+		if !regularCalled {
+			t.Fatalf("expected regular inspector constructor to be called")
+		}
+		if sbomInspectorCalled {
+			t.Fatalf("did not expect SBOM inspector constructor when extraction not requested")
+		}
+	})
+
+	t.Run("UsesSBOMInspectorWhenExtractRequested", func(t *testing.T) {
+		resetInspectFlags()
+		tmpDir := t.TempDir()
+		outFile := filepath.Join(tmpDir, "out.json")
+
+		regularCalled := false
+		sbomInspectorCalled := false
+
+		newInspector = func(hash bool) inspector {
+			regularCalled = true
+			return &fakeInspector{summary: &imageinspect.ImageSummary{File: "fake.img", SizeBytes: 1}}
+		}
+		newInspectorWithSBOM = func(hash bool, inspectSBOM bool) inspector {
+			sbomInspectorCalled = true
+			return &fakeInspector{
+				summary: &imageinspect.ImageSummary{
+					File: "fake.img",
+					SBOM: imageinspect.SBOMSummary{
+						Present:  true,
+						FileName: "spdx_manifest_demo.json",
+						Content:  []byte(`{"packages":[]}`),
+					},
+				},
+			}
+		}
+
+		cmd := createInspectCommand()
+		cmd.SetOut(&bytes.Buffer{})
+		cmd.SetErr(&bytes.Buffer{})
+		if err := cmd.Flags().Set("extract-sbom", outFile); err != nil {
+			t.Fatalf("set extract-sbom flag: %v", err)
+		}
+
+		err := executeInspect(cmd, []string{"fake.img"})
+		if err != nil {
+			t.Fatalf("expected success, got error: %v", err)
+		}
+		if !sbomInspectorCalled {
+			t.Fatalf("expected SBOM inspector constructor to be called")
+		}
+		if regularCalled {
+			t.Fatalf("did not expect regular inspector constructor when extraction is requested")
+		}
+		if _, statErr := os.Stat(outFile); statErr != nil {
+			t.Fatalf("expected extracted SBOM file at %s: %v", outFile, statErr)
+		}
+	})
+}
+
+func TestWriteExtractedSBOM_MissingIncludesNotes(t *testing.T) {
+	err := writeExtractedSBOM(imageinspect.SBOMSummary{
+		Notes: []string{"first reason", "second reason"},
+	}, "ignored.json")
+	if err == nil {
+		t.Fatalf("expected error when SBOM is missing")
+	}
+	if !strings.Contains(err.Error(), "first reason") || !strings.Contains(err.Error(), "second reason") {
+		t.Fatalf("expected notes in error message, got: %v", err)
+	}
+}
+
 func TestExecuteInspect_DirectCall(t *testing.T) {
 	defer resetInspectFlags()
 
