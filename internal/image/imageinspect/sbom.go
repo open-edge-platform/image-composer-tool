@@ -24,7 +24,10 @@ func inspectSBOMFromImageRaw(img io.ReaderAt, pt PartitionTableSummary) SBOMSumm
 
 	for _, candidateIndex := range rootCandidates {
 		partitionSummary := pt.Partitions[candidateIndex]
-		fsType := strings.ToLower(strings.TrimSpace(partitionSummary.Filesystem.Type))
+		fsType := ""
+		if partitionSummary.Filesystem != nil {
+			fsType = strings.ToLower(strings.TrimSpace(partitionSummary.Filesystem.Type))
+		}
 
 		partOff := partitionStartOffset(pt, partitionSummary)
 		var (

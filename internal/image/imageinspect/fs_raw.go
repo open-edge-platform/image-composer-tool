@@ -494,6 +494,28 @@ func readFileFromFAT(v *fatVol, filePath string) (string, error) {
 // It finds the SBOM filename/path in a raw partition, then reads it via the
 // generic raw partition file reader.
 func readSBOMFromRawPartition(img io.ReaderAt, partOff int64, partSize uint64, fsType string) ([]byte, string, string, error) {
+	fsType = strings.ToLower(strings.TrimSpace(fsType))
+
+	if fsType == "ext4" || fsType == "ext3" || fsType == "ext2" {
+		partitionFilePath, cleanup, err := extractPartitionToTempFile(img, partOff, partSize)
+		if err != nil {
+			return nil, "", "", err
+		}
+		defer cleanup()
+
+		sbomFileName, sbomPath, err := findSBOMFileInExtPartitionImage(partitionFilePath)
+		if err != nil {
+			return nil, "", "", err
+		}
+
+		content, err := readFileFromExtPartitionImage(partitionFilePath, sbomPath)
+		if err != nil {
+			return nil, "", "", fmt.Errorf("read SBOM file %s: %w", sbomPath, err)
+		}
+
+		return content, sbomFileName, sbomPath, nil
+	}
+
 	sbomFileName, sbomPath, err := findSBOMFileInRawPartition(img, partOff, partSize, fsType)
 	if err != nil {
 		return nil, "", "", err
@@ -505,6 +527,39 @@ func readSBOMFromRawPartition(img io.ReaderAt, partOff int64, partSize uint64, f
 	}
 
 	return content, sbomFileName, sbomPath, nil
+}
+
+func findSBOMFileInExtPartitionImage(partitionFilePath string) (string, string, error) {
+	dumpDir, err := os.MkdirTemp("", "oic-sbom-rdump-*")
+	if err != nil {
+		return "", "", fmt.Errorf("create temp dump directory: %w", err)
+	}
+	defer func() {
+		_ = os.RemoveAll(dumpDir)
+	}()
+
+	rdumpCmd := fmt.Sprintf("debugfs -R 'rdump %s %s' %s", manifest.ImageSBOMPath, dumpDir, partitionFilePath)
+	if _, err = shell.ExecCmd(rdumpCmd, false, shell.HostPath, nil); err != nil {
+		return "", "", fmt.Errorf("debugfs rdump failed: %w", err)
+	}
+
+	jsonFiles := collectJSONFilesFromDir(dumpDir)
+	if len(jsonFiles) == 0 {
+		return "", "", fmt.Errorf("SBOM directory present but no SPDX JSON file found")
+	}
+
+	fileNames := make([]string, 0, len(jsonFiles))
+	for _, filePath := range jsonFiles {
+		fileNames = append(fileNames, filepath.Base(filePath))
+	}
+
+	sbomFileName, found := pickSBOMFileNameFromNames(fileNames)
+	if !found {
+		return "", "", fmt.Errorf("SBOM directory present but no SPDX JSON file found")
+	}
+
+	sbomPath := path.Join(manifest.ImageSBOMPath, sbomFileName)
+	return sbomFileName, sbomPath, nil
 }
 
 func findSBOMFileInRawPartition(img io.ReaderAt, partOff int64, partSize uint64, fsType string) (string, string, error) {
@@ -538,36 +593,7 @@ func findSBOMFileInRawPartition(img io.ReaderAt, partOff int64, partSize uint64,
 		}
 		defer cleanup()
 
-		dumpDir, err := os.MkdirTemp("", "oic-sbom-rdump-*")
-		if err != nil {
-			return "", "", fmt.Errorf("create temp dump directory: %w", err)
-		}
-		defer func() {
-			_ = os.RemoveAll(dumpDir)
-		}()
-
-		rdumpCmd := fmt.Sprintf("debugfs -R 'rdump %s %s' %s", manifest.ImageSBOMPath, dumpDir, partitionFilePath)
-		if _, err = shell.ExecCmd(rdumpCmd, false, shell.HostPath, nil); err != nil {
-			return "", "", fmt.Errorf("debugfs rdump failed: %w", err)
-		}
-
-		jsonFiles := collectJSONFilesFromDir(dumpDir)
-		if len(jsonFiles) == 0 {
-			return "", "", fmt.Errorf("SBOM directory present but no SPDX JSON file found")
-		}
-
-		fileNames := make([]string, 0, len(jsonFiles))
-		for _, filePath := range jsonFiles {
-			fileNames = append(fileNames, filepath.Base(filePath))
-		}
-
-		sbomFileName, found := pickSBOMFileNameFromNames(fileNames)
-		if !found {
-			return "", "", fmt.Errorf("SBOM directory present but no SPDX JSON file found")
-		}
-
-		sbomPath := path.Join(manifest.ImageSBOMPath, sbomFileName)
-		return sbomFileName, sbomPath, nil
+		return findSBOMFileInExtPartitionImage(partitionFilePath)
 
 	default:
 		return "", "", fmt.Errorf("filesystem %q is not supported for raw SPDX extraction yet", emptyOr(fsType, "unknown"))
