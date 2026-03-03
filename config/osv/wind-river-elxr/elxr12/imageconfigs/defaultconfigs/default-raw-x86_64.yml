@@ -81,6 +81,7 @@ systemConfig:
     - systemd-boot
     - elxr-archive-keyring
     - systemd-timesyncd
+    - efibootmgr
 
   additionalFiles:
     - local: ../additionalfiles/dhcp.network

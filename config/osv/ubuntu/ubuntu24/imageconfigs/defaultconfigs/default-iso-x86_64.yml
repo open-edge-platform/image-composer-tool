@@ -49,6 +49,7 @@ systemConfig: # Required
     - systemd
     - cryptsetup-bin
     - systemd-resolved
+    - efibootmgr
 
   additionalFiles:
     - local: ../additionalfiles/dhcp.network

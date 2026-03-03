@@ -110,6 +110,7 @@ systemConfig: # Required
     # virt-guest-packages
     - dracut-virtio
     - dracut-xen
+    - efibootmgr
 
   additionalFiles:
     - local: ../additionalfiles/99-dhcp-en.network
@@ -120,3 +121,4 @@ systemConfig: # Required
     cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
     packages:
      - kernel
+
