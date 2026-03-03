@@ -6,7 +6,7 @@ This tutorial assumes you have already built a base OS image using **OS Image Co
 ---
 
 ## 1. Prerequisites
-- Add DL Streamer and Docker based packages as part of os image composer build process using its multi repo feature 
+- Add DL Streamer and Docker based packages as part of OS Image Composer build process using its [Multiple Package Repository Support](../architecture/os-image-composer-multi-repo-support.md) feature
 - OS with Docker Engine installed via and running
 - (Optional) Corporate proxy details if you are behind a proxy
 - For DL Streamer section: Intel® DL Streamer installed under `/opt/intel/dlstreamer/`
