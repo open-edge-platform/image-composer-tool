@@ -10,7 +10,7 @@ This tutorial assumes you have already built a base OS image using **OS Image Co
 
   After the image is built and the system is booted, verify the runtime environment.
   First, confirm that Docker Engine is installed and running.
-  Next, confirm that Intel DL Streamer is installed by checking that the directory slash opt slash intel slash dlstreamer exists.
+  Next, confirm that Intel DL Streamer is installed by checking that the directory '/opt/intel/dlstreamer' exists.
 
 ---
 
@@ -216,6 +216,7 @@ Use these examples to extend your application beyond basic face detection into:
 ## 7. License
 
 This guide contains example commands and scripts provided for convenience. Review third‑party container/images licenses before redistribution.
+
 
 
 
