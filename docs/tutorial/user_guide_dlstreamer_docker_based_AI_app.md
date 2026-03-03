@@ -163,7 +163,7 @@ gst-launch-1.0 filesrc location=/path/to/face-demographics-walking.mp4 ! \
   filesink location=face_detected_output.webm
 ```
 
-### 5.4 (Alt) Display on screen
+### 5.4 Alternative: Display on screen
 
 ```bash
 gst-launch-1.0 filesrc location=/path/to/face-demographics-walking.mp4 ! \
