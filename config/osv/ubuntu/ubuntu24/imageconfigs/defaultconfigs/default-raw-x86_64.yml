@@ -60,6 +60,8 @@ systemConfig:
 
   immutability:
     enabled: true # default is true
+  packages:
+    - efibootmgr
 
   additionalFiles:
     - local: ../additionalfiles/dhcp.network
