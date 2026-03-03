@@ -227,7 +227,7 @@ systemConfig:
     - build-essential
     - apt-transport-https
     - default-jre
-    - docker-compose
+    #- docker-compose
     - git-lfs
     - gnuplot
     - lbzip2
@@ -362,14 +362,15 @@ systemConfig:
     - xserver-xorg-dev_2:21.1.12-1ppa1~noble3
     - xvfb_2:21.1.12-1ppa1~noble3
     # M9 Packages
-    #- docker-ce
-    #- docker-ce-cli
-    #- docker-buildx-plugin
-    #- docker-compose-plugin
-    #- ca-certificates
-    #- software-properties-common
-    #- cpuid
-    #- clinfo
+    - ca-certificates
+    - software-properties-common
+    - cpuid
+    - clinfo
+    - docker-ce
+    - docker-ce-cli
+    - containerd.io
+    - docker-buildx-plugin
+    - docker-compose-plugin
 
   additionalFiles:
     - local: ../additionalfiles/ptl/01-network-manager-all.yaml

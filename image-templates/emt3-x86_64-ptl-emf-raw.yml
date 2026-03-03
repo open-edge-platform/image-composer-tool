@@ -27,12 +27,122 @@ target:
 
 packageRepositories:
   - codename: "emtNext"
+    priority: 1001
     url: "https://files-rs.edgeorchestration.intel.com/files-edge-orch/microvisor/rpms/next/base"
     pkey: "https://raw.githubusercontent.com/open-edge-platform/edge-microvisor-toolkit/refs/heads/3.0/SPECS/edge-repos/INTEL-RPM-GPG-KEY"
     # list of allowed packages from this repository
-    AllowPackages:
+    allowPackages:
       - kernel-6.17.11
       - kernel-drivers-gpu-6.17.11
+      - gstreamer1-plugins-base
+      - spice-server
+      - spice-protocol
+      - busybox
+      - ethtool
+      - iperf3
+      - msr-tools
+      - lsscsi
+      - tpm2-abrmd
+      - binutils
+      - cifs-utils
+      - opencl-headers
+      - linuxptp
+      - libva-utils
+      - pulseaudio
+      - libsndfile
+      # Dependencies for gstreamer1-plugins-base
+      - libvorbis
+      - libvisual
+      - libtheora
+      - orc
+      - libogg
+      - graphene
+      - iso-codes
+      - libcdda_interface0
+      - libcdda_paranoia0
+      # Dependencies for spice-server
+      - opus
+      # libepoxy and QEMU graphics dependencies
+      - libepoxy
+      - qemu
+      - qemu-common
+      - qemu-user
+      - qemu-img
+      - qemu-tools
+      - qemu-system-aarch64
+      - qemu-system-arm
+      - qemu-system-riscv
+      - qemu-system-x86-core
+      - qemu-audio-spice
+      - qemu-char-spice
+      - qemu-device-display-qxl
+      - qemu-ui-opengl
+      - qemu-ui-spice-app
+      - qemu-ui-spice-core
+      # Packages aligned with installer script
+      - gdb
+      - ovmf
+      - openbox
+      - libpng-devel
+      - libXinerama-devel
+      - libXrandr-devel
+      - libXt-devel
+      - libXcursor-devel
+      - libxml2-devel
+      - pango-devel
+      - freefont
+      - xorg-x11-xkb-utils
+      - xorg-x11-server-utils
+      - xorg-x11-apps
+      - dracut-virtio
+      - qemu-guest-agent
+      - qemu-audio-pa
+      - qemu-with-ui
+      - qemu-kvm
+      - qemu-system-x86
+      - qemu-ui-curses
+      - qemu-device-usb-redirect
+      - qemu-device-usb-host
+      - qemu-device-display-virtio-vga
+      - qemu-device-display-virtio-gpu-pci
+      - qemu-device-display-virtio-gpu-ccw
+      - qemu-device-display-virtio-gpu
+      - qemu-block-nfs
+      - qemu-block-iscsi
+      - qemu-block-dmg
+      - qemu-block-curl
+      - qemu-audio-oss
+      - qemu-audio-alsa
+      - qemu-ui-gtk
+      - qemu-ui-egl-headless
+      - qemu-ipxe
+      - libvirt
+      - swtpm-tools
+      - dmidecode
+      - cvt
+      - xorg-x11-xinit
+      - unzip
+      - alsa-lib
+      - libvpl
+      - wayland*
+      - tpm2-tools
+      - i2c-tools
+      - mesa-filesystem
+      - mesa-demos
+      - mesa-libgbm
+      - mesa-libEGL-devel
+      - mesa-libGL-devel
+      - alsa-utils
+      - libva*
+      - intel-lms
+      - xorg-x11-server-Xorg
+      - intel-opencl
+      - ocl-icd
+      - clinfo
+      - kernel-drivers-sound
+  - codename: "edgeai"
+    url: "https://yum.repos.intel.com/edgeai/"
+    pkey: "https://yum.repos.intel.com/edgeai/GPG-PUB-KEY-INTEL-DLS.gpg"
 
 disk:
   name: edge-non-rt # 1:1 mapping to the systemConfigs name
@@ -40,7 +150,7 @@ disk:
     -
       type: raw  # image file format, valid value [raw, vhd, vhdx, qcow2, vmdk, vdi]
       compression: gz # image compression format (optional)
-  size: 4GiB # 4G, 4GB, 4096 MiB also valid. (Required for raw)
+  size: 37376MiB # 4G, 4GB, 4096 MiB also valid. (Required for raw)
   partitionTableType: gpt # Partition table type, valid value: [gpt, mbr]
   partitions: # Required for raw, optional for ISO, not needed for rootfs.
     - id: boot
@@ -57,19 +167,23 @@ disk:
     - id: rootfs
       type: linux-root-amd64
       start: 384MiB
-      end: 3584MiB
+      end: 8192MiB
       fsType: ext4
       mountPoint: /
       mountOptions: defaults
 
     - id: edge_persistent
       type: linux
-      start: 3584MiB
-      end: "0"  # use the rest of the disk space
+      start: 8192MiB
+      end: 16896MiB
       fsType: ext4
       mountPoint: /opt
 
-
+    - id: swap
+      type: linux-swap
+      start: 16896MiB
+      end: "0"  # use the rest of the disk space
+      fsType: linux-swap
 
 systemConfig:
   
@@ -93,12 +207,122 @@ systemConfig:
     - tpm-cryptsetup
     - persistent-mount
     - intel-npu-driver
+    - busybox
+    - ethtool
+    - iperf3
+    - msr-tools
+    - lsscsi
+    - tpm2-abrmd
+    - binutils
+    - cifs-utils
+    - opencl-headers
+    - linuxptp
+    - libva-utils
+    - pulseaudio
+    - libsndfile
+    # Development tools
+    - perl
+    - gcc
+    - gcc-c++
+    - make
+    # QEMU full system emulation
+    - qemu
+    - qemu-user
+    - qemu-img 
+    - qemu-tools
+    - qemu-system-aarch64
+    - qemu-system-arm
+    - qemu-system-riscv
+    - qemu-system-x86
+    # Graphics and display stack
+    - mesa-dri-drivers
+    - mesa-libGL
+    - mesa-libEGL
+    - libX11
+    - libepoxy
+    - libwayland-client
+    - cairo
+    - pango
+    - freetype
+    - fontconfig
+    # Multimedia
+    - gstreamer1
+    - gstreamer1-plugins-base
+    # Container runtime
+    - containerd2
+    - containerd2-core
+    # Additional tools
+    - helm
+    - intel-level-zero-zello_world
+    - lm-sensors
+    - llvm
+    - spice-server
+    - spice-protocol
+    # installer_emt.sh package set
+    - gdb
+    - edk2-ovmf
+    - openbox
+    - libpng-devel
+    - libXinerama-devel
+    - libXrandr-devel
+    - libXt-devel
+    - libXcursor-devel
+    - libxml2-devel
+    - pango-devel
+    - freefont
+    - xorg-x11-xkb-utils
+    - xorg-x11-server-utils
+    - xorg-x11-apps
+    - dracut-virtio
+    - qemu-guest-agent
+    - qemu-audio-pa
+    - qemu-with-ui
+    - qemu-kvm
+    - libvirt
+    - swtpm-tools
+    - dmidecode
+    - cvt
+    - xorg-x11-xinit
+    - unzip
+    - alsa-lib
+    - libvpl
+    - wayland*
+    - tpm2-tools
+    - i2c-tools
+    - mesa-filesystem
+    - mesa-demos
+    - mesa-libgbm
+    - mesa-libEGL-devel
+    - mesa-libGL-devel
+    - alsa-utils
+    - libva*
+    - intel-lms
+    - xorg-x11-server-Xorg
+    - intel-opencl
+    - ocl-icd
+    - clinfo
+    - kernel-drivers-sound
+    - intel-dlstreamer
 
   # Kernel Configuration
   kernel:
     version: "6.17"
-    cmdline: "root=/dev/mapper/rootfs_verity console=ttyS0,115200 console=tty0 loglevel=7 sysctl.vm.overcommit_memory=1 sysctl.kernel.panic=10 sysctl.kernel.panic_on_oops=1 sysctl.fs.inotify.max_user_instances=8192 rd.parallel=1 rd.shell=0 rd.timeout=200 rd.emergency=reboot"
+    cmdline: "root=/dev/mapper/rootfs_verity loglevel=7 sysctl.vm.overcommit_memory=1 sysctl.kernel.panic=10 sysctl.kernel.panic_on_oops=1 sysctl.fs.inotify.max_user_instances=8192 rd.parallel=1 rd.shell=0 rd.timeout=200 rd.emergency=reboot xe.max_vfs=7 xe.force_probe=* modprobe.blacklist=i915 udmabuf.list_limit=8192 console=tty0 console=ttyS0,115200n8"
     enableExtraModules: "intel_vpu uas"
     packages:
       - kernel-drivers-gpu-6.17.11
+
+  configurations:
+    - cmd: "echo 'user ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/user-sudo"
+    - cmd: "chmod 440 /etc/sudoers.d/user-sudo"
+    - cmd: "grep -q '^http_proxy=http://proxy-dmz.intel.com:911$' /etc/environment || echo 'http_proxy=http://proxy-dmz.intel.com:911' >> /etc/environment"
+    - cmd: "grep -q '^https_proxy=http://proxy-dmz.intel.com:912$' /etc/environment || echo 'https_proxy=http://proxy-dmz.intel.com:912' >> /etc/environment"
+    - cmd: "grep -q '^ftp_proxy=http://proxy-dmz.intel.com:911$' /etc/environment || echo 'ftp_proxy=http://proxy-dmz.intel.com:911' >> /etc/environment"
+    - cmd: "grep -q '^socks_server=http://proxy-dmz.intel.com:1080$' /etc/environment || echo 'socks_server=http://proxy-dmz.intel.com:1080' >> /etc/environment"
+    - cmd: "grep -q '^no_proxy=.internal,10.*,10.0.0.0/8,127.0.0.1,169.254.169.254,::1,localhost,10.49.76.92$' /etc/environment || echo 'no_proxy=.internal,10.*,10.0.0.0/8,127.0.0.1,169.254.169.254,::1,localhost,10.49.76.92' >> /etc/environment"
+    - cmd: "grep -q '^no_proxy=localhost,127.0.0.1,127.0.1.1,127.0.0.0/8,172.16.0.0/20,192.168.0.0/16,10.0.0.0/8,10.1.0.0/16,10.152.183.0/24,devtools.intel.com,jf.intel.com,teamcity-or.intel.com,caas.intel.com,inn.intel.com,isscorp.intel.com,gfx-assets.fm.intel.com$' /etc/environment || echo 'no_proxy=localhost,127.0.0.1,127.0.1.1,127.0.0.0/8,172.16.0.0/20,192.168.0.0/16,10.0.0.0/8,10.1.0.0/16,10.152.183.0/24,devtools.intel.com,jf.intel.com,teamcity-or.intel.com,caas.intel.com,inn.intel.com,isscorp.intel.com,gfx-assets.fm.intel.com' >> /etc/environment"
+    - cmd: "grep -q '^http_proxy = http://proxy-dmz.intel.com:911$' /etc/wgetrc || echo 'http_proxy = http://proxy-dmz.intel.com:911' >> /etc/wgetrc"
+    - cmd: "grep -q '^https_proxy = http://proxy-dmz.intel.com:912$' /etc/wgetrc || echo 'https_proxy = http://proxy-dmz.intel.com:912' >> /etc/wgetrc"
+
+
   

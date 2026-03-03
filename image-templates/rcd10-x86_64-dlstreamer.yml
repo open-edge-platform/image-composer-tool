@@ -12,7 +12,7 @@ packageRepositories:
   - codename: "edge-base"
     url: "https://files-rs.edgeorchestration.intel.com/files-edge-orch/microvisor/rpms/3.0/base"
     pkey: "https://raw.githubusercontent.com/open-edge-platform/edge-microvisor-toolkit/refs/heads/3.0/SPECS/edge-repos/INTEL-RPM-GPG-KEY" # Uncomment and replace in real config
-    AllowPackages:
+    allowPackages:
       - kernel-drivers-gpu
       - kernel
       - grub2-configuration

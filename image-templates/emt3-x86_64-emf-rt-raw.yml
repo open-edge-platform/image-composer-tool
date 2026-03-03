@@ -53,7 +53,7 @@ disk:
       end: 3584MiB
       fsType: ext4
       mountPoint: /
-      mountOptions: defaults, ro
+      mountOptions: defaults
 
     - id: edge_persistent
       type: linux

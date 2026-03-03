@@ -137,6 +137,39 @@ systemConfig:
 	}
 }
 
+func TestValidMergedTemplateWithWildcardPackages(t *testing.T) {
+	mergedTemplateYAML := `image:
+  name: test-merged-image
+  version: "1.0.0"
+
+target:
+  os: edge-microvisor-toolkit
+  dist: emt3
+  arch: x86_64
+  imageType: raw
+
+systemConfig:
+  name: default
+  packages:
+    - wayland*
+    - libva*
+`
+
+	var raw interface{}
+	if err := yaml.Unmarshal([]byte(mergedTemplateYAML), &raw); err != nil {
+		t.Fatalf("yml parsing error: %v", err)
+	}
+
+	dataJSON, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("json marshaling error: %v", err)
+	}
+
+	if err := ValidateImageTemplateJSON(dataJSON); err != nil {
+		t.Errorf("expected wildcard package template to pass validation, but got: %v", err)
+	}
+}
+
 func TestInvalidMergedTemplate(t *testing.T) {
 	// Create an invalid merged template (missing required fields)
 	invalidMergedTemplateYAML := `image:
@@ -166,6 +199,45 @@ target:
 
 	if err := ValidateImageTemplateJSON(dataJSON); err == nil {
 		t.Errorf("expected invalid merged template to fail validation")
+	}
+}
+
+func TestInvalidMergedTemplateWithMalformedAllowPackage(t *testing.T) {
+	invalidTemplateYAML := `image:
+  name: test-merged-image
+  version: "1.0.0"
+
+target:
+  os: edge-microvisor-toolkit
+  dist: emt3
+  arch: x86_64
+  imageType: raw
+
+packageRepositories:
+  - codename: "emtNext"
+    url: "https://example.com/repo"
+    pkey: "[trusted=yes]"
+    allowPackages:
+      - qemu-audio-oss"
+
+systemConfig:
+  name: default
+  packages:
+    - qemu-system-x86
+`
+
+	var raw interface{}
+	if err := yaml.Unmarshal([]byte(invalidTemplateYAML), &raw); err != nil {
+		t.Fatalf("yml parsing error: %v", err)
+	}
+
+	dataJSON, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("json marshaling error: %v", err)
+	}
+
+	if err := ValidateImageTemplateJSON(dataJSON); err == nil {
+		t.Errorf("expected template with malformed allowPackages entry to fail validation")
 	}
 }
 

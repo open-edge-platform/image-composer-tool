@@ -391,6 +391,67 @@ func TestParsePrimary(t *testing.T) {
 	}
 }
 
+func TestMatchesPackageFilter(t *testing.T) {
+	tests := []struct {
+		name    string
+		pkgName string
+		filter  []string
+		want    bool
+	}{
+		{
+			name:    "empty filter allows all",
+			pkgName: "any-package",
+			filter:  nil,
+			want:    true,
+		},
+		{
+			name:    "exact match",
+			pkgName: "qemu-common",
+			filter:  []string{"qemu-common"},
+			want:    true,
+		},
+		{
+			name:    "prefix version match",
+			pkgName: "kernel-drivers-gpu-6.17.11-1.emt3.x86_64",
+			filter:  []string{"kernel-drivers-gpu-6.17.11"},
+			want:    true,
+		},
+		{
+			name:    "glob wildcard wayland",
+			pkgName: "wayland-protocols-devel",
+			filter:  []string{"wayland*"},
+			want:    true,
+		},
+		{
+			name:    "glob wildcard libva",
+			pkgName: "libva-intel-media-driver",
+			filter:  []string{"libva*"},
+			want:    true,
+		},
+		{
+			name:    "glob wildcard no match",
+			pkgName: "mesa-libEGL",
+			filter:  []string{"wayland*", "libva*"},
+			want:    false,
+		},
+		{
+			name:    "invalid glob does not match and does not fail",
+			pkgName: "wayland",
+			filter:  []string{"wayland["},
+			want:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := matchesPackageFilter(tt.pkgName, tt.filter)
+			if got != tt.want {
+				t.Errorf("matchesPackageFilter(%q, %v) = %v, want %v", tt.pkgName, tt.filter, got, tt.want)
+			}
+		})
+	}
+}
+
 // Helper function to compress content with gzip
 func compressGzip(t *testing.T, content string) []byte {
 	t.Helper()
@@ -448,6 +509,18 @@ func TestMatchRequestedAdvanced(t *testing.T) {
 			Arch:    "src",
 			URL:     "https://repo.example.com/package-with-src-1.0-1.src.rpm",
 		},
+		{
+			Name:    "wayland",
+			Version: "1.20.0-1.azl3",
+			Arch:    "x86_64",
+			URL:     "https://repo.example.com/wayland-1.20.0-1.azl3.x86_64.rpm",
+		},
+		{
+			Name:    "wayland-devel",
+			Version: "1.20.0-1.azl3",
+			Arch:    "x86_64",
+			URL:     "https://repo.example.com/wayland-devel-1.20.0-1.azl3.x86_64.rpm",
+		},
 	}
 
 	tests := []struct {
@@ -498,6 +571,13 @@ func TestMatchRequestedAdvanced(t *testing.T) {
 			requests:      []string{"curl", "nonexistent"},
 			expectError:   true,
 			expectedCount: 0,
+		},
+		{
+			name:          "Wildcard request expands to multiple packages",
+			requests:      []string{"wayland*"},
+			expectError:   false,
+			expectedCount: 2,
+			expectedNames: []string{"wayland", "wayland-devel"},
 		},
 	}
 
