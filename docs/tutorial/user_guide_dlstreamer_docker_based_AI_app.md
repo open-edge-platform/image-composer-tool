@@ -184,8 +184,7 @@ gst-launch-1.0 filesrc location=/path/to/face-demographics-walking.mp4 ! \
 
 ## 6. Notes & Troubleshooting
 
-- **Proxy cert errors (Docker pulls)**: import your corporate root CA into the OS trust store and into ` sudo apt-get install -y ca-certificates ,
-sudo update-ca-certificates , /etc/docker/certs.d/<registry>/ca.crt`, then `systemctl restart docker`.
+- **Proxy cert errors (Docker pulls)**: import your corporate root CA into the OS trust store (for example, using `sudo apt-get install -y ca-certificates` and `sudo update-ca-certificates`) and into `/etc/docker/certs.d/<registry>/ca.crt`, then run `systemctl restart docker`.
 - **No GVA plugins?** Ensure DL Streamer is installed and `GST_PLUGIN_PATH` is exported.
 - **Headless systems**: prefer the file-output pipeline (WebM/MP4) instead of `autovideosink`.
 - **Model path errors**: ensure `.xml` and `.bin` are co-located in the same `FP32`/`FP16` folder.
