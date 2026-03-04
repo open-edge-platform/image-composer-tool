@@ -772,6 +772,6 @@ func TestRCDDisplayImageArtifacts(t *testing.T) {
 		}
 	}()
 
-	displayImageArtifacts("/tmp/test", "TEST", nil)
+	displayImageArtifacts("/tmp/test", "TEST")
 	t.Log("displayImageArtifacts function executed without panic")
 }
