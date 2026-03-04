@@ -13,6 +13,87 @@ import (
 	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
 )
 
+const defaultRepoPriority = 500
+
+func normalizeRepositoryPriority(priority int) int {
+	if priority == 0 {
+		return defaultRepoPriority
+	}
+	return priority
+}
+
+func getRepositoryPriority(packageURL string) int {
+	normalizedPkgURL := strings.TrimRight(packageURL, "/")
+	highestPriority := defaultRepoPriority
+
+	for _, repo := range UserRepo {
+		repoURL := strings.TrimRight(repo.URL, "/")
+		if repoURL == "" {
+			continue
+		}
+
+		if normalizedPkgURL == repoURL || strings.HasPrefix(normalizedPkgURL, repoURL+"/") {
+			repoPriority := normalizeRepositoryPriority(repo.Priority)
+			if repoPriority > highestPriority {
+				highestPriority = repoPriority
+			}
+		}
+	}
+
+	return highestPriority
+}
+
+func selectByPriorityThenRepo(parentBase string, candidates []ospackage.PackageInfo) ospackage.PackageInfo {
+	highestPriority := -1
+	highestPriorityCandidates := make([]ospackage.PackageInfo, 0, len(candidates))
+
+	for _, candidate := range candidates {
+		candidatePriority := getRepositoryPriority(candidate.URL)
+		if candidatePriority > highestPriority {
+			highestPriority = candidatePriority
+			highestPriorityCandidates = highestPriorityCandidates[:0]
+			highestPriorityCandidates = append(highestPriorityCandidates, candidate)
+			continue
+		}
+
+		if candidatePriority == highestPriority {
+			highestPriorityCandidates = append(highestPriorityCandidates, candidate)
+		}
+	}
+
+	if len(highestPriorityCandidates) == 1 {
+		return highestPriorityCandidates[0]
+	}
+
+	var sameRepoCandidates []ospackage.PackageInfo
+	for _, candidate := range highestPriorityCandidates {
+		candidateBase, err := extractRepoBase(candidate.URL)
+		if err != nil {
+			continue
+		}
+		if candidateBase == parentBase {
+			sameRepoCandidates = append(sameRepoCandidates, candidate)
+		}
+	}
+
+	if len(sameRepoCandidates) == 1 {
+		return sameRepoCandidates[0]
+	}
+
+	if len(sameRepoCandidates) > 1 {
+		latest := sameRepoCandidates[0]
+		for _, candidate := range sameRepoCandidates[1:] {
+			cmp := compareVersions(candidate.Version, latest.Version)
+			if cmp > 0 {
+				latest = candidate
+			}
+		}
+		return latest
+	}
+
+	return highestPriorityCandidates[0]
+}
+
 func resolveMultiCandidates(parentPkg ospackage.PackageInfo, candidates []ospackage.PackageInfo) (ospackage.PackageInfo, error) {
 	parentBase, err := extractRepoBase(parentPkg.URL)
 	if err != nil {
@@ -31,16 +112,9 @@ func resolveMultiCandidates(parentPkg ospackage.PackageInfo, candidates []ospack
 	}
 
 	if hasVersionConstraint {
-		// First pass: look for candidates from the same repo that meet version constraint
-		var sameRepoMatches []ospackage.PackageInfo
-		var otherRepoMatches []ospackage.PackageInfo
+		var matchingCandidates []ospackage.PackageInfo
 
 		for _, candidate := range candidates {
-			candidateBase, err := extractRepoBase(candidate.URL)
-			if err != nil {
-				continue
-			}
-
 			// Check if version constraint is satisfied
 			cmp, err := comparePackageVersions(candidate.Version, ver)
 			if err != nil {
@@ -62,22 +136,12 @@ func resolveMultiCandidates(parentPkg ospackage.PackageInfo, candidates []ospack
 			}
 
 			if versionMatches {
-				if candidateBase == parentBase {
-					sameRepoMatches = append(sameRepoMatches, candidate)
-				} else {
-					otherRepoMatches = append(otherRepoMatches, candidate)
-				}
+				matchingCandidates = append(matchingCandidates, candidate)
 			}
 		}
 
-		// Priority 1: return first match from same repo
-		if len(sameRepoMatches) > 0 {
-			return sameRepoMatches[0], nil
-		}
-
-		// Priority 2: return first match from other repos
-		if len(otherRepoMatches) > 0 {
-			return otherRepoMatches[0], nil
+		if len(matchingCandidates) > 0 {
+			return selectByPriorityThenRepo(parentBase, matchingCandidates), nil
 		}
 
 		return ospackage.PackageInfo{}, fmt.Errorf("no candidates satisfy version constraint = %s%s", op, ver)
@@ -97,38 +161,7 @@ func resolveMultiCandidates(parentPkg ospackage.PackageInfo, candidates []ospack
 		return candidates[0], nil
 	}
 
-	// Rule 1: find all candidates with the same base URL and return the latest version
-	var sameBaseCandidates []ospackage.PackageInfo
-	for _, candidate := range candidates {
-		candidateBase, err := extractRepoBase(candidate.URL)
-		if err != nil {
-			continue
-		}
-		if candidateBase == parentBase {
-			sameBaseCandidates = append(sameBaseCandidates, candidate)
-		}
-	}
-
-	// If we found candidates with the same base URL, return the one with the latest version
-	if len(sameBaseCandidates) > 0 {
-		if len(sameBaseCandidates) == 1 {
-			return sameBaseCandidates[0], nil
-		}
-
-		// Find the candidate with the latest version
-		latest := sameBaseCandidates[0]
-		for _, candidate := range sameBaseCandidates[1:] {
-			cmp := compareVersions(candidate.Version, latest.Version)
-			if cmp > 0 {
-				latest = candidate
-			}
-		}
-
-		return latest, nil
-	}
-
-	// Rule 2: If no candidate has the same repo, return the first candidate in other repos
-	return candidates[0], nil
+	return selectByPriorityThenRepo(parentBase, candidates), nil
 }
 
 func extractRepoBase(rawURL string) (string, error) {
@@ -345,16 +378,41 @@ func findAllCandidates(parent ospackage.PackageInfo, depName string, all []ospac
 	return candidates, nil
 }
 
+func isGlobPattern(s string) bool {
+	return strings.ContainsAny(s, "*?[")
+}
+
+func matchPackageRequest(want, packageName string) bool {
+	if !isGlobPattern(want) {
+		return packageName == want
+	}
+
+	matched, err := filepath.Match(want, packageName)
+	if err != nil {
+		return false
+	}
+
+	return matched
+}
+
 // ResolvePackage finds the best matching package for a given package name
 func ResolveTopPackageConflicts(want string, all []ospackage.PackageInfo) (ospackage.PackageInfo, bool) {
 	var candidates []ospackage.PackageInfo
+	isGlob := isGlobPattern(want)
 	for _, pi := range all {
 		// 1) exact name, e.g. acct-205-25.azl3.noarch.rpm
-		if pi.Name == want {
+		if !isGlob && pi.Name == want {
 			candidates = append(candidates, pi)
 			break
 		}
 		cleanName := extractBasePackageNameFromFile(pi.Name)
+
+		if isGlob {
+			if matchPackageRequest(want, cleanName) || matchPackageRequest(want, pi.Name) {
+				candidates = append(candidates, pi)
+			}
+			continue
+		}
 		// 2) base name, e.g. acct
 		if cleanName == want {
 			candidates = append(candidates, pi)
@@ -423,6 +481,51 @@ func ResolveTopPackageConflicts(want string, all []ospackage.PackageInfo) (ospac
 	})
 
 	return candidates[0], true
+}
+
+// ResolveWildcardPackageConflicts expands a wildcard request to the best package
+// for each matched base package name.
+func ResolveWildcardPackageConflicts(want string, all []ospackage.PackageInfo) ([]ospackage.PackageInfo, bool) {
+	if !isGlobPattern(want) {
+		pkg, found := ResolveTopPackageConflicts(want, all)
+		if !found {
+			return nil, false
+		}
+		return []ospackage.PackageInfo{pkg}, true
+	}
+
+	baseNames := make(map[string]struct{})
+	for _, pi := range all {
+		cleanName := extractBasePackageNameFromFile(pi.Name)
+		if matchPackageRequest(want, cleanName) || matchPackageRequest(want, pi.Name) {
+			baseNames[cleanName] = struct{}{}
+		}
+	}
+
+	if len(baseNames) == 0 {
+		return nil, false
+	}
+
+	var results []ospackage.PackageInfo
+	for baseName := range baseNames {
+		pkg, found := ResolveTopPackageConflicts(baseName, all)
+		if found {
+			results = append(results, pkg)
+		}
+	}
+
+	if len(results) == 0 {
+		return nil, false
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].Name == results[j].Name {
+			return compareVersions(results[i].Version, results[j].Version) > 0
+		}
+		return results[i].Name < results[j].Name
+	})
+
+	return results, true
 }
 
 func extractVersionRequirement(reqVers []string, depName string) (op string, ver string, found bool) {

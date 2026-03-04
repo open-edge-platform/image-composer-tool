@@ -1,6 +1,7 @@
 package imageinspect
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -973,5 +974,207 @@ func TestCompareImages_EFISigningStatusChanges(t *testing.T) {
 
 	if res.Diff.EFIBinaries.Modified[0].From.Signed || !res.Diff.EFIBinaries.Modified[0].To.Signed {
 		t.Fatalf("expected signed false->true, got %v->%v", res.Diff.EFIBinaries.Modified[0].From.Signed, res.Diff.EFIBinaries.Modified[0].To.Signed)
+	}
+}
+func TestCompareUUIDReferences_Branches(t *testing.T) {
+	from := []UUIDReference{
+		{UUID: "00000000-0000-0000-0000-000000000001", Context: "kernel_cmdline", Mismatch: false}, // removed
+		{UUID: "00000000-0000-0000-0000-000000000002", Context: "kernel_cmdline", Mismatch: false}, // mismatch changed
+		{UUID: "00000000-0000-0000-0000-000000000003", Context: "grub_search", Mismatch: false},    // context changed only
+		{UUID: "00000000-0000-0000-0000-000000000004", Context: "root_device", Mismatch: true},     // unchanged
+	}
+	to := []UUIDReference{
+		{UUID: "00000000-0000-0000-0000-000000000002", Context: "root_device", Mismatch: true},
+		{UUID: "00000000-0000-0000-0000-000000000003", Context: "kernel_cmdline", Mismatch: false},
+		{UUID: "00000000-0000-0000-0000-000000000004", Context: "root_device", Mismatch: true},
+		{UUID: "00000000-0000-0000-0000-000000000005", Context: "kernel_cmdline", Mismatch: false}, // added
+	}
+
+	changes := compareUUIDReferences(from, to)
+	if len(changes) != 4 {
+		t.Fatalf("expected 4 UUID reference changes, got %d: %+v", len(changes), changes)
+	}
+
+	byUUID := map[string]UUIDRefChange{}
+	for _, ch := range changes {
+		byUUID[ch.UUID] = ch
+	}
+
+	removed, ok := byUUID["00000000-0000-0000-0000-000000000001"]
+	if !ok || removed.Status != "removed" || removed.ContextFrom != "kernel_cmdline" || removed.MismatchFrom {
+		t.Fatalf("unexpected removed UUID change: %+v", removed)
+	}
+
+	added, ok := byUUID["00000000-0000-0000-0000-000000000005"]
+	if !ok || added.Status != "added" || added.ContextTo != "kernel_cmdline" || added.MismatchTo {
+		t.Fatalf("unexpected added UUID change: %+v", added)
+	}
+
+	mismatchChanged, ok := byUUID["00000000-0000-0000-0000-000000000002"]
+	if !ok || mismatchChanged.Status != "modified" || mismatchChanged.MismatchFrom != false || mismatchChanged.MismatchTo != true {
+		t.Fatalf("unexpected mismatch-changed UUID entry: %+v", mismatchChanged)
+	}
+	// When both mismatch and context change, the single entry must carry both pieces.
+	if mismatchChanged.ContextFrom != "kernel_cmdline" || mismatchChanged.ContextTo != "root_device" {
+		t.Fatalf("expected context change to be captured when mismatch also differs: %+v", mismatchChanged)
+	}
+
+	contextChanged, ok := byUUID["00000000-0000-0000-0000-000000000003"]
+	if !ok || contextChanged.Status != "modified" || contextChanged.ContextFrom != "grub_search" || contextChanged.ContextTo != "kernel_cmdline" {
+		t.Fatalf("unexpected context-changed UUID entry: %+v", contextChanged)
+	}
+}
+
+func TestUkiOnlyVolatile_Branches(t *testing.T) {
+	tests := []struct {
+		name string
+		mod  ModifiedEFIBinaryEvidence
+		want bool
+	}{
+		{
+			name: "kernel hash changed is meaningful",
+			mod: ModifiedEFIBinaryEvidence{
+				UKI: &UKIDiff{KernelSHA256: &ValueDiff[string]{From: "k1", To: "k2"}, Changed: true},
+			},
+			want: false,
+		},
+		{
+			name: "uname hash changed is meaningful",
+			mod: ModifiedEFIBinaryEvidence{
+				UKI: &UKIDiff{UnameSHA256: &ValueDiff[string]{From: "u1", To: "u2"}, Changed: true},
+			},
+			want: false,
+		},
+		{
+			name: "cmdline changed only by UUID is volatile",
+			mod: ModifiedEFIBinaryEvidence{
+				From: EFIBinaryEvidence{Cmdline: "root=UUID=11111111-1111-1111-1111-111111111111 ro quiet"},
+				To:   EFIBinaryEvidence{Cmdline: "root=UUID=22222222-2222-2222-2222-222222222222 ro quiet"},
+				UKI:  &UKIDiff{CmdlineSHA256: &ValueDiff[string]{From: "c1", To: "c2"}, Changed: true},
+			},
+			want: true,
+		},
+		{
+			name: "cmdline semantic change is meaningful",
+			mod: ModifiedEFIBinaryEvidence{
+				From: EFIBinaryEvidence{Cmdline: "root=UUID=11111111-1111-1111-1111-111111111111 ro quiet"},
+				To:   EFIBinaryEvidence{Cmdline: "root=UUID=22222222-2222-2222-2222-222222222222 rw quiet"},
+				UKI:  &UKIDiff{CmdlineSHA256: &ValueDiff[string]{From: "c1", To: "c2"}, Changed: true},
+			},
+			want: false,
+		},
+		{
+			name: "no uki details defaults volatile",
+			mod:  ModifiedEFIBinaryEvidence{},
+			want: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ukiOnlyVolatile(tc.mod)
+			if got != tc.want {
+				t.Fatalf("expected %v, got %v", tc.want, got)
+			}
+		})
+	}
+}
+func TestCompareVerity_NilCasesAndFieldChanges(t *testing.T) {
+	if got := compareVerity(nil, nil); got != nil {
+		t.Fatalf("expected nil diff when both verity values are nil")
+	}
+
+	added := compareVerity(nil, &VerityInfo{Enabled: true, Method: "systemd-verity", RootDevice: "/dev/vda2", HashPartition: 3})
+	if added == nil || !added.Changed || added.Added == nil {
+		t.Fatalf("expected added verity diff")
+	}
+
+	removed := compareVerity(&VerityInfo{Enabled: true, Method: "systemd-verity"}, nil)
+	if removed == nil || !removed.Changed || removed.Removed == nil {
+		t.Fatalf("expected removed verity diff")
+	}
+
+	from := &VerityInfo{
+		Enabled:       true,
+		Method:        "systemd-verity",
+		RootDevice:    "/dev/vda2",
+		HashPartition: 3,
+	}
+	to := &VerityInfo{
+		Enabled:       false,
+		Method:        "custom-initramfs",
+		RootDevice:    "/dev/vda3",
+		HashPartition: 4,
+	}
+
+	changed := compareVerity(from, to)
+	if changed == nil || !changed.Changed {
+		t.Fatalf("expected changed verity diff")
+	}
+	if changed.Enabled == nil || changed.Enabled.From != true || changed.Enabled.To != false {
+		t.Fatalf("expected enabled diff to be set")
+	}
+	if changed.Method == nil || changed.Method.From != "systemd-verity" || changed.Method.To != "custom-initramfs" {
+		t.Fatalf("expected method diff to be set")
+	}
+	if changed.RootDevice == nil || changed.RootDevice.From != "/dev/vda2" || changed.RootDevice.To != "/dev/vda3" {
+		t.Fatalf("expected root device diff to be set")
+	}
+	if changed.HashPartition == nil || changed.HashPartition.From != 3 || changed.HashPartition.To != 4 {
+		t.Fatalf("expected hash partition diff to be set")
+	}
+}
+
+func TestTallyBootloaderConfigDiff_ClassificationCoverage(t *testing.T) {
+	tally := &diffTally{}
+	d := &BootloaderConfigDiff{
+		ConfigFileChanges: []ConfigFileChange{
+			{Path: "/boot/grub/grub.cfg", Status: "added"},
+			{Path: "/loader/entries/old.conf", Status: "removed"},
+			{Path: "/loader/entries/default.conf", Status: "modified"},
+		},
+		BootEntryChanges: []BootEntryChange{
+			{Name: "entry-added", Status: "added"},
+			{Name: "entry-removed", Status: "removed"},
+			{Name: "entry-kernel", Status: "modified", KernelFrom: "/vmlinuz-a", KernelTo: "/vmlinuz-b"},
+			{Name: "entry-initrd", Status: "modified", KernelFrom: "/vmlinuz", KernelTo: "/vmlinuz", InitrdFrom: "/initrd-a", InitrdTo: "/initrd-b"},
+			{Name: "entry-cmdline", Status: "modified", KernelFrom: "/vmlinuz", KernelTo: "/vmlinuz", InitrdFrom: "/initrd", InitrdTo: "/initrd", CmdlineFrom: "root=UUID=11111111-1111-1111-1111-111111111111 ro", CmdlineTo: "root=UUID=22222222-2222-2222-2222-222222222222 rw"},
+			{Name: "entry-meta", Status: "modified", KernelFrom: "/vmlinuz", KernelTo: "/vmlinuz", InitrdFrom: "/initrd", InitrdTo: "/initrd", CmdlineFrom: " root=UUID=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa  ro ", CmdlineTo: "root=UUID=bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb ro"},
+		},
+		KernelRefChanges: []KernelRefChange{
+			{Path: "EFI/Linux/new.efi", Status: "added"},
+			{Path: "EFI/Linux/old.efi", Status: "removed"},
+			{Path: "EFI/Linux/uuid.efi", Status: "modified", UUIDFrom: "u1", UUIDTo: "u2"},
+			{Path: "EFI/Linux/meta.efi", Status: "modified", UUIDFrom: "same", UUIDTo: "same"},
+		},
+		UUIDReferenceChanges: []UUIDRefChange{
+			{UUID: "a", Status: "added", MismatchTo: true},
+			{UUID: "b", Status: "added", MismatchTo: false},
+			{UUID: "c", Status: "removed", MismatchFrom: true},
+			{UUID: "d", Status: "removed", MismatchFrom: false},
+			{UUID: "e", Status: "modified", MismatchFrom: false, MismatchTo: true},
+			{UUID: "f", Status: "modified", MismatchFrom: false, MismatchTo: false},
+		},
+		NotesAdded:   []string{"note-a", "note-b"},
+		NotesRemoved: []string{"note-c"},
+	}
+
+	tallyBootloaderConfigDiff(tally, d, "EFI/BOOT/BOOTX64.EFI")
+
+	if tally.meaningful != 14 {
+		t.Fatalf("expected meaningful=14, got %d (reasons=%v)", tally.meaningful, tally.mReasons)
+	}
+	if tally.volatile != 8 {
+		t.Fatalf("expected volatile=8, got %d (reasons=%v)", tally.volatile, tally.vReasons)
+	}
+
+	meaningfulJoined := strings.Join(tally.mReasons, "\n")
+	volatileJoined := strings.Join(tally.vReasons, "\n")
+
+	if !strings.Contains(meaningfulJoined, "boot entry initrd changed: entry-initrd") {
+		t.Fatalf("expected initrd change to be classified meaningful, reasons=%v", tally.mReasons)
+	}
+	if !strings.Contains(volatileJoined, "boot entry metadata changed: entry-meta") {
+		t.Fatalf("expected metadata-only boot entry change to be classified volatile, reasons=%v", tally.vReasons)
 	}
 }

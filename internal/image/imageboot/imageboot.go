@@ -191,10 +191,33 @@ func updateInitramfsForGrub(installRoot, kernelVersion string, template *config.
 		log.Debugf("No extra modules specified in enableExtraModules")
 	}
 
-	// Run update-initramfs to regenerate the initramfs
-	cmd := fmt.Sprintf("update-initramfs -u -k %s", kernelVersion)
+	updateInitramfsExists, err := shell.IsCommandExist("update-initramfs", installRoot)
+	if err != nil {
+		return fmt.Errorf("failed to check update-initramfs availability: %w", err)
+	}
+
+	var cmd string
+	if updateInitramfsExists {
+		cmd = fmt.Sprintf("update-initramfs -u -k %s", kernelVersion)
+	} else {
+		dracutExists, dracutCheckErr := shell.IsCommandExist("dracut", installRoot)
+		if dracutCheckErr != nil {
+			return fmt.Errorf("failed to check dracut availability: %w", dracutCheckErr)
+		}
+		if !dracutExists {
+			return fmt.Errorf("neither update-initramfs nor dracut found in the install root")
+		}
+
+		initrdPath := fmt.Sprintf("/boot/initrd.img-%s", kernelVersion)
+		cmd = fmt.Sprintf("dracut --force --kver %s %s", kernelVersion, initrdPath)
+		if extraModules != "" {
+			cmd = fmt.Sprintf("%s --add-drivers '%s'", cmd, extraModules)
+		}
+		log.Infof("update-initramfs not found, using dracut fallback")
+	}
+
 	log.Debugf("Executing: %s", cmd)
-	_, err := shell.ExecCmd(cmd, true, installRoot, nil)
+	_, err = shell.ExecCmd(cmd, true, installRoot, nil)
 	if err != nil {
 		log.Errorf("Failed to update initramfs: %v", err)
 		return fmt.Errorf("failed to update initramfs: %w", err)

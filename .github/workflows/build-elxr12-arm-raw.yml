@@ -28,16 +28,16 @@ jobs:
     runs-on: ubuntu-24.04-arm
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd #v6.0.2
         with:
           persist-credentials: false
           ref: ${{ github.event.inputs.ref || github.ref }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@f95db51fddba0c2d1ec667646a06c2ce06100226 #v3.0.0
 
       - name: Install Earthly
-        uses: earthly/actions-setup@v1
+        uses: earthly/actions-setup@43211c7a0eae5344d6d79fb4aaf209c8f8866203 #v1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           version: "latest"
@@ -48,7 +48,7 @@ jobs:
           sudo apt-get install -y qemu-system-aarch64 ovmf tree jq systemd-ukify mmdebstrap systemd-boot qemu-efi-aarch64
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 #v6.0.0
         with:
           go-version: stable
 
@@ -94,7 +94,7 @@ jobs:
           find workspace/*/imagebuild/*/ -name "*.raw*" -exec chmod 777 {} \; || true
 
       - name: GitHub Upload Release Artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f #v6.0.0
         with:
           name: elxr12-arm-raw-image
           path: |

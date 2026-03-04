@@ -364,6 +364,11 @@ systemConfig:
     - xnest_2:21.1.12-1ppa1~noble3
     - xserver-xorg-dev_2:21.1.12-1ppa1~noble3
     - xvfb_2:21.1.12-1ppa1~noble3
+    # additional packages
+    - tcpdump
+    - usb-modeswitch
+    - fwupd
+    - clinfo
     #dls based pkg
     - docker.io
     - docker-compose-plugin

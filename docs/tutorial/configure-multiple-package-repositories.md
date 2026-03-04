@@ -310,6 +310,6 @@ packageRepositories:
 
 ## Related Documentation
 
-- [Image Template Format](../architecture/image-template-format.md)
+- [Image Templates](../architecture/os-image-composer-templates.md)
 - [Understanding the OS Image Build Process](../architecture/os-image-composer-build-process.md)
 - [Configuring Custom Commands During Image Build](configure-additional-actions-for-build.md)

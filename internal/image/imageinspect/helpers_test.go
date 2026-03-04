@@ -203,7 +203,7 @@ func TestParseOSRelease_Empty(t *testing.T) {
 
 func TestSHA256Hex_Format(t *testing.T) {
 	data := []byte("test data")
-	hash := sha256Hex(data)
+	hash := hashBytesHex(data)
 	if len(hash) != 64 {
 		t.Fatalf("expected 64 char hash, got %d", len(hash))
 	}

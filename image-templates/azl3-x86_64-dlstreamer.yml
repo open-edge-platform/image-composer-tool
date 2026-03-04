@@ -95,8 +95,8 @@ systemConfig:
     - ffmpeg
     - gstreamer
     - opencv
-    - intel-dlstreamer
-    - openvino-2025.2.0
+    - intel-dlstreamer-2025.2.0
+    - openvino-2025.3.0
     - linux-firmware-i915
 
   kernel:

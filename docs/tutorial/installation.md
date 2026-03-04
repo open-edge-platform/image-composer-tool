@@ -17,7 +17,7 @@ prerequisites.
 
 - **OS**: Ubuntu 24.04 (recommended; other standard Linux distributions may
   work but are not validated)
-- **Go**: Version 1.22.12 or later — see
+- **Go**: Version 1.24.0 or later — see
   [Go installation instructions](https://go.dev/doc/manage-install)
 
 ## Development Build (Go)

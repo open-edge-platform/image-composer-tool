@@ -11,6 +11,7 @@ A command-line tool for building custom Linux images from pre-built packages. De
 |----|-------------|--------------|
 | Azure Linux | azl3 | x86_64 |
 | Edge Microvisor Toolkit | emt3 | x86_64 |
+| Red Hat Compatible Distro | rcd10 | x86_64 |
 | Wind River eLxr | elxr12 | x86_64 |
 | Ubuntu | ubuntu24 | x86_64 |
 
@@ -18,7 +19,8 @@ A command-line tool for building custom Linux images from pre-built packages. De
 
 ### 1. Build the Tool
 
-Requires Go 1.22.12+ on Ubuntu 24.04 (recommended).
+Requires Go 1.24+.
+Recommended Ubuntu 24.04
 
 ```bash
 git clone https://github.com/open-edge-platform/os-image-composer.git

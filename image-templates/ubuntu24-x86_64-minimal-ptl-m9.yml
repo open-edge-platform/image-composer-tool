@@ -1,5 +1,5 @@
 image:
-  name: minimal-desktop-ubuntu-ptl-m9
+  name: minimal-desktop-ubuntu-ptl
   version: "24.04"
 
 target:
@@ -79,26 +79,15 @@ packageRepositories:
     pkey: "https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB" # Uncomment and replace in real config
 
   - codename: "noble"
-    url: "https://af01p-png.devtools.intel.com/artifactory/hspe-edge-png-local/ubuntu/noble/noble/20251029-0810_SW_A_REL6_RC02_plus"
+    url: "https://af01p-png.devtools.intel.com/artifactory/hspe-edge-png-local/ubuntu/noble/noble/20260116-0012_2026_SW_A_REL1_RC02"
     pkey: "https://af01p-png.devtools.intel.com/artifactory/hspe-edge-png-local/ubuntu/keys/adl-hirsute-public.gpg" # Uncomment and replace in real config
     component: "main non-free multimedia internal"
     priority: 1001 # Higher priority means preferred over other repos
 
   - codename: "noble"
-    url: "https://af01p-png.devtools.intel.com/artifactory/hspe-edge-repos-png-local-png-local/ubuntu-ppa2"
-    pkey: "https://af01p-png.devtools.intel.com/artifactory/hspe-edge-repos-png-local-png-local/ubuntu-ppa2/pub.gpg" # Uncomment and replace in real config
-    priority: 1001 # Higher priority means preferred over other repos
-
-  - codename: "noble"
-    url: "https://ubit-artifactory-or.intel.com/artifactory/turtle-creek-debian-local"
-    pkey: "[trusted=yes]" # Uncomment and replace in real config
-    component: "universe"
-
-  - codename: "noble"
     url: "https://download.docker.com/linux/ubuntu"
     pkey: "https://download.docker.com/linux/ubuntu/gpg" # Uncomment and replace in real config
     component: "stable"
-
 
 systemConfig:
   name: minimal
@@ -170,6 +159,7 @@ systemConfig:
     - iproute2
     # PTL packages
     - vim
+    - nano
     - ocl-icd-libopencl1
     - net-tools
     - libdrm-amdgpu1
@@ -237,7 +227,7 @@ systemConfig:
     - build-essential
     - apt-transport-https
     - default-jre
-    - docker-compose
+    #- docker-compose
     - git-lfs
     - gnuplot
     - lbzip2
@@ -271,135 +261,141 @@ systemConfig:
     - dbus-x11
     - sg3-utils
     - rpm
+    - dash
+    - hostname
+    - login
+    - passwd
+    - sed
+    - network-manager-config-connectivity-ubuntu
+    - cloud-init
+    - network-manager
+    - systemd-timesyncd
     # Pinned versions
-    - xdp-tools_1.2.8-1ppa1~noble2
-    - libigdgmm-dev_22.8.2-1ppa1~noble1
-    - libigdgmm12_22.8.2-1ppa1~noble1
-    - libmfx-gen1.2_25.3.4-1ppa1~noble1
-    - libva-dev_2.22.0-1ppa1~noble2
-    - libva-drm2_2.22.0-1ppa1~noble2
-    - libva-glx2_2.22.0-1ppa1~noble2
-    - libva-wayland2_2.22.0-1ppa1~noble2
-    - libva-x11-2_2.22.0-1ppa1~noble2
-    - libva2_2.22.0-1ppa1~noble2
-    - libxatracker2_25.0.0-1ppa1~noble7
-    - linux-firmware_20240318.git3b128b60-0.2.17-1ppa1-noble7
-    - mesa-va-drivers_25.0.0-1ppa1~noble7
-    - mesa-vdpau-drivers_25.0.0-1ppa1~noble7
-    - mesa-vulkan-drivers_25.0.0-1ppa1~noble7
+    - xdp-tools
+    - mutter-common-bin_46.2-1.0.24.04.13-1ppa1~noble2
+    - libmutter-14-0_46.2-1.0.24.04.13-1ppa1~noble2
+    - gir1.2-mutter-14_46.2-1.0.24.04.13-1ppa1~noble2
+    - libigdgmm-dev_22.8.2-1ppa1~noble2
+    - libigdgmm12_22.8.2-1ppa1~noble2
+    - libmfx-gen1.2_25.3.4-1ppa1~noble2
+    - libva-dev_2.22.0-1ppa1~noble3
+    - libva-drm2_2.22.0-1ppa1~noble3
+    - libva-glx2_2.22.0-1ppa1~noble3
+    - libva-wayland2_2.22.0-1ppa1~noble3
+    - libva-x11-2_2.22.0-1ppa1~noble3
+    - libva2_2.22.0-1ppa1~noble3
+    - libxatracker2_25.0.0-1ppa1~noble9
+    - linux-firmware_20240318.git3b128b60-0.2.17-1ppa1-noble12
+    - mesa-va-drivers_25.0.0-1ppa1~noble9
+    - mesa-vdpau-drivers_25.0.0-1ppa1~noble9
+    - mesa-vulkan-drivers_25.0.0-1ppa1~noble9
     - libvpl-dev_1:2.15.0-1ppa1~noble2
-    - libmfx-gen-dev_25.3.4-1ppa1~noble1
+    - libmfx-gen-dev_25.3.4-1ppa1~noble2
     - onevpl-tools_1:2.15.0-1ppa1~noble2
-    - qemu-block-extra_3:9.1.0+git20250923-ppa1-noble2
-    - qemu-guest-agent_3:9.1.0+git20250923-ppa1-noble2
-    - qemu-system_3:9.1.0+git20250923-ppa1-noble2
-    - qemu-system-arm_3:9.1.0+git20250923-ppa1-noble2
-    - qemu-system-common_3:9.1.0+git20250923-ppa1-noble2
-    - qemu-system-data_3:9.1.0+git20250923-ppa1-noble2
-    - qemu-system-gui_3:9.1.0+git20250923-ppa1-noble2
-    - qemu-system-mips_3:9.1.0+git20250923-ppa1-noble2
-    - qemu-system-misc_3:9.1.0+git20250923-ppa1-noble2
-    - qemu-system-ppc_3:9.1.0+git20250923-ppa1-noble2
-    - qemu-system-s390x_3:9.1.0+git20250923-ppa1-noble2
-    - qemu-system-sparc_3:9.1.0+git20250923-ppa1-noble2
-    - qemu-system-x86_3:9.1.0+git20250923-ppa1-noble2
-    - qemu-user_3:9.1.0+git20250923-ppa1-noble2
-    - qemu-user-binfmt_3:9.1.0+git20250923-ppa1-noble2
-    - qemu-utils_3:9.1.0+git20250923-ppa1-noble2
-    - qemu-system-modules-opengl_3:9.1.0+git20250923-ppa1-noble2
-    - va-driver-all_2.22.0-1ppa1~noble2
-    - weston_10.0.0+git20250321-1ppa1~noble5
+    - qemu-block-extra_4:9.1.0+git20251029-ppa1-noble3
+    - qemu-guest-agent_4:9.1.0+git20251029-ppa1-noble3
+    - qemu-system_4:9.1.0+git20251029-ppa1-noble3
+    - qemu-system-arm_4:9.1.0+git20251029-ppa1-noble3
+    - qemu-system-common_4:9.1.0+git20251029-ppa1-noble3
+    - qemu-system-data_4:9.1.0+git20251029-ppa1-noble3
+    - qemu-system-gui_4:9.1.0+git20251029-ppa1-noble3
+    - qemu-system-mips_4:9.1.0+git20251029-ppa1-noble3
+    - qemu-system-misc_4:9.1.0+git20251029-ppa1-noble3
+    - qemu-system-ppc_4:9.1.0+git20251029-ppa1-noble3
+    - qemu-system-s390x_4:9.1.0+git20251029-ppa1-noble3
+    - qemu-system-sparc_4:9.1.0+git20251029-ppa1-noble3
+    - qemu-system-x86_4:9.1.0+git20251029-ppa1-noble3
+    - qemu-user_4:9.1.0+git20251029-ppa1-noble3
+    - qemu-user-binfmt_4:9.1.0+git20251029-ppa1-noble3
+    - qemu-utils_4:9.1.0+git20251029-ppa1-noble3
+    - qemu-system-modules-opengl_4:9.1.0+git20251029-ppa1-noble3
+    - va-driver-all_2.22.0-1ppa1~noble3
+    - weston_10.0.0+git20250321-1ppa1~noble6
     - wayland-protocols_1.38-1ppa1~noble3
     - linuxptp_4.3-ppa1~noble2
     - libvpl-tools_2:1.4.0~1ppa1-noble2
-    - spice-client-gtk_0.42-1ppa1~noble2
-    - intel-media-va-driver-non-free_25.3.4-1ppa1~noble3
-    - gir1.2-gst-plugins-bad-1.0_1.26.5-1ppa1~noble8
-    - gir1.2-gst-plugins-base-1.0_1.26.5-1ppa1~noble1
-    - gir1.2-gstreamer-1.0_1.26.5-1ppa1~noble1
-    - gir1.2-gst-rtsp-server-1.0_1.26.5-1ppa1~noble1
-    - gstreamer1.0-alsa_1.26.5-1ppa1~noble1
-    - gstreamer1.0-gl_1.26.5-1ppa1~noble1
-    - gstreamer1.0-gtk3_1.26.5-1ppa1~noble1
-    - gstreamer1.0-opencv_1.26.5-1ppa1~noble8
-    - gstreamer1.0-plugins-bad_1.26.5-1ppa1~noble8
-    - gstreamer1.0-plugins-bad-apps_1.26.5-1ppa1~noble8
-    - gstreamer1.0-plugins-base_1.26.5-1ppa1~noble1
-    - gstreamer1.0-plugins-base-apps_1.26.5-1ppa1~noble1
-    - gstreamer1.0-plugins-good_1.26.5-1ppa1~noble1
-    - gstreamer1.0-plugins-ugly_1.26.5-1ppa1~noble1
-    - gstreamer1.0-pulseaudio_1.26.5-1ppa1~noble1
-    - gstreamer1.0-qt5_1.26.5-1ppa1~noble1
-    - gstreamer1.0-rtsp_1.26.5-1ppa1~noble1
-    - gstreamer1.0-tools_1.26.5-1ppa1~noble1
-    - gstreamer1.0-x_1.26.5-1ppa1~noble1
-    - libgstrtspserver-1.0-dev_1.26.5-1ppa1~noble1
-    - libgstrtspserver-1.0-0_1.26.5-1ppa1~noble1
-    - libgstreamer-gl1.0-0_1.26.5-1ppa1~noble1
-    - libgstreamer-opencv1.0-0_1.26.5-1ppa1~noble8
-    - libgstreamer-plugins-bad1.0-0_1.26.5-1ppa1~noble8
-    - libgstreamer-plugins-bad1.0-dev_1.26.5-1ppa1~noble8
-    - libgstreamer-plugins-base1.0-0_1.26.5-1ppa1~noble1
-    - libgstreamer-plugins-base1.0-dev_1.26.5-1ppa1~noble1
-    - libgstreamer1.0-0_1.26.5-1ppa1~noble1
-    - libgstreamer1.0-dev_1.26.5-1ppa1~noble1
+    - spice-client-gtk_0.42-1ppa1~noble4
+    - intel-media-va-driver-non-free_25.3.4-1ppa1~noble5
+    - gir1.2-gst-plugins-bad-1.0_1.26.5-1ppa1~noble13
+    - gir1.2-gst-plugins-base-1.0_1.26.5-1ppa1~noble3
+    - gir1.2-gstreamer-1.0_1.26.5-1ppa1~noble3
+    - gir1.2-gst-rtsp-server-1.0_1.26.5-1ppa1~noble2
+    - gstreamer1.0-alsa_1.26.5-1ppa1~noble3
+    - gstreamer1.0-gl_1.26.5-1ppa1~noble3
+    - gstreamer1.0-gtk3_1.26.5-1ppa1~noble3
+    - gstreamer1.0-opencv_1.26.5-1ppa1~noble13
+    - gstreamer1.0-plugins-bad_1.26.5-1ppa1~noble13
+    - gstreamer1.0-plugins-bad-apps_1.26.5-1ppa1~noble13
+    - gstreamer1.0-plugins-base_1.26.5-1ppa1~noble3
+    - gstreamer1.0-plugins-base-apps_1.26.5-1ppa1~noble3
+    - gstreamer1.0-plugins-good_1.26.5-1ppa1~noble3
+    - gstreamer1.0-plugins-ugly_1.26.5-1ppa1~noble2
+    - gstreamer1.0-pulseaudio_1.26.5-1ppa1~noble3
+    - gstreamer1.0-qt5_1.26.5-1ppa1~noble3
+    - gstreamer1.0-rtsp_1.26.5-1ppa1~noble2
+    - gstreamer1.0-tools_1.26.5-1ppa1~noble3
+    - gstreamer1.0-x_1.26.5-1ppa1~noble3
+    - libgstrtspserver-1.0-dev_1.26.5-1ppa1~noble2
+    - libgstrtspserver-1.0-0_1.26.5-1ppa1~noble2
+    - libgstreamer-gl1.0-0_1.26.5-1ppa1~noble3
+    - libgstreamer-opencv1.0-0_1.26.5-1ppa1~noble13
+    - libgstreamer-plugins-bad1.0-0_1.26.5-1ppa1~noble13
+    - libgstreamer-plugins-bad1.0-dev_1.26.5-1ppa1~noble13
+    - libgstreamer-plugins-base1.0-0_1.26.5-1ppa1~noble3
+    - libgstreamer-plugins-base1.0-dev_1.26.5-1ppa1~noble3
+    - libgstreamer1.0-0_1.26.5-1ppa1~noble3
+    - libgstreamer1.0-dev_1.26.5-1ppa1~noble3
     - vainfo_2.22.0-1ppa1~noble1
-    - ffmpeg_7:7.1.0-1ppa1~noble5
+    - ffmpeg_7:8.0.0-1ppa1~noble1
     - xpu-smi_1.3.0-20250707.103634.3db7de07~u24.04
-    - intel-ocloc_25.35.35096.9-0
-    - libze-intel-gpu1_25.35.35096.9-0
+    - intel-ocloc_25.40.35563.4-0
+    - libze-intel-gpu1_25.40.35563.4-0
     - intel-metrics-discovery_1.14.180-1
     - intel-metrics-library_1.0.196-1
     - intel-gsc_0.9.5-1ppa1~noble1
     - level-zero_1.22.4
-    - intel-igc-core-2_2.18.5
-    - intel-igc-opencl-2_2.18.5
-    - intel-opencl-icd_25.35.35096.9-0
+    - intel-igc-core-2_2.20.3
+    - intel-igc-opencl-2_2.20.3
+    - intel-opencl-icd_25.40.35563.4-0
     - xserver-common_2:21.1.12-1ppa1~noble3
     - xnest_2:21.1.12-1ppa1~noble3
     - xserver-xorg-dev_2:21.1.12-1ppa1~noble3
     - xvfb_2:21.1.12-1ppa1~noble3
-    # Manageability packages
-    - apparmor
-    - inbc-program_4.2.8.8-1
-    - inbm-cloudadapter-agent_4.2.8.8-1
-    - inbm-configuration-agent_4.2.8.8-1
-    - inbm-diagnostic-agent_4.2.8.8-1
-    - inbm-dispatcher-agent_4.2.8.8-1
-    - inbm-telemetry-agent_4.2.8.8-1
-    - mqtt_4.2.8.8-1
-    - tpm-provision_4.2.8.8-1
-    - trtl_4.2.8.8-1
-    - dkms
     # M9 Packages
-    - docker-ce
-    - docker-ce-cli
-    - docker-buildx-plugin
-    - docker-compose-plugin
     - ca-certificates
     - software-properties-common
     - cpuid
     - clinfo
+    - docker-ce
+    - docker-ce-cli
+    - containerd.io
+    - docker-buildx-plugin
+    - docker-compose-plugin
+
+  additionalFiles:
+    - local: ../additionalfiles/ptl/01-network-manager-all.yaml
+      final: /etc/netplan/01-network-manager-all.yaml
+    - local: ../additionalfiles/ptl/50-cloud-init.yaml
+      final: /etc/netplan/50-cloud-init.yaml
     
   kernel:
     version: "6.17"
     # Use this cmdline and kernel option if using xe driver,
-    # cmdline: "console=ttyS0,115200 console=tty0 loglevel=7 xe.max_vfs=7 xe.force_probe=* modprobe.blacklist=i915 udmabuf.list_limit=8192"
-    # enableExtraModules: "intel_vpu uas"
-    # Use this cmdline and kernel option if using i915 driver,
-    cmdline: "console=ttyS0,115200 console=tty0 loglevel=7 i915.force_probe=*"
+    cmdline: "console=ttyS0,115200 console=tty0 loglevel=7 xe.max_vfs=7 xe.force_probe=* modprobe.blacklist=i915 udmabuf.list_limit=8192"
     enableExtraModules: "intel_vpu uas"
+    # Use this cmdline and kernel option if using i915 driver,
+    # cmdline: "console=ttyS0,115200 console=tty0 loglevel=7 i915.force_probe=*"
+    # enableExtraModules: "intel_vpu uas"
     # alternative cmdline in case gpu not support both i915 and xe drivers
     # cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
     # enableExtraModules: "intel_vpu uas simpledrm"
     packages:
-        - linux-image-6.17-intel_251118t134731z-r2
-        - linux-headers-6.17-intel_251118t134731z-r2
+        - linux-image-6.17-intel_260128t080735z-r2
+        - linux-headers-6.17-intel_260128t080735z-r2
 
   users:
     - name: rbfadmin
       password: "jaiZ6dai"
-      groups: ["docker", "render"]
     - name: user
       password: user1234
       groups: ["sudo"]
@@ -428,19 +424,13 @@ systemConfig:
     - cmd: "echo 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQDb2P8gBvsy9DkzC1WiXfvisMFf7PQvtdvVC4n22ot4D5KOVxgoaCnjZM6qAZ2AdWPBebxInnUeMvw0u6RjRnflpYtNPgN4qiE313j62CmD80f/N+jvIxmoGhgsGE4RAMFXQ6pNaB/8KblrpmWQ5VfEIt7JcSR3Qvnkl9I2bljJU9zrMieE+Nras7hstg8fVWtGNjQjJpMWmt1YGxVbQiea0jDBqpru6TqnOYGD48JdR8QzHq++xL82I3x8kPz6annAvCDSVmiw9Mz0YtAsPIDZj4ABm866a8/U2mKVUncXYrBG1/pHBJMDJeX3ggd/UK2NvU8uEDJmITXUZRP8kBaO7b2LnRO08+Pr+nvmwukCP/wXflfS59h7kXCo8+Xjx/PEMO4OyFYHQunOUf/XTC13iig/MLY0EbqU6D+Lg1N13eJocRSta50zV+m+/PG23Zd3/6UH0noxYezQV3dQmsstzKKXbm8vkBmdqCZEvEnFSgl0VmX5HpzZLYI3L3hBH8/wgiWinrs7K13pZ8+lXN0ZhhJhdo61juiYwy1gbHP0ihqGkePw7w0DSCu5s9fA7xDTy2YTjkMsKaT8rbTYG5hunokNswdOCNYJyiCF3zJ08Z5hlDqSJJOPRdjL3YTIr6QlWSea/pTjkWmmE7Mv8M15c4V8Y77x6DsTFWlmGQbf1Q== swsbalabuser@BA02RNL99999' >> ~sys_olvtelemetry/.ssh/authorized_keys"
     - cmd: "chmod 600 ~sys_olvtelemetry/.ssh/authorized_keys"
     - cmd: "chown sys_olvtelemetry:sys_olvtelemetry -R ~sys_olvtelemetry/.ssh"
-    # Enable SSH service
-    - cmd: "systemctl enable ssh"
-    # Install NPU driver (firmware, compiler, runtime only - skip kernel module for chroot)
-    - cmd: "mkdir -m 755 -pv /opt/vpu"
-    - cmd: "curl -s https://af01p-ir.devtools.intel.com/artifactory/drivers_vpu_linux_client-ir-local/engineering-drops/driver/main/release/25ww49.1.1/npu-linux-driver-ci-1.30.0.20251128-19767695845-ubuntu2404-release.tar.gz | tar -zxv --strip-components=1 -C /opt/vpu -f -"
-    - cmd: "sed -i.bak \"/intel-level-zero',/d; s/\\\"intel-level-zero\\\", //g\" /opt/vpu/npu-drv-installer"
-    # Patch npu-drv-installer to skip module operations that don't work in chroot
-    - cmd: "sed -i 's/^def load_module():/def load_module_disabled():/' /opt/vpu/npu-drv-installer"
-    - cmd: "sed -i 's/^def unload_module():/def unload_module_disabled():/' /opt/vpu/npu-drv-installer"
-    - cmd: "sed -i 's/^def create_user(/def create_user_disabled(/' /opt/vpu/npu-drv-installer"
-    - cmd: "sed -i 's/load_module()/pass  # load_module() disabled for chroot/' /opt/vpu/npu-drv-installer"
-    - cmd: "sed -i 's/create_user(/pass  # create_user() disabled for chroot; create_user_disabled(/' /opt/vpu/npu-drv-installer"
-    - cmd: "/opt/vpu/npu-drv-installer --driver_only --skip_module_install --skip_module_load --skip_user_creation"
+    # Enable SSH service to start automatically on boot
+    - cmd: "ln -sf /lib/systemd/system/ssh.service /etc/systemd/system/multi-user.target.wants/ssh.service"
+    # Install NPU driver via dpkg per script-1
+    - cmd: "mkdir -p /tmp/npu-drv-package"
+    - cmd: "cd /tmp/npu-drv-package && wget https://af01p-ir.devtools.intel.com/artifactory/drivers_vpu_linux_client-ir-local/builds/opensource-linux-vpu-driver/ci/opensource_main/npu-linux-driver-ci-1.28.0.20251218-20347000698/linux-npu-driver-v1.28.0.20251218-20347000698-ubuntu2404.tar.gz"
+    - cmd: "cd /tmp/npu-drv-package && tar -xf linux-npu-driver-v1.28.0.20251218-20347000698-ubuntu2404.tar.gz"
+    - cmd: "cd /tmp/npu-drv-package && dpkg -i *.deb"
     # Install audio firmware
     - cmd: "mkdir -pv /lib/firmware/intel/sof-ipc4/mtl/ /lib/firmware/intel/sof-ace-tplg/"
     - cmd: "wget https://af01p-png.devtools.intel.com/artifactory/hspe-edge-png-local/ubuntu-mtl-audio-tplg-6/c0/intel/sof-ipc4/mtl/sof-mtl.ldc -O /lib/firmware/intel/sof-ipc4/mtl/sof-mtl.ldc"
@@ -467,6 +457,9 @@ systemConfig:
     # Configure kernel messages
     - cmd: "echo 'kernel.printk = 7 4 1 7' > /etc/sysctl.d/99-kernel-printk.conf"
     - cmd: "echo 'kernel.dmesg_restrict = 0' >> /etc/sysctl.d/99-kernel-printk.conf"
+    # Configure NTP and timezone for correct datetime
+    - cmd: "ln -sf /usr/share/zoneinfo/UTC /etc/localtime"
+    - cmd: "ln -sf /lib/systemd/system/systemd-timesyncd.service /etc/systemd/system/sysinit.target.wants/systemd-timesyncd.service"
     # Set up snap proxy refresh
     - cmd: "echo '#!/bin/bash' > /opt/snapd_refresh.sh"
     - cmd: "echo 'snap set system proxy.http=http://proxy-dmz.intel.com:911' >> /opt/snapd_refresh.sh"

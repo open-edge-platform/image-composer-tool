@@ -257,8 +257,8 @@
         "bootloader": { "$ref": "#/$defs/Bootloader" },
         "packages": {
           "type": "array",
-          "description": "List of packages to include in the system",
-          "items": { "type": "string", "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9+_.:~-]*[A-Za-z0-9+])?$" },
+          "description": "List of packages to include in the system. Supports simple glob-style patterns on package names, such as wayland* or libva-?[0-9]. Wildcards are limited to *, ?, and bracket ranges (e.g. [0-9]); patterns must match the allowed character set in this schema and are applied only to package names (versioned globs or comparison operators like pkg>=1.2 are not supported). Invalid patterns will cause template validation to fail.",
+          "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9+_.:~*?\\[\\]-]*$" },
           "uniqueItems": true
         },
         "additionalFiles": {
@@ -344,12 +344,13 @@
           "maximum": 9999,
           "default": 0
         },
-        "AllowPackages": {
+        "allowPackages": {
           "type": "array",
           "description": "Optional: specific packages to include from this repository (package pinning)",
           "items": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9+_.:~*?\\[\\]-]*$"
           }
         }
       },

@@ -151,6 +151,9 @@ type EFIBinaryEvidence struct {
 	OSRelSHA256   string            `json:"osrelSha256,omitempty" yaml:"osrelSha256,omitempty"`
 	UnameSHA256   string            `json:"unameSha256,omitempty" yaml:"unameSha256,omitempty"`
 
+	// Bootloader configuration (for GRUB, systemd-boot, etc.)
+	BootConfig *BootloaderConfig `json:"bootConfig,omitempty" yaml:"bootConfig,omitempty"`
+
 	Notes []string `json:"notes,omitempty" yaml:"notes,omitempty"`
 }
 
@@ -167,6 +170,56 @@ const (
 	BootloaderMokManager   BootloaderKind = "mok-manager"
 	BootloaderLinuxEFIStub BootloaderKind = "linux-efi-stub" // optional
 )
+
+// BootloaderConfig captures bootloader configuration data and kernel references.
+type BootloaderConfig struct {
+	// Configuration file paths and hashes
+	ConfigFiles map[string]string `json:"configFiles,omitempty" yaml:"configFiles,omitempty"` // path -> SHA256
+	ConfigRaw   map[string]string `json:"configRaw,omitempty" yaml:"configRaw,omitempty"`     // path -> raw content (truncated if large)
+
+	// Kernel location references extracted from config
+	KernelReferences []KernelReference `json:"kernelReferences,omitempty" yaml:"kernelReferences,omitempty"`
+
+	// Boot entries (GRUB/systemd-boot/EFI boot order)
+	BootEntries []BootEntry `json:"bootEntries,omitempty" yaml:"bootEntries,omitempty"`
+
+	// UUID resolution: UUIDs found in config and whether they match partition table
+	UUIDReferences []UUIDReference `json:"uuidReferences,omitempty" yaml:"uuidReferences,omitempty"`
+
+	// Default boot target/entry
+	DefaultEntry string `json:"defaultEntry,omitempty" yaml:"defaultEntry,omitempty"`
+
+	// Configuration issues detected during parsing
+	Notes []string `json:"notes,omitempty" yaml:"notes,omitempty"`
+}
+
+// KernelReference represents a kernel file reference found in bootloader config.
+type KernelReference struct {
+	Path          string `json:"path" yaml:"path"`                                       // Kernel path as specified in config
+	PartitionUUID string `json:"partitionUuid,omitempty" yaml:"partitionUuid,omitempty"` // UUID reference if present
+	RootUUID      string `json:"rootUuid,omitempty" yaml:"rootUuid,omitempty"`           // root device UUID reference if present
+	BootEntry     string `json:"bootEntry,omitempty" yaml:"bootEntry,omitempty"`         // Which boot entry this references
+}
+
+// BootEntry represents a single boot entry (GRUB menu item, systemd-boot entry, etc.).
+type BootEntry struct {
+	Name          string `json:"name" yaml:"name"`                                       // Entry name/title
+	Kernel        string `json:"kernel" yaml:"kernel"`                                   // Kernel path
+	Initrd        string `json:"initrd,omitempty" yaml:"initrd,omitempty"`               // Initrd path
+	Cmdline       string `json:"cmdline,omitempty" yaml:"cmdline,omitempty"`             // Kernel cmdline
+	IsDefault     bool   `json:"isDefault,omitempty" yaml:"isDefault,omitempty"`         // Whether this is default
+	PartitionUUID string `json:"partitionUuid,omitempty" yaml:"partitionUuid,omitempty"` // Root partition UUID
+	RootDevice    string `json:"rootDevice,omitempty" yaml:"rootDevice,omitempty"`       // Root device reference
+	UKIPath       string `json:"ukiPath,omitempty" yaml:"ukiPath,omitempty"`             // For systemd-boot unified kernel image
+}
+
+// UUIDReference tracks UUIDs found in bootloader config and partition table resolution.
+type UUIDReference struct {
+	UUID                string `json:"uuid" yaml:"uuid"`
+	Context             string `json:"context" yaml:"context"`                                             // Where found: "kernel_cmdline", "root_device", "boot_entry", etc.
+	ReferencedPartition int    `json:"referencedPartition,omitempty" yaml:"referencedPartition,omitempty"` // Partition index (1-based) if resolved
+	Mismatch            bool   `json:"mismatch" yaml:"mismatch"`                                           // True if UUID not found in partition table
+}
 
 // File system constants
 const (
@@ -567,6 +620,13 @@ func computeFileSHA256(f *os.File) (string, error) {
 	}
 
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// hashBytesHex computes SHA256 hash of a byte slice and returns hex string
+func hashBytesHex(data []byte) string {
+	h := sha256.New()
+	h.Write(data)
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // detectVerity inspects the partition table and UKI cmdline to detect dm-verity configuration

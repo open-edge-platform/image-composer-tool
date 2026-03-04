@@ -29,14 +29,14 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd #v6.0.2
         with:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
 
       - name: Setup Earthly
-        uses: earthly/actions/setup-earthly@v1
+        uses: earthly/actions-setup@43211c7a0eae5344d6d79fb4aaf209c8f8866203 #v1.0.13
         with:
           version: "latest"
 
@@ -76,7 +76,7 @@ jobs:
 
       - name: Upload coverage artifacts
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f #v6.0.0
         with:
           name: coverage-${{ github.run_id }}
           path: |

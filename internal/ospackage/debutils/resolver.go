@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -22,6 +23,34 @@ type VersionConstraint struct {
 	Op          string
 	Ver         string
 	Alternative string // Alternative package name for constraints like "logsave | e2fsprogs (<< 1.45.3-1~)"
+}
+
+func isGlobPattern(pattern string) bool {
+	return strings.ContainsAny(pattern, "*?[]")
+}
+
+func matchesPackageFilter(pkgName string, filter []string) bool {
+	if len(filter) == 0 {
+		return true
+	}
+
+	for _, pattern := range filter {
+		if isGlobPattern(pattern) {
+			if ok, err := path.Match(pattern, pkgName); err == nil && ok {
+				return true
+			}
+		}
+
+		if pkgName == pattern {
+			return true
+		}
+
+		if strings.HasPrefix(pkgName, pattern+"-") || strings.HasPrefix(pkgName, pattern) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func GenerateDot(pkgs []ospackage.PackageInfo, file string, pkgSources map[string]config.PackageSource) error {
@@ -80,7 +109,7 @@ func GenerateDot(pkgs []ospackage.PackageInfo, file string, pkgSources map[strin
 }
 
 // ParseRepositoryMetadata parses the Packages.gz file from gzHref.
-func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, releaseSign string, pbGPGKey string, buildPath string, arch string) ([]ospackage.PackageInfo, error) {
+func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, releaseSign string, pbGPGKey string, buildPath string, arch string, packageFilter []string) ([]ospackage.PackageInfo, error) {
 	log := logger.Logger()
 
 	// Ensure pkgMetaDir exists, create if not
@@ -196,7 +225,9 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 		if line == "" {
 			// End of one package entry
 			if pkg.Name != "" {
-				pkgs = append(pkgs, pkg)
+				if matchesPackageFilter(pkg.Name, packageFilter) {
+					pkgs = append(pkgs, pkg)
+				}
 				pkg = ospackage.PackageInfo{}
 			}
 			if err == io.EOF {
@@ -289,7 +320,9 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 
 	// Add the last package if file doesn't end with a blank line
 	if pkg.Name != "" {
-		pkgs = append(pkgs, pkg)
+		if matchesPackageFilter(pkg.Name, packageFilter) {
+			pkgs = append(pkgs, pkg)
+		}
 	}
 
 	return pkgs, nil

@@ -23,29 +23,31 @@ import (
 
 // Repository represents a Debian repository
 type Repository struct {
-	ID        string
-	Codename  string
-	URL       string
-	PKey      string
-	Component string
-	Priority  int
+	ID            string
+	Codename      string
+	URL           string
+	PKey          string
+	Component     string
+	Priority      int
+	AllowPackages []string
 }
 
 // repoConfig hold repo related info
 type RepoConfig struct {
-	Section      string // raw section header
-	Name         string // human-readable name from name=
-	PkgList      string
-	PkgPrefix    string
-	GPGCheck     bool
-	RepoGPGCheck bool
-	Enabled      bool
-	PbGPGKey     string
-	ReleaseFile  string
-	ReleaseSign  string
-	BuildPath    string // path to store builds, relative to the root of the repo
-	Arch         string // architecture, e.g., amd64, all
-	Priority     int    // repository priority (higher numbers = higher priority)
+	Section       string // raw section header
+	Name          string // human-readable name from name=
+	PkgList       string
+	PkgPrefix     string
+	GPGCheck      bool
+	RepoGPGCheck  bool
+	Enabled       bool
+	PbGPGKey      string
+	ReleaseFile   string
+	ReleaseSign   string
+	BuildPath     string   // path to store builds, relative to the root of the repo
+	Arch          string   // architecture, e.g., amd64, all
+	Priority      int      // repository priority (higher numbers = higher priority)
+	AllowPackages []string // optional package filter for this repository
 }
 
 type pkgChecksum struct {
@@ -68,7 +70,7 @@ func Packages() ([]ospackage.PackageInfo, error) {
 	log := logger.Logger()
 	log.Infof("fetching packages from %s", RepoCfg.PkgList)
 
-	packages, err := ParseRepositoryMetadata(RepoCfg.PkgPrefix, GzHref, RepoCfg.ReleaseFile, RepoCfg.ReleaseSign, RepoCfg.PbGPGKey, RepoCfg.BuildPath, RepoCfg.Arch)
+	packages, err := ParseRepositoryMetadata(RepoCfg.PkgPrefix, GzHref, RepoCfg.ReleaseFile, RepoCfg.ReleaseSign, RepoCfg.PbGPGKey, RepoCfg.BuildPath, RepoCfg.Arch, RepoCfg.AllowPackages)
 	if err != nil {
 		return nil, fmt.Errorf("parsing default repo failed: %w", err)
 	}
@@ -92,7 +94,7 @@ func PackagesFromMultipleRepos() ([]ospackage.PackageInfo, error) {
 	for i, repoCfg := range RepoCfgs {
 		log.Infof("fetching packages from repository %d: %s (%s)", i+1, repoCfg.Name, repoCfg.PkgList)
 
-		packages, err := ParseRepositoryMetadata(repoCfg.PkgPrefix, repoCfg.PkgList, repoCfg.ReleaseFile, repoCfg.ReleaseSign, repoCfg.PbGPGKey, repoCfg.BuildPath, repoCfg.Arch)
+		packages, err := ParseRepositoryMetadata(repoCfg.PkgPrefix, repoCfg.PkgList, repoCfg.ReleaseFile, repoCfg.ReleaseSign, repoCfg.PbGPGKey, repoCfg.BuildPath, repoCfg.Arch, repoCfg.AllowPackages)
 		if err != nil {
 			log.Warnf("Failed to parse repository %s: %v", repoCfg.Name, err)
 			failedRepos = append(failedRepos, repoCfg.Name)
@@ -139,18 +141,19 @@ func BuildRepoConfigs(userRepoList []Repository, arch string) ([]RepoConfig, err
 				}
 				fmt.Printf("SUCCESS: baseURL %s codename %s localArch %s componentName %s\n", baseURL, codename, localArch, componentName)
 				repo := RepoConfig{
-					PkgList:      package_list_url,
-					ReleaseFile:  fmt.Sprintf("%s/dists/%s/%s", baseURL, codename, releaseNm),
-					ReleaseSign:  fmt.Sprintf("%s/dists/%s/%s.gpg", baseURL, codename, releaseNm),
-					PkgPrefix:    baseURL,
-					Name:         id,
-					GPGCheck:     true,
-					RepoGPGCheck: true,
-					Enabled:      true,
-					PbGPGKey:     pkey,
-					BuildPath:    filepath.Join(config.TempDir(), "builds", fmt.Sprintf("%s_%s_%s", id, localArch, componentName)),
-					Arch:         localArch,
-					Priority:     repoItem.Priority,
+					PkgList:       package_list_url,
+					ReleaseFile:   fmt.Sprintf("%s/dists/%s/%s", baseURL, codename, releaseNm),
+					ReleaseSign:   fmt.Sprintf("%s/dists/%s/%s.gpg", baseURL, codename, releaseNm),
+					PkgPrefix:     baseURL,
+					Name:          id,
+					GPGCheck:      true,
+					RepoGPGCheck:  true,
+					Enabled:       true,
+					PbGPGKey:      pkey,
+					BuildPath:     filepath.Join(config.TempDir(), "builds", fmt.Sprintf("%s_%s_%s", id, localArch, componentName)),
+					Arch:          localArch,
+					Priority:      repoItem.Priority,
+					AllowPackages: repoItem.AllowPackages,
 				}
 				userRepo = append(userRepo, repo)
 				connectSuccess = true
@@ -179,11 +182,14 @@ func UserPackages() ([]ospackage.PackageInfo, error) {
 		}
 		baseURL := strings.TrimPrefix(strings.TrimPrefix(repo.URL, "http://"), "https://")
 		repoList = append(repoList, Repository{
-			ID:        fmt.Sprintf("%s%d", repoGroup+"-"+baseURL, i+1),
-			Codename:  repo.Codename,
-			URL:       repo.URL,
-			PKey:      repo.PKey,
-			Component: repo.Component, Priority: repo.Priority})
+			ID:            fmt.Sprintf("%s%d", repoGroup+"-"+baseURL, i+1),
+			Codename:      repo.Codename,
+			URL:           repo.URL,
+			PKey:          repo.PKey,
+			Component:     repo.Component,
+			Priority:      repo.Priority,
+			AllowPackages: repo.AllowPackages,
+		})
 	}
 
 	// If no valid repositories were found (all were placeholders), return empty package list
@@ -199,7 +205,7 @@ func UserPackages() ([]ospackage.PackageInfo, error) {
 	var allUserPackages []ospackage.PackageInfo
 	for _, rpItx := range userRepo {
 
-		userPkgs, err := ParseRepositoryMetadata(rpItx.PkgPrefix, rpItx.PkgList, rpItx.ReleaseFile, rpItx.ReleaseSign, rpItx.PbGPGKey, rpItx.BuildPath, rpItx.Arch)
+		userPkgs, err := ParseRepositoryMetadata(rpItx.PkgPrefix, rpItx.PkgList, rpItx.ReleaseFile, rpItx.ReleaseSign, rpItx.PbGPGKey, rpItx.BuildPath, rpItx.Arch, rpItx.AllowPackages)
 		if err != nil {
 			return nil, fmt.Errorf("parsing user repo failed: %w", err)
 		}

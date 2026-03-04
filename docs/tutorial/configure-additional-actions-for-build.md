@@ -80,7 +80,7 @@ systemConfig:
 
 ## Real-World Example
 
-From the [`ubuntu24-mah.yml`](../image-templates/ubuntu24-mah.yml) template:
+From an example Ubuntu template with custom actions:
 
 ```yaml
 systemConfig:
@@ -229,6 +229,6 @@ systemConfig:
 
 ## Related Documentation
 
-- [Image Template Format](../architecture/image-template-format.md)
+- [Image Templates](../architecture/os-image-composer-templates.md)
 - [Understanding the OS Image Build Process](../architecture/os-image-composer-build-process.md)
 - [Command-Line Reference](../architecture/os-image-composer-cli-specification.md)
