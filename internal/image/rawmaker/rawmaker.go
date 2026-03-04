@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/open-edge-platform/os-image-composer/internal/chroot"
 	"github.com/open-edge-platform/os-image-composer/internal/config"
@@ -153,13 +154,31 @@ func (rawMaker *RawMaker) BuildRawImage() error {
 		rawMaker.cleanupImageFileOnError(imageFile)
 		return fmt.Errorf("failed to rename image file: %w", err)
 	}
+	rawMaker.template.FinishPureImageBuildTimer()
+
+	pureImageBuildDuration := rawMaker.template.GetPureImageBuildDuration()
+	if pureImageBuildDuration > 0 {
+		log.Infof("Pure raw image build time: %s", pureImageBuildDuration.Round(time.Millisecond))
+	}
 
 	log.Infof("Raw image build completed successfully: %s", finalImagePath)
 
 	// Image conversion (may compress/remove original file)
+	rawMaker.template.StartConvertImageTimer()
 	if err := rawMaker.ImageConvert.ConvertImageFile(finalImagePath, rawMaker.template); err != nil {
+		rawMaker.template.FinishConvertImageTimer()
+		convertImageDuration := rawMaker.template.GetConvertImageDuration()
+		if convertImageDuration > 0 {
+			log.Infof("Image conversion time before failure: %s", convertImageDuration.Round(time.Millisecond))
+		}
 		rawMaker.cleanupImageFileOnError(finalImagePath)
 		return fmt.Errorf("failed to convert image file: %w", err)
+	}
+	rawMaker.template.FinishConvertImageTimer()
+
+	convertImageDuration := rawMaker.template.GetConvertImageDuration()
+	if convertImageDuration > 0 {
+		log.Infof("Image conversion time: %s", convertImageDuration.Round(time.Millisecond))
 	}
 
 	// Copy SBOM to image build directory
@@ -167,6 +186,8 @@ func (rawMaker *RawMaker) BuildRawImage() error {
 		log.Warnf("Failed to copy SBOM to image build directory: %v", err)
 		// Don't fail the build if SBOM copy fails, just log warning
 	}
+
+	rawMaker.template.MarkBuildFinished()
 
 	return nil
 }

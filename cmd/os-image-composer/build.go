@@ -106,11 +106,13 @@ func executeBuild(cmd *cobra.Command, args []string) error {
 		goto post
 	}
 
+	template.StartBuildTimeline()
 	if err := p.PreProcess(template); err != nil {
 		buildErr = fmt.Errorf("pre-processing failed: %v", err)
 		goto post
 	}
 
+	template.StartPureImageBuildTimer()
 	if err := p.BuildImage(template); err != nil {
 		buildErr = fmt.Errorf("image build failed: %v", err)
 		goto post

@@ -91,9 +91,12 @@ func (p *Emt) PreProcess(template *config.ImageTemplate) error {
 		return fmt.Errorf("failed to install host dependencies: %w", err)
 	}
 
+	template.StartDownloadImagePkgsTimer()
 	if err := p.downloadImagePkgs(template); err != nil {
+		template.FinishDownloadImagePkgsTimer()
 		return fmt.Errorf("failed to download image packages: %w", err)
 	}
+	template.FinishDownloadImagePkgsTimer()
 
 	if err := p.chrootEnv.InitChrootEnv(template.Target.OS,
 		template.Target.Dist, template.Target.Arch); err != nil {
@@ -147,7 +150,7 @@ func (p *Emt) buildRawImage(template *config.ImageTemplate) error {
 	providerId := system.GetProviderId(template.Target.OS, template.Target.Dist, template.Target.Arch)
 	imageBuildDir := filepath.Join(globalWorkDir, providerId, "imagebuild", template.GetSystemConfigName())
 
-	displayImageArtifacts(imageBuildDir, "RAW")
+	displayImageArtifacts(imageBuildDir, "RAW", template)
 
 	return nil
 }
@@ -169,6 +172,15 @@ func (p *Emt) buildInitrdImage(template *config.ImageTemplate) error {
 	if err := initrdMaker.CleanInitrdRootfs(); err != nil {
 		return fmt.Errorf("failed to clean initrd rootfs: %w", err)
 	}
+
+	globalWorkDir, err := config.WorkDir()
+	if err != nil {
+		return fmt.Errorf("failed to get work directory: %w", err)
+	}
+	providerId := system.GetProviderId(template.Target.OS, template.Target.Dist, template.Target.Arch)
+	imageBuildDir := filepath.Join(globalWorkDir, providerId, "imagebuild", template.GetSystemConfigName())
+
+	displayImageArtifacts(imageBuildDir, "IMG", template)
 
 	return nil
 }
@@ -198,7 +210,7 @@ func (p *Emt) buildIsoImage(template *config.ImageTemplate) error {
 	providerId := system.GetProviderId(template.Target.OS, template.Target.Dist, template.Target.Arch)
 	imageBuildDir := filepath.Join(globalWorkDir, providerId, "imagebuild", template.GetSystemConfigName())
 
-	displayImageArtifacts(imageBuildDir, "ISO")
+	displayImageArtifacts(imageBuildDir, "ISO", template)
 
 	return nil
 }
@@ -316,6 +328,21 @@ func loadRepoConfigFromYAML(dist, arch string) (rpmutils.RepoConfig, error) {
 }
 
 // displayImageArtifacts displays all image artifacts in the build directory
-func displayImageArtifacts(imageBuildDir, imageType string) {
-	display.PrintImageDirectorySummary(imageBuildDir, imageType)
+func displayImageArtifacts(imageBuildDir, imageType string, template *config.ImageTemplate) {
+	startToDownloadImagePkgsDuration := template.GetDurationStartToDownloadImagePkgs()
+	downloadImagePkgsToPureBuildDuration := template.GetDurationDownloadImagePkgsToPureBuild()
+	pureImageBuildDuration := template.GetPureImageBuildDuration()
+	downloadImagePkgsDuration := template.GetDownloadImagePkgsDuration()
+	convertImageDuration := template.GetConvertImageDuration()
+	convertImageFileToFinishDuration := template.GetDurationConvertImageFileToFinish()
+	display.PrintImageDirectorySummary(
+		imageBuildDir,
+		imageType,
+		startToDownloadImagePkgsDuration,
+		downloadImagePkgsDuration,
+		downloadImagePkgsToPureBuildDuration,
+		pureImageBuildDuration,
+		convertImageDuration,
+		convertImageFileToFinishDuration,
+	)
 }

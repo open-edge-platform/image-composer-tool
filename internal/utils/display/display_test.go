@@ -25,7 +25,7 @@ func captureLogs(t *testing.T, fn func()) string {
 
 func TestPrintImageDirectorySummary_MissingDir(t *testing.T) {
 	logs := captureLogs(t, func() {
-		display.PrintImageDirectorySummary("/path/does/not/exist", "iso")
+		display.PrintImageDirectorySummary("/path/does/not/exist", "iso", 0, 0, 0, 0, 0, 0)
 	})
 
 	if !strings.Contains(logs, "Unable to read image build directory") {
@@ -37,7 +37,7 @@ func TestPrintImageDirectorySummary_EmptyDir(t *testing.T) {
 	dir := t.TempDir()
 
 	logs := captureLogs(t, func() {
-		display.PrintImageDirectorySummary(dir, "raw")
+		display.PrintImageDirectorySummary(dir, "raw", 0, 0, 0, 0, 0, 0)
 	})
 
 	if !strings.Contains(logs, "No artifacts found") {
@@ -68,7 +68,7 @@ func TestPrintImageDirectorySummary_WithArtifacts(t *testing.T) {
 	}
 
 	logs := captureLogs(t, func() {
-		display.PrintImageDirectorySummary(dir, "iso")
+		display.PrintImageDirectorySummary(dir, "iso", 0, 0, 0, 0, 0, 0)
 	})
 
 	if !strings.Contains(logs, "IMAGE CREATED SUCCESSFULLY") {

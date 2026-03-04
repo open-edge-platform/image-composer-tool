@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/open-edge-platform/os-image-composer/internal/chroot"
 	"github.com/open-edge-platform/os-image-composer/internal/config"
@@ -108,6 +109,14 @@ func (isoMaker *IsoMaker) BuildIsoImage() (err error) {
 		log.Warnf("Failed to copy SBOM to image build directory: %v", err)
 		// Don't fail the build if SBOM copy fails, just log warning
 	}
+
+	isoMaker.template.FinishPureImageBuildTimer()
+	pureImageBuildDuration := isoMaker.template.GetPureImageBuildDuration()
+	if pureImageBuildDuration > 0 {
+		log.Infof("Pure ISO image build time: %s", pureImageBuildDuration.Round(time.Millisecond))
+	}
+
+	isoMaker.template.MarkBuildFinished()
 
 	log.Infof("ISO image build completed successfully: %s", isoFilePath)
 

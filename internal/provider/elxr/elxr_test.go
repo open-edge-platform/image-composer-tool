@@ -998,13 +998,13 @@ func TestDisplayImageArtifacts(t *testing.T) {
 	tempDir := t.TempDir()
 
 	// Test with empty directory
-	displayImageArtifacts(tempDir, "TEST")
+	displayImageArtifacts(tempDir, "TEST", nil)
 	t.Log("displayImageArtifacts called successfully with empty directory")
 
 	// Test with different image types
-	displayImageArtifacts(tempDir, "RAW")
-	displayImageArtifacts(tempDir, "ISO")
-	displayImageArtifacts(tempDir, "IMG")
+	displayImageArtifacts(tempDir, "RAW", nil)
+	displayImageArtifacts(tempDir, "ISO", nil)
+	displayImageArtifacts(tempDir, "IMG", nil)
 
 	t.Log("displayImageArtifacts tested with multiple image types")
 }
