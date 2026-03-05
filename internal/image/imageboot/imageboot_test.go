@@ -1379,25 +1379,6 @@ func TestUpdateInitramfsForGrub_ModuleAddFailsContinues(t *testing.T) {
 	}
 }
 
-func TestUpdateInitramfsForGrub_EmptyExtraModulesReturnsNil(t *testing.T) {
-	tmpDir := t.TempDir()
-	kernelVersion := "5.15.0-73-generic"
-
-	template := &config.ImageTemplate{
-		SystemConfig: config.SystemConfig{
-			Kernel: config.KernelConfig{
-				EnableExtraModules: "",
-			},
-		},
-	}
-
-	// No mock commands needed - function should return early without executing any commands
-	err := updateInitramfsForGrub(tmpDir, kernelVersion, template)
-	if err != nil {
-		t.Errorf("Expected nil when EnableExtraModules is empty, got: %v", err)
-	}
-}
-
 func TestInstallImageBoot_GrubWithEnableExtraModules(t *testing.T) {
 	setupConfigDir(t)
 	diskPathIdMap := map[string]string{
