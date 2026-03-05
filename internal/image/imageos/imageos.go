@@ -964,25 +964,30 @@ func buildImageUKI(installRoot string, template *config.ImageTemplate) error {
 		} else {
 			log.Errorf("Install Root does not exist at %s", installRoot)
 		}
+		if _, err := os.Stat(kernelPath); err == nil {
+			log.Infof("kernelPath  Exists at %s", kernelPath)
+		} else {
+			log.Errorf("Install Root does not exist at %s", installRoot)
+		}
 
-		if _, err := os.Stat(filepath.Join(installRoot, kernelPath)); err == nil {
+		if _, err := os.Stat(kernelPath); err == nil {
 			log.Infof("kernelPath  Exists at %s", kernelPath)
 		} else {
 			log.Errorf("kernelPath does not exist at %s", kernelPath)
 		}
 
-		if _, err := os.Stat(filepath.Join(installRoot, initrdPath)); err == nil {
+		if _, err := os.Stat(initrdPath); err == nil {
 			log.Infof("initrdPath  Exists at %s", initrdPath)
 		} else {
 			log.Errorf("initrdPath does not exist at %s", initrdPath)
 		}
-		if _, err := os.Stat(filepath.Join(installRoot, cmdlineFile)); err == nil {
+		if _, err := os.Stat(cmdlineFile); err == nil {
 			log.Infof("cmdlineFile  Exists at %s", cmdlineFile)
 			return nil
 		} else {
 			log.Errorf("cmdlineFile does not exist at %s", cmdlineFile)
 		}
-		if _, err := os.Stat(filepath.Join(installRoot, outputPath)); err == nil {
+		if _, err := os.Stat(outputPath); err == nil {
 			log.Infof("outputPath  Exists at %s", outputPath)
 			return nil
 		} else {

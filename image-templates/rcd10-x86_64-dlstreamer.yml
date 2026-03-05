@@ -9,10 +9,6 @@ target:
   imageType: raw # Image type, valid value: [raw, iso].
 
 packageRepositories:
-  - codename: "EdgeAI"
-    url: "https://yum.repos.intel.com/edgeai/"
-    pkey: "https://yum.repos.intel.com/edgeai/GPG-PUB-KEY-INTEL-DLS.gpg" # Uncomment and replace in real config
-  
   - codename: "edge-base"
     url: "https://files-rs.edgeorchestration.intel.com/files-edge-orch/microvisor/rpms/3.0/base"
     pkey: "https://raw.githubusercontent.com/open-edge-platform/edge-microvisor-toolkit/refs/heads/3.0/SPECS/edge-repos/INTEL-RPM-GPG-KEY" # Uncomment and replace in real config
@@ -20,19 +16,6 @@ packageRepositories:
       - kernel-drivers-gpu
       - kernel
       - grub2-configuration
-      - linux-firmware-i915
-      - libva-intel-media-driver 
-      - libva-utils
-      - intel-gmmlib
-  
-  - codename: "OpenVINO"
-    url: "https://yum.repos.intel.com/openvino/"
-    pkey: "https://yum.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB" # Uncomment and replace in real config
-    
-  - codename: "mariner"
-    url: "https://packages.microsoft.com/yumrepos/cbl-mariner-2.0-prod-extended-x86_64/"
-    pkey: "https://packages.microsoft.com/azurelinux/3.0/prod/base/x86_64/repodata/repomd.xml.key" # Uncomment and replace in real config
-
 
 disk:
   name: Minimal_Raw # 1:1 mapping to the systemConfigs name
@@ -74,16 +57,4 @@ systemConfig:
       - kernel-drivers-gpu
 
   immutability:
-    enabled: false # default is true, overridden to false here  
-  packages:    
-    - sqlite
-    - curl
-    - nano
-    - paho-mqtt-c
-    - ffmpeg
-    - gstreamer
-    - opencv
-    - intel-dlstreamer
-    - openvino-2025.2.0
-    - linux-firmware-i915
-    # - tdnf
+    enabled: false # default is true, overridden to false here
