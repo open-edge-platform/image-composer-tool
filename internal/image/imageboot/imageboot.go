@@ -189,7 +189,6 @@ func updateInitramfsForGrub(installRoot, kernelVersion string, template *config.
 		}
 	} else {
 		log.Debugf("No extra modules specified in enableExtraModules")
-		return nil
 	}
 
 	updateInitramfsExists, err := shell.IsCommandExist("update-initramfs", installRoot)
