@@ -74,6 +74,7 @@ systemConfig:
     - coreutils
     - openssh-server
     - systemd-resolved
+    - efibootmgr
 
   additionalFiles:
     - local: ../additionalfiles/99-dhcp-en.network
