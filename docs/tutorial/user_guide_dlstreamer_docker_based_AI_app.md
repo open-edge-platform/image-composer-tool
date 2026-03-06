@@ -2,7 +2,7 @@
 
 *An example guide for running Docker-based AI workloads (Ollama chat, face recognition, DL Streamer face detection) on a Linux image created with OS Image Composer.*
 
-This tutorial assumes you have already built a base OS image using **OS Image Composer** and want to validate it or extend it with containerized edge‑AI workloads. For full details of the AI applications themselves (models, pipelines, etc.), refer to the corresponding guides in the `edge-ai-libraries` repository; this document focuses on how to deploy and run them on your composed image, including typical proxy and Docker configuration steps.
+This tutorial assumes you have already built a base OS image using **OS Image Composer** and want to validate it or extend it with containerized edge‑AI workloads. For full details of the AI applications themselves (models, pipelines, etc.), refer to the corresponding guides in the [`edge-ai-libraries`](https://github.com/open-edge-platform/edge-ai-libraries) and [`edge-ai-suites`](https://github.com/open-edge-platform/edge-ai-suites) repositories; this document focuses on how to deploy and run them on your composed image, including typical proxy and Docker configuration steps.
 ---
 
 ## 1. Prerequisites
@@ -216,6 +216,7 @@ Use these examples to extend your application beyond basic face detection into:
 ## 7. License
 
 This guide contains example commands and scripts provided for convenience. Review third‑party container/images licenses before redistribution.
+
 
 
 
