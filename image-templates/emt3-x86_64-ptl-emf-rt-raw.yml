@@ -33,8 +33,8 @@ packageRepositories:
     pkey: "https://raw.githubusercontent.com/open-edge-platform/edge-microvisor-toolkit/refs/heads/3.0/SPECS/edge-repos/INTEL-RPM-GPG-KEY"
     # list of allowed packages from this repository
     allowPackages:
-      - kernel-6.17.11
-      - kernel-drivers-gpu-6.17.11
+      - kernel-rt-6.17.11
+      - kernel-rt-drivers-gpu-6.17.11
       - gstreamer1-plugins-base
       - spice-server
       - spice-protocol
@@ -311,7 +311,7 @@ systemConfig:
     cmdline: "modprobe.blacklist=i915 processor.max_cstate=0 intel.max_cstate=0 processor_idle.max_cstate=0 intel_idle.max_cstate=0 clocksource=tsc tsc=reliable nowatchdog intel_pstate=disable idle=poll nosmt isolcpus=2,3 rcu_nocbs=2,3 rcupdate.rcu_cpu_stall_suppress=1 rcu_nocb_poll irqaffinity=0 mce=off hpet=disable numa_balancing=disable igb.blacklist=no nmi_watchdog=0 nosoftlockup"
     enableExtraModules: "intel_vpu uas"
     packages:
-      - kernel-rt-drivers-gpu
+      - kernel-rt-drivers-gpu-6.17.11
 
   configurations:
     - cmd: "echo 'user ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/user-sudo"
