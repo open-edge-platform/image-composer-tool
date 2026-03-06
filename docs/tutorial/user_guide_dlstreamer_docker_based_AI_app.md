@@ -189,11 +189,17 @@ gst-launch-1.0 filesrc location=/path/to/face-demographics-walking.mp4 ! \
 - **No GVA plugins?** Ensure DL Streamer is installed and `GST_PLUGIN_PATH` is exported.
 - **Headless systems**: prefer the file-output pipeline (WebM/MP4) instead of `autovideosink`.
 - **Model path errors**: ensure `.xml` and `.bin` are co-located in the same `FP32`/`FP16` folder.
-##  Additional DL Streamer Applications & Examples
+## Additional DL Streamer Applications & Examples
 
-For more DL Streamer (DLS) pipelines, advanced video analytics, multi-model graphs, and edge AI applications, refer to the official Open Edge Platform AI Libraries:
+For more DL Streamer (DLS) pipelines, advanced video analytics, multi-model graphs, and edge AI applications, refer to these official Open Edge Platform resources:
 
- **https://github.com/open-edge-platform/edge-ai-libraries**
+- **Open Edge Platform Edge AI Libraries (DL Streamer pipelines & assets):**  
+  https://github.com/open-edge-platform/edge-ai-libraries
+
+- **Open Edge Platform Edge AI Suites (end-to-end reference suites / sample solutions):**  
+  https://github.com/open-edge-platform/edge-ai-suites
+
+### Edge AI Libraries highlights
 
 This repository contains:
 - Ready‑to‑run DL Streamer pipelines  
@@ -210,12 +216,19 @@ Use these examples to extend your application beyond basic face detection into:
 - Multi-camera pipelines  
 - Custom edge AI applications  
 
+### Edge AI Suites highlights
+
+Edge AI Suites provides:
+- End-to-end edge AI sample suites and reference implementations
+- Deployment-oriented examples (including containerized flows)
+- Pre-integrated building blocks to accelerate solution bring-up on edge platforms
 
 ---
 
 ## 7. License
 
 This guide contains example commands and scripts provided for convenience. Review third‑party container/images licenses before redistribution.
+
 
 
 
