@@ -202,7 +202,7 @@ systemConfig:
     # secureBootDBCer: "<SECURE_BOOT_DB_CER_PATH>"
 
     # Package Configuration
-    packages:
+  packages:
     # Additional packages beyond the base system
     # ssh server
     - openssh-server
