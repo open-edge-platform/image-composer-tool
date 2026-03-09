@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/open-edge-platform/os-image-composer/internal/utils/display"
 	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
@@ -83,5 +84,62 @@ func TestPrintImageDirectorySummary_WithArtifacts(t *testing.T) {
 
 	if strings.Contains(logs, "ignored.raw") {
 		t.Fatalf("nested files should not be listed as artifacts: %s", logs)
+	}
+}
+
+func TestPrintImageBuildingTiming_NoVisibleRows(t *testing.T) {
+	logs := captureLogs(t, func() {
+		display.PrintImageBuildingTiming("raw", 0, 0, 0, 0, 0, 0)
+	})
+
+	if strings.Contains(logs, "Build Timings:") {
+		t.Fatalf("expected no build timings table when all durations are zero, got: %s", logs)
+	}
+}
+
+func TestPrintImageBuildingTiming_TableIncludesVisibleRowsAndTotal(t *testing.T) {
+	logs := captureLogs(t, func() {
+		display.PrintImageBuildingTiming(
+			"iso",
+			1500*time.Millisecond,
+			0,
+			250*time.Millisecond,
+			2*time.Second,
+			0,
+			1250*time.Millisecond,
+		)
+	})
+
+	if !strings.Contains(logs, "Build Timings:") {
+		t.Fatalf("expected build timings header, got: %s", logs)
+	}
+	if !strings.Contains(logs, "Stage") || !strings.Contains(logs, "Duration") {
+		t.Fatalf("expected table headers, got: %s", logs)
+	}
+
+	visibleStages := []string{
+		"Initialization and Configuration",
+		"Chroot Env Initialization",
+		"Image Build",
+		"Finalization and Clean Up",
+	}
+	for _, stage := range visibleStages {
+		if !strings.Contains(logs, stage) {
+			t.Fatalf("expected visible stage %q to appear in table", stage)
+		}
+	}
+
+	hiddenStages := []string{"Package Download", "Image Conversion"}
+	for _, stage := range hiddenStages {
+		if strings.Contains(logs, stage) {
+			t.Fatalf("expected zero-duration stage %q to be hidden", stage)
+		}
+	}
+
+	if !strings.Contains(logs, "Total Time") {
+		t.Fatalf("expected total row in table, got: %s", logs)
+	}
+	if !strings.Contains(logs, "5s") {
+		t.Fatalf("expected total duration 5s in table, got: %s", logs)
 	}
 }

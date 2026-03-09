@@ -639,50 +639,38 @@ logging:
 
 ### Image Template File
 
-The image template file (YAML format) defines the specifications for a single image build.
-With this file, you can define exactly what goes into your custom OS image,
-including packages, configurations, and customizations.
+The image template file (YAML) defines everything that goes into a custom OS
+image. A minimal template requires only `image` and `target`; the remaining
+sections are merged from the OS-specific default template at build time.
 
-**Example Template:**
+**Minimal example** (only the two required sections):
 
 ```yaml
 image:
-  # Basic image identification
-  name: edge-device-image                    # Name of the resulting image
-  version: "1.2.0"                           # Version for tracking and naming
+  name: edge-device-image
+  version: "1.2.0"
 
 target:
-  # Target OS and image configuration
-  os: azure-linux                            # Base operating system
-  dist: azl3                                 # Distribution identifier
-  arch: x86_64                               # Target architecture
-  imageType: raw                             # Output format (supported: raw, iso only)
-
-systemConfig:
-  # System configuration
-  name: edge                                 # Configuration name
-  description: Edge device image with Microvisor support
-
-  # Package configuration
-  packages:                                  # Packages to install
-    - openssh-server
-    - docker-ce
-    - vim
-    - curl
-    - wget
-
-  # Kernel configuration
-  kernel:
-    version: "6.12"                          # Kernel version to include
-    cmdline: "quiet splash"                  # Additional kernel command-line parameters
+  os: azure-linux
+  dist: azl3
+  arch: x86_64
+  imageType: raw
 ```
 
-See also:
+**Top-level sections:**
 
-- [Common Build Patterns](./os-image-composer-build-process.md#common-build-patterns)
-  for example image templates
-- [Template Structure](./os-image-composer-templates.md#template-structure)
-  for detailed template documentation
+| Section | Required | Description |
+|---------|----------|-------------|
+| `metadata` | No | AI-searchable discovery metadata (ignored by build engine) |
+| `image` | **Yes** | Image name and version |
+| `target` | **Yes** | OS, distribution, architecture, image type |
+| `disk` | No | Disk size, partitions, output artifact formats |
+| `packageRepositories` | No | Additional package repositories |
+| `systemConfig` | No (user) / **Yes** (merged) | Packages, kernel, users, bootloader, immutability, build commands |
+
+For the complete field-by-field reference including all nested fields, valid
+values, validation rules, and merge behavior, see the
+[Image Template Reference](./os-image-composer-templates.md).
 
 ## Exit Codes
 

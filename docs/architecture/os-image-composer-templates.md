@@ -1,190 +1,481 @@
-# Understanding and Using Templates in OS Image Composer
+# Image Template Reference
 
-Templates in the OS Image Composer tool are YAML files that deliver a
-straightforward way to customize, standardize, and reuse image configurations.
-This document explains the template system and how to use it to streamline your
-image-creation workflow.
+Templates are YAML files that define what goes into a custom OS image, the
+target platform, packages, disk layout, users, and build-time customizations.
+This document is the authoritative field-by-field reference for the template
+format.
+
+For a conceptual overview of how templates fit into the build pipeline, see
+[Understanding the Build Process](./os-image-composer-build-process.md).
 
 ## Table of Contents
 
-- [What Are Templates and How Do They Work?](#what-are-templates-and-how-do-they-work)
-  - [Template Structure](#template-structure)
+- [Image Template Reference](#image-template-reference)
+  - [Table of Contents](#table-of-contents)
+  - [How Templates Work](#how-templates-work)
+  - [Quick Start Example](#quick-start-example)
+  - [Top-Level Structure](#top-level-structure)
+  - [Field Reference](#field-reference)
+    - [`metadata`](#metadata)
+    - [`image` (required)](#image-required)
+    - [`target` (required)](#target-required)
+    - [`disk`](#disk)
+      - [`disk.artifacts[]`](#diskartifacts)
+      - [`disk.partitions[]`](#diskpartitions)
+    - [`packageRepositories`](#packagerepositories)
+    - [`systemConfig`](#systemconfig)
+      - [`systemConfig.kernel`](#systemconfigkernel)
+      - [`systemConfig.bootloader`](#systemconfigbootloader)
+      - [`systemConfig.immutability`](#systemconfigimmutability)
+      - [`systemConfig.users[]`](#systemconfigusers)
+      - [`systemConfig.initramfs`](#systemconfiginitramfs)
+      - [`systemConfig.additionalFiles[]`](#systemconfigadditionalfiles)
+      - [`systemConfig.configurations[]`](#systemconfigconfigurations)
+  - [Template Merge Behavior](#template-merge-behavior)
   - [Variable Substitution](#variable-substitution)
-- [Using Templates to Build Images](#using-templates-to-build-images)
-- [Template Storage](#template-storage)
-- [Template Variables](#template-variables)
-- [Best Practices](#best-practices)
-  - [Template Organization](#template-organization)
-  - [Template Design](#template-design)
-  - [Template Sharing](#template-sharing)
-- [Conclusion](#conclusion)
-- [Related Documentation](#related-documentation)
+  - [Best Practices](#best-practices)
+  - [Related Documentation](#related-documentation)
 
-## What Are Templates and How Do They Work?
+## How Templates Work
 
-Templates are predefined build specifications that serve as a foundation for
-building operating system images. Here's what templates empower you to do:
-
-- Create standardized baseline configurations.
-- Impose consistency across multiple images.
-- Reduce duplication of effort.
-- Share and reuse common configurations with your team.
-
-The OS Image Composer provides default image templates on a per-distribution
-basis and image type (RAW vs. ISO) that can be used directly to build an
-operating system from those defaults. You can override these default templates
-by providing your own template and configure or override the settings and
-values you want. The tool will internally merge the two to create the final
-template used for image composition.
+OS Image Composer ships **default templates** for each distribution and image
+type (raw, ISO, initrd). When you provide a user template, the tool merges it
+with the matching default; your values override or extend the defaults. The
+merged result is validated against a JSON schema before the build begins.
 
 ![image-templates](./assets/template.drawio.svg)
 
-Validation is performed both on the provided user template and the
-default template for the particular distribution and image type you are
-building. It is not recommended to directly modify the default templates.
+Default templates live at:
 
-The generic path pattern to the default OS templates is as follows:
-
-```bash
-
-osv/<distribution>/imageconfig/defaultconfigs/default-<type>-<arch>.yml
-
+```text
+config/osv/<target.os>/<target.dist>/imageconfigs/defaultconfigs/default-<imageType>-<arch>.yml
 ```
 
-In the pattern, <type> indicates the image type you are building (ISO vs. RAW)
-and <arch> defines the architecture you are building for.
+> **Note:** `imageType: img` maps to `default-initrd-<arch>.yml` (there is no
+> `default-img-` filename).
 
-When building your own custom image, it is unnecessary to start an image
-template from scratch. The `image-templates` directory contains user-templates
-that can be used as starting points for your own custom images.
+You do not need to edit the defaults. You can start from one of the examples in
+`image-templates/` and override only what you need.
 
-### Template Structure
+## Quick Start Example
 
-A template includes standard build specification sections with variables where
-customization is needed:
+A minimal user template only needs `image`, `target`, and optionally
+`systemConfig` with extra packages:
 
 ```yaml
 image:
-  name: emt3-x86_64-edge
+  name: my-edge-device
   version: "1.0.0"
 
 target:
-  os: edge-microvisor-toolkit # Target OS name
-  dist: emt3 # Target OS distribution
-  arch: x86_64 # Target OS architecture
-  imageType: raw # Image type, valid value: [raw, iso].
+  os: edge-microvisor-toolkit
+  dist: emt3
+  arch: x86_64
+  imageType: raw
 
-# System configuration
 systemConfig:
   name: edge
-  description: Default yml configuration for edge image
-
-  immutability:
-    enabled: false # default is true
-
-  # Package Configuration
   packages:
-  # Additional packages beyond the base system
     - cloud-init
     - rsyslog
+```
 
-  # Kernel Configuration
+Everything else (disk layout, bootloader, kernel, default packages) comes from
+the default template for `emt3 / raw / x86_64`.
+
+## Top-Level Structure
+
+A template file has up to five top-level sections plus an optional `metadata`
+block:
+
+```yaml
+metadata:       # Optional - AI-searchable discovery metadata
+  ...
+image:          # Required - image name and version
+  ...
+target:         # Required - OS, distribution, architecture, image type
+  ...
+disk:           # Optional - disk layout, partitions, output artifacts
+  ...
+packageRepositories:  # Optional - additional package repositories
+  - ...
+systemConfig:   # Required in merged template - packages, kernel, users, etc.
+  ...
+```
+
+> **Note:** **User templates** require only `image` and `target`. The remaining sections
+> are merged from the default template if omitted.
+
+---
+
+## Field Reference
+
+### `metadata`
+
+Optional block for AI-powered template discovery. Ignored by the build engine.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `description` | string | Human-readable description of the template |
+| `use_cases` | string[] | Use cases this template targets |
+| `keywords` | string[] | Keywords for search and discovery |
+
+```yaml
+metadata:
+  description: "Edge device image with container runtime"
+  use_cases: ["edge computing", "IoT gateway"]
+  keywords: [edge, docker, emt3]
+```
+
+---
+
+### `image` (required)
+
+Image identification. Both fields are required.
+
+| Field | Type | Required | Validation | Description |
+|-------|------|----------|------------|-------------|
+| `name` | string | **Yes** | `^[a-zA-Z0-9]([a-zA-Z0-9\-_]*[a-zA-Z0-9])?$` | Image name (alphanumeric, hyphens, underscores) |
+| `version` | string | **Yes** | Semver-like: `1.0.0`, `24.04`, `1.0.0+build1` | Version string |
+
+```yaml
+image:
+  name: my-edge-device
+  version: "1.0.0"
+```
+
+---
+
+### `target` (required)
+
+Target platform. All four fields are required.
+
+| Field | Type | Required | Valid Values | Description |
+|-------|------|----------|--------------|-------------|
+| `os` | string | **Yes** | `azure-linux`, `edge-microvisor-toolkit`, `wind-river-elxr`, `ubuntu`, `redhat-compatible-distro` | Target operating system |
+| `dist` | string | **Yes** | See OS constraints below | Distribution identifier |
+| `arch` | string | **Yes** | `x86_64`, `aarch64`, `armv7hl` | Target CPU architecture |
+| `imageType` | string | **Yes** | `raw`, `iso`, `img` | Output image format |
+
+**OS → dist constraints:**
+
+| OS | Valid `dist` |
+|----|-------------|
+| `azure-linux` | `azl3` |
+| `edge-microvisor-toolkit` | `emt3` |
+| `wind-river-elxr` | `elxr12` |
+| `ubuntu` | Any (e.g., `ubuntu24`) |
+| `redhat-compatible-distro` | Any (e.g., `el10`) |
+
+```yaml
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+```
+
+---
+
+### `disk`
+
+Disk layout, partition scheme, and output artifact formats. If omitted, the
+default template provides sensible values (typically 4–6 GiB GPT disk with EFI
+boot and ext4 root partitions).
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | **Yes** (schema) | Disk configuration name (e.g., `"Default_Raw"`) |
+| `path` | string | No | Disk device path (used by live installer, e.g., `/dev/sda`) |
+| `size` | string | No | Disk size. Accepts: `"4GiB"`, `"8GB"`, `"4096 MiB"` |
+| `partitionTableType` | string | No | `gpt` or `mbr` |
+| `artifacts` | artifact[] | No | Output formats and optional compression |
+| `partitions` | partition[] | No | Partition layout definitions |
+
+#### `disk.artifacts[]`
+
+Each entry defines one output format:
+
+| Field | Type | Required | Valid Values | Description |
+|-------|------|----------|--------------|-------------|
+| `type` | string | **Yes** | `raw`, `qcow2`, `vhd`, `vhdx`, `vmdk`, `vdi` | Output image format |
+| `compression` | string | No | `gz`, `gzip`, `xz`, `zstd`, `bz2` | Compression to apply |
+
+#### `disk.partitions[]`
+
+Each entry defines one partition:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Partition identifier (e.g., `boot`, `rootfs`, `roothashmap`, `userdata`) |
+| `name` | string | Partition label |
+| `type` | string | Partition type (e.g., `esp`, `linux-root-amd64`, `linux`) |
+| `typeUUID` | string | GPT type GUID (e.g., `8300`) |
+| `fsType` | string | Filesystem type: `ext4`, `fat32`, `xfs`, etc. |
+| `fsLabel` | string | Filesystem label |
+| `start` | string | Start offset (e.g., `1MiB`, `513MiB`) |
+| `end` | string | End offset (`0` means rest of disk) |
+| `mountPoint` | string | Mount point (e.g., `/boot/efi`, `/`, `none`) |
+| `mountOptions` | string | Mount options (e.g., `defaults`, `umask=0077`) |
+| `flags` | string[] | Partition flags (e.g., `boot`, `esp`, `hidden`) |
+
+**Example - raw disk with two partitions and two output formats:**
+
+```yaml
+disk:
+  name: Edge_Raw
+  size: 4GiB
+  partitionTableType: gpt
+  artifacts:
+    - type: raw
+      compression: gz
+    - type: vhdx
+  partitions:
+    - id: boot
+      type: esp
+      flags: [esp, boot]
+      start: 1MiB
+      end: 513MiB
+      fsType: fat32
+      mountPoint: /boot/efi
+      mountOptions: umask=0077
+    - id: rootfs
+      type: linux-root-amd64
+      start: 513MiB
+      end: "0"
+      fsType: ext4
+      mountPoint: /
+      mountOptions: defaults
+```
+
+---
+
+### `packageRepositories`
+
+Optional list of additional package repositories beyond the OS base repos.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `codename` | string | **Yes** | Repository identifier (e.g., `company-internal`) |
+| `url` | string | **Yes** | Repository base URL (must be a valid URI) |
+| `pkey` | string | **Yes** | GPG key URL, absolute file path, or `[trusted=yes]` to skip verification |
+| `component` | string | No | Repository component (e.g., `main`, `restricted`) |
+| `priority` | int | No | Priority from `-9999` to `9999` (default: `0`, higher = preferred) |
+| `AllowPackages` | string[] | No | Specific packages to include from this repo (package pinning) |
+
+```yaml
+packageRepositories:
+  - codename: "company-internal"
+    url: "https://packages.example.com/repo"
+    pkey: "https://packages.example.com/gpg.key"
+    component: "main"
+    priority: 100
+  - codename: "dev-tools"
+    url: "https://dev.example.com/repo"
+    pkey: "[trusted=yes]"
+```
+
+See [Multiple Package Repository Support](./os-image-composer-multi-repo-support.md)
+for detailed configuration guidance.
+
+---
+
+### `systemConfig`
+
+System configuration - packages, kernel, users, bootloader, build-time
+commands, and more. Required in the final merged template, but optional in
+user templates (as defaults already provide a complete base).
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | No | Configuration name |
+| `description` | string | No | Human-readable description |
+| `hostname` | string | No | System hostname |
+| `packages` | string[] | No | Packages to install (additive with defaults) |
+| `kernel` | object | No | Kernel configuration |
+| `bootloader` | object | No | Bootloader configuration |
+| `immutability` | object | No | dm-verity / Secure Boot configuration |
+| `users` | user[] | No | User account definitions |
+| `initramfs` | object | No | Initramfs config (ISO/initrd builds) |
+| `additionalFiles` | file[] | No | Extra files to copy into the image |
+| `configurations` | cmd[] | No | Shell commands to run during build |
+
+Package names must match: `^[A-Za-z0-9](?:[A-Za-z0-9+_.:~-]*[A-Za-z0-9+])?$`
+and must be unique within the list.
+
+#### `systemConfig.kernel`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `version` | string | Kernel version (e.g., `"6.12"`, `"6.14"`) |
+| `cmdline` | string | Kernel boot command line |
+| `packages` | string[] | Kernel packages (e.g., `["linux-image-generic-hwe-24.04"]`) |
+| `enableExtraModules` | string | Additional kernel modules to load |
+| `uki` | bool | Enable Unified Kernel Image (typically set by defaults) |
+
+```yaml
+systemConfig:
   kernel:
-    version: "6.12"
+    version: "6.14"
     cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
+    packages:
+      - linux-image-generic-hwe-24.04
 ```
 
-To learn about patterns that work well as templates, see
-[Common Build Patterns](./os-image-composer-build-process.md#common-build-patterns).
+#### `systemConfig.bootloader`
 
-### Variable Substitution
+| Field | Type | Valid Values | Description |
+|-------|------|--------------|-------------|
+| `bootType` | string | `efi`, `legacy` | Boot firmware type |
+| `provider` | string | `grub`, `grub2`, `systemd-boot` | Bootloader software |
 
-Templates support simple variable substitution using the `${variable_name}`
-syntax. When building an image from a template, you can provide values for
-these variables. See the
-[Image Template File](./os-image-composer-cli-specification.md#image-template-file)
-in the
-[command-line reference](./os-image-composer-cli-specification.md)
-for the complete template structure.
+Typical defaults: raw images use `efi` / `systemd-boot`; ISO images use
+`efi` / `grub`.
 
-## Using Templates to Build Images
+#### `systemConfig.immutability`
 
-The OS `os-image-composer build` command creates custom operating system images
-from an image template file. With templates, you can customize OS images to
-fulfill your requirements. You can also define variables in a separate YAML
-file and override variables when you run a command. With the
-`os-image-composer template render` command, you generate a specification file
-to review or modify it before building it.
+Configures dm-verity immutable root filesystem and optional UEFI Secure Boot
+signing.
 
-```bash
-# Build an image using a template
-os-image-composer build azl3-x86_64-edge-raw.yml
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `enabled` | bool | **Yes** (when section present) | Enable dm-verity immutable root |
+| `secureBootDBKey` | string | Conditional | Private key file (`.key` or `.pem`) |
+| `secureBootDBCrt` | string | Conditional | Certificate in PEM format (`.crt` or `.pem`) |
+| `secureBootDBCer` | string | Conditional | Certificate in DER format (`.cer`) |
 
+> **Note:** If **any** Secure Boot field is provided, **all three** must be provided and
+> `enabled` must be `true`.
+
+```yaml
+systemConfig:
+  immutability:
+    enabled: true
+    secureBootDBKey: /path/to/db.key
+    secureBootDBCrt: /path/to/db.crt
+    secureBootDBCer: /path/to/db.cer
 ```
 
-See the [Build Command](./os-image-composer-cli-specification.md#build-command)
-in the command-line reference.
+#### `systemConfig.users[]`
 
-## Template Storage
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | **Yes** | Username |
+| `password` | string | No | Password (plain text or pre-hashed with `$` prefix) |
+| `hash_algo` | string | No | Hash algorithm: `bcrypt`, `sha512`, `sha256`, `md5` (md5 is insecure — avoid in production) |
+| `passwordMaxAge` | int | No | Max password age in days |
+| `startupScript` | string | No | Script to run on login |
+| `groups` | string[] | No | Additional groups |
+| `sudo` | bool | No | Grant sudo permissions |
+| `home` | string | No | Custom home directory |
+| `shell` | string | No | Login shell (e.g., `/bin/bash`) |
 
-Templates in the OS Image Composer tool are stored in two main locations:
+```yaml
+systemConfig:
+  users:
+    - name: admin
+      password: "changeme"
+      sudo: true
+      groups: [docker, wheel]
+      shell: /bin/bash
+      - name: service-account
+      shell: /usr/sbin/nologin
+```
 
-1. System Templates: `/etc/os-image-composer/templates/`
-2. User Templates: `~/.config/os-image-composer/templates/`
+#### `systemConfig.initramfs`
 
-## Template Variables
+Used for ISO and initrd builds. Points to the initramfs configuration template.
 
-To find out how variables affect each build stage, see
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `template` | string | **Yes** (when section present) | Path to the initramfs config template file |
+
+#### `systemConfig.additionalFiles[]`
+
+Copy host files into the image at build time.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `local` | string | Source path on the host (absolute, or relative to template directory) |
+| `final` | string | Destination path inside the image |
+
+```yaml
+systemConfig:
+  additionalFiles:
+    - local: files/dhcp.network
+      final: /etc/systemd/network/dhcp.network
+    - local: files/motd
+      final: /etc/motd
+```
+
+#### `systemConfig.configurations[]`
+
+Shell commands executed inside the chroot during the configuration stage.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `cmd` | string | Shell command to execute |
+
+```yaml
+systemConfig:
+  configurations:
+    - cmd: systemctl enable docker
+    - cmd: echo "BuildDate=$(date)" >> /etc/image-info
+```
+
+---
+
+## Template Merge Behavior
+
+When your user template is merged with the default template, different sections
+follow different strategies:
+
+| Section | Strategy |
+|---------|----------|
+| `image.name`, `image.version` | User overrides default if non-empty |
+| `target` | User value used entirely |
+| `disk` | User replaces entire default if non-empty |
+| `systemConfig.packages` | **Additive** - user packages appended to defaults (deduplicated) |
+| `systemConfig.kernel` | User overrides `version`, `cmdline`, `packages` individually if non-empty |
+| `systemConfig.bootloader` | User overrides individual fields if non-empty |
+| `systemConfig.users` | Merged by `name` - same-name users merged field-by-field; new users appended |
+| `systemConfig.additionalFiles` | Merged by `final` path - same destination overrides; new files appended |
+| `systemConfig.configurations` | **Additive** - user commands appended after defaults |
+| `systemConfig.immutability` | Merged only if user explicitly provides the section |
+| `packageRepositories` | Merged by `codename` - same codename overrides; new repos appended |
+
+## Variable Substitution
+
+Templates support variable substitution using `${variable_name}` syntax. You
+can provide variable values via a separate YAML file or command-line flags at
+build time.
+
+To learn how variables interact with each build stage, see
 [Build Stages in Detail](./os-image-composer-build-process.md#build-stages-in-detail).
 
-For details on customizations that you can apply, see
-[Build Stages in Detail](./os-image-composer-build-process.md#build-stages-in-detail)
-in the build process documentation.
+
 
 ## Best Practices
 
-### Template Organization
-
-1. **Keep templates simple**: Focus on common configurations that are likely to
-be reused.
-2. **Use descriptive names**: Name templates according to their purpose.
-3. **Document variables**: Provide clear descriptions for all the variables.
-
-### Template Design
-
-1. **Parameterize wisely**: Make variables out of settings that are likely to
-   change.
-2. **Provide defaults**: Always include sensible default values for variables.
-3. **Minimize complexity**: Keep templates straightforward and focused.
-
-### Template Sharing
-
-1. **Version control**: Store templates in a Git repository.
-2. **Documentation**: Maintain a simple catalog of your templates.
-3. **Standardization**: Use templates to enforce your standards.
-
-To understand the role templates play in improving the efficiency of builds, see
-[Build Performance Optimization](./os-image-composer-build-process.md#build-performance-optimization).
-
-## Conclusion
-
-With templates in the OS Image Composer tool, you can standardize the creation
-of images and reduce repetitive work. By defining common configurations once
-and reusing them with different variables, you can:
-
-1. **Save time**: Avoid recreating similar configurations.
-2. **Ensure consistency**: Maintain standardized environments.
-3. **Simplify onboarding**: Make it easier for new team members to create proper
-images.
-
-The template system is designed to be simple yet effective, focusing on
-practical reuse rather than complex inheritance or versioning schemes.
+1. **Start from examples** - copy a template from `image-templates/` and modify
+   only the fields you need. Let defaults handle the rest.
+2. **Keep templates minimal** - override only what differs from the default.
+   Smaller templates are easier to maintain and review.
+3. **Use descriptive names** - name images and configs after their purpose
+   (e.g., `factory-floor-edge`, not `test-image-3`).
+4. **Version control your templates** - store them in Git alongside your
+   deployment code.
+5. **Validate before building** - run `os-image-composer validate template.yml`
+   to catch errors early.
+6. **Prefer `additionalFiles` over `configurations`** - copying config files is
+   more reproducible than running arbitrary shell commands.
 
 ## Related Documentation
 
 - [Understanding the Build Process](./os-image-composer-build-process.md)
 - [Multiple Package Repository Support](./os-image-composer-multi-repo-support.md)
 - [OS Image Composer CLI Reference](./os-image-composer-cli-specification.md)
+- [Common Build Patterns](./os-image-composer-build-process.md#common-build-patterns)
 
 <!--hide_directive
 :::{toctree}
