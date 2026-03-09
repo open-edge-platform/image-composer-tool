@@ -84,8 +84,71 @@ systemConfig:
     enabled: false # default is true
 
   packages:
+    # ssh server
+    - openssh-server
+
+    # virtualization host
+    - qemu-kvm
+
+    # agent packages
+    - hardware-discovery-agent
+    - cluster-agent
+    - node-agent
+    - platform-observability-agent
+    - platform-telemetry-agent
+    - platform-update-agent
+    - in-band-manageability
+    - reporting-agent
+
+    # tinker tools
+    - gptfdisk
     - cloud-init
+    - cloud-utils-growpart
+    - tpm2-tools
+    - lvm2
+    - netplan
+    - efibootmgr
+    - unzip
     - rsyslog
+    - tpm2-initramfs-tool
+    - veritysetup
+    - python3-pyserial
+
+    # persistent mount
+    - rsync
+
+    # selinux full
+    - selinux-policy
+    - selinux-policy-devel
+    - policycoreutils-python-utils
+    - checkpolicy
+    - secilc
+    - setools-console
+
+    # intel gpu base
+    #- kernel-drivers-gpu
+    - linux-firmware-i915
+    - linux-firmware-ice
+    - intel-npu-firmware
+
+    # intel wireless
+    - linux-firmware-iwlwifi
+    - wireless-regdb
+
+    # os update
+    - os-update
+
+    # vpro amt
+    - platform-manageability-agent
+    - rpc
+    - intel-lms
+
+    # docker
+    - moby-engine
+    - docker-cli
+    - docker-compose
+
+    # dl streamer packages
     - tdnf
     - curl
     - nano

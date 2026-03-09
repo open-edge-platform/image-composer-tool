@@ -62,8 +62,19 @@ systemConfig:
   name: Minimal_Raw
   description: Default yml configuration for raw image
 
+  bootloader:
+    bootType: efi
+    provider: grub
+
   immutability:
     enabled: false # default is true, overridden to false here
+
+  packages:
+    - grub-efi-amd64-signed
+    - grub2-common
+    - grub-pc-bin
+    - grub-efi-amd64
+    - grub-efi-amd64-bin
 
   kernel:
     version: "6.12"

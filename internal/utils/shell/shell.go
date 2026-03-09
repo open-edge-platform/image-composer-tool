@@ -45,6 +45,7 @@ var commandMap = map[string][]string{
 	"debugfs":            {"/usr/sbin/debugfs", "/usr/bin/debugfs"},
 	"dnf":                {"/usr/bin/dnf"},
 	"dpkg":               {"/usr/bin/dpkg"},
+	"dpkg-divert":        {"/usr/bin/dpkg-divert"},
 	"dpkg-scanpackages":  {"/usr/bin/dpkg-scanpackages"},
 	"echo":               {"/bin/echo", "/usr/bin/echo"},
 	"e2fsck":             {"/usr/sbin/e2fsck"},

@@ -106,6 +106,15 @@ systemConfig:
     - ncurses
     - systemd-resolved
     - efibootmgr
+    # --- FOR SSH ---
+    - chrony
+    - openssh-server
+    - sudo
+    - firewalld
+    - nftables
+    - python3-nftables
+    - libselinux-utils
+    # - selinux-policy-targeted
 
   additionalFiles:
     - local: ../additionalfiles/99-dhcp-en.network
@@ -113,7 +122,7 @@ systemConfig:
 
   kernel:
     name: kernel
-    cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
+    cmdline: "rw console=ttyS0,115200 console=tty0 loglevel=7 selinux=0"
     enableExtraModules: "usbcore usb-common"
     packages:
      - kernel

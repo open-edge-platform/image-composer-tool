@@ -61,6 +61,14 @@ systemConfig:
   immutability:
     enabled: true # default is true
   packages:
+    - ubuntu-minimal
+    - systemd-boot
+    - dracut-core
+    - systemd
+    - cryptsetup-bin
+    - openssh-server
+    - systemd-resolved
+    - systemd-timesyncd
     - efibootmgr
 
   additionalFiles:

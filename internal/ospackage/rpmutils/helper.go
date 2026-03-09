@@ -405,7 +405,11 @@ func ResolveTopPackageConflicts(want string, all []ospackage.PackageInfo) (ospac
 			candidates = append(candidates, pi)
 			break
 		}
-		cleanName := extractBasePackageNameFromFile(pi.Name)
+		// Use PkgName if available, otherwise extract from filename
+		cleanName := pi.PkgName
+		if cleanName == "" {
+			cleanName = extractBasePackageNameFromFile(pi.Name)
+		}
 
 		if isGlob {
 			if matchPackageRequest(want, cleanName) || matchPackageRequest(want, pi.Name) {

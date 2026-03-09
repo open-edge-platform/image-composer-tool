@@ -33,8 +33,8 @@ packageRepositories:
     pkey: "https://raw.githubusercontent.com/open-edge-platform/edge-microvisor-toolkit/refs/heads/3.0/SPECS/edge-repos/INTEL-RPM-GPG-KEY"
     # list of allowed packages from this repository
     allowPackages:
-      - kernel-6.17.11
-      - kernel-drivers-gpu-6.17.11
+      - kernel-rt-6.17.11
+      - kernel-rt-drivers-gpu-6.17.11
       - gstreamer1-plugins-base
       - spice-server
       - spice-protocol
@@ -48,7 +48,6 @@ packageRepositories:
       - cifs-utils
       - opencl-headers
       - linuxptp
-      - libva-utils
       - pulseaudio
       - libsndfile
       # Dependencies for gstreamer1-plugins-base
@@ -205,6 +204,71 @@ systemConfig:
     # Package Configuration
   packages:
     # Additional packages beyond the base system
+    # ssh server
+    - openssh-server
+
+    # virtualization host
+    - qemu-kvm
+
+    # agent packages
+    - hardware-discovery-agent
+    - cluster-agent
+    - node-agent
+    - platform-observability-agent
+    - platform-telemetry-agent
+    - platform-update-agent
+    - in-band-manageability
+    - reporting-agent
+
+    # tinker tools
+    - gptfdisk
+    - cloud-init
+    - cloud-utils-growpart
+    - tpm2-tools
+    - lvm2
+    - netplan
+    - efibootmgr
+    - unzip
+    - rsyslog
+    - tpm2-initramfs-tool
+    - veritysetup
+    - python3-pyserial
+
+    # persistent mount
+    - rsync
+
+    # selinux full
+    - selinux-policy
+    - selinux-policy-devel
+    - policycoreutils-python-utils
+    - checkpolicy
+    - secilc
+    - setools-console
+
+    # intel gpu base
+    #- kernel-drivers-gpu
+    - linux-firmware-i915
+    - linux-firmware-ice
+    - intel-npu-firmware
+
+    # intel wireless
+    - linux-firmware-iwlwifi
+    - wireless-regdb
+
+    # os update
+    - os-update
+
+    # vpro amt
+    - platform-manageability-agent
+    - rpc
+    - intel-lms
+
+    # docker
+    - moby-engine
+    - docker-cli
+    - docker-compose
+
+    # ptl emf packages
     - tpm-cryptsetup
     - persistent-mount
     - intel-npu-driver
@@ -218,23 +282,25 @@ systemConfig:
     - cifs-utils
     - opencl-headers
     - linuxptp
-    - libva-utils
     - pulseaudio
     - libsndfile
+
     # Development tools
     - perl
     - gcc
     - gcc-c++
     - make
+
     # QEMU full system emulation
     - qemu
     - qemu-user
-    - qemu-img 
+    - qemu-img
     - qemu-tools
     - qemu-system-aarch64
     - qemu-system-arm
     - qemu-system-riscv
     - qemu-system-x86
+
     # Graphics and display stack
     - mesa-dri-drivers
     - mesa-libGL
@@ -246,12 +312,15 @@ systemConfig:
     - pango
     - freetype
     - fontconfig
+
     # Multimedia
     - gstreamer1
     - gstreamer1-plugins-base
+
     # Container runtime
     - containerd2
     - containerd2-core
+
     # Additional tools
     - helm
     - intel-level-zero-zello_world
@@ -259,6 +328,7 @@ systemConfig:
     - llvm
     - spice-server
     - spice-protocol
+
     # installer_emt.sh package set
     - gdb
     - edk2-ovmf
@@ -278,17 +348,14 @@ systemConfig:
     - qemu-guest-agent
     - qemu-audio-pa
     - qemu-with-ui
-    - qemu-kvm
     - libvirt
     - swtpm-tools
     - dmidecode
     - cvt
     - xorg-x11-xinit
-    - unzip
     - alsa-lib
     - libvpl
     - wayland*
-    - tpm2-tools
     - i2c-tools
     - mesa-filesystem
     - mesa-demos
@@ -297,7 +364,6 @@ systemConfig:
     - mesa-libGL-devel
     - alsa-utils
     - libva*
-    - intel-lms
     - xorg-x11-server-Xorg
     - intel-opencl
     - ocl-icd
@@ -311,7 +377,7 @@ systemConfig:
     cmdline: "modprobe.blacklist=i915 processor.max_cstate=0 intel.max_cstate=0 processor_idle.max_cstate=0 intel_idle.max_cstate=0 clocksource=tsc tsc=reliable nowatchdog intel_pstate=disable idle=poll nosmt isolcpus=2,3 rcu_nocbs=2,3 rcupdate.rcu_cpu_stall_suppress=1 rcu_nocb_poll irqaffinity=0 mce=off hpet=disable numa_balancing=disable igb.blacklist=no nmi_watchdog=0 nosoftlockup"
     enableExtraModules: "intel_vpu uas"
     packages:
-      - kernel-rt-drivers-gpu
+      - kernel-rt-drivers-gpu-6.17.11
 
   configurations:
     - cmd: "echo 'user ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/user-sudo"
