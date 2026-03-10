@@ -122,7 +122,7 @@ func writeExtractedSBOM(sbom imageinspect.SBOMSummary, outPath string) error {
 	if outPath == "" {
 		outPath = "."
 	}
-
+outPath = filepath.Clean(outPath)
 	fileName := sbom.FileName
 	if fileName == "" {
 		fileName = "spdx_manifest.json"
