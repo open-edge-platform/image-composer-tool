@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/open-edge-platform/os-image-composer/internal/config/validate"
 	"github.com/open-edge-platform/os-image-composer/internal/ospackage"
@@ -82,14 +83,22 @@ type ImageTemplate struct {
 	PackageRepositories []PackageRepository `yaml:"packageRepositories,omitempty"`
 
 	// Explicitly excluded from YAML serialization/deserialization
-	PathList          []string                `yaml:"-"`
-	BootloaderPkgList []string                `yaml:"-"`
-	EssentialPkgList  []string                `yaml:"-"`
-	KernelPkgList     []string                `yaml:"-"`
-	FullPkgList       []string                `yaml:"-"`
-	FullPkgListBom    []ospackage.PackageInfo `yaml:"-"`
-	DotFilePath       string                  `yaml:"-"`
-	DotSystemOnly     bool                    `yaml:"-"`
+	PathList             []string                `yaml:"-"`
+	BootloaderPkgList    []string                `yaml:"-"`
+	EssentialPkgList     []string                `yaml:"-"`
+	KernelPkgList        []string                `yaml:"-"`
+	FullPkgList          []string                `yaml:"-"`
+	FullPkgListBom       []ospackage.PackageInfo `yaml:"-"`
+	DotFilePath          string                  `yaml:"-"`
+	DotSystemOnly        bool                    `yaml:"-"`
+	pureBuildStart       time.Time
+	pureBuildDuration    time.Duration
+	downloadPkgsStart    time.Time
+	downloadPkgsDuration time.Duration
+	convertImageStart    time.Time
+	convertImageDuration time.Duration
+	buildTimelineStart   time.Time
+	buildFinishedAt      time.Time
 }
 
 // PackageSource identifies why a package was requested in the merged template.
@@ -287,6 +296,153 @@ func (t *ImageTemplate) GetDistroVersion() string {
 
 func (t *ImageTemplate) GetImageName() string {
 	return t.Image.Name
+}
+
+// StartPureImageBuildTimer starts tracking the pure image build time window.
+func (t *ImageTemplate) StartPureImageBuildTimer() {
+	if t == nil {
+		return
+	}
+
+	t.pureBuildStart = time.Now()
+	t.pureBuildDuration = 0
+}
+
+// FinishPureImageBuildTimer stores the elapsed pure image build time if tracking was started.
+func (t *ImageTemplate) FinishPureImageBuildTimer() {
+	if t == nil || t.pureBuildStart.IsZero() {
+		return
+	}
+
+	t.pureBuildDuration = time.Since(t.pureBuildStart)
+}
+
+// GetPureImageBuildDuration returns the tracked pure image build duration.
+func (t *ImageTemplate) GetPureImageBuildDuration() time.Duration {
+	if t == nil {
+		return 0
+	}
+
+	return t.pureBuildDuration
+}
+
+// StartBuildTimeline starts the overall build timeline at the provided timestamp.
+func (t *ImageTemplate) StartBuildTimeline(buildTimelineStart time.Time) {
+	if t == nil {
+		return
+	}
+
+	t.buildTimelineStart = buildTimelineStart
+	t.buildFinishedAt = time.Time{}
+}
+
+// MarkBuildFinished marks the overall build timeline end.
+func (t *ImageTemplate) MarkBuildFinished() {
+	if t == nil {
+		return
+	}
+
+	t.buildFinishedAt = time.Now()
+}
+
+// StartDownloadImagePkgsTimer starts tracking downloadImagePkgs duration.
+func (t *ImageTemplate) StartDownloadImagePkgsTimer() {
+	if t == nil {
+		return
+	}
+
+	t.downloadPkgsStart = time.Now()
+	t.downloadPkgsDuration = 0
+}
+
+// FinishDownloadImagePkgsTimer stores elapsed downloadImagePkgs duration if tracking was started.
+func (t *ImageTemplate) FinishDownloadImagePkgsTimer() {
+	if t == nil || t.downloadPkgsStart.IsZero() {
+		return
+	}
+
+	t.downloadPkgsDuration = time.Since(t.downloadPkgsStart)
+}
+
+// GetDownloadImagePkgsDuration returns tracked downloadImagePkgs duration.
+func (t *ImageTemplate) GetDownloadImagePkgsDuration() time.Duration {
+	if t == nil {
+		return 0
+	}
+
+	return t.downloadPkgsDuration
+}
+
+// GetDurationStartToDownloadImagePkgs returns the gap from build start to downloadImagePkgs start.
+func (t *ImageTemplate) GetDurationStartToDownloadImagePkgs() time.Duration {
+	if t == nil || t.buildTimelineStart.IsZero() || t.downloadPkgsStart.IsZero() {
+		return 0
+	}
+
+	d := t.downloadPkgsStart.Sub(t.buildTimelineStart)
+	if d < 0 {
+		return 0
+	}
+
+	return d
+}
+
+// GetDurationDownloadImagePkgsToPureBuild returns the gap from downloadImagePkgs end to pure build start.
+func (t *ImageTemplate) GetDurationDownloadImagePkgsToPureBuild() time.Duration {
+	if t == nil || t.downloadPkgsStart.IsZero() || t.downloadPkgsDuration <= 0 || t.pureBuildStart.IsZero() {
+		return 0
+	}
+
+	downloadEnd := t.downloadPkgsStart.Add(t.downloadPkgsDuration)
+	d := t.pureBuildStart.Sub(downloadEnd)
+	if d < 0 {
+		return 0
+	}
+
+	return d
+}
+
+// GetDurationConvertImageFileToFinish returns the gap from convertImageFile end to build finish.
+func (t *ImageTemplate) GetDurationConvertImageFileToFinish() time.Duration {
+	if t == nil || t.convertImageStart.IsZero() || t.convertImageDuration <= 0 || t.buildFinishedAt.IsZero() {
+		return 0
+	}
+
+	convertEnd := t.convertImageStart.Add(t.convertImageDuration)
+	d := t.buildFinishedAt.Sub(convertEnd)
+	if d < 0 {
+		return 0
+	}
+
+	return d
+}
+
+// StartConvertImageTimer starts tracking image conversion time.
+func (t *ImageTemplate) StartConvertImageTimer() {
+	if t == nil {
+		return
+	}
+
+	t.convertImageStart = time.Now()
+	t.convertImageDuration = 0
+}
+
+// FinishConvertImageTimer stores elapsed image conversion time if tracking was started.
+func (t *ImageTemplate) FinishConvertImageTimer() {
+	if t == nil || t.convertImageStart.IsZero() {
+		return
+	}
+
+	t.convertImageDuration = time.Since(t.convertImageStart)
+}
+
+// GetConvertImageDuration returns tracked image conversion duration.
+func (t *ImageTemplate) GetConvertImageDuration() time.Duration {
+	if t == nil {
+		return 0
+	}
+
+	return t.convertImageDuration
 }
 
 func (t *ImageTemplate) GetTargetInfo() TargetInfo {

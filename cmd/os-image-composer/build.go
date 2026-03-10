@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/open-edge-platform/os-image-composer/internal/config"
 	"github.com/open-edge-platform/os-image-composer/internal/provider"
@@ -12,6 +13,7 @@ import (
 	"github.com/open-edge-platform/os-image-composer/internal/provider/emt"
 	"github.com/open-edge-platform/os-image-composer/internal/provider/rcd"
 	"github.com/open-edge-platform/os-image-composer/internal/provider/ubuntu"
+	"github.com/open-edge-platform/os-image-composer/internal/utils/display"
 	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
 	"github.com/open-edge-platform/os-image-composer/internal/utils/system"
 	"github.com/spf13/cobra"
@@ -81,12 +83,18 @@ func executeBuild(cmd *cobra.Command, args []string) error {
 	}
 	templateFile := args[0]
 
+	// get start time
+	startTime := time.Now()
+
 	// Load user template and merge with default configuration
 	template, err := config.LoadAndMergeTemplate(templateFile)
 	if err != nil {
 		return fmt.Errorf("loading and merging template: %v", err)
 	}
 	template.DotSystemOnly = systemPackagesOnly
+
+	// assign start time to storage
+	template.StartBuildTimeline(startTime)
 
 	if dotFile != "" {
 		dotFilePath, err := filepath.Abs(dotFile)
@@ -111,6 +119,7 @@ func executeBuild(cmd *cobra.Command, args []string) error {
 		goto post
 	}
 
+	template.StartPureImageBuildTimer()
 	if err := p.BuildImage(template); err != nil {
 		buildErr = fmt.Errorf("image build failed: %v", err)
 		goto post
@@ -126,6 +135,8 @@ post:
 
 	if buildErr == nil {
 		log.Info("image build completed successfully")
+		template.MarkBuildFinished()
+		displayImageBuildTiming(template.Target.ImageType, template)
 	} else {
 		// Avoid logging the full error chain to prevent potential leakage of sensitive data.
 		// Log only the error type/category to aid debugging without exposing sensitive details.
@@ -133,6 +144,24 @@ post:
 	}
 
 	return buildErr
+}
+
+func displayImageBuildTiming(imageType string, template *config.ImageTemplate) {
+	startToDownloadImagePkgsDuration := template.GetDurationStartToDownloadImagePkgs()
+	downloadImagePkgsToPureBuildDuration := template.GetDurationDownloadImagePkgsToPureBuild()
+	pureImageBuildDuration := template.GetPureImageBuildDuration()
+	downloadImagePkgsDuration := template.GetDownloadImagePkgsDuration()
+	convertImageDuration := template.GetConvertImageDuration()
+	convertImageFileToFinishDuration := template.GetDurationConvertImageFileToFinish()
+	display.PrintImageBuildingTiming(
+		imageType,
+		startToDownloadImagePkgsDuration,
+		downloadImagePkgsDuration,
+		downloadImagePkgsToPureBuildDuration,
+		pureImageBuildDuration,
+		convertImageDuration,
+		convertImageFileToFinishDuration,
+	)
 }
 
 func InitProvider(os, dist, arch string) (provider.Provider, error) {

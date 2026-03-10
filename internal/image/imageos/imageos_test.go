@@ -1956,6 +1956,67 @@ func TestMountDiskToChroot(t *testing.T) {
 	t.Log("mountDiskToChroot test completed")
 }
 
+func TestIsSwapFsType(t *testing.T) {
+	tests := []struct {
+		name   string
+		fsType string
+		want   bool
+	}{
+		{name: "swap", fsType: "swap", want: true},
+		{name: "linux-swap", fsType: "linux-swap", want: true},
+		{name: "ext4", fsType: "ext4", want: false},
+		{name: "empty", fsType: "", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isSwapFsType(tt.fsType); got != tt.want {
+				t.Errorf("isSwapFsType(%q) = %v, want %v", tt.fsType, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMountDiskToChrootSkipsNonMountablePartitions(t *testing.T) {
+	// Create test directory
+	testDir, err := os.MkdirTemp("", "imageos_mount_skip_test_*")
+	if err != nil {
+		t.Fatalf("Failed to create test directory: %v", err)
+	}
+	defer os.RemoveAll(testDir)
+
+	template := &config.ImageTemplate{
+		Image:        config.ImageInfo{Name: "test-image"},
+		SystemConfig: config.SystemConfig{Name: "test-system"},
+		Disk: config.DiskConfig{
+			Partitions: []config.PartitionInfo{
+				{ID: "swap", FsType: "linux-swap", MountPoint: ""},
+				{ID: "hash", FsType: "ext4", MountPoint: "none"},
+			},
+		},
+	}
+
+	imageOs := &ImageOs{
+		installRoot: filepath.Join(testDir, template.SystemConfig.Name),
+		chrootEnv:   &MockChrootEnv{chrootImageBuildDir: testDir},
+		template:    template,
+	}
+
+	diskPathIdMap := map[string]string{
+		"swap": "/dev/loop9p1",
+		"hash": "/dev/loop9p2",
+	}
+
+	_, err = imageOs.mountDiskToChroot(imageOs.installRoot, diskPathIdMap, template)
+	if err == nil {
+		t.Fatal("Expected error when all partitions are non-mountable, got none")
+	}
+
+	if !strings.Contains(err.Error(), "no mount points found") {
+		t.Fatalf("Expected no-mount-points error, got: %v", err)
+	}
+}
+
 // TestGetImageVersionInfo tests the getImageVersionInfo functionality
 func TestGetImageVersionInfoDetailed(t *testing.T) {
 	// Set up mock executor

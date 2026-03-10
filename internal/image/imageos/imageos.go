@@ -314,6 +314,15 @@ func mountDiskRootToChroot(installRoot string, diskPathIdMap map[string]string, 
 	return fmt.Errorf("no root partition found in diskPathIdMap")
 }
 
+func isSwapFsType(fsType string) bool {
+	return fsType == "swap" || fsType == "linux-swap"
+}
+
+func isNonMountablePartition(partition config.PartitionInfo) bool {
+	mountPoint := strings.TrimSpace(partition.MountPoint)
+	return mountPoint == "" || mountPoint == "none" || isSwapFsType(partition.FsType)
+}
+
 func (imageOs *ImageOs) mountDiskToChroot(installRoot string, diskPathIdMap map[string]string, template *config.ImageTemplate) ([]map[string]string, error) {
 	var mountPointInfoList []map[string]string
 	diskInfo := template.GetDiskConfig()
@@ -321,6 +330,12 @@ func (imageOs *ImageOs) mountDiskToChroot(installRoot string, diskPathIdMap map[
 	for diskId, diskPath := range diskPathIdMap {
 		for _, partition := range partions {
 			if partition.ID == diskId {
+				if isNonMountablePartition(partition) {
+					log.Debugf("Skipping non-mountable partition %s (fsType=%s, mountPoint=%q)",
+						partition.ID, partition.FsType, partition.MountPoint)
+					continue
+				}
+
 				mountPointInfo := make(map[string]string)
 				mountPointInfo["Id"] = diskId
 				mountPointInfo["Path"] = diskPath
@@ -553,6 +568,14 @@ func (imageOs *ImageOs) installImagePkgs(installRoot string, template *config.Im
 		// Force to use the local cache repository
 		var repoSrcList []string = []string{"/etc/apt/sources.list.d/local.list"}
 		var efiVariableAccessPkg = []string{"systemd-boot", "dracut-core"}
+
+		var initramfsBinaries = []string{"/usr/bin/dracut", "/usr/sbin/mkinitramfs", "/usr/sbin/update-initramfs"}
+		backupPaths, divertedPaths := prepareInitramfsBinariesForDebInstall(installRoot, initramfsBinaries)
+
+		defer func() {
+			restoreInitramfsBinariesAfterDebInstall(installRoot, backupPaths, divertedPaths)
+		}()
+
 		for i, pkg := range imagePkgOrderedList {
 			log.Infof("Installing package %d/%d: %s", i+1, imagePkgNum, pkg)
 			if slice.Contains(efiVariableAccessPkg, pkg) {
@@ -622,6 +645,7 @@ exit 0
 					}
 				}
 			}
+
 		}
 		if err := imageOs.deInitDebLocalRepoWithinInstallRoot(installRoot); err != nil {
 			return fmt.Errorf("failed to de-initialize local repository within install root: %w", err)
@@ -646,6 +670,81 @@ exit 0
 		return fmt.Errorf("unsupported package type: %s", pkgType)
 	}
 	return nil
+}
+
+func prepareInitramfsBinariesForDebInstall(installRoot string, initramfsBinaries []string) (map[string]string, map[string]string) {
+	backupPaths := make(map[string]string)
+	divertedPaths := make(map[string]string)
+	dummyContent := "#!/bin/sh\necho \"Initramfs generation temporarily disabled during package installation\"\nexit 0\n"
+
+	for _, binary := range initramfsBinaries {
+		binaryPath := filepath.Join(installRoot, binary)
+		divertPath := binary + ".oic-diverted"
+
+		divertCmd := fmt.Sprintf("dpkg-divert --local --divert %s --add %s", divertPath, binary)
+		if _, err := shell.ExecCmd(divertCmd, true, installRoot, nil); err == nil {
+			if err := file.Write(dummyContent, binaryPath); err != nil {
+				log.Warnf("Failed to write dummy binary %s: %v", binary, err)
+				removeCmd := fmt.Sprintf("dpkg-divert --rename --divert %s --remove %s", divertPath, binary)
+				if _, removeErr := shell.ExecCmd(removeCmd, true, installRoot, nil); removeErr != nil {
+					log.Debugf("Failed to remove diversion for %s: %v", binary, removeErr)
+				}
+				continue
+			}
+			if _, err := shell.ExecCmd("chmod +x "+binaryPath, true, shell.HostPath, nil); err != nil {
+				log.Debugf("Failed to chmod +x %s: %v", binaryPath, err)
+			}
+			divertedPaths[binary] = divertPath
+			log.Debugf("Temporarily replaced %s with dummy binary", binary)
+			continue
+		}
+
+		log.Debugf("Failed to add diversion for %s, falling back to direct replacement if present", binary)
+
+		if _, err := os.Stat(binaryPath); err == nil {
+			backupPath := binaryPath + ".backup"
+			if err := file.CopyFile(binaryPath, backupPath, "", false); err != nil {
+				log.Debugf("Failed to backup %s before replacement: %v", binaryPath, err)
+				continue
+			}
+			backupPaths[binaryPath] = backupPath
+			if err := file.Write(dummyContent, binaryPath); err != nil {
+				log.Debugf("Failed to replace %s with dummy binary: %v", binaryPath, err)
+				continue
+			}
+			if _, err := shell.ExecCmd("chmod +x "+binaryPath, true, shell.HostPath, nil); err != nil {
+				log.Debugf("Failed to chmod +x %s: %v", binaryPath, err)
+			}
+			log.Debugf("Temporarily replaced %s with dummy binary", binary)
+		}
+	}
+
+	return backupPaths, divertedPaths
+}
+
+func restoreInitramfsBinariesAfterDebInstall(installRoot string, backupPaths map[string]string, divertedPaths map[string]string) {
+	for originalPath, backupPath := range backupPaths {
+		if _, err := os.Stat(backupPath); err == nil {
+			if err := file.CopyFile(backupPath, originalPath, "", false); err == nil {
+				if _, err := shell.ExecCmd("rm -f "+backupPath, true, shell.HostPath, nil); err != nil {
+					log.Debugf("Failed to remove backup file %s: %v", backupPath, err)
+				}
+				log.Debugf("Restored original binary: %s", originalPath)
+			}
+		}
+	}
+
+	for binary, divertPath := range divertedPaths {
+		if _, err := shell.ExecCmd("rm -f "+binary, true, installRoot, nil); err != nil {
+			log.Debugf("Failed to remove dummy binary %s: %v", binary, err)
+		}
+		removeCmd := fmt.Sprintf("dpkg-divert --rename --divert %s --remove %s", divertPath, binary)
+		if _, err := shell.ExecCmd(removeCmd, true, installRoot, nil); err != nil {
+			log.Warnf("Failed to restore diverted binary %s: %v", binary, err)
+		} else {
+			log.Debugf("Restored diverted binary: %s", binary)
+		}
+	}
 }
 
 func updateInitrdConfig(installRoot string, template *config.ImageTemplate) error {
@@ -845,7 +944,6 @@ func updateImageFstab(installRoot string, diskPathIdMap map[string]string, templ
 	const (
 		rootfsMountPoint = "/"
 		defaultOptions   = "defaults"
-		swapFsType       = "swap"
 		swapOptions      = "sw"
 		defaultDump      = "0"
 		disablePass      = "0"
@@ -887,7 +985,12 @@ func updateImageFstab(installRoot string, diskPathIdMap map[string]string, templ
 					pass = rootPass
 				}
 
-				if fsType == swapFsType {
+				if isSwapFsType(fsType) {
+					fsType = "swap"
+					if strings.TrimSpace(mountPoint) == "" {
+						mountPoint = "none"
+					}
+
 					// For swap partitions, set the options accordingly
 					options = swapOptions
 					pass = disablePass // No pass value for swap

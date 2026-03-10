@@ -1298,7 +1298,7 @@ func TestUpdateInitramfsForGrub_UpdateInitramfsFails(t *testing.T) {
 	template := &config.ImageTemplate{
 		SystemConfig: config.SystemConfig{
 			Kernel: config.KernelConfig{
-				EnableExtraModules: "",
+				EnableExtraModules: "intel_vpu",
 			},
 		},
 	}
@@ -1306,6 +1306,7 @@ func TestUpdateInitramfsForGrub_UpdateInitramfsFails(t *testing.T) {
 	originalExecutor := shell.Default
 	defer func() { shell.Default = originalExecutor }()
 	mockExpectedOutput := []shell.MockCommand{
+		{Pattern: "echo 'intel_vpu' >> /etc/initramfs-tools/modules", Output: "", Error: nil},
 		{Pattern: "command -v update-initramfs", Output: "/usr/sbin/update-initramfs\n", Error: nil},
 		{Pattern: "update-initramfs -u -k " + kernelVersion, Output: "", Error: fmt.Errorf("update-initramfs failed")},
 	}
