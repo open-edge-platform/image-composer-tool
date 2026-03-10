@@ -121,9 +121,9 @@ systemConfig:
     - NetworkManager-libnm
     # - NetworkManager-tui
 
-  additionalFiles:
-    - local: ../additionalfiles/99-dhcp-en.network
-      final: /etc/systemd/network/99-dhcp-en.network
+  # additionalFiles:
+  #   - local: ../additionalfiles/99-dhcp-en.network
+  #     final: /etc/systemd/network/99-dhcp-en.network
 
   kernel:
     name: kernel
