@@ -1,7 +1,21 @@
 # Release Notes
 
 ## Current Release
+**Version**: 2026.0
+**Release Date**: 11th March 2026
 
+### Features
+- Support for inclusion of packages from multiple package repos(either deb or rpm)
+- Package Dependency Visualization for the target image
+- Pre-Deployment Configuration Management with in the target image
+- Integrate Intel Open Edge Platform Components seemlessly into the target image 
+- Generate SBOM of the target image and store it in the image itself
+- Compose EMF compatible images for Ubuntu and EMT distros
+
+### Known Issues/Opens
+- Features
+
+## Release 2025.2 
 **Version**: 1.0
 **Release Date**: 12th December 2025
 
