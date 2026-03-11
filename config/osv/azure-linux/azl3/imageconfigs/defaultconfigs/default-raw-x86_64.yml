@@ -104,11 +104,6 @@ systemConfig:
      - kernel
     uki: true
 
-  users:
-    - name: user
-      password: "user"
-      groups: ["sudo"]
-
   configurations:
     # Set up ssh directories with correct permissions
     - cmd: "mkdir -m 755 -p /opt/var/lib/sshd"
