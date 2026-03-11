@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -39,11 +40,15 @@ func shouldRetryHTTPStatus(statusCode int) bool {
 func downloadWithRetry(client *http.Client, url, destPath string, threadcontext int) error {
 	log := logger.Logger()
 
+	// S3/CloudFront treats literal '+' as space; encode it as %2B in the URL only
+	// (the local filename keeps the original '+').
+	requestURL := strings.ReplaceAll(url, "+", "%2B")
+
 	var lastErr error
 	backoff := initialRetryBackoff
 
 	for attempt := 1; attempt <= maxDownloadAttempts; attempt++ {
-		resp, err := client.Get(url)
+		resp, err := client.Get(requestURL)
 		if err != nil {
 			lastErr = err
 		} else {
