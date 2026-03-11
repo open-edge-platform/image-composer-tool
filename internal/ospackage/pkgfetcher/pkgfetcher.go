@@ -168,6 +168,20 @@ func FetchPackages(urls []string, destDir string, workers int) error {
 				}
 
 				destPath := filepath.Join(destDir, name)
+
+				// Remove stale cached .deb files with same package name but different version.
+				// When repos (e.g. ECI vs Ubuntu) provide different versions of the same package,
+				// dpkg-scanpackages indexes ALL .debs and mmdebstrap may pick the wrong one (exit 25).
+				pkgPrefix := strings.SplitN(name, "_", 2)[0]
+				if entries, err := os.ReadDir(destDir); err == nil {
+					for _, e := range entries {
+						if e.Name() != name && strings.HasPrefix(e.Name(), pkgPrefix+"_") && strings.HasSuffix(e.Name(), ".deb") {
+							log.Infof("removing stale cached version %s (replaced by %s)", e.Name(), name)
+							os.Remove(filepath.Join(destDir, e.Name()))
+						}
+					}
+				}
+
 				if fi, err := os.Stat(destPath); err == nil {
 					if fi.Size() > 0 {
 						//log.Debugf("skipping existing %s", name)
