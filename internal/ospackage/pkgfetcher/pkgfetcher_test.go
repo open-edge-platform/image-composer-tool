@@ -609,3 +609,58 @@ func TestDownloadWithRetry_RemovaPartialFileOnError(t *testing.T) {
 		t.Fatalf("expected partial file to be removed, statErr=%v", statErr)
 	}
 }
+
+// TestFetchPackages_PlusEncodedAsPercentTwoBInURL verifies that FetchPackages
+// encodes '+' as '%2B' in the HTTP request URL (S3/CloudFront treats literal
+// '+' as space), while the destination filename retains the original '+'.
+func TestFetchPackages_PlusEncodedAsPercentTwoBInURL(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "pkgfetcher_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	var receivedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.RawPath
+		if receivedPath == "" {
+			// RawPath is empty when the path has no encoded characters after Go
+			// normalisation, so fall back to RequestURI which preserves encoding.
+			receivedPath = r.RequestURI
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("eci-package-content"))
+	}))
+	defer server.Close()
+
+	// Simulate an ECI package filename containing '+' characters.
+	filename := "systemd_255.4-1ubuntu8.12-ecir8+etf+taprio_amd64.deb"
+	inputURL := server.URL + "/pool/main/s/systemd/" + filename
+
+	err = FetchPackages([]string{inputURL}, tempDir, 1)
+	if err != nil {
+		t.Fatalf("FetchPackages failed: %v", err)
+	}
+
+	// The server must have received '%2B' instead of '+'.
+	if !strings.Contains(receivedPath, "%2B") {
+		t.Errorf("server received path with literal '+' instead of '%%2B': %s", receivedPath)
+	}
+	if strings.Contains(receivedPath, "+") {
+		t.Errorf("server path still contains literal '+': %s", receivedPath)
+	}
+
+	// The destination file must retain the original '+' in its name.
+	destPath := filepath.Join(tempDir, filename)
+	if _, statErr := os.Stat(destPath); os.IsNotExist(statErr) {
+		t.Fatalf("expected destination file with '+' in name to exist: %s", destPath)
+	}
+
+	content, readErr := os.ReadFile(destPath)
+	if readErr != nil {
+		t.Fatalf("failed to read downloaded file: %v", readErr)
+	}
+	if string(content) != "eci-package-content" {
+		t.Fatalf("unexpected file content: %q", string(content))
+	}
+}
