@@ -2052,3 +2052,143 @@ func TestUbuntuInstallHostDependencyGetPkgManagerError(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildUserRepoListAllowPackages is a regression test ensuring that
+// AllowPackages from the template is forwarded into the debutils.Repository
+// entries. This mapping was previously missing and is easy to regress.
+func TestBuildUserRepoListAllowPackages(t *testing.T) {
+	tests := []struct {
+		name          string
+		repos         []config.PackageRepository
+		wantLen       int
+		wantAllowPkgs [][]string // expected AllowPackages per resulting repo
+	}{
+		{
+			name: "AllowPackages is forwarded",
+			repos: []config.PackageRepository{
+				{
+					URL:           "https://eci.intel.com/repos/ubuntu",
+					Codename:      "noble",
+					PKey:          "https://eci.intel.com/key.gpg",
+					Component:     "main",
+					Priority:      1000,
+					AllowPackages: []string{"ros-jazzy-openvino*", "intel-level-zero-npu"},
+				},
+			},
+			wantLen:       1,
+			wantAllowPkgs: [][]string{{"ros-jazzy-openvino*", "intel-level-zero-npu"}},
+		},
+		{
+			name: "empty AllowPackages is preserved as nil",
+			repos: []config.PackageRepository{
+				{
+					URL:      "https://archive.ubuntu.com/ubuntu",
+					Codename: "noble",
+				},
+			},
+			wantLen:       1,
+			wantAllowPkgs: [][]string{nil},
+		},
+		{
+			name: "placeholder repos are skipped",
+			repos: []config.PackageRepository{
+				{URL: "<URL>", Codename: "noble"},
+				{URL: "", Codename: "noble"},
+				{
+					URL:           "https://real.repo.com/deb",
+					Codename:      "noble",
+					AllowPackages: []string{"pkg-a"},
+				},
+			},
+			wantLen:       1,
+			wantAllowPkgs: [][]string{{"pkg-a"}},
+		},
+		{
+			name: "multiple repos each preserve their AllowPackages",
+			repos: []config.PackageRepository{
+				{
+					URL:           "https://repo1.example.com/deb",
+					Codename:      "noble",
+					Priority:      1000,
+					AllowPackages: []string{"alpha", "beta"},
+				},
+				{
+					URL:           "https://repo2.example.com/deb",
+					Codename:      "noble",
+					Priority:      1001,
+					AllowPackages: []string{"gamma"},
+				},
+			},
+			wantLen:       2,
+			wantAllowPkgs: [][]string{{"alpha", "beta"}, {"gamma"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := buildUserRepoList(tt.repos)
+			if len(result) != tt.wantLen {
+				t.Fatalf("expected %d repos, got %d", tt.wantLen, len(result))
+			}
+			for i, repo := range result {
+				wantPkgs := tt.wantAllowPkgs[i]
+				if wantPkgs == nil && repo.AllowPackages != nil {
+					t.Errorf("repo %d: expected nil AllowPackages, got %v", i, repo.AllowPackages)
+				}
+				if wantPkgs != nil {
+					if len(repo.AllowPackages) != len(wantPkgs) {
+						t.Errorf("repo %d: expected %d AllowPackages, got %d", i, len(wantPkgs), len(repo.AllowPackages))
+						continue
+					}
+					for j, pkg := range wantPkgs {
+						if repo.AllowPackages[j] != pkg {
+							t.Errorf("repo %d AllowPackages[%d]: expected %q, got %q", i, j, pkg, repo.AllowPackages[j])
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestBuildUserRepoListFieldMapping verifies all PackageRepository fields are
+// correctly mapped to debutils.Repository.
+func TestBuildUserRepoListFieldMapping(t *testing.T) {
+	input := []config.PackageRepository{
+		{
+			URL:           "https://example.com/repo",
+			Codename:      "noble",
+			PKey:          "https://example.com/key.gpg",
+			Component:     "main contrib",
+			Priority:      500,
+			AllowPackages: []string{"foo", "bar"},
+		},
+	}
+	result := buildUserRepoList(input)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 repo, got %d", len(result))
+	}
+	r := result[0]
+	if r.Codename != "noble" {
+		t.Errorf("Codename: expected %q, got %q", "noble", r.Codename)
+	}
+	if r.URL != "https://example.com/repo" {
+		t.Errorf("URL: expected %q, got %q", "https://example.com/repo", r.URL)
+	}
+	if r.PKey != "https://example.com/key.gpg" {
+		t.Errorf("PKey: expected %q, got %q", "https://example.com/key.gpg", r.PKey)
+	}
+	if r.Component != "main contrib" {
+		t.Errorf("Component: expected %q, got %q", "main contrib", r.Component)
+	}
+	if r.Priority != 500 {
+		t.Errorf("Priority: expected %d, got %d", 500, r.Priority)
+	}
+	if len(r.AllowPackages) != 2 || r.AllowPackages[0] != "foo" || r.AllowPackages[1] != "bar" {
+		t.Errorf("AllowPackages: expected [foo bar], got %v", r.AllowPackages)
+	}
+	expectedID := "user-example.com/repo"
+	if r.ID != expectedID {
+		t.Errorf("ID: expected %q, got %q", expectedID, r.ID)
+	}
+}
