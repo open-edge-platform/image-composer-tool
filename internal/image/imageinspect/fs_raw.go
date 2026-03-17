@@ -6,8 +6,12 @@ import (
 	"io"
 	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/open-edge-platform/os-image-composer/internal/config/manifest"
+	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
 )
 
 // FAT filesystem reader implementation (for raw reads from disk images)
@@ -484,6 +488,239 @@ func readFileFromFAT(v *fatVol, filePath string) (string, error) {
 	}
 
 	return "", fmt.Errorf("file not found: %s", filePath)
+}
+
+// readSBOMFromRawPartition reads an embedded SPDX SBOM from a raw partition.
+// It finds the SBOM filename/path in a raw partition, then reads it via the
+// generic raw partition file reader.
+func readSBOMFromRawPartition(img io.ReaderAt, partOff int64, partSize uint64, fsType string) ([]byte, string, string, error) {
+	fsType = strings.ToLower(strings.TrimSpace(fsType))
+
+	if fsType == "ext4" || fsType == "ext3" || fsType == "ext2" {
+		partitionFilePath, cleanup, err := extractPartitionToTempFile(img, partOff, partSize)
+		if err != nil {
+			return nil, "", "", err
+		}
+		defer cleanup()
+
+		sbomFileName, sbomPath, err := findSBOMFileInExtPartitionImage(partitionFilePath)
+		if err != nil {
+			return nil, "", "", err
+		}
+
+		content, err := readFileFromExtPartitionImage(partitionFilePath, sbomPath)
+		if err != nil {
+			return nil, "", "", fmt.Errorf("read SBOM file %s: %w", sbomPath, err)
+		}
+
+		return content, sbomFileName, sbomPath, nil
+	}
+
+	sbomFileName, sbomPath, err := findSBOMFileInRawPartition(img, partOff, partSize, fsType)
+	if err != nil {
+		return nil, "", "", err
+	}
+
+	content, err := readFileFromRawPartition(img, partOff, partSize, fsType, sbomPath)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("read SBOM file %s: %w", sbomPath, err)
+	}
+
+	return content, sbomFileName, sbomPath, nil
+}
+
+func findSBOMFileInExtPartitionImage(partitionFilePath string) (string, string, error) {
+	dumpDir, err := os.MkdirTemp("", "oic-sbom-rdump-*")
+	if err != nil {
+		return "", "", fmt.Errorf("create temp dump directory: %w", err)
+	}
+	defer func() {
+		_ = os.RemoveAll(dumpDir)
+	}()
+
+	rdumpCmd := fmt.Sprintf("debugfs -R 'rdump %s %s' %s", manifest.ImageSBOMPath, dumpDir, partitionFilePath)
+	if _, err = shell.ExecCmd(rdumpCmd, false, shell.HostPath, nil); err != nil {
+		return "", "", fmt.Errorf("debugfs rdump failed: %w", err)
+	}
+
+	jsonFiles := collectJSONFilesFromDir(dumpDir)
+	if len(jsonFiles) == 0 {
+		return "", "", fmt.Errorf("SBOM directory present but no SPDX JSON file found")
+	}
+
+	fileNames := make([]string, 0, len(jsonFiles))
+	for _, filePath := range jsonFiles {
+		fileNames = append(fileNames, filepath.Base(filePath))
+	}
+
+	sbomFileName, found := pickSBOMFileNameFromNames(fileNames)
+	if !found {
+		return "", "", fmt.Errorf("SBOM directory present but no SPDX JSON file found")
+	}
+
+	sbomPath := path.Join(manifest.ImageSBOMPath, sbomFileName)
+	return sbomFileName, sbomPath, nil
+}
+
+func findSBOMFileInRawPartition(img io.ReaderAt, partOff int64, partSize uint64, fsType string) (string, string, error) {
+	fsType = strings.ToLower(strings.TrimSpace(fsType))
+
+	switch {
+	case isVFATLike(fsType):
+		volume, err := openFAT(img, partOff)
+		if err != nil {
+			return "", "", fmt.Errorf("open FAT volume: %w", err)
+		}
+
+		sbomDir := strings.Trim(manifest.ImageSBOMPath, "/")
+		entries, err := volume.listDir(sbomDir)
+		if err != nil {
+			return "", "", fmt.Errorf("list SBOM directory: %w", err)
+		}
+
+		sbomFileName, found := pickSBOMFileNameFromFAT(entries)
+		if !found {
+			return "", "", fmt.Errorf("SBOM directory present but no SPDX JSON file found")
+		}
+
+		sbomPath := path.Join(manifest.ImageSBOMPath, sbomFileName)
+		return sbomFileName, sbomPath, nil
+
+	case fsType == "ext4" || fsType == "ext3" || fsType == "ext2":
+		partitionFilePath, cleanup, err := extractPartitionToTempFile(img, partOff, partSize)
+		if err != nil {
+			return "", "", err
+		}
+		defer cleanup()
+
+		return findSBOMFileInExtPartitionImage(partitionFilePath)
+
+	default:
+		return "", "", fmt.Errorf("filesystem %q is not supported for raw SPDX extraction yet", emptyOr(fsType, "unknown"))
+	}
+}
+
+// readFileFromRawPartition reads a file from a raw partition by path.
+// It dispatches to filesystem-specific readers based on fsType.
+func readFileFromRawPartition(img io.ReaderAt, partOff int64, partSize uint64, fsType, filePath string) ([]byte, error) {
+	fsType = strings.ToLower(strings.TrimSpace(fsType))
+
+	switch {
+	case isVFATLike(fsType):
+		return readFileFromRawFAT(img, partOff, filePath)
+	case fsType == "ext4" || fsType == "ext3" || fsType == "ext2":
+		return readFileFromRawExt(img, partOff, partSize, filePath)
+	default:
+		return nil, fmt.Errorf("filesystem %q is not supported for raw file reads", emptyOr(fsType, "unknown"))
+	}
+}
+
+func readFileFromRawFAT(img io.ReaderAt, partOff int64, filePath string) ([]byte, error) {
+	volume, err := openFAT(img, partOff)
+	if err != nil {
+		return nil, fmt.Errorf("open FAT volume: %w", err)
+	}
+
+	content, err := readFileFromFAT(volume, filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	return []byte(content), nil
+}
+
+func readFileFromRawExt(img io.ReaderAt, partOff int64, partSize uint64, filePath string) ([]byte, error) {
+	partitionFilePath, cleanup, err := extractPartitionToTempFile(img, partOff, partSize)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+
+	return readFileFromExtPartitionImage(partitionFilePath, filePath)
+}
+
+func readFileFromExtPartitionImage(partitionFilePath, filePath string) ([]byte, error) {
+
+	outFile, err := os.CreateTemp("", "oic-ext-read-*.bin")
+	if err != nil {
+		return nil, fmt.Errorf("create temp output file: %w", err)
+	}
+	outFilePath := outFile.Name()
+	_ = outFile.Close()
+	defer func() {
+		_ = os.Remove(outFilePath)
+	}()
+
+	normalizedPath := filePath
+	if !strings.HasPrefix(normalizedPath, "/") {
+		normalizedPath = "/" + normalizedPath
+	}
+
+	dumpCmd := fmt.Sprintf("debugfs -R 'dump %s %s' %s", normalizedPath, outFilePath, partitionFilePath)
+	if _, err = shell.ExecCmd(dumpCmd, false, shell.HostPath, nil); err != nil {
+		return nil, fmt.Errorf("debugfs dump failed: %w", err)
+	}
+
+	content, err := os.ReadFile(outFilePath)
+	if err != nil {
+		return nil, fmt.Errorf("read extracted file: %w", err)
+	}
+
+	return content, nil
+}
+
+func extractPartitionToTempFile(img io.ReaderAt, partOff int64, partSize uint64) (string, func(), error) {
+	if partSize == 0 {
+		return "", nil, fmt.Errorf("partition size is zero")
+	}
+
+	debugfsExists, existsErr := shell.IsCommandExist("debugfs", shell.HostPath)
+	if existsErr != nil {
+		return "", nil, fmt.Errorf("failed to check debugfs availability: %w", existsErr)
+	}
+	if !debugfsExists {
+		return "", nil, fmt.Errorf("debugfs command is not available")
+	}
+
+	partitionFile, err := os.CreateTemp("", "oic-partition-*.img")
+	if err != nil {
+		return "", nil, fmt.Errorf("create temp partition file: %w", err)
+	}
+
+	partitionFilePath := partitionFile.Name()
+
+	partitionReader := io.NewSectionReader(img, partOff, int64(partSize))
+	if _, err = io.Copy(partitionFile, partitionReader); err != nil {
+		_ = partitionFile.Close()
+		_ = os.Remove(partitionFilePath)
+		return "", nil, fmt.Errorf("copy partition bytes: %w", err)
+	}
+
+	if closeErr := partitionFile.Close(); closeErr != nil {
+		_ = os.Remove(partitionFilePath)
+		return "", nil, fmt.Errorf("close temp partition file: %w", closeErr)
+	}
+
+	cleanup := func() {
+		_ = os.Remove(partitionFilePath)
+	}
+
+	return partitionFilePath, cleanup, nil
+}
+
+func collectJSONFilesFromDir(rootDir string) []string {
+	var files []string
+	_ = filepath.WalkDir(rootDir, func(filePath string, dirEntry os.DirEntry, walkErr error) error {
+		if walkErr != nil || dirEntry == nil || dirEntry.IsDir() {
+			return nil
+		}
+		if strings.HasSuffix(strings.ToLower(dirEntry.Name()), ".json") {
+			files = append(files, filePath)
+		}
+		return nil
+	})
+	sort.Strings(files)
+	return files
 }
 
 // generateBootloaderConfigPaths builds a prioritized list of candidate configuration

@@ -74,6 +74,8 @@ systemConfig:
     - coreutils
     - openssh-server
     - systemd-resolved
+    - veritysetup
+    - efibootmgr
 
   additionalFiles:
     - local: ../additionalfiles/99-dhcp-en.network
@@ -94,3 +96,4 @@ systemConfig:
     # Set up ssh directories with correct permissions
     - cmd: "mkdir -m 755 -p /opt/var/lib/sshd"
     - cmd: "printf 'd /run/sshd 0755 root root -\\n' > /etc/tmpfiles.d/sshd.conf"
+    - cmd: "ssh-keygen -A"

@@ -116,9 +116,14 @@ systemConfig:
     - libselinux-utils
     # - selinux-policy-targeted
 
-  additionalFiles:
-    - local: ../additionalfiles/99-dhcp-en.network
-      final: /etc/systemd/network/99-dhcp-en.network
+    # --- NETWORK ---
+    - NetworkManager
+    - NetworkManager-libnm
+    # - NetworkManager-tui
+
+  # additionalFiles:
+  #   - local: ../additionalfiles/99-dhcp-en.network
+  #     final: /etc/systemd/network/99-dhcp-en.network
 
   kernel:
     name: kernel
@@ -132,3 +137,4 @@ systemConfig:
     # Set up ssh directories with correct permissions
     - cmd: "mkdir -m 755 -p /opt/var/lib/sshd"
     - cmd: "printf 'd /run/sshd 0755 root root -\\n' > /etc/tmpfiles.d/sshd.conf"
+    - cmd: "systemctl enable systemd-resolved"

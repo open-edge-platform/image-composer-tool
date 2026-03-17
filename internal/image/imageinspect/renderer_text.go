@@ -38,6 +38,7 @@ func RenderCompareText(w io.Writer, r *ImageCompareResult, opts CompareTextOptio
 		fmt.Fprintf(w, "PartitionTableChanged: %v\n", s.PartitionTableChanged)
 		fmt.Fprintf(w, "PartitionsChanged: %v\n", s.PartitionsChanged)
 		fmt.Fprintf(w, "EFIBinariesChanged: %v\n", s.EFIBinariesChanged)
+		fmt.Fprintf(w, "SBOMChanged: %v\n", s.SBOMChanged)
 		obj := computeObjectCountsFromDiff(r.Diff)
 		fmt.Fprintf(w, "Counts (objects): +%d -%d ~%d\n", obj.added, obj.removed, obj.modified)
 
@@ -147,6 +148,32 @@ func RenderCompareText(w io.Writer, r *ImageCompareResult, opts CompareTextOptio
 		renderVerityDiffText(w, r.Diff.Verity)
 	}
 
+	if r.Diff.SBOM != nil && r.Diff.SBOM.Changed {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "SBOM:")
+		s := r.Diff.SBOM
+		if s.Added != nil {
+			fmt.Fprintf(w, "  Added: %s (%s)\n", s.Added.FileName, shortHash(s.Added.CanonicalSHA256))
+		} else if s.Removed != nil {
+			fmt.Fprintf(w, "  Removed: %s (%s)\n", s.Removed.FileName, shortHash(s.Removed.CanonicalSHA256))
+		} else {
+			if s.Format != nil {
+				fmt.Fprintf(w, "  Format: %s -> %s\n", s.Format.From, s.Format.To)
+			}
+			if s.FileName != nil {
+				fmt.Fprintf(w, "  FileName: %s -> %s\n", s.FileName.From, s.FileName.To)
+			}
+			if s.PackageCount != nil {
+				fmt.Fprintf(w, "  PackageCount: %d -> %d\n", s.PackageCount.From, s.PackageCount.To)
+			}
+			if s.CanonicalSHA256 != nil {
+				fmt.Fprintf(w, "  CanonicalSHA256: %s -> %s\n", shortHash(s.CanonicalSHA256.From), shortHash(s.CanonicalSHA256.To))
+			} else if s.SHA256 != nil {
+				fmt.Fprintf(w, "  SHA256: %s -> %s\n", shortHash(s.SHA256.From), shortHash(s.SHA256.To))
+			}
+		}
+	}
+
 	// Full mode: image metadata & volatile / meaningful remove reasons
 	if mode == "full" {
 		renderImagesBlock(w, r.From, r.To)
@@ -179,6 +206,24 @@ func RenderSummaryText(w io.Writer, summary *ImageSummary, opts TextOptions) err
 		fmt.Fprintln(w)
 		renderVerityInfo(w, summary.Verity)
 	}
+
+	if summary.SBOM.Present {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "SBOM")
+		fmt.Fprintln(w, "----")
+		fmt.Fprintf(w, "Path:\t%s\n", summary.SBOM.Path)
+		fmt.Fprintf(w, "Format:\t%s\n", summary.SBOM.Format)
+		fmt.Fprintf(w, "Size:\t%s (%d bytes)\n", humanBytes(summary.SBOM.SizeBytes), summary.SBOM.SizeBytes)
+		if strings.TrimSpace(summary.SBOM.CanonicalSHA256) != "" {
+			fmt.Fprintf(w, "CanonicalSHA256:\t%s\n", summary.SBOM.CanonicalSHA256)
+		}
+		if strings.TrimSpace(summary.SBOM.SHA256) != "" {
+			fmt.Fprintf(w, "SHA256:\t%s\n", summary.SBOM.SHA256)
+		}
+		if summary.SBOM.PackageCount > 0 {
+			fmt.Fprintf(w, "PackageCount:\t%d\n", summary.SBOM.PackageCount)
+		}
+	}
 	// Detailed per-partition filesystem blocks (ONLY ONCE)
 	for _, p := range summary.PartitionTable.Partitions {
 		if p.Filesystem == nil || isFilesystemEmpty(p.Filesystem) {
@@ -191,6 +236,42 @@ func RenderSummaryText(w io.Writer, summary *ImageSummary, opts TextOptions) err
 	}
 
 	fmt.Fprintln(w)
+	return nil
+}
+
+// RenderSPDXCompareText renders a concise text report for SPDX manifest comparison.
+func RenderSPDXCompareText(w io.Writer, result *SPDXCompareResult) error {
+	if result == nil {
+		return fmt.Errorf("RenderSPDXCompareText: result is nil")
+	}
+
+	fmt.Fprintln(w, "SPDX Compare")
+	fmt.Fprintln(w, "============")
+	fmt.Fprintf(w, "From:\t%s\n", result.FromPath)
+	fmt.Fprintf(w, "To:\t%s\n", result.ToPath)
+	fmt.Fprintf(w, "Equal:\t%v\n", result.Equal)
+	fmt.Fprintf(w, "Packages:\t%d -> %d\n", result.FromPackageCount, result.ToPackageCount)
+
+	if strings.TrimSpace(result.FromCanonicalHash) != "" || strings.TrimSpace(result.ToCanonicalHash) != "" {
+		fmt.Fprintf(w, "CanonicalSHA256:\t%s -> %s\n", result.FromCanonicalHash, result.ToCanonicalHash)
+	}
+
+	if len(result.AddedPackages) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Added packages:")
+		for _, pkg := range result.AddedPackages {
+			fmt.Fprintf(w, "  + %s\n", pkg)
+		}
+	}
+
+	if len(result.RemovedPackages) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Removed packages:")
+		for _, pkg := range result.RemovedPackages {
+			fmt.Fprintf(w, "  - %s\n", pkg)
+		}
+	}
+
 	return nil
 }
 
@@ -374,6 +455,17 @@ func computeObjectCountsFromDiff(d ImageDiff) objectCounts {
 			c.added += len(mp.EFIBinaries.Added)
 			c.removed += len(mp.EFIBinaries.Removed)
 			c.modified += len(mp.EFIBinaries.Modified)
+		}
+	}
+
+	if d.SBOM != nil && d.SBOM.Changed {
+		switch {
+		case d.SBOM.Added != nil:
+			c.added++
+		case d.SBOM.Removed != nil:
+			c.removed++
+		default:
+			c.modified++
 		}
 	}
 
@@ -569,7 +661,7 @@ func renderPartitionTableHeader(w io.Writer, pt PartitionTableSummary) {
 	_ = tw.Flush()
 }
 
-func renderVerityInfo(w io.Writer, v *VerityInfo) {
+func renderVerityInfo(w io.Writer, v *VeritySummary) {
 	fmt.Fprintln(w, "dm-verity Configuration")
 	fmt.Fprintln(w, "-----------------------")
 

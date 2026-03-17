@@ -314,6 +314,15 @@ func mountDiskRootToChroot(installRoot string, diskPathIdMap map[string]string, 
 	return fmt.Errorf("no root partition found in diskPathIdMap")
 }
 
+func isSwapFsType(fsType string) bool {
+	return fsType == "swap" || fsType == "linux-swap"
+}
+
+func isNonMountablePartition(partition config.PartitionInfo) bool {
+	mountPoint := strings.TrimSpace(partition.MountPoint)
+	return mountPoint == "" || mountPoint == "none" || isSwapFsType(partition.FsType)
+}
+
 func (imageOs *ImageOs) mountDiskToChroot(installRoot string, diskPathIdMap map[string]string, template *config.ImageTemplate) ([]map[string]string, error) {
 	var mountPointInfoList []map[string]string
 	diskInfo := template.GetDiskConfig()
@@ -321,6 +330,12 @@ func (imageOs *ImageOs) mountDiskToChroot(installRoot string, diskPathIdMap map[
 	for diskId, diskPath := range diskPathIdMap {
 		for _, partition := range partions {
 			if partition.ID == diskId {
+				if isNonMountablePartition(partition) {
+					log.Debugf("Skipping non-mountable partition %s (fsType=%s, mountPoint=%q)",
+						partition.ID, partition.FsType, partition.MountPoint)
+					continue
+				}
+
 				mountPointInfo := make(map[string]string)
 				mountPointInfo["Id"] = diskId
 				mountPointInfo["Path"] = diskPath
@@ -929,7 +944,6 @@ func updateImageFstab(installRoot string, diskPathIdMap map[string]string, templ
 	const (
 		rootfsMountPoint = "/"
 		defaultOptions   = "defaults"
-		swapFsType       = "swap"
 		swapOptions      = "sw"
 		defaultDump      = "0"
 		disablePass      = "0"
@@ -971,7 +985,12 @@ func updateImageFstab(installRoot string, diskPathIdMap map[string]string, templ
 					pass = rootPass
 				}
 
-				if fsType == swapFsType {
+				if isSwapFsType(fsType) {
+					fsType = "swap"
+					if strings.TrimSpace(mountPoint) == "" {
+						mountPoint = "none"
+					}
+
 					// For swap partitions, set the options accordingly
 					options = swapOptions
 					pass = disablePass // No pass value for swap

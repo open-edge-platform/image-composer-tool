@@ -119,7 +119,7 @@ see [Creating and Reusing Image Templates](./docs/architecture/os-image-composer
 ## Get Help
 
 - Run `./os-image-composer --help`
-- [Browse the documentation](./docs/)
+- [Browse the documentation](https://docs.openedgeplatform.intel.com/2026.0/os-image-composer/index.html)
 - [Start a discussion](https://github.com/open-edge-platform/os-image-composer/discussions)
 - [Troubleshoot build issues](./docs/architecture/os-image-composer-build-process.md#troubleshooting-build-issues)
 

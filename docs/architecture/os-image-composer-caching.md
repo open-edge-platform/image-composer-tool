@@ -60,26 +60,26 @@ During the packages stage of a build, the tool follows this process:
 ```mermaid
 flowchart TD
     Start([Need Package]) --> CheckCache{In Package Cache?}
-    
+
     CheckCache -->|Yes| VerifyIntegrity{Verify Integrity}
     VerifyIntegrity -->|Valid| UseCache[Use Cached Package]
     VerifyIntegrity -->|Invalid| DeleteInvalid[Delete Invalid Entry]
     DeleteInvalid --> Download
-    
+
     CheckCache -->|No| Download[Download from Repository]
     Download --> VerifyDownload[Verify GPG & Checksum]
     VerifyDownload --> StoreCache[Store in Package Cache]
     StoreCache --> UsePackage[Use Package for Installation]
-    
+
     UseCache --> UsePackage
     UsePackage --> Done([Ready for Installation])
-    
+
     %% Styling
     classDef decision fill:#fffacd,stroke:#d4b106,stroke-width:2px;
     classDef cache fill:#d1f0da,stroke:#0e7735,stroke-width:2px;
     classDef process fill:#f9f9f9,stroke:#333,stroke-width:1px;
     classDef endpoint fill:#b5e2fa,stroke:#0077b6,stroke-width:2px;
-    
+
     class CheckCache,VerifyIntegrity decision;
     class UseCache,StoreCache cache;
     class Download,VerifyDownload,DeleteInvalid,UsePackage process;
@@ -245,42 +245,42 @@ flowchart TD
     Start([Start Build]) --> LoadTemplate[Load Template]
     LoadTemplate --> InitProvider[Initialize Provider]
     InitProvider --> Validate[Validate Stage]
-    
+
     Validate --> PackageStage[Packages Stage]
-    
+
     PackageStage --> FetchMeta[Fetch Repository Metadata]
     FetchMeta --> ResolveDeps[Resolve Dependencies]
     ResolveDeps --> PackageLoop[For Each Required Package]
-    
+
     PackageLoop --> CheckPkgCache{In Package Cache?}
     CheckPkgCache -->|Yes| UsePackage[Use Cached Package]
     CheckPkgCache -->|No| DownloadPkg[Download Package]
     DownloadPkg --> StorePkg[Store in Package Cache]
     StorePkg --> UsePackage
-    
+
     UsePackage --> MorePackages{More Packages?}
     MorePackages -->|Yes| PackageLoop
     MorePackages -->|No| Compose[Compose Stage]
-    
+
     Compose --> CheckChroot{Chroot Exists?}
     CheckChroot -->|Yes| ReuseChroot[Reuse Chroot Environment]
     CheckChroot -->|No| CreateChroot[Create New Chroot]
     CreateChroot --> SaveTarball[Save Chroot Tarball]
     SaveTarball --> InstallPackages
     ReuseChroot --> InstallPackages[Install Image Packages]
-    
+
     InstallPackages --> Configure[Configure System]
     Configure --> CreateImage[Create Image File]
     CreateImage --> Finalize[Finalize Stage]
     Finalize --> Done([Build Complete])
-    
+
     %% Styling
     classDef stage fill:#f8edeb,stroke:#333,stroke-width:2px;
     classDef decision fill:#fffacd,stroke:#d4b106,stroke-width:2px;
     classDef cache fill:#d1f0da,stroke:#0e7735,stroke-width:2px;
     classDef process fill:#f9f9f9,stroke:#333,stroke-width:1px;
     classDef endpoint fill:#b5e2fa,stroke:#0077b6,stroke-width:2px;
-    
+
     class PackageStage,Compose,Finalize stage;
     class CheckPkgCache,CheckChroot,MorePackages decision;
     class UsePackage,StorePkg,ReuseChroot,SaveTarball cache;
@@ -507,7 +507,7 @@ check_size() {
     if [ -d "$dir" ]; then
         local size_gb=$(du -s "$dir" 2>/dev/null | awk '{print int($1/1024/1024)}')
         echo "$name: ${size_gb}GB"
-        
+
         if [ $size_gb -gt $CRIT_SIZE_GB ]; then
             echo "CRITICAL: $name exceeds ${CRIT_SIZE_GB}GB"
             return 2
@@ -637,6 +637,6 @@ sudo -E os-image-composer build full-template.yml
 ## Related Documentation
 
 - [Build Process Documentation](./os-image-composer-build-process.md) - How caching integrates with the build pipeline
-- [Architecture Documentation](./architecture.md) - System architecture and runtime directory structure
+- [Architecture Documentation](../architecture.md) - System architecture and runtime directory structure
 - [CLI Reference](./os-image-composer-cli-specification.md) - Complete command-line documentation
 - [Understanding Templates](./os-image-composer-templates.md) - How to create image templates

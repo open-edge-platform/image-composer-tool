@@ -4,7 +4,8 @@ OS Image Composer is a command-line tool for building custom, bootable Linux
 images from pre-built packages. Define your requirements in a YAML template,
 run one command to get a RAW image ready to deploy (ISO installers require an extra step; see the Installation Guide).
 
-**Supported distributions:** Azure Linux (azl3), Edge Microvisor Toolkit
+**Supported distributions:** Azure Linux (azl3),
+[Edge Microvisor Toolkit](https://docs.openedgeplatform.intel.com/2026.0/edge-microvisor-toolkit/index.html)
 (emt3), Wind River eLxr (elxr12), Ubuntu (ubuntu24), and Red Hat-compatible
 distributions (rcd10).
 
@@ -37,7 +38,7 @@ For build options (Earthly, Debian package) and prerequisite details, see the
 | [CLI Reference](./architecture/os-image-composer-cli-specification.md) | Complete command-line specification |
 | [Image Templates](./architecture/os-image-composer-templates.md) | Template structure, variables, best practices |
 | [Build Process](./architecture/os-image-composer-build-process.md) | Pipeline stages, caching, troubleshooting |
-| [Architecture](./architecture/architecture.md) | System design and component overview |
+| [Architecture](./architecture.md) | System design and component overview |
 
 ## Tutorials
 
@@ -71,7 +72,7 @@ For build options (Earthly, Debian package) and prerequisite details, see the
 
 Installation Guide <tutorial/installation.md>
 Prerequisites <tutorial/prerequisite.md>
-Architecture <architecture/architecture.md>
+Architecture <architecture.md>
 Usage Guide <tutorial/usage-guide.md>
 Secure Boot Configuration <tutorial/configure-secure-boot.md>
 Configure Users <tutorial/configure-image-user.md>
