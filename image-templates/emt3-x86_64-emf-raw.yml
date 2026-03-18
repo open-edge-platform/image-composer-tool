@@ -64,13 +64,6 @@ disk:
 
 
 systemConfig:
-
-  users:
-    # Development user with plaintext password (NOT for production)
-    - name: user
-      password: "user"  # Do not commit real plaintext passwords
-      groups: ["sudo"]
-  
   additionalFiles:
     - local: ../additionalfiles/layout.env
       final: /etc/layout.env
