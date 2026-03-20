@@ -60,7 +60,6 @@ systemConfig:
     - openssh-server
     - systemd-resolved
     - systemd-timesyncd
-    - nano
 
   kernel:
     version: "6.14"
