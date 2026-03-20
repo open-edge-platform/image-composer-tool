@@ -13,6 +13,17 @@ import (
 	"github.com/open-edge-platform/os-image-composer/internal/ospackage"
 )
 
+func resetURLExistenceCacheForTest(t *testing.T) {
+	t.Helper()
+
+	urlExistenceCacheMu.Lock()
+	urlExistenceCache = nil
+	urlExistenceCacheLoaded = false
+	urlExistenceCacheMu.Unlock()
+
+	_ = os.Remove(urlExistenceCacheFilePath())
+}
+
 // TestPackages tests the Packages function
 func TestPackages(t *testing.T) {
 	// Save original values
@@ -193,6 +204,8 @@ func TestPackagesFromMultipleRepos(t *testing.T) {
 
 // TestBuildRepoConfigs tests the BuildRepoConfigs function
 func TestBuildRepoConfigs(t *testing.T) {
+	resetURLExistenceCacheForTest(t)
+
 	tests := []struct {
 		name          string
 		userRepoList  []Repository
@@ -275,6 +288,77 @@ func TestBuildRepoConfigs(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestBuildRepoConfigs_UsesCachedPackageListOffline(t *testing.T) {
+	resetURLExistenceCacheForTest(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/dists/stable/main/binary-amd64/Packages.gz" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.URL.Path == "/dists/stable/main/binary-all/Packages.gz" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+
+	repos := []Repository{{
+		ID:       "cached-repo",
+		Codename: "stable",
+		URL:      server.URL,
+		PKey:     "dummy-key",
+	}}
+
+	configs, err := BuildRepoConfigs(repos, "amd64")
+	if err != nil {
+		t.Fatalf("first BuildRepoConfigs failed: %v", err)
+	}
+	if len(configs) == 0 {
+		t.Fatalf("expected repo configs from first run")
+	}
+
+	server.Close()
+
+	configs, err = BuildRepoConfigs(repos, "amd64")
+	if err != nil {
+		t.Fatalf("second BuildRepoConfigs should use cache and work offline: %v", err)
+	}
+	if len(configs) == 0 {
+		t.Fatalf("expected repo configs from cached run")
+	}
+}
+
+func TestIsDebPackageCacheOutdated(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(tmpDir, "bash_1.0_amd64.deb"), []byte("x"), 0644); err != nil {
+		t.Fatalf("failed to write cached deb: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "coreutils_1.0_amd64.deb"), []byte("x"), 0644); err != nil {
+		t.Fatalf("failed to write cached deb: %v", err)
+	}
+
+	outdated, missing, _, err := isDebPackageCacheOutdated([]string{"bash", "coreutils"}, tmpDir)
+	if err != nil {
+		t.Fatalf("isDebPackageCacheOutdated returned error: %v", err)
+	}
+	if outdated {
+		t.Fatalf("expected cache to be up-to-date, missing=%v", missing)
+	}
+
+	outdated, missing, _, err = isDebPackageCacheOutdated([]string{"bash", "curl"}, tmpDir)
+	if err != nil {
+		t.Fatalf("isDebPackageCacheOutdated returned error: %v", err)
+	}
+	if !outdated {
+		t.Fatalf("expected cache to be outdated")
+	}
+	if len(missing) != 1 || missing[0] != "curl" {
+		t.Fatalf("expected missing=[curl], got %v", missing)
 	}
 }
 
@@ -364,6 +448,8 @@ func TestUserPackages(t *testing.T) {
 
 // TestCheckFileExists tests the checkFileExists function
 func TestCheckFileExists(t *testing.T) {
+	resetURLExistenceCacheForTest(t)
+
 	// Create test server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -418,6 +504,33 @@ func TestCheckFileExists(t *testing.T) {
 				t.Errorf("Expected %v, got %v", tt.expected, result)
 			}
 		})
+	}
+}
+
+func TestCheckFileExists_UsesCacheOffline(t *testing.T) {
+	resetURLExistenceCacheForTest(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	url := server.URL + "/exists"
+	first, err := checkFileExists(url)
+	if err != nil {
+		t.Fatalf("first checkFileExists failed: %v", err)
+	}
+	if !first {
+		t.Fatalf("expected first checkFileExists to return true")
+	}
+
+	server.Close()
+
+	second, err := checkFileExists(url)
+	if err != nil {
+		t.Fatalf("second checkFileExists should use cache and work offline: %v", err)
+	}
+	if !second {
+		t.Fatalf("expected cached checkFileExists to return true")
 	}
 }
 
