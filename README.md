@@ -5,6 +5,10 @@
 
 A command-line tool for building custom Linux images from pre-built packages. Define what you need in a YAML template, run one command, and get a bootable RAW or ISO image.
 
+## How It Works
+
+![OS Image Composer Build Flow](./docs/architecture/assets/os-image-composer-build-flow.svg)
+
 ## Supported Distributions
 
 | OS | Distribution | Architecture |
