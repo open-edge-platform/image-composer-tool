@@ -9,17 +9,39 @@ complexity**.
 
 ## Benchmark Results
 
-Tested on Intel NUC (Ubuntu 22.04 host), cold builds (no cache), same network.
+Tested on Intel NUC (Ubuntu 22.04 host), same network, same proxy.
 
 ### Build Time
 
 | | OIC | mkosi v25 | Delta |
 |-|-----|-----------|-------|
-| **Cold build** | **4m 12s** | 5m 14s | OIC **20% faster** |
+| **Cold build** (no cache) | **4m 07s** | 5m 13s | OIC **21% faster** |
+| **Warm build** (with cache) | **2m 56s** | 5m 16s | OIC **44% faster** |
 
-OIC is faster primarily because it uses direct chroot + losetup, whereas mkosi v25
-downloads a Debian testing tools tree (for systemd-repart v256) and uses user
-namespace isolation, adding overhead.
+**Cold build**: no cached packages or tools tree. OIC is faster because it uses
+direct chroot + losetup, whereas mkosi v25 must first download a Debian testing
+tools tree (for systemd-repart v256) and uses user namespace isolation, both of
+which add overhead.
+
+**Warm build**: OIC benefits dramatically from its package cache. On a warm run,
+Package Download drops from ~42s to ~14s and Chroot Init from ~1m 23s to ~8s,
+cutting total time nearly in half. mkosi caches the tools tree (~19s savings)
+but still re-downloads and re-installs all packages each build, so its warm
+time barely changes.
+
+<details>
+<summary>OIC stage-level breakdown</summary>
+
+| Stage | Cold | Warm |
+|-------|------|------|
+| Initialization and Configuration | 11.5s | 9.6s |
+| Package Download | 15.2s | 14.0s |
+| Chroot Env Initialization | 1m 12.9s | 7.6s |
+| Image Build | 2m 27.2s | 2m 24.8s |
+| Finalization and Clean Up | 0.1s | 0.2s |
+| **Total** | **4m 07s** | **2m 56s** |
+
+</details>
 
 ### Image Equivalence
 
@@ -42,45 +64,81 @@ listed explicitly in mkosi config (OIC pulls it as a dependency).
 
 | Metric | OIC | mkosi v25 |
 |--------|-----|-----------|
-| File size (apparent/sparse) | 6.0 GiB | 5.4 GiB |
+| File size (apparent/sparse) | 6.0 GiB | 6.1 GiB |
 | Disk usage (actual) | 1.7 GiB | 1.0 GiB |
 
-Both images are sparse. mkosi's smaller actual size comes from more aggressive
-sparse allocation by systemd-repart.
+Both images are sparse and have the same partition layout. The apparent sizes are
+now within 0.1 GiB. The 0.7 GiB gap in actual disk usage is because systemd-repart
+(used by mkosi) applies more aggressive sparse-file allocation than the
+losetup/mkfs approach used by OIC.
 
 ### Partition Layout
 
-| # | OIC | mkosi v25 |
-|---|-----|-----------|
-| 1 | `boot` (EF00), 512 MiB vfat | `esp` (EF00), 512 MiB vfat |
-| 2 | `rootfs` (8304), 3.9 GiB ext4 | `root-x86-64` (8304), 3.9 GiB ext4 |
-| 3 | `roothashmap` (8300), 500 MiB ext4 | `roothashmap` (8300), 500 MiB ext4 |
-| 4 | `userdata` (8300), 1.1 GiB ext4 | `userdata` (8300), 512 MiB ext4 |
+The table below shows each partition's **label** (name), GPT type code, and size.
+Both images now use the same labels, type codes, and partition sizes.
 
-Partition type codes match. Name and size differences are cosmetic (OIC default
-userdata is larger).
+| # | OIC (label, type, size) | mkosi v25 (label, type, size) |
+|---|-------------------------|-------------------------------|
+| 1 | `boot` EF00, 512 MiB vfat | `boot` EF00, 512 MiB vfat |
+| 2 | `rootfs` 8304, 3.9 GiB ext4 | `rootfs` 8304, 3.9 GiB ext4 |
+| 3 | `roothashmap` 8300, 500 MiB ext4 | `roothashmap` 8300, 500 MiB ext4 |
+| 4 | `userdata` 8300, 1.1 GiB ext4 | `userdata` 8300, 1.1 GiB ext4 |
+
+`EF00` = EFI System Partition, `8304` = Linux root (x86-64), `8300` = Linux filesystem.
+Partition labels, type codes, and sizes are identical between both images.
 
 ### Configuration Complexity
 
 | Metric | OIC | mkosi v25 |
 |--------|-----|-----------|
-| User config files | **1 YAML** | 13 files |
+| User config files | **1 YAML** | 14 files (see breakdown below) |
 | Lines of config | ~50 | ~120 |
 | Partition definition | Declarative in YAML | `mkosi.repart/*.conf` drop-ins |
 | Default handling | Auto-merged from `config/osv/` | Manual in mkosi.conf |
 | Post-install hooks | Built-in (provider) | `mkosi.postinst.chroot` script |
 | Proxy config | Env vars (`-E`) | Skeleton + sandbox apt.conf drop-ins |
 
+**mkosi v25 file breakdown (14 files):**
+
+| File | Purpose |
+|------|---------|
+| `mkosi.conf` | Main config: distro, packages, bootloader, output format |
+| `mkosi.postinst.chroot` | Post-install script: enable services, fstab, passwd |
+| `mkosi.repart/00-esp.conf` | EFI System Partition definition (512M, vfat) |
+| `mkosi.repart/10-root.conf` | Root filesystem definition (4044M, ext4) |
+| `mkosi.repart/20-roothashmap.conf` | Roothashmap partition definition (500M, ext4) |
+| `mkosi.repart/30-userdata.conf` | Userdata partition definition (512M+, ext4) |
+| `mkosi.skeleton/.../90proxy` | APT proxy for build chroot (pre-install) |
+| `mkosi.skeleton/.../ubuntu-noble.list` | APT sources for build chroot |
+| `mkosi.extra/.../90proxy` | APT proxy persisted in final image |
+| `mkosi.extra/.../ubuntu-noble.list` | APT sources persisted in final image |
+| `mkosi.extra/.../dhcp.network` | systemd-networkd DHCP config |
+| `mkosi.extra/.../autologin.conf` (getty) | Auto-login on virtual console |
+| `mkosi.extra/.../autologin.conf` (serial) | Auto-login on serial console |
+| `mkosi.sandbox/.../90proxy` | APT proxy for host-side sandbox (tools tree) |
+
 ### Feature Comparison
 
 | Feature | OIC | mkosi v25 |
 |---------|-----|-----------|
 | SBOM generation | SPDX JSON (auto) | JSON manifest |
-| Image compression | gz (configurable) | xz, zstd, etc. |
-| Multi-OS support | 5 distros (azl, elxr, emt, rcd, ubuntu) | Generic (Ubuntu/Debian/Fedora/etc.) |
-| Reproducibility | Depends on mirror state | `--seed` + `SOURCE_DATE_EPOCH` |
+| Image compression | gz, xz, zstd (configurable) | gz, xz, zstd (configurable) |
+| Multi-OS support | 5 distros (azl, elxr, emt, rcd, ubuntu) | Ubuntu, Debian, Fedora, CentOS Stream, Arch, OpenSUSE, etc. |
+| Reproducibility | Depends on mirror snapshot | `--seed` + `SOURCE_DATE_EPOCH` for bit-for-bit builds |
 | Caching | Built-in package cache | `--incremental` / tools tree cache |
 | Build isolation | chroot | User namespaces (unprivileged) |
+
+**Notes on Feature Comparison:**
+
+- **SBOM**: OIC generates [SPDX 2.3](https://spdx.github.io/spdx-spec/v2.3/) JSON,
+  a standardized SBOM format that includes package supplier, license, and
+  relationship metadata. mkosi's JSON manifest is a flat package-name + version
+  list with no license or dependency data. The two are not directly comparable in
+  richness.
+- **Reproducibility**: OIC image contents are determined by the packages available
+  in the upstream APT/RPM mirrors at build time; if mirror contents change between
+  builds, the output may differ. mkosi offers `--seed` and `SOURCE_DATE_EPOCH` to
+  produce bit-for-bit reproducible images (assuming pinned package versions).
 
 ## mkosi v25 Setup
 
