@@ -30,12 +30,17 @@ Recommended Ubuntu 24.04
 git clone https://github.com/open-edge-platform/os-image-composer.git
 cd os-image-composer
 go build -buildmode=pie -ldflags "-s -w" ./cmd/os-image-composer
+
+# Required for ISO and initrd images — build the live installer
+go build -buildmode=pie -o ./build/live-installer -ldflags "-s -w" ./cmd/live-installer
 ```
 
-This produces `./os-image-composer` in the repo root.
+This produces `./os-image-composer` in the repo root and
+`./build/live-installer` (used during ISO/initrd image composition).
 
 Alternatively, use [Earthly](https://earthly.dev/) for reproducible production
-builds (output: `./build/os-image-composer`):
+builds — this builds both binaries automatically
+(output: `./build/os-image-composer` and `./build/live-installer`):
 
 ```bash
 earthly +build
