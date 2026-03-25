@@ -1,0 +1,280 @@
+# Robotics AI Suite: Full ROS 2 Jazzy Image Template
+# Ubuntu 24.04 LTS + ROS 2 Jazzy Desktop + Intel OpenVINO + Gazebo Harmonic +
+# Intel RealSense + Robotics SDK + Collab SLAM + Intel GPU/NPU support
+#
+# Full-featured robotics development image based on the init_jazzy.sh setup script.
+# Includes ROS 2 Jazzy Desktop, Intel OpenVINO 2025, Gazebo Harmonic physics simulator,
+# Intel RealSense camera libraries, Intel NPU drivers, Mesa GPU stack, and more.
+#
+# Usage:
+#   sudo -E ./os-image-composer build image-templates/ubuntu24-x86_64-robotics-jazzy-raw.yml
+#
+# VM launch (QEMU example):
+#   qemu-system-x86_64 -machine q35 -enable-kvm -cpu host -smp 8 -m 16384 \
+#     -drive if=pflash,format=raw,readonly=on,file=OVMF_CODE_4M.fd \
+#     -drive if=pflash,format=raw,file=OVMF_VARS_4M.fd \
+#     -drive file=robotics-jazzy-ubuntu24-24.04.raw,format=raw,if=virtio \
+#     -device virtio-net-pci,netdev=net0 \
+#     -netdev user,id=net0,hostfwd=tcp::2222-:22 \
+#     -nographic
+#
+# ROS 2 is auto-sourced on login. Run demos:
+#   ros2 run turtlesim turtlesim_node &
+#   ros2 run demo_nodes_cpp talker &
+#   ros2 run demo_nodes_cpp listener &
+#
+# OpenVINO inference example:
+#   ros2 launch openvino_node openvino_node.launch.py
+#
+# Gazebo Harmonic simulation:
+#   gz sim shapes.sdf
+
+# AI-searchable metadata for template discovery
+metadata:
+  description: Full ROS 2 Jazzy robotics image with Intel OpenVINO, Gazebo Harmonic, RealSense, and Intel GPU/NPU support
+  use_cases:
+    - Full robotics development environment
+    - ROS 2 Jazzy Desktop with all tools
+    - Intel OpenVINO AI inference on robots
+    - Gazebo Harmonic physics simulation
+    - Intel RealSense depth camera integration
+    - Collaborative SLAM (collab-slam-lze)
+    - Intel GPU acceleration (Xe/UHD Graphics)
+    - Intel NPU inference offload
+    - Edge robotics deployments
+  keywords:
+    - robotics
+    - ros2
+    - jazzy
+    - openvino
+    - gazebo
+    - harmonic
+    - realsense
+    - slam
+    - intel
+    - gpu
+    - npu
+    - level-zero
+    - mesa
+    - ubuntu
+
+image:
+  name: robotics-jazzy-ubuntu24
+  version: "24.04"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+
+# 24GiB to accommodate ROS 2 Desktop + Gazebo + OpenVINO + Mesa + firmware
+disk:
+  name: robotics-jazzy
+  artifacts:
+    - type: raw
+      compression: gz
+  size: 24GiB
+  partitionTableType: gpt
+  partitions:
+    - id: boot
+      type: esp
+      flags:
+        - esp
+        - boot
+      start: 1MiB
+      end: 513MiB
+      fsType: fat32
+      mountPoint: /boot/efi
+      mountOptions: umask=0077
+    - id: rootfs
+      type: linux-root-amd64
+      start: 513MiB
+      end: "0"
+      fsType: ext4
+      mountPoint: /
+      mountOptions: defaults
+
+packageRepositories:
+  # ROS 2 Jazzy repository
+  - codename: "noble"
+    url: "http://packages.ros.org/ros2/ubuntu"
+    pkey: "https://raw.githubusercontent.com/ros/rosdistro/master/ros.key"
+    component: "main"
+
+  # Intel Edge Controls for Industrial (ECI) repository
+  # Priority 1000 ensures ECI packages (systemd+ETF/taprio, PCL+oneAPI, FLANN+oneAPI)
+  # are preferred over Ubuntu defaults when version strings differ.
+  # No allowPackages filter — ECI packages have deep transitive dependency chains
+  # that require many ECI-only sub-packages to satisfy.
+  - codename: "isar"
+    url: "https://eci.intel.com/repos/noble"
+    pkey: "https://eci.intel.com/repos/gpg-keys/GPG-PUB-KEY-INTEL-ECI.gpg"
+    component: "main"
+    priority: 1000
+
+  # Intel AMR (Autonomous Mobile Robots) repository (uses ECI GPG key)
+  # Priority 1001 (above ECI) — AMR packages override ECI when both provide the same package.
+  - codename: "amr"
+    url: "https://amrdocs.intel.com/repos/noble"
+    pkey: "https://eci.intel.com/repos/gpg-keys/GPG-PUB-KEY-INTEL-ECI.gpg"
+    component: "main"
+    priority: 1001
+
+  # Intel OneAPI runtime repository
+  - codename: "all"
+    url: "https://apt.repos.intel.com/oneapi"
+    pkey: "https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB"
+    component: "main"
+
+  # Intel OpenVINO 2025 repository
+  - codename: "ubuntu24"
+    url: "https://apt.repos.intel.com/openvino/2025"
+    pkey: "https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB"
+    component: "main"
+
+  # Kisak Mesa PPA (latest Mesa drivers)
+  - codename: "noble"
+    url: "https://ppa.launchpadcontent.net/kisak/kisak-mesa/ubuntu"
+    pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xEB8B81E14DA65431D7504EA8F63F0F2B90935439"
+    component: "main"
+
+  # Kobuk Team Intel Graphics PPA
+  - codename: "noble"
+    url: "https://ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu"
+    pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x0C0E6AF955CE463C03FC51574D098D70AFBE5E1F"
+    component: "main"
+
+  # Gazebo (OSRF) Harmonic stable repository
+  - codename: "noble"
+    url: "https://packages.osrfoundation.org/gazebo/ubuntu-stable"
+    pkey: "https://packages.osrfoundation.org/gazebo.gpg"
+    component: "main"
+
+  # Intel RealSense repository — NOT needed at build time.
+  # All RealSense packages are installed on first boot via systemd oneshot service
+  # (see configurations section). The first-boot script sets up the repo itself.
+
+systemConfig:
+  name: robotics-jazzy
+  description: Intel Robotics AI Suite - Full ROS 2 Jazzy with OpenVINO, Gazebo, RealSense, and Intel GPU/NPU
+
+  immutability:
+    enabled: false
+
+  packages:
+    # ── Base system ──────────────────────────────────────────────────
+    - ubuntu-minimal
+    - ubuntu-desktop-minimal
+    - systemd
+    - systemd-resolved
+    - systemd-boot
+    - systemd-timesyncd
+    - openssh-server
+    - network-manager
+    - sudo
+    - curl
+    - wget
+    - vim
+    - software-properties-common
+    - gnupg
+    - lsb-release
+    - debconf-utils
+
+    # Boot / initramfs (required for UKI)
+    - dracut-core
+    - cryptsetup-bin
+
+    # ── ROS 2 Jazzy Desktop (full) ──────────────────────────────────
+    - ros-jazzy-desktop
+
+    # ── Intel OpenVINO 2025 (pinned to 2025.3.0) ─────────────────────
+    - openvino_2025.3.0.19807
+    - ros-jazzy-openvino-wrapper-lib
+    - ros-jazzy-openvino-node
+
+    # ── Intel GPU / Level Zero ──────────────────────────────────────
+    - libze1
+    - libze-intel-gpu1
+
+    # ── Gazebo Harmonic physics simulator ───────────────────────────
+    - gz-harmonic
+
+    # ── Intel Robotics SDK ───────────────────────────────────────────
+    - ros-jazzy-robotics-sdk
+
+    # ── Collaborative SLAM (Intel Xe / UHD GPU accelerated) ──────────
+    - ros-jazzy-collab-slam-lze
+
+    # ── Intel RealSense camera ──────────────────────────────────────
+    # Installed on first boot via systemd oneshot service (see configurations).
+    # librealsense2-dkms requires DKMS which needs a live kernel to build modules;
+    # cannot be built inside chroot. All RealSense packages are installed together
+    # on first boot to ensure DKMS + userspace SDK are in sync.
+
+    # ── Mesa GPU stack (Intel Xe / UHD) ─────────────────────────────
+    - libegl-mesa0
+    - libgl1-mesa-dri
+    - libgbm1
+    - libglx-mesa0
+    - mesa-libgallium
+    - mesa-va-drivers
+    - mesa-vdpau-drivers
+    - mesa-vulkan-drivers
+    - xwayland
+
+    # ── Firmware ────────────────────────────────────────────────────
+    - linux-firmware
+
+    # ── Intel NPU (Neural Processing Unit) drivers ───────────────────
+    - intel-level-zero-npu
+    - intel-driver-compiler-npu
+
+  kernel:
+    version: "6.14"
+    cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
+    packages:
+      - linux-image-generic-hwe-24.04
+
+  configurations:
+    # ── ROS 2 environment setup ────────────────────────────────────
+    - cmd: "echo 'source /opt/ros/jazzy/setup.bash' >> /etc/bash.bashrc"
+    - cmd: "echo 'export ROS_DOMAIN_ID=45' >> /etc/bash.bashrc"
+
+    # ── Post-deployment APT version pinning (protects against bad upgrades) ──
+    # Note: Origin-based priority pins (ECI=1000, AMR=1001) are auto-generated
+    # by the provider from packageRepositories.priority fields.
+    # Only version-specific pins that the provider cannot generate are listed here.
+    #
+    # Block old FLANN 1.19.x from ECI (prefer Ubuntu's FLANN 1.9.2)
+    - cmd: "printf 'Package: libflann*\\nPin: version 1.19.*\\nPin-Priority: -1\\n\\nPackage: flann*\\nPin: version 1.19.*\\nPin-Priority: -1\\n' > /etc/apt/preferences.d/eci-flann-block"
+    # Pin OneAPI runtime deps to 2025.3.*
+    - cmd: "printf 'Package: intel-oneapi-runtime-*\\nPin: version 2025.3.*\\nPin-Priority: 1001\\n' > /etc/apt/preferences.d/oneapi"
+    # OpenVINO version pins (match init_jazzy.sh exactly)
+    - cmd: "printf 'Package: openvino-libraries-dev\\nPin: version 2025.3.0*\\nPin-Priority: 1001\\n\\nPackage: openvino\\nPin: version 2025.3.0*\\nPin-Priority: 1001\\n\\nPackage: ros-jazzy-openvino-wrapper-lib\\nPin: version 2025.3.0*\\nPin-Priority: 1002\\n\\nPackage: ros-jazzy-openvino-node\\nPin: version 2025.3.0*\\nPin-Priority: 1002\\n' > /etc/apt/preferences.d/intel-openvino"
+    # RealSense version pin
+    - cmd: "printf 'Package: librealsense2*\\nPin: version 2.56.5-0~realsense.17055\\nPin-Priority: 1001\\n' > /etc/apt/preferences.d/librealsense"
+
+    # ── debconf pre-selections for OpenVINO node ─────────────────────
+    - cmd: "echo 'ros-jazzy-openvino-node openvino-node/pip-proxy select true' | debconf-set-selections"
+    - cmd: "echo 'ros-jazzy-openvino-node openvino-node/models select true' | debconf-set-selections"
+
+    # ── Intel NPU udev rules (render group access to /dev/accel/*) ──
+    - cmd: "printf 'SUBSYSTEM==\"accel\", KERNEL==\"accel*\", GROUP=\"render\", MODE=\"0660\"\\n' > /etc/udev/rules.d/10-intel-vpu.rules"
+
+    # ── Intel RealSense first-boot installation ────────────────────
+    # librealsense2-dkms requires DKMS (needs live kernel for module builds).
+    # This creates a systemd oneshot that sets up the repo, installs all
+    # RealSense packages (version-pinned via /etc/apt/preferences.d/librealsense),
+    # then disables itself.
+    - cmd: "printf '#!/bin/bash\\nset -euo pipefail\\nexport DEBIAN_FRONTEND=noninteractive\\nmkdir -p /etc/apt/keyrings\\ncurl -sSf https://librealsense.intel.com/Debian/librealsense.pgp -o /etc/apt/keyrings/librealsense.pgp\\necho \"deb [signed-by=/etc/apt/keyrings/librealsense.pgp] https://librealsense.intel.com/Debian/apt-repo noble main\" > /etc/apt/sources.list.d/librealsense.list\\napt-get update\\napt-get install -y librealsense2-dkms librealsense2\\nsystemctl disable install-librealsense.service\\nrm -f /usr/local/bin/install-librealsense.sh\\n' > /usr/local/bin/install-librealsense.sh"
+    - cmd: "chmod 755 /usr/local/bin/install-librealsense.sh"
+    - cmd: "printf '[Unit]\\nDescription=Install Intel RealSense packages (first boot)\\nAfter=network-online.target\\nWants=network-online.target\\nConditionPathExists=/usr/local/bin/install-librealsense.sh\\n\\n[Service]\\nType=oneshot\\nExecStart=/usr/local/bin/install-librealsense.sh\\nEnvironment=DEBIAN_FRONTEND=noninteractive\\nTimeoutStartSec=0\\n\\n[Install]\\nWantedBy=multi-user.target\\n' > /etc/systemd/system/install-librealsense.service"
+    - cmd: "systemctl enable install-librealsense.service"
+
+    # ── Enable required services ────────────────────────────────────
+    - cmd: "systemctl enable NetworkManager"
+    - cmd: "systemctl enable ssh"
+
+    # ── Set hostname ────────────────────────────────────────────────
+    - cmd: "echo 'robotics-jazzy' > /etc/hostname"

@@ -78,7 +78,7 @@ var log = logger.Logger()
 - **Imports**: stdlib → third-party → local (blank line separated)
 - **Struct-based design over globals** — prefer dependency injection
 - **Interface naming**: should end with `-er` when possible (e.g., `PackageInstaller`, `ConfigReader`)
-- **Named returns + defer for cleanup** — the standard cleanup pattern (not "goto fail"); see [coding style Section 4.3](docs/architecture/os-image-composer-coding-style.md)
+- **Named returns + defer for cleanup** — the standard cleanup pattern (not "goto fail"); see [coding style Section 4.3](../docs/architecture/os-image-composer-coding-style.md)
 - **Linters** (`earthly +lint`): `govet`, `gofmt`, `errcheck`, `staticcheck`, `unused`, `gosimple` — all errors must be handled (`errcheck` is enforced)
 - Shell scripts: `set -euo pipefail`
 - See `docs/architecture/os-image-composer-coding-style.md` for the full guide

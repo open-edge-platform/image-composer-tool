@@ -21,19 +21,21 @@
 
 The OS Image Composer is a tool for creating customized OS images from pre-built packages. It takes an image template file (YAML) as input and produces bootable OS images in raw or ISO formats suitable for deployment on bare metal systems, virtual machines, and edge devices.
 
-The tool uses a layered configuration approach: OS-specific default templates provide base settings for supported distributions (Azure Linux, Edge Microvisor Toolkit, Wind River eLxr, Ubuntu, and Red Hat-compatible distributions), which are merged with user-provided image templates to generate the final image specification. This approach simplifies the process by handling OS-specific details automatically while allowing full customization when needed.
+The tool uses a layered configuration approach: OS-specific default templates provide base settings for supported distributions (Azure Linux,
+[Edge Microvisor Toolkit](https://docs.openedgeplatform.intel.com/2026.0/edge-microvisor-toolkit/index.html),
+Wind River eLxr, Ubuntu, and Red Hat-compatible distributions), which are merged with user-provided image templates to generate the final image specification. This approach simplifies the process by handling OS-specific details automatically while allowing full customization when needed.
 
 Pre-built packages are fetched securely from distribution-specific remote repositories over HTTPS, with automatic dependency resolution and GPG signature verification. The tool maintains local caches for both packages and reusable chroot environments to optimize build performance across multiple image builds.
 
 The following diagram shows the input and output of the OS Image Composer tool:
 
-![Overview](assets/overview.drawio.svg)
+![Overview](./architecture/assets/overview.drawio.svg)
 
 ## OS Image Composer System Network Context
 
 The following diagram shows the network context of the OS Image Composer tool:
 
-![OS Image Composer Network Diagram](assets/os-image-composer-network-diagram.drawio.svg)
+![OS Image Composer Network Diagram](./architecture/assets/os-image-composer-network-diagram.drawio.svg)
 
 The diagram illustrates how different components of the product's system architecture communicate with each other.
 
@@ -49,7 +51,7 @@ When packages are downloaded, they are verified for integrity by using the GPG p
 
 The following diagram outlines the high-level components of the OS Image Composer tool:
 
-![components high level view](assets/components.drawio.svg)
+![components high level view](./architecture/assets/components.drawio.svg)
 
 The tools for composing an image are grouped under the following components: **Provider**, **Chroot**, **Image**, **OsPackage**, and **Config**. For modularity, each group contains a set of components for the OS Image Composer tool's functions.
 
@@ -91,7 +93,7 @@ The chroot environment provides a clean, reproducible build environment that ens
 
 ### Image
 
-![components - image](assets/components.drawio.image.svg)
+![components - image](./architecture/assets/components.drawio.image.svg)
 
 The Image component groups the libraries that generate the final image output. It creates raw disk images or ISO images according to an image template file.
 
@@ -114,7 +116,7 @@ The Image component groups the libraries that generate the final image output. I
 
 ### Config
 
-![components - Config](assets/components.drawio.config.svg)
+![components - Config](./architecture/assets/components.drawio.config.svg)
 
 The **Config** component contains configuration data for the image that will be created. It serves as input data for the **Provider**, which builds the OS image according to that data.
 
@@ -143,7 +145,7 @@ The configuration system uses a layered approach: OS-specific default templates 
 
 ### OsPackage
 
-![components - package](assets/components.drawio.OsPackage.svg)
+![components - package](./architecture/assets/components.drawio.OsPackage.svg)
 
 The **OsPackage** component groups the libraries that provide the unified interface to operating system vendors' remote package repositories. It analyzes given package lists and downloads all the packages and dependencies from the target operating system's remote package repository to a local cache.
 
@@ -162,7 +164,7 @@ It verifies signatures of the downloaded packages to ensure they are authenticat
 
 The following diagram illustrates the overall image composition workflow:
 
-![Image composition workflow](./assets/image.composition.workflow.drawio.svg)
+![Image composition workflow](./architecture/assets/image.composition.workflow.drawio.svg)
 
 The build process follows these high-level steps:
 
@@ -182,27 +184,27 @@ The build process follows these high-level steps:
 
 ## Related Documentation
 
-- [Understanding the Build Process](./os-image-composer-build-process.md) - Detailed explanation of build stages
-- [Understanding Caching](./os-image-composer-caching.md) - How package and chroot caching work
-- [Understanding Templates](./os-image-composer-templates.md) - How to create and use image templates
-- [Multiple Package Repository Support](./os-image-composer-multi-repo-support.md) - Adding custom package repositories
-- [OS Image Composer CLI Reference](./os-image-composer-cli-specification.md) - Complete CLI documentation
+- [Understanding the Build Process](./architecture/os-image-composer-build-process.md) - Detailed explanation of build stages
+- [Understanding Caching](./architecture/os-image-composer-caching.md) - How package and chroot caching work
+- [Understanding Templates](./architecture/os-image-composer-templates.md) - How to create and use image templates
+- [Multiple Package Repository Support](./architecture/os-image-composer-multi-repo-support.md) - Adding custom package repositories
+- [OS Image Composer CLI Reference](./architecture/os-image-composer-cli-specification.md) - Complete CLI documentation
 
 <!--hide_directive
 :::{toctree}
 :hidden:
 
-CLI Specification <os-image-composer-cli-specification.md>
-Security Objectives <image-composition-tool-security-objectives.md>
-Build Process <os-image-composer-build-process.md>
-image-manifest-specification.md
-Coding Style Guide <os-image-composer-coding-style.md>
-Caching in OS Image Composer <os-image-composer-caching.md>
-Multiple-package Repo Support <os-image-composer-multi-repo-support.md>
-Using Templates <os-image-composer-templates.md>
-Dependency Graph Analyzer <adr-dep-analyzer.md>
-Image Inspection and Comparison <adr-image-inspect.md>
-Template-Enriched RAG <adr-template-enriched-rag.md>
+CLI Specification <./architecture/os-image-composer-cli-specification.md>
+Security Objectives <./architecture/image-composition-tool-security-objectives.md>
+Build Process <./architecture/os-image-composer-build-process.md>
+./architecture/image-manifest-specification.md
+Coding Style Guide <./architecture/os-image-composer-coding-style.md>
+Caching in OS Image Composer <./architecture/os-image-composer-caching.md>
+Multiple-package Repo Support <./architecture/os-image-composer-multi-repo-support.md>
+Using Templates <./architecture/os-image-composer-templates.md>
+Dependency Graph Analyzer <./architecture/adr-dep-analyzer.md>
+Image Inspection and Comparison <./architecture/adr-image-inspect.md>
+Template-Enriched RAG <./architecture/adr-template-enriched-rag.md>
 
 :::
 hide_directive-->

@@ -27,12 +27,12 @@ type ImageSummary struct {
 	SHA256         string                `json:"sha256,omitempty"`
 	SizeBytes      int64                 `json:"sizeBytes,omitempty"`
 	PartitionTable PartitionTableSummary `json:"partitionTable,omitempty"`
-	Verity         *VerityInfo           `json:"verity,omitempty" yaml:"verity,omitempty"`
-	// SBOM           SBOMSummary 		   `json:"sbom,omitempty"`
+	Verity         *VeritySummary        `json:"verity,omitempty" yaml:"verity,omitempty"`
+	SBOM           SBOMSummary           `json:"sbom,omitempty" yaml:"sbom,omitempty"`
 }
 
-// VerityInfo holds dm-verity detection information.
-type VerityInfo struct {
+// VeritySummary holds dm-verity detection information.
+type VeritySummary struct {
 	Enabled       bool     `json:"enabled" yaml:"enabled"`
 	Method        string   `json:"method,omitempty" yaml:"method,omitempty"` // "systemd-verity", "custom-initramfs", "unknown"
 	RootDevice    string   `json:"rootDevice,omitempty" yaml:"rootDevice,omitempty"`
@@ -51,6 +51,20 @@ type PartitionTableSummary struct {
 
 	LargestFreeSpan      *FreeSpanSummary `json:"largestFreeSpan,omitempty" yaml:"largestFreeSpan,omitempty"`
 	MisalignedPartitions []int            `json:"misalignedPartitions,omitempty" yaml:"misalignedPartitions,omitempty"`
+}
+
+// SBOMSummary holds information about the Software Bill of Materials (SBOM) if available.
+type SBOMSummary struct {
+	Present         bool     `json:"present,omitempty" yaml:"present,omitempty"`
+	Path            string   `json:"path,omitempty" yaml:"path,omitempty"`
+	FileName        string   `json:"fileName,omitempty" yaml:"fileName,omitempty"`
+	Format          string   `json:"format,omitempty" yaml:"format,omitempty"` // e.g., "spdx", "cyclonedx"
+	SizeBytes       int64    `json:"sizeBytes,omitempty" yaml:"sizeBytes,omitempty"`
+	SHA256          string   `json:"sha256,omitempty" yaml:"sha256,omitempty"`
+	CanonicalSHA256 string   `json:"canonicalSha256,omitempty" yaml:"canonicalSha256,omitempty"`
+	PackageCount    int      `json:"packageCount,omitempty" yaml:"packageCount,omitempty"`
+	Content         []byte   `json:"-" yaml:"-"`
+	Notes           []string `json:"notes,omitempty" yaml:"notes,omitempty"`
 }
 
 // FreeSpanSummary captures the largest unallocated extent on disk (by LBA).
@@ -232,12 +246,17 @@ type diskAccessorFS interface {
 }
 
 type DiskfsInspector struct {
-	HashImages bool
-	logger     *zap.SugaredLogger
+	HashImages  bool
+	InspectSBOM bool
+	logger      *zap.SugaredLogger
 }
 
 func NewDiskfsInspector(hash bool) *DiskfsInspector {
-	return &DiskfsInspector{HashImages: hash, logger: logger.Logger()}
+	return &DiskfsInspector{HashImages: hash, InspectSBOM: false, logger: logger.Logger()}
+}
+
+func NewDiskfsInspectorWithOptions(hash bool, inspectSBOM bool) *DiskfsInspector {
+	return &DiskfsInspector{HashImages: hash, InspectSBOM: inspectSBOM, logger: logger.Logger()}
 }
 
 func (d *DiskfsInspector) Inspect(imagePath string) (*ImageSummary, error) {
@@ -365,12 +384,27 @@ func (d *DiskfsInspector) inspectCore(
 	// Detect dm-verity configuration
 	verityInfo := detectVerity(ptSummary)
 
+	// Detect SBOM information if requested by user
+	var sbomInfo SBOMSummary
+	if d.InspectSBOM {
+		sbomInfo = inspectSBOMFromImageRaw(img, ptSummary)
+		if !sbomInfo.Present {
+			fsSummary := inspectSBOMFromImageFilesystem(disk, ptSummary)
+			if fsSummary.Present {
+				sbomInfo = fsSummary
+			} else {
+				sbomInfo.Notes = append(sbomInfo.Notes, fsSummary.Notes...)
+			}
+		}
+	}
+
 	return &ImageSummary{
 		File:           imagePath,
 		SizeBytes:      sizeBytes,
 		PartitionTable: ptSummary,
 		SHA256:         sha256sum,
 		Verity:         verityInfo,
+		SBOM:           sbomInfo,
 	}, nil
 }
 
@@ -630,8 +664,8 @@ func hashBytesHex(data []byte) string {
 }
 
 // detectVerity inspects the partition table and UKI cmdline to detect dm-verity configuration
-func detectVerity(pt PartitionTableSummary) *VerityInfo {
-	info := &VerityInfo{}
+func detectVerity(pt PartitionTableSummary) *VeritySummary {
+	info := &VeritySummary{}
 
 	// Look for hash partition (common names/types)
 	hashPartLoopIdx := -1

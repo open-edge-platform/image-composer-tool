@@ -1084,23 +1084,23 @@ func TestCompareVerity_NilCasesAndFieldChanges(t *testing.T) {
 		t.Fatalf("expected nil diff when both verity values are nil")
 	}
 
-	added := compareVerity(nil, &VerityInfo{Enabled: true, Method: "systemd-verity", RootDevice: "/dev/vda2", HashPartition: 3})
+	added := compareVerity(nil, &VeritySummary{Enabled: true, Method: "systemd-verity", RootDevice: "/dev/vda2", HashPartition: 3})
 	if added == nil || !added.Changed || added.Added == nil {
 		t.Fatalf("expected added verity diff")
 	}
 
-	removed := compareVerity(&VerityInfo{Enabled: true, Method: "systemd-verity"}, nil)
+	removed := compareVerity(&VeritySummary{Enabled: true, Method: "systemd-verity"}, nil)
 	if removed == nil || !removed.Changed || removed.Removed == nil {
 		t.Fatalf("expected removed verity diff")
 	}
 
-	from := &VerityInfo{
+	from := &VeritySummary{
 		Enabled:       true,
 		Method:        "systemd-verity",
 		RootDevice:    "/dev/vda2",
 		HashPartition: 3,
 	}
-	to := &VerityInfo{
+	to := &VeritySummary{
 		Enabled:       false,
 		Method:        "custom-initramfs",
 		RootDevice:    "/dev/vda3",

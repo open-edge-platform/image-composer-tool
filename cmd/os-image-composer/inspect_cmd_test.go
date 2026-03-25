@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -15,8 +17,13 @@ import (
 // resetInspectFlags resets inspect flags to defaults.
 func resetInspectFlags() {
 	outputFormat = "text"
+	prettyJSON = false
+	sbomOutPath = ""
 	newInspector = func(hash bool) inspector {
 		return imageinspect.NewDiskfsInspector(hash)
+	}
+	newInspectorWithSBOM = func(hash bool, inspectSBOM bool) inspector {
+		return imageinspect.NewDiskfsInspectorWithOptions(hash, inspectSBOM)
 	}
 }
 
@@ -91,6 +98,16 @@ func TestCreateInspectCommand(t *testing.T) {
 		}
 	})
 
+	t.Run("ExtractSBOMFlagOptionalValue", func(t *testing.T) {
+		extractFlag := cmd.Flags().Lookup("extract-sbom")
+		if extractFlag == nil {
+			t.Fatal("--extract-sbom flag should be registered")
+		}
+		if extractFlag.NoOptDefVal != "." {
+			t.Fatalf("expected --extract-sbom NoOptDefVal '.', got %q", extractFlag.NoOptDefVal)
+		}
+	})
+
 	t.Run("ArgsValidation", func(t *testing.T) {
 		if cmd.Args == nil {
 			t.Fatal("Args validator should be set")
@@ -128,11 +145,249 @@ func TestInspectCommand_HelpOutput(t *testing.T) {
 		"inspect",
 		"IMAGE_FILE",
 		"--format",
+		"--extract-sbom",
 	}
 	for _, s := range expected {
 		if !strings.Contains(out, s) {
 			t.Errorf("help output should contain %q", s)
 		}
+	}
+}
+
+func TestWriteExtractedSBOM(t *testing.T) {
+	t.Run("NoSBOMPresent_NoWrite", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		err := writeExtractedSBOM(imageinspect.SBOMSummary{}, tmpDir)
+		if err == nil {
+			t.Fatalf("expected error when SBOM is not present")
+		}
+		if !strings.Contains(err.Error(), "embedded SBOM not found") {
+			t.Fatalf("expected missing SBOM error, got: %v", err)
+		}
+	})
+
+	t.Run("WritesToDirectory", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		sbom := imageinspect.SBOMSummary{
+			Present:  true,
+			FileName: "spdx_manifest_deb_demo.json",
+			Content:  []byte(`{"packages":[]}`),
+		}
+
+		err := writeExtractedSBOM(sbom, tmpDir)
+		if err != nil {
+			t.Fatalf("writeExtractedSBOM returned error: %v", err)
+		}
+
+		outFile := filepath.Join(tmpDir, sbom.FileName)
+		data, readErr := os.ReadFile(outFile)
+		if readErr != nil {
+			t.Fatalf("failed to read written SBOM file: %v", readErr)
+		}
+		if string(data) != string(sbom.Content) {
+			t.Fatalf("written SBOM content mismatch")
+		}
+	})
+
+	t.Run("WritesToExplicitFile", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		outFile := filepath.Join(tmpDir, "custom-spdx.json")
+		sbom := imageinspect.SBOMSummary{
+			Present: true,
+			Content: []byte(`{"packages":[{"name":"acl"}]}`),
+		}
+
+		err := writeExtractedSBOM(sbom, outFile)
+		if err != nil {
+			t.Fatalf("writeExtractedSBOM returned error: %v", err)
+		}
+
+		data, readErr := os.ReadFile(outFile)
+		if readErr != nil {
+			t.Fatalf("failed to read written SBOM file: %v", readErr)
+		}
+		if string(data) != string(sbom.Content) {
+			t.Fatalf("written SBOM content mismatch")
+		}
+	})
+
+	t.Run("EmptyOutPathDefaultsToCurrentDirectory", func(t *testing.T) {
+		cwd, err := os.Getwd()
+		if err != nil {
+			t.Fatalf("failed to get cwd: %v", err)
+		}
+
+		tmpDir := t.TempDir()
+		if err := os.Chdir(tmpDir); err != nil {
+			t.Fatalf("failed to chdir to temp dir: %v", err)
+		}
+		t.Cleanup(func() {
+			_ = os.Chdir(cwd)
+		})
+
+		sbom := imageinspect.SBOMSummary{
+			Present:  true,
+			FileName: "spdx_manifest_default.json",
+			Content:  []byte(`{"packages":[]}`),
+		}
+
+		err = writeExtractedSBOM(sbom, "")
+		if err != nil {
+			t.Fatalf("writeExtractedSBOM returned error: %v", err)
+		}
+
+		data, readErr := os.ReadFile(filepath.Join(tmpDir, sbom.FileName))
+		if readErr != nil {
+			t.Fatalf("failed to read default-path SBOM file: %v", readErr)
+		}
+		if string(data) != string(sbom.Content) {
+			t.Fatalf("written SBOM content mismatch")
+		}
+	})
+}
+
+func TestInspectCommand_ExtractSBOMWithoutValue(t *testing.T) {
+	defer resetInspectFlags()
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get cwd: %v", err)
+	}
+	tmpDir := t.TempDir()
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("failed to chdir to temp dir: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(cwd)
+	})
+
+	newInspector = func(hash bool) inspector {
+		return &fakeInspector{
+			summary: &imageinspect.ImageSummary{
+				File: "fake.img",
+				SBOM: imageinspect.SBOMSummary{
+					Present:  true,
+					FileName: "spdx_manifest_rpm_demo.json",
+					Content:  []byte(`{"packages":[]}`),
+				},
+			},
+		}
+	}
+	newInspectorWithSBOM = func(hash bool, inspectSBOM bool) inspector {
+		return &fakeInspector{
+			summary: &imageinspect.ImageSummary{
+				File: "fake.img",
+				SBOM: imageinspect.SBOMSummary{
+					Present:  true,
+					FileName: "spdx_manifest_rpm_demo.json",
+					Content:  []byte(`{"packages":[]}`),
+				},
+			},
+		}
+	}
+
+	cmd := createInspectCommand()
+	_, err = execCmd(t, cmd, "--extract-sbom", "fake.img")
+	if err != nil {
+		t.Fatalf("expected inspect with bare --extract-sbom to succeed, got: %v", err)
+	}
+
+	if _, statErr := os.Stat(filepath.Join(tmpDir, "spdx_manifest_rpm_demo.json")); statErr != nil {
+		t.Fatalf("expected extracted SBOM file in current directory, stat err: %v", statErr)
+	}
+}
+
+func TestExecuteInspect_InspectorSelection(t *testing.T) {
+	defer resetInspectFlags()
+
+	t.Run("UsesRegularInspectorWhenExtractNotRequested", func(t *testing.T) {
+		resetInspectFlags()
+		regularCalled := false
+		sbomInspectorCalled := false
+
+		newInspector = func(hash bool) inspector {
+			regularCalled = true
+			return &fakeInspector{summary: &imageinspect.ImageSummary{File: "fake.img", SizeBytes: 1}}
+		}
+		newInspectorWithSBOM = func(hash bool, inspectSBOM bool) inspector {
+			sbomInspectorCalled = true
+			return &fakeInspector{summary: &imageinspect.ImageSummary{File: "fake.img", SizeBytes: 1}}
+		}
+
+		cmd := createInspectCommand()
+		cmd.SetOut(&bytes.Buffer{})
+		cmd.SetErr(&bytes.Buffer{})
+
+		err := executeInspect(cmd, []string{"fake.img"})
+		if err != nil {
+			t.Fatalf("expected success, got error: %v", err)
+		}
+		if !regularCalled {
+			t.Fatalf("expected regular inspector constructor to be called")
+		}
+		if sbomInspectorCalled {
+			t.Fatalf("did not expect SBOM inspector constructor when extraction not requested")
+		}
+	})
+
+	t.Run("UsesSBOMInspectorWhenExtractRequested", func(t *testing.T) {
+		resetInspectFlags()
+		tmpDir := t.TempDir()
+		outFile := filepath.Join(tmpDir, "out.json")
+
+		regularCalled := false
+		sbomInspectorCalled := false
+
+		newInspector = func(hash bool) inspector {
+			regularCalled = true
+			return &fakeInspector{summary: &imageinspect.ImageSummary{File: "fake.img", SizeBytes: 1}}
+		}
+		newInspectorWithSBOM = func(hash bool, inspectSBOM bool) inspector {
+			sbomInspectorCalled = true
+			return &fakeInspector{
+				summary: &imageinspect.ImageSummary{
+					File: "fake.img",
+					SBOM: imageinspect.SBOMSummary{
+						Present:  true,
+						FileName: "spdx_manifest_demo.json",
+						Content:  []byte(`{"packages":[]}`),
+					},
+				},
+			}
+		}
+
+		cmd := createInspectCommand()
+		cmd.SetOut(&bytes.Buffer{})
+		cmd.SetErr(&bytes.Buffer{})
+		if err := cmd.Flags().Set("extract-sbom", outFile); err != nil {
+			t.Fatalf("set extract-sbom flag: %v", err)
+		}
+
+		err := executeInspect(cmd, []string{"fake.img"})
+		if err != nil {
+			t.Fatalf("expected success, got error: %v", err)
+		}
+		if !sbomInspectorCalled {
+			t.Fatalf("expected SBOM inspector constructor to be called")
+		}
+		if regularCalled {
+			t.Fatalf("did not expect regular inspector constructor when extraction is requested")
+		}
+		if _, statErr := os.Stat(outFile); statErr != nil {
+			t.Fatalf("expected extracted SBOM file at %s: %v", outFile, statErr)
+		}
+	})
+}
+
+func TestWriteExtractedSBOM_MissingIncludesNotes(t *testing.T) {
+	err := writeExtractedSBOM(imageinspect.SBOMSummary{
+		Notes: []string{"first reason", "second reason"},
+	}, "ignored.json")
+	if err == nil {
+		t.Fatalf("expected error when SBOM is missing")
+	}
+	if !strings.Contains(err.Error(), "first reason") || !strings.Contains(err.Error(), "second reason") {
+		t.Fatalf("expected notes in error message, got: %v", err)
 	}
 }
 
