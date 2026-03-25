@@ -55,6 +55,123 @@ func Packages() ([]ospackage.PackageInfo, error) {
 	return packages, nil
 }
 
+func createTemporaryRepository(sourcePath, repoName string) (string, error) {
+	// Create temp directory structure
+	// tempRepoPath := filepath.Join("/tmp", fmt.Sprintf("rpmrepo_%s_%d", repoName, time.Now().Unix()))
+
+	// Copy RPM files from source to temp directory
+	// Run createrepo_c command to generate metadata
+	// Return the new repository path
+	return "", fmt.Errorf("createTemporaryRepository not implemented yet")
+}
+
+func LocalUserPackages() ([]ospackage.PackageInfo, error) {
+	log := logger.Logger()
+	log.Infof("fetching packages from %s", "local user package list")
+
+	repoList := make([]struct {
+		id            string
+		codename      string
+		url           string
+		path          string
+		pkey          string
+		allowPackages []string
+	}, len(UserRepo))
+	for i, repo := range UserRepo {
+		// skipping non-local repos for now - we only want to process local file path repos in this function
+		// , and the non-local ones will be processed in UserPackages()
+		if repo.Path == "" {
+			continue
+		}
+		repoList[i] = struct {
+			id            string
+			codename      string
+			url           string
+			path          string
+			pkey          string
+			allowPackages []string
+		}{
+			id:            fmt.Sprintf("rpmlocrepo%d", i+1),
+			codename:      repo.Codename,
+			url:           repo.URL,
+			path:          repo.Path,
+			pkey:          repo.PKey,
+			allowPackages: repo.AllowPackages,
+		}
+	}
+
+	// log.Debugf("yockgen %v", repoList)
+	// return nil, fmt.Errorf("yockgen local user packages not implemented yet")
+
+	type RepoConfigWithPackages struct {
+		RepoConfig
+		AllowPackages []string
+	}
+
+	var localRepo []RepoConfigWithPackages
+	for _, repoItem := range repoList {
+		id := repoItem.id
+		codename := repoItem.codename
+		baseURL := repoItem.url
+		path := repoItem.path
+		pkey := repoItem.pkey
+		allowPackages := repoItem.allowPackages
+
+		repo := RepoConfigWithPackages{
+			RepoConfig: RepoConfig{
+				Name:         id,
+				GPGCheck:     true,
+				RepoGPGCheck: true,
+				Enabled:      true,
+				GPGKey:       pkey,
+				URL:          baseURL,
+				Path:         path,
+				Section:      fmt.Sprintf("[%s]", codename),
+			},
+			AllowPackages: allowPackages,
+		}
+
+		localRepo = append(localRepo, repo)
+	}
+
+	// metadataXmlPath := "repodata/repomd.xml"
+	// var allLocalPackages []ospackage.PackageInfo
+	for _, rpItx := range localRepo {
+		if rpItx.Path == "" {
+			continue
+		}
+
+		// Check if it's a proper repository
+		repoMetaDataPath := filepath.Join(rpItx.Path, "repodata/repomd.xml")
+		if _, err := os.Stat(repoMetaDataPath); os.IsNotExist(err) {
+			// Not a proper repo - need to create one
+			tempRepoPath, err := createTemporaryRepository(rpItx.Path, rpItx.Name)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create temporary repository: %w", err)
+			}
+			// Update the path to point to the new temp repo
+			rpItx.Path = tempRepoPath
+		}
+
+		// // For local repositories, construct file path directly
+		// primaryXmlPath, err := FetchLocalPrimaryURL(repoMetaDataPath)
+		// if err != nil {
+		// 	return nil, fmt.Errorf("fetching local primary URL from %s failed: %w", repoMetaDataPath, err)
+		// }
+
+		// // Use file:// scheme for local parsing
+		// fileURL := fmt.Sprintf("file://%s", rpItx.Path)
+		// localPkgs, err := ParseLocalRepositoryMetadata(fileURL, primaryXmlPath, rpItx.AllowPackages)
+		// if err != nil {
+		// 	return nil, fmt.Errorf("parsing local repo failed: %w", err)
+		// }
+		// allLocalPackages = append(allLocalPackages, localPkgs...)
+	}
+
+	return []ospackage.PackageInfo{}, nil
+	//return allLocalPackages, nil
+}
+
 func UserPackages() ([]ospackage.PackageInfo, error) {
 	log := logger.Logger()
 	log.Infof("fetching packages from %s", "user package list")
@@ -413,6 +530,14 @@ func DownloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSour
 	}
 	all = append(all, userpkg...)
 
+	// Adding local repo packages
+	localRepoPkgs, err := LocalUserPackages()
+	if err != nil {
+		log.Errorf("getting local repo packages failed: %v", err)
+		return downloadPkgList, nil, fmt.Errorf("local repo package fetch failed: %w", err)
+	}
+	all = append(all, localRepoPkgs...)
+
 	// Adjust package names to remove any prefixes before PkgName - Azure Linux RPM repos often prefix package file names
 	for i := range all {
 		// Find where the package name starts in the full name
@@ -487,3 +612,24 @@ func DownloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSour
 
 	return downloadPkgList, needed, nil
 }
+
+// In LocalUserPackages(), before the main processing loop:
+// for _, rpItx := range localRepo {
+//     if rpItx.Path == "" {
+//         continue
+//     }
+//
+//     // Check if it's a proper repository
+//     repoMetaDataPath := filepath.Join(rpItx.Path, "repodata/repomd.xml")
+//     if _, err := os.Stat(repoMetaDataPath); os.IsNotExist(err) {
+//         // Not a proper repo - need to create one
+//         tempRepoPath, err := createTemporaryRepository(rpItx.Path, rpItx.Name)
+//         if err != nil {
+//             return nil, fmt.Errorf("failed to create temporary repository: %w", err)
+//         }
+//         // Update the path to point to the new temp repo
+//         rpItx.Path = tempRepoPath
+//     }
+//
+//     // Continue with existing repo processing...
+// }
