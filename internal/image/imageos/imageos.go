@@ -314,6 +314,15 @@ func mountDiskRootToChroot(installRoot string, diskPathIdMap map[string]string, 
 	return fmt.Errorf("no root partition found in diskPathIdMap")
 }
 
+func isSwapFsType(fsType string) bool {
+	return fsType == "swap" || fsType == "linux-swap"
+}
+
+func isNonMountablePartition(partition config.PartitionInfo) bool {
+	mountPoint := strings.TrimSpace(partition.MountPoint)
+	return mountPoint == "" || mountPoint == "none" || isSwapFsType(partition.FsType)
+}
+
 func (imageOs *ImageOs) mountDiskToChroot(installRoot string, diskPathIdMap map[string]string, template *config.ImageTemplate) ([]map[string]string, error) {
 	var mountPointInfoList []map[string]string
 	diskInfo := template.GetDiskConfig()
@@ -321,6 +330,12 @@ func (imageOs *ImageOs) mountDiskToChroot(installRoot string, diskPathIdMap map[
 	for diskId, diskPath := range diskPathIdMap {
 		for _, partition := range partions {
 			if partition.ID == diskId {
+				if isNonMountablePartition(partition) {
+					log.Debugf("Skipping non-mountable partition %s (fsType=%s, mountPoint=%q)",
+						partition.ID, partition.FsType, partition.MountPoint)
+					continue
+				}
+
 				mountPointInfo := make(map[string]string)
 				mountPointInfo["Id"] = diskId
 				mountPointInfo["Path"] = diskPath
@@ -929,7 +944,6 @@ func updateImageFstab(installRoot string, diskPathIdMap map[string]string, templ
 	const (
 		rootfsMountPoint = "/"
 		defaultOptions   = "defaults"
-		swapFsType       = "swap"
 		swapOptions      = "sw"
 		defaultDump      = "0"
 		disablePass      = "0"
@@ -971,7 +985,12 @@ func updateImageFstab(installRoot string, diskPathIdMap map[string]string, templ
 					pass = rootPass
 				}
 
-				if fsType == swapFsType {
+				if isSwapFsType(fsType) {
+					fsType = "swap"
+					if strings.TrimSpace(mountPoint) == "" {
+						mountPoint = "none"
+					}
+
 					// For swap partitions, set the options accordingly
 					options = swapOptions
 					pass = disablePass // No pass value for swap
@@ -1046,36 +1065,31 @@ func buildImageUKI(installRoot string, template *config.ImageTemplate) error {
 		if _, err := os.Stat(installRoot); err == nil {
 			log.Infof("Install Root Exists at %s", installRoot)
 		} else {
-			log.Errorf("Install Root does not exist at %s", installRoot)
-		}
-		if _, err := os.Stat(kernelPath); err == nil {
-			log.Infof("kernelPath  Exists at %s", kernelPath)
-		} else {
-			log.Errorf("Install Root does not exist at %s", installRoot)
+			log.Warnf("Install Root does not exist at %s", installRoot)
 		}
 
-		if _, err := os.Stat(kernelPath); err == nil {
+		if _, err := os.Stat(filepath.Join(installRoot, kernelPath)); err == nil {
 			log.Infof("kernelPath  Exists at %s", kernelPath)
 		} else {
-			log.Errorf("kernelPath does not exist at %s", kernelPath)
+			log.Warnf("kernelPath does not exist at %s", kernelPath)
 		}
 
-		if _, err := os.Stat(initrdPath); err == nil {
+		if _, err := os.Stat(filepath.Join(installRoot, initrdPath)); err == nil {
 			log.Infof("initrdPath  Exists at %s", initrdPath)
 		} else {
-			log.Errorf("initrdPath does not exist at %s", initrdPath)
+			log.Warnf("initrdPath does not exist at %s", initrdPath)
 		}
-		if _, err := os.Stat(cmdlineFile); err == nil {
+
+		if _, err := os.Stat(filepath.Join(installRoot, cmdlineFile)); err == nil {
 			log.Infof("cmdlineFile  Exists at %s", cmdlineFile)
-			return nil
 		} else {
-			log.Errorf("cmdlineFile does not exist at %s", cmdlineFile)
+			log.Warnf("cmdlineFile does not exist at %s", cmdlineFile)
 		}
-		if _, err := os.Stat(outputPath); err == nil {
+
+		if _, err := os.Stat(filepath.Join(installRoot, outputPath)); err == nil {
 			log.Infof("outputPath  Exists at %s", outputPath)
-			return nil
 		} else {
-			log.Errorf("outputPath does not exist at %s", outputPath)
+			log.Warnf("outputPath does not exist at %s", outputPath)
 		}
 
 		if err := buildUKI(installRoot, kernelPath, initrdPath, cmdlineFile, outputPath, template); err != nil {

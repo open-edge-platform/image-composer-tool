@@ -191,3 +191,181 @@ func TestRenderEFIBinaryDiffText_FullBranches(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderCompareText_NilResult(t *testing.T) {
+	var buf bytes.Buffer
+	err := RenderCompareText(&buf, nil, CompareTextOptions{Mode: "diff"})
+	if err == nil {
+		t.Fatalf("expected error for nil compare result")
+	}
+}
+
+func TestRenderCompareText_Modes(t *testing.T) {
+	rich := &ImageCompareResult{
+		From: ImageSummary{File: "from.img", SizeBytes: 1024},
+		To:   ImageSummary{File: "to.img", SizeBytes: 2048},
+		Equality: Equality{
+			Class:           EqualityDifferent,
+			VolatileDiffs:   1,
+			MeaningfulDiffs: 2,
+		},
+		Summary: CompareSummary{
+			Changed:               true,
+			PartitionTableChanged: true,
+			PartitionsChanged:     true,
+			EFIBinariesChanged:    true,
+			SBOMChanged:           true,
+		},
+		Diff: ImageDiff{
+			Image: MetaDiff{SizeBytes: &ValueDiff[int64]{From: 1024, To: 2048}},
+			PartitionTable: PartitionTableDiff{
+				Changed: true,
+				Type:    &ValueDiff[string]{From: "gpt", To: "mbr"},
+			},
+			Partitions: PartitionDiff{
+				Added:   []PartitionSummary{{Index: 2, Name: "data", Type: "linux", StartLBA: 2048, EndLBA: 4095, SizeBytes: 1024}},
+				Removed: []PartitionSummary{{Index: 1, Name: "root", Type: "linux", StartLBA: 34, EndLBA: 2047, SizeBytes: 1024}},
+				Modified: []ModifiedPartitionSummary{{
+					Key: "idx=3",
+					Changes: []FieldChange{{
+						Field: "name",
+						From:  "old",
+						To:    "new",
+					}},
+				}},
+			},
+			Verity: &VerityDiff{
+				Changed:    true,
+				Method:     &ValueDiff[string]{From: "systemd-verity", To: "custom-initramfs"},
+				RootDevice: &ValueDiff[string]{From: "/dev/sda2", To: "/dev/sda3"},
+			},
+			SBOM: &SBOMDiff{
+				Changed:         true,
+				FileName:        &ValueDiff[string]{From: "spdx_a.json", To: "spdx_b.json"},
+				PackageCount:    &ValueDiff[int]{From: 1, To: 2},
+				CanonicalSHA256: &ValueDiff[string]{From: strings.Repeat("a", 64), To: strings.Repeat("b", 64)},
+			},
+		},
+	}
+
+	var summaryBuf bytes.Buffer
+	if err := RenderCompareText(&summaryBuf, rich, CompareTextOptions{Mode: "summary"}); err != nil {
+		t.Fatalf("summary mode render error: %v", err)
+	}
+	summaryOut := summaryBuf.String()
+	for _, want := range []string{"Changed:", "PartitionTableChanged:", "SBOMChanged:", "Counts (objects):"} {
+		if !strings.Contains(summaryOut, want) {
+			t.Fatalf("summary output missing %q:\n%s", want, summaryOut)
+		}
+	}
+
+	var diffBuf bytes.Buffer
+	if err := RenderCompareText(&diffBuf, rich, CompareTextOptions{Mode: "diff"}); err != nil {
+		t.Fatalf("diff mode render error: %v", err)
+	}
+	diffOut := diffBuf.String()
+	for _, want := range []string{"Partition table:", "Partitions:", "dm-verity:", "SBOM:"} {
+		if !strings.Contains(diffOut, want) {
+			t.Fatalf("diff output missing %q:\n%s", want, diffOut)
+		}
+	}
+
+	unchanged := &ImageCompareResult{
+		From:     ImageSummary{File: "from.img"},
+		To:       ImageSummary{File: "to.img"},
+		Equality: Equality{Class: EqualitySemantic},
+		Summary:  CompareSummary{Changed: false},
+	}
+
+	var fullBuf bytes.Buffer
+	if err := RenderCompareText(&fullBuf, unchanged, CompareTextOptions{Mode: "full"}); err != nil {
+		t.Fatalf("full mode render error: %v", err)
+	}
+	fullOut := fullBuf.String()
+	if !strings.Contains(fullOut, "No changes detected.") {
+		t.Fatalf("expected unchanged full output, got:\n%s", fullOut)
+	}
+}
+
+func TestRenderSummaryText_AndSPDXCompareText(t *testing.T) {
+	var summaryBuf bytes.Buffer
+	summary := &ImageSummary{
+		File:      "image.raw",
+		SizeBytes: 4096,
+		SHA256:    strings.Repeat("a", 64),
+		PartitionTable: PartitionTableSummary{
+			Type:               "gpt",
+			LogicalSectorSize:  512,
+			PhysicalSectorSize: 4096,
+			ProtectiveMBR:      true,
+			Partitions: []PartitionSummary{{
+				Index:     1,
+				Name:      "root",
+				Type:      "linux",
+				StartLBA:  2048,
+				EndLBA:    4095,
+				SizeBytes: 1024,
+				Filesystem: &FilesystemSummary{
+					Type:  "ext4",
+					Label: "rootfs",
+					UUID:  "uuid-1",
+				},
+			}},
+		},
+		Verity: &VeritySummary{
+			Enabled:       true,
+			Method:        "systemd-verity",
+			RootDevice:    "/dev/sda2",
+			HashPartition: 3,
+		},
+		SBOM: SBOMSummary{
+			Present:         true,
+			Path:            "/usr/share/sbom/spdx_manifest.json",
+			Format:          "spdx",
+			SizeBytes:       123,
+			SHA256:          strings.Repeat("b", 64),
+			CanonicalSHA256: strings.Repeat("c", 64),
+			PackageCount:    10,
+		},
+	}
+
+	if err := RenderSummaryText(&summaryBuf, summary, TextOptions{}); err != nil {
+		t.Fatalf("RenderSummaryText error: %v", err)
+	}
+	summaryOut := summaryBuf.String()
+	for _, want := range []string{"OS Image Summary", "Partition Table", "dm-verity", "SBOM", "Partition 1 filesystem details"} {
+		if !strings.Contains(summaryOut, want) {
+			t.Fatalf("summary output missing %q:\n%s", want, summaryOut)
+		}
+	}
+
+	if err := RenderSummaryText(&summaryBuf, nil, TextOptions{}); err == nil {
+		t.Fatalf("expected nil summary error")
+	}
+
+	var spdxBuf bytes.Buffer
+	spdx := &SPDXCompareResult{
+		FromPath:          "from.json",
+		ToPath:            "to.json",
+		Equal:             false,
+		FromPackageCount:  1,
+		ToPackageCount:    2,
+		FromCanonicalHash: strings.Repeat("d", 64),
+		ToCanonicalHash:   strings.Repeat("e", 64),
+		AddedPackages:     []string{"pkg-new"},
+		RemovedPackages:   []string{"pkg-old"},
+	}
+	if err := RenderSPDXCompareText(&spdxBuf, spdx); err != nil {
+		t.Fatalf("RenderSPDXCompareText error: %v", err)
+	}
+	spdxOut := spdxBuf.String()
+	for _, want := range []string{"SPDX Compare", "Added packages:", "Removed packages:"} {
+		if !strings.Contains(spdxOut, want) {
+			t.Fatalf("spdx compare output missing %q:\n%s", want, spdxOut)
+		}
+	}
+
+	if err := RenderSPDXCompareText(&spdxBuf, nil); err == nil {
+		t.Fatalf("expected nil SPDX compare error")
+	}
+}

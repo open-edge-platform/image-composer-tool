@@ -33,8 +33,38 @@ For a conceptual overview of how templates fit into the build pipeline, see
       - [`systemConfig.configurations[]`](#systemconfigconfigurations)
   - [Template Merge Behavior](#template-merge-behavior)
   - [Variable Substitution](#variable-substitution)
-  - [Best Practices](#best-practices)
-  - [Related Documentation](#related-documentation)
+- [Using Templates to Build Images](#using-templates-to-build-images)
+- [Template Storage](#template-storage)
+- [Template Variables](#template-variables)
+- [Package Repositories](#package-repositories)
+  - [Repository Fields](#repository-fields)
+  - [Priority Behavior](#priority-behavior)
+  - [AllowPackages White List](#allowpackages-white-list)
+- [Best Practices](#best-practices)
+  - [Template Organization](#template-organization)
+  - [Template Design](#template-design)
+  - [Template Sharing](#template-sharing)
+- [Conclusion](#conclusion)
+- [Related Documentation](#related-documentation)
+
+## What Are Templates and How Do They Work?
+
+Templates are predefined build specifications that serve as a foundation for
+building operating system images. Here's what templates empower you to do:
+
+- Create standardized baseline configurations.
+- Impose consistency across multiple images.
+- Reduce duplication of effort.
+- Share and reuse common configurations with your team.
+
+The OS Image Composer provides default image templates on a per-distribution
+basis and image type (RAW vs. ISO) that can be used directly to build an
+operating system from those defaults. You can override these default templates
+by providing your own template and configure or override the settings and
+values you want. The tool will internally merge the two to create the final
+template used for image composition.
+
+![image-templates](./assets/template.drawio.svg)
 
 ## How Templates Work
 
@@ -320,6 +350,22 @@ systemConfig:
     cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
     packages:
       - linux-image-generic-hwe-24.04
+
+# Optional additional repositories
+packageRepositories:
+  - codename: emtNext
+    url: https://example.com/rpms/next/base
+    pkey: https://example.com/RPM-GPG-KEY
+    priority: 1001
+    allowPackages:
+      - kernel-6.17.11
+      - kernel-drivers-gpu-6.17.11
+      - libva*
+
+  - codename: edgeai
+    url: https://example2.com/edgeai/
+    pkey: https://example2.com/edgeai/GPG-PUB-KEY.gpg
+    priority: 500
 ```
 
 #### `systemConfig.bootloader`
@@ -422,6 +468,49 @@ systemConfig:
     - cmd: systemctl enable docker
     - cmd: echo "BuildDate=$(date)" >> /etc/image-info
 ```
+
+## Package Repositories
+
+Use `packageRepositories` to add extra Debian or RPM repositories to a build.
+Each entry defines where to fetch package metadata and how candidates are
+selected when the same package exists in multiple repositories.
+
+### Repository Fields
+
+- `codename`: repository identifier.
+- `url`: repository base URL.
+- `component`: optional Debian component (for example, `main`, `universe`) for multi-component repositories.
+- `pkey`: GPG key reference; supports `http://`/`https://` URLs, `file://` URLs, absolute local paths, or `[trusted=yes]` for supported Debian flows.
+- `priority`: numeric repository preference used in conflict resolution.
+- `allowPackages`: optional package white list for metadata filtering.
+
+### Priority Behavior
+
+`priority` is evaluated during package candidate selection across repositories.
+
+- Higher numeric values are preferred.
+- Debian resolver also supports APT-like behavior:
+  - `< 0`: block packages from that repository
+  - `990`: prefer over default repositories
+  - `1000`: install even if lower version
+  - `> 1000`: force preference
+
+When candidates have equivalent priority, version constraints and dependency
+context determine the final package choice.
+
+### AllowPackages White List
+
+`allowPackages` limits which package names are indexed from a specific
+repository.
+
+- If omitted or empty, all repository packages are eligible.
+- If present, only matching package names are indexed.
+- Supported matching modes:
+  - exact name (for example `spice-server`)
+  - prefix/version pin (for example `kernel-6.17.11`)
+  - glob patterns (for example `libva*`, `wayland*`)
+
+Filtering happens at metadata-parse time, before dependency resolution.
 
 ---
 

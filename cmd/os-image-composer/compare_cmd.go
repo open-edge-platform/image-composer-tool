@@ -14,7 +14,7 @@ import (
 var (
 	prettyDiffJSON bool   = true  // Pretty-print JSON output
 	outFormat      string         // "text" | "json"
-	outMode        string = ""    // "full" | "diff" | "summary"
+	outMode        string = ""    // "full" | "diff" | "summary" | "spdx"
 	hashImages     bool   = false // Skip hashing during inspection
 )
 
@@ -39,7 +39,7 @@ func createCompareCommand() *cobra.Command {
 	compareCmd.Flags().StringVar(&outFormat, "format", "text",
 		"Output format: text or json")
 	compareCmd.Flags().StringVar(&outMode, "mode", "",
-		"Output mode: full, diff, or summary (default: diff for text, full for json)")
+		"Output mode: full, diff, summary, or spdx (default: diff for text, full for json)")
 	compareCmd.Flags().BoolVar(&hashImages, "hash-images", false,
 		"Compute SHA256 hash of images during inspection (slower but enables binary identity verification")
 	return compareCmd
@@ -48,6 +48,10 @@ func createCompareCommand() *cobra.Command {
 func resolveDefaults(format, mode string) (string, string) {
 	format = strings.ToLower(format)
 	mode = strings.ToLower(mode)
+
+	if mode == "spdx" {
+		return format, mode
+	}
 
 	// Set default mode if not specified
 	if mode == "" {
@@ -67,6 +71,24 @@ func executeCompare(cmd *cobra.Command, args []string) error {
 	imageFile2 := args[1]
 	log.Infof("Comparing image files: (%s) & (%s)", imageFile1, imageFile2)
 
+	format, mode := resolveDefaults(outFormat, outMode)
+
+	if mode == "spdx" {
+		spdxResult, err := imageinspect.CompareSPDXFiles(imageFile1, imageFile2)
+		if err != nil {
+			return fmt.Errorf("SPDX compare failed: %w", err)
+		}
+
+		switch format {
+		case "json":
+			return writeCompareResult(cmd, spdxResult, prettyDiffJSON)
+		case "text":
+			return imageinspect.RenderSPDXCompareText(cmd.OutOrStdout(), spdxResult)
+		default:
+			return fmt.Errorf("invalid --format %q (expected text|json)", format)
+		}
+	}
+
 	inspector := newInspector(hashImages)
 
 	image1, err1 := inspector.Inspect(imageFile1)
@@ -79,8 +101,6 @@ func executeCompare(cmd *cobra.Command, args []string) error {
 	}
 
 	compareResult := imageinspect.CompareImages(image1, image2)
-
-	format, mode := resolveDefaults(outFormat, outMode)
 
 	switch format {
 	case "json":
@@ -100,7 +120,7 @@ func executeCompare(cmd *cobra.Command, args []string) error {
 				Summary       imageinspect.CompareSummary `json:"summary"`
 			}{EqualityClass: string(compareResult.Equality.Class), Summary: compareResult.Summary}
 		default:
-			return fmt.Errorf("invalid --mode or --format %q (expected --mode=diff|summary|full) and --format=text|json", mode)
+			return fmt.Errorf("invalid --mode or --format %q (expected --mode=diff|summary|full|spdx) and --format=text|json", mode)
 		}
 		return writeCompareResult(cmd, payload, prettyDiffJSON)
 
@@ -109,7 +129,7 @@ func executeCompare(cmd *cobra.Command, args []string) error {
 			imageinspect.CompareTextOptions{Mode: mode})
 
 	default:
-		return fmt.Errorf("invalid --mode %q (expected text|json)", outMode)
+		return fmt.Errorf("invalid --format %q (expected text|json)", format)
 	}
 }
 

@@ -47,7 +47,6 @@ packageRepositories:
       - cifs-utils
       - opencl-headers
       - linuxptp
-      - libva-utils
       - pulseaudio
       - libsndfile
       # Dependencies for gstreamer1-plugins-base
@@ -282,7 +281,6 @@ systemConfig:
     - cifs-utils
     - opencl-headers
     - linuxptp
-    - libva-utils
     - pulseaudio
     - libsndfile
     # Development tools
@@ -293,7 +291,7 @@ systemConfig:
     # QEMU full system emulation
     - qemu
     - qemu-user
-    - qemu-img 
+    - qemu-img
     - qemu-tools
     - qemu-system-aarch64
     - qemu-system-arm
@@ -342,17 +340,14 @@ systemConfig:
     - qemu-guest-agent
     - qemu-audio-pa
     - qemu-with-ui
-    - qemu-kvm
     - libvirt
     - swtpm-tools
     - dmidecode
     - cvt
     - xorg-x11-xinit
-    - unzip
     - alsa-lib
     - libvpl
     - wayland*
-    - tpm2-tools
     - i2c-tools
     - mesa-filesystem
     - mesa-demos
@@ -361,7 +356,6 @@ systemConfig:
     - mesa-libGL-devel
     - alsa-utils
     - libva*
-    - intel-lms
     - xorg-x11-server-Xorg
     - intel-opencl
     - ocl-icd

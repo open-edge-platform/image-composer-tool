@@ -27,6 +27,7 @@ type CompareSummary struct {
 	PartitionsChanged     bool `json:"partitionsChanged,omitempty"`
 	FilesystemsChanged    bool `json:"filesystemsChanged,omitempty"`
 	EFIBinariesChanged    bool `json:"efiBinariesChanged,omitempty"`
+	SBOMChanged           bool `json:"sbomChanged,omitempty"`
 
 	AddedCount    int `json:"addedCount,omitempty"`
 	RemovedCount  int `json:"removedCount,omitempty"`
@@ -40,6 +41,21 @@ type ImageDiff struct {
 	Partitions     PartitionDiff      `json:"partitions,omitempty"`
 	EFIBinaries    EFIBinaryDiff      `json:"efiBinaries,omitempty"`
 	Verity         *VerityDiff        `json:"verity,omitempty" yaml:"verity,omitempty"`
+	SBOM           *SBOMDiff          `json:"sbom,omitempty" yaml:"sbom,omitempty"`
+}
+
+// SBOMDiff represents differences in embedded SBOM metadata.
+type SBOMDiff struct {
+	Added   *SBOMSummary `json:"added,omitempty" yaml:"added,omitempty"`
+	Removed *SBOMSummary `json:"removed,omitempty" yaml:"removed,omitempty"`
+	Changed bool         `json:"changed,omitempty" yaml:"changed,omitempty"`
+
+	Format          *ValueDiff[string] `json:"format,omitempty" yaml:"format,omitempty"`
+	FileName        *ValueDiff[string] `json:"fileName,omitempty" yaml:"fileName,omitempty"`
+	SizeBytes       *ValueDiff[int64]  `json:"sizeBytes,omitempty" yaml:"sizeBytes,omitempty"`
+	SHA256          *ValueDiff[string] `json:"sha256,omitempty" yaml:"sha256,omitempty"`
+	CanonicalSHA256 *ValueDiff[string] `json:"canonicalSha256,omitempty" yaml:"canonicalSha256,omitempty"`
+	PackageCount    *ValueDiff[int]    `json:"packageCount,omitempty" yaml:"packageCount,omitempty"`
 }
 
 // MetaDiff represents differences in image-level metadata.
@@ -49,9 +65,9 @@ type MetaDiff struct {
 
 // VerityDiff represents differences in dm-verity configuration.
 type VerityDiff struct {
-	Added   *VerityInfo `json:"added,omitempty" yaml:"added,omitempty"`
-	Removed *VerityInfo `json:"removed,omitempty" yaml:"removed,omitempty"`
-	Changed bool        `json:"changed,omitempty" yaml:"changed,omitempty"`
+	Added   *VeritySummary `json:"added,omitempty" yaml:"added,omitempty"`
+	Removed *VeritySummary `json:"removed,omitempty" yaml:"removed,omitempty"`
+	Changed bool           `json:"changed,omitempty" yaml:"changed,omitempty"`
 
 	Enabled       *ValueDiff[bool]   `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 	Method        *ValueDiff[string] `json:"method,omitempty" yaml:"method,omitempty"`
@@ -302,6 +318,13 @@ func CompareImages(from, to *ImageSummary) ImageCompareResult {
 		res.Summary.Changed = true
 	}
 
+	// --- SBOM ---
+	res.Diff.SBOM = compareSBOM(from.SBOM, to.SBOM)
+	if res.Diff.SBOM != nil && res.Diff.SBOM.Changed {
+		res.Summary.SBOMChanged = true
+		res.Summary.Changed = true
+	}
+
 	// Deterministic ordering for stable JSON
 	normalizeCompareResult(&res)
 
@@ -352,7 +375,7 @@ func compareMeta(from, to ImageSummary) MetaDiff {
 	return out
 }
 
-func compareVerity(from, to *VerityInfo) *VerityDiff {
+func compareVerity(from, to *VeritySummary) *VerityDiff {
 	// Both nil = no difference
 	if from == nil && to == nil {
 		return nil
@@ -392,6 +415,62 @@ func compareVerity(from, to *VerityInfo) *VerityDiff {
 
 	if from.HashPartition != to.HashPartition {
 		diff.HashPartition = &ValueDiff[int]{From: from.HashPartition, To: to.HashPartition}
+		diff.Changed = true
+	}
+
+	if !diff.Changed {
+		return nil
+	}
+
+	return diff
+}
+
+func compareSBOM(from, to SBOMSummary) *SBOMDiff {
+	if !from.Present && !to.Present {
+		return nil
+	}
+
+	diff := &SBOMDiff{}
+
+	if !from.Present && to.Present {
+		diff.Added = &to
+		diff.Changed = true
+		return diff
+	}
+
+	if from.Present && !to.Present {
+		diff.Removed = &from
+		diff.Changed = true
+		return diff
+	}
+
+	if strings.TrimSpace(from.Format) != strings.TrimSpace(to.Format) {
+		diff.Format = &ValueDiff[string]{From: from.Format, To: to.Format}
+		diff.Changed = true
+	}
+	if strings.TrimSpace(from.FileName) != strings.TrimSpace(to.FileName) {
+		diff.FileName = &ValueDiff[string]{From: from.FileName, To: to.FileName}
+		diff.Changed = true
+	}
+	if from.SizeBytes != to.SizeBytes {
+		diff.SizeBytes = &ValueDiff[int64]{From: from.SizeBytes, To: to.SizeBytes}
+		diff.Changed = true
+	}
+
+	if from.PackageCount != to.PackageCount {
+		diff.PackageCount = &ValueDiff[int]{From: from.PackageCount, To: to.PackageCount}
+		diff.Changed = true
+	}
+
+	fromCanonical := strings.TrimSpace(from.CanonicalSHA256)
+	toCanonical := strings.TrimSpace(to.CanonicalSHA256)
+	if fromCanonical != "" || toCanonical != "" {
+		if fromCanonical != toCanonical {
+			diff.CanonicalSHA256 = &ValueDiff[string]{From: from.CanonicalSHA256, To: to.CanonicalSHA256}
+			diff.Changed = true
+		}
+	} else if strings.TrimSpace(from.SHA256) != strings.TrimSpace(to.SHA256) {
+		diff.SHA256 = &ValueDiff[string]{From: from.SHA256, To: to.SHA256}
 		diff.Changed = true
 	}
 
@@ -887,6 +966,32 @@ func tallyDiffs(d ImageDiff) diffTally {
 			}
 			if d.Verity.HashPartition != nil {
 				t.addMeaningful(1, "dm-verity hash partition changed")
+			}
+		}
+	}
+
+	if d.SBOM != nil && d.SBOM.Changed {
+		if d.SBOM.Added != nil {
+			t.addMeaningful(1, "SBOM added")
+		} else if d.SBOM.Removed != nil {
+			t.addMeaningful(1, "SBOM removed")
+		} else {
+			if d.SBOM.CanonicalSHA256 != nil {
+				t.addMeaningful(1, "SBOM canonical content changed")
+			} else if d.SBOM.SHA256 != nil {
+				t.addMeaningful(1, "SBOM raw content changed")
+			}
+			if d.SBOM.PackageCount != nil {
+				t.addMeaningful(1, "SBOM package count changed")
+			}
+			if d.SBOM.Format != nil {
+				t.addMeaningful(1, "SBOM format changed")
+			}
+			if d.SBOM.FileName != nil {
+				t.addVolatile(1, "SBOM file name changed")
+			}
+			if d.SBOM.SizeBytes != nil {
+				t.addVolatile(1, "SBOM size changed")
 			}
 		}
 	}

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -260,6 +262,71 @@ func TestCompareCommand_InvalidModeErrors(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "invalid --mode") {
 		t.Fatalf("expected invalid mode error, got %v", err)
 	}
+}
+
+func TestCompareCommand_SPDXMode(t *testing.T) {
+	origNewInspector := newInspector
+	origOutFormat, origOutMode := outFormat, outMode
+	t.Cleanup(func() {
+		newInspector = origNewInspector
+		outFormat, outMode = origOutFormat, origOutMode
+	})
+
+	newInspector = func(hash bool) inspector {
+		return &fakeCompareInspector{errByPath: map[string]error{
+			"a.spdx.json": errors.New("should not inspect images in spdx mode"),
+			"b.spdx.json": errors.New("should not inspect images in spdx mode"),
+		}}
+	}
+
+	tmpDir := t.TempDir()
+	fromPath := filepath.Join(tmpDir, "a.spdx.json")
+	toPath := filepath.Join(tmpDir, "b.spdx.json")
+
+	fromContent := `{"packages":[{"name":"acl","versionInfo":"2.3.1","downloadLocation":"https://example.com/acl.rpm"}]}`
+	toContent := `{"packages":[{"name":"acl","versionInfo":"2.3.2","downloadLocation":"https://example.com/acl.rpm"}]}`
+
+	if err := os.WriteFile(fromPath, []byte(fromContent), 0644); err != nil {
+		t.Fatalf("write from SPDX file: %v", err)
+	}
+	if err := os.WriteFile(toPath, []byte(toContent), 0644); err != nil {
+		t.Fatalf("write to SPDX file: %v", err)
+	}
+
+	t.Run("JSON", func(t *testing.T) {
+		cmd := &cobra.Command{}
+		outFormat = "json"
+		outMode = "spdx"
+		prettyDiffJSON = false
+
+		s, err := runCompareExecute(t, cmd, []string{fromPath, toPath})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		var got imageinspect.SPDXCompareResult
+		decodeJSON(t, s, &got)
+		if got.Equal {
+			t.Fatalf("expected SPDX compare to be different")
+		}
+		if len(got.AddedPackages) == 0 || len(got.RemovedPackages) == 0 {
+			t.Fatalf("expected added/removed package entries, got %+v", got)
+		}
+	})
+
+	t.Run("Text", func(t *testing.T) {
+		cmd := &cobra.Command{}
+		outFormat = "text"
+		outMode = "spdx"
+
+		s, err := runCompareExecute(t, cmd, []string{fromPath, toPath})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(s, "SPDX Compare") {
+			t.Fatalf("expected SPDX text header, got:\n%s", s)
+		}
+	})
 }
 
 func TestCompareCommand_InvalidFormatErrors(t *testing.T) {
