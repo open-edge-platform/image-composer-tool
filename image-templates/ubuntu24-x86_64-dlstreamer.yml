@@ -94,7 +94,7 @@ systemConfig:
     - openssh-server
     - systemd-resolved
     - systemd-timesyncd
-    - intel-dlstreamer
+    - intel-dlstreamer_2025.2.0
     - linux-firmware
 
   kernel:

@@ -95,6 +95,9 @@ func (p *AzureLinux) PreProcess(template *config.ImageTemplate) error {
 		return fmt.Errorf("failed to download image packages: %w", err)
 	}
 	template.FinishDownloadImagePkgsTimer()
+	if templateAwareChrootEnv, ok := p.chrootEnv.(interface{ SetBuildTemplate(*config.ImageTemplate) }); ok {
+		templateAwareChrootEnv.SetBuildTemplate(template)
+	}
 
 	if err := p.chrootEnv.InitChrootEnv(template.Target.OS,
 		template.Target.Dist, template.Target.Arch); err != nil {
