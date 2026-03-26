@@ -20,10 +20,14 @@ packageRepositories:
       - kernel-drivers-gpu
       - kernel
       - grub2-configuration
+      - intel-npu-driver
+      - intel-level-zero
       #- linux-firmware-i915
-      #- libva-intel-media-driver 
-      #- libva-utils
-      #- intel-gmmlib
+      - libva-intel-media-driver
+      - libva-utils
+      - intel-gmmlib
+      - fmt
+      - spdlog
   
   - codename: "OpenVINO"
     url: "https://yum.repos.intel.com/openvino/"
@@ -46,7 +50,6 @@ packageRepositories:
       - libva-utils
       - intel-gmmlib
       - intel-npu-firmware
-      - intel-npu-driver
 
 
 disk:
