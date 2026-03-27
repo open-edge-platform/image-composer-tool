@@ -89,11 +89,33 @@ func TestPrintImageDirectorySummary_WithArtifacts(t *testing.T) {
 
 func TestPrintImageBuildingTiming_NoVisibleRows(t *testing.T) {
 	logs := captureLogs(t, func() {
-		display.PrintImageBuildingTiming("raw", 0, 0, 0, 0, 0, 0)
+		display.PrintImageBuildingTiming("raw", 0, 0, 0, 0, 0, 0, 0)
 	})
 
-	if strings.Contains(logs, "Build Timings:") {
-		t.Fatalf("expected no build timings table when all durations are zero, got: %s", logs)
+	if !strings.Contains(logs, "Build Timings:") {
+		t.Fatalf("expected build timings header even when all durations are zero, got: %s", logs)
+	}
+
+	allStages := []string{
+		"Initialization and Configuration",
+		"Package Download",
+		"Chroot Package Download",
+		"Chroot Env Initialization",
+		"Image Build",
+		"Image Conversion",
+		"Finalization and Clean Up",
+	}
+	for _, stage := range allStages {
+		if !strings.Contains(logs, stage) {
+			t.Fatalf("expected stage %q to appear in table", stage)
+		}
+	}
+
+	if !strings.Contains(logs, "Total Time") {
+		t.Fatalf("expected total row in table, got: %s", logs)
+	}
+	if !strings.Contains(logs, "0s") {
+		t.Fatalf("expected zero-duration values in table, got: %s", logs)
 	}
 }
 
@@ -103,10 +125,11 @@ func TestPrintImageBuildingTiming_TableIncludesVisibleRowsAndTotal(t *testing.T)
 			"iso",
 			1500*time.Millisecond,
 			0,
+			500*time.Millisecond,
 			250*time.Millisecond,
 			2*time.Second,
 			0,
-			1250*time.Millisecond,
+			750*time.Millisecond,
 		)
 	})
 
@@ -117,22 +140,18 @@ func TestPrintImageBuildingTiming_TableIncludesVisibleRowsAndTotal(t *testing.T)
 		t.Fatalf("expected table headers, got: %s", logs)
 	}
 
-	visibleStages := []string{
+	allStages := []string{
 		"Initialization and Configuration",
+		"Package Download",
+		"Chroot Package Download",
 		"Chroot Env Initialization",
 		"Image Build",
+		"Image Conversion",
 		"Finalization and Clean Up",
 	}
-	for _, stage := range visibleStages {
+	for _, stage := range allStages {
 		if !strings.Contains(logs, stage) {
-			t.Fatalf("expected visible stage %q to appear in table", stage)
-		}
-	}
-
-	hiddenStages := []string{"Package Download", "Image Conversion"}
-	for _, stage := range hiddenStages {
-		if strings.Contains(logs, stage) {
-			t.Fatalf("expected zero-duration stage %q to be hidden", stage)
+			t.Fatalf("expected stage %q to appear in table", stage)
 		}
 	}
 

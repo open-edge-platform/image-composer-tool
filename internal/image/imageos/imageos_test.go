@@ -108,8 +108,10 @@ func (m *MockChrootEnv) CopyFileFromChrootToHost(hostFilePath, chrootPath string
 func (m *MockChrootEnv) UpdateChrootLocalRepoMetadata(chrootRepoDir string, targetArch string, sudo bool) error {
 	return nil
 }
-func (m *MockChrootEnv) RefreshLocalCacheRepo() error                                   { return nil }
-func (m *MockChrootEnv) InitChrootEnv(targetOs, targetDist, targetArch string) error    { return nil }
+func (m *MockChrootEnv) RefreshLocalCacheRepo() error { return nil }
+func (m *MockChrootEnv) InitChrootEnv(targetOs, targetDist, targetArch string) error {
+	return nil
+}
 func (m *MockChrootEnv) CleanupChrootEnv(targetOs, targetDist, targetArch string) error { return nil }
 func (m *MockChrootEnv) TdnfInstallPackage(packageName, installRoot string, repositoryIDList []string) error {
 	return nil

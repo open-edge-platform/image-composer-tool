@@ -91,6 +91,7 @@ func PrintImageBuildingTiming(
 	imageType string,
 	startToDownloadImagePkgsTime,
 	downloadImagePkgsTime,
+	chrootPkgDownloadTime,
 	downloadImagePkgsToPureBuildTime,
 	pureImageBuildTime,
 	convertImageTime time.Duration,
@@ -103,6 +104,7 @@ func PrintImageBuildingTiming(
 	}{
 		{stage: "Initialization and Configuration", duration: startToDownloadImagePkgsTime},
 		{stage: "Package Download", duration: downloadImagePkgsTime},
+		{stage: "Chroot Package Download", duration: chrootPkgDownloadTime},
 		{stage: "Chroot Env Initialization", duration: downloadImagePkgsToPureBuildTime},
 		{stage: "Image Build", duration: pureImageBuildTime},
 		{stage: "Image Conversion", duration: convertImageTime},
@@ -115,10 +117,8 @@ func PrintImageBuildingTiming(
 	}
 	var totalDuration time.Duration
 	for _, row := range timingRows {
-		if row.duration > 0 {
-			visibleTimingRows = append(visibleTimingRows, row)
-			totalDuration += row.duration
-		}
+		visibleTimingRows = append(visibleTimingRows, row)
+		totalDuration += row.duration
 	}
 
 	if len(visibleTimingRows) > 0 {

@@ -88,6 +88,8 @@ The tool supports building custom images for:
 - EMT (Edge Microvisor Toolkit)
 - Azure Linux
 - Wind River eLxr
+- Ubuntu
+- RCD (Red Hat Compatible Distro)
 	Use 'os-image-composer --help' to see available commands.
 	Use 'os-image-composer <command> --help' for more information about a command.`,
 	}

@@ -96,7 +96,7 @@ systemConfig:
     enabled: false # default is true, overridden to false here
 
   packages:
-    - intel-dlstreamer
+    - intel-dlstreamer_2025.2.0
     - firmware-linux
 
   kernel:
