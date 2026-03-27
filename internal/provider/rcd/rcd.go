@@ -226,13 +226,14 @@ func (p *RCD) PostProcess(template *config.ImageTemplate, err error) error {
 
 func (p *RCD) installHostDependency() error {
 	var dependencyInfo = map[string]string{
-		"rpm":          "rpm",         // For the chroot env build RPM pkg installation
-		"mkfs.fat":     "dosfstools",  // For the FAT32 boot partition creation
-		"qemu-img":     "qemu-utils",  // For image file format conversion
-		"mformat":      "mtools",      // For writing files to FAT32 partition
-		"xorriso":      "xorriso",     // For ISO image creation
-		"grub-mkimage": "grub-common", // For ISO image UEFI Grub binary creation
-		"sbsign":       "sbsigntool",  // For the UKI image creation
+		"rpm":          "rpm",          // For the chroot env build RPM pkg installation
+		"mkfs.fat":     "dosfstools",   // For the FAT32 boot partition creation
+		"qemu-img":     "qemu-utils",   // For image file format conversion
+		"mformat":      "mtools",       // For writing files to FAT32 partition
+		"xorriso":      "xorriso",      // For ISO image creation
+		"grub-mkimage": "grub-common",  // For ISO image UEFI Grub binary creation
+		"sbsign":       "sbsigntool",   // For the UKI image creation
+		"createrepo_c": "createrepo_c", // For RPM repository metadata creation
 	}
 	hostPkgManager, err := system.GetHostOsPkgManager()
 	if err != nil {

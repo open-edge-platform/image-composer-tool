@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path"
 	"path/filepath"
@@ -135,7 +136,7 @@ func LocalUserPackages() ([]ospackage.PackageInfo, error) {
 		repoMetaDataPath := filepath.Join(rpItx.Path, "repodata/repomd.xml")
 		if _, err := os.Stat(repoMetaDataPath); os.IsNotExist(err) {
 			// Not a proper repo - need to create one
-			tempRepoPath, _, cleanup, err := CreateTemporaryRepository(rpItx.Path, rpItx.Name)
+			tempRepoPath, tempUrl, cleanup, err := CreateTemporaryRepository(rpItx.Path, rpItx.Name)
 			if err != nil {
 				return nil, fmt.Errorf("failed to create temporary repository: %w", err)
 			}
@@ -143,7 +144,25 @@ func LocalUserPackages() ([]ospackage.PackageInfo, error) {
 			_ = cleanup
 			// Update the path to point to the new temp repo
 			rpItx.Path = tempRepoPath
+			rpItx.URL = tempUrl
 		}
+
+		// Verify HTTP server is working by fetching repomd.xml
+		repomdURL := rpItx.URL + "/repodata/repomd.xml"
+		log.Infof("verifying HTTP server by fetching: %s", repomdURL)
+
+		client := &http.Client{Timeout: 5 * time.Second}
+		resp, err := client.Get(repomdURL)
+		if err != nil {
+			log.Debug("yockgen: failed to verify HTTP server - could not fetch repomd.xml: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != 200 {
+			log.Debug("yockgen: failed to verify HTTP server - repomd.xml returned status %d", resp.StatusCode)
+		}
+
+		log.Debugf("yockgen: HTTP server verification successful - repomd.xml accessible at %s", repomdURL)
 
 		// // For local repositories, construct file path directly
 		// primaryXmlPath, err := FetchLocalPrimaryURL(repoMetaDataPath)
