@@ -16,6 +16,8 @@ import (
 
 var log = logger.Logger()
 
+// Mock implementation: always succeed
+
 // Mock implementations for testing
 type mockChrootEnv struct {
 	pkgType           string
@@ -117,7 +119,6 @@ func (m *mockChrootEnv) RefreshLocalCacheRepo() error {
 
 // Add missing method to satisfy chroot.ChrootEnvInterface
 func (m *mockChrootEnv) InitChrootEnv(targetOs, targetDist, targetArch string) error {
-	// Mock implementation: always succeed
 	return nil
 }
 

@@ -57,6 +57,7 @@ type ChrootEnv struct {
 	ChrootEnvRoot       string
 	ChrootImageBuildDir string
 	ChrootBuilder       chrootbuild.ChrootBuilderInterface
+	buildTemplate       *config.ImageTemplate
 	TargetOs            string // Store targetOs for package manager selection
 }
 
@@ -87,6 +88,13 @@ func NewChrootEnv(targetOs, targetDist, targetArch string) (*ChrootEnv, error) {
 
 func (chrootEnv *ChrootEnv) GetChrootEnvRoot() string {
 	return chrootEnv.ChrootEnvRoot
+}
+
+func (chrootEnv *ChrootEnv) SetBuildTemplate(template *config.ImageTemplate) {
+	chrootEnv.buildTemplate = template
+	if templateAwareBuilder, ok := chrootEnv.ChrootBuilder.(interface{ SetBuildTemplate(*config.ImageTemplate) }); ok {
+		templateAwareBuilder.SetBuildTemplate(template)
+	}
 }
 
 func (chrootEnv *ChrootEnv) GetChrootImageBuildDir() string {
@@ -392,6 +400,9 @@ func (chrootEnv *ChrootEnv) InitChrootEnv(targetOs, targetDist, targetArch strin
 		chrootBuildDir := chrootEnv.ChrootBuilder.GetChrootBuildDir()
 		chrootEnvTarPath := filepath.Join(chrootBuildDir, "chrootenv.tar.gz")
 		if _, err := os.Stat(chrootEnvTarPath); os.IsNotExist(err) {
+			if templateAwareBuilder, ok := chrootEnv.ChrootBuilder.(interface{ SetBuildTemplate(*config.ImageTemplate) }); ok {
+				templateAwareBuilder.SetBuildTemplate(chrootEnv.buildTemplate)
+			}
 			// Build chroot environment tarball
 			if err = chrootEnv.ChrootBuilder.BuildChrootEnv(targetOs, targetDist, targetArch); err != nil {
 				return fmt.Errorf("failed to build chroot environment: %w", err)

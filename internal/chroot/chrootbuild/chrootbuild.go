@@ -48,8 +48,13 @@ type ChrootBuilder struct {
 	TargetOsConfig    map[string]interface{}
 	ChrootBuildDir    string
 	ChrootPkgCacheDir string
+	BuildTemplate     *config.ImageTemplate
 	RpmInstaller      rpm.RpmInstallerInterface
 	DebInstaller      deb.DebInstallerInterface
+}
+
+func (chrootBuilder *ChrootBuilder) SetBuildTemplate(template *config.ImageTemplate) {
+	chrootBuilder.BuildTemplate = template
 }
 
 // ChrootenvConfig represents the structure of a chrootenv configuration file
@@ -283,6 +288,9 @@ func (chrootBuilder *ChrootBuilder) BuildChrootEnv(targetOs string, targetDist s
 	pkgsList, allPkgsList, err := chrootBuilder.downloadChrootEnvPackages()
 	if err != nil {
 		return fmt.Errorf("failed to download chroot environment packages: %w", err)
+	}
+	if chrootBuilder.BuildTemplate != nil {
+		chrootBuilder.BuildTemplate.FinishChrootPkgDownloadTimer()
 	}
 	log.Infof("Downloaded %d packages for chroot environment", len(allPkgsList))
 

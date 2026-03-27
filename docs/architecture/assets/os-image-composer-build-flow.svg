@@ -1,0 +1,504 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="1020" viewBox="0 0 680 1020" style="background:#ffffff;font-family:ui-sans-serif,system-ui,sans-serif;">
+
+<defs>
+  <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+    <path d="M2 1L8 5L2 9" fill="none" stroke="#888780" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </marker>
+  <marker id="arrd" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+    <path d="M2 1L8 5L2 9" fill="none" stroke="#888780" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </marker>
+</defs>
+
+<!-- Title -->
+<text x="340" y="30" text-anchor="middle" font-size="16" font-weight="600" fill="#1a1a1a">OS Image Composer - build flow</text>
+
+<!-- ═══ BOXES ═══ -->
+<rect x="30" y="50" width="180" height="34" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.5"/>
+<text x="120" y="72" text-anchor="middle" font-size="13" font-weight="600" fill="#3C3489">Inputs</text>
+
+<rect x="30" y="98" width="180" height="54" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.5"/>
+<text x="120" y="119" text-anchor="middle" font-size="13" font-weight="600" fill="#3C3489">Image template</text>
+<text x="120" y="138" text-anchor="middle" font-size="11" fill="#534AB7">User-provided YAML</text>
+
+<rect x="30" y="164" width="180" height="54" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.5"/>
+<text x="120" y="185" text-anchor="middle" font-size="13" font-weight="600" fill="#3C3489">Default templates</text>
+<text x="120" y="204" text-anchor="middle" font-size="11" fill="#534AB7">OS-specific defaults</text>
+
+<rect x="30" y="230" width="180" height="54" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.5"/>
+<text x="120" y="251" text-anchor="middle" font-size="13" font-weight="600" fill="#3C3489">Global config</text>
+<text x="120" y="270" text-anchor="middle" font-size="11" fill="#534AB7">config.yml</text>
+
+<rect x="240" y="50" width="240" height="628" rx="16" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+<text x="360" y="76" text-anchor="middle" font-size="13" font-weight="600" fill="#085041">Build pipeline</text>
+<text x="360" y="94" text-anchor="middle" font-size="11" fill="#0F6E56">os-image-composer build</text>
+
+<!-- stage boxes -->
+<rect x="258" y="110" width="204" height="54" rx="8" fill="#9FE1CB" stroke="#0F6E56" stroke-width="0.5"/>
+<text x="360" y="131" text-anchor="middle" font-size="13" font-weight="600" fill="#085041">1 - Load and merge</text>
+<text x="360" y="150" text-anchor="middle" font-size="11" fill="#0F6E56">Template + defaults + config</text>
+<line x1="360" y1="164" x2="360" y2="182" stroke="#888780" stroke-width="1" marker-end="url(#arr)"/>
+
+<rect x="258" y="182" width="204" height="54" rx="8" fill="#9FE1CB" stroke="#0F6E56" stroke-width="0.5"/>
+<text x="360" y="203" text-anchor="middle" font-size="13" font-weight="600" fill="#085041">2 - Validate</text>
+<text x="360" y="222" text-anchor="middle" font-size="11" fill="#0F6E56">JSON schema + constraints</text>
+<line x1="360" y1="236" x2="360" y2="254" stroke="#888780" stroke-width="1" marker-end="url(#arr)"/>
+
+<rect x="258" y="254" width="204" height="54" rx="8" fill="#9FE1CB" stroke="#0F6E56" stroke-width="0.5"/>
+<text x="360" y="275" text-anchor="middle" font-size="13" font-weight="600" fill="#085041">3 - Init provider</text>
+<text x="360" y="294" text-anchor="middle" font-size="11" fill="#0F6E56">Select OS / dist / arch</text>
+<line x1="360" y1="308" x2="360" y2="326" stroke="#888780" stroke-width="1" marker-end="url(#arr)"/>
+
+<rect x="258" y="326" width="204" height="68" rx="8" fill="#9FE1CB" stroke="#0F6E56" stroke-width="0.5"/>
+<text x="360" y="349" text-anchor="middle" font-size="13" font-weight="600" fill="#085041">4 - Packages stage</text>
+<text x="360" y="368" text-anchor="middle" font-size="11" fill="#0F6E56">Resolve deps - download</text>
+<text x="360" y="384" text-anchor="middle" font-size="11" fill="#0F6E56">GPG verify - cache</text>
+<line x1="360" y1="394" x2="360" y2="412" stroke="#888780" stroke-width="1" marker-end="url(#arr)"/>
+
+<rect x="258" y="412" width="204" height="82" rx="8" fill="#9FE1CB" stroke="#0F6E56" stroke-width="0.5"/>
+<text x="360" y="436" text-anchor="middle" font-size="13" font-weight="600" fill="#085041">5 - Compose stage</text>
+<text x="360" y="455" text-anchor="middle" font-size="11" fill="#0F6E56">Chroot - install pkgs</text>
+<text x="360" y="470" text-anchor="middle" font-size="11" fill="#0F6E56">Configure OS - bootloader</text>
+<text x="360" y="485" text-anchor="middle" font-size="11" fill="#0F6E56">Security (SELinux, verity)</text>
+<line x1="360" y1="494" x2="360" y2="512" stroke="#888780" stroke-width="1" marker-end="url(#arr)"/>
+
+<rect x="258" y="512" width="204" height="54" rx="8" fill="#9FE1CB" stroke="#0F6E56" stroke-width="0.5"/>
+<text x="360" y="533" text-anchor="middle" font-size="13" font-weight="600" fill="#085041">6 - Image signing</text>
+<text x="360" y="552" text-anchor="middle" font-size="11" fill="#0F6E56">Secure boot keys (optional)</text>
+<line x1="360" y1="566" x2="360" y2="584" stroke="#888780" stroke-width="1" marker-end="url(#arr)"/>
+
+<rect x="258" y="584" width="204" height="54" rx="8" fill="#9FE1CB" stroke="#0F6E56" stroke-width="0.5"/>
+<text x="360" y="605" text-anchor="middle" font-size="13" font-weight="600" fill="#085041">7 - Post-process</text>
+<text x="360" y="624" text-anchor="middle" font-size="11" fill="#0F6E56">Cleanup - generate SBOM</text>
+
+<!-- providers -->
+<rect x="510" y="50" width="150" height="34" rx="8" fill="#FAECE7" stroke="#993C1D" stroke-width="0.5"/>
+<text x="585" y="72" text-anchor="middle" font-size="13" font-weight="600" fill="#712B13">Providers</text>
+<rect x="510" y="98" width="150" height="54" rx="8" fill="#FAECE7" stroke="#993C1D" stroke-width="0.5"/>
+<text x="585" y="119" text-anchor="middle" font-size="13" font-weight="600" fill="#712B13">Azure Linux</text>
+<text x="585" y="138" text-anchor="middle" font-size="11" fill="#993C1D">azl3 - x86_64 / aarch64</text>
+<rect x="510" y="164" width="150" height="54" rx="8" fill="#FAECE7" stroke="#993C1D" stroke-width="0.5"/>
+<text x="585" y="185" text-anchor="middle" font-size="13" font-weight="600" fill="#712B13">EMT</text>
+<text x="585" y="204" text-anchor="middle" font-size="11" fill="#993C1D">emt3 - x86_64</text>
+<rect x="510" y="230" width="150" height="54" rx="8" fill="#FAECE7" stroke="#993C1D" stroke-width="0.5"/>
+<text x="585" y="251" text-anchor="middle" font-size="13" font-weight="600" fill="#712B13">Wind River eLxr</text>
+<text x="585" y="270" text-anchor="middle" font-size="11" fill="#993C1D">elxr12 - x86_64</text>
+<rect x="510" y="296" width="150" height="54" rx="8" fill="#FAECE7" stroke="#993C1D" stroke-width="0.5"/>
+<text x="585" y="317" text-anchor="middle" font-size="13" font-weight="600" fill="#712B13">Ubuntu</text>
+<text x="585" y="336" text-anchor="middle" font-size="11" fill="#993C1D">ubuntu24 - x86_64</text>
+
+<!-- caches -->
+<rect x="510" y="378" width="150" height="34" rx="8" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.5"/>
+<text x="585" y="400" text-anchor="middle" font-size="13" font-weight="600" fill="#633806">Caches</text>
+<rect x="510" y="424" width="150" height="54" rx="8" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.5"/>
+<text x="585" y="445" text-anchor="middle" font-size="13" font-weight="600" fill="#633806">Package cache</text>
+<text x="585" y="464" text-anchor="middle" font-size="11" fill="#854F0B">pkgCache/{provider}</text>
+<rect x="510" y="490" width="150" height="54" rx="8" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.5"/>
+<text x="585" y="511" text-anchor="middle" font-size="13" font-weight="600" fill="#633806">Chroot cache</text>
+<text x="585" y="530" text-anchor="middle" font-size="11" fill="#854F0B">chrootenv.tar.gz</text>
+<rect x="510" y="568" width="150" height="54" rx="8" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+<text x="585" y="589" text-anchor="middle" font-size="13" font-weight="600" fill="#444441">Pkg repos</text>
+<text x="585" y="608" text-anchor="middle" font-size="11" fill="#5F5E5A">HTTPS + GPG verify</text>
+
+<!-- outputs -->
+<rect x="30" y="718" width="620" height="34" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text x="340" y="740" text-anchor="middle" font-size="13" font-weight="600" fill="#0C447C">Output images</text>
+<rect x="30"  y="764" width="140" height="68" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text x="100" y="785" text-anchor="middle" font-size="13" font-weight="600" fill="#0C447C">raw</text>
+<text x="100" y="804" text-anchor="middle" font-size="11" fill="#185FA5">Bare metal / VM</text>
+<text x="100" y="820" text-anchor="middle" font-size="11" fill="#185FA5">vhd - qcow2 - vmdk</text>
+<rect x="190" y="764" width="140" height="68" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text x="260" y="785" text-anchor="middle" font-size="13" font-weight="600" fill="#0C447C">iso</text>
+<text x="260" y="804" text-anchor="middle" font-size="11" fill="#185FA5">Bootable installer</text>
+<text x="260" y="820" text-anchor="middle" font-size="11" fill="#185FA5">Live systems</text>
+<rect x="350" y="764" width="140" height="68" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text x="420" y="785" text-anchor="middle" font-size="13" font-weight="600" fill="#0C447C">initrd / UKI</text>
+<text x="420" y="804" text-anchor="middle" font-size="11" fill="#185FA5">Initial ramdisk</text>
+<text x="420" y="820" text-anchor="middle" font-size="11" fill="#185FA5">Unified kernel image</text>
+<rect x="510" y="764" width="140" height="68" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text x="580" y="785" text-anchor="middle" font-size="13" font-weight="600" fill="#0C447C">Manifest / SBOM</text>
+<text x="580" y="804" text-anchor="middle" font-size="11" fill="#185FA5">Package inventory</text>
+<text x="580" y="820" text-anchor="middle" font-size="11" fill="#185FA5">Integrity metadata</text>
+
+<!-- ═══ STATIC CONNECTORS ═══ -->
+<path d="M210,125 L258,125" fill="none" stroke="#888780" stroke-width="1" marker-end="url(#arr)"/>
+<path d="M210,191 L240,191 L240,137 L258,137" fill="none" stroke="#888780" stroke-width="1" marker-end="url(#arr)"/>
+<path d="M210,257 L240,257 L240,147 L258,147" fill="none" stroke="#888780" stroke-width="1" marker-end="url(#arr)"/>
+<path d="M510,125 L462,281" fill="none" stroke="#888780" stroke-width="1" marker-end="url(#arr)"/>
+<path d="M510,191 L462,281" fill="none" stroke="#888780" stroke-width="1" marker-end="url(#arr)"/>
+<path d="M510,257 L462,281" fill="none" stroke="#888780" stroke-width="1" marker-end="url(#arr)"/>
+<path d="M510,323 L462,281" fill="none" stroke="#888780" stroke-width="1" marker-end="url(#arr)"/>
+<path d="M510,451 L462,360" fill="none" stroke="#888780" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arrd)"/>
+<path d="M510,517 L462,453" fill="none" stroke="#888780" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arrd)"/>
+<path d="M510,595 L462,360" fill="none" stroke="#888780" stroke-width="1" marker-end="url(#arr)"/>
+<line x1="360" y1="638" x2="360" y2="716" stroke="#888780" stroke-width="1" marker-end="url(#arr)"/>
+
+<!--
+═══════════════════════════════════════════════════════════════════
+  TIMING PLAN  (total cycle = 34s)
+
+  Each stage with only vertical pipeline transition = 2s
+  Stages 3, 4, 5 split into two sub-phases:
+    Phase A (outer dots arrive)  = 1.5s
+    Phase B (green pipeline dot) = 1.5s
+
+  s0  inputs lit          0.0  -  2.0s
+  s1  merge lit           2.0  -  4.0s   green dot: merge-bot → validate-top
+  s2  validate lit        4.0  -  6.0s   green dot: validate-bot → provider-top
+  s3a provider lit, 4 coral dots arrive  6.0  -  7.5s
+  s3b green dot: provider-bot → packages-top   7.5  -  9.0s
+  s4a packages lit, gray repo dot arrives  9.0  - 10.5s
+  s4b green dot: packages-bot → compose-top   10.5  - 12.0s
+  s5a compose lit, amber chroot dot arrives   12.0  - 13.5s
+  s5b green dot: compose-bot → sign-top   13.5  - 15.0s
+  s6  sign lit            15.0  - 17.0s  green dot: sign-bot → post-top
+  s7  post lit            17.0  - 19.0s  green dot: post-bot → output-top
+  s8  outputs lit         19.0  - 21.0s
+  gap                     21.0  - 22.0s  (reset pause)
+
+  All begin= values are absolute seconds from t=0.
+  All dot animations use dur="22s" repeatCount="indefinite"
+  so they fire every 22s at their begin= offset.
+
+  Dot travel fraction within 22s cycle:
+    travel time = 1.2s for outer dots, 1.0s for vertical green dots
+    as fraction of 22s:  1.2/22 = 0.0545,  1.0/22 = 0.0455
+═══════════════════════════════════════════════════════════════════
+-->
+
+<!-- ── ACTIVE HIGHLIGHTS ── -->
+<!-- s0: 0-2s  inputs -->
+<rect x="30" y="98"  width="180" height="54" rx="8" fill="none" stroke="#534AB7" stroke-width="0">
+  <animate attributeName="stroke-width" calcMode="discrete" dur="22s" repeatCount="indefinite" values="0;2.5;0" keyTimes="0;0.005;0.091"/></rect>
+<rect x="30" y="164" width="180" height="54" rx="8" fill="none" stroke="#534AB7" stroke-width="0">
+  <animate attributeName="stroke-width" calcMode="discrete" dur="22s" repeatCount="indefinite" values="0;2.5;0" keyTimes="0;0.005;0.091"/></rect>
+<rect x="30" y="230" width="180" height="54" rx="8" fill="none" stroke="#534AB7" stroke-width="0">
+  <animate attributeName="stroke-width" calcMode="discrete" dur="22s" repeatCount="indefinite" values="0;2.5;0" keyTimes="0;0.005;0.091"/></rect>
+
+<!-- s1: 2-4s  merge -->
+<rect x="258" y="110" width="204" height="54" rx="8" fill="none" stroke="#085041" stroke-width="0">
+  <animate attributeName="stroke-width" calcMode="discrete" dur="22s" repeatCount="indefinite" values="0;2.5;0" keyTimes="0;0.096;0.182"/></rect>
+
+<!-- s2: 4-6s  validate -->
+<rect x="258" y="182" width="204" height="54" rx="8" fill="none" stroke="#085041" stroke-width="0">
+  <animate attributeName="stroke-width" calcMode="discrete" dur="22s" repeatCount="indefinite" values="0;2.5;0" keyTimes="0;0.187;0.273"/></rect>
+
+<!-- s3a+s3b: 6-9s  provider + all providers -->
+<rect x="258" y="254" width="204" height="54" rx="8" fill="none" stroke="#085041" stroke-width="0">
+  <animate attributeName="stroke-width" calcMode="discrete" dur="22s" repeatCount="indefinite" values="0;2.5;0" keyTimes="0;0.278;0.409"/></rect>
+<rect x="510" y="98"  width="150" height="54" rx="8" fill="none" stroke="#993C1D" stroke-width="0">
+  <animate attributeName="stroke-width" calcMode="discrete" dur="22s" repeatCount="indefinite" values="0;2.5;0" keyTimes="0;0.278;0.341"/></rect>
+<rect x="510" y="164" width="150" height="54" rx="8" fill="none" stroke="#993C1D" stroke-width="0">
+  <animate attributeName="stroke-width" calcMode="discrete" dur="22s" repeatCount="indefinite" values="0;2.5;0" keyTimes="0;0.278;0.341"/></rect>
+<rect x="510" y="230" width="150" height="54" rx="8" fill="none" stroke="#993C1D" stroke-width="0">
+  <animate attributeName="stroke-width" calcMode="discrete" dur="22s" repeatCount="indefinite" values="0;2.5;0" keyTimes="0;0.278;0.341"/></rect>
+<rect x="510" y="296" width="150" height="54" rx="8" fill="none" stroke="#993C1D" stroke-width="0">
+  <animate attributeName="stroke-width" calcMode="discrete" dur="22s" repeatCount="indefinite" values="0;2.5;0" keyTimes="0;0.278;0.341"/></rect>
+
+<!-- s4a+s4b: 9-12s  packages + repo -->
+<rect x="258" y="326" width="204" height="68" rx="8" fill="none" stroke="#085041" stroke-width="0">
+  <animate attributeName="stroke-width" calcMode="discrete" dur="22s" repeatCount="indefinite" values="0;2.5;0" keyTimes="0;0.414;0.545"/></rect>
+<rect x="510" y="568" width="150" height="54" rx="8" fill="none" stroke="#5F5E5A" stroke-width="0">
+  <animate attributeName="stroke-width" calcMode="discrete" dur="22s" repeatCount="indefinite" values="0;2.5;0" keyTimes="0;0.414;0.477"/></rect>
+
+<!-- s4 pkgcache also lights with packages stage (cache read) -->
+<rect x="510" y="424" width="150" height="54" rx="8" fill="none" stroke="#854F0B" stroke-width="0">
+  <animate attributeName="stroke-width" calcMode="discrete" dur="22s" repeatCount="indefinite" values="0;2.5;0" keyTimes="0;0.414;0.477"/></rect>
+
+<!-- s5a+s5b: 12-15s  compose + chroot cache -->
+<rect x="258" y="412" width="204" height="82" rx="8" fill="none" stroke="#085041" stroke-width="0">
+  <animate attributeName="stroke-width" calcMode="discrete" dur="22s" repeatCount="indefinite" values="0;2.5;0" keyTimes="0;0.550;0.682"/></rect>
+<rect x="510" y="490" width="150" height="54" rx="8" fill="none" stroke="#854F0B" stroke-width="0">
+  <animate attributeName="stroke-width" calcMode="discrete" dur="22s" repeatCount="indefinite" values="0;2.5;0" keyTimes="0;0.550;0.614"/></rect>
+
+<!-- s6: 15-17s  sign -->
+<rect x="258" y="512" width="204" height="54" rx="8" fill="none" stroke="#085041" stroke-width="0">
+  <animate attributeName="stroke-width" calcMode="discrete" dur="22s" repeatCount="indefinite" values="0;2.5;0" keyTimes="0;0.687;0.773"/></rect>
+
+<!-- s7: 17-19s  post -->
+<rect x="258" y="584" width="204" height="54" rx="8" fill="none" stroke="#085041" stroke-width="0">
+  <animate attributeName="stroke-width" calcMode="discrete" dur="22s" repeatCount="indefinite" values="0;2.5;0" keyTimes="0;0.778;0.864"/></rect>
+
+<!-- s8: 19-21s  outputs -->
+<rect x="30"  y="764" width="140" height="68" rx="8" fill="none" stroke="#185FA5" stroke-width="0">
+  <animate attributeName="stroke-width" calcMode="discrete" dur="22s" repeatCount="indefinite" values="0;2.5;0" keyTimes="0;0.868;0.955"/></rect>
+<rect x="190" y="764" width="140" height="68" rx="8" fill="none" stroke="#185FA5" stroke-width="0">
+  <animate attributeName="stroke-width" calcMode="discrete" dur="22s" repeatCount="indefinite" values="0;2.5;0" keyTimes="0;0.868;0.955"/></rect>
+<rect x="350" y="764" width="140" height="68" rx="8" fill="none" stroke="#185FA5" stroke-width="0">
+  <animate attributeName="stroke-width" calcMode="discrete" dur="22s" repeatCount="indefinite" values="0;2.5;0" keyTimes="0;0.868;0.955"/></rect>
+<rect x="510" y="764" width="140" height="68" rx="8" fill="none" stroke="#185FA5" stroke-width="0">
+  <animate attributeName="stroke-width" calcMode="discrete" dur="22s" repeatCount="indefinite" values="0;2.5;0" keyTimes="0;0.868;0.955"/></rect>
+
+<!--
+═══════════════════════════════════════════════════════════════════
+  DOTS  — each uses begin="Xs" dur="22s" repeatCount="indefinite"
+  cx/cy set to connector SOURCE. animate cx/cy to DESTINATION.
+  opacity: fade in quickly, stay visible during travel, fade out.
+
+  Travel durations within each 22s cycle (as keyTime fractions):
+    1.2s travel  = 0.0545 of 22s
+    1.0s travel  = 0.0455 of 22s
+    0.8s travel  = 0.0364 of 22s
+
+  Offsets (begin=):
+    s0  inputs         0.0s
+    s1  merge→valid    2.0s
+    s2  valid→prov     4.0s
+    s3a prov dots      6.0s   (travel 1.2s, done by 7.2s)
+    s3b prov→pkg green 7.5s   (after outer dots settled)
+    s4a repo dot       9.0s   (travel 1.2s, done by 10.2s)
+    s4b pkg→comp green 10.5s
+    s5a chroot dot     12.0s  (travel 1.0s, done by 13.0s)
+    s5b comp→sign grn  13.5s
+    s6  sign→post grn  15.0s
+    s7  post→out blue  17.0s
+═══════════════════════════════════════════════════════════════════
+-->
+
+<!-- s0: 3 input dots  begin=0s -->
+<!-- template: (210,125)→(258,125) -->
+<circle cx="210" cy="125" r="6" fill="#7F77DD" opacity="0">
+  <animate attributeName="cx" dur="22s" begin="0s" repeatCount="indefinite"
+    values="210;258;258" keyTimes="0;0.055;1" calcMode="linear"/>
+  <animate attributeName="opacity" dur="22s" begin="0s" repeatCount="indefinite"
+    values="0;1;1;0;0" keyTimes="0;0.004;0.050;0.065;1" calcMode="linear"/>
+</circle>
+
+<!-- defaults: (210,191)→(240,191)→(240,137)→(258,137) -->
+<circle cx="210" cy="191" r="6" fill="#7F77DD" opacity="0">
+  <animate attributeName="cx" dur="22s" begin="0s" repeatCount="indefinite"
+    values="210;240;240;258;258" keyTimes="0;0.018;0.037;0.055;1" calcMode="linear"/>
+  <animate attributeName="cy" dur="22s" begin="0s" repeatCount="indefinite"
+    values="191;191;137;137;137" keyTimes="0;0.018;0.037;0.055;1" calcMode="linear"/>
+  <animate attributeName="opacity" dur="22s" begin="0s" repeatCount="indefinite"
+    values="0;1;1;1;0;0" keyTimes="0;0.004;0.037;0.055;0.065;1" calcMode="linear"/>
+</circle>
+
+<!-- config: (210,257)→(240,257)→(240,147)→(258,147) -->
+<circle cx="210" cy="257" r="6" fill="#7F77DD" opacity="0">
+  <animate attributeName="cx" dur="22s" begin="0s" repeatCount="indefinite"
+    values="210;240;240;258;258" keyTimes="0;0.018;0.050;0.055;1" calcMode="linear"/>
+  <animate attributeName="cy" dur="22s" begin="0s" repeatCount="indefinite"
+    values="257;257;147;147;147" keyTimes="0;0.018;0.050;0.055;1" calcMode="linear"/>
+  <animate attributeName="opacity" dur="22s" begin="0s" repeatCount="indefinite"
+    values="0;1;1;1;0;0" keyTimes="0;0.004;0.050;0.055;0.065;1" calcMode="linear"/>
+</circle>
+
+<!-- s1: merge-bot(360,164)→validate-top(360,182)  begin=2s -->
+<circle cx="360" cy="164" r="6" fill="#1D9E75" opacity="0">
+  <animate attributeName="cy" dur="22s" begin="2s" repeatCount="indefinite"
+    values="164;182;182" keyTimes="0;0.046;1" calcMode="linear"/>
+  <animate attributeName="opacity" dur="22s" begin="2s" repeatCount="indefinite"
+    values="0;1;1;0;0" keyTimes="0;0.004;0.042;0.055;1" calcMode="linear"/>
+</circle>
+
+<!-- s2: validate-bot(360,236)→provider-top(360,254)  begin=4s -->
+<circle cx="360" cy="236" r="6" fill="#1D9E75" opacity="0">
+  <animate attributeName="cy" dur="22s" begin="4s" repeatCount="indefinite"
+    values="236;254;254" keyTimes="0;0.046;1" calcMode="linear"/>
+  <animate attributeName="opacity" dur="22s" begin="4s" repeatCount="indefinite"
+    values="0;1;1;0;0" keyTimes="0;0.004;0.042;0.055;1" calcMode="linear"/>
+</circle>
+
+<!-- s3a: 4 coral provider dots  begin=6s, travel 1.2s -->
+<!-- AZL: (510,125)→(462,281) -->
+<circle cx="510" cy="125" r="6" fill="#D85A30" opacity="0">
+  <animate attributeName="cx" dur="22s" begin="6s" repeatCount="indefinite"
+    values="510;462;462" keyTimes="0;0.055;1" calcMode="linear"/>
+  <animate attributeName="cy" dur="22s" begin="6s" repeatCount="indefinite"
+    values="125;281;281" keyTimes="0;0.055;1" calcMode="linear"/>
+  <animate attributeName="opacity" dur="22s" begin="6s" repeatCount="indefinite"
+    values="0;1;1;0;0" keyTimes="0;0.004;0.050;0.065;1" calcMode="linear"/>
+</circle>
+<!-- EMT: (510,191)→(462,281) -->
+<circle cx="510" cy="191" r="6" fill="#D85A30" opacity="0">
+  <animate attributeName="cx" dur="22s" begin="6s" repeatCount="indefinite"
+    values="510;462;462" keyTimes="0;0.055;1" calcMode="linear"/>
+  <animate attributeName="cy" dur="22s" begin="6s" repeatCount="indefinite"
+    values="191;281;281" keyTimes="0;0.055;1" calcMode="linear"/>
+  <animate attributeName="opacity" dur="22s" begin="6s" repeatCount="indefinite"
+    values="0;1;1;0;0" keyTimes="0;0.004;0.050;0.065;1" calcMode="linear"/>
+</circle>
+<!-- eLxr: (510,257)→(462,281) -->
+<circle cx="510" cy="257" r="6" fill="#D85A30" opacity="0">
+  <animate attributeName="cx" dur="22s" begin="6s" repeatCount="indefinite"
+    values="510;462;462" keyTimes="0;0.055;1" calcMode="linear"/>
+  <animate attributeName="cy" dur="22s" begin="6s" repeatCount="indefinite"
+    values="257;281;281" keyTimes="0;0.055;1" calcMode="linear"/>
+  <animate attributeName="opacity" dur="22s" begin="6s" repeatCount="indefinite"
+    values="0;1;1;0;0" keyTimes="0;0.004;0.050;0.065;1" calcMode="linear"/>
+</circle>
+<!-- Ubuntu: (510,323)→(462,281) -->
+<circle cx="510" cy="323" r="6" fill="#D85A30" opacity="0">
+  <animate attributeName="cx" dur="22s" begin="6s" repeatCount="indefinite"
+    values="510;462;462" keyTimes="0;0.055;1" calcMode="linear"/>
+  <animate attributeName="cy" dur="22s" begin="6s" repeatCount="indefinite"
+    values="323;281;281" keyTimes="0;0.055;1" calcMode="linear"/>
+  <animate attributeName="opacity" dur="22s" begin="6s" repeatCount="indefinite"
+    values="0;1;1;0;0" keyTimes="0;0.004;0.050;0.065;1" calcMode="linear"/>
+</circle>
+
+<!-- s3b: green provider-bot(360,308)→packages-top(360,326)  begin=7.5s -->
+<circle cx="360" cy="308" r="6" fill="#1D9E75" opacity="0">
+  <animate attributeName="cy" dur="22s" begin="7.5s" repeatCount="indefinite"
+    values="308;326;326" keyTimes="0;0.046;1" calcMode="linear"/>
+  <animate attributeName="opacity" dur="22s" begin="7.5s" repeatCount="indefinite"
+    values="0;1;1;0;0" keyTimes="0;0.004;0.042;0.055;1" calcMode="linear"/>
+</circle>
+
+<!-- s4a: gray repo dot (510,595)→(462,360)  begin=9s, travel 1.2s -->
+<circle cx="510" cy="595" r="6" fill="#888780" opacity="0">
+  <animate attributeName="cx" dur="22s" begin="9s" repeatCount="indefinite"
+    values="510;462;462" keyTimes="0;0.055;1" calcMode="linear"/>
+  <animate attributeName="cy" dur="22s" begin="9s" repeatCount="indefinite"
+    values="595;360;360" keyTimes="0;0.055;1" calcMode="linear"/>
+  <animate attributeName="opacity" dur="22s" begin="9s" repeatCount="indefinite"
+    values="0;1;1;0;0" keyTimes="0;0.004;0.050;0.065;1" calcMode="linear"/>
+</circle>
+
+<!-- s4a also: amber pkgcache dot (510,451)→(462,360)  begin=9s -->
+<circle cx="510" cy="451" r="6" fill="#BA7517" opacity="0">
+  <animate attributeName="cx" dur="22s" begin="9s" repeatCount="indefinite"
+    values="510;462;462" keyTimes="0;0.055;1" calcMode="linear"/>
+  <animate attributeName="cy" dur="22s" begin="9s" repeatCount="indefinite"
+    values="451;360;360" keyTimes="0;0.055;1" calcMode="linear"/>
+  <animate attributeName="opacity" dur="22s" begin="9s" repeatCount="indefinite"
+    values="0;1;1;0;0" keyTimes="0;0.004;0.050;0.065;1" calcMode="linear"/>
+</circle>
+
+<!-- s4b: green packages-bot(360,394)→compose-top(360,412)  begin=10.5s -->
+<circle cx="360" cy="394" r="6" fill="#1D9E75" opacity="0">
+  <animate attributeName="cy" dur="22s" begin="10.5s" repeatCount="indefinite"
+    values="394;412;412" keyTimes="0;0.046;1" calcMode="linear"/>
+  <animate attributeName="opacity" dur="22s" begin="10.5s" repeatCount="indefinite"
+    values="0;1;1;0;0" keyTimes="0;0.004;0.042;0.055;1" calcMode="linear"/>
+</circle>
+
+<!-- s5a: amber chroot dot (510,517)→(462,453)  begin=12s, travel 1.0s -->
+<circle cx="510" cy="517" r="6" fill="#BA7517" opacity="0">
+  <animate attributeName="cx" dur="22s" begin="12s" repeatCount="indefinite"
+    values="510;462;462" keyTimes="0;0.046;1" calcMode="linear"/>
+  <animate attributeName="cy" dur="22s" begin="12s" repeatCount="indefinite"
+    values="517;453;453" keyTimes="0;0.046;1" calcMode="linear"/>
+  <animate attributeName="opacity" dur="22s" begin="12s" repeatCount="indefinite"
+    values="0;1;1;0;0" keyTimes="0;0.004;0.042;0.055;1" calcMode="linear"/>
+</circle>
+
+<!-- s5b: green compose-bot(360,494)→sign-top(360,512)  begin=13.5s -->
+<circle cx="360" cy="494" r="6" fill="#1D9E75" opacity="0">
+  <animate attributeName="cy" dur="22s" begin="13.5s" repeatCount="indefinite"
+    values="494;512;512" keyTimes="0;0.046;1" calcMode="linear"/>
+  <animate attributeName="opacity" dur="22s" begin="13.5s" repeatCount="indefinite"
+    values="0;1;1;0;0" keyTimes="0;0.004;0.042;0.055;1" calcMode="linear"/>
+</circle>
+
+<!-- s6: green sign-bot(360,566)→post-top(360,584)  begin=15s -->
+<circle cx="360" cy="566" r="6" fill="#1D9E75" opacity="0">
+  <animate attributeName="cy" dur="22s" begin="15s" repeatCount="indefinite"
+    values="566;584;584" keyTimes="0;0.046;1" calcMode="linear"/>
+  <animate attributeName="opacity" dur="22s" begin="15s" repeatCount="indefinite"
+    values="0;1;1;0;0" keyTimes="0;0.004;0.042;0.055;1" calcMode="linear"/>
+</circle>
+
+<!-- s7: blue post-bot(360,638)→output-top(360,716)  begin=17s -->
+<circle cx="360" cy="638" r="7" fill="#378ADD" opacity="0">
+  <animate attributeName="cy" dur="22s" begin="17s" repeatCount="indefinite"
+    values="638;716;716" keyTimes="0;0.055;1" calcMode="linear"/>
+  <animate attributeName="opacity" dur="22s" begin="17s" repeatCount="indefinite"
+    values="0;1;1;0;0" keyTimes="0;0.004;0.050;0.065;1" calcMode="linear"/>
+</circle>
+
+<!-- ═══ PROGRESS BAR ═══ -->
+<rect x="30" y="900" width="620" height="34" rx="8" fill="#F1EFE8" stroke="#D3D1C7" stroke-width="0.5"/>
+<rect x="36"  y="910" width="57" height="6" rx="3" fill="#D3D1C7"/>
+<rect x="97"  y="910" width="57" height="6" rx="3" fill="#D3D1C7"/>
+<rect x="158" y="910" width="57" height="6" rx="3" fill="#D3D1C7"/>
+<rect x="219" y="910" width="57" height="6" rx="3" fill="#D3D1C7"/>
+<rect x="280" y="910" width="57" height="6" rx="3" fill="#D3D1C7"/>
+<rect x="341" y="910" width="57" height="6" rx="3" fill="#D3D1C7"/>
+<rect x="402" y="910" width="57" height="6" rx="3" fill="#D3D1C7"/>
+<rect x="463" y="910" width="57" height="6" rx="3" fill="#D3D1C7"/>
+<rect x="524" y="910" width="57" height="6" rx="3" fill="#D3D1C7"/>
+<rect x="585" y="910" width="57" height="6" rx="3" fill="#D3D1C7"/>
+
+<!-- pip fills light up cumulatively via discrete opacity -->
+<rect x="36"  y="910" width="57" height="6" rx="3" fill="#1D9E75" opacity="0"><animate attributeName="opacity" dur="22s" repeatCount="indefinite" calcMode="discrete" values="0;1;0" keyTimes="0;0.005;0.955"/></rect>
+<rect x="97"  y="910" width="57" height="6" rx="3" fill="#1D9E75" opacity="0"><animate attributeName="opacity" dur="22s" repeatCount="indefinite" calcMode="discrete" values="0;1;0" keyTimes="0;0.096;0.955"/></rect>
+<rect x="158" y="910" width="57" height="6" rx="3" fill="#1D9E75" opacity="0"><animate attributeName="opacity" dur="22s" repeatCount="indefinite" calcMode="discrete" values="0;1;0" keyTimes="0;0.187;0.955"/></rect>
+<rect x="219" y="910" width="57" height="6" rx="3" fill="#1D9E75" opacity="0"><animate attributeName="opacity" dur="22s" repeatCount="indefinite" calcMode="discrete" values="0;1;0" keyTimes="0;0.278;0.955"/></rect>
+<rect x="280" y="910" width="57" height="6" rx="3" fill="#1D9E75" opacity="0"><animate attributeName="opacity" dur="22s" repeatCount="indefinite" calcMode="discrete" values="0;1;0" keyTimes="0;0.414;0.955"/></rect>
+<rect x="341" y="910" width="57" height="6" rx="3" fill="#1D9E75" opacity="0"><animate attributeName="opacity" dur="22s" repeatCount="indefinite" calcMode="discrete" values="0;1;0" keyTimes="0;0.477;0.955"/></rect>
+<rect x="402" y="910" width="57" height="6" rx="3" fill="#1D9E75" opacity="0"><animate attributeName="opacity" dur="22s" repeatCount="indefinite" calcMode="discrete" values="0;1;0" keyTimes="0;0.550;0.955"/></rect>
+<rect x="463" y="910" width="57" height="6" rx="3" fill="#1D9E75" opacity="0"><animate attributeName="opacity" dur="22s" repeatCount="indefinite" calcMode="discrete" values="0;1;0" keyTimes="0;0.687;0.955"/></rect>
+<rect x="524" y="910" width="57" height="6" rx="3" fill="#1D9E75" opacity="0"><animate attributeName="opacity" dur="22s" repeatCount="indefinite" calcMode="discrete" values="0;1;0" keyTimes="0;0.778;0.955"/></rect>
+<rect x="585" y="910" width="57" height="6" rx="3" fill="#1D9E75" opacity="0"><animate attributeName="opacity" dur="22s" repeatCount="indefinite" calcMode="discrete" values="0;1;0" keyTimes="0;0.868;0.955"/></rect>
+
+<!-- stage label -->
+<rect x="30" y="940" width="620" height="28" rx="6" fill="#F1EFE8" stroke="#D3D1C7" stroke-width="0.5"/>
+<text x="340" y="958" text-anchor="middle" font-size="11" fill="#444441">
+  <animate attributeName="visibility" dur="22s" repeatCount="indefinite" calcMode="discrete"
+    values="visible;hidden;hidden;hidden;hidden;hidden;hidden;hidden;hidden;hidden;hidden"
+    keyTimes="0;0.091;0.182;0.273;0.341;0.409;0.477;0.545;0.614;0.682;0.864"/>
+  Gathering inputs - template, defaults and config
+</text>
+<text x="340" y="958" text-anchor="middle" font-size="11" fill="#444441">
+  <animate attributeName="visibility" dur="22s" repeatCount="indefinite" calcMode="discrete"
+    values="hidden;visible;hidden;hidden;hidden;hidden;hidden;hidden;hidden;hidden;hidden"
+    keyTimes="0;0.091;0.182;0.273;0.341;0.409;0.477;0.545;0.614;0.682;0.864"/>
+  Stage 1 - Load and merge - inputs flow into the pipeline
+</text>
+<text x="340" y="958" text-anchor="middle" font-size="11" fill="#444441">
+  <animate attributeName="visibility" dur="22s" repeatCount="indefinite" calcMode="discrete"
+    values="hidden;hidden;visible;hidden;hidden;hidden;hidden;hidden;hidden;hidden;hidden"
+    keyTimes="0;0.091;0.182;0.273;0.341;0.409;0.477;0.545;0.614;0.682;0.864"/>
+  Stage 2 - Validate - merged config checked against schema
+</text>
+<text x="340" y="958" text-anchor="middle" font-size="11" fill="#444441">
+  <animate attributeName="visibility" dur="22s" repeatCount="indefinite" calcMode="discrete"
+    values="hidden;hidden;hidden;visible;hidden;hidden;hidden;hidden;hidden;hidden;hidden"
+    keyTimes="0;0.091;0.182;0.273;0.341;0.409;0.477;0.545;0.614;0.682;0.864"/>
+  Stage 3 - Init provider - provider selected, 4 coral dots arrive
+</text>
+<text x="340" y="958" text-anchor="middle" font-size="11" fill="#444441">
+  <animate attributeName="visibility" dur="22s" repeatCount="indefinite" calcMode="discrete"
+    values="hidden;hidden;hidden;hidden;visible;hidden;hidden;hidden;hidden;hidden;hidden"
+    keyTimes="0;0.091;0.182;0.273;0.341;0.409;0.477;0.545;0.614;0.682;0.864"/>
+  Stage 3 - Provider ready, pipeline advances to packages
+</text>
+<text x="340" y="958" text-anchor="middle" font-size="11" fill="#444441">
+  <animate attributeName="visibility" dur="22s" repeatCount="indefinite" calcMode="discrete"
+    values="hidden;hidden;hidden;hidden;hidden;visible;hidden;hidden;hidden;hidden;hidden"
+    keyTimes="0;0.091;0.182;0.273;0.341;0.409;0.477;0.545;0.614;0.682;0.864"/>
+  Stage 4 - Packages - repo and cache dots arrive
+</text>
+<text x="340" y="958" text-anchor="middle" font-size="11" fill="#444441">
+  <animate attributeName="visibility" dur="22s" repeatCount="indefinite" calcMode="discrete"
+    values="hidden;hidden;hidden;hidden;hidden;hidden;visible;hidden;hidden;hidden;hidden"
+    keyTimes="0;0.091;0.182;0.273;0.341;0.409;0.477;0.545;0.614;0.682;0.864"/>
+  Stage 4 - Packages ready, pipeline advances to compose
+</text>
+<text x="340" y="958" text-anchor="middle" font-size="11" fill="#444441">
+  <animate attributeName="visibility" dur="22s" repeatCount="indefinite" calcMode="discrete"
+    values="hidden;hidden;hidden;hidden;hidden;hidden;hidden;visible;hidden;hidden;hidden"
+    keyTimes="0;0.091;0.182;0.273;0.341;0.409;0.477;0.545;0.614;0.682;0.864"/>
+  Stage 5 - Compose - chroot cache arrives, OS installed
+</text>
+<text x="340" y="958" text-anchor="middle" font-size="11" fill="#444441">
+  <animate attributeName="visibility" dur="22s" repeatCount="indefinite" calcMode="discrete"
+    values="hidden;hidden;hidden;hidden;hidden;hidden;hidden;hidden;visible;hidden;hidden"
+    keyTimes="0;0.091;0.182;0.273;0.341;0.409;0.477;0.545;0.614;0.682;0.864"/>
+  Stage 5 - Compose ready, pipeline advances to signing
+</text>
+<text x="340" y="958" text-anchor="middle" font-size="11" fill="#444441">
+  <animate attributeName="visibility" dur="22s" repeatCount="indefinite" calcMode="discrete"
+    values="hidden;hidden;hidden;hidden;hidden;hidden;hidden;hidden;hidden;visible;hidden"
+    keyTimes="0;0.091;0.182;0.273;0.341;0.409;0.477;0.545;0.614;0.682;0.864"/>
+  Stage 6 - Image signing - secure boot keys applied
+</text>
+<text x="340" y="958" text-anchor="middle" font-size="11" fill="#444441">
+  <animate attributeName="visibility" dur="22s" repeatCount="indefinite" calcMode="discrete"
+    values="hidden;hidden;hidden;hidden;hidden;hidden;hidden;hidden;hidden;hidden;visible"
+    keyTimes="0;0.091;0.182;0.273;0.341;0.409;0.477;0.545;0.614;0.682;0.864"/>
+  Stage 7 - Post-process - SBOM generated, artifacts written
+</text>
+
+</svg>

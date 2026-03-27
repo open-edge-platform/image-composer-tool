@@ -372,7 +372,7 @@ systemConfig:
     #dls based pkg
     - docker.io
     - docker-compose-plugin
-    - intel-dlstreamer
+    - intel-dlstreamer_2025.2.0
 
   additionalFiles:
     - local: ../additionalfiles/ptl/01-network-manager-all.yaml

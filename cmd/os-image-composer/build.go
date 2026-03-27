@@ -148,6 +148,7 @@ post:
 
 func displayImageBuildTiming(imageType string, template *config.ImageTemplate) {
 	startToDownloadImagePkgsDuration := template.GetDurationStartToDownloadImagePkgs()
+	chrootPkgDownloadDuration := template.GetChrootPkgDownloadDuration()
 	downloadImagePkgsToPureBuildDuration := template.GetDurationDownloadImagePkgsToPureBuild()
 	pureImageBuildDuration := template.GetPureImageBuildDuration()
 	downloadImagePkgsDuration := template.GetDownloadImagePkgsDuration()
@@ -157,6 +158,7 @@ func displayImageBuildTiming(imageType string, template *config.ImageTemplate) {
 		imageType,
 		startToDownloadImagePkgsDuration,
 		downloadImagePkgsDuration,
+		chrootPkgDownloadDuration,
 		downloadImagePkgsToPureBuildDuration,
 		pureImageBuildDuration,
 		convertImageDuration,
