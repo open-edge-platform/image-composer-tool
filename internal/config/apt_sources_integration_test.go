@@ -7,6 +7,32 @@ import (
 	"testing"
 )
 
+func createLocalTestGPGKey(t *testing.T, pattern string) string {
+	t.Helper()
+
+	tempFile, err := os.CreateTemp("", pattern)
+	if err != nil {
+		t.Fatalf("Failed to create local test GPG key file: %v", err)
+	}
+
+	if _, err := tempFile.WriteString("dummy-gpg-key-content"); err != nil {
+		tempFile.Close()
+		os.Remove(tempFile.Name())
+		t.Fatalf("Failed to write local test GPG key file: %v", err)
+	}
+
+	if err := tempFile.Close(); err != nil {
+		os.Remove(tempFile.Name())
+		t.Fatalf("Failed to close local test GPG key file: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_ = os.Remove(tempFile.Name())
+	})
+
+	return tempFile.Name()
+}
+
 // resolveAdditionalFilePath converts relative paths (like ../../../../../../tmp/file.gpg)
 // to absolute paths by joining with working directory or config root
 func resolveAdditionalFilePath(relativePath string) (string, error) {
@@ -38,6 +64,9 @@ func resolveAdditionalFilePath(relativePath string) (string, error) {
 
 // TestIntegrationAptSourcesGeneration tests the complete flow
 func TestIntegrationAptSourcesGeneration(t *testing.T) {
+	sedKeyPath := createLocalTestGPGKey(t, "sed-test-key-*.gpg")
+	openvinoKeyPath := createLocalTestGPGKey(t, "openvino-test-key-*.gpg")
+
 	// Create a realistic test template similar to the example
 	template := &ImageTemplate{
 		Image: ImageInfo{
@@ -54,14 +83,14 @@ func TestIntegrationAptSourcesGeneration(t *testing.T) {
 			{
 				Codename:  "sed",
 				URL:       "https://eci.intel.com/sed-repos/noble",
-				PKey:      "https://eci.intel.com/sed-repos/gpg-keys/GPG-PUB-KEY-INTEL-SED.gpg",
+				PKey:      sedKeyPath,
 				Priority:  1000,
 				Component: "",
 			},
 			{
 				Codename:  "ubuntu24",
 				URL:       "https://apt.repos.intel.com/openvino/2025",
-				PKey:      "https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB",
+				PKey:      openvinoKeyPath,
 				Component: "main contrib",
 			},
 		},
@@ -132,6 +161,9 @@ func TestIntegrationAptSourcesGeneration(t *testing.T) {
 
 // TestIntegrationAptPreferencesGeneration tests the complete flow including preferences
 func TestIntegrationAptPreferencesGeneration(t *testing.T) {
+	sedKeyPath := createLocalTestGPGKey(t, "sed-test-key-*.gpg")
+	openvinoKeyPath := createLocalTestGPGKey(t, "openvino-test-key-*.gpg")
+
 	// Create a realistic test template with priorities
 	template := &ImageTemplate{
 		Image: ImageInfo{
@@ -149,14 +181,14 @@ func TestIntegrationAptPreferencesGeneration(t *testing.T) {
 				ID:       "sed-repo",
 				Codename: "sed",
 				URL:      "https://eci.intel.com/sed-repos/noble",
-				PKey:     "https://eci.intel.com/sed-repos/gpg-keys/GPG-PUB-KEY-INTEL-SED.gpg",
+				PKey:     sedKeyPath,
 				Priority: 1000,
 			},
 			{
 				ID:        "openvino-repo",
 				Codename:  "ubuntu24",
 				URL:       "https://apt.repos.intel.com/openvino/2025",
-				PKey:      "https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB",
+				PKey:      openvinoKeyPath,
 				Component: "main contrib",
 				Priority:  500,
 			},
