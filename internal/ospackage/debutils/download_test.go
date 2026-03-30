@@ -362,6 +362,23 @@ func TestIsDebPackageCacheOutdated(t *testing.T) {
 	}
 }
 
+func TestIsDebPackageCacheOutdated_VersionPinnedRequirement(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(tmpDir, "intel-dlstreamer_2025.2.0_amd64.deb"), []byte("x"), 0644); err != nil {
+		t.Fatalf("failed to write cached deb: %v", err)
+	}
+
+	outdated, missing, _, err := isDebPackageCacheOutdated([]string{"intel-dlstreamer_2025.2.0"}, tmpDir)
+	if err != nil {
+		t.Fatalf("isDebPackageCacheOutdated returned error: %v", err)
+	}
+
+	if outdated {
+		t.Fatalf("expected version-pinned requirement to be satisfied from cache, missing=%v", missing)
+	}
+}
+
 func TestClearDebPackageCache(t *testing.T) {
 	tests := []struct {
 		name     string

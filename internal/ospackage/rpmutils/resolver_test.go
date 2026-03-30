@@ -710,6 +710,12 @@ func TestFetchPrimaryURL_NoRetryOnPermanentFailure(t *testing.T) {
 }
 
 func TestParseRepositoryMetadata_UsesCacheOffline(t *testing.T) {
+	origCfg := config.Global()
+	updatedCfg := origCfg
+	updatedCfg.CacheDir = t.TempDir()
+	config.SetGlobal(updatedCfg)
+	defer config.SetGlobal(origCfg)
+
 	var requestCount int32
 	xmlContent := `<?xml version="1.0" encoding="UTF-8"?><metadata xmlns="http://linux.duke.edu/metadata/common" xmlns:rpm="http://linux.duke.edu/metadata/rpm" packages="1"><package type="rpm"><name>bash</name><arch>x86_64</arch><location href="bash-5.1-8.el9.x86_64.rpm"/></package></metadata>`
 	compressed := compressGzip(t, xmlContent)
@@ -720,7 +726,7 @@ func TestParseRepositoryMetadata_UsesCacheOffline(t *testing.T) {
 		_, _ = w.Write(compressed)
 	}))
 
-	cacheDir := filepath.Join(config.TempDir(), "builds", generateRPMMetadataDir(server.URL+"/"))
+	cacheDir := filepath.Join(updatedCfg.CacheDir, "rpm-metadata", generateRPMMetadataDir(server.URL+"/"))
 	_ = os.RemoveAll(cacheDir)
 	t.Cleanup(func() {
 		_ = os.RemoveAll(cacheDir)
@@ -752,6 +758,12 @@ func TestParseRepositoryMetadata_UsesCacheOffline(t *testing.T) {
 }
 
 func TestFetchPrimaryURL_UsesCacheOffline(t *testing.T) {
+	origCfg := config.Global()
+	updatedCfg := origCfg
+	updatedCfg.CacheDir = t.TempDir()
+	config.SetGlobal(updatedCfg)
+	defer config.SetGlobal(origCfg)
+
 	var requestCount int32
 	repomd := `<?xml version="1.0" encoding="UTF-8"?>
 <repomd xmlns="http://linux.duke.edu/metadata/repo">
@@ -767,7 +779,7 @@ func TestFetchPrimaryURL_UsesCacheOffline(t *testing.T) {
 	}))
 
 	baseURL := server.URL
-	cacheDir := filepath.Join(config.TempDir(), "builds", generateRPMMetadataDir(baseURL))
+	cacheDir := filepath.Join(updatedCfg.CacheDir, "rpm-metadata", generateRPMMetadataDir(baseURL))
 	_ = os.RemoveAll(cacheDir)
 	t.Cleanup(func() {
 		_ = os.RemoveAll(cacheDir)
@@ -796,5 +808,61 @@ func TestFetchPrimaryURL_UsesCacheOffline(t *testing.T) {
 	}
 	if atomic.LoadInt32(&requestCount) != 1 {
 		t.Fatalf("expected no additional network requests when using cached primary href, got %d", atomic.LoadInt32(&requestCount))
+	}
+}
+
+func TestFetchPrimaryURL_UsesCachedRepomdWhenPrimaryLocationMissing(t *testing.T) {
+	origCfg := config.Global()
+	updatedCfg := origCfg
+	updatedCfg.CacheDir = t.TempDir()
+	config.SetGlobal(updatedCfg)
+	defer config.SetGlobal(origCfg)
+
+	var requestCount int32
+	repomd := `<?xml version="1.0" encoding="UTF-8"?>
+<repomd xmlns="http://linux.duke.edu/metadata/repo">
+  <data type="primary">
+    <location href="repodata/primary.xml.gz"/>
+  </data>
+</repomd>`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requestCount, 1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(repomd))
+	}))
+
+	baseURL := server.URL
+	cacheDir := filepath.Join(updatedCfg.CacheDir, "rpm-metadata", generateRPMMetadataDir(baseURL))
+	_ = os.RemoveAll(cacheDir)
+	t.Cleanup(func() {
+		_ = os.RemoveAll(cacheDir)
+	})
+
+	repomdURL := baseURL + "/repodata/repomd.xml"
+	href, err := FetchPrimaryURL(repomdURL)
+	if err != nil {
+		t.Fatalf("first FetchPrimaryURL failed: %v", err)
+	}
+	if href != "repodata/primary.xml.gz" {
+		t.Fatalf("unexpected primary href: %s", href)
+	}
+
+	primaryLocationCacheFile := filepath.Join(cacheDir, "primary.location.json")
+	if err := os.Remove(primaryLocationCacheFile); err != nil {
+		t.Fatalf("failed to remove primary location cache file: %v", err)
+	}
+
+	server.Close()
+
+	href, err = FetchPrimaryURL(repomdURL)
+	if err != nil {
+		t.Fatalf("FetchPrimaryURL should succeed from cached repomd offline, got error: %v", err)
+	}
+	if href != "repodata/primary.xml.gz" {
+		t.Fatalf("unexpected href from cached repomd: %s", href)
+	}
+	if atomic.LoadInt32(&requestCount) != 1 {
+		t.Fatalf("expected no additional network requests when using cached repomd, got %d", atomic.LoadInt32(&requestCount))
 	}
 }

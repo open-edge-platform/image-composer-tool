@@ -36,6 +36,28 @@ func TestIsRPMPackageCacheOutdated(t *testing.T) {
 	if len(missing) != 1 || missing[0] != "curl" {
 		t.Fatalf("expected missing=[curl], got %v", missing)
 	}
+
+	outdated, missing, _, err = isRPMPackageCacheOutdated([]string{"kernel-drivers-gpu-6.12.55"}, tmpDir)
+	if err != nil {
+		t.Fatalf("isRPMPackageCacheOutdated returned error: %v", err)
+	}
+	if !outdated {
+		t.Fatalf("expected cache to be outdated for missing kernel-drivers-gpu")
+	}
+	if len(missing) != 1 || missing[0] != "kernel-drivers-gpu-6.12.55" {
+		t.Fatalf("expected missing=[kernel-drivers-gpu-6.12.55], got %v", missing)
+	}
+
+	if err := os.WriteFile(filepath.Join(tmpDir, "kernel-drivers-gpu-6.12.55-2.emt3.x86_64.rpm"), []byte("x"), 0644); err != nil {
+		t.Fatalf("failed to write cached rpm: %v", err)
+	}
+	outdated, missing, _, err = isRPMPackageCacheOutdated([]string{"kernel-drivers-gpu-6.12.55"}, tmpDir)
+	if err != nil {
+		t.Fatalf("isRPMPackageCacheOutdated returned error: %v", err)
+	}
+	if outdated {
+		t.Fatalf("expected version-pinned package to be satisfied from cache, missing=%v", missing)
+	}
 }
 
 func TestClearRPMPackageCache(t *testing.T) {
@@ -88,6 +110,12 @@ func TestClearRPMPackageCache(t *testing.T) {
 }
 
 func TestClearRPMMetadataCache(t *testing.T) {
+	origCfg := config.Global()
+	updatedCfg := origCfg
+	updatedCfg.CacheDir = t.TempDir()
+	config.SetGlobal(updatedCfg)
+	defer config.SetGlobal(origCfg)
+
 	origRepoCfg := RepoCfg
 	defer func() { RepoCfg = origRepoCfg }()
 
@@ -95,7 +123,7 @@ func TestClearRPMMetadataCache(t *testing.T) {
 	RepoCfg = RepoConfig{URL: testURL}
 
 	metaDirName := generateRPMMetadataDir(testURL)
-	metaDir := filepath.Join(config.TempDir(), "builds", metaDirName)
+	metaDir := filepath.Join(updatedCfg.CacheDir, "rpm-metadata", metaDirName)
 	if err := os.MkdirAll(metaDir, 0755); err != nil {
 		t.Fatalf("failed to create metadata dir: %v", err)
 	}

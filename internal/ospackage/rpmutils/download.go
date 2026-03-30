@@ -392,6 +392,9 @@ func isRPMRequirementInCache(required string, cachedPackageNames map[string]stru
 		if matchesPackageFilter(cachedName, []string{required}) {
 			return true
 		}
+		if matchesPackageFilter(required, []string{cachedName}) {
+			return true
+		}
 	}
 
 	return false
@@ -442,8 +445,11 @@ func clearRPMMetadataCache() {
 		return
 	}
 
-	metaDirName := generateRPMMetadataDir(RepoCfg.URL)
-	metaDir := filepath.Join(config.TempDir(), "builds", metaDirName)
+	metaDir, err := rpmMetadataCacheDir(RepoCfg.URL)
+	if err != nil {
+		log.Warnf("failed to resolve RPM metadata cache directory: %v", err)
+		return
+	}
 
 	for _, name := range []string{"primary.parsed.json", "primary.location.json"} {
 		f := filepath.Join(metaDir, name)
@@ -514,9 +520,7 @@ func DownloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSour
 			return cachedFiles, buildRPMPackageInfosFromCache(absDestDir, cachedFiles), nil
 		} else if len(missingRequired) > 0 {
 			log.Infof("RPM package cache is outdated; missing required packages: %v", missingRequired)
-			if clearErr := clearRPMPackageCache(absDestDir); clearErr != nil {
-				log.Warnf("Failed to clear RPM package cache: %v", clearErr)
-			}
+			log.Infof("Keeping existing cached RPM files and continuing to fetch only missing/new packages")
 		}
 	}
 

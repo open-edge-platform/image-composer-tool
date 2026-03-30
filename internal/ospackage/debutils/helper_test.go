@@ -1,6 +1,7 @@
 package debutils
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -31,6 +32,10 @@ func TestGenerateSPDXFileName(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := GenerateSPDXFileName(tt.repoNm)
+			expectedRepoName := strings.ReplaceAll(tt.repoNm, " ", "_")
+			if !strings.Contains(result, expectedRepoName) {
+				t.Errorf("GenerateSPDXFileName() = %v, expected to contain %v", result, expectedRepoName)
+			}
 
 			// Check that result starts with correct prefix
 			if !strings.HasPrefix(result, "spdx_manifest_deb_") {
@@ -43,14 +48,14 @@ func TestGenerateSPDXFileName(t *testing.T) {
 			}
 
 			// Check that spaces are replaced with underscores
-			expectedRepoName := strings.ReplaceAll(tt.repoNm, " ", "_")
 			if !strings.Contains(result, expectedRepoName) {
 				t.Errorf("GenerateSPDXFileName() = %v, expected to contain %v", result, expectedRepoName)
 			}
 
-			// Check that result contains timestamp-like pattern (has underscores and digits)
-			if len(result) < 30 { // Should be long enough to contain timestamp
-				t.Errorf("GenerateSPDXFileName() = %v, result too short", result)
+			// Check timestamp suffix format
+			re := regexp.MustCompile(`^spdx_manifest_deb_.*_[0-9]{8}_[0-9]{6}\.json$`)
+			if !re.MatchString(result) {
+				t.Errorf("GenerateSPDXFileName() result %q does not match timestamped format", result)
 			}
 		})
 	}

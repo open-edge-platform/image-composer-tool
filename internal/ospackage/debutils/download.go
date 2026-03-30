@@ -137,14 +137,42 @@ func extractDebPackageNameFromFile(fileName string) string {
 	return base
 }
 
-func isDebRequirementInCache(required string, cachedPackageNames map[string]struct{}) bool {
-	required = strings.TrimSpace(CleanDependencyName(required))
-	if required == "" {
+func parseDebFileName(fileName string) (string, string) {
+	base := strings.TrimSuffix(fileName, ".deb")
+	parts := strings.Split(base, "_")
+	if len(parts) >= 2 {
+		return parts[0], parts[1]
+	}
+	return base, ""
+}
+
+func isDebRequirementInCache(
+	required string,
+	cachedPackageNames map[string]struct{},
+	cachedPackageInfos []ospackage.PackageInfo,
+) bool {
+	required = strings.TrimSpace(required)
+	requiredName := strings.TrimSpace(CleanDependencyName(required))
+	if requiredName == "" {
+		return true
+	}
+
+	if pkg, found := ResolveTopPackageConflicts(required, cachedPackageInfos); found && pkg.Name != "" {
+		return true
+	}
+
+	if requiredName != required {
+		if pkg, found := ResolveTopPackageConflicts(requiredName, cachedPackageInfos); found && pkg.Name != "" {
+			return true
+		}
+	}
+
+	if _, ok := cachedPackageNames[requiredName]; ok {
 		return true
 	}
 
 	for cachedName := range cachedPackageNames {
-		if matchesPackageFilter(cachedName, []string{required}) {
+		if matchesPackageFilter(cachedName, []string{requiredName}) {
 			return true
 		}
 	}
@@ -160,11 +188,19 @@ func isDebPackageCacheOutdated(requiredPackages []string, cacheDir string) (bool
 	}
 
 	cachedPackageNames := make(map[string]struct{}, len(cachedPaths))
+	cachedPackageInfos := make([]ospackage.PackageInfo, 0, len(cachedPaths))
 	cachedFiles := make([]string, 0, len(cachedPaths))
 	for _, p := range cachedPaths {
 		base := filepath.Base(p)
 		cachedFiles = append(cachedFiles, base)
-		cachedPackageNames[extractDebPackageNameFromFile(base)] = struct{}{}
+		name, version := parseDebFileName(base)
+		cachedPackageNames[name] = struct{}{}
+		cachedPackageInfos = append(cachedPackageInfos, ospackage.PackageInfo{
+			Name:    name,
+			Version: version,
+			URL:     p,
+			Type:    "deb",
+		})
 	}
 
 	missingSet := make(map[string]struct{})
@@ -174,7 +210,7 @@ func isDebPackageCacheOutdated(requiredPackages []string, cacheDir string) (bool
 		if req == "" {
 			continue
 		}
-		if isDebRequirementInCache(req, cachedPackageNames) {
+		if isDebRequirementInCache(req, cachedPackageNames, cachedPackageInfos) {
 			continue
 		}
 		if _, seen := missingSet[req]; seen {
