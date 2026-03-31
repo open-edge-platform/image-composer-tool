@@ -54,7 +54,7 @@ curl -fsSL https://ollama.com/install.sh | sh
 
 # Pull the required models
 ollama pull nomic-embed-text   # embedding model (768 dimensions)
-ollama pull llama3.2           # chat/generation model
+ollama pull llama3.1:8b        # default chat/generation model
 
 # Verify the server is running
 ollama list
@@ -62,7 +62,7 @@ ollama list
 
 > **Tip:** Alternative embedding models are supported:
 > `mxbai-embed-large` (1024 dims) and `all-minilm` (384 dims). Change the
-> model in `os-image-composer.yml` or via `--provider` flag if needed.
+> model in `os-image-composer.yml` if needed.
 
 ---
 
@@ -141,8 +141,8 @@ Found 5 matching templates:
 ./os-image-composer ai "create an edge image" --output /tmp/my-image.yml
 ```
 
-If the output filename matches an existing indexed template, you will be
-prompted before overwriting.
+If the output filename matches one of the reference templates returned by
+the current search results, you will be prompted before overwriting.
 
 ### Cache Management
 
@@ -175,22 +175,31 @@ automatically invalidates when a template's content changes (SHA256 hash).
 ### Zero Configuration (Ollama)
 
 If Ollama is running on `localhost:11434` with `nomic-embed-text` and
-`llama3.2` pulled, everything works out of the box - no config file changes
+`llama3.1:8b` pulled, everything works out of the box - no config file changes
 required.
 
 ### Switching to OpenAI
 
-Edit `os-image-composer.yml`:
+The AI command currently selects the provider via CLI flags, not
+`os-image-composer.yml`.
+
+Use `--provider openai` when running `os-image-composer ai`:
+
+```bash
+./os-image-composer ai --provider openai "minimal Ubuntu server image for cloud VMs"
+```
+
+You also need an API key:
+
+```bash
+export OPENAI_API_KEY="sk-..."
+```
+
+The config snippet below shows the global config file schema for reference:
 
 ```yaml
 ai:
   provider: openai
-```
-
-Then set the API key:
-
-```bash
-export OPENAI_API_KEY="sk-..."
 ```
 
 ### Full Configuration Reference
@@ -206,13 +215,13 @@ ai:
   ollama:
     base_url: http://localhost:11434
     embedding_model: nomic-embed-text   # 768 dims
-    chat_model: llama3.2
-    timeout: 120                        # seconds
+    chat_model: llama3.1:8b
+    timeout: "120s"                    # request timeout
 
   openai:
     embedding_model: text-embedding-3-small
     chat_model: gpt-4o-mini
-    timeout: 60                         # seconds
+    timeout: "60s"                     # request timeout
 
   cache:
     enabled: true
@@ -220,17 +229,14 @@ ai:
 
   # Advanced - rarely need to change
   scoring:
-    semantic: 0.70          # embedding similarity weight
-    keyword: 0.20           # keyword overlap weight
-    package: 0.10           # package name matching weight
-    min_score_threshold: 0.40
+    semantic_weight: 0.70   # embedding similarity weight
+    keyword_weight: 0.20    # keyword overlap weight
+    package_weight: 0.10    # package name matching weight
 ```
 
 | Environment Variable | Description |
 |----------------------|-------------|
 | `OPENAI_API_KEY` | Required when `provider: openai` |
-| `OLLAMA_HOST` | Override Ollama server URL |
-| `OIC_AI_PROVIDER` | Override provider at runtime |
 
 ---
 
@@ -269,18 +275,13 @@ improves search accuracy:
 ```yaml
 metadata:
   description: "Cloud-ready eLxr image for VM deployment on AWS, Azure, GCP"
-  useCase: cloud-deployment
+  use_cases:
+    - cloud-deployment
   keywords:
     - cloud
     - cloud-init
     - aws
     - azure
-  capabilities:
-    - security
-    - monitoring
-  recommendedFor:
-    - "cloud VM deployment"
-    - "auto-scaling environments"
 
 image:
   name: elxr-cloud-amd64
@@ -300,7 +301,7 @@ package lists.
 | `failed to create AI engine` | Ollama not running | Run `ollama serve` |
 | `connection refused :11434` | Ollama server down | Start Ollama: `ollama serve` |
 | Embeddings fail | Model not pulled | `ollama pull nomic-embed-text` |
-| Chat generation fails | Chat model not pulled | `ollama pull llama3.2` |
+| Chat generation fails | Chat model not pulled | `ollama pull llama3.1:8b` |
 | Poor search results | Stale cache | `./os-image-composer ai --clear-cache` |
 | OpenAI auth error | Missing API key | `export OPENAI_API_KEY="sk-..."` |
 | Slow first run | Building embedding cache | Normal - subsequent runs use cache |
