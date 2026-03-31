@@ -97,6 +97,8 @@ type ImageTemplate struct {
 	downloadPkgsDuration time.Duration
 	convertImageStart    time.Time
 	convertImageDuration time.Duration
+	chrootPkgDlStart     time.Time
+	chrootPkgDlDuration  time.Duration
 	buildTimelineStart   time.Time
 	buildFinishedAt      time.Time
 }
@@ -362,6 +364,26 @@ func (t *ImageTemplate) FinishDownloadImagePkgsTimer() {
 	}
 
 	t.downloadPkgsDuration = time.Since(t.downloadPkgsStart)
+	t.chrootPkgDlStart = time.Now()
+	t.chrootPkgDlDuration = 0
+}
+
+// FinishChrootPkgDownloadTimer stores elapsed chroot package download wait time if tracking was started.
+func (t *ImageTemplate) FinishChrootPkgDownloadTimer() {
+	if t == nil || t.chrootPkgDlStart.IsZero() {
+		return
+	}
+
+	t.chrootPkgDlDuration = time.Since(t.chrootPkgDlStart)
+}
+
+// GetChrootPkgDownloadDuration returns tracked chroot package download wait duration.
+func (t *ImageTemplate) GetChrootPkgDownloadDuration() time.Duration {
+	if t == nil {
+		return 0
+	}
+
+	return t.chrootPkgDlDuration
 }
 
 // GetDownloadImagePkgsDuration returns tracked downloadImagePkgs duration.
@@ -397,6 +419,13 @@ func (t *ImageTemplate) GetDurationDownloadImagePkgsToPureBuild() time.Duration 
 	d := t.pureBuildStart.Sub(downloadEnd)
 	if d < 0 {
 		return 0
+	}
+
+	if t.chrootPkgDlDuration > 0 {
+		d -= t.chrootPkgDlDuration
+		if d < 0 {
+			return 0
+		}
 	}
 
 	return d
