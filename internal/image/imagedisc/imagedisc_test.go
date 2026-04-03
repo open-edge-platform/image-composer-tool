@@ -793,7 +793,6 @@ func TestDiskPartitionsCreate(t *testing.T) {
 			partitionTableType: "gpt",
 			mockCommands: []shell.MockCommand{
 				{Pattern: "fdisk -l /dev/sda", Output: "Disk /dev/sda: 1 GiB", Error: nil},
-				{Pattern: "label: gpt", Output: "", Error: nil},
 				{Pattern: "cat /sys/block/sda/queue/hw_sector_size", Output: "512", Error: nil},
 				{Pattern: "cat /sys/block/sda/queue/physical_block_size", Output: "4096", Error: nil},
 				{Pattern: "sudo sgdisk -n:", Output: "", Error: nil},
@@ -820,7 +819,6 @@ func TestDiskPartitionsCreate(t *testing.T) {
 			partitionTableType: "gpt",
 			mockCommands: []shell.MockCommand{
 				{Pattern: "fdisk -l /dev/sda", Output: "Disk /dev/sda: 1 GiB", Error: nil},
-				{Pattern: "label: gpt", Output: "", Error: nil},
 				{Pattern: "cat /sys/block/sda/queue/hw_sector_size", Output: "512", Error: nil},
 				{Pattern: "cat /sys/block/sda/queue/physical_block_size", Output: "4096", Error: nil},
 				{Pattern: "sudo sgdisk -n:", Output: "", Error: nil},
@@ -845,7 +843,6 @@ func TestDiskPartitionsCreate(t *testing.T) {
 			partitionTableType: "mbr",
 			mockCommands: []shell.MockCommand{
 				{Pattern: "fdisk -l /dev/sda", Output: "Disk /dev/sda: 1 GiB", Error: nil},
-				{Pattern: "fdisk -l /dev/sda", Output: "Disk /dev/sda: 1 GiB", Error: nil},
 				{Pattern: "echo 'label: dos'", Output: "", Error: nil},
 				{Pattern: "cat /sys/block/sda/queue/hw_sector_size", Output: "512", Error: nil},
 				{Pattern: "cat /sys/block/sda/queue/physical_block_size", Output: "4096", Error: nil},
@@ -869,7 +866,6 @@ func TestDiskPartitionsCreate(t *testing.T) {
 			},
 			partitionTableType: "gpt",
 			mockCommands: []shell.MockCommand{
-				{Pattern: "label: gpt", Output: "", Error: nil},
 				{Pattern: "cat /sys/block/sda/queue/hw_sector_size", Output: "512", Error: nil},
 				{Pattern: "cat /sys/block/sda/queue/physical_block_size", Output: "4096", Error: nil},
 				{Pattern: "sudo sgdisk", Output: "", Error: fmt.Errorf("sgdisk failed")},
