@@ -906,8 +906,8 @@ func TestPartitionInfoFields(t *testing.T) {
 		t.Errorf("expected EFI partition ID 'efi', got '%s'", efiPartition.ID)
 	}
 	if *efiPartition.Index != 1 {
-                t.Errorf("expected index 1 for EFI partition, got %d", *efiPartition.Index)
-        }
+		t.Errorf("expected index 1 for EFI partition, got %d", *efiPartition.Index)
+	}
 	if len(efiPartition.Flags) != 2 {
 		t.Errorf("expected 2 flags for EFI partition, got %d", len(efiPartition.Flags))
 	}
@@ -930,8 +930,8 @@ func TestPartitionInfoFields(t *testing.T) {
 		t.Errorf("expected swap filesystem type, got '%s'", swapPartition.FsType)
 	}
 	if *swapPartition.Index != 2 {
-                t.Errorf("expected index 2 for swap, got '%d'", *swapPartition.Index)
-        }
+		t.Errorf("expected index 2 for swap, got '%d'", *swapPartition.Index)
+	}
 	if swapPartition.MountPoint != "" {
 		t.Errorf("expected empty mount point for swap, got '%s'", swapPartition.MountPoint)
 	}
@@ -947,9 +947,9 @@ func TestPartitionInfoFields(t *testing.T) {
 	if rootPartition.MountPoint != "/" {
 		t.Errorf("expected root mount point '/', got '%s'", rootPartition.MountPoint)
 	}
-        if *rootPartition.Index != 3 {
-                t.Errorf("expected index 3 for root, got '%d'", *rootPartition.Index)
-        }
+	if *rootPartition.Index != 3 {
+		t.Errorf("expected index 3 for root, got '%d'", *rootPartition.Index)
+	}
 	if rootPartition.Start != "2GiB" {
 		t.Errorf("expected root start '2GiB', got '%s'", rootPartition.Start)
 	}

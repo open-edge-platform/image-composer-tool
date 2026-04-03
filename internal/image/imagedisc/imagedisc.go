@@ -548,7 +548,7 @@ func diskPartitionCreate(
 		}
 
 		// Set partition type
-		if partitionTableType == "mbr"{
+		if partitionTableType == "mbr" {
 			// For MBR, use hex type code
 			var typeCode string
 			switch {
@@ -737,7 +737,7 @@ func DiskPartitionsCreate(diskPath string, partitionsList []config.PartitionInfo
 		var partitionNum int
 		for i, partitionInfo := range partitionsList {
 			if partitionInfo.Index != nil {
-				partitionNum  = *partitionInfo.Index
+				partitionNum = *partitionInfo.Index
 			} else {
 				assignedIndex := i + 1
 				for {
