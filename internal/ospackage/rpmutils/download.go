@@ -63,6 +63,7 @@ func UserPackages() ([]ospackage.PackageInfo, error) {
 		codename      string
 		url           string
 		pkey          string
+		pkeys         []string
 		allowPackages []string
 	}, len(UserRepo))
 	for i, repo := range UserRepo {
@@ -71,12 +72,14 @@ func UserPackages() ([]ospackage.PackageInfo, error) {
 			codename      string
 			url           string
 			pkey          string
+			pkeys         []string
 			allowPackages []string
 		}{
 			id:            fmt.Sprintf("rpmcustrepo%d", i+1),
 			codename:      repo.Codename,
 			url:           repo.URL,
 			pkey:          repo.PKey,
+			pkeys:         repo.PKeys,
 			allowPackages: repo.AllowPackages,
 		}
 	}
@@ -91,8 +94,13 @@ func UserPackages() ([]ospackage.PackageInfo, error) {
 		id := repoItem.id
 		codename := repoItem.codename
 		baseURL := repoItem.url
-		pkey := repoItem.pkey
 		allowPackages := repoItem.allowPackages
+
+		allKeys := repoItem.pkeys
+		if repoItem.pkey != "" {
+			allKeys = append([]string{repoItem.pkey}, allKeys...)
+		}
+		gpgKey := strings.Join(allKeys, ",")
 
 		repo := RepoConfigWithPackages{
 			RepoConfig: RepoConfig{
@@ -100,7 +108,7 @@ func UserPackages() ([]ospackage.PackageInfo, error) {
 				GPGCheck:     true,
 				RepoGPGCheck: true,
 				Enabled:      true,
-				GPGKey:       pkey,
+				GPGKey:       gpgKey,
 				URL:          baseURL,
 				Section:      fmt.Sprintf("[%s]", codename),
 			},
