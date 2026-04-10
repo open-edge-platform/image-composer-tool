@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/open-edge-platform/os-image-composer/internal/config"
 	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
 )
 
@@ -396,4 +397,105 @@ func TestCreateTemporaryRepositoryUniqueDirectories(t *testing.T) {
 	// Test that the repository paths would be different (from the temp directory structure)
 	// Even though the function fails, the initial path creation should use unique names
 	t.Log("This test verifies unique temporary directory naming with mocked commands")
+}
+
+func TestCreateTemporaryRepositoryCopyFileFails(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	tempDir, err := os.MkdirTemp("", "debtest_copy_")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create a fake DEB file so the source-check passes
+	debPath := filepath.Join(tempDir, "package_1.0_amd64.deb")
+	if err := os.WriteFile(debPath, []byte("fake deb content"), 0644); err != nil {
+		t.Fatalf("Failed to create fake DEB file: %v", err)
+	}
+
+	// Mock cp to fail
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: "cp", Output: "", Error: fmt.Errorf("permission denied")},
+	})
+
+	_, _, _, err = CreateTemporaryRepository(tempDir, "testrepo", "amd64")
+	if err == nil {
+		t.Fatal("Expected error when cp fails")
+	}
+	if !strings.Contains(err.Error(), "failed to copy DEB files") {
+		t.Errorf("Expected 'failed to copy DEB files' error, got: %v", err)
+	}
+}
+
+func TestDebLocalUserPackagesEmpty(t *testing.T) {
+	origUserRepo := UserRepo
+	origArch := Architecture
+	defer func() {
+		UserRepo = origUserRepo
+		Architecture = origArch
+	}()
+
+	UserRepo = []config.PackageRepository{}
+	Architecture = "amd64"
+
+	pkgs, cleanup, err := LocalUserPackages()
+	if err != nil {
+		t.Fatalf("expected no error for empty repo list, got: %v", err)
+	}
+	if len(pkgs) != 0 {
+		t.Errorf("expected empty package list, got %d packages", len(pkgs))
+	}
+	if cleanup != nil {
+		cleanup()
+	}
+}
+
+func TestDebLocalUserPackagesSkipsPlaceholders(t *testing.T) {
+	origUserRepo := UserRepo
+	origArch := Architecture
+	defer func() {
+		UserRepo = origUserRepo
+		Architecture = origArch
+	}()
+
+	UserRepo = []config.PackageRepository{
+		{Path: "<PATH>"},
+		{Path: ""},
+	}
+	Architecture = "amd64"
+
+	pkgs, cleanup, err := LocalUserPackages()
+	if err != nil {
+		t.Fatalf("expected no error when all paths are placeholders, got: %v", err)
+	}
+	if len(pkgs) != 0 {
+		t.Errorf("expected empty package list when all paths skip, got %d", len(pkgs))
+	}
+	if cleanup != nil {
+		cleanup()
+	}
+}
+
+func TestDebLocalUserPackagesFailsForNonExistentDir(t *testing.T) {
+	origUserRepo := UserRepo
+	origArch := Architecture
+	defer func() {
+		UserRepo = origUserRepo
+		Architecture = origArch
+	}()
+
+	UserRepo = []config.PackageRepository{
+		{Path: "/totally/nonexistent/deb/path"},
+	}
+	Architecture = "amd64"
+
+	_, _, err := LocalUserPackages()
+	if err == nil {
+		t.Fatal("expected error for non-existent repo path")
+	}
+	if !strings.Contains(err.Error(), "failed to create temporary DEB repository") {
+		t.Errorf("expected 'failed to create temporary DEB repository' in error, got: %v", err)
+	}
 }

@@ -841,7 +841,7 @@ func TestRCDInstallHostDependencyCheckError(t *testing.T) {
 	defer func() { shell.Default = originalExecutor }()
 
 	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
-		{Pattern: "command -v rpm", Output: "/usr/bin/rpm", Error: fmt.Errorf("command check failed")},
+		{Pattern: "command -v .*", Output: "/usr/bin/fake", Error: fmt.Errorf("command check failed")},
 	})
 
 	rcd := &RCD{}
@@ -849,7 +849,10 @@ func TestRCDInstallHostDependencyCheckError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected command check error")
 	}
-	if !strings.Contains(err.Error(), "failed to check command rpm existence") {
+	if !strings.Contains(err.Error(), "failed to check command") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "command check failed") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -859,9 +862,8 @@ func TestRCDInstallHostDependencyInstallError(t *testing.T) {
 	defer func() { shell.Default = originalExecutor }()
 
 	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
-		{Pattern: "command -v rpm", Output: "", Error: fmt.Errorf("missing")},
-		{Pattern: "command -v .*", Output: "/usr/bin/fake", Error: nil},
-		{Pattern: "sudo apt install -y rpm", Output: "", Error: fmt.Errorf("install failed")},
+		{Pattern: "command -v .*", Output: "", Error: fmt.Errorf("missing")},
+		{Pattern: "sudo apt install -y .*", Output: "", Error: fmt.Errorf("install failed")},
 	})
 
 	rcd := &RCD{}
@@ -869,7 +871,10 @@ func TestRCDInstallHostDependencyInstallError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected install error")
 	}
-	if !strings.Contains(err.Error(), "failed to install host dependency rpm") {
+	if !strings.Contains(err.Error(), "failed to install host dependency") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "install failed") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

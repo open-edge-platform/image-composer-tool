@@ -256,6 +256,15 @@ func (m *cleanupErrorChrootEnv) CleanupChrootEnv(targetOs, targetDist, targetArc
 	return m.cleanupErr
 }
 
+type updateErrorChrootEnv struct {
+	mockChrootEnv
+	updateErr error
+}
+
+func (m *updateErrorChrootEnv) UpdateSystemPkgs(template *config.ImageTemplate) error {
+	return m.updateErr
+}
+
 func TestBuildUserRepoList(t *testing.T) {
 	userRepos := []config.PackageRepository{
 		{
@@ -357,7 +366,7 @@ func TestUbuntuInstallHostDependencyCommandCheckError(t *testing.T) {
 	defer func() { shell.Default = originalExecutor }()
 
 	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
-		{Pattern: "command -v mmdebstrap", Output: "/usr/bin/mmdebstrap", Error: fmt.Errorf("probe failed")},
+		{Pattern: "command -v .*", Output: "/usr/bin/fake", Error: fmt.Errorf("probe failed")},
 	})
 
 	ubuntu := &ubuntu{}
@@ -365,7 +374,31 @@ func TestUbuntuInstallHostDependencyCommandCheckError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected command check error, got nil")
 	}
-	if !strings.Contains(err.Error(), "failed to check command mmdebstrap existence") {
+	if !strings.Contains(err.Error(), "failed to check command") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "probe failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestUbuntuPostProcessReturnsNilOnCleanupSuccess(t *testing.T) {
+	ubuntu := &ubuntu{chrootEnv: &mockChrootEnv{}}
+
+	err := ubuntu.PostProcess(createTestImageTemplate(), fmt.Errorf("upstream build failure"))
+	if err != nil {
+		t.Fatalf("expected nil when cleanup succeeds, got %v", err)
+	}
+}
+
+func TestUbuntuDownloadImagePkgsUpdateSystemErrorDeterministic(t *testing.T) {
+	ubuntu := &ubuntu{chrootEnv: &updateErrorChrootEnv{updateErr: fmt.Errorf("update failed")}}
+
+	err := ubuntu.downloadImagePkgs(createTestImageTemplate())
+	if err == nil {
+		t.Fatal("expected update system packages error")
+	}
+	if !strings.Contains(err.Error(), "failed to update system packages") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -375,9 +408,8 @@ func TestUbuntuInstallHostDependencyInstallFailure(t *testing.T) {
 	defer func() { shell.Default = originalExecutor }()
 
 	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
-		{Pattern: "command -v mmdebstrap", Output: "", Error: fmt.Errorf("missing")},
-		{Pattern: "command -v .*", Output: "/usr/bin/fake", Error: nil},
-		{Pattern: "sudo apt install -y mmdebstrap", Output: "", Error: fmt.Errorf("install failed")},
+		{Pattern: "command -v .*", Output: "", Error: fmt.Errorf("missing")},
+		{Pattern: "sudo apt install -y .*", Output: "", Error: fmt.Errorf("install failed")},
 	})
 
 	ubuntu := &ubuntu{}
@@ -385,7 +417,10 @@ func TestUbuntuInstallHostDependencyInstallFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected install error, got nil")
 	}
-	if !strings.Contains(err.Error(), "failed to install host dependency mmdebstrap") {
+	if !strings.Contains(err.Error(), "failed to install host dependency") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "install failed") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

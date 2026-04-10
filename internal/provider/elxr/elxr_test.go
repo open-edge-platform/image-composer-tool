@@ -1122,7 +1122,7 @@ func TestElxrInstallHostDependencyCheckError(t *testing.T) {
 	defer func() { shell.Default = originalExecutor }()
 
 	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
-		{Pattern: "command -v mmdebstrap", Output: "/usr/bin/mmdebstrap", Error: fmt.Errorf("probe failed")},
+		{Pattern: "command -v .*", Output: "/usr/bin/fake", Error: fmt.Errorf("probe failed")},
 	})
 
 	elxr := &eLxr{}
@@ -1130,7 +1130,10 @@ func TestElxrInstallHostDependencyCheckError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected command check error")
 	}
-	if !strings.Contains(err.Error(), "failed to check command mmdebstrap existence") {
+	if !strings.Contains(err.Error(), "failed to check command") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "probe failed") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -1140,9 +1143,8 @@ func TestElxrInstallHostDependencyInstallError(t *testing.T) {
 	defer func() { shell.Default = originalExecutor }()
 
 	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
-		{Pattern: "command -v mmdebstrap", Output: "", Error: fmt.Errorf("missing")},
-		{Pattern: "command -v .*", Output: "/usr/bin/fake", Error: nil},
-		{Pattern: "sudo apt install -y mmdebstrap", Output: "", Error: fmt.Errorf("install failed")},
+		{Pattern: "command -v .*", Output: "", Error: fmt.Errorf("missing")},
+		{Pattern: "sudo apt install -y .*", Output: "", Error: fmt.Errorf("install failed")},
 	})
 
 	elxr := &eLxr{}
@@ -1150,7 +1152,10 @@ func TestElxrInstallHostDependencyInstallError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected install error")
 	}
-	if !strings.Contains(err.Error(), "failed to install host dependency mmdebstrap") {
+	if !strings.Contains(err.Error(), "failed to install host dependency") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "install failed") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
