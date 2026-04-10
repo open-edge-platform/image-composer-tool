@@ -3206,6 +3206,77 @@ systemConfig:
 	}
 }
 
+func TestPackageRepositoryYAMLParsingLocalPath(t *testing.T) {
+	yamlContent := `image:
+  name: test-local-repo-parsing
+  version: "1.0.0"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+
+packageRepositories:
+  - codename: "localdeb"
+    path: "/data/os-image-composer/localdeb"
+    pkey: "[trusted=yes]"
+    component: "main"
+
+systemConfig:
+  name: test
+  packages:
+    - test-package
+  kernel:
+    version: "6.12"
+    cmdline: "quiet"
+`
+
+	tmpFile, err := os.CreateTemp("", "test-local-repo-*.yml")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	if err := tmpFile.Chmod(0600); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpFile.Name())
+		return
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString(yamlContent); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	template, err := LoadTemplate(tmpFile.Name(), false)
+	if err != nil {
+		t.Fatalf("failed to load YAML template with local package repository: %v", err)
+	}
+
+	repos := template.GetPackageRepositories()
+	if len(repos) != 1 {
+		t.Fatalf("expected 1 parsed repository, got %d", len(repos))
+	}
+
+	repo := template.GetRepositoryByCodename("localdeb")
+	if repo == nil {
+		t.Fatalf("expected to find localdeb repository")
+	}
+
+	if repo.Path != "/data/os-image-composer/localdeb" {
+		t.Errorf("expected repo path '/data/os-image-composer/localdeb', got '%s'", repo.Path)
+	}
+	if repo.PKey != "[trusted=yes]" {
+		t.Errorf("expected repo pkey '[trusted=yes]', got '%s'", repo.PKey)
+	}
+	if repo.Component != "main" {
+		t.Errorf("expected repo component 'main', got '%s'", repo.Component)
+	}
+	if repo.URL != "" {
+		t.Errorf("expected repo URL to be empty for local path repository, got '%s'", repo.URL)
+	}
+}
+
 func TestPackageRepositoriesWithDuplicateCodenames(t *testing.T) {
 	repos := []PackageRepository{
 		{Codename: "duplicate", URL: "https://first.com", PKey: "https://first.com/key.pub"},

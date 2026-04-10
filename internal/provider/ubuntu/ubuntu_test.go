@@ -2194,3 +2194,30 @@ func TestBuildUserRepoListFieldMapping(t *testing.T) {
 		t.Errorf("ID: expected %q, got %q", expectedID, r.ID)
 	}
 }
+
+func TestBuildUserRepoListSkipsPathOnlyRepos(t *testing.T) {
+	input := []config.PackageRepository{
+		{
+			Codename: "localdeb",
+			Path:     "/data/os-image-composer/localdeb",
+			PKey:     "[trusted=yes]",
+		},
+		{
+			URL:      "https://example.com/repo",
+			Codename: "noble",
+			PKey:     "https://example.com/key.gpg",
+		},
+	}
+
+	result := buildUserRepoList(input)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 URL-based repo, got %d", len(result))
+	}
+
+	if result[0].URL != "https://example.com/repo" {
+		t.Errorf("expected URL repo to be retained, got %q", result[0].URL)
+	}
+	if result[0].Codename != "noble" {
+		t.Errorf("expected codename %q, got %q", "noble", result[0].Codename)
+	}
+}
