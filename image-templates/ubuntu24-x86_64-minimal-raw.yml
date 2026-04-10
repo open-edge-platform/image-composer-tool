@@ -89,16 +89,11 @@ systemConfig:
     - systemd-resolved
     - systemd-timesyncd
     - dkms
-
-  configurations:
-    # ── Generic DKMS modules first-boot installation ─────────────────
-    # DKMS packages require a live kernel for module builds and cannot
-    # be compiled inside chroot. This creates a systemd oneshot service
-    # that installs all DKMS modules on first boot, then disables itself.
-    - cmd: "printf '#!/bin/bash\\nset -euo pipefail\\nexport DEBIAN_FRONTEND=noninteractive\\n\\n# List of DKMS packages to install\\nDKMS_PACKAGES=(\\n  \"v4l2loopback-dkms\"\\n  # Add more DKMS packages here as needed:\\n  # \"nvidia-dkms-525\"\\n  # \"virtualbox-dkms\"\\n  # \"broadcom-sta-dkms\"\\n)\\n\\necho \"Installing DKMS packages...\"\\napt-get update || { echo \"Failed to update package list\"; exit 1; }\\n\\nfor package in \"${DKMS_PACKAGES[@]}\"; do\\n  if [[ ! \"$package\" =~ ^[[:space:]]*# ]] && [[ -n \"$package\" ]]; then\\n    echo \"Installing $package...\"\\n    if apt-get install -y \"$package\"; then\\n      echo \"✓ Successfully installed $package\"\\n    else\\n      echo \"✗ Failed to install $package\"\\n    fi\\n  fi\\ndone\\n\\necho \"DKMS installation complete.\"\\necho \"Cleaning up installation service...\"\\nsystemctl disable install-dkms-modules.service\\nrm -f /etc/systemd/system/install-dkms-modules.service\\nrm -f /usr/local/bin/install-dkms-modules.sh\\necho \"Cleanup complete.\"\\n' > /usr/local/bin/install-dkms-modules.sh"
-    - cmd: "chmod 755 /usr/local/bin/install-dkms-modules.sh"
-    - cmd: "printf '[Unit]\\nDescription=Install DKMS modules (first boot)\\nAfter=network-online.target\\nWants=network-online.target\\nConditionPathExists=/usr/local/bin/install-dkms-modules.sh\\n\\n[Service]\\nType=oneshot\\nExecStart=/usr/local/bin/install-dkms-modules.sh\\nEnvironment=DEBIAN_FRONTEND=noninteractive\\nTimeoutStartSec=0\\n\\n[Install]\\nWantedBy=multi-user.target\\n' > /etc/systemd/system/install-dkms-modules.service"
-    - cmd: "systemctl enable install-dkms-modules.service"
+    # Add any packages here - DKMS packages will be automatically handled by the build system
+    - v4l2loopback-dkms
+    # - nvidia-dkms-525
+    # - virtualbox-dkms
+    # - broadcom-sta-dkms
 
   kernel:
     version: "6.17"

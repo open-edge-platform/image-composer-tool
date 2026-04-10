@@ -1,0 +1,14 @@
+[Unit]
+Description=Install DKMS modules (first boot)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/usr/local/bin/install-dkms-modules.sh
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/install-dkms-modules.sh
+Environment=DEBIAN_FRONTEND=noninteractive
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

@@ -2,6 +2,7 @@ package imageos
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -35,13 +36,44 @@ type ImageOsInterface interface {
 }
 
 type ImageOs struct {
-	installRoot string
-	template    *config.ImageTemplate
-	chrootEnv   chroot.ChrootEnvInterface
-	imageBoot   imageboot.ImageBootInterface
+	installRoot  string
+	template     *config.ImageTemplate
+	chrootEnv    chroot.ChrootEnvInterface
+	imageBoot    imageboot.ImageBootInterface
+	dkmsPackages []string // Store detected DKMS packages for post-installation
 }
 
 var log = logger.Logger()
+
+// DKMS package detection and handling functions
+// Note: DKMS only applies to Debian-based systems (Ubuntu, Debian), not RPM-based systems
+// RPM systems use different kernel module management (kmod packages, etc.)
+// During image build, we can only detect DKMS packages by name patterns
+// since the packages haven't been installed yet and metadata isn't available
+func isDkmsPackage(packageName string) bool {
+	// Primary check: standard -dkms suffix (most common pattern)
+	if strings.HasSuffix(packageName, "-dkms") {
+		return true
+	}
+
+	// Secondary check: known DKMS package patterns
+	dkmsPatterns := []string{
+		"-dkms-", // packages like nvidia-dkms-525
+		"dkms-",  // packages starting with dkms- prefix
+	}
+
+	for _, pattern := range dkmsPatterns {
+		if strings.Contains(packageName, pattern) {
+			return true
+		}
+	}
+
+	// No manual exception list - this would defeat the purpose of automatic detection
+	// If a DKMS package doesn't follow naming conventions, it will be treated as regular
+	// and may fail during chroot installation, which will provide feedback for pattern updates
+
+	return false
+}
 
 func NewImageOs(chrootEnv chroot.ChrootEnvInterface, template *config.ImageTemplate) (*ImageOs, error) {
 	chrootImageBuildDir := chrootEnv.GetChrootImageBuildDir()
@@ -415,6 +447,11 @@ func getRpmPkgInstallList(template *config.ImageTemplate) []string {
 }
 
 func getDebPkgInstallList(template *config.ImageTemplate) []string {
+	regular, _ := getDebPkgInstallListWithDkmsFilter(template)
+	return regular
+}
+
+func getDebPkgInstallListWithDkmsFilter(template *config.ImageTemplate) (regular []string, dkms []string) {
 	var head, middle, tail []string
 	var imagePkgList []string
 	// Exclude the template.EssentialPkgList as it is already installed by mmdebstrap
@@ -422,7 +459,20 @@ func getDebPkgInstallList(template *config.ImageTemplate) []string {
 	imagePkgList = append(imagePkgList, template.SystemConfig.Packages...)
 	imagePkgList = append(imagePkgList, template.BootloaderPkgList...)
 
+	// Separate DKMS packages from regular packages based on name patterns
+	// Note: Cannot validate package metadata during build since packages aren't installed yet
+	var regularPkgList []string
 	for _, pkg := range imagePkgList {
+		if isDkmsPackage(pkg) {
+			dkms = append(dkms, pkg)
+			log.Infof("Auto-detected DKMS package (pattern-based): %s", pkg)
+		} else {
+			regularPkgList = append(regularPkgList, pkg)
+		}
+	}
+
+	// Sort regular packages into head, middle, tail for proper installation order
+	for _, pkg := range regularPkgList {
 		if strings.HasPrefix(pkg, "base-files") {
 			head = append(head, pkg)
 		} else if strings.HasPrefix(pkg, "dracut") {
@@ -433,7 +483,9 @@ func getDebPkgInstallList(template *config.ImageTemplate) []string {
 			middle = append(middle, pkg)
 		}
 	}
-	return append(append(head, middle...), tail...)
+
+	regular = append(append(head, middle...), tail...)
+	return regular, dkms
 }
 
 func (imageOs *ImageOs) initImageRpmDb(installRoot string, template *config.ImageTemplate) error {
@@ -541,6 +593,109 @@ func preImageOsInstall(installRoot string, template *config.ImageTemplate) error
 	return nil
 }
 
+// setupDkmsPostInstallation sets up DKMS packages for post-installation during first boot
+func (imageOs *ImageOs) setupDkmsPostInstallation(installRoot string, dkmsPackages []string) error {
+	if len(dkmsPackages) == 0 {
+		log.Infof("No DKMS packages to set up")
+		return nil
+	}
+
+	log.Infof("Setting up %d DKMS packages for post-boot installation: %v", len(dkmsPackages), dkmsPackages)
+
+	// Get current working directory to construct relative paths
+	wd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get working directory: %w", err)
+	}
+
+	// Construct config path based on template target information
+	configBasePath := filepath.Join(wd, "config", "osv", imageOs.template.Target.OS, imageOs.template.Target.Dist, "imageconfigs", "additionalfiles")
+	log.Infof("Using DKMS config path: %s (OS: %s, Dist: %s)", configBasePath, imageOs.template.Target.OS, imageOs.template.Target.Dist)
+
+	// Create the directory structure for additional files
+	usrLocalBinDir := filepath.Join(installRoot, "usr", "local", "bin")
+	if err := os.MkdirAll(usrLocalBinDir, 0755); err != nil {
+		return fmt.Errorf("failed to create /usr/local/bin directory: %w", err)
+	}
+
+	// Write DKMS packages list to a file
+	dkmsListPath := filepath.Join(installRoot, "etc", "dkms-packages.list")
+	dkmsListContent := strings.Join(dkmsPackages, "\n") + "\n"
+	if err := os.WriteFile(dkmsListPath, []byte(dkmsListContent), 0644); err != nil {
+		return fmt.Errorf("failed to write DKMS packages list: %w", err)
+	}
+
+	// Copy the DKMS installation script to /usr/local/bin (matches systemd service expectation)
+	scriptSrcPath := filepath.Join(configBasePath, "install-dkms-modules.sh")
+	scriptDstPath := filepath.Join(usrLocalBinDir, "install-dkms-modules.sh")
+	if err := copyFile(scriptSrcPath, scriptDstPath); err != nil {
+		return fmt.Errorf("failed to copy DKMS installation script from %s: %w", scriptSrcPath, err)
+	}
+	if err := os.Chmod(scriptDstPath, 0755); err != nil {
+		return fmt.Errorf("failed to set script permissions: %w", err)
+	}
+
+	// Copy the systemd service file
+	serviceSrcPath := filepath.Join(configBasePath, "install-dkms-modules.service")
+	serviceDstPath := filepath.Join(installRoot, "etc", "systemd", "system", "install-dkms-modules.service")
+	if err := copyFile(serviceSrcPath, serviceDstPath); err != nil {
+		return fmt.Errorf("failed to copy DKMS service file from %s: %w", serviceSrcPath, err)
+	}
+
+	// Enable the systemd service
+	enableCmd := "systemctl enable install-dkms-modules.service"
+	if output, err := shell.ExecCmdWithStream(enableCmd, false, installRoot, nil); err != nil {
+		// Log the error but don't fail - the service can be enabled manually
+		log.Warnf("Failed to enable DKMS service (will try manual symlink): %v, output: %s", err, output)
+
+		// Create the symlink manually
+		serviceSymlinkDir := filepath.Join(installRoot, "etc", "systemd", "system", "multi-user.target.wants")
+		if err := os.MkdirAll(serviceSymlinkDir, 0755); err != nil {
+			return fmt.Errorf("failed to create systemd wants directory: %w", err)
+		}
+
+		symlinkPath := filepath.Join(serviceSymlinkDir, "install-dkms-modules.service")
+		targetPath := "/etc/systemd/system/install-dkms-modules.service"
+		if err := os.Symlink(targetPath, symlinkPath); err != nil {
+			return fmt.Errorf("failed to create systemd service symlink: %w", err)
+		}
+		log.Infof("Created systemd service symlink manually")
+	} else {
+		log.Infof("Successfully enabled DKMS installation service")
+	}
+
+	log.Infof("DKMS post-installation setup completed for packages: %v", dkmsPackages)
+	return nil
+}
+
+// copyFile copies a file from src to dst
+func copyFile(src, dst string) error {
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("failed to open source file %s: %w", src, err)
+	}
+	defer srcFile.Close()
+
+	// Create destination directory if it doesn't exist
+	dstDir := filepath.Dir(dst)
+	if err := os.MkdirAll(dstDir, 0755); err != nil {
+		return fmt.Errorf("failed to create destination directory %s: %w", dstDir, err)
+	}
+
+	dstFile, err := os.Create(dst)
+	if err != nil {
+		return fmt.Errorf("failed to create destination file %s: %w", dst, err)
+	}
+	defer dstFile.Close()
+
+	_, err = io.Copy(dstFile, srcFile)
+	if err != nil {
+		return fmt.Errorf("failed to copy file content: %w", err)
+	}
+
+	return nil
+}
+
 func (imageOs *ImageOs) installImagePkgs(installRoot string, template *config.ImageTemplate) error {
 	pkgType := imageOs.chrootEnv.GetTargetOsPkgType()
 
@@ -559,7 +714,27 @@ func (imageOs *ImageOs) installImagePkgs(installRoot string, template *config.Im
 			}
 		}
 	} else if pkgType == "deb" {
-		imagePkgOrderedList := getDebPkgInstallList(template)
+		// Separate regular packages from DKMS packages (DKMS is Debian/Ubuntu specific)
+		regularPackages, dkmsPackages := getDebPkgInstallListWithDkmsFilter(template)
+
+		// Store DKMS packages in the ImageOs struct for later use
+		imageOs.dkmsPackages = dkmsPackages
+
+		imagePkgOrderedList := regularPackages
+		log.Infof("Installing %d regular packages, %d DKMS packages will be installed post-boot",
+			len(regularPackages), len(dkmsPackages))
+
+		if len(dkmsPackages) > 0 {
+			log.Infof("DKMS packages detected using patterns: -dkms suffix, -dkms- infix, dkms- prefix")
+			log.Infof("DKMS packages: %v", dkmsPackages)
+		}
+
+		// Set up DKMS packages for post-installation if any exist
+		if len(dkmsPackages) > 0 {
+			if err := imageOs.setupDkmsPostInstallation(installRoot, dkmsPackages); err != nil {
+				return fmt.Errorf("failed to set up DKMS post-installation: %w", err)
+			}
+		}
 		// Prepare local cache repository
 		if err := imageOs.initDebLocalRepoWithinInstallRoot(installRoot); err != nil {
 			return fmt.Errorf("failed to initialize local repository within install root: %w", err)
@@ -611,6 +786,18 @@ func (imageOs *ImageOs) installImagePkgs(installRoot string, template *config.Im
 				}
 			} else {
 				if err := imageOs.chrootEnv.AptInstallPackage(pkg, installRoot, repoSrcList); err != nil {
+					// Check if this might be a DKMS package that wasn't detected by our patterns
+					mightBeDkms := strings.Contains(strings.ToLower(pkg), "dkms") ||
+						strings.Contains(strings.ToLower(pkg), "driver") ||
+						strings.Contains(strings.ToLower(pkg), "module") ||
+						strings.Contains(strings.ToLower(pkg), "kernel")
+
+					if mightBeDkms && !isDkmsPackage(pkg) {
+						log.Warnf("Package '%s' failed to install in chroot and appears to be kernel-related. "+
+							"If this is a DKMS package, it might need to be added to DKMS detection patterns.", pkg)
+						log.Infof("Consider updating DKMS detection patterns or reporting this package for pattern enhancement")
+					}
+
 					return fmt.Errorf("failed to install package %s: %w", pkg, err)
 				}
 
