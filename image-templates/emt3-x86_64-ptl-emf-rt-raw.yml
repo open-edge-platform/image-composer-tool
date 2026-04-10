@@ -30,7 +30,9 @@ target:
 packageRepositories:
   - codename: "emtNext"
     url: "https://files-rs.edgeorchestration.intel.com/files-edge-orch/microvisor/rpms/next/base"
-    pkey: "https://raw.githubusercontent.com/open-edge-platform/edge-microvisor-toolkit/refs/heads/3.0/SPECS/edge-repos/INTEL-RPM-GPG-KEY"
+    pkeys:
+      - "https://raw.githubusercontent.com/open-edge-platform/edge-microvisor-toolkit/refs/heads/3.0/SPECS/edge-repos/INTEL-RPM-GPG-KEY"
+      - "https://raw.githubusercontent.com/cheeyanglee/edge-microvisor-toolkit/e2e05b402c056bbf4ba1a429490b3c37f4d659d7/SPECS/edge-repos/INTEL-RPM-GPG-KEY-26"
     # list of allowed packages from this repository
     allowPackages:
       - kernel-rt-6.17.11

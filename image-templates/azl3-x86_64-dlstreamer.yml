@@ -38,7 +38,9 @@ packageRepositories:
 
   - codename: "edge-base"
     url: "https://files-rs.edgeorchestration.intel.com/files-edge-orch/microvisor/rpms/3.0/base"
-    pkey: "https://raw.githubusercontent.com/open-edge-platform/edge-microvisor-toolkit/refs/heads/3.0/SPECS/edge-repos/INTEL-RPM-GPG-KEY" # Uncomment and replace in real config
+    pkeys:
+      - "https://raw.githubusercontent.com/open-edge-platform/edge-microvisor-toolkit/refs/heads/3.0/SPECS/edge-repos/INTEL-RPM-GPG-KEY"
+      - "https://raw.githubusercontent.com/cheeyanglee/edge-microvisor-toolkit/e2e05b402c056bbf4ba1a429490b3c37f4d659d7/SPECS/edge-repos/INTEL-RPM-GPG-KEY-26"
 
   - codename: "OpenVINO"
     url: "https://yum.repos.intel.com/openvino/"
@@ -95,6 +97,7 @@ systemConfig:
     - ffmpeg
     - gstreamer
     - opencv
+    - util-linux-devel-2.40.2-3.emt3
     - intel-dlstreamer-2025.2.0
     - openvino-2025.3.0
     - linux-firmware-i915
