@@ -481,6 +481,8 @@ func TestAllSupportedProviders(t *testing.T) {
 		{"azure-linux", "azl3", "AzureLinux3", "3"},
 		{"emt", "emt3", "EMT3.0", "3.0"},
 		{"elxr", "elxr12", "eLxr12", "12"},
+		{"ubuntu", "ubuntu24", "Ubuntu24", "24.04"},
+		{"ubuntu", "ubuntu26", "Ubuntu26", "26.04"},
 	}
 
 	for _, tc := range testCases {
