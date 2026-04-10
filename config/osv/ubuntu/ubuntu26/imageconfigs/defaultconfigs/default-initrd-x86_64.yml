@@ -46,8 +46,8 @@ systemConfig:
   additionalFiles:
     - local: ../additionalfiles/dhcp.network
       final: /etc/systemd/network/dhcp.network
-    - local: ../additionalfiles/ubuntu-plucky.list
-      final: /etc/apt/sources.list.d/ubuntu-plucky.list
+    - local: ../additionalfiles/ubuntu-resolute.list
+      final: /etc/apt/sources.list.d/ubuntu-resolute.list
     - local: ../additionalfiles/getty@.service
       final: /usr/lib/systemd/system/getty@.service
     - local: ../additionalfiles/serial-getty@.service

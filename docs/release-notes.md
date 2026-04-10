@@ -33,4 +33,4 @@
 - Face Detection and Recognition application output video is not
   displayed locally.
 - Support for building Ubuntu OS images is being considered.
-- Support for Ubuntu 26.04 (Plucky Puffin) image composition.
+- Support for Ubuntu 26.04 LTS (Resolute Rattlesnake) image composition.
