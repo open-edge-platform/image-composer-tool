@@ -3682,6 +3682,7 @@ func TestUnifiedRepoConfig(t *testing.T) {
 		arch         string
 		expectedType string
 		expectedURL  string
+		expectedGPG  string
 	}{
 		{
 			name: "RPM Repository (Azure Linux)",
@@ -3696,6 +3697,7 @@ func TestUnifiedRepoConfig(t *testing.T) {
 			arch:         "x86_64",
 			expectedType: "rpm",
 			expectedURL:  "https://packages.microsoft.com/azurelinux/3.0/prod/base/x86_64",
+			expectedGPG:  "https://packages.microsoft.com/azurelinux/3.0/prod/base/x86_64/repodata/repomd.xml.key",
 		},
 		{
 			name: "DEB Repository (eLxr)",
@@ -3726,6 +3728,21 @@ func TestUnifiedRepoConfig(t *testing.T) {
 			arch:         "x86_64",
 			expectedType: "rpm",
 			expectedURL:  "https://files-rs.edgeorchestration.intel.com/files-edge-orch/microvisor/rpm/3.0",
+		},
+		{
+			name: "RPM Repository with multiple GPG keys",
+			repoConfig: ProviderRepoConfig{
+				Name:      "Edge Microvisor Toolkit 3.0",
+				Type:      "rpm",
+				BaseURL:   "https://files-rs.edgeorchestration.intel.com/files-edge-orch/microvisor/rpm/3.0",
+				GPGKeys:   []string{"https://example.com/key-old.asc", "https://example.com/key-new.asc"},
+				Component: "emt3.0-base",
+				Enabled:   true,
+			},
+			arch:         "x86_64",
+			expectedType: "rpm",
+			expectedURL:  "https://files-rs.edgeorchestration.intel.com/files-edge-orch/microvisor/rpm/3.0",
+			expectedGPG:  "https://example.com/key-old.asc,https://example.com/key-new.asc",
 		},
 	}
 
@@ -3766,7 +3783,11 @@ func TestUnifiedRepoConfig(t *testing.T) {
 				}
 
 				// Verify arch substitution in GPG key if applicable
-				if tt.repoConfig.GPGKey != "" && gpgKey != "" {
+				if tt.expectedGPG != "" {
+					if gpgKey != tt.expectedGPG {
+						t.Errorf("Expected GPG key %s, got %s", tt.expectedGPG, gpgKey)
+					}
+				} else if tt.repoConfig.GPGKey != "" && gpgKey != "" {
 					expectedGPGKey := tt.repoConfig.GPGKey
 					if expectedGPGKey == "repodata/repomd.xml.key" {
 						expectedGPGKey = "https://packages.microsoft.com/azurelinux/3.0/prod/base/x86_64/repodata/repomd.xml.key"
