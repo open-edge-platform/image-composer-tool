@@ -61,15 +61,33 @@ systemConfig:
   immutability:
     enabled: true # default is true
   packages:
+    - apt
     - base-files
-    - systemd-boot
-    - dracut-core
-    - systemd
+    - bash
     - cryptsetup-bin
+    - dracut-core
+    - dhcpcd-base
+    - eject
+    - efibootmgr
+    - init
+    - iproute2
+    - iputils-ping
+    - less
+    - locales
+    - lsb-release
+    - mawk
+    - netcat-openbsd
+    - netplan.io
     - openssh-server
+    - procps
+    - sensible-utils
+    - sudo
+    - systemd-boot
     - systemd-resolved
     - systemd-timesyncd
-    - efibootmgr
+    - systemd-cryptsetup
+    - vim-tiny
+    - whiptail
 
   additionalFiles:
     - local: ../additionalfiles/dhcp.network
@@ -78,7 +96,7 @@ systemConfig:
       final: /etc/apt/sources.list.d/debian-trixie.list
 
   kernel:
-    version: "6.13"
+    version: "6.12.74"
     cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
     packages:
-      - linux-image-generic
+      - linux-image-amd64

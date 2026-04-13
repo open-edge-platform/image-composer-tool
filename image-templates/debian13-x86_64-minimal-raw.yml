@@ -65,20 +65,54 @@ systemConfig:
     enabled: false
 
   packages:
-    - base-files
-    - grub-efi-amd64-signed
-    - initramfs-tools
-    - grub2-common
-    - grub-pc-bin
-    - grub-efi-amd64
-    - grub-efi-amd64-bin
-    - systemd
-    - openssh-server
-    - systemd-resolved
-    - systemd-timesyncd
+    - apparmor
+    - apt-listchanges
+    - apt-utils
+    - bash-completion
+    - bind9-host
+    - cloud-init
+    - cloud-initramfs-growroot
+    - curl
+    - dbus
+    - dosfstools
+    - grub-cloud-amd64
+    - init
+    - iptables
+    - iputils-ping
+    - less
+    - libext2fs2t64
+    - liblastlog2-2
+    - libnss-myhostname
+    - libnss-resolve
+    - libpam-modules-bin
+    - libpam-systemd
+    - libss2
+    - linux-sysctl-defaults
+    - man-db
+    - manpages
+    - mawk
+    - nano
+    - netplan.io
+    - pciutils
+    - polkitd
+    - psmisc
+    - python3-minimal
+    - reportbug
+    - screen
+    - socat
+    - ssh-import-id
+    - sudo
+    - tcpdump
+    - traceroute
+    - unattended-upgrades
+    - uuid-runtime
+    - vim
+    - vim-tiny
+    - whiptail
+    - zstd
 
   kernel:
-    version: "6.13"
+    version: "6.12.74"
     cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
     packages:
-      - linux-image-generic
+      - linux-image-amd64
