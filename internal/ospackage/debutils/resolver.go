@@ -1072,8 +1072,14 @@ func ResolveTopPackageConflicts(want string, all []ospackage.PackageInfo) (ospac
 		}
 		// 4) prefix by want.release ("acl-2.3.1-2.")
 		if strings.HasPrefix(pi.Name, want+".") {
-			candidates = append(candidates, pi)
-			continue
+                        // Extract string after "." and compare with pi.Version
+                        if dashIdx := strings.LastIndex(want, "."); dashIdx != -1 {
+                                verStr := want[dashIdx+1:]
+                                if strings.Contains(pi.Version, verStr) {
+                                        candidates = append(candidates, pi)
+                                        continue
+                                }
+                        }
 		}
 		// 5) Debian package format (packagename_version_arch.deb)
 		if strings.HasPrefix(pi.Name, want+"_") {
