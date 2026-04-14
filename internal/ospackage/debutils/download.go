@@ -368,15 +368,10 @@ func MatchRequested(requests []string, all []ospackage.PackageInfo) ([]ospackage
 	var requestedPkgs []string
 	gotMissingPkg := false
 
-	log.Debugf("MatchRequested: Searching for %d requested packages in %d available packages", len(requests), len(all))
-
 	for _, want := range requests {
-		log.Debugf("MatchRequested: Looking for package '%s'", want)
 		if pkg, found := ResolveTopPackageConflicts(want, all); found {
-			log.Debugf("MatchRequested: Found package '%s' -> %s version %s", want, pkg.Name, pkg.Version)
 			out = append(out, pkg)
 		} else {
-			log.Warnf("MatchRequested: Package '%s' NOT FOUND in repository metadata", want)
 			requestedPkgs = append(requestedPkgs, want)
 			log.Warnf("requested package '%q' not found in repo", want)
 			gotMissingPkg = true
@@ -472,16 +467,6 @@ func DownloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSour
 	if err != nil {
 		return downloadPkgList, nil, fmt.Errorf("matching packages: %w", err)
 	}
-	
-	// DEBUG: Check if v4l2loopback-dkms is in the all packages list
-	log.Debugf("Total packages available for matching: %d", len(all))
-	for _, pkg := range all {
-		if pkg.Name == "v4l2loopback-dkms" {
-			log.Infof("DEBUG: Found v4l2loopback-dkms in repository metadata: version=%s, arch=%s", pkg.Version, pkg.Arch)
-			break
-		}
-	}
-	
 	log.Infof("matched a total of %d packages", len(req))
 
 	// Resolve the dependencies of the requested packages
