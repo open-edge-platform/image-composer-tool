@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -12,6 +13,43 @@ import (
 	"github.com/open-edge-platform/os-image-composer/internal/ospackage"
 	"github.com/open-edge-platform/os-image-composer/internal/ospackage/rpmutils"
 )
+
+func TestValidateSupportsMultipleRepoGPGKeys(t *testing.T) {
+	originalRepoCfg := rpmutils.RepoCfg
+	originalUserRepo := rpmutils.UserRepo
+	defer func() {
+		rpmutils.RepoCfg = originalRepoCfg
+		rpmutils.UserRepo = originalUserRepo
+	}()
+
+	hits := map[string]int{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits[r.URL.Path]++
+		_, _ = w.Write([]byte("-----BEGIN PGP PUBLIC KEY BLOCK-----\nkey\n-----END PGP PUBLIC KEY BLOCK-----\n"))
+	}))
+	defer server.Close()
+
+	rpmutils.RepoCfg = rpmutils.RepoConfig{
+		GPGKey: server.URL + "/old.asc," + server.URL + "/new.asc",
+	}
+	rpmutils.UserRepo = nil
+
+	destDir := filepath.Join(t.TempDir(), "rpms")
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		t.Fatalf("failed to create temp rpm dir: %v", err)
+	}
+
+	if err := rpmutils.Validate(destDir); err != nil {
+		t.Fatalf("Validate returned error: %v", err)
+	}
+
+	if hits["/old.asc"] != 1 {
+		t.Fatalf("expected old key to be fetched once, got %d", hits["/old.asc"])
+	}
+	if hits["/new.asc"] != 1 {
+		t.Fatalf("expected new key to be fetched once, got %d", hits["/new.asc"])
+	}
+}
 
 func TestUserPackages(t *testing.T) {
 	// Save original global variables

@@ -332,6 +332,24 @@
             }
           ]
         },
+        "pkeys": {
+          "type": "array",
+          "description": "Multiple public GPG key URLs for package verification (alternative to pkey)",
+          "items": {
+            "type": "string",
+            "oneOf": [
+              {
+                "pattern": "^(https?|file)://",
+                "description": "URL to GPG key file (must start with http://, https://, or file://)"
+              },
+              {
+                "pattern": "^/",
+                "description": "Absolute local file path to GPG key file"
+              }
+            ]
+          },
+          "minItems": 1
+        },
         "component": {
           "type": "string",
           "description": "Repository component (e.g., 'main', 'restricted')",
@@ -354,7 +372,11 @@
           }
         }
       },
-      "required": ["codename", "url", "pkey"],
+      "required": ["codename", "url"],
+      "anyOf": [
+        { "required": ["pkey"] },
+        { "required": ["pkeys"] }
+      ],
       "additionalProperties": false
     },
 
