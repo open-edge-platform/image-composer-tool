@@ -369,11 +369,6 @@ func MatchRequested(requests []string, all []ospackage.PackageInfo) ([]ospackage
 	gotMissingPkg := false
 
 	for _, want := range requests {
-		w := strings.TrimSpace(want)
-		if w != want {
-			log.Warnf("MatchRequested(): trimming request whitespace: raw=%q trimmed=%q", want, w)
-		}
-		want = w
 		if pkg, found := ResolveTopPackageConflicts(want, all); found {
 			out = append(out, pkg)
 		} else {
@@ -460,33 +455,12 @@ func DownloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSour
 	}
 
 	// Fetch the entire user repos package list
-
-	log.Infof("UserPackages(): starting. UserRepo entries=%d, Architecture=%q", len(UserRepo), Architecture)
-
 	userpkg, err := UserPackages()
 	if err != nil {
 		log.Debugf("getting user packages failed: %v", err)
 		return downloadPkgList, nil, fmt.Errorf("user package fetch failed: %w", err)
 	}
-
-	log.Infof("UserPackages(): done. returned %d packages", len(userpkg))
-
 	all = append(all, userpkg...)
-	log.Infof("Total package index size after merging base+user repos: %d", len(all))
-
-	want := "login"
-	found := false
-	for _, p := range all {
-		if p.Name == want {
-			found = true
-			log.Infof("Package index contains %q: version=%q url=%q", want, p.Version, p.URL)
-			break
-		}
-	}
-
-	if !found {
-		log.Warnf("Package index does NOT contain %q (after base+user repo merge)", want)
-	}
 
 	// Match the packages in the template against all the packages
 	req, err := MatchRequested(pkgList, all)
