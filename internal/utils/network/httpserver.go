@@ -12,6 +12,11 @@ import (
 	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
 )
 
+const (
+	serverReadHeaderTimeout = 10 * time.Second
+	serverReadTimeout       = 30 * time.Second
+)
+
 // ServeRepositoryHTTP starts a temporary HTTP server to serve the repository
 // Returns the server URL, cleanup function, and error
 func ServeRepositoryHTTP(repoPath string) (serverURL string, cleanup func(), err error) {
@@ -42,7 +47,9 @@ func ServeRepositoryHTTP(repoPath string) (serverURL string, cleanup func(), err
 	mux.Handle("/", fileHandler)
 
 	server := &http.Server{
-		Handler: mux,
+		Handler:           mux,
+		ReadHeaderTimeout: serverReadHeaderTimeout,
+		ReadTimeout:       serverReadTimeout,
 	}
 
 	// Start server in goroutine

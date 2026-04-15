@@ -861,8 +861,16 @@ func CreateTemporaryRepository(sourcePath, repoName string) (repoPath, serverURL
 		return "", "", nil, fmt.Errorf("failed to get absolute path of source directory: %w", err)
 	}
 
-	if _, err := os.Stat(sourcePath); os.IsNotExist(err) {
-		return "", "", nil, fmt.Errorf("source directory does not exist: %s", sourcePath)
+	sourceInfo, err := os.Stat(sourcePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", "", nil, fmt.Errorf("source directory does not exist: %s", sourcePath)
+		}
+		return "", "", nil, fmt.Errorf("failed to stat source directory %s: %w", sourcePath, err)
+	}
+
+	if !sourceInfo.IsDir() {
+		return "", "", nil, fmt.Errorf("source path is not a directory: %s", sourcePath)
 	}
 
 	// Check if source contains RPM files

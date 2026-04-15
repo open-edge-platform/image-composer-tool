@@ -34,8 +34,16 @@ func CreateTemporaryRepository(sourcePath, repoName, arch string) (repoPath, ser
 		return "", "", nil, fmt.Errorf("failed to get absolute path of source directory: %w", err)
 	}
 
-	if _, err := os.Stat(sourcePath); os.IsNotExist(err) {
-		return "", "", nil, fmt.Errorf("source directory does not exist: %s", sourcePath)
+	sourceInfo, err := os.Stat(sourcePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", "", nil, fmt.Errorf("source directory does not exist: %s", sourcePath)
+		}
+		return "", "", nil, fmt.Errorf("failed to stat source directory %s: %w", sourcePath, err)
+	}
+
+	if !sourceInfo.IsDir() {
+		return "", "", nil, fmt.Errorf("source path is not a directory: %s", sourcePath)
 	}
 
 	// Check if source contains DEB files
@@ -120,18 +128,29 @@ func CreateTemporaryRepository(sourcePath, repoName, arch string) (repoPath, ser
 		os.RemoveAll(tempRepoPath)
 		return "", "", nil, fmt.Errorf("failed to create Packages.gz file: %w", createErr)
 	}
-	gzWriter := gzip.NewWriter(gzFile)
-	if _, writeErr := gzWriter.Write(packagesData); writeErr != nil {
-		gzFile.Close()
+	if gzipErr := func() (retErr error) {
+		defer func() {
+			if closeErr := gzFile.Close(); closeErr != nil && retErr == nil {
+				retErr = fmt.Errorf("failed to close Packages.gz file: %w", closeErr)
+			}
+		}()
+
+		gzWriter := gzip.NewWriter(gzFile)
+		defer func() {
+			if closeErr := gzWriter.Close(); closeErr != nil && retErr == nil {
+				retErr = fmt.Errorf("failed to finalize Packages.gz: %w", closeErr)
+			}
+		}()
+
+		if _, writeErr := gzWriter.Write(packagesData); writeErr != nil {
+			return fmt.Errorf("failed to write Packages.gz: %w", writeErr)
+		}
+
+		return nil
+	}(); gzipErr != nil {
 		os.RemoveAll(tempRepoPath)
-		return "", "", nil, fmt.Errorf("failed to write Packages.gz: %w", writeErr)
+		return "", "", nil, gzipErr
 	}
-	if closeErr := gzWriter.Close(); closeErr != nil {
-		gzFile.Close()
-		os.RemoveAll(tempRepoPath)
-		return "", "", nil, fmt.Errorf("failed to finalize Packages.gz: %w", closeErr)
-	}
-	gzFile.Close()
 
 	// Compute SHA256 checksums and file sizes for the Release file
 	packagesHash, hashErr := computeFileSHA256(packagesPath)

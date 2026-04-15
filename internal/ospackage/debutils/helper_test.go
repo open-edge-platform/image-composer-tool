@@ -175,6 +175,48 @@ func TestCreateTemporaryRepositoryNonExistentDirectory(t *testing.T) {
 	}
 }
 
+func TestCreateTemporaryRepositorySourcePathIsFile(t *testing.T) {
+	tempDir := t.TempDir()
+	filePath := filepath.Join(tempDir, "package1_1.0_amd64.deb")
+	if err := os.WriteFile(filePath, []byte("fake deb content"), 0644); err != nil {
+		t.Fatalf("failed to create source file: %v", err)
+	}
+
+	_, _, _, err := CreateTemporaryRepository(filePath, "testrepo", "amd64")
+	if err == nil {
+		t.Fatal("expected error when source path is a file")
+	}
+	if !strings.Contains(err.Error(), "source path is not a directory") {
+		t.Errorf("expected non-directory source path error, got: %v", err)
+	}
+}
+
+func TestCreateTemporaryRepositoryStatError(t *testing.T) {
+	tempDir := t.TempDir()
+	blockedParent := filepath.Join(tempDir, "blocked")
+	if err := os.Mkdir(blockedParent, 0755); err != nil {
+		t.Fatalf("failed to create blocked parent directory: %v", err)
+	}
+
+	blockedPath := filepath.Join(blockedParent, "source")
+	if err := os.Chmod(blockedParent, 0); err != nil {
+		t.Fatalf("failed to restrict blocked parent permissions: %v", err)
+	}
+	defer os.Chmod(blockedParent, 0755)
+
+	if _, statErr := os.Stat(blockedPath); statErr == nil || os.IsNotExist(statErr) {
+		t.Skip("unable to induce non-not-exist os.Stat error on this platform")
+	}
+
+	_, _, _, err := CreateTemporaryRepository(blockedPath, "testrepo", "amd64")
+	if err == nil {
+		t.Fatal("expected stat error for inaccessible source path")
+	}
+	if !strings.Contains(err.Error(), "failed to stat source directory") {
+		t.Errorf("expected stat failure error, got: %v", err)
+	}
+}
+
 // TestCreateTemporaryRepositoryNoDEBFiles tests error handling when source directory contains no DEB files
 func TestCreateTemporaryRepositoryNoDEBFiles(t *testing.T) {
 	// Create temporary directory without DEB files
