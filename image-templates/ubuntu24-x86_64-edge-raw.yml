@@ -40,6 +40,11 @@ packageRepositories:
     pkey: "<PUBLIC_KEY_URL>" # Uncomment and replace in real config
     component: "restricted"
 
+  # - codename: "localdeb"
+  #   path: "/data/os-image-composer/localdeb" # Uncomment and replace with local path
+  #   pkey: "[trusted=yes]" # Make sure to put trusted
+  #   component: "main" # Make sure to put main or leave empty
+
 systemConfig:
   name: edge
   description: edge ubuntu image with immutable rootfs

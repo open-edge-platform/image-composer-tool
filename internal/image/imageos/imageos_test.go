@@ -124,6 +124,34 @@ func (m *MockChrootEnv) SetupChrootEnv(imageBuildDir, outputDir string, template
 	return nil
 }
 
+type errorPathMockChrootEnv struct {
+	MockChrootEnv
+	pathErr   error
+	mountErr  error
+	umountErr error
+}
+
+func (m *errorPathMockChrootEnv) GetChrootEnvPath(installRoot string) (string, error) {
+	if m.pathErr != nil {
+		return "", m.pathErr
+	}
+	return m.MockChrootEnv.GetChrootEnvPath(installRoot)
+}
+
+func (m *errorPathMockChrootEnv) MountChrootSysfs(chrootPath string) error {
+	if m.mountErr != nil {
+		return m.mountErr
+	}
+	return nil
+}
+
+func (m *errorPathMockChrootEnv) UmountChrootSysfs(chrootPath string) error {
+	if m.umountErr != nil {
+		return m.umountErr
+	}
+	return nil
+}
+
 // TestNewImageOs tests the NewImageOs constructor
 func TestNewImageOs(t *testing.T) {
 	// Set up mock executor
@@ -1603,6 +1631,110 @@ func TestUpdateInitramfsWithMock(t *testing.T) {
 	t.Log("UpdateInitramfs mock test completed - shell commands intercepted")
 }
 
+func TestUpdateInitramfsVariants(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	t.Run("immutability and EMT options included", func(t *testing.T) {
+		mockCommands := []shell.MockCommand{
+			{
+				Pattern: `sudo.*chroot.*dracut --force --no-hostonly --verbose --add systemd-veritysetup --add dm --add crypt --install /usr/bin/cut --add systemd --add-drivers 'xhci_hcd usb_storage' --kver 6\.1\.0 /boot/initramfs-6\.1\.0\.img`,
+				Output:  "ok",
+				Error:   nil,
+			},
+		}
+		shell.Default = shell.NewMockExecutor(mockCommands)
+
+		template := &config.ImageTemplate{
+			Target: config.TargetInfo{OS: "edge-microvisor-toolkit"},
+			SystemConfig: config.SystemConfig{
+				Immutability: config.ImmutabilityConfig{Enabled: true},
+				Kernel:       config.KernelConfig{EnableExtraModules: "xhci_hcd usb_storage"},
+			},
+		}
+
+		err := updateInitramfs("/tmp/test-initramfs", "6.1.0", template)
+		if err != nil {
+			t.Fatalf("updateInitramfs() returned unexpected error: %v", err)
+		}
+	})
+
+	t.Run("non-immutable command failure", func(t *testing.T) {
+		mockCommands := []shell.MockCommand{
+			{
+				Pattern: `sudo.*chroot.*dracut --force --no-hostonly --verbose --add systemd --kver 6\.1\.0 /boot/initramfs-6\.1\.0\.img`,
+				Output:  "",
+				Error:   fmt.Errorf("dracut failed"),
+			},
+		}
+		shell.Default = shell.NewMockExecutor(mockCommands)
+
+		template := &config.ImageTemplate{
+			Target:       config.TargetInfo{OS: "ubuntu"},
+			SystemConfig: config.SystemConfig{Immutability: config.ImmutabilityConfig{Enabled: false}},
+		}
+
+		err := updateInitramfs("/tmp/test-initramfs", "6.1.0", template)
+		if err == nil || !strings.Contains(err.Error(), "failed to update initramfs with USB drivers") {
+			t.Fatalf("expected non-immutable initramfs error, got: %v", err)
+		}
+	})
+}
+
+func TestCreateResolvConfSymlink(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	t.Run("creates symlink when missing", func(t *testing.T) {
+		mockCommands := []shell.MockCommand{
+			{Pattern: `ln -sf /run/systemd/resolve/stub-resolv\.conf /etc/resolv\.conf`, Output: "", Error: nil},
+		}
+		shell.Default = shell.NewMockExecutor(mockCommands)
+
+		installRoot := t.TempDir()
+		template := &config.ImageTemplate{Image: config.ImageInfo{Name: "test-image"}}
+
+		err := createResolvConfSymlink(installRoot, template)
+		if err != nil {
+			t.Fatalf("createResolvConfSymlink() unexpected error: %v", err)
+		}
+	})
+
+	t.Run("skips when resolv.conf exists", func(t *testing.T) {
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{})
+
+		installRoot := t.TempDir()
+		etcDir := filepath.Join(installRoot, "etc")
+		if err := os.MkdirAll(etcDir, 0755); err != nil {
+			t.Fatalf("failed to create etc dir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(etcDir, "resolv.conf"), []byte("nameserver 1.1.1.1\n"), 0644); err != nil {
+			t.Fatalf("failed to create resolv.conf: %v", err)
+		}
+
+		template := &config.ImageTemplate{Image: config.ImageInfo{Name: "test-image"}}
+		err := createResolvConfSymlink(installRoot, template)
+		if err != nil {
+			t.Fatalf("createResolvConfSymlink() unexpected error: %v", err)
+		}
+	})
+
+	t.Run("returns error on symlink failure", func(t *testing.T) {
+		mockCommands := []shell.MockCommand{
+			{Pattern: `ln -sf /run/systemd/resolve/stub-resolv\.conf /etc/resolv\.conf`, Output: "", Error: fmt.Errorf("ln failed")},
+		}
+		shell.Default = shell.NewMockExecutor(mockCommands)
+
+		installRoot := t.TempDir()
+		template := &config.ImageTemplate{Image: config.ImageInfo{Name: "test-image"}}
+
+		err := createResolvConfSymlink(installRoot, template)
+		if err == nil || !strings.Contains(err.Error(), "failed to create symlink for resolv.conf") {
+			t.Fatalf("expected symlink failure error, got: %v", err)
+		}
+	})
+}
+
 // TestMountUmountSysfs tests the sysfs mount/unmount functionality
 func TestMountUmountSysfs(t *testing.T) {
 	// Set up mock executor
@@ -1651,6 +1783,81 @@ func TestMountUmountSysfs(t *testing.T) {
 	t.Log("Mount and unmount operations completed without errors")
 
 	t.Log("Mount/unmount sysfs test completed")
+}
+
+func TestMountUmountSysfsErrorPaths(t *testing.T) {
+	template := createTestImageTemplate()
+
+	t.Run("mount path resolution error", func(t *testing.T) {
+		imageOs := &ImageOs{
+			installRoot: "/tmp/test",
+			chrootEnv: &errorPathMockChrootEnv{
+				MockChrootEnv: MockChrootEnv{chrootPath: "/tmp/chroot"},
+				pathErr:       fmt.Errorf("path failed"),
+			},
+			template: template,
+		}
+
+		err := imageOs.mountSysfsToRootfs(imageOs.installRoot)
+		if err == nil || !strings.Contains(err.Error(), "failed to get chroot environment path") {
+			t.Fatalf("expected chroot path error, got: %v", err)
+		}
+	})
+
+	t.Run("mount sysfs command error", func(t *testing.T) {
+		imageOs := &ImageOs{
+			installRoot: "/tmp/test",
+			chrootEnv: &errorPathMockChrootEnv{
+				MockChrootEnv: MockChrootEnv{chrootPath: "/tmp/chroot"},
+				mountErr:      fmt.Errorf("mount failed"),
+			},
+			template: template,
+		}
+
+		err := imageOs.mountSysfsToRootfs(imageOs.installRoot)
+		if err == nil || !strings.Contains(err.Error(), "failed to mount sysfs into image rootfs") {
+			t.Fatalf("expected mount sysfs error, got: %v", err)
+		}
+	})
+
+	t.Run("umount path resolution error", func(t *testing.T) {
+		imageOs := &ImageOs{
+			installRoot: "/tmp/test",
+			chrootEnv: &errorPathMockChrootEnv{
+				MockChrootEnv: MockChrootEnv{chrootPath: "/tmp/chroot"},
+				pathErr:       fmt.Errorf("path failed"),
+			},
+			template: template,
+		}
+
+		err := imageOs.umountSysfsFromRootfs(imageOs.installRoot)
+		if err == nil || !strings.Contains(err.Error(), "failed to get chroot environment path") {
+			t.Fatalf("expected chroot path error, got: %v", err)
+		}
+	})
+
+	t.Run("umount sysfs command error", func(t *testing.T) {
+		imageOs := &ImageOs{
+			installRoot: "/tmp/test",
+			chrootEnv: &errorPathMockChrootEnv{
+				MockChrootEnv: MockChrootEnv{chrootPath: "/tmp/chroot"},
+				umountErr:     fmt.Errorf("umount failed"),
+			},
+			template: template,
+		}
+
+		err := imageOs.umountSysfsFromRootfs(imageOs.installRoot)
+		if err == nil || !strings.Contains(err.Error(), "failed to unmount sysfs for image rootfs") {
+			t.Fatalf("expected umount sysfs error, got: %v", err)
+		}
+	})
+}
+
+func TestPrepareVeritySetupInvalidPair(t *testing.T) {
+	err := prepareVeritySetup("   ", "/tmp/install-root")
+	if err == nil || !strings.Contains(err.Error(), "invalid partPair") {
+		t.Fatalf("expected invalid partPair error, got: %v", err)
+	}
 }
 
 // TestInitRootfsForDeb tests the initRootfsForDeb functionality
@@ -2634,6 +2841,34 @@ func TestPrepareESPDir(t *testing.T) {
 	t.Log("prepareESPDir test completed")
 }
 
+func TestPrepareESPDirFailures(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	t.Run("cleanup command failure", func(t *testing.T) {
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+			{Pattern: `rm -rf /boot/efi/\*`, Output: "", Error: fmt.Errorf("rm failed")},
+		})
+
+		_, err := prepareESPDir(t.TempDir())
+		if err == nil || !strings.Contains(err.Error(), "failed to clean up ESP directory") {
+			t.Fatalf("expected cleanup failure error, got: %v", err)
+		}
+	})
+
+	t.Run("mkdir command failure", func(t *testing.T) {
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+			{Pattern: `rm -rf /boot/efi/\*`, Output: "", Error: nil},
+			{Pattern: `mkdir -p /boot/efi$`, Output: "", Error: fmt.Errorf("mkdir failed")},
+		})
+
+		_, err := prepareESPDir(t.TempDir())
+		if err == nil || !strings.Contains(err.Error(), "failed to create ESP directory") {
+			t.Fatalf("expected mkdir failure error, got: %v", err)
+		}
+	})
+}
+
 // TestBuildUKI tests the buildUKI function
 func TestBuildUKI(t *testing.T) {
 	// Set up mock executor
@@ -3090,6 +3325,21 @@ func TestRemoveVerityTmp(t *testing.T) {
 
 	installRoot := "/tmp/test-install-root"
 	removeVerityTmp(installRoot)
+}
+
+func TestRemoveVerityTmpWithCleanupErrors(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	mockCommands := []shell.MockCommand{
+		{Pattern: `umount /tmp`, Output: "", Error: fmt.Errorf("umount tmp failed")},
+		{Pattern: `rm -rf .*/tmp`, Output: "", Error: fmt.Errorf("rm tmp failed")},
+		{Pattern: `umount /boot/efi/tmp`, Output: "", Error: fmt.Errorf("umount efi tmp failed")},
+		{Pattern: `rm -rf .*/boot/efi/tmp`, Output: "", Error: fmt.Errorf("rm efi tmp failed")},
+	}
+	shell.Default = shell.NewMockExecutor(mockCommands)
+
+	removeVerityTmp(t.TempDir())
 }
 
 func TestVerifyUserCreated(t *testing.T) {

@@ -27,6 +27,7 @@ type RepoConfig struct {
 	Section      string // raw section header
 	Name         string // human-readable name from name=
 	URL          string
+	Path         string
 	GPGCheck     bool
 	RepoGPGCheck bool
 	Enabled      bool
@@ -54,6 +55,71 @@ func Packages() ([]ospackage.PackageInfo, error) {
 	return packages, nil
 }
 
+func LocalUserPackages() ([]ospackage.PackageInfo, func(), error) {
+	log := logger.Logger()
+	log.Infof("fetching packages from local user package list")
+
+	var allLocalPackages []ospackage.PackageInfo
+	var cleanups []func()
+	combinedCleanup := func() {
+		for _, fn := range cleanups {
+			fn()
+		}
+	}
+
+	for i, repo := range UserRepo {
+		if repo.Path == "" {
+			continue
+		}
+
+		repoName := fmt.Sprintf("rpmlocrepo%d", i+1)
+		var repoURL string
+
+		// Check if it's already a proper repository with repodata metadata
+		repoMetaDataPath := filepath.Join(repo.Path, "repodata/repomd.xml")
+		if _, err := os.Stat(repoMetaDataPath); err != nil {
+			if os.IsNotExist(err) {
+				// Not a proper repo - copy RPMs, generate metadata, and serve over HTTP
+				_, tempURL, cleanup, err := CreateTemporaryRepository(repo.Path, repoName)
+				if err != nil {
+					combinedCleanup()
+					return nil, nil, fmt.Errorf("failed to create temporary RPM repository for %s: %w", repo.Path, err)
+				}
+				cleanups = append(cleanups, cleanup)
+				repoURL = tempURL
+			} else {
+				combinedCleanup()
+				return nil, nil, fmt.Errorf("failed to access local RPM repository metadata %s: %w", repoMetaDataPath, err)
+			}
+		} else {
+			// Already a proper repo - serve it directly over HTTP
+			tempURL, serverCleanup, err := network.ServeRepositoryHTTP(repo.Path)
+			if err != nil {
+				combinedCleanup()
+				return nil, nil, fmt.Errorf("failed to serve local RPM repository %s via HTTP: %w", repo.Path, err)
+			}
+			cleanups = append(cleanups, serverCleanup)
+			repoURL = tempURL
+		}
+
+		repomdURL := repoURL + "/repodata/repomd.xml"
+		primaryXmlURL, err := FetchPrimaryURL(repomdURL)
+		if err != nil {
+			combinedCleanup()
+			return nil, nil, fmt.Errorf("fetching primary XML URL from %s failed: %w", repomdURL, err)
+		}
+
+		localPkgs, err := ParseRepositoryMetadata(repoURL, primaryXmlURL, repo.AllowPackages)
+		if err != nil {
+			combinedCleanup()
+			return nil, nil, fmt.Errorf("parsing local RPM repository %s failed: %w", repo.Path, err)
+		}
+		allLocalPackages = append(allLocalPackages, localPkgs...)
+	}
+
+	return allLocalPackages, combinedCleanup, nil
+}
+
 func UserPackages() ([]ospackage.PackageInfo, error) {
 	log := logger.Logger()
 	log.Infof("fetching packages from %s", "user package list")
@@ -62,15 +128,21 @@ func UserPackages() ([]ospackage.PackageInfo, error) {
 		id            string
 		codename      string
 		url           string
+		path          string
 		pkey          string
 		pkeys         []string
 		allowPackages []string
-	}, len(UserRepo))
+	}, 0, len(UserRepo))
 	for i, repo := range UserRepo {
-		repoList[i] = struct {
+		if repo.URL == "" || repo.URL == "<URL>" {
+			continue
+		}
+
+		repoList = append(repoList, struct {
 			id            string
 			codename      string
 			url           string
+			path          string
 			pkey          string
 			pkeys         []string
 			allowPackages []string
@@ -78,10 +150,11 @@ func UserPackages() ([]ospackage.PackageInfo, error) {
 			id:            fmt.Sprintf("rpmcustrepo%d", i+1),
 			codename:      repo.Codename,
 			url:           repo.URL,
+			path:          repo.Path,
 			pkey:          repo.PKey,
 			pkeys:         repo.PKeys,
 			allowPackages: repo.AllowPackages,
-		}
+		})
 	}
 
 	type RepoConfigWithPackages struct {
@@ -94,6 +167,7 @@ func UserPackages() ([]ospackage.PackageInfo, error) {
 		id := repoItem.id
 		codename := repoItem.codename
 		baseURL := repoItem.url
+		path := repoItem.path
 		allowPackages := repoItem.allowPackages
 
 		allKeys := repoItem.pkeys
@@ -110,6 +184,7 @@ func UserPackages() ([]ospackage.PackageInfo, error) {
 				Enabled:      true,
 				GPGKey:       gpgKey,
 				URL:          baseURL,
+				Path:         path,
 				Section:      fmt.Sprintf("[%s]", codename),
 			},
 			AllowPackages: allowPackages,
@@ -121,7 +196,6 @@ func UserPackages() ([]ospackage.PackageInfo, error) {
 	metadataXmlPath := "repodata/repomd.xml"
 	var allUserPackages []ospackage.PackageInfo
 	for _, rpItx := range userRepo {
-
 		repoMetaDataURL := GetRepoMetaDataURL(rpItx.URL, metadataXmlPath)
 		if repoMetaDataURL == "" {
 			log.Errorf("invalid repo metadata URL: %s/%s, skipping", rpItx.URL, metadataXmlPath)
@@ -225,8 +299,8 @@ func createTempGPGKeyFiles(gpgKeyURLs []string) (keyPaths []string, cleanup func
 	// Download and create temp files for each GPG key
 	for i, gpgKeyURL := range gpgKeyURLs {
 
-		if gpgKeyURL == "<PUBLIC_KEY_URL>" || gpgKeyURL == "" {
-			log.Warnf("GPG key URL %d is empty, skipping", i+1)
+		if gpgKeyURL == "<PUBLIC_KEY_URL>" || gpgKeyURL == "" || gpgKeyURL == "[trusted=yes]" {
+			log.Warnf("GPG key URL %d is empty or marked as trusted, skipping", i+1)
 			continue
 		}
 
@@ -314,6 +388,48 @@ func createTempGPGKeyFiles(gpgKeyURLs []string) (keyPaths []string, cleanup func
 func Validate(destDir string) error {
 	log := logger.Logger()
 
+	localRepoRPMNames := make(map[string]struct{})
+	for _, userRepo := range UserRepo {
+		if userRepo.Path == "" {
+			continue
+		}
+
+		localRPMs, err := filepath.Glob(filepath.Join(userRepo.Path, "*.rpm"))
+		if err != nil {
+			return fmt.Errorf("glob local repo RPMs in %s: %w", userRepo.Path, err)
+		}
+
+		for _, rpmPath := range localRPMs {
+			localRepoRPMNames[filepath.Base(rpmPath)] = struct{}{}
+		}
+	}
+
+	rpmPattern := filepath.Join(destDir, "*.rpm")
+	rpmPaths, err := filepath.Glob(rpmPattern)
+	if err != nil {
+		return fmt.Errorf("glob %q: %w", rpmPattern, err)
+	}
+
+	verifiableRPMPaths := make([]string, 0, len(rpmPaths))
+	skippedLocalRPMs := 0
+	for _, rpmPath := range rpmPaths {
+		if _, isLocal := localRepoRPMNames[filepath.Base(rpmPath)]; isLocal {
+			skippedLocalRPMs++
+			continue
+		}
+
+		verifiableRPMPaths = append(verifiableRPMPaths, rpmPath)
+	}
+
+	if skippedLocalRPMs > 0 {
+		log.Infof("skipping verification for %d local-repo RPM(s)", skippedLocalRPMs)
+	}
+
+	if len(rpmPaths) > 0 && len(verifiableRPMPaths) == 0 {
+		log.Info("no non-local RPMs to verify")
+		return nil
+	}
+
 	// Collect all GPG key URLs (could be from RepoCfg and UserRepo)
 	var gpgKeyURLs []string
 
@@ -324,6 +440,10 @@ func Validate(destDir string) error {
 
 	// Add user repo GPG keys
 	for _, userRepo := range UserRepo {
+		if userRepo.Path != "" {
+			continue
+		}
+
 		// Collect keys from both PKey (string) and PKeys (array)
 		var userKeys []string
 
@@ -345,6 +465,19 @@ func Validate(destDir string) error {
 		return fmt.Errorf("no GPG keys configured for verification")
 	}
 
+	// If every configured key is the [trusted=yes] sentinel, skip RPM signature verification.
+	allTrusted := true
+	for _, url := range gpgKeyURLs {
+		if url != "[trusted=yes]" {
+			allTrusted = false
+			break
+		}
+	}
+	if allTrusted {
+		log.Infof("all repositories are marked [trusted=yes], skipping RPM signature verification")
+		return nil
+	}
+
 	// Create temporary GPG key files
 	gpgKeyPaths, cleanup, err := createTempGPGKeyFiles(gpgKeyURLs)
 	if err != nil {
@@ -354,19 +487,13 @@ func Validate(destDir string) error {
 
 	log.Infof("created %d temporary GPG key files for verification", len(gpgKeyPaths))
 
-	// get all RPMs in the destDir
-	rpmPattern := filepath.Join(destDir, "*.rpm")
-	rpmPaths, err := filepath.Glob(rpmPattern)
-	if err != nil {
-		return fmt.Errorf("glob %q: %w", rpmPattern, err)
-	}
 	if len(rpmPaths) == 0 {
 		log.Warn("no RPMs found to verify")
 		return nil
 	}
 
 	start := time.Now()
-	results := VerifyAll(rpmPaths, gpgKeyPaths, 4)
+	results := VerifyAll(verifiableRPMPaths, gpgKeyPaths, 4)
 	log.Infof("RPM verification took %s", time.Since(start))
 
 	// Check results
@@ -441,6 +568,17 @@ func DownloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSour
 		return downloadPkgList, nil, fmt.Errorf("user package fetch failed: %w", err)
 	}
 	all = append(all, userpkg...)
+
+	// Adding local repo packages
+	localRepoPkgs, localRepoCleanup, err := LocalUserPackages()
+	if err != nil {
+		log.Errorf("getting local repo packages failed: %v", err)
+		return downloadPkgList, nil, fmt.Errorf("local repo package fetch failed: %w", err)
+	}
+	if localRepoCleanup != nil {
+		defer localRepoCleanup()
+	}
+	all = append(all, localRepoPkgs...)
 
 	// Adjust package names to remove any prefixes before PkgName - Azure Linux RPM repos often prefix package file names
 	for i := range all {
