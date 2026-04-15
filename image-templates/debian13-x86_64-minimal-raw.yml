@@ -75,6 +75,9 @@ systemConfig:
     - curl
     - dbus
     - dosfstools
+    - firmware-intel-graphics
+    - firmware-intel-misc
+    - firmware-iwlwifi
     - grub-cloud-amd64
     - init
     - iptables
@@ -98,6 +101,7 @@ systemConfig:
     - psmisc
     - python3-minimal
     - reportbug
+    - wireless-regdb
     - screen
     - socat
     - ssh-import-id
