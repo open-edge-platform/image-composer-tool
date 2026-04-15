@@ -1439,7 +1439,11 @@ func TestRPMCreateTemporaryRepositoryStatError(t *testing.T) {
 	if err := os.Chmod(blockedParent, 0); err != nil {
 		t.Fatalf("failed to restrict blocked parent permissions: %v", err)
 	}
-	defer os.Chmod(blockedParent, 0755)
+	defer func() {
+		if err := os.Chmod(blockedParent, 0755); err != nil {
+			t.Logf("warning: failed to restore blocked parent permissions: %v", err)
+		}
+	}()
 
 	if _, statErr := os.Stat(blockedPath); statErr == nil || os.IsNotExist(statErr) {
 		t.Skip("unable to induce non-not-exist os.Stat error on this platform")
