@@ -31,6 +31,17 @@ var log = logger.Logger()
 
 var rpmVersionSuffixRe = regexp.MustCompile(`^(.+)-([0-9][A-Za-z0-9.+_:~\-]*)-([0-9][A-Za-z0-9.+_:~\-]*)$`)
 
+var knownRPMArch = map[string]struct{}{
+	"x86_64":  {},
+	"aarch64": {},
+	"noarch":  {},
+	"i686":    {},
+	"i586":    {},
+	"armv7hl": {},
+	"ppc64le": {},
+	"s390x":   {},
+}
+
 type ChrootEnvInterface interface {
 	GetChrootEnvRoot() string
 	GetChrootImageBuildDir() string
@@ -581,19 +592,8 @@ func CleanRpmName(packageName string) string {
 	packageName = strings.TrimSpace(packageName)
 	packageName = strings.TrimSuffix(packageName, ".rpm")
 
-	knownArch := map[string]struct{}{
-		"x86_64":  {},
-		"aarch64": {},
-		"noarch":  {},
-		"i686":    {},
-		"i586":    {},
-		"armv7hl": {},
-		"ppc64le": {},
-		"s390x":   {},
-	}
-
 	if idx := strings.LastIndex(packageName, "."); idx != -1 {
-		if _, ok := knownArch[packageName[idx+1:]]; ok {
+		if _, ok := knownRPMArch[packageName[idx+1:]]; ok {
 			packageName = packageName[:idx]
 		}
 	}
