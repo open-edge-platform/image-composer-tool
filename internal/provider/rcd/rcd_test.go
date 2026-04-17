@@ -12,6 +12,7 @@ import (
 	"github.com/open-edge-platform/os-image-composer/internal/config"
 	"github.com/open-edge-platform/os-image-composer/internal/ospackage/rpmutils"
 	"github.com/open-edge-platform/os-image-composer/internal/provider"
+	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
 	"github.com/open-edge-platform/os-image-composer/internal/utils/system"
 )
 
@@ -57,6 +58,24 @@ func (m *mockChrootEnv) AptInstallPackage(packageName, installRoot string, repoS
 	return nil
 }
 func (m *mockChrootEnv) UpdateSystemPkgs(template *config.ImageTemplate) error { return nil }
+
+type mockChrootEnvCleanupErr struct {
+	mockChrootEnv
+	err error
+}
+
+func (m *mockChrootEnvCleanupErr) CleanupChrootEnv(targetOs, targetDist, targetArch string) error {
+	return m.err
+}
+
+type mockChrootEnvUpdateErr struct {
+	mockChrootEnv
+	err error
+}
+
+func (m *mockChrootEnvUpdateErr) UpdateSystemPkgs(template *config.ImageTemplate) error {
+	return m.err
+}
 
 // Helper function to create a test ImageTemplate
 func createTestImageTemplate() *config.ImageTemplate {
@@ -776,4 +795,120 @@ func TestRCDDisplayImageArtifacts(t *testing.T) {
 
 	displayImageArtifacts("/tmp/test", "TEST")
 	t.Log("displayImageArtifacts function executed without panic")
+}
+
+func TestRCDPostProcessReturnsInputErrorOnCleanupSuccess(t *testing.T) {
+	rcd := &RCD{chrootEnv: &mockChrootEnv{}}
+	inputErr := fmt.Errorf("image build failed")
+
+	err := rcd.PostProcess(createTestImageTemplate(), inputErr)
+	if err == nil {
+		t.Fatal("expected input error to be returned")
+	}
+	if !strings.Contains(err.Error(), "image build failed") {
+		t.Fatalf("expected input error to be propagated, got %v", err)
+	}
+}
+
+func TestRCDPostProcessCleanupFailure(t *testing.T) {
+	rcd := &RCD{chrootEnv: &mockChrootEnvCleanupErr{err: fmt.Errorf("cleanup failed")}}
+
+	err := rcd.PostProcess(createTestImageTemplate(), nil)
+	if err == nil {
+		t.Fatal("expected cleanup failure")
+	}
+	if !strings.Contains(err.Error(), "failed to cleanup chroot environment") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRCDInstallHostDependencySkipsWhenCommandsExist(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: "command -v .*", Output: "/usr/bin/fake", Error: nil},
+	})
+
+	rcd := &RCD{}
+	if err := rcd.installHostDependency(); err != nil {
+		t.Fatalf("expected success when commands exist, got %v", err)
+	}
+}
+
+func TestRCDInstallHostDependencyCheckError(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: "command -v .*", Output: "/usr/bin/fake", Error: fmt.Errorf("command check failed")},
+	})
+
+	rcd := &RCD{}
+	err := rcd.installHostDependency()
+	if err == nil {
+		t.Fatal("expected command check error")
+	}
+	if !strings.Contains(err.Error(), "failed to check command") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "command check failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRCDInstallHostDependencyInstallError(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: "command -v .*", Output: "", Error: fmt.Errorf("missing")},
+		{Pattern: "sudo apt install -y .*", Output: "", Error: fmt.Errorf("install failed")},
+	})
+
+	rcd := &RCD{}
+	err := rcd.installHostDependency()
+	if err == nil {
+		t.Fatal("expected install error")
+	}
+	if !strings.Contains(err.Error(), "failed to install host dependency") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "install failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRCDDownloadImagePkgsUpdateSystemError(t *testing.T) {
+	rcd := &RCD{chrootEnv: &mockChrootEnvUpdateErr{err: fmt.Errorf("update failed")}}
+
+	err := rcd.downloadImagePkgs(createTestImageTemplate())
+	if err == nil {
+		t.Fatal("expected update system packages error")
+	}
+	if !strings.Contains(err.Error(), "failed to update system packages") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadRepoConfigFromYAMLInvalidDist(t *testing.T) {
+	originalDir, _ := os.Getwd()
+	defer func() {
+		if err := os.Chdir(originalDir); err != nil {
+			t.Logf("failed to change back to original directory: %v", err)
+		}
+	}()
+
+	if err := os.Chdir("../../../"); err != nil {
+		t.Skipf("cannot change to project root: %v", err)
+		return
+	}
+
+	_, err := loadRepoConfigFromYAML("definitely-invalid-dist", "x86_64")
+	if err == nil {
+		t.Fatal("expected error for invalid dist")
+	}
+	if !strings.Contains(err.Error(), "failed to load provider repo config") {
+		t.Fatalf("unexpected error: %v", err)
+	}
 }

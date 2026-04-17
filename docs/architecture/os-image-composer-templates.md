@@ -194,7 +194,7 @@ Target platform. All four fields are required.
 | `azure-linux` | `azl3` |
 | `edge-microvisor-toolkit` | `emt3` |
 | `wind-river-elxr` | `elxr12` |
-| `ubuntu` | Any (e.g., `ubuntu24`) |
+| `ubuntu` | `ubuntu24`, `ubuntu26` |
 | `redhat-compatible-distro` | Any (e.g., `el10`) |
 
 ```yaml

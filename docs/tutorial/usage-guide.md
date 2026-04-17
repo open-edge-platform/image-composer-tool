@@ -45,6 +45,7 @@ os-image-composer build         # Build an image from a template
 os-image-composer validate      # Validate a template without building
 os-image-composer inspect       # Inspect a raw image's structure
 os-image-composer compare       # Compare two images
+os-image-composer ai            # AI-powered template generation (RAG)
 os-image-composer cache clean   # Manage cached artifacts
 os-image-composer config        # Manage configuration (init, show)
 os-image-composer version       # Display version info
@@ -248,6 +249,7 @@ systemConfig:
 
 ## Related Documentation
 
+- [AI-Powered Template Generation](./ai-template-generation.md)
 - [CLI Specification and Reference](../architecture/os-image-composer-cli-specification.md)
 - [Image Templates](../architecture/os-image-composer-templates.md)
 - [Build Process](../architecture/os-image-composer-build-process.md)

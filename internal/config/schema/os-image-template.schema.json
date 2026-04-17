@@ -60,6 +60,10 @@
         {
           "if": { "properties": { "os": { "const": "wind-river-elxr" } } },
           "then": { "properties": { "dist": { "enum": ["elxr12"] } } }
+        },
+        {
+          "if": { "properties": { "os": { "const": "ubuntu" } } },
+          "then": { "properties": { "dist": { "enum": ["ubuntu24", "ubuntu26"] } } }
         }
       ]
     },
@@ -310,6 +314,11 @@
           "description": "Repository base URL",
           "format": "uri"
         },
+        "path": {
+          "type": "string",
+          "description": "Local directory path for file-based repositories",
+          "pattern": "^/"
+        },
         "pkey": {
           "type": "string",
           "description": "Public GPG key URL for package verification or [trusted=yes] to skip verification",
@@ -372,7 +381,10 @@
           }
         }
       },
-      "required": ["codename", "url"],
+      "oneOf": [
+        { "required": ["codename", "path"] },
+        { "required": ["codename", "url"] }
+      ],
       "anyOf": [
         { "required": ["pkey"] },
         { "required": ["pkeys"] }

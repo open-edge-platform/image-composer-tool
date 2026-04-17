@@ -1,6 +1,6 @@
 # AI-searchable metadata for template discovery
 metadata:
-  description: Minimal Ubuntu 24.04 image with essential packages for lightweight deployments
+  description: Minimal Ubuntu 26.04 image with essential packages for lightweight deployments
   use_cases:
     - Lightweight Ubuntu base image
     - Cloud instances
@@ -16,11 +16,11 @@ metadata:
 
 image:
   name: minimal-os-image-ubuntu
-  version: "24.04"
+  version: "26.04"
 
 target:
   os: ubuntu
-  dist: ubuntu24
+  dist: ubuntu26
   arch: x86_64
   imageType: raw
 
@@ -85,4 +85,4 @@ systemConfig:
     version: "6.17"
     cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
     packages:
-      - linux-image-generic-hwe-24.04
+      - linux-image-generic
