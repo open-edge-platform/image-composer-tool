@@ -12,7 +12,7 @@
         "dist": {
           "type": "string",
           "description": "Distribution identifier",
-          "enum": ["azl3", "emt3", "elxr12", "aria", "ubuntu24", "rcd10"]
+          "enum": ["azl3", "emt3", "elxr12", "aria", "ubuntu24", "ubuntu26", "rcd10"]
         },
         "arch": {
           "type": "string",

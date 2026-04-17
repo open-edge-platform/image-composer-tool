@@ -283,6 +283,7 @@ func (t *ImageTemplate) GetProviderName() string {
 		"azure-linux": {"azl3": "AzureLinux3"},
 		"emt":         {"emt3": "EMT3.0"},
 		"elxr":        {"elxr12": "eLxr12"},
+		"ubuntu":      {"ubuntu24": "Ubuntu24", "ubuntu26": "Ubuntu26"},
 	}
 
 	if providers, ok := providerMap[t.Target.OS]; ok {
@@ -296,9 +297,11 @@ func (t *ImageTemplate) GetProviderName() string {
 // GetDistroVersion returns the version string expected by providers
 func (t *ImageTemplate) GetDistroVersion() string {
 	versionMap := map[string]string{
-		"azl3":   "3",
-		"emt3":   "3.0",
-		"elxr12": "12",
+		"azl3":     "3",
+		"emt3":     "3.0",
+		"elxr12":   "12",
+		"ubuntu24": "24.04",
+		"ubuntu26": "26.04",
 	}
 	return versionMap[t.Target.Dist]
 }

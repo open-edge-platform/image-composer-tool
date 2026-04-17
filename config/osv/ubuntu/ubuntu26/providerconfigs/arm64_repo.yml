@@ -1,0 +1,37 @@
+repositories:
+  - name: "resolute"
+    type: "deb"  # Repository type: rpm or deb
+    baseURL: "http://ports.ubuntu.com/ubuntu-ports"
+    pkgPrefix: "http://ports.ubuntu.com/ubuntu-ports"
+    releaseFile: "http://ports.ubuntu.com/ubuntu-ports/dists/resolute/Release"
+    releaseSign: "http://ports.ubuntu.com/ubuntu-ports/dists/resolute/Release.gpg"
+    pbGPGKey: "/usr/share/keyrings/ubuntu-archive-keyring.gpg"
+    gpgCheck: true
+    repoGPGCheck: true
+    enabled: true
+    component: "main restricted universe multiverse"  # Repository component/section identifier
+    buildPath: "./builds/ubuntu26/aarch64-main"  # Will be replaced with temp_dir/builds/ubuntu26/aarch64-main at runtime
+  - name: "resolute-security"
+    type: "deb"
+    baseURL: "http://ports.ubuntu.com/ubuntu-ports"
+    pkgPrefix: "http://ports.ubuntu.com/ubuntu-ports"
+    releaseFile: "http://ports.ubuntu.com/ubuntu-ports/dists/resolute-security/Release"
+    releaseSign: "http://ports.ubuntu.com/ubuntu-ports/dists/resolute-security/Release.gpg"
+    pbGPGKey: "/usr/share/keyrings/ubuntu-archive-keyring.gpg"
+    gpgCheck: true
+    repoGPGCheck: true
+    enabled: true
+    component: "main restricted universe multiverse"
+    buildPath: "./builds/ubuntu26/aarch64-security"  # Will be replaced with temp_dir/builds/ubuntu26/aarch64-security at runtime
+  - name: "resolute-updates"
+    type: "deb"
+    baseURL: "http://ports.ubuntu.com/ubuntu-ports"
+    pkgPrefix: "http://ports.ubuntu.com/ubuntu-ports"
+    releaseFile: "http://ports.ubuntu.com/ubuntu-ports/dists/resolute-updates/Release"
+    releaseSign: "http://ports.ubuntu.com/ubuntu-ports/dists/resolute-updates/Release.gpg"
+    pbGPGKey: "/usr/share/keyrings/ubuntu-archive-keyring.gpg"
+    gpgCheck: true
+    repoGPGCheck: true
+    enabled: true
+    component: "main restricted universe multiverse"
+    buildPath: "./builds/ubuntu26/aarch64-updates"  # Will be replaced with temp_dir/builds/ubuntu26/aarch64-updates at runtime
