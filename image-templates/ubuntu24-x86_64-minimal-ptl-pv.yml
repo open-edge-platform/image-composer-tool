@@ -127,6 +127,7 @@ systemConfig:
     - cron
     - ethtool
     - iproute2
+    - libtbb12
     # PTL packages
     - libigfxcmrt-dev
     - libigfxcmrt7
@@ -323,9 +324,6 @@ systemConfig:
         - linux-headers-6.17
 
   configurations:
-    # Install pinned iproute2 version for PTL (from installer PPAUpdate)
-    - cmd: "wget http://ftp.ubuntu.com/ubuntu/pool/main/i/iproute2/iproute2_6.14.0-1ubuntu1_amd64.deb -O /tmp/iproute2_6.14.0-1ubuntu1_amd64.deb"
-    - cmd: "DEBIAN_FRONTEND=noninteractive apt-get install -y /tmp/iproute2_6.14.0-1ubuntu1_amd64.deb"
     # Install Intel Graphics Compiler and compute runtime packages for PTL
     - cmd: "mkdir -p /tmp/gpu-packages"
     - cmd: "wget https://github.com/intel/intel-graphics-compiler/releases/download/v2.20.3/intel-igc-core-2_2.20.3+19972_amd64.deb -O /tmp/gpu-packages/intel-igc-core-2_2.20.3+19972_amd64.deb --no-check-certificate 2>&1 || echo 'Warning: intel-igc-core-2 download failed'"
@@ -341,5 +339,4 @@ systemConfig:
     - cmd: "mkdir -p /tmp/npu-driver"
     - cmd: "cd /tmp/npu-driver && wget https://github.com/intel/linux-npu-driver/releases/download/v1.28.0/linux-npu-driver-v1.28.0.20251218-20347000698-ubuntu2404.tar.gz -O /tmp/npu-driver/linux-npu-driver-v1.28.0.20251218-20347000698-ubuntu2404.tar.gz --no-check-certificate"
     - cmd: "cd /tmp/npu-driver && tar -xf linux-npu-driver-v1.28.0.20251218-20347000698-ubuntu2404.tar.gz"
-    - cmd: "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y libtbb12"
     - cmd: "find /tmp/npu-driver -name '*.deb' -print0 | xargs -0 dpkg -i"
