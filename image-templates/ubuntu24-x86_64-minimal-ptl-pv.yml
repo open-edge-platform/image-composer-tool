@@ -52,7 +52,7 @@ disk:
 packageRepositories:
   # Intel overlay repository (aligned with installer script)
   - codename: "noble"
-    url: "https://download.01.org/intel-linux-overlay/ubuntu/"
+    url: "https://download.01.org/intel-linux-overlay/ubuntu"
     pkey: "https://download.01.org/intel-linux-overlay/ubuntu/E6FA98203588250569758E97D176E3162086EE4C.gpg"
     component: "multimedia main non-free"
     priority: 2000
@@ -200,7 +200,6 @@ systemConfig:
     - mesa-vdpau-drivers
     - mesa-vulkan-drivers
     - libvpl-dev
-    - libvpl2
     - libvpl-tools
     - libmfx-gen-dev
     - onevpl-tools
@@ -302,9 +301,6 @@ systemConfig:
     - socat
     - virt-viewer
     - spice-client-gtk
-    - util-linux-extra
-    - dbus-x11
-    - sg3-utils
     - rpm
     # additional packages
     - tcpdump
@@ -325,15 +321,6 @@ systemConfig:
     packages:
         - linux-image-6.17
         - linux-headers-6.17
-  users:
-    - name: rbfadmin
-      password: "jaiZ6dai"
-    - name: user
-      password: user1234
-      groups: ["sudo"]
-    - name: vpu-user
-      password: vpu-user
-      groups: ["render"]
 
   configurations:
     # Install pinned iproute2 version for PTL (from installer PPAUpdate)
