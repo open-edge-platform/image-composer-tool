@@ -3,7 +3,7 @@
 **Status**: Proposed  
 **Date**: 2026-01-05  
 **Updated**: 2026-01-05  
-**Authors**: OS Image Composer Team  
+**Authors**: ICT Team  
 **Technical Area**: AI/ML, Template Generation
 
 ---
@@ -18,7 +18,7 @@ This ADR proposes a Template-Enriched RAG (Retrieval-Augmented Generation) archi
 
 ### Problem Statement
 
-OS Image Composer needs an AI-powered system that generates production-ready YAML templates from natural language descriptions. The system must:
+ICT needs an AI-powered system that generates production-ready YAML templates from natural language descriptions. The system must:
 
 1. Ground responses in real, working template examples to reduce hallucination
 2. Apply curated best practices (packages, kernel configs, disk layouts) consistently
@@ -123,7 +123,7 @@ All diagrams in this ADR use a consistent color scheme:
 ```mermaid
 flowchart TB
     subgraph UI["User Interface"]
-        CLI[CLI: os-image-composer ai]
+        CLI[CLI: ict ai]
     end
     
     subgraph Core["Core System"]
@@ -192,7 +192,7 @@ flowchart TB
 | **Query Classifier** | Detects query type (semantic, package-explicit, refinement, negation) |
 | **RAG Engine** | Semantic search with hybrid scoring (semantic + keyword + package) |
 | **Agent Loop** | Orchestrates LLM generation → validation → fix cycle |
-| **Agent Tools** | Functions that call existing os-image-composer code (not separate services) |
+| **Agent Tools** | Functions that call existing ict code (not separate services) |
 
 ---
 
@@ -607,12 +607,12 @@ When the configured model changes, the entire cache must be invalidated.
 | Template content changes | Recompute hash → cache miss → regenerate |
 | Embedding model changes | Clear entire cache (model_id mismatch) |
 | Cache TTL expires (optional) | Regenerate on next access |
-| Manual cache clear | `os-image-composer ai --clear-cache` |
+| Manual cache clear | `ict ai --clear-cache` |
 
 #### Example: Full Cache Flow
 
 ```bash
-$ os-image-composer ai "create cloud image"
+$ ict ai "create cloud image"
 ```
 
 ```
@@ -777,7 +777,7 @@ Sessions can optionally persist across CLI invocations:
 ai:
   session:
     persist: true
-    storage: ~/.config/os-image-composer/sessions/
+    storage: ~/.config/ict/sessions/
     max_age: 24h  # Auto-expire old sessions
 ```
 
@@ -1076,7 +1076,7 @@ This feature is planned for **Phase 5** as a future enhancement because:
 - Template parser with metadata extraction
 - Embedding generation with content-hash caching
 - Basic semantic search
-- Basic CLI for testing (`os-image-composer ai "query"`)
+- Basic CLI for testing (`ict ai "query"`)
 
 **Phase 2: Query Classification and Hybrid Scoring**
 - Query classifier implementation
@@ -1089,7 +1089,7 @@ This feature is planned for **Phase 5** as a future enhancement because:
 - Multi-turn conversation support
 
 **Phase 4: Full CLI Integration**
-- Interactive mode (`os-image-composer ai --interactive`)
+- Interactive mode (`ict ai --interactive`)
 - Session persistence and continuation
 - Cache management commands
 
@@ -1129,7 +1129,7 @@ flowchart LR
 
 ```bash
 $ ollama serve &
-$ os-image-composer ai "create minimal edge image"
+$ ict ai "create minimal edge image"
 # Just works with defaults!
 ```
 
@@ -1142,7 +1142,7 @@ ai:
 
 ```bash
 $ export OPENAI_API_KEY=sk-xxx
-$ os-image-composer ai "create minimal edge image"
+$ ict ai "create minimal edge image"
 ```
 
 #### config.yaml AI Section
@@ -1246,7 +1246,7 @@ User wants OpenAI with custom cache location:
 ai:
   provider: openai
   cache:
-    dir: /var/cache/os-image-composer/ai
+    dir: /var/cache/ict/ai
 ```
 
 Hardcoded defaults fill in everything else automatically.
@@ -1255,19 +1255,19 @@ Hardcoded defaults fill in everything else automatically.
 
 ```bash
 # Single-shot generation
-os-image-composer ai "create a minimal edge image for elxr"
+ict ai "create a minimal edge image for elxr"
 
 # Interactive conversation mode
-os-image-composer ai --interactive
+ict ai --interactive
 
 # Continue previous session
-os-image-composer ai --continue
+ict ai --continue
 
 # Clear embedding cache
-os-image-composer ai --clear-cache
+ict ai --clear-cache
 
 # Show cache statistics
-os-image-composer ai --cache-stats
+ict ai --cache-stats
 ```
 
 ### Observability

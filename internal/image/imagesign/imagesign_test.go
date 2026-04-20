@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/image/imagesign"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
+	"github.com/open-edge-platform/ict/internal/config"
+	"github.com/open-edge-platform/ict/internal/image/imagesign"
+	"github.com/open-edge-platform/ict/internal/utils/shell"
 )
 
 // CustomMockExecutor creates signed files during sbsign operations

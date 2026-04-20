@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-edge-platform/os-image-composer/internal/chroot"
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/image/initrdmaker"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
+	"github.com/open-edge-platform/ict/internal/chroot"
+	"github.com/open-edge-platform/ict/internal/config"
+	"github.com/open-edge-platform/ict/internal/image/initrdmaker"
+	"github.com/open-edge-platform/ict/internal/utils/shell"
 )
 
 // Custom mock executor that creates files when cpio commands are executed

@@ -12,8 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/network"
+	"github.com/open-edge-platform/ict/internal/utils/logger"
+	"github.com/open-edge-platform/ict/internal/utils/network"
 	"github.com/schollz/progressbar/v3"
 )
 

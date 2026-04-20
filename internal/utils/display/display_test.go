@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/open-edge-platform/os-image-composer/internal/utils/display"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
+	"github.com/open-edge-platform/ict/internal/utils/display"
+	"github.com/open-edge-platform/ict/internal/utils/logger"
 )
 
 func captureLogs(t *testing.T, fn func()) string {

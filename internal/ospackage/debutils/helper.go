@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/network"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
+	"github.com/open-edge-platform/ict/internal/utils/logger"
+	"github.com/open-edge-platform/ict/internal/utils/network"
+	"github.com/open-edge-platform/ict/internal/utils/shell"
 )
 
 // GenerateSPDXFileName creates a SPDX manifest filename based on repository configuration

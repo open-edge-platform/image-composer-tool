@@ -8,12 +8,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-edge-platform/os-image-composer/internal/chroot"
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage/rpmutils"
-	"github.com/open-edge-platform/os-image-composer/internal/provider"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/system"
+	"github.com/open-edge-platform/ict/internal/chroot"
+	"github.com/open-edge-platform/ict/internal/config"
+	"github.com/open-edge-platform/ict/internal/ospackage/rpmutils"
+	"github.com/open-edge-platform/ict/internal/provider"
+	"github.com/open-edge-platform/ict/internal/utils/shell"
+	"github.com/open-edge-platform/ict/internal/utils/system"
 )
 
 // mockChrootEnv is a simple mock implementation of ChrootEnvInterface for testing

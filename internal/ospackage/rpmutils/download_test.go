@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage/rpmutils"
+	"github.com/open-edge-platform/ict/internal/config"
+	"github.com/open-edge-platform/ict/internal/ospackage"
+	"github.com/open-edge-platform/ict/internal/ospackage/rpmutils"
 )
 
 func TestValidateSupportsMultipleRepoGPGKeys(t *testing.T) {

@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	chroot "github.com/open-edge-platform/os-image-composer/internal/chroot"
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
+	chroot "github.com/open-edge-platform/ict/internal/chroot"
+	"github.com/open-edge-platform/ict/internal/config"
+	"github.com/open-edge-platform/ict/internal/utils/shell"
 )
 
 // mockChrootBuilder implements the necessary interface for testing

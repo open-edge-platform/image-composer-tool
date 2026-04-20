@@ -9,7 +9,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
+	"github.com/open-edge-platform/ict/internal/utils/logger"
 )
 
 const (

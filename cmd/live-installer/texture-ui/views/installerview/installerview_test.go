@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"github.com/gdamore/tcell"
-	"github.com/open-edge-platform/os-image-composer/cmd/live-installer/texture-ui/primitives/customshortcutlist"
-	"github.com/open-edge-platform/os-image-composer/internal/config"
+	"github.com/open-edge-platform/ict/cmd/live-installer/texture-ui/primitives/customshortcutlist"
+	"github.com/open-edge-platform/ict/internal/config"
 	"github.com/rivo/tview"
 )
 

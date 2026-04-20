@@ -10,9 +10,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/open-edge-platform/os-image-composer/internal/config/validate"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/security"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/slice"
+	"github.com/open-edge-platform/ict/internal/config/validate"
+	"github.com/open-edge-platform/ict/internal/utils/security"
+	"github.com/open-edge-platform/ict/internal/utils/slice"
 	"gopkg.in/yaml.v3"
 )
 
@@ -116,7 +116,7 @@ func DefaultGlobalConfig() *GlobalConfig {
 
 		Logging: LoggingConfig{
 			Level: "info",
-			File:  "os-image-composer.log",
+			File:  "ict.log",
 		},
 	}
 }
@@ -266,7 +266,7 @@ func (gc *GlobalConfig) SaveGlobalConfigWithComments(configPath string) error {
 func (gc *GlobalConfig) renderCommentedYAML() string {
 	var b strings.Builder
 
-	b.WriteString("# OS Image Composer - Global Configuration\n")
+	b.WriteString("# ICT - Global Configuration\n")
 	b.WriteString("# This file contains tool-level settings that apply across all image builds.\n")
 	b.WriteString("# Image-specific parameters should be defined in the image specification.\n\n")
 
@@ -358,25 +358,25 @@ func GetConfigPaths() []string {
 	homeDir, _ := os.UserHomeDir()
 
 	paths := []string{
-		"os-image-composer.yml",   // Primary config location (root directory)
-		".os-image-composer.yml",  // Hidden file in current directory
-		"os-image-composer.yaml",  // Alternative extension
-		".os-image-composer.yaml", // Hidden file alternative
+		"ict.yml",   // Primary config location (root directory)
+		".ict.yml",  // Hidden file in current directory
+		"ict.yaml",  // Alternative extension
+		".ict.yaml", // Hidden file alternative
 	}
 
 	if homeDir != "" {
 		paths = append(paths,
-			filepath.Join(homeDir, ".os-image-composer", "config.yml"),
-			filepath.Join(homeDir, ".os-image-composer", "config.yaml"),
-			filepath.Join(homeDir, ".config", "os-image-composer", "config.yml"),
-			filepath.Join(homeDir, ".config", "os-image-composer", "config.yaml"),
+			filepath.Join(homeDir, ".ict", "config.yml"),
+			filepath.Join(homeDir, ".ict", "config.yaml"),
+			filepath.Join(homeDir, ".config", "ict", "config.yml"),
+			filepath.Join(homeDir, ".config", "ict", "config.yaml"),
 		)
 	}
 
 	// System-wide config paths
 	paths = append(paths,
-		"/etc/os-image-composer/config.yml",
-		"/etc/os-image-composer/config.yaml",
+		"/etc/ict/config.yml",
+		"/etc/ict/config.yaml",
 	)
 
 	return paths

@@ -19,10 +19,10 @@ import (
 	"time"
 
 	"github.com/klauspost/compress/zstd"
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/network"
+	"github.com/open-edge-platform/ict/internal/config"
+	"github.com/open-edge-platform/ict/internal/ospackage"
+	"github.com/open-edge-platform/ict/internal/utils/logger"
+	"github.com/open-edge-platform/ict/internal/utils/network"
 )
 
 const (

@@ -395,7 +395,7 @@ func TestGenerateAptSourcesFromRepositories_PathOnlyRepo(t *testing.T) {
 		PackageRepositories: []PackageRepository{
 			{
 				Codename:  "localdeb",
-				Path:      "/data/os-image-composer/localdeb",
+				Path:      "/data/ict/localdeb",
 				PKey:      "[trusted=yes]",
 				Component: "main",
 			},

@@ -7,7 +7,7 @@ import (
 	"github.com/gdamore/tcell"
 	"github.com/rivo/tview"
 
-	"github.com/open-edge-platform/os-image-composer/cmd/live-installer/texture-ui/uitext"
+	"github.com/open-edge-platform/ict/cmd/live-installer/texture-ui/uitext"
 )
 
 const (

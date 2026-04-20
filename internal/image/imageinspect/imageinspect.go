@@ -14,10 +14,10 @@ import (
 	"github.com/diskfs/go-diskfs/partition"
 	"github.com/diskfs/go-diskfs/partition/gpt"
 	"github.com/diskfs/go-diskfs/partition/mbr"
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/image/imageconvert"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/file"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
+	"github.com/open-edge-platform/ict/internal/config"
+	"github.com/open-edge-platform/ict/internal/image/imageconvert"
+	"github.com/open-edge-platform/ict/internal/utils/file"
+	"github.com/open-edge-platform/ict/internal/utils/logger"
 	"go.uber.org/zap"
 )
 

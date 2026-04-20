@@ -8,19 +8,19 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/open-edge-platform/os-image-composer/internal/chroot/deb"
-	"github.com/open-edge-platform/os-image-composer/internal/chroot/rpm"
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/config/schema"
-	"github.com/open-edge-platform/os-image-composer/internal/config/validate"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage/debutils"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage/rpmutils"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/compression"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/file"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/security"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/system"
+	"github.com/open-edge-platform/ict/internal/chroot/deb"
+	"github.com/open-edge-platform/ict/internal/chroot/rpm"
+	"github.com/open-edge-platform/ict/internal/config"
+	"github.com/open-edge-platform/ict/internal/config/schema"
+	"github.com/open-edge-platform/ict/internal/config/validate"
+	"github.com/open-edge-platform/ict/internal/ospackage/debutils"
+	"github.com/open-edge-platform/ict/internal/ospackage/rpmutils"
+	"github.com/open-edge-platform/ict/internal/utils/compression"
+	"github.com/open-edge-platform/ict/internal/utils/file"
+	"github.com/open-edge-platform/ict/internal/utils/logger"
+	"github.com/open-edge-platform/ict/internal/utils/security"
+	"github.com/open-edge-platform/ict/internal/utils/shell"
+	"github.com/open-edge-platform/ict/internal/utils/system"
 )
 
 const (

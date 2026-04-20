@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-edge-platform/os-image-composer/internal/image/imageinspect"
+	"github.com/open-edge-platform/ict/internal/image/imageinspect"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
