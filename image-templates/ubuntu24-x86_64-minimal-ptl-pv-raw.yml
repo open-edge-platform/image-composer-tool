@@ -320,8 +320,8 @@ systemConfig:
     cmdline: "xe.max_vfs=7 xe.force_probe=* modprobe.blacklist=i915 udmabuf.list_limit=8192 console=tty0 console=ttyS0,115200n8"
     enableExtraModules: "intel_vpu uas"
     packages:
-        - linux-image-6.17
-        - linux-headers-6.17
+        - linux-image-6.17-intel_260128t080735z-r2
+        - linux-headers-6.17-intel_260128t080735z-r2
 
   configurations:
     # Install Intel Graphics Compiler and compute runtime packages for PTL
