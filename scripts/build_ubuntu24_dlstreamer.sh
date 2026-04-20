@@ -154,18 +154,18 @@ run_qemu_boot_test() {
 
 git branch
 
-echo "Building the OS Image Composer..."
+echo "Building the ICT..."
 echo "Generating binary with go build..."
-go build ./cmd/os-image-composer
+go build ./cmd/ict
 
 build_ubuntu24_dlstreamer_image() {
-  echo "Building Ubuntu24 DLStreamer Image. (using os-image-composer binary)"
+  echo "Building Ubuntu24 DLStreamer Image. (using ict binary)"
   echo "Ensuring we're in the working directory before starting builds..."
   cd "$WORKING_DIR"
   echo "Current working directory: $(pwd)"
   
   set +e
-  output=$(sudo -S ./os-image-composer build image-templates/ubuntu24-x86_64-dlstreamer.yml 2>&1)
+  output=$(sudo -S ./ict build image-templates/ubuntu24-x86_64-dlstreamer.yml 2>&1)
   build_exit_code=$?
   set -e
   

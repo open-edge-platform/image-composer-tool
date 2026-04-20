@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/open-edge-platform/os-image-composer/internal/config/validate"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/security"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/slice"
+	"github.com/open-edge-platform/ict/internal/config/validate"
+	"github.com/open-edge-platform/ict/internal/ospackage"
+	"github.com/open-edge-platform/ict/internal/utils/logger"
+	"github.com/open-edge-platform/ict/internal/utils/security"
+	"github.com/open-edge-platform/ict/internal/utils/slice"
 	"gopkg.in/yaml.v3"
 )
 

@@ -1,4 +1,4 @@
-module github.com/open-edge-platform/os-image-composer
+module github.com/open-edge-platform/ict
 
 go 1.24.0
 

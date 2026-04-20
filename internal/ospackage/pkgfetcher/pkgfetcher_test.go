@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/open-edge-platform/os-image-composer/internal/utils/network"
+	"github.com/open-edge-platform/ict/internal/utils/network"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

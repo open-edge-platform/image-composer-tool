@@ -6,7 +6,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage"
+	"github.com/open-edge-platform/ict/internal/ospackage"
 )
 
 // Mock resolver implementation for testing

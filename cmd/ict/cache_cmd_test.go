@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/open-edge-platform/os-image-composer/internal/config"
+	"github.com/open-edge-platform/ict/internal/config"
 )
 
 func configureTempGlobalCLI(t *testing.T) (restore func(), cacheDir, workDir string) {

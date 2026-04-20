@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-edge-platform/os-image-composer/internal/config"
+	"github.com/open-edge-platform/ict/internal/config"
 )
 
 func TestNewChrootBuilder_MissingConfigDir(t *testing.T) {

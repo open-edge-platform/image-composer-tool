@@ -6,12 +6,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-edge-platform/os-image-composer/internal/chroot"
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage/debutils"
-	"github.com/open-edge-platform/os-image-composer/internal/provider"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/system"
+	"github.com/open-edge-platform/ict/internal/chroot"
+	"github.com/open-edge-platform/ict/internal/config"
+	"github.com/open-edge-platform/ict/internal/ospackage/debutils"
+	"github.com/open-edge-platform/ict/internal/provider"
+	"github.com/open-edge-platform/ict/internal/utils/shell"
+	"github.com/open-edge-platform/ict/internal/utils/system"
 )
 
 // Helper function to create a test ImageTemplate
@@ -2450,7 +2450,7 @@ func TestBuildUserRepoListSkipsPathOnlyRepos(t *testing.T) {
 	input := []config.PackageRepository{
 		{
 			Codename: "localdeb",
-			Path:     "/data/os-image-composer/localdeb",
+			Path:     "/data/ict/localdeb",
 			PKey:     "[trusted=yes]",
 		},
 		{

@@ -5,17 +5,17 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/open-edge-platform/os-image-composer/internal/chroot"
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/image/initrdmaker"
-	"github.com/open-edge-platform/os-image-composer/internal/image/isomaker"
-	"github.com/open-edge-platform/os-image-composer/internal/image/rawmaker"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage/debutils"
-	"github.com/open-edge-platform/os-image-composer/internal/provider"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/display"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/system"
+	"github.com/open-edge-platform/ict/internal/chroot"
+	"github.com/open-edge-platform/ict/internal/config"
+	"github.com/open-edge-platform/ict/internal/image/initrdmaker"
+	"github.com/open-edge-platform/ict/internal/image/isomaker"
+	"github.com/open-edge-platform/ict/internal/image/rawmaker"
+	"github.com/open-edge-platform/ict/internal/ospackage/debutils"
+	"github.com/open-edge-platform/ict/internal/provider"
+	"github.com/open-edge-platform/ict/internal/utils/display"
+	"github.com/open-edge-platform/ict/internal/utils/logger"
+	"github.com/open-edge-platform/ict/internal/utils/shell"
+	"github.com/open-edge-platform/ict/internal/utils/system"
 )
 
 // DEB: https://deb.debian.org/debian/dists/trixie/main/binary-amd64/Packages.gz
