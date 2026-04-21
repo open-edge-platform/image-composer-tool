@@ -192,11 +192,15 @@ func (debInstaller *DebInstaller) InstallDebPkg(targetOsConfigDir, chrootEnvPath
 		"-- %s %s %s",
 		debArch, pkgListStr, suite, chrootEnvPath, localRepoConfigPath)
 
-	// Set environment variables to ensure non-interactive installation
+	// Set environment variables to ensure non-interactive installation.
+	// PYTHONDONTWRITEBYTECODE skips py3compile during postinst scripts, which
+	// is very slow under QEMU user-mode emulation in cross-arch builds. Python
+	// will recompile bytecode on first execution on the target device.
 	envVars := []string{
 		"DEBIAN_FRONTEND=noninteractive",
 		"DEBCONF_NONINTERACTIVE_SEEN=true",
 		"DEBCONF_NOWARNINGS=yes",
+		"PYTHONDONTWRITEBYTECODE=1",
 	}
 
 	if _, err = shell.ExecCmdWithStream(cmd, true, shell.HostPath, envVars); err != nil {
