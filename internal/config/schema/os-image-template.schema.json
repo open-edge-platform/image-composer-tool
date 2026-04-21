@@ -60,6 +60,10 @@
         {
           "if": { "properties": { "os": { "const": "wind-river-elxr" } } },
           "then": { "properties": { "dist": { "enum": ["elxr12"] } } }
+        },
+        {
+          "if": { "properties": { "os": { "const": "ubuntu" } } },
+          "then": { "properties": { "dist": { "enum": ["ubuntu24", "ubuntu26"] } } }
         }
       ]
     },

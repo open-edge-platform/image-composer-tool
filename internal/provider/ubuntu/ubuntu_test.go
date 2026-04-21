@@ -174,7 +174,7 @@ func TestLoadRepoConfig(t *testing.T) {
 		return
 	}
 
-	configs, err := loadRepoConfig("", "amd64")
+	configs, err := loadRepoConfig("ubuntu24", "", "amd64")
 	if err != nil {
 		t.Skipf("loadRepoConfig failed (expected in test environment): %v", err)
 		return
@@ -201,6 +201,79 @@ func TestLoadRepoConfig(t *testing.T) {
 		}
 
 		t.Logf("Successfully loaded repo config: %s", config.Name)
+	}
+}
+
+// TestLoadRepoConfigUbuntu26 tests loading repo config for ubuntu26
+func TestLoadRepoConfigUbuntu26(t *testing.T) {
+	originalDir, _ := os.Getwd()
+	defer func() {
+		if err := os.Chdir(originalDir); err != nil {
+			t.Logf("Failed to change back to original directory: %v", err)
+		}
+	}()
+
+	if err := os.Chdir("../../../"); err != nil {
+		t.Skipf("Cannot change to project root: %v", err)
+		return
+	}
+
+	configs, err := loadRepoConfig("ubuntu26", "", "amd64")
+	if err != nil {
+		t.Skipf("loadRepoConfig for ubuntu26 failed (expected in test environment): %v", err)
+		return
+	}
+
+	if len(configs) == 0 {
+		t.Error("Expected at least one repository configuration for ubuntu26")
+		return
+	}
+
+	for _, cfg := range configs {
+		if cfg.Name == "" {
+			t.Error("Expected config name to be set")
+		}
+		if cfg.Arch != "amd64" {
+			t.Errorf("Expected arch 'amd64', got '%s'", cfg.Arch)
+		}
+		t.Logf("Successfully loaded ubuntu26 repo config: %s", cfg.Name)
+	}
+}
+
+// TestUbuntuProviderInitUbuntu26 tests Init with ubuntu26 dist
+func TestUbuntuProviderInitUbuntu26(t *testing.T) {
+	originalDir, _ := os.Getwd()
+	defer func() {
+		if err := os.Chdir(originalDir); err != nil {
+			t.Logf("Failed to change back to original directory: %v", err)
+		}
+	}()
+
+	if err := os.Chdir("../../../"); err != nil {
+		t.Skipf("Cannot change to project root: %v", err)
+		return
+	}
+
+	u := &ubuntu{}
+	err := u.Init("ubuntu26", "x86_64")
+	if err != nil {
+		t.Logf("Init for ubuntu26 failed as expected in test environment: %v", err)
+	} else {
+		if len(u.repoCfgs) == 0 {
+			t.Error("Expected repoCfgs to be populated after successful Init")
+		}
+		t.Logf("Successfully initialized ubuntu26 provider with %d repositories", len(u.repoCfgs))
+	}
+}
+
+// TestUbuntuProviderNameUbuntu26 tests the Name method with ubuntu26
+func TestUbuntuProviderNameUbuntu26(t *testing.T) {
+	u := &ubuntu{}
+	name := u.Name("ubuntu26", "amd64")
+	expected := "ubuntu-ubuntu26-amd64"
+
+	if name != expected {
+		t.Errorf("Expected name %s, got %s", expected, name)
 	}
 }
 
@@ -1104,7 +1177,7 @@ func TestUbuntuLoadRepoConfigMultiple(t *testing.T) {
 		return
 	}
 
-	configs, err := loadRepoConfig("", "amd64")
+	configs, err := loadRepoConfig("ubuntu24", "", "amd64")
 	if err != nil {
 		t.Skipf("loadRepoConfig failed (expected in test environment): %v", err)
 		return
@@ -1348,7 +1421,7 @@ func TestLoadRepoConfigArm64(t *testing.T) {
 		return
 	}
 
-	configs, err := loadRepoConfig("", "arm64")
+	configs, err := loadRepoConfig("ubuntu24", "", "arm64")
 	if err != nil {
 		t.Skipf("loadRepoConfig failed (expected in test environment): %v", err)
 		return
@@ -1391,7 +1464,7 @@ func TestLoadRepoConfigNonDebRepository(t *testing.T) {
 		return
 	}
 
-	configs, err := loadRepoConfig("", "amd64")
+	configs, err := loadRepoConfig("ubuntu24", "", "amd64")
 	if err != nil {
 		// Check if error is about no valid DEB repositories
 		if strings.Contains(err.Error(), "no valid DEB repositories found") {
@@ -1704,7 +1777,7 @@ func TestLoadRepoConfigNoValidRepos(t *testing.T) {
 	}
 
 	// Try with an invalid architecture that might result in no valid repos
-	configs, err := loadRepoConfig("", "invalid-arch")
+	configs, err := loadRepoConfig("ubuntu24", "", "invalid-arch")
 	if err != nil {
 		if strings.Contains(err.Error(), "no valid DEB repositories found") ||
 			strings.Contains(err.Error(), "failed to load provider repo config") {
@@ -2052,7 +2125,7 @@ func TestUbuntuLoadRepoConfigWithValidData(t *testing.T) {
 	}
 
 	// Test with valid amd64 architecture
-	configs, err := loadRepoConfig("", "amd64")
+	configs, err := loadRepoConfig("ubuntu24", "", "amd64")
 	if err != nil {
 		t.Skipf("loadRepoConfig failed: %v", err)
 		return

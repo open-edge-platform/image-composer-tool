@@ -60,7 +60,7 @@ func (p *ubuntu) Init(dist, arch string) error {
 		arch = "arm64"
 	}
 
-	cfgs, err := loadRepoConfig("", arch)
+	cfgs, err := loadRepoConfig(dist, "", arch)
 	if err != nil {
 		log.Errorf("Parsing repo config failed: %v", err)
 		return err
@@ -343,11 +343,11 @@ func buildUserRepoList(userRepos []config.PackageRepository) []debutils.Reposito
 	return repos
 }
 
-func loadRepoConfig(repoUrl string, arch string) ([]debutils.RepoConfig, error) {
+func loadRepoConfig(dist, repoUrl string, arch string) ([]debutils.RepoConfig, error) {
 	var repoConfigs []debutils.RepoConfig
 
 	// Load provider repo config using the centralized config function
-	providerConfigs, err := config.LoadProviderRepoConfig(OsName, "ubuntu24", arch)
+	providerConfigs, err := config.LoadProviderRepoConfig(OsName, dist, arch)
 	if err != nil {
 		return repoConfigs, fmt.Errorf("failed to load provider repo config: %w", err)
 	}
