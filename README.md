@@ -20,6 +20,7 @@ combinations. The table below lists the OS and architecture combinations that ar
 | Red Hat Compatible Distro | rcd10 | x86_64 |
 | Wind River eLxr | elxr12 | x86_64 |
 | Ubuntu | ubuntu24 | x86_64 |
+| Ubuntu | ubuntu26 | x86_64 |
 
 ## Quick Start
 

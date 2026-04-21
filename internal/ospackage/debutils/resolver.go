@@ -336,16 +336,19 @@ func getRepositoryPriority(packageURL string) int {
 	}
 
 	// Check global RepoCfgs for priority
+	// Normalize trailing slashes before comparing, since user-supplied URLs may include them
+	// but extractRepoBase always returns a URL without a trailing slash.
+	repoBaseNorm := strings.TrimSuffix(repoBase, "/")
 	if len(RepoCfgs) > 0 {
 		for _, repoCfg := range RepoCfgs {
-			if repoCfg.PkgPrefix == repoBase {
+			if strings.TrimSuffix(repoCfg.PkgPrefix, "/") == repoBaseNorm {
 				return repoCfg.Priority
 			}
 		}
 	}
 
 	// Check single RepoCfg for backward compatibility
-	if RepoCfg.PkgPrefix == repoBase {
+	if strings.TrimSuffix(RepoCfg.PkgPrefix, "/") == repoBaseNorm {
 		return RepoCfg.Priority
 	}
 
