@@ -8,7 +8,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DEFAULT_WORKSPACE_DIR="$REPO_ROOT/workspace"
-readonly DEFAULT_WORKSPACE_DIR
 WORKSPACE_DIR="$DEFAULT_WORKSPACE_DIR"
 MAX_UMOUNT_PASSES=5
 FORCE_DELETE=false
@@ -100,8 +99,14 @@ if ! command -v realpath >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! DEFAULT_WORKSPACE_DIR="$(realpath -m "$DEFAULT_WORKSPACE_DIR" 2>/dev/null)"; then
+  echo "Failed to resolve default workspace directory path: $DEFAULT_WORKSPACE_DIR" >&2
+  exit 1
+fi
+readonly DEFAULT_WORKSPACE_DIR
+
 if ! WORKSPACE_DIR="$(realpath -m "$WORKSPACE_DIR" 2>/dev/null)"; then
-  echo "Failed to resolve workspace directory path: $WORKSPACE_DIR" >&2
+  echo "Failed to canonicalize workspace directory path (check permissions or path validity): $WORKSPACE_DIR" >&2
   exit 1
 fi
 
