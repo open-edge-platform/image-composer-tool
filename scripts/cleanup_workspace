@@ -58,10 +58,20 @@ usage() {
 while [[ $# -gt 0 ]]; do
   case $1 in
     --workspace-dir)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: --workspace-dir requires a value"
+        usage
+        exit 1
+      fi
       WORKSPACE_DIR="$2"
       shift 2
       ;;
     --max-umount-passes)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: --max-umount-passes requires a value"
+        usage
+        exit 1
+      fi
       MAX_UMOUNT_PASSES="$2"
       shift 2
       ;;
