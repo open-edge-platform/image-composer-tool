@@ -387,6 +387,34 @@ func TestGenerateAptSourcesFromRepositories_NonDEBSystem(t *testing.T) {
 	}
 }
 
+func TestGenerateAptSourcesFromRepositories_PathOnlyRepo(t *testing.T) {
+	template := &ImageTemplate{
+		Target: TargetInfo{
+			OS: "ubuntu",
+		},
+		PackageRepositories: []PackageRepository{
+			{
+				Codename:  "localdeb",
+				Path:      "/data/os-image-composer/localdeb",
+				PKey:      "[trusted=yes]",
+				Component: "main",
+			},
+		},
+		SystemConfig: SystemConfig{
+			AdditionalFiles: []AdditionalFileInfo{},
+		},
+	}
+
+	err := template.GenerateAptSourcesFromRepositories()
+	if err != nil {
+		t.Fatalf("GenerateAptSourcesFromRepositories() failed for path-only repo: %v", err)
+	}
+
+	if len(template.SystemConfig.AdditionalFiles) != 0 {
+		t.Errorf("expected no apt additional files for path-only repo, got %d", len(template.SystemConfig.AdditionalFiles))
+	}
+}
+
 func TestAddUniqueAdditionalFile(t *testing.T) {
 	template := &ImageTemplate{
 		SystemConfig: SystemConfig{
@@ -615,6 +643,13 @@ func TestNormalizeRepositoryPriorities(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestNormalizeRepositoryPriorities_NilInput(t *testing.T) {
+	result := normalizeRepositoryPriorities(nil)
+	if len(result) != 0 {
+		t.Errorf("expected empty result for nil input, got len=%d", len(result))
 	}
 }
 

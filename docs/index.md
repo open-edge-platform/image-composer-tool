@@ -2,7 +2,7 @@
 
 OS Image Composer is a command-line tool for building custom, bootable Linux
 images from pre-built packages. Define your requirements in a YAML template,
-run one command to get a RAW image ready to deploy (ISO installers require an extra step; see the Installation Guide).
+run one command to get a RAW image ready for deployment (ISO installers require an extra step; see the Installation Guide).
 
 **Supported distributions:** Azure Linux (azl3),
 [Edge Microvisor Toolkit](https://docs.openedgeplatform.intel.com/2026.0/edge-microvisor-toolkit/index.html)
@@ -70,14 +70,15 @@ For build options (Earthly, Debian package) and prerequisite details, see the
 :::{toctree}
 :hidden:
 
-Installation Guide <tutorial/installation.md>
-Prerequisites <tutorial/prerequisite.md>
-Architecture <architecture.md>
-Usage Guide <tutorial/usage-guide.md>
-Secure Boot Configuration <tutorial/configure-secure-boot.md>
-Configure Users <tutorial/configure-image-user.md>
-Customize Image Build <tutorial/configure-additional-actions-for-build.md>
-Configure Multiple Package Repositories <tutorial/configure-multiple-package-repositories.md>
+Installation Guide <./tutorial/installation.md>
+Prerequisites <./tutorial/prerequisite.md>
+Architecture <./architecture.md>
+Usage Guide <./tutorial/usage-guide.md>
+Secure Boot Configuration <./tutorial/configure-secure-boot.md>
+Configure Users <./tutorial/configure-image-user.md>
+Customize Image Build <./tutorial/configure-additional-actions-for-build.md>
+Configure Multiple Package Repositories <./tutorial/configure-multiple-package-repositories.md>
+AI Template Generation (RAG) <./tutorial/ai-template-generation.md>
 release-notes.md
 
 :::

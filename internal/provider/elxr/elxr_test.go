@@ -239,6 +239,24 @@ func (m *mockChrootEnv) AptInstallPackage(packageName, installRoot string, repoS
 }
 func (m *mockChrootEnv) UpdateSystemPkgs(template *config.ImageTemplate) error { return nil }
 
+type mockElxrCleanupErrEnv struct {
+	mockChrootEnv
+	err error
+}
+
+func (m *mockElxrCleanupErrEnv) CleanupChrootEnv(targetOs, targetDist, targetArch string) error {
+	return m.err
+}
+
+type mockElxrUpdateErrEnv struct {
+	mockChrootEnv
+	err error
+}
+
+func (m *mockElxrUpdateErrEnv) UpdateSystemPkgs(template *config.ImageTemplate) error {
+	return m.err
+}
+
 // TestElxrProviderPreProcess tests PreProcess method with mocked dependencies
 func TestElxrProviderPreProcess(t *testing.T) {
 	// Save original shell executor and restore after test
@@ -1071,6 +1089,87 @@ func TestElxrInitWithAarch64(t *testing.T) {
 	}
 
 	t.Logf("Successfully initialized with aarch64: %s", elxr.repoCfgs[0].PkgList)
+}
+
+func TestElxrPostProcessCleanupFailure(t *testing.T) {
+	elxr := &eLxr{chrootEnv: &mockElxrCleanupErrEnv{err: fmt.Errorf("cleanup failed")}}
+
+	err := elxr.PostProcess(createTestImageTemplate(), nil)
+	if err == nil {
+		t.Fatal("expected cleanup failure")
+	}
+	if !strings.Contains(err.Error(), "failed to cleanup chroot environment") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestElxrInstallHostDependencySkipsWhenCommandsExist(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: "command -v .*", Output: "/usr/bin/fake", Error: nil},
+	})
+
+	elxr := &eLxr{}
+	if err := elxr.installHostDependency(); err != nil {
+		t.Fatalf("expected success when commands already exist, got %v", err)
+	}
+}
+
+func TestElxrInstallHostDependencyCheckError(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: "command -v .*", Output: "/usr/bin/fake", Error: fmt.Errorf("probe failed")},
+	})
+
+	elxr := &eLxr{}
+	err := elxr.installHostDependency()
+	if err == nil {
+		t.Fatal("expected command check error")
+	}
+	if !strings.Contains(err.Error(), "failed to check command") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "probe failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestElxrInstallHostDependencyInstallError(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: "command -v .*", Output: "", Error: fmt.Errorf("missing")},
+		{Pattern: "sudo apt install -y .*", Output: "", Error: fmt.Errorf("install failed")},
+	})
+
+	elxr := &eLxr{}
+	err := elxr.installHostDependency()
+	if err == nil {
+		t.Fatal("expected install error")
+	}
+	if !strings.Contains(err.Error(), "failed to install host dependency") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "install failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestElxrDownloadImagePkgsUpdateSystemError(t *testing.T) {
+	elxr := &eLxr{chrootEnv: &mockElxrUpdateErrEnv{err: fmt.Errorf("update failed")}}
+
+	err := elxr.downloadImagePkgs(createTestImageTemplate())
+	if err == nil {
+		t.Fatal("expected update system packages error")
+	}
+	if !strings.Contains(err.Error(), "failed to update system packages") {
+		t.Fatalf("unexpected error: %v", err)
+	}
 }
 
 // TestElxrInitErrorPaths tests error paths in Init method

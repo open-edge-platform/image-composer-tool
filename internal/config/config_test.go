@@ -481,6 +481,8 @@ func TestAllSupportedProviders(t *testing.T) {
 		{"azure-linux", "azl3", "AzureLinux3", "3"},
 		{"emt", "emt3", "EMT3.0", "3.0"},
 		{"elxr", "elxr12", "eLxr12", "12"},
+		{"ubuntu", "ubuntu24", "Ubuntu24", "24.04"},
+		{"ubuntu", "ubuntu26", "Ubuntu26", "26.04"},
 	}
 
 	for _, tc := range testCases {
@@ -2427,6 +2429,55 @@ systemConfig:
 	}
 }
 
+func TestLoadTemplateRejectsInvalidPackageRepository(t *testing.T) {
+	yamlContent := `image:
+  name: test-invalid-repo
+  version: "1.0.0"
+
+target:
+  os: azure-linux
+  dist: azl3
+  arch: x86_64
+  imageType: raw
+
+packageRepositories:
+  - codename: "invalid-repo"
+    url: "https://example.com/repo"
+    path: "/tmp/repo"
+    pkey: "https://example.com/key.pub"
+
+systemConfig:
+  name: test
+  packages:
+    - test-package
+  kernel:
+    version: "6.12"
+    cmdline: "quiet"
+`
+
+	tmpFile, err := os.CreateTemp("", "test-invalid-repo-*.yml")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	if err := tmpFile.Chmod(0600); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpFile.Name())
+		t.Fatalf("failed to set temp file permissions: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString(yamlContent); err != nil {
+		tmpFile.Close()
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	_, err = LoadTemplate(tmpFile.Name(), false)
+	if err == nil {
+		t.Fatal("expected LoadTemplate to reject invalid package repository configuration")
+	}
+}
+
 func TestGlobalConfigSaveWithCreateDirectory(t *testing.T) {
 	config := &GlobalConfig{
 		Workers:   4,
@@ -3206,6 +3257,77 @@ systemConfig:
 	}
 }
 
+func TestPackageRepositoryYAMLParsingLocalPath(t *testing.T) {
+	yamlContent := `image:
+  name: test-local-repo-parsing
+  version: "1.0.0"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+
+packageRepositories:
+  - codename: "localdeb"
+    path: "/data/os-image-composer/localdeb"
+    pkey: "[trusted=yes]"
+    component: "main"
+
+systemConfig:
+  name: test
+  packages:
+    - test-package
+  kernel:
+    version: "6.12"
+    cmdline: "quiet"
+`
+
+	tmpFile, err := os.CreateTemp("", "test-local-repo-*.yml")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	if err := tmpFile.Chmod(0600); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpFile.Name())
+		return
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString(yamlContent); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	template, err := LoadTemplate(tmpFile.Name(), false)
+	if err != nil {
+		t.Fatalf("failed to load YAML template with local package repository: %v", err)
+	}
+
+	repos := template.GetPackageRepositories()
+	if len(repos) != 1 {
+		t.Fatalf("expected 1 parsed repository, got %d", len(repos))
+	}
+
+	repo := template.GetRepositoryByCodename("localdeb")
+	if repo == nil {
+		t.Fatalf("expected to find localdeb repository")
+	}
+
+	if repo.Path != "/data/os-image-composer/localdeb" {
+		t.Errorf("expected repo path '/data/os-image-composer/localdeb', got '%s'", repo.Path)
+	}
+	if repo.PKey != "[trusted=yes]" {
+		t.Errorf("expected repo pkey '[trusted=yes]', got '%s'", repo.PKey)
+	}
+	if repo.Component != "main" {
+		t.Errorf("expected repo component 'main', got '%s'", repo.Component)
+	}
+	if repo.URL != "" {
+		t.Errorf("expected repo URL to be empty for local path repository, got '%s'", repo.URL)
+	}
+}
+
 func TestPackageRepositoriesWithDuplicateCodenames(t *testing.T) {
 	repos := []PackageRepository{
 		{Codename: "duplicate", URL: "https://first.com", PKey: "https://first.com/key.pub"},
@@ -3665,6 +3787,7 @@ func TestUnifiedRepoConfig(t *testing.T) {
 		arch         string
 		expectedType string
 		expectedURL  string
+		expectedGPG  string
 	}{
 		{
 			name: "RPM Repository (Azure Linux)",
@@ -3679,6 +3802,7 @@ func TestUnifiedRepoConfig(t *testing.T) {
 			arch:         "x86_64",
 			expectedType: "rpm",
 			expectedURL:  "https://packages.microsoft.com/azurelinux/3.0/prod/base/x86_64",
+			expectedGPG:  "https://packages.microsoft.com/azurelinux/3.0/prod/base/x86_64/repodata/repomd.xml.key",
 		},
 		{
 			name: "DEB Repository (eLxr)",
@@ -3709,6 +3833,21 @@ func TestUnifiedRepoConfig(t *testing.T) {
 			arch:         "x86_64",
 			expectedType: "rpm",
 			expectedURL:  "https://files-rs.edgeorchestration.intel.com/files-edge-orch/microvisor/rpm/3.0",
+		},
+		{
+			name: "RPM Repository with multiple GPG keys",
+			repoConfig: ProviderRepoConfig{
+				Name:      "Edge Microvisor Toolkit 3.0",
+				Type:      "rpm",
+				BaseURL:   "https://files-rs.edgeorchestration.intel.com/files-edge-orch/microvisor/rpm/3.0",
+				GPGKeys:   []string{"https://example.com/key-old.asc", "https://example.com/key-new.asc"},
+				Component: "emt3.0-base",
+				Enabled:   true,
+			},
+			arch:         "x86_64",
+			expectedType: "rpm",
+			expectedURL:  "https://files-rs.edgeorchestration.intel.com/files-edge-orch/microvisor/rpm/3.0",
+			expectedGPG:  "https://example.com/key-old.asc,https://example.com/key-new.asc",
 		},
 	}
 
@@ -3749,7 +3888,11 @@ func TestUnifiedRepoConfig(t *testing.T) {
 				}
 
 				// Verify arch substitution in GPG key if applicable
-				if tt.repoConfig.GPGKey != "" && gpgKey != "" {
+				if tt.expectedGPG != "" {
+					if gpgKey != tt.expectedGPG {
+						t.Errorf("Expected GPG key %s, got %s", tt.expectedGPG, gpgKey)
+					}
+				} else if tt.repoConfig.GPGKey != "" && gpgKey != "" {
 					expectedGPGKey := tt.repoConfig.GPGKey
 					if expectedGPGKey == "repodata/repomd.xml.key" {
 						expectedGPGKey = "https://packages.microsoft.com/azurelinux/3.0/prod/base/x86_64/repodata/repomd.xml.key"

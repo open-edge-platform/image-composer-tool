@@ -1,0 +1,30 @@
+essential:
+  - dpkg
+  - apt
+  - debianutils
+  - init-system-helpers
+  - dash
+  - mount
+  - sysvinit-utils
+  - gzip
+  - bash
+  - util-linux
+  - tar
+  - base-files
+  - base-passwd
+  - sed
+  - bsdutils
+  - coreutils
+  - findutils
+  - grep
+  - login
+  - perl-base
+  - diffutils
+  - libc-bin
+  - hostname
+  - ncurses-bin
+  - ncurses-base
+
+packages:
+  - mmdebstrap
+  - grub-efi-arm64-bin

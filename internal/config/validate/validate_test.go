@@ -686,3 +686,45 @@ systemConfig:
 		t.Errorf("expected template with URL pkey to pass validation, but got: %v", err)
 	}
 }
+
+// TestPackageRepositoryWithLocalPath validates that a local path repository
+// with [trusted=yes] is accepted by schema validation.
+func TestPackageRepositoryWithLocalPath(t *testing.T) {
+	templateYAML := `image:
+  name: test-local-path-repo
+  version: "1.0.0"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+
+packageRepositories:
+  - codename: "localdeb"
+    path: "/data/os-image-composer/localdeb"
+    pkey: "[trusted=yes]"
+    component: "main"
+
+systemConfig:
+  name: test
+  packages:
+    - test-package
+  kernel:
+    version: "6.14"
+`
+
+	var raw interface{}
+	if err := yaml.Unmarshal([]byte(templateYAML), &raw); err != nil {
+		t.Fatalf("YAML parsing error: %v", err)
+	}
+
+	dataJSON, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("JSON marshaling error: %v", err)
+	}
+
+	if err := ValidateImageTemplateJSON(dataJSON); err != nil {
+		t.Errorf("expected template with local path repo to pass validation, but got: %v", err)
+	}
+}

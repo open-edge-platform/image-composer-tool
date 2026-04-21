@@ -27,6 +27,7 @@ type Repository struct {
 	ID            string
 	Codename      string
 	URL           string
+	Path          string
 	PKey          string
 	Component     string
 	Priority      int
@@ -583,13 +584,57 @@ func BuildRepoConfigs(userRepoList []Repository, arch string) ([]RepoConfig, err
 	return userRepo, nil
 }
 
-// initializeUserRepoCfgs builds the UserRepoCfgs from UserRepo without fetching package metadata.
-// This is called early to ensure UserRepoCfgs is available before cache checks.
-func initializeUserRepoCfgs() error {
-	// UserRepoCfgs is already initialized, skip
+func LocalUserPackages() ([]ospackage.PackageInfo, func(), error) {
+	log := logger.Logger()
+	log.Infof("fetching packages from local user package list")
+
+	var allLocalPackages []ospackage.PackageInfo
+	var cleanups []func()
+	combinedCleanup := func() {
+		for _, fn := range cleanups {
+			fn()
+		}
+	}
+
+	for i, repo := range UserRepo {
+		if repo.Path == "<PATH>" || repo.Path == "" {
+			continue
+		}
+
+		repoName := fmt.Sprintf("localrepo%d", i+1)
+		_, tempURL, cleanup, err := CreateTemporaryRepository(repo.Path, repoName, Architecture)
+		if err != nil {
+			combinedCleanup()
+			log.Errorf("failed to create temporary DEB repository for %s: %v", repo.Path, err)
+			return nil, nil, fmt.Errorf("failed to create temporary DEB repository for %s: %w", repo.Path, err)
+		}
+		cleanups = append(cleanups, cleanup)
+
+		component := "main"
+		pkggz := fmt.Sprintf("%s/dists/stable/%s/binary-%s/Packages.gz", tempURL, component, Architecture)
+		releaseFile := fmt.Sprintf("%s/dists/stable/Release", tempURL)
+		buildPath := filepath.Join(config.TempDir(), "builds", fmt.Sprintf("%s_%s_%s", repoName, Architecture, component))
+
+		localPkgs, err := ParseRepositoryMetadata(tempURL, pkggz, releaseFile, "", "[trusted=yes]", buildPath, Architecture, repo.AllowPackages)
+		if err != nil {
+			combinedCleanup()
+			log.Errorf("failed to parse local DEB repository %s: %v", repo.Path, err)
+			return nil, nil, fmt.Errorf("failed to parse local DEB repository %s: %w", repo.Path, err)
+		}
+		allLocalPackages = append(allLocalPackages, localPkgs...)
+	}
+
+	return allLocalPackages, combinedCleanup, nil
+}
+
+func UserPackages() ([]ospackage.PackageInfo, error) {
+  // UserRepoCfgs is already initialized, skip
 	if len(UserRepoCfgs) > 0 {
 		return nil
 	}
+
+	log := logger.Logger()
+	log.Infof("fetching packages from %s", "user package list")
 
 	var repoList []Repository
 	repoGroup := "custrepo"
@@ -598,11 +643,13 @@ func initializeUserRepoCfgs() error {
 		if repo.URL == "<URL>" || repo.URL == "" {
 			continue
 		}
+
 		baseURL := strings.TrimPrefix(strings.TrimPrefix(repo.URL, "http://"), "https://")
 		repoList = append(repoList, Repository{
 			ID:            fmt.Sprintf("%s%d", repoGroup+"-"+baseURL, i+1),
 			Codename:      repo.Codename,
 			URL:           repo.URL,
+			Path:          repo.Path,
 			PKey:          repo.PKey,
 			Component:     repo.Component,
 			Priority:      repo.Priority,
@@ -924,6 +971,17 @@ func DownloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSour
 		return downloadPkgList, nil, fmt.Errorf("user package fetch failed: %w", err)
 	}
 	all = append(all, userpkg...)
+
+	// Adding local repo packages
+	localRepoPkgs, localRepoCleanup, err := LocalUserPackages()
+	if err != nil {
+		log.Errorf("getting local repo packages failed: %v", err)
+		return downloadPkgList, nil, fmt.Errorf("local repo package fetch failed: %w", err)
+	}
+	if localRepoCleanup != nil {
+		defer localRepoCleanup()
+	}
+	all = append(all, localRepoPkgs...)
 
 	// Match the packages in the template against all the packages
 	req, err := MatchRequested(pkgList, all)

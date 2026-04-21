@@ -1,4 +1,4 @@
-package debutils_test
+package debutils
 
 import (
 	"fmt"
@@ -9,7 +9,6 @@ import (
 
 	"github.com/open-edge-platform/os-image-composer/internal/config"
 	"github.com/open-edge-platform/os-image-composer/internal/ospackage"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage/debutils"
 )
 
 func TestResolveDependenciesAdvanced(t *testing.T) {
@@ -70,7 +69,7 @@ func TestResolveDependenciesAdvanced(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			result, err := debutils.ResolveDependencies(tc.requested, tc.all)
+			result, err := ResolveDependencies(tc.requested, tc.all)
 
 			if tc.expectError {
 				if err == nil {
@@ -161,7 +160,7 @@ func TestGenerateDot(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := debutils.GenerateDot(tc.pkgs, tc.filename, tc.pkgSources)
+			err := GenerateDot(tc.pkgs, tc.filename, tc.pkgSources)
 			if tc.expectError {
 				if err == nil {
 					t.Errorf("expected error but got none")
@@ -201,7 +200,7 @@ func TestGenerateDot(t *testing.T) {
 				// Check dependencies - each unique edge should appear exactly once
 				seenEdges := make(map[string]bool)
 				for _, dep := range pkg.Requires {
-					depName := debutils.CleanDependencyName(dep)
+					depName := CleanDependencyName(dep)
 					if depName == "" {
 						continue
 					}
@@ -268,7 +267,7 @@ func TestCleanDependencyName(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.input, func(t *testing.T) {
-			result := debutils.CleanDependencyName(tc.input)
+			result := CleanDependencyName(tc.input)
 			if result != tc.expected {
 				t.Errorf("cleanDependencyName(%q) = %q, expected %q", tc.input, result, tc.expected)
 			}
@@ -325,7 +324,7 @@ func TestCompareDebianVersions(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.a+"_vs_"+tc.b, func(t *testing.T) {
 			// Test the exported CompareDebianVersions function directly
-			result, err := debutils.CompareDebianVersions(tc.a, tc.b)
+			result, err := CompareDebianVersions(tc.a, tc.b)
 			if err != nil {
 				t.Errorf("CompareDebianVersions(%q, %q) returned error: %v", tc.a, tc.b, err)
 				return
@@ -376,6 +375,209 @@ func TestCompareVersions(t *testing.T) {
 			// CompareVersions is unexported, so we skip direct testing
 			// The function is tested indirectly through Resolve functionality
 			t.Skipf("CompareVersions is unexported - tested indirectly through resolution")
+		})
+	}
+}
+
+func TestFilterCandidatesByPriorityWithTarget(t *testing.T) {
+	// Mock repository configurations for testing
+	oldRepoCfgs := RepoCfgs
+	oldRepoCfg := RepoCfg
+	defer func() {
+		RepoCfgs = oldRepoCfgs
+		RepoCfg = oldRepoCfg
+	}()
+
+	// Set up test repositories with different priorities
+	RepoCfgs = []RepoConfig{
+		{PkgPrefix: "http://archive.ubuntu.com/ubuntu", Priority: 500},         // Default priority
+		{PkgPrefix: "http://ppa.launchpad.net/test/ppa/ubuntu", Priority: 990}, // Preferred
+		{PkgPrefix: "http://blocked.repo.com/ubuntu", Priority: -1},            // Blocked
+		{PkgPrefix: "http://force.repo.com/ubuntu", Priority: 1001},            // Force install
+	}
+
+	testCases := []struct {
+		name          string
+		candidates    []ospackage.PackageInfo
+		targetName    string
+		expectedNames []string // Expected order of package names after filtering
+		expectedCount int
+		description   string
+	}{
+		{
+			name:          "empty candidates",
+			candidates:    []ospackage.PackageInfo{},
+			targetName:    "test-pkg",
+			expectedNames: []string{},
+			expectedCount: 0,
+			description:   "should handle empty candidate list",
+		},
+		{
+			name: "exact name wins over provides",
+			candidates: []ospackage.PackageInfo{
+				{Name: "linux-image-6.17.0-1017-oem", Version: "6.17.0-1017.18",
+					URL:      "http://archive.ubuntu.com/ubuntu/pool/main/l/linux/linux-image-6.17.0-1017-oem_6.17.0-1017.18_amd64.deb",
+					Provides: []string{"v4l2loopback-dkms"}},
+				{Name: "v4l2loopback-dkms", Version: "0.12.7-2ubuntu5.1",
+					URL: "http://archive.ubuntu.com/ubuntu/pool/universe/v/v4l2loopback/v4l2loopback-dkms_0.12.7-2ubuntu5.1_all.deb"},
+			},
+			targetName:    "v4l2loopback-dkms",
+			expectedNames: []string{"v4l2loopback-dkms", "linux-image-6.17.0-1017-oem"},
+			expectedCount: 2,
+			description:   "exact name match should come first despite lower version number",
+		},
+		{
+			name: "blocked packages filtered out",
+			candidates: []ospackage.PackageInfo{
+				{Name: "good-pkg", Version: "1.0",
+					URL: "http://archive.ubuntu.com/ubuntu/pool/main/g/good/good-pkg_1.0_amd64.deb"},
+				{Name: "blocked-pkg", Version: "2.0",
+					URL: "http://blocked.repo.com/ubuntu/pool/main/b/blocked/blocked-pkg_2.0_amd64.deb"},
+			},
+			targetName:    "test-pkg",
+			expectedNames: []string{"good-pkg"},
+			expectedCount: 1,
+			description:   "packages from blocked repositories should be filtered out",
+		},
+		{
+			name: "priority comparison for exact matches",
+			candidates: []ospackage.PackageInfo{
+				{Name: "pkg", Version: "1.0",
+					URL: "http://archive.ubuntu.com/ubuntu/pool/main/p/pkg/pkg_1.0_amd64.deb"}, // Priority 500
+				{Name: "pkg", Version: "1.0",
+					URL: "http://ppa.launchpad.net/test/ppa/ubuntu/pool/main/p/pkg/pkg_1.0_amd64.deb"}, // Priority 990
+			},
+			targetName:    "pkg",
+			expectedNames: []string{"pkg", "pkg"}, // Higher priority first
+			expectedCount: 2,
+			description:   "higher priority exact matches should come first",
+		},
+		{
+			name: "version comparison for exact matches",
+			candidates: []ospackage.PackageInfo{
+				{Name: "pkg", Version: "1.0",
+					URL: "http://archive.ubuntu.com/ubuntu/pool/main/p/pkg/pkg_1.0_amd64.deb"},
+				{Name: "pkg", Version: "2.0",
+					URL: "http://archive.ubuntu.com/ubuntu/pool/main/p/pkg/pkg_2.0_amd64.deb"},
+			},
+			targetName:    "pkg",
+			expectedNames: []string{"pkg", "pkg"}, // Higher version first
+			expectedCount: 2,
+			description:   "higher version exact matches should come first when same priority",
+		},
+		{
+			name: "force install priority",
+			candidates: []ospackage.PackageInfo{
+				{Name: "pkg", Version: "1.0",
+					URL: "http://archive.ubuntu.com/ubuntu/pool/main/p/pkg/pkg_1.0_amd64.deb"}, // Priority 500
+				{Name: "pkg", Version: "1.0",
+					URL: "http://force.repo.com/ubuntu/pool/main/p/pkg/pkg_1.0_amd64.deb"}, // Priority 1001 (force)
+			},
+			targetName:    "pkg",
+			expectedNames: []string{"pkg", "pkg"}, // Force install first
+			expectedCount: 2,
+			description:   "force install packages should have highest priority",
+		},
+		{
+			name: "provides matches stable order",
+			candidates: []ospackage.PackageInfo{
+				{Name: "kernel-a", Version: "6.17.0",
+					URL:      "http://archive.ubuntu.com/ubuntu/pool/main/k/kernel-a/kernel-a_6.17.0_amd64.deb",
+					Provides: []string{"virtual-pkg"}},
+				{Name: "kernel-b", Version: "5.15.0",
+					URL:      "http://archive.ubuntu.com/ubuntu/pool/main/k/kernel-b/kernel-b_5.15.0_amd64.deb",
+					Provides: []string{"virtual-pkg"}},
+			},
+			targetName:    "virtual-pkg",
+			expectedNames: []string{"kernel-a", "kernel-b"}, // Maintain stable order, no version comparison
+			expectedCount: 2,
+			description:   "provides matches should maintain stable order without cross-type version comparison",
+		},
+		{
+			name: "mixed exact and provides with different priorities",
+			candidates: []ospackage.PackageInfo{
+				{Name: "real-pkg", Version: "1.0",
+					URL: "http://archive.ubuntu.com/ubuntu/pool/main/r/real/real-pkg_1.0_amd64.deb"}, // Priority 500
+				{Name: "high-priority-virtual", Version: "2.0",
+					URL:      "http://ppa.launchpad.net/test/ppa/ubuntu/pool/main/h/high/high-priority-virtual_2.0_amd64.deb", // Priority 990
+					Provides: []string{"real-pkg"}},
+			},
+			targetName:    "real-pkg",
+			expectedNames: []string{"real-pkg", "high-priority-virtual"}, // Exact match wins despite lower priority
+			expectedCount: 2,
+			description:   "exact matches should win over provides matches regardless of priority",
+		},
+		{
+			name: "all candidates blocked",
+			candidates: []ospackage.PackageInfo{
+				{Name: "blocked1", Version: "1.0",
+					URL: "http://blocked.repo.com/ubuntu/pool/main/b/blocked1/blocked1_1.0_amd64.deb"},
+				{Name: "blocked2", Version: "2.0",
+					URL: "http://blocked.repo.com/ubuntu/pool/main/b/blocked2/blocked2_2.0_amd64.deb"},
+			},
+			targetName:    "test-pkg",
+			expectedNames: []string{},
+			expectedCount: 0,
+			description:   "should return empty when all candidates are blocked",
+		},
+		{
+			name: "real v4l2loopback-dkms scenario",
+			candidates: []ospackage.PackageInfo{
+				// Multiple kernel packages providing v4l2loopback-dkms (with higher versions)
+				{Name: "linux-image-unsigned-6.17.0-1017-oem", Version: "6.17.0-1017.18",
+					URL:      "http://archive.ubuntu.com/ubuntu/pool/main/l/linux-unsigned/linux-image-unsigned-6.17.0-1017-oem_6.17.0-1017.18_amd64.deb",
+					Provides: []string{"v4l2loopback-dkms"}},
+				{Name: "linux-image-unsigned-6.15.0-1015-oem", Version: "6.15.0-1015.16",
+					URL:      "http://archive.ubuntu.com/ubuntu/pool/main/l/linux-unsigned/linux-image-unsigned-6.15.0-1015-oem_6.15.0-1015.16_amd64.deb",
+					Provides: []string{"v4l2loopback-dkms"}},
+				// Real v4l2loopback-dkms package (with lower version number)
+				{Name: "v4l2loopback-dkms", Version: "0.12.7-2ubuntu5.1",
+					URL: "http://archive.ubuntu.com/ubuntu/pool/universe/v/v4l2loopback/v4l2loopback-dkms_0.12.7-2ubuntu5.1_all.deb"},
+			},
+			targetName:    "v4l2loopback-dkms",
+			expectedNames: []string{"v4l2loopback-dkms", "linux-image-unsigned-6.17.0-1017-oem", "linux-image-unsigned-6.15.0-1015-oem"},
+			expectedCount: 3,
+			description:   "real v4l2loopback-dkms package should be selected first despite kernel packages having higher version numbers",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := filterCandidatesByPriorityWithTarget(tc.candidates, tc.targetName)
+
+			if len(result) != tc.expectedCount {
+				t.Errorf("expected %d candidates, got %d", tc.expectedCount, len(result))
+				for i, pkg := range result {
+					t.Logf("  result[%d]: %s (version: %s)", i, pkg.Name, pkg.Version)
+				}
+			}
+
+			// Check that the order matches expected names
+			for i, expected := range tc.expectedNames {
+				if i >= len(result) {
+					t.Errorf("expected candidate %d to be %s, but result has only %d candidates", i, expected, len(result))
+					continue
+				}
+				if result[i].Name != expected {
+					t.Errorf("expected candidate %d to be %s, got %s", i, expected, result[i].Name)
+				}
+			}
+
+			// Verify no blocked packages in result
+			for _, pkg := range result {
+				if strings.Contains(pkg.URL, "blocked.repo.com") {
+					t.Errorf("blocked package %s should not be in result", pkg.Name)
+				}
+			}
+
+			// For the real v4l2loopback-dkms scenario, verify the exact match comes first
+			if tc.name == "real v4l2loopback-dkms scenario" && len(result) > 0 {
+				if result[0].Name != "v4l2loopback-dkms" {
+					t.Errorf("v4l2loopback-dkms should be first candidate, got %s", result[0].Name)
+				}
+			}
+
+			t.Logf("Test '%s': %s", tc.name, tc.description)
 		})
 	}
 }
@@ -433,7 +635,7 @@ func TestResolveTopPackageConflicts(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			result, found := debutils.ResolveTopPackageConflicts(tc.want, all)
+			result, found := ResolveTopPackageConflicts(tc.want, all)
 
 			if found != tc.expectFound {
 				t.Errorf("ResolveTopPackageConflicts(%q) found=%v, expected found=%v", tc.want, found, tc.expectFound)

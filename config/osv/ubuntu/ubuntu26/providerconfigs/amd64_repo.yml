@@ -1,0 +1,38 @@
+repositories:
+  - name: "resolute"
+    type: "deb"  # Repository type: rpm or deb
+    baseURL: "http://archive.ubuntu.com/ubuntu"
+    pkgPrefix: "http://archive.ubuntu.com/ubuntu"
+    releaseFile: "http://archive.ubuntu.com/ubuntu/dists/resolute/Release"
+    releaseSign: "http://archive.ubuntu.com/ubuntu/dists/resolute/Release.gpg"
+    pbGPGKey: "/usr/share/keyrings/ubuntu-archive-keyring.gpg"
+    gpgCheck: true
+    repoGPGCheck: true
+    enabled: true
+    component: "main restricted universe multiverse"  # Repository component/section identifier
+    buildPath: "./builds/ubuntu26/main"  # Will be replaced with temp_dir/builds/ubuntu26/main at runtime
+  - name: "resolute-security"
+    type: "deb"
+    baseURL: "http://security.ubuntu.com/ubuntu"
+    pkgPrefix: "http://security.ubuntu.com/ubuntu"
+    releaseFile: "http://security.ubuntu.com/ubuntu/dists/resolute-security/Release"
+    releaseSign: "http://security.ubuntu.com/ubuntu/dists/resolute-security/Release.gpg"
+    pbGPGKey: "/usr/share/keyrings/ubuntu-archive-keyring.gpg"
+    gpgCheck: true
+    repoGPGCheck: true
+    enabled: true
+    component: "main restricted universe multiverse"
+    buildPath: "./builds/ubuntu26/security"  # Will be replaced with temp_dir/builds/ubuntu26/security at runtime
+  - name: "resolute-updates"
+    type: "deb"
+    baseURL: "http://archive.ubuntu.com/ubuntu"
+    pkgPrefix: "http://archive.ubuntu.com/ubuntu"
+    releaseFile: "http://archive.ubuntu.com/ubuntu/dists/resolute-updates/Release"
+    releaseSign: "http://archive.ubuntu.com/ubuntu/dists/resolute-updates/Release.gpg"
+    pbGPGKey: "/usr/share/keyrings/ubuntu-archive-keyring.gpg"
+    gpgCheck: true
+    repoGPGCheck: true
+    enabled: true
+    component: "main restricted universe multiverse"
+    buildPath: "./builds/ubuntu26/updates"  # Will be replaced with temp_dir/builds/ubuntu26/updates at runtime
+  

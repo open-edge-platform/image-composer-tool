@@ -44,6 +44,7 @@ disk:
       start: 1MiB
       end: 384MiB
       fsType: fat32
+      fsLabel: esp
       mountPoint: /boot/efi
       mountOptions: umask=0077
 
