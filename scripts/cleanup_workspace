@@ -61,7 +61,7 @@ while [[ $# -gt 0 ]]; do
   case $1 in
     --workspace-dir)
       if [[ $# -lt 2 ]]; then
-        echo "Error: --workspace-dir requires a value"
+        echo "Error: --workspace-dir requires a value" >&2
         usage
         exit 1
       fi
@@ -70,7 +70,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --max-umount-passes)
       if [[ $# -lt 2 ]]; then
-        echo "Error: --max-umount-passes requires a value"
+        echo "Error: --max-umount-passes requires a value" >&2
         usage
         exit 1
       fi
@@ -94,17 +94,17 @@ while [[ $# -gt 0 ]]; do
 done
 
 if ! WORKSPACE_DIR="$(realpath -m "$WORKSPACE_DIR" 2>/dev/null)"; then
-  echo "Failed to resolve workspace directory path: $WORKSPACE_DIR"
+  echo "Failed to resolve workspace directory path: $WORKSPACE_DIR" >&2
   exit 1
 fi
 
 if [[ "$WORKSPACE_DIR" == "/" ]]; then
-  echo "Refusing to remove root directory"
+  echo "Refusing to remove root directory" >&2
   exit 1
 fi
 
 if [[ "$WORKSPACE_DIR" != "$REPO_ROOT/workspace" && "$FORCE_DELETE" != true ]]; then
-  echo "Refusing to remove non-default workspace directory without --force: $WORKSPACE_DIR"
+  echo "Refusing to remove non-default workspace directory without --force: $WORKSPACE_DIR" >&2
   exit 1
 fi
 
