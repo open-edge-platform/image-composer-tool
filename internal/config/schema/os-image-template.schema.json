@@ -29,7 +29,7 @@
         "os": {
           "type": "string",
           "description": "Target operating system",
-          "enum": ["azure-linux", "edge-microvisor-toolkit", "wind-river-elxr", "ubuntu", "redhat-compatible-distro"]
+          "enum": ["azure-linux", "edge-microvisor-toolkit", "wind-river-elxr", "ubuntu", "redhat-compatible-distro", "debian"]
         },
         "dist": {
           "type": "string",
@@ -60,6 +60,10 @@
         {
           "if": { "properties": { "os": { "const": "wind-river-elxr" } } },
           "then": { "properties": { "dist": { "enum": ["elxr12"] } } }
+        },
+        {
+          "if": { "properties": { "os": { "const": "debian" } } },
+          "then": { "properties": { "dist": { "enum": ["debian13"] } } }
         },
         {
           "if": { "properties": { "os": { "const": "ubuntu" } } },
