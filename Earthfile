@@ -273,8 +273,8 @@ deb:
         echo "Depends: bash, coreutils, unzip, dosfstools, xorriso, grub-common" >> DEBIAN/control && \
         echo "Recommends: mmdebstrap, debootstrap" >> DEBIAN/control && \
         echo "License: MIT" >> DEBIAN/control && \
-        echo "Description: ICT (OIC)" >> DEBIAN/control && \
-        echo " OIC enables users to compose custom bootable OS images based on a" >> DEBIAN/control && \
+        echo "Description: Image Composer Tool (ICT)" >> DEBIAN/control && \
+        echo " ICT enables users to compose custom bootable OS images based on a" >> DEBIAN/control && \
         echo " user-provided template that specifies package lists, configurations," >> DEBIAN/control && \
         echo " and output formats for supported distributions." >> DEBIAN/control
     

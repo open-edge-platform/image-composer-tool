@@ -1201,7 +1201,7 @@ All AI settings are **commented by default** with their default values shown. Us
 |----------|-------------|---------|
 | `OPENAI_API_KEY` | OpenAI API key (required for OpenAI provider) | `sk-xxx...` |
 | `OLLAMA_HOST` | Ollama server URL | `http://localhost:11434` |
-| `OIC_AI_PROVIDER` | Override provider at runtime | `ollama` or `openai` |
+| `ICT_AI_PROVIDER` | Override provider at runtime | `ollama` or `openai` |
 
 #### Configuration Reference
 
