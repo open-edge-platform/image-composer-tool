@@ -11,7 +11,7 @@ MAX_UMOUNT_PASSES=5
 FORCE_DELETE=false
 
 if ! command -v realpath >/dev/null 2>&1; then
-  echo "realpath command is required but not found" >&2
+  echo "realpath command is required but not found. Install coreutils or ensure realpath is in PATH." >&2
   exit 1
 fi
 
@@ -117,6 +117,7 @@ if [[ "$WORKSPACE_DIR" == "/" ]]; then
 fi
 
 if [[ "$WORKSPACE_DIR" != "$DEFAULT_WORKSPACE_DIR" && "$FORCE_DELETE" != true ]]; then
+  # Both paths are canonicalized via realpath -m before this comparison.
   echo "Refusing to remove non-default workspace directory without --force: $WORKSPACE_DIR" >&2
   exit 1
 fi
