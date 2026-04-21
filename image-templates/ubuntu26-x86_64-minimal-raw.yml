@@ -1,0 +1,88 @@
+# AI-searchable metadata for template discovery
+metadata:
+  description: Minimal Ubuntu 26.04 image with essential packages for lightweight deployments
+  use_cases:
+    - Lightweight Ubuntu base image
+    - Cloud instances
+    - Development environments
+    - Container hosts
+  keywords:
+    - minimal
+    - lightweight
+    - base
+    - ubuntu
+    - cloud
+    - development
+
+image:
+  name: minimal-os-image-ubuntu
+  version: "26.04"
+
+target:
+  os: ubuntu
+  dist: ubuntu26
+  arch: x86_64
+  imageType: raw
+
+disk:
+  name: Minimal_Raw # 1:1 mapping to the systemConfigs name
+  artifacts:
+    -
+      type: raw  # image file format, valid value [raw, vhd, vhdx, qcow2, vmdk, vdi]
+      compression: gz # image compression format (optional)
+    - type: vhdx
+  size: 4GiB # 4G, 4GB, 4096 MiB also valid. (Required for raw)
+  partitionTableType: gpt # Partition table type, valid value: [gpt, mbr]
+  partitions: # Required for raw, optional for ISO, not needed for rootfs.
+    - id: boot
+      type: esp
+      flags:
+        - esp
+        - boot
+      start: 1MiB
+      end: 513MiB
+      fsType: fat32
+      mountPoint: /boot/efi
+      mountOptions: umask=0077
+
+    - id: rootfs
+      type: linux-root-amd64
+      start: 513MiB
+      end: "0"
+      fsType: ext4
+      mountPoint: /
+      mountOptions: defaults
+
+systemConfig:
+  name: minimal
+  description: Minimal ubuntu image
+
+  bootloader:
+    bootType: efi
+    provider: grub
+
+  immutability:
+    enabled: false # default is true
+    # To enable Secure Boot, provide the actual file paths for your environment below and uncomment the relevant lines.
+    # secureBootDBKey: "<SECURE_BOOT_DB_KEY_PATH>"
+    # secureBootDBCrt: "<SECURE_BOOT_DB_CRT_PATH>"
+    # secureBootDBCer: "<SECURE_BOOT_DB_CER_PATH>"
+
+  packages:
+    - ubuntu-minimal
+    - grub-efi-amd64-signed
+    - initramfs-tools
+    - grub2-common
+    - grub-pc-bin
+    - grub-efi-amd64
+    - grub-efi-amd64-bin
+    - systemd
+    - openssh-server
+    - systemd-resolved
+    - systemd-timesyncd
+
+  kernel:
+    version: "6.17"
+    cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
+    packages:
+      - linux-image-generic

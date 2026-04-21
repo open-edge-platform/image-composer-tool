@@ -1,11 +1,14 @@
 package debutils
 
 import (
+	"bytes"
 	"compress/gzip"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ulikunitz/xz"
 )
 
 // TestDecompress_Success tests successful decompression of a gzipped file
@@ -389,4 +392,96 @@ func createGzipFile(filename, content string) error {
 	}
 
 	return nil
+}
+
+func TestDecompressXZ_Success(t *testing.T) {
+	tempDir := t.TempDir()
+
+	content := "test content for XZ decompression\nLine 2\n"
+	inputFile := filepath.Join(tempDir, "test.xz")
+	outputFile := filepath.Join(tempDir, "test.txt")
+
+	// Create XZ file using the xz library
+	var buf bytes.Buffer
+	xzWriter, err := xz.NewWriter(&buf)
+	if err != nil {
+		t.Fatalf("failed to create xz writer: %v", err)
+	}
+	if _, err := xzWriter.Write([]byte(content)); err != nil {
+		t.Fatalf("failed to write xz content: %v", err)
+	}
+	if err := xzWriter.Close(); err != nil {
+		t.Fatalf("failed to close xz writer: %v", err)
+	}
+	if err := os.WriteFile(inputFile, buf.Bytes(), 0644); err != nil {
+		t.Fatalf("failed to write xz file: %v", err)
+	}
+
+	result, err := DecompressXZ(inputFile, outputFile)
+	if err != nil {
+		t.Fatalf("DecompressXZ failed: %v", err)
+	}
+	if len(result) != 1 || result[0] != outputFile {
+		t.Errorf("unexpected result: %v", result)
+	}
+	data, err := os.ReadFile(outputFile)
+	if err != nil {
+		t.Fatalf("failed to read output file: %v", err)
+	}
+	if string(data) != content {
+		t.Errorf("content mismatch: got %q, want %q", string(data), content)
+	}
+}
+
+func TestDecompressXZ_NonExistentFile(t *testing.T) {
+	tempDir := t.TempDir()
+	_, err := DecompressXZ("/nonexistent/path/to/file.xz", filepath.Join(tempDir, "out.txt"))
+	if err == nil {
+		t.Fatal("expected error for non-existent file")
+	}
+	if !strings.Contains(err.Error(), "failed to open xz file") {
+		t.Errorf("expected 'failed to open xz file' error, got: %v", err)
+	}
+}
+
+func TestDecompressXZ_InvalidData(t *testing.T) {
+	tempDir := t.TempDir()
+	inputFile := filepath.Join(tempDir, "invalid.xz")
+	outputFile := filepath.Join(tempDir, "out.txt")
+
+	if err := os.WriteFile(inputFile, []byte("this is not valid xz data"), 0644); err != nil {
+		t.Fatalf("failed to write invalid xz file: %v", err)
+	}
+
+	_, err := DecompressXZ(inputFile, outputFile)
+	if err == nil {
+		t.Fatal("expected error for invalid XZ data")
+	}
+	if !strings.Contains(err.Error(), "failed to create xz reader") {
+		t.Errorf("expected 'failed to create xz reader' error, got: %v", err)
+	}
+}
+
+func TestDecompress_DispatchesToXZ(t *testing.T) {
+	tempDir := t.TempDir()
+	inputFile := filepath.Join(tempDir, "data.xz")
+	outputFile := filepath.Join(tempDir, "out.txt")
+
+	// Create a valid XZ file
+	var buf bytes.Buffer
+	xzWriter, err := xz.NewWriter(&buf)
+	if err != nil {
+		t.Fatalf("failed to create xz writer: %v", err)
+	}
+	_, _ = xzWriter.Write([]byte("dispatch test"))
+	_ = xzWriter.Close()
+	if err := os.WriteFile(inputFile, buf.Bytes(), 0644); err != nil {
+		t.Fatalf("failed to write xz file: %v", err)
+	}
+
+	// Decompress via the dispatcher (should call DecompressXZ for .xz extension)
+	_, err = Decompress(inputFile, outputFile)
+	if err != nil {
+		t.Fatalf("Decompress .xz dispatch failed: %v", err)
+	}
 }
