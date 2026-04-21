@@ -9,6 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 WORKSPACE_DIR="$REPO_ROOT/workspace"
 MAX_UMOUNT_PASSES=5
+FORCE_DELETE=false
 
 run_privileged() {
   if [[ "$EUID" -eq 0 ]]; then
@@ -49,9 +50,10 @@ try_unmount_once() {
 }
 
 usage() {
-  echo "Usage: $0 [--workspace-dir DIR] [--max-umount-passes N] [-h|--help]"
+  echo "Usage: $0 [--workspace-dir DIR] [--max-umount-passes N] [--force] [-h|--help]"
   echo "  --workspace-dir DIR  Override workspace directory (default: $WORKSPACE_DIR)"
   echo "  --max-umount-passes N  Number of unmount retry passes (default: $MAX_UMOUNT_PASSES)"
+  echo "  --force              Allow deleting a non-default workspace path"
   echo "  -h, --help           Show this help message"
 }
 
@@ -75,6 +77,10 @@ while [[ $# -gt 0 ]]; do
       MAX_UMOUNT_PASSES="$2"
       shift 2
       ;;
+    --force)
+      FORCE_DELETE=true
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -86,6 +92,21 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if ! WORKSPACE_DIR="$(realpath -m "$WORKSPACE_DIR" 2>/dev/null)"; then
+  echo "Failed to resolve workspace directory path: $WORKSPACE_DIR"
+  exit 1
+fi
+
+if [[ "$WORKSPACE_DIR" == "/" ]]; then
+  echo "Refusing to remove root directory"
+  exit 1
+fi
+
+if [[ "$WORKSPACE_DIR" != "$REPO_ROOT/workspace" && "$FORCE_DELETE" != true ]]; then
+  echo "Refusing to remove non-default workspace directory without --force: $WORKSPACE_DIR"
+  exit 1
+fi
 
 if [[ ! -d "$WORKSPACE_DIR" ]]; then
   echo "Workspace directory does not exist: $WORKSPACE_DIR"
