@@ -12,7 +12,7 @@ func TestExecuteConfigInit_CreatesFile(t *testing.T) {
 	target := filepath.Join(tmp, "my-config.yml")
 
 	cmd := createConfigCommand()
-	// Run: ict config init <path>
+	// Run: image-composer-tool config init <path>
 	cmd.SetArgs([]string{"init", target})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("execute config init failed: %v", err)
@@ -32,7 +32,7 @@ func TestExecuteConfigInit_CreatesFile(t *testing.T) {
 		t.Fatalf("generated config missing header comments: %s", text)
 	}
 
-	if !strings.Contains(text, "file: \"ict.log\"") {
+	if !strings.Contains(text, "file: \"image-composer-tool.log\"") {
 		t.Fatalf("generated config missing logging.file entry: %s", text)
 	}
 }

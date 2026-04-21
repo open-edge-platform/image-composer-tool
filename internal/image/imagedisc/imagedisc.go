@@ -11,10 +11,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/open-edge-platform/ict/internal/config"
-	"github.com/open-edge-platform/ict/internal/utils/logger"
-	"github.com/open-edge-platform/ict/internal/utils/shell"
-	"github.com/open-edge-platform/ict/internal/utils/slice"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/slice"
 )
 
 type blockDevicesOutput struct {

@@ -199,14 +199,14 @@ Provides quick answers without generating graph output:
 **Cons**
 
 - Shell script requires graphviz to be installed
-- Limited to DOT format input (by design, matches ict output)
+- Limited to DOT format input (by design, matches image-composer-tool output)
 - BFS traversal may not suit all analysis patterns
 
 ---
 
 ## Alternatives Considered
 
-### Extend ict with built-in analysis
+### Extend image-composer-tool with built-in analysis
 
 **Rejected** — Would add complexity to the main tool and require Go
 implementation. A separate utility keeps concerns separated and is faster
@@ -232,7 +232,7 @@ understand our semantic colors.
 ## Non-Goals
 
 - Modifying the original DOT file
-- Generating DOT files (that's ict's job)
+- Generating DOT files (that's image-composer-tool's job)
 - Real-time or interactive analysis
 - Supporting non-DOT graph formats
 
@@ -263,4 +263,4 @@ The tool handles various error conditions gracefully:
 
 - [Graphviz gvpr documentation](https://graphviz.org/pdf/gvpr.1.pdf)
 - [DOT language specification](https://graphviz.org/doc/info/lang.html)
-- ict `--dotfile` flag documentation
+- image-composer-tool `--dotfile` flag documentation

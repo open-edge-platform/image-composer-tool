@@ -10,13 +10,13 @@ import (
 	"github.com/gdamore/tcell"
 	"github.com/rivo/tview"
 
-	"github.com/open-edge-platform/ict/cmd/live-installer/texture-ui/primitives/enumfield"
-	"github.com/open-edge-platform/ict/cmd/live-installer/texture-ui/primitives/navigationbar"
-	"github.com/open-edge-platform/ict/cmd/live-installer/texture-ui/uitext"
-	"github.com/open-edge-platform/ict/cmd/live-installer/texture-ui/uiutils"
-	"github.com/open-edge-platform/ict/internal/config"
-	"github.com/open-edge-platform/ict/internal/image/imagedisc"
-	"github.com/open-edge-platform/ict/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/cmd/live-installer/texture-ui/primitives/enumfield"
+	"github.com/open-edge-platform/image-composer-tool/cmd/live-installer/texture-ui/primitives/navigationbar"
+	"github.com/open-edge-platform/image-composer-tool/cmd/live-installer/texture-ui/uitext"
+	"github.com/open-edge-platform/image-composer-tool/cmd/live-installer/texture-ui/uiutils"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/imagedisc"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 )
 
 const (

@@ -4,7 +4,7 @@ The ICT tool creates customized OS images through a well-defined build pipeline.
 
 ## Table of Contents
 
-- [Understanding the ICT Build Process](#understanding-the-ict-build-process)
+- [Understanding the ICT Build Process](#understanding-the-image-composer-tool-build-process)
   - [Table of Contents](#table-of-contents)
   - [Overview of the Build Pipeline](#overview-of-the-build-pipeline)
   - [Build Command Workflow](#build-command-workflow)
@@ -43,10 +43,10 @@ The build process takes a single YAML image template file as input and produces 
 
 ## Build Command Workflow
 
-The [`build` command](./ict-cli-specification.md#build-command) orchestrates the entire image creation process:
+The [`build` command](./image-composer-tool-cli-specification.md#build-command) orchestrates the entire image creation process:
 
 ```bash
-sudo -E ict build my-image-template.yml
+sudo -E image-composer-tool build my-image-template.yml
 ```
 
 **Internal Workflow:**
@@ -81,10 +81,10 @@ The `BuildImage` process executes several internal operations to create the fina
 
 **Failure Handling:** If validation fails, the build is aborted immediately with detailed error messages to help fix the issue.
 
-**Note:** You can validate a template without building by using the [`validate` command](./ict-cli-specification.md#validate-command):
+**Note:** You can validate a template without building by using the [`validate` command](./image-composer-tool-cli-specification.md#validate-command):
 
 ```bash
-ict validate my-image-template.yml
+image-composer-tool validate my-image-template.yml
 ```
 
 ### 2. Packages Stage
@@ -109,7 +109,7 @@ The package cache stores downloaded packages (.rpm or .deb files) in `cache/pkgC
 - Enables offline builds if packages were previously cached
 - Works even when templates change (shared packages are reused)
 
-See [Understanding Caching](./ict-caching.md#how-package-caching-works) for detailed information about how the package cache works.
+See [Understanding Caching](./image-composer-tool-caching.md#how-package-caching-works) for detailed information about how the package cache works.
 
 **Dependency Resolution:**
 
@@ -157,7 +157,7 @@ sequenceDiagram
 
 **Multiple Repository Support:**
 
-You can add multiple package repositories to include proprietary packages or upstream packages pending integration. See [Multiple Package Repository Support](./ict-multi-repo-support.md) for details.
+You can add multiple package repositories to include proprietary packages or upstream packages pending integration. See [Multiple Package Repository Support](./image-composer-tool-multi-repo-support.md) for details.
 
 ### 3. Compose Stage
 
@@ -225,7 +225,7 @@ This reuse significantly improves build performance, especially when building mu
 - Generate verification metadata
 - Store signature information in image metadata
 
-Image signing is optional and is only performed if configured in the template. See [Understanding Templates](./ict-templates.md) for template configuration details.
+Image signing is optional and is only performed if configured in the template. See [Understanding Templates](./image-composer-tool-templates.md) for template configuration details.
 
 ### 5. Finalize Stage
 
@@ -259,21 +259,21 @@ The build process can be customized through multiple configuration layers.
 
 ### Global Configuration Options
 
-[Global configuration](./ict-cli-specification.md#global-configuration-file) default stored in root of the repository ict.yml`:
+[Global configuration](./image-composer-tool-cli-specification.md#global-configuration-file) default stored in root of the repository image-composer-tool.yml`:
 
 ```yaml
 # Worker configuration
 workers: 16                                       # Number of concurrent package download workers
 
 # Directory configuration
-cache_dir: /var/cache/ict          # Package cache location
-work_dir: /var/tmp/ict             # Working directory for builds
+cache_dir: /var/cache/image-composer-tool          # Package cache location
+work_dir: /var/tmp/image-composer-tool             # Working directory for builds
 temp_dir: /tmp                                    # Temporary files location
 
 # Logging configuration
 logging:
   level: info                                     # Log level: debug, info, warn, error
-  file: /var/log/ict.log           # Optional log file path
+  file: /var/log/image-composer-tool.log           # Optional log file path
 ```
 
 ### Default Templates vs Image Templates
@@ -298,7 +298,7 @@ Default templates contain common settings like partition layouts, essential pack
 
 **Image Templates** (user-provided YAML files in `image-templates/`)
 
-These are the [templates you create](./ict-cli-specification.md#image-template-file) to define your specific image requirements. They specify what differs from the defaults:
+These are the [templates you create](./image-composer-tool-cli-specification.md#image-template-file) to define your specific image requirements. They specify what differs from the defaults:
 
 ```yaml
 image:
@@ -341,27 +341,27 @@ systemConfig:
 
 This layering allows you to specify only what differs from the defaults, making templates concise and maintainable.
 
-See [Understanding Templates](./ict-templates.md) for complete template documentation and schema reference.
+See [Understanding Templates](./image-composer-tool-templates.md) for complete template documentation and schema reference.
 
 ### Command-Line Overrides
 
-[Command-line flags](./ict-cli-specification.md#global-options) override configuration file settings:
+[Command-line flags](./image-composer-tool-cli-specification.md#global-options) override configuration file settings:
 
 ```bash
 # Override worker count and cache directory
-sudo -E ict build \
+sudo -E image-composer-tool build \
   --workers 32 \
   --cache-dir /mnt/fast-ssd/cache \
   my-template.yml
 
 # Enable verbose logging for debugging
-sudo -E ict build --verbose my-template.yml
+sudo -E image-composer-tool build --verbose my-template.yml
 
 # Generate dependency graph visualization
-sudo -E ict build --dotfile deps.dot my-template.yml
+sudo -E image-composer-tool build --dotfile deps.dot my-template.yml
 
 # Generate a graph that only shows SystemConfig roots
-sudo -E ict build --dotfile system.dot --system-packages-only my-template.yml
+sudo -E image-composer-tool build --dotfile system.dot --system-packages-only my-template.yml
 ```
 
 ## Common Build Patterns
@@ -454,10 +454,10 @@ Normal logging is sufficient for most builds. Use verbose mode only for debuggin
 
 ```bash
 # Normal build
-sudo -E ict build template.yml
+sudo -E image-composer-tool build template.yml
 
 # Verbose only when investigating issues
-sudo -E ict build --verbose template.yml
+sudo -E image-composer-tool build --verbose template.yml
 ```
 
 **3. Leverage Reusable Artifacts**
@@ -466,7 +466,7 @@ Keep your workspace directory across builds to benefit from chroot reuse:
 
 ```bash
 # Use consistent work directory
---work-dir /var/tmp/ict
+--work-dir /var/tmp/image-composer-tool
 ```
 
 ## Troubleshooting Build Issues
@@ -506,7 +506,7 @@ Error: Permission denied when creating loop device
 ```
 
 **Solutions:**
-- Run with sudo: `sudo -E ict build template.yml`
+- Run with sudo: `sudo -E image-composer-tool build template.yml`
 - Ensure user has appropriate permissions
 - Check that work directory and cache directory are writable
 - Verify SELinux is not blocking operations (if applicable)
@@ -539,10 +539,10 @@ Error: Failed to enter chroot environment
 **Enable Verbose Logging:**
 
 ```bash
-sudo -E ict build --verbose my-template.yml
+sudo -E image-composer-tool build --verbose my-template.yml
 ```
 
-See the [build command documentation](./ict-cli-specification.md#build-command) for all available flags.
+See the [build command documentation](./image-composer-tool-cli-specification.md#build-command) for all available flags.
 
 This provides detailed output for each step:
 - Package download progress
@@ -554,7 +554,7 @@ This provides detailed output for each step:
 **Generate Dependency Graph:**
 
 ```bash
-sudo -E ict build --dotfile deps.dot my-template.yml
+sudo -E image-composer-tool build --dotfile deps.dot my-template.yml
 dot -Tpng deps.dot -o deps.png
 ```
 
@@ -591,7 +591,7 @@ cat tmp/spdx_manifest.json
 The build process logs important milestones:
 
 ```
-INFO: Using configuration from: /etc/ict/config.yml
+INFO: Using configuration from: /etc/image-composer-tool/config.yml
 INFO: Loading template: my-template.yml
 INFO: Merging with default template: config/general/default-raw.yml
 INFO: Initializing provider: azure-linux-azl3-x86_64
@@ -636,17 +636,17 @@ The ICT build process uses a single unified `build` command that internally exec
 
 ## Related Documentation
 
-- [Understanding Caching](./ict-caching.md) - Detailed information about package and chroot caching
-- [Understanding Templates](./ict-templates.md) - How to create image templates and schema reference
-- [Multiple Package Repository Support](./ict-multi-repo-support.md) - Adding custom package sources
-- [ICT CLI Reference](./ict-cli-specification.md) - Complete command-line documentation
+- [Understanding Caching](./image-composer-tool-caching.md) - Detailed information about package and chroot caching
+- [Understanding Templates](./image-composer-tool-templates.md) - How to create image templates and schema reference
+- [Multiple Package Repository Support](./image-composer-tool-multi-repo-support.md) - Adding custom package sources
+- [ICT CLI Reference](./image-composer-tool-cli-specification.md) - Complete command-line documentation
 
 <!--hide_directive
 :::{toctree}
 :hidden:
 
-Caching <ict-caching>
-Templates <ict-templates>
+Caching <image-composer-tool-caching>
+Templates <image-composer-tool-templates>
 
 :::
 hide_directive-->

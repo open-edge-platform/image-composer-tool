@@ -6,17 +6,17 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/open-edge-platform/ict/internal/config"
-	"github.com/open-edge-platform/ict/internal/provider"
-	"github.com/open-edge-platform/ict/internal/provider/azl"
-	"github.com/open-edge-platform/ict/internal/provider/debian13"
-	"github.com/open-edge-platform/ict/internal/provider/elxr"
-	"github.com/open-edge-platform/ict/internal/provider/emt"
-	"github.com/open-edge-platform/ict/internal/provider/rcd"
-	"github.com/open-edge-platform/ict/internal/provider/ubuntu"
-	"github.com/open-edge-platform/ict/internal/utils/display"
-	"github.com/open-edge-platform/ict/internal/utils/logger"
-	"github.com/open-edge-platform/ict/internal/utils/system"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/provider"
+	"github.com/open-edge-platform/image-composer-tool/internal/provider/azl"
+	"github.com/open-edge-platform/image-composer-tool/internal/provider/debian13"
+	"github.com/open-edge-platform/image-composer-tool/internal/provider/elxr"
+	"github.com/open-edge-platform/image-composer-tool/internal/provider/emt"
+	"github.com/open-edge-platform/image-composer-tool/internal/provider/rcd"
+	"github.com/open-edge-platform/image-composer-tool/internal/provider/ubuntu"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/display"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 	"github.com/spf13/cobra"
 )
 
@@ -80,7 +80,7 @@ func executeBuild(cmd *cobra.Command, args []string) error {
 
 	// Check if template file is provided as first positional argument
 	if len(args) < 1 {
-		return fmt.Errorf("no template file provided, usage: ict build [flags] TEMPLATE_FILE")
+		return fmt.Errorf("no template file provided, usage: image-composer-tool build [flags] TEMPLATE_FILE")
 	}
 	templateFile := args[0]
 

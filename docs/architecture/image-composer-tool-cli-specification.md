@@ -2,7 +2,7 @@
 
 ## Table of Contents
 
-- [ICT CLI Specification](#ict-cli-specification)
+- [ICT CLI Specification](#image-composer-tool-cli-specification)
   - [Table of Contents](#table-of-contents)
   - [Overview](#overview)
   - [CLI Flow](#cli-flow)
@@ -37,7 +37,7 @@
 
 ## Overview
 
-`ict` is a command-line tool for generating custom images for
+`image-composer-tool` is a command-line tool for generating custom images for
 different operating systems, including
 Azure Linux, Wind River eLxr, RCD, and
 [Edge Microvisor Toolkit](https://docs.openedgeplatform.intel.com/2026.0/edge-microvisor-toolkit/index.html).
@@ -59,7 +59,7 @@ ensure reproducible builds.
 ## CLI Flow
 
 The following diagram illustrates the high-level flow of the ICT
-CLI, the commands of which begin with `ict`:
+CLI, the commands of which begin with `image-composer-tool`:
 
 ```mermaid
 flowchart TD
@@ -98,13 +98,13 @@ template file and runs the build pipeline to create a new image.
 
 See also:
 
-- [Build Stages](./ict-build-process.md#build-stages-in-detail)
+- [Build Stages](./image-composer-tool-build-process.md#build-stages-in-detail)
   for the stages of the build pipeline
 
 ## Usage
 
 ```bash
-ict [global options] command [command options] [arguments...]
+image-composer-tool [global options] command [command options] [arguments...]
 ```
 
 ## Global Options
@@ -118,7 +118,7 @@ with command-line options taking priority over the configuration file settings:
 | `--log-level LEVEL` | Log level: debug, info, warn, error (overrides config). Use debug for troubleshooting build issues. |
 | `--log-file PATH` | Tee logs to a specific file path (overrides `logging.file` in the configuration). |
 | `--help, -h` | Show help for any command or subcommand. |
-| `--version` | Show `ict` version information. |
+| `--version` | Show `image-composer-tool` version information. |
 
 ## Commands
 
@@ -128,7 +128,7 @@ Build an OS image from an image template file. This is the primary command for
 creating custom OS images according to your requirements.
 
 ```bash
-ict build [flags] TEMPLATE_FILE
+image-composer-tool build [flags] TEMPLATE_FILE
 ```
 
 **Arguments:**
@@ -150,26 +150,26 @@ ict build [flags] TEMPLATE_FILE
 
 ```bash
 # Build an image with default settings
-sudo -E ict build my-image-template.yml
+sudo -E image-composer-tool build my-image-template.yml
 
 # Build with custom workers and cache directory
-sudo -E ict build --workers 16 --cache-dir /tmp/cache my-image-template.yml
+sudo -E image-composer-tool build --workers 16 --cache-dir /tmp/cache my-image-template.yml
 
 # Build with verbose output
-sudo -E ict build --verbose my-image-template.yml
+sudo -E image-composer-tool build --verbose my-image-template.yml
 
 # Build and generate dependency graphs
-sudo -E ict build --dotfile deps.dot my-image-template.yml
+sudo -E image-composer-tool build --dotfile deps.dot my-image-template.yml
 # Limit the graph to SystemConfig.Packages roots
-sudo -E ict build --dotfile system.dot --system-packages-only my-image-template.yml
+sudo -E image-composer-tool build --dotfile system.dot --system-packages-only my-image-template.yml
 ```
 
 **Note:** The build command typically requires sudo privileges for operations like creating loopback devices and mounting filesystems.
 
 See also:
 
-- [Build Stages in Detail](./ict-build-process.md#build-stages-in-detail) for information about each build stage
-- [Build Performance Optimization](./ict-build-process.md#build-performance-optimization) for tips to improve build speed
+- [Build Stages in Detail](./image-composer-tool-build-process.md#build-stages-in-detail) for information about each build stage
+- [Build Performance Optimization](./image-composer-tool-build-process.md#build-performance-optimization) for tips to improve build speed
 
 ### Validate Command
 
@@ -177,7 +177,7 @@ Validate an image template file without building it. This allows checking for
 errors in your template before committing to a full build process.
 
 ```bash
-ict validate TEMPLATE_FILE
+image-composer-tool validate TEMPLATE_FILE
 ```
 
 **Arguments:**
@@ -197,15 +197,15 @@ The validate command performs the following checks:
 
 ```bash
 # Validate a template file
-ict validate my-image-template.yml
+image-composer-tool validate my-image-template.yml
 
 # Validate with verbose output
-ict --log-level debug validate my-image-template.yml
+image-composer-tool --log-level debug validate my-image-template.yml
 ```
 
 See also:
 
-- [Template Loading and Validation](./ict-build-process.md#1-template-loading-and-validation)
+- [Template Loading and Validation](./image-composer-tool-build-process.md#1-template-loading-and-validation)
   for details on the validation process
 
 ### Inspect Command
@@ -214,7 +214,7 @@ Inspects a raw image and outputs comprehensive details about the image including
 table layout, partition identity and attributes, filesystem information, bootloader details, and layout diagnostics.
 
 ```bash
-ict inspect [flags] IMAGE_FILE
+image-composer-tool inspect [flags] IMAGE_FILE
 ```
 
 **Arguments:**
@@ -261,16 +261,16 @@ The inspect command extracts and analyzes the following from a disk image:
 
 ```bash
 # Inspect a raw image and output text (default)
-ict inspect my-image.raw
+image-composer-tool inspect my-image.raw
 
 # Inspect and output pretty JSON
-ict inspect --format=json --pretty my-image.raw
+image-composer-tool inspect --format=json --pretty my-image.raw
 
 # Inspect and output YAML
-ict inspect --format=yaml my-image.raw
+image-composer-tool inspect --format=yaml my-image.raw
 
 # Inspect and extract SPDX data from an IMAGE
-ict inspect my-image.raw --extract-sbom my-sbom.json
+image-composer-tool inspect my-image.raw --extract-sbom my-sbom.json
 ```
 
 ### Compare Command
@@ -278,7 +278,7 @@ ict inspect my-image.raw --extract-sbom my-sbom.json
 Compares two disk images and outputs detailed differences in partition layout, filesystems, bootloaders, and EFI/UKI payloads.
 
 ```bash
-ict compare [flags] IMAGE_FILE1 IMAGE_FILE2
+image-composer-tool compare [flags] IMAGE_FILE1 IMAGE_FILE2
 ```
 
 **Arguments:**
@@ -338,22 +338,22 @@ The compare command performs a deep structural comparison of two images and repo
 
 ```bash
 # Compare two images and show detailed text diff
-ict compare image-v1.raw image-v2.raw
+image-composer-tool compare image-v1.raw image-v2.raw
 
 # Show only a summary of changes
-ict compare --mode=summary image-v1.raw image-v2.raw
+image-composer-tool compare --mode=summary image-v1.raw image-v2.raw
 
 # Compare and output pretty JSON with full metadata
-ict compare --format=json --mode=full --pretty image-v1.raw image-v2.raw
+image-composer-tool compare --format=json --mode=full --pretty image-v1.raw image-v2.raw
 
 # Compact JSON diff suitable for CI/CD automation
-ict compare --format=json --mode=diff image-v1.raw image-v2.raw
+image-composer-tool compare --format=json --mode=diff image-v1.raw image-v2.raw
 
 # Perform comparison with image hashing enabled with details text diff
-ict compare --hash-images=true image-v1.raw image-v2.raw
+image-composer-tool compare --hash-images=true image-v1.raw image-v2.raw
 
 # Perform SPDX comparison
-ict compare --format=json --mode=spdx spdx-file1.json spdx-file2.json
+image-composer-tool compare --format=json --mode=spdx spdx-file1.json spdx-file2.json
 ```
 
 ### Cache Command
@@ -361,7 +361,7 @@ ict compare --format=json --mode=spdx spdx-file1.json spdx-file2.json
 Manage cached artifacts created during the build process.
 
 ```bash
-ict cache SUBCOMMAND
+image-composer-tool cache SUBCOMMAND
 ```
 
 #### cache clean
@@ -369,7 +369,7 @@ ict cache SUBCOMMAND
 Remove cached packages or workspace chroot data.
 
 ```bash
-ict cache clean [flags]
+image-composer-tool cache clean [flags]
 ```
 
 **Flags:**
@@ -386,13 +386,13 @@ ict cache clean [flags]
 
 ```bash
 # Remove all cached packages
-ict cache clean
+image-composer-tool cache clean
 
 # Remove chroot caches for a single provider
-ict cache clean --workspace --provider-id azure-linux-azl3-x86_64
+image-composer-tool cache clean --workspace --provider-id azure-linux-azl3-x86_64
 
 # Preview everything that would be deleted
-ict cache clean --all --dry-run
+image-composer-tool cache clean --all --dry-run
 ```
 
 When no scope flag is supplied, the command defaults to `--packages`.
@@ -403,7 +403,7 @@ Manage the global configuration file. The config command provides subcommands
 for initializing and viewing configuration.
 
 ```bash
-ict config SUBCOMMAND
+image-composer-tool config SUBCOMMAND
 ```
 
 **Subcommands:**
@@ -413,7 +413,7 @@ ict config SUBCOMMAND
 Initialize a new configuration file with default values.
 
 ```bash
-ict config init [CONFIG_FILE]
+image-composer-tool config init [CONFIG_FILE]
 ```
 
 **Arguments:**
@@ -424,10 +424,10 @@ ict config init [CONFIG_FILE]
 
 ```bash
 # Initialize configuration in current directory
-ict config init ict.yml
+image-composer-tool config init image-composer-tool.yml
 
 # Initialize in default location
-ict config init
+image-composer-tool config init
 ```
 
 #### config show
@@ -435,17 +435,17 @@ ict config init
 Show the current configuration settings.
 
 ```bash
-ict config show
+image-composer-tool config show
 ```
 
 **Example:**
 
 ```bash
 # Show current configuration
-ict config show
+image-composer-tool config show
 
 # Show configuration from specific file
-ict --config /path/to/config.yml config show
+image-composer-tool --config /path/to/config.yml config show
 ```
 
 ### Version Command
@@ -453,13 +453,13 @@ ict --config /path/to/config.yml config show
 Display the tool's version information, including build date, Git commit SHA, and organization.
 
 ```bash
-ict version
+image-composer-tool version
 ```
 
 **Example:**
 
 ```bash
-ict version
+image-composer-tool version
 ```
 
 **Output includes:**
@@ -471,10 +471,10 @@ ict version
 
 ### Install-Completion Command
 
-Install shell completion for the ict command. Supports bash, zsh, fish, and PowerShell.
+Install shell completion for the image-composer-tool command. Supports bash, zsh, fish, and PowerShell.
 
 ```bash
-ict install-completion [flags]
+image-composer-tool install-completion [flags]
 ```
 
 **Flags:**
@@ -488,13 +488,13 @@ ict install-completion [flags]
 
 ```bash
 # Auto-detect shell and install completion
-ict install-completion
+image-composer-tool install-completion
 
 # Install completion for specific shell
-ict install-completion --shell bash
+image-composer-tool install-completion --shell bash
 
 # Force reinstall
-ict install-completion --force
+image-composer-tool install-completion --force
 ```
 
 **Post-Installation Steps:**
@@ -531,68 +531,68 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 ```bash
 # Build an image with default settings
-sudo -E ict build image-templates/azl3-x86_64-edge-raw.yml
+sudo -E image-composer-tool build image-templates/azl3-x86_64-edge-raw.yml
 
 # Build with custom configuration
-sudo -E ict --config=/path/to/config.yaml build image-templates/azl3-x86_64-edge-raw.yml
+sudo -E image-composer-tool --config=/path/to/config.yaml build image-templates/azl3-x86_64-edge-raw.yml
 
 # Build with custom workers and cache
-sudo -E ict build --workers 12 --cache-dir ./package-cache image-templates/azl3-x86_64-edge-raw.yml
+sudo -E image-composer-tool build --workers 12 --cache-dir ./package-cache image-templates/azl3-x86_64-edge-raw.yml
 
 # Build with debug logging
-sudo -E ict --log-level debug build image-templates/azl3-x86_64-edge-raw.yml
+sudo -E image-composer-tool --log-level debug build image-templates/azl3-x86_64-edge-raw.yml
 ```
 
 ### Managing Configuration
 
 ```bash
 # Initialize a new configuration file
-ict config init my-config.yml
+image-composer-tool config init my-config.yml
 
 # Show current configuration
-ict config show
+image-composer-tool config show
 
 # Use a specific configuration file
-ict --config /etc/ict/config.yml build template.yml
+image-composer-tool --config /etc/image-composer-tool/config.yml build template.yml
 ```
 
 ### Managing Cache
 
 ```bash
 # Remove all cached packages
-ict cache clean
+image-composer-tool cache clean
 
 # Remove workspace chroot caches for a specific provider
-ict cache clean --workspace --provider-id azure-linux-azl3-x86_64
+image-composer-tool cache clean --workspace --provider-id azure-linux-azl3-x86_64
 
 # Preview both package and workspace cleanup without deleting files
-ict cache clean --all --dry-run
+image-composer-tool cache clean --all --dry-run
 ```
 
 ### Inspecting and Comparing Images
 
 ```bash
 # Inspect an image in text format
-ict inspect my-image.raw
+image-composer-tool inspect my-image.raw
 
 # Inspect and output JSON (suitable for tooling/CI)
-ict inspect --format=json --pretty my-image.raw
+image-composer-tool inspect --format=json --pretty my-image.raw
 
 # Compare two images with detailed diff
-ict compare image-v1.raw image-v2.raw
+image-composer-tool compare image-v1.raw image-v2.raw
 
 # Compare with JSON output for parsing
-ict compare --format=json --mode=diff image-v1.raw image-v2.raw
+image-composer-tool compare --format=json --mode=diff image-v1.raw image-v2.raw
 ```
 
 ### Validating Templates
 
 ```bash
 # Validate a template
-ict validate image-templates/azl3-x86_64-edge-raw.yml
+image-composer-tool validate image-templates/azl3-x86_64-edge-raw.yml
 
 # Validate with debug output
-ict --log-level debug validate image-templates/azl3-x86_64-edge-raw.yml
+image-composer-tool --log-level debug validate image-templates/azl3-x86_64-edge-raw.yml
 ```
 
 ## Configuration Files
@@ -603,16 +603,16 @@ The global configuration file (YAML format) defines system-wide settings that
 apply to all image builds. The tool searches for configuration files in the following locations (in order):
 
 1. Path specified with `--config` flag
-2. `ict.yml` in current directory
-3. `.ict.yml` in current directory
-4. `ict.yaml` in current directory
-5. `.ict.yaml` in current directory
-6. `~/.ict/config.yml`
+2. `image-composer-tool.yml` in current directory
+3. `.image-composer-tool.yml` in current directory
+4. `image-composer-tool.yaml` in current directory
+5. `.image-composer-tool.yaml` in current directory
+6. `~/.image-composer-tool/config.yml`
 7. `~/.ict/config.yaml`
-8. `~/.config/ict/config.yml`
-9. `~/.config/ict/config.yaml`
-10. `/etc/ict/config.yml`
-11. `/etc/ict/config.yaml`
+8. `~/.config/image-composer-tool/config.yml`
+9. `~/.config/image-composer-tool/config.yaml`
+10. `/etc/image-composer-tool/config.yml`
+11. `/etc/image-composer-tool/config.yaml`
 
 **Example Configuration:**
 
@@ -681,7 +681,7 @@ target:
 
 For the complete field-by-field reference including all nested fields, valid
 values, validation rules, and merge behavior, see the
-[Image Template Reference](./ict-templates.md).
+[Image Template Reference](./image-composer-tool-templates.md).
 
 ## Exit Codes
 
@@ -711,24 +711,24 @@ automation:
 
    ```bash
    # Run with sudo and preserve environment
-   sudo -E ict build template.yml
+   sudo -E image-composer-tool build template.yml
    ```
 
 3. **Configuration Issues**: Verify configuration is valid.
 
    ```bash
    # Show current configuration
-   ict config show
+   image-composer-tool config show
 
    # Initialize with defaults
-   ict config init
+   image-composer-tool config init
    ```
 
 4. **Template Validation Errors**: Validate templates before building.
 
    ```bash
    # Validate template
-   ict validate template.yml
+   image-composer-tool validate template.yml
    ```
 
 ### Logging
@@ -737,18 +737,18 @@ Use the `--log-level` flag or `--verbose` flag to get more detailed output:
 
 ```bash
 # Debug logging
-ict --log-level debug build template.yml
+image-composer-tool --log-level debug build template.yml
 
 # Verbose output (same as debug)
-ict build --verbose template.yml
+image-composer-tool build --verbose template.yml
 
 # Error logging only
-ict --log-level error build template.yml
+image-composer-tool --log-level error build template.yml
 ```
 
 ## Related Documentation
 
-- [Build Process](./ict-build-process.md) - Detailed information about the build stages
-- [Templates](./ict-templates.md) - Template structure and usage
-- [Caching](./ict-caching.md) - How caching works
-- [Coding Style](./ict-coding-style.md) - Development guidelines
+- [Build Process](./image-composer-tool-build-process.md) - Detailed information about the build stages
+- [Templates](./image-composer-tool-templates.md) - Template structure and usage
+- [Caching](./image-composer-tool-caching.md) - How caching works
+- [Coding Style](./image-composer-tool-coding-style.md) - Development guidelines

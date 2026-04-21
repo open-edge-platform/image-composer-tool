@@ -7,11 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-edge-platform/ict/internal/config"
-	"github.com/open-edge-platform/ict/internal/ospackage/rpmutils"
-	"github.com/open-edge-platform/ict/internal/provider"
-	"github.com/open-edge-platform/ict/internal/utils/shell"
-	"github.com/open-edge-platform/ict/internal/utils/system"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/rpmutils"
+	"github.com/open-edge-platform/image-composer-tool/internal/provider"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
 
 // Helper function to create a test ImageTemplate

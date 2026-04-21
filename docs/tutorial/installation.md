@@ -23,17 +23,17 @@ prerequisites.
 ## Development Build (Go)
 
 For development and testing purposes, build directly with Go.
-The binary is placed in the **repo root** as `./ict`.
+The binary is placed in the **repo root** as `./image-composer-tool`.
 
 ```bash
-# Build the tool (output: ./ict)
-go build -buildmode=pie -ldflags "-s -w" ./cmd/ict
+# Build the tool (output: ./image-composer-tool)
+go build -buildmode=pie -ldflags "-s -w" ./cmd/image-composer-tool
 
 # Build the live-installer (required for ISO images)
 go build -buildmode=pie -o ./build/live-installer -ldflags "-s -w" ./cmd/live-installer
 
 # Or run without building
-go run ./cmd/ict --help
+go run ./cmd/image-composer-tool --help
 ```
 
 > **Note:** Development builds show default version information (e.g.,
@@ -50,32 +50,32 @@ BUILD_DATE=$(date -u '+%Y-%m-%d')
 
 go build -buildmode=pie \
   -ldflags "-s -w \
-    -X 'github.com/open-edge-platform/ict/internal/config/version.Version=$VERSION' \
-    -X 'github.com/open-edge-platform/ict/internal/config/version.Toolname=Image-Composer' \
-    -X 'github.com/open-edge-platform/ict/internal/config/version.Organization=Open Edge Platform' \
-    -X 'github.com/open-edge-platform/ict/internal/config/version.BuildDate=$BUILD_DATE' \
-    -X 'github.com/open-edge-platform/ict/internal/config/version.CommitSHA=$COMMIT'" \
-  ./cmd/ict
+    -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.Version=$VERSION' \
+    -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.Toolname=Image-Composer' \
+    -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.Organization=Open Edge Platform' \
+    -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.BuildDate=$BUILD_DATE' \
+    -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.CommitSHA=$COMMIT'" \
+  ./cmd/image-composer-tool
 
 # Required for ISO images
 go build -buildmode=pie \
   -o ./build/live-installer \
   -ldflags "-s -w \
-    -X 'github.com/open-edge-platform/ict/internal/config/version.Version=$VERSION' \
-    -X 'github.com/open-edge-platform/ict/internal/config/version.Toolname=Image-Composer' \
-    -X 'github.com/open-edge-platform/ict/internal/config/version.Organization=Open Edge Platform' \
-    -X 'github.com/open-edge-platform/ict/internal/config/version.BuildDate=$BUILD_DATE' \
-    -X 'github.com/open-edge-platform/ict/internal/config/version.CommitSHA=$COMMIT'" \
+    -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.Version=$VERSION' \
+    -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.Toolname=Image-Composer' \
+    -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.Organization=Open Edge Platform' \
+    -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.BuildDate=$BUILD_DATE' \
+    -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.CommitSHA=$COMMIT'" \
   ./cmd/live-installer
 ```
 
 ## Production Build (Earthly)
 
 For reproducible production builds with automatic version injection.
-The binary is placed in `./build/ict`.
+The binary is placed in `./build/image-composer-tool`.
 
 ```bash
-# Default build (output: ./build/ict)
+# Default build (output: ./build/image-composer-tool)
 earthly +build
 
 # Build with custom version metadata
@@ -123,20 +123,20 @@ sudo apt-get install -y mmdebstrap || sudo apt-get install -y debootstrap
 ### Verify Installation
 
 ```bash
-dpkg -l | grep ict
-ict version
+dpkg -l | grep image-composer-tool
+image-composer-tool version
 ```
 
 ### Package Contents
 
 | Path | Description |
 |------|-------------|
-| `/usr/local/bin/ict` | Main executable |
-| `/etc/ict/config.yml` | Global configuration |
-| `/etc/ict/config/` | OS variant configuration files |
-| `/usr/share/ict/examples/` | Sample image templates |
-| `/usr/share/doc/ict/` | README, LICENSE, CLI specification |
-| `/var/cache/ict/` | Package cache storage |
+| `/usr/local/bin/image-composer-tool` | Main executable |
+| `/etc/image-composer-tool/config.yml` | Global configuration |
+| `/etc/image-composer-tool/config/` | OS variant configuration files |
+| `/usr/share/image-composer-tool/examples/` | Sample image templates |
+| `/usr/share/doc/image-composer-tool/` | README, LICENSE, CLI specification |
+| `/var/cache/image-composer-tool/` | Package cache storage |
 
 ### Package Dependencies
 
@@ -157,10 +157,10 @@ ict version
 
 ```bash
 # Remove package (keeps config files)
-sudo dpkg -r ict
+sudo dpkg -r image-composer-tool
 
 # Remove package and config files
-sudo dpkg --purge ict
+sudo dpkg --purge image-composer-tool
 ```
 
 ## Image Composition Prerequisites
@@ -193,5 +193,5 @@ Downloads and installs Debian packages to initialize a chroot.
 - [Quick Start](../../README.md#quick-start) — build your first image
 - [Usage Guide](./usage-guide.md) — CLI commands, configuration, and
   shell completion
-- [Image Templates](../architecture/ict-templates.md) —
+- [Image Templates](../architecture/image-composer-tool-templates.md) —
   creating and reusing templates

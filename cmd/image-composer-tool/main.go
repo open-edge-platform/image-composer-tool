@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/open-edge-platform/ict/internal/config"
-	"github.com/open-edge-platform/ict/internal/utils/logger"
-	"github.com/open-edge-platform/ict/internal/utils/security"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/security"
 	"github.com/spf13/cobra"
 )
 
@@ -78,7 +78,7 @@ func initConfig() {
 // createRootCommand creates and configures the root cobra command with all subcommands
 func createRootCommand() *cobra.Command {
 	rootCmd := &cobra.Command{
-		Use:   "ict",
+		Use:   "image-composer-tool",
 		Short: "ICT for building Linux distributions",
 		Long: `ICT is a toolchain that enables building immutable
 Linux distributions using a simple toolchain from pre-built packages emanating
@@ -90,8 +90,8 @@ The tool supports building custom images for:
 - Wind River eLxr
 - Ubuntu
 - RCD (Red Hat Compatible Distro)
-	Use 'ict --help' to see available commands.
-	Use 'ict <command> --help' for more information about a command.`,
+	Use 'image-composer-tool --help' to see available commands.
+	Use 'image-composer-tool <command> --help' for more information about a command.`,
 	}
 
 	// Add global flags

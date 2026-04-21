@@ -139,7 +139,7 @@ build_azl3_iso_image() {
   echo "Current working directory: $(pwd)"
   # Temporarily disable exit on error for the build command to capture output
   set +e
-  output=$( sudo -S ./build/ict build image-templates/azl3-x86_64-minimal-iso.yml 2>&1)
+  output=$( sudo -S ./build/image-composer-tool build image-templates/azl3-x86_64-minimal-iso.yml 2>&1)
   build_exit_code=$?
   set -e
   

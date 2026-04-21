@@ -7,7 +7,7 @@
 # Intel RealSense camera libraries, Intel NPU drivers, Mesa GPU stack, and more.
 #
 # Usage:
-#   sudo -E ./ict build image-templates/ubuntu24-x86_64-robotics-jazzy-raw.yml
+#   sudo -E ./image-composer-tool build image-templates/ubuntu24-x86_64-robotics-jazzy-raw.yml
 #
 # VM launch (QEMU example):
 #   qemu-system-x86_64 -machine q35 -enable-kvm -cpu host -smp 8 -m 16384 \

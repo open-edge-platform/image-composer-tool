@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/open-edge-platform/ict/internal/utils/logger"
-	"github.com/open-edge-platform/ict/internal/utils/network"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/network"
 )
 
 // GenerateAptSourcesFromRepositories creates an apt sources file from packageRepositories

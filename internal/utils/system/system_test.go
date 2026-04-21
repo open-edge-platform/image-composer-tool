@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-edge-platform/ict/internal/utils/shell"
-	"github.com/open-edge-platform/ict/internal/utils/system"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
 
 func TestGetHostOsInfo(t *testing.T) {

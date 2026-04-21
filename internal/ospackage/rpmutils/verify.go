@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
-	"github.com/open-edge-platform/ict/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"github.com/sassoftware/go-rpmutils"
 	"github.com/schollz/progressbar/v3"
 )

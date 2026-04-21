@@ -7,10 +7,10 @@
 # someone opens a pull request.
 
 # Everything requires image-composer-maintain team review by default
-* @open-edge-platform/ict-maintain
+* @open-edge-platform/image-composer-tool-maintain
 
 # CI files
-.github/ @adimoft @daveroge @shanedonohue @manilk1x @open-edge-platform/ict-maintain
+.github/ @adimoft @daveroge @shanedonohue @manilk1x @open-edge-platform/image-composer-tool-maintain
 
 # documentation content
 /docs @open-edge-platform/open-edge-platform-docs-write

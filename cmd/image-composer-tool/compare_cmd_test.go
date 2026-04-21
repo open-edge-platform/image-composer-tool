@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-edge-platform/ict/internal/image/imageinspect"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/imageinspect"
 	"github.com/spf13/cobra"
 )
 

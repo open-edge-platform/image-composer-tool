@@ -92,7 +92,7 @@ systemConfig:
   configurations:
     - cmd: "touch /etc/dummy01.txt"
     - cmd: "echo 'dlstreamer x86_64 ubuntu24 image' > /etc/dummy01.txt"
-    - cmd: "wget --no-check-certificate -O /etc/validate.sh https://raw.githubusercontent.com/open-edge-platform/ict/main/validate.sh"
+    - cmd: "wget --no-check-certificate -O /etc/validate.sh https://raw.githubusercontent.com/open-edge-platform/image-composer-tool/main/validate.sh"
 ```
 
 ## Configuration Examples
@@ -229,6 +229,6 @@ systemConfig:
 
 ## Related Documentation
 
-- [Image Templates](../architecture/ict-templates.md)
-- [Understanding the OS Image Build Process](../architecture/ict-build-process.md)
-- [Command-Line Reference](../architecture/ict-cli-specification.md)
+- [Image Templates](../architecture/image-composer-tool-templates.md)
+- [Understanding the OS Image Build Process](../architecture/image-composer-tool-build-process.md)
+- [Command-Line Reference](../architecture/image-composer-tool-cli-specification.md)

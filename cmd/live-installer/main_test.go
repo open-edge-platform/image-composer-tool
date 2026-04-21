@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/open-edge-platform/ict/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
 )
 
 func TestCreateRootCommand(t *testing.T) {

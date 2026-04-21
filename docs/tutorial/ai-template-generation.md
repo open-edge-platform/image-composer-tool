@@ -40,7 +40,7 @@ in real, working examples.
 
 | Requirement | Details |
 |-------------|---------|
-| **ict** binary | Built via `earthly +build` or `go build ./cmd/ict` |
+| **ict** binary | Built via `earthly +build` or `go build ./cmd/image-composer-tool` |
 | **AI provider** (one of) | [Ollama](https://ollama.com) (local) **or** an [OpenAI](https://platform.openai.com) API key |
 | **Template files** | At least a few `image-templates/*.yml` files to serve as the RAG knowledge base |
 
@@ -62,7 +62,7 @@ ollama list
 
 > **Tip:** Alternative embedding models are supported:
 > `mxbai-embed-large` (1024 dims) and `all-minilm` (384 dims). Change the
-> model in `ict.yml` if needed.
+> model in `image-composer-tool.yml` if needed.
 
 ---
 
@@ -75,10 +75,10 @@ With Ollama running, no configuration is needed:
 ollama serve &
 
 # 2. Generate a template from a natural language description
-./ict ai "create a minimal edge image for ubuntu with SSH"
+./image-composer-tool ai "create a minimal edge image for ubuntu with SSH"
 
 # 3. Search for relevant templates without generating
-./ict ai --search-only "cloud image with monitoring"
+./image-composer-tool ai --search-only "cloud image with monitoring"
 ```
 
 ## Quick Start (OpenAI - cloud)
@@ -88,7 +88,7 @@ ollama serve &
 export OPENAI_API_KEY="sk-..."
 
 # 2. Generate using OpenAI
-./ict ai --provider openai "create a minimal elxr image for IoT"
+./image-composer-tool ai --provider openai "create a minimal elxr image for IoT"
 ```
 
 ---
@@ -96,13 +96,13 @@ export OPENAI_API_KEY="sk-..."
 ## CLI Reference
 
 ```
-ict ai [query] [flags]
+image-composer-tool ai [query] [flags]
 ```
 
 ### Generate a Template
 
 ```bash
-./ict ai "create a minimal edge image for elxr with docker support"
+./image-composer-tool ai "create a minimal edge image for elxr with docker support"
 ```
 
 The command will:
@@ -117,7 +117,7 @@ The command will:
 Find relevant templates without invoking the LLM:
 
 ```bash
-./ict ai --search-only "cloud deployment with monitoring"
+./image-composer-tool ai --search-only "cloud deployment with monitoring"
 ```
 
 Output shows each matching template with a score breakdown:
@@ -135,10 +135,10 @@ Found 5 matching templates:
 
 ```bash
 # Save to image-templates/my-custom-image.yml
-./ict ai "create a minimal edge image" --output my-custom-image
+./image-composer-tool ai "create a minimal edge image" --output my-custom-image
 
 # Save to a specific path
-./ict ai "create an edge image" --output /tmp/my-image.yml
+./image-composer-tool ai "create an edge image" --output /tmp/my-image.yml
 ```
 
 If the output filename matches one of the reference templates returned by
@@ -151,10 +151,10 @@ automatically invalidates when a template's content changes (SHA256 hash).
 
 ```bash
 # Show cache statistics (entries, size, model, dimensions)
-./ict ai --cache-stats
+./image-composer-tool ai --cache-stats
 
 # Clear the embedding cache (forces re-indexing on next run)
-./ict ai --clear-cache
+./image-composer-tool ai --clear-cache
 ```
 
 ### All Flags
@@ -181,12 +181,12 @@ required.
 ### Switching to OpenAI
 
 The AI command currently selects the provider via CLI flags, not
-`ict.yml`.
+`image-composer-tool.yml`.
 
-Use `--provider openai` when running `ict ai`:
+Use `--provider openai` when running `image-composer-tool ai`:
 
 ```bash
-./ict ai --provider openai "minimal Ubuntu server image for cloud VMs"
+./image-composer-tool ai --provider openai "minimal Ubuntu server image for cloud VMs"
 ```
 
 You also need an API key:
@@ -205,7 +205,7 @@ ai:
 ### Full Configuration Reference
 
 All settings are optional. Defaults are shown below - only override what you
-need to change in `ict.yml`:
+need to change in `image-composer-tool.yml`:
 
 ```yaml
 ai:
@@ -302,7 +302,7 @@ package lists.
 | `connection refused :11434` | Ollama server down | Start Ollama: `ollama serve` |
 | Embeddings fail | Model not pulled | `ollama pull nomic-embed-text` |
 | Chat generation fails | Chat model not pulled | `ollama pull llama3.1:8b` |
-| Poor search results | Stale cache | `./ict ai --clear-cache` |
+| Poor search results | Stale cache | `./image-composer-tool ai --clear-cache` |
 | OpenAI auth error | Missing API key | `export OPENAI_API_KEY="sk-..."` |
 | Slow first run | Building embedding cache | Normal - subsequent runs use cache |
 | `No matching templates found` | Empty templates dir | Check `--templates-dir` points to templates |
@@ -313,8 +313,8 @@ package lists.
 
 - [ADR: Template-Enriched RAG](../architecture/adr-template-enriched-rag.md) -
   Full architecture decision record, design details, and roadmap
-- [Usage Guide](usage-guide.md) - General ict usage
-- [Image Templates](../architecture/ict-templates.md) -
+- [Usage Guide](usage-guide.md) - General image-composer-tool usage
+- [Image Templates](../architecture/image-composer-tool-templates.md) -
   Template format specification
-- [CLI Specification](../architecture/ict-cli-specification.md) -
+- [CLI Specification](../architecture/image-composer-tool-cli-specification.md) -
   Complete command reference

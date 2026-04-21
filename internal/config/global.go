@@ -10,9 +10,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/open-edge-platform/ict/internal/config/validate"
-	"github.com/open-edge-platform/ict/internal/utils/security"
-	"github.com/open-edge-platform/ict/internal/utils/slice"
+	"github.com/open-edge-platform/image-composer-tool/internal/config/validate"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/security"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/slice"
 	"gopkg.in/yaml.v3"
 )
 
@@ -116,7 +116,7 @@ func DefaultGlobalConfig() *GlobalConfig {
 
 		Logging: LoggingConfig{
 			Level: "info",
-			File:  "ict.log",
+			File:  "image-composer-tool.log",
 		},
 	}
 }
@@ -358,25 +358,25 @@ func GetConfigPaths() []string {
 	homeDir, _ := os.UserHomeDir()
 
 	paths := []string{
-		"ict.yml",   // Primary config location (root directory)
-		".ict.yml",  // Hidden file in current directory
-		"ict.yaml",  // Alternative extension
-		".ict.yaml", // Hidden file alternative
+		"image-composer-tool.yml",   // Primary config location (root directory)
+		".image-composer-tool.yml",  // Hidden file in current directory
+		"image-composer-tool.yaml",  // Alternative extension
+		".image-composer-tool.yaml", // Hidden file alternative
 	}
 
 	if homeDir != "" {
 		paths = append(paths,
-			filepath.Join(homeDir, ".ict", "config.yml"),
-			filepath.Join(homeDir, ".ict", "config.yaml"),
-			filepath.Join(homeDir, ".config", "ict", "config.yml"),
-			filepath.Join(homeDir, ".config", "ict", "config.yaml"),
+			filepath.Join(homeDir, ".image-composer-tool", "config.yml"),
+			filepath.Join(homeDir, ".image-composer-tool", "config.yaml"),
+			filepath.Join(homeDir, ".config", "image-composer-tool", "config.yml"),
+			filepath.Join(homeDir, ".config", "image-composer-tool", "config.yaml"),
 		)
 	}
 
 	// System-wide config paths
 	paths = append(paths,
-		"/etc/ict/config.yml",
-		"/etc/ict/config.yaml",
+		"/etc/image-composer-tool/config.yml",
+		"/etc/image-composer-tool/config.yaml",
 	)
 
 	return paths

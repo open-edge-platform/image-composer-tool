@@ -2,7 +2,7 @@
 
 // NOTE: This test is guarded by a build tag because it depends on internal/provider
 // interfaces and registry functions in your repository. Enable with:
-//    go test -tags provider_integration ./cmd/ict -run TestBuild_HappyPath -v
+//    go test -tags provider_integration ./cmd/image-composer-tool -run TestBuild_HappyPath -v
 //
 // You may need to tweak method names to match your internal provider interface.
 
@@ -13,8 +13,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/open-edge-platform/ict/internal/config"
-	"github.com/open-edge-platform/ict/internal/provider"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/provider"
 )
 
 // ---- Fake provider that records calls ----

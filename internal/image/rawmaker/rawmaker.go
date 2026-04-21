@@ -6,15 +6,15 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/open-edge-platform/ict/internal/chroot"
-	"github.com/open-edge-platform/ict/internal/config"
-	"github.com/open-edge-platform/ict/internal/config/manifest"
-	"github.com/open-edge-platform/ict/internal/image/imageconvert"
-	"github.com/open-edge-platform/ict/internal/image/imagedisc"
-	"github.com/open-edge-platform/ict/internal/image/imageos"
-	"github.com/open-edge-platform/ict/internal/utils/logger"
-	"github.com/open-edge-platform/ict/internal/utils/shell"
-	"github.com/open-edge-platform/ict/internal/utils/system"
+	"github.com/open-edge-platform/image-composer-tool/internal/chroot"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/config/manifest"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/imageconvert"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/imagedisc"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/imageos"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
 
 type RawMakerInterface interface {

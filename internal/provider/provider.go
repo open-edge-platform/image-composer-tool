@@ -1,7 +1,7 @@
 package provider
 
 import (
-	"github.com/open-edge-platform/ict/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
 )
 
 // Provider is the interface every OSV plugin must implement.

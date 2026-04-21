@@ -13,17 +13,17 @@ distributions (rcd10).
 
 ```bash
 # 1. Clone and build (requires Go 1.24+)
-git clone https://github.com/open-edge-platform/ict.git
-cd ict
-go build -buildmode=pie -ldflags "-s -w" ./cmd/ict
+git clone https://github.com/open-edge-platform/image-composer-tool.git
+cd image-composer-tool
+go build -buildmode=pie -ldflags "-s -w" ./cmd/image-composer-tool
 
 # 2. Install prerequisites
 sudo apt install systemd-ukify mmdebstrap
 # Or run it directly:
-go run ./cmd/ict --help
+go run ./cmd/image-composer-tool --help
 
 # 3. Compose an image
-sudo -E ./ict build image-templates/azl3-x86_64-edge-raw.yml
+sudo -E ./image-composer-tool build image-templates/azl3-x86_64-edge-raw.yml
 ```
 
 For build options (Earthly, Debian package) and prerequisite details, see the
@@ -35,9 +35,9 @@ For build options (Earthly, Debian package) and prerequisite details, see the
 |-------|-------------|
 | [Installation Guide](./tutorial/installation.md) | Build methods, Debian packaging, prerequisites |
 | [Usage Guide](./tutorial/usage-guide.md) | CLI commands, configuration, build output, shell completion |
-| [CLI Reference](./architecture/ict-cli-specification.md) | Complete command-line specification |
-| [Image Templates](./architecture/ict-templates.md) | Template structure, variables, best practices |
-| [Build Process](./architecture/ict-build-process.md) | Pipeline stages, caching, troubleshooting |
+| [CLI Reference](./architecture/image-composer-tool-cli-specification.md) | Complete command-line specification |
+| [Image Templates](./architecture/image-composer-tool-templates.md) | Template structure, variables, best practices |
+| [Build Process](./architecture/image-composer-tool-build-process.md) | Pipeline stages, caching, troubleshooting |
 | [Architecture](./architecture.md) | System design and component overview |
 
 ## Tutorials
@@ -52,19 +52,19 @@ For build options (Earthly, Debian package) and prerequisite details, see the
 
 ## Get Help
 
-- Run `ict --help` (using the binary path from your install method)
-- [Start a discussion](https://github.com/open-edge-platform/ict/discussions)
-- [Troubleshoot build issues](./architecture/ict-build-process.md#troubleshooting-build-issues)
+- Run `image-composer-tool --help` (using the binary path from your install method)
+- [Start a discussion](https://github.com/open-edge-platform/image-composer-tool/discussions)
+- [Troubleshoot build issues](./architecture/image-composer-tool-build-process.md#troubleshooting-build-issues)
 
 ## Contribute
 
-- [Open an issue](https://github.com/open-edge-platform/ict/issues)
-- [Report a security vulnerability](https://github.com/open-edge-platform/ict/blob/main/SECURITY.md)
-- [Submit a pull request](https://github.com/open-edge-platform/ict/pulls)
+- [Open an issue](https://github.com/open-edge-platform/image-composer-tool/issues)
+- [Report a security vulnerability](https://github.com/open-edge-platform/image-composer-tool/blob/main/SECURITY.md)
+- [Submit a pull request](https://github.com/open-edge-platform/image-composer-tool/pulls)
 
 ## License
 
-[MIT](https://github.com/open-edge-platform/ict/blob/main/LICENSE)
+[MIT](https://github.com/open-edge-platform/image-composer-tool/blob/main/LICENSE)
 
 <!--hide_directive
 :::{toctree}

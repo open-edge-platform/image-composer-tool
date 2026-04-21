@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-edge-platform/ict/internal/chroot/deb"
-	"github.com/open-edge-platform/ict/internal/utils/shell"
+	"github.com/open-edge-platform/image-composer-tool/internal/chroot/deb"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
 
 func TestNewDebInstaller(t *testing.T) {

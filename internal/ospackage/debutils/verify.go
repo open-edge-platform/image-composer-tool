@@ -15,7 +15,7 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
-	"github.com/open-edge-platform/ict/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"github.com/schollz/progressbar/v3"
 )
 

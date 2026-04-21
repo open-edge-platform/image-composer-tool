@@ -265,7 +265,7 @@ build_ubuntu24_immutable_raw_image() {
 
   # Temporarily disable exit on error for the build command to capture output
   set +e
-  output=$( sudo -S ./build/ict build image-templates/ubuntu24-x86_64-edge-raw.yml 2>&1)
+  output=$( sudo -S ./build/image-composer-tool build image-templates/ubuntu24-x86_64-edge-raw.yml 2>&1)
   build_exit_code=$?
   set -e
   

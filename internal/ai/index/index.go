@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/open-edge-platform/ict/internal/ai/template"
+	"github.com/open-edge-platform/image-composer-tool/internal/ai/template"
 )
 
 // Document represents an indexed template with its embedding.

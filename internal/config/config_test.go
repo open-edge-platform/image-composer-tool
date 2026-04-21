@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-edge-platform/ict/internal/config/validate"
+	"github.com/open-edge-platform/image-composer-tool/internal/config/validate"
 )
 
 func TestMergeStringSlices(t *testing.T) {
@@ -2060,8 +2060,8 @@ func TestDefaultGlobalConfig(t *testing.T) {
 		t.Errorf("expected default log level 'info', got '%s'", config.Logging.Level)
 	}
 
-	if config.Logging.File != "ict.log" {
-		t.Errorf("expected default log file 'ict.log', got '%s'", config.Logging.File)
+	if config.Logging.File != "image-composer-tool.log" {
+		t.Errorf("expected default log file 'image-composer-tool.log', got '%s'", config.Logging.File)
 	}
 }
 
@@ -3270,7 +3270,7 @@ target:
 
 packageRepositories:
   - codename: "localdeb"
-    path: "/data/ict/localdeb"
+    path: "/data/image-composer-tool/localdeb"
     pkey: "[trusted=yes]"
     component: "main"
 
@@ -3314,8 +3314,8 @@ systemConfig:
 		t.Fatalf("expected to find localdeb repository")
 	}
 
-	if repo.Path != "/data/ict/localdeb" {
-		t.Errorf("expected repo path '/data/ict/localdeb', got '%s'", repo.Path)
+	if repo.Path != "/data/image-composer-tool/localdeb" {
+		t.Errorf("expected repo path '/data/image-composer-tool/localdeb', got '%s'", repo.Path)
 	}
 	if repo.PKey != "[trusted=yes]" {
 		t.Errorf("expected repo pkey '[trusted=yes]', got '%s'", repo.PKey)
@@ -4071,10 +4071,10 @@ func TestGetConfigPaths(t *testing.T) {
 
 	// Verify that current directory paths are included
 	expectedPaths := []string{
-		"ict.yml",
-		".ict.yml",
-		"ict.yaml",
-		".ict.yaml",
+		"image-composer-tool.yml",
+		".image-composer-tool.yml",
+		"image-composer-tool.yaml",
+		".image-composer-tool.yaml",
 	}
 
 	for _, expected := range expectedPaths {
@@ -4092,8 +4092,8 @@ func TestGetConfigPaths(t *testing.T) {
 
 	// Verify system paths are included
 	systemPaths := []string{
-		"/etc/ict/config.yml",
-		"/etc/ict/config.yaml",
+		"/etc/image-composer-tool/config.yml",
+		"/etc/image-composer-tool/config.yaml",
 	}
 
 	for _, sysPath := range systemPaths {
@@ -4133,7 +4133,7 @@ func TestFindConfigFile(t *testing.T) {
 	}
 
 	// Create a config file
-	configFile := "ict.yml"
+	configFile := "image-composer-tool.yml"
 	if err := os.WriteFile(configFile, []byte("workers: 4\n"), 0644); err != nil {
 		t.Fatalf("Failed to create test config: %v", err)
 	}

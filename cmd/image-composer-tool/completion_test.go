@@ -16,7 +16,7 @@ func runInstallCompletion(t *testing.T, args ...string) (string, error) {
 	t.Helper()
 
 	// Create root command
-	root := &cobra.Command{Use: "ict"}
+	root := &cobra.Command{Use: "image-composer-tool"}
 
 	// Manually create and add completion command (since InitDefaultCompletionCmd doesn't actually add it immediately)
 	completionCmd := &cobra.Command{
@@ -42,7 +42,7 @@ func TestInstallCompletion_UnknownShellDetection(t *testing.T) {
 	t.Setenv("PSModulePath", "")
 
 	// Create root command
-	root := &cobra.Command{Use: "ict"}
+	root := &cobra.Command{Use: "image-composer-tool"}
 
 	// Manually create and add completion command
 	completionCmd := &cobra.Command{
@@ -78,7 +78,7 @@ func TestInstallCompletion_ZshWritesToHome(t *testing.T) {
 	}
 
 	// Validate the expected file path exists
-	target := filepath.Join(tmp, ".zsh", "completion", "_ict")
+	target := filepath.Join(tmp, ".zsh", "completion", "_image-composer-tool")
 	if _, statErr := os.Stat(target); statErr != nil {
 		t.Fatalf("expected completion file at %s, got stat error: %v", target, statErr)
 	}
@@ -110,7 +110,7 @@ func runCompletionFor(t *testing.T, shell string) {
 	t.Setenv("USERPROFILE", tmp) // windows env used by os.UserHomeDir on some setups
 
 	// Create root command
-	root := &cobra.Command{Use: "ict"}
+	root := &cobra.Command{Use: "image-composer-tool"}
 
 	// Manually create and add completion command
 	completionCmd := &cobra.Command{
@@ -126,15 +126,15 @@ func runCompletionFor(t *testing.T, shell string) {
 		t.Fatalf("completion for %s failed: %v", shell, err)
 	}
 
-	// Be flexible: we accept any file whose base name indicates ict completion.
+	// Be flexible: we accept any file whose base name indicates image-composer-tool completion.
 	want := func(name string) bool {
 		name = strings.ToLower(name)
-		return strings.Contains(name, "ict") &&
+		return strings.Contains(name, "image-composer-tool") &&
 			(strings.HasSuffix(name, ".bash") ||
 				strings.HasSuffix(name, ".fish") ||
 				strings.HasSuffix(name, ".ps1") ||
-				name == "_ict" || // zsh
-				name == "ict") // some distros use no extension
+				name == "_image-composer-tool" || // zsh
+				name == "image-composer-tool") // some distros use no extension
 	}
 	ok, err := findAnyFileUnder(tmp, want)
 	if err != nil {

@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/open-edge-platform/ict/internal/config"
-	fileutil "github.com/open-edge-platform/ict/internal/utils/file"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	fileutil "github.com/open-edge-platform/image-composer-tool/internal/utils/file"
 )
 
 // CleanOptions defines what cache artifacts should be removed.

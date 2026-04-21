@@ -107,13 +107,13 @@ consistent behavior across environments and improved long-term maintainability.
 The ICT CLI will be extended with additional commands:
 
 ```bash
-ict inspect <image.img> \
+image-composer-tool inspect <image.img> \
   --format=yml \
   --output=report.yml \
   --verbose
 
   
-ict diff <image-1.img> <image-2.img> \
+image-composer-tool diff <image-1.img> <image-2.img> \
   --format=yml \
   --output=report.yml \
   --verbose

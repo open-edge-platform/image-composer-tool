@@ -6,7 +6,7 @@ This document is the authoritative field-by-field reference for the template
 format.
 
 For a conceptual overview of how templates fit into the build pipeline, see
-[Understanding the Build Process](./ict-build-process.md).
+[Understanding the Build Process](./image-composer-tool-build-process.md).
 
 ## Table of Contents
 
@@ -305,7 +305,7 @@ packageRepositories:
     pkey: "[trusted=yes]"
 ```
 
-See [Multiple Package Repository Support](./ict-multi-repo-support.md)
+See [Multiple Package Repository Support](./image-composer-tool-multi-repo-support.md)
 for detailed configuration guidance.
 
 ---
@@ -540,7 +540,7 @@ can provide variable values via a separate YAML file or command-line flags at
 build time.
 
 To learn how variables interact with each build stage, see
-[Build Stages in Detail](./ict-build-process.md#build-stages-in-detail).
+[Build Stages in Detail](./image-composer-tool-build-process.md#build-stages-in-detail).
 
 
 
@@ -554,22 +554,22 @@ To learn how variables interact with each build stage, see
    (e.g., `factory-floor-edge`, not `test-image-3`).
 4. **Version control your templates** - store them in Git alongside your
    deployment code.
-5. **Validate before building** - run `ict validate template.yml`
+5. **Validate before building** - run `image-composer-tool validate template.yml`
    to catch errors early.
 6. **Prefer `additionalFiles` over `configurations`** - copying config files is
    more reproducible than running arbitrary shell commands.
 
 ## Related Documentation
 
-- [Understanding the Build Process](./ict-build-process.md)
-- [Multiple Package Repository Support](./ict-multi-repo-support.md)
-- [ICT CLI Reference](./ict-cli-specification.md)
-- [Common Build Patterns](./ict-build-process.md#common-build-patterns)
+- [Understanding the Build Process](./image-composer-tool-build-process.md)
+- [Multiple Package Repository Support](./image-composer-tool-multi-repo-support.md)
+- [ICT CLI Reference](./image-composer-tool-cli-specification.md)
+- [Common Build Patterns](./image-composer-tool-build-process.md#common-build-patterns)
 
 <!--hide_directive
 :::{toctree}
 :hidden:
 
-ict-multi-repo-support
+image-composer-tool-multi-repo-support
 :::
 hide_directive-->

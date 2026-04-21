@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/open-edge-platform/ict/internal/utils/slice"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/slice"
 )
 
 // DefaultConfigLoader handles loading and merging default configurations

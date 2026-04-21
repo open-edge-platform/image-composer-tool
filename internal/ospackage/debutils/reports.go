@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/open-edge-platform/ict/internal/ospackage"
-	"github.com/open-edge-platform/ict/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 )
 
 // MinimalPackageInfo contains only essential fields for reporting.

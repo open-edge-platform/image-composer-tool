@@ -42,7 +42,7 @@ packageRepositories:
     component: "restricted"
 
   # - codename: "localrpm"
-  #   path: "/data/ict/localrpm" # Uncomment and replace with local path
+  #   path: "/data/image-composer-tool/localrpm" # Uncomment and replace with local path
   #   pkey: "[trusted=yes]" # Make sure to put trusted
   #   component: "main" # Make sure to put main or leave empty
 

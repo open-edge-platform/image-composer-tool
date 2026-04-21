@@ -10,10 +10,10 @@ import (
 	"github.com/muesli/crunchy"
 	"github.com/rivo/tview"
 
-	"github.com/open-edge-platform/ict/cmd/live-installer/texture-ui/primitives/navigationbar"
-	"github.com/open-edge-platform/ict/cmd/live-installer/texture-ui/uitext"
-	"github.com/open-edge-platform/ict/cmd/live-installer/texture-ui/uiutils"
-	"github.com/open-edge-platform/ict/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/cmd/live-installer/texture-ui/primitives/navigationbar"
+	"github.com/open-edge-platform/image-composer-tool/cmd/live-installer/texture-ui/uitext"
+	"github.com/open-edge-platform/image-composer-tool/cmd/live-installer/texture-ui/uiutils"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
 )
 
 // UI constants.

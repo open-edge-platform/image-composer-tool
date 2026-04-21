@@ -50,7 +50,7 @@ func captureOutput(t *testing.T, fn func()) string {
 }
 
 func TestVersionCommand_PrintsFields(t *testing.T) {
-	cmd := &cobra.Command{Use: "ict"}
+	cmd := &cobra.Command{Use: "image-composer-tool"}
 	cmd.AddCommand(createVersionCommand())
 
 	// Execute "version" and capture global output (fmt.Printf used by the command).

@@ -310,6 +310,6 @@ packageRepositories:
 
 ## Related Documentation
 
-- [Image Templates](../architecture/ict-templates.md)
-- [Understanding the OS Image Build Process](../architecture/ict-build-process.md)
+- [Image Templates](../architecture/image-composer-tool-templates.md)
+- [Understanding the OS Image Build Process](../architecture/image-composer-tool-build-process.md)
 - [Configuring Custom Commands During Image Build](configure-additional-actions-for-build.md)

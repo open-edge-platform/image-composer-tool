@@ -1,6 +1,6 @@
 {
 	"$schema": "https://json-schema.org/draft/2020-12/schema",
-	"$id": "https://github.com/open-edge-platform/ict/schemas/ict-config.schema.json",
+	"$id": "https://github.com/open-edge-platform/image-composer-tool/schemas/image-composer-tool-config.schema.json",
 	"title": "ICT Config",
 	"description": "Defines the global configuration file for the ICT",
 	"type": "object",

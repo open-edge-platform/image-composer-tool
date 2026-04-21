@@ -7,7 +7,7 @@ import (
 	"github.com/gdamore/tcell"
 	"github.com/rivo/tview"
 
-	"github.com/open-edge-platform/ict/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
 )
 
 // View is the interface for different "pages" in the attended installer.

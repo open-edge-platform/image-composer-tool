@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-edge-platform/ict/internal/config"
-	"github.com/open-edge-platform/ict/internal/utils/shell"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
 
 func TestNewImageConvert(t *testing.T) {

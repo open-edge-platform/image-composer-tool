@@ -6,8 +6,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/open-edge-platform/ict/internal/config"
-	"github.com/open-edge-platform/ict/internal/ospackage/debutils"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/debutils"
 )
 
 // TestPackagesFromMultipleRepos tests package retrieval from multiple repositories

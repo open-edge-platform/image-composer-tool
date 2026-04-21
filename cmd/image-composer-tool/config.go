@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/open-edge-platform/ict/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -31,17 +31,17 @@ func createConfigInitCommand() *cobra.Command {
 		Short: "Initialize a new configuration file",
 		Long: `Initialize a new configuration file with default values.
 
-If no path is specified, the config will be created in the current directory as ict.yml
+If no path is specified, the config will be created in the current directory as image-composer-tool.yml
 
 Examples:
   # Create config in current directory
-  ict config init
+  image-composer-tool config init
   
   # Create config at specific location
-  ict config init /etc/ict/config.yml
+  image-composer-tool config init /etc/image-composer-tool/config.yml
   
   # Create config in user's home directory
-  ict config init ~/.ict/config.yml`,
+  image-composer-tool config init ~/.ict/config.yml`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: executeConfigInit,
 	}
@@ -51,7 +51,7 @@ Examples:
 
 // executeConfigInit handles the config init command logic
 func executeConfigInit(cmd *cobra.Command, args []string) error {
-	configPath := "ict.yml"
+	configPath := "image-composer-tool.yml"
 	if len(args) > 0 {
 		configPath = args[0]
 	}

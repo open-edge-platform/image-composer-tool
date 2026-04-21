@@ -35,7 +35,7 @@ The following diagram shows the input and output of the ICT tool:
 
 The following diagram shows the network context of the ICT tool:
 
-![ICT Network Diagram](./architecture/assets/ict-network-diagram.drawio.svg)
+![ICT Network Diagram](./architecture/assets/image-composer-tool-network-diagram.drawio.svg)
 
 The diagram illustrates how different components of the product's system architecture communicate with each other.
 
@@ -122,7 +122,7 @@ The **Config** component contains configuration data for the image that will be 
 
 **Configuration Types:**
 
-1. **Global Configuration** (Default: `ict/config.yml`)
+1. **Global Configuration** (Default: `image-composer-tool/config.yml`)
    - System-wide settings (cache directories, worker count, logging)
    - Applies to all builds on the system
 
@@ -184,24 +184,24 @@ The build process follows these high-level steps:
 
 ## Related Documentation
 
-- [Understanding the Build Process](./architecture/ict-build-process.md) - Detailed explanation of build stages
-- [Understanding Caching](./architecture/ict-caching.md) - How package and chroot caching work
-- [Understanding Templates](./architecture/ict-templates.md) - How to create and use image templates
-- [Multiple Package Repository Support](./architecture/ict-multi-repo-support.md) - Adding custom package repositories
-- [ICT CLI Reference](./architecture/ict-cli-specification.md) - Complete CLI documentation
+- [Understanding the Build Process](./architecture/image-composer-tool-build-process.md) - Detailed explanation of build stages
+- [Understanding Caching](./architecture/image-composer-tool-caching.md) - How package and chroot caching work
+- [Understanding Templates](./architecture/image-composer-tool-templates.md) - How to create and use image templates
+- [Multiple Package Repository Support](./architecture/image-composer-tool-multi-repo-support.md) - Adding custom package repositories
+- [ICT CLI Reference](./architecture/image-composer-tool-cli-specification.md) - Complete CLI documentation
 
 <!--hide_directive
 :::{toctree}
 :hidden:
 
-CLI Specification <./architecture/ict-cli-specification.md>
+CLI Specification <./architecture/image-composer-tool-cli-specification.md>
 Security Objectives <./architecture/image-composition-tool-security-objectives.md>
-Build Process <./architecture/ict-build-process.md>
+Build Process <./architecture/image-composer-tool-build-process.md>
 ./architecture/image-manifest-specification.md
-Coding Style Guide <./architecture/ict-coding-style.md>
-Caching in ICT <./architecture/ict-caching.md>
-Multiple-package Repo Support <./architecture/ict-multi-repo-support.md>
-Using Templates <./architecture/ict-templates.md>
+Coding Style Guide <./architecture/image-composer-tool-coding-style.md>
+Caching in ICT <./architecture/image-composer-tool-caching.md>
+Multiple-package Repo Support <./architecture/image-composer-tool-multi-repo-support.md>
+Using Templates <./architecture/image-composer-tool-templates.md>
 Dependency Graph Analyzer <./architecture/adr-dep-analyzer.md>
 Image Inspection and Comparison <./architecture/adr-image-inspect.md>
 Template-Enriched RAG <./architecture/adr-template-enriched-rag.md>

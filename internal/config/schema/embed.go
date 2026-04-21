@@ -5,7 +5,7 @@ import _ "embed"
 //go:embed os-image-template.schema.json
 var ImageTemplateSchema []byte
 
-//go:embed ict-config.schema.json
+//go:embed image-composer-tool-config.schema.json
 var ConfigSchema []byte
 
 // ChrootenvSchema contains the JSON schema for validating chrootenv configuration files

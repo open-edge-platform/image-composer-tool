@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/open-edge-platform/ict/internal/ai"
-	"github.com/open-edge-platform/ict/internal/ai/rag"
-	"github.com/open-edge-platform/ict/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/ai"
+	"github.com/open-edge-platform/image-composer-tool/internal/ai/rag"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"github.com/spf13/cobra"
 )
 
@@ -34,28 +34,28 @@ new templates based on natural language descriptions.
 
 Examples:
   # Generate a template from a description
-  ict ai "create a minimal edge image for elxr with docker support"
+  image-composer-tool ai "create a minimal edge image for elxr with docker support"
 
   # Generate and save to image-templates/ with a name
-  ict ai "create a minimal edge image" --output my-custom-image
+  image-composer-tool ai "create a minimal edge image" --output my-custom-image
 
   # Generate and save to a custom path
-  ict ai "create an edge image" --output /path/to/output.yml
+  image-composer-tool ai "create an edge image" --output /path/to/output.yml
 
   # Search for relevant templates without generating
-  ict ai --search-only "cloud deployment with monitoring"
+  image-composer-tool ai --search-only "cloud deployment with monitoring"
 
   # Clear the embedding cache
-  ict ai --clear-cache
+  image-composer-tool ai --clear-cache
 
   # Show cache statistics
-  ict ai --cache-stats
+  image-composer-tool ai --cache-stats
 
 Configuration:
   The AI feature uses sensible defaults. If Ollama is running locally, no configuration
   is needed. For OpenAI, set the OPENAI_API_KEY environment variable.
 
-  Optional configuration in ict.yml:
+  Optional configuration in image-composer-tool.yml:
     ai:
       provider: ollama  # or "openai"
       templates_dir: ./image-templates

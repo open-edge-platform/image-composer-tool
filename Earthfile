@@ -106,11 +106,11 @@ build:
         CGO_ENABLED=0 GOARCH=amd64 GOOS=linux \
         go build -trimpath -buildmode=pie -o build/live-installer \
             -ldflags "-s -w \
-                     -X 'github.com/open-edge-platform/ict/internal/config/version.Version=$VERSION' \
-                     -X 'github.com/open-edge-platform/ict/internal/config/version.Toolname=Image-Composer' \
-                     -X 'github.com/open-edge-platform/ict/internal/config/version.Organization=Open Edge Platform' \
-                     -X 'github.com/open-edge-platform/ict/internal/config/version.BuildDate=$BUILD_DATE' \
-                     -X 'github.com/open-edge-platform/ict/internal/config/version.CommitSHA=$COMMIT_SHA'" \
+                     -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.Version=$VERSION' \
+                     -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.Toolname=Image-Composer-Tool' \
+                     -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.Organization=Open Edge Platform' \
+                     -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.BuildDate=$BUILD_DATE' \
+                     -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.CommitSHA=$COMMIT_SHA'" \
             ./cmd/live-installer
 
     SAVE ARTIFACT build/live-installer AS LOCAL ./build/live-installer
@@ -120,17 +120,17 @@ build:
         COMMIT_SHA=$(cat /tmp/commit_sha) && \
         BUILD_DATE=$(cat /tmp/build_date) && \
         CGO_ENABLED=0 GOARCH=amd64 GOOS=linux \
-        go build -trimpath -buildmode=pie -o build/ict \
+        go build -trimpath -buildmode=pie -o build/image-composer-tool \
             -ldflags "-s -w \
-                     -X 'github.com/open-edge-platform/ict/internal/config/version.Version=$VERSION' \
-                     -X 'github.com/open-edge-platform/ict/internal/config/version.Toolname=Image-Composer' \
-                     -X 'github.com/open-edge-platform/ict/internal/config/version.Organization=Open Edge Platform' \
-                     -X 'github.com/open-edge-platform/ict/internal/config/version.BuildDate=$BUILD_DATE' \
-                     -X 'github.com/open-edge-platform/ict/internal/config/version.CommitSHA=$COMMIT_SHA'" \
-            ./cmd/ict
+                     -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.Version=$VERSION' \
+                     -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.Toolname=Image-Composer-Tool' \
+                     -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.Organization=Open Edge Platform' \
+                     -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.BuildDate=$BUILD_DATE' \
+                     -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.CommitSHA=$COMMIT_SHA'" \
+            ./cmd/image-composer-tool
             
-    SAVE ARTIFACT build/ict AS LOCAL ./build/ict
-    SAVE ARTIFACT /tmp/version.txt AS LOCAL ./build/ict.version
+    SAVE ARTIFACT build/image-composer-tool AS LOCAL ./build/image-composer-tool
+    SAVE ARTIFACT /tmp/version.txt AS LOCAL ./build/image-composer-tool.version
 
 lint:
     FROM +golang-base
@@ -219,10 +219,10 @@ deb:
                  DEBIAN
     
     # Copy the built binary from the build target
-    COPY +build/ict usr/local/bin/ict
+    COPY +build/image-composer-tool usr/local/bin/image-composer-tool
     
     # Make the binary executable
-    RUN chmod +x usr/local/bin/ict
+    RUN chmod +x usr/local/bin/image-composer-tool
     
     # Create default global configuration with system paths (user-editable)
     # Note: Must be named config.yml to match the default search paths in the code
@@ -234,13 +234,13 @@ deb:
         echo "workers: 8" >> etc/ict/config.yml && \
         echo "# Number of concurrent download workers (1-100, default: 8)" >> etc/ict/config.yml && \
         echo "" >> etc/ict/config.yml && \
-        echo "config_dir: \"/etc/ict/config\"" >> etc/ict/config.yml && \
+        echo "config_dir: \"/etc/image-composer-tool/config\"" >> etc/ict/config.yml && \
         echo "# Directory containing configuration files for different target OSs" >> etc/ict/config.yml && \
         echo "" >> etc/ict/config.yml && \
-        echo "cache_dir: \"/var/cache/ict\"" >> etc/ict/config.yml && \
+        echo "cache_dir: \"/var/cache/image-composer-tool\"" >> etc/ict/config.yml && \
         echo "# Package cache directory where downloaded RPMs/DEBs are stored" >> etc/ict/config.yml && \
         echo "" >> etc/ict/config.yml && \
-        echo "work_dir: \"/tmp/ict\"" >> etc/ict/config.yml && \
+        echo "work_dir: \"/tmp/image-composer-tool\"" >> etc/ict/config.yml && \
         echo "# Working directory for build operations and image assembly" >> etc/ict/config.yml && \
         echo "" >> etc/ict/config.yml && \
         echo "temp_dir: \"/tmp\"" >> etc/ict/config.yml && \
@@ -284,6 +284,6 @@ deb:
         dpkg-deb --build . /tmp/dist/ict_${VERSION}_${ARCH}.deb
 
     # Save the debian package artifact and resolved version information to dist/
-    RUN VERSION=$(cat /tmp/pkg_version) && cp /tmp/pkg_version /tmp/dist/ict.version
+    RUN VERSION=$(cat /tmp/pkg_version) && cp /tmp/pkg_version /tmp/dist/image-composer-tool.version
     SAVE ARTIFACT /tmp/dist/ict_*_${ARCH}.deb AS LOCAL dist/
-    SAVE ARTIFACT /tmp/dist/ict.version AS LOCAL dist/ict.version
+    SAVE ARTIFACT /tmp/dist/image-composer-tool.version AS LOCAL dist/image-composer-tool.version

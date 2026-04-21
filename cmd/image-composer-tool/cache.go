@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/open-edge-platform/ict/internal/cache"
+	"github.com/open-edge-platform/image-composer-tool/internal/cache"
 	"github.com/spf13/cobra"
 )
 

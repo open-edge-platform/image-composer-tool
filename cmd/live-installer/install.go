@@ -6,17 +6,17 @@ import (
 	"path/filepath"
 	"strings"
 
-	attendedinstaller "github.com/open-edge-platform/ict/cmd/live-installer/texture-ui"
-	"github.com/open-edge-platform/ict/internal/chroot"
-	"github.com/open-edge-platform/ict/internal/chroot/chrootbuild"
-	"github.com/open-edge-platform/ict/internal/chroot/deb"
-	"github.com/open-edge-platform/ict/internal/chroot/rpm"
-	"github.com/open-edge-platform/ict/internal/config"
-	"github.com/open-edge-platform/ict/internal/image/imagedisc"
-	"github.com/open-edge-platform/ict/internal/image/imageos"
-	"github.com/open-edge-platform/ict/internal/utils/file"
-	"github.com/open-edge-platform/ict/internal/utils/security"
-	"github.com/open-edge-platform/ict/internal/utils/shell"
+	attendedinstaller "github.com/open-edge-platform/image-composer-tool/cmd/live-installer/texture-ui"
+	"github.com/open-edge-platform/image-composer-tool/internal/chroot"
+	"github.com/open-edge-platform/image-composer-tool/internal/chroot/chrootbuild"
+	"github.com/open-edge-platform/image-composer-tool/internal/chroot/deb"
+	"github.com/open-edge-platform/image-composer-tool/internal/chroot/rpm"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/imagedisc"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/imageos"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/file"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/security"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
 
 func newChrootBuilder(configDir, localRepo, targetOs, targetDist, targetArch string) (*chrootbuild.ChrootBuilder, error) {

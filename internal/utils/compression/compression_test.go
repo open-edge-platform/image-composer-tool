@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-edge-platform/ict/internal/utils/compression"
-	"github.com/open-edge-platform/ict/internal/utils/shell"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/compression"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
 
 func TestDecompressFile(t *testing.T) {

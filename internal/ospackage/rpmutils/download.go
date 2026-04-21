@@ -13,13 +13,13 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
 
-	"github.com/open-edge-platform/ict/internal/config"
-	"github.com/open-edge-platform/ict/internal/ospackage"
-	"github.com/open-edge-platform/ict/internal/ospackage/dotfilter"
-	"github.com/open-edge-platform/ict/internal/ospackage/pkgfetcher"
-	"github.com/open-edge-platform/ict/internal/ospackage/pkgsorter"
-	"github.com/open-edge-platform/ict/internal/utils/logger"
-	"github.com/open-edge-platform/ict/internal/utils/network"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/dotfilter"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/pkgfetcher"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/pkgsorter"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/network"
 )
 
 // repoConfig holds .repo file values

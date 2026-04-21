@@ -37,7 +37,7 @@ logging:
   # - info:  Normal output, shows progress and important events
   # - warn:  Only warnings and errors, minimal output
   # - error: Only errors, very quiet operation
-  file: "ict.log"
+  file: "image-composer-tool.log"
   # Tee logs to this file in addition to stdout/stderr (overwritten on each run)
 
 # AI-powered template generation configuration (optional)

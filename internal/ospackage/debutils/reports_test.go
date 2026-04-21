@@ -3,8 +3,8 @@ package debutils_test
 import (
 	"testing"
 
-	"github.com/open-edge-platform/ict/internal/ospackage"
-	"github.com/open-edge-platform/ict/internal/ospackage/debutils"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/debutils"
 )
 
 func TestBuildDependencyChains(t *testing.T) {

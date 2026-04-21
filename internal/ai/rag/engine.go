@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/open-edge-platform/ict/internal/ai"
-	"github.com/open-edge-platform/ict/internal/ai/cache"
-	"github.com/open-edge-platform/ict/internal/ai/index"
-	"github.com/open-edge-platform/ict/internal/ai/provider"
-	"github.com/open-edge-platform/ict/internal/ai/template"
+	"github.com/open-edge-platform/image-composer-tool/internal/ai"
+	"github.com/open-edge-platform/image-composer-tool/internal/ai/cache"
+	"github.com/open-edge-platform/image-composer-tool/internal/ai/index"
+	"github.com/open-edge-platform/image-composer-tool/internal/ai/provider"
+	"github.com/open-edge-platform/image-composer-tool/internal/ai/template"
 )
 
 // Engine is the main RAG engine that orchestrates indexing and search.
@@ -222,7 +222,7 @@ func (e *Engine) Generate(ctx context.Context, query string) (string, error) {
 
 	// Build context from top results
 	var contextBuilder strings.Builder
-	contextBuilder.WriteString("You are an expert at generating OS image YAML templates for ict.\n")
+	contextBuilder.WriteString("You are an expert at generating OS image YAML templates for image-composer-tool.\n")
 	contextBuilder.WriteString("Here are some example templates to use as reference:\n\n")
 
 	for i, result := range results {

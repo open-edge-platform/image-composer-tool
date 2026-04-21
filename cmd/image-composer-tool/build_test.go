@@ -6,12 +6,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-edge-platform/ict/internal/config"
-	"github.com/open-edge-platform/ict/internal/provider"
-	"github.com/open-edge-platform/ict/internal/provider/azl"
-	"github.com/open-edge-platform/ict/internal/provider/elxr"
-	"github.com/open-edge-platform/ict/internal/provider/emt"
-	"github.com/open-edge-platform/ict/internal/provider/ubuntu"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/provider"
+	"github.com/open-edge-platform/image-composer-tool/internal/provider/azl"
+	"github.com/open-edge-platform/image-composer-tool/internal/provider/elxr"
+	"github.com/open-edge-platform/image-composer-tool/internal/provider/emt"
+	"github.com/open-edge-platform/image-composer-tool/internal/provider/ubuntu"
 	"github.com/spf13/cobra"
 )
 

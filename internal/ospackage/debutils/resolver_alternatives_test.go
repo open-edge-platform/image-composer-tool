@@ -3,7 +3,7 @@ package debutils
 import (
 	"testing"
 
-	"github.com/open-edge-platform/ict/internal/ospackage"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 )
 
 func TestVersionConstraintAlternatives(t *testing.T) {

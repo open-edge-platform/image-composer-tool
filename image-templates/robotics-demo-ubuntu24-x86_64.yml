@@ -5,7 +5,7 @@
 # Includes turtlesim, rqt_graph, rqt_plot, and X11 forwarding support.
 #
 # Usage:
-#   sudo -E ./ict build image-templates/robotics-demo-ubuntu24-x86_64.yml
+#   sudo -E ./image-composer-tool build image-templates/robotics-demo-ubuntu24-x86_64.yml
 #
 # VM prerequisites:
 #   sudo apt install -y qemu-system-x86 ovmf

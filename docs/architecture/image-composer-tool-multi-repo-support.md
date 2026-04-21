@@ -353,7 +353,7 @@ non-traditional requirements and future customizations.
 
 ## Related Documentation
 
-- [Understanding the Build Process](./ict-build-process.md)
-- [Understanding Templates](./ict-templates.md)
-- [Multiple Package Repository Support](./ict-multi-repo-support.md)
-- [ICT CLI Reference](./ict-cli-specification.md)
+- [Understanding the Build Process](./image-composer-tool-build-process.md)
+- [Understanding Templates](./image-composer-tool-templates.md)
+- [Multiple Package Repository Support](./image-composer-tool-multi-repo-support.md)
+- [ICT CLI Reference](./image-composer-tool-cli-specification.md)

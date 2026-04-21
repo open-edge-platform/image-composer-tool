@@ -1,13 +1,13 @@
-# ICT
+# Image Composer Tool (ICT)
 
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![Go Lint Check](https://github.com/open-edge-platform/ict/actions/workflows/go-lint.yml/badge.svg)](https://github.com/open-edge-platform/ict/actions/workflows/go-lint.yml) [![Unit and Coverage](https://github.com/open-edge-platform/ict/actions/workflows/unit-test-and-coverage-gate.yml/badge.svg)](https://github.com/open-edge-platform/ict/actions/workflows/unit-test-and-coverage-gate.yml) [![Security zizmor 🌈](https://github.com/open-edge-platform/ict/actions/workflows/zizmor.yml/badge.svg)](https://github.com/open-edge-platform/ict/actions/workflows/zizmor.yml) [![Fuzz test](https://github.com/open-edge-platform/ict/actions/workflows/fuzz-test.yml/badge.svg)](https://github.com/open-edge-platform/ict/actions/workflows/fuzz-test.yml) [![Trivy scan](https://github.com/open-edge-platform/ict/actions/workflows/trivy-scan.yml/badge.svg)](https://github.com/open-edge-platform/ict/actions/workflows/trivy-scan.yml)
+[![Go Lint Check](https://github.com/open-edge-platform/image-composer-tool/actions/workflows/go-lint.yml/badge.svg)](https://github.com/open-edge-platform/image-composer-tool/actions/workflows/go-lint.yml) [![Unit and Coverage](https://github.com/open-edge-platform/image-composer-tool/actions/workflows/unit-test-and-coverage-gate.yml/badge.svg)](https://github.com/open-edge-platform/image-composer-tool/actions/workflows/unit-test-and-coverage-gate.yml) [![Security zizmor 🌈](https://github.com/open-edge-platform/image-composer-tool/actions/workflows/zizmor.yml/badge.svg)](https://github.com/open-edge-platform/image-composer-tool/actions/workflows/zizmor.yml) [![Fuzz test](https://github.com/open-edge-platform/image-composer-tool/actions/workflows/fuzz-test.yml/badge.svg)](https://github.com/open-edge-platform/image-composer-tool/actions/workflows/fuzz-test.yml) [![Trivy scan](https://github.com/open-edge-platform/image-composer-tool/actions/workflows/trivy-scan.yml/badge.svg)](https://github.com/open-edge-platform/image-composer-tool/actions/workflows/trivy-scan.yml)
 
 A command-line tool for building custom Linux images from pre-built packages. Define what you need in a YAML template, run one command, and get a bootable RAW or ISO image.
 
 ## How It Works
 
-![ICT Build Flow](./docs/architecture/assets/ict-build-flow.svg)
+![ICT Build Flow](./docs/architecture/assets/image-composer-tool-build-flow.svg)
 
 The diagram above illustrates the overall build flow and may show representative or planned provider/architecture
 combinations. The table below lists the OS and architecture combinations that are currently supported.
@@ -30,15 +30,15 @@ Requires Go 1.24+.
 Recommended Ubuntu 24.04
 
 ```bash
-git clone https://github.com/open-edge-platform/ict.git
-cd ict
-go build -buildmode=pie -ldflags "-s -w" ./cmd/ict
+git clone https://github.com/open-edge-platform/image-composer-tool.git
+cd image-composer-tool
+go build -buildmode=pie -ldflags "-s -w" ./cmd/image-composer-tool
 ```
 
-This produces `./ict` in the repo root.
+This produces `./image-composer-tool` in the repo root.
 
 Alternatively, use [Earthly](https://earthly.dev/) for reproducible production
-builds (output: `./build/ict`):
+builds (output: `./build/image-composer-tool`):
 
 ```bash
 earthly +build
@@ -61,22 +61,22 @@ sudo apt install systemd-ukify mmdebstrap
 
 ```bash
 # If built with go build:
-sudo -E ./ict build image-templates/azl3-x86_64-edge-raw.yml
+sudo -E ./image-composer-tool build image-templates/azl3-x86_64-edge-raw.yml
 
 # If built with earthly:
-sudo -E ./build/ict build image-templates/azl3-x86_64-edge-raw.yml
+sudo -E ./build/image-composer-tool build image-templates/azl3-x86_64-edge-raw.yml
 ```
 
 That's it. The output image will be under
 `./workspace/<os>-<dist>-<arch>/imagebuild/<config-name>/`
-(or `/tmp/ict/...` if installed via the Debian package).
+(or `/tmp/image-composer-tool/...` if installed via the Debian package).
 
 ### 4. Validate a Template (Optional)
 
 Check a template for errors before starting a build:
 
 ```bash
-./ict validate image-templates/azl3-x86_64-edge-raw.yml
+./image-composer-tool validate image-templates/azl3-x86_64-edge-raw.yml
 ```
 
 ## Image Templates
@@ -109,7 +109,7 @@ systemConfig:
 ```
 
 To learn about template structure, variable substitution, and best practices,
-see [Creating and Reusing Image Templates](./docs/architecture/ict-templates.md).
+see [Creating and Reusing Image Templates](./docs/architecture/image-composer-tool-templates.md).
 
 ## Documentation
 
@@ -117,24 +117,24 @@ see [Creating and Reusing Image Templates](./docs/architecture/ict-templates.md)
 |-------|-------------|
 | [Installation Guide](./docs/tutorial/installation.md) | Build options, Debian packaging, prerequisites |
 | [Usage Guide](./docs/tutorial/usage-guide.md) | CLI commands, configuration, shell completion |
-| [CLI Reference](./docs/architecture/ict-cli-specification.md) | Complete command-line specification |
-| [Image Templates](./docs/architecture/ict-templates.md) | Template system and customization |
-| [Build Process](./docs/architecture/ict-build-process.md) | How image composition works, troubleshooting |
+| [CLI Reference](./docs/architecture/image-composer-tool-cli-specification.md) | Complete command-line specification |
+| [Image Templates](./docs/architecture/image-composer-tool-templates.md) | Template system and customization |
+| [Build Process](./docs/architecture/image-composer-tool-build-process.md) | How image composition works, troubleshooting |
 | [Secure Boot](./docs/tutorial/configure-secure-boot.md) | Configuring secure boot for images |
-| [Multiple Repos](./docs/architecture/ict-multi-repo-support.md) | Using multiple package repositories |
+| [Multiple Repos](./docs/architecture/image-composer-tool-multi-repo-support.md) | Using multiple package repositories |
 
 ## Get Help
 
-- Run `./ict --help`
-- [Browse the documentation](https://docs.openedgeplatform.intel.com/2026.0/ict/index.html)
-- [Start a discussion](https://github.com/open-edge-platform/ict/discussions)
-- [Troubleshoot build issues](./docs/architecture/ict-build-process.md#troubleshooting-build-issues)
+- Run `./image-composer-tool --help`
+- [Browse the documentation](https://docs.openedgeplatform.intel.com/2026.0/image-composer-tool/index.html)
+- [Start a discussion](https://github.com/open-edge-platform/image-composer-tool/discussions)
+- [Troubleshoot build issues](./docs/architecture/image-composer-tool-build-process.md#troubleshooting-build-issues)
 
 ## Contribute
 
-- [Open an issue](https://github.com/open-edge-platform/ict/issues)
+- [Open an issue](https://github.com/open-edge-platform/image-composer-tool/issues)
 - [Report a security vulnerability](./SECURITY.md)
-- [Submit a pull request](https://github.com/open-edge-platform/ict/pulls)
+- [Submit a pull request](https://github.com/open-edge-platform/image-composer-tool/pulls)
 
 ## License
 

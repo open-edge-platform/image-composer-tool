@@ -299,15 +299,15 @@ flowchart TD
 
 ### Global Configuration
 
-Configure cache and workspace locations in `/etc/ict/config.yml`:
+Configure cache and workspace locations in `/etc/image-composer-tool/config.yml`:
 
 ```yaml
 # Package cache configuration
-cache_dir: /var/cache/ict  # Root cache directory
+cache_dir: /var/cache/image-composer-tool  # Root cache directory
                                           # Contains pkgCache/
 
 # Working directory configuration
-work_dir: /var/tmp/ict     # Root workspace directory
+work_dir: /var/tmp/image-composer-tool     # Root workspace directory
                                           # Contains {provider-id}/ subdirs
 
 # Worker configuration (affects download speed)
@@ -329,16 +329,16 @@ Override configuration for specific builds:
 
 ```bash
 # Use custom cache directory
-sudo -E ict build --cache-dir /mnt/fast-ssd/cache template.yml
+sudo -E image-composer-tool build --cache-dir /mnt/fast-ssd/cache template.yml
 
 # Use custom work directory
-sudo -E ict build --work-dir /mnt/nvme/workspace template.yml
+sudo -E image-composer-tool build --work-dir /mnt/nvme/workspace template.yml
 
 # Increase workers for faster initial download
-sudo -E ict build --workers 32 template.yml
+sudo -E image-composer-tool build --workers 32 template.yml
 
 # Combine multiple overrides
-sudo -E ict build \
+sudo -E image-composer-tool build \
   --cache-dir /mnt/cache \
   --work-dir /mnt/workspace \
   --workers 24 \
@@ -354,7 +354,7 @@ sudo -E ict build \
 cache/pkgCache/{provider-id}/
 ```
 
-Default: `/var/cache/ict/pkgCache/`
+Default: `/var/cache/image-composer-tool/pkgCache/`
 
 **Chroot Environment:**
 ```
@@ -362,7 +362,7 @@ workspace/{provider-id}/chrootenv/
 workspace/{provider-id}/chrootbuild/
 ```
 
-Default: `/var/tmp/ict/{provider-id}/`
+Default: `/var/tmp/image-composer-tool/{provider-id}/`
 
 **Image Build Output:**
 ```
@@ -475,11 +475,11 @@ work_dir: /mnt/nvme/workspace
 
 # CI/CD: Network storage shared across agents
 cache_dir: /mnt/nfs/ict-cache
-work_dir: /var/tmp/ict
+work_dir: /var/tmp/image-composer-tool
 
 # Production: Reliable storage with backup
-cache_dir: /var/cache/ict
-work_dir: /var/tmp/ict
+cache_dir: /var/cache/image-composer-tool
+work_dir: /var/tmp/image-composer-tool
 ```
 
 **2. Size Storage Appropriately**
@@ -496,8 +496,8 @@ Create a monitoring script:
 #!/bin/bash
 # /usr/local/bin/check-oic-cache.sh
 
-CACHE_DIR="/var/cache/ict"
-WORK_DIR="/var/tmp/ict"
+CACHE_DIR="/var/cache/image-composer-tool"
+WORK_DIR="/var/tmp/image-composer-tool"
 WARN_SIZE_GB=40
 CRIT_SIZE_GB=80
 
@@ -581,7 +581,7 @@ work_dir: /mnt/nfs/ict-workspace
 sudo mount -t nfs nfs-server:/export/oic-cache /mnt/nfs/ict-cache
 sudo mount -t nfs nfs-server:/export/oic-workspace /mnt/nfs/ict-workspace
 
-# Configure in /etc/ict/config.yml
+# Configure in /etc/image-composer-tool/config.yml
 cache_dir: /mnt/nfs/ict-cache
 work_dir: /mnt/nfs/ict-workspace
 ```
@@ -628,15 +628,15 @@ Multiple build hosts can share caches for efficiency:
 
 ```bash
 # Pre-populate cache with minimal build first
-sudo -E ict build minimal-template.yml
+sudo -E image-composer-tool build minimal-template.yml
 
 # Then build full image (uses cached packages and chroot)
-sudo -E ict build full-template.yml
+sudo -E image-composer-tool build full-template.yml
 ```
 
 ## Related Documentation
 
-- [Build Process Documentation](./ict-build-process.md) - How caching integrates with the build pipeline
+- [Build Process Documentation](./image-composer-tool-build-process.md) - How caching integrates with the build pipeline
 - [Architecture Documentation](../architecture.md) - System architecture and runtime directory structure
-- [CLI Reference](./ict-cli-specification.md) - Complete command-line documentation
-- [Understanding Templates](./ict-templates.md) - How to create image templates
+- [CLI Reference](./image-composer-tool-cli-specification.md) - Complete command-line documentation
+- [Understanding Templates](./image-composer-tool-templates.md) - How to create image templates

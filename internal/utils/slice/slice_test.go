@@ -3,7 +3,7 @@ package slice_test
 import (
 	"testing"
 
-	"github.com/open-edge-platform/ict/internal/utils/slice"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/slice"
 )
 
 func TestConvertToSliceOfT_String(t *testing.T) {

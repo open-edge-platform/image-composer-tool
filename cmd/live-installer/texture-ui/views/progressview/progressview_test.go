@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell"
-	"github.com/open-edge-platform/ict/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/rivo/tview"
 )
 

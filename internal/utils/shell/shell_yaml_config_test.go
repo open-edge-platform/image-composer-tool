@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-edge-platform/ict/internal/utils/shell"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
 
 // TestEchoWithNestedQuotes specifically tests the fix for echo commands with nested quotes
@@ -86,7 +86,7 @@ func TestChrootCommandVerification(t *testing.T) {
 		{
 			name:        "simple echo in chroot",
 			cmd:         `echo 'yockgn01 dlstreamer x86_64 ubuntu24 image' > /etc/yockgn01.txt`,
-			installRoot: "/data/ict/workspace/ubuntu-ubuntu24-x86_64/chrootenv/workspace/imagebuild/minimal",
+			installRoot: "/data/image-composer-tool/workspace/ubuntu-ubuntu24-x86_64/chrootenv/workspace/imagebuild/minimal",
 			wantErr:     false,
 		},
 	}

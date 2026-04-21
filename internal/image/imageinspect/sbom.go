@@ -11,7 +11,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/open-edge-platform/ict/internal/config/manifest"
+	"github.com/open-edge-platform/image-composer-tool/internal/config/manifest"
 )
 
 func inspectSBOMFromImageRaw(img io.ReaderAt, pt PartitionTableSummary) SBOMSummary {

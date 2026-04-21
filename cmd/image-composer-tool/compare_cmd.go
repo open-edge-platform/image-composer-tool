@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/open-edge-platform/ict/internal/image/imageinspect"
-	"github.com/open-edge-platform/ict/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/imageinspect"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"github.com/spf13/cobra"
 )
 
