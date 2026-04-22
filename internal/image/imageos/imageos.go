@@ -1461,6 +1461,17 @@ func getVerityRootHash(partPair, installRoot string) (string, error) {
 	return "", fmt.Errorf("root hash not found in veritysetup output")
 }
 
+func getUkifyStubPath(targetArch string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(targetArch)) {
+	case "x86_64", "amd64":
+		return filepath.Join("/usr", "lib", "systemd", "boot", "efi", "linuxx64.efi.stub"), nil
+	case "aarch64", "arm64":
+		return filepath.Join("/usr", "lib", "systemd", "boot", "efi", "linuxaa64.efi.stub"), nil
+	default:
+		return "", fmt.Errorf("unsupported architecture for ukify EFI stub: %s", targetArch)
+	}
+}
+
 // Helper to build UKI using ukify
 func buildUKI(installRoot, kernelPath, initrdPath, cmdlineFile, outputPath string, template *config.ImageTemplate) error {
 	data, err := file.Read(filepath.Join(installRoot, cmdlineFile))
@@ -1487,6 +1498,10 @@ func buildUKI(installRoot, kernelPath, initrdPath, cmdlineFile, outputPath strin
 	var cmd string
 	var backInstallRoot = installRoot
 	exists, _ := shell.IsCommandExist("ukify", installRoot)
+	stubPath, err := getUkifyStubPath(template.Target.Arch)
+	if err != nil {
+		return fmt.Errorf("failed to resolve ukify EFI stub: %w", err)
+	}
 
 	// For cross-arch builds, chroot binaries cannot execute on the host.
 	// Fall back to the host ukify even when the binary exists in the chroot.
@@ -1503,23 +1518,26 @@ func buildUKI(installRoot, kernelPath, initrdPath, cmdlineFile, outputPath strin
 		initrdPath = filepath.Join(installRoot, initrdPath)
 		outputPath = filepath.Join(installRoot, outputPath)
 		osRelease := filepath.Join(installRoot, "/etc/os-release")
+		stubPath = filepath.Join(installRoot, stubPath)
 		installRoot = shell.HostPath
 
 		cmd = fmt.Sprintf(
-			"ukify build --linux \"%s\" --initrd \"%s\" --cmdline \"%s\" --os-release @\"%s\" --output \"%s\"",
+			"ukify build --linux \"%s\" --initrd \"%s\" --cmdline \"%s\" --stub \"%s\" --os-release @\"%s\" --output \"%s\"",
 			kernelPath,
 			initrdPath,
 			cmdlineStr,
+			stubPath,
 			osRelease,
 			outputPath,
 		)
 
 	} else {
 		cmd = fmt.Sprintf(
-			"ukify build --linux \"%s\" --initrd \"%s\" --cmdline \"%s\" --output \"%s\"",
+			"ukify build --linux \"%s\" --initrd \"%s\" --cmdline \"%s\" --stub \"%s\" --output \"%s\"",
 			kernelPath,
 			initrdPath,
 			cmdlineStr,
+			stubPath,
 			outputPath,
 		)
 	}
