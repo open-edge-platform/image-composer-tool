@@ -247,7 +247,7 @@ func (imageOs *ImageOs) initRootfsForDeb(installRoot string) error {
 		log.Errorf("Local repository config file does not exist: %s", localRepoConfigHostPath)
 		return fmt.Errorf("local repository config file does not exist: %s", localRepoConfigHostPath)
 	}
-	suite := detectDebSuiteFromSourcesList(localRepoConfigHostPath)
+	suite := debutils.DetectDebSuiteFromSourcesList(localRepoConfigHostPath)
 
 	chrootInstallRoot, err := imageOs.chrootEnv.GetChrootEnvPath(installRoot)
 	if err != nil {
@@ -282,42 +282,7 @@ func (imageOs *ImageOs) initRootfsForDeb(installRoot string) error {
 	return nil
 }
 
-func detectDebSuiteFromSourcesList(sourcesListPath string) string {
-	const defaultSuite = "stable"
 
-	content, err := os.ReadFile(sourcesListPath)
-	if err != nil {
-		log.Warnf("Failed to read local sources list %s, defaulting suite to %s: %v", sourcesListPath, defaultSuite, err)
-		return defaultSuite
-	}
-
-	for _, rawLine := range strings.Split(string(content), "\n") {
-		line := strings.TrimSpace(rawLine)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		fields := strings.Fields(line)
-		if len(fields) < 3 || fields[0] != "deb" {
-			continue
-		}
-
-		idx := 1
-		if strings.HasPrefix(fields[idx], "[") {
-			for idx < len(fields) && !strings.HasSuffix(fields[idx], "]") {
-				idx++
-			}
-			idx++
-		}
-
-		if idx+1 < len(fields) {
-			return fields[idx+1]
-		}
-	}
-
-	log.Warnf("Could not determine suite from %s, defaulting to %s", sourcesListPath, defaultSuite)
-	return defaultSuite
-}
 
 func (imageOs *ImageOs) mountSysfsToRootfs(installRoot string) error {
 	chrootInstallRoot, err := imageOs.chrootEnv.GetChrootEnvPath(installRoot)

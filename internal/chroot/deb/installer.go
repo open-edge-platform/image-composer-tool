@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/open-edge-platform/os-image-composer/internal/ospackage/debutils"
 	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
 	"github.com/open-edge-platform/os-image-composer/internal/utils/mount"
 	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
@@ -59,12 +60,24 @@ func (debInstaller *DebInstaller) validateCrossArchDeps(targetArch string) error
 		return nil
 	}
 
-	hasArchTest, err := shell.IsCommandExist("arch-test", shell.HostPath)
-	if err != nil {
-		return fmt.Errorf("failed to check host dependency 'arch-test' for cross-architecture build (host=%s target=%s): %w", hostArch, targetArch, err)
+	type crossArchDep struct {
+		cmd     string // command to check
+		pkg     string // apt package that provides it
 	}
-	if !hasArchTest {
-		return fmt.Errorf("cross-architecture build requested (host=%s target=%s) but required host dependency 'arch-test' is missing; install it with: sudo apt-get install -y arch-test", hostArch, targetArch)
+	deps := []crossArchDep{
+		{"arch-test", "arch-test"},
+		{"qemu-user-static", "qemu-user-static"},
+		{"update-binfmts", "binfmt-support"},
+	}
+
+	for _, dep := range deps {
+		exists, err := shell.IsCommandExist(dep.cmd, shell.HostPath)
+		if err != nil {
+			return fmt.Errorf("failed to check host dependency %q for cross-architecture build (host=%s target=%s): %w", dep.cmd, hostArch, targetArch, err)
+		}
+		if !exists {
+			return fmt.Errorf("cross-architecture build requested (host=%s target=%s) but required host dependency %q is missing; install it with: sudo apt-get install -y %s", hostArch, targetArch, dep.cmd, dep.pkg)
+		}
 	}
 
 	return nil
@@ -163,7 +176,7 @@ func (debInstaller *DebInstaller) InstallDebPkgWithArch(
 		log.Errorf("Local repository config file does not exist: %s", localRepoConfigPath)
 		return fmt.Errorf("local repository config file does not exist: %s", localRepoConfigPath)
 	}
-	suite := detectDebSuiteFromSourcesList(localRepoConfigPath)
+	suite := debutils.DetectDebSuiteFromSourcesList(localRepoConfigPath)
 
 	if err := debInstaller.validateCrossArchDeps(debArch); err != nil {
 		log.Errorf("Missing host dependencies for cross-architecture chroot build: %v", err)
@@ -223,39 +236,4 @@ func (debInstaller *DebInstaller) InstallDebPkgWithArch(
 	return nil
 }
 
-func detectDebSuiteFromSourcesList(sourcesListPath string) string {
-	const defaultSuite = "stable"
 
-	content, err := os.ReadFile(sourcesListPath)
-	if err != nil {
-		log.Warnf("Failed to read local sources list %s, defaulting suite to %s: %v", sourcesListPath, defaultSuite, err)
-		return defaultSuite
-	}
-
-	for _, rawLine := range strings.Split(string(content), "\n") {
-		line := strings.TrimSpace(rawLine)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		fields := strings.Fields(line)
-		if len(fields) < 3 || fields[0] != "deb" {
-			continue
-		}
-
-		idx := 1
-		if strings.HasPrefix(fields[idx], "[") {
-			for idx < len(fields) && !strings.HasSuffix(fields[idx], "]") {
-				idx++
-			}
-			idx++
-		}
-
-		if idx+1 < len(fields) {
-			return fields[idx+1]
-		}
-	}
-
-	log.Warnf("Could not determine suite from %s, defaulting to %s", sourcesListPath, defaultSuite)
-	return defaultSuite
-}
