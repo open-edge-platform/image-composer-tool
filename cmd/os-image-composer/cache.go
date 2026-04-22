@@ -93,7 +93,9 @@ caches or to restrict cleanup to a specific provider.`,
 
 			writer := cmd.OutOrStdout()
 			for _, line := range output {
-				fmt.Fprintln(writer, line)
+				if _, err := fmt.Fprintln(writer, line); err != nil {
+					return fmt.Errorf("failed to write cache output: %w", err)
+				}
 			}
 
 			return nil

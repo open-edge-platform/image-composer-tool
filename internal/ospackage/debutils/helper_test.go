@@ -1,10 +1,10 @@
 package debutils
 
 import (
-	"regexp"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
