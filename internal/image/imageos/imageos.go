@@ -611,8 +611,15 @@ func preImageOsInstall(installRoot string, template *config.ImageTemplate) error
 		// Configure dpkg with the target architecture inside the chroot
 		// This is needed for cross-architecture package installations
 		// Set up binfmt_misc for cross-architecture binary execution if needed
-		hostInfo, _ := system.GetHostOsInfo()
-		hostArch := hostInfo["arch"]
+		hostInfo, err := system.GetHostOsInfo()
+		if err != nil {
+			return fmt.Errorf("failed to determine host OS information: %w", err)
+		}
+
+		hostArch, ok := hostInfo["arch"]
+		if !ok || hostArch == "" {
+			return fmt.Errorf("failed to determine host architecture from host OS information")
+		}
 
 		// Normalize host architecture
 		switch hostArch {
