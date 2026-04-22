@@ -1,0 +1,15 @@
+# Debian 13 (Trixie) OS Configuration
+# This file defines architecture-specific build configurations for Debian 13 (Trixie)
+
+x86_64:
+  dist: debian13                                    # Distribution identifier
+  arch: x86_64                                      # Target architecture
+  pkgType: deb                                      # Package management system
+  chrootenvConfigFile: chrootenvconfigs/chrootenv_x86_64.yml  # Path to chrootenv config
+  releaseVersion: "13.0"                            # Distribution release version
+aarch64:
+  dist: debian13                                    # Distribution identifier
+  arch: aarch64                                      # Target architecture
+  pkgType: deb                                      # Package management system
+  chrootenvConfigFile: chrootenvconfigs/chrootenv_aarch64.yml  # Path to chrootenv config
+  releaseVersion: "13.0"                            # Distribution release version

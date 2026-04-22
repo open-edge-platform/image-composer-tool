@@ -1,0 +1,392 @@
+# AI-searchable metadata for template discovery
+metadata:
+  description: Minimal Debian 13 image for ARM64 (aarch64) architecture
+  use_cases:
+    - ARM64 bare metal deployments
+    - Single-board computers (SBC)
+    - ARM64 cloud instances
+    - Edge computing on ARM64 devices
+  keywords:
+    - minimal
+    - lightweight
+    - arm64
+    - aarch64
+    - debian
+    - sbcs
+    - edge
+
+image:
+  name: minimal-os-image-debian-arm64
+  version: "13.0"
+
+target:
+  os: debian
+  dist: debian13
+  arch: aarch64
+  imageType: raw
+
+disk:
+  name: Minimal_Raw_ARM64 # 1:1 mapping to the systemConfigs name
+  artifacts:
+    -
+      type: raw  # image file format, valid value [raw, vhd, vhdx, qcow2, vmdk, vdi]
+      compression: gz # image compression format (optional)
+  size: 4GiB # 4G, 4GB, 4096 MiB also valid. (Required for raw)
+  partitionTableType: gpt # Partition table type, valid value: [gpt, mbr]
+  partitions: # Required for raw, optional for ISO, not needed for rootfs.
+    - id: boot
+      type: esp
+      flags:
+        - esp
+        - boot
+      start: 1MiB
+      end: 513MiB
+      fsType: fat32
+      mountPoint: /boot/efi
+      mountOptions: umask=0077
+
+    - id: rootfs
+      type: linux-root-arm64
+      start: 513MiB
+      end: "0"
+      fsType: ext4
+      mountPoint: /
+      mountOptions: defaults
+
+systemConfig:
+  name: minimal-arm64
+  description: Minimal debian image for ARM64
+
+  bootloader:
+    bootType: efi
+    provider: grub
+
+  immutability:
+    enabled: false
+
+  packages:
+    - adduser
+    - apparmor
+    - apt
+    - apt-listchanges
+    - apt-utils
+    - base-files
+    - base-passwd
+    - bash
+    - bash-completion
+    - bind9-host
+    - bind9-libs
+    - bsdextrautils
+    - bsdutils
+    - ca-certificates
+    - cloud-guest-utils
+    - cloud-image-utils
+    - cloud-init
+    - cloud-initramfs-growroot
+    - cloud-utils
+    - coreutils
+    - cpio
+    - curl
+    - dash
+    - dbus
+    - dbus-bin
+    - dbus-daemon
+    - dbus-session-bus-common
+    - dbus-system-bus-common
+    - debconf
+    - debian-archive-keyring
+    - debianutils
+    - dhcpcd-base
+    - diffutils
+    - distro-info-data
+    - dmsetup
+    - dosfstools
+    - dpkg
+    - dracut-install
+    - e2fsprogs
+    - eject
+    - ethtool
+    - fdisk
+    - file
+    - findutils
+    - gcc-14-base
+    - gdisk
+    - genisoimage
+    - gettext-base
+    - grep
+    - groff-base
+    - grub-cloud-arm64
+    - grub-common
+    - grub-efi-arm64-bin
+    - grub-efi-arm64-signed
+    - grub-efi-arm64-unsigned
+    - grub2-common
+    - gzip
+    - hostname
+    - init
+    - init-system-helpers
+    - initramfs-tools
+    - initramfs-tools-bin
+    - initramfs-tools-core
+    - iproute2
+    - iptables
+    - iputils-ping
+    - klibc-utils
+    - kmod
+    - less
+    - libacl1
+    - libaio1t64
+    - libapparmor1
+    - libapt-pkg7.0
+    - libatomic1
+    - libattr1
+    - libaudit-common
+    - libaudit1
+    - libblkid1
+    - libbpf1
+    - libbrotli1
+    - libbsd0
+    - libbz2-1.0
+    - libc-bin
+    - libc-l10n
+    - libc6
+    - libcap-ng0
+    - libcap2
+    - libcap2-bin
+    - libcbor0.10
+    - libcom-err2
+    - libcrypt1
+    - libcurl4t64
+    - libdb5.3t64
+    - libdbus-1-3
+    - libdebconfclient0
+    - libdevmapper1.02.1
+    - libduktape207
+    - libedit2
+    - libefiboot1t64
+    - libefivar1t64
+    - libelf1t64
+    - libexpat1
+    - libext2fs2t64
+    - libfdisk1
+    - libffi8
+    - libfido2-1
+    - libfreetype6
+    - libfstrm0
+    - libfuse3-4
+    - libgcc-s1
+    - libgdbm6t64
+    - libglib2.0-0t64
+    - libgmp10
+    - libgnutls30t64
+    - libgpm2
+    - libgssapi-krb5-2
+    - libhogweed6t64
+    - libidn2-0
+    - libip4tc2
+    - libip6tc2
+    - libjemalloc2
+    - libjson-c5
+    - libk5crypto3
+    - libkeyutils1
+    - libklibc
+    - libkmod2
+    - libkrb5-3
+    - libkrb5support0
+    - liblastlog2-2
+    - libldap2
+    - liblmdb0
+    - liblz4-1
+    - liblzma5
+    - libmagic-mgc
+    - libmagic1t64
+    - libmaxminddb0
+    - libmd0
+    - libmnl0
+    - libmount1
+    - libncursesw6
+    - libnetfilter-conntrack3
+    - libnetplan1
+    - libnettle8t64
+    - libnewt0.52
+    - libnfnetlink0
+    - libnftnl11
+    - libnghttp2-14
+    - libnghttp3-9
+    - libnss-myhostname
+    - libnss-resolve
+    - libnuma1
+    - libp11-kit0
+    - libpam-modules
+    - libpam-modules-bin
+    - libpam-runtime
+    - libpam-systemd
+    - libpam0g
+    - libpcap0.8t64
+    - libpci3
+    - libpcre2-8-0
+    - libpipeline1
+    - libpng16-16t64
+    - libpolkit-agent-1-0
+    - libpolkit-gobject-1-0
+    - libpopt0
+    - libproc2-0
+    - libprotobuf-c1
+    - libpsl5t64
+    - libpython3-stdlib
+    - libpython3.13-minimal
+    - libpython3.13-stdlib
+    - libreadline8t64
+    - librtmp1
+    - libsasl2-2
+    - libsasl2-modules-db
+    - libseccomp2
+    - libselinux1
+    - libsemanage-common
+    - libsemanage2
+    - libsepol2
+    - libslang2
+    - libsmartcols1
+    - libsodium23
+    - libsqlite3-0
+    - libss2
+    - libssh2-1t64
+    - libssl3t64
+    - libstdc++6
+    - libsystemd-shared
+    - libsystemd0
+    - libtasn1-6
+    - libtext-charwidth-perl
+    - libtext-wrapi18n-perl
+    - libtinfo6
+    - libtirpc-common
+    - libtirpc3t64
+    - libuchardet0
+    - libudev1
+    - libunistring5
+    - liburcu8t64
+    - liburing2
+    - libuuid1
+    - libuv1t64
+    - libwrap0
+    - libwtmpdb0
+    - libxml2
+    - libxtables12
+    - libxxhash0
+    - libyaml-0-2
+    - libzstd1
+    - linux-base
+    - linux-sysctl-defaults
+    - locales
+    - login
+    - login.defs
+    - logsave
+    - lsb-release
+    - man-db
+    - manpages
+    - mawk
+    - media-types
+    - mokutil
+    - mount
+    - nano
+    - ncurses-base
+    - ncurses-bin
+    - netbase
+    - netcat-openbsd
+    - netplan-generator
+    - netplan.io
+    - openssh-client
+    - openssh-server
+    - openssh-sftp-server
+    - openssl
+    - openssl-provider-legacy
+    - passwd
+    - pci.ids
+    - pciutils
+    - perl-base
+    - polkitd
+    - procps
+    - psmisc
+    - python-apt-common
+    - python3
+    - python3-apt
+    - python3-attr
+    - python3-bcrypt
+    - python3-blinker
+    - python3-certifi
+    - python3-cffi-backend
+    - python3-chardet
+    - python3-charset-normalizer
+    - python3-configobj
+    - python3-cryptography
+    - python3-dbus
+    - python3-debconf
+    - python3-debian
+    - python3-debianbts
+    - python3-distro
+    - python3-distro-info
+    - python3-idna
+    - python3-jinja2
+    - python3-json-pointer
+    - python3-jsonpatch
+    - python3-jsonschema
+    - python3-jsonschema-specifications
+    - python3-jwt
+    - python3-markupsafe
+    - python3-minimal
+    - python3-netplan
+    - python3-oauthlib
+    - python3-referencing
+    - python3-reportbug
+    - python3-requests
+    - python3-rpds-py
+    - python3-urllib3
+    - python3-yaml
+    - python3.13
+    - python3.13-minimal
+    - qemu-utils
+    - readline-common
+    - reportbug
+    - runit-helper
+    - screen
+    - sed
+    - sensible-utils
+    - sgml-base
+    - shim-helpers-arm64-signed
+    - shim-signed
+    - shim-signed-common
+    - shim-unsigned
+    - socat
+    - sqv
+    - ssh-import-id
+    - sudo
+    - systemd
+    - systemd-resolved
+    - systemd-sysv
+    - systemd-timesyncd
+    - sysvinit-utils
+    - tar
+    - tcpdump
+    - traceroute
+    - tzdata
+    - ucf
+    - udev
+    - unattended-upgrades
+    - util-linux
+    - uuid-runtime
+    - vim
+    - vim-common
+    - vim-runtime
+    - vim-tiny
+    - wget
+    - whiptail
+    - xml-core
+    - xz-utils
+    - zlib1g
+    - zstd
+
+  kernel:
+    version: "6.12.74"
+    cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
+    packages:
+      - linux-image-arm64

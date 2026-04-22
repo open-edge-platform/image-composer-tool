@@ -1,0 +1,122 @@
+# AI-searchable metadata for template discovery
+metadata:
+  description: Minimal Debian 13 image with essential packages for lightweight deployments
+  use_cases:
+    - Lightweight Debian base image
+    - Cloud instances
+    - Development environments
+    - Container hosts
+  keywords:
+    - minimal
+    - lightweight
+    - base
+    - debian
+    - cloud
+    - development
+
+image:
+  name: minimal-os-image-debian
+  version: "13.0"
+
+target:
+  os: debian
+  dist: debian13
+  arch: x86_64
+  imageType: raw
+
+disk:
+  name: Minimal_Raw # 1:1 mapping to the systemConfigs name
+  artifacts:
+    -
+      type: raw  # image file format, valid value [raw, vhd, vhdx, qcow2, vmdk, vdi]
+      compression: gz # image compression format (optional)
+    - type: vhdx
+  size: 4GiB # 4G, 4GB, 4096 MiB also valid. (Required for raw)
+  partitionTableType: gpt # Partition table type, valid value: [gpt, mbr]
+  partitions: # Required for raw, optional for ISO, not needed for rootfs.
+    - id: boot
+      type: esp
+      flags:
+        - esp
+        - boot
+      start: 1MiB
+      end: 513MiB
+      fsType: fat32
+      mountPoint: /boot/efi
+      mountOptions: umask=0077
+
+    - id: rootfs
+      type: linux-root-amd64
+      start: 513MiB
+      end: "0"
+      fsType: ext4
+      mountPoint: /
+      mountOptions: defaults
+
+systemConfig:
+  name: minimal
+  description: Minimal debian image
+
+  bootloader:
+    bootType: efi
+    provider: grub
+
+  immutability:
+    enabled: false
+
+  packages:
+    - apparmor
+    - apt-listchanges
+    - apt-utils
+    - bash-completion
+    - bind9-host
+    - cloud-init
+    - cloud-initramfs-growroot
+    - curl
+    - dbus
+    - dosfstools
+    - firmware-intel-graphics
+    - firmware-intel-misc
+    - firmware-iwlwifi
+    - grub-cloud-amd64
+    - init
+    - iptables
+    - iputils-ping
+    - less
+    - libext2fs2t64
+    - liblastlog2-2
+    - libnss-myhostname
+    - libnss-resolve
+    - libpam-modules-bin
+    - libpam-systemd
+    - libss2
+    - linux-sysctl-defaults
+    - man-db
+    - manpages
+    - mawk
+    - nano
+    - netplan.io
+    - pciutils
+    - polkitd
+    - psmisc
+    - python3-minimal
+    - reportbug
+    - wireless-regdb
+    - screen
+    - socat
+    - ssh-import-id
+    - sudo
+    - tcpdump
+    - traceroute
+    - unattended-upgrades
+    - uuid-runtime
+    - vim
+    - vim-tiny
+    - whiptail
+    - zstd
+
+  kernel:
+    version: "6.12.74"
+    cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
+    packages:
+      - linux-image-amd64
