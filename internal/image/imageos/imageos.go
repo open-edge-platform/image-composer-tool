@@ -282,8 +282,6 @@ func (imageOs *ImageOs) initRootfsForDeb(installRoot string) error {
 	return nil
 }
 
-
-
 func (imageOs *ImageOs) mountSysfsToRootfs(installRoot string) error {
 	chrootInstallRoot, err := imageOs.chrootEnv.GetChrootEnvPath(installRoot)
 	if err != nil {
@@ -1201,7 +1199,7 @@ func buildImageUKI(installRoot string, template *config.ImageTemplate) error {
 		if err := copyBootloader(installRoot, srcBootloader, dstBootloader); err != nil {
 			return fmt.Errorf("failed to copy bootloader: %w", err)
 		}
-		log.Debugf("Bootloader copied successfully to:", dstBootloader)
+		log.Debugf("BuildImage UKI: Bootloader copied successfully to %s, from %s:", dstBootloader, srcBootloader)
 	} else {
 		log.Infof("Skipping UKI build for image: %s, bootloader provider is not systemd-boot", template.GetImageName())
 	}
@@ -1266,6 +1264,7 @@ func updateInitramfs(installRoot, kernelVersion string, template *config.ImageTe
 
 	// Execute single dracut command
 	cmd := strings.Join(cmdParts, " ")
+	log.Debugf("\nInitramfs updated cmd string is: %s \n", cmd)
 	_, err := shell.ExecCmd(cmd, true, installRoot, nil)
 	if err != nil {
 		if template.IsImmutabilityEnabled() {
