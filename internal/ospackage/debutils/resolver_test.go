@@ -653,3 +653,105 @@ func TestResolveTopPackageConflicts(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveTopPackageConflictsKernelVersionSelection(t *testing.T) {
+	ConfigureKernelSelection([]string{"linux-image-generic-hwe-24.04"}, "6.17")
+	defer ConfigureKernelSelection(nil, "")
+
+	all := []ospackage.PackageInfo{
+		{
+			Name:    "linux-image-generic-hwe-24.04",
+			Version: "6.18.0-10.10~24.04.1",
+			URL:     "pool/main/l/linux-meta-hwe-6.18/linux-image-generic-hwe-24.04_6.18.0-10.10~24.04.1_amd64.deb",
+		},
+		{
+			Name:    "linux-image-generic-hwe-24.04",
+			Version: "6.17.0-5.5~24.04.1",
+			URL:     "pool/main/l/linux-meta-hwe-6.17/linux-image-generic-hwe-24.04_6.17.0-5.5~24.04.1_amd64.deb",
+		},
+		{
+			Name:    "linux-image-generic-hwe-24.04",
+			Version: "1:6.17.0-6.6~24.04.1",
+			URL:     "pool/main/l/linux-meta-hwe-6.17/linux-image-generic-hwe-24.04_6.17.0-6.6~24.04.1_amd64.deb",
+		},
+	}
+
+	result, found := ResolveTopPackageConflicts("linux-image-generic-hwe-24.04", all)
+	if !found {
+		t.Fatal("expected kernel package to be found")
+	}
+	if result.Version != "1:6.17.0-6.6~24.04.1" {
+		t.Errorf("expected kernel-version-matching package, got %q", result.Version)
+	}
+}
+
+func TestResolveTopPackageConflictsKernelVersionMissing(t *testing.T) {
+	ConfigureKernelSelection([]string{"linux-image-generic-hwe-24.04"}, "6.17")
+	defer ConfigureKernelSelection(nil, "")
+
+	all := []ospackage.PackageInfo{
+		{
+			Name:    "linux-image-generic-hwe-24.04",
+			Version: "6.18.0-10.10~24.04.1",
+			URL:     "pool/main/l/linux-meta-hwe-6.18/linux-image-generic-hwe-24.04_6.18.0-10.10~24.04.1_amd64.deb",
+		},
+	}
+
+	_, found := ResolveTopPackageConflicts("linux-image-generic-hwe-24.04", all)
+	if found {
+		t.Fatal("expected kernel package resolution to fail when no candidate matches kernel version")
+	}
+}
+
+func TestResolveTopPackageConflictsKernelVersionPrefixMatch(t *testing.T) {
+	ConfigureKernelSelection([]string{"linux-image-generic-hwe-24.04"}, "6.17")
+	defer ConfigureKernelSelection(nil, "")
+
+	all := []ospackage.PackageInfo{
+		{
+			Name:    "linux-image-generic-hwe-24.04",
+			Version: "6.170.1.1.0",
+			URL:     "pool/main/l/linux-meta-hwe-6.170/linux-image-generic-hwe-24.04_6.170.1.1.0_amd64.deb",
+		},
+		{
+			Name:    "linux-image-generic-hwe-24.04",
+			Version: "6.17.1.1.0",
+			URL:     "pool/main/l/linux-meta-hwe-6.17/linux-image-generic-hwe-24.04_6.17.1.1.0_amd64.deb",
+		},
+	}
+
+	result, found := ResolveTopPackageConflicts("linux-image-generic-hwe-24.04", all)
+	if !found {
+		t.Fatal("expected kernel package to be found")
+	}
+	if result.Version != "6.17.1.1.0" {
+		t.Errorf("expected dotted patch version to match kernel version prefix, got %q", result.Version)
+	}
+}
+
+func TestResolveTopPackageConflictsKernelVersionWildcardPattern(t *testing.T) {
+	ConfigureKernelSelection([]string{"linux-image-generic*"}, "6.14")
+	defer ConfigureKernelSelection(nil, "")
+
+	all := []ospackage.PackageInfo{
+		{
+			Name:    "linux-image-generic-hwe-24.04",
+			Version: "6.15.0-1.1~24.04.1",
+			URL:     "pool/main/l/linux-meta-hwe-6.15/linux-image-generic-hwe-24.04_6.15.0-1.1~24.04.1_amd64.deb",
+		},
+		{
+			Name:    "linux-image-generic-hwe-24.04",
+			Version: "6.14.3.2.0",
+			URL:     "pool/main/l/linux-meta-hwe-6.14/linux-image-generic-hwe-24.04_6.14.3.2.0_amd64.deb",
+		},
+	}
+
+	result, found := ResolveTopPackageConflicts("linux-image-generic-hwe-24.04", all)
+	if !found {
+		t.Fatal("expected kernel wildcard pattern to match package request")
+	}
+
+	if result.Version != "6.14.3.2.0" {
+		t.Errorf("expected wildcard kernel pattern to enforce kernel version filter, got %q", result.Version)
+	}
+}
