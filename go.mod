@@ -8,7 +8,7 @@ require (
 	github.com/ProtonMail/go-crypto v1.2.0
 	github.com/bendahl/uinput v1.4.0
 	github.com/diskfs/go-diskfs v1.7.0
-	github.com/gdamore/tcell v1.4.0
+	github.com/gdamore/tcell v1.4.1
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.18.0
 	github.com/muesli/crunchy v0.4.0
