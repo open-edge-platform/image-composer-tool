@@ -6,7 +6,7 @@ toolchain go1.24.5
 
 require (
 	github.com/ProtonMail/go-crypto v1.2.0
-	github.com/bendahl/uinput v1.4.0
+	github.com/bendahl/uinput v1.7.0
 	github.com/diskfs/go-diskfs v1.7.0
 	github.com/gdamore/tcell v1.4.0
 	github.com/google/uuid v1.6.0
