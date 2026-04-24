@@ -255,5 +255,3 @@ func (debInstaller *DebInstaller) InstallDebPkgWithArch(
 
 	return nil
 }
-
-
