@@ -9,6 +9,8 @@ import (
 	"github.com/open-edge-platform/os-image-composer/internal/config/validate"
 )
 
+func intPtr(v int) *int { return &v }
+
 func TestMergeStringSlices(t *testing.T) {
 	defaultSlice := []string{"a", "b", "c"}
 	userSlice := []string{"c", "d", "e"}
@@ -532,6 +534,7 @@ func TestDiskAndSystemConfigGetters(t *testing.T) {
 			Partitions: []PartitionInfo{
 				{
 					ID:         "root",
+					Index:      intPtr(1),
 					FsType:     "ext4",
 					Start:      "1MiB",
 					End:        "0",
@@ -811,6 +814,7 @@ func TestDiskConfigValidation(t *testing.T) {
 				Partitions: []PartitionInfo{
 					{
 						ID:         "boot",
+						Index:      intPtr(1),
 						Name:       "EFI Boot",
 						Type:       "esp",
 						FsType:     "fat32",
@@ -821,6 +825,7 @@ func TestDiskConfigValidation(t *testing.T) {
 					},
 					{
 						ID:         "root",
+						Index:      intPtr(2),
 						Name:       "Root",
 						Type:       "linux-root-amd64",
 						FsType:     "ext4",
@@ -854,6 +859,7 @@ func TestPartitionInfoFields(t *testing.T) {
 			Partitions: []PartitionInfo{
 				{
 					ID:           "efi",
+					Index:        intPtr(1),
 					Name:         "EFI System",
 					Type:         "esp",
 					TypeGUID:     "C12A7328-F81F-11D2-BA4B-00A0C93EC93B",
@@ -866,6 +872,7 @@ func TestPartitionInfoFields(t *testing.T) {
 				},
 				{
 					ID:       "swap",
+					Index:    intPtr(2),
 					Name:     "Swap",
 					Type:     "swap",
 					TypeGUID: "0657FD6D-A4AB-43C4-84E5-0933C84B4F4F",
@@ -875,6 +882,7 @@ func TestPartitionInfoFields(t *testing.T) {
 				},
 				{
 					ID:         "root",
+					Index:      intPtr(3),
 					Name:       "Root",
 					Type:       "linux-root-amd64",
 					TypeGUID:   "4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709",
@@ -899,6 +907,9 @@ func TestPartitionInfoFields(t *testing.T) {
 	if efiPartition.ID != "efi" {
 		t.Errorf("expected EFI partition ID 'efi', got '%s'", efiPartition.ID)
 	}
+	if *efiPartition.Index != 1 {
+		t.Errorf("expected index 1 for EFI partition, got %d", *efiPartition.Index)
+	}
 	if len(efiPartition.Flags) != 2 {
 		t.Errorf("expected 2 flags for EFI partition, got %d", len(efiPartition.Flags))
 	}
@@ -920,6 +931,9 @@ func TestPartitionInfoFields(t *testing.T) {
 	if swapPartition.FsType != "swap" {
 		t.Errorf("expected swap filesystem type, got '%s'", swapPartition.FsType)
 	}
+	if *swapPartition.Index != 2 {
+		t.Errorf("expected index 2 for swap, got '%d'", *swapPartition.Index)
+	}
 	if swapPartition.MountPoint != "" {
 		t.Errorf("expected empty mount point for swap, got '%s'", swapPartition.MountPoint)
 	}
@@ -934,6 +948,9 @@ func TestPartitionInfoFields(t *testing.T) {
 	rootPartition := diskConfig.Partitions[2]
 	if rootPartition.MountPoint != "/" {
 		t.Errorf("expected root mount point '/', got '%s'", rootPartition.MountPoint)
+	}
+	if *rootPartition.Index != 3 {
+		t.Errorf("expected index 3 for root, got '%d'", *rootPartition.Index)
 	}
 	if rootPartition.Start != "2GiB" {
 		t.Errorf("expected root start '2GiB', got '%s'", rootPartition.Start)
