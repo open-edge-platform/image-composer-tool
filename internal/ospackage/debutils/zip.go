@@ -84,6 +84,10 @@ func GetPackagesNames(baseURL string, codename string, arch string, component st
 	if baseURL == "<URL>" || baseURL == "" {
 		return "", nil
 	}
+	if cachedURL, ok := getPackageListURLFromCache(baseURL, codename, arch, component); ok {
+		logger.Logger().Debugf("Using cached package list URL for %s/%s/%s/%s: %s", baseURL, codename, arch, component, cachedURL)
+		return cachedURL, nil
+	}
 	possibleFiles := []string{"Packages.gz", "Packages.xz"}
 	var foundFile string
 	for _, fname := range possibleFiles {
@@ -94,6 +98,7 @@ func GetPackagesNames(baseURL string, codename string, arch string, component st
 		}
 		if fileExist {
 			foundFile = packageListURL
+			savePackageListURLToCache(baseURL, codename, arch, component, packageListURL)
 			break
 		} else {
 			logger.Logger().Debugf("Searching package list at: %s", packageListURL)

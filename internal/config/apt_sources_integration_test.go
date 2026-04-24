@@ -66,6 +66,7 @@ func resolveAdditionalFilePath(relativePath string) (string, error) {
 func TestIntegrationAptSourcesGeneration(t *testing.T) {
 	sedKeyPath := createLocalTestGPGKey(t, "sed-test-key-*.gpg")
 	openvinoKeyPath := createLocalTestGPGKey(t, "openvino-test-key-*.gpg")
+
 	// Create a realistic test template similar to the example
 	template := &ImageTemplate{
 		Image: ImageInfo{
@@ -162,6 +163,7 @@ func TestIntegrationAptSourcesGeneration(t *testing.T) {
 func TestIntegrationAptPreferencesGeneration(t *testing.T) {
 	sedKeyPath := createLocalTestGPGKey(t, "sed-test-key-*.gpg")
 	openvinoKeyPath := createLocalTestGPGKey(t, "openvino-test-key-*.gpg")
+
 	// Create a realistic test template with priorities
 	template := &ImageTemplate{
 		Image: ImageInfo{

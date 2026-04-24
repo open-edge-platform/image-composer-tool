@@ -13,6 +13,24 @@ import (
 	"github.com/open-edge-platform/os-image-composer/internal/ospackage"
 )
 
+func resetURLExistenceCacheForTest(t *testing.T) {
+	t.Helper()
+
+	urlExistenceCacheMu.Lock()
+	urlExistenceCache = nil
+	urlExistenceCacheLoaded = false
+	urlExistenceCacheMu.Unlock()
+
+	_ = os.Remove(urlExistenceCacheFilePath())
+
+	packageListURLCacheMu.Lock()
+	packageListURLCache = nil
+	packageListURLCacheLoaded = false
+	packageListURLCacheMu.Unlock()
+
+	_ = os.Remove(packageListURLCacheFilePath())
+}
+
 // TestPackages tests the Packages function
 func TestPackages(t *testing.T) {
 	// Save original values
@@ -193,6 +211,8 @@ func TestPackagesFromMultipleRepos(t *testing.T) {
 
 // TestBuildRepoConfigs tests the BuildRepoConfigs function
 func TestBuildRepoConfigs(t *testing.T) {
+	resetURLExistenceCacheForTest(t)
+
 	tests := []struct {
 		name          string
 		userRepoList  []Repository
@@ -275,6 +295,201 @@ func TestBuildRepoConfigs(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestBuildRepoConfigs_UsesCachedPackageListOffline(t *testing.T) {
+	resetURLExistenceCacheForTest(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/dists/stable/main/binary-amd64/Packages.gz" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.URL.Path == "/dists/stable/main/binary-all/Packages.gz" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+
+	repos := []Repository{{
+		ID:       "cached-repo",
+		Codename: "stable",
+		URL:      server.URL,
+		PKey:     "dummy-key",
+	}}
+
+	configs, err := BuildRepoConfigs(repos, "amd64")
+	if err != nil {
+		t.Fatalf("first BuildRepoConfigs failed: %v", err)
+	}
+	if len(configs) == 0 {
+		t.Fatalf("expected repo configs from first run")
+	}
+
+	server.Close()
+
+	configs, err = BuildRepoConfigs(repos, "amd64")
+	if err != nil {
+		t.Fatalf("second BuildRepoConfigs should use cache and work offline: %v", err)
+	}
+	if len(configs) == 0 {
+		t.Fatalf("expected repo configs from cached run")
+	}
+}
+
+func TestIsDebPackageCacheOutdated(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(tmpDir, "bash_1.0_amd64.deb"), []byte("x"), 0644); err != nil {
+		t.Fatalf("failed to write cached deb: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "coreutils_1.0_amd64.deb"), []byte("x"), 0644); err != nil {
+		t.Fatalf("failed to write cached deb: %v", err)
+	}
+
+	outdated, missing, _, err := isDebPackageCacheOutdated([]string{"bash", "coreutils"}, tmpDir)
+	if err != nil {
+		t.Fatalf("isDebPackageCacheOutdated returned error: %v", err)
+	}
+	if outdated {
+		t.Fatalf("expected cache to be up-to-date, missing=%v", missing)
+	}
+
+	outdated, missing, _, err = isDebPackageCacheOutdated([]string{"bash", "curl"}, tmpDir)
+	if err != nil {
+		t.Fatalf("isDebPackageCacheOutdated returned error: %v", err)
+	}
+	if !outdated {
+		t.Fatalf("expected cache to be outdated")
+	}
+	if len(missing) != 1 || missing[0] != "curl" {
+		t.Fatalf("expected missing=[curl], got %v", missing)
+	}
+}
+
+func TestIsDebPackageCacheOutdated_VersionPinnedRequirement(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(tmpDir, "intel-dlstreamer_2025.2.0_amd64.deb"), []byte("x"), 0644); err != nil {
+		t.Fatalf("failed to write cached deb: %v", err)
+	}
+
+	outdated, missing, _, err := isDebPackageCacheOutdated([]string{"intel-dlstreamer_2025.2.0"}, tmpDir)
+	if err != nil {
+		t.Fatalf("isDebPackageCacheOutdated returned error: %v", err)
+	}
+
+	if outdated {
+		t.Fatalf("expected version-pinned requirement to be satisfied from cache, missing=%v", missing)
+	}
+}
+
+func TestIsDebPackageCacheOutdated_EpochPinnedRequirement(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(tmpDir, "qemu-system_9.1.0+git20251029-ppa1-noble3_amd64.deb"), []byte("x"), 0644); err != nil {
+		t.Fatalf("failed to write cached deb: %v", err)
+	}
+
+	outdated, missing, _, err := isDebPackageCacheOutdated(
+		[]string{"qemu-system_4:9.1.0+git20251029-ppa1-noble3"},
+		tmpDir,
+	)
+	if err != nil {
+		t.Fatalf("isDebPackageCacheOutdated returned error: %v", err)
+	}
+
+	if outdated {
+		t.Fatalf("expected epoch-pinned requirement to be satisfied from cache, missing=%v", missing)
+	}
+}
+
+func TestClearDebPackageCache(t *testing.T) {
+	tests := []struct {
+		name     string
+		setup    func(dir string)
+		wantLeft []string // non-.deb files that must survive
+	}{
+		{
+			name: "clears all deb files",
+			setup: func(dir string) {
+				_ = os.WriteFile(filepath.Join(dir, "bash_1.0_amd64.deb"), []byte("x"), 0644)
+				_ = os.WriteFile(filepath.Join(dir, "curl_1.0_amd64.deb"), []byte("x"), 0644)
+			},
+		},
+		{
+			name: "leaves non-deb files untouched",
+			setup: func(dir string) {
+				_ = os.WriteFile(filepath.Join(dir, "bash_1.0_amd64.deb"), []byte("x"), 0644)
+				_ = os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("x"), 0644)
+			},
+			wantLeft: []string{"notes.txt"},
+		},
+		{
+			name:  "empty cache dir is a no-op",
+			setup: func(dir string) {},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			tt.setup(dir)
+
+			if err := clearDebPackageCache(dir); err != nil {
+				t.Fatalf("clearDebPackageCache() unexpected error: %v", err)
+			}
+
+			debs, _ := filepath.Glob(filepath.Join(dir, "*.deb"))
+			if len(debs) != 0 {
+				t.Errorf("expected no .deb files after clear, got %v", debs)
+			}
+
+			for _, name := range tt.wantLeft {
+				if _, statErr := os.Stat(filepath.Join(dir, name)); os.IsNotExist(statErr) {
+					t.Errorf("expected file %s to survive cache clear, but it was removed", name)
+				}
+			}
+		})
+	}
+}
+
+func TestClearDebMetadataCache(t *testing.T) {
+	origRepoCfg := RepoCfg
+	origRepoCfgs := RepoCfgs
+	defer func() {
+		RepoCfg = origRepoCfg
+		RepoCfgs = origRepoCfgs
+	}()
+
+	metaDir1 := t.TempDir()
+	metaDir2 := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(metaDir1, "packages.parsed.json"), []byte("{}"), 0644); err != nil {
+		t.Fatalf("failed to write metadata cache: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(metaDir2, "packages.parsed.json"), []byte("{}"), 0644); err != nil {
+		t.Fatalf("failed to write metadata cache: %v", err)
+	}
+
+	RepoCfg = RepoConfig{BuildPath: metaDir1}
+	RepoCfgs = []RepoConfig{{BuildPath: metaDir2}}
+
+	pkgDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(pkgDir, "bash_1.0_amd64.deb"), []byte("x"), 0644); err != nil {
+		t.Fatalf("failed to write deb: %v", err)
+	}
+
+	if err := clearDebPackageCache(pkgDir); err != nil {
+		t.Fatalf("clearDebPackageCache() unexpected error: %v", err)
+	}
+
+	for i, dir := range []string{metaDir1, metaDir2} {
+		f := filepath.Join(dir, "packages.parsed.json")
+		if _, statErr := os.Stat(f); !os.IsNotExist(statErr) {
+			t.Errorf("expected packages.parsed.json in build path %d (%s) to be removed", i, dir)
+		}
 	}
 }
 
@@ -364,6 +579,8 @@ func TestUserPackages(t *testing.T) {
 
 // TestCheckFileExists tests the checkFileExists function
 func TestCheckFileExists(t *testing.T) {
+	resetURLExistenceCacheForTest(t)
+
 	// Create test server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -418,6 +635,67 @@ func TestCheckFileExists(t *testing.T) {
 				t.Errorf("Expected %v, got %v", tt.expected, result)
 			}
 		})
+	}
+}
+
+func TestCheckFileExists_UsesCacheOffline(t *testing.T) {
+	resetURLExistenceCacheForTest(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	url := server.URL + "/exists"
+	first, err := checkFileExists(url)
+	if err != nil {
+		t.Fatalf("first checkFileExists failed: %v", err)
+	}
+	if !first {
+		t.Fatalf("expected first checkFileExists to return true")
+	}
+
+	server.Close()
+
+	second, err := checkFileExists(url)
+	if err != nil {
+		t.Fatalf("second checkFileExists should use cache and work offline: %v", err)
+	}
+	if !second {
+		t.Fatalf("expected cached checkFileExists to return true")
+	}
+}
+
+func TestGetPackagesNames_UsesCachedURLOffline(t *testing.T) {
+	resetURLExistenceCacheForTest(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/dists/stable/main/binary-amd64/Packages.gz" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+
+	baseURL := server.URL
+	first, err := GetPackagesNames(baseURL, "stable", "amd64", "main")
+	if err != nil {
+		t.Fatalf("first GetPackagesNames failed: %v", err)
+	}
+	if first == "" {
+		t.Fatalf("expected first GetPackagesNames to return URL")
+	}
+
+	server.Close()
+
+	second, err := GetPackagesNames(baseURL, "stable", "amd64", "main")
+	if err != nil {
+		t.Fatalf("second GetPackagesNames should use cache and work offline: %v", err)
+	}
+	if second == "" {
+		t.Fatalf("expected cached GetPackagesNames to return URL")
+	}
+	if second != first {
+		t.Fatalf("expected cached URL %q, got %q", first, second)
 	}
 }
 
