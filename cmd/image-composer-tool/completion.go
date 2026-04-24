@@ -123,7 +123,7 @@ func executeInstallCompletion(cmd *cobra.Command, args []string) error {
 			}
 		}
 
-		targetPath = filepath.Join(completionDir, "os-image-composer.bash")
+		targetPath = filepath.Join(completionDir, "image-composer-tool.bash")
 	case "zsh":
 		completionDir := filepath.Join(homeDir, ".zsh/completion")
 		if _, err := os.Stat(completionDir); os.IsNotExist(err) {
@@ -131,7 +131,7 @@ func executeInstallCompletion(cmd *cobra.Command, args []string) error {
 				return fmt.Errorf("could not create directory %s: %v", completionDir, err)
 			}
 		}
-		targetPath = filepath.Join(completionDir, "_os-image-composer")
+		targetPath = filepath.Join(completionDir, "_image-composer-tool")
 	case "fish":
 		completionDir := filepath.Join(homeDir, ".config/fish/completions")
 		if _, err := os.Stat(completionDir); os.IsNotExist(err) {
@@ -139,7 +139,7 @@ func executeInstallCompletion(cmd *cobra.Command, args []string) error {
 				return fmt.Errorf("could not create directory %s: %v", completionDir, err)
 			}
 		}
-		targetPath = filepath.Join(completionDir, "os-image-composer.fish")
+		targetPath = filepath.Join(completionDir, "image-composer-tool.fish")
 	case "powershell":
 		profilePath := filepath.Join(homeDir, "Documents/WindowsPowerShell")
 		if _, err := os.Stat(profilePath); os.IsNotExist(err) {
@@ -147,7 +147,7 @@ func executeInstallCompletion(cmd *cobra.Command, args []string) error {
 				return fmt.Errorf("could not create directory %s: %v", profilePath, err)
 			}
 		}
-		targetPath = filepath.Join(profilePath, "os-image-composer-completion.ps1")
+		targetPath = filepath.Join(profilePath, "image-composer-tool-completion.ps1")
 	}
 
 	// Check if file exists

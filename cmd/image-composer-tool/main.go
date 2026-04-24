@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/security"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/security"
 	"github.com/spf13/cobra"
 )
 
@@ -78,9 +78,9 @@ func initConfig() {
 // createRootCommand creates and configures the root cobra command with all subcommands
 func createRootCommand() *cobra.Command {
 	rootCmd := &cobra.Command{
-		Use:   "os-image-composer",
-		Short: "OS Image Composer for building Linux distributions",
-		Long: `OS Image Composer is a toolchain that enables building immutable
+		Use:   "image-composer-tool",
+		Short: "ICT for building Linux distributions",
+		Long: `ICT is a toolchain that enables building immutable
 Linux distributions using a simple toolchain from pre-built packages emanating
 from different Operating System Vendors (OSVs).
 
@@ -90,8 +90,8 @@ The tool supports building custom images for:
 - Wind River eLxr
 - Ubuntu
 - RCD (Red Hat Compatible Distro)
-	Use 'os-image-composer --help' to see available commands.
-	Use 'os-image-composer <command> --help' for more information about a command.`,
+	Use 'image-composer-tool --help' to see available commands.
+	Use 'image-composer-tool <command> --help' for more information about a command.`,
 	}
 
 	// Add global flags

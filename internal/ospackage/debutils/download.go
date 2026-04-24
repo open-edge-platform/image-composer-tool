@@ -11,14 +11,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage/dotfilter"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage/pkgfetcher"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage/pkgsorter"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/network"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/slice"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/dotfilter"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/pkgfetcher"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/pkgsorter"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/network"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/slice"
 )
 
 // Repository represents a Debian repository
@@ -278,7 +278,7 @@ func checkFileExists(url string) (bool, error) {
 	}
 
 	// Set additional headers to encourage faster responses
-	req.Header.Set("User-Agent", "os-image-composer/1.0")
+	req.Header.Set("User-Agent", "image-composer-tool/1.0")
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("Connection", "close") // Don't keep connection alive for HEAD requests
 

@@ -1,6 +1,6 @@
 # Multiple Package Repo Support
 
-A major feature of the OS Image Composer tool is its ability to let you add
+A major feature of the ICT tool is its ability to let you add
 multiple package repositories to the OS build. These repositories often contain
 in-house proprietary packages or upstream packages pending integration. By
 supporting multiple repositories, the tool enables rapid deployment,
@@ -8,7 +8,7 @@ experimentation, and validation of custom software alongside standard OS
 components. This document describes the key aspects of the multiple package repo:
 
 - **Configuration**: Describes how to add and configure extra package
-  repositories, enabling the OS Image Composer tool to access and pull custom
+  repositories, enabling the ICT tool to access and pull custom
   packages that are unavailable in the base repository.
 - **Package conflict priority consideration**: Outlines how the tool determines
   which package to use when duplicates exist across repositories using
@@ -49,7 +49,7 @@ components. This document describes the key aspects of the multiple package repo
 
 ## Setting Multiple Repositories in the User Template
 
-You can specify additional package repositories in the OS Image Composer user
+You can specify additional package repositories in the ICT user
 template. Here's an example:
 
 ```yaml
@@ -77,7 +77,7 @@ systemConfig:
 ```
 
 Each repository must follow the standard Debian or RPM structure, including all
-required metadata. The OS Image Composer tool performs sanity checks to ensure
+required metadata. The ICT tool performs sanity checks to ensure
 repository URLs are valid before proceeding. See the following repository
 setup references:
 
@@ -91,7 +91,7 @@ Composer tool uses repository `priority` to select candidates.
 
 ### Priority Rules
 
-The OS Image Composer tool follows these rules:
+The ICT tool follows these rules:
 
 1. **Higher numeric priority wins**: repositories with higher `priority`
     values are preferred.
@@ -180,7 +180,7 @@ communicate over the internet.
 
 #### Dependency Resolution in a Multi-Repository Environment
 
-The OS Image Composer tool automatically resolves dependencies according to the
+The ICT tool automatically resolves dependencies according to the
 rules below, ensuring package consistency by keeping parent packages and their
 dependencies from the same repository.
 
@@ -353,7 +353,7 @@ non-traditional requirements and future customizations.
 
 ## Related Documentation
 
-- [Understanding the Build Process](./os-image-composer-build-process.md)
-- [Understanding Templates](./os-image-composer-templates.md)
-- [Multiple Package Repository Support](./os-image-composer-multi-repo-support.md)
-- [OS Image Composer CLI Reference](./os-image-composer-cli-specification.md)
+- [Understanding the Build Process](./image-composer-tool-build-process.md)
+- [Understanding Templates](./image-composer-tool-templates.md)
+- [Multiple Package Repository Support](./image-composer-tool-multi-repo-support.md)
+- [ICT CLI Reference](./image-composer-tool-cli-specification.md)

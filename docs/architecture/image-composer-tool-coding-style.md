@@ -1,4 +1,4 @@
-# Go Coding Style Guide for OS Image Composer
+# Go Coding Style Guide for ICT
 
 ## Table of Contents
 
@@ -96,8 +96,8 @@ import (
     "github.com/spf13/cobra"
     "gopkg.in/yaml.v3"
 
-    "github.com/open-edge-platform/os-image-composer/internal/config"
-    "github.com/open-edge-platform/os-image-composer/internal/utils/logger"
+    "github.com/open-edge-platform/image-composer-tool/internal/config"
+    "github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 )
 ```
 
@@ -144,7 +144,7 @@ type ImageBuilder struct {}
 type PackageInstaller interface {}
 type ConfigReader interface {}
 
-// Specific to OS Image Composer
+// Specific to ICT
 type ChrootBuilder struct {}
 type RpmInstaller interface {}
 type DebInstaller interface {}
@@ -156,7 +156,7 @@ type DebInstaller interface {}
 - Package names should be descriptive but concise
 
 ```go
-// Good package structure for OS Image Composer
+// Good package structure for ICT
 package chroot    // for chroot environment building
 package rpm       // for RPM package handling
 package deb       // for DEB package handling
@@ -403,7 +403,7 @@ Use package-level logger instead of declaring in each function:
 package chroot
 
 import (
-    "github.com/open-edge-platform/os-image-composer/internal/utils/logger"
+    "github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 )
 
 var log = logger.Logger()

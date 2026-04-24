@@ -6,7 +6,7 @@ This document is the authoritative field-by-field reference for the template
 format.
 
 For a conceptual overview of how templates fit into the build pipeline, see
-[Understanding the Build Process](./os-image-composer-build-process.md).
+[Understanding the Build Process](./image-composer-tool-build-process.md).
 
 ## Table of Contents
 
@@ -57,7 +57,7 @@ building operating system images. Here's what templates empower you to do:
 - Reduce duplication of effort.
 - Share and reuse common configurations with your team.
 
-The OS Image Composer provides default image templates on a per-distribution
+The ICT provides default image templates on a per-distribution
 basis and image type (RAW vs. ISO) that can be used directly to build an
 operating system from those defaults. You can override these default templates
 by providing your own template and configure or override the settings and
@@ -68,7 +68,7 @@ template used for image composition.
 
 ## How Templates Work
 
-OS Image Composer ships **default templates** for each distribution and image
+ICT ships **default templates** for each distribution and image
 type (raw, ISO, initrd). When you provide a user template, the tool merges it
 with the matching default; your values override or extend the defaults. The
 merged result is validated against a JSON schema before the build begins.
@@ -305,7 +305,7 @@ packageRepositories:
     pkey: "[trusted=yes]"
 ```
 
-See [Multiple Package Repository Support](./os-image-composer-multi-repo-support.md)
+See [Multiple Package Repository Support](./image-composer-tool-multi-repo-support.md)
 for detailed configuration guidance.
 
 ---
@@ -540,7 +540,7 @@ can provide variable values via a separate YAML file or command-line flags at
 build time.
 
 To learn how variables interact with each build stage, see
-[Build Stages in Detail](./os-image-composer-build-process.md#build-stages-in-detail).
+[Build Stages in Detail](./image-composer-tool-build-process.md#build-stages-in-detail).
 
 
 
@@ -554,22 +554,22 @@ To learn how variables interact with each build stage, see
    (e.g., `factory-floor-edge`, not `test-image-3`).
 4. **Version control your templates** - store them in Git alongside your
    deployment code.
-5. **Validate before building** - run `os-image-composer validate template.yml`
+5. **Validate before building** - run `image-composer-tool validate template.yml`
    to catch errors early.
 6. **Prefer `additionalFiles` over `configurations`** - copying config files is
    more reproducible than running arbitrary shell commands.
 
 ## Related Documentation
 
-- [Understanding the Build Process](./os-image-composer-build-process.md)
-- [Multiple Package Repository Support](./os-image-composer-multi-repo-support.md)
-- [OS Image Composer CLI Reference](./os-image-composer-cli-specification.md)
-- [Common Build Patterns](./os-image-composer-build-process.md#common-build-patterns)
+- [Understanding the Build Process](./image-composer-tool-build-process.md)
+- [Multiple Package Repository Support](./image-composer-tool-multi-repo-support.md)
+- [ICT CLI Reference](./image-composer-tool-cli-specification.md)
+- [Common Build Patterns](./image-composer-tool-build-process.md#common-build-patterns)
 
 <!--hide_directive
 :::{toctree}
 :hidden:
 
-os-image-composer-multi-repo-support
+image-composer-tool-multi-repo-support
 :::
 hide_directive-->

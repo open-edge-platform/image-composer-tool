@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/open-edge-platform/os-image-composer/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
 )
 
 func configureTempGlobal(t *testing.T) (cacheDir, workDir string, restore func()) {

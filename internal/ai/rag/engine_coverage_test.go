@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/open-edge-platform/os-image-composer/internal/ai"
+	"github.com/open-edge-platform/image-composer-tool/internal/ai"
 )
 
 // TestNewEngineWithOllama tests engine creation with Ollama provider.

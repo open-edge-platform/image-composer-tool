@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"github.com/spf13/cobra"
 )
 
@@ -47,8 +47,8 @@ func TestCreateRootCommand(t *testing.T) {
 		if root == nil {
 			t.Fatal("createRootCommand returned nil")
 		}
-		if root.Use != "os-image-composer" {
-			t.Errorf("expected Use='os-image-composer', got %q", root.Use)
+		if root.Use != "image-composer-tool" {
+			t.Errorf("expected Use='image-composer-tool', got %q", root.Use)
 		}
 		if root.Short == "" {
 			t.Error("Short description should not be empty")
@@ -321,8 +321,8 @@ func TestHelpOutput(t *testing.T) {
 	output := buf.String()
 
 	expectedStrings := []string{
-		"os-image-composer",
-		"OS Image Composer",
+		"image-composer-tool",
+		"ICT",
 		"building immutable",
 		"--config",
 		"--log-level",

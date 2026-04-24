@@ -10,8 +10,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/open-edge-platform/os-image-composer/internal/config/manifest"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
+	"github.com/open-edge-platform/image-composer-tool/internal/config/manifest"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
 
 // FAT filesystem reader implementation (for raw reads from disk images)
