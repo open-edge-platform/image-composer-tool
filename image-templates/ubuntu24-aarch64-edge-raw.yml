@@ -1,0 +1,73 @@
+# AI-searchable metadata for template discovery
+metadata:
+  description: Ubuntu 24.04 edge-optimized image with container runtime and edge computing packages
+  use_cases:
+    - Edge computing deployments
+    - Container workloads at the edge
+    - IoT gateway systems
+    - Ubuntu-based edge nodes
+  keywords:
+    - edge
+    - container
+    - docker
+    - iot
+    - gateway
+    - ubuntu
+
+image:
+  name: edge-os-image-ubuntu-arm64
+  version: "24.04"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: aarch64
+  imageType: raw
+
+# Sample list of additional package repositories; replace codename, url, and pkey values as needed
+packageRepositories:
+  - codename: "company-internal"
+    url: "<URL>"
+    pkey: "<PUBLIC_KEY_URL>" # Uncomment and replace in real config
+    component: "main"
+
+  - codename: "dev-tools"
+    url: "<URL>"
+    pkey: "<PUBLIC_KEY_URL>" # Uncomment and replace in real config
+
+  - codename: "intel-openvino"
+    url: "<URL>"
+    pkey: "<PUBLIC_KEY_URL>" # Uncomment and replace in real config
+    component: "restricted"
+
+  # - codename: "localdeb"
+  #   path: "/data/os-image-composer/localdeb" # Uncomment and replace with local path
+  #   pkey: "[trusted=yes]" # Make sure to put trusted
+  #   component: "main" # Make sure to put main or leave empty
+
+systemConfig:
+  name: edge
+  description: edge ubuntu image with immutable rootfs
+
+  immutability:
+    enabled: false # default is true
+    # To enable Secure Boot, provide the actual file paths for your environment below and uncomment the relevant lines.
+    # secureBootDBKey: "<SECURE_BOOT_DB_KEY_PATH>"
+    # secureBootDBCrt: "<SECURE_BOOT_DB_CRT_PATH>"
+    # secureBootDBCer: "<SECURE_BOOT_DB_CER_PATH>"
+
+  packages:
+    - ubuntu-minimal
+    - systemd-boot
+    - dracut-core
+    - systemd
+    - cryptsetup-bin
+    - openssh-server
+    - systemd-resolved
+    - systemd-timesyncd
+
+  kernel:
+    version: "6.17"
+    cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
+    packages:
+      - linux-image-generic-hwe-24.04

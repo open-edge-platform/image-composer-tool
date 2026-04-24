@@ -15,6 +15,7 @@ func SignImage(installRoot string, template *config.ImageTemplate) error {
 
 	// If immutability is not enabled, skip signing
 	if !template.IsImmutabilityEnabled() {
+		fmt.Println("***Skipping Signing because Immutability not enabled***")
 		return nil
 	}
 
@@ -23,6 +24,7 @@ func SignImage(installRoot string, template *config.ImageTemplate) error {
 	if template.GetSecureBootDBKeyPath() == "" ||
 		template.GetSecureBootDBCrtPath() == "" ||
 		template.GetSecureBootDBCerPath() == "" {
+		fmt.Println("***Skipping Signing because secure boot keys are not provided***")
 		return nil
 	}
 
@@ -65,6 +67,7 @@ func SignImage(installRoot string, template *config.ImageTemplate) error {
 	if _, err := shell.ExecCmd(cmd, true, shell.HostPath, nil); err != nil {
 		return fmt.Errorf("failed to sign bootloader: %w", err)
 	}
+	fmt.Println("***Successfully signed the bootloader and UKI with sbsign***")
 
 	// Replace original with signed version
 	if err := os.Rename(bootloaderSignedPath, bootloaderPath); err != nil {
