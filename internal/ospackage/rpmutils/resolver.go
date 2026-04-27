@@ -284,7 +284,7 @@ func saveRPMParsedMetadataCache(cacheFile, metadataURL string, pkgs []ospackage.
 		return fmt.Errorf("failed to marshal rpm metadata cache: %w", err)
 	}
 
-	if err := os.WriteFile(cacheFile, data, 0644); err != nil {
+	if err := os.WriteFile(cacheFile, data, 0600); err != nil {
 		return fmt.Errorf("failed to write rpm metadata cache: %w", err)
 	}
 

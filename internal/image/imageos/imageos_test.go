@@ -2435,8 +2435,9 @@ func TestDebLocalRepo(t *testing.T) {
 		t.Fatalf("initDebLocalRepoWithinInstallRoot failed: %v", err)
 	}
 
-	if mockChrootEnv.updatedRepoDir != chroot.ChrootRepoDir {
-		t.Fatalf("expected repo metadata refresh for %q, got %q", chroot.ChrootRepoDir, mockChrootEnv.updatedRepoDir)
+	expectedRepoDir := filepath.Join(mockChrootEnv.chrootPath, "cdrom", "cache-repo")
+	if mockChrootEnv.updatedRepoDir != expectedRepoDir {
+		t.Fatalf("expected repo metadata refresh for %q, got %q", expectedRepoDir, mockChrootEnv.updatedRepoDir)
 	}
 
 	if mockChrootEnv.updatedTargetArch != template.Target.Arch {

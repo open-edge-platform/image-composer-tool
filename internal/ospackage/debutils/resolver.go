@@ -135,7 +135,7 @@ func saveParsedPackageCache(cacheFile, checksum string, pkgs []ospackage.Package
 	if err != nil {
 		return fmt.Errorf("failed to marshal package cache: %w", err)
 	}
-	return os.WriteFile(cacheFile, data, 0644)
+	return os.WriteFile(cacheFile, data, 0600)
 }
 
 // ParseRepositoryMetadata parses the Packages.gz file from gzHref.
