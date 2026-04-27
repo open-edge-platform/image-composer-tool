@@ -58,6 +58,16 @@ For the full details on every command — including `inspect`, `compare`, and
 
 ## Building an Image
 
+> **ISO images require the `live-installer` binary.** Build it before starting
+> an ISO build:
+>
+> ```bash
+> go build -buildmode=pie -o ./build/live-installer ./cmd/live-installer
+> ```
+>
+> If you use `earthly +build`, both binaries are built automatically. See the
+> [Installation Guide](./installation.md) for details.
+
 ```bash
 # go build — binary is in the repo root
 sudo -E ./os-image-composer build image-templates/azl3-x86_64-edge-raw.yml

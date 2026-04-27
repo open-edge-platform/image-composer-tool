@@ -5,11 +5,24 @@ prerequisites.
 
 ## Table of Contents
 
-- [Prerequisites](#prerequisites)
-- [Development Build (Go)](#development-build-go)
-- [Production Build (Earthly)](#production-build-earthly)
-- [Install via Debian Package](#install-via-debian-package)
-- [Image Composition Prerequisites](#image-composition-prerequisites)
+- [Installation Guide](#installation-guide)
+  - [Table of Contents](#table-of-contents)
+  - [Prerequisites](#prerequisites)
+  - [Development Build (Go)](#development-build-go)
+    - [Including Version Information in Dev Builds](#including-version-information-in-dev-builds)
+    - [VS Code MCP Servers (Optional)](#vs-code-mcp-servers-optional)
+  - [Production Build (Earthly)](#production-build-earthly)
+  - [Install via Debian Package](#install-via-debian-package)
+    - [Build the Debian Package](#build-the-debian-package)
+    - [Install the Package](#install-the-package)
+    - [Verify Installation](#verify-installation)
+    - [Package Contents](#package-contents)
+    - [Package Dependencies](#package-dependencies)
+    - [Uninstall](#uninstall)
+  - [Image Composition Prerequisites](#image-composition-prerequisites)
+    - [ukify](#ukify)
+    - [mmdebstrap](#mmdebstrap)
+  - [Next Steps](#next-steps)
 
 ---
 
@@ -68,6 +81,22 @@ go build -buildmode=pie \
     -X 'github.com/open-edge-platform/os-image-composer/internal/config/version.CommitSHA=$COMMIT'" \
   ./cmd/live-installer
 ```
+
+### VS Code MCP Servers (Optional)
+
+This repository includes `.vscode/mcp.json` which configures
+[MCP servers](https://code.visualstudio.com/docs/copilot/chat/mcp-servers) for
+AI-assisted development with GitHub Copilot. These are **optional** — everything
+works without them.
+
+| Requirement | What it provides | Install |
+|-------------|-----------------|---------|
+| Go 1.24+ with `gopls` | Go workspace tools (diagnostics, search, references) | VS Code Go extension installs `gopls` automatically |
+| Node.js 18+ with `npx` | GitHub, fetch, context7, sequential-thinking, memory servers | [nodejs.org](https://nodejs.org/) |
+| GitHub PAT (optional) | GitHub MCP server authentication | [Creating a PAT](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens) |
+
+If a server's prerequisites are not met, VS Code will skip that server with no
+impact on normal development.
 
 ## Production Build (Earthly)
 
