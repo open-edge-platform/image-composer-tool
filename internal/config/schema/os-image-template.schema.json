@@ -120,6 +120,7 @@
             "type": "object",
             "properties": {
               "id": { "type": "string", "description": "Partition identifier" },
+              "index": {"type": "integer", "description": "Partition index"},
               "name": { "type": "string", "description": "Partition name/label" },
               "type": { "type": "string", "description": "Partition type" },
               "typeUUID": { "type": "string", "description": "Partition type UUID" },

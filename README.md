@@ -59,6 +59,15 @@ sudo apt install systemd-ukify mmdebstrap
 
 ### 3. Compose an Image
 
+> **ISO images require the `live-installer` binary.** Build it before starting
+> an ISO build:
+>
+> ```bash
+> go build -buildmode=pie -o ./build/live-installer ./cmd/live-installer
+> ```
+>
+> If you use `earthly +build`, both binaries are built automatically.
+
 ```bash
 # If built with go build:
 sudo -E ./os-image-composer build image-templates/azl3-x86_64-edge-raw.yml

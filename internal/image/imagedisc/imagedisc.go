@@ -482,6 +482,7 @@ func diskPartitionCreate(
 		log.Errorf("Failed to get disk name from path %s: %v", diskPath, err)
 		return "", fmt.Errorf("failed to get disk name from path: %s", diskPath)
 	}
+
 	startSector, _ := getSectorOffsetFromSize(diskName, startSizeStr)
 	var endSector uint64
 	if partitionInfo.End == "0" {
@@ -505,60 +506,82 @@ func diskPartitionCreate(
 	log.Infof("Input partition end: " + endSizeStr + ", aligned end sector: " + endSectorStr)
 
 	// Create partition
-	var sfdiskScript strings.Builder
-	sfdiskScript.WriteString(fmt.Sprintf("start=%d ", startSector))
-	if endSector != 0 {
-		size := endSector - startSector
-		sfdiskScript.WriteString(fmt.Sprintf("size=%d ", size))
-	}
-
-	// Set partition type
+	// GPT with sgdisk & MBR with sfdisk
 	if partitionTableType == "gpt" {
-		// For GPT, use GUID
 		typeGUID := partitionInfo.TypeGUID
 		if typeGUID == "" && partitionInfo.Type != "" {
 			typeGUID, _ = PartitionTypeStrToGUID(partitionInfo.Type)
 		}
+
+		startArg := fmt.Sprintf("%d", startSector)
+		var endArg string
+		if endSector == 0 {
+			endArg = "0"
+		} else {
+			endArg = fmt.Sprintf("%d", endSector)
+		}
+
+		// Build sgdisk command: -n (new), -t (type), -c (name)
+		var parts []string
+		parts = append(parts, fmt.Sprintf("-n %d:%s:%s", partitionNum, startArg, endArg))
 		if typeGUID != "" {
-			sfdiskScript.WriteString(fmt.Sprintf("type=%s ", typeGUID))
+			parts = append(parts, fmt.Sprintf("-t %d:%s", partitionNum, typeGUID))
 		}
-		// Set partition name if provided
 		if partitionName != "" {
-			sfdiskScript.WriteString(fmt.Sprintf("name=\"%s\" ", partitionName))
+			safeName := strings.ReplaceAll(partitionName, "\"", "\\\"")
+			parts = append(parts, fmt.Sprintf("-c %d:\"%s\"", partitionNum, safeName))
 		}
+
+		cmdStr := fmt.Sprintf("sudo sgdisk %s %s", strings.Join(parts, " "), diskPath)
+		_, err = shell.ExecCmd(cmdStr, false, shell.HostPath, nil)
+		if err != nil {
+			log.Errorf("Failed to create GPT partition %d on disk %s: %v", partitionNum, diskPath, err)
+			return "", fmt.Errorf("failed to create GPT partition %d on disk %s: %w", partitionNum, diskPath, err)
+		}
+
 	} else {
-		// For MBR, use hex type code
-		var typeCode string
-		switch {
-		case partitionType == "extended":
-			typeCode = "5"
-		case partitionInfo.FsType == "linux-swap":
-			typeCode = "82"
-		default:
-			typeCode = "83" // Linux
+		var sfdiskScript strings.Builder
+		sfdiskScript.WriteString(fmt.Sprintf("start=%d ", startSector))
+		if endSector != 0 {
+			size := endSector - startSector
+			sfdiskScript.WriteString(fmt.Sprintf("size=%d ", size))
 		}
-		sfdiskScript.WriteString(fmt.Sprintf("type=%s ", typeCode))
-	}
 
-	// Handle boot flag
-	for _, flag := range partitionInfo.Flags {
-		if flag == "boot" {
-			sfdiskScript.WriteString("bootable ")
-			break
+		// Set partition type
+		if partitionTableType == "mbr" {
+			// For MBR, use hex type code
+			var typeCode string
+			switch {
+			case partitionType == "extended":
+				typeCode = "5"
+			case partitionInfo.FsType == "linux-swap":
+				typeCode = "82"
+			default:
+				typeCode = "83" // Linux
+			}
+			sfdiskScript.WriteString(fmt.Sprintf("type=%s ", typeCode))
 		}
-	}
 
-	// Create the partition using sfdisk
-	cmdStr := fmt.Sprintf("echo '%s' | sudo sfdisk --no-reread --append %s",
-		sfdiskScript.String(), diskPath)
-	_, err = shell.ExecCmd(cmdStr, false, shell.HostPath, nil)
-	if err != nil {
-		log.Errorf("Failed to create partition %d on disk %s: %v", partitionNum, diskPath, err)
-		return "", fmt.Errorf("failed to create partition %d on disk %s: %w", partitionNum, diskPath, err)
+		// Handle boot flag
+		for _, flag := range partitionInfo.Flags {
+			if flag == "boot" {
+				sfdiskScript.WriteString("bootable ")
+				break
+			}
+		}
+
+		// Create the partition using sfdisk
+		cmdStr := fmt.Sprintf("echo '%s' | sudo sfdisk --no-reread --append %s",
+			sfdiskScript.String(), diskPath)
+		_, err = shell.ExecCmd(cmdStr, false, shell.HostPath, nil)
+		if err != nil {
+			log.Errorf("Failed to create partition %d on disk %s: %v", partitionNum, diskPath, err)
+			return "", fmt.Errorf("failed to create partition %d on disk %s: %w", partitionNum, diskPath, err)
+		}
 	}
 
 	// Refresh partition table using partx
-	cmdStr = fmt.Sprintf("partx -u %s", diskPath)
+	cmdStr := fmt.Sprintf("partx -u %s", diskPath)
 	_, err = shell.ExecCmd(cmdStr, true, shell.HostPath, nil)
 	if err != nil {
 		log.Errorf("Failed to refresh partition table after creating partition %d: %v", partitionNum, err)
@@ -698,8 +721,33 @@ func DiskPartitionsCreate(diskPath string, partitionsList []config.PartitionInfo
 			return nil, fmt.Errorf("failed to create GPT partition table on disk %s: %w", diskPath, err)
 		}
 
+		indexPlaceholder := map[int]string{}
+		for _, p := range partitionsList {
+			if p.Index != nil {
+				if *p.Index <= 0 {
+					return nil, fmt.Errorf("partition %q: index must be > 0 (got %d)", p.ID, *p.Index)
+				}
+				if prev, ok := indexPlaceholder[*p.Index]; ok {
+					return nil, fmt.Errorf("duplicate partition index %d used by %q and %q", *p.Index, prev, p.ID)
+				}
+				indexPlaceholder[*p.Index] = p.ID
+			}
+		}
+
+		var partitionNum int
 		for i, partitionInfo := range partitionsList {
-			partitionNum := i + 1
+			if partitionInfo.Index != nil {
+				partitionNum = *partitionInfo.Index
+			} else {
+				assignedIndex := i + 1
+				for {
+					if _, used := indexPlaceholder[assignedIndex]; !used {
+						break
+					}
+					assignedIndex++
+				}
+				partitionNum = assignedIndex
+			}
 			diskPartDev, err := diskPartitionCreate(diskPath, partitionNum, partitionInfo, partitionTableType, "primary")
 			if err != nil {
 				for i := 1; i < partitionNum; i++ {

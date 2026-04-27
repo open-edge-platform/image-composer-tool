@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/open-edge-platform/os-image-composer/internal/config"
+	"github.com/open-edge-platform/os-image-composer/internal/image/isomaker"
 	"github.com/open-edge-platform/os-image-composer/internal/provider"
 	"github.com/open-edge-platform/os-image-composer/internal/provider/azl"
 	"github.com/open-edge-platform/os-image-composer/internal/provider/debian13"
@@ -107,6 +108,14 @@ func executeBuild(cmd *cobra.Command, args []string) error {
 		}
 		template.DotFilePath = dotFilePath
 		log.Infof("Dependency graph will be written to %s", dotFilePath)
+	}
+
+	// For ISO builds, validate prerequisites (e.g., live-installer binary)
+	// before starting expensive provider init and package downloads
+	if template.Target.ImageType == "iso" {
+		if err := isomaker.ValidateISOPrerequisites(template); err != nil {
+			return fmt.Errorf("ISO prerequisites check failed: %w", err)
+		}
 	}
 
 	p, err := InitProvider(template.Target.OS, template.Target.Dist, template.Target.Arch)

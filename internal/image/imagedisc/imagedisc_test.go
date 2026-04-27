@@ -10,6 +10,8 @@ import (
 	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
 )
 
+func intPtr(v int) *int { return &v }
+
 func TestIsDigit(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -785,17 +787,45 @@ func TestDiskPartitionsCreate(t *testing.T) {
 					End:    "100MiB",
 					FsType: "ext4",
 					Type:   "linux",
+					Index:  intPtr(1),
 				},
 			},
 			partitionTableType: "gpt",
 			mockCommands: []shell.MockCommand{
-				{Pattern: "fdisk -l /dev/sda", Output: "Disk /dev/sda: 1 GiB", Error: nil},
-				{Pattern: "echo 'label: gpt'", Output: "", Error: nil},
-				{Pattern: "cat /sys/block/sda/queue/hw_sector_size", Output: "512", Error: nil},
-				{Pattern: "cat /sys/block/sda/queue/physical_block_size", Output: "4096", Error: nil},
-				{Pattern: "echo", Output: "", Error: nil},
-				{Pattern: "partx -u /dev/sda", Output: "", Error: nil},
-				{Pattern: "mkfs", Output: "", Error: nil},
+				{Pattern: ".*fdisk.*sda.*", Output: "Disk /dev/sda: 1 GiB", Error: nil},
+				{Pattern: ".*label.*gpt.*sfdisk.*", Output: "", Error: nil},
+				{Pattern: ".*hw_sector_size", Output: "512", Error: nil},
+				{Pattern: ".*physical_block_size", Output: "4096", Error: nil},
+				{Pattern: ".*sgdisk.*sda.*", Output: "", Error: nil},
+				{Pattern: ".*partx.*sda.*", Output: "", Error: nil},
+				{Pattern: ".*mkfs.*ext4.*sda.*", Output: "", Error: nil},
+			},
+			expectError:     false,
+			expectedDevices: 1,
+		},
+		{
+			name:     "gpt_partition_index",
+			diskPath: "/dev/sda",
+			partitionsList: []config.PartitionInfo{
+				{
+					ID:     "root",
+					Name:   "root",
+					Start:  "1MiB",
+					End:    "100MiB",
+					FsType: "ext4",
+					Type:   "linux",
+					Index:  intPtr(14),
+				},
+			},
+			partitionTableType: "gpt",
+			mockCommands: []shell.MockCommand{
+				{Pattern: ".*fdisk.*sda.*", Output: "Disk /dev/sda: 1 GiB", Error: nil},
+				{Pattern: ".*label.*gpt.*sfdisk.*", Output: "", Error: nil},
+				{Pattern: ".*hw_sector_size", Output: "512", Error: nil},
+				{Pattern: ".*physical_block_size", Output: "4096", Error: nil},
+				{Pattern: ".*sgdisk.*sda.*", Output: "", Error: nil},
+				{Pattern: ".*partx.*sda.*", Output: "", Error: nil},
+				{Pattern: ".*mkfs.*ext4.*sda.*", Output: "", Error: nil},
 			},
 			expectError:     false,
 			expectedDevices: 1,
@@ -814,13 +844,13 @@ func TestDiskPartitionsCreate(t *testing.T) {
 			},
 			partitionTableType: "mbr",
 			mockCommands: []shell.MockCommand{
-				{Pattern: "fdisk -l /dev/sda", Output: "Disk /dev/sda: 1 GiB", Error: nil},
-				{Pattern: "echo 'label: dos'", Output: "", Error: nil},
-				{Pattern: "cat /sys/block/sda/queue/hw_sector_size", Output: "512", Error: nil},
-				{Pattern: "cat /sys/block/sda/queue/physical_block_size", Output: "4096", Error: nil},
-				{Pattern: "echo", Output: "", Error: nil},
-				{Pattern: "partx -u /dev/sda", Output: "", Error: nil},
-				{Pattern: "mkfs", Output: "", Error: nil},
+				{Pattern: ".*fdisk.*sda.*", Output: "Disk /dev/sda: 1 GiB", Error: nil},
+				{Pattern: ".*label.*dos.*sfdisk.*", Output: "", Error: nil},
+				{Pattern: ".*hw_sector_size", Output: "512", Error: nil},
+				{Pattern: ".*physical_block_size", Output: "4096", Error: nil},
+				{Pattern: ".*sfdisk.*append.*sda.*", Output: "", Error: nil},
+				{Pattern: ".*partx.*sda.*", Output: "", Error: nil},
+				{Pattern: ".*mkfs.*ext4.*sda.*", Output: "", Error: nil},
 			},
 			expectError:     false,
 			expectedDevices: 1,
@@ -838,11 +868,10 @@ func TestDiskPartitionsCreate(t *testing.T) {
 			},
 			partitionTableType: "gpt",
 			mockCommands: []shell.MockCommand{
-				{Pattern: "fdisk -l /dev/sda", Output: "Disk /dev/sda: 1 GiB", Error: nil},
-				{Pattern: "echo 'label: gpt'", Output: "", Error: nil},
-				{Pattern: "cat /sys/block/sda/queue/hw_sector_size", Output: "512", Error: nil},
-				{Pattern: "cat /sys/block/sda/queue/physical_block_size", Output: "4096", Error: nil},
-				{Pattern: "echo", Output: "", Error: fmt.Errorf("sfdisk failed")},
+				{Pattern: ".*fdisk.*sda.*", Output: "Disk /dev/sda: 1 GiB", Error: nil},
+				{Pattern: ".*label.*gpt.*sfdisk.*", Output: "", Error: fmt.Errorf("sgdisk failed")},
+				{Pattern: ".*hw_sector_size", Output: "512", Error: nil},
+				{Pattern: ".*physical_block_size", Output: "4096", Error: nil},
 			},
 			expectError: true,
 			errorMsg:    "failed to create partition",

@@ -187,6 +187,7 @@ type KernelConfig struct {
 type PartitionInfo struct {
 	Name         string   `yaml:"name"`         // Name: label for the partition
 	ID           string   `yaml:"id"`           // ID: unique identifier for the partition; can be used as a key
+	Index        *int     `yaml:"index"`        // Index: index for the partition sdx (x = 1, 2, 3, 4, ...)
 	Flags        []string `yaml:"flags"`        // Flags: optional flags for the partition (e.g., "boot", "hidden")
 	Type         string   `yaml:"type"`         // Type: partition type (e.g., "esp", "linux-root-amd64")
 	TypeGUID     string   `yaml:"typeUUID"`     // TypeGUID: GPT type GUID for the partition (e.g., "8300" for Linux filesystem)
