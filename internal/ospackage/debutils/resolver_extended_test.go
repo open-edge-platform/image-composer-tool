@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage/debutils"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/debutils"
 )
 
 // TestParseRepositoryMetadata tests parsing of Debian repository metadata

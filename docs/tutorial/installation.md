@@ -1,6 +1,6 @@
 # Installation Guide
 
-This guide covers all the ways to install OS Image Composer and its
+This guide covers all the ways to install ICT and its
 prerequisites.
 
 ## Table of Contents
@@ -36,17 +36,17 @@ prerequisites.
 ## Development Build (Go)
 
 For development and testing purposes, build directly with Go.
-The binary is placed in the **repo root** as `./os-image-composer`.
+The binary is placed in the **repo root** as `./image-composer-tool`.
 
 ```bash
-# Build the tool (output: ./os-image-composer)
-go build -buildmode=pie -ldflags "-s -w" ./cmd/os-image-composer
+# Build the tool (output: ./image-composer-tool)
+go build -buildmode=pie -ldflags "-s -w" ./cmd/image-composer-tool
 
 # Build the live-installer (required for ISO images)
 go build -buildmode=pie -o ./build/live-installer -ldflags "-s -w" ./cmd/live-installer
 
 # Or run without building
-go run ./cmd/os-image-composer --help
+go run ./cmd/image-composer-tool --help
 ```
 
 > **Note:** Development builds show default version information (e.g.,
@@ -63,22 +63,22 @@ BUILD_DATE=$(date -u '+%Y-%m-%d')
 
 go build -buildmode=pie \
   -ldflags "-s -w \
-    -X 'github.com/open-edge-platform/os-image-composer/internal/config/version.Version=$VERSION' \
-    -X 'github.com/open-edge-platform/os-image-composer/internal/config/version.Toolname=Image-Composer' \
-    -X 'github.com/open-edge-platform/os-image-composer/internal/config/version.Organization=Open Edge Platform' \
-    -X 'github.com/open-edge-platform/os-image-composer/internal/config/version.BuildDate=$BUILD_DATE' \
-    -X 'github.com/open-edge-platform/os-image-composer/internal/config/version.CommitSHA=$COMMIT'" \
-  ./cmd/os-image-composer
+    -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.Version=$VERSION' \
+    -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.Toolname=Image-Composer' \
+    -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.Organization=Open Edge Platform' \
+    -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.BuildDate=$BUILD_DATE' \
+    -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.CommitSHA=$COMMIT'" \
+  ./cmd/image-composer-tool
 
 # Required for ISO images
 go build -buildmode=pie \
   -o ./build/live-installer \
   -ldflags "-s -w \
-    -X 'github.com/open-edge-platform/os-image-composer/internal/config/version.Version=$VERSION' \
-    -X 'github.com/open-edge-platform/os-image-composer/internal/config/version.Toolname=Image-Composer' \
-    -X 'github.com/open-edge-platform/os-image-composer/internal/config/version.Organization=Open Edge Platform' \
-    -X 'github.com/open-edge-platform/os-image-composer/internal/config/version.BuildDate=$BUILD_DATE' \
-    -X 'github.com/open-edge-platform/os-image-composer/internal/config/version.CommitSHA=$COMMIT'" \
+    -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.Version=$VERSION' \
+    -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.Toolname=Image-Composer' \
+    -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.Organization=Open Edge Platform' \
+    -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.BuildDate=$BUILD_DATE' \
+    -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.CommitSHA=$COMMIT'" \
   ./cmd/live-installer
 ```
 
@@ -101,10 +101,10 @@ impact on normal development.
 ## Production Build (Earthly)
 
 For reproducible production builds with automatic version injection.
-The binary is placed in `./build/os-image-composer`.
+The binary is placed in `./build/image-composer-tool`.
 
 ```bash
-# Default build (output: ./build/os-image-composer)
+# Default build (output: ./build/image-composer-tool)
 earthly +build
 
 # Build with custom version metadata
@@ -113,7 +113,7 @@ earthly +build --VERSION=1.2.0
 
 ## Install via Debian Package
 
-For Ubuntu and Debian systems, OS Image Composer can be installed as a `.deb`
+For Ubuntu and Debian systems, ICT can be installed as a `.deb`
 package with proper package management.
 
 ### Build the Debian Package
@@ -127,13 +127,13 @@ earthly +deb --VERSION=1.2.0
 ```
 
 The package is created in the `dist/` directory as
-`os-image-composer_<VERSION>_<ARCH>.deb`.
+`ict_<VERSION>_<ARCH>.deb`.
 
 ### Install the Package
 
 ```bash
 # Recommended — automatically resolves dependencies
-sudo apt install <PATH>/os-image-composer_1.0.0_amd64.deb
+sudo apt install <PATH>/ict_1.0.0_amd64.deb
 ```
 
 Alternatively, using `dpkg`:
@@ -141,7 +141,7 @@ Alternatively, using `dpkg`:
 ```bash
 sudo apt-get update
 sudo apt-get install -y bash coreutils unzip dosfstools xorriso grub-common
-sudo dpkg -i dist/os-image-composer_1.0.0_amd64.deb
+sudo dpkg -i dist/ict_1.0.0_amd64.deb
 # Optional bootstrap tools:
 sudo apt-get install -y mmdebstrap || sudo apt-get install -y debootstrap
 ```
@@ -152,20 +152,20 @@ sudo apt-get install -y mmdebstrap || sudo apt-get install -y debootstrap
 ### Verify Installation
 
 ```bash
-dpkg -l | grep os-image-composer
-os-image-composer version
+dpkg -l | grep image-composer-tool
+image-composer-tool version
 ```
 
 ### Package Contents
 
 | Path | Description |
 |------|-------------|
-| `/usr/local/bin/os-image-composer` | Main executable |
-| `/etc/os-image-composer/config.yml` | Global configuration |
-| `/etc/os-image-composer/config/` | OS variant configuration files |
-| `/usr/share/os-image-composer/examples/` | Sample image templates |
-| `/usr/share/doc/os-image-composer/` | README, LICENSE, CLI specification |
-| `/var/cache/os-image-composer/` | Package cache storage |
+| `/usr/local/bin/image-composer-tool` | Main executable |
+| `/etc/image-composer-tool/config.yml` | Global configuration |
+| `/etc/image-composer-tool/config/` | OS variant configuration files |
+| `/usr/share/image-composer-tool/examples/` | Sample image templates |
+| `/usr/share/doc/image-composer-tool/` | README, LICENSE, CLI specification |
+| `/var/cache/image-composer-tool/` | Package cache storage |
 
 ### Package Dependencies
 
@@ -186,10 +186,10 @@ os-image-composer version
 
 ```bash
 # Remove package (keeps config files)
-sudo dpkg -r os-image-composer
+sudo dpkg -r image-composer-tool
 
 # Remove package and config files
-sudo dpkg --purge os-image-composer
+sudo dpkg --purge image-composer-tool
 ```
 
 ## Image Composition Prerequisites
@@ -222,5 +222,5 @@ Downloads and installs Debian packages to initialize a chroot.
 - [Quick Start](../../README.md#quick-start) — build your first image
 - [Usage Guide](./usage-guide.md) — CLI commands, configuration, and
   shell completion
-- [Image Templates](../architecture/os-image-composer-templates.md) —
+- [Image Templates](../architecture/image-composer-tool-templates.md) —
   creating and reusing templates

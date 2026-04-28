@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/open-edge-platform/os-image-composer/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
 )
 
 // MockProvider implements the Provider interface for testing

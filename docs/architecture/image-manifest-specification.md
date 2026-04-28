@@ -30,7 +30,7 @@ for the update to apply.
 
 ## Image Manifest Format
 
-The following is an image manifest's minimal format that the OS Image Composer
+The following is an image manifest's minimal format that the ICT
 tool can output along with the system image it creates:
 
 ```text

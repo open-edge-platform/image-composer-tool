@@ -1,10 +1,10 @@
-# Understanding Caching in OS Image Composer
+# Understanding Caching in ICT
 
-The OS Image Composer implements sophisticated caching mechanisms to significantly improve build performance and reduce resource usage. This document explains how caching works and how to manage it effectively.
+The ICT implements sophisticated caching mechanisms to significantly improve build performance and reduce resource usage. This document explains how caching works and how to manage it effectively.
 
 ## Table of Contents
 
-- [Understanding Caching in OS Image Composer](#understanding-caching-in-os-image-composer)
+- [Understanding Caching in ICT](#understanding-caching-in-ict)
   - [Table of Contents](#table-of-contents)
   - [Overview of Caching Mechanisms](#overview-of-caching-mechanisms)
   - [Package Caching](#package-caching)
@@ -32,7 +32,7 @@ The OS Image Composer implements sophisticated caching mechanisms to significant
 
 ## Overview of Caching Mechanisms
 
-The OS Image Composer uses two complementary caching mechanisms to dramatically improve build performance:
+The ICT uses two complementary caching mechanisms to dramatically improve build performance:
 
 **1. Package Cache** - Stores downloaded OS packages (.rpm or .deb files) for reuse across builds
 
@@ -299,15 +299,15 @@ flowchart TD
 
 ### Global Configuration
 
-Configure cache and workspace locations in `/etc/os-image-composer/config.yml`:
+Configure cache and workspace locations in `/etc/image-composer-tool/config.yml`:
 
 ```yaml
 # Package cache configuration
-cache_dir: /var/cache/os-image-composer  # Root cache directory
+cache_dir: /var/cache/image-composer-tool  # Root cache directory
                                           # Contains pkgCache/
 
 # Working directory configuration
-work_dir: /var/tmp/os-image-composer     # Root workspace directory
+work_dir: /var/tmp/image-composer-tool     # Root workspace directory
                                           # Contains {provider-id}/ subdirs
 
 # Worker configuration (affects download speed)
@@ -329,16 +329,16 @@ Override configuration for specific builds:
 
 ```bash
 # Use custom cache directory
-sudo -E os-image-composer build --cache-dir /mnt/fast-ssd/cache template.yml
+sudo -E image-composer-tool build --cache-dir /mnt/fast-ssd/cache template.yml
 
 # Use custom work directory
-sudo -E os-image-composer build --work-dir /mnt/nvme/workspace template.yml
+sudo -E image-composer-tool build --work-dir /mnt/nvme/workspace template.yml
 
 # Increase workers for faster initial download
-sudo -E os-image-composer build --workers 32 template.yml
+sudo -E image-composer-tool build --workers 32 template.yml
 
 # Combine multiple overrides
-sudo -E os-image-composer build \
+sudo -E image-composer-tool build \
   --cache-dir /mnt/cache \
   --work-dir /mnt/workspace \
   --workers 24 \
@@ -354,7 +354,7 @@ sudo -E os-image-composer build \
 cache/pkgCache/{provider-id}/
 ```
 
-Default: `/var/cache/os-image-composer/pkgCache/`
+Default: `/var/cache/image-composer-tool/pkgCache/`
 
 **Chroot Environment:**
 ```
@@ -362,7 +362,7 @@ workspace/{provider-id}/chrootenv/
 workspace/{provider-id}/chrootbuild/
 ```
 
-Default: `/var/tmp/os-image-composer/{provider-id}/`
+Default: `/var/tmp/image-composer-tool/{provider-id}/`
 
 **Image Build Output:**
 ```
@@ -474,12 +474,12 @@ cache_dir: /mnt/nvme/cache
 work_dir: /mnt/nvme/workspace
 
 # CI/CD: Network storage shared across agents
-cache_dir: /mnt/nfs/os-image-composer-cache
-work_dir: /var/tmp/os-image-composer
+cache_dir: /mnt/nfs/ict-cache
+work_dir: /var/tmp/image-composer-tool
 
 # Production: Reliable storage with backup
-cache_dir: /var/cache/os-image-composer
-work_dir: /var/tmp/os-image-composer
+cache_dir: /var/cache/image-composer-tool
+work_dir: /var/tmp/image-composer-tool
 ```
 
 **2. Size Storage Appropriately**
@@ -496,8 +496,8 @@ Create a monitoring script:
 #!/bin/bash
 # /usr/local/bin/check-oic-cache.sh
 
-CACHE_DIR="/var/cache/os-image-composer"
-WORK_DIR="/var/tmp/os-image-composer"
+CACHE_DIR="/var/cache/image-composer-tool"
+WORK_DIR="/var/tmp/image-composer-tool"
 WARN_SIZE_GB=40
 CRIT_SIZE_GB=80
 
@@ -570,20 +570,20 @@ You can place caches on network storage for sharing across build hosts:
 
 ```yaml
 # Global configuration
-cache_dir: /mnt/nfs/os-image-composer-cache
-work_dir: /mnt/nfs/os-image-composer-workspace
+cache_dir: /mnt/nfs/ict-cache
+work_dir: /mnt/nfs/ict-workspace
 ```
 
 **NFS Example:**
 
 ```bash
 # Mount NFS share
-sudo mount -t nfs nfs-server:/export/oic-cache /mnt/nfs/os-image-composer-cache
-sudo mount -t nfs nfs-server:/export/oic-workspace /mnt/nfs/os-image-composer-workspace
+sudo mount -t nfs nfs-server:/export/oic-cache /mnt/nfs/ict-cache
+sudo mount -t nfs nfs-server:/export/oic-workspace /mnt/nfs/ict-workspace
 
-# Configure in /etc/os-image-composer/config.yml
-cache_dir: /mnt/nfs/os-image-composer-cache
-work_dir: /mnt/nfs/os-image-composer-workspace
+# Configure in /etc/image-composer-tool/config.yml
+cache_dir: /mnt/nfs/ict-cache
+work_dir: /mnt/nfs/ict-workspace
 ```
 
 **Considerations:**
@@ -628,15 +628,15 @@ Multiple build hosts can share caches for efficiency:
 
 ```bash
 # Pre-populate cache with minimal build first
-sudo -E os-image-composer build minimal-template.yml
+sudo -E image-composer-tool build minimal-template.yml
 
 # Then build full image (uses cached packages and chroot)
-sudo -E os-image-composer build full-template.yml
+sudo -E image-composer-tool build full-template.yml
 ```
 
 ## Related Documentation
 
-- [Build Process Documentation](./os-image-composer-build-process.md) - How caching integrates with the build pipeline
+- [Build Process Documentation](./image-composer-tool-build-process.md) - How caching integrates with the build pipeline
 - [Architecture Documentation](../architecture.md) - System architecture and runtime directory structure
-- [CLI Reference](./os-image-composer-cli-specification.md) - Complete command-line documentation
-- [Understanding Templates](./os-image-composer-templates.md) - How to create image templates
+- [CLI Reference](./image-composer-tool-cli-specification.md) - Complete command-line documentation
+- [Understanding Templates](./image-composer-tool-templates.md) - How to create image templates

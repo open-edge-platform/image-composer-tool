@@ -10,7 +10,7 @@
 </defs>
 
 <!-- Title -->
-<text x="340" y="30" text-anchor="middle" font-size="16" font-weight="600" fill="#1a1a1a">OS Image Composer - build flow</text>
+<text x="340" y="30" text-anchor="middle" font-size="16" font-weight="600" fill="#1a1a1a">Image Composer Tool (ICT) - build flow</text>
 
 <!-- ═══ BOXES ═══ -->
 <rect x="30" y="50" width="180" height="34" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.5"/>
@@ -30,7 +30,7 @@
 
 <rect x="240" y="50" width="240" height="628" rx="16" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
 <text x="360" y="76" text-anchor="middle" font-size="13" font-weight="600" fill="#085041">Build pipeline</text>
-<text x="360" y="94" text-anchor="middle" font-size="11" fill="#0F6E56">os-image-composer build</text>
+<text x="360" y="94" text-anchor="middle" font-size="11" fill="#0F6E56">image-composer-tool build</text>
 
 <!-- stage boxes -->
 <rect x="258" y="110" width="204" height="54" rx="8" fill="#9FE1CB" stroke="#0F6E56" stroke-width="0.5"/>

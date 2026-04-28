@@ -1,4 +1,4 @@
-# OS Image Composer - Global Configuration
+# ICT - Global Configuration
 # This file contains tool-level settings that apply across all image builds.
 # Image-specific parameters should be defined in the image specification.
 
@@ -37,7 +37,7 @@ logging:
   # - info:  Normal output, shows progress and important events
   # - warn:  Only warnings and errors, minimal output
   # - error: Only errors, very quiet operation
-  file: "os-image-composer.log"
+  file: "image-composer-tool.log"
   # Tee logs to this file in addition to stdout/stderr (overwritten on each run)
 
 # AI-powered template generation configuration (optional)

@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/open-edge-platform/os-image-composer/internal/cache"
+	"github.com/open-edge-platform/image-composer-tool/internal/cache"
 	"github.com/spf13/cobra"
 )
 
@@ -11,7 +11,7 @@ func createCacheCommand() *cobra.Command {
 	cacheCmd := &cobra.Command{
 		Use:   "cache",
 		Short: "Manage cached artifacts",
-		Long: `Manage cache directories used by OS Image Composer.
+		Long: `Manage cache directories used by ICT.
 
 Available commands:
   clean    Remove cached packages or workspace chroot data`,

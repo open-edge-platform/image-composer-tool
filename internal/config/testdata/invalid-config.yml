@@ -1,4 +1,4 @@
-# OS Image Composer - Global Configuration
+# ICT - Global Configuration
 # This file contains tool-level settings that apply across all image builds.
 # Image-specific parameters should be defined in the image specification.
 
@@ -8,12 +8,12 @@ workers: 67
 # Higher values speed up package downloads but consume more network/CPU resources
 # Recommended: 8-16 for most systems, 20+ for high-bandwidth servers
 
-cache_dir: "/var/cache/os-image-composer"   
+cache_dir: "/var/cache/image-composer-tool"   
 # Package cache directory where downloaded RPMs/DEBs are stored (default: ./cache)
 # This directory persists between builds for package reuse
 # Should have sufficient space (typically 1-5GB depending on image size)
 
-work_dir: "/tmp/os-image-composer"
+work_dir: "/tmp/image-composer-tool"
 # Working directory for build operations and image assembly (default: ./workspace)
 # Contains temporary build artifacts, extracted packages, and final images
 # Cleaned up after successful builds

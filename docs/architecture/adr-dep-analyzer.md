@@ -3,7 +3,7 @@
 **Status**: Proposed  
 **Date**: 2026-01-08  
 **Updated**: N/A  
-**Authors**: OS Image Composer Team  
+**Authors**: ICT Team  
 **Technical Area**: Dependency Analysis / Graph Visualization
 
 ---
@@ -11,7 +11,7 @@
 ## Summary
 
 This ADR proposes adding a **dependency graph analyzer** tool (`dep-analyzer`)
-to the OS Image Composer.
+to the ICT.
 
 The tool enables users to:
 - Slice DOT dependency graphs by root package and traversal depth
@@ -28,7 +28,7 @@ without requiring users to learn gvpr or write custom graph programs.
 
 ### Problem Statement
 
-The OS Image Composer generates DOT format dependency graphs via the `--dotfile`
+The ICT generates DOT format dependency graphs via the `--dotfile`
 flag. These graphs visualize package dependencies for Linux OS images and can
 contain hundreds of packages with thousands of dependency edges.
 
@@ -199,14 +199,14 @@ Provides quick answers without generating graph output:
 **Cons**
 
 - Shell script requires graphviz to be installed
-- Limited to DOT format input (by design, matches os-image-composer output)
+- Limited to DOT format input (by design, matches image-composer-tool output)
 - BFS traversal may not suit all analysis patterns
 
 ---
 
 ## Alternatives Considered
 
-### Extend os-image-composer with built-in analysis
+### Extend image-composer-tool with built-in analysis
 
 **Rejected** — Would add complexity to the main tool and require Go
 implementation. A separate utility keeps concerns separated and is faster
@@ -232,7 +232,7 @@ understand our semantic colors.
 ## Non-Goals
 
 - Modifying the original DOT file
-- Generating DOT files (that's os-image-composer's job)
+- Generating DOT files (that's image-composer-tool's job)
 - Real-time or interactive analysis
 - Supporting non-DOT graph formats
 
@@ -263,4 +263,4 @@ The tool handles various error conditions gracefully:
 
 - [Graphviz gvpr documentation](https://graphviz.org/pdf/gvpr.1.pdf)
 - [DOT language specification](https://graphviz.org/doc/info/lang.html)
-- os-image-composer `--dotfile` flag documentation
+- image-composer-tool `--dotfile` flag documentation

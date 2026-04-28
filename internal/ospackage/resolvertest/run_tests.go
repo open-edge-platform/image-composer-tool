@@ -5,7 +5,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 )
 
 // Resolver is interface both rpmutil & debutil satisfy.

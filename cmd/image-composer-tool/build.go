@@ -6,18 +6,18 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/image/isomaker"
-	"github.com/open-edge-platform/os-image-composer/internal/provider"
-	"github.com/open-edge-platform/os-image-composer/internal/provider/azl"
-	"github.com/open-edge-platform/os-image-composer/internal/provider/debian13"
-	"github.com/open-edge-platform/os-image-composer/internal/provider/elxr"
-	"github.com/open-edge-platform/os-image-composer/internal/provider/emt"
-	"github.com/open-edge-platform/os-image-composer/internal/provider/rcd"
-	"github.com/open-edge-platform/os-image-composer/internal/provider/ubuntu"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/display"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/system"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/isomaker"
+	"github.com/open-edge-platform/image-composer-tool/internal/provider"
+	"github.com/open-edge-platform/image-composer-tool/internal/provider/azl"
+	"github.com/open-edge-platform/image-composer-tool/internal/provider/debian13"
+	"github.com/open-edge-platform/image-composer-tool/internal/provider/elxr"
+	"github.com/open-edge-platform/image-composer-tool/internal/provider/emt"
+	"github.com/open-edge-platform/image-composer-tool/internal/provider/rcd"
+	"github.com/open-edge-platform/image-composer-tool/internal/provider/ubuntu"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/display"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 	"github.com/spf13/cobra"
 )
 
@@ -81,7 +81,7 @@ func executeBuild(cmd *cobra.Command, args []string) error {
 
 	// Check if template file is provided as first positional argument
 	if len(args) < 1 {
-		return fmt.Errorf("no template file provided, usage: os-image-composer build [flags] TEMPLATE_FILE")
+		return fmt.Errorf("no template file provided, usage: image-composer-tool build [flags] TEMPLATE_FILE")
 	}
 	templateFile := args[0]
 

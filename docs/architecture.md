@@ -1,11 +1,11 @@
-# OS Image Composer Architecture
+# ICT Architecture
 
 ## Table of Contents
 
-- [OS Image Composer Architecture](#os-image-composer-architecture)
+- [ICT Architecture](#ict-architecture)
   - [Table of Contents](#table-of-contents)
   - [Overview](#overview)
-  - [OS Image Composer System Network Context](#os-image-composer-system-network-context)
+  - [ICT System Network Context](#ict-system-network-context)
     - [Network Security Considerations](#network-security-considerations)
     - [Package Sign Verification](#package-sign-verification)
   - [Components Overview](#components-overview)
@@ -19,7 +19,7 @@
 
 ## Overview
 
-The OS Image Composer is a tool for creating customized OS images from pre-built packages. It takes an image template file (YAML) as input and produces bootable OS images in raw or ISO formats suitable for deployment on bare metal systems, virtual machines, and edge devices.
+The ICT is a tool for creating customized OS images from pre-built packages. It takes an image template file (YAML) as input and produces bootable OS images in raw or ISO formats suitable for deployment on bare metal systems, virtual machines, and edge devices.
 
 The tool uses a layered configuration approach: OS-specific default templates provide base settings for supported distributions (Azure Linux,
 [Edge Microvisor Toolkit](https://docs.openedgeplatform.intel.com/2026.0/edge-microvisor-toolkit/index.html),
@@ -27,21 +27,21 @@ Wind River eLxr, Ubuntu, and Red Hat-compatible distributions), which are merged
 
 Pre-built packages are fetched securely from distribution-specific remote repositories over HTTPS, with automatic dependency resolution and GPG signature verification. The tool maintains local caches for both packages and reusable chroot environments to optimize build performance across multiple image builds.
 
-The following diagram shows the input and output of the OS Image Composer tool:
+The following diagram shows the input and output of the ICT tool:
 
 ![Overview](./architecture/assets/overview.drawio.svg)
 
-## OS Image Composer System Network Context
+## ICT System Network Context
 
-The following diagram shows the network context of the OS Image Composer tool:
+The following diagram shows the network context of the ICT tool:
 
-![OS Image Composer Network Diagram](./architecture/assets/os-image-composer-network-diagram.drawio.svg)
+![ICT Network Diagram](./architecture/assets/image-composer-tool-network-diagram.drawio.svg)
 
 The diagram illustrates how different components of the product's system architecture communicate with each other.
 
 ### Network Security Considerations
 
-The OS Image Composer tool downloads required packages using HTTP requests to the distribution-specific package repositories over TLS 1.2+ connections. Each of the package repositories does server-side validation on the package download requests, so it is expected that the system running the OS Image Composer tool is provisioned with a CA root chain.
+The ICT tool downloads required packages using HTTP requests to the distribution-specific package repositories over TLS 1.2+ connections. Each of the package repositories does server-side validation on the package download requests, so it is expected that the system running the ICT tool is provisioned with a CA root chain.
 
 ### Package Sign Verification
 
@@ -49,11 +49,11 @@ When packages are downloaded, they are verified for integrity by using the GPG p
 
 ## Components Overview
 
-The following diagram outlines the high-level components of the OS Image Composer tool:
+The following diagram outlines the high-level components of the ICT tool:
 
 ![components high level view](./architecture/assets/components.drawio.svg)
 
-The tools for composing an image are grouped under the following components: **Provider**, **Chroot**, **Image**, **OsPackage**, and **Config**. For modularity, each group contains a set of components for the OS Image Composer tool's functions.
+The tools for composing an image are grouped under the following components: **Provider**, **Chroot**, **Image**, **OsPackage**, and **Config**. For modularity, each group contains a set of components for the ICT tool's functions.
 
 The **Provider** component takes data from **Config** as its input, then orchestrates **Chroot**, **Image**, and **OsPackage** components to build the image. **Chroot** libraries are used to create an isolated chroot environment for building the OS image. The **Image** libraries provide general functions for building OS images. The **OsPackage** libraries include utilities for handling Debian and RPM packages. The **Config** component contains configuration data for the image that will be created.
 
@@ -78,7 +78,7 @@ The provider encapsulates all OS-specific logic while maintaining a consistent i
 
 ### Chroot
 
-The OS Image Composer tool generates a `chroot` environment, which is used for the image composition and creation process, isolated from the host operating system's file system. The chroot environment is reused across builds for the same provider, while packages are fetched and cached locally.
+The ICT tool generates a `chroot` environment, which is used for the image composition and creation process, isolated from the host operating system's file system. The chroot environment is reused across builds for the same provider, while packages are fetched and cached locally.
 
 **Key Responsibilities:**
 - Create and manage isolated chroot environments
@@ -122,7 +122,7 @@ The **Config** component contains configuration data for the image that will be 
 
 **Configuration Types:**
 
-1. **Global Configuration** (Default: `os-image-composer/config.yml`)
+1. **Global Configuration** (Default: `image-composer-tool/config.yml`)
    - System-wide settings (cache directories, worker count, logging)
    - Applies to all builds on the system
 
@@ -184,24 +184,24 @@ The build process follows these high-level steps:
 
 ## Related Documentation
 
-- [Understanding the Build Process](./architecture/os-image-composer-build-process.md) - Detailed explanation of build stages
-- [Understanding Caching](./architecture/os-image-composer-caching.md) - How package and chroot caching work
-- [Understanding Templates](./architecture/os-image-composer-templates.md) - How to create and use image templates
-- [Multiple Package Repository Support](./architecture/os-image-composer-multi-repo-support.md) - Adding custom package repositories
-- [OS Image Composer CLI Reference](./architecture/os-image-composer-cli-specification.md) - Complete CLI documentation
+- [Understanding the Build Process](./architecture/image-composer-tool-build-process.md) - Detailed explanation of build stages
+- [Understanding Caching](./architecture/image-composer-tool-caching.md) - How package and chroot caching work
+- [Understanding Templates](./architecture/image-composer-tool-templates.md) - How to create and use image templates
+- [Multiple Package Repository Support](./architecture/image-composer-tool-multi-repo-support.md) - Adding custom package repositories
+- [ICT CLI Reference](./architecture/image-composer-tool-cli-specification.md) - Complete CLI documentation
 
 <!--hide_directive
 :::{toctree}
 :hidden:
 
-CLI Specification <./architecture/os-image-composer-cli-specification.md>
+CLI Specification <./architecture/image-composer-tool-cli-specification.md>
 Security Objectives <./architecture/image-composition-tool-security-objectives.md>
-Build Process <./architecture/os-image-composer-build-process.md>
+Build Process <./architecture/image-composer-tool-build-process.md>
 ./architecture/image-manifest-specification.md
-Coding Style Guide <./architecture/os-image-composer-coding-style.md>
-Caching in OS Image Composer <./architecture/os-image-composer-caching.md>
-Multiple-package Repo Support <./architecture/os-image-composer-multi-repo-support.md>
-Using Templates <./architecture/os-image-composer-templates.md>
+Coding Style Guide <./architecture/image-composer-tool-coding-style.md>
+Caching in ICT <./architecture/image-composer-tool-caching.md>
+Multiple-package Repo Support <./architecture/image-composer-tool-multi-repo-support.md>
+Using Templates <./architecture/image-composer-tool-templates.md>
 Dependency Graph Analyzer <./architecture/adr-dep-analyzer.md>
 Image Inspection and Comparison <./architecture/adr-image-inspect.md>
 Template-Enriched RAG <./architecture/adr-template-enriched-rag.md>

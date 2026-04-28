@@ -1,6 +1,6 @@
-# OS Image Composer
+# ICT
 
-OS Image Composer is a command-line tool for building custom, bootable Linux
+ICT is a command-line tool for building custom, bootable Linux
 images from pre-built packages. Define your requirements in a YAML template,
 run one command to get a RAW image ready for deployment (ISO installers require an extra step; see the Installation Guide).
 
@@ -13,17 +13,17 @@ distributions (rcd10).
 
 ```bash
 # 1. Clone and build (requires Go 1.24+)
-git clone https://github.com/open-edge-platform/os-image-composer.git
-cd os-image-composer
-go build -buildmode=pie -ldflags "-s -w" ./cmd/os-image-composer
+git clone https://github.com/open-edge-platform/image-composer-tool.git
+cd image-composer-tool
+go build -buildmode=pie -ldflags "-s -w" ./cmd/image-composer-tool
 
 # 2. Install prerequisites
 sudo apt install systemd-ukify mmdebstrap
 # Or run it directly:
-go run ./cmd/os-image-composer --help
+go run ./cmd/image-composer-tool --help
 
 # 3. Compose an image
-sudo -E ./os-image-composer build image-templates/azl3-x86_64-edge-raw.yml
+sudo -E ./image-composer-tool build image-templates/azl3-x86_64-edge-raw.yml
 ```
 
 For build options (Earthly, Debian package) and prerequisite details, see the
@@ -35,9 +35,9 @@ For build options (Earthly, Debian package) and prerequisite details, see the
 |-------|-------------|
 | [Installation Guide](./tutorial/installation.md) | Build methods, Debian packaging, prerequisites |
 | [Usage Guide](./tutorial/usage-guide.md) | CLI commands, configuration, build output, shell completion |
-| [CLI Reference](./architecture/os-image-composer-cli-specification.md) | Complete command-line specification |
-| [Image Templates](./architecture/os-image-composer-templates.md) | Template structure, variables, best practices |
-| [Build Process](./architecture/os-image-composer-build-process.md) | Pipeline stages, caching, troubleshooting |
+| [CLI Reference](./architecture/image-composer-tool-cli-specification.md) | Complete command-line specification |
+| [Image Templates](./architecture/image-composer-tool-templates.md) | Template structure, variables, best practices |
+| [Build Process](./architecture/image-composer-tool-build-process.md) | Pipeline stages, caching, troubleshooting |
 | [Architecture](./architecture.md) | System design and component overview |
 
 ## Tutorials
@@ -52,19 +52,19 @@ For build options (Earthly, Debian package) and prerequisite details, see the
 
 ## Get Help
 
-- Run `os-image-composer --help` (using the binary path from your install method)
-- [Start a discussion](https://github.com/open-edge-platform/os-image-composer/discussions)
-- [Troubleshoot build issues](./architecture/os-image-composer-build-process.md#troubleshooting-build-issues)
+- Run `image-composer-tool --help` (using the binary path from your install method)
+- [Start a discussion](https://github.com/open-edge-platform/image-composer-tool/discussions)
+- [Troubleshoot build issues](./architecture/image-composer-tool-build-process.md#troubleshooting-build-issues)
 
 ## Contribute
 
-- [Open an issue](https://github.com/open-edge-platform/os-image-composer/issues)
-- [Report a security vulnerability](https://github.com/open-edge-platform/os-image-composer/blob/main/SECURITY.md)
-- [Submit a pull request](https://github.com/open-edge-platform/os-image-composer/pulls)
+- [Open an issue](https://github.com/open-edge-platform/image-composer-tool/issues)
+- [Report a security vulnerability](https://github.com/open-edge-platform/image-composer-tool/blob/main/SECURITY.md)
+- [Submit a pull request](https://github.com/open-edge-platform/image-composer-tool/pulls)
 
 ## License
 
-[MIT](https://github.com/open-edge-platform/os-image-composer/blob/main/LICENSE)
+[MIT](https://github.com/open-edge-platform/image-composer-tool/blob/main/LICENSE)
 
 <!--hide_directive
 :::{toctree}
