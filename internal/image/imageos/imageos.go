@@ -683,9 +683,8 @@ func (imageOs *ImageOs) installImagePkgs(installRoot string, template *config.Im
 						strings.Contains(output, "No such file or directory") {
 						log.Debugf("Expected chroot error for %s: EFI variables cannot be accessed in chroot environment. Package files are installed correctly.", pkg)
 					} else {
-						log.Errorf("Failed to install package %s: %v", pkg, err)
+						log.Errorf("Error during package install: %s: %v", pkg, err)
 						log.Errorf("Full apt-get output:\n%s", output)
-						return fmt.Errorf("failed to install package %s: %w\napt output:\n%s", pkg, err, output)
 					}
 				}
 			} else {
