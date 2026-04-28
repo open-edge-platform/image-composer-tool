@@ -211,11 +211,10 @@ func GenerateDot(pkgs []ospackage.PackageInfo, file string, pkgSources map[strin
 				continue
 			}
 			cleanDep := dep
-
-			// If using fallback Requires field, apply extraction to handle filenames and capabilities
-			if len(pkg.RequiresPkgNames) == 0 {
+			// Only trim if it looks like a package filename (contains .rpm)
+			if (strings.Contains(cleanDep, ".rpm") || strings.Contains(cleanDep, ".so.")) {
 				// Extract clean dependency name for edges (handles capabilities and package requirements)
-				cleanDep = extractBaseRequirement(dep)
+				cleanDep = extractBaseRequirement(cleanDep)
 				// Also trim package filenames (e.g., "glibc-2.38-16.azl3.x86_64.rpm" -> "glibc")
 				cleanDep = extractBasePackageNameFromFile(cleanDep)
 			}
@@ -443,7 +442,7 @@ func ParseRepositoryMetadata(baseURL, gzHref string, packageFilter []string) ([]
 								} else if section == "requires" {
 									// Store the base name in Requires
 									curInfo.Requires = append(curInfo.Requires, name)
-
+									curInfo.RequiresPkgNames = append(curInfo.Requires, name)
 									// Store version constraint with package name prefix in RequiresVer
 									if version != "" || release != "" || epoch != "" || flags != "" {
 										versionPart := ""
@@ -737,9 +736,11 @@ func ResolveDependencies(requested []ospackage.PackageInfo, all []ospackage.Pack
 	// Clear required fields for all and requested
 	for i := range all {
 		all[i].Requires = nil
+		all[i].RequiresPkgNames = nil
 	}
 	for i := range requested {
 		requested[i].Requires = nil
+		requested[i].RequiresPkgNames = nil
 	}
 
 	neededSet := make(map[string]struct{})
