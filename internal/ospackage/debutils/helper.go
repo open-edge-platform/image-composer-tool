@@ -15,6 +15,47 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
 
+// DetectDebSuiteFromSourcesList parses a Debian sources.list file and returns the
+// suite (e.g. "focal", "bookworm"). Falls back to "stable" when the suite cannot
+// be determined.
+func DetectDebSuiteFromSourcesList(sourcesListPath string) string {
+	log := logger.Logger()
+	const defaultSuite = "stable"
+
+	content, err := os.ReadFile(sourcesListPath)
+	if err != nil {
+		log.Warnf("Failed to read local sources list %s, defaulting suite to %s: %v", sourcesListPath, defaultSuite, err)
+		return defaultSuite
+	}
+
+	for _, rawLine := range strings.Split(string(content), "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		fields := strings.Fields(line)
+		if len(fields) < 3 || fields[0] != "deb" {
+			continue
+		}
+
+		idx := 1
+		if strings.HasPrefix(fields[idx], "[") {
+			for idx < len(fields) && !strings.HasSuffix(fields[idx], "]") {
+				idx++
+			}
+			idx++
+		}
+
+		if idx+1 < len(fields) {
+			return fields[idx+1]
+		}
+	}
+
+	log.Warnf("Could not determine suite from %s, defaulting to %s", sourcesListPath, defaultSuite)
+	return defaultSuite
+}
+
 // GenerateSPDXFileName creates a SPDX manifest filename based on repository configuration
 func GenerateSPDXFileName(repoNm string) string {
 	timestamp := time.Now().Format("20060102_150405")
