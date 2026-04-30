@@ -188,7 +188,6 @@ The build process follows these high-level steps:
 - [Understanding Caching](./architecture/image-composer-tool-caching.md) - How package and chroot caching work
 - [Understanding Templates](./architecture/image-composer-tool-templates.md) - How to create and use image templates
 - [Multiple Package Repository Support](./architecture/image-composer-tool-multi-repo-support.md) - Adding custom package repositories
-- [ARM64 GRUB and UKI Architecture](./architecture/image-composer-tool-arm64-grub-uki-architecture.md) - Architecture specification for Ubuntu, eLxr, and Azure Linux ARM64 image composition
 - [ICT CLI Reference](./architecture/image-composer-tool-cli-specification.md) - Complete CLI documentation
 
 <!--hide_directive
