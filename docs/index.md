@@ -50,7 +50,6 @@ For build options (Earthly, Debian package) and prerequisite details, see the
 | [Configure Users](./tutorial/configure-image-user.md) | Adding users to images |
 | [Custom Build Actions](./tutorial/configure-additional-actions-for-build.md) | Pre/post-build scripts |
 | [Multiple Repos](./tutorial/configure-multiple-package-repositories.md) | Using multiple package repositories |
-| [ARM64 Image Creation](./tutorial/arm64-image-creation-guide.md) | End-to-end ARM64 image build workflows and checks |
 
 ## Get Help
 

@@ -198,7 +198,6 @@ CLI Specification <./architecture/image-composer-tool-cli-specification.md>
 Security Objectives <./architecture/image-composition-tool-security-objectives.md>
 Build Process <./architecture/image-composer-tool-build-process.md>
 ./architecture/image-manifest-specification.md
-./architecture/image-composer-tool-arm64-grub-uki-architecture.md
 Coding Style Guide <./architecture/image-composer-tool-coding-style.md>
 Caching in ICT <./architecture/image-composer-tool-caching.md>
 Multiple-package Repo Support <./architecture/image-composer-tool-multi-repo-support.md>

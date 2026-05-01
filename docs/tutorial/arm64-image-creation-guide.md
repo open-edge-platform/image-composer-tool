@@ -39,10 +39,12 @@ This guide covers both ARM64 boot paths used in this repository:
 go build -buildmode=pie -ldflags "-s -w" ./cmd/image-composer-tool
 ```
 
-2. Install core host dependencies (Ubuntu host recommended):
-The following software packages are the prerequisite packages on the Host Platform. However, currently the ICT tool itself will automatically install these dependencies at runtime.
+2. Verify host dependencies (Ubuntu host recommended):
+ICT automatically installs the following packages at runtime, but you can pre-install them to speed up subsequent builds:
 
- systemd-ukify mmdebstrap qemu-user-static arch-test binfmt-support grub-common sbsigntool dosfstools mtools xorriso qemu-utils
+```bash
+sudo apt install systemd-ukify mmdebstrap qemu-user-static arch-test binfmt-support grub-common sbsigntool dosfstools mtools xorriso qemu-utils
+```
 
 3. Use `sudo -E` for builds (required for loop devices, mounts, chroot operations):
 
@@ -88,6 +90,8 @@ sudo -E ./image-composer-tool build image-templates/ubuntu24-aarch64-minimal-raw
 ```
 
 ### Ubuntu ARM64 (UKI)
+
+> **Note:** Ubuntu UKI images composed with ICT are currently **not bootable** (see [Known issues](#known-issues)). The build command is provided for reference and testing purposes only.
 
 ```bash
 sudo -E ./image-composer-tool build image-templates/ubuntu24-aarch64-minimal-uki.yml
