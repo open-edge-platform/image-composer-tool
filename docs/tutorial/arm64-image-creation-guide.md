@@ -89,7 +89,11 @@ For ARM64, use UEFI boot. Do not use legacy boot mode.
 sudo -E ./image-composer-tool build image-templates/ubuntu24-aarch64-minimal-raw.yml
 ```
 
-### Ubuntu ARM64 (UKI)
+### Ubuntu ARM64 (UKI, experimental / currently non-bootable)
+
+This command is provided for experimental inspection and development only. It may produce a UKI artifact,
+but Ubuntu UKI images composed using ICT are currently **not expected to boot** on ARM64 UEFI systems.
+Use the Ubuntu ARM64 GRUB template above for a bootable Ubuntu image.
 
 > **Note:** Ubuntu UKI images composed with ICT are currently **not bootable** (see [Known issues](#known-issues)). The build command is provided for reference and testing purposes only.
 
