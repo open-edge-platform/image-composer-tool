@@ -53,6 +53,7 @@ metadata:
     - gpu
     - npu
     - level-zero
+    - dkms
     - ubuntu
     - iso
     - bootable
@@ -202,7 +203,7 @@ systemConfig:
     - cmd: "printf 'Package: libflann*\\nPin: version 1.19.*\\nPin-Priority: -1\\n\\nPackage: flann*\\nPin: version 1.19.*\\nPin-Priority: -1\\n' > /etc/apt/preferences.d/eci-flann-block"
     # Pin OneAPI runtime deps to 2025.3.*
     - cmd: "printf 'Package: intel-oneapi-runtime-*\\nPin: version 2025.3.*\\nPin-Priority: 1001\\n' > /etc/apt/preferences.d/oneapi"
-    # OpenVINO version pins (match init_jazzy.sh exactly)
+    # OpenVINO version pins (match setup-robotics-jazzy.sh exactly)
     - cmd: "printf 'Package: openvino-libraries-dev\\nPin: version 2025.3.0*\\nPin-Priority: 1001\\n\\nPackage: openvino\\nPin: version 2025.3.0*\\nPin-Priority: 1001\\n\\nPackage: ros-jazzy-openvino-wrapper-lib\\nPin: version 2025.3.0*\\nPin-Priority: 1002\\n\\nPackage: ros-jazzy-openvino-node\\nPin: version 2025.3.0*\\nPin-Priority: 1002\\n' > /etc/apt/preferences.d/intel-openvino"
     # RealSense SDK version pin for post-deployment upgrade protection.
     - cmd: "printf 'Package: librealsense2\\nPin: version 2.56.5-0~realsense.17055\\nPin-Priority: 1001\\n' > /etc/apt/preferences.d/librealsense"
