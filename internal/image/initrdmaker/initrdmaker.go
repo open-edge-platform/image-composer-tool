@@ -7,17 +7,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/open-edge-platform/os-image-composer/internal/chroot"
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/config/manifest"
-	"github.com/open-edge-platform/os-image-composer/internal/image/imageos"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage/debutils"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage/rpmutils"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/file"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/mount"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/system"
+	"github.com/open-edge-platform/image-composer-tool/internal/chroot"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/config/manifest"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/imageos"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/debutils"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/rpmutils"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/file"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/mount"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
 
 type InitrdMakerInterface interface {

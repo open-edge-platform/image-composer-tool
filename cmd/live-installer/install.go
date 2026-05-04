@@ -6,17 +6,17 @@ import (
 	"path/filepath"
 	"strings"
 
-	attendedinstaller "github.com/open-edge-platform/os-image-composer/cmd/live-installer/texture-ui"
-	"github.com/open-edge-platform/os-image-composer/internal/chroot"
-	"github.com/open-edge-platform/os-image-composer/internal/chroot/chrootbuild"
-	"github.com/open-edge-platform/os-image-composer/internal/chroot/deb"
-	"github.com/open-edge-platform/os-image-composer/internal/chroot/rpm"
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/image/imagedisc"
-	"github.com/open-edge-platform/os-image-composer/internal/image/imageos"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/file"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/security"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
+	attendedinstaller "github.com/open-edge-platform/image-composer-tool/cmd/live-installer/texture-ui"
+	"github.com/open-edge-platform/image-composer-tool/internal/chroot"
+	"github.com/open-edge-platform/image-composer-tool/internal/chroot/chrootbuild"
+	"github.com/open-edge-platform/image-composer-tool/internal/chroot/deb"
+	"github.com/open-edge-platform/image-composer-tool/internal/chroot/rpm"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/imagedisc"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/imageos"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/file"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/security"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
 
 func newChrootBuilder(configDir, localRepo, targetOs, targetDist, targetArch string) (*chrootbuild.ChrootBuilder, error) {
@@ -104,6 +104,12 @@ func dependencyCheck(targetOs string) error {
 			"mkfs.fat":    "dosfstools", // For the FAT32 boot partition creation
 			"veritysetup": "cryptsetup", // For the veritysetup command
 			//"sbsign":      "sbsigntools", // For the UKI image creation
+		}
+	case "debian":
+		dependencyInfo = map[string]string{
+			"mmdebstrap":  "mmdebstrap", // For the chroot env build
+			"mkfs.fat":    "dosfstools", // For the FAT32 boot partition creation
+			"veritysetup": "cryptsetup", // For the veritysetup command
 		}
 	default:
 		return fmt.Errorf("unsupported target OS for dependency check: %s", targetOs)
@@ -218,7 +224,7 @@ func removeOldBootEntries() error {
 			}
 			bootnum := parts[0][4:8] // Boot0001 -> 0001
 			label := strings.Join(parts[1:], " ")
-			if strings.Contains(label, "OS Image Composer") {
+			if strings.Contains(label, "ICT") {
 				log.Infof("Removing old boot entry: %s (%s)", bootnum, label)
 				cmdStr := fmt.Sprintf("efibootmgr --delete-bootnum --bootnum %s", bootnum)
 				if _, err := shell.ExecCmd(cmdStr, true, shell.HostPath, nil); err != nil {
@@ -261,7 +267,7 @@ func createNewBootEntry(template *config.ImageTemplate, diskPathIdMap map[string
 	log.Infof("Creating new boot entry for disk %s partition %s", diskPath, partNum)
 	cmdStr := fmt.Sprintf("efibootmgr --create --disk %s --part %s", diskPath, partNum)
 	cmdStr += " --loader /EFI/BOOT/bootx64.efi"
-	cmdStr += " --label 'OS Image Composer' --verbose"
+	cmdStr += " --label 'ICT' --verbose"
 
 	if _, err := shell.ExecCmdWithStream(cmdStr, true, shell.HostPath, nil); err != nil {
 		log.Errorf("Failed to create new boot entry: %v", err)

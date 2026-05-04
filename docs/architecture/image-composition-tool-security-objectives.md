@@ -1,13 +1,13 @@
-# OS Image Composer Tool Security Objectives
+# ICT Tool Security Objectives
 
-The OS Image Composer tool enables you to build minimal, verifiable, and secure
+The ICT tool enables you to build minimal, verifiable, and secure
 operating system images so you can reduce the attack surface of images and
 simplify the adoption of modern boot mechanisms. The tool lets you encrypt
 partitions, use dm-verity for root protection, and support Secure Boot.
 
 ## 1. Reduced Attack Surface
 
-The OS Image Composer tool allows customization, enabling the inclusion of only
+The ICT tool allows customization, enabling the inclusion of only
 necessary kernel features and executables, reducing the overall attack surface
 as defined by the user.
 
@@ -30,6 +30,6 @@ mechanism, potentially improving edge node security by supporting secure boot.
 
 ## 4. Partition Customization
 
-The OS Image Composer tool allows you to customize the partition layout,
+The ICT tool allows you to customize the partition layout,
 including optionally encrypting root partitions, customizing partition sizes,
 and adding partitions for security.

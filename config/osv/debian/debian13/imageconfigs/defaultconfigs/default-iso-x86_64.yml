@@ -1,0 +1,93 @@
+image:
+  name: minimal-os-image-debian
+  version: "13.0"
+
+target:
+  os: debian # Target OS name
+  dist: debian13 # Target OS distribution
+  arch: x86_64 # Target OS architecture
+  imageType: iso # Image type, valid value: [raw, iso].
+
+disk:
+  name: Default_ISO
+  partitionTableType: gpt # Partition table type, valid value: [gpt, mbr]
+  partitions: # Required for raw, optional for ISO, not needed for rootfs.
+    - id: boot
+      type: esp
+      flags:
+        - esp
+        - boot
+      start: 1MiB
+      end: 513MiB
+      fsType: fat32
+      mountPoint: /boot/efi
+
+    - id: rootfs
+      type: linux-root-amd64
+      start: 513MiB
+      end: "0"  # 0 means use the rest of the disk space
+      fsType: ext4
+      mountPoint: /
+
+systemConfig:
+  name: Default_ISO
+  description: Default yml configuration for ISO image
+
+  initramfs:
+    template: default-initrd-x86_64.yml
+
+  bootloader:
+    bootType: efi # (efi or legacy)
+    provider: grub # (grub for efi and legacy mode, or systemd-boot for efi mode)
+
+  immutability:
+    enabled: false
+
+  packages:
+    - apt
+    - base-files
+    - bash
+    - cryptsetup-bin
+    - dhcpcd-base
+    - eject
+    - efibootmgr
+    - firmware-intel-graphics
+    - firmware-intel-misc
+    - firmware-iwlwifi
+    - grub-efi-amd64-bin
+    - grub-pc-bin
+    - grub2-common
+    - systemd-boot
+    - dracut-core
+    - init
+    - iproute2
+    - iputils-ping
+    - less
+    - locales
+    - lsb-release
+    - mawk
+    - wireless-regdb
+    - netcat-openbsd
+    - netplan.io
+    - openssh-server
+    - procps
+    - sensible-utils
+    - sudo
+    - systemd
+    - systemd-resolved
+    - systemd-timesyncd
+    - vim
+    - whiptail
+    - xorriso
+
+  additionalFiles:
+    - local: ../additionalfiles/dhcp.network
+      final: /etc/systemd/network/dhcp.network
+    - local: ../additionalfiles/debian-trixie.list
+      final: /etc/apt/sources.list.d/debian-trixie.list
+
+  kernel:
+    version: "6.12.74"
+    cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
+    packages:
+      - linux-image-amd64

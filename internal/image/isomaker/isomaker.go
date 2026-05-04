@@ -1,21 +1,23 @@
 package isomaker
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/open-edge-platform/os-image-composer/internal/chroot"
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/config/manifest"
-	"github.com/open-edge-platform/os-image-composer/internal/image/imageos"
-	"github.com/open-edge-platform/os-image-composer/internal/image/initrdmaker"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/file"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/system"
+	"github.com/open-edge-platform/image-composer-tool/internal/chroot"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/config/manifest"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/imageos"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/initrdmaker"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/file"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
 
 type IsoMakerInterface interface {
@@ -31,7 +33,7 @@ type IsoMaker struct {
 	InitrdMaker   initrdmaker.InitrdMakerInterface
 }
 
-const IsoLabel = "OIC_CDROM"
+const IsoLabel = "ICT_CDROM"
 
 var log = logger.Logger()
 
@@ -128,6 +130,10 @@ func (isoMaker *IsoMaker) buildInitrd(template *config.ImageTemplate) error {
 			return fmt.Errorf("failed to get initrd template: %w", err)
 		}
 
+		if err := ValidateAdditionalFiles(initrdTemplate); err != nil {
+			return fmt.Errorf("ISO build prerequisites not met: %w", err)
+		}
+
 		isoMaker.InitrdMaker, err = initrdmaker.NewInitrdMaker(isoMaker.ChrootEnv, initrdTemplate)
 		if err != nil {
 			return fmt.Errorf("failed to create initrd maker: %w", err)
@@ -161,6 +167,94 @@ func (isoMaker *IsoMaker) getInitrdTemplate(template *config.ImageTemplate) (*co
 	}
 
 	return initrdTemplate, nil
+}
+
+// ValidateISOPrerequisites checks that all prerequisites for an ISO build are
+// met before starting expensive operations. Call this early (before provider init
+// or package download) to fail fast on missing files like live-installer.
+func ValidateISOPrerequisites(template *config.ImageTemplate) error {
+	initrdTemplateFilePath, err := template.GetInitramfsTemplate()
+	if err != nil {
+		return fmt.Errorf("failed to resolve initramfs template: %w", err)
+	}
+
+	initrdTemplate, err := config.LoadAndMergeTemplate(initrdTemplateFilePath)
+	if err != nil {
+		return fmt.Errorf("failed to load initrd template for validation: %w", err)
+	}
+
+	return ValidateAdditionalFiles(initrdTemplate)
+}
+
+// ValidateAdditionalFiles checks that all additional files referenced in the
+// template exist before starting expensive build operations. This catches
+// missing dependencies like the live-installer binary early.
+func ValidateAdditionalFiles(template *config.ImageTemplate) error {
+	if template == nil {
+		return fmt.Errorf("template cannot be nil")
+	}
+
+	for _, fileInfo := range template.SystemConfig.AdditionalFiles {
+		if fileInfo.Local == "" || fileInfo.Final == "" {
+			continue
+		}
+
+		if filepath.IsAbs(fileInfo.Local) {
+			if err := checkFileExists(fileInfo.Local); err != nil {
+				return liveInstallerHintOrError(fileInfo.Local, fileInfo.Final, err)
+			}
+			continue
+		}
+
+		var lastErr error
+		found := false
+		for _, tmplPath := range template.PathList {
+			candidatePath := filepath.Join(filepath.Dir(tmplPath), fileInfo.Local)
+			if err := checkFileExists(candidatePath); err == nil {
+				found = true
+				break
+			} else if !errors.Is(err, fs.ErrNotExist) {
+				lastErr = err
+			}
+		}
+		if !found {
+			if lastErr != nil {
+				return fmt.Errorf("cannot access additional file %s: %w", fileInfo.Local, lastErr)
+			}
+			return liveInstallerHintOrError(fileInfo.Local, fileInfo.Final, nil)
+		}
+	}
+	return nil
+}
+
+// checkFileExists verifies the path exists and is a regular file (not a directory).
+func checkFileExists(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return fmt.Errorf("path is a directory, expected a regular file: %s", path)
+	}
+	return nil
+}
+
+// liveInstallerHintOrError returns an actionable error with build instructions
+// if the missing file is live-installer, otherwise a generic missing file error.
+func liveInstallerHintOrError(local, final string, wrapped error) error {
+	if isLiveInstaller(local) || isLiveInstaller(final) {
+		return fmt.Errorf("live-installer binary not found (referenced as %s). "+
+			"Build it first: go build -buildmode=pie -o ./build/live-installer ./cmd/live-installer",
+			local)
+	}
+	if wrapped != nil {
+		return fmt.Errorf("required file not accessible: %s (target: %s): %w", local, final, wrapped)
+	}
+	return fmt.Errorf("required additional file not found: %s (target: %s)", local, final)
+}
+
+func isLiveInstaller(path string) bool {
+	return strings.Contains(path, "live-installer")
 }
 
 func (isoMaker *IsoMaker) copyConfigFilesToIso(template *config.ImageTemplate, installRoot string) error {

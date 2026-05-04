@@ -1,0 +1,69 @@
+image:
+  name: minimal-os-image-ubuntu
+  version: "26.04"
+
+target:
+  os: ubuntu
+  dist: ubuntu26
+  arch: x86_64
+  imageType: img # Image type, valid value: [raw, iso].
+
+systemConfig:
+  name: Default_Initrd
+  description: Default yml configuration for initrd image
+
+  bootloader:
+    bootType: efi # (efi or legacy)
+    provider: grub # (grub for efi and legacy mode, or systemd-boot for efi mode)
+
+  packages:
+    - ca-certificates
+    - vim
+    - sudo
+    - net-tools
+    - openssh-client
+    - openssh-server
+    - procps
+    - less
+    - dbus
+    - policykit-1
+    - dosfstools
+    - efibootmgr
+    - eject
+    - curl
+    - mmdebstrap
+    - wget
+    - cryptsetup
+    - systemd-resolved
+    - cloud-guest-utils
+    - xterm
+    - initramfs-tools
+    - systemd-boot
+    - grub-pc-bin
+    - grub-efi-amd64-bin
+
+
+  additionalFiles:
+    - local: ../additionalfiles/dhcp.network
+      final: /etc/systemd/network/dhcp.network
+    - local: ../additionalfiles/ubuntu-resolute.list
+      final: /etc/apt/sources.list.d/ubuntu-resolute.list
+    - local: ../additionalfiles/getty@.service
+      final: /usr/lib/systemd/system/getty@.service
+    - local: ../additionalfiles/serial-getty@.service
+      final: /usr/lib/systemd/system/serial-getty@.service
+    - local: ../../../../../../general/isolinux/attendedinstaller
+      final: /root/attendedinstaller
+    - local: ../../../../../../../build/live-installer
+      final: /usr/bin/live-installer
+
+  users:
+    - name: root
+      startupScript: "/root/attendedinstaller"
+
+  kernel:
+    name: kernel
+    version: "6.17"
+    cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
+    packages:
+      - linux-image-generic

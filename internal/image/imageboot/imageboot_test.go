@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
 
 func setupConfigDir(t *testing.T) string {
@@ -824,6 +824,41 @@ func TestGetGrubVersion(t *testing.T) {
 				if result != tt.expected {
 					t.Errorf("Expected %s, but got %s", tt.expected, result)
 				}
+			}
+		})
+	}
+}
+
+func TestGetGrubEfiTarget(t *testing.T) {
+	tests := []struct {
+		name      string
+		arch      string
+		expected  string
+		wantError bool
+	}{
+		{name: "empty_defaults_to_x86_64", arch: "", expected: "x86_64-efi", wantError: false},
+		{name: "amd64", arch: "amd64", expected: "x86_64-efi", wantError: false},
+		{name: "x86_64", arch: "x86_64", expected: "x86_64-efi", wantError: false},
+		{name: "arm64", arch: "arm64", expected: "arm64-efi", wantError: false},
+		{name: "aarch64", arch: "aarch64", expected: "arm64-efi", wantError: false},
+		{name: "unsupported", arch: "riscv64", expected: "", wantError: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := getGrubEfiTarget(tt.arch)
+			if tt.wantError {
+				if err == nil {
+					t.Errorf("expected error for arch %q, got nil", tt.arch)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("expected no error for arch %q, got: %v", tt.arch, err)
+			}
+			if result != tt.expected {
+				t.Errorf("getGrubEfiTarget(%q) = %q, expected %q", tt.arch, result, tt.expected)
 			}
 		})
 	}

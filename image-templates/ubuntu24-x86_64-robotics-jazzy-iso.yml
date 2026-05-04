@@ -7,7 +7,7 @@
 # Intel RealSense camera libraries, Intel NPU drivers, Mesa GPU stack, and more.
 #
 # Usage:
-#   sudo -E ./os-image-composer build image-templates/ubuntu24-x86_64-robotics-jazzy-iso.yml
+#   sudo -E ./image-composer-tool build image-templates/ubuntu24-x86_64-robotics-jazzy-iso.yml
 #
 # Flash to USB:
 #   sudo dd if=builds/robotics-jazzy-ubuntu24-24.04.iso of=/dev/sdX bs=4M status=progress conv=fsync

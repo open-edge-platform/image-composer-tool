@@ -2,6 +2,8 @@ package rpmutils
 
 import (
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"path/filepath"
 	"sort"
@@ -9,8 +11,12 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
+	"os"
+
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/network"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
 
 const defaultRepoPriority = 500
@@ -844,4 +850,151 @@ func GenerateSPDXFileName(repoNm string) string {
 	timestamp := time.Now().Format("20060102_150405")
 	SPDXFileNm := filepath.Join("spdx_manifest_rpm_" + strings.ReplaceAll(repoNm, " ", "_") + "_" + timestamp + ".json")
 	return SPDXFileNm
+}
+
+func CreateTemporaryRepository(sourcePath, repoName string) (repoPath, serverURL string, cleanup func(), err error) {
+	log := logger.Logger()
+
+	// Validate input path
+	sourcePath, err = filepath.Abs(sourcePath)
+	if err != nil {
+		return "", "", nil, fmt.Errorf("failed to get absolute path of source directory: %w", err)
+	}
+
+	sourceInfo, err := os.Stat(sourcePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", "", nil, fmt.Errorf("source directory does not exist: %s", sourcePath)
+		}
+		return "", "", nil, fmt.Errorf("failed to stat source directory %s: %w", sourcePath, err)
+	}
+
+	if !sourceInfo.IsDir() {
+		return "", "", nil, fmt.Errorf("source path is not a directory: %s", sourcePath)
+	}
+
+	// Check if source contains RPM files
+	pattern := filepath.Join(sourcePath, "*.rpm")
+	rpmFiles, err := filepath.Glob(pattern)
+	if err != nil {
+		return "", "", nil, fmt.Errorf("failed to search for RPM files in %s: %w", sourcePath, err)
+	}
+	if len(rpmFiles) == 0 {
+		return "", "", nil, fmt.Errorf("no RPM files found in source directory: %s", sourcePath)
+	}
+
+	log.Infof("found %d RPM files in source directory: %s", len(rpmFiles), sourcePath)
+
+	// Create temporary repository directory
+	tempRepoPath, err := os.MkdirTemp("", fmt.Sprintf("rpmrepo_%s_*", repoName))
+	if err != nil {
+		return "", "", nil, fmt.Errorf("failed to create temporary repository directory: %w", err)
+	}
+
+	// Create Packages subdirectory for proper RPM repository structure
+	packagesPath := filepath.Join(tempRepoPath, "Packages")
+	if err := os.MkdirAll(packagesPath, 0755); err != nil {
+		// Clean up on failure
+		os.RemoveAll(tempRepoPath)
+		return "", "", nil, fmt.Errorf("failed to create Packages directory: %w", err)
+	}
+
+	log.Infof("created temporary repository directory: %s", tempRepoPath)
+
+	// Copy all RPM files from source to Packages subdirectory without shelling out.
+	for _, rpmFile := range rpmFiles {
+		dstPath := filepath.Join(packagesPath, filepath.Base(rpmFile))
+		if err := copyFile(rpmFile, dstPath); err != nil {
+			// Clean up on failure
+			os.RemoveAll(tempRepoPath)
+			return "", "", nil, fmt.Errorf("failed to copy RPM file %s to temporary repository: %w", rpmFile, err)
+		}
+	}
+
+	log.Infof("copied RPM files from %s to %s", sourcePath, packagesPath)
+
+	// Generate repository metadata using createrepo_c (run on repository root)
+	createrepoCmd := fmt.Sprintf("createrepo_c %s", tempRepoPath)
+	output, err := shell.ExecCmd(createrepoCmd, false, shell.HostPath, nil)
+	if err != nil {
+		// Clean up on failure
+		os.RemoveAll(tempRepoPath)
+		return "", "", nil, fmt.Errorf("failed to create repository metadata: %w", err)
+	}
+
+	log.Debugf("createrepo_c output: %s", output)
+	log.Infof("generated repository metadata for %s", tempRepoPath)
+
+	// Verify that the repository structure was created correctly
+	repoDataPath := filepath.Join(tempRepoPath, "repodata", "repomd.xml")
+	if _, err := os.Stat(repoDataPath); os.IsNotExist(err) {
+		// Clean up on failure
+		os.RemoveAll(tempRepoPath)
+		return "", "", nil, fmt.Errorf("repository metadata was not created properly: missing %s", repoDataPath)
+	}
+
+	log.Infof("verified repository metadata exists: %s", repoDataPath)
+
+	// Start HTTP server to serve the repository
+	serverURL, serverCleanup, err := network.ServeRepositoryHTTP(tempRepoPath)
+	if err != nil {
+		// Clean up repository if server fails
+		os.RemoveAll(tempRepoPath)
+		return "", "", nil, fmt.Errorf("failed to serve repository via HTTP: %w", err)
+	}
+
+	// Combined cleanup function
+	cleanup = func() {
+		serverCleanup()            // Stop HTTP server first
+		os.RemoveAll(tempRepoPath) // Then remove repository directory
+	}
+
+	// Verify HTTP server is working by fetching repomd.xml
+	repomdURL := serverURL + "/repodata/repomd.xml"
+	log.Infof("verifying HTTP server by fetching: %s", repomdURL)
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(repomdURL)
+	if err != nil {
+		// Clean up if verification fails
+		cleanup()
+		return "", "", nil, fmt.Errorf("failed to verify HTTP server - could not fetch repomd.xml: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		// Clean up if verification fails
+		cleanup()
+		return "", "", nil, fmt.Errorf("failed to verify HTTP server - repomd.xml returned status %d", resp.StatusCode)
+	}
+
+	log.Infof("HTTP server verification successful - repomd.xml accessible at %s", repomdURL)
+
+	log.Infof("successfully created and serving temporary RPM repository: %s", tempRepoPath)
+	return tempRepoPath, serverURL, cleanup, nil
+}
+
+func copyFile(srcPath, dstPath string) error {
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return fmt.Errorf("failed to open source file %s: %w", srcPath, err)
+	}
+	defer src.Close()
+
+	srcInfo, err := src.Stat()
+	if err != nil {
+		return fmt.Errorf("failed to stat source file %s: %w", srcPath, err)
+	}
+
+	dst, err := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, srcInfo.Mode())
+	if err != nil {
+		return fmt.Errorf("failed to create destination file %s: %w", dstPath, err)
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, src); err != nil {
+		return fmt.Errorf("failed to copy file data from %s to %s: %w", srcPath, dstPath, err)
+	}
+
+	return nil
 }

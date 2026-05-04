@@ -3,7 +3,7 @@
 **Status**: Proposed  
 **Date**: 2026-01-05  
 **Updated**: 2026-01-05  
-**Authors**: OS Image Composer Team  
+**Authors**: ICT Team  
 **Technical Area**: AI/ML, Template Generation
 
 ---
@@ -18,7 +18,7 @@ This ADR proposes a Template-Enriched RAG (Retrieval-Augmented Generation) archi
 
 ### Problem Statement
 
-OS Image Composer needs an AI-powered system that generates production-ready YAML templates from natural language descriptions. The system must:
+ICT needs an AI-powered system that generates production-ready YAML templates from natural language descriptions. The system must:
 
 1. Ground responses in real, working template examples to reduce hallucination
 2. Apply curated best practices (packages, kernel configs, disk layouts) consistently
@@ -123,7 +123,7 @@ All diagrams in this ADR use a consistent color scheme:
 ```mermaid
 flowchart TB
     subgraph UI["User Interface"]
-        CLI[CLI: os-image-composer ai]
+        CLI[CLI: image-composer-tool ai]
     end
     
     subgraph Core["Core System"]
@@ -192,7 +192,7 @@ flowchart TB
 | **Query Classifier** | Detects query type (semantic, package-explicit, refinement, negation) |
 | **RAG Engine** | Semantic search with hybrid scoring (semantic + keyword + package) |
 | **Agent Loop** | Orchestrates LLM generation → validation → fix cycle |
-| **Agent Tools** | Functions that call existing os-image-composer code (not separate services) |
+| **Agent Tools** | Functions that call existing image-composer-tool code (not separate services) |
 
 ---
 
@@ -607,12 +607,12 @@ When the configured model changes, the entire cache must be invalidated.
 | Template content changes | Recompute hash → cache miss → regenerate |
 | Embedding model changes | Clear entire cache (model_id mismatch) |
 | Cache TTL expires (optional) | Regenerate on next access |
-| Manual cache clear | `os-image-composer ai --clear-cache` |
+| Manual cache clear | `image-composer-tool ai --clear-cache` |
 
 #### Example: Full Cache Flow
 
 ```bash
-$ os-image-composer ai "create cloud image"
+$ image-composer-tool ai "create cloud image"
 ```
 
 ```
@@ -777,7 +777,7 @@ Sessions can optionally persist across CLI invocations:
 ai:
   session:
     persist: true
-    storage: ~/.config/os-image-composer/sessions/
+    storage: ~/.config/image-composer-tool/sessions/
     max_age: 24h  # Auto-expire old sessions
 ```
 
@@ -1076,7 +1076,7 @@ This feature is planned for **Phase 5** as a future enhancement because:
 - Template parser with metadata extraction
 - Embedding generation with content-hash caching
 - Basic semantic search
-- Basic CLI for testing (`os-image-composer ai "query"`)
+- Basic CLI for testing (`image-composer-tool ai "query"`)
 
 **Phase 2: Query Classification and Hybrid Scoring**
 - Query classifier implementation
@@ -1089,7 +1089,7 @@ This feature is planned for **Phase 5** as a future enhancement because:
 - Multi-turn conversation support
 
 **Phase 4: Full CLI Integration**
-- Interactive mode (`os-image-composer ai --interactive`)
+- Interactive mode (`image-composer-tool ai --interactive`)
 - Session persistence and continuation
 - Cache management commands
 
@@ -1129,7 +1129,7 @@ flowchart LR
 
 ```bash
 $ ollama serve &
-$ os-image-composer ai "create minimal edge image"
+$ image-composer-tool ai "create minimal edge image"
 # Just works with defaults!
 ```
 
@@ -1142,7 +1142,7 @@ ai:
 
 ```bash
 $ export OPENAI_API_KEY=sk-xxx
-$ os-image-composer ai "create minimal edge image"
+$ image-composer-tool ai "create minimal edge image"
 ```
 
 #### config.yaml AI Section
@@ -1201,7 +1201,7 @@ All AI settings are **commented by default** with their default values shown. Us
 |----------|-------------|---------|
 | `OPENAI_API_KEY` | OpenAI API key (required for OpenAI provider) | `sk-xxx...` |
 | `OLLAMA_HOST` | Ollama server URL | `http://localhost:11434` |
-| `OIC_AI_PROVIDER` | Override provider at runtime | `ollama` or `openai` |
+| `ICT_AI_PROVIDER` | Override provider at runtime | `ollama` or `openai` |
 
 #### Configuration Reference
 
@@ -1246,7 +1246,7 @@ User wants OpenAI with custom cache location:
 ai:
   provider: openai
   cache:
-    dir: /var/cache/os-image-composer/ai
+    dir: /var/cache/image-composer-tool/ai
 ```
 
 Hardcoded defaults fill in everything else automatically.
@@ -1255,19 +1255,19 @@ Hardcoded defaults fill in everything else automatically.
 
 ```bash
 # Single-shot generation
-os-image-composer ai "create a minimal edge image for elxr"
+image-composer-tool ai "create a minimal edge image for elxr"
 
 # Interactive conversation mode
-os-image-composer ai --interactive
+image-composer-tool ai --interactive
 
 # Continue previous session
-os-image-composer ai --continue
+image-composer-tool ai --continue
 
 # Clear embedding cache
-os-image-composer ai --clear-cache
+image-composer-tool ai --clear-cache
 
 # Show cache statistics
-os-image-composer ai --cache-stats
+image-composer-tool ai --cache-stats
 ```
 
 ### Observability

@@ -1,0 +1,74 @@
+image:
+  name: minimal-os-image-debian
+  version: "13.0"
+
+target:
+  os: debian # Target OS name
+  dist: debian13 # Target OS distribution
+  arch: x86_64 # Target OS architecture
+  imageType: img # Image type, valid value: [raw, iso, img].
+
+systemConfig:
+  name: Default_INITRD
+  description: Default yml configuration for initrd/initramfs image
+
+  bootloader:
+    bootType: efi # (efi or legacy)
+    provider: grub # (grub for efi and legacy mode, or system
+
+  immutability:
+    enabled: false
+
+  packages:
+    - base-files
+    - ca-certificates
+    - dracut-core
+    - vim
+    - sudo
+    - net-tools
+    - procps
+    - less
+    - dbus
+    - polkitd
+    - dosfstools
+    - efibootmgr
+    - eject
+    - curl
+    - mmdebstrap
+    - openssh-client
+    - openssh-server
+    - systemd
+    - systemd-timesyncd
+    - systemd-resolved
+    - wget
+    - cryptsetup
+    - cloud-guest-utils
+    - xterm
+    - initramfs-tools
+    - systemd-boot
+    - grub-pc-bin
+    - grub-efi-amd64-bin
+
+  additionalFiles:
+    - local: ../additionalfiles/dhcp.network
+      final: /etc/systemd/network/dhcp.network
+    - local: ../additionalfiles/ubuntu-noble.list
+      final: /etc/apt/sources.list.d/ubuntu-noble.list
+    - local: ../additionalfiles/getty@.service
+      final: /usr/lib/systemd/system/getty@.service
+    - local: ../additionalfiles/serial-getty@.service
+      final: /usr/lib/systemd/system/serial-getty@.service
+    - local: ../../../../../general/isolinux/attendedinstaller
+      final: /root/attendedinstaller
+    - local: ../../../../../../build/live-installer
+      final: /usr/bin/live-installer
+
+  users:
+    - name: root
+      startupScript: "/root/attendedinstaller"
+
+  kernel:
+    version: "6.12.74"
+    cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
+    packages:
+      - linux-image-amd64
