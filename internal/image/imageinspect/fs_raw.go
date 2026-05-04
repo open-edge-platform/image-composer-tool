@@ -1,15 +1,17 @@
 package imageinspect
 
 import (
-	"crypto/sha256"
 	"encoding/binary"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/open-edge-platform/image-composer-tool/internal/config/manifest"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
 
 // FAT filesystem reader implementation (for raw reads from disk images)
@@ -143,16 +145,656 @@ func scanAndHashEFIFromRawFAT(r io.ReaderAt, partOff int64, out *FilesystemSumma
 
 	out.HasShim = out.HasShim || hasShim
 	out.HasUKI = out.HasUKI || hasUKI
+
+	// Extract bootloader configuration for known bootloader types
+	for i := range out.EFIBinaries {
+		efi := &out.EFIBinaries[i]
+		switch efi.Kind {
+		case BootloaderGrub, BootloaderSystemdBoot:
+			// Try to extract config files
+			efi.BootConfig = extractBootloaderConfigFromFAT(v, efi.Kind)
+			// For systemd-boot on UKI systems, also synthesize boot config from UKI
+			if efi.Kind == BootloaderSystemdBoot && out.HasUKI && efi.BootConfig != nil && len(efi.BootConfig.ConfigFiles) == 0 {
+				// No loader.conf found on UKI system; synthesize from UKI cmdline
+				for _, uki := range out.EFIBinaries {
+					if uki.IsUKI && uki.Cmdline != "" {
+						// Create synthetic boot config from UKI
+						efi.BootConfig = synthesizeBootConfigFromUKI(&uki)
+						break
+					}
+				}
+			}
+		}
+	}
+
 	return nil
 }
 
-// sha256Hex returns the SHA256 hash of the given byte slice as a hex string.
-func sha256Hex(b []byte) string {
-	h := sha256.Sum256(b)
-	return hex.EncodeToString(h[:])
+// synthesizeBootConfigFromUKI creates a BootloaderConfig from a UKI binary's cmdline.
+// This is used for UKI-based systems that don't have a separate loader.conf file.
+func synthesizeBootConfigFromUKI(uki *EFIBinaryEvidence) *BootloaderConfig {
+	cfg := &BootloaderConfig{
+		ConfigFiles:      make(map[string]string),
+		ConfigRaw:        make(map[string]string),
+		KernelReferences: []KernelReference{},
+		BootEntries:      []BootEntry{},
+		UUIDReferences:   []UUIDReference{},
+		Notes:            []string{},
+	}
+
+	if uki == nil || uki.Cmdline == "" {
+		cfg.Notes = append(cfg.Notes, "No UKI cmdline available for boot config synthesis")
+		return cfg
+	}
+
+	// Store the UKI cmdline as ConfigRaw
+	cfg.ConfigRaw["uki_cmdline"] = uki.Cmdline
+
+	// Parse the UKI cmdline to extract boot parameters
+	// Create a synthetic boot entry for the UKI
+	entry := BootEntry{
+		Name:      "UKI Boot Entry",
+		Kernel:    uki.Path,
+		Cmdline:   uki.Cmdline,
+		IsDefault: true,
+		UKIPath:   uki.Path,
+	}
+
+	// Extract root= and UUIDs from cmdline
+	for _, token := range strings.Fields(uki.Cmdline) {
+		if strings.HasPrefix(token, "root=") {
+			entry.RootDevice = strings.TrimPrefix(token, "root=")
+			entry.RootDevice = strings.Trim(entry.RootDevice, `"'`)
+			// Extract UUID if present
+			for _, u := range extractUUIDsFromString(entry.RootDevice) {
+				entry.PartitionUUID = u
+				cfg.UUIDReferences = append(cfg.UUIDReferences, UUIDReference{UUID: u, Context: "uki_cmdline"})
+			}
+		} else if strings.HasPrefix(token, "boot_uuid=") {
+			// boot_uuid parameter points to the root filesystem UUID
+			id := strings.TrimPrefix(token, "boot_uuid=")
+			id = strings.Trim(id, `"'`)
+			for _, u := range extractUUIDsFromString(id) {
+				cfg.UUIDReferences = append(cfg.UUIDReferences, UUIDReference{UUID: u, Context: "uki_boot_uuid"})
+			}
+		}
+	}
+
+	cfg.BootEntries = append(cfg.BootEntries, entry)
+
+	// Create kernel reference
+	kernRef := KernelReference{
+		Path:      uki.Path,
+		BootEntry: entry.Name,
+		RootUUID:  entry.RootDevice,
+	}
+	if entry.PartitionUUID != "" {
+		kernRef.PartitionUUID = entry.PartitionUUID
+	}
+	cfg.KernelReferences = append(cfg.KernelReferences, kernRef)
+
+	// Note that this is a synthesized config
+	cfg.Notes = append(cfg.Notes, fmt.Sprintf("Boot configuration extracted from UKI binary %s (no loader.conf found)", uki.Path))
+
+	return cfg
 }
 
-// readFileByEntry reads the contents of the file represented by the given fatDirEntry.
+// extractBootloaderConfigFromFAT attempts to read and parse bootloader config files
+// from the FAT filesystem for the given bootloader kind.
+func extractBootloaderConfigFromFAT(v *fatVol, kind BootloaderKind) *BootloaderConfig {
+	cfg := &BootloaderConfig{
+		ConfigFiles:      make(map[string]string),
+		ConfigRaw:        make(map[string]string),
+		KernelReferences: []KernelReference{},
+		BootEntries:      []BootEntry{},
+		UUIDReferences:   []UUIDReference{},
+		Notes:            []string{},
+	}
+
+	// Generate candidate config paths based on filesystem layout and bootloader kind
+	configPaths := generateBootloaderConfigPaths(v, kind)
+	if len(configPaths) == 0 {
+		return nil
+	}
+
+	// Try to read each config file
+	for _, cfgPath := range configPaths {
+		content, err := readFileFromFAT(v, cfgPath)
+		if err == nil && content != "" {
+			// Calculate hash
+			hash := hashBytesHex([]byte(content))
+			cfg.ConfigFiles[cfgPath] = hash
+
+			// Store raw content (truncated if large)
+			if len(content) > 10240 {
+				cfg.ConfigRaw[cfgPath] = content[:10240] + "\n[truncated...]"
+			} else {
+				cfg.ConfigRaw[cfgPath] = content
+			}
+
+			// Parse based on bootloader kind
+			switch kind {
+			case BootloaderGrub:
+				parsed := parseGrubConfigContent(content)
+				cfg.BootEntries = parsed.BootEntries
+				cfg.KernelReferences = parsed.KernelReferences
+				cfg.UUIDReferences = parsed.UUIDReferences
+				cfg.Notes = append(cfg.Notes, parsed.Notes...)
+				// Don't overwrite ConfigRaw since we set it above
+				cfg.DefaultEntry = parsed.DefaultEntry
+			case BootloaderSystemdBoot:
+				parsed := parseSystemdBootEntries(content)
+				cfg.BootEntries = parsed.BootEntries
+				cfg.DefaultEntry = parsed.DefaultEntry
+				cfg.UUIDReferences = parsed.UUIDReferences
+				cfg.Notes = append(cfg.Notes, parsed.Notes...)
+			}
+
+			break // Found config file, stop trying alternatives
+		} else if err != nil {
+			if !strings.Contains(err.Error(), "does not exist") && !strings.Contains(err.Error(), "not found") {
+				// Only report non-file-not-found errors
+				cfg.Notes = append(cfg.Notes, fmt.Sprintf("Failed to read %s: %v", cfgPath, err))
+			}
+		}
+	}
+
+	// If no config found with hardcoded paths, try dynamic search in /EFI/*/grub.cfg
+	if len(cfg.ConfigFiles) == 0 && kind == BootloaderGrub {
+		if dynamicPath, dynamicContent := searchBootloaderConfigInEFI(v, "grub.cfg"); dynamicPath != "" && dynamicContent != "" {
+			hash := hashBytesHex([]byte(dynamicContent))
+			cfg.ConfigFiles[dynamicPath] = hash
+
+			if len(dynamicContent) > 10240 {
+				cfg.ConfigRaw[dynamicPath] = dynamicContent[:10240] + "\n[truncated...]"
+			} else {
+				cfg.ConfigRaw[dynamicPath] = dynamicContent
+			}
+
+			parsed := parseGrubConfigContent(dynamicContent)
+			cfg.BootEntries = parsed.BootEntries
+			cfg.KernelReferences = parsed.KernelReferences
+			cfg.UUIDReferences = parsed.UUIDReferences
+			cfg.Notes = append(cfg.Notes, parsed.Notes...)
+			cfg.DefaultEntry = parsed.DefaultEntry
+		}
+	}
+
+	// If no config file found, add note (not an error, might be acceptable for minimal configs)
+	if len(cfg.ConfigFiles) == 0 {
+		switch kind {
+		case BootloaderSystemdBoot:
+			cfg.Notes = append(cfg.Notes, "No systemd-boot configuration file found (may be normal for UKI-based systems)")
+		case BootloaderGrub:
+			cfg.Notes = append(cfg.Notes, "No GRUB configuration file found on ESP. Some distributions may store GRUB config on the root partition (/boot/grub/grub.cfg)")
+		}
+	}
+
+	return cfg
+}
+
+// searchBootloaderConfigInEFI dynamically searches for a bootloader config file
+// in any subdirectory of /EFI/, including nested directories.
+// Returns the path and content if found, or empty strings if not found.
+func searchBootloaderConfigInEFI(v *fatVol, filename string) (string, string) {
+	// First try /EFI/ root level
+	if content, err := readFileFromFAT(v, fmt.Sprintf("/EFI/%s", filename)); err == nil && content != "" {
+		return fmt.Sprintf("/EFI/%s", filename), content
+	}
+
+	// List /EFI directory
+	efiEntries, err := v.listDir("EFI")
+	if err != nil {
+		return "", ""
+	}
+
+	// Try each subdirectory in /EFI/ (one level deep)
+	for _, entry := range efiEntries {
+		if !entry.isDir || entry.name == "." || entry.name == ".." {
+			continue
+		}
+
+		// Try to read the file in this subdirectory
+		testPath := fmt.Sprintf("/EFI/%s/%s", entry.name, filename)
+		if content, err := readFileFromFAT(v, testPath); err == nil && content != "" {
+			return testPath, content
+		}
+
+		// Also search nested directories within /EFI/[name]/
+		// This handles cases like /EFI/BOOT/x64-efi/grub.cfg
+		if nestedPath, nestedContent := searchBootloaderConfigInNestedDir(v, fmt.Sprintf("EFI/%s", entry.name), filename); nestedPath != "" {
+			return nestedPath, nestedContent
+		}
+	}
+
+	// If no grub.cfg found, try alternative names like grub-efi.cfg or grubx64.cfg.signed
+	if strings.Contains(filename, "grub") {
+		alternativeNames := []string{"grub-efi.cfg", "grubx64.cfg", "grub.cfg.signed"}
+		for _, altName := range alternativeNames {
+			// Try in each subdirectory
+			for _, entry := range efiEntries {
+				if !entry.isDir || entry.name == "." || entry.name == ".." {
+					continue
+				}
+				testPath := fmt.Sprintf("/EFI/%s/%s", entry.name, altName)
+				if content, err := readFileFromFAT(v, testPath); err == nil && content != "" {
+					return testPath, content
+				}
+				// Also search nested
+				if nestedPath, nestedContent := searchBootloaderConfigInNestedDir(v, fmt.Sprintf("EFI/%s", entry.name), altName); nestedPath != "" {
+					return nestedPath, nestedContent
+				}
+			}
+		}
+	}
+
+	return "", ""
+}
+
+// searchBootloaderConfigInNestedDir recursively searches within a directory for a config file
+func searchBootloaderConfigInNestedDir(v *fatVol, dirPath, filename string) (string, string) {
+	// Avoid infinite recursion - limit to 3 levels deep
+	depth := strings.Count(dirPath, "/")
+	if depth > 4 { // EFI is level 1, subdirs are 2+
+		return "", ""
+	}
+
+	entries, err := v.listDir(dirPath)
+	if err != nil {
+		return "", ""
+	}
+
+	for _, entry := range entries {
+		if entry.name == "." || entry.name == ".." {
+			continue
+		}
+
+		if !entry.isDir {
+			// Check if this is our target file (case-insensitive)
+			if strings.EqualFold(entry.name, filename) {
+				testPath := fmt.Sprintf("/%s/%s", dirPath, entry.name)
+				if content, err := readFileFromFAT(v, testPath); err == nil && content != "" {
+					return testPath, content
+				}
+			}
+			continue
+		}
+
+		// Recursively search in subdirectories
+		nestedPath := fmt.Sprintf("%s/%s", dirPath, entry.name)
+		if foundPath, foundContent := searchBootloaderConfigInNestedDir(v, nestedPath, filename); foundPath != "" {
+			return foundPath, foundContent
+		}
+	}
+
+	return "", ""
+}
+
+// readFileFromFAT reads a file from the FAT filesystem by path.
+// Returns the file content as a string, or an error if the file cannot be read.
+func readFileFromFAT(v *fatVol, filePath string) (string, error) {
+	// Normalize path
+	filePath = strings.TrimPrefix(filePath, "/")
+	filePath = strings.ReplaceAll(filePath, "\\", "/")
+
+	parts := strings.Split(filePath, "/")
+	if len(parts) == 0 {
+		return "", fmt.Errorf("invalid file path")
+	}
+
+	// Navigate through directory structure
+	for i, part := range parts {
+		if part == "" {
+			continue
+		}
+
+		// Determine which directory to list
+		// For the first part, list the root; for subsequent parts, list the path so far
+		var dirPath string
+		if i == 0 {
+			dirPath = "" // List root to find first part
+		} else {
+			dirPath = strings.Join(parts[:i], "/") // List accumulated path
+		}
+
+		entries, err := v.listDir(dirPath)
+		if err != nil {
+			return "", err
+		}
+
+		// Find matching entry (case-insensitive)
+		found := false
+		var entry fatDirEntry
+		for _, e := range entries {
+			if strings.EqualFold(e.name, part) {
+				entry = e
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			return "", fmt.Errorf("file not found: %s", filePath)
+		}
+
+		// Last part - if this is a file, read it
+		if i == len(parts)-1 && !entry.isDir {
+			content, _, err := v.readFileByEntry(&entry)
+			if err != nil {
+				return "", err
+			}
+			return string(content), nil
+		}
+	}
+
+	return "", fmt.Errorf("file not found: %s", filePath)
+}
+
+// readSBOMFromRawPartition reads an embedded SPDX SBOM from a raw partition.
+// It finds the SBOM filename/path in a raw partition, then reads it via the
+// generic raw partition file reader.
+func readSBOMFromRawPartition(img io.ReaderAt, partOff int64, partSize uint64, fsType string) ([]byte, string, string, error) {
+	fsType = strings.ToLower(strings.TrimSpace(fsType))
+
+	if fsType == "ext4" || fsType == "ext3" || fsType == "ext2" {
+		partitionFilePath, cleanup, err := extractPartitionToTempFile(img, partOff, partSize)
+		if err != nil {
+			return nil, "", "", err
+		}
+		defer cleanup()
+
+		sbomFileName, sbomPath, err := findSBOMFileInExtPartitionImage(partitionFilePath)
+		if err != nil {
+			return nil, "", "", err
+		}
+
+		content, err := readFileFromExtPartitionImage(partitionFilePath, sbomPath)
+		if err != nil {
+			return nil, "", "", fmt.Errorf("read SBOM file %s: %w", sbomPath, err)
+		}
+
+		return content, sbomFileName, sbomPath, nil
+	}
+
+	sbomFileName, sbomPath, err := findSBOMFileInRawPartition(img, partOff, partSize, fsType)
+	if err != nil {
+		return nil, "", "", err
+	}
+
+	content, err := readFileFromRawPartition(img, partOff, partSize, fsType, sbomPath)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("read SBOM file %s: %w", sbomPath, err)
+	}
+
+	return content, sbomFileName, sbomPath, nil
+}
+
+func findSBOMFileInExtPartitionImage(partitionFilePath string) (string, string, error) {
+	dumpDir, err := os.MkdirTemp("", "oic-sbom-rdump-*")
+	if err != nil {
+		return "", "", fmt.Errorf("create temp dump directory: %w", err)
+	}
+	defer func() {
+		_ = os.RemoveAll(dumpDir)
+	}()
+
+	rdumpCmd := fmt.Sprintf("debugfs -R 'rdump %s %s' %s", manifest.ImageSBOMPath, dumpDir, partitionFilePath)
+	if _, err = shell.ExecCmd(rdumpCmd, false, shell.HostPath, nil); err != nil {
+		return "", "", fmt.Errorf("debugfs rdump failed: %w", err)
+	}
+
+	jsonFiles := collectJSONFilesFromDir(dumpDir)
+	if len(jsonFiles) == 0 {
+		return "", "", fmt.Errorf("SBOM directory present but no SPDX JSON file found")
+	}
+
+	fileNames := make([]string, 0, len(jsonFiles))
+	for _, filePath := range jsonFiles {
+		fileNames = append(fileNames, filepath.Base(filePath))
+	}
+
+	sbomFileName, found := pickSBOMFileNameFromNames(fileNames)
+	if !found {
+		return "", "", fmt.Errorf("SBOM directory present but no SPDX JSON file found")
+	}
+
+	sbomPath := path.Join(manifest.ImageSBOMPath, sbomFileName)
+	return sbomFileName, sbomPath, nil
+}
+
+func findSBOMFileInRawPartition(img io.ReaderAt, partOff int64, partSize uint64, fsType string) (string, string, error) {
+	fsType = strings.ToLower(strings.TrimSpace(fsType))
+
+	switch {
+	case isVFATLike(fsType):
+		volume, err := openFAT(img, partOff)
+		if err != nil {
+			return "", "", fmt.Errorf("open FAT volume: %w", err)
+		}
+
+		sbomDir := strings.Trim(manifest.ImageSBOMPath, "/")
+		entries, err := volume.listDir(sbomDir)
+		if err != nil {
+			return "", "", fmt.Errorf("list SBOM directory: %w", err)
+		}
+
+		sbomFileName, found := pickSBOMFileNameFromFAT(entries)
+		if !found {
+			return "", "", fmt.Errorf("SBOM directory present but no SPDX JSON file found")
+		}
+
+		sbomPath := path.Join(manifest.ImageSBOMPath, sbomFileName)
+		return sbomFileName, sbomPath, nil
+
+	case fsType == "ext4" || fsType == "ext3" || fsType == "ext2":
+		partitionFilePath, cleanup, err := extractPartitionToTempFile(img, partOff, partSize)
+		if err != nil {
+			return "", "", err
+		}
+		defer cleanup()
+
+		return findSBOMFileInExtPartitionImage(partitionFilePath)
+
+	default:
+		return "", "", fmt.Errorf("filesystem %q is not supported for raw SPDX extraction yet", emptyOr(fsType, "unknown"))
+	}
+}
+
+// readFileFromRawPartition reads a file from a raw partition by path.
+// It dispatches to filesystem-specific readers based on fsType.
+func readFileFromRawPartition(img io.ReaderAt, partOff int64, partSize uint64, fsType, filePath string) ([]byte, error) {
+	fsType = strings.ToLower(strings.TrimSpace(fsType))
+
+	switch {
+	case isVFATLike(fsType):
+		return readFileFromRawFAT(img, partOff, filePath)
+	case fsType == "ext4" || fsType == "ext3" || fsType == "ext2":
+		return readFileFromRawExt(img, partOff, partSize, filePath)
+	default:
+		return nil, fmt.Errorf("filesystem %q is not supported for raw file reads", emptyOr(fsType, "unknown"))
+	}
+}
+
+func readFileFromRawFAT(img io.ReaderAt, partOff int64, filePath string) ([]byte, error) {
+	volume, err := openFAT(img, partOff)
+	if err != nil {
+		return nil, fmt.Errorf("open FAT volume: %w", err)
+	}
+
+	content, err := readFileFromFAT(volume, filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	return []byte(content), nil
+}
+
+func readFileFromRawExt(img io.ReaderAt, partOff int64, partSize uint64, filePath string) ([]byte, error) {
+	partitionFilePath, cleanup, err := extractPartitionToTempFile(img, partOff, partSize)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+
+	return readFileFromExtPartitionImage(partitionFilePath, filePath)
+}
+
+func readFileFromExtPartitionImage(partitionFilePath, filePath string) ([]byte, error) {
+
+	outFile, err := os.CreateTemp("", "oic-ext-read-*.bin")
+	if err != nil {
+		return nil, fmt.Errorf("create temp output file: %w", err)
+	}
+	outFilePath := outFile.Name()
+	_ = outFile.Close()
+	defer func() {
+		_ = os.Remove(outFilePath)
+	}()
+
+	normalizedPath := filePath
+	if !strings.HasPrefix(normalizedPath, "/") {
+		normalizedPath = "/" + normalizedPath
+	}
+
+	dumpCmd := fmt.Sprintf("debugfs -R 'dump %s %s' %s", normalizedPath, outFilePath, partitionFilePath)
+	if _, err = shell.ExecCmd(dumpCmd, false, shell.HostPath, nil); err != nil {
+		return nil, fmt.Errorf("debugfs dump failed: %w", err)
+	}
+
+	content, err := os.ReadFile(outFilePath)
+	if err != nil {
+		return nil, fmt.Errorf("read extracted file: %w", err)
+	}
+
+	return content, nil
+}
+
+func extractPartitionToTempFile(img io.ReaderAt, partOff int64, partSize uint64) (string, func(), error) {
+	if partSize == 0 {
+		return "", nil, fmt.Errorf("partition size is zero")
+	}
+
+	debugfsExists, existsErr := shell.IsCommandExist("debugfs", shell.HostPath)
+	if existsErr != nil {
+		return "", nil, fmt.Errorf("failed to check debugfs availability: %w", existsErr)
+	}
+	if !debugfsExists {
+		return "", nil, fmt.Errorf("debugfs command is not available")
+	}
+
+	partitionFile, err := os.CreateTemp("", "oic-partition-*.img")
+	if err != nil {
+		return "", nil, fmt.Errorf("create temp partition file: %w", err)
+	}
+
+	partitionFilePath := partitionFile.Name()
+
+	partitionReader := io.NewSectionReader(img, partOff, int64(partSize))
+	if _, err = io.Copy(partitionFile, partitionReader); err != nil {
+		_ = partitionFile.Close()
+		_ = os.Remove(partitionFilePath)
+		return "", nil, fmt.Errorf("copy partition bytes: %w", err)
+	}
+
+	if closeErr := partitionFile.Close(); closeErr != nil {
+		_ = os.Remove(partitionFilePath)
+		return "", nil, fmt.Errorf("close temp partition file: %w", closeErr)
+	}
+
+	cleanup := func() {
+		_ = os.Remove(partitionFilePath)
+	}
+
+	return partitionFilePath, cleanup, nil
+}
+
+func collectJSONFilesFromDir(rootDir string) []string {
+	var files []string
+	_ = filepath.WalkDir(rootDir, func(filePath string, dirEntry os.DirEntry, walkErr error) error {
+		if walkErr != nil || dirEntry == nil || dirEntry.IsDir() {
+			return nil
+		}
+		if strings.HasSuffix(strings.ToLower(dirEntry.Name()), ".json") {
+			files = append(files, filePath)
+		}
+		return nil
+	})
+	sort.Strings(files)
+	return files
+}
+
+// generateBootloaderConfigPaths builds a prioritized list of candidate configuration
+// file paths for a given `kind` on the provided FAT volume. It prefers files
+// under /EFI/* (inspecting actual subdirectories) and falls back to common
+// /boot locations. Returned paths are normalized (leading '/') and deduplicated
+// while preserving order.
+func generateBootloaderConfigPaths(v *fatVol, kind BootloaderKind) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	add := func(p string) {
+		if p == "" {
+			return
+		}
+		// normalize
+		if !strings.HasPrefix(p, "/") {
+			p = "/" + p
+		}
+		if _, ok := seen[p]; ok {
+			return
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+
+	// Inspect /EFI directory to discover vendor-specific subdirs
+	var efiSubdirs []string
+	if ents, err := v.listDir("EFI"); err == nil {
+		for _, e := range ents {
+			if e.isDir {
+				efiSubdirs = append(efiSubdirs, e.name)
+			}
+		}
+	}
+
+	switch kind {
+	case BootloaderGrub:
+		// Prefer vendor-specific locations under /EFI/<vendor>/*.cfg
+		for _, d := range efiSubdirs {
+			// common candidate names
+			add(path.Join("EFI", d, "grub.cfg"))
+			add(path.Join("EFI", d, "grub-efi.cfg"))
+			add(path.Join("EFI", d, "grubx64.cfg"))
+			add(path.Join("EFI", d, "grub.cfg.signed"))
+			// nested possibilities
+			add(path.Join("EFI", d, "grub", "grub.cfg"))
+			add(path.Join("EFI", d, "boot", "grub.cfg"))
+		}
+		// Common ESP-wide locations
+		add("EFI/BOOT/grub.cfg")
+		add("EFI/boot/grub.cfg")
+		add("EFI/grub/grub.cfg")
+
+		// Fallbacks on possible non-ESP /boot locations
+		add("/grub/grub.cfg")
+		add("/boot/grub/grub.cfg")
+		add("/boot/grub2/grub.cfg")
+
+	case BootloaderSystemdBoot:
+		// Prefer loader.conf under /loader and vendor dirs
+		add("loader/loader.conf")
+		add("EFI/systemd/loader.conf")
+		for _, d := range efiSubdirs {
+			add(path.Join("EFI", d, "loader.conf"))
+			add(path.Join("EFI", d, "loader", "loader.conf"))
+		}
+		add("/boot/loader.conf")
+	default:
+		// Unknown bootloader
+	}
+
+	return out
+}
+
 func (v *fatVol) readFileByEntry(e *fatDirEntry) ([]byte, int64, error) {
 	remaining := int64(e.size)
 	var out []byte

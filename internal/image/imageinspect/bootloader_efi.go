@@ -17,7 +17,7 @@ func ParsePEFromBytes(p string, blob []byte) (EFIBinaryEvidence, error) {
 		Kind:            BootloaderUnknown, // set after we have more evidence
 	}
 
-	ev.SHA256 = sha256Hex(blob)
+	ev.SHA256 = hashBytesHex(blob)
 
 	r := bytes.NewReader(blob)
 	f, err := pe.NewFile(r)
@@ -61,7 +61,7 @@ func ParsePEFromBytes(p string, blob []byte) (EFIBinaryEvidence, error) {
 			ev.Notes = append(ev.Notes, fmt.Sprintf("read section %s: %v", name, err))
 			continue
 		}
-		ev.SectionSHA256[name] = sha256Hex(data)
+		ev.SectionSHA256[name] = hashBytesHex(data)
 
 		switch name {
 		case ".linux":

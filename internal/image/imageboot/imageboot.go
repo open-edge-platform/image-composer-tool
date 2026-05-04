@@ -7,11 +7,11 @@ import (
 
 	"os"
 
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/image/imagedisc"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/file"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/imagedisc"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/file"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
 
 var log = logger.Logger()
@@ -70,6 +70,17 @@ func getGrubVersion(installRoot string) (string, error) {
 	return grubVersion, nil
 }
 
+func getGrubEfiTarget(arch string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(arch)) {
+	case "", "x86_64", "amd64":
+		return "x86_64-efi", nil
+	case "aarch64", "arm64":
+		return "arm64-efi", nil
+	default:
+		return "", fmt.Errorf("unsupported architecture for GRUB EFI target: %s", arch)
+	}
+}
+
 func installGrubWithEfiMode(installRoot, bootUUID, bootPrefix, pkgType, grubVersion string, template *config.ImageTemplate) error {
 	// Expect that shim (bootx64.efi) and grub (grub.efi) are installed
 	// into the EFI directory via the package installation step previously.
@@ -118,11 +129,20 @@ func installGrubWithEfiMode(installRoot, bootUUID, bootPrefix, pkgType, grubVers
 	}
 
 	if pkgType == "deb" {
-		// Generate bootx64.efi for debian based systems at /EFI/BOOT/bootx64.efi
-		installCmd := fmt.Sprintf("grub-install --target=x86_64-efi --efi-directory=%s --removable", efiDir)
+		if template == nil {
+			return fmt.Errorf("image template cannot be nil for GRUB EFI installation")
+		}
+
+		grubTarget, err := getGrubEfiTarget(template.Target.Arch)
+		if err != nil {
+			return fmt.Errorf("failed to determine GRUB EFI target: %w", err)
+		}
+
+		// Generate removable fallback EFI bootloader for the target architecture.
+		installCmd := fmt.Sprintf("grub-install --target=%s --efi-directory=%s --removable", grubTarget, efiDir)
 		if _, err = shell.ExecCmd(installCmd, true, installRoot, nil); err != nil {
-			log.Errorf("Failed to install bootx64.efi for GRUB EFI bootloader: %v", err)
-			return fmt.Errorf("failed to install bootx64.efi for GRUB EFI bootloader: %w", err)
+			log.Errorf("Failed to install removable GRUB EFI bootloader for target %s: %v", grubTarget, err)
+			return fmt.Errorf("failed to install removable GRUB EFI bootloader for target %s: %w", grubTarget, err)
 		}
 	}
 
@@ -191,10 +211,33 @@ func updateInitramfsForGrub(installRoot, kernelVersion string, template *config.
 		log.Debugf("No extra modules specified in enableExtraModules")
 	}
 
-	// Run update-initramfs to regenerate the initramfs
-	cmd := fmt.Sprintf("update-initramfs -u -k %s", kernelVersion)
+	updateInitramfsExists, err := shell.IsCommandExist("update-initramfs", installRoot)
+	if err != nil {
+		return fmt.Errorf("failed to check update-initramfs availability: %w", err)
+	}
+
+	var cmd string
+	if updateInitramfsExists {
+		cmd = fmt.Sprintf("update-initramfs -u -k %s", kernelVersion)
+	} else {
+		dracutExists, dracutCheckErr := shell.IsCommandExist("dracut", installRoot)
+		if dracutCheckErr != nil {
+			return fmt.Errorf("failed to check dracut availability: %w", dracutCheckErr)
+		}
+		if !dracutExists {
+			return fmt.Errorf("neither update-initramfs nor dracut found in the install root")
+		}
+
+		initrdPath := fmt.Sprintf("/boot/initrd.img-%s", kernelVersion)
+		cmd = fmt.Sprintf("dracut --force --kver %s %s", kernelVersion, initrdPath)
+		if extraModules != "" {
+			cmd = fmt.Sprintf("%s --add-drivers '%s'", cmd, extraModules)
+		}
+		log.Infof("update-initramfs not found, using dracut fallback")
+	}
+
 	log.Debugf("Executing: %s", cmd)
-	_, err := shell.ExecCmd(cmd, true, installRoot, nil)
+	_, err = shell.ExecCmd(cmd, true, installRoot, nil)
 	if err != nil {
 		log.Errorf("Failed to update initramfs: %v", err)
 		return fmt.Errorf("failed to update initramfs: %w", err)

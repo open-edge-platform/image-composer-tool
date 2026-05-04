@@ -2,6 +2,8 @@ package rpmutils
 
 import (
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"path/filepath"
 	"sort"
@@ -9,9 +11,94 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
+	"os"
+
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/network"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
+
+const defaultRepoPriority = 500
+
+func normalizeRepositoryPriority(priority int) int {
+	if priority == 0 {
+		return defaultRepoPriority
+	}
+	return priority
+}
+
+func getRepositoryPriority(packageURL string) int {
+	normalizedPkgURL := strings.TrimRight(packageURL, "/")
+	highestPriority := defaultRepoPriority
+
+	for _, repo := range UserRepo {
+		repoURL := strings.TrimRight(repo.URL, "/")
+		if repoURL == "" {
+			continue
+		}
+
+		if normalizedPkgURL == repoURL || strings.HasPrefix(normalizedPkgURL, repoURL+"/") {
+			repoPriority := normalizeRepositoryPriority(repo.Priority)
+			if repoPriority > highestPriority {
+				highestPriority = repoPriority
+			}
+		}
+	}
+
+	return highestPriority
+}
+
+func selectByPriorityThenRepo(parentBase string, candidates []ospackage.PackageInfo) ospackage.PackageInfo {
+	highestPriority := -1
+	highestPriorityCandidates := make([]ospackage.PackageInfo, 0, len(candidates))
+
+	for _, candidate := range candidates {
+		candidatePriority := getRepositoryPriority(candidate.URL)
+		if candidatePriority > highestPriority {
+			highestPriority = candidatePriority
+			highestPriorityCandidates = highestPriorityCandidates[:0]
+			highestPriorityCandidates = append(highestPriorityCandidates, candidate)
+			continue
+		}
+
+		if candidatePriority == highestPriority {
+			highestPriorityCandidates = append(highestPriorityCandidates, candidate)
+		}
+	}
+
+	if len(highestPriorityCandidates) == 1 {
+		return highestPriorityCandidates[0]
+	}
+
+	var sameRepoCandidates []ospackage.PackageInfo
+	for _, candidate := range highestPriorityCandidates {
+		candidateBase, err := extractRepoBase(candidate.URL)
+		if err != nil {
+			continue
+		}
+		if candidateBase == parentBase {
+			sameRepoCandidates = append(sameRepoCandidates, candidate)
+		}
+	}
+
+	if len(sameRepoCandidates) == 1 {
+		return sameRepoCandidates[0]
+	}
+
+	if len(sameRepoCandidates) > 1 {
+		latest := sameRepoCandidates[0]
+		for _, candidate := range sameRepoCandidates[1:] {
+			cmp := compareVersions(candidate.Version, latest.Version)
+			if cmp > 0 {
+				latest = candidate
+			}
+		}
+		return latest
+	}
+
+	return highestPriorityCandidates[0]
+}
 
 func resolveMultiCandidates(parentPkg ospackage.PackageInfo, candidates []ospackage.PackageInfo) (ospackage.PackageInfo, error) {
 	parentBase, err := extractRepoBase(parentPkg.URL)
@@ -31,16 +118,9 @@ func resolveMultiCandidates(parentPkg ospackage.PackageInfo, candidates []ospack
 	}
 
 	if hasVersionConstraint {
-		// First pass: look for candidates from the same repo that meet version constraint
-		var sameRepoMatches []ospackage.PackageInfo
-		var otherRepoMatches []ospackage.PackageInfo
+		var matchingCandidates []ospackage.PackageInfo
 
 		for _, candidate := range candidates {
-			candidateBase, err := extractRepoBase(candidate.URL)
-			if err != nil {
-				continue
-			}
-
 			// Check if version constraint is satisfied
 			cmp, err := comparePackageVersions(candidate.Version, ver)
 			if err != nil {
@@ -62,22 +142,12 @@ func resolveMultiCandidates(parentPkg ospackage.PackageInfo, candidates []ospack
 			}
 
 			if versionMatches {
-				if candidateBase == parentBase {
-					sameRepoMatches = append(sameRepoMatches, candidate)
-				} else {
-					otherRepoMatches = append(otherRepoMatches, candidate)
-				}
+				matchingCandidates = append(matchingCandidates, candidate)
 			}
 		}
 
-		// Priority 1: return first match from same repo
-		if len(sameRepoMatches) > 0 {
-			return sameRepoMatches[0], nil
-		}
-
-		// Priority 2: return first match from other repos
-		if len(otherRepoMatches) > 0 {
-			return otherRepoMatches[0], nil
+		if len(matchingCandidates) > 0 {
+			return selectByPriorityThenRepo(parentBase, matchingCandidates), nil
 		}
 
 		return ospackage.PackageInfo{}, fmt.Errorf("no candidates satisfy version constraint = %s%s", op, ver)
@@ -97,38 +167,7 @@ func resolveMultiCandidates(parentPkg ospackage.PackageInfo, candidates []ospack
 		return candidates[0], nil
 	}
 
-	// Rule 1: find all candidates with the same base URL and return the latest version
-	var sameBaseCandidates []ospackage.PackageInfo
-	for _, candidate := range candidates {
-		candidateBase, err := extractRepoBase(candidate.URL)
-		if err != nil {
-			continue
-		}
-		if candidateBase == parentBase {
-			sameBaseCandidates = append(sameBaseCandidates, candidate)
-		}
-	}
-
-	// If we found candidates with the same base URL, return the one with the latest version
-	if len(sameBaseCandidates) > 0 {
-		if len(sameBaseCandidates) == 1 {
-			return sameBaseCandidates[0], nil
-		}
-
-		// Find the candidate with the latest version
-		latest := sameBaseCandidates[0]
-		for _, candidate := range sameBaseCandidates[1:] {
-			cmp := compareVersions(candidate.Version, latest.Version)
-			if cmp > 0 {
-				latest = candidate
-			}
-		}
-
-		return latest, nil
-	}
-
-	// Rule 2: If no candidate has the same repo, return the first candidate in other repos
-	return candidates[0], nil
+	return selectByPriorityThenRepo(parentBase, candidates), nil
 }
 
 func extractRepoBase(rawURL string) (string, error) {
@@ -246,13 +285,52 @@ func extractBasePackageNameFromFile(fullName string) string {
 // extractBaseNameFromDep takes a potentially complex requirement string
 // and returns only the base package/capability name.
 func extractBaseNameFromDep(req string) string {
-	if strings.HasPrefix(req, "(") && strings.Contains(req, " ") {
-		trimmed := strings.TrimPrefix(req, "(")
-		parts := strings.Fields(trimmed)
-		if len(parts) > 0 {
-			req = parts[0]
+	req = strings.TrimSpace(req)
+	if req == "" {
+		return ""
+	}
+
+	// Handle complex conditional dependencies with "if" clauses
+	if strings.Contains(req, ") if ") {
+		// Extract content between first '((' and ') if'
+		if start := strings.Index(req, "(("); start != -1 {
+			if end := strings.Index(req, ") if "); end != -1 {
+				inner := req[start+2 : end]
+				// Handle multiple operators in priority order
+				for _, op := range []string{" >= ", " <= ", " > ", " < ", " = "} {
+					if idx := strings.Index(inner, op); idx != -1 {
+						return strings.TrimSpace(inner[:idx])
+					}
+				}
+				return strings.TrimSpace(inner)
+			}
 		}
 	}
+
+	// Handle simple parentheses cases
+	if strings.HasPrefix(req, "(") && strings.HasSuffix(req, ")") {
+		inner := req[1 : len(req)-1]
+		inner = strings.TrimSpace(inner)
+		// Handle version operators in priority order
+		for _, op := range []string{" >= ", " <= ", " > ", " < ", " = "} {
+			if idx := strings.Index(inner, op); idx != -1 {
+				return strings.TrimSpace(inner[:idx])
+			}
+		}
+		parts := strings.Fields(inner)
+		if len(parts) > 0 {
+			return parts[0]
+		}
+		return inner
+	}
+
+	// Handle regular cases with operators
+	for _, op := range []string{" >= ", " <= ", " > ", " < ", " = "} {
+		if idx := strings.Index(req, op); idx != -1 {
+			return strings.TrimSpace(req[:idx])
+		}
+	}
+
 	finalParts := strings.Fields(req)
 	if len(finalParts) == 0 {
 		return ""
@@ -306,16 +384,45 @@ func findAllCandidates(parent ospackage.PackageInfo, depName string, all []ospac
 	return candidates, nil
 }
 
+func isGlobPattern(s string) bool {
+	return strings.ContainsAny(s, "*?[")
+}
+
+func matchPackageRequest(want, packageName string) bool {
+	if !isGlobPattern(want) {
+		return packageName == want
+	}
+
+	matched, err := filepath.Match(want, packageName)
+	if err != nil {
+		return false
+	}
+
+	return matched
+}
+
 // ResolvePackage finds the best matching package for a given package name
 func ResolveTopPackageConflicts(want string, all []ospackage.PackageInfo) (ospackage.PackageInfo, bool) {
 	var candidates []ospackage.PackageInfo
+	isGlob := isGlobPattern(want)
 	for _, pi := range all {
 		// 1) exact name, e.g. acct-205-25.azl3.noarch.rpm
-		if pi.Name == want {
+		if !isGlob && pi.Name == want {
 			candidates = append(candidates, pi)
 			break
 		}
-		cleanName := extractBasePackageNameFromFile(pi.Name)
+		// Use PkgName if available, otherwise extract from filename
+		cleanName := pi.PkgName
+		if cleanName == "" {
+			cleanName = extractBasePackageNameFromFile(pi.Name)
+		}
+
+		if isGlob {
+			if matchPackageRequest(want, cleanName) || matchPackageRequest(want, pi.Name) {
+				candidates = append(candidates, pi)
+			}
+			continue
+		}
 		// 2) base name, e.g. acct
 		if cleanName == want {
 			candidates = append(candidates, pi)
@@ -384,6 +491,51 @@ func ResolveTopPackageConflicts(want string, all []ospackage.PackageInfo) (ospac
 	})
 
 	return candidates[0], true
+}
+
+// ResolveWildcardPackageConflicts expands a wildcard request to the best package
+// for each matched base package name.
+func ResolveWildcardPackageConflicts(want string, all []ospackage.PackageInfo) ([]ospackage.PackageInfo, bool) {
+	if !isGlobPattern(want) {
+		pkg, found := ResolveTopPackageConflicts(want, all)
+		if !found {
+			return nil, false
+		}
+		return []ospackage.PackageInfo{pkg}, true
+	}
+
+	baseNames := make(map[string]struct{})
+	for _, pi := range all {
+		cleanName := extractBasePackageNameFromFile(pi.Name)
+		if matchPackageRequest(want, cleanName) || matchPackageRequest(want, pi.Name) {
+			baseNames[cleanName] = struct{}{}
+		}
+	}
+
+	if len(baseNames) == 0 {
+		return nil, false
+	}
+
+	var results []ospackage.PackageInfo
+	for baseName := range baseNames {
+		pkg, found := ResolveTopPackageConflicts(baseName, all)
+		if found {
+			results = append(results, pkg)
+		}
+	}
+
+	if len(results) == 0 {
+		return nil, false
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].Name == results[j].Name {
+			return compareVersions(results[i].Version, results[j].Version) > 0
+		}
+		return results[i].Name < results[j].Name
+	})
+
+	return results, true
 }
 
 func extractVersionRequirement(reqVers []string, depName string) (op string, ver string, found bool) {
@@ -698,4 +850,151 @@ func GenerateSPDXFileName(repoNm string) string {
 	timestamp := time.Now().Format("20060102_150405")
 	SPDXFileNm := filepath.Join("spdx_manifest_rpm_" + strings.ReplaceAll(repoNm, " ", "_") + "_" + timestamp + ".json")
 	return SPDXFileNm
+}
+
+func CreateTemporaryRepository(sourcePath, repoName string) (repoPath, serverURL string, cleanup func(), err error) {
+	log := logger.Logger()
+
+	// Validate input path
+	sourcePath, err = filepath.Abs(sourcePath)
+	if err != nil {
+		return "", "", nil, fmt.Errorf("failed to get absolute path of source directory: %w", err)
+	}
+
+	sourceInfo, err := os.Stat(sourcePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", "", nil, fmt.Errorf("source directory does not exist: %s", sourcePath)
+		}
+		return "", "", nil, fmt.Errorf("failed to stat source directory %s: %w", sourcePath, err)
+	}
+
+	if !sourceInfo.IsDir() {
+		return "", "", nil, fmt.Errorf("source path is not a directory: %s", sourcePath)
+	}
+
+	// Check if source contains RPM files
+	pattern := filepath.Join(sourcePath, "*.rpm")
+	rpmFiles, err := filepath.Glob(pattern)
+	if err != nil {
+		return "", "", nil, fmt.Errorf("failed to search for RPM files in %s: %w", sourcePath, err)
+	}
+	if len(rpmFiles) == 0 {
+		return "", "", nil, fmt.Errorf("no RPM files found in source directory: %s", sourcePath)
+	}
+
+	log.Infof("found %d RPM files in source directory: %s", len(rpmFiles), sourcePath)
+
+	// Create temporary repository directory
+	tempRepoPath, err := os.MkdirTemp("", fmt.Sprintf("rpmrepo_%s_*", repoName))
+	if err != nil {
+		return "", "", nil, fmt.Errorf("failed to create temporary repository directory: %w", err)
+	}
+
+	// Create Packages subdirectory for proper RPM repository structure
+	packagesPath := filepath.Join(tempRepoPath, "Packages")
+	if err := os.MkdirAll(packagesPath, 0755); err != nil {
+		// Clean up on failure
+		os.RemoveAll(tempRepoPath)
+		return "", "", nil, fmt.Errorf("failed to create Packages directory: %w", err)
+	}
+
+	log.Infof("created temporary repository directory: %s", tempRepoPath)
+
+	// Copy all RPM files from source to Packages subdirectory without shelling out.
+	for _, rpmFile := range rpmFiles {
+		dstPath := filepath.Join(packagesPath, filepath.Base(rpmFile))
+		if err := copyFile(rpmFile, dstPath); err != nil {
+			// Clean up on failure
+			os.RemoveAll(tempRepoPath)
+			return "", "", nil, fmt.Errorf("failed to copy RPM file %s to temporary repository: %w", rpmFile, err)
+		}
+	}
+
+	log.Infof("copied RPM files from %s to %s", sourcePath, packagesPath)
+
+	// Generate repository metadata using createrepo_c (run on repository root)
+	createrepoCmd := fmt.Sprintf("createrepo_c %s", tempRepoPath)
+	output, err := shell.ExecCmd(createrepoCmd, false, shell.HostPath, nil)
+	if err != nil {
+		// Clean up on failure
+		os.RemoveAll(tempRepoPath)
+		return "", "", nil, fmt.Errorf("failed to create repository metadata: %w", err)
+	}
+
+	log.Debugf("createrepo_c output: %s", output)
+	log.Infof("generated repository metadata for %s", tempRepoPath)
+
+	// Verify that the repository structure was created correctly
+	repoDataPath := filepath.Join(tempRepoPath, "repodata", "repomd.xml")
+	if _, err := os.Stat(repoDataPath); os.IsNotExist(err) {
+		// Clean up on failure
+		os.RemoveAll(tempRepoPath)
+		return "", "", nil, fmt.Errorf("repository metadata was not created properly: missing %s", repoDataPath)
+	}
+
+	log.Infof("verified repository metadata exists: %s", repoDataPath)
+
+	// Start HTTP server to serve the repository
+	serverURL, serverCleanup, err := network.ServeRepositoryHTTP(tempRepoPath)
+	if err != nil {
+		// Clean up repository if server fails
+		os.RemoveAll(tempRepoPath)
+		return "", "", nil, fmt.Errorf("failed to serve repository via HTTP: %w", err)
+	}
+
+	// Combined cleanup function
+	cleanup = func() {
+		serverCleanup()            // Stop HTTP server first
+		os.RemoveAll(tempRepoPath) // Then remove repository directory
+	}
+
+	// Verify HTTP server is working by fetching repomd.xml
+	repomdURL := serverURL + "/repodata/repomd.xml"
+	log.Infof("verifying HTTP server by fetching: %s", repomdURL)
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(repomdURL)
+	if err != nil {
+		// Clean up if verification fails
+		cleanup()
+		return "", "", nil, fmt.Errorf("failed to verify HTTP server - could not fetch repomd.xml: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		// Clean up if verification fails
+		cleanup()
+		return "", "", nil, fmt.Errorf("failed to verify HTTP server - repomd.xml returned status %d", resp.StatusCode)
+	}
+
+	log.Infof("HTTP server verification successful - repomd.xml accessible at %s", repomdURL)
+
+	log.Infof("successfully created and serving temporary RPM repository: %s", tempRepoPath)
+	return tempRepoPath, serverURL, cleanup, nil
+}
+
+func copyFile(srcPath, dstPath string) error {
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return fmt.Errorf("failed to open source file %s: %w", srcPath, err)
+	}
+	defer src.Close()
+
+	srcInfo, err := src.Stat()
+	if err != nil {
+		return fmt.Errorf("failed to stat source file %s: %w", srcPath, err)
+	}
+
+	dst, err := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, srcInfo.Mode())
+	if err != nil {
+		return fmt.Errorf("failed to create destination file %s: %w", dstPath, err)
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, src); err != nil {
+		return fmt.Errorf("failed to copy file data from %s to %s: %w", srcPath, dstPath, err)
+	}
+
+	return nil
 }

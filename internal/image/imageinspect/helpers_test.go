@@ -203,7 +203,7 @@ func TestParseOSRelease_Empty(t *testing.T) {
 
 func TestSHA256Hex_Format(t *testing.T) {
 	data := []byte("test data")
-	hash := sha256Hex(data)
+	hash := hashBytesHex(data)
 	if len(hash) != 64 {
 		t.Fatalf("expected 64 char hash, got %d", len(hash))
 	}
@@ -564,7 +564,7 @@ func TestRenderVerityInfo(t *testing.T) {
 	var buf bytes.Buffer
 
 	// Test with dm-verity enabled
-	v := &VerityInfo{
+	v := &VeritySummary{
 		Enabled:       true,
 		Method:        "custom-initramfs",
 		RootDevice:    "/dev/mapper/rootfs_verity",
@@ -598,7 +598,7 @@ func TestRenderVerityInfo(t *testing.T) {
 func TestRenderVerityInfo_Disabled(t *testing.T) {
 	var buf bytes.Buffer
 
-	v := &VerityInfo{
+	v := &VeritySummary{
 		Enabled: false,
 	}
 
@@ -619,7 +619,7 @@ func TestRenderVerityDiffText(t *testing.T) {
 	// Test dm-verity enabled
 	diff := &VerityDiff{
 		Changed: true,
-		Added: &VerityInfo{
+		Added: &VeritySummary{
 			Enabled:    true,
 			Method:     "systemd-verity",
 			RootDevice: "/dev/sda2",
@@ -645,7 +645,7 @@ func TestRenderVerityDiffText_Removed(t *testing.T) {
 
 	diff := &VerityDiff{
 		Changed: true,
-		Removed: &VerityInfo{
+		Removed: &VeritySummary{
 			Enabled:    true,
 			Method:     "custom-initramfs",
 			RootDevice: "/dev/mapper/test",

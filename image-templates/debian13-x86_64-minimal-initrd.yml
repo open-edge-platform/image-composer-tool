@@ -1,0 +1,27 @@
+# AI-searchable metadata for template discovery
+metadata:
+  description: Minimal Debian 13 initrd/initramfs image for network boot and PXE
+  use_cases:
+    - PXE network boot
+    - Diskless boot environments
+    - Network-based provisioning
+    - Live boot systems
+  keywords:
+    - initrd
+    - initramfs
+    - pxe
+    - network-boot
+    - diskless
+    - live
+    - minimal
+    - debian
+
+image:
+  name: minimal-os-image-debian
+  version: "13.0"
+
+target:
+  os: debian
+  dist: debian13
+  arch: x86_64
+  imageType: img # Image type, valid value: [raw, iso, img].

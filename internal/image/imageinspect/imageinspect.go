@@ -14,10 +14,10 @@ import (
 	"github.com/diskfs/go-diskfs/partition"
 	"github.com/diskfs/go-diskfs/partition/gpt"
 	"github.com/diskfs/go-diskfs/partition/mbr"
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/image/imageconvert"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/file"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/imageconvert"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/file"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"go.uber.org/zap"
 )
 
@@ -27,12 +27,12 @@ type ImageSummary struct {
 	SHA256         string                `json:"sha256,omitempty"`
 	SizeBytes      int64                 `json:"sizeBytes,omitempty"`
 	PartitionTable PartitionTableSummary `json:"partitionTable,omitempty"`
-	Verity         *VerityInfo           `json:"verity,omitempty" yaml:"verity,omitempty"`
-	// SBOM           SBOMSummary 		   `json:"sbom,omitempty"`
+	Verity         *VeritySummary        `json:"verity,omitempty" yaml:"verity,omitempty"`
+	SBOM           SBOMSummary           `json:"sbom,omitempty" yaml:"sbom,omitempty"`
 }
 
-// VerityInfo holds dm-verity detection information.
-type VerityInfo struct {
+// VeritySummary holds dm-verity detection information.
+type VeritySummary struct {
 	Enabled       bool     `json:"enabled" yaml:"enabled"`
 	Method        string   `json:"method,omitempty" yaml:"method,omitempty"` // "systemd-verity", "custom-initramfs", "unknown"
 	RootDevice    string   `json:"rootDevice,omitempty" yaml:"rootDevice,omitempty"`
@@ -51,6 +51,20 @@ type PartitionTableSummary struct {
 
 	LargestFreeSpan      *FreeSpanSummary `json:"largestFreeSpan,omitempty" yaml:"largestFreeSpan,omitempty"`
 	MisalignedPartitions []int            `json:"misalignedPartitions,omitempty" yaml:"misalignedPartitions,omitempty"`
+}
+
+// SBOMSummary holds information about the Software Bill of Materials (SBOM) if available.
+type SBOMSummary struct {
+	Present         bool     `json:"present,omitempty" yaml:"present,omitempty"`
+	Path            string   `json:"path,omitempty" yaml:"path,omitempty"`
+	FileName        string   `json:"fileName,omitempty" yaml:"fileName,omitempty"`
+	Format          string   `json:"format,omitempty" yaml:"format,omitempty"` // e.g., "spdx", "cyclonedx"
+	SizeBytes       int64    `json:"sizeBytes,omitempty" yaml:"sizeBytes,omitempty"`
+	SHA256          string   `json:"sha256,omitempty" yaml:"sha256,omitempty"`
+	CanonicalSHA256 string   `json:"canonicalSha256,omitempty" yaml:"canonicalSha256,omitempty"`
+	PackageCount    int      `json:"packageCount,omitempty" yaml:"packageCount,omitempty"`
+	Content         []byte   `json:"-" yaml:"-"`
+	Notes           []string `json:"notes,omitempty" yaml:"notes,omitempty"`
 }
 
 // FreeSpanSummary captures the largest unallocated extent on disk (by LBA).
@@ -151,6 +165,9 @@ type EFIBinaryEvidence struct {
 	OSRelSHA256   string            `json:"osrelSha256,omitempty" yaml:"osrelSha256,omitempty"`
 	UnameSHA256   string            `json:"unameSha256,omitempty" yaml:"unameSha256,omitempty"`
 
+	// Bootloader configuration (for GRUB, systemd-boot, etc.)
+	BootConfig *BootloaderConfig `json:"bootConfig,omitempty" yaml:"bootConfig,omitempty"`
+
 	Notes []string `json:"notes,omitempty" yaml:"notes,omitempty"`
 }
 
@@ -168,6 +185,56 @@ const (
 	BootloaderLinuxEFIStub BootloaderKind = "linux-efi-stub" // optional
 )
 
+// BootloaderConfig captures bootloader configuration data and kernel references.
+type BootloaderConfig struct {
+	// Configuration file paths and hashes
+	ConfigFiles map[string]string `json:"configFiles,omitempty" yaml:"configFiles,omitempty"` // path -> SHA256
+	ConfigRaw   map[string]string `json:"configRaw,omitempty" yaml:"configRaw,omitempty"`     // path -> raw content (truncated if large)
+
+	// Kernel location references extracted from config
+	KernelReferences []KernelReference `json:"kernelReferences,omitempty" yaml:"kernelReferences,omitempty"`
+
+	// Boot entries (GRUB/systemd-boot/EFI boot order)
+	BootEntries []BootEntry `json:"bootEntries,omitempty" yaml:"bootEntries,omitempty"`
+
+	// UUID resolution: UUIDs found in config and whether they match partition table
+	UUIDReferences []UUIDReference `json:"uuidReferences,omitempty" yaml:"uuidReferences,omitempty"`
+
+	// Default boot target/entry
+	DefaultEntry string `json:"defaultEntry,omitempty" yaml:"defaultEntry,omitempty"`
+
+	// Configuration issues detected during parsing
+	Notes []string `json:"notes,omitempty" yaml:"notes,omitempty"`
+}
+
+// KernelReference represents a kernel file reference found in bootloader config.
+type KernelReference struct {
+	Path          string `json:"path" yaml:"path"`                                       // Kernel path as specified in config
+	PartitionUUID string `json:"partitionUuid,omitempty" yaml:"partitionUuid,omitempty"` // UUID reference if present
+	RootUUID      string `json:"rootUuid,omitempty" yaml:"rootUuid,omitempty"`           // root device UUID reference if present
+	BootEntry     string `json:"bootEntry,omitempty" yaml:"bootEntry,omitempty"`         // Which boot entry this references
+}
+
+// BootEntry represents a single boot entry (GRUB menu item, systemd-boot entry, etc.).
+type BootEntry struct {
+	Name          string `json:"name" yaml:"name"`                                       // Entry name/title
+	Kernel        string `json:"kernel" yaml:"kernel"`                                   // Kernel path
+	Initrd        string `json:"initrd,omitempty" yaml:"initrd,omitempty"`               // Initrd path
+	Cmdline       string `json:"cmdline,omitempty" yaml:"cmdline,omitempty"`             // Kernel cmdline
+	IsDefault     bool   `json:"isDefault,omitempty" yaml:"isDefault,omitempty"`         // Whether this is default
+	PartitionUUID string `json:"partitionUuid,omitempty" yaml:"partitionUuid,omitempty"` // Root partition UUID
+	RootDevice    string `json:"rootDevice,omitempty" yaml:"rootDevice,omitempty"`       // Root device reference
+	UKIPath       string `json:"ukiPath,omitempty" yaml:"ukiPath,omitempty"`             // For systemd-boot unified kernel image
+}
+
+// UUIDReference tracks UUIDs found in bootloader config and partition table resolution.
+type UUIDReference struct {
+	UUID                string `json:"uuid" yaml:"uuid"`
+	Context             string `json:"context" yaml:"context"`                                             // Where found: "kernel_cmdline", "root_device", "boot_entry", etc.
+	ReferencedPartition int    `json:"referencedPartition,omitempty" yaml:"referencedPartition,omitempty"` // Partition index (1-based) if resolved
+	Mismatch            bool   `json:"mismatch" yaml:"mismatch"`                                           // True if UUID not found in partition table
+}
+
 // File system constants
 const (
 	unrealisticSectorSize = 65535
@@ -179,12 +246,17 @@ type diskAccessorFS interface {
 }
 
 type DiskfsInspector struct {
-	HashImages bool
-	logger     *zap.SugaredLogger
+	HashImages  bool
+	InspectSBOM bool
+	logger      *zap.SugaredLogger
 }
 
 func NewDiskfsInspector(hash bool) *DiskfsInspector {
-	return &DiskfsInspector{HashImages: hash, logger: logger.Logger()}
+	return &DiskfsInspector{HashImages: hash, InspectSBOM: false, logger: logger.Logger()}
+}
+
+func NewDiskfsInspectorWithOptions(hash bool, inspectSBOM bool) *DiskfsInspector {
+	return &DiskfsInspector{HashImages: hash, InspectSBOM: inspectSBOM, logger: logger.Logger()}
 }
 
 func (d *DiskfsInspector) Inspect(imagePath string) (*ImageSummary, error) {
@@ -312,12 +384,27 @@ func (d *DiskfsInspector) inspectCore(
 	// Detect dm-verity configuration
 	verityInfo := detectVerity(ptSummary)
 
+	// Detect SBOM information if requested by user
+	var sbomInfo SBOMSummary
+	if d.InspectSBOM {
+		sbomInfo = inspectSBOMFromImageRaw(img, ptSummary)
+		if !sbomInfo.Present {
+			fsSummary := inspectSBOMFromImageFilesystem(disk, ptSummary)
+			if fsSummary.Present {
+				sbomInfo = fsSummary
+			} else {
+				sbomInfo.Notes = append(sbomInfo.Notes, fsSummary.Notes...)
+			}
+		}
+	}
+
 	return &ImageSummary{
 		File:           imagePath,
 		SizeBytes:      sizeBytes,
 		PartitionTable: ptSummary,
 		SHA256:         sha256sum,
 		Verity:         verityInfo,
+		SBOM:           sbomInfo,
 	}, nil
 }
 
@@ -569,9 +656,16 @@ func computeFileSHA256(f *os.File) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// hashBytesHex computes SHA256 hash of a byte slice and returns hex string
+func hashBytesHex(data []byte) string {
+	h := sha256.New()
+	h.Write(data)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 // detectVerity inspects the partition table and UKI cmdline to detect dm-verity configuration
-func detectVerity(pt PartitionTableSummary) *VerityInfo {
-	info := &VerityInfo{}
+func detectVerity(pt PartitionTableSummary) *VeritySummary {
+	info := &VeritySummary{}
 
 	// Look for hash partition (common names/types)
 	hashPartLoopIdx := -1

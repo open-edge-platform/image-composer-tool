@@ -2,7 +2,7 @@
 
 ## Overview
 
-The OS Image Composer supports adding multiple custom package repositories to your image builds through the `packageRepositories` section in image template files. This feature allows you to include packages from additional repositories beyond the default OS repositories, enabling you to integrate specialized software, proprietary packages, or packages from specific vendors into your custom images.
+The ICT supports adding multiple custom package repositories to your image builds through the `packageRepositories` section in image template files. This feature allows you to include packages from additional repositories beyond the default OS repositories, enabling you to integrate specialized software, proprietary packages, or packages from specific vendors into your custom images.
 
 ## How It Works
 
@@ -310,6 +310,6 @@ packageRepositories:
 
 ## Related Documentation
 
-- [Image Template Format](../architecture/image-template-format.md)
-- [Understanding the OS Image Build Process](../architecture/os-image-composer-build-process.md)
+- [Image Templates](../architecture/image-composer-tool-templates.md)
+- [Understanding the OS Image Build Process](../architecture/image-composer-tool-build-process.md)
 - [Configuring Custom Commands During Image Build](configure-additional-actions-for-build.md)

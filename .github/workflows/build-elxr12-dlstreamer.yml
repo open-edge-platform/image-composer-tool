@@ -1,0 +1,107 @@
+name: Build ELXR12 DLStreamer Image
+on:
+  workflow_dispatch:             # Manual runs
+    inputs:
+      ref:
+        description: "Branch or SHA to test (e.g. feature/x or a1b2c3)"
+        required: false
+      run_qemu_test:
+        description: "Run QEMU boot test after build"
+        required: false
+        default: "false"
+        type: choice
+        options:
+        - "true"
+        - "false"
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build-elxr12-dlstreamer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@1e31de5234b9f8995739874a8ce0492dc87873e2 #v4.0.0
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f95db51fddba0c2d1ec667646a06c2ce06100226 #v3.0.0
+
+      - name: Install Earthly
+        uses: earthly/actions-setup@ee3f29b7334bcd54efbe129d3321f600ee0c8567 #v1.0.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          version: "latest"
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 ovmf tree jq systemd-ukify mmdebstrap systemd-boot
+
+      - name: Set up Go
+        uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 #v5.0.0
+        with:
+          go-version: stable
+
+      - name: Prepare build script
+        run: |
+          if [ ! -f scripts/build_elxr12_dlstreamer.sh ]; then
+            echo "scripts/build_elxr12_dlstreamer.sh not found!"
+            exit 1
+          fi
+          chmod +x scripts/build_elxr12_dlstreamer.sh
+
+      - name: Run ELXR12 DLStreamer Image Build
+        env:
+          RUN_QEMU_TEST: ${{ github.event.inputs.run_qemu_test }}
+        run: |
+          echo "Starting ELXR12 DLStreamer image build..."
+          # Ensure script has access to docker group for Earthly
+          sudo usermod -aG docker $USER
+          
+          # Prepare arguments with input validation
+          ARGS=""
+          case "${RUN_QEMU_TEST}" in
+            "true")
+              ARGS="--qemu-test"
+              echo "QEMU boot test will be run after build"
+              ;;
+            "false"|"")
+              echo "QEMU boot test will be skipped"
+              ;;
+            *)
+              echo "Invalid input for run_qemu_test: ${RUN_QEMU_TEST}"
+              exit 1
+              ;;
+          esac
+          
+          # Run the ELXR12 DLStreamer image build script
+          ./scripts/build_elxr12_dlstreamer.sh $ARGS
+          echo "ELXR12 DLStreamer image build completed."
+
+      - name: Notify on failure
+        if: ${{ failure() && github.event_name == 'pull_request' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REVIEWER_ID: srmungar
+        run: |
+          PR_AUTHOR=$(jq --raw-output 'try .pull_request.user.login // empty' "$GITHUB_EVENT_PATH")
+          if [ -z "$PR_AUTHOR" ]; then
+            echo "PR_AUTHOR not found in event payload. Skipping notification."
+            exit 0
+          fi
+          COMMENT_BODY="Hey @$PR_AUTHOR and @$REVIEWER_ID — the ELXR12 DLStreamer image build has failed. Please check the logs."
+          curl -s -X POST \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            --data "{\"body\": \"$COMMENT_BODY\"}" \
+            "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments"

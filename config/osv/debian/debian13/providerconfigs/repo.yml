@@ -1,0 +1,37 @@
+repositories:
+  - name: "trixie"
+    type: "deb"  # Repository type: rpm or deb
+    baseURL: "http://deb.debian.org/debian"
+    pkgPrefix: "http://deb.debian.org/debian"
+    releaseFile: "http://deb.debian.org/debian/dists/trixie/Release"
+    releaseSign: "http://deb.debian.org/debian/dists/trixie/Release.gpg"
+    pbGPGKey: "https://ftp-master.debian.org/keys/archive-key-13.asc"
+    gpgCheck: true
+    repoGPGCheck: true
+    enabled: true
+    component: "main contrib non-free non-free-firmware"  # Repository component/section identifier
+    buildPath: "./builds/debian13/main"  # Will be replaced with temp_dir/builds/debian13/main at runtime
+  - name: "trixie-security"
+    type: "deb"
+    baseURL: "http://deb.debian.org/debian-security"
+    pkgPrefix: "http://deb.debian.org/debian-security"
+    releaseFile: "http://deb.debian.org/debian-security/dists/trixie-security/Release"
+    releaseSign: "http://deb.debian.org/debian-security/dists/trixie-security/Release.gpg"
+    pbGPGKey: "https://ftp-master.debian.org/keys/archive-key-13-security.asc"
+    gpgCheck: true
+    repoGPGCheck: true
+    enabled: true
+    component: "main contrib non-free non-free-firmware"
+    buildPath: "./builds/debian13/security"  # Will be replaced with temp_dir/builds/debian13/security at runtime
+  - name: "trixie-updates"
+    type: "deb"
+    baseURL: "http://deb.debian.org/debian"
+    pkgPrefix: "http://deb.debian.org/debian"
+    releaseFile: "http://deb.debian.org/debian/dists/trixie-updates/Release"
+    releaseSign: "http://deb.debian.org/debian/dists/trixie-updates/Release.gpg"
+    pbGPGKey: "https://ftp-master.debian.org/keys/archive-key-13.asc"
+    gpgCheck: true
+    repoGPGCheck: true
+    enabled: true
+    component: "main contrib non-free non-free-firmware"
+    buildPath: "./builds/debian13/updates"  # Will be replaced with temp_dir/builds/debian13/updates at runtime

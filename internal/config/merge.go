@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/open-edge-platform/os-image-composer/internal/utils/slice"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/slice"
 )
 
 // DefaultConfigLoader handles loading and merging default configurations
@@ -491,10 +491,30 @@ func mergePackageRepositories(defaultRepos, userRepos []PackageRepository) []Pac
 	if len(userRepos) == 0 {
 		return defaultRepos
 	}
+	if len(defaultRepos) == 0 {
+		return userRepos
+	}
 
-	// User repositories take precedence - they completely override defaults
-	// This gives users full control over repository configuration
-	return userRepos
+	// Start with a copy of default repos
+	merged := make([]PackageRepository, len(defaultRepos))
+	copy(merged, defaultRepos)
+
+	// For each user repo, override if codename matches a default, otherwise append
+	for _, userRepo := range userRepos {
+		found := false
+		for i, defRepo := range merged {
+			if defRepo.Codename == userRepo.Codename {
+				merged[i] = userRepo
+				found = true
+				break
+			}
+		}
+		if !found {
+			merged = append(merged, userRepo)
+		}
+	}
+
+	return merged
 }
 
 // Helper functions to check if structures are empty

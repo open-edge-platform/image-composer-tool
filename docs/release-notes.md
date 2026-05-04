@@ -21,8 +21,9 @@
   Legacy BIOS.
 - Verbose and filtered logging based on severity to provide easy troubleshooting.
 - User-defined OS image configuration.
-- Seamless support for AI software stacks - Edge AI Libraries in user
-  space of the OS distribution.
+- Seamless support for AI software stacks -
+  [Edge AI Libraries](https://docs.openedgeplatform.intel.com/2025.2/ai-libraries.html)
+  in user space of the OS distribution.
 - Support for composing the OS images to include ECG Sample Apps.
 
 ### Known Issues/Opens

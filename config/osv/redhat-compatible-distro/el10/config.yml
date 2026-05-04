@@ -1,0 +1,16 @@
+# RHEL 10 OS Configuration
+# This file defines architecture-specific build configurations
+
+x86_64:
+  dist: rcd10                                       # Distribution identifier
+  arch: x86_64                                      # Target architecture
+  pkgType: rpm                                      # Package management system
+  chrootenvConfigFile: chrootenvconfigs/chrootenv_x86_64.yml  # Path to chrootenv config
+  releaseVersion: "10.0"                             # Distribution release version
+
+aarch64:
+  dist: rcd10                                       # Distribution identifier
+  arch: aarch64                                     # Target architecture
+  pkgType: rpm                                      # Package management system
+  chrootenvConfigFile: chrootenvconfigs/chrootenv_aarch64.yml # Path to chrootenv config
+  releaseVersion: "10.0"                             # Distribution release version

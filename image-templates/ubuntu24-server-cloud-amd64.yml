@@ -1,0 +1,153 @@
+# Image metadata describing template identity
+# this template attempt to create ubuntu cloud server in qcow2 
+# based on https://cloud-images.ubuntu.com/server/releases/noble/release-20250429/ubuntu-24.04-server-cloudimg-amd64.img
+image:
+  name: ubuntu-server-cloud-amd64
+  version: "24.04"
+
+# Target platform that the image builder should produce
+target:
+  # Provider family
+  os: ubuntu
+  # Distribution release within provider family
+  dist: ubuntu24
+  # CPU architecture for artifacts
+  arch: x86_64
+  # Artifact format expected from build pipeline
+  imageType: raw
+
+# Disk layout and output artifact definition
+disk:
+  # Human friendly name logged by builders
+  name: ubuntu-server-cloud-raw
+  artifacts:
+    # Request conversion to qcow2
+    - type: raw
+      compression: gz
+  size: 3500MiB
+  # GPT partition table per installer spec
+  partitionTableType: gpt
+  partitions:
+    # BIOS boot partition for GRUB compatibility - first partition
+    - id: BIOSBOOT
+      type: bios-boot
+      # GPT type GUID for BIOS boot partition
+      typeUUID: 21686148-6449-6e6f-744e-656564454649
+      fsType: ext2
+      start: 1MiB
+      end: 5MiB
+      flags:
+        - bios_grub
+    # EFI system partition for bootloaders - second partition
+    - id: EFI
+      type: esp
+      # GPT type GUID for EFI system partition
+      typeUUID: c12a7328-f81f-11d2-ba4b-00a0c93ec93b
+      fsType: fat32
+      fsLabel: UEFI
+      start: 5MiB
+      end: 116MiB
+      mountPoint: /boot/efi
+      mountOptions: defaults
+      flags:
+        - boot
+        - esp
+    # Dedicated /boot to host kernels and bootloader assets - third partition
+    - id: BOOT
+      type: linux
+      # GPT GUID for Linux /boot partition
+      typeUUID: bc13c2ff-59e6-4262-a352-b275fd6f7172
+      fsType: ext4
+      fsLabel: BOOT
+      start: 116MiB
+      end: 1073MiB
+      mountPoint: /boot
+      mountOptions: defaults
+      flags: []
+    # Root filesystem - last partition for easy expansion
+    - id: rootfs
+      name: cloudimg-rootfs
+      type: linux-root-amd64
+      # Standard Linux root filesystem GUID for x86_64
+      typeUUID: 4f68bce3-e8cd-4db1-96e7-fbcaf984b709
+      fsType: ext4
+      fsLabel: cloudimg-rootfs
+      start: 1073MiB
+      end: "0"
+      mountPoint: /
+      mountOptions: defaults
+      flags: []
+
+# Host OS configuration applied within the image
+systemConfig:
+  # Name reused by logging and validation output
+  name: ubuntu-server-cloud-amd64
+  # High-level description surfaced in manifests
+  description: server Ubuntu 24.04 cloud image for x86_64
+
+  immutability:
+    enabled: false # default is true, overridden to false here
+    
+  # Bootloader settings; grub following ubuntu defaults
+  bootloader:
+    bootType: efi
+    provider: grub
+  # Packages derived from ubuntu server cloud image
+  packages:
+  - base-files
+  - bash
+  - bsdutils
+  - cloud-init
+  - dash
+  - diffutils
+  - eatmydata
+  - findutils
+  - grep
+  - grub-pc
+  - gzip
+  - hostname
+  - init
+  - libeatmydata1
+  - libwrap0
+  - linux-virtual
+  - login
+  - ncurses-base
+  - ncurses-bin
+  - ncurses-term
+  - openssh-server
+  - openssh-sftp-server
+  - python-babel-localedata
+  - python3-babel
+  - python3-jinja2
+  - python3-json-pointer
+  - python3-jsonpatch
+  - python3-jsonschema
+  - python3-markupsafe
+  - python3-pyrsistent
+  - python3-serial
+  - python3-tz
+  - shim-signed
+  - ssh-import-id
+  - ubuntu-minimal
+  - ubuntu-server
+  - ubuntu-standard
+  - util-linux
+  
+  ## other top level package 
+  - snapd
+  - systemd-resolved
+  
+  ## Packages required by installer.sh (services that must pre-exist)
+  - systemd-timesyncd
+  - rsyslog
+  - ufw
+  - cron
+  - logrotate
+  - unattended-upgrades
+
+  # Kernel metadata used by builder to set cmdline and module hints
+  kernel:
+    version: "6.11"
+    cmdline: "root=LABEL=cloudimg-rootfs ro console=tty1 console=ttyS0"
+    packages:
+      - linux-image-6.11.0-17-generic

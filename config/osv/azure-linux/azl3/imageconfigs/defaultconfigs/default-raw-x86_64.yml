@@ -34,7 +34,7 @@ disk:
       end: 2561MiB  # 513MiB + 2GiB (2048MiB) = 2561MiB
       fsType: ext4
       mountPoint: /
-      mountOptions: defaults, ro
+      mountOptions: defaults
 
     - id: roothashmap
       type: linux
@@ -89,6 +89,8 @@ systemConfig:
     - dracut-virtio
     - dracut-xen
     - veritysetup
+    - systemd-resolved
+    - efibootmgr
 
   additionalFiles:
     - local: ../additionalfiles/99-dhcp-en.network
@@ -101,3 +103,9 @@ systemConfig:
     packages:
      - kernel
     uki: true
+
+  configurations:
+    # Set up ssh directories with correct permissions
+    - cmd: "mkdir -m 755 -p /opt/var/lib/sshd"
+    - cmd: "printf 'd /run/sshd 0755 root root -\\n' > /etc/tmpfiles.d/sshd.conf"
+    - cmd: "ssh-keygen -A"

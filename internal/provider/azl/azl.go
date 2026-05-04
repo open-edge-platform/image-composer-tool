@@ -5,17 +5,17 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/open-edge-platform/os-image-composer/internal/chroot"
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/image/initrdmaker"
-	"github.com/open-edge-platform/os-image-composer/internal/image/isomaker"
-	"github.com/open-edge-platform/os-image-composer/internal/image/rawmaker"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage/rpmutils"
-	"github.com/open-edge-platform/os-image-composer/internal/provider"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/display"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/system"
+	"github.com/open-edge-platform/image-composer-tool/internal/chroot"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/initrdmaker"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/isomaker"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/rawmaker"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/rpmutils"
+	"github.com/open-edge-platform/image-composer-tool/internal/provider"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/display"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
 
 const (
@@ -89,8 +89,14 @@ func (p *AzureLinux) PreProcess(template *config.ImageTemplate) error {
 		return fmt.Errorf("failed to install host dependencies: %w", err)
 	}
 
+	template.StartDownloadImagePkgsTimer()
 	if err := p.downloadImagePkgs(template); err != nil {
+		template.FinishDownloadImagePkgsTimer()
 		return fmt.Errorf("failed to download image packages: %w", err)
+	}
+	template.FinishDownloadImagePkgsTimer()
+	if templateAwareChrootEnv, ok := p.chrootEnv.(interface{ SetBuildTemplate(*config.ImageTemplate) }); ok {
+		templateAwareChrootEnv.SetBuildTemplate(template)
 	}
 
 	if err := p.chrootEnv.InitChrootEnv(template.Target.OS,
@@ -167,6 +173,15 @@ func (p *AzureLinux) buildInitrdImage(template *config.ImageTemplate) error {
 	if err := initrdMaker.CleanInitrdRootfs(); err != nil {
 		return fmt.Errorf("failed to clean initrd rootfs: %w", err)
 	}
+
+	globalWorkDir, err := config.WorkDir()
+	if err != nil {
+		return fmt.Errorf("failed to get work directory: %w", err)
+	}
+	providerId := system.GetProviderId(template.Target.OS, template.Target.Dist, template.Target.Arch)
+	imageBuildDir := filepath.Join(globalWorkDir, providerId, "imagebuild", template.GetSystemConfigName())
+
+	displayImageArtifacts(imageBuildDir, "IMG")
 
 	return nil
 }
@@ -314,5 +329,8 @@ func loadRepoConfigFromYAML(dist, arch string) (rpmutils.RepoConfig, error) {
 
 // displayImageArtifacts displays all image artifacts in the build directory
 func displayImageArtifacts(imageBuildDir, imageType string) {
-	display.PrintImageDirectorySummary(imageBuildDir, imageType)
+	display.PrintImageDirectorySummary(
+		imageBuildDir,
+		imageType,
+	)
 }

@@ -6,12 +6,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
-	"github.com/open-edge-platform/os-image-composer/internal/config/validate"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/security"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/slice"
+	"github.com/open-edge-platform/image-composer-tool/internal/config/validate"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/security"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/slice"
 	"gopkg.in/yaml.v3"
 )
 
@@ -42,29 +43,33 @@ type DiskConfig struct {
 }
 
 type PackageRepository struct {
-	ID        string `yaml:"id,omitempty"`        // Auto-assigned
-	Codename  string `yaml:"codename"`            // Repository identifier/codename
-	URL       string `yaml:"url"`                 // Repository base URL
-	PKey      string `yaml:"pkey"`                // Public GPG key URL for verification
-	Component string `yaml:"component,omitempty"` // Repository component (e.g., "main", "restricted")
-	Priority  int    `yaml:"priority,omitempty"`  // Repository priority (higher numbers = higher priority)
+	ID            string   `yaml:"id,omitempty"`            // Auto-assigned
+	Codename      string   `yaml:"codename"`                // Repository identifier/codename
+	URL           string   `yaml:"url,omitempty"`           // Repository base URL
+	Path          string   `yaml:"path,omitempty"`          // Local directory path for file-based repositories
+	PKey          string   `yaml:"pkey"`                    // Public GPG key URL for verification
+	PKeys         []string `yaml:"pkeys,omitempty"`         // Multiple public GPG key URLs for verification
+	Component     string   `yaml:"component,omitempty"`     // Repository component (e.g., "main", "restricted")
+	Priority      int      `yaml:"priority,omitempty"`      // Repository priority (higher numbers = higher priority)
+	AllowPackages []string `yaml:"allowPackages,omitempty"` // Optional: specific packages to include from this repo (pinning)
 }
 
 // ProviderRepoConfig represents the repository configuration for a provider
 type ProviderRepoConfig struct {
-	Name         string `yaml:"name"`
-	Type         string `yaml:"type"` // Repository type: "rpm" or "deb"
-	BaseURL      string `yaml:"baseURL"`
-	PkgPrefix    string `yaml:"pkgPrefix"`
-	ReleaseFile  string `yaml:"releaseFile"`
-	ReleaseSign  string `yaml:"releaseSign"`
-	PbGPGKey     string `yaml:"pbGPGKey"` // For DEB repositories (eLxr)
-	GPGKey       string `yaml:"gpgKey"`   // For RPM repositories (azl, emt)
-	GPGCheck     bool   `yaml:"gpgCheck"`
-	RepoGPGCheck bool   `yaml:"repoGPGCheck"`
-	Enabled      bool   `yaml:"enabled"`
-	Component    string `yaml:"component"` // Repository component/section identifier
-	BuildPath    string `yaml:"buildPath"`
+	Name         string   `yaml:"name"`
+	Type         string   `yaml:"type"` // Repository type: "rpm" or "deb"
+	BaseURL      string   `yaml:"baseURL"`
+	PkgPrefix    string   `yaml:"pkgPrefix"`
+	ReleaseFile  string   `yaml:"releaseFile"`
+	ReleaseSign  string   `yaml:"releaseSign"`
+	PbGPGKey     string   `yaml:"pbGPGKey"` // For DEB repositories (eLxr)
+	GPGKey       string   `yaml:"gpgKey"`   // For RPM repositories (azl, emt)
+	GPGKeys      []string `yaml:"gpgKeys,omitempty"`
+	GPGCheck     bool     `yaml:"gpgCheck"`
+	RepoGPGCheck bool     `yaml:"repoGPGCheck"`
+	Enabled      bool     `yaml:"enabled"`
+	Component    string   `yaml:"component"` // Repository component/section identifier
+	BuildPath    string   `yaml:"buildPath"`
 }
 
 // ProviderRepoConfigs represents multiple repository configurations for a provider
@@ -81,14 +86,24 @@ type ImageTemplate struct {
 	PackageRepositories []PackageRepository `yaml:"packageRepositories,omitempty"`
 
 	// Explicitly excluded from YAML serialization/deserialization
-	PathList          []string                `yaml:"-"`
-	BootloaderPkgList []string                `yaml:"-"`
-	EssentialPkgList  []string                `yaml:"-"`
-	KernelPkgList     []string                `yaml:"-"`
-	FullPkgList       []string                `yaml:"-"`
-	FullPkgListBom    []ospackage.PackageInfo `yaml:"-"`
-	DotFilePath       string                  `yaml:"-"`
-	DotSystemOnly     bool                    `yaml:"-"`
+	PathList             []string                `yaml:"-"`
+	BootloaderPkgList    []string                `yaml:"-"`
+	EssentialPkgList     []string                `yaml:"-"`
+	KernelPkgList        []string                `yaml:"-"`
+	FullPkgList          []string                `yaml:"-"`
+	FullPkgListBom       []ospackage.PackageInfo `yaml:"-"`
+	DotFilePath          string                  `yaml:"-"`
+	DotSystemOnly        bool                    `yaml:"-"`
+	pureBuildStart       time.Time
+	pureBuildDuration    time.Duration
+	downloadPkgsStart    time.Time
+	downloadPkgsDuration time.Duration
+	convertImageStart    time.Time
+	convertImageDuration time.Duration
+	chrootPkgDlStart     time.Time
+	chrootPkgDlDuration  time.Duration
+	buildTimelineStart   time.Time
+	buildFinishedAt      time.Time
 }
 
 // PackageSource identifies why a package was requested in the merged template.
@@ -172,10 +187,12 @@ type KernelConfig struct {
 type PartitionInfo struct {
 	Name         string   `yaml:"name"`         // Name: label for the partition
 	ID           string   `yaml:"id"`           // ID: unique identifier for the partition; can be used as a key
+	Index        *int     `yaml:"index"`        // Index: index for the partition sdx (x = 1, 2, 3, 4, ...)
 	Flags        []string `yaml:"flags"`        // Flags: optional flags for the partition (e.g., "boot", "hidden")
 	Type         string   `yaml:"type"`         // Type: partition type (e.g., "esp", "linux-root-amd64")
 	TypeGUID     string   `yaml:"typeUUID"`     // TypeGUID: GPT type GUID for the partition (e.g., "8300" for Linux filesystem)
 	FsType       string   `yaml:"fsType"`       // FsType: filesystem type (e.g., "ext4", "xfs", etc.);
+	FsLabel      string   `yaml:"fsLabel"`      // FsLabel: filesystem label (e.g., "cloudimg-rootfs")
 	Start        string   `yaml:"start"`        // Start: start offset of the partition; can be a absolute size (e.g., "512MiB")
 	End          string   `yaml:"end"`          // End: end offset of the partition; can be a absolute size (e.g., "2GiB") or "0" for the end of the disk
 	MountPoint   string   `yaml:"mountPoint"`   // MountPoint: optional mount point for the partition (e.g., "/boot", "/rootfs")
@@ -253,6 +270,10 @@ func parseYAMLTemplate(data []byte, validateFull bool) (*ImageTemplate, error) {
 		return nil, fmt.Errorf("template parsing failed: invalid structure: %w", err)
 	}
 
+	if err := template.validatePackageRepositories(); err != nil {
+		return nil, err
+	}
+
 	return &template, nil
 }
 
@@ -263,6 +284,7 @@ func (t *ImageTemplate) GetProviderName() string {
 		"azure-linux": {"azl3": "AzureLinux3"},
 		"emt":         {"emt3": "EMT3.0"},
 		"elxr":        {"elxr12": "eLxr12"},
+		"ubuntu":      {"ubuntu24": "Ubuntu24", "ubuntu26": "Ubuntu26"},
 	}
 
 	if providers, ok := providerMap[t.Target.OS]; ok {
@@ -276,15 +298,191 @@ func (t *ImageTemplate) GetProviderName() string {
 // GetDistroVersion returns the version string expected by providers
 func (t *ImageTemplate) GetDistroVersion() string {
 	versionMap := map[string]string{
-		"azl3":   "3",
-		"emt3":   "3.0",
-		"elxr12": "12",
+		"azl3":     "3",
+		"emt3":     "3.0",
+		"elxr12":   "12",
+		"ubuntu24": "24.04",
+		"ubuntu26": "26.04",
 	}
 	return versionMap[t.Target.Dist]
 }
 
 func (t *ImageTemplate) GetImageName() string {
 	return t.Image.Name
+}
+
+// StartPureImageBuildTimer starts tracking the pure image build time window.
+func (t *ImageTemplate) StartPureImageBuildTimer() {
+	if t == nil {
+		return
+	}
+
+	t.pureBuildStart = time.Now()
+	t.pureBuildDuration = 0
+}
+
+// FinishPureImageBuildTimer stores the elapsed pure image build time if tracking was started.
+func (t *ImageTemplate) FinishPureImageBuildTimer() {
+	if t == nil || t.pureBuildStart.IsZero() {
+		return
+	}
+
+	t.pureBuildDuration = time.Since(t.pureBuildStart)
+}
+
+// GetPureImageBuildDuration returns the tracked pure image build duration.
+func (t *ImageTemplate) GetPureImageBuildDuration() time.Duration {
+	if t == nil {
+		return 0
+	}
+
+	return t.pureBuildDuration
+}
+
+// StartBuildTimeline starts the overall build timeline at the provided timestamp.
+func (t *ImageTemplate) StartBuildTimeline(buildTimelineStart time.Time) {
+	if t == nil {
+		return
+	}
+
+	t.buildTimelineStart = buildTimelineStart
+	t.buildFinishedAt = time.Time{}
+}
+
+// MarkBuildFinished marks the overall build timeline end.
+func (t *ImageTemplate) MarkBuildFinished() {
+	if t == nil {
+		return
+	}
+
+	t.buildFinishedAt = time.Now()
+}
+
+// StartDownloadImagePkgsTimer starts tracking downloadImagePkgs duration.
+func (t *ImageTemplate) StartDownloadImagePkgsTimer() {
+	if t == nil {
+		return
+	}
+
+	t.downloadPkgsStart = time.Now()
+	t.downloadPkgsDuration = 0
+}
+
+// FinishDownloadImagePkgsTimer stores elapsed downloadImagePkgs duration if tracking was started.
+func (t *ImageTemplate) FinishDownloadImagePkgsTimer() {
+	if t == nil || t.downloadPkgsStart.IsZero() {
+		return
+	}
+
+	t.downloadPkgsDuration = time.Since(t.downloadPkgsStart)
+	t.chrootPkgDlStart = time.Now()
+	t.chrootPkgDlDuration = 0
+}
+
+// FinishChrootPkgDownloadTimer stores elapsed chroot package download wait time if tracking was started.
+func (t *ImageTemplate) FinishChrootPkgDownloadTimer() {
+	if t == nil || t.chrootPkgDlStart.IsZero() {
+		return
+	}
+
+	t.chrootPkgDlDuration = time.Since(t.chrootPkgDlStart)
+}
+
+// GetChrootPkgDownloadDuration returns tracked chroot package download wait duration.
+func (t *ImageTemplate) GetChrootPkgDownloadDuration() time.Duration {
+	if t == nil {
+		return 0
+	}
+
+	return t.chrootPkgDlDuration
+}
+
+// GetDownloadImagePkgsDuration returns tracked downloadImagePkgs duration.
+func (t *ImageTemplate) GetDownloadImagePkgsDuration() time.Duration {
+	if t == nil {
+		return 0
+	}
+
+	return t.downloadPkgsDuration
+}
+
+// GetDurationStartToDownloadImagePkgs returns the gap from build start to downloadImagePkgs start.
+func (t *ImageTemplate) GetDurationStartToDownloadImagePkgs() time.Duration {
+	if t == nil || t.buildTimelineStart.IsZero() || t.downloadPkgsStart.IsZero() {
+		return 0
+	}
+
+	d := t.downloadPkgsStart.Sub(t.buildTimelineStart)
+	if d < 0 {
+		return 0
+	}
+
+	return d
+}
+
+// GetDurationDownloadImagePkgsToPureBuild returns the gap from downloadImagePkgs end to pure build start.
+func (t *ImageTemplate) GetDurationDownloadImagePkgsToPureBuild() time.Duration {
+	if t == nil || t.downloadPkgsStart.IsZero() || t.downloadPkgsDuration <= 0 || t.pureBuildStart.IsZero() {
+		return 0
+	}
+
+	downloadEnd := t.downloadPkgsStart.Add(t.downloadPkgsDuration)
+	d := t.pureBuildStart.Sub(downloadEnd)
+	if d < 0 {
+		return 0
+	}
+
+	if t.chrootPkgDlDuration > 0 {
+		d -= t.chrootPkgDlDuration
+		if d < 0 {
+			return 0
+		}
+	}
+
+	return d
+}
+
+// GetDurationConvertImageFileToFinish returns the gap from convertImageFile end to build finish.
+func (t *ImageTemplate) GetDurationConvertImageFileToFinish() time.Duration {
+	if t == nil || t.convertImageStart.IsZero() || t.convertImageDuration <= 0 || t.buildFinishedAt.IsZero() {
+		return 0
+	}
+
+	convertEnd := t.convertImageStart.Add(t.convertImageDuration)
+	d := t.buildFinishedAt.Sub(convertEnd)
+	if d < 0 {
+		return 0
+	}
+
+	return d
+}
+
+// StartConvertImageTimer starts tracking image conversion time.
+func (t *ImageTemplate) StartConvertImageTimer() {
+	if t == nil {
+		return
+	}
+
+	t.convertImageStart = time.Now()
+	t.convertImageDuration = 0
+}
+
+// FinishConvertImageTimer stores elapsed image conversion time if tracking was started.
+func (t *ImageTemplate) FinishConvertImageTimer() {
+	if t == nil || t.convertImageStart.IsZero() {
+		return
+	}
+
+	t.convertImageDuration = time.Since(t.convertImageStart)
+}
+
+// GetConvertImageDuration returns tracked image conversion duration.
+func (t *ImageTemplate) GetConvertImageDuration() time.Duration {
+	if t == nil {
+		return 0
+	}
+
+	return t.convertImageDuration
 }
 
 func (t *ImageTemplate) GetTargetInfo() TargetInfo {
@@ -677,13 +875,26 @@ func (prc *ProviderRepoConfig) ToRepoConfigData(arch string) (repoType, name, ur
 			url = prc.BaseURL
 		}
 
-		// Handle GPG key URL construction
-		gpgKey = prc.GPGKey
-		if !strings.HasPrefix(gpgKey, "http") && gpgKey != "" {
-			// For relative GPG key paths, use the constructed repository URL
-			gpgKey = fmt.Sprintf("%s/%s", url, gpgKey)
+		gpgKeyValues := make([]string, 0, len(prc.GPGKeys)+1)
+		if len(prc.GPGKeys) > 0 {
+			gpgKeyValues = append(gpgKeyValues, prc.GPGKeys...)
 		}
-		// If gpgKey starts with http, use it as-is
+		if prc.GPGKey != "" {
+			gpgKeyValues = append(gpgKeyValues, prc.GPGKey)
+		}
+
+		resolvedKeys := make([]string, 0, len(gpgKeyValues))
+		for _, keyURL := range gpgKeyValues {
+			keyURL = strings.TrimSpace(keyURL)
+			if keyURL == "" {
+				continue
+			}
+			if !strings.HasPrefix(keyURL, "http") {
+				keyURL = fmt.Sprintf("%s/%s", url, keyURL)
+			}
+			resolvedKeys = append(resolvedKeys, keyURL)
+		}
+		gpgKey = strings.Join(resolvedKeys, ",")
 
 		// DEB-specific fields are empty for RPM
 		pkgPrefix = ""
@@ -743,4 +954,25 @@ func (i *ImmutabilityConfig) UnmarshalYAML(unmarshal func(interface{}) error) er
 // WasProvided returns true if the immutability section was explicitly defined in YAML
 func (i *ImmutabilityConfig) WasProvided() bool {
 	return i.wasProvided
+}
+
+func (t *ImageTemplate) validatePackageRepositories() error {
+	for _, repo := range t.PackageRepositories {
+		if err := repo.ValidatePackageRepository(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// ValidatePackageRepository validates that either URL or Path is provided
+func (pr *PackageRepository) ValidatePackageRepository() error {
+	if pr.URL == "" && pr.Path == "" {
+		return fmt.Errorf("repository '%s': either 'url' or 'path' must be provided", pr.Codename)
+	}
+	if pr.URL != "" && pr.Path != "" {
+		return fmt.Errorf("repository '%s': cannot specify both 'url' and 'path', choose one", pr.Codename)
+	}
+	return nil
 }

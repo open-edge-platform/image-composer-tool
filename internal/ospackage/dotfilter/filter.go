@@ -1,8 +1,8 @@
 package dotfilter
 
 import (
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 )
 
 // FilterPackagesForDot returns the package slice that should be rendered in the DOT graph.

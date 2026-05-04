@@ -1,0 +1,26 @@
+# AI-searchable metadata for template discovery
+metadata:
+  description: Minimal Debian 13 bootable ISO image for installation media
+  use_cases:
+    - Creating bootable installation media
+    - USB/DVD installation
+    - Bare metal provisioning
+    - System recovery
+  keywords:
+    - iso
+    - bootable
+    - installation
+    - usb
+    - dvd
+    - minimal
+    - debian
+
+image:
+  name: minimal-os-image-debian
+  version: "13.0"
+
+target:
+  os: debian
+  dist: debian13
+  arch: x86_64
+  imageType: iso # Image type, valid value: [raw, iso].

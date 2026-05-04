@@ -1,0 +1,52 @@
+image:
+  name: rcd10-default-x86_64
+  version: "1.0.0"
+
+target:
+  os: redhat-compatible-distro # Target OS name
+  dist: el10 # Target OS distribution
+  arch: x86_64 # Target OS architecture
+  imageType: img # Image type, valid value: [raw, iso, img].
+
+systemConfig:
+  name: Default_Initrd
+  description: Default yml configuration for initrd image
+
+  bootloader:
+    bootType: efi # (efi or legacy)
+    provider: grub # (grub for efi and legacy mode, or systemd-boot for efi mode)
+
+  packages:
+    - core-packages-base-image
+    - dosfstools
+    - efibootmgr
+    - grub2-efi
+    - grub2-efi-binary
+    - grub2-pc
+    - ca-certificates
+    - cronie-anacron
+    - logrotate
+    - shadow-utils
+    - util-linux
+
+  additionalFiles:
+    - local: ../additionalfiles/99-dhcp-en.network
+      final: /etc/systemd/network/99-dhcp-en.network
+    - local: ../additionalfiles/getty@.service
+      final: /usr/lib/systemd/system/getty@.service
+    - local: ../additionalfiles/serial-getty@.service
+      final: /usr/lib/systemd/system/serial-getty@.service
+    - local: ../../../../../general/isolinux/attendedinstaller
+      final: /root/attendedinstaller
+    - local: ../../../../../../build/live-installer
+      final: /usr/bin/live-installer
+
+  users:
+    - name: root
+      startupScript: "/root/attendedinstaller"
+
+  kernel:
+    name: kernel
+    cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
+    packages:
+     - kernel

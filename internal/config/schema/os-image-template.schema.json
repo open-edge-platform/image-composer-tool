@@ -29,7 +29,7 @@
         "os": {
           "type": "string",
           "description": "Target operating system",
-          "enum": ["azure-linux", "edge-microvisor-toolkit", "wind-river-elxr", "ubuntu"]
+          "enum": ["azure-linux", "edge-microvisor-toolkit", "wind-river-elxr", "ubuntu", "redhat-compatible-distro", "debian"]
         },
         "dist": {
           "type": "string",
@@ -60,6 +60,14 @@
         {
           "if": { "properties": { "os": { "const": "wind-river-elxr" } } },
           "then": { "properties": { "dist": { "enum": ["elxr12"] } } }
+        },
+        {
+          "if": { "properties": { "os": { "const": "debian" } } },
+          "then": { "properties": { "dist": { "enum": ["debian13"] } } }
+        },
+        {
+          "if": { "properties": { "os": { "const": "ubuntu" } } },
+          "then": { "properties": { "dist": { "enum": ["ubuntu24", "ubuntu26"] } } }
         }
       ]
     },
@@ -112,10 +120,12 @@
             "type": "object",
             "properties": {
               "id": { "type": "string", "description": "Partition identifier" },
+              "index": {"type": "integer", "description": "Partition index"},
               "name": { "type": "string", "description": "Partition name/label" },
               "type": { "type": "string", "description": "Partition type" },
               "typeUUID": { "type": "string", "description": "Partition type UUID" },
               "fsType": { "type": "string", "description": "Filesystem type" },
+              "fsLabel": { "type": "string", "description": "Filesystem label" },
               "start": { "type": "string", "description": "Partition start offset" },
               "end": { "type": "string", "description": "Partition end offset (0 = rest of disk)" },
               "mountPoint": { "type": "string", "description": "Mount point path" },
@@ -256,8 +266,8 @@
         "bootloader": { "$ref": "#/$defs/Bootloader" },
         "packages": {
           "type": "array",
-          "description": "List of packages to include in the system",
-          "items": { "type": "string", "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9+_.:~-]*[A-Za-z0-9+])?$" },
+          "description": "List of packages to include in the system. Supports simple glob-style patterns on package names, such as wayland* or libva-?[0-9]. Wildcards are limited to *, ?, and bracket ranges (e.g. [0-9]); patterns must match the allowed character set in this schema and are applied only to package names (versioned globs or comparison operators like pkg>=1.2 are not supported). Invalid patterns will cause template validation to fail.",
+          "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9+_.:~*?\\[\\]-]*$" },
           "uniqueItems": true
         },
         "additionalFiles": {
@@ -309,6 +319,11 @@
           "description": "Repository base URL",
           "format": "uri"
         },
+        "path": {
+          "type": "string",
+          "description": "Local directory path for file-based repositories",
+          "pattern": "^/"
+        },
         "pkey": {
           "type": "string",
           "description": "Public GPG key URL for package verification or [trusted=yes] to skip verification",
@@ -331,6 +346,24 @@
             }
           ]
         },
+        "pkeys": {
+          "type": "array",
+          "description": "Multiple public GPG key URLs for package verification (alternative to pkey)",
+          "items": {
+            "type": "string",
+            "oneOf": [
+              {
+                "pattern": "^(https?|file)://",
+                "description": "URL to GPG key file (must start with http://, https://, or file://)"
+              },
+              {
+                "pattern": "^/",
+                "description": "Absolute local file path to GPG key file"
+              }
+            ]
+          },
+          "minItems": 1
+        },
         "component": {
           "type": "string",
           "description": "Repository component (e.g., 'main', 'restricted')",
@@ -342,9 +375,25 @@
           "minimum": -9999,
           "maximum": 9999,
           "default": 0
+        },
+        "allowPackages": {
+          "type": "array",
+          "description": "Optional: specific packages to include from this repository (package pinning)",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9+_.:~*?\\[\\]-]*$"
+          }
         }
       },
-      "required": ["codename", "url", "pkey"],
+      "oneOf": [
+        { "required": ["codename", "path"] },
+        { "required": ["codename", "url"] }
+      ],
+      "anyOf": [
+        { "required": ["pkey"] },
+        { "required": ["pkeys"] }
+      ],
       "additionalProperties": false
     },
 

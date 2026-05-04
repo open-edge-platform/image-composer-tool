@@ -468,30 +468,29 @@ func TestMergePackageRepositoriesDetailed(t *testing.T) {
 
 	merged := mergePackageRepositories(defaultRepos, userRepos)
 
-	// User repositories completely replace defaults in actual implementation
-	if len(merged) != 2 {
-		t.Errorf("expected 2 repositories (user repos replace defaults), got %d", len(merged))
+	// User repos are appended to defaults; matching codenames override defaults
+	if len(merged) != 3 {
+		t.Errorf("expected 3 repositories (default universe + user main override + user extras appended), got %d", len(merged))
 	}
 
-	// Check that only user repositories are present
 	repoMap := make(map[string]string)
 	for _, repo := range merged {
 		repoMap[repo.Codename] = repo.URL
 	}
 
-	// main should be from user
+	// main should be overridden by user
 	if repoMap["main"] != "http://user.com/main" {
 		t.Errorf("expected main repo to be from user, got '%s'", repoMap["main"])
 	}
 
-	// extras should be from user
+	// extras should be appended from user
 	if repoMap["extras"] != "http://user.com/extras" {
 		t.Errorf("expected extras repo to be from user, got '%s'", repoMap["extras"])
 	}
 
-	// universe should NOT be present (defaults are completely replaced)
-	if _, exists := repoMap["universe"]; exists {
-		t.Errorf("universe repo should not be present (defaults completely replaced)")
+	// universe should still be present from defaults
+	if repoMap["universe"] != "http://default.com/universe" {
+		t.Errorf("expected universe repo from defaults, got '%s'", repoMap["universe"])
 	}
 }
 

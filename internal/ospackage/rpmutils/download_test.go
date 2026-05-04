@@ -5,13 +5,51 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage/rpmutils"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/rpmutils"
 )
+
+func TestValidateSupportsMultipleRepoGPGKeys(t *testing.T) {
+	originalRepoCfg := rpmutils.RepoCfg
+	originalUserRepo := rpmutils.UserRepo
+	defer func() {
+		rpmutils.RepoCfg = originalRepoCfg
+		rpmutils.UserRepo = originalUserRepo
+	}()
+
+	hits := map[string]int{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits[r.URL.Path]++
+		_, _ = w.Write([]byte("-----BEGIN PGP PUBLIC KEY BLOCK-----\nkey\n-----END PGP PUBLIC KEY BLOCK-----\n"))
+	}))
+	defer server.Close()
+
+	rpmutils.RepoCfg = rpmutils.RepoConfig{
+		GPGKey: server.URL + "/old.asc," + server.URL + "/new.asc",
+	}
+	rpmutils.UserRepo = nil
+
+	destDir := filepath.Join(t.TempDir(), "rpms")
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		t.Fatalf("failed to create temp rpm dir: %v", err)
+	}
+
+	if err := rpmutils.Validate(destDir); err != nil {
+		t.Fatalf("Validate returned error: %v", err)
+	}
+
+	if hits["/old.asc"] != 1 {
+		t.Fatalf("expected old key to be fetched once, got %d", hits["/old.asc"])
+	}
+	if hits["/new.asc"] != 1 {
+		t.Fatalf("expected new key to be fetched once, got %d", hits["/new.asc"])
+	}
+}
 
 func TestUserPackages(t *testing.T) {
 	// Save original global variables
@@ -52,6 +90,16 @@ func TestUserPackages(t *testing.T) {
 				},
 			},
 			expectError: true, // Will fail due to network call
+		},
+		{
+			name: "local repository is handled elsewhere",
+			userRepos: []config.PackageRepository{
+				{
+					Path: "/tmp/local-rpm-repo",
+					PKey: "[trusted=yes]",
+				},
+			},
+			expectError: false,
 		},
 	}
 
@@ -502,6 +550,92 @@ func TestValidate(t *testing.T) {
 				if err != nil {
 					t.Errorf("Expected no error but got: %v", err)
 				}
+			}
+		})
+	}
+}
+
+func TestValidateSkipsLocalRepoRPMs(t *testing.T) {
+	originalRepoCfg := rpmutils.RepoCfg
+	originalUserRepo := rpmutils.UserRepo
+	defer func() {
+		rpmutils.RepoCfg = originalRepoCfg
+		rpmutils.UserRepo = originalUserRepo
+	}()
+
+	destDir := t.TempDir()
+	localRepoDir := t.TempDir()
+
+	localRPMName := "dummyapp-1.0.0-1.x86_64.rpm"
+	destRPMPath := filepath.Join(destDir, localRPMName)
+	localRPMPath := filepath.Join(localRepoDir, localRPMName)
+
+	if err := os.WriteFile(destRPMPath, []byte("unsigned local rpm"), 0644); err != nil {
+		t.Fatalf("failed to create destination RPM: %v", err)
+	}
+	if err := os.WriteFile(localRPMPath, []byte("unsigned local rpm"), 0644); err != nil {
+		t.Fatalf("failed to create local repo RPM: %v", err)
+	}
+
+	rpmutils.RepoCfg = rpmutils.RepoConfig{}
+	rpmutils.UserRepo = []config.PackageRepository{
+		{
+			Path: localRepoDir,
+			PKey: "[trusted=yes]",
+		},
+	}
+
+	if err := rpmutils.Validate(destDir); err != nil {
+		t.Fatalf("Validate should skip local repo RPM verification, got: %v", err)
+	}
+}
+
+func TestValidateTrustedYesSkipsRPMVerification(t *testing.T) {
+	originalRepoCfg := rpmutils.RepoCfg
+	originalUserRepo := rpmutils.UserRepo
+	defer func() {
+		rpmutils.RepoCfg = originalRepoCfg
+		rpmutils.UserRepo = originalUserRepo
+	}()
+
+	destDir := t.TempDir()
+	rpmPath := filepath.Join(destDir, "unsigned.rpm")
+	if err := os.WriteFile(rpmPath, []byte("unsigned rpm"), 0644); err != nil {
+		t.Fatalf("failed to create RPM: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		repoCfg  rpmutils.RepoConfig
+		userRepo []config.PackageRepository
+	}{
+		{
+			name:    "main repo GPGKey is trusted=yes",
+			repoCfg: rpmutils.RepoConfig{GPGKey: "[trusted=yes]"},
+		},
+		{
+			name:    "non-local user repo PKey is trusted=yes",
+			repoCfg: rpmutils.RepoConfig{},
+			userRepo: []config.PackageRepository{
+				{URL: "https://example.com/repo", PKey: "[trusted=yes]"},
+			},
+		},
+		{
+			name:    "multiple truested=yes keys",
+			repoCfg: rpmutils.RepoConfig{GPGKey: "[trusted=yes]"},
+			userRepo: []config.PackageRepository{
+				{URL: "https://example.com/repo", PKey: "[trusted=yes]"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rpmutils.RepoCfg = tt.repoCfg
+			rpmutils.UserRepo = tt.userRepo
+
+			if err := rpmutils.Validate(destDir); err != nil {
+				t.Errorf("Validate should skip verification for [trusted=yes], got: %v", err)
 			}
 		})
 	}

@@ -1,0 +1,13 @@
+# RCD 10.0 Repository Configuration
+name: "RCD 10.0 Repository"
+type: "rpm"  # Repository type: rpm or deb
+baseURL: "https://mirror.stream.centos.org/10-stream/BaseOS/{arch}/os"
+component: "rcd-10.0-base"  # Repository component/section identifier
+gpgCheck: true  # Re-enabled with correct GPG key
+repoGPGCheck: true  # Re-enabled with correct GPG key
+enabled: true
+gpgKey: "https://www.centos.org/keys/RPM-GPG-KEY-CentOS-Official"
+# For RPM-based repositories, we use the baseURL pattern
+# The actual repository URL is constructed as: {baseURL}/{arch}/
+# Repodata is accessed at: {baseURL}/{arch}/repodata/repomd.xml
+buildPath: "./builds/rcd10"  # Will be replaced with temp_dir/builds/rcd10 at runtime

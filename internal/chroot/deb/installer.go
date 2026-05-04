@@ -2,13 +2,14 @@ package deb
 
 import (
 	"fmt"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/debutils"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/mount"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
-
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/mount"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
 )
 
 var log = logger.Logger()
@@ -19,10 +20,86 @@ type DebInstallerInterface interface {
 }
 
 type DebInstaller struct {
+	targetArch string
 }
 
 func NewDebInstaller() *DebInstaller {
 	return &DebInstaller{}
+}
+
+func normalizeDebArch(targetArch string) (string, error) {
+	switch targetArch {
+	case "amd64", "x86_64":
+		return "amd64", nil
+	case "arm64", "aarch64":
+		return "arm64", nil
+	default:
+		return "", fmt.Errorf("unsupported architecture: %s", targetArch)
+	}
+}
+
+func normalizeRuntimeArch(goArch string) (string, error) {
+	switch goArch {
+	case "amd64":
+		return "amd64", nil
+	case "arm64":
+		return "arm64", nil
+	default:
+		return "", fmt.Errorf("unsupported host architecture: %s", goArch)
+	}
+}
+
+func (debInstaller *DebInstaller) validateCrossArchDeps(targetArch string) error {
+	hostArch, err := normalizeRuntimeArch(runtime.GOARCH)
+	if err != nil {
+		return err
+	}
+
+	if hostArch == targetArch {
+		return nil
+	}
+
+	type crossArchDep struct {
+		name string   // human-readable dependency name
+		cmds []string // commands to check (any match passes)
+		pkg  string   // apt package that provides it
+	}
+
+	qemuCmdByArch := map[string]string{
+		"arm64": "qemu-aarch64-static",
+		"amd64": "qemu-x86_64-static",
+	}
+
+	qemuCmd, ok := qemuCmdByArch[targetArch]
+	if !ok {
+		return fmt.Errorf("unsupported target architecture for cross-architecture dependency validation: %s", targetArch)
+	}
+
+	deps := []crossArchDep{
+		{name: "arch-test", cmds: []string{"arch-test"}, pkg: "arch-test"},
+		{name: qemuCmd, cmds: []string{qemuCmd}, pkg: "qemu-user-static"},
+		{name: "binfmt-support", cmds: []string{"update-binfmts"}, pkg: "binfmt-support"},
+	}
+
+	for _, dep := range deps {
+		hasAnyCommand := false
+		for _, cmd := range dep.cmds {
+			exists, err := shell.IsCommandExist(cmd, shell.HostPath)
+			if err != nil {
+				return fmt.Errorf("failed to check host dependency %q for cross-architecture build (host=%s target=%s): %w", cmd, hostArch, targetArch, err)
+			}
+			if exists {
+				hasAnyCommand = true
+				break
+			}
+		}
+
+		if !hasAnyCommand {
+			return fmt.Errorf("cross-architecture build requested (host=%s target=%s) but required host dependency %q is missing; install it with: sudo apt-get install -y %s", hostArch, targetArch, dep.name, dep.pkg)
+		}
+	}
+
+	return nil
 }
 
 func (debInstaller *DebInstaller) cleanupOnSuccess(repoPath string, err *error) {
@@ -50,14 +127,12 @@ func (debInstaller *DebInstaller) UpdateLocalDebRepo(repoPath, targetArch string
 		return fmt.Errorf("repository path cannot be empty")
 	}
 
-	switch targetArch {
-	case "amd64", "x86_64":
-		targetArch = "amd64"
-	case "arm64", "aarch64":
-		targetArch = "arm64"
-	default:
-		return fmt.Errorf("unsupported architecture: %s", targetArch)
+	normalizedArch, err := normalizeDebArch(targetArch)
+	if err != nil {
+		return err
 	}
+	targetArch = normalizedArch
+	debInstaller.targetArch = normalizedArch
 
 	metaDataPath := filepath.Join(repoPath,
 		fmt.Sprintf("dists/stable/main/binary-%s", targetArch), "Packages.gz")
@@ -87,10 +162,29 @@ func (debInstaller *DebInstaller) UpdateLocalDebRepo(repoPath, targetArch string
 	return nil
 }
 
-func (debInstaller *DebInstaller) InstallDebPkg(targetOsConfigDir, chrootEnvPath, chrootPkgCacheDir string, pkgsList []string) (err error) {
+func (debInstaller *DebInstaller) InstallDebPkg(
+	targetOsConfigDir, chrootEnvPath, chrootPkgCacheDir string, pkgsList []string,
+) (err error) {
+	return debInstaller.InstallDebPkgWithArch(
+		targetOsConfigDir,
+		chrootEnvPath,
+		chrootPkgCacheDir,
+		pkgsList,
+		debInstaller.targetArch,
+	)
+}
+
+func (debInstaller *DebInstaller) InstallDebPkgWithArch(
+	targetOsConfigDir, chrootEnvPath, chrootPkgCacheDir string, pkgsList []string, targetArch string,
+) (err error) {
 	if chrootEnvPath == "" || chrootPkgCacheDir == "" || len(pkgsList) == 0 {
 		return fmt.Errorf("invalid parameters: chrootEnvPath, chrootPkgCacheDir, and pkgsList cannot be empty")
 	}
+	if targetArch == "" {
+		return fmt.Errorf("failed to install debian packages in chroot environment: target architecture is required")
+	}
+
+	debArch := targetArch
 
 	// from local.list
 	repoPath := "/cdrom/cache-repo"
@@ -100,6 +194,12 @@ func (debInstaller *DebInstaller) InstallDebPkg(targetOsConfigDir, chrootEnvPath
 	if _, err := os.Stat(localRepoConfigPath); os.IsNotExist(err) {
 		log.Errorf("Local repository config file does not exist: %s", localRepoConfigPath)
 		return fmt.Errorf("local repository config file does not exist: %s", localRepoConfigPath)
+	}
+	suite := debutils.DetectDebSuiteFromSourcesList(localRepoConfigPath)
+
+	if err := debInstaller.validateCrossArchDeps(debArch); err != nil {
+		log.Errorf("Missing host dependencies for cross-architecture chroot build: %v", err)
+		return err
 	}
 
 	if err := mount.MountPath(chrootPkgCacheDir, repoPath, "--bind"); err != nil {
@@ -129,17 +229,22 @@ func (debInstaller *DebInstaller) InstallDebPkg(targetOsConfigDir, chrootEnvPath
 		"--aptopt=Dpkg::Options::=--force-confdef "+
 		"--aptopt=Dpkg::Options::=--force-confold "+
 		"--aptopt=APT::Get::Assume-Yes=true "+
+		"--architectures=%s "+
 		"--hook-dir=/usr/share/mmdebstrap/hooks/file-mirror-automount "+
 		"--include=%s "+
 		"--verbose --debug "+
-		"-- bookworm %s %s",
-		pkgListStr, chrootEnvPath, localRepoConfigPath)
+		"-- %s %s %s",
+		debArch, pkgListStr, suite, chrootEnvPath, localRepoConfigPath)
 
-	// Set environment variables to ensure non-interactive installation
+	// Set environment variables to ensure non-interactive installation.
+	// PYTHONDONTWRITEBYTECODE skips py3compile during postinst scripts, which
+	// is very slow under QEMU user-mode emulation in cross-arch builds. Python
+	// will recompile bytecode on first execution on the target device.
 	envVars := []string{
 		"DEBIAN_FRONTEND=noninteractive",
 		"DEBCONF_NONINTERACTIVE_SEEN=true",
 		"DEBCONF_NOWARNINGS=yes",
+		"PYTHONDONTWRITEBYTECODE=1",
 	}
 
 	if _, err = shell.ExecCmdWithStream(cmd, true, shell.HostPath, envVars); err != nil {

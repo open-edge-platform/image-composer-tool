@@ -6,8 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-edge-platform/os-image-composer/internal/config/validate"
+	"github.com/open-edge-platform/image-composer-tool/internal/config/validate"
 )
+
+func intPtr(v int) *int { return &v }
 
 func TestMergeStringSlices(t *testing.T) {
 	defaultSlice := []string{"a", "b", "c"}
@@ -481,6 +483,8 @@ func TestAllSupportedProviders(t *testing.T) {
 		{"azure-linux", "azl3", "AzureLinux3", "3"},
 		{"emt", "emt3", "EMT3.0", "3.0"},
 		{"elxr", "elxr12", "eLxr12", "12"},
+		{"ubuntu", "ubuntu24", "Ubuntu24", "24.04"},
+		{"ubuntu", "ubuntu26", "Ubuntu26", "26.04"},
 	}
 
 	for _, tc := range testCases {
@@ -530,6 +534,7 @@ func TestDiskAndSystemConfigGetters(t *testing.T) {
 			Partitions: []PartitionInfo{
 				{
 					ID:         "root",
+					Index:      intPtr(1),
 					FsType:     "ext4",
 					Start:      "1MiB",
 					End:        "0",
@@ -809,6 +814,7 @@ func TestDiskConfigValidation(t *testing.T) {
 				Partitions: []PartitionInfo{
 					{
 						ID:         "boot",
+						Index:      intPtr(1),
 						Name:       "EFI Boot",
 						Type:       "esp",
 						FsType:     "fat32",
@@ -819,6 +825,7 @@ func TestDiskConfigValidation(t *testing.T) {
 					},
 					{
 						ID:         "root",
+						Index:      intPtr(2),
 						Name:       "Root",
 						Type:       "linux-root-amd64",
 						FsType:     "ext4",
@@ -852,6 +859,7 @@ func TestPartitionInfoFields(t *testing.T) {
 			Partitions: []PartitionInfo{
 				{
 					ID:           "efi",
+					Index:        intPtr(1),
 					Name:         "EFI System",
 					Type:         "esp",
 					TypeGUID:     "C12A7328-F81F-11D2-BA4B-00A0C93EC93B",
@@ -864,6 +872,7 @@ func TestPartitionInfoFields(t *testing.T) {
 				},
 				{
 					ID:       "swap",
+					Index:    intPtr(2),
 					Name:     "Swap",
 					Type:     "swap",
 					TypeGUID: "0657FD6D-A4AB-43C4-84E5-0933C84B4F4F",
@@ -873,6 +882,7 @@ func TestPartitionInfoFields(t *testing.T) {
 				},
 				{
 					ID:         "root",
+					Index:      intPtr(3),
 					Name:       "Root",
 					Type:       "linux-root-amd64",
 					TypeGUID:   "4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709",
@@ -897,6 +907,9 @@ func TestPartitionInfoFields(t *testing.T) {
 	if efiPartition.ID != "efi" {
 		t.Errorf("expected EFI partition ID 'efi', got '%s'", efiPartition.ID)
 	}
+	if *efiPartition.Index != 1 {
+		t.Errorf("expected index 1 for EFI partition, got %d", *efiPartition.Index)
+	}
 	if len(efiPartition.Flags) != 2 {
 		t.Errorf("expected 2 flags for EFI partition, got %d", len(efiPartition.Flags))
 	}
@@ -918,6 +931,9 @@ func TestPartitionInfoFields(t *testing.T) {
 	if swapPartition.FsType != "swap" {
 		t.Errorf("expected swap filesystem type, got '%s'", swapPartition.FsType)
 	}
+	if *swapPartition.Index != 2 {
+		t.Errorf("expected index 2 for swap, got '%d'", *swapPartition.Index)
+	}
 	if swapPartition.MountPoint != "" {
 		t.Errorf("expected empty mount point for swap, got '%s'", swapPartition.MountPoint)
 	}
@@ -932,6 +948,9 @@ func TestPartitionInfoFields(t *testing.T) {
 	rootPartition := diskConfig.Partitions[2]
 	if rootPartition.MountPoint != "/" {
 		t.Errorf("expected root mount point '/', got '%s'", rootPartition.MountPoint)
+	}
+	if *rootPartition.Index != 3 {
+		t.Errorf("expected index 3 for root, got '%d'", *rootPartition.Index)
 	}
 	if rootPartition.Start != "2GiB" {
 		t.Errorf("expected root start '2GiB', got '%s'", rootPartition.Start)
@@ -2058,8 +2077,8 @@ func TestDefaultGlobalConfig(t *testing.T) {
 		t.Errorf("expected default log level 'info', got '%s'", config.Logging.Level)
 	}
 
-	if config.Logging.File != "os-image-composer.log" {
-		t.Errorf("expected default log file 'os-image-composer.log', got '%s'", config.Logging.File)
+	if config.Logging.File != "image-composer-tool.log" {
+		t.Errorf("expected default log file 'image-composer-tool.log', got '%s'", config.Logging.File)
 	}
 }
 
@@ -2427,6 +2446,55 @@ systemConfig:
 	}
 }
 
+func TestLoadTemplateRejectsInvalidPackageRepository(t *testing.T) {
+	yamlContent := `image:
+  name: test-invalid-repo
+  version: "1.0.0"
+
+target:
+  os: azure-linux
+  dist: azl3
+  arch: x86_64
+  imageType: raw
+
+packageRepositories:
+  - codename: "invalid-repo"
+    url: "https://example.com/repo"
+    path: "/tmp/repo"
+    pkey: "https://example.com/key.pub"
+
+systemConfig:
+  name: test
+  packages:
+    - test-package
+  kernel:
+    version: "6.12"
+    cmdline: "quiet"
+`
+
+	tmpFile, err := os.CreateTemp("", "test-invalid-repo-*.yml")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	if err := tmpFile.Chmod(0600); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpFile.Name())
+		t.Fatalf("failed to set temp file permissions: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString(yamlContent); err != nil {
+		tmpFile.Close()
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	_, err = LoadTemplate(tmpFile.Name(), false)
+	if err == nil {
+		t.Fatal("expected LoadTemplate to reject invalid package repository configuration")
+	}
+}
+
 func TestGlobalConfigSaveWithCreateDirectory(t *testing.T) {
 	config := &GlobalConfig{
 		Workers:   4,
@@ -2469,7 +2537,7 @@ func TestSaveGlobalConfigWithComments(t *testing.T) {
 	}
 
 	text := string(contents)
-	if !strings.Contains(text, "# OS Image Composer - Global Configuration") {
+	if !strings.Contains(text, "# ICT - Global Configuration") {
 		t.Fatalf("expected commented config header, got: %s", text)
 	}
 
@@ -2977,21 +3045,28 @@ func TestMergePackageRepositories(t *testing.T) {
 
 	merged := mergePackageRepositories(defaultRepos, userRepos)
 
-	// User repos should completely override defaults
-	if len(merged) != 1 {
-		t.Errorf("expected 1 merged repository, got %d", len(merged))
+	// User repos are appended to defaults (additive merge)
+	if len(merged) != 3 {
+		t.Errorf("expected 3 merged repositories (2 default + 1 user), got %d", len(merged))
 	}
 
-	if merged[0].Codename != "user1" {
-		t.Errorf("expected merged repo codename 'user1', got '%s'", merged[0].Codename)
+	// Create a map to easily check repos by codename
+	repoMap := make(map[string]PackageRepository)
+	for _, repo := range merged {
+		repoMap[repo.Codename] = repo
 	}
 
-	if merged[0].URL != "https://user.com/1" {
-		t.Errorf("expected merged repo URL 'https://user.com/1', got '%s'", merged[0].URL)
+	// Verify all default repos are preserved
+	if repo, exists := repoMap["default1"]; !exists || repo.URL != "https://default.com/1" {
+		t.Errorf("expected default1 repo to be preserved")
+	}
+	if repo, exists := repoMap["default2"]; !exists || repo.URL != "https://default.com/2" {
+		t.Errorf("expected default2 repo to be preserved")
 	}
 
-	if merged[0].PKey != "https://user.com/1.pub" {
-		t.Errorf("expected merged repo pkey 'https://user.com/1.pub', got '%s'", merged[0].PKey)
+	// Verify user repo is added
+	if repo, exists := repoMap["user1"]; !exists || repo.URL != "https://user.com/1" {
+		t.Errorf("expected user1 repo to be added")
 	}
 }
 
@@ -3056,25 +3131,29 @@ func TestMergeConfigurationsWithPackageRepositories(t *testing.T) {
 		t.Fatalf("failed to merge configurations: %v", err)
 	}
 
-	// Test that user repositories completely override defaults
+	// Test that user repositories are added to defaults (additive merge)
 	repos := merged.GetPackageRepositories()
-	if len(repos) != 1 {
-		t.Errorf("expected 1 merged repository (user override), got %d", len(repos))
+	if len(repos) != 3 {
+		t.Errorf("expected 3 merged repositories (2 default + 1 user), got %d", len(repos))
 	}
 
-	if repos[0].Codename != "company-internal" {
-		t.Errorf("expected user repository codename 'company-internal', got '%s'", repos[0].Codename)
-	}
-
-	// Verify default repositories are not included when user specifies repositories
+	// Verify user repository is included
 	companyRepo := merged.GetRepositoryByCodename("company-internal")
 	if companyRepo == nil {
 		t.Errorf("expected to find user repository 'company-internal'")
+	} else if companyRepo.URL != "https://packages.company.com/internal" {
+		t.Errorf("expected company-internal URL to be correct, got '%s'", companyRepo.URL)
 	}
 
-	defaultRepo := merged.GetRepositoryByCodename("azure-extras")
-	if defaultRepo != nil {
-		t.Errorf("expected default repository 'azure-extras' to be overridden by user repos")
+	// Verify default repositories are preserved
+	azureExtrasRepo := merged.GetRepositoryByCodename("azure-extras")
+	if azureExtrasRepo == nil {
+		t.Errorf("expected default repository 'azure-extras' to be preserved")
+	}
+
+	azurePreviewRepo := merged.GetRepositoryByCodename("azure-preview")
+	if azurePreviewRepo == nil {
+		t.Errorf("expected default repository 'azure-preview' to be preserved")
 	}
 }
 
@@ -3192,6 +3271,77 @@ systemConfig:
 	repo2 := template.GetRepositoryByCodename("test-repo2")
 	if repo2 == nil {
 		t.Errorf("expected to find test-repo2")
+	}
+}
+
+func TestPackageRepositoryYAMLParsingLocalPath(t *testing.T) {
+	yamlContent := `image:
+  name: test-local-repo-parsing
+  version: "1.0.0"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+
+packageRepositories:
+  - codename: "localdeb"
+    path: "/data/image-composer-tool/localdeb"
+    pkey: "[trusted=yes]"
+    component: "main"
+
+systemConfig:
+  name: test
+  packages:
+    - test-package
+  kernel:
+    version: "6.12"
+    cmdline: "quiet"
+`
+
+	tmpFile, err := os.CreateTemp("", "test-local-repo-*.yml")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	if err := tmpFile.Chmod(0600); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpFile.Name())
+		return
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString(yamlContent); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	template, err := LoadTemplate(tmpFile.Name(), false)
+	if err != nil {
+		t.Fatalf("failed to load YAML template with local package repository: %v", err)
+	}
+
+	repos := template.GetPackageRepositories()
+	if len(repos) != 1 {
+		t.Fatalf("expected 1 parsed repository, got %d", len(repos))
+	}
+
+	repo := template.GetRepositoryByCodename("localdeb")
+	if repo == nil {
+		t.Fatalf("expected to find localdeb repository")
+	}
+
+	if repo.Path != "/data/image-composer-tool/localdeb" {
+		t.Errorf("expected repo path '/data/image-composer-tool/localdeb', got '%s'", repo.Path)
+	}
+	if repo.PKey != "[trusted=yes]" {
+		t.Errorf("expected repo pkey '[trusted=yes]', got '%s'", repo.PKey)
+	}
+	if repo.Component != "main" {
+		t.Errorf("expected repo component 'main', got '%s'", repo.Component)
+	}
+	if repo.URL != "" {
+		t.Errorf("expected repo URL to be empty for local path repository, got '%s'", repo.URL)
 	}
 }
 
@@ -3654,6 +3804,7 @@ func TestUnifiedRepoConfig(t *testing.T) {
 		arch         string
 		expectedType string
 		expectedURL  string
+		expectedGPG  string
 	}{
 		{
 			name: "RPM Repository (Azure Linux)",
@@ -3668,6 +3819,7 @@ func TestUnifiedRepoConfig(t *testing.T) {
 			arch:         "x86_64",
 			expectedType: "rpm",
 			expectedURL:  "https://packages.microsoft.com/azurelinux/3.0/prod/base/x86_64",
+			expectedGPG:  "https://packages.microsoft.com/azurelinux/3.0/prod/base/x86_64/repodata/repomd.xml.key",
 		},
 		{
 			name: "DEB Repository (eLxr)",
@@ -3698,6 +3850,21 @@ func TestUnifiedRepoConfig(t *testing.T) {
 			arch:         "x86_64",
 			expectedType: "rpm",
 			expectedURL:  "https://files-rs.edgeorchestration.intel.com/files-edge-orch/microvisor/rpm/3.0",
+		},
+		{
+			name: "RPM Repository with multiple GPG keys",
+			repoConfig: ProviderRepoConfig{
+				Name:      "Edge Microvisor Toolkit 3.0",
+				Type:      "rpm",
+				BaseURL:   "https://files-rs.edgeorchestration.intel.com/files-edge-orch/microvisor/rpm/3.0",
+				GPGKeys:   []string{"https://example.com/key-old.asc", "https://example.com/key-new.asc"},
+				Component: "emt3.0-base",
+				Enabled:   true,
+			},
+			arch:         "x86_64",
+			expectedType: "rpm",
+			expectedURL:  "https://files-rs.edgeorchestration.intel.com/files-edge-orch/microvisor/rpm/3.0",
+			expectedGPG:  "https://example.com/key-old.asc,https://example.com/key-new.asc",
 		},
 	}
 
@@ -3738,7 +3905,11 @@ func TestUnifiedRepoConfig(t *testing.T) {
 				}
 
 				// Verify arch substitution in GPG key if applicable
-				if tt.repoConfig.GPGKey != "" && gpgKey != "" {
+				if tt.expectedGPG != "" {
+					if gpgKey != tt.expectedGPG {
+						t.Errorf("Expected GPG key %s, got %s", tt.expectedGPG, gpgKey)
+					}
+				} else if tt.repoConfig.GPGKey != "" && gpgKey != "" {
 					expectedGPGKey := tt.repoConfig.GPGKey
 					if expectedGPGKey == "repodata/repomd.xml.key" {
 						expectedGPGKey = "https://packages.microsoft.com/azurelinux/3.0/prod/base/x86_64/repodata/repomd.xml.key"
@@ -3917,10 +4088,10 @@ func TestGetConfigPaths(t *testing.T) {
 
 	// Verify that current directory paths are included
 	expectedPaths := []string{
-		"os-image-composer.yml",
-		".os-image-composer.yml",
-		"os-image-composer.yaml",
-		".os-image-composer.yaml",
+		"image-composer-tool.yml",
+		".image-composer-tool.yml",
+		"image-composer-tool.yaml",
+		".image-composer-tool.yaml",
 	}
 
 	for _, expected := range expectedPaths {
@@ -3938,8 +4109,8 @@ func TestGetConfigPaths(t *testing.T) {
 
 	// Verify system paths are included
 	systemPaths := []string{
-		"/etc/os-image-composer/config.yml",
-		"/etc/os-image-composer/config.yaml",
+		"/etc/image-composer-tool/config.yml",
+		"/etc/image-composer-tool/config.yaml",
 	}
 
 	for _, sysPath := range systemPaths {
@@ -3979,7 +4150,7 @@ func TestFindConfigFile(t *testing.T) {
 	}
 
 	// Create a config file
-	configFile := "os-image-composer.yml"
+	configFile := "image-composer-tool.yml"
 	if err := os.WriteFile(configFile, []byte("workers: 4\n"), 0644); err != nil {
 		t.Fatalf("Failed to create test config: %v", err)
 	}

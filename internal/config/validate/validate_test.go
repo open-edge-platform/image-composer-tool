@@ -137,6 +137,39 @@ systemConfig:
 	}
 }
 
+func TestValidMergedTemplateWithWildcardPackages(t *testing.T) {
+	mergedTemplateYAML := `image:
+  name: test-merged-image
+  version: "1.0.0"
+
+target:
+  os: edge-microvisor-toolkit
+  dist: emt3
+  arch: x86_64
+  imageType: raw
+
+systemConfig:
+  name: default
+  packages:
+    - wayland*
+    - libva*
+`
+
+	var raw interface{}
+	if err := yaml.Unmarshal([]byte(mergedTemplateYAML), &raw); err != nil {
+		t.Fatalf("yml parsing error: %v", err)
+	}
+
+	dataJSON, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("json marshaling error: %v", err)
+	}
+
+	if err := ValidateImageTemplateJSON(dataJSON); err != nil {
+		t.Errorf("expected wildcard package template to pass validation, but got: %v", err)
+	}
+}
+
 func TestInvalidMergedTemplate(t *testing.T) {
 	// Create an invalid merged template (missing required fields)
 	invalidMergedTemplateYAML := `image:
@@ -166,6 +199,45 @@ target:
 
 	if err := ValidateImageTemplateJSON(dataJSON); err == nil {
 		t.Errorf("expected invalid merged template to fail validation")
+	}
+}
+
+func TestInvalidMergedTemplateWithMalformedAllowPackage(t *testing.T) {
+	invalidTemplateYAML := `image:
+  name: test-merged-image
+  version: "1.0.0"
+
+target:
+  os: edge-microvisor-toolkit
+  dist: emt3
+  arch: x86_64
+  imageType: raw
+
+packageRepositories:
+  - codename: "emtNext"
+    url: "https://example.com/repo"
+    pkey: "[trusted=yes]"
+    allowPackages:
+      - qemu-audio-oss"
+
+systemConfig:
+  name: default
+  packages:
+    - qemu-system-x86
+`
+
+	var raw interface{}
+	if err := yaml.Unmarshal([]byte(invalidTemplateYAML), &raw); err != nil {
+		t.Fatalf("yml parsing error: %v", err)
+	}
+
+	dataJSON, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("json marshaling error: %v", err)
+	}
+
+	if err := ValidateImageTemplateJSON(dataJSON); err == nil {
+		t.Errorf("expected template with malformed allowPackages entry to fail validation")
 	}
 }
 
@@ -612,5 +684,47 @@ systemConfig:
 	// This should pass validation with a normal URL
 	if err := ValidateImageTemplateJSON(dataJSON); err != nil {
 		t.Errorf("expected template with URL pkey to pass validation, but got: %v", err)
+	}
+}
+
+// TestPackageRepositoryWithLocalPath validates that a local path repository
+// with [trusted=yes] is accepted by schema validation.
+func TestPackageRepositoryWithLocalPath(t *testing.T) {
+	templateYAML := `image:
+  name: test-local-path-repo
+  version: "1.0.0"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+
+packageRepositories:
+  - codename: "localdeb"
+    path: "/data/image-composer-tool/localdeb"
+    pkey: "[trusted=yes]"
+    component: "main"
+
+systemConfig:
+  name: test
+  packages:
+    - test-package
+  kernel:
+    version: "6.14"
+`
+
+	var raw interface{}
+	if err := yaml.Unmarshal([]byte(templateYAML), &raw); err != nil {
+		t.Fatalf("YAML parsing error: %v", err)
+	}
+
+	dataJSON, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("JSON marshaling error: %v", err)
+	}
+
+	if err := ValidateImageTemplateJSON(dataJSON); err != nil {
+		t.Errorf("expected template with local path repo to pass validation, but got: %v", err)
 	}
 }

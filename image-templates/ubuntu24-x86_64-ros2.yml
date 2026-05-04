@@ -36,13 +36,14 @@ systemConfig:
     - cryptsetup-bin
     - openssh-server
     - systemd-resolved
+    - systemd-timesyncd
     # ROS2
     - ros-jazzy-ros-base
     - ros-jazzy-rmw-cyclonedds-cpp
     - ros-jazzy-demo-nodes-py
 
   kernel:
-    version: "6.14"
+    version: "6.17"
     cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
     packages:
       - linux-image-generic-hwe-24.04

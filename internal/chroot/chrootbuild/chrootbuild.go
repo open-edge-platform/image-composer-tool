@@ -8,19 +8,19 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/open-edge-platform/os-image-composer/internal/chroot/deb"
-	"github.com/open-edge-platform/os-image-composer/internal/chroot/rpm"
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/config/schema"
-	"github.com/open-edge-platform/os-image-composer/internal/config/validate"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage/debutils"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage/rpmutils"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/compression"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/file"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/security"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/system"
+	"github.com/open-edge-platform/image-composer-tool/internal/chroot/deb"
+	"github.com/open-edge-platform/image-composer-tool/internal/chroot/rpm"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/config/schema"
+	"github.com/open-edge-platform/image-composer-tool/internal/config/validate"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/debutils"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/rpmutils"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/compression"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/file"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/security"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
 
 const (
@@ -48,8 +48,13 @@ type ChrootBuilder struct {
 	TargetOsConfig    map[string]interface{}
 	ChrootBuildDir    string
 	ChrootPkgCacheDir string
+	BuildTemplate     *config.ImageTemplate
 	RpmInstaller      rpm.RpmInstallerInterface
 	DebInstaller      deb.DebInstallerInterface
+}
+
+func (chrootBuilder *ChrootBuilder) SetBuildTemplate(template *config.ImageTemplate) {
+	chrootBuilder.BuildTemplate = template
 }
 
 // ChrootenvConfig represents the structure of a chrootenv configuration file
@@ -283,6 +288,9 @@ func (chrootBuilder *ChrootBuilder) BuildChrootEnv(targetOs string, targetDist s
 	pkgsList, allPkgsList, err := chrootBuilder.downloadChrootEnvPackages()
 	if err != nil {
 		return fmt.Errorf("failed to download chroot environment packages: %w", err)
+	}
+	if chrootBuilder.BuildTemplate != nil {
+		chrootBuilder.BuildTemplate.FinishChrootPkgDownloadTimer()
 	}
 	log.Infof("Downloaded %d packages for chroot environment", len(allPkgsList))
 

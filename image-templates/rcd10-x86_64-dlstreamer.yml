@@ -1,0 +1,91 @@
+image:
+  name: rcd10-x86_64-dlstreamer
+  version: "1.0.0"
+
+target:
+  os: redhat-compatible-distro # Target OS name
+  dist: el10 # Target OS distribution
+  arch: x86_64 # Target OS architecture
+  imageType: raw # Image type, valid value: [raw, iso].
+
+packageRepositories:
+  - codename: "EdgeAI"
+    url: "https://yum.repos.intel.com/edgeai/"
+    pkey: "https://yum.repos.intel.com/edgeai/GPG-PUB-KEY-INTEL-DLS.gpg" # Uncomment and replace in real config
+  
+  - codename: "edge-base"
+    url: "https://files-rs.edgeorchestration.intel.com/files-edge-orch/microvisor/rpms/3.0/base"
+    pkeys:
+      - "https://raw.githubusercontent.com/open-edge-platform/edge-microvisor-toolkit/refs/heads/3.0/SPECS/edge-repos/INTEL-RPM-GPG-KEY"
+      - "https://raw.githubusercontent.com/cheeyanglee/edge-microvisor-toolkit/e2e05b402c056bbf4ba1a429490b3c37f4d659d7/SPECS/edge-repos/INTEL-RPM-GPG-KEY-26"
+    allowPackages:
+      - kernel-drivers-gpu
+      - kernel
+      - grub2-configuration
+      - linux-firmware-i915
+      - libva-intel-media-driver 
+      - libva-utils
+      - intel-gmmlib
+  
+  - codename: "OpenVINO"
+    url: "https://yum.repos.intel.com/openvino/"
+    pkey: "https://yum.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB" # Uncomment and replace in real config
+    
+  - codename: "mariner"
+    url: "https://packages.microsoft.com/yumrepos/cbl-mariner-2.0-prod-extended-x86_64/"
+    pkey: "https://packages.microsoft.com/azurelinux/3.0/prod/base/x86_64/repodata/repomd.xml.key" # Uncomment and replace in real config
+
+
+disk:
+  name: Minimal_Raw # 1:1 mapping to the systemConfigs name
+  artifacts:
+    -
+      type: raw  # image file format, valid value [raw, vhd, vhdx, qcow2, vmdk, vdi]
+      compression: gz # image compression format (optional)
+    - type: vhdx
+  size: 4GiB # 4G, 4GB, 4096 MiB also valid. (Required for raw)
+  partitionTableType: gpt # Partition table type, valid value: [gpt, mbr]
+  partitions: # Required for raw, optional for ISO, not needed for rootfs.
+    - id: boot
+      type: esp
+      flags:
+        - esp
+        - boot
+      start: 1MiB
+      end: 513MiB
+      fsType: fat32
+      mountPoint: /boot/efi
+      mountOptions: umask=0077
+
+    - id: rootfs
+      type: linux-root-amd64
+      start: 513MiB
+      end: "0"
+      fsType: ext4
+      mountPoint: /
+      mountOptions: defaults
+
+systemConfig:
+  name: Minimal_Raw
+  description: Default yml configuration for raw image
+  kernel:
+    version: "6.12"
+    cmdline: "console=ttyS0,115200 console=tty0 loglevel=7 i915.force_probe=*"
+    enableExtraModules: "usbcore usb-common"
+    packages:
+      - kernel-drivers-gpu
+
+  immutability:
+    enabled: false # default is true, overridden to false here
+  packages:
+    - sqlite
+    - curl
+    - nano
+    - paho-mqtt-c
+    - ffmpeg
+    - gstreamer
+    - opencv
+    - intel-dlstreamer-2025.2.0
+    - openvino-2025.3.0
+    - linux-firmware-i915
+    # - tdnf

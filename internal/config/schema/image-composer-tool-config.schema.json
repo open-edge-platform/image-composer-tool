@@ -1,0 +1,190 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"$id": "https://github.com/open-edge-platform/image-composer-tool/schemas/image-composer-tool-config.schema.json",
+	"title": "ICT Config",
+	"description": "Defines the global configuration file for the ICT",
+	"type": "object",
+	"properties": {
+		"workers": {
+			"type": "integer",
+			"description": "Number of concurrent workers for tasks",
+			"default": 8,
+			"minimum": 1,
+			"maximum": 64
+		},
+		"config_dir": {
+			"type": "string",
+			"description": "Configuration file directory for the ICT",
+			"default": ".config",
+			"pattern": "^[a-zA-Z0-9_./-]+$",
+			"minLength": 0,
+			"maxLength": 255
+		},
+		"cache_dir": {
+			"type": "string",
+			"description": "Default root package cache directory",
+			"default": ".cache",
+			"pattern": "^[a-zA-Z0-9_./-]+$",
+			"minLength": 0,
+			"maxLength": 255
+		},
+		"work_dir": {
+			"type": "string",
+			"description": "Default root workspace directory",
+			"default": ".workspace",
+			"pattern": "^[a-zA-Z0-9_./-]+$",
+			"minLength": 0,
+			"maxLength": 255
+		},
+		"temp_dir": {
+			"type": "string",
+			"description": "Default temporary directory for short lived files",
+			"default": ".temp",
+			"pattern": "^[a-zA-Z0-9_./-]+$",
+			"minLength": 0,
+			"maxLength": 255
+		},
+		"logging": {
+			"type": "object",
+			"description": "Logging configuration",
+			"properties": {
+				"level": {
+					"type": "string",
+					"description": "Logging level",
+					"enum": [
+						"debug",
+						"info",
+						"warn",
+						"error"
+					],
+					"default": "info"
+				},
+				"file": {
+					"type": "string",
+					"description": "Optional log file path for teeing output",
+					"minLength": 1,
+					"maxLength": 4096
+				}
+			},
+			"required": [
+				"level"
+			],
+			"additionalProperties": false
+		},
+		"ai": {
+			"type": "object",
+			"description": "AI-powered template generation configuration",
+			"properties": {
+				"provider": {
+					"type": "string",
+					"description": "AI provider to use",
+					"enum": ["ollama", "openai"],
+					"default": "ollama"
+				},
+				"templates_dir": {
+					"type": "string",
+					"description": "Directory containing template files for RAG",
+					"default": "./image-templates",
+					"minLength": 1,
+					"maxLength": 4096
+				},
+				"ollama": {
+					"type": "object",
+					"description": "Ollama-specific settings",
+					"properties": {
+						"base_url": {
+							"type": "string",
+							"description": "Ollama server URL",
+							"default": "http://localhost:11434"
+						},
+						"embedding_model": {
+							"type": "string",
+							"description": "Model for embeddings",
+							"default": "nomic-embed-text"
+						},
+						"chat_model": {
+							"type": "string",
+							"description": "Model for chat/generation",
+							"default": "llama3.2"
+						},
+						"timeout": {
+							"type": "string",
+							"description": "Request timeout",
+							"default": "120s"
+						}
+					},
+					"additionalProperties": false
+				},
+				"openai": {
+					"type": "object",
+					"description": "OpenAI-specific settings",
+					"properties": {
+						"embedding_model": {
+							"type": "string",
+							"description": "Model for embeddings",
+							"default": "text-embedding-3-small"
+						},
+						"chat_model": {
+							"type": "string",
+							"description": "Model for chat/generation",
+							"default": "gpt-4o-mini"
+						},
+						"timeout": {
+							"type": "string",
+							"description": "Request timeout",
+							"default": "60s"
+						}
+					},
+					"additionalProperties": false
+				},
+				"cache": {
+					"type": "object",
+					"description": "Embedding cache settings",
+					"properties": {
+						"enabled": {
+							"type": "boolean",
+							"description": "Enable caching",
+							"default": true
+						},
+						"dir": {
+							"type": "string",
+							"description": "Cache directory",
+							"default": "./cache/ai-embeddings"
+						}
+					},
+					"additionalProperties": false
+				},
+				"scoring": {
+					"type": "object",
+					"description": "Hybrid scoring weights for template retrieval",
+					"properties": {
+						"semantic_weight": {
+							"type": "number",
+							"description": "Embedding similarity weight",
+							"default": 0.70,
+							"minimum": 0,
+							"maximum": 1
+						},
+						"keyword_weight": {
+							"type": "number",
+							"description": "Keyword matching weight",
+							"default": 0.20,
+							"minimum": 0,
+							"maximum": 1
+						},
+						"package_weight": {
+							"type": "number",
+							"description": "Package matching weight",
+							"default": 0.10,
+							"minimum": 0,
+							"maximum": 1
+						}
+					},
+					"additionalProperties": false
+				}
+			},
+			"additionalProperties": false
+		}
+	},
+	"additionalProperties": false
+}

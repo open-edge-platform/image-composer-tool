@@ -1,0 +1,140 @@
+image:
+  name: rcd10-default-x86_64
+  version: "1.0.0"
+
+target:
+  os: redhat-compatible-distro # Target OS name
+  dist: el10 # Target OS distribution
+  arch: x86_64 # Target OS architecture
+  imageType: raw # Image type, valid value: [raw, iso].
+
+packageRepositories:
+  - codename: "CentOS-Stream-10-AppStream"
+    url: "https://mirror.stream.centos.org/10-stream/AppStream/x86_64/os"
+    pkey: "https://www.centos.org/keys/RPM-GPG-KEY-centosofficial-SHA256"  
+    
+disk:
+  name: Default_Raw # 1:1 mapping to the systemConfigs name
+  artifacts:
+    -
+      type: raw  # image file format
+      compression: gz # image compression format (optional)
+  size: 4GiB # 4G, 4GB, 4096 MiB also valid. (Required for raw)
+  partitionTableType: gpt # Partition table type, valid value: [gpt, mbr]
+  partitions: # Required for raw, optional for ISO, not needed for rootfs.
+    - id: boot
+      type: esp
+      flags:
+        - esp
+        - boot
+      start: 1MiB
+      end: 513MiB
+      fsType: fat32
+      mountPoint: /boot/efi
+      mountOptions: umask=0077
+
+    - id: rootfs
+      type: linux-root-amd64
+      start: 513MiB
+      end: 2561MiB  # 513MiB + 2GiB (2048MiB) = 2561MiB
+      fsType: ext4
+      mountPoint: /
+      mountOptions: defaults
+
+    - id: roothashmap
+      type: linux
+      start: 2561MiB
+      end: 3061MiB  # 2561MiB + 500MiB = 3061MiB
+      fsType: ext4
+      mountPoint: none
+
+    - id: userdata
+      type: linux
+      start: 3061MiB
+      end: "0"  # 2561MiB + 2GiB (2048MiB) = 4609MiB
+      fsType: ext4
+      mountPoint: /opt
+
+systemConfig:
+  name: Default_Raw
+  description: Default yml configuration for raw image
+
+  bootloader:
+    bootType: efi # (efi or legacy)
+    provider: systemd-boot # (grub for efi and legacy mode, or systemd-boot for efi mode)
+
+  immutability:
+    enabled: false # default is true
+
+  packages:
+    # --- MINIMUM BOOTABLE BASE ---
+    - centos-stream-release  # <--- ADDED: Critical for system identity
+    - basesystem
+    - filesystem
+    - setup
+    - glibc
+    - bash
+    - coreutils
+    - systemd
+    - util-linux
+    - kernel
+    - kernel-core
+    - kernel-modules         # <--- ADDED: For hardware driver support
+    - dracut
+    - cpio
+    - dracut-config-generic  # <--- ADDED: Ensures the image boots on any hardware
+    - dnf
+
+    # --- BOOTLOADER GRUB (For UEFI) ---
+    # - grub2-common
+    # - grub2-efi-x64          # <--- ADDED: The actual EFI bootloader
+    # - grub2-tools            # <--- ADDED: Tools to generate grub.cfg
+    # - shim-x64
+    # - efibootmgr             # <--- ADDED: Required to register boot entry
+
+    # --- SYSTEMD-BOOT LOADER ---    
+    - systemd-ukify          # <--- Provides the 'ukify' command
+    - systemd-boot-unsigned  # The boot manager
+    - shim-x64               # For Secure Boot handoff
+    - binutils               # Required by ukify for 'objcopy' operations
+    - python3-pefile         # Often a required dependency for ukify to handle PE binaries
+
+    # --- MINIMUM CONFIGURATION ---
+    - hostname
+    - shadow-utils
+    - iproute
+    - ncurses
+    - systemd-resolved
+    - efibootmgr
+    # --- FOR SSH ---
+    - chrony
+    - openssh-server
+    - sudo
+    - firewalld
+    - nftables
+    - python3-nftables
+    - libselinux-utils
+    # - selinux-policy-targeted
+
+    # --- NETWORK ---
+    - NetworkManager
+    - NetworkManager-libnm
+    # - NetworkManager-tui
+
+  # additionalFiles:
+  #   - local: ../additionalfiles/99-dhcp-en.network
+  #     final: /etc/systemd/network/99-dhcp-en.network
+
+  kernel:
+    name: kernel
+    cmdline: "rw console=ttyS0,115200 console=tty0 loglevel=7 selinux=0"
+    enableExtraModules: "usbcore usb-common"
+    packages:
+     - kernel
+    uki: true
+
+  configurations:
+    # Set up ssh directories with correct permissions
+    - cmd: "mkdir -m 755 -p /opt/var/lib/sshd"
+    - cmd: "printf 'd /run/sshd 0755 root root -\\n' > /etc/tmpfiles.d/sshd.conf"
+    - cmd: "systemctl enable systemd-resolved"

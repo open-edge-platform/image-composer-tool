@@ -1,0 +1,176 @@
+# Robotics AI Suite: Visual Demo Image Template
+# Ubuntu 24.04 LTS + ROS2 Jazzy + Turtlesim + rqt tools
+#
+# Minimal image for running visual ROS2 demos in a QEMU VM.
+# Includes turtlesim, rqt_graph, rqt_plot, and X11 forwarding support.
+#
+# Usage:
+#   sudo -E ./image-composer-tool build image-templates/robotics-demo-ubuntu24-x86_64.yml
+#
+# VM prerequisites:
+#   sudo apt install -y qemu-system-x86 ovmf
+#   cp /usr/share/OVMF/OVMF_CODE_4M.fd .
+#   cp /usr/share/OVMF/OVMF_VARS_4M.fd .
+#
+# VM launch:
+#   qemu-system-x86_64 -machine q35 -enable-kvm -cpu host -smp 4 -m 4096 \
+#     -drive if=pflash,format=raw,readonly=on,file=OVMF_CODE_4M.fd \
+#     -drive if=pflash,format=raw,file=OVMF_VARS_4M.fd \
+#     -drive file=robotics-demo-ubuntu24-24.04.raw,format=raw,if=virtio \
+#     -device virtio-net-pci,netdev=net0 \
+#     -netdev user,id=net0,hostfwd=tcp::2222-:22 \
+#     -nographic
+#
+# Connect with X11 forwarding (replace <user> with your configured user):
+#   ssh -X -p 2222 <user>@localhost
+#
+# ROS2 is auto-sourced on login. If needed manually:
+#   source /opt/ros/jazzy/setup.bash
+#
+# Run demos:
+#   # Demo 1: Turtlesim — visual turtle control with arrow keys
+#   ros2 run turtlesim turtlesim_node &
+#   ros2 run turtlesim turtle_teleop_key
+#
+#   # Demo 2: rqt_graph — live node/topic graph (refresh to see connections)
+#   ros2 run rqt_graph rqt_graph &
+#
+#   # Demo 3: rqt_plot — real-time data chart (move turtle to see updates)
+#   ros2 run rqt_plot rqt_plot /turtle1/pose/x /turtle1/pose/y /turtle1/pose/theta &
+#
+#   # Demo 4: Talker/Listener — add more nodes to the graph
+#   ros2 run demo_nodes_cpp talker &
+#   ros2 run demo_nodes_cpp listener &
+
+# AI-searchable metadata for template discovery
+metadata:
+  description: Minimal ROS2 Jazzy demo image with visual tools (turtlesim, rqt) for QEMU VM testing
+  use_cases:
+    - Visual ROS2 demos in QEMU virtual machines
+    - Turtlesim keyboard-controlled robot simulation
+    - rqt_graph node/topic visualization
+    - rqt_plot real-time data charting
+    - ROS2 talker/listener pub/sub testing
+    - X11 forwarding GUI demos over SSH
+  keywords:
+    - robotics
+    - ros2
+    - jazzy
+    - turtlesim
+    - rqt
+    - demo
+    - qemu
+    - vm
+    - x11
+    - visualization
+    - ubuntu
+
+image:
+  name: robotics-demo-ubuntu24
+  version: "24.04"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+
+# 12GiB is sufficient for this minimal demo image
+disk:
+  name: robotics-demo
+  artifacts:
+    - type: raw
+      compression: gz
+  size: 12GiB
+  partitionTableType: gpt
+  partitions:
+    - id: boot
+      type: esp
+      flags:
+        - esp
+        - boot
+      start: 1MiB
+      end: 513MiB
+      fsType: fat32
+      mountPoint: /boot/efi
+      mountOptions: umask=0077
+    - id: rootfs
+      type: linux-root-amd64
+      start: 513MiB
+      end: "0"
+      fsType: ext4
+      mountPoint: /
+      mountOptions: defaults
+
+packageRepositories:
+  # ROS2 Jazzy repository
+  - codename: "noble"
+    url: "http://packages.ros.org/ros2/ubuntu"
+    pkey: "https://raw.githubusercontent.com/ros/rosdistro/master/ros.key"
+    component: "main"
+
+systemConfig:
+  name: robotics-demo
+  description: Intel Robotics AI Suite - Visual Demo (Turtlesim + rqt)
+
+  immutability:
+    enabled: false
+
+  packages:
+    # Base system
+    - ubuntu-minimal
+    - systemd
+    - systemd-resolved
+    - systemd-boot
+    - openssh-server
+    - network-manager
+    - sudo
+    - curl
+    - vim
+
+    # Boot/initramfs (required for UKI)
+    - dracut-core
+    - cryptsetup-bin
+
+    # X11 forwarding support (required for GUI over SSH)
+    - xauth
+    - x11-apps
+
+    # ROS2 Jazzy Core
+    - ros-jazzy-ros-base
+    - ros-jazzy-rmw-cyclonedds-cpp
+
+    # Visual demo packages
+    - ros-jazzy-turtlesim
+    - ros-jazzy-rqt
+    - ros-jazzy-rqt-graph
+    - ros-jazzy-rqt-plot
+
+    # Demo nodes (talker/listener)
+    - ros-jazzy-demo-nodes-cpp
+    - ros-jazzy-demo-nodes-py
+
+  kernel:
+    version: "6.17"
+    cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
+    packages:
+      - linux-image-generic-hwe-24.04
+
+  configurations:
+    # ROS2 environment setup
+    - cmd: "echo 'source /opt/ros/jazzy/setup.bash' >> /etc/bash.bashrc"
+    - cmd: "echo 'export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp' >> /etc/bash.bashrc"
+
+    # Enable required services
+    - cmd: "systemctl enable NetworkManager"
+    - cmd: "systemctl enable ssh"
+
+    # Fix SSH X11 forwarding (IPv6 socket allocation fails in QEMU)
+    - cmd: "sh -c \"mkdir -p /etc/ssh/sshd_config.d && printf 'AddressFamily inet\\n' > /etc/ssh/sshd_config.d/10-addressfamily.conf\""
+
+    # Disable IPv6 (avoids DNS/connection timeouts in VM environments)
+    - cmd: "echo 'net.ipv6.conf.all.disable_ipv6 = 1' >> /etc/sysctl.d/99-disable-ipv6.conf"
+    - cmd: "echo 'net.ipv6.conf.default.disable_ipv6 = 1' >> /etc/sysctl.d/99-disable-ipv6.conf"
+
+    # Set hostname
+    - cmd: "echo 'robotics-demo' > /etc/hostname"

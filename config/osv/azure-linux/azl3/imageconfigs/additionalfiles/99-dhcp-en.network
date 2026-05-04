@@ -7,3 +7,4 @@ IPv6AcceptRA=no
 
 [DHCPv4]
 SendRelease=false
+ClientIdentifier=mac

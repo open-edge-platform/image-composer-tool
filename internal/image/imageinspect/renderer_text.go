@@ -38,6 +38,7 @@ func RenderCompareText(w io.Writer, r *ImageCompareResult, opts CompareTextOptio
 		fmt.Fprintf(w, "PartitionTableChanged: %v\n", s.PartitionTableChanged)
 		fmt.Fprintf(w, "PartitionsChanged: %v\n", s.PartitionsChanged)
 		fmt.Fprintf(w, "EFIBinariesChanged: %v\n", s.EFIBinariesChanged)
+		fmt.Fprintf(w, "SBOMChanged: %v\n", s.SBOMChanged)
 		obj := computeObjectCountsFromDiff(r.Diff)
 		fmt.Fprintf(w, "Counts (objects): +%d -%d ~%d\n", obj.added, obj.removed, obj.modified)
 
@@ -147,6 +148,32 @@ func RenderCompareText(w io.Writer, r *ImageCompareResult, opts CompareTextOptio
 		renderVerityDiffText(w, r.Diff.Verity)
 	}
 
+	if r.Diff.SBOM != nil && r.Diff.SBOM.Changed {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "SBOM:")
+		s := r.Diff.SBOM
+		if s.Added != nil {
+			fmt.Fprintf(w, "  Added: %s (%s)\n", s.Added.FileName, shortHash(s.Added.CanonicalSHA256))
+		} else if s.Removed != nil {
+			fmt.Fprintf(w, "  Removed: %s (%s)\n", s.Removed.FileName, shortHash(s.Removed.CanonicalSHA256))
+		} else {
+			if s.Format != nil {
+				fmt.Fprintf(w, "  Format: %s -> %s\n", s.Format.From, s.Format.To)
+			}
+			if s.FileName != nil {
+				fmt.Fprintf(w, "  FileName: %s -> %s\n", s.FileName.From, s.FileName.To)
+			}
+			if s.PackageCount != nil {
+				fmt.Fprintf(w, "  PackageCount: %d -> %d\n", s.PackageCount.From, s.PackageCount.To)
+			}
+			if s.CanonicalSHA256 != nil {
+				fmt.Fprintf(w, "  CanonicalSHA256: %s -> %s\n", shortHash(s.CanonicalSHA256.From), shortHash(s.CanonicalSHA256.To))
+			} else if s.SHA256 != nil {
+				fmt.Fprintf(w, "  SHA256: %s -> %s\n", shortHash(s.SHA256.From), shortHash(s.SHA256.To))
+			}
+		}
+	}
+
 	// Full mode: image metadata & volatile / meaningful remove reasons
 	if mode == "full" {
 		renderImagesBlock(w, r.From, r.To)
@@ -179,6 +206,24 @@ func RenderSummaryText(w io.Writer, summary *ImageSummary, opts TextOptions) err
 		fmt.Fprintln(w)
 		renderVerityInfo(w, summary.Verity)
 	}
+
+	if summary.SBOM.Present {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "SBOM")
+		fmt.Fprintln(w, "----")
+		fmt.Fprintf(w, "Path:\t%s\n", summary.SBOM.Path)
+		fmt.Fprintf(w, "Format:\t%s\n", summary.SBOM.Format)
+		fmt.Fprintf(w, "Size:\t%s (%d bytes)\n", humanBytes(summary.SBOM.SizeBytes), summary.SBOM.SizeBytes)
+		if strings.TrimSpace(summary.SBOM.CanonicalSHA256) != "" {
+			fmt.Fprintf(w, "CanonicalSHA256:\t%s\n", summary.SBOM.CanonicalSHA256)
+		}
+		if strings.TrimSpace(summary.SBOM.SHA256) != "" {
+			fmt.Fprintf(w, "SHA256:\t%s\n", summary.SBOM.SHA256)
+		}
+		if summary.SBOM.PackageCount > 0 {
+			fmt.Fprintf(w, "PackageCount:\t%d\n", summary.SBOM.PackageCount)
+		}
+	}
 	// Detailed per-partition filesystem blocks (ONLY ONCE)
 	for _, p := range summary.PartitionTable.Partitions {
 		if p.Filesystem == nil || isFilesystemEmpty(p.Filesystem) {
@@ -191,6 +236,42 @@ func RenderSummaryText(w io.Writer, summary *ImageSummary, opts TextOptions) err
 	}
 
 	fmt.Fprintln(w)
+	return nil
+}
+
+// RenderSPDXCompareText renders a concise text report for SPDX manifest comparison.
+func RenderSPDXCompareText(w io.Writer, result *SPDXCompareResult) error {
+	if result == nil {
+		return fmt.Errorf("RenderSPDXCompareText: result is nil")
+	}
+
+	fmt.Fprintln(w, "SPDX Compare")
+	fmt.Fprintln(w, "============")
+	fmt.Fprintf(w, "From:\t%s\n", result.FromPath)
+	fmt.Fprintf(w, "To:\t%s\n", result.ToPath)
+	fmt.Fprintf(w, "Equal:\t%v\n", result.Equal)
+	fmt.Fprintf(w, "Packages:\t%d -> %d\n", result.FromPackageCount, result.ToPackageCount)
+
+	if strings.TrimSpace(result.FromCanonicalHash) != "" || strings.TrimSpace(result.ToCanonicalHash) != "" {
+		fmt.Fprintf(w, "CanonicalSHA256:\t%s -> %s\n", result.FromCanonicalHash, result.ToCanonicalHash)
+	}
+
+	if len(result.AddedPackages) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Added packages:")
+		for _, pkg := range result.AddedPackages {
+			fmt.Fprintf(w, "  + %s\n", pkg)
+		}
+	}
+
+	if len(result.RemovedPackages) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Removed packages:")
+		for _, pkg := range result.RemovedPackages {
+			fmt.Fprintf(w, "  - %s\n", pkg)
+		}
+	}
+
 	return nil
 }
 
@@ -316,6 +397,12 @@ func renderEFIBinaryDiffText(w io.Writer, d EFIBinaryDiff, indent string) {
 						shortHash(m.UKI.UnameSHA256.From), shortHash(m.UKI.UnameSHA256.To))
 				}
 			}
+
+			// Bootloader configuration diff (if present)
+			if m.BootConfig != nil {
+				fmt.Fprintf(w, "%s    Bootloader config:\n", indent)
+				renderBootloaderConfigDiffText(w, m.BootConfig, indent+"      ")
+			}
 		}
 	}
 }
@@ -368,6 +455,17 @@ func computeObjectCountsFromDiff(d ImageDiff) objectCounts {
 			c.added += len(mp.EFIBinaries.Added)
 			c.removed += len(mp.EFIBinaries.Removed)
 			c.modified += len(mp.EFIBinaries.Modified)
+		}
+	}
+
+	if d.SBOM != nil && d.SBOM.Changed {
+		switch {
+		case d.SBOM.Added != nil:
+			c.added++
+		case d.SBOM.Removed != nil:
+			c.removed++
+		default:
+			c.modified++
 		}
 	}
 
@@ -501,6 +599,13 @@ func renderPartitionFilesystemDetails(w io.Writer, p PartitionSummary) {
 		if uki, ok := firstUKI(arts); ok {
 			renderUKIDetailsBlock(w, uki)
 		}
+
+		// Print bootloader config details if present
+		for _, art := range arts {
+			if art.BootConfig != nil {
+				renderBootloaderConfigDetails(w, art.Path, art.BootConfig)
+			}
+		}
 	}
 
 	// Squashfs-specific
@@ -556,7 +661,7 @@ func renderPartitionTableHeader(w io.Writer, pt PartitionTableSummary) {
 	_ = tw.Flush()
 }
 
-func renderVerityInfo(w io.Writer, v *VerityInfo) {
+func renderVerityInfo(w io.Writer, v *VeritySummary) {
 	fmt.Fprintln(w, "dm-verity Configuration")
 	fmt.Fprintln(w, "-----------------------")
 
@@ -716,6 +821,234 @@ func renderEqualityReasonsBlock(w io.Writer, r *ImageCompareResult) {
 	}
 }
 
+// renderBootloaderConfigDetails renders bootloader configuration details for a single image.
+func renderBootloaderConfigDetails(w io.Writer, efiPath string, cfg *BootloaderConfig) {
+	if cfg == nil {
+		return
+	}
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Bootloader configuration")
+	fmt.Fprintln(w, "------------------------")
+
+	// Config file hashes and content preview
+	if len(cfg.ConfigFiles) > 0 {
+		fmt.Fprintf(w, "EFI Path: %s\n", efiPath)
+		fmt.Fprintln(w, "Config files:")
+
+		// Collect and sort paths for deterministic output
+		paths := make([]string, 0, len(cfg.ConfigFiles))
+		for path := range cfg.ConfigFiles {
+			paths = append(paths, path)
+		}
+		sort.Strings(paths)
+		for _, path := range paths {
+			hash := cfg.ConfigFiles[path]
+			fmt.Fprintf(w, "  %s: %s\n", path, shortHash(hash))
+
+			// Show raw config content (first 30 lines or up to 2KB)
+			if raw, ok := cfg.ConfigRaw[path]; ok && raw != "" {
+				lines := strings.Split(raw, "\n")
+				maxLines := 30
+				if len(lines) > maxLines {
+					lines = lines[:maxLines]
+				}
+
+				fmt.Fprintln(w, "    Content preview:")
+				for _, line := range lines {
+					if strings.TrimSpace(line) != "" {
+						// Truncate very long lines
+						if len(line) > 100 {
+							fmt.Fprintf(w, "      %s...\n", line[:97])
+						} else {
+							fmt.Fprintf(w, "      %s\n", line)
+						}
+					}
+				}
+				if len(cfg.ConfigRaw[path]) > 2048 {
+					fmt.Fprintf(w, "      [... config truncated, total size: %d bytes]\n", len(cfg.ConfigRaw[path]))
+				}
+			}
+		}
+	}
+
+	// Display boot entries
+	if len(cfg.BootEntries) > 0 {
+		fmt.Fprintln(w, "Boot entries:")
+		for i, entry := range cfg.BootEntries {
+			mark := " "
+			if entry.IsDefault {
+				mark = "*"
+			}
+			fmt.Fprintf(w, "  %s [%d] %s\n", mark, i+1, entry.Name)
+			if entry.Kernel != "" {
+				fmt.Fprintf(w, "       kernel: %s\n", entry.Kernel)
+			}
+			if entry.Initrd != "" {
+				fmt.Fprintf(w, "       initrd: %s\n", entry.Initrd)
+			}
+			if entry.RootDevice != "" {
+				fmt.Fprintf(w, "       root:   %s\n", entry.RootDevice)
+			}
+			if entry.Cmdline != "" {
+				if len(entry.Cmdline) > 100 {
+					fmt.Fprintf(w, "       cmdline: %s...\n", entry.Cmdline[:97])
+				} else {
+					fmt.Fprintf(w, "       cmdline: %s\n", entry.Cmdline)
+				}
+			}
+		}
+		if cfg.DefaultEntry != "" {
+			fmt.Fprintf(w, "  Default: %s\n", cfg.DefaultEntry)
+		}
+	}
+
+	// Display kernel references
+	if len(cfg.KernelReferences) > 0 {
+		fmt.Fprintln(w, "Kernel references:")
+		for _, ref := range cfg.KernelReferences {
+			fmt.Fprintf(w, "  %s\n", ref.Path)
+			if ref.PartitionUUID != "" {
+				fmt.Fprintf(w, "    partition uuid: %s\n", ref.PartitionUUID)
+			}
+			if ref.RootUUID != "" {
+				fmt.Fprintf(w, "    root uuid:      %s\n", ref.RootUUID)
+			}
+			if ref.BootEntry != "" {
+				fmt.Fprintf(w, "    boot entry:     %s\n", ref.BootEntry)
+			}
+		}
+	}
+
+	// Display UUID references with validation status
+	if len(cfg.UUIDReferences) > 0 {
+		hasIssues := false
+		for _, ref := range cfg.UUIDReferences {
+			if ref.Mismatch {
+				hasIssues = true
+				break
+			}
+		}
+
+		if hasIssues {
+			fmt.Fprintln(w, "UUID validation:")
+			for _, ref := range cfg.UUIDReferences {
+				status := "✓"
+				if ref.Mismatch {
+					status = "✗ MISMATCH"
+				}
+				fmt.Fprintf(w, "  [%s] %s (%s)\n", status, ref.UUID, ref.Context)
+				if ref.ReferencedPartition > 0 {
+					fmt.Fprintf(w, "       -> partition %d\n", ref.ReferencedPartition)
+				}
+			}
+		}
+	}
+
+	// Display validation notes
+	if len(cfg.Notes) > 0 {
+		fmt.Fprintln(w, "Notes:")
+		for _, note := range cfg.Notes {
+			fmt.Fprintf(w, "  - %s\n", note)
+		}
+	}
+}
+
+// renderBootloaderConfigDiffText renders bootloader configuration differences in a comparison.
+func renderBootloaderConfigDiffText(w io.Writer, diff *BootloaderConfigDiff, indent string) {
+	if diff == nil {
+		return
+	}
+
+	// Config file changes
+	if len(diff.ConfigFileChanges) > 0 {
+		fmt.Fprintf(w, "%sConfig files:\n", indent)
+		for _, change := range diff.ConfigFileChanges {
+			status := change.Status
+			fmt.Fprintf(w, "%s  %s: %s\n", indent, status, change.Path)
+			if status == "modified" {
+				fmt.Fprintf(w, "%s    hash: %s -> %s\n", indent, shortHash(change.HashFrom), shortHash(change.HashTo))
+			}
+		}
+	}
+
+	// Boot entry changes
+	if len(diff.BootEntryChanges) > 0 {
+		fmt.Fprintf(w, "%sBoot entries:\n", indent)
+		for _, change := range diff.BootEntryChanges {
+			fmt.Fprintf(w, "%s  %s: %s\n", indent, change.Status, change.Name)
+			if change.Status == "modified" {
+				if change.KernelFrom != change.KernelTo {
+					fmt.Fprintf(w, "%s    kernel: %s -> %s\n", indent, change.KernelFrom, change.KernelTo)
+				}
+				if change.InitrdFrom != change.InitrdTo {
+					fmt.Fprintf(w, "%s    initrd: %s -> %s\n", indent, change.InitrdFrom, change.InitrdTo)
+				}
+				if change.CmdlineFrom != change.CmdlineTo {
+					fromCmdline := change.CmdlineFrom
+					toCmdline := change.CmdlineTo
+					if len(fromCmdline) > 80 {
+						fromCmdline = fromCmdline[:77] + "..."
+					}
+					if len(toCmdline) > 80 {
+						toCmdline = toCmdline[:77] + "..."
+					}
+					fmt.Fprintf(w, "%s    cmdline: %s -> %s\n", indent, fromCmdline, toCmdline)
+				}
+			}
+		}
+	}
+
+	// Kernel reference changes
+	if len(diff.KernelRefChanges) > 0 {
+		fmt.Fprintf(w, "%sKernel references:\n", indent)
+		for _, change := range diff.KernelRefChanges {
+			fmt.Fprintf(w, "%s  %s: %s\n", indent, change.Status, change.Path)
+			if change.Status == "modified" && change.UUIDFrom != change.UUIDTo {
+				fmt.Fprintf(w, "%s    uuid: %s -> %s\n", indent, change.UUIDFrom, change.UUIDTo)
+			}
+		}
+	}
+
+	// UUID reference changes
+	if len(diff.UUIDReferenceChanges) > 0 {
+		hasMismatch := false
+		for _, change := range diff.UUIDReferenceChanges {
+			if change.MismatchTo {
+				hasMismatch = true
+				break
+			}
+		}
+
+		if hasMismatch {
+			fmt.Fprintf(w, "%sUUID validation:\n", indent)
+			for _, change := range diff.UUIDReferenceChanges {
+				if change.MismatchTo {
+					fmt.Fprintf(w, "%s  ✗ CRITICAL: %s not found in partition table\n", indent, change.UUID)
+					if change.ContextTo != "" {
+						fmt.Fprintf(w, "%s    context: %s\n", indent, change.ContextTo)
+					}
+				}
+			}
+		}
+	}
+
+	// Configuration notes
+	if len(diff.NotesAdded) > 0 {
+		fmt.Fprintf(w, "%sNew issues:\n", indent)
+		for _, note := range diff.NotesAdded {
+			fmt.Fprintf(w, "%s  - %s\n", indent, note)
+		}
+	}
+
+	if len(diff.NotesRemoved) > 0 {
+		fmt.Fprintf(w, "%sResolved issues:\n", indent)
+		for _, note := range diff.NotesRemoved {
+			fmt.Fprintf(w, "%s  - %s\n", indent, note)
+		}
+	}
+}
+
 func humanBytes(n int64) string {
 	if n < 0 {
 		return fmt.Sprintf("%d B", n)
@@ -761,7 +1094,6 @@ func gptTypeName(guid string) string {
 		return "Linux filesystem"
 	case "21686148-6449-6E6F-744E-656564454649":
 		return "BIOS boot partition"
-	// Add more as you run into them (BIOS boot, swap, LVM, etc.)
 	default:
 		return ""
 	}

@@ -1,0 +1,3 @@
+# PTL (Platform Telemetry Layer) configuration files
+# This directory contains optional PTL-related YAML files
+# Add custom PTL configurations here as needed

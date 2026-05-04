@@ -34,7 +34,7 @@ disk:
       end: 4557MiB  # 513MiB + 4044MiB (4238528512 bytes) = 4557MiB
       fsType: ext4
       mountPoint: /
-      mountOptions: defaults, ro
+      mountOptions: defaults
 
     - id: roothashmap
       type: linux
@@ -68,7 +68,7 @@ systemConfig:
       final: /etc/apt/sources.list.d/ubuntu-noble.list
 
   kernel:
-    version: "6.14"
+    version: "6.17"
     cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
     packages:
       - linux-image-generic-hwe-24.04

@@ -102,6 +102,7 @@ func compareEFIBinaries(from, to []EFIBinaryEvidence) EFIBinaryDiff {
 			}
 			mod.Changes = appendEFIBinaryFieldChanges(nil, f, t)
 			mod.UKI = buildUKIDiffIfRelevant(f, t)
+			mod.BootConfig = compareBootloaderConfigs(f.BootConfig, t.BootConfig)
 			out.Modified = append(out.Modified, mod)
 		}
 	}
@@ -250,4 +251,322 @@ func diffStringMap(a, b map[string]string) SectionMapDiff {
 	}
 
 	return out
+}
+
+// compareBootloaderConfigs compares bootloader configuration between two EFI binaries.
+// It returns a BootloaderConfigDiff containing detected changes.
+func compareBootloaderConfigs(a, b *BootloaderConfig) *BootloaderConfigDiff {
+	if a == nil && b == nil {
+		return nil
+	}
+
+	diff := &BootloaderConfigDiff{
+		ConfigFileChanges:    []ConfigFileChange{},
+		BootEntryChanges:     []BootEntryChange{},
+		KernelRefChanges:     []KernelRefChange{},
+		UUIDReferenceChanges: []UUIDRefChange{},
+		NotesAdded:           []string{},
+		NotesRemoved:         []string{},
+	}
+
+	// Handle nil cases
+	if a == nil {
+		a = &BootloaderConfig{}
+	}
+	if b == nil {
+		b = &BootloaderConfig{}
+	}
+
+	// Compare config files
+	diff.ConfigFileChanges = compareConfigFiles(a.ConfigFiles, b.ConfigFiles)
+
+	// Compare boot entries
+	diff.BootEntryChanges = compareBootEntries(a.BootEntries, b.BootEntries)
+
+	// Compare kernel references
+	diff.KernelRefChanges = compareKernelReferences(a.KernelReferences, b.KernelReferences)
+
+	// Compare UUID references
+	diff.UUIDReferenceChanges = compareUUIDReferences(a.UUIDReferences, b.UUIDReferences)
+
+	// Compare issues
+	diff.NotesRemoved = findRemovedStrings(a.Notes, b.Notes)
+	diff.NotesAdded = findRemovedStrings(b.Notes, a.Notes)
+
+	// Check if anything actually changed
+	if len(diff.ConfigFileChanges) == 0 &&
+		len(diff.BootEntryChanges) == 0 &&
+		len(diff.KernelRefChanges) == 0 &&
+		len(diff.UUIDReferenceChanges) == 0 &&
+		len(diff.NotesAdded) == 0 &&
+		len(diff.NotesRemoved) == 0 {
+		return nil
+	}
+
+	return diff
+}
+
+// compareConfigFiles compares bootloader config file hashes.
+func compareConfigFiles(a, b map[string]string) []ConfigFileChange {
+	changes := []ConfigFileChange{}
+
+	pathsA := sortedMapKeys(a)
+	pathsB := sortedMapKeys(b)
+
+	allPaths := mergeStrings(pathsA, pathsB)
+
+	for _, path := range allPaths {
+		hashA := a[path]
+		hashB := b[path]
+
+		switch {
+		case hashA != "" && hashB == "":
+			changes = append(changes, ConfigFileChange{
+				Path:     path,
+				Status:   "removed",
+				HashFrom: hashA,
+			})
+		case hashA == "" && hashB != "":
+			changes = append(changes, ConfigFileChange{
+				Path:   path,
+				Status: "added",
+				HashTo: hashB,
+			})
+		case hashA != "" && hashB != "" && hashA != hashB:
+			changes = append(changes, ConfigFileChange{
+				Path:     path,
+				Status:   "modified",
+				HashFrom: hashA,
+				HashTo:   hashB,
+			})
+		}
+	}
+
+	return changes
+}
+
+// compareBootEntries compares boot menu entries.
+func compareBootEntries(a, b []BootEntry) []BootEntryChange {
+	changes := []BootEntryChange{}
+
+	aMap := bootEntryMapByName(a)
+	bMap := bootEntryMapByName(b)
+
+	allNames := mergeStrings(sortedMapKeys(aMap), sortedMapKeys(bMap))
+
+	for _, name := range allNames {
+		entryA := aMap[name]
+		entryB := bMap[name]
+
+		switch {
+		case entryA != nil && entryB == nil:
+			changes = append(changes, BootEntryChange{
+				Name:        name,
+				Status:      "removed",
+				KernelFrom:  entryA.Kernel,
+				InitrdFrom:  entryA.Initrd,
+				CmdlineFrom: entryA.Cmdline,
+			})
+		case entryA == nil && entryB != nil:
+			changes = append(changes, BootEntryChange{
+				Name:      name,
+				Status:    "added",
+				KernelTo:  entryB.Kernel,
+				InitrdTo:  entryB.Initrd,
+				CmdlineTo: entryB.Cmdline,
+			})
+		case entryA != nil && entryB != nil:
+			// Check for changes within the entry
+			if entryA.Kernel != entryB.Kernel || entryA.Initrd != entryB.Initrd || entryA.Cmdline != entryB.Cmdline {
+				changes = append(changes, BootEntryChange{
+					Name:        name,
+					Status:      "modified",
+					KernelFrom:  entryA.Kernel,
+					KernelTo:    entryB.Kernel,
+					InitrdFrom:  entryA.Initrd,
+					InitrdTo:    entryB.Initrd,
+					CmdlineFrom: entryA.Cmdline,
+					CmdlineTo:   entryB.Cmdline,
+				})
+			}
+		}
+	}
+
+	return changes
+}
+
+// compareKernelReferences compares kernel references in bootloader config.
+func compareKernelReferences(a, b []KernelReference) []KernelRefChange {
+	changes := []KernelRefChange{}
+
+	aMap := kernelRefMapByPath(a)
+	bMap := kernelRefMapByPath(b)
+
+	allPaths := mergeStrings(sortedMapKeys(aMap), sortedMapKeys(bMap))
+
+	for _, path := range allPaths {
+		refA := aMap[path]
+		refB := bMap[path]
+
+		switch {
+		case refA != nil && refB == nil:
+			changes = append(changes, KernelRefChange{
+				Path:     path,
+				Status:   "removed",
+				UUIDFrom: refA.PartitionUUID,
+			})
+		case refA == nil && refB != nil:
+			changes = append(changes, KernelRefChange{
+				Path:   path,
+				Status: "added",
+				UUIDTo: refB.PartitionUUID,
+			})
+		case refA != nil && refB != nil:
+			if refA.PartitionUUID != refB.PartitionUUID {
+				changes = append(changes, KernelRefChange{
+					Path:     path,
+					Status:   "modified",
+					UUIDFrom: refA.PartitionUUID,
+					UUIDTo:   refB.PartitionUUID,
+				})
+			}
+		}
+	}
+
+	return changes
+}
+
+// compareUUIDReferences compares UUID references in bootloader config.
+func compareUUIDReferences(a, b []UUIDReference) []UUIDRefChange {
+	changes := []UUIDRefChange{}
+
+	aMap := uuidRefMapByUUID(a)
+	bMap := uuidRefMapByUUID(b)
+
+	allUUIDs := mergeStrings(sortedMapKeys(aMap), sortedMapKeys(bMap))
+
+	for _, uuid := range allUUIDs {
+		refA := aMap[uuid]
+		refB := bMap[uuid]
+
+		switch {
+		case refA != nil && refB == nil:
+			changes = append(changes, UUIDRefChange{
+				UUID:         uuid,
+				Status:       "removed",
+				ContextFrom:  refA.Context,
+				MismatchFrom: refA.Mismatch,
+			})
+		case refA == nil && refB != nil:
+			changes = append(changes, UUIDRefChange{
+				UUID:       uuid,
+				Status:     "added",
+				ContextTo:  refB.Context,
+				MismatchTo: refB.Mismatch,
+			})
+		case refA != nil && refB != nil:
+			if refA.Mismatch != refB.Mismatch || refA.Context != refB.Context {
+				changes = append(changes, UUIDRefChange{
+					UUID:         uuid,
+					Status:       "modified",
+					ContextFrom:  refA.Context,
+					ContextTo:    refB.Context,
+					MismatchFrom: refA.Mismatch,
+					MismatchTo:   refB.Mismatch,
+				})
+			}
+		}
+	}
+
+	return changes
+}
+
+// Helper functions for comparison
+
+func bootEntryMapByName(entries []BootEntry) map[string]*BootEntry {
+	m := make(map[string]*BootEntry)
+	for i := range entries {
+		m[entries[i].Name] = &entries[i]
+	}
+	return m
+}
+
+func kernelRefMapByPath(refs []KernelReference) map[string]*KernelReference {
+	m := make(map[string]*KernelReference)
+	for i := range refs {
+		m[refs[i].Path] = &refs[i]
+	}
+	return m
+}
+
+func uuidRefMapByUUID(refs []UUIDReference) map[string]*UUIDReference {
+	m := make(map[string]*UUIDReference)
+	for i := range refs {
+		m[refs[i].UUID] = &refs[i]
+	}
+	return m
+}
+
+func sortedMapKeys(m interface{}) []string {
+	switch v := m.(type) {
+	case map[string]string:
+		keys := make([]string, 0, len(v))
+		for k := range v {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		return keys
+	case map[string]*BootEntry:
+		keys := make([]string, 0, len(v))
+		for k := range v {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		return keys
+	case map[string]*KernelReference:
+		keys := make([]string, 0, len(v))
+		for k := range v {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		return keys
+	case map[string]*UUIDReference:
+		keys := make([]string, 0, len(v))
+		for k := range v {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		return keys
+	}
+	return nil
+}
+
+func mergeStrings(slices ...[]string) []string {
+	seen := make(map[string]struct{})
+	var result []string
+	for _, slice := range slices {
+		for _, s := range slice {
+			if _, ok := seen[s]; !ok {
+				seen[s] = struct{}{}
+				result = append(result, s)
+			}
+		}
+	}
+	sort.Strings(result)
+	return result
+}
+
+func findRemovedStrings(old, new []string) []string {
+	newSet := make(map[string]struct{})
+	for _, s := range new {
+		newSet[s] = struct{}{}
+	}
+
+	var removed []string
+	for _, s := range old {
+		if _, ok := newSet[s]; !ok {
+			removed = append(removed, s)
+		}
+	}
+	return removed
 }

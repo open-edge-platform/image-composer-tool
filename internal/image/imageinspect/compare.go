@@ -27,6 +27,7 @@ type CompareSummary struct {
 	PartitionsChanged     bool `json:"partitionsChanged,omitempty"`
 	FilesystemsChanged    bool `json:"filesystemsChanged,omitempty"`
 	EFIBinariesChanged    bool `json:"efiBinariesChanged,omitempty"`
+	SBOMChanged           bool `json:"sbomChanged,omitempty"`
 
 	AddedCount    int `json:"addedCount,omitempty"`
 	RemovedCount  int `json:"removedCount,omitempty"`
@@ -40,6 +41,21 @@ type ImageDiff struct {
 	Partitions     PartitionDiff      `json:"partitions,omitempty"`
 	EFIBinaries    EFIBinaryDiff      `json:"efiBinaries,omitempty"`
 	Verity         *VerityDiff        `json:"verity,omitempty" yaml:"verity,omitempty"`
+	SBOM           *SBOMDiff          `json:"sbom,omitempty" yaml:"sbom,omitempty"`
+}
+
+// SBOMDiff represents differences in embedded SBOM metadata.
+type SBOMDiff struct {
+	Added   *SBOMSummary `json:"added,omitempty" yaml:"added,omitempty"`
+	Removed *SBOMSummary `json:"removed,omitempty" yaml:"removed,omitempty"`
+	Changed bool         `json:"changed,omitempty" yaml:"changed,omitempty"`
+
+	Format          *ValueDiff[string] `json:"format,omitempty" yaml:"format,omitempty"`
+	FileName        *ValueDiff[string] `json:"fileName,omitempty" yaml:"fileName,omitempty"`
+	SizeBytes       *ValueDiff[int64]  `json:"sizeBytes,omitempty" yaml:"sizeBytes,omitempty"`
+	SHA256          *ValueDiff[string] `json:"sha256,omitempty" yaml:"sha256,omitempty"`
+	CanonicalSHA256 *ValueDiff[string] `json:"canonicalSha256,omitempty" yaml:"canonicalSha256,omitempty"`
+	PackageCount    *ValueDiff[int]    `json:"packageCount,omitempty" yaml:"packageCount,omitempty"`
 }
 
 // MetaDiff represents differences in image-level metadata.
@@ -49,9 +65,9 @@ type MetaDiff struct {
 
 // VerityDiff represents differences in dm-verity configuration.
 type VerityDiff struct {
-	Added   *VerityInfo `json:"added,omitempty" yaml:"added,omitempty"`
-	Removed *VerityInfo `json:"removed,omitempty" yaml:"removed,omitempty"`
-	Changed bool        `json:"changed,omitempty" yaml:"changed,omitempty"`
+	Added   *VeritySummary `json:"added,omitempty" yaml:"added,omitempty"`
+	Removed *VeritySummary `json:"removed,omitempty" yaml:"removed,omitempty"`
+	Changed bool           `json:"changed,omitempty" yaml:"changed,omitempty"`
 
 	Enabled       *ValueDiff[bool]   `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 	Method        *ValueDiff[string] `json:"method,omitempty" yaml:"method,omitempty"`
@@ -178,7 +194,8 @@ type ModifiedEFIBinaryEvidence struct {
 	To      EFIBinaryEvidence `json:"to"`
 	Changes []FieldChange     `json:"changes,omitempty"`
 
-	UKI *UKIDiff `json:"uki,omitempty"`
+	UKI        *UKIDiff              `json:"uki,omitempty"`
+	BootConfig *BootloaderConfigDiff `json:"bootConfig,omitempty"`
 }
 
 // UKIDiff represents differences in the UKI-related fields of an EFI binary.
@@ -199,6 +216,54 @@ type SectionMapDiff struct {
 	Added    map[string]string            `json:"added,omitempty"`
 	Removed  map[string]string            `json:"removed,omitempty"`
 	Modified map[string]ValueDiff[string] `json:"modified,omitempty"`
+}
+
+// BootloaderConfigDiff represents differences in bootloader configuration.
+type BootloaderConfigDiff struct {
+	ConfigFileChanges    []ConfigFileChange `json:"configFileChanges,omitempty"`
+	BootEntryChanges     []BootEntryChange  `json:"bootEntryChanges,omitempty"`
+	KernelRefChanges     []KernelRefChange  `json:"kernelRefChanges,omitempty"`
+	UUIDReferenceChanges []UUIDRefChange    `json:"uuidReferenceChanges,omitempty"`
+	NotesAdded           []string           `json:"notesAdded,omitempty"`
+	NotesRemoved         []string           `json:"notesRemoved,omitempty"`
+}
+
+// ConfigFileChange represents a change to a bootloader config file.
+type ConfigFileChange struct {
+	Path     string `json:"path" yaml:"path"`
+	Status   string `json:"status" yaml:"status"` // "added", "removed", "modified"
+	HashFrom string `json:"hashFrom,omitempty" yaml:"hashFrom,omitempty"`
+	HashTo   string `json:"hashTo,omitempty" yaml:"hashTo,omitempty"`
+}
+
+// BootEntryChange represents a change to a boot entry.
+type BootEntryChange struct {
+	Name        string `json:"name" yaml:"name"`
+	Status      string `json:"status" yaml:"status"` // "added", "removed", "modified"
+	KernelFrom  string `json:"kernelFrom,omitempty" yaml:"kernelFrom,omitempty"`
+	KernelTo    string `json:"kernelTo,omitempty" yaml:"kernelTo,omitempty"`
+	InitrdFrom  string `json:"initrdFrom,omitempty" yaml:"initrdFrom,omitempty"`
+	InitrdTo    string `json:"initrdTo,omitempty" yaml:"initrdTo,omitempty"`
+	CmdlineFrom string `json:"cmdlineFrom,omitempty" yaml:"cmdlineFrom,omitempty"`
+	CmdlineTo   string `json:"cmdlineTo,omitempty" yaml:"cmdlineTo,omitempty"`
+}
+
+// KernelRefChange represents a change to a kernel reference.
+type KernelRefChange struct {
+	Path     string `json:"path" yaml:"path"`
+	Status   string `json:"status" yaml:"status"` // "added", "removed", "modified"
+	UUIDFrom string `json:"uuidFrom,omitempty" yaml:"uuidFrom,omitempty"`
+	UUIDTo   string `json:"uuidTo,omitempty" yaml:"uuidTo,omitempty"`
+}
+
+// UUIDRefChange represents a change to a UUID reference.
+type UUIDRefChange struct {
+	UUID         string `json:"uuid" yaml:"uuid"`
+	Status       string `json:"status" yaml:"status"` // "added", "removed", "modified"
+	ContextFrom  string `json:"contextFrom,omitempty" yaml:"contextFrom,omitempty"`
+	ContextTo    string `json:"contextTo,omitempty" yaml:"contextTo,omitempty"`
+	MismatchFrom bool   `json:"mismatchFrom,omitempty" yaml:"mismatchFrom,omitempty"`
+	MismatchTo   bool   `json:"mismatchTo,omitempty" yaml:"mismatchTo,omitempty"`
 }
 
 // CompareImages compares two ImageSummary objects and returns a structured diff.
@@ -253,6 +318,13 @@ func CompareImages(from, to *ImageSummary) ImageCompareResult {
 		res.Summary.Changed = true
 	}
 
+	// --- SBOM ---
+	res.Diff.SBOM = compareSBOM(from.SBOM, to.SBOM)
+	if res.Diff.SBOM != nil && res.Diff.SBOM.Changed {
+		res.Summary.SBOMChanged = true
+		res.Summary.Changed = true
+	}
+
 	// Deterministic ordering for stable JSON
 	normalizeCompareResult(&res)
 
@@ -303,7 +375,7 @@ func compareMeta(from, to ImageSummary) MetaDiff {
 	return out
 }
 
-func compareVerity(from, to *VerityInfo) *VerityDiff {
+func compareVerity(from, to *VeritySummary) *VerityDiff {
 	// Both nil = no difference
 	if from == nil && to == nil {
 		return nil
@@ -343,6 +415,62 @@ func compareVerity(from, to *VerityInfo) *VerityDiff {
 
 	if from.HashPartition != to.HashPartition {
 		diff.HashPartition = &ValueDiff[int]{From: from.HashPartition, To: to.HashPartition}
+		diff.Changed = true
+	}
+
+	if !diff.Changed {
+		return nil
+	}
+
+	return diff
+}
+
+func compareSBOM(from, to SBOMSummary) *SBOMDiff {
+	if !from.Present && !to.Present {
+		return nil
+	}
+
+	diff := &SBOMDiff{}
+
+	if !from.Present && to.Present {
+		diff.Added = &to
+		diff.Changed = true
+		return diff
+	}
+
+	if from.Present && !to.Present {
+		diff.Removed = &from
+		diff.Changed = true
+		return diff
+	}
+
+	if strings.TrimSpace(from.Format) != strings.TrimSpace(to.Format) {
+		diff.Format = &ValueDiff[string]{From: from.Format, To: to.Format}
+		diff.Changed = true
+	}
+	if strings.TrimSpace(from.FileName) != strings.TrimSpace(to.FileName) {
+		diff.FileName = &ValueDiff[string]{From: from.FileName, To: to.FileName}
+		diff.Changed = true
+	}
+	if from.SizeBytes != to.SizeBytes {
+		diff.SizeBytes = &ValueDiff[int64]{From: from.SizeBytes, To: to.SizeBytes}
+		diff.Changed = true
+	}
+
+	if from.PackageCount != to.PackageCount {
+		diff.PackageCount = &ValueDiff[int]{From: from.PackageCount, To: to.PackageCount}
+		diff.Changed = true
+	}
+
+	fromCanonical := strings.TrimSpace(from.CanonicalSHA256)
+	toCanonical := strings.TrimSpace(to.CanonicalSHA256)
+	if fromCanonical != "" || toCanonical != "" {
+		if fromCanonical != toCanonical {
+			diff.CanonicalSHA256 = &ValueDiff[string]{From: from.CanonicalSHA256, To: to.CanonicalSHA256}
+			diff.Changed = true
+		}
+	} else if strings.TrimSpace(from.SHA256) != strings.TrimSpace(to.SHA256) {
+		diff.SHA256 = &ValueDiff[string]{From: from.SHA256, To: to.SHA256}
 		diff.Changed = true
 	}
 
@@ -797,7 +925,6 @@ func tallyDiffs(d ImageDiff) diffTally {
 	if d.PartitionTable.MisalignedParts != nil {
 		t.addMeaningful(1, "PT MisalignedParts")
 	}
-
 	if len(d.Partitions.Added) > 0 {
 		t.addMeaningful(len(d.Partitions.Added), "Partitions Added")
 	}
@@ -839,6 +966,32 @@ func tallyDiffs(d ImageDiff) diffTally {
 			}
 			if d.Verity.HashPartition != nil {
 				t.addMeaningful(1, "dm-verity hash partition changed")
+			}
+		}
+	}
+
+	if d.SBOM != nil && d.SBOM.Changed {
+		if d.SBOM.Added != nil {
+			t.addMeaningful(1, "SBOM added")
+		} else if d.SBOM.Removed != nil {
+			t.addMeaningful(1, "SBOM removed")
+		} else {
+			if d.SBOM.CanonicalSHA256 != nil {
+				t.addMeaningful(1, "SBOM canonical content changed")
+			} else if d.SBOM.SHA256 != nil {
+				t.addMeaningful(1, "SBOM raw content changed")
+			}
+			if d.SBOM.PackageCount != nil {
+				t.addMeaningful(1, "SBOM package count changed")
+			}
+			if d.SBOM.Format != nil {
+				t.addMeaningful(1, "SBOM format changed")
+			}
+			if d.SBOM.FileName != nil {
+				t.addVolatile(1, "SBOM file name changed")
+			}
+			if d.SBOM.SizeBytes != nil {
+				t.addVolatile(1, "SBOM size changed")
 			}
 		}
 	}
@@ -930,32 +1083,35 @@ func tallyEFIBinaryDiff(t *diffTally, d EFIBinaryDiff) {
 		}
 
 		// UKI diffs
-		if m.UKI == nil || !m.UKI.Changed {
-			continue
-		}
-
-		if m.UKI.KernelSHA256 != nil {
-			t.addMeaningful(1, "EFI "+m.Key+" UKI KernelSHA")
-		}
-		if m.UKI.OSRelSHA256 != nil {
-			t.addMeaningful(1, "EFI "+m.Key+" UKI OSRelSHA")
-		}
-		if m.UKI.UnameSHA256 != nil {
-			t.addMeaningful(1, "EFI "+m.Key+" UKI UnameSHA")
-		}
-
-		otherSectionChanged := false
-		for sec := range m.UKI.SectionSHA256.Modified {
-			secL := strings.ToLower(strings.TrimSpace(sec))
-			if secL == ".cmdline" || secL == "cmdline" ||
-				secL == ".initrd" || secL == "initrd" {
-				continue
+		if m.UKI != nil && m.UKI.Changed {
+			if m.UKI.KernelSHA256 != nil {
+				t.addMeaningful(1, "EFI "+m.Key+" UKI KernelSHA")
 			}
-			otherSectionChanged = true
-			break
+			if m.UKI.OSRelSHA256 != nil {
+				t.addMeaningful(1, "EFI "+m.Key+" UKI OSRelSHA")
+			}
+			if m.UKI.UnameSHA256 != nil {
+				t.addMeaningful(1, "EFI "+m.Key+" UKI UnameSHA")
+			}
+
+			otherSectionChanged := false
+			for sec := range m.UKI.SectionSHA256.Modified {
+				secL := strings.ToLower(strings.TrimSpace(sec))
+				if secL == ".cmdline" || secL == "cmdline" ||
+					secL == ".initrd" || secL == "initrd" {
+					continue
+				}
+				otherSectionChanged = true
+				break
+			}
+			if otherSectionChanged {
+				t.addMeaningful(1, "EFI "+m.Key+" UKI otherSectionChanged")
+			}
 		}
-		if otherSectionChanged {
-			t.addMeaningful(1, "EFI "+m.Key+" UKI otherSectionChanged")
+
+		// Bootloader config diffs
+		if m.BootConfig != nil {
+			tallyBootloaderConfigDiff(t, m.BootConfig, m.Key)
 		}
 	}
 }
@@ -1007,5 +1163,98 @@ func tallyFilesystemChange(t *diffTally, fs *FilesystemChange) {
 		} else {
 			t.addMeaningful(1, "Filesystem field "+ch.Field)
 		}
+	}
+}
+
+func tallyBootloaderConfigDiff(t *diffTally, diff *BootloaderConfigDiff, efiKey string) {
+	if diff == nil {
+		return
+	}
+
+	// Config file changes are meaningful (actual bootloader configuration changed)
+	for _, cf := range diff.ConfigFileChanges {
+		switch cf.Status {
+		case "added":
+			t.addMeaningful(1, "BootConfig["+efiKey+"] config file added: "+cf.Path)
+		case "removed":
+			t.addMeaningful(1, "BootConfig["+efiKey+"] config file removed: "+cf.Path)
+		case "modified":
+			t.addMeaningful(1, "BootConfig["+efiKey+"] config file modified: "+cf.Path)
+		}
+	}
+
+	// Boot entry changes are meaningful (boot menu changed)
+	for _, be := range diff.BootEntryChanges {
+		switch be.Status {
+		case "added":
+			t.addMeaningful(1, "BootConfig["+efiKey+"] boot entry added: "+be.Name)
+		case "removed":
+			t.addMeaningful(1, "BootConfig["+efiKey+"] boot entry removed: "+be.Name)
+		case "modified":
+			// Check if kernel path or cmdline actually changed (meaningful)
+			// vs just the display name changed
+			if be.KernelFrom != be.KernelTo {
+				t.addMeaningful(1, "BootConfig["+efiKey+"] boot entry kernel changed: "+be.Name)
+			} else if be.InitrdFrom != be.InitrdTo {
+				t.addMeaningful(1, "BootConfig["+efiKey+"] boot entry initrd changed: "+be.Name)
+			} else if normalizeKernelCmdline(be.CmdlineFrom) != normalizeKernelCmdline(be.CmdlineTo) {
+				t.addMeaningful(1, "BootConfig["+efiKey+"] boot entry cmdline changed: "+be.Name)
+			} else {
+				// Only cosmetic/metadata changes
+				t.addVolatile(1, "BootConfig["+efiKey+"] boot entry metadata changed: "+be.Name)
+			}
+		}
+	}
+
+	// Kernel reference changes
+	for _, kr := range diff.KernelRefChanges {
+		switch kr.Status {
+		case "added":
+			t.addMeaningful(1, "BootConfig["+efiKey+"] kernel ref added: "+kr.Path)
+		case "removed":
+			t.addMeaningful(1, "BootConfig["+efiKey+"] kernel ref removed: "+kr.Path)
+		case "modified":
+			// UUID change is typically volatile (regenerated each build)
+			if kr.UUIDFrom != kr.UUIDTo {
+				t.addVolatile(1, "BootConfig["+efiKey+"] kernel ref UUID changed: "+kr.Path)
+			} else {
+				t.addMeaningful(1, "BootConfig["+efiKey+"] kernel ref modified: "+kr.Path)
+			}
+		}
+	}
+
+	// UUID reference changes - typically volatile (UUIDs regenerate)
+	for _, ur := range diff.UUIDReferenceChanges {
+		switch ur.Status {
+		case "added":
+			// New UUID reference found - could be meaningful or volatile depending on context
+			if ur.MismatchTo {
+				// UUID mismatch is a potential issue - meaningful
+				t.addMeaningful(1, "BootConfig["+efiKey+"] UUID ref mismatch added: "+ur.UUID)
+			} else {
+				t.addVolatile(1, "BootConfig["+efiKey+"] UUID ref added: "+ur.UUID)
+			}
+		case "removed":
+			if ur.MismatchFrom {
+				t.addMeaningful(1, "BootConfig["+efiKey+"] UUID ref mismatch removed: "+ur.UUID)
+			} else {
+				t.addVolatile(1, "BootConfig["+efiKey+"] UUID ref removed: "+ur.UUID)
+			}
+		case "modified":
+			// UUID context changed - typically volatile unless introducing/fixing mismatch
+			if ur.MismatchFrom != ur.MismatchTo {
+				t.addMeaningful(1, "BootConfig["+efiKey+"] UUID ref mismatch status changed: "+ur.UUID)
+			} else {
+				t.addVolatile(1, "BootConfig["+efiKey+"] UUID ref context changed: "+ur.UUID)
+			}
+		}
+	}
+
+	// Notes changes are informational - count as volatile
+	if len(diff.NotesAdded) > 0 {
+		t.addVolatile(len(diff.NotesAdded), "BootConfig["+efiKey+"] notes added")
+	}
+	if len(diff.NotesRemoved) > 0 {
+		t.addVolatile(len(diff.NotesRemoved), "BootConfig["+efiKey+"] notes removed")
 	}
 }

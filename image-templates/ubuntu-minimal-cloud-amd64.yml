@@ -113,6 +113,9 @@ systemConfig:
     - ncurses-bin
     - shim-signed
     - ubuntu-cloud-minimal
+    - openssh-server
+    - systemd-resolved
+    - systemd-timesyncd
 
   # Kernel metadata used by builder to set cmdline and module hints
   kernel:

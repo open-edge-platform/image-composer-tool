@@ -2,7 +2,7 @@
 
 ## Overview
 
-The OS Image Composer supports executing custom commands during the image build process through the `configurations` section in image template files. These commands are executed in a chroot environment after all packages have been installed, allowing you to customize the system configuration, create files, download resources, or perform any other setup tasks needed for your custom image.
+The ICT supports executing custom commands during the image build process through the `configurations` section in image template files. These commands are executed in a chroot environment after all packages have been installed, allowing you to customize the system configuration, create files, download resources, or perform any other setup tasks needed for your custom image.
 
 ## How It Works
 
@@ -80,7 +80,7 @@ systemConfig:
 
 ## Real-World Example
 
-From the [`ubuntu24-mah.yml`](../image-templates/ubuntu24-mah.yml) template:
+From an example Ubuntu template with custom actions:
 
 ```yaml
 systemConfig:
@@ -92,7 +92,7 @@ systemConfig:
   configurations:
     - cmd: "touch /etc/dummy01.txt"
     - cmd: "echo 'dlstreamer x86_64 ubuntu24 image' > /etc/dummy01.txt"
-    - cmd: "wget --no-check-certificate -O /etc/validate.sh https://raw.githubusercontent.com/open-edge-platform/os-image-composer/main/validate.sh"
+    - cmd: "wget --no-check-certificate -O /etc/validate.sh https://raw.githubusercontent.com/open-edge-platform/image-composer-tool/main/validate.sh"
 ```
 
 ## Configuration Examples
@@ -229,6 +229,6 @@ systemConfig:
 
 ## Related Documentation
 
-- [Image Template Format](../architecture/image-template-format.md)
-- [Understanding the OS Image Build Process](../architecture/os-image-composer-build-process.md)
-- [Command-Line Reference](../architecture/os-image-composer-cli-specification.md)
+- [Image Templates](../architecture/image-composer-tool-templates.md)
+- [Understanding the OS Image Build Process](../architecture/image-composer-tool-build-process.md)
+- [Command-Line Reference](../architecture/image-composer-tool-cli-specification.md)

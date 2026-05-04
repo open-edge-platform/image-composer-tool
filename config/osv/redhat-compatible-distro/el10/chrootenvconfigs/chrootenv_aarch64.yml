@@ -1,0 +1,10 @@
+packages:
+  - createrepo_c
+  - centos-gpg-keys        # Provides GPG keys for package verification
+  - centos-stream-release  # Provides repo files and release info
+  - bash                   # The shell
+  - coreutils-single       # Minimal version of basic tools (ls, cp, mv)
+  - glibc-minimal-langpack # Core libraries without extra languages
+  - dnf                    # Package manager (or 'microdnf' for even smaller)
+  - rpm                    # Package database tools
+  - findutils              # Basic search tools (often needed by scripts)  

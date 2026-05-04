@@ -23,6 +23,12 @@ target:
   arch: x86_64 # Target OS architecture
   imageType: raw # Image type, valid value: [raw, iso].
 
+packageRepositories:
+  - codename: "noble"
+    url: "https://download.01.org/intel-linux-overlay/ubuntu/"
+    pkey: "https://download.01.org/intel-linux-overlay/ubuntu/E6FA98203588250569758E97D176E3162086EE4C.gpg"
+    component: "kernels"
+
 disk:
   name: Minimal_Raw # 1:1 mapping to the systemConfigs name
   artifacts:
@@ -56,5 +62,23 @@ systemConfig:
   name: Minimal_Raw
   description: Default yml configuration for raw image
 
+  bootloader:
+    bootType: efi
+    provider: grub
+
   immutability:
     enabled: false # default is true, overridden to false here
+
+  packages:
+    - grub-efi-amd64-signed
+    - grub2-common
+    - grub-pc-bin
+    - grub-efi-amd64
+    - grub-efi-amd64-bin
+
+  kernel:
+    version: "6.12"
+    cmdline: "console=ttyS0,115200 console=tty0 loglevel=7 i915.force_probe=*"
+    packages:
+      - linux-image-6.12-intel
+      - linux-headers-6.12-intel

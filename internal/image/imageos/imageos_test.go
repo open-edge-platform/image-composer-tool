@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-edge-platform/os-image-composer/internal/chroot"
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
+	"github.com/open-edge-platform/image-composer-tool/internal/chroot"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
 
 // Helper function to create a test ImageTemplate
@@ -108,8 +108,10 @@ func (m *MockChrootEnv) CopyFileFromChrootToHost(hostFilePath, chrootPath string
 func (m *MockChrootEnv) UpdateChrootLocalRepoMetadata(chrootRepoDir string, targetArch string, sudo bool) error {
 	return nil
 }
-func (m *MockChrootEnv) RefreshLocalCacheRepo() error                                   { return nil }
-func (m *MockChrootEnv) InitChrootEnv(targetOs, targetDist, targetArch string) error    { return nil }
+func (m *MockChrootEnv) RefreshLocalCacheRepo() error { return nil }
+func (m *MockChrootEnv) InitChrootEnv(targetOs, targetDist, targetArch string) error {
+	return nil
+}
 func (m *MockChrootEnv) CleanupChrootEnv(targetOs, targetDist, targetArch string) error { return nil }
 func (m *MockChrootEnv) TdnfInstallPackage(packageName, installRoot string, repositoryIDList []string) error {
 	return nil
@@ -119,6 +121,34 @@ func (m *MockChrootEnv) AptInstallPackage(packageName, installRoot string, repoS
 }
 func (m *MockChrootEnv) UpdateSystemPkgs(template *config.ImageTemplate) error { return nil }
 func (m *MockChrootEnv) SetupChrootEnv(imageBuildDir, outputDir string, template *config.ImageTemplate) error {
+	return nil
+}
+
+type errorPathMockChrootEnv struct {
+	MockChrootEnv
+	pathErr   error
+	mountErr  error
+	umountErr error
+}
+
+func (m *errorPathMockChrootEnv) GetChrootEnvPath(installRoot string) (string, error) {
+	if m.pathErr != nil {
+		return "", m.pathErr
+	}
+	return m.MockChrootEnv.GetChrootEnvPath(installRoot)
+}
+
+func (m *errorPathMockChrootEnv) MountChrootSysfs(chrootPath string) error {
+	if m.mountErr != nil {
+		return m.mountErr
+	}
+	return nil
+}
+
+func (m *errorPathMockChrootEnv) UmountChrootSysfs(chrootPath string) error {
+	if m.umountErr != nil {
+		return m.umountErr
+	}
 	return nil
 }
 
@@ -1601,6 +1631,110 @@ func TestUpdateInitramfsWithMock(t *testing.T) {
 	t.Log("UpdateInitramfs mock test completed - shell commands intercepted")
 }
 
+func TestUpdateInitramfsVariants(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	t.Run("immutability and EMT options included", func(t *testing.T) {
+		mockCommands := []shell.MockCommand{
+			{
+				Pattern: `sudo.*chroot.*dracut --force --no-hostonly --verbose --add systemd-veritysetup --add dm --add crypt --install /usr/bin/cut --add systemd --add-drivers 'xhci_hcd usb_storage' --kver 6\.1\.0 /boot/initramfs-6\.1\.0\.img`,
+				Output:  "ok",
+				Error:   nil,
+			},
+		}
+		shell.Default = shell.NewMockExecutor(mockCommands)
+
+		template := &config.ImageTemplate{
+			Target: config.TargetInfo{OS: "edge-microvisor-toolkit"},
+			SystemConfig: config.SystemConfig{
+				Immutability: config.ImmutabilityConfig{Enabled: true},
+				Kernel:       config.KernelConfig{EnableExtraModules: "xhci_hcd usb_storage"},
+			},
+		}
+
+		err := updateInitramfs("/tmp/test-initramfs", "6.1.0", template)
+		if err != nil {
+			t.Fatalf("updateInitramfs() returned unexpected error: %v", err)
+		}
+	})
+
+	t.Run("non-immutable command failure", func(t *testing.T) {
+		mockCommands := []shell.MockCommand{
+			{
+				Pattern: `sudo.*chroot.*dracut --force --no-hostonly --verbose --add systemd --kver 6\.1\.0 /boot/initramfs-6\.1\.0\.img`,
+				Output:  "",
+				Error:   fmt.Errorf("dracut failed"),
+			},
+		}
+		shell.Default = shell.NewMockExecutor(mockCommands)
+
+		template := &config.ImageTemplate{
+			Target:       config.TargetInfo{OS: "ubuntu"},
+			SystemConfig: config.SystemConfig{Immutability: config.ImmutabilityConfig{Enabled: false}},
+		}
+
+		err := updateInitramfs("/tmp/test-initramfs", "6.1.0", template)
+		if err == nil || !strings.Contains(err.Error(), "failed to update initramfs with USB drivers") {
+			t.Fatalf("expected non-immutable initramfs error, got: %v", err)
+		}
+	})
+}
+
+func TestCreateResolvConfSymlink(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	t.Run("creates symlink when missing", func(t *testing.T) {
+		mockCommands := []shell.MockCommand{
+			{Pattern: `ln -sf /run/systemd/resolve/stub-resolv\.conf /etc/resolv\.conf`, Output: "", Error: nil},
+		}
+		shell.Default = shell.NewMockExecutor(mockCommands)
+
+		installRoot := t.TempDir()
+		template := &config.ImageTemplate{Image: config.ImageInfo{Name: "test-image"}}
+
+		err := createResolvConfSymlink(installRoot, template)
+		if err != nil {
+			t.Fatalf("createResolvConfSymlink() unexpected error: %v", err)
+		}
+	})
+
+	t.Run("skips when resolv.conf exists", func(t *testing.T) {
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{})
+
+		installRoot := t.TempDir()
+		etcDir := filepath.Join(installRoot, "etc")
+		if err := os.MkdirAll(etcDir, 0755); err != nil {
+			t.Fatalf("failed to create etc dir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(etcDir, "resolv.conf"), []byte("nameserver 1.1.1.1\n"), 0644); err != nil {
+			t.Fatalf("failed to create resolv.conf: %v", err)
+		}
+
+		template := &config.ImageTemplate{Image: config.ImageInfo{Name: "test-image"}}
+		err := createResolvConfSymlink(installRoot, template)
+		if err != nil {
+			t.Fatalf("createResolvConfSymlink() unexpected error: %v", err)
+		}
+	})
+
+	t.Run("returns error on symlink failure", func(t *testing.T) {
+		mockCommands := []shell.MockCommand{
+			{Pattern: `ln -sf /run/systemd/resolve/stub-resolv\.conf /etc/resolv\.conf`, Output: "", Error: fmt.Errorf("ln failed")},
+		}
+		shell.Default = shell.NewMockExecutor(mockCommands)
+
+		installRoot := t.TempDir()
+		template := &config.ImageTemplate{Image: config.ImageInfo{Name: "test-image"}}
+
+		err := createResolvConfSymlink(installRoot, template)
+		if err == nil || !strings.Contains(err.Error(), "failed to create symlink for resolv.conf") {
+			t.Fatalf("expected symlink failure error, got: %v", err)
+		}
+	})
+}
+
 // TestMountUmountSysfs tests the sysfs mount/unmount functionality
 func TestMountUmountSysfs(t *testing.T) {
 	// Set up mock executor
@@ -1649,6 +1783,81 @@ func TestMountUmountSysfs(t *testing.T) {
 	t.Log("Mount and unmount operations completed without errors")
 
 	t.Log("Mount/unmount sysfs test completed")
+}
+
+func TestMountUmountSysfsErrorPaths(t *testing.T) {
+	template := createTestImageTemplate()
+
+	t.Run("mount path resolution error", func(t *testing.T) {
+		imageOs := &ImageOs{
+			installRoot: "/tmp/test",
+			chrootEnv: &errorPathMockChrootEnv{
+				MockChrootEnv: MockChrootEnv{chrootPath: "/tmp/chroot"},
+				pathErr:       fmt.Errorf("path failed"),
+			},
+			template: template,
+		}
+
+		err := imageOs.mountSysfsToRootfs(imageOs.installRoot)
+		if err == nil || !strings.Contains(err.Error(), "failed to get chroot environment path") {
+			t.Fatalf("expected chroot path error, got: %v", err)
+		}
+	})
+
+	t.Run("mount sysfs command error", func(t *testing.T) {
+		imageOs := &ImageOs{
+			installRoot: "/tmp/test",
+			chrootEnv: &errorPathMockChrootEnv{
+				MockChrootEnv: MockChrootEnv{chrootPath: "/tmp/chroot"},
+				mountErr:      fmt.Errorf("mount failed"),
+			},
+			template: template,
+		}
+
+		err := imageOs.mountSysfsToRootfs(imageOs.installRoot)
+		if err == nil || !strings.Contains(err.Error(), "failed to mount sysfs into image rootfs") {
+			t.Fatalf("expected mount sysfs error, got: %v", err)
+		}
+	})
+
+	t.Run("umount path resolution error", func(t *testing.T) {
+		imageOs := &ImageOs{
+			installRoot: "/tmp/test",
+			chrootEnv: &errorPathMockChrootEnv{
+				MockChrootEnv: MockChrootEnv{chrootPath: "/tmp/chroot"},
+				pathErr:       fmt.Errorf("path failed"),
+			},
+			template: template,
+		}
+
+		err := imageOs.umountSysfsFromRootfs(imageOs.installRoot)
+		if err == nil || !strings.Contains(err.Error(), "failed to get chroot environment path") {
+			t.Fatalf("expected chroot path error, got: %v", err)
+		}
+	})
+
+	t.Run("umount sysfs command error", func(t *testing.T) {
+		imageOs := &ImageOs{
+			installRoot: "/tmp/test",
+			chrootEnv: &errorPathMockChrootEnv{
+				MockChrootEnv: MockChrootEnv{chrootPath: "/tmp/chroot"},
+				umountErr:     fmt.Errorf("umount failed"),
+			},
+			template: template,
+		}
+
+		err := imageOs.umountSysfsFromRootfs(imageOs.installRoot)
+		if err == nil || !strings.Contains(err.Error(), "failed to unmount sysfs for image rootfs") {
+			t.Fatalf("expected umount sysfs error, got: %v", err)
+		}
+	})
+}
+
+func TestPrepareVeritySetupInvalidPair(t *testing.T) {
+	err := prepareVeritySetup("   ", "/tmp/install-root")
+	if err == nil || !strings.Contains(err.Error(), "invalid partPair") {
+		t.Fatalf("expected invalid partPair error, got: %v", err)
+	}
 }
 
 // TestInitRootfsForDeb tests the initRootfsForDeb functionality
@@ -1954,6 +2163,67 @@ func TestMountDiskToChroot(t *testing.T) {
 	}
 
 	t.Log("mountDiskToChroot test completed")
+}
+
+func TestIsSwapFsType(t *testing.T) {
+	tests := []struct {
+		name   string
+		fsType string
+		want   bool
+	}{
+		{name: "swap", fsType: "swap", want: true},
+		{name: "linux-swap", fsType: "linux-swap", want: true},
+		{name: "ext4", fsType: "ext4", want: false},
+		{name: "empty", fsType: "", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isSwapFsType(tt.fsType); got != tt.want {
+				t.Errorf("isSwapFsType(%q) = %v, want %v", tt.fsType, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMountDiskToChrootSkipsNonMountablePartitions(t *testing.T) {
+	// Create test directory
+	testDir, err := os.MkdirTemp("", "imageos_mount_skip_test_*")
+	if err != nil {
+		t.Fatalf("Failed to create test directory: %v", err)
+	}
+	defer os.RemoveAll(testDir)
+
+	template := &config.ImageTemplate{
+		Image:        config.ImageInfo{Name: "test-image"},
+		SystemConfig: config.SystemConfig{Name: "test-system"},
+		Disk: config.DiskConfig{
+			Partitions: []config.PartitionInfo{
+				{ID: "swap", FsType: "linux-swap", MountPoint: ""},
+				{ID: "hash", FsType: "ext4", MountPoint: "none"},
+			},
+		},
+	}
+
+	imageOs := &ImageOs{
+		installRoot: filepath.Join(testDir, template.SystemConfig.Name),
+		chrootEnv:   &MockChrootEnv{chrootImageBuildDir: testDir},
+		template:    template,
+	}
+
+	diskPathIdMap := map[string]string{
+		"swap": "/dev/loop9p1",
+		"hash": "/dev/loop9p2",
+	}
+
+	_, err = imageOs.mountDiskToChroot(imageOs.installRoot, diskPathIdMap, template)
+	if err == nil {
+		t.Fatal("Expected error when all partitions are non-mountable, got none")
+	}
+
+	if !strings.Contains(err.Error(), "no mount points found") {
+		t.Fatalf("Expected no-mount-points error, got: %v", err)
+	}
 }
 
 // TestGetImageVersionInfo tests the getImageVersionInfo functionality
@@ -2490,6 +2760,9 @@ func TestBuildImageUKI(t *testing.T) {
 
 			// Create test template
 			template := &config.ImageTemplate{
+				Target: config.TargetInfo{
+					Arch: "x86_64",
+				},
 				SystemConfig: config.SystemConfig{
 					Bootloader: config.Bootloader{
 						Provider: tt.bootloaderType,
@@ -2571,6 +2844,34 @@ func TestPrepareESPDir(t *testing.T) {
 	t.Log("prepareESPDir test completed")
 }
 
+func TestPrepareESPDirFailures(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	t.Run("cleanup command failure", func(t *testing.T) {
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+			{Pattern: `rm -rf /boot/efi/\*`, Output: "", Error: fmt.Errorf("rm failed")},
+		})
+
+		_, err := prepareESPDir(t.TempDir())
+		if err == nil || !strings.Contains(err.Error(), "failed to clean up ESP directory") {
+			t.Fatalf("expected cleanup failure error, got: %v", err)
+		}
+	})
+
+	t.Run("mkdir command failure", func(t *testing.T) {
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+			{Pattern: `rm -rf /boot/efi/\*`, Output: "", Error: nil},
+			{Pattern: `mkdir -p /boot/efi$`, Output: "", Error: fmt.Errorf("mkdir failed")},
+		})
+
+		_, err := prepareESPDir(t.TempDir())
+		if err == nil || !strings.Contains(err.Error(), "failed to create ESP directory") {
+			t.Fatalf("expected mkdir failure error, got: %v", err)
+		}
+	})
+}
+
 // TestBuildUKI tests the buildUKI function
 func TestBuildUKI(t *testing.T) {
 	// Set up mock executor
@@ -2650,6 +2951,9 @@ func TestBuildUKI(t *testing.T) {
 
 			// Create test template
 			template := &config.ImageTemplate{
+				Target: config.TargetInfo{
+					Arch: "x86_64",
+				},
 				SystemConfig: config.SystemConfig{
 					Immutability: config.ImmutabilityConfig{
 						Enabled: tt.immutable,
@@ -2679,6 +2983,38 @@ func TestBuildUKI(t *testing.T) {
 	}
 
 	t.Log("buildUKI test completed")
+}
+
+func TestGetUkifyStubPath(t *testing.T) {
+	tests := []struct {
+		name       string
+		arch       string
+		wantSuffix string
+		wantErr    bool
+	}{
+		{name: "x86_64", arch: "x86_64", wantSuffix: "/usr/lib/systemd/boot/efi/linuxx64.efi.stub"},
+		{name: "aarch64", arch: "aarch64", wantSuffix: "/usr/lib/systemd/boot/efi/linuxaa64.efi.stub"},
+		{name: "arm64 alias", arch: "arm64", wantSuffix: "/usr/lib/systemd/boot/efi/linuxaa64.efi.stub"},
+		{name: "unsupported", arch: "riscv64", wantErr: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := getUkifyStubPath(tc.arch)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error for arch %s, got nil", tc.arch)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.wantSuffix {
+				t.Fatalf("unexpected stub path for arch %s: got %s, want %s", tc.arch, got, tc.wantSuffix)
+			}
+		})
+	}
 }
 
 // TestCollectUserGroups tests the collectUserGroups function
@@ -3027,6 +3363,21 @@ func TestRemoveVerityTmp(t *testing.T) {
 
 	installRoot := "/tmp/test-install-root"
 	removeVerityTmp(installRoot)
+}
+
+func TestRemoveVerityTmpWithCleanupErrors(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	mockCommands := []shell.MockCommand{
+		{Pattern: `umount /tmp`, Output: "", Error: fmt.Errorf("umount tmp failed")},
+		{Pattern: `rm -rf .*/tmp`, Output: "", Error: fmt.Errorf("rm tmp failed")},
+		{Pattern: `umount /boot/efi/tmp`, Output: "", Error: fmt.Errorf("umount efi tmp failed")},
+		{Pattern: `rm -rf .*/boot/efi/tmp`, Output: "", Error: fmt.Errorf("rm efi tmp failed")},
+	}
+	shell.Default = shell.NewMockExecutor(mockCommands)
+
+	removeVerityTmp(t.TempDir())
 }
 
 func TestVerifyUserCreated(t *testing.T) {
@@ -4295,5 +4646,658 @@ func TestSystemConfigurationErrorRecovery(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestIsSymlink tests the isSymlink helper function
+func TestIsSymlink(t *testing.T) {
+	// Create test directory
+	tempDir, err := os.MkdirTemp("", "test_issymlink_*")
+	if err != nil {
+		t.Fatalf("Failed to create temp directory: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create a regular file
+	regularFile := filepath.Join(tempDir, "regular_file")
+	if err := os.WriteFile(regularFile, []byte("test"), 0644); err != nil {
+		t.Fatalf("Failed to create regular file: %v", err)
+	}
+
+	// Create a symbolic link
+	symlinkPath := filepath.Join(tempDir, "symlink_file")
+	if err := os.Symlink(regularFile, symlinkPath); err != nil {
+		t.Fatalf("Failed to create symlink: %v", err)
+	}
+
+	// Test regular file (should not be symlink)
+	isLink, err := isSymlink(regularFile)
+	if err != nil {
+		t.Errorf("Unexpected error for regular file: %v", err)
+	}
+	if isLink {
+		t.Error("Regular file incorrectly identified as symlink")
+	}
+
+	// Test symlink (should be symlink)
+	isLink, err = isSymlink(symlinkPath)
+	if err != nil {
+		t.Errorf("Unexpected error for symlink: %v", err)
+	}
+	if !isLink {
+		t.Error("Symlink incorrectly identified as regular file")
+	}
+
+	// Test non-existent path
+	nonExistentPath := filepath.Join(tempDir, "nonexistent")
+	isLink, err = isSymlink(nonExistentPath)
+	if err == nil {
+		t.Error("Expected error for non-existent path")
+	}
+	if isLink {
+		t.Error("Non-existent path incorrectly identified as symlink")
+	}
+}
+
+// TestFixKernelSymlinksNoBootDir tests fixKernelSymlinks when boot directory doesn't exist
+func TestFixKernelSymlinksNoBootDir(t *testing.T) {
+	// Create test directory without boot directory
+	tempDir, err := os.MkdirTemp("", "test_kernel_symlinks_*")
+	if err != nil {
+		t.Fatalf("Failed to create temp directory: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Test fixKernelSymlinks - should return nil (no error) when boot directory doesn't exist
+	err = fixKernelSymlinks(tempDir)
+	if err != nil {
+		t.Errorf("Expected no error when boot directory doesn't exist, got: %v", err)
+	}
+}
+
+// TestFixKernelSymlinksNoLibModulesDir tests fixKernelSymlinks when lib/modules directory doesn't exist
+func TestFixKernelSymlinksNoLibModulesDir(t *testing.T) {
+	// Create test directory with boot but no lib/modules directory
+	tempDir, err := os.MkdirTemp("", "test_kernel_symlinks_*")
+	if err != nil {
+		t.Fatalf("Failed to create temp directory: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create boot directory
+	bootDir := filepath.Join(tempDir, "boot")
+	if err := os.MkdirAll(bootDir, 0755); err != nil {
+		t.Fatalf("Failed to create boot directory: %v", err)
+	}
+
+	// Test fixKernelSymlinks - should return nil when lib/modules directory doesn't exist
+	err = fixKernelSymlinks(tempDir)
+	if err != nil {
+		t.Errorf("Expected no error when lib/modules directory doesn't exist, got: %v", err)
+	}
+}
+
+// TestFixKernelSymlinksExistingVmlinuz tests fixKernelSymlinks when vmlinuz already exists in boot
+func TestFixKernelSymlinksExistingVmlinuz(t *testing.T) {
+	// Create test directory
+	tempDir, err := os.MkdirTemp("", "test_kernel_symlinks_*")
+	if err != nil {
+		t.Fatalf("Failed to create temp directory: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create boot directory with existing vmlinuz file
+	bootDir := filepath.Join(tempDir, "boot")
+	if err := os.MkdirAll(bootDir, 0755); err != nil {
+		t.Fatalf("Failed to create boot directory: %v", err)
+	}
+
+	existingVmlinuz := filepath.Join(bootDir, "vmlinuz-5.15.0")
+	if err := os.WriteFile(existingVmlinuz, []byte("kernel"), 0644); err != nil {
+		t.Fatalf("Failed to create existing vmlinuz file: %v", err)
+	}
+
+	// Create lib/modules directory with kernel
+	libModulesDir := filepath.Join(tempDir, "lib", "modules", "5.15.0")
+	if err := os.MkdirAll(libModulesDir, 0755); err != nil {
+		t.Fatalf("Failed to create lib/modules directory: %v", err)
+	}
+
+	kernelFile := filepath.Join(libModulesDir, "vmlinuz")
+	if err := os.WriteFile(kernelFile, []byte("kernel"), 0644); err != nil {
+		t.Fatalf("Failed to create kernel file: %v", err)
+	}
+
+	// Test fixKernelSymlinks - should return early when vmlinuz already exists
+	err = fixKernelSymlinks(tempDir)
+	if err != nil {
+		t.Errorf("Expected no error when vmlinuz already exists, got: %v", err)
+	}
+
+	// Verify the existing file wasn't changed
+	if _, err := os.Stat(existingVmlinuz); os.IsNotExist(err) {
+		t.Error("Existing vmlinuz file was removed when it shouldn't have been")
+	}
+}
+
+// TestFixKernelSymlinksCreateSymlinks tests fixKernelSymlinks creating symlinks successfully
+func TestFixKernelSymlinksCreateSymlinks(t *testing.T) {
+	// Create test directory
+	tempDir, err := os.MkdirTemp("", "test_kernel_symlinks_*")
+	if err != nil {
+		t.Fatalf("Failed to create temp directory: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create boot directory (empty)
+	bootDir := filepath.Join(tempDir, "boot")
+	if err := os.MkdirAll(bootDir, 0755); err != nil {
+		t.Fatalf("Failed to create boot directory: %v", err)
+	}
+
+	// Create lib/modules directories with multiple kernel versions
+	kernelVersions := []string{"5.15.0", "6.1.0", "6.2.1"}
+	for _, version := range kernelVersions {
+		libModulesDir := filepath.Join(tempDir, "lib", "modules", version)
+		if err := os.MkdirAll(libModulesDir, 0755); err != nil {
+			t.Fatalf("Failed to create lib/modules/%s directory: %v", version, err)
+		}
+
+		kernelFile := filepath.Join(libModulesDir, "vmlinuz")
+		if err := os.WriteFile(kernelFile, []byte("kernel-"+version), 0644); err != nil {
+			t.Fatalf("Failed to create kernel file for %s: %v", version, err)
+		}
+	}
+
+	// Test fixKernelSymlinks
+	err = fixKernelSymlinks(tempDir)
+	if err != nil {
+		t.Errorf("Expected no error creating symlinks, got: %v", err)
+	}
+
+	// Verify symlinks were created
+	for _, version := range kernelVersions {
+		symlinkPath := filepath.Join(bootDir, "vmlinuz-"+version)
+
+		// Check if symlink exists
+		if _, err := os.Lstat(symlinkPath); os.IsNotExist(err) {
+			t.Errorf("Expected symlink %s was not created", symlinkPath)
+			continue
+		}
+
+		// Check if it's actually a symlink
+		isLink, err := isSymlink(symlinkPath)
+		if err != nil {
+			t.Errorf("Error checking if %s is symlink: %v", symlinkPath, err)
+			continue
+		}
+		if !isLink {
+			t.Errorf("Expected %s to be a symlink, but it's not", symlinkPath)
+			continue
+		}
+
+		// Check if symlink points to correct target
+		target, err := os.Readlink(symlinkPath)
+		if err != nil {
+			t.Errorf("Error reading symlink target for %s: %v", symlinkPath, err)
+			continue
+		}
+
+		expectedTarget := filepath.Join("..", "..", "lib", "modules", version, "vmlinuz")
+		if target != expectedTarget {
+			t.Errorf("Symlink %s points to %s, expected %s", symlinkPath, target, expectedTarget)
+		}
+	}
+}
+
+// TestFixKernelSymlinksSkipNonVersionDirs tests skipping non-kernel version directories
+func TestFixKernelSymlinksSkipNonVersionDirs(t *testing.T) {
+	// Create test directory
+	tempDir, err := os.MkdirTemp("", "test_kernel_symlinks_*")
+	if err != nil {
+		t.Fatalf("Failed to create temp directory: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create boot directory
+	bootDir := filepath.Join(tempDir, "boot")
+	if err := os.MkdirAll(bootDir, 0755); err != nil {
+		t.Fatalf("Failed to create boot directory: %v", err)
+	}
+
+	// Create lib/modules directories with non-version directories and one valid kernel
+	nonVersionDirs := []string{"build", "source", "extramodules"}
+	libModulesBase := filepath.Join(tempDir, "lib", "modules")
+
+	for _, dir := range nonVersionDirs {
+		dirPath := filepath.Join(libModulesBase, dir)
+		if err := os.MkdirAll(dirPath, 0755); err != nil {
+			t.Fatalf("Failed to create %s directory: %v", dir, err)
+		}
+	}
+
+	// Create one valid kernel version directory
+	validKernelDir := filepath.Join(libModulesBase, "5.15.0")
+	if err := os.MkdirAll(validKernelDir, 0755); err != nil {
+		t.Fatalf("Failed to create valid kernel directory: %v", err)
+	}
+
+	kernelFile := filepath.Join(validKernelDir, "vmlinuz")
+	if err := os.WriteFile(kernelFile, []byte("kernel"), 0644); err != nil {
+		t.Fatalf("Failed to create kernel file: %v", err)
+	}
+
+	// Test fixKernelSymlinks
+	err = fixKernelSymlinks(tempDir)
+	if err != nil {
+		t.Errorf("Expected no error, got: %v", err)
+	}
+
+	// Verify only the valid kernel symlink was created
+	symlinkPath := filepath.Join(bootDir, "vmlinuz-5.15.0")
+	if _, err := os.Lstat(symlinkPath); os.IsNotExist(err) {
+		t.Error("Expected symlink for valid kernel was not created")
+	}
+
+	// Verify no symlinks for non-version directories
+	for _, dir := range nonVersionDirs {
+		invalidSymlink := filepath.Join(bootDir, "vmlinuz-"+dir)
+		if _, err := os.Lstat(invalidSymlink); err == nil {
+			t.Errorf("Unexpected symlink created for non-version directory: %s", dir)
+		}
+	}
+}
+
+// TestFixKernelSymlinksSkipMissingKernel tests skipping when kernel file doesn't exist
+func TestFixKernelSymlinksSkipMissingKernel(t *testing.T) {
+	// Create test directory
+	tempDir, err := os.MkdirTemp("", "test_kernel_symlinks_*")
+	if err != nil {
+		t.Fatalf("Failed to create temp directory: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create boot directory
+	bootDir := filepath.Join(tempDir, "boot")
+	if err := os.MkdirAll(bootDir, 0755); err != nil {
+		t.Fatalf("Failed to create boot directory: %v", err)
+	}
+
+	// Create lib/modules directory without vmlinuz file
+	libModulesDir := filepath.Join(tempDir, "lib", "modules", "5.15.0")
+	if err := os.MkdirAll(libModulesDir, 0755); err != nil {
+		t.Fatalf("Failed to create lib/modules directory: %v", err)
+	}
+
+	// Test fixKernelSymlinks
+	err = fixKernelSymlinks(tempDir)
+	if err != nil {
+		t.Errorf("Expected no error when kernel file missing, got: %v", err)
+	}
+
+	// Verify no symlink was created
+	symlinkPath := filepath.Join(bootDir, "vmlinuz-5.15.0")
+	if _, err := os.Lstat(symlinkPath); err == nil {
+		t.Error("Unexpected symlink created when kernel file was missing")
+	}
+}
+
+// TestFixKernelSymlinksReplaceNonSymlink tests the replacement logic when boot directory is initially empty
+func TestFixKernelSymlinksReplaceNonSymlink(t *testing.T) {
+	// Create test directory
+	tempDir, err := os.MkdirTemp("", "test_kernel_symlinks_*")
+	if err != nil {
+		t.Fatalf("Failed to create temp directory: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create boot directory (initially empty)
+	bootDir := filepath.Join(tempDir, "boot")
+	if err := os.MkdirAll(bootDir, 0755); err != nil {
+		t.Fatalf("Failed to create boot directory: %v", err)
+	}
+
+	// Create lib/modules directory with kernel
+	libModulesDir := filepath.Join(tempDir, "lib", "modules", "5.15.0")
+	if err := os.MkdirAll(libModulesDir, 0755); err != nil {
+		t.Fatalf("Failed to create lib/modules directory: %v", err)
+	}
+
+	kernelFile := filepath.Join(libModulesDir, "vmlinuz")
+	if err := os.WriteFile(kernelFile, []byte("new-kernel"), 0644); err != nil {
+		t.Fatalf("Failed to create kernel file: %v", err)
+	}
+
+	// Create a regular file where the symlink should go (after boot dir check passes)
+	conflictingFile := filepath.Join(bootDir, "vmlinuz-5.15.0")
+	if err := os.WriteFile(conflictingFile, []byte("old-kernel"), 0644); err != nil {
+		t.Fatalf("Failed to create conflicting file: %v", err)
+	}
+
+	// Since the function returns early when it finds vmlinuz* files, we need to test
+	// this scenario differently. The function is designed to skip entirely if there
+	// are any vmlinuz files present, so the replacement logic doesn't get executed
+	// in this case. This is the correct behavior as documented in the function.
+
+	// Test fixKernelSymlinks - should return early due to existing vmlinuz file
+	err = fixKernelSymlinks(tempDir)
+	if err != nil {
+		t.Errorf("Expected no error with existing vmlinuz file, got: %v", err)
+	}
+
+	// Verify the file remains unchanged (due to early return)
+	content, err := os.ReadFile(conflictingFile)
+	if err != nil {
+		t.Errorf("Error reading conflicting file: %v", err)
+	}
+
+	if string(content) != "old-kernel" {
+		t.Errorf("File content changed unexpectedly: got %s, expected 'old-kernel'", string(content))
+	}
+
+	// Verify it's still a regular file (not a symlink)
+	isLink, err := isSymlink(conflictingFile)
+	if err != nil {
+		t.Errorf("Error checking if file is symlink: %v", err)
+	}
+	if isLink {
+		t.Error("File was unexpectedly converted to symlink")
+	}
+
+	// This test verifies that the function correctly implements the early return
+	// behavior when vmlinuz files are already present, which is the intended design
+}
+
+// TestFixKernelSymlinksKeepExistingSymlink tests keeping existing valid symlinks
+func TestFixKernelSymlinksKeepExistingSymlink(t *testing.T) {
+	// Create test directory
+	tempDir, err := os.MkdirTemp("", "test_kernel_symlinks_*")
+	if err != nil {
+		t.Fatalf("Failed to create temp directory: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create boot directory
+	bootDir := filepath.Join(tempDir, "boot")
+	if err := os.MkdirAll(bootDir, 0755); err != nil {
+		t.Fatalf("Failed to create boot directory: %v", err)
+	}
+
+	// Create lib/modules directory with kernel
+	libModulesDir := filepath.Join(tempDir, "lib", "modules", "5.15.0")
+	if err := os.MkdirAll(libModulesDir, 0755); err != nil {
+		t.Fatalf("Failed to create lib/modules directory: %v", err)
+	}
+
+	kernelFile := filepath.Join(libModulesDir, "vmlinuz")
+	if err := os.WriteFile(kernelFile, []byte("kernel"), 0644); err != nil {
+		t.Fatalf("Failed to create kernel file: %v", err)
+	}
+
+	// Create existing symlink
+	existingSymlink := filepath.Join(bootDir, "vmlinuz-5.15.0")
+	relPath := filepath.Join("..", "..", "lib", "modules", "5.15.0", "vmlinuz")
+	if err := os.Symlink(relPath, existingSymlink); err != nil {
+		t.Fatalf("Failed to create existing symlink: %v", err)
+	}
+
+	// Get original link info
+	originalInfo, err := os.Lstat(existingSymlink)
+	if err != nil {
+		t.Fatalf("Failed to get original symlink info: %v", err)
+	}
+
+	// Test fixKernelSymlinks
+	err = fixKernelSymlinks(tempDir)
+	if err != nil {
+		t.Errorf("Expected no error with existing symlink, got: %v", err)
+	}
+
+	// Verify the existing symlink wasn't changed
+	newInfo, err := os.Lstat(existingSymlink)
+	if err != nil {
+		t.Errorf("Existing symlink was removed: %v", err)
+	}
+
+	// Compare modification times to ensure the symlink wasn't recreated
+	if !newInfo.ModTime().Equal(originalInfo.ModTime()) {
+		t.Error("Existing symlink appears to have been recreated")
+	}
+
+	// Verify it's still a symlink
+	isLink, err := isSymlink(existingSymlink)
+	if err != nil {
+		t.Errorf("Error checking existing symlink: %v", err)
+	}
+	if !isLink {
+		t.Error("Existing symlink is no longer a symlink")
+	}
+}
+
+// TestFixKernelSymlinksMultipleKernels tests handling multiple kernel versions
+func TestFixKernelSymlinksMultipleKernels(t *testing.T) {
+	// Create test directory
+	tempDir, err := os.MkdirTemp("", "test_kernel_symlinks_*")
+	if err != nil {
+		t.Fatalf("Failed to create temp directory: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create boot directory
+	bootDir := filepath.Join(tempDir, "boot")
+	if err := os.MkdirAll(bootDir, 0755); err != nil {
+		t.Fatalf("Failed to create boot directory: %v", err)
+	}
+
+	// Create multiple kernel versions, some with issues
+	testKernels := map[string]struct {
+		createKernel  bool
+		expectSymlink bool
+		description   string
+	}{
+		"5.15.0":    {true, true, "valid kernel"},
+		"6.1.0":     {true, true, "another valid kernel"},
+		"6.2.0-rc1": {true, true, "rc kernel"},
+		"build":     {false, false, "non-version directory"},
+		"6.3.0":     {false, false, "kernel directory without vmlinuz file"},
+	}
+
+	libModulesBase := filepath.Join(tempDir, "lib", "modules")
+
+	for version, config := range testKernels {
+		libModulesDir := filepath.Join(libModulesBase, version)
+		if err := os.MkdirAll(libModulesDir, 0755); err != nil {
+			t.Fatalf("Failed to create lib/modules/%s directory: %v", version, err)
+		}
+
+		if config.createKernel {
+			kernelFile := filepath.Join(libModulesDir, "vmlinuz")
+			if err := os.WriteFile(kernelFile, []byte("kernel-"+version), 0644); err != nil {
+				t.Fatalf("Failed to create kernel file for %s: %v", version, err)
+			}
+		}
+	}
+
+	// Test fixKernelSymlinks
+	err = fixKernelSymlinks(tempDir)
+	if err != nil {
+		t.Errorf("Expected no error with multiple kernels, got: %v", err)
+	}
+
+	// Verify results for each kernel
+	for version, config := range testKernels {
+		symlinkPath := filepath.Join(bootDir, "vmlinuz-"+version)
+
+		if config.expectSymlink {
+			// Check if symlink exists
+			if _, err := os.Lstat(symlinkPath); os.IsNotExist(err) {
+				t.Errorf("Expected symlink %s was not created (%s)", symlinkPath, config.description)
+				continue
+			}
+
+			// Check if it's actually a symlink
+			isLink, err := isSymlink(symlinkPath)
+			if err != nil {
+				t.Errorf("Error checking if %s is symlink: %v (%s)", symlinkPath, err, config.description)
+				continue
+			}
+			if !isLink {
+				t.Errorf("Expected %s to be a symlink (%s)", symlinkPath, config.description)
+			}
+		} else {
+			// Check that symlink was NOT created
+			if _, err := os.Lstat(symlinkPath); err == nil {
+				t.Errorf("Unexpected symlink created: %s (%s)", symlinkPath, config.description)
+			}
+		}
+	}
+}
+
+// TestFixKernelSymlinksErrorHandling tests error scenarios
+func TestFixKernelSymlinksErrorHandling(t *testing.T) {
+	// Create test directory
+	tempDir, err := os.MkdirTemp("", "test_kernel_symlinks_*")
+	if err != nil {
+		t.Fatalf("Failed to create temp directory: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create boot directory
+	bootDir := filepath.Join(tempDir, "boot")
+	if err := os.MkdirAll(bootDir, 0755); err != nil {
+		t.Fatalf("Failed to create boot directory: %v", err)
+	}
+
+	// Create lib/modules directory with kernel
+	libModulesDir := filepath.Join(tempDir, "lib", "modules", "5.15.0")
+	if err := os.MkdirAll(libModulesDir, 0755); err != nil {
+		t.Fatalf("Failed to create lib/modules directory: %v", err)
+	}
+
+	kernelFile := filepath.Join(libModulesDir, "vmlinuz")
+	if err := os.WriteFile(kernelFile, []byte("kernel"), 0644); err != nil {
+		t.Fatalf("Failed to create kernel file: %v", err)
+	}
+
+	// Create a read-only directory to cause symlink creation to fail
+	symlinkPath := filepath.Join(bootDir, "vmlinuz-5.15.0")
+
+	// First create the symlink directory structure to later make it read-only
+	readOnlyDir := filepath.Join(bootDir, "readonly_test")
+	if err := os.MkdirAll(readOnlyDir, 0755); err != nil {
+		t.Fatalf("Failed to create readonly test dir: %v", err)
+	}
+
+	// Test with valid setup first
+	err = fixKernelSymlinks(tempDir)
+	if err != nil {
+		t.Errorf("Expected no error in valid setup, got: %v", err)
+	}
+
+	// Verify symlink was created successfully
+	if _, err := os.Lstat(symlinkPath); os.IsNotExist(err) {
+		t.Error("Expected symlink was not created in valid scenario")
+	}
+}
+
+// TestFixKernelSymlinksPermissionIssues tests handling permission issues gracefully
+func TestFixKernelSymlinksPermissionIssues(t *testing.T) {
+	// Skip this test if running as root, as root can usually override permissions
+	if os.Getuid() == 0 {
+		t.Skip("Skipping permission test when running as root")
+	}
+
+	// Create test directory
+	tempDir, err := os.MkdirTemp("", "test_kernel_symlinks_*")
+	if err != nil {
+		t.Fatalf("Failed to create temp directory: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create boot directory and make it read-only
+	bootDir := filepath.Join(tempDir, "boot")
+	if err := os.MkdirAll(bootDir, 0755); err != nil {
+		t.Fatalf("Failed to create boot directory: %v", err)
+	}
+
+	// Create lib/modules directory with kernel
+	libModulesDir := filepath.Join(tempDir, "lib", "modules", "5.15.0")
+	if err := os.MkdirAll(libModulesDir, 0755); err != nil {
+		t.Fatalf("Failed to create lib/modules directory: %v", err)
+	}
+
+	kernelFile := filepath.Join(libModulesDir, "vmlinuz")
+	if err := os.WriteFile(kernelFile, []byte("kernel"), 0644); err != nil {
+		t.Fatalf("Failed to create kernel file: %v", err)
+	}
+
+	// Make boot directory read-only to cause symlink creation to fail
+	if err := os.Chmod(bootDir, 0444); err != nil {
+		t.Fatalf("Failed to make boot directory read-only: %v", err)
+	}
+	defer func() {
+		if err := os.Chmod(bootDir, 0755); err != nil {
+			t.Logf("Warning: Failed to restore permissions for %s: %v", bootDir, err)
+		}
+	}() // Restore permissions for cleanup
+
+	// Test fixKernelSymlinks - should handle permission errors gracefully
+	err = fixKernelSymlinks(tempDir)
+	// The function should not return an error even if individual symlink creations fail
+	// as it logs warnings and continues
+	if err != nil {
+		t.Errorf("Expected function to handle permission errors gracefully, got: %v", err)
+	}
+}
+
+// TestFixKernelSymlinksEdgeCases tests various edge cases
+func TestFixKernelSymlinksEdgeCases(t *testing.T) {
+	// Test with empty install root
+	err := fixKernelSymlinks("")
+	if err != nil {
+		t.Errorf("Expected no error with empty install root, got: %v", err)
+	}
+
+	// Create test directory for other edge cases
+	tempDir, err := os.MkdirTemp("", "test_kernel_symlinks_edge_*")
+	if err != nil {
+		t.Fatalf("Failed to create temp directory: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Test with boot directory that exists but is empty
+	bootDir := filepath.Join(tempDir, "boot")
+	if err := os.MkdirAll(bootDir, 0755); err != nil {
+		t.Fatalf("Failed to create boot directory: %v", err)
+	}
+
+	// Test with lib/modules directory that exists but is empty
+	libModulesBase := filepath.Join(tempDir, "lib", "modules")
+	if err := os.MkdirAll(libModulesBase, 0755); err != nil {
+		t.Fatalf("Failed to create lib/modules directory: %v", err)
+	}
+
+	// Test fixKernelSymlinks with empty directories
+	err = fixKernelSymlinks(tempDir)
+	if err != nil {
+		t.Errorf("Expected no error with empty directories, got: %v", err)
+	}
+
+	// Create a file (not directory) in lib/modules
+	regularFile := filepath.Join(libModulesBase, "regular_file.txt")
+	if err := os.WriteFile(regularFile, []byte("test"), 0644); err != nil {
+		t.Fatalf("Failed to create regular file: %v", err)
+	}
+
+	// Test fixKernelSymlinks - should skip regular files
+	err = fixKernelSymlinks(tempDir)
+	if err != nil {
+		t.Errorf("Expected no error when lib/modules contains regular files, got: %v", err)
+	}
+
+	// Verify no symlink was created for the regular file
+	symlinkPath := filepath.Join(bootDir, "vmlinuz-regular_file.txt")
+	if _, err := os.Lstat(symlinkPath); err == nil {
+		t.Error("Unexpected symlink created for regular file")
 	}
 }

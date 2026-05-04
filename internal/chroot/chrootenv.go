@@ -6,14 +6,14 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/open-edge-platform/os-image-composer/internal/chroot/chrootbuild"
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/compression"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/file"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/mount"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/system"
+	"github.com/open-edge-platform/image-composer-tool/internal/chroot/chrootbuild"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/compression"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/file"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/mount"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
 
 const (
@@ -57,6 +57,8 @@ type ChrootEnv struct {
 	ChrootEnvRoot       string
 	ChrootImageBuildDir string
 	ChrootBuilder       chrootbuild.ChrootBuilderInterface
+	buildTemplate       *config.ImageTemplate
+	TargetOs            string // Store targetOs for package manager selection
 }
 
 func NewChrootEnv(targetOs, targetDist, targetArch string) (*ChrootEnv, error) {
@@ -80,11 +82,19 @@ func NewChrootEnv(targetOs, targetDist, targetArch string) (*ChrootEnv, error) {
 	return &ChrootEnv{
 		ChrootEnvRoot: chrootEnvRoot,
 		ChrootBuilder: chrootBuilder,
+		TargetOs:      targetOs,
 	}, nil
 }
 
 func (chrootEnv *ChrootEnv) GetChrootEnvRoot() string {
 	return chrootEnv.ChrootEnvRoot
+}
+
+func (chrootEnv *ChrootEnv) SetBuildTemplate(template *config.ImageTemplate) {
+	chrootEnv.buildTemplate = template
+	if templateAwareBuilder, ok := chrootEnv.ChrootBuilder.(interface{ SetBuildTemplate(*config.ImageTemplate) }); ok {
+		templateAwareBuilder.SetBuildTemplate(template)
+	}
 }
 
 func (chrootEnv *ChrootEnv) GetChrootImageBuildDir() string {
@@ -277,8 +287,16 @@ func (chrootEnv *ChrootEnv) RefreshLocalCacheRepo() error {
 	// From local.repo
 	pkgType := chrootEnv.GetTargetOsPkgType()
 	if pkgType == "rpm" {
+		pkgManager := chrootEnv.getPackageManagerCmd()
 		releaseVersion := chrootEnv.GetTargetOsReleaseVersion()
-		cmd := fmt.Sprintf("tdnf makecache --releasever %s", releaseVersion)
+
+		var cmd string
+		if pkgManager == "dnf" {
+			cmd = "dnf makecache"
+		} else {
+			cmd = fmt.Sprintf("tdnf makecache --releasever %s", releaseVersion)
+		}
+
 		if _, err := shell.ExecCmdWithStream(cmd, true, chrootEnv.ChrootEnvRoot, nil); err != nil {
 			return fmt.Errorf("failed to refresh cache for chroot repository: %w", err)
 		}
@@ -382,6 +400,9 @@ func (chrootEnv *ChrootEnv) InitChrootEnv(targetOs, targetDist, targetArch strin
 		chrootBuildDir := chrootEnv.ChrootBuilder.GetChrootBuildDir()
 		chrootEnvTarPath := filepath.Join(chrootBuildDir, "chrootenv.tar.gz")
 		if _, err := os.Stat(chrootEnvTarPath); os.IsNotExist(err) {
+			if templateAwareBuilder, ok := chrootEnv.ChrootBuilder.(interface{ SetBuildTemplate(*config.ImageTemplate) }); ok {
+				templateAwareBuilder.SetBuildTemplate(chrootEnv.buildTemplate)
+			}
 			// Build chroot environment tarball
 			if err = chrootEnv.ChrootBuilder.BuildChrootEnv(targetOs, targetDist, targetArch); err != nil {
 				return fmt.Errorf("failed to build chroot environment: %w", err)
@@ -480,22 +501,55 @@ func (chrootEnv *ChrootEnv) CleanupChrootEnv(targetOs, targetDist, targetArch st
 	return nil
 }
 
+// getPackageManagerCmd returns the appropriate package manager command based on target OS
+func (chrootEnv *ChrootEnv) getPackageManagerCmd() string {
+	if strings.Contains(chrootEnv.TargetOs, "redhat-compatible-distro") {
+		return "dnf"
+	}
+	return "tdnf"
+}
+
+// buildInstallCmd builds the package installation command based on the package manager
+func (chrootEnv *ChrootEnv) buildInstallCmd(packageName, chrootInstallRoot string, repositoryIDList []string) string {
+	pkgManager := chrootEnv.getPackageManagerCmd()
+	releaseVersion := chrootEnv.GetTargetOsReleaseVersion()
+
+	if pkgManager == "dnf" {
+		// dnf syntax for RCD builds (similar to tdnf but with dnf)
+		installCmd := fmt.Sprintf("dnf install %s -y --nogpgcheck --installroot %s --setopt=reposdir=%s",
+			packageName, chrootInstallRoot, RPMRepoConfigDir)
+
+		// Add repository configuration for dnf
+		if len(repositoryIDList) > 0 {
+			installCmd += " --disablerepo=*"
+			for _, repoID := range repositoryIDList {
+				installCmd += " --enablerepo=" + repoID
+			}
+		}
+		return installCmd
+	} else {
+		// tdnf original syntax
+		installCmd := fmt.Sprintf("tdnf install %s --releasever %s --setopt reposdir=%s --nogpgcheck --assumeyes --installroot %s",
+			packageName, releaseVersion, RPMRepoConfigDir, chrootInstallRoot)
+
+		// Add repository configuration for tdnf
+		if len(repositoryIDList) > 0 {
+			installCmd += " --disablerepo=*"
+			for _, repoID := range repositoryIDList {
+				installCmd += " --enablerepo=" + repoID
+			}
+		}
+		return installCmd
+	}
+}
+
 func (chrootEnv *ChrootEnv) TdnfInstallPackage(packageName, installRoot string, repositoryIDList []string) error {
-	var installCmd string
 	chrootInstallRoot, err := chrootEnv.GetChrootEnvPath(installRoot)
 	if err != nil {
 		return fmt.Errorf("failed to get chroot environment path for install root %s: %w", installRoot, err)
 	}
-	releaseVersion := chrootEnv.GetTargetOsReleaseVersion()
-	installCmd = fmt.Sprintf("tdnf install %s --releasever %s --setopt reposdir=%s --nogpgcheck --assumeyes --installroot %s",
-		packageName, releaseVersion, RPMRepoConfigDir, chrootInstallRoot)
 
-	if len(repositoryIDList) > 0 {
-		installCmd += " --disablerepo=*"
-		for _, repoID := range repositoryIDList {
-			installCmd += " --enablerepo=" + repoID
-		}
-	}
+	installCmd := chrootEnv.buildInstallCmd(packageName, chrootInstallRoot, repositoryIDList)
 
 	if _, err := shell.ExecCmdWithStream(installCmd, true, chrootEnv.ChrootEnvRoot, nil); err != nil {
 		return fmt.Errorf("failed to install package %s: %w", packageName, err)
@@ -518,7 +572,7 @@ func CleanDebName(packageName string) string {
 
 func (chrootEnv *ChrootEnv) AptInstallPackage(packageName, installRoot string, repoSrcList []string) error {
 	packageName = CleanDebName(packageName)
-	installCmd := fmt.Sprintf("apt-get install -y %s", packageName)
+	installCmd := fmt.Sprintf("apt-get install -y --no-install-recommends %s", packageName)
 
 	if len(repoSrcList) > 0 {
 		for _, repoSrc := range repoSrcList {
@@ -533,8 +587,11 @@ func (chrootEnv *ChrootEnv) AptInstallPackage(packageName, installRoot string, r
 		"DEBCONF_NOWARNINGS=yes",
 	}
 
-	if _, err := shell.ExecCmdWithStream(installCmd, true, installRoot, envVars); err != nil {
-		return fmt.Errorf("failed to install package %s: %w", packageName, err)
+	output, err := shell.ExecCmdWithStream(installCmd, true, installRoot, envVars)
+	if err != nil {
+		log.Errorf("Failed to install package %s: %v", packageName, err)
+		log.Errorf("Full apt-get output for %s:\n%s", packageName, output)
+		return fmt.Errorf("failed to install package %s: %w\napt output:\n%s", packageName, err, output)
 	}
 
 	return nil
