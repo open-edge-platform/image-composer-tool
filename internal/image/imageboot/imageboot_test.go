@@ -1561,3 +1561,75 @@ func TestInstallImageBoot_GrubWithEnableExtraModulesUbuntu(t *testing.T) {
 		t.Errorf("Expected no error, got: %v", err)
 	}
 }
+
+func TestUpdateBootConfigTemplate_GrubCmdlineRootAndExtraArgs(t *testing.T) {
+	configDir := t.TempDir()
+	generalDir := filepath.Join(configDir, "general")
+
+	if err := os.MkdirAll(filepath.Join(generalDir, "image", "grub2"), 0755); err != nil {
+		t.Fatalf("failed to create grub2 asset dir: %v", err)
+	}
+
+	grubAsset := filepath.Join(generalDir, "image", "grub2", "grub")
+	assetContent := strings.Join([]string{
+		"GRUB_TIMEOUT=5",
+		"GRUB_CMDLINE_LINUX=\"root={{.RootPartition}} {{.rdAuto}}\"",
+		"GRUB_CMDLINE_LINUX_DEFAULT=\"{{.ExtraCommandLine}}\"",
+		"GRUB_DISTRIBUTOR=\"{{.Hostname}}\"",
+	}, "\n")
+	if err := os.WriteFile(grubAsset, []byte(assetContent), 0644); err != nil {
+		t.Fatalf("failed to write grub template asset: %v", err)
+	}
+
+	config.SetGlobal(&config.GlobalConfig{
+		ConfigDir: configDir,
+		Logging:   config.LoggingConfig{Level: "debug"},
+	})
+
+	installRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(installRoot, "etc", "default"), 0755); err != nil {
+		t.Fatalf("failed to create install root dirs: %v", err)
+	}
+
+	template := &config.ImageTemplate{
+		Image: config.ImageInfo{Name: "cmdline-test-image"},
+		SystemConfig: config.SystemConfig{
+			Bootloader: config.Bootloader{Provider: "grub", BootType: "efi"},
+			Kernel: config.KernelConfig{
+				Cmdline: "root=/dev/mapper/rootfs_verity console=ttyS0,115200 console=tty0 quiet",
+			},
+		},
+	}
+
+	err := updateBootConfigTemplate(
+		installRoot,
+		"PARTUUID=abc123",
+		"boot-uuid",
+		"",
+		"",
+		"",
+		template,
+	)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	generatedPath := filepath.Join(installRoot, "etc", "default", "grub")
+	contentBytes, err := os.ReadFile(generatedPath)
+	if err != nil {
+		t.Fatalf("failed to read generated grub config: %v", err)
+	}
+	content := string(contentBytes)
+
+	if !strings.Contains(content, "GRUB_CMDLINE_LINUX=\"root=/dev/mapper/rootfs_verity rd.auto=1\"") {
+		t.Fatalf("expected root override from kernel cmdline, got: %s", content)
+	}
+
+	if !strings.Contains(content, "GRUB_CMDLINE_LINUX_DEFAULT=\"console=ttyS0,115200 console=tty0 quiet\"") {
+		t.Fatalf("expected root arg removed from extra cmdline, got: %s", content)
+	}
+
+	if strings.Contains(content, "$kernelopts") {
+		t.Fatalf("did not expect unresolved $kernelopts in generated grub config: %s", content)
+	}
+}

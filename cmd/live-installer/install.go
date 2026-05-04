@@ -95,6 +95,7 @@ func dependencyCheck(targetOs string) error {
 		dependencyInfo = map[string]string{
 			"mmdebstrap":  "mmdebstrap", // For the chroot env build
 			"mkfs.fat":    "dosfstools", // For the FAT32 boot partition creation
+			"sgdisk":      "gdisk",      // For GPT partition creation
 			"veritysetup": "cryptsetup", // For the veritysetup command
 			//"sbsign":      "sbsigntools", // For the UKI image creation
 		}
@@ -102,6 +103,7 @@ func dependencyCheck(targetOs string) error {
 		dependencyInfo = map[string]string{
 			"mmdebstrap":  "mmdebstrap", // For the chroot env build
 			"mkfs.fat":    "dosfstools", // For the FAT32 boot partition creation
+			"sgdisk":      "gdisk",      // For GPT partition creation
 			"veritysetup": "cryptsetup", // For the veritysetup command
 			//"sbsign":      "sbsigntools", // For the UKI image creation
 		}
@@ -109,6 +111,7 @@ func dependencyCheck(targetOs string) error {
 		dependencyInfo = map[string]string{
 			"mmdebstrap":  "mmdebstrap", // For the chroot env build
 			"mkfs.fat":    "dosfstools", // For the FAT32 boot partition creation
+			"sgdisk":      "gdisk",      // For GPT partition creation
 			"veritysetup": "cryptsetup", // For the veritysetup command
 		}
 	default:
@@ -156,10 +159,12 @@ func install(template *config.ImageTemplate, configDir, localRepo string) error 
 	}
 
 	diskInfo := template.GetDiskConfig()
-	diskPath := template.Disk.Path
-	if diskPath == "" {
-		return fmt.Errorf("no target disk path specified in the template")
+	diskPath, err := imagedisc.ResolveInstallDiskPath(diskInfo)
+	if err != nil {
+		return fmt.Errorf("failed to resolve target disk: %w", err)
 	}
+	template.Disk.Path = diskPath
+	log.Infof("Using target disk: %s", diskPath)
 
 	diskPathIdMap, err := imagedisc.DiskPartitionsCreate(diskPath, diskInfo.Partitions, diskInfo.PartitionTableType)
 	if err != nil {

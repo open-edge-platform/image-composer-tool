@@ -83,6 +83,23 @@
           "type": "string",
           "description": "Path to the disk device"
         },
+        "selectionPolicy": {
+          "type": "object",
+          "description": "Policy-based disk selection used when path is empty",
+          "properties": {
+            "strategy": {
+              "type": "string",
+              "description": "Disk selection strategy",
+              "enum": ["first", "largest", "fastest", "largest-free"]
+            },
+            "excludeRemovable": {
+              "type": "boolean",
+              "description": "Exclude removable disks from selection",
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        },
         "artifacts": {
           "type": "array",
           "description": "Output artifacts configuration",

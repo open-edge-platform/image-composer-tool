@@ -33,13 +33,19 @@ type ArtifactInfo struct {
 	Compression string `yaml:"compression"`
 }
 
+type DiskSelectionPolicy struct {
+	Strategy         string `yaml:"strategy,omitempty"`
+	ExcludeRemovable *bool  `yaml:"excludeRemovable,omitempty"`
+}
+
 type DiskConfig struct {
-	Name               string          `yaml:"name"`
-	Path               string          `yaml:"path"` // Path to the disk device (e.g., /dev/sda), used by live installer
-	Artifacts          []ArtifactInfo  `yaml:"artifacts"`
-	Size               string          `yaml:"size"`
-	PartitionTableType string          `yaml:"partitionTableType"`
-	Partitions         []PartitionInfo `yaml:"partitions"`
+	Name               string              `yaml:"name"`
+	Path               string              `yaml:"path"` // Path to the disk device (e.g., /dev/sda), used by live installer
+	SelectionPolicy    DiskSelectionPolicy `yaml:"selectionPolicy,omitempty"`
+	Artifacts          []ArtifactInfo      `yaml:"artifacts"`
+	Size               string              `yaml:"size"`
+	PartitionTableType string              `yaml:"partitionTableType"`
+	Partitions         []PartitionInfo     `yaml:"partitions"`
 }
 
 type PackageRepository struct {
@@ -185,18 +191,18 @@ type KernelConfig struct {
 
 // PartitionInfo holds information about a partition in the disk layout
 type PartitionInfo struct {
-	Name         string   `yaml:"name"`         // Name: label for the partition
-	ID           string   `yaml:"id"`           // ID: unique identifier for the partition; can be used as a key
-	Index        *int     `yaml:"index"`        // Index: index for the partition sdx (x = 1, 2, 3, 4, ...)
-	Flags        []string `yaml:"flags"`        // Flags: optional flags for the partition (e.g., "boot", "hidden")
-	Type         string   `yaml:"type"`         // Type: partition type (e.g., "esp", "linux-root-amd64")
-	TypeGUID     string   `yaml:"typeUUID"`     // TypeGUID: GPT type GUID for the partition (e.g., "8300" for Linux filesystem)
-	FsType       string   `yaml:"fsType"`       // FsType: filesystem type (e.g., "ext4", "xfs", etc.);
-	FsLabel      string   `yaml:"fsLabel"`      // FsLabel: filesystem label (e.g., "cloudimg-rootfs")
-	Start        string   `yaml:"start"`        // Start: start offset of the partition; can be a absolute size (e.g., "512MiB")
-	End          string   `yaml:"end"`          // End: end offset of the partition; can be a absolute size (e.g., "2GiB") or "0" for the end of the disk
-	MountPoint   string   `yaml:"mountPoint"`   // MountPoint: optional mount point for the partition (e.g., "/boot", "/rootfs")
-	MountOptions string   `yaml:"mountOptions"` // MountOptions: optional mount options for the partition (e.g., "defaults", "noatime")
+	Name         string   `yaml:"name"`            // Name: label for the partition
+	ID           string   `yaml:"id"`              // ID: unique identifier for the partition; can be used as a key
+	Index        *int     `yaml:"index,omitempty"` // Index: index for the partition sdx (x = 1, 2, 3, 4, ...)
+	Flags        []string `yaml:"flags"`           // Flags: optional flags for the partition (e.g., "boot", "hidden")
+	Type         string   `yaml:"type"`            // Type: partition type (e.g., "esp", "linux-root-amd64")
+	TypeGUID     string   `yaml:"typeUUID"`        // TypeGUID: GPT type GUID for the partition (e.g., "8300" for Linux filesystem)
+	FsType       string   `yaml:"fsType"`          // FsType: filesystem type (e.g., "ext4", "xfs", etc.);
+	FsLabel      string   `yaml:"fsLabel"`         // FsLabel: filesystem label (e.g., "cloudimg-rootfs")
+	Start        string   `yaml:"start"`           // Start: start offset of the partition; can be a absolute size (e.g., "512MiB")
+	End          string   `yaml:"end"`             // End: end offset of the partition; can be a absolute size (e.g., "2GiB") or "0" for the end of the disk
+	MountPoint   string   `yaml:"mountPoint"`      // MountPoint: optional mount point for the partition (e.g., "/boot", "/rootfs")
+	MountOptions string   `yaml:"mountOptions"`    // MountOptions: optional mount options for the partition (e.g., "defaults", "noatime")
 }
 
 var log = logger.Logger()

@@ -9,8 +9,8 @@ target:
   imageType: img # Image type, valid value: [raw, iso].
 
 systemConfig:
-  name: Default_Initrd
-  description: Default yml configuration for initrd image
+  name: Default_Initrd_Unattended
+  description: Default yml configuration for unattended initrd image
 
   bootloader:
     bootType: efi # (efi or legacy)
@@ -53,14 +53,14 @@ systemConfig:
       final: /usr/lib/systemd/system/getty@.service
     - local: ../additionalfiles/serial-getty@.service
       final: /usr/lib/systemd/system/serial-getty@.service
-    - local: ../../../../../general/isolinux/attendedinstaller
-      final: /root/attendedinstaller
+    - local: ../../../../../general/isolinux/unattendedinstaller
+      final: /root/unattendedinstaller
     - local: ../../../../../../build/live-installer
       final: /usr/bin/live-installer
 
   users:
     - name: root
-      startupScript: "/root/attendedinstaller"
+      startupScript: "/root/unattendedinstaller"
 
   kernel:
     name: kernel

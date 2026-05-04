@@ -1224,6 +1224,120 @@ func TestSystemBlockDevices(t *testing.T) {
 	}
 }
 
+func boolPtr(v bool) *bool {
+	return &v
+}
+
+func TestResolveInstallDiskPath(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	tests := []struct {
+		name        string
+		diskConfig  config.DiskConfig
+		lsblkOutput string
+		expectPath  string
+		expectError bool
+	}{
+		{
+			name:       "explicit_path_wins",
+			diskConfig: config.DiskConfig{Path: "/dev/sdz"},
+			expectPath: "/dev/sdz",
+		},
+		{
+			name: "largest_strategy_default",
+			diskConfig: config.DiskConfig{
+				SelectionPolicy: config.DiskSelectionPolicy{Strategy: "largest"},
+			},
+			lsblkOutput: `{"blockdevices":[{"name":"sda","size":10737418240,"model":"Disk A","serial":"A","tran":"sata","rm":0,"rota":1},{"name":"nvme0n1","size":21474836480,"model":"Disk B","serial":"B","tran":"nvme","rm":0,"rota":0}]}`,
+			expectPath:  "/dev/nvme0n1",
+		},
+		{
+			name: "fastest_strategy_prefers_nvme",
+			diskConfig: config.DiskConfig{
+				SelectionPolicy: config.DiskSelectionPolicy{Strategy: "fastest"},
+			},
+			lsblkOutput: `{"blockdevices":[{"name":"sda","size":536870912000,"model":"Large HDD","serial":"A","tran":"sata","rm":0,"rota":1},{"name":"nvme0n1","size":107374182400,"model":"Fast NVMe","serial":"B","tran":"nvme","rm":0,"rota":0}]}`,
+			expectPath:  "/dev/nvme0n1",
+		},
+		{
+			name: "largest_free_strategy_uses_unallocated_span",
+			diskConfig: config.DiskConfig{
+				SelectionPolicy: config.DiskSelectionPolicy{Strategy: "largest-free"},
+			},
+			lsblkOutput: `{"blockdevices":[{"name":"sda","size":32212254720,"model":"Disk A","serial":"A","tran":"virtio","rm":0,"rota":0},{"name":"sdb","size":21474836480,"model":"Disk B","serial":"B","tran":"virtio","rm":0,"rota":0}]}`,
+			expectPath:  "/dev/sdb",
+		},
+		{
+			name: "exclude_removable_default",
+			diskConfig: config.DiskConfig{
+				SelectionPolicy: config.DiskSelectionPolicy{Strategy: "first"},
+			},
+			lsblkOutput: `{"blockdevices":[{"name":"sdb","size":68719476736,"model":"USB Disk","serial":"U","tran":"usb","rm":1,"rota":0},{"name":"sda","size":21474836480,"model":"Local","serial":"L","tran":"sata","rm":0,"rota":1}]}`,
+			expectPath:  "/dev/sda",
+		},
+		{
+			name: "include_removable_when_enabled",
+			diskConfig: config.DiskConfig{
+				SelectionPolicy: config.DiskSelectionPolicy{Strategy: "first", ExcludeRemovable: boolPtr(false)},
+			},
+			lsblkOutput: `{"blockdevices":[{"name":"sdb","size":68719476736,"model":"USB Disk","serial":"U","tran":"usb","rm":1,"rota":0},{"name":"sda","size":21474836480,"model":"Local","serial":"L","tran":"sata","rm":0,"rota":1}]}`,
+			expectPath:  "/dev/sdb",
+		},
+		{
+			name: "unsupported_strategy",
+			diskConfig: config.DiskConfig{
+				SelectionPolicy: config.DiskSelectionPolicy{Strategy: "by-id"},
+			},
+			lsblkOutput: `{"blockdevices":[{"name":"sda","size":21474836480,"model":"Disk","serial":"A","tran":"sata","rm":0,"rota":1}]}`,
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.diskConfig.Path == "" {
+				mockCommands := []shell.MockCommand{{Pattern: "lsblk", Output: tt.lsblkOutput, Error: nil}}
+				if tt.diskConfig.SelectionPolicy.Strategy == "largest-free" {
+					mockCommands = append(mockCommands,
+						shell.MockCommand{
+							Pattern: "fdisk -l /dev/sda",
+							Output: "Disk /dev/sda: 30 GiB, 32212254720 bytes, 62914560 sectors\n" +
+								"Sector size (logical/physical): 512 bytes / 512 bytes\n" +
+								"/dev/sda1        2048 60817407 60815360 29G Linux filesystem",
+							Error: nil,
+						},
+						shell.MockCommand{
+							Pattern: "fdisk -l /dev/sdb",
+							Output: "Disk /dev/sdb: 20 GiB, 21474836480 bytes, 41943040 sectors\n" +
+								"Sector size (logical/physical): 512 bytes / 512 bytes\n" +
+								"/dev/sdb1        2048 20973567 20971520 10G Linux filesystem",
+							Error: nil,
+						},
+					)
+				}
+				shell.Default = shell.NewMockExecutor(mockCommands)
+			}
+
+			path, err := ResolveInstallDiskPath(tt.diskConfig)
+			if tt.expectError {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+
+			if path != tt.expectPath {
+				t.Fatalf("expected %s, got %s", tt.expectPath, path)
+			}
+		})
+	}
+}
+
 func TestBootPartitionConfig(t *testing.T) {
 	tests := []struct {
 		name               string

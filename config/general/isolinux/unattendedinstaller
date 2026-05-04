@@ -8,7 +8,24 @@ CACHE_REPO=$ISO_ROOT/cache-repo
 
 # Mounting the ISO root for the installer.
 mkdir -p $ISO_ROOT
-LABEL=OIC_CDROM
+LABELS=(ICT_CDROM OIC_CDROM)
+
+function mount_iso_root {
+    local label
+    for label in "${LABELS[@]}"; do
+        if mount -L "$label" -o ro "$ISO_ROOT" 2>/dev/null; then
+            echo "Mounted ISO root using label $label"
+            return 0
+        fi
+    done
+
+    if mount -t iso9660 -o ro /dev/sr0 "$ISO_ROOT" 2>/dev/null; then
+        echo "Mounted ISO root using /dev/sr0"
+        return 0
+    fi
+
+    return 1
+}
 
 function retry {
     local retry=0
@@ -33,7 +50,7 @@ else
     # the mount will fail and the retry loop would retry the mount repeatedly. This
     # is handled by the 'or' in the retry loop which will grep for the mount point and
     # break out of the loop if it is found.
-    retry "{ mount -L $LABEL -o ro $ISO_ROOT 2>/dev/null || grep -qs $ISO_ROOT /proc/mounts ; }"
+    retry "{ mount_iso_root || grep -qs $ISO_ROOT /proc/mounts ; }"
 fi
 
 TEMPLATE_DUMP_YAML=$(find "$CONFIG_ROOT" -type f -name "template-dump.yaml" | head -n 1)
