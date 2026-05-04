@@ -2,6 +2,9 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+# Set pipefail to catch errors in pipelines (e.g., live-installer | tee).
+# Note: -e is not set because the retry loop intentionally allows command failures.
+# Note: -u is not set to allow optional variable expansion; critical vars are pre-checked.
 set -o pipefail
 
 ISO_ROOT=/cdrom
@@ -55,7 +58,8 @@ stty -echo
 dmesg -D
 
 echo "Saving installer debug log to $INSTALLER_LOG"
-live-installer --config $TEMPLATE_DUMP_YAML --repo $CACHE_REPO --attended --log-level debug 2>&1 | tee -a "$INSTALLER_LOG"
+# Overwrite log (not append) to produce a clean log for each run
+live-installer --config $TEMPLATE_DUMP_YAML --repo $CACHE_REPO --attended --log-level debug 2>&1 | tee "$INSTALLER_LOG"
 installerExitCode=${PIPESTATUS[0]}
 
 # Consume any buffered stdin to prevent it from being passed to any future programs,

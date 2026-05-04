@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config/validate"
+	"gopkg.in/yaml.v3"
 )
 
 func intPtr(v int) *int { return &v }
@@ -4271,5 +4272,156 @@ func TestEnsureTempDir(t *testing.T) {
 	// Verify the directory was created
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		t.Error("EnsureTempDir should create the directory")
+	}
+}
+
+// TestSaveUpdatedConfigFileYAMLSerialization verifies that SaveUpdatedConfigFile
+// correctly serializes templates with partitions containing nil Index values,
+// ensuring that the YAML output omits the "index" key when Index is nil.
+func TestSaveUpdatedConfigFileYAMLSerialization(t *testing.T) {
+	// Create a template with partitions: one with nil Index, one with set Index
+	template := &ImageTemplate{
+		Image: ImageInfo{
+			Name:    "test-yaml-serialization",
+			Version: "1.0.0",
+		},
+		Target: TargetInfo{
+			OS:        "ubuntu",
+			Dist:      "ubuntu24",
+			Arch:      "x86_64",
+			ImageType: "raw",
+		},
+		Disk: DiskConfig{
+			Name:               "test-disk",
+			Size:               "10GB",
+			PartitionTableType: "gpt",
+			Partitions: []PartitionInfo{
+				{
+					Name:       "boot",
+					ID:         "boot-1",
+					Index:      intPtr(1), // Index explicitly set
+					Flags:      []string{"boot"},
+					Type:       "esp",
+					FsType:     "vfat",
+					FsLabel:    "boot",
+					Start:      "0",
+					End:        "512MiB",
+					MountPoint: "/boot",
+				},
+				{
+					Name:       "root",
+					ID:         "root-1",
+					Index:      nil, // Index is nil - should not appear in YAML
+					Flags:      []string{},
+					Type:       "linux-root-x86-64",
+					FsType:     "ext4",
+					FsLabel:    "rootfs",
+					Start:      "512MiB",
+					End:        "0",
+					MountPoint: "/",
+				},
+			},
+		},
+		SystemConfig: SystemConfig{
+			Name:        "test-system",
+			Description: "Test system config",
+			Bootloader: Bootloader{
+				BootType: "efi",
+				Provider: "grub2",
+			},
+			Kernel: KernelConfig{
+				Version: "6.1.0",
+			},
+		},
+	}
+
+	// Save to temporary file
+	tmpFile, err := os.CreateTemp("", "test-config-*.yml")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	tmpFile.Close()
+	defer os.Remove(tmpFile.Name())
+
+	// Save the template
+	err = template.SaveUpdatedConfigFile(tmpFile.Name())
+	if err != nil {
+		t.Fatalf("SaveUpdatedConfigFile() = %v, want nil", err)
+	}
+
+	// Read the saved file and parse as YAML map
+	data, err := os.ReadFile(tmpFile.Name())
+	if err != nil {
+		t.Fatalf("Failed to read saved file: %v", err)
+	}
+
+	// Parse YAML to verify structure
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("Failed to parse YAML: %v", err)
+	}
+
+	// Navigate to partitions
+	disk, ok := parsed["disk"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("disk field not found or not a map")
+	}
+
+	partitionsRaw, ok := disk["partitions"].([]interface{})
+	if !ok {
+		t.Fatalf("partitions field not found or not a slice")
+	}
+
+	if len(partitionsRaw) != 2 {
+		t.Fatalf("expected 2 partitions, got %d", len(partitionsRaw))
+	}
+
+	// Check first partition (has Index set to 1)
+	partition1, ok := partitionsRaw[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("partition 0 not a map")
+	}
+
+	if index1, exists := partition1["index"]; !exists {
+		t.Error("first partition should have 'index' key since Index was set")
+	} else if index1 != 1 {
+		t.Errorf("first partition index should be 1, got %v", index1)
+	}
+
+	// Check second partition (has Index = nil)
+	partition2, ok := partitionsRaw[1].(map[string]interface{})
+	if !ok {
+		t.Fatalf("partition 1 not a map")
+	}
+
+	if _, exists := partition2["index"]; exists {
+		t.Error("second partition should NOT have 'index' key when Index is nil (omitempty)")
+	}
+
+	// Also verify raw YAML string doesn't contain "index: null" for the root partition
+	yamlStr := string(data)
+	lines := strings.Split(yamlStr, "\n")
+	inRootPartition := false
+	foundIndexNull := false
+
+	for i, line := range lines {
+		if strings.Contains(line, "- name: root") {
+			inRootPartition = true
+		} else if inRootPartition && strings.Contains(line, "- name:") {
+			// End of root partition, start of next
+			break
+		}
+
+		if inRootPartition && strings.TrimSpace(line) == "index:" {
+			// Check if followed by null or just "index:" with no value
+			if i+1 < len(lines) && strings.Contains(lines[i+1], "null") {
+				foundIndexNull = true
+				break
+			}
+		}
+	}
+
+	if foundIndexNull {
+		t.Error("YAML should not contain 'index: null' for partition with nil Index")
 	}
 }
