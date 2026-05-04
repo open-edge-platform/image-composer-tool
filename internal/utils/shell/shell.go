@@ -108,7 +108,7 @@ var commandMap = map[string][]string{
 	"touch":              {"/usr/bin/touch"},
 	"truncate":           {"/usr/bin/truncate"},
 	"tune2fs":            {"/usr/sbin/tune2fs"},
-	"ukify":              {"/usr/bin/ukify"},
+	"ukify":              {"/usr/bin/ukify", "/usr/local/bin/ukify"},
 	"umount":             {"/usr/bin/umount"},
 	"uname":              {"/usr/bin/uname"},
 	"uniq":               {"/usr/bin/uniq"},
@@ -548,24 +548,24 @@ func (d *DefaultExecutor) ExecCmdWithStream(cmdStr string, sudo bool, chrootPath
 		return "", fmt.Errorf("failed to start command %s: %w", fullCmdStr, err)
 	}
 
-	// Use channels to collect output safely
-	outputChan := make(chan string) // Unbuffered channel
-	var wg sync.WaitGroup
-	wg.Add(3)
-
-	// Collect output immediately in a dedicated goroutine
+	// Use channels to collect stdout and stderr in order to preserve full command output.
+	outputChan := make(chan string, 128)
 	var outputStr strings.Builder
+	var collectWG sync.WaitGroup
+	collectWG.Add(1)
 	go func() {
-		defer wg.Done()
+		defer collectWG.Done()
 		for output := range outputChan {
 			outputStr.WriteString(output)
 			outputStr.WriteString("\n") // Add newlines between lines
 		}
 	}()
 
+	var streamWG sync.WaitGroup
+	streamWG.Add(2)
+
 	go func() {
-		defer wg.Done()
-		defer close(outputChan)
+		defer streamWG.Done()
 		scanner := bufio.NewScanner(stdout)
 		for scanner.Scan() {
 			str := scanner.Text()
@@ -577,17 +577,20 @@ func (d *DefaultExecutor) ExecCmdWithStream(cmdStr string, sudo bool, chrootPath
 	}()
 
 	go func() {
-		defer wg.Done()
+		defer streamWG.Done()
 		scanner := bufio.NewScanner(stderr)
 		for scanner.Scan() {
 			str := scanner.Text()
 			if str != "" {
+				outputChan <- str
 				log.Debugf(str)
 			}
 		}
 	}()
 
-	wg.Wait()
+	streamWG.Wait()
+	close(outputChan)
+	collectWG.Wait()
 
 	if err := cmd.Wait(); err != nil {
 		return outputStr.String(), fmt.Errorf("failed to wait for command %s: %w", fullCmdStr, err)

@@ -754,6 +754,7 @@ func TestUbuntuProviderInstallHostDependency(t *testing.T) {
 	// Set up mock executor
 	mockExpectedOutput := []shell.MockCommand{
 		// Mock successful command existence checks
+		{Pattern: "command -v arch-test", Output: "", Error: nil},
 		{Pattern: "which mmdebstrap", Output: "", Error: nil},
 		{Pattern: "which mkfs.fat", Output: "", Error: nil},
 		{Pattern: "which mformat", Output: "", Error: nil},
@@ -766,6 +767,7 @@ func TestUbuntuProviderInstallHostDependency(t *testing.T) {
 		{Pattern: "which ubuntu-keyring", Output: "", Error: nil},
 		// Mock successful installation commands
 		{Pattern: "apt-get install -y mmdebstrap", Output: "Success", Error: nil},
+		{Pattern: "apt-get install -y arch-test", Output: "Success", Error: nil},
 		{Pattern: "apt-get install -y dosfstools", Output: "Success", Error: nil},
 		{Pattern: "apt-get install -y mtools", Output: "Success", Error: nil},
 		{Pattern: "apt-get install -y xorriso", Output: "Success", Error: nil},
@@ -795,6 +797,7 @@ func TestUbuntuProviderInstallHostDependencyCommands(t *testing.T) {
 	// Get the dependency map by examining the installHostDependency method
 	expectedDeps := map[string]string{
 		"mmdebstrap":     "mmdebstrap",
+		"arch-test":      "arch-test",
 		"mkfs.fat":       "dosfstools",
 		"mformat":        "mtools",
 		"xorriso":        "xorriso",
@@ -811,12 +814,12 @@ func TestUbuntuProviderInstallHostDependencyCommands(t *testing.T) {
 	t.Logf("Expected host dependencies for Ubuntu provider: %+v", expectedDeps)
 
 	// Verify we have the expected number of dependencies
-	if len(expectedDeps) != 10 {
-		t.Errorf("Expected 10 host dependencies, got %d", len(expectedDeps))
+	if len(expectedDeps) != 11 {
+		t.Errorf("Expected 11 host dependencies, got %d", len(expectedDeps))
 	}
 
 	// Verify specific critical dependencies
-	criticalDeps := []string{"mmdebstrap", "mkfs.fat", "xorriso", "qemu-img"}
+	criticalDeps := []string{"mmdebstrap", "arch-test", "mkfs.fat", "xorriso", "qemu-img"}
 	for _, dep := range criticalDeps {
 		if _, exists := expectedDeps[dep]; !exists {
 			t.Errorf("Critical dependency %s not found in expected dependencies", dep)
@@ -1581,6 +1584,7 @@ func TestUbuntuInstallHostDependencyCommandCheck(t *testing.T) {
 
 	// Set up mock executor that simulates all commands already exist
 	mockExpectedOutput := []shell.MockCommand{
+		{Pattern: "command -v arch-test", Output: "/usr/bin/arch-test", Error: nil},
 		{Pattern: "which mmdebstrap", Output: "/usr/bin/mmdebstrap", Error: nil},
 		{Pattern: "which mkfs.fat", Output: "/usr/bin/mkfs.fat", Error: nil},
 		{Pattern: "which mformat", Output: "/usr/bin/mformat", Error: nil},

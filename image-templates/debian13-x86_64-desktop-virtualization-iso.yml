@@ -1,0 +1,254 @@
+# ============================================================================
+# Debian 13 Desktop Virtualization ISO Image Template
+# ============================================================================
+#
+# This template is adapted from the EMT Desktop Virtualization project for
+# Debian 13 (trixie) systems, providing QEMU/KVM desktop virtualization 
+# with Intel graphics SR-IOV support.
+#
+# Key features:
+#   - QEMU/KVM virtualization stack
+#   - Intel i915 graphics SR-IOV for GPU-accelerated virtual desktops
+#   - X11 display server with hardware acceleration
+#   - Complete development environment
+#   - SELinux security (where applicable)
+# ============================================================================
+
+# AI-searchable metadata for template discovery
+metadata:
+  description: "Debian 13 Desktop Virtualization ISO image with graphics SR-IOV, QEMU/KVM, and X11 display for GPU-virtualized desktop workflows"
+  use_cases:
+    - "desktop virtualization"
+    - "graphics SR-IOV"
+    - "GPU passthrough"
+    - "virtual desktop infrastructure"
+    - "QEMU/KVM virtualization"
+    - "bootable installer"
+    - "debian development"
+  keywords:
+    - debian13
+    - trixie
+    - desktop-virtualization
+    - sriov
+    - gpu
+    - qemu
+    - kvm
+    - libvirt
+    - xorg
+    - iso
+    - installer
+    - beyonnB
+    - microvisor
+    - i915
+
+image:
+  name: debian13-x86_64-desktop-virtualization
+  version: "1.0.0"
+
+target:
+  os: debian
+  dist: debian13  # Align with debian13-minimal-raw.yml
+  arch: x86_64
+  imageType: iso
+
+# ============================================================================
+# System Configuration
+# ============================================================================
+systemConfig:
+  name: Debian13-Desktop-Virtualization
+  description: >-
+    Debian 13 Desktop Virtualization ISO with Intel graphics SR-IOV support.
+    Provides GPU-accelerated virtual desktops using QEMU/KVM.
+
+  bootloader:
+    bootType: efi
+    provider: grub
+
+  immutability:
+    enabled: false
+
+  # ============================================================================
+  # Packages - Debian 13 equivalents
+  # ============================================================================
+  packages:
+
+    # --------------------------------------------------------------------------
+    # Bootloader packages
+    # --------------------------------------------------------------------------
+    - grub2-common                # GRUB2 bootloader
+    - grub-efi-amd64              # GRUB EFI support for x86_64
+    - grub-efi-amd64-bin          # GRUB EFI binaries
+
+    # --------------------------------------------------------------------------
+    # Essential system packages
+    # --------------------------------------------------------------------------
+    - shim-signed                 # UEFI shim bootloader for Secure Boot
+    - efibootmgr                  # EFI Boot Manager utility
+    - ca-certificates             # Root CA certificates
+    - cron                        # Cron job scheduler
+    - logrotate                   # Log rotation utility
+    - dracut-core                 # Dracut initramfs generator
+    - initramfs-tools             # Initial RAM filesystem tools
+    - passwd                      # User/group management utilities
+    - apparmor                    # AppArmor security framework
+    - apt-listchanges             # APT package change notifications
+    - apt-utils                   # APT utilities
+    - bash-completion             # Bash completion scripts
+    - bind9-host                  # DNS lookup utilities
+    - cloud-init                  # Cloud instance initialization
+    - cloud-initramfs-growroot    # Cloud init RAM filesystem growth
+    - dbus                        # D-Bus message bus
+    - dosfstools                  # FAT filesystem utilities
+    - init                        # System initialization
+    - liblastlog2-2               # Last login library
+    - libnss-myhostname          # NSS hostname resolution
+    - libnss-resolve             # NSS systemd-resolved integration
+    - libpam-modules-bin         # PAM modules binaries
+    - libpam-systemd             # PAM systemd integration
+    - linux-sysctl-defaults      # Default sysctl configuration
+    - man-db                      # Manual page database
+    - manpages                    # System manual pages
+    - mawk                        # Pattern scanning language
+    - nano                        # Simple text editor
+    - netplan.io                  # Network configuration
+    - polkitd                     # PolicyKit daemon
+    - psmisc                      # Process utilities
+    - python3-minimal             # Minimal Python 3
+    - reportbug                   # Bug reporting tool
+    - screen                      # Terminal multiplexer
+    - socat                       # Socket concatenation
+    - ssh-import-id              # SSH key import utility
+    - sudo                        # Privilege escalation
+    - tcpdump                     # Network packet analyzer
+    - traceroute                  # Network path tracer
+    - unattended-upgrades         # Automatic security updates
+    - uuid-runtime                # UUID generation runtime
+    - vim-tiny                    # Minimal Vim editor
+    - whiptail                    # Dialog boxes for shell scripts
+    - zstd                        # Zstandard compression
+
+    # --------------------------------------------------------------------------
+    # Development and build tools
+    # --------------------------------------------------------------------------
+    - build-essential             # Essential build tools (gcc, make, etc.)
+    - cmake                       # Cross-platform build system
+    - curl                        # HTTP/FTP client
+    - libcurl4-openssl-dev        # libcurl development headers
+    - flex                        # Lexical analyzer generator
+    - libfuse-dev                 # FUSE development headers
+    - git                         # Version control system
+    - golang-go                   # Go programming language
+    - iputils-ping                # Network utilities
+    - less                        # Terminal pager
+    - net-tools                   # Legacy networking utilities
+    - ninja-build                 # Ninja build system
+    - parted                      # Disk partitioning tool
+    - pciutils                    # PCI utilities (lspci)
+    - python3-pip                 # Python package installer
+    - tar                         # Archive utility
+    - texinfo                     # Documentation system
+    - usbutils                    # USB utilities (lsusb)
+    - wget                        # File downloader
+
+    # --------------------------------------------------------------------------
+    # Package management and utilities
+    # --------------------------------------------------------------------------
+    - apt                         # APT package manager
+    - vim                         # Vi Improved text editor
+
+    # --------------------------------------------------------------------------
+    # SSH server
+    # --------------------------------------------------------------------------
+    - openssh-server              # OpenSSH server
+
+    # --------------------------------------------------------------------------
+    # Virtualization stack (QEMU/KVM)
+    # --------------------------------------------------------------------------
+    - swtpm-tools                 # Software TPM tools
+    - libvirt-daemon-system       # Libvirt virtualization daemon
+    - libvirt-clients             # Libvirt client tools
+    - pulseaudio                  # Audio server
+    - qemu-kvm                    # QEMU with KVM acceleration
+    - qemu-system-x86             # QEMU system emulation for x86
+    - qemu-utils                  # QEMU utilities
+    - virtinst                    # Virtual machine installation tools
+    - virt-manager                # Virtual machine management GUI
+    - bridge-utils                # Network bridge utilities
+    - iptables                    # Netfilter administration tool
+
+    # --------------------------------------------------------------------------
+    # QEMU guest support
+    # --------------------------------------------------------------------------
+    - qemu-guest-agent            # QEMU guest agent
+
+    # --------------------------------------------------------------------------
+    # X11 display server and desktop environment
+    # --------------------------------------------------------------------------
+    - openbox                     # Lightweight window manager
+    - xterm                       # X11 terminal emulator
+    - xserver-xorg                # X.Org X11 server
+    - xserver-xorg-core           # X.Org server core
+    - x11-apps                    # Standard X11 applications
+    - x11-utils                   # X11 utilities
+    - x11-xserver-utils           # X server utilities
+    - xinit                       # X11 session initialization
+    - xserver-xorg-input-libinput # X11 libinput input driver
+    - xfonts-base                 # Basic X11 fonts
+    - fonts-liberation            # Liberation fonts
+
+    # --------------------------------------------------------------------------
+    # SELinux security (where available in Debian)
+    # --------------------------------------------------------------------------
+    - selinux-basics              # SELinux basic tools
+    - selinux-policy-default      # Default SELinux policy
+    - selinux-utils               # SELinux utilities
+    - policycoreutils             # SELinux policy utilities
+
+    # --------------------------------------------------------------------------
+    # Intel GPU and graphics support
+    # --------------------------------------------------------------------------
+    - intel-gpu-tools             # Intel GPU diagnostic tools
+    - mesa-utils                  # Mesa OpenGL utilities
+    - mesa-vulkan-drivers         # Vulkan drivers
+    - libgl1-mesa-dri             # Mesa DRI drivers
+    - xserver-xorg-video-intel    # Intel X11 graphics driver
+    - firmware-intel-graphics     # Intel graphics firmware (from minimal-raw)
+    - firmware-intel-misc         # Intel miscellaneous firmware
+
+    # --------------------------------------------------------------------------
+    # TPM and trusted boot support
+    # --------------------------------------------------------------------------
+    - tpm2-tools                  # TPM 2.0 tools
+    - libtss2-dev                 # TPM 2.0 TSS development files
+
+    # --------------------------------------------------------------------------
+    # Network and wireless support
+    # --------------------------------------------------------------------------
+    - firmware-iwlwifi            # Intel WiFi firmware
+    - wpasupplicant               # WPA supplicant
+    - wireless-regdb              # Wireless regulatory database
+
+    # --------------------------------------------------------------------------
+    # Additional utilities
+    # --------------------------------------------------------------------------
+    - lsb-release                 # LSB version information
+    - nbd-client                  # Network block device client
+    - nbd-server                  # Network block device server
+    - ntfs-3g                     # NTFS filesystem driver
+
+  # ============================================================================
+  # Kernel Configuration
+  # ============================================================================
+  kernel:
+    version: "6.12.74"  # Align with debian13-minimal-raw.yml
+    # Kernel command line optimized for virtualization and Intel GPU SR-IOV
+    cmdline: "console=ttyS0,115200 console=tty0 loglevel=7 udmabuf.list_limit=8192 i915.enable_guc=3 i915.max_vfs=7 intel_iommu=on i915.force_probe=* selinux=1 enforcing=0"
+    packages:
+      - linux-image-amd64         # Debian kernel
+
+  # ============================================================================
+  # Additional Files
+  # ============================================================================
+  additionalFiles:
+    - local: ../additionalfiles/99-dhcp-en.network
+      final: /etc/systemd/network/99-dhcp-en.network

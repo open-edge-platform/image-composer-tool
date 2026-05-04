@@ -24,6 +24,8 @@ essential:
   - hostname
   - ncurses-bin
   - ncurses-base
+  - systemd-ukify
+  - systemd-boot-efi
 
 packages:
   - mmdebstrap

@@ -83,7 +83,7 @@ func (rpmInstaller *RpmInstaller) InstallRpmPkg(targetOs, chrootEnvPath, chrootP
 			return fmt.Errorf("package %s does not exist in cache directory: %w", pkg, err)
 		}
 		log.Infof("Installing package %s in chroot environment", pkg)
-		cmdStr := fmt.Sprintf("rpm -i -v --nodeps --force --root %s --define '_dbpath /var/lib/rpm' %s",
+		cmdStr := fmt.Sprintf("rpm -i -v --nodeps --force --ignorearch --root %s --define '_dbpath /var/lib/rpm' %s",
 			chrootEnvPath, pkgPath)
 		var output string
 		output, err = shell.ExecCmd(cmdStr, true, shell.HostPath, nil)
@@ -157,7 +157,7 @@ func (rpmInstaller *RpmInstaller) updateRpmDB(chrootEnvBuildPath, chrootPkgCache
 
 	for _, rpm := range rpmList {
 		rpmChrootPath := filepath.Join("/packages", rpm)
-		cmdStr := "rpm -i -v --nodeps --force --justdb " + rpmChrootPath
+		cmdStr := "rpm -i -v --nodeps --force --ignorearch --justdb " + rpmChrootPath
 		if _, err := shell.ExecCmdWithStream(cmdStr, true, chrootEnvBuildPath, nil); err != nil {
 			log.Errorf("Failed to update RPM Database for %s in chroot environment: %v", rpm, err)
 			return fmt.Errorf("failed to update RPM Database for %s in chroot environment: %w", rpm, err)
