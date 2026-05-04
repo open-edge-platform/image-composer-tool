@@ -1,0 +1,63 @@
+image:
+  name: minimal-os-image-ubuntu
+  version: "26.04"
+
+target:
+  os: ubuntu
+  dist: ubuntu26
+  arch: x86_64
+  imageType: iso # Image type, valid value: [raw, iso].
+
+disk:
+  name: Default_ISO
+  partitionTableType: gpt # Partition table type, valid value: [gpt, mbr]
+  partitions: # Required for raw, optional for ISO, not needed for rootfs.
+    - id: boot
+      type: esp
+      flags:
+        - esp
+        - boot
+      start: 1MiB
+      end: 513MiB
+      fsType: fat32
+      mountPoint: /boot/efi
+
+    - id: rootfs
+      type: linux-root-amd64
+      start: 513MiB
+      end: "0"  # 0 means use the rest of the disk space
+      fsType: ext4
+      mountPoint: /
+
+systemConfig: # Required
+  name: Default_ISO
+  description: Default yml configuration for iso image
+
+  initramfs:
+    template: default-initrd-x86_64.yml
+
+  bootloader:
+    bootType: efi # (efi or legacy)
+    provider: grub # (grub for efi and legacy mode, or systemd-boot for efi mode)
+
+  packages:
+    - ubuntu-minimal
+    - grub2-common
+    - grub-efi-amd64-bin
+    - initramfs-tools
+    - dracut-core
+    - systemd
+    - cryptsetup-bin
+    - systemd-resolved
+    - efibootmgr
+
+  additionalFiles:
+    - local: ../additionalfiles/dhcp.network
+      final: /etc/systemd/network/dhcp.network
+    - local: ../additionalfiles/ubuntu-resolute.list
+      final: /etc/apt/sources.list.d/ubuntu-resolute.list
+
+  kernel:
+    name: kernel
+    packages:
+     - linux-image-generic

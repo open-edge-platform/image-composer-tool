@@ -1,0 +1,15 @@
+# Canonical Ubuntu 26.04 LTS OS Configuration
+# This file defines architecture-specific build configurations for Canonical Ubuntu 26.04 LTS
+
+x86_64:
+  dist: ubuntu26                                    # Distribution identifier
+  arch: x86_64                                      # Target architecture
+  pkgType: deb                                      # Package management system
+  chrootenvConfigFile: chrootenvconfigs/chrootenv_x86_64.yml  # Path to chrootenv config
+  releaseVersion: "26.04"                           # Distribution release version
+aarch64:
+  dist: ubuntu26                                    # Distribution identifier
+  arch: aarch64                                      # Target architecture
+  pkgType: deb                                      # Package management system
+  chrootenvConfigFile: chrootenvconfigs/chrootenv_aarch64.yml  # Path to chrootenv config
+  releaseVersion: "26.04"                           # Distribution release version

@@ -5,16 +5,17 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/open-edge-platform/os-image-composer/internal/chroot"
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/image/initrdmaker"
-	"github.com/open-edge-platform/os-image-composer/internal/image/isomaker"
-	"github.com/open-edge-platform/os-image-composer/internal/image/rawmaker"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage/debutils"
-	"github.com/open-edge-platform/os-image-composer/internal/provider"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/system"
+	"github.com/open-edge-platform/image-composer-tool/internal/chroot"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/initrdmaker"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/isomaker"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/rawmaker"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/debutils"
+	"github.com/open-edge-platform/image-composer-tool/internal/provider"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/display"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
 
 // DEB: https://deb.debian.org/debian/dists/bookworm/main/binary-amd64/Packages.gz
@@ -59,7 +60,7 @@ func (p *ubuntu) Init(dist, arch string) error {
 		arch = "arm64"
 	}
 
-	cfgs, err := loadRepoConfig("", arch)
+	cfgs, err := loadRepoConfig(dist, "", arch)
 	if err != nil {
 		log.Errorf("Parsing repo config failed: %v", err)
 		return err
@@ -84,8 +85,14 @@ func (p *ubuntu) PreProcess(template *config.ImageTemplate) error {
 		return fmt.Errorf("failed to install host dependencies: %w", err)
 	}
 
+	template.StartDownloadImagePkgsTimer()
 	if err := p.downloadImagePkgs(template); err != nil {
+		template.FinishDownloadImagePkgsTimer()
 		return fmt.Errorf("failed to download image packages: %w", err)
+	}
+	template.FinishDownloadImagePkgsTimer()
+	if templateAwareChrootEnv, ok := p.chrootEnv.(interface{ SetBuildTemplate(*config.ImageTemplate) }); ok {
+		templateAwareChrootEnv.SetBuildTemplate(template)
 	}
 
 	if err := p.chrootEnv.InitChrootEnv(template.Target.OS,
@@ -127,7 +134,22 @@ func (p *ubuntu) buildRawImage(template *config.ImageTemplate) error {
 		return fmt.Errorf("failed to initialize raw maker: %w", err)
 	}
 
-	return rawMaker.BuildRawImage()
+	if err := rawMaker.BuildRawImage(); err != nil {
+		return err
+	}
+
+	// Display summary after build completes (loop device detached, files accessible)
+	// Construct the actual image build directory path (on host, not in chroot)
+	globalWorkDir, err := config.WorkDir()
+	if err != nil {
+		return fmt.Errorf("failed to get work directory: %w", err)
+	}
+	providerId := system.GetProviderId(template.Target.OS, template.Target.Dist, template.Target.Arch)
+	imageBuildDir := filepath.Join(globalWorkDir, providerId, "imagebuild", template.GetSystemConfigName())
+
+	displayImageArtifacts(imageBuildDir, "RAW")
+
+	return nil
 }
 
 func (p *ubuntu) buildInitrdImage(template *config.ImageTemplate) error {
@@ -148,6 +170,15 @@ func (p *ubuntu) buildInitrdImage(template *config.ImageTemplate) error {
 		return fmt.Errorf("failed to clean initrd rootfs: %w", err)
 	}
 
+	globalWorkDir, err := config.WorkDir()
+	if err != nil {
+		return fmt.Errorf("failed to get work directory: %w", err)
+	}
+	providerId := system.GetProviderId(template.Target.OS, template.Target.Dist, template.Target.Arch)
+	imageBuildDir := filepath.Join(globalWorkDir, providerId, "imagebuild", template.GetSystemConfigName())
+
+	displayImageArtifacts(imageBuildDir, "IMG")
+
 	return nil
 }
 
@@ -163,7 +194,20 @@ func (p *ubuntu) buildIsoImage(template *config.ImageTemplate) error {
 		return fmt.Errorf("failed to initialize iso maker: %w", err)
 	}
 
-	return isoMaker.BuildIsoImage()
+	if err := isoMaker.BuildIsoImage(); err != nil {
+		return err
+	}
+
+	globalWorkDir, err := config.WorkDir()
+	if err != nil {
+		return fmt.Errorf("failed to get work directory: %w", err)
+	}
+	providerId := system.GetProviderId(template.Target.OS, template.Target.Dist, template.Target.Arch)
+	imageBuildDir := filepath.Join(globalWorkDir, providerId, "imagebuild", template.GetSystemConfigName())
+
+	displayImageArtifacts(imageBuildDir, "ISO")
+
+	return nil
 }
 
 func (p *ubuntu) PostProcess(template *config.ImageTemplate, err error) error {
@@ -176,17 +220,21 @@ func (p *ubuntu) PostProcess(template *config.ImageTemplate, err error) error {
 
 func (p *ubuntu) installHostDependency() error {
 	var dependencyInfo = map[string]string{
-		"mmdebstrap":     "mmdebstrap",       // For the chroot env build
-		"mkfs.fat":       "dosfstools",       // For the FAT32 boot partition creation
-		"mformat":        "mtools",           // For writing files to FAT32 partition
-		"xorriso":        "xorriso",          // For ISO image creation
-		"qemu-img":       "qemu-utils",       // For image file format conversion
-		"ukify":          "systemd-ukify",    // For the UKI image creation
-		"grub-mkimage":   "grub-common",      // For ISO image UEFI Grub binary creation
-		"veritysetup":    "cryptsetup",       // For the veritysetup command
-		"sbsign":         "sbsigntool",       // For the UKI image creation
-		"ubuntu-keyring": "ubuntu-keyring",   // For Ubuntu repository GPG keys
-		"bootctl":        "systemd-boot-efi", // For bootctl on Ubuntu hosts
+		"mmdebstrap":        "mmdebstrap",       // For the chroot env build
+		"arch-test":         "arch-test",        // Required by mmdebstrap for foreign-architecture bootstrap
+		"qemu-user-static":  "qemu-user-static", // For cross-architecture binary execution support
+		"update-binfmts":    "binfmt-support",   // For registering qemu-user-static with the kernel
+		"mkfs.fat":          "dosfstools",       // For the FAT32 boot partition creation
+		"mformat":           "mtools",           // For writing files to FAT32 partition
+		"xorriso":           "xorriso",          // For ISO image creation
+		"qemu-img":          "qemu-utils",       // For image file format conversion
+		"ukify":             "systemd-ukify",    // For the UKI image creation
+		"grub-mkimage":      "grub-common",      // For ISO image UEFI Grub binary creation
+		"veritysetup":       "cryptsetup",       // For the veritysetup command
+		"sbsign":            "sbsigntool",       // For the UKI image creation
+		"ubuntu-keyring":    "ubuntu-keyring",   // For Ubuntu repository GPG keys
+		"bootctl":           "systemd-boot-efi", // For bootctl on Ubuntu hosts
+		"dpkg-scanpackages": "dpkg-dev",         // For DEB repository metadata creation
 	}
 	hostPkgManager, err := system.GetHostOsPkgManager()
 	if err != nil {
@@ -234,23 +282,7 @@ func (p *ubuntu) downloadImagePkgs(template *config.ImageTemplate) error {
 
 	// Build user repository configurations and add them to the list
 	arch := p.repoCfgs[0].Arch
-
-	var userRepoList []debutils.Repository
-	for _, userRepo := range userRepos {
-		// Skip placeholder repositories
-		if userRepo.URL == "<URL>" || userRepo.URL == "" {
-			continue
-		}
-		baseURL := strings.TrimPrefix(strings.TrimPrefix(userRepo.URL, "http://"), "https://")
-		userRepoList = append(userRepoList, debutils.Repository{
-			ID:        fmt.Sprintf("user-%s", baseURL),
-			Codename:  userRepo.Codename,
-			URL:       userRepo.URL,
-			PKey:      userRepo.PKey,
-			Component: userRepo.Component,
-			Priority:  userRepo.Priority,
-		})
-	}
+	userRepoList := buildUserRepoList(userRepos)
 
 	// Build user repo configs and add to the provider repos
 	if len(userRepoList) > 0 {
@@ -289,11 +321,34 @@ func (p *ubuntu) downloadImagePkgs(template *config.ImageTemplate) error {
 	return nil
 }
 
-func loadRepoConfig(repoUrl string, arch string) ([]debutils.RepoConfig, error) {
+// buildUserRepoList converts user-defined package repositories from the image
+// template into debutils.Repository entries. Placeholder repositories (empty
+// URL or "<URL>") are skipped.
+func buildUserRepoList(userRepos []config.PackageRepository) []debutils.Repository {
+	var repos []debutils.Repository
+	for _, userRepo := range userRepos {
+		if userRepo.URL == "<URL>" || userRepo.URL == "" {
+			continue
+		}
+		baseURL := strings.TrimPrefix(strings.TrimPrefix(userRepo.URL, "http://"), "https://")
+		repos = append(repos, debutils.Repository{
+			ID:            fmt.Sprintf("user-%s", baseURL),
+			Codename:      userRepo.Codename,
+			URL:           userRepo.URL,
+			PKey:          userRepo.PKey,
+			Component:     userRepo.Component,
+			Priority:      userRepo.Priority,
+			AllowPackages: userRepo.AllowPackages,
+		})
+	}
+	return repos
+}
+
+func loadRepoConfig(dist, repoUrl string, arch string) ([]debutils.RepoConfig, error) {
 	var repoConfigs []debutils.RepoConfig
 
 	// Load provider repo config using the centralized config function
-	providerConfigs, err := config.LoadProviderRepoConfig(OsName, "ubuntu24", arch)
+	providerConfigs, err := config.LoadProviderRepoConfig(OsName, dist, arch)
 	if err != nil {
 		return repoConfigs, fmt.Errorf("failed to load provider repo config: %w", err)
 	}
@@ -333,4 +388,12 @@ func loadRepoConfig(repoUrl string, arch string) ([]debutils.RepoConfig, error) 
 	}
 
 	return repoConfigs, nil
+}
+
+// displayImageArtifacts displays all image artifacts in the build directory
+func displayImageArtifacts(imageBuildDir, imageType string) {
+	display.PrintImageDirectorySummary(
+		imageBuildDir,
+		imageType,
+	)
 }

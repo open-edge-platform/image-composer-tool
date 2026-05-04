@@ -19,10 +19,10 @@ import (
 	"time"
 
 	"github.com/klauspost/compress/zstd"
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/network"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/network"
 )
 
 const (
@@ -223,13 +223,20 @@ func GenerateDot(pkgs []ospackage.PackageInfo, file string, pkgSources map[strin
 }
 
 // matchesPackageFilter checks if a package name matches any of the filter patterns.
-// Supports exact match and version-specific match (e.g., "kernel-6.17.11" matches "kernel-6.17.11-1.emt3.x86_64.rpm")
+// Supports glob patterns, exact match, and version-specific prefix match
+// (e.g., "kernel-6.17.11" matches "kernel-6.17.11-1.emt3.x86_64.rpm").
 func matchesPackageFilter(pkgName string, filter []string) bool {
 	if len(filter) == 0 {
 		return true // No filter means include all
 	}
 
 	for _, pattern := range filter {
+		if isGlobPattern(pattern) {
+			if ok, err := path.Match(pattern, pkgName); err == nil && ok {
+				return true
+			}
+		}
+
 		// Exact match
 		if pkgName == pattern {
 			return true
@@ -664,10 +671,31 @@ func convertFlags(flags string) string {
 func MatchRequested(requests []string, all []ospackage.PackageInfo) ([]ospackage.PackageInfo, error) {
 
 	var out []ospackage.PackageInfo
+	seen := make(map[string]struct{})
 	for _, want := range requests {
-		if pkg, found := ResolveTopPackageConflicts(want, all); found {
-			out = append(out, pkg)
+		if isGlobPattern(want) {
+			pkgs, found := ResolveWildcardPackageConflicts(want, all)
+			if !found {
+				return nil, fmt.Errorf("requested package '%q' not found in repo", want)
+			}
+			for _, pkg := range pkgs {
+				key := fmt.Sprintf("%s=%s", pkg.Name, pkg.Version)
+				if _, ok := seen[key]; ok {
+					continue
+				}
+				seen[key] = struct{}{}
+				out = append(out, pkg)
+			}
+			continue
+		}
 
+		if pkg, found := ResolveTopPackageConflicts(want, all); found {
+			key := fmt.Sprintf("%s=%s", pkg.Name, pkg.Version)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, pkg)
 		} else {
 			return nil, fmt.Errorf("requested package '%q' not found in repo", want)
 		}

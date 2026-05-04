@@ -1,16 +1,16 @@
 # Configure Users
 
-This guide walks you through setting up login users for your target OS image using OS Image Composer.
+This guide walks you through setting up login users for your target OS image using ICT.
 
 ## Prerequisites
 
 - Linux environment
-- OS Image Composer tool configured
+- ICT tool configured
 - Basic understanding of YAML configuration
 
 ## Step 1: Understanding User Configuration
 
-OS Image Composer supports two types of user password configuration:
+ICT supports two types of user password configuration:
 
 1. **Plaintext passwords** (for development/testing only)
 2. **Hashed passwords** (recommended for production)
@@ -34,7 +34,7 @@ python3 -c "import crypt, getpass; print(crypt.crypt(getpass.getpass(), crypt.mk
 
 ## Step 3: Configure Users in Your Template
 
-Edit your OS Image Composer template YAML file to include user configurations:
+Edit your ICT template YAML file to include user configurations:
 
 ```yaml
 # Basic user configuration examples
@@ -70,7 +70,7 @@ When configuring users, assign only groups that exist in a minimal Linux OS inst
 
 ## Step 5: Build Your OS Image
 
-Run OS Image Composer to build your image with the configured users.
+Run ICT to build your image with the configured users.
 
 ## Step 6: Test User Login
 

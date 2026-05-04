@@ -6,15 +6,16 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
 	"unicode"
 
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage/pkgfetcher"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/pkgfetcher"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 )
 
 // VersionConstraint represents a version operator and version pair
@@ -22,6 +23,34 @@ type VersionConstraint struct {
 	Op          string
 	Ver         string
 	Alternative string // Alternative package name for constraints like "logsave | e2fsprogs (<< 1.45.3-1~)"
+}
+
+func isGlobPattern(pattern string) bool {
+	return strings.ContainsAny(pattern, "*?[]")
+}
+
+func matchesPackageFilter(pkgName string, filter []string) bool {
+	if len(filter) == 0 {
+		return true
+	}
+
+	for _, pattern := range filter {
+		if isGlobPattern(pattern) {
+			if ok, err := path.Match(pattern, pkgName); err == nil && ok {
+				return true
+			}
+		}
+
+		if pkgName == pattern {
+			return true
+		}
+
+		if strings.HasPrefix(pkgName, pattern+"-") || strings.HasPrefix(pkgName, pattern) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func GenerateDot(pkgs []ospackage.PackageInfo, file string, pkgSources map[string]config.PackageSource) error {
@@ -80,7 +109,7 @@ func GenerateDot(pkgs []ospackage.PackageInfo, file string, pkgSources map[strin
 }
 
 // ParseRepositoryMetadata parses the Packages.gz file from gzHref.
-func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, releaseSign string, pbGPGKey string, buildPath string, arch string) ([]ospackage.PackageInfo, error) {
+func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, releaseSign string, pbGPGKey string, buildPath string, arch string, packageFilter []string) ([]ospackage.PackageInfo, error) {
 	log := logger.Logger()
 
 	// Ensure pkgMetaDir exists, create if not
@@ -196,7 +225,9 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 		if line == "" {
 			// End of one package entry
 			if pkg.Name != "" {
-				pkgs = append(pkgs, pkg)
+				if matchesPackageFilter(pkg.Name, packageFilter) {
+					pkgs = append(pkgs, pkg)
+				}
 				pkg = ospackage.PackageInfo{}
 			}
 			if err == io.EOF {
@@ -289,7 +320,9 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 
 	// Add the last package if file doesn't end with a blank line
 	if pkg.Name != "" {
-		pkgs = append(pkgs, pkg)
+		if matchesPackageFilter(pkg.Name, packageFilter) {
+			pkgs = append(pkgs, pkg)
+		}
 	}
 
 	return pkgs, nil
@@ -303,16 +336,19 @@ func getRepositoryPriority(packageURL string) int {
 	}
 
 	// Check global RepoCfgs for priority
+	// Normalize trailing slashes before comparing, since user-supplied URLs may include them
+	// but extractRepoBase always returns a URL without a trailing slash.
+	repoBaseNorm := strings.TrimSuffix(repoBase, "/")
 	if len(RepoCfgs) > 0 {
 		for _, repoCfg := range RepoCfgs {
-			if repoCfg.PkgPrefix == repoBase {
+			if strings.TrimSuffix(repoCfg.PkgPrefix, "/") == repoBaseNorm {
 				return repoCfg.Priority
 			}
 		}
 	}
 
 	// Check single RepoCfg for backward compatibility
-	if RepoCfg.PkgPrefix == repoBase {
+	if strings.TrimSuffix(RepoCfg.PkgPrefix, "/") == repoBaseNorm {
 		return RepoCfg.Priority
 	}
 
@@ -392,6 +428,71 @@ func filterCandidatesByPriority(candidates []ospackage.PackageInfo) []ospackage.
 
 		// Finally, compare by version (highest version first)
 		return compareVersions(pkgI.Version, pkgJ.Version) > 0
+	})
+
+	return filtered
+}
+
+// filterCandidatesByPriorityWithTarget filters and sorts candidates, prioritizing exact name matches
+func filterCandidatesByPriorityWithTarget(candidates []ospackage.PackageInfo, targetName string) []ospackage.PackageInfo {
+	log := logger.Logger()
+	var filtered []ospackage.PackageInfo
+
+	// First pass: filter out blocked packages (priority < 0)
+	for _, candidate := range candidates {
+		if !shouldBlockPackage(candidate) {
+			filtered = append(filtered, candidate)
+		}
+	}
+
+	// Sort by simple rule: exact name matches first, then provides matches
+	sort.Slice(filtered, func(i, j int) bool {
+		pkgI := filtered[i]
+		pkgJ := filtered[j]
+
+		isExactI := pkgI.Name == targetName
+		isExactJ := pkgJ.Name == targetName
+
+		// Simple rule: exact name matches always win over provides
+		if isExactI != isExactJ {
+			log.Debugf("    Exact match priority: %s (exact=%v) vs %s (exact=%v) -> %s wins",
+				pkgI.Name, isExactI, pkgJ.Name, isExactJ,
+				func() string {
+					if isExactI {
+						return pkgI.Name
+					} else {
+						return pkgJ.Name
+					}
+				}())
+			return isExactI
+		}
+
+		// For same type (both exact or both provides), use standard APT priority + version
+		priorityI := getRepositoryPriority(pkgI.URL)
+		priorityJ := getRepositoryPriority(pkgJ.URL)
+
+		// APT priority comparison
+		if priorityI != priorityJ {
+			return priorityI > priorityJ
+		}
+
+		// Only compare versions for exact matches (avoid kernel vs dkms version comparison)
+		if isExactI && isExactJ {
+			versionCmp := compareVersions(pkgI.Version, pkgJ.Version) > 0
+			log.Debugf("    Exact match version comparison: %s (%s) vs %s (%s) -> %s wins",
+				pkgI.Name, pkgI.Version, pkgJ.Name, pkgJ.Version,
+				func() string {
+					if versionCmp {
+						return pkgI.Name
+					} else {
+						return pkgJ.Name
+					}
+				}())
+			return versionCmp
+		}
+
+		// For provides matches, maintain stable order (don't compare different versioning schemes)
+		return false
 	})
 
 	return filtered
@@ -1014,6 +1115,9 @@ func compareVersions(v1, v2 string) int {
 
 // ResolvePackage finds the best matching package for a given package name
 func ResolveTopPackageConflicts(want string, all []ospackage.PackageInfo) (ospackage.PackageInfo, bool) {
+	log := logger.Logger()
+	log.Debugf("ResolveTopPackageConflicts: Searching for package '%s' in %d available packages", want, len(all))
+
 	var candidates []ospackage.PackageInfo
 	for _, pi := range all {
 		// 1) exact name and version matched with .deb filenamae, e.g. acct_7.6.4-5+b1_amd64
@@ -1023,6 +1127,7 @@ func ResolveTopPackageConflicts(want string, all []ospackage.PackageInfo) (ospac
 		}
 		// 2) exact name, e.g. acct
 		if pi.Name == want {
+			log.Debugf("  Found EXACT NAME candidate: %s (version: %s)", pi.Name, pi.Version)
 			candidates = append(candidates, pi)
 			continue
 		}
@@ -1039,8 +1144,13 @@ func ResolveTopPackageConflicts(want string, all []ospackage.PackageInfo) (ospac
 		}
 		// 4) prefix by want.release ("acl-2.3.1-2.")
 		if strings.HasPrefix(pi.Name, want+".") {
-			candidates = append(candidates, pi)
-			continue
+			suffix := strings.TrimPrefix(pi.Name, want+".") // e.g. "10" or "defs"
+			if len(suffix) > 0 && suffix[0] >= '0' && suffix[0] <= '9' {
+				// treat as versioned dotted-variant like python3.10
+				candidates = append(candidates, pi)
+				continue
+			}
+			// otherwise ignore dotted names like login.defs for want=login
 		}
 		// 5) Debian package format (packagename_version_arch.deb)
 		if strings.HasPrefix(pi.Name, want+"_") {
@@ -1088,28 +1198,41 @@ func ResolveTopPackageConflicts(want string, all []ospackage.PackageInfo) (ospac
 		// Example: want="mail-transport-agent", pi.Provides=["mail-transport-agent"]
 		for _, provided := range pi.Provides {
 			if provided == want {
+				log.Debugf("  Found PROVIDES candidate: %s (version: %s, provides: %s)", pi.Name, pi.Version, provided)
 				candidates = append(candidates, pi)
 				break
 			}
 		}
 	}
 
+	log.Debugf("ResolveTopPackageConflicts: Found %d initial candidates for package '%s'", len(candidates), want)
+	for i, candidate := range candidates {
+		log.Debugf("  Candidate %d: %s (version: %s, provides: %v)", i+1, candidate.Name, candidate.Version, candidate.Provides)
+	}
+
 	if len(candidates) == 0 {
+		log.Debugf("ResolveTopPackageConflicts: No candidates found for package '%s'", want)
 		return ospackage.PackageInfo{}, false
 	}
 
-	// Filter out blocked packages (priority < 0)
-	candidates = filterCandidatesByPriority(candidates)
+	// Filter out blocked packages (priority < 0) and prioritize exact name matches
+	candidates = filterCandidatesByPriorityWithTarget(candidates, want)
+	log.Debugf("ResolveTopPackageConflicts: After priority filtering, %d candidates remain for package '%s'", len(candidates), want)
+	for i, candidate := range candidates {
+		log.Debugf("  Filtered candidate %d: %s (version: %s)", i+1, candidate.Name, candidate.Version)
+	}
 	if len(candidates) == 0 {
 		return ospackage.PackageInfo{}, false
 	}
 
 	// If we got an exact match in step (1), it's the only candidate
 	if len(candidates) == 1 && (candidates[0].Name == want || candidates[0].Name == want+".deb") {
+		log.Debugf("ResolveTopPackageConflicts: Selected exact match candidate: %s (version: %s)", candidates[0].Name, candidates[0].Version)
 		return candidates[0], true
 	}
 
 	// Candidates already sorted by filterCandidatesByPriority
+	log.Debugf("ResolveTopPackageConflicts: Selected best candidate: %s (version: %s) for package '%s'", candidates[0].Name, candidates[0].Version, want)
 	return candidates[0], true
 }
 
@@ -1135,8 +1258,8 @@ func findAllCandidates(depName string, all []ospackage.PackageInfo) []ospackage.
 		}
 	}
 
-	// Apply APT priority filtering and sorting
-	filtered := filterCandidatesByPriority(candidates)
+	// Apply APT priority filtering and sorting with exact name preference
+	filtered := filterCandidatesByPriorityWithTarget(candidates, depName)
 	return filtered
 }
 
@@ -1283,6 +1406,7 @@ func matchesRepoBase(parentBase []string, candidateBase string) bool {
 
 func resolveMultiCandidates(parentPkg ospackage.PackageInfo, candidates []ospackage.PackageInfo) (ospackage.PackageInfo, error) {
 	// Filter out blocked packages (priority < 0) first
+	// All candidates should have the same name here, so no need for target-aware filtering
 	candidates = filterCandidatesByPriority(candidates)
 	if len(candidates) == 0 {
 		return ospackage.PackageInfo{}, fmt.Errorf("all candidates are blocked by negative priority")

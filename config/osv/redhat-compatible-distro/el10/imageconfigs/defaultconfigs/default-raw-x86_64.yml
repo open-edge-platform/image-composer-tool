@@ -105,14 +105,29 @@ systemConfig:
     - iproute
     - ncurses
     - systemd-resolved
+    - efibootmgr
+    # --- FOR SSH ---
+    - chrony
+    - openssh-server
+    - sudo
+    - firewalld
+    - nftables
+    - python3-nftables
+    - libselinux-utils
+    # - selinux-policy-targeted
 
-  additionalFiles:
-    - local: ../additionalfiles/99-dhcp-en.network
-      final: /etc/systemd/network/99-dhcp-en.network
+    # --- NETWORK ---
+    - NetworkManager
+    - NetworkManager-libnm
+    # - NetworkManager-tui
+
+  # additionalFiles:
+  #   - local: ../additionalfiles/99-dhcp-en.network
+  #     final: /etc/systemd/network/99-dhcp-en.network
 
   kernel:
     name: kernel
-    cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
+    cmdline: "rw console=ttyS0,115200 console=tty0 loglevel=7 selinux=0"
     enableExtraModules: "usbcore usb-common"
     packages:
      - kernel
@@ -122,3 +137,4 @@ systemConfig:
     # Set up ssh directories with correct permissions
     - cmd: "mkdir -m 755 -p /opt/var/lib/sshd"
     - cmd: "printf 'd /run/sshd 0755 root root -\\n' > /etc/tmpfiles.d/sshd.conf"
+    - cmd: "systemctl enable systemd-resolved"

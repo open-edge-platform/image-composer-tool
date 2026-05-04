@@ -5,7 +5,7 @@
 # Includes turtlesim, rqt_graph, rqt_plot, and X11 forwarding support.
 #
 # Usage:
-#   sudo -E ./os-image-composer build image-templates/robotics-demo-ubuntu24-x86_64.yml
+#   sudo -E ./image-composer-tool build image-templates/robotics-demo-ubuntu24-x86_64.yml
 #
 # VM prerequisites:
 #   sudo apt install -y qemu-system-x86 ovmf
@@ -151,7 +151,7 @@ systemConfig:
     - ros-jazzy-demo-nodes-py
 
   kernel:
-    version: "6.14"
+    version: "6.17"
     cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
     packages:
       - linux-image-generic-hwe-24.04

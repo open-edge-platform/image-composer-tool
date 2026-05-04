@@ -1360,3 +1360,171 @@ func TestDetectVerity_MultipleUKIs_UsesFirst(t *testing.T) {
 		t.Fatalf("expected first UKI cmdline to be used, got RootDevice=%q", info.RootDevice)
 	}
 }
+
+func TestIsSameFSFamily(t *testing.T) {
+	tests := []struct {
+		name string
+		a, b string
+		want bool
+	}{
+		{"ext4-ext4", "ext4", "ext4", true},
+		{"ext4-ext3", "ext4", "ext3", true},
+		{"ext2-ext4", "ext2", "ext4", true},
+		{"vfat-fat", "vfat", "fat", true},
+		{"vfat-msdos", "vfat", "msdos", true},
+		{"fat32-fat16", "fat32", "fat16", true},
+		{"ext4-vfat", "ext4", "vfat", false},
+		{"vfat-ext4", "vfat", "ext4", false},
+		{"squashfs-squashfs", "squashfs", "squashfs", true},
+		{"squashfs-ext4", "squashfs", "ext4", false},
+		{"empty-empty", "", "", true},
+		{"whitespace-squashfs", " squashfs ", "squashfs", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isSameFSFamily(tt.a, tt.b)
+			if got != tt.want {
+				t.Errorf("isSameFSFamily(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsExtLike(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{"ext4", true},
+		{"ext3", true},
+		{"ext2", true},
+		{"EXT4", true},
+		{" ext4 ", true},
+		{"vfat", false},
+		{"squashfs", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := isExtLike(tt.input)
+			if got != tt.want {
+				t.Errorf("isExtLike(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestEnrichFilesystemFromRaw_CorrectsMisclassifiedExt4 verifies that when
+// diskfs misidentifies an ext4 partition as vfat, the raw magic sniffing
+// corrects it to ext4.
+func TestEnrichFilesystemFromRaw_CorrectsMisclassifiedExt4(t *testing.T) {
+	// Build a minimal buffer with ext4 magic at the partition offset
+	const partStartSector = 2048
+	const sectorSize = 512
+	const partOff = partStartSector * sectorSize
+	bufSize := partOff + 4096
+	buf := make([]byte, bufSize)
+
+	// Place ext4 superblock magic (0xEF53) at partition offset + 1024 + 56
+	buf[partOff+1024+56] = 0x53
+	buf[partOff+1024+57] = 0xEF
+
+	// Also place a valid ext4 block size (s_log_block_size=2 => 4096 bytes)
+	binary.LittleEndian.PutUint32(buf[partOff+1024+24:partOff+1024+28], 2)
+
+	img := sliceReaderAt{b: buf}
+
+	p := PartitionSummary{
+		Index:             2,
+		Name:              "rootfs",
+		StartLBA:          partStartSector,
+		LogicalSectorSize: sectorSize,
+		Filesystem: &FilesystemSummary{
+			Type: "vfat", // diskfs misclassification
+		},
+	}
+	pt := PartitionTableSummary{
+		LogicalSectorSize: sectorSize,
+	}
+
+	err := enrichFilesystemFromRaw(img, &p, pt)
+	if err != nil {
+		t.Fatalf("enrichFilesystemFromRaw error: %v", err)
+	}
+
+	if p.Filesystem.Type != "ext4" {
+		t.Fatalf("expected filesystem type to be corrected to ext4, got %q", p.Filesystem.Type)
+	}
+
+	// Should have a note about correction
+	foundNote := false
+	for _, n := range p.Filesystem.Notes {
+		if strings.Contains(n, "corrected from") && strings.Contains(n, "raw magic") {
+			foundNote = true
+			break
+		}
+	}
+	if !foundNote {
+		t.Errorf("expected a correction note in Filesystem.Notes, got: %v", p.Filesystem.Notes)
+	}
+}
+
+// TestEnrichFilesystemFromRaw_KeepsCorrectVFAT verifies that when diskfs
+// correctly identifies a vfat partition and raw magic agrees, no correction occurs.
+func TestEnrichFilesystemFromRaw_KeepsCorrectVFAT(t *testing.T) {
+	const partStartSector = 2048
+	const sectorSize = 512
+	const partOff = partStartSector * sectorSize
+	bufSize := partOff + 8192
+	buf := make([]byte, bufSize)
+
+	// Build a minimal valid FAT32 BPB so readFATBootSector does not reject it.
+	// BPB_BytsPerSec at offset 11 (uint16 LE) = 512
+	binary.LittleEndian.PutUint16(buf[partOff+11:partOff+13], 512)
+	// BPB_SecPerClus at offset 13 = 8
+	buf[partOff+13] = 8
+	// BPB_RsvdSecCnt at offset 14 (uint16 LE) = 32
+	binary.LittleEndian.PutUint16(buf[partOff+14:partOff+16], 32)
+	// BPB_NumFATs at offset 16 = 2
+	buf[partOff+16] = 2
+	// BPB_RootEntCnt at offset 17 (uint16 LE) = 0 (FAT32)
+	binary.LittleEndian.PutUint16(buf[partOff+17:partOff+19], 0)
+	// BPB_TotSec32 at offset 32 (uint32 LE) = 1048576 (~512MB)
+	binary.LittleEndian.PutUint32(buf[partOff+32:partOff+36], 1048576)
+	// BPB_FATSz32 at offset 36 (uint32 LE) = 1024
+	binary.LittleEndian.PutUint32(buf[partOff+36:partOff+40], 1024)
+	// FAT boot signature 0x55AA at offset 510
+	buf[partOff+510] = 0x55
+	buf[partOff+511] = 0xAA
+
+	img := sliceReaderAt{b: buf}
+
+	p := PartitionSummary{
+		Index:             1,
+		Name:              "boot",
+		StartLBA:          partStartSector,
+		LogicalSectorSize: sectorSize,
+		Filesystem: &FilesystemSummary{
+			Type: "vfat",
+		},
+	}
+	pt := PartitionTableSummary{
+		LogicalSectorSize: sectorSize,
+	}
+
+	err := enrichFilesystemFromRaw(img, &p, pt)
+	if err != nil {
+		t.Fatalf("enrichFilesystemFromRaw error: %v", err)
+	}
+
+	if p.Filesystem.Type != "vfat" {
+		t.Fatalf("expected filesystem type to remain vfat, got %q", p.Filesystem.Type)
+	}
+
+	// Should NOT have a correction note
+	for _, n := range p.Filesystem.Notes {
+		if strings.Contains(n, "corrected from") {
+			t.Errorf("unexpected correction note: %s", n)
+		}
+	}
+}

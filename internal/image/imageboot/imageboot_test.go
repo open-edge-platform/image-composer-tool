@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
 
 func setupConfigDir(t *testing.T) string {
@@ -829,6 +829,41 @@ func TestGetGrubVersion(t *testing.T) {
 	}
 }
 
+func TestGetGrubEfiTarget(t *testing.T) {
+	tests := []struct {
+		name      string
+		arch      string
+		expected  string
+		wantError bool
+	}{
+		{name: "empty_defaults_to_x86_64", arch: "", expected: "x86_64-efi", wantError: false},
+		{name: "amd64", arch: "amd64", expected: "x86_64-efi", wantError: false},
+		{name: "x86_64", arch: "x86_64", expected: "x86_64-efi", wantError: false},
+		{name: "arm64", arch: "arm64", expected: "arm64-efi", wantError: false},
+		{name: "aarch64", arch: "aarch64", expected: "arm64-efi", wantError: false},
+		{name: "unsupported", arch: "riscv64", expected: "", wantError: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := getGrubEfiTarget(tt.arch)
+			if tt.wantError {
+				if err == nil {
+					t.Errorf("expected error for arch %q, got nil", tt.arch)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("expected no error for arch %q, got: %v", tt.arch, err)
+			}
+			if result != tt.expected {
+				t.Errorf("getGrubEfiTarget(%q) = %q, expected %q", tt.arch, result, tt.expected)
+			}
+		})
+	}
+}
+
 func TestInstallImageBoot_KernelCmdlineWithRootParameter(t *testing.T) {
 	diskPathIdMap := map[string]string{
 		"root": "/dev/sda1",
@@ -1196,6 +1231,7 @@ func TestUpdateInitramfsForGrub_NoExtraModules(t *testing.T) {
 	originalExecutor := shell.Default
 	defer func() { shell.Default = originalExecutor }()
 	mockExpectedOutput := []shell.MockCommand{
+		{Pattern: "command -v update-initramfs", Output: "/usr/sbin/update-initramfs\n", Error: nil},
 		{Pattern: "update-initramfs -u -k " + kernelVersion, Output: "update-initramfs: Generating /boot/initrd.img-" + kernelVersion, Error: nil},
 	}
 	shell.Default = shell.NewMockExecutor(mockExpectedOutput)
@@ -1222,6 +1258,7 @@ func TestUpdateInitramfsForGrub_WithSingleExtraModule(t *testing.T) {
 	defer func() { shell.Default = originalExecutor }()
 	mockExpectedOutput := []shell.MockCommand{
 		{Pattern: "echo 'intel_vpu' >> /etc/initramfs-tools/modules", Output: "", Error: nil},
+		{Pattern: "command -v update-initramfs", Output: "/usr/sbin/update-initramfs\n", Error: nil},
 		{Pattern: "update-initramfs -u -k " + kernelVersion, Output: "update-initramfs: Generating /boot/initrd.img-" + kernelVersion, Error: nil},
 	}
 	shell.Default = shell.NewMockExecutor(mockExpectedOutput)
@@ -1250,6 +1287,7 @@ func TestUpdateInitramfsForGrub_WithMultipleExtraModules(t *testing.T) {
 		{Pattern: "echo 'intel_vpu' >> /etc/initramfs-tools/modules", Output: "", Error: nil},
 		{Pattern: "echo 'nvidia_drm' >> /etc/initramfs-tools/modules", Output: "", Error: nil},
 		{Pattern: "echo 'i915' >> /etc/initramfs-tools/modules", Output: "", Error: nil},
+		{Pattern: "command -v update-initramfs", Output: "/usr/sbin/update-initramfs\n", Error: nil},
 		{Pattern: "update-initramfs -u -k " + kernelVersion, Output: "update-initramfs: Generating /boot/initrd.img-" + kernelVersion, Error: nil},
 	}
 	shell.Default = shell.NewMockExecutor(mockExpectedOutput)
@@ -1277,6 +1315,7 @@ func TestUpdateInitramfsForGrub_WithWhitespaceInModules(t *testing.T) {
 	mockExpectedOutput := []shell.MockCommand{
 		{Pattern: "echo 'intel_vpu' >> /etc/initramfs-tools/modules", Output: "", Error: nil},
 		{Pattern: "echo 'nvidia_drm' >> /etc/initramfs-tools/modules", Output: "", Error: nil},
+		{Pattern: "command -v update-initramfs", Output: "/usr/sbin/update-initramfs\n", Error: nil},
 		{Pattern: "update-initramfs -u -k " + kernelVersion, Output: "update-initramfs: Generating /boot/initrd.img-" + kernelVersion, Error: nil},
 	}
 	shell.Default = shell.NewMockExecutor(mockExpectedOutput)
@@ -1294,7 +1333,7 @@ func TestUpdateInitramfsForGrub_UpdateInitramfsFails(t *testing.T) {
 	template := &config.ImageTemplate{
 		SystemConfig: config.SystemConfig{
 			Kernel: config.KernelConfig{
-				EnableExtraModules: "",
+				EnableExtraModules: "intel_vpu",
 			},
 		},
 	}
@@ -1302,6 +1341,8 @@ func TestUpdateInitramfsForGrub_UpdateInitramfsFails(t *testing.T) {
 	originalExecutor := shell.Default
 	defer func() { shell.Default = originalExecutor }()
 	mockExpectedOutput := []shell.MockCommand{
+		{Pattern: "echo 'intel_vpu' >> /etc/initramfs-tools/modules", Output: "", Error: nil},
+		{Pattern: "command -v update-initramfs", Output: "/usr/sbin/update-initramfs\n", Error: nil},
 		{Pattern: "update-initramfs -u -k " + kernelVersion, Output: "", Error: fmt.Errorf("update-initramfs failed")},
 	}
 	shell.Default = shell.NewMockExecutor(mockExpectedOutput)
@@ -1309,9 +1350,38 @@ func TestUpdateInitramfsForGrub_UpdateInitramfsFails(t *testing.T) {
 	err := updateInitramfsForGrub(tmpDir, kernelVersion, template)
 	if err == nil {
 		t.Error("Expected error when update-initramfs fails")
+		return
 	}
 	if !strings.Contains(err.Error(), "failed to update initramfs") {
 		t.Errorf("Expected update initramfs error, got: %v", err)
+	}
+}
+
+func TestUpdateInitramfsForGrub_FallbackToDracut(t *testing.T) {
+	tmpDir := t.TempDir()
+	kernelVersion := "6.2.0-26-generic"
+
+	template := &config.ImageTemplate{
+		SystemConfig: config.SystemConfig{
+			Kernel: config.KernelConfig{
+				EnableExtraModules: "intel_vpu",
+			},
+		},
+	}
+
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+	mockExpectedOutput := []shell.MockCommand{
+		{Pattern: "echo 'intel_vpu' >> /etc/initramfs-tools/modules", Output: "", Error: nil},
+		{Pattern: "command -v update-initramfs", Output: "", Error: nil},
+		{Pattern: "command -v dracut", Output: "/usr/bin/dracut\n", Error: nil},
+		{Pattern: "dracut --force --kver " + kernelVersion + " /boot/initrd.img-" + kernelVersion + " --add-drivers 'intel_vpu'", Output: "", Error: nil},
+	}
+	shell.Default = shell.NewMockExecutor(mockExpectedOutput)
+
+	err := updateInitramfsForGrub(tmpDir, kernelVersion, template)
+	if err != nil {
+		t.Errorf("Expected no error when falling back to dracut, got: %v", err)
 	}
 }
 
@@ -1332,6 +1402,7 @@ func TestUpdateInitramfsForGrub_ModuleAddFailsContinues(t *testing.T) {
 	mockExpectedOutput := []shell.MockCommand{
 		{Pattern: "echo 'intel_vpu' >> /etc/initramfs-tools/modules", Output: "", Error: fmt.Errorf("failed to add module")},
 		{Pattern: "echo 'nvidia_drm' >> /etc/initramfs-tools/modules", Output: "", Error: nil},
+		{Pattern: "command -v update-initramfs", Output: "/usr/sbin/update-initramfs\n", Error: nil},
 		{Pattern: "update-initramfs -u -k " + kernelVersion, Output: "update-initramfs: Generating /boot/initrd.img-" + kernelVersion, Error: nil},
 	}
 	shell.Default = shell.NewMockExecutor(mockExpectedOutput)
@@ -1396,6 +1467,7 @@ func TestInstallImageBoot_GrubWithEnableExtraModules(t *testing.T) {
 		{Pattern: "blkid.*UUID", Output: "UUID=test-uuid\n", Error: nil},
 		{Pattern: "blkid.*PARTUUID", Output: "PARTUUID=test-partuuid\n", Error: nil},
 		{Pattern: "command -v grub2-mkconfig", Output: "/usr/sbin/grub2-mkconfig", Error: nil},
+		{Pattern: "command -v update-initramfs", Output: "/usr/sbin/update-initramfs\n", Error: nil},
 		{Pattern: "mkdir", Output: "", Error: nil},
 		{Pattern: "cp", Output: "", Error: nil},
 		{Pattern: "sed", Output: "", Error: nil},
@@ -1470,6 +1542,7 @@ func TestInstallImageBoot_GrubWithEnableExtraModulesUbuntu(t *testing.T) {
 		{Pattern: "blkid.*UUID", Output: "UUID=ubuntu-uuid\n", Error: nil},
 		{Pattern: "blkid.*PARTUUID", Output: "PARTUUID=ubuntu-partuuid\n", Error: nil},
 		{Pattern: "command -v grub2-mkconfig", Output: "/usr/sbin/grub2-mkconfig", Error: nil},
+		{Pattern: "command -v update-initramfs", Output: "/usr/sbin/update-initramfs\n", Error: nil},
 		{Pattern: "mkdir", Output: "", Error: nil},
 		{Pattern: "cp", Output: "", Error: nil},
 		{Pattern: "sed", Output: "", Error: nil},

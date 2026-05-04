@@ -85,11 +85,22 @@ func enrichFilesystemFromRaw(img io.ReaderAt, p *PartitionSummary, pt PartitionT
 	partOff := int64(p.StartLBA) * sectorSize
 
 	fsType := strings.ToLower(strings.TrimSpace(p.Filesystem.Type))
-	if fsType == "" || fsType == "unknown" {
-		guessed, err := sniffFilesystemType(img, partOff)
-		if err == nil && guessed != "" {
-			fsType = guessed
-			p.Filesystem.Type = guessed
+
+	// Always sniff filesystem type from raw magic bytes to cross-check
+	// the diskfs library classification, which can misidentify ext4 as vfat
+	// (e.g., when an ext4 partition happens to have 0x55AA at offset 510).
+	sniffed, sniffErr := sniffFilesystemType(img, partOff)
+	if sniffErr == nil && sniffed != "" && sniffed != "unknown" {
+		if fsType == "" || fsType == "unknown" {
+			// No prior classification — use sniffed type
+			fsType = sniffed
+			p.Filesystem.Type = sniffed
+		} else if fsType != sniffed && !isSameFSFamily(fsType, sniffed) {
+			// diskfs and raw magic disagree — trust raw magic bytes
+			p.Filesystem.Notes = append(p.Filesystem.Notes,
+				fmt.Sprintf("filesystem type corrected from %q to %q (raw magic)", fsType, sniffed))
+			fsType = sniffed
+			p.Filesystem.Type = sniffed
 		}
 	}
 
@@ -320,6 +331,24 @@ func isESPPartition(p PartitionSummary) bool {
 func isVFATLike(t string) bool {
 	t = strings.ToLower(strings.TrimSpace(t))
 	return t == "vfat" || t == "fat" || t == "msdos" || t == "dos" || t == "fat16" || t == "fat32"
+}
+
+// isExtLike determines if a filesystem type string corresponds to an ext-family filesystem.
+func isExtLike(t string) bool {
+	t = strings.ToLower(strings.TrimSpace(t))
+	return t == "ext4" || t == "ext3" || t == "ext2"
+}
+
+// isSameFSFamily returns true if the two filesystem type strings belong to the same
+// filesystem family (e.g., ext2/ext3/ext4 are all ext, vfat/fat/msdos are all FAT).
+func isSameFSFamily(a, b string) bool {
+	if isExtLike(a) && isExtLike(b) {
+		return true
+	}
+	if isVFATLike(a) && isVFATLike(b) {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
 }
 
 // filesystemTypeLabel maps a diskfs filesystem.Type to a string label.

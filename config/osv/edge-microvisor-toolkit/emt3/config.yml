@@ -7,3 +7,10 @@ x86_64:
   pkgType: rpm                                      # Package management system
   chrootenvConfigFile: chrootenvconfigs/chrootenv_x86_64.yml  # Path to chrootenv config
   releaseVersion: "3.0"                             # Distribution release version
+
+aarch64:
+  dist: emt3                                        # Distribution identifier
+  arch: aarch64                                      # Target architecture
+  pkgType: rpm                                      # Package management system
+  chrootenvConfigFile: chrootenvconfigs/chrootenv_aarch64.yml  # Path to chrootenv config
+  releaseVersion: "3.0"                             # Distribution release version

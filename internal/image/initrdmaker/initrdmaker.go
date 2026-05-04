@@ -5,18 +5,19 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
-	"github.com/open-edge-platform/os-image-composer/internal/chroot"
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/config/manifest"
-	"github.com/open-edge-platform/os-image-composer/internal/image/imageos"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage/debutils"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage/rpmutils"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/file"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/mount"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/system"
+	"github.com/open-edge-platform/image-composer-tool/internal/chroot"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/config/manifest"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/imageos"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/debutils"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/rpmutils"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/file"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/mount"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
 
 type InitrdMakerInterface interface {
@@ -169,6 +170,13 @@ func (initrdMaker *InitrdMaker) BuildInitrdImage() (err error) {
 	if err := manifest.CopySBOMToImageBuildDir(initrdMaker.ImageBuildDir); err != nil {
 		log.Warnf("Failed to copy SBOM to image build directory: %v", err)
 		// Don't fail the build if SBOM copy fails, just log warning
+	}
+
+	initrdMaker.template.FinishPureImageBuildTimer()
+	pureImageBuildDuration := initrdMaker.template.GetPureImageBuildDuration()
+	if pureImageBuildDuration > 0 {
+		log.Infof("Pure initrd image build time: %s", pureImageBuildDuration.Round(time.Millisecond))
+		log.Infof("Initrd image build completed successfully: %s", initrdMaker.InitrdFilePath)
 	}
 
 	return nil

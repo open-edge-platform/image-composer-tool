@@ -40,6 +40,11 @@ packageRepositories:
     pkey: "<PUBLIC_KEY_URL>" # Uncomment and replace in real config
     component: "restricted"
 
+  # - codename: "localdeb"
+  #   path: "/data/image-composer-tool/localdeb" # Uncomment and replace with local path
+  #   pkey: "[trusted=yes]" # Make sure to put trusted
+  #   component: "main" # Make sure to put main or leave empty
+
 systemConfig:
   name: edge
   description: edge ubuntu image with immutable rootfs
@@ -62,7 +67,7 @@ systemConfig:
     - systemd-timesyncd
 
   kernel:
-    version: "6.14"
+    version: "6.17"
     cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
     packages:
       - linux-image-generic-hwe-24.04

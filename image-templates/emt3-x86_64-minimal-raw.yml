@@ -60,3 +60,35 @@ systemConfig:
 
   immutability:
     enabled: false # default is true, overridden to false here
+
+    # Package Configuration
+  packages:
+    # Additional packages beyond the base system
+    - edge-release
+    - edge-repos
+    - edge-rpm-macros
+    - bash
+    - ca-certificates
+    - dbus
+    - e2fsprogs
+    - filesystem
+    - iana-etc
+    - initramfs
+    - iproute
+    - iputils
+    - irqbalance
+    - ncurses-libs
+    - openssl
+    - rpm
+    - rpm-libs
+    - shadow-utils
+    - sudo
+    - systemd
+    - systemd-networkd
+    - systemd-resolved
+    - systemd-udev
+    - tdnf
+    - tdnf-plugin-repogpgcheck
+    - util-linux
+    - zlib
+

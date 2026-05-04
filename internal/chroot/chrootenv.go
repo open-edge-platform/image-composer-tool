@@ -6,14 +6,14 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/open-edge-platform/os-image-composer/internal/chroot/chrootbuild"
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/compression"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/file"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/mount"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/system"
+	"github.com/open-edge-platform/image-composer-tool/internal/chroot/chrootbuild"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/compression"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/file"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/mount"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
 
 const (
@@ -57,6 +57,7 @@ type ChrootEnv struct {
 	ChrootEnvRoot       string
 	ChrootImageBuildDir string
 	ChrootBuilder       chrootbuild.ChrootBuilderInterface
+	buildTemplate       *config.ImageTemplate
 	TargetOs            string // Store targetOs for package manager selection
 }
 
@@ -87,6 +88,13 @@ func NewChrootEnv(targetOs, targetDist, targetArch string) (*ChrootEnv, error) {
 
 func (chrootEnv *ChrootEnv) GetChrootEnvRoot() string {
 	return chrootEnv.ChrootEnvRoot
+}
+
+func (chrootEnv *ChrootEnv) SetBuildTemplate(template *config.ImageTemplate) {
+	chrootEnv.buildTemplate = template
+	if templateAwareBuilder, ok := chrootEnv.ChrootBuilder.(interface{ SetBuildTemplate(*config.ImageTemplate) }); ok {
+		templateAwareBuilder.SetBuildTemplate(template)
+	}
 }
 
 func (chrootEnv *ChrootEnv) GetChrootImageBuildDir() string {
@@ -392,6 +400,9 @@ func (chrootEnv *ChrootEnv) InitChrootEnv(targetOs, targetDist, targetArch strin
 		chrootBuildDir := chrootEnv.ChrootBuilder.GetChrootBuildDir()
 		chrootEnvTarPath := filepath.Join(chrootBuildDir, "chrootenv.tar.gz")
 		if _, err := os.Stat(chrootEnvTarPath); os.IsNotExist(err) {
+			if templateAwareBuilder, ok := chrootEnv.ChrootBuilder.(interface{ SetBuildTemplate(*config.ImageTemplate) }); ok {
+				templateAwareBuilder.SetBuildTemplate(chrootEnv.buildTemplate)
+			}
 			// Build chroot environment tarball
 			if err = chrootEnv.ChrootBuilder.BuildChrootEnv(targetOs, targetDist, targetArch); err != nil {
 				return fmt.Errorf("failed to build chroot environment: %w", err)
@@ -561,7 +572,7 @@ func CleanDebName(packageName string) string {
 
 func (chrootEnv *ChrootEnv) AptInstallPackage(packageName, installRoot string, repoSrcList []string) error {
 	packageName = CleanDebName(packageName)
-	installCmd := fmt.Sprintf("apt-get install -y %s", packageName)
+	installCmd := fmt.Sprintf("apt-get install -y --no-install-recommends %s", packageName)
 
 	if len(repoSrcList) > 0 {
 		for _, repoSrc := range repoSrcList {
@@ -576,8 +587,11 @@ func (chrootEnv *ChrootEnv) AptInstallPackage(packageName, installRoot string, r
 		"DEBCONF_NOWARNINGS=yes",
 	}
 
-	if _, err := shell.ExecCmdWithStream(installCmd, true, installRoot, envVars); err != nil {
-		return fmt.Errorf("failed to install package %s: %w", packageName, err)
+	output, err := shell.ExecCmdWithStream(installCmd, true, installRoot, envVars)
+	if err != nil {
+		log.Errorf("Failed to install package %s: %v", packageName, err)
+		log.Errorf("Full apt-get output for %s:\n%s", packageName, output)
+		return fmt.Errorf("failed to install package %s: %w\napt output:\n%s", packageName, err, output)
 	}
 
 	return nil

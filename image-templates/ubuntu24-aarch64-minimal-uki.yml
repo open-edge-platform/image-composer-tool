@@ -1,0 +1,93 @@
+image:
+  name: minimal-os-image-ubuntu-uki
+  version: "24.04"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: aarch64
+  imageType: raw
+
+# Sample list of additional package repositories; replace codename, url, and pkey values as needed
+packageRepositories:
+  - codename: "company-internal"
+    url: "<URL>"
+    pkey: "<PUBLIC_KEY_URL>" # Uncomment and replace in real config
+    component: "main"
+
+  - codename: "dev-tools"
+    url: "<URL>"
+    pkey: "<PUBLIC_KEY_URL>" # Uncomment and replace in real config
+
+  - codename: "intel-openvino"
+    url: "<URL>"
+    pkey: "<PUBLIC_KEY_URL>" # Uncomment and replace in real config
+    component: "restricted"
+
+disk:
+  name: minimal_ubuntu_arm_raw-uki # 1:1 mapping to the systemConfigs name
+  artifacts:
+    -
+      type: raw  # image file format, valid value [raw, vhd, vhdx, qcow2, vmdk, vdi]
+      compression: gz # image compression format (optional)
+  size: 6GiB # 4G, 4GB, 4096 MiB also valid. (Required for raw)
+  partitionTableType: gpt # Partition table type, valid value: [gpt, mbr]
+  partitions:
+    # EFI system partition for bootloaders - second partition
+    - id: boot
+      type: esp
+      flags:
+        - esp  
+        - boot  
+      # GPT type GUID for EFI system partition
+      #typeUUID: c12a7328-f81f-11d2-ba4b-00a0c93ec93b
+      fsType: fat32
+      #fsLabel: UEFI
+      start: 1MiB
+      end: 513MB
+      mountPoint: /boot/efi
+      mountOptions: umask=0077
+
+    # Root filesystem - last partition for easy expansion
+    - id: rootfs
+      name: minimal-rootfs
+      type: linux-root-arm64
+      # Standard Linux root filesystem GUID for ARM
+      #typeUUID: B921B045-1DF0-41C3-AF44-4C6F280D3FAE 
+      fsType: ext4
+      fsLabel: minimal-rootfs
+      start: 513MiB
+      end: "0"
+      mountPoint: /
+      mountOptions: defaults
+
+systemConfig:
+  name: minimal
+  description: Minimal ubuntu UKI
+  users:
+    - name: admin
+      password: "changeme"
+      sudo: true
+      groups: [docker, wheel]
+      shell: /bin/bash
+
+  bootloader:
+    bootType: efi
+    provider: systemd-boot
+
+  immutability:
+    enabled: false # default is true
+    # To enable Secure Boot, provide the actual file paths for your environment below and uncomment the relevant lines.
+    # secureBootDBKey: "<SECURE_BOOT_DB_KEY_PATH>"
+    # secureBootDBCrt: "<SECURE_BOOT_DB_CRT_PATH>"
+    # secureBootDBCer: "<SECURE_BOOT_DB_CER_PATH>"
+
+  packages:
+    - ubuntu-minimal
+    - dracut-core
+
+  kernel:
+    version: "6.17"
+    cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
+    packages:
+      - linux-image-generic-hwe-24.04

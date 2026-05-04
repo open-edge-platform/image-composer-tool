@@ -6,12 +6,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-edge-platform/os-image-composer/internal/chroot"
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage/debutils"
-	"github.com/open-edge-platform/os-image-composer/internal/provider"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/system"
+	"github.com/open-edge-platform/image-composer-tool/internal/chroot"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/debutils"
+	"github.com/open-edge-platform/image-composer-tool/internal/provider"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
 
 // Helper function to create a test ImageTemplate
@@ -174,7 +174,7 @@ func TestLoadRepoConfig(t *testing.T) {
 		return
 	}
 
-	configs, err := loadRepoConfig("", "amd64")
+	configs, err := loadRepoConfig("ubuntu24", "", "amd64")
 	if err != nil {
 		t.Skipf("loadRepoConfig failed (expected in test environment): %v", err)
 		return
@@ -201,6 +201,79 @@ func TestLoadRepoConfig(t *testing.T) {
 		}
 
 		t.Logf("Successfully loaded repo config: %s", config.Name)
+	}
+}
+
+// TestLoadRepoConfigUbuntu26 tests loading repo config for ubuntu26
+func TestLoadRepoConfigUbuntu26(t *testing.T) {
+	originalDir, _ := os.Getwd()
+	defer func() {
+		if err := os.Chdir(originalDir); err != nil {
+			t.Logf("Failed to change back to original directory: %v", err)
+		}
+	}()
+
+	if err := os.Chdir("../../../"); err != nil {
+		t.Skipf("Cannot change to project root: %v", err)
+		return
+	}
+
+	configs, err := loadRepoConfig("ubuntu26", "", "amd64")
+	if err != nil {
+		t.Skipf("loadRepoConfig for ubuntu26 failed (expected in test environment): %v", err)
+		return
+	}
+
+	if len(configs) == 0 {
+		t.Error("Expected at least one repository configuration for ubuntu26")
+		return
+	}
+
+	for _, cfg := range configs {
+		if cfg.Name == "" {
+			t.Error("Expected config name to be set")
+		}
+		if cfg.Arch != "amd64" {
+			t.Errorf("Expected arch 'amd64', got '%s'", cfg.Arch)
+		}
+		t.Logf("Successfully loaded ubuntu26 repo config: %s", cfg.Name)
+	}
+}
+
+// TestUbuntuProviderInitUbuntu26 tests Init with ubuntu26 dist
+func TestUbuntuProviderInitUbuntu26(t *testing.T) {
+	originalDir, _ := os.Getwd()
+	defer func() {
+		if err := os.Chdir(originalDir); err != nil {
+			t.Logf("Failed to change back to original directory: %v", err)
+		}
+	}()
+
+	if err := os.Chdir("../../../"); err != nil {
+		t.Skipf("Cannot change to project root: %v", err)
+		return
+	}
+
+	u := &ubuntu{}
+	err := u.Init("ubuntu26", "x86_64")
+	if err != nil {
+		t.Logf("Init for ubuntu26 failed as expected in test environment: %v", err)
+	} else {
+		if len(u.repoCfgs) == 0 {
+			t.Error("Expected repoCfgs to be populated after successful Init")
+		}
+		t.Logf("Successfully initialized ubuntu26 provider with %d repositories", len(u.repoCfgs))
+	}
+}
+
+// TestUbuntuProviderNameUbuntu26 tests the Name method with ubuntu26
+func TestUbuntuProviderNameUbuntu26(t *testing.T) {
+	u := &ubuntu{}
+	name := u.Name("ubuntu26", "amd64")
+	expected := "ubuntu-ubuntu26-amd64"
+
+	if name != expected {
+		t.Errorf("Expected name %s, got %s", expected, name)
 	}
 }
 
@@ -234,8 +307,10 @@ func (m *mockChrootEnv) CopyFileFromChrootToHost(hostFilePath, chrootPath string
 func (m *mockChrootEnv) UpdateChrootLocalRepoMetadata(chrootRepoDir string, targetArch string, sudo bool) error {
 	return nil
 }
-func (m *mockChrootEnv) RefreshLocalCacheRepo() error                                   { return nil }
-func (m *mockChrootEnv) InitChrootEnv(targetOs, targetDist, targetArch string) error    { return nil }
+func (m *mockChrootEnv) RefreshLocalCacheRepo() error { return nil }
+func (m *mockChrootEnv) InitChrootEnv(targetOs, targetDist, targetArch string) error {
+	return nil
+}
 func (m *mockChrootEnv) CleanupChrootEnv(targetOs, targetDist, targetArch string) error { return nil }
 func (m *mockChrootEnv) TdnfInstallPackage(packageName, installRoot string, repositoryIDList []string) error {
 	return nil
@@ -244,6 +319,184 @@ func (m *mockChrootEnv) AptInstallPackage(packageName, installRoot string, repoS
 	return nil
 }
 func (m *mockChrootEnv) UpdateSystemPkgs(template *config.ImageTemplate) error { return nil }
+
+type cleanupErrorChrootEnv struct {
+	mockChrootEnv
+	cleanupErr error
+}
+
+func (m *cleanupErrorChrootEnv) CleanupChrootEnv(targetOs, targetDist, targetArch string) error {
+	return m.cleanupErr
+}
+
+type updateErrorChrootEnv struct {
+	mockChrootEnv
+	updateErr error
+}
+
+func (m *updateErrorChrootEnv) UpdateSystemPkgs(template *config.ImageTemplate) error {
+	return m.updateErr
+}
+
+func TestBuildUserRepoList(t *testing.T) {
+	userRepos := []config.PackageRepository{
+		{
+			URL:           "https://example.com/ubuntu",
+			Codename:      "noble",
+			PKey:          "example-key",
+			Component:     "main",
+			Priority:      700,
+			AllowPackages: []string{"curl", "wget"},
+		},
+		{
+			URL:      "<URL>",
+			Codename: "ignored-placeholder",
+		},
+		{
+			URL:      "",
+			Codename: "ignored-empty",
+		},
+		{
+			URL:           "http://mirror.internal/repo",
+			Codename:      "custom",
+			PKey:          "mirror-key",
+			Component:     "universe",
+			Priority:      650,
+			AllowPackages: []string{"vim"},
+		},
+	}
+
+	got := buildUserRepoList(userRepos)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 repositories, got %d", len(got))
+	}
+
+	if got[0].ID != "user-example.com/ubuntu" {
+		t.Errorf("first repository ID: got %q, want %q", got[0].ID, "user-example.com/ubuntu")
+	}
+	if got[0].Codename != "noble" {
+		t.Errorf("first repository codename: got %q, want %q", got[0].Codename, "noble")
+	}
+	if got[0].URL != "https://example.com/ubuntu" {
+		t.Errorf("first repository URL: got %q, want %q", got[0].URL, "https://example.com/ubuntu")
+	}
+	if got[0].PKey != "example-key" {
+		t.Errorf("first repository key: got %q, want %q", got[0].PKey, "example-key")
+	}
+	if got[0].Component != "main" {
+		t.Errorf("first repository component: got %q, want %q", got[0].Component, "main")
+	}
+	if got[0].Priority != 700 {
+		t.Errorf("first repository priority: got %d, want %d", got[0].Priority, 700)
+	}
+	if len(got[0].AllowPackages) != 2 || got[0].AllowPackages[0] != "curl" || got[0].AllowPackages[1] != "wget" {
+		t.Errorf("first repository allow list: got %#v", got[0].AllowPackages)
+	}
+
+	if got[1].ID != "user-mirror.internal/repo" {
+		t.Errorf("second repository ID: got %q, want %q", got[1].ID, "user-mirror.internal/repo")
+	}
+	if got[1].Component != "universe" {
+		t.Errorf("second repository component: got %q, want %q", got[1].Component, "universe")
+	}
+	if got[1].Priority != 650 {
+		t.Errorf("second repository priority: got %d, want %d", got[1].Priority, 650)
+	}
+}
+
+func TestUbuntuPostProcessCleanupErrorWrappedMessage(t *testing.T) {
+	cleanupErr := fmt.Errorf("cleanup failed")
+	ubuntu := &ubuntu{chrootEnv: &cleanupErrorChrootEnv{cleanupErr: cleanupErr}}
+
+	err := ubuntu.PostProcess(createTestImageTemplate(), nil)
+	if err == nil {
+		t.Fatal("expected cleanup error, got nil")
+	}
+	if !strings.Contains(err.Error(), "failed to cleanup chroot environment") {
+		t.Fatalf("expected wrapped cleanup error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), cleanupErr.Error()) {
+		t.Fatalf("expected original cleanup error in message, got %v", err)
+	}
+}
+
+func TestUbuntuInstallHostDependencySkipsExistingCommands(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: "command -v .*", Output: "/usr/bin/fake", Error: nil},
+	})
+
+	ubuntu := &ubuntu{}
+	if err := ubuntu.installHostDependency(); err != nil {
+		t.Fatalf("expected dependencies to be treated as already installed, got error: %v", err)
+	}
+}
+
+func TestUbuntuInstallHostDependencyCommandCheckError(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: "command -v .*", Output: "/usr/bin/fake", Error: fmt.Errorf("probe failed")},
+	})
+
+	ubuntu := &ubuntu{}
+	err := ubuntu.installHostDependency()
+	if err == nil {
+		t.Fatal("expected command check error, got nil")
+	}
+	if !strings.Contains(err.Error(), "failed to check command") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "probe failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestUbuntuPostProcessReturnsNilOnCleanupSuccess(t *testing.T) {
+	ubuntu := &ubuntu{chrootEnv: &mockChrootEnv{}}
+
+	err := ubuntu.PostProcess(createTestImageTemplate(), fmt.Errorf("upstream build failure"))
+	if err != nil {
+		t.Fatalf("expected nil when cleanup succeeds, got %v", err)
+	}
+}
+
+func TestUbuntuDownloadImagePkgsUpdateSystemErrorDeterministic(t *testing.T) {
+	ubuntu := &ubuntu{chrootEnv: &updateErrorChrootEnv{updateErr: fmt.Errorf("update failed")}}
+
+	err := ubuntu.downloadImagePkgs(createTestImageTemplate())
+	if err == nil {
+		t.Fatal("expected update system packages error")
+	}
+	if !strings.Contains(err.Error(), "failed to update system packages") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestUbuntuInstallHostDependencyInstallFailure(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: "command -v .*", Output: "", Error: fmt.Errorf("missing")},
+		{Pattern: "sudo apt install -y .*", Output: "", Error: fmt.Errorf("install failed")},
+	})
+
+	ubuntu := &ubuntu{}
+	err := ubuntu.installHostDependency()
+	if err == nil {
+		t.Fatal("expected install error, got nil")
+	}
+	if !strings.Contains(err.Error(), "failed to install host dependency") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "install failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
 
 // TestUbuntuProviderPreProcess tests PreProcess method with mocked dependencies
 func TestUbuntuProviderPreProcess(t *testing.T) {
@@ -501,6 +754,7 @@ func TestUbuntuProviderInstallHostDependency(t *testing.T) {
 	// Set up mock executor
 	mockExpectedOutput := []shell.MockCommand{
 		// Mock successful command existence checks
+		{Pattern: "command -v arch-test", Output: "", Error: nil},
 		{Pattern: "which mmdebstrap", Output: "", Error: nil},
 		{Pattern: "which mkfs.fat", Output: "", Error: nil},
 		{Pattern: "which mformat", Output: "", Error: nil},
@@ -513,6 +767,7 @@ func TestUbuntuProviderInstallHostDependency(t *testing.T) {
 		{Pattern: "which ubuntu-keyring", Output: "", Error: nil},
 		// Mock successful installation commands
 		{Pattern: "apt-get install -y mmdebstrap", Output: "Success", Error: nil},
+		{Pattern: "apt-get install -y arch-test", Output: "Success", Error: nil},
 		{Pattern: "apt-get install -y dosfstools", Output: "Success", Error: nil},
 		{Pattern: "apt-get install -y mtools", Output: "Success", Error: nil},
 		{Pattern: "apt-get install -y xorriso", Output: "Success", Error: nil},
@@ -542,6 +797,7 @@ func TestUbuntuProviderInstallHostDependencyCommands(t *testing.T) {
 	// Get the dependency map by examining the installHostDependency method
 	expectedDeps := map[string]string{
 		"mmdebstrap":     "mmdebstrap",
+		"arch-test":      "arch-test",
 		"mkfs.fat":       "dosfstools",
 		"mformat":        "mtools",
 		"xorriso":        "xorriso",
@@ -558,12 +814,12 @@ func TestUbuntuProviderInstallHostDependencyCommands(t *testing.T) {
 	t.Logf("Expected host dependencies for Ubuntu provider: %+v", expectedDeps)
 
 	// Verify we have the expected number of dependencies
-	if len(expectedDeps) != 10 {
-		t.Errorf("Expected 10 host dependencies, got %d", len(expectedDeps))
+	if len(expectedDeps) != 11 {
+		t.Errorf("Expected 11 host dependencies, got %d", len(expectedDeps))
 	}
 
 	// Verify specific critical dependencies
-	criticalDeps := []string{"mmdebstrap", "mkfs.fat", "xorriso", "qemu-img"}
+	criticalDeps := []string{"mmdebstrap", "arch-test", "mkfs.fat", "xorriso", "qemu-img"}
 	for _, dep := range criticalDeps {
 		if _, exists := expectedDeps[dep]; !exists {
 			t.Errorf("Critical dependency %s not found in expected dependencies", dep)
@@ -921,7 +1177,7 @@ func TestUbuntuLoadRepoConfigMultiple(t *testing.T) {
 		return
 	}
 
-	configs, err := loadRepoConfig("", "amd64")
+	configs, err := loadRepoConfig("ubuntu24", "", "amd64")
 	if err != nil {
 		t.Skipf("loadRepoConfig failed (expected in test environment): %v", err)
 		return
@@ -1165,7 +1421,7 @@ func TestLoadRepoConfigArm64(t *testing.T) {
 		return
 	}
 
-	configs, err := loadRepoConfig("", "arm64")
+	configs, err := loadRepoConfig("ubuntu24", "", "arm64")
 	if err != nil {
 		t.Skipf("loadRepoConfig failed (expected in test environment): %v", err)
 		return
@@ -1208,7 +1464,7 @@ func TestLoadRepoConfigNonDebRepository(t *testing.T) {
 		return
 	}
 
-	configs, err := loadRepoConfig("", "amd64")
+	configs, err := loadRepoConfig("ubuntu24", "", "amd64")
 	if err != nil {
 		// Check if error is about no valid DEB repositories
 		if strings.Contains(err.Error(), "no valid DEB repositories found") {
@@ -1328,6 +1584,7 @@ func TestUbuntuInstallHostDependencyCommandCheck(t *testing.T) {
 
 	// Set up mock executor that simulates all commands already exist
 	mockExpectedOutput := []shell.MockCommand{
+		{Pattern: "command -v arch-test", Output: "/usr/bin/arch-test", Error: nil},
 		{Pattern: "which mmdebstrap", Output: "/usr/bin/mmdebstrap", Error: nil},
 		{Pattern: "which mkfs.fat", Output: "/usr/bin/mkfs.fat", Error: nil},
 		{Pattern: "which mformat", Output: "/usr/bin/mformat", Error: nil},
@@ -1520,7 +1777,7 @@ func TestLoadRepoConfigNoValidRepos(t *testing.T) {
 	}
 
 	// Try with an invalid architecture that might result in no valid repos
-	configs, err := loadRepoConfig("", "invalid-arch")
+	configs, err := loadRepoConfig("ubuntu24", "", "invalid-arch")
 	if err != nil {
 		if strings.Contains(err.Error(), "no valid DEB repositories found") ||
 			strings.Contains(err.Error(), "failed to load provider repo config") {
@@ -1868,7 +2125,7 @@ func TestUbuntuLoadRepoConfigWithValidData(t *testing.T) {
 	}
 
 	// Test with valid amd64 architecture
-	configs, err := loadRepoConfig("", "amd64")
+	configs, err := loadRepoConfig("ubuntu24", "", "amd64")
 	if err != nil {
 		t.Skipf("loadRepoConfig failed: %v", err)
 		return
@@ -2050,5 +2307,172 @@ func TestUbuntuInstallHostDependencyGetPkgManagerError(t *testing.T) {
 		} else {
 			t.Logf("installHostDependency error: %v", err)
 		}
+	}
+}
+
+// TestBuildUserRepoListAllowPackages is a regression test ensuring that
+// AllowPackages from the template is forwarded into the debutils.Repository
+// entries. This mapping was previously missing and is easy to regress.
+func TestBuildUserRepoListAllowPackages(t *testing.T) {
+	tests := []struct {
+		name          string
+		repos         []config.PackageRepository
+		wantLen       int
+		wantAllowPkgs [][]string // expected AllowPackages per resulting repo
+	}{
+		{
+			name: "AllowPackages is forwarded",
+			repos: []config.PackageRepository{
+				{
+					URL:           "https://eci.intel.com/repos/ubuntu",
+					Codename:      "noble",
+					PKey:          "https://eci.intel.com/key.gpg",
+					Component:     "main",
+					Priority:      1000,
+					AllowPackages: []string{"ros-jazzy-openvino*", "intel-level-zero-npu"},
+				},
+			},
+			wantLen:       1,
+			wantAllowPkgs: [][]string{{"ros-jazzy-openvino*", "intel-level-zero-npu"}},
+		},
+		{
+			name: "empty AllowPackages is preserved as nil",
+			repos: []config.PackageRepository{
+				{
+					URL:      "https://archive.ubuntu.com/ubuntu",
+					Codename: "noble",
+				},
+			},
+			wantLen:       1,
+			wantAllowPkgs: [][]string{nil},
+		},
+		{
+			name: "placeholder repos are skipped",
+			repos: []config.PackageRepository{
+				{URL: "<URL>", Codename: "noble"},
+				{URL: "", Codename: "noble"},
+				{
+					URL:           "https://real.repo.com/deb",
+					Codename:      "noble",
+					AllowPackages: []string{"pkg-a"},
+				},
+			},
+			wantLen:       1,
+			wantAllowPkgs: [][]string{{"pkg-a"}},
+		},
+		{
+			name: "multiple repos each preserve their AllowPackages",
+			repos: []config.PackageRepository{
+				{
+					URL:           "https://repo1.example.com/deb",
+					Codename:      "noble",
+					Priority:      1000,
+					AllowPackages: []string{"alpha", "beta"},
+				},
+				{
+					URL:           "https://repo2.example.com/deb",
+					Codename:      "noble",
+					Priority:      1001,
+					AllowPackages: []string{"gamma"},
+				},
+			},
+			wantLen:       2,
+			wantAllowPkgs: [][]string{{"alpha", "beta"}, {"gamma"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := buildUserRepoList(tt.repos)
+			if len(result) != tt.wantLen {
+				t.Fatalf("expected %d repos, got %d", tt.wantLen, len(result))
+			}
+			for i, repo := range result {
+				wantPkgs := tt.wantAllowPkgs[i]
+				if wantPkgs == nil && repo.AllowPackages != nil {
+					t.Errorf("repo %d: expected nil AllowPackages, got %v", i, repo.AllowPackages)
+				}
+				if wantPkgs != nil {
+					if len(repo.AllowPackages) != len(wantPkgs) {
+						t.Errorf("repo %d: expected %d AllowPackages, got %d", i, len(wantPkgs), len(repo.AllowPackages))
+						continue
+					}
+					for j, pkg := range wantPkgs {
+						if repo.AllowPackages[j] != pkg {
+							t.Errorf("repo %d AllowPackages[%d]: expected %q, got %q", i, j, pkg, repo.AllowPackages[j])
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestBuildUserRepoListFieldMapping verifies all PackageRepository fields are
+// correctly mapped to debutils.Repository.
+func TestBuildUserRepoListFieldMapping(t *testing.T) {
+	input := []config.PackageRepository{
+		{
+			URL:           "https://example.com/repo",
+			Codename:      "noble",
+			PKey:          "https://example.com/key.gpg",
+			Component:     "main contrib",
+			Priority:      500,
+			AllowPackages: []string{"foo", "bar"},
+		},
+	}
+	result := buildUserRepoList(input)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 repo, got %d", len(result))
+	}
+	r := result[0]
+	if r.Codename != "noble" {
+		t.Errorf("Codename: expected %q, got %q", "noble", r.Codename)
+	}
+	if r.URL != "https://example.com/repo" {
+		t.Errorf("URL: expected %q, got %q", "https://example.com/repo", r.URL)
+	}
+	if r.PKey != "https://example.com/key.gpg" {
+		t.Errorf("PKey: expected %q, got %q", "https://example.com/key.gpg", r.PKey)
+	}
+	if r.Component != "main contrib" {
+		t.Errorf("Component: expected %q, got %q", "main contrib", r.Component)
+	}
+	if r.Priority != 500 {
+		t.Errorf("Priority: expected %d, got %d", 500, r.Priority)
+	}
+	if len(r.AllowPackages) != 2 || r.AllowPackages[0] != "foo" || r.AllowPackages[1] != "bar" {
+		t.Errorf("AllowPackages: expected [foo bar], got %v", r.AllowPackages)
+	}
+	expectedID := "user-example.com/repo"
+	if r.ID != expectedID {
+		t.Errorf("ID: expected %q, got %q", expectedID, r.ID)
+	}
+}
+
+func TestBuildUserRepoListSkipsPathOnlyRepos(t *testing.T) {
+	input := []config.PackageRepository{
+		{
+			Codename: "localdeb",
+			Path:     "/data/image-composer-tool/localdeb",
+			PKey:     "[trusted=yes]",
+		},
+		{
+			URL:      "https://example.com/repo",
+			Codename: "noble",
+			PKey:     "https://example.com/key.gpg",
+		},
+	}
+
+	result := buildUserRepoList(input)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 URL-based repo, got %d", len(result))
+	}
+
+	if result[0].URL != "https://example.com/repo" {
+		t.Errorf("expected URL repo to be retained, got %q", result[0].URL)
+	}
+	if result[0].Codename != "noble" {
+		t.Errorf("expected codename %q, got %q", "noble", result[0].Codename)
 	}
 }

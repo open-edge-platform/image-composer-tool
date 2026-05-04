@@ -6,9 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/open-edge-platform/os-image-composer/internal/utils/display"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/display"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 )
 
 func captureLogs(t *testing.T, fn func()) string {
@@ -83,5 +84,81 @@ func TestPrintImageDirectorySummary_WithArtifacts(t *testing.T) {
 
 	if strings.Contains(logs, "ignored.raw") {
 		t.Fatalf("nested files should not be listed as artifacts: %s", logs)
+	}
+}
+
+func TestPrintImageBuildingTiming_NoVisibleRows(t *testing.T) {
+	logs := captureLogs(t, func() {
+		display.PrintImageBuildingTiming("raw", 0, 0, 0, 0, 0, 0, 0)
+	})
+
+	if !strings.Contains(logs, "Build Timings:") {
+		t.Fatalf("expected build timings header even when all durations are zero, got: %s", logs)
+	}
+
+	allStages := []string{
+		"Initialization and Configuration",
+		"Package Download",
+		"Chroot Package Download",
+		"Chroot Env Initialization",
+		"Image Build",
+		"Image Conversion",
+		"Finalization and Clean Up",
+	}
+	for _, stage := range allStages {
+		if !strings.Contains(logs, stage) {
+			t.Fatalf("expected stage %q to appear in table", stage)
+		}
+	}
+
+	if !strings.Contains(logs, "Total Time") {
+		t.Fatalf("expected total row in table, got: %s", logs)
+	}
+	if !strings.Contains(logs, "0s") {
+		t.Fatalf("expected zero-duration values in table, got: %s", logs)
+	}
+}
+
+func TestPrintImageBuildingTiming_TableIncludesVisibleRowsAndTotal(t *testing.T) {
+	logs := captureLogs(t, func() {
+		display.PrintImageBuildingTiming(
+			"iso",
+			1500*time.Millisecond,
+			0,
+			500*time.Millisecond,
+			250*time.Millisecond,
+			2*time.Second,
+			0,
+			750*time.Millisecond,
+		)
+	})
+
+	if !strings.Contains(logs, "Build Timings:") {
+		t.Fatalf("expected build timings header, got: %s", logs)
+	}
+	if !strings.Contains(logs, "Stage") || !strings.Contains(logs, "Duration") {
+		t.Fatalf("expected table headers, got: %s", logs)
+	}
+
+	allStages := []string{
+		"Initialization and Configuration",
+		"Package Download",
+		"Chroot Package Download",
+		"Chroot Env Initialization",
+		"Image Build",
+		"Image Conversion",
+		"Finalization and Clean Up",
+	}
+	for _, stage := range allStages {
+		if !strings.Contains(logs, stage) {
+			t.Fatalf("expected stage %q to appear in table", stage)
+		}
+	}
+
+	if !strings.Contains(logs, "Total Time") {
+		t.Fatalf("expected total row in table, got: %s", logs)
+	}
+	if !strings.Contains(logs, "5s") {
+		t.Fatalf("expected total duration 5s in table, got: %s", logs)
 	}
 }

@@ -1,0 +1,576 @@
+# AI-searchable metadata for template discovery
+metadata:
+  description: "Ubuntu 24.04 minimal PTL PV desktop image in raw format for Intel PTL development and validation"
+  use_cases:
+    - "PTL platform validation"
+    - "Intel GPU and NPU enablement"
+    - "desktop development"
+    - "raw image deployment"
+  keywords:
+    - ptl
+    - pv
+    - ubuntu
+    - raw
+    - desktop
+    - intel
+    - gpu
+    - npu
+
+image:
+  name: minimal-desktop-ubuntu-ptl-pv
+  version: "24.04"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+
+# Disk layout and output artifact definition
+disk:
+  # Human friendly name logged by builders
+  name: minimal-desktop-ubuntu-ptl-pv
+  artifacts:
+    # Request conversion to raw
+    - type: raw
+      compression: gz
+  size: 32GiB
+  # GPT partition table per installer spec
+  partitionTableType: gpt
+  partitions:
+    # EFI system partition for bootloaders
+    - id: EFI
+      name: EFI
+      type: esp
+      # GPT type GUID for EFI system partition
+      typeUUID: c12a7328-f81f-11d2-ba4b-00a0c93ec93b
+      fsType: vfat
+      # Builder expects explicit MiB offsets
+      start: 1MiB
+      end: 1025MiB
+      mountPoint: /boot/efi
+      mountOptions: defaults
+      flags:
+        - boot
+        - esp
+    # Root filesystem
+    - id: SWAP
+      name: SWAP
+      type: linux-swap
+      typeUUID: 0657fd6d-a4ab-43c4-84e5-0933c84b4f4f
+      fsType: linux-swap
+      start: 1025MiB
+      end: 3073MiB
+      mountPoint: none
+      mountOptions: sw
+      flags: []
+
+    - id: ROOT
+      name: ROOT
+      type: linux-root-amd64
+      # Standard Linux root filesystem GUID for x86_64
+      typeUUID: 4f68bce3-e8cd-4db1-96e7-fbcaf984b709
+      fsType: ext4
+      start: 3073MiB
+      end: "0"
+      mountPoint: /
+      mountOptions: defaults
+      flags: []
+
+# Additional package repositories for this image
+packageRepositories:
+  # Intel overlay repository (aligned with installer script)
+  - codename: "noble"
+    url: "https://download.01.org/intel-linux-overlay/ubuntu"
+    pkey: "https://download.01.org/intel-linux-overlay/ubuntu/E6FA98203588250569758E97D176E3162086EE4C.gpg"
+    component: "multimedia main non-free kernels"
+    priority: 2000
+    allowPackages:
+      - libigfxcmrt-dev
+      - libigfxcmrt7
+      - vim
+      - ocl-icd-libopencl1
+      - curl
+      - openssh-server
+      - net-tools
+      - gir1.2-gst-plugins-bad-1.0
+      - gir1.2-gst-plugins-base-1.0
+      - gir1.2-gstreamer-1.0
+      - gir1.2-gst-rtsp-server-1.0
+      - gstreamer1.0-alsa
+      - gstreamer1.0-gl
+      - gstreamer1.0-gtk3
+      - gstreamer1.0-opencv
+      - gstreamer1.0-plugins-bad
+      - gstreamer1.0-plugins-bad-apps
+      - gstreamer1.0-plugins-base
+      - gstreamer1.0-plugins-base-apps
+      - gstreamer1.0-plugins-good
+      - gstreamer1.0-plugins-ugly
+      - gstreamer1.0-pulseaudio
+      - gstreamer1.0-qt5
+      - gstreamer1.0-rtsp
+      - gstreamer1.0-tools
+      - gstreamer1.0-x
+      - intel-media-va-driver-non-free
+      - libdrm-amdgpu1
+      - libdrm-common
+      - libdrm-dev
+      - libdrm-intel1
+      - libdrm-nouveau2
+      - libdrm-radeon1
+      - libdrm-tests
+      - libdrm2
+      - libgstrtspserver-1.0-dev
+      - libgstrtspserver-1.0-0
+      - libgstreamer-gl1.0-0
+      - libgstreamer-opencv1.0-0
+      - libgstreamer-plugins-bad1.0-0
+      - libgstreamer-plugins-bad1.0-dev
+      - libgstreamer-plugins-base1.0-0
+      - libgstreamer-plugins-base1.0-dev
+      - libgstreamer-plugins-good1.0-0
+      - libgstreamer-plugins-good1.0-dev
+      - libgstreamer1.0-0
+      - libgstreamer1.0-dev
+      - libigdgmm-dev
+      - libigdgmm12
+      - libmfx-gen1.2
+      - libtpms-dev
+      - libtpms0
+      - libva-dev
+      - libva-drm2
+      - libva-glx2
+      - libva-wayland2
+      - libva-x11-2
+      - libva2
+      - libwayland-bin
+      - libwayland-client0
+      - libwayland-cursor0
+      - libwayland-dev
+      - libwayland-doc
+      - libwayland-egl-backend-dev
+      - libwayland-egl1
+      - libwayland-server0
+      - libxatracker2
+      - linux-firmware
+      - mesa-utils
+      - mesa-va-drivers
+      - mesa-vdpau-drivers
+      - mesa-vulkan-drivers
+      - libvpl-dev
+      - libvpl-tools
+      - libmfx-gen-dev
+      - onevpl-tools
+      - ovmf
+      - ovmf-ia32
+      - qemu-block-extra
+      - qemu-guest-agent
+      - qemu-system
+      - qemu-system-arm
+      - qemu-system-common
+      - qemu-system-data
+      - qemu-system-gui
+      - qemu-system-mips
+      - qemu-system-misc
+      - qemu-system-ppc
+      - qemu-system-s390x
+      - qemu-system-sparc
+      - qemu-system-x86
+      - qemu-user
+      - qemu-user-binfmt
+      - qemu-utils
+      - va-driver-all
+      - vainfo
+      - weston
+      - xserver-xorg-core
+      - libvirt0
+      - libvirt-clients
+      - libvirt-daemon
+      - libvirt-daemon-config-network
+      - libvirt-daemon-config-nwfilter
+      - libvirt-daemon-driver-lxc
+      - libvirt-daemon-driver-qemu
+      - libvirt-daemon-driver-storage-gluster
+      - libvirt-daemon-driver-storage-iscsi-direct
+      - libvirt-daemon-driver-storage-rbd
+      - libvirt-daemon-driver-storage-zfs
+      - libvirt-daemon-driver-vbox
+      - libvirt-daemon-driver-xen
+      - libvirt-daemon-system
+      - libvirt-daemon-system-systemd
+      - libvirt-dev
+      - libvirt-doc
+      - libvirt-login-shell
+      - libvirt-sanlock
+      - libvirt-wireshark
+      - libnss-libvirt
+      - swtpm
+      - swtpm-tools
+      - bmap-tools
+      - adb
+      - autoconf
+      - automake
+      - libtool
+      - cmake
+      - g++
+      - gcc
+      - git
+      - intel-gpu-tools
+      - libssl3t64
+      - libssl-dev
+      - make
+      - mosquitto
+      - mosquitto-clients
+      - build-essential
+      - apt-transport-https
+      - default-jre
+      - docker-compose
+      - ffmpeg
+      - git-lfs
+      - gnuplot
+      - lbzip2
+      - libglew-dev
+      - libglm-dev
+      - libsdl2-dev
+      - mc
+      - openssl
+      - pciutils
+      - python3-pandas
+      - python3-pip
+      - python3-seaborn
+      - terminator
+      - wmctrl
+      - wayland-protocols
+      - gdbserver
+      - iperf3
+      - msr-tools
+      - powertop
+      - linuxptp
+      - lsscsi
+      - tpm2-tools
+      - tpm2-abrmd
+      - binutils
+      - cifs-utils
+      - i2c-tools
+      - xdotool
+      - gnupg
+      - lsb-release
+      - qemu-system-modules-opengl
+      - socat
+      - virt-viewer
+      - spice-client-gtk
+      - util-linux-extra
+      - dbus-x11
+      - sg3-utils
+      - rpm
+      - linux-image-6.17-intel
+      - linux-headers-6.17-intel
+      # overlay dependencies
+      - libvpl2
+      - mesa-libgallium
+      - libgbm1
+      - libgbm-dev
+      - libgl1-mesa-dri
+      - libegl-mesa0
+      - libglx-mesa0
+      - libspice-client-glib-2.0-8
+      - libspice-client-gtk-3.0-5
+      - spice-client-glib-usb-acl-helper
+      - libavcodec62
+      - libavformat62
+      - libavutil60
+      - libavdevice62
+      - libavfilter11
+      - libswresample6
+      - libswscale9
+      - libweston-10-0
+      - xnest
+      - xvfb
+
+
+systemConfig:
+  name: minimal
+  description: Minimal desktop ubuntu image for PTL
+
+  bootloader:
+    bootType: efi
+    provider: grub
+
+  immutability:
+    enabled: false # default is true
+
+  packages:
+    - bluez
+    - bsdutils
+    - cloud-utils
+    - debianutils
+    - diffutils
+    - findutils
+    - grep
+    - grub-efi-amd64-signed
+    - gzip
+    - ibus-table-cangjie-big
+    - ibus-table-cangjie3
+    - ibus-table-cangjie5
+    - init
+    - language-pack-en
+    - language-pack-en-base
+    - language-pack-gnome-en
+    - language-pack-gnome-en-base
+    - libattr1
+    - libchewing3
+    - libchewing3-data
+    - libm17n-0
+    - libmarisa0
+    - libopencc-data
+    - libopencc1.1
+    - libotf1
+    - libpinyin-data
+    - libpinyin15
+    - linux-base
+    - m17n-db
+    - mawk
+    - ncurses-base
+    - ncurses-bin
+    - python3-netifaces
+    - shim-signed
+    - ubuntu-desktop-minimal
+    - ubuntu-minimal
+    - ubuntu-standard
+    - ubuntu-wallpapers
+    - wbritish
+    - gdm3
+    - systemd
+    - openssh-server
+    - systemd-resolved
+    - util-linux
+    - udev
+    - initramfs-tools
+    - grub2-common
+    - grub-pc-bin
+    - grub-efi-amd64
+    - grub-efi-amd64-bin
+    - efibootmgr
+    # PTL network stack
+    - libbpf1
+    - curl
+    - wget
+    - cron
+    - ethtool
+    - iproute2
+    - libtbb12
+    # PTL packages
+    - libigfxcmrt-dev
+    - libigfxcmrt7
+    - vim
+    - nano
+    - ocl-icd-libopencl1
+    - net-tools
+    - gir1.2-gst-plugins-bad-1.0
+    - gir1.2-gst-plugins-base-1.0
+    - gir1.2-gstreamer-1.0
+    - gir1.2-gst-rtsp-server-1.0
+    - gstreamer1.0-alsa
+    - gstreamer1.0-gl
+    - gstreamer1.0-gtk3
+    - gstreamer1.0-opencv
+    - gstreamer1.0-plugins-bad
+    - gstreamer1.0-plugins-bad-apps
+    - gstreamer1.0-plugins-base
+    - gstreamer1.0-plugins-base-apps
+    - gstreamer1.0-plugins-good
+    - gstreamer1.0-plugins-ugly
+    - gstreamer1.0-pulseaudio
+    - gstreamer1.0-qt5
+    - gstreamer1.0-rtsp
+    - gstreamer1.0-tools
+    - gstreamer1.0-x
+    - intel-media-va-driver-non-free
+    - libdrm-amdgpu1
+    - libdrm-common
+    - libdrm-dev
+    - libdrm-intel1
+    - libdrm-nouveau2
+    - libdrm-radeon1
+    - libdrm-tests
+    - libdrm2
+    - libgstrtspserver-1.0-dev
+    - libgstrtspserver-1.0-0
+    - libgstreamer-gl1.0-0
+    - libgstreamer-opencv1.0-0
+    - libgstreamer-plugins-bad1.0-0
+    - libgstreamer-plugins-bad1.0-dev
+    - libgstreamer-plugins-base1.0-0
+    - libgstreamer-plugins-base1.0-dev
+    - libgstreamer-plugins-good1.0-0
+    - libgstreamer-plugins-good1.0-dev
+    - libgstreamer1.0-0
+    - libgstreamer1.0-dev
+    - libigdgmm-dev
+    - libigdgmm12
+    - libmfx-gen1.2
+    - libtpms-dev
+    - libtpms0
+    - libva-dev
+    - libva-drm2
+    - libva-glx2
+    - libva-wayland2
+    - libva-x11-2
+    - libva2
+    - libwayland-bin
+    - libwayland-client0
+    - libwayland-cursor0
+    - libwayland-dev
+    - libwayland-doc
+    - libwayland-egl-backend-dev
+    - libwayland-egl1
+    - libwayland-server0
+    - libxatracker2
+    - linux-firmware
+    - mesa-utils
+    - mesa-va-drivers
+    - mesa-vdpau-drivers
+    - mesa-vulkan-drivers
+    - libvpl-dev
+    - libvpl-tools
+    - libmfx-gen-dev
+    - onevpl-tools
+    - ovmf
+    - ovmf-ia32
+    - qemu-block-extra
+    - qemu-guest-agent
+    - qemu-system
+    - qemu-system-arm
+    - qemu-system-common
+    - qemu-system-data
+    - qemu-system-gui
+    - qemu-system-mips
+    - qemu-system-misc
+    - qemu-system-ppc
+    - qemu-system-s390x
+    - qemu-system-sparc
+    - qemu-system-x86
+    - qemu-user
+    - qemu-user-binfmt
+    - qemu-utils
+    - va-driver-all
+    - vainfo
+    - weston
+    - xserver-xorg-core
+    - libvirt0
+    - libvirt-clients
+    - libvirt-daemon
+    - libvirt-daemon-config-network
+    - libvirt-daemon-config-nwfilter
+    - libvirt-daemon-driver-lxc
+    - libvirt-daemon-driver-qemu
+    - libvirt-daemon-driver-storage-gluster
+    - libvirt-daemon-driver-storage-iscsi-direct
+    - libvirt-daemon-driver-storage-rbd
+    - libvirt-daemon-driver-storage-zfs
+    - libvirt-daemon-driver-vbox
+    - libvirt-daemon-driver-xen
+    - libvirt-daemon-system
+    - libvirt-daemon-system-systemd
+    - libvirt-dev
+    - libvirt-doc
+    - libvirt-login-shell
+    - libvirt-sanlock
+    - libvirt-wireshark
+    - libnss-libvirt
+    - swtpm
+    - swtpm-tools
+    - bmap-tools
+    - adb
+    - autoconf
+    - automake
+    - libtool
+    - cmake
+    - g++
+    - gcc
+    - git
+    - intel-gpu-tools
+    - libssl3
+    - libssl-dev
+    - make
+    - mosquitto
+    - mosquitto-clients
+    - build-essential
+    - apt-transport-https
+    - default-jre
+    - docker-compose
+    - ffmpeg
+    - git-lfs
+    - gnuplot
+    - lbzip2
+    - libglew-dev
+    - libglm-dev
+    - libsdl2-dev
+    - mc
+    - openssl
+    - pciutils
+    - python3-pandas
+    - python3-pip
+    - python3-seaborn
+    - terminator
+    - wmctrl
+    - wayland-protocols
+    - gdbserver
+    - iperf3
+    - msr-tools
+    - powertop
+    - linuxptp
+    - lsscsi
+    - tpm2-tools
+    - tpm2-abrmd
+    - binutils
+    - cifs-utils
+    - i2c-tools
+    - xdotool
+    - gnupg
+    - lsb-release
+    - qemu-system-modules-opengl
+    - socat
+    - virt-viewer
+    - rpm
+    # additional packages
+    - tcpdump
+    - usb-modeswitch
+    - fwupd
+    - clinfo
+    - xvfb
+    - xnest
+
+
+  additionalFiles:
+    - local: ../additionalfiles/ptl/01-network-manager-all.yaml
+      final: /etc/netplan/01-network-manager-all.yaml
+    - local: ../additionalfiles/ptl/50-cloud-init.yaml
+      final: /etc/netplan/50-cloud-init.yaml
+
+  kernel:
+    version: "6.17"
+    cmdline: "xe.max_vfs=7 xe.force_probe=* modprobe.blacklist=i915 udmabuf.list_limit=8192 console=tty0 console=ttyS0,115200n8"
+    enableExtraModules: "intel_vpu uas"
+    packages:
+        - linux-image-6.17-intel_260128t080735z-r2
+        - linux-headers-6.17-intel_260128t080735z-r2
+
+  configurations:
+    # Install Intel Graphics Compiler and compute runtime packages for PTL
+    - cmd: "mkdir -p /tmp/gpu-packages"
+    - cmd: "wget https://github.com/intel/intel-graphics-compiler/releases/download/v2.20.3/intel-igc-core-2_2.20.3+19972_amd64.deb -O /tmp/gpu-packages/intel-igc-core-2_2.20.3+19972_amd64.deb --no-check-certificate 2>&1 || echo 'Warning: intel-igc-core-2 download failed'"
+    - cmd: "wget https://github.com/intel/intel-graphics-compiler/releases/download/v2.20.3/intel-igc-opencl-2_2.20.3+19972_amd64.deb -O /tmp/gpu-packages/intel-igc-opencl-2_2.20.3+19972_amd64.deb --no-check-certificate 2>&1 || echo 'Warning: intel-igc-opencl-2 download failed'"
+    - cmd: "wget https://github.com/intel/compute-runtime/releases/download/25.40.35563.4/intel-ocloc_25.40.35563.4-0_amd64.deb -O /tmp/gpu-packages/intel-ocloc_25.40.35563.4-0_amd64.deb --no-check-certificate 2>&1 || echo 'Warning: intel-ocloc download failed'"
+    - cmd: "wget https://github.com/intel/compute-runtime/releases/download/25.40.35563.4/intel-opencl-icd_25.40.35563.4-0_amd64.deb -O /tmp/gpu-packages/intel-opencl-icd_25.40.35563.4-0_amd64.deb --no-check-certificate 2>&1 || echo 'Warning: intel-opencl-icd download failed'"
+    - cmd: "wget https://github.com/intel/compute-runtime/releases/download/25.40.35563.4/libze-intel-gpu1_25.40.35563.4-0_amd64.deb -O /tmp/gpu-packages/libze-intel-gpu1_25.40.35563.4-0_amd64.deb --no-check-certificate 2>&1 || echo 'Warning: libze-intel-gpu1 download failed'"
+    - cmd: "wget https://github.com/oneapi-src/level-zero/releases/download/v1.22.4/level-zero_1.22.4+u24.04_amd64.deb -O /tmp/gpu-packages/level-zero_1.22.4+u24.04_amd64.deb --no-check-certificate 2>&1 || echo 'Warning: level-zero download failed'"
+    - cmd: "wget https://github.com/oneapi-src/level-zero/releases/download/v1.22.4/level-zero-devel_1.22.4+u24.04_amd64.deb -O /tmp/gpu-packages/level-zero-devel_1.22.4+u24.04_amd64.deb --no-check-certificate 2>&1 || echo 'Warning: level-zero-devel download failed'"
+    - cmd: "find /tmp/gpu-packages -maxdepth 1 -type f -name '*.deb' | xargs -r dpkg -i 2>&1 || echo 'GPU packages: some installs had issues, attempting apt-get --fix-broken-install'; apt-get install -y --fix-broken-install 2>&1 || true"
+    # Install NPU driver for PTL
+    - cmd: "dpkg --purge --force-remove-reinstreq intel-driver-compiler-npu intel-fw-npu intel-level-zero-npu intel-level-zero-npu-dbgsym 2>/dev/null || true"
+    - cmd: "mkdir -p /tmp/npu-driver"
+    - cmd: "cd /tmp/npu-driver && wget https://github.com/intel/linux-npu-driver/releases/download/v1.28.0/linux-npu-driver-v1.28.0.20251218-20347000698-ubuntu2404.tar.gz -O /tmp/npu-driver/linux-npu-driver-v1.28.0.20251218-20347000698-ubuntu2404.tar.gz --no-check-certificate"
+    - cmd: "cd /tmp/npu-driver && tar -xf linux-npu-driver-v1.28.0.20251218-20347000698-ubuntu2404.tar.gz"
+    - cmd: "find /tmp/npu-driver -name '*.deb' -print0 | xargs -0 dpkg -i"

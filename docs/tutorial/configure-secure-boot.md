@@ -1,13 +1,13 @@
 # Configure Secure Boot
 
 This guide walks you through setting up Secure Boot for your operating system
-images using the OS Image Composer tool. Follow each step carefully.
+images using the ICT tool. Follow each step carefully.
 
 ## Prerequisites
 
 - Linux environment with OpenSSL installed
 - QEMU with OVMF UEFI firmware
-- OS Image Composer tool configured
+- ICT tool configured
 
 ## Step 1: Generate Secure Boot Keys
 
@@ -38,7 +38,7 @@ recommendation is to test the support for `RSA3072SHA384` before moving to
 
 ## Step 2: Configure Your Template
 
-Edit your OS Image Composer template YAML file to include the Secure Boot
+Edit your ICT template YAML file to include the Secure Boot
 configuration:
 
 ```yaml
@@ -61,7 +61,7 @@ Run ICT to build your image as usual.
 After a successful build, check the output directory, for example:
 
 ```bash
-ls ./tmp/os-image-composer/wind-river-elxr-elxr12-x86_64/imagebuild/Default_Raw/ -la
+ls /tmp/image-composer-tool/wind-river-elxr-elxr12-x86_64/imagebuild/Default_Raw/ -la
 ```
 
 **Expected output:**

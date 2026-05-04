@@ -1,0 +1,10 @@
+repositories:
+  - name: "resolute"
+    type: "deb"  # Repository type: rpm or deb
+    baseURL: "http://archive.ubuntu.com/ubuntu"
+    pkgPrefix: "http://archive.ubuntu.com/ubuntu"
+    releaseFile: "http://archive.ubuntu.com/ubuntu/dists/resolute/Release"
+    releaseSign: "http://archive.ubuntu.com/ubuntu/dists/resolute/Release.gpg"
+    pbGPGKey: "/usr/share/keyrings/ubuntu-archive-keyring.gpg"
+    gpgCheck: true
+    repoGPGCheck: true

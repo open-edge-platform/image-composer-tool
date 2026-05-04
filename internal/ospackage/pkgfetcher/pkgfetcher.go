@@ -7,12 +7,13 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/network"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/network"
 	"github.com/schollz/progressbar/v3"
 )
 
@@ -175,7 +176,10 @@ func FetchPackages(urls []string, destDir string, workers int) error {
 					log.Warnf("re-downloading zero-size %s", name)
 				}
 				client := network.GetSecureHTTPClient()
-				err := downloadWithRetry(client, url, destPath, i)
+				// S3/CloudFront treats literal '+' as space; encode it as %2B in the
+				// download URL only (the local filename keeps the original '+').
+				downloadURL := strings.ReplaceAll(url, "+", "%2B")
+				err := downloadWithRetry(client, downloadURL, destPath, i)
 
 				if err != nil {
 					log.Errorf("downloading %s failed: %v", url, err)
