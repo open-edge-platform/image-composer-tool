@@ -34,8 +34,10 @@ type ArtifactInfo struct {
 }
 
 type DiskSelectionPolicy struct {
-	Strategy         string `yaml:"strategy,omitempty"`
-	ExcludeRemovable *bool  `yaml:"excludeRemovable,omitempty"`
+	Strategy string `yaml:"strategy,omitempty"`
+	// ExcludeRemovable is intentionally conservative for unattended installs and
+	// excludes disks that appear externally attached, not only devices with RM=1.
+	ExcludeRemovable *bool `yaml:"excludeRemovable,omitempty"`
 }
 
 type DiskConfig struct {

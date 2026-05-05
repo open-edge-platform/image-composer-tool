@@ -2,6 +2,7 @@ package imagedisc
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1168,7 +1169,13 @@ func TestGetAlignedSectorOffset(t *testing.T) {
 
 func TestSystemBlockDevices(t *testing.T) {
 	originalExecutor := shell.Default
+	originalReadFile := readFile
+	originalEvalSymlinks := evalSymlinks
 	defer func() { shell.Default = originalExecutor }()
+	defer func() {
+		readFile = originalReadFile
+		evalSymlinks = originalEvalSymlinks
+	}()
 
 	tests := []struct {
 		name         string
@@ -1213,6 +1220,8 @@ func TestSystemBlockDevices(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			shell.Default = shell.NewMockExecutor(tt.mockCommands)
+			readFile = os.ReadFile
+			evalSymlinks = filepath.EvalSymlinks
 
 			result, err := SystemBlockDevices()
 
@@ -1238,7 +1247,13 @@ func boolPtr(v bool) *bool {
 
 func TestResolveInstallDiskPath(t *testing.T) {
 	originalExecutor := shell.Default
+	originalReadFile := readFile
+	originalEvalSymlinks := evalSymlinks
 	defer func() { shell.Default = originalExecutor }()
+	defer func() {
+		readFile = originalReadFile
+		evalSymlinks = originalEvalSymlinks
+	}()
 
 	tests := []struct {
 		name        string
@@ -1299,7 +1314,15 @@ func TestResolveInstallDiskPath(t *testing.T) {
 			expectPath:  "/dev/sda",
 		},
 		{
-			name: "include_removable_when_enabled",
+			name: "exclude_external_hotplug_default",
+			diskConfig: config.DiskConfig{
+				SelectionPolicy: config.DiskSelectionPolicy{Strategy: "first"},
+			},
+			lsblkOutput: `{"blockdevices":[{"name":"sdb","size":68719476736,"model":"USB Bridge","serial":"U","tran":"sata","type":"disk","hotplug":1,"rm":0,"rota":0},{"name":"sda","size":21474836480,"model":"Local","serial":"L","tran":"sata","type":"disk","hotplug":0,"rm":0,"rota":1}]}`,
+			expectPath:  "/dev/sda",
+		},
+		{
+			name: "include_external_when_enabled",
 			diskConfig: config.DiskConfig{
 				SelectionPolicy: config.DiskSelectionPolicy{Strategy: "first", ExcludeRemovable: boolPtr(false)},
 			},
@@ -1318,6 +1341,15 @@ func TestResolveInstallDiskPath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			readFile = func(path string) ([]byte, error) {
+				if path == "/proc/mounts" {
+					return nil, os.ErrNotExist
+				}
+				return nil, os.ErrNotExist
+			}
+			evalSymlinks = func(path string) (string, error) {
+				return "", os.ErrNotExist
+			}
 			if tt.diskConfig.Path == "" {
 				mockCommands := []shell.MockCommand{{Pattern: "lsblk", Output: tt.lsblkOutput, Error: nil}}
 				if tt.diskConfig.SelectionPolicy.Strategy == "largest-free" {
@@ -1355,6 +1387,93 @@ func TestResolveInstallDiskPath(t *testing.T) {
 
 			if path != tt.expectPath {
 				t.Fatalf("expected %s, got %s", tt.expectPath, path)
+			}
+		})
+	}
+}
+
+func TestIsExternallyAttachedInstallDisk(t *testing.T) {
+	originalReadFile := readFile
+	originalEvalSymlinks := evalSymlinks
+	defer func() {
+		readFile = originalReadFile
+		evalSymlinks = originalEvalSymlinks
+	}()
+
+	tests := []struct {
+		name          string
+		device        blockDeviceInfo
+		devicePath    string
+		isRemovable   bool
+		isHotplug     bool
+		udevData      map[string]string
+		sysfsResolved map[string]string
+		expect        bool
+	}{
+		{
+			name:        "rm_flag_marks_external",
+			device:      blockDeviceInfo{Name: "sdb", MajMin: "8:16", Tran: "sata"},
+			devicePath:  "/dev/sdb",
+			isRemovable: true,
+			expect:      true,
+		},
+		{
+			name:       "usb_transport_marks_external",
+			device:     blockDeviceInfo{Name: "sdb", MajMin: "8:16", Tran: "usb"},
+			devicePath: "/dev/sdb",
+			expect:     true,
+		},
+		{
+			name:       "hotplug_marks_external",
+			device:     blockDeviceInfo{Name: "sdb", MajMin: "8:16", Tran: "sata"},
+			devicePath: "/dev/sdb",
+			isHotplug:  true,
+			expect:     true,
+		},
+		{
+			name:       "udev_usb_bus_marks_external",
+			device:     blockDeviceInfo{Name: "sdb", MajMin: "8:16", Tran: "sata"},
+			devicePath: "/dev/sdb",
+			udevData: map[string]string{
+				"/run/udev/data/b8:16": "E:ID_BUS=usb\n",
+			},
+			expect: true,
+		},
+		{
+			name:       "usb_sysfs_ancestry_marks_external",
+			device:     blockDeviceInfo{Name: "sdb", MajMin: "8:16", Tran: "sata"},
+			devicePath: "/dev/sdb",
+			sysfsResolved: map[string]string{
+				"/sys/class/block/sdb": "/sys/devices/pci0000:00/0000:00:14.0/usb2/2-1/2-1:1.0/host6/target6:0:0/6:0:0:0/block/sdb",
+			},
+			expect: true,
+		},
+		{
+			name:       "internal_sata_disk_is_not_external",
+			device:     blockDeviceInfo{Name: "sda", MajMin: "8:0", Tran: "sata"},
+			devicePath: "/dev/sda",
+			expect:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			readFile = func(path string) ([]byte, error) {
+				if content, ok := tt.udevData[path]; ok {
+					return []byte(content), nil
+				}
+				return nil, os.ErrNotExist
+			}
+			evalSymlinks = func(path string) (string, error) {
+				if resolved, ok := tt.sysfsResolved[path]; ok {
+					return resolved, nil
+				}
+				return "", os.ErrNotExist
+			}
+
+			got := isExternallyAttachedInstallDisk(tt.device, tt.devicePath, tt.isRemovable, tt.isHotplug)
+			if got != tt.expect {
+				t.Fatalf("isExternallyAttachedInstallDisk() = %v, want %v", got, tt.expect)
 			}
 		})
 	}

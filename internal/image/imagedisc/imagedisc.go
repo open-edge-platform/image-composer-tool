@@ -23,16 +23,17 @@ type blockDevicesOutput struct {
 }
 
 type blockDeviceInfo struct {
-	Name   string      `json:"name"`    // Example: sda
-	MajMin string      `json:"maj:min"` // Example: 1:2
-	Size   json.Number `json:"size"`    // Number of bytes. Can be a quoted string or a JSON number, depending on the util-linux version
-	Model  string      `json:"model"`   // Example: 'Virtual Disk'
-	Serial string      `json:"serial"`
-	Tran   string      `json:"tran"`
-	Type   string      `json:"type"`
-	PkName string      `json:"pkname"`
-	RM     interface{} `json:"rm"`
-	Rota   interface{} `json:"rota"`
+	Name    string      `json:"name"`    // Example: sda
+	MajMin  string      `json:"maj:min"` // Example: 1:2
+	Size    json.Number `json:"size"`    // Number of bytes. Can be a quoted string or a JSON number, depending on the util-linux version
+	Model   string      `json:"model"`   // Example: 'Virtual Disk'
+	Serial  string      `json:"serial"`
+	Tran    string      `json:"tran"`
+	Type    string      `json:"type"`
+	PkName  string      `json:"pkname"`
+	Hotplug interface{} `json:"hotplug"`
+	RM      interface{} `json:"rm"`
+	Rota    interface{} `json:"rota"`
 }
 
 type SystemBlockDevice struct {
@@ -42,6 +43,7 @@ type SystemBlockDevice struct {
 	Serial       string
 	Transport    string
 	IsRemovable  bool
+	IsExternal   bool
 	IsRotational bool
 }
 
@@ -88,6 +90,8 @@ const (
 )
 
 var log = logger.Logger()
+var readFile = os.ReadFile
+var evalSymlinks = filepath.EvalSymlinks
 var sizeSuffixesList = []string{"KiB", "MiB", "GiB", "K", "M", "G", "KB", "MB", "GB"}
 var sizeBytesMap = []int{1024, 1048576, 1073741824, 1024, 1048576, 1073741824, 1000, 1000000, 1000000000}
 var partitionTypeNameToGUID = map[string]string{
@@ -919,7 +923,7 @@ func SystemBlockDevices() (systemDevices []SystemBlockDevice, err error) {
 	)
 
 	blockDeviceMajorNumbers := []string{scsiDiskMajorNumber, mmcBlockMajorNumber, virtualDiskMajorNumber, blockExtendedMajorNumber}
-	cmd := fmt.Sprintf("lsblk -d --bytes -I %s -n --json --output NAME,SIZE,MODEL,SERIAL,TRAN,TYPE,PKNAME,RM,ROTA",
+	cmd := fmt.Sprintf("lsblk -d --bytes -I %s -n --json --output NAME,SIZE,MODEL,SERIAL,TRAN,TYPE,PKNAME,HOTPLUG,RM,ROTA",
 		strings.Join(blockDeviceMajorNumbers, ","))
 	rawDiskOutput, err := shell.ExecCmd(cmd, true, shell.HostPath, nil)
 	if err != nil {
@@ -969,11 +973,17 @@ func SystemBlockDevices() (systemDevices []SystemBlockDevice, err error) {
 			return nil, fmt.Errorf("failed to parse rotational flag for %s: %w", devicePath, err)
 		}
 
-		isISOInstaller := isReadOnlyISO(devicePath)
+		isHotplug, err := parseLsblkBool(device.Hotplug)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse hotplug flag for %s: %w", devicePath, err)
+		}
 
-		log.Debugf("Device: %s, Size: %d, Model: %s, Transport: %s, Removable: %v, Rotational: %v, isISOInstaller: %v",
+		isISOInstaller := isReadOnlyISO(devicePath)
+		isExternal := isExternallyAttachedInstallDisk(device, devicePath, isRemovable, isHotplug)
+
+		log.Debugf("Device: %s, Size: %d, Model: %s, Transport: %s, Removable: %v, Hotplug: %v, External: %v, Rotational: %v, isISOInstaller: %v",
 			devicePath, rawSize, strings.TrimSpace(device.Model), strings.TrimSpace(device.Tran), isRemovable,
-			isRotational, isISOInstaller)
+			isHotplug, isExternal, isRotational, isISOInstaller)
 
 		if !isISOInstaller {
 			systemDevices = append(systemDevices, SystemBlockDevice{
@@ -983,6 +993,7 @@ func SystemBlockDevices() (systemDevices []SystemBlockDevice, err error) {
 				Serial:       strings.TrimSpace(device.Serial),
 				Transport:    strings.TrimSpace(device.Tran),
 				IsRemovable:  isRemovable,
+				IsExternal:   isExternal,
 				IsRotational: isRotational,
 			})
 		} else {
@@ -1004,6 +1015,9 @@ func ResolveInstallDiskPath(diskConfig config.DiskConfig) (string, error) {
 		return "", err
 	}
 
+	// For backward compatibility, excludeRemovable now means exclude disks that
+	// appear externally attached according to multiple signals, not only the
+	// kernel's RM bit.
 	excludeRemovable := true
 	if diskConfig.SelectionPolicy.ExcludeRemovable != nil {
 		excludeRemovable = *diskConfig.SelectionPolicy.ExcludeRemovable
@@ -1011,7 +1025,7 @@ func ResolveInstallDiskPath(diskConfig config.DiskConfig) (string, error) {
 
 	eligible := make([]SystemBlockDevice, 0, len(devices))
 	for _, dev := range devices {
-		if excludeRemovable && dev.IsRemovable {
+		if excludeRemovable && dev.IsExternal {
 			continue
 		}
 		eligible = append(eligible, dev)
@@ -1282,9 +1296,75 @@ func parseLsblkBool(value interface{}) (bool, error) {
 	}
 }
 
+// isExternallyAttachedInstallDisk applies a conservative heuristic for
+// unattended installs. Some high-speed USB storage can present as non-removable
+// SATA/ATA devices, so excludeRemovable intentionally covers broader external
+// attachment signals than the RM bit alone.
+func isExternallyAttachedInstallDisk(device blockDeviceInfo, devicePath string, isRemovable, isHotplug bool) bool {
+	if isRemovable {
+		return true
+	}
+
+	if strings.EqualFold(strings.TrimSpace(device.Tran), "usb") {
+		return true
+	}
+
+	if isHotplug {
+		return true
+	}
+
+	if udevReportsUSBBus(device.MajMin) {
+		return true
+	}
+
+	return sysfsAncestryIncludesUSB(devicePath)
+}
+
+func udevReportsUSBBus(majMin string) bool {
+	majMin = strings.TrimSpace(majMin)
+	if majMin == "" {
+		return false
+	}
+
+	data, err := readFile(filepath.Join("/run/udev/data", "b"+majMin))
+	if err != nil {
+		return false
+	}
+
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "E:ID_BUS=usb" || trimmed == "ID_BUS=usb" {
+			return true
+		}
+	}
+
+	return false
+}
+
+func sysfsAncestryIncludesUSB(devicePath string) bool {
+	deviceName := filepath.Base(strings.TrimSpace(devicePath))
+	if deviceName == "" || deviceName == "." || deviceName == string(filepath.Separator) {
+		return false
+	}
+
+	resolvedPath, err := evalSymlinks(filepath.Join("/sys/class/block", deviceName))
+	if err != nil {
+		return false
+	}
+
+	for _, segment := range strings.Split(filepath.Clean(resolvedPath), string(filepath.Separator)) {
+		segment = strings.ToLower(strings.TrimSpace(segment))
+		if strings.HasPrefix(segment, "usb") {
+			return true
+		}
+	}
+
+	return false
+}
+
 // isReadOnlyISO checks if a device is mounted read-only (ISO on USB/CD).
 func isReadOnlyISO(devicePath string) bool {
-	mounts, err := os.ReadFile("/proc/mounts")
+	mounts, err := readFile("/proc/mounts")
 	if err != nil {
 		log.Debugf("Failed to read /proc/mounts: %v", err)
 		return false

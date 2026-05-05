@@ -94,7 +94,7 @@
             },
             "excludeRemovable": {
               "type": "boolean",
-              "description": "Exclude removable disks from selection",
+              "description": "Exclude removable or externally attached disks from selection using RM, transport, hotplug, udev, and sysfs heuristics",
               "default": true
             }
           },
