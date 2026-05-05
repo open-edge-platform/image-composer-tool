@@ -12,6 +12,11 @@ import (
 )
 
 func setupConfigDir(t *testing.T) string {
+	originalGlobal := config.Global()
+	t.Cleanup(func() {
+		config.SetGlobal(originalGlobal)
+	})
+
 	configDir := t.TempDir()
 	generalDir := filepath.Join(configDir, "general")
 
@@ -1563,6 +1568,11 @@ func TestInstallImageBoot_GrubWithEnableExtraModulesUbuntu(t *testing.T) {
 }
 
 func TestUpdateBootConfigTemplate_GrubCmdlineRootAndExtraArgs(t *testing.T) {
+	originalGlobal := config.Global()
+	t.Cleanup(func() {
+		config.SetGlobal(originalGlobal)
+	})
+
 	configDir := t.TempDir()
 	generalDir := filepath.Join(configDir, "general")
 
