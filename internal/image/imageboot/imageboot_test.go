@@ -1572,6 +1572,11 @@ func TestUpdateBootConfigTemplate_GrubCmdlineRootAndExtraArgs(t *testing.T) {
 	t.Cleanup(func() {
 		config.SetGlobal(originalGlobal)
 	})
+	originalExecutor := shell.Default
+	shell.Default = &shell.DefaultExecutor{}
+	t.Cleanup(func() {
+		shell.Default = originalExecutor
+	})
 
 	configDir := t.TempDir()
 	generalDir := filepath.Join(configDir, "general")
@@ -1630,12 +1635,19 @@ func TestUpdateBootConfigTemplate_GrubCmdlineRootAndExtraArgs(t *testing.T) {
 		t.Fatalf("failed to read generated grub config: %v", err)
 	}
 	content := string(contentBytes)
+	lines := strings.Split(content, "\n")
+	lineMap := make(map[string]string)
+	for _, line := range lines {
+		if key, value, ok := strings.Cut(line, "="); ok {
+			lineMap[key] = value
+		}
+	}
 
-	if !strings.Contains(content, "GRUB_CMDLINE_LINUX=\"root=/dev/mapper/rootfs_verity rd.auto=1\"") {
+	if lineMap["GRUB_CMDLINE_LINUX"] != "\"root=/dev/mapper/rootfs_verity rd.auto=1\"" {
 		t.Fatalf("expected root override from kernel cmdline, got: %s", content)
 	}
 
-	if !strings.Contains(content, "GRUB_CMDLINE_LINUX_DEFAULT=\"console=ttyS0,115200 console=tty0 quiet\"") {
+	if lineMap["GRUB_CMDLINE_LINUX_DEFAULT"] != "\"console=ttyS0,115200 console=tty0 quiet\"" {
 		t.Fatalf("expected root arg removed from extra cmdline, got: %s", content)
 	}
 
