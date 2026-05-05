@@ -22,10 +22,10 @@ func TestLoopSetupCreate(t *testing.T) {
 	defer func() { shell.Default = originalExecutor }()
 
 	tests := []struct {
-		name         string
-		output       string
-		cmdErr       error
-		expectError  bool
+		name          string
+		output        string
+		cmdErr        error
+		expectError   bool
 		errorContains string
 	}{
 		{name: "success", output: "/dev/loop7\n"},
