@@ -343,8 +343,14 @@ func TestGetFullCmdStr_Sudo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetFullCmdStr failed with sudo: %v", err)
 	}
+	if os.Geteuid() == 0 {
+		if strings.Contains(fullCmd, "sudo") {
+			t.Errorf("Expected sudo to be omitted when already root, got: %s", fullCmd)
+		}
+		return
+	}
 	if !strings.Contains(fullCmd, "sudo") {
-		t.Errorf("Expected sudo in command, got: %s", fullCmd)
+		t.Errorf("Expected sudo in command when not root, got: %s", fullCmd)
 	}
 }
 
