@@ -14,6 +14,15 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
 
+const ubuntuNetworkTestsEnv = "ICT_RUN_UBUNTU_NETWORK_TESTS"
+
+func requireUbuntuNetworkTests(t *testing.T) {
+	t.Helper()
+	if os.Getenv(ubuntuNetworkTestsEnv) != "1" {
+		t.Skipf("skipping network-dependent ubuntu provider test; set %s=1 to run", ubuntuNetworkTestsEnv)
+	}
+}
+
 // Helper function to create a test ImageTemplate
 func createTestImageTemplate() *config.ImageTemplate {
 	return &config.ImageTemplate{
@@ -75,6 +84,8 @@ func TestGetProviderId(t *testing.T) {
 
 // TestUbuntuProviderInit tests the Init method
 func TestUbuntuProviderInit(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	// Change to project root for tests that need config files
 	originalDir, _ := os.Getwd()
 	defer func() {
@@ -115,6 +126,8 @@ func TestUbuntuProviderInit(t *testing.T) {
 
 // TestUbuntuProviderInitArchMapping tests architecture mapping in Init
 func TestUbuntuProviderInitArchMapping(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	// Change to project root for tests that need config files
 	originalDir, _ := os.Getwd()
 	defer func() {
@@ -160,6 +173,8 @@ func TestUbuntuProviderInitArchMapping(t *testing.T) {
 
 // TestLoadRepoConfig tests the loadRepoConfig function
 func TestLoadRepoConfig(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	// Change to project root for tests that need config files
 	originalDir, _ := os.Getwd()
 	defer func() {
@@ -206,6 +221,8 @@ func TestLoadRepoConfig(t *testing.T) {
 
 // TestLoadRepoConfigUbuntu26 tests loading repo config for ubuntu26
 func TestLoadRepoConfigUbuntu26(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	originalDir, _ := os.Getwd()
 	defer func() {
 		if err := os.Chdir(originalDir); err != nil {
@@ -242,6 +259,8 @@ func TestLoadRepoConfigUbuntu26(t *testing.T) {
 
 // TestUbuntuProviderInitUbuntu26 tests Init with ubuntu26 dist
 func TestUbuntuProviderInitUbuntu26(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	originalDir, _ := os.Getwd()
 	defer func() {
 		if err := os.Chdir(originalDir); err != nil {
@@ -421,6 +440,8 @@ func TestUbuntuPostProcessCleanupErrorWrappedMessage(t *testing.T) {
 }
 
 func TestUbuntuInstallHostDependencySkipsExistingCommands(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	originalExecutor := shell.Default
 	defer func() { shell.Default = originalExecutor }()
 
@@ -435,6 +456,8 @@ func TestUbuntuInstallHostDependencySkipsExistingCommands(t *testing.T) {
 }
 
 func TestUbuntuInstallHostDependencyCommandCheckError(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	originalExecutor := shell.Default
 	defer func() { shell.Default = originalExecutor }()
 
@@ -477,6 +500,8 @@ func TestUbuntuDownloadImagePkgsUpdateSystemErrorDeterministic(t *testing.T) {
 }
 
 func TestUbuntuInstallHostDependencyInstallFailure(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	originalExecutor := shell.Default
 	defer func() { shell.Default = originalExecutor }()
 
@@ -500,6 +525,8 @@ func TestUbuntuInstallHostDependencyInstallFailure(t *testing.T) {
 
 // TestUbuntuProviderPreProcess tests PreProcess method with mocked dependencies
 func TestUbuntuProviderPreProcess(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	// Save original shell executor and restore after test
 	originalExecutor := shell.Default
 	defer func() { shell.Default = originalExecutor }()
@@ -551,6 +578,8 @@ func TestUbuntuProviderPreProcess(t *testing.T) {
 
 // TestUbuntuProviderBuildImage tests BuildImage method
 func TestUbuntuProviderBuildImage(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	// Save original shell executor and restore after test
 	originalExecutor := shell.Default
 	defer func() { shell.Default = originalExecutor }()
@@ -598,6 +627,8 @@ func TestUbuntuProviderBuildImage(t *testing.T) {
 
 // TestUbuntuProviderBuildImageISO tests BuildImage method with ISO type
 func TestUbuntuProviderBuildImageISO(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	// Save original shell executor and restore after test
 	originalExecutor := shell.Default
 	defer func() { shell.Default = originalExecutor }()
@@ -648,6 +679,8 @@ func TestUbuntuProviderBuildImageISO(t *testing.T) {
 
 // TestUbuntuProviderBuildImageInitrd tests BuildImage method with IMG type
 func TestUbuntuProviderBuildImageInitrd(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	// Save original shell executor and restore after test
 	originalExecutor := shell.Default
 	defer func() { shell.Default = originalExecutor }()
@@ -698,6 +731,8 @@ func TestUbuntuProviderBuildImageInitrd(t *testing.T) {
 
 // TestUbuntuProviderPostProcess tests PostProcess method
 func TestUbuntuProviderPostProcess(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	// Save original shell executor and restore after test
 	originalExecutor := shell.Default
 	defer func() { shell.Default = originalExecutor }()
@@ -747,6 +782,8 @@ func TestUbuntuProviderPostProcess(t *testing.T) {
 
 // TestUbuntuProviderInstallHostDependency tests installHostDependency method
 func TestUbuntuProviderInstallHostDependency(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	// Save original shell executor and restore after test
 	originalExecutor := shell.Default
 	defer func() { shell.Default = originalExecutor }()
@@ -829,6 +866,8 @@ func TestUbuntuProviderInstallHostDependencyCommands(t *testing.T) {
 
 // TestUbuntuProviderRegister tests the Register function
 func TestUbuntuProviderRegister(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	// Save original providers registry and restore after test
 	// Note: We can't easily access the provider registry for cleanup,
 	// so this test shows the approach but may leave test artifacts
@@ -862,6 +901,8 @@ func TestUbuntuProviderRegister(t *testing.T) {
 
 // TestUbuntuProviderWorkflow tests a complete ubuntu provider workflow
 func TestUbuntuProviderWorkflow(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	// This is a unit test focused on testing the provider interface methods
 	// without external dependencies that require system access
 
@@ -939,6 +980,8 @@ func TestUbuntuConfigurationStructure(t *testing.T) {
 
 // TestUbuntuArchitectureHandling tests architecture-specific URL construction
 func TestUbuntuArchitectureHandling(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	// Change to project root for tests that need config files
 	originalDir, _ := os.Getwd()
 	defer func() {
@@ -1086,6 +1129,8 @@ func TestUbuntuPostProcessErrorHandling(t *testing.T) {
 
 // TestUbuntuDownloadImagePkgs tests downloadImagePkgs method structure
 func TestUbuntuDownloadImagePkgs(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	ubuntu := &ubuntu{
 		repoCfgs: []debutils.RepoConfig{
 			{
@@ -1121,6 +1166,8 @@ func TestUbuntuDownloadImagePkgs(t *testing.T) {
 
 // TestUbuntuMultipleRepositories tests handling of multiple repositories
 func TestUbuntuMultipleRepositories(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	ubuntu := &ubuntu{
 		repoCfgs: []debutils.RepoConfig{
 			{
@@ -1163,6 +1210,8 @@ func TestUbuntuMultipleRepositories(t *testing.T) {
 
 // TestUbuntuLoadRepoConfigMultiple tests loadRepoConfig with multiple repositories
 func TestUbuntuLoadRepoConfigMultiple(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	// Change to project root for tests that need config files
 	originalDir, _ := os.Getwd()
 	defer func() {
@@ -1223,6 +1272,8 @@ func TestUbuntuOsNameConstant(t *testing.T) {
 
 // TestUbuntuPreProcessWithMockEnv tests PreProcess with mock chroot environment
 func TestUbuntuPreProcessWithMockEnv(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	ubuntu := &ubuntu{
 		repoCfgs: []debutils.RepoConfig{
 			{
@@ -1279,6 +1330,8 @@ func TestUbuntuPostProcessWithMockEnv(t *testing.T) {
 
 // TestUbuntuInitWithAarch64 tests Init with aarch64 architecture mapping
 func TestUbuntuInitWithAarch64(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	// Change to project root for tests that need config files
 	originalDir, _ := os.Getwd()
 	defer func() {
@@ -1407,6 +1460,8 @@ func TestUbuntuBuildIsoImageError(t *testing.T) {
 
 // TestLoadRepoConfigArm64 tests loadRepoConfig with arm64 architecture
 func TestLoadRepoConfigArm64(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	// Change to project root for tests that need config files
 	originalDir, _ := os.Getwd()
 	defer func() {
@@ -1449,6 +1504,8 @@ func TestLoadRepoConfigArm64(t *testing.T) {
 
 // TestLoadRepoConfigNonDebRepository tests loadRepoConfig skipping non-DEB repos
 func TestLoadRepoConfigNonDebRepository(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	// This test verifies that non-DEB repositories are properly skipped
 	// Change to project root for tests that need config files
 	originalDir, _ := os.Getwd()
@@ -1481,6 +1538,8 @@ func TestLoadRepoConfigNonDebRepository(t *testing.T) {
 
 // TestUbuntuRegisterWithEmptyDist tests Register with empty distribution
 func TestUbuntuRegisterWithEmptyDist(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	// Save original shell executor and restore after test
 	originalExecutor := shell.Default
 	defer func() { shell.Default = originalExecutor }()
@@ -1499,6 +1558,8 @@ func TestUbuntuRegisterWithEmptyDist(t *testing.T) {
 
 // TestUbuntuDownloadImagePkgsCacheDirError tests downloadImagePkgs cache dir error
 func TestUbuntuDownloadImagePkgsCacheDirError(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	// This test verifies error handling when cache directory retrieval fails
 	ubuntu := &ubuntu{
 		repoCfgs: []debutils.RepoConfig{
@@ -1525,6 +1586,8 @@ func TestUbuntuDownloadImagePkgsCacheDirError(t *testing.T) {
 
 // TestUbuntuInitEmptyRepoConfigs tests Init handling when loadRepoConfig returns empty configs
 func TestUbuntuInitEmptyRepoConfigs(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	// This test would need to mock loadRepoConfig to return empty configs
 	// For now, we document the expected behavior
 	ubuntu := &ubuntu{}
@@ -1578,6 +1641,8 @@ func TestUbuntuNameWithVariousInputs(t *testing.T) {
 
 // TestUbuntuInstallHostDependencyCommandCheck tests installHostDependency command checking
 func TestUbuntuInstallHostDependencyCommandCheck(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	// Save original shell executor and restore after test
 	originalExecutor := shell.Default
 	defer func() { shell.Default = originalExecutor }()
@@ -1608,6 +1673,8 @@ func TestUbuntuInstallHostDependencyCommandCheck(t *testing.T) {
 
 // TestUbuntuPreProcessInitChrootEnvError tests PreProcess when InitChrootEnv fails
 func TestUbuntuPreProcessInitChrootEnvError(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	// Create a mock that fails on InitChrootEnv
 	type failingMockChrootEnv struct {
 		mockChrootEnv
@@ -1709,6 +1776,8 @@ func TestUbuntuBuildIsoImageSuccess(t *testing.T) {
 
 // TestUbuntuPreProcessDownloadPackagesError tests PreProcess when downloadImagePkgs fails
 func TestUbuntuPreProcessDownloadPackagesError(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	ubuntu := &ubuntu{
 		repoCfgs:  []debutils.RepoConfig{}, // Empty to trigger error in downloadImagePkgs
 		chrootEnv: &mockChrootEnv{},
@@ -1729,6 +1798,8 @@ func TestUbuntuPreProcessDownloadPackagesError(t *testing.T) {
 
 // TestUbuntuDownloadImagePkgsUpdateSystemError tests downloadImagePkgs when UpdateSystemPkgs fails
 func TestUbuntuDownloadImagePkgsUpdateSystemError(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	// Create a mock that fails on UpdateSystemPkgs
 	type failingUpdateMockChrootEnv struct {
 		mockChrootEnv
@@ -1762,6 +1833,8 @@ func TestUbuntuDownloadImagePkgsUpdateSystemError(t *testing.T) {
 
 // TestLoadRepoConfigNoValidRepos tests loadRepoConfig when no valid repos found
 func TestLoadRepoConfigNoValidRepos(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	// Change to project root for tests that need config files
 	originalDir, _ := os.Getwd()
 	defer func() {
@@ -1814,6 +1887,8 @@ func TestUbuntuPostProcessCleanupError(t *testing.T) {
 
 // TestUbuntuRegisterWithDifferentArchitectures tests Register with various architectures
 func TestUbuntuRegisterWithDifferentArchitectures(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	// Save original shell executor and restore after test
 	originalExecutor := shell.Default
 	defer func() { shell.Default = originalExecutor }()
@@ -1847,6 +1922,8 @@ func TestUbuntuRegisterWithDifferentArchitectures(t *testing.T) {
 
 // TestUbuntuRegisterChrootEnvError tests Register when NewChrootEnv fails
 func TestUbuntuRegisterChrootEnvError(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	// Test with invalid parameters that should cause chroot creation to fail
 	err := Register("invalid-os", "invalid-dist", "invalid-arch")
 	if err != nil {
@@ -1859,6 +1936,8 @@ func TestUbuntuRegisterChrootEnvError(t *testing.T) {
 
 // TestUbuntuPreProcessWithMockComplete tests full PreProcess with comprehensive mocking
 func TestUbuntuPreProcessWithMockComplete(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	// Save original shell executor and restore after test
 	originalExecutor := shell.Default
 	defer func() { shell.Default = originalExecutor }()
@@ -1916,6 +1995,8 @@ func TestUbuntuPreProcessWithMockComplete(t *testing.T) {
 
 // TestUbuntuInstallHostDependencyMissingCommands tests installHostDependency when commands are missing
 func TestUbuntuInstallHostDependencyMissingCommands(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	// Save original shell executor and restore after test
 	originalExecutor := shell.Default
 	defer func() { shell.Default = originalExecutor }()
@@ -2066,6 +2147,8 @@ func TestUbuntuPostProcessNilTemplate(t *testing.T) {
 
 // TestUbuntuDownloadImagePkgsWithFullTemplate tests downloadImagePkgs with complete template
 func TestUbuntuDownloadImagePkgsWithFullTemplate(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	ubuntu := &ubuntu{
 		repoCfgs: []debutils.RepoConfig{
 			{
@@ -2110,6 +2193,8 @@ func TestUbuntuDownloadImagePkgsWithFullTemplate(t *testing.T) {
 
 // TestUbuntuLoadRepoConfigWithValidData tests loadRepoConfig with valid provider config
 func TestUbuntuLoadRepoConfigWithValidData(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	// Change to project root for tests that need config files
 	originalDir, _ := os.Getwd()
 	defer func() {
@@ -2160,6 +2245,8 @@ func TestUbuntuLoadRepoConfigWithValidData(t *testing.T) {
 
 // TestUbuntuInitWithX86_64Mapping tests Init with x86_64 to amd64 mapping
 func TestUbuntuInitWithX86_64Mapping(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	// Change to project root for tests that need config files
 	originalDir, _ := os.Getwd()
 	defer func() {
@@ -2198,6 +2285,8 @@ func TestUbuntuInitWithX86_64Mapping(t *testing.T) {
 
 // TestUbuntuPreProcessDownloadError tests PreProcess when downloadImagePkgs returns specific error
 func TestUbuntuPreProcessDownloadError(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	// Save original shell executor and restore after test
 	originalExecutor := shell.Default
 	defer func() { shell.Default = originalExecutor }()
@@ -2227,6 +2316,8 @@ func TestUbuntuPreProcessDownloadError(t *testing.T) {
 
 // TestUbuntuPreProcessInitChrootError tests PreProcess when InitChrootEnv returns error
 func TestUbuntuPreProcessInitChrootError(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	// Create mock that fails on InitChrootEnv
 	type failingInitMock struct {
 		mockChrootEnv
@@ -2294,6 +2385,8 @@ func TestUbuntuBuildImageAllTypes(t *testing.T) {
 
 // TestUbuntuInstallHostDependencyGetPkgManagerError tests installHostDependency when GetHostOsPkgManager fails
 func TestUbuntuInstallHostDependencyGetPkgManagerError(t *testing.T) {
+	requireUbuntuNetworkTests(t)
+
 	// This test documents the error handling when system.GetHostOsPkgManager() fails
 	ubuntu := &ubuntu{}
 

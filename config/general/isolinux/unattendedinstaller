@@ -8,24 +8,7 @@ CACHE_REPO=$ISO_ROOT/cache-repo
 
 # Mounting the ISO root for the installer.
 mkdir -p $ISO_ROOT
-LABELS=(ICT_CDROM OIC_CDROM)
-
-function mount_iso_root {
-    local label
-    for label in "${LABELS[@]}"; do
-        if mount -L "$label" -o ro "$ISO_ROOT" 2>/dev/null; then
-            echo "Mounted ISO root using label $label"
-            return 0
-        fi
-    done
-
-    if mount -t iso9660 -o ro /dev/sr0 "$ISO_ROOT" 2>/dev/null; then
-        echo "Mounted ISO root using /dev/sr0"
-        return 0
-    fi
-
-    return 1
-}
+LABEL=ICT_CDROM
 
 function retry {
     local retry=0

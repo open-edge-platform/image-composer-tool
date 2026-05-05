@@ -217,7 +217,7 @@ packageRepositories:
       - gcc
       - git
       - intel-gpu-tools
-      - libssl3
+      - libssl3t64
       - libssl-dev
       - make
       - mosquitto

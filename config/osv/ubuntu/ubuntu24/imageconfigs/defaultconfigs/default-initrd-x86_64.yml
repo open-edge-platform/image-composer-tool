@@ -42,6 +42,7 @@ systemConfig:
     - systemd-boot
     - grub-pc-bin
     - grub-efi-amd64-bin
+    - gdisk
 
 
   additionalFiles:
