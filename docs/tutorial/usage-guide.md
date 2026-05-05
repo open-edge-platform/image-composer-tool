@@ -260,6 +260,7 @@ systemConfig:
 ## Related Documentation
 
 - [AI-Powered Template Generation](./ai-template-generation.md)
+- [ARM64 Image Creation Guide](./arm64-image-creation-guide.md)
 - [CLI Specification and Reference](../architecture/image-composer-tool-cli-specification.md)
 - [Image Templates](../architecture/image-composer-tool-templates.md)
 - [Build Process](../architecture/image-composer-tool-build-process.md)

@@ -126,6 +126,7 @@ see [Creating and Reusing Image Templates](./docs/architecture/image-composer-to
 |-------|-------------|
 | [Installation Guide](./docs/tutorial/installation.md) | Build options, Debian packaging, prerequisites |
 | [Usage Guide](./docs/tutorial/usage-guide.md) | CLI commands, configuration, shell completion |
+| [ARM64 Image Creation Guide](./docs/tutorial/arm64-image-creation-guide.md) | Build Ubuntu, eLxr, and Azure Linux ARM64 images with GRUB or UKI |
 | [CLI Reference](./docs/architecture/image-composer-tool-cli-specification.md) | Complete command-line specification |
 | [Image Templates](./docs/architecture/image-composer-tool-templates.md) | Template system and customization |
 | [Build Process](./docs/architecture/image-composer-tool-build-process.md) | How image composition works, troubleshooting |

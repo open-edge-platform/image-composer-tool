@@ -35,6 +35,7 @@ For build options (Earthly, Debian package) and prerequisite details, see the
 |-------|-------------|
 | [Installation Guide](./tutorial/installation.md) | Build methods, Debian packaging, prerequisites |
 | [Usage Guide](./tutorial/usage-guide.md) | CLI commands, configuration, build output, shell completion |
+| [ARM64 Image Creation Guide](./tutorial/arm64-image-creation-guide.md) | Build Ubuntu, eLxr, and Azure Linux ARM64 images with GRUB or UKI |
 | [CLI Reference](./architecture/image-composer-tool-cli-specification.md) | Complete command-line specification |
 | [Image Templates](./architecture/image-composer-tool-templates.md) | Template structure, variables, best practices |
 | [Build Process](./architecture/image-composer-tool-build-process.md) | Pipeline stages, caching, troubleshooting |
@@ -74,6 +75,7 @@ Installation Guide <./tutorial/installation.md>
 Prerequisites <./tutorial/prerequisite.md>
 Architecture <./architecture.md>
 Usage Guide <./tutorial/usage-guide.md>
+ARM64 Image Creation Guide <./tutorial/arm64-image-creation-guide.md>
 Secure Boot Configuration <./tutorial/configure-secure-boot.md>
 Configure Users <./tutorial/configure-image-user.md>
 Customize Image Build <./tutorial/configure-additional-actions-for-build.md>
