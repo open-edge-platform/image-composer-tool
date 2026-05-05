@@ -4,11 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
-	"github.com/open-edge-platform/os-image-composer/internal/chroot/deb"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
+	"github.com/open-edge-platform/image-composer-tool/internal/chroot/deb"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
 
 func TestNewDebInstaller(t *testing.T) {
@@ -199,10 +200,17 @@ func TestInstallDebPkg_MissingLocalRepoConfig(t *testing.T) {
 	originalExecutor := shell.Default
 	defer func() { shell.Default = originalExecutor }()
 	mockExpectedOutput := []shell.MockCommand{
+		{Pattern: "mkdir", Output: "override-test\n", Error: nil},
+		{Pattern: "dpkg-scanpackages", Output: "override-test\n", Error: nil},
 		{Pattern: "mmdebstrap", Output: "override-test\n", Error: fmt.Errorf("command not found")},
 		{Pattern: "rm", Output: "override-test\n", Error: nil},
 	}
 	shell.Default = shell.NewMockExecutor(mockExpectedOutput)
+
+	// Set targetArch by calling UpdateLocalDebRepo first
+	if err := installer.UpdateLocalDebRepo(chrootPkgCacheDir, "amd64", false); err != nil {
+		t.Fatalf("Failed to update local deb repo: %v", err)
+	}
 
 	// Don't create the local.list file
 	err := installer.InstallDebPkg(targetOsConfigDir, chrootEnvPath, chrootPkgCacheDir, pkgsList)
@@ -297,12 +305,18 @@ func TestInstallDebPkg_ChrootEnvCreation(t *testing.T) {
 	defer func() { shell.Default = originalExecutor }()
 	mockExpectedOutput := []shell.MockCommand{
 		{Pattern: "mkdir", Output: "override-test\n", Error: nil},
+		{Pattern: "dpkg-scanpackages", Output: "override-test\n", Error: nil},
 		{Pattern: "mount", Output: "override-test\n", Error: nil},
 		{Pattern: "umount", Output: "override-test\n", Error: nil},
 		{Pattern: "mmdebstrap", Output: "override-test\n", Error: fmt.Errorf("command not found")},
 		{Pattern: "rm", Output: "override-test\n", Error: nil},
 	}
 	shell.Default = shell.NewMockExecutor(mockExpectedOutput)
+
+	// Set targetArch by calling UpdateLocalDebRepo first
+	if err := installer.UpdateLocalDebRepo(chrootPkgCacheDir, "amd64", false); err != nil {
+		t.Fatalf("Failed to update local deb repo: %v", err)
+	}
 
 	err := installer.InstallDebPkg(tempDir, chrootEnvPath, chrootPkgCacheDir, pkgsList)
 
@@ -417,5 +431,55 @@ func TestInstallDebPkg_RepoPathConstant(t *testing.T) {
 	if err != nil && !strings.Contains(err.Error(), "failed to mount") {
 		// If it fails for a different reason, that's also acceptable for this test
 		t.Logf("Got error (expected): %v", err)
+	}
+}
+
+func TestInstallDebPkg_CrossArchMissingArchTest(t *testing.T) {
+	installer := deb.NewDebInstaller()
+	tempDir := t.TempDir()
+
+	configDir := filepath.Join(tempDir, "chrootenvconfigs")
+	if err := os.MkdirAll(configDir, 0700); err != nil {
+		t.Fatalf("Failed to create config directory: %v", err)
+	}
+
+	localListPath := filepath.Join(configDir, "local.list")
+	if err := os.WriteFile(localListPath, []byte("deb file:///cdrom/cache-repo ./"), 0644); err != nil {
+		t.Fatalf("Failed to create local.list file: %v", err)
+	}
+
+	chrootPkgCacheDir := filepath.Join(tempDir, "cache")
+	if err := os.MkdirAll(chrootPkgCacheDir, 0700); err != nil {
+		t.Fatalf("Failed to create cache directory: %v", err)
+	}
+
+	// Pick a target architecture that is different from the runtime architecture.
+	targetArch := "arm64"
+	if runtime.GOARCH == "arm64" {
+		targetArch = "amd64"
+	}
+
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+	mockExpectedOutput := []shell.MockCommand{
+		{Pattern: "dpkg-scanpackages", Output: "override-test\n", Error: nil},
+		{Pattern: "command -v arch-test", Output: "", Error: nil},
+	}
+	shell.Default = shell.NewMockExecutor(mockExpectedOutput)
+
+	if err := installer.UpdateLocalDebRepo(tempDir, targetArch, false); err != nil {
+		t.Fatalf("Failed to set target architecture via UpdateLocalDebRepo: %v", err)
+	}
+
+	err := installer.InstallDebPkg(tempDir, filepath.Join(tempDir, "chroot"), chrootPkgCacheDir, []string{"test-package"})
+	if err == nil {
+		t.Fatal("Expected cross-architecture preflight error for missing arch-test")
+	}
+
+	if !strings.Contains(err.Error(), "arch-test") {
+		t.Fatalf("Expected error to mention arch-test, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "cross-architecture") {
+		t.Fatalf("Expected cross-architecture error context, got: %v", err)
 	}
 }

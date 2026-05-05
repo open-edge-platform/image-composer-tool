@@ -34,7 +34,7 @@ disk:
     # Request conversion to raw
     - type: raw
       compression: gz
-  size: 16GiB
+  size: 32GiB
   # GPT partition table per installer spec
   partitionTableType: gpt
   partitions:
@@ -54,13 +54,24 @@ disk:
         - boot
         - esp
     # Root filesystem
+    - id: SWAP
+      name: SWAP
+      type: linux-swap
+      typeUUID: 0657fd6d-a4ab-43c4-84e5-0933c84b4f4f
+      fsType: linux-swap
+      start: 1025MiB
+      end: 3073MiB
+      mountPoint: none
+      mountOptions: sw
+      flags: []
+
     - id: ROOT
       name: ROOT
       type: linux-root-amd64
       # Standard Linux root filesystem GUID for x86_64
       typeUUID: 4f68bce3-e8cd-4db1-96e7-fbcaf984b709
       fsType: ext4
-      start: 1025MiB
+      start: 3073MiB
       end: "0"
       mountPoint: /
       mountOptions: defaults
@@ -72,8 +83,210 @@ packageRepositories:
   - codename: "noble"
     url: "https://download.01.org/intel-linux-overlay/ubuntu"
     pkey: "https://download.01.org/intel-linux-overlay/ubuntu/E6FA98203588250569758E97D176E3162086EE4C.gpg"
-    component: "multimedia main non-free"
+    component: "multimedia main non-free kernels"
     priority: 2000
+    allowPackages:
+      - libigfxcmrt-dev
+      - libigfxcmrt7
+      - vim
+      - ocl-icd-libopencl1
+      - curl
+      - openssh-server
+      - net-tools
+      - gir1.2-gst-plugins-bad-1.0
+      - gir1.2-gst-plugins-base-1.0
+      - gir1.2-gstreamer-1.0
+      - gir1.2-gst-rtsp-server-1.0
+      - gstreamer1.0-alsa
+      - gstreamer1.0-gl
+      - gstreamer1.0-gtk3
+      - gstreamer1.0-opencv
+      - gstreamer1.0-plugins-bad
+      - gstreamer1.0-plugins-bad-apps
+      - gstreamer1.0-plugins-base
+      - gstreamer1.0-plugins-base-apps
+      - gstreamer1.0-plugins-good
+      - gstreamer1.0-plugins-ugly
+      - gstreamer1.0-pulseaudio
+      - gstreamer1.0-qt5
+      - gstreamer1.0-rtsp
+      - gstreamer1.0-tools
+      - gstreamer1.0-x
+      - intel-media-va-driver-non-free
+      - libdrm-amdgpu1
+      - libdrm-common
+      - libdrm-dev
+      - libdrm-intel1
+      - libdrm-nouveau2
+      - libdrm-radeon1
+      - libdrm-tests
+      - libdrm2
+      - libgstrtspserver-1.0-dev
+      - libgstrtspserver-1.0-0
+      - libgstreamer-gl1.0-0
+      - libgstreamer-opencv1.0-0
+      - libgstreamer-plugins-bad1.0-0
+      - libgstreamer-plugins-bad1.0-dev
+      - libgstreamer-plugins-base1.0-0
+      - libgstreamer-plugins-base1.0-dev
+      - libgstreamer-plugins-good1.0-0
+      - libgstreamer-plugins-good1.0-dev
+      - libgstreamer1.0-0
+      - libgstreamer1.0-dev
+      - libigdgmm-dev
+      - libigdgmm12
+      - libmfx-gen1.2
+      - libtpms-dev
+      - libtpms0
+      - libva-dev
+      - libva-drm2
+      - libva-glx2
+      - libva-wayland2
+      - libva-x11-2
+      - libva2
+      - libwayland-bin
+      - libwayland-client0
+      - libwayland-cursor0
+      - libwayland-dev
+      - libwayland-doc
+      - libwayland-egl-backend-dev
+      - libwayland-egl1
+      - libwayland-server0
+      - libxatracker2
+      - linux-firmware
+      - mesa-utils
+      - mesa-va-drivers
+      - mesa-vdpau-drivers
+      - mesa-vulkan-drivers
+      - libvpl-dev
+      - libvpl-tools
+      - libmfx-gen-dev
+      - onevpl-tools
+      - ovmf
+      - ovmf-ia32
+      - qemu-block-extra
+      - qemu-guest-agent
+      - qemu-system
+      - qemu-system-arm
+      - qemu-system-common
+      - qemu-system-data
+      - qemu-system-gui
+      - qemu-system-mips
+      - qemu-system-misc
+      - qemu-system-ppc
+      - qemu-system-s390x
+      - qemu-system-sparc
+      - qemu-system-x86
+      - qemu-user
+      - qemu-user-binfmt
+      - qemu-utils
+      - va-driver-all
+      - vainfo
+      - weston
+      - xserver-xorg-core
+      - libvirt0
+      - libvirt-clients
+      - libvirt-daemon
+      - libvirt-daemon-config-network
+      - libvirt-daemon-config-nwfilter
+      - libvirt-daemon-driver-lxc
+      - libvirt-daemon-driver-qemu
+      - libvirt-daemon-driver-storage-gluster
+      - libvirt-daemon-driver-storage-iscsi-direct
+      - libvirt-daemon-driver-storage-rbd
+      - libvirt-daemon-driver-storage-zfs
+      - libvirt-daemon-driver-vbox
+      - libvirt-daemon-driver-xen
+      - libvirt-daemon-system
+      - libvirt-daemon-system-systemd
+      - libvirt-dev
+      - libvirt-doc
+      - libvirt-login-shell
+      - libvirt-sanlock
+      - libvirt-wireshark
+      - libnss-libvirt
+      - swtpm
+      - swtpm-tools
+      - bmap-tools
+      - adb
+      - autoconf
+      - automake
+      - libtool
+      - cmake
+      - g++
+      - gcc
+      - git
+      - intel-gpu-tools
+      - libssl3t64
+      - libssl-dev
+      - make
+      - mosquitto
+      - mosquitto-clients
+      - build-essential
+      - apt-transport-https
+      - default-jre
+      - docker-compose
+      - ffmpeg
+      - git-lfs
+      - gnuplot
+      - lbzip2
+      - libglew-dev
+      - libglm-dev
+      - libsdl2-dev
+      - mc
+      - openssl
+      - pciutils
+      - python3-pandas
+      - python3-pip
+      - python3-seaborn
+      - terminator
+      - wmctrl
+      - wayland-protocols
+      - gdbserver
+      - iperf3
+      - msr-tools
+      - powertop
+      - linuxptp
+      - lsscsi
+      - tpm2-tools
+      - tpm2-abrmd
+      - binutils
+      - cifs-utils
+      - i2c-tools
+      - xdotool
+      - gnupg
+      - lsb-release
+      - qemu-system-modules-opengl
+      - socat
+      - virt-viewer
+      - spice-client-gtk
+      - util-linux-extra
+      - dbus-x11
+      - sg3-utils
+      - rpm
+      - linux-image-6.17-intel
+      - linux-headers-6.17-intel
+      # overlay dependencies
+      - libvpl2
+      - mesa-libgallium
+      - libgbm1
+      - libgbm-dev
+      - libgl1-mesa-dri
+      - libegl-mesa0
+      - libglx-mesa0
+      - libspice-client-glib-2.0-8
+      - libspice-client-gtk-3.0-5
+      - spice-client-glib-usb-acl-helper
+      - libavcodec62
+      - libavformat62
+      - libavutil60
+      - libavdevice62
+      - libavfilter11
+      - libswresample6
+      - libswscale9
+      - libweston-10-0
+      - xnest
+      - xvfb
 
 
 systemConfig:
@@ -88,6 +301,7 @@ systemConfig:
     enabled: false # default is true
 
   packages:
+    - bluez
     - bsdutils
     - cloud-utils
     - debianutils
@@ -319,13 +533,15 @@ systemConfig:
     - qemu-system-modules-opengl
     - socat
     - virt-viewer
-    - spice-client-gtk
     - rpm
     # additional packages
     - tcpdump
     - usb-modeswitch
     - fwupd
     - clinfo
+    - xvfb
+    - xnest
+
 
   additionalFiles:
     - local: ../additionalfiles/ptl/01-network-manager-all.yaml
@@ -338,8 +554,8 @@ systemConfig:
     cmdline: "xe.max_vfs=7 xe.force_probe=* modprobe.blacklist=i915 udmabuf.list_limit=8192 console=tty0 console=ttyS0,115200n8"
     enableExtraModules: "intel_vpu uas"
     packages:
-        - linux-image-generic-hwe-24.04
-        - linux-headers-generic-hwe-24.04
+        - linux-image-6.17-intel_260128t080735z-r2
+        - linux-headers-6.17-intel_260128t080735z-r2
 
   configurations:
     # Install Intel Graphics Compiler and compute runtime packages for PTL

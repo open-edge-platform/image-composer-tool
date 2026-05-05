@@ -1,0 +1,79 @@
+# ICT - Global Configuration
+# This file contains tool-level settings that apply across all image builds.
+# Image-specific parameters should be defined in the image specification.
+
+# Core tool settings
+workers: 8
+# Number of concurrent download workers (1-100, default: 8)
+# Higher values speed up package downloads but consume more network/CPU resources
+# Recommended: 8-16 for most systems, 20+ for high-bandwidth servers
+
+config_dir: "./config"
+# Directory containing configuration files for different target OSs (default: ./config)
+# Should contain subdirectories for general and each target OS config files.
+
+cache_dir: "./cache"
+# Package cache directory where downloaded RPMs/DEBs are stored (default: ./cache)
+# This directory persists between builds for package reuse
+# Should have sufficient space (typically 1-5GB depending on image size)
+
+work_dir: "./workspace"
+# Working directory for build operations and image assembly (default: ./workspace)
+# Contains temporary build artifacts, extracted packages, and final images
+# Hosts the per-provider chrootenv/chrootbuild trees used for entering/exiting chroot
+# Requires substantial space during builds (2-10GB typical)
+
+temp_dir: "./tmp"
+# Temporary directory for short-lived files like GPG keys and metadata parsing
+# Empty value uses system default (/tmp on Linux, %TEMP% on Windows)
+# Used for: GPG verification files, decompressed metadata, parsing operations
+# Files here are deleted within seconds/minutes of creation
+
+# Logging configuration
+logging:
+  level: "info"
+  # Log verbosity level (default: info)
+  # - debug: Most verbose, shows all operations and data structures
+  # - info:  Normal output, shows progress and important events
+  # - warn:  Only warnings and errors, minimal output
+  # - error: Only errors, very quiet operation
+  file: "image-composer-tool.log"
+  # Tee logs to this file in addition to stdout/stderr (overwritten on each run)
+
+# AI-powered template generation configuration (optional)
+# All settings have sensible defaults - this section can be omitted entirely
+ai:
+  # Provider for embeddings and chat completions
+  provider: "ollama"
+  # - ollama: Local inference (default, requires Ollama running on localhost:11434)
+  # - openai: Cloud inference (requires OPENAI_API_KEY environment variable)
+
+  # Directory containing template files for RAG knowledge base
+  templates_dir: "./image-templates"
+
+  # Ollama-specific settings (used when provider: ollama)
+  ollama:
+    base_url: "http://localhost:11434"
+    embedding_model: "nomic-embed-text"
+    # Embedding models: nomic-embed-text (768 dims), mxbai-embed-large (1024 dims)
+    chat_model: "llama3.2"
+    # Chat models: llama3.2, mistral, codellama, etc.
+    timeout: "120s"
+
+  # OpenAI-specific settings (used when provider: openai)
+  # openai:
+  #   embedding_model: "text-embedding-3-small"
+  #   chat_model: "gpt-4o-mini"
+  #   timeout: "60s"
+
+  # Embedding cache configuration
+  cache:
+    enabled: true
+    dir: "./cache/ai-embeddings"
+    # Cache stores embeddings to avoid re-computing on each run
+
+  # Hybrid scoring weights for template retrieval
+  # scoring:
+  #   semantic_weight: 0.70   # Embedding similarity (0.0-1.0)
+  #   keyword_weight: 0.20    # Keyword matching (0.0-1.0)
+  #   package_weight: 0.10    # Package matching (0.0-1.0)

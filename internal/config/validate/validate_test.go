@@ -702,7 +702,7 @@ target:
 
 packageRepositories:
   - codename: "localdeb"
-    path: "/data/os-image-composer/localdeb"
+    path: "/data/image-composer-tool/localdeb"
     pkey: "[trusted=yes]"
     component: "main"
 

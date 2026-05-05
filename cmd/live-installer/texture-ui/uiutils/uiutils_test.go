@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-edge-platform/os-image-composer/cmd/live-installer/texture-ui/primitives/customshortcutlist"
+	"github.com/open-edge-platform/image-composer-tool/cmd/live-installer/texture-ui/primitives/customshortcutlist"
 	"github.com/rivo/tview"
 )
 

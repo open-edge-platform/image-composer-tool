@@ -42,6 +42,7 @@ systemConfig:
     - grub2
     - grub-pc-bin
     - grub-efi-amd64-bin
+    - gdisk
 
   additionalFiles:
     - local: ../additionalfiles/dhcp.network

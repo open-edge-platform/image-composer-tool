@@ -6,9 +6,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
+
+func intPtr(v int) *int { return &v }
 
 func TestIsDigit(t *testing.T) {
 	tests := []struct {
@@ -785,17 +787,45 @@ func TestDiskPartitionsCreate(t *testing.T) {
 					End:    "100MiB",
 					FsType: "ext4",
 					Type:   "linux",
+					Index:  intPtr(1),
 				},
 			},
 			partitionTableType: "gpt",
 			mockCommands: []shell.MockCommand{
-				{Pattern: "fdisk -l /dev/sda", Output: "Disk /dev/sda: 1 GiB", Error: nil},
-				{Pattern: "echo 'label: gpt'", Output: "", Error: nil},
-				{Pattern: "cat /sys/block/sda/queue/hw_sector_size", Output: "512", Error: nil},
-				{Pattern: "cat /sys/block/sda/queue/physical_block_size", Output: "4096", Error: nil},
-				{Pattern: "echo", Output: "", Error: nil},
-				{Pattern: "partx -u /dev/sda", Output: "", Error: nil},
-				{Pattern: "mkfs", Output: "", Error: nil},
+				{Pattern: ".*fdisk.*sda.*", Output: "Disk /dev/sda: 1 GiB", Error: nil},
+				{Pattern: ".*label.*gpt.*sfdisk.*", Output: "", Error: nil},
+				{Pattern: ".*hw_sector_size", Output: "512", Error: nil},
+				{Pattern: ".*physical_block_size", Output: "4096", Error: nil},
+				{Pattern: ".*sgdisk.*sda.*", Output: "", Error: nil},
+				{Pattern: ".*partx.*sda.*", Output: "", Error: nil},
+				{Pattern: ".*mkfs.*ext4.*sda.*", Output: "", Error: nil},
+			},
+			expectError:     false,
+			expectedDevices: 1,
+		},
+		{
+			name:     "gpt_partition_index",
+			diskPath: "/dev/sda",
+			partitionsList: []config.PartitionInfo{
+				{
+					ID:     "root",
+					Name:   "root",
+					Start:  "1MiB",
+					End:    "100MiB",
+					FsType: "ext4",
+					Type:   "linux",
+					Index:  intPtr(14),
+				},
+			},
+			partitionTableType: "gpt",
+			mockCommands: []shell.MockCommand{
+				{Pattern: ".*fdisk.*sda.*", Output: "Disk /dev/sda: 1 GiB", Error: nil},
+				{Pattern: ".*label.*gpt.*sfdisk.*", Output: "", Error: nil},
+				{Pattern: ".*hw_sector_size", Output: "512", Error: nil},
+				{Pattern: ".*physical_block_size", Output: "4096", Error: nil},
+				{Pattern: ".*sgdisk.*sda.*", Output: "", Error: nil},
+				{Pattern: ".*partx.*sda.*", Output: "", Error: nil},
+				{Pattern: ".*mkfs.*ext4.*sda.*", Output: "", Error: nil},
 			},
 			expectError:     false,
 			expectedDevices: 1,
@@ -814,13 +844,13 @@ func TestDiskPartitionsCreate(t *testing.T) {
 			},
 			partitionTableType: "mbr",
 			mockCommands: []shell.MockCommand{
-				{Pattern: "fdisk -l /dev/sda", Output: "Disk /dev/sda: 1 GiB", Error: nil},
-				{Pattern: "echo 'label: dos'", Output: "", Error: nil},
-				{Pattern: "cat /sys/block/sda/queue/hw_sector_size", Output: "512", Error: nil},
-				{Pattern: "cat /sys/block/sda/queue/physical_block_size", Output: "4096", Error: nil},
-				{Pattern: "echo", Output: "", Error: nil},
-				{Pattern: "partx -u /dev/sda", Output: "", Error: nil},
-				{Pattern: "mkfs", Output: "", Error: nil},
+				{Pattern: ".*fdisk.*sda.*", Output: "Disk /dev/sda: 1 GiB", Error: nil},
+				{Pattern: ".*label.*dos.*sfdisk.*", Output: "", Error: nil},
+				{Pattern: ".*hw_sector_size", Output: "512", Error: nil},
+				{Pattern: ".*physical_block_size", Output: "4096", Error: nil},
+				{Pattern: ".*sfdisk.*append.*sda.*", Output: "", Error: nil},
+				{Pattern: ".*partx.*sda.*", Output: "", Error: nil},
+				{Pattern: ".*mkfs.*ext4.*sda.*", Output: "", Error: nil},
 			},
 			expectError:     false,
 			expectedDevices: 1,
@@ -838,11 +868,10 @@ func TestDiskPartitionsCreate(t *testing.T) {
 			},
 			partitionTableType: "gpt",
 			mockCommands: []shell.MockCommand{
-				{Pattern: "fdisk -l /dev/sda", Output: "Disk /dev/sda: 1 GiB", Error: nil},
-				{Pattern: "echo 'label: gpt'", Output: "", Error: nil},
-				{Pattern: "cat /sys/block/sda/queue/hw_sector_size", Output: "512", Error: nil},
-				{Pattern: "cat /sys/block/sda/queue/physical_block_size", Output: "4096", Error: nil},
-				{Pattern: "echo", Output: "", Error: fmt.Errorf("sfdisk failed")},
+				{Pattern: ".*fdisk.*sda.*", Output: "Disk /dev/sda: 1 GiB", Error: nil},
+				{Pattern: ".*label.*gpt.*sfdisk.*", Output: "", Error: fmt.Errorf("sgdisk failed")},
+				{Pattern: ".*hw_sector_size", Output: "512", Error: nil},
+				{Pattern: ".*physical_block_size", Output: "4096", Error: nil},
 			},
 			expectError: true,
 			errorMsg:    "failed to create partition",
@@ -1266,6 +1295,296 @@ func TestGetSectorOffsetFromSize(t *testing.T) {
 			}
 			if got != tt.expected {
 				t.Errorf("getSectorOffsetFromSize() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestDiskPartitionsCreate_GPTLabelFailureWithOutput tests the error path when GPT label creation
+// fails and stderr/stdout output is captured, ensuring the output is included in the error message.
+func TestDiskPartitionsCreate_GPTLabelFailureWithOutput(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	tests := []struct {
+		name             string
+		diskPath         string
+		partitionsList   []config.PartitionInfo
+		commandOutput    string
+		expectError      bool
+		expectedErrMsg   string
+		checkOutputInErr bool
+	}{
+		{
+			name:     "gpt_label_failure_with_output",
+			diskPath: "/dev/sda",
+			partitionsList: []config.PartitionInfo{
+				{
+					ID:     "boot",
+					Start:  "0",
+					End:    "1GiB",
+					FsType: "fat32",
+					Type:   "esp",
+				},
+			},
+			commandOutput:    "Error: device busy, could not write GPT",
+			expectError:      true,
+			expectedErrMsg:   "failed to create GPT partition table",
+			checkOutputInErr: true,
+		},
+		{
+			name:     "gpt_label_failure_with_stderr",
+			diskPath: "/dev/sdb",
+			partitionsList: []config.PartitionInfo{
+				{
+					ID:     "root",
+					Start:  "0",
+					End:    "50GiB",
+					FsType: "ext4",
+					Type:   "linux",
+				},
+			},
+			commandOutput:    "sfdisk: cannot modify partition table",
+			expectError:      true,
+			expectedErrMsg:   "failed to create GPT partition table",
+			checkOutputInErr: true,
+		},
+		{
+			name:     "gpt_label_failure_empty_output",
+			diskPath: "/dev/sdc",
+			partitionsList: []config.PartitionInfo{
+				{
+					ID:     "boot",
+					Start:  "0",
+					End:    "1GiB",
+					FsType: "fat32",
+					Type:   "esp",
+				},
+			},
+			commandOutput:    "",
+			expectError:      true,
+			expectedErrMsg:   "failed to create GPT partition table",
+			checkOutputInErr: false,
+		},
+		{
+			name:     "gpt_label_failure_whitespace_output",
+			diskPath: "/dev/sdd",
+			partitionsList: []config.PartitionInfo{
+				{
+					ID:     "root",
+					Start:  "0",
+					End:    "50GiB",
+					FsType: "ext4",
+					Type:   "linux",
+				},
+			},
+			commandOutput:    "   \n   ",
+			expectError:      true,
+			expectedErrMsg:   "failed to create GPT partition table",
+			checkOutputInErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockCommands := []shell.MockCommand{
+				// Mock the fdisk check for existing partitions (called by IsDiskPartitionExist)
+				{
+					Pattern: "fdisk -l",
+					Output:  "",
+					Error:   nil,
+				},
+				// Mock the sfdisk command for GPT label creation - this should fail with output
+				{
+					Pattern: "label: gpt",
+					Output:  tt.commandOutput,
+					Error:   fmt.Errorf("command failed"),
+				},
+			}
+			shell.Default = shell.NewMockExecutor(mockCommands)
+
+			_, err := DiskPartitionsCreate(tt.diskPath, tt.partitionsList, "gpt")
+
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("Expected error, but got none")
+				} else {
+					errMsg := err.Error()
+					if !strings.Contains(errMsg, tt.expectedErrMsg) {
+						t.Errorf("Expected error containing '%s', but got: %v", tt.expectedErrMsg, err)
+					}
+					if tt.checkOutputInErr && !strings.Contains(errMsg, tt.commandOutput) {
+						t.Errorf("Expected error to contain output '%s', but got: %v", tt.commandOutput, err)
+					}
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Expected no error, but got: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// TestDiskPartitionCreate_SGDiskFailureWithOutput tests the error path when sgdisk fails
+// with command output, ensuring the trimmed output is included in the returned error.
+func TestDiskPartitionCreate_SGDiskFailureWithOutput(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	tests := []struct {
+		name           string
+		diskPath       string
+		partitionNum   int
+		partitionInfo  config.PartitionInfo
+		sgdiskOutput   string
+		expectError    bool
+		expectedErrMsg string
+		checkOutputErr bool
+	}{
+		{
+			name:         "sgdisk_partition_failure_with_stderr",
+			diskPath:     "/dev/sda",
+			partitionNum: 1,
+			partitionInfo: config.PartitionInfo{
+				ID:       "boot",
+				Start:    "0",
+				End:      "1GiB",
+				FsType:   "fat32",
+				Type:     "esp",
+				TypeGUID: "C12A7328-F81F-11D2-BA4B-00A0C93EC93B",
+			},
+			sgdiskOutput:   "Error: The specified partition is not unique. Use option -p to point to the partition.",
+			expectError:    true,
+			expectedErrMsg: "failed to create GPT partition 1",
+			checkOutputErr: true,
+		},
+		{
+			name:         "sgdisk_failure_with_multiline_output",
+			diskPath:     "/dev/nvme0n1",
+			partitionNum: 2,
+			partitionInfo: config.PartitionInfo{
+				ID:       "root",
+				Start:    "1GiB",
+				End:      "50GiB",
+				FsType:   "ext4",
+				Type:     "linux",
+				Name:     "root_partition",
+				TypeGUID: "0FC63DAF-8483-4772-8E79-3D69D8477DE4",
+			},
+			sgdiskOutput:   "Warning: The CRC for the main GPT header is invalid\nError: Aborting due to invalid GPT",
+			expectError:    true,
+			expectedErrMsg: "failed to create GPT partition 2",
+			checkOutputErr: true,
+		},
+		{
+			name:         "sgdisk_failure_with_trailing_whitespace",
+			diskPath:     "/dev/sdb",
+			partitionNum: 1,
+			partitionInfo: config.PartitionInfo{
+				ID:       "data",
+				Start:    "0",
+				End:      "100GiB",
+				FsType:   "ext4",
+				Type:     "linux",
+				TypeGUID: "0FC63DAF-8483-4772-8E79-3D69D8477DE4",
+			},
+			sgdiskOutput:   "  \n  Device not found  \n  ",
+			expectError:    true,
+			expectedErrMsg: "failed to create GPT partition 1",
+			checkOutputErr: true,
+		},
+		{
+			name:         "sgdisk_failure_empty_output",
+			diskPath:     "/dev/sdc",
+			partitionNum: 1,
+			partitionInfo: config.PartitionInfo{
+				ID:       "boot",
+				Start:    "0",
+				End:      "1GiB",
+				FsType:   "fat32",
+				Type:     "esp",
+				TypeGUID: "C12A7328-F81F-11D2-BA4B-00A0C93EC93B",
+			},
+			sgdiskOutput:   "",
+			expectError:    true,
+			expectedErrMsg: "failed to create GPT partition 1",
+			checkOutputErr: false,
+		},
+		{
+			name:         "sgdisk_failure_whitespace_only_output",
+			diskPath:     "/dev/sdd",
+			partitionNum: 2,
+			partitionInfo: config.PartitionInfo{
+				ID:       "root",
+				Start:    "1GiB",
+				End:      "50GiB",
+				FsType:   "ext4",
+				Type:     "linux",
+				TypeGUID: "0FC63DAF-8483-4772-8E79-3D69D8477DE4",
+			},
+			sgdiskOutput:   "  \t  ",
+			expectError:    true,
+			expectedErrMsg: "failed to create GPT partition 2",
+			checkOutputErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Get disk name for the command mocks
+			diskName, _ := GetDiskNameFromDiskPath(tt.diskPath)
+
+			// Mock commands needed for diskPartitionCreate
+			mockCommands := []shell.MockCommand{
+				// Mock hw_sector_size read
+				{
+					Pattern: fmt.Sprintf("cat /sys/block/%s/queue/hw_sector_size", diskName),
+					Output:  "512\n",
+					Error:   nil,
+				},
+				// Mock physical_block_size read
+				{
+					Pattern: fmt.Sprintf("cat /sys/block/%s/queue/physical_block_size", diskName),
+					Output:  "4096\n",
+					Error:   nil,
+				},
+				// Mock sgdisk command - this should fail with output
+				{
+					Pattern: "sgdisk",
+					Output:  tt.sgdiskOutput,
+					Error:   fmt.Errorf("sgdisk command failed"),
+				},
+			}
+			shell.Default = shell.NewMockExecutor(mockCommands)
+
+			_, err := diskPartitionCreate(
+				tt.diskPath,
+				tt.partitionNum,
+				tt.partitionInfo,
+				"gpt",
+				"primary",
+			)
+
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("Expected error, but got none")
+				} else {
+					errMsg := err.Error()
+					if !strings.Contains(errMsg, tt.expectedErrMsg) {
+						t.Errorf("Expected error containing '%s', but got: %v", tt.expectedErrMsg, err)
+					}
+					if tt.checkOutputErr {
+						trimmedOutput := strings.TrimSpace(tt.sgdiskOutput)
+						if trimmedOutput != "" && !strings.Contains(errMsg, trimmedOutput) {
+							t.Errorf("Expected error to contain trimmed output '%s', but got: %v", trimmedOutput, err)
+						}
+					}
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Expected no error, but got: %v", err)
+				}
 			}
 		})
 	}

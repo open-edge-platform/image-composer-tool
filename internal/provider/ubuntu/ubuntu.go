@@ -5,17 +5,17 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/open-edge-platform/os-image-composer/internal/chroot"
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/image/initrdmaker"
-	"github.com/open-edge-platform/os-image-composer/internal/image/isomaker"
-	"github.com/open-edge-platform/os-image-composer/internal/image/rawmaker"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage/debutils"
-	"github.com/open-edge-platform/os-image-composer/internal/provider"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/display"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/system"
+	"github.com/open-edge-platform/image-composer-tool/internal/chroot"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/initrdmaker"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/isomaker"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/rawmaker"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/debutils"
+	"github.com/open-edge-platform/image-composer-tool/internal/provider"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/display"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
 
 // DEB: https://deb.debian.org/debian/dists/bookworm/main/binary-amd64/Packages.gz
@@ -221,6 +221,9 @@ func (p *ubuntu) PostProcess(template *config.ImageTemplate, err error) error {
 func (p *ubuntu) installHostDependency() error {
 	var dependencyInfo = map[string]string{
 		"mmdebstrap":        "mmdebstrap",       // For the chroot env build
+		"arch-test":         "arch-test",        // Required by mmdebstrap for foreign-architecture bootstrap
+		"qemu-user-static":  "qemu-user-static", // For cross-architecture binary execution support
+		"update-binfmts":    "binfmt-support",   // For registering qemu-user-static with the kernel
 		"mkfs.fat":          "dosfstools",       // For the FAT32 boot partition creation
 		"mformat":           "mtools",           // For writing files to FAT32 partition
 		"xorriso":           "xorriso",          // For ISO image creation

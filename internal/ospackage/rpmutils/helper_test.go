@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
 
 func TestExtractRepoBase(t *testing.T) {
