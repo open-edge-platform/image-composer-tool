@@ -29,6 +29,8 @@ type blockDeviceInfo struct {
 	Model  string      `json:"model"`   // Example: 'Virtual Disk'
 	Serial string      `json:"serial"`
 	Tran   string      `json:"tran"`
+	Type   string      `json:"type"`
+	PkName string      `json:"pkname"`
 	RM     interface{} `json:"rm"`
 	Rota   interface{} `json:"rota"`
 }
@@ -48,6 +50,16 @@ const (
 	DiskSelectStrategyLargest     = "largest"
 	DiskSelectStrategyFastest     = "fastest"
 	DiskSelectStrategyLargestFree = "largest-free"
+)
+
+const (
+	diskTransportTierUnknown = iota
+	diskTransportTierUSB
+	diskTransportTierMMC
+	diskTransportTierSATA
+	diskTransportTierSAS
+	diskTransportTierVirtio
+	diskTransportTierNVMe
 )
 
 const (
@@ -907,7 +919,7 @@ func SystemBlockDevices() (systemDevices []SystemBlockDevice, err error) {
 	)
 
 	blockDeviceMajorNumbers := []string{scsiDiskMajorNumber, mmcBlockMajorNumber, virtualDiskMajorNumber, blockExtendedMajorNumber}
-	cmd := fmt.Sprintf("lsblk -d --bytes -I %s -n --json --output NAME,SIZE,MODEL,SERIAL,TRAN,RM,ROTA",
+	cmd := fmt.Sprintf("lsblk -d --bytes -I %s -n --json --output NAME,SIZE,MODEL,SERIAL,TRAN,TYPE,PKNAME,RM,ROTA",
 		strings.Join(blockDeviceMajorNumbers, ","))
 	rawDiskOutput, err := shell.ExecCmd(cmd, true, shell.HostPath, nil)
 	if err != nil {
@@ -931,6 +943,16 @@ func SystemBlockDevices() (systemDevices []SystemBlockDevice, err error) {
 	// Process each device to build the filtered list
 	systemDevices = []SystemBlockDevice{}
 	for _, device := range blockDevices.Devices {
+		deviceType := strings.TrimSpace(strings.ToLower(device.Type))
+		if deviceType != "disk" {
+			log.Debugf("Excluded non-disk block device: /dev/%s (type=%s, pkname=%s)", device.Name, deviceType, strings.TrimSpace(device.PkName))
+			continue
+		}
+		if strings.HasPrefix(device.Name, "dm-") {
+			log.Debugf("Excluded device-mapper block device: /dev/%s", device.Name)
+			continue
+		}
+
 		devicePath := fmt.Sprintf("/dev/%s", device.Name)
 		rawSize, err := strconv.ParseUint(device.Size.String(), 10, 64)
 		if err != nil {
@@ -1019,12 +1041,9 @@ func ResolveInstallDiskPath(diskConfig config.DiskConfig) (string, error) {
 		return selectDiskWithLargestFreeSpan(eligible)
 	case DiskSelectStrategyFastest:
 		selected := eligible[0]
-		bestScore := diskSpeedScore(selected)
 		for _, dev := range eligible[1:] {
-			score := diskSpeedScore(dev)
-			if score > bestScore || (score == bestScore && dev.RawDiskSize > selected.RawDiskSize) {
+			if fasterDiskCandidate(dev, selected) {
 				selected = dev
-				bestScore = score
 			}
 		}
 		return selected.DevicePath, nil
@@ -1172,35 +1191,48 @@ func parseBytesPrefix(s string) (int, error) {
 	return value, nil
 }
 
-func diskSpeedScore(device SystemBlockDevice) int {
-	transport := strings.ToLower(strings.TrimSpace(device.Transport))
-	model := strings.ToLower(strings.TrimSpace(device.Model))
+func fasterDiskCandidate(candidate, current SystemBlockDevice) bool {
+	candidateTier := diskTransportTier(candidate)
+	currentTier := diskTransportTier(current)
+	if candidateTier != currentTier {
+		return candidateTier > currentTier
+	}
 
-	score := 1000
+	if candidate.IsRotational != current.IsRotational {
+		return !candidate.IsRotational
+	}
+
+	candidateHasSSDHint := hasSolidStateModelHint(candidate)
+	currentHasSSDHint := hasSolidStateModelHint(current)
+	if candidateHasSSDHint != currentHasSSDHint {
+		return candidateHasSSDHint
+	}
+
+	return candidate.RawDiskSize > current.RawDiskSize
+}
+
+func diskTransportTier(device SystemBlockDevice) int {
+	transport := strings.ToLower(strings.TrimSpace(device.Transport))
 	switch transport {
 	case "nvme":
-		score = 5000
+		return diskTransportTierNVMe
 	case "virtio":
-		score = 4200
+		return diskTransportTierVirtio
 	case "sas", "scsi":
-		score = 3000
+		return diskTransportTierSAS
 	case "sata", "ata":
-		score = 2500
+		return diskTransportTierSATA
 	case "mmc":
-		score = 2000
+		return diskTransportTierMMC
 	case "usb":
-		score = 500
+		return diskTransportTierUSB
 	}
+	return diskTransportTierUnknown
+}
 
-	if !device.IsRotational {
-		score += 300
-	}
-
-	if strings.Contains(model, "nvme") || strings.Contains(model, "ssd") {
-		score += 150
-	}
-
-	return score
+func hasSolidStateModelHint(device SystemBlockDevice) bool {
+	model := strings.ToLower(strings.TrimSpace(device.Model))
+	return strings.Contains(model, "nvme") || strings.Contains(model, "ssd")
 }
 
 func parseLsblkBool(value interface{}) (bool, error) {
