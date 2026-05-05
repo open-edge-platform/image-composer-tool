@@ -1,4 +1,6 @@
 #!/bin/bash
+set -euo pipefail
+
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
@@ -8,19 +10,18 @@
 set -o pipefail
 
 ISO_ROOT=/cdrom
-CONFIG_ROOT=$ISO_ROOT/config
-CACHE_REPO=$ISO_ROOT/cache-repo
-INSTALLER_LOG=/tmp/live-installer-attended.log
+CONFIG_ROOT="$ISO_ROOT/config"
+CACHE_REPO="$ISO_ROOT/cache-repo"
 
 # Mounting the ISO root for the installer.
-mkdir -p $ISO_ROOT
+mkdir -p "$ISO_ROOT"
 LABEL=ICT_CDROM
 
 function retry {
     local retry=0
     local limit=10
     local sleep_seconds=15
-    while [ $retry -lt $limit ]
+    while [[ $retry -lt $limit ]]
     do
         eval "$@" && break
         echo "$@" Retrying...
@@ -29,7 +30,7 @@ function retry {
     done
 }
 
-if grep -qs $ISO_ROOT /proc/mounts; then
+if grep -qs "$ISO_ROOT" /proc/mounts; then
     echo ISO root already mounted
 else
     echo Attempt to mount the ISO root
@@ -39,11 +40,11 @@ else
     # the mount will fail and the retry loop would retry the mount repeatedly. This
     # is handled by the 'or' in the retry loop which will grep for the mount point and
     # break out of the loop if it is found.
-    retry "{ mount_iso_root || grep -qs $ISO_ROOT /proc/mounts ; }"
+    retry "mount_iso_root || grep -qs \"$ISO_ROOT\" /proc/mounts"
 fi
 
 TEMPLATE_DUMP_YAML=$(find "$CONFIG_ROOT" -type f -name "template-dump.yaml" | head -n 1)
-if [ -n "$TEMPLATE_DUMP_YAML" ]; then
+if [[ -n "$TEMPLATE_DUMP_YAML" ]]; then
     echo "find template-dump.yaml at $TEMPLATE_DUMP_YAML"
 else
     echo "template-dump.yaml not found in $CONFIG_ROOT"
@@ -57,10 +58,11 @@ stty -echo
 # Disable kernel messages on the current terminal
 dmesg -D
 
-echo "Saving installer debug log to $INSTALLER_LOG"
-# Overwrite log (not append) to produce a clean log for each run
-live-installer --config $TEMPLATE_DUMP_YAML --repo $CACHE_REPO --attended --log-level debug 2>&1 | tee "$INSTALLER_LOG"
-installerExitCode=${PIPESTATUS[0]}
+if live-installer --config "$TEMPLATE_DUMP_YAML" --repo "$CACHE_REPO" --attended; then
+    installerExitCode=0
+else
+    installerExitCode=$?
+fi
 
 # Consume any buffered stdin to prevent it from being passed to any future programs,
 # as it may contain sensitive data
@@ -75,7 +77,7 @@ stty echo
 # Enable kernel messages
 dmesg -E
 
-if [ $installerExitCode -eq 0 ]; then
+if [[ $installerExitCode -eq 0 ]]; then
     reboot
 else
     echo "Installer failed. Debug log saved at $INSTALLER_LOG"
