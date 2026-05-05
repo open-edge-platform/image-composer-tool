@@ -234,6 +234,61 @@
       },
       "additionalProperties": false
     },
+    "NetworkInterface": {
+      "type": "object",
+      "description": "Network interface configuration",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Interface name (e.g., eth0, eno1)"
+        },
+        "dhcp4": {
+          "type": "boolean",
+          "description": "Enable DHCPv4"
+        },
+        "dhcp6": {
+          "type": "boolean",
+          "description": "Enable DHCPv6"
+        },
+        "addresses": {
+          "type": "array",
+          "description": "Static IP addresses (e.g., 192.168.1.10/24)",
+          "items": { "type": "string" }
+        },
+        "gateway4": {
+          "type": "string",
+          "description": "IPv4 default gateway"
+        },
+        "gateway6": {
+          "type": "string",
+          "description": "IPv6 default gateway"
+        },
+        "nameservers": {
+          "type": "array",
+          "description": "DNS server addresses",
+          "items": { "type": "string" }
+        }
+      },
+      "required": ["name"],
+      "additionalProperties": false
+    },
+    "NetworkConfig": {
+      "type": "object",
+      "description": "Network configuration for the installed OS",
+      "properties": {
+        "backend": {
+          "type": "string",
+          "description": "Network backend to use",
+          "enum": ["systemd-networkd", "netplan"]
+        },
+        "interfaces": {
+          "type": "array",
+          "description": "List of network interfaces to configure",
+          "items": { "$ref": "#/$defs/NetworkInterface" }
+        }
+      },
+      "additionalProperties": false
+    },
     "Kernel": {
       "type": "object",
       "description": "Kernel configuration",
@@ -264,6 +319,7 @@
         "immutability": { "$ref": "#/$defs/Immutability" },
         "users": { "$ref": "#/$defs/Users" },
         "bootloader": { "$ref": "#/$defs/Bootloader" },
+        "network": { "$ref": "#/$defs/NetworkConfig" },
         "packages": {
           "type": "array",
           "description": "List of packages to include in the system. Supports simple glob-style patterns on package names, such as wayland* or libva-?[0-9]. Wildcards are limited to *, ?, and bracket ranges (e.g. [0-9]); patterns must match the allowed character set in this schema and are applied only to package names (versioned globs or comparison operators like pkg>=1.2 are not supported). Invalid patterns will cause template validation to fail.",

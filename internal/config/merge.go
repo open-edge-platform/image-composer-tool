@@ -245,6 +245,11 @@ func mergeSystemConfig(defaultConfig, userConfig SystemConfig) SystemConfig {
 		merged.Bootloader = mergeBootloader(defaultConfig.Bootloader, userConfig.Bootloader)
 	}
 
+	// Merge network config
+	if !isEmptyNetworkConfig(userConfig.Network) {
+		merged.Network = mergeNetworkConfig(defaultConfig.Network, userConfig.Network)
+	}
+
 	// Merge packages - user packages are added to default packages
 	if len(userConfig.Packages) > 0 {
 		merged.Packages = mergePackages(defaultConfig.Packages, userConfig.Packages)
@@ -274,6 +279,21 @@ func mergeImmutabilityConfig(defaultImmutability, userImmutability ImmutabilityC
 
 	if userImmutability.SecureBootDBCer != "" {
 		merged.SecureBootDBCer = userImmutability.SecureBootDBCer
+	}
+
+	return merged
+}
+
+// mergeNetworkConfig merges network configurations
+func mergeNetworkConfig(defaultNetwork, userNetwork NetworkConfig) NetworkConfig {
+	merged := defaultNetwork
+
+	if userNetwork.Backend != "" {
+		merged.Backend = userNetwork.Backend
+	}
+
+	if len(userNetwork.Interfaces) > 0 {
+		merged.Interfaces = userNetwork.Interfaces
 	}
 
 	return merged
@@ -529,6 +549,10 @@ func isEmptySystemConfig(config SystemConfig) bool {
 
 func isEmptyBootloader(bootloader Bootloader) bool {
 	return bootloader.BootType == "" && bootloader.Provider == ""
+}
+
+func isEmptyNetworkConfig(network NetworkConfig) bool {
+	return network.Backend == "" && len(network.Interfaces) == 0
 }
 
 // validateAndFixImmutabilityConfig checks if immutability is enabled but hash partition is missing

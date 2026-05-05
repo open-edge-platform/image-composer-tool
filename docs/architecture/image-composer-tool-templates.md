@@ -26,6 +26,7 @@ For a conceptual overview of how templates fit into the build pipeline, see
     - [`systemConfig`](#systemconfig)
       - [`systemConfig.kernel`](#systemconfigkernel)
       - [`systemConfig.bootloader`](#systemconfigbootloader)
+      - [`systemConfig.network`](#systemconfignetwork)
       - [`systemConfig.immutability`](#systemconfigimmutability)
       - [`systemConfig.users[]`](#systemconfigusers)
       - [`systemConfig.initramfs`](#systemconfiginitramfs)
@@ -378,6 +379,62 @@ packageRepositories:
 Typical defaults: raw images use `efi` / `systemd-boot`; ISO images use
 `efi` / `grub`.
 
+#### `systemConfig.network`
+
+Declarative network configuration for the installed OS. This is a minimal
+explicit-interface implementation.
+
+| Field | Type | Required | Valid Values | Description |
+|-------|------|----------|--------------|-------------|
+| `backend` | string | **Yes** (when section present) | `systemd-networkd`, `netplan` | Network configuration backend |
+| `interfaces` | object[] | No | See below | List of interface configurations |
+
+`interfaces[]` fields:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | **Yes** | Interface name (for example, `eth0`, `eno1`) |
+| `dhcp4` | bool | No | Enable DHCPv4 |
+| `dhcp6` | bool | No | Enable DHCPv6 |
+| `addresses` | string[] | No | Static addresses in CIDR format |
+| `gateway4` | string | No | IPv4 default gateway |
+| `gateway6` | string | No | IPv6 default gateway |
+| `nameservers` | string[] | No | DNS server addresses |
+
+> **Note:** Interface names are explicit and user-provided. The current
+> implementation does not auto-discover or auto-select NICs at install time.
+
+```yaml
+systemConfig:
+  network:
+    backend: systemd-networkd
+    interfaces:
+      - name: eth0
+        dhcp4: true
+      - name: eth1
+        addresses:
+          - "10.0.0.100/24"
+        gateway4: "10.0.0.1"
+        nameservers:
+          - "8.8.8.8"
+          - "8.8.4.4"
+```
+
+```yaml
+systemConfig:
+  network:
+    backend: netplan
+    interfaces:
+      - name: eth0
+        dhcp4: true
+      - name: eth1
+        addresses:
+          - "192.168.1.10/24"
+        gateway4: "192.168.1.1"
+        nameservers:
+          - "1.1.1.1"
+```
+
 #### `systemConfig.immutability`
 
 Configures dm-verity immutable root filesystem and optional UEFI Secure Boot
@@ -527,6 +584,7 @@ follow different strategies:
 | `systemConfig.packages` | **Additive** - user packages appended to defaults (deduplicated) |
 | `systemConfig.kernel` | User overrides `version`, `cmdline`, `packages` individually if non-empty |
 | `systemConfig.bootloader` | User overrides individual fields if non-empty |
+| `systemConfig.network` | User overrides `backend` if non-empty; `interfaces` replaced when provided |
 | `systemConfig.users` | Merged by `name` - same-name users merged field-by-field; new users appended |
 | `systemConfig.additionalFiles` | Merged by `final` path - same destination overrides; new files appended |
 | `systemConfig.configurations` | **Additive** - user commands appended after defaults |

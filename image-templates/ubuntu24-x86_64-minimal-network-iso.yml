@@ -1,0 +1,93 @@
+metadata:
+  description: Ubuntu 24.04 minimal ISO with declarative network configuration
+  use_cases:
+    - Unattended edge device provisioning
+    - Network-configured minimal deployments
+  keywords:
+    - iso
+    - ubuntu
+    - minimal
+    - network
+    - dhcp
+    - static-ip
+
+image:
+  name: minimal-os-image-ubuntu-network
+  version: "24.04"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: iso
+
+disk:
+  name: Default_ISO
+  selectionPolicy:
+    strategy: largest
+    excludeRemovable: true
+  partitionTableType: gpt
+  partitions:
+    - id: esp
+      type: esp
+      flags:
+        - esp
+        - boot
+      start: 1MiB
+      end: 512MiB
+      fsType: fat32
+      mountPoint: /boot/efi
+
+    - id: rootfs
+      type: linux-root-amd64
+      start: 512MiB
+      end: "0"
+      fsType: ext4
+      mountPoint: /
+
+systemConfig:
+  name: Minimal_Ubuntu_Network
+  description: Minimal Ubuntu 24.04 with network configuration
+
+  hostname: ubuntu-minimal
+
+  bootloader:
+    bootType: efi
+    provider: grub
+
+  # Declarative network configuration
+  network:
+    backend: systemd-networkd
+    interfaces:
+      # Primary interface with DHCP
+      - name: eth0
+        dhcp4: true
+
+      # Secondary interface with static IP
+      - name: eth1
+        addresses:
+          - "10.0.0.100/24"
+        gateway4: "10.0.0.1"
+        nameservers:
+          - "8.8.8.8"
+          - "8.8.4.4"
+
+  packages:
+    - ca-certificates
+    - curl
+    - openssh-server
+    - vim
+    - cloud-init
+
+  users:
+    - name: root
+      startupScript: "/root/setup.sh"
+    - name: admin
+      sudo: true
+      shell: /bin/bash
+      home: /home/admin
+
+  kernel:
+    version: "6.8"
+    packages:
+      - linux-image-generic-hwe-24.04
