@@ -533,8 +533,16 @@ func diskPartitionCreate(
 		}
 
 		cmdStr := fmt.Sprintf("sudo sgdisk %s %s", strings.Join(parts, " "), diskPath)
-		_, err = shell.ExecCmd(cmdStr, false, shell.HostPath, nil)
+		cmdOutput, err := shell.ExecCmd(cmdStr, false, shell.HostPath, nil)
 		if err != nil {
+			trimmedOutput := strings.TrimSpace(cmdOutput)
+			if trimmedOutput != "" {
+				log.Errorf("Failed to create GPT partition %d on disk %s: %v; output: %s",
+					partitionNum, diskPath, err, trimmedOutput)
+				return "", fmt.Errorf("failed to create GPT partition %d on disk %s: %w; output: %s",
+					partitionNum, diskPath, err, trimmedOutput)
+			}
+
 			log.Errorf("Failed to create GPT partition %d on disk %s: %v", partitionNum, diskPath, err)
 			return "", fmt.Errorf("failed to create GPT partition %d on disk %s: %w", partitionNum, diskPath, err)
 		}
@@ -715,8 +723,15 @@ func DiskPartitionsCreate(diskPath string, partitionsList []config.PartitionInfo
 
 	if partitionTableType == "gpt" {
 		cmdStr := fmt.Sprintf("echo 'label: gpt' | sudo sfdisk %s", diskPath)
-		_, err := shell.ExecCmd(cmdStr, false, shell.HostPath, nil)
+		cmdOutput, err := shell.ExecCmd(cmdStr, false, shell.HostPath, nil)
 		if err != nil {
+			trimmedOutput := strings.TrimSpace(cmdOutput)
+			if trimmedOutput != "" {
+				log.Errorf("Failed to create GPT partition table on disk %s: %v; output: %s", diskPath, err, trimmedOutput)
+				return nil, fmt.Errorf("failed to create GPT partition table on disk %s: %w; output: %s",
+					diskPath, err, trimmedOutput)
+			}
+
 			log.Errorf("Failed to create GPT partition table on disk %s: %v", diskPath, err)
 			return nil, fmt.Errorf("failed to create GPT partition table on disk %s: %w", diskPath, err)
 		}
