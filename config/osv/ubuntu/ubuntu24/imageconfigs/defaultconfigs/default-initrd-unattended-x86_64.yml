@@ -62,6 +62,9 @@ systemConfig:
     - name: root
       startupScript: "/root/unattendedinstaller"
 
+  configurations:
+    - cmd: "systemctl mask apt-daily.service apt-daily.timer apt-daily-upgrade.service apt-daily-upgrade.timer"
+
   kernel:
     name: kernel
     version: "6.17"
