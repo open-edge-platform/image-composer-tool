@@ -4,18 +4,30 @@ set -euo pipefail
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-# Set pipefail to catch errors in pipelines (e.g., live-installer | tee).
-# Note: -e is not set because the retry loop intentionally allows command failures.
-# Note: -u is not set to allow optional variable expansion; critical vars are pre-checked.
-set -o pipefail
-
 ISO_ROOT=/cdrom
 CONFIG_ROOT="$ISO_ROOT/config"
 CACHE_REPO="$ISO_ROOT/cache-repo"
 
 # Mounting the ISO root for the installer.
 mkdir -p "$ISO_ROOT"
-LABEL=ICT_CDROM
+LABELS=(ICT_CDROM OIC_CDROM)
+
+function mount_iso_root {
+    local label
+    for label in "${LABELS[@]}"; do
+        if mount -L "$label" -o ro "$ISO_ROOT" 2>/dev/null; then
+            echo "Mounted ISO root using label $label"
+            return 0
+        fi
+    done
+
+    if mount -t iso9660 -o ro /dev/sr0 "$ISO_ROOT" 2>/dev/null; then
+        echo "Mounted ISO root using /dev/sr0"
+        return 0
+    fi
+
+    return 1
+}
 
 function retry {
     local retry=0
@@ -25,7 +37,7 @@ function retry {
     do
         eval "$@" && break
         echo "$@" Retrying...
-        ((retry++))
+        retry=$((retry + 1))
         sleep $sleep_seconds
     done
 }
@@ -80,6 +92,5 @@ dmesg -E
 if [[ $installerExitCode -eq 0 ]]; then
     reboot
 else
-    echo "Installer failed. Debug log saved at $INSTALLER_LOG"
     /bin/bash
 fi

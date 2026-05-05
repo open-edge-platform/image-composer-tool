@@ -37,7 +37,7 @@ function retry {
     do
         eval "$@" && break
         echo "$@" Retrying...
-        ((retry++))
+        retry=$((retry + 1))
         sleep $sleep_seconds
     done
 }
