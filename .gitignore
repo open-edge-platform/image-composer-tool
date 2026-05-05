@@ -9,6 +9,6 @@ workspace/
 
 # Local editor and generated artifacts
 .vscode/
-image-composer-tool
-live-installer
-image-composer-tool.log
+/image-composer-tool
+/live-installer
+/image-composer-tool.log
