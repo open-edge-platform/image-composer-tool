@@ -311,6 +311,9 @@ func (p *ubuntu) downloadImagePkgs(template *config.ImageTemplate) error {
 			i+1, cfg.Name, cfg.PkgList, cfg.PkgPrefix, cfg.Priority)
 	}
 
+	debutils.ConfigureKernelSelection(template.GetKernelPackages(), template.GetKernel().Version)
+	defer debutils.ConfigureKernelSelection(nil, "")
+
 	fullPkgList, fullPkgListBom, err := debutils.DownloadPackagesComplete(pkgList, pkgCacheDir, template.DotFilePath, pkgSources, template.DotSystemOnly)
 	if err != nil {
 		return fmt.Errorf("failed to download packages: %w", err)
