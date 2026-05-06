@@ -137,6 +137,50 @@ func targetUsesApt(targetOS string) bool {
 	}
 }
 
+var aptBackgroundUnits = []string{
+	"apt-daily.service",
+	"apt-daily.timer",
+	"apt-daily-upgrade.service",
+	"apt-daily-upgrade.timer",
+	"unattended-upgrades.service",
+	"unattended-upgrades.timer",
+}
+
+func isIgnorableSystemctlSuppressionFailure(output string) bool {
+	lowerOutput := strings.ToLower(strings.TrimSpace(output))
+	if lowerOutput == "" {
+		return false
+	}
+
+	markers := []string{
+		"not loaded",
+		"not found",
+		"does not exist",
+		"inactive",
+		"not active",
+	}
+
+	for _, marker := range markers {
+		if strings.Contains(lowerOutput, marker) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func runSystemctlSuppressionCommand(cmd string) error {
+	output, err := shell.ExecCmd(cmd, true, shell.HostPath, nil)
+	if err == nil {
+		return nil
+	}
+	if isIgnorableSystemctlSuppressionFailure(output) {
+		log.Warnf("Ignoring non-fatal systemctl suppression failure for %q: %s", cmd, strings.TrimSpace(output))
+		return nil
+	}
+	return fmt.Errorf("command %q failed: %w", cmd, err)
+}
+
 func suppressHostAptBackgroundTasks() error {
 	systemctlExists, err := shell.IsCommandExist("systemctl", shell.HostPath)
 	if err != nil {
@@ -148,12 +192,12 @@ func suppressHostAptBackgroundTasks() error {
 	}
 
 	commands := []string{
-		"sh -c \"systemctl stop apt-daily.service apt-daily.timer apt-daily-upgrade.service apt-daily-upgrade.timer unattended-upgrades.service unattended-upgrades.timer >/dev/null 2>&1 || true\"",
-		"sh -c \"systemctl mask apt-daily.service apt-daily.timer apt-daily-upgrade.service apt-daily-upgrade.timer unattended-upgrades.service unattended-upgrades.timer >/dev/null 2>&1 || true\"",
+		"systemctl stop " + strings.Join(aptBackgroundUnits, " "),
+		"systemctl mask --runtime " + strings.Join(aptBackgroundUnits, " "),
 	}
 
 	for _, cmd := range commands {
-		if _, err := shell.ExecCmd(cmd, true, shell.HostPath, nil); err != nil {
+		if err := runSystemctlSuppressionCommand(cmd); err != nil {
 			return fmt.Errorf("failed to suppress host apt background tasks: %w", err)
 		}
 	}
