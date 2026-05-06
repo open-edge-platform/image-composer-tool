@@ -403,7 +403,7 @@ func TestUmountPath(t *testing.T) {
 			mountPoint: "/mnt/test",
 			mockCommands: []shell.MockCommand{
 				{Pattern: "mkdir", Output: "", Error: nil},
-				{Pattern: "mount", Output: "ext4 on /mnt/test type ext4 (rw,relatime)", Error: nil},
+				{Pattern: "^mount$", Output: "ext4 on /mnt/test type ext4 (rw,relatime)", Error: nil},
 				{Pattern: "umount /mnt/test", Output: "", Error: nil},
 			},
 			expectError: false,
@@ -413,7 +413,7 @@ func TestUmountPath(t *testing.T) {
 			mountPoint: "/mnt/test",
 			mockCommands: []shell.MockCommand{
 				{Pattern: "mkdir", Output: "", Error: nil},
-				{Pattern: "mount", Output: "ext4 on /mnt/test type ext4 (rw,relatime)", Error: nil},
+				{Pattern: "^mount$", Output: "ext4 on /mnt/test type ext4 (rw,relatime)", Error: nil},
 				{Pattern: "umount /mnt/test", Output: "", Error: fmt.Errorf("device busy")},
 				{Pattern: "umount -l /mnt/test", Output: "", Error: nil},
 			},
@@ -424,7 +424,7 @@ func TestUmountPath(t *testing.T) {
 			mountPoint: "/mnt/test",
 			mockCommands: []shell.MockCommand{
 				{Pattern: "mkdir", Output: "", Error: nil},
-				{Pattern: "mount", Output: "ext4 on /mnt/test type ext4 (rw,relatime)", Error: nil},
+				{Pattern: "^mount$", Output: "ext4 on /mnt/test type ext4 (rw,relatime)", Error: nil},
 				{Pattern: "umount /mnt/test", Output: "", Error: fmt.Errorf("device busy")},
 				{Pattern: "umount -l /mnt/test", Output: "", Error: fmt.Errorf("still busy")},
 				{Pattern: "umount -f /mnt/test", Output: "", Error: nil},
@@ -436,7 +436,7 @@ func TestUmountPath(t *testing.T) {
 			mountPoint: "/mnt/test",
 			mockCommands: []shell.MockCommand{
 				{Pattern: "mkdir", Output: "", Error: nil},
-				{Pattern: "mount", Output: "ext4 on /mnt/test type ext4 (rw,relatime)", Error: nil},
+				{Pattern: "^mount$", Output: "ext4 on /mnt/test type ext4 (rw,relatime)", Error: nil},
 				{Pattern: "umount /mnt/test", Output: "", Error: fmt.Errorf("device busy")},
 				{Pattern: "umount -l /mnt/test", Output: "", Error: fmt.Errorf("still busy")},
 				{Pattern: "umount -f /mnt/test", Output: "", Error: fmt.Errorf("still busy")},
@@ -449,13 +449,14 @@ func TestUmountPath(t *testing.T) {
 			mountPoint: "/mnt/test",
 			mockCommands: []shell.MockCommand{
 				{Pattern: "mkdir", Output: "", Error: nil},
-				{Pattern: "mount", Output: "ext4 on /mnt/test type ext4 (rw,relatime)", Error: nil},
+				{Pattern: "^mount$", Output: "ext4 on /mnt/test type ext4 (rw,relatime)", Error: nil},
 				{Pattern: "umount /mnt/test", Output: "", Error: fmt.Errorf("device busy")},
 				{Pattern: "umount -l /mnt/test", Output: "", Error: fmt.Errorf("still busy")},
 				{Pattern: "umount -f /mnt/test", Output: "", Error: fmt.Errorf("still busy")},
 				{Pattern: "umount -lf /mnt/test", Output: "", Error: fmt.Errorf("still busy")},
 			},
-			expectError: false, // umountPath returns nil even if all strategies fail
+			expectError: true,
+			errorMsg:    "failed to unmount /mnt/test after trying all strategies",
 		},
 		{
 			name:       "mount_point_not_mounted",
@@ -514,7 +515,7 @@ func TestUmountAndDeletePath(t *testing.T) {
 			name:       "successful_unmount_and_delete",
 			mountPoint: "/mnt/test",
 			mockCommands: []shell.MockCommand{
-				{Pattern: "mount", Output: "ext4 on /mnt/test type ext4 (rw,relatime)", Error: nil},
+				{Pattern: "^mount$", Output: "ext4 on /mnt/test type ext4 (rw,relatime)", Error: nil},
 				{Pattern: "umount /mnt/test", Output: "", Error: nil},
 				{Pattern: "rm -rf /mnt/test", Output: "", Error: nil},
 			},
@@ -586,7 +587,7 @@ func TestUmountSubPath(t *testing.T) {
 			name:       "successful_unmount_subpaths",
 			mountPoint: "/mnt/chroot",
 			mockCommands: []shell.MockCommand{
-				{Pattern: "mount", Output: "proc on /mnt/chroot/proc type proc (rw,nosuid,nodev,noexec,relatime)\ntmpfs on /mnt/chroot/dev/shm type tmpfs (rw,nosuid,nodev)\nudev on /mnt/chroot/dev type devtmpfs (rw,nosuid,relatime)\n", Error: nil},
+				{Pattern: "^mount$", Output: "proc on /mnt/chroot/proc type proc (rw,nosuid,nodev,noexec,relatime)\ntmpfs on /mnt/chroot/dev/shm type tmpfs (rw,nosuid,nodev)\nudev on /mnt/chroot/dev type devtmpfs (rw,nosuid,relatime)\n", Error: nil},
 				{Pattern: "umount /mnt/chroot/proc", Output: "", Error: nil},
 				{Pattern: "umount /mnt/chroot/dev/shm", Output: "", Error: nil},
 				{Pattern: "umount /mnt/chroot/dev", Output: "", Error: nil},
@@ -597,7 +598,7 @@ func TestUmountSubPath(t *testing.T) {
 			name:       "no_subpaths_to_unmount",
 			mountPoint: "/mnt/chroot",
 			mockCommands: []shell.MockCommand{
-				{Pattern: "mount", Output: "proc on /proc type proc (rw,nosuid,nodev,noexec,relatime)\n", Error: nil},
+				{Pattern: "^mount$", Output: "proc on /proc type proc (rw,nosuid,nodev,noexec,relatime)\n", Error: nil},
 			},
 			expectError: false,
 		},
@@ -605,7 +606,7 @@ func TestUmountSubPath(t *testing.T) {
 			name:       "get_mount_subpath_list_failure",
 			mountPoint: "/mnt/chroot",
 			mockCommands: []shell.MockCommand{
-				{Pattern: "mount", Output: "", Error: fmt.Errorf("mount command failed")},
+				{Pattern: "^mount$", Output: "", Error: fmt.Errorf("mount command failed")},
 			},
 			expectError: true,
 			errorMsg:    "failed to get mount subpath list",
@@ -614,13 +615,14 @@ func TestUmountSubPath(t *testing.T) {
 			name:       "unmount_subpath_failure",
 			mountPoint: "/mnt/chroot",
 			mockCommands: []shell.MockCommand{
-				{Pattern: "mount", Output: "proc on /mnt/chroot/proc type proc (rw,nosuid,nodev,noexec,relatime)\n", Error: nil},
+				{Pattern: "^mount$", Output: "proc on /mnt/chroot/proc type proc (rw,nosuid,nodev,noexec,relatime)\n", Error: nil},
 				{Pattern: "umount /mnt/chroot/proc", Output: "", Error: fmt.Errorf("device busy")},
 				{Pattern: "umount -l /mnt/chroot/proc", Output: "", Error: fmt.Errorf("still busy")},
 				{Pattern: "umount -f /mnt/chroot/proc", Output: "", Error: fmt.Errorf("still busy")},
 				{Pattern: "umount -lf /mnt/chroot/proc", Output: "", Error: fmt.Errorf("still busy")},
 			},
-			expectError: false, // umountPath returns nil even if all strategies fail
+			expectError: true,
+			errorMsg:    "failed to unmount /mnt/chroot/proc",
 		},
 	}
 

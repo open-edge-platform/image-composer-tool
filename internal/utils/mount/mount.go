@@ -160,16 +160,21 @@ func umountPath(mountPoint string) error {
 		{"umount -f " + mountPoint, "force"},
 		{"umount -lf " + mountPoint, "lazy-force"},
 	}
+	var lastErr error
 	for _, strategy := range unmountStrategies {
 		log.Debugf("Trying %s unmount for %s", strategy.desc, mountPoint)
 		if output, err := shell.ExecCmd(strategy.cmd, true, shell.HostPath, nil); err == nil {
 			log.Debugf("Successfully unmounted %s using %s approach", mountPoint, strategy.desc)
 			return nil
 		} else {
+			lastErr = err
 			log.Debugf("Unmount failed with %s approach: %v, output: %s", strategy.desc, err, output)
 		}
 	}
-	return nil
+	if lastErr != nil {
+		return fmt.Errorf("failed to unmount %s after trying all strategies: %w", mountPoint, lastErr)
+	}
+	return fmt.Errorf("failed to unmount %s after trying all strategies", mountPoint)
 }
 
 func UmountPath(mountPoint string) error {
