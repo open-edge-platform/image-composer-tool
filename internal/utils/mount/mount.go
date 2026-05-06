@@ -53,11 +53,13 @@ func waitForBlockDevice(path string) error {
 }
 
 func mountPathWithRetry(targetPath, mountPoint, mountCmdStr string) error {
+	if err := waitForBlockDevice(targetPath); err != nil {
+		return err
+	}
+
 	var lastErr error
 	for attempt := 1; attempt <= maxBlockDeviceMountAttempts; attempt++ {
-		if err := waitForBlockDevice(targetPath); err != nil {
-			lastErr = err
-		} else if _, err := shell.ExecCmd(mountCmdStr, true, shell.HostPath, nil); err != nil {
+		if _, err := shell.ExecCmd(mountCmdStr, true, shell.HostPath, nil); err != nil {
 			lastErr = err
 			log.Warnf("Mount attempt %d/%d failed for %s on %s: %v", attempt, maxBlockDeviceMountAttempts, targetPath, mountPoint, err)
 		} else {
