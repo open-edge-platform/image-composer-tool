@@ -32,37 +32,42 @@ disk:
       compression: gz # image compression format (optional)
   size: 4GiB # 4G, 4GB, 4096 MiB also valid. (Required for raw)
   partitionTableType: gpt # Partition table type, valid value: [gpt, mbr]
-  partitions: # Required for raw, optional for ISO, not needed for rootfs.
+  partitions:
+    # EFI system partition for bootloaders - second partition
     - id: boot
       type: esp
       flags:
-        - esp
-        - boot
-      start:  1MiB
-      end: 100MiB
+        - esp  
+        - boot  
+      # GPT type GUID for EFI system partition
+      typeUUID: c12a7328-f81f-11d2-ba4b-00a0c93ec93b
       fsType: fat32
-      mountPoint: /efi
+      fsLabel: UEFI
+      start: 1MiB
+      end: 513MB
+      mountPoint: /boot/efi
       mountOptions: umask=0077
 
+    # Root filesystem - last partition for easy expansion
     - id: rootfs
-      type: linux-root-amd64
-      start: 1025MiB
-      end: 3583MiB
+      name: minimal-rootfs
+      type: linux-root-arm64
+      # Standard Linux root filesystem GUID for ARM
+      typeUUID: B921B045-1DF0-41C3-AF44-4C6F280D3FAE 
       fsType: ext4
+      fsLabel: minimal-rootfs
+      start: 1073MiB
+      end: "0"
       mountPoint: /
-      mountOptions: defaults
-
-    - id: extendedboot
-      type: xbootldr
-      start: 101MiB
-      end: 1024MiB 
-      fsType: vfat
-      mountPoint: /boot
       mountOptions: defaults
 
 systemConfig:
   name: minimal
   description: Minimal ubuntu image
+
+  bootloader:
+    bootType: efi
+    provider: grub
 
   immutability:
     enabled: false # default is true
@@ -73,12 +78,12 @@ systemConfig:
 
   packages:
     - ubuntu-minimal
-    - systemd-boot
     - dracut-core
     - systemd
-    - cryptsetup-bin
     - openssh-server
     - systemd-resolved
+    - systemd-timesyncd
+    - grub-efi-arm64
 
   kernel:
     version: "6.17"

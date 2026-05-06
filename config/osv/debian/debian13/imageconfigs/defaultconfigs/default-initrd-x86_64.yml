@@ -48,12 +48,13 @@ systemConfig:
     - systemd-boot
     - grub-pc-bin
     - grub-efi-amd64-bin
+    - gdisk
 
   additionalFiles:
     - local: ../additionalfiles/dhcp.network
       final: /etc/systemd/network/dhcp.network
-    - local: ../additionalfiles/ubuntu-noble.list
-      final: /etc/apt/sources.list.d/ubuntu-noble.list
+    - local: ../additionalfiles/debian-trixie.list
+      final: /etc/apt/sources.list.d/debian-trixie.list
     - local: ../additionalfiles/getty@.service
       final: /usr/lib/systemd/system/getty@.service
     - local: ../additionalfiles/serial-getty@.service

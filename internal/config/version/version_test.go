@@ -22,8 +22,8 @@ func TestBuildMetadataDefaults(t *testing.T) {
 	if Version != "0.1.0" {
 		t.Errorf("Version: got %q, want %q", Version, "0.1.0")
 	}
-	if Toolname != "Image-Composer-dev" {
-		t.Errorf("Toolname: got %q, want %q", Toolname, "Image-Composer-dev")
+	if Toolname != "Image-Composer-Tool-dev" {
+		t.Errorf("Toolname: got %q, want %q", Toolname, "Image-Composer-Tool-dev")
 	}
 	if Organization != "unknown" {
 		t.Errorf("Organization: got %q, want %q", Organization, "unknown")

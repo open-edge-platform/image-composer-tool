@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-edge-platform/os-image-composer/internal/chroot"
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
+	"github.com/open-edge-platform/image-composer-tool/internal/chroot"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
 
 // Helper function to create a test ImageTemplate
@@ -2815,6 +2815,9 @@ func TestBuildImageUKI(t *testing.T) {
 
 			// Create test template
 			template := &config.ImageTemplate{
+				Target: config.TargetInfo{
+					Arch: "x86_64",
+				},
 				SystemConfig: config.SystemConfig{
 					Bootloader: config.Bootloader{
 						Provider: tt.bootloaderType,
@@ -3003,6 +3006,9 @@ func TestBuildUKI(t *testing.T) {
 
 			// Create test template
 			template := &config.ImageTemplate{
+				Target: config.TargetInfo{
+					Arch: "x86_64",
+				},
 				SystemConfig: config.SystemConfig{
 					Immutability: config.ImmutabilityConfig{
 						Enabled: tt.immutable,
@@ -3032,6 +3038,38 @@ func TestBuildUKI(t *testing.T) {
 	}
 
 	t.Log("buildUKI test completed")
+}
+
+func TestGetUkifyStubPath(t *testing.T) {
+	tests := []struct {
+		name       string
+		arch       string
+		wantSuffix string
+		wantErr    bool
+	}{
+		{name: "x86_64", arch: "x86_64", wantSuffix: "/usr/lib/systemd/boot/efi/linuxx64.efi.stub"},
+		{name: "aarch64", arch: "aarch64", wantSuffix: "/usr/lib/systemd/boot/efi/linuxaa64.efi.stub"},
+		{name: "arm64 alias", arch: "arm64", wantSuffix: "/usr/lib/systemd/boot/efi/linuxaa64.efi.stub"},
+		{name: "unsupported", arch: "riscv64", wantErr: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := getUkifyStubPath(tc.arch)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error for arch %s, got nil", tc.arch)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.wantSuffix {
+				t.Fatalf("unexpected stub path for arch %s: got %s, want %s", tc.arch, got, tc.wantSuffix)
+			}
+		})
+	}
 }
 
 // TestCollectUserGroups tests the collectUserGroups function

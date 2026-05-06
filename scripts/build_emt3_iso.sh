@@ -126,8 +126,8 @@ run_qemu_boot_test_iso() {
 }
 
 git branch
-#Build the OS Image Composer
-echo "Building the OS Image Composer..."
+#Build the ICT
+echo "Building the ICT..."
 echo "Generating binary with earthly..."
 earthly +build
 
@@ -139,7 +139,7 @@ build_emt3_iso_image() {
   echo "Current working directory: $(pwd)"
   # Temporarily disable exit on error for the build command to capture output
   set +e
-  output=$( sudo -S ./build/os-image-composer build image-templates/emt3-x86_64-minimal-iso.yml 2>&1)
+  output=$( sudo -S ./build/image-composer-tool build image-templates/emt3-x86_64-minimal-iso.yml 2>&1)
   build_exit_code=$?
   set -e
   

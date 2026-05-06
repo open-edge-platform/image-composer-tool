@@ -1,8 +1,8 @@
 # Usage Guide
 
-A practical guide for common OS Image Composer workflows. For the complete
+A practical guide for common ICT workflows. For the complete
 command reference, see the
-[CLI Specification](../architecture/os-image-composer-cli-specification.md).
+[CLI Specification](../architecture/image-composer-tool-cli-specification.md).
 
 ## Table of Contents
 
@@ -26,56 +26,66 @@ command reference, see the
 
 ## Binary Location
 
-The path to the `os-image-composer` binary depends on how you built or
+The path to the `image-composer-tool` binary depends on how you built or
 installed it:
 
 | Build method | Binary path |
 |-------------|-------------|
-| `go build ./cmd/os-image-composer` | `./os-image-composer` |
-| `earthly +build` | `./build/os-image-composer` |
-| Debian package | `os-image-composer` (installed to `/usr/local/bin/`) |
+| `go build ./cmd/image-composer-tool` | `./image-composer-tool` |
+| `earthly +build` | `./build/image-composer-tool` |
+| Debian package | `image-composer-tool` (installed to `/usr/local/bin/`) |
 
-The examples below use `./os-image-composer` (the `go build` location).
+The examples below use `./image-composer-tool` (the `go build` location).
 Substitute the path that matches your setup.
 
 ## Commands Overview
 
 ```bash
-os-image-composer build         # Build an image from a template
-os-image-composer validate      # Validate a template without building
-os-image-composer inspect       # Inspect a raw image's structure
-os-image-composer compare       # Compare two images
-os-image-composer ai            # AI-powered template generation (RAG)
-os-image-composer cache clean   # Manage cached artifacts
-os-image-composer config        # Manage configuration (init, show)
-os-image-composer version       # Display version info
-os-image-composer --help        # Show all commands and options
+image-composer-tool build         # Build an image from a template
+image-composer-tool validate      # Validate a template without building
+image-composer-tool inspect       # Inspect a raw image's structure
+image-composer-tool compare       # Compare two images
+image-composer-tool ai            # AI-powered template generation (RAG)
+image-composer-tool cache clean   # Manage cached artifacts
+image-composer-tool config        # Manage configuration (init, show)
+image-composer-tool version       # Display version info
+image-composer-tool --help        # Show all commands and options
 ```
 
 For the full details on every command — including `inspect`, `compare`, and
 `cache` — see the
-[CLI Specification](../architecture/os-image-composer-cli-specification.md#commands).
+[CLI Specification](../architecture/image-composer-tool-cli-specification.md#commands).
 
 ## Building an Image
 
+> **ISO images require the `live-installer` binary.** Build it before starting
+> an ISO build:
+>
+> ```bash
+> go build -buildmode=pie -o ./build/live-installer ./cmd/live-installer
+> ```
+>
+> If you use `earthly +build`, both binaries are built automatically. See the
+> [Installation Guide](./installation.md) for details.
+
 ```bash
 # go build — binary is in the repo root
-sudo -E ./os-image-composer build image-templates/azl3-x86_64-edge-raw.yml
+sudo -E ./image-composer-tool build image-templates/azl3-x86_64-edge-raw.yml
 
 # earthly +build — binary is in ./build/
-sudo -E ./build/os-image-composer build image-templates/azl3-x86_64-edge-raw.yml
+sudo -E ./build/image-composer-tool build image-templates/azl3-x86_64-edge-raw.yml
 
 # Debian package — binary is on PATH
-sudo os-image-composer build /usr/share/os-image-composer/examples/azl3-x86_64-edge-raw.yml
+sudo image-composer-tool build /usr/share/image-composer-tool/examples/azl3-x86_64-edge-raw.yml
 
 # Override config settings with flags
-sudo -E ./os-image-composer build --workers 16 --cache-dir /tmp/cache image-templates/azl3-x86_64-edge-raw.yml
+sudo -E ./image-composer-tool build --workers 16 --cache-dir /tmp/cache image-templates/azl3-x86_64-edge-raw.yml
 ```
 
 Common flags: `--workers`, `--cache-dir`, `--work-dir`, `--verbose`,
 `--dotfile`, `--config`, `--log-level`.
 See the full
-[build flag reference](../architecture/os-image-composer-cli-specification.md#build-command)
+[build flag reference](../architecture/image-composer-tool-cli-specification.md#build-command)
 for descriptions and additional flags like `--system-packages-only`.
 
 ### Build Output
@@ -92,7 +102,7 @@ The default `work_dir` depends on how you installed the tool:
 | Install method | Default `work_dir` | Example output path |
 |----------------|-------------------|---------------------|
 | Cloned repo | `./workspace` (relative to repo root) | `./workspace/azure-linux-azl3-x86_64/imagebuild/edge/` |
-| Debian package | `/tmp/os-image-composer` | `/tmp/os-image-composer/azure-linux-azl3-x86_64/imagebuild/edge/` |
+| Debian package | `/tmp/image-composer-tool` | `/tmp/image-composer-tool/azure-linux-azl3-x86_64/imagebuild/edge/` |
 
 You can override it with `--work-dir` or by setting `work_dir` in your
 configuration file.
@@ -102,7 +112,7 @@ configuration file.
 Check a template for errors before starting a build:
 
 ```bash
-./os-image-composer validate image-templates/azl3-x86_64-edge-raw.yml
+./image-composer-tool validate image-templates/azl3-x86_64-edge-raw.yml
 ```
 
 ## Configuration
@@ -114,13 +124,13 @@ explicitly with `--config`.
 
 ```bash
 # Create a default configuration file
-./os-image-composer config init
+./image-composer-tool config init
 
 # Show the active configuration
-./os-image-composer config show
+./image-composer-tool config show
 
 # Use a specific configuration file
-./os-image-composer --config /path/to/config.yaml build template.yml
+./image-composer-tool --config /path/to/config.yaml build template.yml
 ```
 
 Key settings:
@@ -128,11 +138,11 @@ Key settings:
 | Setting | Default (cloned repo) | Default (Debian pkg) |
 |---------|----------------------|----------------------|
 | `workers` | 8 | 8 |
-| `cache_dir` | `./cache` | `/var/cache/os-image-composer` |
-| `work_dir` | `./workspace` | `/tmp/os-image-composer` |
+| `cache_dir` | `./cache` | `/var/cache/image-composer-tool` |
+| `work_dir` | `./workspace` | `/tmp/image-composer-tool` |
 
 For the complete search order and all configuration fields, see
-[Configuration Files](../architecture/os-image-composer-cli-specification.md#configuration-files)
+[Configuration Files](../architecture/image-composer-tool-cli-specification.md#configuration-files)
 in the CLI Specification.
 
 ## Operations Requiring Sudo
@@ -148,22 +158,22 @@ Always run builds with `sudo -E` to preserve your environment variables
 
 ```bash
 # Auto-detect shell and install completion
-./os-image-composer install-completion
+./image-composer-tool install-completion
 
 # Or specify a shell: bash, zsh, fish, powershell
-./os-image-composer install-completion --shell bash
+./image-composer-tool install-completion --shell bash
 ```
 
 After installing, reload your shell configuration (e.g., `source ~/.bashrc`).
 For per-shell activation steps and manual completion script generation, see the
-[Install-Completion Command](../architecture/os-image-composer-cli-specification.md#install-completion-command)
+[Install-Completion Command](../architecture/image-composer-tool-cli-specification.md#install-completion-command)
 reference.
 
 ## Template Examples
 
 Templates are YAML files that define the requirements for an image build.
 For the full template system documentation, see
-[Creating and Reusing Image Templates](../architecture/os-image-composer-templates.md).
+[Creating and Reusing Image Templates](../architecture/image-composer-tool-templates.md).
 
 The `image-templates/` directory contains ready-to-use examples for all
 supported distributions and image types.
@@ -250,8 +260,8 @@ systemConfig:
 ## Related Documentation
 
 - [AI-Powered Template Generation](./ai-template-generation.md)
-- [CLI Specification and Reference](../architecture/os-image-composer-cli-specification.md)
-- [Image Templates](../architecture/os-image-composer-templates.md)
-- [Build Process](../architecture/os-image-composer-build-process.md)
+- [CLI Specification and Reference](../architecture/image-composer-tool-cli-specification.md)
+- [Image Templates](../architecture/image-composer-tool-templates.md)
+- [Build Process](../architecture/image-composer-tool-build-process.md)
 - [Installation Guide](./installation.md)
 - [Edge Microvisor Toolkit](https://docs.openedgeplatform.intel.com/2026.0/edge-microvisor-toolkit/index.html)

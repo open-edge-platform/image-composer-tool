@@ -106,11 +106,11 @@ build:
         CGO_ENABLED=0 GOARCH=amd64 GOOS=linux \
         go build -trimpath -buildmode=pie -o build/live-installer \
             -ldflags "-s -w \
-                     -X 'github.com/open-edge-platform/os-image-composer/internal/config/version.Version=$VERSION' \
-                     -X 'github.com/open-edge-platform/os-image-composer/internal/config/version.Toolname=Image-Composer' \
-                     -X 'github.com/open-edge-platform/os-image-composer/internal/config/version.Organization=Open Edge Platform' \
-                     -X 'github.com/open-edge-platform/os-image-composer/internal/config/version.BuildDate=$BUILD_DATE' \
-                     -X 'github.com/open-edge-platform/os-image-composer/internal/config/version.CommitSHA=$COMMIT_SHA'" \
+                     -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.Version=$VERSION' \
+                     -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.Toolname=Image-Composer-Tool' \
+                     -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.Organization=Open Edge Platform' \
+                     -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.BuildDate=$BUILD_DATE' \
+                     -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.CommitSHA=$COMMIT_SHA'" \
             ./cmd/live-installer
 
     SAVE ARTIFACT build/live-installer AS LOCAL ./build/live-installer
@@ -120,17 +120,17 @@ build:
         COMMIT_SHA=$(cat /tmp/commit_sha) && \
         BUILD_DATE=$(cat /tmp/build_date) && \
         CGO_ENABLED=0 GOARCH=amd64 GOOS=linux \
-        go build -trimpath -buildmode=pie -o build/os-image-composer \
+        go build -trimpath -buildmode=pie -o build/image-composer-tool \
             -ldflags "-s -w \
-                     -X 'github.com/open-edge-platform/os-image-composer/internal/config/version.Version=$VERSION' \
-                     -X 'github.com/open-edge-platform/os-image-composer/internal/config/version.Toolname=Image-Composer' \
-                     -X 'github.com/open-edge-platform/os-image-composer/internal/config/version.Organization=Open Edge Platform' \
-                     -X 'github.com/open-edge-platform/os-image-composer/internal/config/version.BuildDate=$BUILD_DATE' \
-                     -X 'github.com/open-edge-platform/os-image-composer/internal/config/version.CommitSHA=$COMMIT_SHA'" \
-            ./cmd/os-image-composer
+                     -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.Version=$VERSION' \
+                     -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.Toolname=Image-Composer-Tool' \
+                     -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.Organization=Open Edge Platform' \
+                     -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.BuildDate=$BUILD_DATE' \
+                     -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.CommitSHA=$COMMIT_SHA'" \
+            ./cmd/image-composer-tool
             
-    SAVE ARTIFACT build/os-image-composer AS LOCAL ./build/os-image-composer
-    SAVE ARTIFACT /tmp/version.txt AS LOCAL ./build/os-image-composer.version
+    SAVE ARTIFACT build/image-composer-tool AS LOCAL ./build/image-composer-tool
+    SAVE ARTIFACT /tmp/version.txt AS LOCAL ./build/image-composer-tool.version
 
 lint:
     FROM +golang-base
@@ -212,59 +212,59 @@ deb:
     
     # Create directory structure following FHS (Filesystem Hierarchy Standard)
     RUN mkdir -p usr/local/bin \
-                 etc/os-image-composer/config \
-                 usr/share/os-image-composer/examples \
-                 usr/share/doc/os-image-composer \
-                 var/cache/os-image-composer \
+                 etc/ict/config \
+                 usr/share/ict/examples \
+                 usr/share/doc/ict \
+                 var/cache/ict \
                  DEBIAN
     
     # Copy the built binary from the build target
-    COPY +build/os-image-composer usr/local/bin/os-image-composer
+    COPY +build/image-composer-tool usr/local/bin/image-composer-tool
     
     # Make the binary executable
-    RUN chmod +x usr/local/bin/os-image-composer
+    RUN chmod +x usr/local/bin/image-composer-tool
     
     # Create default global configuration with system paths (user-editable)
     # Note: Must be named config.yml to match the default search paths in the code
-    RUN echo "# OS Image Composer - Global Configuration" > etc/os-image-composer/config.yml && \
-        echo "# This file contains tool-level settings that apply across all image builds." >> etc/os-image-composer/config.yml && \
-        echo "# Image-specific parameters should be defined in the image specification." >> etc/os-image-composer/config.yml && \
-        echo "" >> etc/os-image-composer/config.yml && \
-        echo "# Core tool settings" >> etc/os-image-composer/config.yml && \
-        echo "workers: 8" >> etc/os-image-composer/config.yml && \
-        echo "# Number of concurrent download workers (1-100, default: 8)" >> etc/os-image-composer/config.yml && \
-        echo "" >> etc/os-image-composer/config.yml && \
-        echo "config_dir: \"/etc/os-image-composer/config\"" >> etc/os-image-composer/config.yml && \
-        echo "# Directory containing configuration files for different target OSs" >> etc/os-image-composer/config.yml && \
-        echo "" >> etc/os-image-composer/config.yml && \
-        echo "cache_dir: \"/var/cache/os-image-composer\"" >> etc/os-image-composer/config.yml && \
-        echo "# Package cache directory where downloaded RPMs/DEBs are stored" >> etc/os-image-composer/config.yml && \
-        echo "" >> etc/os-image-composer/config.yml && \
-        echo "work_dir: \"/tmp/os-image-composer\"" >> etc/os-image-composer/config.yml && \
-        echo "# Working directory for build operations and image assembly" >> etc/os-image-composer/config.yml && \
-        echo "" >> etc/os-image-composer/config.yml && \
-        echo "temp_dir: \"/tmp\"" >> etc/os-image-composer/config.yml && \
-        echo "# Temporary directory for short-lived files" >> etc/os-image-composer/config.yml && \
-        echo "" >> etc/os-image-composer/config.yml && \
-        echo "# Logging configuration" >> etc/os-image-composer/config.yml && \
-        echo "logging:" >> etc/os-image-composer/config.yml && \
-        echo "  level: \"info\"" >> etc/os-image-composer/config.yml && \
-        echo "  # Log verbosity level: debug, info, warn, error" >> etc/os-image-composer/config.yml
+    RUN echo "# ICT - Global Configuration" > etc/ict/config.yml && \
+        echo "# This file contains tool-level settings that apply across all image builds." >> etc/ict/config.yml && \
+        echo "# Image-specific parameters should be defined in the image specification." >> etc/ict/config.yml && \
+        echo "" >> etc/ict/config.yml && \
+        echo "# Core tool settings" >> etc/ict/config.yml && \
+        echo "workers: 8" >> etc/ict/config.yml && \
+        echo "# Number of concurrent download workers (1-100, default: 8)" >> etc/ict/config.yml && \
+        echo "" >> etc/ict/config.yml && \
+        echo "config_dir: \"/etc/image-composer-tool/config\"" >> etc/ict/config.yml && \
+        echo "# Directory containing configuration files for different target OSs" >> etc/ict/config.yml && \
+        echo "" >> etc/ict/config.yml && \
+        echo "cache_dir: \"/var/cache/image-composer-tool\"" >> etc/ict/config.yml && \
+        echo "# Package cache directory where downloaded RPMs/DEBs are stored" >> etc/ict/config.yml && \
+        echo "" >> etc/ict/config.yml && \
+        echo "work_dir: \"/tmp/image-composer-tool\"" >> etc/ict/config.yml && \
+        echo "# Working directory for build operations and image assembly" >> etc/ict/config.yml && \
+        echo "" >> etc/ict/config.yml && \
+        echo "temp_dir: \"/tmp\"" >> etc/ict/config.yml && \
+        echo "# Temporary directory for short-lived files" >> etc/ict/config.yml && \
+        echo "" >> etc/ict/config.yml && \
+        echo "# Logging configuration" >> etc/ict/config.yml && \
+        echo "logging:" >> etc/ict/config.yml && \
+        echo "  level: \"info\"" >> etc/ict/config.yml && \
+        echo "  # Log verbosity level: debug, info, warn, error" >> etc/ict/config.yml
     
     # Copy OS variant configuration files (user-editable)
-    COPY config etc/os-image-composer/config
+    COPY config etc/ict/config
     
     # Copy image templates as examples (read-only, for reference)
-    COPY image-templates usr/share/os-image-composer/examples
+    COPY image-templates usr/share/ict/examples
     
     # Copy documentation
-    COPY README.md usr/share/doc/os-image-composer/
-    COPY LICENSE usr/share/doc/os-image-composer/
-    COPY docs/architecture/os-image-composer-cli-specification.md usr/share/doc/os-image-composer/
+    COPY README.md usr/share/doc/ict/
+    COPY LICENSE usr/share/doc/ict/
+    COPY docs/architecture/ict-cli-specification.md usr/share/doc/ict/
     
     # Create the DEBIAN control file with proper metadata
     RUN VERSION=$(cat /tmp/pkg_version) && \
-        echo "Package: os-image-composer" > DEBIAN/control && \
+        echo "Package: ict" > DEBIAN/control && \
         echo "Version: ${VERSION}" >> DEBIAN/control && \
         echo "Section: utils" >> DEBIAN/control && \
         echo "Priority: optional" >> DEBIAN/control && \
@@ -273,17 +273,17 @@ deb:
         echo "Depends: bash, coreutils, unzip, dosfstools, xorriso, grub-common" >> DEBIAN/control && \
         echo "Recommends: mmdebstrap, debootstrap" >> DEBIAN/control && \
         echo "License: MIT" >> DEBIAN/control && \
-        echo "Description: OS Image Composer (OIC)" >> DEBIAN/control && \
-        echo " OIC enables users to compose custom bootable OS images based on a" >> DEBIAN/control && \
+        echo "Description: Image Composer Tool (ICT)" >> DEBIAN/control && \
+        echo " ICT enables users to compose custom bootable OS images based on a" >> DEBIAN/control && \
         echo " user-provided template that specifies package lists, configurations," >> DEBIAN/control && \
         echo " and output formats for supported distributions." >> DEBIAN/control
     
     # Build the debian package and stage in a stable location
     RUN VERSION=$(cat /tmp/pkg_version) && \
         mkdir -p /tmp/dist && \
-        dpkg-deb --build . /tmp/dist/os-image-composer_${VERSION}_${ARCH}.deb
+        dpkg-deb --build . /tmp/dist/ict_${VERSION}_${ARCH}.deb
 
     # Save the debian package artifact and resolved version information to dist/
-    RUN VERSION=$(cat /tmp/pkg_version) && cp /tmp/pkg_version /tmp/dist/os-image-composer.version
-    SAVE ARTIFACT /tmp/dist/os-image-composer_*_${ARCH}.deb AS LOCAL dist/
-    SAVE ARTIFACT /tmp/dist/os-image-composer.version AS LOCAL dist/os-image-composer.version
+    RUN VERSION=$(cat /tmp/pkg_version) && cp /tmp/pkg_version /tmp/dist/image-composer-tool.version
+    SAVE ARTIFACT /tmp/dist/ict_*_${ARCH}.deb AS LOCAL dist/
+    SAVE ARTIFACT /tmp/dist/image-composer-tool.version AS LOCAL dist/image-composer-tool.version

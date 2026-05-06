@@ -65,9 +65,6 @@ systemConfig:
     - filesystem
     - kernel
     - azurelinux-release
-    # hyperv packages
-    - dracut-hyperv
-    - hyperv-daemons
     # core image packages
     - shim
     - systemd-boot
@@ -83,11 +80,11 @@ systemConfig:
     # ssh-server
     - openssh-server
     # cloud-init packages
-    - cloud-init
-    - cloud-utils-growpart
+    #- cloud-init
+    #- cloud-utils-growpart
     # virt guest packages
-    - dracut-virtio
-    - dracut-xen
+    #- dracut-virtio
+    #- dracut-xen
     - veritysetup
 
   additionalFiles:

@@ -3,3 +3,8 @@ Name=en*
 
 [Network]
 DHCP=yes
+IPv6AcceptRA=no
+
+[DHCPv4]
+SendRelease=false
+ClientIdentifier=mac

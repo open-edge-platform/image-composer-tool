@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
 
 func DecompressFile(decompressPath, outputPath, decompressType string, sudo bool) error {

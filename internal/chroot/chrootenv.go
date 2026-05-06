@@ -6,14 +6,14 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/open-edge-platform/os-image-composer/internal/chroot/chrootbuild"
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/compression"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/file"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/mount"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/system"
+	"github.com/open-edge-platform/image-composer-tool/internal/chroot/chrootbuild"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/compression"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/file"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/mount"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
 
 const (
@@ -572,7 +572,7 @@ func CleanDebName(packageName string) string {
 
 func (chrootEnv *ChrootEnv) AptInstallPackage(packageName, installRoot string, repoSrcList []string) error {
 	packageName = CleanDebName(packageName)
-	installCmd := fmt.Sprintf("apt-get install -y %s", packageName)
+	installCmd := fmt.Sprintf("apt-get install -y --no-install-recommends %s", packageName)
 
 	if len(repoSrcList) > 0 {
 		for _, repoSrc := range repoSrcList {
@@ -587,8 +587,11 @@ func (chrootEnv *ChrootEnv) AptInstallPackage(packageName, installRoot string, r
 		"DEBCONF_NOWARNINGS=yes",
 	}
 
-	if _, err := shell.ExecCmdWithStream(installCmd, true, installRoot, envVars); err != nil {
-		return fmt.Errorf("failed to install package %s: %w", packageName, err)
+	output, err := shell.ExecCmdWithStream(installCmd, true, installRoot, envVars)
+	if err != nil {
+		log.Errorf("Failed to install package %s: %v", packageName, err)
+		log.Errorf("Full apt-get output for %s:\n%s", packageName, output)
+		return fmt.Errorf("failed to install package %s: %w\napt output:\n%s", packageName, err, output)
 	}
 
 	return nil
