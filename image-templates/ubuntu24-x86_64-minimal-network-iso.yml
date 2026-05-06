@@ -23,9 +23,6 @@ target:
 
 disk:
   name: Default_ISO
-  selectionPolicy:
-    strategy: largest
-    excludeRemovable: true
   partitionTableType: gpt
   partitions:
     - id: esp
@@ -81,13 +78,12 @@ systemConfig:
     - vim
     - cloud-init
 
-  users:
-    - name: root
-      startupScript: "/root/setup.sh"
-    - name: admin
-      sudo: true
-      shell: /bin/bash
-      home: /home/admin
+  # users:
+  #   - name: root
+  #   - name: admin
+  #     sudo: true
+  #     shell: /bin/bash
+  #     home: /home/admin
 
   kernel:
     version: "6.8"
