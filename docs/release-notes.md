@@ -1,9 +1,5 @@
 # Release Notes
 
-## Unreleased
-
-- Prevented the Ubuntu 24 unattended installer ISO from racing background `apt-daily` jobs by masking the related apt systemd services and timers in the live environment.
-
 ## Current Release
 
 **Version**: 1.0
