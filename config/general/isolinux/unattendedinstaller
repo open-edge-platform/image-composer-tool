@@ -8,7 +8,7 @@ CACHE_REPO=$ISO_ROOT/cache-repo
 
 # Mounting the ISO root for the installer.
 mkdir -p $ISO_ROOT
-LABEL=OIC_CDROM
+LABEL=ICT_CDROM
 
 function retry {
     local retry=0

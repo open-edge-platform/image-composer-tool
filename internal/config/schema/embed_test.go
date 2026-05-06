@@ -63,7 +63,7 @@ func TestEmbeddedSchemasHaveMetadataFields(t *testing.T) {
 			name:       "ConfigSchema",
 			schema:     ConfigSchema,
 			wantSchema: "https://json-schema.org/draft/2020-12/schema",
-			wantID:     "https://github.com/open-edge-platform/os-image-composer/schemas/os-image-composer-config.schema.json",
+			wantID:     "https://github.com/open-edge-platform/image-composer-tool/schemas/image-composer-tool-config.schema.json",
 		},
 		{
 			name:       "ChrootenvSchema",

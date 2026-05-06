@@ -2,13 +2,19 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+# Set pipefail to catch errors in pipelines (e.g., live-installer | tee).
+# Note: -e is not set because the retry loop intentionally allows command failures.
+# Note: -u is not set to allow optional variable expansion; critical vars are pre-checked.
+set -o pipefail
+
 ISO_ROOT=/cdrom
 CONFIG_ROOT=$ISO_ROOT/config
 CACHE_REPO=$ISO_ROOT/cache-repo
+INSTALLER_LOG=/tmp/live-installer-attended.log
 
 # Mounting the ISO root for the installer.
 mkdir -p $ISO_ROOT
-LABEL=OIC_CDROM
+LABEL=ICT_CDROM
 
 function retry {
     local retry=0
@@ -51,8 +57,10 @@ stty -echo
 # Disable kernel messages on the current terminal
 dmesg -D
 
-live-installer --config $TEMPLATE_DUMP_YAML --repo $CACHE_REPO --attended
-installerExitCode=$?
+echo "Saving installer debug log to $INSTALLER_LOG"
+# Overwrite log (not append) to produce a clean log for each run
+live-installer --config $TEMPLATE_DUMP_YAML --repo $CACHE_REPO --attended --log-level debug 2>&1 | tee "$INSTALLER_LOG"
+installerExitCode=${PIPESTATUS[0]}
 
 # Consume any buffered stdin to prevent it from being passed to any future programs,
 # as it may contain sensitive data
@@ -70,5 +78,6 @@ dmesg -E
 if [ $installerExitCode -eq 0 ]; then
     reboot
 else
+    echo "Installer failed. Debug log saved at $INSTALLER_LOG"
     /bin/bash
 fi

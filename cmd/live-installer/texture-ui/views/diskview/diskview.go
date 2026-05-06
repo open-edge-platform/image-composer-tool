@@ -7,11 +7,11 @@ import (
 	"github.com/gdamore/tcell"
 	"github.com/rivo/tview"
 
-	"github.com/open-edge-platform/os-image-composer/cmd/live-installer/texture-ui/views/diskview/autopartitionwidget"
-	"github.com/open-edge-platform/os-image-composer/cmd/live-installer/texture-ui/views/diskview/manualpartitionwidget"
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/image/imagedisc"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/cmd/live-installer/texture-ui/views/diskview/autopartitionwidget"
+	"github.com/open-edge-platform/image-composer-tool/cmd/live-installer/texture-ui/views/diskview/manualpartitionwidget"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/imagedisc"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 )
 
 // UI constants.

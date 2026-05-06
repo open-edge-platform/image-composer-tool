@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 )
 
 // TestPackages tests the Packages function
@@ -669,6 +669,37 @@ func TestMatchRequested(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestMatchRequestedKernelWildcardVersion(t *testing.T) {
+	ConfigureKernelSelection([]string{"linux-image-generic*"}, "6.14")
+	defer ConfigureKernelSelection(nil, "")
+
+	all := []ospackage.PackageInfo{
+		{
+			Name:    "linux-image-generic-hwe-24.04",
+			Version: "6.13.0-10.10~24.04.1",
+			URL:     "pool/main/l/linux-meta-hwe-6.13/linux-image-generic-hwe-24.04_6.13.0-10.10~24.04.1_amd64.deb",
+		},
+		{
+			Name:    "linux-image-generic-hwe-24.04",
+			Version: "6.14.2.1.0",
+			URL:     "pool/main/l/linux-meta-hwe-6.14/linux-image-generic-hwe-24.04_6.14.2.1.0_amd64.deb",
+		},
+	}
+
+	matched, err := MatchRequested([]string{"linux-image-generic*"}, all)
+	if err != nil {
+		t.Fatalf("expected wildcard kernel request to resolve, got error: %v", err)
+	}
+
+	if len(matched) != 1 {
+		t.Fatalf("expected one resolved package, got %d", len(matched))
+	}
+
+	if matched[0].Version != "6.14.2.1.0" {
+		t.Fatalf("expected kernel version-compatible package, got %q", matched[0].Version)
 	}
 }
 

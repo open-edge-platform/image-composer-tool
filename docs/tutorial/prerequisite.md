@@ -31,7 +31,7 @@ cd src/ukify
 sudo cp ukify.py /usr/local/bin/ukify
 ```
 
-4. For environments that require `ukify` in `/usr/bin` (e.g., OS Image Composer
+4. For environments that require `ukify` in `/usr/bin` (e.g., ICT
    build systems), copy it to `/usr/bin`
 
 

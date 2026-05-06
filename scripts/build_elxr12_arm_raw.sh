@@ -245,13 +245,13 @@ check_disk_space() {
 }
 
 git branch
-#Build the OS Image Composer
-echo "Building the OS Image Composer..."
+#Build the ICT
+echo "Building the ICT..."
 echo "Generating binary with go build..."
-go build ./cmd/os-image-composer
+go build ./cmd/image-composer-tool
 
 build_elxr12_arm_raw_image() {
-  echo "Building ELXR12 raw Image. (using os-image-composer binary)"
+  echo "Building ELXR12 raw Image. (using image-composer-tool binary)"
   # Ensure we're in the working directory before starting builds
   echo "Ensuring we're in the working directory before starting builds..."
   cd "$WORKING_DIR"
@@ -265,7 +265,7 @@ build_elxr12_arm_raw_image() {
   
   # Temporarily disable exit on error for the build command to capture output
   set +e
-  output=$( sudo -S ./os-image-composer build image-templates/elxr12-aarch64-minimal-raw.yml 2>&1)
+  output=$( sudo -S ./image-composer-tool build image-templates/elxr12-aarch64-minimal-raw.yml 2>&1)
   build_exit_code=$?
   set -e
   

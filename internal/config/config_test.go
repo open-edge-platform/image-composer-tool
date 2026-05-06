@@ -6,8 +6,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-edge-platform/os-image-composer/internal/config/validate"
+	"github.com/open-edge-platform/image-composer-tool/internal/config/validate"
+	"gopkg.in/yaml.v3"
 )
+
+func intPtr(v int) *int { return &v }
 
 func TestMergeStringSlices(t *testing.T) {
 	defaultSlice := []string{"a", "b", "c"}
@@ -532,6 +535,7 @@ func TestDiskAndSystemConfigGetters(t *testing.T) {
 			Partitions: []PartitionInfo{
 				{
 					ID:         "root",
+					Index:      intPtr(1),
 					FsType:     "ext4",
 					Start:      "1MiB",
 					End:        "0",
@@ -811,6 +815,7 @@ func TestDiskConfigValidation(t *testing.T) {
 				Partitions: []PartitionInfo{
 					{
 						ID:         "boot",
+						Index:      intPtr(1),
 						Name:       "EFI Boot",
 						Type:       "esp",
 						FsType:     "fat32",
@@ -821,6 +826,7 @@ func TestDiskConfigValidation(t *testing.T) {
 					},
 					{
 						ID:         "root",
+						Index:      intPtr(2),
 						Name:       "Root",
 						Type:       "linux-root-amd64",
 						FsType:     "ext4",
@@ -854,6 +860,7 @@ func TestPartitionInfoFields(t *testing.T) {
 			Partitions: []PartitionInfo{
 				{
 					ID:           "efi",
+					Index:        intPtr(1),
 					Name:         "EFI System",
 					Type:         "esp",
 					TypeGUID:     "C12A7328-F81F-11D2-BA4B-00A0C93EC93B",
@@ -866,6 +873,7 @@ func TestPartitionInfoFields(t *testing.T) {
 				},
 				{
 					ID:       "swap",
+					Index:    intPtr(2),
 					Name:     "Swap",
 					Type:     "swap",
 					TypeGUID: "0657FD6D-A4AB-43C4-84E5-0933C84B4F4F",
@@ -875,6 +883,7 @@ func TestPartitionInfoFields(t *testing.T) {
 				},
 				{
 					ID:         "root",
+					Index:      intPtr(3),
 					Name:       "Root",
 					Type:       "linux-root-amd64",
 					TypeGUID:   "4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709",
@@ -899,6 +908,9 @@ func TestPartitionInfoFields(t *testing.T) {
 	if efiPartition.ID != "efi" {
 		t.Errorf("expected EFI partition ID 'efi', got '%s'", efiPartition.ID)
 	}
+	if *efiPartition.Index != 1 {
+		t.Errorf("expected index 1 for EFI partition, got %d", *efiPartition.Index)
+	}
 	if len(efiPartition.Flags) != 2 {
 		t.Errorf("expected 2 flags for EFI partition, got %d", len(efiPartition.Flags))
 	}
@@ -920,6 +932,9 @@ func TestPartitionInfoFields(t *testing.T) {
 	if swapPartition.FsType != "swap" {
 		t.Errorf("expected swap filesystem type, got '%s'", swapPartition.FsType)
 	}
+	if *swapPartition.Index != 2 {
+		t.Errorf("expected index 2 for swap, got '%d'", *swapPartition.Index)
+	}
 	if swapPartition.MountPoint != "" {
 		t.Errorf("expected empty mount point for swap, got '%s'", swapPartition.MountPoint)
 	}
@@ -934,6 +949,9 @@ func TestPartitionInfoFields(t *testing.T) {
 	rootPartition := diskConfig.Partitions[2]
 	if rootPartition.MountPoint != "/" {
 		t.Errorf("expected root mount point '/', got '%s'", rootPartition.MountPoint)
+	}
+	if *rootPartition.Index != 3 {
+		t.Errorf("expected index 3 for root, got '%d'", *rootPartition.Index)
 	}
 	if rootPartition.Start != "2GiB" {
 		t.Errorf("expected root start '2GiB', got '%s'", rootPartition.Start)
@@ -2060,8 +2078,8 @@ func TestDefaultGlobalConfig(t *testing.T) {
 		t.Errorf("expected default log level 'info', got '%s'", config.Logging.Level)
 	}
 
-	if config.Logging.File != "os-image-composer.log" {
-		t.Errorf("expected default log file 'os-image-composer.log', got '%s'", config.Logging.File)
+	if config.Logging.File != "image-composer-tool.log" {
+		t.Errorf("expected default log file 'image-composer-tool.log', got '%s'", config.Logging.File)
 	}
 }
 
@@ -2520,7 +2538,7 @@ func TestSaveGlobalConfigWithComments(t *testing.T) {
 	}
 
 	text := string(contents)
-	if !strings.Contains(text, "# OS Image Composer - Global Configuration") {
+	if !strings.Contains(text, "# ICT - Global Configuration") {
 		t.Fatalf("expected commented config header, got: %s", text)
 	}
 
@@ -3270,7 +3288,7 @@ target:
 
 packageRepositories:
   - codename: "localdeb"
-    path: "/data/os-image-composer/localdeb"
+    path: "/data/image-composer-tool/localdeb"
     pkey: "[trusted=yes]"
     component: "main"
 
@@ -3314,8 +3332,8 @@ systemConfig:
 		t.Fatalf("expected to find localdeb repository")
 	}
 
-	if repo.Path != "/data/os-image-composer/localdeb" {
-		t.Errorf("expected repo path '/data/os-image-composer/localdeb', got '%s'", repo.Path)
+	if repo.Path != "/data/image-composer-tool/localdeb" {
+		t.Errorf("expected repo path '/data/image-composer-tool/localdeb', got '%s'", repo.Path)
 	}
 	if repo.PKey != "[trusted=yes]" {
 		t.Errorf("expected repo pkey '[trusted=yes]', got '%s'", repo.PKey)
@@ -4071,10 +4089,10 @@ func TestGetConfigPaths(t *testing.T) {
 
 	// Verify that current directory paths are included
 	expectedPaths := []string{
-		"os-image-composer.yml",
-		".os-image-composer.yml",
-		"os-image-composer.yaml",
-		".os-image-composer.yaml",
+		"image-composer-tool.yml",
+		".image-composer-tool.yml",
+		"image-composer-tool.yaml",
+		".image-composer-tool.yaml",
 	}
 
 	for _, expected := range expectedPaths {
@@ -4092,8 +4110,8 @@ func TestGetConfigPaths(t *testing.T) {
 
 	// Verify system paths are included
 	systemPaths := []string{
-		"/etc/os-image-composer/config.yml",
-		"/etc/os-image-composer/config.yaml",
+		"/etc/image-composer-tool/config.yml",
+		"/etc/image-composer-tool/config.yaml",
 	}
 
 	for _, sysPath := range systemPaths {
@@ -4133,7 +4151,7 @@ func TestFindConfigFile(t *testing.T) {
 	}
 
 	// Create a config file
-	configFile := "os-image-composer.yml"
+	configFile := "image-composer-tool.yml"
 	if err := os.WriteFile(configFile, []byte("workers: 4\n"), 0644); err != nil {
 		t.Fatalf("Failed to create test config: %v", err)
 	}
@@ -4254,5 +4272,156 @@ func TestEnsureTempDir(t *testing.T) {
 	// Verify the directory was created
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		t.Error("EnsureTempDir should create the directory")
+	}
+}
+
+// TestSaveUpdatedConfigFileYAMLSerialization verifies that SaveUpdatedConfigFile
+// correctly serializes templates with partitions containing nil Index values,
+// ensuring that the YAML output omits the "index" key when Index is nil.
+func TestSaveUpdatedConfigFileYAMLSerialization(t *testing.T) {
+	// Create a template with partitions: one with nil Index, one with set Index
+	template := &ImageTemplate{
+		Image: ImageInfo{
+			Name:    "test-yaml-serialization",
+			Version: "1.0.0",
+		},
+		Target: TargetInfo{
+			OS:        "ubuntu",
+			Dist:      "ubuntu24",
+			Arch:      "x86_64",
+			ImageType: "raw",
+		},
+		Disk: DiskConfig{
+			Name:               "test-disk",
+			Size:               "10GB",
+			PartitionTableType: "gpt",
+			Partitions: []PartitionInfo{
+				{
+					Name:       "boot",
+					ID:         "boot-1",
+					Index:      intPtr(1), // Index explicitly set
+					Flags:      []string{"boot"},
+					Type:       "esp",
+					FsType:     "vfat",
+					FsLabel:    "boot",
+					Start:      "0",
+					End:        "512MiB",
+					MountPoint: "/boot",
+				},
+				{
+					Name:       "root",
+					ID:         "root-1",
+					Index:      nil, // Index is nil - should not appear in YAML
+					Flags:      []string{},
+					Type:       "linux-root-x86-64",
+					FsType:     "ext4",
+					FsLabel:    "rootfs",
+					Start:      "512MiB",
+					End:        "0",
+					MountPoint: "/",
+				},
+			},
+		},
+		SystemConfig: SystemConfig{
+			Name:        "test-system",
+			Description: "Test system config",
+			Bootloader: Bootloader{
+				BootType: "efi",
+				Provider: "grub2",
+			},
+			Kernel: KernelConfig{
+				Version: "6.1.0",
+			},
+		},
+	}
+
+	// Save to temporary file
+	tmpFile, err := os.CreateTemp("", "test-config-*.yml")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	tmpFile.Close()
+	defer os.Remove(tmpFile.Name())
+
+	// Save the template
+	err = template.SaveUpdatedConfigFile(tmpFile.Name())
+	if err != nil {
+		t.Fatalf("SaveUpdatedConfigFile() = %v, want nil", err)
+	}
+
+	// Read the saved file and parse as YAML map
+	data, err := os.ReadFile(tmpFile.Name())
+	if err != nil {
+		t.Fatalf("Failed to read saved file: %v", err)
+	}
+
+	// Parse YAML to verify structure
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("Failed to parse YAML: %v", err)
+	}
+
+	// Navigate to partitions
+	disk, ok := parsed["disk"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("disk field not found or not a map")
+	}
+
+	partitionsRaw, ok := disk["partitions"].([]interface{})
+	if !ok {
+		t.Fatalf("partitions field not found or not a slice")
+	}
+
+	if len(partitionsRaw) != 2 {
+		t.Fatalf("expected 2 partitions, got %d", len(partitionsRaw))
+	}
+
+	// Check first partition (has Index set to 1)
+	partition1, ok := partitionsRaw[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("partition 0 not a map")
+	}
+
+	if index1, exists := partition1["index"]; !exists {
+		t.Error("first partition should have 'index' key since Index was set")
+	} else if index1 != 1 {
+		t.Errorf("first partition index should be 1, got %v", index1)
+	}
+
+	// Check second partition (has Index = nil)
+	partition2, ok := partitionsRaw[1].(map[string]interface{})
+	if !ok {
+		t.Fatalf("partition 1 not a map")
+	}
+
+	if _, exists := partition2["index"]; exists {
+		t.Error("second partition should NOT have 'index' key when Index is nil (omitempty)")
+	}
+
+	// Also verify raw YAML string doesn't contain "index: null" for the root partition
+	yamlStr := string(data)
+	lines := strings.Split(yamlStr, "\n")
+	inRootPartition := false
+	foundIndexNull := false
+
+	for i, line := range lines {
+		if strings.Contains(line, "- name: root") {
+			inRootPartition = true
+		} else if inRootPartition && strings.Contains(line, "- name:") {
+			// End of root partition, start of next
+			break
+		}
+
+		if inRootPartition && strings.TrimSpace(line) == "index:" {
+			// Check if followed by null or just "index:" with no value
+			if i+1 < len(lines) && strings.Contains(lines[i+1], "null") {
+				foundIndexNull = true
+				break
+			}
+		}
+	}
+
+	if foundIndexNull {
+		t.Error("YAML should not contain 'index: null' for partition with nil Index")
 	}
 }

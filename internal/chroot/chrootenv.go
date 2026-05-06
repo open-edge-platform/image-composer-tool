@@ -4,16 +4,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
-	"github.com/open-edge-platform/os-image-composer/internal/chroot/chrootbuild"
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/compression"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/file"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/mount"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/shell"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/system"
+	"github.com/open-edge-platform/image-composer-tool/internal/chroot/chrootbuild"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/compression"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/file"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/mount"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
 
 const (
@@ -27,6 +28,19 @@ const (
 )
 
 var log = logger.Logger()
+
+var rpmVersionSuffixRe = regexp.MustCompile(`^(.+)-([0-9][A-Za-z0-9.+_:~\-]*)-([0-9][A-Za-z0-9.+_:~\-]*)$`)
+
+var knownRPMArch = map[string]struct{}{
+	"x86_64":  {},
+	"aarch64": {},
+	"noarch":  {},
+	"i686":    {},
+	"i586":    {},
+	"armv7hl": {},
+	"ppc64le": {},
+	"s390x":   {},
+}
 
 type ChrootEnvInterface interface {
 	GetChrootEnvRoot() string
@@ -544,6 +558,8 @@ func (chrootEnv *ChrootEnv) buildInstallCmd(packageName, chrootInstallRoot strin
 }
 
 func (chrootEnv *ChrootEnv) TdnfInstallPackage(packageName, installRoot string, repositoryIDList []string) error {
+	packageName = CleanRpmName(packageName)
+
 	chrootInstallRoot, err := chrootEnv.GetChrootEnvPath(installRoot)
 	if err != nil {
 		return fmt.Errorf("failed to get chroot environment path for install root %s: %w", installRoot, err)
@@ -570,9 +586,33 @@ func CleanDebName(packageName string) string {
 	return packageName
 }
 
+// CleanRpmName normalizes version-suffixed RPM package requests to canonical package names.
+// Example: qemu-kvm-9.1.0-7 -> qemu-kvm.
+func CleanRpmName(packageName string) string {
+	packageName = strings.TrimSpace(packageName)
+	packageName = strings.TrimSuffix(packageName, ".rpm")
+
+	if idx := strings.LastIndex(packageName, "."); idx != -1 {
+		if _, ok := knownRPMArch[packageName[idx+1:]]; ok {
+			packageName = packageName[:idx]
+		}
+	}
+
+	matches := rpmVersionSuffixRe.FindStringSubmatch(packageName)
+	if len(matches) != 4 {
+		return packageName
+	}
+
+	if strings.Contains(matches[2], ".") {
+		return matches[1]
+	}
+
+	return packageName
+}
+
 func (chrootEnv *ChrootEnv) AptInstallPackage(packageName, installRoot string, repoSrcList []string) error {
 	packageName = CleanDebName(packageName)
-	installCmd := fmt.Sprintf("apt-get install -y %s", packageName)
+	installCmd := fmt.Sprintf("apt-get install -y --no-install-recommends %s", packageName)
 
 	if len(repoSrcList) > 0 {
 		for _, repoSrc := range repoSrcList {
@@ -587,8 +627,11 @@ func (chrootEnv *ChrootEnv) AptInstallPackage(packageName, installRoot string, r
 		"DEBCONF_NOWARNINGS=yes",
 	}
 
-	if _, err := shell.ExecCmdWithStream(installCmd, true, installRoot, envVars); err != nil {
-		return fmt.Errorf("failed to install package %s: %w", packageName, err)
+	output, err := shell.ExecCmdWithStream(installCmd, true, installRoot, envVars)
+	if err != nil {
+		log.Errorf("Failed to install package %s: %v", packageName, err)
+		log.Errorf("Full apt-get output for %s:\n%s", packageName, output)
+		return fmt.Errorf("failed to install package %s: %w\napt output:\n%s", packageName, err, output)
 	}
 
 	return nil

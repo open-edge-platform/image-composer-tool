@@ -13,13 +13,13 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
 
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage/dotfilter"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage/pkgfetcher"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage/pkgsorter"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/network"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/dotfilter"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/pkgfetcher"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/pkgsorter"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/network"
 )
 
 // repoConfig holds .repo file values
@@ -35,11 +35,27 @@ type RepoConfig struct {
 }
 
 var (
-	RepoCfg  RepoConfig
-	GzHref   string
-	UserRepo []config.PackageRepository
-	Dist     string
+	RepoCfg        RepoConfig
+	GzHref         string
+	UserRepo       []config.PackageRepository
+	Dist           string
+	KernelVersion  string
+	KernelPackages = make(map[string]struct{})
 )
+
+// ConfigureKernelSelection sets the kernel package requests and version used
+// during top-level package matching.
+func ConfigureKernelSelection(kernelPackages []string, kernelVersion string) {
+	KernelVersion = kernelVersion
+	KernelPackages = make(map[string]struct{}, len(kernelPackages))
+	for _, pkg := range kernelPackages {
+		pkg = strings.TrimSpace(pkg)
+		if pkg == "" {
+			continue
+		}
+		KernelPackages[pkg] = struct{}{}
+	}
+}
 
 func Packages() ([]ospackage.PackageInfo, error) {
 	log := logger.Logger()

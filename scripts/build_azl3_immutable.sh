@@ -245,8 +245,8 @@ check_disk_space() {
 }
 
 git branch
-#Build the OS Image Composer
-echo "Building the OS Image Composer..."
+#Build the ICT
+echo "Building the ICT..."
 echo "Generating binary with earthly..."
 earthly +build
 
@@ -265,7 +265,7 @@ build_azl3_immutable_raw_image() {
   
   # Temporarily disable exit on error for the build command to capture output
   set +e
-  output=$( sudo -S ./build/os-image-composer build image-templates/azl3-x86_64-edge-raw.yml 2>&1)
+  output=$( sudo -S ./build/image-composer-tool build image-templates/azl3-x86_64-edge-raw.yml 2>&1)
   build_exit_code=$?
   set -e
   

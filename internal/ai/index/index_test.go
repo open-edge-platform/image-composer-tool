@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/open-edge-platform/os-image-composer/internal/ai/template"
+	"github.com/open-edge-platform/image-composer-tool/internal/ai/template"
 )
 
 func TestNewIndex(t *testing.T) {

@@ -11,14 +11,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/open-edge-platform/os-image-composer/internal/config"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage/dotfilter"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage/pkgfetcher"
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage/pkgsorter"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/network"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/slice"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/dotfilter"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/pkgfetcher"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/pkgsorter"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/network"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/slice"
 )
 
 // Repository represents a Debian repository
@@ -57,14 +57,30 @@ type pkgChecksum struct {
 }
 
 var (
-	RepoCfg      RepoConfig
-	RepoCfgs     []RepoConfig // Support for multiple repositories
-	PkgChecksum  []pkgChecksum
-	GzHref       string
-	Architecture string
-	UserRepo     []config.PackageRepository
-	ReportPath   = "builds"
+	RepoCfg        RepoConfig
+	RepoCfgs       []RepoConfig // Support for multiple repositories
+	PkgChecksum    []pkgChecksum
+	GzHref         string
+	Architecture   string
+	UserRepo       []config.PackageRepository
+	KernelVersion  string
+	KernelPackages = make(map[string]struct{})
+	ReportPath     = "builds"
 )
+
+// ConfigureKernelSelection sets the kernel package requests and version used
+// during top-level package matching.
+func ConfigureKernelSelection(kernelPackages []string, kernelVersion string) {
+	KernelVersion = kernelVersion
+	KernelPackages = make(map[string]struct{}, len(kernelPackages))
+	for _, pkg := range kernelPackages {
+		pkg = strings.TrimSpace(pkg)
+		if pkg == "" {
+			continue
+		}
+		KernelPackages[pkg] = struct{}{}
+	}
+}
 
 // Packages returns the list of base packages
 func Packages() ([]ospackage.PackageInfo, error) {
@@ -278,7 +294,7 @@ func checkFileExists(url string) (bool, error) {
 	}
 
 	// Set additional headers to encourage faster responses
-	req.Header.Set("User-Agent", "os-image-composer/1.0")
+	req.Header.Set("User-Agent", "image-composer-tool/1.0")
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("Connection", "close") // Don't keep connection alive for HEAD requests
 
@@ -411,11 +427,37 @@ func MatchRequested(requests []string, all []ospackage.PackageInfo) ([]ospackage
 	log := logger.Logger()
 
 	var out []ospackage.PackageInfo
+	seen := make(map[string]struct{})
 	var requestedPkgs []string
 	gotMissingPkg := false
 
 	for _, want := range requests {
+		if isGlobPattern(want) {
+			pkgs, found := ResolveWildcardPackageConflicts(want, all)
+			if !found {
+				requestedPkgs = append(requestedPkgs, want)
+				log.Warnf("requested package '%q' not found in repo", want)
+				gotMissingPkg = true
+				continue
+			}
+
+			for _, pkg := range pkgs {
+				key := fmt.Sprintf("%s=%s", pkg.Name, pkg.Version)
+				if _, ok := seen[key]; ok {
+					continue
+				}
+				seen[key] = struct{}{}
+				out = append(out, pkg)
+			}
+			continue
+		}
+
 		if pkg, found := ResolveTopPackageConflicts(want, all); found {
+			key := fmt.Sprintf("%s=%s", pkg.Name, pkg.Version)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
 			out = append(out, pkg)
 		} else {
 			requestedPkgs = append(requestedPkgs, want)

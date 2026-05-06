@@ -6,15 +6,15 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/open-edge-platform/os-image-composer/internal/config/schema"
-	"github.com/open-edge-platform/os-image-composer/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/config/schema"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 
 	"github.com/santhosh-tekuri/jsonschema/v5"
 )
 
 const (
 	imageSchemaName     = "os-image-template.schema.json"
-	configSchemaName    = "os-image-composer-config.schema.json"
+	configSchemaName    = "image-composer-tool-config.schema.json"
 	chrootenvSchemaName = "chrootenv-config.schema.json"
 	osConfigSchemaName  = "os-config.schema.json"
 	userRef             = "#/$defs/UserTemplate"
