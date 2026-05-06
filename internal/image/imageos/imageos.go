@@ -954,6 +954,12 @@ func updateImageNetwork(installRoot string, template *config.ImageTemplate) erro
 		return fmt.Errorf("failed to write declarative network config: %w", err)
 	}
 
+	// When netplan is the backend, netplan manages its own renderer —
+	// do not unconditionally enable systemd-networkd alongside it.
+	if template.SystemConfig.Network.Backend == "netplan" {
+		return nil
+	}
+
 	unitFilePath := filepath.Join(installRoot, "lib", "systemd", "system", "systemd-networkd.service")
 	if _, err := os.Stat(unitFilePath); os.IsNotExist(err) {
 		log.Warnf("systemd-networkd is not installed in %s, skipping enable", installRoot)

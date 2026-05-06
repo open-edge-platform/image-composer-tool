@@ -60,14 +60,16 @@ systemConfig:
     backend: systemd-networkd
     interfaces:
       # Primary interface with DHCP
-      - name: eth0
+      - name: enp1s0
         dhcp4: true
 
       # Secondary interface with static IP
-      - name: eth1
+      - name: enp2s0
         addresses:
           - "10.0.0.100/24"
-        gateway4: "10.0.0.1"
+        routes:
+          - to: default
+            via: "10.0.0.1"
         nameservers:
           - "8.8.8.8"
           - "8.8.4.4"

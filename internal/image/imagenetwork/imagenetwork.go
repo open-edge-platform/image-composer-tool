@@ -104,12 +104,14 @@ func generateNetworkdFile(iface config.NetworkInterface) string {
 		sb.WriteString(fmt.Sprintf("Address=%s\n", addr))
 	}
 
-	if iface.Gateway4 != "" {
-		sb.WriteString(fmt.Sprintf("Gateway=%s\n", iface.Gateway4))
+	for _, route := range iface.Routes {
+		if route.To == "default" {
+			sb.WriteString(fmt.Sprintf("Gateway=%s\n", route.Via))
+		} else {
+			sb.WriteString(fmt.Sprintf("\n[Route]\nDestination=%s\nGateway=%s\n", route.To, route.Via))
+		}
 	}
-	if iface.Gateway6 != "" {
-		sb.WriteString(fmt.Sprintf("Gateway=%s\n", iface.Gateway6))
-	}
+
 	if len(iface.Nameservers) > 0 {
 		sb.WriteString(fmt.Sprintf("DNS=%s\n", strings.Join(iface.Nameservers, " ")))
 	}
@@ -140,11 +142,13 @@ func generateNetplanFile(interfaces []config.NetworkInterface) string {
 				sb.WriteString(fmt.Sprintf("        - %s\n", addr))
 			}
 		}
-		if iface.Gateway4 != "" {
-			sb.WriteString(fmt.Sprintf("      gateway4: %s\n", iface.Gateway4))
-		}
-		if iface.Gateway6 != "" {
-			sb.WriteString(fmt.Sprintf("      gateway6: %s\n", iface.Gateway6))
+
+		if len(iface.Routes) > 0 {
+			sb.WriteString("      routes:\n")
+			for _, route := range iface.Routes {
+				sb.WriteString(fmt.Sprintf("        - to: %s\n", route.To))
+				sb.WriteString(fmt.Sprintf("          via: %s\n", route.Via))
+			}
 		}
 
 		if len(iface.Nameservers) > 0 {

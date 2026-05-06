@@ -393,28 +393,41 @@ explicit-interface implementation.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | string | **Yes** | Interface name (for example, `eth0`, `eno1`) |
+| `name` | string | **Yes** | Interface name (for example, `enp1s0`, `ens3`) |
 | `dhcp4` | bool | No | Enable DHCPv4 |
 | `dhcp6` | bool | No | Enable DHCPv6 |
 | `addresses` | string[] | No | Static addresses in CIDR format |
-| `gateway4` | string | No | IPv4 default gateway |
-| `gateway6` | string | No | IPv6 default gateway |
+| `routes` | object[] | No | Static routes (see below) |
 | `nameservers` | string[] | No | DNS server addresses |
+
+`routes[]` fields:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `to` | string | **Yes** | Destination (`default` for default gateway, or CIDR) |
+| `via` | string | **Yes** | Gateway address |
 
 > **Note:** Interface names are explicit and user-provided. The current
 > implementation does not auto-discover or auto-select NICs at install time.
+>
+> When `backend` is `systemd-networkd`, the builder enables the
+> `systemd-networkd` service in the image. When `backend` is `netplan`,
+> `systemd-networkd` is **not** forcibly enabled — netplan manages its own
+> renderer.
 
 ```yaml
 systemConfig:
   network:
     backend: systemd-networkd
     interfaces:
-      - name: eth0
+      - name: enp1s0
         dhcp4: true
-      - name: eth1
+      - name: enp2s0
         addresses:
           - "10.0.0.100/24"
-        gateway4: "10.0.0.1"
+        routes:
+          - to: default
+            via: "10.0.0.1"
         nameservers:
           - "8.8.8.8"
           - "8.8.4.4"
@@ -425,12 +438,14 @@ systemConfig:
   network:
     backend: netplan
     interfaces:
-      - name: eth0
+      - name: enp1s0
         dhcp4: true
-      - name: eth1
+      - name: enp2s0
         addresses:
           - "192.168.1.10/24"
-        gateway4: "192.168.1.1"
+        routes:
+          - to: default
+            via: "192.168.1.1"
         nameservers:
           - "1.1.1.1"
 ```

@@ -88,7 +88,7 @@ func TestWriteNetworkdConfig_StaticIP(t *testing.T) {
 			{
 				Name:        "eth1",
 				Addresses:   []string{"10.0.0.5/24"},
-				Gateway4:    "10.0.0.1",
+				Routes:      []config.NetworkRoute{{To: "default", Via: "10.0.0.1"}},
 				Nameservers: []string{"8.8.8.8", "8.8.4.4"},
 			},
 		},
@@ -126,7 +126,7 @@ func TestWriteNetworkdConfig_MultipleInterfaces(t *testing.T) {
 		Backend: "systemd-networkd",
 		Interfaces: []config.NetworkInterface{
 			{Name: "eth0", DHCP4: boolPtr(true)},
-			{Name: "eth1", Addresses: []string{"192.168.1.10/24"}, Gateway4: "192.168.1.1"},
+			{Name: "eth1", Addresses: []string{"192.168.1.10/24"}, Routes: []config.NetworkRoute{{To: "default", Via: "192.168.1.1"}}},
 		},
 	}
 
@@ -194,7 +194,7 @@ func TestWriteNetplanConfig_MultipleInterfaces(t *testing.T) {
 			{
 				Name:        "eth1",
 				Addresses:   []string{"10.0.0.5/24"},
-				Gateway4:    "10.0.0.1",
+				Routes:      []config.NetworkRoute{{To: "default", Via: "10.0.0.1"}},
 				Nameservers: []string{"8.8.8.8"},
 			},
 		},
@@ -249,7 +249,7 @@ func TestGenerateNetworkdFile_StaticIPWithDNS(t *testing.T) {
 	iface := config.NetworkInterface{
 		Name:        "eth0",
 		Addresses:   []string{"192.168.1.10/24", "192.168.1.11/24"},
-		Gateway4:    "192.168.1.1",
+		Routes:      []config.NetworkRoute{{To: "default", Via: "192.168.1.1"}},
 		Nameservers: []string{"8.8.8.8", "1.1.1.1"},
 	}
 
@@ -271,10 +271,10 @@ func TestGenerateNetworkdFile_StaticIPWithDNS(t *testing.T) {
 
 func TestGenerateNetworkdFile_DualStack(t *testing.T) {
 	iface := config.NetworkInterface{
-		Name:     "eth0",
-		DHCP4:    boolPtr(true),
-		DHCP6:    boolPtr(true),
-		Gateway6: "fe80::1",
+		Name:   "eth0",
+		DHCP4:  boolPtr(true),
+		DHCP6:  boolPtr(true),
+		Routes: []config.NetworkRoute{{To: "default", Via: "fe80::1"}},
 	}
 
 	content := generateNetworkdFile(iface)
@@ -316,7 +316,7 @@ func TestGenerateNetplanFile_StaticIP(t *testing.T) {
 		{
 			Name:        "eth0",
 			Addresses:   []string{"10.0.0.5/24"},
-			Gateway4:    "10.0.0.1",
+			Routes:      []config.NetworkRoute{{To: "default", Via: "10.0.0.1"}},
 			Nameservers: []string{"8.8.8.8"},
 		},
 	}
@@ -329,8 +329,11 @@ func TestGenerateNetplanFile_StaticIP(t *testing.T) {
 	if !strings.Contains(content, "- 10.0.0.5/24") {
 		t.Errorf("expected address in list format")
 	}
-	if !strings.Contains(content, "gateway4: 10.0.0.1") {
-		t.Errorf("expected gateway4")
+	if !strings.Contains(content, "- to: default") {
+		t.Errorf("expected route destination")
+	}
+	if !strings.Contains(content, "via: 10.0.0.1") {
+		t.Errorf("expected route via")
 	}
 	if !strings.Contains(content, "nameservers:") {
 		t.Errorf("expected 'nameservers:' section")
