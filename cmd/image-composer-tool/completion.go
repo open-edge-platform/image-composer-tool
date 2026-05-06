@@ -172,7 +172,13 @@ func dirWritable(p string) bool {
 	if err != nil {
 		return false
 	}
-	tf.Close()
-	_ = os.Remove(tf.Name())
+	name := tf.Name()
+	if err := tf.Close(); err != nil {
+		_ = os.Remove(name)
+		return false
+	}
+	if err := os.Remove(name); err != nil {
+		return false
+	}
 	return true
 }

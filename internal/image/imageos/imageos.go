@@ -478,11 +478,19 @@ func (imageOs *ImageOs) initDebLocalRepoWithinInstallRoot(installRoot string) er
 	}
 
 	// from local.list
-	repoPath := filepath.Join(chrootInstallRoot, "/cdrom/cache-repo")
+	repoPath := filepath.Join(chrootInstallRoot, "cdrom", "cache-repo")
 	chrootPkgCacheDir := imageOs.chrootEnv.GetChrootPkgCacheDir()
 	if err := imageOs.chrootEnv.MountChrootPath(chrootPkgCacheDir, repoPath, "--bind"); err != nil {
 		return fmt.Errorf("failed to mount package cache directory %s to chroot repo directory %s: %w",
 			chrootPkgCacheDir, repoPath, err)
+	}
+
+	if err := imageOs.chrootEnv.UpdateChrootLocalRepoMetadata(
+		repoPath,
+		imageOs.template.Target.Arch,
+		false,
+	); err != nil {
+		return fmt.Errorf("failed to refresh local debian repository metadata: %w", err)
 	}
 
 	imageRepoCongfigPath := filepath.Join(installRoot, "/etc/apt/sources.list.d/", "*")

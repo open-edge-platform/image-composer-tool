@@ -51,7 +51,12 @@ type MockChrootEnv struct {
 	hostPath            string
 	chrootPath          string
 	chrootRoot          string
+	targetOsConfigDir   string
+	chrootPkgCacheDir   string
 	pkgType             string
+	updatedRepoDir      string
+	updatedTargetArch   string
+	updatedWithSudo     bool
 }
 
 func (m *MockChrootEnv) GetChrootImageBuildDir() string {
@@ -94,9 +99,19 @@ func (m *MockChrootEnv) GetTargetOsPkgType() string {
 }
 
 // Implement all required interface methods as stubs
-func (m *MockChrootEnv) GetTargetOsConfigDir() string              { return "/tmp/config" }
-func (m *MockChrootEnv) GetTargetOsReleaseVersion() string         { return "1.0" }
-func (m *MockChrootEnv) GetChrootPkgCacheDir() string              { return "/tmp/cache" }
+func (m *MockChrootEnv) GetTargetOsConfigDir() string {
+	if m.targetOsConfigDir != "" {
+		return m.targetOsConfigDir
+	}
+	return "/tmp/config"
+}
+func (m *MockChrootEnv) GetTargetOsReleaseVersion() string { return "1.0" }
+func (m *MockChrootEnv) GetChrootPkgCacheDir() string {
+	if m.chrootPkgCacheDir != "" {
+		return m.chrootPkgCacheDir
+	}
+	return "/tmp/cache"
+}
 func (m *MockChrootEnv) MountChrootSysfs(chrootPath string) error  { return nil }
 func (m *MockChrootEnv) UmountChrootSysfs(chrootPath string) error { return nil }
 func (m *MockChrootEnv) MountChrootPath(hostFullPath, chrootPath, mountFlags string) error {
@@ -106,6 +121,9 @@ func (m *MockChrootEnv) UmountChrootPath(chrootPath string) error               
 func (m *MockChrootEnv) CopyFileFromHostToChroot(hostFilePath, chrootPath string) error { return nil }
 func (m *MockChrootEnv) CopyFileFromChrootToHost(hostFilePath, chrootPath string) error { return nil }
 func (m *MockChrootEnv) UpdateChrootLocalRepoMetadata(chrootRepoDir string, targetArch string, sudo bool) error {
+	m.updatedRepoDir = chrootRepoDir
+	m.updatedTargetArch = targetArch
+	m.updatedWithSudo = sudo
 	return nil
 }
 func (m *MockChrootEnv) RefreshLocalCacheRepo() error { return nil }
@@ -2360,9 +2378,6 @@ func TestDebLocalRepo(t *testing.T) {
 	originalExecutor := shell.Default
 	defer func() { shell.Default = originalExecutor }()
 
-	mockExecutor := &shell.MockExecutor{}
-	shell.Default = mockExecutor
-
 	// Create test directory
 	testDir, err := os.MkdirTemp("", "imageos_deb_repo_test_*")
 	if err != nil {
@@ -2370,9 +2385,33 @@ func TestDebLocalRepo(t *testing.T) {
 	}
 	defer os.RemoveAll(testDir)
 
+	configDir := filepath.Join(testDir, "config")
+	if err := os.MkdirAll(filepath.Join(configDir, "chrootenvconfigs"), 0755); err != nil {
+		t.Fatalf("Failed to create config directory: %v", err)
+	}
+
+	localListPath := filepath.Join(configDir, "chrootenvconfigs", "local.list")
+	if err := os.WriteFile(localListPath, []byte("deb [trusted=yes] file:///cdrom/cache-repo stable main\n"), 0644); err != nil {
+		t.Fatalf("Failed to create local.list: %v", err)
+	}
+
+	mockCommands := []shell.MockCommand{
+		{Pattern: `sudo rm -f .*?/etc/apt/sources\.list\.d/\*`, Output: ""},
+		{Pattern: `sudo chroot .* apt-get update`, Output: ""},
+		{Pattern: `sudo mkdir -p .*?/usr/sbin`, Output: ""},
+		{Pattern: `sudo mkdir -p '.*?/usr/sbin'`, Output: ""},
+		{Pattern: `sudo cp '.*/filewrite-.*' '.*/usr/sbin/policy-rc\.d'`, Output: ""},
+		{Pattern: `sudo rm -f .*?/etc/apt/sources\.list\.d/local\.list`, Output: ""},
+		{Pattern: `sudo rm -f .*?/usr/sbin/policy-rc\.d`, Output: ""},
+	}
+	shell.Default = shell.NewMockExecutor(mockCommands)
+
 	// Create mock chroot environment
 	mockChrootEnv := &MockChrootEnv{
 		chrootImageBuildDir: testDir,
+		chrootPath:          filepath.Join(testDir, "chroot"),
+		targetOsConfigDir:   configDir,
+		chrootPkgCacheDir:   filepath.Join(testDir, "pkg-cache"),
 		pkgType:             "deb",
 	}
 
@@ -2386,17 +2425,33 @@ func TestDebLocalRepo(t *testing.T) {
 	}
 
 	installRoot := imageOs.GetInstallRoot()
+	if err := os.MkdirAll(filepath.Join(installRoot, "etc", "apt", "sources.list.d"), 0755); err != nil {
+		t.Fatalf("Failed to create apt sources directory: %v", err)
+	}
 
 	// Test initDebLocalRepoWithinInstallRoot
 	err = imageOs.initDebLocalRepoWithinInstallRoot(installRoot)
 	if err != nil {
-		t.Logf("initDebLocalRepoWithinInstallRoot failed as expected: %v", err)
+		t.Fatalf("initDebLocalRepoWithinInstallRoot failed: %v", err)
+	}
+
+	expectedRepoDir := filepath.Join(mockChrootEnv.chrootPath, "cdrom", "cache-repo")
+	if mockChrootEnv.updatedRepoDir != expectedRepoDir {
+		t.Fatalf("expected repo metadata refresh for %q, got %q", expectedRepoDir, mockChrootEnv.updatedRepoDir)
+	}
+
+	if mockChrootEnv.updatedTargetArch != template.Target.Arch {
+		t.Fatalf("expected repo metadata refresh arch %q, got %q", template.Target.Arch, mockChrootEnv.updatedTargetArch)
+	}
+
+	if mockChrootEnv.updatedWithSudo {
+		t.Fatalf("expected repo metadata refresh without sudo")
 	}
 
 	// Test deInitDebLocalRepoWithinInstallRoot
 	err = imageOs.deInitDebLocalRepoWithinInstallRoot(installRoot)
 	if err != nil {
-		t.Logf("deInitDebLocalRepoWithinInstallRoot failed as expected: %v", err)
+		t.Fatalf("deInitDebLocalRepoWithinInstallRoot failed: %v", err)
 	}
 
 	t.Log("DEB local repo tests completed")

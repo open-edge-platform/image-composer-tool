@@ -2,6 +2,8 @@ package config
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -391,9 +393,8 @@ func (t *ImageTemplate) downloadAndAddGPGKeys(repos []PackageRepository) error {
 				return fmt.Errorf("failed to read local GPG key from %s: %w", repo.PKey, err)
 			}
 		} else {
-			// For URLs, download the GPG key
-			log.Infof("Downloading GPG key for repository %s from %s", getRepositoryName(repo), repo.PKey)
-			keyData, err = downloadGPGKey(repo.PKey)
+			// For URLs, prefer persistent cache and download only on cache miss
+			keyData, err = getCachedOrDownloadGPGKey(repo.PKey)
 			if err != nil {
 				return fmt.Errorf("failed to download GPG key from %s: %w", repo.PKey, err)
 			}
@@ -429,6 +430,58 @@ func (t *ImageTemplate) downloadAndAddGPGKeys(repos []PackageRepository) error {
 	}
 
 	return nil
+}
+
+// gpgKeyCacheFilePath returns the persistent cache path for a repository GPG key URL.
+func gpgKeyCacheFilePath(keyURL string) (string, error) {
+	cacheDir, err := CacheDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve cache directory: %w", err)
+	}
+
+	gpgCacheDir := filepath.Join(cacheDir, "gpg-keys")
+	if err := os.MkdirAll(gpgCacheDir, 0755); err != nil {
+		return "", fmt.Errorf("create GPG cache directory %s: %w", gpgCacheDir, err)
+	}
+
+	hash := sha256.Sum256([]byte(keyURL))
+	hashHex := hex.EncodeToString(hash[:])
+
+	return filepath.Join(gpgCacheDir, fmt.Sprintf("%s.gpg", hashHex)), nil
+}
+
+// getCachedOrDownloadGPGKey loads a key from persistent cache, downloading only on cache miss.
+func getCachedOrDownloadGPGKey(keyURL string) ([]byte, error) {
+	log := logger.Logger()
+
+	cacheFilePath, err := gpgKeyCacheFilePath(keyURL)
+	if err == nil {
+		if cachedData, readErr := os.ReadFile(cacheFilePath); readErr == nil {
+			log.Infof("Using cached GPG key (%d bytes) for %s", len(cachedData), keyURL)
+			return cachedData, nil
+		}
+	} else {
+		// Cache path failures should not block build; fall back to direct download.
+		log.Warnf("Failed to initialize GPG key cache for %s: %v", keyURL, err)
+	}
+
+	log.Infof("Downloading GPG key from %s", keyURL)
+	keyData, err := downloadGPGKey(keyURL)
+	if err != nil {
+		return nil, err
+	}
+
+	if cacheFilePath == "" {
+		return keyData, nil
+	}
+
+	if writeErr := os.WriteFile(cacheFilePath, keyData, 0644); writeErr != nil {
+		log.Warnf("Failed to persist GPG key cache for %s at %s: %v", keyURL, cacheFilePath, writeErr)
+		return keyData, nil
+	}
+
+	log.Infof("Cached GPG key at %s", cacheFilePath)
+	return keyData, nil
 }
 
 // downloadGPGKey downloads a GPG key from the given URL
