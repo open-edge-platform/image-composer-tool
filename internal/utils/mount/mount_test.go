@@ -272,25 +272,25 @@ func TestMountPath(t *testing.T) {
 	}{
 		{
 			name:       "successful_mount_new_directory",
-			targetPath: "/dev/sda1",
+			targetPath: "image-rootfs",
 			mountPoint: "/mnt/test",
 			mountFlags: "-t ext4",
 			mockCommands: []shell.MockCommand{
 				{Pattern: "mkdir", Output: "", Error: nil},
 				{Pattern: "mount", Output: "", Error: nil}, // For IsMountPathExist check
-				{Pattern: "mount -t ext4 /dev/sda1 /mnt/test", Output: "", Error: nil},
+				{Pattern: "mount -t ext4 image-rootfs /mnt/test", Output: "", Error: nil},
 			},
 			expectError: false,
 		},
 		{
 			name:       "successful_mount_existing_directory",
-			targetPath: "/dev/sda1",
+			targetPath: "image-rootfs",
 			mountPoint: "/mnt/test",
 			mountFlags: "-t ext4",
 			mockCommands: []shell.MockCommand{
 				{Pattern: "mkdir", Output: "", Error: nil},
 				{Pattern: "mount", Output: "", Error: nil}, // For IsMountPathExist check
-				{Pattern: "mount -t ext4 /dev/sda1 /mnt/test", Output: "", Error: nil},
+				{Pattern: "mount -t ext4 image-rootfs /mnt/test", Output: "", Error: nil},
 			},
 			setupFunc: func(tempDir string) error {
 				return os.MkdirAll(filepath.Join(tempDir, "mnt", "test"), 0700)
@@ -299,7 +299,7 @@ func TestMountPath(t *testing.T) {
 		},
 		{
 			name:       "mount_already_exists",
-			targetPath: "/dev/sda1",
+			targetPath: "image-rootfs",
 			mountPoint: "/mnt/test",
 			mountFlags: "-t ext4",
 			mockCommands: []shell.MockCommand{
@@ -310,7 +310,7 @@ func TestMountPath(t *testing.T) {
 		},
 		{
 			name:       "mkdir_failure",
-			targetPath: "/dev/sda1",
+			targetPath: "image-rootfs",
 			mountPoint: "/mnt/test",
 			mountFlags: "-t ext4",
 			mockCommands: []shell.MockCommand{
@@ -321,20 +321,32 @@ func TestMountPath(t *testing.T) {
 		},
 		{
 			name:       "mount_command_failure",
-			targetPath: "/dev/sda1",
+			targetPath: "image-rootfs",
 			mountPoint: "/mnt/test",
 			mountFlags: "-t ext4",
 			mockCommands: []shell.MockCommand{
 				{Pattern: "mkdir -p", Output: "", Error: nil},
-				{Pattern: "mount.*/dev/sda1", Output: "", Error: fmt.Errorf("mount failed")},
+				{Pattern: "mount.*image-rootfs", Output: "", Error: fmt.Errorf("mount failed")},
 				{Pattern: "mount", Output: "", Error: nil}, // For IsMountPathExist check
 			},
 			expectError: true,
 			errorMsg:    "failed to mount",
 		},
 		{
+			name:       "block_device_not_ready",
+			targetPath: "/dev/missing-block-device",
+			mountPoint: "/mnt/test",
+			mountFlags: "-t vfat -o umask=0077",
+			mockCommands: []shell.MockCommand{
+				{Pattern: "mkdir -p", Output: "", Error: nil},
+				{Pattern: "mount", Output: "", Error: nil},
+			},
+			expectError: true,
+			errorMsg:    "did not become ready",
+		},
+		{
 			name:       "is_mount_path_exist_failure",
-			targetPath: "/dev/sda1",
+			targetPath: "image-rootfs",
 			mountPoint: "/mnt/test",
 			mountFlags: "-t ext4",
 			mockCommands: []shell.MockCommand{
@@ -358,7 +370,6 @@ func TestMountPath(t *testing.T) {
 					t.Fatalf("Failed to setup test: %v", err)
 				}
 			}
-
 			err := mount.MountPath(tt.targetPath, actualMountPoint, tt.mountFlags)
 
 			if tt.expectError {
@@ -910,37 +921,37 @@ func TestMountPath_EdgeCases(t *testing.T) {
 	}{
 		{
 			name:       "empty_mount_flags",
-			targetPath: "/dev/sda1",
+			targetPath: "image-rootfs",
 			mountPoint: "/mnt/test",
 			mountFlags: "",
 			mockCommands: []shell.MockCommand{
 				{Pattern: "mkdir -p /mnt/test", Output: "", Error: nil},
 				{Pattern: "mount", Output: "", Error: nil}, // IsMountPathExist check
-				{Pattern: "mount  /dev/sda1 /mnt/test", Output: "", Error: nil},
+				{Pattern: "mount  image-rootfs /mnt/test", Output: "", Error: nil},
 			},
 			expectError: false,
 		},
 		{
 			name:       "complex_mount_flags",
-			targetPath: "/dev/sda1",
+			targetPath: "image-rootfs",
 			mountPoint: "/mnt/test",
 			mountFlags: "-t ext4 -o rw,relatime,user_xattr",
 			mockCommands: []shell.MockCommand{
 				{Pattern: "mkdir -p /mnt/test", Output: "", Error: nil},
 				{Pattern: "mount", Output: "", Error: nil}, // IsMountPathExist check
-				{Pattern: "mount -t ext4 -o rw,relatime,user_xattr /dev/sda1 /mnt/test", Output: "", Error: nil},
+				{Pattern: "mount -t ext4 -o rw,relatime,user_xattr image-rootfs /mnt/test", Output: "", Error: nil},
 			},
 			expectError: false,
 		},
 		{
 			name:       "special_characters_in_paths",
-			targetPath: "/dev/disk/by-uuid/12345678-1234-1234-1234-123456789abc",
+			targetPath: "image-rootfs-12345678-1234-1234-1234-123456789abc",
 			mountPoint: "/mnt/test with spaces",
 			mountFlags: "-t ext4",
 			mockCommands: []shell.MockCommand{
 				{Pattern: "mkdir -p /mnt/test with spaces", Output: "", Error: nil},
 				{Pattern: "mount", Output: "", Error: nil}, // IsMountPathExist check
-				{Pattern: "mount -t ext4 /dev/disk/by-uuid/12345678-1234-1234-1234-123456789abc /mnt/test with spaces", Output: "", Error: nil},
+				{Pattern: "mount -t ext4 image-rootfs-12345678-1234-1234-1234-123456789abc /mnt/test with spaces", Output: "", Error: nil},
 			},
 			expectError: false,
 		},

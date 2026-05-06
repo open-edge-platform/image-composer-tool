@@ -13,6 +13,7 @@ import (
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/mount"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/slice"
 )
@@ -78,6 +79,109 @@ var partitionTypeNameToGUID = map[string]string{
 	"linux-raid":       "a19d880f-05fc-4d3b-a006-743f0f84911e",
 	"linux-luks":       "ca7d7ccb-63ed-4c53-861c-1742536059cc",
 	"linux-dm-crypt":   "7ffec5c9-2d00-49b7-8941-3ea10a5586b7",
+}
+
+func getStringValue(value interface{}) string {
+	strValue, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(strValue)
+}
+
+func isDiskInUsePartitioningOutput(output string) bool {
+	lowerOutput := strings.ToLower(output)
+	return strings.Contains(lowerOutput, "this disk is currently in use") ||
+		strings.Contains(lowerOutput, "checking that no-one is using this disk right now ... failed")
+}
+
+func releaseDiskForPartitioning(diskPath string) error {
+	partitions, err := DiskGetPartitionsInfo(diskPath)
+	if err != nil {
+		return fmt.Errorf("failed to inspect partitions on disk %s: %w", diskPath, err)
+	}
+
+	devInfo, err := DiskGetDevInfo(diskPath)
+	if err != nil {
+		return fmt.Errorf("failed to inspect device info for disk %s: %w", diskPath, err)
+	}
+
+	mountPoints := make([]string, 0, len(partitions)+1)
+	diskMountPoint := getStringValue(devInfo["mountpoint"])
+	if diskMountPoint != "" {
+		mountPoints = append(mountPoints, diskMountPoint)
+	}
+
+	for _, partition := range partitions {
+		mountPoint := getStringValue(partition["mountpoint"])
+		if mountPoint != "" {
+			mountPoints = append(mountPoints, mountPoint)
+		}
+	}
+
+	if len(mountPoints) > 0 {
+		sort.Sort(sort.Reverse(sort.StringSlice(mountPoints)))
+		for _, mountPoint := range mountPoints {
+			if err := mount.UmountPath(mountPoint); err != nil {
+				return fmt.Errorf("failed to unmount %s from disk %s: %w", mountPoint, diskPath, err)
+			}
+		}
+	}
+
+	for _, partition := range partitions {
+		partitionPath := getStringValue(partition["path"])
+		if partitionPath == "" {
+			continue
+		}
+		if output, err := shell.ExecCmd("swapoff "+partitionPath, true, shell.HostPath, nil); err != nil {
+			trimmedOutput := strings.TrimSpace(output)
+			if trimmedOutput != "" {
+				log.Debugf("swapoff skipped for %s on %s: %s", partitionPath, diskPath, trimmedOutput)
+			} else {
+				log.Debugf("swapoff skipped for %s on %s: %v", partitionPath, diskPath, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+func createPartitionTable(diskPath, partitionTableType string) (string, error) {
+	label := "dos"
+	if partitionTableType == "gpt" {
+		label = "gpt"
+	}
+
+	cmdStr := fmt.Sprintf("echo 'label: %s' | sudo sfdisk %s", label, diskPath)
+	cmdOutput, err := shell.ExecCmd(cmdStr, false, shell.HostPath, nil)
+	if err == nil {
+		return cmdOutput, nil
+	}
+
+	trimmedOutput := strings.TrimSpace(cmdOutput)
+	if !isDiskInUsePartitioningOutput(trimmedOutput) {
+		return cmdOutput, err
+	}
+
+	log.Warnf("Disk %s reported busy during %s partition table creation; releasing disk and retrying with force", diskPath, partitionTableType)
+	if releaseErr := releaseDiskForPartitioning(diskPath); releaseErr != nil {
+		return cmdOutput, fmt.Errorf("failed to release busy disk %s before retry: %w", diskPath, releaseErr)
+	}
+
+	for _, retryCmd := range []string{
+		fmt.Sprintf("wipefs -a -f %s", diskPath),
+		"sync",
+		fmt.Sprintf("echo 'label: %s' | sudo sfdisk --force --wipe always %s", label, diskPath),
+	} {
+		var retryOutput string
+		retryOutput, err = shell.ExecCmd(retryCmd, true, shell.HostPath, nil)
+		cmdOutput = retryOutput
+		if err != nil {
+			return retryOutput, err
+		}
+	}
+
+	return cmdOutput, nil
 }
 
 // IsDigit checks if a string contains only digits
@@ -722,8 +826,7 @@ func DiskPartitionsCreate(diskPath string, partitionsList []config.PartitionInfo
 	}
 
 	if partitionTableType == "gpt" {
-		cmdStr := fmt.Sprintf("echo 'label: gpt' | sudo sfdisk %s", diskPath)
-		cmdOutput, err := shell.ExecCmd(cmdStr, false, shell.HostPath, nil)
+		cmdOutput, err := createPartitionTable(diskPath, partitionTableType)
 		if err != nil {
 			trimmedOutput := strings.TrimSpace(cmdOutput)
 			if trimmedOutput != "" {
@@ -779,8 +882,7 @@ func DiskPartitionsCreate(diskPath string, partitionsList []config.PartitionInfo
 		var partitionType string
 		var partitionNum int
 		maxPrimaryPartitionsNum := 4
-		cmdStr := fmt.Sprintf("echo 'label: dos' | sudo sfdisk %s", diskPath)
-		_, err := shell.ExecCmd(cmdStr, false, shell.HostPath, nil)
+		_, err := createPartitionTable(diskPath, partitionTableType)
 		if err != nil {
 			log.Errorf("Failed to create MBR partition table on disk %s: %v", diskPath, err)
 			return nil, fmt.Errorf("failed to create MBR partition table on disk %s: %w", diskPath, err)

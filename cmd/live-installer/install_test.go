@@ -8,7 +8,23 @@ import (
 	"testing"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
+
+func TestSuppressHostAptBackgroundTasks(t *testing.T) {
+	originalShell := shell.Default
+	defer func() { shell.Default = originalShell }()
+
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: "command -v systemctl", Output: "/usr/bin/systemctl\n", Error: nil},
+		{Pattern: "systemctl stop apt-daily.service", Output: "", Error: nil},
+		{Pattern: "systemctl mask apt-daily.service", Output: "", Error: nil},
+	})
+
+	if err := suppressHostAptBackgroundTasks(); err != nil {
+		t.Fatalf("expected apt background suppression to succeed, got: %v", err)
+	}
+}
 
 func TestNewChrootBuilder_MissingConfigDir(t *testing.T) {
 	// Create a temporary directory for testing

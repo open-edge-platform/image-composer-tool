@@ -128,9 +128,49 @@ func dependencyCheck(targetOs string) error {
 	return nil
 }
 
+func targetUsesApt(targetOS string) bool {
+	switch targetOS {
+	case "ubuntu", "debian", "wind-river-elxr":
+		return true
+	default:
+		return false
+	}
+}
+
+func suppressHostAptBackgroundTasks() error {
+	systemctlExists, err := shell.IsCommandExist("systemctl", shell.HostPath)
+	if err != nil {
+		return fmt.Errorf("failed to check systemctl availability: %w", err)
+	}
+	if !systemctlExists {
+		log.Debugf("systemctl is not available; skipping host apt background task suppression")
+		return nil
+	}
+
+	commands := []string{
+		"sh -c \"systemctl stop apt-daily.service apt-daily.timer apt-daily-upgrade.service apt-daily-upgrade.timer unattended-upgrades.service unattended-upgrades.timer >/dev/null 2>&1 || true\"",
+		"sh -c \"systemctl mask apt-daily.service apt-daily.timer apt-daily-upgrade.service apt-daily-upgrade.timer unattended-upgrades.service unattended-upgrades.timer >/dev/null 2>&1 || true\"",
+	}
+
+	for _, cmd := range commands {
+		if _, err := shell.ExecCmd(cmd, true, shell.HostPath, nil); err != nil {
+			return fmt.Errorf("failed to suppress host apt background tasks: %w", err)
+		}
+	}
+
+	log.Infof("Suppressed host apt background services and timers")
+	return nil
+}
+
 func install(template *config.ImageTemplate, configDir, localRepo string) error {
 	if err := dependencyCheck(template.Target.OS); err != nil {
 		return fmt.Errorf("dependency check failed: %w", err)
+	}
+
+	if targetUsesApt(template.Target.OS) {
+		if err := suppressHostAptBackgroundTasks(); err != nil {
+			return fmt.Errorf("failed to suppress host apt background tasks: %w", err)
+		}
 	}
 
 	globalConfig.ConfigDir = configDir
