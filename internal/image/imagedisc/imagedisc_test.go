@@ -1371,12 +1371,25 @@ func TestResolveInstallDiskPath(t *testing.T) {
 			expectPath:  "/dev/sdb",
 		},
 		{
+			// Direct inverse of "require_empty_filters_non_empty_disks": identical two-disk fixture
+			// (sda has an existing partition sda1, sdb is empty) but with RequireEmpty=false.
+			// Under the default RequireEmpty=true policy sda is rejected and sdb is selected;
+			// here the emptiness probe is skipped entirely so sda — the first candidate — is
+			// selected instead, proving that a genuinely non-empty disk is accepted when the
+			// policy explicitly opts out of the emptiness requirement.
 			name: "require_empty_false_allows_non_empty_disk",
 			diskConfig: config.DiskConfig{
 				SelectionPolicy: config.DiskSelectionPolicy{Strategy: "first", RequireEmpty: boolPtr(false)},
 			},
-			lsblkOutput: `{"blockdevices":[{"name":"sda","size":21474836480,"model":"Disk A","serial":"A","tran":"sata","type":"disk","rm":0,"rota":1}]}`,
-			expectPath:  "/dev/sda",
+			lsblkOutput: `{"blockdevices":[{"name":"sda","size":21474836480,"model":"Disk A","serial":"A","tran":"sata","type":"disk","rm":0,"rota":1},{"name":"sdb","size":21474836480,"model":"Disk B","serial":"B","tran":"sata","type":"disk","rm":0,"rota":1}]}`,
+			// Partition probe mocks are not consumed (the probe is skipped when RequireEmpty=false)
+			// but document that sda is genuinely non-empty and sdb is empty — the same state that
+			// causes sda to be rejected in the RequireEmpty=true counterpart test below.
+			extraCommands: []shell.MockCommand{
+				{Pattern: "lsblk /dev/sda --json --list --output", Output: `{"blockdevices":[{"name":"sda","path":"/dev/sda","type":"disk"},{"name":"sda1","path":"/dev/sda1","type":"part"}]}`, Error: nil},
+				{Pattern: "lsblk /dev/sdb --json --list --output", Output: `{"blockdevices":[{"name":"sdb","path":"/dev/sdb","type":"disk"}]}`, Error: nil},
+			},
+			expectPath: "/dev/sda",
 		},
 		{
 			name: "require_empty_filters_non_empty_disks",
