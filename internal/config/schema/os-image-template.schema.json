@@ -90,11 +90,16 @@
             "strategy": {
               "type": "string",
               "description": "Disk selection strategy",
-              "enum": ["first", "largest", "fastest", "largest-free"]
+              "enum": ["first", "largest", "fastest"]
             },
             "excludeRemovable": {
               "type": "boolean",
               "description": "Exclude removable or externally attached disks from selection using RM, transport, hotplug, udev, and sysfs heuristics",
+              "default": true
+            },
+            "requireEmpty": {
+              "type": "boolean",
+              "description": "Require the selected disk to be empty before installation. When false, installation may overwrite existing data on the selected disk.",
               "default": true
             }
           },

@@ -62,7 +62,6 @@ Use 'live-installer --help' to see available params.`,
 		},
 		Run: func(cmd *cobra.Command, args []string) {
 			if !attendedInstaller {
-				logger.SetLogLevel("debug")
 				if err := unattendedInstall(config, repo); err != nil {
 					fmt.Fprintf(os.Stderr, "Unattended install failed: %v\n", err)
 					os.Exit(1)

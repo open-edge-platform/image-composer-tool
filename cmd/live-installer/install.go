@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	attendedinstaller "github.com/open-edge-platform/image-composer-tool/cmd/live-installer/texture-ui"
 	"github.com/open-edge-platform/image-composer-tool/internal/chroot"
@@ -18,6 +19,43 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/security"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
+
+// waitForDiskQuiescence waits for the disk to stabilize by checking for I/O inactivity.
+// This ensures hypervisors (QEMU, KVM, etc.) have fully initialized virtual disks before
+// partitioning begins. Returns nil if disk becomes quiescent or if check is not supported.
+func waitForDiskQuiescence(diskPath string) error {
+	const (
+		maxRetries = 20 // ~10 seconds with 500ms sleeps
+		sleepTime  = 500 * time.Millisecond
+	)
+
+	var quietCount int
+	const quietThreshold = 2 // Two consecutive checks with no I/O
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		isBusy, err := imagedisc.CheckDiskIOStats(diskPath)
+		if err != nil {
+			// If we can't read stats (e.g., disk not ready), skip quiescence check
+			return nil
+		}
+
+		if !isBusy {
+			quietCount++
+			if quietCount >= quietThreshold {
+				log.Debugf("Disk %s is quiescent after %d attempts", diskPath, attempt+1)
+				return nil
+			}
+		} else {
+			quietCount = 0
+		}
+
+		time.Sleep(sleepTime)
+	}
+
+	// Timeout reached; disk may not be fully quiescent, but proceed anyway (non-fatal)
+	log.Warnf("Disk %s did not reach quiescence within timeout; proceeding anyway", diskPath)
+	return nil
+}
 
 func newChrootBuilder(configDir, localRepo, targetOs, targetDist, targetArch string) (*chrootbuild.ChrootBuilder, error) {
 	var targetOsConfig map[string]interface{}
@@ -249,6 +287,14 @@ func install(template *config.ImageTemplate, configDir, localRepo string) error 
 	}
 	template.Disk.Path = diskPath
 	log.Infof("Using target disk: %s", diskPath)
+
+	// Wait for disk to stabilize before partitioning. QEMU and other hypervisors may take
+	// time to fully initialize virtual disks. Check for disk I/O quiescence (no active reads/writes)
+	// with a timeout to avoid indefinite waits.
+	log.Infof("Waiting for disk %s to stabilize...", diskPath)
+	if err := waitForDiskQuiescence(diskPath); err != nil {
+		log.Warnf("Disk quiescence check failed (continuing anyway): %v", err)
+	}
 
 	diskPathIdMap, err := imagedisc.DiskPartitionsCreate(diskPath, diskInfo.Partitions, diskInfo.PartitionTableType)
 	if err != nil {
