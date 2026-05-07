@@ -131,9 +131,93 @@ func dependencyCheck(targetOs string) error {
 	return nil
 }
 
+func targetUsesApt(targetOS string) bool {
+	switch targetOS {
+	case "ubuntu", "debian", "wind-river-elxr":
+		return true
+	default:
+		return false
+	}
+}
+
+var aptBackgroundUnits = []string{
+	"apt-daily.service",
+	"apt-daily.timer",
+	"apt-daily-upgrade.service",
+	"apt-daily-upgrade.timer",
+	"unattended-upgrades.service",
+	"unattended-upgrades.timer",
+}
+
+func isIgnorableSystemctlSuppressionFailure(output string) bool {
+	lowerOutput := strings.ToLower(strings.TrimSpace(output))
+	if lowerOutput == "" {
+		return false
+	}
+
+	markers := []string{
+		"not loaded",
+		"not found",
+		"does not exist",
+		"inactive",
+		"not active",
+	}
+
+	for _, marker := range markers {
+		if strings.Contains(lowerOutput, marker) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func runSystemctlSuppressionCommand(cmd string) error {
+	output, err := shell.ExecCmd(cmd, true, shell.HostPath, nil)
+	if err == nil {
+		return nil
+	}
+	if isIgnorableSystemctlSuppressionFailure(output) {
+		log.Warnf("Ignoring non-fatal systemctl suppression failure for %q: %s", cmd, strings.TrimSpace(output))
+		return nil
+	}
+	return fmt.Errorf("command %q failed: %w", cmd, err)
+}
+
+func suppressHostAptBackgroundTasks() error {
+	systemctlExists, err := shell.IsCommandExist("systemctl", shell.HostPath)
+	if err != nil {
+		return fmt.Errorf("failed to check systemctl availability: %w", err)
+	}
+	if !systemctlExists {
+		log.Debugf("systemctl is not available; skipping host apt background task suppression")
+		return nil
+	}
+
+	commands := []string{
+		"systemctl stop " + strings.Join(aptBackgroundUnits, " "),
+		"systemctl mask --runtime " + strings.Join(aptBackgroundUnits, " "),
+	}
+
+	for _, cmd := range commands {
+		if err := runSystemctlSuppressionCommand(cmd); err != nil {
+			return fmt.Errorf("failed to suppress host apt background tasks: %w", err)
+		}
+	}
+
+	log.Infof("Suppressed host apt background services and timers")
+	return nil
+}
+
 func install(template *config.ImageTemplate, configDir, localRepo string) error {
 	if err := dependencyCheck(template.Target.OS); err != nil {
 		return fmt.Errorf("dependency check failed: %w", err)
+	}
+
+	if targetUsesApt(template.Target.OS) {
+		if err := suppressHostAptBackgroundTasks(); err != nil {
+			return fmt.Errorf("failed to suppress host apt background tasks: %w", err)
+		}
 	}
 
 	globalConfig.ConfigDir = configDir

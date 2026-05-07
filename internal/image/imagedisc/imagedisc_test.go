@@ -903,6 +903,45 @@ func TestDiskPartitionsCreate(t *testing.T) {
 	}
 }
 
+func TestDiskPartitionsCreate_GPTBusyDiskRetry(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	mockCommands := []shell.MockCommand{
+		{Pattern: ".*fdisk.*vda.*", Output: "Disk /dev/vda: 24 GiB", Error: nil},
+		{Pattern: ".*label.*gpt.*sfdisk /dev/vda", Output: "Checking that no-one is using this disk right now ... FAILED\n\nThis disk is currently in use - repartitioning is probably a bad idea.", Error: fmt.Errorf("busy")},
+		{Pattern: "lsblk /dev/vda", Output: `{"blockdevices":[{"name":"vda","path":"/dev/vda","type":"disk"},{"name":"vda1","path":"/dev/vda1","mountpoint":"/media/installer","type":"part"}]}`, Error: nil},
+		{Pattern: "mount", Output: "/dev/vda1 on /media/installer type ext4 (rw,relatime)", Error: nil},
+		{Pattern: "umount /media/installer", Output: "", Error: nil},
+		{Pattern: "swapoff /dev/vda1", Output: "", Error: fmt.Errorf("not swap")},
+		{Pattern: "wipefs -a -f /dev/vda", Output: "", Error: nil},
+		{Pattern: "sync", Output: "", Error: nil},
+		{Pattern: ".*label.*gpt.*sfdisk --force --wipe always /dev/vda", Output: "", Error: nil},
+		{Pattern: ".*hw_sector_size", Output: "512", Error: nil},
+		{Pattern: ".*physical_block_size", Output: "4096", Error: nil},
+		{Pattern: ".*sgdisk.*vda.*", Output: "", Error: nil},
+		{Pattern: ".*partx.*vda.*", Output: "", Error: nil},
+		{Pattern: ".*mkfs.*ext4.*vda.*", Output: "", Error: nil},
+	}
+	shell.Default = shell.NewMockExecutor(mockCommands)
+
+	result, err := DiskPartitionsCreate("/dev/vda", []config.PartitionInfo{{
+		ID:     "root",
+		Name:   "root",
+		Start:  "1MiB",
+		End:    "100MiB",
+		FsType: "ext4",
+		Type:   "linux",
+		Index:  intPtr(1),
+	}}, "gpt")
+	if err != nil {
+		t.Fatalf("expected busy disk retry to succeed, got: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("expected 1 partition device after retry, got %d", len(result))
+	}
+}
+
 func TestGetPartitionLabel(t *testing.T) {
 	originalExecutor := shell.Default
 	defer func() { shell.Default = originalExecutor }()
