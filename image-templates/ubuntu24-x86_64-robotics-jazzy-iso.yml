@@ -206,7 +206,7 @@ systemConfig:
     # OpenVINO version pins (match setup-robotics-jazzy.sh exactly)
     - cmd: "printf 'Package: openvino-libraries-dev\\nPin: version 2025.3.0*\\nPin-Priority: 1001\\n\\nPackage: openvino\\nPin: version 2025.3.0*\\nPin-Priority: 1001\\n\\nPackage: ros-jazzy-openvino-wrapper-lib\\nPin: version 2025.3.0*\\nPin-Priority: 1002\\n\\nPackage: ros-jazzy-openvino-node\\nPin: version 2025.3.0*\\nPin-Priority: 1002\\n' > /etc/apt/preferences.d/intel-openvino"
     # RealSense SDK version pin for post-deployment upgrade protection.
-    - cmd: "printf 'Package: librealsense2\\nPin: version 2.56.5-0~realsense.17055\\nPin-Priority: 1001\\n' > /etc/apt/preferences.d/librealsense"
+    - cmd: "printf 'Package: librealsense2\\nPin: version 2.56.5-0~realsense.17055\\nPin-Priority: 1001\\n\\nPackage: ros-jazzy-librealsense2*\\nPin: version 2.56.4*\\nPin-Priority: 1001\\n\\nPackage: ros-jazzy-realsense2*\\nPin: version 4.56.4*\\nPin-Priority: 1001\\n' > /etc/apt/preferences.d/librealsense"
 
     # ── debconf pre-selections for OpenVINO node ─────────────────────
     - cmd: "echo 'ros-jazzy-openvino-node openvino-node/pip-proxy select true' | debconf-set-selections"
