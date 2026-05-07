@@ -24,17 +24,46 @@ type blockDevicesOutput struct {
 }
 
 type blockDeviceInfo struct {
-	Name   string      `json:"name"`    // Example: sda
-	MajMin string      `json:"maj:min"` // Example: 1:2
-	Size   json.Number `json:"size"`    // Number of bytes. Can be a quoted string or a JSON number, depending on the util-linux version
-	Model  string      `json:"model"`   // Example: 'Virtual Disk'
+	Name    string      `json:"name"`    // Example: sda
+	MajMin  string      `json:"maj:min"` // Example: 1:2
+	Size    json.Number `json:"size"`    // Number of bytes. Can be a quoted string or a JSON number, depending on the util-linux version
+	Model   string      `json:"model"`   // Example: 'Virtual Disk'
+	Serial  string      `json:"serial"`
+	Tran    string      `json:"tran"`
+	Type    string      `json:"type"`
+	PkName  string      `json:"pkname"`
+	Hotplug interface{} `json:"hotplug"`
+	RM      interface{} `json:"rm"`
+	Rota    interface{} `json:"rota"`
 }
 
 type SystemBlockDevice struct {
-	DevicePath  string // Example: /dev/sda
-	RawDiskSize uint64 // Size in bytes
-	Model       string // Example: Virtual Disk
+	DevicePath   string // Example: /dev/sda
+	RawDiskSize  uint64 // Size in bytes
+	Model        string // Example: Virtual Disk
+	Serial       string
+	Transport    string
+	IsRemovable  bool
+	IsExternal   bool
+	IsRotational bool
 }
+
+const (
+	DiskSelectStrategyFirst       = "first"
+	DiskSelectStrategyLargest     = "largest"
+	DiskSelectStrategyFastest     = "fastest"
+	DiskSelectStrategyLargestFree = "largest-free"
+)
+
+const (
+	diskTransportTierUnknown = iota
+	diskTransportTierUSB
+	diskTransportTierMMC
+	diskTransportTierSATA
+	diskTransportTierSAS
+	diskTransportTierVirtio
+	diskTransportTierNVMe
+)
 
 const (
 	EFIPartitionType    = "efi"
@@ -62,6 +91,8 @@ const (
 )
 
 var log = logger.Logger()
+var readFile = os.ReadFile
+var evalSymlinks = filepath.EvalSymlinks
 var sizeSuffixesList = []string{"KiB", "MiB", "GiB", "K", "M", "G", "KB", "MB", "GB"}
 var sizeBytesMap = []int{1024, 1048576, 1073741824, 1024, 1048576, 1073741824, 1000, 1000000, 1000000000}
 var partitionTypeNameToGUID = map[string]string{
@@ -994,7 +1025,8 @@ func SystemBlockDevices() (systemDevices []SystemBlockDevice, err error) {
 	)
 
 	blockDeviceMajorNumbers := []string{scsiDiskMajorNumber, mmcBlockMajorNumber, virtualDiskMajorNumber, blockExtendedMajorNumber}
-	cmd := fmt.Sprintf("lsblk -d --bytes -I %s -n --json --output NAME,SIZE,MODEL", strings.Join(blockDeviceMajorNumbers, ","))
+	cmd := fmt.Sprintf("lsblk -d --bytes -I %s -n --json --output NAME,SIZE,MODEL,SERIAL,TRAN,TYPE,PKNAME,HOTPLUG,RM,ROTA",
+		strings.Join(blockDeviceMajorNumbers, ","))
 	rawDiskOutput, err := shell.ExecCmd(cmd, true, shell.HostPath, nil)
 	if err != nil {
 		log.Errorf("Failed to execute lsblk command: %v", err)
@@ -1017,22 +1049,54 @@ func SystemBlockDevices() (systemDevices []SystemBlockDevice, err error) {
 	// Process each device to build the filtered list
 	systemDevices = []SystemBlockDevice{}
 	for _, device := range blockDevices.Devices {
+		deviceType := strings.TrimSpace(strings.ToLower(device.Type))
+		if deviceType != "disk" {
+			log.Debugf("Excluded non-disk block device: /dev/%s (type=%s, pkname=%s)", device.Name, deviceType, strings.TrimSpace(device.PkName))
+			continue
+		}
+		if strings.HasPrefix(device.Name, "dm-") {
+			log.Debugf("Excluded device-mapper block device: /dev/%s", device.Name)
+			continue
+		}
+
 		devicePath := fmt.Sprintf("/dev/%s", device.Name)
 		rawSize, err := strconv.ParseUint(device.Size.String(), 10, 64)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse size for %s: %v", devicePath, err)
 		}
 
-		isISOInstaller := isReadOnlyISO(devicePath)
+		isRemovable, err := parseLsblkBool(device.RM)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse removable flag for %s: %w", devicePath, err)
+		}
 
-		log.Debugf("Device: %s, Size: %d, Model: %s, isISOInstaller : %v ",
-			devicePath, rawSize, strings.TrimSpace(device.Model), isISOInstaller)
+		isRotational, err := parseLsblkBool(device.Rota)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse rotational flag for %s: %w", devicePath, err)
+		}
+
+		isHotplug, err := parseLsblkBool(device.Hotplug)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse hotplug flag for %s: %w", devicePath, err)
+		}
+
+		isISOInstaller := isReadOnlyISO(devicePath)
+		isExternal := isExternallyAttachedInstallDisk(device, devicePath, isRemovable, isHotplug)
+
+		log.Debugf("Device: %s, Size: %d, Model: %s, Transport: %s, Removable: %v, Hotplug: %v, External: %v, Rotational: %v, isISOInstaller: %v",
+			devicePath, rawSize, strings.TrimSpace(device.Model), strings.TrimSpace(device.Tran), isRemovable,
+			isHotplug, isExternal, isRotational, isISOInstaller)
 
 		if !isISOInstaller {
 			systemDevices = append(systemDevices, SystemBlockDevice{
-				DevicePath:  devicePath,
-				RawDiskSize: rawSize,
-				Model:       strings.TrimSpace(device.Model),
+				DevicePath:   devicePath,
+				RawDiskSize:  rawSize,
+				Model:        strings.TrimSpace(device.Model),
+				Serial:       strings.TrimSpace(device.Serial),
+				Transport:    strings.TrimSpace(device.Tran),
+				IsRemovable:  isRemovable,
+				IsExternal:   isExternal,
+				IsRotational: isRotational,
 			})
 		} else {
 			log.Debugf("Excluded removable installer device: %s", devicePath)
@@ -1043,9 +1107,366 @@ func SystemBlockDevices() (systemDevices []SystemBlockDevice, err error) {
 	return systemDevices, nil
 }
 
+func ResolveInstallDiskPath(diskConfig config.DiskConfig) (string, error) {
+	if diskConfig.Path != "" {
+		return diskConfig.Path, nil
+	}
+
+	devices, err := SystemBlockDevices()
+	if err != nil {
+		return "", err
+	}
+
+	// For backward compatibility, excludeRemovable now means exclude disks that
+	// appear externally attached according to multiple signals, not only the
+	// kernel's RM bit.
+	excludeRemovable := true
+	if diskConfig.SelectionPolicy.ExcludeRemovable != nil {
+		excludeRemovable = *diskConfig.SelectionPolicy.ExcludeRemovable
+	}
+
+	eligible := make([]SystemBlockDevice, 0, len(devices))
+	for _, dev := range devices {
+		if excludeRemovable && dev.IsExternal {
+			continue
+		}
+		eligible = append(eligible, dev)
+	}
+
+	if len(eligible) == 0 {
+		return "", fmt.Errorf("no supported disks found after applying selection policy")
+	}
+
+	strategy := strings.TrimSpace(strings.ToLower(diskConfig.SelectionPolicy.Strategy))
+	if strategy == "" {
+		return "", fmt.Errorf("disk path is not set and no selection policy strategy was provided")
+	}
+
+	switch strategy {
+	case DiskSelectStrategyFirst:
+		return eligible[0].DevicePath, nil
+	case DiskSelectStrategyLargest:
+		selected := eligible[0]
+		for _, dev := range eligible[1:] {
+			if dev.RawDiskSize > selected.RawDiskSize {
+				selected = dev
+			}
+		}
+		return selected.DevicePath, nil
+	case DiskSelectStrategyLargestFree:
+		return selectDiskWithLargestFreeSpan(eligible)
+	case DiskSelectStrategyFastest:
+		selected := eligible[0]
+		for _, dev := range eligible[1:] {
+			if fasterDiskCandidate(dev, selected) {
+				selected = dev
+			}
+		}
+		return selected.DevicePath, nil
+	default:
+		return "", fmt.Errorf("unsupported disk selection strategy: %s", diskConfig.SelectionPolicy.Strategy)
+	}
+}
+
+type diskSpan struct {
+	start uint64
+	end   uint64
+}
+
+func selectDiskWithLargestFreeSpan(devices []SystemBlockDevice) (string, error) {
+	if len(devices) == 0 {
+		return "", fmt.Errorf("no candidate disks provided")
+	}
+
+	selected := devices[0]
+	maxFreeSpan, err := largestFreeSpanBytes(selected.DevicePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to determine free space on %s: %w", selected.DevicePath, err)
+	}
+
+	for _, dev := range devices[1:] {
+		freeSpan, err := largestFreeSpanBytes(dev.DevicePath)
+		if err != nil {
+			return "", fmt.Errorf("failed to determine free space on %s: %w", dev.DevicePath, err)
+		}
+
+		if freeSpan > maxFreeSpan || (freeSpan == maxFreeSpan && dev.RawDiskSize > selected.RawDiskSize) {
+			selected = dev
+			maxFreeSpan = freeSpan
+		}
+	}
+
+	return selected.DevicePath, nil
+}
+
+func largestFreeSpanBytes(diskPath string) (uint64, error) {
+	diskInfo, err := DiskGetInfo(diskPath)
+	if err != nil {
+		return 0, fmt.Errorf("failed to inspect disk %s: %w", diskPath, err)
+	}
+
+	totalSectorsRaw, ok := diskInfo["sectors"]
+	if !ok {
+		return 0, fmt.Errorf("disk info missing total sectors")
+	}
+	totalSectors, ok := totalSectorsRaw.(int)
+	if !ok || totalSectors <= 0 {
+		return 0, fmt.Errorf("invalid total sectors value: %v", totalSectorsRaw)
+	}
+
+	logicalSizeRaw, ok := diskInfo["logical_size"]
+	if !ok {
+		return 0, fmt.Errorf("disk info missing logical sector size")
+	}
+	logicalSectorSize, err := parseBytesPrefix(fmt.Sprintf("%v", logicalSizeRaw))
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse logical sector size: %w", err)
+	}
+
+	spans := []diskSpan{}
+	if partInfo, ok := diskInfo["part_info"].([]map[string]interface{}); ok {
+		for _, part := range partInfo {
+			start, err := parseUintField(part, "start_sec")
+			if err != nil {
+				return 0, err
+			}
+			end, err := parseUintField(part, "end_sec")
+			if err != nil {
+				return 0, err
+			}
+			if end < start {
+				return 0, fmt.Errorf("partition has end before start (%d < %d)", end, start)
+			}
+			spans = append(spans, diskSpan{start: start, end: end})
+		}
+	}
+
+	if len(spans) == 0 {
+		return uint64(totalSectors) * uint64(logicalSectorSize), nil
+	}
+
+	sort.Slice(spans, func(i, j int) bool { return spans[i].start < spans[j].start })
+
+	total := uint64(totalSectors)
+	var maxGap uint64
+	var cursor uint64
+	for _, span := range spans {
+		if span.start > total {
+			break
+		}
+		if span.start > cursor {
+			gap := span.start - cursor
+			if gap > maxGap {
+				maxGap = gap
+			}
+		}
+		if span.end >= total {
+			cursor = total
+			break
+		}
+		next := span.end + 1
+		if next > cursor {
+			cursor = next
+		}
+	}
+
+	if cursor < total {
+		gap := total - cursor
+		if gap > maxGap {
+			maxGap = gap
+		}
+	}
+
+	return maxGap * uint64(logicalSectorSize), nil
+}
+
+func parseUintField(part map[string]interface{}, key string) (uint64, error) {
+	raw, ok := part[key]
+	if !ok {
+		return 0, fmt.Errorf("partition info missing %s", key)
+	}
+	value, err := strconv.ParseUint(fmt.Sprintf("%v", raw), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s value %v: %w", key, raw, err)
+	}
+	return value, nil
+}
+
+func parseBytesPrefix(s string) (int, error) {
+	fields := strings.Fields(s)
+	if len(fields) == 0 {
+		return 0, fmt.Errorf("empty size string")
+	}
+	value, err := strconv.Atoi(fields[0])
+	if err != nil {
+		return 0, fmt.Errorf("invalid size prefix %q: %w", fields[0], err)
+	}
+	if value <= 0 {
+		return 0, fmt.Errorf("size must be positive (got %d)", value)
+	}
+	return value, nil
+}
+
+func fasterDiskCandidate(candidate, current SystemBlockDevice) bool {
+	candidateTier := diskTransportTier(candidate)
+	currentTier := diskTransportTier(current)
+	if candidateTier != currentTier {
+		return candidateTier > currentTier
+	}
+
+	if candidate.IsRotational != current.IsRotational {
+		return !candidate.IsRotational
+	}
+
+	candidateHasSSDHint := hasSolidStateModelHint(candidate)
+	currentHasSSDHint := hasSolidStateModelHint(current)
+	if candidateHasSSDHint != currentHasSSDHint {
+		return candidateHasSSDHint
+	}
+
+	return candidate.RawDiskSize > current.RawDiskSize
+}
+
+func diskTransportTier(device SystemBlockDevice) int {
+	transport := strings.ToLower(strings.TrimSpace(device.Transport))
+	switch transport {
+	case "nvme":
+		return diskTransportTierNVMe
+	case "virtio":
+		return diskTransportTierVirtio
+	case "sas", "scsi":
+		return diskTransportTierSAS
+	case "sata", "ata":
+		return diskTransportTierSATA
+	case "mmc":
+		return diskTransportTierMMC
+	case "usb":
+		return diskTransportTierUSB
+	}
+	return diskTransportTierUnknown
+}
+
+func hasSolidStateModelHint(device SystemBlockDevice) bool {
+	model := strings.ToLower(strings.TrimSpace(device.Model))
+	return strings.Contains(model, "nvme") || strings.Contains(model, "ssd")
+}
+
+func parseLsblkBool(value interface{}) (bool, error) {
+	if value == nil {
+		return false, nil
+	}
+
+	switch v := value.(type) {
+	case bool:
+		return v, nil
+	case json.Number:
+		raw := strings.TrimSpace(v.String())
+		if raw == "" {
+			return false, nil
+		}
+		switch raw {
+		case "1":
+			return true, nil
+		case "0":
+			return false, nil
+		default:
+			return false, fmt.Errorf("unsupported numeric boolean value: %s", raw)
+		}
+	case float64:
+		if v == 1 {
+			return true, nil
+		}
+		if v == 0 {
+			return false, nil
+		}
+		return false, fmt.Errorf("unsupported numeric boolean value: %v", v)
+	case string:
+		raw := strings.TrimSpace(v)
+		if raw == "" {
+			return false, nil
+		}
+		switch strings.ToLower(raw) {
+		case "1", "true":
+			return true, nil
+		case "0", "false":
+			return false, nil
+		default:
+			return false, fmt.Errorf("unsupported string boolean value: %s", raw)
+		}
+	default:
+		return false, fmt.Errorf("unsupported boolean type %T", value)
+	}
+}
+
+// isExternallyAttachedInstallDisk applies a conservative heuristic for
+// unattended installs. Some high-speed USB storage can present as non-removable
+// SATA/ATA devices, so excludeRemovable intentionally covers broader external
+// attachment signals than the RM bit alone.
+func isExternallyAttachedInstallDisk(device blockDeviceInfo, devicePath string, isRemovable, isHotplug bool) bool {
+	if isRemovable {
+		return true
+	}
+
+	if strings.EqualFold(strings.TrimSpace(device.Tran), "usb") {
+		return true
+	}
+
+	if isHotplug {
+		return true
+	}
+
+	if udevReportsUSBBus(device.MajMin) {
+		return true
+	}
+
+	return sysfsAncestryIncludesUSB(devicePath)
+}
+
+func udevReportsUSBBus(majMin string) bool {
+	majMin = strings.TrimSpace(majMin)
+	if majMin == "" {
+		return false
+	}
+
+	data, err := readFile(filepath.Join("/run/udev/data", "b"+majMin))
+	if err != nil {
+		return false
+	}
+
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "E:ID_BUS=usb" || trimmed == "ID_BUS=usb" {
+			return true
+		}
+	}
+
+	return false
+}
+
+func sysfsAncestryIncludesUSB(devicePath string) bool {
+	deviceName := filepath.Base(strings.TrimSpace(devicePath))
+	if deviceName == "" || deviceName == "." || deviceName == string(filepath.Separator) {
+		return false
+	}
+
+	resolvedPath, err := evalSymlinks(filepath.Join("/sys/class/block", deviceName))
+	if err != nil {
+		return false
+	}
+
+	for _, segment := range strings.Split(filepath.Clean(resolvedPath), string(filepath.Separator)) {
+		segment = strings.ToLower(strings.TrimSpace(segment))
+		if strings.HasPrefix(segment, "usb") {
+			return true
+		}
+	}
+
+	return false
+}
+
 // isReadOnlyISO checks if a device is mounted read-only (ISO on USB/CD).
 func isReadOnlyISO(devicePath string) bool {
-	mounts, err := os.ReadFile("/proc/mounts")
+	mounts, err := readFile("/proc/mounts")
 	if err != nil {
 		log.Debugf("Failed to read /proc/mounts: %v", err)
 		return false
