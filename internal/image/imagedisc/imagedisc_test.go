@@ -2,6 +2,7 @@ package imagedisc
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1207,7 +1208,13 @@ func TestGetAlignedSectorOffset(t *testing.T) {
 
 func TestSystemBlockDevices(t *testing.T) {
 	originalExecutor := shell.Default
+	originalReadFile := readFile
+	originalEvalSymlinks := evalSymlinks
 	defer func() { shell.Default = originalExecutor }()
+	defer func() {
+		readFile = originalReadFile
+		evalSymlinks = originalEvalSymlinks
+	}()
 
 	tests := []struct {
 		name         string
@@ -1218,7 +1225,15 @@ func TestSystemBlockDevices(t *testing.T) {
 		{
 			name: "found_devices",
 			mockCommands: []shell.MockCommand{
-				{Pattern: "lsblk", Output: `{"blockdevices":[{"name":"sda","size":10737418240,"model":"Virtual Disk"}]}`, Error: nil},
+				{Pattern: "lsblk", Output: `{"blockdevices":[{"name":"sda","size":10737418240,"model":"Virtual Disk","type":"disk"}]}`, Error: nil},
+			},
+			expectedLen: 1,
+			expectError: false,
+		},
+		{
+			name: "excludes_device_mapper_entries",
+			mockCommands: []shell.MockCommand{
+				{Pattern: "lsblk", Output: `{"blockdevices":[{"name":"dm-0","size":21474836480,"model":"LVM","type":"lvm","pkname":"nvme0n1"},{"name":"nvme0n1","size":21474836480,"model":"NVMe Disk","type":"disk"}]}`, Error: nil},
 			},
 			expectedLen: 1,
 			expectError: false,
@@ -1244,6 +1259,8 @@ func TestSystemBlockDevices(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			shell.Default = shell.NewMockExecutor(tt.mockCommands)
+			readFile = os.ReadFile
+			evalSymlinks = filepath.EvalSymlinks
 
 			result, err := SystemBlockDevices()
 
@@ -1258,6 +1275,244 @@ func TestSystemBlockDevices(t *testing.T) {
 				if len(result) != tt.expectedLen {
 					t.Errorf("Expected %d devices, but got %d", tt.expectedLen, len(result))
 				}
+			}
+		})
+	}
+}
+
+func boolPtr(v bool) *bool {
+	return &v
+}
+
+func TestResolveInstallDiskPath(t *testing.T) {
+	originalExecutor := shell.Default
+	originalReadFile := readFile
+	originalEvalSymlinks := evalSymlinks
+	defer func() { shell.Default = originalExecutor }()
+	defer func() {
+		readFile = originalReadFile
+		evalSymlinks = originalEvalSymlinks
+	}()
+
+	tests := []struct {
+		name        string
+		diskConfig  config.DiskConfig
+		lsblkOutput string
+		expectPath  string
+		expectError bool
+	}{
+		{
+			name:       "explicit_path_wins",
+			diskConfig: config.DiskConfig{Path: "/dev/sdz"},
+			expectPath: "/dev/sdz",
+		},
+		{
+			name:        "empty_path_without_strategy_errors",
+			diskConfig:  config.DiskConfig{},
+			lsblkOutput: `{"blockdevices":[{"name":"sda","size":21474836480,"model":"Disk","serial":"A","tran":"sata","rm":0,"rota":1}]}`,
+			expectError: true,
+		},
+		{
+			name: "largest_strategy_default",
+			diskConfig: config.DiskConfig{
+				SelectionPolicy: config.DiskSelectionPolicy{Strategy: "largest"},
+			},
+			lsblkOutput: `{"blockdevices":[{"name":"sda","size":10737418240,"model":"Disk A","serial":"A","tran":"sata","type":"disk","rm":0,"rota":1},{"name":"nvme0n1","size":21474836480,"model":"Disk B","serial":"B","tran":"nvme","type":"disk","rm":0,"rota":0}]}`,
+			expectPath:  "/dev/nvme0n1",
+		},
+		{
+			name: "fastest_strategy_prefers_nvme",
+			diskConfig: config.DiskConfig{
+				SelectionPolicy: config.DiskSelectionPolicy{Strategy: "fastest"},
+			},
+			lsblkOutput: `{"blockdevices":[{"name":"sda","size":536870912000,"model":"Large HDD","serial":"A","tran":"sata","type":"disk","rm":0,"rota":1},{"name":"nvme0n1","size":107374182400,"model":"Fast NVMe","serial":"B","tran":"nvme","type":"disk","rm":0,"rota":0}]}`,
+			expectPath:  "/dev/nvme0n1",
+		},
+		{
+			name: "largest_free_strategy_uses_unallocated_span",
+			diskConfig: config.DiskConfig{
+				SelectionPolicy: config.DiskSelectionPolicy{Strategy: "largest-free"},
+			},
+			lsblkOutput: `{"blockdevices":[{"name":"sda","size":32212254720,"model":"Disk A","serial":"A","tran":"virtio","type":"disk","rm":0,"rota":0},{"name":"sdb","size":21474836480,"model":"Disk B","serial":"B","tran":"virtio","type":"disk","rm":0,"rota":0}]}`,
+			expectPath:  "/dev/sdb",
+		},
+		{
+			name: "device_mapper_candidates_are_excluded",
+			diskConfig: config.DiskConfig{
+				SelectionPolicy: config.DiskSelectionPolicy{Strategy: "first"},
+			},
+			lsblkOutput: `{"blockdevices":[{"name":"dm-0","size":21474836480,"model":"cryptroot","serial":"D","tran":"","type":"crypt","pkname":"nvme0n1","rm":0,"rota":0},{"name":"nvme0n1","size":21474836480,"model":"Fast NVMe","serial":"B","tran":"nvme","type":"disk","rm":0,"rota":0}]}`,
+			expectPath:  "/dev/nvme0n1",
+		},
+		{
+			name: "exclude_removable_default",
+			diskConfig: config.DiskConfig{
+				SelectionPolicy: config.DiskSelectionPolicy{Strategy: "first"},
+			},
+			lsblkOutput: `{"blockdevices":[{"name":"sdb","size":68719476736,"model":"USB Disk","serial":"U","tran":"usb","type":"disk","rm":1,"rota":0},{"name":"sda","size":21474836480,"model":"Local","serial":"L","tran":"sata","type":"disk","rm":0,"rota":1}]}`,
+			expectPath:  "/dev/sda",
+		},
+		{
+			name: "exclude_external_hotplug_default",
+			diskConfig: config.DiskConfig{
+				SelectionPolicy: config.DiskSelectionPolicy{Strategy: "first"},
+			},
+			lsblkOutput: `{"blockdevices":[{"name":"sdb","size":68719476736,"model":"USB Bridge","serial":"U","tran":"sata","type":"disk","hotplug":1,"rm":0,"rota":0},{"name":"sda","size":21474836480,"model":"Local","serial":"L","tran":"sata","type":"disk","hotplug":0,"rm":0,"rota":1}]}`,
+			expectPath:  "/dev/sda",
+		},
+		{
+			name: "include_external_when_enabled",
+			diskConfig: config.DiskConfig{
+				SelectionPolicy: config.DiskSelectionPolicy{Strategy: "first", ExcludeRemovable: boolPtr(false)},
+			},
+			lsblkOutput: `{"blockdevices":[{"name":"sdb","size":68719476736,"model":"USB Disk","serial":"U","tran":"usb","type":"disk","rm":1,"rota":0},{"name":"sda","size":21474836480,"model":"Local","serial":"L","tran":"sata","type":"disk","rm":0,"rota":1}]}`,
+			expectPath:  "/dev/sdb",
+		},
+		{
+			name: "unsupported_strategy",
+			diskConfig: config.DiskConfig{
+				SelectionPolicy: config.DiskSelectionPolicy{Strategy: "by-id"},
+			},
+			lsblkOutput: `{"blockdevices":[{"name":"sda","size":21474836480,"model":"Disk","serial":"A","tran":"sata","type":"disk","rm":0,"rota":1}]}`,
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			readFile = func(path string) ([]byte, error) {
+				if path == "/proc/mounts" {
+					return nil, os.ErrNotExist
+				}
+				return nil, os.ErrNotExist
+			}
+			evalSymlinks = func(path string) (string, error) {
+				return "", os.ErrNotExist
+			}
+			if tt.diskConfig.Path == "" {
+				mockCommands := []shell.MockCommand{{Pattern: "lsblk", Output: tt.lsblkOutput, Error: nil}}
+				if tt.diskConfig.SelectionPolicy.Strategy == "largest-free" {
+					mockCommands = append(mockCommands,
+						shell.MockCommand{
+							Pattern: "fdisk -l /dev/sda",
+							Output: "Disk /dev/sda: 30 GiB, 32212254720 bytes, 62914560 sectors\n" +
+								"Sector size (logical/physical): 512 bytes / 512 bytes\n" +
+								"/dev/sda1        2048 60817407 60815360 29G Linux filesystem",
+							Error: nil,
+						},
+						shell.MockCommand{
+							Pattern: "fdisk -l /dev/sdb",
+							Output: "Disk /dev/sdb: 20 GiB, 21474836480 bytes, 41943040 sectors\n" +
+								"Sector size (logical/physical): 512 bytes / 512 bytes\n" +
+								"/dev/sdb1        2048 20973567 20971520 10G Linux filesystem",
+							Error: nil,
+						},
+					)
+				}
+				shell.Default = shell.NewMockExecutor(mockCommands)
+			}
+
+			path, err := ResolveInstallDiskPath(tt.diskConfig)
+			if tt.expectError {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+
+			if path != tt.expectPath {
+				t.Fatalf("expected %s, got %s", tt.expectPath, path)
+			}
+		})
+	}
+}
+
+func TestIsExternallyAttachedInstallDisk(t *testing.T) {
+	originalReadFile := readFile
+	originalEvalSymlinks := evalSymlinks
+	defer func() {
+		readFile = originalReadFile
+		evalSymlinks = originalEvalSymlinks
+	}()
+
+	tests := []struct {
+		name          string
+		device        blockDeviceInfo
+		devicePath    string
+		isRemovable   bool
+		isHotplug     bool
+		udevData      map[string]string
+		sysfsResolved map[string]string
+		expect        bool
+	}{
+		{
+			name:        "rm_flag_marks_external",
+			device:      blockDeviceInfo{Name: "sdb", MajMin: "8:16", Tran: "sata"},
+			devicePath:  "/dev/sdb",
+			isRemovable: true,
+			expect:      true,
+		},
+		{
+			name:       "usb_transport_marks_external",
+			device:     blockDeviceInfo{Name: "sdb", MajMin: "8:16", Tran: "usb"},
+			devicePath: "/dev/sdb",
+			expect:     true,
+		},
+		{
+			name:       "hotplug_marks_external",
+			device:     blockDeviceInfo{Name: "sdb", MajMin: "8:16", Tran: "sata"},
+			devicePath: "/dev/sdb",
+			isHotplug:  true,
+			expect:     true,
+		},
+		{
+			name:       "udev_usb_bus_marks_external",
+			device:     blockDeviceInfo{Name: "sdb", MajMin: "8:16", Tran: "sata"},
+			devicePath: "/dev/sdb",
+			udevData: map[string]string{
+				"/run/udev/data/b8:16": "E:ID_BUS=usb\n",
+			},
+			expect: true,
+		},
+		{
+			name:       "usb_sysfs_ancestry_marks_external",
+			device:     blockDeviceInfo{Name: "sdb", MajMin: "8:16", Tran: "sata"},
+			devicePath: "/dev/sdb",
+			sysfsResolved: map[string]string{
+				"/sys/class/block/sdb": "/sys/devices/pci0000:00/0000:00:14.0/usb2/2-1/2-1:1.0/host6/target6:0:0/6:0:0:0/block/sdb",
+			},
+			expect: true,
+		},
+		{
+			name:       "internal_sata_disk_is_not_external",
+			device:     blockDeviceInfo{Name: "sda", MajMin: "8:0", Tran: "sata"},
+			devicePath: "/dev/sda",
+			expect:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			readFile = func(path string) ([]byte, error) {
+				if content, ok := tt.udevData[path]; ok {
+					return []byte(content), nil
+				}
+				return nil, os.ErrNotExist
+			}
+			evalSymlinks = func(path string) (string, error) {
+				if resolved, ok := tt.sysfsResolved[path]; ok {
+					return resolved, nil
+				}
+				return "", os.ErrNotExist
+			}
+
+			got := isExternallyAttachedInstallDisk(tt.device, tt.devicePath, tt.isRemovable, tt.isHotplug)
+			if got != tt.expect {
+				t.Fatalf("isExternallyAttachedInstallDisk() = %v, want %v", got, tt.expect)
 			}
 		})
 	}
