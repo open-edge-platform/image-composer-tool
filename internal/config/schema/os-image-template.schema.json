@@ -98,9 +98,9 @@
               "default": true
             },
             "requireEmpty": {
-              "type": "boolean",
-              "description": "Require the selected disk to be empty before installation. When false, installation may overwrite existing data on the selected disk.",
-              "default": true
+             "type": "boolean",
+             "description": "Require the selected disk to have no existing partitions before installation. This check does not detect raw or unpartitioned data already on the disk. When false, installation may overwrite existing data on the selected disk.",
+             "default": true
             }
           },
           "additionalProperties": false
