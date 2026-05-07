@@ -30,7 +30,7 @@ disk:
   selectionPolicy:
     strategy: largest
     excludeRemovable: true
-    requireEmpty: true # Only consider disks that do not have existing partitions or data.
+    requireEmpty: true # Only consider disks that do not have existing partitions.
   partitionTableType: gpt # Partition table type, valid value: [gpt, mbr]
   partitions:
     - id: boot
