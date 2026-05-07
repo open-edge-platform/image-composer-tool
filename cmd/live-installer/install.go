@@ -22,7 +22,9 @@ import (
 
 // waitForDiskQuiescence waits for the disk to stabilize by checking for I/O inactivity.
 // This ensures hypervisors (QEMU, KVM, etc.) have fully initialized virtual disks before
-// partitioning begins. Returns nil if disk becomes quiescent or if check is not supported.
+// partitioning begins. Errors from the I/O check are treated as "not-ready" (busy) and
+// retried until the timeout, preventing the check from being skipped on transient failures
+// such as /proc/diskstats not yet reporting the device.
 func waitForDiskQuiescence(diskPath string) error {
 	const (
 		maxRetries = 20 // ~10 seconds with 500ms sleeps
@@ -35,8 +37,12 @@ func waitForDiskQuiescence(diskPath string) error {
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		isBusy, err := imagedisc.CheckDiskIOStats(diskPath)
 		if err != nil {
-			// If we can't read stats (e.g., disk not ready), skip quiescence check
-			return nil
+			// Treat errors as busy/not-ready: the device may not yet be visible in
+			// /proc/diskstats. Reset quiet count and keep retrying until timeout.
+			log.Debugf("Disk %s I/O stats not yet available (attempt %d): %v", diskPath, attempt+1, err)
+			quietCount = 0
+			time.Sleep(sleepTime)
+			continue
 		}
 
 		if !isBusy {
