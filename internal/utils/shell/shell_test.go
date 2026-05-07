@@ -87,6 +87,16 @@ func TestExecCmdOverride(t *testing.T) {
 	}
 }
 
+func TestExecCmdOverrideIncludesOutputInError(t *testing.T) {
+	_, err := shell.ExecCmd("sh -c \"echo lookup-blockdev-failed 1>&2; exit 32\"", false, shell.HostPath, nil)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "lookup-blockdev-failed") {
+		t.Fatalf("expected error to include command output, got: %v", err)
+	}
+}
+
 func TestExecCmdSilentOverride(t *testing.T) {
 	originalExecutor := shell.Default
 	defer func() { shell.Default = originalExecutor }()
