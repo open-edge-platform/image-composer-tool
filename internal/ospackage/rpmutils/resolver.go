@@ -192,18 +192,16 @@ func GenerateDot(pkgs []ospackage.PackageInfo, file string, pkgSources map[strin
 		// Note: Multiple package versions (e.g., glibc-2.38 and glibc-2.35) will both produce "glibc"
 		// This causes duplicate node declarations in the DOT file, which is valid - GraphViz merges them.
 		// For visualization purposes, we only care about package relationships, not specific versions.
-		cleanName := extractBasePackageNameFromFile(pkg.Name)
+		cleanName := pkg.PkgName
 		if _, err := fmt.Fprintf(writer, "  \"%s\";\n", cleanName); err != nil {
 			return fmt.Errorf("writing DOT node for %s: %w", cleanName, err)
 		}
-		for _, dep := range pkg.Requires {
+		for _, dep := range pkg.RequiresPkgNames {
 			if dep == "" {
 				continue
 			}
 			// Extract clean dependency name for edges (handles capabilities and package requirements)
 			cleanDep := extractBaseRequirement(dep)
-			// Also trim package filenames (e.g., "glibc-2.38-16.azl3.x86_64.rpm" -> "glibc")
-			cleanDep = extractBasePackageNameFromFile(cleanDep)
 			edgeKey := cleanName + "|" + cleanDep
 			if edgesWritten[edgeKey] {
 				continue
@@ -427,6 +425,8 @@ func ParseRepositoryMetadata(baseURL, gzHref string, packageFilter []string) ([]
 								} else if section == "requires" {
 									// Store the base name in Requires
 									curInfo.Requires = append(curInfo.Requires, name)
+									// Store the base name in RequiresPkgNames
+									curInfo.RequiresPkgNames = append(curInfo.RequiresPkgNames, name)
 
 									// Store version constraint with package name prefix in RequiresVer
 									if version != "" || release != "" || epoch != "" || flags != "" {
@@ -721,9 +721,11 @@ func ResolveDependencies(requested []ospackage.PackageInfo, all []ospackage.Pack
 	// Clear required fields for all and requested
 	for i := range all {
 		all[i].Requires = nil
+		all[i].RequiresPkgNames = nil
 	}
 	for i := range requested {
 		requested[i].Requires = nil
+		requested[i].RequiresPkgNames = nil
 	}
 
 	neededSet := make(map[string]struct{})
@@ -791,6 +793,16 @@ func ResolveDependencies(requested []ospackage.PackageInfo, all []ospackage.Pack
 				// Append to parent's Requires field even if already resolved
 				if resultPkg, exists := resultMap[cur.Name]; exists {
 					resultPkg.Requires = append(resultPkg.Requires, filename)
+					// Store canonical package name from the already-resolved dependency
+					if depPkg, depExists := resultMap[filename]; depExists {
+						if depPkg.PkgName != "" {
+							resultPkg.RequiresPkgNames = append(resultPkg.RequiresPkgNames, depPkg.PkgName)
+						} else {
+							// Extract canonical name from filename if PkgName not available
+							canonicalName := extractBasePackageNameFromFile(filename)
+							resultPkg.RequiresPkgNames = append(resultPkg.RequiresPkgNames, canonicalName)
+						}
+					}
 				}
 
 				continue
@@ -812,6 +824,14 @@ func ResolveDependencies(requested []ospackage.PackageInfo, all []ospackage.Pack
 				// Update the parent's Requires field with the chosen candidate's name
 				if resultPkg, exists := resultMap[cur.Name]; exists {
 					resultPkg.Requires = append(resultPkg.Requires, chosenCandidate.Name)
+					// Store canonical package name of the chosen candidate
+					if chosenCandidate.PkgName != "" {
+						resultPkg.RequiresPkgNames = append(resultPkg.RequiresPkgNames, chosenCandidate.PkgName)
+					} else {
+						// Extract canonical name from filename if PkgName not available
+						canonicalName := extractBasePackageNameFromFile(chosenCandidate.Name)
+						resultPkg.RequiresPkgNames = append(resultPkg.RequiresPkgNames, canonicalName)
+					}
 				}
 
 				// Add chosen candidate to the queue for further processing

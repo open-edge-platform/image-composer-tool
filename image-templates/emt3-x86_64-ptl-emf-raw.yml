@@ -209,7 +209,7 @@ systemConfig:
     - openssh-server
 
     # virtualization host
-    - qemu-kvm
+    - qemu-kvm-9.1.0-7
 
     # agent packages
     - hardware-discovery-agent
@@ -291,14 +291,14 @@ systemConfig:
     - gcc-c++
     - make
     # QEMU full system emulation
-    - qemu
-    - qemu-user
-    - qemu-img
-    - qemu-tools
-    - qemu-system-aarch64
-    - qemu-system-arm
-    - qemu-system-riscv
-    - qemu-system-x86
+    - qemu-9.1.0-7
+    - qemu-user-9.1.0-7
+    - qemu-img-9.1.0-7
+    - qemu-tools-9.1.0-7
+    - qemu-system-aarch64-9.1.0-7
+    - qemu-system-arm-9.1.0-7
+    - qemu-system-riscv-9.1.0-7
+    - qemu-system-x86-9.1.0-7
     # Graphics and display stack
     - mesa-dri-drivers
     - mesa-libGL
@@ -339,9 +339,9 @@ systemConfig:
     - xorg-x11-server-utils
     - xorg-x11-apps
     - dracut-virtio
-    - qemu-guest-agent
-    - qemu-audio-pa
-    - qemu-with-ui
+    - qemu-guest-agent-9.1.0-7
+    - qemu-audio-pa-9.1.0-7
+    - qemu-with-ui-9.1.0-7
     - libvirt
     - swtpm-tools
     - dmidecode

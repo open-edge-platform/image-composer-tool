@@ -1,16 +1,16 @@
 image:
-  name: minimal-os-image-elxr
-  version: "12.0.0"
+  name: minimal-os-image-ubuntu
+  version: "24.04"
 
 target:
-  os: wind-river-elxr # Target OS name
-  dist: elxr12 # Target OS distribution
-  arch: x86_64 # Target OS architecture
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
   imageType: img # Image type, valid value: [raw, iso].
 
 systemConfig:
-  name: Default_Initrd
-  description: Default yml configuration for initrd image
+  name: Default_Initrd_Unattended
+  description: Default yml configuration for unattended initrd image
 
   bootloader:
     bootType: efi # (efi or legacy)
@@ -28,42 +28,46 @@ systemConfig:
     - dbus
     - policykit-1
     - dosfstools
+    - gdisk
     - efibootmgr
     - eject
     - curl
     - mmdebstrap
     - wget
     - cryptsetup
-    - uefi-ext4
     - systemd-resolved
     - cloud-guest-utils
     - xterm
-    - dracut
-    - grub2
+    - initramfs-tools
+    - systemd-boot
     - grub-pc-bin
     - grub-efi-amd64-bin
-    - gdisk
+
 
   additionalFiles:
     - local: ../additionalfiles/dhcp.network
       final: /etc/systemd/network/dhcp.network
-    - local: ../additionalfiles/elxr-aria.list
-      final: /etc/apt/sources.list.d/elxr-aria.list
+    - local: ../additionalfiles/ubuntu-noble.list
+      final: /etc/apt/sources.list.d/ubuntu-noble.list
     - local: ../additionalfiles/getty@.service
       final: /usr/lib/systemd/system/getty@.service
     - local: ../additionalfiles/serial-getty@.service
       final: /usr/lib/systemd/system/serial-getty@.service
-    - local: ../../../../../general/isolinux/attendedinstaller
-      final: /root/attendedinstaller
+    - local: ../../../../../general/isolinux/unattendedinstaller
+      final: /root/unattendedinstaller
     - local: ../../../../../../build/live-installer
       final: /usr/bin/live-installer
 
   users:
     - name: root
-      startupScript: "/root/attendedinstaller"
+      startupScript: "/root/unattendedinstaller"
+
+  configurations:
+    - cmd: "systemctl mask apt-daily.service apt-daily.timer apt-daily-upgrade.service apt-daily-upgrade.timer"
 
   kernel:
     name: kernel
-    cmdline: "quiet splash console=ttyS0,115200 console=tty0 loglevel=7"
+    version: "6.17"
+    cmdline: "console=ttyS0,115200 console=tty0 loglevel=7 systemd.log_level=debug rd.debug"
     packages:
-     - linux-image-amd64
+      - linux-image-generic-hwe-24.04
