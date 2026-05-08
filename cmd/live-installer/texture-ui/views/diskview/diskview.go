@@ -17,7 +17,7 @@ import (
 // UI constants.
 const (
 	resizeWidgetes         = true
-	defaultToAutoPartition = true
+	defaultToAutoPartition = false
 )
 
 // DiskView contains the disk selection UI

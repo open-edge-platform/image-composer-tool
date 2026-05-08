@@ -43,6 +43,11 @@ const (
 	bootPartitionFormat = "fat32"
 	bootPartitionSize   = "9MiB"
 
+	// Default root partition
+	rootPartitionName       = "root"
+	rootPartitionFormat     = "ext4"
+	rootPartitionMountPoint = "/"
+
 	// Page names
 	tablePage        = "PARTITIONTABLE"
 	addPartitionPage = "ADDPARTITIONFORM"
@@ -273,6 +278,10 @@ func (mp *ManualPartitionWidget) HandleInput(event *tcell.EventKey) *tcell.Event
 
 // Reset resets the page, undoing any user input.
 func (mp *ManualPartitionWidget) Reset() (err error) {
+	// Always clear template partitions when entering manual mode
+	// This ensures a clean state and prevents conflicts with auto-partition config
+	mp.template.Disk.Partitions = []config.PartitionInfo{}
+
 	mp.partitionTable.Clear()
 	err = mp.populateTable()
 	if err != nil {
@@ -422,7 +431,8 @@ func (mp *ManualPartitionWidget) populateTable() (err error) {
 		return
 	}
 
-	// Add the default boot partition
+	// Add only the required boot partition
+	// User will manually add root and other partitions as needed
 	err = mp.addPartitionToTable(bootPartitionName, bootPartitionSize, bootPartitionFormat, bootPartitionMountPoint)
 	return
 }
@@ -515,7 +525,9 @@ func (mp *ManualPartitionWidget) mustRemovePartition() {
 	// On error there is no clean way to bubble up the error as this routine is invoked from UI threads,
 	// so panic as this is unexpected.
 	err := mp.updateSpaceLabel()
-	log.Panicf("Failed to update space label: %v", err)
+	if err != nil {
+		log.Panicf("Failed to update space label: %v", err)
+	}
 }
 
 func (mp *ManualPartitionWidget) unmarshalPartitionTable() (err error) {
@@ -590,6 +602,16 @@ func (mp *ManualPartitionWidget) unmarshalPartitionTable() (err error) {
 	disk.Partitions = partitions
 
 	mp.template.Disk = disk
+
+	// Debug logging to verify partition configuration
+	log.Infof("Manual partition configuration saved:")
+	log.Infof("  Disk path: %s", disk.Path)
+	log.Infof("  Partition table type: %s", disk.PartitionTableType)
+	log.Infof("  Number of partitions: %d", len(disk.Partitions))
+	for i, p := range disk.Partitions {
+		log.Infof("  Partition %d: ID=%s, Name=%s, MountPoint=%s, FsType=%s, Start=%s, End=%s",
+			i, p.ID, p.Name, p.MountPoint, p.FsType, p.Start, p.End)
+	}
 
 	return
 }
