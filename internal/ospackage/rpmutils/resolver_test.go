@@ -132,16 +132,22 @@ func TestGenerateDot(t *testing.T) {
 			name: "simple package with dependencies",
 			packages: []ospackage.PackageInfo{
 				{
-					Name:     "bash",
-					Requires: []string{"glibc", "ncurses"},
+					Name:             "bash",
+					PkgName:          "bash",
+					Requires:         []string{"glibc", "ncurses"},
+					RequiresPkgNames: []string{"glibc", "ncurses"},
 				},
 				{
-					Name:     "glibc",
-					Requires: []string{},
+					Name:             "glibc",
+					PkgName:          "glibc",
+					Requires:         []string{},
+					RequiresPkgNames: []string{},
 				},
 				{
-					Name:     "ncurses",
-					Requires: []string{"glibc"},
+					Name:             "ncurses",
+					PkgName:          "ncurses",
+					Requires:         []string{"glibc"},
+					RequiresPkgNames: []string{"glibc"},
 				},
 			},
 			filename:    filepath.Join(tmpDir, "simple.dot"),
@@ -157,8 +163,10 @@ func TestGenerateDot(t *testing.T) {
 			name: "package with no dependencies",
 			packages: []ospackage.PackageInfo{
 				{
-					Name:     "standalone",
-					Requires: []string{},
+					Name:             "standalone",
+					PkgName:          "standalone",
+					Requires:         []string{},
+					RequiresPkgNames: []string{},
 				},
 			},
 			filename:    filepath.Join(tmpDir, "standalone.dot"),
@@ -168,12 +176,16 @@ func TestGenerateDot(t *testing.T) {
 			name: "packages with special characters in names",
 			packages: []ospackage.PackageInfo{
 				{
-					Name:     "package-with-dashes",
-					Requires: []string{"lib.so.1"},
+					Name:             "package-with-dashes",
+					PkgName:          "package-with-dashes",
+					Requires:         []string{"lib.so.1"},
+					RequiresPkgNames: []string{"lib.so.1"},
 				},
 				{
-					Name:     "lib.so.1",
-					Requires: []string{},
+					Name:             "lib.so.1",
+					PkgName:          "lib.so.1",
+					Requires:         []string{},
+					RequiresPkgNames: []string{},
 				},
 			},
 			filename:    filepath.Join(tmpDir, "special_chars.dot"),
@@ -182,8 +194,8 @@ func TestGenerateDot(t *testing.T) {
 		{
 			name: "with package source colors",
 			packages: []ospackage.PackageInfo{
-				{Name: "kernel", Requires: []string{}},
-				{Name: "boot", Requires: []string{}},
+				{Name: "kernel", PkgName: "kernel", Requires: []string{}, RequiresPkgNames: []string{}},
+				{Name: "boot", PkgName: "boot", Requires: []string{}, RequiresPkgNames: []string{}},
 			},
 			filename: filepath.Join(tmpDir, "sources.dot"),
 			pkgSources: map[string]config.PackageSource{
@@ -196,16 +208,22 @@ func TestGenerateDot(t *testing.T) {
 			name: "duplicate dependencies should be deduplicated",
 			packages: []ospackage.PackageInfo{
 				{
-					Name:     "libstdc++",
-					Requires: []string{"glibc", "glibc", "glibc", "libgcc", "libgcc"},
+					Name:             "libstdc++",
+					PkgName:          "libstdc++",
+					Requires:         []string{"glibc", "glibc", "glibc", "libgcc", "libgcc"},
+					RequiresPkgNames: []string{"glibc", "glibc", "glibc", "libgcc", "libgcc"},
 				},
 				{
-					Name:     "glibc",
-					Requires: []string{},
+					Name:             "glibc",
+					PkgName:          "glibc",
+					Requires:         []string{},
+					RequiresPkgNames: []string{},
 				},
 				{
-					Name:     "libgcc",
-					Requires: []string{"glibc"},
+					Name:             "libgcc",
+					PkgName:          "libgcc",
+					Requires:         []string{"glibc"},
+					RequiresPkgNames: []string{"glibc"},
 				},
 			},
 			filename:    filepath.Join(tmpDir, "dedup.dot"),
