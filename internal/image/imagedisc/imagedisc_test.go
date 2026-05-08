@@ -2,6 +2,7 @@ package imagedisc
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -902,6 +903,45 @@ func TestDiskPartitionsCreate(t *testing.T) {
 	}
 }
 
+func TestDiskPartitionsCreate_GPTBusyDiskRetry(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	mockCommands := []shell.MockCommand{
+		{Pattern: ".*fdisk.*vda.*", Output: "Disk /dev/vda: 24 GiB", Error: nil},
+		{Pattern: ".*label.*gpt.*sfdisk /dev/vda", Output: "Checking that no-one is using this disk right now ... FAILED\n\nThis disk is currently in use - repartitioning is probably a bad idea.", Error: fmt.Errorf("busy")},
+		{Pattern: "lsblk /dev/vda", Output: `{"blockdevices":[{"name":"vda","path":"/dev/vda","type":"disk"},{"name":"vda1","path":"/dev/vda1","mountpoint":"/media/installer","type":"part"}]}`, Error: nil},
+		{Pattern: "mount", Output: "/dev/vda1 on /media/installer type ext4 (rw,relatime)", Error: nil},
+		{Pattern: "umount /media/installer", Output: "", Error: nil},
+		{Pattern: "swapoff /dev/vda1", Output: "", Error: fmt.Errorf("not swap")},
+		{Pattern: "wipefs -a -f /dev/vda", Output: "", Error: nil},
+		{Pattern: "sync", Output: "", Error: nil},
+		{Pattern: ".*label.*gpt.*sfdisk --force --wipe always /dev/vda", Output: "", Error: nil},
+		{Pattern: ".*hw_sector_size", Output: "512", Error: nil},
+		{Pattern: ".*physical_block_size", Output: "4096", Error: nil},
+		{Pattern: ".*sgdisk.*vda.*", Output: "", Error: nil},
+		{Pattern: ".*partx.*vda.*", Output: "", Error: nil},
+		{Pattern: ".*mkfs.*ext4.*vda.*", Output: "", Error: nil},
+	}
+	shell.Default = shell.NewMockExecutor(mockCommands)
+
+	result, err := DiskPartitionsCreate("/dev/vda", []config.PartitionInfo{{
+		ID:     "root",
+		Name:   "root",
+		Start:  "1MiB",
+		End:    "100MiB",
+		FsType: "ext4",
+		Type:   "linux",
+		Index:  intPtr(1),
+	}}, "gpt")
+	if err != nil {
+		t.Fatalf("expected busy disk retry to succeed, got: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("expected 1 partition device after retry, got %d", len(result))
+	}
+}
+
 func TestGetPartitionLabel(t *testing.T) {
 	originalExecutor := shell.Default
 	defer func() { shell.Default = originalExecutor }()
@@ -1168,7 +1208,13 @@ func TestGetAlignedSectorOffset(t *testing.T) {
 
 func TestSystemBlockDevices(t *testing.T) {
 	originalExecutor := shell.Default
+	originalReadFile := readFile
+	originalEvalSymlinks := evalSymlinks
 	defer func() { shell.Default = originalExecutor }()
+	defer func() {
+		readFile = originalReadFile
+		evalSymlinks = originalEvalSymlinks
+	}()
 
 	tests := []struct {
 		name         string
@@ -1179,7 +1225,15 @@ func TestSystemBlockDevices(t *testing.T) {
 		{
 			name: "found_devices",
 			mockCommands: []shell.MockCommand{
-				{Pattern: "lsblk", Output: `{"blockdevices":[{"name":"sda","size":10737418240,"model":"Virtual Disk"}]}`, Error: nil},
+				{Pattern: "lsblk", Output: `{"blockdevices":[{"name":"sda","size":10737418240,"model":"Virtual Disk","type":"disk"}]}`, Error: nil},
+			},
+			expectedLen: 1,
+			expectError: false,
+		},
+		{
+			name: "excludes_device_mapper_entries",
+			mockCommands: []shell.MockCommand{
+				{Pattern: "lsblk", Output: `{"blockdevices":[{"name":"dm-0","size":21474836480,"model":"LVM","type":"lvm","pkname":"nvme0n1"},{"name":"nvme0n1","size":21474836480,"model":"NVMe Disk","type":"disk"}]}`, Error: nil},
 			},
 			expectedLen: 1,
 			expectError: false,
@@ -1205,6 +1259,8 @@ func TestSystemBlockDevices(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			shell.Default = shell.NewMockExecutor(tt.mockCommands)
+			readFile = os.ReadFile
+			evalSymlinks = filepath.EvalSymlinks
 
 			result, err := SystemBlockDevices()
 
@@ -1219,6 +1275,244 @@ func TestSystemBlockDevices(t *testing.T) {
 				if len(result) != tt.expectedLen {
 					t.Errorf("Expected %d devices, but got %d", tt.expectedLen, len(result))
 				}
+			}
+		})
+	}
+}
+
+func boolPtr(v bool) *bool {
+	return &v
+}
+
+func TestResolveInstallDiskPath(t *testing.T) {
+	originalExecutor := shell.Default
+	originalReadFile := readFile
+	originalEvalSymlinks := evalSymlinks
+	defer func() { shell.Default = originalExecutor }()
+	defer func() {
+		readFile = originalReadFile
+		evalSymlinks = originalEvalSymlinks
+	}()
+
+	tests := []struct {
+		name        string
+		diskConfig  config.DiskConfig
+		lsblkOutput string
+		expectPath  string
+		expectError bool
+	}{
+		{
+			name:       "explicit_path_wins",
+			diskConfig: config.DiskConfig{Path: "/dev/sdz"},
+			expectPath: "/dev/sdz",
+		},
+		{
+			name:        "empty_path_without_strategy_errors",
+			diskConfig:  config.DiskConfig{},
+			lsblkOutput: `{"blockdevices":[{"name":"sda","size":21474836480,"model":"Disk","serial":"A","tran":"sata","rm":0,"rota":1}]}`,
+			expectError: true,
+		},
+		{
+			name: "largest_strategy_default",
+			diskConfig: config.DiskConfig{
+				SelectionPolicy: config.DiskSelectionPolicy{Strategy: "largest"},
+			},
+			lsblkOutput: `{"blockdevices":[{"name":"sda","size":10737418240,"model":"Disk A","serial":"A","tran":"sata","type":"disk","rm":0,"rota":1},{"name":"nvme0n1","size":21474836480,"model":"Disk B","serial":"B","tran":"nvme","type":"disk","rm":0,"rota":0}]}`,
+			expectPath:  "/dev/nvme0n1",
+		},
+		{
+			name: "fastest_strategy_prefers_nvme",
+			diskConfig: config.DiskConfig{
+				SelectionPolicy: config.DiskSelectionPolicy{Strategy: "fastest"},
+			},
+			lsblkOutput: `{"blockdevices":[{"name":"sda","size":536870912000,"model":"Large HDD","serial":"A","tran":"sata","type":"disk","rm":0,"rota":1},{"name":"nvme0n1","size":107374182400,"model":"Fast NVMe","serial":"B","tran":"nvme","type":"disk","rm":0,"rota":0}]}`,
+			expectPath:  "/dev/nvme0n1",
+		},
+		{
+			name: "largest_free_strategy_uses_unallocated_span",
+			diskConfig: config.DiskConfig{
+				SelectionPolicy: config.DiskSelectionPolicy{Strategy: "largest-free"},
+			},
+			lsblkOutput: `{"blockdevices":[{"name":"sda","size":32212254720,"model":"Disk A","serial":"A","tran":"virtio","type":"disk","rm":0,"rota":0},{"name":"sdb","size":21474836480,"model":"Disk B","serial":"B","tran":"virtio","type":"disk","rm":0,"rota":0}]}`,
+			expectPath:  "/dev/sdb",
+		},
+		{
+			name: "device_mapper_candidates_are_excluded",
+			diskConfig: config.DiskConfig{
+				SelectionPolicy: config.DiskSelectionPolicy{Strategy: "first"},
+			},
+			lsblkOutput: `{"blockdevices":[{"name":"dm-0","size":21474836480,"model":"cryptroot","serial":"D","tran":"","type":"crypt","pkname":"nvme0n1","rm":0,"rota":0},{"name":"nvme0n1","size":21474836480,"model":"Fast NVMe","serial":"B","tran":"nvme","type":"disk","rm":0,"rota":0}]}`,
+			expectPath:  "/dev/nvme0n1",
+		},
+		{
+			name: "exclude_removable_default",
+			diskConfig: config.DiskConfig{
+				SelectionPolicy: config.DiskSelectionPolicy{Strategy: "first"},
+			},
+			lsblkOutput: `{"blockdevices":[{"name":"sdb","size":68719476736,"model":"USB Disk","serial":"U","tran":"usb","type":"disk","rm":1,"rota":0},{"name":"sda","size":21474836480,"model":"Local","serial":"L","tran":"sata","type":"disk","rm":0,"rota":1}]}`,
+			expectPath:  "/dev/sda",
+		},
+		{
+			name: "exclude_external_hotplug_default",
+			diskConfig: config.DiskConfig{
+				SelectionPolicy: config.DiskSelectionPolicy{Strategy: "first"},
+			},
+			lsblkOutput: `{"blockdevices":[{"name":"sdb","size":68719476736,"model":"USB Bridge","serial":"U","tran":"sata","type":"disk","hotplug":1,"rm":0,"rota":0},{"name":"sda","size":21474836480,"model":"Local","serial":"L","tran":"sata","type":"disk","hotplug":0,"rm":0,"rota":1}]}`,
+			expectPath:  "/dev/sda",
+		},
+		{
+			name: "include_external_when_enabled",
+			diskConfig: config.DiskConfig{
+				SelectionPolicy: config.DiskSelectionPolicy{Strategy: "first", ExcludeRemovable: boolPtr(false)},
+			},
+			lsblkOutput: `{"blockdevices":[{"name":"sdb","size":68719476736,"model":"USB Disk","serial":"U","tran":"usb","type":"disk","rm":1,"rota":0},{"name":"sda","size":21474836480,"model":"Local","serial":"L","tran":"sata","type":"disk","rm":0,"rota":1}]}`,
+			expectPath:  "/dev/sdb",
+		},
+		{
+			name: "unsupported_strategy",
+			diskConfig: config.DiskConfig{
+				SelectionPolicy: config.DiskSelectionPolicy{Strategy: "by-id"},
+			},
+			lsblkOutput: `{"blockdevices":[{"name":"sda","size":21474836480,"model":"Disk","serial":"A","tran":"sata","type":"disk","rm":0,"rota":1}]}`,
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			readFile = func(path string) ([]byte, error) {
+				if path == "/proc/mounts" {
+					return nil, os.ErrNotExist
+				}
+				return nil, os.ErrNotExist
+			}
+			evalSymlinks = func(path string) (string, error) {
+				return "", os.ErrNotExist
+			}
+			if tt.diskConfig.Path == "" {
+				mockCommands := []shell.MockCommand{{Pattern: "lsblk", Output: tt.lsblkOutput, Error: nil}}
+				if tt.diskConfig.SelectionPolicy.Strategy == "largest-free" {
+					mockCommands = append(mockCommands,
+						shell.MockCommand{
+							Pattern: "fdisk -l /dev/sda",
+							Output: "Disk /dev/sda: 30 GiB, 32212254720 bytes, 62914560 sectors\n" +
+								"Sector size (logical/physical): 512 bytes / 512 bytes\n" +
+								"/dev/sda1        2048 60817407 60815360 29G Linux filesystem",
+							Error: nil,
+						},
+						shell.MockCommand{
+							Pattern: "fdisk -l /dev/sdb",
+							Output: "Disk /dev/sdb: 20 GiB, 21474836480 bytes, 41943040 sectors\n" +
+								"Sector size (logical/physical): 512 bytes / 512 bytes\n" +
+								"/dev/sdb1        2048 20973567 20971520 10G Linux filesystem",
+							Error: nil,
+						},
+					)
+				}
+				shell.Default = shell.NewMockExecutor(mockCommands)
+			}
+
+			path, err := ResolveInstallDiskPath(tt.diskConfig)
+			if tt.expectError {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+
+			if path != tt.expectPath {
+				t.Fatalf("expected %s, got %s", tt.expectPath, path)
+			}
+		})
+	}
+}
+
+func TestIsExternallyAttachedInstallDisk(t *testing.T) {
+	originalReadFile := readFile
+	originalEvalSymlinks := evalSymlinks
+	defer func() {
+		readFile = originalReadFile
+		evalSymlinks = originalEvalSymlinks
+	}()
+
+	tests := []struct {
+		name          string
+		device        blockDeviceInfo
+		devicePath    string
+		isRemovable   bool
+		isHotplug     bool
+		udevData      map[string]string
+		sysfsResolved map[string]string
+		expect        bool
+	}{
+		{
+			name:        "rm_flag_marks_external",
+			device:      blockDeviceInfo{Name: "sdb", MajMin: "8:16", Tran: "sata"},
+			devicePath:  "/dev/sdb",
+			isRemovable: true,
+			expect:      true,
+		},
+		{
+			name:       "usb_transport_marks_external",
+			device:     blockDeviceInfo{Name: "sdb", MajMin: "8:16", Tran: "usb"},
+			devicePath: "/dev/sdb",
+			expect:     true,
+		},
+		{
+			name:       "hotplug_marks_external",
+			device:     blockDeviceInfo{Name: "sdb", MajMin: "8:16", Tran: "sata"},
+			devicePath: "/dev/sdb",
+			isHotplug:  true,
+			expect:     true,
+		},
+		{
+			name:       "udev_usb_bus_marks_external",
+			device:     blockDeviceInfo{Name: "sdb", MajMin: "8:16", Tran: "sata"},
+			devicePath: "/dev/sdb",
+			udevData: map[string]string{
+				"/run/udev/data/b8:16": "E:ID_BUS=usb\n",
+			},
+			expect: true,
+		},
+		{
+			name:       "usb_sysfs_ancestry_marks_external",
+			device:     blockDeviceInfo{Name: "sdb", MajMin: "8:16", Tran: "sata"},
+			devicePath: "/dev/sdb",
+			sysfsResolved: map[string]string{
+				"/sys/class/block/sdb": "/sys/devices/pci0000:00/0000:00:14.0/usb2/2-1/2-1:1.0/host6/target6:0:0/6:0:0:0/block/sdb",
+			},
+			expect: true,
+		},
+		{
+			name:       "internal_sata_disk_is_not_external",
+			device:     blockDeviceInfo{Name: "sda", MajMin: "8:0", Tran: "sata"},
+			devicePath: "/dev/sda",
+			expect:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			readFile = func(path string) ([]byte, error) {
+				if content, ok := tt.udevData[path]; ok {
+					return []byte(content), nil
+				}
+				return nil, os.ErrNotExist
+			}
+			evalSymlinks = func(path string) (string, error) {
+				if resolved, ok := tt.sysfsResolved[path]; ok {
+					return resolved, nil
+				}
+				return "", os.ErrNotExist
+			}
+
+			got := isExternallyAttachedInstallDisk(tt.device, tt.devicePath, tt.isRemovable, tt.isHotplug)
+			if got != tt.expect {
+				t.Fatalf("isExternallyAttachedInstallDisk() = %v, want %v", got, tt.expect)
 			}
 		})
 	}
@@ -1295,6 +1589,296 @@ func TestGetSectorOffsetFromSize(t *testing.T) {
 			}
 			if got != tt.expected {
 				t.Errorf("getSectorOffsetFromSize() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestDiskPartitionsCreate_GPTLabelFailureWithOutput tests the error path when GPT label creation
+// fails and stderr/stdout output is captured, ensuring the output is included in the error message.
+func TestDiskPartitionsCreate_GPTLabelFailureWithOutput(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	tests := []struct {
+		name             string
+		diskPath         string
+		partitionsList   []config.PartitionInfo
+		commandOutput    string
+		expectError      bool
+		expectedErrMsg   string
+		checkOutputInErr bool
+	}{
+		{
+			name:     "gpt_label_failure_with_output",
+			diskPath: "/dev/sda",
+			partitionsList: []config.PartitionInfo{
+				{
+					ID:     "boot",
+					Start:  "0",
+					End:    "1GiB",
+					FsType: "fat32",
+					Type:   "esp",
+				},
+			},
+			commandOutput:    "Error: device busy, could not write GPT",
+			expectError:      true,
+			expectedErrMsg:   "failed to create GPT partition table",
+			checkOutputInErr: true,
+		},
+		{
+			name:     "gpt_label_failure_with_stderr",
+			diskPath: "/dev/sdb",
+			partitionsList: []config.PartitionInfo{
+				{
+					ID:     "root",
+					Start:  "0",
+					End:    "50GiB",
+					FsType: "ext4",
+					Type:   "linux",
+				},
+			},
+			commandOutput:    "sfdisk: cannot modify partition table",
+			expectError:      true,
+			expectedErrMsg:   "failed to create GPT partition table",
+			checkOutputInErr: true,
+		},
+		{
+			name:     "gpt_label_failure_empty_output",
+			diskPath: "/dev/sdc",
+			partitionsList: []config.PartitionInfo{
+				{
+					ID:     "boot",
+					Start:  "0",
+					End:    "1GiB",
+					FsType: "fat32",
+					Type:   "esp",
+				},
+			},
+			commandOutput:    "",
+			expectError:      true,
+			expectedErrMsg:   "failed to create GPT partition table",
+			checkOutputInErr: false,
+		},
+		{
+			name:     "gpt_label_failure_whitespace_output",
+			diskPath: "/dev/sdd",
+			partitionsList: []config.PartitionInfo{
+				{
+					ID:     "root",
+					Start:  "0",
+					End:    "50GiB",
+					FsType: "ext4",
+					Type:   "linux",
+				},
+			},
+			commandOutput:    "   \n   ",
+			expectError:      true,
+			expectedErrMsg:   "failed to create GPT partition table",
+			checkOutputInErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockCommands := []shell.MockCommand{
+				// Mock the fdisk check for existing partitions (called by IsDiskPartitionExist)
+				{
+					Pattern: "fdisk -l",
+					Output:  "",
+					Error:   nil,
+				},
+				// Mock the sfdisk command for GPT label creation - this should fail with output
+				{
+					Pattern: "label: gpt",
+					Output:  tt.commandOutput,
+					Error:   fmt.Errorf("command failed"),
+				},
+			}
+			shell.Default = shell.NewMockExecutor(mockCommands)
+
+			_, err := DiskPartitionsCreate(tt.diskPath, tt.partitionsList, "gpt")
+
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("Expected error, but got none")
+				} else {
+					errMsg := err.Error()
+					if !strings.Contains(errMsg, tt.expectedErrMsg) {
+						t.Errorf("Expected error containing '%s', but got: %v", tt.expectedErrMsg, err)
+					}
+					if tt.checkOutputInErr && !strings.Contains(errMsg, tt.commandOutput) {
+						t.Errorf("Expected error to contain output '%s', but got: %v", tt.commandOutput, err)
+					}
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Expected no error, but got: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// TestDiskPartitionCreate_SGDiskFailureWithOutput tests the error path when sgdisk fails
+// with command output, ensuring the trimmed output is included in the returned error.
+func TestDiskPartitionCreate_SGDiskFailureWithOutput(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	tests := []struct {
+		name           string
+		diskPath       string
+		partitionNum   int
+		partitionInfo  config.PartitionInfo
+		sgdiskOutput   string
+		expectError    bool
+		expectedErrMsg string
+		checkOutputErr bool
+	}{
+		{
+			name:         "sgdisk_partition_failure_with_stderr",
+			diskPath:     "/dev/sda",
+			partitionNum: 1,
+			partitionInfo: config.PartitionInfo{
+				ID:       "boot",
+				Start:    "0",
+				End:      "1GiB",
+				FsType:   "fat32",
+				Type:     "esp",
+				TypeGUID: "C12A7328-F81F-11D2-BA4B-00A0C93EC93B",
+			},
+			sgdiskOutput:   "Error: The specified partition is not unique. Use option -p to point to the partition.",
+			expectError:    true,
+			expectedErrMsg: "failed to create GPT partition 1",
+			checkOutputErr: true,
+		},
+		{
+			name:         "sgdisk_failure_with_multiline_output",
+			diskPath:     "/dev/nvme0n1",
+			partitionNum: 2,
+			partitionInfo: config.PartitionInfo{
+				ID:       "root",
+				Start:    "1GiB",
+				End:      "50GiB",
+				FsType:   "ext4",
+				Type:     "linux",
+				Name:     "root_partition",
+				TypeGUID: "0FC63DAF-8483-4772-8E79-3D69D8477DE4",
+			},
+			sgdiskOutput:   "Warning: The CRC for the main GPT header is invalid\nError: Aborting due to invalid GPT",
+			expectError:    true,
+			expectedErrMsg: "failed to create GPT partition 2",
+			checkOutputErr: true,
+		},
+		{
+			name:         "sgdisk_failure_with_trailing_whitespace",
+			diskPath:     "/dev/sdb",
+			partitionNum: 1,
+			partitionInfo: config.PartitionInfo{
+				ID:       "data",
+				Start:    "0",
+				End:      "100GiB",
+				FsType:   "ext4",
+				Type:     "linux",
+				TypeGUID: "0FC63DAF-8483-4772-8E79-3D69D8477DE4",
+			},
+			sgdiskOutput:   "  \n  Device not found  \n  ",
+			expectError:    true,
+			expectedErrMsg: "failed to create GPT partition 1",
+			checkOutputErr: true,
+		},
+		{
+			name:         "sgdisk_failure_empty_output",
+			diskPath:     "/dev/sdc",
+			partitionNum: 1,
+			partitionInfo: config.PartitionInfo{
+				ID:       "boot",
+				Start:    "0",
+				End:      "1GiB",
+				FsType:   "fat32",
+				Type:     "esp",
+				TypeGUID: "C12A7328-F81F-11D2-BA4B-00A0C93EC93B",
+			},
+			sgdiskOutput:   "",
+			expectError:    true,
+			expectedErrMsg: "failed to create GPT partition 1",
+			checkOutputErr: false,
+		},
+		{
+			name:         "sgdisk_failure_whitespace_only_output",
+			diskPath:     "/dev/sdd",
+			partitionNum: 2,
+			partitionInfo: config.PartitionInfo{
+				ID:       "root",
+				Start:    "1GiB",
+				End:      "50GiB",
+				FsType:   "ext4",
+				Type:     "linux",
+				TypeGUID: "0FC63DAF-8483-4772-8E79-3D69D8477DE4",
+			},
+			sgdiskOutput:   "  \t  ",
+			expectError:    true,
+			expectedErrMsg: "failed to create GPT partition 2",
+			checkOutputErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Get disk name for the command mocks
+			diskName, _ := GetDiskNameFromDiskPath(tt.diskPath)
+
+			// Mock commands needed for diskPartitionCreate
+			mockCommands := []shell.MockCommand{
+				// Mock hw_sector_size read
+				{
+					Pattern: fmt.Sprintf("cat /sys/block/%s/queue/hw_sector_size", diskName),
+					Output:  "512\n",
+					Error:   nil,
+				},
+				// Mock physical_block_size read
+				{
+					Pattern: fmt.Sprintf("cat /sys/block/%s/queue/physical_block_size", diskName),
+					Output:  "4096\n",
+					Error:   nil,
+				},
+				// Mock sgdisk command - this should fail with output
+				{
+					Pattern: "sgdisk",
+					Output:  tt.sgdiskOutput,
+					Error:   fmt.Errorf("sgdisk command failed"),
+				},
+			}
+			shell.Default = shell.NewMockExecutor(mockCommands)
+
+			_, err := diskPartitionCreate(
+				tt.diskPath,
+				tt.partitionNum,
+				tt.partitionInfo,
+				"gpt",
+				"primary",
+			)
+
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("Expected error, but got none")
+				} else {
+					errMsg := err.Error()
+					if !strings.Contains(errMsg, tt.expectedErrMsg) {
+						t.Errorf("Expected error containing '%s', but got: %v", tt.expectedErrMsg, err)
+					}
+					if tt.checkOutputErr {
+						trimmedOutput := strings.TrimSpace(tt.sgdiskOutput)
+						if trimmedOutput != "" && !strings.Contains(errMsg, trimmedOutput) {
+							t.Errorf("Expected error to contain trimmed output '%s', but got: %v", trimmedOutput, err)
+						}
+					}
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Expected no error, but got: %v", err)
+				}
 			}
 		})
 	}

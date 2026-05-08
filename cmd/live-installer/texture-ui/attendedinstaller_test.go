@@ -17,9 +17,9 @@ import (
 
 const LsblkOutput = `{
    "blockdevices": [
-      {"name":"sda", "size":500107862016, "model":"CT500MX500SSD1  "},
-      {"name":"sdb", "size":62746787840, "model":"Extreme         "},
-      {"name":"nvme0n1", "size":512110190592, "model":"INTEL SSDPEKNW512G8                     "}
+		{"name":"sda", "size":500107862016, "model":"CT500MX500SSD1  ", "tran":"sata", "type":"disk", "rm":0, "rota":0},
+		{"name":"sdb", "size":62746787840, "model":"Extreme         ", "tran":"usb", "type":"disk", "rm":1, "rota":0},
+		{"name":"nvme0n1", "size":512110190592, "model":"INTEL SSDPEKNW512G8                     ", "tran":"nvme", "type":"disk", "rm":0, "rota":0}
    ]
 }
 `
