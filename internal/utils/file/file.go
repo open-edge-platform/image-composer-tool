@@ -273,9 +273,9 @@ func CopyDir(srcDir, dstDir, flags string, sudo bool) error {
 
 	var cmdStr string
 	if flags == "" {
-		cmdStr = fmt.Sprintf("cp -r '%s'/* '%s'", srcDirPath, dstDirPath)
+		cmdStr = fmt.Sprintf("cp -r '%s/.' '%s'", srcDirPath, dstDirPath)
 	} else {
-		cmdStr = fmt.Sprintf("cp -r %s '%s'/* '%s'", flags, srcDirPath, dstDirPath)
+		cmdStr = fmt.Sprintf("cp -r %s '%s/.' '%s'", flags, srcDirPath, dstDirPath)
 	}
 	if _, err := shell.ExecCmd(cmdStr, sudo, shell.HostPath, nil); err != nil {
 		return fmt.Errorf("failed to copy directory from %s to %s: %w", srcDirPath, dstDirPath, err)
