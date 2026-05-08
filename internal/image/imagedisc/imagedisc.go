@@ -49,10 +49,9 @@ type SystemBlockDevice struct {
 }
 
 const (
-	DiskSelectStrategyFirst       = "first"
-	DiskSelectStrategyLargest     = "largest"
-	DiskSelectStrategyFastest     = "fastest"
-	DiskSelectStrategyLargestFree = "largest-free"
+	DiskSelectStrategyFirst   = "first"
+	DiskSelectStrategyLargest = "largest"
+	DiskSelectStrategyFastest = "fastest"
 )
 
 const (
@@ -284,7 +283,6 @@ func TranslateBytesToSizeStr(byteSize uint64) string {
 		unit := uint64(sizeBytesMap[i])
 		if byteSize >= unit {
 			v := float64(byteSize) / float64(unit)
-			// trim trailing zeros as needed, here show up to 2 decimals
 			if v == float64(int64(v)) {
 				return fmt.Sprintf("%d%s", int64(v), sizeSuffixesList[i])
 			}
@@ -619,12 +617,25 @@ func diskPartitionCreate(
 		return "", fmt.Errorf("failed to get disk name from path: %s", diskPath)
 	}
 
-	startSector, _ := getSectorOffsetFromSize(diskName, startSizeStr)
+	var startSector uint64
+	if partitionInfo.Start == "0" {
+		startSector = 0
+	} else {
+		startSector, err = getSectorOffsetFromSize(diskName, startSizeStr)
+		if err != nil {
+			log.Errorf("Failed to calculate start sector for partition %d on disk %s: %v", partitionNum, diskPath, err)
+			return "", fmt.Errorf("failed to calculate start sector for partition %d on disk %s: %w", partitionNum, diskPath, err)
+		}
+	}
 	var endSector uint64
 	if partitionInfo.End == "0" {
 		endSector = 0
 	} else {
-		endSector, _ = getSectorOffsetFromSize(diskName, endSizeStr)
+		endSector, err = getSectorOffsetFromSize(diskName, endSizeStr)
+		if err != nil {
+			log.Errorf("Failed to calculate end sector for partition %d on disk %s: %v", partitionNum, diskPath, err)
+			return "", fmt.Errorf("failed to calculate end sector for partition %d on disk %s: %w", partitionNum, diskPath, err)
+		}
 		endSector--
 	}
 
@@ -1117,6 +1128,11 @@ func ResolveInstallDiskPath(diskConfig config.DiskConfig) (string, error) {
 		return "", err
 	}
 
+	strategy := strings.TrimSpace(strings.ToLower(diskConfig.SelectionPolicy.Strategy))
+	if strategy == "" {
+		return "", fmt.Errorf("disk path is not set and no selection policy strategy was provided")
+	}
+
 	// For backward compatibility, excludeRemovable now means exclude disks that
 	// appear externally attached according to multiple signals, not only the
 	// kernel's RM bit.
@@ -1125,186 +1141,142 @@ func ResolveInstallDiskPath(diskConfig config.DiskConfig) (string, error) {
 		excludeRemovable = *diskConfig.SelectionPolicy.ExcludeRemovable
 	}
 
-	eligible := make([]SystemBlockDevice, 0, len(devices))
-	for _, dev := range devices {
-		if excludeRemovable && dev.IsExternal {
-			continue
-		}
-		eligible = append(eligible, dev)
+	requireEmpty := true
+	if diskConfig.SelectionPolicy.RequireEmpty != nil {
+		requireEmpty = *diskConfig.SelectionPolicy.RequireEmpty
 	}
 
+	requiredDiskBytes, err := requiredInstallDiskBytes(diskConfig.Partitions)
+	if err != nil {
+		return "", fmt.Errorf("invalid partition layout for disk selection: %w", err)
+	}
+
+	eligible, evaluations := evaluateInstallDiskCandidates(devices, excludeRemovable, requireEmpty, requiredDiskBytes)
 	if len(eligible) == 0 {
-		return "", fmt.Errorf("no supported disks found after applying selection policy")
-	}
-
-	strategy := strings.TrimSpace(strings.ToLower(diskConfig.SelectionPolicy.Strategy))
-	if strategy == "" {
-		return "", fmt.Errorf("disk path is not set and no selection policy strategy was provided")
+		return "", fmt.Errorf("no eligible install disks matched selection policy (strategy=%s, requireEmpty=%t, excludeRemovable=%t)\n%s",
+			strategy, requireEmpty, excludeRemovable, formatDiskCandidateEvaluations(evaluations))
 	}
 
 	switch strategy {
 	case DiskSelectStrategyFirst:
 		return eligible[0].DevicePath, nil
 	case DiskSelectStrategyLargest:
-		selected := eligible[0]
-		for _, dev := range eligible[1:] {
-			if dev.RawDiskSize > selected.RawDiskSize {
-				selected = dev
+		sort.Slice(eligible, func(i, j int) bool {
+			if eligible[i].RawDiskSize != eligible[j].RawDiskSize {
+				return eligible[i].RawDiskSize > eligible[j].RawDiskSize
 			}
-		}
-		return selected.DevicePath, nil
-	case DiskSelectStrategyLargestFree:
-		return selectDiskWithLargestFreeSpan(eligible)
+			return eligible[i].DevicePath < eligible[j].DevicePath
+		})
+		return eligible[0].DevicePath, nil
 	case DiskSelectStrategyFastest:
-		selected := eligible[0]
-		for _, dev := range eligible[1:] {
-			if fasterDiskCandidate(dev, selected) {
-				selected = dev
-			}
+		if len(eligible) > 1 {
+			sort.Slice(eligible, func(i, j int) bool {
+				return fasterDiskCandidate(eligible[i], eligible[j])
+			})
 		}
-		return selected.DevicePath, nil
+		return eligible[0].DevicePath, nil
 	default:
 		return "", fmt.Errorf("unsupported disk selection strategy: %s", diskConfig.SelectionPolicy.Strategy)
 	}
 }
 
-type diskSpan struct {
-	start uint64
-	end   uint64
+type diskCandidateEvaluation struct {
+	Device  SystemBlockDevice
+	Reasons []string
 }
 
-func selectDiskWithLargestFreeSpan(devices []SystemBlockDevice) (string, error) {
-	if len(devices) == 0 {
-		return "", fmt.Errorf("no candidate disks provided")
-	}
+func requiredInstallDiskBytes(partitions []config.PartitionInfo) (uint64, error) {
+	var required uint64
+	for _, partition := range partitions {
+		endRaw := strings.TrimSpace(fmt.Sprintf("%v", partition.End))
+		if endRaw == "" || endRaw == "0" {
+			continue
+		}
 
-	selected := devices[0]
-	maxFreeSpan, err := largestFreeSpanBytes(selected.DevicePath)
-	if err != nil {
-		return "", fmt.Errorf("failed to determine free space on %s: %w", selected.DevicePath, err)
-	}
-
-	for _, dev := range devices[1:] {
-		freeSpan, err := largestFreeSpanBytes(dev.DevicePath)
+		endSize, err := VerifyFileSize(partition.End)
 		if err != nil {
-			return "", fmt.Errorf("failed to determine free space on %s: %w", dev.DevicePath, err)
+			return 0, fmt.Errorf("partition %q has invalid end size %q: %w", partition.ID, endRaw, err)
 		}
 
-		if freeSpan > maxFreeSpan || (freeSpan == maxFreeSpan && dev.RawDiskSize > selected.RawDiskSize) {
-			selected = dev
-			maxFreeSpan = freeSpan
+		endBytes, err := TranslateSizeStrToBytes(endSize)
+		if err != nil {
+			return 0, fmt.Errorf("partition %q has invalid end size %q: %w", partition.ID, endRaw, err)
+		}
+
+		if endBytes > required {
+			required = endBytes
 		}
 	}
 
-	return selected.DevicePath, nil
+	return required, nil
 }
 
-func largestFreeSpanBytes(diskPath string) (uint64, error) {
-	diskInfo, err := DiskGetInfo(diskPath)
-	if err != nil {
-		return 0, fmt.Errorf("failed to inspect disk %s: %w", diskPath, err)
-	}
+func evaluateInstallDiskCandidates(
+	devices []SystemBlockDevice,
+	excludeRemovable, requireEmpty bool,
+	requiredDiskBytes uint64,
+) ([]SystemBlockDevice, []diskCandidateEvaluation) {
+	eligible := make([]SystemBlockDevice, 0, len(devices))
+	evaluations := make([]diskCandidateEvaluation, 0, len(devices))
 
-	totalSectorsRaw, ok := diskInfo["sectors"]
-	if !ok {
-		return 0, fmt.Errorf("disk info missing total sectors")
-	}
-	totalSectors, ok := totalSectorsRaw.(int)
-	if !ok || totalSectors <= 0 {
-		return 0, fmt.Errorf("invalid total sectors value: %v", totalSectorsRaw)
-	}
+	for _, dev := range devices {
+		reasons := make([]string, 0, 2)
 
-	logicalSizeRaw, ok := diskInfo["logical_size"]
-	if !ok {
-		return 0, fmt.Errorf("disk info missing logical sector size")
-	}
-	logicalSectorSize, err := parseBytesPrefix(fmt.Sprintf("%v", logicalSizeRaw))
-	if err != nil {
-		return 0, fmt.Errorf("failed to parse logical sector size: %w", err)
-	}
+		if excludeRemovable && dev.IsExternal {
+			reasons = append(reasons, "excluded as externally attached/removable")
+		}
 
-	spans := []diskSpan{}
-	if partInfo, ok := diskInfo["part_info"].([]map[string]interface{}); ok {
-		for _, part := range partInfo {
-			start, err := parseUintField(part, "start_sec")
+		if requiredDiskBytes > 0 && dev.RawDiskSize < requiredDiskBytes {
+			reasons = append(reasons,
+				fmt.Sprintf("disk is too small (%d bytes) for requested layout end (%d bytes)", dev.RawDiskSize, requiredDiskBytes))
+		}
+
+		if requireEmpty {
+			partitionCount, err := diskPartitionCount(dev.DevicePath)
 			if err != nil {
-				return 0, err
+				reasons = append(reasons, fmt.Sprintf("could not verify emptiness: %v", err))
+			} else if partitionCount > 0 {
+				reasons = append(reasons, fmt.Sprintf("disk is not empty (%d partition(s) detected)", partitionCount))
 			}
-			end, err := parseUintField(part, "end_sec")
-			if err != nil {
-				return 0, err
-			}
-			if end < start {
-				return 0, fmt.Errorf("partition has end before start (%d < %d)", end, start)
-			}
-			spans = append(spans, diskSpan{start: start, end: end})
+		}
+
+		evaluations = append(evaluations, diskCandidateEvaluation{Device: dev, Reasons: reasons})
+		if len(reasons) == 0 {
+			eligible = append(eligible, dev)
 		}
 	}
 
-	if len(spans) == 0 {
-		return uint64(totalSectors) * uint64(logicalSectorSize), nil
-	}
-
-	sort.Slice(spans, func(i, j int) bool { return spans[i].start < spans[j].start })
-
-	total := uint64(totalSectors)
-	var maxGap uint64
-	var cursor uint64
-	for _, span := range spans {
-		if span.start > total {
-			break
-		}
-		if span.start > cursor {
-			gap := span.start - cursor
-			if gap > maxGap {
-				maxGap = gap
-			}
-		}
-		if span.end >= total {
-			cursor = total
-			break
-		}
-		next := span.end + 1
-		if next > cursor {
-			cursor = next
-		}
-	}
-
-	if cursor < total {
-		gap := total - cursor
-		if gap > maxGap {
-			maxGap = gap
-		}
-	}
-
-	return maxGap * uint64(logicalSectorSize), nil
+	return eligible, evaluations
 }
 
-func parseUintField(part map[string]interface{}, key string) (uint64, error) {
-	raw, ok := part[key]
-	if !ok {
-		return 0, fmt.Errorf("partition info missing %s", key)
-	}
-	value, err := strconv.ParseUint(fmt.Sprintf("%v", raw), 10, 64)
+func diskPartitionCount(diskPath string) (int, error) {
+	partitions, err := DiskGetPartitionsInfo(diskPath)
 	if err != nil {
-		return 0, fmt.Errorf("invalid %s value %v: %w", key, raw, err)
+		return 0, err
 	}
-	return value, nil
+	return len(partitions), nil
 }
 
-func parseBytesPrefix(s string) (int, error) {
-	fields := strings.Fields(s)
-	if len(fields) == 0 {
-		return 0, fmt.Errorf("empty size string")
+func formatDiskCandidateEvaluations(evaluations []diskCandidateEvaluation) string {
+	var builder strings.Builder
+	builder.WriteString("Disk candidates and policy evaluation:\n")
+
+	for _, evaluation := range evaluations {
+		device := evaluation.Device
+		builder.WriteString(fmt.Sprintf("- %s (size=%d bytes, transport=%s, model=%q): ",
+			device.DevicePath, device.RawDiskSize, strings.TrimSpace(device.Transport), strings.TrimSpace(device.Model)))
+
+		if len(evaluation.Reasons) == 0 {
+			builder.WriteString("eligible")
+		} else {
+			builder.WriteString("ineligible - ")
+			builder.WriteString(strings.Join(evaluation.Reasons, "; "))
+		}
+
+		builder.WriteString("\n")
 	}
-	value, err := strconv.Atoi(fields[0])
-	if err != nil {
-		return 0, fmt.Errorf("invalid size prefix %q: %w", fields[0], err)
-	}
-	if value <= 0 {
-		return 0, fmt.Errorf("size must be positive (got %d)", value)
-	}
-	return value, nil
+
+	return strings.TrimSuffix(builder.String(), "\n")
 }
 
 func fasterDiskCandidate(candidate, current SystemBlockDevice) bool {
@@ -1324,7 +1296,11 @@ func fasterDiskCandidate(candidate, current SystemBlockDevice) bool {
 		return candidateHasSSDHint
 	}
 
-	return candidate.RawDiskSize > current.RawDiskSize
+	if candidate.RawDiskSize != current.RawDiskSize {
+		return candidate.RawDiskSize > current.RawDiskSize
+	}
+
+	return candidate.DevicePath < current.DevicePath
 }
 
 func diskTransportTier(device SystemBlockDevice) int {
