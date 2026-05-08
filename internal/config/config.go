@@ -38,6 +38,9 @@ type DiskSelectionPolicy struct {
 	// ExcludeRemovable is intentionally conservative for unattended installs and
 	// excludes disks that appear externally attached, not only devices with RM=1.
 	ExcludeRemovable *bool `yaml:"excludeRemovable,omitempty"`
+	// RequireEmpty restricts unattended disk selection to empty disks when true.
+	// If false, disks with existing partitions are eligible and may be overwritten.
+	RequireEmpty *bool `yaml:"requireEmpty,omitempty"`
 }
 
 type DiskConfig struct {
