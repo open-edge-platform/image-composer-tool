@@ -71,17 +71,8 @@ func (dv *DiskView) Initialize(backButtonText string, template *config.ImageTemp
 
 // HandleInput handles custom input.
 func (dv *DiskView) HandleInput(event *tcell.EventKey) *tcell.EventKey {
-	if dv.pages == nil {
-		return event
-	}
 	if dv.autoPartitionMode {
-		if dv.autoPartitionWidget == nil {
-			return event
-		}
 		return dv.autoPartitionWidget.HandleInput(event)
-	}
-	if dv.manualPartitionWidget == nil {
-		return event
 	}
 
 	return dv.manualPartitionWidget.HandleInput(event)
@@ -89,10 +80,6 @@ func (dv *DiskView) HandleInput(event *tcell.EventKey) *tcell.EventKey {
 
 // Reset resets the page, undoing any user input.
 func (dv *DiskView) Reset() (err error) {
-	if dv.pages == nil || dv.manualPartitionWidget == nil || dv.autoPartitionWidget == nil {
-		return nil
-	}
-
 	err = dv.manualPartitionWidget.Reset()
 	if err != nil {
 		return
@@ -117,19 +104,11 @@ func (dv *DiskView) Name() string {
 
 // Title returns the title of the view.
 func (dv *DiskView) Title() string {
-	if dv.pages == nil {
-		return dv.Name()
-	}
 	if dv.autoPartitionMode {
-		if dv.autoPartitionWidget == nil {
-			return dv.Name()
-		}
 		return dv.autoPartitionWidget.Title()
+	} else {
+		return dv.manualPartitionWidget.Title()
 	}
-	if dv.manualPartitionWidget == nil {
-		return dv.Name()
-	}
-	return dv.manualPartitionWidget.Title()
 }
 
 // Primitive returns the primary primitive to be rendered for the view.

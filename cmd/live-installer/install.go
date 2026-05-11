@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	attendedinstaller "github.com/open-edge-platform/image-composer-tool/cmd/live-installer/texture-ui"
 	"github.com/open-edge-platform/image-composer-tool/internal/chroot"
@@ -19,49 +18,6 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/security"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
-
-// waitForDiskQuiescence waits for the disk to stabilize by checking for I/O inactivity.
-// This ensures hypervisors (QEMU, KVM, etc.) have fully initialized virtual disks before
-// partitioning begins. Errors from the I/O check are treated as "not-ready" (busy) and
-// retried until the timeout, preventing the check from being skipped on transient failures
-// such as /proc/diskstats not yet reporting the device.
-func waitForDiskQuiescence(diskPath string) error {
-	const (
-		maxRetries = 20 // ~10 seconds with 500ms sleeps
-		sleepTime  = 500 * time.Millisecond
-	)
-
-	var quietCount int
-	const quietThreshold = 2 // Two consecutive checks with no I/O
-
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		isBusy, err := imagedisc.CheckDiskIOStats(diskPath)
-		if err != nil {
-			// Treat errors as busy/not-ready: the device may not yet be visible in
-			// /proc/diskstats. Reset quiet count and keep retrying until timeout.
-			log.Debugf("Disk %s I/O stats not yet available (attempt %d): %v", diskPath, attempt+1, err)
-			quietCount = 0
-			time.Sleep(sleepTime)
-			continue
-		}
-
-		if !isBusy {
-			quietCount++
-			if quietCount >= quietThreshold {
-				log.Debugf("Disk %s is quiescent after %d attempts", diskPath, attempt+1)
-				return nil
-			}
-		} else {
-			quietCount = 0
-		}
-
-		time.Sleep(sleepTime)
-	}
-
-	// Timeout reached; disk may not be fully quiescent, but proceed anyway (non-fatal)
-	log.Warnf("Disk %s did not reach quiescence within timeout; proceeding anyway", diskPath)
-	return nil
-}
 
 func newChrootBuilder(configDir, localRepo, targetOs, targetDist, targetArch string) (*chrootbuild.ChrootBuilder, error) {
 	var targetOsConfig map[string]interface{}
@@ -139,7 +95,6 @@ func dependencyCheck(targetOs string) error {
 		dependencyInfo = map[string]string{
 			"mmdebstrap":  "mmdebstrap", // For the chroot env build
 			"mkfs.fat":    "dosfstools", // For the FAT32 boot partition creation
-			"sgdisk":      "gdisk",      // For GPT partition creation
 			"veritysetup": "cryptsetup", // For the veritysetup command
 			//"sbsign":      "sbsigntools", // For the UKI image creation
 		}
@@ -147,7 +102,6 @@ func dependencyCheck(targetOs string) error {
 		dependencyInfo = map[string]string{
 			"mmdebstrap":  "mmdebstrap", // For the chroot env build
 			"mkfs.fat":    "dosfstools", // For the FAT32 boot partition creation
-			"sgdisk":      "gdisk",      // For GPT partition creation
 			"veritysetup": "cryptsetup", // For the veritysetup command
 			//"sbsign":      "sbsigntools", // For the UKI image creation
 		}
@@ -155,7 +109,6 @@ func dependencyCheck(targetOs string) error {
 		dependencyInfo = map[string]string{
 			"mmdebstrap":  "mmdebstrap", // For the chroot env build
 			"mkfs.fat":    "dosfstools", // For the FAT32 boot partition creation
-			"sgdisk":      "gdisk",      // For GPT partition creation
 			"veritysetup": "cryptsetup", // For the veritysetup command
 		}
 	default:
@@ -175,93 +128,9 @@ func dependencyCheck(targetOs string) error {
 	return nil
 }
 
-func targetUsesApt(targetOS string) bool {
-	switch targetOS {
-	case "ubuntu", "debian", "wind-river-elxr":
-		return true
-	default:
-		return false
-	}
-}
-
-var aptBackgroundUnits = []string{
-	"apt-daily.service",
-	"apt-daily.timer",
-	"apt-daily-upgrade.service",
-	"apt-daily-upgrade.timer",
-	"unattended-upgrades.service",
-	"unattended-upgrades.timer",
-}
-
-func isIgnorableSystemctlSuppressionFailure(output string) bool {
-	lowerOutput := strings.ToLower(strings.TrimSpace(output))
-	if lowerOutput == "" {
-		return false
-	}
-
-	markers := []string{
-		"not loaded",
-		"not found",
-		"does not exist",
-		"inactive",
-		"not active",
-	}
-
-	for _, marker := range markers {
-		if strings.Contains(lowerOutput, marker) {
-			return true
-		}
-	}
-
-	return false
-}
-
-func runSystemctlSuppressionCommand(cmd string) error {
-	output, err := shell.ExecCmd(cmd, true, shell.HostPath, nil)
-	if err == nil {
-		return nil
-	}
-	if isIgnorableSystemctlSuppressionFailure(output) {
-		log.Warnf("Ignoring non-fatal systemctl suppression failure for %q: %s", cmd, strings.TrimSpace(output))
-		return nil
-	}
-	return fmt.Errorf("command %q failed: %w", cmd, err)
-}
-
-func suppressHostAptBackgroundTasks() error {
-	systemctlExists, err := shell.IsCommandExist("systemctl", shell.HostPath)
-	if err != nil {
-		return fmt.Errorf("failed to check systemctl availability: %w", err)
-	}
-	if !systemctlExists {
-		log.Debugf("systemctl is not available; skipping host apt background task suppression")
-		return nil
-	}
-
-	commands := []string{
-		"systemctl stop " + strings.Join(aptBackgroundUnits, " "),
-		"systemctl mask --runtime " + strings.Join(aptBackgroundUnits, " "),
-	}
-
-	for _, cmd := range commands {
-		if err := runSystemctlSuppressionCommand(cmd); err != nil {
-			return fmt.Errorf("failed to suppress host apt background tasks: %w", err)
-		}
-	}
-
-	log.Infof("Suppressed host apt background services and timers")
-	return nil
-}
-
 func install(template *config.ImageTemplate, configDir, localRepo string) error {
 	if err := dependencyCheck(template.Target.OS); err != nil {
 		return fmt.Errorf("dependency check failed: %w", err)
-	}
-
-	if targetUsesApt(template.Target.OS) {
-		if err := suppressHostAptBackgroundTasks(); err != nil {
-			return fmt.Errorf("failed to suppress host apt background tasks: %w", err)
-		}
 	}
 
 	globalConfig.ConfigDir = configDir
@@ -287,19 +156,9 @@ func install(template *config.ImageTemplate, configDir, localRepo string) error 
 	}
 
 	diskInfo := template.GetDiskConfig()
-	diskPath, err := imagedisc.ResolveInstallDiskPath(diskInfo)
-	if err != nil {
-		return fmt.Errorf("failed to resolve target disk: %w", err)
-	}
-	template.Disk.Path = diskPath
-	log.Infof("Using target disk: %s", diskPath)
-
-	// Wait for disk to stabilize before partitioning. QEMU and other hypervisors may take
-	// time to fully initialize virtual disks. Check for disk I/O quiescence (no active reads/writes)
-	// with a timeout to avoid indefinite waits.
-	log.Infof("Waiting for disk %s to stabilize...", diskPath)
-	if err := waitForDiskQuiescence(diskPath); err != nil {
-		log.Warnf("Disk quiescence check failed (continuing anyway): %v", err)
+	diskPath := template.Disk.Path
+	if diskPath == "" {
+		return fmt.Errorf("no target disk path specified in the template")
 	}
 
 	diskPathIdMap, err := imagedisc.DiskPartitionsCreate(diskPath, diskInfo.Partitions, diskInfo.PartitionTableType)

@@ -6,9 +6,3 @@ tmp/
 workspace/
 # AI embedding cache
 .ai-cache/
-
-# Local editor and generated artifacts
-.vscode/
-/image-composer-tool
-/live-installer
-/image-composer-tool.log

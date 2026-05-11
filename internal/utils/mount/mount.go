@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
@@ -14,64 +13,6 @@ import (
 )
 
 var log = logger.Logger()
-
-const (
-	maxBlockDeviceMountAttempts = 5
-	blockDeviceRetryDelay       = 200 * time.Millisecond
-)
-
-func isBlockDevicePath(path string) bool {
-	return strings.HasPrefix(path, "/dev/")
-}
-
-func isBlockDeviceReady(path string) error {
-	fileInfo, err := os.Stat(path)
-	if err != nil {
-		return fmt.Errorf("stat failed: %w", err)
-	}
-	mode := fileInfo.Mode()
-	if mode&os.ModeDevice == 0 || mode&os.ModeCharDevice != 0 {
-		return fmt.Errorf("path is not a block device")
-	}
-	return nil
-}
-
-func waitForBlockDevice(path string) error {
-	var lastErr error
-	for attempt := 1; attempt <= maxBlockDeviceMountAttempts; attempt++ {
-		if err := isBlockDeviceReady(path); err == nil {
-			return nil
-		} else {
-			lastErr = err
-			log.Debugf("Block device %s not ready on attempt %d/%d: %v", path, attempt, maxBlockDeviceMountAttempts, err)
-		}
-		if attempt < maxBlockDeviceMountAttempts {
-			time.Sleep(blockDeviceRetryDelay)
-		}
-	}
-	return fmt.Errorf("block device %s did not become ready after %d attempts: %w", path, maxBlockDeviceMountAttempts, lastErr)
-}
-
-func mountPathWithRetry(targetPath, mountPoint, mountCmdStr string) error {
-	if err := waitForBlockDevice(targetPath); err != nil {
-		return err
-	}
-
-	var lastErr error
-	for attempt := 1; attempt <= maxBlockDeviceMountAttempts; attempt++ {
-		if _, err := shell.ExecCmd(mountCmdStr, true, shell.HostPath, nil); err != nil {
-			lastErr = err
-			log.Warnf("Mount attempt %d/%d failed for %s on %s: %v", attempt, maxBlockDeviceMountAttempts, targetPath, mountPoint, err)
-		} else {
-			return nil
-		}
-
-		if attempt < maxBlockDeviceMountAttempts {
-			time.Sleep(blockDeviceRetryDelay)
-		}
-	}
-	return lastErr
-}
 
 func GetMountPathList() ([]string, error) {
 	var mountPathList []string
@@ -134,11 +75,7 @@ func MountPath(targetPath, mountPoint, mountFlags string) error {
 	}
 	if !pathExist {
 		mountCmdStr := "mount " + mountFlags + " " + targetPath + " " + mountPoint
-		if isBlockDevicePath(targetPath) {
-			if err := mountPathWithRetry(targetPath, mountPoint, mountCmdStr); err != nil {
-				return fmt.Errorf("failed to mount %s to %s after retries: %w", targetPath, mountPoint, err)
-			}
-		} else if _, err := shell.ExecCmd(mountCmdStr, true, shell.HostPath, nil); err != nil {
+		if _, err := shell.ExecCmd(mountCmdStr, true, shell.HostPath, nil); err != nil {
 			return fmt.Errorf("failed to mount %s to %s: %w", targetPath, mountPoint, err)
 		} else {
 			log.Debugf("Mounted:", targetPath, "to", mountPoint)
@@ -160,21 +97,16 @@ func umountPath(mountPoint string) error {
 		{"umount -f " + mountPoint, "force"},
 		{"umount -lf " + mountPoint, "lazy-force"},
 	}
-	var lastErr error
 	for _, strategy := range unmountStrategies {
 		log.Debugf("Trying %s unmount for %s", strategy.desc, mountPoint)
 		if output, err := shell.ExecCmd(strategy.cmd, true, shell.HostPath, nil); err == nil {
 			log.Debugf("Successfully unmounted %s using %s approach", mountPoint, strategy.desc)
 			return nil
 		} else {
-			lastErr = err
 			log.Debugf("Unmount failed with %s approach: %v, output: %s", strategy.desc, err, output)
 		}
 	}
-	if lastErr != nil {
-		return fmt.Errorf("failed to unmount %s after trying all strategies: %w", mountPoint, lastErr)
-	}
-	return fmt.Errorf("failed to unmount %s after trying all strategies", mountPoint)
+	return nil
 }
 
 func UmountPath(mountPoint string) error {

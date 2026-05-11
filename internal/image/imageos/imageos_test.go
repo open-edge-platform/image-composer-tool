@@ -2457,8 +2457,8 @@ func TestMountDiskRootToChroot(t *testing.T) {
 
 	mockCommands := []shell.MockCommand{
 		// Specific test case behaviors - order matters, more specific patterns first
-		{Pattern: ".*mount.*xfs.*image-rootfs-fail.*", Output: "", Error: fmt.Errorf("mount failed")},
-		{Pattern: ".*mount.*ext4.*image-rootfs-ok.*", Output: "", Error: nil},
+		{Pattern: ".*mount.*xfs.*sdb1.*", Output: "", Error: fmt.Errorf("mount failed")},
+		{Pattern: ".*mount.*ext4.*sda1.*", Output: "", Error: nil},
 		// General mount commands - broad patterns to catch all mount utilities
 		{Pattern: ".*mount.*", Output: "", Error: nil},
 		{Pattern: ".*umount.*", Output: "", Error: nil},
@@ -2480,7 +2480,7 @@ func TestMountDiskRootToChroot(t *testing.T) {
 	}{
 		{
 			name:          "successful root mount",
-			diskPathIdMap: map[string]string{"root": "image-rootfs-ok"},
+			diskPathIdMap: map[string]string{"root": "/dev/sda1"},
 			partitions: []config.PartitionInfo{
 				{ID: "root", MountPoint: "/", FsType: "ext4"},
 			},
@@ -2488,7 +2488,7 @@ func TestMountDiskRootToChroot(t *testing.T) {
 		},
 		{
 			name:          "mount failure",
-			diskPathIdMap: map[string]string{"root": "image-rootfs-fail"},
+			diskPathIdMap: map[string]string{"root": "/dev/sdb1"},
 			partitions: []config.PartitionInfo{
 				{ID: "root", MountPoint: "/", FsType: "xfs"},
 			},

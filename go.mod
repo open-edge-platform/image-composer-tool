@@ -5,21 +5,21 @@ go 1.24.0
 toolchain go1.24.5
 
 require (
-	github.com/ProtonMail/go-crypto v1.3.0
+	github.com/ProtonMail/go-crypto v1.2.0
 	github.com/bendahl/uinput v1.4.0
 	github.com/diskfs/go-diskfs v1.7.0
 	github.com/gdamore/tcell v1.4.0
 	github.com/google/uuid v1.6.0
-	github.com/klauspost/compress v1.18.4
+	github.com/klauspost/compress v1.18.0
 	github.com/muesli/crunchy v0.4.0
 	github.com/rivo/tview v0.0.0-20200219135020-0ba8301b415c
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
 	github.com/sassoftware/go-rpmutils v0.4.0
 	github.com/schollz/progressbar/v3 v3.7.0
 	github.com/spf13/cobra v1.9.1
-	github.com/spf13/pflag v1.0.10
+	github.com/spf13/pflag v1.0.6
 	github.com/ulikunitz/xz v0.5.15
-	go.uber.org/zap v1.27.1
+	go.uber.org/zap v1.27.0
 	gopkg.in/yaml.v3 v3.0.1
 	sigs.k8s.io/yaml v1.4.0
 )

@@ -10,7 +10,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 )
@@ -18,18 +17,6 @@ import (
 const HostPath string = "/"
 
 var log = logger.Logger()
-
-var (
-	aptLockRetryAttempts = 20
-	aptLockRetryDelay    = 3 * time.Second
-)
-
-var aptLockErrorMarkers = []string{
-	"could not get lock",
-	"unable to lock directory",
-	"unable to acquire the dpkg frontend lock",
-	"is another process using it",
-}
 
 var commandMap = map[string][]string{
 	"apt":                {"/usr/bin/apt"},
@@ -449,7 +436,6 @@ func verifyCmdWithFullPath(cmd, chrootPath string) (string, error) {
 func GetFullCmdStr(cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error) {
 	var fullCmdStr string
 	envValStr := ""
-	runningAsRoot := os.Geteuid() == 0
 	for _, env := range envVal {
 		envValStr += env + " "
 	}
@@ -470,11 +456,7 @@ func GetFullCmdStr(cmdStr string, sudo bool, chrootPath string, envVal []string)
 			envValStr += key + "=" + value + " "
 		}
 
-		if sudo && !runningAsRoot {
-			fullCmdStr = "sudo " + envValStr + "chroot " + chrootPath + " " + fullPathCmdStr
-		} else {
-			fullCmdStr = envValStr + "chroot " + chrootPath + " " + fullPathCmdStr
-		}
+		fullCmdStr = "sudo " + envValStr + "chroot " + chrootPath + " " + fullPathCmdStr
 		chrootDir := filepath.Base(chrootPath)
 		// log.Debugf("Chroot " + chrootDir + " Exec: [" + fullPathCmdStr + "]")
 		// Avoid logging full command string to prevent leaking sensitive data.
@@ -488,15 +470,10 @@ func GetFullCmdStr(cmdStr string, sudo bool, chrootPath string, envVal []string)
 				envValStr += key + "=" + value + " "
 			}
 
-			if runningAsRoot {
-				fullCmdStr = envValStr + fullPathCmdStr
-				log.Debugf("Exec without sudo: [already running as root]")
-			} else {
-				fullCmdStr = "sudo " + envValStr + fullPathCmdStr
-				// log.Debugf("Exec: [sudo " + fullPathCmdStr + "]")
-				// Avoid logging full command string to prevent leaking sensitive data.
-				log.Debugf("Exec with sudo: [command executed]")
-			}
+			fullCmdStr = "sudo " + envValStr + fullPathCmdStr
+			// log.Debugf("Exec: [sudo " + fullPathCmdStr + "]")
+			// Avoid logging full command string to prevent leaking sensitive data.
+			log.Debugf("Exec with sudo: [command executed]")
 		} else {
 			fullCmdStr = fullPathCmdStr
 			// log.Debugf("Exec: [" + fullPathCmdStr + "]")
@@ -515,7 +492,28 @@ func (d *DefaultExecutor) ExecCmd(cmdStr string, sudo bool, chrootPath string, e
 		return "", fmt.Errorf("failed to get full command string: %w", err)
 	}
 
-	return d.execCmdWithRetry(cmdStr, fullCmdStr)
+	cmd := exec.Command("bash", "-c", fullCmdStr)
+	output, err := cmd.CombinedOutput()
+	outputStr := string(output)
+
+	if err != nil {
+		if outputStr != "" {
+			// return outputStr, fmt.Errorf("failed to exec %s: output %s, err %w", fullCmdStr, outputStr, err)
+			// Do not include the full command string in the error to avoid leaking sensitive data.
+			return outputStr, fmt.Errorf("failed to execute command with output: %w", err)
+		} else {
+			// return outputStr, fmt.Errorf("failed to exec %s: %w", fullCmdStr, err)
+			// Do not include the full command string in the error to avoid leaking sensitive data.
+			return outputStr, fmt.Errorf("failed to execute command: %w", err)
+		}
+	} else {
+		if outputStr != "" {
+			// log.Debugf(outputStr)
+			// Avoid logging raw command output to prevent leaking sensitive data.
+			log.Debugf("Command executed successfully with non-empty output")
+		}
+		return outputStr, nil
+	}
 }
 
 // ExecCmdSilent executes a command without logging its output
@@ -536,97 +534,6 @@ func (d *DefaultExecutor) ExecCmdWithStream(cmdStr string, sudo bool, chrootPath
 	if err != nil {
 		return "", fmt.Errorf("failed to get full command string: %w", err)
 	}
-
-	return d.execCmdWithStreamRetry(cmdStr, fullCmdStr)
-}
-
-func shouldRetryAptLock(cmdStr, output string, err error) bool {
-	if err == nil || aptLockRetryAttempts <= 1 {
-		return false
-	}
-
-	fields := strings.Fields(cmdStr)
-	if len(fields) == 0 {
-		return false
-	}
-
-	cmdName := fields[0]
-	if cmdName != "apt" && cmdName != "apt-get" {
-		return false
-	}
-
-	lowerOutput := strings.ToLower(output)
-	for _, marker := range aptLockErrorMarkers {
-		if strings.Contains(lowerOutput, marker) {
-			return true
-		}
-	}
-
-	return false
-}
-
-func logAptRetry(attempt int, output string) {
-	trimmedOutput := strings.TrimSpace(output)
-	if trimmedOutput == "" {
-		log.Warnf("APT command hit a lock on attempt %d/%d; retrying in %s", attempt, aptLockRetryAttempts, aptLockRetryDelay)
-		return
-	}
-	log.Warnf("APT command hit a lock on attempt %d/%d; retrying in %s: %s",
-		attempt, aptLockRetryAttempts, aptLockRetryDelay, trimmedOutput)
-}
-
-func (d *DefaultExecutor) execCmdWithRetry(cmdStr, fullCmdStr string) (string, error) {
-	for attempt := 1; attempt <= aptLockRetryAttempts; attempt++ {
-		outputStr, err := d.execCmdOnce(fullCmdStr)
-		if err == nil {
-			return outputStr, nil
-		}
-		if !shouldRetryAptLock(cmdStr, outputStr, err) || attempt == aptLockRetryAttempts {
-			return outputStr, err
-		}
-		logAptRetry(attempt, outputStr)
-		time.Sleep(aptLockRetryDelay)
-	}
-
-	return "", fmt.Errorf("failed to execute command after retries")
-}
-
-func (d *DefaultExecutor) execCmdOnce(fullCmdStr string) (string, error) {
-	cmd := exec.Command("bash", "-c", fullCmdStr)
-	output, err := cmd.CombinedOutput()
-	outputStr := string(output)
-
-	if err != nil {
-		if outputStr != "" {
-			trimmedOutput := strings.TrimSpace(outputStr)
-			return outputStr, fmt.Errorf("failed to execute command with output %q: %w", trimmedOutput, err)
-		}
-		return outputStr, fmt.Errorf("failed to execute command: %w", err)
-	}
-
-	if outputStr != "" {
-		log.Debugf("Command executed successfully with non-empty output")
-	}
-	return outputStr, nil
-}
-
-func (d *DefaultExecutor) execCmdWithStreamRetry(cmdStr, fullCmdStr string) (string, error) {
-	for attempt := 1; attempt <= aptLockRetryAttempts; attempt++ {
-		outputStr, err := d.execCmdWithStreamOnce(fullCmdStr)
-		if err == nil {
-			return outputStr, nil
-		}
-		if !shouldRetryAptLock(cmdStr, outputStr, err) || attempt == aptLockRetryAttempts {
-			return outputStr, err
-		}
-		logAptRetry(attempt, outputStr)
-		time.Sleep(aptLockRetryDelay)
-	}
-
-	return "", fmt.Errorf("failed to execute streamed command after retries")
-}
-
-func (d *DefaultExecutor) execCmdWithStreamOnce(fullCmdStr string) (string, error) {
 	cmd := exec.Command("bash", "-c", fullCmdStr)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -641,6 +548,7 @@ func (d *DefaultExecutor) execCmdWithStreamOnce(fullCmdStr string) (string, erro
 		return "", fmt.Errorf("failed to start command %s: %w", fullCmdStr, err)
 	}
 
+	// Use channels to collect stdout and stderr in order to preserve full command output.
 	outputChan := make(chan string, 128)
 	var outputStr strings.Builder
 	var collectWG sync.WaitGroup
@@ -649,7 +557,7 @@ func (d *DefaultExecutor) execCmdWithStreamOnce(fullCmdStr string) (string, erro
 		defer collectWG.Done()
 		for output := range outputChan {
 			outputStr.WriteString(output)
-			outputStr.WriteString("\n")
+			outputStr.WriteString("\n") // Add newlines between lines
 		}
 	}()
 

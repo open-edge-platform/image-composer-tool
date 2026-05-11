@@ -33,24 +33,13 @@ type ArtifactInfo struct {
 	Compression string `yaml:"compression"`
 }
 
-type DiskSelectionPolicy struct {
-	Strategy string `yaml:"strategy,omitempty"`
-	// ExcludeRemovable is intentionally conservative for unattended installs and
-	// excludes disks that appear externally attached, not only devices with RM=1.
-	ExcludeRemovable *bool `yaml:"excludeRemovable,omitempty"`
-	// RequireEmpty restricts unattended disk selection to empty disks when true.
-	// If false, disks with existing partitions are eligible and may be overwritten.
-	RequireEmpty *bool `yaml:"requireEmpty,omitempty"`
-}
-
 type DiskConfig struct {
-	Name               string              `yaml:"name"`
-	Path               string              `yaml:"path"` // Path to the disk device (e.g., /dev/sda), used by live installer
-	SelectionPolicy    DiskSelectionPolicy `yaml:"selectionPolicy,omitempty"`
-	Artifacts          []ArtifactInfo      `yaml:"artifacts"`
-	Size               string              `yaml:"size"`
-	PartitionTableType string              `yaml:"partitionTableType"`
-	Partitions         []PartitionInfo     `yaml:"partitions"`
+	Name               string          `yaml:"name"`
+	Path               string          `yaml:"path"` // Path to the disk device (e.g., /dev/sda), used by live installer
+	Artifacts          []ArtifactInfo  `yaml:"artifacts"`
+	Size               string          `yaml:"size"`
+	PartitionTableType string          `yaml:"partitionTableType"`
+	Partitions         []PartitionInfo `yaml:"partitions"`
 }
 
 type PackageRepository struct {

@@ -540,28 +540,11 @@ func mergePackageRepositories(defaultRepos, userRepos []PackageRepository) []Pac
 // Helper functions to check if structures are empty
 
 func isEmptyDiskConfig(disk DiskConfig) bool {
-	return disk.Name == "" &&
-		disk.Path == "" &&
-		disk.SelectionPolicy.Strategy == "" &&
-		disk.SelectionPolicy.ExcludeRemovable == nil &&
-		disk.Size == "" &&
-		disk.PartitionTableType == "" &&
-		len(disk.Artifacts) == 0 &&
-		len(disk.Partitions) == 0
+	return disk.Name == "" && disk.Size == "" && len(disk.Partitions) == 0
 }
 
 func isEmptySystemConfig(config SystemConfig) bool {
-	return config.Name == "" &&
-		config.Description == "" &&
-		config.HostName == "" &&
-		config.Initramfs.Template == "" &&
-		!config.Immutability.wasProvided &&
-		isEmptyBootloader(config.Bootloader) &&
-		len(config.Users) == 0 &&
-		len(config.Packages) == 0 &&
-		len(config.AdditionalFiles) == 0 &&
-		len(config.Configurations) == 0 &&
-		isEmptyKernelConfig(config.Kernel)
+	return config.Name == ""
 }
 
 func isEmptyBootloader(bootloader Bootloader) bool {
