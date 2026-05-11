@@ -43,11 +43,6 @@ const (
 	bootPartitionFormat = "fat32"
 	bootPartitionSize   = "9MiB"
 
-	// Default root partition
-	rootPartitionName       = "root"
-	rootPartitionFormat     = "ext4"
-	rootPartitionMountPoint = "/"
-
 	// Page names
 	tablePage        = "PARTITIONTABLE"
 	addPartitionPage = "ADDPARTITIONFORM"
