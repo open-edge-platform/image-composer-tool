@@ -273,10 +273,6 @@ func (mp *ManualPartitionWidget) HandleInput(event *tcell.EventKey) *tcell.Event
 
 // Reset resets the page, undoing any user input.
 func (mp *ManualPartitionWidget) Reset() (err error) {
-	// Always clear template partitions when entering manual mode
-	// This ensures a clean state and prevents conflicts with auto-partition config
-	mp.template.Disk.Partitions = []config.PartitionInfo{}
-
 	mp.partitionTable.Clear()
 	err = mp.populateTable()
 	if err != nil {
