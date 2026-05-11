@@ -570,6 +570,7 @@ func isEmptyBootloader(bootloader Bootloader) bool {
 
 func isEmptyNetworkConfig(network NetworkConfig) bool {
 	return network.Backend == "" && len(network.Interfaces) == 0
+}
 
 func isEmptyKernelConfig(kernel KernelConfig) bool {
 	return kernel.Version == "" &&
