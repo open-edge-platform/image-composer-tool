@@ -309,14 +309,14 @@ func mountDiskRootToChroot(installRoot string, diskPathIdMap map[string]string, 
 	partions := diskInfo.Partitions
 
 	// Debug logging
-	log.Infof("mountDiskRootToChroot: Looking for root partition")
-	log.Infof("  diskPathIdMap contents:")
+	log.Debugf("mountDiskRootToChroot: Looking for root partition")
+	log.Debugf("  diskPathIdMap contents:")
 	for id, path := range diskPathIdMap {
-		log.Infof("    ID=%s -> Path=%s", id, path)
+		log.Debugf("    ID=%s -> Path=%s", id, path)
 	}
-	log.Infof("  Template partitions:")
+	log.Debugf("  Template partitions:")
 	for i, p := range partions {
-		log.Infof("    Partition %d: ID=%s, MountPoint=%s, FsType=%s", i, p.ID, p.MountPoint, p.FsType)
+		log.Debugf("    Partition %d: ID=%s, MountPoint=%s, FsType=%s", i, p.ID, p.MountPoint, p.FsType)
 	}
 
 	for diskId, diskPath := range diskPathIdMap {
