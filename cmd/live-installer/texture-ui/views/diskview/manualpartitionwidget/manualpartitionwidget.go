@@ -604,12 +604,12 @@ func (mp *ManualPartitionWidget) unmarshalPartitionTable() (err error) {
 	mp.template.Disk = disk
 
 	// Debug logging to verify partition configuration
-	log.Infof("Manual partition configuration saved:")
-	log.Infof("  Disk path: %s", disk.Path)
-	log.Infof("  Partition table type: %s", disk.PartitionTableType)
-	log.Infof("  Number of partitions: %d", len(disk.Partitions))
+	log.Debugf("Manual partition configuration saved:")
+	log.Debugf("  Disk path: %s", disk.Path)
+	log.Debugf("  Partition table type: %s", disk.PartitionTableType)
+	log.Debugf("  Number of partitions: %d", len(disk.Partitions))
 	for i, p := range disk.Partitions {
-		log.Infof("  Partition %d: ID=%s, Name=%s, MountPoint=%s, FsType=%s, Start=%s, End=%s",
+		log.Debugf("  Partition %d: ID=%s, Name=%s, MountPoint=%s, FsType=%s, Start=%s, End=%s",
 			i, p.ID, p.Name, p.MountPoint, p.FsType, p.Start, p.End)
 	}
 
