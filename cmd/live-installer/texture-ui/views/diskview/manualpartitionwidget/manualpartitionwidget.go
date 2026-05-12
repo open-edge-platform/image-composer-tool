@@ -55,10 +55,12 @@ const (
 
 	maxParittionLabelSize   = 32
 	LegalCharactersAlphaNum = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	LegalCharactersFsLabel  = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
 )
 
 const (
 	nameColumn       = iota
+	labelColumn      = iota
 	sizeColumn       = iota
 	formatColumn     = iota
 	mountpointColumn = iota
@@ -84,6 +86,7 @@ type ManualPartitionWidget struct {
 	formFlex          *tview.Flex
 	formNavBar        *navigationbar.NavigationBar
 	formatInput       *enumfield.EnumField
+	labelInput        *tview.InputField
 	mountPointInput   *tview.InputField
 	nameInput         *tview.InputField
 	sizeUnitInput     *enumfield.EnumField
@@ -135,6 +138,7 @@ func (mp *ManualPartitionWidget) Initialize(backButtonText string, template *con
 	var maxLabelWidth int
 	labels := []string{
 		uitext.FormDiskFormatLabel,
+		uitext.FormDiskLabelLabel,
 		uitext.FormDiskSizeUnitLabel,
 		uitext.FormDiskNameLabel,
 		uitext.FormDiskMountPointLabel,
@@ -165,6 +169,12 @@ func (mp *ManualPartitionWidget) Initialize(backButtonText string, template *con
 		SetAcceptanceFunc(mp.nameInputValidation).
 		SetFieldBackgroundColor(tcell.ColorWhite)
 
+	mp.labelInput = tview.NewInputField().
+		SetLabel(uitext.FormDiskLabelLabel).
+		SetFieldWidth(maxParittionLabelSize).
+		SetAcceptanceFunc(mp.labelInputValidation).
+		SetFieldBackgroundColor(tcell.ColorWhite)
+
 	mp.mountPointInput = tview.NewInputField().
 		SetLabel(uitext.FormDiskMountPointLabel).
 		SetAcceptanceFunc(mp.mountPointInputValidation).
@@ -192,6 +202,7 @@ func (mp *ManualPartitionWidget) Initialize(backButtonText string, template *con
 
 	mp.addPartitionForm.
 		AddFormItem(mp.nameInput).
+		AddFormItem(mp.labelInput).
 		AddFormItem(mp.mountPointInput).
 		AddFormItem(mp.formatInput).
 		AddFormItem(mp.sizeUnitInput).
@@ -332,7 +343,7 @@ func (mp *ManualPartitionWidget) onPartitionConfirmButton() {
 		}
 
 		currentFormat := mp.formatInput.GetText()
-		if err := mp.addPartitionToTable(mp.nameInput.GetText(), formattedSize, currentFormat, mp.mountPointInput.GetText()); err != nil {
+		if err := mp.addPartitionToTable(mp.nameInput.GetText(), mp.labelInput.GetText(), formattedSize, currentFormat, mp.mountPointInput.GetText()); err != nil {
 			mp.formNavBar.SetUserFeedback(err.Error(), tview.Styles.TertiaryTextColor)
 		}
 		mp.pages.HidePage(addPartitionPage)
@@ -389,6 +400,7 @@ func (mp *ManualPartitionWidget) validateAddPartitionForm() (err error) {
 
 func (mp *ManualPartitionWidget) resetAddPartitionForm() {
 	mp.nameInput.SetText("")
+	mp.labelInput.SetText("")
 	mp.mountPointInput.SetText("")
 	mp.sizeInput.SetText("")
 	mp.formSpaceLeftText.SetText(mp.spaceLeftText.GetText(stripSpaceTags))
@@ -401,6 +413,7 @@ func (mp *ManualPartitionWidget) resetAddPartitionForm() {
 func (mp *ManualPartitionWidget) populateTable() (err error) {
 	headers := []string{
 		uitext.DiskNameLabel,
+		uitext.DiskLabelLabel,
 		uitext.DiskSizeLabel,
 		uitext.DiskFormatLabel,
 		uitext.DiskMountPointLabel,
@@ -424,7 +437,7 @@ func (mp *ManualPartitionWidget) populateTable() (err error) {
 
 	// Add only the required boot partition
 	// User will manually add root and other partitions as needed
-	err = mp.addPartitionToTable(bootPartitionName, bootPartitionSize, bootPartitionFormat, bootPartitionMountPoint)
+	err = mp.addPartitionToTable(bootPartitionName, "", bootPartitionSize, bootPartitionFormat, bootPartitionMountPoint)
 	return
 }
 
@@ -467,8 +480,8 @@ func (mp *ManualPartitionWidget) updateSpaceLabel() (err error) {
 	return
 }
 
-func (mp *ManualPartitionWidget) addPartitionToTable(name, size, format, mountPoint string) (err error) {
-	newCells := []string{name, size, format, mountPoint}
+func (mp *ManualPartitionWidget) addPartitionToTable(name, label, size, format, mountPoint string) (err error) {
+	newCells := []string{name, label, size, format, mountPoint}
 	row := mp.partitionTable.GetRowCount()
 
 	for i, cellText := range newCells {
@@ -568,6 +581,7 @@ func (mp *ManualPartitionWidget) unmarshalPartitionTable() (err error) {
 
 		partitions[i].ID = mp.partitionTable.GetCell(currentRow, nameColumn).Text
 		partitions[i].Name = partitions[i].ID
+		partitions[i].FsLabel = mp.partitionTable.GetCell(currentRow, labelColumn).Text
 
 		partitions[i].FsType = mp.partitionTable.GetCell(currentRow, formatColumn).Text
 		partitions[i].MountPoint = mp.partitionTable.GetCell(currentRow, mountpointColumn).Text
@@ -600,8 +614,8 @@ func (mp *ManualPartitionWidget) unmarshalPartitionTable() (err error) {
 	log.Debugf("  Partition table type: %s", disk.PartitionTableType)
 	log.Debugf("  Number of partitions: %d", len(disk.Partitions))
 	for i, p := range disk.Partitions {
-		log.Debugf("  Partition %d: ID=%s, Name=%s, MountPoint=%s, FsType=%s, Start=%s, End=%s",
-			i, p.ID, p.Name, p.MountPoint, p.FsType, p.Start, p.End)
+		log.Debugf("  Partition %d: ID=%s, Name=%s, FsLabel=%s, MountPoint=%s, FsType=%s, Start=%s, End=%s",
+			i, p.ID, p.Name, p.FsLabel, p.MountPoint, p.FsType, p.Start, p.End)
 	}
 
 	return
@@ -664,6 +678,19 @@ func (mp *ManualPartitionWidget) nameInputValidation(textToCheck string, lastCha
 
 	if !strings.ContainsRune(LegalCharactersAlphaNum, lastChar) {
 		mp.formNavBar.SetUserFeedback(uitext.NameInvalidCharacterError, tview.Styles.TertiaryTextColor)
+		return false
+	}
+
+	return true
+}
+
+func (mp *ManualPartitionWidget) labelInputValidation(textToCheck string, lastChar rune) bool {
+	if len(textToCheck) > maxParittionLabelSize {
+		return false
+	}
+
+	if !strings.ContainsRune(LegalCharactersFsLabel, lastChar) {
+		mp.formNavBar.SetUserFeedback(uitext.LabelInvalidCharacterError, tview.Styles.TertiaryTextColor)
 		return false
 	}
 

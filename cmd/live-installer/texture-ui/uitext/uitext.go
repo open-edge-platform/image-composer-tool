@@ -55,6 +55,7 @@ const (
 	DiskAdvanceTitleFmt      = "Partitions for: %v"
 	DiskAddPartitionTitle    = "Add Partition"
 	DiskFormatLabel          = "Format"
+	DiskLabelLabel           = "Label"
 	DiskMountPointLabel      = "Mount Point"
 	DiskNameLabel            = "Name"
 	DiskSizeLabel            = "Size"
@@ -62,6 +63,7 @@ const (
 	FormDiskSizeLabelMaxHelp = "(* for max)"
 	FormDiskSizeUnitLabel    = "* Unit size"
 	FormDiskFormatLabel      = RequiredInputMark + DiskFormatLabel
+	FormDiskLabelLabel       = DiskLabelLabel
 	FormDiskMountPointLabel  = RequiredInputMark + DiskMountPointLabel
 	FormDiskNameLabel        = RequiredInputMark + DiskNameLabel
 	FormDiskSizeLabel        = RequiredInputMark + DiskSizeLabel
@@ -73,6 +75,7 @@ const (
 	MountPointAlreadyInUseError        = "mount point is already in use"
 	MountPointStartError               = "mount point must start with `/`"
 	MountPointInvalidCharacterError    = "mount point only supports alphanumeric characters and `/`"
+	LabelInvalidCharacterError         = "label only supports alphanumeric characters, '-' and '_'"
 	NameInvalidCharacterError          = "name only supports alphanumeric characters"
 	NoPartitionsError                  = "must specify at least one boot and one root partition"
 	NoPartitionSelectedError           = "no partition selected"
