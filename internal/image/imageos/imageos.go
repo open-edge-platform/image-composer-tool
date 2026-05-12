@@ -308,6 +308,18 @@ func (imageOs *ImageOs) umountSysfsFromRootfs(installRoot string) error {
 func mountDiskRootToChroot(installRoot string, diskPathIdMap map[string]string, template *config.ImageTemplate) error {
 	diskInfo := template.GetDiskConfig()
 	partions := diskInfo.Partitions
+
+	// Debug logging
+	log.Debugf("mountDiskRootToChroot: Looking for root partition")
+	log.Debugf("  diskPathIdMap contents:")
+	for id, path := range diskPathIdMap {
+		log.Debugf("    ID=%s -> Path=%s", id, path)
+	}
+	log.Debugf("  Template partitions:")
+	for i, p := range partions {
+		log.Debugf("    Partition %d: ID=%s, MountPoint=%s, FsType=%s", i, p.ID, p.MountPoint, p.FsType)
+	}
+
 	for diskId, diskPath := range diskPathIdMap {
 		for _, partition := range partions {
 			if partition.ID == diskId {
