@@ -422,7 +422,8 @@ func (mp *ManualPartitionWidget) populateTable() (err error) {
 		return
 	}
 
-	// Add the default boot partition
+	// Add only the required boot partition
+	// User will manually add root and other partitions as needed
 	err = mp.addPartitionToTable(bootPartitionName, bootPartitionSize, bootPartitionFormat, bootPartitionMountPoint)
 	return
 }
@@ -515,7 +516,9 @@ func (mp *ManualPartitionWidget) mustRemovePartition() {
 	// On error there is no clean way to bubble up the error as this routine is invoked from UI threads,
 	// so panic as this is unexpected.
 	err := mp.updateSpaceLabel()
-	log.Panicf("Failed to update space label: %v", err)
+	if err != nil {
+		log.Panicf("Failed to update space label: %v", err)
+	}
 }
 
 func (mp *ManualPartitionWidget) unmarshalPartitionTable() (err error) {
@@ -590,6 +593,16 @@ func (mp *ManualPartitionWidget) unmarshalPartitionTable() (err error) {
 	disk.Partitions = partitions
 
 	mp.template.Disk = disk
+
+	// Debug logging to verify partition configuration
+	log.Debugf("Manual partition configuration saved:")
+	log.Debugf("  Disk path: %s", disk.Path)
+	log.Debugf("  Partition table type: %s", disk.PartitionTableType)
+	log.Debugf("  Number of partitions: %d", len(disk.Partitions))
+	for i, p := range disk.Partitions {
+		log.Debugf("  Partition %d: ID=%s, Name=%s, MountPoint=%s, FsType=%s, Start=%s, End=%s",
+			i, p.ID, p.Name, p.MountPoint, p.FsType, p.Start, p.End)
+	}
 
 	return
 }
