@@ -95,7 +95,7 @@ func generateNetworkdFile(iface config.NetworkInterface) string {
 	case dhcp4 && dhcp6:
 		sb.WriteString("DHCP=yes\n")
 	case dhcp4:
-		sb.WriteString("DHCP=yes\n")
+		sb.WriteString("DHCP=ipv4\n")
 	case dhcp6:
 		sb.WriteString("DHCP=ipv6\n")
 	}

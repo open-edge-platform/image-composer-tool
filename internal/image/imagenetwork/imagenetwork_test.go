@@ -75,8 +75,8 @@ func TestWriteNetworkdConfig_SingleDHCPInterface(t *testing.T) {
 	if !strings.Contains(contentStr, "[Network]") {
 		t.Errorf("expected [Network] section in config")
 	}
-	if !strings.Contains(contentStr, "DHCP=yes") {
-		t.Errorf("expected DHCP=yes in config")
+	if !strings.Contains(contentStr, "DHCP=ipv4") {
+		t.Errorf("expected DHCP=ipv4 for DHCPv4-only config")
 	}
 }
 
@@ -240,8 +240,8 @@ func TestGenerateNetworkdFile_DHCPv4Only(t *testing.T) {
 	if !strings.Contains(content, "[Network]") {
 		t.Errorf("expected [Network] section")
 	}
-	if !strings.Contains(content, "DHCP=yes") {
-		t.Errorf("expected DHCP=yes")
+	if !strings.Contains(content, "DHCP=ipv4") {
+		t.Errorf("expected DHCP=ipv4 for DHCPv4-only")
 	}
 }
 
