@@ -275,10 +275,13 @@
         },
         "addresses": {
           "type": "array",
-          "description": "Static IP addresses in CIDR notation (e.g., 192.168.1.10/24)",
+          "description": "Static IP addresses in CIDR notation (e.g., 192.168.1.10/24). Omit or use an empty list when DHCP is enabled; static addresses must not be set together with DHCP on the same interface.",
           "items": {
             "type": "string",
-            "pattern": "^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$|^[0-9a-fA-F:]+/[0-9]{1,3}$"
+            "oneOf": [
+              { "format": "ipv4-cidr" },
+              { "format": "ipv6-cidr" }
+            ]
           }
         },
         "routes": {
@@ -290,12 +293,19 @@
               "to": {
                 "type": "string",
                 "description": "Route destination (e.g., 'default', '10.0.0.0/8')",
-                "pattern": "^default$|^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$|^[0-9a-fA-F:]+/[0-9]{1,3}$"
+                "oneOf": [
+                  { "const": "default" },
+                  { "format": "ipv4-cidr" },
+                  { "format": "ipv6-cidr" }
+                ]
               },
               "via": {
                 "type": "string",
                 "description": "Gateway address (e.g., '10.0.0.1')",
-                "pattern": "^([0-9]{1,3}\\.){3}[0-9]{1,3}$|^[0-9a-fA-F:]+$"
+                "oneOf": [
+                  { "format": "ipv4" },
+                  { "format": "ipv6" }
+                ]
               }
             },
             "required": ["to", "via"],
@@ -307,12 +317,39 @@
           "description": "DNS server addresses",
           "items": {
             "type": "string",
-            "pattern": "^([0-9]{1,3}\\.){3}[0-9]{1,3}$|^[0-9a-fA-F:]+$"
+            "oneOf": [
+              { "format": "ipv4" },
+              { "format": "ipv6" }
+            ]
           }
         }
       },
       "required": ["name"],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "required": ["dhcp4"],
+                "properties": { "dhcp4": { "const": true } }
+              },
+              {
+                "required": ["dhcp6"],
+                "properties": { "dhcp6": { "const": true } }
+              }
+            ]
+          },
+          "then": {
+            "properties": {
+              "addresses": {
+                "type": "array",
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      ]
     },
     "NetworkConfig": {
       "type": "object",
@@ -415,7 +452,10 @@
         "url": {
           "type": "string",
           "description": "Repository base URL",
-          "format": "uri"
+          "oneOf": [
+            { "format": "uri" },
+            { "const": "<URL>", "description": "Placeholder used in example templates" }
+          ]
         },
         "path": {
           "type": "string",
