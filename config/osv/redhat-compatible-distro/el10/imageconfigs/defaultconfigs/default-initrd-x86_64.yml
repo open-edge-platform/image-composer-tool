@@ -26,6 +26,7 @@ systemConfig:
     - ca-certificates
     - cronie-anacron
     - logrotate
+    - gptfdisk
     - shadow-utils
     - util-linux
 

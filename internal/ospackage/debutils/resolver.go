@@ -1113,12 +1113,71 @@ func compareVersions(v1, v2 string) int {
 	return cmp
 }
 
+func isKernelPackageRequest(want string) bool {
+	for pattern := range KernelPackages {
+		if pattern == want {
+			return true
+		}
+
+		if !isGlobPattern(pattern) {
+			continue
+		}
+
+		matched, err := path.Match(pattern, want)
+		if err == nil && matched {
+			return true
+		}
+	}
+
+	return false
+}
+
+func stripEpoch(version string) string {
+	if colonIdx := strings.Index(version, ":"); colonIdx != -1 {
+		return version[colonIdx+1:]
+	}
+	return version
+}
+
+func matchesKernelVersion(candidateVersion string) bool {
+	if KernelVersion == "" {
+		return false
+	}
+
+	versionNoEpoch := stripEpoch(candidateVersion)
+	if versionNoEpoch == KernelVersion {
+		return true
+	}
+
+	if !strings.HasPrefix(versionNoEpoch, KernelVersion) {
+		return false
+	}
+
+	if len(versionNoEpoch) == len(KernelVersion) {
+		return true
+	}
+
+	nextChar := versionNoEpoch[len(KernelVersion)]
+	return nextChar == '.' || nextChar == '-' || nextChar == '_' || nextChar == '+' || nextChar == '~'
+}
+
+func filterKernelCandidates(candidates []ospackage.PackageInfo) []ospackage.PackageInfo {
+	var matched []ospackage.PackageInfo
+	for _, candidate := range candidates {
+		if matchesKernelVersion(candidate.Version) {
+			matched = append(matched, candidate)
+		}
+	}
+	return matched
+}
+
 // ResolvePackage finds the best matching package for a given package name
 func ResolveTopPackageConflicts(want string, all []ospackage.PackageInfo) (ospackage.PackageInfo, bool) {
 	log := logger.Logger()
 	log.Debugf("ResolveTopPackageConflicts: Searching for package '%s' in %d available packages", want, len(all))
 
 	var candidates []ospackage.PackageInfo
+	isKernelPackage := isKernelPackageRequest(want)
 	for _, pi := range all {
 		// 1) exact name and version matched with .deb filenamae, e.g. acct_7.6.4-5+b1_amd64
 		if filepath.Base(pi.URL) == want+".deb" {
@@ -1225,6 +1284,21 @@ func ResolveTopPackageConflicts(want string, all []ospackage.PackageInfo) (ospac
 		return ospackage.PackageInfo{}, false
 	}
 
+	if isKernelPackage && KernelVersion != "" {
+		var beforeFilter []ospackage.PackageInfo
+		beforeFilter = append(beforeFilter, candidates...)
+		candidates = filterKernelCandidates(candidates)
+		if len(candidates) == 0 {
+			var availableVersions []string
+			for _, pkg := range beforeFilter {
+				availableVersions = append(availableVersions, pkg.Version)
+			}
+			log.Errorf("kernel version mismatch: package %q requires kernel version %q, but available versions are: %v",
+				want, KernelVersion, availableVersions)
+			return ospackage.PackageInfo{}, false
+		}
+	}
+
 	// If we got an exact match in step (1), it's the only candidate
 	if len(candidates) == 1 && (candidates[0].Name == want || candidates[0].Name == want+".deb") {
 		log.Debugf("ResolveTopPackageConflicts: Selected exact match candidate: %s (version: %s)", candidates[0].Name, candidates[0].Version)
@@ -1234,6 +1308,52 @@ func ResolveTopPackageConflicts(want string, all []ospackage.PackageInfo) (ospac
 	// Candidates already sorted by filterCandidatesByPriority
 	log.Debugf("ResolveTopPackageConflicts: Selected best candidate: %s (version: %s) for package '%s'", candidates[0].Name, candidates[0].Version, want)
 	return candidates[0], true
+}
+
+// ResolveWildcardPackageConflicts expands a wildcard request to the best package
+// for each matched base package name.
+func ResolveWildcardPackageConflicts(want string, all []ospackage.PackageInfo) ([]ospackage.PackageInfo, bool) {
+	if !isGlobPattern(want) {
+		pkg, found := ResolveTopPackageConflicts(want, all)
+		if !found {
+			return nil, false
+		}
+		return []ospackage.PackageInfo{pkg}, true
+	}
+
+	baseNames := make(map[string]struct{})
+	for _, pi := range all {
+		matched, err := path.Match(want, pi.Name)
+		if err != nil || !matched {
+			continue
+		}
+		baseNames[pi.Name] = struct{}{}
+	}
+
+	if len(baseNames) == 0 {
+		return nil, false
+	}
+
+	var results []ospackage.PackageInfo
+	for baseName := range baseNames {
+		pkg, found := ResolveTopPackageConflicts(baseName, all)
+		if found {
+			results = append(results, pkg)
+		}
+	}
+
+	if len(results) == 0 {
+		return nil, false
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].Name == results[j].Name {
+			return compareVersions(results[i].Version, results[j].Version) > 0
+		}
+		return results[i].Name < results[j].Name
+	})
+
+	return results, true
 }
 
 // Helper function to find all candidates for a dependency

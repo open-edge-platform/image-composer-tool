@@ -593,6 +593,75 @@ func TestResolveTopPackageConflicts(t *testing.T) {
 	}
 }
 
+func TestResolveTopPackageConflictsKernelVersionSelection(t *testing.T) {
+	originalKernelVersion := KernelVersion
+	originalKernelPackages := KernelPackages
+	defer func() {
+		KernelVersion = originalKernelVersion
+		KernelPackages = originalKernelPackages
+	}()
+
+	ConfigureKernelSelection([]string{"kernel"}, "6.6")
+
+	allPackages := []ospackage.PackageInfo{
+		{Name: "kernel-6.7.0-1.azl3.x86_64.rpm", PkgName: "kernel", Version: "6.7.0-1.azl3"},
+		{Name: "kernel-6.6.10-2.azl3.x86_64.rpm", PkgName: "kernel", Version: "6.6.10-2.azl3"},
+		{Name: "kernel-1:6.6.11-1.azl3.x86_64.rpm", PkgName: "kernel", Version: "1:6.6.11-1.azl3"},
+	}
+
+	pkg, found := ResolveTopPackageConflicts("kernel", allPackages)
+	if !found {
+		t.Fatal("expected kernel package to be found")
+	}
+	if pkg.Version != "1:6.6.11-1.azl3" {
+		t.Errorf("expected kernel-version-matching package, got %q", pkg.Version)
+	}
+}
+
+func TestResolveTopPackageConflictsKernelVersionMissing(t *testing.T) {
+	originalKernelVersion := KernelVersion
+	originalKernelPackages := KernelPackages
+	defer func() {
+		KernelVersion = originalKernelVersion
+		KernelPackages = originalKernelPackages
+	}()
+
+	ConfigureKernelSelection([]string{"kernel"}, "6.6")
+
+	allPackages := []ospackage.PackageInfo{
+		{Name: "kernel-6.7.0-1.azl3.x86_64.rpm", PkgName: "kernel", Version: "6.7.0-1.azl3"},
+	}
+
+	_, found := ResolveTopPackageConflicts("kernel", allPackages)
+	if found {
+		t.Fatal("expected kernel package resolution to fail when no candidate matches kernel version")
+	}
+}
+
+func TestResolveTopPackageConflictsKernelVersionPrefixMatch(t *testing.T) {
+	originalKernelVersion := KernelVersion
+	originalKernelPackages := KernelPackages
+	defer func() {
+		KernelVersion = originalKernelVersion
+		KernelPackages = originalKernelPackages
+	}()
+
+	ConfigureKernelSelection([]string{"kernel"}, "6.17")
+
+	allPackages := []ospackage.PackageInfo{
+		{Name: "kernel-6.170.1.1.0-1.azl3.x86_64.rpm", PkgName: "kernel", Version: "6.170.1.1.0-1.azl3"},
+		{Name: "kernel-6.17.1.1.0-1.azl3.x86_64.rpm", PkgName: "kernel", Version: "6.17.1.1.0-1.azl3"},
+	}
+
+	pkg, found := ResolveTopPackageConflicts("kernel", allPackages)
+	if !found {
+		t.Fatal("expected kernel package to be found")
+	}
+	if pkg.Version != "6.17.1.1.0-1.azl3" {
+		t.Errorf("expected dotted patch version to match kernel version prefix, got %q", pkg.Version)
+	}
+}
+
 func TestResolveMultiCandidates(t *testing.T) {
 	tests := []struct {
 		name         string

@@ -14,9 +14,9 @@ import (
 
 const LsblkOutput = `{
    "blockdevices": [
-      {"name":"sda", "size":500107862016, "model":"CT500MX500SSD1  "},
-      {"name":"sdb", "size":62746787840, "model":"Extreme         "},
-      {"name":"nvme0n1", "size":512110190592, "model":"INTEL SSDPEKNW512G8                     "}
+		{"name":"sda", "size":500107862016, "model":"CT500MX500SSD1  ", "tran":"sata", "type":"disk", "rm":0, "rota":0},
+		{"name":"sdb", "size":62746787840, "model":"Extreme         ", "tran":"usb", "type":"disk", "rm":1, "rota":0},
+		{"name":"nvme0n1", "size":512110190592, "model":"INTEL SSDPEKNW512G8                     ", "tran":"nvme", "type":"disk", "rm":0, "rota":0}
    ]
 }
 `
@@ -174,8 +174,8 @@ func TestDiskView_Initialize(t *testing.T) {
 	}
 
 	// Check default mode
-	if dv.autoPartitionMode != defaultToAutoPartition {
-		t.Errorf("expected autoPartitionMode to be %v, got %v", defaultToAutoPartition, dv.autoPartitionMode)
+	if !dv.autoPartitionMode {
+		t.Errorf("expected autoPartitionMode to be true, got %v", dv.autoPartitionMode)
 	}
 
 	// Check that refreshTitle was set
@@ -449,6 +449,62 @@ func TestDiskView_SwitchMode(t *testing.T) {
 
 	if !refreshTitleCalled {
 		t.Error("expected refreshTitle to be called after second mode switch")
+	}
+}
+
+func TestDiskView_SwitchToManual_DoesNotMutateTemplateConfig(t *testing.T) {
+	template := &config.ImageTemplate{
+		Target: config.TargetInfo{
+			OS:   "azure-linux",
+			Dist: "3.0",
+			Arch: "x86_64",
+		},
+		Disk: config.DiskConfig{
+			Path:               "/dev/sda",
+			PartitionTableType: "gpt",
+			Partitions: []config.PartitionInfo{{
+				Name: "existing-root",
+				ID:   "existing-root",
+			}},
+		},
+		SystemConfig: config.SystemConfig{
+			Bootloader: config.Bootloader{
+				BootType: "efi",
+			},
+		},
+	}
+
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+	mockExpectedOutput := []shell.MockCommand{
+		{Pattern: "lsblk", Output: LsblkOutput, Error: nil},
+	}
+	shell.Default = shell.NewMockExecutor(mockExpectedOutput)
+
+	app := tview.NewApplication()
+	mockFunc := func() {}
+
+	dv := New()
+	err := dv.Initialize("Back", template, app, mockFunc, mockFunc, mockFunc, mockFunc)
+	if err != nil {
+		t.Fatalf("Initialize() returned error: %v", err)
+	}
+
+	originalPartitionCount := len(template.Disk.Partitions)
+	originalPartitionTableType := template.Disk.PartitionTableType
+
+	dv.switchMode()
+
+	if dv.autoPartitionMode {
+		t.Fatal("expected to switch to manual partition mode")
+	}
+
+	if len(template.Disk.Partitions) != originalPartitionCount {
+		t.Fatalf("expected partition count to remain %d when entering manual mode, got %d", originalPartitionCount, len(template.Disk.Partitions))
+	}
+
+	if template.Disk.PartitionTableType != originalPartitionTableType {
+		t.Fatalf("expected partition table type to remain %q, got %q", originalPartitionTableType, template.Disk.PartitionTableType)
 	}
 }
 

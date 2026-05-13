@@ -355,6 +355,28 @@ func TestCleanDebName(t *testing.T) {
 	}
 }
 
+func TestCleanRpmName(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"strip_version_release", "qemu-kvm-9.1.0-7", "qemu-kvm"},
+		{"strip_filename_dist_arch", "qemu-kvm-9.1.0-7.emt3.x86_64.rpm", "qemu-kvm"},
+		{"keep_plain_name", "python3-pyserial", "python3-pyserial"},
+		{"keep_single_version_suffix", "kernel-drivers-gpu-6.17.11", "kernel-drivers-gpu-6.17.11"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := chroot.CleanRpmName(tt.input)
+			if got != tt.expected {
+				t.Fatalf("CleanRpmName(%s) = %s, want %s", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestChrootEnv_UpdateChrootLocalRepoMetadata_ErrorPaths(t *testing.T) {
 	mockBuilder := &mockChrootBuilder{
 		packageList: nil,
