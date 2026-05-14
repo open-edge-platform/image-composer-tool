@@ -1,6 +1,9 @@
 package rpmutils
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"compress/gzip"
 	"fmt"
 	"io"
 	"net/http"
@@ -1071,4 +1074,226 @@ func copyFile(srcPath, dstPath string) error {
 	}
 
 	return nil
+}
+
+// PrepareLocalRepositoryFiles copies or downloads entries in packages into repoPath,
+// extracting any .rpm payloads from supported archives (.tar, .tar.gz, .tgz, .zip).
+// Each entry is either an https:// URL (downloaded), a local directory (all .rpm files inside
+// are copied), or a local file path (copied/extracted).
+func PrepareLocalRepositoryFiles(repoPath string, packages []string, insecureSkipVerify bool) error {
+	if len(packages) == 0 {
+		return nil
+	}
+
+	if repoPath == "" {
+		return fmt.Errorf("repository path cannot be empty when packages are configured")
+	}
+
+	if err := os.MkdirAll(repoPath, 0755); err != nil {
+		return fmt.Errorf("failed to create repository path %s: %w", repoPath, err)
+	}
+
+	tmpDir, err := os.MkdirTemp("", "ict-packages-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temporary directory for packages: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	for _, entry := range packages {
+		var srcPath string
+		if strings.HasPrefix(entry, "https://") {
+			localName, err := network.FilenameFromURL(entry)
+			if err != nil {
+				return fmt.Errorf("invalid packages URL %q: %w", entry, err)
+			}
+			downloadPath := filepath.Join(tmpDir, localName)
+			if err := network.DownloadFile(entry, downloadPath, insecureSkipVerify); err != nil {
+				return fmt.Errorf("failed to download %q: %w", entry, err)
+			}
+			srcPath = downloadPath
+		} else {
+			if strings.Contains(entry, "://") {
+				return fmt.Errorf("packages URL entry %q must use https scheme", entry)
+			}
+			info, err := os.Stat(entry)
+			if err != nil {
+				return fmt.Errorf("local path %q not found: %w", entry, err)
+			}
+			if info.IsDir() {
+				if err := importRPMsFromDir(entry, repoPath); err != nil {
+					return fmt.Errorf("failed to process directory %q: %w", entry, err)
+				}
+				continue
+			}
+			srcPath = entry
+		}
+
+		if _, err := importOnlineRPMFileToRepo(srcPath, repoPath); err != nil {
+			return fmt.Errorf("failed to process %q: %w", entry, err)
+		}
+	}
+
+	return nil
+}
+
+// importRPMsFromDir copies all .rpm files found directly inside srcDir into repoPath.
+func importRPMsFromDir(srcDir, repoPath string) error {
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		return fmt.Errorf("failed to read directory: %w", err)
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if !strings.HasSuffix(strings.ToLower(e.Name()), ".rpm") {
+			continue
+		}
+		src := filepath.Join(srcDir, e.Name())
+		dst := filepath.Join(repoPath, e.Name())
+		if err := copyFile(src, dst); err != nil {
+			return fmt.Errorf("failed to copy %q: %w", e.Name(), err)
+		}
+	}
+	return nil
+}
+
+func importOnlineRPMFileToRepo(srcPath, repoPath string) (int, error) {
+	lowerName := strings.ToLower(filepath.Base(srcPath))
+	if strings.HasSuffix(lowerName, ".rpm") {
+		dstPath := filepath.Join(repoPath, filepath.Base(srcPath))
+		if err := copyFile(srcPath, dstPath); err != nil {
+			return 0, fmt.Errorf("failed to copy rpm file into repository: %w", err)
+		}
+		return 1, nil
+	}
+
+	if strings.HasSuffix(lowerName, ".tar.gz") || strings.HasSuffix(lowerName, ".tgz") {
+		f, err := os.Open(srcPath)
+		if err != nil {
+			return 0, fmt.Errorf("failed to open tar.gz file: %w", err)
+		}
+		defer f.Close()
+
+		gzReader, err := gzip.NewReader(f)
+		if err != nil {
+			return 0, fmt.Errorf("failed to create gzip reader: %w", err)
+		}
+		defer gzReader.Close()
+
+		return extractRPMsFromTarReader(tar.NewReader(gzReader), repoPath)
+	}
+
+	if strings.HasSuffix(lowerName, ".tar") {
+		f, err := os.Open(srcPath)
+		if err != nil {
+			return 0, fmt.Errorf("failed to open tar file: %w", err)
+		}
+		defer f.Close()
+
+		return extractRPMsFromTarReader(tar.NewReader(f), repoPath)
+	}
+
+	if strings.HasSuffix(lowerName, ".zip") {
+		zipReader, err := zip.OpenReader(srcPath)
+		if err != nil {
+			return 0, fmt.Errorf("failed to open zip file: %w", err)
+		}
+		defer zipReader.Close()
+
+		copied := 0
+		for _, zipFile := range zipReader.File {
+			if zipFile.FileInfo().IsDir() {
+				continue
+			}
+			if !strings.HasSuffix(strings.ToLower(zipFile.Name), ".rpm") {
+				continue
+			}
+
+			fileName := filepath.Base(zipFile.Name)
+			if fileName == "." || fileName == "/" || fileName == "" {
+				continue
+			}
+
+			srcFile, err := zipFile.Open()
+			if err != nil {
+				return 0, fmt.Errorf("failed to read zip entry %s: %w", zipFile.Name, err)
+			}
+
+			dstPath := filepath.Join(repoPath, fileName)
+			dstFile, err := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+			if err != nil {
+				srcFile.Close()
+				return 0, fmt.Errorf("failed to create output file %s: %w", dstPath, err)
+			}
+
+			_, copyErr := io.Copy(dstFile, srcFile)
+			closeDstErr := dstFile.Close()
+			closeSrcErr := srcFile.Close()
+			if copyErr != nil {
+				return 0, fmt.Errorf("failed to extract zip entry %s: %w", zipFile.Name, copyErr)
+			}
+			if closeDstErr != nil {
+				return 0, fmt.Errorf("failed to close output file %s: %w", dstPath, closeDstErr)
+			}
+			if closeSrcErr != nil {
+				return 0, fmt.Errorf("failed to close zip entry %s: %w", zipFile.Name, closeSrcErr)
+			}
+
+			copied++
+		}
+		if copied == 0 {
+			return 0, fmt.Errorf("no .rpm files found in zip archive %s", srcPath)
+		}
+		return copied, nil
+	}
+
+	return 0, fmt.Errorf("unsupported online file type %q (supported: .rpm, .tar, .tar.gz, .tgz, .zip)", filepath.Base(srcPath))
+}
+
+func extractRPMsFromTarReader(tarReader *tar.Reader, repoPath string) (int, error) {
+	copied := 0
+
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return 0, fmt.Errorf("failed reading tar entry: %w", err)
+		}
+
+		if header.FileInfo().IsDir() {
+			continue
+		}
+		if !strings.HasSuffix(strings.ToLower(header.Name), ".rpm") {
+			continue
+		}
+
+		fileName := filepath.Base(header.Name)
+		if fileName == "." || fileName == "/" || fileName == "" {
+			continue
+		}
+
+		dstPath := filepath.Join(repoPath, fileName)
+		dstFile, err := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+		if err != nil {
+			return 0, fmt.Errorf("failed to create output file %s: %w", dstPath, err)
+		}
+
+		if _, err := io.Copy(dstFile, tarReader); err != nil {
+			dstFile.Close()
+			return 0, fmt.Errorf("failed to extract tar entry %s: %w", header.Name, err)
+		}
+		if err := dstFile.Close(); err != nil {
+			return 0, fmt.Errorf("failed to close output file %s: %w", dstPath, err)
+		}
+
+		copied++
+	}
+
+	if copied == 0 {
+		return 0, fmt.Errorf("no .rpm files found in tar archive")
+	}
+	return copied, nil
 }

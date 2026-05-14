@@ -1,6 +1,9 @@
 package rpmutils
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1643,5 +1646,121 @@ func TestLocalUserPackagesFailsForNonExistentPath(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "failed to create temporary RPM repository") {
 		t.Errorf("expected 'failed to create temporary RPM repository' in error, got: %v", err)
+	}
+}
+
+func TestImportOnlineRPMFileToRepoRPMAndTarGz(t *testing.T) {
+	repoDir := t.TempDir()
+	inputDir := t.TempDir()
+
+	// Direct .rpm file
+	directRPMPath := filepath.Join(inputDir, "curl-8.8.0-2.azl3.x86_64.rpm")
+	if err := os.WriteFile(directRPMPath, []byte("rpm-data-direct"), 0644); err != nil {
+		t.Fatalf("failed to write direct .rpm file: %v", err)
+	}
+
+	// .tar.gz containing a .rpm
+	var tarBuf bytes.Buffer
+	gzWriter := gzip.NewWriter(&tarBuf)
+	tarWriter := tar.NewWriter(gzWriter)
+	rpmInTar := []byte("rpm-data-from-tar")
+	header := &tar.Header{
+		Name: "nested/kernel-6.6.0-1.azl3.x86_64.rpm",
+		Mode: 0644,
+		Size: int64(len(rpmInTar)),
+	}
+	if err := tarWriter.WriteHeader(header); err != nil {
+		t.Fatalf("failed to write tar header: %v", err)
+	}
+	if _, err := tarWriter.Write(rpmInTar); err != nil {
+		t.Fatalf("failed to write tar payload: %v", err)
+	}
+	if err := tarWriter.Close(); err != nil {
+		t.Fatalf("failed to close tar writer: %v", err)
+	}
+	if err := gzWriter.Close(); err != nil {
+		t.Fatalf("failed to close gzip writer: %v", err)
+	}
+	tarPath := filepath.Join(inputDir, "kernel-rpms.tar.gz")
+	if err := os.WriteFile(tarPath, tarBuf.Bytes(), 0644); err != nil {
+		t.Fatalf("failed to write tar.gz file: %v", err)
+	}
+
+	if _, err := importOnlineRPMFileToRepo(directRPMPath, repoDir); err != nil {
+		t.Fatalf("importOnlineRPMFileToRepo returned error for .rpm input: %v", err)
+	}
+	if _, err := importOnlineRPMFileToRepo(tarPath, repoDir); err != nil {
+		t.Fatalf("importOnlineRPMFileToRepo returned error for .tar.gz input: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(repoDir, "curl-8.8.0-2.azl3.x86_64.rpm")); err != nil {
+		t.Fatalf("expected downloaded .rpm in repo dir: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repoDir, "kernel-6.6.0-1.azl3.x86_64.rpm")); err != nil {
+		t.Fatalf("expected extracted .rpm from tar.gz in repo dir: %v", err)
+	}
+}
+
+func TestPrepareLocalRepositoryFilesRPMRejectsNonHTTPS(t *testing.T) {
+	repoDir := t.TempDir()
+	err := PrepareLocalRepositoryFiles(repoDir, []string{"http://example.com/file.rpm"}, false)
+	if err == nil {
+		t.Fatal("expected error for http:// URL")
+	}
+	if !strings.Contains(err.Error(), "must use https scheme") {
+		t.Fatalf("expected https scheme error, got: %v", err)
+	}
+}
+
+func TestPrepareLocalRepositoryFilesRPMEmptyPackages(t *testing.T) {
+	repoDir := t.TempDir()
+	if err := PrepareLocalRepositoryFiles(repoDir, nil, false); err != nil {
+		t.Fatalf("expected no error for empty packages, got: %v", err)
+	}
+}
+
+func TestPrepareLocalRepositoryFilesRPMLocalFileCopy(t *testing.T) {
+	repoDir := t.TempDir()
+	srcDir := t.TempDir()
+
+	localRPM := filepath.Join(srcDir, "custom-driver-1.0.x86_64.rpm")
+	if err := os.WriteFile(localRPM, []byte("fake-rpm-content"), 0644); err != nil {
+		t.Fatalf("failed to create local rpm file: %v", err)
+	}
+
+	if err := PrepareLocalRepositoryFiles(repoDir, []string{localRPM}, false); err != nil {
+		t.Fatalf("expected no error for local file copy, got: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(repoDir, "custom-driver-1.0.x86_64.rpm")); err != nil {
+		t.Fatalf("expected copied .rpm in repo dir: %v", err)
+	}
+}
+
+func TestPrepareLocalRepositoryFilesRPMLocalDirCopy(t *testing.T) {
+	repoDir := t.TempDir()
+	srcDir := t.TempDir()
+
+	// Create several .rpm files and a non-.rpm file in the source directory
+	files := []string{"pkg-a-1.0.x86_64.rpm", "pkg-b-2.0.x86_64.rpm", "readme.txt"}
+	for _, f := range files {
+		if err := os.WriteFile(filepath.Join(srcDir, f), []byte("content"), 0644); err != nil {
+			t.Fatalf("failed to create %s: %v", f, err)
+		}
+	}
+
+	if err := PrepareLocalRepositoryFiles(repoDir, []string{srcDir}, false); err != nil {
+		t.Fatalf("expected no error for local dir copy, got: %v", err)
+	}
+
+	// .rpm files should be copied
+	for _, f := range []string{"pkg-a-1.0.x86_64.rpm", "pkg-b-2.0.x86_64.rpm"} {
+		if _, err := os.Stat(filepath.Join(repoDir, f)); err != nil {
+			t.Fatalf("expected %s in repo dir: %v", f, err)
+		}
+	}
+	// non-.rpm file should not be copied
+	if _, err := os.Stat(filepath.Join(repoDir, "readme.txt")); err == nil {
+		t.Fatal("readme.txt should not have been copied into repo dir")
 	}
 }

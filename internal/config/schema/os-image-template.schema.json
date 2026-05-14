@@ -346,6 +346,24 @@
           "description": "Local directory path for file-based repositories",
           "pattern": "^/"
         },
+        "packages": {
+          "type": "array",
+          "description": "Files to populate the local repository path: each entry is an https:// URL (downloaded), a local directory (all .deb/.rpm files inside are copied), or a local file path (copied/extracted). Supports .deb, .rpm, .tar, .tar.gz, and .zip archives.",
+          "items": {
+            "type": "string",
+            "anyOf": [
+              { "pattern": "^https://", "description": "HTTPS URL to download" },
+              { "pattern": "^/", "description": "Absolute local file path" },
+              { "pattern": "^\\./|\\.\\./", "description": "Relative local file path" }
+            ]
+          },
+          "minItems": 1
+        },
+        "insecureSkipVerify": {
+          "type": "boolean",
+          "description": "Skip TLS certificate verification for onlineFiles downloads (insecure, use with caution for untrusted or self-signed certificates)",
+          "default": false
+        },
         "pkey": {
           "type": "string",
           "description": "Public GPG key URL for package verification or [trusted=yes] to skip verification",
@@ -410,7 +428,8 @@
       },
       "oneOf": [
         { "required": ["codename", "path"] },
-        { "required": ["codename", "url"] }
+        { "required": ["codename", "url"] },
+        { "required": ["codename", "packages"] }
       ],
       "anyOf": [
         { "required": ["pkey"] },

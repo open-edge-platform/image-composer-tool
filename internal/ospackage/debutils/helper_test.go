@@ -1,6 +1,9 @@
 package debutils
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -533,5 +536,126 @@ func TestDebLocalUserPackagesFailsForNonExistentDir(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "failed to create temporary DEB repository") {
 		t.Errorf("expected 'failed to create temporary DEB repository' in error, got: %v", err)
+	}
+}
+
+func TestImportOnlineFileToRepoDebAndTarGz(t *testing.T) {
+	repoDir := t.TempDir()
+	inputDir := t.TempDir()
+
+	directDebPath := filepath.Join(inputDir, "intel-igc-core-2_2.20.3+19972_amd64.deb")
+	if err := os.WriteFile(directDebPath, []byte("deb-data-from-direct-download"), 0644); err != nil {
+		t.Fatalf("failed to write direct .deb file: %v", err)
+	}
+
+	var tarBuf bytes.Buffer
+	gzWriter := gzip.NewWriter(&tarBuf)
+	tarWriter := tar.NewWriter(gzWriter)
+	debInTar := []byte("deb-data-from-tar")
+	header := &tar.Header{
+		Name: "nested/intel-driver-compiler-npu_1.0_amd64.deb",
+		Mode: 0644,
+		Size: int64(len(debInTar)),
+	}
+	if err := tarWriter.WriteHeader(header); err != nil {
+		t.Fatalf("failed to write tar header: %v", err)
+	}
+	if _, err := tarWriter.Write(debInTar); err != nil {
+		t.Fatalf("failed to write tar payload: %v", err)
+	}
+	if err := tarWriter.Close(); err != nil {
+		t.Fatalf("failed to close tar writer: %v", err)
+	}
+	if err := gzWriter.Close(); err != nil {
+		t.Fatalf("failed to close gzip writer: %v", err)
+	}
+
+	tarPath := filepath.Join(inputDir, "linux-npu-driver.tar.gz")
+	if err := os.WriteFile(tarPath, tarBuf.Bytes(), 0644); err != nil {
+		t.Fatalf("failed to write tar.gz file: %v", err)
+	}
+
+	if _, err := importOnlineFileToRepo(directDebPath, repoDir); err != nil {
+		t.Fatalf("importOnlineFileToRepo returned error for .deb input: %v", err)
+	}
+	if _, err := importOnlineFileToRepo(tarPath, repoDir); err != nil {
+		t.Fatalf("importOnlineFileToRepo returned error for .tar.gz input: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(repoDir, "intel-igc-core-2_2.20.3+19972_amd64.deb")); err != nil {
+		t.Fatalf("expected downloaded .deb in repo dir: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repoDir, "intel-driver-compiler-npu_1.0_amd64.deb")); err != nil {
+		t.Fatalf("expected extracted .deb from tar.gz in repo dir: %v", err)
+	}
+}
+
+func TestPrepareLocalRepositoryFilesRejectsNonHTTPS(t *testing.T) {
+	repoDir := t.TempDir()
+	err := PrepareLocalRepositoryFiles(repoDir, []string{"http://example.com/file.deb"}, false)
+	if err == nil {
+		t.Fatal("expected error for http:// URL")
+	}
+	if !strings.Contains(err.Error(), "must use https scheme") {
+		t.Fatalf("expected https scheme error, got: %v", err)
+	}
+}
+
+func TestPrepareLocalRepositoryFilesWithInsecureSkipVerify(t *testing.T) {
+	repoDir := t.TempDir()
+	// Even with insecureSkipVerify=true, non-HTTPS package URLs should still fail validation
+	err := PrepareLocalRepositoryFiles(repoDir, []string{"http://example.com/file.deb"}, true)
+	if err == nil {
+		t.Fatal("expected error for http:// URL even with insecureSkipVerify")
+	}
+	if !strings.Contains(err.Error(), "must use https scheme") {
+		t.Fatalf("expected https scheme error, got: %v", err)
+	}
+}
+
+func TestPrepareLocalRepositoryFilesLocalFileCopy(t *testing.T) {
+	repoDir := t.TempDir()
+	srcDir := t.TempDir()
+
+	// Create a local .deb file to copy
+	localDeb := filepath.Join(srcDir, "local-package_1.0_amd64.deb")
+	if err := os.WriteFile(localDeb, []byte("fake-deb-content"), 0644); err != nil {
+		t.Fatalf("failed to create local deb file: %v", err)
+	}
+
+	if err := PrepareLocalRepositoryFiles(repoDir, []string{localDeb}, false); err != nil {
+		t.Fatalf("expected no error for local file copy, got: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(repoDir, "local-package_1.0_amd64.deb")); err != nil {
+		t.Fatalf("expected copied .deb in repo dir: %v", err)
+	}
+}
+
+func TestPrepareLocalRepositoryFilesLocalDirCopy(t *testing.T) {
+	repoDir := t.TempDir()
+	srcDir := t.TempDir()
+
+	// Create several .deb files and a non-.deb file in the source directory
+	files := []string{"pkg-a_1.0_amd64.deb", "pkg-b_2.0_amd64.deb", "readme.txt"}
+	for _, f := range files {
+		if err := os.WriteFile(filepath.Join(srcDir, f), []byte("content"), 0644); err != nil {
+			t.Fatalf("failed to create %s: %v", f, err)
+		}
+	}
+
+	if err := PrepareLocalRepositoryFiles(repoDir, []string{srcDir}, false); err != nil {
+		t.Fatalf("expected no error for local dir copy, got: %v", err)
+	}
+
+	// .deb files should be copied
+	for _, f := range []string{"pkg-a_1.0_amd64.deb", "pkg-b_2.0_amd64.deb"} {
+		if _, err := os.Stat(filepath.Join(repoDir, f)); err != nil {
+			t.Fatalf("expected %s in repo dir: %v", f, err)
+		}
+	}
+	// non-.deb file should not be copied
+	if _, err := os.Stat(filepath.Join(repoDir, "readme.txt")); err == nil {
+		t.Fatal("readme.txt should not have been copied into repo dir")
 	}
 }
