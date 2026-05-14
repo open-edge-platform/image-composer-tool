@@ -4,7 +4,7 @@
 #
 # Bootable ISO installer image. Flash to USB, boot, and install to internal drive.
 # Includes ROS 2 Jazzy Desktop, Intel OpenVINO 2025, Gazebo Harmonic physics simulator,
-# Intel RealSense camera libraries, Intel NPU drivers, Mesa GPU stack, and more.
+# Intel RealSense camera libraries (DKMS), Intel NPU drivers, and more.
 #
 # Usage:
 #   sudo -E ./image-composer-tool build image-templates/ubuntu24-x86_64-robotics-jazzy-iso.yml
@@ -53,7 +53,7 @@ metadata:
     - gpu
     - npu
     - level-zero
-    - mesa
+    - dkms
     - ubuntu
     - iso
     - bootable
@@ -107,27 +107,17 @@ packageRepositories:
     pkey: "https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB"
     component: "main"
 
-  # Kisak Mesa PPA (latest Mesa drivers)
-  - codename: "noble"
-    url: "https://ppa.launchpadcontent.net/kisak/kisak-mesa/ubuntu"
-    pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xEB8B81E14DA65431D7504EA8F63F0F2B90935439"
-    component: "main"
-
-  # Kobuk Team Intel Graphics PPA
-  - codename: "noble"
-    url: "https://ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu"
-    pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x0C0E6AF955CE463C03FC51574D098D70AFBE5E1F"
-    component: "main"
-
   # Gazebo (OSRF) Harmonic stable repository
   - codename: "noble"
     url: "https://packages.osrfoundation.org/gazebo/ubuntu-stable"
     pkey: "https://packages.osrfoundation.org/gazebo.gpg"
     component: "main"
 
-  # Intel RealSense repository — NOT needed at build time.
-  # All RealSense packages are installed on first boot via systemd oneshot service
-  # (see configurations section). The first-boot script sets up the repo itself.
+  # Intel RealSense repository (new URL as of 2026)
+  - codename: "noble"
+    url: "https://librealsense.realsenseai.com/Debian/apt-repo"
+    pkey: "https://librealsense.realsenseai.com/Debian/librealsenseai.asc"
+    component: "main"
 
 systemConfig:
   name: robotics-jazzy
@@ -180,22 +170,11 @@ systemConfig:
     # ── Collaborative SLAM (Intel Xe / UHD GPU accelerated) ──────────
     - ros-jazzy-collab-slam-lze
 
-    # ── Intel RealSense camera ──────────────────────────────────────
-    # Installed on first boot via systemd oneshot service (see configurations).
-    # librealsense2-dkms requires DKMS which needs a live kernel to build modules;
-    # cannot be built inside chroot. All RealSense packages are installed together
-    # on first boot to ensure DKMS + userspace SDK are in sync.
-
-    # ── Mesa GPU stack (Intel Xe / UHD) ─────────────────────────────
-    - libegl-mesa0
-    - libgl1-mesa-dri
-    - libgbm1
-    - libglx-mesa0
-    - mesa-libgallium
-    - mesa-va-drivers
-    - mesa-vdpau-drivers
-    - mesa-vulkan-drivers
-    - xwayland
+    # ── Intel RealSense camera (DKMS + SDK, installed at build time) ──
+    - linux-headers-generic
+    - librealsense2-dkms
+    - librealsense2_2.56.5-0~realsense.17055
+    - ros-jazzy-librealsense2
 
     # ── Firmware ────────────────────────────────────────────────────
     - linux-firmware
@@ -224,10 +203,10 @@ systemConfig:
     - cmd: "printf 'Package: libflann*\\nPin: version 1.19.*\\nPin-Priority: -1\\n\\nPackage: flann*\\nPin: version 1.19.*\\nPin-Priority: -1\\n' > /etc/apt/preferences.d/eci-flann-block"
     # Pin OneAPI runtime deps to 2025.3.*
     - cmd: "printf 'Package: intel-oneapi-runtime-*\\nPin: version 2025.3.*\\nPin-Priority: 1001\\n' > /etc/apt/preferences.d/oneapi"
-    # OpenVINO version pins (match init_jazzy.sh exactly)
+    # OpenVINO version pins (match setup-robotics-jazzy.sh exactly)
     - cmd: "printf 'Package: openvino-libraries-dev\\nPin: version 2025.3.0*\\nPin-Priority: 1001\\n\\nPackage: openvino\\nPin: version 2025.3.0*\\nPin-Priority: 1001\\n\\nPackage: ros-jazzy-openvino-wrapper-lib\\nPin: version 2025.3.0*\\nPin-Priority: 1002\\n\\nPackage: ros-jazzy-openvino-node\\nPin: version 2025.3.0*\\nPin-Priority: 1002\\n' > /etc/apt/preferences.d/intel-openvino"
-    # RealSense version pin
-    - cmd: "printf 'Package: librealsense2*\\nPin: version 2.56.5-0~realsense.17055\\nPin-Priority: 1001\\n' > /etc/apt/preferences.d/librealsense"
+    # RealSense SDK version pin for post-deployment upgrade protection.
+    - cmd: "printf 'Package: librealsense2\\nPin: version 2.56.5-0~realsense.17055\\nPin-Priority: 1001\\n\\nPackage: ros-jazzy-librealsense2*\\nPin: version 2.56.4*\\nPin-Priority: 1001\\n\\nPackage: ros-jazzy-realsense2*\\nPin: version 4.56.4*\\nPin-Priority: 1001\\n' > /etc/apt/preferences.d/librealsense"
 
     # ── debconf pre-selections for OpenVINO node ─────────────────────
     - cmd: "echo 'ros-jazzy-openvino-node openvino-node/pip-proxy select true' | debconf-set-selections"
@@ -235,16 +214,6 @@ systemConfig:
 
     # ── Intel NPU udev rules (render group access to /dev/accel/*) ──
     - cmd: "printf 'SUBSYSTEM==\"accel\", KERNEL==\"accel*\", GROUP=\"render\", MODE=\"0660\"\\n' > /etc/udev/rules.d/10-intel-vpu.rules"
-
-    # ── Intel RealSense first-boot installation ────────────────────
-    # librealsense2-dkms requires DKMS (needs live kernel for module builds).
-    # This creates a systemd oneshot that sets up the repo, installs all
-    # RealSense packages (version-pinned via /etc/apt/preferences.d/librealsense),
-    # then disables itself.
-    - cmd: "printf '#!/bin/bash\\nset -euo pipefail\\nexport DEBIAN_FRONTEND=noninteractive\\nmkdir -p /etc/apt/keyrings\\ncurl -sSf https://librealsense.intel.com/Debian/librealsense.pgp -o /etc/apt/keyrings/librealsense.pgp\\necho \"deb [signed-by=/etc/apt/keyrings/librealsense.pgp] https://librealsense.intel.com/Debian/apt-repo noble main\" > /etc/apt/sources.list.d/librealsense.list\\napt-get update\\napt-get install -y librealsense2-dkms librealsense2\\nsystemctl disable install-librealsense.service\\nrm -f /usr/local/bin/install-librealsense.sh\\n' > /usr/local/bin/install-librealsense.sh"
-    - cmd: "chmod 755 /usr/local/bin/install-librealsense.sh"
-    - cmd: "printf '[Unit]\\nDescription=Install Intel RealSense packages (first boot)\\nAfter=network-online.target\\nWants=network-online.target\\nConditionPathExists=/usr/local/bin/install-librealsense.sh\\n\\n[Service]\\nType=oneshot\\nExecStart=/usr/local/bin/install-librealsense.sh\\nEnvironment=DEBIAN_FRONTEND=noninteractive\\nTimeoutStartSec=0\\n\\n[Install]\\nWantedBy=multi-user.target\\n' > /etc/systemd/system/install-librealsense.service"
-    - cmd: "systemctl enable install-librealsense.service"
 
     # ── Enable required services ────────────────────────────────────
     - cmd: "systemctl enable NetworkManager"
