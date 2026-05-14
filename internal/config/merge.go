@@ -580,14 +580,6 @@ func isEmptyKernelConfig(kernel KernelConfig) bool {
 		kernel.EnableExtraModules == ""
 }
 
-func isEmptyKernelConfig(kernel KernelConfig) bool {
-	return kernel.Version == "" &&
-		kernel.Cmdline == "" &&
-		len(kernel.Packages) == 0 &&
-		!kernel.UKI &&
-		kernel.EnableExtraModules == ""
-}
-
 // validateAndFixImmutabilityConfig checks if immutability is enabled but hash partition is missing
 // If so, it automatically disables immutability with a warning
 func validateAndFixImmutabilityConfig(template *ImageTemplate) {
