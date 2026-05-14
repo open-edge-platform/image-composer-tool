@@ -1,17 +1,16 @@
 # AI-searchable metadata for template discovery
 metadata:
-  description: Ubuntu 24.04 PTL PV unattended ISO installer with Intel GPU/NPU support and automatic disk selection
+  description: Ubuntu 24.04 PTL PV attended ISO installer with Intel GPU/NPU support and interactive disk selection
   use_cases:
-    - Unattended bare metal installation on Intel PTL platforms
+    - Attended bare metal installation on Intel PTL platforms
     - PTL platform validation and fleet provisioning
-    - Automatic install target selection with Intel GPU/NPU enablement
+    - Interactive install target selection with Intel GPU/NPU enablement
   keywords:
     - iso
     - ubuntu
-    - unattended
+    - attended
     - installer
-    - auto-disk-selection
-    - largest
+    - manual-disk-selection
     - ptl
     - pv
     - intel
@@ -19,7 +18,7 @@ metadata:
     - npu
 
 image:
-  name: ptl-pv-ubuntu-unattended-iso
+  name: ptl-pv-ubuntu-iso
   version: "24.04"
 
 target:
@@ -29,13 +28,9 @@ target:
   imageType: iso # Image type, valid value: [raw, iso].
 
 disk:
-  name: ptl-pv-ubuntu-unattended-iso
-  # Keep path empty to enable policy-based disk selection at install time.
+  name: ptl-pv-ubuntu-iso
+  # Keep path empty so the live installer prompts for interactive disk selection.
   path: ""
-  selectionPolicy:
-    strategy: largest
-    excludeRemovable: true
-    requireEmpty: true # Only consider disks that do not have existing partitions.
   partitionTableType: gpt # Partition table type, valid value: [gpt, mbr]
   partitions:
     - id: EFI
@@ -299,11 +294,11 @@ packageRepositories:
       - xvfb
 
 systemConfig:
-  name: ptl-pv-ubuntu-unattended-iso
-  description: PTL PV Ubuntu image for unattended ISO installation
+  name: ptl-pv-ubuntu-iso
+  description: PTL PV Ubuntu image for attended ISO installation
 
   initramfs:
-    template: default-initrd-unattended-x86_64.yml
+    template: default-initrd-x86_64.yml
 
   bootloader:
     bootType: efi
@@ -312,25 +307,9 @@ systemConfig:
   immutability:
     enabled: false
 
-  hostname: ubuntu24-ptl-pv-unattended
+  hostname: ubuntu24-ptl-pv
 
-  users:
-    - name: root
-      startupScript: "/root/unattendedinstaller"
-    - name: admin
-      # Generate a SHA-512 password hash from CLI and paste it into `password`.
-      # Example (recommended):
-      #   openssl passwd -6
-      # Example (explicit salt):
-      #   openssl passwd -6 -salt "$(openssl rand -base64 12)"
-      # Example resulting value format:
-      #   password: "$6$<salt>$<hash>"
-      # hash_algo: sha512
-      groups:
-        - sudo
-      sudo: true
-      shell: /bin/bash
-      home: /home/admin
+
 
   kernel:
     version: "260128t080735z-r2"
@@ -596,8 +575,6 @@ systemConfig:
     - cloud-init
 
   additionalFiles:
-    - local: ../config/general/isolinux/unattendedinstaller
-      final: /root/unattendedinstaller
     - local: ../additionalfiles/ptl/01-network-manager-all.yaml
       final: /etc/netplan/01-network-manager-all.yaml
     - local: ../additionalfiles/ptl/50-cloud-init.yaml
