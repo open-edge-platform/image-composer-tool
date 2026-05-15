@@ -86,8 +86,8 @@ systemConfig:
   additionalFiles:
     - local: ../additionalfiles/dhcp.network
       final: /etc/systemd/network/dhcp.network
-    - local: ../additionalfiles/elxr-aria.list
-      final: /etc/apt/sources.list.d/elxr-aria.list
+    - local: ../additionalfiles/elxr-bianca.list
+      final: /etc/apt/sources.list.d/elxr-bianca.list
 
   kernel:
     name: kernel
