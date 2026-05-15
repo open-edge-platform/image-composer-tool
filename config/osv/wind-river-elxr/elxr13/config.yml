@@ -1,5 +1,5 @@
-# Wind River ELXR12 OS Configuration
-# This file defines architecture-specific build configurations for Wind River ELXR12
+# Wind River ELXR13 OS Configuration
+# This file defines architecture-specific build configurations for Wind River ELXR13
 
 x86_64:
   dist: bianca                                        # Distribution identifier
