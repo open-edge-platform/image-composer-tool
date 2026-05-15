@@ -1,6 +1,6 @@
 # AI-searchable metadata for template discovery
 metadata:
-  description: Minimal ELXR 12 bootable ISO image for installation media
+  description: Minimal ELXR 13 bootable ISO image for installation media
   use_cases:
     - Creating bootable installation media
     - USB/DVD installation
