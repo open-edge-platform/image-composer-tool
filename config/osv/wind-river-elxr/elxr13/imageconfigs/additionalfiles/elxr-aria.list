@@ -1,1 +1,1 @@
-deb [trusted=amd64 signed-by=/usr/share/keyrings/elxr-archive-keyring.gpg] https://mirror.elxr.dev/elxr aria main
+deb [trusted=amd64 signed-by=/usr/share/keyrings/elxr-archive-keyring.gpg] https://mirror.elxr.dev/elxr bianca main
