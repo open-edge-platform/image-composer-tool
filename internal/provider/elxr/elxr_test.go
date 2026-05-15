@@ -197,7 +197,12 @@ func TestLoadRepoConfig(t *testing.T) {
 }
 
 func TestLoadRepoConfigElxr13Bianca(t *testing.T) {
-	originalDir, _ := os.Getwd()
+	originalDir, err := os.Getwd()
+	if err != nil {
+		t.Skipf("Cannot get current working directory: %v", err)
+		return
+	}
+
 	defer func() {
 		if err := os.Chdir(originalDir); err != nil {
 			t.Logf("Failed to change back to original directory: %v", err)
@@ -225,6 +230,14 @@ func TestLoadRepoConfigElxr13Bianca(t *testing.T) {
 
 	if !strings.Contains(config[0].PkgList, "/dists/bianca/") {
 		t.Fatalf("Expected PkgList to target bianca dist, got %q", config[0].PkgList)
+	}
+
+	if !strings.Contains(config[0].PkgList, "/binary-amd64/Packages.gz") {
+		t.Fatalf("Expected PkgList to target amd64 package index, got %q", config[0].PkgList)
+	}
+
+	if !strings.Contains(config[0].PkgPrefix, "mirror.elxr.dev/elxr") {
+		t.Fatalf("Expected PkgPrefix to target ELXR mirror, got %q", config[0].PkgPrefix)
 	}
 }
 
