@@ -256,6 +256,118 @@
       },
       "additionalProperties": false
     },
+    "NetworkInterface": {
+      "type": "object",
+      "description": "Network interface configuration",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Interface name (e.g., enp1s0, ens3)",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,14}$"
+        },
+        "dhcp4": {
+          "type": "boolean",
+          "description": "Enable DHCPv4"
+        },
+        "dhcp6": {
+          "type": "boolean",
+          "description": "Enable DHCPv6"
+        },
+        "addresses": {
+          "type": "array",
+          "description": "Static IP addresses in CIDR notation (e.g., 192.168.1.10/24). Omit or use an empty list when DHCP is enabled; static addresses must not be set together with DHCP on the same interface.",
+          "items": {
+            "type": "string",
+            "oneOf": [
+              { "format": "ipv4-cidr" },
+              { "format": "ipv6-cidr" }
+            ]
+          }
+        },
+        "routes": {
+          "type": "array",
+          "description": "Static routes (use 'default' as destination for default gateway)",
+          "items": {
+            "type": "object",
+            "properties": {
+              "to": {
+                "type": "string",
+                "description": "Route destination (e.g., 'default', '10.0.0.0/8')",
+                "oneOf": [
+                  { "const": "default" },
+                  { "format": "ipv4-cidr" },
+                  { "format": "ipv6-cidr" }
+                ]
+              },
+              "via": {
+                "type": "string",
+                "description": "Gateway address (e.g., '10.0.0.1')",
+                "oneOf": [
+                  { "format": "ipv4" },
+                  { "format": "ipv6" }
+                ]
+              }
+            },
+            "required": ["to", "via"],
+            "additionalProperties": false
+          }
+        },
+        "nameservers": {
+          "type": "array",
+          "description": "DNS server addresses",
+          "items": {
+            "type": "string",
+            "oneOf": [
+              { "format": "ipv4" },
+              { "format": "ipv6" }
+            ]
+          }
+        }
+      },
+      "required": ["name"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "required": ["dhcp4"],
+                "properties": { "dhcp4": { "const": true } }
+              },
+              {
+                "required": ["dhcp6"],
+                "properties": { "dhcp6": { "const": true } }
+              }
+            ]
+          },
+          "then": {
+            "properties": {
+              "addresses": {
+                "type": "array",
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    "NetworkConfig": {
+      "type": "object",
+      "description": "Network configuration for the installed OS",
+      "properties": {
+        "backend": {
+          "type": "string",
+          "description": "Network backend to use",
+          "enum": ["systemd-networkd", "netplan"]
+        },
+        "interfaces": {
+          "type": "array",
+          "description": "List of network interfaces to configure",
+          "items": { "$ref": "#/$defs/NetworkInterface" }
+        }
+      },
+      "additionalProperties": false
+    },
     "Kernel": {
       "type": "object",
       "description": "Kernel configuration",
@@ -286,6 +398,7 @@
         "immutability": { "$ref": "#/$defs/Immutability" },
         "users": { "$ref": "#/$defs/Users" },
         "bootloader": { "$ref": "#/$defs/Bootloader" },
+        "network": { "$ref": "#/$defs/NetworkConfig" },
         "packages": {
           "type": "array",
           "description": "List of packages to include in the system. Supports simple glob-style patterns on package names, such as wayland* or libva-?[0-9]. Wildcards are limited to *, ?, and bracket ranges (e.g. [0-9]); patterns must match the allowed character set in this schema and are applied only to package names (versioned globs or comparison operators like pkg>=1.2 are not supported). Invalid patterns will cause template validation to fail.",
@@ -339,7 +452,10 @@
         "url": {
           "type": "string",
           "description": "Repository base URL",
-          "format": "uri"
+          "oneOf": [
+            { "format": "uri" },
+            { "const": "<URL>", "description": "Placeholder used in example templates" }
+          ]
         },
         "path": {
           "type": "string",

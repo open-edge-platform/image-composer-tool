@@ -162,6 +162,28 @@ type UserConfig struct {
 	Shell          string   `yaml:"shell,omitempty"`          // Shell: login shell (e.g., /bin/bash, /bin/zsh)
 }
 
+// NetworkRoute represents a static route entry
+type NetworkRoute struct {
+	To  string `yaml:"to"`  // To: destination (e.g., "default", "10.0.0.0/8")
+	Via string `yaml:"via"` // Via: gateway address (e.g., "10.0.0.1")
+}
+
+// NetworkInterface represents a single network interface configuration
+type NetworkInterface struct {
+	Name        string         `yaml:"name"`                  // Name: interface name (e.g., enp1s0, ens3)
+	DHCP4       *bool          `yaml:"dhcp4,omitempty"`       // DHCP4: enable DHCPv4
+	DHCP6       *bool          `yaml:"dhcp6,omitempty"`       // DHCP6: enable DHCPv6
+	Addresses   []string       `yaml:"addresses,omitempty"`   // Addresses: static IPv4/IPv6 addresses (e.g., "192.168.1.10/24")
+	Routes      []NetworkRoute `yaml:"routes,omitempty"`      // Routes: static routes (replaces deprecated gateway4/gateway6)
+	Nameservers []string       `yaml:"nameservers,omitempty"` // Nameservers: DNS server addresses
+}
+
+// NetworkConfig represents the network configuration for the installed OS
+type NetworkConfig struct {
+	Backend    string             `yaml:"backend,omitempty"`    // Backend: network backend (netplan or systemd-networkd)
+	Interfaces []NetworkInterface `yaml:"interfaces,omitempty"` // Interfaces: list of interfaces to configure
+}
+
 // SystemConfig represents a system configuration within the template
 type SystemConfig struct {
 	Name            string               `yaml:"name"`
@@ -171,6 +193,7 @@ type SystemConfig struct {
 	Immutability    ImmutabilityConfig   `yaml:"immutability,omitempty"`
 	Users           []UserConfig         `yaml:"users,omitempty"`
 	Bootloader      Bootloader           `yaml:"bootloader"`
+	Network         NetworkConfig        `yaml:"network,omitempty"`
 	Packages        []string             `yaml:"packages"`
 	AdditionalFiles []AdditionalFileInfo `yaml:"additionalFiles"`
 	Configurations  []ConfigurationInfo  `yaml:"configurations"`
