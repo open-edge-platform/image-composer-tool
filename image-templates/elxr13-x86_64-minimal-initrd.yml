@@ -1,6 +1,6 @@
 # AI-searchable metadata for template discovery
 metadata:
-  description: Minimal ELXR 12 initrd/initramfs image for network boot and PXE
+  description: Minimal ELXR 13 initrd/initramfs image for network boot and PXE
   use_cases:
     - PXE network boot
     - Diskless boot environments

@@ -1,6 +1,6 @@
 # AI-searchable metadata for template discovery
 metadata:
-  description: ELXR 12 image with Intel DL Streamer for video analytics and AI inference
+  description: ELXR 13 image with Intel DL Streamer for video analytics and AI inference
   use_cases:
     - Video analytics pipelines
     - AI inference at the edge

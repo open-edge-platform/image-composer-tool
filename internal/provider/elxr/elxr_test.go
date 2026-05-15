@@ -196,6 +196,38 @@ func TestLoadRepoConfig(t *testing.T) {
 	t.Logf("Successfully loaded repo config: %s", config[0].Name)
 }
 
+func TestLoadRepoConfigElxr13Bianca(t *testing.T) {
+	originalDir, _ := os.Getwd()
+	defer func() {
+		if err := os.Chdir(originalDir); err != nil {
+			t.Logf("Failed to change back to original directory: %v", err)
+		}
+	}()
+
+	if err := os.Chdir("../../../"); err != nil {
+		t.Skipf("Cannot change to project root: %v", err)
+		return
+	}
+
+	config, err := loadRepoConfig("elxr13", "amd64")
+	if err != nil {
+		t.Skipf("loadRepoConfig failed (expected in test environment): %v", err)
+		return
+	}
+
+	if len(config) == 0 {
+		t.Fatal("Expected at least one repository config")
+	}
+
+	if got := config[0].Name; got != "bianca" {
+		t.Fatalf("Expected repository codename 'bianca', got %q", got)
+	}
+
+	if !strings.Contains(config[0].PkgList, "/dists/bianca/") {
+		t.Fatalf("Expected PkgList to target bianca dist, got %q", config[0].PkgList)
+	}
+}
+
 func TestNormalizeElxrDist(t *testing.T) {
 	tests := []struct {
 		in   string

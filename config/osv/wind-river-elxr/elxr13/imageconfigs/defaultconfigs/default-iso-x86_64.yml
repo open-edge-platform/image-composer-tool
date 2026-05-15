@@ -1,6 +1,6 @@
 image:
   name: minimal-os-image-elxr
-  version: "12.0.0"
+  version: "13.0.0"
 
 target:
   os: wind-river-elxr # Target OS name

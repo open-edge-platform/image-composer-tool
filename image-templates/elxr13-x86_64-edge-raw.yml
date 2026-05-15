@@ -1,6 +1,6 @@
 # AI-searchable metadata for template discovery
 metadata:
-  description: ELXR 12 edge-optimized image with container runtime and edge computing packages
+  description: ELXR 13 edge-optimized image with container runtime and edge computing packages
   use_cases:
     - Edge computing deployments
     - Container workloads at the edge

@@ -1,3 +1,17 @@
+metadata:
+  description: Minimal ELXR 13 image with essential packages for lightweight ARM64 deployments
+  use_cases:
+    - Lightweight ARM64 deployments
+    - Embedded and edge devices
+    - Minimal base image customization
+  keywords:
+    - minimal
+    - arm64
+    - aarch64
+    - embedded
+    - edge
+    - elxr
+
 image:
   name: elxr13-aarch64-minimal
   version: "1.0.0"
