@@ -3,8 +3,8 @@ repositories:
     type: "deb"  # Repository type: rpm or deb
     baseURL: "https://mirror.elxr.dev/elxr"
     pkgPrefix: "https://mirror.elxr.dev/elxr/"
-    releaseFile: "https://mirror.elxr.dev/elxr/dists/aria/Release"
-    releaseSign: "https://mirror.elxr.dev/elxr/dists/aria/Release.gpg"
+    releaseFile: "https://mirror.elxr.dev/elxr/dists/bianca/Release"
+    releaseSign: "https://mirror.elxr.dev/elxr/dists/bianca/Release.gpg"
     pbGPGKey: "https://mirror.elxr.dev/elxr/public.gpg"
     gpgCheck: true
     repoGPGCheck: true
