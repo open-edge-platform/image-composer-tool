@@ -307,9 +307,7 @@ func (p *eLxr) downloadImagePkgs(template *config.ImageTemplate) error {
 
 func loadRepoConfig(dist string, arch string) ([]debutils.RepoConfig, error) {
 	var repoConfigs []debutils.RepoConfig
-	if dist == "" {
-		dist = "elxr12"
-	}
+	dist = normalizeElxrDist(dist)
 
 	// Load provider repo config for eLxr based on requested distribution.
 	providerConfigs, err := config.LoadProviderRepoConfig(OsName, dist, arch)
@@ -350,6 +348,18 @@ func loadRepoConfig(dist string, arch string) ([]debutils.RepoConfig, error) {
 	}
 
 	return repoConfigs, nil
+}
+
+// normalizeElxrDist maps user/config aliases to supported distribution directory names.
+func normalizeElxrDist(dist string) string {
+	switch dist {
+	case "", "elxr12", "aria":
+		return "elxr12"
+	case "elxr13", "bianca":
+		return "elxr13"
+	default:
+		return dist
+	}
 }
 
 // displayImageArtifacts displays all image artifacts in the build directory

@@ -196,6 +196,28 @@ func TestLoadRepoConfig(t *testing.T) {
 	t.Logf("Successfully loaded repo config: %s", config[0].Name)
 }
 
+func TestNormalizeElxrDist(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"", "elxr12"},
+		{"aria", "elxr12"},
+		{"elxr12", "elxr12"},
+		{"bianca", "elxr13"},
+		{"elxr13", "elxr13"},
+		{"custom", "custom"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			if got := normalizeElxrDist(tt.in); got != tt.want {
+				t.Fatalf("normalizeElxrDist(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
 // mockChrootEnv is a simple mock implementation of ChrootEnvInterface for testing
 type mockChrootEnv struct{}
 
