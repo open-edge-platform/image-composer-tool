@@ -10,4 +10,4 @@ repositories:
     repoGPGCheck: true
     enabled: true
     component: "main non-free-firmware"  # Repository component/section identifier
-    buildPath: "./builds/elxr12/main"  # Will be replaced with temp_dir/builds/elxr12 at runtime
+    buildPath: "./builds/elxr13/main"  # Will be replaced with temp_dir/builds/elxr13 at runtime
