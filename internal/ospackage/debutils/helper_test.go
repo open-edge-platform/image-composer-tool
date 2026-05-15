@@ -2,6 +2,7 @@ package debutils
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"bytes"
 	"compress/gzip"
 	"fmt"
@@ -587,6 +588,83 @@ func TestImportOnlineFileToRepoDebAndTarGz(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(repoDir, "intel-driver-compiler-npu_1.0_amd64.deb")); err != nil {
 		t.Fatalf("expected extracted .deb from tar.gz in repo dir: %v", err)
+	}
+}
+
+func TestImportOnlineFileToRepoTarRejectsPathTraversal(t *testing.T) {
+	repoDir := t.TempDir()
+	archiveDir := t.TempDir()
+
+	var tarBuf bytes.Buffer
+	tw := tar.NewWriter(&tarBuf)
+	debPayload := []byte("deb-data")
+	if err := tw.WriteHeader(&tar.Header{
+		Name: "../../evil.deb",
+		Mode: 0644,
+		Size: int64(len(debPayload)),
+	}); err != nil {
+		t.Fatalf("failed to write tar header: %v", err)
+	}
+	if _, err := tw.Write(debPayload); err != nil {
+		t.Fatalf("failed to write tar payload: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("failed to close tar writer: %v", err)
+	}
+
+	tarPath := filepath.Join(archiveDir, "malicious.tar")
+	if err := os.WriteFile(tarPath, tarBuf.Bytes(), 0644); err != nil {
+		t.Fatalf("failed to write tar file: %v", err)
+	}
+
+	_, err := importOnlineFileToRepo(tarPath, repoDir)
+	if err == nil {
+		t.Fatal("expected path traversal tar entry to be rejected")
+	}
+	if !strings.Contains(err.Error(), "failed to validate tar entry") {
+		t.Fatalf("expected tar validation error, got: %v", err)
+	}
+
+	if _, statErr := os.Stat(filepath.Join(repoDir, "evil.deb")); !os.IsNotExist(statErr) {
+		t.Fatalf("expected no extracted file for malicious tar, stat error: %v", statErr)
+	}
+}
+
+func TestImportOnlineFileToRepoZipRejectsPathTraversal(t *testing.T) {
+	repoDir := t.TempDir()
+	archiveDir := t.TempDir()
+
+	zipPath := filepath.Join(archiveDir, "malicious.zip")
+	zipOut, err := os.Create(zipPath)
+	if err != nil {
+		t.Fatalf("failed to create zip file: %v", err)
+	}
+
+	zw := zip.NewWriter(zipOut)
+	entryWriter, err := zw.Create("../../evil.deb")
+	if err != nil {
+		t.Fatalf("failed to create zip entry: %v", err)
+	}
+	if _, err := entryWriter.Write([]byte("deb-data")); err != nil {
+		t.Fatalf("failed to write zip entry payload: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("failed to close zip writer: %v", err)
+	}
+	if err := zipOut.Close(); err != nil {
+		t.Fatalf("failed to close zip file: %v", err)
+	}
+
+	_, err = importOnlineFileToRepo(zipPath, repoDir)
+	if err == nil {
+		t.Fatal("expected path traversal zip entry to be rejected")
+	}
+	if !strings.Contains(err.Error(), "failed to validate zip entry") {
+		t.Fatalf("expected zip validation error, got: %v", err)
+	}
+
+	if _, statErr := os.Stat(filepath.Join(repoDir, "evil.deb")); !os.IsNotExist(statErr) {
+		t.Fatalf("expected no extracted file for malicious zip, stat error: %v", statErr)
 	}
 }
 

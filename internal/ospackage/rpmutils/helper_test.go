@@ -2,6 +2,7 @@ package rpmutils
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"bytes"
 	"compress/gzip"
 	"fmt"
@@ -1698,6 +1699,83 @@ func TestImportOnlineRPMFileToRepoRPMAndTarGz(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(repoDir, "kernel-6.6.0-1.azl3.x86_64.rpm")); err != nil {
 		t.Fatalf("expected extracted .rpm from tar.gz in repo dir: %v", err)
+	}
+}
+
+func TestImportOnlineRPMFileToRepoTarRejectsPathTraversal(t *testing.T) {
+	repoDir := t.TempDir()
+	archiveDir := t.TempDir()
+
+	var tarBuf bytes.Buffer
+	tw := tar.NewWriter(&tarBuf)
+	rpmPayload := []byte("rpm-data")
+	if err := tw.WriteHeader(&tar.Header{
+		Name: "../../evil.rpm",
+		Mode: 0644,
+		Size: int64(len(rpmPayload)),
+	}); err != nil {
+		t.Fatalf("failed to write tar header: %v", err)
+	}
+	if _, err := tw.Write(rpmPayload); err != nil {
+		t.Fatalf("failed to write tar payload: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("failed to close tar writer: %v", err)
+	}
+
+	tarPath := filepath.Join(archiveDir, "malicious.tar")
+	if err := os.WriteFile(tarPath, tarBuf.Bytes(), 0644); err != nil {
+		t.Fatalf("failed to write tar file: %v", err)
+	}
+
+	_, err := importOnlineRPMFileToRepo(tarPath, repoDir)
+	if err == nil {
+		t.Fatal("expected path traversal tar entry to be rejected")
+	}
+	if !strings.Contains(err.Error(), "failed to validate tar entry") {
+		t.Fatalf("expected tar validation error, got: %v", err)
+	}
+
+	if _, statErr := os.Stat(filepath.Join(repoDir, "evil.rpm")); !os.IsNotExist(statErr) {
+		t.Fatalf("expected no extracted file for malicious tar, stat error: %v", statErr)
+	}
+}
+
+func TestImportOnlineRPMFileToRepoZipRejectsPathTraversal(t *testing.T) {
+	repoDir := t.TempDir()
+	archiveDir := t.TempDir()
+
+	zipPath := filepath.Join(archiveDir, "malicious.zip")
+	zipOut, err := os.Create(zipPath)
+	if err != nil {
+		t.Fatalf("failed to create zip file: %v", err)
+	}
+
+	zw := zip.NewWriter(zipOut)
+	entryWriter, err := zw.Create("../../evil.rpm")
+	if err != nil {
+		t.Fatalf("failed to create zip entry: %v", err)
+	}
+	if _, err := entryWriter.Write([]byte("rpm-data")); err != nil {
+		t.Fatalf("failed to write zip entry payload: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("failed to close zip writer: %v", err)
+	}
+	if err := zipOut.Close(); err != nil {
+		t.Fatalf("failed to close zip file: %v", err)
+	}
+
+	_, err = importOnlineRPMFileToRepo(zipPath, repoDir)
+	if err == nil {
+		t.Fatal("expected path traversal zip entry to be rejected")
+	}
+	if !strings.Contains(err.Error(), "failed to validate zip entry") {
+		t.Fatalf("expected zip validation error, got: %v", err)
+	}
+
+	if _, statErr := os.Stat(filepath.Join(repoDir, "evil.rpm")); !os.IsNotExist(statErr) {
+		t.Fatalf("expected no extracted file for malicious zip, stat error: %v", statErr)
 	}
 }
 

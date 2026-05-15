@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -388,6 +389,42 @@ func downloadOnlineFile(fileURL, dstPath string, insecureSkipVerify bool) error 
 	return network.DownloadFile(fileURL, dstPath, insecureSkipVerify)
 }
 
+func archiveEntryDestinationPath(repoPath, entryName string) (string, error) {
+	normalizedEntryName := strings.ReplaceAll(entryName, "\\", "/")
+	cleanEntryName := path.Clean(normalizedEntryName)
+	if cleanEntryName == "" || cleanEntryName == "." || cleanEntryName == "/" {
+		return "", fmt.Errorf("invalid archive entry name %q", entryName)
+	}
+	if cleanEntryName == ".." || strings.HasPrefix(cleanEntryName, "../") || strings.HasPrefix(cleanEntryName, "/") {
+		return "", fmt.Errorf("archive entry %q attempts path traversal", entryName)
+	}
+
+	fileName := filepath.Base(cleanEntryName)
+	if fileName == "" || fileName == "." || fileName == ".." || fileName == "/" {
+		return "", fmt.Errorf("invalid archive entry name %q", entryName)
+	}
+
+	dstPath := filepath.Join(repoPath, fileName)
+	absRepoPath, err := filepath.Abs(repoPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve repository path %s: %w", repoPath, err)
+	}
+	absDstPath, err := filepath.Abs(dstPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve destination path %s: %w", dstPath, err)
+	}
+
+	relPath, err := filepath.Rel(absRepoPath, absDstPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to validate destination path %s: %w", absDstPath, err)
+	}
+	if relPath == ".." || strings.HasPrefix(relPath, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("archive entry %q resolves outside repository path", entryName)
+	}
+
+	return absDstPath, nil
+}
+
 func importOnlineFileToRepo(srcPath, repoPath string) (int, error) {
 	lowerName := strings.ToLower(filepath.Base(srcPath))
 	if strings.HasSuffix(lowerName, ".deb") {
@@ -440,9 +477,9 @@ func importOnlineFileToRepo(srcPath, repoPath string) (int, error) {
 				continue
 			}
 
-			fileName := filepath.Base(zipFile.Name)
-			if fileName == "." || fileName == "/" || fileName == "" {
-				continue
+			dstPath, err := archiveEntryDestinationPath(repoPath, zipFile.Name)
+			if err != nil {
+				return 0, fmt.Errorf("failed to validate zip entry %s: %w", zipFile.Name, err)
 			}
 
 			srcFile, err := zipFile.Open()
@@ -450,7 +487,6 @@ func importOnlineFileToRepo(srcPath, repoPath string) (int, error) {
 				return 0, fmt.Errorf("failed to read zip entry %s: %w", zipFile.Name, err)
 			}
 
-			dstPath := filepath.Join(repoPath, fileName)
 			dstFile, err := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 			if err != nil {
 				srcFile.Close()
@@ -500,12 +536,10 @@ func extractDebsFromTarReader(tarReader *tar.Reader, repoPath string) (int, erro
 			continue
 		}
 
-		fileName := filepath.Base(header.Name)
-		if fileName == "." || fileName == "/" || fileName == "" {
-			continue
+		dstPath, err := archiveEntryDestinationPath(repoPath, header.Name)
+		if err != nil {
+			return 0, fmt.Errorf("failed to validate tar entry %s: %w", header.Name, err)
 		}
-
-		dstPath := filepath.Join(repoPath, fileName)
 		dstFile, err := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 		if err != nil {
 			return 0, fmt.Errorf("failed to create output file %s: %w", dstPath, err)
