@@ -608,6 +608,27 @@ func DownloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSour
 		return downloadPkgList, nil, fmt.Errorf("creating cache directory %s: %w", absDestDir, err)
 	}
 
+	// Remove stale DEB files from previous runs so the local file:// repo contains
+	// only packages selected for this build. This prevents mixed-version solver
+	// conflicts when components publish different distro snapshots.
+	wanted := make(map[string]struct{}, len(downloadPkgList))
+	for _, name := range downloadPkgList {
+		wanted[name] = struct{}{}
+	}
+	existingDebs, err := filepath.Glob(filepath.Join(absDestDir, "*.deb"))
+	if err != nil {
+		return downloadPkgList, nil, fmt.Errorf("listing existing debs in cache directory %s: %w", absDestDir, err)
+	}
+	for _, debPath := range existingDebs {
+		name := filepath.Base(debPath)
+		if _, keep := wanted[name]; keep {
+			continue
+		}
+		if err := os.Remove(debPath); err != nil {
+			return downloadPkgList, nil, fmt.Errorf("removing stale deb %s: %w", debPath, err)
+		}
+	}
+
 	// Download packages using configured workers and cache directory
 	log.Infof("downloading %d packages to %s using %d workers", len(urls), absDestDir, config.Workers())
 	if err := pkgfetcher.FetchPackages(urls, absDestDir, config.Workers()); err != nil {

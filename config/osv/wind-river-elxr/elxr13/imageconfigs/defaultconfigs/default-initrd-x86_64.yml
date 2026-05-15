@@ -26,7 +26,7 @@ systemConfig:
     - procps
     - less
     - dbus
-    - policykit-1
+    - polkitd
     - dosfstools
     - efibootmgr
     - eject

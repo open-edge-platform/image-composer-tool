@@ -9,5 +9,5 @@ repositories:
     gpgCheck: true
     repoGPGCheck: true
     enabled: true
-    component: "main non-free-firmware"  # Repository component/section identifier
+    component: "main main-debian-community non-free-firmware non-free-firmware-debian-community"  # Repository component/section identifier
     buildPath: "./builds/elxr13/main"  # Will be replaced with temp_dir/builds/elxr13 at runtime

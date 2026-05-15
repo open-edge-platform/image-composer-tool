@@ -71,7 +71,7 @@ systemConfig:
     - procps
     - less
     - dbus
-    - policykit-1
+    - polkitd
     - curl
     - wget
     - uefi-ext4
