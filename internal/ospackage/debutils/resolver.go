@@ -1190,14 +1190,12 @@ func ResolveTopPackageConflicts(want string, all []ospackage.PackageInfo) (ospac
 			candidates = append(candidates, pi)
 			continue
 		}
-		// 3) prefix by want-version ("name-<version>")
-		// Only treat the trailing token as a version hint when it actually looks
-		// like a version (e.g., contains '.', '+', '~', ':', or '_').
-		// This avoids false matches for regular package names like "policykit-1".
+		// 3) prefix by want-version ("acl-")
 		if strings.HasPrefix(pi.Name, want+"-") {
+			// Extract string after "-" and compare with pi.Version
 			if dashIdx := strings.LastIndex(want, "-"); dashIdx != -1 {
 				verStr := want[dashIdx+1:]
-				if strings.ContainsAny(verStr, ".:+~_") && strings.Contains(pi.Version, verStr) {
+				if strings.Contains(pi.Version, verStr) {
 					candidates = append(candidates, pi)
 					continue
 				}
