@@ -1,5 +1,5 @@
 repositories:
-  - name: "aria"
+  - name: "bianca"
     type: "deb"  # Repository type: rpm or deb
     baseURL: "https://mirror.elxr.dev/elxr"
     pkgPrefix: "https://mirror.elxr.dev/elxr/"
