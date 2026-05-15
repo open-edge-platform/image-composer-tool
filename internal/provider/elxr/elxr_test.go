@@ -173,7 +173,7 @@ func TestLoadRepoConfig(t *testing.T) {
 		return
 	}
 
-	config, err := loadRepoConfig("", "amd64")
+	config, err := loadRepoConfig("elxr12", "amd64")
 	if err != nil {
 		t.Skipf("loadRepoConfig failed (expected in test environment): %v", err)
 		return
@@ -972,7 +972,7 @@ func TestLoadRepoConfigArchMapping(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.arch, func(t *testing.T) {
-			cfgs, err := loadRepoConfig("", tc.arch)
+			cfgs, err := loadRepoConfig("elxr12", tc.arch)
 			if err != nil {
 				t.Logf("loadRepoConfig failed for arch %s: %v", tc.arch, err)
 				return
@@ -1004,7 +1004,7 @@ func TestLoadRepoConfigInvalidArch(t *testing.T) {
 		return
 	}
 
-	_, err := loadRepoConfig("", "invalid-arch")
+	_, err := loadRepoConfig("elxr12", "invalid-arch")
 	if err == nil {
 		t.Error("Expected error for invalid architecture")
 	} else {
@@ -1330,7 +1330,7 @@ func TestLoadRepoConfigMultipleRepos(t *testing.T) {
 		return
 	}
 
-	cfgs, err := loadRepoConfig("", "amd64")
+	cfgs, err := loadRepoConfig("elxr12", "amd64")
 	if err != nil {
 		t.Logf("loadRepoConfig failed: %v", err)
 		return

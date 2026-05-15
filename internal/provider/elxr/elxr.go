@@ -61,7 +61,7 @@ func (p *eLxr) Init(dist, arch string) error {
 		arch = "arm64"
 	}
 
-	cfgs, err := loadRepoConfig("", arch)
+	cfgs, err := loadRepoConfig(dist, arch)
 	if err != nil {
 		log.Errorf("Parsing repo config failed: %v", err)
 		return err
@@ -305,11 +305,14 @@ func (p *eLxr) downloadImagePkgs(template *config.ImageTemplate) error {
 	return nil
 }
 
-func loadRepoConfig(repoUrl string, arch string) ([]debutils.RepoConfig, error) {
+func loadRepoConfig(dist string, arch string) ([]debutils.RepoConfig, error) {
 	var repoConfigs []debutils.RepoConfig
+	if dist == "" {
+		dist = "elxr12"
+	}
 
-	// Load provider repo config for elxr - use correct OS name
-	providerConfigs, err := config.LoadProviderRepoConfig(OsName, "elxr12", arch) // Use "wind-river-elxr" and "aria" dist
+	// Load provider repo config for eLxr based on requested distribution.
+	providerConfigs, err := config.LoadProviderRepoConfig(OsName, dist, arch)
 	if err != nil {
 		return repoConfigs, fmt.Errorf("failed to load provider repo config: %w", err)
 	}
