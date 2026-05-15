@@ -1,0 +1,97 @@
+image:
+  name: minimal-os-image-elxr
+  version: "12.0.0"
+
+target:
+  os: wind-river-elxr # Target OS name
+  dist: elxr13 # Target OS distribution
+  arch: x86_64 # Target OS architecture
+  imageType: raw # Image type, valid value: [raw, iso].
+
+disk:
+  name: Default_Raw # 1:1 mapping to the systemConfigs name
+  artifacts:
+    -
+      type: raw  # image file format
+      compression: gz # image compression format (optional)
+  size: 4GiB # 4G, 4GB, 4096 MiB also valid. (Required for raw)
+  partitionTableType: gpt # Partition table type, valid value: [gpt, mbr]
+  partitions: # Required for raw, optional for ISO, not needed for rootfs.
+    - id: boot
+      type: esp
+      flags:
+        - esp
+        - boot
+      start: 1MiB
+      end: 513MiB
+      fsType: fat32
+      mountPoint: /boot/efi
+      mountOptions: umask=0077
+
+    - id: rootfs
+      type: linux-root-amd64
+      start: 513MiB
+      end: 2561MiB  # 513MiB + 2GiB (2048MiB) = 2561MiB
+      fsType: ext4
+      mountPoint: /
+      mountOptions: defaults
+
+    - id: roothashmap
+      type: linux
+      start: 2561MiB
+      end: 3061MiB  # 2561MiB + 500MiB = 3061MiB
+      fsType: ext4
+      mountPoint: none
+
+    - id: userdata
+      type: linux
+      start: 3061MiB
+      end: "0"  # 2561MiB + 2GiB (2048MiB) = 4609MiB
+      fsType: ext4
+      mountPoint: /opt
+
+systemConfig:
+  name: Default_Raw
+  description: Default yml configuration for raw image
+
+  bootloader:
+    bootType: efi # (efi or legacy)
+    provider: systemd-boot # (grub for efi and legacy mode, or systemd-boot for efi mode)
+
+  immutability:
+    enabled: true # default is true
+
+  packages:
+    - ca-certificates
+    - vim
+    - sudo
+    - net-tools
+    - openssh-client
+    - openssh-server
+    - procps
+    - less
+    - dbus
+    - policykit-1
+    - curl
+    - wget
+    - uefi-ext4
+    - systemd-resolved
+    - cloud-guest-utils
+    - dracut
+    - systemd-boot
+    - elxr-archive-keyring
+    - systemd-timesyncd
+    - efibootmgr
+
+  additionalFiles:
+    - local: ../additionalfiles/dhcp.network
+      final: /etc/systemd/network/dhcp.network
+    - local: ../additionalfiles/elxr-aria.list
+      final: /etc/apt/sources.list.d/elxr-aria.list
+
+  kernel:
+    name: kernel
+    cmdline: "quiet splash console=ttyS0,115200 console=tty0 loglevel=7"
+    uki: true
+    packages:
+     - linux-image-amd64

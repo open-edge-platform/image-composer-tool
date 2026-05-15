@@ -1,0 +1,13 @@
+repositories:
+  - name: "aria"
+    type: "deb"  # Repository type: rpm or deb
+    baseURL: "https://mirror.elxr.dev/elxr"
+    pkgPrefix: "https://mirror.elxr.dev/elxr/"
+    releaseFile: "https://mirror.elxr.dev/elxr/dists/aria/Release"
+    releaseSign: "https://mirror.elxr.dev/elxr/dists/aria/Release.gpg"
+    pbGPGKey: "https://mirror.elxr.dev/elxr/public.gpg"
+    gpgCheck: true
+    repoGPGCheck: true
+    enabled: true
+    component: "main non-free-firmware"  # Repository component/section identifier
+    buildPath: "./builds/elxr12/main"  # Will be replaced with temp_dir/builds/elxr12 at runtime
