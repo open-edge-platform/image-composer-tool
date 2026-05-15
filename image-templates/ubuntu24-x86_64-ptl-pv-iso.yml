@@ -309,7 +309,24 @@ systemConfig:
 
   hostname: ubuntu24-ptl-pv
 
+  # Declarative network configuration
+  # network:
+  #   backend: systemd-networkd
+  #   interfaces:
+  #     # Primary interface with DHCP
+  #     - name: enp1s0
+  #       dhcp4: true
 
+  #     # Secondary interface with static IP
+  #     - name: enp2s0
+  #       addresses:
+  #         - "10.0.0.100/24"
+  #       routes:
+  #         - to: default
+  #           via: "10.0.0.1"
+  #       nameservers:
+  #         - "8.8.8.8"
+  #         - "8.8.4.4"
 
   kernel:
     version: "260128t080735z-r2"
