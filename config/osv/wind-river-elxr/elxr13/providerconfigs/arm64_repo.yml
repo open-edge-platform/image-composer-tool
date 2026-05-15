@@ -5,7 +5,7 @@ repositories:
     pkgPrefix: "https://mirror.elxr.dev/elxr/"
     releaseFile: "https://mirror.elxr.dev/elxr/dists/bianca/Release"
     releaseSign: "https://mirror.elxr.dev/elxr/dists/bianca/Release.gpg"
-    pbGPGKey: "https://mirror.elxr.dev/elxr/public.gpg"
+    pbGPGKey: "https://mirror.elxr.dev/elxr/bianca.gpg"
     gpgCheck: true
     repoGPGCheck: true
     enabled: true
