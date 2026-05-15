@@ -1,0 +1,107 @@
+# AI-searchable metadata for template discovery
+metadata:
+  description: ELXR 13 image with Intel DL Streamer for video analytics and AI inference
+  use_cases:
+    - Video analytics pipelines
+    - AI inference at the edge
+    - Computer vision applications
+    - Media processing workloads
+    - Deep learning inference
+  keywords:
+    - dlstreamer
+    - video
+    - analytics
+    - ai
+    - inference
+    - computer-vision
+    - media
+    - deep-learning
+    - intel
+    - elxr
+
+image:
+  name: elxr13-dlstreamer-x86_64
+  version: "13.0.0"
+
+target:
+  os: wind-river-elxr # Target OS name
+  dist: elxr13 # Target OS distribution
+  arch: x86_64 # Target OS architecture
+  imageType: raw # Image type, valid value: [raw, iso].
+
+# Sample list of additional package repositories; replace codename, url, and pkey values as needed
+packageRepositories:
+  - codename: "ubuntu22"
+    url: "https://apt.repos.intel.com/openvino/2025"
+    pkey: "https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB"
+    component: "main"
+
+  - codename: "jammy"
+    url: "http://archive.ubuntu.com/ubuntu"
+    pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x871920D1991BC93C" # Uncomment and replace in real config
+    component: "main universe"
+
+  - codename: "jammy-updates"
+    url: "http://archive.ubuntu.com/ubuntu"
+    pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x871920D1991BC93C"
+    component: "main universe"
+
+  - codename: "noble"
+    url: "https://download.01.org/intel-linux-overlay/ubuntu/"
+    pkey: "https://download.01.org/intel-linux-overlay/ubuntu/E6FA98203588250569758E97D176E3162086EE4C.gpg"
+    component: "kernels"
+
+  - codename: "ubuntu22"
+    url: "https://apt.repos.intel.com/edgeai/dlstreamer/ubuntu22"
+    pkey: "https://apt.repos.intel.com/edgeai/dlstreamer/GPG-PUB-KEY-INTEL-DLS.gpg"
+
+  - codename: "jammy"
+    url: "https://repositories.intel.com/gpu/ubuntu"
+    pkey: "https://repositories.intel.com/gpu/intel-graphics.key"
+    component: "unified"
+
+disk:
+  name: Minimal_Raw # 1:1 mapping to the systemConfigs name
+  artifacts:
+    -
+      type: raw  # image file format, valid value [raw, vhd, vhdx, qcow2, vmdk, vdi]
+      compression: gz # image compression format (optional)
+  size: 8GiB # 4G, 4GB, 4096 MiB also valid. (Required for raw)
+  partitionTableType: gpt # Partition table type, valid value: [gpt, mbr]
+  partitions: # Required for raw, optional for ISO, not needed for rootfs.
+    - id: boot
+      type: esp
+      flags:
+        - esp
+        - boot
+      start: 1MiB
+      end: 513MiB
+      fsType: fat32
+      mountPoint: /boot/efi
+      mountOptions: umask=0077
+
+    - id: rootfs
+      type: linux-root-amd64
+      start: 513MiB
+      end: "0"
+      fsType: ext4
+      mountPoint: /
+      mountOptions: defaults
+
+systemConfig:
+  name: Minimal_Raw
+  description: Default yml configuration for raw image
+
+  immutability:
+    enabled: false # default is true, overridden to false here
+
+  packages:
+    - intel-dlstreamer_2025.2.0
+    - firmware-linux
+
+  kernel:
+    version: "251229t065211z-r2"
+    cmdline: "console=ttyS0,115200 console=tty0 loglevel=7 i915.force_probe=*"
+    packages:
+      - linux-image-6.12-intel
+      - linux-headers-6.12-intel

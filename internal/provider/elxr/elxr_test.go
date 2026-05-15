@@ -173,7 +173,7 @@ func TestLoadRepoConfig(t *testing.T) {
 		return
 	}
 
-	config, err := loadRepoConfig("", "amd64")
+	config, err := loadRepoConfig("elxr12", "amd64")
 	if err != nil {
 		t.Skipf("loadRepoConfig failed (expected in test environment): %v", err)
 		return
@@ -194,6 +194,73 @@ func TestLoadRepoConfig(t *testing.T) {
 	}
 
 	t.Logf("Successfully loaded repo config: %s", config[0].Name)
+}
+
+func TestLoadRepoConfigElxr13Bianca(t *testing.T) {
+	originalDir, err := os.Getwd()
+	if err != nil {
+		t.Skipf("Cannot get current working directory: %v", err)
+		return
+	}
+
+	defer func() {
+		if err := os.Chdir(originalDir); err != nil {
+			t.Logf("Failed to change back to original directory: %v", err)
+		}
+	}()
+
+	if err := os.Chdir("../../../"); err != nil {
+		t.Skipf("Cannot change to project root: %v", err)
+		return
+	}
+
+	config, err := loadRepoConfig("elxr13", "amd64")
+	if err != nil {
+		t.Skipf("loadRepoConfig failed (expected in test environment): %v", err)
+		return
+	}
+
+	if len(config) == 0 {
+		t.Fatal("Expected at least one repository config")
+	}
+
+	if got := config[0].Name; got == "" {
+		t.Fatal("Expected repository name to be set")
+	}
+
+	if !strings.Contains(config[0].PkgList, "/dists/bianca/") {
+		t.Fatalf("Expected PkgList to target bianca dist, got %q", config[0].PkgList)
+	}
+
+	if !strings.Contains(config[0].PkgList, "/binary-amd64/Packages.gz") {
+		t.Fatalf("Expected PkgList to target amd64 package index, got %q", config[0].PkgList)
+	}
+
+	if !strings.Contains(config[0].PkgPrefix, "mirror.elxr.dev/elxr") {
+		t.Fatalf("Expected PkgPrefix to target ELXR mirror, got %q", config[0].PkgPrefix)
+	}
+}
+
+func TestNormalizeElxrDist(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"", "elxr12"},
+		{"aria", "elxr12"},
+		{"elxr12", "elxr12"},
+		{"bianca", "elxr13"},
+		{"elxr13", "elxr13"},
+		{"custom", "custom"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			if got := normalizeElxrDist(tt.in); got != tt.want {
+				t.Fatalf("normalizeElxrDist(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
 }
 
 // mockChrootEnv is a simple mock implementation of ChrootEnvInterface for testing
@@ -972,7 +1039,7 @@ func TestLoadRepoConfigArchMapping(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.arch, func(t *testing.T) {
-			cfgs, err := loadRepoConfig("", tc.arch)
+			cfgs, err := loadRepoConfig("elxr12", tc.arch)
 			if err != nil {
 				t.Logf("loadRepoConfig failed for arch %s: %v", tc.arch, err)
 				return
@@ -1004,7 +1071,7 @@ func TestLoadRepoConfigInvalidArch(t *testing.T) {
 		return
 	}
 
-	_, err := loadRepoConfig("", "invalid-arch")
+	_, err := loadRepoConfig("elxr12", "invalid-arch")
 	if err == nil {
 		t.Error("Expected error for invalid architecture")
 	} else {
@@ -1330,7 +1397,7 @@ func TestLoadRepoConfigMultipleRepos(t *testing.T) {
 		return
 	}
 
-	cfgs, err := loadRepoConfig("", "amd64")
+	cfgs, err := loadRepoConfig("elxr12", "amd64")
 	if err != nil {
 		t.Logf("loadRepoConfig failed: %v", err)
 		return

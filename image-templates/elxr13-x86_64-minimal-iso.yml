@@ -1,0 +1,26 @@
+# AI-searchable metadata for template discovery
+metadata:
+  description: Minimal ELXR 13 bootable ISO image for installation media
+  use_cases:
+    - Creating bootable installation media
+    - USB/DVD installation
+    - Bare metal provisioning
+    - System recovery
+  keywords:
+    - iso
+    - bootable
+    - installation
+    - usb
+    - dvd
+    - minimal
+    - elxr
+
+image:
+  name: elxr13-x86_64-minimal
+  version: "1.0.0"
+
+target:
+  os: wind-river-elxr # Target OS name
+  dist: elxr13 # Target OS distribution
+  arch: x86_64 # Target OS architecture
+  imageType: iso # Image type, valid value: [raw, iso].

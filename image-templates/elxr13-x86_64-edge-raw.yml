@@ -1,0 +1,84 @@
+# AI-searchable metadata for template discovery
+metadata:
+  description: ELXR 13 edge-optimized image with container runtime and edge computing packages
+  use_cases:
+    - Edge computing deployments
+    - Container workloads at the edge
+    - IoT gateway systems
+    - Industrial edge nodes
+  keywords:
+    - edge
+    - container
+    - docker
+    - iot
+    - gateway
+    - industrial
+    - elxr
+
+image:
+  name: minimal-os-image-elxr
+  version: "13.0.0"
+
+target:
+  os: wind-river-elxr
+  dist: elxr13
+  arch: x86_64
+  imageType: raw
+
+# Sample list of additional package repositories; replace codename, url, and pkey values as needed
+packageRepositories:
+  - codename: "company-internal"
+    url: "<URL>"
+    pkey: "<PUBLIC_KEY_URL>" # Uncomment and replace in real config
+    component: "main"
+
+  - codename: "dev-tools"
+    url: "<URL>"
+    pkey: "<PUBLIC_KEY_URL>" # Uncomment and replace in real config
+
+  - codename: "intel-openvino"
+    url: "<URL>"
+    pkey: "<PUBLIC_KEY_URL>" # Uncomment and replace in real config
+    component: "restricted"
+
+systemConfig:
+  name: edge
+  description: Minimal eLxr image with immutable rootfs
+
+  immutability:
+    enabled: true # default is true
+    # To enable Secure Boot, provide the actual file paths for your environment below and uncomment the relevant lines.
+    # secureBootDBKey: "<SECURE_BOOT_DB_KEY_PATH>"
+    # secureBootDBCrt: "<SECURE_BOOT_DB_CRT_PATH>"
+    # secureBootDBCer: "<SECURE_BOOT_DB_CER_PATH>"
+
+  packages:
+    - systemd-boot
+    - dracut
+    - linux-image-amd64
+    - ca-certificates
+    - vim
+    - sudo
+    - net-tools
+    - openssh-client
+    - openssh-server
+    - procps
+    - less
+    - dbus
+    - policykit-1
+    - curl
+    - wget
+    - ostree
+    - ostree-boot
+    #- python3-apt-ostree
+    - uefi-ext4
+    - systemd-resolved
+    - cloud-guest-utils
+    - xterm
+
+  kernel:
+    version: "6.1"
+    cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
+    #packages:
+    #  - kernel-elxr12
+    #  - kernel-modules-elxr12
