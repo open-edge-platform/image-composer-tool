@@ -3056,6 +3056,123 @@ func TestEmptyPackageRepositories(t *testing.T) {
 	}
 }
 
+func TestValidatePackageRepositoryPackages(t *testing.T) {
+	tests := []struct {
+		name        string
+		repo        PackageRepository
+		expectError string
+	}{
+		{
+			name: "valid local repo with https package URLs",
+			repo: PackageRepository{
+				Codename: "localdeb",
+				Path:     "/tmp/localdeb",
+				PKey:     "[trusted=yes]",
+				Packages: []string{"https://example.com/pkg.deb", "https://example.com/archive.tar.gz"},
+			},
+		},
+		{
+			name: "valid local repo with local file path packages",
+			repo: PackageRepository{
+				Codename: "localdeb",
+				Path:     "/tmp/localdeb",
+				PKey:     "[trusted=yes]",
+				Packages: []string{"/opt/packages/custom.deb", "./relative/package.rpm"},
+			},
+		},
+		{
+			name: "packages without path is valid (temp dir auto-created at runtime)",
+			repo: PackageRepository{
+				Codename: "localdeb",
+				PKey:     "[trusted=yes]",
+				Packages: []string{"https://example.com/pkg.deb"},
+			},
+		},
+		{
+			name: "packages URL must be https",
+			repo: PackageRepository{
+				Codename: "localdeb",
+				Path:     "/tmp/localdeb",
+				PKey:     "[trusted=yes]",
+				Packages: []string{"http://example.com/pkg.deb"},
+			},
+			expectError: "must use https",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.repo.ValidatePackageRepository()
+			if tt.expectError == "" && err != nil {
+				t.Fatalf("expected no error, got: %v", err)
+			}
+			if tt.expectError != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tt.expectError)
+				}
+				if !strings.Contains(err.Error(), tt.expectError) {
+					t.Fatalf("expected error containing %q, got: %v", tt.expectError, err)
+				}
+			}
+		})
+	}
+}
+
+func TestValidatePackageRepositoryInsecureSkipVerify(t *testing.T) {
+	tests := []struct {
+		name        string
+		repo        PackageRepository
+		expectError string
+	}{
+		{
+			name: "valid repo with insecureSkipVerify=true",
+			repo: PackageRepository{
+				Codename:           "localdeb",
+				Path:               "/tmp/localdeb",
+				PKey:               "[trusted=yes]",
+				Packages:           []string{"https://example.com/pkg.deb"},
+				InsecureSkipVerify: true,
+			},
+		},
+		{
+			name: "valid repo with insecureSkipVerify=false",
+			repo: PackageRepository{
+				Codename:           "localdeb",
+				Path:               "/tmp/localdeb",
+				PKey:               "[trusted=yes]",
+				Packages:           []string{"https://example.com/pkg.deb"},
+				InsecureSkipVerify: false,
+			},
+		},
+		{
+			name: "insecureSkipVerify without packages is accepted",
+			repo: PackageRepository{
+				Codename:           "localdeb",
+				Path:               "/tmp/localdeb",
+				PKey:               "[trusted=yes]",
+				InsecureSkipVerify: true,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.repo.ValidatePackageRepository()
+			if tt.expectError == "" && err != nil {
+				t.Fatalf("expected no error, got: %v", err)
+			}
+			if tt.expectError != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tt.expectError)
+				}
+				if !strings.Contains(err.Error(), tt.expectError) {
+					t.Fatalf("expected error containing %q, got: %v", tt.expectError, err)
+				}
+			}
+		})
+	}
+}
+
 func TestMergePackageRepositories(t *testing.T) {
 	defaultRepos := []PackageRepository{
 		{Codename: "default1", URL: "https://default.com/1", PKey: "https://default.com/1.pub"},

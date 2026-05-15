@@ -198,16 +198,33 @@ func LocalUserPackages() ([]ospackage.PackageInfo, func(), error) {
 	}
 
 	for i, repo := range UserRepo {
-		if repo.Path == "<PATH>" || repo.Path == "" {
-			continue
+		repoPath := repo.Path
+		if repoPath == "<PATH>" || repoPath == "" {
+			if len(repo.Packages) == 0 {
+				continue
+			}
+			// auto-create a temp dir when path is not specified but packages are
+			tmpPath, err := os.MkdirTemp(config.TempDir(), "ict-localrepo-*")
+			if err != nil {
+				combinedCleanup()
+				return nil, nil, fmt.Errorf("failed to create temporary directory for local repository: %w", err)
+			}
+			cleanups = append(cleanups, func() { os.RemoveAll(tmpPath) })
+			repoPath = tmpPath
+		}
+
+		if err := PrepareLocalRepositoryFiles(repoPath, repo.Packages, repo.InsecureSkipVerify); err != nil {
+			combinedCleanup()
+			log.Errorf("failed to prepare local DEB repository source path %s: %v", repoPath, err)
+			return nil, nil, fmt.Errorf("failed to prepare local DEB repository source path %s: %w", repoPath, err)
 		}
 
 		repoName := fmt.Sprintf("localrepo%d", i+1)
-		_, tempURL, cleanup, err := CreateTemporaryRepository(repo.Path, repoName, Architecture)
+		_, tempURL, cleanup, err := CreateTemporaryRepository(repoPath, repoName, Architecture)
 		if err != nil {
 			combinedCleanup()
-			log.Errorf("failed to create temporary DEB repository for %s: %v", repo.Path, err)
-			return nil, nil, fmt.Errorf("failed to create temporary DEB repository for %s: %w", repo.Path, err)
+			log.Errorf("failed to create temporary DEB repository for %s: %v", repoPath, err)
+			return nil, nil, fmt.Errorf("failed to create temporary DEB repository for %s: %w", repoPath, err)
 		}
 		cleanups = append(cleanups, cleanup)
 
@@ -219,8 +236,8 @@ func LocalUserPackages() ([]ospackage.PackageInfo, func(), error) {
 		localPkgs, err := ParseRepositoryMetadata(tempURL, pkggz, releaseFile, "", "[trusted=yes]", buildPath, Architecture, repo.AllowPackages)
 		if err != nil {
 			combinedCleanup()
-			log.Errorf("failed to parse local DEB repository %s: %v", repo.Path, err)
-			return nil, nil, fmt.Errorf("failed to parse local DEB repository %s: %w", repo.Path, err)
+			log.Errorf("failed to parse local DEB repository %s: %v", repoPath, err)
+			return nil, nil, fmt.Errorf("failed to parse local DEB repository %s: %w", repoPath, err)
 		}
 		allLocalPackages = append(allLocalPackages, localPkgs...)
 	}

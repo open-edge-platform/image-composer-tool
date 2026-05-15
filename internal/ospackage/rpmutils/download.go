@@ -84,22 +84,38 @@ func LocalUserPackages() ([]ospackage.PackageInfo, func(), error) {
 	}
 
 	for i, repo := range UserRepo {
-		if repo.Path == "" {
-			continue
+		repoPath := repo.Path
+		if repoPath == "" {
+			if len(repo.Packages) == 0 {
+				continue
+			}
+			// auto-create a temp dir when path is not specified but packages are
+			tmpPath, err := os.MkdirTemp(config.TempDir(), "ict-localrepo-*")
+			if err != nil {
+				combinedCleanup()
+				return nil, nil, fmt.Errorf("failed to create temporary directory for local repository: %w", err)
+			}
+			cleanups = append(cleanups, func() { os.RemoveAll(tmpPath) })
+			repoPath = tmpPath
+		}
+
+		if err := PrepareLocalRepositoryFiles(repoPath, repo.Packages, repo.InsecureSkipVerify); err != nil {
+			combinedCleanup()
+			return nil, nil, fmt.Errorf("failed to prepare local RPM repository source path %s: %w", repoPath, err)
 		}
 
 		repoName := fmt.Sprintf("rpmlocrepo%d", i+1)
 		var repoURL string
 
 		// Check if it's already a proper repository with repodata metadata
-		repoMetaDataPath := filepath.Join(repo.Path, "repodata/repomd.xml")
+		repoMetaDataPath := filepath.Join(repoPath, "repodata/repomd.xml")
 		if _, err := os.Stat(repoMetaDataPath); err != nil {
 			if os.IsNotExist(err) {
 				// Not a proper repo - copy RPMs, generate metadata, and serve over HTTP
-				_, tempURL, cleanup, err := CreateTemporaryRepository(repo.Path, repoName)
+				_, tempURL, cleanup, err := CreateTemporaryRepository(repoPath, repoName)
 				if err != nil {
 					combinedCleanup()
-					return nil, nil, fmt.Errorf("failed to create temporary RPM repository for %s: %w", repo.Path, err)
+					return nil, nil, fmt.Errorf("failed to create temporary RPM repository for %s: %w", repoPath, err)
 				}
 				cleanups = append(cleanups, cleanup)
 				repoURL = tempURL
@@ -109,10 +125,10 @@ func LocalUserPackages() ([]ospackage.PackageInfo, func(), error) {
 			}
 		} else {
 			// Already a proper repo - serve it directly over HTTP
-			tempURL, serverCleanup, err := network.ServeRepositoryHTTP(repo.Path)
+			tempURL, serverCleanup, err := network.ServeRepositoryHTTP(repoPath)
 			if err != nil {
 				combinedCleanup()
-				return nil, nil, fmt.Errorf("failed to serve local RPM repository %s via HTTP: %w", repo.Path, err)
+				return nil, nil, fmt.Errorf("failed to serve local RPM repository %s via HTTP: %w", repoPath, err)
 			}
 			cleanups = append(cleanups, serverCleanup)
 			repoURL = tempURL
@@ -128,7 +144,7 @@ func LocalUserPackages() ([]ospackage.PackageInfo, func(), error) {
 		localPkgs, err := ParseRepositoryMetadata(repoURL, primaryXmlURL, repo.AllowPackages)
 		if err != nil {
 			combinedCleanup()
-			return nil, nil, fmt.Errorf("parsing local RPM repository %s failed: %w", repo.Path, err)
+			return nil, nil, fmt.Errorf("parsing local RPM repository %s failed: %w", repoPath, err)
 		}
 		allLocalPackages = append(allLocalPackages, localPkgs...)
 	}
