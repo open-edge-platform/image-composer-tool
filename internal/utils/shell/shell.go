@@ -124,6 +124,7 @@ var commandMap = map[string][]string{
 	"ukify":              {"/usr/bin/ukify", "/usr/local/bin/ukify"},
 	"umount":             {"/usr/bin/umount"},
 	"uname":              {"/usr/bin/uname"},
+	"update-binfmts":     {"/usr/sbin/update-binfmts", "/usr/bin/update-binfmts"},
 	"uniq":               {"/usr/bin/uniq"},
 	"veritysetup":        {"/usr/sbin/veritysetup"},
 	"vgcreate":           {"/usr/sbin/vgcreate"},
