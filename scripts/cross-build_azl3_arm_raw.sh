@@ -59,8 +59,44 @@ run_qemu_boot_test() {
     echo "Error: Image pattern not provided to run_qemu_boot_test"
     return 1
   fi
-  
-  BIOS="/usr/share/OVMF/OVMF_CODE_4M.fd"
+
+  # Prefer AArch64 firmware files and fall back to generic qemu-efi image if needed.
+  local CODE_FD=""
+  local VARS_FD=""
+  local BIOS_FD=""
+  for code_path in \
+    /usr/share/AAVMF/AAVMF_CODE.fd \
+    /usr/share/AAVMF/AAVMF_CODE.ms.fd \
+    /usr/share/qemu-efi-aarch64/QEMU_EFI.fd; do
+    if [ -f "$code_path" ]; then
+      if [[ "$code_path" == *QEMU_EFI.fd ]]; then
+        BIOS_FD="$code_path"
+      else
+        CODE_FD="$code_path"
+      fi
+      break
+    fi
+  done
+
+  if [ -n "$CODE_FD" ]; then
+    for vars_path in \
+      /usr/share/AAVMF/AAVMF_VARS.fd \
+      /usr/share/AAVMF/AAVMF_VARS.ms.fd; do
+      if [ -f "$vars_path" ]; then
+        VARS_FD="$vars_path"
+        break
+      fi
+    done
+  fi
+
+  if [ -z "$BIOS_FD" ] && { [ -z "$CODE_FD" ] || [ -z "$VARS_FD" ]; }; then
+    echo "Unable to find ARM UEFI firmware files for qemu-system-aarch64"
+    echo "Checked AAVMF CODE/VARS and qemu-efi-aarch64 QEMU_EFI.fd paths"
+    return 1
+  fi
+
+  local QEMU_MACHINE="virt,accel=tcg"
+  local QEMU_CPU="max"
   TIMEOUT=30
   SUCCESS_STRING="login:"
   LOGFILE="qemu_serial.log"
@@ -163,31 +199,43 @@ run_qemu_boot_test() {
   sudo bash -c "
     LOGFILE=\"$LOGFILE\"
     SUCCESS_STRING=\"$SUCCESS_STRING\"
+    TIMEOUT=\"$TIMEOUT\"
     IMAGE=\"$IMAGE\"
     RAW_IMAGE=\"$RAW_IMAGE\"
     ORIGINAL_DIR=\"$ORIGINAL_DIR\"
+    CODE_FD=\"$CODE_FD\"
+    VARS_FD=\"$VARS_FD\"
+    BIOS_FD=\"$BIOS_FD\"
+    QEMU_MACHINE=\"$QEMU_MACHINE\"
+    QEMU_CPU=\"$QEMU_CPU\"
         #-enable-kvm \\
     
-    touch \"\$LOGFILE\" && chmod 666 \"\$LOGFILE\"    
-    nohup qemu-system-aarch64 \\
+    touch \"\$LOGFILE\" && chmod 666 \"\$LOGFILE\"
+
+    qemu_cmd=\"qemu-system-aarch64 \\
+        -machine \$QEMU_MACHINE \\
         -m 2048 \\
-        -cpu host \\
+        -cpu \$QEMU_CPU \\
         -drive if=none,file=\"\$IMAGE\",format=raw,id=nvme0 \\
         -device nvme,drive=nvme0,serial=deadbeef \\
-        -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \\
-        -drive if=pflash,format=raw,file=/usr/share/OVMF/OVMF_VARS_4M.fd \\
         -nographic \\
-        -serial mon:stdio \\
-        > \"\$LOGFILE\" 2>&1 &
+        -serial mon:stdio\"
+
+    if [ -n \"\$CODE_FD\" ] && [ -n \"\$VARS_FD\" ]; then
+      qemu_cmd=\"\$qemu_cmd -drive if=pflash,format=raw,readonly=on,file=\"\$CODE_FD\" -drive if=pflash,format=raw,file=\"\$VARS_FD\"\"
+    else
+      qemu_cmd=\"\$qemu_cmd -bios \"\$BIOS_FD\"\"
+    fi
+
+    nohup sh -c \"\$qemu_cmd\" > \"\$LOGFILE\" 2>&1 &
 
     qemu_pid=\$!
     echo \"QEMU launched as root with PID \$qemu_pid\"
     echo \"Current working dir: \$(pwd)\"
 
     # Wait for SUCCESS_STRING or timeout
-    timeout=30
     elapsed=0
-    while ! grep -q \"\$SUCCESS_STRING\" \"\$LOGFILE\" && [ \$elapsed -lt \$timeout ]; do
+    while ! grep -q \"\$SUCCESS_STRING\" \"\$LOGFILE\" && [ \$elapsed -lt \$TIMEOUT ]; do
       sleep 1
       elapsed=\$((elapsed + 1))
     done
