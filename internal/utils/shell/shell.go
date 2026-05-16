@@ -449,7 +449,6 @@ func verifyCmdWithFullPath(cmd, chrootPath string) (string, error) {
 func GetFullCmdStr(cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error) {
 	var fullCmdStr string
 	envValStr := ""
-	runningAsRoot := os.Geteuid() == 0
 	for _, env := range envVal {
 		envValStr += env + " "
 	}
@@ -470,11 +469,7 @@ func GetFullCmdStr(cmdStr string, sudo bool, chrootPath string, envVal []string)
 			envValStr += key + "=" + value + " "
 		}
 
-		if sudo && !runningAsRoot {
-			fullCmdStr = "sudo " + envValStr + "chroot " + chrootPath + " " + fullPathCmdStr
-		} else {
-			fullCmdStr = envValStr + "chroot " + chrootPath + " " + fullPathCmdStr
-		}
+		fullCmdStr = "sudo " + envValStr + "chroot " + chrootPath + " " + fullPathCmdStr
 		chrootDir := filepath.Base(chrootPath)
 		// log.Debugf("Chroot " + chrootDir + " Exec: [" + fullPathCmdStr + "]")
 		// Avoid logging full command string to prevent leaking sensitive data.
@@ -488,15 +483,10 @@ func GetFullCmdStr(cmdStr string, sudo bool, chrootPath string, envVal []string)
 				envValStr += key + "=" + value + " "
 			}
 
-			if runningAsRoot {
-				fullCmdStr = envValStr + fullPathCmdStr
-				log.Debugf("Exec without sudo: [already running as root]")
-			} else {
-				fullCmdStr = "sudo " + envValStr + fullPathCmdStr
-				// log.Debugf("Exec: [sudo " + fullPathCmdStr + "]")
-				// Avoid logging full command string to prevent leaking sensitive data.
-				log.Debugf("Exec with sudo: [command executed]")
-			}
+			fullCmdStr = "sudo " + envValStr + fullPathCmdStr
+			// log.Debugf("Exec: [sudo " + fullPathCmdStr + "]")
+			// Avoid logging full command string to prevent leaking sensitive data.
+			log.Debugf("Exec with sudo: [command executed]")
 		} else {
 			fullCmdStr = fullPathCmdStr
 			// log.Debugf("Exec: [" + fullPathCmdStr + "]")

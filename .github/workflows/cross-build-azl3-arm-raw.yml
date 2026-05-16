@@ -1,0 +1,95 @@
+name: Build Azure Linux Raw Image - ARM 
+on:
+  workflow_dispatch:             # Manual runs
+    push:
+    inputs:
+      ref:
+        description: "Branch or SHA to test (e.g. feature/x or a1b2c3)"
+        required: false
+      run_qemu_test:
+        description: "Run QEMU boot test after build"
+        required: false
+        default: "false"
+        type: choice
+        options:
+        - "true"
+        - "false"
+permissions:
+  contents: read
+
+jobs:
+  build-azl3-arm-raw:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd #v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd #v4.0.0
+
+      - name: Install Earthly
+        uses: earthly/actions-setup@43211c7a0eae5344d6d79fb4aaf209c8f8866203 #v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          version: "latest"
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-aarch64 ovmf tree jq systemd-ukify mmdebstrap systemd-boot qemu-efi-aarch64
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c #v6.4.0
+        with:
+          go-version: stable
+
+      - name: Prepare build script
+        run: |
+          if [ ! -f scripts/cross-build_azl3_arm_raw.sh ]; then
+            echo "scripts/cross-build_azl3_arm_raw.sh not found!"
+            exit 1
+          fi
+          chmod +x scripts/cross-build_azl3_arm_raw.sh
+
+      - name: Run azl3 Raw Image Cross Build
+        env:
+          #RUN_QEMU_TEST: ${{ github.event.push }}
+          RUN_QEMU_TEST: false
+        run: |
+          echo "Starting azl3 raw image cross build..."
+          # Ensure script has access to docker group for Earthly
+          sudo usermod -aG docker $USER
+          
+          # Prepare arguments with input validation
+          ARGS=""
+          case "${RUN_QEMU_TEST}" in
+            "true")
+              ARGS="--qemu-test"
+              echo "QEMU boot test will be run after build"
+              ;;
+            "false"|"")
+              echo "QEMU boot test will be skipped"
+              ;;
+            *)
+              echo "Invalid input for run_qemu_test: ${RUN_QEMU_TEST}"
+              exit 1
+              ;;
+          esac
+          
+          # Run the azl3 raw image build script
+          ./scripts/build_azl3_arm_raw.sh $ARGS
+          echo "azl3 raw image build completed."
+
+      - name: Set file permissions for artifacts
+        run: |
+          sudo chmod -R 755 workspace/ || true
+          find workspace/*/imagebuild/*/ -name "*.raw*" -exec chmod 777 {} \; || true
+      - name: GitHub Upload Release Artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a #v7.0.1
+        with:
+          name: azl3-arm-raw-image
+          path: |
+            workspace/*/imagebuild/*/*.raw*
+          retention-days: 30
