@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 jobs:
-  build-azl3-arm-raw:
+  cross-build-azl3-arm-raw:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
@@ -79,7 +79,7 @@ jobs:
           esac
           
           # Run the azl3 raw image build script
-          ./scripts/build_azl3_arm_raw.sh $ARGS
+          ./scripts/cross-build_azl3_arm_raw.sh $ARGS
           echo "azl3 raw image build completed."
 
       - name: Set file permissions for artifacts
