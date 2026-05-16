@@ -1,0 +1,169 @@
+name: Cross Build ELXR12 AArch64 Minimal Raw
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch or SHA to test (e.g. feature/x or a1b2c3)"
+        required: false
+      run_qemu_test:
+        description: "Run QEMU boot test after build"
+        required: false
+        default: "false"
+        type: choice
+        options:
+        - "true"
+        - "false"
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  cross-build-elxr12-aarch64-minimal-raw:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd #v6.0.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd #v4.0.0
+
+      - name: Install Earthly
+        uses: earthly/actions-setup@43211c7a0eae5344d6d79fb4aaf209c8f8866203 #v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          version: "latest"
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-aarch64 qemu-user-static binfmt-support ovmf tree jq systemd-ukify mmdebstrap systemd-boot qemu-efi-aarch64
+          sudo mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc || true
+          sudo update-binfmts --enable qemu-aarch64
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c #v6.4.0
+        with:
+          go-version: stable
+
+      - name: Build image-composer-tool
+        run: go build ./cmd/image-composer-tool
+
+      - name: Build ELXR12 AArch64 Minimal Raw image
+        run: |
+          sudo -E ./image-composer-tool --verbose build image-templates/elxr12-aarch64-minimal-raw.yml
+
+      - name: Run QEMU boot test
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.run_qemu_test == 'true' }}
+        run: |
+          set -euo pipefail
+          FOUND_PATH=$(find workspace -type f \( -name "*.raw.gz" -o -name "*.raw" \) | head -n 1)
+          if [ -z "$FOUND_PATH" ]; then
+            echo "No raw image artifact found under workspace/"
+            exit 1
+          fi
+
+          TEST_IMAGE="/tmp/test-arm-image.raw"
+          if [[ "$FOUND_PATH" == *.gz ]]; then
+            gunzip -c "$FOUND_PATH" > "$TEST_IMAGE"
+          else
+            cp -f "$FOUND_PATH" "$TEST_IMAGE"
+          fi
+
+          CODE_FD=""
+          VARS_FD=""
+          BIOS_FD=""
+          for code_path in \
+            /usr/share/AAVMF/AAVMF_CODE.fd \
+            /usr/share/AAVMF/AAVMF_CODE.ms.fd \
+            /usr/share/qemu-efi-aarch64/QEMU_EFI.fd; do
+            if [ -f "$code_path" ]; then
+              if [[ "$code_path" == *QEMU_EFI.fd ]]; then
+                BIOS_FD="$code_path"
+              else
+                CODE_FD="$code_path"
+              fi
+              break
+            fi
+          done
+
+          if [ -n "$CODE_FD" ]; then
+            for vars_path in /usr/share/AAVMF/AAVMF_VARS.fd /usr/share/AAVMF/AAVMF_VARS.ms.fd; do
+              if [ -f "$vars_path" ]; then
+                VARS_FD="$vars_path"
+                break
+              fi
+            done
+          fi
+
+          if [ -z "$BIOS_FD" ] && { [ -z "$CODE_FD" ] || [ -z "$VARS_FD" ]; }; then
+            echo "Unable to find ARM UEFI firmware files"
+            exit 1
+          fi
+
+          LOGFILE="qemu-boot.log"
+          SUCCESS_STRING="login:"
+          TIMEOUT=60
+
+          QEMU_ARGS=(
+            -machine virt,accel=tcg
+            -cpu max
+            -m 2048
+            -drive if=none,file="$TEST_IMAGE",format=raw,id=nvme0
+            -device nvme,drive=nvme0,serial=deadbeef
+            -nographic
+            -serial mon:stdio
+          )
+
+          if [ -n "$CODE_FD" ] && [ -n "$VARS_FD" ]; then
+            VARS_WORK="/tmp/AAVMF_VARS.fd"
+            cp -f "$VARS_FD" "$VARS_WORK"
+            QEMU_ARGS+=(
+              -drive if=pflash,format=raw,readonly=on,file="$CODE_FD"
+              -drive if=pflash,format=raw,file="$VARS_WORK"
+            )
+          else
+            QEMU_ARGS+=(-bios "$BIOS_FD")
+          fi
+
+          sudo nohup qemu-system-aarch64 "${QEMU_ARGS[@]}" > "$LOGFILE" 2>&1 &
+          QEMU_PID=$!
+
+          elapsed=0
+          while ! grep -q "$SUCCESS_STRING" "$LOGFILE" && [ $elapsed -lt $TIMEOUT ]; do
+            sleep 1
+            elapsed=$((elapsed + 1))
+          done
+
+          sudo kill "$QEMU_PID" 2>/dev/null || true
+          sudo pkill -f "qemu-system-aarch64.*$TEST_IMAGE" 2>/dev/null || true
+
+          if ! grep -q "$SUCCESS_STRING" "$LOGFILE"; then
+            echo "QEMU boot test failed or timed out"
+            tail -n 200 "$LOGFILE" || true
+            exit 1
+          fi
+
+          echo "QEMU boot test passed"
+          rm -f "$TEST_IMAGE" /tmp/AAVMF_VARS.fd
+
+      - name: Set file permissions for artifacts
+        run: |
+          sudo chmod -R 755 workspace/ || true
+          find workspace/*/imagebuild/*/ -name "*.raw*" -exec chmod 777 {} \; || true
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a #v7.0.1
+        with:
+          name: elxr12-aarch64-minimal-raw-image
+          path: |
+            workspace/*/imagebuild/*/*.raw*
+          retention-days: 30
