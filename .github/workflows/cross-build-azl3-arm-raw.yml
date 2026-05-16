@@ -15,7 +15,7 @@ on:
         - "false"
   push:
     branches:
-      - main
+      - fix-broken-arm64-builds
   pull_request:
     branches:
       - main
