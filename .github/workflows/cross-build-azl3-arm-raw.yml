@@ -54,41 +54,106 @@ jobs:
         with:
           go-version: stable
 
-      - name: Prepare build script
+      - name: Build image-composer-tool
+        run: go build ./cmd/image-composer-tool
+
+      - name: Build AZL3 AArch64 Raw image
         run: |
-          if [ ! -f scripts/cross-build_azl3_arm_raw.sh ]; then
-            echo "scripts/cross-build_azl3_arm_raw.sh not found!"
+          sudo -E ./image-composer-tool --verbose build image-templates/azl3-aarch64-edge-raw.yml
+
+      - name: Run QEMU boot test
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.run_qemu_test == 'true' }}
+        run: |
+          set -euo pipefail
+          FOUND_PATH=$(find workspace -type f \( -name "*.raw.gz" -o -name "*.raw" \) | head -n 1)
+          if [ -z "$FOUND_PATH" ]; then
+            echo "No raw image artifact found under workspace/"
             exit 1
           fi
-          chmod +x scripts/cross-build_azl3_arm_raw.sh
 
-      - name: Run azl3 Raw Image Cross Build
-        env:
-          RUN_QEMU_TEST: ${{ github.event.inputs.run_qemu_test || 'false' }}
-        run: |
-          echo "Starting azl3 raw image cross build..."
-          # Ensure script has access to docker group for Earthly
-          sudo usermod -aG docker $USER
-          
-          # Prepare arguments with input validation
-          ARGS=""
-          case "${RUN_QEMU_TEST}" in
-            "true")
-              ARGS="--qemu-test"
-              echo "QEMU boot test will be run after build"
-              ;;
-            "false"|"")
-              echo "QEMU boot test will be skipped"
-              ;;
-            *)
-              echo "Invalid input for run_qemu_test: ${RUN_QEMU_TEST}"
-              exit 1
-              ;;
-          esac
-          
-          # Run the azl3 raw image build script
-          ./scripts/cross-build_azl3_arm_raw.sh $ARGS
-          echo "azl3 raw image build completed."
+          TEST_IMAGE="/tmp/test-arm-image.raw"
+          if [[ "$FOUND_PATH" == *.gz ]]; then
+            gunzip -c "$FOUND_PATH" > "$TEST_IMAGE"
+          else
+            cp -f "$FOUND_PATH" "$TEST_IMAGE"
+          fi
+
+          CODE_FD=""
+          VARS_FD=""
+          BIOS_FD=""
+          for code_path in \
+            /usr/share/AAVMF/AAVMF_CODE.fd \
+            /usr/share/AAVMF/AAVMF_CODE.ms.fd \
+            /usr/share/qemu-efi-aarch64/QEMU_EFI.fd; do
+            if [ -f "$code_path" ]; then
+              if [[ "$code_path" == *QEMU_EFI.fd ]]; then
+                BIOS_FD="$code_path"
+              else
+                CODE_FD="$code_path"
+              fi
+              break
+            fi
+          done
+
+          if [ -n "$CODE_FD" ]; then
+            for vars_path in /usr/share/AAVMF/AAVMF_VARS.fd /usr/share/AAVMF/AAVMF_VARS.ms.fd; do
+              if [ -f "$vars_path" ]; then
+                VARS_FD="$vars_path"
+                break
+              fi
+            done
+          fi
+
+          if [ -z "$BIOS_FD" ] && { [ -z "$CODE_FD" ] || [ -z "$VARS_FD" ]; }; then
+            echo "Unable to find ARM UEFI firmware files"
+            exit 1
+          fi
+
+          LOGFILE="qemu-boot.log"
+          SUCCESS_STRING="login:"
+          TIMEOUT=60
+
+          QEMU_ARGS=(
+            -machine virt,accel=tcg
+            -cpu max
+            -m 2048
+            -drive if=none,file="$TEST_IMAGE",format=raw,id=nvme0
+            -device nvme,drive=nvme0,serial=deadbeef
+            -nographic
+            -serial mon:stdio
+          )
+
+          if [ -n "$CODE_FD" ] && [ -n "$VARS_FD" ]; then
+            VARS_WORK="/tmp/AAVMF_VARS.fd"
+            cp -f "$VARS_FD" "$VARS_WORK"
+            QEMU_ARGS+=(
+              -drive if=pflash,format=raw,readonly=on,file="$CODE_FD"
+              -drive if=pflash,format=raw,file="$VARS_WORK"
+            )
+          else
+            QEMU_ARGS+=(-bios "$BIOS_FD")
+          fi
+
+          sudo nohup qemu-system-aarch64 "${QEMU_ARGS[@]}" > "$LOGFILE" 2>&1 &
+          QEMU_PID=$!
+
+          elapsed=0
+          while ! grep -q "$SUCCESS_STRING" "$LOGFILE" && [ $elapsed -lt $TIMEOUT ]; do
+            sleep 1
+            elapsed=$((elapsed + 1))
+          done
+
+          sudo kill "$QEMU_PID" 2>/dev/null || true
+          sudo pkill -f "qemu-system-aarch64.*$TEST_IMAGE" 2>/dev/null || true
+
+          if ! grep -q "$SUCCESS_STRING" "$LOGFILE"; then
+            echo "QEMU boot test failed or timed out"
+            tail -n 200 "$LOGFILE" || true
+            exit 1
+          fi
+
+          echo "QEMU boot test passed"
+          rm -f "$TEST_IMAGE" /tmp/AAVMF_VARS.fd
 
       - name: Set file permissions for artifacts
         run: |
