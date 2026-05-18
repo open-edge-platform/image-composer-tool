@@ -174,6 +174,10 @@ func releaseDiskForPartitioning(diskPath string) error {
 		}
 	}
 
+	if _, err := shell.ExecCmd("sync", true, shell.HostPath, nil); err != nil {
+		return fmt.Errorf("failed to sync disk %s after release operations: %w", diskPath, err)
+	}
+
 	return nil
 }
 
@@ -733,6 +737,10 @@ func diskPartitionCreate(
 			log.Errorf("Failed to create partition %d on disk %s: %v", partitionNum, diskPath, err)
 			return "", fmt.Errorf("failed to create partition %d on disk %s: %w", partitionNum, diskPath, err)
 		}
+	}
+
+	if _, err := shell.ExecCmd("sync", true, shell.HostPath, nil); err != nil {
+		return "", fmt.Errorf("failed to sync disk %s after creating partition %d: %w", diskPath, partitionNum, err)
 	}
 
 	// Refresh partition table using partx
