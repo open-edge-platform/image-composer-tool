@@ -211,13 +211,11 @@ func createPartitionTable(diskPath, partitionTableType string) (string, error) {
 	for {
 		var retryOutput string
 		retryOutput, err = shell.ExecCmd(fmt.Sprintf("wipefs -a -f %s", diskPath), true, shell.HostPath, nil)
-		cmdOutput = retryOutput
 		if err != nil {
 			return retryOutput, err
 		}
 
 		retryOutput, err = shell.ExecCmd("sync", true, shell.HostPath, nil)
-		cmdOutput = retryOutput
 		if err != nil {
 			return retryOutput, err
 		}
@@ -251,7 +249,6 @@ func createPartitionTable(diskPath, partitionTableType string) (string, error) {
 		}
 
 		retryOutput, err = shell.ExecCmd("sync", true, shell.HostPath, nil)
-		cmdOutput = retryOutput
 		if err != nil {
 			return retryOutput, err
 		}
