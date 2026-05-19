@@ -226,13 +226,15 @@ func (p *AzureLinux) PostProcess(template *config.ImageTemplate, err error) erro
 
 func (p *AzureLinux) installHostDependency() error {
 	var dependencyInfo = map[string]string{
-		"rpm":          "rpm",         // For the chroot env build RPM pkg installation
-		"mkfs.fat":     "dosfstools",  // For the FAT32 boot partition creation
-		"qemu-img":     "qemu-utils",  // For image file format conversion
-		"mformat":      "mtools",      // For writing files to FAT32 partition
-		"xorriso":      "xorriso",     // For ISO image creation
-		"grub-mkimage": "grub-common", // For ISO image UEFI Grub binary creation
-		"sbsign":       "sbsigntool",  // For the UKI image creation
+		"rpm":              "rpm",              // For the chroot env build RPM pkg installation
+		"qemu-user-static": "qemu-user-static", // For cross-architecture binary execution support
+		"update-binfmts":   "binfmt-support",   // For registering qemu-user-static with the kernel
+		"mkfs.fat":         "dosfstools",       // For the FAT32 boot partition creation
+		"qemu-img":         "qemu-utils",       // For image file format conversion
+		"mformat":          "mtools",           // For writing files to FAT32 partition
+		"xorriso":          "xorriso",          // For ISO image creation
+		"grub-mkimage":     "grub-common",      // For ISO image UEFI Grub binary creation
+		"sbsign":           "sbsigntool",       // For the UKI image creation
 	}
 	hostPkgManager, err := system.GetHostOsPkgManager()
 	if err != nil {
@@ -254,6 +256,21 @@ func (p *AzureLinux) installHostDependency() error {
 			log.Debugf("Host dependency %s is already installed", pkg)
 		}
 	}
+
+	// Ensure arm64 binfmt handler is active on x86_64 hosts for cross-arch chroot execution.
+	hostInfo, err := system.GetHostOsInfo()
+	if err != nil {
+		return fmt.Errorf("failed to get host OS information: %w", err)
+	}
+	if hostInfo["arch"] == "x86_64" {
+		if _, err := shell.ExecCmd("mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc 2>/dev/null || true", true, shell.HostPath, nil); err != nil {
+			log.Debugf("binfmt_misc mount attempt: %v", err)
+		}
+		if _, err := shell.ExecCmd("update-binfmts --enable qemu-aarch64", true, shell.HostPath, nil); err != nil {
+			return fmt.Errorf("failed to enable qemu-aarch64 binfmt handler: %w", err)
+		}
+	}
+
 	return nil
 }
 

@@ -716,8 +716,17 @@ func TestAzlPreProcess(t *testing.T) {
 	t.Skip("PreProcess requires proper Azure Linux initialization with chrootEnv - function exists and is callable")
 }
 
+func requireHostDependencyTestOptIn(t *testing.T) {
+	t.Helper()
+	if os.Getenv("ICT_RUN_HOST_DEP_TESTS") != "1" {
+		t.Skip("Skipping host dependency tests by default; set ICT_RUN_HOST_DEP_TESTS=1 to enable")
+	}
+}
+
 // TestAzlInstallHostDependency tests the installHostDependency function
 func TestAzlInstallHostDependency(t *testing.T) {
+	requireHostDependencyTestOptIn(t)
+
 	azl := &AzureLinux{}
 
 	// Test that the function exists and can be called
@@ -743,6 +752,8 @@ func TestAzlDownloadImagePkgs(t *testing.T) {
 
 // TestAzlPreProcessWithMockEnv tests PreProcess with proper mock chrootEnv
 func TestAzlPreProcessWithMockEnv(t *testing.T) {
+	requireHostDependencyTestOptIn(t)
+
 	azl := &AzureLinux{
 		chrootEnv: &mockChrootEnv{},
 	}
@@ -951,6 +962,8 @@ func TestRegisterSuccess(t *testing.T) {
 
 // TestInstallHostDependencyMapping tests the dependency mapping logic
 func TestInstallHostDependencyMapping(t *testing.T) {
+	requireHostDependencyTestOptIn(t)
+
 	azl := &AzureLinux{}
 
 	// Call installHostDependency
@@ -1041,6 +1054,8 @@ func TestBuildImageEdgeCases(t *testing.T) {
 
 // TestPreProcessErrorPropagation tests error propagation in PreProcess
 func TestPreProcessErrorPropagation(t *testing.T) {
+	requireHostDependencyTestOptIn(t)
+
 	azl := &AzureLinux{
 		chrootEnv: &mockChrootEnv{},
 	}

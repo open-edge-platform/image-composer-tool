@@ -1567,13 +1567,31 @@ func TestInstallImageBoot_GrubWithEnableExtraModulesUbuntu(t *testing.T) {
 	}
 }
 
+type noSudoExecutor struct{}
+
+func (e *noSudoExecutor) ExecCmd(cmdStr string, _ bool, chrootPath string, envVal []string) (string, error) {
+	return (&shell.DefaultExecutor{}).ExecCmd(cmdStr, false, chrootPath, envVal)
+}
+
+func (e *noSudoExecutor) ExecCmdSilent(cmdStr string, _ bool, chrootPath string, envVal []string) (string, error) {
+	return (&shell.DefaultExecutor{}).ExecCmdSilent(cmdStr, false, chrootPath, envVal)
+}
+
+func (e *noSudoExecutor) ExecCmdWithStream(cmdStr string, _ bool, chrootPath string, envVal []string) (string, error) {
+	return (&shell.DefaultExecutor{}).ExecCmdWithStream(cmdStr, false, chrootPath, envVal)
+}
+
+func (e *noSudoExecutor) ExecCmdWithInput(inputStr string, cmdStr string, _ bool, chrootPath string, envVal []string) (string, error) {
+	return (&shell.DefaultExecutor{}).ExecCmdWithInput(inputStr, cmdStr, false, chrootPath, envVal)
+}
+
 func TestUpdateBootConfigTemplate_GrubCmdlineRootAndExtraArgs(t *testing.T) {
 	originalGlobal := config.Global()
 	t.Cleanup(func() {
 		config.SetGlobal(originalGlobal)
 	})
 	originalExecutor := shell.Default
-	shell.Default = &shell.DefaultExecutor{}
+	shell.Default = &noSudoExecutor{}
 	t.Cleanup(func() {
 		shell.Default = originalExecutor
 	})
