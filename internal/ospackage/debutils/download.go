@@ -58,14 +58,16 @@ type pkgChecksum struct {
 }
 
 var (
-	RepoCfg      RepoConfig
-	RepoCfgs     []RepoConfig // Support for multiple repositories
-	UserRepoCfgs []RepoConfig // Populated from UserRepo packageRepositories
-	PkgChecksum  []pkgChecksum
-	GzHref       string
-	Architecture string
-	UserRepo     []config.PackageRepository
-	ReportPath   = "builds"
+	RepoCfg        RepoConfig
+	RepoCfgs       []RepoConfig // Support for multiple repositories
+	UserRepoCfgs   []RepoConfig // Populated from UserRepo packageRepositories
+	PkgChecksum    []pkgChecksum
+	GzHref         string
+	Architecture   string
+	UserRepo       []config.PackageRepository
+	ReportPath     = "builds"
+	KernelVersion  string
+	KernelPackages = make(map[string]struct{})
 
 	urlExistenceCacheMu     sync.Mutex
 	urlExistenceCache       map[string]bool
