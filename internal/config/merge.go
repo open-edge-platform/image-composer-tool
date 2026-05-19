@@ -245,6 +245,11 @@ func mergeSystemConfig(defaultConfig, userConfig SystemConfig) SystemConfig {
 		merged.Bootloader = mergeBootloader(defaultConfig.Bootloader, userConfig.Bootloader)
 	}
 
+	// Merge network config
+	if !isEmptyNetworkConfig(userConfig.Network) {
+		merged.Network = mergeNetworkConfig(defaultConfig.Network, userConfig.Network)
+	}
+
 	// Merge packages - user packages are added to default packages
 	if len(userConfig.Packages) > 0 {
 		merged.Packages = mergePackages(defaultConfig.Packages, userConfig.Packages)
@@ -274,6 +279,21 @@ func mergeImmutabilityConfig(defaultImmutability, userImmutability ImmutabilityC
 
 	if userImmutability.SecureBootDBCer != "" {
 		merged.SecureBootDBCer = userImmutability.SecureBootDBCer
+	}
+
+	return merged
+}
+
+// mergeNetworkConfig merges network configurations
+func mergeNetworkConfig(defaultNetwork, userNetwork NetworkConfig) NetworkConfig {
+	merged := defaultNetwork
+
+	if userNetwork.Backend != "" {
+		merged.Backend = userNetwork.Backend
+	}
+
+	if len(userNetwork.Interfaces) > 0 {
+		merged.Interfaces = userNetwork.Interfaces
 	}
 
 	return merged
@@ -520,15 +540,44 @@ func mergePackageRepositories(defaultRepos, userRepos []PackageRepository) []Pac
 // Helper functions to check if structures are empty
 
 func isEmptyDiskConfig(disk DiskConfig) bool {
-	return disk.Name == "" && disk.Size == "" && len(disk.Partitions) == 0
+	return disk.Name == "" &&
+		disk.Path == "" &&
+		disk.SelectionPolicy.Strategy == "" &&
+		disk.SelectionPolicy.ExcludeRemovable == nil &&
+		disk.Size == "" &&
+		disk.PartitionTableType == "" &&
+		len(disk.Artifacts) == 0 &&
+		len(disk.Partitions) == 0
 }
 
 func isEmptySystemConfig(config SystemConfig) bool {
-	return config.Name == ""
+	return config.Name == "" &&
+		config.Description == "" &&
+		config.HostName == "" &&
+		config.Initramfs.Template == "" &&
+		!config.Immutability.wasProvided &&
+		isEmptyBootloader(config.Bootloader) &&
+		len(config.Users) == 0 &&
+		len(config.Packages) == 0 &&
+		len(config.AdditionalFiles) == 0 &&
+		len(config.Configurations) == 0 &&
+		isEmptyKernelConfig(config.Kernel)
 }
 
 func isEmptyBootloader(bootloader Bootloader) bool {
 	return bootloader.BootType == "" && bootloader.Provider == ""
+}
+
+func isEmptyNetworkConfig(network NetworkConfig) bool {
+	return network.Backend == "" && len(network.Interfaces) == 0
+}
+
+func isEmptyKernelConfig(kernel KernelConfig) bool {
+	return kernel.Version == "" &&
+		kernel.Cmdline == "" &&
+		len(kernel.Packages) == 0 &&
+		!kernel.UKI &&
+		kernel.EnableExtraModules == ""
 }
 
 // validateAndFixImmutabilityConfig checks if immutability is enabled but hash partition is missing

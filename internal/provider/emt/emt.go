@@ -276,6 +276,8 @@ func (p *Emt) downloadImagePkgs(template *config.ImageTemplate) error {
 	rpmutils.Dist = template.Target.Dist
 
 	rpmutils.UserRepo = template.GetPackageRepositories()
+	rpmutils.ConfigureKernelSelection(template.GetKernelPackages(), template.GetKernel().Version)
+	defer rpmutils.ConfigureKernelSelection(nil, "")
 
 	fullPkgList, fullPkgListBom, err := rpmutils.DownloadPackagesComplete(pkgList, pkgCacheDir, template.DotFilePath, pkgSources, template.DotSystemOnly)
 	if err != nil {

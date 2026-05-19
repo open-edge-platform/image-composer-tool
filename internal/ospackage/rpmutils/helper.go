@@ -401,10 +401,69 @@ func matchPackageRequest(want, packageName string) bool {
 	return matched
 }
 
+func isKernelPackageRequest(want string) bool {
+	for pattern := range KernelPackages {
+		if pattern == want {
+			return true
+		}
+
+		if !isGlobPattern(pattern) {
+			continue
+		}
+
+		if matchPackageRequest(pattern, want) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func stripEpoch(version string) string {
+	if colonIdx := strings.Index(version, ":"); colonIdx != -1 {
+		return version[colonIdx+1:]
+	}
+	return version
+}
+
+func matchesKernelVersion(candidateVersion string) bool {
+	if KernelVersion == "" {
+		return false
+	}
+
+	versionNoEpoch := stripEpoch(candidateVersion)
+	if versionNoEpoch == KernelVersion {
+		return true
+	}
+
+	if !strings.HasPrefix(versionNoEpoch, KernelVersion) {
+		return false
+	}
+
+	if len(versionNoEpoch) == len(KernelVersion) {
+		return true
+	}
+
+	nextChar := versionNoEpoch[len(KernelVersion)]
+	return nextChar == '.' || nextChar == '-' || nextChar == '_' || nextChar == '+' || nextChar == '~'
+}
+
+func filterKernelCandidates(candidates []ospackage.PackageInfo) []ospackage.PackageInfo {
+	var matched []ospackage.PackageInfo
+	for _, candidate := range candidates {
+		if matchesKernelVersion(candidate.Version) {
+			matched = append(matched, candidate)
+		}
+	}
+	return matched
+}
+
 // ResolvePackage finds the best matching package for a given package name
 func ResolveTopPackageConflicts(want string, all []ospackage.PackageInfo) (ospackage.PackageInfo, bool) {
+	log := logger.Logger()
 	var candidates []ospackage.PackageInfo
 	isGlob := isGlobPattern(want)
+	isKernelPackage := isKernelPackageRequest(want)
 	for _, pi := range all {
 		// 1) exact name, e.g. acct-205-25.azl3.noarch.rpm
 		if !isGlob && pi.Name == want {
@@ -445,6 +504,21 @@ func ResolveTopPackageConflicts(want string, all []ospackage.PackageInfo) (ospac
 
 	if len(candidates) == 0 {
 		return ospackage.PackageInfo{}, false
+	}
+
+	if isKernelPackage && KernelVersion != "" {
+		var beforeFilter []ospackage.PackageInfo
+		beforeFilter = append(beforeFilter, candidates...)
+		candidates = filterKernelCandidates(candidates)
+		if len(candidates) == 0 {
+			var availableVersions []string
+			for _, pkg := range beforeFilter {
+				availableVersions = append(availableVersions, pkg.Version)
+			}
+			log.Errorf("kernel version mismatch: package %q requires kernel version %q, but available versions are: %v",
+				want, KernelVersion, availableVersions)
+			return ospackage.PackageInfo{}, false
+		}
 	}
 
 	// If we got an exact match in step (1), it's the only candidate

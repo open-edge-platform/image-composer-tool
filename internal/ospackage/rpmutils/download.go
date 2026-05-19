@@ -35,11 +35,27 @@ type RepoConfig struct {
 }
 
 var (
-	RepoCfg  RepoConfig
-	GzHref   string
-	UserRepo []config.PackageRepository
-	Dist     string
+	RepoCfg        RepoConfig
+	GzHref         string
+	UserRepo       []config.PackageRepository
+	Dist           string
+	KernelVersion  string
+	KernelPackages = make(map[string]struct{})
 )
+
+// ConfigureKernelSelection sets the kernel package requests and version used
+// during top-level package matching.
+func ConfigureKernelSelection(kernelPackages []string, kernelVersion string) {
+	KernelVersion = kernelVersion
+	KernelPackages = make(map[string]struct{}, len(kernelPackages))
+	for _, pkg := range kernelPackages {
+		pkg = strings.TrimSpace(pkg)
+		if pkg == "" {
+			continue
+		}
+		KernelPackages[pkg] = struct{}{}
+	}
+}
 
 func Packages() ([]ospackage.PackageInfo, error) {
 	log := logger.Logger()

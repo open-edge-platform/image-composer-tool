@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/chroot/chrootbuild"
@@ -27,6 +28,19 @@ const (
 )
 
 var log = logger.Logger()
+
+var rpmVersionSuffixRe = regexp.MustCompile(`^(.+)-([0-9][A-Za-z0-9.+_:~\-]*)-([0-9][A-Za-z0-9.+_:~\-]*)$`)
+
+var knownRPMArch = map[string]struct{}{
+	"x86_64":  {},
+	"aarch64": {},
+	"noarch":  {},
+	"i686":    {},
+	"i586":    {},
+	"armv7hl": {},
+	"ppc64le": {},
+	"s390x":   {},
+}
 
 type ChrootEnvInterface interface {
 	GetChrootEnvRoot() string
@@ -544,6 +558,8 @@ func (chrootEnv *ChrootEnv) buildInstallCmd(packageName, chrootInstallRoot strin
 }
 
 func (chrootEnv *ChrootEnv) TdnfInstallPackage(packageName, installRoot string, repositoryIDList []string) error {
+	packageName = CleanRpmName(packageName)
+
 	chrootInstallRoot, err := chrootEnv.GetChrootEnvPath(installRoot)
 	if err != nil {
 		return fmt.Errorf("failed to get chroot environment path for install root %s: %w", installRoot, err)
@@ -567,6 +583,30 @@ func CleanDebName(packageName string) string {
 			packageName = packageName[:idx]
 		}
 	}
+	return packageName
+}
+
+// CleanRpmName normalizes version-suffixed RPM package requests to canonical package names.
+// Example: qemu-kvm-9.1.0-7 -> qemu-kvm.
+func CleanRpmName(packageName string) string {
+	packageName = strings.TrimSpace(packageName)
+	packageName = strings.TrimSuffix(packageName, ".rpm")
+
+	if idx := strings.LastIndex(packageName, "."); idx != -1 {
+		if _, ok := knownRPMArch[packageName[idx+1:]]; ok {
+			packageName = packageName[:idx]
+		}
+	}
+
+	matches := rpmVersionSuffixRe.FindStringSubmatch(packageName)
+	if len(matches) != 4 {
+		return packageName
+	}
+
+	if strings.Contains(matches[2], ".") {
+		return matches[1]
+	}
+
 	return packageName
 }
 

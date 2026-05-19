@@ -33,13 +33,24 @@ type ArtifactInfo struct {
 	Compression string `yaml:"compression"`
 }
 
+type DiskSelectionPolicy struct {
+	Strategy string `yaml:"strategy,omitempty"`
+	// ExcludeRemovable is intentionally conservative for unattended installs and
+	// excludes disks that appear externally attached, not only devices with RM=1.
+	ExcludeRemovable *bool `yaml:"excludeRemovable,omitempty"`
+	// RequireEmpty restricts unattended disk selection to empty disks when true.
+	// If false, disks with existing partitions are eligible and may be overwritten.
+	RequireEmpty *bool `yaml:"requireEmpty,omitempty"`
+}
+
 type DiskConfig struct {
-	Name               string          `yaml:"name"`
-	Path               string          `yaml:"path"` // Path to the disk device (e.g., /dev/sda), used by live installer
-	Artifacts          []ArtifactInfo  `yaml:"artifacts"`
-	Size               string          `yaml:"size"`
-	PartitionTableType string          `yaml:"partitionTableType"`
-	Partitions         []PartitionInfo `yaml:"partitions"`
+	Name               string              `yaml:"name"`
+	Path               string              `yaml:"path"` // Path to the disk device (e.g., /dev/sda), used by live installer
+	SelectionPolicy    DiskSelectionPolicy `yaml:"selectionPolicy,omitempty"`
+	Artifacts          []ArtifactInfo      `yaml:"artifacts"`
+	Size               string              `yaml:"size"`
+	PartitionTableType string              `yaml:"partitionTableType"`
+	Partitions         []PartitionInfo     `yaml:"partitions"`
 }
 
 type PackageRepository struct {
@@ -148,6 +159,28 @@ type UserConfig struct {
 	Shell          string   `yaml:"shell,omitempty"`          // Shell: login shell (e.g., /bin/bash, /bin/zsh)
 }
 
+// NetworkRoute represents a static route entry
+type NetworkRoute struct {
+	To  string `yaml:"to"`  // To: destination (e.g., "default", "10.0.0.0/8")
+	Via string `yaml:"via"` // Via: gateway address (e.g., "10.0.0.1")
+}
+
+// NetworkInterface represents a single network interface configuration
+type NetworkInterface struct {
+	Name        string         `yaml:"name"`                  // Name: interface name (e.g., enp1s0, ens3)
+	DHCP4       *bool          `yaml:"dhcp4,omitempty"`       // DHCP4: enable DHCPv4
+	DHCP6       *bool          `yaml:"dhcp6,omitempty"`       // DHCP6: enable DHCPv6
+	Addresses   []string       `yaml:"addresses,omitempty"`   // Addresses: static IPv4/IPv6 addresses (e.g., "192.168.1.10/24")
+	Routes      []NetworkRoute `yaml:"routes,omitempty"`      // Routes: static routes (replaces deprecated gateway4/gateway6)
+	Nameservers []string       `yaml:"nameservers,omitempty"` // Nameservers: DNS server addresses
+}
+
+// NetworkConfig represents the network configuration for the installed OS
+type NetworkConfig struct {
+	Backend    string             `yaml:"backend,omitempty"`    // Backend: network backend (netplan or systemd-networkd)
+	Interfaces []NetworkInterface `yaml:"interfaces,omitempty"` // Interfaces: list of interfaces to configure
+}
+
 // SystemConfig represents a system configuration within the template
 type SystemConfig struct {
 	Name            string               `yaml:"name"`
@@ -157,6 +190,7 @@ type SystemConfig struct {
 	Immutability    ImmutabilityConfig   `yaml:"immutability,omitempty"`
 	Users           []UserConfig         `yaml:"users,omitempty"`
 	Bootloader      Bootloader           `yaml:"bootloader"`
+	Network         NetworkConfig        `yaml:"network,omitempty"`
 	Packages        []string             `yaml:"packages"`
 	AdditionalFiles []AdditionalFileInfo `yaml:"additionalFiles"`
 	Configurations  []ConfigurationInfo  `yaml:"configurations"`

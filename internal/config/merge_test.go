@@ -520,6 +520,18 @@ func TestIsEmptyDiskConfig(t *testing.T) {
 	if isEmptyDiskConfig(diskWithPartitions) {
 		t.Errorf("disk config with partitions should not be empty")
 	}
+
+	// Test non-empty disk config with path
+	diskWithPath := DiskConfig{Path: "/dev/sda"}
+	if isEmptyDiskConfig(diskWithPath) {
+		t.Errorf("disk config with path should not be empty")
+	}
+
+	// Test non-empty disk config with selection policy
+	diskWithPolicy := DiskConfig{SelectionPolicy: DiskSelectionPolicy{Strategy: "largest"}}
+	if isEmptyDiskConfig(diskWithPolicy) {
+		t.Errorf("disk config with selection policy should not be empty")
+	}
 }
 
 func TestIsEmptySystemConfigDetailed(t *testing.T) {
@@ -529,10 +541,26 @@ func TestIsEmptySystemConfigDetailed(t *testing.T) {
 		t.Errorf("expected empty system config to be detected as empty")
 	}
 
-	// Test non-empty system config
-	nonEmptySystem := SystemConfig{Name: "test-system"}
-	if isEmptySystemConfig(nonEmptySystem) {
-		t.Errorf("system config with name should not be empty")
+	tests := []struct {
+		name string
+		cfg  SystemConfig
+	}{
+		{name: "name", cfg: SystemConfig{Name: "test-system"}},
+		{name: "hostname", cfg: SystemConfig{HostName: "test-host"}},
+		{name: "initramfs template", cfg: SystemConfig{Initramfs: Initramfs{Template: "default-initrd-unattended-x86_64.yml"}}},
+		{name: "users", cfg: SystemConfig{Users: []UserConfig{{Name: "root", StartupScript: "/root/unattendedinstaller"}}}},
+		{name: "additional files", cfg: SystemConfig{AdditionalFiles: []AdditionalFileInfo{{Local: "a", Final: "b"}}}},
+		{name: "packages", cfg: SystemConfig{Packages: []string{"vim"}}},
+		{name: "bootloader", cfg: SystemConfig{Bootloader: Bootloader{BootType: "efi"}}},
+		{name: "kernel", cfg: SystemConfig{Kernel: KernelConfig{Version: "6.8"}}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if isEmptySystemConfig(tt.cfg) {
+				t.Errorf("system config with %s should not be empty", tt.name)
+			}
+		})
 	}
 }
 

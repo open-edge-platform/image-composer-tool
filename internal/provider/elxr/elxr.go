@@ -292,6 +292,9 @@ func (p *eLxr) downloadImagePkgs(template *config.ImageTemplate) error {
 		log.Infof("Repository %d: %s (%s)", i+1, cfg.Name, cfg.PkgList)
 	}
 
+	debutils.ConfigureKernelSelection(template.GetKernelPackages(), template.GetKernel().Version)
+	defer debutils.ConfigureKernelSelection(nil, "")
+
 	fullPkgList, fullPkgListBom, err := debutils.DownloadPackagesComplete(pkgList, pkgCacheDir, template.DotFilePath, pkgSources, template.DotSystemOnly)
 	if err != nil {
 		return fmt.Errorf("failed to download packages: %w", err)

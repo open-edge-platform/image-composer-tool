@@ -16,6 +16,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/config/manifest"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/imageboot"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/imagedisc"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/imagenetwork"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/imagesecure"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/imagesign"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
@@ -307,6 +308,18 @@ func (imageOs *ImageOs) umountSysfsFromRootfs(installRoot string) error {
 func mountDiskRootToChroot(installRoot string, diskPathIdMap map[string]string, template *config.ImageTemplate) error {
 	diskInfo := template.GetDiskConfig()
 	partions := diskInfo.Partitions
+
+	// Debug logging
+	log.Debugf("mountDiskRootToChroot: Looking for root partition")
+	log.Debugf("  diskPathIdMap contents:")
+	for id, path := range diskPathIdMap {
+		log.Debugf("    ID=%s -> Path=%s", id, path)
+	}
+	log.Debugf("  Template partitions:")
+	for i, p := range partions {
+		log.Debugf("    Partition %d: ID=%s, MountPoint=%s, FsType=%s", i, p.ID, p.MountPoint, p.FsType)
+	}
+
 	for diskId, diskPath := range diskPathIdMap {
 		for _, partition := range partions {
 			if partition.ID == diskId {
@@ -957,6 +970,16 @@ func updateImageUsrGroup(installRoot string, template *config.ImageTemplate) err
 }
 
 func updateImageNetwork(installRoot string, template *config.ImageTemplate) error {
+	if err := imagenetwork.WriteNetworkConfig(installRoot, &template.SystemConfig.Network); err != nil {
+		return fmt.Errorf("failed to write declarative network config: %w", err)
+	}
+
+	// When netplan is the backend, netplan manages its own renderer —
+	// do not unconditionally enable systemd-networkd alongside it.
+	if template.SystemConfig.Network.Backend == "netplan" {
+		return nil
+	}
+
 	unitFilePath := filepath.Join(installRoot, "lib", "systemd", "system", "systemd-networkd.service")
 	if _, err := os.Stat(unitFilePath); os.IsNotExist(err) {
 		log.Warnf("systemd-networkd is not installed in %s, skipping enable", installRoot)

@@ -455,6 +455,10 @@ func TestCopyDir(t *testing.T) {
 	// Test directories
 	srcDir := filepath.Join(tempDir, "src")
 	dstDir := filepath.Join(tempDir, "dst")
+	emptySrcDir := filepath.Join(tempDir, "empty-src")
+	if err := os.MkdirAll(emptySrcDir, 0755); err != nil {
+		t.Fatalf("Failed to create empty source directory: %v", err)
+	}
 
 	// Test cases
 	testCases := []struct {
@@ -547,6 +551,22 @@ func TestCopyDir(t *testing.T) {
 				mainFile := filepath.Join(dstPath, "test.txt")
 				if _, err := os.Stat(mainFile); os.IsNotExist(err) {
 					t.Errorf("Expected main file to be copied to new directory: %s", mainFile)
+				}
+			},
+		},
+		{
+			name:    "Copy empty source directory",
+			src:     emptySrcDir,
+			dst:     filepath.Join(tempDir, "dst_empty_src"),
+			flags:   "",
+			wantErr: false,
+			validate: func(t *testing.T, dstPath string) {
+				entries, err := os.ReadDir(dstPath)
+				if err != nil {
+					t.Fatalf("Failed to read destination directory: %v", err)
+				}
+				if len(entries) != 0 {
+					t.Errorf("Expected empty destination directory, got %d entries", len(entries))
 				}
 			},
 		},

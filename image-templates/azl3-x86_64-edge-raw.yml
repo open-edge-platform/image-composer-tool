@@ -86,7 +86,7 @@ systemConfig:
 
   # Kernel Configuration
   kernel:
-    version: "6.12"
+    version: "6.6"
     cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
     #packages:
     #  - kernel-azure
