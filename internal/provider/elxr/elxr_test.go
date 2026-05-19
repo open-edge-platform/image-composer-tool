@@ -547,11 +547,17 @@ func TestElxrProviderInstallHostDependencyCommands(t *testing.T) {
 	expectedDeps := map[string]string{
 		"mmdebstrap":        "mmdebstrap",
 		"mkfs.fat":          "dosfstools",
+		"mformat":           "mtools",
 		"xorriso":           "xorriso",
+		"qemu-img":          "qemu-utils",
 		"ukify":             "systemd-ukify",
-		"grub-mkstandalone": "grub-common",
+		"grub-mkimage":      "grub-common",
 		"veritysetup":       "cryptsetup",
 		"sbsign":            "sbsigntool",
+		"dpkg-scanpackages": "dpkg-dev",
+		"bootctl":           "systemd-boot-efi",
+		"arch-test":         "arch-test",
+		"qemu-user-static":  "qemu-user-static",
 	}
 
 	// This is a structural test to verify the dependency mapping
@@ -559,12 +565,12 @@ func TestElxrProviderInstallHostDependencyCommands(t *testing.T) {
 	t.Logf("Expected host dependencies for eLxr provider: %+v", expectedDeps)
 
 	// Verify we have the expected number of dependencies
-	if len(expectedDeps) != 7 {
-		t.Errorf("Expected 7 host dependencies, got %d", len(expectedDeps))
+	if len(expectedDeps) != 13 {
+		t.Errorf("Expected 13 host dependencies, got %d", len(expectedDeps))
 	}
 
 	// Verify specific critical dependencies
-	criticalDeps := []string{"mmdebstrap", "mkfs.fat", "xorriso"}
+	criticalDeps := []string{"mmdebstrap", "mkfs.fat", "xorriso", "grub-mkimage", "qemu-user-static"}
 	for _, dep := range criticalDeps {
 		if _, exists := expectedDeps[dep]; !exists {
 			t.Errorf("Critical dependency %s not found in expected dependencies", dep)
@@ -995,12 +1001,19 @@ func TestElxrInstallHostDependency(t *testing.T) {
 func TestElxrInstallHostDependencyMapping(t *testing.T) {
 	// Test the expected dependencies mapping
 	expectedDeps := map[string]string{
-		"mmdebstrap":  "mmdebstrap",
-		"mkfs.fat":    "dosfstools",
-		"xorriso":     "xorriso",
-		"sbsign":      "sbsigntool",
-		"ukify":       "systemd-ukify",
-		"veritysetup": "cryptsetup",
+		"mmdebstrap":        "mmdebstrap",
+		"mkfs.fat":          "dosfstools",
+		"mformat":           "mtools",
+		"xorriso":           "xorriso",
+		"qemu-img":          "qemu-utils",
+		"ukify":             "systemd-ukify",
+		"grub-mkimage":      "grub-common",
+		"veritysetup":       "cryptsetup",
+		"sbsign":            "sbsigntool",
+		"dpkg-scanpackages": "dpkg-dev",
+		"bootctl":           "systemd-boot-efi",
+		"arch-test":         "arch-test",
+		"qemu-user-static":  "qemu-user-static",
 	}
 
 	t.Logf("Expected host dependencies for eLxr provider: %v", expectedDeps)
