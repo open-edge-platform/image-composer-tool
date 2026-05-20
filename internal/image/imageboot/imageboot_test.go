@@ -1168,7 +1168,7 @@ func TestInstallImageBoot_GrubVersionNotFound(t *testing.T) {
 	if err == nil {
 		t.Error("Expected error when neither grub version is found")
 	}
-	if !strings.Contains(err.Error(), "neither grub2-mkconfig nor grub-mkconfig found") {
+	if !strings.Contains(err.Error(), "none of grub2-mkconfig, grub-mkconfig, or update-grub found") {
 		t.Errorf("Expected grub version error, got: %v", err)
 	}
 }
