@@ -13,6 +13,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/cmd/live-installer/texture-ui/views/finishview"
 	"github.com/open-edge-platform/image-composer-tool/cmd/live-installer/texture-ui/views/hostnameview"
 	"github.com/open-edge-platform/image-composer-tool/cmd/live-installer/texture-ui/views/installerview"
+	"github.com/open-edge-platform/image-composer-tool/cmd/live-installer/texture-ui/views/networkview"
 	"github.com/open-edge-platform/image-composer-tool/cmd/live-installer/texture-ui/views/progressview"
 	"github.com/open-edge-platform/image-composer-tool/cmd/live-installer/texture-ui/views/userview"
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
@@ -75,6 +76,7 @@ func TestViewImplementations(t *testing.T) {
 		{"FinishView", finishview.New(mockInstallationTime)},
 		{"HostnameView", hostnameview.New()},
 		{"InstallerView", installerview.New()},
+		{"NetworkView", networkview.New()},
 		{"ProgressView", progressview.New(mockPerformInstallation)},
 		{"UserView", userview.New()},
 	}
