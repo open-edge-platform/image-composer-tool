@@ -174,6 +174,13 @@ systemConfig:
     - dracut-core
     - cryptsetup-bin
 
+    # ── Intel OneAPI runtime (pinned to 2025.3.x) ───────────────────
+    # Listed before ros-jazzy-desktop so the resolver locks these versions
+    # first, preventing transitive deps from pulling 2026.0.0.
+    - intel-oneapi-runtime-compilers_2025.3.3-30
+    - intel-oneapi-runtime-compilers-common_2025.3.3-30
+    - intel-oneapi-runtime-opencl_2025.3.3-30
+
     # ── ROS 2 Jazzy Desktop (full) ──────────────────────────────────
     - ros-jazzy-desktop
 
@@ -217,7 +224,7 @@ systemConfig:
   configurations:
     # ── ROS 2 environment setup ────────────────────────────────────
     - cmd: "echo 'source /opt/ros/jazzy/setup.bash' >> /etc/bash.bashrc"
-    - cmd: "echo 'export ROS_DOMAIN_ID=45' >> /etc/bash.bashrc"
+    - cmd: "echo 'export ROS_DOMAIN_ID=42' >> /etc/bash.bashrc"
 
     # ── Post-deployment APT version pinning (protects against bad upgrades) ──
     # Note: Origin-based priority pins (ECI=1000, AMR=1001) are auto-generated
@@ -226,8 +233,8 @@ systemConfig:
     #
     # Block old FLANN 1.19.x from ECI (prefer Ubuntu's FLANN 1.9.2)
     - cmd: "printf 'Package: libflann*\\nPin: version 1.19.*\\nPin-Priority: -1\\n\\nPackage: flann*\\nPin: version 1.19.*\\nPin-Priority: -1\\n' > /etc/apt/preferences.d/eci-flann-block"
-    # Pin OneAPI runtime deps to 2025.3.*
-    - cmd: "printf 'Package: intel-oneapi-runtime-*\\nPin: version 2025.3.*\\nPin-Priority: 1001\\n' > /etc/apt/preferences.d/oneapi"
+    # Pin OneAPI packages to 2025.3.* (matches setup-robotics-jazzy.sh exactly)
+    - cmd: "printf 'Package: intel-oneapi-runtime-*\\nPin: version 2025.3.*\\nPin-Priority: 1001\\n\\nPackage: intel-oneapi-compiler-*\\nPin: version 2025.3.*\\nPin-Priority: 1001\\n\\nPackage: intel-oneapi-mkl-*\\nPin: version 2025.3.*\\nPin-Priority: 1001\\n' > /etc/apt/preferences.d/oneapi"
     # OpenVINO version pins (match setup-robotics-jazzy.sh exactly)
     - cmd: "printf 'Package: openvino-libraries-dev\\nPin: version 2025.3.0*\\nPin-Priority: 1001\\n\\nPackage: openvino\\nPin: version 2025.3.0*\\nPin-Priority: 1001\\n\\nPackage: ros-jazzy-openvino-wrapper-lib\\nPin: version 2025.3.0*\\nPin-Priority: 1002\\n\\nPackage: ros-jazzy-openvino-node\\nPin: version 2025.3.0*\\nPin-Priority: 1002\\n' > /etc/apt/preferences.d/intel-openvino"
     # RealSense SDK version pin for post-deployment upgrade protection.
