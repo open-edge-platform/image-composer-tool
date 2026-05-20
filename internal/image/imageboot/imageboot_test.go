@@ -868,7 +868,7 @@ func TestUpdateGrubConfig_UsesUpdateGrubFallback(t *testing.T) {
 	}
 
 	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
-		{Pattern: "/usr/sbin/update-grub", Output: "", Error: nil},
+		{Pattern: "update-grub", Output: "", Error: nil},
 	})
 
 	if err := updateGrubConfig(installRoot, "grub"); err != nil {

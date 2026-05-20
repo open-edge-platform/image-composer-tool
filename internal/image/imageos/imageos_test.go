@@ -2365,7 +2365,7 @@ func TestMountDiskToChroot_RollbackOnMountFailure(t *testing.T) {
 		t.Fatalf("expected mount failure error, got: %v", err)
 	}
 
-	rootMountPoint := filepath.Join(imageOs.installRoot, "/")
+	rootMountPoint := imageOs.installRoot
 	foundRootUmount := false
 	for _, path := range recordingExecutor.umountHistory {
 		if path == rootMountPoint {
@@ -2394,6 +2394,31 @@ func TestIsSwapFsType(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := isSwapFsType(tt.fsType); got != tt.want {
 				t.Errorf("isSwapFsType(%q) = %v, want %v", tt.fsType, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveInstallRootMountPoint(t *testing.T) {
+	installRoot := "/tmp/install-root"
+
+	tests := []struct {
+		name       string
+		mountPoint string
+		want       string
+	}{
+		{name: "root_slash", mountPoint: "/", want: installRoot},
+		{name: "root_whitespace", mountPoint: "  /  ", want: installRoot},
+		{name: "boot_absolute", mountPoint: "/boot", want: filepath.Join(installRoot, "boot")},
+		{name: "boot_relative", mountPoint: "boot", want: filepath.Join(installRoot, "boot")},
+		{name: "boot_efi_absolute", mountPoint: "/boot/efi", want: filepath.Join(installRoot, "boot/efi")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveInstallRootMountPoint(installRoot, tt.mountPoint)
+			if got != tt.want {
+				t.Fatalf("resolveInstallRootMountPoint(%q, %q) = %q, want %q", installRoot, tt.mountPoint, got, tt.want)
 			}
 		})
 	}

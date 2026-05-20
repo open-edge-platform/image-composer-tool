@@ -210,16 +210,16 @@ func updateGrubConfig(installRoot, grubVersion string) error {
 	grubConfigFile := fmt.Sprintf("/boot/%s/grub.cfg", grubVersion)
 	mkconfigCommand := fmt.Sprintf("%s-mkconfig", grubVersion)
 	mkconfigCandidates := []string{fmt.Sprintf("/usr/sbin/%s-mkconfig", grubVersion), fmt.Sprintf("/usr/bin/%s-mkconfig", grubVersion)}
-	programExists, programResolved, err := commandExistsInInstallRoot(installRoot, mkconfigCommand, mkconfigCandidates)
+	programExists, _, err := commandExistsInInstallRoot(installRoot, mkconfigCommand, mkconfigCandidates)
 	if err != nil {
 		return fmt.Errorf("failed to resolve grub mkconfig command in install root: %w", err)
 	}
 
 	cmdStr := ""
 	if programExists {
-		cmdStr = fmt.Sprintf("%s -o %s", programResolved, grubConfigFile)
+		cmdStr = fmt.Sprintf("%s -o %s", mkconfigCommand, grubConfigFile)
 	} else {
-		updateGrubExists, updateGrubResolved, updateErr := commandExistsInInstallRoot(
+		updateGrubExists, _, updateErr := commandExistsInInstallRoot(
 			installRoot,
 			"update-grub",
 			[]string{"/usr/sbin/update-grub", "/usr/bin/update-grub"},
@@ -228,7 +228,7 @@ func updateGrubConfig(installRoot, grubVersion string) error {
 			return fmt.Errorf("failed to resolve update-grub command in install root: %w", updateErr)
 		}
 		if updateGrubExists {
-			cmdStr = updateGrubResolved
+			cmdStr = "update-grub"
 		} else {
 			return fmt.Errorf("failed to find grub config generator in install root")
 		}

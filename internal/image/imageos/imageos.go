@@ -326,7 +326,7 @@ func mountDiskRootToChroot(installRoot string, diskPathIdMap map[string]string, 
 		for _, partition := range partions {
 			if partition.ID == diskId {
 				if partition.MountPoint == "/" {
-					mountPoint := filepath.Join(installRoot, partition.MountPoint)
+					mountPoint := resolveInstallRootMountPoint(installRoot, partition.MountPoint)
 					mountFlags := fmt.Sprintf("-t %s", partition.FsType)
 					if err := mount.MountPath(diskPath, mountPoint, mountFlags); err != nil {
 						log.Errorf("Failed to mount %s to %s: %v", diskPath, mountPoint, err)
@@ -348,6 +348,16 @@ func isSwapFsType(fsType string) bool {
 func isNonMountablePartition(partition config.PartitionInfo) bool {
 	mountPoint := strings.TrimSpace(partition.MountPoint)
 	return mountPoint == "" || mountPoint == "none" || isSwapFsType(partition.FsType)
+}
+
+func resolveInstallRootMountPoint(installRoot, partitionMountPoint string) string {
+	trimmed := strings.TrimSpace(partitionMountPoint)
+	if trimmed == "" || trimmed == "/" {
+		return installRoot
+	}
+
+	trimmed = strings.TrimPrefix(trimmed, "/")
+	return filepath.Join(installRoot, trimmed)
 }
 
 func (imageOs *ImageOs) mountDiskToChroot(installRoot string, diskPathIdMap map[string]string, template *config.ImageTemplate) ([]map[string]string, error) {
@@ -375,13 +385,13 @@ func (imageOs *ImageOs) mountDiskToChroot(installRoot string, diskPathIdMap map[
 				mountPointInfo := make(map[string]string)
 				mountPointInfo["Id"] = diskId
 				mountPointInfo["Path"] = diskPath
-				mountPointInfo["MountPoint"] = filepath.Join(installRoot, partition.MountPoint)
+				mountPointInfo["MountPoint"] = resolveInstallRootMountPoint(installRoot, partition.MountPoint)
 				// Normalize FAT filesystem types to vfat for Linux mount compatibility
 				fsType := partition.FsType
 				if fsType == "fat32" || fsType == "fat16" {
 					fsType = "vfat"
 				}
-				if partition.MountPoint == "/boot/efi" {
+				if strings.TrimPrefix(strings.TrimSpace(partition.MountPoint), "/") == "boot/efi" {
 					mountPointInfo["Flags"] = fmt.Sprintf("-t %s -o umask=0077", fsType)
 				} else {
 					mountPointInfo["Flags"] = fmt.Sprintf("-t %s", fsType)
