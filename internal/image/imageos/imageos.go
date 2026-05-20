@@ -155,17 +155,19 @@ func (imageOs *ImageOs) InstallImageOs(diskPathIdMap map[string]string) (version
 			return
 		}
 		mounted = true
+		mountPointInfoList = append(mountPointInfoList, map[string]string{"MountPoint": imageOs.installRoot})
 		if err = imageOs.initRootfsForDeb(imageOs.installRoot); err != nil {
 			err = fmt.Errorf("failed to initialize rootfs for deb: %w", err)
 			return
 		}
 	}
 
-	mountPointInfoList, err = imageOs.mountDiskToChroot(imageOs.installRoot, diskPathIdMap, imageOs.template)
-	if err != nil {
-		err = fmt.Errorf("failed to mount disk to chroot: %w", err)
+	mountedPointInfoList, mountErr := imageOs.mountDiskToChroot(imageOs.installRoot, diskPathIdMap, imageOs.template)
+	if mountErr != nil {
+		err = fmt.Errorf("failed to mount disk to chroot: %w", mountErr)
 		return
 	}
+	mountPointInfoList = mountedPointInfoList
 	mounted = true
 
 	log.Infof("Image installation pre-processing...")
@@ -350,6 +352,15 @@ func isNonMountablePartition(partition config.PartitionInfo) bool {
 
 func (imageOs *ImageOs) mountDiskToChroot(installRoot string, diskPathIdMap map[string]string, template *config.ImageTemplate) ([]map[string]string, error) {
 	var mountPointInfoList []map[string]string
+	mountedPaths := make([]string, 0)
+	rollbackMountedPaths := func() error {
+		for i := len(mountedPaths) - 1; i >= 0; i-- {
+			if err := mount.UmountPath(mountedPaths[i]); err != nil {
+				return fmt.Errorf("failed to rollback mount %s: %w", mountedPaths[i], err)
+			}
+		}
+		return nil
+	}
 	diskInfo := template.GetDiskConfig()
 	partions := diskInfo.Partitions
 	for diskId, diskPath := range diskPathIdMap {
@@ -397,11 +408,18 @@ func (imageOs *ImageOs) mountDiskToChroot(installRoot string, diskPathIdMap map[
 		flags := mountPointInfo["Flags"]
 		if err := mount.MountPath(path, mountPoint, flags); err != nil {
 			log.Errorf("Failed to mount %s to %s with flags %s: %v", path, mountPoint, flags, err)
+			if rollbackErr := rollbackMountedPaths(); rollbackErr != nil {
+				return nil, fmt.Errorf("failed to mount %s to %s with flags %s: %w; rollback error: %v", path, mountPoint, flags, err, rollbackErr)
+			}
 			return nil, fmt.Errorf("failed to mount %s to %s with flags %s: %w", path, mountPoint, flags, err)
 		}
+		mountedPaths = append(mountedPaths, mountPoint)
 	}
 
 	if err := imageOs.mountSysfsToRootfs(installRoot); err != nil {
+		if rollbackErr := rollbackMountedPaths(); rollbackErr != nil {
+			return nil, fmt.Errorf("%w; rollback error: %v", err, rollbackErr)
+		}
 		return nil, err
 	}
 
@@ -639,7 +657,7 @@ func preImageOsInstall(installRoot string, template *config.ImageTemplate) error
 	return nil
 }
 
-func (imageOs *ImageOs) installImagePkgs(installRoot string, template *config.ImageTemplate) error {
+func (imageOs *ImageOs) installImagePkgs(installRoot string, template *config.ImageTemplate) (err error) {
 	pkgType := imageOs.chrootEnv.GetTargetOsPkgType()
 
 	if pkgType == "rpm" {
@@ -662,6 +680,19 @@ func (imageOs *ImageOs) installImagePkgs(installRoot string, template *config.Im
 		if err := imageOs.initDebLocalRepoWithinInstallRoot(installRoot); err != nil {
 			return fmt.Errorf("failed to initialize local repository within install root: %w", err)
 		}
+		repoInitialized := true
+		defer func() {
+			if !repoInitialized {
+				return
+			}
+			if deinitErr := imageOs.deInitDebLocalRepoWithinInstallRoot(installRoot); deinitErr != nil {
+				if err == nil {
+					err = fmt.Errorf("failed to de-initialize local repository within install root: %w", deinitErr)
+				} else {
+					err = fmt.Errorf("operation failed: %w, cleanup errors: %v", err, deinitErr)
+				}
+			}
+		}()
 		imagePkgNum := len(imagePkgOrderedList)
 		// Force to use the local cache repository
 		var repoSrcList []string = []string{"/etc/apt/sources.list.d/local.list"}
@@ -746,10 +777,6 @@ exit 0
 			}
 
 		}
-		if err := imageOs.deInitDebLocalRepoWithinInstallRoot(installRoot); err != nil {
-			return fmt.Errorf("failed to de-initialize local repository within install root: %w", err)
-		}
-
 		// Restore original apparmor_parser after all packages are installed
 		apparmorRealPath := filepath.Join(installRoot, "usr/sbin/apparmor_parser.real")
 		if _, statErr := os.Stat(apparmorRealPath); statErr == nil {
