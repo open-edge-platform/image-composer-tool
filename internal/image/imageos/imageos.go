@@ -680,11 +680,7 @@ func (imageOs *ImageOs) installImagePkgs(installRoot string, template *config.Im
 		if err := imageOs.initDebLocalRepoWithinInstallRoot(installRoot); err != nil {
 			return fmt.Errorf("failed to initialize local repository within install root: %w", err)
 		}
-		repoInitialized := true
 		defer func() {
-			if !repoInitialized {
-				return
-			}
 			if deinitErr := imageOs.deInitDebLocalRepoWithinInstallRoot(installRoot); deinitErr != nil {
 				if err == nil {
 					err = fmt.Errorf("failed to de-initialize local repository within install root: %w", deinitErr)
