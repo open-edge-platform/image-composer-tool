@@ -59,7 +59,7 @@
         },
         {
           "if": { "properties": { "os": { "const": "wind-river-elxr" } } },
-          "then": { "properties": { "dist": { "enum": ["elxr12"] } } }
+          "then": { "properties": { "dist": { "enum": ["elxr12", "elxr13"] } } }
         },
         {
           "if": { "properties": { "os": { "const": "debian" } } },
