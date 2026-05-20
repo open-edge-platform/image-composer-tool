@@ -54,11 +54,86 @@ func loopSetupCreateEmptyRawDisk(filePath, fileSize string) (string, error) {
 }
 
 func (loopDev *LoopDev) LoopSetupDelete(loopDevPath string) error {
+	// Handle SWAP partitions before detaching
+	if err := loopDev.disableSwapPartitions(loopDevPath); err != nil {
+		log.Warnf("Warning while disabling SWAP partitions on %s: %v", loopDevPath, err)
+		// Don't return error, try to continue with detach
+	}
+
 	cmd := fmt.Sprintf("losetup -d %s", loopDevPath)
 	if _, err := shell.ExecCmd(cmd, true, shell.HostPath, nil); err != nil {
 		log.Errorf("Failed to delete loop device %s: %v", loopDevPath, err)
 		return fmt.Errorf("failed to delete loop device %s: %w", loopDevPath, err)
 	}
+	return nil
+}
+
+// disableSwapPartitions finds and disables SWAP partitions on a loop device
+func (loopDev *LoopDev) disableSwapPartitions(loopDevPath string) error {
+	// List all partitions to find SWAP ones
+	// Get base loop device number from path (e.g., /dev/loop0 from /dev/loop0p1)
+	re := regexp.MustCompile(`^(/dev/loop\d+)(?:p\d+)?$`)
+	match := re.FindStringSubmatch(loopDevPath)
+	if len(match) < 2 {
+		// If not a loop device, no SWAP to disable
+		return nil
+	}
+
+	// Get all partitions of this loop device
+	cmd := fmt.Sprintf("lsblk -o NAME,FSTYPE %s -J", match[1])
+	output, err := shell.ExecCmd(cmd, true, shell.HostPath, nil)
+	if err != nil {
+		log.Debugf("Could not list block devices for %s: %v", match[1], err)
+		return nil
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		log.Debugf("Failed to parse lsblk output: %v", err)
+		return nil
+	}
+
+	// Recursively find and disable SWAP partitions
+	if err := loopDev.findAndDisableSwap(result); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// findAndDisableSwap recursively searches for SWAP filesystems and disables them
+func (loopDev *LoopDev) findAndDisableSwap(data interface{}) error {
+	switch v := data.(type) {
+	case map[string]interface{}:
+		// Check if this entry is a SWAP partition
+		if fsType, ok := v["fstype"].(string); ok && fsType == "swap" {
+			if name, ok := v["name"].(string); ok {
+				swapDev := fmt.Sprintf("/dev/%s", name)
+				log.Infof("Found SWAP partition: %s, disabling it", swapDev)
+				if _, err := shell.ExecCmd(fmt.Sprintf("swapoff %s", swapDev), true, shell.HostPath, nil); err != nil {
+					log.Warnf("Failed to disable SWAP on %s: %v", swapDev, err)
+					// Continue processing other partitions
+				} else {
+					log.Infof("Successfully disabled SWAP on %s", swapDev)
+				}
+			}
+		}
+
+		// Recurse into nested structures
+		for _, val := range v {
+			if err := loopDev.findAndDisableSwap(val); err != nil {
+				return err
+			}
+		}
+
+	case []interface{}:
+		for _, item := range v {
+			if err := loopDev.findAndDisableSwap(item); err != nil {
+				return err
+			}
+		}
+	}
+
 	return nil
 }
 
