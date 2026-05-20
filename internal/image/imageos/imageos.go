@@ -16,6 +16,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/config/manifest"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/imageboot"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/imagedisc"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/imagenetwork"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/imagesecure"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/imagesign"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
@@ -490,11 +491,19 @@ func (imageOs *ImageOs) initDebLocalRepoWithinInstallRoot(installRoot string) er
 	}
 
 	// from local.list
-	repoPath := filepath.Join(chrootInstallRoot, "/cdrom/cache-repo")
+	repoPath := filepath.Join(chrootInstallRoot, "cdrom", "cache-repo")
 	chrootPkgCacheDir := imageOs.chrootEnv.GetChrootPkgCacheDir()
 	if err := imageOs.chrootEnv.MountChrootPath(chrootPkgCacheDir, repoPath, "--bind"); err != nil {
 		return fmt.Errorf("failed to mount package cache directory %s to chroot repo directory %s: %w",
 			chrootPkgCacheDir, repoPath, err)
+	}
+
+	if err := imageOs.chrootEnv.UpdateChrootLocalRepoMetadata(
+		repoPath,
+		imageOs.template.Target.Arch,
+		false,
+	); err != nil {
+		return fmt.Errorf("failed to refresh local debian repository metadata: %w", err)
 	}
 
 	imageRepoCongfigPath := filepath.Join(installRoot, "/etc/apt/sources.list.d/", "*")
@@ -961,6 +970,16 @@ func updateImageUsrGroup(installRoot string, template *config.ImageTemplate) err
 }
 
 func updateImageNetwork(installRoot string, template *config.ImageTemplate) error {
+	if err := imagenetwork.WriteNetworkConfig(installRoot, &template.SystemConfig.Network); err != nil {
+		return fmt.Errorf("failed to write declarative network config: %w", err)
+	}
+
+	// When netplan is the backend, netplan manages its own renderer —
+	// do not unconditionally enable systemd-networkd alongside it.
+	if template.SystemConfig.Network.Backend == "netplan" {
+		return nil
+	}
+
 	unitFilePath := filepath.Join(installRoot, "lib", "systemd", "system", "systemd-networkd.service")
 	if _, err := os.Stat(unitFilePath); os.IsNotExist(err) {
 		log.Warnf("systemd-networkd is not installed in %s, skipping enable", installRoot)
@@ -1467,6 +1486,16 @@ func getUkifyStubPath(targetArch string) (string, error) {
 	}
 }
 
+func getUkifyStubPathCandidates(targetArch string) ([]string, error) {
+	primary, err := getUkifyStubPath(targetArch)
+	if err != nil {
+		return nil, err
+	}
+
+	// Some distros may only provide signed stub variants.
+	return []string{primary, primary + ".signed"}, nil
+}
+
 // Helper to build UKI using ukify
 func buildUKI(installRoot, kernelPath, initrdPath, cmdlineFile, outputPath string, template *config.ImageTemplate) error {
 	data, err := file.Read(filepath.Join(installRoot, cmdlineFile))
@@ -1516,9 +1545,26 @@ func buildUKI(installRoot, kernelPath, initrdPath, cmdlineFile, outputPath strin
 	var cmd string
 	backInstallRoot := installRoot
 	exists, _ := shell.IsCommandExist("ukify", installRoot)
-	stubPath, err := getUkifyStubPath(template.Target.Arch)
+	stubCandidates, err := getUkifyStubPathCandidates(template.Target.Arch)
 	if err != nil {
 		return fmt.Errorf("failed to resolve ukify EFI stub: %w", err)
+	}
+
+	fileExists := func(path string) bool {
+		if path == "" {
+			return false
+		}
+		info, statErr := os.Stat(path)
+		return statErr == nil && !info.IsDir()
+	}
+
+	findFirstExisting := func(paths []string) string {
+		for _, p := range paths {
+			if fileExists(p) {
+				return p
+			}
+		}
+		return ""
 	}
 
 	// For cross-arch builds, chroot binaries cannot execute on the host.
@@ -1536,35 +1582,109 @@ func buildUKI(installRoot, kernelPath, initrdPath, cmdlineFile, outputPath strin
 		initrdPath = toRootPath(installRoot, initrdPath)
 		outputPath = toRootPath(installRoot, outputPath)
 		osRelease := toRootPath(installRoot, "/etc/os-release")
-		stubPath = toRootPath(installRoot, stubPath)
+
+		stubInImageCandidates := make([]string, 0, len(stubCandidates))
+		for _, candidate := range stubCandidates {
+			stubInImageCandidates = append(stubInImageCandidates, toRootPath(installRoot, candidate))
+		}
+
+		// In host-ukify mode, same-arch builds should prefer host stubs first;
+		// cross-arch builds should prefer image-root stubs first.
+		stubPath := ""
+		if isCrossArch {
+			stubPath = findFirstExisting(stubInImageCandidates)
+			if stubPath == "" {
+				stubPath = findFirstExisting(stubCandidates)
+			}
+		} else {
+			stubPath = findFirstExisting(stubCandidates)
+			if stubPath == "" {
+				stubPath = findFirstExisting(stubInImageCandidates)
+			}
+		}
 		installRoot = shell.HostPath
 
 		if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
 			return fmt.Errorf("failed to create UKI output directory %s: %w", filepath.Dir(outputPath), err)
 		}
 
+		stubArg := ""
+		if stubPath != "" && fileExists(stubPath) {
+			stubArg = fmt.Sprintf(" --stub \"%s\"", stubPath)
+		} else {
+			log.Warnf("Could not find ukify EFI stub for arch %s in image rootfs or host defaults; letting ukify choose default stub", template.Target.Arch)
+		}
+
 		cmd = fmt.Sprintf(
-			"ukify build --linux \"%s\" --initrd \"%s\" --cmdline \"%s\" --stub \"%s\" --os-release @\"%s\" --output \"%s\"",
+			"ukify build --linux \"%s\" --initrd \"%s\" --cmdline \"%s\"%s --os-release @\"%s\" --output \"%s\"",
 			kernelPath,
 			initrdPath,
 			cmdlineStr,
-			stubPath,
+			stubArg,
 			osRelease,
 			outputPath,
 		)
 	} else {
-		if err := os.MkdirAll(filepath.Join(installRoot, filepath.Dir(outputPath)), 0o755); err != nil {
-			return fmt.Errorf("failed to create UKI output directory %s: %w", filepath.Dir(outputPath), err)
+		stubInChrootCandidates := make([]string, 0, len(stubCandidates))
+		for _, candidate := range stubCandidates {
+			stubInChrootCandidates = append(stubInChrootCandidates, filepath.Join(installRoot, strings.TrimPrefix(candidate, "/")))
 		}
 
-		cmd = fmt.Sprintf(
-			"ukify build --linux \"%s\" --initrd \"%s\" --cmdline \"%s\" --stub \"%s\" --output \"%s\"",
-			kernelPath,
-			initrdPath,
-			cmdlineStr,
-			stubPath,
-			outputPath,
-		)
+		selectedStubInChroot := findFirstExisting(stubInChrootCandidates)
+		if selectedStubInChroot == "" {
+			log.Warnf("ukify found in chroot but EFI stub is missing in target rootfs for arch %s; retrying with host ukify", template.Target.Arch)
+			kernelPath = toRootPath(installRoot, kernelPath)
+			initrdPath = toRootPath(installRoot, initrdPath)
+			outputPath = toRootPath(installRoot, outputPath)
+			osRelease := toRootPath(installRoot, "/etc/os-release")
+			installRoot = shell.HostPath
+
+			if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
+				return fmt.Errorf("failed to create UKI output directory %s: %w", filepath.Dir(outputPath), err)
+			}
+
+			selectedStub := findFirstExisting(stubCandidates)
+			stubArg := ""
+			if selectedStub != "" {
+				stubArg = fmt.Sprintf(" --stub \"%s\"", selectedStub)
+			} else {
+				log.Warnf("Could not find ukify EFI stub for arch %s on host defaults; letting ukify choose default stub", template.Target.Arch)
+			}
+
+			cmd = fmt.Sprintf(
+				"ukify build --linux \"%s\" --initrd \"%s\" --cmdline \"%s\"%s --os-release @\"%s\" --output \"%s\"",
+				kernelPath,
+				initrdPath,
+				cmdlineStr,
+				stubArg,
+				osRelease,
+				outputPath,
+			)
+		} else {
+			selectedStub := ""
+			for i, candidateOnHost := range stubInChrootCandidates {
+				if candidateOnHost == selectedStubInChroot {
+					selectedStub = stubCandidates[i]
+					break
+				}
+			}
+			if selectedStub == "" {
+				selectedStub = stubCandidates[0]
+			}
+
+			if err := os.MkdirAll(filepath.Join(installRoot, filepath.Dir(outputPath)), 0o755); err != nil {
+				return fmt.Errorf("failed to create UKI output directory %s: %w", filepath.Dir(outputPath), err)
+			}
+
+			cmd = fmt.Sprintf(
+				"ukify build --linux \"%s\" --initrd \"%s\" --cmdline \"%s\" --stub \"%s\" --output \"%s\"",
+				kernelPath,
+				initrdPath,
+				cmdlineStr,
+				selectedStub,
+				outputPath,
+			)
+		}
 	}
 
 	log.Debugf("UKI executing command")
