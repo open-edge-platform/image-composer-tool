@@ -170,6 +170,100 @@ func (m *errorPathMockChrootEnv) UmountChrootSysfs(chrootPath string) error {
 	return nil
 }
 
+type recordingMountExecutor struct {
+	mountedPaths  map[string]bool
+	umountHistory []string
+}
+
+func newRecordingMountExecutor() *recordingMountExecutor {
+	return &recordingMountExecutor{mountedPaths: make(map[string]bool)}
+}
+
+func (m *recordingMountExecutor) mountOutput() string {
+	lines := make([]string, 0, len(m.mountedPaths))
+	for path := range m.mountedPaths {
+		lines = append(lines, fmt.Sprintf("/dev/mock on %s type ext4 (rw)", path))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m *recordingMountExecutor) ExecCmd(cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error) {
+	switch {
+	case strings.HasPrefix(cmdStr, "mount "):
+		parts := strings.Fields(cmdStr)
+		if len(parts) < 2 {
+			return "", fmt.Errorf("invalid mount command: %s", cmdStr)
+		}
+		mountPoint := parts[len(parts)-1]
+		if strings.HasSuffix(mountPoint, "/boot") {
+			return "", fmt.Errorf("mock mount failure")
+		}
+		m.mountedPaths[mountPoint] = true
+		return "", nil
+	case strings.HasPrefix(cmdStr, "umount"):
+		parts := strings.Fields(cmdStr)
+		if len(parts) < 2 {
+			return "", fmt.Errorf("invalid umount command: %s", cmdStr)
+		}
+		mountPoint := parts[len(parts)-1]
+		m.umountHistory = append(m.umountHistory, mountPoint)
+		delete(m.mountedPaths, mountPoint)
+		return "", nil
+	case strings.HasPrefix(cmdStr, "mkdir -p"):
+		return "", nil
+	default:
+		return "", fmt.Errorf("unexpected command: %s", cmdStr)
+	}
+}
+
+func (m *recordingMountExecutor) ExecCmdSilent(cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error) {
+	if cmdStr == "mount" {
+		return m.mountOutput(), nil
+	}
+	return "", fmt.Errorf("unexpected command: %s", cmdStr)
+}
+
+func (m *recordingMountExecutor) ExecCmdWithStream(cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error) {
+	return m.ExecCmd(cmdStr, sudo, chrootPath, envVal)
+}
+
+func (m *recordingMountExecutor) ExecCmdWithInput(inputStr string, cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error) {
+	return m.ExecCmd(cmdStr, sudo, chrootPath, envVal)
+}
+
+type cleanupCountMockChrootEnv struct {
+	MockChrootEnv
+	targetConfigDir string
+	cacheDir        string
+	umountCalls     int
+	aptInstallErr   error
+}
+
+func (m *cleanupCountMockChrootEnv) GetTargetOsConfigDir() string { return m.targetConfigDir }
+func (m *cleanupCountMockChrootEnv) GetChrootPkgCacheDir() string { return m.cacheDir }
+func (m *cleanupCountMockChrootEnv) GetChrootEnvPath(installRoot string) (string, error) {
+	if m.chrootPath != "" {
+		return m.chrootPath, nil
+	}
+	return installRoot, nil
+}
+func (m *cleanupCountMockChrootEnv) MountChrootPath(hostFullPath, chrootPath, mountFlags string) error {
+	return nil
+}
+func (m *cleanupCountMockChrootEnv) UmountChrootPath(chrootPath string) error {
+	m.umountCalls++
+	return nil
+}
+func (m *cleanupCountMockChrootEnv) CopyFileFromHostToChroot(hostFilePath, chrootPath string) error {
+	return nil
+}
+func (m *cleanupCountMockChrootEnv) AptInstallPackage(packageName, installRoot string, repoSrcList []string) error {
+	if m.aptInstallErr != nil {
+		return m.aptInstallErr
+	}
+	return nil
+}
+
 // TestNewImageOs tests the NewImageOs constructor
 func TestNewImageOs(t *testing.T) {
 	// Set up mock executor
@@ -2029,6 +2123,60 @@ func TestInstallImagePkgs(t *testing.T) {
 	t.Log("installImagePkgs test completed")
 }
 
+func TestInstallImagePkgs_DebRepoDeinitOnInstallError(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{{Pattern: ".*", Output: "", Error: nil}})
+
+	testDir := t.TempDir()
+	installRoot := filepath.Join(testDir, "install-root")
+	if err := os.MkdirAll(filepath.Join(installRoot, "etc", "apt", "sources.list.d"), 0755); err != nil {
+		t.Fatalf("failed to create install root apt dir: %v", err)
+	}
+
+	configDir := filepath.Join(testDir, "config", "chrootenvconfigs")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("failed to create config dir: %v", err)
+	}
+	localListPath := filepath.Join(configDir, "local.list")
+	if err := os.WriteFile(localListPath, []byte("deb file:///repo bookworm main\n"), 0644); err != nil {
+		t.Fatalf("failed to create local.list: %v", err)
+	}
+
+	template := createTestImageTemplate()
+	template.Target.OS = "ubuntu"
+	template.Target.Arch = "x86_64"
+	template.SystemConfig.Packages = []string{"curl"}
+
+	countingEnv := &cleanupCountMockChrootEnv{
+		MockChrootEnv: MockChrootEnv{
+			pkgType:    "deb",
+			chrootPath: installRoot,
+		},
+		targetConfigDir: filepath.Join(testDir, "config"),
+		cacheDir:        filepath.Join(testDir, "cache"),
+		aptInstallErr:   fmt.Errorf("forced apt install failure"),
+	}
+
+	imageOs := &ImageOs{
+		installRoot: installRoot,
+		chrootEnv:   countingEnv,
+		template:    template,
+	}
+
+	err := imageOs.installImagePkgs(installRoot, template)
+	if err == nil {
+		t.Fatal("expected installImagePkgs to fail, got nil")
+	}
+	if !strings.Contains(err.Error(), "failed to install package") {
+		t.Fatalf("expected package install failure, got: %v", err)
+	}
+	if countingEnv.umountCalls != 1 {
+		t.Fatalf("expected UmountChrootPath to be called once during deferred cleanup, got %d", countingEnv.umountCalls)
+	}
+}
+
 // TestUpdateImageConfig tests the updateImageConfig functionality
 func TestUpdateImageConfig(t *testing.T) {
 	// Set up mock executor
@@ -2183,6 +2331,53 @@ func TestMountDiskToChroot(t *testing.T) {
 	t.Log("mountDiskToChroot test completed")
 }
 
+func TestMountDiskToChroot_RollbackOnMountFailure(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	recordingExecutor := newRecordingMountExecutor()
+	shell.Default = recordingExecutor
+
+	template := createTestImageTemplate()
+	template.Disk = config.DiskConfig{
+		Partitions: []config.PartitionInfo{
+			{ID: "root", MountPoint: "/", FsType: "ext4"},
+			{ID: "boot", MountPoint: "/boot", FsType: "ext4"},
+		},
+	}
+
+	imageOs := &ImageOs{
+		installRoot: t.TempDir(),
+		chrootEnv:   &MockChrootEnv{},
+		template:    template,
+	}
+
+	diskPathIDMap := map[string]string{
+		"root": "mockp1",
+		"boot": "mockp2",
+	}
+
+	_, err := imageOs.mountDiskToChroot(imageOs.installRoot, diskPathIDMap, template)
+	if err == nil {
+		t.Fatal("expected mountDiskToChroot to fail, got nil")
+	}
+	if !strings.Contains(err.Error(), "failed to mount") {
+		t.Fatalf("expected mount failure error, got: %v", err)
+	}
+
+	rootMountPoint := imageOs.installRoot
+	foundRootUmount := false
+	for _, path := range recordingExecutor.umountHistory {
+		if path == rootMountPoint {
+			foundRootUmount = true
+			break
+		}
+	}
+	if !foundRootUmount {
+		t.Fatalf("expected rollback umount for root mount point %s, umount history: %v", rootMountPoint, recordingExecutor.umountHistory)
+	}
+}
+
 func TestIsSwapFsType(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -2199,6 +2394,31 @@ func TestIsSwapFsType(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := isSwapFsType(tt.fsType); got != tt.want {
 				t.Errorf("isSwapFsType(%q) = %v, want %v", tt.fsType, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveInstallRootMountPoint(t *testing.T) {
+	installRoot := "/tmp/install-root"
+
+	tests := []struct {
+		name       string
+		mountPoint string
+		want       string
+	}{
+		{name: "root_slash", mountPoint: "/", want: installRoot},
+		{name: "root_whitespace", mountPoint: "  /  ", want: installRoot},
+		{name: "boot_absolute", mountPoint: "/boot", want: filepath.Join(installRoot, "boot")},
+		{name: "boot_relative", mountPoint: "boot", want: filepath.Join(installRoot, "boot")},
+		{name: "boot_efi_absolute", mountPoint: "/boot/efi", want: filepath.Join(installRoot, "boot/efi")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveInstallRootMountPoint(installRoot, tt.mountPoint)
+			if got != tt.want {
+				t.Fatalf("resolveInstallRootMountPoint(%q, %q) = %q, want %q", installRoot, tt.mountPoint, got, tt.want)
 			}
 		})
 	}

@@ -209,5 +209,6 @@ func FetchPackages(urls []string, destDir string, workers int) error {
 	if err := bar.Finish(); err != nil {
 		log.Errorf("failed to finish progress bar: %v", err)
 	}
+	fmt.Println()
 	return nil
 }

@@ -302,6 +302,7 @@ func VerifyDEBs(paths []string, pkgChecksum map[string][]string, workers int) []
 	if err := bar.Finish(); err != nil {
 		log.Errorf("failed to finish progress bar: %v", err)
 	}
+	fmt.Println()
 
 	return results
 }
