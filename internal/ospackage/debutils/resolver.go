@@ -1285,20 +1285,9 @@ func ResolveTopPackageConflicts(want string, all []ospackage.PackageInfo) (ospac
 	}
 
 	if isKernelPackage && KernelVersion != "" {
-		var beforeFilter []ospackage.PackageInfo
-		beforeFilter = append(beforeFilter, candidates...)
 		candidates = filterKernelCandidates(candidates)
 		if len(candidates) == 0 {
-			var availableVersions []string
-			for _, pkg := range beforeFilter {
-				availableVersions = append(availableVersions, pkg.Version)
-			}
-			log.Infof("validating kernel version: package %q requires kernel version %q, available versions are: %v",
-				want, KernelVersion, availableVersions)
 			return ospackage.PackageInfo{}, false
-		} else {
-			log.Infof("validating kernel version: package %q requires kernel version %q, matched candidates after filtering are: %v",
-				want, KernelVersion, candidates)
 		}
 	}
 

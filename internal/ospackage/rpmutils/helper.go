@@ -515,7 +515,7 @@ func ResolveTopPackageConflicts(want string, all []ospackage.PackageInfo) (ospac
 			for _, pkg := range beforeFilter {
 				availableVersions = append(availableVersions, pkg.Version)
 			}
-			log.Infof("validating kernel version: package %q requires kernel version %q, available versions are: %v",
+			log.Errorf("kernel version mismatch: package %q requires kernel version %q, but available versions are: %v",
 				want, KernelVersion, availableVersions)
 			return ospackage.PackageInfo{}, false
 		} else {
