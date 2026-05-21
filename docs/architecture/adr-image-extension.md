@@ -4,7 +4,7 @@
 **Date**: 2026-05-21  
 **Updated**: N/A  
 **Authors**: OS Image Composer Team  
-**Technical Area**: Image Composition / Provisioning / Live Installer 
+**Technical Area**: Image Composition / Provisioning
 
 ---
 
