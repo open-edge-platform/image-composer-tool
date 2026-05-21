@@ -253,6 +253,12 @@ func createPartitionTable(diskPath, partitionTableType string) (string, error) {
 			return retryOutput, err
 		}
 
+		// Refresh partition table using partx (non-fatal; continue retry loop on failure)
+		cmdStr := fmt.Sprintf("partx -u %s", diskPath)
+		if _, err := shell.ExecCmd(cmdStr, true, shell.HostPath, nil); err != nil {
+			log.Debugf("partx refresh failed during partition table retry (will retry): %v", err)
+		}
+
 		diskInfo, err := DiskGetInfo(diskPath)
 		if err != nil {
 			return "", fmt.Errorf("failed to verify partition table creation on %s: %w", diskPath, err)
