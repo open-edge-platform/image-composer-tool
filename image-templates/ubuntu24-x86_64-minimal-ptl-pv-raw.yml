@@ -550,7 +550,7 @@ systemConfig:
       final: /etc/netplan/50-cloud-init.yaml
 
   kernel:
-    version: "6.17"
+    version: "260128t080735z-r2"
     cmdline: "xe.max_vfs=7 xe.force_probe=* modprobe.blacklist=i915 udmabuf.list_limit=8192 console=tty0 console=ttyS0,115200n8"
     enableExtraModules: "intel_vpu uas"
     packages:

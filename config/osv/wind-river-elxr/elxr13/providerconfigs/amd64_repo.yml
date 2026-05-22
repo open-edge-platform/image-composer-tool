@@ -1,0 +1,13 @@
+repositories:
+  - name: "bianca"
+    type: "deb"  # Repository type: rpm or deb
+    baseURL: "https://mirror.elxr.dev/elxr"
+    pkgPrefix: "https://mirror.elxr.dev/elxr/"
+    releaseFile: "https://mirror.elxr.dev/elxr/dists/bianca/Release"
+    releaseSign: "https://mirror.elxr.dev/elxr/dists/bianca/Release.gpg"
+    pbGPGKey: "https://mirror.elxr.dev/elxr/bianca.gpg"
+    gpgCheck: true
+    repoGPGCheck: true
+    enabled: true
+    component: "main main-debian-community non-free-firmware non-free-firmware-debian-community"  # Repository component/section identifier
+    buildPath: "./builds/elxr13/main"  # Will be replaced with temp_dir/builds/elxr13 at runtime

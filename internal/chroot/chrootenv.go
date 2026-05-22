@@ -194,12 +194,19 @@ func (chrootEnv *ChrootEnv) UmountChrootSysfs(chrootPath string) error {
 		return fmt.Errorf("failed to get chroot host path for %s: %w", chrootPath, err)
 	}
 
+	var cleanupErr error
 	if err := system.StopGPGComponents(chrootHostPath); err != nil {
-		return fmt.Errorf("failed to stop GPG components in chroot environment: %w", err)
+		cleanupErr = fmt.Errorf("failed to stop GPG components in chroot environment: %w", err)
 	}
 
 	if err = mount.UmountSysfs(chrootHostPath); err != nil {
+		if cleanupErr != nil {
+			return fmt.Errorf("operation failed: %w, cleanup errors: %v", cleanupErr, err)
+		}
 		return fmt.Errorf("failed to unmount sysfs for %s: %w", chrootHostPath, err)
+	}
+	if cleanupErr != nil {
+		return cleanupErr
 	}
 	return nil
 }
@@ -471,11 +478,16 @@ func (chrootEnv *ChrootEnv) InitChrootEnv(targetOs, targetDist, targetArch strin
 func (chrootEnv *ChrootEnv) CleanupChrootEnv(targetOs, targetDist, targetArch string) error {
 	log := logger.Logger()
 	if _, err := os.Stat(chrootEnv.ChrootEnvRoot); err == nil {
+		var cleanupErr error
 		if err := system.StopGPGComponents(chrootEnv.ChrootEnvRoot); err != nil {
-			return fmt.Errorf("failed to stop GPG components in chroot environment: %w", err)
+			cleanupErr = fmt.Errorf("failed to stop GPG components in chroot environment: %w", err)
 		}
 		if err := mount.UmountSubPath(chrootEnv.ChrootEnvRoot); err != nil {
-			return fmt.Errorf("failed to unmount path for chroot environment: %w", err)
+			if cleanupErr == nil {
+				cleanupErr = fmt.Errorf("failed to unmount path for chroot environment: %w", err)
+			} else {
+				cleanupErr = fmt.Errorf("operation failed: %w, cleanup errors: %v", cleanupErr, err)
+			}
 		}
 
 		// Restore existing local repo config files in chroot environment
@@ -508,6 +520,10 @@ func (chrootEnv *ChrootEnv) CleanupChrootEnv(targetOs, targetDist, targetArch st
 					}
 				}
 			}
+		}
+
+		if cleanupErr != nil {
+			return cleanupErr
 		}
 	} else {
 		log.Infof("Chroot environment root %s does not exist, skipping cleanup", chrootEnv.ChrootEnvRoot)

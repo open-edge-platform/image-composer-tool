@@ -61,7 +61,7 @@ func (p *eLxr) Init(dist, arch string) error {
 		arch = "arm64"
 	}
 
-	cfgs, err := loadRepoConfig("", arch)
+	cfgs, err := loadRepoConfig(dist, arch)
 	if err != nil {
 		log.Errorf("Parsing repo config failed: %v", err)
 		return err
@@ -233,6 +233,7 @@ func (p *eLxr) installHostDependency() error {
 		"veritysetup":       "cryptsetup",       // For the veritysetup command
 		"sbsign":            "sbsigntool",       // For the UKI image creation
 		"dpkg-scanpackages": "dpkg-dev",         // For DEB repository metadata creation
+		"bootctl":           "systemd-boot-efi", // For bootctl on Ubuntu hosts
 		"arch-test":         "arch-test",        // Required by mmdebstrap for foreign-architecture bootstrap
 		"qemu-user-static":  "qemu-user-static", // For cross-architecture binary execution support
 	}
@@ -305,11 +306,12 @@ func (p *eLxr) downloadImagePkgs(template *config.ImageTemplate) error {
 	return nil
 }
 
-func loadRepoConfig(repoUrl string, arch string) ([]debutils.RepoConfig, error) {
+func loadRepoConfig(dist string, arch string) ([]debutils.RepoConfig, error) {
 	var repoConfigs []debutils.RepoConfig
+	dist = normalizeElxrDist(dist)
 
-	// Load provider repo config for elxr - use correct OS name
-	providerConfigs, err := config.LoadProviderRepoConfig(OsName, "elxr12", arch) // Use "wind-river-elxr" and "aria" dist
+	// Load provider repo config for eLxr based on requested distribution.
+	providerConfigs, err := config.LoadProviderRepoConfig(OsName, dist, arch)
 	if err != nil {
 		return repoConfigs, fmt.Errorf("failed to load provider repo config: %w", err)
 	}
@@ -347,6 +349,18 @@ func loadRepoConfig(repoUrl string, arch string) ([]debutils.RepoConfig, error) 
 	}
 
 	return repoConfigs, nil
+}
+
+// normalizeElxrDist maps user/config aliases to supported distribution directory names.
+func normalizeElxrDist(dist string) string {
+	switch dist {
+	case "", "elxr12", "aria":
+		return "elxr12"
+	case "elxr13", "bianca":
+		return "elxr13"
+	default:
+		return dist
+	}
 }
 
 // displayImageArtifacts displays all image artifacts in the build directory

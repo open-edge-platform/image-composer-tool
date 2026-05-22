@@ -1,0 +1,6 @@
+#cloud-config
+runcmd:
+  - |
+    echo "Starting example setup."
+    echo "This is a cloud init test file" > /cloud-init-test.txt
+    echo "Example setup complete."

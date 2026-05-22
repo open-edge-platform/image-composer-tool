@@ -116,14 +116,16 @@ func (m *mockChrootEnv) UpdateSystemPkgs(template *config.ImageTemplate) error {
 }
 
 type mockLoopDev struct {
-	shouldFailCreate bool
-	shouldFailDelete bool
-	loopDevPath      string
+	shouldFailCreate      bool
+	shouldFailDelete      bool
+	loopDevPath           string
+	failCreateLoopDevPath string
+	deleteCallCount       int
 }
 
 func (m *mockLoopDev) CreateRawImageLoopDev(filePath string, template *config.ImageTemplate) (string, map[string]string, error) {
 	if m.shouldFailCreate {
-		return "", nil, fmt.Errorf("mock loop device creation failure")
+		return m.failCreateLoopDevPath, nil, fmt.Errorf("mock loop device creation failure")
 	}
 	diskPathIdMap := map[string]string{
 		"root": "/dev/loop0p1",
@@ -133,6 +135,7 @@ func (m *mockLoopDev) CreateRawImageLoopDev(filePath string, template *config.Im
 }
 
 func (m *mockLoopDev) LoopSetupDelete(loopDevPath string) error {
+	m.deleteCallCount++
 	if m.shouldFailDelete {
 		return fmt.Errorf("mock loop device deletion failure")
 	}
@@ -509,6 +512,73 @@ func TestRawMaker_BuildRawImage_LoopDevCreationFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "failed to create loop device") {
 		t.Errorf("Expected error about loop device creation, but got: %v", err)
+	}
+}
+
+func TestRawMaker_BuildRawImage_LoopDevCreationFailureWithCreatedLoopDevice(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	mockCommands := []shell.MockCommand{
+		{Pattern: "mkdir", Output: "", Error: nil},
+		{Pattern: "rm", Output: "", Error: nil},
+	}
+	shell.Default = shell.NewMockExecutor(mockCommands)
+
+	tempDir := t.TempDir()
+	chrootEnv := &mockChrootEnv{
+		pkgType:           "deb",
+		chrootEnvRoot:     tempDir,
+		chrootPkgCacheDir: filepath.Join(tempDir, "cache"),
+	}
+
+	chrootImageBuildDir := chrootEnv.GetChrootImageBuildDir()
+	if err := os.MkdirAll(chrootImageBuildDir, 0700); err != nil {
+		t.Fatalf("Failed to create chroot image build dir: %v", err)
+	}
+
+	os.Setenv("IMAGE_COMPOSER_WORK_DIR", tempDir)
+	defer os.Unsetenv("IMAGE_COMPOSER_WORK_DIR")
+
+	template := &config.ImageTemplate{
+		Target: config.TargetInfo{
+			OS:   "ubuntu",
+			Dist: "jammy",
+			Arch: "x86_64",
+		},
+		Image: config.ImageInfo{
+			Name: "test-image",
+		},
+		SystemConfig: config.SystemConfig{
+			Name: "test-config",
+		},
+	}
+
+	rawMaker, err := rawmaker.NewRawMaker(chrootEnv, template)
+	if err != nil {
+		t.Fatalf("Failed to create RawMaker: %v", err)
+	}
+
+	mockLoopDev := &mockLoopDev{
+		shouldFailCreate:      true,
+		failCreateLoopDevPath: "/dev/loop-test0",
+	}
+	rawMaker.LoopDev = mockLoopDev
+
+	err = rawMaker.Init()
+	if err != nil {
+		t.Fatalf("Failed to initialize RawMaker: %v", err)
+	}
+
+	err = rawMaker.BuildRawImage()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "failed to create loop device") {
+		t.Fatalf("expected loop creation failure, got: %v", err)
+	}
+	if mockLoopDev.deleteCallCount != 1 {
+		t.Fatalf("expected LoopSetupDelete to be called once, got %d", mockLoopDev.deleteCallCount)
 	}
 }
 
