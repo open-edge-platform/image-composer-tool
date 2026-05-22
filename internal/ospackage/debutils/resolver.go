@@ -117,6 +117,16 @@ type packageMetadataCache struct {
 	Packages []ospackage.PackageInfo `json:"packages"`
 }
 
+func shouldBypassParsedPackageCache(baseURL string) bool {
+	parsedURL, err := url.Parse(baseURL)
+	if err != nil {
+		return false
+	}
+
+	host := strings.ToLower(parsedURL.Hostname())
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
+}
+
 func loadParsedPackageCache(cacheFile string) (*packageMetadataCache, error) {
 	data, err := os.ReadFile(cacheFile)
 	if err != nil {
@@ -159,9 +169,15 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 	// Check the cache before any network operation. If a valid cache exists from a
 	// previous run it is returned immediately, enabling fully offline operation.
 	cacheFile := filepath.Join(pkgMetaDir, "packages.parsed.json")
-	if cached, loadErr := loadParsedPackageCache(cacheFile); loadErr == nil && cached.Checksum != "" {
-		log.Infof("Using cached package metadata for %s (checksum %s)", baseURL, cached.Checksum)
-		return cached.Packages, nil
+	allowParsedCache := !shouldBypassParsedPackageCache(baseURL)
+	if !allowParsedCache {
+		log.Debugf("Bypassing parsed package metadata cache for loopback repository %s", baseURL)
+	}
+	if allowParsedCache {
+		if cached, loadErr := loadParsedPackageCache(cacheFile); loadErr == nil && cached.Checksum != "" {
+			log.Infof("Using cached package metadata for %s (checksum %s)", baseURL, cached.Checksum)
+			return cached.Packages, nil
+		}
 	}
 
 	//verify release file
@@ -419,8 +435,10 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 	}
 
 	// Persist the parsed result so future calls with the same checksum skip decompression/parsing.
-	if saveErr := saveParsedPackageCache(cacheFile, expectedChecksum, pkgs); saveErr != nil {
-		log.Warnf("failed to save package metadata cache: %v", saveErr)
+	if allowParsedCache {
+		if saveErr := saveParsedPackageCache(cacheFile, expectedChecksum, pkgs); saveErr != nil {
+			log.Warnf("failed to save package metadata cache: %v", saveErr)
+		}
 	}
 
 	return pkgs, nil
