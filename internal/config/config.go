@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,15 +55,17 @@ type DiskConfig struct {
 }
 
 type PackageRepository struct {
-	ID            string   `yaml:"id,omitempty"`            // Auto-assigned
-	Codename      string   `yaml:"codename"`                // Repository identifier/codename
-	URL           string   `yaml:"url,omitempty"`           // Repository base URL
-	Path          string   `yaml:"path,omitempty"`          // Local directory path for file-based repositories
-	PKey          string   `yaml:"pkey"`                    // Public GPG key URL for verification
-	PKeys         []string `yaml:"pkeys,omitempty"`         // Multiple public GPG key URLs for verification
-	Component     string   `yaml:"component,omitempty"`     // Repository component (e.g., "main", "restricted")
-	Priority      int      `yaml:"priority,omitempty"`      // Repository priority (higher numbers = higher priority)
-	AllowPackages []string `yaml:"allowPackages,omitempty"` // Optional: specific packages to include from this repo (pinning)
+	ID                 string   `yaml:"id,omitempty"`                 // Auto-assigned
+	Codename           string   `yaml:"codename"`                     // Repository identifier/codename
+	URL                string   `yaml:"url,omitempty"`                // Repository base URL
+	Path               string   `yaml:"path,omitempty"`               // Local directory path for file-based repositories
+	Packages           []string `yaml:"packages,omitempty"`           // Files to copy/download into Path for local repositories (HTTPS URLs or local file paths)
+	InsecureSkipVerify bool     `yaml:"insecureSkipVerify,omitempty"` // Skip TLS certificate verification for packages URL downloads (insecure, use with caution)
+	PKey               string   `yaml:"pkey"`                         // Public GPG key URL for verification
+	PKeys              []string `yaml:"pkeys,omitempty"`              // Multiple public GPG key URLs for verification
+	Component          string   `yaml:"component,omitempty"`          // Repository component (e.g., "main", "restricted")
+	Priority           int      `yaml:"priority,omitempty"`           // Repository priority (higher numbers = higher priority)
+	AllowPackages      []string `yaml:"allowPackages,omitempty"`      // Optional: specific packages to include from this repo (pinning)
 }
 
 // ProviderRepoConfig represents the repository configuration for a provider
@@ -1002,8 +1005,27 @@ func (t *ImageTemplate) validatePackageRepositories() error {
 
 // ValidatePackageRepository validates that either URL or Path is provided
 func (pr *PackageRepository) ValidatePackageRepository() error {
-	if pr.URL == "" && pr.Path == "" {
-		return fmt.Errorf("repository '%s': either 'url' or 'path' must be provided", pr.Codename)
+	if len(pr.Packages) > 0 {
+		// path is optional when packages is set — a temp dir is auto-created at runtime
+		for _, entry := range pr.Packages {
+			if strings.TrimSpace(entry) == "" {
+				return fmt.Errorf("repository '%s': 'packages' entries cannot be empty", pr.Codename)
+			}
+			// If the entry looks like a URL it must use https; plain paths are copied at runtime
+			if strings.Contains(entry, "://") {
+				parsedURL, err := url.Parse(entry)
+				if err != nil {
+					return fmt.Errorf("repository '%s': invalid packages URL '%s': %w", pr.Codename, entry, err)
+				}
+				if parsedURL.Scheme != "https" {
+					return fmt.Errorf("repository '%s': packages URL '%s' must use https", pr.Codename, entry)
+				}
+			}
+		}
+	}
+
+	if pr.URL == "" && pr.Path == "" && len(pr.Packages) == 0 {
+		return fmt.Errorf("repository '%s': either 'url', 'path', or 'packages' must be provided", pr.Codename)
 	}
 	if pr.URL != "" && pr.Path != "" {
 		return fmt.Errorf("repository '%s': cannot specify both 'url' and 'path', choose one", pr.Codename)

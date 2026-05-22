@@ -84,6 +84,56 @@ setup references:
 - Debian repo setup: https://wiki.debian.org/DebianRepository/Setup
 - RPM repo setup: https://wiki.centos.org/HowTos/CreateLocalRepos
 
+### Local DEB/RPM Repository With Extra Packages
+
+For path-based repositories, you can optionally declare `packages` to
+populate the local repository source path before package resolution. Each entry
+is either an **HTTPS URL** (the file is downloaded) or a **local file path** (the
+file is copied). This avoids running arbitrary host scripts while keeping repository
+preparation in trusted ICT code paths.
+
+```yaml
+packageRepositories:
+  - codename: "localdeb"
+    path: "/tmp/localdeb"
+    pkey: "[trusted=yes]"
+    component: "main"
+    packages:
+      - "https://github.com/intel/intel-graphics-compiler/releases/download/v2.20.3/intel-igc-core-2_2.20.3+19972_amd64.deb"
+      - "https://github.com/intel/linux-npu-driver/releases/download/v1.28.0/linux-npu-driver-v1.28.0.20251218-20347000698-ubuntu2404.tar.gz"
+      - "/opt/staging/local-custom-driver_1.0_amd64.deb"   # copied from local filesystem
+```
+
+#### Certificate Verification for packages
+
+By default, URL downloads enforce strict TLS certificate verification (TLS 1.2+, valid certificates). For environments where certificate verification cannot be satisfied (e.g., self-signed certificates, corporate proxies), you can optionally skip verification with `insecureSkipVerify`:
+
+```yaml
+packageRepositories:
+  - codename: "localdeb"
+    path: "/tmp/localdeb"
+    pkey: "[trusted=yes]"
+    component: "main"
+    insecureSkipVerify: true  # Skip TLS certificate verification (insecure, use with caution)
+    packages:
+      - "https://internal-server.example.com/packages/custom-driver.deb"
+```
+
+⚠️ **Security Warning**: Setting `insecureSkipVerify: true` disables certificate validation and makes downloads vulnerable to man-in-the-middle attacks. Only use this option when:
+- Downloading from internal/trusted networks
+- Working in development/testing environments
+- The download source cannot provide valid certificates
+
+Notes:
+
+- URL entries must use `https://`; `http://` is rejected.
+- Local directory entries copy all `.deb`/`.rpm` files directly inside the directory (non-recursive).
+- Local file path entries are copied as-is (no certificate considerations).
+- `path` is optional when `packages` is set; a temporary directory under `temp_dir` is auto-created and cleaned up after the build.
+- Supported formats are `.deb`, `.rpm`, `.tar`, `.tar.gz`/`.tgz`, and `.zip`.
+- Archive entries are filtered to `.deb` (DEB repos) or `.rpm` (RPM repos) payloads during extraction.
+- `insecureSkipVerify` defaults to `false`; only set to `true` when necessary for untrusted certificates.
+
 ## Package Conflict Priority Consideration
 
 When multiple repositories contain packages with the same name, the OS Image
