@@ -17,6 +17,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/pkgfetcher"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
 
 // VersionConstraint represents a version operator and version pair
@@ -169,9 +170,9 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 	// Check the cache before any network operation. If a valid cache exists from a
 	// previous run it is returned immediately, enabling fully offline operation.
 	cacheFile := filepath.Join(pkgMetaDir, "packages.parsed.json")
-	allowParsedCache := !shouldBypassParsedPackageCache(baseURL)
+	allowParsedCache := !shouldBypassParsedPackageCache(baseURL) && !system.IsLiveInstallerExecution()
 	if !allowParsedCache {
-		log.Debugf("Bypassing parsed package metadata cache for loopback repository %s", baseURL)
+		log.Debugf("Bypassing parsed package metadata cache for %s", baseURL)
 	}
 	if allowParsedCache {
 		if cached, loadErr := loadParsedPackageCache(cacheFile); loadErr == nil && cached.Checksum != "" {
