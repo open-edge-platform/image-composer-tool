@@ -692,6 +692,11 @@ func ResolveDependencies(requested []ospackage.PackageInfo, all []ospackage.Pack
 		neededSet[cur.Name] = struct{}{}
 		result = append(result, cur)
 
+		// Track in resolvedDeps so later packages reuse this version
+		if _, alreadyResolved := resolvedDeps[cur.Name]; !alreadyResolved {
+			resolvedDeps[cur.Name] = cur
+		}
+
 		// Traverse dependencies
 		for _, dep := range cur.Requires {
 
@@ -823,33 +828,30 @@ func ResolveDependencies(requested []ospackage.PackageInfo, all []ospackage.Pack
 								// Pick the best candidate using the resolver
 								newCandidate, err := resolveMultiCandidates(cur, satisfyingCandidates)
 								if err == nil {
-									resolvedPriority := getRepositoryPriority(resolvedPkg.URL)
-									newPriority := getRepositoryPriority(newCandidate.URL)
+									// The resolved package violates a version constraint
+									// required by the current package. A candidate that
+									// satisfies the constraint exists, so replace
+									// unconditionally — constraint satisfaction takes
+									// precedence over priority.
+									log.Debugf("replacing %s_%s with constraint-satisfying version %s_%s (required by %s_%s)",
+										resolvedPkg.Name, resolvedPkg.Version,
+										newCandidate.Name, newCandidate.Version,
+										cur.Name, cur.Version)
 
-									// Apply APT priority comparison
-									if comparePriorityBehavior(newCandidate, resolvedPkg) {
-										// New candidate has higher priority - replace the resolved package
-										log.Debugf("replacing %s_%s (priority %d) with higher priority package %s_%s (priority %d)",
-											resolvedPkg.Name, resolvedPkg.Version, resolvedPriority,
-											newCandidate.Name, newCandidate.Version, newPriority)
-
-										// Remove old package from result and neededSet
-										delete(neededSet, resolvedPkg.Name)
-										for i, pkg := range result {
-											if pkg.Name == resolvedPkg.Name && pkg.Version == resolvedPkg.Version {
-												result = append(result[:i], result[i+1:]...)
-												break
-											}
+									// Remove old package from result and neededSet
+									delete(neededSet, resolvedPkg.Name)
+									for i, pkg := range result {
+										if pkg.Name == resolvedPkg.Name && pkg.Version == resolvedPkg.Version {
+											result = append(result[:i], result[i+1:]...)
+											break
 										}
-
-										// Add new candidate to queue and resolvedDeps
-										queue = append(queue, newCandidate)
-										resolvedDeps[depName] = newCandidate
-										AddParentChildPair(cur, newCandidate, &parentChildPairs)
-										continue
-									} else {
-										log.Debugf("new candidate does not have higher priority, cannot replace")
 									}
+
+									// Add new candidate to queue and resolvedDeps
+									queue = append(queue, newCandidate)
+									resolvedDeps[depName] = newCandidate
+									AddParentChildPair(cur, newCandidate, &parentChildPairs)
+									continue
 								}
 							}
 						}
