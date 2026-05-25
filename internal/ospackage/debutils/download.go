@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -884,6 +885,7 @@ func MatchRequested(requests []string, all []ospackage.PackageInfo) ([]ospackage
 	seen := make(map[string]struct{})
 	var requestedPkgs []string
 	gotMissingPkg := false
+	gotMissingKernelPkg := false
 
 	for _, want := range requests {
 		if isGlobPattern(want) {
@@ -892,6 +894,9 @@ func MatchRequested(requests []string, all []ospackage.PackageInfo) ([]ospackage
 				requestedPkgs = append(requestedPkgs, want)
 				log.Warnf("requested package '%q' not found in repo", want)
 				gotMissingPkg = true
+				if isKernelPackageRequest(want) {
+					gotMissingKernelPkg = true
+				}
 				continue
 			}
 
@@ -917,10 +922,31 @@ func MatchRequested(requests []string, all []ospackage.PackageInfo) ([]ospackage
 			requestedPkgs = append(requestedPkgs, want)
 			log.Warnf("requested package '%q' not found in repo", want)
 			gotMissingPkg = true
+			if isKernelPackageRequest(want) {
+				gotMissingKernelPkg = true
+			}
 		}
 	}
 
 	log.Infof("found %d packages in request of %d", len(out), len(requests))
+
+	// Log kernel version mismatch only if a kernel package wasn't found
+	if len(KernelPackages) > 0 && KernelVersion != "" && gotMissingKernelPkg {
+		var versions []string
+		versionsSet := make(map[string]struct{})
+		for _, pkg := range all {
+			if isKernelPackageRequest(pkg.Name) {
+				versionsSet[pkg.Version] = struct{}{}
+			}
+		}
+		for v := range versionsSet {
+			versions = append(versions, v)
+		}
+		sort.Strings(versions)
+		log.Errorf("kernel version mismatch: requires kernel version %q, but available versions are: %v",
+			KernelVersion, versions)
+	}
+
 	if gotMissingPkg {
 		report, err := WriteArrayToFile(requestedPkgs, "Missing Requested Packages")
 		if err != nil {

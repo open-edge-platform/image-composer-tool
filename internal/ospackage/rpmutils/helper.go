@@ -522,6 +522,9 @@ func ResolveTopPackageConflicts(want string, all []ospackage.PackageInfo) (ospac
 			log.Errorf("kernel version mismatch: package %q requires kernel version %q, but available versions are: %v",
 				want, KernelVersion, availableVersions)
 			return ospackage.PackageInfo{}, false
+		} else {
+			log.Infof("validating kernel version: package %q requires kernel version %q, matched candidates after filtering are: %v",
+				want, KernelVersion, candidates)
 		}
 	}
 
