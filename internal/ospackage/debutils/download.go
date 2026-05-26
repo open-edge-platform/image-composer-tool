@@ -21,6 +21,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/network"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/slice"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
 
 // Repository represents a Debian repository
@@ -118,6 +119,10 @@ func loadURLExistenceCacheLocked() {
 }
 
 func getURLExistenceFromCache(url string) (bool, bool) {
+	if system.IsLiveInstallerExecution() {
+		return false, false
+	}
+
 	urlExistenceCacheMu.Lock()
 	defer urlExistenceCacheMu.Unlock()
 
@@ -127,6 +132,10 @@ func getURLExistenceFromCache(url string) (bool, bool) {
 }
 
 func saveURLExistenceToCache(url string, exists bool) {
+	if system.IsLiveInstallerExecution() {
+		return
+	}
+
 	log := logger.Logger()
 
 	urlExistenceCacheMu.Lock()
@@ -171,6 +180,10 @@ func loadPackageListURLCacheLocked() {
 }
 
 func getPackageListURLFromCache(baseURL, codename, arch, component string) (string, bool) {
+	if system.IsLiveInstallerExecution() {
+		return "", false
+	}
+
 	packageListURLCacheMu.Lock()
 	defer packageListURLCacheMu.Unlock()
 
@@ -183,6 +196,10 @@ func getPackageListURLFromCache(baseURL, codename, arch, component string) (stri
 }
 
 func savePackageListURLToCache(baseURL, codename, arch, component, packageListURL string) {
+	if system.IsLiveInstallerExecution() {
+		return
+	}
+
 	log := logger.Logger()
 
 	packageListURLCacheMu.Lock()
@@ -350,6 +367,10 @@ func debMetadataBuildPaths() []string {
 }
 
 func loadDebPackageInfosFromMetadataCache() []ospackage.PackageInfo {
+	if system.IsLiveInstallerExecution() {
+		return nil
+	}
+
 	var infos []ospackage.PackageInfo
 	for _, dir := range debMetadataBuildPaths() {
 		cacheFile := filepath.Join(dir, "packages.parsed.json")
