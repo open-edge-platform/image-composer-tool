@@ -6,7 +6,11 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
@@ -16,6 +20,61 @@ const (
 	serverReadHeaderTimeout = 10 * time.Second
 	serverReadTimeout       = 30 * time.Second
 )
+
+var (
+	managedLocalRepoMu sync.RWMutex
+	managedLocalRepos  = make(map[string]string)
+)
+
+func registerManagedLocalRepo(baseURL, repoPath string) {
+	managedLocalRepoMu.Lock()
+	defer managedLocalRepoMu.Unlock()
+	managedLocalRepos[baseURL] = repoPath
+}
+
+func unregisterManagedLocalRepo(baseURL string) {
+	managedLocalRepoMu.Lock()
+	defer managedLocalRepoMu.Unlock()
+	delete(managedLocalRepos, baseURL)
+}
+
+func managedLocalRepoPath(baseURL string) (string, bool) {
+	managedLocalRepoMu.RLock()
+	defer managedLocalRepoMu.RUnlock()
+	repoPath, ok := managedLocalRepos[baseURL]
+	return repoPath, ok
+}
+
+// ResolveManagedLocalRepoFile resolves a URL to an on-disk file when the URL points
+// to a local repository served by this process. It returns (path, true) only for
+// valid, in-bounds, existing regular files.
+func ResolveManagedLocalRepoFile(rawURL string) (string, bool) {
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
+		return "", false
+	}
+
+	baseURL := fmt.Sprintf("%s://%s", parsedURL.Scheme, parsedURL.Host)
+	repoPath, ok := managedLocalRepoPath(baseURL)
+	if !ok {
+		return "", false
+	}
+
+	relPath := strings.TrimPrefix(filepath.Clean(parsedURL.Path), "/")
+	candidate := filepath.Join(repoPath, relPath)
+
+	relToRepo, err := filepath.Rel(repoPath, candidate)
+	if err != nil || strings.HasPrefix(relToRepo, "..") || relToRepo == "." {
+		return "", false
+	}
+
+	info, err := os.Stat(candidate)
+	if err != nil || info.IsDir() {
+		return "", false
+	}
+
+	return candidate, true
+}
 
 // ServeRepositoryHTTP starts a temporary HTTP server to serve the repository
 // Returns the server URL, cleanup function, and error
@@ -68,11 +127,13 @@ func ServeRepositoryHTTP(repoPath string) (serverURL string, cleanup func(), err
 	}
 
 	serverURL = fmt.Sprintf("http://localhost:%d", port)
+	registerManagedLocalRepo(serverURL, repoPath)
 	log.Infof("repository available at: %s", serverURL)
 
 	// Cleanup function
 	cleanup = func() {
 		log.Infof("shutting down HTTP server for repository")
+		unregisterManagedLocalRepo(serverURL)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 

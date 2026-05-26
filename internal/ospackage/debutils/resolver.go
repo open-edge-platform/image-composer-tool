@@ -138,6 +138,15 @@ func saveParsedPackageCache(cacheFile, checksum string, pkgs []ospackage.Package
 	return os.WriteFile(cacheFile, data, 0600)
 }
 
+func isLocalEphemeralRepoBaseURL(baseURL string) bool {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
+}
+
 // ParseRepositoryMetadata parses the Packages.gz file from gzHref.
 // Caching is applied at two levels:
 //  1. If a valid parse cache (packages.parsed.json) exists from a previous run it is
@@ -159,9 +168,12 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 	// Check the cache before any network operation. If a valid cache exists from a
 	// previous run it is returned immediately, enabling fully offline operation.
 	cacheFile := filepath.Join(pkgMetaDir, "packages.parsed.json")
-	if cached, loadErr := loadParsedPackageCache(cacheFile); loadErr == nil && cached.Checksum != "" {
-		log.Infof("Using cached package metadata for %s (checksum %s)", baseURL, cached.Checksum)
-		return cached.Packages, nil
+	useParseCache := !isLocalEphemeralRepoBaseURL(baseURL)
+	if useParseCache {
+		if cached, loadErr := loadParsedPackageCache(cacheFile); loadErr == nil && cached.Checksum != "" {
+			log.Infof("Using cached package metadata for %s (checksum %s)", baseURL, cached.Checksum)
+			return cached.Packages, nil
+		}
 	}
 
 	//verify release file
@@ -419,8 +431,10 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 	}
 
 	// Persist the parsed result so future calls with the same checksum skip decompression/parsing.
-	if saveErr := saveParsedPackageCache(cacheFile, expectedChecksum, pkgs); saveErr != nil {
-		log.Warnf("failed to save package metadata cache: %v", saveErr)
+	if useParseCache {
+		if saveErr := saveParsedPackageCache(cacheFile, expectedChecksum, pkgs); saveErr != nil {
+			log.Warnf("failed to save package metadata cache: %v", saveErr)
+		}
 	}
 
 	return pkgs, nil

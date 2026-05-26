@@ -182,6 +182,86 @@ func releaseDiskForPartitioning(diskPath string) error {
 	return nil
 }
 
+func verifyDiskWipeState(diskPath string) error {
+	partxCmd := fmt.Sprintf("partx -s %s", diskPath)
+	partxOutput, partxErr := shell.ExecCmd(partxCmd, true, shell.HostPath, nil)
+	trimmedPartxOutput := strings.TrimSpace(partxOutput)
+	if trimmedPartxOutput != "" {
+		return fmt.Errorf("kernel still reports partitions after wipe on %s: %s", diskPath, trimmedPartxOutput)
+	}
+	if partxErr != nil {
+		log.Debugf("partx -s returned no partitions for %s with non-zero exit: %v", diskPath, partxErr)
+	}
+
+	probeCmd := fmt.Sprintf("wipefs -n %s", diskPath)
+	probeOutput, probeErr := shell.ExecCmd(probeCmd, true, shell.HostPath, nil)
+	trimmedProbeOutput := strings.TrimSpace(probeOutput)
+	if probeErr != nil {
+		return fmt.Errorf("failed to probe signatures after wipe on %s: %w", diskPath, probeErr)
+	}
+	if trimmedProbeOutput != "" {
+		return fmt.Errorf("signatures still detected after wipe on %s: %s", diskPath, trimmedProbeOutput)
+	}
+
+	blkidCmd := fmt.Sprintf("blkid %s", diskPath)
+	blkidOutput, blkidErr := shell.ExecCmd(blkidCmd, true, shell.HostPath, nil)
+	trimmedBlkidOutput := strings.TrimSpace(blkidOutput)
+	if trimmedBlkidOutput != "" {
+		return fmt.Errorf("disk metadata still present after wipe on %s: %s", diskPath, trimmedBlkidOutput)
+	}
+	if blkidErr != nil {
+		log.Debugf("blkid returned no metadata for %s with non-zero exit: %v", diskPath, blkidErr)
+	}
+
+	return nil
+}
+
+func deactivateDiskSwapPartitions(diskPath string) error {
+	partitions, err := DiskGetPartitionsInfo(diskPath)
+	if err != nil {
+		return fmt.Errorf("failed to inspect partitions on disk %s for swap state: %w", diskPath, err)
+	}
+
+	swapPartitions := make([]string, 0)
+	for _, partition := range partitions {
+		partitionPath := getStringValue(partition["path"])
+		if partitionPath == "" {
+			continue
+		}
+
+		fsType := strings.ToLower(getStringValue(partition["fstype"]))
+		if fsType == "swap" || fsType == "linux-swap" {
+			swapPartitions = append(swapPartitions, partitionPath)
+		}
+	}
+
+	if len(swapPartitions) == 0 {
+		return nil
+	}
+
+	errs := make([]string, 0)
+	for _, partitionPath := range swapPartitions {
+		output, err := shell.ExecCmd("swapoff "+partitionPath, true, shell.HostPath, nil)
+		if err != nil {
+			trimmedOutput := strings.TrimSpace(output)
+			if trimmedOutput != "" {
+				errs = append(errs, fmt.Sprintf("%s: %s", partitionPath, trimmedOutput))
+			} else {
+				errs = append(errs, fmt.Sprintf("%s: %v", partitionPath, err))
+			}
+			continue
+		}
+
+		log.Infof("Disabled swap on partition %s while wiping disk %s", partitionPath, diskPath)
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("failed to disable swap partitions on disk %s: %s", diskPath, strings.Join(errs, "; "))
+	}
+
+	return nil
+}
+
 func createPartitionTable(diskPath, partitionTableType string) (string, error) {
 	label := "dos"
 	if partitionTableType == "gpt" {
@@ -220,21 +300,24 @@ func createPartitionTable(diskPath, partitionTableType string) (string, error) {
 			return retryOutput, err
 		}
 
-		partitionExists, err := IsDiskPartitionExist(diskPath)
-		if err != nil {
-			return "", fmt.Errorf("failed to verify disk wipe on %s: %w", diskPath, err)
-		}
-		if !partitionExists {
+		verifyErr := verifyDiskWipeState(diskPath)
+		if verifyErr == nil {
 			// Wipe successful
 			log.Infof("Disk %s successfully wiped after %.1f seconds", diskPath, time.Since(partStartTime).Seconds())
 			break
 		}
 
-		if time.Since(partStartTime) > maxRetryDuration {
-			return "", fmt.Errorf("disk %s still has partitions after %d second retry timeout", diskPath, int(maxRetryDuration.Seconds()))
+		if deactivateErr := deactivateDiskSwapPartitions(diskPath); deactivateErr != nil {
+			log.Warnf("Failed to disable swap partitions on %s after wipe verification failure: %v", diskPath, deactivateErr)
+		} else {
+			log.Warnf("Wipe verification failed on %s; swap partitions were checked and deactivated before retry", diskPath)
 		}
 
-		log.Warnf("Disk %s still has partitions, retrying wipe...", diskPath)
+		if time.Since(partStartTime) > maxRetryDuration {
+			return "", fmt.Errorf("disk %s failed wipe verification after %d second retry timeout", diskPath, int(maxRetryDuration.Seconds()))
+		}
+
+		log.Warnf("Disk %s failed wipe verification, retrying wipe...", diskPath)
 		time.Sleep(2 * time.Second)
 	}
 
@@ -1060,19 +1143,44 @@ func GetPartitionLabel(diskPartDev string) (string, error) {
 }
 
 func WipePartitions(diskPath string) error {
-	// Wipe filesystem signatures
-	_, err := shell.ExecCmd(fmt.Sprintf("wipefs -a -f %s", diskPath), true, shell.HostPath, nil)
-	if err != nil {
-		log.Errorf("Failed to wipe filesystem signatures on disk %s: %v", diskPath, err)
-		return fmt.Errorf("failed to wipe disk %s: %w", diskPath, err)
-	}
+	const maxRetryDuration = 30 * time.Second
+	startTime := time.Now()
+	var lastErr error
 
-	_, err = shell.ExecCmd("sync", true, shell.HostPath, nil)
-	if err != nil {
-		log.Errorf("Failed to sync after wiping disk %s: %v", diskPath, err)
-		return fmt.Errorf("failed to sync after wiping disk %s: %w", diskPath, err)
+	for {
+		// Wipe filesystem signatures
+		_, err := shell.ExecCmd(fmt.Sprintf("wipefs -a -f %s", diskPath), true, shell.HostPath, nil)
+		if err != nil {
+			lastErr = fmt.Errorf("failed to wipe disk %s: %w", diskPath, err)
+		} else {
+			_, err = shell.ExecCmd("sync", true, shell.HostPath, nil)
+			if err != nil {
+				lastErr = fmt.Errorf("failed to sync after wiping disk %s: %w", diskPath, err)
+			} else {
+				verifyErr := verifyDiskWipeState(diskPath)
+				if verifyErr == nil {
+					log.Infof("Disk %s successfully wiped after %.1f seconds", diskPath, time.Since(startTime).Seconds())
+					return nil
+				}
+
+				if deactivateErr := deactivateDiskSwapPartitions(diskPath); deactivateErr != nil {
+					lastErr = fmt.Errorf("failed to verify wipe on disk %s: %w; failed to disable swap: %v",
+						diskPath, verifyErr, deactivateErr)
+				} else {
+					lastErr = fmt.Errorf("failed to verify wipe on disk %s: %w", diskPath, verifyErr)
+				}
+			}
+		}
+
+		if time.Since(startTime) > maxRetryDuration {
+			log.Errorf("Disk wipe failed for %s after retry timeout: %v", diskPath, lastErr)
+			return fmt.Errorf("disk wipe failed on %s after %d second retry timeout: %w",
+				diskPath, int(maxRetryDuration.Seconds()), lastErr)
+		}
+
+		log.Warnf("Disk wipe attempt failed for %s: %v. Retrying...", diskPath, lastErr)
+		time.Sleep(2 * time.Second)
 	}
-	return nil
 }
 
 func GetUUID(diskPartitionPath string) (string, error) {

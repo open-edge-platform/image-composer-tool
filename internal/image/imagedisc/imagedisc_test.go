@@ -610,8 +610,11 @@ func TestWipePartitions(t *testing.T) {
 			name:     "successful_wipe",
 			diskPath: "/dev/sda",
 			mockCommands: []shell.MockCommand{
-				{Pattern: "wipefs", Output: "", Error: nil},
+				{Pattern: "wipefs -a -f /dev/sda", Output: "", Error: nil},
 				{Pattern: "sync", Output: "", Error: nil},
+				{Pattern: "partx -s /dev/sda", Output: "", Error: fmt.Errorf("no partitions")},
+				{Pattern: "wipefs -n /dev/sda", Output: "", Error: nil},
+				{Pattern: "blkid /dev/sda", Output: "", Error: fmt.Errorf("not found")},
 			},
 			expectError: false,
 		},
@@ -619,7 +622,7 @@ func TestWipePartitions(t *testing.T) {
 			name:     "wipefs_failure",
 			diskPath: "/dev/sda",
 			mockCommands: []shell.MockCommand{
-				{Pattern: "wipefs", Output: "", Error: fmt.Errorf("wipefs failed")},
+				{Pattern: "wipefs -a -f /dev/sda", Output: "", Error: fmt.Errorf("wipefs failed")},
 			},
 			expectError: true,
 			errorMsg:    "failed to wipe disk",
@@ -628,11 +631,23 @@ func TestWipePartitions(t *testing.T) {
 			name:     "sync_failure",
 			diskPath: "/dev/sda",
 			mockCommands: []shell.MockCommand{
-				{Pattern: "wipefs", Output: "", Error: nil},
+				{Pattern: "wipefs -a -f /dev/sda", Output: "", Error: nil},
 				{Pattern: "sync", Output: "", Error: fmt.Errorf("sync failed")},
 			},
 			expectError: true,
 			errorMsg:    "failed to sync after wiping disk",
+		},
+		{
+			name:     "verify_wipe_failure",
+			diskPath: "/dev/sda",
+			mockCommands: []shell.MockCommand{
+				{Pattern: "wipefs -a -f /dev/sda", Output: "", Error: nil},
+				{Pattern: "sync", Output: "", Error: nil},
+				{Pattern: "partx -s /dev/sda", Output: "", Error: fmt.Errorf("no partitions")},
+				{Pattern: "wipefs -n /dev/sda", Output: "offset               type\n0x000001fe           dos", Error: nil},
+			},
+			expectError: true,
+			errorMsg:    "failed to verify wipe on disk",
 		},
 	}
 
@@ -921,6 +936,9 @@ func TestDiskPartitionsCreate_GPTBusyDiskRetry(t *testing.T) {
 		{Pattern: "swapoff /dev/vda1", Output: "", Error: fmt.Errorf("not swap")},
 		{Pattern: "wipefs -a -f /dev/vda", Output: "", Error: nil},
 		{Pattern: "sync", Output: "", Error: nil},
+		{Pattern: "partx -s /dev/vda", Output: "", Error: fmt.Errorf("no partitions")},
+		{Pattern: "wipefs -n /dev/vda", Output: "", Error: nil},
+		{Pattern: "blkid /dev/vda", Output: "", Error: fmt.Errorf("not found")},
 		{Pattern: ".*label.*gpt.*sfdisk --force --wipe always /dev/vda", Output: "", Error: nil},
 		{Pattern: ".*hw_sector_size", Output: "512", Error: nil},
 		{Pattern: ".*physical_block_size", Output: "4096", Error: nil},

@@ -42,6 +42,7 @@ systemConfig:
     - grub-pc-bin
     - grub-efi-amd64-bin
     - gdisk
+    - util-linux
 
 
   additionalFiles:

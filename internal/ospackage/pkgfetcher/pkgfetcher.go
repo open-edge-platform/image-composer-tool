@@ -175,6 +175,19 @@ func FetchPackages(urls []string, destDir string, workers int) error {
 					// file exists but zero size: re-download
 					log.Warnf("re-downloading zero-size %s", name)
 				}
+
+				if localPath, ok := network.ResolveManagedLocalRepoFile(url); ok {
+					if err := copyLocalFile(localPath, destPath); err != nil {
+						log.Errorf("copying local repo package %s to %s failed: %v", localPath, destPath, err)
+						downloadError.Store(true)
+					} else {
+						if err := bar.Add(1); err != nil {
+							log.Errorf("failed to add to progress bar: %v", err)
+						}
+						continue
+					}
+				}
+
 				client := network.GetSecureHTTPClient()
 				// S3/CloudFront treats literal '+' as space; encode it as %2B in the
 				// download URL only (the local filename keeps the original '+').
@@ -210,5 +223,33 @@ func FetchPackages(urls []string, destDir string, workers int) error {
 		log.Errorf("failed to finish progress bar: %v", err)
 	}
 	fmt.Println()
+	return nil
+}
+
+func copyLocalFile(srcPath, dstPath string) error {
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return fmt.Errorf("open source file: %w", err)
+	}
+	defer src.Close()
+
+	srcInfo, err := src.Stat()
+	if err != nil {
+		return fmt.Errorf("stat source file: %w", err)
+	}
+
+	dst, err := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, srcInfo.Mode())
+	if err != nil {
+		return fmt.Errorf("create destination file: %w", err)
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, src); err != nil {
+		if removeErr := os.Remove(dstPath); removeErr != nil && !os.IsNotExist(removeErr) {
+			return fmt.Errorf("copy local file: %w (also failed to remove partial file: %v)", err, removeErr)
+		}
+		return fmt.Errorf("copy local file: %w", err)
+	}
+
 	return nil
 }

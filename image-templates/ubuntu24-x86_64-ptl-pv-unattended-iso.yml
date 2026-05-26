@@ -35,7 +35,7 @@ disk:
   selectionPolicy:
     strategy: largest
     excludeRemovable: true
-    requireEmpty: true # Only consider disks that do not have existing partitions.
+    requireEmpty: false # Only consider disks that do not have existing partitions.
   partitionTableType: gpt # Partition table type, valid value: [gpt, mbr]
   partitions:
     - id: EFI
@@ -334,8 +334,6 @@ systemConfig:
   #         - "8.8.4.4"
 
   users:
-    - name: root
-      startupScript: "/root/unattendedinstaller"
     - name: admin
       # Generate a SHA-512 password hash from CLI and paste it into `password`.
       # Example (recommended):
@@ -615,8 +613,6 @@ systemConfig:
     - cloud-init
 
   additionalFiles:
-    - local: ../config/general/isolinux/unattendedinstaller
-      final: /root/unattendedinstaller
     - local: ../additionalfiles/ptl/01-network-manager-all.yaml
       final: /etc/netplan/01-network-manager-all.yaml
     - local: ../additionalfiles/ptl/50-cloud-init.yaml

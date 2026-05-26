@@ -134,3 +134,27 @@ func TestGetFullUrl(t *testing.T) {
 		})
 	}
 }
+
+func TestIsLocalEphemeralRepoBaseURL(t *testing.T) {
+	tests := []struct {
+		name     string
+		baseURL  string
+		expected bool
+	}{
+		{name: "localhost with port", baseURL: "http://localhost:38540", expected: true},
+		{name: "localhost without port", baseURL: "http://localhost", expected: true},
+		{name: "loopback ipv4", baseURL: "http://127.0.0.1:39394", expected: true},
+		{name: "loopback ipv6", baseURL: "http://[::1]:8080", expected: true},
+		{name: "remote host", baseURL: "https://download.01.org/intel-linux-overlay/ubuntu", expected: false},
+		{name: "invalid URL", baseURL: "://invalid", expected: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isLocalEphemeralRepoBaseURL(tt.baseURL)
+			if got != tt.expected {
+				t.Errorf("isLocalEphemeralRepoBaseURL(%q) = %v, want %v", tt.baseURL, got, tt.expected)
+			}
+		})
+	}
+}

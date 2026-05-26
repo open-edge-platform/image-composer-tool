@@ -664,3 +664,26 @@ func TestFetchPackages_PlusEncodedAsPercentTwoBInURL(t *testing.T) {
 		t.Fatalf("unexpected file content: %q", string(content))
 	}
 }
+
+func TestCopyLocalFile_Success(t *testing.T) {
+	tempDir := t.TempDir()
+	srcPath := filepath.Join(tempDir, "source.rpm")
+	dstPath := filepath.Join(tempDir, "dest.rpm")
+
+	if err := os.WriteFile(srcPath, []byte("local package content"), 0644); err != nil {
+		t.Fatalf("failed to write source file: %v", err)
+	}
+
+	if err := copyLocalFile(srcPath, dstPath); err != nil {
+		t.Fatalf("copyLocalFile failed: %v", err)
+	}
+
+	got, err := os.ReadFile(dstPath)
+	if err != nil {
+		t.Fatalf("failed to read destination file: %v", err)
+	}
+
+	if string(got) != "local package content" {
+		t.Fatalf("unexpected destination content: %q", string(got))
+	}
+}

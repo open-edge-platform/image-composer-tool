@@ -341,3 +341,54 @@ func TestServeRepositoryHTTP_DirectoryListing(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveManagedLocalRepoFile_Success(t *testing.T) {
+	repoDir := t.TempDir()
+	relPath := filepath.Join("pool", "main", "pkg.deb")
+	fullPath := filepath.Join(repoDir, relPath)
+
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
+		t.Fatalf("failed to create repo file directory: %v", err)
+	}
+	if err := os.WriteFile(fullPath, []byte("pkg content"), 0644); err != nil {
+		t.Fatalf("failed to create repo file: %v", err)
+	}
+
+	serverURL, cleanup, err := ServeRepositoryHTTP(repoDir)
+	if err != nil {
+		t.Fatalf("ServeRepositoryHTTP failed: %v", err)
+	}
+	defer cleanup()
+
+	resolvedPath, ok := ResolveManagedLocalRepoFile(serverURL + "/" + relPath)
+	if !ok {
+		t.Fatalf("expected ResolveManagedLocalRepoFile to resolve managed URL")
+	}
+	if resolvedPath != fullPath {
+		t.Fatalf("unexpected resolved path: got %s, want %s", resolvedPath, fullPath)
+	}
+}
+
+func TestResolveManagedLocalRepoFile_AfterCleanup(t *testing.T) {
+	repoDir := t.TempDir()
+	relPath := filepath.Join("pool", "main", "pkg.deb")
+	fullPath := filepath.Join(repoDir, relPath)
+
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
+		t.Fatalf("failed to create repo file directory: %v", err)
+	}
+	if err := os.WriteFile(fullPath, []byte("pkg content"), 0644); err != nil {
+		t.Fatalf("failed to create repo file: %v", err)
+	}
+
+	serverURL, cleanup, err := ServeRepositoryHTTP(repoDir)
+	if err != nil {
+		t.Fatalf("ServeRepositoryHTTP failed: %v", err)
+	}
+
+	cleanup()
+
+	if _, ok := ResolveManagedLocalRepoFile(serverURL + "/" + relPath); ok {
+		t.Fatalf("expected managed URL to be unregistered after cleanup")
+	}
+}
