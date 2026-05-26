@@ -344,6 +344,11 @@ func (chrootEnv *ChrootEnv) initChrootLocalRepo(targetArch string) error {
 			chrootPkgCacheDir, ChrootRepoDir, err)
 	}
 
+	if system.IsLiveInstallerExecution() {
+		log.Infof("Skipping local cache repository metadata/refresh in live-installer mode")
+		return nil
+	}
+
 	if chrootEnv.ChrootEnvRoot != shell.HostPath {
 		// Within iso initramfs system, local repo metadata should have been generated
 		// And the repo cache is read-only, not able to update by live-installer
