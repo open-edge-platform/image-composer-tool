@@ -76,16 +76,18 @@ systemConfig:
 ```mermaid
 flowchart TD
     A[Load child template] --> B{Has extends?}
-    B -- No --> G[Load OS default template]
+
+    B -- No --> G1[Load OS default template]
+    G1 --> I["Merge: MergeConfigurations(child, default) → final"]
+
     B -- Yes --> C[Resolve path relative to child location]
     C --> D[Load parent template]
     D --> E{Parent has extends?}
     E -- Yes --> ERR1[❌ Reject: single-level only]
     E -- No --> F{Target matches child?}
     F -- No --> ERR2["❌ Reject: target mismatch (OS/dist/arch/imageType)"]
-    F -- Yes --> G
-    G --> H["Merge 1: MergeConfigurations(parent, default) → intermediate"]
-    G -- No parent --> I["Merge: MergeConfigurations(child, default) → final"]
+    F -- Yes --> G2[Load OS default template]
+    G2 --> H["Merge 1: MergeConfigurations(parent, default) → intermediate"]
     H --> J["Merge 2: MergeConfigurations(child, intermediate) → final"]
 
     style ERR1 fill:#f44,color:#fff
@@ -112,7 +114,7 @@ The existing `MergeConfigurations()` is called twice. No changes to merge strate
 - **Single level only**: if the parent template contains `extends`, reject with a clear error
 - **Circular reference**: child cannot extend itself
 - **Target match**: child's `target` must match parent's `target` (prevents nonsensical cross-OS inheritance)
-- **Path safety**: resolve paths with `filepath.Clean`, reject symlinks (existing `security.RejectSymlinks`), prevent traversal outside workspace
+- **Path safety**: resolve paths with `filepath.Clean`, reject symlinks (existing `security.RejectSymlinks`), reject resolved paths that escape the child template's directory (i.e., disallow `../../../etc/` style traversal after cleaning)
 - **Schema**: `extends` added as optional string to `UserTemplate` schema; stripped from merged result
 
 ### Changes Required
