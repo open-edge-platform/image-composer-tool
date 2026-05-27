@@ -163,6 +163,11 @@ The existing `MergeConfigurations()` is called twice. No changes to merge strate
 
 ### Alternatives Considered
 
-- **Multi-level extends (3-4 levels)**: Rejected due to significant increase in merge conflict resolution, debugging difficulty, and ordering ambiguity for order-sensitive sections
+- **Multi-level extends (3-4 levels)**: Rejected due to complexity that grows with each additional level:
+  - **Order-sensitive sections become ambiguous**: `configurations` contains shell commands appended in order. With A extends B extends C, the execution order across files is hard to predict and debug
+  - **Last-writer-wins conflicts**: for merge-by-key sections (`users`, `packageRepositories`), each level can silently override the previous. Users must trace the full chain to predict the outcome
+  - **No subtraction for additive sections**: packages are merged as a union. If an intermediate level adds a package, no downstream level can remove it without introducing a `remove`/`exclude` concept
+  - **Validation requires full chain resolution**: intermediate templates may be intentionally incomplete. Errors must point to the correct file and level, requiring provenance tracking through every merge step
+  - **Cycle and diamond detection**: multi-level chaining requires full graph cycle detection (A extends B extends C extends A), unlike single-level where checking if the parent has `extends` is sufficient
 - **Template fragments/mixins (`includes: [...]`)**: Different pattern that solves horizontal reuse but not the parent-child inheritance use case
 - **External pre-processing (yq, scripts)**: Already used by some users but pushes complexity outward and loses ICT validation/traceability
