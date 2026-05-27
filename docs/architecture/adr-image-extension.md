@@ -301,8 +301,7 @@ target:
   imageType: raw
 
 baseline:
-  mode: compose
-  type: distro-template
+  mode: create
 
 systemConfig:
   packages:
@@ -324,9 +323,9 @@ target:
 
 baseline:
   mode: overlay
-  type: disk-image
-  source: ./input/ubuntu-24.04-baseline.raw
-  format: raw
+  source:
+    path: ./input/ubuntu-24.04-baseline.raw
+    format: raw
 
 extensionPolicy:
   packageOperation: additive-only
@@ -434,7 +433,8 @@ Examples:
 - Debian Installer ISO adapter.
 - Fedora Anaconda ISO adapter.
 
-Each adapter must include version-specific validation and negative tests for unsupported variants.
+Each adapter must include version-specific validation and negative tests for
+unsupported variants.
 
 ### In Scope
 
@@ -469,17 +469,22 @@ Disk Image Extension out of scope.
 - Migrating bootloaders unless explicitly supported.
 - Silently resolving package conflicts through downgrade or replacement.
 - Modifying encrypted partitions unless explicitly supported.
-- Modifying dm-verity protected root filesystems unless regenerated through a supported flow.
+- Modifying dm-verity protected root filesystems unless regenerated through a
+supported flow.
 
 ## Alternatives Considered
 
 ### Alternative 1: Support Generic ISO Mutation
 
-Allow users to provide any ISO and request package additions or configuration changes.
+Allow users to provide any ISO and request package additions or configuration
+changes.
 
 **Rejected.**
 
-Generic ISO mutation requires understanding each installer’s internal structure, payload model, package selection behavior, manifests, checksums, and boot/security model. This approach is brittle, expensive to maintain, hard to validate, and unlikely to scale.
+Generic ISO mutation requires understanding each installer’s internal structure,
+payload model, package selection behavior, manifests, checksums, and
+boot/security model. This approach is brittle, expensive to maintain, hard to
+validate, and unlikely to scale.
 
 ### Alternative 2: Treat ISO and RAW/VHD Inputs the Same
 
@@ -487,15 +492,19 @@ Expose one baseline abstraction for all artifact types.
 
 **Rejected.**
 
-Disk images and ISO installers have different semantics. A disk image usually contains the target root filesystem. An ISO installer may contain multiple environments and installer-specific payloads.
+Disk images and ISO installers have different semantics. A disk image usually
+contains the target root filesystem. An ISO installer may contain multiple
+environments and installer-specific payloads.
 
 ### Alternative 3: Support Full Structural Mutation of Disk Images
 
-Allow users to change partition layout, filesystem type, partition table type, encryption model, and boot mode of an existing baseline.
+Allow users to change partition layout, filesystem type, partition table type,
+encryption model, and boot mode of an existing baseline.
 
 **Rejected for initial implementation.**
 
-Structural mutation has high complexity and risk. Significant layout changes should use fresh composition from a declarative template.
+Structural mutation has high complexity and risk. Significant layout changes
+should use fresh composition from a declarative template.
 
 ### Alternative 4: Support Package Removal During Baseline Extension
 
@@ -503,15 +512,18 @@ Allow users to remove existing packages from a baseline image.
 
 **Deferred.**
 
-Package removal can have complex dependency side effects and may break assumptions in the baseline image. Initial support should be additive only.
+Package removal can have complex dependency side effects and may break
+assumptions in the baseline image. Initial support should be additive only.
 
 ### Alternative 5: Generate All Images from Scratch Only
 
-Require all images to be generated from templates and disallow existing image baselines.
+Require all images to be generated from templates and disallow existing image
+baselines.
 
 **Rejected.**
 
-Extending existing disk images provides practical value for customer-specific customization, ODM workflows, and incremental platform enablement.
+Extending existing disk images provides practical value for customer-specific
+customization, ODM workflows, and incremental platform enablement.
 
 ## Schema Recommendation
 
@@ -547,85 +559,57 @@ What is missing is the **composition mode**.
 ```json
 "Baseline": {
   "type": "object",
-  "description": "Declares the image composition starting point and operation mode.",
+  "description": "Declares whether the template creates a new image or extends
+  an existing disk image baseline.",
   "properties": {
     "mode": {
       "type": "string",
-      "description": "Composition mode.",
-      "enum": ["compose", "overlay", "remaster"]
-    },
-    "type": {
-      "type": "string",
-      "description": "Baseline artifact type.",
-      "enum": ["distro-template", "installer-template", "disk-image", "iso"]
+      "description": "Composition mode. 'create' builds a new image from the 
+      template. 'overlay' starts from an existing disk image baseline and 
+      applies additive changes.",
+      "enum": ["create", "extend"],
+      "default": "create"
     },
     "source": {
-      "type": "string",
-      "description": "Path or URI to the baseline artifact."
-    },
-    "format": {
-      "type": "string",
-      "description": "Input artifact format.",
-      "enum": ["raw", "img", "qcow2", "vhd", "vhdx", "vmdk", "vdi", "iso"]
-    },
-    "installer": {
-      "type": "string",
-      "description": "Known installer template or installer family.",
-      "enum": ["ubuntu-live-server", "ubuntu-desktop", "debian-installer", "fedora-anaconda"]
-    },
-    "adapter": {
-      "type": "string",
-      "description": "Explicit distro-specific remastering adapter."
+      "type": "object",
+      "description": "Existing baseline artifact used when mode is 'overlay'.",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Path or URI to the existing baseline disk image."
+        },
+        "format": {
+          "type": "string",
+          "description": "Input baseline disk image format.",
+          "enum": ["raw", "img", "qcow2", "vhd", "vhdx", "vmdk", "vdi"]
+        }
+      },
+      "required": ["path", "format"],
+      "additionalProperties": false
     }
   },
-  "required": ["mode", "type"],
   "additionalProperties": false,
   "allOf": [
     {
       "if": {
         "properties": {
-          "mode": { "const": "overlay" },
-          "type": { "const": "disk-image" }
+          "mode": { "const": "overlay" }
         }
       },
       "then": {
-        "required": ["source", "format"],
-        "properties": {
-          "format": {
-            "enum": ["raw", "img", "qcow2", "vhd", "vhdx", "vmdk", "vdi"]
-          }
-        }
+        "required": ["source"]
       }
     },
     {
       "if": {
         "properties": {
-          "mode": { "const": "overlay" },
-          "type": { "const": "iso" }
-        }
-      },
-      "then": false
-    },
-    {
-      "if": {
-        "properties": {
-          "mode": { "const": "remaster" },
-          "type": { "const": "iso" }
+          "mode": { "const": "create" }
         }
       },
       "then": {
-        "required": ["source", "adapter"]
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "mode": { "const": "compose" },
-          "type": { "const": "installer-template" }
+        "not": {
+          "required": ["source"]
         }
-      },
-      "then": {
-        "required": ["installer"]
       }
     }
   ]
@@ -691,32 +675,49 @@ What is missing is the **composition mode**.
   "properties": {
     "inspect": {
       "type": "boolean",
+      "description": "Inspect the generated image and produce an image summary.",
       "default": true
     },
     "compare": {
       "type": "object",
+      "description": "Compare the generated image against a reference image or expected image summary.",
       "properties": {
         "enabled": {
           "type": "boolean",
           "default": false
         },
-        "baseline": {
+        "referenceImage": {
           "type": "string",
-          "description": "Path or URI to comparison baseline."
+          "description": "Path or URI to the image used as the comparison reference."
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "enabled": { "const": true }
+            }
+          },
+          "then": {
+            "required": ["referenceImage"]
+          }
+        }
+      ]
     },
     "sbom": {
       "type": "boolean",
+      "description": "Generate a software bill of materials for the output image.",
       "default": false
     },
     "cveCheck": {
       "type": "boolean",
+      "description": "Run CVE analysis against the generated image package inventory.",
       "default": false
     },
     "bootTest": {
       "type": "boolean",
+      "description": "Boot-test the generated image where supported.",
       "default": false
     }
   },
