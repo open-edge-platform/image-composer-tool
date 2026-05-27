@@ -772,6 +772,7 @@ func TestGetGrubVersion(t *testing.T) {
 	tests := []struct {
 		name         string
 		mockCommands []shell.MockCommand
+		setupRoot    func(t *testing.T, installRoot string)
 		expected     string
 		expectError  bool
 	}{
@@ -793,10 +794,26 @@ func TestGetGrubVersion(t *testing.T) {
 			expectError: false,
 		},
 		{
+			name:         "update_grub_exists_in_install_root",
+			mockCommands: []shell.MockCommand{},
+			setupRoot: func(t *testing.T, installRoot string) {
+				updateGrubPath := filepath.Join(installRoot, "usr", "sbin", "update-grub")
+				if err := os.MkdirAll(filepath.Dir(updateGrubPath), 0755); err != nil {
+					t.Fatalf("failed to create update-grub parent dir: %v", err)
+				}
+				if err := os.WriteFile(updateGrubPath, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+					t.Fatalf("failed to create update-grub binary: %v", err)
+				}
+			},
+			expected:    "grub",
+			expectError: false,
+		},
+		{
 			name: "neither_exists",
 			mockCommands: []shell.MockCommand{
 				{Pattern: "command -v grub2-mkconfig", Output: "", Error: nil},
 				{Pattern: "command -v grub-mkconfig", Output: "", Error: nil},
+				{Pattern: "command -v update-grub", Output: "", Error: nil},
 			},
 			expected:    "",
 			expectError: true,
@@ -805,7 +822,6 @@ func TestGetGrubVersion(t *testing.T) {
 			name: "error_checking_grub2",
 			mockCommands: []shell.MockCommand{
 				{Pattern: "command -v grub2-mkconfig", Output: "", Error: fmt.Errorf("failed")},
-				{Pattern: "command -v grub-mkconfig", Output: "", Error: fmt.Errorf("failed")},
 			},
 			expected:    "",
 			expectError: true,
@@ -815,8 +831,12 @@ func TestGetGrubVersion(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			shell.Default = shell.NewMockExecutor(tt.mockCommands)
+			installRoot := t.TempDir()
+			if tt.setupRoot != nil {
+				tt.setupRoot(t, installRoot)
+			}
 
-			result, err := getGrubVersion("/")
+			result, err := getGrubVersion(installRoot)
 
 			if tt.expectError {
 				if err == nil {
@@ -831,6 +851,28 @@ func TestGetGrubVersion(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestUpdateGrubConfig_UsesUpdateGrubFallback(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	installRoot := t.TempDir()
+	updateGrubPath := filepath.Join(installRoot, "usr", "sbin", "update-grub")
+	if err := os.MkdirAll(filepath.Dir(updateGrubPath), 0755); err != nil {
+		t.Fatalf("failed to create update-grub parent dir: %v", err)
+	}
+	if err := os.WriteFile(updateGrubPath, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatalf("failed to create update-grub binary: %v", err)
+	}
+
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: "update-grub", Output: "", Error: nil},
+	})
+
+	if err := updateGrubConfig(installRoot, "grub"); err != nil {
+		t.Fatalf("expected update-grub fallback to succeed, got error: %v", err)
 	}
 }
 
@@ -1126,7 +1168,7 @@ func TestInstallImageBoot_GrubVersionNotFound(t *testing.T) {
 	if err == nil {
 		t.Error("Expected error when neither grub version is found")
 	}
-	if !strings.Contains(err.Error(), "neither grub2-mkconfig nor grub-mkconfig found") {
+	if !strings.Contains(err.Error(), "none of grub2-mkconfig, grub-mkconfig, or update-grub found") {
 		t.Errorf("Expected grub version error, got: %v", err)
 	}
 }

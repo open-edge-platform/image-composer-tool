@@ -123,6 +123,14 @@ func (rawMaker *RawMaker) BuildRawImage() error {
 	// Create loop device
 	loopDevPath, diskPathIdMap, err := rawMaker.LoopDev.CreateRawImageLoopDev(imageFile, rawMaker.template)
 	if err != nil {
+		if loopDevPath != "" {
+			if detachErr := rawMaker.LoopDev.LoopSetupDelete(loopDevPath); detachErr != nil {
+				log.Errorf("Failed to detach loopback device %s after loop creation failure: %v", loopDevPath, detachErr)
+			} else {
+				log.Infof("Successfully detached loopback device after loop creation failure: %s", loopDevPath)
+			}
+		}
+		rawMaker.cleanupImageFileOnError(imageFile)
 		return fmt.Errorf("failed to create loop device: %w", err)
 	}
 

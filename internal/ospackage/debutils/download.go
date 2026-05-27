@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/network"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/slice"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
 
 // Repository represents a Debian repository
@@ -117,6 +119,10 @@ func loadURLExistenceCacheLocked() {
 }
 
 func getURLExistenceFromCache(url string) (bool, bool) {
+	if system.IsLiveInstallerExecution() {
+		return false, false
+	}
+
 	urlExistenceCacheMu.Lock()
 	defer urlExistenceCacheMu.Unlock()
 
@@ -126,6 +132,10 @@ func getURLExistenceFromCache(url string) (bool, bool) {
 }
 
 func saveURLExistenceToCache(url string, exists bool) {
+	if system.IsLiveInstallerExecution() {
+		return
+	}
+
 	log := logger.Logger()
 
 	urlExistenceCacheMu.Lock()
@@ -170,6 +180,10 @@ func loadPackageListURLCacheLocked() {
 }
 
 func getPackageListURLFromCache(baseURL, codename, arch, component string) (string, bool) {
+	if system.IsLiveInstallerExecution() {
+		return "", false
+	}
+
 	packageListURLCacheMu.Lock()
 	defer packageListURLCacheMu.Unlock()
 
@@ -182,6 +196,10 @@ func getPackageListURLFromCache(baseURL, codename, arch, component string) (stri
 }
 
 func savePackageListURLToCache(baseURL, codename, arch, component, packageListURL string) {
+	if system.IsLiveInstallerExecution() {
+		return
+	}
+
 	log := logger.Logger()
 
 	packageListURLCacheMu.Lock()
@@ -349,6 +367,10 @@ func debMetadataBuildPaths() []string {
 }
 
 func loadDebPackageInfosFromMetadataCache() []ospackage.PackageInfo {
+	if system.IsLiveInstallerExecution() {
+		return nil
+	}
+
 	var infos []ospackage.PackageInfo
 	for _, dir := range debMetadataBuildPaths() {
 		cacheFile := filepath.Join(dir, "packages.parsed.json")
@@ -613,16 +635,33 @@ func LocalUserPackages() ([]ospackage.PackageInfo, func(), error) {
 	}
 
 	for i, repo := range UserRepo {
-		if repo.Path == "<PATH>" || repo.Path == "" {
-			continue
+		repoPath := repo.Path
+		if repoPath == "<PATH>" || repoPath == "" {
+			if len(repo.Packages) == 0 {
+				continue
+			}
+			// auto-create a temp dir when path is not specified but packages are
+			tmpPath, err := os.MkdirTemp(config.TempDir(), "ict-localrepo-*")
+			if err != nil {
+				combinedCleanup()
+				return nil, nil, fmt.Errorf("failed to create temporary directory for local repository: %w", err)
+			}
+			cleanups = append(cleanups, func() { os.RemoveAll(tmpPath) })
+			repoPath = tmpPath
+		}
+
+		if err := PrepareLocalRepositoryFiles(repoPath, repo.Packages, repo.InsecureSkipVerify); err != nil {
+			combinedCleanup()
+			log.Errorf("failed to prepare local DEB repository source path %s: %v", repoPath, err)
+			return nil, nil, fmt.Errorf("failed to prepare local DEB repository source path %s: %w", repoPath, err)
 		}
 
 		repoName := fmt.Sprintf("localrepo%d", i+1)
-		_, tempURL, cleanup, err := CreateTemporaryRepository(repo.Path, repoName, Architecture)
+		_, tempURL, cleanup, err := CreateTemporaryRepository(repoPath, repoName, Architecture)
 		if err != nil {
 			combinedCleanup()
-			log.Errorf("failed to create temporary DEB repository for %s: %v", repo.Path, err)
-			return nil, nil, fmt.Errorf("failed to create temporary DEB repository for %s: %w", repo.Path, err)
+			log.Errorf("failed to create temporary DEB repository for %s: %v", repoPath, err)
+			return nil, nil, fmt.Errorf("failed to create temporary DEB repository for %s: %w", repoPath, err)
 		}
 		cleanups = append(cleanups, cleanup)
 
@@ -634,8 +673,8 @@ func LocalUserPackages() ([]ospackage.PackageInfo, func(), error) {
 		localPkgs, err := ParseRepositoryMetadata(tempURL, pkggz, releaseFile, "", "[trusted=yes]", buildPath, Architecture, repo.AllowPackages)
 		if err != nil {
 			combinedCleanup()
-			log.Errorf("failed to parse local DEB repository %s: %v", repo.Path, err)
-			return nil, nil, fmt.Errorf("failed to parse local DEB repository %s: %w", repo.Path, err)
+			log.Errorf("failed to parse local DEB repository %s: %v", repoPath, err)
+			return nil, nil, fmt.Errorf("failed to parse local DEB repository %s: %w", repoPath, err)
 		}
 		allLocalPackages = append(allLocalPackages, localPkgs...)
 	}
@@ -867,6 +906,7 @@ func MatchRequested(requests []string, all []ospackage.PackageInfo) ([]ospackage
 	seen := make(map[string]struct{})
 	var requestedPkgs []string
 	gotMissingPkg := false
+	gotMissingKernelPkg := false
 
 	for _, want := range requests {
 		if isGlobPattern(want) {
@@ -875,6 +915,9 @@ func MatchRequested(requests []string, all []ospackage.PackageInfo) ([]ospackage
 				requestedPkgs = append(requestedPkgs, want)
 				log.Warnf("requested package '%q' not found in repo", want)
 				gotMissingPkg = true
+				if isKernelPackageRequest(want) {
+					gotMissingKernelPkg = true
+				}
 				continue
 			}
 
@@ -900,10 +943,31 @@ func MatchRequested(requests []string, all []ospackage.PackageInfo) ([]ospackage
 			requestedPkgs = append(requestedPkgs, want)
 			log.Warnf("requested package '%q' not found in repo", want)
 			gotMissingPkg = true
+			if isKernelPackageRequest(want) {
+				gotMissingKernelPkg = true
+			}
 		}
 	}
 
 	log.Infof("found %d packages in request of %d", len(out), len(requests))
+
+	// Log kernel version mismatch only if a kernel package wasn't found
+	if len(KernelPackages) > 0 && KernelVersion != "" && gotMissingKernelPkg {
+		var versions []string
+		versionsSet := make(map[string]struct{})
+		for _, pkg := range all {
+			if isKernelPackageRequest(pkg.Name) {
+				versionsSet[pkg.Version] = struct{}{}
+			}
+		}
+		for v := range versionsSet {
+			versions = append(versions, v)
+		}
+		sort.Strings(versions)
+		log.Errorf("kernel version mismatch: requires kernel version %q, but available versions are: %v",
+			KernelVersion, versions)
+	}
+
 	if gotMissingPkg {
 		report, err := WriteArrayToFile(requestedPkgs, "Missing Requested Packages")
 		if err != nil {

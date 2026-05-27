@@ -17,6 +17,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/pkgfetcher"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
 
 // VersionConstraint represents a version operator and version pair
@@ -117,6 +118,16 @@ type packageMetadataCache struct {
 	Packages []ospackage.PackageInfo `json:"packages"`
 }
 
+func shouldBypassParsedPackageCache(baseURL string) bool {
+	parsedURL, err := url.Parse(baseURL)
+	if err != nil {
+		return false
+	}
+
+	host := strings.ToLower(parsedURL.Hostname())
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
+}
+
 func loadParsedPackageCache(cacheFile string) (*packageMetadataCache, error) {
 	data, err := os.ReadFile(cacheFile)
 	if err != nil {
@@ -159,9 +170,15 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 	// Check the cache before any network operation. If a valid cache exists from a
 	// previous run it is returned immediately, enabling fully offline operation.
 	cacheFile := filepath.Join(pkgMetaDir, "packages.parsed.json")
-	if cached, loadErr := loadParsedPackageCache(cacheFile); loadErr == nil && cached.Checksum != "" {
-		log.Infof("Using cached package metadata for %s (checksum %s)", baseURL, cached.Checksum)
-		return cached.Packages, nil
+	allowParsedCache := !shouldBypassParsedPackageCache(baseURL) && !system.IsLiveInstallerExecution()
+	if !allowParsedCache {
+		log.Debugf("Bypassing parsed package metadata cache for %s", baseURL)
+	}
+	if allowParsedCache {
+		if cached, loadErr := loadParsedPackageCache(cacheFile); loadErr == nil && cached.Checksum != "" {
+			log.Infof("Using cached package metadata for %s (checksum %s)", baseURL, cached.Checksum)
+			return cached.Packages, nil
+		}
 	}
 
 	//verify release file
@@ -419,8 +436,10 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 	}
 
 	// Persist the parsed result so future calls with the same checksum skip decompression/parsing.
-	if saveErr := saveParsedPackageCache(cacheFile, expectedChecksum, pkgs); saveErr != nil {
-		log.Warnf("failed to save package metadata cache: %v", saveErr)
+	if allowParsedCache {
+		if saveErr := saveParsedPackageCache(cacheFile, expectedChecksum, pkgs); saveErr != nil {
+			log.Warnf("failed to save package metadata cache: %v", saveErr)
+		}
 	}
 
 	return pkgs, nil
@@ -692,6 +711,11 @@ func ResolveDependencies(requested []ospackage.PackageInfo, all []ospackage.Pack
 		neededSet[cur.Name] = struct{}{}
 		result = append(result, cur)
 
+		// Track in resolvedDeps so later packages reuse this version
+		if _, alreadyResolved := resolvedDeps[cur.Name]; !alreadyResolved {
+			resolvedDeps[cur.Name] = cur
+		}
+
 		// Traverse dependencies
 		for _, dep := range cur.Requires {
 
@@ -823,33 +847,30 @@ func ResolveDependencies(requested []ospackage.PackageInfo, all []ospackage.Pack
 								// Pick the best candidate using the resolver
 								newCandidate, err := resolveMultiCandidates(cur, satisfyingCandidates)
 								if err == nil {
-									resolvedPriority := getRepositoryPriority(resolvedPkg.URL)
-									newPriority := getRepositoryPriority(newCandidate.URL)
+									// The resolved package violates a version constraint
+									// required by the current package. A candidate that
+									// satisfies the constraint exists, so replace
+									// unconditionally — constraint satisfaction takes
+									// precedence over priority.
+									log.Debugf("replacing %s_%s with constraint-satisfying version %s_%s (required by %s_%s)",
+										resolvedPkg.Name, resolvedPkg.Version,
+										newCandidate.Name, newCandidate.Version,
+										cur.Name, cur.Version)
 
-									// Apply APT priority comparison
-									if comparePriorityBehavior(newCandidate, resolvedPkg) {
-										// New candidate has higher priority - replace the resolved package
-										log.Debugf("replacing %s_%s (priority %d) with higher priority package %s_%s (priority %d)",
-											resolvedPkg.Name, resolvedPkg.Version, resolvedPriority,
-											newCandidate.Name, newCandidate.Version, newPriority)
-
-										// Remove old package from result and neededSet
-										delete(neededSet, resolvedPkg.Name)
-										for i, pkg := range result {
-											if pkg.Name == resolvedPkg.Name && pkg.Version == resolvedPkg.Version {
-												result = append(result[:i], result[i+1:]...)
-												break
-											}
+									// Remove old package from result and neededSet
+									delete(neededSet, resolvedPkg.Name)
+									for i, pkg := range result {
+										if pkg.Name == resolvedPkg.Name && pkg.Version == resolvedPkg.Version {
+											result = append(result[:i], result[i+1:]...)
+											break
 										}
-
-										// Add new candidate to queue and resolvedDeps
-										queue = append(queue, newCandidate)
-										resolvedDeps[depName] = newCandidate
-										AddParentChildPair(cur, newCandidate, &parentChildPairs)
-										continue
-									} else {
-										log.Debugf("new candidate does not have higher priority, cannot replace")
 									}
+
+									// Add new candidate to queue and resolvedDeps
+									queue = append(queue, newCandidate)
+									resolvedDeps[depName] = newCandidate
+									AddParentChildPair(cur, newCandidate, &parentChildPairs)
+									continue
 								}
 							}
 						}
@@ -1383,16 +1404,8 @@ func ResolveTopPackageConflicts(want string, all []ospackage.PackageInfo) (ospac
 	}
 
 	if isKernelPackage && KernelVersion != "" {
-		var beforeFilter []ospackage.PackageInfo
-		beforeFilter = append(beforeFilter, candidates...)
 		candidates = filterKernelCandidates(candidates)
 		if len(candidates) == 0 {
-			var availableVersions []string
-			for _, pkg := range beforeFilter {
-				availableVersions = append(availableVersions, pkg.Version)
-			}
-			log.Errorf("kernel version mismatch: package %q requires kernel version %q, but available versions are: %v",
-				want, KernelVersion, availableVersions)
 			return ospackage.PackageInfo{}, false
 		}
 	}

@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
@@ -174,6 +175,10 @@ func releaseDiskForPartitioning(diskPath string) error {
 		}
 	}
 
+	if _, err := shell.ExecCmd("sync", true, shell.HostPath, nil); err != nil {
+		return fmt.Errorf("failed to sync disk %s after release operations: %w", diskPath, err)
+	}
+
 	return nil
 }
 
@@ -199,20 +204,80 @@ func createPartitionTable(diskPath, partitionTableType string) (string, error) {
 		return cmdOutput, fmt.Errorf("failed to release busy disk %s before retry: %w", diskPath, releaseErr)
 	}
 
-	for _, retryCmd := range []string{
-		fmt.Sprintf("wipefs -a -f %s", diskPath),
-		"sync",
-		fmt.Sprintf("echo 'label: %s' | sudo sfdisk --force --wipe always %s", label, diskPath),
-	} {
+	const maxRetryDuration = 30 * time.Second
+
+	// Part 1: Wipe disk and verify it's actually wiped (with retry and timeout)
+	partStartTime := time.Now()
+	for {
 		var retryOutput string
-		retryOutput, err = shell.ExecCmd(retryCmd, true, shell.HostPath, nil)
+		retryOutput, err = shell.ExecCmd(fmt.Sprintf("wipefs -a -f %s", diskPath), true, shell.HostPath, nil)
+		if err != nil {
+			return retryOutput, err
+		}
+
+		retryOutput, err = shell.ExecCmd("sync", true, shell.HostPath, nil)
+		if err != nil {
+			return retryOutput, err
+		}
+
+		partitionExists, err := IsDiskPartitionExist(diskPath)
+		if err != nil {
+			return "", fmt.Errorf("failed to verify disk wipe on %s: %w", diskPath, err)
+		}
+		if !partitionExists {
+			// Wipe successful
+			log.Infof("Disk %s successfully wiped after %.1f seconds", diskPath, time.Since(partStartTime).Seconds())
+			break
+		}
+
+		if time.Since(partStartTime) > maxRetryDuration {
+			return "", fmt.Errorf("disk %s still has partitions after %d second retry timeout", diskPath, int(maxRetryDuration.Seconds()))
+		}
+
+		log.Warnf("Disk %s still has partitions, retrying wipe...", diskPath)
+		time.Sleep(2 * time.Second)
+	}
+
+	// Part 2: Create partition table and verify it's created (with retry and timeout)
+	partStartTime = time.Now()
+	for {
+		var retryOutput string
+		retryOutput, err = shell.ExecCmd(fmt.Sprintf("echo 'label: %s' | sudo sfdisk --force --wipe always %s", label, diskPath), true, shell.HostPath, nil)
 		cmdOutput = retryOutput
 		if err != nil {
 			return retryOutput, err
 		}
-	}
 
-	return cmdOutput, nil
+		retryOutput, err = shell.ExecCmd("sync", true, shell.HostPath, nil)
+		if err != nil {
+			return retryOutput, err
+		}
+
+		// Refresh partition table using partx (non-fatal; continue retry loop on failure)
+		cmdStr := fmt.Sprintf("partx -u %s", diskPath)
+		if _, err := shell.ExecCmd(cmdStr, true, shell.HostPath, nil); err != nil {
+			log.Debugf("partx refresh failed during partition table retry (will retry): %v", err)
+		}
+
+		diskInfo, err := DiskGetInfo(diskPath)
+		if err != nil {
+			return "", fmt.Errorf("failed to verify partition table creation on %s: %w", diskPath, err)
+		}
+
+		actualLabel, ok := diskInfo["part_table_type"].(string)
+		if ok && strings.TrimSpace(actualLabel) == label {
+			// Partition table created successfully
+			log.Infof("Partition table type %s created on disk %s after %.1f seconds", label, diskPath, time.Since(partStartTime).Seconds())
+			return cmdOutput, nil
+		}
+
+		if time.Since(partStartTime) > maxRetryDuration {
+			return "", fmt.Errorf("partition table type mismatch on %s after %d second retry timeout: expected %s, got %s", diskPath, int(maxRetryDuration.Seconds()), label, actualLabel)
+		}
+
+		log.Warnf("Partition table type mismatch on %s, retrying creation...", diskPath)
+		time.Sleep(2 * time.Second)
+	}
 }
 
 // IsDigit checks if a string contains only digits
@@ -733,6 +798,10 @@ func diskPartitionCreate(
 			log.Errorf("Failed to create partition %d on disk %s: %v", partitionNum, diskPath, err)
 			return "", fmt.Errorf("failed to create partition %d on disk %s: %w", partitionNum, diskPath, err)
 		}
+	}
+
+	if _, err := shell.ExecCmd("sync", true, shell.HostPath, nil); err != nil {
+		return "", fmt.Errorf("failed to sync disk %s after creating partition %d: %w", diskPath, partitionNum, err)
 	}
 
 	// Refresh partition table using partx

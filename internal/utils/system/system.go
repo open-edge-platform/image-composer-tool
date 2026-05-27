@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
@@ -107,6 +108,22 @@ func GetHostOsPkgManager() (string, error) {
 
 func GetProviderId(os, dist, arch string) string {
 	return os + "-" + dist + "-" + arch
+}
+
+// IsLiveInstallerExecution returns true when the current process is live-installer.
+// It checks the executable name and supports an env override for tests/tooling.
+func IsLiveInstallerExecution() bool {
+	mode := strings.TrimSpace(os.Getenv("ICT_EXECUTION_MODE"))
+	if strings.EqualFold(mode, "live-installer") {
+		return true
+	}
+
+	if len(os.Args) == 0 {
+		return false
+	}
+
+	exe := strings.ToLower(filepath.Base(strings.TrimSpace(os.Args[0])))
+	return strings.Contains(exe, "live-installer")
 }
 
 func StopGPGComponents(chrootPath string) error {
