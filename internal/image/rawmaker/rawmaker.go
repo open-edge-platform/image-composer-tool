@@ -151,9 +151,16 @@ func (rawMaker *RawMaker) BuildRawImage() error {
 		}
 	}()
 
-	// Goroutine to handle interrupt signals
+	// Goroutine to handle interrupt signals.
+	// On normal completion the defer above calls signal.Stop + close(sigChan),
+	// which unblocks the receive with ok=false. We must NOT treat that as a
+	// signal — otherwise every successful build would terminate via os.Exit(1).
 	go func() {
-		sig := <-sigChan
+		sig, ok := <-sigChan
+		if !ok {
+			// Channel closed by defer on normal/error return — no signal received.
+			return
+		}
 		log.Warnf("Received signal %v, cleaning up loop device %s", sig, loopDevPath)
 		if loopDevPath != "" {
 			if detachErr := rawMaker.LoopDev.LoopSetupDelete(loopDevPath); detachErr != nil {
