@@ -134,14 +134,17 @@ func (rawMaker *RawMaker) BuildRawImage() error {
 		return fmt.Errorf("failed to create loop device: %w", err)
 	}
 
-	// Setup signal handler for graceful cleanup on Ctrl+C
+	// Setup signal handler for graceful cleanup on Ctrl+C.
+	// done is a separate channel used only to tell the goroutine that the
+	// function returned normally — we never close sigChan itself.
 	sigChan := make(chan os.Signal, 1)
+	done := make(chan struct{})
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	// Setup cleanup for loop device (always needed)
 	defer func() {
 		signal.Stop(sigChan)
-		close(sigChan)
+		close(done) // unblock the goroutine so it exits cleanly
 		if loopDevPath != "" {
 			if detachErr := rawMaker.LoopDev.LoopSetupDelete(loopDevPath); detachErr != nil {
 				log.Errorf("Failed to detach loopback device %s: %v", loopDevPath, detachErr)
@@ -151,25 +154,25 @@ func (rawMaker *RawMaker) BuildRawImage() error {
 		}
 	}()
 
-	// Goroutine to handle interrupt signals.
-	// On normal completion the defer above calls signal.Stop + close(sigChan),
-	// which unblocks the receive with ok=false. We must NOT treat that as a
-	// signal — otherwise every successful build would terminate via os.Exit(1).
+	// Goroutine waits for either an OS signal or normal completion.
+	// Using select + a dedicated done channel avoids closing sigChan and
+	// makes the two paths explicit: real interrupt vs. function returned.
 	go func() {
-		sig, ok := <-sigChan
-		if !ok {
-			// Channel closed by defer on normal/error return — no signal received.
+		select {
+		case sig := <-sigChan:
+			log.Warnf("Received signal %v, cleaning up loop device %s", sig, loopDevPath)
+			if loopDevPath != "" {
+				if detachErr := rawMaker.LoopDev.LoopSetupDelete(loopDevPath); detachErr != nil {
+					log.Errorf("Failed to detach loopback device on signal %s: %v", loopDevPath, detachErr)
+				} else {
+					log.Infof("Successfully detached loopback device on signal: %s", loopDevPath)
+				}
+			}
+			os.Exit(1)
+		case <-done:
+			// Normal or error return — defer already handles cleanup.
 			return
 		}
-		log.Warnf("Received signal %v, cleaning up loop device %s", sig, loopDevPath)
-		if loopDevPath != "" {
-			if detachErr := rawMaker.LoopDev.LoopSetupDelete(loopDevPath); detachErr != nil {
-				log.Errorf("Failed to detach loopback device on signal %s: %v", loopDevPath, detachErr)
-			} else {
-				log.Infof("Successfully detached loopback device on signal: %s", loopDevPath)
-			}
-		}
-		os.Exit(1)
 	}()
 
 	log.Infof("Created loop device: %s", loopDevPath)
