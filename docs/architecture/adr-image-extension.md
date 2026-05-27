@@ -3,14 +3,14 @@
 **Status**: Proposed  
 **Date**: 2026-05-21  
 **Updated**: N/A  
-**Authors**: OS Image Composer Team  
+**Authors**: Image Composer Tool Team  
 **Technical Area**: Image Composition / Provisioning
 
 ---
 
 ## Summary
 
-OS Image Composer supports declarative composition of bootable Linux images and
+Image Composer Tool (ICT) supports declarative composition of bootable Linux images and
 already provides an ICT-owned ISO live installer flow for attended and unattended
 installation scenarios.
 
@@ -78,54 +78,7 @@ questionable ROI.
 
 ---
 
-## Decision / Recommendation
-
-### Disk Image Baselines
-
-A disk image baseline typically contains the actual installed target system:
-
-- Partition table.
-- EFI System Partition.
-- Root filesystem.
-- Bootloader configuration.
-- Kernel and initramfs artifacts.
-- Package database.
-- OS release metadata.
-- Installed package set.
-
-Because the root filesystem is directly available, OS Image Composer can modify
-it using native package manager flows.
-
-### ISO Installer Media
-
-An ISO installer is usually not the installed system. Depending on the
-distribution, it may include:
-
-- A live boot environment.
-- SquashFS or another compressed filesystem payload.
-- Package pools.
-- Installer configuration.
-- Autoinstall, preseed, kickstart, or cloud-init metadata.
-- Release manifests and checksums.
-- Secure Boot artifacts.
-- Installer-specific logic such as Subiquity, Debian Installer, Anaconda,
-Calamares, or custom installers.
-
-Therefore, “add a package to an ISO” is ambiguous. It may mean:
-
-- Add the package to the live environment only.
-- Add the package to the installed target system.
-- Add the package to an offline package pool.
-- Modify the installer recipe.
-- Regenerate the install payload.
-- Recalculate manifests.
-- Preserve or recreate boot and signing behavior.
-
-These operations are not portable across ISO formats.
-
----
-
-## Proposal
+## Decision
 
 Image Composer Tool will support three explicit composition modes:
 
@@ -148,6 +101,20 @@ Supported output artifacts may include:
 ### 2. Disk Image Extension
 
 Image Composer Tool may use an existing disk image as an additive baseline.
+
+A disk image baseline typically contains the actual installed target system:
+
+- Partition table.
+- EFI System Partition.
+- Root filesystem.
+- Bootloader configuration.
+- Kernel and initramfs artifacts.
+- Package database.
+- OS release metadata.
+- Installed package set.
+
+Because the root filesystem is directly available, ICT can modify it using
+native package manager flows.
 
 Supported input formats may include:
 
@@ -175,6 +142,31 @@ partition layout.
 - Emit updated image artifacts.
 
 ### 3. ISO Remastering
+
+An ISO installer is usually not the installed system. Depending on the
+distribution, it may include:
+
+- A live boot environment.
+- SquashFS or another compressed filesystem payload.
+- Package pools.
+- Installer configuration.
+- Autoinstall, preseed, kickstart, or cloud-init metadata.
+- Release manifests and checksums.
+- Secure Boot artifacts.
+- Installer-specific logic such as Subiquity, Debian Installer, Anaconda,
+Calamares, or custom installers.
+
+Therefore, “add a package to an ISO” is ambiguous. It may mean:
+
+- Add the package to the live environment only.
+- Add the package to the installed target system.
+- Add the package to an offline package pool.
+- Modify the installer recipe.
+- Regenerate the install payload.
+- Recalculate manifests.
+- Preserve or recreate boot and signing behavior.
+
+These operations are not portable across ISO formats.
 
 Generic ISO remastering is out of scope.
 
@@ -238,9 +230,9 @@ verification, and optional semantic comparison.
 
 ## Separation of Responsibilities
 
-### OS Image Composer Responsibilities
+### ICT Responsibilities
 
-OS Image Composer is responsible for:
+ICT is responsible for:
 
 - Declarative image definition.
 - Baseline inspection.
@@ -331,17 +323,16 @@ target:
   imageType: raw
 
 baseline:
-  mode: extend
+  mode: overlay
   type: disk-image
   source: ./input/ubuntu-24.04-baseline.raw
   format: raw
 
 extensionPolicy:
-  packages:
-    operation: additive-only
-    conflictPolicy: fail
-    allowDowngrade: false
-    allowRemoval: false
+  packageOperation: additive-only
+  conflictPolicy: fail
+  allowDowngrade: false
+  allowRemoval: false
 
 disk:
   name: primary
@@ -464,9 +455,9 @@ Each adapter must include version-specific validation and negative tests for uns
 - Image inspect and compare.
 - Support declarative package/profile selection.
 
-## Out of Scope
+### Out of Scope
 
-### Disk Image Extension Out of Scope
+Disk Image Extension out of scope.
 
 - Removing packages or content from the baseline image.
 - Shrinking images or filesystems.
@@ -480,7 +471,7 @@ Each adapter must include version-specific validation and negative tests for uns
 - Modifying encrypted partitions unless explicitly supported.
 - Modifying dm-verity protected root filesystems unless regenerated through a supported flow.
 
-## Alternatives Consideres
+## Alternatives Considered
 
 ### Alternative 1: Support Generic ISO Mutation
 
@@ -561,7 +552,7 @@ What is missing is the **composition mode**.
     "mode": {
       "type": "string",
       "description": "Composition mode.",
-      "enum": ["compose", "extend", "remaster"]
+      "enum": ["compose", "overlay", "remaster"]
     },
     "type": {
       "type": "string",
@@ -593,7 +584,7 @@ What is missing is the **composition mode**.
     {
       "if": {
         "properties": {
-          "mode": { "const": "extend" },
+          "mode": { "const": "overlay" },
           "type": { "const": "disk-image" }
         }
       },
@@ -609,7 +600,7 @@ What is missing is the **composition mode**.
     {
       "if": {
         "properties": {
-          "mode": { "const": "extend" },
+          "mode": { "const": "overlay" },
           "type": { "const": "iso" }
         }
       },
