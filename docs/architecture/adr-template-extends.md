@@ -127,7 +127,7 @@ The existing `MergeConfigurations()` is called twice. No changes to merge strate
 | `validate` command | Resolve `extends` chain during validation |
 | `build` command | No changes needed (already calls `LoadAndMergeTemplate`) |
 | CLI output | Log the resolved extends chain: `"Extending parent template: <path>"` |
-| `resolve` subcommand (new) | Dump the fully-merged template to stdout for debugging/traceability |
+| `resolve` subcommand (new) | Show the resolved parent + child merge when `extends` is used |
 | Tests | Basic extends, missing parent, chained rejection, target mismatch, circular ref, path traversal |
 | Documentation | Template docs, CLI specification, examples |
 
@@ -135,7 +135,7 @@ The existing `MergeConfigurations()` is called twice. No changes to merge strate
 
 - **`build`**: When `extends` is used, log the parent template path at info level so users can see the inheritance chain in build output
 - **`validate`**: Resolve the `extends` reference and validate the full merged result, not just the child template in isolation
-- **`resolve` (new subcommand)**: Output the fully-merged template as YAML to stdout. Works for all templates, not just ones using `extends`. For a standard template it shows the OS defaults + user merge result; with `extends` it shows OS defaults + parent + child. This replaces the need to read debug logs to see the merged configuration. Usage: `image-composer-tool resolve -t my-template.yml`
+- **`resolve` (new subcommand)**: When the template uses `extends`, output the resolved parent + child merged template as YAML to stdout (does not include OS defaults). If the template does not use `extends`, output the template as-is with a message: `"No extends used in template, nothing to resolve"`. Usage: `image-composer-tool resolve -t my-template.yml`
 - **Error messages**: Provide clear, actionable messages for common errors:
   - `"template X extends Y, which also extends Z: only single-level extends is supported"`
   - `"extends target mismatch: child targets ubuntu/x86_64 but parent targets azure-linux/x86_64"`
