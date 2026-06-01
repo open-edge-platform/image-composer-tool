@@ -1,4 +1,4 @@
-# ADR: Baseline Image Extension and ISO Composition Boundaries
+# ADR: Baseline Image Overlay and ISO Composition Boundaries
 
 **Status**: Proposed  
 **Date**: 2026-05-21  
@@ -10,9 +10,9 @@
 
 ## Summary
 
-Image Composer Tool (ICT) supports declarative composition of bootable Linux images and
-already provides an ICT-owned ISO live installer flow for attended and unattended
-installation scenarios.
+Image Composer Tool (ICT) supports declarative composition of bootable Linux
+images and already provides an ICT-owned ISO live installer flow for attended
+and unattended installation scenarios.
 
 This ADR defines the boundary for using existing artifacts as baselines for
 additional composition.
@@ -98,7 +98,7 @@ Supported output artifacts may include:
 - VMDK
 - ISO, where generated from a supported template
 
-### 2. Disk Image Extension
+### 2. Disk Image Overlay
 
 Image Composer Tool may use an existing disk image as an additive baseline.
 
@@ -281,10 +281,10 @@ installer behavior.
 
 ## Template Schema
 
-The existing template schema should be extended rather than replaced.
+The existing template schema should be overlayed rather than replaced.
 
 The recommended addition is a top-level `baseline` object that declares whether
-the template performs fresh composition, disk image extension, ISO generation,
+the template performs fresh composition, disk image overlay, ISO generation,
 or supported ISO remastering.
 
 ### Fresh composition
@@ -312,7 +312,7 @@ systemConfig:
 
 ```yaml
 image:
-  name: ubuntu-edge-ai-extended
+  name: ubuntu-edge-ai-overlay
   version: 1.0.0
 
 target:
@@ -327,7 +327,7 @@ baseline:
     path: ./input/ubuntu-24.04-baseline.raw
     format: raw
 
-extensionPolicy:
+overlayPolicy:
   packageOperation: additive-only
   conflictPolicy: fail
   allowDowngrade: false
@@ -386,7 +386,7 @@ systemConfig:
 
 ## Approach
 
-### Phase 1: Disk Image Extension
+### Phase 1: Disk Image Overlay
 
 Implement first-class support for RAW/VHD-style disk image extension.
 
@@ -438,7 +438,7 @@ unsupported variants.
 
 ### In Scope
 
-- Disk Image Extension
+- Disk Image Overlay
 - RAW/IMG disk image extension.
 - VHD/VHDX extension, where tooling support exists.
 - QCOW2/VMDK support, where tooling support exists or conversion is supported.
@@ -456,8 +456,6 @@ unsupported variants.
 - Support declarative package/profile selection.
 
 ### Out of Scope
-
-Disk Image Extension out of scope.
 
 - Removing packages or content from the baseline image.
 - Shrinking images or filesystems.
@@ -506,7 +504,7 @@ encryption model, and boot mode of an existing baseline.
 Structural mutation has high complexity and risk. Significant layout changes
 should use fresh composition from a declarative template.
 
-### Alternative 4: Support Package Removal During Baseline Extension
+### Alternative 4: Support Package Removal During Baseline Overlay
 
 Allow users to remove existing packages from a baseline image.
 
@@ -545,8 +543,8 @@ What is missing is the **composition mode**.
   "baseline": {
     "$ref": "#/$defs/Baseline"
   },
-  "extensionPolicy": {
-    "$ref": "#/$defs/ExtensionPolicy"
+  "overlayPolicy": {
+    "$ref": "#/$defs/OverlayPolicy"
   },
   "validation": {
     "$ref": "#/$defs/Validation"
@@ -559,7 +557,7 @@ What is missing is the **composition mode**.
 ```json
 "Baseline": {
   "type": "object",
-  "description": "Declares whether the template creates a new image or extends
+  "description": "Declares whether the template creates a new image or overlays
   an existing disk image baseline.",
   "properties": {
     "mode": {
@@ -567,7 +565,7 @@ What is missing is the **composition mode**.
       "description": "Composition mode. 'create' builds a new image from the 
       template. 'overlay' starts from an existing disk image baseline and 
       applies additive changes.",
-      "enum": ["create", "extend"],
+      "enum": ["create", "overlay"],
       "default": "create"
     },
     "source": {
@@ -619,7 +617,7 @@ What is missing is the **composition mode**.
 ### Proposed Extension Policy
 
 ```json
-"ExtensionPolicy": {
+"OverlayPolicy": {
   "type": "object",
   "description": "Policy for extending an existing disk image baseline.",
   "properties": {
@@ -671,7 +669,7 @@ What is missing is the **composition mode**.
 ```json
 "Validation": {
   "type": "object",
-  "description": "Validation and reporting outputs for composed or extended images.",
+  "description": "Validation and reporting outputs for composed or overlay images.",
   "properties": {
     "inspect": {
       "type": "boolean",
