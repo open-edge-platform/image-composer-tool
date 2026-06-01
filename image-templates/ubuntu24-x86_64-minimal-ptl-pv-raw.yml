@@ -34,7 +34,7 @@ disk:
     # Request conversion to raw
     - type: raw
       compression: gz
-  size: 32GiB
+  size: 64GiB
   # GPT partition table per installer spec
   partitionTableType: gpt
   partitions:
@@ -60,7 +60,7 @@ disk:
       typeUUID: 0657fd6d-a4ab-43c4-84e5-0933c84b4f4f
       fsType: linux-swap
       start: 1025MiB
-      end: 3073MiB
+      end: 9217MiB
       mountPoint: none
       mountOptions: sw
       flags: []
@@ -71,7 +71,7 @@ disk:
       # Standard Linux root filesystem GUID for x86_64
       typeUUID: 4f68bce3-e8cd-4db1-96e7-fbcaf984b709
       fsType: ext4
-      start: 3073MiB
+      start: 9217MiB
       end: "0"
       mountPoint: /
       mountOptions: defaults
@@ -112,7 +112,7 @@ packageRepositories:
       - gstreamer1.0-rtsp
       - gstreamer1.0-tools
       - gstreamer1.0-x
-      - intel-media-va-driver-non-free
+      - intel-media-va-driver
       - libdrm-amdgpu1
       - libdrm-common
       - libdrm-dev
@@ -130,7 +130,6 @@ packageRepositories:
       - libgstreamer-plugins-base1.0-0
       - libgstreamer-plugins-base1.0-dev
       - libgstreamer-plugins-good1.0-0
-      - libgstreamer-plugins-good1.0-dev
       - libgstreamer1.0-0
       - libgstreamer1.0-dev
       - libigdgmm-dev
@@ -152,10 +151,8 @@ packageRepositories:
       - libwayland-egl-backend-dev
       - libwayland-egl1
       - libwayland-server0
-      - libxatracker2
       - linux-firmware
       - mesa-utils
-      - mesa-va-drivers
       - mesa-vdpau-drivers
       - mesa-vulkan-drivers
       - libvpl-dev
@@ -217,7 +214,6 @@ packageRepositories:
       - gcc
       - git
       - intel-gpu-tools
-      - libssl3t64
       - libssl-dev
       - make
       - mosquitto
@@ -264,16 +260,10 @@ packageRepositories:
       - dbus-x11
       - sg3-utils
       - rpm
-      - linux-image-6.17-intel
-      - linux-headers-6.17-intel
+      - linux-headers-6.18-intel
+      - linux-image-6.18-intel
       # overlay dependencies
       - libvpl2
-      - mesa-libgallium
-      - libgbm1
-      - libgbm-dev
-      - libgl1-mesa-dri
-      - libegl-mesa0
-      - libglx-mesa0
       - libspice-client-glib-2.0-8
       - libspice-client-gtk-3.0-5
       - spice-client-glib-usb-acl-helper
@@ -287,7 +277,16 @@ packageRepositories:
       - libweston-10-0
       - xnest
       - xvfb
-
+      - dnsmasq-base
+      # additional PTL packages
+      - xdp-tools
+      - rpc-go
+      - lms 
+      - metee
+      - libxdp-dev
+      - libxdp1
+      - intel-media-va-driver-non-free
+      - spice-client-gtk
 
 systemConfig:
   name: minimal
@@ -301,6 +300,7 @@ systemConfig:
     enabled: false # default is true
 
   packages:
+    - libssl3t64
     - bluez
     - bsdutils
     - cloud-utils
@@ -324,6 +324,7 @@ systemConfig:
     - libm17n-0
     - libmarisa0
     - libopencc-data
+    - va-driver-all
     - libopencc1.1
     - libotf1
     - libpinyin-data
@@ -386,15 +387,6 @@ systemConfig:
     - gstreamer1.0-rtsp
     - gstreamer1.0-tools
     - gstreamer1.0-x
-    - intel-media-va-driver-non-free
-    - libdrm-amdgpu1
-    - libdrm-common
-    - libdrm-dev
-    - libdrm-intel1
-    - libdrm-nouveau2
-    - libdrm-radeon1
-    - libdrm-tests
-    - libdrm2
     - libgstrtspserver-1.0-dev
     - libgstrtspserver-1.0-0
     - libgstreamer-gl1.0-0
@@ -404,7 +396,6 @@ systemConfig:
     - libgstreamer-plugins-base1.0-0
     - libgstreamer-plugins-base1.0-dev
     - libgstreamer-plugins-good1.0-0
-    - libgstreamer-plugins-good1.0-dev
     - libgstreamer1.0-0
     - libgstreamer1.0-dev
     - libigdgmm-dev
@@ -426,12 +417,8 @@ systemConfig:
     - libwayland-egl-backend-dev
     - libwayland-egl1
     - libwayland-server0
-    - libxatracker2
     - linux-firmware
     - mesa-utils
-    - mesa-va-drivers
-    - mesa-vdpau-drivers
-    - mesa-vulkan-drivers
     - libvpl-dev
     - libvpl-tools
     - libmfx-gen-dev
@@ -454,7 +441,6 @@ systemConfig:
     - qemu-user
     - qemu-user-binfmt
     - qemu-utils
-    - va-driver-all
     - vainfo
     - weston
     - xserver-xorg-core
@@ -541,6 +527,16 @@ systemConfig:
     - clinfo
     - xvfb
     - xnest
+    - mesa-vulkan-drivers
+    - xdp-tools
+    - rpc-go
+    - lms 
+    - metee
+    - libxdp-dev
+    - libxdp1
+    - intel-media-va-driver-non-free
+    - spice-client-gtk
+    - libdrm-tests
 
 
   additionalFiles:
@@ -550,27 +546,28 @@ systemConfig:
       final: /etc/netplan/50-cloud-init.yaml
 
   kernel:
-    version: "260128t080735z-r2"
+    version: "260427t075939z-r2"
     cmdline: "xe.max_vfs=7 xe.force_probe=* modprobe.blacklist=i915 udmabuf.list_limit=8192 console=tty0 console=ttyS0,115200n8"
     enableExtraModules: "intel_vpu uas"
     packages:
-        - linux-image-6.17-intel_260128t080735z-r2
-        - linux-headers-6.17-intel_260128t080735z-r2
+        - linux-image-6.18-intel_260427t075939z-r2
+        - linux-headers-6.18-intel_260427t075939z-r2
+
 
   configurations:
     # Install Intel Graphics Compiler and compute runtime packages for PTL
     - cmd: "mkdir -p /tmp/gpu-packages"
-    - cmd: "wget https://github.com/intel/intel-graphics-compiler/releases/download/v2.20.3/intel-igc-core-2_2.20.3+19972_amd64.deb -O /tmp/gpu-packages/intel-igc-core-2_2.20.3+19972_amd64.deb --no-check-certificate 2>&1 || echo 'Warning: intel-igc-core-2 download failed'"
-    - cmd: "wget https://github.com/intel/intel-graphics-compiler/releases/download/v2.20.3/intel-igc-opencl-2_2.20.3+19972_amd64.deb -O /tmp/gpu-packages/intel-igc-opencl-2_2.20.3+19972_amd64.deb --no-check-certificate 2>&1 || echo 'Warning: intel-igc-opencl-2 download failed'"
-    - cmd: "wget https://github.com/intel/compute-runtime/releases/download/25.40.35563.4/intel-ocloc_25.40.35563.4-0_amd64.deb -O /tmp/gpu-packages/intel-ocloc_25.40.35563.4-0_amd64.deb --no-check-certificate 2>&1 || echo 'Warning: intel-ocloc download failed'"
-    - cmd: "wget https://github.com/intel/compute-runtime/releases/download/25.40.35563.4/intel-opencl-icd_25.40.35563.4-0_amd64.deb -O /tmp/gpu-packages/intel-opencl-icd_25.40.35563.4-0_amd64.deb --no-check-certificate 2>&1 || echo 'Warning: intel-opencl-icd download failed'"
-    - cmd: "wget https://github.com/intel/compute-runtime/releases/download/25.40.35563.4/libze-intel-gpu1_25.40.35563.4-0_amd64.deb -O /tmp/gpu-packages/libze-intel-gpu1_25.40.35563.4-0_amd64.deb --no-check-certificate 2>&1 || echo 'Warning: libze-intel-gpu1 download failed'"
+    - cmd: "wget https://github.com/intel/intel-graphics-compiler/releases/download/v2.28.4/intel-igc-core-2_2.28.4+20760_amd64.deb -O /tmp/gpu-packages/intel-igc-core-2_2.20.3+19972_amd64.deb --no-check-certificate 2>&1 || echo 'Warning: intel-igc-core-2 download failed'"
+    - cmd: "wget https://github.com/intel/intel-graphics-compiler/releases/download/v2.28.4/intel-igc-opencl-2_2.28.4+20760_amd64.deb -O /tmp/gpu-packages/intel-igc-opencl-2_2.20.3+19972_amd64.deb --no-check-certificate 2>&1 || echo 'Warning: intel-igc-opencl-2 download failed'"
+    - cmd: "wget https://github.com/intel/compute-runtime/releases/download/26.05.37020.3/intel-ocloc_26.05.37020.3-0_amd64.deb -O /tmp/gpu-packages/intel-ocloc_25.40.35563.4-0_amd64.deb --no-check-certificate 2>&1 || echo 'Warning: intel-ocloc download failed'"
+    - cmd: "wget https://github.com/intel/compute-runtime/releases/download/26.05.37020.3/intel-opencl-icd_26.05.37020.3-0_amd64.deb -O /tmp/gpu-packages/intel-opencl-icd_25.40.35563.4-0_amd64.deb --no-check-certificate 2>&1 || echo 'Warning: intel-opencl-icd download failed'"
+    - cmd: "wget https://github.com/intel/compute-runtime/releases/download/26.05.37020.3/libze-intel-gpu1_26.05.37020.3-0_amd64.deb -O /tmp/gpu-packages/libze-intel-gpu1_25.40.35563.4-0_amd64.deb --no-check-certificate 2>&1 || echo 'Warning: libze-intel-gpu1 download failed'"
     - cmd: "wget https://github.com/oneapi-src/level-zero/releases/download/v1.22.4/level-zero_1.22.4+u24.04_amd64.deb -O /tmp/gpu-packages/level-zero_1.22.4+u24.04_amd64.deb --no-check-certificate 2>&1 || echo 'Warning: level-zero download failed'"
     - cmd: "wget https://github.com/oneapi-src/level-zero/releases/download/v1.22.4/level-zero-devel_1.22.4+u24.04_amd64.deb -O /tmp/gpu-packages/level-zero-devel_1.22.4+u24.04_amd64.deb --no-check-certificate 2>&1 || echo 'Warning: level-zero-devel download failed'"
     - cmd: "find /tmp/gpu-packages -maxdepth 1 -type f -name '*.deb' | xargs -r dpkg -i 2>&1 || echo 'GPU packages: some installs had issues, attempting apt-get --fix-broken-install'; apt-get install -y --fix-broken-install 2>&1 || true"
     # Install NPU driver for PTL
     - cmd: "dpkg --purge --force-remove-reinstreq intel-driver-compiler-npu intel-fw-npu intel-level-zero-npu intel-level-zero-npu-dbgsym 2>/dev/null || true"
     - cmd: "mkdir -p /tmp/npu-driver"
-    - cmd: "cd /tmp/npu-driver && wget https://github.com/intel/linux-npu-driver/releases/download/v1.28.0/linux-npu-driver-v1.28.0.20251218-20347000698-ubuntu2404.tar.gz -O /tmp/npu-driver/linux-npu-driver-v1.28.0.20251218-20347000698-ubuntu2404.tar.gz --no-check-certificate"
-    - cmd: "cd /tmp/npu-driver && tar -xf linux-npu-driver-v1.28.0.20251218-20347000698-ubuntu2404.tar.gz"
+    - cmd: "cd /tmp/npu-driver && wget https://github.com/intel/linux-npu-driver/releases/download/v1.32.0/linux-npu-driver-v1.32.0.20260402-23905121947-ubuntu2404.tar.gz -O /tmp/npu-driver/linux-npu-driver-v1.32.0.20260402-23905121947-ubuntu2404.tar.gz --no-check-certificate"
+    - cmd: "cd /tmp/npu-driver && tar -xf linux-npu-driver-v1.32.0.20260402-23905121947-ubuntu2404.tar.gz"
     - cmd: "find /tmp/npu-driver -name '*.deb' -print0 | xargs -0 dpkg -i"
