@@ -24,6 +24,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/network"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
 
 const (
@@ -351,18 +352,25 @@ func rpmMetadataCacheDir(baseURL string) (string, error) {
 // It also caches the downloaded and uncompressed XML files for debugging purposes.
 func ParseRepositoryMetadata(baseURL, gzHref string, packageFilter []string) ([]ospackage.PackageInfo, error) {
 	log := logger.Logger()
+	cacheEnabled := !system.IsLiveInstallerExecution()
 
 	fullURL := strings.TrimRight(baseURL, "/") + "/" + strings.TrimLeft(gzHref, "/")
 	log.Infof("Fetching and parsing repository metadata from %s", fullURL)
 
 	// Keep metadata cache under persistent cache-dir so rebuilds can run offline.
-	xmlCacheDir, err := rpmMetadataCacheDir(baseURL)
-	if err != nil {
-		log.Warnf("Failed to resolve RPM metadata cache directory: %v", err)
-		xmlCacheDir = "" // Disable caching if cache root cannot be resolved
-	} else if err := os.MkdirAll(xmlCacheDir, 0755); err != nil {
-		log.Warnf("Failed to create XML cache directory: %v", err)
-		xmlCacheDir = "" // Disable caching if directory creation fails
+	xmlCacheDir := ""
+	if cacheEnabled {
+		var err error
+		xmlCacheDir, err = rpmMetadataCacheDir(baseURL)
+		if err != nil {
+			log.Warnf("Failed to resolve RPM metadata cache directory: %v", err)
+			xmlCacheDir = "" // Disable caching if cache root cannot be resolved
+		} else if err := os.MkdirAll(xmlCacheDir, 0755); err != nil {
+			log.Warnf("Failed to create XML cache directory: %v", err)
+			xmlCacheDir = "" // Disable caching if directory creation fails
+		}
+	} else {
+		log.Debugf("Bypassing RPM metadata cache in live-installer mode")
 	}
 
 	// Offline-first behavior: if parsed metadata is cached for this exact metadata URL,
@@ -674,18 +682,25 @@ func ParseRepositoryMetadata(baseURL, gzHref string, packageFilter []string) ([]
 func FetchPrimaryURL(repomdURL string) (string, error) {
 	log := logger.Logger()
 	baseURL := strings.TrimSuffix(repomdURL, "/repodata/repomd.xml")
+	cacheEnabled := !system.IsLiveInstallerExecution()
 
 	// Create cache directory for repomd-derived artifacts.
-	xmlCacheDir, cacheDirErr := rpmMetadataCacheDir(baseURL)
-	if cacheDirErr != nil {
-		log.Warnf("Failed to resolve RPM metadata cache directory: %v", cacheDirErr)
-		xmlCacheDir = ""
-	}
-	if xmlCacheDir != "" {
-		if err := os.MkdirAll(xmlCacheDir, 0755); err != nil {
-			log.Warnf("Failed to create XML cache directory: %v", err)
-			xmlCacheDir = ""
+	xmlCacheDir := ""
+	if cacheEnabled {
+		cacheDir, cacheDirErr := rpmMetadataCacheDir(baseURL)
+		if cacheDirErr != nil {
+			log.Warnf("Failed to resolve RPM metadata cache directory: %v", cacheDirErr)
+		} else {
+			xmlCacheDir = cacheDir
 		}
+		if xmlCacheDir != "" {
+			if err := os.MkdirAll(xmlCacheDir, 0755); err != nil {
+				log.Warnf("Failed to create XML cache directory: %v", err)
+				xmlCacheDir = ""
+			}
+		}
+	} else {
+		log.Debugf("Bypassing RPM primary location cache in live-installer mode")
 	}
 	if xmlCacheDir != "" {
 		primaryLocationCacheFile := filepath.Join(xmlCacheDir, "primary.location.json")
