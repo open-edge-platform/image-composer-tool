@@ -45,7 +45,7 @@ disk:
       flags:
         - boot
         - esp
-    # Root filesystem
+    # Swap partition
     - id: SWAP
       name: SWAP
       type: linux-swap
