@@ -203,6 +203,7 @@ Caching in ICT <./architecture/image-composer-tool-caching.md>
 Multiple-package Repo Support <./architecture/image-composer-tool-multi-repo-support.md>
 Using Templates <./architecture/image-composer-tool-templates.md>
 Declarative Live ISO Installer <./architecture/adr-declarative-installer.md>
+Extending Disk Images <./architecture/adr-image-extension.md>
 Dependency Graph Analyzer <./architecture/adr-dep-analyzer.md>
 Image Inspection and Comparison <./architecture/adr-image-inspect.md>
 Template-Enriched RAG <./architecture/adr-template-enriched-rag.md>
