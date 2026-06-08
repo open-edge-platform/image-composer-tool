@@ -34,7 +34,7 @@ disk:
     # Request conversion to raw
     - type: raw
       compression: gz
-  size: 64GiB
+  size: 32GiB
   # GPT partition table per installer spec
   partitionTableType: gpt
   partitions:
@@ -60,7 +60,7 @@ disk:
       typeUUID: 0657fd6d-a4ab-43c4-84e5-0933c84b4f4f
       fsType: linux-swap
       start: 1025MiB
-      end: 9217MiB
+      end: 3073MiB
       mountPoint: none
       mountOptions: sw
       flags: []
@@ -71,7 +71,7 @@ disk:
       # Standard Linux root filesystem GUID for x86_64
       typeUUID: 4f68bce3-e8cd-4db1-96e7-fbcaf984b709
       fsType: ext4
-      start: 9217MiB
+      start: 3073MiB
       end: "0"
       mountPoint: /
       mountOptions: defaults
