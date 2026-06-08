@@ -1,9 +1,13 @@
 package rawmaker
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/chroot"
@@ -132,14 +136,51 @@ func (rawMaker *RawMaker) BuildRawImage() error {
 		return fmt.Errorf("failed to create loop device: %w", err)
 	}
 
+	// Setup signal handler for graceful cleanup on Ctrl+C.
+	// The cleanup is wrapped in sync.Once to prevent both the interrupt goroutine
+	// and the defer from cleaning up the loop device simultaneously.
+	sigChan := make(chan os.Signal, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	var cleanupOnce sync.Once
+	var interruptErr error
+
 	// Setup cleanup for loop device (always needed)
 	defer func() {
-		if loopDevPath != "" {
-			if detachErr := rawMaker.LoopDev.LoopSetupDelete(loopDevPath); detachErr != nil {
-				log.Errorf("Failed to detach loopback device %s: %v", loopDevPath, detachErr)
-			} else {
-				log.Infof("Successfully detached loopback device: %s", loopDevPath)
+		signal.Stop(sigChan)
+		cancel() // unblock the goroutine so it exits cleanly
+		cleanupOnce.Do(func() {
+			if loopDevPath != "" {
+				if detachErr := rawMaker.LoopDev.LoopSetupDelete(loopDevPath); detachErr != nil {
+					log.Errorf("Failed to detach loopback device %s: %v", loopDevPath, detachErr)
+				} else {
+					log.Infof("Successfully detached loopback device: %s", loopDevPath)
+				}
 			}
+		})
+	}()
+
+	// Goroutine waits for either an OS signal or normal completion.
+	// If a signal is received, it triggers cleanup (via sync.Once) and propagates an error.
+	go func() {
+		select {
+		case sig := <-sigChan:
+			log.Warnf("Received signal %v, cleaning up loop device %s", sig, loopDevPath)
+			cleanupOnce.Do(func() {
+				if loopDevPath != "" {
+					if detachErr := rawMaker.LoopDev.LoopSetupDelete(loopDevPath); detachErr != nil {
+						log.Errorf("Failed to detach loopback device on signal %s: %v", loopDevPath, detachErr)
+					} else {
+						log.Infof("Successfully detached loopback device on signal: %s", loopDevPath)
+					}
+				}
+			})
+			// Set an error to be returned after defer cleanup
+			interruptErr = fmt.Errorf("build interrupted by signal %v", sig)
+		case <-ctx.Done():
+			// Normal or error return — defer already handles cleanup.
+			return
 		}
 	}()
 
@@ -193,6 +234,11 @@ func (rawMaker *RawMaker) BuildRawImage() error {
 	if err := manifest.CopySBOMToImageBuildDir(rawMaker.ImageBuildDir); err != nil {
 		log.Warnf("Failed to copy SBOM to image build directory: %v", err)
 		// Don't fail the build if SBOM copy fails, just log warning
+	}
+
+	// Return any error from signal interrupt (e.g., Ctrl+C during build)
+	if interruptErr != nil {
+		return interruptErr
 	}
 
 	return nil
