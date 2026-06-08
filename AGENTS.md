@@ -22,7 +22,7 @@
 
 Builds custom Linux images from pre-built packages.
 
-- `internal/provider/` — per-OS orchestrators (`azl`, `debian13`, `elxr`, `emt`, `rcd`, `ubuntu`). Each implements the `Provider` interface (`Name`, `Init`, `PreProcess`, `BuildImage`, `PostProcess`) and exports `OsName` + `Register()`.
+- `internal/provider/` — per-OS orchestrators. Directory names `azl`, `debian13`, `elxr`, `emt`, `rcd`, `ubuntu` map to `target.os` / `OsName` values `azure-linux`, `debian`, `wind-river-elxr`, `edge-microvisor-toolkit`, `redhat-compatible-distro`, `ubuntu` (use the latter in templates). Each implements the `Provider` interface (`Name`, `Init`, `PreProcess`, `BuildImage`, `PostProcess`) and exports `OsName` + `Register()`.
 - `internal/image/` — output formats: `rawmaker/`, `isomaker/`, `initrdmaker/`.
 - `internal/chroot/` — isolated build envs with `deb/` and `rpm/` installers.
 - `internal/config/` — template loading, defaults+user merge, validation.

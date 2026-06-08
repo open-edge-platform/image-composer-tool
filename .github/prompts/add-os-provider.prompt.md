@@ -30,7 +30,7 @@ Create a `manage_todo_list` covering exactly these steps, then execute in order:
    - Implement `Name(dist, arch string) string`, `Init(dist, arch string) error`, `PreProcess(template *config.ImageTemplate) error`, `BuildImage(template *config.ImageTemplate) error`, `PostProcess(template *config.ImageTemplate, err error) error`. **No `context.Context`** — the interface does not take one. Wrap errors with phase context and use `var log = logger.Logger()`.
 3. **Wire registration** in `cmd/image-composer-tool/build.go` — add a `case {osname}.OsName:` arm to the `switch os` that calls `{osname}.Register(os, dist, arch)` and wraps the error. Confirm by re-reading the edited section.
 4. **Default configs** in `config/osv/{osname}/` — mirror the layout of the analogue provider (package lists, disk layout, bootloader). Use the user-provided repo URLs and signing keys.
-5. **Example templates** in `image-templates/`, one per chosen image type, named `<osname><majorver>-<arch>-minimal-<imageType>.yml`. Each must have a populated `metadata` block.
+5. **Example templates** in `image-templates/`, one per chosen image type, named `<dist>-<arch>-minimal-<imageType>.yml` (filenames use the `target.dist` value, e.g. `azl3-…`, `ubuntu24-…`, not the `OsName`). Each must have a populated `metadata` block.
 6. **Unit tests** in `internal/provider/{osname}/{osname}_test.go` covering at minimum: the `OsName` constant, `Name(dist, arch)` output, `Init` error paths, and registration. Mock chroot + shell — no real package installs.
 7. **Docs**:
    - Add the provider to `docs/architecture/architecture.md`.

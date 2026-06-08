@@ -32,31 +32,32 @@ image:
   version: 1.0.0
 
 target:
-  os: ubuntu          # must match a provider's OsName
-  os_version: "24.04"
+  os: ubuntu          # must match a provider's OsName (target.os enum)
+  dist: ubuntu24      # distro + major version (target.dist)
   arch: x86_64
+  imageType: raw      # raw | img | iso
 ```
 
-Everything else (`packages`, `disk`, `bootloader`, …) is supplied by `config/osv/{osname}/` defaults and only needs to appear when the user overrides it.
+Everything else (`systemConfig` with its `packages`, `bootloader`, …, plus `disk` and `packageRepositories`) is supplied by `config/osv/{osname}/` defaults and only needs to appear when the user overrides it.
 
 ## Merge semantics — important
 
 | Field | Behavior |
 |---|---|
-| `packages` (and nested package lists) | **Additive** — user entries are merged by name with defaults |
+| `systemConfig.packages` (and nested package lists) | **Additive** — user entries are merged by name with defaults |
 | `disk` | **Replace** — providing `disk` discards the OS default entirely; copy the default and edit it |
 | `metadata` | Replace per top-level key |
-| Scalar overrides (`image.name`, `target.os_version`, …) | Replace |
+| Scalar overrides (`image.name`, `target.dist`, …) | Replace |
 
 If you intend to *remove* a default package, you currently cannot do that with the merge — open an issue rather than working around it.
 
 ## Authoring rules
 
 - Always include the `metadata` block — it powers template discoverability and `image-composer-tool list`.
-- Reference packages by exact name (no globs).
+- Reference packages by exact name under `systemConfig.packages` (glob patterns like `wayland*` are allowed; versioned globs are not).
 - Pin kernel and bootloader versions explicitly when reproducibility matters.
-- Do **not** embed secrets, tokens, or private repo URLs. Use the `auth` block + env vars.
-- Keep YAML 2-space indented, no tabs. Sort top-level keys: `metadata`, `image`, `target`, `packages`, `disk`, `bootloader`, `auth`, rest.
+- Do **not** embed secrets, tokens, or private repo URLs. For repository GPG verification use `packageRepositories[].pkey` / `pkeys`.
+- Keep YAML 2-space indented, no tabs. Top-level keys are `metadata`, `image`, `target`, `disk`, `systemConfig`, `packageRepositories` — keep them in that order.
 
 ## Before committing
 

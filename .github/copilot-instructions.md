@@ -23,7 +23,7 @@
 
 ICT builds custom Linux images from pre-built packages. Key components:
 
-- **Provider** (`internal/provider/`) — Orchestrates builds per OS (azl, debian13, elxr, emt, rcd, ubuntu). Implements the `Provider` interface with `Name`, `Init`, `PreProcess`, `BuildImage`, `PostProcess`. Each provider exports an `OsName` constant and a `Register()` function.
+- **Provider** (`internal/provider/`) — Orchestrates builds per OS. Directory names are `azl`, `debian13`, `elxr`, `emt`, `rcd`, `ubuntu`; their `target.os` / `OsName` values are `azure-linux`, `debian`, `wind-river-elxr`, `edge-microvisor-toolkit`, `redhat-compatible-distro`, `ubuntu` (use these in templates). Implements the `Provider` interface with `Name`, `Init`, `PreProcess`, `BuildImage`, `PostProcess`. Each provider exports an `OsName` constant and a `Register()` function.
 - **Image makers** (`internal/image/`) — Output formats: `rawmaker/`, `isomaker/`, `initrdmaker/`.
 - **Chroot** (`internal/chroot/`) — Isolated build environments with package installers for `deb/` and `rpm/`.
 - **Config** (`internal/config/`) — Template loading, defaults+user merge, validation.
