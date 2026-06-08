@@ -428,6 +428,19 @@ func TestClearDebPackageCache(t *testing.T) {
 			wantLeft: []string{"notes.txt"},
 		},
 		{
+			name: "clears deb files in nested subdirectories",
+			setup: func(dir string) {
+				nested := filepath.Join(dir, "chrootenv")
+				if err := os.MkdirAll(nested, 0755); err != nil {
+					t.Fatalf("failed to create nested directory: %v", err)
+				}
+				_ = os.WriteFile(filepath.Join(dir, "bash_1.0_amd64.deb"), []byte("x"), 0644)
+				_ = os.WriteFile(filepath.Join(nested, "libsystemd0_255.4-1ubuntu8.15-ecir8_amd64.deb"), []byte("x"), 0644)
+				_ = os.WriteFile(filepath.Join(nested, "keep.txt"), []byte("x"), 0644)
+			},
+			wantLeft: []string{"chrootenv/keep.txt"},
+		},
+		{
 			name:  "empty cache dir is a no-op",
 			setup: func(dir string) {},
 		},
@@ -441,7 +454,20 @@ func TestClearDebPackageCache(t *testing.T) {
 				t.Fatalf("clearDebPackageCache() unexpected error: %v", err)
 			}
 
-			debs, _ := filepath.Glob(filepath.Join(dir, "*.deb"))
+			var debs []string
+			walkErr := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				if d.IsDir() || filepath.Ext(d.Name()) != ".deb" {
+					return nil
+				}
+				debs = append(debs, path)
+				return nil
+			})
+			if walkErr != nil {
+				t.Fatalf("failed to walk test cache dir: %v", walkErr)
+			}
 			if len(debs) != 0 {
 				t.Errorf("expected no .deb files after clear, got %v", debs)
 			}
@@ -490,6 +516,14 @@ func TestClearDebMetadataCache(t *testing.T) {
 		if _, statErr := os.Stat(f); !os.IsNotExist(statErr) {
 			t.Errorf("expected packages.parsed.json in build path %d (%s) to be removed", i, dir)
 		}
+	}
+}
+
+func TestClearDebPackageCache_MissingDirIsNoOp(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "does-not-exist")
+
+	if err := clearDebPackageCache(dir); err != nil {
+		t.Fatalf("clearDebPackageCache() unexpected error for missing dir: %v", err)
 	}
 }
 
