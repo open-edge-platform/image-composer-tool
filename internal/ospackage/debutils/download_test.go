@@ -434,9 +434,15 @@ func TestClearDebPackageCache(t *testing.T) {
 				if err := os.MkdirAll(nested, 0755); err != nil {
 					t.Fatalf("failed to create nested directory: %v", err)
 				}
-				_ = os.WriteFile(filepath.Join(dir, "bash_1.0_amd64.deb"), []byte("x"), 0644)
-				_ = os.WriteFile(filepath.Join(nested, "libsystemd0_255.4-1ubuntu8.15-ecir8_amd64.deb"), []byte("x"), 0644)
-				_ = os.WriteFile(filepath.Join(nested, "keep.txt"), []byte("x"), 0644)
+				for _, p := range []string{
+					filepath.Join(dir, "bash_1.0_amd64.deb"),
+					filepath.Join(nested, "libsystemd0_255.4-1ubuntu8.15-ecir8_amd64.deb"),
+					filepath.Join(nested, "keep.txt"),
+				} {
+					if err := os.WriteFile(p, []byte("x"), 0644); err != nil {
+						t.Fatalf("failed to write %s: %v", p, err)
+					}
+				}
 			},
 			wantLeft: []string{"chrootenv/keep.txt"},
 		},
