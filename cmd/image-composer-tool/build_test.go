@@ -17,7 +17,7 @@ import (
 
 // resetBuildFlags resets all build command flags to their default values
 func resetBuildFlags() {
-	workers = -1
+	workers = defaultWorkers
 	cacheDir = ""
 	workDir = ""
 }
@@ -512,8 +512,8 @@ func TestBuildCommand_Integration(t *testing.T) {
 func TestBuildFlags_DefaultValues(t *testing.T) {
 	resetBuildFlags()
 
-	if workers != -1 {
-		t.Errorf("workers should default to -1, got %d", workers)
+	if workers != defaultWorkers {
+		t.Errorf("workers should default to %d, got %d", defaultWorkers, workers)
 	}
 	if cacheDir != "" {
 		t.Errorf("cacheDir should default to empty, got %q", cacheDir)
@@ -544,12 +544,9 @@ func TestBuildCommand_FlagParsing(t *testing.T) {
 				if err := cmd.ParseFlags([]string{"--workers", "8"}); err != nil {
 					t.Fatalf("failed to parse flags: %v", err)
 				}
-				if workers != -1 {
-					// Flag value is set when the flag is parsed
-					val, _ := cmd.Flags().GetInt("workers")
-					if val != 8 {
-						t.Errorf("expected workers=8, got %d", val)
-					}
+				val, _ := cmd.Flags().GetInt("workers")
+				if val != 8 {
+					t.Errorf("expected workers=8, got %d", val)
 				}
 			},
 		},

@@ -21,9 +21,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// defaultWorkers is the default number of concurrent download workers from config
+var defaultWorkers = config.DefaultGlobalConfig().Workers
+
 // Build command flags
 var (
-	workers            int    = -1 // -1 means use config file value
+	workers            int    = defaultWorkers
 	cacheDir           string = "" // Empty means use config file value
 	workDir            string = "" // Empty means use config file value
 	dotFile            string = "" // Generate a dot file for the dependency graph
@@ -43,8 +46,8 @@ The template file must be in YAML format following the image template schema.`,
 	}
 
 	// Add flags
-	buildCmd.Flags().IntVarP(&workers, "workers", "w", -1,
-		"Number of concurrent download workers")
+	buildCmd.Flags().IntVarP(&workers, "workers", "w", defaultWorkers,
+		"Number of concurrent download workers (default from config)")
 	buildCmd.Flags().StringVarP(&cacheDir, "cache-dir", "d", "",
 		"Package cache directory")
 	buildCmd.Flags().StringVar(&workDir, "work-dir", "",
