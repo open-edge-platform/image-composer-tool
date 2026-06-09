@@ -62,6 +62,50 @@ func isBinaryGPGKey(data []byte) bool {
 	return float64(printableCount)/float64(checkLength) < 0.7
 }
 
+// parseKeyring loads every PGP key in data into a single EntityList. ProtonMail's
+// openpgp.ReadArmoredKeyRing stops after the first armored block, which silently
+// drops every later entity when a vendor key file concatenates multiple armored
+// blocks (e.g. a rotated primary alongside the active signing key). We dearmor
+// each block independently and feed the merged binary stream to ReadKeyRing so
+// the verifier can pick whichever key actually signed the Release file.
+func parseKeyring(data []byte) (openpgp.EntityList, error) {
+	beginMarker := []byte("-----BEGIN PGP PUBLIC KEY BLOCK-----")
+	if !bytes.Contains(data, beginMarker) {
+		return openpgp.ReadKeyRing(bytes.NewReader(data))
+	}
+
+	endMarker := []byte("-----END PGP PUBLIC KEY BLOCK-----")
+	var merged bytes.Buffer
+	rest := data
+	for {
+		start := bytes.Index(rest, beginMarker)
+		if start < 0 {
+			break
+		}
+		end := bytes.Index(rest[start:], endMarker)
+		if end < 0 {
+			return nil, fmt.Errorf("armored key block missing end marker")
+		}
+		blockEnd := start + end + len(endMarker)
+
+		block, err := armor.Decode(bytes.NewReader(rest[start:blockEnd]))
+		if err != nil {
+			return nil, fmt.Errorf("decoding armored key block: %w", err)
+		}
+		body, err := io.ReadAll(block.Body)
+		if err != nil {
+			return nil, fmt.Errorf("reading armored key body: %w", err)
+		}
+		merged.Write(body)
+		rest = rest[blockEnd:]
+	}
+
+	if merged.Len() == 0 {
+		return nil, fmt.Errorf("no armored key blocks decoded")
+	}
+	return openpgp.ReadKeyRing(&merged)
+}
+
 // convertBinaryGPGToAscii converts binary GPG key to ASCII armored format using Go crypto
 func convertBinaryGPGToAscii(binaryData []byte) ([]byte, error) {
 	// Try to parse the binary data as an OpenPGP key ring
@@ -165,18 +209,12 @@ func VerifyRelease(relPath string, relSignPath string, pKeyPath string) (bool, e
 		return false, fmt.Errorf("failed to read Release signature: %w", err)
 	}
 
-	// Try to import the public key - support both binary and armored formats
-	var keyring openpgp.EntityList
-
-	// First try as armored key (text format)
-	keyring, err = openpgp.ReadArmoredKeyRing(bytes.NewReader(keyringBytes))
+	// Load every PGP block in the key file. parseKeyring tolerates binary
+	// input and key files that concatenate multiple armored blocks, so the
+	// signing key is always present even when vendors ship rotated bundles.
+	keyring, err := parseKeyring(keyringBytes)
 	if err != nil {
-		log.Infof("Failed to parse as armored key, trying binary format: %v", err)
-		// Try as binary key format
-		keyring, err = openpgp.ReadKeyRing(bytes.NewReader(keyringBytes))
-		if err != nil {
-			return false, fmt.Errorf("failed to parse public key (tried both armored and binary formats): %w", err)
-		}
+		return false, fmt.Errorf("failed to parse public key: %w", err)
 	}
 
 	// Check if signature is binary or armored and verify accordingly
