@@ -472,23 +472,45 @@ func clearDebMetadataCache() {
 	}
 }
 
-// clearDebPackageCache removes all .deb files from cacheDir and invalidates
-// the per-repo metadata cache (packages.parsed.json) so that a full re-download
-// including fresh repository metadata is performed on the next run.
+// clearDebPackageCache removes all .deb files from cacheDir, including those in
+// nested subdirectories (e.g. the chrootenv/ and initrd/ package caches), and
+// invalidates the per-repo metadata cache (packages.parsed.json) so that a full
+// re-download including fresh repository metadata is performed on the next run.
+//
+// Subdirectories must be cleared too: the image build's local-repo step can
+// index package files under cacheDir recursively, so stale .deb files left in
+// subdirectories could shadow the correct package version.
 func clearDebPackageCache(cacheDir string) error {
 	log := logger.Logger()
-	pattern := filepath.Join(cacheDir, "*.deb")
-	files, err := filepath.Glob(pattern)
-	if err != nil {
-		return fmt.Errorf("glob %q: %w", pattern, err)
+	removedCount := 0
+
+	if _, err := os.Stat(cacheDir); os.IsNotExist(err) {
+		log.Debugf("cache directory %s does not exist; skipping cleanup", cacheDir)
+		clearDebMetadataCache()
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("stat cache directory %q: %w", cacheDir, err)
 	}
-	for _, f := range files {
-		if err := os.Remove(f); err != nil {
-			return fmt.Errorf("removing cached file %s: %w", f, err)
+
+	err := filepath.WalkDir(cacheDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
-		log.Debugf("removed stale cached file: %s", filepath.Base(f))
+		if d.IsDir() || filepath.Ext(d.Name()) != ".deb" {
+			return nil
+		}
+		if err := os.Remove(path); err != nil {
+			return fmt.Errorf("removing cached file %s: %w", path, err)
+		}
+		removedCount++
+		log.Debugf("removed stale cached file: %s", filepath.Base(path))
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("walking cache directory %q: %w", cacheDir, err)
 	}
-	log.Infof("cleared %d stale DEB files from cache directory %s", len(files), cacheDir)
+
+	log.Infof("cleared %d stale DEB files from cache directory %s", removedCount, cacheDir)
 	clearDebMetadataCache()
 	return nil
 }
