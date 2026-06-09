@@ -47,7 +47,7 @@ The template file must be in YAML format following the image template schema.`,
 
 	// Add flags
 	buildCmd.Flags().IntVarP(&workers, "workers", "w", defaultWorkers,
-		"Number of concurrent download workers (default from config)")
+		"Number of concurrent download workers, overrides config file value")
 	buildCmd.Flags().StringVarP(&cacheDir, "cache-dir", "d", "",
 		"Package cache directory")
 	buildCmd.Flags().StringVar(&workDir, "work-dir", "",

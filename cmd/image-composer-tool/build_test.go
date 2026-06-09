@@ -544,7 +544,10 @@ func TestBuildCommand_FlagParsing(t *testing.T) {
 				if err := cmd.ParseFlags([]string{"--workers", "8"}); err != nil {
 					t.Fatalf("failed to parse flags: %v", err)
 				}
-				val, _ := cmd.Flags().GetInt("workers")
+				val, err := cmd.Flags().GetInt("workers")
+				if err != nil {
+					t.Fatalf("failed to get workers flag: %v", err)
+				}
 				if val != 8 {
 					t.Errorf("expected workers=8, got %d", val)
 				}
