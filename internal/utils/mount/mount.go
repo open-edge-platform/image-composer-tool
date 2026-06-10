@@ -219,49 +219,75 @@ func UmountSubPath(mountPoint string) error {
 	return nil
 }
 
+func umountPathListReverse(pathList []string) error {
+	for i := len(pathList) - 1; i >= 0; i-- {
+		path := pathList[i]
+		if err := umountPath(path); err != nil {
+			if !strings.Contains(err.Error(), "not found") {
+				return fmt.Errorf("failed to unmount %s: %w", path, err)
+			}
+		}
+	}
+	return nil
+}
+
 // MountSysfs mounts system directories (e.g., /dev, /proc, /sys) into the chroot environment
 func MountSysfs(mountPoint string) error {
+	mountedPaths := make([]string, 0, 6)
+	failWithRollback := func(message string, mountErr error) error {
+		if rollbackErr := umountPathListReverse(mountedPaths); rollbackErr != nil {
+			return fmt.Errorf("%s: %w; rollback failed: %v", message, mountErr, rollbackErr)
+		}
+		return fmt.Errorf("%s: %w", message, mountErr)
+	}
+
 	procMountPoint := filepath.Join(mountPoint, "proc")
 	if err := MountPath("proc", procMountPoint, "-t proc"); err != nil {
-		return fmt.Errorf("failed to mount /proc to %s: %w", procMountPoint, err)
+		return failWithRollback(fmt.Sprintf("failed to mount /proc to %s", procMountPoint), err)
 	}
+	mountedPaths = append(mountedPaths, procMountPoint)
 
 	sysMountPoint := filepath.Join(mountPoint, "sys")
 	if err := MountPath("sysfs", sysMountPoint, "-t sysfs -o nosuid,noexec,nodev"); err != nil {
-		return fmt.Errorf("failed to mount /sys to %s: %w", sysMountPoint, err)
+		return failWithRollback(fmt.Sprintf("failed to mount /sys to %s", sysMountPoint), err)
 	}
+	mountedPaths = append(mountedPaths, sysMountPoint)
 
 	devMountPoint := filepath.Join(mountPoint, "dev")
 	if err := MountPath("devtmpfs", devMountPoint, "-t devtmpfs -o mode=0700,nosuid"); err != nil {
-		return fmt.Errorf("failed to mount /dev to %s: %w", devMountPoint, err)
+		return failWithRollback(fmt.Sprintf("failed to mount /dev to %s", devMountPoint), err)
 	}
+	mountedPaths = append(mountedPaths, devMountPoint)
 
 	devPtsMountPoint := filepath.Join(mountPoint, "dev/pts")
 	if err := MountPath("devpts", devPtsMountPoint, "-t devpts -o gid=5,mode=620"); err != nil {
-		return fmt.Errorf("failed to mount /dev/pts to %s: %w", devPtsMountPoint, err)
+		return failWithRollback(fmt.Sprintf("failed to mount /dev/pts to %s", devPtsMountPoint), err)
 	}
+	mountedPaths = append(mountedPaths, devPtsMountPoint)
 
 	devShmMountPoint := filepath.Join(mountPoint, "dev/shm")
 	if err := MountPath("tmpfs", devShmMountPoint, "-t tmpfs -o mode=1700"); err != nil {
-		return fmt.Errorf("failed to mount /dev/shm to %s: %w", devShmMountPoint, err)
+		return failWithRollback(fmt.Sprintf("failed to mount /dev/shm to %s", devShmMountPoint), err)
 	}
+	mountedPaths = append(mountedPaths, devShmMountPoint)
 
 	runMountPoint := filepath.Join(mountPoint, "run")
 	if err := MountPath("tmpfs", runMountPoint, "-t tmpfs -o mode=0700"); err != nil {
-		return fmt.Errorf("failed to mount /run to %s: %w", runMountPoint, err)
+		return failWithRollback(fmt.Sprintf("failed to mount /run to %s", runMountPoint), err)
 	}
+	mountedPaths = append(mountedPaths, runMountPoint)
 
 	runShmMountPoint := filepath.Join(mountPoint, "run/shm")
 	if _, err := shell.ExecCmd("mkdir -p "+runShmMountPoint, true, shell.HostPath, nil); err != nil {
-		return fmt.Errorf("failed to create %s: %w", runShmMountPoint, err)
+		return failWithRollback(fmt.Sprintf("failed to create %s", runShmMountPoint), err)
 	}
 	if _, err := shell.ExecCmd("chmod 1700 "+runShmMountPoint, true, shell.HostPath, nil); err != nil {
-		return fmt.Errorf("failed to set permissions on %s: %w", runShmMountPoint, err)
+		return failWithRollback(fmt.Sprintf("failed to set permissions on %s", runShmMountPoint), err)
 	}
 
 	runLockMountPoint := filepath.Join(mountPoint, "run/lock")
 	if _, err := shell.ExecCmd("mkdir -p "+runLockMountPoint, true, shell.HostPath, nil); err != nil {
-		return fmt.Errorf("failed to create %s: %w", runLockMountPoint, err)
+		return failWithRollback(fmt.Sprintf("failed to create %s", runLockMountPoint), err)
 	}
 
 	return nil

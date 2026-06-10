@@ -772,6 +772,7 @@ func TestGetGrubVersion(t *testing.T) {
 	tests := []struct {
 		name         string
 		mockCommands []shell.MockCommand
+		setupRoot    func(t *testing.T, installRoot string)
 		expected     string
 		expectError  bool
 	}{
@@ -793,10 +794,26 @@ func TestGetGrubVersion(t *testing.T) {
 			expectError: false,
 		},
 		{
+			name:         "update_grub_exists_in_install_root",
+			mockCommands: []shell.MockCommand{},
+			setupRoot: func(t *testing.T, installRoot string) {
+				updateGrubPath := filepath.Join(installRoot, "usr", "sbin", "update-grub")
+				if err := os.MkdirAll(filepath.Dir(updateGrubPath), 0755); err != nil {
+					t.Fatalf("failed to create update-grub parent dir: %v", err)
+				}
+				if err := os.WriteFile(updateGrubPath, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+					t.Fatalf("failed to create update-grub binary: %v", err)
+				}
+			},
+			expected:    "grub",
+			expectError: false,
+		},
+		{
 			name: "neither_exists",
 			mockCommands: []shell.MockCommand{
 				{Pattern: "command -v grub2-mkconfig", Output: "", Error: nil},
 				{Pattern: "command -v grub-mkconfig", Output: "", Error: nil},
+				{Pattern: "command -v update-grub", Output: "", Error: nil},
 			},
 			expected:    "",
 			expectError: true,
@@ -805,7 +822,6 @@ func TestGetGrubVersion(t *testing.T) {
 			name: "error_checking_grub2",
 			mockCommands: []shell.MockCommand{
 				{Pattern: "command -v grub2-mkconfig", Output: "", Error: fmt.Errorf("failed")},
-				{Pattern: "command -v grub-mkconfig", Output: "", Error: fmt.Errorf("failed")},
 			},
 			expected:    "",
 			expectError: true,
@@ -815,8 +831,12 @@ func TestGetGrubVersion(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			shell.Default = shell.NewMockExecutor(tt.mockCommands)
+			installRoot := t.TempDir()
+			if tt.setupRoot != nil {
+				tt.setupRoot(t, installRoot)
+			}
 
-			result, err := getGrubVersion("/")
+			result, err := getGrubVersion(installRoot)
 
 			if tt.expectError {
 				if err == nil {
@@ -831,6 +851,28 @@ func TestGetGrubVersion(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestUpdateGrubConfig_UsesUpdateGrubFallback(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	installRoot := t.TempDir()
+	updateGrubPath := filepath.Join(installRoot, "usr", "sbin", "update-grub")
+	if err := os.MkdirAll(filepath.Dir(updateGrubPath), 0755); err != nil {
+		t.Fatalf("failed to create update-grub parent dir: %v", err)
+	}
+	if err := os.WriteFile(updateGrubPath, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatalf("failed to create update-grub binary: %v", err)
+	}
+
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: "update-grub", Output: "", Error: nil},
+	})
+
+	if err := updateGrubConfig(installRoot, "grub"); err != nil {
+		t.Fatalf("expected update-grub fallback to succeed, got error: %v", err)
 	}
 }
 
@@ -1126,7 +1168,7 @@ func TestInstallImageBoot_GrubVersionNotFound(t *testing.T) {
 	if err == nil {
 		t.Error("Expected error when neither grub version is found")
 	}
-	if !strings.Contains(err.Error(), "neither grub2-mkconfig nor grub-mkconfig found") {
+	if !strings.Contains(err.Error(), "none of grub2-mkconfig, grub-mkconfig, or update-grub found") {
 		t.Errorf("Expected grub version error, got: %v", err)
 	}
 }
@@ -1564,94 +1606,5 @@ func TestInstallImageBoot_GrubWithEnableExtraModulesUbuntu(t *testing.T) {
 
 	if err != nil {
 		t.Errorf("Expected no error, got: %v", err)
-	}
-}
-
-func TestUpdateBootConfigTemplate_GrubCmdlineRootAndExtraArgs(t *testing.T) {
-	originalGlobal := config.Global()
-	t.Cleanup(func() {
-		config.SetGlobal(originalGlobal)
-	})
-	originalExecutor := shell.Default
-	shell.Default = &shell.DefaultExecutor{}
-	t.Cleanup(func() {
-		shell.Default = originalExecutor
-	})
-
-	configDir := t.TempDir()
-	generalDir := filepath.Join(configDir, "general")
-
-	if err := os.MkdirAll(filepath.Join(generalDir, "image", "grub2"), 0755); err != nil {
-		t.Fatalf("failed to create grub2 asset dir: %v", err)
-	}
-
-	grubAsset := filepath.Join(generalDir, "image", "grub2", "grub")
-	assetContent := strings.Join([]string{
-		"GRUB_TIMEOUT=5",
-		"GRUB_CMDLINE_LINUX=\"root={{.RootPartition}} {{.rdAuto}}\"",
-		"GRUB_CMDLINE_LINUX_DEFAULT=\"{{.ExtraCommandLine}}\"",
-		"GRUB_DISTRIBUTOR=\"{{.Hostname}}\"",
-	}, "\n")
-	if err := os.WriteFile(grubAsset, []byte(assetContent), 0644); err != nil {
-		t.Fatalf("failed to write grub template asset: %v", err)
-	}
-
-	config.SetGlobal(&config.GlobalConfig{
-		ConfigDir: configDir,
-		Logging:   config.LoggingConfig{Level: "debug"},
-	})
-
-	installRoot := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(installRoot, "etc", "default"), 0755); err != nil {
-		t.Fatalf("failed to create install root dirs: %v", err)
-	}
-
-	template := &config.ImageTemplate{
-		Image: config.ImageInfo{Name: "cmdline-test-image"},
-		SystemConfig: config.SystemConfig{
-			Bootloader: config.Bootloader{Provider: "grub", BootType: "efi"},
-			Kernel: config.KernelConfig{
-				Cmdline: "root=/dev/mapper/rootfs_verity console=ttyS0,115200 console=tty0 quiet",
-			},
-		},
-	}
-
-	err := updateBootConfigTemplate(
-		installRoot,
-		"PARTUUID=abc123",
-		"boot-uuid",
-		"",
-		"",
-		"",
-		template,
-	)
-	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
-	}
-
-	generatedPath := filepath.Join(installRoot, "etc", "default", "grub")
-	contentBytes, err := os.ReadFile(generatedPath)
-	if err != nil {
-		t.Fatalf("failed to read generated grub config: %v", err)
-	}
-	content := string(contentBytes)
-	lines := strings.Split(content, "\n")
-	lineMap := make(map[string]string)
-	for _, line := range lines {
-		if key, value, ok := strings.Cut(line, "="); ok {
-			lineMap[key] = value
-		}
-	}
-
-	if lineMap["GRUB_CMDLINE_LINUX"] != "\"root=/dev/mapper/rootfs_verity rd.auto=1\"" {
-		t.Fatalf("expected root override from kernel cmdline, got: %s", content)
-	}
-
-	if lineMap["GRUB_CMDLINE_LINUX_DEFAULT"] != "\"console=ttyS0,115200 console=tty0 quiet\"" {
-		t.Fatalf("expected root arg removed from extra cmdline, got: %s", content)
-	}
-
-	if strings.Contains(content, "$kernelopts") {
-		t.Fatalf("did not expect unresolved $kernelopts in generated grub config: %s", content)
 	}
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/config/manifest"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/imageboot"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/imagedisc"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/imagenetwork"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/imagesecure"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/imagesign"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
@@ -154,17 +155,19 @@ func (imageOs *ImageOs) InstallImageOs(diskPathIdMap map[string]string) (version
 			return
 		}
 		mounted = true
+		mountPointInfoList = append(mountPointInfoList, map[string]string{"MountPoint": imageOs.installRoot})
 		if err = imageOs.initRootfsForDeb(imageOs.installRoot); err != nil {
 			err = fmt.Errorf("failed to initialize rootfs for deb: %w", err)
 			return
 		}
 	}
 
-	mountPointInfoList, err = imageOs.mountDiskToChroot(imageOs.installRoot, diskPathIdMap, imageOs.template)
-	if err != nil {
-		err = fmt.Errorf("failed to mount disk to chroot: %w", err)
+	mountedPointInfoList, mountErr := imageOs.mountDiskToChroot(imageOs.installRoot, diskPathIdMap, imageOs.template)
+	if mountErr != nil {
+		err = fmt.Errorf("failed to mount disk to chroot: %w", mountErr)
 		return
 	}
+	mountPointInfoList = mountedPointInfoList
 	mounted = true
 
 	log.Infof("Image installation pre-processing...")
@@ -307,11 +310,23 @@ func (imageOs *ImageOs) umountSysfsFromRootfs(installRoot string) error {
 func mountDiskRootToChroot(installRoot string, diskPathIdMap map[string]string, template *config.ImageTemplate) error {
 	diskInfo := template.GetDiskConfig()
 	partions := diskInfo.Partitions
+
+	// Debug logging
+	log.Debugf("mountDiskRootToChroot: Looking for root partition")
+	log.Debugf("  diskPathIdMap contents:")
+	for id, path := range diskPathIdMap {
+		log.Debugf("    ID=%s -> Path=%s", id, path)
+	}
+	log.Debugf("  Template partitions:")
+	for i, p := range partions {
+		log.Debugf("    Partition %d: ID=%s, MountPoint=%s, FsType=%s", i, p.ID, p.MountPoint, p.FsType)
+	}
+
 	for diskId, diskPath := range diskPathIdMap {
 		for _, partition := range partions {
 			if partition.ID == diskId {
 				if partition.MountPoint == "/" {
-					mountPoint := filepath.Join(installRoot, partition.MountPoint)
+					mountPoint := resolveInstallRootMountPoint(installRoot, partition.MountPoint)
 					mountFlags := fmt.Sprintf("-t %s", partition.FsType)
 					if err := mount.MountPath(diskPath, mountPoint, mountFlags); err != nil {
 						log.Errorf("Failed to mount %s to %s: %v", diskPath, mountPoint, err)
@@ -335,8 +350,27 @@ func isNonMountablePartition(partition config.PartitionInfo) bool {
 	return mountPoint == "" || mountPoint == "none" || isSwapFsType(partition.FsType)
 }
 
+func resolveInstallRootMountPoint(installRoot, partitionMountPoint string) string {
+	trimmed := strings.TrimSpace(partitionMountPoint)
+	if trimmed == "" || trimmed == "/" {
+		return installRoot
+	}
+
+	trimmed = strings.TrimPrefix(trimmed, "/")
+	return filepath.Join(installRoot, trimmed)
+}
+
 func (imageOs *ImageOs) mountDiskToChroot(installRoot string, diskPathIdMap map[string]string, template *config.ImageTemplate) ([]map[string]string, error) {
 	var mountPointInfoList []map[string]string
+	mountedPaths := make([]string, 0)
+	rollbackMountedPaths := func() error {
+		for i := len(mountedPaths) - 1; i >= 0; i-- {
+			if err := mount.UmountPath(mountedPaths[i]); err != nil {
+				return fmt.Errorf("failed to rollback mount %s: %w", mountedPaths[i], err)
+			}
+		}
+		return nil
+	}
 	diskInfo := template.GetDiskConfig()
 	partions := diskInfo.Partitions
 	for diskId, diskPath := range diskPathIdMap {
@@ -351,13 +385,13 @@ func (imageOs *ImageOs) mountDiskToChroot(installRoot string, diskPathIdMap map[
 				mountPointInfo := make(map[string]string)
 				mountPointInfo["Id"] = diskId
 				mountPointInfo["Path"] = diskPath
-				mountPointInfo["MountPoint"] = filepath.Join(installRoot, partition.MountPoint)
+				mountPointInfo["MountPoint"] = resolveInstallRootMountPoint(installRoot, partition.MountPoint)
 				// Normalize FAT filesystem types to vfat for Linux mount compatibility
 				fsType := partition.FsType
 				if fsType == "fat32" || fsType == "fat16" {
 					fsType = "vfat"
 				}
-				if partition.MountPoint == "/boot/efi" {
+				if strings.TrimPrefix(strings.TrimSpace(partition.MountPoint), "/") == "boot/efi" {
 					mountPointInfo["Flags"] = fmt.Sprintf("-t %s -o umask=0077", fsType)
 				} else {
 					mountPointInfo["Flags"] = fmt.Sprintf("-t %s", fsType)
@@ -384,11 +418,18 @@ func (imageOs *ImageOs) mountDiskToChroot(installRoot string, diskPathIdMap map[
 		flags := mountPointInfo["Flags"]
 		if err := mount.MountPath(path, mountPoint, flags); err != nil {
 			log.Errorf("Failed to mount %s to %s with flags %s: %v", path, mountPoint, flags, err)
+			if rollbackErr := rollbackMountedPaths(); rollbackErr != nil {
+				return nil, fmt.Errorf("failed to mount %s to %s with flags %s: %w; rollback error: %v", path, mountPoint, flags, err, rollbackErr)
+			}
 			return nil, fmt.Errorf("failed to mount %s to %s with flags %s: %w", path, mountPoint, flags, err)
 		}
+		mountedPaths = append(mountedPaths, mountPoint)
 	}
 
 	if err := imageOs.mountSysfsToRootfs(installRoot); err != nil {
+		if rollbackErr := rollbackMountedPaths(); rollbackErr != nil {
+			return nil, fmt.Errorf("%w; rollback error: %v", err, rollbackErr)
+		}
 		return nil, err
 	}
 
@@ -478,11 +519,19 @@ func (imageOs *ImageOs) initDebLocalRepoWithinInstallRoot(installRoot string) er
 	}
 
 	// from local.list
-	repoPath := filepath.Join(chrootInstallRoot, "/cdrom/cache-repo")
+	repoPath := filepath.Join(chrootInstallRoot, "cdrom", "cache-repo")
 	chrootPkgCacheDir := imageOs.chrootEnv.GetChrootPkgCacheDir()
 	if err := imageOs.chrootEnv.MountChrootPath(chrootPkgCacheDir, repoPath, "--bind"); err != nil {
 		return fmt.Errorf("failed to mount package cache directory %s to chroot repo directory %s: %w",
 			chrootPkgCacheDir, repoPath, err)
+	}
+
+	if err := imageOs.chrootEnv.UpdateChrootLocalRepoMetadata(
+		repoPath,
+		imageOs.template.Target.Arch,
+		false,
+	); err != nil {
+		return fmt.Errorf("failed to refresh local debian repository metadata: %w", err)
 	}
 
 	imageRepoCongfigPath := filepath.Join(installRoot, "/etc/apt/sources.list.d/", "*")
@@ -618,7 +667,7 @@ func preImageOsInstall(installRoot string, template *config.ImageTemplate) error
 	return nil
 }
 
-func (imageOs *ImageOs) installImagePkgs(installRoot string, template *config.ImageTemplate) error {
+func (imageOs *ImageOs) installImagePkgs(installRoot string, template *config.ImageTemplate) (err error) {
 	pkgType := imageOs.chrootEnv.GetTargetOsPkgType()
 
 	if pkgType == "rpm" {
@@ -641,6 +690,15 @@ func (imageOs *ImageOs) installImagePkgs(installRoot string, template *config.Im
 		if err := imageOs.initDebLocalRepoWithinInstallRoot(installRoot); err != nil {
 			return fmt.Errorf("failed to initialize local repository within install root: %w", err)
 		}
+		defer func() {
+			if deinitErr := imageOs.deInitDebLocalRepoWithinInstallRoot(installRoot); deinitErr != nil {
+				if err == nil {
+					err = fmt.Errorf("failed to de-initialize local repository within install root: %w", deinitErr)
+				} else {
+					err = fmt.Errorf("operation failed: %w, cleanup errors: %v", err, deinitErr)
+				}
+			}
+		}()
 		imagePkgNum := len(imagePkgOrderedList)
 		// Force to use the local cache repository
 		var repoSrcList []string = []string{"/etc/apt/sources.list.d/local.list"}
@@ -725,10 +783,6 @@ exit 0
 			}
 
 		}
-		if err := imageOs.deInitDebLocalRepoWithinInstallRoot(installRoot); err != nil {
-			return fmt.Errorf("failed to de-initialize local repository within install root: %w", err)
-		}
-
 		// Restore original apparmor_parser after all packages are installed
 		apparmorRealPath := filepath.Join(installRoot, "usr/sbin/apparmor_parser.real")
 		if _, statErr := os.Stat(apparmorRealPath); statErr == nil {
@@ -949,6 +1003,16 @@ func updateImageUsrGroup(installRoot string, template *config.ImageTemplate) err
 }
 
 func updateImageNetwork(installRoot string, template *config.ImageTemplate) error {
+	if err := imagenetwork.WriteNetworkConfig(installRoot, &template.SystemConfig.Network); err != nil {
+		return fmt.Errorf("failed to write declarative network config: %w", err)
+	}
+
+	// When netplan is the backend, netplan manages its own renderer —
+	// do not unconditionally enable systemd-networkd alongside it.
+	if template.SystemConfig.Network.Backend == "netplan" {
+		return nil
+	}
+
 	unitFilePath := filepath.Join(installRoot, "lib", "systemd", "system", "systemd-networkd.service")
 	if _, err := os.Stat(unitFilePath); os.IsNotExist(err) {
 		log.Warnf("systemd-networkd is not installed in %s, skipping enable", installRoot)
@@ -1455,6 +1519,16 @@ func getUkifyStubPath(targetArch string) (string, error) {
 	}
 }
 
+func getUkifyStubPathCandidates(targetArch string) ([]string, error) {
+	primary, err := getUkifyStubPath(targetArch)
+	if err != nil {
+		return nil, err
+	}
+
+	// Some distros may only provide signed stub variants.
+	return []string{primary, primary + ".signed"}, nil
+}
+
 // Helper to build UKI using ukify
 func buildUKI(installRoot, kernelPath, initrdPath, cmdlineFile, outputPath string, template *config.ImageTemplate) error {
 	data, err := file.Read(filepath.Join(installRoot, cmdlineFile))
@@ -1504,9 +1578,26 @@ func buildUKI(installRoot, kernelPath, initrdPath, cmdlineFile, outputPath strin
 	var cmd string
 	backInstallRoot := installRoot
 	exists, _ := shell.IsCommandExist("ukify", installRoot)
-	stubPath, err := getUkifyStubPath(template.Target.Arch)
+	stubCandidates, err := getUkifyStubPathCandidates(template.Target.Arch)
 	if err != nil {
 		return fmt.Errorf("failed to resolve ukify EFI stub: %w", err)
+	}
+
+	fileExists := func(path string) bool {
+		if path == "" {
+			return false
+		}
+		info, statErr := os.Stat(path)
+		return statErr == nil && !info.IsDir()
+	}
+
+	findFirstExisting := func(paths []string) string {
+		for _, p := range paths {
+			if fileExists(p) {
+				return p
+			}
+		}
+		return ""
 	}
 
 	// For cross-arch builds, chroot binaries cannot execute on the host.
@@ -1524,35 +1615,109 @@ func buildUKI(installRoot, kernelPath, initrdPath, cmdlineFile, outputPath strin
 		initrdPath = toRootPath(installRoot, initrdPath)
 		outputPath = toRootPath(installRoot, outputPath)
 		osRelease := toRootPath(installRoot, "/etc/os-release")
-		stubPath = toRootPath(installRoot, stubPath)
+
+		stubInImageCandidates := make([]string, 0, len(stubCandidates))
+		for _, candidate := range stubCandidates {
+			stubInImageCandidates = append(stubInImageCandidates, toRootPath(installRoot, candidate))
+		}
+
+		// In host-ukify mode, same-arch builds should prefer host stubs first;
+		// cross-arch builds should prefer image-root stubs first.
+		stubPath := ""
+		if isCrossArch {
+			stubPath = findFirstExisting(stubInImageCandidates)
+			if stubPath == "" {
+				stubPath = findFirstExisting(stubCandidates)
+			}
+		} else {
+			stubPath = findFirstExisting(stubCandidates)
+			if stubPath == "" {
+				stubPath = findFirstExisting(stubInImageCandidates)
+			}
+		}
 		installRoot = shell.HostPath
 
 		if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
 			return fmt.Errorf("failed to create UKI output directory %s: %w", filepath.Dir(outputPath), err)
 		}
 
+		stubArg := ""
+		if stubPath != "" && fileExists(stubPath) {
+			stubArg = fmt.Sprintf(" --stub \"%s\"", stubPath)
+		} else {
+			log.Warnf("Could not find ukify EFI stub for arch %s in image rootfs or host defaults; letting ukify choose default stub", template.Target.Arch)
+		}
+
 		cmd = fmt.Sprintf(
-			"ukify build --linux \"%s\" --initrd \"%s\" --cmdline \"%s\" --stub \"%s\" --os-release @\"%s\" --output \"%s\"",
+			"ukify build --linux \"%s\" --initrd \"%s\" --cmdline \"%s\"%s --os-release @\"%s\" --output \"%s\"",
 			kernelPath,
 			initrdPath,
 			cmdlineStr,
-			stubPath,
+			stubArg,
 			osRelease,
 			outputPath,
 		)
 	} else {
-		if err := os.MkdirAll(filepath.Join(installRoot, filepath.Dir(outputPath)), 0o755); err != nil {
-			return fmt.Errorf("failed to create UKI output directory %s: %w", filepath.Dir(outputPath), err)
+		stubInChrootCandidates := make([]string, 0, len(stubCandidates))
+		for _, candidate := range stubCandidates {
+			stubInChrootCandidates = append(stubInChrootCandidates, filepath.Join(installRoot, strings.TrimPrefix(candidate, "/")))
 		}
 
-		cmd = fmt.Sprintf(
-			"ukify build --linux \"%s\" --initrd \"%s\" --cmdline \"%s\" --stub \"%s\" --output \"%s\"",
-			kernelPath,
-			initrdPath,
-			cmdlineStr,
-			stubPath,
-			outputPath,
-		)
+		selectedStubInChroot := findFirstExisting(stubInChrootCandidates)
+		if selectedStubInChroot == "" {
+			log.Warnf("ukify found in chroot but EFI stub is missing in target rootfs for arch %s; retrying with host ukify", template.Target.Arch)
+			kernelPath = toRootPath(installRoot, kernelPath)
+			initrdPath = toRootPath(installRoot, initrdPath)
+			outputPath = toRootPath(installRoot, outputPath)
+			osRelease := toRootPath(installRoot, "/etc/os-release")
+			installRoot = shell.HostPath
+
+			if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
+				return fmt.Errorf("failed to create UKI output directory %s: %w", filepath.Dir(outputPath), err)
+			}
+
+			selectedStub := findFirstExisting(stubCandidates)
+			stubArg := ""
+			if selectedStub != "" {
+				stubArg = fmt.Sprintf(" --stub \"%s\"", selectedStub)
+			} else {
+				log.Warnf("Could not find ukify EFI stub for arch %s on host defaults; letting ukify choose default stub", template.Target.Arch)
+			}
+
+			cmd = fmt.Sprintf(
+				"ukify build --linux \"%s\" --initrd \"%s\" --cmdline \"%s\"%s --os-release @\"%s\" --output \"%s\"",
+				kernelPath,
+				initrdPath,
+				cmdlineStr,
+				stubArg,
+				osRelease,
+				outputPath,
+			)
+		} else {
+			selectedStub := ""
+			for i, candidateOnHost := range stubInChrootCandidates {
+				if candidateOnHost == selectedStubInChroot {
+					selectedStub = stubCandidates[i]
+					break
+				}
+			}
+			if selectedStub == "" {
+				selectedStub = stubCandidates[0]
+			}
+
+			if err := os.MkdirAll(filepath.Join(installRoot, filepath.Dir(outputPath)), 0o755); err != nil {
+				return fmt.Errorf("failed to create UKI output directory %s: %w", filepath.Dir(outputPath), err)
+			}
+
+			cmd = fmt.Sprintf(
+				"ukify build --linux \"%s\" --initrd \"%s\" --cmdline \"%s\" --stub \"%s\" --output \"%s\"",
+				kernelPath,
+				initrdPath,
+				cmdlineStr,
+				selectedStub,
+				outputPath,
+			)
+		}
 	}
 
 	log.Debugf("UKI executing command")

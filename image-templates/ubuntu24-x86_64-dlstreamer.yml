@@ -46,9 +46,9 @@ packageRepositories:
     pkey: "https://apt.repos.intel.com/edgeai/dlstreamer/GPG-PUB-KEY-INTEL-DLS.gpg"
 
   - codename: "noble"
-    url: "https://repositories.intel.com/gpu/ubuntu"
-    pkey: "https://repositories.intel.com/gpu/intel-graphics.key"
-    component: "unified"
+    url: "https://ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu"
+    pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x0C0E6AF955CE463C03FC51574D098D70AFBE5E1F"
+    component: "main"
 
 disk:
   name: Minimal_Raw # 1:1 mapping to the systemConfigs name

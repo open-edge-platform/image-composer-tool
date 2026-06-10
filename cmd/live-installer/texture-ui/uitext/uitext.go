@@ -142,6 +142,26 @@ const (
 	UserNameInvalidLengthErrorFmt = "user name must be <= %d characters"
 )
 
+// NetworkView text.
+const (
+	NetworkTitle = "Configure Network"
+
+	NetworkInterfaceLabel = "Interface Name (leave blank to skip):"
+	NetworkDHCPLabel      = "* Use DHCP:"
+	NetworkIPLabel        = "  Static IP (CIDR):"
+	NetworkGatewayLabel   = "  Gateway:"
+	NetworkDNSLabel       = "  DNS Servers (comma-separated):"
+
+	NetworkIPPlaceholder      = "e.g. 192.168.1.10/24"
+	NetworkGatewayPlaceholder = "e.g. 192.168.1.1"
+	NetworkDNSPlaceholder     = "e.g. 8.8.8.8, 8.8.4.4"
+
+	NetworkIPRequiredError        = "static IP address is required when DHCP is disabled"
+	NetworkIPInvalidErrorFmt      = "invalid IP address (CIDR format required): %s"
+	NetworkGatewayInvalidErrorFmt = "invalid gateway address: %s"
+	NetworkDNSInvalidErrorFmt     = "invalid DNS server address: %s"
+)
+
 // ProgressView text.
 const (
 	ProgressTitle      = "Installing OS"
