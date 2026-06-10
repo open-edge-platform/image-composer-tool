@@ -13,6 +13,8 @@
 - Ability to set priority for repositories to manage conflicts.
 - Ability to prioritize specific packages to manage conflicts.
 - Caching for consistent and faster composition.
+- Debian repository GPG keys are now cached in `cache_dir/gpg-keys` and reused on rebuilds to avoid re-downloading.
+- RPM repository metadata is now cached in `cache_dir/rpm-metadata` and reused on rebuilds to avoid network fetches.
 - Native support for Debian and RPM based distributions.
 - Support for building immutable OS images with DM-Verity and read-only file
   system support.
