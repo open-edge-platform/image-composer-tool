@@ -1,0 +1,106 @@
+name: Build ELXR Edge 26.04 Immutable Image
+on:
+  workflow_dispatch:             # Manual runs
+    inputs:
+      ref:
+        description: "Branch or SHA to test (e.g. feature/x or a1b2c3)"
+        required: false
+      run_qemu_test:
+        description: "Run QEMU boot test after build"
+        required: false
+        default: "false"
+        type: choice
+        options:
+        - "true"
+        - "false"
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build-elxr-edge-26-04-immutable:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 #v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 #v4.1.0
+
+      - name: Install Earthly
+        uses: earthly/actions-setup@43211c7a0eae5344d6d79fb4aaf209c8f8866203 #v1.0.13
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          version: "latest"
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 ovmf tree jq systemd-ukify mmdebstrap systemd-boot
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c #v6.4.0
+        with:
+          go-version: stable
+
+      - name: Prepare build script
+        run: |
+          if [ ! -f scripts/build_elxr-edge-26.04_immutable.sh ]; then
+            echo "scripts/build_elxr-edge-26.04_immutable.sh not found!"
+            exit 1
+          fi
+          chmod +x scripts/build_elxr-edge-26.04_immutable.sh
+
+      - name: Run ELXR Edge 26.04 Immutable Image Build
+        env:
+          RUN_QEMU_TEST: ${{ github.event.inputs.run_qemu_test }}
+        run: |
+          echo "Starting ELXR Edge 26.04 immutable image build..."
+          # Ensure script has access to docker group for Earthly
+          sudo usermod -aG docker $USER
+          
+          # Prepare arguments with input validation
+          ARGS=""
+          case "${RUN_QEMU_TEST}" in
+            "true")
+              ARGS="--qemu-test"
+              echo "QEMU boot test will be run after build"
+              ;;
+            "false"|"")
+              echo "QEMU boot test will be skipped"
+              ;;
+            *)
+              echo "Invalid input for run_qemu_test: ${RUN_QEMU_TEST}"
+              exit 1
+              ;;
+          esac
+          
+          # Run the ELXR Edge 26.04 immutable image build script
+          ./scripts/build_elxr-edge-26.04_immutable.sh $ARGS
+          echo "ELXR Edge 26.04 immutable image build completed."
+
+      - name: Notify on failure
+        if: ${{ failure() && github.event_name == 'pull_request' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REVIEWER_ID: srmungar
+        run: |
+          PR_AUTHOR=$(jq --raw-output 'try .pull_request.user.login // empty' "$GITHUB_EVENT_PATH")
+          if [ -z "$PR_AUTHOR" ]; then
+            echo "PR_AUTHOR not found in event payload. Skipping notification."
+            exit 0
+          fi
+          COMMENT_BODY="Hey @$PR_AUTHOR and @$REVIEWER_ID — the ELXR Edge 26.04 Immutable image build has failed. Please check the logs."
+          curl -s -X POST \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            --data "{\"body\": \"$COMMENT_BODY\"}" \
+            "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments"

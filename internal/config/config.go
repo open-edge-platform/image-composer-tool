@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,6 +39,9 @@ type DiskSelectionPolicy struct {
 	// ExcludeRemovable is intentionally conservative for unattended installs and
 	// excludes disks that appear externally attached, not only devices with RM=1.
 	ExcludeRemovable *bool `yaml:"excludeRemovable,omitempty"`
+	// RequireEmpty restricts unattended disk selection to empty disks when true.
+	// If false, disks with existing partitions are eligible and may be overwritten.
+	RequireEmpty *bool `yaml:"requireEmpty,omitempty"`
 }
 
 type DiskConfig struct {
@@ -51,15 +55,17 @@ type DiskConfig struct {
 }
 
 type PackageRepository struct {
-	ID            string   `yaml:"id,omitempty"`            // Auto-assigned
-	Codename      string   `yaml:"codename"`                // Repository identifier/codename
-	URL           string   `yaml:"url,omitempty"`           // Repository base URL
-	Path          string   `yaml:"path,omitempty"`          // Local directory path for file-based repositories
-	PKey          string   `yaml:"pkey"`                    // Public GPG key URL for verification
-	PKeys         []string `yaml:"pkeys,omitempty"`         // Multiple public GPG key URLs for verification
-	Component     string   `yaml:"component,omitempty"`     // Repository component (e.g., "main", "restricted")
-	Priority      int      `yaml:"priority,omitempty"`      // Repository priority (higher numbers = higher priority)
-	AllowPackages []string `yaml:"allowPackages,omitempty"` // Optional: specific packages to include from this repo (pinning)
+	ID                 string   `yaml:"id,omitempty"`                 // Auto-assigned
+	Codename           string   `yaml:"codename"`                     // Repository identifier/codename
+	URL                string   `yaml:"url,omitempty"`                // Repository base URL
+	Path               string   `yaml:"path,omitempty"`               // Local directory path for file-based repositories
+	Packages           []string `yaml:"packages,omitempty"`           // Files to copy/download into Path for local repositories (HTTPS URLs or local file paths)
+	InsecureSkipVerify bool     `yaml:"insecureSkipVerify,omitempty"` // Skip TLS certificate verification for packages URL downloads (insecure, use with caution)
+	PKey               string   `yaml:"pkey"`                         // Public GPG key URL for verification
+	PKeys              []string `yaml:"pkeys,omitempty"`              // Multiple public GPG key URLs for verification
+	Component          string   `yaml:"component,omitempty"`          // Repository component (e.g., "main", "restricted")
+	Priority           int      `yaml:"priority,omitempty"`           // Repository priority (higher numbers = higher priority)
+	AllowPackages      []string `yaml:"allowPackages,omitempty"`      // Optional: specific packages to include from this repo (pinning)
 }
 
 // ProviderRepoConfig represents the repository configuration for a provider
@@ -156,6 +162,28 @@ type UserConfig struct {
 	Shell          string   `yaml:"shell,omitempty"`          // Shell: login shell (e.g., /bin/bash, /bin/zsh)
 }
 
+// NetworkRoute represents a static route entry
+type NetworkRoute struct {
+	To  string `yaml:"to"`  // To: destination (e.g., "default", "10.0.0.0/8")
+	Via string `yaml:"via"` // Via: gateway address (e.g., "10.0.0.1")
+}
+
+// NetworkInterface represents a single network interface configuration
+type NetworkInterface struct {
+	Name        string         `yaml:"name"`                  // Name: interface name (e.g., enp1s0, ens3)
+	DHCP4       *bool          `yaml:"dhcp4,omitempty"`       // DHCP4: enable DHCPv4
+	DHCP6       *bool          `yaml:"dhcp6,omitempty"`       // DHCP6: enable DHCPv6
+	Addresses   []string       `yaml:"addresses,omitempty"`   // Addresses: static IPv4/IPv6 addresses (e.g., "192.168.1.10/24")
+	Routes      []NetworkRoute `yaml:"routes,omitempty"`      // Routes: static routes (replaces deprecated gateway4/gateway6)
+	Nameservers []string       `yaml:"nameservers,omitempty"` // Nameservers: DNS server addresses
+}
+
+// NetworkConfig represents the network configuration for the installed OS
+type NetworkConfig struct {
+	Backend    string             `yaml:"backend,omitempty"`    // Backend: network backend (netplan or systemd-networkd)
+	Interfaces []NetworkInterface `yaml:"interfaces,omitempty"` // Interfaces: list of interfaces to configure
+}
+
 // SystemConfig represents a system configuration within the template
 type SystemConfig struct {
 	Name            string               `yaml:"name"`
@@ -165,6 +193,7 @@ type SystemConfig struct {
 	Immutability    ImmutabilityConfig   `yaml:"immutability,omitempty"`
 	Users           []UserConfig         `yaml:"users,omitempty"`
 	Bootloader      Bootloader           `yaml:"bootloader"`
+	Network         NetworkConfig        `yaml:"network,omitempty"`
 	Packages        []string             `yaml:"packages"`
 	AdditionalFiles []AdditionalFileInfo `yaml:"additionalFiles"`
 	Configurations  []ConfigurationInfo  `yaml:"configurations"`
@@ -976,8 +1005,27 @@ func (t *ImageTemplate) validatePackageRepositories() error {
 
 // ValidatePackageRepository validates that either URL or Path is provided
 func (pr *PackageRepository) ValidatePackageRepository() error {
-	if pr.URL == "" && pr.Path == "" {
-		return fmt.Errorf("repository '%s': either 'url' or 'path' must be provided", pr.Codename)
+	if len(pr.Packages) > 0 {
+		// path is optional when packages is set — a temp dir is auto-created at runtime
+		for _, entry := range pr.Packages {
+			if strings.TrimSpace(entry) == "" {
+				return fmt.Errorf("repository '%s': 'packages' entries cannot be empty", pr.Codename)
+			}
+			// If the entry looks like a URL it must use https; plain paths are copied at runtime
+			if strings.Contains(entry, "://") {
+				parsedURL, err := url.Parse(entry)
+				if err != nil {
+					return fmt.Errorf("repository '%s': invalid packages URL '%s': %w", pr.Codename, entry, err)
+				}
+				if parsedURL.Scheme != "https" {
+					return fmt.Errorf("repository '%s': packages URL '%s' must use https", pr.Codename, entry)
+				}
+			}
+		}
+	}
+
+	if pr.URL == "" && pr.Path == "" && len(pr.Packages) == 0 {
+		return fmt.Errorf("repository '%s': either 'url', 'path', or 'packages' must be provided", pr.Codename)
 	}
 	if pr.URL != "" && pr.Path != "" {
 		return fmt.Errorf("repository '%s': cannot specify both 'url' and 'path', choose one", pr.Codename)

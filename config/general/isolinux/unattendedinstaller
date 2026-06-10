@@ -10,7 +10,7 @@ CACHE_REPO="$ISO_ROOT/cache-repo"
 
 # Mounting the ISO root for the installer.
 mkdir -p "$ISO_ROOT"
-LABELS=(ICT_CDROM OIC_CDROM)
+LABELS=(ICT_CDROM)
 
 function mount_iso_root {
     local label

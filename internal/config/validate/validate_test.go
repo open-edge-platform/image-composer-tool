@@ -728,3 +728,76 @@ systemConfig:
 		t.Errorf("expected template with local path repo to pass validation, but got: %v", err)
 	}
 }
+
+func TestNetworkInterfaceInvalidCIDRRejected(t *testing.T) {
+	templateYAML := `image:
+  name: test-net-cidr
+  version: "1.0.0"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+systemConfig:
+  name: test
+  packages:
+    - p
+  kernel:
+    version: "6.14"
+  network:
+    backend: systemd-networkd
+    interfaces:
+      - name: enp1s0
+        addresses:
+          - "888.888.888.888/24"
+`
+
+	var raw interface{}
+	if err := yaml.Unmarshal([]byte(templateYAML), &raw); err != nil {
+		t.Fatalf("YAML parsing error: %v", err)
+	}
+	dataJSON, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("JSON marshaling error: %v", err)
+	}
+	if err := ValidateImageTemplateJSON(dataJSON); err == nil {
+		t.Fatal("expected invalid IPv4 CIDR to fail schema validation")
+	}
+}
+
+func TestNetworkInterfaceDHCPWithStaticAddressesRejected(t *testing.T) {
+	templateYAML := `image:
+  name: test-net-dhcp-static
+  version: "1.0.0"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+systemConfig:
+  name: test
+  packages:
+    - p
+  kernel:
+    version: "6.14"
+  network:
+    backend: systemd-networkd
+    interfaces:
+      - name: enp1s0
+        dhcp4: true
+        addresses:
+          - "192.168.1.10/24"
+`
+
+	var raw interface{}
+	if err := yaml.Unmarshal([]byte(templateYAML), &raw); err != nil {
+		t.Fatalf("YAML parsing error: %v", err)
+	}
+	dataJSON, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("JSON marshaling error: %v", err)
+	}
+	if err := ValidateImageTemplateJSON(dataJSON); err == nil {
+		t.Fatal("expected dhcp4 with static addresses to fail schema validation")
+	}
+}

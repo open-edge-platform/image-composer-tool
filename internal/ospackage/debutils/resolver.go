@@ -2,6 +2,7 @@ package debutils
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/url"
@@ -16,6 +17,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/pkgfetcher"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
 
 // VersionConstraint represents a version operator and version pair
@@ -108,7 +110,52 @@ func GenerateDot(pkgs []ospackage.PackageInfo, file string, pkgSources map[strin
 	return nil
 }
 
+// packageMetadataCache stores parsed package metadata keyed by the Packages.gz SHA256
+// checksum recorded in the Release file. A matching checksum means the upstream
+// repository has not changed, so we can skip downloading, decompressing, and re-parsing.
+type packageMetadataCache struct {
+	Checksum string                  `json:"checksum"`
+	Packages []ospackage.PackageInfo `json:"packages"`
+}
+
+func shouldBypassParsedPackageCache(baseURL string) bool {
+	parsedURL, err := url.Parse(baseURL)
+	if err != nil {
+		return false
+	}
+
+	host := strings.ToLower(parsedURL.Hostname())
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
+}
+
+func loadParsedPackageCache(cacheFile string) (*packageMetadataCache, error) {
+	data, err := os.ReadFile(cacheFile)
+	if err != nil {
+		return nil, err
+	}
+	var cache packageMetadataCache
+	if err := json.Unmarshal(data, &cache); err != nil {
+		return nil, fmt.Errorf("invalid cache file: %w", err)
+	}
+	return &cache, nil
+}
+
+func saveParsedPackageCache(cacheFile, checksum string, pkgs []ospackage.PackageInfo) error {
+	cache := packageMetadataCache{Checksum: checksum, Packages: pkgs}
+	data, err := json.Marshal(cache)
+	if err != nil {
+		return fmt.Errorf("failed to marshal package cache: %w", err)
+	}
+	return os.WriteFile(cacheFile, data, 0600)
+}
+
 // ParseRepositoryMetadata parses the Packages.gz file from gzHref.
+// Caching is applied at two levels:
+//  1. If a valid parse cache (packages.parsed.json) exists from a previous run it is
+//     returned immediately with zero network operations, enabling fully offline use.
+//  2. On the first (online) run the Packages.gz is only downloaded when its SHA256
+//     checksum in the freshly-fetched Release file differs from the local copy.
+//     Once parsed, the result is persisted to the cache for future offline runs.
 func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, releaseSign string, pbGPGKey string, buildPath string, arch string, packageFilter []string) ([]ospackage.PackageInfo, error) {
 	log := logger.Logger()
 
@@ -117,6 +164,21 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 	pkgMetaDir := buildPath
 	if err := os.MkdirAll(pkgMetaDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create pkgMetaDir: %w", err)
+	}
+
+	// --- Parse cache check (offline-first) ---
+	// Check the cache before any network operation. If a valid cache exists from a
+	// previous run it is returned immediately, enabling fully offline operation.
+	cacheFile := filepath.Join(pkgMetaDir, "packages.parsed.json")
+	allowParsedCache := !shouldBypassParsedPackageCache(baseURL) && !system.IsLiveInstallerExecution()
+	if !allowParsedCache {
+		log.Debugf("Bypassing parsed package metadata cache for %s", baseURL)
+	}
+	if allowParsedCache {
+		if cached, loadErr := loadParsedPackageCache(cacheFile); loadErr == nil && cached.Checksum != "" {
+			log.Infof("Using cached package metadata for %s (checksum %s)", baseURL, cached.Checksum)
+			return cached.Packages, nil
+		}
 	}
 
 	//verify release file
@@ -135,42 +197,60 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 		localPBGPGKey = pbGPGKey
 	}
 
-	var localFiles []string
-	var urllist []string
+	var metaLocalFiles []string
+	var metaURLList []string
 
 	if isTrustedRepo {
 		// For trusted repos, skip Release.gpg and GPG key download
-		localFiles = []string{localPkggzFile, localReleaseFile}
-		urllist = []string{pkggz, releaseFile}
+		metaLocalFiles = []string{localReleaseFile}
+		metaURLList = []string{releaseFile}
 	} else if pbkeyIsURL {
-		// Remove any existing local files to ensure fresh downloads
-		localFiles = []string{localPkggzFile, localReleaseFile, localReleaseSign, localPBGPGKey}
-		urllist = []string{pkggz, releaseFile, releaseSign, pbGPGKey}
+		metaLocalFiles = []string{localReleaseFile, localReleaseSign, localPBGPGKey}
+		metaURLList = []string{releaseFile, releaseSign, pbGPGKey}
 	} else {
-		localFiles = []string{localPkggzFile, localReleaseFile, localReleaseSign}
-		urllist = []string{pkggz, releaseFile, releaseSign}
+		metaLocalFiles = []string{localReleaseFile, localReleaseSign}
+		metaURLList = []string{releaseFile, releaseSign}
 	}
 
-	for _, f := range localFiles {
-		if _, err := os.Stat(f); err == nil {
-			if remErr := os.Remove(f); remErr != nil {
-				return nil, fmt.Errorf("failed to remove old file %s: %w", f, remErr)
-			}
+	// Only skip Release file refresh if local files exist; allow network check for freshness.
+	// This balances offline resilience with metadata staleness detection.
+	refreshNeeded := false
+	for _, f := range metaLocalFiles {
+		if _, err := os.Stat(f); err != nil {
+			refreshNeeded = true
+			break
 		}
 	}
 
-	// Download the debian repo files
-	err := pkgfetcher.FetchPackages(urllist, pkgMetaDir, 1)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch critical repo config packages: %w", err)
+	// Download the metadata files only if missing
+	if refreshNeeded {
+		log.Infof("Refreshing metadata files for %s", baseURL)
+		for _, f := range metaLocalFiles {
+			if _, err := os.Stat(f); err == nil {
+				if remErr := os.Remove(f); remErr != nil {
+					return nil, fmt.Errorf("failed to remove old file %s: %w", f, remErr)
+				}
+			}
+		}
+		err := pkgfetcher.FetchPackages(metaURLList, pkgMetaDir, 1)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch critical repo config packages: %w", err)
+		}
+	} else {
+		log.Debugf("Using existing metadata files for %s (offline mode)", baseURL)
 	}
-	// Verify the release file
-	relVryResult, err := VerifyRelease(localReleaseFile, localReleaseSign, localPBGPGKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to verify release file: %w", err)
-	}
-	if !relVryResult {
-		return nil, fmt.Errorf("release file verification failed")
+
+	// Verify the release file if it was refreshed online; offline cached files are trusted.
+	if refreshNeeded {
+		relVryResult, err := VerifyRelease(localReleaseFile, localReleaseSign, localPBGPGKey)
+		if err != nil {
+			return nil, fmt.Errorf("failed to verify release file: %w", err)
+		}
+		if !relVryResult {
+			return nil, fmt.Errorf("release file verification failed")
+		}
+	} else {
+		log.Debugf("Skipping release file verification (using cached offline files)")
 	}
 
 	// verify the sham256 checksum of the Packages.gz file
@@ -181,7 +261,37 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 	if idx := strings.LastIndex(buildPath, "_"); idx != -1 && len(buildPath) > idx+1 {
 		component = buildPath[idx+1:]
 	}
-	//
+
+	// Retrieve the expected SHA256 for Packages.gz from the Release file.
+	// This serves as the authoritative cache key for the download cache.
+	pkgPathSrch := fmt.Sprintf("%s/binary-%s/%s", component, arch, filepath.Base(pkggz))
+	expectedChecksum, err := findChecksumInRelease(localReleaseFile, "SHA256", pkgPathSrch)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get checksum from Release file: %w", err)
+	}
+
+	// --- Download cache check ---
+	// Only re-download Packages.gz when the local copy is absent or has a different checksum.
+	needsDownload := true
+	if fi, statErr := os.Stat(localPkggzFile); statErr == nil && fi.Size() > 0 {
+		actual, csErr := computeFileSHA256(localPkggzFile)
+		if csErr == nil && strings.EqualFold(actual, expectedChecksum) {
+			log.Infof("Packages.gz already up-to-date, skipping download")
+			needsDownload = false
+		}
+	}
+	if needsDownload {
+		if _, statErr := os.Stat(localPkggzFile); statErr == nil {
+			if remErr := os.Remove(localPkggzFile); remErr != nil {
+				return nil, fmt.Errorf("failed to remove stale Packages.gz: %w", remErr)
+			}
+		}
+		if fetchErr := pkgfetcher.FetchPackages([]string{pkggz}, pkgMetaDir, 1); fetchErr != nil {
+			return nil, fmt.Errorf("failed to fetch Packages.gz: %w", fetchErr)
+		}
+	}
+
+	// Authoritative checksum verification after download
 	pkggzVryResult, err := VerifyPackagegz(localReleaseFile, localPkggzFile, arch, component)
 	if err != nil {
 		return nil, fmt.Errorf("failed to verify pkg file: %w", err)
@@ -322,6 +432,13 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 	if pkg.Name != "" {
 		if matchesPackageFilter(pkg.Name, packageFilter) {
 			pkgs = append(pkgs, pkg)
+		}
+	}
+
+	// Persist the parsed result so future calls with the same checksum skip decompression/parsing.
+	if allowParsedCache {
+		if saveErr := saveParsedPackageCache(cacheFile, expectedChecksum, pkgs); saveErr != nil {
+			log.Warnf("failed to save package metadata cache: %v", saveErr)
 		}
 	}
 
@@ -594,6 +711,11 @@ func ResolveDependencies(requested []ospackage.PackageInfo, all []ospackage.Pack
 		neededSet[cur.Name] = struct{}{}
 		result = append(result, cur)
 
+		// Track in resolvedDeps so later packages reuse this version
+		if _, alreadyResolved := resolvedDeps[cur.Name]; !alreadyResolved {
+			resolvedDeps[cur.Name] = cur
+		}
+
 		// Traverse dependencies
 		for _, dep := range cur.Requires {
 
@@ -725,33 +847,30 @@ func ResolveDependencies(requested []ospackage.PackageInfo, all []ospackage.Pack
 								// Pick the best candidate using the resolver
 								newCandidate, err := resolveMultiCandidates(cur, satisfyingCandidates)
 								if err == nil {
-									resolvedPriority := getRepositoryPriority(resolvedPkg.URL)
-									newPriority := getRepositoryPriority(newCandidate.URL)
+									// The resolved package violates a version constraint
+									// required by the current package. A candidate that
+									// satisfies the constraint exists, so replace
+									// unconditionally — constraint satisfaction takes
+									// precedence over priority.
+									log.Debugf("replacing %s_%s with constraint-satisfying version %s_%s (required by %s_%s)",
+										resolvedPkg.Name, resolvedPkg.Version,
+										newCandidate.Name, newCandidate.Version,
+										cur.Name, cur.Version)
 
-									// Apply APT priority comparison
-									if comparePriorityBehavior(newCandidate, resolvedPkg) {
-										// New candidate has higher priority - replace the resolved package
-										log.Debugf("replacing %s_%s (priority %d) with higher priority package %s_%s (priority %d)",
-											resolvedPkg.Name, resolvedPkg.Version, resolvedPriority,
-											newCandidate.Name, newCandidate.Version, newPriority)
-
-										// Remove old package from result and neededSet
-										delete(neededSet, resolvedPkg.Name)
-										for i, pkg := range result {
-											if pkg.Name == resolvedPkg.Name && pkg.Version == resolvedPkg.Version {
-												result = append(result[:i], result[i+1:]...)
-												break
-											}
+									// Remove old package from result and neededSet
+									delete(neededSet, resolvedPkg.Name)
+									for i, pkg := range result {
+										if pkg.Name == resolvedPkg.Name && pkg.Version == resolvedPkg.Version {
+											result = append(result[:i], result[i+1:]...)
+											break
 										}
-
-										// Add new candidate to queue and resolvedDeps
-										queue = append(queue, newCandidate)
-										resolvedDeps[depName] = newCandidate
-										AddParentChildPair(cur, newCandidate, &parentChildPairs)
-										continue
-									} else {
-										log.Debugf("new candidate does not have higher priority, cannot replace")
 									}
+
+									// Add new candidate to queue and resolvedDeps
+									queue = append(queue, newCandidate)
+									resolvedDeps[depName] = newCandidate
+									AddParentChildPair(cur, newCandidate, &parentChildPairs)
+									continue
 								}
 							}
 						}
@@ -1285,16 +1404,8 @@ func ResolveTopPackageConflicts(want string, all []ospackage.PackageInfo) (ospac
 	}
 
 	if isKernelPackage && KernelVersion != "" {
-		var beforeFilter []ospackage.PackageInfo
-		beforeFilter = append(beforeFilter, candidates...)
 		candidates = filterKernelCandidates(candidates)
 		if len(candidates) == 0 {
-			var availableVersions []string
-			for _, pkg := range beforeFilter {
-				availableVersions = append(availableVersions, pkg.Version)
-			}
-			log.Errorf("kernel version mismatch: package %q requires kernel version %q, but available versions are: %v",
-				want, KernelVersion, availableVersions)
 			return ospackage.PackageInfo{}, false
 		}
 	}

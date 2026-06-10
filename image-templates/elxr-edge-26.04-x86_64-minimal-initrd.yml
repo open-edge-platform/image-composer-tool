@@ -1,0 +1,27 @@
+# AI-searchable metadata for template discovery
+metadata:
+  description: Minimal ELXR 13 initrd/initramfs image for network boot and PXE
+  use_cases:
+    - PXE network boot
+    - Diskless boot environments
+    - Network-based provisioning
+    - Live boot systems
+  keywords:
+    - initrd
+    - initramfs
+    - pxe
+    - network-boot
+    - diskless
+    - live
+    - minimal
+    - elxr
+
+image:
+  name: elxr13-x86_64-minimal
+  version: "1.0.0"
+
+target:
+  os: wind-river-elxr # Target OS name
+  dist: elxr13 # Target OS distribution
+  arch: x86_64 # Target OS architecture
+  imageType: img # Image type, valid value: [raw, iso, img].
