@@ -1462,9 +1462,9 @@ func TestResolveInstallDiskPath(t *testing.T) {
 			name: "largest_with_require_empty_true_selects_smaller_empty_usb",
 			diskConfig: config.DiskConfig{
 				SelectionPolicy: config.DiskSelectionPolicy{
-					Strategy:          "largest",
-					ExcludeRemovable:  boolPtr(false),
-					RequireEmpty:      boolPtr(true),
+					Strategy:         "largest",
+					ExcludeRemovable: boolPtr(false),
+					RequireEmpty:     boolPtr(true),
 				},
 			},
 			lsblkOutput: `{"blockdevices":[{"name":"sdb","size":68719476736,"model":"Large USB","serial":"B","tran":"usb","type":"disk","rm":1,"rota":0},{"name":"sda","size":32212254720,"model":"Small USB","serial":"A","tran":"usb","type":"disk","rm":1,"rota":0}]}`,
