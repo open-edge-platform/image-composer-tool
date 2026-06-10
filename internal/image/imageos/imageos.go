@@ -2043,6 +2043,12 @@ func (imageOs *ImageOs) generateSBOM(installRoot string, template *config.ImageT
 
 	installRootPkgs := strings.Split(strings.TrimSpace(result), "\n")
 	downloadedPkgs := template.FullPkgListBom
+	if len(downloadedPkgs) == 0 {
+		// live-installer loads template-dump.yaml where FullPkgListBom is not serialized.
+		// Fallback to installed package metadata only in this case; RAW flow remains unchanged.
+		log.Warnf("SBOM metadata list is empty; falling back to installed package metadata")
+		downloadedPkgs = imageOs.installedPackageNamesAsSBOMMetadata(installRootPkgs, pkgType)
+	}
 
 	// Create a map of normalized package names from installed packages for faster lookup
 	installedPkgMap := make(map[string]bool)
@@ -2086,6 +2092,30 @@ func (imageOs *ImageOs) generateSBOM(installRoot string, template *config.ImageT
 	}
 
 	return result, nil
+}
+
+func (imageOs *ImageOs) installedPackageNamesAsSBOMMetadata(installedPkgs []string, pkgType string) []ospackage.PackageInfo {
+	pkgs := make([]ospackage.PackageInfo, 0, len(installedPkgs))
+	for _, pkg := range installedPkgs {
+		name := strings.TrimSpace(pkg)
+		if name == "" {
+			continue
+		}
+
+		if colonIndex := strings.Index(name, ":"); colonIndex != -1 {
+			name = name[:colonIndex]
+		}
+
+		pkgs = append(pkgs, ospackage.PackageInfo{
+			Name:    name,
+			Type:    pkgType,
+			URL:     "NOASSERTION",
+			License: "NOASSERTION",
+			Origin:  "NOASSERTION",
+		})
+	}
+
+	return pkgs
 }
 
 // isSymlink checks if a given path is a symbolic link
