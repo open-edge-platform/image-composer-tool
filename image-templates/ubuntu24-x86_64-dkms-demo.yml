@@ -53,6 +53,13 @@ disk:
       mountPoint: /
       mountOptions: defaults
 
+packageRepositories:
+  # Intel RealSense repository (new URL as of 2026)
+  - codename: "noble"
+    url: "https://librealsense.realsenseai.com/Debian/apt-repo"
+    pkey: "https://librealsense.realsenseai.com/Debian/librealsenseai.asc"
+    component: "main"
+
 systemConfig:
   name: minimal
   description: Minimal ubuntu image
@@ -80,11 +87,11 @@ systemConfig:
     - openssh-server
     - systemd-resolved
     - systemd-timesyncd
+    # ── Intel RealSense camera (DKMS) ──
+    - librealsense2-dkms
     # Additional packages for DKMS and dkms kernel modules
-    - linux-headers-generic
     - v4l2loopback-dkms
     - acpi-call-dkms
-    - adv-17v35x-dkms
     - apfs-dkms
 
   kernel:
@@ -92,3 +99,4 @@ systemConfig:
     cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
     packages:
       - linux-image-generic-hwe-24.04
+      - linux-headers-generic-hwe-24.04

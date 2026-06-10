@@ -1,6 +1,7 @@
 package debutils
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"fmt"
 	"os"
@@ -8,6 +9,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ProtonMail/go-crypto/openpgp"
+	"github.com/ProtonMail/go-crypto/openpgp/armor"
 )
 
 // TestVerifyPackagegz tests the VerifyPackagegz function
@@ -749,6 +753,112 @@ func TestVerifyWithGoDeb(t *testing.T) {
 			}
 		})
 	}
+}
+
+// generateArmoredTestKey produces a self-contained ASCII-armored PGP public key
+// suitable for parseKeyring fixtures. Each call returns a freshly-generated key.
+func generateArmoredTestKey(t *testing.T, name, email string) []byte {
+	t.Helper()
+	entity, err := openpgp.NewEntity(name, "test", email, nil)
+	if err != nil {
+		t.Fatalf("NewEntity: %v", err)
+	}
+
+	var armored bytes.Buffer
+	w, err := armor.Encode(&armored, openpgp.PublicKeyType, nil)
+	if err != nil {
+		t.Fatalf("armor.Encode: %v", err)
+	}
+	if err := entity.Serialize(w); err != nil {
+		t.Fatalf("entity.Serialize: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("armor close: %v", err)
+	}
+	return armored.Bytes()
+}
+
+// TestParseKeyring covers the verify-side keyring parser, especially the
+// concatenated-armored-blocks case that the ProtonMail openpgp library does
+// not handle natively (it stops after the first block).
+func TestParseKeyring(t *testing.T) {
+	keyA := generateArmoredTestKey(t, "Test Key A", "a@example.invalid")
+	keyB := generateArmoredTestKey(t, "Test Key B", "b@example.invalid")
+
+	t.Run("single armored block", func(t *testing.T) {
+		ring, err := parseKeyring(keyA)
+		if err != nil {
+			t.Fatalf("parseKeyring: %v", err)
+		}
+		if len(ring) != 1 {
+			t.Fatalf("expected 1 entity, got %d", len(ring))
+		}
+	})
+
+	t.Run("two concatenated armored blocks", func(t *testing.T) {
+		// Mimic vendor key files (e.g. intel-graphics.key) that ship a
+		// rotated primary alongside the active signing key in one file.
+		concatenated := append(append([]byte{}, keyA...), keyB...)
+
+		ring, err := parseKeyring(concatenated)
+		if err != nil {
+			t.Fatalf("parseKeyring: %v", err)
+		}
+		if len(ring) != 2 {
+			t.Fatalf("expected 2 entities from concatenated blocks, got %d", len(ring))
+		}
+	})
+
+	t.Run("concatenated blocks separated by whitespace", func(t *testing.T) {
+		concatenated := append(append([]byte{}, keyA...), []byte("\n\n")...)
+		concatenated = append(concatenated, keyB...)
+
+		ring, err := parseKeyring(concatenated)
+		if err != nil {
+			t.Fatalf("parseKeyring: %v", err)
+		}
+		if len(ring) != 2 {
+			t.Fatalf("expected 2 entities, got %d", len(ring))
+		}
+	})
+
+	t.Run("binary keyring is forwarded as-is", func(t *testing.T) {
+		entity, err := openpgp.NewEntity("Binary Key", "test", "bin@example.invalid", nil)
+		if err != nil {
+			t.Fatalf("NewEntity: %v", err)
+		}
+		var binary bytes.Buffer
+		if err := entity.Serialize(&binary); err != nil {
+			t.Fatalf("entity.Serialize: %v", err)
+		}
+
+		ring, err := parseKeyring(binary.Bytes())
+		if err != nil {
+			t.Fatalf("parseKeyring: %v", err)
+		}
+		if len(ring) != 1 {
+			t.Fatalf("expected 1 entity from binary input, got %d", len(ring))
+		}
+	})
+
+	t.Run("armored block missing end marker", func(t *testing.T) {
+		truncated := bytes.Replace(keyA, []byte("-----END PGP PUBLIC KEY BLOCK-----"), []byte{}, 1)
+
+		_, err := parseKeyring(truncated)
+		if err == nil {
+			t.Fatalf("expected error for truncated armored block")
+		}
+		if !strings.Contains(err.Error(), "missing end marker") {
+			t.Fatalf("expected missing-end-marker error, got: %v", err)
+		}
+	})
+
+	t.Run("garbage input is rejected", func(t *testing.T) {
+		_, err := parseKeyring([]byte("this is not a key"))
+		if err == nil {
+			t.Fatalf("expected error for garbage input")
+		}
+	})
 }
 
 // TestResult tests the Result struct

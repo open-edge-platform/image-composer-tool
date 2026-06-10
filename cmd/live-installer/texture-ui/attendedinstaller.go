@@ -18,6 +18,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/cmd/live-installer/texture-ui/views/finishview"
 	"github.com/open-edge-platform/image-composer-tool/cmd/live-installer/texture-ui/views/hostnameview"
 	"github.com/open-edge-platform/image-composer-tool/cmd/live-installer/texture-ui/views/installerview"
+	"github.com/open-edge-platform/image-composer-tool/cmd/live-installer/texture-ui/views/networkview"
 	"github.com/open-edge-platform/image-composer-tool/cmd/live-installer/texture-ui/views/progressview"
 	"github.com/open-edge-platform/image-composer-tool/cmd/live-installer/texture-ui/views/userview"
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
@@ -354,6 +355,7 @@ func (ai *AttendedInstaller) initializeViews() (err error) {
 	ai.allViews = append(ai.allViews, diskview.New())
 	ai.allViews = append(ai.allViews, hostnameview.New())
 	ai.allViews = append(ai.allViews, userview.New())
+	ai.allViews = append(ai.allViews, networkview.New())
 	ai.allViews = append(ai.allViews, confirmview.New())
 	ai.allViews = append(ai.allViews, progressview.New(ai.installationWrapper))
 	ai.allViews = append(ai.allViews, finishview.New(ai.recordedInstallationTime))
