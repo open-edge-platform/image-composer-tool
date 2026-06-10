@@ -173,7 +173,7 @@ func TestLoadRepoConfig(t *testing.T) {
 		return
 	}
 
-	config, err := loadRepoConfig("", "amd64")
+	config, err := loadRepoConfig("elxr12", "amd64")
 	if err != nil {
 		t.Skipf("loadRepoConfig failed (expected in test environment): %v", err)
 		return
@@ -194,6 +194,73 @@ func TestLoadRepoConfig(t *testing.T) {
 	}
 
 	t.Logf("Successfully loaded repo config: %s", config[0].Name)
+}
+
+func TestLoadRepoConfigElxr13Bianca(t *testing.T) {
+	originalDir, err := os.Getwd()
+	if err != nil {
+		t.Skipf("Cannot get current working directory: %v", err)
+		return
+	}
+
+	defer func() {
+		if err := os.Chdir(originalDir); err != nil {
+			t.Logf("Failed to change back to original directory: %v", err)
+		}
+	}()
+
+	if err := os.Chdir("../../../"); err != nil {
+		t.Skipf("Cannot change to project root: %v", err)
+		return
+	}
+
+	config, err := loadRepoConfig("elxr13", "amd64")
+	if err != nil {
+		t.Skipf("loadRepoConfig failed (expected in test environment): %v", err)
+		return
+	}
+
+	if len(config) == 0 {
+		t.Fatal("Expected at least one repository config")
+	}
+
+	if got := config[0].Name; got == "" {
+		t.Fatal("Expected repository name to be set")
+	}
+
+	if !strings.Contains(config[0].PkgList, "/dists/bianca/") {
+		t.Fatalf("Expected PkgList to target bianca dist, got %q", config[0].PkgList)
+	}
+
+	if !strings.Contains(config[0].PkgList, "/binary-amd64/Packages.gz") {
+		t.Fatalf("Expected PkgList to target amd64 package index, got %q", config[0].PkgList)
+	}
+
+	if !strings.Contains(config[0].PkgPrefix, "mirror.elxr.dev/elxr") {
+		t.Fatalf("Expected PkgPrefix to target ELXR mirror, got %q", config[0].PkgPrefix)
+	}
+}
+
+func TestNormalizeElxrDist(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"", "elxr12"},
+		{"aria", "elxr12"},
+		{"elxr12", "elxr12"},
+		{"bianca", "elxr13"},
+		{"elxr13", "elxr13"},
+		{"custom", "custom"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			if got := normalizeElxrDist(tt.in); got != tt.want {
+				t.Fatalf("normalizeElxrDist(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
 }
 
 // mockChrootEnv is a simple mock implementation of ChrootEnvInterface for testing
@@ -480,11 +547,17 @@ func TestElxrProviderInstallHostDependencyCommands(t *testing.T) {
 	expectedDeps := map[string]string{
 		"mmdebstrap":        "mmdebstrap",
 		"mkfs.fat":          "dosfstools",
+		"mformat":           "mtools",
 		"xorriso":           "xorriso",
+		"qemu-img":          "qemu-utils",
 		"ukify":             "systemd-ukify",
-		"grub-mkstandalone": "grub-common",
+		"grub-mkimage":      "grub-common",
 		"veritysetup":       "cryptsetup",
 		"sbsign":            "sbsigntool",
+		"dpkg-scanpackages": "dpkg-dev",
+		"bootctl":           "systemd-boot-efi",
+		"arch-test":         "arch-test",
+		"qemu-user-static":  "qemu-user-static",
 	}
 
 	// This is a structural test to verify the dependency mapping
@@ -492,12 +565,12 @@ func TestElxrProviderInstallHostDependencyCommands(t *testing.T) {
 	t.Logf("Expected host dependencies for eLxr provider: %+v", expectedDeps)
 
 	// Verify we have the expected number of dependencies
-	if len(expectedDeps) != 7 {
-		t.Errorf("Expected 7 host dependencies, got %d", len(expectedDeps))
+	if len(expectedDeps) != 13 {
+		t.Errorf("Expected 13 host dependencies, got %d", len(expectedDeps))
 	}
 
 	// Verify specific critical dependencies
-	criticalDeps := []string{"mmdebstrap", "mkfs.fat", "xorriso"}
+	criticalDeps := []string{"mmdebstrap", "mkfs.fat", "xorriso", "grub-mkimage", "qemu-user-static"}
 	for _, dep := range criticalDeps {
 		if _, exists := expectedDeps[dep]; !exists {
 			t.Errorf("Critical dependency %s not found in expected dependencies", dep)
@@ -928,12 +1001,19 @@ func TestElxrInstallHostDependency(t *testing.T) {
 func TestElxrInstallHostDependencyMapping(t *testing.T) {
 	// Test the expected dependencies mapping
 	expectedDeps := map[string]string{
-		"mmdebstrap":  "mmdebstrap",
-		"mkfs.fat":    "dosfstools",
-		"xorriso":     "xorriso",
-		"sbsign":      "sbsigntool",
-		"ukify":       "systemd-ukify",
-		"veritysetup": "cryptsetup",
+		"mmdebstrap":        "mmdebstrap",
+		"mkfs.fat":          "dosfstools",
+		"mformat":           "mtools",
+		"xorriso":           "xorriso",
+		"qemu-img":          "qemu-utils",
+		"ukify":             "systemd-ukify",
+		"grub-mkimage":      "grub-common",
+		"veritysetup":       "cryptsetup",
+		"sbsign":            "sbsigntool",
+		"dpkg-scanpackages": "dpkg-dev",
+		"bootctl":           "systemd-boot-efi",
+		"arch-test":         "arch-test",
+		"qemu-user-static":  "qemu-user-static",
 	}
 
 	t.Logf("Expected host dependencies for eLxr provider: %v", expectedDeps)
@@ -972,7 +1052,7 @@ func TestLoadRepoConfigArchMapping(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.arch, func(t *testing.T) {
-			cfgs, err := loadRepoConfig("", tc.arch)
+			cfgs, err := loadRepoConfig("elxr12", tc.arch)
 			if err != nil {
 				t.Logf("loadRepoConfig failed for arch %s: %v", tc.arch, err)
 				return
@@ -1004,7 +1084,7 @@ func TestLoadRepoConfigInvalidArch(t *testing.T) {
 		return
 	}
 
-	_, err := loadRepoConfig("", "invalid-arch")
+	_, err := loadRepoConfig("elxr12", "invalid-arch")
 	if err == nil {
 		t.Error("Expected error for invalid architecture")
 	} else {
@@ -1330,7 +1410,7 @@ func TestLoadRepoConfigMultipleRepos(t *testing.T) {
 		return
 	}
 
-	cfgs, err := loadRepoConfig("", "amd64")
+	cfgs, err := loadRepoConfig("elxr12", "amd64")
 	if err != nil {
 		t.Logf("loadRepoConfig failed: %v", err)
 		return

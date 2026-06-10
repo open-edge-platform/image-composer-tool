@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net"
 	"strings"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config/schema"
@@ -23,10 +24,43 @@ const (
 
 var log = logger.Logger()
 
+// registerImageTemplateFormats adds format checkers referenced by
+// os-image-template.schema.json. santhosh-tekuri/jsonschema does not ship
+// ipv4-cidr / ipv6-cidr, and draft 2020-12 only asserts formats when
+// Compiler.AssertFormat is true.
+func registerImageTemplateFormats(c *jsonschema.Compiler) {
+	c.Formats["ipv4-cidr"] = func(v interface{}) bool {
+		s, ok := v.(string)
+		if !ok {
+			return true
+		}
+		ip, _, err := net.ParseCIDR(s)
+		if err != nil {
+			return false
+		}
+		return ip.To4() != nil
+	}
+	c.Formats["ipv6-cidr"] = func(v interface{}) bool {
+		s, ok := v.(string)
+		if !ok {
+			return true
+		}
+		ip, _, err := net.ParseCIDR(s)
+		if err != nil {
+			return false
+		}
+		return ip.To4() == nil
+	}
+}
+
 // ValidateAgainstSchema compiles the given schema bytes and runs it against
 // the JSON in data.  The `name` is only used to identify the schema in errors.
 func ValidateAgainstSchema(name string, schemaBytes, data []byte, ref string) error {
 	comp := jsonschema.NewCompiler()
+	if name == imageSchemaName {
+		comp.AssertFormat = true
+		registerImageTemplateFormats(comp)
+	}
 	if err := comp.AddResource(name, bytes.NewReader(schemaBytes)); err != nil {
 		log.Errorf("Error loading schema %q: %v", name, err)
 		return fmt.Errorf("loading schema %q: %w", name, err)

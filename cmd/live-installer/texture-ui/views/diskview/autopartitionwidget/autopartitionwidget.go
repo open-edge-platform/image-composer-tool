@@ -128,6 +128,64 @@ func (ap *AutoPartitionWidget) SelectedSystemDevice() int {
 
 func (ap *AutoPartitionWidget) mustUpdateConfiguration(template *config.ImageTemplate) {
 	template.Disk.Path = ap.systemDevices[ap.deviceList.GetCurrentItem()].DevicePath
+
+	// If template already has partitions defined, use them
+	if len(template.Disk.Partitions) > 0 {
+		// Ensure partition table type is set (default to GPT if not already set)
+		if template.Disk.PartitionTableType == "" {
+			template.Disk.PartitionTableType = "gpt"
+		}
+	} else {
+		// No partitions in template, use hardcoded defaults
+		template.Disk.PartitionTableType = "gpt"
+		template.Disk.Partitions = ap.createDefaultPartitions(template.Target.Arch)
+	}
+}
+
+// createDefaultPartitions creates default boot and root partitions for auto mode when template has no partitions
+func (ap *AutoPartitionWidget) createDefaultPartitions(arch string) []config.PartitionInfo {
+	bootMountPoint, bootMountOptions, bootFlags, err := imagedisc.BootPartitionConfig(ap.bootType, imagedisc.PartitionTableTypeGpt)
+	if err != nil {
+		bootMountPoint = "/boot/efi"
+		bootMountOptions = "umask=0077"
+		bootFlags = []string{imagedisc.PartitionFlagESP, imagedisc.PartitionFlagBoot}
+	}
+
+	var partitions []config.PartitionInfo
+
+	// Create boot partition
+	bootPartition := config.PartitionInfo{
+		ID:           "boot",
+		Type:         "esp",
+		Start:        "1MiB",
+		End:          "513MiB",
+		FsType:       "fat32",
+		MountPoint:   bootMountPoint,
+		MountOptions: bootMountOptions,
+		Flags:        bootFlags,
+	}
+	partitions = append(partitions, bootPartition)
+
+	// Create root partition - use full remaining space
+	// Determine root partition type based on architecture
+	rootType := "linux-root-amd64"
+	if arch == "aarch64" {
+		rootType = "linux-root-aarch64"
+	}
+
+	rootPartition := config.PartitionInfo{
+		ID:           "rootfs",
+		Type:         rootType,
+		Start:        "513MiB",
+		End:          "0", // 0 means use all remaining space
+		FsType:       "ext4",
+		MountPoint:   "/",
+		MountOptions: "defaults",
+		Flags:        []string{},
+	}
+	partitions = append(partitions, rootPartition)
+
+	return partitions
 }
 
 func (ap *AutoPartitionWidget) populateBlockDeviceOptions() {

@@ -182,6 +182,73 @@ func TestHostnameViewConstants(t *testing.T) {
 	}
 }
 
+func TestNetworkViewConstants(t *testing.T) {
+	if NetworkTitle == "" {
+		t.Error("NetworkTitle should not be empty")
+	}
+	if !strings.Contains(strings.ToLower(NetworkTitle), "network") {
+		t.Errorf("expected NetworkTitle to mention 'network', got %q", NetworkTitle)
+	}
+
+	labels := []struct {
+		name  string
+		value string
+	}{
+		{"NetworkInterfaceLabel", NetworkInterfaceLabel},
+		{"NetworkDHCPLabel", NetworkDHCPLabel},
+		{"NetworkIPLabel", NetworkIPLabel},
+		{"NetworkGatewayLabel", NetworkGatewayLabel},
+		{"NetworkDNSLabel", NetworkDNSLabel},
+		{"NetworkIPPlaceholder", NetworkIPPlaceholder},
+		{"NetworkGatewayPlaceholder", NetworkGatewayPlaceholder},
+		{"NetworkDNSPlaceholder", NetworkDNSPlaceholder},
+	}
+
+	for _, l := range labels {
+		t.Run(l.name, func(t *testing.T) {
+			if l.value == "" {
+				t.Errorf("expected %s to be non-empty", l.name)
+			}
+		})
+	}
+
+	errorFmts := []struct {
+		name  string
+		value string
+	}{
+		{"NetworkIPRequiredError", NetworkIPRequiredError},
+		{"NetworkIPInvalidErrorFmt", NetworkIPInvalidErrorFmt},
+		{"NetworkGatewayInvalidErrorFmt", NetworkGatewayInvalidErrorFmt},
+		{"NetworkDNSInvalidErrorFmt", NetworkDNSInvalidErrorFmt},
+	}
+
+	for _, e := range errorFmts {
+		t.Run(e.name, func(t *testing.T) {
+			if e.value == "" {
+				t.Errorf("expected %s to be non-empty", e.name)
+			}
+		})
+	}
+
+	// Format strings must contain %s placeholder
+	fmtStrings := []struct {
+		name  string
+		value string
+	}{
+		{"NetworkIPInvalidErrorFmt", NetworkIPInvalidErrorFmt},
+		{"NetworkGatewayInvalidErrorFmt", NetworkGatewayInvalidErrorFmt},
+		{"NetworkDNSInvalidErrorFmt", NetworkDNSInvalidErrorFmt},
+	}
+
+	for _, f := range fmtStrings {
+		t.Run(f.name+"_has_placeholder", func(t *testing.T) {
+			if !strings.Contains(f.value, "%s") {
+				t.Errorf("expected %s to contain %%s placeholder, got %q", f.name, f.value)
+			}
+		})
+	}
+}
+
 func TestProgressViewConstants(t *testing.T) {
 	if ProgressTitle == "" {
 		t.Error("ProgressTitle should not be empty")

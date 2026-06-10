@@ -99,6 +99,54 @@ func (initrdMaker *InitrdMaker) GetInitrdRootfsPath() string {
 	return initrdMaker.InitrdRootfsPath
 }
 
+func (initrdMaker *InitrdMaker) initrdPkgCacheDir() string {
+	return filepath.Join(initrdMaker.ChrootEnv.GetChrootPkgCacheDir(), "initrd")
+}
+
+func cachePkgExtension(pkgType string) string {
+	switch pkgType {
+	case "deb":
+		return ".deb"
+	case "rpm":
+		return ".rpm"
+	default:
+		return ""
+	}
+}
+
+func copyCachedPackagesByType(srcDir, dstDir, pkgType string) error {
+	ext := cachePkgExtension(pkgType)
+	if ext == "" {
+		return nil
+	}
+
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		return fmt.Errorf("failed to list initrd cache directory %s: %w", srcDir, err)
+	}
+
+	if err := os.MkdirAll(dstDir, 0755); err != nil {
+		return fmt.Errorf("failed to create package cache directory %s: %w", dstDir, err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if filepath.Ext(entry.Name()) != ext {
+			continue
+		}
+
+		src := filepath.Join(srcDir, entry.Name())
+		dst := filepath.Join(dstDir, entry.Name())
+		if err := file.CopyFile(src, dst, "--preserve=mode", true); err != nil {
+			return fmt.Errorf("failed to copy initrd package %s to shared cache: %w", entry.Name(), err)
+		}
+	}
+
+	return nil
+}
+
 func (initrdMaker *InitrdMaker) DownloadInitrdPkgs() error {
 	log.Infof("Downloading packages for: %s", initrdMaker.template.GetImageName())
 
@@ -108,16 +156,22 @@ func (initrdMaker *InitrdMaker) DownloadInitrdPkgs() error {
 
 	pkgList := initrdMaker.template.GetPackages()
 	pkgType := initrdMaker.ChrootEnv.GetTargetOsPkgType()
+	sharedPkgCacheDir := initrdMaker.ChrootEnv.GetChrootPkgCacheDir()
+	initrdPkgCacheDir := initrdMaker.initrdPkgCacheDir()
 	if pkgType == "deb" {
-		_, err := debutils.DownloadPackages(pkgList, initrdMaker.ChrootEnv.GetChrootPkgCacheDir(), "", nil, false)
+		_, err := debutils.DownloadPackages(pkgList, initrdPkgCacheDir, "", nil, false)
 		if err != nil {
 			return fmt.Errorf("failed to download initrd packages: %w", err)
 		}
 	} else if pkgType == "rpm" {
-		_, err := rpmutils.DownloadPackages(pkgList, initrdMaker.ChrootEnv.GetChrootPkgCacheDir(), "", nil, false)
+		_, err := rpmutils.DownloadPackages(pkgList, initrdPkgCacheDir, "", nil, false)
 		if err != nil {
 			return fmt.Errorf("failed to download initrd packages: %w", err)
 		}
+	}
+
+	if err := copyCachedPackagesByType(initrdPkgCacheDir, sharedPkgCacheDir, pkgType); err != nil {
+		return fmt.Errorf("failed to sync initrd packages into shared cache: %w", err)
 	}
 
 	if err := initrdMaker.ChrootEnv.UpdateChrootLocalRepoMetadata(
