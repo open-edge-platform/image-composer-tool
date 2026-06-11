@@ -93,55 +93,55 @@ This ADR follows the same color scheme defined in the [RAG ADR](adr-template-enr
 ```mermaid
 flowchart TB
     %% ── Layer 1: Users ──
-    subgraph L1["🖥️ User Interfaces"]
+    subgraph L1["User Interfaces"]
         direction LR
-        Terminal(["fa:fa-terminal Terminal"])
-        Browser(["fa:fa-globe Browser"])
+        Terminal(["Terminal"])
+        Browser(["Browser"])
     end
 
     %% ── Layer 2: Thin frontends ──
-    subgraph L2["🔌 Thin Frontends"]
+    subgraph L2["Thin Frontends"]
         direction LR
         CLI["ai_cmd.go\nCLI frontend"]
         API["internal/api/\nHTTP frontend"]
     end
 
     %% ── Layer 3: Shared library ──
-    subgraph L3["📦 internal/ai/ - Shared Library"]
+    subgraph L3["internal/ai/ - Shared Library"]
         direction LR
 
-        subgraph L3a["✨ New"]
+        subgraph L3a["New"]
             direction TB
-            SM{{"🗂️ Session\nManager"}}
-            AG{{"🛡️ Agent\nValidator"}}
-            CL{{"🏷️ Query\nClassifier"}}
+            SM[["Session\nManager"]]
+            AG[["Agent\nValidator"]]
+            CL[["Query\nClassifier"]]
         end
 
         subgraph L3b["Existing"]
             direction TB
-            EN{{"🔍 RAG\nEngine"}}
-            PR["🤖 Provider\nAbstraction"]
-            TP["📄 Template\nParser"]
-            IX["📐 Vector\nIndex"]
-            CA["💾 Embedding\nCache"]
+            EN[["RAG\nEngine"]]
+            PR["Provider\nAbstraction"]
+            TP["Template\nParser"]
+            IX["Vector\nIndex"]
+            CA["Embedding\nCache"]
         end
     end
 
     %% ── Layer 4: External services & storage ──
-    subgraph L4a["🤖 AI Backends"]
+    subgraph L4a["AI Backends"]
         direction LR
-        OL[/"Ollama\n(local)"\]
-        OA[/"OpenAI\n(cloud)"\]
+        OL["Ollama\n- local -"]
+        OA["OpenAI\n- cloud -"]
     end
 
-    subgraph L4b["💾 Persistent Storage"]
+    subgraph L4b["Persistent Storage"]
         direction LR
-        TF[("📁 image-\ntemplates/")]
-        EC[("📁 .ai-cache/")]
-        SF[("📁 sessions/")]
+        TF[("image-\ntemplates/")]
+        EC[(".ai-cache/")]
+        SF[("sessions/")]
     end
 
-    subgraph L4c["🔨 Build"]
+    subgraph L4c["Build"]
         BE["os/exec\nCLI subprocess"]
     end
 
@@ -297,19 +297,19 @@ The agent loop auto-validates every generated template and self-corrects if inva
 
 ```mermaid
 flowchart TD
-    A["🤖 Generate YAML"] ==> B["🔍 Validate Template Schema"]
+    A["Generate YAML"] ==> B["Validate Template Schema"]
     B --> C{Valid?}
-    C -->|"✅ Yes"| D["📦 Verify Packages in Repo"]
-    C -->|"❌ No"| E["🔧 Attempt Fix via LLM"]
-    E --> F["🔍 Validate Again"]
+    C -->|Yes| D["Verify Packages in Repo"]
+    C -->|No| E["Attempt Fix via LLM"]
+    E --> F["Validate Again"]
     F --> G{Valid?}
-    G -->|"✅ Yes"| D
-    G -->|"❌ No"| H{Attempts < 2?}
-    H -->|"🔄 Yes"| E
+    G -->|Yes| D
+    G -->|No| H{Attempts < 2?}
+    H -->|Retry| E
     H -->|No| I(["Return - status: invalid"])
     D --> J{All Found?}
-    J -->|"✅ Yes"| K(["Return - status: valid"])
-    J -->|"⚠️ No"| L(["Return - status: warning"])
+    J -->|Yes| K(["Return - status: valid"])
+    J -->|No| L(["Return - status: warning"])
 
     style A fill:#E3F2FD,stroke:#1565C0,stroke-width:2px
     style B fill:#FFE082,stroke:#FFA000,stroke-width:2px
@@ -645,29 +645,29 @@ The shared library architecture supports two integration paths for external prod
 ```mermaid
 flowchart LR
     %% ── External consumers ──
-    subgraph GoProducts["🟢 Go-based products"]
-        GP(["fa:fa-code Go application"])
+    subgraph GoProducts["Go-based products"]
+        GP(["Go application"])
     end
 
-    subgraph AnyLang["🔵 Any language"]
-        EP(["fa:fa-globe Python / JS / Rust / ..."])
+    subgraph AnyLang["Any language"]
+        EP(["Python / JS / Rust / ..."])
     end
 
     %% ── ICT API Server (thin wrapper) ──
-    subgraph APIServer["🌐 ICT API Server"]
+    subgraph APIServer["ICT API Server"]
         APIS["internal/api/\nRouting + CORS + SSE"]
     end
 
     %% ── Shared Library ──
-    subgraph Library["📦 internal/ai/ - Shared Library"]
+    subgraph Library["internal/ai/ - Shared Library"]
         direction TB
-        LIB{{"🔌 Library\nEntry Point"}}
+        LIB[["Library\nEntry Point"]]
 
         subgraph LibComponents["Core Components"]
             direction LR
-            EN{{"🔍 rag.Engine"}}
-            SM2{{"🗂️ session.Manager"}}
-            AG2{{"🛡️ agent.Validate"}}
+            EN[["rag.Engine"]]
+            SM2[["session.Manager"]]
+            AG2[["agent.Validate"]]
         end
 
         LIB -->|"search + generate"| EN
