@@ -154,10 +154,9 @@ systemConfig:
     - nano
     - paho-mqtt-c
     - ffmpeg
-    - gstreamer
     - opencv
-    - intel-dlstreamer-2025.2.0
-    - openvino-2025.3.0
+    - intel-dlstreamer-2026.0.0
+    - openvino-2026.0.0
 
   # Kernel Configuration
   kernel:
