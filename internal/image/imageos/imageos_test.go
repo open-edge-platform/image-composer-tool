@@ -1,6 +1,7 @@
 package imageos
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/open-edge-platform/image-composer-tool/internal/chroot"
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/config/manifest"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
@@ -4188,6 +4190,133 @@ func TestGenerateSBOMWithDifferentPkgTypes(t *testing.T) {
 			}
 
 			t.Logf("SBOM generation for %s completed successfully", tc.pkgType)
+		})
+	}
+}
+
+func TestGenerateSBOMForRawAndISOImages(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	testCases := []struct {
+		name               string
+		imageType          string
+		pkgType            string
+		installedPackages  string
+		fullPkgListBom     []ospackage.PackageInfo
+		expectedPkgNames   []string
+		unexpectedPkgNames []string
+	}{
+		{
+			name:              "raw image uses matched downloaded packages",
+			imageType:         "raw",
+			pkgType:           "rpm",
+			installedPackages: "bash-5.1.4-1.x86_64\ncurl-7.74.0-1.x86_64",
+			fullPkgListBom: []ospackage.PackageInfo{
+				{Name: "bash-5.1.4-1.x86_64.rpm", Version: "5.1.4-1", Type: "rpm"},
+				{Name: "curl-7.74.0-1.x86_64.rpm", Version: "7.74.0-1", Type: "rpm"},
+				{Name: "not-installed-1.0.0-1.x86_64.rpm", Version: "1.0.0-1", Type: "rpm"},
+			},
+			expectedPkgNames:   []string{"bash-5.1.4-1.x86_64.rpm", "curl-7.74.0-1.x86_64.rpm"},
+			unexpectedPkgNames: []string{"not-installed-1.0.0-1.x86_64.rpm"},
+		},
+		{
+			name:               "iso image falls back to installed package list",
+			imageType:          "iso",
+			pkgType:            "rpm",
+			installedPackages:  "dracut-061-1.x86_64\niso-live-config-2.0-1.x86_64",
+			fullPkgListBom:     nil,
+			expectedPkgNames:   []string{"dracut-061-1.x86_64", "iso-live-config-2.0-1.x86_64"},
+			unexpectedPkgNames: []string{"not-installed-1.0.0-1.x86_64.rpm"},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+				{Pattern: `rpm -qa`, Output: tc.installedPackages, Error: nil},
+				{Pattern: `mkdir -p .*`, Output: "", Error: nil},
+				{Pattern: `cp .*`, Output: "", Error: nil},
+			})
+
+			installRoot := t.TempDir()
+			template := &config.ImageTemplate{
+				Image: config.ImageInfo{
+					Name:    "sbom-" + tc.imageType,
+					Version: "1.0.0",
+				},
+				Target: config.TargetInfo{
+					ImageType: tc.imageType,
+				},
+				FullPkgListBom: tc.fullPkgListBom,
+			}
+
+			imageOs := &ImageOs{
+				installRoot: installRoot,
+				chrootEnv: &MockChrootEnv{
+					chrootImageBuildDir: installRoot,
+					pkgType:             tc.pkgType,
+				},
+				template: template,
+			}
+
+			canonicalSBOM := filepath.Join(config.TempDir(), manifest.DefaultSPDXFile)
+			if err := os.Remove(canonicalSBOM); err != nil && !os.IsNotExist(err) {
+				t.Fatalf("failed to clean canonical SBOM %s: %v", canonicalSBOM, err)
+			}
+
+			stagedPattern := filepath.Join(config.TempDir(), fmt.Sprintf("spdx_manifest_%s_sbom-%s_*.json", tc.pkgType, tc.imageType))
+			existingStaged, err := filepath.Glob(stagedPattern)
+			if err != nil {
+				t.Fatalf("failed to enumerate staged SBOM files with pattern %s: %v", stagedPattern, err)
+			}
+			for _, f := range existingStaged {
+				if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
+					t.Fatalf("failed to clean staged SBOM %s: %v", f, err)
+				}
+			}
+
+			_, err = imageOs.generateSBOM(installRoot, template)
+			if err != nil {
+				t.Fatalf("generateSBOM returned error for image type %s: %v", tc.imageType, err)
+			}
+
+			generatedStaged, err := filepath.Glob(stagedPattern)
+			if err != nil {
+				t.Fatalf("failed to enumerate generated staged SBOM files with pattern %s: %v", stagedPattern, err)
+			}
+			if len(generatedStaged) != 1 {
+				t.Fatalf("expected exactly one staged SBOM for image type %s, found %d", tc.imageType, len(generatedStaged))
+			}
+
+			sbomPath := generatedStaged[0]
+			rawSBOM, err := os.ReadFile(sbomPath)
+			if err != nil {
+				t.Fatalf("failed reading staged SBOM %s: %v", sbomPath, err)
+			}
+
+			if !json.Valid(rawSBOM) {
+				t.Fatalf("failed to parse canonical SBOM JSON")
+			}
+
+			for _, pkgName := range tc.expectedPkgNames {
+				if !strings.Contains(string(rawSBOM), `"name": "`+pkgName+`"`) {
+					t.Errorf("expected SBOM for image type %s to contain package %s", tc.imageType, pkgName)
+				}
+			}
+
+			for _, pkgName := range tc.unexpectedPkgNames {
+				if strings.Contains(string(rawSBOM), `"name": "`+pkgName+`"`) {
+					t.Errorf("expected SBOM for image type %s to exclude package %s", tc.imageType, pkgName)
+				}
+			}
+
+			if err := os.Remove(sbomPath); err != nil && !os.IsNotExist(err) {
+				t.Fatalf("failed to clean staged SBOM %s: %v", sbomPath, err)
+			}
+			if err := os.Remove(canonicalSBOM); err != nil && !os.IsNotExist(err) {
+				t.Fatalf("failed to clean canonical SBOM %s: %v", canonicalSBOM, err)
+			}
 		})
 	}
 }
