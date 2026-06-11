@@ -184,8 +184,8 @@ flowchart TB
     CA -->|"read/write"| EC
     SM -->|"persist"| SF
 
-    %% ── Edges: Build (separate path) ──
-    Browser -.->|"POST /builds"| BE
+    %% ── Edges: Build (API spawns subprocess) ──
+    API -.->|"POST /builds"| BE
 
     %% ── Styles: Layers ──
     style L1 fill:#ECEFF1,stroke:#607D8B,stroke-width:2px
