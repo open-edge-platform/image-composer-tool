@@ -76,15 +76,28 @@ All new capabilities are implemented in `internal/ai/` (the shared Go library). 
 
 This ADR follows the same color scheme defined in the [RAG ADR](adr-template-enriched-rag.md):
 
+**Colors**
+
 | Color | Component Type | Fill | Stroke | Examples |
 |-------|---------------|------|--------|----------|
-| ⚪ Slate | User Interface / Input | `#ECEFF1` | `#607D8B` | CLI, Browser, User Query |
-| 🔵 Deep Blue | AI / LLM Operations | `#E3F2FD` | `#1565C0` | Embedding API, LLM, Generate |
-| 🟣 Purple | Classification / Analysis | `#F3E5F5` | `#9C27B0` | Query Classifier, Analyze |
-| 🟢 Green | RAG / Retrieval / Success | `#E8F5E9` | `#4CAF50` | RAG Engine, Validated Output |
-| 🟠 Orange | Agent / Cache / Decisions | `#FFF3E0` | `#FF9800` | Agent Loop, Cache, Sessions |
-| 🟡 Yellow | Warnings | `#FFF9C4` | `#FBC02D` | Return with Warnings |
-| 🔴 Red-Orange | Errors / Fixes | `#FFCCBC` | `#FF5722` | Fix Errors, Validation Failed |
+| Slate | User Interface / Input | `#ECEFF1` | `#607D8B` | CLI, Browser, User Query |
+| Cyan | Session / State Management | `#E0F7FA` | `#00BCD4` | Session Manager |
+| Deep Blue | AI / LLM Operations | `#E3F2FD` | `#1565C0` | Embedding API, LLM, Providers |
+| Purple | Classification / Analysis | `#F3E5F5` | `#9C27B0` | Query Classifier |
+| Green | RAG / Retrieval / Success | `#E8F5E9` | `#4CAF50` | RAG Engine, Validated Output |
+| Orange | Agent / Cache / Decisions | `#FFF3E0` | `#FF9800` | Agent Loop, Cache, Sessions |
+| Yellow | Warnings | `#FFF9C4` | `#FBC02D` | Return with Warnings |
+| Red-Orange | Errors / Fixes | `#FFCCBC` | `#FF5722` | Fix Errors, Build subprocess |
+
+**Node shapes**
+
+| Shape | Mermaid syntax | Meaning | Examples |
+|-------|---------------|---------|----------|
+| Stadium | `(["..."])` | User entry point | Terminal, Browser |
+| Rectangle | `["..."]` | Standard component | CLI frontend, Template Parser |
+| Subroutine | `[["..."]]` | Core processing component | RAG Engine, Session Manager |
+| Cylinder | `[("...")]` | Persistent storage | image-templates/, .ai-cache/ |
+| Diamond | `{"..."}` | Decision / condition | Valid?, All Found? |
 
 ---
 
