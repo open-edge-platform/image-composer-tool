@@ -866,38 +866,50 @@ Deploy the RAG engine, session manager, and web server as separate services comm
 
 ## Implementation phases
 
-**Phase 1: Foundation (Weeks 2-5)**
-- REST API endpoints for query, search, templates
-- SSE streaming for LLM token delivery
-- Basic chat UI with streaming responses
-- Template display with syntax highlighting
+Week 1 is the GSoC community bonding / onboarding period. Development starts at Week 2.
 
-**Phase 2: Conversations (Weeks 6-7)**
+**Phase 1: Project setup and API foundation (Weeks 2-3)**
+- Project scaffolding: `internal/api/` package, router, CORS middleware
+- REST API endpoints for templates (list, get, create, update, delete, validate)
+- REST API endpoints for AI query and search
+- Basic request/response JSON serialization and error handling
+
+**Phase 2: SSE streaming and chat backend (Weeks 4-5)**
+- SSE streaming infrastructure for LLM token delivery
+- `POST /api/v1/ai/query` and `GET /api/v1/ai/stream` implementation
+- Connect API to existing `rag.Engine` for search and generation
+- Basic chat UI with streaming responses and template display
+
+**Phase 3: Session manager and conversations (Weeks 6-7)**
 - Session manager in `internal/ai/session/`
-- Refinement detection and multi-turn flow
-- Session persistence (store interface + file store)
-- Chat UI conversation thread
+- `SessionStore` interface with in-memory and file-based implementations
+- Refinement detection: new query vs. modify existing template
+- Multi-turn conversation flow in chat UI
+- Session persistence for CLI `--interactive` and `--continue` modes
 
-**Phase 3: Editor and library (Weeks 7-8)**
-- Visual YAML editor with real-time validation
-- Template library browser with filtering
-- "Use as starting point" flow
+**Phase 4: Template editor and library browser (Weeks 8-9)**
+- Visual YAML editor (CodeMirror/Monaco) with real-time validation
+- Standalone mode: create and edit templates without AI
+- AI-assisted mode: load AI-generated templates for manual refinement
+- Template library browser with filtering by distribution, architecture, image type
+- Template actions: edit, duplicate, delete, use with AI
 
-**Phase 4: Build integration (Week 9)**
-- Build trigger via subprocess
+**Phase 5: Build integration (Weeks 10-11)**
+- Build trigger via subprocess (`exec.Command`)
 - Build log streaming via SSE
-- Build dashboard with history
+- Build dashboard with history and status tracking
+- Error display with suggestions for common failures
 
-**Phase 5: Agent validation (future)**
-- Agent loop in `internal/ai/rag/agent.go`
-- Auto-validate, self-correct, verify packages
-- Agent step streaming via SSE
-- Validation status display in chat UI
+**Phase 6: Polish, testing, and documentation (Week 12)**
+- End-to-end testing of all flows (AI generation, manual editing, builds)
+- UI polish and error handling improvements
+- Documentation updates: usage guide, API reference
+- Final PR cleanup and code review
 
-**Phase 6: Query classification (future)**
-- Full query type classification
-- Adaptive scoring weight profiles
-- Negation handling
+**Future enhancements (post-GSoC)**
+- Agent validation loop (auto-validate, self-correct, verify packages)
+- Query classification with adaptive scoring weight profiles
+- Negation handling in search queries
 
 ---
 
