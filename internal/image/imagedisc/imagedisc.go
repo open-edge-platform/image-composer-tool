@@ -422,14 +422,67 @@ func DiskGetDevInfo(diskPath string) (map[string]interface{}, error) {
 	}
 	if blockDevices, ok := partitionsInfo["blockdevices"].([]interface{}); ok {
 		for _, device := range blockDevices {
-			dev := device.(map[string]interface{})
-			if dev["path"] == diskPath {
-				return dev, nil
+			dev, ok := device.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if found := findBlockDeviceByPath(dev, diskPath); found != nil {
+				return found, nil
 			}
 		}
 	}
 	log.Errorf("Device info not found for disk %s", diskPath)
 	return nil, errors.New("device not found")
+}
+
+func findBlockDeviceByPath(device map[string]interface{}, diskPath string) map[string]interface{} {
+	if device == nil {
+		return nil
+	}
+
+	if path, ok := device["path"].(string); ok && path == diskPath {
+		return device
+	}
+
+	children, ok := device["children"].([]interface{})
+	if !ok {
+		return nil
+	}
+
+	for _, child := range children {
+		childMap, ok := child.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if found := findBlockDeviceByPath(childMap, diskPath); found != nil {
+			return found
+		}
+	}
+
+	return nil
+}
+
+func collectPartitionDevices(device map[string]interface{}, partitions *[]map[string]interface{}) {
+	if device == nil || partitions == nil {
+		return
+	}
+
+	if devType, ok := device["type"].(string); ok && devType == "part" {
+		*partitions = append(*partitions, device)
+	}
+
+	children, ok := device["children"].([]interface{})
+	if !ok {
+		return
+	}
+
+	for _, child := range children {
+		childMap, ok := child.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		collectPartitionDevices(childMap, partitions)
+	}
 }
 
 func DiskGetPartitionsInfo(diskPath string) ([]map[string]interface{}, error) {
@@ -447,10 +500,11 @@ func DiskGetPartitionsInfo(diskPath string) ([]map[string]interface{}, error) {
 	var partitions []map[string]interface{}
 	if blockDevices, ok := partitionsInfo["blockdevices"].([]interface{}); ok {
 		for _, device := range blockDevices {
-			dev := device.(map[string]interface{})
-			if dev["type"] == "part" {
-				partitions = append(partitions, dev)
+			dev, ok := device.(map[string]interface{})
+			if !ok {
+				continue
 			}
+			collectPartitionDevices(dev, &partitions)
 		}
 	}
 	return partitions, nil

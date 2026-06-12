@@ -562,6 +562,11 @@
         "target": { "$ref": "#/$defs/Target" },
         "disk": { "$ref": "#/$defs/Disk" },
         "systemConfig": { "$ref": "#/$defs/SystemConfig" },
+        "sbomPackageMetadata": {
+          "type": "array",
+          "description": "Optional SBOM package metadata preserved for installer-time SBOM generation",
+          "items": { "type": "object", "additionalProperties": true }
+        },
         "packageRepositories": {
           "type": "array",
           "description": "Additional package repositories",
@@ -580,6 +585,11 @@
         "target": { "$ref": "#/$defs/Target" },
         "disk": { "$ref": "#/$defs/Disk" },
         "systemConfig": { "$ref": "#/$defs/SystemConfig" },
+        "sbomPackageMetadata": {
+          "type": "array",
+          "description": "Optional SBOM package metadata preserved for installer-time SBOM generation",
+          "items": { "type": "object", "additionalProperties": true }
+        },
         "packageRepositories": {
           "type": "array",
           "description": "Additional package repositories",

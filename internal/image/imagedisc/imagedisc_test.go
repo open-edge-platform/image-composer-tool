@@ -435,6 +435,15 @@ func TestDiskGetPartitionsInfo(t *testing.T) {
 			expectedLen: 0,
 		},
 		{
+			name:     "nested_children_partitions",
+			diskPath: "/dev/sdb",
+			mockCommands: []shell.MockCommand{
+				{Pattern: "lsblk /dev/sdb", Output: `{"blockdevices":[{"name":"sdb","path":"/dev/sdb","type":"disk","children":[{"name":"sdb1","path":"/dev/sdb1","type":"part"},{"name":"sdb2","path":"/dev/sdb2","type":"part"}]}]}`, Error: nil},
+			},
+			expectError: false,
+			expectedLen: 2,
+		},
+		{
 			name:     "command_failure",
 			diskPath: "/dev/sda",
 			mockCommands: []shell.MockCommand{
@@ -1448,6 +1457,22 @@ func TestResolveInstallDiskPath(t *testing.T) {
 			},
 			lsblkOutput: `{"blockdevices":[{"name":"sdb","size":21474836480,"model":"Disk B","serial":"B","tran":"sata","type":"disk","rm":0,"rota":1},{"name":"sda","size":21474836480,"model":"Disk A","serial":"A","tran":"sata","type":"disk","rm":0,"rota":1}]}`,
 			expectPath:  "/dev/sda",
+		},
+		{
+			name: "largest_with_require_empty_true_selects_smaller_empty_usb",
+			diskConfig: config.DiskConfig{
+				SelectionPolicy: config.DiskSelectionPolicy{
+					Strategy:         "largest",
+					ExcludeRemovable: boolPtr(false),
+					RequireEmpty:     boolPtr(true),
+				},
+			},
+			lsblkOutput: `{"blockdevices":[{"name":"sdb","size":68719476736,"model":"Large USB","serial":"B","tran":"usb","type":"disk","rm":1,"rota":0},{"name":"sda","size":32212254720,"model":"Small USB","serial":"A","tran":"usb","type":"disk","rm":1,"rota":0}]}`,
+			extraCommands: []shell.MockCommand{
+				{Pattern: "lsblk /dev/sdb --json --list --output", Output: `{"blockdevices":[{"name":"sdb","path":"/dev/sdb","type":"disk","children":[{"name":"sdb1","path":"/dev/sdb1","type":"part"}]}]}`, Error: nil},
+				{Pattern: "lsblk /dev/sda --json --list --output", Output: `{"blockdevices":[{"name":"sda","path":"/dev/sda","type":"disk"}]}`, Error: nil},
+			},
+			expectPath: "/dev/sda",
 		},
 		{
 			name: "exclude_removable_false_with_require_empty_true_can_select_external_empty",
