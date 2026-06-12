@@ -8,8 +8,52 @@ import (
 	"testing"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
+
+func TestHydrateSBOMMetadataForInstaller(t *testing.T) {
+	t.Run("copies_sbom_metadata_when_full_bom_is_empty", func(t *testing.T) {
+		template := &config.ImageTemplate{
+			SBOMPackageMetadata: []ospackage.PackageInfo{
+				{Name: "pkg-a", Type: "deb", Version: "1.0.0", URL: "https://example.test/pkg-a.deb"},
+			},
+		}
+
+		hydrateSBOMMetadataForInstaller(template)
+
+		if len(template.FullPkgListBom) != 1 {
+			t.Fatalf("expected FullPkgListBom to be hydrated with 1 package, got %d", len(template.FullPkgListBom))
+		}
+		if template.FullPkgListBom[0].Name != "pkg-a" {
+			t.Fatalf("expected hydrated package name pkg-a, got %s", template.FullPkgListBom[0].Name)
+		}
+	})
+
+	t.Run("does_not_override_existing_full_bom", func(t *testing.T) {
+		template := &config.ImageTemplate{
+			FullPkgListBom: []ospackage.PackageInfo{
+				{Name: "existing", Type: "deb", Version: "2.0.0"},
+			},
+			SBOMPackageMetadata: []ospackage.PackageInfo{
+				{Name: "fallback", Type: "deb", Version: "1.0.0"},
+			},
+		}
+
+		hydrateSBOMMetadataForInstaller(template)
+
+		if len(template.FullPkgListBom) != 1 {
+			t.Fatalf("expected existing FullPkgListBom length to remain 1, got %d", len(template.FullPkgListBom))
+		}
+		if template.FullPkgListBom[0].Name != "existing" {
+			t.Fatalf("expected existing package to be preserved, got %s", template.FullPkgListBom[0].Name)
+		}
+	})
+
+	t.Run("nil_template_is_noop", func(t *testing.T) {
+		hydrateSBOMMetadataForInstaller(nil)
+	})
+}
 
 func TestSuppressHostAptBackgroundTasks(t *testing.T) {
 	originalShell := shell.Default
