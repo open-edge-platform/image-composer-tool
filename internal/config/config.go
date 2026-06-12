@@ -106,6 +106,7 @@ type ImageTemplate struct {
 	KernelPkgList        []string                `yaml:"-"`
 	FullPkgList          []string                `yaml:"-"`
 	FullPkgListBom       []ospackage.PackageInfo `yaml:"-"`
+	SBOMPackageMetadata  []ospackage.PackageInfo `yaml:"sbomPackageMetadata,omitempty"`
 	DotFilePath          string                  `yaml:"-"`
 	DotSystemOnly        bool                    `yaml:"-"`
 	pureBuildStart       time.Time

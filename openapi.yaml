@@ -1,0 +1,648 @@
+openapi: 3.0.3
+info:
+  title: Image Composer API
+  description: |
+    REST API specification for the Image Composer Web App. 
+    This API enables template management, real-time template validation, 
+    and AI-assisted template generation/search via RAG (Retrieval-Augmented Generation).
+  version: 1.0.0
+servers:
+  - url: /api/v1
+    description: Local API server
+paths:
+  /health:
+    get:
+      summary: Health check
+      description: Returns the health status of the API server.
+      responses:
+        '200':
+          description: Server is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "UP"
+                  timestamp:
+                    type: string
+                    format: date-time
+                    example: "2026-06-09T13:45:00Z"
+
+  /version:
+    get:
+      summary: Get system version
+      description: Returns version information for the web app and CLI tool.
+      responses:
+        '200':
+          description: Version information
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  webVersion:
+                    type: string
+                    example: "0.1.0"
+                  toolVersion:
+                    type: string
+                    example: "1.0.0"
+                  buildDate:
+                    type: string
+                    example: "2026-06-09"
+                  gitCommit:
+                    type: string
+                    example: "abcdefgh"
+
+  /config:
+    get:
+      summary: Get global configuration
+      description: Retrieves the current active global configuration of the Image Composer Tool.
+      responses:
+        '200':
+          description: Global configuration settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /templates:
+    get:
+      summary: List available templates
+      description: Retrieves a list of all OS image templates available in the workspace.
+      responses:
+        '200':
+          description: List of templates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TemplateInfo'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      summary: Save a template
+      description: Saves a new template or updates an existing one in the workspace.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SaveTemplateRequest'
+      responses:
+        '201':
+          description: Template saved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "success"
+                  message:
+                    type: string
+                    example: "Template custom-ubuntu.yml saved"
+        '400':
+          description: Invalid request data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /templates/{name}:
+    get:
+      summary: Get template details
+      description: Retrieves the raw YAML content and parsed metadata of a specific template by name.
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: Name of the template file (e.g. azl3-x86_64-edge-raw.yml)
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Template details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TemplateDetail'
+        '404':
+          description: Template not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      summary: Delete a template
+      description: Deletes a template file from the workspace.
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: Name of the template file to delete
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Template deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "success"
+                  message:
+                    type: string
+                    example: "Template deleted"
+        '404':
+          description: Template not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /templates/{name}/download:
+    get:
+      summary: Download template file
+      description: Directly downloads the raw YAML template file.
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: Name of the template file to download
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Raw YAML content of the template
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+                example: 'attachment; filename="azl3-x86_64-edge-raw.yml"'
+          content:
+            text/yaml:
+              schema:
+                type: string
+
+  /validate:
+    post:
+      summary: Validate a template
+      description: Validates template YAML content against the JSON Schema and required structure checks.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ValidateRequest'
+      responses:
+        '200':
+          description: Validation completed (may contain errors if invalid)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidateResponse'
+        '400':
+          description: Invalid JSON request payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation failed (returns detail of schema errors)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidateResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /ai/search:
+    post:
+      summary: Search templates using AI
+      description: Uses semantic and hybrid scoring to find templates matching a natural language prompt.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - query
+              properties:
+                query:
+                  type: string
+                  description: Natural language search query
+                  example: "ubuntu with docker and python3"
+                limit:
+                  type: integer
+                  description: Max results to return
+                  default: 5
+                  example: 3
+      responses:
+        '200':
+          description: Matching templates sorted by score
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SearchResult'
+        '400':
+          description: Invalid query
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: RAG engine not initialized or query failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /ai/generate:
+    post:
+      summary: Generate template using AI
+      description: Synchronously generates a new YAML template based on the user prompt and indexed references.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - query
+              properties:
+                query:
+                  type: string
+                  description: Description of the desired image configuration
+                  example: "elxr 12 x86_64 minimal image with openssh-server"
+      responses:
+        '200':
+          description: Generated template
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  query:
+                    type: string
+                    example: "elxr 12 x86_64 minimal image with openssh-server"
+                  yaml:
+                    type: string
+                    example: "image:\n  name: elxr12-custom\ntarget:\n  os: elxr\n..."
+        '400':
+          description: Invalid request payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: AI generation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /ai/stream:
+    get:
+      summary: Stream template generation
+      description: Streams token-by-token template generation using Server-Sent Events (SSE).
+      parameters:
+        - name: query
+          in: query
+          required: true
+          description: Description of the desired image configuration
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successful stream initialization
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: Text fragments of the template returned as chunk events.
+        '400':
+          description: Missing query parameter
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Streaming connection failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /ai/stats:
+    get:
+      summary: Get RAG engine statistics
+      description: Returns current status and statistics of the indexed template RAG engine.
+      responses:
+        '200':
+          description: RAG engine statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatsResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /ai/cache/clean:
+    post:
+      summary: Clear AI embedding cache
+      description: Deletes all cached embedding vectors for templates.
+      responses:
+        '200':
+          description: Cache cleared successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "success"
+                  message:
+                    type: string
+                    example: "Embedding cache cleared"
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - timestamp
+      properties:
+        error:
+          type: string
+          description: Short error summary.
+          example: "File not found"
+        details:
+          type: string
+          description: Detailed technical error context.
+          example: "template 'my-custom-image.yml' does not exist in workspace"
+        timestamp:
+          type: string
+          format: date-time
+          example: "2026-06-09T13:30:00Z"
+
+    ConfigResponse:
+      type: object
+      properties:
+        workers:
+          type: integer
+          example: 8
+        cacheDir:
+          type: string
+          example: "./cache"
+        workDir:
+          type: string
+          example: "./workspace"
+        logging:
+          type: object
+          properties:
+            level:
+              type: string
+              example: "info"
+
+    TemplateInfo:
+      type: object
+      required:
+        - name
+        - os
+        - dist
+        - arch
+        - imageType
+      properties:
+        name:
+          type: string
+          description: Filename of the template.
+          example: "azl3-x86_64-edge-raw.yml"
+        os:
+          type: string
+          description: Target Operating System.
+          example: "azure-linux"
+        dist:
+          type: string
+          description: Target Distribution.
+          example: "azl3"
+        arch:
+          type: string
+          description: Target Architecture.
+          example: "x86_64"
+        imageType:
+          type: string
+          description: Type of image output.
+          example: "raw"
+        description:
+          type: string
+          description: Extracted metadata description of the template.
+          example: "Azure Linux 3 edge image with container runtime"
+
+    TemplateDetail:
+      type: object
+      required:
+        - name
+        - content
+      properties:
+        name:
+          type: string
+          example: "azl3-x86_64-edge-raw.yml"
+        content:
+          type: string
+          description: Raw YAML content of the template.
+          example: "image:\n  name: azl3-x86_64-edge\ntarget:\n  os: azure-linux\n..."
+        metadata:
+          type: object
+          properties:
+            description:
+              type: string
+              example: "Azure Linux 3 edge-optimized raw disk image"
+            useCases:
+              type: array
+              items:
+                type: string
+              example: ["Azure IoT Edge", "edge computing"]
+            keywords:
+              type: array
+              items:
+                type: string
+              example: ["edge", "container", "docker"]
+
+    SaveTemplateRequest:
+      type: object
+      required:
+        - name
+        - content
+      properties:
+        name:
+          type: string
+          description: Filename to save as (e.g. custom-ubuntu.yml).
+          example: "custom-ubuntu.yml"
+        content:
+          type: string
+          description: Full YAML string content of the template.
+          example: "image:\n  name: custom-ubuntu\ntarget:\n  os: ubuntu\n  dist: ubuntu24\n  arch: x86_64\n  imageType: raw\n"
+
+    ValidateRequest:
+      type: object
+      required:
+        - content
+      properties:
+        content:
+          type: string
+          description: YAML template string to validate.
+          example: "image:\n  name: test-image\ntarget:\n  os: azure-linux\n"
+
+    ValidateResponse:
+      type: object
+      required:
+        - valid
+        - errors
+      properties:
+        valid:
+          type: boolean
+          example: false
+        errors:
+          type: array
+          items:
+            type: object
+            required:
+              - field
+              - message
+            properties:
+              field:
+                type: string
+                description: Path to the field failing validation.
+                example: "target.dist"
+              message:
+                type: string
+                description: Description of the validation failure.
+                example: "dist is a required field"
+
+    SearchResult:
+      type: object
+      required:
+        - template
+        - score
+        - semanticScore
+        - keywordScore
+        - packageScore
+      properties:
+        template:
+          $ref: '#/components/schemas/TemplateInfo'
+        score:
+          type: number
+          format: double
+          description: Combined scoring metrics
+          example: 0.85
+        semanticScore:
+          type: number
+          format: double
+          example: 0.92
+        keywordScore:
+          type: number
+          format: double
+          example: 0.75
+        packageScore:
+          type: number
+          format: double
+          example: 0.80
+
+    StatsResponse:
+      type: object
+      required:
+        - initialized
+        - templateCount
+        - provider
+        - embeddingModel
+        - cacheEnabled
+      properties:
+        initialized:
+          type: boolean
+          example: true
+        indexedAt:
+          type: string
+          format: date-time
+          example: "2026-06-09T13:00:00Z"
+        templateCount:
+          type: integer
+          example: 54
+        provider:
+          type: string
+          example: "ollama"
+        embeddingModel:
+          type: string
+          example: "nomic-embed-text"
+        cacheEnabled:
+          type: boolean
+          example: true
+        cacheStats:
+          type: object
+          properties:
+            entryCount:
+              type: integer
+              example: 17
+            totalSize:
+              type: integer
+              description: Total size of embedding cache in bytes.
+              example: 15600
+            modelId:
+              type: string
+              example: "nomic-embed-text"
+            dimensions:
+              type: integer
+              example: 768
