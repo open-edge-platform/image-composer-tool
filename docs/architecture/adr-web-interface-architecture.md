@@ -12,7 +12,7 @@
 
 ## Summary
 
-This ADR defines the architecture for a web-based interface to the Image Composer Tool (ICT). The web interface serves two complementary purposes: (1) AI-powered template generation with conversational refinement, and (2) direct template management (create, edit, validate, and build) without requiring AI. The design follows a shared library pattern where new AI capabilities (session management, conversational refinement, agent validation) are built in `internal/ai/` (the shared Go library) rather than in the web API layer. Both the CLI and web frontends consume the same library, ensuring feature parity and avoiding code duplication. The web API layer (`internal/api/`) is a thin HTTP wrapper handling routing, CORS, and serialization only.
+This ADR defines the architecture for a web-based interface to the Image Composer Tool (ICT). The web interface serves two complementary purposes: (1) AI-powered template generation with conversational refinement, and (2) direct template management (create, edit, validate, and build) without requiring AI. The design follows a shared library pattern where new AI capabilities (session management, conversational refinement) are built in `internal/ai/` (the shared Go library) rather than in the web API layer. Both the CLI and web frontends consume the same library, ensuring feature parity and avoiding code duplication. The web API layer (`internal/api/`) is a thin HTTP wrapper handling routing, CORS, and serialization only.
 
 ---
 
@@ -48,11 +48,10 @@ The CLI is a thin 370-line wrapper that calls library functions and formats outp
 1. Web interface for natural language template generation with streaming responses
 2. Multi-turn conversations: generate a template, then refine it iteratively
 3. Session persistence: resume conversations after disconnection or restart
-4. Agent validation: auto-validate generated templates, self-correct if invalid
-5. Visual YAML editor with real-time validation
-6. Template library browser with search and filtering
-7. Build dashboard with live log streaming
-8. CLI must gain the same conversational capabilities (interactive mode, session continuation)
+4. Visual YAML editor with real-time validation
+5. Template library browser with search and filtering
+6. Build dashboard with live log streaming
+7. CLI must gain the same conversational capabilities (interactive mode, session continuation)
 
 ---
 
@@ -67,7 +66,7 @@ All new capabilities are implemented in `internal/ai/` (the shared Go library). 
 1. **Shared library, thin frontends**: Business logic lives in `internal/ai/`. The CLI and API are presentation layers only.
 2. **Single `rag.Engine` instance**: Both frontends share the in-memory vector index and embedding cache, avoiding re-indexing per request.
 3. **Session-first design**: Conversation state is managed by a library-level session manager, not the transport layer.
-4. **Composition over duplication**: New components (session manager, agent loop) orchestrate the existing RAG engine. They call `engine.Search()` and `engine.Generate()`, they don't replace them.
+4. **Composition over duplication**: New components (session manager) orchestrate the existing RAG engine. They call `engine.Search()` and `engine.Generate()`, they don't replace them.
 5. **SSE over WebSocket**: Server-Sent Events for streaming (token delivery, build logs) because responses are unidirectional and SSE works through corporate proxies.
 
 ---
@@ -126,7 +125,6 @@ flowchart TB
         subgraph L3a["New"]
             direction TB
             SM[["Session\nManager"]]
-            AG[["Agent\nValidator"]]
             CL[["Query\nClassifier"]]
         end
 
@@ -168,7 +166,6 @@ flowchart TB
 
     %% ── Edges: Within Library ──
     SM -->|"query"| EN
-    AG -->|"validate"| EN
     CL -.->|"classify"| EN
     EN --> TP
     EN --> IX
@@ -203,7 +200,6 @@ flowchart TB
     style CLI fill:#ECEFF1,stroke:#607D8B,stroke-width:2px
     style API fill:#ECEFF1,stroke:#607D8B,stroke-width:2px
     style SM fill:#E0F7FA,stroke:#00BCD4,stroke-width:2px
-    style AG fill:#FFE082,stroke:#FFA000,stroke-width:2px
     style CL fill:#F3E5F5,stroke:#9C27B0,stroke-width:2px
     style EN fill:#C8E6C9,stroke:#4CAF50,stroke-width:2px
     style PR fill:#BBDEFB,stroke:#1565C0,stroke-width:2px
@@ -302,78 +298,17 @@ type FileStore struct { ... }       // CLI: persist to ~/.config/ict/sessions/
 
 3. **Lifecycle**: Sessions expire after a configurable timeout (default 30 minutes). A background goroutine cleans up expired sessions. Sessions can be explicitly serialized to disk for later continuation.
 
-### Agent validation loop
+### Agent validation loop (future enhancement)
 
 **Location**: `internal/ai/rag/agent.go`
 
-The agent loop auto-validates every generated template and self-corrects if invalid. It runs after both initial generation and refinement.
+The agent loop will auto-validate every generated template and self-correct if invalid. This is planned as a future enhancement to reduce initial implementation scope. See the [RAG ADR - Lightweight Agentic Capabilities](adr-template-enriched-rag.md) section for the full design including the validation flow diagram, agent tools, and self-correction loop.
 
-```mermaid
-flowchart TD
-    A["Generate YAML"] ==> B["Validate Template Schema"]
-    B --> C{Valid?}
-    C -->|Yes| D["Verify Packages in Repo"]
-    C -->|No| E["Attempt Fix via LLM"]
-    E --> F["Validate Again"]
-    F --> G{Valid?}
-    G -->|Yes| D
-    G -->|No| H{Attempts < 2?}
-    H -->|Retry| E
-    H -->|No| I(["Return - status: invalid"])
-    D --> J{All Found?}
-    J -->|Yes| K(["Return - status: valid"])
-    J -->|No| L(["Return - status: warning"])
-
-    style A fill:#E3F2FD,stroke:#1565C0,stroke-width:2px
-    style B fill:#FFE082,stroke:#FFA000,stroke-width:2px
-    style C fill:#FFF3E0,stroke:#FF9800,stroke-width:2px
-    style D fill:#FFE082,stroke:#FFA000,stroke-width:2px
-    style E fill:#FFCCBC,stroke:#FF5722,stroke-width:2px
-    style F fill:#FFE082,stroke:#FFA000,stroke-width:2px
-    style G fill:#FFF3E0,stroke:#FF9800,stroke-width:2px
-    style H fill:#FFF3E0,stroke:#FF9800,stroke-width:2px
-    style I fill:#FFCCBC,stroke:#FF5722,stroke-width:2px
-    style J fill:#FFF3E0,stroke:#FF9800,stroke-width:2px
-    style K fill:#C8E6C9,stroke:#388E3C,stroke-width:2px
-    style L fill:#FFF9C4,stroke:#FBC02D,stroke-width:2px
-```
-
-**Interface**:
-
-```go
-type AgentConfig struct {
-    AutoValidate   bool // default: true
-    AutoFix        bool // default: true
-    MaxFixAttempts int  // default: 2
-    VerifyPackages bool // default: true
-}
-
-type AgentResult struct {
-    YAML             string
-    ValidationStatus string           // "valid", "warning", "invalid"
-    Errors           []ValidationError
-    AutoFixes        []AutoFix
-    FixAttempts      int
-    MissingPackages  []string
-    Steps            []AgentStep      // For streaming to UI
-}
-
-type AgentStep struct {
-    Step    string // "validate_template", "fix_errors", "verify_packages"
-    Status  string // "running", "success", "failed"
-    Message string // Human-readable status
-}
-
-func (e *Engine) GenerateWithValidation(
-    ctx context.Context,
-    query string,
-    session *session.Session,
-    config AgentConfig,
-    onStep func(AgentStep),        // Callback for streaming steps to UI
-) (*AgentResult, error)
-```
-
-The `onStep` callback enables both the web API (stream steps via SSE) and the CLI (print steps to terminal) to show real-time validation progress.
+When implemented, it will provide:
+- Auto-validation of generated templates against the JSON schema
+- Self-correction via LLM when validation fails (max 2 attempts)
+- Package existence verification against configured repositories
+- Streaming of validation steps to the UI via SSE `agent_step` events
 
 ### Query classifier (future)
 
@@ -403,9 +338,9 @@ The API layer is a thin HTTP wrapper. It handles transport concerns only: routin
 | `POST` | `/api/v1/sessions` | Create session | `session.Manager.Create()` |
 | `GET` | `/api/v1/sessions/{id}` | Get session state | `session.Manager.Get()` |
 | `DELETE` | `/api/v1/sessions/{id}` | End session | `session.Manager.Delete()` |
-| `POST` | `/api/v1/ai/query` | Submit query | `engine.GenerateWithValidation()` |
+| `POST` | `/api/v1/ai/query` | Submit query | `engine.Generate()` |
 | `GET` | `/api/v1/ai/search` | Search templates | `engine.Search()` |
-| `GET` | `/api/v1/ai/stream` | SSE: stream tokens + agent steps | `engine.GenerateWithValidation()` with `onStep` callback |
+| `GET` | `/api/v1/ai/stream` | SSE: stream tokens | `engine.Generate()` with streaming callback |
 | `GET` | `/api/v1/templates` | List templates | `template.Parser` scan |
 | `GET` | `/api/v1/templates/{name}` | Get template | `template.Parser.Parse()` |
 | `POST` | `/api/v1/templates/validate` | Validate YAML | Existing ICT validator |
@@ -444,18 +379,6 @@ data: {"content": "  name: custom-edge\n"}
 
 event: generation_complete
 data: {"yaml": "...", "generation_time_ms": 1850}
-
-event: agent_step
-data: {"step": "validate_template", "status": "running", "message": "Validating template schema…"}
-
-event: agent_step
-data: {"step": "fix_errors", "status": "running", "message": "Found 1 issue. Auto-correcting…"}
-
-event: agent_step
-data: {"step": "validate_template", "status": "success", "message": "Template valid"}
-
-event: agent_step
-data: {"step": "verify_packages", "status": "success", "message": "All 9 packages verified"}
 
 event: complete
 data: {"session_id": "s_7f3a", "yaml": "...", "validation": {...}, "changes": [...]}
@@ -538,7 +461,7 @@ image-composer-tool ai --interactive
 image-composer-tool ai --continue
 ```
 
-Interactive mode uses a terminal REPL loop that calls `session.Manager` for state management and `engine.GenerateWithValidation()` for generation with agent validation. Session data is persisted to `~/.config/image-composer-tool/sessions/` via the `FileStore` implementation.
+Interactive mode uses a terminal REPL loop that calls `session.Manager` for state management and `engine.Generate()` for template generation. Session data is persisted to `~/.config/image-composer-tool/sessions/` via the `FileStore` implementation.
 
 ---
 
@@ -566,20 +489,10 @@ sequenceDiagram
     A-->>B: SSE: search_results
 
     A-->>B: SSE: generation_start
-    A->>L: GenerateWithValidation(query)
+    A->>L: Generate(query)
     L-->>A: Token stream
     A-->>B: SSE: token (×N)
     A-->>B: SSE: generation_complete
-
-    Note over A,R: Agent validation loop
-    A->>R: validate(yaml)
-    A-->>B: SSE: agent_step (validating)
-    A->>L: fix(yaml, errors)
-    A-->>B: SSE: agent_step (fixing)
-    A->>R: validate(fixed)
-    A-->>B: SSE: agent_step (valid)
-    A->>R: verify(packages)
-    A-->>B: SSE: agent_step (verified)
 
     A->>S: updateSession(template)
     A-->>B: SSE: complete
@@ -607,9 +520,6 @@ sequenceDiagram
 
     A->>S: diff(old template, new template)
     S-->>A: Changes list
-
-    Note over A,S: Agent validation loop
-    A-->>B: SSE: agent_step (validate + verify)
 
     A->>S: updateSession(new template)
     A-->>B: SSE: complete {changes, yaml, validation}
@@ -680,12 +590,10 @@ flowchart LR
             direction LR
             EN[["rag.Engine"]]
             SM2[["session.Manager"]]
-            AG2[["agent.Validate"]]
         end
 
         LIB -->|"search + generate"| EN
         LIB -->|"create + resume"| SM2
-        LIB -->|"validate + fix"| AG2
     end
 
     %% ── Integration edges ──
@@ -707,14 +615,13 @@ flowchart LR
     style LIB fill:#FFE082,stroke:#FFA000,stroke-width:2px
     style EN fill:#C8E6C9,stroke:#4CAF50,stroke-width:2px
     style SM2 fill:#E0F7FA,stroke:#00BCD4,stroke-width:2px
-    style AG2 fill:#FFE082,stroke:#FFA000,stroke-width:2px
 ```
 
 ### Path 1: Go library import (tightest integration)
 
 Products written in Go can import `internal/ai/` directly as a Go package dependency. This provides:
 
-- Type-safe access to `rag.Engine`, `session.Manager`, and agent validation
+- Type-safe access to `rag.Engine` and `session.Manager`
 - Shared in-memory vector index (no re-indexing)
 - Shared embedding cache
 - No serialization overhead
@@ -737,7 +644,7 @@ func main() {
     })
 
     sess := sessionMgr.Create()
-    result, _ := engine.GenerateWithValidation(ctx, "minimal edge image with docker", sess, rag.DefaultAgentConfig(), nil)
+    result, _ := engine.Generate(ctx, "minimal edge image with docker", sess)
     fmt.Println(result.YAML)
 }
 ```
@@ -786,7 +693,7 @@ To support third-party consumers, the REST API follows these stability rules:
 2. **Additive changes only**: New fields may be added to responses without a version bump. Existing fields are never removed or renamed within a version.
 3. **Documented via OpenAPI**: The API specification is published as an OpenAPI 3.0 document at `/api/v1/openapi.json`, enabling automatic client generation in any language.
 4. **Stable error codes**: Error `code` strings (e.g., `SESSION_NOT_FOUND`, `GENERATION_FAILED`) are part of the contract and will not change within a version.
-5. **SSE event types are stable**: Event names (`token`, `agent_step`, `complete`, `error`) will not change within a version. New event types may be added.
+5. **SSE event types are stable**: Event names (`token`, `complete`, `error`) will not change within a version. New event types may be added.
 
 ### Deployment models
 
@@ -807,7 +714,7 @@ React single-page application served alongside the Go API server (embedded via `
 
 ### Views
 
-1. **Chat view**: Natural language conversation with streaming responses, search result cards with score breakdowns, syntax-highlighted YAML output, agent validation step indicators, and action buttons (edit, download, build).
+1. **Chat view**: Natural language conversation with streaming responses, search result cards with score breakdowns, syntax-highlighted YAML output, and action buttons (edit, download, build).
 
 2. **Editor view**: CodeMirror/Monaco YAML editor with real-time validation. Validation errors shown inline as editor markers. Debounced calls to `/api/v1/templates/validate`. Works in two modes:
    - **Standalone**: Create new templates from scratch or edit existing templates without AI. Users write or paste YAML directly, get instant validation feedback, and save via `POST /api/v1/templates` or `PUT /api/v1/templates/{name}`.
@@ -843,12 +750,13 @@ web:
     timeout: 30m
     output_dir: /tmp/ict-builds
 
-ai:
-  agent:
-    auto_validate: true
-    auto_fix: true
-    max_fix_attempts: 2
-    verify_packages: true
+# ai.agent settings are reserved for the future agent validation feature
+# ai:
+#   agent:
+#     auto_validate: true
+#     auto_fix: true
+#     max_fix_attempts: 2
+#     verify_packages: true
 ```
 
 ---
@@ -888,9 +796,9 @@ All API errors follow a consistent format:
 
 ### Alternative 1: API layer contains business logic
 
-Place session management, query classification, and agent validation in `internal/api/` rather than `internal/ai/`.
+Place session management and query classification in `internal/api/` rather than `internal/ai/`.
 
-**Rejected because**: The CLI would not benefit from these features. Adding `--interactive` mode to the CLI would require duplicating the session management, refinement detection, and agent validation logic. Two implementations of the same logic diverge over time.
+**Rejected because**: The CLI would not benefit from these features. Adding `--interactive` mode to the CLI would require duplicating the session management and refinement detection logic. Two implementations of the same logic diverge over time.
 
 ### Alternative 2: CLI subprocess for all operations
 
@@ -916,23 +824,22 @@ Deploy the RAG engine, session manager, and web server as separate services comm
 
 ### Expected benefits
 
-1. **Feature parity**: Both CLI and web UI get multi-turn conversations, agent validation, and session persistence from the same library code.
+1. **Feature parity**: Both CLI and web UI get multi-turn conversations and session persistence from the same library code.
 2. **Performance**: Single `rag.Engine` instance keeps the vector index warm in memory. No re-indexing per request. Embedding cache shared across all sessions.
-3. **Maintainability**: One implementation of session management, one implementation of agent validation. Bug fixes and improvements apply to both frontends automatically.
+3. **Maintainability**: One implementation of session management. Bug fixes and improvements apply to both frontends automatically.
 4. **Testability**: Library code is testable in isolation without HTTP infrastructure. Integration tests can exercise the full flow through either frontend.
 5. **Deployment simplicity**: Single Go binary. No microservice orchestration. Docker Compose optional for development convenience.
 6. **Third-party integration**: External products can integrate via Go import (tightest) or REST API (language-agnostic). The same architecture serves both paths without additional abstraction layers.
 
 ### Trade-offs
 
-1. **Shared library complexity**: Adding session management and agent validation to `internal/ai/` increases the library's surface area. The library must handle concurrent access (web) even though the CLI uses it single-threaded.
+1. **Shared library complexity**: Adding session management to `internal/ai/` increases the library's surface area. The library must handle concurrent access (web) even though the CLI uses it single-threaded.
 2. **Session store abstraction**: Supporting both in-memory (web) and file-based (CLI) storage requires an interface with two implementations, adding indirection.
-3. **Agent callback pattern**: The `onStep` callback in `GenerateWithValidation` decouples the agent from its output format but adds a level of indirection compared to direct I/O.
-4. **Go `internal/` path**: The `internal/ai/` path prevents external Go imports by convention. If third-party Go integration becomes a requirement, packages must be relocated to `pkg/ai/`. This is a non-breaking change (same interfaces, different import path) but requires coordination.
+3. **Go `internal/` path**: The `internal/ai/` path prevents external Go imports by convention. If third-party Go integration becomes a requirement, packages must be relocated to `pkg/ai/`. This is a non-breaking change (same interfaces, different import path) but requires coordination.
 
 ### Risks
 
-1. **Scope**: Building shared library features plus web frontend plus CLI interactive mode is substantial. Mitigated by prioritizing: sessions and agent validation are critical, query classification is a stretch goal.
+1. **Scope**: Building shared library features plus web frontend plus CLI interactive mode is substantial. Mitigated by phasing: sessions are critical, agent validation and query classification are future enhancements.
 2. **Concurrent state**: The session manager must be thread-safe for the web server. Mitigated by standard Go concurrency patterns (`sync.RWMutex`).
 3. **LLM latency**: Streaming helps perceived performance but doesn't reduce actual generation time. Mitigated by embedding cache (fast retrieval) and SSE (early content delivery).
 
@@ -944,7 +851,6 @@ Deploy the RAG engine, session manager, and web server as separate services comm
 
 - Session lifecycle events (created, expired, resumed, deleted)
 - Refinement detection decisions (new query vs. refinement, and why)
-- Agent validation steps (validate, fix attempt, verify packages)
 - SSE connection lifecycle (connect, disconnect, reconnect)
 - Build process lifecycle (started, progress, completed, failed)
 - API request latency by endpoint
@@ -953,7 +859,6 @@ Deploy the RAG engine, session manager, and web server as separate services comm
 
 - Session count (active, expired, persisted)
 - Refinement ratio (refinements vs. new queries per session)
-- Agent fix success rate (fixed in 1 attempt, 2 attempts, unfixable)
 - Build success rate and average duration
 - SSE connection count and duration
 
@@ -978,16 +883,16 @@ Deploy the RAG engine, session manager, and web server as separate services comm
 - Template library browser with filtering
 - "Use as starting point" flow
 
-**Phase 4: Agent validation (Week 9)**
+**Phase 4: Build integration (Week 9)**
+- Build trigger via subprocess
+- Build log streaming via SSE
+- Build dashboard with history
+
+**Phase 5: Agent validation (future)**
 - Agent loop in `internal/ai/rag/agent.go`
 - Auto-validate, self-correct, verify packages
 - Agent step streaming via SSE
 - Validation status display in chat UI
-
-**Phase 5: Build integration (Week 10)**
-- Build trigger via subprocess
-- Build log streaming via SSE
-- Build dashboard with history
 
 **Phase 6: Query classification (future)**
 - Full query type classification
