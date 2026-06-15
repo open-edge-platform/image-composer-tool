@@ -83,9 +83,12 @@ systemConfig:
     - nano
     - paho-mqtt-c
     - ffmpeg
-    - gstreamer
     - opencv
     - intel-dlstreamer-2025.2.0
     - openvino-2025.3.0
     - linux-firmware-i915
     # - tdnf
+
+  configurations:
+    # Edit source file path for dlstreamer opencv plugin
+    - cmd: sed -i 's|export LD_LIBRARY_PATH="|export LD_LIBRARY_PATH="/usr/local/lib64:|' /opt/intel/dlstreamer/setupvars.sh
