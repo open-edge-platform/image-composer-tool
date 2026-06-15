@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config/validate"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 	"gopkg.in/yaml.v3"
 )
 
@@ -1481,6 +1482,118 @@ func TestSaveUpdatedConfigFile(t *testing.T) {
 
 	if strings.Contains(string(data), "index: null") {
 		t.Fatalf("dumped config unexpectedly contains 'index: null'\n%s", string(data))
+	}
+}
+
+func TestSaveUpdatedConfigFileFixesInvalidBlockScalarHeader(t *testing.T) {
+	t.Parallel()
+
+	template := &ImageTemplate{
+		Image: ImageInfo{
+			Name:    "test-save-sbom",
+			Version: "1.0.0",
+		},
+		SBOMPackageMetadata: []ospackage.PackageInfo{
+			{
+				Name:        "newt-0.52.23-1.azl3.x86_64.rpm",
+				Type:        "rpm",
+				Description: "\nline1\nline2",
+				Origin:      "Microsoft",
+				License:     "GPLv2",
+				Version:     "0:0.52.23-1.azl3",
+				Arch:        "x86_64",
+				URL:         "https://example.invalid/newt.rpm",
+			},
+		},
+	}
+
+	outPath := filepath.Join(t.TempDir(), "test-sbom.yml")
+
+	if err := template.SaveUpdatedConfigFile(outPath); err != nil {
+		t.Fatalf("SaveUpdatedConfigFile returned unexpected error: %v", err)
+	}
+
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("failed to read dumped config: %v", err)
+	}
+
+	var parsed any
+	if err := yaml.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("dumped config is not valid YAML: %v\n%s", err, string(data))
+	}
+
+	var roundTrip ImageTemplate
+	if err := yaml.Unmarshal(data, &roundTrip); err != nil {
+		t.Fatalf("failed to unmarshal dumped config into ImageTemplate: %v", err)
+	}
+
+	if len(roundTrip.SBOMPackageMetadata) != 1 {
+		t.Fatalf("expected 1 sbom package metadata entry, got %d", len(roundTrip.SBOMPackageMetadata))
+	}
+
+	if roundTrip.SBOMPackageMetadata[0].Description != "line1\nline2" {
+		t.Fatalf(
+			"expected sanitized description %q, got %q",
+			"line1\\nline2",
+			roundTrip.SBOMPackageMetadata[0].Description,
+		)
+	}
+
+	if strings.Contains(string(data), "description: |4-") {
+		t.Fatalf("dumped config still contains invalid block scalar header |4-\n%s", string(data))
+	}
+
+	if roundTrip.SBOMPackageMetadata[0].Origin != "Microsoft" ||
+		roundTrip.SBOMPackageMetadata[0].License != "GPLv2" ||
+		roundTrip.SBOMPackageMetadata[0].Version != "0:0.52.23-1.azl3" ||
+		roundTrip.SBOMPackageMetadata[0].Arch != "x86_64" ||
+		roundTrip.SBOMPackageMetadata[0].URL != "https://example.invalid/newt.rpm" {
+		t.Fatalf("unexpected SBOM metadata mutation after save: %+v", roundTrip.SBOMPackageMetadata[0])
+	}
+}
+
+func TestFixInvalidBlockScalarHeader(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "removes single digit indent and preserves strip chomping",
+			input: "description: |4-\n    line1\n",
+			want:  "description: |-\n    line1\n",
+		},
+		{
+			name:  "removes multi digit indent and preserves keep chomping",
+			input: "description: |12+\n            line1\n",
+			want:  "description: |+\n            line1\n",
+		},
+		{
+			name:  "removes indent without chomping indicator",
+			input: "description: |2\n  line1\n",
+			want:  "description: |\n  line1\n",
+		},
+		{
+			name:  "leaves inferred indent header untouched",
+			input: "description: |-\n  line1\n",
+			want:  "description: |-\n  line1\n",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := string(fixInvalidBlockScalarHeader([]byte(tt.input)))
+
+			if got != tt.want {
+				t.Fatalf("fixInvalidBlockScalarHeader() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
