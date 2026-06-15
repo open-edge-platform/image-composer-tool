@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -238,6 +239,8 @@ type PartitionInfo struct {
 }
 
 var log = logger.Logger()
+
+var invalidBlockScalarHeaderPattern = regexp.MustCompile(`(: \|)\d+([+-]?)\n`)
 
 // LoadTemplate loads an ImageTemplate from the specified YAML template path
 func LoadTemplate(path string, validateFull bool) (*ImageTemplate, error) {
@@ -697,6 +700,17 @@ func (t *ImageTemplate) SaveUpdatedConfigFile(path string) error {
 		return fmt.Errorf("error marshaling template to YAML: %w", err)
 	}
 
+	if err := validateYAMLBytes(data); err != nil {
+		log.Warnf("Generated YAML is not parseable, applying block scalar header fix: %v", err)
+
+		data = fixInvalidBlockScalarHeader(data)
+
+		if validateErr := validateYAMLBytes(data); validateErr != nil {
+			log.Errorf("Generated YAML remains invalid after block scalar header fix: %v", validateErr)
+			return fmt.Errorf("generated YAML is invalid after block scalar header fix: %w", validateErr)
+		}
+	}
+
 	// Write file safely with symlink protection
 	if err := security.SafeWriteFile(path, data, 0644, security.RejectSymlinks); err != nil {
 		log.Errorf("Failed to write image template to %s: %v", path, err)
@@ -705,6 +719,18 @@ func (t *ImageTemplate) SaveUpdatedConfigFile(path string) error {
 
 	log.Infof("Saved image template to %s", path)
 	return nil
+}
+
+func validateYAMLBytes(data []byte) error {
+	var parsed any
+
+	return yaml.Unmarshal(data, &parsed)
+}
+
+func fixInvalidBlockScalarHeader(data []byte) []byte {
+	// Work around yaml.v3 emitting invalid explicit indent headers such as "|4-".
+	// Keep the payload and chomping mode untouched, and drop only the indent indicator.
+	return invalidBlockScalarHeaderPattern.ReplaceAll(data, []byte("$1$2\n"))
 }
 
 // GetImmutability returns the immutability configuration from systemConfig
