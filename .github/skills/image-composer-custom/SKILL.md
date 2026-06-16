@@ -78,7 +78,7 @@ packageRepositories:
 | OS family | Works? | Example codename | Example component |
 |-----------|--------|------------------|-------------------|
 | Ubuntu (apt) | ✓ | `noble` (24.04) | `stable`, `main` |
-| Debian (apt) | ✓ | `bookworm` (13) | `stable`, `main` |
+| Debian (apt) | ✓ | `trixie` (13) | `stable`, `main` |
 | RCD10 / Rocky (RPM) | ✓ | `CentOS-Stream-10-AppStream` | *(optional)* |
 | ELXR12 (RPM) | ✓ | *(varies)* | *(optional)* |
 | EMT3 (RPM) | ✓ | *(varies)* | *(optional)* |
