@@ -1,0 +1,1734 @@
+openapi: "3.0.3"
+
+info:
+  title: Image Composer Tool — Web API
+  description: |
+    REST API for the Image Composer Tool (ICT) web interface.
+
+    This API provides:
+    1. **AI-powered template generation** with conversational refinement via
+       multi-turn sessions.
+    2. **Direct template management** — create, edit, validate, and delete
+       OS image templates without requiring AI.
+    3. **Image build triggering** with live log streaming.
+
+    The API is a thin HTTP wrapper over the shared Go library (`internal/ai/`).
+    All business logic lives in the library; the API handles only routing, CORS,
+    JSON serialization, and SSE connection management.
+
+    ## Streaming
+
+    Two endpoints use **Server-Sent Events (SSE)** for real-time streaming:
+    - `GET /api/v1/ai/stream` — streams AI-generated template tokens
+    - `GET /api/v1/builds/{id}/logs` — streams build log output
+
+    Clients should use the browser-native `EventSource` API or an equivalent
+    SSE client library. SSE was chosen over WebSocket because responses are
+    unidirectional (server → client), SSE works through corporate proxies,
+    and the browser `EventSource` API provides built-in auto-reconnection.
+
+    ## Error Handling
+
+    All error responses use a consistent JSON envelope. See the `ErrorResponse`
+    schema for the exact format. Error `code` strings (e.g., `SESSION_NOT_FOUND`,
+    `GENERATION_FAILED`) are part of the API stability contract and will not
+    change within a version.
+
+    ## Versioning & Stability Contract
+
+    - All endpoints are prefixed with `/api/v1/`.
+    - Breaking changes require a new version prefix (`/api/v2/`).
+    - New fields may be added to responses without a version bump (additive only).
+    - Existing fields are never removed or renamed within a version.
+    - SSE event type names are stable within a version. New event types may be added.
+    - The OpenAPI specification is served at `GET /api/v1/openapi.json` at runtime.
+  version: 1.0.0
+  contact:
+    name: ICT Team
+    url: https://github.com/orgs/open-edge-platform/projects/42/views/2
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+
+tags:
+  - name: Sessions
+    description: |
+      Conversation session lifecycle management.
+
+      Sessions maintain multi-turn conversation state for AI-powered template
+      generation and refinement. Each session tracks the current template,
+      conversation history, and search results.
+
+      Sessions expire after a configurable timeout (default: 30 minutes).
+  - name: AI
+    description: |
+      AI-powered template generation and semantic search.
+
+      Queries are processed by the RAG engine which performs hybrid scoring
+      (semantic 70% + keyword 20% + package 10%) against the template library,
+      then generates a new template using the top matches as context.
+
+      When a session already has a current template, the system detects
+      refinement queries and skips the RAG search, passing the existing
+      template directly to the LLM for modification.
+  - name: Templates
+    description: |
+      Template CRUD operations and schema validation.
+
+      Templates are OS image definition files in YAML format. They are validated
+      against the `UserTemplate` JSON schema (`os-image-template.schema.json`)
+      which checks structure while allowing optional fields that will be filled
+      in by merging with defaults at build time.
+
+      Templates are stored as `.yml` files in the `image-templates/` directory.
+  - name: Builds
+    description: |
+      Image build triggering and monitoring.
+
+      Builds are executed as subprocesses via `exec.Command("image-composer-tool",
+      "build", ...)` because they require `sudo` privileges, run for minutes, and
+      benefit from process isolation. Build logs are streamed in real time via SSE.
+  - name: Engine
+    description: |
+      RAG engine statistics and embedding cache management.
+
+      The engine maintains an in-memory vector index of all templates and an
+      on-disk embedding cache for faster re-indexing.
+
+# =============================================================================
+# Paths
+# =============================================================================
+
+paths:
+
+  # ---------------------------------------------------------------------------
+  # Sessions
+  # ---------------------------------------------------------------------------
+
+  /api/v1/sessions:
+    post:
+      tags: [Sessions]
+      operationId: createSession
+      summary: Create a new conversation session
+      description: |
+        Creates a new empty conversation session for multi-turn AI template
+        generation and refinement.
+
+        The returned `id` must be passed to subsequent AI query and stream
+        requests to maintain conversation context.
+
+        **Library call:** `session.Manager.Create()`
+      responses:
+        "201":
+          description: Session created successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+              example:
+                id: "s_7f3a1b2c"
+                current_template: null
+                history: []
+                created_at: "2026-06-19T01:00:00Z"
+                last_active_at: "2026-06-19T01:00:00Z"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
+
+  /api/v1/sessions/{id}:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+
+    get:
+      tags: [Sessions]
+      operationId: getSession
+      summary: Get session state
+      description: |
+        Returns the full state of a conversation session, including the current
+        template (if any), conversation history, and timestamps.
+
+        **Library call:** `session.Manager.Get()`
+      responses:
+        "200":
+          description: Session state retrieved successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        "404":
+          $ref: "#/components/responses/SessionNotFound"
+        "410":
+          $ref: "#/components/responses/SessionExpired"
+
+    delete:
+      tags: [Sessions]
+      operationId: deleteSession
+      summary: End a conversation session
+      description: |
+        Deletes a conversation session and frees all associated resources.
+
+        **Library call:** `session.Manager.Delete()`
+      responses:
+        "204":
+          description: Session deleted successfully.
+        "404":
+          $ref: "#/components/responses/SessionNotFound"
+
+  # ---------------------------------------------------------------------------
+  # AI
+  # ---------------------------------------------------------------------------
+
+  /api/v1/ai/query:
+    post:
+      tags: [AI]
+      operationId: submitQuery
+      summary: Submit a query (non-streaming)
+      description: |
+        Submits a natural language query for template generation or refinement
+        and returns the complete result in a single JSON response.
+
+        Use this endpoint for programmatic access where streaming is not needed.
+        For real-time token streaming in a browser UI, use `GET /api/v1/ai/stream`
+        instead.
+
+        **Behavior with sessions:**
+        - If `session_id` is provided and the session has a current template,
+          the system treats the query as a **refinement** — it skips the RAG
+          search and passes the current template + modification request to the LLM.
+        - If `session_id` is omitted or the session has no current template,
+          a full RAG search + generation is performed.
+
+        **Library call:** `engine.Generate()`
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QueryRequest"
+            example:
+              query: "create a minimal edge image for elxr with docker support"
+              session_id: "s_7f3a1b2c"
+      responses:
+        "200":
+          description: Query processed successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueryResponse"
+        "400":
+          $ref: "#/components/responses/QueryRequired"
+        "404":
+          $ref: "#/components/responses/SessionNotFound"
+        "502":
+          $ref: "#/components/responses/GenerationFailed"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
+
+  /api/v1/ai/search:
+    get:
+      tags: [AI]
+      operationId: searchTemplates
+      summary: Search the template library
+      description: |
+        Performs a semantic search against the indexed template library using
+        hybrid scoring (semantic similarity, keyword overlap, and package matching).
+
+        Returns the top 5 matching templates ranked by combined score.
+
+        **Library call:** `engine.Search()`
+      parameters:
+        - name: query
+          in: query
+          required: true
+          description: Natural language search query.
+          schema:
+            type: string
+          example: "cloud deployment with monitoring"
+      responses:
+        "200":
+          description: Search completed successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
+        "400":
+          $ref: "#/components/responses/QueryRequired"
+        "502":
+          $ref: "#/components/responses/GenerationFailed"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
+
+  /api/v1/ai/stream:
+    get:
+      tags: [AI]
+      operationId: streamQuery
+      summary: Stream AI-generated template tokens (SSE)
+      description: |
+        Opens a Server-Sent Events stream for real-time AI template generation.
+        The client receives events as the LLM generates the template token by
+        token, allowing the UI to display results progressively.
+
+        **Behavior with sessions:**
+        - If `session_id` is provided and the session has a current template,
+          the query is treated as a **refinement** — the RAG search is skipped.
+        - If `session_id` is omitted or the session has no template, a full
+          RAG search + generation is performed.
+
+        **Library call:** `engine.Generate()` with streaming callback
+
+        ## SSE Event Types
+
+        Events are sent in the following order for an **initial query**:
+
+        | Order | Event                  | Description                              |
+        |-------|------------------------|------------------------------------------|
+        | 1     | `search_results`       | RAG search results with scores           |
+        | 2     | `generation_start`     | Signals generation has begun             |
+        | 3…N   | `token`                | Individual LLM output tokens             |
+        | N+1   | `generation_complete`  | Full YAML and generation timing          |
+        | N+2   | `complete`             | Final result with session and validation |
+
+        For a **refinement query**, `search_results` is omitted (no RAG search).
+
+        An `error` event may be sent at any point if something goes wrong.
+
+        ### Event: `search_results`
+        ```json
+        {"results": [...], "query_type": "semantic"}
+        ```
+
+        ### Event: `generation_start`
+        ```json
+        {"source_templates": ["elxr-cloud-amd64.yml"]}
+        ```
+
+        ### Event: `token`
+        ```json
+        {"content": "image:\n"}
+        ```
+
+        ### Event: `generation_complete`
+        ```json
+        {"yaml": "...", "generation_time_ms": 1850}
+        ```
+
+        ### Event: `complete`
+        ```json
+        {"session_id": "s_7f3a", "yaml": "...", "validation": {...}, "changes": [...]}
+        ```
+
+        ### Event: `error`
+        ```json
+        {"code": "GENERATION_FAILED", "message": "LLM timeout", "retry": true}
+        ```
+      parameters:
+        - name: query
+          in: query
+          required: true
+          description: Natural language query for template generation or refinement.
+          schema:
+            type: string
+          example: "create a minimal edge image for elxr with docker support"
+        - name: session_id
+          in: query
+          required: false
+          description: |
+            Session ID for multi-turn conversations. If provided and the session
+            has a current template, the query is treated as a refinement.
+          schema:
+            type: string
+          example: "s_7f3a1b2c"
+      responses:
+        "200":
+          description: SSE stream opened successfully.
+          content:
+            text/event-stream:
+              schema:
+                description: |
+                  A stream of Server-Sent Events. Each event has an `event` field
+                  (the event type) and a `data` field (JSON payload). See the
+                  endpoint description for the full list of event types and their
+                  data schemas.
+                oneOf:
+                  - $ref: "#/components/schemas/SSESearchResults"
+                  - $ref: "#/components/schemas/SSEGenerationStart"
+                  - $ref: "#/components/schemas/SSEToken"
+                  - $ref: "#/components/schemas/SSEGenerationComplete"
+                  - $ref: "#/components/schemas/SSEComplete"
+                  - $ref: "#/components/schemas/SSEError"
+        "400":
+          $ref: "#/components/responses/QueryRequired"
+        "404":
+          $ref: "#/components/responses/SessionNotFound"
+
+  # ---------------------------------------------------------------------------
+  # Templates
+  # ---------------------------------------------------------------------------
+
+  /api/v1/templates:
+    get:
+      tags: [Templates]
+      operationId: listTemplates
+      summary: List all templates
+      description: |
+        Returns a summary list of all templates in the `image-templates/`
+        directory. Each entry includes parsed metadata (name, distribution,
+        architecture, packages, etc.) but **not** the full YAML content.
+
+        Use `GET /api/v1/templates/{name}` to retrieve the full YAML for a
+        specific template.
+
+        **Library call:** `template.ScanTemplates()`
+      responses:
+        "200":
+          description: Template list retrieved successfully.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [templates, count]
+                properties:
+                  templates:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TemplateInfo"
+                  count:
+                    type: integer
+                    description: Total number of templates.
+                    example: 54
+
+    post:
+      tags: [Templates]
+      operationId: createTemplate
+      summary: Create a new template
+      description: |
+        Creates a new template by validating the provided YAML against the
+        `UserTemplate` JSON schema and writing it to `image-templates/<name>.yml`.
+
+        This endpoint serves both workflows:
+        - **Saving AI-generated templates:** After the AI generates a template
+          via `/api/v1/ai/stream`, the user can save it here.
+        - **Manual template creation:** A user can write YAML from scratch in
+          the browser editor and save it directly.
+
+        The YAML is validated using `ValidateUserTemplateJSON()` which checks
+        against the `UserTemplate` sub-schema (relaxed — does not require fields
+        that will be filled by merging with defaults at build time).
+
+        Returns `409 TEMPLATE_EXISTS` if a template with the given name already
+        exists. Use `PUT /api/v1/templates/{name}` to update an existing template.
+
+        **Library call:** `validate.ValidateUserTemplateJSON()` + file write
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TemplateCreateRequest"
+            example:
+              name: "my-custom-edge"
+              yaml: "image:\n  name: my-custom-edge\n  version: \"1.0\"\ntarget:\n  os: elxr\n  dist: elxr12\n  arch: x86_64\n  imageType: raw\nsystemConfig:\n  name: custom-edge\n  description: Custom edge image\n  packages:\n    - docker-ce\n"
+      responses:
+        "201":
+          description: Template created successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TemplateDetail"
+        "409":
+          $ref: "#/components/responses/TemplateExists"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+
+  /api/v1/templates/validate:
+    post:
+      tags: [Templates]
+      operationId: validateTemplate
+      summary: Validate template YAML
+      description: |
+        Validates template YAML against the `UserTemplate` JSON schema without
+        saving it. This is the relaxed schema that does not require fields
+        that will be filled by defaults at build time.
+
+        Use this endpoint for real-time validation in the browser editor
+        (debounced calls as the user types).
+
+        **Library call:** `validate.ValidateUserTemplateJSON()`
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TemplateValidateRequest"
+            example:
+              yaml: "image:\n  name: test\n  version: \"1.0\"\ntarget:\n  os: elxr\n  dist: elxr12\n  arch: x86_64\n  imageType: raw\n"
+      responses:
+        "200":
+          description: Validation completed (check the `valid` field for the result).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationResult"
+              examples:
+                valid:
+                  summary: Valid template
+                  value:
+                    valid: true
+                    errors: []
+                invalid:
+                  summary: Invalid template
+                  value:
+                    valid: false
+                    errors:
+                      - path: "/target"
+                        message: "missing properties: 'arch'"
+                      - path: "/target/imageType"
+                        message: "value must be one of: raw, img, iso"
+
+  /api/v1/templates/{name}:
+    parameters:
+      - $ref: "#/components/parameters/TemplateName"
+
+    get:
+      tags: [Templates]
+      operationId: getTemplate
+      summary: Get a specific template
+      description: |
+        Returns the full details of a template, including parsed metadata
+        **and** the raw YAML content for display in the editor.
+
+        **Library call:** `template.ParseTemplate()`
+      responses:
+        "200":
+          description: Template retrieved successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TemplateDetail"
+        "404":
+          $ref: "#/components/responses/TemplateNotFound"
+
+    put:
+      tags: [Templates]
+      operationId: updateTemplate
+      summary: Update an existing template
+      description: |
+        Updates an existing template by validating the provided YAML and
+        overwriting the file at `image-templates/<name>.yml`.
+
+        The YAML is validated using `ValidateUserTemplateJSON()` before writing.
+
+        **Library call:** `validate.ValidateUserTemplateJSON()` + file write
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TemplateUpdateRequest"
+            example:
+              yaml: "image:\n  name: my-custom-edge\n  version: \"1.1\"\ntarget:\n  os: elxr\n  dist: elxr12\n  arch: x86_64\n  imageType: raw\nsystemConfig:\n  name: custom-edge\n  description: Updated edge image\n  packages:\n    - docker-ce\n    - nginx\n"
+      responses:
+        "200":
+          description: Template updated successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TemplateDetail"
+        "404":
+          $ref: "#/components/responses/TemplateNotFound"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+
+    delete:
+      tags: [Templates]
+      operationId: deleteTemplate
+      summary: Delete a template
+      description: |
+        Removes a template file from `image-templates/`.
+
+        **Library call:** file remove (`os.Remove()`)
+      responses:
+        "204":
+          description: Template deleted successfully.
+        "404":
+          $ref: "#/components/responses/TemplateNotFound"
+
+  # ---------------------------------------------------------------------------
+  # Builds
+  # ---------------------------------------------------------------------------
+
+  /api/v1/builds:
+    post:
+      tags: [Builds]
+      operationId: startBuild
+      summary: Start an image build
+      description: |
+        Triggers an OS image build as a subprocess via
+        `exec.Command("image-composer-tool", "build", ...)`.
+
+        Builds require `sudo` privileges, run for minutes, and execute in
+        process isolation. The request accepts either a saved template name
+        or raw YAML content.
+
+        Returns `202 Accepted` with a `build_id` that can be used to track
+        status and stream logs.
+
+        **Library call:** `exec.Command` (subprocess)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BuildRequest"
+            examples:
+              by_name:
+                summary: Build from a saved template
+                value:
+                  template_name: "elxr-cloud-amd64"
+              by_yaml:
+                summary: Build from raw YAML
+                value:
+                  template_yaml: "image:\n  name: custom\n  version: \"1.0\"\ntarget:\n  os: elxr\n  dist: elxr12\n  arch: x86_64\n  imageType: raw\n"
+      responses:
+        "202":
+          description: Build started successfully.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [build_id]
+                properties:
+                  build_id:
+                    type: string
+                    description: Unique identifier for tracking this build.
+                    example: "build_a1b2c3d4"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "500":
+          $ref: "#/components/responses/BuildFailed"
+
+    get:
+      tags: [Builds]
+      operationId: listBuilds
+      summary: List all builds
+      description: |
+        Returns a list of all builds (active and completed) tracked by the
+        in-memory build tracker.
+
+        **Library call:** in-memory build tracker
+      responses:
+        "200":
+          description: Build list retrieved successfully.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [builds]
+                properties:
+                  builds:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/BuildInfo"
+
+  /api/v1/builds/{id}:
+    parameters:
+      - $ref: "#/components/parameters/BuildId"
+
+    get:
+      tags: [Builds]
+      operationId: getBuild
+      summary: Get build status
+      description: |
+        Returns the current status and details of a specific build.
+
+        **Library call:** in-memory build tracker
+      responses:
+        "200":
+          description: Build status retrieved successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BuildInfo"
+        "404":
+          $ref: "#/components/responses/BuildNotFound"
+
+  /api/v1/builds/{id}/logs:
+    parameters:
+      - $ref: "#/components/parameters/BuildId"
+
+    get:
+      tags: [Builds]
+      operationId: streamBuildLogs
+      summary: Stream build logs (SSE)
+      description: |
+        Opens a Server-Sent Events stream that pipes the build subprocess
+        stdout/stderr to the client in real time.
+
+        **Library call:** pipe subprocess stdout
+
+        ## SSE Event Types
+
+        | Event            | Description                          |
+        |------------------|--------------------------------------|
+        | `log`            | A single log line from the build     |
+        | `progress`       | Build phase and completion percentage|
+        | `build_complete` | Build finished successfully          |
+        | `build_failed`   | Build finished with an error         |
+
+        ### Event: `log`
+        ```json
+        {"timestamp": "...", "level": "info", "message": "Installing docker-ce", "phase": "installing_packages"}
+        ```
+
+        ### Event: `progress`
+        ```json
+        {"phase": "installing_packages", "percentage": 65}
+        ```
+
+        ### Event: `build_complete`
+        ```json
+        {"status": "success", "duration_seconds": 390}
+        ```
+
+        ### Event: `build_failed`
+        ```json
+        {"status": "failed", "error": "Package not found", "suggestion": "Check repository config"}
+        ```
+      responses:
+        "200":
+          description: SSE stream opened successfully.
+          content:
+            text/event-stream:
+              schema:
+                description: |
+                  A stream of Server-Sent Events. See the endpoint description
+                  for the full list of event types and their data schemas.
+                oneOf:
+                  - $ref: "#/components/schemas/SSEBuildLog"
+                  - $ref: "#/components/schemas/SSEBuildProgress"
+                  - $ref: "#/components/schemas/SSEBuildComplete"
+                  - $ref: "#/components/schemas/SSEBuildFailed"
+        "404":
+          $ref: "#/components/responses/BuildNotFound"
+
+  # ---------------------------------------------------------------------------
+  # Engine
+  # ---------------------------------------------------------------------------
+
+  /api/v1/engine/stats:
+    get:
+      tags: [Engine]
+      operationId: getEngineStats
+      summary: Get engine statistics
+      description: |
+        Returns statistics about the RAG engine, including indexing status,
+        template count, provider info, and embedding cache stats.
+
+        **Library call:** `engine.GetStats()`
+      responses:
+        "200":
+          description: Engine statistics retrieved successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EngineStats"
+              example:
+                initialized: true
+                indexed_at: "2026-06-19T01:00:00Z"
+                template_count: 54
+                provider: "ollama"
+                embedding_model: "nomic-embed-text"
+                cache_enabled: true
+                cache_stats:
+                  entry_count: 54
+                  total_size: 331776
+                  model_id: "nomic-embed-text"
+                  dimensions: 768
+                  created_at: "2026-06-18T10:00:00Z"
+
+  /api/v1/engine/cache:
+    delete:
+      tags: [Engine]
+      operationId: clearCache
+      summary: Clear the embedding cache
+      description: |
+        Clears all cached embeddings from disk. The next request that requires
+        embeddings will regenerate them from the AI provider.
+
+        **Library call:** `engine.ClearCache()`
+      responses:
+        "200":
+          description: Cache cleared successfully.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message]
+                properties:
+                  message:
+                    type: string
+                    example: "Cache cleared successfully"
+
+# =============================================================================
+# Components
+# =============================================================================
+
+components:
+
+  # ---------------------------------------------------------------------------
+  # Parameters
+  # ---------------------------------------------------------------------------
+
+  parameters:
+    SessionId:
+      name: id
+      in: path
+      required: true
+      description: Unique session identifier.
+      schema:
+        type: string
+      example: "s_7f3a1b2c"
+
+    TemplateName:
+      name: name
+      in: path
+      required: true
+      description: |
+        Template file name (with or without `.yml` extension).
+        Example: `elxr-cloud-amd64` or `elxr-cloud-amd64.yml`.
+      schema:
+        type: string
+      example: "elxr-cloud-amd64"
+
+    BuildId:
+      name: id
+      in: path
+      required: true
+      description: Unique build identifier.
+      schema:
+        type: string
+      example: "build_a1b2c3d4"
+
+  # ---------------------------------------------------------------------------
+  # Reusable Responses
+  # ---------------------------------------------------------------------------
+
+  responses:
+    SessionNotFound:
+      description: Session does not exist or has expired.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: "SESSION_NOT_FOUND"
+              message: "Session 's_7f3a1b2c' not found"
+              details: {}
+              request_id: "req_abc123"
+
+    SessionExpired:
+      description: Session has timed out.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: "SESSION_EXPIRED"
+              message: "Session 's_7f3a1b2c' has expired"
+              details: {}
+              request_id: "req_abc124"
+
+    QueryRequired:
+      description: No query string provided.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: "QUERY_REQUIRED"
+              message: "A query string is required"
+              details: {}
+              request_id: "req_abc125"
+
+    ValidationFailed:
+      description: Template YAML failed schema validation.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: "VALIDATION_FAILED"
+              message: "Template validation failed with 2 errors"
+              details:
+                errors:
+                  - path: "/target"
+                    message: "missing properties: 'arch'"
+                  - path: "/target/imageType"
+                    message: "value must be one of: raw, img, iso"
+              request_id: "req_abc126"
+
+    TemplateNotFound:
+      description: Named template does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: "TEMPLATE_NOT_FOUND"
+              message: "Template 'nonexistent' not found"
+              details: {}
+              request_id: "req_abc127"
+
+    TemplateExists:
+      description: A template with this name already exists.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: "TEMPLATE_EXISTS"
+              message: "Template 'my-custom-edge' already exists"
+              details: {}
+              request_id: "req_abc128"
+
+    GenerationFailed:
+      description: LLM provider returned an error during generation.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: "GENERATION_FAILED"
+              message: "LLM timeout after 30s"
+              details: {}
+              request_id: "req_abc129"
+
+    ProviderUnavailable:
+      description: AI provider (Ollama/OpenAI) is not reachable.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: "PROVIDER_UNAVAILABLE"
+              message: "Cannot connect to Ollama at http://localhost:11434"
+              details: {}
+              request_id: "req_abc130"
+
+    BuildNotFound:
+      description: Build ID does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: "BUILD_NOT_FOUND"
+              message: "Build 'build_xyz' not found"
+              details: {}
+              request_id: "req_abc131"
+
+    BuildFailed:
+      description: Image build process failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: "BUILD_FAILED"
+              message: "Build process exited with code 1"
+              details:
+                suggestion: "Check repository configuration"
+              request_id: "req_abc132"
+
+    RateLimited:
+      description: Too many requests.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: "RATE_LIMITED"
+              message: "Rate limit exceeded, try again in 30 seconds"
+              details: {}
+              request_id: "req_abc133"
+
+  # ---------------------------------------------------------------------------
+  # Schemas
+  # ---------------------------------------------------------------------------
+
+  schemas:
+
+    # ── Error ──────────────────────────────────────────────────────────────
+
+    ErrorResponse:
+      type: object
+      description: |
+        Standard error envelope used by all API error responses.
+        Follows the format defined in the ADR (Error handling section).
+      required: [error]
+      properties:
+        error:
+          $ref: "#/components/schemas/Error"
+
+    Error:
+      type: object
+      description: Error detail object.
+      required: [code, message, details, request_id]
+      properties:
+        code:
+          type: string
+          description: |
+            Stable error code string. Part of the API stability contract —
+            these codes will not change within a version.
+          enum:
+            - SESSION_NOT_FOUND
+            - SESSION_EXPIRED
+            - QUERY_REQUIRED
+            - VALIDATION_FAILED
+            - TEMPLATE_NOT_FOUND
+            - TEMPLATE_EXISTS
+            - GENERATION_FAILED
+            - PROVIDER_UNAVAILABLE
+            - BUILD_FAILED
+            - BUILD_NOT_FOUND
+            - RATE_LIMITED
+          example: "VALIDATION_FAILED"
+        message:
+          type: string
+          description: Human-readable error message.
+          example: "Template validation failed with 2 errors"
+        details:
+          type: object
+          description: |
+            Additional error-specific details. Structure varies by error code.
+            Always present but may be an empty object `{}`.
+          additionalProperties: true
+        request_id:
+          type: string
+          description: |
+            Unique request identifier for tracing and debugging.
+            Always present in every error response.
+          example: "req_abc123"
+
+    # ── Session ────────────────────────────────────────────────────────────
+
+    Session:
+      type: object
+      description: |
+        Conversation session state for multi-turn template generation.
+        Derived from the `Session` struct defined in the ADR.
+      required: [id, current_template, history, created_at, last_active_at]
+      properties:
+        id:
+          type: string
+          description: Unique session identifier.
+          example: "s_7f3a1b2c"
+        current_template:
+          nullable: true
+          description: |
+            The most recently generated or refined template in this session.
+            `null` if no template has been generated yet.
+          allOf:
+            - $ref: "#/components/schemas/GeneratedTemplate"
+        history:
+          type: array
+          description: Ordered list of conversation messages.
+          items:
+            $ref: "#/components/schemas/Message"
+        created_at:
+          type: string
+          format: date-time
+          description: When the session was created.
+        last_active_at:
+          type: string
+          format: date-time
+          description: When the session was last used.
+
+    GeneratedTemplate:
+      type: object
+      description: |
+        A template generated or refined during a conversation session.
+        Derived from the `GeneratedTemplate` struct defined in the ADR.
+      required: [yaml, source_templates, validation_status, last_modified]
+      properties:
+        yaml:
+          type: string
+          description: The generated template YAML content.
+        source_templates:
+          type: array
+          items:
+            type: string
+          description: |
+            File names of templates used as RAG context for generation.
+          example: ["elxr-cloud-amd64.yml", "elxr-edge-amd64.yml"]
+        validation_status:
+          type: string
+          description: Result of schema validation against the generated YAML.
+          enum: [valid, invalid, unchecked]
+          example: "valid"
+        last_modified:
+          type: string
+          format: date-time
+          description: When this template was last generated or refined.
+
+    Message:
+      type: object
+      description: |
+        A single message in the conversation history.
+        Derived from the `Message` struct defined in the ADR.
+      required: [role, content, timestamp]
+      properties:
+        role:
+          type: string
+          description: Who sent this message.
+          enum: [user, assistant]
+        content:
+          type: string
+          description: The message text content.
+        template_snapshot:
+          type: string
+          description: |
+            Snapshot of the template YAML at the time of this message.
+            Only present for assistant messages that generated or refined
+            a template.
+        search_results:
+          type: array
+          description: |
+            RAG search results used for this generation. Only present for
+            assistant messages where a RAG search was performed.
+          items:
+            $ref: "#/components/schemas/SearchResult"
+        changes:
+          type: array
+          description: |
+            List of changes made to the template during refinement. Only
+            present for assistant messages in refinement queries.
+          items:
+            $ref: "#/components/schemas/Change"
+        timestamp:
+          type: string
+          format: date-time
+          description: When this message was created.
+
+    Change:
+      type: object
+      description: |
+        A single change made to a template during refinement.
+        Derived from the `Change` struct defined in the ADR.
+      required: [type, path, from, to]
+      properties:
+        type:
+          type: string
+          description: The kind of change.
+          enum: [added, changed, removed]
+        path:
+          type: string
+          description: |
+            YAML path of the changed field.
+          example: "diskConfig.disks[0].size"
+        from:
+          type: string
+          description: Previous value (empty string for `added` changes).
+          example: "4GiB"
+        to:
+          type: string
+          description: New value (empty string for `removed` changes).
+          example: "8GiB"
+
+    # ── AI ─────────────────────────────────────────────────────────────────
+
+    QueryRequest:
+      type: object
+      description: Request body for a non-streaming AI query.
+      required: [query]
+      properties:
+        query:
+          type: string
+          description: Natural language query for template generation or refinement.
+          example: "create a minimal edge image for elxr with docker support"
+        session_id:
+          type: string
+          description: |
+            Optional session ID for multi-turn conversations. If provided and the
+            session has a current template, the query is treated as a refinement.
+          example: "s_7f3a1b2c"
+
+    QueryResponse:
+      type: object
+      description: |
+        Complete result of a non-streaming AI query. Contains the same
+        information that would be delivered across multiple SSE events in the
+        streaming endpoint.
+      required: [session_id, yaml, search_results, source_templates, generation_time_ms]
+      properties:
+        session_id:
+          type: string
+          description: The session ID associated with this query.
+          example: "s_7f3a1b2c"
+        yaml:
+          type: string
+          description: The generated or refined template YAML.
+        search_results:
+          type: array
+          description: |
+            RAG search results used as context for generation. Empty array
+            for refinement queries (where RAG search is skipped).
+          items:
+            $ref: "#/components/schemas/SearchResult"
+        source_templates:
+          type: array
+          items:
+            type: string
+          description: File names of templates used as RAG context.
+          example: ["elxr-cloud-amd64.yml"]
+        generation_time_ms:
+          type: integer
+          description: Time taken for LLM generation in milliseconds.
+          example: 1850
+        validation:
+          $ref: "#/components/schemas/ValidationResult"
+        changes:
+          type: array
+          description: |
+            List of changes made to the template. Only present for refinement
+            queries where the session had an existing template.
+          items:
+            $ref: "#/components/schemas/Change"
+
+    SearchResponse:
+      type: object
+      description: Response from the template search endpoint.
+      required: [results, query]
+      properties:
+        results:
+          type: array
+          description: |
+            Templates matching the query, ranked by combined score.
+            Maximum 5 results.
+          items:
+            $ref: "#/components/schemas/SearchResult"
+        query:
+          type: string
+          description: The original search query.
+          example: "cloud deployment with monitoring"
+
+    SearchResult:
+      type: object
+      description: |
+        A single template search result with relevance scores.
+        Derived from the `SearchResult` struct in `rag/engine.go`.
+      required: [template, score, semantic_score, keyword_score, package_score]
+      properties:
+        template:
+          $ref: "#/components/schemas/TemplateInfo"
+        score:
+          type: number
+          format: double
+          description: |
+            Combined relevance score (weighted sum of semantic, keyword,
+            and package scores).
+          example: 0.85
+        semantic_score:
+          type: number
+          format: double
+          description: Cosine similarity between query and template embeddings.
+          example: 0.78
+        keyword_score:
+          type: number
+          format: double
+          description: Keyword overlap score between query tokens and template text.
+          example: 0.65
+        package_score:
+          type: number
+          format: double
+          description: Package name matching score.
+          example: 0.90
+
+    # ── Templates ──────────────────────────────────────────────────────────
+
+    TemplateInfo:
+      type: object
+      description: |
+        Summary information about a template, used in list responses and
+        search results. Does not include the raw YAML content.
+        Derived from the `TemplateInfo` struct in `template/parser.go`.
+      required: [file_name, image_name, image_version, distribution, architecture, os, image_type, packages, metadata]
+      properties:
+        file_name:
+          type: string
+          description: Base file name of the template (e.g., `elxr-cloud-amd64.yml`).
+          example: "elxr-cloud-amd64.yml"
+        image_name:
+          type: string
+          description: Image name from the `image.name` field.
+          example: "elxr-cloud-amd64"
+        image_version:
+          type: string
+          description: Image version from the `image.version` field.
+          example: "1.0"
+        distribution:
+          type: string
+          description: Distribution from the `target.dist` field.
+          example: "elxr12"
+        architecture:
+          type: string
+          description: Architecture from the `target.arch` field.
+          example: "x86_64"
+        os:
+          type: string
+          description: Operating system from the `target.os` field.
+          example: "elxr"
+        image_type:
+          type: string
+          description: Image type from the `target.imageType` field.
+          example: "raw"
+        packages:
+          type: array
+          items:
+            type: string
+          description: List of packages from `systemConfig.packages`.
+          example: ["docker-ce", "nginx", "curl"]
+        metadata:
+          $ref: "#/components/schemas/TemplateMetadata"
+
+    TemplateDetail:
+      type: object
+      description: |
+        Full template information including the raw YAML content, returned
+        by single-template GET and create/update responses. Extends
+        `TemplateInfo` with the `yaml` field.
+      allOf:
+        - $ref: "#/components/schemas/TemplateInfo"
+        - type: object
+          required: [yaml]
+          properties:
+            yaml:
+              type: string
+              description: |
+                The full raw YAML content of the template, suitable for
+                display in the browser editor.
+
+    TemplateMetadata:
+      type: object
+      description: |
+        AI-searchable metadata attached to a template.
+        Derived from the `Metadata` struct in `template/parser.go`.
+      properties:
+        description:
+          type: string
+          description: Human-readable description of the template.
+          example: "Minimal cloud image for eLxr on AMD64"
+        use_cases:
+          type: array
+          items:
+            type: string
+          description: Use case descriptions for this template.
+          example: ["Cloud deployment", "Edge computing"]
+        keywords:
+          type: array
+          items:
+            type: string
+          description: Keywords for search matching.
+          example: ["cloud", "edge", "minimal"]
+        capabilities:
+          type: array
+          items:
+            type: string
+          description: Feature tags.
+          example: ["monitoring", "security"]
+        recommended_for:
+          type: array
+          items:
+            type: string
+          description: Natural language descriptions of ideal use cases.
+          example: ["AWS EC2 deployments", "Lightweight edge nodes"]
+
+    TemplateCreateRequest:
+      type: object
+      description: Request body for creating a new template.
+      required: [name, yaml]
+      properties:
+        name:
+          type: string
+          description: |
+            Name for the new template. Will be saved as
+            `image-templates/<name>.yml`. Must not already exist.
+          pattern: "^[a-zA-Z0-9][a-zA-Z0-9\\-_]*[a-zA-Z0-9]$"
+          example: "my-custom-edge"
+        yaml:
+          type: string
+          description: The template YAML content to validate and save.
+
+    TemplateUpdateRequest:
+      type: object
+      description: Request body for updating an existing template.
+      required: [yaml]
+      properties:
+        yaml:
+          type: string
+          description: The updated template YAML content to validate and save.
+
+    TemplateValidateRequest:
+      type: object
+      description: Request body for template validation.
+      required: [yaml]
+      properties:
+        yaml:
+          type: string
+          description: Template YAML content to validate against the `UserTemplate` schema.
+
+    ValidationResult:
+      type: object
+      description: Result of template YAML schema validation.
+      required: [valid, errors]
+      properties:
+        valid:
+          type: boolean
+          description: Whether the template passed validation.
+        errors:
+          type: array
+          description: |
+            List of validation errors. Empty array if the template is valid.
+          items:
+            $ref: "#/components/schemas/ValidationError"
+
+    ValidationError:
+      type: object
+      description: A single schema validation error.
+      required: [path, message]
+      properties:
+        path:
+          type: string
+          description: |
+            JSON pointer path to the field that caused the error.
+          example: "/target/imageType"
+        message:
+          type: string
+          description: Human-readable description of the validation error.
+          example: "value must be one of: raw, img, iso"
+
+    # ── Builds ─────────────────────────────────────────────────────────────
+
+    BuildRequest:
+      type: object
+      description: |
+        Request body for starting a build. Provide either `template_name`
+        (to build from a saved template) or `template_yaml` (to build from
+        raw YAML content). Exactly one must be provided.
+      properties:
+        template_name:
+          type: string
+          description: |
+            Name of a saved template in `image-templates/` to build.
+            Mutually exclusive with `template_yaml`.
+          example: "elxr-cloud-amd64"
+        template_yaml:
+          type: string
+          description: |
+            Raw YAML content to build. Mutually exclusive with
+            `template_name`.
+
+    BuildInfo:
+      type: object
+      description: |
+        Status and details of a build. Derived from the in-memory build
+        tracker and the SSE event schemas defined in the ADR.
+      required: [id, status, template_name, started_at]
+      properties:
+        id:
+          type: string
+          description: Unique build identifier.
+          example: "build_a1b2c3d4"
+        status:
+          type: string
+          description: Current build status.
+          enum: [pending, running, completed, failed]
+          example: "running"
+        template_name:
+          type: string
+          description: Name of the template being built.
+          example: "my-custom-edge"
+        started_at:
+          type: string
+          format: date-time
+          description: When the build was started.
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the build completed (null if still running).
+        duration_seconds:
+          type: integer
+          nullable: true
+          description: Total build duration in seconds (null if still running).
+          example: 390
+        error:
+          type: string
+          nullable: true
+          description: Error message if the build failed (null otherwise).
+
+    # ── Engine ─────────────────────────────────────────────────────────────
+
+    EngineStats:
+      type: object
+      description: |
+        RAG engine statistics.
+        Derived from the `Stats` struct in `rag/engine.go`.
+      required: [initialized, indexed_at, template_count, provider, embedding_model, cache_enabled]
+      properties:
+        initialized:
+          type: boolean
+          description: Whether the engine has been initialized and templates indexed.
+        indexed_at:
+          type: string
+          format: date-time
+          description: When the template index was last built.
+        template_count:
+          type: integer
+          description: Number of templates currently indexed.
+          example: 54
+        provider:
+          type: string
+          description: Active AI provider.
+          enum: [ollama, openai]
+          example: "ollama"
+        embedding_model:
+          type: string
+          description: Embedding model identifier.
+          example: "nomic-embed-text"
+        cache_enabled:
+          type: boolean
+          description: Whether the embedding cache is enabled.
+        cache_stats:
+          nullable: true
+          description: |
+            Cache statistics. `null` if cache is disabled.
+          allOf:
+            - $ref: "#/components/schemas/CacheStats"
+
+    CacheStats:
+      type: object
+      description: |
+        Embedding cache statistics.
+        Derived from the `CacheStats` struct in `cache/cache.go`.
+      required: [entry_count, total_size, model_id, dimensions, created_at]
+      properties:
+        entry_count:
+          type: integer
+          description: Number of cached embeddings.
+          example: 54
+        total_size:
+          type: integer
+          format: int64
+          description: Total cache size on disk in bytes.
+          example: 331776
+        model_id:
+          type: string
+          description: Embedding model used to generate cached vectors.
+          example: "nomic-embed-text"
+        dimensions:
+          type: integer
+          description: Vector dimensions (model-specific).
+          example: 768
+        created_at:
+          type: string
+          format: date-time
+          description: When the cache was first created.
+
+    # ── SSE Event Schemas ──────────────────────────────────────────────────
+    # These schemas document the JSON payloads carried in SSE `data` fields.
+    # They are not used as direct API response schemas but are included for
+    # completeness and to enable client code generation.
+
+    SSESearchResults:
+      type: object
+      description: |
+        **SSE event: `search_results`**
+        Sent at the start of a streaming query with RAG search results.
+      required: [results, query_type]
+      properties:
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/SearchResult"
+        query_type:
+          type: string
+          description: How the query was classified for scoring.
+          example: "semantic"
+
+    SSEGenerationStart:
+      type: object
+      description: |
+        **SSE event: `generation_start`**
+        Signals that LLM generation has begun.
+      required: [source_templates]
+      properties:
+        source_templates:
+          type: array
+          items:
+            type: string
+          description: Templates used as context for generation.
+          example: ["elxr-cloud-amd64.yml"]
+
+    SSEToken:
+      type: object
+      description: |
+        **SSE event: `token`**
+        A single token from the LLM output stream.
+      required: [content]
+      properties:
+        content:
+          type: string
+          description: The token text content.
+          example: "image:\n"
+
+    SSEGenerationComplete:
+      type: object
+      description: |
+        **SSE event: `generation_complete`**
+        Sent when LLM generation finishes, before final processing.
+      required: [yaml, generation_time_ms]
+      properties:
+        yaml:
+          type: string
+          description: The complete generated YAML template.
+        generation_time_ms:
+          type: integer
+          description: Time taken for generation in milliseconds.
+          example: 1850
+
+    SSEComplete:
+      type: object
+      description: |
+        **SSE event: `complete`**
+        Final event with the fully processed result.
+      required: [session_id, yaml]
+      properties:
+        session_id:
+          type: string
+          description: Session ID associated with this query.
+          example: "s_7f3a"
+        yaml:
+          type: string
+          description: The final template YAML.
+        validation:
+          $ref: "#/components/schemas/ValidationResult"
+        changes:
+          type: array
+          description: Changes made during refinement (empty for initial queries).
+          items:
+            $ref: "#/components/schemas/Change"
+
+    SSEError:
+      type: object
+      description: |
+        **SSE event: `error`**
+        Sent when an error occurs during streaming.
+      required: [code, message, retry]
+      properties:
+        code:
+          type: string
+          description: Error code matching the API error codes.
+          example: "GENERATION_FAILED"
+        message:
+          type: string
+          description: Human-readable error message.
+          example: "LLM timeout"
+        retry:
+          type: boolean
+          description: Whether the client should retry the request.
+
+    SSEBuildLog:
+      type: object
+      description: |
+        **SSE event: `log`**
+        A single log line from the build subprocess.
+      required: [timestamp, level, message, phase]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          description: When this log line was emitted.
+        level:
+          type: string
+          description: Log level.
+          enum: [debug, info, warn, error]
+          example: "info"
+        message:
+          type: string
+          description: The log message.
+          example: "Installing docker-ce"
+        phase:
+          type: string
+          description: Current build phase.
+          example: "installing_packages"
+
+    SSEBuildProgress:
+      type: object
+      description: |
+        **SSE event: `progress`**
+        Build progress update with phase and completion percentage.
+      required: [phase, percentage]
+      properties:
+        phase:
+          type: string
+          description: Current build phase.
+          example: "installing_packages"
+        percentage:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: Completion percentage for the current phase.
+          example: 65
+
+    SSEBuildComplete:
+      type: object
+      description: |
+        **SSE event: `build_complete`**
+        Sent when the build finishes successfully.
+      required: [status, duration_seconds]
+      properties:
+        status:
+          type: string
+          enum: [success]
+          example: "success"
+        duration_seconds:
+          type: integer
+          description: Total build duration in seconds.
+          example: 390
+
+    SSEBuildFailed:
+      type: object
+      description: |
+        **SSE event: `build_failed`**
+        Sent when the build finishes with an error.
+      required: [status, error]
+      properties:
+        status:
+          type: string
+          enum: [failed]
+          example: "failed"
+        error:
+          type: string
+          description: Error message describing what went wrong.
+          example: "Package not found"
+        suggestion:
+          type: string
+          description: Suggested action to fix the error.
+          example: "Check repository config"
