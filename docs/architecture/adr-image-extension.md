@@ -681,7 +681,7 @@ Recommended parameter:
 - `--compare-report <sbom|full>`
   - `sbom`: compare only SBOM/package inventory between baseline and output.
   - `full`: run semantic image comparison including SBOM/package delta,
-  filesystem metadata, and boot artifacts where supported.
+    filesystem metadata, and boot artifacts where supported.
 
 Suggested defaults:
 
