@@ -203,13 +203,13 @@ gunzip -t <artifact>.gz
    ```
    **This is non-fatal.** EFI variables are unavailable inside a chroot. The image-composer-tool treats this as INFO-level and the build continues to completion with exit code 0. The final image boots fine because the bootloader is installed in a separate post-build step that runs outside the chroot.
 
-11. **GPG key verification failure** — some third-party repos distribute keys in a format the tool cannot verify, causing
-12. **Artifacts not in current directory** — the tool outputs to
+11. **GPG key verification failure** — some third-party repos distribute keys in a format the tool cannot verify, causing:
+   ```
    Error: signature verification failed (tried both armored and binary): openpgp: invalid data: tag byte does not have MSB set
    ```
    **Fix:** replace the `pkey` URL with `pkey: "[trusted=yes]"` to skip GPG verification for that repo. Package metadata is still checksum-verified. See `references/gpg-key-workaround.md` for details and example.
 
-10. **Artifacts not in current directory** — the tool outputs to `workspace/<os-dist>-<arch>/imagebuild/<name>/`, not cwd. After a successful build, check there instead of `ls *.raw*`:
+12. **Artifacts not in current directory** — the tool outputs to `workspace/<os-dist>-<arch>/imagebuild/<name>/`, not cwd. After a successful build, check there instead of `ls *.raw*`:
     ```bash
     find workspace/ -name "*.raw*" -o -name "*.vhdx*" -o -name "*.iso*" 2>/dev/null
     ```
