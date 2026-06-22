@@ -1524,24 +1524,31 @@ components:
     # ── Builds ─────────────────────────────────────────────────────────────
 
     BuildRequest:
-      type: object
       description: |
-        Request body for starting a build. Provide either `template_name`
-        (to build from a saved template) or `template_yaml` (to build from
-        raw YAML content). Exactly one must be provided.
+        Start a build from a saved template **or** from inline YAML.
+        Exactly one of `template_name` or `template_yaml` must be present.
+      oneOf:
+        - $ref: "#/components/schemas/BuildRequestByName"
+        - $ref: "#/components/schemas/BuildRequestByYaml"
+
+    BuildRequestByName:
+      type: object
+      additionalProperties: false
+      required: [template_name]
       properties:
         template_name:
           type: string
-          description: |
-            Name of a saved template in `image-templates/` to build.
-            Mutually exclusive with `template_yaml`.
+          description: Name of a saved template in `image-templates/` (without path).
           example: "elxr-cloud-amd64"
+
+    BuildRequestByYaml:
+      type: object
+      additionalProperties: false
+      required: [template_yaml]
+      properties:
         template_yaml:
           type: string
-          description: |
-            Raw YAML content to build. Mutually exclusive with
-            `template_name`.
-
+          description: Raw template YAML to build (validated before the build starts).
     BuildInfo:
       type: object
       description: |
