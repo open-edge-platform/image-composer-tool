@@ -1567,7 +1567,7 @@ SessionExpired:
     BuildInfo:
       type: object
       description: |
-        Status and details of a build. Derived from the in-memory build.
+        Status and details of a build. Derived from the in-memory build tracker and sse event schema.
       required: [id, status, template_name, started_at]
       properties:
         id:
