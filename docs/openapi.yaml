@@ -27,6 +27,12 @@ info:
     unidirectional (server → client), SSE works through corporate proxies,
     and the browser `EventSource` API provides built-in auto-reconnection.
 
+    ## Health
+
+    `GET /api/v1/health` reports whether the HTTP service is up and whether the
+    RAG engine is ready to serve AI and search requests. Use
+    `GET /api/v1/engine/stats` for detailed engine and cache metrics.
+
     ## Error Handling
 
     All error responses use a consistent JSON envelope. See the `ErrorResponse`
@@ -94,10 +100,12 @@ tags:
       benefit from process isolation. Build logs are streamed in real time via SSE.
   - name: Engine
     description: |
-      RAG engine statistics and embedding cache management.
+      Service readiness and RAG engine statistics.
 
       The engine maintains an in-memory vector index of all templates and an
-      on-disk embedding cache for faster re-indexing.
+      on-disk embedding cache for faster re-indexing. Use `GET /api/v1/health`
+      for a lightweight readiness probe; use `GET /api/v1/engine/stats` for
+      detailed metrics.
 
 # =============================================================================
 # Paths
@@ -221,7 +229,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/QueryResponse"
         "400":
-          $ref: "#/components/responses/QueryRequired"
+          $ref: "#/components/responses/InvalidQuery"
         "404":
           $ref: "#/components/responses/SessionNotFound"
         "502":
@@ -245,9 +253,10 @@ paths:
         - name: query
           in: query
           required: true
-          description: Natural language search query.
+          description: Natural language search query (max 2000 characters).
           schema:
             type: string
+            maxLength: 2000
           example: "cloud deployment with monitoring"
       responses:
         "200":
@@ -257,9 +266,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/SearchResponse"
         "400":
-          $ref: "#/components/responses/QueryRequired"
+          $ref: "#/components/responses/InvalidQuery"
         "502":
-          $ref: "#/components/responses/GenerationFailed"
+          $ref: "#/components/responses/SearchFailed"
         "503":
           $ref: "#/components/responses/ProviderUnavailable"
 
@@ -295,7 +304,12 @@ paths:
 
         For a **refinement query**, `search_results` is omitted (no RAG search).
 
-        An `error` event may be sent at any point if something goes wrong.
+        An `error` event may be sent at any point if something goes wrong. After
+        an `error` event, no further application events are sent for that stream.
+
+        Payload schemas for each event type are defined under
+        `components.schemas` (`SSESearchResults`, `SSEGenerationStart`, `SSEToken`,
+        `SSEGenerationComplete`, `SSEComplete`, `SSEError`).
 
         ### Event: `search_results`
         ```json
@@ -330,9 +344,10 @@ paths:
         - name: query
           in: query
           required: true
-          description: Natural language query for template generation or refinement.
+          description: Natural language query for template generation or refinement (max 2000 characters).
           schema:
             type: string
+            maxLength: 2000
           example: "create a minimal edge image for elxr with docker support"
         - name: session_id
           in: query
@@ -362,7 +377,7 @@ paths:
                   - $ref: "#/components/schemas/SSEComplete"
                   - $ref: "#/components/schemas/SSEError"
         "400":
-          $ref: "#/components/responses/QueryRequired"
+          $ref: "#/components/responses/InvalidQuery"
         "404":
           $ref: "#/components/responses/SessionNotFound"
 
@@ -720,6 +735,45 @@ paths:
   # Engine
   # ---------------------------------------------------------------------------
 
+  /api/v1/health:
+    get:
+      tags: [Engine]
+      operationId: getHealth
+      summary: Service and engine readiness probe
+      description: |
+        Lightweight readiness check for load balancers, orchestration health
+        probes, and web UI status indicators.
+
+        Returns high-level RAG engine readiness without detailed statistics.
+        Use `GET /api/v1/engine/stats` for template counts, provider
+        configuration, and embedding cache metrics.
+
+        The HTTP server may respond with `status: ok` at the process level while
+        the engine is still `initializing` until template indexing completes.
+      responses:
+        "200":
+          description: |
+            Health status. HTTP 200 indicates the web server is accepting
+            requests; inspect `status` for engine readiness.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              examples:
+                ok:
+                  summary: Engine ready
+                  value:
+                    status: ok
+                initializing:
+                  summary: Engine indexing or not yet started
+                  value:
+                    status: initializing
+                error:
+                  summary: Engine cannot serve AI requests
+                  value:
+                    status: error
+                    message: "AI provider unavailable"
+
   /api/v1/engine/stats:
     get:
       tags: [Engine]
@@ -857,6 +911,45 @@ components:
               message: "A query string is required"
               details: {}
               request_id: "req_abc125"
+
+    InvalidQuery:
+      description: |
+        Query missing, empty, or exceeds the maximum length (2000 characters).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            required:
+              summary: Missing query
+              value:
+                error:
+                  code: "QUERY_REQUIRED"
+                  message: "A query string is required"
+                  details: {}
+                  request_id: "req_abc125"
+            tooLong:
+              summary: Query too long
+              value:
+                error:
+                  code: "QUERY_TOO_LONG"
+                  message: "Query exceeds 2000 characters"
+                  details:
+                    max_length: 2000
+                  request_id: "req_abc125a"
+
+    SearchFailed:
+      description: Template search failed (e.g., embedding provider error).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: "SEARCH_FAILED"
+              message: "Template search failed"
+              details: {}
+              request_id: "req_abc125b"
 
     ValidationFailed:
       description: Template YAML failed schema validation.
@@ -1000,6 +1093,9 @@ components:
             - SESSION_NOT_FOUND
             - SESSION_EXPIRED
             - QUERY_REQUIRED
+            - QUERY_TOO_LONG
+            - SEARCH_FAILED
+            - ENGINE_UNAVAILABLE
             - VALIDATION_FAILED
             - TEMPLATE_NOT_FOUND
             - TEMPLATE_EXISTS
@@ -1160,6 +1256,7 @@ components:
       properties:
         query:
           type: string
+          maxLength: 2000
           description: Natural language query for template generation or refinement.
           example: "create a minimal edge image for elxr with docker support"
         session_id:
@@ -1218,9 +1315,10 @@ components:
       properties:
         results:
           type: array
+          maxItems: 5
           description: |
             Templates matching the query, ranked by combined score.
-            Maximum 5 results.
+            At most 5 results (matches RAG retrieval top-K).
           items:
             $ref: "#/components/schemas/SearchResult"
         query:
@@ -1485,10 +1583,29 @@ components:
 
     # ── Engine ─────────────────────────────────────────────────────────────
 
+    HealthResponse:
+      type: object
+      description: |
+        Readiness of the HTTP service and RAG engine for AI and search operations.
+      required: [status]
+      properties:
+        status:
+          type: string
+          description: |
+            - `initializing` — engine not ready (indexing not complete).
+            - `ok` — engine ready to serve AI and search requests.
+            - `error` — engine cannot operate; see `message`.
+          enum: [initializing, ok, error]
+        message:
+          type: string
+          description: |
+            Operator- or UI-facing detail when `status` is `error`. Omitted when
+            not applicable.
+
     EngineStats:
       type: object
       description: |
-        RAG engine statistics.
+        RAG engine statistics. JSON property names use snake_case.
         Derived from the `Stats` struct in `rag/engine.go`.
       required: [initialized, indexed_at, template_count, provider, embedding_model, cache_enabled]
       properties:
@@ -1525,7 +1642,7 @@ components:
     CacheStats:
       type: object
       description: |
-        Embedding cache statistics.
+        Embedding cache statistics. JSON property names use snake_case.
         Derived from the `CacheStats` struct in `cache/cache.go`.
       required: [entry_count, total_size, model_id, dimensions, created_at]
       properties:
@@ -1565,6 +1682,8 @@ components:
       properties:
         results:
           type: array
+          maxItems: 5
+          description: Top matching templates (at most 5).
           items:
             $ref: "#/components/schemas/SearchResult"
         query_type:
@@ -1644,7 +1763,16 @@ components:
       properties:
         code:
           type: string
-          description: Error code matching the API error codes.
+          description: Error code matching the API error codes (see `Error.code` enum).
+          enum:
+            - SESSION_NOT_FOUND
+            - SESSION_EXPIRED
+            - QUERY_REQUIRED
+            - QUERY_TOO_LONG
+            - SEARCH_FAILED
+            - ENGINE_UNAVAILABLE
+            - GENERATION_FAILED
+            - PROVIDER_UNAVAILABLE
           example: "GENERATION_FAILED"
         message:
           type: string
