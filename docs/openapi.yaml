@@ -47,7 +47,7 @@ info:
     - New fields may be added to responses without a version bump (additive only).
     - Existing fields are never removed or renamed within a version.
     - SSE event type names are stable within a version. New event types may be added.
-    - The OpenAPI specification is served at `GET /api/v1/openapi.json` at runtime.
+    
   version: 1.0.0
   contact:
     name: ICT Team
@@ -622,6 +622,20 @@ paths:
                     type: string
                     description: Unique identifier for tracking this build.
                     example: "build_a1b2c3d4"
+        "400":
+          description: |
+            Invalid build request (both `template_name` and `template_yaml` set,
+            or neither set).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: "QUERY_REQUIRED"
+                  message: "Provide exactly one of template_name or template_yaml"
+                  details: {}
+                  request_id: "req_abc134"            
         "422":
           $ref: "#/components/responses/ValidationFailed"
         "500":
@@ -874,30 +888,35 @@ components:
 
   responses:
     SessionNotFound:
-      description: Session does not exist or has expired.
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorResponse"
-          example:
-            error:
-              code: "SESSION_NOT_FOUND"
-              message: "Session 's_7f3a1b2c' not found"
-              details: {}
-              request_id: "req_abc123"
+  description: |
+    No active session exists for this ID (unknown ID or session was deleted).
+    For timed-out sessions on **GET** `/api/v1/sessions/{id}`, the server
+    returns **410** with `SESSION_EXPIRED` instead.
+  content:
+    application/json:
+      schema:
+        $ref: "#/components/schemas/ErrorResponse"
+      example:
+        error:
+          code: "SESSION_NOT_FOUND"
+          message: "Session 's_7f3a1b2c' not found"
+          details: {}
+          request_id: "req_abc123"
 
-    SessionExpired:
-      description: Session has timed out.
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorResponse"
-          example:
-            error:
-              code: "SESSION_EXPIRED"
-              message: "Session 's_7f3a1b2c' has expired"
-              details: {}
-              request_id: "req_abc124"
+SessionExpired:
+  description: |
+    The session ID was recognized but the session exceeded the inactivity
+    timeout and was removed. Create a new session to continue.
+  content:
+    application/json:
+      schema:
+        $ref: "#/components/schemas/ErrorResponse"
+      example:
+        error:
+          code: "SESSION_EXPIRED"
+          message: "Session 's_7f3a1b2c' has expired"
+          details: {}
+          request_id: "req_abc124"
 
     QueryRequired:
       description: No query string provided.
@@ -1073,7 +1092,6 @@ components:
       type: object
       description: |
         Standard error envelope used by all API error responses.
-        Follows the format defined in the ADR (Error handling section).
       required: [error]
       properties:
         error:
@@ -1128,7 +1146,6 @@ components:
       type: object
       description: |
         Conversation session state for multi-turn template generation.
-        Derived from the `Session` struct defined in the ADR.
       required: [id, current_template, history, created_at, last_active_at]
       properties:
         id:
@@ -1160,7 +1177,6 @@ components:
       type: object
       description: |
         A template generated or refined during a conversation session.
-        Derived from the `GeneratedTemplate` struct defined in the ADR.
       required: [yaml, source_templates, validation_status, last_modified]
       properties:
         yaml:
@@ -1187,7 +1203,6 @@ components:
       type: object
       description: |
         A single message in the conversation history.
-        Derived from the `Message` struct defined in the ADR.
       required: [role, content, timestamp]
       properties:
         role:
@@ -1226,7 +1241,7 @@ components:
       type: object
       description: |
         A single change made to a template during refinement.
-        Derived from the `Change` struct defined in the ADR.
+      
       required: [type, path, from, to]
       properties:
         type:
@@ -1552,8 +1567,7 @@ components:
     BuildInfo:
       type: object
       description: |
-        Status and details of a build. Derived from the in-memory build
-        tracker and the SSE event schemas defined in the ADR.
+        Status and details of a build. Derived from the in-memory build.
       required: [id, status, template_name, started_at]
       properties:
         id:
