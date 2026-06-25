@@ -127,6 +127,12 @@ func (imageOs *ImageOs) InstallInitrd() (installRoot, versionInfo string, err er
 		return
 	}
 
+	log.Infof("Image SBOM generation...")
+	if _, sbomErr := imageOs.generateSBOM(imageOs.installRoot, imageOs.template); sbomErr != nil {
+		log.Warnf("SBOM generation failed: %v", sbomErr)
+		// Don't fail the build if SBOM generation fails
+	}
+
 	return
 }
 
@@ -2033,7 +2039,6 @@ func (imageOs *ImageOs) generateSBOM(installRoot string, template *config.ImageT
 		cmd = "dpkg -l | awk '/^ii/ {print $2}'"
 		sBomFNm = debutils.GenerateSPDXFileName(template.GetImageName())
 	}
-	manifest.DefaultSPDXFile = sBomFNm
 
 	result, err := shell.ExecCmd(cmd, true, installRoot, nil)
 	if err != nil {
@@ -2076,14 +2081,40 @@ func (imageOs *ImageOs) generateSBOM(installRoot string, template *config.ImageT
 		}
 	}
 
+	// In live ISO install flows template-dump.yaml does not include FullPkgListBom,
+	// so build a minimal SBOM package list directly from the installed package DB.
+	if len(finalPkgs) == 0 {
+		for _, line := range installRootPkgs {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+
+			finalPkgs = append(finalPkgs, ospackage.PackageInfo{
+				Name:    line,
+				PkgName: line,
+				Type:    pkgType,
+				License: "NOASSERTION",
+				Origin:  "UNKNOWN",
+			})
+		}
+	}
+
 	log.Infof("SBOM raw data (installed=%d, downloaded=%d, final=%d)", len(installRootPkgs), len(downloadedPkgs), len(finalPkgs))
 
-	// Generate SPDX manifest, generated in temp directory
-	spdxFile := filepath.Join(config.TempDir(), manifest.DefaultSPDXFile)
+	// Generate SPDX manifest in temp directory and also publish a canonical filename.
+	spdxFile := filepath.Join(config.TempDir(), sBomFNm)
 	if err := manifest.WriteSPDXToFile(finalPkgs, spdxFile); err != nil {
 		log.Warnf("SPDX SBOM creation error: %v", err)
 	}
 	log.Infof("SPDX file created at %s", spdxFile)
+
+	canonicalSBOM := filepath.Join(config.TempDir(), manifest.DefaultSPDXFile)
+	if spdxFile != canonicalSBOM {
+		if err := file.CopyFile(spdxFile, canonicalSBOM, "--preserve=mode", false); err != nil {
+			log.Warnf("failed to prepare canonical SPDX SBOM %s: %v", canonicalSBOM, err)
+		}
+	}
 
 	// Copy SBOM into image filesystem
 	if err := manifest.CopySBOMToChroot(installRoot); err != nil {
