@@ -111,6 +111,20 @@ func MergeConfigurations(userTemplate, defaultTemplate *ImageTemplate) (*ImageTe
 
 	mergedTemplate.Target = userTemplate.Target
 
+	// Baseline configuration - user override if provided. The struct copy above
+	// only carries the default's baseline; without this the user's overlay-mode
+	// baseline would be silently dropped and the build would fall back to create.
+	if userTemplate.Baseline != nil {
+		mergedTemplate.Baseline = userTemplate.Baseline
+		log.Debugf("User baseline config overrides default (mode=%s)", userTemplate.Baseline.Mode)
+	}
+
+	// OverlayPolicy is a top-level peer to baseline; carry the user override
+	// so it is not dropped by the struct copy above.
+	if userTemplate.OverlayPolicy != nil {
+		mergedTemplate.OverlayPolicy = userTemplate.OverlayPolicy
+	}
+
 	// Disk configuration - user override if provided
 	if !isEmptyDiskConfig(userTemplate.Disk) {
 		mergedTemplate.Disk = userTemplate.Disk

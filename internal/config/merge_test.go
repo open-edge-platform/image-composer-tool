@@ -98,6 +98,60 @@ func TestMergeConfigurationsImageInfo(t *testing.T) {
 	}
 }
 
+func TestMergeConfigurationsBaseline(t *testing.T) {
+	// A user-provided overlay baseline must survive the merge even when the
+	// default template has none; otherwise the build silently falls back to
+	// create mode and ignores the overlay request.
+	t.Run("user overlay baseline overrides nil default", func(t *testing.T) {
+		defaultTemplate := &ImageTemplate{
+			Image:  ImageInfo{Name: "default", Version: "1.0.0"},
+			Target: TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64"},
+		}
+		userTemplate := &ImageTemplate{
+			Image:  ImageInfo{Name: "user", Version: "2.0.0"},
+			Target: TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64"},
+			Baseline: &Baseline{
+				Mode:   BaselineModeOverlay,
+				Source: &BaselineSource{Path: "/tmp/u.raw"},
+			},
+		}
+
+		result, err := MergeConfigurations(userTemplate, defaultTemplate)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Baseline == nil {
+			t.Fatal("expected merged baseline to be preserved, got nil")
+		}
+		if !result.IsOverlayMode() {
+			t.Errorf("expected merged template to be overlay mode, got mode=%q", result.Baseline.Mode)
+		}
+		if result.Baseline.Source == nil || result.Baseline.Source.Path != "/tmp/u.raw" {
+			t.Errorf("expected baseline source path '/tmp/u.raw', got %+v", result.Baseline.Source)
+		}
+	})
+
+	t.Run("default baseline retained when user provides none", func(t *testing.T) {
+		defaultTemplate := &ImageTemplate{
+			Image:    ImageInfo{Name: "default", Version: "1.0.0"},
+			Target:   TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64"},
+			Baseline: &Baseline{Mode: BaselineModeCreate},
+		}
+		userTemplate := &ImageTemplate{
+			Image:  ImageInfo{Name: "user", Version: "2.0.0"},
+			Target: TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64"},
+		}
+
+		result, err := MergeConfigurations(userTemplate, defaultTemplate)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Baseline == nil || result.Baseline.Mode != BaselineModeCreate {
+			t.Errorf("expected default baseline (create) to be retained, got %+v", result.Baseline)
+		}
+	})
+}
+
 func TestMergeConfigurationsPathList(t *testing.T) {
 	defaultTemplate := &ImageTemplate{
 		PathList: []string{"/default/path1", "/default/path2"},
