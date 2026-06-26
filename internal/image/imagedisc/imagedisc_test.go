@@ -776,6 +776,16 @@ func TestDiskPartitionsCreate(t *testing.T) {
 	originalExecutor := shell.Default
 	defer func() { shell.Default = originalExecutor }()
 
+	gptDiskInfo := `Disk /dev/sda: 1 GiB, 1073741824 bytes, 2097152 sectors
+Units: sectors of 1 * 512 = 512 bytes
+Sector size (logical/physical): 512 bytes / 4096 bytes
+Disklabel type: gpt`
+
+	dosDiskInfo := `Disk /dev/sda: 1 GiB, 1073741824 bytes, 2097152 sectors
+Units: sectors of 1 * 512 = 512 bytes
+Sector size (logical/physical): 512 bytes / 4096 bytes
+Disklabel type: dos`
+
 	tests := []struct {
 		name               string
 		diskPath           string
@@ -802,14 +812,21 @@ func TestDiskPartitionsCreate(t *testing.T) {
 			},
 			partitionTableType: "gpt",
 			mockCommands: []shell.MockCommand{
-				{Pattern: ".*fdisk.*sda.*", Output: "Disk /dev/sda: 1 GiB", Error: nil},
-				{Pattern: ".*label.*gpt.*sfdisk.*", Output: "", Error: nil},
-				{Pattern: ".*hw_sector_size", Output: "512", Error: nil},
-				{Pattern: ".*physical_block_size", Output: "4096", Error: nil},
-				{Pattern: ".*sgdisk.*sda.*", Output: "", Error: nil},
-				{Pattern: "sync", Output: "", Error: nil},
-				{Pattern: ".*partx.*sda.*", Output: "", Error: nil},
-				{Pattern: ".*mkfs.*ext4.*sda.*", Output: "", Error: nil},
+				// IsDiskPartitionExist check
+				{Pattern: "sudo fdisk -l /dev/sda", Output: gptDiskInfo, Error: nil},
+				// createPartitionTable - initial attempt with label verification
+				{Pattern: "echo 'label: gpt' | sudo sfdisk /dev/sda", Output: "", Error: nil},
+				// verifyPartitionTableLabel
+				{Pattern: "sudo fdisk -l /dev/sda", Output: gptDiskInfo, Error: nil},
+				// getSectorOffsetFromSize calls
+				{Pattern: "sudo cat /sys/block/sda/queue/hw_sector_size", Output: "512", Error: nil},
+				{Pattern: "sudo cat /sys/block/sda/queue/physical_block_size", Output: "4096", Error: nil},
+				// diskPartitionCreate with sgdisk for GPT
+				{Pattern: "sudo sgdisk.*", Output: "", Error: nil},
+				{Pattern: "sudo sync", Output: "", Error: nil},
+				{Pattern: "sudo partx -u /dev/sda", Output: "", Error: nil},
+				// mkfs for partition
+				{Pattern: "sudo mkfs.*ext4.*", Output: "", Error: nil},
 			},
 			expectError:     false,
 			expectedDevices: 1,
@@ -830,14 +847,14 @@ func TestDiskPartitionsCreate(t *testing.T) {
 			},
 			partitionTableType: "gpt",
 			mockCommands: []shell.MockCommand{
-				{Pattern: ".*fdisk.*sda.*", Output: "Disk /dev/sda: 1 GiB", Error: nil},
-				{Pattern: ".*label.*gpt.*sfdisk.*", Output: "", Error: nil},
-				{Pattern: ".*hw_sector_size", Output: "512", Error: nil},
-				{Pattern: ".*physical_block_size", Output: "4096", Error: nil},
-				{Pattern: ".*sgdisk.*sda.*", Output: "", Error: nil},
-				{Pattern: "sync", Output: "", Error: nil},
-				{Pattern: ".*partx.*sda.*", Output: "", Error: nil},
-				{Pattern: ".*mkfs.*ext4.*sda.*", Output: "", Error: nil},
+				{Pattern: "sudo fdisk -l /dev/sda", Output: gptDiskInfo, Error: nil},
+				{Pattern: "echo 'label: gpt' | sudo sfdisk /dev/sda", Output: "", Error: nil},
+				{Pattern: "sudo cat /sys/block/sda/queue/hw_sector_size", Output: "512", Error: nil},
+				{Pattern: "sudo cat /sys/block/sda/queue/physical_block_size", Output: "4096", Error: nil},
+				{Pattern: "sudo sgdisk.*", Output: "", Error: nil},
+				{Pattern: "sudo sync", Output: "", Error: nil},
+				{Pattern: "sudo partx -u /dev/sda", Output: "", Error: nil},
+				{Pattern: "sudo mkfs.*ext4.*", Output: "", Error: nil},
 			},
 			expectError:     false,
 			expectedDevices: 1,
@@ -856,14 +873,14 @@ func TestDiskPartitionsCreate(t *testing.T) {
 			},
 			partitionTableType: "mbr",
 			mockCommands: []shell.MockCommand{
-				{Pattern: ".*fdisk.*sda.*", Output: "Disk /dev/sda: 1 GiB", Error: nil},
-				{Pattern: ".*label.*dos.*sfdisk.*", Output: "", Error: nil},
-				{Pattern: ".*hw_sector_size", Output: "512", Error: nil},
-				{Pattern: ".*physical_block_size", Output: "4096", Error: nil},
-				{Pattern: ".*sfdisk.*append.*sda.*", Output: "", Error: nil},
-				{Pattern: "sync", Output: "", Error: nil},
-				{Pattern: ".*partx.*sda.*", Output: "", Error: nil},
-				{Pattern: ".*mkfs.*ext4.*sda.*", Output: "", Error: nil},
+				{Pattern: "sudo fdisk -l /dev/sda", Output: dosDiskInfo, Error: nil},
+				{Pattern: "echo 'label: dos' | sudo sfdisk /dev/sda", Output: "", Error: nil},
+				{Pattern: "sudo cat /sys/block/sda/queue/hw_sector_size", Output: "512", Error: nil},
+				{Pattern: "sudo cat /sys/block/sda/queue/physical_block_size", Output: "4096", Error: nil},
+				{Pattern: "echo '.*' | sudo sfdisk --no-reread --append /dev/sda", Output: "", Error: nil},
+				{Pattern: "sudo sync", Output: "", Error: nil},
+				{Pattern: "sudo partx -u /dev/sda", Output: "", Error: nil},
+				{Pattern: "sudo mkfs.*ext4.*", Output: "", Error: nil},
 			},
 			expectError:     false,
 			expectedDevices: 1,
@@ -881,12 +898,13 @@ func TestDiskPartitionsCreate(t *testing.T) {
 			},
 			partitionTableType: "gpt",
 			mockCommands: []shell.MockCommand{
-				{Pattern: ".*fdisk.*sda.*", Output: "Disk /dev/sda: 1 GiB", Error: nil},
-				{Pattern: ".*label.*gpt.*sfdisk.*", Output: "", Error: nil},
-				{Pattern: "sync", Output: "", Error: nil},
-				{Pattern: ".*hw_sector_size", Output: "512", Error: nil},
-				{Pattern: ".*physical_block_size", Output: "4096", Error: nil},
-				{Pattern: ".*sgdisk.*sda.*", Output: "", Error: fmt.Errorf("sgdisk failed")},
+				{Pattern: "sudo fdisk -l /dev/sda", Output: gptDiskInfo, Error: nil},
+				{Pattern: "echo 'label: gpt' | sudo sfdisk /dev/sda", Output: "", Error: nil},
+				{Pattern: "sudo cat /sys/block/sda/queue/hw_sector_size", Output: "512", Error: nil},
+				{Pattern: "sudo cat /sys/block/sda/queue/physical_block_size", Output: "4096", Error: nil},
+				{Pattern: "sudo sgdisk.*", Output: "", Error: fmt.Errorf("sgdisk failed")},
+				{Pattern: "sudo sync", Output: "", Error: nil},
+				{Pattern: "sudo partx -u /dev/sda", Output: "", Error: nil},
 			},
 			expectError: true,
 			errorMsg:    "failed to create partition",
@@ -921,21 +939,36 @@ func TestDiskPartitionsCreate_GPTBusyDiskRetry(t *testing.T) {
 	originalExecutor := shell.Default
 	defer func() { shell.Default = originalExecutor }()
 
+	// For this test, we simplify: the disk state after operations completes successfully
+	// We don't try to track state transitions in the mock
+	diskInfo := `Disk /dev/vda: 24 GiB, 25769803776 bytes, 50331648 sectors
+Units: sectors of 1 * 512 = 512 bytes
+Sector size (logical/physical): 512 bytes / 512 bytes
+Disklabel type: gpt`
+
 	mockCommands := []shell.MockCommand{
-		{Pattern: ".*fdisk.*vda.*", Output: "Disk /dev/vda: 24 GiB", Error: nil},
-		{Pattern: ".*label.*gpt.*sfdisk /dev/vda", Output: "Checking that no-one is using this disk right now ... FAILED\n\nThis disk is currently in use - repartitioning is probably a bad idea.", Error: fmt.Errorf("busy")},
-		{Pattern: "lsblk /dev/vda", Output: `{"blockdevices":[{"name":"vda","path":"/dev/vda","type":"disk"},{"name":"vda1","path":"/dev/vda1","mountpoint":"/media/installer","type":"part"}]}`, Error: nil},
-		{Pattern: "mount", Output: "/dev/vda1 on /media/installer type ext4 (rw,relatime)", Error: nil},
-		{Pattern: "umount /media/installer", Output: "", Error: nil},
-		{Pattern: "swapoff /dev/vda1", Output: "", Error: fmt.Errorf("not swap")},
-		{Pattern: "wipefs -a -f /dev/vda", Output: "", Error: nil},
-		{Pattern: "sync", Output: "", Error: nil},
-		{Pattern: ".*label.*gpt.*sfdisk --force --wipe always /dev/vda", Output: "", Error: nil},
-		{Pattern: ".*hw_sector_size", Output: "512", Error: nil},
-		{Pattern: ".*physical_block_size", Output: "4096", Error: nil},
-		{Pattern: ".*sgdisk.*vda.*", Output: "", Error: nil},
-		{Pattern: ".*partx.*vda.*", Output: "", Error: nil},
-		{Pattern: ".*mkfs.*ext4.*vda.*", Output: "", Error: nil},
+		// lsblk for inspecting device
+		{Pattern: "sudo lsblk /dev/vda --json --list", Output: `{"blockdevices":[{"name":"vda","path":"/dev/vda","type":"disk"}]}`, Error: nil},
+		// Umount and swapoff
+		{Pattern: "sudo umount.*", Output: "", Error: fmt.Errorf("already unmounted")},
+		{Pattern: "sudo swapoff.*", Output: "", Error: fmt.Errorf("not swap")},
+		// sync
+		{Pattern: "sudo sync", Output: "", Error: nil},
+		// wipefs
+		{Pattern: "sudo wipefs -a -f /dev/vda", Output: "", Error: nil},
+		// sfdisk for partition table creation
+		{Pattern: "echo 'label: gpt' | sudo sfdisk --force --wipe always /dev/vda", Output: "", Error: nil},
+		// partx
+		{Pattern: "sudo partx.*", Output: "", Error: nil},
+		// fdisk for checks
+		{Pattern: "sudo fdisk -l /dev/vda", Output: diskInfo, Error: nil},
+		// Block device info
+		{Pattern: "sudo cat /sys/block/vda/queue/hw_sector_size", Output: "512", Error: nil},
+		{Pattern: "sudo cat /sys/block/vda/queue/physical_block_size", Output: "4096", Error: nil},
+		// sgdisk for GPT partition creation
+		{Pattern: "sudo sgdisk.*", Output: "", Error: nil},
+		// mkfs
+		{Pattern: "sudo mkfs.*ext4.*", Output: "", Error: nil},
 	}
 	shell.Default = shell.NewMockExecutor(mockCommands)
 

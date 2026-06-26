@@ -33,6 +33,11 @@ type MissingReport struct {
 	Missing    map[string][]DependencyChain `json:"missing"`
 }
 
+type reportNode struct {
+	Key  string
+	Info MinimalPackageInfo
+}
+
 func AddParentChildPair(parent ospackage.PackageInfo, child ospackage.PackageInfo, pairs *[][]ospackage.PackageInfo) {
 	*pairs = append(*pairs, []ospackage.PackageInfo{parent, child})
 }
@@ -47,17 +52,24 @@ func AddParentMissingChildPair(parent ospackage.PackageInfo, missingChildName st
 // writes them as a JSON array to a file in /tmp, and returns the file path.
 func BuildDependencyChains(parentChildPairs [][]ospackage.PackageInfo) string {
 	// Build adjacency list with MinimalPackageInfo
-	graph := make(map[string][]MinimalPackageInfo)
-	parents := make(map[string]MinimalPackageInfo)
-	children := make(map[string]MinimalPackageInfo)
+	graph := make(map[string][]reportNode)
+	parents := make(map[string]reportNode)
+	children := make(map[string]reportNode)
 
 	// Convert ospackage.PackageInfo to MinimalPackageInfo for all pairs
-	toMinimal := func(pkg ospackage.PackageInfo) MinimalPackageInfo {
-		return MinimalPackageInfo{
-			Name:    pkg.Name,
+	toReportNode := func(pkg ospackage.PackageInfo) reportNode {
+		rawName := pkg.Name
+		minimal := MinimalPackageInfo{
+			Name:    strings.ReplaceAll(rawName, "(missing)", ""),
 			Version: pkg.Version,
 			Origin:  pkg.Origin,
 			URL:     pkg.URL,
+			Found:   !strings.Contains(rawName, "(missing)"),
+		}
+
+		return reportNode{
+			Key:  strings.Join([]string{rawName, pkg.Version, pkg.Origin, pkg.URL}, "|"),
+			Info: minimal,
 		}
 	}
 
@@ -65,40 +77,30 @@ func BuildDependencyChains(parentChildPairs [][]ospackage.PackageInfo) string {
 		if len(pair) != 2 {
 			continue
 		}
-		parent := toMinimal(pair[0])
-		child := toMinimal(pair[1])
+		parent := toReportNode(pair[0])
+		child := toReportNode(pair[1])
 
-		// Handle missing child
-		if strings.Contains(child.Name, "(missing)") {
-			child.Found = false
-			child.Name = strings.ReplaceAll(child.Name, "(missing)", "")
-		} else {
-			child.Found = true
-		}
-
-		// Handle missing parent (rare, but for completeness)
-		if strings.Contains(parent.Name, "(missing)") {
-			parent.Found = false
-			parent.Name = strings.ReplaceAll(parent.Name, "(missing)", "")
-		} else {
-			parent.Found = true
-		}
-
-		if parent.Name == "" || child.Name == "" {
+		if parent.Info.Name == "" || child.Info.Name == "" {
 			continue
 		}
-		parent.Child = child.Name
-		child.Parent = parent.Name
-		graph[parent.Name] = append(graph[parent.Name], child)
-		parents[parent.Name] = parent
-		children[child.Name] = child
+
+		parent.Info.Child = child.Info.Name
+		child.Info.Parent = parent.Info.Name
+		graph[parent.Key] = append(graph[parent.Key], child)
+		parents[parent.Key] = parent
+		children[child.Key] = child
 	}
 
 	// Find root nodes (parents that are not children)
-	var roots []MinimalPackageInfo
-	for _, p := range parents {
-		if _, ok := children[p.Name]; !ok {
-			roots = append(roots, p)
+	var roots []reportNode
+	for key, parent := range parents {
+		if _, ok := children[key]; !ok {
+			roots = append(roots, parent)
+		}
+	}
+	if len(roots) == 0 {
+		for _, parent := range parents {
+			roots = append(roots, parent)
 		}
 	}
 
@@ -108,24 +110,43 @@ func BuildDependencyChains(parentChildPairs [][]ospackage.PackageInfo) string {
 		Missing:    make(map[string][]DependencyChain),
 	}
 
-	var dfs func(node MinimalPackageInfo, path []MinimalPackageInfo)
-	dfs = func(node MinimalPackageInfo, path []MinimalPackageInfo) {
-		path = append(path, node)
-		if next, ok := graph[node.Name]; ok && len(next) > 0 {
+	seenChains := make(map[string]struct{})
+
+	var dfs func(node reportNode, path []MinimalPackageInfo, visiting map[string]struct{})
+	dfs = func(node reportNode, path []MinimalPackageInfo, visiting map[string]struct{}) {
+		path = append(path, node.Info)
+		if next, ok := graph[node.Key]; ok && len(next) > 0 {
 			for _, child := range next {
-				dfs(child, path)
+				if _, seen := visiting[child.Key]; seen {
+					continue
+				}
+
+				visiting[child.Key] = struct{}{}
+				dfs(child, path, visiting)
+				delete(visiting, child.Key)
 			}
 		} else {
-			// Only report if the last node is a missing package (contains "(missing)")
+			// Only report if the last node is a missing package.
 			missingName := path[len(path)-1].Name
 			if !path[len(path)-1].Found {
+				chainKeyParts := make([]string, 0, len(path))
+				for _, item := range path {
+					chainKeyParts = append(chainKeyParts, strings.Join([]string{item.Name, item.Version, item.URL}, "|"))
+				}
+				chainKey := strings.Join(chainKeyParts, "->")
+				if _, exists := seenChains[chainKey]; exists {
+					return
+				}
+
+				seenChains[chainKey] = struct{}{}
 				report.Missing[missingName] = append(report.Missing[missingName], DependencyChain{Chain: path})
 			}
 		}
 	}
 
 	for _, root := range roots {
-		dfs(root, []MinimalPackageInfo{})
+		visiting := map[string]struct{}{root.Key: {}}
+		dfs(root, []MinimalPackageInfo{}, visiting)
 	}
 
 	// Write report to JSON file in builds

@@ -237,12 +237,21 @@ func TestCreateRawImageLoopDev(t *testing.T) {
 		tmpDir := t.TempDir()
 		filePath := filepath.Join(tmpDir, "disk.raw")
 
+		gptDiskInfo := `Disk /dev/loop7: 1 MiB, 1048576 bytes, 2048 sectors
+Units: sectors of 1 * 512 = 512 bytes
+Sector size (logical/physical): 512 bytes / 4096 bytes
+Disklabel type: gpt`
+
 		// Use shell mocks for all external commands touched in this path.
 		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
-			{Pattern: "fallocate -l 1MiB", Output: "", Error: nil},
-			{Pattern: "losetup --direct-io=on --show -f -P", Output: "/dev/loop7\n", Error: nil},
-			{Pattern: "fdisk -l /dev/loop7", Output: "Disk /dev/loop7: 1 GiB", Error: nil},
-			{Pattern: "label: gpt", Output: "", Error: nil},
+			{Pattern: "sudo fallocate -l 1MiB", Output: "", Error: nil},
+			{Pattern: "sudo losetup --direct-io=on --show -f -P", Output: "/dev/loop7\n", Error: nil},
+			{Pattern: "sudo fdisk -l /dev/loop7", Output: gptDiskInfo, Error: nil},
+			{Pattern: "sudo cat /sys/block/loop7/queue/hw_sector_size", Output: "512", Error: nil},
+			{Pattern: "sudo cat /sys/block/loop7/queue/physical_block_size", Output: "4096", Error: nil},
+			{Pattern: "echo 'label: gpt'.*sudo sfdisk", Output: "", Error: nil},
+			{Pattern: "sudo sync", Output: "", Error: nil},
+			{Pattern: "sudo partx -u /dev/loop7", Output: "", Error: nil},
 		})
 
 		// Ensure the file exists for loopSetupCreateEmptyRawDisk stat check.
