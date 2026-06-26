@@ -37,15 +37,15 @@ Run **one** GPU stack per node unless you deliberately plan overlapping drivers.
 
 ## Rerunnable behavior
 
-| Kind | Every run | Once (unless `FORCE=1`) |
-|------|-----------|---------------------------|
+| Kind | Every run (`sudo ./agent-install.sh`) | Skip with `FORCE=0` |
+|------|----------------------------------------|---------------------|
 | `apt-get update` / `install` | Yes | — |
-| Intel repo lists | Rewritten if invalid; skipped if OK + `intel-apt-repos-v2` stamp | — |
-| Hermes, OpenClaw, SuperClaw ctl, pip venv | — | Yes (stamp files) |
+| Intel repo lists | Yes if invalid; else re-run (default FORCE=1) | Skip if OK + stamp |
+| Hermes, OpenClaw, SuperClaw ctl, pip venv | Yes (default **FORCE=1**) | Yes (stamps honored) |
 
 ```bash
 sudo /opt/agent/agent-install.sh
-sudo FORCE=1 /opt/agent/agent-install.sh   # redo stamped custom steps
+sudo FORCE=0 /opt/agent/agent-install.sh   # faster: skip completed stamp steps
 ```
 
 Script revision is logged at start (`rev=` in `agent-install.sh` header).
@@ -94,6 +94,10 @@ OpenVINO apt base:
 https://apt.repos.intel.com/openvino/${OPENVINO_REPO_TRACK}   # default OPENVINO_REPO_TRACK=2025
 ```
 
+Do not duplicate those URLs in the image template `packageRepositories` and in this script —
+apt fails with `Conflicting values set for option Signed-By`. Sample
+`ubuntu24-x86_64-agent.yml` uses the script only.
+
 DL Streamer:
 
 ```text
@@ -122,6 +126,10 @@ Defaults:
 ```text
 HERMES_INSTALL_FLAGS=--skip-setup --non-interactive --skip-browser
 ```
+
+`--skip-browser` skips Playwright/Chromium only. If no suitable Node.js is on the host, Hermes
+still downloads and extracts a managed Node LTS tarball (needs **`xz-utils`** for `.tar.xz`;
+both install scripts install `git` and `xz-utils` via apt before the Hermes step).
 
 The wrapper also sets `DEBIAN_FRONTEND=noninteractive`, `NEEDRESTART_MODE=a`, and runs the
 Hermes installer with **stdin from `/dev/null`** so automation and `sudo` from SSH do not use
@@ -166,7 +174,7 @@ User runs **`openclaw onboard`** when ready. NemoClaw onboarding may still need 
 | Intel | `/opt/agent/venv` | autogen-agentchat, crewai, langgraph, openai, openai-agents |
 | NVIDIA | `/opt/agent/venv-nvidia` | Same + optional PyTorch (cu124) and vLLM |
 
-Venv creation is a **stamped run-once** step unless `FORCE=1`.
+Venv creation re-runs each invocation by default (`FORCE=1`); use `FORCE=0` to skip if stamp exists.
 
 ---
 
@@ -185,7 +193,7 @@ Venv creation is a **stamped run-once** step unless `FORCE=1`.
 | `INTEL_APT_ARCH` | `amd64` | |
 | `HERMES_INSTALL_FLAGS` | see Hermes section | |
 | `HERMES_INSTALL_AS_USER` | empty | |
-| `FORCE` | `0` | `1` redo stamped steps |
+| `FORCE` | `1` | `0` = skip stamped run-once steps (Hermes, venv, …) |
 
 ### NVIDIA (`agent-install-nvidia.sh`)
 
@@ -198,7 +206,7 @@ Venv creation is a **stamped run-once** step unless `FORCE=1`.
 | `INSTALL_VLLM` | `0` | |
 | `INSTALL_NEMOCLAW` | `0` | |
 | `INSTALL_HERMES` / `INSTALL_OPENCLAW` | `1` | Same Hermes flags as Intel script |
-| `FORCE` | `0` | |
+| `FORCE` | `1` | `0` = skip stamped steps |
 
 ---
 
@@ -223,7 +231,9 @@ ls -la /var/lib/agent-install/done/
 | Intel 404 on `noble` in apt | Wrong suite in old lists | Use current script; remove obsolete stamp `intel-apt-repos`; or `FORCE=1` |
 | `Skip step 'intel-apt-repos'` (old id) | Pre-v2 script / stamp | Copy current script; `FORCE=1` |
 | No OpenVINO packages after update | Repos OK but wrong discovery | v6+ script; check `intel-openvino.list` shows `ubuntu24` suite |
+| `Conflicting values set for option Signed-By` (openvino ubuntu24) | ICT `package-repositories.list` + script `intel-*.list` | v7+ script strips ICT Intel lines; or remove `packageRepositories` from template |
 | Hermes prompts | Old install line or missing flags | Use `hermes-agent-v2` step; default `HERMES_INSTALL_FLAGS`; `FORCE=1` |
+| `tar (child): xz: Cannot exec` during Hermes | Minimal image without `xz-utils` | Use current script (v8+); or `apt install -y xz-utils` and re-run with `FORCE=1` |
 | Packages missing on 22.04 | Pin names / repo track | `INTEL_UBUNTU_SUITE=ubuntu22`; `INTEL_PACKAGE_POLICY=latest` |
 | Run both Intel + NVIDIA scripts | Two stacks on one node | Use one script per machine |
 

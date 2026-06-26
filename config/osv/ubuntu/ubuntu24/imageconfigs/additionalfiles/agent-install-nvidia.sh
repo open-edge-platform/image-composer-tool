@@ -4,7 +4,7 @@
 #
 # Usage:
 #   sudo /opt/agent/agent-install-nvidia.sh
-#   sudo FORCE=1 /opt/agent/agent-install-nvidia.sh
+#   sudo FORCE=0 /opt/agent/agent-install-nvidia.sh
 #
 # Optional overrides (examples):
 #   NVIDIA_DRIVER_PACKAGE=nvidia-driver-550-open
@@ -27,7 +27,7 @@
 #   OpenClaw  — openclaw.ai/install.sh (--no-onboard); npm global also supported
 #   NemoClaw  — curl|bash nvidia.com/nemoclaw.sh; needs Docker + GPU; bundles OpenClaw in OpenShell
 #
-# Rerunnable: apt every run; stamped custom steps unless FORCE=1.
+# Rerunnable: apt every run; stamped custom steps every run (FORCE=1 default). FORCE=0 to skip stamps.
 # Requires: network, root, writable rootfs, NVIDIA GPU + driver load after reboot if new driver.
 
 set -euo pipefail
@@ -68,6 +68,8 @@ PACKAGES=(
 	ca-certificates
 	curl
 	wget
+	git
+	xz-utils
 	gnupg
 	apt-transport-https
 	python3
@@ -92,8 +94,8 @@ run_once_step() {
 	shift
 	local stamp="${STAMP_DIR}/${id}"
 
-	if [[ -f "${stamp}" && "${FORCE:-0}" != "1" ]]; then
-		log "Skip step '${id}' (already done; set FORCE=1 to redo)"
+	if [[ -f "${stamp}" && "${FORCE:-1}" != "1" ]]; then
+		log "Skip step '${id}' (already done; default FORCE=1 re-runs; set FORCE=0 to skip)"
 		return 0
 	fi
 
@@ -275,7 +277,7 @@ main() {
 	mkdir -p "$(dirname "${LOG_FILE}")" "${STAMP_DIR}" /opt/agent
 	: >> "${LOG_FILE}"
 
-	log "=== ${SCRIPT_NAME} start (FORCE=${FORCE:-0}) ==="
+	log "=== ${SCRIPT_NAME} start (FORCE=${FORCE:-1}) ==="
 
 	run_once_step_cuda_keyring
 	append_optional_cuda_packages

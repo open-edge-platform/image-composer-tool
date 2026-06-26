@@ -39,16 +39,6 @@ target:
   arch: x86_64
   imageType: raw
 
-packageRepositories:
-  - codename: "ubuntu24"
-    url: "https://apt.repos.intel.com/openvino/2025"
-    pkey: "https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB"
-    component: "main"
-
-  - codename: "ubuntu24"
-    url: "https://apt.repos.intel.com/edgeai/dlstreamer/ubuntu24"
-    pkey: "https://apt.repos.intel.com/edgeai/dlstreamer/GPG-PUB-KEY-INTEL-DLS.gpg"
-
 disk:
   name: edge-agent
   artifacts:

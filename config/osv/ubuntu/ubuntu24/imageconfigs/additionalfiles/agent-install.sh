@@ -7,7 +7,7 @@
 #
 # Usage:
 #   sudo /opt/agent/agent-install.sh
-#   sudo FORCE=1 /opt/agent/agent-install.sh   # re-run stamped custom steps
+#   sudo FORCE=0 /opt/agent/agent-install.sh   # skip stamped steps if already done
 #
 # Agent (OS) layer (diagram) — public install paths researched Jun 2026:
 #   Hermes     — install.sh with --skip-setup --non-interactive (user runs hermes setup later)
@@ -22,16 +22,16 @@
 #   OPENCLAW_INSTALL_URL=https://openclaw.ai/install.sh
 #   SUPERCLAW_CTL_URL=…/superclaw-ctl-v1.0.0-linux-x86-64.tar.gz
 #   SUPERCLAW_CTL_PREFIX=/opt/superclaw
-#   HERMES_INSTALL_FLAGS="--skip-setup --non-interactive --skip-browser"  # default; no wizard
+#   HERMES_INSTALL_FLAGS="--skip-setup --non-interactive --skip-browser"  # skips Playwright only; Hermes may still install Node
 #   HERMES_INSTALL_AS_USER=         # optional; empty = install as script user (root → /usr/local/…)
 #
-# Rerunnable: apt-get update/install every run; custom steps once unless FORCE=1.
-# Requires: network, root, writable apt/dpkg (not for immutable / without overlay).
+# Rerunnable: apt-get update/install every run; stamped custom steps every run (FORCE=1 default).
+# Set FORCE=0 to skip completed stamp steps. Requires: network, root, writable apt/dpkg.
 
 set -euo pipefail
 
 readonly SCRIPT_NAME="${0##*/}"
-readonly SCRIPT_REV="2026-06-26-intel-ubuntu-suite-v6"
+readonly SCRIPT_REV="2026-06-26-intel-ubuntu-suite-v8"
 readonly LOG_TAG="agent-install"
 readonly STAMP_DIR="/var/lib/agent-install/done"
 readonly LOG_FILE="/var/log/agent-install.log"
@@ -74,6 +74,8 @@ PACKAGES=(
 	ca-certificates
 	curl
 	wget
+	git
+	xz-utils
 	gnupg
 	apt-transport-https
 	python3
@@ -139,9 +141,34 @@ intel_apt_sources_ok() {
 	return 0
 }
 
+# ICT image templates may ship package-repositories.list (no signed-by) for the same
+# Intel URLs as intel-*.list (signed-by=…). Apt rejects conflicting Signed-By values.
+remove_ict_duplicate_intel_apt_lines() {
+	local f="/etc/apt/sources.list.d/package-repositories.list"
+
+	if [[ ! -f "${f}" ]]; then
+		return 0
+	fi
+	if ! grep -q 'apt.repos.intel.com' "${f}"; then
+		return 0
+	fi
+	if [[ ! -f /etc/apt/sources.list.d/intel-openvino.list ]]; then
+		return 0
+	fi
+
+	log "Removing duplicate Intel entries from ${f} (intel-*.list provides signed-by sources)"
+	local tmp
+	tmp="$(mktemp)"
+	grep -v 'apt.repos.intel.com' "${f}" >"${tmp}" || true
+	install -m 0644 "${tmp}" "${f}"
+	rm -f "${tmp}"
+}
+
 configure_intel_apt_repos_files() {
 	local suite="$1"
 	local dls_base="$2"
+
+	remove_ict_duplicate_intel_apt_lines
 
 	bash -c "
 		set -euo pipefail
@@ -172,8 +199,8 @@ run_once_step() {
 	shift
 	local stamp="${STAMP_DIR}/${id}"
 
-	if [[ -f "${stamp}" && "${FORCE:-0}" != "1" ]]; then
-		log "Skip step '${id}' (already done; set FORCE=1 to redo)"
+	if [[ -f "${stamp}" && "${FORCE:-1}" != "1" ]]; then
+		log "Skip step '${id}' (already done; default FORCE=1 re-runs; set FORCE=0 to skip)"
 		return 0
 	fi
 
@@ -198,8 +225,8 @@ run_once_step_intel_apt_repos() {
 		rm -f "${STAMP_DIR}/intel-apt-repos"
 	fi
 
-	if [[ -f "${stamp}" && "${FORCE:-0}" != "1" ]] && intel_apt_sources_ok; then
-		log "Skip step 'intel-apt-repos-v2' (repos OK; set FORCE=1 to redo)"
+	if [[ -f "${stamp}" && "${FORCE:-1}" != "1" ]] && intel_apt_sources_ok; then
+		log "Skip step 'intel-apt-repos-v2' (repos OK; set FORCE=0 to skip)"
 		return 0
 	fi
 
@@ -424,6 +451,8 @@ install_apt_packages() {
 	export DEBIAN_FRONTEND=noninteractive
 	export DEBCONF_NONINTERACTIVE_SEEN=true
 
+	remove_ict_duplicate_intel_apt_lines
+
 	log "apt-get update"
 	apt-get update -y
 
@@ -450,7 +479,7 @@ main() {
 	mkdir -p "$(dirname "${LOG_FILE}")" "${STAMP_DIR}" /opt/agent
 	: >> "${LOG_FILE}"
 
-	log "=== ${SCRIPT_NAME} start (FORCE=${FORCE:-0}, rev=${SCRIPT_REV}) ==="
+	log "=== ${SCRIPT_NAME} start (FORCE=${FORCE:-1}, rev=${SCRIPT_REV}) ==="
 
 	run_once_step_intel_apt_repos
 	install_apt_packages
