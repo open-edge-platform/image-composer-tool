@@ -311,6 +311,8 @@ package lists.
 
 ## Related Documentation
 
+- [Ubuntu 24 agent install scripts (post-boot)](ubuntu24-agent-install-scripts.md) —
+  Intel/NVIDIA `agent-install*.sh`, logging, Hermes/OpenClaw automation defaults
 - [ADR: Template-Enriched RAG](../architecture/adr-template-enriched-rag.md) -
   Full architecture decision record, design details, and roadmap
 - [Usage Guide](usage-guide.md) - General image-composer-tool usage

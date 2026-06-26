@@ -1,238 +1,250 @@
-# Ubuntu 24 agent install scripts — package and step coverage
+# Ubuntu 24 post-boot agent install scripts
 
-This document lists what **`agent-install.sh`** (Intel) and **`agent-install-nvidia.sh`**
-(NVIDIA) **request on the device after boot**, and what they **do not** install.
+Post-boot installers for Intel and NVIDIA agent stacks on **Ubuntu 22.04 / 24.04**.
+They are **not** executed during image compose unless you add separate build-time actions.
 
-Scripts are bundled on sample template
-[`image-templates/ubuntu24-x86_64-agent.yml`](../../image-templates/ubuntu24-x86_64-agent.yml)
-under `/opt/agent/`. They are **not** run during image compose unless you add separate
-build-time actions.
-
-**Run one stack per node** unless you deliberately plan overlapping GPU drivers and repos.
-
-| Script | Path on image | Log | Stamp directory |
-|--------|---------------|-----|-----------------|
+| Script | Path on image | Log | Completed-step stamps |
+|--------|---------------|-----|------------------------|
 | Intel | `/opt/agent/agent-install.sh` | `/var/log/agent-install.log` | `/var/lib/agent-install/done/` |
 | NVIDIA | `/opt/agent/agent-install-nvidia.sh` | `/var/log/agent-install-nvidia.log` | `/var/lib/agent-install-nvidia/done/` |
 
-**Behavior:** `apt-get update` and `apt-get install` run **every** time. Repo setup,
-remote installers, and pip venv steps run **once** (stamp files) unless `FORCE=1`.
+Wire scripts via `systemConfig.additionalFiles` (see sample
+`image-templates/ubuntu24-x86_64-agent.yml` when present in the repo).
+
+**Source of truth (keep this doc in sync when scripts change):**
+
+- `config/osv/ubuntu/ubuntu24/imageconfigs/additionalfiles/agent-install.sh`
+- `config/osv/ubuntu/ubuntu24/imageconfigs/additionalfiles/agent-install-nvidia.sh`
+
+Run **one** GPU stack per node unless you deliberately plan overlapping drivers.
 
 ---
 
-## At a glance
+## Table of contents
 
-| Category | Intel script | NVIDIA script |
-|----------|--------------|---------------|
-| Intel OpenVINO / oneAPI / L0 / NPU / DL Streamer | Yes (APT) | **No** |
-| NVIDIA driver / CUDA / cuDNN / NCCL | **No** | Yes (APT, toggles) |
-| NVIDIA Container Toolkit | **No** | Yes (default on) |
-| Hermes (Agent OS) | Yes (default on) | Yes (default on) |
-| OpenClaw (Agent OS) | Yes (default on) | Yes (default on; see NemoClaw) |
-| SuperClaw | Optional edge binary only (`INSTALL_SUPERCLAW_CTL=1`) | **No** |
-| NemoClaw (Agent OS) | **No** | Optional (`INSTALL_NEMOCLAW=1`) |
-| Shared pip frameworks (venv) | Yes | Yes (separate venv path) |
-| PyTorch (CUDA wheels) | **No** | Yes (default on) |
-| vLLM | **No** | Optional (`INSTALL_VLLM=1`) |
+- [Rerunnable behavior](#rerunnable-behavior)
+- [What gets installed](#what-gets-installed)
+- [Intel apt (OpenVINO / oneAPI / DL Streamer)](#intel-apt-openvino--oneapi--dl-streamer)
+- [Hermes (automation-friendly)](#hermes-automation-friendly)
+- [OpenClaw / SuperClaw / NemoClaw](#openclaw--superclaw--nemoclaw)
+- [Python agent venv (pip)](#python-agent-venv-pip)
+- [Environment variables](#environment-variables)
+- [Logging](#logging)
+- [Troubleshooting](#troubleshooting)
+- [Related](#related)
 
 ---
 
-## Shared — both scripts
+## Rerunnable behavior
 
-### APT (every run)
+| Kind | Every run | Once (unless `FORCE=1`) |
+|------|-----------|---------------------------|
+| `apt-get update` / `install` | Yes | — |
+| Intel repo lists | Rewritten if invalid; skipped if OK + `intel-apt-repos-v2` stamp | — |
+| Hermes, OpenClaw, SuperClaw ctl, pip venv | — | Yes (stamp files) |
 
-| Debian package | Intel | NVIDIA |
-|----------------|:-----:|:------:|
-| `ca-certificates` | Yes | Yes |
-| `curl` | Yes | Yes |
-| `wget` | Yes | Yes |
-| `gnupg` | Yes | Yes |
-| `apt-transport-https` | Yes | Yes |
-| `python3` | Yes | Yes |
-| `python3-pip` | Yes | Yes |
-| `python3-venv` | Yes | Yes |
+```bash
+sudo /opt/agent/agent-install.sh
+sudo FORCE=1 /opt/agent/agent-install.sh   # redo stamped custom steps
+```
 
-### Custom steps (run-once unless `FORCE=1`)
-
-| Step ID | Default | Intel | NVIDIA | Notes |
-|---------|---------|:-----:|:------:|-------|
-| `hermes-agent` | On (`INSTALL_HERMES=1`) | Yes | Yes | `curl \| bash` Hermes installer |
-| `openclaw-agent` | On (`INSTALL_OPENCLAW=1`) | Yes | Yes* | `openclaw.ai/install.sh --no-onboard` |
-| `agent-python-venv` / `agent-python-venv-nvidia` | Always | Yes | Yes | Creates venv + pip packages below |
-
-\*On NVIDIA, host OpenClaw is **skipped** when `INSTALL_NEMOCLAW=1` unless
-`INSTALL_HOST_OPENCLAW_WITH_NEMOCLAW=1`.
-
-### Pip (run-once, in venv)
-
-| Python package | Intel venv | NVIDIA venv |
-|----------------|------------|-------------|
-| `autogen-agentchat` | `/opt/agent/venv` | `/opt/agent/venv-nvidia` |
-| `crewai` | Yes | Yes |
-| `langgraph` | Yes | Yes |
-| `openai` | Yes | Yes |
-| `openai-agents` | Yes | Yes |
-
-Remote installers (Hermes, OpenClaw, NemoClaw) may install **additional** packages
-(Node.js, CLI tools, etc.) that are **not** listed in the script `PACKAGES` array.
+Script revision is logged at start (`rev=` in `agent-install.sh` header).
 
 ---
 
-## Intel only — `agent-install.sh`
+## What gets installed
 
-### APT repositories (run-once: `intel-apt-repos`)
+### At a glance
 
-| Source | Purpose |
-|--------|---------|
-| `https://apt.repos.intel.com/openvino/2025` | OpenVINO |
-| `https://apt.repos.intel.com/oneapi` | oneAPI runtime |
-| `https://apt.repos.intel.com/edgeai/dlstreamer/ubuntu24` | DL Streamer |
+| Layer | Intel (`agent-install.sh`) | NVIDIA (`agent-install-nvidia.sh`) |
+|-------|----------------------------|-------------------------------------|
+| Intel OpenVINO / oneAPI / DL Streamer | Yes (apt, policy below) | No |
+| NVIDIA driver / CUDA / cuDNN / NCCL | No | Yes (toggles, defaults on) |
+| NVIDIA Container Toolkit | No | Default on |
+| Hermes | Default on (non-interactive) | Default on (same) |
+| OpenClaw | Default on (`--no-onboard`) | Default on; see NemoClaw |
+| SuperClaw | Optional edge `superclaw-ctl` only | No |
+| NemoClaw | No | Optional (`INSTALL_NEMOCLAW=1`) |
+| Pip frameworks (venv) | Yes | Yes (separate venv path) |
+| PyTorch (CUDA wheels) | No | Default on |
+| vLLM | No | Optional (`INSTALL_VLLM=1`) |
 
-### APT packages (every run, after repos)
+### Not installed by these scripts
 
-| Debian package | Role |
-|----------------|------|
-| `openvino_2025.3.0.19807` | OpenVINO runtime (pinned version) |
-| `intel-oneapi-runtime-compilers_2025.3.3-30` | oneAPI compilers runtime |
-| `intel-oneapi-runtime-compilers-common_2025.3.3-30` | oneAPI compilers common |
-| `intel-oneapi-runtime-opencl_2025.3.3-30` | oneAPI OpenCL runtime |
-| `libze1` | Level Zero |
-| `libze-intel-gpu1` | Intel GPU Level Zero |
-| `intel-level-zero-npu` | NPU Level Zero |
-| `intel-driver-compiler-npu` | NPU driver compiler |
-| `xpu-smi` | Intel XPU management |
-| `intel-dlstreamer_2025.2.0` | DL Streamer (pinned) |
-| `podman` | OCI containers (rootless-friendly) |
-
-### Optional custom steps
-
-| Step ID | Env | Default | What it installs |
-|---------|-----|---------|------------------|
-| `superclaw-ctl-edge` | `INSTALL_SUPERCLAW_CTL=1` | **Off** | `superclaw-ctl` binary → `/opt/superclaw`, symlink `/usr/local/bin/superclaw-ctl` |
-
-### Not requested by the Intel script
-
-| Item | Reason |
-|------|--------|
-| NVIDIA driver, CUDA, cuDNN, NCCL, Container Toolkit | Use `agent-install-nvidia.sh` |
-| NemoClaw / OpenShell stack | NVIDIA-only; use NVIDIA script with `INSTALL_NEMOCLAW=1` |
-| SuperClaw Windows desktop app | Not supported on bare Ubuntu; Intel ships Windows/WSL product |
-| Full SuperClaw edge deployment | Only optional `superclaw-ctl` binary; models/services per Intel USER-GUIDE |
-| PyTorch, vLLM, TensorRT-LLM, SGLang | Not in Intel script |
-| OpenClaw onboarding / systemd daemon | Install stops at `--no-onboard`; run `openclaw onboard` manually |
-| `docker.io` | Not installed (Intel uses `podman` in `PACKAGES`) |
+- TensorRT-LLM, SGLang (use NGC / vendor docs or enable vLLM on NVIDIA path only)
+- Full SuperClaw Windows desktop (Intel path can install `superclaw-ctl` binary only)
+- Hermes / OpenClaw **configuration** (API keys, gateway, onboarding) — manual after install
+- Image compose-time packages (unless your template lists them separately)
 
 ---
 
-## NVIDIA only — `agent-install-nvidia.sh`
+## Intel apt (OpenVINO / oneAPI / DL Streamer)
 
-### APT / repo setup (run-once)
+Intel deb **suites** are **`ubuntu22`** / **`ubuntu24`**, not **`jammy`** / **`noble`**.
 
-| Step ID | What it does |
-|---------|----------------|
-| `nvidia-cuda-keyring` | Installs NVIDIA `cuda-keyring` deb (`ubuntu2404` / `x86_64` by default) |
-| `nvidia-container-toolkit-repo` | Adds libnvidia-container apt source (if `INSTALL_CONTAINER_TOOLKIT=1`) |
+The script detects 22.04 vs 24.04, or set:
 
-### APT packages (every run)
+```bash
+export INTEL_UBUNTU_SUITE=ubuntu24   # or ubuntu22
+```
 
-**Always in base `PACKAGES`:**
+OpenVINO apt base:
 
-| Debian package | Default name | Notes |
-|----------------|--------------|-------|
-| `nvidia-driver-*` | `nvidia-driver-550-open` | Override: `NVIDIA_DRIVER_PACKAGE` |
+```text
+https://apt.repos.intel.com/openvino/${OPENVINO_REPO_TRACK}   # default OPENVINO_REPO_TRACK=2025
+```
 
-**Appended when toggles are on (defaults in parentheses):**
+DL Streamer:
 
-| Toggle | Default | Packages |
-|--------|---------|----------|
-| `INSTALL_CUDA_TOOLKIT` | `1` | `cuda-toolkit-12-8` (override: `CUDA_META_PACKAGE`) |
-| `INSTALL_CUDNN` | `1` | `libcudnn9-cuda-12`, `libcudnn9-dev-cuda-12` |
-| `INSTALL_NCCL` | `1` | `libnccl2`, `libnccl-dev` |
-| `INSTALL_CONTAINER_TOOLKIT` | `1` | `nvidia-container-toolkit` |
-| `INSTALL_NEMOCLAW` | `0` | `docker.io` (only when NemoClaw enabled) |
+```text
+https://apt.repos.intel.com/edgeai/dlstreamer/${INTEL_UBUNTU_SUITE}
+```
 
-### Post-APT configuration
+### Package policy
 
-| Action | When |
-|--------|------|
-| `nvidia-ctk runtime configure --runtime=containerd` | Container toolkit installed (best-effort if containerd absent) |
-| `systemctl enable --now docker` | `INSTALL_NEMOCLAW=1` |
+| `INTEL_PACKAGE_POLICY` | Behavior |
+|------------------------|----------|
+| `latest` (default) | After `apt-get update`, install **newest** matching `openvino_*`, `intel-oneapi-runtime-*`, `intel-dlstreamer_*` in cache |
+| `pinned` | Require exact names in `INTEL_PINNED_PACKAGES` in the script |
 
-### Optional custom / pip steps
+Base apt set also includes Level Zero GPU libs, optional NPU / `xpu-smi` (WARN + skip if absent), `podman`.
 
-| Step ID | Env | Default | What it installs |
-|---------|-----|---------|------------------|
-| `nemoclaw-stack` | `INSTALL_NEMOCLAW=1` | **Off** | NVIDIA NemoClaw installer (`nemoclaw.sh` + third-party accept flags) |
-| `pytorch-cuda-venv` | `INSTALL_PYTORCH_CUDA=1` | **On** | `torch`, `torchvision`, `torchaudio` (cu124 index) |
-| `vllm-pip` | `INSTALL_VLLM=1` | **Off** | `vllm` |
-
-### Not requested by the NVIDIA script
-
-| Item | Reason |
-|------|--------|
-| Intel OpenVINO, oneAPI, Level Zero, NPU, DL Streamer, `xpu-smi` | Use `agent-install.sh` |
-| `podman` | Not in NVIDIA `PACKAGES` (Docker only when NemoClaw enabled) |
-| SuperClaw / `superclaw-ctl` | Intel product path |
-| TensorRT-LLM | No public one-line install in script; use NGC / vendor docs |
-| SGLang | Not in either script |
-| NemoClaw full non-interactive onboarding | Script installs CLI/stack with accept flags; provider/onboarding may still need manual env (see NVIDIA NemoClaw docs) |
-| OpenClaw onboard/daemon | Same as Intel: `--no-onboard` only unless you run onboarding later |
-| Hermes / OpenClaw / NemoClaw when toggled off | Set `INSTALL_HERMES=0`, `INSTALL_OPENCLAW=0`, or leave `INSTALL_NEMOCLAW=0` |
+Package discovery uses `apt-cache pkgnames` and Intel `_Packages` list fallbacks (not `apt-cache search '^openvino_'` alone).
 
 ---
 
-## Image build vs post-boot install
+## Hermes (automation-friendly)
 
-The sample agent template installs **only** a minimal edge set at **compose** time
-(`ubuntu-minimal`, SSH, `curl`, etc.) and copies both scripts to `/opt/agent/`.
-It does **not** install OpenVINO, CUDA, or agent OS layers during compose.
+**Goal:** Hermes **binaries and dependencies** on the system; **no** interactive setup in this script.
 
-Optional template `packageRepositories` entries point at Intel OpenVINO and DL Streamer
-URLs for **future** template `packages:` use; the current template does **not** list
-those deb names in `systemConfig.packages`.
+Defaults:
+
+```text
+HERMES_INSTALL_FLAGS=--skip-setup --non-interactive --skip-browser
+```
+
+The wrapper also sets `DEBIAN_FRONTEND=noninteractive`, `NEEDRESTART_MODE=a`, and runs the
+Hermes installer with **stdin from `/dev/null`** so automation and `sudo` from SSH do not use
+`/dev/tty` prompts.
+
+Stamp id: **`hermes-agent-v2`**. User steps after install:
+
+```bash
+hermes setup
+# optional:
+hermes gateway install
+```
+
+| Variable | Purpose |
+|----------|---------|
+| `INSTALL_HERMES=0` | Skip Hermes |
+| `HERMES_INSTALL_AS_USER=<login>` | Install under that user's home (needs passwordless sudo for automation) |
+| `HERMES_INSTALL_FLAGS` | Override flags passed to `install.sh` |
+
+Root install (default when script runs as root): code under `/usr/local/lib/hermes-agent`,
+`hermes` on PATH; data under `/root/.hermes`.
 
 ---
 
-## Environment quick reference
+## OpenClaw / SuperClaw / NemoClaw
+
+| Component | Intel | NVIDIA |
+|-----------|-------|--------|
+| OpenClaw | `openclaw.ai/install.sh --no-onboard` | Same |
+| SuperClaw | `INSTALL_SUPERCLAW_CTL=1` → `superclaw-ctl` tarball | — |
+| NemoClaw | — | `INSTALL_NEMOCLAW=1` → `nemoclaw.sh` + `docker.io`; host OpenClaw skipped unless `INSTALL_HOST_OPENCLAW_WITH_NEMOCLAW=1` |
+
+User runs **`openclaw onboard`** when ready. NemoClaw onboarding may still need provider env
+(see [NVIDIA NemoClaw docs](https://docs.nvidia.com/nemoclaw/latest/)).
+
+---
+
+## Python agent venv (pip)
+
+| Script | Venv path | Packages (pip) |
+|--------|-----------|----------------|
+| Intel | `/opt/agent/venv` | autogen-agentchat, crewai, langgraph, openai, openai-agents |
+| NVIDIA | `/opt/agent/venv-nvidia` | Same + optional PyTorch (cu124) and vLLM |
+
+Venv creation is a **stamped run-once** step unless `FORCE=1`.
+
+---
+
+## Environment variables
 
 ### Intel (`agent-install.sh`)
 
-| Variable | Default | Effect |
-|----------|---------|--------|
-| `INSTALL_HERMES` | `1` | Hermes curl installer |
-| `INSTALL_OPENCLAW` | `1` | OpenClaw installer (`--no-onboard`) |
-| `INSTALL_SUPERCLAW_CTL` | `0` | SuperClaw edge `superclaw-ctl` tarball |
-| `OPENCLAW_INSTALL_URL` | `https://openclaw.ai/install.sh` | OpenClaw bootstrap URL |
-| `SUPERCLAW_CTL_URL` | Intel AI Builder tarball URL | SuperClaw ctl download |
-| `SUPERCLAW_CTL_PREFIX` | `/opt/superclaw` | Install prefix |
-| `FORCE` | `0` | Re-run stamped custom steps |
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `INSTALL_HERMES` | `1` | |
+| `INSTALL_OPENCLAW` | `1` | |
+| `INSTALL_SUPERCLAW_CTL` | `0` | |
+| `INTEL_PACKAGE_POLICY` | `latest` | or `pinned` |
+| `INTEL_UBUNTU_SUITE` | auto | `ubuntu22` / `ubuntu24` |
+| `OPENVINO_REPO_TRACK` | `2025` | Intel openvino apt path segment |
+| `INTEL_APT_ARCH` | `amd64` | |
+| `HERMES_INSTALL_FLAGS` | see Hermes section | |
+| `HERMES_INSTALL_AS_USER` | empty | |
+| `FORCE` | `0` | `1` redo stamped steps |
 
 ### NVIDIA (`agent-install-nvidia.sh`)
 
-| Variable | Default | Effect |
-|----------|---------|--------|
-| `NVIDIA_DRIVER_PACKAGE` | `nvidia-driver-550-open` | Driver deb |
-| `CUDA_META_PACKAGE` | `cuda-toolkit-12-8` | CUDA toolkit meta |
-| `INSTALL_CUDA_TOOLKIT` | `1` | CUDA toolkit deb |
-| `INSTALL_CUDNN` | `1` | cuDNN debs |
-| `INSTALL_NCCL` | `1` | NCCL debs |
-| `INSTALL_CONTAINER_TOOLKIT` | `1` | Container toolkit + repo step |
-| `INSTALL_PYTORCH_CUDA` | `1` | PyTorch in venv |
-| `INSTALL_VLLM` | `0` | vLLM in venv |
-| `INSTALL_HERMES` | `1` | Hermes |
-| `INSTALL_OPENCLAW` | `1` | Host OpenClaw |
-| `INSTALL_NEMOCLAW` | `0` | NemoClaw + `docker.io` |
-| `INSTALL_HOST_OPENCLAW_WITH_NEMOCLAW` | `0` | Host OpenClaw when NemoClaw=1 |
-| `NEMOCLAW_INSTALL_URL` | `https://www.nvidia.com/nemoclaw.sh` | NemoClaw bootstrap |
-| `FORCE` | `0` | Re-run stamped steps |
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `NVIDIA_DRIVER_PACKAGE` | `nvidia-driver-550-open` | |
+| `CUDA_META_PACKAGE` | `cuda-toolkit-12-8` | |
+| `INSTALL_CUDA_TOOLKIT` / `CUDNN` / `NCCL` / `CONTAINER_TOOLKIT` | `1` | |
+| `INSTALL_PYTORCH_CUDA` | `1` | |
+| `INSTALL_VLLM` | `0` | |
+| `INSTALL_NEMOCLAW` | `0` | |
+| `INSTALL_HERMES` / `INSTALL_OPENCLAW` | `1` | Same Hermes flags as Intel script |
+| `FORCE` | `0` | |
 
 ---
 
-## Source of truth
+## Logging
 
-Package names and toggles are defined in:
+- Every `log()` line goes to **stdout** and is **appended** to the script log file.
+- Intel script logs **`Installed: <package> <version>`** for OpenVINO / oneAPI / DL Streamer after apt.
+- **Not** fully captured: verbose output from Hermes, OpenClaw, or apt (only script milestones).
 
-- [`config/osv/ubuntu/ubuntu24/imageconfigs/additionalfiles/agent-install.sh`](../../config/osv/ubuntu/ubuntu24/imageconfigs/additionalfiles/agent-install.sh)
-- [`config/osv/ubuntu/ubuntu24/imageconfigs/additionalfiles/agent-install-nvidia.sh`](../../config/osv/ubuntu/ubuntu24/imageconfigs/additionalfiles/agent-install-nvidia.sh)
+```bash
+sudo tail -100 /var/log/agent-install.log
+sudo grep -E 'ERROR|WARN|Installed:|complete' /var/log/agent-install.log
+ls -la /var/lib/agent-install/done/
+```
 
-When the scripts change, update this document in the same change set.
+---
+
+## Troubleshooting
+
+| Symptom | Likely cause | Action |
+|---------|--------------|--------|
+| Intel 404 on `noble` in apt | Wrong suite in old lists | Use current script; remove obsolete stamp `intel-apt-repos`; or `FORCE=1` |
+| `Skip step 'intel-apt-repos'` (old id) | Pre-v2 script / stamp | Copy current script; `FORCE=1` |
+| No OpenVINO packages after update | Repos OK but wrong discovery | v6+ script; check `intel-openvino.list` shows `ubuntu24` suite |
+| Hermes prompts | Old install line or missing flags | Use `hermes-agent-v2` step; default `HERMES_INSTALL_FLAGS`; `FORCE=1` |
+| Packages missing on 22.04 | Pin names / repo track | `INTEL_UBUNTU_SUITE=ubuntu22`; `INTEL_PACKAGE_POLICY=latest` |
+| Run both Intel + NVIDIA scripts | Two stacks on one node | Use one script per machine |
+
+Verify Intel lists:
+
+```bash
+cat /etc/apt/sources.list.d/intel-openvino.list
+# expect: ... openvino/2025 ubuntu24 main   (on 24.04)
+```
+
+Verify Hermes non-interactive install:
+
+```bash
+grep hermes-agent-v2 /var/lib/agent-install/done/
+which hermes
+```
+
+---
+
+## Related
+
+- [Configure additional build actions](configure-additional-actions-for-build.md) — chroot/compose-time commands
+- [Image templates](../architecture/image-composer-tool-templates.md) — YAML structure
+- [Multiple package repositories](configure-multiple-package-repositories.md) — Intel repos in templates (suite names)

@@ -19,6 +19,8 @@
 #   INSTALL_HOST_OPENCLAW_WITH_NEMOCLAW=0  (set 1 to also install host OpenClaw when NemoClaw=1)
 #   NEMOCLAW_INSTALL_URL=https://www.nvidia.com/nemoclaw.sh  (redirects to NVIDIA/NemoClaw installer)
 #   OPENCLAW_INSTALL_URL=https://openclaw.ai/install.sh
+#   HERMES_INSTALL_FLAGS="--skip-setup --non-interactive --skip-browser"
+#   HERMES_INSTALL_AS_USER=
 #
 # Agent (OS) layer — public install paths (Jun 2026):
 #   Hermes    — hermes-agent.nousresearch.com/install.sh
@@ -57,6 +59,9 @@ INSTALL_HOST_OPENCLAW_WITH_NEMOCLAW="${INSTALL_HOST_OPENCLAW_WITH_NEMOCLAW:-0}"
 
 readonly NEMOCLAW_INSTALL_URL="${NEMOCLAW_INSTALL_URL:-https://www.nvidia.com/nemoclaw.sh}"
 readonly OPENCLAW_INSTALL_URL="${OPENCLAW_INSTALL_URL:-https://openclaw.ai/install.sh}"
+readonly HERMES_INSTALL_URL="${HERMES_INSTALL_URL:-https://hermes-agent.nousresearch.com/install.sh}"
+HERMES_INSTALL_FLAGS="${HERMES_INSTALL_FLAGS:---skip-setup --non-interactive --skip-browser}"
+HERMES_INSTALL_AS_USER="${HERMES_INSTALL_AS_USER:-}"
 
 # Installed after cuda-keyring + apt update (adjust names if apt reports alternatives).
 PACKAGES=(
@@ -121,8 +126,16 @@ run_once_step_container_toolkit_repo() {
 }
 
 run_once_step_hermes() {
-	run_once_step "hermes-agent" \
-		'curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash'
+	local hermes_pipe="curl -fsSL '${HERMES_INSTALL_URL}' | bash -s -- ${HERMES_INSTALL_FLAGS}"
+	run_once_step "hermes-agent-v2" "
+		set -euo pipefail
+		export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a UV_NO_CONFIG=1
+		if [[ -n '${HERMES_INSTALL_AS_USER}' ]]; then
+			sudo -u $(printf '%q' '${HERMES_INSTALL_AS_USER}') -H env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a UV_NO_CONFIG=1 bash -c $(printf '%q' "${hermes_pipe}") </dev/null
+		else
+			bash -c $(printf '%q' "${hermes_pipe}") </dev/null
+		fi
+	"
 }
 
 run_once_step_openclaw() {
@@ -289,6 +302,9 @@ main() {
 
 	log "=== ${SCRIPT_NAME} complete ==="
 	log "Activate venv: ${AGENT_VENV}/bin/activate"
+	if [[ "${INSTALL_HERMES}" == "1" ]]; then
+		log "Hermes: configure manually — hermes setup (optional: hermes gateway install)"
+	fi
 	if should_install_host_openclaw || [[ "${INSTALL_OPENCLAW}" == "1" ]]; then
 		log "OpenClaw: run 'openclaw onboard' when ready (skipped on host if NemoClaw-only)"
 	fi
