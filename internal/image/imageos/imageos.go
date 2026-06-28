@@ -75,6 +75,68 @@ func (imageOs *ImageOs) GetInstallRoot() string {
 	return imageOs.installRoot
 }
 
+func (imageOs *ImageOs) InstallRootfs() (installRoot, versionInfo string, err error) {
+	installRoot = imageOs.installRoot
+	versionInfo = ""
+	log.Infof("Installing rootfs for image: %s", imageOs.template.GetImageName())
+
+	pkgType := imageOs.chrootEnv.GetTargetOsPkgType()
+	if pkgType == "deb" {
+		if err = imageOs.initRootfsForDeb(imageOs.installRoot); err != nil {
+			err = fmt.Errorf("failed to initialize rootfs for deb: %w", err)
+			return
+		}
+	}
+
+	if err = imageOs.mountSysfsToRootfs(imageOs.installRoot); err != nil {
+		return
+	}
+
+	defer func() {
+		if umountErr := imageOs.umountSysfsFromRootfs(imageOs.installRoot); umountErr != nil {
+			if err != nil {
+				err = fmt.Errorf("operation failed: %w, cleanup errors: %v", err, umountErr)
+			} else {
+				err = fmt.Errorf("failed to unmount sysfs from image rootfs: %w", umountErr)
+			}
+		}
+	}()
+
+	log.Infof("Image installation pre-processing...")
+	if err = preImageOsInstall(imageOs.installRoot, imageOs.template); err != nil {
+		err = fmt.Errorf("pre-install failed: %w", err)
+		return
+	}
+
+	log.Infof("Image package installation...")
+	if err = imageOs.installImagePkgs(imageOs.installRoot, imageOs.template); err != nil {
+		err = fmt.Errorf("failed to install image packages: %w", err)
+		return
+	}
+
+	log.Infof("Image system configuration...")
+	if err = updateRootfsConfig(imageOs.installRoot, imageOs.template); err != nil {
+		err = fmt.Errorf("failed to update image config: %w", err)
+		return
+	}
+
+	log.Infof("Image SBOM generation...")
+	versionInfo, err = imageOs.generateSBOM(imageOs.installRoot, imageOs.template)
+	if err != nil {
+		err = fmt.Errorf("generating SBOM failed: %w", err)
+		return
+	}
+
+	log.Infof("Image installation post-processing...")
+	versionInfo, err = imageOs.postImageOsInstall(imageOs.installRoot, imageOs.template)
+	if err != nil {
+		err = fmt.Errorf("post-install failed: %w", err)
+		return
+	}
+
+	return
+}
+
 func (imageOs *ImageOs) InstallInitrd() (installRoot, versionInfo string, err error) {
 	installRoot = imageOs.installRoot
 	versionInfo = ""
@@ -234,7 +296,32 @@ func (imageOs *ImageOs) InstallImageOs(diskPathIdMap map[string]string) (version
 	return
 }
 
+func getDebMirrorSpecFromSourcesList(sourcesListPath string) (string, error) {
+	data, err := os.ReadFile(sourcesListPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read apt sources list %s: %w", sourcesListPath, err)
+	}
+
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "deb ") || strings.HasPrefix(line, "deb-src ") {
+			return line, nil
+		}
+	}
+
+	return "", fmt.Errorf("no deb repository entry found in %s", sourcesListPath)
+}
+
 func (imageOs *ImageOs) initRootfsForDeb(installRoot string) error {
+	if imageOs.template.Target.ImageType == "wsl2" {
+		if err := imageOs.prepareInstallRootForDebBootstrap(installRoot); err != nil {
+			return err
+		}
+	}
+
 	essentialPkgsList, err := imageOs.chrootEnv.GetChrootEnvEssentialPackageList()
 	if err != nil {
 		return fmt.Errorf("failed to get essential packages list: %w", err)
@@ -251,6 +338,10 @@ func (imageOs *ImageOs) initRootfsForDeb(installRoot string) error {
 		return fmt.Errorf("local repository config file does not exist: %s", localRepoConfigHostPath)
 	}
 	suite := debutils.DetectDebSuiteFromSourcesList(localRepoConfigHostPath)
+	mirrorSpec, err := getDebMirrorSpecFromSourcesList(localRepoConfigHostPath)
+	if err != nil {
+		return fmt.Errorf("failed to parse apt mirror from %s: %w", localRepoConfigHostPath, err)
+	}
 
 	chrootInstallRoot, err := imageOs.chrootEnv.GetChrootEnvPath(installRoot)
 	if err != nil {
@@ -274,13 +365,39 @@ func (imageOs *ImageOs) initRootfsForDeb(installRoot string) error {
 		"--hook-dir=/usr/share/mmdebstrap/hooks/file-mirror-automount "+
 		"--include=%s "+
 		"--verbose --debug "+
-		"-- %s %s %s",
-		targetArch, pkgListStr, suite, chrootInstallRoot, localRepoConfigChrootPath)
+		"-- %s %s %q",
+		targetArch, pkgListStr, suite, chrootInstallRoot, mirrorSpec)
 
 	chrootEnvRoot := imageOs.chrootEnv.GetChrootEnvRoot()
 	if _, err = shell.ExecCmdWithStream(cmd, true, chrootEnvRoot, nil); err != nil {
 		log.Errorf("Failed to install essential packages into image: %v", err)
 		return fmt.Errorf("failed to install packages into image: %w", err)
+	}
+	return nil
+}
+
+func (imageOs *ImageOs) prepareInstallRootForDebBootstrap(installRoot string) error {
+	installRoot = filepath.Clean(installRoot)
+	imageBuildDir := filepath.Clean(imageOs.chrootEnv.GetChrootImageBuildDir())
+	if installRoot == "" || installRoot == string(filepath.Separator) || installRoot == imageBuildDir {
+		return fmt.Errorf("refusing to reset invalid install root %s", installRoot)
+	}
+	isSubPath, err := file.IsSubPath(imageBuildDir, installRoot)
+	if err != nil {
+		return fmt.Errorf("failed to validate install root %s: %w", installRoot, err)
+	}
+	if !isSubPath {
+		return fmt.Errorf("install root %s is not under image build directory %s", installRoot, imageBuildDir)
+	}
+
+	if err := mount.UmountSubPath(installRoot); err != nil {
+		return fmt.Errorf("failed to unmount stale rootfs mount points: %w", err)
+	}
+	if _, err := shell.ExecCmd("rm -rf "+installRoot, true, shell.HostPath, nil); err != nil {
+		return fmt.Errorf("failed to remove stale install root %s: %w", installRoot, err)
+	}
+	if _, err := shell.ExecCmd("mkdir -p "+installRoot, true, shell.HostPath, nil); err != nil {
+		return fmt.Errorf("failed to recreate install root %s: %w", installRoot, err)
 	}
 	return nil
 }
@@ -880,6 +997,10 @@ func restoreInitramfsBinariesAfterDebInstall(installRoot string, backupPaths map
 }
 
 func updateInitrdConfig(installRoot string, template *config.ImageTemplate) error {
+	return updateRootfsConfig(installRoot, template)
+}
+
+func updateRootfsConfig(installRoot string, template *config.ImageTemplate) error {
 	if err := updateImageHostname(installRoot, template); err != nil {
 		return fmt.Errorf("failed to update image hostname: %w", err)
 	}
@@ -1051,7 +1172,10 @@ func addImageAdditionalFiles(installRoot string, template *config.ImageTemplate)
 	}
 
 	for _, fileInfo := range additionalFiles {
-		srcFile := fileInfo.Local
+		srcFile, err := resolveAdditionalFileLocalPath(fileInfo.Local, template.PathList)
+		if err != nil {
+			return fmt.Errorf("failed to resolve additional file %s: %w", fileInfo.Local, err)
+		}
 		dstFile := filepath.Join(installRoot, fileInfo.Final)
 		if err := file.CopyFile(srcFile, dstFile, "-p", true); err != nil {
 			log.Errorf("Failed to copy additional file %s to image: %v", srcFile, err)
@@ -1061,6 +1185,22 @@ func addImageAdditionalFiles(installRoot string, template *config.ImageTemplate)
 	}
 	return nil
 }
+
+func resolveAdditionalFileLocalPath(localPath string, templatePaths []string) (string, error) {
+	if localPath == "" || filepath.IsAbs(localPath) {
+		return localPath, nil
+	}
+
+	for _, templatePath := range templatePaths {
+		candidatePath := filepath.Join(filepath.Dir(templatePath), localPath)
+		if _, err := os.Stat(candidatePath); err == nil {
+			return candidatePath, nil
+		}
+	}
+
+	return "", fmt.Errorf("relative path not found in template search paths")
+}
+
 func addImageConfigs(installRoot string, template *config.ImageTemplate) error {
 	customConfigs := template.GetConfigurationInfo()
 	if len(customConfigs) == 0 {

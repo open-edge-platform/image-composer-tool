@@ -52,6 +52,7 @@ golang-base:
     RUN go mod download # for caching
     COPY cmd/ ./cmd
     COPY internal/ ./internal
+    COPY config/ ./config
     COPY image-templates/ ./image-templates
     COPY scripts/ ./scripts
     RUN chmod +x ./scripts/*.sh || true

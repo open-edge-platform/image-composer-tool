@@ -43,7 +43,7 @@
         "imageType": {
           "type": "string",
           "description": "Type of image to build",
-          "enum": ["raw", "img", "iso"]
+          "enum": ["raw", "img", "iso", "wsl2"]
         }
       },
       "required": ["os", "dist", "arch", "imageType"],
@@ -114,7 +114,7 @@
               "type": {
                 "type": "string",
                 "description": "Output format type",
-                "enum": ["raw", "qcow2", "vhd", "vhdx", "vmdk", "vdi"]
+                "enum": ["raw", "qcow2", "vhd", "vhdx", "vmdk", "vdi", "tar"]
               },
               "compression": {
                 "type": "string",
@@ -574,7 +574,63 @@
         }
       },
       "required": ["image", "target", "systemConfig"],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "target": {
+                "properties": {
+                  "imageType": { "const": "wsl2" }
+                },
+                "required": ["imageType"]
+              }
+            },
+            "required": ["target"]
+          },
+          "then": {
+            "required": ["disk"],
+            "properties": {
+              "systemConfig": {
+                "properties": {
+                  "kernel": false
+                }
+              },
+              "disk": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "artifacts": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": ["tar"]
+                        },
+                        "compression": {
+                          "type": "string",
+                          "enum": ["gz", "gzip", "xz"]
+                        }
+                      },
+                      "required": ["type", "compression"],
+                      "additionalProperties": false
+                    }
+                  },
+                  "partitionTableType": false,
+                  "partitions": false
+                },
+                "required": ["name", "artifacts"],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      ]
     },
 
     "UserTemplate": {
@@ -601,7 +657,62 @@
         }
       },
       "required": ["image", "target"],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "target": {
+                "properties": {
+                  "imageType": { "const": "wsl2" }
+                },
+                "required": ["imageType"]
+              }
+            },
+            "required": ["target"]
+          },
+          "then": {
+            "properties": {
+              "systemConfig": {
+                "properties": {
+                  "kernel": false
+                }
+              },
+              "disk": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "artifacts": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": ["tar"]
+                        },
+                        "compression": {
+                          "type": "string",
+                          "enum": ["gz", "gzip", "xz"]
+                        }
+                      },
+                      "required": ["type", "compression"],
+                      "additionalProperties": false
+                    }
+                  },
+                  "partitionTableType": false,
+                  "partitions": false
+                },
+                "required": ["name", "artifacts"],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      ]
     }
   }
 }

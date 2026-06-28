@@ -121,6 +121,8 @@ func (p *RCD) BuildImage(template *config.ImageTemplate) error {
 		return p.buildInitrdImage(template)
 	case "iso":
 		return p.buildIsoImage(template)
+	case "wsl2":
+		return provider.BuildWSL2Image(p.chrootEnv, template)
 	default:
 		return fmt.Errorf("unsupported image type: %s", template.Target.ImageType)
 	}

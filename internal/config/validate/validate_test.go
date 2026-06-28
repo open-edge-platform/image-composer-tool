@@ -170,6 +170,158 @@ systemConfig:
 	}
 }
 
+func TestValidWSL2Template(t *testing.T) {
+	wsl2TemplateYAML := `image:
+  name: test-wsl2-image
+  version: "1.0.0"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: wsl2
+
+disk:
+  name: wsl2-rootfs
+  artifacts:
+    - type: tar
+      compression: gz
+
+systemConfig:
+  name: default
+  packages:
+    - ubuntu-minimal
+`
+
+	var raw interface{}
+	if err := yaml.Unmarshal([]byte(wsl2TemplateYAML), &raw); err != nil {
+		t.Fatalf("yml parsing error: %v", err)
+	}
+
+	dataJSON, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("json marshaling error: %v", err)
+	}
+
+	if err := ValidateImageTemplateJSON(dataJSON); err != nil {
+		t.Errorf("expected WSL2 template to pass validation, but got: %v", err)
+	}
+}
+
+func TestInvalidWSL2TemplateWithPartitionTable(t *testing.T) {
+	invalidTemplateYAML := `image:
+  name: test-wsl2-image
+  version: "1.0.0"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: wsl2
+
+disk:
+  name: wsl2-rootfs
+  partitionTableType: gpt
+  artifacts:
+    - type: tar
+      compression: gz
+
+systemConfig:
+  name: default
+  packages:
+    - ubuntu-minimal
+`
+
+	var raw interface{}
+	if err := yaml.Unmarshal([]byte(invalidTemplateYAML), &raw); err != nil {
+		t.Fatalf("yml parsing error: %v", err)
+	}
+
+	dataJSON, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("json marshaling error: %v", err)
+	}
+
+	if err := ValidateImageTemplateJSON(dataJSON); err == nil {
+		t.Errorf("expected WSL2 template with partitionTableType to fail validation")
+	}
+}
+
+func TestInvalidWSL2TemplateWithoutCompression(t *testing.T) {
+	invalidTemplateYAML := `image:
+  name: test-wsl2-image
+  version: "1.0.0"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: wsl2
+
+disk:
+  name: wsl2-rootfs
+  artifacts:
+    - type: tar
+
+systemConfig:
+  name: default
+  packages:
+    - ubuntu-minimal
+`
+
+	var raw interface{}
+	if err := yaml.Unmarshal([]byte(invalidTemplateYAML), &raw); err != nil {
+		t.Fatalf("yml parsing error: %v", err)
+	}
+
+	dataJSON, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("json marshaling error: %v", err)
+	}
+
+	if err := ValidateImageTemplateJSON(dataJSON); err == nil {
+		t.Errorf("expected WSL2 template without artifact compression to fail validation")
+	}
+}
+
+func TestInvalidWSL2TemplateWithKernelSection(t *testing.T) {
+	invalidTemplateYAML := `image:
+  name: test-wsl2-image
+  version: "1.0.0"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: wsl2
+
+disk:
+  name: wsl2-rootfs
+  artifacts:
+    - type: tar
+      compression: gz
+
+systemConfig:
+  name: default
+  kernel:
+    version: "6.12"
+`
+
+	var raw interface{}
+	if err := yaml.Unmarshal([]byte(invalidTemplateYAML), &raw); err != nil {
+		t.Fatalf("yml parsing error: %v", err)
+	}
+
+	dataJSON, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("json marshaling error: %v", err)
+	}
+
+	if err := ValidateImageTemplateJSON(dataJSON); err == nil {
+		t.Errorf("expected WSL2 template with kernel section to fail validation")
+	}
+}
+
 func TestInvalidMergedTemplate(t *testing.T) {
 	// Create an invalid merged template (missing required fields)
 	invalidMergedTemplateYAML := `image:

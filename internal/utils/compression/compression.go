@@ -2,6 +2,7 @@ package compression
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
@@ -79,6 +80,11 @@ func CompressFile(compressPath, outputPath, compressType string, sudo bool) erro
 
 func CompressFolder(compressPath, outputPath, compressType string, sudo bool) error {
 	var cmdStr string
+
+	outputDir := filepath.Dir(outputPath)
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return fmt.Errorf("failed to create compression output directory %s: %w", outputDir, err)
+	}
 
 	switch compressType {
 	case "tar.xz":

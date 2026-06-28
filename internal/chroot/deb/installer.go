@@ -181,6 +181,25 @@ func (debInstaller *DebInstaller) InstallDebPkg(
 	)
 }
 
+func getDebMirrorSpecFromSourcesList(sourcesListPath string) (string, error) {
+	data, err := os.ReadFile(sourcesListPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read apt sources list %s: %w", sourcesListPath, err)
+	}
+
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "deb ") || strings.HasPrefix(line, "deb-src ") {
+			return line, nil
+		}
+	}
+
+	return "", fmt.Errorf("no deb repository entry found in %s", sourcesListPath)
+}
+
 func (debInstaller *DebInstaller) InstallDebPkgWithArch(
 	targetOsConfigDir, chrootEnvPath, chrootPkgCacheDir string, pkgsList []string, targetArch string,
 ) (err error) {
@@ -203,6 +222,10 @@ func (debInstaller *DebInstaller) InstallDebPkgWithArch(
 		return fmt.Errorf("local repository config file does not exist: %s", localRepoConfigPath)
 	}
 	suite := debutils.DetectDebSuiteFromSourcesList(localRepoConfigPath)
+	mirrorSpec, err := getDebMirrorSpecFromSourcesList(localRepoConfigPath)
+	if err != nil {
+		return fmt.Errorf("failed to parse apt mirror from %s: %w", localRepoConfigPath, err)
+	}
 
 	if err := debInstaller.validateCrossArchDeps(debArch); err != nil {
 		log.Errorf("Missing host dependencies for cross-architecture chroot build: %v", err)
@@ -240,8 +263,8 @@ func (debInstaller *DebInstaller) InstallDebPkgWithArch(
 		"--hook-dir=/usr/share/mmdebstrap/hooks/file-mirror-automount "+
 		"--include=%s "+
 		"--verbose --debug "+
-		"-- %s %s %s",
-		debArch, pkgListStr, suite, chrootEnvPath, localRepoConfigPath)
+		"-- %s %s %q",
+		debArch, pkgListStr, suite, chrootEnvPath, mirrorSpec)
 
 	// Set environment variables to ensure non-interactive installation.
 	// PYTHONDONTWRITEBYTECODE skips py3compile during postinst scripts, which

@@ -1,0 +1,32 @@
+===============================================================================
+Welcome to your ICT WSL2 rootfs.
+
+The root filesystem is stored in a WSL-managed virtual disk. To grow it, run
+these commands from PowerShell or Command Prompt on Windows:
+
+  wsl.exe --list --verbose
+  wsl.exe --shutdown
+  wsl.exe --manage <distribution-name> --resize 128GB
+
+Replace <distribution-name> with this distro's name and replace 128GB with the
+desired size.
+
+The resize command is available in WSL 2.5 and newer. If the command is not
+recognized, update WSL first:
+
+  wsl.exe --update
+
+New interactive shells start in the Linux home directory by default. Set
+ICT_WSL2_PRESERVE_CWD=1 before launching WSL to keep the Windows-provided
+starting directory instead.
+
+Note! An SPDX-format SBOM is available under /usr/share/sbom for details about
+the packages and filesystem contents included in this rootfs.
+
+This message is shown once per Linux user. Read it again with:
+
+  cat /usr/share/doc/ict-wsl2/resize-filesystem.txt
+
+===============================================================================
+
+

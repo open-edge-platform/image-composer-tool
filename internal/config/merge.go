@@ -38,6 +38,8 @@ func (d *DefaultConfigLoader) LoadDefaultConfig(imageType string) (*ImageTemplat
 		defaultConfigFile = fmt.Sprintf("default-initrd-%s.yml", d.targetArch)
 	case "iso":
 		defaultConfigFile = fmt.Sprintf("default-iso-%s.yml", d.targetArch)
+	case "wsl2":
+		defaultConfigFile = fmt.Sprintf("default-wsl2-%s.yml", d.targetArch)
 	default:
 		log.Errorf("Unsupported image type: %s", imageType)
 		return nil, fmt.Errorf("unsupported image type: %s", imageType)
