@@ -66,12 +66,6 @@ systemConfig:
   name: minimal
   description: Minimal ubuntu image
 
-  users:
-    # Development user with plaintext password (NOT for production)
-    - name: user
-      password: "user"  # Do not commit real plaintext passwords
-      groups: ["sudo"]
-
   bootloader:
     bootType: efi
     provider: grub

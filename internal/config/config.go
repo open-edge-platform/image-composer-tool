@@ -46,16 +46,16 @@ type DiskSelectionPolicy struct {
 }
 
 type DiskConfig struct {
-	Name               string              `yaml:"name"`
-	Path               string              `yaml:"path"` // Path to the disk device (e.g., /dev/sda), used by live installer
-	SelectionPolicy    DiskSelectionPolicy `yaml:"selectionPolicy,omitempty"`
+	Name            string              `yaml:"name"`
+	Path            string              `yaml:"path"` // Path to the disk device (e.g., /dev/sda), used by live installer
+	SelectionPolicy DiskSelectionPolicy `yaml:"selectionPolicy,omitempty"`
 	// ExtendLastPartitionToFillDisk forces the final partition's end to "0"
 	// (consume all remaining disk space) when enabled.
-	ExtendLastPartitionToFillDisk bool              `yaml:"extendLastPartitionToFillDisk,omitempty"`
-	Artifacts          []ArtifactInfo      `yaml:"artifacts"`
-	Size               string              `yaml:"size"`
-	PartitionTableType string              `yaml:"partitionTableType"`
-	Partitions         []PartitionInfo     `yaml:"partitions"`
+	ExtendLastPartitionToFillDisk bool            `yaml:"extendLastPartitionToFillDisk,omitempty"`
+	Artifacts                     []ArtifactInfo  `yaml:"artifacts"`
+	Size                          string          `yaml:"size"`
+	PartitionTableType            string          `yaml:"partitionTableType"`
+	Partitions                    []PartitionInfo `yaml:"partitions"`
 }
 
 type PackageRepository struct {
