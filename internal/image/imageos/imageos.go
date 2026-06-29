@@ -393,10 +393,10 @@ func (imageOs *ImageOs) prepareInstallRootForDebBootstrap(installRoot string) er
 	if err := mount.UmountSubPath(installRoot); err != nil {
 		return fmt.Errorf("failed to unmount stale rootfs mount points: %w", err)
 	}
-	if _, err := shell.ExecCmd("rm -rf "+installRoot, true, shell.HostPath, nil); err != nil {
+	if _, err := shell.ExecCmd(fmt.Sprintf("rm -rf -- %q", installRoot), true, shell.HostPath, nil); err != nil {
 		return fmt.Errorf("failed to remove stale install root %s: %w", installRoot, err)
 	}
-	if _, err := shell.ExecCmd("mkdir -p "+installRoot, true, shell.HostPath, nil); err != nil {
+	if _, err := shell.ExecCmd(fmt.Sprintf("mkdir -p -- %q", installRoot), true, shell.HostPath, nil); err != nil {
 		return fmt.Errorf("failed to recreate install root %s: %w", installRoot, err)
 	}
 	return nil
