@@ -1,12 +1,18 @@
 #!/bin/bash
+# dash/sh do not support "set -o pipefail"; re-exec with bash if needed.
+case "${BASH_VERSION:-}" in
+'') exec /bin/bash "$0" "$@" ;;
+esac
+
 # Install Intel agent stack + common agent frameworks on Ubuntu 22.04 / 24.04.
 # Target: x86_64 with Intel GPU/NPU (set INTEL_APT_ARCH=arm64 on aarch64 hosts).
 #
 # Intel apt suites are ubuntu22 / ubuntu24 (not jammy/noble). Override:
 #   INTEL_UBUNTU_SUITE=ubuntu22|ubuntu24
 #
-# Usage:
+# Usage (must run under bash — not "sh agent-install.sh"):
 #   sudo /opt/agent/agent-install.sh
+#   sudo bash /opt/agent/agent-install.sh
 #   sudo FORCE=0 /opt/agent/agent-install.sh   # skip stamped steps if already done
 #
 # Agent (OS) layer (diagram) — public install paths researched Jun 2026:
@@ -17,13 +23,19 @@
 #
 # Optional env (defaults):
 #   INSTALL_HERMES=1  INSTALL_OPENCLAW=1  INSTALL_SUPERCLAW_CTL=0
-#   INTEL_PACKAGE_POLICY=latest   # latest | pinned (exact deb names below)
+#   INTEL_PACKAGE_POLICY=release  # release | latest | pinned
+#   OPENVINO_RELEASE=2026.2.0      # target; installs when Intel publishes openvino-2026.2.0
+#   OPENVINO_RELEASE_FALLBACK=1    # 1 = newest openvino-* meta if target not in apt yet
 #   OPENVINO_REPO_TRACK=2025       # Intel apt path …/openvino/${OPENVINO_REPO_TRACK}
+#   INSTALL_OPEN_MODEL_ZOO=1       # git clone open_model_zoo (tag OPEN_MODEL_ZOO_TAG)
 #   OPENCLAW_INSTALL_URL=https://openclaw.ai/install.sh
 #   SUPERCLAW_CTL_URL=…/superclaw-ctl-v1.0.0-linux-x86-64.tar.gz
 #   SUPERCLAW_CTL_PREFIX=/opt/superclaw
 #   HERMES_INSTALL_FLAGS="--skip-setup --non-interactive --skip-browser"  # skips Playwright only; Hermes may still install Node
 #   HERMES_INSTALL_AS_USER=         # optional; empty = install as script user (root → /usr/local/…)
+#   AGENT_INSTALL_PROXY_MODE=auto   # auto | on | off — see configure_network_proxy
+#   AGENT_INSTALL_HTTP_PROXY=http://proxy-dmz.intel.com:911
+#   AGENT_INSTALL_HTTPS_PROXY=http://proxy-dmz.intel.com:912
 #
 # Rerunnable: apt-get update/install every run; stamped custom steps every run (FORCE=1 default).
 # Set FORCE=0 to skip completed stamp steps. Requires: network, root, writable apt/dpkg.
@@ -31,7 +43,7 @@
 set -euo pipefail
 
 readonly SCRIPT_NAME="${0##*/}"
-readonly SCRIPT_REV="2026-06-26-intel-ubuntu-suite-v8"
+readonly SCRIPT_REV="2026-06-29-intel-openvino-2026.2-omz-v14"
 readonly LOG_TAG="agent-install"
 readonly STAMP_DIR="/var/lib/agent-install/done"
 readonly LOG_FILE="/var/log/agent-install.log"
@@ -46,15 +58,27 @@ readonly SUPERCLAW_CTL_URL="${SUPERCLAW_CTL_URL:-https://github.com/intel/intel-
 readonly SUPERCLAW_CTL_PREFIX="${SUPERCLAW_CTL_PREFIX:-/opt/superclaw}"
 readonly INTEL_APT_ARCH="${INTEL_APT_ARCH:-amd64}"
 readonly OPENVINO_REPO_TRACK="${OPENVINO_REPO_TRACK:-2025}"
+readonly OPENVINO_RELEASE="${OPENVINO_RELEASE:-2026.2.0}"
+OPENVINO_RELEASE_FALLBACK="${OPENVINO_RELEASE_FALLBACK:-1}"
+readonly OPEN_MODEL_ZOO_DIR="${OPEN_MODEL_ZOO_DIR:-/opt/intel/open_model_zoo}"
+readonly OPEN_MODEL_ZOO_GIT_URL="${OPEN_MODEL_ZOO_GIT_URL:-https://github.com/openvinotoolkit/open_model_zoo.git}"
+OPEN_MODEL_ZOO_TAG="${OPEN_MODEL_ZOO_TAG:-}"
+
+AGENT_INSTALL_PROXY_MODE="${AGENT_INSTALL_PROXY_MODE:-auto}"
+AGENT_INSTALL_HTTP_PROXY="${AGENT_INSTALL_HTTP_PROXY:-http://proxy-dmz.intel.com:911}"
+AGENT_INSTALL_HTTPS_PROXY="${AGENT_INSTALL_HTTPS_PROXY:-http://proxy-dmz.intel.com:912}"
+AGENT_INSTALL_NO_PROXY="${AGENT_INSTALL_NO_PROXY:-}"
+AGENT_INSTALL_PROXY_PROBE_URL="${AGENT_INSTALL_PROXY_PROBE_URL:-https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB}"
 
 INSTALL_HERMES="${INSTALL_HERMES:-1}"
 INSTALL_OPENCLAW="${INSTALL_OPENCLAW:-1}"
 INSTALL_SUPERCLAW_CTL="${INSTALL_SUPERCLAW_CTL:-0}"
-INTEL_PACKAGE_POLICY="${INTEL_PACKAGE_POLICY:-latest}"
+INSTALL_OPEN_MODEL_ZOO="${INSTALL_OPEN_MODEL_ZOO:-1}"
+INTEL_PACKAGE_POLICY="${INTEL_PACKAGE_POLICY:-release}"
 
-# Used only when INTEL_PACKAGE_POLICY=pinned (ICT template defaults; may not match live apt).
+# Used only when INTEL_PACKAGE_POLICY=pinned (exact deb names; OpenVINO uses release-style meta names).
 INTEL_PINNED_PACKAGES=(
-	openvino_2025.3.0.19807
+	openvino-2026.2.0
 	intel-oneapi-runtime-compilers_2025.3.3-30
 	intel-oneapi-runtime-compilers-common_2025.3.3-30
 	intel-oneapi-runtime-opencl_2025.3.3-30
@@ -78,6 +102,11 @@ PACKAGES=(
 	xz-utils
 	gnupg
 	apt-transport-https
+	cmake
+	g++
+	gcc
+	make
+	pkgconf
 	python3
 	python3-pip
 	python3-venv
@@ -93,7 +122,7 @@ PACKAGES=(
 )
 
 log() {
-	echo "[${LOG_TAG}] $(date -u +%Y-%m-%dT%H:%M:%SZ) $*" | tee -a "${LOG_FILE}"
+	echo "[${LOG_TAG}] $(date -u +%Y-%m-%dT%H:%M:%SZ) $*" | tee -a "${LOG_FILE}" >&2
 }
 
 require_root() {
@@ -101,6 +130,100 @@ require_root() {
 		echo "${SCRIPT_NAME}: run as root (e.g. sudo ${SCRIPT_NAME})" >&2
 		exit 1
 	fi
+}
+
+proxy_env_already_set() {
+	[[ -n "${http_proxy:-${HTTP_PROXY:-}}" || -n "${https_proxy:-${HTTPS_PROXY:-}}" ]]
+}
+
+sync_proxy_env_from_existing() {
+	local h="${http_proxy:-${HTTP_PROXY:-}}"
+	local s="${https_proxy:-${HTTPS_PROXY:-}}"
+	local n="${no_proxy:-${NO_PROXY:-}}"
+
+	if [[ -n "${h}" ]]; then
+		export http_proxy="${h}" HTTP_PROXY="${h}"
+	fi
+	if [[ -n "${s}" ]]; then
+		export https_proxy="${s}" HTTPS_PROXY="${s}"
+	fi
+	if [[ -n "${n}" ]]; then
+		export no_proxy="${n}" NO_PROXY="${n}"
+	fi
+}
+
+apply_agent_install_default_proxy() {
+	export http_proxy="${AGENT_INSTALL_HTTP_PROXY}"
+	export https_proxy="${AGENT_INSTALL_HTTPS_PROXY}"
+	export HTTP_PROXY="${http_proxy}"
+	export HTTPS_PROXY="${https_proxy}"
+	if [[ -n "${AGENT_INSTALL_NO_PROXY}" ]]; then
+		export no_proxy="${AGENT_INSTALL_NO_PROXY}"
+		export NO_PROXY="${no_proxy}"
+	fi
+}
+
+network_https_reachable() {
+	local url="$1"
+	local direct="$2"
+
+	if ! command -v curl >/dev/null 2>&1; then
+		return 0
+	fi
+	if [[ "${direct}" == "1" ]]; then
+		curl -fsSL --connect-timeout 8 --max-time 20 --noproxy '*' -o /dev/null "${url}" 2>/dev/null
+	else
+		curl -fsSL --connect-timeout 8 --max-time 20 -o /dev/null "${url}" 2>/dev/null
+	fi
+}
+
+# auto: keep user/sudo env; else direct probe; else Intel DMZ defaults. off: never set. on: always set if unset.
+configure_network_proxy() {
+	local mode="${AGENT_INSTALL_PROXY_MODE}"
+	local probe="${AGENT_INSTALL_PROXY_PROBE_URL}"
+
+	sync_proxy_env_from_existing
+	if proxy_env_already_set; then
+		log "Network proxy: using existing env (http_proxy=${http_proxy:-<unset>}, https_proxy=${https_proxy:-<unset>})"
+		return 0
+	fi
+
+	case "${mode}" in
+	off)
+		log "Network proxy: AGENT_INSTALL_PROXY_MODE=off (not setting http_proxy/https_proxy)"
+		return 0
+		;;
+	on)
+		apply_agent_install_default_proxy
+		log "Network proxy: mode=on — set http_proxy=${http_proxy}, https_proxy=${https_proxy}"
+		return 0
+		;;
+	auto)
+		;;
+	*)
+		log "WARN: unknown AGENT_INSTALL_PROXY_MODE=${mode}; treating as auto"
+		;;
+	esac
+
+	if network_https_reachable "${probe}" "1"; then
+		log "Network proxy: direct HTTPS OK; not setting proxy (AGENT_INSTALL_PROXY_MODE=auto)"
+		return 0
+	fi
+
+	if ! command -v curl >/dev/null 2>&1; then
+		log "Network proxy: curl unavailable for probe; not auto-setting proxy"
+		return 0
+	fi
+
+	log "Network proxy: direct probe failed for ${probe}; trying default Intel DMZ proxy"
+	apply_agent_install_default_proxy
+	if network_https_reachable "${probe}" "0"; then
+		log "Network proxy: using defaults (http_proxy=${http_proxy}, https_proxy=${https_proxy})"
+		return 0
+	fi
+
+	log "WARN: HTTPS still failing via default proxy; unsetting auto-proxy (set http_proxy/https_proxy manually)"
+	unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY no_proxy NO_PROXY
 }
 
 detect_intel_ubuntu_suite() {
@@ -271,6 +394,37 @@ run_once_step_superclaw_ctl() {
 	"
 }
 
+run_once_step_open_model_zoo() {
+	if [[ "${INSTALL_OPEN_MODEL_ZOO}" != "1" ]]; then
+		return 0
+	fi
+
+	local omz_tag
+	omz_tag="$(resolve_open_model_zoo_tag)" || return 1
+
+	run_once_step "open-model-zoo-${omz_tag}" "
+		set -euo pipefail
+		dir='${OPEN_MODEL_ZOO_DIR}'
+		tag='${omz_tag}'
+		url='${OPEN_MODEL_ZOO_GIT_URL}'
+		parent=\$(dirname \"\${dir}\")
+		install -d -m 0755 \"\${parent}\"
+		if [[ -d \"\${dir}/.git\" ]]; then
+			git -C \"\${dir}\" fetch --tags origin
+			git -C \"\${dir}\" checkout \"\${tag}\"
+		else
+			git clone --depth 1 --branch \"\${tag}\" \"\${url}\" \"\${dir}\"
+		fi
+		install -d -m 0755 /etc/profile.d
+		printf '%s\\n' \"export OMZ_ROOT=\${dir}\" \"export OPEN_MODEL_ZOO=\${dir}\" \"export OMZ_GIT_TAG=\${tag}\" > /etc/profile.d/open-model-zoo.sh
+		chmod 0644 /etc/profile.d/open-model-zoo.sh
+		if [[ -f \"\${dir}/requirements.txt\" ]]; then
+			python3 -m pip install --break-system-packages -r \"\${dir}/requirements.txt\"
+		fi
+	"
+	log "Open Model Zoo git tag: ${omz_tag} (override with OPEN_MODEL_ZOO_TAG=…)"
+}
+
 run_once_step_agent_python_venv() {
 	run_once_step "agent-python-venv" "
 		set -euo pipefail
@@ -316,29 +470,19 @@ latest_apt_pkg_matching() {
 	echo ""
 }
 
-latest_openvino_pkg() {
-	local pkg="" lists="" f
+latest_openvino_meta_pkg() {
+	local pkg="" f
 
-	pkg="$(list_apt_pkg_names_matching '^openvino_' | sort -V | tail -1)"
+	pkg="$(list_apt_pkg_names_matching '^openvino-[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)"
 	if [[ -n "${pkg}" ]]; then
-		echo "${pkg}"
-		return 0
-	fi
-
-	if apt-cache show openvino >/dev/null 2>&1; then
-		echo "openvino"
-		return 0
-	fi
-
-	pkg="$(list_apt_pkg_names_matching '^openvino' | sort -V | tail -1)"
-	if [[ -n "${pkg}" ]] && apt-cache show "${pkg}" >/dev/null 2>&1; then
 		echo "${pkg}"
 		return 0
 	fi
 
 	while IFS= read -r f; do
 		[[ -z "${f}" ]] && continue
-		pkg="$(grep -E '^Package: openvino' "${f}" 2>/dev/null | awk '{print $2}' | sort -V | tail -1)"
+		pkg="$(grep -E '^Package: openvino-[0-9]+\.[0-9]+\.[0-9]+$' "${f}" 2>/dev/null \
+			| awk '{print $2}' | sort -V | tail -1)"
 		if [[ -n "${pkg}" ]]; then
 			echo "${pkg}"
 			return 0
@@ -348,8 +492,77 @@ latest_openvino_pkg() {
 	return 1
 }
 
+latest_openvino_pkg() {
+	latest_openvino_meta_pkg
+}
+
+openvino_meta_version() {
+	local meta="$1"
+	meta="${meta#openvino-}"
+	echo "${meta}"
+}
+
+append_openvino_plugin_packages() {
+	local ver="$1"
+	local suffix pkg
+
+	for suffix in hetero auto-batch auto intel-cpu intel-gpu intel-npu; do
+		pkg="libopenvino-${suffix}-plugin-${ver}"
+		if apt-cache show "${pkg}" >/dev/null 2>&1; then
+			log "Intel OpenVINO plugin: ${pkg}"
+			RESOLVED_PACKAGES+=("${pkg}")
+		else
+			log "WARN: optional OpenVINO plugin not in apt: ${pkg}"
+		fi
+	done
+}
+
+append_openvino_release_packages() {
+	local ver="$1"
+	local meta="openvino-${ver}"
+
+	if ! apt-cache show "${meta}" >/dev/null 2>&1; then
+		log "ERROR: ${meta} not in apt after resolve (internal error)"
+		exit 1
+	fi
+
+	log "Intel OpenVINO meta: ${meta}"
+	RESOLVED_PACKAGES+=("${meta}")
+	append_openvino_plugin_packages "${ver}"
+}
+
+# Target OPENVINO_RELEASE when published; else optional fallback to newest openvino-* meta in apt.
+resolve_openvino_apt_version() {
+	local want="${OPENVINO_RELEASE}"
+	local meta latest
+
+	if apt-cache show "openvino-${want}" >/dev/null 2>&1; then
+		echo "${want}"
+		return 0
+	fi
+
+	if [[ "${OPENVINO_RELEASE_FALLBACK}" != "1" ]]; then
+		log "ERROR: openvino-${want} not in apt (OPENVINO_RELEASE=${want}, track openvino/${OPENVINO_REPO_TRACK})"
+		log "Hint: apt-cache pkgnames | grep -E '^openvino-' | sort -V | tail"
+		log "Hint: set OPENVINO_RELEASE_FALLBACK=1 to install newest published meta until ${want} ships"
+		exit 1
+	fi
+
+	meta="$(latest_openvino_meta_pkg)" || {
+		log "ERROR: no openvino-* meta package in apt"
+		exit 1
+	}
+	latest="$(openvino_meta_version "${meta}")"
+	log "WARN: openvino-${want} not published on openvino/${OPENVINO_REPO_TRACK} ubuntu24 yet"
+	log "WARN: OPENVINO_RELEASE_FALLBACK=1 — using ${meta} (newest in apt); re-run later for ${want}"
+	echo "${latest}"
+}
+
 intel_openvino_repo_has_packages() {
-	latest_openvino_pkg >/dev/null 2>&1
+	if apt-cache show "openvino-${OPENVINO_RELEASE}" >/dev/null 2>&1; then
+		return 0
+	fi
+	latest_openvino_meta_pkg >/dev/null 2>&1
 }
 
 # Pinned names in PACKAGES may lag the live Intel repo; pick newest matching package.
@@ -363,8 +576,15 @@ resolve_pinned_apt_pkg() {
 	fi
 
 	case "${want}" in
+	openvino-*)
+		if apt-cache show "${want}" >/dev/null 2>&1; then
+			echo "${want}"
+			return 0
+		fi
+		resolved="$(latest_openvino_meta_pkg || true)"
+		;;
 	openvino_*)
-		resolved="$(latest_openvino_pkg || true)"
+		resolved="$(latest_openvino_meta_pkg || true)"
 		;;
 	intel-oneapi-runtime-compilers_*)
 		resolved="$(latest_apt_pkg_matching '^intel-oneapi-runtime-compilers_')"
@@ -395,15 +615,30 @@ resolve_pinned_apt_pkg() {
 
 resolve_packages_for_install() {
 	RESOLVED_PACKAGES=()
-	local pkg resolved pattern
+	local pkg resolved pattern ver meta
 
-	if [[ "${INTEL_PACKAGE_POLICY}" == "latest" ]]; then
-		log "Intel package policy: latest (newest in apt from openvino/${OPENVINO_REPO_TRACK} + oneapi + dlstreamer repos)"
-		if resolved="$(latest_openvino_pkg)"; then
-			log "Intel latest: openvino -> ${resolved}"
+	if [[ "${INTEL_PACKAGE_POLICY}" == "release" ]]; then
+		ver="$(resolve_openvino_apt_version)"
+		log "Intel package policy: release (target openvino-${OPENVINO_RELEASE}, installing openvino-${ver} + plugins + oneAPI + DL Streamer)"
+		append_openvino_release_packages "${ver}"
+		for pattern in "${INTEL_LATEST_APT_PATTERNS[@]}"; do
+			resolved="$(latest_apt_pkg_matching "${pattern}")"
+			if [[ -n "${resolved}" ]] && apt-cache show "${resolved}" >/dev/null 2>&1; then
+				log "Intel release stack: ${pattern} -> ${resolved}"
+				RESOLVED_PACKAGES+=("${resolved}")
+			else
+				log "WARN: no package for pattern ${pattern}"
+			fi
+		done
+	elif [[ "${INTEL_PACKAGE_POLICY}" == "latest" ]]; then
+		log "Intel package policy: latest (newest openvino-* meta from openvino/${OPENVINO_REPO_TRACK} + oneapi + dlstreamer)"
+		if resolved="$(latest_openvino_meta_pkg)"; then
+			ver="$(openvino_meta_version "${resolved}")"
+			log "Intel latest: openvino meta -> ${resolved}"
 			RESOLVED_PACKAGES+=("${resolved}")
+			append_openvino_plugin_packages "${ver}"
 		else
-			log "WARN: no OpenVINO package found (try: apt-cache pkgnames | grep -i openvino)"
+			log "WARN: no OpenVINO meta package found (try: apt-cache pkgnames | grep -E '^openvino-')"
 		fi
 		for pattern in "${INTEL_LATEST_APT_PATTERNS[@]}"; do
 			resolved="$(latest_apt_pkg_matching "${pattern}")"
@@ -419,6 +654,9 @@ resolve_packages_for_install() {
 		for pkg in "${INTEL_PINNED_PACKAGES[@]}"; do
 			if resolved="$(resolve_pinned_apt_pkg "${pkg}")"; then
 				RESOLVED_PACKAGES+=("${resolved}")
+				if [[ "${resolved}" =~ ^openvino-[0-9] ]]; then
+					append_openvino_plugin_packages "$(openvino_meta_version "${resolved}")"
+				fi
 			else
 				log "ERROR: pinned package missing: ${pkg}"
 				exit 1
@@ -440,6 +678,63 @@ log_installed_intel_versions() {
 	while IFS= read -r line; do
 		[[ -n "${line}" ]] && log "Installed: ${line}"
 	done < <(dpkg-query -W -f='${Package} ${Version}\n' 'openvino*' 'intel-oneapi-runtime*' 'intel-dlstreamer*' 2>/dev/null || true)
+}
+
+installed_openvino_apt_release() {
+	local pkg
+	pkg="$(dpkg-query -W -f='${Package}\n' 'openvino-[0-9]*' 2>/dev/null \
+		| grep -E '^openvino-[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)"
+	[[ -n "${pkg}" ]] || return 1
+	echo "${pkg#openvino-}"
+}
+
+omz_remote_tag_exists() {
+	local tag="$1"
+	git ls-remote --tags "${OPEN_MODEL_ZOO_GIT_URL}" "refs/tags/${tag}^{}" "refs/tags/${tag}" 2>/dev/null \
+		| grep -q .
+}
+
+list_omz_remote_version_tags() {
+	git ls-remote --tags "${OPEN_MODEL_ZOO_GIT_URL}" 2>/dev/null \
+		| awk -F/ '{print $NF}' | sed 's/\^{}//' \
+		| grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -Vu
+}
+
+# OPEN_MODEL_ZOO_TAG unset: match OPENVINO_RELEASE, then installed apt meta, else newest OMZ tag on GitHub.
+resolve_open_model_zoo_tag() {
+	local tag installed want newest
+
+	if [[ -n "${OPEN_MODEL_ZOO_TAG}" ]]; then
+		if omz_remote_tag_exists "${OPEN_MODEL_ZOO_TAG}"; then
+			echo "${OPEN_MODEL_ZOO_TAG}"
+			return 0
+		fi
+		log "ERROR: OPEN_MODEL_ZOO_TAG=${OPEN_MODEL_ZOO_TAG} not found on ${OPEN_MODEL_ZOO_GIT_URL}"
+		return 1
+	fi
+
+	want="${OPENVINO_RELEASE}"
+	installed="$(installed_openvino_apt_release || true)"
+	for tag in "${want}" "${installed}"; do
+		[[ -z "${tag}" ]] && continue
+		if omz_remote_tag_exists "${tag}"; then
+			if [[ "${tag}" != "${want}" ]]; then
+				log "WARN: OMZ git tag ${want} not on GitHub; using ${tag} (aligned with OpenVINO apt / fallback)"
+			fi
+			echo "${tag}"
+			return 0
+		fi
+	done
+
+	newest="$(list_omz_remote_version_tags | tail -1)"
+	if [[ -n "${newest}" ]]; then
+		log "WARN: no OMZ tag matching OpenVINO ${want} (apt ${installed:-unknown}); using newest OMZ tag ${newest}"
+		echo "${newest}"
+		return 0
+	fi
+
+	log "ERROR: could not list version tags from ${OPEN_MODEL_ZOO_GIT_URL}"
+	return 1
 }
 
 install_apt_packages() {
@@ -479,10 +774,13 @@ main() {
 	mkdir -p "$(dirname "${LOG_FILE}")" "${STAMP_DIR}" /opt/agent
 	: >> "${LOG_FILE}"
 
-	log "=== ${SCRIPT_NAME} start (FORCE=${FORCE:-1}, rev=${SCRIPT_REV}) ==="
+	configure_network_proxy
+
+	log "=== ${SCRIPT_NAME} start (FORCE=${FORCE:-1}, rev=${SCRIPT_REV}, OPENVINO_RELEASE=${OPENVINO_RELEASE}) ==="
 
 	run_once_step_intel_apt_repos
 	install_apt_packages
+	run_once_step_open_model_zoo
 
 	if [[ "${INSTALL_HERMES}" == "1" ]]; then
 		run_once_step_hermes
@@ -498,6 +796,9 @@ main() {
 
 	log "=== ${SCRIPT_NAME} complete ==="
 	log "Python agent venv: ${AGENT_VENV}/bin/activate"
+	if [[ "${INSTALL_OPEN_MODEL_ZOO}" == "1" ]]; then
+		log "Open Model Zoo: ${OPEN_MODEL_ZOO_DIR} (source /etc/profile.d/open-model-zoo.sh; see log for git tag)"
+	fi
 	if [[ "${INSTALL_HERMES}" == "1" ]]; then
 		log "Hermes: configure manually — hermes setup (optional: hermes gateway install)"
 	fi

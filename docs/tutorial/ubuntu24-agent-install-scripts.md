@@ -106,14 +106,48 @@ https://apt.repos.intel.com/edgeai/dlstreamer/${INTEL_UBUNTU_SUITE}
 
 ### Package policy
 
+Default **target** is **OpenVINO 2026.2.0** (`OPENVINO_RELEASE=2026.2.0`). Intel’s Ubuntu apt channel
+(`openvino/2025` + suite `ubuntu24`) may not publish `openvino-2026.2.0` immediately; when the meta deb
+is missing, **`OPENVINO_RELEASE_FALLBACK=1`** (default) installs the **newest** `openvino-*` meta in apt
+(e.g. `2025.4.1`) and logs a **WARN**. Set **`OPENVINO_RELEASE_FALLBACK=0`** to fail until the exact
+release is available.
+
 | `INTEL_PACKAGE_POLICY` | Behavior |
 |------------------------|----------|
-| `latest` (default) | After `apt-get update`, install **newest** matching `openvino_*`, `intel-oneapi-runtime-*`, `intel-dlstreamer_*` in cache |
-| `pinned` | Require exact names in `INTEL_PINNED_PACKAGES` in the script |
+| `release` (default) | `openvino-${OPENVINO_RELEASE}` + matching plugins + newest oneAPI/DL Streamer in cache |
+| `latest` | Newest `openvino-*` meta + plugins for that version + oneAPI/DL Streamer |
+| `pinned` | Exact names in `INTEL_PINNED_PACKAGES` in the script (+ plugins when meta is `openvino-*`) |
 
-Base apt set also includes Level Zero GPU libs, optional NPU / `xpu-smi` (WARN + skip if absent), `podman`.
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `OPENVINO_RELEASE` | `2026.2.0` | OpenVINO apt release (26.2) |
+| `OPENVINO_REPO_TRACK` | `2025` | Intel apt path segment `…/openvino/${OPENVINO_REPO_TRACK}` |
 
-Package discovery uses `apt-cache pkgnames` and Intel `_Packages` list fallbacks (not `apt-cache search '^openvino_'` alone).
+### Open Model Zoo
+
+Not shipped as a separate Intel apt package. When `INSTALL_OPEN_MODEL_ZOO=1` (default), the script
+clones [open_model_zoo](https://github.com/openvinotoolkit/open_model_zoo) to
+`/opt/intel/open_model_zoo`, writes `/etc/profile.d/open-model-zoo.sh` (`OMZ_ROOT`, `OMZ_GIT_TAG`),
+and runs `pip install -r requirements.txt` when present.
+
+**Git tag selection (v13+):** If `OPEN_MODEL_ZOO_TAG` is unset, the script tries, in order: tag matching
+`OPENVINO_RELEASE`, tag matching the **installed** `openvino-*` apt meta (e.g. `2025.4.1` after
+fallback), then the **newest version tag on GitHub** (currently often **`2024.6.0`** — OMZ tags lag
+OpenVINO apt). Set `OPEN_MODEL_ZOO_TAG` explicitly to force a tag.
+
+| Variable | Default |
+|----------|---------|
+| `INSTALL_OPEN_MODEL_ZOO` | `1` |
+| `OPEN_MODEL_ZOO_TAG` | *(auto)* |
+| `OPEN_MODEL_ZOO_DIR` | `/opt/intel/open_model_zoo` |
+
+Stamp id: `open-model-zoo-<resolved-tag>`.
+
+Base apt set also includes Level Zero GPU libs, optional NPU / `xpu-smi` (WARN + skip if absent),
+`podman`, and OpenVINO sample build tools (`cmake`, `gcc`, `g++`, `make`, `pkgconf`).
+
+Package discovery uses `apt-cache pkgnames` and Intel `_Packages` list fallbacks (prefer
+`openvino-YYYY.M.P` meta names, not legacy `openvino_*` only).
 
 ---
 
@@ -187,13 +221,55 @@ Venv creation re-runs each invocation by default (`FORCE=1`); use `FORCE=0` to s
 | `INSTALL_HERMES` | `1` | |
 | `INSTALL_OPENCLAW` | `1` | |
 | `INSTALL_SUPERCLAW_CTL` | `0` | |
-| `INTEL_PACKAGE_POLICY` | `latest` | or `pinned` |
-| `INTEL_UBUNTU_SUITE` | auto | `ubuntu22` / `ubuntu24` |
+| `INTEL_PACKAGE_POLICY` | `release` | `latest` or `pinned` |
+| `OPENVINO_RELEASE` | `2026.2.0` | Target OpenVINO apt release (26.2) |
+| `OPENVINO_RELEASE_FALLBACK` | `1` | `0` = fail if target meta deb missing |
 | `OPENVINO_REPO_TRACK` | `2025` | Intel openvino apt path segment |
+| `INSTALL_OPEN_MODEL_ZOO` | `1` | Git clone OMZ to `/opt/intel/open_model_zoo` |
+| `INTEL_UBUNTU_SUITE` | auto | `ubuntu22` / `ubuntu24` |
 | `INTEL_APT_ARCH` | `amd64` | |
 | `HERMES_INSTALL_FLAGS` | see Hermes section | |
 | `HERMES_INSTALL_AS_USER` | empty | |
 | `FORCE` | `1` | `0` = skip stamped run-once steps (Hermes, venv, …) |
+
+### HTTP(S) proxy
+
+Corporate installs often need **`http_proxy` / `https_proxy`**; lab or edge hosts may use **direct** egress.
+Both scripts call **`configure_network_proxy`** at startup (before apt/curl/git).
+
+| `AGENT_INSTALL_PROXY_MODE` | Behavior |
+|----------------------------|----------|
+| **`auto`** (default) | If `http_proxy`/`https_proxy` (any case) already set → use them. Else **direct HTTPS probe**; if OK → **no proxy**. If probe fails → set Intel DMZ defaults (`911`/`912`). If proxy probe fails → WARN and continue without auto-proxy. |
+| **`on`** | If unset, always export `AGENT_INSTALL_HTTP_PROXY` / `AGENT_INSTALL_HTTPS_PROXY` (no direct probe). |
+| **`off`** | Never set proxy (direct only; use when a proxy would break local mirrors). |
+
+| Variable | Default |
+|----------|---------|
+| `AGENT_INSTALL_HTTP_PROXY` | `http://proxy-dmz.intel.com:911` |
+| `AGENT_INSTALL_HTTPS_PROXY` | `http://proxy-dmz.intel.com:912` |
+| `AGENT_INSTALL_NO_PROXY` | *(empty)* |
+| `AGENT_INSTALL_PROXY_PROBE_URL` | Intel GPG URL (Intel script); CUDA keyring URL (NVIDIA script) |
+
+**sudo:** user proxies are often dropped unless preserved. Either `sudo -E`, export before `sudo`, or rely on **`auto`** / **`on`** so root gets defaults.
+
+Example (user already has proxy, as on ArcherCity):
+
+```bash
+env | grep -i proxy   # http_proxy / https_proxy set
+sudo -E FORCE=1 /opt/agent/agent-install.sh   # keeps env; script logs "using existing env"
+```
+
+Example (force DMZ proxy on root either way):
+
+```bash
+sudo AGENT_INSTALL_PROXY_MODE=on /opt/agent/agent-install.sh
+```
+
+Example (lab, no proxy):
+
+```bash
+sudo AGENT_INSTALL_PROXY_MODE=auto /opt/agent/agent-install.sh   # direct probe, no proxy if reachable
+```
 
 ### NVIDIA (`agent-install-nvidia.sh`)
 
@@ -228,9 +304,13 @@ ls -la /var/lib/agent-install/done/
 
 | Symptom | Likely cause | Action |
 |---------|--------------|--------|
+| `set: Illegal option -o pipefail` | Script run with **dash** (`sh agent-install.sh`) or old copy without bash guard | Use `sudo bash ./agent-install.sh` or v10+ script (auto re-exec); ensure shebang `#!/bin/bash` and LF line endings |
 | Intel 404 on `noble` in apt | Wrong suite in old lists | Use current script; remove obsolete stamp `intel-apt-repos`; or `FORCE=1` |
 | `Skip step 'intel-apt-repos'` (old id) | Pre-v2 script / stamp | Copy current script; `FORCE=1` |
 | No OpenVINO packages after update | Repos OK but wrong discovery | v6+ script; check `intel-openvino.list` shows `ubuntu24` suite |
+| `openvino-2026.2.0 not in apt` | Not published on Intel ubuntu24 channel yet | Default **fallback** installs newest `openvino-*` with WARN (v11+); or `OPENVINO_RELEASE=2025.4.1`; strict: `OPENVINO_RELEASE_FALLBACK=0` |
+| OpenVINO missing GPU/NPU plugins | Only meta deb installed | v9+ installs `libopenvino-*-plugin-${OPENVINO_RELEASE}` explicitly |
+| Open Model Zoo git checkout fails | Tag not on GitHub (e.g. `2026.2.0`) | v13+ auto-picks newest OMZ tag with WARN; or `OPEN_MODEL_ZOO_TAG=2024.6.0` |
 | `Conflicting values set for option Signed-By` (openvino ubuntu24) | ICT `package-repositories.list` + script `intel-*.list` | v7+ script strips ICT Intel lines; or remove `packageRepositories` from template |
 | Hermes prompts | Old install line or missing flags | Use `hermes-agent-v2` step; default `HERMES_INSTALL_FLAGS`; `FORCE=1` |
 | `tar (child): xz: Cannot exec` during Hermes | Minimal image without `xz-utils` | Use current script (v8+); or `apt install -y xz-utils` and re-run with `FORCE=1` |

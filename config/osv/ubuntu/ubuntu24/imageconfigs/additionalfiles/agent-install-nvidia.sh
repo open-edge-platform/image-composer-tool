@@ -1,4 +1,8 @@
 #!/bin/bash
+case "${BASH_VERSION:-}" in
+'') exec /bin/bash "$0" "$@" ;;
+esac
+
 # Install NVIDIA GPU base stack + common agent frameworks on Ubuntu 24.04 (Noble).
 # Target: x86_64 with NVIDIA GPU (CUDA 12.x network repo).
 #
@@ -21,6 +25,7 @@
 #   OPENCLAW_INSTALL_URL=https://openclaw.ai/install.sh
 #   HERMES_INSTALL_FLAGS="--skip-setup --non-interactive --skip-browser"
 #   HERMES_INSTALL_AS_USER=
+#   AGENT_INSTALL_PROXY_MODE=auto   # auto | on | off (same as agent-install.sh)
 #
 # Agent (OS) layer — public install paths (Jun 2026):
 #   Hermes    — hermes-agent.nousresearch.com/install.sh
@@ -63,6 +68,12 @@ readonly HERMES_INSTALL_URL="${HERMES_INSTALL_URL:-https://hermes-agent.nousrese
 HERMES_INSTALL_FLAGS="${HERMES_INSTALL_FLAGS:---skip-setup --non-interactive --skip-browser}"
 HERMES_INSTALL_AS_USER="${HERMES_INSTALL_AS_USER:-}"
 
+AGENT_INSTALL_PROXY_MODE="${AGENT_INSTALL_PROXY_MODE:-auto}"
+AGENT_INSTALL_HTTP_PROXY="${AGENT_INSTALL_HTTP_PROXY:-http://proxy-dmz.intel.com:911}"
+AGENT_INSTALL_HTTPS_PROXY="${AGENT_INSTALL_HTTPS_PROXY:-http://proxy-dmz.intel.com:912}"
+AGENT_INSTALL_NO_PROXY="${AGENT_INSTALL_NO_PROXY:-}"
+AGENT_INSTALL_PROXY_PROBE_URL="${AGENT_INSTALL_PROXY_PROBE_URL:-${CUDA_KEYRING_URL}}"
+
 # Installed after cuda-keyring + apt update (adjust names if apt reports alternatives).
 PACKAGES=(
 	ca-certificates
@@ -79,7 +90,7 @@ PACKAGES=(
 )
 
 log() {
-	echo "[${LOG_TAG}] $(date -u +%Y-%m-%dT%H:%M:%SZ) $*" | tee -a "${LOG_FILE}"
+	echo "[${LOG_TAG}] $(date -u +%Y-%m-%dT%H:%M:%SZ) $*" | tee -a "${LOG_FILE}" >&2
 }
 
 require_root() {
@@ -87,6 +98,99 @@ require_root() {
 		echo "${SCRIPT_NAME}: run as root (e.g. sudo ${SCRIPT_NAME})" >&2
 		exit 1
 	fi
+}
+
+proxy_env_already_set() {
+	[[ -n "${http_proxy:-${HTTP_PROXY:-}}" || -n "${https_proxy:-${HTTPS_PROXY:-}}" ]]
+}
+
+sync_proxy_env_from_existing() {
+	local h="${http_proxy:-${HTTP_PROXY:-}}"
+	local s="${https_proxy:-${HTTPS_PROXY:-}}"
+	local n="${no_proxy:-${NO_PROXY:-}}"
+
+	if [[ -n "${h}" ]]; then
+		export http_proxy="${h}" HTTP_PROXY="${h}"
+	fi
+	if [[ -n "${s}" ]]; then
+		export https_proxy="${s}" HTTPS_PROXY="${s}"
+	fi
+	if [[ -n "${n}" ]]; then
+		export no_proxy="${n}" NO_PROXY="${n}"
+	fi
+}
+
+apply_agent_install_default_proxy() {
+	export http_proxy="${AGENT_INSTALL_HTTP_PROXY}"
+	export https_proxy="${AGENT_INSTALL_HTTPS_PROXY}"
+	export HTTP_PROXY="${http_proxy}"
+	export HTTPS_PROXY="${https_proxy}"
+	if [[ -n "${AGENT_INSTALL_NO_PROXY}" ]]; then
+		export no_proxy="${AGENT_INSTALL_NO_PROXY}"
+		export NO_PROXY="${no_proxy}"
+	fi
+}
+
+network_https_reachable() {
+	local url="$1"
+	local direct="$2"
+
+	if ! command -v curl >/dev/null 2>&1; then
+		return 0
+	fi
+	if [[ "${direct}" == "1" ]]; then
+		curl -fsSL --connect-timeout 8 --max-time 20 --noproxy '*' -o /dev/null "${url}" 2>/dev/null
+	else
+		curl -fsSL --connect-timeout 8 --max-time 20 -o /dev/null "${url}" 2>/dev/null
+	fi
+}
+
+configure_network_proxy() {
+	local mode="${AGENT_INSTALL_PROXY_MODE}"
+	local probe="${AGENT_INSTALL_PROXY_PROBE_URL}"
+
+	sync_proxy_env_from_existing
+	if proxy_env_already_set; then
+		log "Network proxy: using existing env (http_proxy=${http_proxy:-<unset>}, https_proxy=${https_proxy:-<unset>})"
+		return 0
+	fi
+
+	case "${mode}" in
+	off)
+		log "Network proxy: AGENT_INSTALL_PROXY_MODE=off (not setting http_proxy/https_proxy)"
+		return 0
+		;;
+	on)
+		apply_agent_install_default_proxy
+		log "Network proxy: mode=on — set http_proxy=${http_proxy}, https_proxy=${https_proxy}"
+		return 0
+		;;
+	auto)
+		;;
+	*)
+		log "WARN: unknown AGENT_INSTALL_PROXY_MODE=${mode}; treating as auto"
+		;;
+	esac
+
+	if network_https_reachable "${probe}" "1"; then
+		log "Network proxy: direct HTTPS OK; not setting proxy (AGENT_INSTALL_PROXY_MODE=auto)"
+		return 0
+	fi
+
+	if ! command -v curl >/dev/null 2>&1; then
+		log "Network proxy: curl unavailable for probe; not auto-setting proxy"
+		return 0
+	fi
+
+	log "Network proxy: direct probe failed for ${probe}; trying default Intel DMZ proxy"
+	apply_agent_install_default_proxy
+	if network_https_reachable "${probe}" "0"; then
+		log "Network proxy: using defaults (http_proxy=${http_proxy}, https_proxy=${https_proxy})"
+		return 0
+	fi
+
+	log "WARN: HTTPS still failing via default proxy; unsetting auto-proxy (set http_proxy/https_proxy manually)"
+	unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY no_proxy NO_PROXY
 }
 
 run_once_step() {
@@ -276,6 +380,8 @@ main() {
 	require_root
 	mkdir -p "$(dirname "${LOG_FILE}")" "${STAMP_DIR}" /opt/agent
 	: >> "${LOG_FILE}"
+
+	configure_network_proxy
 
 	log "=== ${SCRIPT_NAME} start (FORCE=${FORCE:-1}) ==="
 
