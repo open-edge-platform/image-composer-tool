@@ -1973,22 +1973,6 @@ func TestPrepareVeritySetupInvalidPair(t *testing.T) {
 	}
 }
 
-func TestGetDebMirrorSpecFromSourcesList(t *testing.T) {
-	tmpDir := t.TempDir()
-	sourcesListPath := filepath.Join(tmpDir, "local.list")
-	if err := os.WriteFile(sourcesListPath, []byte("# comment\n\ndeb [trusted=yes] file:///cdrom/cache-repo stable main\n"), 0644); err != nil {
-		t.Fatalf("failed to write sources list: %v", err)
-	}
-
-	mirrorSpec, err := getDebMirrorSpecFromSourcesList(sourcesListPath)
-	if err != nil {
-		t.Fatalf("expected mirror spec, got error: %v", err)
-	}
-	if mirrorSpec != "deb [trusted=yes] file:///cdrom/cache-repo stable main" {
-		t.Fatalf("unexpected mirror spec: %q", mirrorSpec)
-	}
-}
-
 func TestResolveAdditionalFileLocalPath(t *testing.T) {
 	tmpDir := t.TempDir()
 	templatePath := filepath.Join(tmpDir, "templates", "test.yml")

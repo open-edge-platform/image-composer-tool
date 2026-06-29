@@ -296,25 +296,6 @@ func (imageOs *ImageOs) InstallImageOs(diskPathIdMap map[string]string) (version
 	return
 }
 
-func getDebMirrorSpecFromSourcesList(sourcesListPath string) (string, error) {
-	data, err := os.ReadFile(sourcesListPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to read apt sources list %s: %w", sourcesListPath, err)
-	}
-
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		if strings.HasPrefix(line, "deb ") || strings.HasPrefix(line, "deb-src ") {
-			return line, nil
-		}
-	}
-
-	return "", fmt.Errorf("no deb repository entry found in %s", sourcesListPath)
-}
-
 func (imageOs *ImageOs) initRootfsForDeb(installRoot string) error {
 	if imageOs.template.Target.ImageType == "wsl2" {
 		if err := imageOs.prepareInstallRootForDebBootstrap(installRoot); err != nil {
@@ -338,10 +319,6 @@ func (imageOs *ImageOs) initRootfsForDeb(installRoot string) error {
 		return fmt.Errorf("local repository config file does not exist: %s", localRepoConfigHostPath)
 	}
 	suite := debutils.DetectDebSuiteFromSourcesList(localRepoConfigHostPath)
-	mirrorSpec, err := getDebMirrorSpecFromSourcesList(localRepoConfigHostPath)
-	if err != nil {
-		return fmt.Errorf("failed to parse apt mirror from %s: %w", localRepoConfigHostPath, err)
-	}
 
 	chrootInstallRoot, err := imageOs.chrootEnv.GetChrootEnvPath(installRoot)
 	if err != nil {
@@ -365,8 +342,8 @@ func (imageOs *ImageOs) initRootfsForDeb(installRoot string) error {
 		"--hook-dir=/usr/share/mmdebstrap/hooks/file-mirror-automount "+
 		"--include=%s "+
 		"--verbose --debug "+
-		"-- %s %s %q",
-		targetArch, pkgListStr, suite, chrootInstallRoot, mirrorSpec)
+		"-- %s %s %s",
+		targetArch, pkgListStr, suite, chrootInstallRoot, localRepoConfigChrootPath)
 
 	chrootEnvRoot := imageOs.chrootEnv.GetChrootEnvRoot()
 	if _, err = shell.ExecCmdWithStream(cmd, true, chrootEnvRoot, nil); err != nil {
