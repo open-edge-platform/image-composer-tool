@@ -17,7 +17,7 @@ func TestArchiveFormat(t *testing.T) {
 		expectError bool
 	}{
 		{name: "gzip", artifact: config.ArtifactInfo{Type: "tar", Compression: "gz"}, wantType: "tar.gz", wantExt: "tar.gz"},
-		{name: "xz", artifact: config.ArtifactInfo{Type: "tar", Compression: "xz"}, wantType: "tar.xz", wantExt: "tar.xz"},
+		{name: "xz", artifact: config.ArtifactInfo{Type: "tar", Compression: "xz"}, expectError: true},
 		{name: "gzip alias", artifact: config.ArtifactInfo{Type: "tar", Compression: "gzip"}, wantType: "tar.gz", wantExt: "tar.gz"},
 		{name: "unsupported compression", artifact: config.ArtifactInfo{Type: "tar", Compression: "zstd"}, expectError: true},
 		{name: "unsupported type", artifact: config.ArtifactInfo{Type: "raw", Compression: "gz"}, expectError: true},
