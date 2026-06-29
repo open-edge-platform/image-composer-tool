@@ -6,6 +6,8 @@
 #   sudo /opt/agent/agent-install-nvidia.sh   # NVIDIA + Hermes/OpenClaw (+ optional NemoClaw)
 #   sudo INSTALL_SUPERCLAW_CTL=1 /opt/agent/agent-install.sh
 #   sudo INSTALL_NEMOCLAW=1 /opt/agent/agent-install-nvidia.sh
+# After flashing this image to a larger disk, grow rootfs to fill it:
+#   sudo /opt/agent/extend-storage.sh          # grow last partition + resize ext4 rootfs
 # FORCE=1 re-runs stamped custom steps. Requires network and mutable root (immutability off).
 # Package/step coverage: docs/tutorial/ubuntu24-agent-install-scripts.md
 
@@ -91,6 +93,8 @@ systemConfig:
       final: /opt/agent/agent-install.sh
     - local: ../additionalfiles/agent-install-nvidia.sh
       final: /opt/agent/agent-install-nvidia.sh
+    - local: ../additionalfiles/extend-storage.sh
+      final: /opt/agent/extend-storage.sh
 
   kernel:
     version: "6.17"

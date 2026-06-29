@@ -7,6 +7,7 @@ They are **not** executed during image compose unless you add separate build-tim
 |--------|---------------|-----|------------------------|
 | Intel | `/opt/agent/agent-install.sh` | `/var/log/agent-install.log` | `/var/lib/agent-install/done/` |
 | NVIDIA | `/opt/agent/agent-install-nvidia.sh` | `/var/log/agent-install-nvidia.log` | `/var/lib/agent-install-nvidia/done/` |
+| Extend storage | `/opt/agent/extend-storage.sh` | `/var/log/extend-storage.log` | none (idempotent; no-op when full) |
 
 Wire scripts via `systemConfig.additionalFiles` (see sample
 `image-templates/ubuntu24-x86_64-agent.yml` when present in the repo).
@@ -15,6 +16,7 @@ Wire scripts via `systemConfig.additionalFiles` (see sample
 
 - `config/osv/ubuntu/ubuntu24/imageconfigs/additionalfiles/agent-install.sh`
 - `config/osv/ubuntu/ubuntu24/imageconfigs/additionalfiles/agent-install-nvidia.sh`
+- `config/osv/ubuntu/ubuntu24/imageconfigs/additionalfiles/extend-storage.sh`
 
 Run **one** GPU stack per node unless you deliberately plan overlapping drivers.
 
@@ -28,6 +30,7 @@ Run **one** GPU stack per node unless you deliberately plan overlapping drivers.
 - [Hermes (automation-friendly)](#hermes-automation-friendly)
 - [OpenClaw / SuperClaw / NemoClaw](#openclaw--superclaw--nemoclaw)
 - [Python agent venv (pip)](#python-agent-venv-pip)
+- [Extend storage after flash](#extend-storage-after-flash)
 - [Environment variables](#environment-variables)
 - [Logging](#logging)
 - [Troubleshooting](#troubleshooting)
@@ -212,6 +215,51 @@ Venv creation re-runs each invocation by default (`FORCE=1`); use `FORCE=0` to s
 
 ---
 
+## Extend storage after flash
+
+Raw images are built to a fixed size (the agent image is 16GiB). When you flash or clone the image
+to a **larger** physical disk (for example with `dd`, `bmaptool`, or a cloning tool), the rootfs still
+ends at the original image size, leaving the rest of the disk unallocated. Run **`extend-storage.sh`**
+once on first boot (manually or via automation) to grow the **last partition** (assumed rootfs) and
+resize its filesystem to fill the disk.
+
+```bash
+sudo /opt/agent/extend-storage.sh
+sudo EXTEND_STORAGE_DRY_RUN=1 /opt/agent/extend-storage.sh   # show plan, make no changes
+```
+
+What it does:
+
+1. Detects the root device via `findmnt -n -o SOURCE /` and splits it into disk + partition number
+   (handles `nvme*` / `mmcblk*` `pN` and `sd*` `N` naming).
+2. Verifies the target is the **highest-numbered** partition on the disk and is mounted at `/`.
+3. Exits **0 with a log line** if the partition already fills the disk (idempotent; safe to re-run).
+4. Installs `cloud-guest-utils` + `e2fsprogs` if `growpart` / `resize2fs` are missing.
+5. Runs `growpart <disk> <part>`, refreshes the table (`partprobe` / `partx -u`), then `resize2fs`
+   for ext2/3/4 roots.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `EXTEND_STORAGE_DRY_RUN` | `0` | `1` = print the growpart/resize plan only |
+| `EXTEND_STORAGE_DISK` | *(auto)* | Override detected disk, e.g. `/dev/nvme0n1` |
+| `EXTEND_STORAGE_PART` | *(auto)* | Override partition number, e.g. `2` |
+| `EXTEND_STORAGE_ALLOW_NON_ROOT` | `0` | `1` = grow the last partition even if not mounted at `/` |
+
+Verify:
+
+```bash
+lsblk
+df -h /
+sudo tail -50 /var/log/extend-storage.log
+```
+
+Limits: GPT disks where the **last partition is an ext4 root**, matching the agent two-partition
+layout (ESP + rootfs). It is **not** for verity/multi-partition edge images (e.g. layouts with a
+`roothashmap` partition after rootfs), LVM, or LUKS. For non-ext filesystems the partition is grown
+but you must resize the filesystem yourself (e.g. `xfs_growfs /`, `btrfs filesystem resize max /`).
+
+---
+
 ## Environment variables
 
 ### Intel (`agent-install.sh`)
@@ -316,6 +364,9 @@ ls -la /var/lib/agent-install/done/
 | `tar (child): xz: Cannot exec` during Hermes | Minimal image without `xz-utils` | Use current script (v8+); or `apt install -y xz-utils` and re-run with `FORCE=1` |
 | Packages missing on 22.04 | Pin names / repo track | `INTEL_UBUNTU_SUITE=ubuntu22`; `INTEL_PACKAGE_POLICY=latest` |
 | Run both Intel + NVIDIA scripts | Two stacks on one node | Use one script per machine |
+| `extend-storage.sh` says "not the last partition" | Root is not the final partition (verity/multi-partition image) | Unsupported layout; grow manually, or set `EXTEND_STORAGE_DISK`/`EXTEND_STORAGE_PART` if you know the target |
+| `extend-storage.sh` "cannot parse disk/partition" | Root on LVM/LUKS/btrfs subvolume | Set `EXTEND_STORAGE_DISK` + `EXTEND_STORAGE_PART`, or resize with the stack's own tools |
+| Disk not grown after flashing | Script not run, or already at max | Run `sudo /opt/agent/extend-storage.sh`; check `/var/log/extend-storage.log` and `lsblk` |
 
 Verify Intel lists:
 
