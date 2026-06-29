@@ -117,9 +117,7 @@ func archiveFormat(template *config.ImageTemplate) (archiveType, archiveExt stri
 	switch strings.ToLower(artifact.Compression) {
 	case "gz", "gzip":
 		return "tar.gz", "tar.gz", nil
-	case "xz":
-		return "tar.xz", "tar.xz", nil
 	default:
-		return "", "", fmt.Errorf("wsl2 image requires supported tar compression, got %s", artifact.Compression)
+		return "", "", fmt.Errorf("wsl2 image requires supported tar compression (gz), got %s", artifact.Compression)
 	}
 }
