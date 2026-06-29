@@ -406,53 +406,12 @@ func VerificationWorkers() int {
 }
 
 func ConfigDir() (string, error) {
-	configuredDir := Global().ConfigDir
-	if configuredDir == "" {
-		configuredDir = "./config"
-	}
-
-	configDir, err := filepath.Abs(configuredDir)
+	configDir, err := filepath.Abs(Global().ConfigDir)
 	if err != nil {
 		log.Errorf("Failed to resolve config directory: %v", err)
 		return "", fmt.Errorf("failed to resolving config directory: %w", err)
 	}
-
-	if _, err := os.Stat(configDir); err == nil {
-		return configDir, nil
-	}
-
-	if filepath.IsAbs(configuredDir) {
-		return configDir, nil
-	}
-
-	cwd, err := os.Getwd()
-	if err != nil {
-		return configDir, nil
-	}
-
-	searchDir := cwd
-	for {
-		candidate := filepath.Join(searchDir, configuredDir)
-		if _, err := os.Stat(candidate); err == nil {
-			if hasConfigLayout(candidate) {
-				return filepath.Abs(candidate)
-			}
-		}
-
-		parent := filepath.Dir(searchDir)
-		if parent == searchDir {
-			break
-		}
-		searchDir = parent
-	}
-
 	return configDir, nil
-}
-
-func hasConfigLayout(path string) bool {
-	_, errGeneral := os.Stat(filepath.Join(path, "general"))
-	_, errOSV := os.Stat(filepath.Join(path, "osv"))
-	return errGeneral == nil && errOSV == nil
 }
 
 func CacheDir() (string, error) {
