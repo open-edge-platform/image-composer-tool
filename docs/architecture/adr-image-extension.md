@@ -22,7 +22,10 @@ such as RAW/VHD-style images, while avoiding generic mutation of arbitrary ISO
 installer media.
 
 Disk images may be mounted, inspected, extended with additional repositories and
-packages, resized where supported, validated, and emitted as updated artifacts.
+packages, resized where supported, and emitted as updated artifacts.
+
+Validation and comparison are executed post-composition through explicit
+command-line options rather than template-embedded policy.
 
 ISO installers are different. An ISO installer is not simply an installed OS
 image. It contains boot media, installer behavior, payloads, manifests, and
@@ -82,6 +85,11 @@ questionable ROI.
 
 Image Composer Tool will support three explicit composition modes:
 
+Validation and comparison policy will be decoupled from template schema and
+handled as explicit command-line behavior after composition. This keeps
+templates focused on image intent and keeps operational checks in execution
+workflows.
+
 ### 1. Fresh Image Composition
 
 Image Composer Tool composes an image from a known distro/template baseline.
@@ -137,8 +145,8 @@ partition layout.
 - Resize the disk image where supported.
 - Grow supported filesystems.
 - Regenerate initramfs, UKI, or bootloader configuration when required.
-- Generate package inventory, SBOM, and CVE reports.
-- Inspect and compare the resulting image.
+- Generate package inventory and SBOM outputs.
+- Optionally compare baseline and output images using post-compose CLI modes: SBOM-only or full comparison.
 - Emit updated image artifacts.
 
 ### 3. ISO Remastering
@@ -223,8 +231,8 @@ update mechanisms wherever possible.
 
 ### Make output inspectable
 
-Generated and extended images should support inspection, SBOM generation, CVE
-verification, and optional semantic comparison.
+Generated and extended images should support inspection, SBOM generation, and
+optional semantic comparison.
 
 ---
 
@@ -242,8 +250,7 @@ ICT is responsible for:
 - Disk resize orchestration where supported.
 - Boot artifact regeneration where required.
 - SBOM generation.
-- CVE verification integration.
-- Image inspection and comparison.
+- Image inspection and comparison execution.
 - Emitting bootable output artifacts.
 
 ### Native Package Manager Responsibilities
@@ -286,6 +293,9 @@ The existing template schema should be overlayed rather than replaced.
 The recommended addition is a top-level `baseline` object that declares whether
 the template performs fresh composition, disk image overlay, ISO generation,
 or supported ISO remastering.
+
+Validation execution policy is intentionally excluded from template schema to
+preserve separation of duties.
 
 ### Fresh composition
 
@@ -405,9 +415,7 @@ Implement first-class support for RAW/VHD-style disk image extension.
 - Grow supported filesystems.
 - Regenerate boot artifacts where required.
 - Generate SBOM.
-- Run CVE verification.
-- Inspect and compare output image.
-- Boot-test representative images in CI.
+- Run post-compose comparison in SBOM-only or full mode.
 
 #### Initial limitations
 
@@ -451,8 +459,8 @@ unsupported variants.
 - Filesystem grow operation for supported filesystems.
 - Boot artifact regeneration where required.
 - SBOM generation.
-- CVE verification.
-- Image inspect and compare.
+- Post-compose SBOM-only comparison.
+- Post-compose full comparison.
 - Support declarative package/profile selection.
 
 ### Out of Scope
@@ -469,6 +477,8 @@ unsupported variants.
 - Modifying encrypted partitions unless explicitly supported.
 - Modifying dm-verity protected root filesystems unless regenerated through a
 supported flow.
+- Automatic CVE checks as part of the composition command.
+- Automatic boot testing as part of the composition command.
 
 ## Alternatives Considered
 
@@ -545,9 +555,6 @@ What is missing is the **composition mode**.
   },
   "overlayPolicy": {
     "$ref": "#/$defs/OverlayPolicy"
-  },
-  "validation": {
-    "$ref": "#/$defs/Validation"
   }
 }
 ```
@@ -664,63 +671,41 @@ What is missing is the **composition mode**.
 }
 ```
 
-### Proposed Validation Policy
+### Proposed Post-Composition Validation CLI
 
-```json
-"Validation": {
-  "type": "object",
-  "description": "Validation and reporting outputs for composed or overlay images.",
-  "properties": {
-    "inspect": {
-      "type": "boolean",
-      "description": "Inspect the generated image and produce an image summary.",
-      "default": true
-    },
-    "compare": {
-      "type": "object",
-      "description": "Compare the generated image against a reference image or expected image summary.",
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "default": false
-        },
-        "referenceImage": {
-          "type": "string",
-          "description": "Path or URI to the image used as the comparison reference."
-        }
-      },
-      "additionalProperties": false,
-      "allOf": [
-        {
-          "if": {
-            "properties": {
-              "enabled": { "const": true }
-            }
-          },
-          "then": {
-            "required": ["referenceImage"]
-          }
-        }
-      ]
-    },
-    "sbom": {
-      "type": "boolean",
-      "description": "Generate a software bill of materials for the output image.",
-      "default": false
-    },
-    "cveCheck": {
-      "type": "boolean",
-      "description": "Run CVE analysis against the generated image package inventory.",
-      "default": false
-    },
-    "bootTest": {
-      "type": "boolean",
-      "description": "Boot-test the generated image where supported.",
-      "default": false
-    }
-  },
-  "additionalProperties": false
-}
+Validation behavior is not part of the template schema. Instead, Image Composer
+Tool should provide post-compose command-line options.
+
+Recommended parameter:
+
+- `--compare-report <sbom|full>`
+  - `sbom`: compare only SBOM/package inventory between baseline and output.
+  - `full`: run semantic image comparison including SBOM/package delta,
+    filesystem metadata, and boot artifacts where supported.
+
+Suggested defaults:
+
+- no comparison report by default (explicit opt-in).
+- when enabled for overlay mode, baseline image is inferred from
+  `baseline.source.path` in the template.
+- output image is inferred from the primary artifact produced in the working
+  output path for the current build.
+
+Deferred from this ADR:
+
+- CVE scanning as an automatic composition step.
+- Boot testing as an automatic composition step.
+
+These remain separate, manually-invoked operational workflows.
+
+Example usage:
+
+```bash
+# SBOM-only compare between baseline and output image
+image-composer-tool build -t overlay-template.yml --compare-report sbom
+
+# Full semantic compare between baseline and output image
+image-composer-tool build -t overlay-template.yml --compare-report full
 ```
 
 ## Risks and Mitigations
@@ -745,4 +730,4 @@ What is missing is the **composition mode**.
 | External ISO adapter maintenance burden | High validation cost across distro releases and installer variants | Add adapters only for high-value, versioned ISO families with explicit validation coverage |
 | Installed target differs from expected ISO content | Packages may be added to live media but not installed system | For ICT-owned ISO flows, validate installed target content after installation, not just ISO contents |
 | Image inspection or compare produces false confidence | Differences may be missed or misinterpreted | Define semantic comparison boundaries clearly; include package inventory, boot artifacts, filesystem, and metadata checks |
-| CVE/SBOM data is incomplete or stale | Supply chain transparency may be misleading | Record package versions and repository sources; treat CVE checks as point-in-time reports tied to scanner/database version |
+| SBOM data is incomplete or stale | Supply chain transparency may be misleading | Record package versions and repository sources; include tool/version metadata in comparison output |
