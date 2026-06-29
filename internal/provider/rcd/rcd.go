@@ -10,6 +10,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/image/initrdmaker"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/isomaker"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/rawmaker"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/wsl2maker"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/rpmutils"
 	"github.com/open-edge-platform/image-composer-tool/internal/provider"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/display"
@@ -122,10 +123,21 @@ func (p *RCD) BuildImage(template *config.ImageTemplate) error {
 	case "iso":
 		return p.buildIsoImage(template)
 	case "wsl2":
-		return provider.BuildWSL2Image(p.chrootEnv, template)
+		return p.buildWslImage(template)
 	default:
 		return fmt.Errorf("unsupported image type: %s", template.Target.ImageType)
 	}
+}
+
+func (p *RCD) buildWslImage(template *config.ImageTemplate) error {
+	maker, err := wsl2maker.NewWSL2Maker(p.chrootEnv, template)
+	if err != nil {
+		return fmt.Errorf("failed to create WSL2 maker: %w", err)
+	}
+	if err := maker.Init(); err != nil {
+		return fmt.Errorf("failed to initialize WSL2 maker: %w", err)
+	}
+	return maker.BuildWSL2Image()
 }
 
 func (p *RCD) buildRawImage(template *config.ImageTemplate) error {

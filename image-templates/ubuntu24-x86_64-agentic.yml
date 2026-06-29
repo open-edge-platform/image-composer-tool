@@ -28,3 +28,6 @@ systemConfig:
     - ca-certificates
     - curl
     - gnupg
+  additionalFiles:
+    - local: ../additionalfiles/agent-install.sh
+      final: /opt/agent/agent-install.sh

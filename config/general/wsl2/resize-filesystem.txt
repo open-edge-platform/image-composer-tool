@@ -16,6 +16,10 @@ recognized, update WSL first:
 
   wsl.exe --update
 
+Depending on your Windows build and WSL channel, `wsl.exe --update` may also be
+needed to refresh the underlying kernel. Some platforms require WSL kernel
+6.18 or later for full functionality.
+
 New interactive shells start in the Linux home directory by default. Set
 ICT_WSL2_PRESERVE_CWD=1 before launching WSL to keep the Windows-provided
 starting directory instead.
@@ -23,7 +27,7 @@ starting directory instead.
 Note! An SPDX-format SBOM is available under /usr/share/sbom for details about
 the packages and filesystem contents included in this rootfs.
 
-This message is shown once per Linux user. Read it again with:
+This message is shown on every interactive shell start. Read it again with:
 
   cat /usr/share/doc/ict-wsl2/resize-filesystem.txt
 
