@@ -3071,11 +3071,8 @@ func TestSetupFirstBootLastPartitionAutoExpandSkipsWhenImmutableEnabled(t *testi
 	template.SystemConfig.Immutability.Enabled = true
 
 	err := injectFirstBootLastPartitionAutoExpandAdditionalFiles(template)
-	if err != nil {
-		t.Fatalf("injectFirstBootLastPartitionAutoExpandAdditionalFiles returned error: %v", err)
-	}
-	if len(template.SystemConfig.AdditionalFiles) != 0 {
-		t.Fatalf("additional files should not be injected when immutability is enabled")
+	if err == nil {
+		t.Fatalf("expected error when immutability is enabled")
 	}
 }
 
@@ -3097,11 +3094,8 @@ func TestSetupFirstBootLastPartitionAutoExpandSkipsWhenLastPartitionNotRootfs(t 
 	}
 
 	err := injectFirstBootLastPartitionAutoExpandAdditionalFiles(template)
-	if err != nil {
-		t.Fatalf("injectFirstBootLastPartitionAutoExpandAdditionalFiles returned error: %v", err)
-	}
-	if len(template.SystemConfig.AdditionalFiles) != 0 {
-		t.Fatalf("additional files should not be injected when last partition is not rootfs")
+	if err == nil {
+		t.Fatalf("expected error when last partition is not rootfs")
 	}
 }
 

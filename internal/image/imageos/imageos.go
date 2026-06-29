@@ -1089,22 +1089,8 @@ func injectFirstBootLastPartitionAutoExpandAdditionalFiles(template *config.Imag
 		return nil
 	}
 
-	// Check if immutability is enabled
-	if template.SystemConfig.Immutability.Enabled {
-		log.Infof("Skipping first-boot partition auto-expand file injection: immutability is enabled")
-		return nil
-	}
-
-	// Check if the last partition is rootfs
-	if len(disk.Partitions) == 0 {
-		log.Warnf("Skipping first-boot partition auto-expand file injection: no partitions defined")
-		return nil
-	}
-
-	lastPartition := disk.Partitions[len(disk.Partitions)-1]
-	if lastPartition.MountPoint != "/" {
-		log.Infof("Skipping first-boot partition auto-expand file injection: last partition is not rootfs (mountpoint=%s)", lastPartition.MountPoint)
-		return nil
+	if err := validateFirstBootLastPartitionAutoExpandConfig(template); err != nil {
+		return err
 	}
 
 	configDir, err := config.ConfigDir()
@@ -1158,6 +1144,10 @@ func setupFirstBootLastPartitionAutoExpand(installRoot string, template *config.
 		return nil
 	}
 
+	if err := validateFirstBootLastPartitionAutoExpandConfig(template); err != nil {
+		return err
+	}
+
 	serviceName := "ict-auto-expand-last-partition.service"
 	scriptPath := filepath.Join(installRoot, "usr", "local", "sbin", "ict-auto-expand-last-partition.sh")
 	if _, err := shell.ExecCmd("chmod 0755 "+scriptPath, true, shell.HostPath, nil); err != nil {
@@ -1171,6 +1161,25 @@ func setupFirstBootLastPartitionAutoExpand(installRoot string, template *config.
 
 	return nil
 }
+
+func validateFirstBootLastPartitionAutoExpandConfig(template *config.ImageTemplate) error {
+	if template.SystemConfig.Immutability.Enabled {
+		return fmt.Errorf("first-boot partition auto-expand requires immutability to be disabled")
+	}
+
+	disk := template.GetDiskConfig()
+	if len(disk.Partitions) == 0 {
+		return fmt.Errorf("first-boot partition auto-expand requires at least one disk partition")
+	}
+
+	lastPartition := disk.Partitions[len(disk.Partitions)-1]
+	if lastPartition.MountPoint != "/" {
+		return fmt.Errorf("first-boot partition auto-expand requires the last partition to be rootfs ('/'), got mountpoint=%q", lastPartition.MountPoint)
+	}
+
+	return nil
+}
+
 func addImageConfigs(installRoot string, template *config.ImageTemplate) error {
 	customConfigs := template.GetConfigurationInfo()
 	if len(customConfigs) == 0 {

@@ -100,22 +100,38 @@ func ValidateAgainstSchema(name string, schemaBytes, data []byte, ref string) er
 
 // ValidateImageTemplateJSON runs the template schema against data
 func ValidateImageTemplateJSON(data []byte) error {
-	return ValidateAgainstSchema(
+	if err := ValidateAgainstSchema(
 		imageSchemaName,
 		schema.ImageTemplateSchema,
 		data,
 		fullRef,
-	)
+	); err != nil {
+		return err
+	}
+
+	if err := validateAutoExpandLastPartitionConstraints(data, true); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // User-provided (minimal) template
 func ValidateUserTemplateJSON(data []byte) error {
-	return ValidateAgainstSchema(
+	if err := ValidateAgainstSchema(
 		imageSchemaName,
 		schema.ImageTemplateSchema,
 		data,
 		userRef,
-	)
+	); err != nil {
+		return err
+	}
+
+	if err := validateAutoExpandLastPartitionConstraints(data, false); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // ValidateConfigJSON runs the config schema against data
@@ -126,4 +142,53 @@ func ValidateConfigJSON(data []byte) error {
 		data,
 		"",
 	)
+}
+
+func validateAutoExpandLastPartitionConstraints(data []byte, requirePartitions bool) error {
+	var doc map[string]interface{}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return fmt.Errorf("invalid JSON for auto-expand validation: %w", err)
+	}
+
+	target, _ := doc["target"].(map[string]interface{})
+	if imageType, _ := target["imageType"].(string); imageType != "raw" {
+		return nil
+	}
+
+	disk, _ := doc["disk"].(map[string]interface{})
+	extendEnabled, _ := disk["extendLastPartitionToFillDisk"].(bool)
+	if !extendEnabled {
+		return nil
+	}
+
+	systemConfig, _ := doc["systemConfig"].(map[string]interface{})
+	immutability, _ := systemConfig["immutability"].(map[string]interface{})
+	if enabled, _ := immutability["enabled"].(bool); enabled {
+		return fmt.Errorf("first-boot partition auto-expand requires immutability to be disabled")
+	}
+
+	partitionsRaw, foundPartitions := disk["partitions"]
+	if !foundPartitions {
+		if requirePartitions {
+			return fmt.Errorf("first-boot partition auto-expand requires at least one disk partition")
+		}
+		return nil
+	}
+
+	partitions, _ := partitionsRaw.([]interface{})
+	if len(partitions) == 0 {
+		return fmt.Errorf("first-boot partition auto-expand requires at least one disk partition")
+	}
+
+	lastPartition, ok := partitions[len(partitions)-1].(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("first-boot partition auto-expand requires a valid last disk partition definition")
+	}
+
+	mountPoint, _ := lastPartition["mountPoint"].(string)
+	if mountPoint != "/" {
+		return fmt.Errorf("first-boot partition auto-expand requires the last partition to be rootfs ('/'), got mountpoint=%q", mountPoint)
+	}
+
+	return nil
 }

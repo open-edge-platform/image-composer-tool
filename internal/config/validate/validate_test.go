@@ -801,3 +801,191 @@ systemConfig:
 		t.Fatal("expected dhcp4 with static addresses to fail schema validation")
 	}
 }
+
+func TestValidateImageTemplateJSON_AutoExpandRejectsImmutabilityEnabled(t *testing.T) {
+	templateYAML := `image:
+  name: test-autoexpand-immutable
+  version: "1.0.0"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+disk:
+  name: test
+  size: 4GiB
+  partitionTableType: gpt
+  extendLastPartitionToFillDisk: true
+  partitions:
+    - id: boot
+      type: esp
+      start: 1MiB
+      end: 513MiB
+      fsType: fat32
+      mountPoint: /boot/efi
+    - id: rootfs
+      type: linux-root-amd64
+      start: 513MiB
+      end: "0"
+      fsType: ext4
+      mountPoint: /
+systemConfig:
+  name: test
+  immutability:
+    enabled: true
+  packages:
+    - p
+  kernel:
+    version: "6.14"
+`
+
+	var raw interface{}
+	if err := yaml.Unmarshal([]byte(templateYAML), &raw); err != nil {
+		t.Fatalf("YAML parsing error: %v", err)
+	}
+	dataJSON, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("JSON marshaling error: %v", err)
+	}
+
+	err = ValidateImageTemplateJSON(dataJSON)
+	if err == nil {
+		t.Fatal("expected immutability-enabled template with auto-expand to fail validation")
+	}
+	if !strings.Contains(err.Error(), "immutability") {
+		t.Fatalf("expected immutability error, got: %v", err)
+	}
+}
+
+func TestValidateImageTemplateJSON_AutoExpandRejectsNonRootfsLastPartition(t *testing.T) {
+	templateYAML := `image:
+  name: test-autoexpand-nonroot-last
+  version: "1.0.0"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+disk:
+  name: test
+  size: 4GiB
+  partitionTableType: gpt
+  extendLastPartitionToFillDisk: true
+  partitions:
+    - id: boot
+      type: esp
+      start: 1MiB
+      end: 513MiB
+      fsType: fat32
+      mountPoint: /boot/efi
+    - id: rootfs
+      type: linux-root-amd64
+      start: 513MiB
+      end: 2561MiB
+      fsType: ext4
+      mountPoint: /
+    - id: swap
+      type: linux-swap
+      start: 2561MiB
+      end: "0"
+      fsType: linux-swap
+      mountPoint: none
+systemConfig:
+  name: test
+  immutability:
+    enabled: false
+  packages:
+    - p
+  kernel:
+    version: "6.14"
+`
+
+	var raw interface{}
+	if err := yaml.Unmarshal([]byte(templateYAML), &raw); err != nil {
+		t.Fatalf("YAML parsing error: %v", err)
+	}
+	dataJSON, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("JSON marshaling error: %v", err)
+	}
+
+	err = ValidateImageTemplateJSON(dataJSON)
+	if err == nil {
+		t.Fatal("expected non-rootfs-last template with auto-expand to fail validation")
+	}
+	if !strings.Contains(err.Error(), "last partition") {
+		t.Fatalf("expected last-partition error, got: %v", err)
+	}
+}
+
+func TestValidateImageTemplateJSON_AutoExpandAllowsRootfsLastPartition(t *testing.T) {
+	templateYAML := `image:
+  name: test-autoexpand-valid
+  version: "1.0.0"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+disk:
+  name: test
+  size: 4GiB
+  partitionTableType: gpt
+  extendLastPartitionToFillDisk: true
+  partitions:
+    - id: boot
+      type: esp
+      start: 1MiB
+      end: 513MiB
+      fsType: fat32
+      mountPoint: /boot/efi
+    - id: rootfs
+      type: linux-root-amd64
+      start: 513MiB
+      end: "0"
+      fsType: ext4
+      mountPoint: /
+systemConfig:
+  name: test
+  immutability:
+    enabled: false
+  packages:
+    - p
+  kernel:
+    version: "6.14"
+`
+
+	var raw interface{}
+	if err := yaml.Unmarshal([]byte(templateYAML), &raw); err != nil {
+		t.Fatalf("YAML parsing error: %v", err)
+	}
+	dataJSON, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("JSON marshaling error: %v", err)
+	}
+
+	if err := ValidateImageTemplateJSON(dataJSON); err != nil {
+		t.Fatalf("expected valid auto-expand template to pass validation, got: %v", err)
+	}
+}
+
+func TestValidateUserTemplateJSON_AutoExpandRejectsNonRootfsLastPartition(t *testing.T) {
+	dataJSON := []byte(`{
+  "image": {"name": "test-user-autoexpand", "version": "1.0.0"},
+  "target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"},
+  "disk": {
+		"name": "test",
+    "extendLastPartitionToFillDisk": true,
+    "partitions": [{"mountPoint": "/"}, {"mountPoint": "none"}]
+  },
+  "systemConfig": {"immutability": {"enabled": false}}
+}`)
+
+	err := ValidateUserTemplateJSON(dataJSON)
+	if err == nil {
+		t.Fatal("expected user template with non-rootfs last partition to fail validation")
+	}
+	if !strings.Contains(err.Error(), "last partition") {
+		t.Fatalf("expected last-partition error, got: %v", err)
+	}
+}
