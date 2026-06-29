@@ -614,7 +614,7 @@
                         },
                         "compression": {
                           "type": "string",
-                          "enum": ["gz", "gzip", "xz"]
+                          "enum": ["gz"]
                         }
                       },
                       "required": ["type", "compression"],
@@ -696,7 +696,7 @@
                         },
                         "compression": {
                           "type": "string",
-                          "enum": ["gz", "gzip", "xz"]
+                          "enum": ["gz"]
                         }
                       },
                       "required": ["type", "compression"],
