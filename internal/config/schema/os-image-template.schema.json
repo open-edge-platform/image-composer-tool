@@ -584,6 +584,10 @@
     "UserTemplate": {
       "type": "object",
       "properties": {
+        "extends": {
+          "type": "string",
+          "description": "Path to a parent template to inherit from. The child template overrides or extends the parent using the standard merge strategies."
+        },
         "metadata": { "$ref": "#/$defs/Metadata" },
         "image": { "$ref": "#/$defs/Image" },
         "target": { "$ref": "#/$defs/Target" },

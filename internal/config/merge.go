@@ -84,6 +84,7 @@ func MergeConfigurations(userTemplate, defaultTemplate *ImageTemplate) (*ImageTe
 	// If no default template, use user template as-is
 	if defaultTemplate == nil {
 		log.Warn("Default template is nil, using user template as-is")
+		userTemplate.Extends = ""
 		return userTemplate, nil
 	}
 
@@ -132,9 +133,9 @@ func MergeConfigurations(userTemplate, defaultTemplate *ImageTemplate) (*ImageTe
 		log.Debugf("Merged %d package repositories", len(mergedTemplate.PackageRepositories))
 	}
 
-	log.Infof("Successfully merged user and default configurations")
+	// Strip extends from merged result — it is a build-time directive, not part of the output
+	mergedTemplate.Extends = ""
 
-	// Validate immutability configuration and fix if needed
 	validateAndFixImmutabilityConfig(&mergedTemplate)
 
 	// Debug mode: Pretty print the merged template with sensitive data redacted

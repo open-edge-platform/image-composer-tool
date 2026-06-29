@@ -849,6 +849,60 @@ gpgkey: "https://example.com/key.gpg"
 	_ = originalGetTargetOsConfigDir // Prevent unused variable error
 }
 
+func TestMergeConfigurationsStripsExtends(t *testing.T) {
+	t.Parallel()
+
+	userTemplate := &ImageTemplate{
+		Extends: "parent-template.yml",
+		Image:   ImageInfo{Name: "child", Version: "1.0.0"},
+		Target:  TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"},
+		SystemConfig: SystemConfig{
+			Name:     "child-config",
+			Packages: []string{"pkg-a"},
+		},
+	}
+	defaultTemplate := &ImageTemplate{
+		Image:  ImageInfo{Name: "default", Version: "0.1.0"},
+		Target: TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"},
+		SystemConfig: SystemConfig{
+			Name:     "default-config",
+			Packages: []string{"pkg-default"},
+		},
+	}
+
+	merged, err := MergeConfigurations(userTemplate, defaultTemplate)
+	if err != nil {
+		t.Fatalf("MergeConfigurations() err = %v", err)
+	}
+
+	if merged.Extends != "" {
+		t.Errorf("merged.Extends = %q, want empty string (should be stripped)", merged.Extends)
+	}
+}
+
+func TestMergeConfigurationsStripsExtendsWhenDefaultNil(t *testing.T) {
+	t.Parallel()
+
+	userTemplate := &ImageTemplate{
+		Extends: "parent-template.yml",
+		Image:   ImageInfo{Name: "child", Version: "1.0.0"},
+		Target:  TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"},
+		SystemConfig: SystemConfig{
+			Name:     "child-config",
+			Packages: []string{"pkg-a"},
+		},
+	}
+
+	merged, err := MergeConfigurations(userTemplate, nil)
+	if err != nil {
+		t.Fatalf("MergeConfigurations() err = %v", err)
+	}
+
+	if merged.Extends != "" {
+		t.Errorf("merged.Extends = %q, want empty string (should be stripped even with nil default)", merged.Extends)
+	}
+}
+
 // TestLoadProviderRepoConfigArchVariants tests different architecture naming
 func TestLoadProviderRepoConfigArchVariants(t *testing.T) {
 	archVariants := []string{"amd64", "x86_64", "arm64", "aarch64"}

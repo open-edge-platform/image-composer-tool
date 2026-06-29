@@ -2136,6 +2136,128 @@ func TestValidateUserTemplateJSON(t *testing.T) {
 	}
 }
 
+func TestExtendsFieldSchemaValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		json    string
+		wantErr bool
+	}{
+		{
+			name: "user template with valid extends",
+			json: `{
+				"extends": "ubuntu24-x86_64-edge-raw.yml",
+				"image": {"name": "child", "version": "1.0.0"},
+				"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"}
+			}`,
+			wantErr: false,
+		},
+		{
+			name: "user template without extends",
+			json: `{
+				"image": {"name": "standalone", "version": "1.0.0"},
+				"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"}
+			}`,
+			wantErr: false,
+		},
+		{
+			name: "user template with invalid extends type (number)",
+			json: `{
+				"extends": 42,
+				"image": {"name": "bad", "version": "1.0.0"},
+				"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"}
+			}`,
+			wantErr: true,
+		},
+		{
+			name: "user template with invalid extends type (array)",
+			json: `{
+				"extends": ["a.yml", "b.yml"],
+				"image": {"name": "bad", "version": "1.0.0"},
+				"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"}
+			}`,
+			wantErr: true,
+		},
+		{
+			name: "user template with invalid extends type (boolean)",
+			json: `{
+				"extends": true,
+				"image": {"name": "bad", "version": "1.0.0"},
+				"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"}
+			}`,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := validate.ValidateUserTemplateJSON([]byte(tt.json))
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateUserTemplateJSON() err = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestExtendsFieldParsedFromYAML(t *testing.T) {
+	t.Parallel()
+
+	templateYAML := `extends: "ubuntu24-x86_64-edge-raw.yml"
+image:
+  name: child-template
+  version: "1.0.0"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+`
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "child.yml")
+	if err := os.WriteFile(tmpFile, []byte(templateYAML), 0644); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	tmpl, err := LoadTemplate(tmpFile, false)
+	if err != nil {
+		t.Fatalf("LoadTemplate() err = %v", err)
+	}
+
+	if tmpl.Extends != "ubuntu24-x86_64-edge-raw.yml" {
+		t.Errorf("Extends = %q, want %q", tmpl.Extends, "ubuntu24-x86_64-edge-raw.yml")
+	}
+}
+
+func TestExtendsFieldAbsentInTemplate(t *testing.T) {
+	t.Parallel()
+
+	templateYAML := `image:
+  name: standalone
+  version: "1.0.0"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+`
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "standalone.yml")
+	if err := os.WriteFile(tmpFile, []byte(templateYAML), 0644); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	tmpl, err := LoadTemplate(tmpFile, false)
+	if err != nil {
+		t.Fatalf("LoadTemplate() err = %v", err)
+	}
+
+	if tmpl.Extends != "" {
+		t.Errorf("Extends = %q, want empty string for template without extends", tmpl.Extends)
+	}
+}
+
 func TestValidateConfigJSON(t *testing.T) {
 	// Valid config JSON
 	validConfig := `{
