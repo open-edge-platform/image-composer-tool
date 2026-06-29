@@ -82,8 +82,14 @@ func CompressFolder(compressPath, outputPath, compressType string, sudo bool) er
 	var cmdStr string
 
 	outputDir := filepath.Dir(outputPath)
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		return fmt.Errorf("failed to create compression output directory %s: %w", outputDir, err)
+	if sudo {
+		if _, err := shell.ExecCmd(fmt.Sprintf("mkdir -p -- %q", outputDir), true, shell.HostPath, nil); err != nil {
+			return fmt.Errorf("failed to create compression output directory %s: %w", outputDir, err)
+		}
+	} else {
+		if err := os.MkdirAll(outputDir, 0755); err != nil {
+			return fmt.Errorf("failed to create compression output directory %s: %w", outputDir, err)
+		}
 	}
 
 	switch compressType {
