@@ -8,11 +8,14 @@ Debian raw images with GRUB build the booted initramfs with `**update-initramfs`
 
 **Start from your image template:** add `systemConfig.additionalFiles` (and related entries) that point at files in the repo. This page shows the YAML first, then the file contents and boot stages.
 
-**Full working example:** `image-templates/debian13-x86_64-bb-raw.yml` and `image-templates/additionalfiles/debian13-bb/`.
+**Full working examples:**
+
+- `image-templates/debian13-x86_64-bb-raw.yml` with `image-templates/additionalfiles/debian13-bb/` (initramfs-tools flow)
+- `image-templates/debian13-x86_64-bb-dracut-raw.yml` with `image-templates/additionalfiles/debian13-bb-dracut/` (dracut module flow)
 
 ## Image template changes
 
-Use `[debian13-x86_64-bb-raw.yml](../../image-templates/debian13-x86_64-bb-raw.yml)`) as an example.
+Use [debian13-x86_64-bb-raw.yml](../../image-templates/debian13-x86_64-bb-raw.yml) as an example.
 
 Paths in `**local`** are relative to the **directory that contains your template YAML** (`image-templates/…` → `additionalfiles/debian13-bb/…`).
 
@@ -62,14 +65,67 @@ Rename `debian13-bb` in `local` paths to match your folder name. Keep the `**fin
 | `packages`            | Include `**initramfs-tools`** (and `**grub-cloud-amd64**` or your GRUB packages). |
 | `bootloader.provider` | `**grub**` for this guide (initramfs is rebuilt via `update-initramfs`).          |
 
+---
+
+## dracut module variant (`bb-dracut-raw`) vs initramfs-tools (`bb-raw`)
+
+If you want the same early-boot marker behavior using dracut modules instead of initramfs-tools hooks, use
+`image-templates/debian13-x86_64-bb-dracut-raw.yml`.
+
+This variant keeps the same Debian 13 + GRUB + raw image target but changes how content is added to initrd:
+
+| Area | `debian13-x86_64-bb-raw.yml` (initramfs-tools) | `debian13-x86_64-bb-dracut-raw.yml` (dracut) |
+| ---- | ----------------------------------------------- | --------------------------------------------- |
+| Package focus | `initramfs-tools` | `dracut` and `dracut-core` |
+| Files copied by template | `hello.sh`, `hooks/hello`, `scripts/init-bottom/hello` | `modules.d/91hello/module-setup.sh`, `modules.d/91hello/hello.sh` |
+| Destination inside image | `/etc/initramfs-tools/...` and `/usr/local/sbin/hello.sh` | `/usr/lib/dracut/modules.d/91hello/...` |
+| Enable step | Hook/script are discovered by initramfs-tools layout | Add `/etc/dracut.conf.d/91hello.conf` with `add_dracutmodules+=" hello "` |
+
+### dracut template snippet
+
+```yaml
+  packages:
+    - dracut
+    - dracut-core
+    # ... keep your GRUB/kernel packages
+
+  additionalFiles:
+    - local: additionalfiles/debian13-bb-dracut/modules.d/91hello/module-setup.sh
+      final: /usr/lib/dracut/modules.d/91hello/module-setup.sh
+    - local: additionalfiles/debian13-bb-dracut/modules.d/91hello/hello.sh
+      final: /usr/lib/dracut/modules.d/91hello/hello.sh
+
+  configurations:
+    - cmd: 'mkdir -p /etc/dracut.conf.d && echo ''add_dracutmodules+=" hello "'' > /etc/dracut.conf.d/91hello.conf'
+    - cmd: "chmod 755 /usr/lib/dracut/modules.d/91hello/module-setup.sh /usr/lib/dracut/modules.d/91hello/hello.sh"
+```
+
+### dracut module files
+
+Create the module under:
+
+```text
+image-templates/
+  additionalfiles/debian13-bb-dracut/
+    modules.d/91hello/
+      module-setup.sh
+      hello.sh
+```
+
+`module-setup.sh` declares install logic for the module; `hello.sh` is the script executed from initrd.
+
+Use the provided example files in `image-templates/additionalfiles/debian13-bb-dracut/modules.d/91hello/` as the
+reference implementation.
+
 
 ---
 
 ## Build and check
 
-**Build the tool, install prerequisites, validate, and compose the image** using the [README.md](../../README.md) (Quick Start and *Compose an Image*). Example template:
+**Build the tool, install prerequisites, validate, and compose the image** using the [README.md](../../README.md) (Quick Start and *Compose an Image*). Example templates:
 
-`image-templates/debian13-x86_64-bb-raw.yml`
+- `image-templates/debian13-x86_64-bb-raw.yml`
+- `image-templates/debian13-x86_64-bb-dracut-raw.yml`
 
 Run validate if you use it (see [Usage Guide](./usage-guide.md)). If validate warns about a missing `local` file, fix the path or add the file under [Where to put files in the repo](#where-to-put-files-in-the-repo).
 
@@ -79,7 +135,10 @@ Run validate if you use it (see [Usage Guide](./usage-guide.md)). If validate wa
 2. Use serial console if your template sets `console=ttyS0,...` on the kernel cmdline.
 3. Look for your message during early boot, or run: `dmesg | grep -i hello`
 
-Optional on a machine with the image mounted: `lsinitramfs /boot/initrd.img-* | grep hello` to confirm the script was packed.
+Optional checks on a machine with the image mounted:
+
+- initramfs-tools flow: `lsinitramfs /boot/initrd.img-* | grep hello`
+- dracut flow: `lsinitrd /boot/initrd.img-* | grep 91hello`
 
 ---
 
