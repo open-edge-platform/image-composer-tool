@@ -1134,7 +1134,7 @@ func (t *ImageTemplate) validateBaseline() error {
 		if t.Baseline.Source == nil {
 			return fmt.Errorf("baseline: source is required when mode is %q", BaselineModeOverlay)
 		}
-		if err := t.Baseline.Source.validate(); err != nil {
+		if err := t.Baseline.Source.Validate(); err != nil {
 			return err
 		}
 		format := t.Baseline.Source.Format
@@ -1156,11 +1156,12 @@ func (t *ImageTemplate) validateBaseline() error {
 	return nil
 }
 
-// validate enforces that exactly one of Path or URL is set, and that a URL
+// Validate enforces that exactly one of Path or URL is set, and that a URL
 // uses an http(s) scheme. Integrity verification of the downloaded image is
 // intentionally deferred. Local paths are taken from the host build system
-// as-is; URLs are downloaded (over TLS) before the overlay runs.
-func (s *BaselineSource) validate() error {
+// as-is; URLs are downloaded before the overlay runs — over TLS when https,
+// in the clear when http (both schemes are permitted).
+func (s *BaselineSource) Validate() error {
 	path := strings.TrimSpace(s.Path)
 	rawURL := strings.TrimSpace(s.URL)
 
