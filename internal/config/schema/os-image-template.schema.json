@@ -471,7 +471,7 @@
     },
     "BaselineSource": {
       "type": "object",
-      "description": "Baseline source. v1 supports a local RAW disk image, referenced by a local path or an http(s) URL. Exactly one of 'path' or 'url' must be set.",
+      "description": "Baseline source. v1 supports a local RAW disk image, referenced by a local path or an https URL. Exactly one of 'path' or 'url' must be set.",
       "properties": {
         "path": {
           "type": "string",
@@ -481,8 +481,9 @@
         },
         "url": {
           "type": "string",
-          "description": "http(s) URL of the baseline RAW disk image; downloaded over TLS before the overlay runs",
-          "minLength": 1
+          "description": "https URL of the baseline RAW disk image; downloaded over TLS before the overlay runs (plain http is rejected)",
+          "minLength": 1,
+          "pattern": "^https://[^/?#]"
         },
         "format": {
           "type": "string",

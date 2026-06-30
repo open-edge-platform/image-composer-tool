@@ -67,12 +67,12 @@ func TestValidateBaseline(t *testing.T) {
 			wantNoErr: true,
 		},
 		{
-			name: "overlay accepts http URL source",
+			name: "overlay rejects plain http URL source",
 			baseline: &Baseline{
 				Mode:   BaselineModeOverlay,
 				Source: &BaselineSource{URL: "http://example.com/u.raw"},
 			},
-			wantNoErr: true,
+			wantErr: "must use https",
 		},
 		{
 			name: "overlay rejects URL written into path field",
@@ -91,12 +91,36 @@ func TestValidateBaseline(t *testing.T) {
 			wantErr: "use baseline.source.url for remote images",
 		},
 		{
-			name: "overlay rejects non-http URL scheme",
+			name: "overlay rejects non-https URL scheme",
 			baseline: &Baseline{
 				Mode:   BaselineModeOverlay,
 				Source: &BaselineSource{URL: "file:///tmp/u.raw"},
 			},
-			wantErr: "must use http or https",
+			wantErr: "must use https",
+		},
+		{
+			name: "overlay rejects https URL with no host",
+			baseline: &Baseline{
+				Mode:   BaselineModeOverlay,
+				Source: &BaselineSource{URL: "https://"},
+			},
+			wantErr: "must include a host",
+		},
+		{
+			name: "overlay rejects https URL with query but no host",
+			baseline: &Baseline{
+				Mode:   BaselineModeOverlay,
+				Source: &BaselineSource{URL: "https://?q=x"},
+			},
+			wantErr: "must include a host",
+		},
+		{
+			name: "overlay rejects https URL with fragment but no host",
+			baseline: &Baseline{
+				Mode:   BaselineModeOverlay,
+				Source: &BaselineSource{URL: "https://#frag"},
+			},
+			wantErr: "must include a host",
 		},
 		{
 			name: "overlay rejects source with neither path nor url",
@@ -179,6 +203,28 @@ func TestValidateBaseline(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBaselineSourceValidateNormalizesWhitespace(t *testing.T) {
+	t.Run("path is trimmed in place", func(t *testing.T) {
+		s := &BaselineSource{Path: "  /tmp/u.raw\n"}
+		if err := s.Validate(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if s.Path != "/tmp/u.raw" {
+			t.Errorf("Path = %q, want trimmed %q", s.Path, "/tmp/u.raw")
+		}
+	})
+
+	t.Run("url is trimmed in place", func(t *testing.T) {
+		s := &BaselineSource{URL: "  https://example.com/u.raw  "}
+		if err := s.Validate(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if s.URL != "https://example.com/u.raw" {
+			t.Errorf("URL = %q, want trimmed %q", s.URL, "https://example.com/u.raw")
+		}
+	})
 }
 
 func TestIsOverlayMode(t *testing.T) {

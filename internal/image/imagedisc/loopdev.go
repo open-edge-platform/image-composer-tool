@@ -2,6 +2,7 @@ package imagedisc
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -14,16 +15,28 @@ import (
 type LoopDevInterface interface {
 	LoopSetupDelete(loopDevPath string) error
 	CreateRawImageLoopDev(filePath string, template *config.ImageTemplate) (string, map[string]string, error)
+	AttachImageToLoopDev(imagePath string) (string, []string, error)
 }
 
 type LoopDev struct{}
+
+// canonicalLoopDevPath matches a bare loop device path, e.g. "/dev/loop0" or
+// "/dev/loop12", with no trailing partition suffix or surrounding text. It is
+// used to validate losetup output before that value is interpolated into
+// privileged shell commands.
+var canonicalLoopDevPath = regexp.MustCompile(`^/dev/loop\d+$`)
 
 func NewLoopDev() *LoopDev {
 	return &LoopDev{}
 }
 
 func loopSetupCreate(imagePath string) (string, error) {
-	cmd := fmt.Sprintf("losetup --direct-io=on --show -f -P %s", imagePath)
+	// losetup runs with sudo through a bash -c string. Single-quote the path so
+	// bash performs no expansion on it: strconv.Quote uses double quotes, inside
+	// which $(...), ${...} and backticks still expand, so a crafted work-dir or
+	// image path could trigger command substitution. shell.QuoteArg neutralizes
+	// that by wrapping the value in single quotes.
+	cmd := fmt.Sprintf("losetup --direct-io=on --show -f -P %s", shell.QuoteArg(imagePath))
 	loopDevPath, err := shell.ExecCmd(cmd, true, shell.HostPath, nil)
 	if err != nil {
 		log.Errorf("Losetup failed for %s: %v", imagePath, err)
@@ -31,7 +44,12 @@ func loopSetupCreate(imagePath string) (string, error) {
 	}
 
 	loopDevPath = strings.TrimSpace(loopDevPath)
-	if strings.Contains(loopDevPath, "/dev/loop") {
+	// losetup output is interpolated into later privileged bash -c commands
+	// (partition scan, detach, lsblk, ...). Accept only a canonical loop device
+	// path ("/dev/loopN") via an anchored regex, so a malformed or unexpected
+	// output string can never be propagated into shell execution. A substring
+	// match would let arbitrary surrounding text through.
+	if canonicalLoopDevPath.MatchString(loopDevPath) {
 		log.Infof(fmt.Sprintf("Losetup %s created loopback device at %s\n", imagePath, loopDevPath))
 		return loopDevPath, nil
 	} else {
@@ -51,6 +69,66 @@ func loopSetupCreateEmptyRawDisk(filePath, fileSize string) (string, error) {
 	}
 	log.Errorf("Can't find %s after creating raw file", filePath)
 	return "", fmt.Errorf("can't find %s", filePath)
+}
+
+// AttachImageToLoopDev attaches an already-existing disk image to a loop device
+// with partition scanning enabled (losetup -fP) and returns the loop device path
+// along with its enumerated partition nodes. Unlike CreateRawImageLoopDev it does
+// not create or partition the backing file, so it is safe to use on a baseline
+// image that must not be modified. On partition-enumeration failure the loop
+// device is detached before returning so no loop device is leaked. If that
+// detach itself fails, the device is genuinely leaked: the returned path is the
+// leaked device (non-empty) and the error is annotated with it so the caller can
+// retain the backing file and operators can reclaim the device.
+func (loopDev *LoopDev) AttachImageToLoopDev(imagePath string) (string, []string, error) {
+	if _, err := os.Stat(imagePath); err != nil {
+		return "", nil, fmt.Errorf("cannot access baseline image at %s: %w", imagePath, err)
+	}
+
+	loopDevPath, err := loopSetupCreate(imagePath)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to attach loop device for %s: %w", imagePath, err)
+	}
+
+	partitions, err := loopDevPartitions(loopDevPath)
+	if err != nil {
+		if detachErr := loopDev.LoopSetupDelete(loopDevPath); detachErr != nil {
+			// Detach also failed: the loop device is leaked. Return the leaked
+			// device path (not "") together with both the enumeration error and
+			// the detach failure, wrapped with the path, so the caller can retain
+			// the backing file and operators can identify and reclaim the device.
+			log.Errorf("Failed to detach loop device %s after partition enumeration failure: %v", loopDevPath, detachErr)
+			return loopDevPath, nil, fmt.Errorf("leaked loop device %s: %w", loopDevPath, errors.Join(err, detachErr))
+		}
+		return "", nil, err
+	}
+
+	return loopDevPath, partitions, nil
+}
+
+// loopDevPartitions returns the partition device nodes of a loop device, e.g.
+// ["/dev/loop0p1", "/dev/loop0p2"]. The base loop device itself is excluded.
+func loopDevPartitions(loopDevPath string) ([]string, error) {
+	// loopDevPath originates from losetup output; single-quote it defensively so
+	// a malformed value is never reinterpreted by the bash -c shell. Single
+	// quotes (via shell.QuoteArg) suppress the $(...)/backtick expansion that
+	// double-quoting (strconv.Quote) would still allow.
+	cmd := fmt.Sprintf("lsblk -prno NAME %s", shell.QuoteArg(loopDevPath))
+	output, err := shell.ExecCmd(cmd, true, shell.HostPath, nil)
+	if err != nil {
+		log.Errorf("Failed to list partitions for loop device %s: %v", loopDevPath, err)
+		return nil, fmt.Errorf("failed to list partitions for loop device %s: %w", loopDevPath, err)
+	}
+
+	var partitions []string
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		name := strings.TrimSpace(line)
+		if name == "" || name == loopDevPath {
+			continue
+		}
+		partitions = append(partitions, name)
+	}
+	return partitions, nil
 }
 
 func (loopDev *LoopDev) LoopSetupDelete(loopDevPath string) error {
