@@ -360,6 +360,86 @@ systemConfig:
 	}
 }
 
+func TestInvalidNonWSL2TemplateWithTarArtifact(t *testing.T) {
+	tests := []struct {
+		name      string
+		template  string
+		validate  func([]byte) error
+		errSubstr string
+	}{
+		{
+			name: "full-template-raw-image-with-tar-artifact",
+			template: `image:
+  name: test-raw-image
+  version: "1.0.0"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+
+disk:
+  name: default
+  artifacts:
+    - type: tar
+      compression: gz
+
+systemConfig:
+  name: default
+`,
+			validate:  ValidateImageTemplateJSON,
+			errSubstr: "not",
+		},
+		{
+			name: "user-template-raw-image-with-tar-artifact",
+			template: `image:
+  name: test-raw-user-template
+  version: "1.0.0"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+
+disk:
+  name: default
+  artifacts:
+    - type: tar
+      compression: gz
+`,
+			validate:  ValidateUserTemplateJSON,
+			errSubstr: "not",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var raw interface{}
+			if err := yaml.Unmarshal([]byte(tt.template), &raw); err != nil {
+				t.Fatalf("yml parsing error: %v", err)
+			}
+
+			dataJSON, err := json.Marshal(raw)
+			if err != nil {
+				t.Fatalf("json marshaling error: %v", err)
+			}
+
+			err = tt.validate(dataJSON)
+			if err == nil {
+				t.Fatalf("expected non-WSL2 template with tar artifact to fail validation")
+			}
+			if !strings.Contains(err.Error(), tt.errSubstr) {
+				t.Fatalf("expected error to contain %q, got: %v", tt.errSubstr, err)
+			}
+		})
+	}
+}
+
 func TestInvalidMergedTemplate(t *testing.T) {
 	// Create an invalid merged template (missing required fields)
 	invalidMergedTemplateYAML := `image:

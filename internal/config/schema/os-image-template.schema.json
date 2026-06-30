@@ -628,6 +628,23 @@
                 "additionalProperties": false
               }
             }
+          },
+          "else": {
+            "properties": {
+              "disk": {
+                "properties": {
+                  "artifacts": {
+                    "items": {
+                      "properties": {
+                        "type": {
+                          "not": { "const": "tar" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       ]
@@ -708,6 +725,23 @@
                 },
                 "required": ["name", "artifacts"],
                 "additionalProperties": false
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "disk": {
+                "properties": {
+                  "artifacts": {
+                    "items": {
+                      "properties": {
+                        "type": {
+                          "not": { "const": "tar" }
+                        }
+                      }
+                    }
+                  }
+                }
               }
             }
           }
