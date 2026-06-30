@@ -146,6 +146,30 @@ OpenVINO apt). Set `OPEN_MODEL_ZOO_TAG` explicitly to force a tag.
 
 Stamp id: `open-model-zoo-<resolved-tag>`.
 
+### Level Zero (L0) GPU runtime
+
+Ubuntu's stock `libze-intel-gpu1` / `libze1` are typically **far behind** the current Intel compute
+runtime. When `INSTALL_INTEL_GPU_REPO=1` (default), the Intel apt step also adds Intel's GPU repo
+(`https://repositories.intel.com/gpu/ubuntu <codename> ${INTEL_GPU_REPO_COMPONENT}`, key
+`intel-graphics.gpg`), so the standard `apt-get install` picks up the **newest** Level Zero runtime
+for the detected codename (`noble` for 24.04, `jammy` for 22.04). The repo line is part of the
+`intel-apt-repos-v2` step and is included in the `intel_apt_sources_ok` check.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `INSTALL_INTEL_GPU_REPO` | `1` | Add `repositories.intel.com/gpu` for up-to-date L0 runtime |
+| `INTEL_GPU_REPO_COMPONENT` | `unified` | GPU repo component (`unified` or `client`) |
+
+Verify: `dpkg -l libze1 libze-intel-gpu1 | grep ^ii`.
+
+### PyTorch XPU backend
+
+When `INSTALL_PYTORCH_XPU=1` (default), the agent venv step also installs **`torch torchvision
+torchaudio`** from the **XPU wheel index** (`PYTORCH_XPU_INDEX_URL`, default
+`https://download.pytorch.org/whl/xpu`). These wheels bundle the oneAPI runtime they need.
+
+Verify: `/opt/agent/venv/bin/python -c 'import torch; print(torch.xpu.is_available())'`.
+
 Base apt set also includes Level Zero GPU libs, optional NPU / `xpu-smi` (WARN + skip if absent),
 `podman`, and OpenVINO sample build tools (`cmake`, `gcc`, `g++`, `make`, `pkgconf`).
 
@@ -208,7 +232,7 @@ User runs **`openclaw onboard`** when ready. NemoClaw onboarding may still need 
 
 | Script | Venv path | Packages (pip) |
 |--------|-----------|----------------|
-| Intel | `/opt/agent/venv` | autogen-agentchat, crewai, langgraph, openai, openai-agents |
+| Intel | `/opt/agent/venv` | autogen-agentchat, crewai, langgraph, openai, openai-agents, + PyTorch XPU (`INSTALL_PYTORCH_XPU=1`) |
 | NVIDIA | `/opt/agent/venv-nvidia` | Same + optional PyTorch (cu124) and vLLM |
 
 Venv creation re-runs each invocation by default (`FORCE=1`); use `FORCE=0` to skip if stamp exists.
@@ -274,6 +298,10 @@ but you must resize the filesystem yourself (e.g. `xfs_growfs /`, `btrfs filesys
 | `OPENVINO_RELEASE_FALLBACK` | `1` | `0` = fail if target meta deb missing |
 | `OPENVINO_REPO_TRACK` | `2025` | Intel openvino apt path segment |
 | `INSTALL_OPEN_MODEL_ZOO` | `1` | Git clone OMZ to `/opt/intel/open_model_zoo` |
+| `INSTALL_INTEL_GPU_REPO` | `1` | Add Intel GPU repo for up-to-date Level Zero (L0) runtime |
+| `INTEL_GPU_REPO_COMPONENT` | `unified` | Intel GPU repo component (`unified` / `client`) |
+| `INSTALL_PYTORCH_XPU` | `1` | Install PyTorch XPU backend in the agent venv |
+| `PYTORCH_XPU_INDEX_URL` | `https://download.pytorch.org/whl/xpu` | PyTorch XPU wheel index |
 | `INTEL_UBUNTU_SUITE` | auto | `ubuntu22` / `ubuntu24` |
 | `INTEL_APT_ARCH` | `amd64` | |
 | `HERMES_INSTALL_FLAGS` | see Hermes section | |
@@ -363,6 +391,9 @@ ls -la /var/lib/agent-install/done/
 | Hermes prompts | Old install line or missing flags | Use `hermes-agent-v2` step; default `HERMES_INSTALL_FLAGS`; `FORCE=1` |
 | `tar (child): xz: Cannot exec` during Hermes | Minimal image without `xz-utils` | Use current script (v8+); or `apt install -y xz-utils` and re-run with `FORCE=1` |
 | Packages missing on 22.04 | Pin names / repo track | `INTEL_UBUNTU_SUITE=ubuntu22`; `INTEL_PACKAGE_POLICY=latest` |
+| Level Zero runtime too old | Stock Ubuntu `libze-intel-gpu1` | v15+ adds `repositories.intel.com/gpu` (`INSTALL_INTEL_GPU_REPO=1`); `FORCE=1` re-run; check `intel-gpu.list` |
+| `torch.xpu.is_available()` is False | Missing L0 runtime / not an Intel GPU host | Ensure GPU repo installed L0 libs; reboot after GPU driver; confirm `clinfo` / `xpu-smi` see the GPU |
+| PyTorch XPU install slow/large | XPU wheels are big | Set `INSTALL_PYTORCH_XPU=0` to skip, or pre-stage wheels on a local index |
 | Run both Intel + NVIDIA scripts | Two stacks on one node | Use one script per machine |
 | `extend-storage.sh` says "not the last partition" | Root is not the final partition (verity/multi-partition image) | Unsupported layout; grow manually, or set `EXTEND_STORAGE_DISK`/`EXTEND_STORAGE_PART` if you know the target |
 | `extend-storage.sh` "cannot parse disk/partition" | Root on LVM/LUKS/btrfs subvolume | Set `EXTEND_STORAGE_DISK` + `EXTEND_STORAGE_PART`, or resize with the stack's own tools |

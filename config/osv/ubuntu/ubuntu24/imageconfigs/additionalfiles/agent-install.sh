@@ -28,6 +28,10 @@ esac
 #   OPENVINO_RELEASE_FALLBACK=1    # 1 = newest openvino-* meta if target not in apt yet
 #   OPENVINO_REPO_TRACK=2025       # Intel apt path …/openvino/${OPENVINO_REPO_TRACK}
 #   INSTALL_OPEN_MODEL_ZOO=1       # git clone open_model_zoo (tag OPEN_MODEL_ZOO_TAG)
+#   INSTALL_INTEL_GPU_REPO=1       # add repositories.intel.com/gpu for up-to-date Level Zero (L0) runtime
+#   INTEL_GPU_REPO_COMPONENT=unified  # Intel GPU repo component (unified | client)
+#   INSTALL_PYTORCH_XPU=1          # pip install torch+XPU backend in the agent venv
+#   PYTORCH_XPU_INDEX_URL=https://download.pytorch.org/whl/xpu
 #   OPENCLAW_INSTALL_URL=https://openclaw.ai/install.sh
 #   SUPERCLAW_CTL_URL=…/superclaw-ctl-v1.0.0-linux-x86-64.tar.gz
 #   SUPERCLAW_CTL_PREFIX=/opt/superclaw
@@ -43,7 +47,7 @@ esac
 set -euo pipefail
 
 readonly SCRIPT_NAME="${0##*/}"
-readonly SCRIPT_REV="2026-06-29-intel-openvino-2026.2-omz-v14"
+readonly SCRIPT_REV="2026-06-30-intel-l0-gpu-pytorch-xpu-v15"
 readonly LOG_TAG="agent-install"
 readonly STAMP_DIR="/var/lib/agent-install/done"
 readonly LOG_FILE="/var/log/agent-install.log"
@@ -75,6 +79,14 @@ INSTALL_OPENCLAW="${INSTALL_OPENCLAW:-1}"
 INSTALL_SUPERCLAW_CTL="${INSTALL_SUPERCLAW_CTL:-0}"
 INSTALL_OPEN_MODEL_ZOO="${INSTALL_OPEN_MODEL_ZOO:-1}"
 INTEL_PACKAGE_POLICY="${INTEL_PACKAGE_POLICY:-release}"
+
+# Up-to-date Intel GPU Level Zero (L0) runtime: Ubuntu's stock libze-intel-gpu1 lags badly.
+INSTALL_INTEL_GPU_REPO="${INSTALL_INTEL_GPU_REPO:-1}"
+readonly INTEL_GPU_REPO_COMPONENT="${INTEL_GPU_REPO_COMPONENT:-unified}"
+
+# PyTorch with Intel GPU (XPU) backend, installed into the agent venv from the XPU wheel index.
+INSTALL_PYTORCH_XPU="${INSTALL_PYTORCH_XPU:-1}"
+readonly PYTORCH_XPU_INDEX_URL="${PYTORCH_XPU_INDEX_URL:-https://download.pytorch.org/whl/xpu}"
 
 # Used only when INTEL_PACKAGE_POLICY=pinned (exact deb names; OpenVINO uses release-style meta names).
 INTEL_PINNED_PACKAGES=(
@@ -253,6 +265,15 @@ detect_intel_ubuntu_suite() {
 	esac
 }
 
+# repositories.intel.com/gpu uses Ubuntu codenames (noble/jammy), not the ubuntu24/ubuntu22 suites.
+detect_intel_gpu_codename() {
+	case "$(detect_intel_ubuntu_suite)" in
+	ubuntu24) echo "noble" ;;
+	ubuntu22) echo "jammy" ;;
+	*) return 1 ;;
+	esac
+}
+
 intel_apt_sources_ok() {
 	local suite
 	suite="$(detect_intel_ubuntu_suite)" || return 1
@@ -261,6 +282,12 @@ intel_apt_sources_ok() {
 	[[ -f /etc/apt/sources.list.d/intel-dlstreamer.list ]] || return 1
 	grep -qF "dlstreamer/${suite} ${suite} main" /etc/apt/sources.list.d/intel-dlstreamer.list || return 1
 	[[ -f /etc/apt/sources.list.d/intel-oneapi.list ]] || return 1
+	if [[ "${INSTALL_INTEL_GPU_REPO}" == "1" ]]; then
+		local gpu_codename
+		gpu_codename="$(detect_intel_gpu_codename)" || return 0
+		[[ -f /etc/apt/sources.list.d/intel-gpu.list ]] || return 1
+		grep -qF "gpu/ubuntu ${gpu_codename} ${INTEL_GPU_REPO_COMPONENT}" /etc/apt/sources.list.d/intel-gpu.list || return 1
+	fi
 	return 0
 }
 
@@ -290,6 +317,7 @@ remove_ict_duplicate_intel_apt_lines() {
 configure_intel_apt_repos_files() {
 	local suite="$1"
 	local dls_base="$2"
+	local gpu_codename="$3"
 
 	remove_ict_duplicate_intel_apt_lines
 
@@ -314,6 +342,16 @@ EOF
 		cat >/etc/apt/sources.list.d/intel-dlstreamer.list <<EOF
 deb [arch=${INTEL_APT_ARCH} signed-by=/usr/share/keyrings/intel-dls.gpg] ${dls_base} ${suite} main
 EOF
+
+		if [[ -n '${gpu_codename}' ]]; then
+			curl -fsSL https://repositories.intel.com/gpu/intel-graphics.key \
+				| gpg --batch --yes --dearmor -o /usr/share/keyrings/intel-graphics.gpg
+			cat >/etc/apt/sources.list.d/intel-gpu.list <<EOF
+deb [arch=${INTEL_APT_ARCH} signed-by=/usr/share/keyrings/intel-graphics.gpg] https://repositories.intel.com/gpu/ubuntu ${gpu_codename} ${INTEL_GPU_REPO_COMPONENT}
+EOF
+		else
+			rm -f /etc/apt/sources.list.d/intel-gpu.list
+		fi
 	"
 }
 
@@ -343,6 +381,16 @@ run_once_step_intel_apt_repos() {
 	dls_base="https://apt.repos.intel.com/edgeai/dlstreamer/${suite}"
 	log "Intel apt suite: ${suite} (arch=${INTEL_APT_ARCH})"
 
+	local gpu_codename=""
+	if [[ "${INSTALL_INTEL_GPU_REPO}" == "1" ]]; then
+		gpu_codename="$(detect_intel_gpu_codename || true)"
+		if [[ -n "${gpu_codename}" ]]; then
+			log "Intel GPU (Level Zero) repo: repositories.intel.com/gpu/ubuntu ${gpu_codename} ${INTEL_GPU_REPO_COMPONENT}"
+		else
+			log "WARN: could not map suite to Intel GPU repo codename; skipping L0 runtime repo"
+		fi
+	fi
+
 	if [[ -f "${STAMP_DIR}/intel-apt-repos" ]]; then
 		log "Removing obsolete stamp intel-apt-repos (wrong noble/jammy suite lists)"
 		rm -f "${STAMP_DIR}/intel-apt-repos"
@@ -358,7 +406,7 @@ run_once_step_intel_apt_repos() {
 	fi
 
 	log "Step 'intel-apt-repos-v2' start"
-	configure_intel_apt_repos_files "${suite}" "${dls_base}"
+	configure_intel_apt_repos_files "${suite}" "${dls_base}" "${gpu_codename}"
 	touch "${stamp}"
 	log "Step 'intel-apt-repos-v2' ok"
 }
@@ -436,6 +484,11 @@ run_once_step_agent_python_venv() {
 			langgraph \\
 			openai \\
 			openai-agents
+		if [[ '${INSTALL_PYTORCH_XPU}' == '1' ]]; then
+			# PyTorch Intel GPU (XPU) backend; wheels bundle the needed runtime libs.
+			'${AGENT_VENV}/bin/pip' install --index-url '${PYTORCH_XPU_INDEX_URL}' \\
+				torch torchvision torchaudio
+		fi
 	"
 }
 
@@ -796,6 +849,12 @@ main() {
 
 	log "=== ${SCRIPT_NAME} complete ==="
 	log "Python agent venv: ${AGENT_VENV}/bin/activate"
+	if [[ "${INSTALL_PYTORCH_XPU}" == "1" ]]; then
+		log "PyTorch XPU: ${AGENT_VENV}/bin/python -c 'import torch; print(torch.xpu.is_available())'"
+	fi
+	if [[ "${INSTALL_INTEL_GPU_REPO}" == "1" ]]; then
+		log "Level Zero runtime: dpkg -l libze1 libze-intel-gpu1 | grep ^ii (from repositories.intel.com/gpu)"
+	fi
 	if [[ "${INSTALL_OPEN_MODEL_ZOO}" == "1" ]]; then
 		log "Open Model Zoo: ${OPEN_MODEL_ZOO_DIR} (source /etc/profile.d/open-model-zoo.sh; see log for git tag)"
 	fi

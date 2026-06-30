@@ -46,7 +46,7 @@ disk:
   artifacts:
     - type: raw
       compression: gz
-  size: 16GiB
+  size: 4GiB
   partitionTableType: gpt
   partitions:
     - id: boot
