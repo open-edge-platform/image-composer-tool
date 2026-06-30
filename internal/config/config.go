@@ -135,6 +135,13 @@ type OverlayPolicy struct {
 	// overlay mode is additive-only in v1. A future release can lift the
 	// restriction by surfacing this field in the schema/YAML.
 	AllowRemoval bool `yaml:"-"`
+
+	// AllowDowngrade gates whether preflight permits downgrading a baseline
+	// package to an older version. Like AllowRemoval it is intentionally NOT a
+	// YAML field (the schema rejects it via additionalProperties:false) and
+	// always carries its zero value (false): overlay mode is additive-only in
+	// v1, so downgrades are blocked by default. A future release can surface it.
+	AllowDowngrade bool `yaml:"-"`
 }
 
 // ImageTemplate represents the YAML image template structure
