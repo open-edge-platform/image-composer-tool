@@ -11,6 +11,7 @@ import (
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
 
 func resetURLExistenceCacheForTest(t *testing.T) {
@@ -108,6 +109,60 @@ func TestPackages(t *testing.T) {
 				if len(packages) != tt.expectedCount {
 					t.Errorf("Expected %d packages, got %d", tt.expectedCount, len(packages))
 				}
+			}
+		})
+	}
+}
+
+func TestLocalUserPackagesRegistersLocalRepoPriority(t *testing.T) {
+	origUserRepo := UserRepo
+	origArch := Architecture
+	origLocalUserRepoCfgs := LocalUserRepoCfgs
+	origExecutor := shell.Default
+	t.Cleanup(func() {
+		UserRepo = origUserRepo
+		Architecture = origArch
+		LocalUserRepoCfgs = origLocalUserRepoCfgs
+		shell.Default = origExecutor
+	})
+
+	tests := []struct {
+		name         string
+		templatePrio int
+		wantPrio     int
+	}{
+		{name: "explicit priority preserved", templatePrio: 900, wantPrio: 900},
+		{name: "default priority applied", templatePrio: 0, wantPrio: 500},
+	}
+
+	for _, tt := range tests {
+		tc := tt
+		t.Run(tc.name, func(t *testing.T) {
+			repoDir := t.TempDir()
+			debPath := filepath.Join(repoDir, "package1_1.0_amd64.deb")
+			if err := os.WriteFile(debPath, []byte("fake deb content"), 0644); err != nil {
+				t.Fatalf("failed to create fake DEB file: %v", err)
+			}
+
+			shell.Default = &scanpackagesExecutor{}
+			UserRepo = []config.PackageRepository{{Path: repoDir, Priority: tc.templatePrio}}
+			Architecture = "amd64"
+
+			_, cleanup, err := LocalUserPackages()
+			if cleanup != nil {
+				defer cleanup()
+			}
+			if err != nil {
+				t.Fatalf("LocalUserPackages() error = %v", err)
+			}
+			if len(LocalUserRepoCfgs) != 1 {
+				t.Fatalf("expected 1 local repo config, got %d", len(LocalUserRepoCfgs))
+			}
+			if got := LocalUserRepoCfgs[0].Priority; got != tc.wantPrio {
+				t.Fatalf("local repo priority = %d, want %d", got, tc.wantPrio)
+			}
+			if got := getRepositoryPriority(LocalUserRepoCfgs[0].PkgPrefix + "/pool/main/p/package1/package1_1.0_amd64.deb"); got != tc.wantPrio {
+				t.Fatalf("getRepositoryPriority(localhost package URL) = %d, want %d", got, tc.wantPrio)
 			}
 		})
 	}

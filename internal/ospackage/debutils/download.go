@@ -60,16 +60,17 @@ type pkgChecksum struct {
 }
 
 var (
-	RepoCfg        RepoConfig
-	RepoCfgs       []RepoConfig // Support for multiple repositories
-	UserRepoCfgs   []RepoConfig // Populated from UserRepo packageRepositories
-	PkgChecksum    []pkgChecksum
-	GzHref         string
-	Architecture   string
-	UserRepo       []config.PackageRepository
-	ReportPath     = "builds"
-	KernelVersion  string
-	KernelPackages = make(map[string]struct{})
+	RepoCfg           RepoConfig
+	RepoCfgs          []RepoConfig // Support for multiple repositories
+	UserRepoCfgs      []RepoConfig // Populated from UserRepo packageRepositories
+	LocalUserRepoCfgs []RepoConfig // Populated from path/packages-backed local packageRepositories
+	PkgChecksum       []pkgChecksum
+	GzHref            string
+	Architecture      string
+	UserRepo          []config.PackageRepository
+	ReportPath        = "builds"
+	KernelVersion     string
+	KernelPackages    = make(map[string]struct{})
 
 	urlExistenceCacheMu     sync.Mutex
 	urlExistenceCache       map[string]bool
@@ -341,7 +342,7 @@ func isDebRequirementInCache(
 }
 
 func debMetadataBuildPaths() []string {
-	buildPaths := make([]string, 0, 1+len(RepoCfgs)+len(UserRepoCfgs))
+	buildPaths := make([]string, 0, 1+len(RepoCfgs)+len(UserRepoCfgs)+len(LocalUserRepoCfgs))
 	seen := make(map[string]struct{})
 	add := func(path string) {
 		path = strings.TrimSpace(path)
@@ -360,6 +361,9 @@ func debMetadataBuildPaths() []string {
 		add(rc.BuildPath)
 	}
 	for _, rc := range UserRepoCfgs {
+		add(rc.BuildPath)
+	}
+	for _, rc := range LocalUserRepoCfgs {
 		add(rc.BuildPath)
 	}
 
@@ -647,8 +651,10 @@ func BuildRepoConfigs(userRepoList []Repository, arch string) ([]RepoConfig, err
 func LocalUserPackages() ([]ospackage.PackageInfo, func(), error) {
 	log := logger.Logger()
 	log.Infof("fetching packages from local user package list")
+	LocalUserRepoCfgs = nil
 
 	var allLocalPackages []ospackage.PackageInfo
+	var localRepoCfgs []RepoConfig
 	var cleanups []func()
 	combinedCleanup := func() {
 		for _, fn := range cleanups {
@@ -691,6 +697,20 @@ func LocalUserPackages() ([]ospackage.PackageInfo, func(), error) {
 		pkggz := fmt.Sprintf("%s/dists/stable/%s/binary-%s/Packages.gz", tempURL, component, Architecture)
 		releaseFile := fmt.Sprintf("%s/dists/stable/Release", tempURL)
 		buildPath := filepath.Join(config.TempDir(), "builds", fmt.Sprintf("%s_%s_%s", repoName, Architecture, component))
+		priority := repo.Priority
+		if priority == 0 {
+			priority = 500
+		}
+		localRepoCfgs = append(localRepoCfgs, RepoConfig{
+			PkgList:       pkggz,
+			ReleaseFile:   releaseFile,
+			PkgPrefix:     tempURL,
+			Name:          repoName,
+			BuildPath:     buildPath,
+			Arch:          Architecture,
+			Priority:      priority,
+			AllowPackages: repo.AllowPackages,
+		})
 
 		localPkgs, err := ParseRepositoryMetadata(tempURL, pkggz, releaseFile, "", "[trusted=yes]", buildPath, Architecture, repo.AllowPackages)
 		if err != nil {
@@ -700,6 +720,7 @@ func LocalUserPackages() ([]ospackage.PackageInfo, func(), error) {
 		}
 		allLocalPackages = append(allLocalPackages, localPkgs...)
 	}
+	LocalUserRepoCfgs = localRepoCfgs
 
 	return allLocalPackages, combinedCleanup, nil
 }
