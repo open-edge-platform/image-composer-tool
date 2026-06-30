@@ -2,6 +2,7 @@ package shell_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -357,5 +358,45 @@ func TestGetFullCmdStr_Env(t *testing.T) {
 	// The env vars are added after sudo
 	if !strings.Contains(fullCmd, "VAR=VALUE") {
 		t.Errorf("Expected env var in command, got: %s", fullCmd)
+	}
+}
+
+func TestQuoteArg(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"plain path", "/dev/loop0", `'/dev/loop0'`},
+		{"empty", "", `''`},
+		{"command substitution stays literal", "$(reboot)", `'$(reboot)'`},
+		{"backticks stay literal", "`id`", "'`id`'"},
+		{"variable stays literal", "${HOME}", `'${HOME}'`},
+		{"embedded single quote", "a'b", `'a'\''b'`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shell.QuoteArg(tt.in); got != tt.want {
+				t.Errorf("QuoteArg(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestQuoteArgNeutralizesExpansion runs a quoted argument through bash to prove
+// no expansion occurs: the shell must echo the value back byte-for-byte.
+func TestQuoteArgNeutralizesExpansion(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available; skipping shell-expansion check")
+	}
+	for _, in := range []string{"$(echo pwned)", "`echo pwned`", "${PATH}", "a'b'c"} {
+		cmd := exec.Command("bash", "-c", "printf %s "+shell.QuoteArg(in))
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("bash failed for %q: %v", in, err)
+		}
+		if string(out) != in {
+			t.Errorf("bash expanded %q to %q; single-quoting must prevent expansion", in, string(out))
+		}
 	}
 }

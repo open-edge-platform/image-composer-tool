@@ -726,3 +726,14 @@ func ExecCmdWithStream(cmdStr string, sudo bool, chrootPath string, envVal []str
 func ExecCmdWithInput(inputStr string, cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error) {
 	return Default.ExecCmdWithInput(inputStr, cmdStr, sudo, chrootPath, envVal)
 }
+
+// QuoteArg returns s quoted as a single shell argument safe to interpolate into
+// a command string that is later executed via "bash -c". It wraps the value in
+// single quotes, inside which bash performs no expansion at all — unlike double
+// quotes (as produced by strconv.Quote), which still allow $(...), ${...}, and
+// backtick command substitution. Any embedded single quote is emitted as the
+// standard close-quote, escaped-quote, reopen-quote sequence, i.e. the four
+// characters: single-quote, backslash, single-quote, single-quote.
+func QuoteArg(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
