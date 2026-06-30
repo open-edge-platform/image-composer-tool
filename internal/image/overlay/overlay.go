@@ -72,6 +72,26 @@ func validatePathSegment(name string) error {
 	return nil
 }
 
+// overlaySysConfigName returns the single, safe path segment used for the
+// per-build overlay workspace and image build directory. SystemConfig.Name is
+// user-supplied, schema-optional, and has no schema pattern, so it may be empty
+// or carry path separators / "..". An empty value falls back to a fixed default
+// (so a template omitting systemConfig.name still gets a predictable, isolated
+// location instead of an empty segment that collides with other builds); a
+// non-empty value is constrained to a single safe segment. Both NewIngestor (the
+// workspace) and overlayImageBuildDir (the emitted artifact) derive their path
+// segment through this helper so they stay consistent.
+func overlaySysConfigName(template *config.ImageTemplate) (string, error) {
+	name := template.GetSystemConfigName()
+	if strings.TrimSpace(name) == "" {
+		return defaultSysConfigName, nil
+	}
+	if err := validatePathSegment(name); err != nil {
+		return "", fmt.Errorf("invalid system config name %q: %w", name, err)
+	}
+	return name, nil
+}
+
 // LoopDevManager is the subset of imagedisc.LoopDevInterface needed to attach
 // and detach a baseline image. It is declared here so tests can inject a fake.
 type LoopDevManager interface {
@@ -135,11 +155,9 @@ func NewIngestor(template *config.ImageTemplate) (*Ingestor, error) {
 	// to a single, safe path segment before being joined into the workspace path,
 	// otherwise the overlay workspace (and the baseline copy/remove that operate
 	// under it) could escape the intended work directory.
-	sysConfigName := template.GetSystemConfigName()
-	if strings.TrimSpace(sysConfigName) == "" {
-		sysConfigName = defaultSysConfigName
-	} else if err := validatePathSegment(sysConfigName); err != nil {
-		return nil, fmt.Errorf("invalid system config name %q: %w", sysConfigName, err)
+	sysConfigName, err := overlaySysConfigName(template)
+	if err != nil {
+		return nil, err
 	}
 	// Image.Name is user-supplied and, like SystemConfig.Name, has no schema
 	// pattern. It is later joined into the emitted artifact filename

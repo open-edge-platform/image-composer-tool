@@ -19,6 +19,9 @@ For a conceptual overview of how templates fit into the build pipeline, see
     - [`metadata`](#metadata)
     - [`image` (required)](#image-required)
     - [`target` (required)](#target-required)
+    - [`baseline`](#baseline)
+      - [`baseline.source`](#baselinesource)
+    - [`overlayPolicy`](#overlaypolicy)
     - [`disk`](#disk)
       - [`disk.artifacts[]`](#diskartifacts)
       - [`disk.partitions[]`](#diskpartitions)
@@ -126,6 +129,10 @@ image:          # Required - image name and version
   ...
 target:         # Required - OS, distribution, architecture, image type
   ...
+baseline:       # Optional - "create" (default) or "overlay" an existing image
+  ...
+overlayPolicy:  # Optional - overlay-mode policy (only with baseline.mode: overlay)
+  ...
 disk:           # Optional - disk layout, partitions, output artifacts
   ...
 packageRepositories:  # Optional - additional package repositories
@@ -205,6 +212,83 @@ target:
   arch: x86_64
   imageType: raw
 ```
+
+---
+
+### `baseline`
+
+Selects how the image is assembled. If omitted, the build defaults to **create**
+mode (build the image from scratch, the behavior described everywhere else in
+this reference). Set `mode: overlay` to instead layer packages onto an existing
+baseline RAW disk image without rebuilding it.
+
+| Field | Type | Required | Valid Values | Description |
+|-------|------|----------|--------------|-------------|
+| `mode` | string | No | `create` (default), `overlay` | Assembly mode |
+| `source` | object | **Yes** when `mode: overlay` (must be **absent** for `create`) | — | The baseline image to overlay |
+
+#### `baseline.source`
+
+Identifies the baseline RAW image. Exactly one of `path` or `url` must be set.
+The source is copied into the build workspace first and is **never modified in
+place**.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `path` | string | one of `path`/`url` | Local filesystem path to the baseline RAW image (no URI scheme) |
+| `url` | string | one of `path`/`url` | `https://` URL of the baseline RAW image; downloaded over TLS before the overlay runs (plain `http` is rejected) |
+| `format` | string | No | Baseline image format. Only `raw` is supported (default `raw`) |
+
+```yaml
+baseline:
+  mode: overlay
+  source:
+    path: /path/to/ubuntu-24.04-base.img
+    format: raw
+```
+
+> **Note:** Overlay mode is currently wired end-to-end for the **Ubuntu**
+> provider. The overlay build is **strictly additive**: packages (and their
+> transitive dependencies not already present in the baseline) are installed
+> into the baseline root, the initramfs is regenerated for the added packages,
+> and an optional grow-only resize can enlarge the image to a larger
+> `disk.size`. The installed bootloader binary, the ESP, and existing baseline
+> packages are never modified.
+>
+> **Sizing:** Adding packages does **not** auto-grow the image. The resize is
+> grow-only and keyed solely on `disk.size` (compared to the baseline's current
+> size), not on how much space the added packages need. If the baseline root is
+> near-full, set `disk.size` larger than the baseline image to make room;
+> otherwise the package install step fails with a "no space left on device"
+> error (the failure message points back here).
+
+---
+
+### `overlayPolicy`
+
+Optional policy controls for overlay-mode preflight and install. It is a
+top-level peer of `baseline` and may **only** be set when `baseline.mode` is
+`overlay`. If omitted, the defaults below apply.
+
+| Field | Type | Required | Valid Values | Description |
+|-------|------|----------|--------------|-------------|
+| `packageOperation` | string | No | `additive-only` (default) | Permitted package operations. v1 is additive-only: packages may only be added, never removed or downgraded |
+| `conflictPolicy` | string | No | `fail` (default), `allow-explicit` | How a package conflict detected during preflight is handled. `fail` aborts the build; `allow-explicit` permits a conflict only when the conflicting package was explicitly requested |
+| `kernelCmdline` | string | No | — | Optional kernel command-line override applied to the overlaid image |
+
+```yaml
+baseline:
+  mode: overlay
+  source:
+    path: /path/to/ubuntu-24.04-base.img
+
+overlayPolicy:
+  packageOperation: additive-only
+  conflictPolicy: fail
+```
+
+A complete example lives at
+[`image-templates/ubuntu24-x86_64-overlay-raw.yml`](../../image-templates/ubuntu24-x86_64-overlay-raw.yml).
 
 ---
 

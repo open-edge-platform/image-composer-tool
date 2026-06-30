@@ -9,6 +9,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/initrdmaker"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/isomaker"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/overlay"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/rawmaker"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/wsl2maker"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/debutils"
@@ -31,6 +32,11 @@ var log = logger.Logger()
 type ubuntu struct {
 	repoCfgs  []debutils.RepoConfig
 	chrootEnv chroot.ChrootEnvInterface
+	// overlayBuilder holds the overlay-mode build lifecycle when the template is
+	// in overlay mode. It is created in PreProcess and reused across BuildImage and
+	// PostProcess so the single baseline mount spans all three phases. It is nil for
+	// ordinary create-mode builds, which take the unchanged maker path.
+	overlayBuilder *overlay.Builder
 }
 
 func Register(targetOs, targetDist, targetArch string) error {
@@ -77,6 +83,13 @@ func (p *ubuntu) Init(dist, arch string) error {
 }
 
 func (p *ubuntu) PreProcess(template *config.ImageTemplate) error {
+	// Overlay mode takes a separate, baseline-driven pipeline that keeps a single
+	// mount lifecycle open across preprocess and build; create mode falls through
+	// to the unchanged package-download + chroot-init flow below.
+	if template.IsOverlayMode() {
+		return p.overlayPreProcess(template)
+	}
+
 	// Generate apt sources file from packageRepositories
 	if err := template.GenerateAptSourcesFromRepositories(); err != nil {
 		return fmt.Errorf("failed to generate apt sources from repositories: %w", err)
@@ -106,6 +119,10 @@ func (p *ubuntu) PreProcess(template *config.ImageTemplate) error {
 func (p *ubuntu) BuildImage(template *config.ImageTemplate) error {
 	if template == nil {
 		return fmt.Errorf("template cannot be nil")
+	}
+
+	if template.IsOverlayMode() {
+		return p.overlayBuildImage(template)
 	}
 
 	log.Infof("Building image: %s", template.GetImageName())
@@ -225,9 +242,63 @@ func (p *ubuntu) buildIsoImage(template *config.ImageTemplate) error {
 }
 
 func (p *ubuntu) PostProcess(template *config.ImageTemplate, err error) error {
+	if template.IsOverlayMode() {
+		return p.overlayPostProcess(template, err)
+	}
+
 	if err := p.chrootEnv.CleanupChrootEnv(template.Target.OS,
 		template.Target.Dist, template.Target.Arch); err != nil {
 		return fmt.Errorf("failed to cleanup chroot environment: %w", err)
+	}
+	return nil
+}
+
+// overlayPreProcess runs the overlay-mode preprocess phase: it creates the overlay
+// Builder (which gates on overlay mode) and runs its Preprocess, which copies and
+// mounts the baseline, inspects it, resolves the requested packages, and runs the
+// preflight policy gate. The Builder is retained on the provider so BuildImage and
+// PostProcess reuse the same open mount lifecycle.
+func (p *ubuntu) overlayPreProcess(template *config.ImageTemplate) error {
+	builder, err := overlay.NewBuilder(template)
+	if err != nil {
+		return fmt.Errorf("failed to create overlay builder: %w", err)
+	}
+	p.overlayBuilder = builder
+
+	if err := builder.Preprocess(); err != nil {
+		return fmt.Errorf("overlay pre-processing failed: %w", err)
+	}
+	return nil
+}
+
+// overlayBuildImage runs the overlay-mode build phase against the baseline mounted
+// in preprocess: install the approved package plan, regenerate the initramfs for
+// added packages (never the bootloader), and apply any grow-only resize.
+func (p *ubuntu) overlayBuildImage(template *config.ImageTemplate) error {
+	if p.overlayBuilder == nil {
+		return fmt.Errorf("overlay build invoked without a preprocessed overlay builder")
+	}
+	log.Infof("Building overlay image: %s", template.GetImageName())
+	if err := p.overlayBuilder.Build(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// overlayPostProcess runs the overlay-mode postprocess phase: generate the SBOM,
+// emit the final RAW artifact, and ALWAYS unmount/detach the baseline. buildErr is
+// threaded in so a failed build still triggers the full cleanup chain. When
+// preprocess never created a builder (it failed early), there is nothing to clean.
+func (p *ubuntu) overlayPostProcess(template *config.ImageTemplate, buildErr error) error {
+	if p.overlayBuilder == nil {
+		return nil
+	}
+	// Clear the retained builder once postprocess has run (success or failure) so it
+	// cannot be accidentally reused across builds and its retained state (paths,
+	// plan, report, mount lifecycle) can be garbage-collected promptly.
+	defer func() { p.overlayBuilder = nil }()
+	if err := p.overlayBuilder.Postprocess(buildErr); err != nil {
+		return fmt.Errorf("overlay post-processing failed: %w", err)
 	}
 	return nil
 }

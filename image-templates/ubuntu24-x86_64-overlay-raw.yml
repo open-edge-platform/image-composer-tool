@@ -1,0 +1,60 @@
+# Sample overlay-mode template: layer packages onto an existing Ubuntu 24.04 RAW
+# image instead of building one from scratch.
+#
+# Replace baseline.source.path below with the path to your own baseline RAW
+# image (or use baseline.source.url for an https-hosted image). The placeholder
+# path is intentionally not a real file; the build will not run until you point
+# it at a baseline you have.
+
+# AI-searchable metadata for template discovery
+metadata:
+  description: Overlay an existing Ubuntu 24.04 RAW image, adding packages without rebuilding from scratch
+  use_cases:
+    - Add packages to a pre-built Ubuntu base image
+    - Incremental/overlay image customization
+    - Fast iteration on an existing golden image
+  keywords:
+    - overlay
+    - baseline
+    - additive
+    - ubuntu
+    - raw
+    - incremental
+
+image:
+  name: ubuntu-overlay
+  version: "24.04"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+
+# Overlay mode: layer packages onto an existing baseline RAW image instead of
+# building from scratch. The source image is copied into the build workspace
+# first and is never modified in place.
+baseline:
+  mode: overlay
+  source:
+    # Replace with a real baseline RAW image path on your build host, or use
+    # `url: https://...` to fetch one over TLS.
+    path: /path/to/ubuntu-24.04-base.img
+    format: raw
+
+# Overlay is strictly additive in v1: packages may only be added, never removed
+# or downgraded, and any conflict fails the preflight gate.
+overlayPolicy:
+  packageOperation: additive-only
+  conflictPolicy: fail
+
+systemConfig:
+  name: overlay
+  description: Ubuntu 24.04 baseline with additional packages overlaid
+
+  # Additive overlay packages. These (and their transitive dependencies not
+  # already present in the baseline) are resolved, downloaded, and installed
+  # into the baseline. The bootloader and kernel are left untouched.
+  packages:
+    - tree
+    - jq
