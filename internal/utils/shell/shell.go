@@ -232,6 +232,23 @@ func IsCommandExist(cmd string, chrootPath string) (bool, error) {
 	return strings.TrimSpace(output) != "", nil
 }
 
+// QuoteArg returns s wrapped as a single shell argument that bash -c will pass
+// through literally, neutralizing every shell metacharacter it may contain.
+//
+// Commands in this tool are assembled as strings and run via `bash -c`, so any
+// interpolated value that is (even partially) attacker-influenced — e.g. an
+// artifact filename derived from a package URL basename, or a workspace path —
+// must be quoted here before being concatenated into a command. Single-quote
+// wrapping is used deliberately (not strconv.Quote / double quotes): inside
+// double quotes bash still expands $(...), backticks and $var, whereas nothing
+// is special inside single quotes. An embedded single quote is emitted as the
+// standard close-quote, escaped-quote, reopen-quote sequence (see the
+// ReplaceAll below), so the result is safe for arbitrary input including
+// quotes themselves.
+func QuoteArg(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 func extractSedPattern(command string) (string, error) {
 	// This regex handles common sed patterns:
 	// - sed -i 's/pattern/replacement/'
@@ -725,15 +742,4 @@ func ExecCmdWithStream(cmdStr string, sudo bool, chrootPath string, envVal []str
 
 func ExecCmdWithInput(inputStr string, cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error) {
 	return Default.ExecCmdWithInput(inputStr, cmdStr, sudo, chrootPath, envVal)
-}
-
-// QuoteArg returns s quoted as a single shell argument safe to interpolate into
-// a command string that is later executed via "bash -c". It wraps the value in
-// single quotes, inside which bash performs no expansion at all — unlike double
-// quotes (as produced by strconv.Quote), which still allow $(...), ${...}, and
-// backtick command substitution. Any embedded single quote is emitted as the
-// standard close-quote, escaped-quote, reopen-quote sequence, i.e. the four
-// characters: single-quote, backslash, single-quote, single-quote.
-func QuoteArg(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
