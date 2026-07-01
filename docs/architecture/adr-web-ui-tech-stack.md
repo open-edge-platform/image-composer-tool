@@ -228,17 +228,23 @@ by engineering.
 ### How selections map to a template
 
 The Basic UI collects five selections — **OS, vertical, SKU, platform, image type** —
-which together identify one template. This mirrors ICT's existing file-naming
-convention (`{os}-{arch}-{variant}-{platform}-{imageType}.yml`), e.g.:
+which together identify one template. A small **manifest** maps each valid
+combination to a template file *by explicit reference*, so filenames are not derived
+from the selections:
 
-| Selection | Resolved template |
-|-----------|-------------------|
+| Selection | Mapped template (`template:` in manifest) |
+|-----------|-------------------------------------------|
 | Ubuntu 24.04 · Robotics · AMR · — · ISO | `ubuntu24-x86_64-robotics-jazzy-iso.yml` |
 | Ubuntu 24.04 · Generic · Non-Realtime · PTL · RAW | `ubuntu24-x86_64-minimal-ptl-pv-raw.yml` |
 
-A small **manifest** maps each valid combination to its template file and to the
-display metadata the UI needs (vertical/SKU/platform/OS labels, image type). The
-manifest is the only new data artifact; the templates themselves already exist.
+> **No renaming required.** Existing templates in `image-templates/` keep their
+> current filenames. The manifest's `template:` field points at whatever the file is
+> already called, so the UI mapping and the on-disk names stay fully decoupled — any
+> naming scheme (existing or future) works without touching the UI or API code.
+
+The manifest maps each combination to its template file plus the display metadata the
+UI needs (vertical/SKU/platform/OS labels, image type). It is the only new data
+artifact; the templates themselves already exist.
 
 ### Data layout
 
