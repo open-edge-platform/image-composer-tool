@@ -56,18 +56,56 @@ The file `web/prototype/template-builder.html` demonstrates the exact views and 
 
 ### Architecture Diagram
 
-![Tech Stack Architecture](assets/web-ui-tech-stack.drawio.svg)
+![Tech Stack Architecture](assets/web-ui-tech-stack.svg)
 
 ### Data Flow Diagram
 
-![Template Builder Data Flow](assets/web-ui-data-flow.drawio.svg)
+![Template Builder Data Flow](assets/web-ui-data-flow.svg)
 
 ### Sequence Diagram — API calls & ICT build
 
 End-to-end flow across the three phases: loading options, composing (template
 lookup), and building via the ICT binary with SSE log streaming.
 
-![API Call and ICT Build Sequence](assets/web-ui-sequence.drawio.svg)
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as User (Browser)
+    participant SPA as React SPA
+    participant API as API (internal/api)
+    participant M as manifest + image-templates/
+    participant ICT as ICT binary (os/exec)
+
+    Note over U,ICT: 1 · Load Basic-tab options
+    SPA->>API: GET /verticals, /platforms, /targets
+    API->>M: read distinct combinations
+    M-->>API: valid options
+    API-->>SPA: JSON → populate dropdowns
+    U->>SPA: select vertical / SKU / platform / OS
+
+    Note over U,ICT: 2 · Review / Export (compose)
+    SPA->>API: POST /templates/compose {selections}
+    API->>M: lookup template by combination
+    M-->>API: matched template YAML
+    API-->>SPA: YAML + summary (Review / preview)
+
+    Note over U,ICT: 3 · Build Image
+    U->>SPA: clicks Build Image
+    SPA->>API: POST /builds {compose | yaml}
+    API->>M: resolve template file
+    API->>ICT: os/exec image-composer-tool build <template>
+    API-->>SPA: 202 {buildId, logsUrl}
+    SPA->>API: GET /builds/{id}/logs (SSE)
+    loop while build running
+        ICT-->>API: stdout/stderr line
+        API-->>SPA: event: log {message} → append to viewer
+    end
+    ICT-->>API: exit code 0 (build complete)
+    API-->>SPA: event: complete {status, artifacts[]}
+    SPA->>API: GET /builds/{id}/artifacts
+    API-->>SPA: Image + SBOM (name, type, path) → table
+    U->>SPA: views logs live + copies artifact paths
+```
 
 ---
 
@@ -400,3 +438,4 @@ npx openapi-typescript api/v1/openapi-template-builder.yaml -o web/src/api/types
 | 2026-06-28 | ICT Team | Replaced catalog/overlay data model with ICT's template-per-combination model: each UI selection maps via `manifest.yaml` to one pre-authored, engineering-tested template in `image-templates/`; `compose` returns the matched template rather than synthesizing one; Advanced edits apply per-request only |
 | 2026-07-01 | ICT Team | Refreshed both architecture diagrams to match current model (removed Swagger/validate/CRUD/policies/history; added manifest + artifacts); noted Advanced wizard steps are MVP-1 scope; clarified single-binary constraint; trimmed Project Structure to key files |
 | 2026-07-01 | ICT Team | Renamed "Backend Data Model & Maintenance" → "Implementation Data Model & Maintenance"; added sequence diagram (API calls & ICT binary invocation over `os/exec` with SSE log streaming) |
+| 2026-07-01 | ICT Team | Converted sequence diagram to Mermaid (repo convention for sequence diagrams); recolored block diagrams with a softer palette; renamed hand-authored SVGs from `*.drawio.svg` to `*.svg` (they are not draw.io-editable) |
