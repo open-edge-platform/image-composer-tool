@@ -1094,6 +1094,42 @@ func TestResolveExtendsChainPathTraversalAttack(t *testing.T) {
 	}
 }
 
+func TestResolveExtendsChainDirectorySymlinkEscape(t *testing.T) {
+	tmpDir := t.TempDir()
+	target := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+
+	childDir := filepath.Join(tmpDir, "child")
+	outsideDir := filepath.Join(tmpDir, "outside")
+	if err := os.MkdirAll(childDir, 0o755); err != nil {
+		t.Fatalf("failed to create child directory: %v", err)
+	}
+	if err := os.MkdirAll(outsideDir, 0o755); err != nil {
+		t.Fatalf("failed to create outside directory: %v", err)
+	}
+
+	// Parent template lives outside the child directory.
+	writeChainTemplate(t, filepath.Join(outsideDir, "parent.yml"), "parent", "", target)
+
+	// A directory symlink inside the child directory points outside it. The lexical
+	// guard sees "link/parent.yml" (no ".."), so only the symlink-resolved
+	// containment check can catch this escape.
+	if err := os.Symlink(outsideDir, filepath.Join(childDir, "link")); err != nil {
+		t.Skipf("symlinks not supported on this platform: %v", err)
+	}
+
+	leafPath := filepath.Join(childDir, "leaf.yml")
+	writeChainTemplate(t, leafPath, "leaf", "link/parent.yml", target)
+
+	_, err := resolveExtendsChain(leafPath)
+	if err == nil {
+		t.Fatalf("resolveExtendsChain() expected directory-symlink escape rejection")
+	}
+
+	if !strings.Contains(err.Error(), "extends path escapes child template's directory") {
+		t.Errorf("error = %q, want contains path escape message", err.Error())
+	}
+}
+
 func TestResolveExtendsChainDepthWarning(t *testing.T) {
 	tmpDir := t.TempDir()
 	target := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}

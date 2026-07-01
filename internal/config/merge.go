@@ -674,6 +674,13 @@ func resolveExtendsChain(templatePath string) ([]*ImageTemplate, error) {
 			return nil, fmt.Errorf("invalid extends path: %w", err)
 		}
 
+		// The lexical guard in resolveExtendsParentPath cannot see through directory
+		// symlinks inside the child directory. Re-check containment against the fully
+		// symlink-resolved paths so a symlink like child/link -> /outside cannot escape.
+		if err := verifyResolvedContainment(currentPath, parentPath); err != nil {
+			return nil, err
+		}
+
 		if cycleStart, exists := visited[canonicalPath(parentPath)]; exists {
 			cyclePaths := append([]string{}, displayPaths[cycleStart:]...)
 			cyclePaths = append(cyclePaths, parentPath)
@@ -725,6 +732,32 @@ func resolveExtendsParentPath(childTemplatePath, extendsRef string) (string, err
 	}
 
 	return parentPath, nil
+}
+
+// verifyResolvedContainment ensures that, after resolving all symlinks, the parent
+// template still lives within the child template's directory. This defends against
+// directory symlinks inside the child directory that the lexical check in
+// resolveExtendsParentPath cannot detect. Both paths must already exist.
+func verifyResolvedContainment(childTemplatePath, parentPath string) error {
+	resolvedChildDir, err := filepath.EvalSymlinks(filepath.Dir(childTemplatePath))
+	if err != nil {
+		return fmt.Errorf("failed to resolve child template directory: %w", err)
+	}
+
+	resolvedParent, err := filepath.EvalSymlinks(parentPath)
+	if err != nil {
+		return fmt.Errorf("failed to resolve extends path %s: %w", parentPath, err)
+	}
+
+	rel, err := filepath.Rel(resolvedChildDir, resolvedParent)
+	if err != nil {
+		return fmt.Errorf("failed to evaluate resolved extends path %s: %w", parentPath, err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("extends path escapes child template's directory: %s", parentPath)
+	}
+
+	return nil
 }
 
 // canonicalPath returns a symlink-resolved absolute path for use as a stable
