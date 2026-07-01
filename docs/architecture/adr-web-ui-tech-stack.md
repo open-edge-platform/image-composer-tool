@@ -83,16 +83,20 @@ sequenceDiagram
     API-->>SPA: JSON → populate dropdowns
     U->>SPA: select vertical / SKU / platform / OS
 
-    Note over U,ICT: 2 · Review / Export (compose)
+    Note over U,ICT: 2 · Compose (fetch base template once)
     SPA->>API: POST /templates/compose {selections}
     API->>M: lookup template by combination
     M-->>API: matched template YAML
-    API-->>SPA: YAML + summary (Review / preview)
+    API-->>SPA: YAML + summary (Basic Review / seed Advanced editor)
+    opt Advanced tab — edits are client-side only
+        U->>SPA: add packages / repos / change disk
+        SPA->>SPA: mutate model, re-render YAML preview locally (no backend call)
+    end
 
     Note over U,ICT: 3 · Build Image
     U->>SPA: clicks Build Image
-    SPA->>API: POST /builds {compose | yaml}
-    API->>M: resolve template file
+    SPA->>API: POST /builds  (Basic: {compose} · Advanced: {yaml} = complete template)
+    API->>M: resolve template file (Basic) / parse sent YAML (Advanced)
     API->>ICT: os/exec image-composer-tool build <template>
     API-->>SPA: 202 {buildId, logsUrl}
     SPA->>API: GET /builds/{id}/logs (SSE)
@@ -130,7 +134,7 @@ sequenceDiagram
 | **Middleware** | Custom (CORS, logging, request-id) | Thin wrappers around stdlib |
 | **Serialization** | `encoding/json` | Request/response marshalling |
 | **Validation** | `santhosh-tekuri/jsonschema/v5` | Template validation (already in deps) |
-| **YAML** | `yaml.v3` + `sigs.k8s.io/yaml` | Read/serve matched template; apply Advanced-tab edits per request |
+| **YAML** | `yaml.v3` + `sigs.k8s.io/yaml` | Read/serve the matched template; parse the complete YAML sent by Advanced builds |
 | **SSE Streaming** | Custom `text/event-stream` writer | Build log streaming to UI |
 | **ICT Adapter** | `os/exec` subprocess | Translates intent to ICT calls, invokes `image-composer-tool build`, normalizes logs/artifacts |
 | **Logging** | `go.uber.org/zap` | Structured logs |
@@ -181,8 +185,8 @@ sequenceDiagram
 | Disk step: partition layout | `<Table>` with add/remove partition actions |
 | Review step: summary table | `<Table>` matching Basic review (Image, Vertical, SKU, Platform, OS, Image Type, Disk, Packages) |
 | Review step: Export YAML | `<Button>` generates and downloads `.yml` file |
-| Review step: Build Image | Navigates to Build Image tab, triggers `POST /api/v1/builds` |
-| Live YAML preview (right panel) | `<CodeMirror>` read-only with YAML mode, updates on every state change via Zustand |
+| Review step: Build Image | Navigates to Build Image tab, triggers `POST /api/v1/builds` with the **complete edited YAML** (`{ yaml }`), not a delta |
+| Live YAML preview (right panel) | `<CodeMirror>` read-only. Base template fetched **once** via `POST /templates/compose` on entering Advanced; every subsequent edit mutates the Zustand model and re-renders the YAML **client-side** — no per-change backend calls |
 | Basic → Advanced sync | `syncBasicToAdvanced()` copies Zustand Basic store into Advanced store on tab switch |
 
 ### Build Image Tab
@@ -321,8 +325,8 @@ combinations:
 |----------|--------|
 | `GET /verticals`, `/platforms`, `/targets`, `/verticals/{id}/skus` | Distinct values from `manifest.yaml` (drives the dropdowns; only combinations that resolve to a real template are offered) |
 | `GET /verticals/{id}/defaults` | The matched template — summary fields (packages, disk, image type) are read from that template file |
-| `POST /templates/compose` | Returns the matched template's YAML verbatim (used for the Advanced preview / Export YAML) |
-| `POST /builds` | Builds the matched template file directly |
+| `POST /templates/compose` | Returns the matched template's YAML verbatim — Basic uses it for the Review summary; Advanced fetches it **once** to seed the editor |
+| `POST /builds` | **Basic:** `{ compose }` → builds the matched template file directly. **Advanced:** `{ yaml }` → builds the complete edited YAML sent by the client. Always a whole template, never a delta. |
 
 ### Maintenance (owned by ICT engineering)
 
@@ -339,9 +343,17 @@ impossible to construct.
 ### Advanced tab
 
 The Advanced tab starts from the matched template (via Basic → Advanced sync) and lets
-power users adjust packages, repositories, and disk layout on top of it. These edits
-produce a modified YAML for that build only; they do **not** alter the stored templates.
-Changing a default template remains an engineering-team action.
+power users adjust packages, repositories, and disk layout on top of it.
+
+**Editing is entirely client-side.** The base template is fetched **once** (`POST
+/templates/compose`) when the user enters Advanced. Every subsequent edit mutates the
+in-browser Zustand model, and the live YAML preview re-renders locally — there are **no
+per-change backend round-trips**. At build time the browser sends the **complete edited
+YAML** to `POST /builds { yaml }` (not a diff), so the preview the user sees is exactly
+what gets built.
+
+These edits produce a modified YAML for that build only; they do **not** alter the
+stored templates. Changing a default template remains an engineering-team action.
 
 > **Out of scope for MVP-1:** a live package index. `GET /packages/search` is backed by
 > a static/sample package list in MVP-1; wiring it to real repository metadata
@@ -439,3 +451,4 @@ npx openapi-typescript api/v1/openapi-template-builder.yaml -o web/src/api/types
 | 2026-07-01 | ICT Team | Refreshed both architecture diagrams to match current model (removed Swagger/validate/CRUD/policies/history; added manifest + artifacts); noted Advanced wizard steps are MVP-1 scope; clarified single-binary constraint; trimmed Project Structure to key files |
 | 2026-07-01 | ICT Team | Renamed "Backend Data Model & Maintenance" → "Implementation Data Model & Maintenance"; added sequence diagram (API calls & ICT binary invocation over `os/exec` with SSE log streaming) |
 | 2026-07-01 | ICT Team | Converted sequence diagram to Mermaid (repo convention for sequence diagrams); recolored block diagrams with a softer palette; renamed hand-authored SVGs from `*.drawio.svg` to `*.svg` (they are not draw.io-editable) |
+| 2026-07-01 | ICT Team | Clarified build payload & Advanced preview: `POST /builds` is always self-contained (Basic → `{compose}`, Advanced → complete `{yaml}`, never a delta); Advanced fetches the base template once then edits/re-render happen client-side with no per-change backend calls; removed misleading "apply edits per request" wording |
