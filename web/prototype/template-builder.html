@@ -1,0 +1,1271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Image Composer Tool (ICT)</title>
+<style>
+:root {
+  --primary: #0071C5;
+  --primary-hover: #00285A;
+  --primary-light: #e6f2fa;
+  --success: #16a34a;
+  --success-light: #f0fdf4;
+  --warning: #d97706;
+  --error: #dc2626;
+  --bg: #f5f8fb;
+  --surface: #ffffff;
+  --border: #d6e3f0;
+  --text: #00285A;
+  --text-muted: #4a6d8c;
+  --radius: 8px;
+  --shadow: 0 1px 3px rgba(0,40,90,0.08), 0 1px 2px rgba(0,40,90,0.04);
+  --shadow-lg: 0 10px 15px -3px rgba(0,40,90,0.1), 0 4px 6px -2px rgba(0,40,90,0.05);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.topnav {
+  background: #00285A;
+  border-bottom: none;
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  height: 56px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  box-shadow: 0 2px 8px rgba(0,40,90,0.15);
+}
+
+.topnav-logo { font-weight: 700; font-size: 18px; color: #ffffff; margin-right: 32px; }
+.topnav-tabs { display: flex; gap: 4px; }
+
+.topnav-tab {
+  padding: 8px 20px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  color: rgba(255,255,255,0.7);
+  transition: all 0.15s;
+  border: none;
+  background: none;
+}
+
+.topnav-tab:hover { background: rgba(255,255,255,0.1); color: #ffffff; }
+.topnav-tab.active { background: #0071C5; color: #ffffff; }
+.topnav-actions { margin-left: auto; display: flex; gap: 8px; }
+
+.btn {
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  transition: all 0.15s;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn:hover { border-color: #94a3b8; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-primary { background: var(--primary); color: white; border-color: var(--primary); }
+.btn-primary:hover { background: var(--primary-hover); }
+.btn-success { background: var(--success); color: white; border-color: var(--success); }
+.btn-warning { background: var(--warning); color: white; border-color: var(--warning); }
+.btn-sm { padding: 4px 10px; font-size: 12px; }
+.btn-lg { padding: 12px 24px; font-size: 15px; font-weight: 600; }
+
+.view { display: none; }
+.view.active { display: block; }
+
+.page-container { max-width: 960px; margin: 0 auto; padding: 32px 24px; }
+.page-title { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
+.page-desc { font-size: 14px; color: var(--text-muted); margin-bottom: 28px; }
+
+.form-group { margin-bottom: 24px; }
+.form-label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: var(--text); }
+.form-hint { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+
+.form-select {
+  width: 100%;
+  max-width: 420px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 14px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2364748b' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  transition: border-color 0.15s;
+}
+
+.form-select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,0.1); }
+
+.form-input {
+  width: 100%;
+  max-width: 420px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 14px;
+  transition: border-color 0.15s;
+}
+
+.form-input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,0.1); }
+
+.info-banner {
+  padding: 12px 16px;
+  border-radius: 8px;
+  border: 1px solid;
+  margin-bottom: 24px;
+  font-size: 13px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.info-banner.info { background: var(--primary-light); border-color: #b3d9f2; color: #00285A; }
+
+
+.review-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.review-header { padding: 14px 20px; background: #f8fafc; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 15px; }
+.review-table { width: 100%; border-collapse: collapse; }
+.review-table td { padding: 12px 20px; border-bottom: 1px solid var(--border); font-size: 14px; }
+.review-table td:first-child { font-weight: 600; color: var(--text-muted); width: 160px; }
+.review-table tr:last-child td { border-bottom: none; }
+
+.review-actions { padding: 16px 20px; border-top: 1px solid var(--border); background: #f8fafc; display: flex; gap: 10px; }
+
+.yaml-preview {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-top: 20px;
+  box-shadow: var(--shadow);
+}
+
+.yaml-preview-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.yaml-content {
+  padding: 16px;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  max-height: 400px;
+  overflow-y: auto;
+  white-space: pre;
+  color: #334155;
+  background: #f8fafc;
+}
+
+.section-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  margin-bottom: 20px;
+  box-shadow: var(--shadow);
+}
+
+.section-card h3 { font-size: 15px; margin-bottom: 4px; }
+.section-card .section-desc { font-size: 12px; color: var(--text-muted); margin-bottom: 16px; }
+
+.chip-group { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.chip {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.15s;
+  user-select: none;
+}
+
+.chip:hover { border-color: #94a3b8; }
+.chip.selected { border-color: var(--primary); background: var(--primary-light); color: var(--primary); }
+
+.checkbox-card {
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+  margin-bottom: 8px;
+}
+
+.checkbox-card:hover { border-color: #94a3b8; }
+.checkbox-card.checked { border-color: var(--primary); background: var(--primary-light); }
+.checkbox-card-header { display: flex; align-items: center; gap: 10px; }
+.checkbox-card-header input[type="checkbox"] { accent-color: var(--primary); width: 16px; height: 16px; }
+.checkbox-card-title { font-weight: 600; font-size: 13px; }
+.checkbox-card-packages { font-size: 12px; color: var(--text-muted); margin-top: 3px; margin-left: 26px; }
+
+.tags-input {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  min-height: 42px;
+  align-items: center;
+  max-width: 600px;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  background: var(--primary-light);
+  border: 1px solid #bfdbfe;
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--primary);
+}
+
+.tag-remove { cursor: pointer; font-weight: bold; opacity: 0.6; }
+.tag-remove:hover { opacity: 1; }
+.tags-input input { border: none; outline: none; font-size: 13px; flex: 1; min-width: 150px; }
+
+/* ── Package Search Autocomplete ── */
+.pkg-search-container { position: relative; max-width: 600px; }
+
+.pkg-search-input {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.pkg-search-input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,0.1); }
+
+.pkg-search-dropdown {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+  box-shadow: var(--shadow-lg);
+  max-height: 240px;
+  overflow-y: auto;
+  z-index: 50;
+}
+
+.pkg-search-dropdown.active { display: block; }
+
+.pkg-search-item {
+  padding: 10px 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #f1f5f9;
+  transition: background 0.1s;
+}
+
+.pkg-search-item:hover { background: var(--primary-light); }
+.pkg-search-item:last-child { border-bottom: none; }
+
+.pkg-search-name { font-size: 13px; font-weight: 600; color: var(--text); }
+.pkg-search-desc { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+.pkg-search-repo { font-size: 11px; color: var(--primary); background: #eff6ff; padding: 2px 6px; border-radius: 3px; white-space: nowrap; }
+
+/* ── Validation Status ── */
+.validation-result {
+  padding: 12px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  margin-top: 12px;
+  display: none;
+}
+
+.validation-result.valid { display: block; background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; }
+.validation-result.invalid { display: block; background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; }
+
+/* ── Build Dashboard ── */
+.builds-container { padding: 24px; max-width: 1100px; margin: 0 auto; }
+
+.build-active {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  margin-bottom: 24px;
+  box-shadow: var(--shadow);
+}
+
+.build-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.build-title { font-weight: 600; font-size: 16px; }
+.build-status { font-size: 12px; color: var(--text-muted); }
+
+.progress-bar { height: 8px; background: #e2e8f0; border-radius: 4px; overflow: hidden; margin-bottom: 16px; }
+.progress-fill { height: 100%; background: var(--primary); border-radius: 4px; transition: width 0.5s ease; }
+
+.build-logs {
+  background: #1e293b;
+  border-radius: 6px;
+  padding: 12px 16px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: #e2e8f0;
+  max-height: 200px;
+  overflow-y: auto;
+  line-height: 1.8;
+}
+
+.log-line { opacity: 0.9; }
+.log-time { color: #64748b; }
+.log-info { color: #38bdf8; }
+.log-success { color: #4ade80; }
+
+.build-history { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.build-history-header { padding: 16px; font-weight: 600; border-bottom: 1px solid var(--border); }
+.build-history table { width: 100%; border-collapse: collapse; font-size: 13px; }
+
+.build-history th {
+  text-align: left;
+  padding: 10px 16px;
+  background: #f8fafc;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.build-history td { padding: 10px 16px; border-top: 1px solid var(--border); }
+.status-pass { color: var(--success); font-weight: 600; }
+.status-fail { color: var(--error); font-weight: 600; }
+
+/* ── Wizard Layout (Advanced Tab) ── */
+.wizard-container {
+  display: grid;
+  grid-template-columns: 1fr 380px;
+  gap: 24px;
+  padding: 0 24px 24px;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.steps-progress {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 16px 24px;
+  overflow-x: auto;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.step-dot {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  background: #e2e8f0;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+
+.step-dot.active { background: var(--primary); color: white; }
+.step-dot.completed { background: var(--success); color: white; }
+
+.step-line { height: 2px; width: 24px; background: #e2e8f0; flex-shrink: 0; }
+.step-line.completed { background: var(--success); }
+
+.step-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+  box-shadow: var(--shadow);
+  animation: fadeIn 0.2s ease;
+}
+
+.step-panel h2 { font-size: 18px; margin-bottom: 4px; }
+.step-panel .step-desc { font-size: 13px; color: var(--text-muted); margin-bottom: 20px; }
+
+.step-nav {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.radio-group { display: flex; flex-direction: column; gap: 8px; }
+
+.radio-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.radio-option:hover { border-color: #94a3b8; background: #f8fafc; }
+.radio-option.selected { border-color: var(--primary); background: #eff6ff; }
+.radio-option input[type="radio"] { accent-color: var(--primary); }
+
+.image-type-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+
+.image-type-card {
+  padding: 16px;
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.image-type-card:hover { border-color: #94a3b8; }
+.image-type-card.selected { border-color: var(--primary); background: #eff6ff; }
+.image-type-card .card-icon { font-size: 24px; margin-bottom: 4px; }
+.image-type-card .card-title { font-weight: 600; font-size: 14px; }
+.image-type-card .card-desc { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+.validation-status {
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.validation-status.valid { color: var(--success); }
+.validation-status.invalid { color: var(--error); }
+
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+.page-container { animation: fadeIn 0.2s ease; }
+</style>
+</head>
+<body>
+
+<!-- ═══ TOP NAV ═══ -->
+<nav class="topnav">
+  <div class="topnav-logo">Image Composer Tool</div>
+  <div class="topnav-tabs">
+    <button class="topnav-tab active" data-view="basic">Basic</button>
+    <button class="topnav-tab" data-view="advanced">Advanced</button>
+    <button class="topnav-tab" data-view="builds">Build Image</button>
+  </div>
+</nav>
+
+<!-- ════════════════════════════════════════════════════════════ -->
+<!-- BASIC TAB                                                   -->
+<!-- ════════════════════════════════════════════════════════════ -->
+<div class="view active" id="view-basic">
+  <div class="page-container">
+    <h1 class="page-title">Choose Image Configuration</h1>
+    <p class="page-desc">Select a targeted vertical, SKU, and platform. Pre-configured defaults will be applied based on your selection.</p>
+
+    <div class="step-panel">
+      <div class="form-group">
+        <label class="form-label">Targeted Vertical</label>
+        <select class="form-select" id="select-vertical" onchange="onVerticalChange()">
+          <option value="generic">Generic</option>
+          <optgroup label="Verticals">
+            <option value="robotics">Robotics</option>
+            <option value="physical-ai">Physical AI</option>
+            <option value="agentic-ai">Agentic AI</option>
+            <option value="health">Health</option>
+            <option value="fed-aero">Fed Aero</option>
+            <option value="industrial">Industrial IoT</option>
+            <option value="retail">Retail Edge</option>
+          </optgroup>
+        </select>
+        <p class="form-hint">Verticals come with pre-configured defaults optimized for the use case.</p>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">SKU</label>
+        <select class="form-select" id="select-sku" onchange="onSelectionChange()">
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Platform</label>
+        <select class="form-select" id="select-platform" onchange="onSelectionChange()">
+          <option value="">-- Select Platform --</option>
+          <option value="ptl">PTL (Panther Lake)</option>
+          <option value="wcl">WCL (Wildcat Lake)</option>
+          <option value="arl">ARL (Arrow Lake)</option>
+          <option value="nvl">NVL (Nova Lake)</option>
+        </select>
+      </div>
+
+      <div class="form-group" id="os-selection">
+        <label class="form-label">Operating System</label>
+        <select class="form-select" id="select-os" onchange="onSelectionChange()">
+          <option value="" disabled selected>-- Select Operating System --</option>
+          <option value="ubuntu24">Ubuntu 24.04</option>
+          <option value="ubuntu26">Ubuntu 26.04</option>
+          <option value="debian13">Debian 13</option>
+          <option value="azl3">Azure Linux 3</option>
+          <option value="elxr13">Wind River eLxr 13</option>
+          <option value="emt3">Edge Microvisor Toolkit 3</option>
+        </select>
+      </div>
+
+      <!-- Review Image Configuration toggle -->
+      <div class="form-group" id="view-content-section" style="margin-bottom:0;">
+        <label style="font-size:13px;display:flex;align-items:center;gap:8px;cursor:pointer;">
+          <input type="checkbox" id="view-image-content" onchange="toggleImageContent()"> Review Image Configuration
+        </label>
+        <div id="image-content-details" style="display:none;"></div>
+      </div>
+    </div>
+
+    <!-- Actions (always visible) -->
+    <div style="margin-top: 24px; display:flex; gap:12px;">
+      <button class="btn btn-lg btn-success" onclick="switchView('builds')">Build Image</button>
+      <button class="btn btn-lg" onclick="switchView('advanced')">Edit in Advanced</button>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════ -->
+<!-- ADVANCED TAB                                                -->
+<!-- ════════════════════════════════════════════════════════════ -->
+<div class="view" id="view-advanced">
+  <!-- Steps Progress -->
+  <div class="steps-progress" id="adv-steps-progress"></div>
+
+  <!-- Wizard Layout: step panel + yaml preview -->
+  <div class="wizard-container">
+    <div id="adv-step-content"></div>
+    <div class="yaml-preview">
+      <div class="yaml-preview-header">
+        <span style="font-size:14px;font-weight:600;">Live Preview</span>
+        <div style="display:flex;gap:6px;">
+          <button class="btn btn-sm" onclick="copyAdvYaml()">Copy</button>
+          <button class="btn btn-sm btn-warning" onclick="validateAdvanced()">Validate</button>
+        </div>
+      </div>
+      <div class="yaml-content" id="yaml-output-adv"></div>
+      <div class="validation-status valid" id="adv-validation-status">&#10003; Template valid</div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════ -->
+<!-- BUILD TAB                                                   -->
+<!-- ════════════════════════════════════════════════════════════ -->
+<div class="view" id="view-builds">
+  <div class="builds-container">
+    <h1 class="page-title" style="margin-bottom:20px;">Build Image</h1>
+    <div class="build-active">
+      <div class="build-header">
+        <div class="build-title">&#128296; ubuntu24-robotics-amr v1.0.0</div>
+        <span id="build-result" style="font-weight:600;"></span>
+      </div>
+      <div style="margin-top:16px;">
+        <div style="font-size:14px;font-weight:600;margin-bottom:8px;">Build Status</div>
+        <div class="build-logs" id="build-logs">
+          <div class="log-line"><span class="log-time">[14:32:01]</span> <span class="log-info">Resolving package dependencies...</span></div>
+          <div class="log-line"><span class="log-time">[14:32:03]</span> Downloading ros-jazzy-base (120 MB)</div>
+          <div class="log-line"><span class="log-time">[14:32:15]</span> Downloading docker-ce-24.0.7 (45 MB)</div>
+          <div class="log-line"><span class="log-time">[14:32:22]</span> <span class="log-info">Installing ros-jazzy-base...</span></div>
+          <div class="log-line"><span class="log-time">[14:32:30]</span> <span class="log-info">Installing docker-ce...</span></div>
+          <div class="log-line"><span class="log-time">[14:32:35]</span> <span class="log-success">Installing cloud-init... done</span></div>
+        </div>
+        <div style="margin-top:8px; display:flex; gap:8px;">
+          <button class="btn btn-sm" onclick="copyBuildLogs()">Copy Logs</button>
+          <button class="btn btn-sm" onclick="downloadBuildLogs()">Download Logs</button>
+        </div>
+      </div>
+      <div style="margin-top:24px;">
+        <div style="font-size:14px;font-weight:600;margin-bottom:8px;">Artifacts</div>
+        <div style="border:1px solid var(--border);border-radius:6px;overflow:hidden;">
+          <table style="width:100%;font-size:13px;border-collapse:collapse;">
+            <thead><tr style="background:var(--bg);"><th style="padding:8px 12px;text-align:left;">Name</th><th style="padding:8px 12px;text-align:left;">Type</th><th style="padding:8px 12px;text-align:right;">Path</th></tr></thead>
+            <tbody id="artifacts-table">
+              <tr><td style="padding:8px 12px;">ubuntu24-robotics-amr.raw.gz</td><td style="padding:8px 12px;">Image</td><td style="padding:8px 12px;text-align:right;"><button class="btn btn-sm" onclick="copyArtifactLink('/output/ubuntu24-robotics-amr.raw.gz')" title="Copy path">&#128203;</button></td></tr>
+              <tr><td style="padding:8px 12px;">ubuntu24-robotics-amr.sbom.json</td><td style="padding:8px 12px;">SBOM</td><td style="padding:8px 12px;text-align:right;"><button class="btn btn-sm" onclick="copyArtifactLink('/output/ubuntu24-robotics-amr.sbom.json')" title="Copy path">&#128203;</button></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════════════
+
+const state = {
+  vertical: 'generic',
+  sku: '',
+  platform: '',
+  os: 'ubuntu24',
+  imageType: 'raw',
+  unattended: false
+};
+
+const VERTICAL_SKUS = {
+  'generic': [
+    { id: 'non-realtime', label: 'Non-Realtime' },
+    { id: 'realtime', label: 'Realtime' }
+  ],
+  'physical-ai': [
+    { id: 'sku-1', label: 'SKU-1 (Inference Edge)' },
+    { id: 'sku-2', label: 'SKU-2 (Training Node)' },
+    { id: 'sku-3', label: 'SKU-3 (Multi-GPU Server)' }
+  ],
+  'robotics': [
+    { id: 'amr', label: 'AMR (Autonomous Mobile Robot)' },
+    { id: 'humanoid', label: 'Humanoid Robots' },
+    { id: 'stationary', label: 'Stationary Robot' }
+  ],
+  'agentic-ai': [
+    { id: 'sku-1', label: 'SKU-1 (Edge Agent)' },
+    { id: 'sku-2', label: 'SKU-2 (Multi-Agent Server)' }
+  ],
+  'health': [
+    { id: 'sku-1', label: 'SKU-1 (Medical Device Edge)' },
+    { id: 'sku-2', label: 'SKU-2 (Clinical Workstation)' }
+  ],
+  'fed-aero': [
+    { id: 'sku-1', label: 'SKU-1 (Tactical Edge)' },
+    { id: 'sku-2', label: 'SKU-2 (Command Post)' },
+    { id: 'sku-3', label: 'SKU-3 (Airborne Platform)' }
+  ],
+  'industrial': [
+    { id: 'sku-1', label: 'SKU-1 (PLC Gateway)' },
+    { id: 'sku-2', label: 'SKU-2 (Vision Inspection)' }
+  ],
+  'retail': [
+    { id: 'sku-1', label: 'SKU-1 (POS Terminal)' },
+    { id: 'sku-2', label: 'SKU-2 (Smart Shelf)' }
+  ]
+};
+
+const VERTICAL_PRESETS = {
+  'generic': { os: 'ubuntu24', osLabel: 'Ubuntu 24.04', imageType: 'raw', unattended: false, showOsSelector: true,
+    imageName: 'generic-edge-image', packages: ['cloud-init', 'rsyslog', 'systemd-networkd'], disk: { size: '4GiB', partitionTableType: 'GPT', partitions: 2 }
+  },
+  'physical-ai': {
+    os: 'ubuntu24', osLabel: 'Ubuntu 24.04', imageType: 'raw', unattended: false, showOsSelector: false,
+    imageName: 'physical-ai-image', packages: ['openvino-runtime', 'intel-level-zero-gpu', 'docker-ce', 'onnxruntime', 'cloud-init'], disk: { size: '8GiB', partitionTableType: 'GPT', partitions: 2 }
+  },
+  'robotics': {
+    os: 'ubuntu24', osLabel: 'Ubuntu 24.04', imageType: 'iso', unattended: false, showOsSelector: false,
+    imageName: 'robotics-image', packages: ['ros-jazzy-base', 'ros-jazzy-navigation2', 'openvino-runtime', 'docker-ce', 'intel-level-zero-gpu', 'cloud-init'], disk: { size: '8GiB', partitionTableType: 'GPT', partitions: 2 }
+  },
+  'agentic-ai': {
+    os: 'ubuntu24', osLabel: 'Ubuntu 24.04', imageType: 'raw', unattended: false, showOsSelector: false,
+    imageName: 'agentic-ai-image', packages: ['vllm', 'langchain', 'openvino-genai', 'k3s', 'docker-ce', 'cloud-init'], disk: { size: '16GiB', partitionTableType: 'GPT', partitions: 2 }
+  },
+  'health': {
+    os: 'ubuntu24', osLabel: 'Ubuntu 24.04', imageType: 'qcow', unattended: false, showOsSelector: false,
+    imageName: 'health-edge-image', packages: ['openvino-runtime', 'auditd', 'cryptsetup', 'cloud-init', 'apparmor'], disk: { size: '8GiB', partitionTableType: 'GPT', partitions: 3 }
+  },
+  'fed-aero': {
+    os: 'ubuntu24', osLabel: 'Ubuntu 24.04', imageType: 'raw', unattended: true, showOsSelector: false,
+    imageName: 'fed-aero-image', packages: ['auditd', 'aide', 'fapolicyd', 'openscap', 'cryptsetup', 'apparmor'], disk: { size: '8GiB', partitionTableType: 'GPT', partitions: 3 }
+  },
+  'industrial': {
+    os: 'elxr13', osLabel: 'Wind River eLxr 13', imageType: 'raw', unattended: true, showOsSelector: false,
+    imageName: 'industrial-iot-image', packages: ['opcua-stack', 'mosquitto', 'collectd', 'docker-ce', 'cloud-init'], disk: { size: '4GiB', partitionTableType: 'GPT', partitions: 2 }
+  },
+  'retail': {
+    os: 'ubuntu24', osLabel: 'Ubuntu 24.04', imageType: 'qcow', unattended: false, showOsSelector: false,
+    imageName: 'retail-edge-image', packages: ['docker-ce', 'nginx', 'cloud-init', 'collectd'], disk: { size: '8GiB', partitionTableType: 'GPT', partitions: 2 }
+  }
+};
+
+
+// Package database (simulated)
+const PACKAGE_DB = [
+  { name: 'docker-ce', desc: 'Docker Community Edition', repo: 'docker-ce-stable' },
+  { name: 'docker-ce-cli', desc: 'Docker CLI', repo: 'docker-ce-stable' },
+  { name: 'containerd.io', desc: 'Container runtime', repo: 'docker-ce-stable' },
+  { name: 'docker-compose-plugin', desc: 'Docker Compose V2', repo: 'docker-ce-stable' },
+  { name: 'openvino-runtime', desc: 'OpenVINO inference engine', repo: 'intel-openvino' },
+  { name: 'openvino-dev', desc: 'OpenVINO development tools', repo: 'intel-openvino' },
+  { name: 'ros-jazzy-base', desc: 'ROS 2 Jazzy base', repo: 'ros2-jazzy' },
+  { name: 'ros-jazzy-navigation2', desc: 'ROS 2 Nav2 stack', repo: 'ros2-jazzy' },
+  { name: 'ros-jazzy-slam-toolbox', desc: 'SLAM Toolbox for ROS 2', repo: 'ros2-jazzy' },
+  { name: 'ros-jazzy-moveit', desc: 'MoveIt motion planning', repo: 'ros2-jazzy' },
+  { name: 'intel-level-zero-gpu', desc: 'Intel Level Zero GPU runtime', repo: 'intel-compute' },
+  { name: 'intel-opencl-icd', desc: 'Intel OpenCL driver', repo: 'intel-compute' },
+  { name: 'cloud-init', desc: 'Cloud instance init', repo: 'ubuntu-main' },
+  { name: 'curl', desc: 'URL transfer tool', repo: 'ubuntu-main' },
+  { name: 'collectd', desc: 'System metrics collector', repo: 'ubuntu-universe' },
+  { name: 'chrony', desc: 'NTP time sync', repo: 'ubuntu-main' },
+  { name: 'cryptsetup', desc: 'Disk encryption tools', repo: 'ubuntu-main' },
+  { name: 'nginx', desc: 'HTTP server', repo: 'ubuntu-main' },
+  { name: 'nodejs', desc: 'JavaScript runtime', repo: 'ubuntu-universe' },
+  { name: 'k3s', desc: 'Lightweight Kubernetes', repo: 'rancher-k3s' },
+  { name: 'kubectl', desc: 'Kubernetes CLI', repo: 'kubernetes' },
+  { name: 'helm', desc: 'Kubernetes package manager', repo: 'helm-stable' },
+  { name: 'auditd', desc: 'Linux audit daemon', repo: 'ubuntu-main' },
+  { name: 'apparmor', desc: 'Application armor profiles', repo: 'ubuntu-main' },
+  { name: 'fapolicyd', desc: 'File access policy daemon', repo: 'ubuntu-universe' },
+  { name: 'aide', desc: 'File integrity checker', repo: 'ubuntu-universe' },
+  { name: 'openscap', desc: 'SCAP compliance scanner', repo: 'ubuntu-universe' },
+];
+
+// ═══════════════════════════════════════════════════════════════
+// NAVIGATION
+// ═══════════════════════════════════════════════════════════════
+
+function switchView(view) {
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.getElementById('view-' + view).classList.add('active');
+  document.querySelectorAll('.topnav-tab').forEach(t => t.classList.remove('active'));
+  document.querySelector(`[data-view="${view}"]`).classList.add('active');
+  if (view === 'advanced') { syncBasicToAdvanced(); }
+}
+
+document.querySelectorAll('.topnav-tab').forEach(tab => {
+  tab.addEventListener('click', () => switchView(tab.dataset.view));
+});
+
+// ═══════════════════════════════════════════════════════════════
+// BASIC TAB
+// ═══════════════════════════════════════════════════════════════
+
+function uncheckReview() {
+  const cb = document.getElementById('view-image-content');
+  if (cb && cb.checked) {
+    cb.checked = false;
+    const container = document.getElementById('image-content-details');
+    if (container) { container.innerHTML = ''; container.style.display = 'none'; }
+  }
+}
+
+function onVerticalChange() {
+  const vertical = document.getElementById('select-vertical').value;
+  state.vertical = vertical;
+  const preset = VERTICAL_PRESETS[vertical];
+
+  // Update SKU dropdown
+  const skuSelect = document.getElementById('select-sku');
+  const skus = VERTICAL_SKUS[vertical] || [];
+  skuSelect.innerHTML = '<option value="">-- Select SKU --</option>' + skus.map(s => `<option value="${s.id}">${s.label}</option>`).join('');
+
+  // Show/hide OS
+  document.getElementById('os-selection').style.display = preset.showOsSelector ? 'block' : 'none';
+
+  state.sku = '';
+  state.platform = '';
+  document.getElementById('select-platform').value = '';
+  state.os = preset.os;
+  state.imageType = preset.imageType;
+  state.unattended = preset.unattended;
+  uncheckReview();
+}
+
+function onSelectionChange() {
+  state.sku = document.getElementById('select-sku').value;
+  state.platform = document.getElementById('select-platform').value;
+  if (VERTICAL_PRESETS[state.vertical].showOsSelector) {
+    state.os = document.getElementById('select-os').value;
+  }
+  uncheckReview();
+}
+
+function syncBasicToAdvanced() {
+  const preset = VERTICAL_PRESETS[state.vertical] || {};
+  advState.template.target.vertical = state.vertical;
+  advState.template.target.sku = state.sku;
+  advState.template.target.platform = state.platform;
+  advState.template.target.dist = state.os;
+  advState.template.target.imageType = state.imageType || preset.imageType || 'raw';
+  advState.template.image.name = preset.imageName || 'my-edge-image';
+  advState.template.packages = (preset.packages || ['cloud-init', 'rsyslog']).slice();
+  advState.currentStep = 0;
+  renderAdvSteps();
+  renderAdvStepContent();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ADVANCED TAB
+// ═══════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════
+// ADVANCED TAB - WIZARD STEPS
+// ═══════════════════════════════════════════════════════════════
+
+const ADV_STEPS = [
+  { id: 'target', label: 'Target', icon: '&#127919;' },
+  { id: 'packages', label: 'Packages', icon: '&#128230;' },
+  { id: 'disk', label: 'Disk', icon: '&#128191;' },
+  { id: 'review', label: 'Review', icon: '&#10003;' }
+];
+
+const OS_OPTIONS = [
+  { id: 'azure-linux', name: 'Azure Linux', dists: ['azl3'] },
+  { id: 'edge-microvisor-toolkit', name: 'Edge Microvisor Toolkit', dists: ['emt3'] },
+  { id: 'wind-river-elxr', name: 'Wind River eLxr', dists: ['elxr12', 'elxr13'] },
+  { id: 'ubuntu', name: 'Ubuntu', dists: ['ubuntu24', 'ubuntu26'] },
+  { id: 'redhat-compatible-distro', name: 'Red Hat Compatible', dists: ['el10'] },
+  { id: 'debian', name: 'Debian', dists: ['debian13'] }
+];
+
+const advState = {
+  currentStep: 0,
+  template: {
+    image: { name: 'my-edge-image', version: '1.0.0' },
+    target: { vertical: 'generic', sku: '', platform: '', os: 'ubuntu', dist: 'ubuntu24', arch: 'x86_64', imageType: 'raw' },
+    disk: { size: '4GiB', partitionTableType: 'gpt',
+      partitions: [
+        { id: 'boot', name: 'boot', fsType: 'vfat', size: '512MiB', mountPoint: '/boot/efi' },
+        { id: 'rootfs', name: 'rootfs', fsType: 'ext4', size: 'rest', mountPoint: '/' }
+    ]},
+    packages: ['cloud-init', 'rsyslog'],
+  }
+};
+
+function renderAdvSteps() {
+  const container = document.getElementById('adv-steps-progress');
+  container.innerHTML = '';
+  ADV_STEPS.forEach((step, i) => {
+    const dot = document.createElement('div');
+    dot.className = 'step-dot' + (i === advState.currentStep ? ' active' : '') + (i < advState.currentStep ? ' completed' : '');
+    dot.textContent = i < advState.currentStep ? '✓' : (i + 1);
+    dot.onclick = () => { advState.currentStep = i; renderAdvSteps(); renderAdvStepContent(); };
+    container.appendChild(dot);
+    if (i < ADV_STEPS.length - 1) {
+      const line = document.createElement('div');
+      line.className = 'step-line' + (i < advState.currentStep ? ' completed' : '');
+      container.appendChild(line);
+    }
+  });
+}
+
+function renderAdvStepContent() {
+  const container = document.getElementById('adv-step-content');
+  const step = ADV_STEPS[advState.currentStep];
+  const t = advState.template;
+  let html = '<div class="step-panel">';
+
+  switch(step.id) {
+    case 'target':
+      html += `<h2>Choose Image Configuration</h2>
+        <p class="step-desc">Select a targeted vertical, SKU, and platform. Pre-configured defaults will be applied based on your selection.</p>
+        <div class="form-group">
+          <label class="form-label">Targeted Vertical</label>
+          <select class="form-input" onchange="advState.template.target.vertical=this.value; renderAdvStepContent(); updateAdvancedYaml()">
+            <option ${t.target.vertical==='generic'?'selected':''} value="generic">Generic</option>
+            <optgroup label="Verticals">
+              <option ${t.target.vertical==='robotics'?'selected':''} value="robotics">Robotics</option>
+              <option ${t.target.vertical==='physical-ai'?'selected':''} value="physical-ai">Physical AI</option>
+              <option ${t.target.vertical==='agentic-ai'?'selected':''} value="agentic-ai">Agentic AI</option>
+              <option ${t.target.vertical==='health'?'selected':''} value="health">Health</option>
+              <option ${t.target.vertical==='fed-aero'?'selected':''} value="fed-aero">Fed Aero</option>
+              <option ${t.target.vertical==='industrial'?'selected':''} value="industrial">Industrial IoT</option>
+              <option ${t.target.vertical==='retail'?'selected':''} value="retail">Retail Edge</option>
+            </optgroup>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">SKU</label>
+          <select class="form-input" onchange="advState.template.target.sku=this.value; updateAdvancedYaml()">
+            <option value="">-- Select SKU --</option>
+            ${(VERTICAL_SKUS[t.target.vertical]||[]).map(s => `<option ${t.target.sku===s.id?'selected':''} value="${s.id}">${s.label}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Platform</label>
+          <select class="form-input" onchange="advState.template.target.platform=this.value; updateAdvancedYaml()">
+            <option value="">-- Select Platform --</option>
+            <option ${t.target.platform==='ptl'?'selected':''} value="ptl">PTL (Panther Lake)</option>
+            <option ${t.target.platform==='wcl'?'selected':''} value="wcl">WCL (Wildcat Lake)</option>
+            <option ${t.target.platform==='arl'?'selected':''} value="arl">ARL (Arrow Lake)</option>
+            <option ${t.target.platform==='nvl'?'selected':''} value="nvl">NVL (Nova Lake)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Operating System</label>
+          <select class="form-input" onchange="advState.template.target.dist=this.value; updateAdvancedYaml()">
+            <option value="" disabled ${!t.target.dist?'selected':''}>-- Select Operating System --</option>
+            <option ${t.target.dist==='ubuntu24'?'selected':''} value="ubuntu24">Ubuntu 24.04</option>
+            <option ${t.target.dist==='ubuntu26'?'selected':''} value="ubuntu26">Ubuntu 26.04</option>
+            <option ${t.target.dist==='debian13'?'selected':''} value="debian13">Debian 13</option>
+            <option ${t.target.dist==='azl3'?'selected':''} value="azl3">Azure Linux 3</option>
+            <option ${t.target.dist==='elxr13'?'selected':''} value="elxr13">Wind River eLxr 13</option>
+            <option ${t.target.dist==='emt3'?'selected':''} value="emt3">Edge Microvisor Toolkit 3</option>
+          </select>
+        </div>
+        <hr style="border:none;border-top:1px solid var(--border);margin:24px 0;">
+        <div class="form-group">
+          <label class="form-label">Image Type</label>
+          <select class="form-input" onchange="advState.template.target.imageType=this.value; updateAdvancedYaml()">
+            <option ${t.target.imageType==='raw'?'selected':''} value="raw">RAW (Disk image)</option>
+            <option ${t.target.imageType==='iso'?'selected':''} value="iso">ISO (Live/Installer)</option>
+            <option ${t.target.imageType==='qcow'?'selected':''} value="qcow">QCOW (Virtual machine)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Image Name</label>
+          <input class="form-input" value="${t.image.name}" onchange="advState.template.image.name=this.value; updateAdvancedYaml()">
+        </div>`;
+      break;
+
+    case 'disk':
+      html += `<h2>${step.icon} Disk Layout</h2>
+        <p class="step-desc">Configure disk size, partition table, and partitions.</p>
+        <div class="form-group">
+          <label class="form-label">Disk Size</label>
+          <div style="display:flex;gap:8px;">
+            <input class="form-input" style="width:100px;" value="${parseInt(t.disk.size)}" onchange="advState.template.disk.size=this.value+'GiB'; updateAdvancedYaml()">
+            <select class="form-input" style="width:80px;"><option>GiB</option><option>GB</option><option>MiB</option></select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Partition Table</label>
+          <div class="chip-group">
+            <div class="chip ${t.disk.partitionTableType==='gpt'?'selected':''}" onclick="advState.template.disk.partitionTableType='gpt'; renderAdvStepContent(); updateAdvancedYaml()">GPT</div>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Partitions</label>
+          <div style="background:#f8fafc;border:1px solid var(--border);border-radius:6px;padding:12px;">
+            ${t.disk.partitions.map(p => `
+              <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px;font-size:13px;">
+                <span style="font-weight:600;width:60px;">${p.name}</span>
+                <span style="color:var(--text-muted);width:50px;">${p.fsType}</span>
+                <span style="color:var(--text-muted);width:60px;">${p.size}</span>
+                <span style="color:var(--text-muted);">${p.mountPoint}</span>
+              </div>
+            `).join('')}
+            <button class="btn btn-sm" style="margin-top:8px;">+ Add Partition</button>
+          </div>
+        </div>
+        </div>`;
+      break;
+
+    case 'packages':
+      html += `<h2>${step.icon} Repositories &amp; Packages</h2>
+        <p class="step-desc">Enable repositories and add packages from repos, OS defaults, or manually.</p>
+        <div class="form-group">
+          <label class="form-label">Package Repositories</label>
+          <div class="checkbox-group">
+            <div class="checkbox-card checked"><div class="checkbox-card-header"><input type="checkbox" checked><span class="checkbox-card-title">Default OS Repository</span></div><div class="checkbox-card-packages">Base packages for selected OS</div></div>
+            <div class="checkbox-card" onclick="this.classList.toggle('checked');this.querySelector('input').checked=this.classList.contains('checked')"><div class="checkbox-card-header"><input type="checkbox"><span class="checkbox-card-title">Intel OpenVINO</span></div><div class="checkbox-card-packages">https://apt.repos.intel.com/openvino</div></div>
+            <div class="checkbox-card" onclick="this.classList.toggle('checked');this.querySelector('input').checked=this.classList.contains('checked')"><div class="checkbox-card-header"><input type="checkbox"><span class="checkbox-card-title">Docker CE</span></div><div class="checkbox-card-packages">https://download.docker.com/linux/ubuntu</div></div>
+            <div class="checkbox-card" onclick="this.classList.toggle('checked');this.querySelector('input').checked=this.classList.contains('checked')"><div class="checkbox-card-header"><input type="checkbox"><span class="checkbox-card-title">Intel Compute Runtime</span></div><div class="checkbox-card-packages">https://repositories.intel.com/gpu/ubuntu</div></div>
+            <div class="checkbox-card" onclick="this.classList.toggle('checked');this.querySelector('input').checked=this.classList.contains('checked')"><div class="checkbox-card-header"><input type="checkbox"><span class="checkbox-card-title">ROS 2 (Jazzy)</span></div><div class="checkbox-card-packages">https://packages.ros.org/ros2/ubuntu</div></div>
+            <div class="checkbox-card" onclick="this.classList.toggle('checked');this.querySelector('input').checked=this.classList.contains('checked')"><div class="checkbox-card-header"><input type="checkbox"><span class="checkbox-card-title">Intel ECI</span></div><div class="checkbox-card-packages">https://eci.intel.com/repos/noble</div></div>
+          </div>
+          <div style="margin-top:8px;">
+            <input class="form-input" placeholder="Add custom repo URL..." onkeydown="if(event.key==='Enter'){this.value=''; /* TODO: add to repo list */}">
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Search Packages</label>
+          <div class="pkg-search-container">
+            <input class="pkg-search-input" id="pkg-search" placeholder="Start typing a package name..." oninput="onPackageSearch(this.value)" onfocus="onPackageSearch(this.value)" onblur="setTimeout(()=>closePkgDropdown(),200)">
+            <div class="pkg-search-dropdown" id="pkg-dropdown"></div>
+          </div>
+          <p class="form-hint">Search across enabled repositories. Results show package name and source repo.</p>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Selected Packages (${t.packages.length})</label>
+          <div class="tags-input" id="adv-packages">
+            ${t.packages.map(p => `<span class="tag">${p}<span class="tag-remove" onclick="advRemovePackage('${p}')">x</span></span>`).join('')}
+            <input placeholder="Add package manually..." onkeydown="if(event.key==='Enter'){advAddPackage(this.value);this.value=''}">
+          </div>
+          <p class="form-hint">Packages from search are added here. You can also type a package name and press Enter.</p>
+        </div>`;
+      break;
+
+
+    case 'review':
+      html += `<h2>&#10003; Review Image Configuration</h2>
+        <p class="step-desc">Review your configuration before building.</p>
+        <div style="background:#f8fafc;border:1px solid var(--border);border-radius:6px;padding:16px;margin-bottom:16px;">
+          <table style="width:100%;font-size:13px;border-collapse:collapse;">
+            <tr><td style="padding:6px 0;font-weight:600;width:120px;">Image</td><td>${t.image.name} v${t.image.version}</td></tr>
+            <tr><td style="padding:6px 0;font-weight:600;">Vertical</td><td>${t.target.vertical || 'Generic'}</td></tr>
+            <tr><td style="padding:6px 0;font-weight:600;">SKU</td><td>${t.target.sku || '—'}</td></tr>
+            <tr><td style="padding:6px 0;font-weight:600;">Platform</td><td>${t.target.platform || '—'}</td></tr>
+            <tr><td style="padding:6px 0;font-weight:600;">OS</td><td>${t.target.os} (${t.target.dist}) / ${t.target.arch}</td></tr>
+            <tr><td style="padding:6px 0;font-weight:600;">Image Type</td><td>${t.target.imageType.toUpperCase()}</td></tr>
+            <tr><td style="padding:6px 0;font-weight:600;">Disk</td><td>${t.disk.size}, ${t.disk.partitionTableType.toUpperCase()}, ${t.disk.partitions.length} partitions</td></tr>
+            <tr><td style="padding:6px 0;font-weight:600;">Packages</td><td>${t.packages.length} packages</td></tr>
+          </table>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn btn-primary" onclick="exportAdvYaml()">&#128190; Export YAML</button>
+          <button class="btn btn-success" onclick="switchView('builds')">&#128296; Build Image</button>
+        </div>`;
+      break;
+  }
+
+  html += `<div class="step-nav">
+    <button class="btn" ${advState.currentStep===0?'disabled':''} onclick="advPrevStep()">&#8592; Back</button>
+    <button class="btn btn-primary" ${advState.currentStep===ADV_STEPS.length-1?'style="display:none"':''} onclick="advNextStep()">Next &#8594;</button>
+  </div></div>`;
+
+  container.innerHTML = html;
+  updateAdvancedYaml();
+}
+
+function advSelectOS(osId) {
+  advState.template.target.os = osId;
+  advState.template.target.dist = OS_OPTIONS.find(o=>o.id===osId).dists[0];
+  renderAdvStepContent();
+}
+
+function advAddPackage(name) {
+  if (name && !advState.template.packages.includes(name)) {
+    advState.template.packages.push(name);
+    renderAdvStepContent();
+  }
+}
+
+function advRemovePackage(name) {
+  advState.template.packages = advState.template.packages.filter(p => p !== name);
+  renderAdvStepContent();
+}
+
+function advNextStep() { if (advState.currentStep < ADV_STEPS.length-1) { advState.currentStep++; renderAdvSteps(); renderAdvStepContent(); } }
+function advPrevStep() { if (advState.currentStep > 0) { advState.currentStep--; renderAdvSteps(); renderAdvStepContent(); } }
+
+function updateAdvancedYaml() {
+  const t = advState.template;
+  let yaml = `image:\n  name: ${t.image.name}\n  version: "${t.image.version}"\n\n`;
+  yaml += `target:\n  os: ${t.target.os}\n  dist: ${t.target.dist}\n  arch: ${t.target.arch}\n  imageType: ${t.target.imageType}\n`;
+  if (t.target.vertical) yaml += `  vertical: ${t.target.vertical}\n`;
+  if (t.target.sku) yaml += `  sku: ${t.target.sku}\n`;
+  if (t.target.platform) yaml += `  platform: ${t.target.platform}\n`;
+  yaml += `\n`;
+  yaml += `disk:\n  name: default\n  size: "${t.disk.size}"\n  partitionTableType: ${t.disk.partitionTableType}\n`;
+  yaml += `  partitions:\n`;
+  t.disk.partitions.forEach(p => { yaml += `    - id: ${p.id}\n      name: ${p.name}\n      fsType: ${p.fsType}\n      mountPoint: ${p.mountPoint}\n`; });
+  yaml += `\nsystemConfig:\n`;
+  if (t.packages.length) { yaml += `  packages:\n`; t.packages.forEach(p => { yaml += `    - ${p}\n`; }); }
+  const el = document.getElementById('yaml-output-adv');
+  if (el) el.textContent = yaml;
+}
+
+function validateAdvanced() {
+  const el = document.getElementById('adv-validation-status');
+  el.className = 'validation-status valid';
+  el.innerHTML = '&#10003; Template is valid (all required fields present)';
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// PACKAGE SEARCH AUTOCOMPLETE
+// ═══════════════════════════════════════════════════════════════
+
+function onPackageSearch(query) {
+  const dropdown = document.getElementById('pkg-dropdown');
+  if (!query || query.length < 2) { dropdown.classList.remove('active'); return; }
+
+  const results = PACKAGE_DB.filter(p => p.name.includes(query.toLowerCase()) || p.desc.toLowerCase().includes(query.toLowerCase())).slice(0, 8);
+
+  if (results.length === 0) {
+    dropdown.innerHTML = '<div class="pkg-search-item" style="cursor:default;"><span class="pkg-search-name" style="color:var(--text-muted);">No packages found</span></div>';
+  } else {
+    dropdown.innerHTML = results.map(p => `
+      <div class="pkg-search-item" onclick="addPackageFromSearch('${p.name}')">
+        <div>
+          <div class="pkg-search-name">${highlightMatch(p.name, query)}</div>
+          <div class="pkg-search-desc">${p.desc}</div>
+        </div>
+        <span class="pkg-search-repo">${p.repo}</span>
+      </div>
+    `).join('');
+  }
+  dropdown.classList.add('active');
+}
+
+function highlightMatch(text, query) {
+  const idx = text.toLowerCase().indexOf(query.toLowerCase());
+  if (idx === -1) return text;
+  return text.slice(0, idx) + '<strong>' + text.slice(idx, idx + query.length) + '</strong>' + text.slice(idx + query.length);
+}
+
+function addPackageFromSearch(name) {
+  if (!advState.template.packages.includes(name)) {
+    advState.template.packages.push(name);
+    renderAdvStepContent();
+  }
+  document.getElementById('pkg-search').value = '';
+  closePkgDropdown();
+}
+
+function closePkgDropdown() {
+  document.getElementById('pkg-dropdown').classList.remove('active');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// YAML GENERATION
+// ═══════════════════════════════════════════════════════════════
+
+function getAdvYamlText() {
+  const el = document.getElementById('yaml-output-adv');
+  return el ? el.textContent : '';
+}
+
+function exportAdvYaml() {
+  const yaml = getAdvYamlText();
+  const blob = new Blob([yaml], {type:'text/yaml'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${advState.template.image.name}.yml`;
+  a.click();
+}
+
+function copyAdvYaml() {
+  navigator.clipboard.writeText(getAdvYamlText());
+  alert('YAML copied to clipboard.');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// BUILD SIMULATION
+// ═══════════════════════════════════════════════════════════════
+
+let buildInterval;
+function simulateBuild() {
+  const logs = document.getElementById('build-logs');
+  const statusText = document.getElementById('build-status-text');
+  const resultEl = document.getElementById('build-result');
+  const msgs = ['Resolving packages...','Configuring partitions...','Installing base system...','Installing packages...','Generating image...','Compressing output...','Build complete!'];
+  let i = 0;
+  clearInterval(buildInterval);
+  statusText.textContent = 'Building...';
+  resultEl.innerHTML = '';
+  buildInterval = setInterval(() => {
+    if (i >= msgs.length) {
+      clearInterval(buildInterval);
+      statusText.textContent = 'Finished';
+      resultEl.innerHTML = '<span style="color:#16a34a;">&#10003; Build Passed</span>';
+      return;
+    }
+    const line = document.createElement('div'); line.className='log-line';
+    line.innerHTML = `<span class="log-time">[${new Date().toTimeString().slice(0,8)}]</span> <span class="${i===msgs.length-1?'log-success':'log-info'}">${msgs[i]}</span>`;
+    logs.appendChild(line); logs.scrollTop = logs.scrollHeight; i++;
+  }, 2500);
+}
+
+function copyBuildLogs() {
+  const logs = document.getElementById('build-logs').innerText;
+  navigator.clipboard.writeText(logs);
+  alert('Build logs copied to clipboard.');
+}
+
+function downloadBuildLogs() {
+  const logs = document.getElementById('build-logs').innerText;
+  const blob = new Blob([logs], {type:'text/plain'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'build-logs.txt';
+  a.click();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// REVIEW IMAGE CONFIGURATION & ARTIFACT COPY
+// ═══════════════════════════════════════════════════════════════
+
+const VERTICAL_LABELS = { 'generic':'Generic', 'robotics':'Robotics', 'physical-ai':'Physical AI', 'agentic-ai':'Agentic AI', 'health':'Health', 'fed-aero':'Fed Aero', 'industrial':'Industrial IoT', 'retail':'Retail Edge' };
+const PLATFORM_LABELS = { 'ptl':'PTL (Panther Lake)', 'wcl':'WCL (Wildcat Lake)', 'arl':'ARL (Arrow Lake)', 'nvl':'NVL (Nova Lake)' };
+const OS_LABELS = { 'ubuntu24':'Ubuntu 24.04', 'ubuntu26':'Ubuntu 26.04', 'debian13':'Debian 13', 'azl3':'Azure Linux 3', 'elxr13':'Wind River eLxr 13', 'emt3':'Edge Microvisor Toolkit 3' };
+
+function toggleImageContent() {
+  const cb = document.getElementById('view-image-content');
+  const container = document.getElementById('image-content-details');
+  if (!container) return;
+  if (cb.checked) {
+    const v = state.vertical || 'generic';
+    const skuLabel = (VERTICAL_SKUS[v]||[]).find(s => s.id === state.sku);
+    const preset = VERTICAL_PRESETS[v] || {};
+    const imageName = preset.imageName || 'my-edge-image';
+    const packages = preset.packages || ['cloud-init', 'rsyslog'];
+    const disk = preset.disk || { size: '4GiB', partitionTableType: 'GPT', partitions: 2 };
+    container.innerHTML = `
+      <div style="background:#f8fafc;border:1px solid var(--border);border-radius:6px;padding:16px;margin-top:12px;">
+        <h4 style="margin:0 0 10px;color:var(--text);font-size:14px;">Review Image Configuration</h4>
+        <table style="width:100%;font-size:13px;border-collapse:collapse;">
+          <tr><td style="padding:6px 0;font-weight:600;width:120px;">Image</td><td>${imageName} v1.0.0</td></tr>
+          <tr><td style="padding:6px 0;font-weight:600;">Vertical</td><td>${VERTICAL_LABELS[v] || v}</td></tr>
+          <tr><td style="padding:6px 0;font-weight:600;">SKU</td><td>${skuLabel ? skuLabel.label : '—'}</td></tr>
+          <tr><td style="padding:6px 0;font-weight:600;">Platform</td><td>${PLATFORM_LABELS[state.platform] || '—'}</td></tr>
+          <tr><td style="padding:6px 0;font-weight:600;">OS</td><td>${OS_LABELS[state.os] || '—'}</td></tr>
+          <tr><td style="padding:6px 0;font-weight:600;">Image Type</td><td>${(state.imageType || 'raw').toUpperCase()}</td></tr>
+          <tr><td style="padding:6px 0;font-weight:600;">Disk</td><td>${disk.size}, ${disk.partitionTableType}, ${disk.partitions} partitions</td></tr>
+          <tr><td style="padding:6px 0;font-weight:600;">Packages</td><td>${packages.length} packages</td></tr>
+        </table>
+      </div>`;
+    container.style.display = 'block';
+  } else {
+    container.innerHTML = '';
+    container.style.display = 'none';
+  }
+}
+
+function copyArtifactLink(path) {
+  navigator.clipboard.writeText(path);
+  const btn = event.currentTarget;
+  const orig = btn.innerHTML;
+  btn.innerHTML = '&#10003;';
+  setTimeout(() => { btn.innerHTML = orig; }, 1500);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════════════════
+onVerticalChange();
+renderAdvSteps();
+renderAdvStepContent();
+simulateBuild();
+</script>
+</body>
+</html>
