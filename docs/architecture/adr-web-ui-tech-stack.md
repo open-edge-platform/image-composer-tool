@@ -40,7 +40,7 @@ The file `web/prototype/template-builder.html` demonstrates the exact views and 
 | Tab | Production Component | Key Interactions |
 |-----|---------------------|------------------|
 | **Basic** | `<BasicPage>` | Targeted Vertical dropdown (Generic + 7 verticals), SKU dropdown (vertical-specific), Platform dropdown (PTL/WCL/ARL/NVL), OS dropdown with "-- Select Operating System --" placeholder, "Review Image Configuration" checkbox expanding summary table (Image, Vertical, SKU, Platform, OS, Image Type, Disk, Packages). Any config change auto-unchecks review. |
-| **Advanced** | `<AdvancedPage>` | Step wizard. MVP-1 steps: Target (same as Basic + Image Type/Name), Packages (repos + search/add), Disk (size/partitions), Review (summary + Export YAML + Build). Live YAML preview panel on right. More steps may be added later. |
+| **Advanced** | `<AdvancedPage>` | Step wizard. MVP-1 steps: Target (same as Basic + Image Type/Name), Packages (repos + search/add), Disk (size/partitions), Review (summary + Validate + Export YAML + Build). Live YAML preview panel on right. More steps may be added later. |
 | **Build Image** | `<BuildImagePage>` | Streaming log viewer (SSE) with "Build Status" title, artifacts table (Image + SBOM with copy-path icon) |
 
 ### Constraints
@@ -62,10 +62,10 @@ The file `web/prototype/template-builder.html` demonstrates the exact views and 
 
 ![Template Builder Data Flow](assets/web-ui-data-flow.svg)
 
-### Sequence Diagram — API calls & ICT build
+### Sequence Diagram — Basic flow
 
-End-to-end flow across the three phases: loading options, composing (template
-lookup), and building via the ICT binary with SSE log streaming.
+Basic is a pure lookup: selections → matched template → build. No YAML editing,
+no client-side template model.
 
 ```mermaid
 sequenceDiagram
@@ -76,27 +76,24 @@ sequenceDiagram
     participant M as manifest + image-templates/
     participant ICT as ICT binary (os/exec)
 
-    Note over U,ICT: 1 · Load Basic-tab options
+    Note over U,ICT: Load options
     SPA->>API: GET /verticals, /platforms, /targets
     API->>M: read distinct combinations
     M-->>API: valid options
     API-->>SPA: JSON → populate dropdowns
     U->>SPA: select vertical / SKU / platform / OS
 
-    Note over U,ICT: 2 · Compose (fetch base template once)
+    Note over U,ICT: Review (optional)
+    U->>SPA: check "Review Image Configuration"
     SPA->>API: POST /templates/compose {selections}
     API->>M: lookup template by combination
     M-->>API: matched template YAML
-    API-->>SPA: YAML + summary (Basic Review / seed Advanced editor)
-    opt Advanced tab — edits are client-side only
-        U->>SPA: add packages / repos / change disk
-        SPA->>SPA: mutate model, re-render YAML preview locally (no backend call)
-    end
+    API-->>SPA: summary (image, packages, disk, …)
 
-    Note over U,ICT: 3 · Build Image
+    Note over U,ICT: Build
     U->>SPA: clicks Build Image
-    SPA->>API: POST /builds  (Basic: {compose} · Advanced: {yaml} = complete template)
-    API->>M: resolve template file (Basic) / parse sent YAML (Advanced)
+    SPA->>API: POST /builds {compose}
+    API->>M: resolve matched template file
     API->>ICT: os/exec image-composer-tool build <template>
     API-->>SPA: 202 {buildId, logsUrl}
     SPA->>API: GET /builds/{id}/logs (SSE)
@@ -104,11 +101,66 @@ sequenceDiagram
         ICT-->>API: stdout/stderr line
         API-->>SPA: event: log {message} → append to viewer
     end
-    ICT-->>API: exit code 0 (build complete)
+    ICT-->>API: exit code 0 (complete)
     API-->>SPA: event: complete {status, artifacts[]}
     SPA->>API: GET /builds/{id}/artifacts
     API-->>SPA: Image + SBOM (name, type, path) → table
-    U->>SPA: views logs live + copies artifact paths
+```
+
+### Sequence Diagram — Advanced flow
+
+Advanced fetches the base template once, then all editing, preview re-rendering,
+and Export YAML happen **client-side**. Validate and Build send the complete YAML.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as User (Browser)
+    participant SPA as React SPA
+    participant API as API (internal/api)
+    participant M as manifest + image-templates/
+    participant ICT as ICT binary (os/exec)
+
+    Note over U,ICT: Seed editor (once)
+    U->>SPA: open Advanced (selections carried from Basic)
+    SPA->>API: POST /templates/compose {selections}
+    API->>M: lookup template by combination
+    M-->>API: matched template YAML
+    API-->>SPA: base template → load into editor + preview
+
+    Note over U,SPA: Edit — client-side only, no backend calls
+    loop each edit (packages / repos / disk)
+        U->>SPA: modify configuration
+        SPA->>SPA: mutate model, re-render YAML preview locally
+    end
+    opt package autocomplete
+        SPA->>API: GET /packages/search?q=…
+        API-->>SPA: matching packages
+    end
+    opt Export YAML
+        U->>SPA: clicks Export YAML
+        SPA->>SPA: download current YAML (Blob, client-side — no backend)
+    end
+
+    Note over U,ICT: Validate (optional)
+    U->>SPA: clicks Validate
+    SPA->>API: POST /templates/validate {yaml}
+    API-->>SPA: {valid, errors[], warnings[]} → inline status
+
+    Note over U,ICT: Build
+    U->>SPA: clicks Build Image
+    SPA->>API: POST /builds {yaml}  (complete edited template)
+    API->>ICT: os/exec image-composer-tool build <template>
+    API-->>SPA: 202 {buildId, logsUrl}
+    SPA->>API: GET /builds/{id}/logs (SSE)
+    loop while build running
+        ICT-->>API: stdout/stderr line
+        API-->>SPA: event: log {message} → append to viewer
+    end
+    ICT-->>API: exit code 0 (complete)
+    API-->>SPA: event: complete {status, artifacts[]}
+    SPA->>API: GET /builds/{id}/artifacts
+    API-->>SPA: Image + SBOM (name, type, path) → table
 ```
 
 ---
@@ -184,7 +236,8 @@ sequenceDiagram
 | Disk step: partition table type | `<ToggleGroup>` (GPT) |
 | Disk step: partition layout | `<Table>` with add/remove partition actions |
 | Review step: summary table | `<Table>` matching Basic review (Image, Vertical, SKU, Platform, OS, Image Type, Disk, Packages) |
-| Review step: Export YAML | `<Button>` generates and downloads `.yml` file |
+| Review step: Validate | `<Button>` → `POST /api/v1/templates/validate { yaml }`; shows `{ valid, errors[], warnings[] }` inline. Optional — build re-checks anyway |
+| Review step: Export YAML | `<Button>` — downloads the current preview YAML via a client-side Blob (**no backend call**) |
 | Review step: Build Image | Navigates to Build Image tab, triggers `POST /api/v1/builds` with the **complete edited YAML** (`{ yaml }`), not a delta |
 | Live YAML preview (right panel) | `<CodeMirror>` read-only. Base template fetched **once** via `POST /templates/compose` on entering Advanced; every subsequent edit mutates the Zustand model and re-renders the YAML **client-side** — no per-change backend calls |
 | Basic → Advanced sync | `syncBasicToAdvanced()` copies Zustand Basic store into Advanced store on tab switch |
@@ -205,7 +258,7 @@ sequenceDiagram
 
 ### Why stdlib `net/http` over chi/gin/echo?
 
-Go 1.22 added method + pattern routing. ICT has ~12 endpoints — stdlib is sufficient and avoids external router dependencies.
+Go 1.22 added method + pattern routing. ICT has ~13 endpoints — stdlib is sufficient and avoids external router dependencies.
 
 ### Why React over HTMX?
 
@@ -326,6 +379,7 @@ combinations:
 | `GET /verticals`, `/platforms`, `/targets`, `/verticals/{id}/skus` | Distinct values from `manifest.yaml` (drives the dropdowns; only combinations that resolve to a real template are offered) |
 | `GET /verticals/{id}/defaults` | The matched template — summary fields (packages, disk, image type) are read from that template file |
 | `POST /templates/compose` | Returns the matched template's YAML verbatim — Basic uses it for the Review summary; Advanced fetches it **once** to seed the editor |
+| `POST /templates/validate` | Validates the Advanced tab's edited YAML against the ICT schema; returns `{ valid, errors[], warnings[] }`. Backs the Validate button |
 | `POST /builds` | **Basic:** `{ compose }` → builds the matched template file directly. **Advanced:** `{ yaml }` → builds the complete edited YAML sent by the client. Always a whole template, never a delta. |
 
 ### Maintenance (owned by ICT engineering)
@@ -452,3 +506,4 @@ npx openapi-typescript api/v1/openapi-template-builder.yaml -o web/src/api/types
 | 2026-07-01 | ICT Team | Renamed "Backend Data Model & Maintenance" → "Implementation Data Model & Maintenance"; added sequence diagram (API calls & ICT binary invocation over `os/exec` with SSE log streaming) |
 | 2026-07-01 | ICT Team | Converted sequence diagram to Mermaid (repo convention for sequence diagrams); recolored block diagrams with a softer palette; renamed hand-authored SVGs from `*.drawio.svg` to `*.svg` (they are not draw.io-editable) |
 | 2026-07-01 | ICT Team | Clarified build payload & Advanced preview: `POST /builds` is always self-contained (Basic → `{compose}`, Advanced → complete `{yaml}`, never a delta); Advanced fetches the base template once then edits/re-render happen client-side with no per-change backend calls; removed misleading "apply edits per request" wording |
+| 2026-07-01 | ICT Team | Enforced exactly-one `compose`/`yaml` on `POST /builds` via `oneOf`; split the sequence diagram into separate Basic and Advanced flows; added `POST /templates/validate` endpoint to back the Advanced Validate button; documented Export YAML as a client-side action (no backend call) |

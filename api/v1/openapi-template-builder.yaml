@@ -280,6 +280,39 @@ paths:
               schema:
                 $ref: "#/components/schemas/ValidationResponse"
 
+  /templates/validate:
+    post:
+      tags: [Templates]
+      operationId: validateTemplate
+      summary: Validate an edited template
+      description: |
+        Validates a complete template YAML against the ICT template schema and
+        returns any errors and warnings, each with a field path. Backs the
+        Advanced tab's "Validate" button so power users can check their edits
+        before building.
+
+        Always returns 200 with a validation result (a failed validation is a
+        successful call). The build endpoint performs the same check, so
+        validating first is optional but gives faster, in-place feedback.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [yaml]
+              properties:
+                yaml:
+                  type: string
+                  description: Complete template YAML to validate
+      responses:
+        "200":
+          description: Validation result (valid or invalid)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationResponse"
+
   # ─────────────────────────────────────────────────────────────────────
   # Builds
   # ─────────────────────────────────────────────────────────────────────
