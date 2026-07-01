@@ -3,9 +3,12 @@ info:
   title: ICT Template Builder API
   description: |
     Backend API for the Image Composer Tool (ICT) web-based template builder.
-    Provides endpoints for composing image templates from building blocks,
-    validating templates, managing saved templates, and triggering image builds.
-  version: 1.0.0
+    Provides endpoints for retrieving configuration options (verticals, platforms, OS targets),
+    searching packages, composing templates from user intent, and triggering image builds
+    with streaming logs.
+
+    Architecture: UI captures user intent → API translates to ICT template → ICT builds image.
+  version: 2.0.0
   contact:
     name: ICT Team
 
@@ -14,182 +17,183 @@ servers:
     description: Local development server
 
 tags:
-  - name: Building Blocks
-    description: Retrieve available options for each template building block (OS, packages, disk presets, etc.)
+  - name: Verticals
+    description: Targeted verticals and their configurations (SKUs, defaults)
+  - name: Platforms
+    description: Intel hardware platforms
+  - name: Targets
+    description: Operating system options
+  - name: Packages
+    description: Package repositories and search
   - name: Templates
-    description: CRUD operations on image templates
-  - name: Validation
-    description: Validate templates against the ICT schema
+    description: Compose templates from user intent
   - name: Builds
     description: Trigger and monitor image builds
-  - name: Packages
-    description: Search and discover packages available for a target
 
 paths:
   # ─────────────────────────────────────────────────────────────────────
-  # Building Blocks - what the UI offers the user to pick from
+  # Verticals
   # ─────────────────────────────────────────────────────────────────────
 
-  /blocks/targets:
+  /verticals:
     get:
-      tags: [Building Blocks]
-      summary: List available target platforms
+      tags: [Verticals]
+      operationId: listVerticals
+      summary: List all targeted verticals
       description: |
-        Returns all valid OS + distribution + architecture + imageType combinations.
-        The UI uses this to populate the Target step (radio buttons / dropdowns).
+        Returns available verticals (Robotics, Physical AI, Generic, etc.)
+        with display metadata. Used by the Basic and Advanced tab vertical dropdown.
       responses:
         "200":
-          description: Available targets grouped by OS
+          description: List of verticals
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/TargetOptions"
+                $ref: "#/components/schemas/VerticalList"
 
-  /blocks/disk-presets:
+  /verticals/{verticalId}/skus:
     get:
-      tags: [Building Blocks]
-      summary: List disk layout presets
+      tags: [Verticals]
+      operationId: listVerticalSkus
+      summary: List SKUs for a vertical
       description: |
-        Returns predefined disk configurations (e.g., "minimal 4GiB", "large 16GiB with data partition").
-        Users can pick a preset or customize from scratch.
+        Returns the SKU options available for a given vertical.
+        E.g., Generic → Non-Realtime, Realtime; Robotics → AMR, Humanoid, Stationary.
       parameters:
+        - $ref: "#/components/parameters/VerticalId"
+      responses:
+        "200":
+          description: SKU list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkuList"
+        "404":
+          description: Vertical not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /verticals/{verticalId}/defaults:
+    get:
+      tags: [Verticals]
+      operationId: getVerticalDefaults
+      summary: Get preset defaults for a vertical
+      description: |
+        Returns the pre-configured defaults for a vertical including default OS,
+        image type, image name, packages, and disk layout. Used by the
+        "Review Image Configuration" panel in the Basic tab.
+      parameters:
+        - $ref: "#/components/parameters/VerticalId"
         - name: os
           in: query
           schema:
             type: string
-          description: Filter presets by OS (some layouts are OS-specific)
-        - name: imageType
+          description: |
+            Optional OS distribution ID (e.g., ubuntu24) to refine defaults.
+            When omitted, the vertical's defaultOs is used. MVP-1 supports one
+            OS per vertical, but verticals may support multiple OSes over time.
+        - name: sku
           in: query
           schema:
             type: string
-            enum: [raw, iso, img]
-          description: Filter presets by image type
+          description: Optional SKU to further refine defaults
+        - name: platform
+          in: query
+          schema:
+            type: string
+          description: Optional platform to include platform-specific packages
       responses:
         "200":
-          description: Disk presets
+          description: Vertical defaults
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/DiskPresetList"
-
-  /blocks/package-groups:
-    get:
-      tags: [Building Blocks]
-      summary: List curated package groups
-      description: |
-        Returns curated groups of packages (e.g., "Container Runtime", "Kubernetes",
-        "Web Server") that users can select via checkboxes. Each group lists the
-        individual packages it installs.
-      parameters:
-        - name: os
-          in: query
-          required: true
-          schema:
-            type: string
-          description: Target OS (package groups vary by OS)
-        - name: dist
-          in: query
-          required: true
-          schema:
-            type: string
-          description: Target distribution
-      responses:
-        "200":
-          description: Package groups
+                $ref: "#/components/schemas/VerticalDefaults"
+        "404":
+          description: Vertical not found
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/PackageGroupList"
-
-  /blocks/kernel-options:
-    get:
-      tags: [Building Blocks]
-      summary: List kernel configuration options
-      description: |
-        Returns available kernel versions, common cmdline parameters, and
-        kernel packages for the given target.
-      parameters:
-        - name: os
-          in: query
-          required: true
-          schema:
-            type: string
-        - name: dist
-          in: query
-          required: true
-          schema:
-            type: string
-        - name: arch
-          in: query
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Kernel options
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/KernelOptions"
-
-  /blocks/network-presets:
-    get:
-      tags: [Building Blocks]
-      summary: List network configuration presets
-      description: |
-        Returns common network configurations (DHCP, static, multi-interface)
-        and available backends for the target OS.
-      parameters:
-        - name: os
-          in: query
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Network presets
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/NetworkPresets"
-
-  /blocks/security-options:
-    get:
-      tags: [Building Blocks]
-      summary: List security and bootloader options
-      description: |
-        Returns available security features (dm-verity, Secure Boot) and
-        bootloader options (EFI/legacy, grub/grub2/systemd-boot) for the target.
-      parameters:
-        - name: os
-          in: query
-          required: true
-          schema:
-            type: string
-        - name: imageType
-          in: query
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Security options
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SecurityOptions"
+                $ref: "#/components/schemas/Error"
 
   # ─────────────────────────────────────────────────────────────────────
-  # Package Search
+  # Platforms
   # ─────────────────────────────────────────────────────────────────────
+
+  /platforms:
+    get:
+      tags: [Platforms]
+      operationId: listPlatforms
+      summary: List Intel hardware platforms
+      description: |
+        Returns available Intel platforms (PTL, WCL, ARL, NVL) with display names.
+        Used by the Platform dropdown in Basic and Advanced tabs.
+      responses:
+        "200":
+          description: Platform list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlatformList"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # OS Targets
+  # ─────────────────────────────────────────────────────────────────────
+
+  /targets:
+    get:
+      tags: [Targets]
+      operationId: listTargets
+      summary: List available operating systems
+      description: |
+        Returns available OS options with version info. These are the options
+        shown in the Operating System dropdown (e.g., Ubuntu 24.04, Debian 13).
+        MVP-1 architecture is x86_64 only.
+      responses:
+        "200":
+          description: OS target list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TargetList"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Packages
+  # ─────────────────────────────────────────────────────────────────────
+
+  /package-repos:
+    get:
+      tags: [Packages]
+      operationId: listPackageRepos
+      summary: List available package repositories
+      description: |
+        Returns package repositories that can be enabled in the Advanced tab
+        (e.g., Intel OpenVINO, Docker CE, ROS 2 Jazzy, Intel Compute Runtime).
+      parameters:
+        - name: os
+          in: query
+          schema:
+            type: string
+          description: Filter repos by target OS compatibility
+      responses:
+        "200":
+          description: Repository list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PackageRepoList"
 
   /packages/search:
     get:
       tags: [Packages]
+      operationId: searchPackages
       summary: Search available packages
       description: |
-        Search for packages available in the repositories for a given target.
-        Supports prefix matching and glob patterns. Used by the package search
-        input in the builder UI.
+        Search for packages available in enabled repositories for a given target.
+        Supports prefix matching. Used by the package search autocomplete
+        in the Advanced tab Step 2.
       parameters:
         - name: q
           in: query
@@ -197,28 +201,26 @@ paths:
           schema:
             type: string
             minLength: 2
-          description: Search query (package name prefix or glob pattern)
+          description: Search query (package name prefix)
         - name: os
           in: query
           required: true
           schema:
             type: string
-        - name: dist
+          description: Target OS distribution ID (e.g., ubuntu24)
+        - name: repos
           in: query
-          required: true
           schema:
-            type: string
-        - name: arch
-          in: query
-          required: true
-          schema:
-            type: string
+            type: array
+            items:
+              type: string
+          description: Filter by enabled repository IDs
         - name: limit
           in: query
           schema:
             type: integer
             default: 20
-            maximum: 100
+            maximum: 50
           description: Max results to return
       responses:
         "200":
@@ -229,205 +231,21 @@ paths:
                 $ref: "#/components/schemas/PackageSearchResults"
 
   # ─────────────────────────────────────────────────────────────────────
-  # Templates - CRUD
-  # ─────────────────────────────────────────────────────────────────────
-
-  /templates:
-    get:
-      tags: [Templates]
-      summary: List all templates
-      description: |
-        Returns all saved templates (both built-in and user-created).
-        Supports filtering by OS, architecture, and image type.
-      parameters:
-        - name: os
-          in: query
-          schema:
-            type: string
-        - name: arch
-          in: query
-          schema:
-            type: string
-        - name: imageType
-          in: query
-          schema:
-            type: string
-            enum: [raw, iso, img]
-        - name: search
-          in: query
-          schema:
-            type: string
-          description: Free-text search across name, description, and keywords
-      responses:
-        "200":
-          description: Template list
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/TemplateList"
-
-    post:
-      tags: [Templates]
-      summary: Create a new template
-      description: |
-        Save a new template. The template is validated before saving.
-        Returns the saved template with validation results.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/TemplateCreateRequest"
-      responses:
-        "201":
-          description: Template created
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/TemplateSaveResponse"
-        "409":
-          description: Template with this name already exists
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "422":
-          description: Template validation failed
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ValidationResponse"
-
-  /templates/{name}:
-    get:
-      tags: [Templates]
-      summary: Get a template by name
-      description: Returns the full template YAML and parsed structure.
-      parameters:
-        - $ref: "#/components/parameters/TemplateName"
-      responses:
-        "200":
-          description: Template details
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/TemplateDetail"
-        "404":
-          description: Template not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-
-    put:
-      tags: [Templates]
-      summary: Update an existing template
-      description: |
-        Replace a template's content. Validates before saving.
-      parameters:
-        - $ref: "#/components/parameters/TemplateName"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/TemplateUpdateRequest"
-      responses:
-        "200":
-          description: Template updated
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/TemplateSaveResponse"
-        "404":
-          description: Template not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "422":
-          description: Template validation failed
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ValidationResponse"
-
-    delete:
-      tags: [Templates]
-      summary: Delete a template
-      parameters:
-        - $ref: "#/components/parameters/TemplateName"
-      responses:
-        "204":
-          description: Template deleted
-        "404":
-          description: Template not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "403":
-          description: Cannot delete built-in templates
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-
-  /templates/{name}/clone:
-    post:
-      tags: [Templates]
-      summary: Clone a template
-      description: |
-        Create a copy of an existing template with a new name.
-        Useful for starting from an existing template and customizing it.
-      parameters:
-        - $ref: "#/components/parameters/TemplateName"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [newName]
-              properties:
-                newName:
-                  type: string
-                  pattern: "^[a-zA-Z0-9]([a-zA-Z0-9\\-_]*[a-zA-Z0-9])?$"
-                  description: Name for the cloned template
-      responses:
-        "201":
-          description: Template cloned
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/TemplateSaveResponse"
-        "404":
-          description: Source template not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "409":
-          description: Target name already exists
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-
-  # ─────────────────────────────────────────────────────────────────────
-  # Template Composition (the builder's main endpoint)
+  # Template Composition
   # ─────────────────────────────────────────────────────────────────────
 
   /templates/compose:
     post:
       tags: [Templates]
-      summary: Compose a template from building blocks
+      operationId: composeTemplate
+      summary: Compose a template from user intent
       description: |
-        Accepts a structured set of building block selections (from the UI's
-        wizard or canvas) and generates the final merged YAML template.
-        This is the primary endpoint the builder UI calls when the user
-        finishes configuring blocks. The response includes the generated YAML,
-        validation results, and any warnings.
+        Accepts structured user selections from the UI and generates the final
+        merged YAML template. This is the primary endpoint called when the user
+        clicks "Build Image" or "Export YAML".
+
+        The backend merges user intent with vertical defaults, platform-specific
+        packages, and OS base configuration to produce a complete ICT template.
       requestBody:
         required: true
         content:
@@ -436,65 +254,23 @@ paths:
               $ref: "#/components/schemas/ComposeRequest"
       responses:
         "200":
-          description: Composed template with validation
+          description: Composed template
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ComposeResponse"
         "400":
-          description: Invalid block configuration
+          description: Invalid request
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-
-  # ─────────────────────────────────────────────────────────────────────
-  # Validation
-  # ─────────────────────────────────────────────────────────────────────
-
-  /templates/validate:
-    post:
-      tags: [Validation]
-      summary: Validate a template
-      description: |
-        Validates template YAML against the ICT schema. Returns detailed
-        error and warning information with JSON paths pointing to the
-        problematic fields. Used by the live preview panel and the editor.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/ValidateRequest"
-      responses:
-        "200":
-          description: Validation results (may be valid or invalid)
+        "422":
+          description: Template validation failed
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ValidationResponse"
-
-  /templates/validate/block:
-    post:
-      tags: [Validation]
-      summary: Validate a single building block
-      description: |
-        Validates just one section of the template (e.g., only the disk
-        config or only the network config). Used for inline validation
-        as the user configures each block in the wizard/canvas.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/BlockValidateRequest"
-      responses:
-        "200":
-          description: Block validation results
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/BlockValidationResponse"
 
   # ─────────────────────────────────────────────────────────────────────
   # Builds
@@ -503,10 +279,12 @@ paths:
   /builds:
     post:
       tags: [Builds]
+      operationId: startBuild
       summary: Start an image build
       description: |
-        Triggers a new image build from a template. The template is validated
-        before the build starts. Returns a build ID for tracking progress.
+        Triggers a new image build. Accepts either a compose request (user intent)
+        or raw YAML. The template is validated before the build starts.
+        Returns a build ID for tracking progress via SSE.
       requestBody:
         required: true
         content:
@@ -526,40 +304,13 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ValidationResponse"
-        "503":
-          description: Max concurrent builds reached
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-
-    get:
-      tags: [Builds]
-      summary: List builds
-      description: Returns build history with status, duration, and output info.
-      parameters:
-        - name: status
-          in: query
-          schema:
-            type: string
-            enum: [running, success, failed, cancelled]
-        - name: limit
-          in: query
-          schema:
-            type: integer
-            default: 20
-      responses:
-        "200":
-          description: Build list
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/BuildList"
 
   /builds/{buildId}:
     get:
       tags: [Builds]
+      operationId: getBuild
       summary: Get build status
+      description: Returns current build status, duration, and artifacts if complete.
       parameters:
         - $ref: "#/components/parameters/BuildId"
       responses:
@@ -576,44 +327,20 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
-    delete:
-      tags: [Builds]
-      summary: Cancel a running build
-      parameters:
-        - $ref: "#/components/parameters/BuildId"
-      responses:
-        "200":
-          description: Build cancelled
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/BuildDetail"
-        "404":
-          description: Build not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "409":
-          description: Build already completed
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-
   /builds/{buildId}/logs:
     get:
       tags: [Builds]
+      operationId: streamBuildLogs
       summary: Stream build logs (SSE)
       description: |
-        Server-Sent Events stream of build log lines and progress updates.
-        Connect to this endpoint to receive real-time build output.
+        Server-Sent Events stream of build log lines.
+        Connect to this endpoint to receive real-time build output
+        in the "Build Status" log viewer.
 
         Event types:
-        - `log`: A log line with timestamp, level, and message
-        - `progress`: Build phase and percentage
-        - `build_complete`: Build finished successfully
-        - `build_failed`: Build failed with error details
+        - `log`: A log line with timestamp and message
+        - `complete`: Build finished (includes pass/fail status and artifacts)
+        - `error`: Build failed with error details
       parameters:
         - $ref: "#/components/parameters/BuildId"
       responses:
@@ -627,13 +354,37 @@ paths:
                   SSE events. Example:
 
                   event: log
-                  data: {"timestamp":"2026-06-24T14:32:01Z","level":"info","message":"Installing docker-ce"}
+                  data: {"timestamp":"2026-06-28T14:32:01Z","message":"Resolving packages..."}
 
-                  event: progress
-                  data: {"phase":"installing_packages","percentage":65}
+                  event: log
+                  data: {"timestamp":"2026-06-28T14:32:15Z","message":"Installing base system..."}
 
-                  event: build_complete
-                  data: {"duration_seconds":390,"artifacts":["image.raw","image.raw.gz"]}
+                  event: complete
+                  data: {"status":"success","duration_seconds":390,"artifacts":[{"name":"ubuntu24-robotics-amr.raw.gz","type":"image","path":"/output/ubuntu24-robotics-amr.raw.gz"},{"name":"ubuntu24-robotics-amr.sbom.json","type":"sbom","path":"/output/ubuntu24-robotics-amr.sbom.json"}]}
+
+  /builds/{buildId}/artifacts:
+    get:
+      tags: [Builds]
+      operationId: listBuildArtifacts
+      summary: List build artifacts
+      description: |
+        Returns the output artifacts for a completed build (image file and SBOM).
+        Used by the artifacts table in the Build Image tab.
+      parameters:
+        - $ref: "#/components/parameters/BuildId"
+      responses:
+        "200":
+          description: Build artifacts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactList"
+        "404":
+          description: Build not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
 # ─────────────────────────────────────────────────────────────────────
 # Components
@@ -641,14 +392,14 @@ paths:
 
 components:
   parameters:
-    TemplateName:
-      name: name
+    VerticalId:
+      name: verticalId
       in: path
       required: true
       schema:
         type: string
-        pattern: "^[a-zA-Z0-9]([a-zA-Z0-9\\-_]*[a-zA-Z0-9])?$"
-      description: Template name identifier
+        enum: [generic, robotics, physical-ai, agentic-ai, health, fed-aero, industrial, retail]
+      description: Vertical identifier
 
     BuildId:
       name: buildId
@@ -660,90 +411,328 @@ components:
       description: Build identifier
 
   schemas:
-    # ── Building Blocks ──
+    # ── Verticals ──
 
-    TargetOptions:
+    VerticalList:
       type: object
       properties:
-        operatingSystems:
+        verticals:
           type: array
           items:
             type: object
             properties:
               id:
                 type: string
-                example: azure-linux
+                example: robotics
               displayName:
                 type: string
-                example: Azure Linux
-              distributions:
-                type: array
-                items:
-                  type: object
-                  properties:
-                    id:
-                      type: string
-                      example: azl3
-                    displayName:
-                      type: string
-                      example: Azure Linux 3
-                    architectures:
-                      type: array
-                      items:
-                        type: string
-                        enum: [x86_64, aarch64, armv7hl]
-                    imageTypes:
-                      type: array
-                      items:
-                        type: string
-                        enum: [raw, iso, img]
-
-    DiskPresetList:
-      type: object
-      properties:
-        presets:
-          type: array
-          items:
-            type: object
-            properties:
-              id:
-                type: string
-                example: minimal-4g
-              displayName:
-                type: string
-                example: Minimal (4 GiB)
+                example: Robotics
               description:
                 type: string
-                example: Two partitions (boot + root), suitable for most use cases
-              config:
-                $ref: "#/components/schemas/DiskConfig"
+                example: Pre-configured for ROS 2, navigation, and sensor fusion workloads
+              supportedOs:
+                type: array
+                items:
+                  type: string
+                description: |
+                  OS distribution IDs this vertical supports. The UI populates
+                  the Operating System dropdown from this list. MVP-1 ships one
+                  OS per vertical (Generic supports several).
+                example: [ubuntu24]
+              defaultOs:
+                type: string
+                description: Pre-selected OS distribution ID
+                example: ubuntu24
+      example:
+        verticals:
+          - id: generic
+            displayName: Generic
+            description: General-purpose edge image with minimal defaults
+            supportedOs: [ubuntu24, ubuntu26, debian13, azl3, elxr13, emt3]
+            defaultOs: ubuntu24
+          - id: robotics
+            displayName: Robotics
+            description: Pre-configured for ROS 2, navigation, and sensor fusion workloads
+            supportedOs: [ubuntu24]
+            defaultOs: ubuntu24
+          - id: physical-ai
+            displayName: Physical AI
+            description: Optimized for inference and AI model serving at the edge
+          - id: agentic-ai
+            displayName: Agentic AI
+            description: LLM inference and multi-agent orchestration
+          - id: health
+            displayName: Health
+            description: HIPAA-aware medical edge computing
+          - id: fed-aero
+            displayName: Fed Aero
+            description: Security-hardened for federal and aerospace environments
+          - id: industrial
+            displayName: Industrial IoT
+            description: Real-time capable for OT/fieldbus environments
+          - id: retail
+            displayName: Retail Edge
+            description: POS, signage, and edge analytics
 
-    DiskConfig:
+    SkuList:
       type: object
       properties:
-        name:
+        verticalId:
           type: string
-        size:
-          type: string
-          example: "4GiB"
-        partitionTableType:
-          type: string
-          enum: [gpt, mbr]
-        partitions:
-          type: array
-          items:
-            $ref: "#/components/schemas/Partition"
-        artifacts:
+        skus:
           type: array
           items:
             type: object
             properties:
-              type:
+              id:
                 type: string
-                enum: [raw, qcow2, vhd, vhdx, vmdk, vdi]
-              compression:
+                example: amr
+              displayName:
                 type: string
-                enum: [gz, xz, zstd, bz2]
+                example: AMR (Autonomous Mobile Robot)
+      example:
+        verticalId: robotics
+        skus:
+          - id: amr
+            displayName: AMR (Autonomous Mobile Robot)
+          - id: humanoid
+            displayName: Humanoid
+          - id: stationary
+            displayName: Stationary Robot
+
+    VerticalDefaults:
+      type: object
+      description: |
+        Pre-configured defaults for a vertical. Used to populate the
+        "Review Image Configuration" summary and to seed the Advanced tab.
+      properties:
+        verticalId:
+          type: string
+        imageName:
+          type: string
+          example: robotics-image
+        imageType:
+          type: string
+          enum: [raw, iso, qcow]
+          example: iso
+        os:
+          type: string
+          example: ubuntu24
+        osDisplayName:
+          type: string
+          example: Ubuntu 24.04
+        packages:
+          type: array
+          items:
+            type: string
+          example: [ros-jazzy-base, ros-jazzy-navigation2, openvino-runtime, docker-ce, intel-level-zero-gpu, cloud-init]
+        disk:
+          type: object
+          properties:
+            size:
+              type: string
+              example: "8GiB"
+            partitionTableType:
+              type: string
+              enum: [gpt]
+              example: gpt
+            partitions:
+              type: integer
+              example: 2
+        unattended:
+          type: boolean
+          example: false
+
+    # ── Platforms ──
+
+    PlatformList:
+      type: object
+      properties:
+        platforms:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                example: ptl
+              displayName:
+                type: string
+                example: PTL (Panther Lake)
+              description:
+                type: string
+                example: Intel Panther Lake — Xe GPU, NPU, Wi-Fi 7
+      example:
+        platforms:
+          - id: ptl
+            displayName: PTL (Panther Lake)
+            description: Intel Panther Lake — Xe GPU, NPU, Wi-Fi 7
+          - id: wcl
+            displayName: WCL (Wildcat Lake)
+            description: Intel Wildcat Lake — integrated GPU, Thunderbolt 5
+          - id: arl
+            displayName: ARL (Arrow Lake)
+            description: Intel Arrow Lake — hybrid P/E-core, Arc GPU
+          - id: nvl
+            displayName: NVL (Nova Lake)
+            description: Intel Nova Lake — Xe2 GPU, NPU 4.0
+
+    # ── OS Targets ──
+
+    TargetList:
+      type: object
+      properties:
+        targets:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                example: ubuntu24
+              displayName:
+                type: string
+                example: Ubuntu 24.04
+              os:
+                type: string
+                description: OS family identifier
+                example: ubuntu
+              arch:
+                type: string
+                enum: [x86_64]
+                example: x86_64
+      example:
+        targets:
+          - id: ubuntu24
+            displayName: Ubuntu 24.04
+            os: ubuntu
+            arch: x86_64
+          - id: ubuntu26
+            displayName: Ubuntu 26.04
+            os: ubuntu
+            arch: x86_64
+          - id: debian13
+            displayName: Debian 13
+            os: debian
+            arch: x86_64
+          - id: azl3
+            displayName: Azure Linux 3
+            os: azure-linux
+            arch: x86_64
+          - id: elxr13
+            displayName: Wind River eLxr 13
+            os: wind-river-elxr
+            arch: x86_64
+          - id: emt3
+            displayName: Edge Microvisor Toolkit 3
+            os: edge-microvisor-toolkit
+            arch: x86_64
+
+    # ── Packages ──
+
+    PackageRepoList:
+      type: object
+      properties:
+        repos:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                example: intel-openvino
+              displayName:
+                type: string
+                example: Intel OpenVINO
+              url:
+                type: string
+                example: https://apt.repos.intel.com/openvino
+              description:
+                type: string
+                example: OpenVINO inference engine packages
+              enabledByDefault:
+                type: boolean
+                example: false
+
+    PackageSearchResults:
+      type: object
+      properties:
+        query:
+          type: string
+        total:
+          type: integer
+        packages:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+                example: docker-ce
+              description:
+                type: string
+                example: Docker Community Edition
+              repository:
+                type: string
+                example: docker-ce-stable
+
+    # ── Template Composition ──
+
+    ComposeRequest:
+      type: object
+      description: |
+        Structured user intent from the UI. The backend merges this with
+        vertical defaults and platform packages to produce a complete template.
+      required: [vertical, os, imageType]
+      properties:
+        vertical:
+          type: string
+          enum: [generic, robotics, physical-ai, agentic-ai, health, fed-aero, industrial, retail]
+        sku:
+          type: string
+          description: Selected SKU within the vertical
+        platform:
+          type: string
+          enum: [ptl, wcl, arl, nvl]
+        os:
+          type: string
+          description: Target OS distribution ID (e.g., ubuntu24)
+        imageType:
+          type: string
+          enum: [raw, iso, qcow]
+        imageName:
+          type: string
+          description: Custom image name (defaults to vertical preset if omitted)
+          pattern: "^[a-zA-Z0-9]([a-zA-Z0-9\\-_]*[a-zA-Z0-9])?$"
+        packages:
+          type: array
+          items:
+            type: string
+          description: Additional packages beyond vertical defaults
+        packageRepositories:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              url:
+                type: string
+          description: Additional package repositories to enable
+        disk:
+          type: object
+          description: Custom disk configuration (overrides vertical default)
+          properties:
+            size:
+              type: string
+              example: "8GiB"
+            partitionTableType:
+              type: string
+              enum: [gpt]
+            partitions:
+              type: array
+              items:
+                $ref: "#/components/schemas/Partition"
 
     Partition:
       type: object
@@ -761,644 +750,43 @@ components:
           example: "512MiB"
         mountPoint:
           type: string
-          example: /boot
-        flags:
-          type: array
-          items:
-            type: string
-
-    PackageGroupList:
-      type: object
-      properties:
-        groups:
-          type: array
-          items:
-            type: object
-            properties:
-              id:
-                type: string
-                example: container-runtime
-              displayName:
-                type: string
-                example: Container Runtime
-              description:
-                type: string
-                example: Docker CE with CLI and containerd
-              packages:
-                type: array
-                items:
-                  type: string
-                example: [docker-ce, docker-ce-cli, containerd.io]
-              category:
-                type: string
-                enum: [runtime, networking, monitoring, security, development, web, storage]
-
-    KernelOptions:
-      type: object
-      properties:
-        versions:
-          type: array
-          items:
-            type: object
-            properties:
-              version:
-                type: string
-                example: "6.6"
-              isDefault:
-                type: boolean
-        commonCmdlineParams:
-          type: array
-          items:
-            type: object
-            properties:
-              param:
-                type: string
-                example: "console=ttyS0,115200"
-              description:
-                type: string
-                example: Serial console output at 115200 baud
-              category:
-                type: string
-                enum: [console, debug, performance, security, hardware]
-        additionalPackages:
-          type: array
-          items:
-            type: object
-            properties:
-              name:
-                type: string
-                example: kernel-azure
-              description:
-                type: string
-
-    NetworkPresets:
-      type: object
-      properties:
-        backends:
-          type: array
-          items:
-            type: object
-            properties:
-              id:
-                type: string
-                enum: [systemd-networkd, netplan]
-              displayName:
-                type: string
-              isDefault:
-                type: boolean
-        presets:
-          type: array
-          items:
-            type: object
-            properties:
-              id:
-                type: string
-                example: dhcp-single
-              displayName:
-                type: string
-                example: Single Interface (DHCP)
-              description:
-                type: string
-              config:
-                $ref: "#/components/schemas/NetworkConfig"
-
-    NetworkConfig:
-      type: object
-      properties:
-        backend:
-          type: string
-          enum: [systemd-networkd, netplan]
-        interfaces:
-          type: array
-          items:
-            type: object
-            properties:
-              name:
-                type: string
-                example: eth0
-              dhcp4:
-                type: boolean
-              dhcp6:
-                type: boolean
-              addresses:
-                type: array
-                items:
-                  type: string
-              routes:
-                type: array
-                items:
-                  type: object
-                  properties:
-                    to:
-                      type: string
-                    via:
-                      type: string
-              nameservers:
-                type: array
-                items:
-                  type: string
-
-    SecurityOptions:
-      type: object
-      properties:
-        immutability:
-          type: object
-          properties:
-            available:
-              type: boolean
-            description:
-              type: string
-        secureBoot:
-          type: object
-          properties:
-            available:
-              type: boolean
-            requiresFiles:
-              type: array
-              items:
-                type: string
-              example: [secureBootDBKey, secureBootDBCrt, secureBootDBCer]
-        bootloaders:
-          type: array
-          items:
-            type: object
-            properties:
-              bootType:
-                type: string
-                enum: [efi, legacy]
-              provider:
-                type: string
-                enum: [grub, grub2, systemd-boot]
-              isDefault:
-                type: boolean
-              description:
-                type: string
-
-    # ── Package Search ──
-
-    PackageSearchResults:
-      type: object
-      properties:
-        query:
-          type: string
-        total:
-          type: integer
-        packages:
-          type: array
-          items:
-            type: object
-            properties:
-              name:
-                type: string
-                example: docker-ce
-              version:
-                type: string
-                example: "24.0.7"
-              description:
-                type: string
-                example: Docker Community Edition
-              size:
-                type: string
-                example: "45 MB"
-              repository:
-                type: string
-                example: docker-ce-stable
-
-    # ── Templates ──
-
-    TemplateList:
-      type: object
-      properties:
-        total:
-          type: integer
-        templates:
-          type: array
-          items:
-            type: object
-            properties:
-              name:
-                type: string
-              version:
-                type: string
-              os:
-                type: string
-              dist:
-                type: string
-              arch:
-                type: string
-              imageType:
-                type: string
-              description:
-                type: string
-              keywords:
-                type: array
-                items:
-                  type: string
-              isBuiltIn:
-                type: boolean
-              createdAt:
-                type: string
-                format: date-time
-              updatedAt:
-                type: string
-                format: date-time
-
-    TemplateDetail:
-      type: object
-      properties:
-        name:
-          type: string
-        yaml:
-          type: string
-          description: Raw YAML content
-        parsed:
-          $ref: "#/components/schemas/ParsedTemplate"
-        isBuiltIn:
-          type: boolean
-        createdAt:
-          type: string
-          format: date-time
-        updatedAt:
-          type: string
-          format: date-time
-
-    ParsedTemplate:
-      type: object
-      description: Structured representation of the template for the UI
-      properties:
-        image:
-          type: object
-          properties:
-            name:
-              type: string
-            version:
-              type: string
-        target:
-          type: object
-          properties:
-            os:
-              type: string
-            dist:
-              type: string
-            arch:
-              type: string
-            imageType:
-              type: string
-        disk:
-          $ref: "#/components/schemas/DiskConfig"
-        systemConfig:
-          type: object
-          properties:
-            name:
-              type: string
-            hostname:
-              type: string
-            packages:
-              type: array
-              items:
-                type: string
-            kernel:
-              type: object
-              properties:
-                version:
-                  type: string
-                cmdline:
-                  type: string
-                packages:
-                  type: array
-                  items:
-                    type: string
-            network:
-              $ref: "#/components/schemas/NetworkConfig"
-            users:
-              type: array
-              items:
-                $ref: "#/components/schemas/UserConfig"
-            immutability:
-              type: object
-              properties:
-                enabled:
-                  type: boolean
-            bootloader:
-              type: object
-              properties:
-                bootType:
-                  type: string
-                provider:
-                  type: string
-            configurations:
-              type: array
-              items:
-                type: object
-                properties:
-                  name:
-                    type: string
-                  run:
-                    type: string
-            additionalFiles:
-              type: array
-              items:
-                type: object
-                properties:
-                  source:
-                    type: string
-                  destination:
-                    type: string
-                  permissions:
-                    type: string
-        packageRepositories:
-          type: array
-          items:
-            type: object
-            properties:
-              codename:
-                type: string
-              url:
-                type: string
-
-    UserConfig:
-      type: object
-      properties:
-        name:
-          type: string
-        groups:
-          type: array
-          items:
-            type: string
-        sudo:
-          type: boolean
-        shell:
-          type: string
-        home:
-          type: string
-        hasPassword:
-          type: boolean
-          description: Whether a password is set (actual value never exposed via API)
-        hashAlgo:
-          type: string
-
-    TemplateCreateRequest:
-      type: object
-      required: [name, yaml]
-      properties:
-        name:
-          type: string
-          pattern: "^[a-zA-Z0-9]([a-zA-Z0-9\\-_]*[a-zA-Z0-9])?$"
-        yaml:
-          type: string
-          description: Full template YAML content
-        description:
-          type: string
-          description: Human-readable description for the template library
-
-    TemplateUpdateRequest:
-      type: object
-      required: [yaml]
-      properties:
-        yaml:
-          type: string
-        description:
-          type: string
-
-    TemplateSaveResponse:
-      type: object
-      properties:
-        name:
-          type: string
-        validation:
-          $ref: "#/components/schemas/ValidationResult"
-        createdAt:
-          type: string
-          format: date-time
-
-    # ── Compose (Builder's main endpoint) ──
-
-    ComposeRequest:
-      type: object
-      description: |
-        Structured input from the builder UI. Each field corresponds to a
-        building block the user has configured. Only `image` and `target` are
-        required; other blocks use OS defaults when omitted.
-      required: [image, target]
-      properties:
-        image:
-          type: object
-          required: [name, version]
-          properties:
-            name:
-              type: string
-              pattern: "^[a-zA-Z0-9]([a-zA-Z0-9\\-_]*[a-zA-Z0-9])?$"
-            version:
-              type: string
-        target:
-          type: object
-          required: [os, dist, arch, imageType]
-          properties:
-            os:
-              type: string
-              enum: [azure-linux, edge-microvisor-toolkit, wind-river-elxr, ubuntu, redhat-compatible-distro, debian]
-            dist:
-              type: string
-            arch:
-              type: string
-              enum: [x86_64, aarch64, armv7hl]
-            imageType:
-              type: string
-              enum: [raw, iso, img]
-        disk:
-          $ref: "#/components/schemas/DiskConfig"
-        packages:
-          type: array
-          items:
-            type: string
-          description: Packages to install (additive to OS defaults)
-        packageRepositories:
-          type: array
-          items:
-            type: object
-            properties:
-              codename:
-                type: string
-              url:
-                type: string
-              pkey:
-                type: string
-              component:
-                type: string
-        kernel:
-          type: object
-          properties:
-            version:
-              type: string
-            cmdline:
-              type: string
-            packages:
-              type: array
-              items:
-                type: string
-        network:
-          $ref: "#/components/schemas/NetworkConfig"
-        users:
-          type: array
-          items:
-            type: object
-            properties:
-              name:
-                type: string
-              password:
-                type: string
-              hashAlgo:
-                type: string
-              groups:
-                type: array
-                items:
-                  type: string
-              sudo:
-                type: boolean
-              shell:
-                type: string
-        security:
-          type: object
-          properties:
-            immutability:
-              type: object
-              properties:
-                enabled:
-                  type: boolean
-                secureBootDBKey:
-                  type: string
-                secureBootDBCrt:
-                  type: string
-                secureBootDBCer:
-                  type: string
-            bootloader:
-              type: object
-              properties:
-                bootType:
-                  type: string
-                  enum: [efi, legacy]
-                provider:
-                  type: string
-                  enum: [grub, grub2, systemd-boot]
-        configurations:
-          type: array
-          items:
-            type: object
-            properties:
-              name:
-                type: string
-              run:
-                type: string
-          description: Post-install scripts (executed in order)
-        additionalFiles:
-          type: array
-          items:
-            type: object
-            properties:
-              source:
-                type: string
-              destination:
-                type: string
-              permissions:
-                type: string
-        metadata:
-          type: object
-          properties:
-            description:
-              type: string
-            useCases:
-              type: array
-              items:
-                type: string
-            keywords:
-              type: array
-              items:
-                type: string
+          example: /boot/efi
 
     ComposeResponse:
       type: object
       properties:
         yaml:
           type: string
-          description: Generated YAML template content
-        mergedYaml:
-          type: string
-          description: Fully merged YAML (user selections + OS defaults)
+          description: Generated YAML template content (complete, ready for ICT)
         validation:
           $ref: "#/components/schemas/ValidationResult"
-        warnings:
-          type: array
-          items:
-            type: object
-            properties:
-              block:
-                type: string
-                description: Which building block the warning is about
-              message:
-                type: string
-              suggestion:
-                type: string
         summary:
           type: object
           properties:
+            imageName:
+              type: string
+            vertical:
+              type: string
+            sku:
+              type: string
+            platform:
+              type: string
+            os:
+              type: string
+            imageType:
+              type: string
             packageCount:
               type: integer
-            estimatedImageSize:
+            diskSize:
               type: string
             partitionCount:
-              type: integer
-            userCount:
               type: integer
 
     # ── Validation ──
 
-    ValidateRequest:
-      type: object
-      required: [yaml]
-      properties:
-        yaml:
-          type: string
-          description: Template YAML to validate
-        mode:
-          type: string
-          enum: [user, full]
-          default: user
-          description: |
-            Validation mode:
-            - `user`: Validates as a user template (only image + target required)
-            - `full`: Validates as a fully merged template (all required fields)
-
-    BlockValidateRequest:
-      type: object
-      required: [block, config]
-      properties:
-        block:
-          type: string
-          enum: [target, disk, packages, kernel, network, users, security, configurations, additionalFiles, packageRepositories]
-          description: Which building block to validate
-        config:
-          type: object
-          description: The block configuration to validate (structure depends on block type)
-        context:
-          type: object
-          description: |
-            Optional context from other blocks needed for cross-block validation.
-            For example, validating packages may need the target OS to check availability.
-          properties:
-            os:
-              type: string
-            dist:
-              type: string
-            arch:
-              type: string
-            imageType:
-              type: string
-
-    BlockValidationResponse:
+    ValidationResponse:
       type: object
       properties:
-        block:
-          type: string
         valid:
           type: boolean
         errors:
@@ -1409,14 +797,6 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ValidationIssue"
-
-    ValidationResponse:
-      type: object
-      properties:
-        valid:
-          type: boolean
-        result:
-          $ref: "#/components/schemas/ValidationResult"
 
     ValidationResult:
       type: object
@@ -1438,42 +818,27 @@ components:
         path:
           type: string
           description: JSON path to the problematic field
-          example: "systemConfig.network.interfaces[0].addresses"
+          example: "target.os"
         message:
           type: string
-          example: "Static IP address must include CIDR notation (e.g., /24)"
+          example: "Unsupported OS for selected platform"
         severity:
           type: string
-          enum: [error, warning, info]
-        suggestion:
-          type: string
-          description: Optional fix suggestion for the UI to display
-          example: "Add /24 suffix: 192.168.1.10/24"
+          enum: [error, warning]
 
     # ── Builds ──
 
     BuildRequest:
       type: object
+      description: |
+        Start a build from user intent (compose object) or raw YAML.
+        Provide either `compose` or `yaml` — at least one is required.
       properties:
-        templateName:
-          type: string
-          description: Name of a saved template to build
+        compose:
+          $ref: "#/components/schemas/ComposeRequest"
         yaml:
           type: string
-          description: Inline YAML to build (alternative to templateName)
-        options:
-          type: object
-          properties:
-            workers:
-              type: integer
-              description: Number of concurrent download workers
-              default: 4
-            verbose:
-              type: boolean
-              default: false
-      description: |
-        Provide either `templateName` (build a saved template) or `yaml`
-        (build an inline template). At least one is required.
+          description: Raw YAML template (alternative to compose)
 
     BuildAccepted:
       type: object
@@ -1483,59 +848,23 @@ components:
           format: uuid
         status:
           type: string
-          enum: [queued, running]
-        templateName:
-          type: string
+          enum: [running]
         startedAt:
           type: string
           format: date-time
         logsUrl:
           type: string
-          description: URL to connect for SSE log streaming
+          description: SSE endpoint for streaming logs
           example: /api/v1/builds/abc-123/logs
-
-    BuildList:
-      type: object
-      properties:
-        total:
-          type: integer
-        builds:
-          type: array
-          items:
-            $ref: "#/components/schemas/BuildSummary"
-
-    BuildSummary:
-      type: object
-      properties:
-        buildId:
-          type: string
-        templateName:
-          type: string
-        status:
-          type: string
-          enum: [queued, running, success, failed, cancelled]
-        startedAt:
-          type: string
-          format: date-time
-        completedAt:
-          type: string
-          format: date-time
-        durationSeconds:
-          type: integer
-        imageSize:
-          type: string
-          example: "1.2 GB"
 
     BuildDetail:
       type: object
       properties:
         buildId:
           type: string
-        templateName:
-          type: string
         status:
           type: string
-          enum: [queued, running, success, failed, cancelled]
+          enum: [running, success, failed]
         startedAt:
           type: string
           format: date-time
@@ -1544,26 +873,10 @@ components:
           format: date-time
         durationSeconds:
           type: integer
-        currentPhase:
-          type: string
-          example: installing_packages
-        progress:
-          type: integer
-          minimum: 0
-          maximum: 100
         artifacts:
           type: array
           items:
-            type: object
-            properties:
-              filename:
-                type: string
-                example: image.raw.gz
-              size:
-                type: string
-                example: "1.2 GB"
-              format:
-                type: string
+            $ref: "#/components/schemas/Artifact"
         error:
           type: object
           properties:
@@ -1571,8 +884,34 @@ components:
               type: string
             phase:
               type: string
-            suggestion:
-              type: string
+
+    ArtifactList:
+      type: object
+      properties:
+        buildId:
+          type: string
+        artifacts:
+          type: array
+          items:
+            $ref: "#/components/schemas/Artifact"
+
+    Artifact:
+      type: object
+      properties:
+        name:
+          type: string
+          example: ubuntu24-robotics-amr.raw.gz
+        type:
+          type: string
+          enum: [image, sbom]
+          example: image
+        path:
+          type: string
+          description: File path to the artifact (used by copy-path action in UI)
+          example: /output/ubuntu24-robotics-amr.raw.gz
+        size:
+          type: string
+          example: "1.2 GB"
 
     # ── Common ──
 
@@ -1584,9 +923,7 @@ components:
           properties:
             code:
               type: string
-              example: TEMPLATE_NOT_FOUND
+              example: VERTICAL_NOT_FOUND
             message:
               type: string
-              example: Template "my-image" does not exist
-            requestId:
-              type: string
+              example: "Vertical 'unknown' does not exist"

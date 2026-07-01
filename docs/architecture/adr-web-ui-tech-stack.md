@@ -19,13 +19,12 @@ This ADR defines the technology stack for the ICT web-based template builder UI 
 
 ### Problem Statement
 
-ICT needs a web interface that allows users to compose image templates for different industry verticals and custom configurations. The UI must:
+ICT needs a web interface that lets users compose image templates for different industry verticals and custom configurations. The UI must:
 
-1. Provide a guided **Basic** flow where users select a targeted vertical (Robotics, Physical AI, Agentic AI, Health, Fed Aero, Industrial IoT, Retail Edge, or Generic), then pick SKU, platform (PTL/WCL/ARL/NVL), and OS — with vertical-specific defaults auto-applied
-2. Provide an **Advanced** tab for power users to customize image type (RAW/ISO/QCOW), manage package repositories, search/select packages, and configure disk/partition layout — with live YAML preview
-3. Provide a **Build Image** tab that streams build logs via SSE and displays output artifacts (Image + SBOM)
-4. Stream build logs via Server-Sent Events (SSE)
-5. Be served from the same Go binary (single deployment artifact)
+1. Provide a guided **Basic** flow where users pick a targeted vertical (Robotics, Physical AI, Agentic AI, Health, Fed Aero, Industrial IoT, Retail Edge, or Generic), SKU, platform (PTL/WCL/ARL/NVL), and OS — with vertical-specific defaults auto-applied
+2. Provide an **Advanced** tab for power users to customize image type (RAW/ISO/QCOW), package repositories, packages, and disk/partition layout — with a live YAML preview
+3. Provide a **Build Image** tab that streams build logs via SSE and lists output artifacts (Image + SBOM)
+4. Be served from a single Go binary (one deployment artifact)
 
 ### Architecture Principles
 
@@ -116,7 +115,7 @@ The file `web/prototype/template-builder.html` demonstrates the exact views and 
 | Targeted Vertical dropdown with optgroup | `<Select>` from Shadcn/ui, options from `GET /api/v1/verticals` |
 | SKU dropdown (vertical-specific) | `<Select>`, options from `GET /api/v1/verticals/{id}/skus` |
 | Platform dropdown (PTL/WCL/ARL/NVL) | `<Select>`, options from `GET /api/v1/platforms` |
-| OS dropdown with placeholder | `<Select>`, options from `GET /api/v1/targets` |
+| OS dropdown (per-vertical) | `<Select>`, options from the selected vertical's `supportedOs` (via `GET /api/v1/verticals`), preselecting `defaultOs`. MVP-1 has one OS per vertical; the list grows without UI changes. |
 | "Review Image Configuration" checkbox | `<Checkbox>` + `<ReviewPanel>` — expands summary table |
 | Review summary table | `<Table>` showing Image, Vertical, SKU, Platform, OS, Image Type, Disk, Packages — data from vertical presets via `GET /api/v1/verticals/{id}/defaults` |
 | Auto-uncheck on config change | Zustand subscription resets review state on any selection change |
@@ -157,7 +156,7 @@ The file `web/prototype/template-builder.html` demonstrates the exact views and 
 
 ### Why stdlib `net/http` over chi/gin/echo?
 
-Go 1.22 added method + pattern routing. ICT has ~15 endpoints — stdlib is sufficient and avoids external router dependencies.
+Go 1.22 added method + pattern routing. ICT has ~12 endpoints — stdlib is sufficient and avoids external router dependencies.
 
 ### Why React over HTMX?
 
@@ -250,6 +249,80 @@ internal/api/
 
 ---
 
+## Backend Data Model & Maintenance
+
+The API endpoints are thin readers over a **catalog** of static, version-controlled
+configuration data. This catalog — not the handler code — is what the team maintains
+as verticals, SKUs, platforms, and OSes evolve. Keeping it declarative (YAML/JSON
+checked into the repo) means changes are reviewable in PRs and require no code edits.
+
+### Catalog (`internal/catalog/`)
+
+```
+internal/catalog/
+├── catalog.go              # Loads + validates catalog at startup, serves queries
+├── data/
+│   ├── verticals.yaml      # vertical → displayName, description, supportedOs, defaultOs, imageType, packages, disk
+│   ├── skus.yaml           # vertical → list of SKUs (id, displayName, extra packages/repos)
+│   ├── platforms.yaml      # platform → displayName, description, HW-enablement packages/repos, kernel args
+│   ├── targets.yaml        # OS distribution → displayName, os family, arch, base packages
+│   └── package-repos.yaml  # repo → displayName, url, key, OS compatibility, enabledByDefault
+└── catalog_test.go         # Schema + cross-reference validation (see below)
+```
+
+### What each endpoint reads
+
+| Endpoint | Catalog source |
+|----------|----------------|
+| `GET /verticals` | `verticals.yaml` (id, displayName, description, supportedOs, defaultOs) |
+| `GET /verticals/{id}/skus` | `skus.yaml` |
+| `GET /verticals/{id}/defaults` | `verticals.yaml` merged with `skus.yaml` + `platforms.yaml` overlays, refined by the `os`/`sku`/`platform` query params |
+| `GET /platforms` | `platforms.yaml` |
+| `GET /targets` | `targets.yaml` |
+| `GET /package-repos` | `package-repos.yaml` |
+
+### Defaults resolution (what `compose` actually merges)
+
+`getVerticalDefaults` and `POST /templates/compose` resolve a final template by
+layering, in order:
+
+1. **OS base** (`targets.yaml`) — base packages for the chosen OS distribution
+2. **Vertical defaults** (`verticals.yaml`) — packages, image type, disk layout
+3. **SKU overlay** (`skus.yaml`) — SKU-specific additions
+4. **Platform overlay** (`platforms.yaml`) — HW-enablement packages, kernel args, repos
+
+The chosen OS comes from the request (`os` param), falling back to the vertical's
+`defaultOs`. Because OS is now a per-vertical list (`supportedOs`), adding a second
+OS to a vertical is a pure data change in `verticals.yaml` — no API or UI code change.
+
+### Maintenance tasks (data-only, no code)
+
+| Change | Edit |
+|--------|------|
+| Add a vertical | Append to `verticals.yaml` (+ `skus.yaml` if it has SKUs) |
+| Add a SKU | Append under the vertical in `skus.yaml` |
+| Add an OS to a vertical | Add the OS id to that vertical's `supportedOs` in `verticals.yaml`; ensure the OS exists in `targets.yaml` |
+| Add a platform | Append to `platforms.yaml` |
+| Add a package repo | Append to `package-repos.yaml` |
+| Change a vertical's default packages/disk/image type | Edit `verticals.yaml` |
+
+### Validation
+
+`catalog_test.go` runs in CI and enforces referential integrity so bad data
+fails the build rather than the running server:
+
+- Every `defaultOs` is present in that vertical's `supportedOs`
+- Every `supportedOs` id exists in `targets.yaml`
+- Every SKU references an existing vertical
+- Every package repo's OS compatibility references a known OS family
+- No duplicate ids within any catalog file
+
+> **Out of scope for MVP-1:** a live package index. `GET /packages/search` is
+> backed by a static/sample package list in MVP-1; wiring it to real repository
+> metadata (apt/dnf indices) is future work.
+
+---
+
 ## Build & Development Workflow
 
 ### Development
@@ -271,8 +344,10 @@ go build -o image-composer-tool ./cmd/image-composer-tool
 
 ### Type Generation
 
+Each endpoint declares an `operationId` (e.g. `listVerticals`, `composeTemplate`, `startBuild`), so generated Go and TypeScript client functions get stable, readable names.
+
 ```bash
-oapi-codegen -generate types -o internal/api/types.gen.go api/v1/openapi-template-builder.yaml
+oapi-codegen -generate types,client -o internal/api/types.gen.go api/v1/openapi-template-builder.yaml
 npx openapi-typescript api/v1/openapi-template-builder.yaml -o web/src/api/types.ts
 ```
 
@@ -294,12 +369,12 @@ npx openapi-typescript api/v1/openapi-template-builder.yaml -o web/src/api/types
 
 ### Benefits
 
-1. **Single binary**: `go build` produces one artifact with UI + API + Swagger docs
+1. **Single binary**: `go build` produces one artifact with UI + API
 2. **Type-safe end-to-end**: OpenAPI generates both Go and TypeScript types
 3. **Proven UX**: Production mirrors the validated prototype exactly
-4. **Vertical-first UX**: Non-expert users select a vertical and get working defaults — 4 dropdowns + Build
+4. **Vertical-first UX**: Non-expert users pick a vertical and get working defaults — 4 dropdowns + Build
 5. **Seamless escalation**: Basic → Advanced carries all selections forward, no re-entry
-6. **SBOM output**: Every build produces both image and software bill of materials
+6. **SBOM output**: Every build produces both an image and a software bill of materials
 
 ### Trade-offs
 
@@ -310,7 +385,7 @@ npx openapi-typescript api/v1/openapi-template-builder.yaml -o web/src/api/types
 ### Risks
 
 1. **Frontend skill gap** — mitigated by React + Shadcn (copy-paste, good docs) + prototype as reference
-2. **Vertical preset management** — must be maintained as new verticals/SKUs are added
+2. **Catalog drift** — verticals/SKUs/platforms/OSes are maintained as data (`internal/catalog/data/*.yaml`); CI validation (`catalog_test.go`) enforces referential integrity so bad data fails the build. See [Backend Data Model & Maintenance](#backend-data-model--maintenance).
 3. **YAML preview fidelity** — client-side YAML generation must match ICT template schema exactly
 
 ---
@@ -324,7 +399,6 @@ npx openapi-typescript api/v1/openapi-template-builder.yaml -o web/src/api/types
 - [Zustand](https://zustand-demo.pmnd.rs/)
 - [oapi-codegen](https://github.com/oapi-codegen/oapi-codegen)
 
-
 ---
 
 ## Revision History
@@ -333,3 +407,5 @@ npx openapi-typescript api/v1/openapi-template-builder.yaml -o web/src/api/types
 |------|--------|--------|
 | 2026-06-26 | ICT Team | Initial proposal — Basic/Advanced/Build MVP |
 | 2026-06-28 | ICT Team | Updated to match prototype: renamed Build→Build Image, IMG→QCOW, removed kernel/users/policies/unattended steps, removed info cards/progress bar/build history, added Review Image Configuration checkbox, added artifacts table (Image+SBOM), added Basic→Advanced sync, reordered steps (Target→Packages→Disk→Review), updated API endpoints and project structure |
+| 2026-06-28 | ICT Team | Editorial cleanup; OpenAPI spec rewritten to 12 endpoints with `operationId`s for codegen; removed embedded Swagger UI in favor of spec-in-repo |
+| 2026-06-28 | ICT Team | Basic tab OS dropdown now per-vertical (`supportedOs`/`defaultOs`), future-proofed for multiple OSes per vertical; added `os` query param to `getVerticalDefaults`; documented Backend Data Model & Maintenance (catalog + defaults resolution + CI validation) |

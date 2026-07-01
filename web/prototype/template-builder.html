@@ -547,13 +547,7 @@ body {
       <div class="form-group" id="os-selection">
         <label class="form-label">Operating System</label>
         <select class="form-select" id="select-os" onchange="onSelectionChange()">
-          <option value="" disabled selected>-- Select Operating System --</option>
-          <option value="ubuntu24">Ubuntu 24.04</option>
-          <option value="ubuntu26">Ubuntu 26.04</option>
-          <option value="debian13">Debian 13</option>
-          <option value="azl3">Azure Linux 3</option>
-          <option value="elxr13">Wind River eLxr 13</option>
-          <option value="emt3">Edge Microvisor Toolkit 3</option>
+          <!-- Options populated by onVerticalChange() from the vertical's supportedOs list -->
         </select>
       </div>
 
@@ -692,36 +686,40 @@ const VERTICAL_SKUS = {
   ]
 };
 
+// supportedOs is a list per vertical (future-proof). MVP-1 ships one OS per
+// vertical except Generic, which is intentionally flexible. defaultOs is the
+// pre-selected option. When a vertical gains more OSes, just extend supportedOs.
 const VERTICAL_PRESETS = {
-  'generic': { os: 'ubuntu24', osLabel: 'Ubuntu 24.04', imageType: 'raw', unattended: false, showOsSelector: true,
+  'generic': { imageType: 'raw', unattended: false,
+    supportedOs: ['ubuntu24', 'ubuntu26', 'debian13', 'azl3', 'elxr13', 'emt3'], defaultOs: 'ubuntu24',
     imageName: 'generic-edge-image', packages: ['cloud-init', 'rsyslog', 'systemd-networkd'], disk: { size: '4GiB', partitionTableType: 'GPT', partitions: 2 }
   },
   'physical-ai': {
-    os: 'ubuntu24', osLabel: 'Ubuntu 24.04', imageType: 'raw', unattended: false, showOsSelector: false,
+    imageType: 'raw', unattended: false, supportedOs: ['ubuntu24'], defaultOs: 'ubuntu24',
     imageName: 'physical-ai-image', packages: ['openvino-runtime', 'intel-level-zero-gpu', 'docker-ce', 'onnxruntime', 'cloud-init'], disk: { size: '8GiB', partitionTableType: 'GPT', partitions: 2 }
   },
   'robotics': {
-    os: 'ubuntu24', osLabel: 'Ubuntu 24.04', imageType: 'iso', unattended: false, showOsSelector: false,
+    imageType: 'iso', unattended: false, supportedOs: ['ubuntu24'], defaultOs: 'ubuntu24',
     imageName: 'robotics-image', packages: ['ros-jazzy-base', 'ros-jazzy-navigation2', 'openvino-runtime', 'docker-ce', 'intel-level-zero-gpu', 'cloud-init'], disk: { size: '8GiB', partitionTableType: 'GPT', partitions: 2 }
   },
   'agentic-ai': {
-    os: 'ubuntu24', osLabel: 'Ubuntu 24.04', imageType: 'raw', unattended: false, showOsSelector: false,
+    imageType: 'raw', unattended: false, supportedOs: ['ubuntu24'], defaultOs: 'ubuntu24',
     imageName: 'agentic-ai-image', packages: ['vllm', 'langchain', 'openvino-genai', 'k3s', 'docker-ce', 'cloud-init'], disk: { size: '16GiB', partitionTableType: 'GPT', partitions: 2 }
   },
   'health': {
-    os: 'ubuntu24', osLabel: 'Ubuntu 24.04', imageType: 'qcow', unattended: false, showOsSelector: false,
+    imageType: 'qcow', unattended: false, supportedOs: ['ubuntu24'], defaultOs: 'ubuntu24',
     imageName: 'health-edge-image', packages: ['openvino-runtime', 'auditd', 'cryptsetup', 'cloud-init', 'apparmor'], disk: { size: '8GiB', partitionTableType: 'GPT', partitions: 3 }
   },
   'fed-aero': {
-    os: 'ubuntu24', osLabel: 'Ubuntu 24.04', imageType: 'raw', unattended: true, showOsSelector: false,
+    imageType: 'raw', unattended: true, supportedOs: ['ubuntu24'], defaultOs: 'ubuntu24',
     imageName: 'fed-aero-image', packages: ['auditd', 'aide', 'fapolicyd', 'openscap', 'cryptsetup', 'apparmor'], disk: { size: '8GiB', partitionTableType: 'GPT', partitions: 3 }
   },
   'industrial': {
-    os: 'elxr13', osLabel: 'Wind River eLxr 13', imageType: 'raw', unattended: true, showOsSelector: false,
+    imageType: 'raw', unattended: true, supportedOs: ['elxr13'], defaultOs: 'elxr13',
     imageName: 'industrial-iot-image', packages: ['opcua-stack', 'mosquitto', 'collectd', 'docker-ce', 'cloud-init'], disk: { size: '4GiB', partitionTableType: 'GPT', partitions: 2 }
   },
   'retail': {
-    os: 'ubuntu24', osLabel: 'Ubuntu 24.04', imageType: 'qcow', unattended: false, showOsSelector: false,
+    imageType: 'qcow', unattended: false, supportedOs: ['ubuntu24'], defaultOs: 'ubuntu24',
     imageName: 'retail-edge-image', packages: ['docker-ce', 'nginx', 'cloud-init', 'collectd'], disk: { size: '8GiB', partitionTableType: 'GPT', partitions: 2 }
   }
 };
@@ -797,13 +795,16 @@ function onVerticalChange() {
   const skus = VERTICAL_SKUS[vertical] || [];
   skuSelect.innerHTML = '<option value="">-- Select SKU --</option>' + skus.map(s => `<option value="${s.id}">${s.label}</option>`).join('');
 
-  // Show/hide OS
-  document.getElementById('os-selection').style.display = preset.showOsSelector ? 'block' : 'none';
+  // Populate OS dropdown from the vertical's supported OSes (defaultOs preselected).
+  // MVP-1 has one OS per vertical, but this scales as supportedOs grows.
+  const osSelect = document.getElementById('select-os');
+  const supportedOs = preset.supportedOs || [];
+  osSelect.innerHTML = supportedOs.map(id => `<option value="${id}" ${id === preset.defaultOs ? 'selected' : ''}>${OS_LABELS[id] || id}</option>`).join('');
 
   state.sku = '';
   state.platform = '';
   document.getElementById('select-platform').value = '';
-  state.os = preset.os;
+  state.os = preset.defaultOs;
   state.imageType = preset.imageType;
   state.unattended = preset.unattended;
   uncheckReview();
@@ -812,9 +813,7 @@ function onVerticalChange() {
 function onSelectionChange() {
   state.sku = document.getElementById('select-sku').value;
   state.platform = document.getElementById('select-platform').value;
-  if (VERTICAL_PRESETS[state.vertical].showOsSelector) {
-    state.os = document.getElementById('select-os').value;
-  }
+  state.os = document.getElementById('select-os').value;
   uncheckReview();
 }
 
