@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/security"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/slice"
 )
 
@@ -613,6 +614,183 @@ func validateAndFixImmutabilityConfig(template *ImageTemplate) {
 		template.SystemConfig.Immutability.Enabled = false
 		log.Infof("Immutability has been disabled due to missing hash partition.")
 	}
+}
+
+func resolveExtendsChain(templatePath string) ([]*ImageTemplate, error) {
+	startPath, err := filepath.Abs(filepath.Clean(templatePath))
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve template path: %w", err)
+	}
+
+	leafToRoot := make([]*ImageTemplate, 0)
+	displayPaths := make([]string, 0)
+	// visited maps a canonicalized (symlink-resolved) path to its position in the
+	// chain. Canonicalizing guards against directory symlinks aliasing two distinct
+	// textual paths to the same file, which would otherwise evade cycle detection.
+	visited := make(map[string]int)
+	currentPath := startPath
+
+	var leafTarget TargetInfo
+
+	for {
+		tmpl, err := LoadTemplate(currentPath, false)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load template in extends chain: %w", err)
+		}
+
+		if len(leafToRoot) == 0 {
+			leafTarget = tmpl.Target
+		} else if !targetsMatch(leafTarget, tmpl.Target) {
+			level := len(leafToRoot)
+			return nil, fmt.Errorf(
+				"extends target mismatch at level %d: child targets %s but parent targets %s",
+				level,
+				formatTarget(leafTarget),
+				formatTarget(tmpl.Target),
+			)
+		}
+
+		visited[canonicalPath(currentPath)] = len(displayPaths)
+		leafToRoot = append(leafToRoot, tmpl)
+		displayPaths = append(displayPaths, currentPath)
+
+		if strings.TrimSpace(tmpl.Extends) == "" {
+			break
+		}
+
+		parentPath, err := resolveExtendsParentPath(currentPath, tmpl.Extends)
+		if err != nil {
+			return nil, err
+		}
+
+		if _, err := os.Stat(parentPath); err != nil {
+			if os.IsNotExist(err) {
+				return nil, fmt.Errorf("extends path not found: %s", parentPath)
+			}
+			return nil, fmt.Errorf("failed to access extends path %s: %w", parentPath, err)
+		}
+
+		if _, err := security.CheckSymlink(parentPath, security.RejectSymlinks); err != nil {
+			return nil, fmt.Errorf("invalid extends path: %w", err)
+		}
+
+		// The lexical guard in resolveExtendsParentPath cannot see through directory
+		// symlinks inside the child directory. Re-check containment against the fully
+		// symlink-resolved paths so a symlink like child/link -> /outside cannot escape.
+		if err := verifyResolvedContainment(currentPath, parentPath); err != nil {
+			return nil, err
+		}
+
+		if cycleStart, exists := visited[canonicalPath(parentPath)]; exists {
+			cyclePaths := append([]string{}, displayPaths[cycleStart:]...)
+			cyclePaths = append(cyclePaths, parentPath)
+			return nil, fmt.Errorf("circular extends detected: %s", formatCyclePath(cyclePaths))
+		}
+
+		currentPath = parentPath
+	}
+
+	depth := len(leafToRoot) - 1
+	if depth > 4 {
+		log.Warnf("extends chain depth %d exceeds recommended maximum of 4", depth)
+	}
+
+	rootToLeaf := make([]*ImageTemplate, len(leafToRoot))
+	for i := range leafToRoot {
+		rootToLeaf[len(leafToRoot)-1-i] = leafToRoot[i]
+	}
+
+	return rootToLeaf, nil
+}
+
+func resolveExtendsParentPath(childTemplatePath, extendsRef string) (string, error) {
+	childPath, err := filepath.Abs(filepath.Clean(childTemplatePath))
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve child template path: %w", err)
+	}
+
+	childDir := filepath.Dir(childPath)
+
+	var parentCandidate string
+	if filepath.IsAbs(extendsRef) {
+		parentCandidate = filepath.Clean(extendsRef)
+	} else {
+		parentCandidate = filepath.Clean(filepath.Join(childDir, extendsRef))
+	}
+
+	parentPath, err := filepath.Abs(parentCandidate)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve extends path %q: %w", extendsRef, err)
+	}
+
+	rel, err := filepath.Rel(childDir, parentPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to evaluate extends path %q: %w", extendsRef, err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("extends path escapes child template's directory: %s", parentPath)
+	}
+
+	return parentPath, nil
+}
+
+// verifyResolvedContainment ensures that, after resolving all symlinks, the parent
+// template still lives within the child template's directory. This defends against
+// directory symlinks inside the child directory that the lexical check in
+// resolveExtendsParentPath cannot detect. Both paths must already exist.
+func verifyResolvedContainment(childTemplatePath, parentPath string) error {
+	resolvedChildDir, err := filepath.EvalSymlinks(filepath.Dir(childTemplatePath))
+	if err != nil {
+		return fmt.Errorf("failed to resolve child template directory: %w", err)
+	}
+
+	resolvedParent, err := filepath.EvalSymlinks(parentPath)
+	if err != nil {
+		return fmt.Errorf("failed to resolve extends path %s: %w", parentPath, err)
+	}
+
+	rel, err := filepath.Rel(resolvedChildDir, resolvedParent)
+	if err != nil {
+		return fmt.Errorf("failed to evaluate resolved extends path %s: %w", parentPath, err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("extends path escapes child template's directory: %s", parentPath)
+	}
+
+	return nil
+}
+
+// canonicalPath returns a symlink-resolved absolute path for use as a stable
+// cycle-detection key. It falls back to the cleaned absolute path when the file
+// cannot be resolved (e.g. it does not exist yet), so callers always receive a
+// deterministic key.
+func canonicalPath(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	if abs, err := filepath.Abs(filepath.Clean(path)); err == nil {
+		return abs
+	}
+	return filepath.Clean(path)
+}
+
+func targetsMatch(a, b TargetInfo) bool {
+	return a.OS == b.OS &&
+		a.Dist == b.Dist &&
+		a.Arch == b.Arch &&
+		a.ImageType == b.ImageType
+}
+
+func formatTarget(target TargetInfo) string {
+	return fmt.Sprintf("%s/%s/%s/%s", target.OS, target.Dist, target.Arch, target.ImageType)
+}
+
+func formatCyclePath(paths []string) string {
+	names := make([]string, 0, len(paths))
+	for _, p := range paths {
+		names = append(names, filepath.Base(p))
+	}
+	return strings.Join(names, " -> ")
 }
 
 // LoadAndMergeTemplate loads a user template and merges it with the appropriate default config
