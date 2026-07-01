@@ -631,9 +631,17 @@ func validateAndFixImmutabilityConfig(template *ImageTemplate) {
 }
 
 func resolveExtendsChain(templatePath string) ([]*ImageTemplate, error) {
+	templates, _, err := resolveExtendsChainWithPaths(templatePath)
+	return templates, err
+}
+
+// resolveExtendsChainWithPaths behaves like resolveExtendsChain but additionally
+// returns the absolute file path of each template in root-to-leaf order, which
+// callers use for logging the resolved chain.
+func resolveExtendsChainWithPaths(templatePath string) ([]*ImageTemplate, []string, error) {
 	startPath, err := filepath.Abs(filepath.Clean(templatePath))
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve template path: %w", err)
+		return nil, nil, fmt.Errorf("failed to resolve template path: %w", err)
 	}
 
 	leafToRoot := make([]*ImageTemplate, 0)
@@ -649,14 +657,14 @@ func resolveExtendsChain(templatePath string) ([]*ImageTemplate, error) {
 	for {
 		tmpl, err := LoadTemplate(currentPath, false)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load template in extends chain: %w", err)
+			return nil, nil, fmt.Errorf("failed to load template in extends chain: %w", err)
 		}
 
 		if len(leafToRoot) == 0 {
 			leafTarget = tmpl.Target
 		} else if !targetsMatch(leafTarget, tmpl.Target) {
 			level := len(leafToRoot)
-			return nil, fmt.Errorf(
+			return nil, nil, fmt.Errorf(
 				"extends target mismatch at level %d: child targets %s but parent targets %s",
 				level,
 				formatTarget(leafTarget),
@@ -674,31 +682,31 @@ func resolveExtendsChain(templatePath string) ([]*ImageTemplate, error) {
 
 		parentPath, err := resolveExtendsParentPath(currentPath, tmpl.Extends)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		if _, err := os.Stat(parentPath); err != nil {
 			if os.IsNotExist(err) {
-				return nil, fmt.Errorf("extends path not found: %s", parentPath)
+				return nil, nil, fmt.Errorf("extends path not found: %s", parentPath)
 			}
-			return nil, fmt.Errorf("failed to access extends path %s: %w", parentPath, err)
+			return nil, nil, fmt.Errorf("failed to access extends path %s: %w", parentPath, err)
 		}
 
 		if _, err := security.CheckSymlink(parentPath, security.RejectSymlinks); err != nil {
-			return nil, fmt.Errorf("invalid extends path: %w", err)
+			return nil, nil, fmt.Errorf("invalid extends path: %w", err)
 		}
 
 		// The lexical guard in resolveExtendsParentPath cannot see through directory
 		// symlinks inside the child directory. Re-check containment against the fully
 		// symlink-resolved paths so a symlink like child/link -> /outside cannot escape.
 		if err := verifyResolvedContainment(currentPath, parentPath); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		if cycleStart, exists := visited[canonicalPath(parentPath)]; exists {
 			cyclePaths := append([]string{}, displayPaths[cycleStart:]...)
 			cyclePaths = append(cyclePaths, parentPath)
-			return nil, fmt.Errorf("circular extends detected: %s", formatCyclePath(cyclePaths))
+			return nil, nil, fmt.Errorf("circular extends detected: %s", formatCyclePath(cyclePaths))
 		}
 
 		currentPath = parentPath
@@ -710,11 +718,13 @@ func resolveExtendsChain(templatePath string) ([]*ImageTemplate, error) {
 	}
 
 	rootToLeaf := make([]*ImageTemplate, len(leafToRoot))
+	rootToLeafPaths := make([]string, len(displayPaths))
 	for i := range leafToRoot {
 		rootToLeaf[len(leafToRoot)-1-i] = leafToRoot[i]
+		rootToLeafPaths[len(displayPaths)-1-i] = displayPaths[i]
 	}
 
-	return rootToLeaf, nil
+	return rootToLeaf, rootToLeafPaths, nil
 }
 
 func resolveExtendsParentPath(childTemplatePath, extendsRef string) (string, error) {
@@ -810,34 +820,67 @@ func formatCyclePath(paths []string) string {
 // LoadAndMergeTemplate loads a user template and merges it with the appropriate default config
 func LoadAndMergeTemplate(templatePath string) (*ImageTemplate, error) {
 
-	// Load the user template first
-	userTemplate, err := LoadTemplate(templatePath, false)
+	// Load the leaf (user) template first so malformed input yields a clear error.
+	leafTemplate, err := LoadTemplate(templatePath, false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load user template: %w", err)
 	}
 
-	log.Infof("Loaded user template: %s (type: %s)", userTemplate.Image.Name, userTemplate.Target.ImageType)
+	log.Infof("Loaded user template: %s (type: %s)", leafTemplate.Image.Name, leafTemplate.Target.ImageType)
 
-	// Create default config loader
-	loader := NewDefaultConfigLoader(userTemplate.Target.OS, userTemplate.Target.Dist, userTemplate.Target.Arch)
+	// Build the layer chain (root -> ... -> leaf). Without an extends field this
+	// is a single-element chain, preserving the existing two-layer merge behavior.
+	chain := []*ImageTemplate{leafTemplate}
+	if strings.TrimSpace(leafTemplate.Extends) != "" {
+		resolved, chainPaths, err := resolveExtendsChainWithPaths(templatePath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve extends chain: %w", err)
+		}
+		chain = resolved
+
+		names := make([]string, len(chainPaths))
+		for i, p := range chainPaths {
+			names[i] = filepath.Base(p)
+		}
+		log.Infof("Extends chain: %s", strings.Join(names, " -> "))
+	}
+
+	// The leaf template's target determines which default configuration applies.
+	loader := NewDefaultConfigLoader(leafTemplate.Target.OS, leafTemplate.Target.Dist, leafTemplate.Target.Arch)
 
 	// Load the appropriate default configuration
-	defaultTemplate, err := loader.LoadDefaultConfig(userTemplate.Target.ImageType)
+	defaultTemplate, err := loader.LoadDefaultConfig(leafTemplate.Target.ImageType)
 	if err != nil {
 		log.Debugf("Default template: %+v", defaultTemplate)
 		log.Warnf("Could not load default configuration: %v", err)
-		log.Info("Proceeding with user template only")
-		return userTemplate, nil
+		log.Info("Proceeding without default configuration")
+		return foldChain(chain[0], chain[1:])
 	}
 
-	// Merge configurations
-	mergedTemplate, err := MergeConfigurations(userTemplate, defaultTemplate)
+	// Iterative fold: start from the default configuration as the base, then
+	// merge each layer from root to leaf so more specific layers win.
+	mergedTemplate, err := foldChain(defaultTemplate, chain)
 	if err != nil {
-		return nil, fmt.Errorf("failed to merge configurations: %w", err)
+		return nil, err
 	}
 
 	log.Infof("Successfully created merged configuration with system config: %s and disk config: %s",
 		mergedTemplate.SystemConfig.Name, mergedTemplate.Disk.Name)
 
 	return mergedTemplate, nil
+}
+
+// foldChain merges each layer over an accumulating base. The base acts as the
+// lowest-precedence configuration and each successive layer takes precedence,
+// so the final leaf template overrides everything before it.
+func foldChain(base *ImageTemplate, layers []*ImageTemplate) (*ImageTemplate, error) {
+	merged := base
+	for _, layer := range layers {
+		next, err := MergeConfigurations(layer, merged)
+		if err != nil {
+			return nil, fmt.Errorf("failed to merge configurations: %w", err)
+		}
+		merged = next
+	}
+	return merged, nil
 }
