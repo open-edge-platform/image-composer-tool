@@ -145,6 +145,17 @@ type OverlayPolicy struct {
 	// always carries its zero value (false): overlay mode is additive-only in
 	// v1, so downgrades are blocked by default. A future release can surface it.
 	AllowDowngrade bool `yaml:"-"`
+
+	// AllowUpgrade gates whether preflight permits upgrading a baseline package
+	// to a newer version. Like AllowRemoval/AllowDowngrade it is intentionally
+	// NOT a YAML field (the schema rejects it via additionalProperties:false) and
+	// always carries its zero value (false): overlay mode is additive-only in v1,
+	// so upgrades of existing baseline packages are blocked by default. This also
+	// keeps the deb and rpm backends consistent — the additive rpm installer
+	// (rpm -i) cannot replace an installed package, so a permitted upgrade would
+	// fail at install time on RPM baselines; blocking it in preflight surfaces the
+	// violation uniformly up front. A future release can surface this field.
+	AllowUpgrade bool `yaml:"-"`
 }
 
 // ImageTemplate represents the YAML image template structure

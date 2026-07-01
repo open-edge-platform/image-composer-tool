@@ -399,6 +399,10 @@ func (b *rpmInstallerBackend) install(req installRequest) error {
 
 	// rpm -i installs (adds) the local artifacts; it deliberately does not upgrade
 	// or replace existing baseline packages, preserving the additive-only contract.
+	// rpm -i fails outright on an already-installed package, but that never reaches
+	// here: the preflight gate blocks any ActionUpgrade by default (AllowUpgrade is
+	// off in v1), and ToInstall excludes packages already present in the baseline,
+	// so only genuinely-new packages are installed.
 	// "--" terminates option parsing so a URL-derived artifact basename beginning
 	// with '-' is treated as a file path rather than an rpm option.
 	cmd := "rpm -i -v -- " + strings.Join(paths, " ")

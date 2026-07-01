@@ -37,9 +37,18 @@ func TestEvaluatePreflight_PolicyPaths(t *testing.T) {
 			wantBlock:  false,
 		},
 		{
-			name:       "upgrade is allowed (additive bump of an existing pkg)",
+			name:       "upgrade blocked when allowUpgrade is false (additive-only default)",
 			baseline:   []BaselinePackage{installedDeb("curl", "7.0")},
 			resolved:   []ResolvedPackage{{Name: "curl", Version: "8.0", Arch: "amd64"}},
+			wantAction: ActionUpgrade,
+			wantBlock:  true,
+			wantRule:   ruleAllowUpgrade,
+		},
+		{
+			name:       "upgrade allowed when allowUpgrade is true",
+			baseline:   []BaselinePackage{installedDeb("curl", "7.0")},
+			resolved:   []ResolvedPackage{{Name: "curl", Version: "8.0", Arch: "amd64"}},
+			policy:     config.OverlayPolicy{AllowUpgrade: true},
 			wantAction: ActionUpgrade,
 			wantBlock:  false,
 		},
@@ -141,10 +150,13 @@ func TestEvaluatePreflight_PolicyPaths(t *testing.T) {
 			wantBlock:  false,
 		},
 		{
+			// Purpose of this case is the rpm version comparator (2.36-1 < 2.38-1),
+			// so allow upgrades to isolate classification from the additive-only gate.
 			name:       "rpm upgrade classified with rpm comparator",
 			family:     PackageManagerDNF,
 			baseline:   []BaselinePackage{{Name: "glibc", Version: "2.36-1", Arch: "x86_64", Installed: true}},
 			resolved:   []ResolvedPackage{{Name: "glibc", Version: "2.38-1", Arch: "x86_64"}},
+			policy:     config.OverlayPolicy{AllowUpgrade: true},
 			wantAction: ActionUpgrade,
 			wantBlock:  false,
 		},
@@ -228,7 +240,7 @@ func TestEvaluatePreflight_Counts(t *testing.T) {
 			{Type: ActionRemove, Package: "oldpkg"},
 			{Type: ActionConflict, Package: "foo", ConflictWith: "bar"},
 		},
-		Policy: config.OverlayPolicy{AllowRemoval: true, AllowDowngrade: true, ConflictPolicy: config.OverlayConflictPolicyAllowExplicit},
+		Policy: config.OverlayPolicy{AllowRemoval: true, AllowDowngrade: true, AllowUpgrade: true, ConflictPolicy: config.OverlayConflictPolicyAllowExplicit},
 	})
 
 	if report.Adds != 1 || report.Upgrades != 1 || report.Downgrades != 1 || report.Removes != 1 || report.Conflicts != 1 {
@@ -416,11 +428,14 @@ func TestIsBootloaderPackage(t *testing.T) {
 // positive: a clean upgrade of a non-bootloader package that shares a bootloader
 // prefix must pass.
 func TestEvaluatePreflight_BootChartNotBlocked(t *testing.T) {
+	// This case isolates the bootloader-prefix false positive, so allow upgrades:
+	// the assertion is that systemd-bootchart is not misclassified as a bootloader
+	// package, not that upgrades are permitted by default (they are not).
 	report := EvaluatePreflight(PreflightInput{
 		Family:   PackageManagerAPT,
 		Baseline: []BaselinePackage{installedDeb("systemd-bootchart", "233")},
 		Resolved: []ResolvedPackage{{Name: "systemd-bootchart", Version: "234", Arch: "amd64"}},
-		Policy:   config.OverlayPolicy{},
+		Policy:   config.OverlayPolicy{AllowUpgrade: true},
 	})
 	if report.Blocked {
 		t.Errorf("systemd-bootchart upgrade wrongly blocked: %+v", report.Violations)
