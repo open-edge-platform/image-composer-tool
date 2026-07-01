@@ -237,12 +237,15 @@ internal/api/
 ├── server.go
 ├── router.go
 ├── middleware.go
-├── handlers_verticals.go    # GET /verticals, /verticals/{id}/skus, /verticals/{id}/defaults
-├── handlers_platforms.go    # GET /platforms
-├── handlers_targets.go      # GET /targets (OS list)
-├── handlers_packages.go     # GET /packages/search, GET /package-repos
-├── handlers_templates.go    # POST /templates/compose (merge intent → YAML)
-├── handlers_builds.go       # POST /builds, GET /builds/{id}/logs (SSE), GET /builds/{id}/artifacts
+├── manifest.go            # Loads data/manifest.yaml, maps UI combinations → template file
+├── data/
+│   └── manifest.yaml      # Combination → template file + display labels
+├── handlers_verticals.go  # GET /verticals, /verticals/{id}/skus, /verticals/{id}/defaults
+├── handlers_platforms.go  # GET /platforms
+├── handlers_targets.go    # GET /targets (OS list)
+├── handlers_packages.go   # GET /packages/search, GET /package-repos
+├── handlers_templates.go  # POST /templates/compose (returns matched template YAML)
+├── handlers_builds.go     # POST /builds, GET /builds/{id}/logs (SSE), GET /builds/{id}/artifacts
 ├── sse.go
 └── errors.go
 ```
@@ -251,75 +254,86 @@ internal/api/
 
 ## Backend Data Model & Maintenance
 
-The API endpoints are thin readers over a **catalog** of static, version-controlled
-configuration data. This catalog — not the handler code — is what the team maintains
-as verticals, SKUs, platforms, and OSes evolve. Keeping it declarative (YAML/JSON
-checked into the repo) means changes are reviewable in PRs and require no code edits.
+The backend follows ICT's existing model: **one complete, tested template file per
+combination of Basic-UI selections**. There is no runtime merging or overlay logic —
+each combination resolves to a single pre-authored template in the `image-templates/`
+directory. The ICT engineering team owns these templates and updates them only after
+thorough testing; the API never synthesizes a template from scratch.
 
-### Catalog (`internal/catalog/`)
+This keeps the backend trivially simple (a lookup, not a compositor) and guarantees
+that every image the UI can produce corresponds to a template that has been validated
+by engineering.
+
+### How selections map to a template
+
+The Basic UI collects five selections — **OS, vertical, SKU, platform, image type** —
+which together identify one template. This mirrors ICT's existing file-naming
+convention (`{os}-{arch}-{variant}-{platform}-{imageType}.yml`), e.g.:
+
+| Selection | Resolved template |
+|-----------|-------------------|
+| Ubuntu 24.04 · Robotics · AMR · — · ISO | `ubuntu24-x86_64-robotics-jazzy-iso.yml` |
+| Ubuntu 24.04 · Generic · Non-Realtime · PTL · RAW | `ubuntu24-x86_64-minimal-ptl-pv-raw.yml` |
+
+A small **manifest** maps each valid combination to its template file and to the
+display metadata the UI needs (vertical/SKU/platform/OS labels, image type). The
+manifest is the only new data artifact; the templates themselves already exist.
+
+### Data layout
 
 ```
-internal/catalog/
-├── catalog.go              # Loads + validates catalog at startup, serves queries
-├── data/
-│   ├── verticals.yaml      # vertical → displayName, description, supportedOs, defaultOs, imageType, packages, disk
-│   ├── skus.yaml           # vertical → list of SKUs (id, displayName, extra packages/repos)
-│   ├── platforms.yaml      # platform → displayName, description, HW-enablement packages/repos, kernel args
-│   ├── targets.yaml        # OS distribution → displayName, os family, arch, base packages
-│   └── package-repos.yaml  # repo → displayName, url, key, OS compatibility, enabledByDefault
-└── catalog_test.go         # Schema + cross-reference validation (see below)
+image-templates/                     # Existing — one tested template per combination
+├── ubuntu24-x86_64-robotics-jazzy-iso.yml
+├── ubuntu24-x86_64-minimal-ptl-pv-raw.yml
+└── ...
+
+internal/api/data/
+└── manifest.yaml                    # New — maps UI combinations → template file + labels
 ```
 
-### What each endpoint reads
+Example `manifest.yaml` entry:
 
-| Endpoint | Catalog source |
-|----------|----------------|
-| `GET /verticals` | `verticals.yaml` (id, displayName, description, supportedOs, defaultOs) |
-| `GET /verticals/{id}/skus` | `skus.yaml` |
-| `GET /verticals/{id}/defaults` | `verticals.yaml` merged with `skus.yaml` + `platforms.yaml` overlays, refined by the `os`/`sku`/`platform` query params |
-| `GET /platforms` | `platforms.yaml` |
-| `GET /targets` | `targets.yaml` |
-| `GET /package-repos` | `package-repos.yaml` |
+```yaml
+combinations:
+  - vertical: robotics
+    sku: amr
+    platform: null            # platform-agnostic template
+    os: ubuntu24
+    imageType: iso
+    template: ubuntu24-x86_64-robotics-jazzy-iso.yml
+```
 
-### Defaults resolution (what `compose` actually merges)
+### What each endpoint returns
 
-`getVerticalDefaults` and `POST /templates/compose` resolve a final template by
-layering, in order:
+| Endpoint | Source |
+|----------|--------|
+| `GET /verticals`, `/platforms`, `/targets`, `/verticals/{id}/skus` | Distinct values from `manifest.yaml` (drives the dropdowns; only combinations that resolve to a real template are offered) |
+| `GET /verticals/{id}/defaults` | The matched template — summary fields (packages, disk, image type) are read from that template file |
+| `POST /templates/compose` | Returns the matched template's YAML verbatim (used for the Advanced preview / Export YAML) |
+| `POST /builds` | Builds the matched template file directly |
 
-1. **OS base** (`targets.yaml`) — base packages for the chosen OS distribution
-2. **Vertical defaults** (`verticals.yaml`) — packages, image type, disk layout
-3. **SKU overlay** (`skus.yaml`) — SKU-specific additions
-4. **Platform overlay** (`platforms.yaml`) — HW-enablement packages, kernel args, repos
+### Maintenance (owned by ICT engineering)
 
-The chosen OS comes from the request (`os` param), falling back to the vertical's
-`defaultOs`. Because OS is now a per-vertical list (`supportedOs`), adding a second
-OS to a vertical is a pure data change in `verticals.yaml` — no API or UI code change.
+| Change | Action |
+|--------|--------|
+| Add/adjust a combination's image content | Edit the corresponding `image-templates/*.yml` (after testing), commit |
+| Add a new combination | Author + test a new template, add one `manifest.yaml` entry |
+| Add an OS/SKU/platform to a vertical | Author the template(s) for the new combination, add manifest entries |
 
-### Maintenance tasks (data-only, no code)
+Because the dropdown options are derived from the manifest, the UI can only ever offer
+combinations that have a tested template behind them — invalid selections are
+impossible to construct.
 
-| Change | Edit |
-|--------|------|
-| Add a vertical | Append to `verticals.yaml` (+ `skus.yaml` if it has SKUs) |
-| Add a SKU | Append under the vertical in `skus.yaml` |
-| Add an OS to a vertical | Add the OS id to that vertical's `supportedOs` in `verticals.yaml`; ensure the OS exists in `targets.yaml` |
-| Add a platform | Append to `platforms.yaml` |
-| Add a package repo | Append to `package-repos.yaml` |
-| Change a vertical's default packages/disk/image type | Edit `verticals.yaml` |
+### Advanced tab
 
-### Validation
+The Advanced tab starts from the matched template (via Basic → Advanced sync) and lets
+power users adjust packages, repositories, and disk layout on top of it. These edits
+produce a modified YAML for that build only; they do **not** alter the stored templates.
+Changing a default template remains an engineering-team action.
 
-`catalog_test.go` runs in CI and enforces referential integrity so bad data
-fails the build rather than the running server:
-
-- Every `defaultOs` is present in that vertical's `supportedOs`
-- Every `supportedOs` id exists in `targets.yaml`
-- Every SKU references an existing vertical
-- Every package repo's OS compatibility references a known OS family
-- No duplicate ids within any catalog file
-
-> **Out of scope for MVP-1:** a live package index. `GET /packages/search` is
-> backed by a static/sample package list in MVP-1; wiring it to real repository
-> metadata (apt/dnf indices) is future work.
+> **Out of scope for MVP-1:** a live package index. `GET /packages/search` is backed by
+> a static/sample package list in MVP-1; wiring it to real repository metadata
+> (apt/dnf indices) is future work.
 
 ---
 
@@ -385,7 +399,7 @@ npx openapi-typescript api/v1/openapi-template-builder.yaml -o web/src/api/types
 ### Risks
 
 1. **Frontend skill gap** — mitigated by React + Shadcn (copy-paste, good docs) + prototype as reference
-2. **Catalog drift** — verticals/SKUs/platforms/OSes are maintained as data (`internal/catalog/data/*.yaml`); CI validation (`catalog_test.go`) enforces referential integrity so bad data fails the build. See [Backend Data Model & Maintenance](#backend-data-model--maintenance).
+2. **Manifest/template drift** — each UI combination maps to a tested template in `image-templates/` via `manifest.yaml`; CI validates that every manifest entry points to an existing template file. Templates change only through engineering review. See [Backend Data Model & Maintenance](#backend-data-model--maintenance).
 3. **YAML preview fidelity** — client-side YAML generation must match ICT template schema exactly
 
 ---
@@ -409,3 +423,4 @@ npx openapi-typescript api/v1/openapi-template-builder.yaml -o web/src/api/types
 | 2026-06-28 | ICT Team | Updated to match prototype: renamed Build→Build Image, IMG→QCOW, removed kernel/users/policies/unattended steps, removed info cards/progress bar/build history, added Review Image Configuration checkbox, added artifacts table (Image+SBOM), added Basic→Advanced sync, reordered steps (Target→Packages→Disk→Review), updated API endpoints and project structure |
 | 2026-06-28 | ICT Team | Editorial cleanup; OpenAPI spec rewritten to 12 endpoints with `operationId`s for codegen; removed embedded Swagger UI in favor of spec-in-repo |
 | 2026-06-28 | ICT Team | Basic tab OS dropdown now per-vertical (`supportedOs`/`defaultOs`), future-proofed for multiple OSes per vertical; added `os` query param to `getVerticalDefaults`; documented Backend Data Model & Maintenance (catalog + defaults resolution + CI validation) |
+| 2026-06-28 | ICT Team | Replaced catalog/overlay data model with ICT's template-per-combination model: each UI selection maps via `manifest.yaml` to one pre-authored, engineering-tested template in `image-templates/`; `compose` returns the matched template rather than synthesizing one; Advanced edits apply per-request only |

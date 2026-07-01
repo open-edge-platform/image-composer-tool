@@ -81,9 +81,10 @@ paths:
       operationId: getVerticalDefaults
       summary: Get preset defaults for a vertical
       description: |
-        Returns the pre-configured defaults for a vertical including default OS,
-        image type, image name, packages, and disk layout. Used by the
-        "Review Image Configuration" panel in the Basic tab.
+        Returns the summary of the template matched by this vertical (plus optional
+        os/sku/platform) — image name, image type, packages, and disk layout read
+        from the pre-authored template file. Used by the "Review Image
+        Configuration" panel in the Basic tab.
       parameters:
         - $ref: "#/components/parameters/VerticalId"
         - name: os
@@ -238,14 +239,16 @@ paths:
     post:
       tags: [Templates]
       operationId: composeTemplate
-      summary: Compose a template from user intent
+      summary: Resolve a template from user selections
       description: |
-        Accepts structured user selections from the UI and generates the final
-        merged YAML template. This is the primary endpoint called when the user
-        clicks "Build Image" or "Export YAML".
+        Accepts the Basic-UI selections (vertical, SKU, platform, OS, image type)
+        and returns the matching pre-authored ICT template. This is the primary
+        endpoint called when the user clicks "Build Image" or "Export YAML".
 
-        The backend merges user intent with vertical defaults, platform-specific
-        packages, and OS base configuration to produce a complete ICT template.
+        The backend does NOT synthesize a template — it looks up the single tested
+        template mapped to this combination (via the manifest). Advanced-tab edits
+        (extra packages, repos, disk changes) are applied on top of that template
+        for the current request only and never modify the stored template.
       requestBody:
         required: true
         content:
@@ -757,7 +760,7 @@ components:
       properties:
         yaml:
           type: string
-          description: Generated YAML template content (complete, ready for ICT)
+          description: The matched template's YAML (complete, ready for ICT; includes any Advanced-tab edits for this request)
         validation:
           $ref: "#/components/schemas/ValidationResult"
         summary:
