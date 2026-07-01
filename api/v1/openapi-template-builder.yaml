@@ -290,9 +290,15 @@ paths:
       operationId: startBuild
       summary: Start an image build
       description: |
-        Triggers a new image build. Accepts either a compose request (user intent)
-        or raw YAML. The template is validated before the build starts.
-        Returns a build ID for tracking progress via SSE.
+        Triggers a new image build. The request is always self-contained (never a
+        delta) and carries exactly one of:
+
+        - `compose` — the Basic-tab selections; the backend looks up the matching
+          pre-authored template and builds it as-is.
+        - `yaml` — the complete edited template from the Advanced tab.
+
+        The template is validated before the build starts. Returns a build ID for
+        tracking progress via SSE.
       requestBody:
         required: true
         content:
@@ -839,7 +845,7 @@ components:
     BuildRequest:
       type: object
       description: |
-        Start a build. Provide exactly one of `compose` or `yaml` (never a diff —
+        Start a build. Carries exactly one of `compose` or `yaml` (never a diff —
         the payload is always self-contained):
 
         - **Basic tab** sends `compose` (the selections). The backend looks up the
@@ -847,6 +853,9 @@ components:
         - **Advanced tab** sends `yaml` — the complete, final template shown in the
           live preview (base template + the user's edits, serialized client-side).
           The whole template is sent, not a delta.
+      oneOf:
+        - required: [compose]
+        - required: [yaml]
       properties:
         compose:
           $ref: "#/components/schemas/ComposeRequest"
