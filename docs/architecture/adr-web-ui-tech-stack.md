@@ -40,13 +40,13 @@ The file `web/prototype/template-builder.html` demonstrates the exact views and 
 | Tab | Production Component | Key Interactions |
 |-----|---------------------|------------------|
 | **Basic** | `<BasicPage>` | Targeted Vertical dropdown (Generic + 7 verticals), SKU dropdown (vertical-specific), Platform dropdown (PTL/WCL/ARL/NVL), OS dropdown with "-- Select Operating System --" placeholder, "Review Image Configuration" checkbox expanding summary table (Image, Vertical, SKU, Platform, OS, Image Type, Disk, Packages). Any config change auto-unchecks review. |
-| **Advanced** | `<AdvancedPage>` | 4-step wizard: Step 1 (Target — same as Basic + Image Type/Name), Step 2 (Packages — repos + search/add), Step 3 (Disk — size/partitions), Step 4 (Review — summary + Export YAML + Build). Live YAML preview panel on right. |
+| **Advanced** | `<AdvancedPage>` | Step wizard. MVP-1 steps: Target (same as Basic + Image Type/Name), Packages (repos + search/add), Disk (size/partitions), Review (summary + Export YAML + Build). Live YAML preview panel on right. More steps may be added later. |
 | **Build Image** | `<BuildImagePage>` | Streaming log viewer (SSE) with "Build Status" title, artifacts table (Image + SBOM with copy-path icon) |
 
 ### Constraints
 
-- **Single binary deployment**: Frontend embedded via Go's `embed.FS`.
-- **Existing Go stack**: `net/http`, `cobra`, `jsonschema/v5`, `zap`, `yaml.v3`.
+- **Single binary deployment**: The compiled React frontend (static HTML/JS/CSS from `web/dist/`) is embedded into the Go binary via `embed.FS` and served by the same process that serves the API. Shipping and running ICT means shipping and running one executable — no separate web server, container, or Node.js runtime is required at deploy time.
+- **Existing Go stack**: reuse what ICT already depends on — `net/http`, `cobra`, `jsonschema/v5`, `zap`, `yaml.v3`.
 - **Team expertise**: Go-primary team, moderate frontend experience.
 - **Corporate proxy**: SSE (not WebSocket) for real-time streaming.
 
@@ -85,7 +85,7 @@ The file `web/prototype/template-builder.html` demonstrates the exact views and 
 | **Middleware** | Custom (CORS, logging, request-id) | Thin wrappers around stdlib |
 | **Serialization** | `encoding/json` | Request/response marshalling |
 | **Validation** | `santhosh-tekuri/jsonschema/v5` | Template validation (already in deps) |
-| **YAML** | `yaml.v3` + `sigs.k8s.io/yaml` | Template parsing and merge with vertical defaults |
+| **YAML** | `yaml.v3` + `sigs.k8s.io/yaml` | Read/serve matched template; apply Advanced-tab edits per request |
 | **SSE Streaming** | Custom `text/event-stream` writer | Build log streaming to UI |
 | **ICT Adapter** | `os/exec` subprocess | Translates intent to ICT calls, invokes `image-composer-tool build`, normalizes logs/artifacts |
 | **Logging** | `go.uber.org/zap` | Structured logs |
@@ -126,17 +126,17 @@ The file `web/prototype/template-builder.html` demonstrates the exact views and 
 
 | Prototype Feature | Production Implementation |
 |-------------------|--------------------------|
-| Step wizard with progress dots | `<Stepper>` component, 4 steps with Back/Next navigation |
-| Step 1: Target (mirrors Basic + Image Type/Name) | Same `<Select>` components as Basic + `<Select>` for Image Type + `<Input>` for Image Name |
-| Step 2: Package repositories | `<CheckboxCard>` components, from `GET /api/v1/package-repos` |
-| Step 2: Package search with autocomplete | `<Combobox>` with autocomplete from `GET /api/v1/packages/search` |
-| Step 2: Selected packages tags | `<TagInput>` for managing selected packages |
-| Step 3: Disk size + unit selector | `<Input>` + `<Select>` for unit |
-| Step 3: Partition table type | `<ToggleGroup>` (GPT) |
-| Step 3: Partition layout | `<Table>` with add/remove partition actions |
-| Step 4: Review summary table | `<Table>` matching Basic review (Image, Vertical, SKU, Platform, OS, Image Type, Disk, Packages) |
-| Step 4: Export YAML | `<Button>` generates and downloads `.yml` file |
-| Step 4: Build Image | Navigates to Build Image tab, triggers `POST /api/v1/builds` |
+| Step wizard with progress dots | `<Stepper>` component with Back/Next navigation (MVP-1: Target, Packages, Disk, Review; extensible) |
+| Target step (mirrors Basic + Image Type/Name) | Same `<Select>` components as Basic + `<Select>` for Image Type + `<Input>` for Image Name |
+| Packages step: repositories | `<CheckboxCard>` components, from `GET /api/v1/package-repos` |
+| Packages step: search with autocomplete | `<Combobox>` with autocomplete from `GET /api/v1/packages/search` |
+| Packages step: selected packages tags | `<TagInput>` for managing selected packages |
+| Disk step: size + unit selector | `<Input>` + `<Select>` for unit |
+| Disk step: partition table type | `<ToggleGroup>` (GPT) |
+| Disk step: partition layout | `<Table>` with add/remove partition actions |
+| Review step: summary table | `<Table>` matching Basic review (Image, Vertical, SKU, Platform, OS, Image Type, Disk, Packages) |
+| Review step: Export YAML | `<Button>` generates and downloads `.yml` file |
+| Review step: Build Image | Navigates to Build Image tab, triggers `POST /api/v1/builds` |
 | Live YAML preview (right panel) | `<CodeMirror>` read-only with YAML mode, updates on every state change via Zustand |
 | Basic → Advanced sync | `syncBasicToAdvanced()` copies Zustand Basic store into Advanced store on tab switch |
 
@@ -183,71 +183,32 @@ Build log streaming is unidirectional (server → client). SSE works through cor
 
 ### Frontend (`web/`)
 
+Key files only — the full component/handler breakdown will evolve during
+implementation.
+
 ```
 web/
-├── prototype/
-│   └── template-builder.html    # Design reference (open in browser)
+├── prototype/template-builder.html   # Design reference (open in browser)
 ├── src/
-│   ├── main.tsx
-│   ├── App.tsx
-│   ├── api/
-│   │   ├── types.ts             # Generated from OpenAPI spec
-│   │   └── client.ts            # Typed fetch + EventSource
-│   ├── components/
-│   │   ├── ui/                  # Shadcn/ui primitives
-│   │   ├── basic/
-│   │   │   ├── VerticalSelect.tsx
-│   │   │   ├── SkuSelect.tsx
-│   │   │   ├── PlatformSelect.tsx
-│   │   │   ├── OsSelect.tsx
-│   │   │   └── ReviewPanel.tsx
-│   │   ├── advanced/
-│   │   │   ├── StepWizard.tsx
-│   │   │   ├── TargetStep.tsx
-│   │   │   ├── PackageRepoCards.tsx
-│   │   │   ├── PackageSearch.tsx
-│   │   │   ├── PackageTagInput.tsx
-│   │   │   ├── DiskConfig.tsx
-│   │   │   ├── PartitionTable.tsx
-│   │   │   ├── ReviewStep.tsx
-│   │   │   └── YamlPreview.tsx
-│   │   ├── build/
-│   │   │   ├── LogViewer.tsx
-│   │   │   └── ArtifactsTable.tsx
-│   │   └── layout/
-│   │       └── AppShell.tsx
-│   ├── stores/
-│   │   ├── basic-store.ts
-│   │   └── advanced-store.ts
-│   ├── lib/
-│   │   └── yaml.ts
-│   └── pages/
-│       ├── BasicPage.tsx
-│       ├── AdvancedPage.tsx
-│       └── BuildImagePage.tsx
+│   ├── api/            # Generated types (from OpenAPI) + typed client
+│   ├── components/     # basic/ · advanced/ · build/ views + Shadcn ui/ primitives
+│   ├── stores/         # Zustand state (Basic + Advanced)
+│   └── pages/          # BasicPage · AdvancedPage · BuildImagePage
 ├── package.json
-├── vite.config.ts
-└── dist/
+└── vite.config.ts      # dist/ output is embedded into the Go binary
 ```
 
 ### Backend (`internal/api/`)
 
+Key files only — handlers are grouped by resource and may be split/renamed as
+the implementation matures.
+
 ```
 internal/api/
-├── server.go
-├── router.go
-├── middleware.go
-├── manifest.go            # Loads data/manifest.yaml, maps UI combinations → template file
-├── data/
-│   └── manifest.yaml      # Combination → template file + display labels
-├── handlers_verticals.go  # GET /verticals, /verticals/{id}/skus, /verticals/{id}/defaults
-├── handlers_platforms.go  # GET /platforms
-├── handlers_targets.go    # GET /targets (OS list)
-├── handlers_packages.go   # GET /packages/search, GET /package-repos
-├── handlers_templates.go  # POST /templates/compose (returns matched template YAML)
-├── handlers_builds.go     # POST /builds, GET /builds/{id}/logs (SSE), GET /builds/{id}/artifacts
-├── sse.go
-└── errors.go
+├── server.go / router.go       # HTTP server + route registration
+├── manifest.go + data/manifest.yaml  # Maps UI combination → template file + labels
+├── handlers_*.go               # Verticals, platforms, targets, packages, compose, builds
+└── sse.go                      # Build-log streaming
 ```
 
 ---
@@ -424,3 +385,4 @@ npx openapi-typescript api/v1/openapi-template-builder.yaml -o web/src/api/types
 | 2026-06-28 | ICT Team | Editorial cleanup; OpenAPI spec rewritten to 12 endpoints with `operationId`s for codegen; removed embedded Swagger UI in favor of spec-in-repo |
 | 2026-06-28 | ICT Team | Basic tab OS dropdown now per-vertical (`supportedOs`/`defaultOs`), future-proofed for multiple OSes per vertical; added `os` query param to `getVerticalDefaults`; documented Backend Data Model & Maintenance (catalog + defaults resolution + CI validation) |
 | 2026-06-28 | ICT Team | Replaced catalog/overlay data model with ICT's template-per-combination model: each UI selection maps via `manifest.yaml` to one pre-authored, engineering-tested template in `image-templates/`; `compose` returns the matched template rather than synthesizing one; Advanced edits apply per-request only |
+| 2026-07-01 | ICT Team | Refreshed both architecture diagrams to match current model (removed Swagger/validate/CRUD/policies/history; added manifest + artifacts); noted Advanced wizard steps are MVP-1 scope; clarified single-binary constraint; trimmed Project Structure to key files |
