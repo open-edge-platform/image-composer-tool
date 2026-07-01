@@ -62,6 +62,13 @@ The file `web/prototype/template-builder.html` demonstrates the exact views and 
 
 ![Template Builder Data Flow](assets/web-ui-data-flow.drawio.svg)
 
+### Sequence Diagram — API calls & ICT build
+
+End-to-end flow across the three phases: loading options, composing (template
+lookup), and building via the ICT binary with SSE log streaming.
+
+![API Call and ICT Build Sequence](assets/web-ui-sequence.drawio.svg)
+
 ---
 
 ### Frontend Stack
@@ -213,7 +220,7 @@ internal/api/
 
 ---
 
-## Backend Data Model & Maintenance
+## Implementation Data Model & Maintenance
 
 The backend follows ICT's existing model: **one complete, tested template file per
 combination of Basic-UI selections**. There is no runtime merging or overlay logic —
@@ -366,7 +373,7 @@ npx openapi-typescript api/v1/openapi-template-builder.yaml -o web/src/api/types
 ### Risks
 
 1. **Frontend skill gap** — mitigated by React + Shadcn (copy-paste, good docs) + prototype as reference
-2. **Manifest/template drift** — each UI combination maps to a tested template in `image-templates/` via `manifest.yaml`; CI validates that every manifest entry points to an existing template file. Templates change only through engineering review. See [Backend Data Model & Maintenance](#backend-data-model--maintenance).
+2. **Manifest/template drift** — each UI combination maps to a tested template in `image-templates/` via `manifest.yaml`; CI validates that every manifest entry points to an existing template file. Templates change only through engineering review. See [Implementation Data Model & Maintenance](#implementation-data-model--maintenance).
 3. **YAML preview fidelity** — client-side YAML generation must match ICT template schema exactly
 
 ---
@@ -392,3 +399,4 @@ npx openapi-typescript api/v1/openapi-template-builder.yaml -o web/src/api/types
 | 2026-06-28 | ICT Team | Basic tab OS dropdown now per-vertical (`supportedOs`/`defaultOs`), future-proofed for multiple OSes per vertical; added `os` query param to `getVerticalDefaults`; documented Backend Data Model & Maintenance (catalog + defaults resolution + CI validation) |
 | 2026-06-28 | ICT Team | Replaced catalog/overlay data model with ICT's template-per-combination model: each UI selection maps via `manifest.yaml` to one pre-authored, engineering-tested template in `image-templates/`; `compose` returns the matched template rather than synthesizing one; Advanced edits apply per-request only |
 | 2026-07-01 | ICT Team | Refreshed both architecture diagrams to match current model (removed Swagger/validate/CRUD/policies/history; added manifest + artifacts); noted Advanced wizard steps are MVP-1 scope; clarified single-binary constraint; trimmed Project Structure to key files |
+| 2026-07-01 | ICT Team | Renamed "Backend Data Model & Maintenance" → "Implementation Data Model & Maintenance"; added sequence diagram (API calls & ICT binary invocation over `os/exec` with SSE log streaming) |
