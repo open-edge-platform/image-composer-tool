@@ -102,6 +102,89 @@ func TestLoopSetupDelete(t *testing.T) {
 	})
 }
 
+func TestLoopDevPartitions(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	t.Run("excludes base device and blanks", func(t *testing.T) {
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{{
+			Pattern: `lsblk -prno NAME "/dev/loop0"`,
+			Output:  "/dev/loop0\n/dev/loop0p1\n/dev/loop0p2\n\n",
+		}})
+		got, err := loopDevPartitions("/dev/loop0")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := []string{"/dev/loop0p1", "/dev/loop0p2"}
+		if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+			t.Fatalf("partitions = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("command error", func(t *testing.T) {
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{{
+			Pattern: `lsblk -prno NAME "/dev/loop1"`,
+			Error:   fmt.Errorf("lsblk failed"),
+		}})
+		if _, err := loopDevPartitions("/dev/loop1"); err == nil {
+			t.Fatal("expected error, got nil")
+		}
+	})
+}
+
+func TestAttachImageToLoopDev(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	makeImage := func(t *testing.T) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "baseline.raw")
+		if err := os.WriteFile(path, []byte("img"), 0644); err != nil {
+			t.Fatalf("write image: %v", err)
+		}
+		return path
+	}
+
+	t.Run("missing image", func(t *testing.T) {
+		ld := &LoopDev{}
+		if _, _, err := ld.AttachImageToLoopDev("/nonexistent/baseline.raw"); err == nil {
+			t.Fatal("expected error for missing image")
+		}
+	})
+
+	t.Run("success returns partitions", func(t *testing.T) {
+		img := makeImage(t)
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+			{Pattern: "losetup --direct-io=on --show -f -P", Output: "/dev/loop6\n"},
+			{Pattern: `lsblk -prno NAME "/dev/loop6"`, Output: "/dev/loop6\n/dev/loop6p1\n"},
+		})
+		ld := &LoopDev{}
+		dev, parts, err := ld.AttachImageToLoopDev(img)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if dev != "/dev/loop6" {
+			t.Fatalf("dev = %q, want /dev/loop6", dev)
+		}
+		if len(parts) != 1 || parts[0] != "/dev/loop6p1" {
+			t.Fatalf("parts = %v, want [/dev/loop6p1]", parts)
+		}
+	})
+
+	t.Run("detaches on partition enumeration failure", func(t *testing.T) {
+		img := makeImage(t)
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+			{Pattern: "losetup --direct-io=on --show -f -P", Output: "/dev/loop5\n"},
+			{Pattern: `lsblk -prno NAME "/dev/loop5"`, Error: fmt.Errorf("lsblk failed")},
+			{Pattern: "losetup -d /dev/loop5", Output: ""}, // cleanup detach must run
+		})
+		ld := &LoopDev{}
+		if _, _, err := ld.AttachImageToLoopDev(img); err == nil {
+			t.Fatal("expected error, got nil")
+		}
+	})
+}
+
 func TestLoopDevGetInfoAndHelpers(t *testing.T) {
 	originalExecutor := shell.Default
 	defer func() { shell.Default = originalExecutor }()
