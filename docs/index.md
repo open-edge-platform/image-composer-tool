@@ -58,7 +58,8 @@ For build options (Earthly, Debian package) and prerequisite details, see the
 | [Prerequisites](./tutorial/prerequisite.md)                                  | Manual ukify and mmdebstrap installation |
 | [Secure Boot](./tutorial/configure-secure-boot.md)                           | Configuring secure boot for images       |
 | [Configure Users](./tutorial/configure-image-user.md)                        | Adding users to images                   |
-| [Custom Build Actions](./tutorial/configure-additional-actions-for-build.md) | Pre/post-build scripts                   |
+| [Custom Build Actions](./tutorial/configure-additional-actions-for-build.md) | Commands during image compose (chroot)   |
+| [Custom Initrd Script](./tutorial/configure-custom-initrd-script.md)       | Debian 13 GRUB initramfs-tools initrd hook |
 | [Multiple Repos](./tutorial/configure-multiple-package-repositories.md)      | Using multiple package repositories      |
 
 ## Get Help
@@ -88,6 +89,7 @@ Usage Guide <./tutorial/usage-guide.md>
 Secure Boot Configuration <./tutorial/configure-secure-boot.md>
 Configure Users <./tutorial/configure-image-user.md>
 Customize Image Build <./tutorial/configure-additional-actions-for-build.md>
+Configure Custom Initrd Script <./tutorial/configure-custom-initrd-script.md>
 Configure Multiple Package Repositories <./tutorial/configure-multiple-package-repositories.md>
 AI Template Generation (RAG) <./tutorial/ai-template-generation.md>
 release-notes.md
