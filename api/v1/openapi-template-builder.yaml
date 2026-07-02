@@ -17,12 +17,8 @@ servers:
     description: Local development server
 
 tags:
-  - name: Verticals
-    description: Targeted verticals and their configurations (SKUs, defaults)
-  - name: Platforms
-    description: Intel hardware platforms
-  - name: Targets
-    description: Operating system options
+  - name: Manifest
+    description: Configuration manifest (all valid combinations + display labels)
   - name: Packages
     description: Package repositories and search
   - name: Templates
@@ -32,133 +28,29 @@ tags:
 
 paths:
   # ─────────────────────────────────────────────────────────────────────
-  # Verticals
+  # Manifest
   # ─────────────────────────────────────────────────────────────────────
 
-  /verticals:
+  /manifest:
     get:
-      tags: [Verticals]
-      operationId: listVerticals
-      summary: List all targeted verticals
+      tags: [Manifest]
+      operationId: getManifest
+      summary: Get the full configuration manifest
       description: |
-        Returns available verticals (Robotics, Physical AI, Generic, etc.)
-        with display metadata. Used by the Basic and Advanced tab vertical dropdown.
+        Returns the complete manifest in a single call — all valid combinations
+        of vertical/SKU/platform/OS/imageType mapped to their template files,
+        plus display labels for each option. The UI loads this once on startup
+        and derives dropdown cascading locally.
+
+        This replaces separate /verticals, /platforms, /targets endpoints —
+        one round-trip gives the frontend everything it needs.
       responses:
         "200":
-          description: List of verticals
+          description: Full manifest
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/VerticalList"
-
-  /verticals/{verticalId}/skus:
-    get:
-      tags: [Verticals]
-      operationId: listVerticalSkus
-      summary: List SKUs for a vertical
-      description: |
-        Returns the SKU options available for a given vertical.
-        E.g., Generic → Non-Realtime, Realtime; Robotics → AMR, Humanoid, Stationary.
-      parameters:
-        - $ref: "#/components/parameters/VerticalId"
-      responses:
-        "200":
-          description: SKU list
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SkuList"
-        "404":
-          description: Vertical not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-
-  /verticals/{verticalId}/defaults:
-    get:
-      tags: [Verticals]
-      operationId: getVerticalDefaults
-      summary: Get preset defaults for a vertical
-      description: |
-        Returns the summary of the template matched by this vertical (plus optional
-        os/sku/platform) — image name, image type, packages, and disk layout read
-        from the pre-authored template file. Used by the "Review Image
-        Configuration" panel in the Basic tab.
-      parameters:
-        - $ref: "#/components/parameters/VerticalId"
-        - name: os
-          in: query
-          schema:
-            type: string
-          description: |
-            Optional OS distribution ID (e.g., ubuntu24) to refine defaults.
-            When omitted, the vertical's defaultOs is used. MVP-1 supports one
-            OS per vertical, but verticals may support multiple OSes over time.
-        - name: sku
-          in: query
-          schema:
-            type: string
-          description: Optional SKU to further refine defaults
-        - name: platform
-          in: query
-          schema:
-            type: string
-          description: Optional platform to include platform-specific packages
-      responses:
-        "200":
-          description: Vertical defaults
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/VerticalDefaults"
-        "404":
-          description: Vertical not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-
-  # ─────────────────────────────────────────────────────────────────────
-  # Platforms
-  # ─────────────────────────────────────────────────────────────────────
-
-  /platforms:
-    get:
-      tags: [Platforms]
-      operationId: listPlatforms
-      summary: List Intel hardware platforms
-      description: |
-        Returns available Intel platforms (PTL, WCL, ARL, NVL) with display names.
-        Used by the Platform dropdown in Basic and Advanced tabs.
-      responses:
-        "200":
-          description: Platform list
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PlatformList"
-
-  # ─────────────────────────────────────────────────────────────────────
-  # OS Targets
-  # ─────────────────────────────────────────────────────────────────────
-
-  /targets:
-    get:
-      tags: [Targets]
-      operationId: listTargets
-      summary: List available operating systems
-      description: |
-        Returns available OS options with version info. These are the options
-        shown in the Operating System dropdown (e.g., Ubuntu 24.04, Debian 13).
-        MVP-1 architecture is x86_64 only.
-      responses:
-        "200":
-          description: OS target list
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/TargetList"
+                $ref: "#/components/schemas/Manifest"
 
   # ─────────────────────────────────────────────────────────────────────
   # Packages
@@ -332,6 +224,8 @@ paths:
 
         The template is validated before the build starts. Returns a build ID for
         tracking progress via SSE.
+
+        The server tracks the build in-memory (UUID, status, artifacts) with a configurable TTL after completion.
       requestBody:
         required: true
         content:
@@ -439,15 +333,6 @@ paths:
 
 components:
   parameters:
-    VerticalId:
-      name: verticalId
-      in: path
-      required: true
-      schema:
-        type: string
-        enum: [generic, robotics, physical-ai, agentic-ai, health, fed-aero, industrial, retail]
-      description: Vertical identifier
-
     BuildId:
       name: buildId
       in: path
@@ -458,11 +343,42 @@ components:
       description: Build identifier
 
   schemas:
-    # ── Verticals ──
+    # ── Manifest ──
 
-    VerticalList:
+    Manifest:
       type: object
+      description: |
+        Complete configuration manifest. Loaded once by the UI on startup.
+        Contains all valid selection combinations and the display metadata
+        for populating dropdowns with proper cascading.
       properties:
+        combinations:
+          type: array
+          description: Each entry maps a valid UI selection to a template file
+          items:
+            type: object
+            required: [vertical, os, imageType, template]
+            properties:
+              vertical:
+                type: string
+                example: robotics
+              sku:
+                type: string
+                example: amr
+              platform:
+                type: string
+                nullable: true
+                example: ptl
+              os:
+                type: string
+                example: ubuntu24
+              imageType:
+                type: string
+                enum: [raw, iso, qcow]
+              template:
+                type: string
+                description: Filename in image-templates/
+                example: ubuntu24-x86_64-robotics-jazzy-iso.yml
         verticals:
           type: array
           items:
@@ -470,131 +386,16 @@ components:
             properties:
               id:
                 type: string
-                example: robotics
               displayName:
                 type: string
-                example: Robotics
               description:
                 type: string
-                example: Pre-configured for ROS 2, navigation, and sensor fusion workloads
               supportedOs:
                 type: array
                 items:
                   type: string
-                description: |
-                  OS distribution IDs this vertical supports. The UI populates
-                  the Operating System dropdown from this list. MVP-1 ships one
-                  OS per vertical (Generic supports several).
-                example: [ubuntu24]
               defaultOs:
                 type: string
-                description: Pre-selected OS distribution ID
-                example: ubuntu24
-      example:
-        verticals:
-          - id: generic
-            displayName: Generic
-            description: General-purpose edge image with minimal defaults
-            supportedOs: [ubuntu24, ubuntu26, debian13, azl3, elxr13, emt3]
-            defaultOs: ubuntu24
-          - id: robotics
-            displayName: Robotics
-            description: Pre-configured for ROS 2, navigation, and sensor fusion workloads
-            supportedOs: [ubuntu24]
-            defaultOs: ubuntu24
-          - id: physical-ai
-            displayName: Physical AI
-            description: Optimized for inference and AI model serving at the edge
-          - id: agentic-ai
-            displayName: Agentic AI
-            description: LLM inference and multi-agent orchestration
-          - id: health
-            displayName: Health
-            description: HIPAA-aware medical edge computing
-          - id: fed-aero
-            displayName: Fed Aero
-            description: Security-hardened for federal and aerospace environments
-          - id: industrial
-            displayName: Industrial IoT
-            description: Real-time capable for OT/fieldbus environments
-          - id: retail
-            displayName: Retail Edge
-            description: POS, signage, and edge analytics
-
-    SkuList:
-      type: object
-      properties:
-        verticalId:
-          type: string
-        skus:
-          type: array
-          items:
-            type: object
-            properties:
-              id:
-                type: string
-                example: amr
-              displayName:
-                type: string
-                example: AMR (Autonomous Mobile Robot)
-      example:
-        verticalId: robotics
-        skus:
-          - id: amr
-            displayName: AMR (Autonomous Mobile Robot)
-          - id: humanoid
-            displayName: Humanoid
-          - id: stationary
-            displayName: Stationary Robot
-
-    VerticalDefaults:
-      type: object
-      description: |
-        Pre-configured defaults for a vertical. Used to populate the
-        "Review Image Configuration" summary and to seed the Advanced tab.
-      properties:
-        verticalId:
-          type: string
-        imageName:
-          type: string
-          example: robotics-image
-        imageType:
-          type: string
-          enum: [raw, iso, qcow]
-          example: iso
-        os:
-          type: string
-          example: ubuntu24
-        osDisplayName:
-          type: string
-          example: Ubuntu 24.04
-        packages:
-          type: array
-          items:
-            type: string
-          example: [ros-jazzy-base, ros-jazzy-navigation2, openvino-runtime, docker-ce, intel-level-zero-gpu, cloud-init]
-        disk:
-          type: object
-          properties:
-            size:
-              type: string
-              example: "8GiB"
-            partitionTableType:
-              type: string
-              enum: [gpt]
-              example: gpt
-            partitions:
-              type: integer
-              example: 2
-        unattended:
-          type: boolean
-          example: false
-
-    # ── Platforms ──
-
-    PlatformList:
-      type: object
-      properties:
         platforms:
           type: array
           items:
@@ -602,33 +403,10 @@ components:
             properties:
               id:
                 type: string
-                example: ptl
               displayName:
                 type: string
-                example: PTL (Panther Lake)
               description:
                 type: string
-                example: Intel Panther Lake — Xe GPU, NPU, Wi-Fi 7
-      example:
-        platforms:
-          - id: ptl
-            displayName: PTL (Panther Lake)
-            description: Intel Panther Lake — Xe GPU, NPU, Wi-Fi 7
-          - id: wcl
-            displayName: WCL (Wildcat Lake)
-            description: Intel Wildcat Lake — integrated GPU, Thunderbolt 5
-          - id: arl
-            displayName: ARL (Arrow Lake)
-            description: Intel Arrow Lake — hybrid P/E-core, Arc GPU
-          - id: nvl
-            displayName: NVL (Nova Lake)
-            description: Intel Nova Lake — Xe2 GPU, NPU 4.0
-
-    # ── OS Targets ──
-
-    TargetList:
-      type: object
-      properties:
         targets:
           type: array
           items:
@@ -636,44 +414,13 @@ components:
             properties:
               id:
                 type: string
-                example: ubuntu24
               displayName:
                 type: string
-                example: Ubuntu 24.04
               os:
                 type: string
-                description: OS family identifier
-                example: ubuntu
               arch:
                 type: string
                 enum: [x86_64]
-                example: x86_64
-      example:
-        targets:
-          - id: ubuntu24
-            displayName: Ubuntu 24.04
-            os: ubuntu
-            arch: x86_64
-          - id: ubuntu26
-            displayName: Ubuntu 26.04
-            os: ubuntu
-            arch: x86_64
-          - id: debian13
-            displayName: Debian 13
-            os: debian
-            arch: x86_64
-          - id: azl3
-            displayName: Azure Linux 3
-            os: azure-linux
-            arch: x86_64
-          - id: elxr13
-            displayName: Wind River eLxr 13
-            os: wind-river-elxr
-            arch: x86_64
-          - id: emt3
-            displayName: Edge Microvisor Toolkit 3
-            os: edge-microvisor-toolkit
-            arch: x86_64
 
     # ── Packages ──
 
@@ -700,6 +447,10 @@ components:
               enabledByDefault:
                 type: boolean
                 example: false
+              priority:
+                type: integer
+                default: 500
+                description: "Repository priority (higher number = preferred when packages exist in multiple repos). Default 500."
 
     PackageSearchResults:
       type: object
@@ -716,6 +467,10 @@ components:
               name:
                 type: string
                 example: docker-ce
+              version:
+                type: string
+                example: "27.1.1"
+                description: Latest available version
               description:
                 type: string
                 example: Docker Community Edition
