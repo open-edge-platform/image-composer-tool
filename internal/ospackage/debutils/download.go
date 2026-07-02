@@ -743,6 +743,10 @@ func initializeUserRepoCfgs() error {
 		}
 
 		baseURL := strings.TrimPrefix(strings.TrimPrefix(repo.URL, "http://"), "https://")
+		priority := repo.Priority
+		if priority == 0 {
+			priority = 500
+		}
 		repoList = append(repoList, Repository{
 			ID:            fmt.Sprintf("%s%d", repoGroup+"-"+baseURL, i+1),
 			Codename:      repo.Codename,
@@ -750,7 +754,7 @@ func initializeUserRepoCfgs() error {
 			Path:          repo.Path,
 			PKey:          repo.PKey,
 			Component:     repo.Component,
-			Priority:      repo.Priority,
+			Priority:      priority,
 			AllowPackages: repo.AllowPackages,
 		})
 	}

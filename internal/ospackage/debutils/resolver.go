@@ -464,6 +464,12 @@ func getRepositoryPriority(packageURL string) int {
 		}
 	}
 
+	for _, repoCfg := range UserRepoCfgs {
+		if strings.TrimSuffix(repoCfg.PkgPrefix, "/") == repoBaseNorm {
+			return repoCfg.Priority
+		}
+	}
+
 	for _, repoCfg := range LocalUserRepoCfgs {
 		if strings.TrimSuffix(repoCfg.PkgPrefix, "/") == repoBaseNorm {
 			return repoCfg.Priority
