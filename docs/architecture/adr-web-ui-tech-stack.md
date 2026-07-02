@@ -283,6 +283,23 @@ Build log streaming is unidirectional (server → client). SSE works through cor
 
 The validate CLI command (`image-composer-tool validate`) internally calls `config.LoadAndMergeTemplate()`. Since the API server lives in the same Go module, it imports this function directly — no process spawn, structured errors without CLI text parsing, and the same validation logic the CLI uses. Reserve `os/exec` for the build (which needs process isolation for chroot operations).
 
+### State persistence across tabs and refresh
+
+User selections live **in-memory only** (Zustand store, no localStorage, no server sessions):
+
+| Scenario | Behavior |
+|----------|----------|
+| Switching between Basic / Advanced / Build Image tabs | State preserved — Zustand store stays in memory. `syncBasicToAdvanced()` copies selections into the Advanced model on tab switch. |
+| Page refresh or browser close | Selections are lost — user starts fresh. |
+| Opening a new browser tab | Independent session, starts fresh. |
+
+This is the simplest correct approach for MVP-1:
+- No stale-state bugs when the manifest changes (a refresh always picks up the latest).
+- No backend session/auth infrastructure required.
+- A typical workflow (select → optional review → build) completes in one sitting.
+
+**Post-MVP** — if users report friction from losing work on accidental refresh, add Zustand's `persist` middleware with `localStorage` (one-line configuration change, no backend work). Server-side sessions are out of scope unless multi-device continuity is explicitly required.
+
 ---
 
 ## Project Structure
