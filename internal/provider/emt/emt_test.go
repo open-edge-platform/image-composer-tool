@@ -530,7 +530,7 @@ func TestEmtBuildImageUnsupportedType(t *testing.T) {
 func TestEmtBuildImageValidTypes(t *testing.T) {
 	emt := &Emt{}
 
-	validTypes := []string{"raw", "img", "iso"}
+	validTypes := []string{"raw", "img", "iso", "wsl2"}
 
 	for _, imageType := range validTypes {
 		t.Run(imageType, func(t *testing.T) {

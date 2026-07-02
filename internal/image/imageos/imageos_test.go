@@ -1869,6 +1869,7 @@ func TestMountUmountSysfs(t *testing.T) {
 	}
 
 	template := createTestImageTemplate()
+	template.Target.ImageType = "wsl2"
 
 	// Create ImageOs directly without NewImageOs to avoid sudo dependency
 	imageOs := &ImageOs{
@@ -1972,13 +1973,38 @@ func TestPrepareVeritySetupInvalidPair(t *testing.T) {
 	}
 }
 
+func TestResolveAdditionalFileLocalPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	templatePath := filepath.Join(tmpDir, "templates", "test.yml")
+	filePath := filepath.Join(tmpDir, "templates", "files", "profile.sh")
+	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+		t.Fatalf("failed to create file dir: %v", err)
+	}
+	if err := os.WriteFile(filePath, []byte("echo test\n"), 0644); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	got, err := resolveAdditionalFileLocalPath("files/profile.sh", []string{templatePath})
+	if err != nil {
+		t.Fatalf("resolveAdditionalFileLocalPath() error = %v", err)
+	}
+	if got != filePath {
+		t.Fatalf("resolveAdditionalFileLocalPath() = %s, want %s", got, filePath)
+	}
+}
+
 // TestInitRootfsForDeb tests the initRootfsForDeb functionality
 func TestInitRootfsForDeb(t *testing.T) {
 	// Set up mock executor
 	originalExecutor := shell.Default
 	defer func() { shell.Default = originalExecutor }()
 
-	mockExecutor := &shell.MockExecutor{}
+	mockExecutor := shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: "^mount$", Output: "", Error: nil},
+		{Pattern: "sudo rm -rf .*/imageos_deb_test_.*/test-system", Output: "", Error: nil},
+		{Pattern: "sudo mkdir -p .*/imageos_deb_test_.*/test-system", Output: "", Error: nil},
+		{Pattern: "sudo chroot /tmp/chroot .*mmdebstrap", Output: "override-test\n", Error: fmt.Errorf("command not found")},
+	})
 	shell.Default = mockExecutor
 
 	// Create test directory
@@ -2012,6 +2038,7 @@ func TestInitRootfsForDeb(t *testing.T) {
 	defer os.Remove(sourceFile)
 
 	template := createTestImageTemplate()
+	template.Target.ImageType = "wsl2"
 
 	// Create ImageOs directly without NewImageOs to avoid sudo dependency
 	imageOs := &ImageOs{
@@ -2027,7 +2054,7 @@ func TestInitRootfsForDeb(t *testing.T) {
 	if err != nil {
 		// This is expected to fail in test environment due to missing mmdebstrap or chroot setup
 		t.Logf("initRootfsForDeb failed as expected in test environment: %v", err)
-		if !strings.Contains(err.Error(), "chroot path") && !strings.Contains(err.Error(), "mmdebstrap") {
+		if !strings.Contains(err.Error(), "failed to install packages into image") {
 			t.Errorf("Unexpected error: %v", err)
 		}
 	} else {
@@ -2035,6 +2062,60 @@ func TestInitRootfsForDeb(t *testing.T) {
 	}
 
 	t.Log("initRootfsForDeb test completed")
+}
+
+func TestPrepareInstallRootForDebBootstrapRejectsInvalidRoot(t *testing.T) {
+	imageBuildDir := t.TempDir()
+	imageOs := &ImageOs{
+		chrootEnv: &MockChrootEnv{
+			chrootImageBuildDir: imageBuildDir,
+		},
+	}
+
+	for _, installRoot := range []string{"/", imageBuildDir, filepath.Dir(imageBuildDir)} {
+		t.Run(installRoot, func(t *testing.T) {
+			if err := imageOs.prepareInstallRootForDebBootstrap(installRoot); err == nil {
+				t.Fatalf("expected invalid install root %s to be rejected", installRoot)
+			}
+		})
+	}
+}
+
+func TestInitRootfsForDebDoesNotResetRawInstallRoot(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: "sudo chroot .* mmdebstrap", Output: "", Error: nil},
+	})
+
+	testDir := t.TempDir()
+	chrootRoot := filepath.Join(testDir, "chroot")
+	if err := os.MkdirAll(chrootRoot, 0755); err != nil {
+		t.Fatalf("failed to create chroot root: %v", err)
+	}
+	sourceFile := filepath.Join(testDir, "local.list")
+	if err := os.WriteFile(sourceFile, []byte("deb file:///repo bookworm main"), 0644); err != nil {
+		t.Fatalf("failed to create source file: %v", err)
+	}
+
+	template := createTestImageTemplate()
+	template.Target.ImageType = "raw"
+	imageOs := &ImageOs{
+		installRoot: filepath.Join(testDir, template.SystemConfig.Name),
+		chrootEnv: &MockChrootEnv{
+			chrootImageBuildDir: testDir,
+			essentialPkgs:       []string{"base-files", "systemd"},
+			hostPath:            sourceFile,
+			chrootPath:          "/chroot/test",
+			chrootRoot:          chrootRoot,
+		},
+		template: template,
+	}
+
+	if err := imageOs.initRootfsForDeb(imageOs.installRoot); err != nil {
+		t.Fatalf("initRootfsForDeb() error = %v", err)
+	}
 }
 
 // TestInstallImagePkgs tests the package installation functionality
