@@ -357,7 +357,7 @@ components:
           description: Each entry maps a valid UI selection to a template file
           items:
             type: object
-            required: [vertical, os, imageType, template]
+            required: [vertical, platform, os, imageType, template]
             properties:
               vertical:
                 type: string
@@ -367,7 +367,6 @@ components:
                 example: amr
               platform:
                 type: string
-                nullable: true
                 example: ptl
               os:
                 type: string
@@ -485,7 +484,7 @@ components:
       description: |
         Structured user intent from the UI. The backend merges this with
         vertical defaults and platform packages to produce a complete template.
-      required: [vertical, os, imageType]
+      required: [vertical, platform, os, imageType]
       properties:
         vertical:
           type: string

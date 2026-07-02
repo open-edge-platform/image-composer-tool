@@ -387,10 +387,10 @@ Example `manifest.yaml` entry:
 combinations:
   - vertical: robotics
     sku: amr
-    platform: null            # platform-agnostic template
+    platform: ptl
     os: ubuntu24
     imageType: iso
-    template: ubuntu24-x86_64-robotics-jazzy-iso.yml
+    template: ubuntu24-x86_64-robotics-jazzy-ptl-iso.yml
 ```
 
 ### What each endpoint returns
