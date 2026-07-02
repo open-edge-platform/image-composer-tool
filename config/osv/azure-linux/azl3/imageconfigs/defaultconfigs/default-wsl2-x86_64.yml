@@ -1,0 +1,36 @@
+image:
+  name: wsl2-rootfs-azl
+  version: "3.0"
+
+target:
+  os: azure-linux
+  dist: azl3
+  arch: x86_64
+  imageType: wsl2
+
+disk:
+  name: WSL2_Rootfs
+  artifacts:
+    - type: tar
+      compression: gz
+
+systemConfig:
+  name: WSL2_Rootfs
+  packages:
+    - azurelinux-release
+    - bash
+    - ca-certificates
+    - core-packages-base-image
+    - coreutils
+    - filesystem
+    - openssh-server
+    - shadow-utils
+    - sudo
+    - systemd
+    - systemd-resolved
+
+  additionalFiles:
+    - local: ../../../../../general/wsl2/ict-wsl2-profile.sh
+      final: /etc/profile.d/00-ict-wsl2.sh
+    - local: ../../../../../general/wsl2/resize-filesystem.txt
+      final: /usr/share/doc/ict-wsl2/resize-filesystem.txt

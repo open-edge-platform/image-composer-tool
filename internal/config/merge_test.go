@@ -1,9 +1,13 @@
 package config
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 )
 
 func TestNewDefaultConfigLoader(t *testing.T) {
@@ -96,6 +100,60 @@ func TestMergeConfigurationsImageInfo(t *testing.T) {
 	if result.Target.OS != "azure-linux" {
 		t.Errorf("expected target OS 'azure-linux', got '%s'", result.Target.OS)
 	}
+}
+
+func TestMergeConfigurationsBaseline(t *testing.T) {
+	// A user-provided overlay baseline must survive the merge even when the
+	// default template has none; otherwise the build silently falls back to
+	// create mode and ignores the overlay request.
+	t.Run("user overlay baseline overrides nil default", func(t *testing.T) {
+		defaultTemplate := &ImageTemplate{
+			Image:  ImageInfo{Name: "default", Version: "1.0.0"},
+			Target: TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64"},
+		}
+		userTemplate := &ImageTemplate{
+			Image:  ImageInfo{Name: "user", Version: "2.0.0"},
+			Target: TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64"},
+			Baseline: &Baseline{
+				Mode:   BaselineModeOverlay,
+				Source: &BaselineSource{Path: "/tmp/u.raw"},
+			},
+		}
+
+		result, err := MergeConfigurations(userTemplate, defaultTemplate)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Baseline == nil {
+			t.Fatal("expected merged baseline to be preserved, got nil")
+		}
+		if !result.IsOverlayMode() {
+			t.Errorf("expected merged template to be overlay mode, got mode=%q", result.Baseline.Mode)
+		}
+		if result.Baseline.Source == nil || result.Baseline.Source.Path != "/tmp/u.raw" {
+			t.Errorf("expected baseline source path '/tmp/u.raw', got %+v", result.Baseline.Source)
+		}
+	})
+
+	t.Run("default baseline retained when user provides none", func(t *testing.T) {
+		defaultTemplate := &ImageTemplate{
+			Image:    ImageInfo{Name: "default", Version: "1.0.0"},
+			Target:   TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64"},
+			Baseline: &Baseline{Mode: BaselineModeCreate},
+		}
+		userTemplate := &ImageTemplate{
+			Image:  ImageInfo{Name: "user", Version: "2.0.0"},
+			Target: TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64"},
+		}
+
+		result, err := MergeConfigurations(userTemplate, defaultTemplate)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Baseline == nil || result.Baseline.Mode != BaselineModeCreate {
+			t.Errorf("expected default baseline (create) to be retained, got %+v", result.Baseline)
+		}
+	})
 }
 
 func TestMergeConfigurationsPathList(t *testing.T) {
@@ -917,5 +975,290 @@ func TestLoadProviderRepoConfigArchVariants(t *testing.T) {
 				t.Logf("Expected error for arch %s: %v", arch, err)
 			}
 		})
+	}
+}
+
+func TestResolveExtendsChainSingleExtends(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	basePath := filepath.Join(tmpDir, "base.yml")
+	leafPath := filepath.Join(tmpDir, "leaf.yml")
+	target := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+
+	writeChainTemplate(t, basePath, "base", "", target)
+	writeChainTemplate(t, leafPath, "leaf", "base.yml", target)
+
+	chain, err := resolveExtendsChain(leafPath)
+	if err != nil {
+		t.Fatalf("resolveExtendsChain() err = %v", err)
+	}
+
+	if len(chain) != 2 {
+		t.Fatalf("len(chain) = %d, want 2", len(chain))
+	}
+	if chain[0].Image.Name != "base" {
+		t.Errorf("chain[0].Image.Name = %q, want %q", chain[0].Image.Name, "base")
+	}
+	if chain[1].Image.Name != "leaf" {
+		t.Errorf("chain[1].Image.Name = %q, want %q", chain[1].Image.Name, "leaf")
+	}
+}
+
+func TestResolveExtendsChainMultiLevel(t *testing.T) {
+	tmpDir := t.TempDir()
+	target := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+
+	rootPath := filepath.Join(tmpDir, "root.yml")
+	level1Path := filepath.Join(tmpDir, "level1.yml")
+	level2Path := filepath.Join(tmpDir, "level2.yml")
+	leafPath := filepath.Join(tmpDir, "leaf.yml")
+
+	writeChainTemplate(t, rootPath, "root", "", target)
+	writeChainTemplate(t, level1Path, "level1", "root.yml", target)
+	writeChainTemplate(t, level2Path, "level2", "level1.yml", target)
+	writeChainTemplate(t, leafPath, "leaf", "level2.yml", target)
+
+	chain, err := resolveExtendsChain(leafPath)
+	if err != nil {
+		t.Fatalf("resolveExtendsChain() err = %v", err)
+	}
+
+	if len(chain) != 4 {
+		t.Fatalf("len(chain) = %d, want 4", len(chain))
+	}
+
+	wantOrder := []string{"root", "level1", "level2", "leaf"}
+	for i, want := range wantOrder {
+		if chain[i].Image.Name != want {
+			t.Errorf("chain[%d].Image.Name = %q, want %q", i, chain[i].Image.Name, want)
+		}
+	}
+}
+
+func TestResolveExtendsChainCycleDetection(t *testing.T) {
+	tmpDir := t.TempDir()
+	target := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+
+	aPath := filepath.Join(tmpDir, "a.yml")
+	bPath := filepath.Join(tmpDir, "b.yml")
+
+	writeChainTemplate(t, aPath, "a", "b.yml", target)
+	writeChainTemplate(t, bPath, "b", "a.yml", target)
+
+	_, err := resolveExtendsChain(aPath)
+	if err == nil {
+		t.Fatalf("resolveExtendsChain() expected cycle error")
+	}
+
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "circular extends detected") {
+		t.Errorf("error = %q, want contains %q", errMsg, "circular extends detected")
+	}
+	if !strings.Contains(errMsg, "a.yml -> b.yml -> a.yml") {
+		t.Errorf("error = %q, want contains %q", errMsg, "a.yml -> b.yml -> a.yml")
+	}
+}
+
+func TestResolveExtendsChainCycleViaDirectorySymlink(t *testing.T) {
+	tmpDir := t.TempDir()
+	target := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+
+	realDir := filepath.Join(tmpDir, "real")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatalf("failed to create real directory: %v", err)
+	}
+
+	// A directory symlink that lives inside the child directory and points back to
+	// it. Reaching a.yml through "self/" yields a different textual path for the
+	// same file. Without canonicalization the self-extends cycle would go
+	// undetected; the traversal guard still permits it because it stays within the
+	// child directory.
+	if err := os.Symlink(realDir, filepath.Join(realDir, "self")); err != nil {
+		t.Skipf("symlinks not supported on this platform: %v", err)
+	}
+
+	aReal := filepath.Join(realDir, "a.yml")
+	writeChainTemplate(t, aReal, "a", "self/a.yml", target)
+
+	_, err := resolveExtendsChain(aReal)
+	if err == nil {
+		t.Fatalf("resolveExtendsChain() expected cycle error via directory symlink")
+	}
+
+	if !strings.Contains(err.Error(), "circular extends detected") {
+		t.Errorf("error = %q, want contains %q", err.Error(), "circular extends detected")
+	}
+}
+
+func TestResolveExtendsChainTargetMismatch(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	parentPath := filepath.Join(tmpDir, "parent.yml")
+	leafPath := filepath.Join(tmpDir, "leaf.yml")
+
+	parentTarget := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "aarch64", ImageType: "raw"}
+	leafTarget := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+
+	writeChainTemplate(t, parentPath, "parent", "", parentTarget)
+	writeChainTemplate(t, leafPath, "leaf", "parent.yml", leafTarget)
+
+	_, err := resolveExtendsChain(leafPath)
+	if err == nil {
+		t.Fatalf("resolveExtendsChain() expected target mismatch error")
+	}
+
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "extends target mismatch at level") {
+		t.Errorf("error = %q, want contains %q", errMsg, "extends target mismatch at level")
+	}
+}
+
+func TestResolveExtendsChainMissingParent(t *testing.T) {
+	tmpDir := t.TempDir()
+	target := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+
+	leafPath := filepath.Join(tmpDir, "leaf.yml")
+	writeChainTemplate(t, leafPath, "leaf", "missing.yml", target)
+
+	_, err := resolveExtendsChain(leafPath)
+	if err == nil {
+		t.Fatalf("resolveExtendsChain() expected missing parent error")
+	}
+
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "extends path not found:") {
+		t.Errorf("error = %q, want contains %q", errMsg, "extends path not found:")
+	}
+}
+
+func TestResolveExtendsChainPathTraversalAttack(t *testing.T) {
+	tmpDir := t.TempDir()
+	target := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+
+	childDir := filepath.Join(tmpDir, "child")
+	if err := os.MkdirAll(childDir, 0o755); err != nil {
+		t.Fatalf("failed to create child directory: %v", err)
+	}
+
+	leafPath := filepath.Join(childDir, "leaf.yml")
+	writeChainTemplate(t, leafPath, "leaf", "../parent.yml", target)
+
+	_, err := resolveExtendsChain(leafPath)
+	if err == nil {
+		t.Fatalf("resolveExtendsChain() expected traversal rejection")
+	}
+
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "extends path escapes child template's directory") {
+		t.Errorf("error = %q, want contains path escape message", errMsg)
+	}
+}
+
+func TestResolveExtendsChainDirectorySymlinkEscape(t *testing.T) {
+	tmpDir := t.TempDir()
+	target := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+
+	childDir := filepath.Join(tmpDir, "child")
+	outsideDir := filepath.Join(tmpDir, "outside")
+	if err := os.MkdirAll(childDir, 0o755); err != nil {
+		t.Fatalf("failed to create child directory: %v", err)
+	}
+	if err := os.MkdirAll(outsideDir, 0o755); err != nil {
+		t.Fatalf("failed to create outside directory: %v", err)
+	}
+
+	// Parent template lives outside the child directory.
+	writeChainTemplate(t, filepath.Join(outsideDir, "parent.yml"), "parent", "", target)
+
+	// A directory symlink inside the child directory points outside it. The lexical
+	// guard sees "link/parent.yml" (no ".."), so only the symlink-resolved
+	// containment check can catch this escape.
+	if err := os.Symlink(outsideDir, filepath.Join(childDir, "link")); err != nil {
+		t.Skipf("symlinks not supported on this platform: %v", err)
+	}
+
+	leafPath := filepath.Join(childDir, "leaf.yml")
+	writeChainTemplate(t, leafPath, "leaf", "link/parent.yml", target)
+
+	_, err := resolveExtendsChain(leafPath)
+	if err == nil {
+		t.Fatalf("resolveExtendsChain() expected directory-symlink escape rejection")
+	}
+
+	if !strings.Contains(err.Error(), "extends path escapes child template's directory") {
+		t.Errorf("error = %q, want contains path escape message", err.Error())
+	}
+}
+
+func TestResolveExtendsChainDepthWarning(t *testing.T) {
+	tmpDir := t.TempDir()
+	target := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+
+	fileNames := []string{"root.yml", "l1.yml", "l2.yml", "l3.yml", "l4.yml", "leaf.yml"}
+	for i := range fileNames {
+		path := filepath.Join(tmpDir, fileNames[i])
+		extends := ""
+		if i > 0 {
+			extends = fileNames[i-1]
+		}
+		writeChainTemplate(t, path, strings.TrimSuffix(fileNames[i], ".yml"), extends, target)
+	}
+
+	var buf bytes.Buffer
+	prevWriter := logger.ReplaceStderrWriter(&buf)
+	t.Cleanup(func() {
+		logger.ReplaceStderrWriter(prevWriter)
+	})
+
+	chain, err := resolveExtendsChain(filepath.Join(tmpDir, "leaf.yml"))
+	if err != nil {
+		t.Fatalf("resolveExtendsChain() err = %v", err)
+	}
+
+	if len(chain) != 6 {
+		t.Fatalf("len(chain) = %d, want 6", len(chain))
+	}
+
+	if !strings.Contains(buf.String(), "extends chain depth 5 exceeds recommended maximum of 4") {
+		t.Errorf("log output did not contain depth warning, got %q", buf.String())
+	}
+}
+
+func writeChainTemplate(t *testing.T, path, imageName, extends string, target TargetInfo) {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("failed to create template directory: %v", err)
+	}
+
+	var builder strings.Builder
+	if extends != "" {
+		builder.WriteString("extends: ")
+		builder.WriteString("\"")
+		builder.WriteString(extends)
+		builder.WriteString("\"\n")
+	}
+
+	builder.WriteString("image:\n")
+	builder.WriteString("  name: ")
+	builder.WriteString(imageName)
+	builder.WriteString("\n")
+	builder.WriteString("  version: \"1.0.0\"\n")
+	builder.WriteString("target:\n")
+	builder.WriteString("  os: ")
+	builder.WriteString(target.OS)
+	builder.WriteString("\n")
+	builder.WriteString("  dist: ")
+	builder.WriteString(target.Dist)
+	builder.WriteString("\n")
+	builder.WriteString("  arch: ")
+	builder.WriteString(target.Arch)
+	builder.WriteString("\n")
+	builder.WriteString("  imageType: ")
+	builder.WriteString(target.ImageType)
+	builder.WriteString("\n")
+
+	if err := os.WriteFile(path, []byte(builder.String()), 0o644); err != nil {
+		t.Fatalf("failed to write template file %s: %v", path, err)
 	}
 }

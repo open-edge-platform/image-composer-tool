@@ -1,0 +1,30 @@
+image:
+  name: wsl2-rootfs-ubuntu
+  version: "26.04"
+
+target:
+  os: ubuntu
+  dist: ubuntu26
+  arch: x86_64
+  imageType: wsl2
+
+disk:
+  name: WSL2_Rootfs
+  artifacts:
+    - type: tar
+      compression: gz
+
+systemConfig:
+  name: WSL2_Rootfs
+  packages:
+    - ubuntu-minimal
+    - systemd
+    - systemd-resolved
+    - systemd-timesyncd
+    - openssh-server
+
+  additionalFiles:
+    - local: ../../../../../general/wsl2/ict-wsl2-profile.sh
+      final: /etc/profile.d/00-ict-wsl2.sh
+    - local: ../../../../../general/wsl2/resize-filesystem.txt
+      final: /usr/share/doc/ict-wsl2/resize-filesystem.txt

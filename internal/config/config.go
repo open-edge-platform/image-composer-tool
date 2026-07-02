@@ -95,11 +95,58 @@ type ProviderRepoConfigs struct {
 	Repositories []ProviderRepoConfig `yaml:"repositories"`
 }
 
+// Baseline-mode constants.
+const (
+	BaselineModeCreate  = "create"
+	BaselineModeOverlay = "overlay"
+
+	BaselineFormatRaw = "raw"
+
+	OverlayPackageOpAdditiveOnly = "additive-only"
+
+	OverlayConflictPolicyFail          = "fail"
+	OverlayConflictPolicyAllowExplicit = "allow-explicit"
+)
+
+// Baseline configures whether the image is built from scratch ("create") or
+// constructed by overlaying packages onto an existing baseline image ("overlay").
+type Baseline struct {
+	Mode   string          `yaml:"mode,omitempty"`
+	Source *BaselineSource `yaml:"source,omitempty"`
+}
+
+// BaselineSource describes the source baseline image for overlay mode.
+// v1 supports a local RAW disk image, referenced either by a local filesystem
+// path or by an http(s) URL that is downloaded before the overlay runs.
+// Exactly one of Path or URL must be set.
+type BaselineSource struct {
+	Path   string `yaml:"path,omitempty"`
+	URL    string `yaml:"url,omitempty"`
+	Format string `yaml:"format,omitempty"`
+}
+
+// OverlayPolicy controls how overlay-mode preflight classifies and gates
+// package operations against the baseline image.
+type OverlayPolicy struct {
+	PackageOperation string `yaml:"packageOperation,omitempty"`
+	ConflictPolicy   string `yaml:"conflictPolicy,omitempty"`
+	KernelCmdline    string `yaml:"kernelCmdline,omitempty"`
+
+	// AllowRemoval gates whether preflight permits removing a baseline package.
+	// It is intentionally NOT a YAML field, and the schema rejects it via
+	// additionalProperties:false, so it always carries its zero value (false):
+	// overlay mode is additive-only in v1. A future release can lift the
+	// restriction by surfacing this field in the schema/YAML.
+	AllowRemoval bool `yaml:"-"`
+}
+
 // ImageTemplate represents the YAML image template structure
 type ImageTemplate struct {
 	Extends             string              `yaml:"extends,omitempty"`
 	Image               ImageInfo           `yaml:"image"`
 	Target              TargetInfo          `yaml:"target"`
+	Baseline            *Baseline           `yaml:"baseline,omitempty"`
+	OverlayPolicy       *OverlayPolicy      `yaml:"overlayPolicy,omitempty"`
 	Disk                DiskConfig          `yaml:"disk,omitempty"`
 	SystemConfig        SystemConfig        `yaml:"systemConfig"`
 	PackageRepositories []PackageRepository `yaml:"packageRepositories,omitempty"`
@@ -316,6 +363,10 @@ func parseYAMLTemplate(data []byte, validateFull bool) (*ImageTemplate, error) {
 	}
 
 	if err := template.validatePackageRepositories(); err != nil {
+		return nil, err
+	}
+
+	if err := template.validateBaseline(); err != nil {
 		return nil, err
 	}
 
@@ -1074,4 +1125,104 @@ func (pr *PackageRepository) ValidatePackageRepository() error {
 		return fmt.Errorf("repository '%s': cannot specify both 'url' and 'path', choose one", pr.Codename)
 	}
 	return nil
+}
+
+// validateBaseline enforces cross-field rules that the JSON schema cannot express:
+// mode/source coupling, format restrictions, and overlay policy invariants.
+// overlayPolicy is a top-level peer to baseline (per the image-extension ADR),
+// so it is only permitted when baseline.mode is "overlay".
+func (t *ImageTemplate) validateBaseline() error {
+	mode := BaselineModeCreate
+	if t.Baseline != nil && t.Baseline.Mode != "" {
+		mode = t.Baseline.Mode
+	}
+
+	switch mode {
+	case BaselineModeCreate:
+		if t.Baseline != nil && t.Baseline.Source != nil {
+			return fmt.Errorf("baseline: source must not be set when mode is %q", BaselineModeCreate)
+		}
+		if t.OverlayPolicy != nil {
+			return fmt.Errorf("overlayPolicy must not be set when baseline.mode is %q", BaselineModeCreate)
+		}
+	case BaselineModeOverlay:
+		if t.Baseline.Source == nil {
+			return fmt.Errorf("baseline: source is required when mode is %q", BaselineModeOverlay)
+		}
+		if err := t.Baseline.Source.validate(); err != nil {
+			return err
+		}
+		format := t.Baseline.Source.Format
+		if format == "" {
+			format = BaselineFormatRaw
+		}
+		if format != BaselineFormatRaw {
+			return fmt.Errorf("baseline.source.format must be %q (got %q)", BaselineFormatRaw, format)
+		}
+		if t.OverlayPolicy != nil {
+			if err := t.OverlayPolicy.validate(); err != nil {
+				return err
+			}
+		}
+	default:
+		return fmt.Errorf("baseline.mode must be %q or %q (got %q)",
+			BaselineModeCreate, BaselineModeOverlay, t.Baseline.Mode)
+	}
+	return nil
+}
+
+// validate enforces that exactly one of Path or URL is set, and that a URL
+// uses an http(s) scheme. Integrity verification of the downloaded image is
+// intentionally deferred. Local paths are taken from the host build system
+// as-is; URLs are downloaded (over TLS) before the overlay runs.
+func (s *BaselineSource) validate() error {
+	path := strings.TrimSpace(s.Path)
+	rawURL := strings.TrimSpace(s.URL)
+
+	switch {
+	case path == "" && rawURL == "":
+		return fmt.Errorf("baseline.source must set either %q or %q", "path", "url")
+	case path != "" && rawURL != "":
+		return fmt.Errorf("baseline.source must set only one of %q or %q", "path", "url")
+	case path != "":
+		// Reject any URI scheme (e.g. http:/, file:/path, file://...). Local
+		// paths have no scheme; remote images belong in baseline.source.url.
+		if parsed, err := url.Parse(path); err == nil && parsed.Scheme != "" {
+			return fmt.Errorf("baseline.source.path must be a local file path; use baseline.source.url for remote images")
+		}
+	case rawURL != "":
+		parsed, err := url.Parse(rawURL)
+		if err != nil {
+			return fmt.Errorf("baseline.source.url is not a valid URL: %w", err)
+		}
+		if parsed.Scheme != "http" && parsed.Scheme != "https" {
+			return fmt.Errorf("baseline.source.url must use http or https (got %q)", parsed.Scheme)
+		}
+	}
+	return nil
+}
+
+func (p *OverlayPolicy) validate() error {
+	op := p.PackageOperation
+	if op == "" {
+		op = OverlayPackageOpAdditiveOnly
+	}
+	if op != OverlayPackageOpAdditiveOnly {
+		return fmt.Errorf("baseline.overlayPolicy.packageOperation must be %q (got %q)",
+			OverlayPackageOpAdditiveOnly, p.PackageOperation)
+	}
+	cp := p.ConflictPolicy
+	if cp == "" {
+		cp = OverlayConflictPolicyFail
+	}
+	if cp != OverlayConflictPolicyFail && cp != OverlayConflictPolicyAllowExplicit {
+		return fmt.Errorf("baseline.overlayPolicy.conflictPolicy must be %q or %q (got %q)",
+			OverlayConflictPolicyFail, OverlayConflictPolicyAllowExplicit, p.ConflictPolicy)
+	}
+	return nil
+}
+
+// IsOverlayMode reports whether the template requests overlay-mode baseline.
+func (t *ImageTemplate) IsOverlayMode() bool {
+	return t.Baseline != nil && t.Baseline.Mode == BaselineModeOverlay
 }
