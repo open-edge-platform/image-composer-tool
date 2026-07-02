@@ -659,6 +659,10 @@ func (chrootEnv *ChrootEnv) AptInstallPackage(packageName, installRoot string, r
 }
 
 func (chrootEnv *ChrootEnv) UpdateSystemPkgs(template *config.ImageTemplate) error {
+	if template == nil {
+		return fmt.Errorf("image template cannot be nil")
+	}
+
 	// Update essential packages
 	essentialPkgList, err := chrootEnv.GetChrootEnvEssentialPackageList()
 	if err != nil {
@@ -666,22 +670,27 @@ func (chrootEnv *ChrootEnv) UpdateSystemPkgs(template *config.ImageTemplate) err
 	}
 	template.EssentialPkgList = essentialPkgList
 
-	// Update bootloader packages by bootloader type
-	bootloaderConfig := template.GetBootloaderConfig()
-	// To do: support bootloader package selection by bootloader type
-	switch bootloaderConfig.Provider {
-	case "grub":
-		if bootloaderConfig.BootType == "efi" {
-			template.BootloaderPkgList = []string{}
-		} else if bootloaderConfig.BootType == "legacy" {
-			template.BootloaderPkgList = []string{}
-		} else {
-			return fmt.Errorf("unsupported boot type: %s", bootloaderConfig.BootType)
-		}
-	case "systemd-boot":
+	// WSL2 and other rootfs-only image types do not need bootloader packages.
+	if template.Target.ImageType == "wsl2" {
 		template.BootloaderPkgList = []string{}
-	default:
-		return fmt.Errorf("unsupported bootloader provider: %s", bootloaderConfig.Provider)
+	} else {
+		// Update bootloader packages by bootloader type
+		bootloaderConfig := template.GetBootloaderConfig()
+		// To do: support bootloader package selection by bootloader type
+		switch bootloaderConfig.Provider {
+		case "grub":
+			if bootloaderConfig.BootType == "efi" {
+				template.BootloaderPkgList = []string{}
+			} else if bootloaderConfig.BootType == "legacy" {
+				template.BootloaderPkgList = []string{}
+			} else {
+				return fmt.Errorf("unsupported boot type: %s", bootloaderConfig.BootType)
+			}
+		case "systemd-boot":
+			template.BootloaderPkgList = []string{}
+		default:
+			return fmt.Errorf("unsupported bootloader provider: %s", bootloaderConfig.Provider)
+		}
 	}
 
 	// Update kernel packages by kernel version

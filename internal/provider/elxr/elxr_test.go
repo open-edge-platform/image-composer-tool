@@ -779,7 +779,7 @@ func TestElxrBuildImageUnsupportedType(t *testing.T) {
 func TestElxrBuildImageValidTypes(t *testing.T) {
 	elxr := &eLxr{}
 
-	validTypes := []string{"raw", "img", "iso"}
+	validTypes := []string{"raw", "img", "iso", "wsl2"}
 
 	for _, imageType := range validTypes {
 		t.Run(imageType, func(t *testing.T) {

@@ -1216,6 +1216,113 @@ func TestDefaultConfigLoaderUnsupportedImageType(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigLoaderWSL2ImageType(t *testing.T) {
+	tmpDir := t.TempDir()
+	oldConfigDir := Global().ConfigDir
+	Global().ConfigDir = tmpDir
+	t.Cleanup(func() { Global().ConfigDir = oldConfigDir })
+
+	defaultDir := filepath.Join(tmpDir, "osv", "ubuntu", "ubuntu24", "imageconfigs", "defaultconfigs")
+	if err := os.MkdirAll(defaultDir, 0755); err != nil {
+		t.Fatalf("failed to create default config dir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmpDir, "general"), 0755); err != nil {
+		t.Fatalf("failed to create general config dir: %v", err)
+	}
+
+	defaultConfig := `image:
+  name: wsl2-rootfs-ubuntu
+  version: "24.04"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: wsl2
+
+disk:
+  name: WSL2_Rootfs
+  artifacts:
+    - type: tar
+      compression: gz
+
+systemConfig:
+  name: WSL2_Rootfs
+  packages:
+    - ubuntu-minimal
+`
+	defaultPath := filepath.Join(defaultDir, "default-wsl2-x86_64.yml")
+	if err := os.WriteFile(defaultPath, []byte(defaultConfig), 0644); err != nil {
+		t.Fatalf("failed to write default config: %v", err)
+	}
+
+	loader := NewDefaultConfigLoader("ubuntu", "ubuntu24", "x86_64")
+	template, err := loader.LoadDefaultConfig("wsl2")
+	if err != nil {
+		t.Fatalf("expected WSL2 default config to load, got error: %v", err)
+	}
+	if template.Target.ImageType != "wsl2" {
+		t.Errorf("expected template image type 'wsl2', got '%s'", template.Target.ImageType)
+	}
+	if len(template.Disk.Artifacts) == 0 {
+		t.Fatal("expected WSL2 default config to include at least one artifact")
+	}
+	if template.Disk.Artifacts[0].Type != "tar" {
+		t.Errorf("expected WSL2 default config to use tar artifact, got '%s'", template.Disk.Artifacts[0].Type)
+	}
+}
+
+func TestWSL2DefaultConfigs(t *testing.T) {
+	defaults := []string{
+		"azure-linux/azl3",
+		"debian/debian13",
+		"edge-microvisor-toolkit/emt3",
+		"redhat-compatible-distro/el10",
+		"ubuntu/ubuntu24",
+		"ubuntu/ubuntu26",
+		"wind-river-elxr/elxr12",
+		"wind-river-elxr/elxr13",
+	}
+
+	for _, defaultDir := range defaults {
+		t.Run(defaultDir, func(t *testing.T) {
+			path := filepath.Join("..", "..", "config", "osv", defaultDir,
+				"imageconfigs", "defaultconfigs", "default-wsl2-x86_64.yml")
+			template, err := LoadTemplate(path, true)
+			if err != nil {
+				t.Fatalf("LoadTemplate() error = %v", err)
+			}
+			if template.Target.ImageType != "wsl2" {
+				t.Fatalf("imageType = %s, want wsl2", template.Target.ImageType)
+			}
+			if template.Disk.PartitionTableType != "" || len(template.Disk.Partitions) != 0 {
+				t.Fatalf("WSL2 default must not define partition table or partitions")
+			}
+			if !isEmptyKernelConfig(template.SystemConfig.Kernel) {
+				t.Fatalf("WSL2 default must not define kernel config")
+			}
+			if len(template.Disk.Artifacts) != 1 || template.Disk.Artifacts[0].Type != "tar" {
+				t.Fatalf("WSL2 default must define one tar artifact")
+			}
+			if template.Disk.Artifacts[0].Compression == "" {
+				t.Fatalf("WSL2 default tar artifact must define compression")
+			}
+			additionalFiles := map[string]bool{}
+			for _, file := range template.SystemConfig.AdditionalFiles {
+				additionalFiles[file.Final] = true
+			}
+			for _, final := range []string{
+				"/etc/profile.d/00-ict-wsl2.sh",
+				"/usr/share/doc/ict-wsl2/resize-filesystem.txt",
+			} {
+				if !additionalFiles[final] {
+					t.Fatalf("WSL2 default must include %s", final)
+				}
+			}
+		})
+	}
+}
+
 func TestPackageMergingWithDuplicates(t *testing.T) {
 	defaultPackages := []string{"base", "common", "utils"}
 	userPackages := []string{"common", "extra", "base", "new"}
