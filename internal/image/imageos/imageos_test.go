@@ -12,6 +12,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/slice"
 )
 
 // Helper function to create a test ImageTemplate
@@ -3026,6 +3027,205 @@ func TestAddImageAdditionalFiles(t *testing.T) {
 	}
 
 	t.Log("addImageAdditionalFiles test completed")
+}
+
+func TestSetupFirstBootLastPartitionAutoExpand(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+	originalConfigDir := config.Global().ConfigDir
+	defer func() { config.Global().ConfigDir = originalConfigDir }()
+
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: ".*cp.*", Output: "", Error: nil},
+		{Pattern: ".*mkdir.*", Output: "", Error: nil},
+		{Pattern: ".*chmod 0755.*ict-auto-expand-last-partition\\.sh.*", Output: "", Error: nil},
+		{Pattern: ".*systemctl enable --root=.*ict-auto-expand-last-partition\\.service.*", Output: "", Error: nil},
+	})
+
+	installRoot, err := os.MkdirTemp("", "imageos_autoexpand_service_test_*")
+	if err != nil {
+		t.Fatalf("failed to create install root: %v", err)
+	}
+	defer os.RemoveAll(installRoot)
+
+	configDir, err := os.MkdirTemp("", "imageos_autoexpand_cfg_test_*")
+	if err != nil {
+		t.Fatalf("failed to create config dir: %v", err)
+	}
+	defer os.RemoveAll(configDir)
+
+	assetDir := filepath.Join(configDir, "osv", "common", "imageconfigs", "firstboot")
+	if err := os.MkdirAll(assetDir, 0755); err != nil {
+		t.Fatalf("failed to create asset dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(assetDir, "ict-auto-expand-last-partition.sh"), []byte("#!/bin/sh\n"), 0644); err != nil {
+		t.Fatalf("failed to write script asset: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(assetDir, "ict-auto-expand-last-partition.service"), []byte("[Unit]\n"), 0644); err != nil {
+		t.Fatalf("failed to write service asset: %v", err)
+	}
+	config.Global().ConfigDir = configDir
+
+	template := createTestImageTemplate()
+	template.Target.ImageType = "raw"
+	template.Disk.ExtendLastPartitionToFillDisk = true
+	template.SystemConfig.Immutability.Enabled = false
+	template.Disk.Partitions = []config.PartitionInfo{
+		{
+			ID:         "boot",
+			MountPoint: "/boot",
+			Type:       "esp",
+		},
+		{
+			ID:         "rootfs",
+			MountPoint: "/",
+			Type:       "linux-root-amd64",
+		},
+	}
+
+	err = injectFirstBootLastPartitionAutoExpandAdditionalFiles(template)
+	if err != nil {
+		t.Fatalf("injectFirstBootLastPartitionAutoExpandAdditionalFiles returned error: %v", err)
+	}
+	err = addImageAdditionalFiles(installRoot, template)
+	if err != nil {
+		t.Fatalf("addImageAdditionalFiles returned error: %v", err)
+	}
+	err = setupFirstBootLastPartitionAutoExpand(installRoot, template)
+	if err != nil {
+		t.Fatalf("setupFirstBootLastPartitionAutoExpand returned error: %v", err)
+	}
+
+	if len(template.SystemConfig.AdditionalFiles) != 2 {
+		t.Fatalf("expected 2 additional files to be injected, got %d", len(template.SystemConfig.AdditionalFiles))
+	}
+
+	finalPaths := []string{
+		template.SystemConfig.AdditionalFiles[0].Final,
+		template.SystemConfig.AdditionalFiles[1].Final,
+	}
+	if !slice.Contains(finalPaths, "/usr/local/sbin/ict-auto-expand-last-partition.sh") {
+		t.Fatalf("missing injected script additionalFile entry")
+	}
+	if !slice.Contains(finalPaths, "/etc/systemd/system/ict-auto-expand-last-partition.service") {
+		t.Fatalf("missing injected service additionalFile entry")
+	}
+}
+
+func TestSetupFirstBootLastPartitionAutoExpandSkipsWhenDisabled(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	installRoot, err := os.MkdirTemp("", "imageos_autoexpand_skip_test_*")
+	if err != nil {
+		t.Fatalf("failed to create install root: %v", err)
+	}
+	defer os.RemoveAll(installRoot)
+
+	template := createTestImageTemplate()
+	template.Target.ImageType = "raw"
+	template.Disk.ExtendLastPartitionToFillDisk = false
+
+	err = injectFirstBootLastPartitionAutoExpandAdditionalFiles(template)
+	if err != nil {
+		t.Fatalf("injectFirstBootLastPartitionAutoExpandAdditionalFiles returned error: %v", err)
+	}
+	if len(template.SystemConfig.AdditionalFiles) != 0 {
+		t.Fatalf("additional files should not be injected when flag is disabled")
+	}
+
+	err = setupFirstBootLastPartitionAutoExpand(installRoot, template)
+	if err != nil {
+		t.Fatalf("setupFirstBootLastPartitionAutoExpand returned error: %v", err)
+	}
+
+	scriptPath := filepath.Join(installRoot, "usr", "local", "sbin", "ict-auto-expand-last-partition.sh")
+	if _, statErr := os.Stat(scriptPath); !os.IsNotExist(statErr) {
+		t.Fatalf("script should not be generated when flag is disabled")
+	}
+}
+
+func TestSetupFirstBootLastPartitionAutoExpandSkipsWhenImmutableEnabled(t *testing.T) {
+	template := createTestImageTemplate()
+	template.Target.ImageType = "raw"
+	template.Disk.ExtendLastPartitionToFillDisk = true
+	template.SystemConfig.Immutability.Enabled = true
+
+	err := injectFirstBootLastPartitionAutoExpandAdditionalFiles(template)
+	if err == nil {
+		t.Fatalf("expected error when immutability is enabled")
+	}
+}
+
+func TestSetupFirstBootLastPartitionAutoExpandSkipsWhenLastPartitionNotRootfs(t *testing.T) {
+	template := createTestImageTemplate()
+	template.Target.ImageType = "raw"
+	template.Disk.ExtendLastPartitionToFillDisk = true
+	template.Disk.Partitions = []config.PartitionInfo{
+		{
+			ID:         "boot",
+			MountPoint: "/boot",
+			Type:       "esp",
+		},
+		{
+			ID:         "data",
+			MountPoint: "/data",
+			Type:       "linux-data",
+		},
+	}
+
+	err := injectFirstBootLastPartitionAutoExpandAdditionalFiles(template)
+	if err == nil {
+		t.Fatalf("expected error when last partition is not rootfs")
+	}
+}
+
+func TestSetupFirstBootLastPartitionAutoExpandProceedsWhenConditionsMet(t *testing.T) {
+	originalConfigDir := config.Global().ConfigDir
+	defer func() { config.Global().ConfigDir = originalConfigDir }()
+
+	configDir, err := os.MkdirTemp("", "imageos_autoexpand_conditions_test_*")
+	if err != nil {
+		t.Fatalf("failed to create config dir: %v", err)
+	}
+	defer os.RemoveAll(configDir)
+
+	assetDir := filepath.Join(configDir, "osv", "common", "imageconfigs", "firstboot")
+	if err := os.MkdirAll(assetDir, 0755); err != nil {
+		t.Fatalf("failed to create asset dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(assetDir, "ict-auto-expand-last-partition.sh"), []byte("#!/bin/sh\n"), 0644); err != nil {
+		t.Fatalf("failed to write script asset: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(assetDir, "ict-auto-expand-last-partition.service"), []byte("[Unit]\n"), 0644); err != nil {
+		t.Fatalf("failed to write service asset: %v", err)
+	}
+	config.Global().ConfigDir = configDir
+
+	template := createTestImageTemplate()
+	template.Target.ImageType = "raw"
+	template.Disk.ExtendLastPartitionToFillDisk = true
+	template.SystemConfig.Immutability.Enabled = false
+	template.Disk.Partitions = []config.PartitionInfo{
+		{
+			ID:         "boot",
+			MountPoint: "/boot",
+			Type:       "esp",
+		},
+		{
+			ID:         "rootfs",
+			MountPoint: "/",
+			Type:       "linux-root-amd64",
+		},
+	}
+
+	err = injectFirstBootLastPartitionAutoExpandAdditionalFiles(template)
+	if err != nil {
+		t.Fatalf("injectFirstBootLastPartitionAutoExpandAdditionalFiles returned error: %v", err)
+	}
+	if len(template.SystemConfig.AdditionalFiles) != 2 {
+		t.Fatalf("expected 2 additional files to be injected when all conditions are met, got %d", len(template.SystemConfig.AdditionalFiles))
+	}
 }
 
 // TestBuildImageUKI tests the buildImageUKI function

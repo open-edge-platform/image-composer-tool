@@ -562,6 +562,7 @@ func isEmptyDiskConfig(disk DiskConfig) bool {
 		disk.Path == "" &&
 		disk.SelectionPolicy.Strategy == "" &&
 		disk.SelectionPolicy.ExcludeRemovable == nil &&
+		!disk.ExtendLastPartitionToFillDisk &&
 		disk.Size == "" &&
 		disk.PartitionTableType == "" &&
 		len(disk.Artifacts) == 0 &&

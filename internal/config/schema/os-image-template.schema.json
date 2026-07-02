@@ -105,6 +105,10 @@
           },
           "additionalProperties": false
         },
+        "extendLastPartitionToFillDisk": {
+          "type": "boolean",
+          "description": "When true, force only the last partition to use all remaining disk space"
+        },
         "artifacts": {
           "type": "array",
           "description": "Output artifacts configuration",

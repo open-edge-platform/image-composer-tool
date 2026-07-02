@@ -3891,6 +3891,35 @@ func TestGetDiskConfigAndSystemConfig(t *testing.T) {
 	}
 }
 
+func TestGetEffectivePartitions(t *testing.T) {
+	disk := DiskConfig{
+		ExtendLastPartitionToFillDisk: true,
+		Partitions: []PartitionInfo{
+			{ID: "boot", End: "513MiB"},
+			{ID: "rootfs", End: "20GiB"},
+		},
+	}
+
+	effective := disk.GetEffectivePartitions()
+	if len(effective) != 2 {
+		t.Fatalf("expected 2 partitions, got %d", len(effective))
+	}
+	if effective[1].End != "0" {
+		t.Fatalf("expected last partition end to be 0, got %s", effective[1].End)
+	}
+
+	// Ensure the source config is not mutated.
+	if disk.Partitions[1].End != "20GiB" {
+		t.Fatalf("expected original partition end to remain 20GiB, got %s", disk.Partitions[1].End)
+	}
+
+	withoutFlag := DiskConfig{Partitions: []PartitionInfo{{ID: "rootfs", End: "20GiB"}}}
+	effectiveWithoutFlag := withoutFlag.GetEffectivePartitions()
+	if effectiveWithoutFlag[0].End != "20GiB" {
+		t.Fatalf("expected partition end to remain unchanged when flag is false, got %s", effectiveWithoutFlag[0].End)
+	}
+}
+
 func TestGetBootloaderConfig(t *testing.T) {
 	bl := Bootloader{BootType: "efi", Provider: "grub2"}
 	template := &ImageTemplate{SystemConfig: SystemConfig{Bootloader: bl}}

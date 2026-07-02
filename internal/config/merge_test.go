@@ -590,6 +590,12 @@ func TestIsEmptyDiskConfig(t *testing.T) {
 	if isEmptyDiskConfig(diskWithPolicy) {
 		t.Errorf("disk config with selection policy should not be empty")
 	}
+
+	// Test non-empty disk config with extend-last-partition option
+	diskWithExtendLast := DiskConfig{ExtendLastPartitionToFillDisk: true}
+	if isEmptyDiskConfig(diskWithExtendLast) {
+		t.Errorf("disk config with extendLastPartitionToFillDisk should not be empty")
+	}
 }
 
 func TestIsEmptySystemConfigDetailed(t *testing.T) {
