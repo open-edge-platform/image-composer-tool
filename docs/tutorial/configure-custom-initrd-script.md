@@ -33,6 +33,38 @@ Use exactly one route for your template customization.
 - Route 2 (`bb-dracut-raw`, dracut): **add** `dracut` and `dracut-core`; **remove** `initramfs-tools` and `cloud-initramfs-growroot` if present.
 - For both routes: keep your GRUB and kernel packages (for example `grub-cloud-amd64` and `linux-image-amd64`).
 
+### Remove the current initrd stack with `configurations` commands
+
+If your base package set already includes the wrong initrd tooling, remove it explicitly in `systemConfig.configurations`.
+
+Use one of these snippets based on your route:
+
+#### If you are switching to Route 1 (`initramfs-tools`)
+
+Remove dracut packages and dracut module config:
+
+```yaml
+  configurations:
+    - cmd: "apt-get purge -y dracut dracut-core || true"
+    - cmd: "rm -f /etc/dracut.conf.d/*.conf"
+```
+
+#### If you are switching to Route 2 (`dracut`)
+
+Remove initramfs-tools packages and old hook/script paths:
+
+```yaml
+  configurations:
+    - cmd: "apt-get purge -y initramfs-tools cloud-initramfs-growroot || true"
+    - cmd: "rm -f /etc/initramfs-tools/hooks/hello /etc/initramfs-tools/scripts/init-bottom/hello"
+```
+
+Notes:
+
+- Keep only one initrd framework in the final image to avoid mixed behavior.
+- Keep your selected framework in `packages` (`initramfs-tools` for Route 1, or `dracut` + `dracut-core` for Route 2).
+- `|| true` makes the command safe when a package is not installed.
+
 ---
 
 ## Route 1: initramfs-tools hook + boot script (`bb-raw`)
