@@ -77,10 +77,10 @@ sequenceDiagram
     participant ICT as ICT binary (os/exec)
 
     Note over U,ICT: Load options
-    SPA->>API: GET /verticals, /platforms, /targets
-    API->>M: read distinct combinations
-    M-->>API: valid options
-    API-->>SPA: JSON → populate dropdowns
+    SPA->>API: GET /manifest
+    API->>M: load manifest (all combinations + labels)
+    M-->>API: full manifest
+    API-->>SPA: JSON → populate dropdowns (cascade locally)
     U->>SPA: select vertical / SKU / platform / OS
 
     Note over U,ICT: Review (optional)
@@ -213,12 +213,12 @@ sequenceDiagram
 
 | Prototype Feature | Production Implementation |
 |-------------------|--------------------------|
-| Targeted Vertical dropdown with optgroup | `<Select>` from Shadcn/ui, options from `GET /api/v1/verticals` |
-| SKU dropdown (vertical-specific) | `<Select>`, options from `GET /api/v1/verticals/{id}/skus` |
-| Platform dropdown (PTL/WCL/ARL/NVL) | `<Select>`, options from `GET /api/v1/platforms` |
-| OS dropdown (per-vertical) | `<Select>`, options from the selected vertical's `supportedOs` (via `GET /api/v1/verticals`), preselecting `defaultOs`. MVP-1 has one OS per vertical; the list grows without UI changes. |
+| Targeted Vertical dropdown with optgroup | `<Select>` from Shadcn/ui, options derived from `GET /api/v1/manifest` |
+| SKU dropdown (vertical-specific) | `<Select>`, filtered from manifest combinations for the selected vertical |
+| Platform dropdown (PTL/WCL/ARL/NVL) | `<Select>`, filtered from manifest combinations |
+| OS dropdown (per-vertical) | `<Select>`, options from the selected vertical's `supportedOs` in the manifest, preselecting `defaultOs`. MVP-1 has one OS per vertical; the list grows without UI changes. |
 | "Review Image Configuration" checkbox | `<Checkbox>` + `<ReviewPanel>` — expands summary table |
-| Review summary table | `<Table>` showing Image, Vertical, SKU, Platform, OS, Image Type, Disk, Packages — data from vertical presets via `GET /api/v1/verticals/{id}/defaults` |
+| Review summary table | `<Table>` showing Image, Vertical, SKU, Platform, OS, Image Type, Disk, Packages — data from `POST /api/v1/templates/compose` (resolves the matched template for the current selections) |
 | Auto-uncheck on config change | Zustand subscription resets review state on any selection change |
 | "Build Image" button | Navigates to Build Image tab, triggers `POST /api/v1/builds` |
 | "Edit in Advanced" button | Navigates to Advanced tab, syncs Basic state into Advanced store |
@@ -258,7 +258,7 @@ sequenceDiagram
 
 ### Why stdlib `net/http` over chi/gin/echo?
 
-Go 1.22 added method + pattern routing. ICT has ~13 endpoints — stdlib is sufficient and avoids external router dependencies.
+Go 1.22 added method + pattern routing. ICT has 9 endpoints — stdlib is sufficient and avoids external router dependencies.
 
 ### Why React over HTMX?
 
@@ -278,6 +278,10 @@ The template state (vertical selection + overrides from Advanced) maps cleanly t
 ### Why SSE over WebSocket?
 
 Build log streaming is unidirectional (server → client). SSE works through corporate proxies, has built-in auto-reconnect, and needs ~50 lines of Go.
+
+### Why import `internal/config` for validation instead of shelling out?
+
+The validate CLI command (`image-composer-tool validate`) internally calls `config.LoadAndMergeTemplate()`. Since the API server lives in the same Go module, it imports this function directly — no process spawn, structured errors without CLI text parsing, and the same validation logic the CLI uses. Reserve `os/exec` for the build (which needs process isolation for chroot operations).
 
 ---
 
@@ -376,8 +380,7 @@ combinations:
 
 | Endpoint | Source |
 |----------|--------|
-| `GET /verticals`, `/platforms`, `/targets`, `/verticals/{id}/skus` | Distinct values from `manifest.yaml` (drives the dropdowns; only combinations that resolve to a real template are offered) |
-| `GET /verticals/{id}/defaults` | The matched template — summary fields (packages, disk, image type) are read from that template file |
+| `GET /manifest` | Serves the full manifest in one call — all valid combinations + vertical/platform/target display labels. The UI derives dropdown cascading locally. |
 | `POST /templates/compose` | Returns the matched template's YAML verbatim — Basic uses it for the Review summary; Advanced fetches it **once** to seed the editor |
 | `POST /templates/validate` | Validates the Advanced tab's edited YAML against the ICT schema; returns `{ valid, errors[], warnings[] }`. Backs the Validate button |
 | `POST /builds` | **Basic:** `{ compose }` → builds the matched template file directly. **Advanced:** `{ yaml }` → builds the complete edited YAML sent by the client. Always a whole template, never a delta. |
@@ -408,6 +411,29 @@ what gets built.
 
 These edits produce a modified YAML for that build only; they do **not** alter the
 stored templates. Changing a default template remains an engineering-team action.
+
+### Build tracking (MVP-1)
+
+Builds are tracked **in-memory** by the API server — no database.
+
+- On `POST /builds`, the server generates a UUID and creates a work directory (`workspace/builds/{buildId}/`)
+- ICT writes artifacts (image + SBOM) into that directory
+- Build metadata (id, status, startedAt, completedAt, artifacts[]) is held in a `map[string]*Build`
+- `GET /builds/{id}/artifacts` reads from this map (paths point to `workspace/builds/{buildId}/`)
+- The SSE connection keeps the entry alive; after completion, entries are retained for a configurable TTL (e.g. 30 min)
+- On server restart, build history is lost (acceptable for MVP-1)
+
+**Post-MVP:** Persist build metadata to `workspace/builds/{buildId}/metadata.json` so the server can rehydrate on restart. No database needed — the filesystem is the store.
+
+### Package search strategy
+
+The Advanced tab's package search (`GET /packages/search`) is **debounced server-side search**, not a bulk client-side download.
+
+- Client debounces input (300ms) and sends `GET /packages/search?q=...&os=...&limit=10`
+- Server maintains an in-memory index of package metadata per enabled repository
+- **MVP-1:** backed by a curated static package list per repo; wiring to real apt/dnf repo metadata indices is future work
+- Results include package name, latest version, description, and source repository
+- Minimum query length: 2 characters
 
 > **Out of scope for MVP-1:** a live package index. `GET /packages/search` is backed by
 > a static/sample package list in MVP-1; wiring it to real repository metadata
@@ -451,7 +477,7 @@ npx openapi-typescript api/v1/openapi-template-builder.yaml -o web/src/api/types
 |-------------|-----------------|
 | HTMX + Go templates | Advanced tab needs client-side state (step wizard, tag inputs, live YAML preview) |
 | Vue 3 + Vuetify | Smaller ecosystem, opinionated Material styling |
-| chi/gin router | stdlib Go 1.22+ mux sufficient for ~12 endpoints |
+| chi/gin router | stdlib Go 1.22+ mux sufficient for 9 endpoints |
 | WebSocket for streaming | Blocked by corporate proxies, bidirectional not needed |
 | Separate nginx for static | embed.FS gives single-binary deployment |
 
@@ -507,3 +533,4 @@ npx openapi-typescript api/v1/openapi-template-builder.yaml -o web/src/api/types
 | 2026-07-01 | ICT Team | Converted sequence diagram to Mermaid (repo convention for sequence diagrams); recolored block diagrams with a softer palette; renamed hand-authored SVGs from `*.drawio.svg` to `*.svg` (they are not draw.io-editable) |
 | 2026-07-01 | ICT Team | Clarified build payload & Advanced preview: `POST /builds` is always self-contained (Basic → `{compose}`, Advanced → complete `{yaml}`, never a delta); Advanced fetches the base template once then edits/re-render happen client-side with no per-change backend calls; removed misleading "apply edits per request" wording |
 | 2026-07-01 | ICT Team | Enforced exactly-one `compose`/`yaml` on `POST /builds` via `oneOf`; split the sequence diagram into separate Basic and Advanced flows; added `POST /templates/validate` endpoint to back the Advanced Validate button; documented Export YAML as a client-side action (no backend call) |
+| 2026-07-02 | ICT Team | Documented team decisions: single manifest endpoint, in-memory build tracking, debounced server-side package search, Go library for validation (not binary), package repo priority support |
