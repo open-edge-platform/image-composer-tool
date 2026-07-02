@@ -4,7 +4,12 @@
 
 **Goal:** Run your own shell script **on the device during early boot** (inside the initramfs), for **Debian 13** `**imageType: raw`** images that use **GRUB**.
 
-Debian raw images with GRUB build the booted initramfs with `**update-initramfs`** (**initramfs-tools**). You add a **hook** (pack your script into the initramfs at image build time) and an `**init-bottom`** script (run it during boot).
+This tutorial supports **two routes** for Debian 13 raw + GRUB images:
+
+1. **Route 1: initramfs-tools flow** using `image-templates/debian13-x86_64-bb-raw.yml`
+2. **Route 2: dracut module flow** using `image-templates/debian13-x86_64-bb-dracut-raw.yml`
+
+Both routes achieve the same goal (run your custom logic during early boot), but they use different initrd tooling and file layouts.
 
 **Start from your image template:** add `systemConfig.additionalFiles` (and related entries) that point at files in the repo. This page shows the YAML first, then the file contents and boot stages.
 
@@ -13,7 +18,24 @@ Debian raw images with GRUB build the booted initramfs with `**update-initramfs`
 - `image-templates/debian13-x86_64-bb-raw.yml` with `image-templates/additionalfiles/debian13-bb/` (initramfs-tools flow)
 - `image-templates/debian13-x86_64-bb-dracut-raw.yml` with `image-templates/additionalfiles/debian13-bb-dracut/` (dracut module flow)
 
-## Image template changes
+## Choose your route first
+
+Use exactly one route for your template customization.
+
+| Route | Pick this when | Start from this template |
+| ----- | -------------- | ------------------------ |
+| Route 1: initramfs-tools hook + script | You want the classic Debian `update-initramfs` hook model (`hooks/` + `scripts/init-bottom/`). | `image-templates/debian13-x86_64-bb-raw.yml` |
+| Route 2: dracut module | You prefer dracut module structure under `modules.d/` and dracut module enablement config. | `image-templates/debian13-x86_64-bb-dracut-raw.yml` |
+
+### Package switch required for each route
+
+- Route 1 (`bb-raw`, initramfs-tools): **add** `initramfs-tools` and `cloud-initramfs-growroot`; **remove** `dracut` and `dracut-core` if present.
+- Route 2 (`bb-dracut-raw`, dracut): **add** `dracut` and `dracut-core`; **remove** `initramfs-tools` and `cloud-initramfs-growroot` if present.
+- For both routes: keep your GRUB and kernel packages (for example `grub-cloud-amd64` and `linux-image-amd64`).
+
+---
+
+## Route 1: initramfs-tools hook + boot script (`bb-raw`)
 
 Use [debian13-x86_64-bb-raw.yml](../../image-templates/debian13-x86_64-bb-raw.yml) as an example.
 
@@ -67,10 +89,10 @@ Rename `debian13-bb` in `local` paths to match your folder name. Keep the `**fin
 
 ---
 
-## dracut module variant (`bb-dracut-raw`) vs initramfs-tools (`bb-raw`)
+## Route 2: dracut module (`bb-dracut-raw`)
 
 If you want the same early-boot marker behavior using dracut modules instead of initramfs-tools hooks, use
-`image-templates/debian13-x86_64-bb-dracut-raw.yml`.
+[debian13-x86_64-bb-dracut-raw.yml](../../image-templates/debian13-x86_64-bb-dracut-raw.yml).
 
 This variant keeps the same Debian 13 + GRUB + raw image target but changes how content is added to initrd:
 
@@ -122,7 +144,9 @@ reference implementation.
 
 ## Build and check
 
-**Build the tool, install prerequisites, validate, and compose the image** using the [README.md](../../README.md) (Quick Start and *Compose an Image*). Example templates:
+**Build the tool, install prerequisites, validate, and compose the image** using the [README.md](../../README.md) (Quick Start and *Compose an Image*).
+
+Pick one template based on your chosen route:
 
 - `image-templates/debian13-x86_64-bb-raw.yml`
 - `image-templates/debian13-x86_64-bb-dracut-raw.yml`
