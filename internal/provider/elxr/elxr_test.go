@@ -242,6 +242,8 @@ func TestLoadRepoConfigElxr13Bianca(t *testing.T) {
 }
 
 func TestNormalizeElxrDist(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		in   string
 		want string
@@ -256,10 +258,49 @@ func TestNormalizeElxrDist(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.in, func(t *testing.T) {
+			t.Parallel()
+
 			if got := normalizeElxrDist(tt.in); got != tt.want {
 				t.Fatalf("normalizeElxrDist(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestBuildRepositoryListAssignsBasePriority(t *testing.T) {
+	t.Parallel()
+
+	providerConfigs := []config.ProviderRepoConfig{
+		{
+			Name:      "aria",
+			Type:      "deb",
+			BaseURL:   "https://mirror.elxr.dev/elxr/dists/aria/main",
+			PbGPGKey:  "https://mirror.elxr.dev/elxr/repo.key",
+			Component: "main",
+		},
+		{
+			Name:    "skip-me",
+			Type:    "rpm",
+			BaseURL: "https://mirror.elxr.dev/rpm",
+		},
+	}
+
+	repoList := buildRepositoryList(providerConfigs, "amd64")
+
+	if got := repoList[0].Priority; got != 500 {
+		t.Fatalf("repoList[0].Priority = %d, want 500", got)
+	}
+
+	if got := repoList[0].ID; got != "elxr1" {
+		t.Fatalf("repoList[0].ID = %q, want %q", got, "elxr1")
+	}
+
+	if got := repoList[0].URL; got != "https://mirror.elxr.dev/elxr/dists/aria/main" {
+		t.Fatalf("repoList[0].URL = %q, want %q", got, "https://mirror.elxr.dev/elxr/dists/aria/main")
+	}
+
+	if repoList[1].ID != "" || repoList[1].URL != "" || repoList[1].Priority != 0 {
+		t.Fatalf("repoList[1] = %#v, want zero-value repository for non-DEB input", repoList[1])
 	}
 }
 
