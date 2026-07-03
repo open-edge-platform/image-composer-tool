@@ -330,28 +330,7 @@ func loadRepoConfig(dist string, arch string) ([]debutils.RepoConfig, error) {
 		return repoConfigs, fmt.Errorf("failed to load provider repo config: %w", err)
 	}
 
-	repoList := make([]debutils.Repository, len(providerConfigs))
-	repoGroup := "elxr"
-
-	// Convert each ProviderRepoConfig to debutils.RepoConfig
-	for i, providerConfig := range providerConfigs {
-		repoType, name, _, gpgKey, component, _, _, _, _, baseURL, _, _, _ := providerConfig.ToRepoConfigData(arch)
-
-		// Verify this is a DEB repository
-		if repoType != "deb" {
-			log.Warnf("Skipping non-DEB repository: %s (type: %s)", name, repoType)
-			continue
-		}
-
-		repoList[i] = debutils.Repository{
-			ID:        fmt.Sprintf("%s%d", repoGroup, i+1),
-			Codename:  name,
-			URL:       baseURL,
-			PKey:      gpgKey,
-			Component: component,
-			Priority:  0, // Default priority
-		}
-	}
+	repoList := buildRepositoryList(providerConfigs, arch)
 
 	repoConfigs, err = debutils.BuildRepoConfigs(repoList, arch)
 	if err != nil {
@@ -363,6 +342,31 @@ func loadRepoConfig(dist string, arch string) ([]debutils.RepoConfig, error) {
 	}
 
 	return repoConfigs, nil
+}
+
+func buildRepositoryList(providerConfigs []config.ProviderRepoConfig, arch string) []debutils.Repository {
+	repoList := make([]debutils.Repository, len(providerConfigs))
+	repoGroup := "elxr"
+
+	for i, providerConfig := range providerConfigs {
+		repoType, name, _, gpgKey, component, _, _, _, _, baseURL, _, _, _ := providerConfig.ToRepoConfigData(arch)
+
+		if repoType != "deb" {
+			log.Warnf("Skipping non-DEB repository: %s (type: %s)", name, repoType)
+			continue
+		}
+
+		repoList[i] = debutils.Repository{
+			ID:        fmt.Sprintf("%s%d", repoGroup, i+1),
+			Codename:  name,
+			URL:       baseURL,
+			PKey:      gpgKey,
+			Component: component,
+			Priority:  500,
+		}
+	}
+
+	return repoList
 }
 
 // normalizeElxrDist maps user/config aliases to supported distribution directory names.
