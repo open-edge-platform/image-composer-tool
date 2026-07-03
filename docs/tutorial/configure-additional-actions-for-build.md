@@ -229,6 +229,7 @@ systemConfig:
 
 ## Related Documentation
 
+- [Configure a custom script in the initrd (early boot)](configure-custom-initrd-script.md)
 - [Image Templates](../architecture/image-composer-tool-templates.md)
 - [Understanding the OS Image Build Process](../architecture/image-composer-tool-build-process.md)
 - [Command-Line Reference](../architecture/image-composer-tool-cli-specification.md)

@@ -1,0 +1,11 @@
+#!/bin/sh
+PREREQ=""
+prereqs() { echo "$PREREQ"; exit 0; }
+
+case "$1" in
+prereqs) prereqs; exit 0 ;;
+esac
+
+if [ -x /usr/local/sbin/hello.sh ]; then
+	/usr/local/sbin/hello.sh
+fi
