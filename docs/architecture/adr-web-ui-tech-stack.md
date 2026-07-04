@@ -444,17 +444,21 @@ Builds are tracked **in-memory** by the API server — no database.
 
 ### Package search strategy
 
-The Advanced tab's package search (`GET /packages/search`) is **debounced server-side search**, not a bulk client-side download.
+The Advanced tab's package search (`GET /packages/search`) is **debounced server-side search** over a **live package index**, not a bulk client-side download.
 
 - Client debounces input (300ms) and sends `GET /packages/search?q=...&os=...&limit=10`
-- Server maintains an in-memory index of package metadata per enabled repository
-- **MVP-1:** backed by a curated static package list per repo; wiring to real apt/dnf repo metadata indices is future work
-- Results include package name, latest version, description, and source repository
+- Server builds an in-memory index of package metadata per enabled repository by reusing ICT's existing repo-metadata parsers:
+  - **Debian/apt:** `internal/ospackage/debutils` locates and parses `Packages.gz`/`Packages.xz`
+  - **RPM/dnf:** `internal/ospackage/rpmutils.ParseRepositoryMetadata()` parses `primary.xml` and already returns `[]ospackage.PackageInfo` (name + version), with a built-in name-prefix filter
+- The index is populated lazily per repo (on first search touching that repo) and cached; ICT's parsers already persist metadata to the cache directory, so re-parsing is avoided across restarts
+- Results include package **name, latest version, description, and source repository** — version comes free from `PackageInfo`
 - Minimum query length: 2 characters
 
-> **Out of scope for MVP-1:** a live package index. `GET /packages/search` is backed by
-> a static/sample package list in MVP-1; wiring it to real repository metadata
-> (apt/dnf indices) is future work.
+**Why this is affordable:** no new metadata parsing is written — the search handler wires up functions ICT already uses during builds.
+
+> **Scale note:** a full apt suite's `Packages.gz` is large (tens of thousands of
+> entries). Mitigations: index only enabled repos, load lazily per repo, and rely
+> on the existing on-disk metadata cache. A refresh TTL keeps the index current.
 
 ---
 
