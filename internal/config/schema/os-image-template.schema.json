@@ -43,7 +43,7 @@
         "imageType": {
           "type": "string",
           "description": "Type of image to build",
-          "enum": ["raw", "img", "iso"]
+          "enum": ["raw", "img", "iso", "wsl2"]
         }
       },
       "required": ["os", "dist", "arch", "imageType"],
@@ -114,7 +114,7 @@
               "type": {
                 "type": "string",
                 "description": "Output format type",
-                "enum": ["raw", "qcow2", "vhd", "vhdx", "vmdk", "vdi"]
+                "enum": ["raw", "qcow2", "vhd", "vhdx", "vmdk", "vdi", "tar"]
               },
               "compression": {
                 "type": "string",
@@ -440,6 +440,82 @@
       },
       "additionalProperties": false
     },
+    "Baseline": {
+      "type": "object",
+      "description": "Baseline image mode selector. Default mode is 'create' (build from scratch). 'overlay' layers packages onto an existing baseline image.",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "description": "Baseline assembly mode",
+          "enum": ["create", "overlay"],
+          "default": "create"
+        },
+        "source": { "$ref": "#/$defs/BaselineSource" }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "properties": { "mode": { "const": "overlay" } }, "required": ["mode"] },
+          "then": { "required": ["source"] }
+        },
+        {
+          "if": {
+            "anyOf": [
+              { "properties": { "mode": { "const": "create" } }, "required": ["mode"] },
+              { "not": { "required": ["mode"] } }
+            ]
+          },
+          "then": { "not": { "required": ["source"] } }
+        }
+      ]
+    },
+    "BaselineSource": {
+      "type": "object",
+      "description": "Baseline source. v1 supports a local RAW disk image, referenced by a local path or an http(s) URL. Exactly one of 'path' or 'url' must be set.",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Local filesystem path to the baseline RAW disk image (no URI scheme; use 'url' for remote images)",
+          "minLength": 1,
+          "not": { "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:" }
+        },
+        "url": {
+          "type": "string",
+          "description": "http(s) URL of the baseline RAW disk image; downloaded over TLS before the overlay runs",
+          "minLength": 1
+        },
+        "format": {
+          "type": "string",
+          "description": "Baseline image format",
+          "enum": ["raw"],
+          "default": "raw"
+        }
+      },
+      "additionalProperties": false
+    },
+    "OverlayPolicy": {
+      "type": "object",
+      "description": "Policy controls for overlay-mode preflight and install. allowRemoval is intentionally absent: removals are never permitted in v1.",
+      "properties": {
+        "packageOperation": {
+          "type": "string",
+          "description": "Permitted package operation set",
+          "enum": ["additive-only"],
+          "default": "additive-only"
+        },
+        "conflictPolicy": {
+          "type": "string",
+          "description": "How to handle package conflicts detected during preflight",
+          "enum": ["fail", "allow-explicit"],
+          "default": "fail"
+        },
+        "kernelCmdline": {
+          "type": "string",
+          "description": "Optional kernel command-line override applied to the overlaid image"
+        }
+      },
+      "additionalProperties": false
+    },
     "PackageRepository": {
       "type": "object",
       "description": "Additional package repository configuration",
@@ -560,6 +636,8 @@
         "metadata": { "$ref": "#/$defs/Metadata" },
         "image": { "$ref": "#/$defs/Image" },
         "target": { "$ref": "#/$defs/Target" },
+        "baseline": { "$ref": "#/$defs/Baseline" },
+        "overlayPolicy": { "$ref": "#/$defs/OverlayPolicy" },
         "disk": { "$ref": "#/$defs/Disk" },
         "systemConfig": { "$ref": "#/$defs/SystemConfig" },
         "sbomPackageMetadata": {
@@ -574,7 +652,80 @@
         }
       },
       "required": ["image", "target", "systemConfig"],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "target": {
+                "properties": {
+                  "imageType": { "const": "wsl2" }
+                },
+                "required": ["imageType"]
+              }
+            },
+            "required": ["target"]
+          },
+          "then": {
+            "required": ["disk"],
+            "properties": {
+              "systemConfig": {
+                "properties": {
+                  "kernel": false
+                }
+              },
+              "disk": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "artifacts": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": ["tar"]
+                        },
+                        "compression": {
+                          "type": "string",
+                          "enum": ["gz"]
+                        }
+                      },
+                      "required": ["type", "compression"],
+                      "additionalProperties": false
+                    }
+                  },
+                  "partitionTableType": false,
+                  "partitions": false
+                },
+                "required": ["name", "artifacts"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "disk": {
+                "properties": {
+                  "artifacts": {
+                    "items": {
+                      "properties": {
+                        "type": {
+                          "not": { "const": "tar" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
     },
 
     "UserTemplate": {
@@ -587,6 +738,8 @@
         "metadata": { "$ref": "#/$defs/Metadata" },
         "image": { "$ref": "#/$defs/Image" },
         "target": { "$ref": "#/$defs/Target" },
+        "baseline": { "$ref": "#/$defs/Baseline" },
+        "overlayPolicy": { "$ref": "#/$defs/OverlayPolicy" },
         "disk": { "$ref": "#/$defs/Disk" },
         "systemConfig": { "$ref": "#/$defs/SystemConfig" },
         "sbomPackageMetadata": {
@@ -601,7 +754,79 @@
         }
       },
       "required": ["image", "target"],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "target": {
+                "properties": {
+                  "imageType": { "const": "wsl2" }
+                },
+                "required": ["imageType"]
+              }
+            },
+            "required": ["target"]
+          },
+          "then": {
+            "properties": {
+              "systemConfig": {
+                "properties": {
+                  "kernel": false
+                }
+              },
+              "disk": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "artifacts": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": ["tar"]
+                        },
+                        "compression": {
+                          "type": "string",
+                          "enum": ["gz"]
+                        }
+                      },
+                      "required": ["type", "compression"],
+                      "additionalProperties": false
+                    }
+                  },
+                  "partitionTableType": false,
+                  "partitions": false
+                },
+                "required": ["name", "artifacts"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "disk": {
+                "properties": {
+                  "artifacts": {
+                    "items": {
+                      "properties": {
+                        "type": {
+                          "not": { "const": "tar" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
     }
   }
 }

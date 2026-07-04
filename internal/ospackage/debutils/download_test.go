@@ -11,6 +11,7 @@ import (
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
 
 func resetURLExistenceCacheForTest(t *testing.T) {
@@ -108,6 +109,147 @@ func TestPackages(t *testing.T) {
 				if len(packages) != tt.expectedCount {
 					t.Errorf("Expected %d packages, got %d", tt.expectedCount, len(packages))
 				}
+			}
+		})
+	}
+}
+
+func TestLocalUserPackagesRegistersLocalRepoPriority(t *testing.T) {
+	origUserRepo := UserRepo
+	origArch := Architecture
+	origLocalUserRepoCfgs := LocalUserRepoCfgs
+	origExecutor := shell.Default
+	t.Cleanup(func() {
+		UserRepo = origUserRepo
+		Architecture = origArch
+		LocalUserRepoCfgs = origLocalUserRepoCfgs
+		shell.Default = origExecutor
+	})
+
+	tests := []struct {
+		name         string
+		templatePrio int
+		wantPrio     int
+	}{
+		{name: "explicit priority preserved", templatePrio: 900, wantPrio: 900},
+		{name: "default priority applied", templatePrio: 0, wantPrio: 500},
+	}
+
+	for _, tt := range tests {
+		tc := tt
+		t.Run(tc.name, func(t *testing.T) {
+			repoDir := t.TempDir()
+			debPath := filepath.Join(repoDir, "package1_1.0_amd64.deb")
+			if err := os.WriteFile(debPath, []byte("fake deb content"), 0644); err != nil {
+				t.Fatalf("failed to create fake DEB file: %v", err)
+			}
+
+			shell.Default = &scanpackagesExecutor{}
+			UserRepo = []config.PackageRepository{{Path: repoDir, Priority: tc.templatePrio}}
+			Architecture = "amd64"
+
+			_, cleanup, err := LocalUserPackages()
+			if cleanup != nil {
+				defer cleanup()
+			}
+			if err != nil {
+				t.Fatalf("LocalUserPackages() error = %v", err)
+			}
+			if len(LocalUserRepoCfgs) != 1 {
+				t.Fatalf("expected 1 local repo config, got %d", len(LocalUserRepoCfgs))
+			}
+			if got := LocalUserRepoCfgs[0].Priority; got != tc.wantPrio {
+				t.Fatalf("local repo priority = %d, want %d", got, tc.wantPrio)
+			}
+			if got := getRepositoryPriority(LocalUserRepoCfgs[0].PkgPrefix + "/pool/main/p/package1/package1_1.0_amd64.deb"); got != tc.wantPrio {
+				t.Fatalf("getRepositoryPriority(localhost package URL) = %d, want %d", got, tc.wantPrio)
+			}
+		})
+	}
+}
+
+func TestUserRepoCfgsRegistersRemoteRepoPriority(t *testing.T) {
+	origUserRepoCfgs := UserRepoCfgs
+	t.Cleanup(func() { UserRepoCfgs = origUserRepoCfgs })
+
+	tests := []struct {
+		name     string
+		priority int
+		want     int
+	}{
+		{name: "explicit priority preserved", priority: 800, want: 800},
+		{name: "zero priority stored as-is in direct lookup", priority: 0, want: 0},
+	}
+
+	for _, tt := range tests {
+		tc := tt
+		t.Run(tc.name, func(t *testing.T) {
+			UserRepoCfgs = []RepoConfig{
+				{
+					PkgPrefix: "https://remote.example.com/ubuntu",
+					Priority:  tc.priority,
+				},
+			}
+			pkgURL := "https://remote.example.com/ubuntu/pool/main/c/curl/curl_7.0_amd64.deb"
+			if got := getRepositoryPriority(pkgURL); got != tc.want {
+				t.Fatalf("getRepositoryPriority(%q) = %d, want %d", pkgURL, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestInitializeUserRepoCfgsNormalizesDefaultPriority(t *testing.T) {
+	resetURLExistenceCacheForTest(t)
+
+	origUserRepo := UserRepo
+	origUserRepoCfgs := UserRepoCfgs
+	origArch := Architecture
+	t.Cleanup(func() {
+		UserRepo = origUserRepo
+		UserRepoCfgs = origUserRepoCfgs
+		Architecture = origArch
+		resetURLExistenceCacheForTest(t)
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/dists/noble/main/binary-amd64/Packages.gz" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	tests := []struct {
+		name         string
+		templatePrio int
+		wantPrio     int
+	}{
+		{name: "explicit priority preserved", templatePrio: 900, wantPrio: 900},
+		{name: "zero priority defaults to 500", templatePrio: 0, wantPrio: 500},
+	}
+
+	for _, tt := range tests {
+		tc := tt
+		t.Run(tc.name, func(t *testing.T) {
+			UserRepoCfgs = nil
+			Architecture = "amd64"
+			UserRepo = []config.PackageRepository{{
+				URL:      server.URL,
+				Codename: "noble",
+				PKey:     "dummy-key",
+				Priority: tc.templatePrio,
+			}}
+			resetURLExistenceCacheForTest(t)
+
+			if err := initializeUserRepoCfgs(); err != nil {
+				t.Fatalf("initializeUserRepoCfgs() error = %v", err)
+			}
+			if len(UserRepoCfgs) == 0 {
+				t.Fatal("expected UserRepoCfgs to be populated")
+			}
+			if got := UserRepoCfgs[0].Priority; got != tc.wantPrio {
+				t.Fatalf("UserRepoCfgs[0].Priority = %d, want %d", got, tc.wantPrio)
 			}
 		})
 	}

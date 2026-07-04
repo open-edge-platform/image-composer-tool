@@ -404,6 +404,7 @@ func TestCompressFolder(t *testing.T) {
 			compressType: "tar.xz",
 			sudo:         true,
 			mockCommands: []shell.MockCommand{
+				{Pattern: "mkdir -p --", Output: "", Error: nil},
 				{Pattern: "tar -cJf /tmp/output/archive.tar.xz -C /tmp/test/folder .", Output: "", Error: nil},
 			},
 			expectError: false,
@@ -426,6 +427,7 @@ func TestCompressFolder(t *testing.T) {
 			compressType: "tar.gz",
 			sudo:         true,
 			mockCommands: []shell.MockCommand{
+				{Pattern: "mkdir -p --", Output: "", Error: nil},
 				{Pattern: "tar -czf /tmp/output/archive.tar.gz -C /tmp/test/folder .", Output: "", Error: nil},
 			},
 			expectError: false,
