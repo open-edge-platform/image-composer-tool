@@ -357,7 +357,7 @@ from the selections:
 
 | Selection | Mapped template (`template:` in manifest) |
 |-----------|-------------------------------------------|
-| Ubuntu 24.04 · Robotics · AMR · — · ISO | `ubuntu24-x86_64-robotics-jazzy-iso.yml` |
+| Ubuntu 24.04 · Robotics · AMR · PTL · ISO | `ubuntu24-x86_64-robotics-jazzy-ptl-iso.yml` |
 | Ubuntu 24.04 · Generic · Non-Realtime · PTL · RAW | `ubuntu24-x86_64-minimal-ptl-pv-raw.yml` |
 
 > **No renaming required.** Existing templates in `image-templates/` keep their
@@ -546,7 +546,7 @@ npx openapi-typescript api/v1/openapi-template-builder.yaml -o web/src/api/types
 |------|--------|--------|
 | 2026-06-26 | ICT Team | Initial proposal — Basic/Advanced/Build MVP |
 | 2026-06-28 | ICT Team | Updated to match prototype: renamed Build→Build Image, IMG→QCOW, removed kernel/users/policies/unattended steps, removed info cards/progress bar/build history, added Review Image Configuration checkbox, added artifacts table (Image+SBOM), added Basic→Advanced sync, reordered steps (Target→Packages→Disk→Review), updated API endpoints and project structure |
-| 2026-06-28 | ICT Team | Editorial cleanup; OpenAPI spec rewritten to 12 endpoints with `operationId`s for codegen; removed embedded Swagger UI in favor of spec-in-repo |
+| 2026-06-28 | ICT Team | Editorial cleanup; OpenAPI spec rewritten with `operationId`s for codegen; removed embedded Swagger UI in favor of spec-in-repo |
 | 2026-06-28 | ICT Team | Basic tab OS dropdown now per-vertical (`supportedOs`/`defaultOs`), future-proofed for multiple OSes per vertical; added `os` query param to `getVerticalDefaults`; documented Backend Data Model & Maintenance (catalog + defaults resolution + CI validation) |
 | 2026-06-28 | ICT Team | Replaced catalog/overlay data model with ICT's template-per-combination model: each UI selection maps via `manifest.yaml` to one pre-authored, engineering-tested template in `image-templates/`; `compose` returns the matched template rather than synthesizing one; Advanced edits apply per-request only |
 | 2026-07-01 | ICT Team | Refreshed both architecture diagrams to match current model (removed Swagger/validate/CRUD/policies/history; added manifest + artifacts); noted Advanced wizard steps are MVP-1 scope; clarified single-binary constraint; trimmed Project Structure to key files |

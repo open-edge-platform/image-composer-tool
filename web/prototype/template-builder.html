@@ -604,7 +604,7 @@ body {
         <span id="build-result" style="font-weight:600;"></span>
       </div>
       <div style="margin-top:16px;">
-        <div style="font-size:14px;font-weight:600;margin-bottom:8px;">Build Status</div>
+        <div style="font-size:14px;font-weight:600;margin-bottom:8px;">Build Status <span id="build-status-text" class="build-status"></span></div>
         <div class="build-logs" id="build-logs">
           <div class="log-line"><span class="log-time">[14:32:01]</span> <span class="log-info">Resolving package dependencies...</span></div>
           <div class="log-line"><span class="log-time">[14:32:03]</span> Downloading ros-jazzy-base (120 MB)</div>
@@ -624,8 +624,8 @@ body {
           <table style="width:100%;font-size:13px;border-collapse:collapse;">
             <thead><tr style="background:var(--bg);"><th style="padding:8px 12px;text-align:left;">Name</th><th style="padding:8px 12px;text-align:left;">Type</th><th style="padding:8px 12px;text-align:right;">Path</th></tr></thead>
             <tbody id="artifacts-table">
-              <tr><td style="padding:8px 12px;">ubuntu24-robotics-amr.raw.gz</td><td style="padding:8px 12px;">Image</td><td style="padding:8px 12px;text-align:right;"><button class="btn btn-sm" onclick="copyArtifactLink('/output/ubuntu24-robotics-amr.raw.gz')" title="Copy path">&#128203;</button></td></tr>
-              <tr><td style="padding:8px 12px;">ubuntu24-robotics-amr.sbom.json</td><td style="padding:8px 12px;">SBOM</td><td style="padding:8px 12px;text-align:right;"><button class="btn btn-sm" onclick="copyArtifactLink('/output/ubuntu24-robotics-amr.sbom.json')" title="Copy path">&#128203;</button></td></tr>
+              <tr><td style="padding:8px 12px;">ubuntu24-robotics-amr.raw.gz</td><td style="padding:8px 12px;">Image</td><td style="padding:8px 12px;text-align:right;"><button class="btn btn-sm" onclick="copyArtifactLink('/output/ubuntu24-robotics-amr.raw.gz', this)" title="Copy path">&#128203;</button></td></tr>
+              <tr><td style="padding:8px 12px;">ubuntu24-robotics-amr.sbom.json</td><td style="padding:8px 12px;">SBOM</td><td style="padding:8px 12px;text-align:right;"><button class="btn btn-sm" onclick="copyArtifactLink('/output/ubuntu24-robotics-amr.sbom.json', this)" title="Copy path">&#128203;</button></td></tr>
             </tbody>
           </table>
         </div>
@@ -930,7 +930,7 @@ function renderAdvStepContent() {
         </div>
         <div class="form-group">
           <label class="form-label">Operating System</label>
-          <select class="form-input" onchange="advState.template.target.dist=this.value; updateAdvancedYaml()">
+          <select class="form-input" onchange="advSelectDist(this.value)">
             <option value="" disabled ${!t.target.dist?'selected':''}>-- Select Operating System --</option>
             <option ${t.target.dist==='ubuntu24'?'selected':''} value="ubuntu24">Ubuntu 24.04</option>
             <option ${t.target.dist==='ubuntu26'?'selected':''} value="ubuntu26">Ubuntu 26.04</option>
@@ -1061,6 +1061,15 @@ function advSelectOS(osId) {
   renderAdvStepContent();
 }
 
+// Selecting a distribution also updates the parent os family so target.os and
+// target.dist stay consistent (e.g. dist "debian13" → os "debian").
+function advSelectDist(dist) {
+  advState.template.target.dist = dist;
+  const osOpt = OS_OPTIONS.find(o => o.dists.includes(dist));
+  if (osOpt) advState.template.target.os = osOpt.id;
+  updateAdvancedYaml();
+}
+
 function advAddPackage(name) {
   if (name && !advState.template.packages.includes(name)) {
     advState.template.packages.push(name);
@@ -1086,7 +1095,7 @@ function updateAdvancedYaml() {
   yaml += `\n`;
   yaml += `disk:\n  name: default\n  size: "${t.disk.size}"\n  partitionTableType: ${t.disk.partitionTableType}\n`;
   yaml += `  partitions:\n`;
-  t.disk.partitions.forEach(p => { yaml += `    - id: ${p.id}\n      name: ${p.name}\n      fsType: ${p.fsType}\n      mountPoint: ${p.mountPoint}\n`; });
+  t.disk.partitions.forEach(p => { yaml += `    - id: ${p.id}\n      name: ${p.name}\n      fsType: ${p.fsType}\n      size: "${p.size}"\n      mountPoint: ${p.mountPoint}\n`; });
   yaml += `\nsystemConfig:\n`;
   if (t.packages.length) { yaml += `  packages:\n`; t.packages.forEach(p => { yaml += `    - ${p}\n`; }); }
   const el = document.getElementById('yaml-output-adv');
@@ -1108,7 +1117,8 @@ function onPackageSearch(query) {
   const dropdown = document.getElementById('pkg-dropdown');
   if (!query || query.length < 2) { dropdown.classList.remove('active'); return; }
 
-  const results = PACKAGE_DB.filter(p => p.name.includes(query.toLowerCase()) || p.desc.toLowerCase().includes(query.toLowerCase())).slice(0, 8);
+  const q = query.toLowerCase();
+  const results = PACKAGE_DB.filter(p => p.name.toLowerCase().includes(q) || p.desc.toLowerCase().includes(q)).slice(0, 8);
 
   if (results.length === 0) {
     dropdown.innerHTML = '<div class="pkg-search-item" style="cursor:default;"><span class="pkg-search-name" style="color:var(--text-muted);">No packages found</span></div>';
@@ -1180,18 +1190,18 @@ function simulateBuild() {
   const msgs = ['Resolving packages...','Configuring partitions...','Installing base system...','Installing packages...','Generating image...','Compressing output...','Build complete!'];
   let i = 0;
   clearInterval(buildInterval);
-  statusText.textContent = 'Building...';
-  resultEl.innerHTML = '';
+  if (statusText) statusText.textContent = 'Building...';
+  if (resultEl) resultEl.innerHTML = '';
   buildInterval = setInterval(() => {
     if (i >= msgs.length) {
       clearInterval(buildInterval);
-      statusText.textContent = 'Finished';
-      resultEl.innerHTML = '<span style="color:#16a34a;">&#10003; Build Passed</span>';
+      if (statusText) statusText.textContent = 'Finished';
+      if (resultEl) resultEl.innerHTML = '<span style="color:#16a34a;">&#10003; Build Passed</span>';
       return;
     }
     const line = document.createElement('div'); line.className='log-line';
     line.innerHTML = `<span class="log-time">[${new Date().toTimeString().slice(0,8)}]</span> <span class="${i===msgs.length-1?'log-success':'log-info'}">${msgs[i]}</span>`;
-    logs.appendChild(line); logs.scrollTop = logs.scrollHeight; i++;
+    if (logs) { logs.appendChild(line); logs.scrollTop = logs.scrollHeight; } i++;
   }, 2500);
 }
 
@@ -1250,9 +1260,9 @@ function toggleImageContent() {
   }
 }
 
-function copyArtifactLink(path) {
+function copyArtifactLink(path, btn) {
   navigator.clipboard.writeText(path);
-  const btn = event.currentTarget;
+  if (!btn) return;
   const orig = btn.innerHTML;
   btn.innerHTML = '&#10003;';
   setTimeout(() => { btn.innerHTML = orig; }, 1500);

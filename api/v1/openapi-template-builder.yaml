@@ -482,8 +482,9 @@ components:
     ComposeRequest:
       type: object
       description: |
-        Structured user intent from the UI. The backend merges this with
-        vertical defaults and platform packages to produce a complete template.
+        The UI selections that identify one combination. The backend uses these
+        to look up the matching pre-authored template in the manifest and returns
+        it verbatim — it does not synthesize or merge a template.
       required: [vertical, platform, os, imageType]
       properties:
         vertical:
@@ -558,7 +559,10 @@ components:
       properties:
         yaml:
           type: string
-          description: The matched template's YAML (complete, ready for ICT; includes any Advanced-tab edits for this request)
+          description: |
+            The matched base template's YAML, verbatim (complete, ready for ICT).
+            Advanced-tab edits are applied client-side after this response and are
+            NOT reflected here; the edited YAML is sent whole to POST /builds.
         validation:
           $ref: "#/components/schemas/ValidationResult"
         summary:
