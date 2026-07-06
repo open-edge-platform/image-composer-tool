@@ -313,8 +313,13 @@ func LoadTemplate(path string, validateFull bool) (*ImageTemplate, error) {
 	}
 
 	// Store the template path info
-	if !slice.Contains(template.PathList, path) {
-		template.PathList = append(template.PathList, path)
+	canonicalPath, absErr := filepath.Abs(path)
+	if absErr != nil {
+		canonicalPath = path
+	}
+
+	if !slice.Contains(template.PathList, canonicalPath) {
+		template.PathList = append(template.PathList, canonicalPath)
 	}
 
 	log.Infof("Loaded image template from %s: name=%s, os=%s, dist=%s, arch=%s",
