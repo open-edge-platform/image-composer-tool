@@ -18,6 +18,8 @@ type Config struct {
 	Addr         string // listen address, e.g. ":8080"
 	TemplatesDir string // directory containing pre-authored templates
 	ICTBinary    string // path to the image-composer-tool binary for builds
+	WorkDir      string // base directory for per-build work/output directories
+	Sudo         bool   // run builds under `sudo -n` (ICT needs root for chroot)
 }
 
 // Server holds the API's dependencies and shared state.
@@ -38,6 +40,9 @@ func New(cfg Config) (*Server, error) {
 	}
 	if cfg.ICTBinary == "" {
 		cfg.ICTBinary = "./image-composer-tool"
+	}
+	if cfg.WorkDir == "" {
+		cfg.WorkDir = "webui-workspace"
 	}
 	return &Server{cfg: cfg, manifest: m, tracker: newBuildTracker()}, nil
 }
