@@ -32,6 +32,8 @@ esac
 #   INTEL_GPU_REPO_COMPONENT=unified  # Intel GPU repo component (unified | client)
 #   INSTALL_PYTORCH_XPU=1          # pip install torch+XPU backend in the agent venv
 #   PYTORCH_XPU_INDEX_URL=https://download.pytorch.org/whl/xpu
+#   INSTALL_DOCKER_COMPAT=1        # install podman-docker so 'docker …' commands run via podman
+#   ENABLE_PODMAN_SOCKET=1         # enable podman.socket for Docker-compatible API access
 #   OPENCLAW_INSTALL_URL=https://openclaw.ai/install.sh
 #   SUPERCLAW_CTL_URL=…/superclaw-ctl-v1.0.0-linux-x86-64.tar.gz
 #   SUPERCLAW_CTL_PREFIX=/opt/superclaw
@@ -47,7 +49,7 @@ esac
 set -euo pipefail
 
 readonly SCRIPT_NAME="${0##*/}"
-readonly SCRIPT_REV="2026-06-30-intel-l0-gpu-pytorch-xpu-v15"
+readonly SCRIPT_REV="2026-07-01-docker-compat-rootless-v17"
 readonly LOG_TAG="agent-install"
 readonly STAMP_DIR="/var/lib/agent-install/done"
 readonly LOG_FILE="/var/log/agent-install.log"
@@ -87,6 +89,10 @@ readonly INTEL_GPU_REPO_COMPONENT="${INTEL_GPU_REPO_COMPONENT:-unified}"
 # PyTorch with Intel GPU (XPU) backend, installed into the agent venv from the XPU wheel index.
 INSTALL_PYTORCH_XPU="${INSTALL_PYTORCH_XPU:-1}"
 readonly PYTORCH_XPU_INDEX_URL="${PYTORCH_XPU_INDEX_URL:-https://download.pytorch.org/whl/xpu}"
+
+# Docker CLI compatibility via podman-docker: 'docker …' commands run through podman.
+INSTALL_DOCKER_COMPAT="${INSTALL_DOCKER_COMPAT:-1}"
+ENABLE_PODMAN_SOCKET="${ENABLE_PODMAN_SOCKET:-1}"
 
 # Used only when INTEL_PACKAGE_POLICY=pinned (exact deb names; OpenVINO uses release-style meta names).
 INTEL_PINNED_PACKAGES=(
@@ -131,6 +137,10 @@ PACKAGES=(
 	xpu-smi
 
 	podman
+	podman-docker
+	uidmap
+	slirp4netns
+	fuse-overlayfs
 )
 
 log() {
@@ -471,6 +481,21 @@ run_once_step_open_model_zoo() {
 		fi
 	"
 	log "Open Model Zoo git tag: ${omz_tag} (override with OPEN_MODEL_ZOO_TAG=…)"
+}
+
+run_once_step_docker_compat() {
+	run_once_step "docker-compat" "
+		set -euo pipefail
+		# podman-docker prints an 'Emulate Docker CLI using podman' MOTD on every 'docker' call;
+		# the presence of /etc/containers/nodocker quiets it.
+		install -d -m 0755 /etc/containers
+		touch /etc/containers/nodocker
+		# Expose a Docker-compatible API socket for tools that talk to /run/podman/podman.sock
+		# (docker compose, testcontainers, DOCKER_HOST). Best-effort: no systemd in some chroots.
+		if [[ '${ENABLE_PODMAN_SOCKET}' == '1' ]] && command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+			systemctl enable --now podman.socket || echo '[docker-compat] WARN: could not enable podman.socket' >&2
+		fi
+	"
 }
 
 run_once_step_agent_python_venv() {
@@ -835,6 +860,10 @@ main() {
 	install_apt_packages
 	run_once_step_open_model_zoo
 
+	if [[ "${INSTALL_DOCKER_COMPAT}" == "1" ]]; then
+		run_once_step_docker_compat
+	fi
+
 	if [[ "${INSTALL_HERMES}" == "1" ]]; then
 		run_once_step_hermes
 	fi
@@ -854,6 +883,9 @@ main() {
 	fi
 	if [[ "${INSTALL_INTEL_GPU_REPO}" == "1" ]]; then
 		log "Level Zero runtime: dpkg -l libze1 libze-intel-gpu1 | grep ^ii (from repositories.intel.com/gpu)"
+	fi
+	if [[ "${INSTALL_DOCKER_COMPAT}" == "1" ]]; then
+		log "Docker CLI: 'docker' runs via podman (podman-docker); try 'docker run --rm hello-world'"
 	fi
 	if [[ "${INSTALL_OPEN_MODEL_ZOO}" == "1" ]]; then
 		log "Open Model Zoo: ${OPEN_MODEL_ZOO_DIR} (source /etc/profile.d/open-model-zoo.sh; see log for git tag)"

@@ -170,8 +170,30 @@ torchaudio`** from the **XPU wheel index** (`PYTORCH_XPU_INDEX_URL`, default
 
 Verify: `/opt/agent/venv/bin/python -c 'import torch; print(torch.xpu.is_available())'`.
 
+### Docker CLI compatibility (podman)
+
+The stack uses **`podman`** (daemonless, rootless-capable) instead of Docker. When
+`INSTALL_DOCKER_COMPAT=1` (default) the script installs **`podman-docker`**, which provides a
+`/usr/bin/docker` wrapper so all `docker …` commands transparently run through podman. The
+`docker-compat` step also:
+
+- creates `/etc/containers/nodocker` to silence the "Emulate Docker CLI using podman" MOTD printed on every `docker` call;
+- when `ENABLE_PODMAN_SOCKET=1` (default) and systemd is present, enables `podman.socket` so tools expecting the Docker API (`docker compose`, testcontainers, `DOCKER_HOST`) can talk to `/run/podman/podman.sock`.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `INSTALL_DOCKER_COMPAT` | `1` | Install `podman-docker` (`docker` → podman wrapper) |
+| `ENABLE_PODMAN_SOCKET` | `1` | Enable `podman.socket` for Docker-API compatibility |
+
+Rootless podman also needs `uidmap` (`newuidmap`/`newgidmap` for user namespaces), `slirp4netns`
+(rootless networking), and `fuse-overlayfs` (rootless overlay storage) — all in the base apt set.
+
+Verify: `docker run --rm hello-world` (rootless needs your user in a `subuid`/`subgid` range; run
+under `sudo` if unconfigured). Stamp id: `docker-compat`.
+
 Base apt set also includes Level Zero GPU libs, optional NPU / `xpu-smi` (WARN + skip if absent),
-`podman`, and OpenVINO sample build tools (`cmake`, `gcc`, `g++`, `make`, `pkgconf`).
+`podman` (+ `podman-docker`, `uidmap`, `slirp4netns`, `fuse-overlayfs`), and OpenVINO sample build
+tools (`cmake`, `gcc`, `g++`, `make`, `pkgconf`).
 
 Package discovery uses `apt-cache pkgnames` and Intel `_Packages` list fallbacks (prefer
 `openvino-YYYY.M.P` meta names, not legacy `openvino_*` only).
@@ -302,6 +324,8 @@ but you must resize the filesystem yourself (e.g. `xfs_growfs /`, `btrfs filesys
 | `INTEL_GPU_REPO_COMPONENT` | `unified` | Intel GPU repo component (`unified` / `client`) |
 | `INSTALL_PYTORCH_XPU` | `1` | Install PyTorch XPU backend in the agent venv |
 | `PYTORCH_XPU_INDEX_URL` | `https://download.pytorch.org/whl/xpu` | PyTorch XPU wheel index |
+| `INSTALL_DOCKER_COMPAT` | `1` | Install `podman-docker` (`docker` → podman) |
+| `ENABLE_PODMAN_SOCKET` | `1` | Enable `podman.socket` for Docker-API tools |
 | `INTEL_UBUNTU_SUITE` | auto | `ubuntu22` / `ubuntu24` |
 | `INTEL_APT_ARCH` | `amd64` | |
 | `HERMES_INSTALL_FLAGS` | see Hermes section | |
