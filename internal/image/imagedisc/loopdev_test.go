@@ -31,6 +31,12 @@ func TestLoopSetupCreate(t *testing.T) {
 		{name: "success", output: "/dev/loop7\n"},
 		{name: "command error", cmdErr: fmt.Errorf("losetup failed"), expectError: true, errorContains: "losetup failed"},
 		{name: "unexpected output", output: "not-a-loop-device", expectError: true, errorContains: "failed to create loopback device"},
+		// Substring-containing but non-canonical output must be rejected: the
+		// value is later interpolated into privileged shell commands, so only a
+		// bare "/dev/loopN" path is accepted.
+		{name: "loop path with trailing garbage", output: "/dev/loop7; rm -rf /", expectError: true, errorContains: "failed to create loopback device"},
+		{name: "loop path with partition suffix", output: "/dev/loop7p1", expectError: true, errorContains: "failed to create loopback device"},
+		{name: "loop substring inside other text", output: "prefix /dev/loop7", expectError: true, errorContains: "failed to create loopback device"},
 	}
 
 	for _, tt := range tests {
@@ -85,7 +91,13 @@ func TestLoopSetupDelete(t *testing.T) {
 	defer func() { shell.Default = originalExecutor }()
 
 	t.Run("success", func(t *testing.T) {
-		shell.Default = shell.NewMockExecutor([]shell.MockCommand{{Pattern: "losetup -d /dev/loop7", Output: "", Error: nil}})
+		// LoopSetupDelete first runs disableSwapPartitions, which shells out to
+		// lsblk. Mock it (no swap partitions) so the test stays hermetic and cannot
+		// fall back to a real sudo lsblk on the host.
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+			{Pattern: `lsblk -o NAME,FSTYPE /dev/loop7 -J`, Output: `{"blockdevices":[]}`},
+			{Pattern: "losetup -d /dev/loop7", Output: "", Error: nil},
+		})
 		ld := &LoopDev{}
 		if err := ld.LoopSetupDelete("/dev/loop7"); err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -93,11 +105,135 @@ func TestLoopSetupDelete(t *testing.T) {
 	})
 
 	t.Run("command error", func(t *testing.T) {
-		shell.Default = shell.NewMockExecutor([]shell.MockCommand{{Pattern: "losetup -d /dev/loop8", Output: "", Error: fmt.Errorf("delete failed")}})
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+			{Pattern: `lsblk -o NAME,FSTYPE /dev/loop8 -J`, Output: `{"blockdevices":[]}`},
+			{Pattern: "losetup -d /dev/loop8", Output: "", Error: fmt.Errorf("delete failed")},
+		})
 		ld := &LoopDev{}
 		err := ld.LoopSetupDelete("/dev/loop8")
 		if err == nil || !strings.Contains(err.Error(), "failed to delete loop device") {
 			t.Fatalf("expected wrapped delete error, got %v", err)
+		}
+	})
+}
+
+func TestLoopDevPartitions(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	t.Run("excludes base device and blanks", func(t *testing.T) {
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{{
+			Pattern: `lsblk -prno NAME '/dev/loop0'`,
+			Output:  "/dev/loop0\n/dev/loop0p1\n/dev/loop0p2\n\n",
+		}})
+		got, err := loopDevPartitions("/dev/loop0")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := []string{"/dev/loop0p1", "/dev/loop0p2"}
+		if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+			t.Fatalf("partitions = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("command error", func(t *testing.T) {
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{{
+			Pattern: `lsblk -prno NAME '/dev/loop1'`,
+			Error:   fmt.Errorf("lsblk failed"),
+		}})
+		if _, err := loopDevPartitions("/dev/loop1"); err == nil {
+			t.Fatal("expected error, got nil")
+		}
+	})
+}
+
+func TestAttachImageToLoopDev(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	makeImage := func(t *testing.T) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "baseline.raw")
+		if err := os.WriteFile(path, []byte("img"), 0644); err != nil {
+			t.Fatalf("write image: %v", err)
+		}
+		return path
+	}
+
+	t.Run("missing image", func(t *testing.T) {
+		ld := &LoopDev{}
+		if _, _, err := ld.AttachImageToLoopDev("/nonexistent/baseline.raw"); err == nil {
+			t.Fatal("expected error for missing image")
+		}
+	})
+
+	t.Run("success returns partitions", func(t *testing.T) {
+		img := makeImage(t)
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+			{Pattern: "losetup --direct-io=on --show -f -P", Output: "/dev/loop6\n"},
+			{Pattern: `lsblk -prno NAME '/dev/loop6'`, Output: "/dev/loop6\n/dev/loop6p1\n"},
+		})
+		ld := &LoopDev{}
+		dev, parts, err := ld.AttachImageToLoopDev(img)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if dev != "/dev/loop6" {
+			t.Fatalf("dev = %q, want /dev/loop6", dev)
+		}
+		if len(parts) != 1 || parts[0] != "/dev/loop6p1" {
+			t.Fatalf("parts = %v, want [/dev/loop6p1]", parts)
+		}
+	})
+
+	t.Run("detaches on partition enumeration failure", func(t *testing.T) {
+		img := makeImage(t)
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+			{Pattern: "losetup --direct-io=on --show -f -P", Output: "/dev/loop5\n"},
+			{Pattern: `lsblk -prno NAME '/dev/loop5'`, Error: fmt.Errorf("lsblk failed")},
+			// Cleanup (LoopSetupDelete -> disableSwapPartitions) runs this lsblk
+			// before the detach. Mock it (no swap partitions) so the test stays
+			// hermetic and never falls back to a real sudo lsblk on the host.
+			{Pattern: `lsblk -o NAME,FSTYPE /dev/loop5 -J`, Output: `{"blockdevices":[]}`},
+			{Pattern: "losetup -d /dev/loop5", Output: ""}, // cleanup detach must run
+		})
+		ld := &LoopDev{}
+		if _, _, err := ld.AttachImageToLoopDev(img); err == nil {
+			t.Fatal("expected error, got nil")
+		}
+	})
+
+	t.Run("surfaces detach failure alongside enumeration failure", func(t *testing.T) {
+		img := makeImage(t)
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+			{Pattern: "losetup --direct-io=on --show -f -P", Output: "/dev/loop2\n"},
+			{Pattern: `lsblk -prno NAME '/dev/loop2'`, Error: fmt.Errorf("lsblk failed")},
+			// swapoff scan during detach is best-effort; mock its lsblk (no swap
+			// partitions) so cleanup stays hermetic and cannot fall back to a real
+			// sudo lsblk on the host. The detach itself then fails as intended.
+			{Pattern: `lsblk -o NAME,FSTYPE /dev/loop2 -J`, Output: `{"blockdevices":[]}`},
+			{Pattern: "losetup -d /dev/loop2", Error: fmt.Errorf("detach failed")},
+		})
+		ld := &LoopDev{}
+		dev, _, err := ld.AttachImageToLoopDev(img)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		// The leaked loop device path must be returned (not "") so the caller can
+		// retain the backing file and operators can reclaim the device.
+		if dev != "/dev/loop2" {
+			t.Errorf("leaked device path = %q, want /dev/loop2", dev)
+		}
+		// Both the enumeration error and the detach failure (leaked loop device)
+		// must reach the caller so the leak is never silently swallowed.
+		if !strings.Contains(err.Error(), "lsblk failed") {
+			t.Errorf("error must include enumeration failure, got %v", err)
+		}
+		if !strings.Contains(err.Error(), "detach failed") {
+			t.Errorf("error must include detach failure, got %v", err)
+		}
+		if !strings.Contains(err.Error(), "/dev/loop2") {
+			t.Errorf("error must be annotated with leaked device path, got %v", err)
 		}
 	})
 }

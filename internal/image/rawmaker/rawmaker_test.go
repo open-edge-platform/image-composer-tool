@@ -134,6 +134,13 @@ func (m *mockLoopDev) CreateRawImageLoopDev(filePath string, template *config.Im
 	return m.loopDevPath, diskPathIdMap, nil
 }
 
+func (m *mockLoopDev) AttachImageToLoopDev(imagePath string) (string, []string, error) {
+	if m.shouldFailCreate {
+		return m.failCreateLoopDevPath, nil, fmt.Errorf("mock loop device attach failure")
+	}
+	return m.loopDevPath, []string{"/dev/loop0p1", "/dev/loop0p2"}, nil
+}
+
 func (m *mockLoopDev) LoopSetupDelete(loopDevPath string) error {
 	m.deleteCallCount++
 	if m.shouldFailDelete {

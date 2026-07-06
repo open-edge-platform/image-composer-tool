@@ -1134,7 +1134,7 @@ func (t *ImageTemplate) validateBaseline() error {
 		if t.Baseline.Source == nil {
 			return fmt.Errorf("baseline: source is required when mode is %q", BaselineModeOverlay)
 		}
-		if err := t.Baseline.Source.validate(); err != nil {
+		if err := t.Baseline.Source.Validate(); err != nil {
 			return err
 		}
 		format := t.Baseline.Source.Format
@@ -1156,13 +1156,21 @@ func (t *ImageTemplate) validateBaseline() error {
 	return nil
 }
 
-// validate enforces that exactly one of Path or URL is set, and that a URL
-// uses an http(s) scheme. Integrity verification of the downloaded image is
-// intentionally deferred. Local paths are taken from the host build system
-// as-is; URLs are downloaded (over TLS) before the overlay runs.
-func (s *BaselineSource) validate() error {
+// Validate enforces that exactly one of Path or URL is set, and that a URL uses
+// the https scheme. Plain http is rejected so the baseline is always fetched
+// over TLS, matching the https-only policy used for other remote downloads in
+// this tool (e.g. RPM packages). Integrity verification of the downloaded image
+// is intentionally deferred. Local paths are taken from the host build system
+// as-is; https URLs are downloaded before the overlay runs.
+func (s *BaselineSource) Validate() error {
+	// Normalize by trimming surrounding whitespace and persist it back onto the
+	// struct so callers (overlay ingestion) use the same value that was
+	// validated. Otherwise a padded path/URL could pass validation here but then
+	// fail with a confusing error during copy/download.
 	path := strings.TrimSpace(s.Path)
 	rawURL := strings.TrimSpace(s.URL)
+	s.Path = path
+	s.URL = rawURL
 
 	switch {
 	case path == "" && rawURL == "":
@@ -1180,8 +1188,17 @@ func (s *BaselineSource) validate() error {
 		if err != nil {
 			return fmt.Errorf("baseline.source.url is not a valid URL: %w", err)
 		}
-		if parsed.Scheme != "http" && parsed.Scheme != "https" {
-			return fmt.Errorf("baseline.source.url must use http or https (got %q)", parsed.Scheme)
+		// Require https so the baseline is always fetched over TLS. Plain http
+		// offers no integrity or authenticity guarantee for a whole-disk image
+		// and is rejected here, consistent with other remote downloads.
+		if parsed.Scheme != "https" {
+			return fmt.Errorf("baseline.source.url must use https (got %q)", parsed.Scheme)
+		}
+		// Reject a scheme-only URL like "https://" (no host): it passes the
+		// scheme check but would fail later with an opaque download error.
+		// Catching it here gives an immediate, clear message.
+		if parsed.Host == "" {
+			return fmt.Errorf("baseline.source.url must include a host (got %q)", rawURL)
 		}
 	}
 	return nil
