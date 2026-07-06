@@ -32,7 +32,11 @@ image builds via the image-composer-tool binary with streaming build logs.`,
 	serveCmd.Flags().StringVar(&serveTemplates, "templates-dir", "image-templates", "Directory of pre-authored templates")
 	serveCmd.Flags().StringVar(&serveBinary, "ict-binary", "./image-composer-tool", "Path to the image-composer-tool binary used for builds")
 	serveCmd.Flags().StringVar(&serveWorkDir, "work-dir", "webui-workspace", "Base directory for per-build work/output directories")
-	serveCmd.Flags().BoolVar(&serveSudo, "sudo", false, "Run builds under `sudo -n` (ICT requires root for chroot/mount operations)")
+	serveCmd.Flags().BoolVar(&serveSudo, "sudo", false,
+		"Run builds under `sudo -n` (ICT requires root for chroot/mount). "+
+			"Grant a scoped, passwordless sudoers rule for the ICT binary only, "+
+			"e.g. `<svc-user> ALL=(root) NOPASSWD: /path/to/image-composer-tool build *` "+
+			"— do not give the service blanket sudo.")
 
 	return serveCmd
 }
