@@ -110,7 +110,7 @@ func (s *Server) handleStartBuild(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := uuid.NewString()
-	workDir := filepath.Join("workspace", "builds", id)
+	workDir := filepath.Join(s.cfg.WorkDir, "builds", id)
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		writeError(w, http.StatusInternalServerError, "WORKDIR", "cannot create build work directory")
 		return
@@ -162,13 +162,28 @@ func (s *Server) resolveBuildTemplate(req *buildRequest, workDir string) (path, 
 	return filepath.Join(s.cfg.TemplatesDir, tmpl), tmpl, nil
 }
 
+// buildCommand assembles the argv for an ICT build, prefixing sudo when
+// configured (ICT builds require root for chroot/mount operations).
+func (s *Server) buildCommand(templatePath, workDir string) (name string, args []string) {
+	ictArgs := []string{"build", templatePath, "--work-dir", workDir}
+	if s.cfg.Sudo {
+		// -n: never prompt; fail fast if passwordless sudo isn't configured.
+		return "sudo", append([]string{"-n", s.cfg.ICTBinary}, ictArgs...)
+	}
+	return s.cfg.ICTBinary, ictArgs
+}
+
 // runBuild executes the ICT binary, streams its output into the build's log
 // buffer, and records the terminal status + artifacts.
 func (s *Server) runBuild(b *build, templatePath string) {
 	log := logger.Logger()
 	defer close(b.done)
 
-	cmd := exec.Command(s.cfg.ICTBinary, "build", templatePath, "--work-dir", b.WorkDir)
+	// ICT builds require root (chroot, mounts), so the build runs under sudo, and
+	// from the repo root since ICT resolves config/osv/... relative to cwd. The
+	// per-build --work-dir keeps outputs isolated.
+	name, cmdArgs := s.buildCommand(templatePath, b.WorkDir)
+	cmd := exec.Command(name, cmdArgs...)
 	stdout, _ := cmd.StdoutPipe()
 	cmd.Stderr = cmd.Stdout // merge streams
 
