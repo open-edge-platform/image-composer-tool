@@ -635,6 +635,26 @@ func resolveExtendsChain(templatePath string) ([]*ImageTemplate, error) {
 	return templates, err
 }
 
+// ResolveAndMergeExtendsChain resolves the full extends chain for the template at
+// templatePath and folds it into a single merged template in root-to-leaf order
+// (leaf values win), without applying OS defaults. Each template in the chain is
+// validated as it is loaded, and errors identify the file in the chain that
+// failed. The returned paths are the resolved chain files in root-to-leaf order,
+// for logging the effective inheritance.
+func ResolveAndMergeExtendsChain(templatePath string) (*ImageTemplate, []string, error) {
+	chain, chainPaths, err := resolveExtendsChainWithPaths(templatePath)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	merged, err := foldChain(chain[0], chain[1:])
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return merged, chainPaths, nil
+}
+
 // resolveExtendsChainWithPaths behaves like resolveExtendsChain but additionally
 // returns the absolute file path of each template in root-to-leaf order, which
 // callers use for logging the resolved chain.
@@ -657,7 +677,7 @@ func resolveExtendsChainWithPaths(templatePath string) ([]*ImageTemplate, []stri
 	for {
 		tmpl, err := LoadTemplate(currentPath, false)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to load template in extends chain: %w", err)
+			return nil, nil, fmt.Errorf("template %s failed validation in extends chain: %w", currentPath, err)
 		}
 
 		if len(leafToRoot) == 0 {

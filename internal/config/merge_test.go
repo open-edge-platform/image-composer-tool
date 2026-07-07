@@ -772,6 +772,83 @@ func TestLoadAndMergeTemplateSingleExtends(t *testing.T) {
 	}
 }
 
+func TestResolveAndMergeExtendsChainValid(t *testing.T) {
+	dir := t.TempDir()
+	target := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+
+	rootPath := filepath.Join(dir, "root.yml")
+	midPath := filepath.Join(dir, "mid.yml")
+	leafPath := filepath.Join(dir, "leaf.yml")
+	writeExtendsTemplate(t, rootPath, "root", "", target, []string{"root-pkg"})
+	writeExtendsTemplate(t, midPath, "mid", "root.yml", target, []string{"mid-pkg"})
+	writeExtendsTemplate(t, leafPath, "leaf", "mid.yml", target, []string{"leaf-pkg"})
+
+	merged, chainPaths, err := ResolveAndMergeExtendsChain(leafPath)
+	if err != nil {
+		t.Fatalf("ResolveAndMergeExtendsChain() error = %v", err)
+	}
+
+	if merged.Image.Name != "leaf" {
+		t.Errorf("Image.Name = %q, want leaf", merged.Image.Name)
+	}
+	for _, pkg := range []string{"root-pkg", "mid-pkg", "leaf-pkg"} {
+		if !hasPackage(merged.SystemConfig.Packages, pkg) {
+			t.Errorf("packages %v missing %s", merged.SystemConfig.Packages, pkg)
+		}
+	}
+	if merged.Extends != "" {
+		t.Errorf("Extends = %q, want empty after merge", merged.Extends)
+	}
+
+	wantOrder := []string{"root.yml", "mid.yml", "leaf.yml"}
+	if len(chainPaths) != len(wantOrder) {
+		t.Fatalf("chainPaths length = %d, want %d", len(chainPaths), len(wantOrder))
+	}
+	for i, want := range wantOrder {
+		if got := filepath.Base(chainPaths[i]); got != want {
+			t.Errorf("chainPaths[%d] = %q, want %q", i, got, want)
+		}
+	}
+}
+
+func TestResolveAndMergeExtendsChainMissingParent(t *testing.T) {
+	dir := t.TempDir()
+	target := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+
+	leafPath := filepath.Join(dir, "leaf.yml")
+	writeExtendsTemplate(t, leafPath, "leaf", "missing.yml", target, nil)
+
+	_, _, err := ResolveAndMergeExtendsChain(leafPath)
+	if err == nil {
+		t.Fatal("ResolveAndMergeExtendsChain() expected error for missing parent")
+	}
+	if !strings.Contains(err.Error(), "missing.yml") {
+		t.Errorf("error = %q, want reference to missing.yml", err.Error())
+	}
+}
+
+func TestResolveAndMergeExtendsChainInvalidParent(t *testing.T) {
+	dir := t.TempDir()
+	target := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+
+	rootPath := filepath.Join(dir, "root.yml")
+	leafPath := filepath.Join(dir, "leaf.yml")
+
+	// Root parent is malformed YAML.
+	if err := os.WriteFile(rootPath, []byte("image:\n  name: root\n\tbad: indent\n"), 0o644); err != nil {
+		t.Fatalf("failed to write root template: %v", err)
+	}
+	writeExtendsTemplate(t, leafPath, "leaf", "root.yml", target, nil)
+
+	_, _, err := ResolveAndMergeExtendsChain(leafPath)
+	if err == nil {
+		t.Fatal("ResolveAndMergeExtendsChain() expected error for invalid parent")
+	}
+	if !strings.Contains(err.Error(), "root.yml") {
+		t.Errorf("error = %q, want reference to root.yml", err.Error())
+	}
+}
+
 func TestLoadAndMergeTemplateMultiLevelExtends(t *testing.T) {
 	dir := t.TempDir()
 	target := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}

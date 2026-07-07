@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"path/filepath"
+	"strings"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
@@ -73,6 +75,25 @@ func executeValidate(cmd *cobra.Command, args []string) error {
 		template, err := config.LoadTemplate(templateFile, false)
 		if err != nil {
 			return fmt.Errorf("validation failed: %v", err)
+		}
+
+		// When the template inherits from a parent via extends, validate the
+		// fully resolved chain and its merged result rather than the leaf in
+		// isolation. Each file in the chain is validated as it is loaded, so a
+		// broken parent is reported with its path.
+		if strings.TrimSpace(template.Extends) != "" {
+			merged, chainPaths, err := config.ResolveAndMergeExtendsChain(templateFile)
+			if err != nil {
+				return fmt.Errorf("validation failed: %v", err)
+			}
+
+			names := make([]string, len(chainPaths))
+			for i, p := range chainPaths {
+				names[i] = filepath.Base(p)
+			}
+			log.Infof("Resolved extends chain: %s", strings.Join(names, " -> "))
+
+			template = merged
 		}
 
 		log.Info("✓ Template validation passed")
