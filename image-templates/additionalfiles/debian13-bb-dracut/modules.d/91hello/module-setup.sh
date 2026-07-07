@@ -9,8 +9,8 @@ depends() {
 }
 
 install() {
-    inst_simple "$moddir/wait-root.sh" "/sbin/wait-root.sh"
-    inst_hook cmdline 5 "$moddir/wait-root.sh"
-    inst_hook initqueue 90 "$moddir/wait-root.sh"
+    inst_simple "$moddir/initqueue-sample.sh" "/sbin/initqueue-sample.sh"
+    inst_hook cmdline 5 "$moddir/initqueue-sample.sh"
+    inst_hook initqueue 90 "$moddir/initqueue-sample.sh"
     inst_hook pre-mount 91 "$moddir/hello.sh"
 }

@@ -38,7 +38,7 @@ log_marker "WAIT_ROOT_EXECUTED round=$CURRENT_ROUND rootspec=${ROOTSPEC:-<empty>
 
 if is_cmdline_hook_run; then
     log_marker "WAIT_ROOT_CMDLINE_SEED"
-    initqueue --onetime --name wait-root-cmdline-seed /bin/sh /sbin/wait-root.sh
+    initqueue --onetime --name wait-root-cmdline-seed /bin/sh /sbin/initqueue-sample.sh
     exit 0
 fi
 
