@@ -421,6 +421,9 @@ func mountDiskRootToChroot(installRoot string, diskPathIdMap map[string]string, 
 			if partition.ID == diskId {
 				if partition.MountPoint == "/" {
 					mountPoint := resolveInstallRootMountPoint(installRoot, partition.MountPoint)
+					if err := validateFsType(partition.FsType); err != nil {
+						return fmt.Errorf("refusing to mount root partition %s: %w", diskPath, err)
+					}
 					mountFlags := fmt.Sprintf("-t %s", partition.FsType)
 					if err := mount.MountPath(diskPath, mountPoint, mountFlags); err != nil {
 						log.Errorf("Failed to mount %s to %s: %v", diskPath, mountPoint, err)
@@ -433,6 +436,27 @@ func mountDiskRootToChroot(installRoot string, diskPathIdMap map[string]string, 
 	}
 	log.Errorf("No root partition found in diskPathIdMap")
 	return fmt.Errorf("no root partition found in diskPathIdMap")
+}
+
+// fsTypePattern constrains a partition filesystem type to a single safe token.
+// FsType comes from the image template (config.PartitionInfo.FsType) and is
+// interpolated into a "-t <fsType>" mountFlags string that mount.MountPath passes
+// unquoted into a bash -c command line. mount.MountPath's own allowlist has to
+// permit spaces (legitimate flag strings look like "-t ext4 -o nosuid"), so a
+// template fsType such as "ext4 -o loop=/dev/sda1" would slip through as an extra
+// mount option/argument. Constraining fsType to a single non-empty run of
+// [A-Za-z0-9._-] (which covers every real filesystem name: ext4, xfs, vfat,
+// btrfs, f2fs, linux-swap, ...) rejects the embedded space before it can inject
+// options — closing option/argument injection at the template boundary.
+var fsTypePattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// validateFsType rejects a filesystem type that is not a single safe token, so a
+// template cannot smuggle extra mount options through the "-t <fsType>" flag.
+func validateFsType(fsType string) error {
+	if !fsTypePattern.MatchString(fsType) {
+		return fmt.Errorf("invalid filesystem type %q: must be a single token matching [A-Za-z0-9._-]+", fsType)
+	}
+	return nil
 }
 
 func isSwapFsType(fsType string) bool {
@@ -484,6 +508,12 @@ func (imageOs *ImageOs) mountDiskToChroot(installRoot string, diskPathIdMap map[
 				fsType := partition.FsType
 				if fsType == "fat32" || fsType == "fat16" {
 					fsType = "vfat"
+				}
+				// Validate the (normalized) fsType is a single safe token before it is
+				// interpolated into the unquoted "-t <fsType>" mountFlags string, so a
+				// template cannot inject extra mount options via the filesystem type.
+				if err := validateFsType(fsType); err != nil {
+					return nil, fmt.Errorf("refusing to mount partition %s: %w", diskId, err)
 				}
 				if strings.TrimPrefix(strings.TrimSpace(partition.MountPoint), "/") == "boot/efi" {
 					mountPointInfo["Flags"] = fmt.Sprintf("-t %s -o umask=0077", fsType)
