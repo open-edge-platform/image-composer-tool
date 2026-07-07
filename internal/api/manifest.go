@@ -6,7 +6,9 @@ package api
 import (
 	"embed"
 	"fmt"
+	"os"
 
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"sigs.k8s.io/yaml"
 )
 
@@ -46,11 +48,23 @@ type Manifest struct {
 	Targets      []Target      `json:"targets"`
 }
 
-// loadManifest reads and parses the embedded manifest.yaml.
-func loadManifest() (*Manifest, error) {
-	raw, err := manifestFS.ReadFile("data/manifest.yaml")
-	if err != nil {
-		return nil, fmt.Errorf("reading embedded manifest: %w", err)
+// loadManifest parses the manifest. When path is non-empty it reads that file
+// from disk (live-editable, no rebuild needed); otherwise it uses the copy
+// embedded at build time (the single-binary default).
+func loadManifest(path string) (*Manifest, error) {
+	var raw []byte
+	var err error
+	if path != "" {
+		raw, err = os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("reading manifest %q: %w", path, err)
+		}
+		logger.Logger().Infof("loaded manifest from file: %s", path)
+	} else {
+		raw, err = manifestFS.ReadFile("data/manifest.yaml")
+		if err != nil {
+			return nil, fmt.Errorf("reading embedded manifest: %w", err)
+		}
 	}
 	var m Manifest
 	if err := yaml.Unmarshal(raw, &m); err != nil {

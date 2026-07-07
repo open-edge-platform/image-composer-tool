@@ -14,6 +14,7 @@ var (
 	serveBinary    string
 	serveWorkDir   string
 	serveSudo      bool
+	serveManifest  string
 )
 
 // createServeCommand creates the `serve` subcommand that runs the web UI API.
@@ -37,6 +38,9 @@ image builds via the image-composer-tool binary with streaming build logs.`,
 			"Grant a scoped, passwordless sudoers rule for the ICT binary only, "+
 			"e.g. `<svc-user> ALL=(root) NOPASSWD: /path/to/image-composer-tool build *` "+
 			"— do not give the service blanket sudo.")
+	serveCmd.Flags().StringVar(&serveManifest, "manifest", "",
+		"Path to a manifest YAML to read from disk (live-editable, no rebuild). "+
+			"When empty, the manifest embedded at build time is used.")
 
 	return serveCmd
 }
@@ -48,6 +52,7 @@ func executeServe(cmd *cobra.Command, args []string) error {
 		ICTBinary:    serveBinary,
 		WorkDir:      serveWorkDir,
 		Sudo:         serveSudo,
+		ManifestPath: serveManifest,
 	})
 	if err != nil {
 		return err

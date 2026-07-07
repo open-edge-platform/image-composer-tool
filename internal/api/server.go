@@ -20,6 +20,7 @@ type Config struct {
 	ICTBinary    string // path to the image-composer-tool binary for builds
 	WorkDir      string // base directory for per-build work/output directories
 	Sudo         bool   // run builds under `sudo -n` (ICT needs root for chroot)
+	ManifestPath string // optional manifest file; empty uses the embedded copy
 }
 
 // Server holds the API's dependencies and shared state.
@@ -31,7 +32,7 @@ type Server struct {
 
 // New constructs a Server, loading and validating the embedded manifest.
 func New(cfg Config) (*Server, error) {
-	m, err := loadManifest()
+	m, err := loadManifest(cfg.ManifestPath)
 	if err != nil {
 		return nil, err
 	}
