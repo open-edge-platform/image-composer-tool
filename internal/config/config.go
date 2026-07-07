@@ -103,6 +103,11 @@ const (
 	BaselineFormatRaw = "raw"
 
 	OverlayPackageOpAdditiveOnly = "additive-only"
+	// OverlayPackageOpAdditiveAndUpgrade permits, in addition to adding new
+	// packages, upgrading a package already installed in the baseline to a newer
+	// version. Downgrades and removals remain blocked. Opting in flips the
+	// internal OverlayPolicy.AllowUpgrade gate (see OverlayPolicy.validate).
+	OverlayPackageOpAdditiveAndUpgrade = "additive-and-upgrade"
 
 	OverlayConflictPolicyFail          = "fail"
 	OverlayConflictPolicyAllowExplicit = "allow-explicit"
@@ -148,13 +153,12 @@ type OverlayPolicy struct {
 
 	// AllowUpgrade gates whether preflight permits upgrading a baseline package
 	// to a newer version. Like AllowRemoval/AllowDowngrade it is intentionally
-	// NOT a YAML field (the schema rejects it via additionalProperties:false) and
-	// always carries its zero value (false): overlay mode is additive-only in v1,
-	// so upgrades of existing baseline packages are blocked by default. This also
-	// keeps the deb and rpm backends consistent — the additive rpm installer
-	// (rpm -i) cannot replace an installed package, so a permitted upgrade would
-	// fail at install time on RPM baselines; blocking it in preflight surfaces the
-	// violation uniformly up front. A future release can surface this field.
+	// NOT a YAML field (the schema rejects it via additionalProperties:false);
+	// it is instead derived from PackageOperation by validate(), which sets it
+	// true when packageOperation is "additive-and-upgrade" and leaves it false
+	// (the default) for "additive-only". Enabling it lets the deb backend replace
+	// an installed package in place (dpkg -i upgrades), and switches the rpm
+	// backend to `rpm -U`; downgrades and removals stay blocked regardless.
 	AllowUpgrade bool `yaml:"-"`
 }
 
@@ -1235,9 +1239,17 @@ func (p *OverlayPolicy) validate() error {
 	if op == "" {
 		op = OverlayPackageOpAdditiveOnly
 	}
-	if op != OverlayPackageOpAdditiveOnly {
-		return fmt.Errorf("baseline.overlayPolicy.packageOperation must be %q (got %q)",
-			OverlayPackageOpAdditiveOnly, p.PackageOperation)
+	switch op {
+	case OverlayPackageOpAdditiveOnly:
+		// Additive-only: upgrades of baseline packages stay blocked.
+		p.AllowUpgrade = false
+	case OverlayPackageOpAdditiveAndUpgrade:
+		// Opt in to upgrading already-installed baseline packages. Downgrades and
+		// removals are still gated off (AllowDowngrade/AllowRemoval stay false).
+		p.AllowUpgrade = true
+	default:
+		return fmt.Errorf("baseline.overlayPolicy.packageOperation must be %q or %q (got %q)",
+			OverlayPackageOpAdditiveOnly, OverlayPackageOpAdditiveAndUpgrade, p.PackageOperation)
 	}
 	cp := p.ConflictPolicy
 	if cp == "" {

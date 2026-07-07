@@ -46,6 +46,12 @@ type installRequest struct {
 	artifactChrootDir string
 	// items are the packages to install, each paired with its artifact filename.
 	items []plannedInstall
+	// upgrade is true when the approved plan replaces at least one baseline
+	// package with a newer version (preflight classified an upgrade under an
+	// allowUpgrade policy). It selects the package-manager mode that can replace
+	// an installed package: the rpm backend switches from `rpm -i` to `rpm -U`.
+	// The deb backend ignores it — `dpkg -i` already upgrades in place.
+	upgrade bool
 }
 
 // installerBackend installs prepared package artifacts into a mounted baseline
@@ -143,6 +149,7 @@ func InstallOverlayPackages(info *BaselineInfo, rootMount string, plan *Resoluti
 		chrootPath:        rootMount,
 		artifactChrootDir: chrootArtifactDir,
 		items:             items,
+		upgrade:           report.Upgrades > 0,
 	}); err != nil {
 		// A "no space left on device" failure here means the baseline root filled up
 		// while unpacking the added packages. Overlay mode does not auto-grow the
@@ -320,9 +327,12 @@ func selectInstaller(family PackageManager) (installerBackend, error) {
 }
 
 // debInstallerBackend installs prepared .deb artifacts into the baseline chroot
-// with dpkg. The closure was already resolved, so installing the additive set in
-// one dpkg invocation satisfies inter-package dependencies among them; deps that
-// were already present in the baseline remain untouched.
+// with dpkg. The closure was already resolved, so installing the set in one dpkg
+// invocation satisfies inter-package dependencies among them; deps that were
+// already present in the baseline remain untouched. `dpkg -i` installs new
+// packages and upgrades an installed one in place, so it serves both the
+// additive-only and additive-and-upgrade policies without a mode switch (the
+// preflight gate decides which upgrades, if any, are in the approved set).
 type debInstallerBackend struct{}
 
 func (b *debInstallerBackend) family() PackageManager { return PackageManagerAPT }
@@ -397,15 +407,32 @@ func (b *rpmInstallerBackend) install(req installRequest) error {
 		paths = append(paths, shell.QuoteArg(filepath.Join(req.artifactChrootDir, it.artifact)))
 	}
 
-	// rpm -i installs (adds) the local artifacts; it deliberately does not upgrade
-	// or replace existing baseline packages, preserving the additive-only contract.
-	// rpm -i fails outright on an already-installed package, but that never reaches
-	// here: the preflight gate blocks any ActionUpgrade by default (AllowUpgrade is
-	// off in v1), and ToInstall excludes packages already present in the baseline,
-	// so only genuinely-new packages are installed.
+	// rpm -i installs (adds) the local artifacts and fails outright on an
+	// already-installed package. Under additive-only that is exactly right: the
+	// preflight gate blocks every ActionUpgrade, and ToInstall excludes packages
+	// already present in the baseline, so only genuinely-new packages reach here,
+	// and an unexpected already-installed one fails loudly instead of being
+	// silently replaced.
+	//
+	// When the approved plan contains upgrades (allowUpgrade policy), switch the
+	// whole batch to `rpm -U`, which upgrades an installed package and still
+	// installs new ones — `rpm -i` cannot replace an installed package, and rpm
+	// installs the artifact set as one transaction, so a single mode must cover
+	// it. Running the pure-adds in the batch under -U (rather than -i) is safe
+	// here: preflight has already classified every present-package change as an
+	// ActionUpgrade under the AllowUpgrade gate, blocked bootable-kernel and
+	// bootloader replacement (ruleKernelImmutable / ruleBootloaderImmutable), and
+	// gated any Obsoletes-driven removal through AllowRemoval — so no unreviewed
+	// replacement can slip through the coarser -U mode. Downgrades never reach
+	// here (preflight leaves AllowDowngrade off), so no --oldpackage is needed.
+	//
 	// "--" terminates option parsing so a URL-derived artifact basename beginning
 	// with '-' is treated as a file path rather than an rpm option.
-	cmd := "rpm -i -v -- " + strings.Join(paths, " ")
+	op := "-i"
+	if req.upgrade {
+		op = "-U"
+	}
+	cmd := "rpm " + op + " -v -- " + strings.Join(paths, " ")
 	out, err := shell.ExecCmdWithStream(cmd, true, req.chrootPath, nil)
 	if err != nil {
 		return fmt.Errorf("rpm install of %d artifact(s) failed: %w%s", len(paths), err, formatCommandOutput(out))

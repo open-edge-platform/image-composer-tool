@@ -445,6 +445,140 @@ func TestEvaluatePreflight_BootChartNotBlocked(t *testing.T) {
 	}
 }
 
+func TestIsKernelImagePackage(t *testing.T) {
+	// Bootable kernel images that must be treated as immutable.
+	kernels := []string{
+		"linux-image-generic", "linux-image-6.8.0-40-generic", "linux-image-unsigned",
+		"kernel", "kernel-5.14.0-427", "kernel-core", "kernel-image",
+	}
+	for _, n := range kernels {
+		if !isKernelImagePackage(n) {
+			t.Errorf("isKernelImagePackage(%q) = false, want true", n)
+		}
+	}
+	// Userspace kernel-adjacent packages that carry no boot entry and MUST stay
+	// upgradable — including the two the WW28.1 template upgrades.
+	for _, n := range []string{
+		"linux-libc-dev", "linux-tools-common", "linux-tools-6.8.0-40",
+		"kernel-headers", "kernel-devel", "kernel-tools", "kernelshark",
+		"curl", "vim", "",
+	} {
+		if isKernelImagePackage(n) {
+			t.Errorf("isKernelImagePackage(%q) = true, want false", n)
+		}
+	}
+}
+
+// TestEvaluatePreflight_KernelUpgradeBlocked confirms an in-place kernel-image
+// upgrade is blocked even under an allowUpgrade policy (boot regeneration cannot
+// rewrite the bootloader menu for a changed kernel), while a brand-new kernel
+// installed alongside the existing one is permitted.
+func TestEvaluatePreflight_KernelUpgradeBlocked(t *testing.T) {
+	report := EvaluatePreflight(PreflightInput{
+		Family:   PackageManagerAPT,
+		Baseline: []BaselinePackage{installedDeb("linux-image-generic", "6.8.0-40")},
+		Resolved: []ResolvedPackage{{Name: "linux-image-generic", Version: "6.8.0-50", Arch: "amd64"}},
+		Policy:   config.OverlayPolicy{AllowUpgrade: true},
+	})
+	if !report.Blocked {
+		t.Fatalf("kernel upgrade should be blocked even with AllowUpgrade, got %+v", report.Actions)
+	}
+	if len(report.Violations) != 1 || report.Violations[0].Rule != ruleKernelImmutable {
+		t.Errorf("expected kernel-immutable violation, got %+v", report.Violations)
+	}
+
+	// A new kernel added alongside (absent from the baseline) is an add, allowed.
+	addReport := EvaluatePreflight(PreflightInput{
+		Family:   PackageManagerAPT,
+		Baseline: []BaselinePackage{installedDeb("linux-image-6.8.0-40-generic", "6.8.0-40")},
+		Resolved: []ResolvedPackage{{Name: "linux-image-6.8.0-50-generic", Version: "6.8.0-50", Arch: "amd64"}},
+		Policy:   config.OverlayPolicy{AllowUpgrade: true},
+	})
+	if addReport.Blocked {
+		t.Errorf("adding a new kernel alongside should be allowed, got %+v", addReport.Violations)
+	}
+}
+
+// TestEvaluatePreflight_KernelAdjacentUpgradeAllowed confirms the userspace
+// kernel packages the WW28.1 overlay upgrades (linux-libc-dev, linux-tools-common)
+// are NOT caught by the kernel-immutable gate.
+func TestEvaluatePreflight_KernelAdjacentUpgradeAllowed(t *testing.T) {
+	report := EvaluatePreflight(PreflightInput{
+		Family: PackageManagerAPT,
+		Baseline: []BaselinePackage{
+			installedDeb("linux-libc-dev", "6.8.0-124.124"),
+			installedDeb("linux-tools-common", "6.8.0-124.124"),
+		},
+		Resolved: []ResolvedPackage{
+			{Name: "linux-libc-dev", Version: "6.8.0-134.134", Arch: "amd64"},
+			{Name: "linux-tools-common", Version: "6.8.0-134.134", Arch: "amd64"},
+		},
+		Policy: config.OverlayPolicy{AllowUpgrade: true},
+	})
+	if report.Blocked {
+		t.Errorf("kernel-adjacent userspace upgrades wrongly blocked: %+v", report.Violations)
+	}
+	if report.Upgrades != 2 {
+		t.Errorf("expected 2 upgrades, got %+v", report.Actions)
+	}
+}
+
+// TestEvaluatePreflight_ObsoletesRemovalGated confirms an rpm Obsoletes on a
+// present baseline package is classified as a removal and blocked by the default
+// AllowRemoval=false, closing the rpm -U silent-removal gap.
+func TestEvaluatePreflight_ObsoletesRemovalGated(t *testing.T) {
+	base := BaselinePackage{Name: "oldlib", Version: "1.0", Arch: "x86_64", Installed: true}
+	in := PreflightInput{
+		Family:      PackageManagerDNF,
+		Baseline:    []BaselinePackage{base},
+		Resolved:    []ResolvedPackage{{Name: "newlib", Version: "2.0", Arch: "x86_64"}},
+		Obsoletions: []ArtifactObsoletion{{Package: "newlib", Obsoletes: DependencyAlternative{Name: "oldlib"}}},
+		Policy:      config.OverlayPolicy{}, // AllowRemoval defaults false
+	}
+	report := EvaluatePreflight(in)
+	if !report.Blocked || report.Removes != 1 {
+		t.Fatalf("expected a blocked removal from the obsoletion, got removes=%d blocked=%v actions=%+v",
+			report.Removes, report.Blocked, report.Actions)
+	}
+	if report.Violations[0].Rule != ruleAllowRemoval {
+		t.Errorf("expected allowRemoval violation, got %+v", report.Violations)
+	}
+
+	// Same obsoletion is permitted once removal is explicitly allowed.
+	in.Policy = config.OverlayPolicy{AllowRemoval: true}
+	if r := EvaluatePreflight(in); r.Blocked {
+		t.Errorf("obsoletion removal should pass with AllowRemoval=true, got %+v", r.Violations)
+	}
+
+	// An Obsoletes targeting a package absent from the baseline is a no-op.
+	in.Policy = config.OverlayPolicy{}
+	in.Obsoletions = []ArtifactObsoletion{{Package: "newlib", Obsoletes: DependencyAlternative{Name: "not-installed"}}}
+	if r := EvaluatePreflight(in); r.Blocked || r.Removes != 0 {
+		t.Errorf("obsoletion of an absent package must be a no-op, got %+v", r.Actions)
+	}
+}
+
+// TestEvaluatePreflight_VersionedObsoletesOutOfRange confirms a versioned
+// Obsoletes whose constraint the baseline version does NOT fall within is not
+// treated as a removal.
+func TestEvaluatePreflight_VersionedObsoletesOutOfRange(t *testing.T) {
+	base := BaselinePackage{Name: "oldlib", Version: "3.0", Arch: "x86_64", Installed: true}
+	// Obsoletes oldlib < 2.0; baseline has 3.0, which is outside the range.
+	report := EvaluatePreflight(PreflightInput{
+		Family:   PackageManagerDNF,
+		Baseline: []BaselinePackage{base},
+		Resolved: []ResolvedPackage{{Name: "newlib", Version: "2.0", Arch: "x86_64"}},
+		Obsoletions: []ArtifactObsoletion{{
+			Package:   "newlib",
+			Obsoletes: DependencyAlternative{Name: "oldlib", Constraint: &VersionConstraint{Op: "<", Ver: "2.0"}},
+		}},
+		Policy: config.OverlayPolicy{},
+	})
+	if report.Blocked || report.Removes != 0 {
+		t.Errorf("versioned obsoletion out of range must not remove, got %+v", report.Actions)
+	}
+}
+
 func TestPreflight_NilGuards(t *testing.T) {
 	if _, err := Preflight(nil, nil, &ResolutionPlan{}, nil); err == nil {
 		t.Error("expected error for nil info")

@@ -28,10 +28,15 @@ const (
 	ActionConflict ActionType = "conflict"
 	// ActionUnsatisfiedDep marks a to-install package whose version-pinned
 	// dependency names a package present in the baseline at a version that does
-	// not satisfy the pin. Additive-only install never upgrades that baseline
-	// package, so the dependency can never be met and the install would fail at
-	// the package-manager's configure step (e.g. systemd-boot's exact-version
-	// dep on libsystemd-shared against an older baseline copy).
+	// not satisfy the pin AND that the overlay is not upgrading to a satisfying
+	// version. In additive-only mode the baseline package is never upgraded, so
+	// the pin can never be met. In additive-and-upgrade mode the resolver upgrades
+	// a required dependency when a satisfying newer version is available (see
+	// upgradeEligibleNames); this action therefore fires only when even that is
+	// impossible — the satisfying version is not in the post-install set. Either
+	// way the install would fail at the package-manager's configure step (e.g.
+	// systemd-boot's exact-version dep on libsystemd-shared against an older
+	// baseline copy with no newer copy available).
 	ActionUnsatisfiedDep ActionType = "unsatisfied-dependency"
 )
 
@@ -43,6 +48,7 @@ const (
 	ruleAllowUpgrade        = "allowUpgrade=false"
 	ruleConflictPolicyFail  = "conflictPolicy=fail"
 	ruleBootloaderImmutable = "bootloader-immutable"
+	ruleKernelImmutable     = "kernel-immutable"
 	ruleUnsatisfiedDep      = "unsatisfiable-versioned-dependency"
 )
 
@@ -60,6 +66,36 @@ var bootloaderPackagePrefixes = []string{
 	"sd-boot",
 	"gummiboot",
 	"efibootmgr",
+}
+
+// kernelImagePackagePrefixes identify the bootable kernel-image packages overlay
+// mode must never replace: RegenerateBoot only refreshes the initramfs, it does
+// not rewrite the bootloader's menu entries for a changed kernel version, so an
+// in-place kernel upgrade (especially rpm -U, which replaces the running kernel)
+// can leave the boot config pointing at a removed/renamed kernel. Adding a new
+// kernel alongside the existing one is fine; only upgrading/replacing an
+// installed kernel image is blocked (see violatedRule).
+//
+// The match is boundary-aware (see isKernelImagePackage) so it catches the
+// bootable images ("linux-image-*", "kernel", "kernel-core") without swallowing
+// userspace kernel-adjacent packages ("linux-libc-dev", "linux-tools-common",
+// "kernel-headers") that carry no boot entry and are safe to upgrade.
+var kernelImagePackagePrefixes = []string{
+	"linux-image",  // Debian/Ubuntu bootable kernel image
+	"kernel-image", // some distros' explicit image package
+	"kernel-core",  // rpm modular kernel: the bootable core
+	"kernel",       // rpm monolithic kernel image ("kernel", "kernel-5.14...")
+}
+
+// kernelSafeExactNames are kernel-prefixed package names that are NOT bootable
+// images and must stay upgradable even though a prefix above would otherwise
+// match them. They are userspace/development packages with no /boot entry.
+var kernelSafeExactNames = map[string]bool{
+	"kernel-headers":       true,
+	"kernel-devel":         true,
+	"kernel-devel-matched": true,
+	"kernel-tools":         true,
+	"kernel-tools-libs":    true,
 }
 
 // PlannedAction is a single classified package operation.
@@ -81,6 +117,8 @@ type PlannedAction struct {
 	ConflictWith string
 	// Bootloader reports whether this action touches a bootloader package.
 	Bootloader bool
+	// Kernel reports whether this action touches a bootable kernel-image package.
+	Kernel bool
 	// Detail carries optional extra diagnostic context (e.g. a simulator note).
 	Detail string
 }
@@ -116,9 +154,13 @@ type PreflightInput struct {
 	// packages participate).
 	Baseline []BaselinePackage
 	// Resolved is Slice B: the set the overlay will actually install (the
-	// plan's ToInstall — closure members not already satisfied by the baseline),
-	// carrying the requested versions. It excludes already-present closure members
-	// on purpose, since additive-only install never reinstalls them.
+	// plan's ToInstall), carrying the requested versions. In additive-only mode it
+	// is exactly the closure members not already present in the baseline; in
+	// additive-and-upgrade mode it ALSO contains the approved upgrades of present
+	// baseline packages (a present package the resolver routed in because it is in
+	// the bounded upgrade set). It still excludes present packages that are NOT
+	// being changed, so classifyActions never spuriously flags an untouched
+	// baseline package.
 	Resolved []ResolvedPackage
 	// SimulatedActions are removals/conflicts surfaced by a package-manager
 	// simulate run, merged in as a validation aid. The two-slice comparison
@@ -131,6 +173,11 @@ type PreflightInput struct {
 	// install can never satisfy (present-but-wrong-version), which a purely
 	// name-based closure cannot see.
 	ArtifactDeps []ArtifactDependency
+	// Obsoletions are the Obsoletes: declarations of the to-install rpm artifacts.
+	// Under `rpm -U` an Obsoletes on a present baseline package erases it, so each
+	// such obsoletion is classified as an ActionRemove and governed by the
+	// AllowRemoval gate rather than silently removing the package at install time.
+	Obsoletions []ArtifactObsoletion
 	// Policy is the overlay policy that gates the classified actions.
 	Policy config.OverlayPolicy
 }
@@ -150,13 +197,14 @@ var simulateOverlayInstall = func(info *BaselineInfo, plan *ResolutionPlan) ([]P
 // plan.ToInstall), classifies every planned action, and blocks installation on
 // any policy violation with an actionable diagnostic.
 //
-// Slice B is deliberately plan.ToInstall, NOT the full plan.Closure: overlay
-// mode is additive-only, so only ToInstall (the closure members not already
-// satisfied by the baseline) is ever handed to dpkg/rpm. Closure members already
-// present in the baseline are never reinstalled, so comparing their repo-pool
-// version against the baseline would spuriously flag security-patched base
-// packages (whose installed version outranks the pool) as downgrades even though
-// the overlay never touches them.
+// Slice B is deliberately plan.ToInstall, NOT the full plan.Closure: only
+// ToInstall is ever handed to dpkg/rpm. In additive-only mode ToInstall is the
+// closure members not already present in the baseline; in additive-and-upgrade
+// mode it additionally holds the approved upgrades the resolver selected. Either
+// way, a present baseline package that the overlay does NOT change is excluded,
+// so comparing its repo-pool version against the baseline can never spuriously
+// flag a security-patched base package (whose installed version outranks the
+// pool) as a downgrade — the resolver already decided such packages stay put.
 //
 // It returns the report unconditionally (so callers can log the full plan) and a
 // non-nil error when the preflight is blocked.
@@ -192,12 +240,22 @@ func Preflight(info *BaselineInfo, baseline []BaselinePackage, plan *ResolutionP
 		artifactDeps = nil
 	}
 
+	// The Obsoletes read is a best-effort aid too: it lets the preflight gate an
+	// rpm -U obsoletion of a baseline package through AllowRemoval, but an
+	// unreadable artifact must not block the build.
+	obsoletions, err := readOverlayArtifactObsoletes(info.PackageManager, plan)
+	if err != nil {
+		log.Warnf("Overlay preflight: could not read artifact Obsoletes, skipping obsoletion check: %v", err)
+		obsoletions = nil
+	}
+
 	report := EvaluatePreflight(PreflightInput{
 		Family:           info.PackageManager,
 		Baseline:         baseline,
 		Resolved:         plan.ToInstall,
 		SimulatedActions: simulated,
 		ArtifactDeps:     artifactDeps,
+		Obsoletions:      obsoletions,
 		Policy:           effectivePolicy,
 	})
 
@@ -218,6 +276,7 @@ func EvaluatePreflight(in PreflightInput) *PreflightReport {
 	actions := classifyActions(in.Family, sliceA, in.Resolved)
 	actions = append(actions, normalizeSimulatedActions(in.SimulatedActions, sliceA)...)
 	actions = append(actions, classifyUnsatisfiedDeps(in.Family, sliceA, in.Resolved, in.ArtifactDeps)...)
+	actions = append(actions, classifyObsoletions(in.Family, sliceA, in.Obsoletions)...)
 
 	// Flag any action that touches a bootloader package so the policy gate can
 	// block bootloader replacement regardless of the other knobs. An
@@ -226,8 +285,14 @@ func EvaluatePreflight(in PreflightInput) *PreflightReport {
 	// more specific rule (and the version detail) must be the reported reason
 	// even when the declaring package happens to be a bootloader (e.g. systemd-boot).
 	for i := range actions {
-		if actions[i].Type != ActionUnsatisfiedDep && isBootloaderPackage(actions[i].Package) {
+		if actions[i].Type == ActionUnsatisfiedDep {
+			continue
+		}
+		if isBootloaderPackage(actions[i].Package) {
 			actions[i].Bootloader = true
+		}
+		if isKernelImagePackage(actions[i].Package) {
+			actions[i].Kernel = true
 		}
 	}
 
@@ -322,11 +387,14 @@ func classifyActions(family PackageManager, sliceA map[string]BaselinePackage, r
 
 // classifyUnsatisfiedDeps flags to-install packages whose version-pinned
 // dependency names a package that is present after install (in the baseline or
-// in the to-install set) but at a version the pin rejects. This is the failure
-// additive-only install cannot avoid: it never upgrades the baseline's copy, so
-// a strict pin against an older baseline version (e.g. systemd-boot's
-// "libsystemd-shared (= X)" against baseline version Y) can never be met and the
-// package manager fails at its configure step.
+// in the to-install set) but at a version the pin rejects. It checks against the
+// post-install state, so a pin satisfied by a co-installed package — including a
+// baseline package the overlay is upgrading in additive-and-upgrade mode — is
+// correctly NOT flagged. It fires only when the satisfying version is absent from
+// the post-install set: a strict pin against an older baseline version with no
+// newer copy being installed (e.g. systemd-boot's "libsystemd-shared (= X)"
+// against baseline version Y), which the package manager cannot meet, so it fails
+// at its configure step.
 //
 // It deliberately does NOT flag an edge whose package is entirely absent: those
 // are typically satisfied by a Provides/virtual capability the artifact metadata
@@ -362,8 +430,45 @@ func classifyUnsatisfiedDeps(family PackageManager, sliceA map[string]BaselinePa
 			CurrentVersion:   postInstall[unmet.Name],
 			RequestedVersion: unmet.Constraint.Op + " " + unmet.Constraint.Ver,
 			ConflictWith:     unmet.Name,
-			Detail: fmt.Sprintf("requires %s (%s %s) but the baseline has %s, which additive-only install cannot upgrade",
+			Detail: fmt.Sprintf("requires %s (%s %s) but the post-install set has %s and no satisfying version is being installed",
 				unmet.Name, unmet.Constraint.Op, unmet.Constraint.Ver, postInstall[unmet.Name]),
+		})
+	}
+	return actions
+}
+
+// classifyObsoletions turns each rpm Obsoletes: on a present baseline package
+// into an ActionRemove, so the AllowRemoval gate governs an obsoletion that
+// `rpm -U` would otherwise perform silently at install time. An Obsoletes whose
+// target is absent from the baseline is a no-op (nothing to erase) and is
+// skipped; a versioned Obsoletes only fires when the baseline version falls
+// within the obsoleted range.
+func classifyObsoletions(family PackageManager, sliceA map[string]BaselinePackage, obsoletions []ArtifactObsoletion) []PlannedAction {
+	var actions []PlannedAction
+	for _, o := range obsoletions {
+		target := strings.TrimSpace(o.Obsoletes.Name)
+		if target == "" {
+			continue
+		}
+		base, present := sliceA[target]
+		if !present {
+			continue // nothing installed under this name to obsolete
+		}
+		// A versioned Obsoletes only erases the baseline copy when its version
+		// satisfies the constraint; an uncomparable version is treated
+		// conservatively as a potential removal (better to gate than to miss it).
+		if c := o.Obsoletes.Constraint; c != nil {
+			if cmp, err := comparePkgVersions(family, base.Version, c.Ver); err == nil && !constraintSatisfied(c.Op, cmp) {
+				continue
+			}
+		}
+		actions = append(actions, PlannedAction{
+			Type:           ActionRemove,
+			Package:        target,
+			CurrentVersion: base.Version,
+			Arch:           base.Arch,
+			ConflictWith:   o.Package,
+			Detail:         fmt.Sprintf("obsoleted by %q, which rpm -U would erase from the baseline", o.Package),
 		})
 	}
 	return actions
@@ -473,6 +578,13 @@ func violatedRule(a PlannedAction, policy config.OverlayPolicy) (string, bool) {
 	if a.Bootloader && a.Type != ActionAdd {
 		return ruleBootloaderImmutable, true
 	}
+	// The bootable kernel image is likewise immutable: adding a new kernel
+	// alongside the existing one is allowed, but upgrading/replacing/removing an
+	// installed kernel image is blocked because boot regeneration only refreshes
+	// the initramfs, not the bootloader's menu entries for a changed kernel.
+	if a.Kernel && a.Type != ActionAdd {
+		return ruleKernelImmutable, true
+	}
 
 	switch a.Type {
 	case ActionRemove:
@@ -480,11 +592,11 @@ func violatedRule(a PlannedAction, policy config.OverlayPolicy) (string, bool) {
 			return ruleAllowRemoval, true
 		}
 	case ActionUpgrade:
-		// Additive-only: overlay never replaces an existing baseline package with a
-		// newer version by default. Blocking here (rather than at install time) also
-		// keeps the deb and rpm backends consistent — the additive rpm installer
-		// (rpm -i) cannot upgrade an installed package, so a permitted upgrade would
-		// otherwise fail mid-install on RPM baselines despite passing preflight.
+		// Upgrades are gated by policy: additive-only (AllowUpgrade=false) blocks
+		// every upgrade so overlay never replaces a baseline package; the
+		// additive-and-upgrade policy (AllowUpgrade=true) permits them, and the
+		// install step then uses an upgrade-capable package-manager mode (dpkg -i,
+		// which upgrades in place, or rpm -U in place of rpm -i).
 		if !policy.AllowUpgrade {
 			return ruleAllowUpgrade, true
 		}
@@ -497,9 +609,12 @@ func violatedRule(a PlannedAction, policy config.OverlayPolicy) (string, bool) {
 			return ruleConflictPolicyFail, true
 		}
 	case ActionUnsatisfiedDep:
-		// Unconditional: additive-only install cannot upgrade the baseline package
-		// the pin names, so this dependency can never be satisfied. No policy knob
-		// relaxes it — the install would simply fail at configure time.
+		// Unconditional: this action is only emitted when no satisfying version of
+		// the pinned dependency is in the post-install set (the baseline copy is
+		// rejected and no newer copy is being installed), so the dependency can
+		// never be met. No policy knob relaxes it — the install would simply fail
+		// at configure time. The fix is to bring a satisfying version into the
+		// resolved set, not to toggle a policy.
 		return ruleUnsatisfiedDep, true
 	}
 	return "", false
@@ -543,11 +658,33 @@ func comparePkgVersions(family PackageManager, a, b string) (int, error) {
 // "grub-efi-amd64", "systemd-boot-efi"), but NOT a different package that merely
 // shares the prefix's letters (e.g. "systemd-bootchart", a boot profiler).
 func isBootloaderPackage(name string) bool {
+	return matchesPackagePrefix(name, bootloaderPackagePrefixes)
+}
+
+// isKernelImagePackage reports whether a package name identifies a bootable
+// kernel-image package overlay mode must not upgrade in place (see
+// kernelImagePackagePrefixes). Userspace kernel-adjacent packages that merely
+// share the prefix (kernel-headers, linux-libc-dev, linux-tools-common) are NOT
+// matched: linux-libc-dev/linux-tools-common fail the "linux-image" prefix, and
+// the kernel-*-dev/-tools family is excluded explicitly via kernelSafeExactNames.
+func isKernelImagePackage(name string) bool {
+	if kernelSafeExactNames[strings.ToLower(strings.TrimSpace(name))] {
+		return false
+	}
+	return matchesPackagePrefix(name, kernelImagePackagePrefixes)
+}
+
+// matchesPackagePrefix reports whether name matches any of prefixes at a
+// package-name boundary: the bare prefix, or a sub-package separated by '-' or a
+// version digit (e.g. "grub2", "linux-image-6.8.0-40-generic"), but NOT a
+// different package that merely shares the prefix's letters ("systemd-bootchart",
+// "kernelshark").
+func matchesPackagePrefix(name string, prefixes []string) bool {
 	lower := strings.ToLower(strings.TrimSpace(name))
 	if lower == "" {
 		return false
 	}
-	for _, prefix := range bootloaderPackagePrefixes {
+	for _, prefix := range prefixes {
 		if !strings.HasPrefix(lower, prefix) {
 			continue
 		}
@@ -620,6 +757,9 @@ func describeViolation(v PolicyViolation) string {
 	msg := fmt.Sprintf("%s %q: current=%s requested=%s [rule: %s]", a.Type, a.Package, current, requested, v.Rule)
 	if a.Bootloader && v.Rule == ruleBootloaderImmutable {
 		msg += " (bootloader packages must not be replaced in overlay mode)"
+	}
+	if a.Kernel && v.Rule == ruleKernelImmutable {
+		msg += " (bootable kernel image must not be replaced in overlay mode; boot regeneration refreshes only the initramfs, not the bootloader menu entries)"
 	}
 	if a.ConflictWith != "" && a.Type == ActionConflict {
 		msg += fmt.Sprintf(" (conflicts with %q)", a.ConflictWith)

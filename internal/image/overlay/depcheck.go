@@ -77,6 +77,88 @@ var readOverlayArtifactDependencies = func(family PackageManager, plan *Resoluti
 	return deps, nil
 }
 
+// ArtifactObsoletion records that a to-install package declares an rpm
+// Obsoletes: on another package. Under `rpm -U` (upgrade mode) an Obsoletes
+// causes rpm to ERASE the obsoleted package if it is installed — a removal that
+// `rpm -i` would never perform. The preflight turns each obsoletion of a present
+// baseline package into an ActionRemove so the AllowRemoval gate governs it,
+// closing the gap where an upgrade artifact could silently drop a baseline
+// package despite allowRemoval=false.
+type ArtifactObsoletion struct {
+	// Package is the to-install package declaring the Obsoletes.
+	Package string
+	// Obsoletes is the (name + optional version constraint) of the obsoleted
+	// package. Constraint is nil for an unversioned Obsoletes (any version).
+	Obsoletes DependencyAlternative
+}
+
+// readOverlayArtifactObsoletes is the impure seam that reads the Obsoletes:
+// declarations of every plan.ToInstall rpm artifact. Like the dependency reader
+// it is a best-effort validation aid feeding the pure preflight, so a read
+// failure is non-fatal. It is rpm-specific: the deb installer (dpkg -i) never
+// auto-removes an installed package (a Replaces/Conflicts case fails the install
+// rather than silently erasing), so there is nothing to gate for deb here.
+var readOverlayArtifactObsoletes = func(family PackageManager, plan *ResolutionPlan) ([]ArtifactObsoletion, error) {
+	if family != PackageManagerDNF || plan == nil || len(plan.ToInstall) == 0 {
+		return nil, nil
+	}
+	if strings.TrimSpace(plan.DownloadDir) == "" {
+		return nil, fmt.Errorf("overlay obsoletes check: plan has packages to install but no artifact download directory")
+	}
+
+	var obs []ArtifactObsoletion
+	for _, rp := range plan.ToInstall {
+		artifact, err := artifactFileFor(rp)
+		if err != nil {
+			return nil, err
+		}
+		hostPath := joinArtifactPath(plan.DownloadDir, artifact)
+		edges, err := readRPMArtifactObsoletes(rp.Name, hostPath)
+		if err != nil {
+			log.Warnf("Overlay obsoletes check: failed to read Obsoletes of %q from %s (continuing): %v", rp.Name, hostPath, err)
+			continue
+		}
+		obs = append(obs, edges...)
+	}
+	return obs, nil
+}
+
+// readRPMArtifactObsoletes reads a prepared .rpm's Obsoletes with
+// `rpm -qp --obsoletes` (rpm is on the shell allowlist) and parses each entry.
+func readRPMArtifactObsoletes(pkgName, hostPath string) ([]ArtifactObsoletion, error) {
+	// hostPath is a URL-derived artifact path; quote it before interpolating it
+	// into the bash -c command so metacharacters can't alter execution.
+	out, err := shell.ExecCmdSilent(fmt.Sprintf("rpm -qp --obsoletes %s", shell.QuoteArg(hostPath)), true, shell.HostPath, nil)
+	if err != nil {
+		return nil, fmt.Errorf("reading obsoletes of %s: %w", hostPath, err)
+	}
+	return parseRPMObsoletes(pkgName, out), nil
+}
+
+// parseRPMObsoletes parses `rpm -qp --obsoletes` output. Each non-empty line is
+// either a bare capability name or "name op version" (a versioned obsoletion).
+// rpmlib/file entries are skipped as in parseRPMRequires.
+func parseRPMObsoletes(pkgName, out string) []ArtifactObsoletion {
+	var obs []ArtifactObsoletion
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "/") || strings.HasPrefix(line, "rpmlib(") {
+			continue
+		}
+		fields := strings.Fields(line)
+		switch len(fields) {
+		case 1:
+			// Unversioned obsoletion: obsoletes the named package at any version.
+			obs = append(obs, ArtifactObsoletion{Package: pkgName, Obsoletes: DependencyAlternative{Name: fields[0]}})
+		case 3:
+			if c, ok := parseConstraint(fields[1] + " " + fields[2]); ok {
+				obs = append(obs, ArtifactObsoletion{Package: pkgName, Obsoletes: DependencyAlternative{Name: fields[0], Constraint: &c}})
+			}
+		}
+	}
+	return obs
+}
+
 // readDebArtifactDependencies reads the Depends and Pre-Depends control fields
 // of a prepared .deb with `dpkg -f` and parses their version-constrained edges.
 // The file is read on the host, so no chroot is entered.

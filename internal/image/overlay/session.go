@@ -315,10 +315,12 @@ func (b *Builder) imageVersion() string {
 	return "overlay"
 }
 
-// generateOverlaySBOM writes an SPDX SBOM of the packages the overlay ADDED (the
-// additive ToInstall set) and embeds it into the baseline filesystem at the
-// conventional /usr/share/sbom path. It is a no-op-safe reflection of what the
-// overlay contributed, not a full re-inventory of the baseline.
+// generateOverlaySBOM writes an SPDX SBOM of the packages the overlay CONTRIBUTED
+// — the ToInstall set, i.e. newly added packages plus (in additive-and-upgrade
+// mode) baseline packages upgraded to a newer version — recording each at the
+// version the overlay installed, and embeds it into the baseline filesystem at
+// the conventional /usr/share/sbom path. It is a no-op-safe reflection of what
+// the overlay changed, not a full re-inventory of the baseline.
 func generateOverlaySBOM(info *BaselineInfo, rootMount string, plan *ResolutionPlan) error {
 	if plan == nil {
 		return nil
@@ -347,7 +349,7 @@ func generateOverlaySBOM(info *BaselineInfo, rootMount string, plan *ResolutionP
 	if err := manifest.CopySBOMToChroot(rootMount); err != nil {
 		return fmt.Errorf("embedding overlay SBOM into baseline: %w", err)
 	}
-	log.Infof("Overlay SBOM generated for %d added package(s)", len(pkgs))
+	log.Infof("Overlay SBOM generated for %d contributed package(s) (added or upgraded)", len(pkgs))
 	return nil
 }
 
