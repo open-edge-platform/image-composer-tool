@@ -783,7 +783,7 @@ func TestResolveAndMergeExtendsChainValid(t *testing.T) {
 	writeExtendsTemplate(t, midPath, "mid", "root.yml", target, []string{"mid-pkg"})
 	writeExtendsTemplate(t, leafPath, "leaf", "mid.yml", target, []string{"leaf-pkg"})
 
-	merged, chainPaths, err := ResolveAndMergeExtendsChain(leafPath)
+	merged, chainPaths, err := ResolveAndMergeExtendsChain(leafPath, nil)
 	if err != nil {
 		t.Fatalf("ResolveAndMergeExtendsChain() error = %v", err)
 	}
@@ -818,7 +818,7 @@ func TestResolveAndMergeExtendsChainMissingParent(t *testing.T) {
 	leafPath := filepath.Join(dir, "leaf.yml")
 	writeExtendsTemplate(t, leafPath, "leaf", "missing.yml", target, nil)
 
-	_, _, err := ResolveAndMergeExtendsChain(leafPath)
+	_, _, err := ResolveAndMergeExtendsChain(leafPath, nil)
 	if err == nil {
 		t.Fatal("ResolveAndMergeExtendsChain() expected error for missing parent")
 	}
@@ -840,7 +840,7 @@ func TestResolveAndMergeExtendsChainInvalidParent(t *testing.T) {
 	}
 	writeExtendsTemplate(t, leafPath, "leaf", "root.yml", target, nil)
 
-	_, _, err := ResolveAndMergeExtendsChain(leafPath)
+	_, _, err := ResolveAndMergeExtendsChain(leafPath, nil)
 	if err == nil {
 		t.Fatal("ResolveAndMergeExtendsChain() expected error for invalid parent")
 	}

@@ -592,4 +592,3 @@ func TestValidateCommand_BrokenParentInChain(t *testing.T) {
 		t.Errorf("error should identify the offending parent file, got: %v", err)
 	}
 }
-

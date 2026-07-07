@@ -641,8 +641,11 @@ func resolveExtendsChain(templatePath string) ([]*ImageTemplate, error) {
 // validated as it is loaded, and errors identify the file in the chain that
 // failed. The returned paths are the resolved chain files in root-to-leaf order,
 // for logging the effective inheritance.
-func ResolveAndMergeExtendsChain(templatePath string) (*ImageTemplate, []string, error) {
-	chain, chainPaths, err := resolveExtendsChainWithPaths(templatePath)
+//
+// If leaf is non-nil it is used as the already-parsed leaf template, avoiding a
+// redundant re-read of templatePath; pass nil to have the resolver load it.
+func ResolveAndMergeExtendsChain(templatePath string, leaf *ImageTemplate) (*ImageTemplate, []string, error) {
+	chain, chainPaths, err := resolveExtendsChainFromLeaf(templatePath, leaf)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -659,6 +662,14 @@ func ResolveAndMergeExtendsChain(templatePath string) (*ImageTemplate, []string,
 // returns the absolute file path of each template in root-to-leaf order, which
 // callers use for logging the resolved chain.
 func resolveExtendsChainWithPaths(templatePath string) ([]*ImageTemplate, []string, error) {
+	return resolveExtendsChainFromLeaf(templatePath, nil)
+}
+
+// resolveExtendsChainFromLeaf walks the extends references from leaf to root. When
+// preloadedLeaf is non-nil it is reused for the first (leaf) iteration instead of
+// re-reading templatePath from disk, so callers that already parsed the leaf do
+// not pay for a second YAML parse.
+func resolveExtendsChainFromLeaf(templatePath string, preloadedLeaf *ImageTemplate) ([]*ImageTemplate, []string, error) {
 	startPath, err := filepath.Abs(filepath.Clean(templatePath))
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to resolve template path: %w", err)
@@ -675,9 +686,15 @@ func resolveExtendsChainWithPaths(templatePath string) ([]*ImageTemplate, []stri
 	var leafTarget TargetInfo
 
 	for {
-		tmpl, err := LoadTemplate(currentPath, false)
-		if err != nil {
-			return nil, nil, fmt.Errorf("template %s failed validation in extends chain: %w", currentPath, err)
+		var tmpl *ImageTemplate
+		if len(leafToRoot) == 0 && preloadedLeaf != nil {
+			tmpl = preloadedLeaf
+		} else {
+			loaded, err := LoadTemplate(currentPath, false)
+			if err != nil {
+				return nil, nil, fmt.Errorf("template %s failed validation in extends chain: %w", currentPath, err)
+			}
+			tmpl = loaded
 		}
 
 		if len(leafToRoot) == 0 {
@@ -852,7 +869,7 @@ func LoadAndMergeTemplate(templatePath string) (*ImageTemplate, error) {
 	// is a single-element chain, preserving the existing two-layer merge behavior.
 	chain := []*ImageTemplate{leafTemplate}
 	if strings.TrimSpace(leafTemplate.Extends) != "" {
-		resolved, chainPaths, err := resolveExtendsChainWithPaths(templatePath)
+		resolved, chainPaths, err := resolveExtendsChainFromLeaf(templatePath, leafTemplate)
 		if err != nil {
 			return nil, fmt.Errorf("failed to resolve extends chain: %w", err)
 		}

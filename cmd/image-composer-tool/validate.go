@@ -82,7 +82,7 @@ func executeValidate(cmd *cobra.Command, args []string) error {
 		// isolation. Each file in the chain is validated as it is loaded, so a
 		// broken parent is reported with its path.
 		if strings.TrimSpace(template.Extends) != "" {
-			merged, chainPaths, err := config.ResolveAndMergeExtendsChain(templateFile)
+			merged, chainPaths, err := config.ResolveAndMergeExtendsChain(templateFile, template)
 			if err != nil {
 				return fmt.Errorf("validation failed: %v", err)
 			}
