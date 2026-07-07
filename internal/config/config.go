@@ -46,16 +46,16 @@ type DiskSelectionPolicy struct {
 }
 
 type DiskConfig struct {
-	Name            string              `yaml:"name"`
-	Path            string              `yaml:"path"` // Path to the disk device (e.g., /dev/sda), used by live installer
-	SelectionPolicy DiskSelectionPolicy `yaml:"selectionPolicy,omitempty"`
+	Name               string              `yaml:"name"`
+	Path               string              `yaml:"path"` // Path to the disk device (e.g., /dev/sda), used by live installer
+	SelectionPolicy    DiskSelectionPolicy `yaml:"selectionPolicy,omitempty"`
+	Artifacts          []ArtifactInfo      `yaml:"artifacts"`
+	Size               string              `yaml:"size"`
+	PartitionTableType string              `yaml:"partitionTableType"`
+	Partitions         []PartitionInfo     `yaml:"partitions"`
 	// ExtendLastPartitionToFillDisk forces the final partition's end to "0"
 	// (consume all remaining disk space) when enabled.
-	ExtendLastPartitionToFillDisk bool            `yaml:"extendLastPartitionToFillDisk,omitempty"`
-	Artifacts                     []ArtifactInfo  `yaml:"artifacts"`
-	Size                          string          `yaml:"size"`
-	PartitionTableType            string          `yaml:"partitionTableType"`
-	Partitions                    []PartitionInfo `yaml:"partitions"`
+	ExtendLastPartitionToFillDisk bool `yaml:"extendLastPartitionToFillDisk,omitempty"`
 }
 
 type PackageRepository struct {
@@ -588,18 +588,6 @@ func (t *ImageTemplate) GetTargetInfo() TargetInfo {
 // Updated methods to work with single objects instead of arrays
 func (t *ImageTemplate) GetDiskConfig() DiskConfig {
 	return t.Disk
-}
-
-// GetEffectivePartitions returns a copy of the disk partitions with optional
-// last-partition auto-extension applied.
-func (d DiskConfig) GetEffectivePartitions() []PartitionInfo {
-	partitions := append([]PartitionInfo(nil), d.Partitions...)
-	if !d.ExtendLastPartitionToFillDisk || len(partitions) == 0 {
-		return partitions
-	}
-
-	partitions[len(partitions)-1].End = "0"
-	return partitions
 }
 
 func (t *ImageTemplate) GetSystemConfig() SystemConfig {

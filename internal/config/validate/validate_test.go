@@ -1072,8 +1072,16 @@ systemConfig:
 	}
 }
 
-func TestValidateImageTemplateJSON_AutoExpandRejectsImmutabilityEnabled(t *testing.T) {
-	templateYAML := `image:
+func TestValidateImageTemplateJSON_AutoExpand(t *testing.T) {
+	tests := []struct {
+		name        string
+		templateYML string
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "rejects-immutability-enabled",
+			templateYML: `image:
   name: test-autoexpand-immutable
   version: "1.0.0"
 target:
@@ -1107,28 +1115,13 @@ systemConfig:
     - p
   kernel:
     version: "6.14"
-`
-
-	var raw interface{}
-	if err := yaml.Unmarshal([]byte(templateYAML), &raw); err != nil {
-		t.Fatalf("YAML parsing error: %v", err)
-	}
-	dataJSON, err := json.Marshal(raw)
-	if err != nil {
-		t.Fatalf("JSON marshaling error: %v", err)
-	}
-
-	err = ValidateImageTemplateJSON(dataJSON)
-	if err == nil {
-		t.Fatal("expected immutability-enabled template with auto-expand to fail validation")
-	}
-	if !strings.Contains(err.Error(), "immutability") {
-		t.Fatalf("expected immutability error, got: %v", err)
-	}
-}
-
-func TestValidateImageTemplateJSON_AutoExpandRejectsNonRootfsLastPartition(t *testing.T) {
-	templateYAML := `image:
+`,
+			wantErr:     true,
+			errContains: "immutability",
+		},
+		{
+			name: "rejects-non-rootfs-last-partition",
+			templateYML: `image:
   name: test-autoexpand-nonroot-last
   version: "1.0.0"
 target:
@@ -1168,28 +1161,13 @@ systemConfig:
     - p
   kernel:
     version: "6.14"
-`
-
-	var raw interface{}
-	if err := yaml.Unmarshal([]byte(templateYAML), &raw); err != nil {
-		t.Fatalf("YAML parsing error: %v", err)
-	}
-	dataJSON, err := json.Marshal(raw)
-	if err != nil {
-		t.Fatalf("JSON marshaling error: %v", err)
-	}
-
-	err = ValidateImageTemplateJSON(dataJSON)
-	if err == nil {
-		t.Fatal("expected non-rootfs-last template with auto-expand to fail validation")
-	}
-	if !strings.Contains(err.Error(), "last partition") {
-		t.Fatalf("expected last-partition error, got: %v", err)
-	}
-}
-
-func TestValidateImageTemplateJSON_AutoExpandAllowsRootfsLastPartition(t *testing.T) {
-	templateYAML := `image:
+`,
+			wantErr:     true,
+			errContains: "last partition",
+		},
+		{
+			name: "allows-rootfs-last-partition",
+			templateYML: `image:
   name: test-autoexpand-valid
   version: "1.0.0"
 target:
@@ -1223,39 +1201,136 @@ systemConfig:
     - p
   kernel:
     version: "6.14"
-`
-
-	var raw interface{}
-	if err := yaml.Unmarshal([]byte(templateYAML), &raw); err != nil {
-		t.Fatalf("YAML parsing error: %v", err)
+`,
+			wantErr: false,
+		},
+		{
+			name: "rejects-iso-image-type",
+			templateYML: `image:
+  name: test-autoexpand-iso
+  version: "1.0.0"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: iso
+disk:
+  name: test
+  size: 4GiB
+  partitionTableType: gpt
+  extendLastPartitionToFillDisk: true
+  partitions:
+    - id: rootfs
+      type: linux-root-amd64
+      start: 1MiB
+      end: "0"
+      fsType: ext4
+      mountPoint: /
+systemConfig:
+  name: test
+  immutability:
+    enabled: false
+  packages:
+    - p
+  kernel:
+    version: "6.14"
+`,
+			wantErr:     true,
+			errContains: "imageType=\"iso\"",
+		},
 	}
-	dataJSON, err := json.Marshal(raw)
-	if err != nil {
-		t.Fatalf("JSON marshaling error: %v", err)
-	}
 
-	if err := ValidateImageTemplateJSON(dataJSON); err != nil {
-		t.Fatalf("expected valid auto-expand template to pass validation, got: %v", err)
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var raw interface{}
+			if err := yaml.Unmarshal([]byte(tt.templateYML), &raw); err != nil {
+				t.Fatalf("YAML parsing error: %v", err)
+			}
+
+			dataJSON, err := json.Marshal(raw)
+			if err != nil {
+				t.Fatalf("JSON marshaling error: %v", err)
+			}
+
+			err = ValidateImageTemplateJSON(dataJSON)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected validation to fail")
+				}
+				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
+					t.Fatalf("expected error containing %q, got: %v", tt.errContains, err)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("expected validation to pass, got: %v", err)
+			}
+		})
 	}
 }
 
-func TestValidateUserTemplateJSON_AutoExpandRejectsNonRootfsLastPartition(t *testing.T) {
-	dataJSON := []byte(`{
-  "image": {"name": "test-user-autoexpand", "version": "1.0.0"},
-  "target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"},
-  "disk": {
+func TestValidateUserTemplateJSON_AutoExpand(t *testing.T) {
+	tests := []struct {
+		name        string
+		dataJSON    []byte
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "rejects-non-rootfs-last-partition",
+			dataJSON: []byte(`{
+	"image": {"name": "test-user-autoexpand", "version": "1.0.0"},
+	"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"},
+	"disk": {
 		"name": "test",
-    "extendLastPartitionToFillDisk": true,
-    "partitions": [{"mountPoint": "/"}, {"mountPoint": "none"}]
-  },
-  "systemConfig": {"immutability": {"enabled": false}}
-}`)
-
-	err := ValidateUserTemplateJSON(dataJSON)
-	if err == nil {
-		t.Fatal("expected user template with non-rootfs last partition to fail validation")
+		"extendLastPartitionToFillDisk": true,
+		"partitions": [{"mountPoint": "/"}, {"mountPoint": "none"}]
+	},
+	"systemConfig": {"immutability": {"enabled": false}}
+}`),
+			wantErr:     true,
+			errContains: "last partition",
+		},
+		{
+			name: "rejects-iso-image-type",
+			dataJSON: []byte(`{
+	"image": {"name": "test-user-autoexpand-iso", "version": "1.0.0"},
+	"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "iso"},
+	"disk": {
+		"name": "test",
+		"extendLastPartitionToFillDisk": true,
+		"partitions": [{"mountPoint": "/"}]
+	},
+	"systemConfig": {"immutability": {"enabled": false}}
+}`),
+			wantErr:     true,
+			errContains: "imageType=\"iso\"",
+		},
 	}
-	if !strings.Contains(err.Error(), "last partition") {
-		t.Fatalf("expected last-partition error, got: %v", err)
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := ValidateUserTemplateJSON(tt.dataJSON)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected validation to fail")
+				}
+				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
+					t.Fatalf("expected error containing %q, got: %v", tt.errContains, err)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("expected validation to pass, got: %v", err)
+			}
+		})
 	}
 }

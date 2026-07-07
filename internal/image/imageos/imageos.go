@@ -981,14 +981,11 @@ func updateRootfsConfig(installRoot string, template *config.ImageTemplate) erro
 	if err := updateImageHostname(installRoot, template); err != nil {
 		return fmt.Errorf("failed to update image hostname: %w", err)
 	}
-	if err := injectFirstBootLastPartitionAutoExpandAdditionalFiles(template); err != nil {
-		return fmt.Errorf("failed to prepare first-boot partition auto-expand files: %w", err)
-	}
 	if err := addImageAdditionalFiles(installRoot, template); err != nil {
 		return fmt.Errorf("failed to add additional files to image: %w", err)
 	}
-	if err := setupFirstBootLastPartitionAutoExpand(installRoot, template); err != nil {
-		return fmt.Errorf("failed to setup first-boot partition auto-expand service: %w", err)
+	if err := configureFirstBootLastPartitionAutoExpand(installRoot, template); err != nil {
+		return fmt.Errorf("failed to configure first-boot partition auto-expand: %w", err)
 	}
 	if err := updateImageUsrGroup(installRoot, template); err != nil {
 		return fmt.Errorf("failed to update image user/group: %w", err)
@@ -1012,14 +1009,11 @@ func updateImageConfig(installRoot string, diskPathIdMap map[string]string, temp
 	if err := updateImageHostname(installRoot, template); err != nil {
 		return fmt.Errorf("failed to update image hostname: %w", err)
 	}
-	if err := injectFirstBootLastPartitionAutoExpandAdditionalFiles(template); err != nil {
-		return fmt.Errorf("failed to prepare first-boot partition auto-expand files: %w", err)
-	}
 	if err := addImageAdditionalFiles(installRoot, template); err != nil {
 		return fmt.Errorf("failed to add additional files to image: %w", err)
 	}
-	if err := setupFirstBootLastPartitionAutoExpand(installRoot, template); err != nil {
-		return fmt.Errorf("failed to setup first-boot partition auto-expand service: %w", err)
+	if err := configureFirstBootLastPartitionAutoExpand(installRoot, template); err != nil {
+		return fmt.Errorf("failed to configure first-boot partition auto-expand: %w", err)
 	}
 	if err := updateImageUsrGroup(installRoot, template); err != nil {
 		return fmt.Errorf("failed to update image user/group: %w", err)
@@ -1175,7 +1169,7 @@ func addImageAdditionalFiles(installRoot string, template *config.ImageTemplate)
 	return nil
 }
 
-func injectFirstBootLastPartitionAutoExpandAdditionalFiles(template *config.ImageTemplate) error {
+func configureFirstBootLastPartitionAutoExpand(installRoot string, template *config.ImageTemplate) error {
 	if template == nil {
 		return nil
 	}
@@ -1186,12 +1180,8 @@ func injectFirstBootLastPartitionAutoExpandAdditionalFiles(template *config.Imag
 	}
 
 	if template.Target.ImageType != "raw" {
-		log.Infof("Skipping first-boot partition auto-expand file injection: imageType=%s", template.Target.ImageType)
+		log.Infof("Skipping first-boot partition auto-expand configuration: imageType=%s", template.Target.ImageType)
 		return nil
-	}
-
-	if err := validateFirstBootLastPartitionAutoExpandConfig(template); err != nil {
-		return err
 	}
 
 	configDir, err := config.ConfigDir()
@@ -1202,7 +1192,6 @@ func injectFirstBootLastPartitionAutoExpandAdditionalFiles(template *config.Imag
 
 	scriptSrc := filepath.Join(assetDir, "ict-auto-expand-last-partition.sh")
 	serviceSrc := filepath.Join(assetDir, "ict-auto-expand-last-partition.service")
-
 	if _, err := os.Stat(scriptSrc); err != nil {
 		return fmt.Errorf("first-boot auto-expand script asset is missing: %w", err)
 	}
@@ -1210,72 +1199,23 @@ func injectFirstBootLastPartitionAutoExpandAdditionalFiles(template *config.Imag
 		return fmt.Errorf("first-boot auto-expand service asset is missing: %w", err)
 	}
 
-	upsertAdditionalFile(template, scriptSrc, "/usr/local/sbin/ict-auto-expand-last-partition.sh")
-	upsertAdditionalFile(template, serviceSrc, "/etc/systemd/system/ict-auto-expand-last-partition.service")
-
-	return nil
-}
-
-func upsertAdditionalFile(template *config.ImageTemplate, localPath, finalPath string) {
-	for i := range template.SystemConfig.AdditionalFiles {
-		if template.SystemConfig.AdditionalFiles[i].Final == finalPath {
-			template.SystemConfig.AdditionalFiles[i].Local = localPath
-			return
-		}
+	scriptDst := filepath.Join(installRoot, "usr", "local", "sbin", "ict-auto-expand-last-partition.sh")
+	serviceDst := filepath.Join(installRoot, "etc", "systemd", "system", "ict-auto-expand-last-partition.service")
+	if err := file.CopyFile(scriptSrc, scriptDst, "-p", true); err != nil {
+		return fmt.Errorf("failed to copy first-boot partition auto-expand script: %w", err)
 	}
-
-	template.SystemConfig.AdditionalFiles = append(template.SystemConfig.AdditionalFiles, config.AdditionalFileInfo{
-		Local: localPath,
-		Final: finalPath,
-	})
-}
-
-func setupFirstBootLastPartitionAutoExpand(installRoot string, template *config.ImageTemplate) error {
-	if template == nil {
-		return nil
-	}
-
-	disk := template.GetDiskConfig()
-	if !disk.ExtendLastPartitionToFillDisk {
-		return nil
-	}
-
-	if template.Target.ImageType != "raw" {
-		log.Infof("Skipping first-boot partition auto-expand setup: imageType=%s", template.Target.ImageType)
-		return nil
-	}
-
-	if err := validateFirstBootLastPartitionAutoExpandConfig(template); err != nil {
-		return err
+	if err := file.CopyFile(serviceSrc, serviceDst, "-p", true); err != nil {
+		return fmt.Errorf("failed to copy first-boot partition auto-expand service: %w", err)
 	}
 
 	serviceName := "ict-auto-expand-last-partition.service"
-	scriptPath := filepath.Join(installRoot, "usr", "local", "sbin", "ict-auto-expand-last-partition.sh")
-	if _, err := shell.ExecCmd("chmod 0755 "+scriptPath, true, shell.HostPath, nil); err != nil {
+	if _, err := shell.ExecCmd("chmod 0755 "+scriptDst, true, shell.HostPath, nil); err != nil {
 		return fmt.Errorf("failed to set permissions for first-boot partition auto-expand script: %w", err)
 	}
 
 	enableCmd := "systemctl enable --root=\"" + installRoot + "\" " + serviceName
 	if _, err := shell.ExecCmd(enableCmd, true, shell.HostPath, nil); err != nil {
 		return fmt.Errorf("failed to enable first-boot partition auto-expand service: %w", err)
-	}
-
-	return nil
-}
-
-func validateFirstBootLastPartitionAutoExpandConfig(template *config.ImageTemplate) error {
-	if template.SystemConfig.Immutability.Enabled {
-		return fmt.Errorf("first-boot partition auto-expand requires immutability to be disabled")
-	}
-
-	disk := template.GetDiskConfig()
-	if len(disk.Partitions) == 0 {
-		return fmt.Errorf("first-boot partition auto-expand requires at least one disk partition")
-	}
-
-	lastPartition := disk.Partitions[len(disk.Partitions)-1]
-	if lastPartition.MountPoint != "/" {
-		return fmt.Errorf("first-boot partition auto-expand requires the last partition to be rootfs ('/'), got mountpoint=%q", lastPartition.MountPoint)
 	}
 
 	return nil

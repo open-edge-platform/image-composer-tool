@@ -150,14 +150,18 @@ func validateAutoExpandLastPartitionConstraints(data []byte, requirePartitions b
 		return fmt.Errorf("invalid JSON for auto-expand validation: %w", err)
 	}
 
-	target, _ := doc["target"].(map[string]interface{})
-	if imageType, _ := target["imageType"].(string); imageType != "raw" {
-		return nil
-	}
-
 	disk, _ := doc["disk"].(map[string]interface{})
 	extendEnabled, _ := disk["extendLastPartitionToFillDisk"].(bool)
 	if !extendEnabled {
+		return nil
+	}
+
+	target, _ := doc["target"].(map[string]interface{})
+	imageType, _ := target["imageType"].(string)
+	if imageType == "iso" {
+		return fmt.Errorf("first-boot partition auto-expand does not support imageType=%q", imageType)
+	}
+	if imageType != "raw" {
 		return nil
 	}
 
