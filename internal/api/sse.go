@@ -53,9 +53,13 @@ func (s *Server) handleBuildLogs(w http.ResponseWriter, r *http.Request) {
 		case <-b.done:
 			emit() // drain remaining lines
 			if b.Status == statusSuccess {
+				arts := b.artifacts
+				if arts == nil {
+					arts = []artifact{}
+				}
 				sendEvent(w, "complete", map[string]any{
 					"status":    string(statusSuccess),
-					"artifacts": b.artifacts,
+					"artifacts": arts,
 				})
 			} else {
 				sendEvent(w, "error", map[string]any{

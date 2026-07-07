@@ -204,7 +204,15 @@ func (s *Server) runBuild(b *build, templatePath string) {
 		b.setResult(statusFailed, err.Error())
 		return
 	}
-	b.artifacts = discoverArtifacts(b.WorkDir)
+
+	// Prefer artifacts parsed from ICT's own output (authoritative name+path,
+	// and immune to the root-owned output dirs the build creates under sudo).
+	// Fall back to scanning the work dir if the output block wasn't found.
+	arts := parseArtifacts(b.snapshotLogs())
+	if len(arts) == 0 {
+		arts = discoverArtifacts(b.WorkDir)
+	}
+	b.artifacts = arts
 	b.setResult(statusSuccess, "")
 }
 
@@ -215,7 +223,65 @@ func (b *build) setResult(status buildStatus, errMsg string) {
 	b.errMsg = errMsg
 }
 
-// discoverArtifacts scans the build work dir for image + SBOM outputs.
+// parseArtifacts extracts the artifact list from ICT's build output. ICT prints
+// each artifact as a bullet line with "name (size)" followed by a line holding
+// the absolute path:
+//
+//	• minimal-os-image-ubuntu-26.04.raw.gz (1.13 GB)
+//	  /home/.../minimal/minimal-os-image-ubuntu-26.04.raw.gz
+//
+// Log lines carry a leading "<timestamp> INFO ..." prefix from the logger, so we
+// match on the bullet and on a path segment rather than line position.
+func parseArtifacts(logs []string) []artifact {
+	var out []artifact
+	var pending *artifact // artifact awaiting its path line
+
+	for _, line := range logs {
+		if idx := strings.Index(line, "• "); idx >= 0 {
+			rest := strings.TrimSpace(line[idx+len("• "):])
+			// Strip a trailing " (size)" suffix, keeping the filename.
+			name := rest
+			if p := strings.LastIndex(rest, " ("); p >= 0 {
+				name = strings.TrimSpace(rest[:p])
+			}
+			if name != "" {
+				out = append(out, artifact{Name: name, Type: classifyArtifact(name)})
+				pending = &out[len(out)-1]
+			}
+			continue
+		}
+		// The path line for the most recent bullet: an absolute path ending in
+		// that artifact's name.
+		if pending != nil {
+			if p := extractPath(line); p != "" && strings.HasSuffix(p, pending.Name) {
+				pending.Path = p
+				pending = nil
+			}
+		}
+	}
+	return out
+}
+
+// extractPath returns the trailing absolute path on a log line, or "".
+func extractPath(line string) string {
+	idx := strings.Index(line, "/")
+	if idx < 0 {
+		return ""
+	}
+	return strings.TrimSpace(line[idx:])
+}
+
+// classifyArtifact labels an output file as "sbom" or "image" by name.
+func classifyArtifact(name string) string {
+	lower := strings.ToLower(name)
+	if strings.Contains(lower, "sbom") || strings.Contains(lower, "spdx") {
+		return "sbom"
+	}
+	return "image"
+}
+
+// discoverArtifacts scans the build work dir for image + SBOM outputs. Used as a
+// fallback when ICT's artifact block cannot be parsed from the logs.
 func discoverArtifacts(workDir string) []artifact {
 	var out []artifact
 	_ = filepath.WalkDir(workDir, func(path string, d os.DirEntry, err error) error {
