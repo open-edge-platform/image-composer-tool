@@ -264,11 +264,18 @@ func parseArtifacts(logs []string) []artifact {
 
 // extractPath returns the trailing absolute path on a log line, or "".
 func extractPath(line string) string {
-	idx := strings.Index(line, "/")
-	if idx < 0 {
+	// Logger lines are tab-separated: "<ts>\t<LEVEL>\t<source:line>\t<message>".
+	// The path lives in the final field; taking the first "/" would wrongly match
+	// the "display/display.go:80" source prefix. Fall back to the whole line when
+	// there are no tabs (a bare path line).
+	if i := strings.LastIndex(line, "\t"); i >= 0 {
+		line = line[i+1:]
+	}
+	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(line, "/") {
 		return ""
 	}
-	return strings.TrimSpace(line[idx:])
+	return line
 }
 
 // classifyArtifact labels an output file as "sbom" or "image" by name.

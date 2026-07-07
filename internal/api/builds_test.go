@@ -3,7 +3,10 @@
 
 package api
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestParseArtifacts uses real ICT build output (bullet line with name+size,
 // followed by the absolute path line) to verify artifact extraction.
@@ -35,8 +38,16 @@ func TestParseArtifacts(t *testing.T) {
 		if got[i].Type != w.Type {
 			t.Errorf("artifact[%d] type = %q, want %q", i, got[i].Type, w.Type)
 		}
-		if got[i].Path == "" || got[i].Path[0] != '/' {
-			t.Errorf("artifact[%d] path not captured: %q", i, got[i].Path)
+		// Path must be a clean absolute path — no leftover logger prefix such as
+		// "/display.go:80\t..." and it must end with the artifact name.
+		if !strings.HasPrefix(got[i].Path, "/home/") {
+			t.Errorf("artifact[%d] path not clean: %q", i, got[i].Path)
+		}
+		if strings.Contains(got[i].Path, "\t") || strings.Contains(got[i].Path, "display.go") {
+			t.Errorf("artifact[%d] path has logger prefix: %q", i, got[i].Path)
+		}
+		if !strings.HasSuffix(got[i].Path, w.Name) {
+			t.Errorf("artifact[%d] path %q does not end with name %q", i, got[i].Path, w.Name)
 		}
 	}
 }
