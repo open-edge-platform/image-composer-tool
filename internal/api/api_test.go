@@ -59,7 +59,9 @@ func TestLoadManifestEmbedded(t *testing.T) {
 func TestLoadManifestFromFileAndError(t *testing.T) {
 	// From disk.
 	p := filepath.Join(t.TempDir(), "m.yaml")
-	os.WriteFile(p, []byte("combinations:\n  - {vertical: v, platform: p, os: o, imageType: raw, template: t.yml}\n"), 0o644)
+	if err := os.WriteFile(p, []byte("combinations:\n  - {vertical: v, platform: p, os: o, imageType: raw, template: t.yml}\n"), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
 	m, err := loadManifest(p)
 	if err != nil {
 		t.Fatalf("loadManifest file: %v", err)
@@ -280,7 +282,9 @@ func TestHandleBuildArtifacts(t *testing.T) {
 		t.Fatalf("status = %d, want 200", rr.Code)
 	}
 	var out artifactList
-	json.Unmarshal(rr.Body.Bytes(), &out)
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
 	if out.Status != "success" || len(out.Artifacts) != 1 {
 		t.Errorf("artifacts response = %+v", out)
 	}
@@ -307,7 +311,9 @@ func TestWriteJSONAndError(t *testing.T) {
 	rr2 := httptest.NewRecorder()
 	writeError(rr2, http.StatusBadRequest, "CODE", "message")
 	var eb errorBody
-	json.Unmarshal(rr2.Body.Bytes(), &eb)
+	if err := json.Unmarshal(rr2.Body.Bytes(), &eb); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
 	if eb.Error.Code != "CODE" || eb.Error.Message != "message" {
 		t.Fatalf("error body = %+v", eb)
 	}
@@ -386,13 +392,17 @@ func TestDiscoverArtifacts(t *testing.T) {
 	dir := t.TempDir()
 	// nested layout mirroring ICT output
 	sub := filepath.Join(dir, "ubuntu-x86_64", "imagebuild", "minimal")
-	os.MkdirAll(sub, 0o755)
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
 	for _, f := range []string{
 		"minimal.raw.gz",    // image
 		"minimal.sbom.json", // sbom (name contains "sbom")
 		"notes.txt",         // ignored
 	} {
-		os.WriteFile(filepath.Join(sub, f), []byte("x"), 0o644)
+		if err := os.WriteFile(filepath.Join(sub, f), []byte("x"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", f, err)
+		}
 	}
 	got := discoverArtifacts(dir)
 	var img, sbom int
