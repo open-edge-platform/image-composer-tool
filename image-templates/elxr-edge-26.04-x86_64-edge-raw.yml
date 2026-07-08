@@ -54,6 +54,7 @@ systemConfig:
 
   packages:
     - systemd-boot
+    - systemd-boot-efi
     - dracut
 #    - linux-image-amd64
     - ca-certificates

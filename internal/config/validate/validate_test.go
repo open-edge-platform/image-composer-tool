@@ -1071,3 +1071,266 @@ systemConfig:
 		t.Fatal("expected dhcp4 with static addresses to fail schema validation")
 	}
 }
+
+func TestValidateImageTemplateJSON_AutoExpand(t *testing.T) {
+	tests := []struct {
+		name        string
+		templateYML string
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "rejects-immutability-enabled",
+			templateYML: `image:
+  name: test-autoexpand-immutable
+  version: "1.0.0"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+disk:
+  name: test
+  size: 4GiB
+  partitionTableType: gpt
+  extendLastPartitionToFillDisk: true
+  partitions:
+    - id: boot
+      type: esp
+      start: 1MiB
+      end: 513MiB
+      fsType: fat32
+      mountPoint: /boot/efi
+    - id: rootfs
+      type: linux-root-amd64
+      start: 513MiB
+      end: "0"
+      fsType: ext4
+      mountPoint: /
+systemConfig:
+  name: test
+  immutability:
+    enabled: true
+  packages:
+    - p
+  kernel:
+    version: "6.14"
+`,
+			wantErr:     true,
+			errContains: "immutability",
+		},
+		{
+			name: "rejects-non-rootfs-last-partition",
+			templateYML: `image:
+  name: test-autoexpand-nonroot-last
+  version: "1.0.0"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+disk:
+  name: test
+  size: 4GiB
+  partitionTableType: gpt
+  extendLastPartitionToFillDisk: true
+  partitions:
+    - id: boot
+      type: esp
+      start: 1MiB
+      end: 513MiB
+      fsType: fat32
+      mountPoint: /boot/efi
+    - id: rootfs
+      type: linux-root-amd64
+      start: 513MiB
+      end: 2561MiB
+      fsType: ext4
+      mountPoint: /
+    - id: swap
+      type: linux-swap
+      start: 2561MiB
+      end: "0"
+      fsType: linux-swap
+      mountPoint: none
+systemConfig:
+  name: test
+  immutability:
+    enabled: false
+  packages:
+    - p
+  kernel:
+    version: "6.14"
+`,
+			wantErr:     true,
+			errContains: "last partition",
+		},
+		{
+			name: "allows-rootfs-last-partition",
+			templateYML: `image:
+  name: test-autoexpand-valid
+  version: "1.0.0"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+disk:
+  name: test
+  size: 4GiB
+  partitionTableType: gpt
+  extendLastPartitionToFillDisk: true
+  partitions:
+    - id: boot
+      type: esp
+      start: 1MiB
+      end: 513MiB
+      fsType: fat32
+      mountPoint: /boot/efi
+    - id: rootfs
+      type: linux-root-amd64
+      start: 513MiB
+      end: "0"
+      fsType: ext4
+      mountPoint: /
+systemConfig:
+  name: test
+  immutability:
+    enabled: false
+  packages:
+    - p
+  kernel:
+    version: "6.14"
+`,
+			wantErr: false,
+		},
+		{
+			name: "rejects-iso-image-type",
+			templateYML: `image:
+  name: test-autoexpand-iso
+  version: "1.0.0"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: iso
+disk:
+  name: test
+  size: 4GiB
+  partitionTableType: gpt
+  extendLastPartitionToFillDisk: true
+  partitions:
+    - id: rootfs
+      type: linux-root-amd64
+      start: 1MiB
+      end: "0"
+      fsType: ext4
+      mountPoint: /
+systemConfig:
+  name: test
+  immutability:
+    enabled: false
+  packages:
+    - p
+  kernel:
+    version: "6.14"
+`,
+			wantErr:     true,
+			errContains: "imageType=\"iso\"",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var raw interface{}
+			if err := yaml.Unmarshal([]byte(tt.templateYML), &raw); err != nil {
+				t.Fatalf("YAML parsing error: %v", err)
+			}
+
+			dataJSON, err := json.Marshal(raw)
+			if err != nil {
+				t.Fatalf("JSON marshaling error: %v", err)
+			}
+
+			err = ValidateImageTemplateJSON(dataJSON)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected validation to fail")
+				}
+				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
+					t.Fatalf("expected error containing %q, got: %v", tt.errContains, err)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("expected validation to pass, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateUserTemplateJSON_AutoExpand(t *testing.T) {
+	tests := []struct {
+		name        string
+		dataJSON    []byte
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "rejects-non-rootfs-last-partition",
+			dataJSON: []byte(`{
+	"image": {"name": "test-user-autoexpand", "version": "1.0.0"},
+	"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"},
+	"disk": {
+		"name": "test",
+		"extendLastPartitionToFillDisk": true,
+		"partitions": [{"mountPoint": "/"}, {"mountPoint": "none"}]
+	},
+	"systemConfig": {"immutability": {"enabled": false}}
+}`),
+			wantErr:     true,
+			errContains: "last partition",
+		},
+		{
+			name: "rejects-iso-image-type",
+			dataJSON: []byte(`{
+	"image": {"name": "test-user-autoexpand-iso", "version": "1.0.0"},
+	"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "iso"},
+	"disk": {
+		"name": "test",
+		"extendLastPartitionToFillDisk": true,
+		"partitions": [{"mountPoint": "/"}]
+	},
+	"systemConfig": {"immutability": {"enabled": false}}
+}`),
+			wantErr:     true,
+			errContains: "imageType=\"iso\"",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := ValidateUserTemplateJSON(tt.dataJSON)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected validation to fail")
+				}
+				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
+					t.Fatalf("expected error containing %q, got: %v", tt.errContains, err)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("expected validation to pass, got: %v", err)
+			}
+		})
+	}
+}

@@ -1,0 +1,37 @@
+# AI-searchable metadata for template discovery
+metadata:
+  description: "Example template demonstrating the 'extends' inheritance feature: inherits the Ubuntu 24.04 minimal raw image and adds a few extra packages"
+  use_cases:
+    - "template inheritance example"
+    - "extends feature demo"
+    - "minimal image with extra tools"
+  keywords:
+    - extends
+    - inheritance
+    - example
+    - ubuntu
+    - ubuntu24
+    - raw
+
+# Inherit everything (disk layout, systemConfig, immutability, ...) from the
+# parent template, resolved relative to this file's directory. The parent's
+# target must match this template's target. Values below override or extend the
+# parent using the standard merge strategies (packages are additive).
+extends: "ubuntu24-x86_64-minimal-raw.yml"
+
+image:
+  name: ubuntu24-x86_64-extends-example
+  version: "24.04"
+
+target:
+  os: ubuntu # Must match the parent template's target
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+
+systemConfig:
+  name: Extends_Example
+  # These packages are merged additively on top of the parent's package list.
+  packages:
+    - htop
+    - curl
