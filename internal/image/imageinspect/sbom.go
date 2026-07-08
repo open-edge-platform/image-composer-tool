@@ -82,11 +82,17 @@ func inspectSBOMFromImageFilesystem(disk diskAccessorFS, pt PartitionTableSummar
 		partitionSummary := pt.Partitions[candidateIndex]
 		partitionNumber, ok := diskfsPartitionNumberForSummary(disk, partitionSummary)
 		if !ok {
+			summary.Notes = append(summary.Notes,
+				fmt.Sprintf("partition %d (%s): could not resolve diskfs partition number",
+					partitionSummary.Index, partitionSummary.Name))
 			continue
 		}
 
 		filesystemHandle, err := disk.GetFilesystem(partitionNumber)
 		if err != nil || filesystemHandle == nil {
+			summary.Notes = append(summary.Notes,
+				fmt.Sprintf("partition %d (%s): open filesystem failed: %v",
+					partitionSummary.Index, partitionSummary.Name, err))
 			continue
 		}
 
@@ -98,6 +104,9 @@ func inspectSBOMFromImageFilesystem(disk diskAccessorFS, pt PartitionTableSummar
 
 			sbomDirEntries, readDirErr := filesystemHandle.ReadDir(sbomDir)
 			if readDirErr != nil {
+				summary.Notes = append(summary.Notes,
+					fmt.Sprintf("partition %d (%s): read dir %q failed: %v",
+						partitionSummary.Index, partitionSummary.Name, sbomDir, readDirErr))
 				continue
 			}
 
@@ -115,6 +124,9 @@ func inspectSBOMFromImageFilesystem(disk diskAccessorFS, pt PartitionTableSummar
 			for _, sbomFilePath := range fileCandidates {
 				sbomFile, openErr := filesystemHandle.OpenFile(sbomFilePath, os.O_RDONLY)
 				if openErr != nil {
+					summary.Notes = append(summary.Notes,
+						fmt.Sprintf("partition %d (%s): open %q failed: %v",
+							partitionSummary.Index, partitionSummary.Name, sbomFilePath, openErr))
 					continue
 				}
 
@@ -359,6 +371,15 @@ func CompareSPDXFiles(fromPath, toPath string) (*SPDXCompareResult, error) {
 		return nil, fmt.Errorf("read to SPDX file: %w", err)
 	}
 
+	return CompareSPDXData(fromPath, fromData, toPath, toData)
+}
+
+// CompareSPDXData compares two already-read SPDX JSON documents using
+// canonicalized package content. The paths are used only to label the result
+// and in error messages; the bytes are the SPDX documents themselves (read from
+// a standalone .json file or extracted from an image's embedded SBOM). This is
+// the shared core of CompareSPDXFiles and the compare command's spdx mode.
+func CompareSPDXData(fromPath string, fromData []byte, toPath string, toData []byte) (*SPDXCompareResult, error) {
 	fromDoc, fromCanonicalHash, fromCount, err := parseAndCanonicalizeSPDX(fromData)
 	if err != nil {
 		return nil, fmt.Errorf("parse from SPDX file: %w", err)
