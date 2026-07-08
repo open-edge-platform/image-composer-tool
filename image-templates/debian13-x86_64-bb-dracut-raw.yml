@@ -121,13 +121,15 @@ systemConfig:
       final: /usr/lib/dracut/modules.d/91hello/module-setup.sh
     - local: additionalfiles/debian13-bb-dracut/modules.d/91hello/hello.sh
       final: /usr/lib/dracut/modules.d/91hello/hello.sh
+    - local: additionalfiles/debian13-bb-dracut/modules.d/91hello/initqueue-sample.sh
+      final: /usr/lib/dracut/modules.d/91hello/initqueue-sample.sh
 
   configurations:
     - cmd: 'mkdir -p /etc/dracut.conf.d && echo ''add_dracutmodules+=" hello "'' > /etc/dracut.conf.d/91hello.conf'
-    - cmd: "chmod 755 /usr/lib/dracut/modules.d/91hello/module-setup.sh /usr/lib/dracut/modules.d/91hello/hello.sh"
+    - cmd: "chmod 755 /usr/lib/dracut/modules.d/91hello/module-setup.sh /usr/lib/dracut/modules.d/91hello/hello.sh /usr/lib/dracut/modules.d/91hello/initqueue-sample.sh"
 
   kernel:
     version: "6.12.74"
-    cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
+    cmdline: "console=ttyS0,115200 console=tty0 loglevel=7 rd.debug rd.info"
     packages:
       - linux-image-amd64

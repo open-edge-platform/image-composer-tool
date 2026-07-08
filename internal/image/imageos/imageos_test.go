@@ -194,7 +194,9 @@ func (m *recordingMountExecutor) ExecCmd(cmdStr string, sudo bool, chrootPath st
 		if len(parts) < 2 {
 			return "", fmt.Errorf("invalid mount command: %s", cmdStr)
 		}
-		mountPoint := parts[len(parts)-1]
+		// mount.MountPath shell-quotes the target and mount point, so strip the
+		// surrounding single quotes before matching/recording the path.
+		mountPoint := strings.Trim(parts[len(parts)-1], "'")
 		if strings.HasSuffix(mountPoint, "/boot") {
 			return "", fmt.Errorf("mock mount failure")
 		}
@@ -205,7 +207,7 @@ func (m *recordingMountExecutor) ExecCmd(cmdStr string, sudo bool, chrootPath st
 		if len(parts) < 2 {
 			return "", fmt.Errorf("invalid umount command: %s", cmdStr)
 		}
-		mountPoint := parts[len(parts)-1]
+		mountPoint := strings.Trim(parts[len(parts)-1], "'")
 		m.umountHistory = append(m.umountHistory, mountPoint)
 		delete(m.mountedPaths, mountPoint)
 		return "", nil
@@ -1970,6 +1972,49 @@ func TestPrepareVeritySetupInvalidPair(t *testing.T) {
 	err := prepareVeritySetup("   ", "/tmp/install-root")
 	if err == nil || !strings.Contains(err.Error(), "invalid partPair") {
 		t.Fatalf("expected invalid partPair error, got: %v", err)
+	}
+}
+
+func TestValidateFsType(t *testing.T) {
+	// Every real filesystem name the templates emit must pass.
+	for _, ok := range []string{"ext4", "xfs", "vfat", "btrfs", "f2fs", "linux-swap", "ext2", "fat32"} {
+		if err := validateFsType(ok); err != nil {
+			t.Errorf("validateFsType(%q) = %v, want nil", ok, err)
+		}
+	}
+
+	// A template fsType that embeds a space (or shell/option syntax) must be
+	// rejected, since it would otherwise inject extra tokens into the unquoted
+	// "-t <fsType>" mountFlags string. An empty fsType is also invalid.
+	for _, bad := range []string{
+		"",
+		"ext4 -o loop=/dev/sda1", // extra mount option smuggled in
+		"ext4 -o ro",
+		"ext4;reboot",
+		"ext4 rw",
+		"$(reboot)",
+	} {
+		if err := validateFsType(bad); err == nil {
+			t.Errorf("validateFsType(%q) = nil, want error", bad)
+		}
+	}
+}
+
+// TestMountDiskRootToChroot_RejectsFsTypeInjection asserts the root-mount path
+// refuses a template fsType that carries an embedded space/option before it can
+// reach mount.MountPath's unquoted "-t <fsType>" command line.
+func TestMountDiskRootToChroot_RejectsFsTypeInjection(t *testing.T) {
+	idx := 0
+	template := &config.ImageTemplate{
+		Disk: config.DiskConfig{
+			Partitions: []config.PartitionInfo{
+				{ID: "root", Index: &idx, MountPoint: "/", FsType: "ext4 -o loop=/dev/sda1"},
+			},
+		},
+	}
+	err := mountDiskRootToChroot("/tmp/install-root", map[string]string{"root": "/dev/loop0p1"}, template)
+	if err == nil || !strings.Contains(err.Error(), "invalid filesystem type") {
+		t.Fatalf("expected an 'invalid filesystem type' error, got: %v", err)
 	}
 }
 
