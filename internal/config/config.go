@@ -135,6 +135,13 @@ type OverlayPolicy struct {
 	// overlay mode is additive-only in v1. A future release can lift the
 	// restriction by surfacing this field in the schema/YAML.
 	AllowRemoval bool `yaml:"-"`
+
+	// AllowDowngrade gates whether preflight permits downgrading a baseline
+	// package to an older version. Like AllowRemoval it is intentionally NOT a
+	// YAML field (the schema rejects it via additionalProperties:false) and
+	// always carries its zero value (false): overlay mode is additive-only in
+	// v1, so downgrades are blocked by default. A future release can surface it.
+	AllowDowngrade bool `yaml:"-"`
 }
 
 // ImageTemplate represents the YAML image template structure
@@ -313,8 +320,13 @@ func LoadTemplate(path string, validateFull bool) (*ImageTemplate, error) {
 	}
 
 	// Store the template path info
-	if !slice.Contains(template.PathList, path) {
-		template.PathList = append(template.PathList, path)
+	canonicalPath, absErr := filepath.Abs(path)
+	if absErr != nil {
+		canonicalPath = path
+	}
+
+	if !slice.Contains(template.PathList, canonicalPath) {
+		template.PathList = append(template.PathList, canonicalPath)
 	}
 
 	log.Infof("Loaded image template from %s: name=%s, os=%s, dist=%s, arch=%s",

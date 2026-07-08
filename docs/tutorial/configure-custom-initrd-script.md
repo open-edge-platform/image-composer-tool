@@ -131,7 +131,7 @@ This variant keeps the same Debian 13 + GRUB + raw image target but changes how 
 | Area | `debian13-x86_64-bb-raw.yml` (initramfs-tools) | `debian13-x86_64-bb-dracut-raw.yml` (dracut) |
 | ---- | ----------------------------------------------- | --------------------------------------------- |
 | Package focus | `initramfs-tools` | `dracut` and `dracut-core` |
-| Files copied by template | `hello.sh`, `hooks/hello`, `scripts/init-bottom/hello` | `modules.d/91hello/module-setup.sh`, `modules.d/91hello/hello.sh` |
+| Files copied by template | `hello.sh`, `hooks/hello`, `scripts/init-bottom/hello` | `modules.d/91hello/module-setup.sh`, `modules.d/91hello/hello.sh`, `modules.d/91hello/initqueue-sample.sh` |
 | Destination inside image | `/etc/initramfs-tools/...` and `/usr/local/sbin/hello.sh` | `/usr/lib/dracut/modules.d/91hello/...` |
 | Enable step | Hook/script are discovered by initramfs-tools layout | Add `/etc/dracut.conf.d/91hello.conf` with `add_dracutmodules+=" hello "` |
 
@@ -148,10 +148,12 @@ This variant keeps the same Debian 13 + GRUB + raw image target but changes how 
       final: /usr/lib/dracut/modules.d/91hello/module-setup.sh
     - local: additionalfiles/debian13-bb-dracut/modules.d/91hello/hello.sh
       final: /usr/lib/dracut/modules.d/91hello/hello.sh
+    - local: additionalfiles/debian13-bb-dracut/modules.d/91hello/initqueue-sample.sh
+      final: /usr/lib/dracut/modules.d/91hello/initqueue-sample.sh
 
   configurations:
     - cmd: 'mkdir -p /etc/dracut.conf.d && echo ''add_dracutmodules+=" hello "'' > /etc/dracut.conf.d/91hello.conf'
-    - cmd: "chmod 755 /usr/lib/dracut/modules.d/91hello/module-setup.sh /usr/lib/dracut/modules.d/91hello/hello.sh"
+    - cmd: "chmod 755 /usr/lib/dracut/modules.d/91hello/module-setup.sh /usr/lib/dracut/modules.d/91hello/hello.sh /usr/lib/dracut/modules.d/91hello/initqueue-sample.sh"
 ```
 
 ### dracut module files
@@ -164,12 +166,66 @@ image-templates/
     modules.d/91hello/
       module-setup.sh
       hello.sh
+      initqueue-sample.sh
 ```
 
 `module-setup.sh` declares install logic for the module; `hello.sh` is the script executed from initrd.
 
 Use the provided example files in `image-templates/additionalfiles/debian13-bb-dracut/modules.d/91hello/` as the
 reference implementation.
+
+### dracut `initqueue` stage example (`initqueue-sample.sh`)
+
+Use this when you want a script to run in dracut's `initqueue` phase while root-device discovery is still in progress.
+
+In this example module:
+
+- `module-setup.sh` installs `initqueue-sample.sh` into initrd as `/sbin/initqueue-sample.sh`.
+- The script is registered in two hook points:
+  - `inst_hook cmdline 5 ...` to seed an initial initqueue job early.
+  - `inst_hook initqueue 90 ...` to run in initqueue rounds.
+
+Key behavior of `initqueue-sample.sh`:
+
+- Logs markers such as `WAIT_ROOT_EXECUTED`, `WAIT_ROOT_REQUEUE`, and `WAIT_ROOT_MAX_ROUNDS_REACHED`.
+- Reads `root=` from kernel cmdline and resolves common forms (`/dev/...`, `UUID=...`, `LABEL=...`, `PARTUUID=...`).
+- Requeues itself with `initqueue --onetime` for up to 3 rounds if the root block device is not yet present.
+- Adds a settled readiness check with `initqueue --settled /bin/sh -c "test -b \"$ROOTDEV\""`.
+
+Add this file in your template when using the example module:
+
+```yaml
+  additionalFiles:
+    - local: additionalfiles/debian13-bb-dracut/modules.d/91hello/initqueue-sample.sh
+      final: /usr/lib/dracut/modules.d/91hello/initqueue-sample.sh
+```
+
+How to verify on boot:
+
+- Check `dmesg` for `WAIT_ROOT_` markers.
+- If available in the initramfs runtime, inspect `/run/initramfs/wait-root.log`.
+
+### Why this is different from the ad-hoc `install_items` initqueue approach
+
+You may have seen another pattern where files are copied into initramfs paths and then listed in dracut
+`install_items` so they get packed. That method can work, but it is different from this tutorial's approach.
+
+This tutorial uses a **dracut module + template-declared files** approach, which gives you:
+
+- **Reproducibility in ICT**: all inputs are declared in the image template (`additionalFiles`) and tracked as part of
+  the image definition, instead of relying on one-off build-host actions.
+- **Cleaner dracut lifecycle integration**: `module-setup.sh` defines exactly which hooks are used (`cmdline`,
+  `initqueue`, `pre-mount`) and in what order, so behavior is explicit and reviewable.
+- **Correct behavior for event-driven initqueue**: dracut `initqueue` is event/timing driven, so a sample script must
+  be registered as a hook and be able to requeue/wait for readiness signals; only listing files with `install_items`
+  packages content into initrd but does not model this runtime event flow by itself.
+- **Better portability across build environments**: module files live in the repo and are copied into the target image
+  layout; the flow does not depend on host-specific runtime state.
+- **Easier maintenance**: script logic (for example, requeue rounds and root-device checks in
+  `initqueue-sample.sh`) stays in one place, rather than being split across ad-hoc file install and pack lists.
+
+In short: both methods can place a script in initrd, but the module-based method used here is preferred for
+declarative, version-controlled image builds in ICT.
 
 
 ---
