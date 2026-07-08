@@ -35,17 +35,36 @@ type artifact struct {
 }
 
 // build is the in-memory record of a single build (MVP-1: no persistence).
+//
+// All mutable fields are guarded by mu. ID, WorkDir, Template, and done are set
+// once at construction and are safe to read without the lock.
 type build struct {
 	ID       string
-	Status   buildStatus
 	WorkDir  string
 	Template string
+	done     chan struct{} // closed when the build finishes
 
 	mu        sync.Mutex
-	logLines  []string      // buffered log history for late log subscribers
-	done      chan struct{} // closed when the build finishes
+	status    buildStatus
+	logLines  []string // buffered log history for late log subscribers
 	artifacts []artifact
 	errMsg    string
+}
+
+// result is an immutable snapshot of a build's terminal state.
+type result struct {
+	status    buildStatus
+	artifacts []artifact
+	errMsg    string
+}
+
+// snapshot returns the build's current status, artifacts, and error under lock.
+func (b *build) snapshot() result {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	arts := make([]artifact, len(b.artifacts))
+	copy(arts, b.artifacts)
+	return result{status: b.status, artifacts: arts, errMsg: b.errMsg}
 }
 
 // buildTracker holds all builds for the process lifetime.
@@ -125,7 +144,7 @@ func (s *Server) handleStartBuild(w http.ResponseWriter, r *http.Request) {
 
 	b := &build{
 		ID:       id,
-		Status:   statusRunning,
+		status:   statusRunning,
 		WorkDir:  workDir,
 		Template: templateName,
 		done:     make(chan struct{}),
@@ -184,12 +203,17 @@ func (s *Server) runBuild(b *build, templatePath string) {
 	// per-build --work-dir keeps outputs isolated.
 	name, cmdArgs := s.buildCommand(templatePath, b.WorkDir)
 	cmd := exec.Command(name, cmdArgs...)
-	stdout, _ := cmd.StdoutPipe()
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		b.appendLog(fmt.Sprintf("failed to create stdout pipe: %v", err))
+		b.finish(statusFailed, nil, err.Error())
+		return
+	}
 	cmd.Stderr = cmd.Stdout // merge streams
 
 	if err := cmd.Start(); err != nil {
 		b.appendLog(fmt.Sprintf("failed to start build: %v", err))
-		b.setResult(statusFailed, err.Error())
+		b.finish(statusFailed, nil, err.Error())
 		return
 	}
 
@@ -201,7 +225,7 @@ func (s *Server) runBuild(b *build, templatePath string) {
 
 	if err := cmd.Wait(); err != nil {
 		log.Warnf("build %s failed: %v", b.ID, err)
-		b.setResult(statusFailed, err.Error())
+		b.finish(statusFailed, nil, err.Error())
 		return
 	}
 
@@ -212,14 +236,15 @@ func (s *Server) runBuild(b *build, templatePath string) {
 	if len(arts) == 0 {
 		arts = discoverArtifacts(b.WorkDir)
 	}
-	b.artifacts = arts
-	b.setResult(statusSuccess, "")
+	b.finish(statusSuccess, arts, "")
 }
 
-func (b *build) setResult(status buildStatus, errMsg string) {
+// finish records the build's terminal status, artifacts, and error under lock.
+func (b *build) finish(status buildStatus, arts []artifact, errMsg string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.Status = status
+	b.status = status
+	b.artifacts = arts
 	b.errMsg = errMsg
 }
 

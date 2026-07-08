@@ -52,8 +52,9 @@ func (s *Server) handleBuildLogs(w http.ResponseWriter, r *http.Request) {
 			emit()
 		case <-b.done:
 			emit() // drain remaining lines
-			if b.Status == statusSuccess {
-				arts := b.artifacts
+			res := b.snapshot()
+			if res.status == statusSuccess {
+				arts := res.artifacts
 				if arts == nil {
 					arts = []artifact{}
 				}
@@ -64,7 +65,7 @@ func (s *Server) handleBuildLogs(w http.ResponseWriter, r *http.Request) {
 			} else {
 				sendEvent(w, "error", map[string]any{
 					"status":  string(statusFailed),
-					"message": b.errMsg,
+					"message": res.errMsg,
 				})
 			}
 			flusher.Flush()

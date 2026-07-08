@@ -19,11 +19,10 @@ func (s *Server) handleBuildArtifacts(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "build not found")
 		return
 	}
-	b.mu.Lock()
-	arts := make([]artifact, len(b.artifacts))
-	copy(arts, b.artifacts)
-	status := string(b.Status)
-	b.mu.Unlock()
-
-	writeJSON(w, http.StatusOK, artifactList{BuildID: id, Status: status, Artifacts: arts})
+	res := b.snapshot()
+	arts := res.artifacts
+	if arts == nil {
+		arts = []artifact{}
+	}
+	writeJSON(w, http.StatusOK, artifactList{BuildID: id, Status: string(res.status), Artifacts: arts})
 }
