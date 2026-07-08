@@ -2,6 +2,7 @@ package overlay
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
@@ -213,5 +214,150 @@ func TestEvaluatePreflight_UnsatisfiedDepAlternativeRescues(t *testing.T) {
 	})
 	if report.Blocked || report.UnsatisfiedDeps != 0 {
 		t.Errorf("expected no block when an alternative satisfies the edge, got %+v", report)
+	}
+}
+
+func TestParseDebConflictsField(t *testing.T) {
+	// A realistic Conflicts line: a bare conflict, a versioned conflict, and a
+	// multiarch-qualified one. Conflicts/Breaks carry no "a | b" alternatives.
+	field := "oldpkg, libfoo (<< 2.0), bar:amd64 (= 1.0)"
+	conflicts := parseDebConflictsField("mypkg", field)
+	if len(conflicts) != 3 {
+		t.Fatalf("got %d conflicts, want 3: %+v", len(conflicts), conflicts)
+	}
+	if conflicts[0].Package != "mypkg" || conflicts[0].Conflicts.Name != "oldpkg" || conflicts[0].Conflicts.Constraint != nil {
+		t.Errorf("conflict[0] = %+v, want bare oldpkg", conflicts[0])
+	}
+	if conflicts[1].Conflicts.Name != "libfoo" || conflicts[1].Conflicts.Constraint == nil ||
+		conflicts[1].Conflicts.Constraint.Op != "<<" || conflicts[1].Conflicts.Constraint.Ver != "2.0" {
+		t.Errorf("conflict[1] = %+v, want libfoo (<< 2.0)", conflicts[1])
+	}
+	if conflicts[2].Conflicts.Name != "bar" || conflicts[2].Conflicts.Constraint == nil {
+		t.Errorf("conflict[2] = %+v, want bar (= 1.0) with arch stripped", conflicts[2])
+	}
+}
+
+func TestParseRPMConflicts(t *testing.T) {
+	out := "oldpkg\nlibfoo < 2.0\n/some/file\nrpmlib(Something) <= 4.0\n"
+	conflicts := parseRPMConflicts("mypkg", out)
+	// The bare name and the versioned conflict are kept; the file and rpmlib
+	// entries are skipped.
+	if len(conflicts) != 2 {
+		t.Fatalf("got %d conflicts, want 2: %+v", len(conflicts), conflicts)
+	}
+	if conflicts[0].Conflicts.Name != "oldpkg" || conflicts[0].Conflicts.Constraint != nil {
+		t.Errorf("conflict[0] = %+v, want bare oldpkg", conflicts[0])
+	}
+	if conflicts[1].Conflicts.Name != "libfoo" || conflicts[1].Conflicts.Constraint == nil ||
+		conflicts[1].Conflicts.Constraint.Op != "<" {
+		t.Errorf("conflict[1] = %+v, want libfoo < 2.0", conflicts[1])
+	}
+}
+
+// TestClassifyConflicts covers the pure conflict classifier: a declared conflict
+// against a present baseline package fires (bare and versioned-in-range), and a
+// conflict against an absent package or a versioned range that excludes the
+// baseline version does not.
+func TestClassifyConflicts(t *testing.T) {
+	sliceA := baselineVersionIndex([]BaselinePackage{
+		installedDeb("oldpkg", "1.0"),
+		installedDeb("libfoo", "1.5"),
+		installedDeb("libbar", "3.0"),
+	})
+
+	tests := []struct {
+		name         string
+		conflicts    []ArtifactConflict
+		wantCount    int
+		wantTarget   string
+		wantConflict string // the declaring artifact (ConflictWith)
+	}{
+		{
+			name:         "bare conflict on present package fires",
+			conflicts:    []ArtifactConflict{{Package: "newpkg", Conflicts: DependencyAlternative{Name: "oldpkg"}}},
+			wantCount:    1,
+			wantTarget:   "oldpkg",
+			wantConflict: "newpkg",
+		},
+		{
+			name:      "conflict on absent package is skipped",
+			conflicts: []ArtifactConflict{{Package: "newpkg", Conflicts: DependencyAlternative{Name: "absent-pkg"}}},
+			wantCount: 0,
+		},
+		{
+			name:         "versioned conflict in range fires",
+			conflicts:    []ArtifactConflict{{Package: "newpkg", Conflicts: DependencyAlternative{Name: "libfoo", Constraint: &VersionConstraint{"<<", "2.0"}}}},
+			wantCount:    1,
+			wantTarget:   "libfoo",
+			wantConflict: "newpkg",
+		},
+		{
+			name:      "versioned conflict out of range is skipped",
+			conflicts: []ArtifactConflict{{Package: "newpkg", Conflicts: DependencyAlternative{Name: "libbar", Constraint: &VersionConstraint{"<<", "2.0"}}}},
+			wantCount: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			actions := classifyConflicts(PackageManagerAPT, sliceA, tt.conflicts)
+			if len(actions) != tt.wantCount {
+				t.Fatalf("got %d actions, want %d: %+v", len(actions), tt.wantCount, actions)
+			}
+			if tt.wantCount == 0 {
+				return
+			}
+			if actions[0].Type != ActionConflict {
+				t.Errorf("type = %s, want %s", actions[0].Type, ActionConflict)
+			}
+			if actions[0].Package != tt.wantTarget {
+				t.Errorf("target = %q, want %q", actions[0].Package, tt.wantTarget)
+			}
+			if actions[0].ConflictWith != tt.wantConflict {
+				t.Errorf("conflictWith = %q, want %q", actions[0].ConflictWith, tt.wantConflict)
+			}
+		})
+	}
+}
+
+// TestSimulateOverlayInstall_DeclaredConflictBlocked exercises the full seam:
+// the default simulateOverlayInstall reads artifact conflicts (overridden here to
+// avoid a real dpkg call) and feeds them through Preflight, which must block the
+// declared conflict against a present baseline package under the default fail
+// conflict policy — the end-to-end regression for the "conflict slips past the
+// gate" gap.
+func TestSimulateOverlayInstall_DeclaredConflictBlocked(t *testing.T) {
+	origRead := readOverlayArtifactConflicts
+	defer func() { readOverlayArtifactConflicts = origRead }()
+	readOverlayArtifactConflicts = func(PackageManager, *ResolutionPlan) ([]ArtifactConflict, error) {
+		return []ArtifactConflict{{Package: "newpkg", Conflicts: DependencyAlternative{Name: "oldpkg"}}}, nil
+	}
+
+	info := &BaselineInfo{OS: "ubuntu", Arch: "amd64", PackageManager: PackageManagerAPT}
+	baseline := []BaselinePackage{installedDeb("oldpkg", "1.0")}
+	plan := &ResolutionPlan{
+		DownloadDir: "/tmp/does-not-matter", // the reader is stubbed
+		ToInstall:   []ResolvedPackage{{Name: "newpkg", Version: "2.0", Arch: "amd64", URL: "https://x/newpkg.deb"}},
+	}
+
+	report, err := Preflight(info, baseline, plan, &config.OverlayPolicy{})
+	if err == nil || report == nil || !report.Blocked {
+		t.Fatalf("expected a blocked conflict, err=%v report=%+v", err, report)
+	}
+	if report.Conflicts != 1 {
+		t.Fatalf("conflicts = %d, want 1: %+v", report.Conflicts, report.Actions)
+	}
+	if report.Violations[0].Rule != ruleConflictPolicyFail {
+		t.Errorf("rule = %s, want %s", report.Violations[0].Rule, ruleConflictPolicyFail)
+	}
+	if report.Violations[0].Action.ConflictWith != "newpkg" {
+		t.Errorf("conflicting artifact = %q, want newpkg", report.Violations[0].Action.ConflictWith)
+	}
+	if report.Violations[0].Action.CurrentVersion != "1.0" {
+		t.Errorf("current version = %q, want 1.0 (from baseline)", report.Violations[0].Action.CurrentVersion)
+	}
+	for _, want := range []string{"newpkg", "oldpkg", "conflict"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q missing %q", err, want)
+		}
 	}
 }

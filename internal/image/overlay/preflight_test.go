@@ -347,7 +347,7 @@ func TestPreflight_SimulateAidContributesActions(t *testing.T) {
 	defer func() { simulateOverlayInstall = orig }()
 
 	t.Run("simulate-reported removal is gated", func(t *testing.T) {
-		simulateOverlayInstall = func(*BaselineInfo, *ResolutionPlan) ([]PlannedAction, error) {
+		simulateOverlayInstall = func(*BaselineInfo, []BaselinePackage, *ResolutionPlan) ([]PlannedAction, error) {
 			return []PlannedAction{{Type: ActionRemove, Package: "oldpkg"}}, nil
 		}
 		report, err := Preflight(info, baseline, plan, &config.OverlayPolicy{})
@@ -364,7 +364,7 @@ func TestPreflight_SimulateAidContributesActions(t *testing.T) {
 	})
 
 	t.Run("simulate failure is non-fatal", func(t *testing.T) {
-		simulateOverlayInstall = func(*BaselineInfo, *ResolutionPlan) ([]PlannedAction, error) {
+		simulateOverlayInstall = func(*BaselineInfo, []BaselinePackage, *ResolutionPlan) ([]PlannedAction, error) {
 			return nil, errors.New("simulate unavailable")
 		}
 		report, err := Preflight(info, baseline, plan, &config.OverlayPolicy{})

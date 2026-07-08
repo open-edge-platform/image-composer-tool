@@ -123,6 +123,134 @@ var readOverlayArtifactObsoletes = func(family PackageManager, plan *ResolutionP
 	return obs, nil
 }
 
+// ArtifactConflict records that a to-install package declares a conflict with
+// another package via its deb Conflicts:/Breaks: fields or its rpm Conflicts:.
+// When the conflicted package is present in the baseline, installing the
+// artifact would abort at the package-manager's unpack/configure step (dpkg -i
+// refuses a Conflicts, rpm -i/-U refuses a conflicting file/capability), so the
+// preflight classifies it as an ActionConflict gated by conflictPolicy — turning
+// an opaque mid-install failure into an up-front, actionable block.
+type ArtifactConflict struct {
+	// Package is the to-install package declaring the conflict.
+	Package string
+	// Conflicts is the (name + optional version constraint) of the package it
+	// conflicts with. Constraint is nil for an unversioned conflict (any version).
+	Conflicts DependencyAlternative
+}
+
+// readOverlayArtifactConflicts is the impure seam that reads the conflict
+// declarations of every plan.ToInstall artifact (deb Conflicts:/Breaks:, rpm
+// Conflicts:). Like the dependency and Obsoletes readers it is a best-effort
+// validation aid feeding the pure preflight, so a read failure is non-fatal: the
+// preflight simply loses this one net and the install would instead fail loudly
+// at unpack time. Tests override it to inject synthetic conflicts.
+var readOverlayArtifactConflicts = func(family PackageManager, plan *ResolutionPlan) ([]ArtifactConflict, error) {
+	if plan == nil || len(plan.ToInstall) == 0 {
+		return nil, nil
+	}
+	if strings.TrimSpace(plan.DownloadDir) == "" {
+		return nil, fmt.Errorf("overlay conflict check: plan has packages to install but no artifact download directory")
+	}
+
+	var conflicts []ArtifactConflict
+	for _, rp := range plan.ToInstall {
+		artifact, err := artifactFileFor(rp)
+		if err != nil {
+			return nil, err
+		}
+		hostPath := joinArtifactPath(plan.DownloadDir, artifact)
+
+		var edges []ArtifactConflict
+		switch family {
+		case PackageManagerDNF:
+			edges, err = readRPMArtifactConflicts(rp.Name, hostPath)
+		default:
+			edges, err = readDebArtifactConflicts(rp.Name, hostPath)
+		}
+		if err != nil {
+			// Best-effort: a single unreadable artifact must not fail the preflight;
+			// the two-slice model and the remaining artifacts still gate the build.
+			log.Warnf("Overlay conflict check: failed to read conflicts of %q from %s (continuing): %v", rp.Name, hostPath, err)
+			continue
+		}
+		conflicts = append(conflicts, edges...)
+	}
+	return conflicts, nil
+}
+
+// readDebArtifactConflicts reads the Conflicts and Breaks control fields of a
+// prepared .deb with `dpkg -f` and parses their (optionally versioned) entries.
+// Both fields are read because dpkg -i refuses to unpack over either one. The
+// file is read on the host, so no chroot is entered.
+func readDebArtifactConflicts(pkgName, hostPath string) ([]ArtifactConflict, error) {
+	var conflicts []ArtifactConflict
+	for _, field := range []string{"Conflicts", "Breaks"} {
+		// hostPath is a URL-derived artifact path; quote it before interpolating it
+		// into the bash -c command so metacharacters can't alter execution.
+		out, err := shell.ExecCmdSilent(fmt.Sprintf("dpkg -f %s %s", shell.QuoteArg(hostPath), field), true, shell.HostPath, nil)
+		if err != nil {
+			return nil, fmt.Errorf("reading %s of %s: %w", field, hostPath, err)
+		}
+		conflicts = append(conflicts, parseDebConflictsField(pkgName, out)...)
+	}
+	return conflicts, nil
+}
+
+// readRPMArtifactConflicts reads a prepared .rpm's Conflicts with
+// `rpm -qp --conflicts` (rpm is on the shell allowlist) and parses each entry.
+func readRPMArtifactConflicts(pkgName, hostPath string) ([]ArtifactConflict, error) {
+	// hostPath is a URL-derived artifact path; quote it before interpolating it
+	// into the bash -c command so metacharacters can't alter execution.
+	out, err := shell.ExecCmdSilent(fmt.Sprintf("rpm -qp --conflicts %s", shell.QuoteArg(hostPath)), true, shell.HostPath, nil)
+	if err != nil {
+		return nil, fmt.Errorf("reading conflicts of %s: %w", hostPath, err)
+	}
+	return parseRPMConflicts(pkgName, out), nil
+}
+
+// parseDebConflictsField parses a deb Conflicts/Breaks field value into conflict
+// entries. The field is a comma-separated list of "name[:arch] [(op ver)]" terms;
+// unlike Depends it carries no "a | b" alternatives (Debian policy forbids them
+// in Conflicts/Breaks), so each comma term is a single conflicted package. It
+// reuses parseDebAlternative for the name/version parsing.
+func parseDebConflictsField(pkgName, field string) []ArtifactConflict {
+	var conflicts []ArtifactConflict
+	for _, term := range strings.Split(field, ",") {
+		term = strings.TrimSpace(term)
+		if term == "" {
+			continue
+		}
+		if a, ok := parseDebAlternative(term); ok {
+			conflicts = append(conflicts, ArtifactConflict{Package: pkgName, Conflicts: a})
+		}
+	}
+	return conflicts
+}
+
+// parseRPMConflicts parses `rpm -qp --conflicts` output. Each non-empty line is
+// either a bare capability name or "name op version" (a versioned conflict).
+// File and rpmlib entries are skipped as in parseRPMObsoletes.
+func parseRPMConflicts(pkgName, out string) []ArtifactConflict {
+	var conflicts []ArtifactConflict
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "/") || strings.HasPrefix(line, "rpmlib(") {
+			continue
+		}
+		fields := strings.Fields(line)
+		switch len(fields) {
+		case 1:
+			// Unversioned conflict: conflicts with the named package at any version.
+			conflicts = append(conflicts, ArtifactConflict{Package: pkgName, Conflicts: DependencyAlternative{Name: fields[0]}})
+		case 3:
+			if c, ok := parseConstraint(fields[1] + " " + fields[2]); ok {
+				conflicts = append(conflicts, ArtifactConflict{Package: pkgName, Conflicts: DependencyAlternative{Name: fields[0], Constraint: &c}})
+			}
+		}
+	}
+	return conflicts
+}
+
 // readRPMArtifactObsoletes reads a prepared .rpm's Obsoletes with
 // `rpm -qp --obsoletes` (rpm is on the shell allowlist) and parses each entry.
 func readRPMArtifactObsoletes(pkgName, hostPath string) ([]ArtifactObsoletion, error) {

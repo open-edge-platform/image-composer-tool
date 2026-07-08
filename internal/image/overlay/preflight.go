@@ -182,13 +182,31 @@ type PreflightInput struct {
 	Policy config.OverlayPolicy
 }
 
-// simulateOverlayInstall is a seam over the optional package-manager simulate
-// step (apt-get install --simulate / dnf install --assumeno). Its output is a
-// validation aid only — the two-slice model drives the policy decision — so the
-// default is a no-op. The install-wiring story can plug a real simulator in, and
-// tests override it to exercise the remove/conflict policy paths.
-var simulateOverlayInstall = func(info *BaselineInfo, plan *ResolutionPlan) ([]PlannedAction, error) {
-	return nil, nil
+// simulateOverlayInstall simulates the overlay install and returns the
+// remove/conflict actions it would trigger, for the policy gate to enforce. Its
+// output is a validation aid — the two-slice model still drives add/upgrade/
+// downgrade decisions — so a failure here is non-fatal (see Preflight).
+//
+// The default implementation is a METADATA-based simulation: it reads the
+// declared Conflicts:/Breaks: (deb) and Conflicts: (rpm) of every to-install
+// artifact on the host and reports each one that names a package present in the
+// baseline (at a version the conflict's range covers) as an ActionConflict. This
+// catches a declared conflict — which dpkg -i / rpm -i would otherwise only
+// reveal by aborting at unpack time — up front, without entering a chroot or
+// running the package manager, so it is deterministic and always executes.
+//
+// It does NOT catch a file-level collision that no package declares (two packages
+// shipping the same path): nothing in the artifact metadata expresses that, so it
+// still surfaces as a loud install-time failure. A future live simulator
+// (apt-get install --simulate / dnf install --assumeno, run in the mounted chroot
+// during the install phase) could augment this to cover those cases. Tests
+// override this seam to exercise the remove/conflict policy paths directly.
+var simulateOverlayInstall = func(info *BaselineInfo, baseline []BaselinePackage, plan *ResolutionPlan) ([]PlannedAction, error) {
+	conflicts, err := readOverlayArtifactConflicts(info.PackageManager, plan)
+	if err != nil {
+		return nil, err
+	}
+	return classifyConflicts(info.PackageManager, baselineVersionIndex(baseline), conflicts), nil
 }
 
 // Preflight runs the two-slice dependency/conflict preflight for an overlay
@@ -223,8 +241,11 @@ func Preflight(info *BaselineInfo, baseline []BaselinePackage, plan *ResolutionP
 
 	// The simulate step is an optional validation aid; its failure must not mask
 	// the authoritative two-slice decision, so a simulate error is logged and the
-	// preflight continues on the two-slice model alone.
-	simulated, err := simulateOverlayInstall(info, plan)
+	// preflight continues on the two-slice model alone. The default simulator reads
+	// the to-install artifacts' declared conflicts against the baseline (see
+	// simulateOverlayInstall), catching a declared Conflicts:/Breaks: before the
+	// install would abort at unpack time.
+	simulated, err := simulateOverlayInstall(info, baseline, plan)
 	if err != nil {
 		log.Warnf("Overlay preflight: package-manager simulation unavailable, continuing on two-slice model only: %v", err)
 		simulated = nil
@@ -469,6 +490,44 @@ func classifyObsoletions(family PackageManager, sliceA map[string]BaselinePackag
 			Arch:           base.Arch,
 			ConflictWith:   o.Package,
 			Detail:         fmt.Sprintf("obsoleted by %q, which rpm -U would erase from the baseline", o.Package),
+		})
+	}
+	return actions
+}
+
+// classifyConflicts turns each declared Conflicts:/Breaks: (deb) or Conflicts:
+// (rpm) on a present baseline package into an ActionConflict, so conflictPolicy
+// gates a conflict that the package manager would otherwise only reveal by
+// aborting at unpack time. A conflict whose target is absent from the baseline is
+// a no-op (nothing to clash with) and is skipped; a versioned conflict only fires
+// when the baseline version falls within the declared range, and an uncomparable
+// version is treated conservatively as a potential conflict (better to gate than
+// to miss it).
+func classifyConflicts(family PackageManager, sliceA map[string]BaselinePackage, conflicts []ArtifactConflict) []PlannedAction {
+	var actions []PlannedAction
+	for _, c := range conflicts {
+		target := strings.TrimSpace(c.Conflicts.Name)
+		if target == "" {
+			continue
+		}
+		base, present := sliceA[target]
+		if !present {
+			continue // nothing installed under this name to conflict with
+		}
+		// A versioned conflict only clashes when the baseline copy's version
+		// satisfies the constraint; a version outside the range is not a conflict.
+		if vc := c.Conflicts.Constraint; vc != nil {
+			if cmp, err := comparePkgVersions(family, base.Version, vc.Ver); err == nil && !constraintSatisfied(vc.Op, cmp) {
+				continue
+			}
+		}
+		actions = append(actions, PlannedAction{
+			Type:           ActionConflict,
+			Package:        target,
+			CurrentVersion: base.Version,
+			Arch:           base.Arch,
+			ConflictWith:   c.Package,
+			Detail:         fmt.Sprintf("declared as a conflict by %q, which would abort the install at unpack time", c.Package),
 		})
 	}
 	return actions
