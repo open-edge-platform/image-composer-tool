@@ -1672,3 +1672,43 @@ func TestGlobalVariables(t *testing.T) {
 		t.Errorf("Expected RepoCfgs[1].Arch 'arm64', got %s", RepoCfgs[1].Arch)
 	}
 }
+
+// TestBuildDebPackageInfosFromCache_RecoversVersion asserts the cache-hit path
+// recovers the package version from the .deb filename. Dropping it here made an
+// upgraded package's SBOM entry carry an empty versionInfo, so a downstream
+// name|version|url comparison reported the package as removed-and-re-added
+// instead of upgraded.
+func TestBuildDebPackageInfosFromCache_RecoversVersion(t *testing.T) {
+	cacheDir := "/cache/pkgCache/ubuntu-ubuntu24-x86_64"
+	files := []string{
+		"linux-libc-dev_6.8.0-134.134_amd64.deb",
+		"curl_8.5.0-2ubuntu10.10_amd64.deb",
+		"weirdname.deb", // no version field: name kept, version empty
+	}
+
+	infos := buildDebPackageInfosFromCache(cacheDir, files)
+	if len(infos) != len(files) {
+		t.Fatalf("expected %d infos, got %d", len(files), len(infos))
+	}
+
+	byName := make(map[string]ospackage.PackageInfo, len(infos))
+	for _, info := range infos {
+		if info.Type != "deb" {
+			t.Errorf("%s: type = %q, want deb", info.Name, info.Type)
+		}
+		byName[info.Name] = info
+	}
+
+	if p := byName["linux-libc-dev"]; p.Version != "6.8.0-134.134" {
+		t.Errorf("linux-libc-dev version = %q, want 6.8.0-134.134", p.Version)
+	}
+	if p := byName["linux-libc-dev"]; p.URL != filepath.Join(cacheDir, files[0]) {
+		t.Errorf("linux-libc-dev URL = %q, want cache path", p.URL)
+	}
+	if p := byName["curl"]; p.Version != "8.5.0-2ubuntu10.10" {
+		t.Errorf("curl version = %q, want 8.5.0-2ubuntu10.10", p.Version)
+	}
+	if p := byName["weirdname"]; p.Version != "" {
+		t.Errorf("weirdname version = %q, want empty", p.Version)
+	}
+}
