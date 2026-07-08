@@ -14,6 +14,13 @@ import (
 // loop-device and partition/mkfs tooling needed to build and mount a real image.
 func requireMountTooling(t *testing.T, bins ...string) {
 	t.Helper()
+	// These tests attach loop devices, mount filesystems, and may hit the network
+	// (mmdebstrap), so they are slow and environment-sensitive. Skip them under
+	// `go test -short` so a root host with the tooling installed (e.g. CI running
+	// the default suite) can opt out consistently.
+	if testing.Short() {
+		t.Skip("skipping root/loop-device integration test in -short mode")
+	}
 	if os.Geteuid() != 0 {
 		t.Skip("requires root to attach loop devices and mount filesystems")
 	}

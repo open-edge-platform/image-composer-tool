@@ -697,6 +697,207 @@ systemConfig:
 	}
 }
 
+// writeExtendsTemplate writes a template that may declare an extends parent and a
+// list of system-config packages, for exercising the iterative extends fold.
+func writeExtendsTemplate(t *testing.T, path, imageName, extends string, target TargetInfo, packages []string) {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("failed to create template directory: %v", err)
+	}
+
+	var b strings.Builder
+	if extends != "" {
+		b.WriteString("extends: \"" + extends + "\"\n")
+	}
+	b.WriteString("image:\n")
+	b.WriteString("  name: " + imageName + "\n")
+	b.WriteString("  version: \"1.0.0\"\n")
+	b.WriteString("target:\n")
+	b.WriteString("  os: " + target.OS + "\n")
+	b.WriteString("  dist: " + target.Dist + "\n")
+	b.WriteString("  arch: " + target.Arch + "\n")
+	b.WriteString("  imageType: " + target.ImageType + "\n")
+	b.WriteString("systemConfig:\n")
+	b.WriteString("  name: " + imageName + "-config\n")
+	if len(packages) > 0 {
+		b.WriteString("  packages:\n")
+		for _, pkg := range packages {
+			b.WriteString("    - " + pkg + "\n")
+		}
+	}
+
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		t.Fatalf("failed to write template %s: %v", path, err)
+	}
+}
+
+func hasPackage(packages []string, want string) bool {
+	for _, pkg := range packages {
+		if pkg == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestLoadAndMergeTemplateSingleExtends(t *testing.T) {
+	dir := t.TempDir()
+	target := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+
+	rootPath := filepath.Join(dir, "root.yml")
+	leafPath := filepath.Join(dir, "leaf.yml")
+	writeExtendsTemplate(t, rootPath, "root", "", target, []string{"root-pkg"})
+	writeExtendsTemplate(t, leafPath, "leaf", "root.yml", target, []string{"leaf-pkg"})
+
+	result, err := LoadAndMergeTemplate(leafPath)
+	if err != nil {
+		t.Fatalf("LoadAndMergeTemplate() error = %v", err)
+	}
+
+	// Leaf wins for identity fields.
+	if result.Image.Name != "leaf" {
+		t.Errorf("Image.Name = %q, want leaf", result.Image.Name)
+	}
+	// Packages from both layers are present (additive merge).
+	if !hasPackage(result.SystemConfig.Packages, "root-pkg") {
+		t.Errorf("packages %v missing root-pkg", result.SystemConfig.Packages)
+	}
+	if !hasPackage(result.SystemConfig.Packages, "leaf-pkg") {
+		t.Errorf("packages %v missing leaf-pkg", result.SystemConfig.Packages)
+	}
+	// Extends is a build-time directive and must not survive into the merged result.
+	if result.Extends != "" {
+		t.Errorf("Extends = %q, want empty after merge", result.Extends)
+	}
+}
+
+func TestResolveAndMergeExtendsChainValid(t *testing.T) {
+	dir := t.TempDir()
+	target := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+
+	rootPath := filepath.Join(dir, "root.yml")
+	midPath := filepath.Join(dir, "mid.yml")
+	leafPath := filepath.Join(dir, "leaf.yml")
+	writeExtendsTemplate(t, rootPath, "root", "", target, []string{"root-pkg"})
+	writeExtendsTemplate(t, midPath, "mid", "root.yml", target, []string{"mid-pkg"})
+	writeExtendsTemplate(t, leafPath, "leaf", "mid.yml", target, []string{"leaf-pkg"})
+
+	merged, chainPaths, err := ResolveAndMergeExtendsChain(leafPath, nil)
+	if err != nil {
+		t.Fatalf("ResolveAndMergeExtendsChain() error = %v", err)
+	}
+
+	if merged.Image.Name != "leaf" {
+		t.Errorf("Image.Name = %q, want leaf", merged.Image.Name)
+	}
+	for _, pkg := range []string{"root-pkg", "mid-pkg", "leaf-pkg"} {
+		if !hasPackage(merged.SystemConfig.Packages, pkg) {
+			t.Errorf("packages %v missing %s", merged.SystemConfig.Packages, pkg)
+		}
+	}
+	if merged.Extends != "" {
+		t.Errorf("Extends = %q, want empty after merge", merged.Extends)
+	}
+
+	wantOrder := []string{"root.yml", "mid.yml", "leaf.yml"}
+	if len(chainPaths) != len(wantOrder) {
+		t.Fatalf("chainPaths length = %d, want %d", len(chainPaths), len(wantOrder))
+	}
+	for i, want := range wantOrder {
+		if got := filepath.Base(chainPaths[i]); got != want {
+			t.Errorf("chainPaths[%d] = %q, want %q", i, got, want)
+		}
+	}
+}
+
+func TestResolveAndMergeExtendsChainMissingParent(t *testing.T) {
+	dir := t.TempDir()
+	target := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+
+	leafPath := filepath.Join(dir, "leaf.yml")
+	writeExtendsTemplate(t, leafPath, "leaf", "missing.yml", target, nil)
+
+	_, _, err := ResolveAndMergeExtendsChain(leafPath, nil)
+	if err == nil {
+		t.Fatal("ResolveAndMergeExtendsChain() expected error for missing parent")
+	}
+	if !strings.Contains(err.Error(), "missing.yml") {
+		t.Errorf("error = %q, want reference to missing.yml", err.Error())
+	}
+}
+
+func TestResolveAndMergeExtendsChainInvalidParent(t *testing.T) {
+	dir := t.TempDir()
+	target := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+
+	rootPath := filepath.Join(dir, "root.yml")
+	leafPath := filepath.Join(dir, "leaf.yml")
+
+	// Root parent is malformed YAML.
+	if err := os.WriteFile(rootPath, []byte("image:\n  name: root\n\tbad: indent\n"), 0o644); err != nil {
+		t.Fatalf("failed to write root template: %v", err)
+	}
+	writeExtendsTemplate(t, leafPath, "leaf", "root.yml", target, nil)
+
+	_, _, err := ResolveAndMergeExtendsChain(leafPath, nil)
+	if err == nil {
+		t.Fatal("ResolveAndMergeExtendsChain() expected error for invalid parent")
+	}
+	if !strings.Contains(err.Error(), "root.yml") {
+		t.Errorf("error = %q, want reference to root.yml", err.Error())
+	}
+}
+
+func TestLoadAndMergeTemplateMultiLevelExtends(t *testing.T) {
+	dir := t.TempDir()
+	target := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+
+	rootPath := filepath.Join(dir, "root.yml")
+	midPath := filepath.Join(dir, "mid.yml")
+	leafPath := filepath.Join(dir, "leaf.yml")
+	writeExtendsTemplate(t, rootPath, "root", "", target, []string{"root-pkg"})
+	writeExtendsTemplate(t, midPath, "mid", "root.yml", target, []string{"mid-pkg"})
+	writeExtendsTemplate(t, leafPath, "leaf", "mid.yml", target, []string{"leaf-pkg"})
+
+	result, err := LoadAndMergeTemplate(leafPath)
+	if err != nil {
+		t.Fatalf("LoadAndMergeTemplate() error = %v", err)
+	}
+
+	if result.Image.Name != "leaf" {
+		t.Errorf("Image.Name = %q, want leaf", result.Image.Name)
+	}
+	for _, want := range []string{"root-pkg", "mid-pkg", "leaf-pkg"} {
+		if !hasPackage(result.SystemConfig.Packages, want) {
+			t.Errorf("packages %v missing %s", result.SystemConfig.Packages, want)
+		}
+	}
+	if result.Extends != "" {
+		t.Errorf("Extends = %q, want empty after merge", result.Extends)
+	}
+}
+
+func TestLoadAndMergeTemplateNoExtendsRegression(t *testing.T) {
+	dir := t.TempDir()
+	target := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+
+	leafPath := filepath.Join(dir, "standalone.yml")
+	writeExtendsTemplate(t, leafPath, "standalone", "", target, []string{"only-pkg"})
+
+	result, err := LoadAndMergeTemplate(leafPath)
+	if err != nil {
+		t.Fatalf("LoadAndMergeTemplate() error = %v", err)
+	}
+
+	if result.Image.Name != "standalone" {
+		t.Errorf("Image.Name = %q, want standalone", result.Image.Name)
+	}
+	if !hasPackage(result.SystemConfig.Packages, "only-pkg") {
+		t.Errorf("packages %v missing only-pkg", result.SystemConfig.Packages)
+	}
+}
+
 // TestValidateAndFixImmutabilityConfig tests the validateAndFixImmutabilityConfig function
 func TestValidateAndFixImmutabilityConfig(t *testing.T) {
 	tests := []struct {
