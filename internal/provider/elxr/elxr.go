@@ -9,6 +9,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/image/initrdmaker"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/isomaker"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/rawmaker"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/wsl2maker"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/debutils"
 	"github.com/open-edge-platform/image-composer-tool/internal/provider"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/display"
@@ -118,9 +119,22 @@ func (p *eLxr) BuildImage(template *config.ImageTemplate) error {
 		return p.buildInitrdImage(template)
 	case "iso":
 		return p.buildIsoImage(template)
+	case "wsl2":
+		return p.buildWslImage(template)
 	default:
 		return fmt.Errorf("unsupported image type: %s", template.Target.ImageType)
 	}
+}
+
+func (p *eLxr) buildWslImage(template *config.ImageTemplate) error {
+	maker, err := wsl2maker.NewWSL2Maker(p.chrootEnv, template)
+	if err != nil {
+		return fmt.Errorf("failed to create WSL2 maker: %w", err)
+	}
+	if err := maker.Init(); err != nil {
+		return fmt.Errorf("failed to initialize WSL2 maker: %w", err)
+	}
+	return maker.BuildWSL2Image()
 }
 
 func (p *eLxr) buildRawImage(template *config.ImageTemplate) error {
@@ -316,28 +330,7 @@ func loadRepoConfig(dist string, arch string) ([]debutils.RepoConfig, error) {
 		return repoConfigs, fmt.Errorf("failed to load provider repo config: %w", err)
 	}
 
-	repoList := make([]debutils.Repository, len(providerConfigs))
-	repoGroup := "elxr"
-
-	// Convert each ProviderRepoConfig to debutils.RepoConfig
-	for i, providerConfig := range providerConfigs {
-		repoType, name, _, gpgKey, component, _, _, _, _, baseURL, _, _, _ := providerConfig.ToRepoConfigData(arch)
-
-		// Verify this is a DEB repository
-		if repoType != "deb" {
-			log.Warnf("Skipping non-DEB repository: %s (type: %s)", name, repoType)
-			continue
-		}
-
-		repoList[i] = debutils.Repository{
-			ID:        fmt.Sprintf("%s%d", repoGroup, i+1),
-			Codename:  name,
-			URL:       baseURL,
-			PKey:      gpgKey,
-			Component: component,
-			Priority:  0, // Default priority
-		}
-	}
+	repoList := buildRepositoryList(providerConfigs, arch)
 
 	repoConfigs, err = debutils.BuildRepoConfigs(repoList, arch)
 	if err != nil {
@@ -349,6 +342,31 @@ func loadRepoConfig(dist string, arch string) ([]debutils.RepoConfig, error) {
 	}
 
 	return repoConfigs, nil
+}
+
+func buildRepositoryList(providerConfigs []config.ProviderRepoConfig, arch string) []debutils.Repository {
+	repoList := make([]debutils.Repository, len(providerConfigs))
+	repoGroup := "elxr"
+
+	for i, providerConfig := range providerConfigs {
+		repoType, name, _, gpgKey, component, _, _, _, _, baseURL, _, _, _ := providerConfig.ToRepoConfigData(arch)
+
+		if repoType != "deb" {
+			log.Warnf("Skipping non-DEB repository: %s (type: %s)", name, repoType)
+			continue
+		}
+
+		repoList[i] = debutils.Repository{
+			ID:        fmt.Sprintf("%s%d", repoGroup, i+1),
+			Codename:  name,
+			URL:       baseURL,
+			PKey:      gpgKey,
+			Component: component,
+			Priority:  500,
+		}
+	}
+
+	return repoList
 }
 
 // normalizeElxrDist maps user/config aliases to supported distribution directory names.

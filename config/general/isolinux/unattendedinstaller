@@ -7,6 +7,21 @@ set -euo pipefail
 ISO_ROOT=/cdrom
 CONFIG_ROOT="$ISO_ROOT/config"
 CACHE_REPO="$ISO_ROOT/cache-repo"
+LOG_FILE="/tmp/unattended-installer.log"
+LOCK_DIR="/tmp/unattended-installer.lock"
+
+# Prevent multiple unattended installer instances from running at the same time.
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    echo "Another unattended installer instance is already running. See the installer log at $LOG_FILE and then exit."
+    exit 0
+fi
+
+# Capture the full unattended run output for post-boot diagnostics.
+# tee keeps output visible on the console while persisting it to a file.
+exec 3>&1 4>&2
+exec > >(tee -a "$LOG_FILE") 2>&1
+echo "=== unattended installer start $(date -Iseconds) ==="
+echo "Logging to $LOG_FILE"
 
 # Mounting the ISO root for the installer.
 mkdir -p "$ISO_ROOT"
@@ -90,7 +105,13 @@ stty echo
 dmesg -E
 
 if [[ $installerExitCode -eq 0 ]]; then
+    echo "Unattended install completed successfully"
     reboot
 else
-    /bin/bash
+    echo "Unattended install failed with exit code $installerExitCode"
+    echo "Installer log is available at $LOG_FILE"
+    rmdir "$LOCK_DIR" 2>/dev/null || true
+    # Restore direct console output before launching an interactive shell.
+    exec 1>&3 2>&4
+    exec /bin/bash -i
 fi

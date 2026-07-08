@@ -124,6 +124,7 @@ var commandMap = map[string][]string{
 	"ukify":              {"/usr/bin/ukify", "/usr/local/bin/ukify"},
 	"umount":             {"/usr/bin/umount"},
 	"uname":              {"/usr/bin/uname"},
+	"udevadm":            {"/usr/bin/udevadm", "/bin/udevadm"},
 	"update-binfmts":     {"/usr/sbin/update-binfmts", "/usr/bin/update-binfmts"},
 	"uniq":               {"/usr/bin/uniq"},
 	"veritysetup":        {"/usr/sbin/veritysetup"},
@@ -229,6 +230,23 @@ func IsCommandExist(cmd string, chrootPath string) (bool, error) {
 	}
 
 	return strings.TrimSpace(output) != "", nil
+}
+
+// QuoteArg returns s wrapped as a single shell argument that bash -c will pass
+// through literally, neutralizing every shell metacharacter it may contain.
+//
+// Commands in this tool are assembled as strings and run via `bash -c`, so any
+// interpolated value that is (even partially) attacker-influenced — e.g. an
+// artifact filename derived from a package URL basename, or a workspace path —
+// must be quoted here before being concatenated into a command. Single-quote
+// wrapping is used deliberately (not strconv.Quote / double quotes): inside
+// double quotes bash still expands $(...), backticks and $var, whereas nothing
+// is special inside single quotes. An embedded single quote is emitted as the
+// standard close-quote, escaped-quote, reopen-quote sequence (see the
+// ReplaceAll below), so the result is safe for arbitrary input including
+// quotes themselves.
+func QuoteArg(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func extractSedPattern(command string) (string, error) {
