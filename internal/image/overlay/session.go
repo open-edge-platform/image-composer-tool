@@ -167,7 +167,7 @@ func (b *Builder) Build() error {
 		return fmt.Errorf("overlay build: package installation failed: %w", err)
 	}
 
-	if err := builderRegenBootFn(b.info, b.layout.RootMount, installed); err != nil {
+	if err := builderRegenBootFn(b.info, b.layout.RootMount, installed, b.plan); err != nil {
 		return fmt.Errorf("overlay build: boot regeneration failed: %w", err)
 	}
 
