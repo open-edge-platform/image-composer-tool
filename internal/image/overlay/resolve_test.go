@@ -717,6 +717,70 @@ func TestOverlaySeedPackages_PreservesOrder(t *testing.T) {
 	}
 }
 
+// TestOverlaySeedPackages_ArchQualifiedPresent confirms an APT arch-qualified
+// request ("bash:amd64") for a package already present in the baseline (keyed by
+// the canonical base name "bash") is recognized as satisfied and NOT seeded, while
+// an arch-qualified request for an absent package keeps its original token in the
+// seed slice so the resolver still receives the qualifier.
+func TestOverlaySeedPackages_ArchQualifiedPresent(t *testing.T) {
+	requested := []string{"bash:amd64", "curl:amd64"}
+	present := map[string]bool{"bash": true}
+	got := overlaySeedPackages(requested, present)
+	if !reflect.DeepEqual(got, []string{"curl:amd64"}) {
+		t.Errorf("seed = %v, want [curl:amd64]", got)
+	}
+}
+
+// TestResolveOverlayPackages_ArchQualifiedRequestAlreadyPresent confirms that an
+// APT arch-qualified template request ("libc6:amd64") for a package the baseline
+// already has (keyed under the canonical base name "libc6") is not seeded and is
+// recorded as already-present under the base name — rather than being missed on
+// the ":arch" qualifier mismatch and mislabelled. Only the genuinely new package
+// is installed.
+func TestResolveOverlayPackages_ArchQualifiedRequestAlreadyPresent(t *testing.T) {
+	backend := &fakeBackend{
+		fam: PackageManagerAPT,
+		closure: []ospackage.PackageInfo{
+			{Name: "curl_8.deb", PkgName: "curl", Version: "8", Arch: "amd64", URL: "https://r/curl_8.deb"},
+		},
+		arts: []string{"curl_8.deb"},
+	}
+	template := &config.ImageTemplate{
+		Target: config.TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "amd64"},
+		SystemConfig: config.SystemConfig{
+			// libc6 is present in the baseline under its base name; the request is
+			// arch-qualified, so only curl should be seeded/installed.
+			Packages: []string{"curl", "libc6:amd64"},
+		},
+	}
+	info := &BaselineInfo{OS: "ubuntu", Arch: "amd64", PackageManager: PackageManagerAPT, PackageType: pkgTypeDeb}
+	baseline := []BaselinePackage{
+		{Name: "libc6", Version: "2.34", Arch: "amd64", Installed: true},
+	}
+
+	var plan *ResolutionPlan
+	withStubbedResolution(t, backend, []config.ProviderRepoConfig{debProviderRepo()}, nil, func() {
+		var err error
+		plan, err = ResolveOverlayPackages(template, info, baseline)
+		if err != nil {
+			t.Fatalf("ResolveOverlayPackages: %v", err)
+		}
+	})
+
+	// The arch-qualified libc6:amd64 request is recognized as present → not seeded.
+	if !reflect.DeepEqual(backend.gotReq.seed, []string{"curl"}) {
+		t.Errorf("seed = %v, want [curl] (libc6:amd64 already present)", backend.gotReq.seed)
+	}
+	// Only curl installs; libc6 is left on the baseline copy.
+	if len(plan.ToInstall) != 1 || plan.ToInstall[0].Name != "curl" {
+		t.Errorf("toInstall = %+v, want only curl", plan.ToInstall)
+	}
+	// Recorded already-present under the canonical base name, not the raw token.
+	if !reflect.DeepEqual(plan.AlreadyPresent, []string{"libc6"}) {
+		t.Errorf("alreadyPresent = %v, want [libc6]", plan.AlreadyPresent)
+	}
+}
+
 // TestResolveOverlayPackages_Deterministic confirms identical inputs yield
 // byte-identical plans regardless of input ordering of the closure/artifacts.
 func TestResolveOverlayPackages_Deterministic(t *testing.T) {

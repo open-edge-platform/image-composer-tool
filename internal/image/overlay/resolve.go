@@ -228,7 +228,44 @@ func ResolveOverlayPackages(template *config.ImageTemplate, info *BaselineInfo, 
 	})
 	log.Infof("Overlay resolution complete: %d requested, %d in closure, %d to install (%d already present), %d artifact(s) in %s",
 		len(plan.Requested), len(plan.Closure), len(plan.ToInstall), len(plan.AlreadyPresent), len(plan.Artifacts), plan.DownloadDir)
+	logToInstallProvenance(plan)
 	return plan, nil
+}
+
+// logToInstallProvenance annotates each to-be-installed package as either
+// "requested" (named in the template) or "dependency" (pulled in transitively).
+// The install set is the closure of requested packages minus what the baseline
+// already satisfies, so it is routinely larger than the template list; without
+// this breakdown the extra dependency packages look unexplained when they later
+// surface in the image SBOM or a compare diff.
+//
+// The provenance counts are logged at Info level, but the per-package breakdown
+// is logged at Debug: a large dependency closure would otherwise emit hundreds of
+// Info lines per overlay, hurting log readability and slowing CI.
+func logToInstallProvenance(plan *ResolutionPlan) {
+	if len(plan.ToInstall) == 0 {
+		return
+	}
+	// The resolver canonicalizes plan.ToInstall names to the base name (dropping
+	// any deb ":arch" multiarch qualifier), but plan.Requested holds the raw
+	// template strings, which may be arch-qualified ("gcc:amd64"). Key and look up
+	// the requested set on the base name so an arch-qualified request is still
+	// classified as "requested" rather than skewing the dependency count.
+	requestedSet := make(map[string]bool, len(plan.Requested))
+	for _, name := range plan.Requested {
+		requestedSet[basePackageName(name)] = true
+	}
+	requestedCount := 0
+	for _, pkg := range plan.ToInstall {
+		origin := "dependency"
+		if requestedSet[basePackageName(pkg.Name)] {
+			origin = "requested"
+			requestedCount++
+		}
+		log.Debugf("  to install [%s]: %s %s", origin, pkg.Name, pkg.Version)
+	}
+	log.Infof("To-install provenance: %d requested, %d pulled in as dependencies",
+		requestedCount, len(plan.ToInstall)-requestedCount)
 }
 
 // packagingArch translates a detected baseline architecture (ELF-derived, e.g.
@@ -375,10 +412,16 @@ func baselinePresenceSet(baseline []BaselinePackage) map[string]bool {
 // overlaySeedPackages returns the requested packages that are not already present
 // in the baseline. The input is assumed sorted/de-duplicated; the output preserves
 // that order so resolution is deterministic.
+//
+// The baseline presence set is keyed by canonical base name, but a template request
+// may carry an APT ":arch" multiarch qualifier ("gcc:amd64"). Presence is therefore
+// tested on the base name so an arch-qualified request for an already-installed
+// package is recognized as satisfied; the original request token is preserved in the
+// seed slice so the resolver still receives the arch qualifier when it is not.
 func overlaySeedPackages(requested []string, present map[string]bool) []string {
 	var seed []string
 	for _, p := range requested {
-		if !present[p] {
+		if !present[basePackageName(p)] {
 			seed = append(seed, p)
 		}
 	}
@@ -631,10 +674,16 @@ func buildResolutionPlan(in planInput) *ResolutionPlan {
 	// too, even when they never entered the closure (they were never seeded). In
 	// upgrade mode a present-and-upgraded requested package is in toInstall, so it
 	// is excluded here to avoid labelling it both installed and already-present.
+	//
+	// present/toInstallNames are keyed by canonical base name, so an arch-qualified
+	// request ("gcc:amd64") is normalized with basePackageName before the lookups
+	// (and recorded under the base name) — otherwise the qualifier mismatch would
+	// miss an already-present requested package and mislabel it.
 	toInstallNames := resolvedNameSet(toInstall)
 	for _, r := range requested {
-		if present[r] && !toInstallNames[r] {
-			alreadyPresent[r] = true
+		base := basePackageName(r)
+		if present[base] && !toInstallNames[base] {
+			alreadyPresent[base] = true
 		}
 	}
 
