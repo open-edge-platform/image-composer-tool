@@ -7,12 +7,22 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/config/manifest"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
+
+// StageTiming records how long one overlay build stage took. The overlay pipeline
+// does not run through the create-mode maker/chroot stages that populate the
+// template's build timers, so it accumulates its own stage timings here for the
+// caller to render (see Builder.Timings).
+type StageTiming struct {
+	Stage    string
+	Duration time.Duration
+}
 
 // Builder drives an overlay-mode image build across the provider's three phases
 // (preprocess, build, postprocess) while keeping a SINGLE baseline mount lifecycle
@@ -52,6 +62,34 @@ type Builder struct {
 	// finalizes artifacts on a fully successful build and always runs cleanup.
 	preprocessed bool
 	built        bool
+
+	// timings accumulates per-stage durations across the three phases, in the
+	// order the stages ran, for the caller to render as a timing table.
+	timings []StageTiming
+}
+
+// nowFn is the clock seam for stage timing, exposed as a package var so a test
+// can override it for deterministic durations.
+var nowFn = time.Now
+
+// timeStage runs fn, recording its wall-clock duration under the given stage
+// label (appended to b.timings in call order) regardless of whether fn errors,
+// and returns fn's error. Stages that never run leave no row, so the rendered
+// table reflects exactly the pipeline that executed.
+func (b *Builder) timeStage(stage string, fn func() error) error {
+	start := nowFn()
+	err := fn()
+	b.timings = append(b.timings, StageTiming{Stage: stage, Duration: nowFn().Sub(start)})
+	return err
+}
+
+// Timings returns the per-stage durations recorded so far, in execution order.
+// It returns a defensive copy so callers cannot mutate the Builder's internal
+// timing state (e.g. by appending or sorting) and corrupt later reporting.
+func (b *Builder) Timings() []StageTiming {
+	out := make([]StageTiming, len(b.timings))
+	copy(out, b.timings)
+	return out
 }
 
 // Builder-stage indirection seams over the impure overlay stages so the phase
@@ -110,39 +148,60 @@ func (b *Builder) Preprocess() (err error) {
 		}
 	}()
 
-	ctx, err := builderAcquire(b.ingestor)
-	if err != nil {
-		return fmt.Errorf("overlay preprocess: failed to acquire baseline: %w", err)
-	}
-	b.ctx = ctx
+	var baseline []BaselinePackage
+	if err := b.timeStage("Acquire & Mount Baseline", func() error {
+		ctx, aerr := builderAcquire(b.ingestor)
+		if aerr != nil {
+			return fmt.Errorf("overlay preprocess: failed to acquire baseline: %w", aerr)
+		}
+		b.ctx = ctx
 
-	layout, teardown, err := builderMountLayout(b.inspector, ctx.LoopDevPath)
-	if err != nil {
-		return fmt.Errorf("overlay preprocess: failed to mount baseline layout: %w", err)
+		layout, teardown, merr := builderMountLayout(b.inspector, ctx.LoopDevPath)
+		if merr != nil {
+			return fmt.Errorf("overlay preprocess: failed to mount baseline layout: %w", merr)
+		}
+		b.layout = layout
+		b.mountTeardown = teardown
+		return nil
+	}); err != nil {
+		return err
 	}
-	b.layout = layout
-	b.mountTeardown = teardown
 
-	info, baseline, err := builderDetectFn(layout.RootMount, b.template.Target)
-	if err != nil {
-		return fmt.Errorf("overlay preprocess: failed to inspect baseline: %w", err)
+	if err := b.timeStage("Inspect Baseline", func() error {
+		info, base, derr := builderDetectFn(b.layout.RootMount, b.template.Target)
+		if derr != nil {
+			return fmt.Errorf("overlay preprocess: failed to inspect baseline: %w", derr)
+		}
+		b.info = info
+		baseline = base
+		return nil
+	}); err != nil {
+		return err
 	}
-	b.info = info
 
-	plan, err := builderResolveFn(b.template, info, baseline)
-	if err != nil {
-		return fmt.Errorf("overlay preprocess: dependency resolution failed: %w", err)
+	if err := b.timeStage("Resolve Packages", func() error {
+		plan, rerr := builderResolveFn(b.template, b.info, baseline)
+		if rerr != nil {
+			return fmt.Errorf("overlay preprocess: dependency resolution failed: %w", rerr)
+		}
+		b.plan = plan
+		return nil
+	}); err != nil {
+		return err
 	}
-	b.plan = plan
 
-	report, err := builderPreflightFn(info, baseline, plan, b.template.OverlayPolicy)
-	if err != nil {
+	if err := b.timeStage("Preflight", func() error {
+		report, perr := builderPreflightFn(b.info, baseline, b.plan, b.template.OverlayPolicy)
 		// Preflight returns the report alongside a blocked error; retain it for
 		// diagnostics even though installation will not proceed.
 		b.report = report
-		return fmt.Errorf("overlay preprocess: preflight gate blocked the build: %w", err)
+		if perr != nil {
+			return fmt.Errorf("overlay preprocess: preflight gate blocked the build: %w", perr)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
-	b.report = report
 
 	b.preprocessed = true
 	return nil
@@ -162,17 +221,34 @@ func (b *Builder) Build() error {
 		return fmt.Errorf("overlay build: Build already ran")
 	}
 
-	installed, err := builderInstallFn(b.info, b.layout.RootMount, b.plan, b.report)
-	if err != nil {
-		return fmt.Errorf("overlay build: package installation failed: %w", err)
+	var installed *InstallResult
+	if err := b.timeStage("Install Packages", func() error {
+		var ierr error
+		installed, ierr = builderInstallFn(b.info, b.layout.RootMount, b.plan, b.report)
+		if ierr != nil {
+			return fmt.Errorf("overlay build: package installation failed: %w", ierr)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
-	if err := builderRegenBootFn(b.info, b.layout.RootMount, installed, b.plan); err != nil {
-		return fmt.Errorf("overlay build: boot regeneration failed: %w", err)
+	if err := b.timeStage("Boot Regeneration", func() error {
+		if berr := builderRegenBootFn(b.info, b.layout.RootMount, installed, b.plan); berr != nil {
+			return fmt.Errorf("overlay build: boot regeneration failed: %w", berr)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
-	if err := builderResizeFn(b.template, b.ctx, b.layout); err != nil {
-		return fmt.Errorf("overlay build: resize failed: %w", err)
+	if err := b.timeStage("Resize", func() error {
+		if rerr := builderResizeFn(b.template, b.ctx, b.layout); rerr != nil {
+			return fmt.Errorf("overlay build: resize failed: %w", rerr)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	b.built = true
@@ -245,22 +321,32 @@ func (b *Builder) Postprocess(buildErr error) (err error) {
 	}
 
 	// Embed the overlay SBOM into the baseline while the root is still mounted.
-	if err := builderSBOMFn(b.info, b.layout.RootMount, b.plan); err != nil {
-		return fmt.Errorf("overlay postprocess: SBOM generation failed: %w", err)
+	if err := b.timeStage("Generate SBOM", func() error {
+		if serr := builderSBOMFn(b.info, b.layout.RootMount, b.plan); serr != nil {
+			return fmt.Errorf("overlay postprocess: SBOM generation failed: %w", serr)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	// Release the mounts and loop device before emitting the artifact: the final
-	// image is the modified backing file, which must no longer be in use.
+	// image is the modified backing file, which must no longer be in use. The
+	// release is timed together with the emit as the finalization stage.
 	version := b.imageVersion()
-	if cerr := b.cleanupOnce(); cerr != nil {
-		return fmt.Errorf("overlay postprocess: failed to release baseline before emit: %w", cerr)
+	if err := b.timeStage("Emit Artifact", func() error {
+		if cerr := b.cleanupOnce(); cerr != nil {
+			return fmt.Errorf("overlay postprocess: failed to release baseline before emit: %w", cerr)
+		}
+		artifact, eerr := builderEmitFn(b.template, b.ctx.BaselineCopyPath, version)
+		if eerr != nil {
+			return fmt.Errorf("overlay postprocess: failed to emit image artifact: %w", eerr)
+		}
+		log.Infof("Overlay build complete: emitted %s", artifact)
+		return nil
+	}); err != nil {
+		return err
 	}
-
-	artifact, err := builderEmitFn(b.template, b.ctx.BaselineCopyPath, version)
-	if err != nil {
-		return fmt.Errorf("overlay postprocess: failed to emit image artifact: %w", err)
-	}
-	log.Infof("Overlay build complete: emitted %s", artifact)
 	return nil
 }
 
