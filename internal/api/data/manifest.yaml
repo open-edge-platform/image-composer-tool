@@ -30,7 +30,7 @@ combinations:
     platform: ptl
     os: ubuntu24
     imageType: raw
-    template: generic-handheld-os-template.yml
+    template: ubuntu24-x86_64-minimal-raw.yml
 
 verticals:
   - id: retail
