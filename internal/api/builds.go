@@ -252,8 +252,8 @@ func (b *build) finish(status buildStatus, arts []artifact, errMsg string) {
 // each artifact as a bullet line with "name (size)" followed by a line holding
 // the absolute path:
 //
-//	• minimal-os-image-ubuntu-26.04.raw.gz (1.13 GB)
-//	  /home/.../minimal/minimal-os-image-ubuntu-26.04.raw.gz
+//   - minimal-os-image-ubuntu-26.04.raw.gz (1.13 GB)
+//     /home/.../minimal/minimal-os-image-ubuntu-26.04.raw.gz
 //
 // Log lines carry a leading "<timestamp> INFO ..." prefix from the logger, so we
 // match on the bullet and on a path segment rather than line position.
