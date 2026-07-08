@@ -4205,6 +4205,53 @@ func TestGetConfigurationInfo(t *testing.T) {
 	}
 }
 
+func TestLoadTemplateStoresAbsolutePath(t *testing.T) {
+	tmpDir := t.TempDir()
+	templateDir := filepath.Join(tmpDir, "templates")
+	if err := os.MkdirAll(templateDir, 0755); err != nil {
+		t.Fatalf("failed to create template dir: %v", err)
+	}
+
+	templatePath := filepath.Join(templateDir, "test.yml")
+	templateContent := `image:
+  name: test-image
+  version: "1.0.0"
+target:
+  os: debian
+  dist: debian13
+  arch: x86_64
+  imageType: raw
+`
+	if err := os.WriteFile(templatePath, []byte(templateContent), 0644); err != nil {
+		t.Fatalf("failed to write template file: %v", err)
+	}
+
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get current dir: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(originalWD)
+	})
+
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("failed to change dir: %v", err)
+	}
+
+	template, err := LoadTemplate(filepath.Join("templates", "test.yml"), false)
+	if err != nil {
+		t.Fatalf("LoadTemplate() error = %v", err)
+	}
+
+	if len(template.PathList) != 1 {
+		t.Fatalf("expected one path entry, got %d", len(template.PathList))
+	}
+
+	if template.PathList[0] != templatePath {
+		t.Fatalf("expected absolute template path %q, got %q", templatePath, template.PathList[0])
+	}
+}
+
 func TestGetKernelPackages(t *testing.T) {
 	// Test with empty kernel packages
 	template := &ImageTemplate{
