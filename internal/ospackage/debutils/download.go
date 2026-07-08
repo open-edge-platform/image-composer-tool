@@ -596,6 +596,7 @@ func PackagesFromMultipleRepos() ([]ospackage.PackageInfo, error) {
 
 // BuildRepoConfigs converts Repository entries to RepoConfig format
 func BuildRepoConfigs(userRepoList []Repository, arch string) ([]RepoConfig, error) {
+	log := logger.Logger()
 	var userRepo []RepoConfig
 	for _, repoItem := range userRepoList {
 		connectSuccess := false
@@ -616,10 +617,10 @@ func BuildRepoConfigs(userRepoList []Repository, arch string) ([]RepoConfig, err
 					return nil, fmt.Errorf("getting package metadata name: %w, baseURL %s codename %s localArch %s componentName %s\n", err, baseURL, codename, localArch, componentName)
 				}
 				if package_list_url == "" {
-					fmt.Printf("getting package metadata name: %v, baseURL %s codename %s localArch %s componentName %s\n", err, baseURL, codename, localArch, componentName)
+					log.Debugf("no package metadata found: baseURL %s codename %s localArch %s componentName %s", baseURL, codename, localArch, componentName)
 					continue // No valid package list found for this arch/component
 				}
-				fmt.Printf("SUCCESS: baseURL %s codename %s localArch %s componentName %s\n", baseURL, codename, localArch, componentName)
+				log.Debugf("found package metadata: baseURL %s codename %s localArch %s componentName %s", baseURL, codename, localArch, componentName)
 				repo := RepoConfig{
 					PkgList:       package_list_url,
 					ReleaseFile:   fmt.Sprintf("%s/dists/%s/%s", baseURL, codename, releaseNm),
