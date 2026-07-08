@@ -401,12 +401,22 @@ func (b *Builder) imageVersion() string {
 	return "overlay"
 }
 
-// generateOverlaySBOM writes an SPDX SBOM of the packages the overlay CONTRIBUTED
-// — the ToInstall set, i.e. newly added packages plus (in additive-and-upgrade
-// mode) baseline packages upgraded to a newer version — recording each at the
-// version the overlay installed, and embeds it into the baseline filesystem at
-// the conventional /usr/share/sbom path. It is a no-op-safe reflection of what
-// the overlay changed, not a full re-inventory of the baseline.
+// generateOverlaySBOM updates the baseline's embedded SPDX SBOM at
+// /usr/share/sbom so it reflects the COMPLETE inventory of the overlaid image —
+// the baseline packages the image inherited plus the packages the overlay
+// contributed (ToInstall: newly added packages, and in additive-and-upgrade mode
+// baseline packages upgraded to a newer version).
+//
+// The overlay image is a copy of the baseline, so it already carries the
+// baseline's full SBOM. This reads that inherited document, merges the
+// contributed packages into it (a name already present is replaced — an upgrade;
+// a new name is appended — an addition), and writes the merged document back
+// UNDER THE BASELINE'S OWN FILENAME so it replaces the inherited SBOM rather than
+// dropping a second, delta-only file beside it. That prevents SBOM consumers
+// (compare, CVE scanners) from reading a misleading partial inventory.
+//
+// When the baseline carries no readable SBOM, it falls back to writing just the
+// contributed packages so the image still gets a manifest.
 func generateOverlaySBOM(info *BaselineInfo, rootMount string, plan *ResolutionPlan) error {
 	if plan == nil {
 		return nil
@@ -428,7 +438,103 @@ func generateOverlaySBOM(info *BaselineInfo, rootMount string, plan *ResolutionP
 		})
 	}
 
-	tempSBOM := filepath.Join(config.TempDir(), manifest.DefaultSPDXFile)
+	// Locate the SBOM the image inherited from the baseline. Its filename is
+	// build-specific (create mode timestamps it), so discover it rather than
+	// assume a fixed name.
+	baselineSBOMName, baselineSBOMData, found := readBaselineSBOM(rootMount)
+	if !found {
+		log.Warnf("Overlay SBOM: no baseline SBOM found at %s; writing overlay-contributed packages only", manifest.ImageSBOMPath)
+		return writeOverlaySBOMToChroot(pkgs, manifest.DefaultSPDXFile, rootMount)
+	}
+
+	// Stage and embed the merged SBOM under the baseline's OWN filename so it
+	// replaces the inherited file in place (same path + name) rather than
+	// shadowing it with a second, delta-only file. DefaultSPDXFile is set (not
+	// restored) so the later sidecar copy in emitOverlayArtifact — which keys off
+	// this variable — packages the same merged manifest. This mirrors create
+	// mode's generateSBOM, which likewise assigns DefaultSPDXFile.
+	manifest.DefaultSPDXFile = baselineSBOMName
+	tempSBOM := filepath.Join(config.TempDir(), baselineSBOMName)
+	if err := manifest.WriteMergedSPDXToFile(baselineSBOMData, pkgs, tempSBOM); err != nil {
+		// A malformed baseline SBOM must not fail the build; fall back to the
+		// delta so the image still gets a manifest.
+		log.Warnf("Overlay SBOM: merging into baseline SBOM %s failed (%v); writing overlay-contributed packages only", baselineSBOMName, err)
+		return writeOverlaySBOMToChroot(pkgs, baselineSBOMName, rootMount)
+	}
+
+	if err := manifest.CopySBOMToChroot(rootMount); err != nil {
+		return fmt.Errorf("embedding merged overlay SBOM into baseline: %w", err)
+	}
+	log.Infof("Overlay SBOM merged: %d contributed package(s) folded into the baseline inventory at %s/%s",
+		len(pkgs), manifest.ImageSBOMPath, baselineSBOMName)
+	return nil
+}
+
+// readBaselineSBOM finds and reads the SBOM the overlay image inherited from the
+// baseline under <rootMount>/usr/share/sbom. It returns the file's base name, its
+// bytes, and whether a usable SBOM was found. Selection mirrors the inspector's
+// picker: an "spdx_manifest*" JSON is preferred, otherwise the first JSON file.
+func readBaselineSBOM(rootMount string) (string, []byte, bool) {
+	sbomDir := filepath.Join(rootMount, strings.TrimPrefix(manifest.ImageSBOMPath, "/"))
+	entries, err := os.ReadDir(sbomDir)
+	if err != nil {
+		return "", nil, false
+	}
+
+	name, ok := pickBaselineSBOMName(entries)
+	if !ok {
+		return "", nil, false
+	}
+
+	data, err := os.ReadFile(filepath.Join(sbomDir, name))
+	if err != nil {
+		return "", nil, false
+	}
+	return name, data, true
+}
+
+// pickBaselineSBOMName selects the SBOM file among directory entries, preferring
+// a name starting with "spdx_manifest" and falling back to any ".json" file. Both
+// tiers are chosen deterministically (lexicographically smallest) so the pick is
+// stable across runs.
+func pickBaselineSBOMName(entries []os.DirEntry) (string, bool) {
+	var preferred, fallback string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		lower := strings.ToLower(name)
+		if !strings.HasSuffix(lower, ".json") {
+			continue
+		}
+		if strings.HasPrefix(lower, "spdx_manifest") {
+			if preferred == "" || name < preferred {
+				preferred = name
+			}
+			continue
+		}
+		if fallback == "" || name < fallback {
+			fallback = name
+		}
+	}
+	if preferred != "" {
+		return preferred, true
+	}
+	if fallback != "" {
+		return fallback, true
+	}
+	return "", false
+}
+
+// writeOverlaySBOMToChroot stages a from-scratch SBOM of pkgs under sbomName and
+// embeds it into the mounted root at /usr/share/sbom/<sbomName>. It backs the
+// fallback paths where no baseline SBOM is available to merge into. It sets (not
+// restores) manifest.DefaultSPDXFile so both CopySBOMToChroot here and the later
+// sidecar copy — which key off that variable — use sbomName.
+func writeOverlaySBOMToChroot(pkgs []ospackage.PackageInfo, sbomName, rootMount string) error {
+	manifest.DefaultSPDXFile = sbomName
+	tempSBOM := filepath.Join(config.TempDir(), sbomName)
 	if err := manifest.WriteSPDXToFile(pkgs, tempSBOM); err != nil {
 		return fmt.Errorf("writing overlay SBOM: %w", err)
 	}

@@ -288,6 +288,184 @@ func TestWriteSPDXToFile_MissingFields(t *testing.T) {
 	}
 }
 
+func TestWriteMergedSPDXToFile_AddsUpgradesAndPreservesBaseline(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// A baseline SBOM with two packages, one carrying rich metadata (checksum,
+	// supplier) the merge must preserve for untouched entries.
+	baselineDoc := SPDXDocument{
+		SPDXVersion:       SPDXVersion,
+		DataLicense:       SPDXDataLicense,
+		SPDXID:            SPDXDocumentID,
+		DocumentName:      "baseline-doc",
+		DocumentNamespace: "https://example.com/baseline-namespace",
+		Packages: []SPDXPackage{
+			{
+				SPDXID:      "SPDXRef-Package-libc6",
+				Name:        "libc6",
+				Type:        "deb",
+				VersionInfo: "2.39-0ubuntu8",
+				Supplier:    "Organization: Ubuntu",
+				Checksum:    []SPDXChecksum{{Algorithm: "SHA256", ChecksumValue: "baselinelibc"}},
+			},
+			{
+				SPDXID:      "SPDXRef-Package-curl",
+				Name:        "curl",
+				Type:        "deb",
+				VersionInfo: "8.5.0-1", // older; the overlay upgrades this
+			},
+		},
+	}
+	baselineData, err := json.Marshal(baselineDoc)
+	if err != nil {
+		t.Fatalf("marshal baseline: %v", err)
+	}
+
+	overlayPkgs := []ospackage.PackageInfo{
+		// Upgrade: same name as a baseline package, newer version.
+		{Name: "curl", Type: "deb", Version: "8.5.0-2ubuntu10.10", URL: "https://x/curl.deb"},
+		// Addition: a name not in the baseline.
+		{Name: "cups", Type: "deb", Version: "2.4.7-1.2ubuntu7.14", URL: "https://x/cups.deb"},
+	}
+
+	outFile := filepath.Join(tmpDir, "merged.json")
+	if err := WriteMergedSPDXToFile(baselineData, overlayPkgs, outFile); err != nil {
+		t.Fatalf("WriteMergedSPDXToFile failed: %v", err)
+	}
+
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("read merged SBOM: %v", err)
+	}
+	var doc SPDXDocument
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("parse merged SBOM: %v", err)
+	}
+
+	// baseline header preserved (lineage unchanged).
+	if doc.DocumentName != "baseline-doc" || doc.DocumentNamespace != "https://example.com/baseline-namespace" {
+		t.Errorf("baseline header not preserved: name=%q namespace=%q", doc.DocumentName, doc.DocumentNamespace)
+	}
+
+	// 2 baseline + 1 addition (curl upgraded in place, not duplicated) = 3.
+	if len(doc.Packages) != 3 {
+		t.Fatalf("expected 3 packages after merge, got %d: %+v", len(doc.Packages), doc.Packages)
+	}
+
+	byName := make(map[string]SPDXPackage, len(doc.Packages))
+	for _, p := range doc.Packages {
+		byName[p.Name] = p
+	}
+
+	// Untouched baseline package keeps its full metadata.
+	if lc := byName["libc6"]; lc.VersionInfo != "2.39-0ubuntu8" || lc.Supplier != "Organization: Ubuntu" ||
+		len(lc.Checksum) != 1 || lc.Checksum[0].ChecksumValue != "baselinelibc" {
+		t.Errorf("baseline libc6 metadata not preserved: %+v", lc)
+	}
+
+	// Upgraded package reflects the overlay's version and URL, exactly once.
+	if c := byName["curl"]; c.VersionInfo != "8.5.0-2ubuntu10.10" || c.DownloadLocation != "https://x/curl.deb" {
+		t.Errorf("curl not upgraded to overlay version: %+v", c)
+	}
+
+	// Added package present.
+	if _, ok := byName["cups"]; !ok {
+		t.Errorf("added package cups missing from merged SBOM")
+	}
+}
+
+func TestWriteMergedSPDXToFile_AmbiguousMultiEntryNameNotReplaced(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// A baseline with two entries sharing the name "libc6" (a multiarch install:
+	// amd64 + i386). There is no unique entry to upgrade, so the merge must NOT
+	// arbitrarily overwrite one of them; it must append the overlay package and
+	// keep both baseline entries intact.
+	baselineDoc := SPDXDocument{
+		SPDXVersion:       SPDXVersion,
+		DataLicense:       SPDXDataLicense,
+		SPDXID:            SPDXDocumentID,
+		DocumentName:      "baseline-doc",
+		DocumentNamespace: "https://example.com/baseline-namespace",
+		Packages: []SPDXPackage{
+			{
+				SPDXID:           "SPDXRef-Package-libc6-amd64",
+				Name:             "libc6",
+				Type:             "deb",
+				VersionInfo:      "2.39-0ubuntu8",
+				DownloadLocation: "https://x/libc6_amd64.deb",
+			},
+			{
+				SPDXID:           "SPDXRef-Package-libc6-i386",
+				Name:             "libc6",
+				Type:             "deb",
+				VersionInfo:      "2.39-0ubuntu8",
+				DownloadLocation: "https://x/libc6_i386.deb",
+			},
+		},
+	}
+	baselineData, err := json.Marshal(baselineDoc)
+	if err != nil {
+		t.Fatalf("marshal baseline: %v", err)
+	}
+
+	overlayPkgs := []ospackage.PackageInfo{
+		{Name: "libc6", Type: "deb", Version: "2.40-1", URL: "https://x/libc6_new.deb"},
+	}
+
+	outFile := filepath.Join(tmpDir, "merged.json")
+	if err := WriteMergedSPDXToFile(baselineData, overlayPkgs, outFile); err != nil {
+		t.Fatalf("WriteMergedSPDXToFile failed: %v", err)
+	}
+
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("read merged SBOM: %v", err)
+	}
+	var doc SPDXDocument
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("parse merged SBOM: %v", err)
+	}
+
+	// Both baseline entries preserved + the overlay package appended = 3. If the
+	// merge had collapsed the ambiguous name it would show 2 (one silently lost).
+	if len(doc.Packages) != 3 {
+		t.Fatalf("expected 3 packages (2 baseline libc6 + 1 appended), got %d: %+v", len(doc.Packages), doc.Packages)
+	}
+
+	var libc6Count int
+	baselineLocations := map[string]bool{}
+	for _, p := range doc.Packages {
+		if p.Name == "libc6" {
+			libc6Count++
+			baselineLocations[p.DownloadLocation] = true
+		}
+	}
+	if libc6Count != 3 {
+		t.Errorf("expected 3 libc6 entries after append, got %d", libc6Count)
+	}
+	// Both original download locations must survive (neither overwritten).
+	if !baselineLocations["https://x/libc6_amd64.deb"] || !baselineLocations["https://x/libc6_i386.deb"] {
+		t.Errorf("a baseline libc6 entry was overwritten: %+v", baselineLocations)
+	}
+	if !baselineLocations["https://x/libc6_new.deb"] {
+		t.Errorf("overlay libc6 entry was not appended: %+v", baselineLocations)
+	}
+}
+
+func TestWriteMergedSPDXToFile_RejectsMalformedBaseline(t *testing.T) {
+	tmpDir := t.TempDir()
+	outFile := filepath.Join(tmpDir, "merged.json")
+
+	err := WriteMergedSPDXToFile([]byte("not json"), nil, outFile)
+	if err == nil {
+		t.Fatalf("expected error for malformed baseline SBOM")
+	}
+	if _, statErr := os.Stat(outFile); statErr == nil {
+		t.Errorf("no output file should be written when the baseline is unparseable")
+	}
+}
+
 func TestCopySBOMToChroot_Success(t *testing.T) {
 	// Create temporary chroot directory
 	chrootDir := t.TempDir()
