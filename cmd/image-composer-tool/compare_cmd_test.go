@@ -309,8 +309,9 @@ func TestCompareCommand_SPDXMode(t *testing.T) {
 		if got.Equal {
 			t.Fatalf("expected SPDX compare to be different")
 		}
-		if len(got.AddedPackages) == 0 || len(got.RemovedPackages) == 0 {
-			t.Fatalf("expected added/removed package entries, got %+v", got)
+		// A same-name version bump is classified as one upgrade, not add + remove.
+		if len(got.UpgradedPackages) == 0 {
+			t.Fatalf("expected an upgraded package entry, got %+v", got)
 		}
 	})
 
@@ -377,9 +378,16 @@ func TestCompareCommand_SPDXMode_ExtractsFromImages(t *testing.T) {
 	if got.Equal {
 		t.Fatalf("expected the two images' SBOMs to differ, got equal")
 	}
-	// curl 8.5.0 -> 8.6.0 is one removed + one added (name+version keyed).
-	if len(got.AddedPackages) == 0 || len(got.RemovedPackages) == 0 {
-		t.Fatalf("expected added/removed entries from the version bump, got %+v", got)
+	// curl 8.5.0 -> 8.6.0 is the same package name with a differing version, so it
+	// is reported as a single upgrade rather than an unrelated add + remove.
+	if len(got.UpgradedPackages) != 1 {
+		t.Fatalf("expected one upgraded package from the version bump, got %+v", got)
+	}
+	if want := "curl: 8.5.0 -> 8.6.0"; got.UpgradedPackages[0] != want {
+		t.Errorf("upgrade line = %q, want %q", got.UpgradedPackages[0], want)
+	}
+	if len(got.AddedPackages) != 0 || len(got.RemovedPackages) != 0 {
+		t.Errorf("expected no add/remove entries, got added=%v removed=%v", got.AddedPackages, got.RemovedPackages)
 	}
 }
 

@@ -357,6 +357,12 @@ type SPDXCompareResult struct {
 	ToPackageCount    int      `json:"toPackageCount,omitempty" yaml:"toPackageCount,omitempty"`
 	AddedPackages     []string `json:"addedPackages,omitempty" yaml:"addedPackages,omitempty"`
 	RemovedPackages   []string `json:"removedPackages,omitempty" yaml:"removedPackages,omitempty"`
+	// UpgradedPackages are packages present in both images under the same name but
+	// with a differing version/download location, formatted "name: fromVer -> toVer".
+	// Version-keyed diffing would otherwise report each such package as one removed
+	// and one added entry; classifying it as a single change keeps an upgrade (the
+	// common overlay case) from looking like a deletion.
+	UpgradedPackages []string `json:"upgradedPackages,omitempty" yaml:"upgradedPackages,omitempty"`
 }
 
 // CompareSPDXFiles compares two SPDX JSON files using canonicalized package content.
@@ -390,7 +396,7 @@ func CompareSPDXData(fromPath string, fromData []byte, toPath string, toData []b
 		return nil, fmt.Errorf("parse to SPDX file: %w", err)
 	}
 
-	added, removed := diffSPDXPackages(fromDoc.Packages, toDoc.Packages)
+	added, removed, upgraded := diffSPDXPackages(fromDoc.Packages, toDoc.Packages)
 
 	result := &SPDXCompareResult{
 		FromPath:          fromPath,
@@ -403,9 +409,11 @@ func CompareSPDXData(fromPath string, fromData []byte, toPath string, toData []b
 		ToPackageCount:    toCount,
 		AddedPackages:     added,
 		RemovedPackages:   removed,
+		UpgradedPackages:  upgraded,
 	}
 
-	result.Equal = result.FromCanonicalHash == result.ToCanonicalHash && len(added) == 0 && len(removed) == 0
+	result.Equal = result.FromCanonicalHash == result.ToCanonicalHash &&
+		len(added) == 0 && len(removed) == 0 && len(upgraded) == 0
 
 	return result, nil
 }
@@ -451,37 +459,85 @@ func parseAndCanonicalizeSPDX(spdxData []byte) (spdxComparableDoc, string, int, 
 	return spdxDoc, sha256Hex(canonicalJSON), len(spdxDoc.Packages), nil
 }
 
-func diffSPDXPackages(fromPkgs, toPkgs []spdxComparablePackage) ([]string, []string) {
-	fromSet := make(map[string]struct{}, len(fromPkgs))
-	toSet := make(map[string]struct{}, len(toPkgs))
+// diffSPDXPackages classifies the difference between two package sets into
+// added, removed, and upgraded. Packages are matched on the full identity key
+// (name|version|downloadLocation): a key in only one set is a candidate add or
+// remove. Candidate adds and removes are then grouped by package name, and a
+// name that has exactly ONE candidate add and exactly ONE candidate remove is
+// reconciled into a single upgrade ("name: fromVer -> toVer") — so a version
+// bump (the common overlay case) is not reported as an unrelated deletion plus
+// addition.
+//
+// The 1:1 restriction is deliberate: a name may legitimately carry more than
+// one entry (e.g. multiarch installs like libc6:amd64 + libc6:i386, or several
+// download locations for one name). In those N:M cases there is no unambiguous
+// from->to pairing, so the entries stay as genuine adds and removes rather than
+// being collapsed into a fabricated upgrade line (or silently dropped, which a
+// name-keyed map would do).
+func diffSPDXPackages(fromPkgs, toPkgs []spdxComparablePackage) (added, removed, upgraded []string) {
+	fromByKey := make(map[string]spdxComparablePackage, len(fromPkgs))
+	toByKey := make(map[string]spdxComparablePackage, len(toPkgs))
 
 	for _, pkg := range fromPkgs {
-		fromSet[spdxPackageKey(pkg)] = struct{}{}
+		fromByKey[spdxPackageKey(pkg)] = pkg
 	}
-
 	for _, pkg := range toPkgs {
-		toSet[spdxPackageKey(pkg)] = struct{}{}
+		toByKey[spdxPackageKey(pkg)] = pkg
 	}
 
-	var added []string
-	var removed []string
+	// Candidate adds/removes: keys present on exactly one side, grouped by
+	// package name (as slices) so a clean 1:1 pair can be reconciled into an
+	// upgrade below while N:M groups are left intact.
+	addedByName := make(map[string][]spdxComparablePackage)
+	removedByName := make(map[string][]spdxComparablePackage)
 
-	for key := range toSet {
-		if _, exists := fromSet[key]; !exists {
-			added = append(added, key)
+	for key, pkg := range toByKey {
+		if _, exists := fromByKey[key]; !exists {
+			addedByName[pkg.Name] = append(addedByName[pkg.Name], pkg)
+		}
+	}
+	for key, pkg := range fromByKey {
+		if _, exists := toByKey[key]; !exists {
+			removedByName[pkg.Name] = append(removedByName[pkg.Name], pkg)
 		}
 	}
 
-	for key := range fromSet {
-		if _, exists := toSet[key]; !exists {
-			removed = append(removed, key)
+	for name, addPkgs := range addedByName {
+		removePkgs := removedByName[name]
+		// Only a clean 1:1 (one candidate add, one candidate remove for this
+		// name) is an unambiguous upgrade. Anything else stays as adds/removes.
+		if len(addPkgs) == 1 && len(removePkgs) == 1 {
+			upgraded = append(upgraded, fmt.Sprintf("%s: %s -> %s",
+				name, versionOrUnknown(removePkgs[0].VersionInfo), versionOrUnknown(addPkgs[0].VersionInfo)))
+			delete(removedByName, name)
+			continue
+		}
+		for _, pkg := range addPkgs {
+			added = append(added, spdxPackageKey(pkg))
+		}
+	}
+
+	for _, removePkgs := range removedByName {
+		for _, pkg := range removePkgs {
+			removed = append(removed, spdxPackageKey(pkg))
 		}
 	}
 
 	sort.Strings(added)
 	sort.Strings(removed)
+	sort.Strings(upgraded)
 
-	return added, removed
+	return added, removed, upgraded
+}
+
+// versionOrUnknown renders an empty SPDX versionInfo as a stable placeholder so
+// an upgrade line never reads "name:  -> x" when a baseline SBOM omitted the
+// version.
+func versionOrUnknown(version string) string {
+	if strings.TrimSpace(version) == "" {
+		return "unknown"
+	}
+	return version
 }
 
 func spdxPackageKey(pkg spdxComparablePackage) string {
