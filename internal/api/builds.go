@@ -6,6 +6,7 @@ package api
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -130,15 +131,21 @@ func (s *Server) handleStartBuild(w http.ResponseWriter, r *http.Request) {
 
 	id := uuid.NewString()
 	workDir := filepath.Join(s.cfg.WorkDir, "builds", id)
-	if err := os.MkdirAll(workDir, 0o755); err != nil {
+	// 0700: build logs and artifact metadata may be sensitive; keep them private.
+	if err := os.MkdirAll(workDir, 0o700); err != nil {
 		writeError(w, http.StatusInternalServerError, "WORKDIR", "cannot create build work directory")
 		return
 	}
 
-	// Resolve the template path to build.
+	// Resolve the template path to build. Client errors (bad input, no match)
+	// return 400; server errors (e.g. writing the inline template) return 500.
 	templatePath, templateName, err := s.resolveBuildTemplate(&req, workDir)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "NO_MATCH", err.Error())
+		if errors.Is(err, errBadBuildRequest) {
+			writeError(w, http.StatusBadRequest, "NO_MATCH", err.Error())
+		} else {
+			writeError(w, http.StatusInternalServerError, "TEMPLATE_RESOLVE", err.Error())
+		}
 		return
 	}
 
@@ -160,29 +167,47 @@ func (s *Server) handleStartBuild(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// errBadBuildRequest marks resolution failures caused by client input (bad
+// request shape or an unmatched combination) so the handler can return 400;
+// other errors are treated as server-side (500).
+var errBadBuildRequest = errors.New("bad build request")
+
 // resolveBuildTemplate returns the on-disk template path to build. For {compose}
 // it looks up the manifest; for {yaml} it writes the body to the work dir.
 func (s *Server) resolveBuildTemplate(req *buildRequest, workDir string) (path, name string, err error) {
 	if req.YAML != "" {
 		p := filepath.Join(workDir, "template.yml")
-		if werr := os.WriteFile(p, []byte(req.YAML), 0o644); werr != nil {
-			return "", "", fmt.Errorf("writing template: %w", werr)
+		if werr := os.WriteFile(p, []byte(req.YAML), 0o600); werr != nil {
+			return "", "", fmt.Errorf("writing template: %w", werr) // server-side
 		}
 		return p, "template.yml", nil
 	}
 	if req.Compose == nil {
-		return "", "", fmt.Errorf("provide either compose or yaml")
+		return "", "", fmt.Errorf("%w: provide either compose or yaml", errBadBuildRequest)
 	}
 	c := req.Compose
 	tmpl := s.manifest.findTemplate(c.Vertical, c.SKU, c.Platform, c.OS, c.ImageType)
 	if tmpl == "" {
-		return "", "", fmt.Errorf("no template maps to the selected combination")
+		return "", "", fmt.Errorf("%w: no template maps to the selected combination", errBadBuildRequest)
 	}
-	return filepath.Join(s.cfg.TemplatesDir, tmpl), tmpl, nil
+	full, perr := safeTemplatePath(s.cfg.TemplatesDir, tmpl)
+	if perr != nil {
+		return "", "", fmt.Errorf("resolving template path: %w", perr) // server-side (bad manifest)
+	}
+	return full, tmpl, nil
 }
 
 // buildCommand assembles the argv for an ICT build, prefixing sudo when
 // configured (ICT builds require root for chroot/mount operations).
+//
+// This intentionally uses os/exec directly rather than internal/utils/shell:
+// the shell package runs commands synchronously via `bash -c` and returns the
+// captured output as a string, whereas the API needs to hold the *exec.Cmd to
+// stream stdout line-by-line to SSE subscribers and (in the cancellation story)
+// signal the process group. The command surface here is fixed and minimal — a
+// single hard-coded `image-composer-tool build` invocation with no user-derived
+// arguments on the command line (selections are only manifest lookup keys) — so
+// the allowlist the shell package provides adds no safety here.
 func (s *Server) buildCommand(templatePath, workDir string) (name string, args []string) {
 	ictArgs := []string{"build", templatePath, "--work-dir", workDir}
 	if s.cfg.Sudo {
@@ -222,10 +247,21 @@ func (s *Server) runBuild(b *build, templatePath string) {
 	for scanner.Scan() {
 		b.appendLog(scanner.Text())
 	}
+	// A scanner error (pipe read failure, or a token exceeding the buffer) means
+	// the captured log is truncated; record it so a build isn't silently marked
+	// successful with incomplete output.
+	scanErr := scanner.Err()
+	if scanErr != nil {
+		b.appendLog(fmt.Sprintf("warning: build log stream error: %v", scanErr))
+	}
 
 	if err := cmd.Wait(); err != nil {
 		log.Warnf("build %s failed: %v", b.ID, err)
 		b.finish(statusFailed, nil, err.Error())
+		return
+	}
+	if scanErr != nil {
+		b.finish(statusFailed, nil, fmt.Sprintf("log stream error: %v", scanErr))
 		return
 	}
 

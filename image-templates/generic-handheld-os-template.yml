@@ -611,7 +611,8 @@ systemConfig:
 
   users:
     - name: user
-      password: $6$xXo2NxaLDQE6xrCa$lwcawer1BMsC63xx5jHHrVSI4625We6CMv0nzmflYiXVldJC/9gXFqYoe5KTu8lBnuc6W8MxE0eGLUUt1RiJw.
+      password: ""               # Do not commit real credentials; set at deploy time
+      # password: "<HASHED_PASSWORD>"  # Uncomment and replace with a sha512 hash in real config
       groups: ["sudo", "video", "render", "audio"]
       hash_algo: sha512
 

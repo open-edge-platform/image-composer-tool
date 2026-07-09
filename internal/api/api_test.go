@@ -27,13 +27,27 @@ func testManifest() *Manifest {
 	}
 }
 
+// minimalTemplate is a schema-valid user template (image + target are the only
+// required top-level fields). LoadAndMergeTemplate validates the user template
+// and, when OS defaults can't be loaded (as in a unit-test cwd), returns it
+// as-is — so compose succeeds without the repo's config/osv tree present.
+const minimalTemplate = `image:
+  name: test-image
+  version: "1.0"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+`
+
 // newTestServer builds a Server with the test manifest and a templates dir
-// containing a dummy template file for each combination.
+// containing a schema-valid template file for each combination.
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
 	dir := t.TempDir()
 	for _, name := range []string{"robotics.yml", "retail.yml"} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte("image:\n  name: dummy\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(minimalTemplate), 0o644); err != nil {
 			t.Fatalf("writing template %s: %v", name, err)
 		}
 	}
@@ -90,6 +104,39 @@ func TestFindTemplate(t *testing.T) {
 	}
 }
 
+func TestFindTemplateAmbiguousSKU(t *testing.T) {
+	// Two combinations differ only by SKU; an omitted SKU is ambiguous and must
+	// not resolve to an order-dependent guess.
+	m := &Manifest{Combinations: []Combination{
+		{Vertical: "v", SKU: "a", Platform: "p", OS: "o", ImageType: "raw", Template: "a.yml"},
+		{Vertical: "v", SKU: "b", Platform: "p", OS: "o", ImageType: "raw", Template: "b.yml"},
+	}}
+	if got := m.findTemplate("v", "", "p", "o", "raw"); got != "" {
+		t.Errorf("ambiguous no-SKU match = %q, want empty", got)
+	}
+	// With the SKU specified it resolves unambiguously.
+	if got := m.findTemplate("v", "b", "p", "o", "raw"); got != "b.yml" {
+		t.Errorf("explicit-SKU match = %q, want b.yml", got)
+	}
+}
+
+func TestSafeTemplatePath(t *testing.T) {
+	dir := t.TempDir()
+
+	// Valid relative name resolves under dir.
+	got, err := safeTemplatePath(dir, "robotics.yml")
+	if err != nil || filepath.Dir(got) != dir {
+		t.Errorf("valid name: got %q err %v", got, err)
+	}
+
+	// Traversal and absolute paths are rejected.
+	for _, bad := range []string{"../escape.yml", "../../etc/passwd", "/etc/passwd", "", "sub/../../x"} {
+		if _, err := safeTemplatePath(dir, bad); err == nil {
+			t.Errorf("safeTemplatePath(%q) = nil error, want rejection", bad)
+		}
+	}
+}
+
 // --- read handlers ---
 
 func TestHandleGetManifest(t *testing.T) {
@@ -143,6 +190,21 @@ func TestHandleComposeErrors(t *testing.T) {
 				t.Errorf("status = %d, want %d", rr.Code, c.want)
 			}
 		})
+	}
+}
+
+func TestHandleComposeInvalidTemplate(t *testing.T) {
+	s := newTestServer(t)
+	// Overwrite a matched template with schema-invalid content so the
+	// load/merge step fails; compose must surface 422, not a misleading 200.
+	if err := os.WriteFile(filepath.Join(s.cfg.TemplatesDir, "robotics.yml"), []byte("image:\n  name: broken\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rr := httptest.NewRecorder()
+	body := `{"vertical":"robotics","sku":"amr","platform":"wcl","os":"ubuntu24","imageType":"iso"}`
+	s.handleCompose(rr, httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(body)))
+	if rr.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422 (body: %s)", rr.Code, rr.Body)
 	}
 }
 
@@ -319,17 +381,46 @@ func TestWriteJSONAndError(t *testing.T) {
 	}
 }
 
-func TestCORSPreflight(t *testing.T) {
+func TestCORSLocalhostOnly(t *testing.T) {
 	h := withMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
+
+	// Localhost origin is echoed back on a preflight.
 	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, httptest.NewRequest(http.MethodOptions, "/api/v1/manifest", nil))
+	req := httptest.NewRequest(http.MethodOptions, "/api/v1/manifest", nil)
+	req.Header.Set("Origin", "http://localhost:5173")
+	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusNoContent {
 		t.Fatalf("OPTIONS status = %d, want 204", rr.Code)
 	}
-	if rr.Header().Get("Access-Control-Allow-Origin") != "*" {
-		t.Error("missing CORS header")
+	if got := rr.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:5173" {
+		t.Errorf("ACAO = %q, want echoed localhost origin", got)
+	}
+
+	// A non-localhost origin must NOT receive a CORS allow header.
+	rr2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest(http.MethodOptions, "/api/v1/manifest", nil)
+	req2.Header.Set("Origin", "https://evil.example.com")
+	h.ServeHTTP(rr2, req2)
+	if got := rr2.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Errorf("ACAO = %q, want empty for non-localhost origin", got)
+	}
+}
+
+func TestIsLocalhostOrigin(t *testing.T) {
+	cases := map[string]bool{
+		"http://localhost:5173":    true,
+		"http://127.0.0.1:8080":    true,
+		"http://[::1]:3000":        true,
+		"https://evil.example.com": false,
+		"":                         false,
+		"::not a url::":            false,
+	}
+	for origin, want := range cases {
+		if got := isLocalhostOrigin(origin); got != want {
+			t.Errorf("isLocalhostOrigin(%q) = %v, want %v", origin, got, want)
+		}
 	}
 }
 

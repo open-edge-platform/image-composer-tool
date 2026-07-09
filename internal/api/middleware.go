@@ -6,6 +6,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 )
@@ -15,18 +16,39 @@ func withMiddleware(next http.Handler) http.Handler {
 	return recoverPanic(logRequests(cors(next)))
 }
 
-// cors permits the Vite dev server (and same-origin prod) to call the API.
+// cors permits cross-origin calls only from localhost origins (e.g. the Vite dev
+// server). This API can trigger privileged builds, so a wildcard origin would let
+// any web page issue requests against a locally running server; instead we echo
+// the request Origin only when it is a loopback host.
 func cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		origin := r.Header.Get("Origin")
+		if isLocalhostOrigin(origin) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isLocalhostOrigin reports whether an Origin header refers to a loopback host
+// (localhost / 127.0.0.1 / [::1]), ignoring scheme and port.
+func isLocalhostOrigin(origin string) bool {
+	if origin == "" {
+		return false
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
 func logRequests(next http.Handler) http.Handler {

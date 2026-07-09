@@ -46,7 +46,7 @@ skus:
   - id: robotics-jazzy-ubuntu24
     displayName: robotics-jazzy-ubuntu24
   - id: generic-handheld-blueprint
-    displayName: Generic Handheld Blue Print
+    displayName: Generic Handheld Blueprint
 
 platforms:
   - id: arl

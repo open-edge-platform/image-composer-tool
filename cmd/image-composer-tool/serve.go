@@ -9,6 +9,7 @@ import (
 )
 
 var (
+	serveHost      string
 	servePort      string
 	serveTemplates string
 	serveBinary    string
@@ -29,6 +30,9 @@ image builds via the image-composer-tool binary with streaming build logs.`,
 		RunE: executeServe,
 	}
 
+	serveCmd.Flags().StringVar(&serveHost, "host", "127.0.0.1",
+		"Address to bind. Defaults to localhost only; set 0.0.0.0 to expose on all "+
+			"interfaces (not recommended — this API can trigger privileged builds).")
 	serveCmd.Flags().StringVarP(&servePort, "port", "p", "8080", "Port to listen on")
 	serveCmd.Flags().StringVar(&serveTemplates, "templates-dir", "image-templates", "Directory of pre-authored templates")
 	serveCmd.Flags().StringVar(&serveBinary, "ict-binary", "./image-composer-tool", "Path to the image-composer-tool binary used for builds")
@@ -47,7 +51,7 @@ image builds via the image-composer-tool binary with streaming build logs.`,
 
 func executeServe(cmd *cobra.Command, args []string) error {
 	srv, err := api.New(api.Config{
-		Addr:         ":" + servePort,
+		Addr:         serveHost + ":" + servePort,
 		TemplatesDir: serveTemplates,
 		ICTBinary:    serveBinary,
 		WorkDir:      serveWorkDir,

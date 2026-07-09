@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
-	"path/filepath"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 )
@@ -64,23 +63,33 @@ func (s *Server) handleCompose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	path := filepath.Join(s.cfg.TemplatesDir, tmpl)
+	path, err := safeTemplatePath(s.cfg.TemplatesDir, tmpl)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "TEMPLATE_INVALID", "manifest template path is invalid")
+		return
+	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "TEMPLATE_MISSING", "matched template file not found on disk")
 		return
 	}
 
-	// Parse+merge for an accurate summary (reuses ICT's own logic).
+	// Parse+merge for an accurate summary (reuses ICT's own logic). A merge
+	// failure means the matched template is invalid — surface it now rather than
+	// returning a misleading success that fails at build time.
+	merged, err := config.LoadAndMergeTemplate(path)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "TEMPLATE_INVALID",
+			"matched template failed to load/validate: "+err.Error())
+		return
+	}
 	summary := composeSummary{
 		Vertical: req.Vertical, SKU: req.SKU, Platform: req.Platform,
 		OS: req.OS, ImageType: req.ImageType,
-	}
-	if merged, err := config.LoadAndMergeTemplate(path); err == nil {
-		summary.ImageName = merged.Image.Name
-		summary.PackageCount = len(merged.SystemConfig.Packages)
-		summary.DiskSize = merged.Disk.Size
-		summary.PartitionCount = len(merged.Disk.Partitions)
+		ImageName:      merged.Image.Name,
+		PackageCount:   len(merged.SystemConfig.Packages),
+		DiskSize:       merged.Disk.Size,
+		PartitionCount: len(merged.Disk.Partitions),
 	}
 
 	writeJSON(w, http.StatusOK, composeResponse{
