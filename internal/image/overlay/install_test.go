@@ -302,6 +302,54 @@ func TestInstallOverlayPackages_InstallErrorTearsDown(t *testing.T) {
 	}
 }
 
+func TestInstallOverlayPackages_DiskFullAddsSizeHint(t *testing.T) {
+	dir := writeArtifacts(t, t.TempDir(), "curl_8.deb")
+	plan := &ResolutionPlan{
+		DownloadDir: dir,
+		ToInstall:   []ResolvedPackage{{Name: "curl", URL: "https://r/curl_8.deb"}},
+	}
+	// Mirror how the deb backend wraps dpkg's captured ENOSPC output into the error.
+	backend := &fakeInstaller{
+		fam:        PackageManagerAPT,
+		installErr: errors.New("dpkg install of 1 artifact(s) failed: exit status 1\n  dpkg: error: No space left on device"),
+	}
+	h := &installHarness{}
+
+	var err error
+	withStubbedInstall(t, backend, h, func() {
+		_, err = InstallOverlayPackages(aptInfo(), "/mnt/root", plan, passedReport())
+	})
+	if err == nil {
+		t.Fatal("expected install error to propagate")
+	}
+	if !strings.Contains(err.Error(), "disk.size") {
+		t.Errorf("a no-space install failure must point the user at disk.size, got %v", err)
+	}
+	// The original diagnostic must still be present alongside the hint.
+	if !strings.Contains(err.Error(), "No space left on device") {
+		t.Errorf("hint must not replace the underlying diagnostic, got %v", err)
+	}
+}
+
+func TestDiskSpaceHint(t *testing.T) {
+	if got := diskSpaceHint(nil); got != "" {
+		t.Errorf("nil error must yield no hint, got %q", got)
+	}
+	if got := diskSpaceHint(errors.New("exit status 1: dpkg: dependency problems")); got != "" {
+		t.Errorf("unrelated failure must yield no hint, got %q", got)
+	}
+	// Case-insensitive match, since the exact casing varies by tool/kernel.
+	for _, msg := range []string{
+		"No space left on device",
+		"write error: no space left on device",
+	} {
+		hint := diskSpaceHint(errors.New(msg))
+		if !strings.Contains(hint, "disk.size") {
+			t.Errorf("ENOSPC error %q must yield a disk.size hint, got %q", msg, hint)
+		}
+	}
+}
+
 func TestInstallOverlayPackages_BindMountFailureRollsBackSysfs(t *testing.T) {
 	dir := writeArtifacts(t, t.TempDir(), "curl_8.deb")
 	plan := &ResolutionPlan{

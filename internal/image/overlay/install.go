@@ -144,7 +144,13 @@ func InstallOverlayPackages(info *BaselineInfo, rootMount string, plan *Resoluti
 		artifactChrootDir: chrootArtifactDir,
 		items:             items,
 	}); err != nil {
-		return nil, fmt.Errorf("overlay install failed for %d package(s) using %s: %w", len(items), info.PackageManager, err)
+		// A "no space left on device" failure here means the baseline root filled up
+		// while unpacking the added packages. Overlay mode does not auto-grow the
+		// image to fit the packages (resize is a later, grow-only step keyed purely
+		// on disk.size), so surface an actionable hint pointing at disk.size rather
+		// than leaving the user with an opaque dpkg/rpm ENOSPC diagnostic.
+		return nil, fmt.Errorf("overlay install failed for %d package(s) using %s: %w%s",
+			len(items), info.PackageManager, err, diskSpaceHint(err))
 	}
 
 	// Post-condition: every requested package must be installed in the baseline DB.
@@ -430,4 +436,25 @@ func (b *rpmInstallerBackend) verifyInstalled(chrootPath string, pkgs []Resolved
 // distinguish that expected signal from a genuine tool/DB failure.
 func isNotInstalledOutput(out string) bool {
 	return strings.Contains(out, "is not installed")
+}
+
+// diskSpaceHint returns an actionable, indented hint appended to an install error
+// when the failure was caused by the baseline root filling up, or "" otherwise.
+// The install backends fold the package manager's captured output (which carries
+// the "No space left on device" ENOSPC diagnostic) into the error they return, so
+// the hint keys off that text. Overlay mode never auto-grows the image to fit the
+// added packages — resize is a separate, grow-only step keyed on disk.size — so a
+// full baseline is a configuration problem the hint points the user at directly.
+func diskSpaceHint(installErr error) string {
+	if installErr == nil {
+		return ""
+	}
+	// ENOSPC surfaces as "No space left on device" from dpkg/rpm and the kernel;
+	// match case-insensitively since the exact casing varies by tool.
+	if !strings.Contains(strings.ToLower(installErr.Error()), "no space left on device") {
+		return ""
+	}
+	return "\n  hint: the baseline root filesystem ran out of space while installing the added " +
+		"package(s). Overlay mode does not auto-grow the image to fit new packages; set disk.size " +
+		"in the template larger than the baseline image to make room, then rebuild."
 }

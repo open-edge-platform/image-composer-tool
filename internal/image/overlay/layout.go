@@ -120,43 +120,86 @@ func NewInspector(workDir string) *Inspector {
 // order on success, failure, or panic.
 //
 // The ESP is mounted read-only so overlay stages cannot mutate the bootloader.
+//
+// It is the closure-scoped form used by single-shot callers and tests; the
+// explicit-lifecycle Builder uses MountLayout directly so the mounts can span
+// the provider's separate preprocess/build/postprocess phases.
 func (insp *Inspector) WithMountedLayout(loopDevPath string, fn func(*Layout) error) (err error) {
 	if fn == nil {
 		return fmt.Errorf("WithMountedLayout: fn callback must not be nil")
 	}
 
-	table, err := detectPartitionTable(loopDevPath)
+	layout, teardown, err := insp.MountLayout(loopDevPath)
 	if err != nil {
 		return err
+	}
+	// Teardown runs on every return path, including a panic inside fn. Its error
+	// is surfaced only when fn itself did not already fail.
+	defer func() {
+		if terr := teardown(); terr != nil && err == nil {
+			err = terr
+		}
+	}()
+
+	// Wrap the callback error with method-level context so a callback failure is
+	// distinguishable from the mount/teardown errors surfaced above (matching the
+	// pre-refactor behavior). The named return lets the deferred teardown observe
+	// this error and avoid masking it.
+	if ferr := fn(layout); ferr != nil {
+		return fmt.Errorf("overlay layout callback failed: %w", ferr)
+	}
+	return nil
+}
+
+// MountLayout detects and mounts the baseline layout exactly like WithMountedLayout
+// but returns the mounted Layout together with a teardown closure instead of
+// scoping the mounts to a callback. The caller owns the teardown and MUST invoke
+// it exactly once (typically via defer) on every return path; it is idempotent
+// and unmounts in reverse order, returning the first unmount error.
+//
+// On error the returned teardown is nil and any partial mounts have already been
+// rolled back, so the caller has nothing to clean up. This is the seam the Builder
+// uses to keep the baseline mounted across the provider's phase boundaries.
+func (insp *Inspector) MountLayout(loopDevPath string) (*Layout, func() error, error) {
+	table, err := detectPartitionTable(loopDevPath)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	parts, err := probePartitions(loopDevPath)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 
 	layout, err := analyzeLayout(table, parts)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	layout.MountBase = insp.mountBase
 	layout.RootMount = filepath.Join(insp.mountBase, "root")
 
-	// defer-based teardown: unmount in reverse order on any return path,
-	// including the error returns below and a panic inside fn.
+	// mounted tracks the mount points established so far, so teardown can unmount
+	// them in reverse order. It is also used to roll back a partial mount when a
+	// later mount in this function fails.
 	var mounted []string
-	defer func() {
+	teardown := func() error {
+		var firstErr error
 		for i := len(mounted) - 1; i >= 0; i-- {
 			if uerr := mount.UmountPath(mounted[i]); uerr != nil {
 				log.Errorf("Failed to unmount %s during overlay cleanup: %v", mounted[i], uerr)
+				if firstErr == nil {
+					firstErr = fmt.Errorf("failed to unmount %s: %w", mounted[i], uerr)
+				}
 			} else {
 				log.Debugf("Unmounted %s", mounted[i])
 			}
 		}
-	}()
+		mounted = nil // idempotent: a second call unmounts nothing.
+		return firstErr
+	}
 
-	if err = mount.MountPath(layout.RootDevice, layout.RootMount, "-t "+layout.RootFSType); err != nil {
-		return fmt.Errorf("failed to mount root filesystem %s (%s) at %s: %w",
+	if err := mount.MountPath(layout.RootDevice, layout.RootMount, "-t "+layout.RootFSType); err != nil {
+		return nil, nil, fmt.Errorf("failed to mount root filesystem %s (%s) at %s: %w",
 			layout.RootDevice, layout.RootFSType, layout.RootMount, err)
 	}
 	mounted = append(mounted, layout.RootMount)
@@ -166,17 +209,16 @@ func (insp *Inspector) WithMountedLayout(loopDevPath string, fn func(*Layout) er
 		// Nest the ESP at the conventional /boot/efi under the mounted root so
 		// chroot operations see it where the baseline expects it.
 		layout.ESPMount = filepath.Join(layout.RootMount, "boot", "efi")
-		if err = mount.MountPath(layout.ESPDevice, layout.ESPMount, "-o ro"); err != nil {
-			return fmt.Errorf("failed to mount ESP %s at %s: %w", layout.ESPDevice, layout.ESPMount, err)
+		if err := mount.MountPath(layout.ESPDevice, layout.ESPMount, "-o ro"); err != nil {
+			// Roll back the root mount before failing so no partial state leaks.
+			_ = teardown()
+			return nil, nil, fmt.Errorf("failed to mount ESP %s at %s: %w", layout.ESPDevice, layout.ESPMount, err)
 		}
 		mounted = append(mounted, layout.ESPMount)
 		log.Infof("Mounted ESP %s read-only at %s", layout.ESPDevice, layout.ESPMount)
 	}
 
-	if err = fn(layout); err != nil {
-		return fmt.Errorf("overlay layout callback failed: %w", err)
-	}
-	return nil
+	return layout, teardown, nil
 }
 
 // detectPartitionTable returns the partition-table type ("gpt" or "dos") of the
