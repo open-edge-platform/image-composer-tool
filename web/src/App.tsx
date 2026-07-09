@@ -1,18 +1,31 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { api } from './api/client'
 import { useStore } from './store'
 import { BasicPage } from './components/BasicPage'
 
+type LoadState = 'loading' | 'ready' | 'error'
+
 export default function App() {
   const setManifest = useStore((s) => s.setManifest)
+  const [state, setState] = useState<LoadState>('loading')
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
+  const load = useCallback(() => {
+    setState('loading')
+    setError(null)
     api
       .getManifest()
-      .then(setManifest)
-      .catch((e) => setError((e as Error).message))
+      .then((m) => {
+        setManifest(m)
+        setState('ready')
+      })
+      .catch((e) => {
+        setError((e as Error).message)
+        setState('error')
+      })
   }, [setManifest])
+
+  useEffect(load, [load])
 
   return (
     <div className="min-h-full">
@@ -21,13 +34,24 @@ export default function App() {
         <span className="rounded bg-[#0071c5] px-3 py-1 text-sm">Basic</span>
       </nav>
 
-      {error ? (
-        <div className="m-6 rounded bg-red-50 p-4 text-sm text-red-700">
-          Failed to load manifest: {error}. Is the API server running on :8080?
-        </div>
-      ) : (
-        <BasicPage />
+      {state === 'loading' && (
+        <div className="m-6 text-sm text-slate-500">Loading configuration…</div>
       )}
+
+      {state === 'error' && (
+        <div className="m-6 rounded bg-red-50 p-4 text-sm text-red-700">
+          <p>Failed to load configuration: {error}</p>
+          <p className="mt-1 text-red-600">Is the API server running on :8080?</p>
+          <button
+            className="mt-3 rounded border border-red-300 px-3 py-1 text-xs font-medium hover:bg-red-100"
+            onClick={load}
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {state === 'ready' && <BasicPage />}
     </div>
   )
 }
