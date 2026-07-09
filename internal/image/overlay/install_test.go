@@ -758,7 +758,7 @@ func TestInstallCommandsTerminateOptions(t *testing.T) {
 	}{
 		{
 			name: "dpkg install",
-			want: "dpkg -i -- ",
+			want: "dpkg -i --auto-deconfigure -- ",
 			run:  func(shell.Executor) { _ = (&debInstallerBackend{}).install(req) },
 		},
 		{
@@ -795,5 +795,35 @@ func TestInstallCommandsTerminateOptions(t *testing.T) {
 				t.Errorf("operand not protected by leading %q: %q", "--", cap.cmds[0])
 			}
 		})
+	}
+}
+
+// TestDebInstallUsesAutoDeconfigure guards that the deb install passes
+// --auto-deconfigure. Without it, dpkg unpacks artifacts in command-line order and
+// aborts ("deconfiguration is not permitted") when a to-be-unpacked artifact
+// transiently Breaks an installed package that is ALSO being upgraded later in the
+// same batch (the vim-runtime Breaks vim-tiny (<< newver) case): the old version is
+// still present at unpack time. The break is self-resolving within the batch, so
+// the preflight gate permits it; the flag lets dpkg complete it by temporarily
+// deconfiguring and then reconfiguring the affected package.
+func TestDebInstallUsesAutoDeconfigure(t *testing.T) {
+	req := installRequest{
+		chrootPath:        "/mnt/root",
+		artifactChrootDir: chrootArtifactDir,
+		items: []plannedInstall{
+			{pkg: ResolvedPackage{Name: "vim-runtime"}, artifact: "vim-runtime_9.deb"},
+			{pkg: ResolvedPackage{Name: "vim-tiny"}, artifact: "vim-tiny_9.deb"},
+		},
+	}
+	cap := &capturingExecutor{}
+	stubShell(t, cap)
+	if err := (&debInstallerBackend{}).install(req); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if len(cap.cmds) != 1 {
+		t.Fatalf("expected exactly one command, got %v", cap.cmds)
+	}
+	if !strings.Contains(cap.cmds[0], "--auto-deconfigure") {
+		t.Errorf("dpkg install command missing --auto-deconfigure: %q", cap.cmds[0])
 	}
 }

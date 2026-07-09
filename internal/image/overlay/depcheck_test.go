@@ -267,6 +267,7 @@ func TestClassifyConflicts(t *testing.T) {
 
 	tests := []struct {
 		name         string
+		resolved     []ResolvedPackage // the overlay's to-install set (post-install state)
 		conflicts    []ArtifactConflict
 		wantCount    int
 		wantTarget   string
@@ -296,10 +297,20 @@ func TestClassifyConflicts(t *testing.T) {
 			conflicts: []ArtifactConflict{{Package: "newpkg", Conflicts: DependencyAlternative{Name: "libbar", Constraint: &VersionConstraint{"<<", "2.0"}}}},
 			wantCount: 0,
 		},
+		{
+			// The overlay upgrades the target past the break range in the same batch,
+			// so the versioned break no longer covers the post-install version and must
+			// not be flagged (mirrors vim-runtime "Breaks: vim-tiny (<< X)" while the
+			// overlay upgrades vim-tiny to X).
+			name:      "versioned break resolved by a same-batch upgrade is skipped",
+			resolved:  []ResolvedPackage{{Name: "libfoo", Version: "2.0"}},
+			conflicts: []ArtifactConflict{{Package: "newpkg", Conflicts: DependencyAlternative{Name: "libfoo", Constraint: &VersionConstraint{"<<", "2.0"}}}},
+			wantCount: 0,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			actions := classifyConflicts(PackageManagerAPT, sliceA, tt.conflicts)
+			actions := classifyConflicts(PackageManagerAPT, sliceA, tt.resolved, tt.conflicts)
 			if len(actions) != tt.wantCount {
 				t.Fatalf("got %d actions, want %d: %+v", len(actions), tt.wantCount, actions)
 			}

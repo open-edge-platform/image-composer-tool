@@ -206,7 +206,7 @@ var simulateOverlayInstall = func(info *BaselineInfo, baseline []BaselinePackage
 	if err != nil {
 		return nil, err
 	}
-	return classifyConflicts(info.PackageManager, baselineVersionIndex(baseline), conflicts), nil
+	return classifyConflicts(info.PackageManager, baselineVersionIndex(baseline), plan.ToInstall, conflicts), nil
 }
 
 // Preflight runs the two-slice dependency/conflict preflight for an overlay
@@ -429,15 +429,7 @@ func classifyUnsatisfiedDeps(family PackageManager, sliceA map[string]BaselinePa
 	// Post-install version index: the baseline overlaid with what to-install adds.
 	// A dependency is checked against the state that will exist after install, so a
 	// pin satisfied by a co-installed to-install package is correctly not flagged.
-	postInstall := make(map[string]string, len(sliceA)+len(resolved))
-	for name, bp := range sliceA {
-		postInstall[name] = bp.Version
-	}
-	for _, rp := range resolved {
-		if name := strings.TrimSpace(rp.Name); name != "" {
-			postInstall[name] = rp.Version
-		}
-	}
+	postInstall := postInstallVersionIndex(sliceA, resolved)
 
 	var actions []PlannedAction
 	for _, dep := range deps {
@@ -499,11 +491,20 @@ func classifyObsoletions(family PackageManager, sliceA map[string]BaselinePackag
 // (rpm) on a present baseline package into an ActionConflict, so conflictPolicy
 // gates a conflict that the package manager would otherwise only reveal by
 // aborting at unpack time. A conflict whose target is absent from the baseline is
-// a no-op (nothing to clash with) and is skipped; a versioned conflict only fires
-// when the baseline version falls within the declared range, and an uncomparable
-// version is treated conservatively as a potential conflict (better to gate than
-// to miss it).
-func classifyConflicts(family PackageManager, sliceA map[string]BaselinePackage, conflicts []ArtifactConflict) []PlannedAction {
+// a no-op (nothing to clash with) and is skipped.
+//
+// A versioned conflict is evaluated against the POST-INSTALL version of the
+// target, not the baseline version: a Breaks:/Conflicts: bound to a version range
+// (e.g. vim-runtime's "Breaks: vim-tiny (<< 9.1.0016-1ubuntu7.17)") is a lockstep
+// upgrade marker, and when the overlay upgrades that target to a satisfying
+// version in the SAME batch the range no longer covers it, so there is no real
+// conflict — dpkg's --auto-deconfigure resolves the transient break at unpack
+// time. Checking the baseline version alone would spuriously block that upgrade.
+// An uncomparable version is treated conservatively as a potential conflict
+// (better to gate than to miss it).
+func classifyConflicts(family PackageManager, sliceA map[string]BaselinePackage, resolved []ResolvedPackage, conflicts []ArtifactConflict) []PlannedAction {
+	postInstall := postInstallVersionIndex(sliceA, resolved)
+
 	var actions []PlannedAction
 	for _, c := range conflicts {
 		target := strings.TrimSpace(c.Conflicts.Name)
@@ -514,10 +515,12 @@ func classifyConflicts(family PackageManager, sliceA map[string]BaselinePackage,
 		if !present {
 			continue // nothing installed under this name to conflict with
 		}
-		// A versioned conflict only clashes when the baseline copy's version
-		// satisfies the constraint; a version outside the range is not a conflict.
+		// A versioned conflict only clashes when the version that will be present
+		// after install falls within the declared range; a version outside it — most
+		// commonly because the overlay upgrades the target in the same batch — is not
+		// a conflict.
 		if vc := c.Conflicts.Constraint; vc != nil {
-			if cmp, err := comparePkgVersions(family, base.Version, vc.Ver); err == nil && !constraintSatisfied(vc.Op, cmp) {
+			if cmp, err := comparePkgVersions(family, postInstall[target], vc.Ver); err == nil && !constraintSatisfied(vc.Op, cmp) {
 				continue
 			}
 		}
@@ -531,6 +534,23 @@ func classifyConflicts(family PackageManager, sliceA map[string]BaselinePackage,
 		})
 	}
 	return actions
+}
+
+// postInstallVersionIndex builds a name→version map of the state that will exist
+// after the overlay install: the baseline overlaid with the versions the overlay
+// will install (which supersede the baseline copy for any upgraded package). It
+// backs the post-install checks in classifyConflicts and classifyUnsatisfiedDeps.
+func postInstallVersionIndex(sliceA map[string]BaselinePackage, resolved []ResolvedPackage) map[string]string {
+	postInstall := make(map[string]string, len(sliceA)+len(resolved))
+	for name, bp := range sliceA {
+		postInstall[name] = bp.Version
+	}
+	for _, rp := range resolved {
+		if name := strings.TrimSpace(rp.Name); name != "" {
+			postInstall[name] = rp.Version
+		}
+	}
+	return postInstall
 }
 
 // unsatisfiedVersionedAlternative reports whether a dependency edge is blocked by

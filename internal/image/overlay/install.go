@@ -347,10 +347,23 @@ func (b *debInstallerBackend) install(req installRequest) error {
 
 	// Non-interactive install of the local artifacts. dpkg -i takes the prepared
 	// files directly (no network, no repository resolution), keeping the install
-	// strictly to the approved, pre-downloaded set. "--" terminates option parsing
-	// so a URL-derived artifact basename beginning with '-' is treated as a file
-	// path, not a dpkg option (shell-quoting stops word-splitting, not option parsing).
-	cmd := "dpkg -i -- " + strings.Join(paths, " ")
+	// strictly to the approved, pre-downloaded set.
+	//
+	// --auto-deconfigure lets dpkg temporarily deconfigure an installed package that
+	// a to-be-unpacked artifact transiently Breaks, then reconfigure it once the
+	// batch completes — mirroring what apt does. dpkg unpacks the artifacts in
+	// command-line order, so when an upgraded package (e.g. vim-runtime) declares
+	// `Breaks: <other> (<< newver)` against a baseline package that is ALSO being
+	// upgraded to newver later in the same batch (e.g. vim-tiny), the old version is
+	// still installed at unpack time and dpkg would otherwise abort with
+	// "deconfiguration is not permitted". The break is self-resolving within the
+	// batch (the satisfying version is in the same set), which is why the preflight
+	// conflict gate correctly permits it; this flag lets dpkg carry it out.
+	//
+	// "--" terminates option parsing so a URL-derived artifact basename beginning
+	// with '-' is treated as a file path, not a dpkg option (shell-quoting stops
+	// word-splitting, not option parsing).
+	cmd := "dpkg -i --auto-deconfigure -- " + strings.Join(paths, " ")
 	envVars := []string{
 		"DEBIAN_FRONTEND=noninteractive",
 		"DEBCONF_NONINTERACTIVE_SEEN=true",
