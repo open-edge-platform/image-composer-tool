@@ -40,7 +40,7 @@ func New(cfg Config) (*Server, error) {
 		cfg.TemplatesDir = "image-templates"
 	}
 	if cfg.ICTBinary == "" {
-		cfg.ICTBinary = "./image-composer-tool"
+		cfg.ICTBinary = "./build/image-composer-tool"
 	}
 	if cfg.WorkDir == "" {
 		cfg.WorkDir = "webui-workspace"

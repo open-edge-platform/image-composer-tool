@@ -37,7 +37,8 @@ image builds via the image-composer-tool binary with streaming build logs.`,
 			"interfaces (not recommended — this API can trigger privileged builds).")
 	serveCmd.Flags().StringVarP(&servePort, "port", "p", "8080", "Port to listen on")
 	serveCmd.Flags().StringVar(&serveTemplates, "templates-dir", "image-templates", "Directory of pre-authored templates")
-	serveCmd.Flags().StringVar(&serveBinary, "ict-binary", "./image-composer-tool", "Path to the image-composer-tool binary used for builds")
+	serveCmd.Flags().StringVar(&serveBinary, "ict-binary", "./build/image-composer-tool",
+		"Path to the image-composer-tool binary used for builds (earthly +build outputs to ./build/)")
 	serveCmd.Flags().StringVar(&serveWorkDir, "work-dir", "webui-workspace", "Base directory for per-build work/output directories")
 	serveCmd.Flags().BoolVar(&serveSudo, "sudo", false,
 		"Run builds under `sudo -n` (ICT requires root for chroot/mount). "+
