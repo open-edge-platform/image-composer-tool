@@ -508,8 +508,8 @@
       "properties": {
         "packageOperation": {
           "type": "string",
-          "description": "Permitted package operation set",
-          "enum": ["additive-only"],
+          "description": "Permitted package operation set. 'additive-only' only adds new packages; 'additive-and-upgrade' also permits upgrading a package already installed in the baseline to a newer version (downgrades and removals remain blocked).",
+          "enum": ["additive-only", "additive-and-upgrade"],
           "default": "additive-only"
         },
         "conflictPolicy": {

@@ -179,6 +179,12 @@ func TestValidateBaseline(t *testing.T) {
 			wantNoErr:     true,
 		},
 		{
+			name:          "overlay policy accepts additive-and-upgrade",
+			baseline:      &Baseline{Mode: BaselineModeOverlay, Source: &BaselineSource{Path: "/tmp/u.raw"}},
+			overlayPolicy: &OverlayPolicy{PackageOperation: OverlayPackageOpAdditiveAndUpgrade},
+			wantNoErr:     true,
+		},
+		{
 			name:     "unknown mode is rejected",
 			baseline: &Baseline{Mode: "rebuild"},
 			wantErr:  "baseline.mode must be",
@@ -202,6 +208,29 @@ func TestValidateBaseline(t *testing.T) {
 				t.Fatalf("expected error to contain %q, got %q", tt.wantErr, err.Error())
 			}
 		})
+	}
+}
+
+// TestOverlayPolicyDerivesAllowUpgrade confirms validate() derives the internal
+// AllowUpgrade gate from packageOperation: on for additive-and-upgrade, off for
+// additive-only (and the empty default).
+func TestOverlayPolicyDerivesAllowUpgrade(t *testing.T) {
+	cases := []struct {
+		op   string
+		want bool
+	}{
+		{"", false},
+		{OverlayPackageOpAdditiveOnly, false},
+		{OverlayPackageOpAdditiveAndUpgrade, true},
+	}
+	for _, c := range cases {
+		p := &OverlayPolicy{PackageOperation: c.op}
+		if err := p.validate(); err != nil {
+			t.Fatalf("validate(%q): unexpected error %v", c.op, err)
+		}
+		if p.AllowUpgrade != c.want {
+			t.Errorf("packageOperation %q: AllowUpgrade = %v, want %v", c.op, p.AllowUpgrade, c.want)
+		}
 	}
 }
 

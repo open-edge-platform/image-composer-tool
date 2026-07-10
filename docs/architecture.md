@@ -208,6 +208,7 @@ Extending Disk Images <./architecture/adr-image-extension.md>
 Dependency Graph Analyzer <./architecture/adr-dep-analyzer.md>
 Image Inspection and Comparison <./architecture/adr-image-inspect.md>
 Template-Enriched RAG <./architecture/adr-template-enriched-rag.md>
+Web UI and API Tech Stack <./architecture/adr-web-ui-tech-stack.md>
 
 :::
 hide_directive-->
