@@ -4,6 +4,8 @@
 package main
 
 import (
+	"net"
+
 	"github.com/open-edge-platform/image-composer-tool/internal/api"
 	"github.com/spf13/cobra"
 )
@@ -51,7 +53,8 @@ image builds via the image-composer-tool binary with streaming build logs.`,
 
 func executeServe(cmd *cobra.Command, args []string) error {
 	srv, err := api.New(api.Config{
-		Addr:         serveHost + ":" + servePort,
+		// net.JoinHostPort brackets IPv6 hosts correctly (e.g. [::1]:8080).
+		Addr:         net.JoinHostPort(serveHost, servePort),
 		TemplatesDir: serveTemplates,
 		ICTBinary:    serveBinary,
 		WorkDir:      serveWorkDir,

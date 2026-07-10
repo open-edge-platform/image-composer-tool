@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -228,36 +229,51 @@ func (s *Server) runBuild(b *build, templatePath string) {
 	// per-build --work-dir keeps outputs isolated.
 	name, cmdArgs := s.buildCommand(templatePath, b.WorkDir)
 	cmd := exec.Command(name, cmdArgs...)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		b.appendLog(fmt.Sprintf("failed to create stdout pipe: %v", err))
-		b.finish(statusFailed, nil, err.Error())
-		return
-	}
-	cmd.Stderr = cmd.Stdout // merge streams
+
+	// Merge stdout+stderr into a single stream via one pipe writer shared by both
+	// fds. os/exec guards concurrent writes to the same *os.File writer with a
+	// lock, so interleaving is safe — unlike assigning cmd.Stderr = cmd.Stdout,
+	// which hands both fds the same pipe end and races. A pipe (not
+	// CombinedOutput) is required so logs stream line-by-line to SSE as the build
+	// runs rather than buffering until it exits.
+	pr, pw := io.Pipe()
+	cmd.Stdout = pw
+	cmd.Stderr = pw
 
 	if err := cmd.Start(); err != nil {
 		b.appendLog(fmt.Sprintf("failed to start build: %v", err))
 		b.finish(statusFailed, nil, err.Error())
+		_ = pw.Close()
+		_ = pr.Close()
 		return
 	}
+	// Wait for the process in a goroutine and close the pipe writer when it
+	// exits, so the scanner below sees EOF. The exit error is delivered on
+	// waitCh (cmd.Wait is called exactly once, here).
+	waitCh := make(chan error, 1)
+	go func() {
+		err := cmd.Wait()
+		_ = pw.Close()
+		waitCh <- err
+	}()
 
-	scanner := bufio.NewScanner(stdout)
+	scanner := bufio.NewScanner(pr)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		b.appendLog(scanner.Text())
 	}
-	// A scanner error (pipe read failure, or a token exceeding the buffer) means
-	// the captured log is truncated; record it so a build isn't silently marked
+	// A scanner error (read failure, or a token exceeding the buffer) means the
+	// captured log is truncated; record it so a build isn't silently marked
 	// successful with incomplete output.
 	scanErr := scanner.Err()
 	if scanErr != nil {
 		b.appendLog(fmt.Sprintf("warning: build log stream error: %v", scanErr))
 	}
 
-	if err := cmd.Wait(); err != nil {
-		log.Warnf("build %s failed: %v", b.ID, err)
-		b.finish(statusFailed, nil, err.Error())
+	waitErr := <-waitCh
+	if waitErr != nil {
+		log.Warnf("build %s failed: %v", b.ID, waitErr)
+		b.finish(statusFailed, nil, waitErr.Error())
 		return
 	}
 	if scanErr != nil {
