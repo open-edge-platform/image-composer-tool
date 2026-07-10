@@ -149,7 +149,12 @@ post:
 	if buildErr == nil {
 		log.Info("image build completed successfully")
 		template.MarkBuildFinished()
-		displayImageBuildTiming(template.Target.ImageType, template)
+		// Overlay builds do not run through the create-mode stages that populate the
+		// build timers, so the create-mode timing table would be all zeros; the
+		// overlay provider prints its own per-stage table in postprocess instead.
+		if !template.IsOverlayMode() {
+			displayImageBuildTiming(template.Target.ImageType, template)
+		}
 	} else {
 		// Avoid logging the full error chain to prevent potential leakage of sensitive data.
 		// Log only the error type/category to aid debugging without exposing sensitive details.

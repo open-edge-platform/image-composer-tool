@@ -272,9 +272,17 @@ top-level peer of `baseline` and may **only** be set when `baseline.mode` is
 
 | Field | Type | Required | Valid Values | Description |
 |-------|------|----------|--------------|-------------|
-| `packageOperation` | string | No | `additive-only` (default) | Permitted package operations. v1 is additive-only: packages may only be added, never removed or downgraded |
+| `packageOperation` | string | No | `additive-only` (default), `additive-and-upgrade` | Permitted package operations. `additive-only`: packages may only be added, never removed or downgraded. `additive-and-upgrade`: also permits upgrading a package already present in the baseline to a newer version. Downgrades and removals remain blocked in both modes (see note below) |
 | `conflictPolicy` | string | No | `fail` (default), `allow-explicit` | How a package conflict detected during preflight is handled. `fail` aborts the build; `allow-explicit` permits a conflict only when the conflicting package was explicitly requested |
 | `kernelCmdline` | string | No | — | Optional kernel command-line override applied to the overlaid image |
+
+> **`additive-and-upgrade` scope.** Upgrades apply only to the package set: a
+> package already installed in the baseline may be replaced by a newer version
+> when the resolved overlay closure requires it. Downgrades and removals are
+> still rejected at preflight, and the baseline kernel and bootloader remain
+> immutable — an overlay never replaces the kernel or reinstalls the bootloader,
+> regardless of `packageOperation`. Choose `additive-only` (the default) to fail
+> the build on any version bump to a baseline package.
 
 ```yaml
 baseline:

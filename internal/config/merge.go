@@ -141,6 +141,21 @@ func MergeConfigurations(userTemplate, defaultTemplate *ImageTemplate) (*ImageTe
 		mergedTemplate.SystemConfig = defaultTemplate.SystemConfig
 	}
 
+	// Overlay mode layers packages onto an already-complete baseline image, so it
+	// must NOT inherit the create-mode default OS package set. Those defaults
+	// (ubuntu-minimal, systemd-boot, dracut-core, cryptsetup-bin, the kernel, …)
+	// describe how to build an image from scratch; the baseline already provides
+	// them. Unioning them into the overlay's additive package list re-seeds the
+	// whole base toolchain — dragging in bootloader packages whose strict version
+	// pins the frozen baseline cannot satisfy — when the user asked only to add a
+	// package or two. Restrict the overlay package set to exactly what the user
+	// declared. (The overlay seed reads only SystemConfig.Packages; kernel/bootloader
+	// package lists are already excluded from resolution downstream.)
+	if userTemplate.IsOverlayMode() {
+		mergedTemplate.SystemConfig.Packages = append([]string(nil), userTemplate.SystemConfig.Packages...)
+		log.Debugf("Overlay mode: restricted additive package set to %d user-declared package(s)", len(mergedTemplate.SystemConfig.Packages))
+	}
+
 	// Package repositories - merge intelligently
 	mergedTemplate.PackageRepositories = mergePackageRepositories(
 		defaultTemplate.PackageRepositories,

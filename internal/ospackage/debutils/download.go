@@ -227,14 +227,6 @@ func savePackageListURLToCache(baseURL, codename, arch, component, packageListUR
 	}
 }
 
-func extractDebPackageNameFromFile(fileName string) string {
-	base := strings.TrimSuffix(fileName, ".deb")
-	if idx := strings.Index(base, "_"); idx > 0 {
-		return base[:idx]
-	}
-	return base
-}
-
 func parseDebFileName(fileName string) (string, string) {
 	base := strings.TrimSuffix(fileName, ".deb")
 	parts := strings.Split(base, "_")
@@ -522,10 +514,16 @@ func clearDebPackageCache(cacheDir string) error {
 func buildDebPackageInfosFromCache(cacheDir string, cachedFiles []string) []ospackage.PackageInfo {
 	infos := make([]ospackage.PackageInfo, 0, len(cachedFiles))
 	for _, file := range cachedFiles {
+		// The .deb filename follows name_version_arch.deb, so recover both the
+		// name and version from it. Dropping the version here leaves the SBOM
+		// (and any name|version|url comparison built on it) unable to tell an
+		// upgraded package from a removed-and-re-added one.
+		name, version := parseDebFileName(file)
 		infos = append(infos, ospackage.PackageInfo{
-			Name: extractDebPackageNameFromFile(file),
-			Type: "deb",
-			URL:  filepath.Join(cacheDir, file),
+			Name:    name,
+			Version: version,
+			Type:    "deb",
+			URL:     filepath.Join(cacheDir, file),
 		})
 	}
 	return infos

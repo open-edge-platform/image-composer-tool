@@ -159,7 +159,16 @@ func ResolveOverlayPackages(template *config.ImageTemplate, info *BaselineInfo, 
 
 	requested := overlayRequestedPackages(template)
 	present := baselinePresenceSet(baseline)
+	allowUpgrade := overlayAllowsUpgrade(template)
+	// Additive-only prunes requested packages already present in the baseline so
+	// they are never re-resolved. In upgrade mode we must re-resolve them too, so
+	// the resolver surfaces the repository's candidate version and the upgrade set
+	// can decide whether it is strictly newer (an upgrade to install) or not (a
+	// no-op we leave untouched). Absent packages are always seeded.
 	seed := overlaySeedPackages(requested, present)
+	if allowUpgrade {
+		seed = append([]string(nil), requested...)
+	}
 
 	destDir, err := overlayCacheDir(info, template.Target.Dist, arch)
 	if err != nil {
@@ -198,10 +207,65 @@ func ResolveOverlayPackages(template *config.ImageTemplate, info *BaselineInfo, 
 		}
 	}
 
-	plan := buildResolutionPlan(requested, seed, repos, closure, artifacts, present, destDir)
+	// The baseline version index is only consulted to classify upgrades, so build
+	// it only in upgrade mode; the additive-only path never reads it.
+	var baselineByName map[string]BaselinePackage
+	if allowUpgrade {
+		baselineByName = baselineVersionIndex(baseline)
+	}
+
+	plan := buildResolutionPlan(planInput{
+		family:         info.PackageManager,
+		requested:      requested,
+		seed:           seed,
+		repos:          repos,
+		closure:        closure,
+		artifacts:      artifacts,
+		present:        present,
+		baselineByName: baselineByName,
+		allowUpgrade:   allowUpgrade,
+		destDir:        destDir,
+	})
 	log.Infof("Overlay resolution complete: %d requested, %d in closure, %d to install (%d already present), %d artifact(s) in %s",
 		len(plan.Requested), len(plan.Closure), len(plan.ToInstall), len(plan.AlreadyPresent), len(plan.Artifacts), plan.DownloadDir)
+	logToInstallProvenance(plan)
 	return plan, nil
+}
+
+// logToInstallProvenance annotates each to-be-installed package as either
+// "requested" (named in the template) or "dependency" (pulled in transitively).
+// The install set is the closure of requested packages minus what the baseline
+// already satisfies, so it is routinely larger than the template list; without
+// this breakdown the extra dependency packages look unexplained when they later
+// surface in the image SBOM or a compare diff.
+//
+// The provenance counts are logged at Info level, but the per-package breakdown
+// is logged at Debug: a large dependency closure would otherwise emit hundreds of
+// Info lines per overlay, hurting log readability and slowing CI.
+func logToInstallProvenance(plan *ResolutionPlan) {
+	if len(plan.ToInstall) == 0 {
+		return
+	}
+	// The resolver canonicalizes plan.ToInstall names to the base name (dropping
+	// any deb ":arch" multiarch qualifier), but plan.Requested holds the raw
+	// template strings, which may be arch-qualified ("gcc:amd64"). Key and look up
+	// the requested set on the base name so an arch-qualified request is still
+	// classified as "requested" rather than skewing the dependency count.
+	requestedSet := make(map[string]bool, len(plan.Requested))
+	for _, name := range plan.Requested {
+		requestedSet[basePackageName(name)] = true
+	}
+	requestedCount := 0
+	for _, pkg := range plan.ToInstall {
+		origin := "dependency"
+		if requestedSet[basePackageName(pkg.Name)] {
+			origin = "requested"
+			requestedCount++
+		}
+		log.Debugf("  to install [%s]: %s %s", origin, pkg.Name, pkg.Version)
+	}
+	log.Infof("To-install provenance: %d requested, %d pulled in as dependencies",
+		requestedCount, len(plan.ToInstall)-requestedCount)
 }
 
 // packagingArch translates a detected baseline architecture (ELF-derived, e.g.
@@ -348,47 +412,285 @@ func baselinePresenceSet(baseline []BaselinePackage) map[string]bool {
 // overlaySeedPackages returns the requested packages that are not already present
 // in the baseline. The input is assumed sorted/de-duplicated; the output preserves
 // that order so resolution is deterministic.
+//
+// The baseline presence set is keyed by canonical base name, but a template request
+// may carry an APT ":arch" multiarch qualifier ("gcc:amd64"). Presence is therefore
+// tested on the base name so an arch-qualified request for an already-installed
+// package is recognized as satisfied; the original request token is preserved in the
+// seed slice so the resolver still receives the arch qualifier when it is not.
 func overlaySeedPackages(requested []string, present map[string]bool) []string {
 	var seed []string
 	for _, p := range requested {
-		if !present[p] {
+		if !present[basePackageName(p)] {
 			seed = append(seed, p)
 		}
 	}
 	return seed
 }
 
+// planInput carries the resolver output and the baseline state needed to
+// assemble a ResolutionPlan. It is a struct rather than a long positional
+// argument list so the upgrade-classification inputs (baseline versions, the
+// upgrade opt-in, the family comparator) read clearly at the call site.
+type planInput struct {
+	family         PackageManager
+	requested      []string
+	seed           []string
+	repos          []Repository
+	closure        []ospackage.PackageInfo
+	artifacts      []string
+	present        map[string]bool
+	baselineByName map[string]BaselinePackage
+	allowUpgrade   bool
+	destDir        string
+}
+
+// upgradeSet returns the bounded set of baseline-present package names this plan
+// is permitted to upgrade. It is empty unless the overlay opted into upgrades.
+func (in planInput) upgradeSet() map[string]bool {
+	if !in.allowUpgrade {
+		return nil
+	}
+	return upgradeEligibleNames(in.family, in.requested, in.closure, in.present, in.baselineByName)
+}
+
+// overlayAllowsUpgrade reports whether the template's overlay policy permits
+// upgrading baseline packages. The policy's AllowUpgrade gate is derived from
+// packageOperation during validation; an absent policy defaults to additive-only.
+func overlayAllowsUpgrade(template *config.ImageTemplate) bool {
+	return template.OverlayPolicy != nil && template.OverlayPolicy.AllowUpgrade
+}
+
+// isNewerThanBaseline reports whether version is strictly newer than the copy of
+// name installed in the baseline. A package absent from the baseline index, or
+// whose versions cannot be compared, is NOT newer (the caller handles the absent
+// case as a plain add; an uncomparable version is left to the baseline so
+// resolution never forces an ambiguous replacement).
+func isNewerThanBaseline(family PackageManager, name, version string, baselineByName map[string]BaselinePackage) bool {
+	base, ok := baselineByName[name]
+	if !ok {
+		return false
+	}
+	cmp, err := comparePkgVersions(family, version, base.Version)
+	if err != nil {
+		return false
+	}
+	return cmp > 0
+}
+
+// resolvedNameSet returns the set of package names in a resolved slice.
+func resolvedNameSet(pkgs []ResolvedPackage) map[string]bool {
+	set := make(map[string]bool, len(pkgs))
+	for _, p := range pkgs {
+		set[p.Name] = true
+	}
+	return set
+}
+
+// upgradeEligibleNames computes which baseline-present packages an
+// additive-and-upgrade overlay is allowed to upgrade. Upgrade scope is
+// deliberately bounded so opting into upgrades does not silently replace core
+// baseline libraries: only two classes are eligible.
+//
+//  1. Requested-and-present: a package named in the template that the baseline
+//     already has at an older version.
+//  2. Required transitive dependency: a package a to-install package depends on
+//     via a single-alternative, version-constrained edge that the baseline copy
+//     does NOT satisfy but the resolved (newer) copy does. This is the case
+//     additive-only could not resolve — the install would fail at configure time
+//     otherwise — so it is upgraded to keep the requested set installable.
+//
+// Every other present closure member (merely newer in the repo, or required only
+// through a multi-alternative edge that might be satisfiable another way) is left
+// on its baseline version. A genuinely unsatisfiable pin that this scoping does
+// not upgrade is caught fail-closed by preflight's unsatisfied-dependency check.
+//
+// The eligible set is grown to a fixpoint so an upgraded dependency's own
+// required upgrades are also pulled in.
+func upgradeEligibleNames(family PackageManager, requested []string, closure []ospackage.PackageInfo, present map[string]bool, baselineByName map[string]BaselinePackage) map[string]bool {
+	closureByName := make(map[string]ospackage.PackageInfo, len(closure))
+	for _, p := range closure {
+		closureByName[canonicalPackageName(p)] = p
+	}
+	// The resolver canonicalizes closure names to the base name (dropping any deb
+	// ":arch" multiarch qualifier), but the template request strings may be arch-
+	// qualified ("gcc:amd64"). Key the requested set on the base name so an arch-
+	// qualified request is still recognized as requested-and-present below and is
+	// eligible for upgrade.
+	requestedSet := make(map[string]bool, len(requested))
+	for _, r := range requested {
+		requestedSet[basePackageName(r)] = true
+	}
+
+	eligible := map[string]bool{}  // present baseline names approved for upgrade
+	installed := map[string]bool{} // names being installed: adds + eligible upgrades
+	var work []string
+	enqueue := func(name string) {
+		if installed[name] {
+			return
+		}
+		installed[name] = true
+		work = append(work, name)
+	}
+
+	// Seed: every add (absent from the baseline) plus every requested-and-present
+	// package whose resolved version is strictly newer than the baseline's.
+	for _, p := range closure {
+		name := canonicalPackageName(p)
+		if !present[name] {
+			enqueue(name)
+			continue
+		}
+		if requestedSet[basePackageName(name)] && isNewerThanBaseline(family, name, p.Version, baselineByName) {
+			eligible[name] = true
+			enqueue(name)
+		}
+	}
+
+	// Fixpoint: a package being installed can require a newer version of a present
+	// baseline dependency; upgrade that dependency (which may in turn require more).
+	for len(work) > 0 {
+		cur := work[0]
+		work = work[1:]
+		pi, ok := closureByName[cur]
+		if !ok {
+			continue
+		}
+		for _, edge := range directVersionedDeps(family, pi) {
+			dep := edge.Name
+			if !present[dep] || eligible[dep] {
+				continue
+			}
+			base, ok := baselineByName[dep]
+			if !ok {
+				continue
+			}
+			// Skip when the baseline copy already satisfies the pin (no upgrade
+			// needed) or the comparison is undeterminable.
+			if cmp, err := comparePkgVersions(family, base.Version, edge.Constraint.Ver); err != nil || constraintSatisfied(edge.Constraint.Op, cmp) {
+				continue
+			}
+			// Baseline fails the pin: upgrade only if the resolved copy is newer
+			// (and thus can satisfy it); otherwise leave it for preflight to flag.
+			dpi, ok := closureByName[dep]
+			if !ok || !isNewerThanBaseline(family, dep, dpi.Version, baselineByName) {
+				continue
+			}
+			eligible[dep] = true
+			enqueue(dep)
+		}
+	}
+	return eligible
+}
+
+// directVersionedDeps returns the single-alternative, version-constrained
+// dependency edges a resolved package declares, parsed from its family-specific
+// dependency metadata. Multi-alternative edges ("a | b") are skipped: forcing an
+// upgrade to satisfy one branch could be wrong when another branch is already
+// met, so those are left to preflight's unsatisfied-dependency check. Unversioned
+// edges carry no upgrade signal and are dropped.
+func directVersionedDeps(family PackageManager, pi ospackage.PackageInfo) []DependencyAlternative {
+	var out []DependencyAlternative
+	if family == PackageManagerDNF {
+		for _, entry := range pi.RequiresVer {
+			if alt, ok := parseRPMRequiresVerEntry(entry); ok {
+				out = append(out, alt)
+			}
+		}
+		return out
+	}
+	// deb: RequiresVer holds the individual Depends terms; parse them back into
+	// edges and keep only the unambiguous single-alternative versioned ones.
+	for _, edge := range parseDebDependsField(canonicalPackageName(pi), strings.Join(pi.RequiresVer, ",")) {
+		if len(edge.Alternatives) == 1 && edge.Alternatives[0].Constraint != nil {
+			out = append(out, edge.Alternatives[0])
+		}
+	}
+	return out
+}
+
+// parseRPMRequiresVerEntry parses one rpm RequiresVer entry into a versioned
+// dependency alternative. The resolver records these as "name (op ver)",
+// "name op ver", or a bare "name"; only the version-constrained forms yield an
+// edge (ok=false for bare names or unparseable input).
+func parseRPMRequiresVerEntry(entry string) (DependencyAlternative, bool) {
+	entry = strings.TrimSpace(entry)
+	if entry == "" {
+		return DependencyAlternative{}, false
+	}
+	if open := strings.Index(entry, "("); open != -1 {
+		name := strings.TrimSpace(entry[:open])
+		if closeIdx := strings.Index(entry[open:], ")"); closeIdx != -1 && name != "" {
+			if c, ok := parseConstraint(entry[open+1 : open+closeIdx]); ok {
+				return DependencyAlternative{Name: name, Constraint: &c}, true
+			}
+		}
+		return DependencyAlternative{}, false
+	}
+	if fields := strings.Fields(entry); len(fields) == 3 {
+		if c, ok := parseConstraint(fields[1] + " " + fields[2]); ok {
+			return DependencyAlternative{Name: fields[0], Constraint: &c}, true
+		}
+	}
+	return DependencyAlternative{}, false
+}
+
 // buildResolutionPlan assembles the deterministic ResolutionPlan from the resolver
 // output. All slices are sorted so the same template and repository state always
 // produce byte-identical plans.
-func buildResolutionPlan(requested, seed []string, repos []Repository, closure []ospackage.PackageInfo, artifacts []string, present map[string]bool, destDir string) *ResolutionPlan {
-	resolved := make([]ResolvedPackage, 0, len(closure))
+//
+// A closure member already present in the baseline is normally left untouched
+// (additive-only). When in.allowUpgrade is set, a present package is routed into
+// ToInstall as an upgrade only when it is in the bounded upgrade set (see
+// upgradeEligibleNames): a requested-and-present package, or a required
+// transitive dependency whose baseline copy fails a versioned pin. Everything
+// else — including a present package merely newer in the repo — keeps its
+// baseline version (a same-or-older version is never a downgrade).
+func buildResolutionPlan(in planInput) *ResolutionPlan {
+	requested, present, destDir := in.requested, in.present, in.destDir
+	upgradeSet := in.upgradeSet()
+	resolved := make([]ResolvedPackage, 0, len(in.closure))
 	alreadyPresent := map[string]bool{}
 	var toInstall []ResolvedPackage
 
-	for _, p := range closure {
+	for _, p := range in.closure {
 		name := canonicalPackageName(p)
 		rp := ResolvedPackage{Name: name, Version: p.Version, Arch: p.Arch, URL: p.URL}
 		resolved = append(resolved, rp)
-		if present[name] {
-			alreadyPresent[name] = true
-		} else {
+		if !present[name] {
 			toInstall = append(toInstall, rp)
+			continue
+		}
+		// Present in the baseline. Install it only when it is in the approved
+		// upgrade set; otherwise the baseline copy stands.
+		if upgradeSet[name] {
+			toInstall = append(toInstall, rp)
+		} else {
+			alreadyPresent[name] = true
 		}
 	}
 
 	// Requested packages already satisfied by the baseline are "already present"
-	// too, even when they never entered the closure (they were never seeded).
+	// too, even when they never entered the closure (they were never seeded). In
+	// upgrade mode a present-and-upgraded requested package is in toInstall, so it
+	// is excluded here to avoid labelling it both installed and already-present.
+	//
+	// present/toInstallNames are keyed by canonical base name, so an arch-qualified
+	// request ("gcc:amd64") is normalized with basePackageName before the lookups
+	// (and recorded under the base name) — otherwise the qualifier mismatch would
+	// miss an already-present requested package and mislabel it.
+	toInstallNames := resolvedNameSet(toInstall)
 	for _, r := range requested {
-		if present[r] {
-			alreadyPresent[r] = true
+		base := basePackageName(r)
+		if present[base] && !toInstallNames[base] {
+			alreadyPresent[base] = true
 		}
 	}
 
 	sortResolved(resolved)
 	sortResolved(toInstall)
 
-	sortedArtifacts := append([]string(nil), artifacts...)
+	sortedArtifacts := append([]string(nil), in.artifacts...)
 	sort.Strings(sortedArtifacts)
 
 	presentNames := make([]string, 0, len(alreadyPresent))
@@ -399,8 +701,8 @@ func buildResolutionPlan(requested, seed []string, repos []Repository, closure [
 
 	return &ResolutionPlan{
 		Requested:      append([]string(nil), requested...),
-		Seed:           append([]string(nil), seed...),
-		Repositories:   repos,
+		Seed:           append([]string(nil), in.seed...),
+		Repositories:   in.repos,
 		Closure:        resolved,
 		ToInstall:      toInstall,
 		AlreadyPresent: presentNames,
@@ -417,6 +719,17 @@ func canonicalPackageName(p ospackage.PackageInfo) string {
 		return p.PkgName
 	}
 	return p.Name
+}
+
+// basePackageName strips a deb ":arch" multiarch qualifier from a package name
+// ("gcc:amd64" -> "gcc"), leaving unqualified names unchanged. It reconciles the
+// raw template request strings (which may carry an arch suffix) against the
+// resolver's canonicalized base names.
+func basePackageName(name string) string {
+	if colon := strings.Index(name, ":"); colon != -1 {
+		return name[:colon]
+	}
+	return name
 }
 
 // sortResolved orders resolved packages by name, then version, then arch.

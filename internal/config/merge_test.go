@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/slice"
 )
 
 func TestNewDefaultConfigLoader(t *testing.T) {
@@ -152,6 +154,65 @@ func TestMergeConfigurationsBaseline(t *testing.T) {
 		}
 		if result.Baseline == nil || result.Baseline.Mode != BaselineModeCreate {
 			t.Errorf("expected default baseline (create) to be retained, got %+v", result.Baseline)
+		}
+	})
+}
+
+// TestMergeConfigurationsOverlayPackages is the regression for the overlay build
+// that resolved a full create-mode boot toolchain (systemd-boot, dracut-core,
+// cryptsetup-bin, …) even though the user template requested only "tree". The
+// create-mode default template's package list must NOT be unioned into an overlay
+// template's additive package set — the baseline already provides those packages,
+// and re-seeding them drags in bootloader packages whose strict version pins the
+// frozen baseline cannot satisfy.
+func TestMergeConfigurationsOverlayPackages(t *testing.T) {
+	defaultTemplate := &ImageTemplate{
+		Image:  ImageInfo{Name: "default", Version: "1.0.0"},
+		Target: TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64"},
+		SystemConfig: SystemConfig{
+			Name:     "default",
+			Packages: []string{"ubuntu-minimal", "systemd-boot", "dracut-core", "cryptsetup-bin"},
+		},
+	}
+
+	t.Run("overlay drops default packages, keeps only user packages", func(t *testing.T) {
+		userTemplate := &ImageTemplate{
+			Image:  ImageInfo{Name: "user", Version: "2.0.0"},
+			Target: TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64"},
+			Baseline: &Baseline{
+				Mode:   BaselineModeOverlay,
+				Source: &BaselineSource{Path: "/tmp/u.raw"},
+			},
+			SystemConfig: SystemConfig{Name: "overlay", Packages: []string{"tree"}},
+		}
+
+		result, err := MergeConfigurations(userTemplate, defaultTemplate)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := []string{"tree"}
+		if !reflect.DeepEqual(result.SystemConfig.Packages, want) {
+			t.Errorf("overlay merged packages = %v, want %v (default boot toolchain must not be inherited)",
+				result.SystemConfig.Packages, want)
+		}
+	})
+
+	t.Run("create mode still unions default and user packages", func(t *testing.T) {
+		userTemplate := &ImageTemplate{
+			Image:        ImageInfo{Name: "user", Version: "2.0.0"},
+			Target:       TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64"},
+			SystemConfig: SystemConfig{Name: "create", Packages: []string{"tree"}},
+		}
+
+		result, err := MergeConfigurations(userTemplate, defaultTemplate)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		// Create mode is unchanged: the default base packages are still merged in.
+		if !slice.Contains(result.SystemConfig.Packages, "systemd-boot") ||
+			!slice.Contains(result.SystemConfig.Packages, "tree") {
+			t.Errorf("create merged packages = %v, want default base packages unioned with user's tree",
+				result.SystemConfig.Packages)
 		}
 	})
 }

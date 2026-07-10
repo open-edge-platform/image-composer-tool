@@ -296,11 +296,34 @@ func (p *ubuntu) overlayPostProcess(template *config.ImageTemplate, buildErr err
 	// Clear the retained builder once postprocess has run (success or failure) so it
 	// cannot be accidentally reused across builds and its retained state (paths,
 	// plan, report, mount lifecycle) can be garbage-collected promptly.
+	builder := p.overlayBuilder
 	defer func() { p.overlayBuilder = nil }()
-	if err := p.overlayBuilder.Postprocess(buildErr); err != nil {
+	if err := builder.Postprocess(buildErr); err != nil {
 		return fmt.Errorf("overlay post-processing failed: %w", err)
 	}
+
+	// The overlay pipeline does not run through the create-mode maker/chroot stages
+	// that populate the template build timers, so print the overlay's own per-stage
+	// timing table. Only on a clean build — a failed run's partial timings would be
+	// misleading. The generic build-timing table (all zeros for overlay) is skipped
+	// upstream in the same success path.
+	if buildErr == nil {
+		printOverlayTiming(builder.Timings())
+	}
 	return nil
+}
+
+// printOverlayTiming renders the overlay Builder's per-stage timings as a timing
+// table. It is a no-op when no stages were recorded.
+func printOverlayTiming(timings []overlay.StageTiming) {
+	if len(timings) == 0 {
+		return
+	}
+	rows := make([]display.TimingRow, 0, len(timings))
+	for _, t := range timings {
+		rows = append(rows, display.TimingRow{Stage: t.Stage, Duration: t.Duration})
+	}
+	display.PrintTimingTable("Overlay Build Timings", rows)
 }
 
 func (p *ubuntu) installHostDependency() error {

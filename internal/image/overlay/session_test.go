@@ -18,7 +18,7 @@ type builderSeams struct {
 	resolve     func(*config.ImageTemplate, *BaselineInfo, []BaselinePackage) (*ResolutionPlan, error)
 	preflight   func(*BaselineInfo, []BaselinePackage, *ResolutionPlan, *config.OverlayPolicy) (*PreflightReport, error)
 	install     func(*BaselineInfo, string, *ResolutionPlan, *PreflightReport) (*InstallResult, error)
-	regenBoot   func(*BaselineInfo, string, *InstallResult) error
+	regenBoot   func(*BaselineInfo, string, *InstallResult, *ResolutionPlan) error
 	resize      func(*config.ImageTemplate, *Context, *Layout) error
 	sbom        func(*BaselineInfo, string, *ResolutionPlan) error
 	emit        func(*config.ImageTemplate, string, string) (string, error)
@@ -131,7 +131,7 @@ func installOverlayTestBuilder(t *testing.T, r *builderRecorder) *Builder {
 		}
 		return &InstallResult{Installed: []string{"curl"}}, nil
 	}
-	builderRegenBootFn = func(*BaselineInfo, string, *InstallResult) error {
+	builderRegenBootFn = func(*BaselineInfo, string, *InstallResult, *ResolutionPlan) error {
 		r.note("regenBoot")
 		return r.regenErr
 	}
@@ -179,6 +179,62 @@ func TestBuilder_HappyPathOrdersStagesAndCleansUp(t *testing.T) {
 	// On success the copy is moved out by emit, so it must NOT also be removed.
 	if r.removeCopies != 0 {
 		t.Errorf("workspace copy must not be removed on the success path (emit moves it): removeCopies=%d", r.removeCopies)
+	}
+	// A fully successful build records one timing row per pipeline stage, in
+	// execution order, so the caller can render an overlay timing table.
+	wantStages := []string{
+		"Acquire & Mount Baseline", "Inspect Baseline", "Resolve Packages", "Preflight",
+		"Install Packages", "Boot Regeneration", "Resize", "Generate SBOM", "Emit Artifact",
+	}
+	gotStages := make([]string, 0, len(b.Timings()))
+	for _, ts := range b.Timings() {
+		gotStages = append(gotStages, ts.Stage)
+	}
+	if !equalStrings(gotStages, wantStages) {
+		t.Errorf("timing stages = %v, want %v", gotStages, wantStages)
+	}
+}
+
+func TestBuilder_TimingStopsAtFailedStage(t *testing.T) {
+	defer saveBuilderSeams().restore()
+	r := &builderRecorder{installErr: errors.New("dpkg failed")}
+	b := installOverlayTestBuilder(t, r)
+
+	if err := b.Preprocess(); err != nil {
+		t.Fatalf("Preprocess: %v", err)
+	}
+	if err := b.Build(); err == nil {
+		t.Fatal("expected install failure to propagate")
+	}
+	// The failing stage is still recorded (timeStage times fn even on error), but no
+	// later stage runs, so the table reflects exactly the pipeline that executed.
+	got := make([]string, 0, len(b.Timings()))
+	for _, ts := range b.Timings() {
+		got = append(got, ts.Stage)
+	}
+	want := []string{
+		"Acquire & Mount Baseline", "Inspect Baseline", "Resolve Packages", "Preflight",
+		"Install Packages",
+	}
+	if !equalStrings(got, want) {
+		t.Errorf("timing stages after install failure = %v, want %v", got, want)
+	}
+}
+
+func TestBuilder_TimingsReturnsDefensiveCopy(t *testing.T) {
+	b := &Builder{timings: []StageTiming{{Stage: "Acquire & Mount Baseline"}}}
+
+	got := b.Timings()
+	// Mutating the returned slice must not corrupt the Builder's internal state.
+	got[0].Stage = "mutated"
+	got = append(got, StageTiming{Stage: "appended"})
+	_ = got
+
+	if b.timings[0].Stage != "Acquire & Mount Baseline" {
+		t.Errorf("Builder timings mutated via returned slice: got %q", b.timings[0].Stage)
+	}
+	if len(b.timings) != 1 {
+		t.Errorf("Builder timings length changed via returned slice: got %d, want 1", len(b.timings))
 	}
 }
 

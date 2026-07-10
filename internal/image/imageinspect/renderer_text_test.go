@@ -354,12 +354,13 @@ func TestRenderSummaryText_AndSPDXCompareText(t *testing.T) {
 		ToCanonicalHash:   strings.Repeat("e", 64),
 		AddedPackages:     []string{"pkg-new"},
 		RemovedPackages:   []string{"pkg-old"},
+		UpgradedPackages:  []string{"pkg-up: 1.0 -> 2.0"},
 	}
 	if err := RenderSPDXCompareText(&spdxBuf, spdx); err != nil {
 		t.Fatalf("RenderSPDXCompareText error: %v", err)
 	}
 	spdxOut := spdxBuf.String()
-	for _, want := range []string{"SPDX Compare", "Added packages:", "Removed packages:"} {
+	for _, want := range []string{"SPDX Compare", "Added packages:", "Removed packages:", "Upgraded packages:", "pkg-up: 1.0 -> 2.0"} {
 		if !strings.Contains(spdxOut, want) {
 			t.Fatalf("spdx compare output missing %q:\n%s", want, spdxOut)
 		}
