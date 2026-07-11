@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api/client'
 import { useStore } from './store'
 import { BasicPage } from './components/BasicPage'
@@ -15,6 +15,12 @@ export default function App() {
   // Which top-level panel is showing, and the active build (if any).
   const [view, setView] = useState<View>('basic')
   const [buildId, setBuildId] = useState<string | null>(null)
+  const [retrying, setRetrying] = useState(false)
+  // Keep a stable ref to the last selection used to start a build so retry
+  // doesn't capture a stale snapshot from when the callback was first created.
+  const selection = useStore((s) => s.selection)
+  const selectionRef = useRef(selection)
+  selectionRef.current = selection
 
   const load = useCallback(() => {
     setState('loading')
@@ -38,6 +44,17 @@ export default function App() {
     setBuildId(id)
     setView('builds')
   }
+
+  // Retry uses the same selection as the previous build.
+  const onRetry = useCallback(async () => {
+    setRetrying(true)
+    try {
+      const accepted = await api.startBuild(selectionRef.current)
+      setBuildId(accepted.buildId)
+    } finally {
+      setRetrying(false)
+    }
+  }, [])
 
   const tabs: { id: View; label: string; enabled: boolean }[] = [
     { id: 'basic', label: 'Basic', enabled: true },
@@ -96,7 +113,7 @@ export default function App() {
             <BasicPage onBuildStarted={onBuildStarted} />
           </div>
           <div hidden={view !== 'builds'}>
-            <BuildImagePage buildId={buildId} />
+            <BuildImagePage buildId={buildId} onRetry={onRetry} retrying={retrying} />
           </div>
         </>
       )}

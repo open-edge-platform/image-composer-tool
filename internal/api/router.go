@@ -23,6 +23,8 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/v1/builds", s.handleStartBuild)
 	mux.HandleFunc("GET /api/v1/builds/{id}/logs", s.handleBuildLogs)
 	mux.HandleFunc("GET /api/v1/builds/{id}/artifacts", s.handleBuildArtifacts)
+	mux.HandleFunc("GET /api/v1/builds/{id}/details", s.handleBuildDetails)
+	mux.HandleFunc("GET /api/v1/builds/{id}/template", s.handleBuildTemplate)
 
 	// Web UI: serve the embedded SPA at the root. API routes above are more
 	// specific and take precedence in the mux. Only mounted when a real build is

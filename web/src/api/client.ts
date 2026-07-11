@@ -5,6 +5,7 @@ import type {
   ComposeRequest,
   ComposeResponse,
   BuildAccepted,
+  BuildDetails,
 } from './types'
 
 const BASE = '/api/v1'
@@ -47,6 +48,13 @@ export const api = {
   cancelBuild: (buildId: string) =>
     jsonFetch<void>(`/builds/${buildId}/cancel`, { method: 'POST' }),
 
+  // Build command + resolved paths for the troubleshoot panel.
+  buildDetails: (buildId: string) =>
+    jsonFetch<BuildDetails>(`/builds/${buildId}/details`),
+
   // SSE log stream URL for a build.
   logsUrl: (buildId: string) => `${BASE}/builds/${buildId}/logs`,
+
+  // Download URL for the exact template that was built.
+  templateUrl: (buildId: string) => `${BASE}/builds/${buildId}/template`,
 }

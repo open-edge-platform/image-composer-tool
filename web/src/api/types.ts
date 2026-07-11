@@ -73,6 +73,18 @@ export interface Artifact {
   path: string
 }
 
+// Reproducibility/troubleshooting metadata for a build: the exact command that
+// ran, the resolved template (+ a download URL), and the per-build directories.
+export interface BuildDetails {
+  buildId: string
+  status: string
+  command: string
+  template: string
+  templateUrl: string
+  workDir: string
+  cacheDir: string
+}
+
 export interface BuildComplete {
   status: 'success' | 'failed'
   artifacts?: Artifact[]

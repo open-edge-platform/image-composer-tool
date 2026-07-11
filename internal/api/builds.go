@@ -41,10 +41,13 @@ type artifact struct {
 // All mutable fields are guarded by mu. ID, WorkDir, Template, and done are set
 // once at construction and are safe to read without the lock.
 type build struct {
-	ID       string
-	WorkDir  string
-	Template string
-	done     chan struct{} // closed when the build finishes
+	ID           string
+	WorkDir      string
+	CacheDir     string
+	Template     string // template file name (for display)
+	TemplatePath string // resolved on-disk path (for download)
+	Command      string // exact command run, for the UI's troubleshoot panel
+	done         chan struct{} // closed when the build finishes
 
 	mu        sync.Mutex
 	status    buildStatus
@@ -131,11 +134,15 @@ func (s *Server) handleStartBuild(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := uuid.NewString()
-	workDir := filepath.Join(s.cfg.WorkDir, "builds", id)
+	buildRoot := filepath.Join(s.cfg.WorkDir, "builds", id)
+	workDir := filepath.Join(buildRoot, "work")
+	cacheDir := filepath.Join(buildRoot, "cache")
 	// 0700: build logs and artifact metadata may be sensitive; keep them private.
-	if err := os.MkdirAll(workDir, 0o700); err != nil {
-		writeError(w, http.StatusInternalServerError, "WORKDIR", "cannot create build work directory")
-		return
+	for _, d := range []string{workDir, cacheDir} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			writeError(w, http.StatusInternalServerError, "WORKDIR", "cannot create build work directory")
+			return
+		}
 	}
 
 	// Resolve the template path to build. Client errors (bad input, no match)
@@ -150,16 +157,20 @@ func (s *Server) handleStartBuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	name, cmdArgs := s.buildCommand(templatePath, workDir, cacheDir)
 	b := &build{
-		ID:       id,
-		status:   statusRunning,
-		WorkDir:  workDir,
-		Template: templateName,
-		done:     make(chan struct{}),
+		ID:           id,
+		status:       statusRunning,
+		WorkDir:      workDir,
+		CacheDir:     cacheDir,
+		Template:     templateName,
+		TemplatePath: templatePath,
+		Command:      name + " " + strings.Join(cmdArgs, " "),
+		done:         make(chan struct{}),
 	}
 	s.tracker.add(b)
 
-	go s.runBuild(b, templatePath)
+	go s.runBuild(b, name, cmdArgs)
 
 	writeJSON(w, http.StatusAccepted, buildAccepted{
 		BuildID: id,
@@ -209,8 +220,11 @@ func (s *Server) resolveBuildTemplate(req *buildRequest, workDir string) (path, 
 // single hard-coded `image-composer-tool build` invocation with no user-derived
 // arguments on the command line (selections are only manifest lookup keys) — so
 // the allowlist the shell package provides adds no safety here.
-func (s *Server) buildCommand(templatePath, workDir string) (name string, args []string) {
-	ictArgs := []string{"build", templatePath, "--work-dir", workDir}
+func (s *Server) buildCommand(templatePath, workDir, cacheDir string) (name string, args []string) {
+	// Per-build --work-dir and --cache-dir keep each build's scratch and package
+	// cache isolated under the build root, so concurrent/repeat builds don't share
+	// (root-owned) state and cleanup is a single directory removal.
+	ictArgs := []string{"build", templatePath, "--work-dir", workDir, "--cache-dir", cacheDir}
 	if s.cfg.Sudo {
 		// -n: never prompt; fail fast if passwordless sudo isn't configured.
 		return "sudo", append([]string{"-n", s.cfg.ICTBinary}, ictArgs...)
@@ -220,14 +234,20 @@ func (s *Server) buildCommand(templatePath, workDir string) (name string, args [
 
 // runBuild executes the ICT binary, streams its output into the build's log
 // buffer, and records the terminal status + artifacts.
-func (s *Server) runBuild(b *build, templatePath string) {
+func (s *Server) runBuild(b *build, name string, cmdArgs []string) {
 	log := logger.Logger()
 	defer close(b.done)
 
 	// ICT builds require root (chroot, mounts), so the build runs under sudo, and
 	// from the repo root since ICT resolves config/osv/... relative to cwd. The
-	// per-build --work-dir keeps outputs isolated.
-	name, cmdArgs := s.buildCommand(templatePath, b.WorkDir)
+	// per-build --work-dir/--cache-dir keep outputs isolated.
+	//
+	// Echo the exact command so the operator can reproduce it on the shell. This
+	// is both logged server-side and pushed as the first build-log line so it
+	// surfaces in the UI's Build page over SSE.
+	log.Infof("build %s command: %s", b.ID, b.Command)
+	b.appendLog("$ " + b.Command)
+
 	cmd := exec.Command(name, cmdArgs...)
 
 	// Merge stdout+stderr into a single stream via one pipe writer shared by both

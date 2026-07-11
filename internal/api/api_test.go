@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -282,13 +283,16 @@ func TestFinishFailure(t *testing.T) {
 
 func TestBuildCommand(t *testing.T) {
 	s := &Server{cfg: Config{ICTBinary: "/opt/ict"}}
-	name, args := s.buildCommand("/tmp/t.yml", "/tmp/wd")
+	name, args := s.buildCommand("/tmp/t.yml", "/tmp/wd", "/tmp/cd")
 	if name != "/opt/ict" || args[0] != "build" || args[1] != "/tmp/t.yml" {
 		t.Fatalf("non-sudo cmd = %s %v", name, args)
 	}
+	if !slices.Contains(args, "--cache-dir") || !slices.Contains(args, "/tmp/cd") {
+		t.Fatalf("missing --cache-dir in %v", args)
+	}
 
 	s.cfg.Sudo = true
-	name, args = s.buildCommand("/tmp/t.yml", "/tmp/wd")
+	name, args = s.buildCommand("/tmp/t.yml", "/tmp/wd", "/tmp/cd")
 	if name != "sudo" || args[0] != "-n" || args[1] != "/opt/ict" || args[2] != "build" {
 		t.Fatalf("sudo cmd = %s %v", name, args)
 	}

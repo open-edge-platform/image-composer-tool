@@ -1,21 +1,24 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
-import type { Artifact } from '../api/types'
+import type { Artifact, BuildDetails } from '../api/types'
 
 interface BuildViewProps {
   buildId: string
+  onRetry: () => Promise<void>
+  retrying: boolean
 }
 
 // Full MVP-1 build lifecycle. "not-started" is represented by not rendering this
 // component at all; once a build exists it moves through the states below.
 type Status = 'running' | 'cancelling' | 'cancelled' | 'success' | 'failed'
 
-export function BuildView({ buildId }: BuildViewProps) {
+export function BuildView({ buildId, onRetry, retrying }: BuildViewProps) {
   const [logs, setLogs] = useState<string[]>([])
   const [status, setStatus] = useState<Status>('running')
   const [artifacts, setArtifacts] = useState<Artifact[]>([])
   const [errorMsg, setErrorMsg] = useState<string>('')
-  const [cancelErr, setCancelErr] = useState<string>('')
+  const [details, setDetails] = useState<BuildDetails | null>(null)
+  const [detailsOpen, setDetailsOpen] = useState(false)
   const logRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -23,7 +26,12 @@ export function BuildView({ buildId }: BuildViewProps) {
     setStatus('running')
     setArtifacts([])
     setErrorMsg('')
-    setCancelErr('')
+    setDetails(null)
+    setDetailsOpen(false)
+
+    // Fetch the command + resolved template paths for the troubleshoot panel.
+    // Best-effort: a failure here shouldn't disrupt the log stream.
+    api.buildDetails(buildId).then(setDetails).catch(() => {})
 
     const es = new EventSource(api.logsUrl(buildId))
 
@@ -62,19 +70,6 @@ export function BuildView({ buildId }: BuildViewProps) {
     logRef.current?.scrollTo(0, logRef.current.scrollHeight)
   }, [logs])
 
-  const onCancel = async () => {
-    setStatus('cancelling')
-    setCancelErr('')
-    try {
-      await api.cancelBuild(buildId)
-      // The terminal state (cancelled) arrives via the SSE complete/error event.
-    } catch (e) {
-      // The cancellation request itself failed — distinct from a build failure.
-      setCancelErr((e as Error).message)
-      setStatus('running') // still running; allow finish or retry
-    }
-  }
-
   const copyLogs = () => navigator.clipboard.writeText(logs.join('\n'))
   const downloadLogs = () => {
     const blob = new Blob([logs.join('\n')], { type: 'text/plain' })
@@ -86,32 +81,79 @@ export function BuildView({ buildId }: BuildViewProps) {
     URL.revokeObjectURL(url)
   }
   const copyPath = (path: string) => navigator.clipboard.writeText(path)
-
-  const active = status === 'running' || status === 'cancelling'
+  const copyCommand = () => details && navigator.clipboard.writeText(details.command)
 
   return (
     <div className="mt-6">
       <div className="mb-2 flex items-center gap-3">
         <h2 className="text-sm font-semibold text-[#00285a]">Build Status</h2>
         <StatusBadge status={status} />
-        {active && (
+        {/* Cancel button wired in Story 3 (build cancellation + cleanup) */}
+        {(status === 'failed' || status === 'cancelled') && (
           <button
-            className="ml-auto rounded border border-red-300 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
-            disabled={status === 'cancelling'}
-            onClick={onCancel}
+            className="ml-auto rounded border border-[#0071c5] px-3 py-1 text-xs font-medium text-[#0071c5] hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={retrying}
+            onClick={onRetry}
           >
-            {status === 'cancelling' ? 'Cancelling…' : 'Cancel build'}
+            {retrying ? 'Starting…' : '↺ Retry build'}
           </button>
         )}
       </div>
 
-      {cancelErr && (
-        <div className="mb-2 rounded bg-amber-50 p-2 text-xs text-amber-800">
-          Cancel request failed: {cancelErr}
-        </div>
-      )}
       {status === 'failed' && errorMsg && (
         <div className="mb-2 rounded bg-red-50 p-2 text-xs text-red-700">Build failed: {errorMsg}</div>
+      )}
+
+      {/* Collapsible troubleshoot panel: the exact command, the resolved template
+          (downloadable), and the per-build work/cache directories. Collapsed by
+          default so it doesn't compete with the log for space. */}
+      {details && (
+        <div className="mb-2 rounded-md border border-slate-200 bg-slate-50">
+          <button
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-slate-600 hover:bg-slate-100"
+            onClick={() => setDetailsOpen((o) => !o)}
+            aria-expanded={detailsOpen}
+          >
+            <span className="text-slate-400">{detailsOpen ? '▼' : '▶'}</span>
+            Build details
+            <span className="font-normal text-slate-400">— command, template, paths</span>
+          </button>
+          {detailsOpen && (
+            <div className="space-y-3 border-t border-slate-200 px-3 py-3 text-xs">
+              <div>
+                <div className="mb-1 flex items-center gap-2">
+                  <span className="font-semibold text-slate-600">Command</span>
+                  <button
+                    className="rounded border border-slate-300 px-1.5 py-0.5 text-[11px] hover:bg-white"
+                    onClick={copyCommand}
+                  >
+                    📋 Copy
+                  </button>
+                </div>
+                <pre className="overflow-x-auto rounded bg-[#00285a] p-2 font-mono text-[11px] leading-relaxed text-slate-100">
+                  {details.command}
+                </pre>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-slate-600">Template</span>
+                <span className="font-mono text-slate-700">{details.template}</span>
+                <a
+                  className="rounded border border-slate-300 px-1.5 py-0.5 text-[11px] hover:bg-white"
+                  href={api.templateUrl(buildId)}
+                  download={details.template}
+                >
+                  ⬇ Download
+                </a>
+              </div>
+              <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 font-mono text-slate-600">
+                <dt className="font-sans font-semibold">Work dir</dt>
+                <dd className="break-all">{details.workDir}</dd>
+                <dt className="font-sans font-semibold">Cache dir</dt>
+                <dd className="break-all">{details.cacheDir}</dd>
+              </dl>
+            </div>
+          )}
+        </div>
       )}
 
       <div className="mb-2 flex gap-2">
