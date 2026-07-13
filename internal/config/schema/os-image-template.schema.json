@@ -475,7 +475,7 @@
     },
     "BaselineSource": {
       "type": "object",
-      "description": "Baseline source. v1 supports a local RAW disk image, referenced by a local path or an https URL. Exactly one of 'path' or 'url' must be set.",
+      "description": "Baseline source, referenced by a local path or an https URL. Exactly one of 'path' or 'url' must be set. Supported formats are raw (default), qcow2, vhd, and vhdx; non-raw baselines are converted to RAW (via qemu-img) before mounting.",
       "properties": {
         "path": {
           "type": "string",
@@ -491,8 +491,8 @@
         },
         "format": {
           "type": "string",
-          "description": "Baseline image format",
-          "enum": ["raw"],
+          "description": "Baseline image format. Non-raw formats are converted to RAW (via qemu-img) before the baseline is mounted.",
+          "enum": ["raw", "qcow2", "vhd", "vhdx"],
           "default": "raw"
         }
       },

@@ -175,6 +175,8 @@ sudo -E image-composer-tool build --baseline-image /images/base.raw overlay-temp
 
 **Note:** The build command typically requires sudo privileges for operations like creating loopback devices and mounting filesystems.
 
+**Baseline image formats (overlay mode):** `baseline.source.format` accepts `raw` (default), `qcow2`, `vhd`, and `vhdx`. Non-RAW baselines are converted to RAW with `qemu-img` before mounting, so `qemu-img` must be installed on the host when a non-RAW format is used (the build fails clearly if it is missing). The declared format is verified against the image's actual format; a mismatch aborts the build. The user-supplied baseline is never modified — conversion writes into the build workspace.
+
 See also:
 
 - [Build Stages in Detail](./image-composer-tool-build-process.md#build-stages-in-detail) for information about each build stage

@@ -100,7 +100,12 @@ const (
 	BaselineModeCreate  = "create"
 	BaselineModeOverlay = "overlay"
 
-	BaselineFormatRaw = "raw"
+	// Baseline image formats accepted for overlay mode. Non-RAW formats are
+	// converted to RAW (via qemu-img) before the baseline is loop-attached.
+	BaselineFormatRaw   = "raw"
+	BaselineFormatQcow2 = "qcow2"
+	BaselineFormatVHD   = "vhd"
+	BaselineFormatVHDX  = "vhdx"
 
 	OverlayPackageOpAdditiveOnly = "additive-only"
 	// OverlayPackageOpAdditiveAndUpgrade permits, in addition to adding new
@@ -1176,8 +1181,12 @@ func (t *ImageTemplate) validateBaseline() error {
 		if format == "" {
 			format = BaselineFormatRaw
 		}
-		if format != BaselineFormatRaw {
-			return fmt.Errorf("baseline.source.format must be %q (got %q)", BaselineFormatRaw, format)
+		switch format {
+		case BaselineFormatRaw, BaselineFormatQcow2, BaselineFormatVHD, BaselineFormatVHDX:
+			// supported; non-raw formats are converted to RAW before loop-attach.
+		default:
+			return fmt.Errorf("baseline.source.format must be one of %q, %q, %q, %q (got %q)",
+				BaselineFormatRaw, BaselineFormatQcow2, BaselineFormatVHD, BaselineFormatVHDX, format)
 		}
 		if t.OverlayPolicy != nil {
 			if err := t.OverlayPolicy.validate(); err != nil {
@@ -1206,6 +1215,13 @@ func (s *BaselineSource) Validate() error {
 	rawURL := strings.TrimSpace(s.URL)
 	s.Path = path
 	s.URL = rawURL
+	// Normalize the format to lower-case so downstream overlay ingestion compares
+	// the declared format against qemu-img's (lower-cased) detected format on equal
+	// footing. YAML-loaded templates are already constrained to the lower-case
+	// schema enum (raw/qcow2/vhd/vhdx) before this runs, so this primarily
+	// normalizes programmatically-built templates, which reach ingestion via
+	// Validate() without passing through schema validation.
+	s.Format = strings.ToLower(strings.TrimSpace(s.Format))
 
 	switch {
 	case path == "" && rawURL == "":
