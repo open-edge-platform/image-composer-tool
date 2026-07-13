@@ -458,6 +458,10 @@ func isDebPackageCacheOutdated(requiredPackages []string, cacheDir string) (bool
 func clearDebMetadataCache() {
 	log := logger.Logger()
 
+	if err := initializeUserRepoCfgs(); err != nil {
+		log.Warnf("failed to initialize user repo configs during DEB metadata cache clear: %v", err)
+	}
+
 	for _, dir := range debMetadataBuildPaths() {
 		cacheFile := filepath.Join(dir, "packages.parsed.json")
 		if err := os.Remove(cacheFile); err != nil && !os.IsNotExist(err) {
@@ -1067,6 +1071,10 @@ func DownloadPackages(pkgList []string, destDir, dotFile string, pkgSources map[
 }
 
 func DownloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSources map[string]config.PackageSource, systemRootsOnly bool) ([]string, []ospackage.PackageInfo, error) {
+	return downloadPackagesComplete(pkgList, destDir, dotFile, pkgSources, systemRootsOnly, false)
+}
+
+func downloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSources map[string]config.PackageSource, systemRootsOnly bool, retriedAfterCacheClear bool) ([]string, []ospackage.PackageInfo, error) {
 	var downloadPkgList []string
 
 	log := logger.Logger()
@@ -1080,21 +1088,6 @@ func DownloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSour
 	absDestDir, err := filepath.Abs(destDir)
 	if err != nil {
 		return downloadPkgList, nil, fmt.Errorf("resolving cache directory: %w", err)
-	}
-
-	if len(pkgList) > 0 {
-		cacheOutdated, missingRequired, cachedFiles, cacheErr := isDebPackageCacheOutdated(pkgList, absDestDir)
-		if cacheErr != nil {
-			log.Warnf("Failed to evaluate DEB package cache state: %v", cacheErr)
-		} else if !cacheOutdated {
-			log.Infof("DEB package cache is up-to-date; all %d required packages are available locally", len(pkgList))
-			return cachedFiles, buildDebPackageInfosFromCache(absDestDir, cachedFiles), nil
-		} else if len(missingRequired) > 0 {
-			log.Infof("DEB package cache is outdated; missing required packages: %v", missingRequired)
-			if clearErr := clearDebPackageCache(absDestDir); clearErr != nil {
-				log.Warnf("Failed to clear DEB package cache: %v", clearErr)
-			}
-		}
 	}
 
 	// Fetch the entire base package list from multiple repositories if configured
@@ -1152,6 +1145,29 @@ func DownloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSour
 		log.Debugf("sorting packages: %w", err)
 	}
 	log.Infof("sorted %d packages for installation", len(sorted_pkgs))
+
+	if len(sorted_pkgs) > 0 {
+		requiredPackages := make([]string, 0, len(sorted_pkgs))
+		for _, pkg := range sorted_pkgs {
+			requiredPackages = append(requiredPackages, pkg.Name)
+		}
+
+		cacheOutdated, missingRequired, cachedFiles, cacheErr := isDebPackageCacheOutdated(requiredPackages, absDestDir)
+		if cacheErr != nil {
+			log.Warnf("Failed to evaluate DEB package cache state: %v", cacheErr)
+		} else if !cacheOutdated {
+			log.Infof("DEB package cache is up-to-date; all %d resolved packages are available locally", len(requiredPackages))
+			return cachedFiles, buildDebPackageInfosFromCache(absDestDir, cachedFiles), nil
+		} else if len(missingRequired) > 0 {
+			log.Infof("DEB package cache is outdated; missing required packages: %v", missingRequired)
+			if clearErr := clearDebPackageCache(absDestDir); clearErr != nil {
+				log.Warnf("Failed to clear DEB package cache: %v", clearErr)
+			} else if !retriedAfterCacheClear {
+				log.Infof("Retrying DEB package resolution after cache clear")
+				return downloadPackagesComplete(pkgList, destDir, dotFile, pkgSources, systemRootsOnly, true)
+			}
+		}
+	}
 
 	// If a dot file is specified, generate the dependency graph
 	if dotFile != "" {

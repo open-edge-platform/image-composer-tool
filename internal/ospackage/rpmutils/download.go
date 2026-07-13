@@ -628,29 +628,55 @@ func isRPMPackageCacheOutdated(requiredPackages []string, cacheDir string) (bool
 	return len(missing) > 0, missing, cachedFiles, nil
 }
 
+func configuredRPMRepoURLs() []string {
+	seen := make(map[string]struct{})
+	urls := make([]string, 0, 1+len(UserRepo))
+	add := func(url string) {
+		url = strings.TrimSpace(url)
+		if url == "" || url == "<URL>" {
+			return
+		}
+		if _, ok := seen[url]; ok {
+			return
+		}
+		seen[url] = struct{}{}
+		urls = append(urls, url)
+	}
+
+	add(RepoCfg.URL)
+	for _, repo := range UserRepo {
+		add(repo.URL)
+	}
+
+	return urls
+}
+
 // clearRPMMetadataCache removes primary.parsed.json and primary.location.json
 // from the metadata cache directory derived from the configured repo URL so that
 // repository metadata is re-fetched on the next run.
 func clearRPMMetadataCache() {
 	log := logger.Logger()
 
-	if RepoCfg.URL == "" {
+	repoURLs := configuredRPMRepoURLs()
+	if len(repoURLs) == 0 {
 		return
 	}
 
-	metaDir, err := rpmMetadataCacheDir(RepoCfg.URL)
-	if err != nil {
-		log.Warnf("failed to resolve RPM metadata cache directory: %v", err)
-		return
-	}
-
-	for _, name := range []string{"primary.parsed.json", "primary.location.json"} {
-		f := filepath.Join(metaDir, name)
-		if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
-			log.Warnf("failed to remove RPM metadata cache %s: %v", f, err)
+	for _, repoURL := range repoURLs {
+		metaDir, err := rpmMetadataCacheDir(repoURL)
+		if err != nil {
+			log.Warnf("failed to resolve RPM metadata cache directory for %s: %v", repoURL, err)
 			continue
 		}
-		log.Infof("removed RPM metadata cache: %s", f)
+
+		for _, name := range []string{"primary.parsed.json", "primary.location.json"} {
+			f := filepath.Join(metaDir, name)
+			if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
+				log.Warnf("failed to remove RPM metadata cache %s: %v", f, err)
+				continue
+			}
+			log.Infof("removed RPM metadata cache: %s", f)
+		}
 	}
 }
 
@@ -696,25 +722,16 @@ func DownloadPackages(pkgList []string, destDir, dotFile string, pkgSources map[
 
 // DownloadPackagesComplete downloads packages and returns both package names and full package info.
 func DownloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSources map[string]config.PackageSource, systemRootsOnly bool) ([]string, []ospackage.PackageInfo, error) {
+	return downloadPackagesComplete(pkgList, destDir, dotFile, pkgSources, systemRootsOnly, false)
+}
+
+func downloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSources map[string]config.PackageSource, systemRootsOnly bool, retriedAfterMetadataClear bool) ([]string, []ospackage.PackageInfo, error) {
 	var downloadPkgList []string
 
 	log := logger.Logger()
 	absDestDir, err := filepath.Abs(destDir)
 	if err != nil {
 		return downloadPkgList, nil, fmt.Errorf("resolving cache directory: %v", err)
-	}
-
-	if len(pkgList) > 0 {
-		cacheOutdated, missingRequired, cachedFiles, cacheErr := isRPMPackageCacheOutdated(pkgList, absDestDir)
-		if cacheErr != nil {
-			log.Warnf("Failed to evaluate RPM package cache state: %v", cacheErr)
-		} else if !cacheOutdated {
-			log.Infof("RPM package cache is up-to-date; all %d required packages are available locally", len(pkgList))
-			return cachedFiles, buildRPMPackageInfosFromCache(absDestDir, cachedFiles), nil
-		} else if len(missingRequired) > 0 {
-			log.Infof("RPM package cache is outdated; missing required packages: %v", missingRequired)
-			log.Infof("Keeping existing cached RPM files and continuing to fetch only missing/new packages")
-		}
 	}
 
 	// Fetch the entire package list
@@ -775,6 +792,30 @@ func DownloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSour
 		log.Errorf("sorting packages: %v", err)
 	}
 	log.Infof("Sorted %d packages for installation", len(sorted_pkgs))
+
+	if len(sorted_pkgs) > 0 {
+		requiredPackages := make([]string, 0, len(sorted_pkgs))
+		for _, pkg := range sorted_pkgs {
+			requiredPackages = append(requiredPackages, pkg.Name)
+		}
+
+		cacheOutdated, missingRequired, cachedFiles, cacheErr := isRPMPackageCacheOutdated(requiredPackages, absDestDir)
+		if cacheErr != nil {
+			log.Warnf("Failed to evaluate RPM package cache state: %v", cacheErr)
+		} else if !cacheOutdated {
+			log.Infof("RPM package cache is up-to-date; all %d resolved packages are available locally", len(requiredPackages))
+			return cachedFiles, buildRPMPackageInfosFromCache(absDestDir, cachedFiles), nil
+		} else if len(missingRequired) > 0 {
+			log.Infof("RPM package cache is outdated; missing required packages: %v", missingRequired)
+			clearRPMMetadataCache()
+			log.Infof("Cleared RPM metadata cache due to missing required packages")
+			if !retriedAfterMetadataClear {
+				log.Infof("Retrying RPM package resolution after metadata cache clear")
+				return downloadPackagesComplete(pkgList, destDir, dotFile, pkgSources, systemRootsOnly, true)
+			}
+			log.Infof("Keeping existing cached RPM files and continuing to fetch only missing/new packages")
+		}
+	}
 
 	// If a dot file is specified, generate the dependency graph
 	if dotFile != "" {
