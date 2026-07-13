@@ -65,6 +65,7 @@ export default function App() {
   return (
     <div className="min-h-full">
       <nav className="flex items-center gap-6 bg-[#00285a] px-6 py-3 text-white">
+        <img src="/intel-logo.svg" alt="Intel" className="h-8 w-auto" />
         <span className="font-bold">Image Composer Tool</span>
         <div className="flex gap-1">
           {tabs.map((t) => (
