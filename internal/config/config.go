@@ -174,15 +174,20 @@ type ImageTemplate struct {
 	PackageRepositories []PackageRepository `yaml:"packageRepositories,omitempty"`
 
 	// Explicitly excluded from YAML serialization/deserialization
-	PathList             []string                `yaml:"-"`
-	BootloaderPkgList    []string                `yaml:"-"`
-	EssentialPkgList     []string                `yaml:"-"`
-	KernelPkgList        []string                `yaml:"-"`
-	FullPkgList          []string                `yaml:"-"`
-	FullPkgListBom       []ospackage.PackageInfo `yaml:"-"`
-	SBOMPackageMetadata  []ospackage.PackageInfo `yaml:"sbomPackageMetadata,omitempty"`
-	DotFilePath          string                  `yaml:"-"`
-	DotSystemOnly        bool                    `yaml:"-"`
+	PathList            []string                `yaml:"-"`
+	BootloaderPkgList   []string                `yaml:"-"`
+	EssentialPkgList    []string                `yaml:"-"`
+	KernelPkgList       []string                `yaml:"-"`
+	FullPkgList         []string                `yaml:"-"`
+	FullPkgListBom      []ospackage.PackageInfo `yaml:"-"`
+	SBOMPackageMetadata []ospackage.PackageInfo `yaml:"sbomPackageMetadata,omitempty"`
+	DotFilePath         string                  `yaml:"-"`
+	DotSystemOnly       bool                    `yaml:"-"`
+	// InspectEnabled toggles post-build image inspection for overlay builds. It is
+	// driven by the CLI --inspect/--no-inspect flags (default on) rather than YAML,
+	// so it is excluded from serialization. Consumed by the overlay postprocess
+	// inspection stage.
+	InspectEnabled       bool `yaml:"-"`
 	pureBuildStart       time.Time
 	pureBuildDuration    time.Duration
 	downloadPkgsStart    time.Time

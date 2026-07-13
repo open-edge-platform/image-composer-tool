@@ -22,6 +22,7 @@ type builderSeams struct {
 	resize      func(*config.ImageTemplate, *Context, *Layout) error
 	sbom        func(*BaselineInfo, string, *ResolutionPlan) error
 	emit        func(*config.ImageTemplate, string, string) (string, error)
+	inspect     func(string) error
 }
 
 func saveBuilderSeams() builderSeams {
@@ -30,7 +31,7 @@ func saveBuilderSeams() builderSeams {
 		removeCopy: builderRemoveCopy,
 		detect:     builderDetectFn, resolve: builderResolveFn, preflight: builderPreflightFn,
 		install: builderInstallFn, regenBoot: builderRegenBootFn, resize: builderResizeFn,
-		sbom: builderSBOMFn, emit: builderEmitFn,
+		sbom: builderSBOMFn, emit: builderEmitFn, inspect: builderInspectFn,
 	}
 }
 
@@ -39,7 +40,7 @@ func (s builderSeams) restore() {
 	builderRemoveCopy = s.removeCopy
 	builderDetectFn, builderResolveFn, builderPreflightFn = s.detect, s.resolve, s.preflight
 	builderInstallFn, builderRegenBootFn, builderResizeFn = s.install, s.regenBoot, s.resize
-	builderSBOMFn, builderEmitFn = s.sbom, s.emit
+	builderSBOMFn, builderEmitFn, builderInspectFn = s.sbom, s.emit, s.inspect
 }
 
 // builderRecorder tracks calls through the seams and lets a test inject errors at
@@ -62,6 +63,7 @@ type builderRecorder struct {
 	resizeErr    error
 	sbomErr      error
 	emitErr      error
+	inspectErr   error
 
 	report    *PreflightReport
 	installed *InstallResult
@@ -150,6 +152,10 @@ func installOverlayTestBuilder(t *testing.T, r *builderRecorder) *Builder {
 		}
 		return "/out/img-" + version + ".raw", nil
 	}
+	builderInspectFn = func(artifact string) error {
+		r.note("inspect:" + artifact)
+		return r.inspectErr
+	}
 	return b
 }
 
@@ -192,6 +198,85 @@ func TestBuilder_HappyPathOrdersStagesAndCleansUp(t *testing.T) {
 	}
 	if !equalStrings(gotStages, wantStages) {
 		t.Errorf("timing stages = %v, want %v", gotStages, wantStages)
+	}
+}
+
+func TestBuilder_InspectRunsAfterEmitWhenEnabled(t *testing.T) {
+	defer saveBuilderSeams().restore()
+	r := &builderRecorder{}
+	b := installOverlayTestBuilder(t, r)
+	b.template.InspectEnabled = true
+
+	if err := b.Preprocess(); err != nil {
+		t.Fatalf("Preprocess: %v", err)
+	}
+	if err := b.Build(); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if err := b.Postprocess(nil); err != nil {
+		t.Fatalf("Postprocess: %v", err)
+	}
+
+	// Inspection runs immediately after emit, against the emitted artifact path.
+	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "install", "regenBoot", "resize", "sbom", "emit:1.0", "inspect:/out/img-1.0.raw"}
+	if !equalStrings(r.calls, want) {
+		t.Errorf("stage order = %v, want %v", r.calls, want)
+	}
+	// The timing table gains an "Inspect Image" row after "Emit Artifact".
+	gotStages := make([]string, 0, len(b.Timings()))
+	for _, ts := range b.Timings() {
+		gotStages = append(gotStages, ts.Stage)
+	}
+	if len(gotStages) == 0 || gotStages[len(gotStages)-1] != "Inspect Image" {
+		t.Errorf("expected last timing stage to be 'Inspect Image', got %v", gotStages)
+	}
+}
+
+func TestBuilder_InspectSkippedWhenDisabled(t *testing.T) {
+	defer saveBuilderSeams().restore()
+	r := &builderRecorder{}
+	b := installOverlayTestBuilder(t, r)
+	b.template.InspectEnabled = false
+
+	if err := b.Preprocess(); err != nil {
+		t.Fatalf("Preprocess: %v", err)
+	}
+	if err := b.Build(); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if err := b.Postprocess(nil); err != nil {
+		t.Fatalf("Postprocess: %v", err)
+	}
+
+	for _, c := range r.calls {
+		if strings.HasPrefix(c, "inspect:") {
+			t.Errorf("inspect must not run when InspectEnabled=false; calls=%v", r.calls)
+		}
+	}
+}
+
+func TestBuilder_InspectFailureFailsPostprocess(t *testing.T) {
+	defer saveBuilderSeams().restore()
+	r := &builderRecorder{inspectErr: errors.New("bad image")}
+	b := installOverlayTestBuilder(t, r)
+	b.template.InspectEnabled = true
+
+	if err := b.Preprocess(); err != nil {
+		t.Fatalf("Preprocess: %v", err)
+	}
+	if err := b.Build(); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	err := b.Postprocess(nil)
+	if err == nil {
+		t.Fatal("expected Postprocess to fail when inspection fails")
+	}
+	if !strings.Contains(err.Error(), "image inspection failed") {
+		t.Errorf("expected inspection failure to surface, got %v", err)
+	}
+	// Cleanup still ran exactly once despite the inspection failure.
+	if r.teardowns != 1 || r.detaches != 1 {
+		t.Errorf("teardown/detach = %d/%d, want 1/1", r.teardowns, r.detaches)
 	}
 }
 

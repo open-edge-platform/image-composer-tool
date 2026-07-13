@@ -11,6 +11,7 @@ import (
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/config/manifest"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/imageinspect"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
@@ -110,6 +111,7 @@ var (
 	builderResizeFn    = ResizeBaseline
 	builderSBOMFn      = generateOverlaySBOM
 	builderEmitFn      = emitOverlayArtifact
+	builderInspectFn   = inspectOverlayArtifact
 )
 
 // NewBuilder constructs an overlay Builder for an overlay-mode template. It returns
@@ -334,18 +336,37 @@ func (b *Builder) Postprocess(buildErr error) (err error) {
 	// image is the modified backing file, which must no longer be in use. The
 	// release is timed together with the emit as the finalization stage.
 	version := b.imageVersion()
+	var artifact string
 	if err := b.timeStage("Emit Artifact", func() error {
 		if cerr := b.cleanupOnce(); cerr != nil {
 			return fmt.Errorf("overlay postprocess: failed to release baseline before emit: %w", cerr)
 		}
-		artifact, eerr := builderEmitFn(b.template, b.ctx.BaselineCopyPath, version)
+		emitted, eerr := builderEmitFn(b.template, b.ctx.BaselineCopyPath, version)
 		if eerr != nil {
 			return fmt.Errorf("overlay postprocess: failed to emit image artifact: %w", eerr)
 		}
+		artifact = emitted
 		log.Infof("Overlay build complete: emitted %s", artifact)
 		return nil
 	}); err != nil {
 		return err
+	}
+
+	// Inspect the emitted image unless the operator disabled it (--no-inspect).
+	// The inspection is a post-build report on the finished artifact — distinct
+	// from the mandatory baseline inspection in Preprocess that drives package
+	// resolution — so it runs against the already-released RAW file here.
+	if b.template.InspectEnabled {
+		if err := b.timeStage("Inspect Image", func() error {
+			if ierr := builderInspectFn(artifact); ierr != nil {
+				return fmt.Errorf("overlay postprocess: image inspection failed: %w", ierr)
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+	} else {
+		log.Infof("Overlay postprocess: image inspection disabled (--no-inspect); skipping")
 	}
 	return nil
 }
@@ -582,6 +603,33 @@ func emitOverlayArtifact(template *config.ImageTemplate, copyPath, version strin
 		log.Warnf("Overlay emit: failed to copy SBOM sidecar to %s: %v", buildDir, err)
 	}
 	return finalPath, nil
+}
+
+// inspectOverlayArtifact runs a post-build inspection of the emitted RAW image and
+// renders the summary to the build log. It reuses the same diskfs inspector the
+// standalone `inspect` command uses, so it needs no loop device or root: the image
+// is already released and inspected purely in userspace. Inspection is a reporting
+// step; a failure here is surfaced by the caller so a broken emitted image does not
+// pass silently.
+func inspectOverlayArtifact(artifactPath string) error {
+	if strings.TrimSpace(artifactPath) == "" {
+		return fmt.Errorf("overlay inspect: artifact path is empty")
+	}
+	// Enable SBOM inspection (second arg) so the reported summary includes the
+	// image's SBOM, matching the documented overlay-inspection behavior and the
+	// standalone compare/inspect commands. Hashing stays off: it is expensive and
+	// not needed for this reporting step.
+	summary, err := imageinspect.NewDiskfsInspectorWithOptions(false, true).Inspect(artifactPath)
+	if err != nil {
+		return fmt.Errorf("inspecting %s: %w", artifactPath, err)
+	}
+
+	var buf strings.Builder
+	if rerr := imageinspect.RenderSummaryText(&buf, summary, imageinspect.TextOptions{}); rerr != nil {
+		return fmt.Errorf("rendering inspection summary for %s: %w", artifactPath, rerr)
+	}
+	log.Infof("Overlay image inspection:\n%s", buf.String())
+	return nil
 }
 
 // moveFile moves src to dst without invoking a shell. It first attempts an atomic
