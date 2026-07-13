@@ -145,6 +145,7 @@ image-composer-tool build [flags] TEMPLATE_FILE
 | `--verbose, -v` | Enable verbose output (equivalent to --log-level debug). Displays detailed information about each step of the build process. |
 | `--dotfile, -f FILE` | Generate a dot file for the merged template dependency graph (user + defaults with resolved packages). |
 | `--system-packages-only` | When paired with `--dotfile`, limit the dependency graph to roots defined in `SystemConfig.Packages`. Dependencies pulled in by those roots still appear, but essentials/kernel/bootloader packages aren't drawn unless required by a system package. |
+| `--nocache` | Build from scratch: create fresh, unique cache and workspace directories (ignoring any existing caches), then remove them once the build finishes. The final image is copied into the configured `work_dir`. Cannot be combined with `--cache-dir` or `--work-dir`. |
 
 **Example:**
 

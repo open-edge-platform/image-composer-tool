@@ -20,6 +20,7 @@ func resetBuildFlags() {
 	workers = defaultWorkers
 	cacheDir = ""
 	workDir = ""
+	noCache = false
 }
 
 // createTestTemplate creates a minimal valid template file for testing
@@ -104,6 +105,7 @@ func TestCreateBuildCommand(t *testing.T) {
 			{name: "workers", shorthand: "w", shouldExist: true},
 			{name: "cache-dir", shorthand: "d", shouldExist: true},
 			{name: "work-dir", shorthand: "", shouldExist: true},
+			{name: "nocache", shorthand: "", shouldExist: true},
 		}
 
 		for _, expected := range expectedFlags {
@@ -575,6 +577,7 @@ func TestBuildCommand_HelpText(t *testing.T) {
 		"--workers",
 		"--cache-dir",
 		"--work-dir",
+		"--nocache",
 	}
 
 	for _, expected := range expectedInHelp {
@@ -735,6 +738,241 @@ func TestBuildCommand_ArgumentValidation(t *testing.T) {
 			}
 			if !tt.expectErr && err != nil {
 				t.Errorf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+// TestSetupNoCache verifies that setupNoCache creates fresh unique cache/workspace
+// directories adjacent to the configured ones, points the global config at them, and
+// that its cleanup function removes them again.
+func TestSetupNoCache(t *testing.T) {
+	prev := *config.Global()
+	defer config.SetGlobal(&prev)
+
+	tmp := t.TempDir()
+	cacheDir := filepath.Join(tmp, "cache")
+	workDir := filepath.Join(tmp, "workspace")
+
+	cfg := config.DefaultGlobalConfig()
+	cfg.CacheDir = cacheDir
+	cfg.WorkDir = workDir
+	cfg.ConfigDir = filepath.Join(tmp, "config")
+	cfg.TempDir = filepath.Join(tmp, "tmp")
+	config.SetGlobal(cfg)
+
+	nc, cleanup, err := setupNoCache()
+	if err != nil {
+		t.Fatalf("setupNoCache failed: %v", err)
+	}
+
+	// Unique dirs should have been created.
+	if _, err := os.Stat(nc.uniqueCacheDir); err != nil {
+		t.Errorf("unique cache dir should exist: %v", err)
+	}
+	if _, err := os.Stat(nc.uniqueWorkDir); err != nil {
+		t.Errorf("unique work dir should exist: %v", err)
+	}
+
+	// They must differ from the configured dirs but share the same parent.
+	absCache, _ := filepath.Abs(cacheDir)
+	absWork, _ := filepath.Abs(workDir)
+	if nc.uniqueCacheDir == absCache {
+		t.Error("unique cache dir should differ from configured cache dir")
+	}
+	if nc.uniqueWorkDir == absWork {
+		t.Error("unique work dir should differ from configured work dir")
+	}
+	if got, want := filepath.Dir(nc.uniqueCacheDir), filepath.Dir(absCache); got != want {
+		t.Errorf("unique cache dir parent = %q, want %q", got, want)
+	}
+	if got, want := filepath.Dir(nc.uniqueWorkDir), filepath.Dir(absWork); got != want {
+		t.Errorf("unique work dir parent = %q, want %q", got, want)
+	}
+
+	// The global config must now point at the unique dirs.
+	if resolved, _ := config.CacheDir(); resolved != nc.uniqueCacheDir {
+		t.Errorf("config cache dir = %q, want %q", resolved, nc.uniqueCacheDir)
+	}
+	if resolved, _ := config.WorkDir(); resolved != nc.uniqueWorkDir {
+		t.Errorf("config work dir = %q, want %q", resolved, nc.uniqueWorkDir)
+	}
+
+	// origWorkDir must capture the pre-override configured workspace.
+	if nc.origWorkDir != absWork {
+		t.Errorf("origWorkDir = %q, want %q", nc.origWorkDir, absWork)
+	}
+
+	// Cleanup should remove both unique dirs.
+	cleanup()
+	if _, err := os.Stat(nc.uniqueCacheDir); !os.IsNotExist(err) {
+		t.Errorf("unique cache dir should be removed after cleanup, stat err: %v", err)
+	}
+	if _, err := os.Stat(nc.uniqueWorkDir); !os.IsNotExist(err) {
+		t.Errorf("unique work dir should be removed after cleanup, stat err: %v", err)
+	}
+}
+
+// TestSetupNoCache_CleanupKeepsWorkspaceOnFlag verifies that when keepWorkDir is set
+// (e.g. output copy-out failed), cleanup removes the cache but preserves the workspace.
+func TestSetupNoCache_CleanupKeepsWorkspaceOnFlag(t *testing.T) {
+	prev := *config.Global()
+	defer config.SetGlobal(&prev)
+
+	tmp := t.TempDir()
+	cfg := config.DefaultGlobalConfig()
+	cfg.CacheDir = filepath.Join(tmp, "cache")
+	cfg.WorkDir = filepath.Join(tmp, "workspace")
+	cfg.ConfigDir = filepath.Join(tmp, "config")
+	cfg.TempDir = filepath.Join(tmp, "tmp")
+	config.SetGlobal(cfg)
+
+	nc, cleanup, err := setupNoCache()
+	if err != nil {
+		t.Fatalf("setupNoCache failed: %v", err)
+	}
+
+	nc.keepWorkDir = true
+	cleanup()
+
+	if _, err := os.Stat(nc.uniqueCacheDir); !os.IsNotExist(err) {
+		t.Errorf("cache dir should be removed even when keepWorkDir is set")
+	}
+	if _, err := os.Stat(nc.uniqueWorkDir); err != nil {
+		t.Errorf("workspace should be preserved when keepWorkDir is set: %v", err)
+	}
+}
+
+// TestSetupNoCache_ErrorWhenCacheParentMissing verifies setupNoCache surfaces an error
+// when the unique cache directory cannot be created.
+func TestSetupNoCache_ErrorWhenCacheParentMissing(t *testing.T) {
+	prev := *config.Global()
+	defer config.SetGlobal(&prev)
+
+	cfg := config.DefaultGlobalConfig()
+	// The cache dir's parent does not exist, so os.MkdirTemp fails.
+	cfg.CacheDir = filepath.Join(t.TempDir(), "does-not-exist", "cache")
+	cfg.WorkDir = filepath.Join(t.TempDir(), "workspace")
+	config.SetGlobal(cfg)
+
+	if _, _, err := setupNoCache(); err == nil {
+		t.Fatal("expected setupNoCache to fail when the cache parent directory is missing")
+	}
+}
+
+// TestSetupNoCache_ErrorWhenWorkParentMissing verifies that when creating the unique
+// workspace fails, the already-created unique cache directory is cleaned up.
+func TestSetupNoCache_ErrorWhenWorkParentMissing(t *testing.T) {
+	prev := *config.Global()
+	defer config.SetGlobal(&prev)
+
+	tmp := t.TempDir()
+	cfg := config.DefaultGlobalConfig()
+	cfg.CacheDir = filepath.Join(tmp, "cache")                      // parent (tmp) exists
+	cfg.WorkDir = filepath.Join(tmp, "missing-parent", "workspace") // parent missing
+	config.SetGlobal(cfg)
+
+	if _, _, err := setupNoCache(); err == nil {
+		t.Fatal("expected setupNoCache to fail when the workspace parent directory is missing")
+	}
+
+	// The unique cache dir created before the failure must have been removed.
+	entries, err := os.ReadDir(tmp)
+	if err != nil {
+		t.Fatalf("failed to read temp dir: %v", err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "ict-nocache-cache-") {
+			t.Errorf("leftover unique cache dir was not cleaned up: %s", e.Name())
+		}
+	}
+}
+
+// TestPreserveNoCacheOutput verifies that the built image directory is copied from the
+// unique --nocache workspace back to the originally configured workspace.
+func TestPreserveNoCacheOutput(t *testing.T) {
+	const providerId = "azure-linux-azl3-x86_64"
+	const configName = "edge"
+
+	t.Run("CopiesImageOutput", func(t *testing.T) {
+		tmp := t.TempDir()
+		uniqueWork := filepath.Join(tmp, "unique-workspace")
+		origWork := filepath.Join(tmp, "orig-workspace")
+
+		srcImageDir := filepath.Join(uniqueWork, providerId, "imagebuild", configName)
+		if err := os.MkdirAll(srcImageDir, 0o755); err != nil {
+			t.Fatalf("failed to create src image dir: %v", err)
+		}
+		imageContent := []byte("fake image bytes")
+		if err := os.WriteFile(filepath.Join(srcImageDir, "image.raw"), imageContent, 0o644); err != nil {
+			t.Fatalf("failed to write fake image: %v", err)
+		}
+
+		nc := &noCacheContext{uniqueWorkDir: uniqueWork, origWorkDir: origWork}
+		if err := preserveNoCacheOutput(nc, providerId, configName); err != nil {
+			t.Fatalf("preserveNoCacheOutput failed: %v", err)
+		}
+
+		dstImage := filepath.Join(origWork, providerId, "imagebuild", configName, "image.raw")
+		got, err := os.ReadFile(dstImage)
+		if err != nil {
+			t.Fatalf("expected copied image at %s: %v", dstImage, err)
+		}
+		if string(got) != string(imageContent) {
+			t.Errorf("copied image content mismatch: got %q, want %q", got, imageContent)
+		}
+	})
+
+	t.Run("NoOutputDirIsNoOp", func(t *testing.T) {
+		tmp := t.TempDir()
+		nc := &noCacheContext{
+			uniqueWorkDir: filepath.Join(tmp, "unique-workspace"),
+			origWorkDir:   filepath.Join(tmp, "orig-workspace"),
+		}
+		// No imagebuild dir was produced -> should be a no-op, not an error.
+		if err := preserveNoCacheOutput(nc, providerId, configName); err != nil {
+			t.Errorf("expected no error when image dir is missing, got: %v", err)
+		}
+		dst := filepath.Join(nc.origWorkDir, providerId, "imagebuild", configName)
+		if _, err := os.Stat(dst); !os.IsNotExist(err) {
+			t.Errorf("destination should not exist when there is no output, stat err: %v", err)
+		}
+	})
+}
+
+// TestExecuteBuild_NoCacheMutualExclusion verifies that --nocache cannot be combined
+// with --cache-dir or --work-dir.
+func TestExecuteBuild_NoCacheMutualExclusion(t *testing.T) {
+	prev := *config.Global()
+	defer config.SetGlobal(&prev)
+
+	tests := []struct {
+		name string
+		flag string
+		val  string
+	}{
+		{name: "WithCacheDir", flag: "cache-dir", val: "/tmp/some-cache"},
+		{name: "WithWorkDir", flag: "work-dir", val: "/tmp/some-work"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer resetBuildFlags()
+
+			cmd := createBuildCommand()
+			if err := cmd.Flags().Set("nocache", "true"); err != nil {
+				t.Fatalf("failed to set nocache flag: %v", err)
+			}
+			if err := cmd.Flags().Set(tt.flag, tt.val); err != nil {
+				t.Fatalf("failed to set %s flag: %v", tt.flag, err)
+			}
+
+			err := executeBuild(cmd, []string{"template.yml"})
+			if err == nil {
+				t.Fatalf("expected error when combining --nocache with --%s", tt.flag)
+			}
+			if !strings.Contains(err.Error(), "cannot be combined") {
+				t.Errorf("expected mutual-exclusion error, got: %v", err)
 			}
 		})
 	}

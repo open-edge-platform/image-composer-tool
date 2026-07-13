@@ -16,6 +16,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/provider/rcd"
 	"github.com/open-edge-platform/image-composer-tool/internal/provider/ubuntu"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/display"
+	fileutil "github.com/open-edge-platform/image-composer-tool/internal/utils/file"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 	"github.com/spf13/cobra"
@@ -31,6 +32,7 @@ var (
 	workDir            string = "" // Empty means use config file value
 	dotFile            string = "" // Generate a dot file for the dependency graph
 	systemPackagesOnly bool   = false
+	noCache            bool   = false // Build from scratch in fresh, unique cache/workspace dirs
 )
 
 // createBuildCommand creates the build subcommand
@@ -55,6 +57,8 @@ The template file must be in YAML format following the image template schema.`,
 	buildCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose output")
 	buildCmd.Flags().StringVarP(&dotFile, "dotfile", "f", "", "Generate a dot file for the dependency graph")
 	buildCmd.Flags().BoolVar(&systemPackagesOnly, "system-packages-only", false, "When generating a dot graph, only include roots from SystemConfig.Packages")
+	buildCmd.Flags().BoolVar(&noCache, "nocache", false,
+		"Build from scratch using fresh, unique cache and workspace directories that are removed after the build (the final image is copied to the configured workspace)")
 
 	return buildCmd
 }
@@ -77,6 +81,22 @@ func executeBuild(cmd *cobra.Command, args []string) error {
 		currentConfig := config.Global()
 		currentConfig.WorkDir = workDir
 		config.SetGlobal(currentConfig)
+	}
+
+	// When --nocache is set, run the build in fresh, unique cache and workspace
+	// directories so nothing is reused from previous builds, then remove them once the
+	// build finishes. The final image is copied back to the configured workspace.
+	var nc *noCacheContext
+	if noCache {
+		if cmd.Flags().Changed("cache-dir") || cmd.Flags().Changed("work-dir") {
+			return fmt.Errorf("--nocache cannot be combined with --cache-dir or --work-dir")
+		}
+		ctx, cleanup, err := setupNoCache()
+		if err != nil {
+			return fmt.Errorf("setting up --nocache directories: %w", err)
+		}
+		defer cleanup()
+		nc = ctx
 	}
 
 	var buildErr error
@@ -150,6 +170,16 @@ post:
 		log.Info("image build completed successfully")
 		template.MarkBuildFinished()
 		displayImageBuildTiming(template.Target.ImageType, template)
+
+		// Copy the freshly built image out of the temporary --nocache workspace before
+		// the deferred cleanup removes it, so the output lands in the configured workspace.
+		if nc != nil {
+			providerId := system.GetProviderId(template.Target.OS, template.Target.Dist, template.Target.Arch)
+			if err := preserveNoCacheOutput(nc, providerId, template.GetSystemConfigName()); err != nil {
+				nc.keepWorkDir = true
+				return fmt.Errorf("preserving --nocache build output: %w", err)
+			}
+		}
 	} else {
 		// Avoid logging the full error chain to prevent potential leakage of sensitive data.
 		// Log only the error type/category to aid debugging without exposing sensitive details.
@@ -157,6 +187,93 @@ post:
 	}
 
 	return buildErr
+}
+
+// noCacheContext holds the unique directories created for a --nocache build so the
+// final image can be copied out and the directories removed once the build finishes.
+type noCacheContext struct {
+	uniqueCacheDir string
+	uniqueWorkDir  string
+	origWorkDir    string
+	keepWorkDir    bool // preserve the workspace for recovery when output copy-out fails
+}
+
+// setupNoCache creates fresh, unique cache and workspace directories adjacent to the
+// configured ones, points the global config at them, and returns the context plus a
+// cleanup function that removes the unique directories.
+func setupNoCache() (*noCacheContext, func(), error) {
+	origCacheDir, err := config.CacheDir()
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolving cache directory: %w", err)
+	}
+	origWorkDir, err := config.WorkDir()
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolving work directory: %w", err)
+	}
+
+	uniqueCacheDir, err := os.MkdirTemp(filepath.Dir(origCacheDir), "ict-nocache-cache-*")
+	if err != nil {
+		return nil, nil, fmt.Errorf("creating unique cache directory: %w", err)
+	}
+	uniqueWorkDir, err := os.MkdirTemp(filepath.Dir(origWorkDir), "ict-nocache-workspace-*")
+	if err != nil {
+		if rmErr := os.RemoveAll(uniqueCacheDir); rmErr != nil {
+			logger.Logger().Warnf("failed to remove unique cache directory %s: %v", uniqueCacheDir, rmErr)
+		}
+		return nil, nil, fmt.Errorf("creating unique workspace directory: %w", err)
+	}
+
+	currentConfig := config.Global()
+	currentConfig.CacheDir = uniqueCacheDir
+	currentConfig.WorkDir = uniqueWorkDir
+	config.SetGlobal(currentConfig)
+
+	nc := &noCacheContext{
+		uniqueCacheDir: uniqueCacheDir,
+		uniqueWorkDir:  uniqueWorkDir,
+		origWorkDir:    origWorkDir,
+	}
+
+	log := logger.Logger()
+	log.Infof("--nocache: building in fresh cache %s and workspace %s", uniqueCacheDir, uniqueWorkDir)
+
+	cleanup := func() {
+		if err := os.RemoveAll(uniqueCacheDir); err != nil {
+			log.Warnf("failed to remove --nocache cache directory %s: %v", uniqueCacheDir, err)
+		}
+		if nc.keepWorkDir {
+			log.Infof("--nocache: preserving workspace %s for recovery", uniqueWorkDir)
+			return
+		}
+		if err := os.RemoveAll(uniqueWorkDir); err != nil {
+			log.Warnf("failed to remove --nocache workspace directory %s: %v", uniqueWorkDir, err)
+		}
+	}
+
+	return nc, cleanup, nil
+}
+
+// preserveNoCacheOutput copies the built image directory from the unique --nocache
+// workspace back to the originally configured workspace so it survives cleanup.
+func preserveNoCacheOutput(nc *noCacheContext, providerId, configName string) error {
+	srcImageDir := filepath.Join(nc.uniqueWorkDir, providerId, "imagebuild", configName)
+	if _, err := os.Stat(srcImageDir); err != nil {
+		if os.IsNotExist(err) {
+			// No image build directory was produced; nothing to preserve.
+			return nil
+		}
+		return fmt.Errorf("checking image output directory: %w", err)
+	}
+
+	// The build runs as root (image files are root-owned) and the copy happens in the
+	// same process, so no privilege escalation is needed here.
+	dstImageDir := filepath.Join(nc.origWorkDir, providerId, "imagebuild", configName)
+	if err := fileutil.CopyDir(srcImageDir, dstImageDir, "-p", false); err != nil {
+		return fmt.Errorf("copying image output to %s: %w", dstImageDir, err)
+	}
+
+	logger.Logger().Infof("--nocache: build output copied to %s", dstImageDir)
+	return nil
 }
 
 func displayImageBuildTiming(imageType string, template *config.ImageTemplate) {
