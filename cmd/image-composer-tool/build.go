@@ -102,30 +102,30 @@ func executeBuild(cmd *cobra.Command, args []string) error {
 		if cmd.Flags().Changed("cache-dir") || cmd.Flags().Changed("work-dir") {
 			return fmt.Errorf("--nocache cannot be combined with --cache-dir or --work-dir")
 		}
-		origCacheDir, err := config.CacheDir()
+		originalCacheDir, err := config.CacheDir()
 		if err != nil {
 			return fmt.Errorf("resolving cache directory: %w", err)
 		}
-		origWorkDir, err := config.WorkDir()
+		originalWorkDir, err := config.WorkDir()
 		if err != nil {
 			return fmt.Errorf("resolving work directory: %w", err)
 		}
-		createdIsolated, cleanup, setupErr := cache.SetupIsolated(origCacheDir, origWorkDir)
+		createdIsolated, cleanup, setupErr := cache.SetupIsolated(originalCacheDir, originalWorkDir)
 		if setupErr != nil {
 			return fmt.Errorf("setting up --nocache directories: %w", setupErr)
 		}
-		// Point the build at the isolated dirs via the config singleton (the same
+		// Point the build at the isolated directories via the config singleton (the same
 		// mechanism --cache-dir/--work-dir use); restore it during cleanup so later
 		// code in this process never consults the removed directories.
-		cfg := config.Global()
-		cfg.CacheDir = createdIsolated.CacheDir
-		cfg.WorkDir = createdIsolated.WorkDir
-		config.SetGlobal(cfg)
+		currentConfig := config.Global()
+		currentConfig.CacheDir = createdIsolated.CacheDir
+		currentConfig.WorkDir = createdIsolated.WorkDir
+		config.SetGlobal(currentConfig)
 		defer func() {
-			restored := config.Global()
-			restored.CacheDir = origCacheDir
-			restored.WorkDir = origWorkDir
-			config.SetGlobal(restored)
+			restoredConfig := config.Global()
+			restoredConfig.CacheDir = originalCacheDir
+			restoredConfig.WorkDir = originalWorkDir
+			config.SetGlobal(restoredConfig)
 			cleanup()
 		}()
 		isolated = createdIsolated

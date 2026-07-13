@@ -10,49 +10,49 @@ import (
 // TestSetupIsolated verifies that SetupIsolated creates fresh unique cache/workspace
 // directories adjacent to the provided ones and that cleanup removes them again.
 func TestSetupIsolated(t *testing.T) {
-	tmp := t.TempDir()
-	origCacheDir := filepath.Join(tmp, "cache")
-	origWorkDir := filepath.Join(tmp, "workspace")
+	tempDir := t.TempDir()
+	originalCacheDir := filepath.Join(tempDir, "cache")
+	originalWorkDir := filepath.Join(tempDir, "workspace")
 
-	iso, cleanup, err := SetupIsolated(origCacheDir, origWorkDir)
+	isolated, cleanup, err := SetupIsolated(originalCacheDir, originalWorkDir)
 	if err != nil {
 		t.Fatalf("SetupIsolated failed: %v", err)
 	}
 
-	// Unique dirs should have been created.
-	if _, err := os.Stat(iso.CacheDir); err != nil {
-		t.Errorf("unique cache dir should exist: %v", err)
+	// Unique directories should have been created.
+	if _, err := os.Stat(isolated.CacheDir); err != nil {
+		t.Errorf("unique cache directory should exist: %v", err)
 	}
-	if _, err := os.Stat(iso.WorkDir); err != nil {
-		t.Errorf("unique work dir should exist: %v", err)
-	}
-
-	// They must differ from the provided dirs but share the same parent.
-	if iso.CacheDir == origCacheDir {
-		t.Error("unique cache dir should differ from configured cache dir")
-	}
-	if iso.WorkDir == origWorkDir {
-		t.Error("unique work dir should differ from configured work dir")
-	}
-	if got, want := filepath.Dir(iso.CacheDir), filepath.Dir(origCacheDir); got != want {
-		t.Errorf("unique cache dir parent = %q, want %q", got, want)
-	}
-	if got, want := filepath.Dir(iso.WorkDir), filepath.Dir(origWorkDir); got != want {
-		t.Errorf("unique work dir parent = %q, want %q", got, want)
+	if _, err := os.Stat(isolated.WorkDir); err != nil {
+		t.Errorf("unique work directory should exist: %v", err)
 	}
 
-	// origWorkDir must capture the provided configured workspace (copy-out target).
-	if iso.origWorkDir != origWorkDir {
-		t.Errorf("origWorkDir = %q, want %q", iso.origWorkDir, origWorkDir)
+	// They must differ from the provided directories but share the same parent.
+	if isolated.CacheDir == originalCacheDir {
+		t.Error("unique cache directory should differ from configured cache directory")
+	}
+	if isolated.WorkDir == originalWorkDir {
+		t.Error("unique work directory should differ from configured work directory")
+	}
+	if got, want := filepath.Dir(isolated.CacheDir), filepath.Dir(originalCacheDir); got != want {
+		t.Errorf("unique cache directory parent = %q, want %q", got, want)
+	}
+	if got, want := filepath.Dir(isolated.WorkDir), filepath.Dir(originalWorkDir); got != want {
+		t.Errorf("unique work directory parent = %q, want %q", got, want)
 	}
 
-	// Cleanup should remove both unique dirs.
+	// originalWorkDir must capture the provided configured workspace (copy-out target).
+	if isolated.originalWorkDir != originalWorkDir {
+		t.Errorf("originalWorkDir = %q, want %q", isolated.originalWorkDir, originalWorkDir)
+	}
+
+	// Cleanup should remove both unique directories.
 	cleanup()
-	if _, err := os.Stat(iso.CacheDir); !os.IsNotExist(err) {
-		t.Errorf("unique cache dir should be removed after cleanup, stat err: %v", err)
+	if _, err := os.Stat(isolated.CacheDir); !os.IsNotExist(err) {
+		t.Errorf("unique cache directory should be removed after cleanup, stat err: %v", err)
 	}
-	if _, err := os.Stat(iso.WorkDir); !os.IsNotExist(err) {
-		t.Errorf("unique work dir should be removed after cleanup, stat err: %v", err)
+	if _, err := os.Stat(isolated.WorkDir); !os.IsNotExist(err) {
+		t.Errorf("unique work directory should be removed after cleanup, stat err: %v", err)
 	}
 }
 
@@ -60,19 +60,19 @@ func TestSetupIsolated(t *testing.T) {
 // called (e.g. output copy-out failed), cleanup removes the cache but preserves the
 // workspace.
 func TestSetupIsolated_CleanupKeepsWorkspaceOnFlag(t *testing.T) {
-	tmp := t.TempDir()
-	iso, cleanup, err := SetupIsolated(filepath.Join(tmp, "cache"), filepath.Join(tmp, "workspace"))
+	tempDir := t.TempDir()
+	isolated, cleanup, err := SetupIsolated(filepath.Join(tempDir, "cache"), filepath.Join(tempDir, "workspace"))
 	if err != nil {
 		t.Fatalf("SetupIsolated failed: %v", err)
 	}
 
-	iso.KeepWorkspace()
+	isolated.KeepWorkspace()
 	cleanup()
 
-	if _, err := os.Stat(iso.CacheDir); !os.IsNotExist(err) {
-		t.Errorf("cache dir should be removed even when workspace is kept")
+	if _, err := os.Stat(isolated.CacheDir); !os.IsNotExist(err) {
+		t.Errorf("cache directory should be removed even when workspace is kept")
 	}
-	if _, err := os.Stat(iso.WorkDir); err != nil {
+	if _, err := os.Stat(isolated.WorkDir); err != nil {
 		t.Errorf("workspace should be preserved when KeepWorkspace was called: %v", err)
 	}
 }
@@ -80,9 +80,9 @@ func TestSetupIsolated_CleanupKeepsWorkspaceOnFlag(t *testing.T) {
 // TestSetupIsolated_ErrorWhenCacheParentMissing verifies SetupIsolated surfaces an
 // error when the unique cache directory cannot be created.
 func TestSetupIsolated_ErrorWhenCacheParentMissing(t *testing.T) {
-	origCacheDir := filepath.Join(t.TempDir(), "does-not-exist", "cache")
-	origWorkDir := filepath.Join(t.TempDir(), "workspace")
-	if _, _, err := SetupIsolated(origCacheDir, origWorkDir); err == nil {
+	originalCacheDir := filepath.Join(t.TempDir(), "does-not-exist", "cache")
+	originalWorkDir := filepath.Join(t.TempDir(), "workspace")
+	if _, _, err := SetupIsolated(originalCacheDir, originalWorkDir); err == nil {
 		t.Fatal("expected SetupIsolated to fail when the cache parent directory is missing")
 	}
 }
@@ -90,22 +90,22 @@ func TestSetupIsolated_ErrorWhenCacheParentMissing(t *testing.T) {
 // TestSetupIsolated_ErrorWhenWorkParentMissing verifies that when creating the unique
 // workspace fails, the already-created unique cache directory is cleaned up.
 func TestSetupIsolated_ErrorWhenWorkParentMissing(t *testing.T) {
-	tmp := t.TempDir()
-	origCacheDir := filepath.Join(tmp, "cache")                      // parent (tmp) exists
-	origWorkDir := filepath.Join(tmp, "missing-parent", "workspace") // parent missing
+	tempDir := t.TempDir()
+	originalCacheDir := filepath.Join(tempDir, "cache")                      // parent (tempDir) exists
+	originalWorkDir := filepath.Join(tempDir, "missing-parent", "workspace") // parent missing
 
-	if _, _, err := SetupIsolated(origCacheDir, origWorkDir); err == nil {
+	if _, _, err := SetupIsolated(originalCacheDir, originalWorkDir); err == nil {
 		t.Fatal("expected SetupIsolated to fail when the workspace parent directory is missing")
 	}
 
-	// The unique cache dir created before the failure must have been removed.
-	entries, err := os.ReadDir(tmp)
+	// The unique cache directory created before the failure must have been removed.
+	entries, err := os.ReadDir(tempDir)
 	if err != nil {
-		t.Fatalf("failed to read temp dir: %v", err)
+		t.Fatalf("failed to read temp directory: %v", err)
 	}
 	for _, entry := range entries {
 		if strings.HasPrefix(entry.Name(), "ict-nocache-cache-") {
-			t.Errorf("leftover unique cache dir was not cleaned up: %s", entry.Name())
+			t.Errorf("leftover unique cache directory was not cleaned up: %s", entry.Name())
 		}
 	}
 }
@@ -117,28 +117,28 @@ func TestIsolated_PreserveOutput(t *testing.T) {
 	const configName = "edge"
 
 	t.Run("CopiesImageOutput", func(t *testing.T) {
-		tmp := t.TempDir()
-		uniqueWork := filepath.Join(tmp, "unique-workspace")
-		origWork := filepath.Join(tmp, "orig-workspace")
+		tempDir := t.TempDir()
+		uniqueWorkspace := filepath.Join(tempDir, "unique-workspace")
+		originalWorkspace := filepath.Join(tempDir, "orig-workspace")
 
-		srcImageDir := filepath.Join(uniqueWork, providerID, "imagebuild", configName)
-		if err := os.MkdirAll(srcImageDir, 0o700); err != nil {
-			t.Fatalf("failed to create src image dir: %v", err)
+		sourceImageDir := filepath.Join(uniqueWorkspace, providerID, "imagebuild", configName)
+		if err := os.MkdirAll(sourceImageDir, 0o700); err != nil {
+			t.Fatalf("failed to create source image directory: %v", err)
 		}
 		imageContent := []byte("fake image bytes")
-		if err := os.WriteFile(filepath.Join(srcImageDir, "image.raw"), imageContent, 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(sourceImageDir, "image.raw"), imageContent, 0o644); err != nil {
 			t.Fatalf("failed to write fake image: %v", err)
 		}
 
-		iso := &Isolated{WorkDir: uniqueWork, origWorkDir: origWork}
-		if err := iso.PreserveOutput(providerID, configName); err != nil {
+		isolated := &Isolated{WorkDir: uniqueWorkspace, originalWorkDir: originalWorkspace}
+		if err := isolated.PreserveOutput(providerID, configName); err != nil {
 			t.Fatalf("PreserveOutput failed: %v", err)
 		}
 
-		dstImage := filepath.Join(origWork, providerID, "imagebuild", configName, "image.raw")
-		got, err := os.ReadFile(dstImage)
+		destinationImagePath := filepath.Join(originalWorkspace, providerID, "imagebuild", configName, "image.raw")
+		got, err := os.ReadFile(destinationImagePath)
 		if err != nil {
-			t.Fatalf("expected copied image at %s: %v", dstImage, err)
+			t.Fatalf("expected copied image at %s: %v", destinationImagePath, err)
 		}
 		if string(got) != string(imageContent) {
 			t.Errorf("copied image content mismatch: got %q, want %q", got, imageContent)
@@ -146,28 +146,28 @@ func TestIsolated_PreserveOutput(t *testing.T) {
 
 		// The preserved output directory tree should be created with 0700 permissions
 		// (matching the image build directory) rather than CopyDir's mkdir -p default.
-		imageBuildDir := filepath.Join(origWork, providerID, "imagebuild")
-		info, err := os.Stat(imageBuildDir)
+		imageBuildDir := filepath.Join(originalWorkspace, providerID, "imagebuild")
+		fileInfo, err := os.Stat(imageBuildDir)
 		if err != nil {
-			t.Fatalf("stat preserved image build dir: %v", err)
+			t.Fatalf("stat preserved image build directory: %v", err)
 		}
-		if perm := info.Mode().Perm(); perm != 0o700 {
-			t.Errorf("preserved image build dir perm = %o, want 0700", perm)
+		if permissions := fileInfo.Mode().Perm(); permissions != 0o700 {
+			t.Errorf("preserved image build directory perm = %o, want 0700", permissions)
 		}
 	})
 
 	t.Run("NoOutputDirIsNoOp", func(t *testing.T) {
-		tmp := t.TempDir()
-		iso := &Isolated{
-			WorkDir:     filepath.Join(tmp, "unique-workspace"),
-			origWorkDir: filepath.Join(tmp, "orig-workspace"),
+		tempDir := t.TempDir()
+		isolated := &Isolated{
+			WorkDir:         filepath.Join(tempDir, "unique-workspace"),
+			originalWorkDir: filepath.Join(tempDir, "orig-workspace"),
 		}
-		// No imagebuild dir was produced -> should be a no-op, not an error.
-		if err := iso.PreserveOutput(providerID, configName); err != nil {
-			t.Errorf("expected no error when image dir is missing, got: %v", err)
+		// No imagebuild directory was produced -> should be a no-op, not an error.
+		if err := isolated.PreserveOutput(providerID, configName); err != nil {
+			t.Errorf("expected no error when image directory is missing, got: %v", err)
 		}
-		dst := filepath.Join(iso.origWorkDir, providerID, "imagebuild", configName)
-		if _, err := os.Stat(dst); !os.IsNotExist(err) {
+		destinationPath := filepath.Join(isolated.originalWorkDir, providerID, "imagebuild", configName)
+		if _, err := os.Stat(destinationPath); !os.IsNotExist(err) {
 			t.Errorf("destination should not exist when there is no output, stat err: %v", err)
 		}
 	})
