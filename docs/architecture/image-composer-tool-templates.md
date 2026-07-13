@@ -707,7 +707,43 @@ build time.
 To learn how variables interact with each build stage, see
 [Build Stages in Detail](./image-composer-tool-build-process.md#build-stages-in-detail).
 
+## WSL Required Fields
 
+To compose a WSL-compatible image, set `target.imageType: wsl2` and include a
+WSL-compatible `disk` artifact definition.
+
+| Field | Required for WSL | Requirement |
+|-------|------------------|-------------|
+| `image.name` | **Yes** | Standard image identifier |
+| `image.version` | **Yes** | Standard image version |
+| `target.os` | **Yes** | Any supported OS/distribution with a WSL2 default template |
+| `target.dist` | **Yes** | Distribution for the selected OS (for example, `ubuntu24`) |
+| `target.arch` | **Yes** | Use `x86_64` for current WSL2 templates |
+| `target.imageType` | **Yes** | Must be `wsl2` |
+| `disk.name` | **Yes** | Required when `imageType: wsl2` |
+| `disk.artifacts[].type` | **Yes** | Must be `tar` |
+| `disk.artifacts[].compression` | **Yes** | Must be `gz` |
+
+Additional notes for WSL builds:
+
+- The default Ubuntu WSL template seeds the standard Ubuntu apt sources via
+  `systemConfig.additionalFiles` (for example, `ubuntu-noble.list`), which is
+  the same mechanism used by the raw and initrd defaults.
+- `disk.partitionTableType` and `disk.partitions` are not used for `wsl2` templates.
+- `systemConfig.kernel` is not allowed for `wsl2` templates.
+
+Example `disk` block for WSL:
+
+```yaml
+disk:
+  name: ubuntu24-x86_64-agentic
+  artifacts:
+    - type: tar
+      compression: gz
+```
+
+See the full end-to-end example at
+[`image-templates/ubuntu24-x86_64-agentic-wsl2.yml`](../../image-templates/ubuntu24-x86_64-agentic-wsl2.yml).
 
 ## Best Practices
 
