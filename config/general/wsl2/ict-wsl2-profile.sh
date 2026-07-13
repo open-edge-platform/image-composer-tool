@@ -18,5 +18,7 @@ fi
 
 instructions="/usr/share/doc/ict-wsl2/resize-filesystem.txt"
 if [ -r "$instructions" ]; then
-  sed "s/<distribution-name>/${WSL_DISTRO_NAME:-<distribution-name>}/g" "$instructions"
+  distro="${WSL_DISTRO_NAME:-<distribution-name>}"
+  distro_escaped=$(printf '%s' "$distro" | sed 's/[\/&\\]/\\&/g')
+  sed "s/<distribution-name>/${distro_escaped}/g" "$instructions"
 fi
