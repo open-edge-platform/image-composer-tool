@@ -6,18 +6,18 @@ import { BuildImagePage } from './components/BuildImagePage'
 
 type LoadState = 'loading' | 'ready' | 'error'
 type View = 'basic' | 'advanced' | 'builds'
+type BuildStatus = 'idle' | 'running' | 'success' | 'failed'
 
 export default function App() {
   const setManifest = useStore((s) => s.setManifest)
   const [state, setState] = useState<LoadState>('loading')
   const [error, setError] = useState<string | null>(null)
 
-  // Which top-level panel is showing, and the active build (if any).
   const [view, setView] = useState<View>('basic')
   const [buildId, setBuildId] = useState<string | null>(null)
   const [retrying, setRetrying] = useState(false)
-  // Keep a stable ref to the last selection used to start a build so retry
-  // doesn't capture a stale snapshot from when the callback was first created.
+  const [buildStatus, setBuildStatus] = useState<BuildStatus>('idle')
+
   const selection = useStore((s) => s.selection)
   const selectionRef = useRef(selection)
   selectionRef.current = selection
@@ -39,15 +39,17 @@ export default function App() {
 
   useEffect(load, [load])
 
-  // Starting a build hands the id up and switches to the Build Image panel.
   const onBuildStarted = (id: string) => {
     setBuildId(id)
+    setBuildStatus('running')
     setView('builds')
   }
 
-  // Retry uses the same selection as the previous build.
+  const onBuildStatusChange = (s: BuildStatus) => setBuildStatus(s)
+
   const onRetry = useCallback(async () => {
     setRetrying(true)
+    setBuildStatus('running')
     try {
       const accepted = await api.startBuild(selectionRef.current)
       setBuildId(accepted.buildId)
@@ -87,6 +89,10 @@ export default function App() {
             </button>
           ))}
         </div>
+        {/* Build status indicator — right side of nav */}
+        <div className="ml-auto">
+          <BuildIndicator status={buildStatus} onClick={() => setView('builds')} />
+        </div>
       </nav>
 
       {state === 'loading' && (
@@ -106,18 +112,48 @@ export default function App() {
         </div>
       )}
 
-      {/* Keep both panels mounted so an in-flight build's SSE stream isn't torn
-          down when the user flips back to Basic; just toggle visibility. */}
       {state === 'ready' && (
         <>
           <div hidden={view !== 'basic'}>
-            <BasicPage onBuildStarted={onBuildStarted} />
+            <BasicPage
+              onBuildStarted={onBuildStarted}
+              buildInProgress={buildStatus === 'running'}
+            />
           </div>
           <div hidden={view !== 'builds'}>
-            <BuildImagePage buildId={buildId} onRetry={onRetry} retrying={retrying} />
+            <BuildImagePage
+              buildId={buildId}
+              onRetry={onRetry}
+              retrying={retrying}
+              onStatusChange={onBuildStatusChange}
+            />
           </div>
         </>
       )}
     </div>
+  )
+}
+
+function BuildIndicator({ status, onClick }: { status: BuildStatus; onClick: () => void }) {
+  if (status === 'idle') return null
+  const cfg = {
+    running: { color: 'bg-yellow-400', pulse: true,  label: 'Build in progress' },
+    success: { color: 'bg-green-400',  pulse: false, label: 'Build completed' },
+    failed:  { color: 'bg-red-500',    pulse: false, label: 'Build failed' },
+  }[status]
+  return (
+    <button
+      onClick={onClick}
+      title={cfg.label}
+      className="flex items-center gap-2 rounded px-2 py-1 text-xs text-white/80 hover:bg-white/10"
+    >
+      <span className="relative flex h-3 w-3">
+        {cfg.pulse && (
+          <span className={`absolute inline-flex h-full w-full animate-ping rounded-full ${cfg.color} opacity-75`} />
+        )}
+        <span className={`relative inline-flex h-3 w-3 rounded-full ${cfg.color}`} />
+      </span>
+      {cfg.label}
+    </button>
   )
 }

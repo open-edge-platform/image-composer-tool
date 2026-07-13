@@ -5,12 +5,11 @@ import type { ComposeResponse } from '../api/types'
 import { Select } from './Select'
 
 interface BasicPageProps {
-  // Called with the new build id when a build starts; the parent switches to
-  // the Build Image panel.
   onBuildStarted: (buildId: string) => void
+  buildInProgress: boolean
 }
 
-export function BasicPage({ onBuildStarted }: BasicPageProps) {
+export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
   const manifest = useStore((s) => s.manifest)
   const selection = useStore((s) => s.selection)
   const setField = useStore((s) => s.setField)
@@ -140,26 +139,47 @@ export function BasicPage({ onBuildStarted }: BasicPageProps) {
         </label>
 
         {reviewOpen && review && (
-          <div className="mt-3 rounded-md bg-slate-50 p-4">
-            <table className="w-full text-sm">
-              <tbody>
-                {Object.entries({
-                  Image: review.summary.imageName,
-                  Vertical: review.summary.vertical,
-                  SKU: review.summary.sku || '—',
-                  Platform: review.summary.platform,
-                  OS: review.summary.os,
-                  'Image Type': review.summary.imageType.toUpperCase(),
-                  Disk: review.summary.diskSize || '—',
-                  Packages: `${review.summary.packageCount} packages`,
-                }).map(([k, v]) => (
-                  <tr key={k}>
-                    <td className="py-1 pr-4 font-semibold">{k}</td>
-                    <td className="py-1">{v}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
+            <div className="rounded bg-slate-100 p-3">
+              <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Your Selection</p>
+              <table className="w-full">
+                <tbody>
+                  {([
+                    ['Vertical', review.summary.vertical],
+                    review.summary.sku ? ['SKU', review.summary.sku] : null,
+                    ['Platform', review.summary.platform],
+                    ['OS', review.summary.os],
+                    ['Image Type', review.summary.imageType.toUpperCase()],
+                  ] as ([string, string] | null)[]).filter((r): r is [string, string] => r !== null).map(([k, v]) => (
+                    <tr key={k}>
+                      <td className="py-0.5 pr-3 font-semibold text-slate-500 w-24">{k}</td>
+                      <td className="py-0.5 text-slate-700">{v}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="rounded bg-slate-100 p-3">
+              <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Image Configuration</p>
+              <table className="w-full">
+                <tbody>
+                  {([
+                    ['Image', `${review.summary.imageName}${review.summary.imageVersion ? ` (v${review.summary.imageVersion})` : ''}`],
+                    review.summary.description ? ['Description', review.summary.description] : null,
+                    ['Architecture', review.summary.architecture],
+                    review.summary.kernelVersion ? ['Kernel', review.summary.kernelVersion] : null,
+                    ['Packages', `${review.summary.packageCount} packages`],
+                    review.summary.diskSize ? ['Disk', `${review.summary.diskSize}${review.summary.partitionTable ? `, ${review.summary.partitionTable.toUpperCase()}` : ''}${review.summary.partitionCount ? `, ${review.summary.partitionCount} partitions` : ''}`] : null,
+                    review.summary.hostname ? ['Hostname', review.summary.hostname] : null,
+                  ] as ([string, string] | null)[]).filter((r): r is [string, string] => r !== null).map(([k, v]) => (
+                    <tr key={k}>
+                      <td className="py-0.5 pr-3 font-semibold text-slate-500 w-24">{k}</td>
+                      <td className="py-0.5 text-slate-700">{v}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
       </div>
@@ -169,14 +189,19 @@ export function BasicPage({ onBuildStarted }: BasicPageProps) {
       <div className="mt-6">
         <button
           className="rounded-md bg-[#0071c5] px-5 py-2.5 font-semibold text-white hover:bg-[#00285a] disabled:cursor-not-allowed disabled:opacity-50"
-          disabled={!complete || busy}
+          disabled={!complete || busy || buildInProgress}
           onClick={onBuild}
         >
-          {busy ? 'Starting…' : 'Build Image'}
+          {busy ? 'Starting…' : buildInProgress ? 'Build in progress…' : 'Build Image'}
         </button>
-        {!complete && (
+        {!complete && !buildInProgress && (
           <span className="ml-3 text-sm text-slate-500">
             Complete all selections to build.
+          </span>
+        )}
+        {buildInProgress && (
+          <span className="ml-3 text-sm text-amber-600">
+            A build is already in progress. Switch to the Build Image tab to monitor it.
           </span>
         )}
       </div>

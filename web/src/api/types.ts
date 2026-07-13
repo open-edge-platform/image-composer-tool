@@ -44,15 +44,23 @@ export interface ComposeRequest {
 }
 
 export interface ComposeSummary {
-  imageName: string
+  // Selection echo
   vertical: string
   sku: string
   platform: string
   os: string
   imageType: string
+  // Template-derived
+  imageName: string
+  imageVersion: string
+  description: string
+  architecture: string
+  kernelVersion: string
   packageCount: number
   diskSize: string
   partitionCount: number
+  partitionTable: string
+  hostname: string
 }
 
 export interface ComposeResponse {
@@ -83,6 +91,7 @@ export interface BuildDetails {
   templateUrl: string
   workDir: string
   cacheDir: string
+  summary?: ComposeSummary
 }
 
 export interface BuildComplete {

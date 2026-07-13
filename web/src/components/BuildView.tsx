@@ -2,17 +2,20 @@ import { useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
 import type { Artifact, BuildDetails } from '../api/types'
 
+type BuildStatus = 'idle' | 'running' | 'success' | 'failed'
+
 interface BuildViewProps {
   buildId: string
   onRetry: () => Promise<void>
   retrying: boolean
+  onStatusChange: (s: BuildStatus) => void
 }
 
 // Full MVP-1 build lifecycle. "not-started" is represented by not rendering this
 // component at all; once a build exists it moves through the states below.
 type Status = 'running' | 'cancelling' | 'cancelled' | 'success' | 'failed'
 
-export function BuildView({ buildId, onRetry, retrying }: BuildViewProps) {
+export function BuildView({ buildId, onRetry, retrying, onStatusChange }: BuildViewProps) {
   const [logs, setLogs] = useState<string[]>([])
   const [status, setStatus] = useState<Status>('running')
   const [artifacts, setArtifacts] = useState<Artifact[]>([])
@@ -41,10 +44,10 @@ export function BuildView({ buildId, onRetry, retrying }: BuildViewProps) {
     })
     es.addEventListener('complete', (e) => {
       const data = JSON.parse((e as MessageEvent).data)
-      // A build cancelled server-side still terminates via complete/error; honor
-      // an explicit cancelled status if the backend reports one.
-      setStatus(data.status === 'cancelled' ? 'cancelled' : 'success')
+      const s = data.status === 'cancelled' ? 'cancelled' : 'success'
+      setStatus(s)
       setArtifacts(data.artifacts ?? [])
+      onStatusChange(s === 'success' ? 'success' : 'idle')
       es.close()
     })
     es.addEventListener('error', (e) => {
@@ -52,13 +55,15 @@ export function BuildView({ buildId, onRetry, retrying }: BuildViewProps) {
       if (raw) {
         try {
           const data = JSON.parse(raw)
-          setStatus(data.status === 'cancelled' ? 'cancelled' : 'failed')
+          const s = data.status === 'cancelled' ? 'cancelled' : 'failed'
+          setStatus(s)
           if (data.message) setErrorMsg(data.message)
+          onStatusChange('failed')
         } catch {
           setStatus('failed')
+          onStatusChange('failed')
         }
       }
-      // A transport error with no data (connection drop) also ends the stream.
       es.close()
     })
 
@@ -119,7 +124,55 @@ export function BuildView({ buildId, onRetry, retrying }: BuildViewProps) {
             <span className="font-normal text-slate-400">— command, template, paths</span>
           </button>
           {detailsOpen && (
-            <div className="space-y-3 border-t border-slate-200 px-3 py-3 text-xs">
+            <div className="space-y-4 border-t border-slate-200 px-3 py-3 text-xs">
+
+              {/* Selection + image configuration summary */}
+              {details.summary && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="rounded bg-white p-3 shadow-sm">
+                    <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Your Selection</p>
+                    <table className="w-full">
+                      <tbody>
+                        {([
+                          ['Vertical', details.summary.vertical],
+                          details.summary.sku ? ['SKU', details.summary.sku] : null,
+                          ['Platform', details.summary.platform],
+                          ['OS', details.summary.os],
+                          ['Image Type', details.summary.imageType.toUpperCase()],
+                        ] as ([string, string] | null)[]).filter((r): r is [string, string] => r !== null).map(([k, v]) => (
+                          <tr key={k}>
+                            <td className="py-0.5 pr-3 font-semibold text-slate-500 w-24">{k}</td>
+                            <td className="py-0.5 text-slate-700">{v}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="rounded bg-white p-3 shadow-sm">
+                    <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Image Configuration</p>
+                    <table className="w-full">
+                      <tbody>
+                        {([
+                          ['Image', `${details.summary.imageName}${details.summary.imageVersion ? ` (v${details.summary.imageVersion})` : ''}`],
+                          details.summary.description ? ['Description', details.summary.description] : null,
+                          ['Architecture', details.summary.architecture],
+                          details.summary.kernelVersion ? ['Kernel', details.summary.kernelVersion] : null,
+                          ['Packages', `${details.summary.packageCount} packages`],
+                          details.summary.diskSize ? ['Disk', `${details.summary.diskSize}${details.summary.partitionTable ? `, ${details.summary.partitionTable.toUpperCase()}` : ''}${details.summary.partitionCount ? `, ${details.summary.partitionCount} partitions` : ''}`] : null,
+                          details.summary.hostname ? ['Hostname', details.summary.hostname] : null,
+                        ] as ([string, string] | null)[]).filter((r): r is [string, string] => r !== null).map(([k, v]) => (
+                          <tr key={k}>
+                            <td className="py-0.5 pr-3 font-semibold text-slate-500 w-24">{k}</td>
+                            <td className="py-0.5 text-slate-700">{v}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Command */}
               <div>
                 <div className="mb-1 flex items-center gap-2">
                   <span className="font-semibold text-slate-600">Command</span>
@@ -134,6 +187,8 @@ export function BuildView({ buildId, onRetry, retrying }: BuildViewProps) {
                   {details.command}
                 </pre>
               </div>
+
+              {/* Template + dirs */}
               <div className="flex items-center gap-2">
                 <span className="font-semibold text-slate-600">Template</span>
                 <span className="font-mono text-slate-700">{details.template}</span>

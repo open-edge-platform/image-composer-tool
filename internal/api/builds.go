@@ -17,6 +17,7 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 )
 
@@ -44,10 +45,11 @@ type build struct {
 	ID           string
 	WorkDir      string
 	CacheDir     string
-	Template     string // template file name (for display)
-	TemplatePath string // resolved on-disk path (for download)
-	Command      string // exact command run, for the UI's troubleshoot panel
-	done         chan struct{} // closed when the build finishes
+	Template     string          // template file name (for display)
+	TemplatePath string          // resolved on-disk path (for download)
+	Command      string          // exact command run, for the UI's troubleshoot panel
+	Summary      *composeSummary // image configuration summary, nil for YAML builds
+	done         chan struct{}   // closed when the build finishes
 
 	mu        sync.Mutex
 	status    buildStatus
@@ -157,6 +159,16 @@ func (s *Server) handleStartBuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Build the image summary. Best-effort: a merge failure here doesn't block
+	// the build (compose already validated the template; this is for display only).
+	var summary *composeSummary
+	if req.Compose != nil {
+		if merged, err := config.LoadAndMergeTemplate(templatePath); err == nil {
+			s := buildComposeSummary(*req.Compose, merged)
+			summary = &s
+		}
+	}
+
 	name, cmdArgs := s.buildCommand(templatePath, workDir, cacheDir)
 	b := &build{
 		ID:           id,
@@ -166,6 +178,7 @@ func (s *Server) handleStartBuild(w http.ResponseWriter, r *http.Request) {
 		Template:     templateName,
 		TemplatePath: templatePath,
 		Command:      name + " " + strings.Join(cmdArgs, " "),
+		Summary:      summary,
 		done:         make(chan struct{}),
 	}
 	s.tracker.add(b)
@@ -308,7 +321,6 @@ func (s *Server) runBuild(b *build, name string, cmdArgs []string) {
 	if len(arts) == 0 {
 		arts = discoverArtifacts(b.WorkDir)
 	}
-
 
 	b.finish(statusSuccess, arts, "")
 }

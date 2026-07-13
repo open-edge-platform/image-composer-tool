@@ -16,13 +16,14 @@ import (
 // in its collapsible "Build details" panel: the exact command, the resolved
 // template, and the per-build work/cache directories.
 type buildDetails struct {
-	BuildID     string `json:"buildId"`
-	Status      string `json:"status"`
-	Command     string `json:"command"`
-	Template    string `json:"template"`
-	TemplateURL string `json:"templateUrl"`
-	WorkDir     string `json:"workDir"`
-	CacheDir    string `json:"cacheDir"`
+	BuildID     string          `json:"buildId"`
+	Status      string          `json:"status"`
+	Command     string          `json:"command"`
+	Template    string          `json:"template"`
+	TemplateURL string          `json:"templateUrl"`
+	WorkDir     string          `json:"workDir"`
+	CacheDir    string          `json:"cacheDir"`
+	Summary     *composeSummary `json:"summary,omitempty"`
 }
 
 // handleBuildDetails returns the command and paths for a build so the UI can show
@@ -43,6 +44,7 @@ func (s *Server) handleBuildDetails(w http.ResponseWriter, r *http.Request) {
 		TemplateURL: "/api/v1/builds/" + id + "/template",
 		WorkDir:     b.WorkDir,
 		CacheDir:    b.CacheDir,
+		Summary:     b.Summary,
 	})
 }
 
