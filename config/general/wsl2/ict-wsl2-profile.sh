@@ -18,6 +18,5 @@ fi
 
 instructions="/usr/share/doc/ict-wsl2/resize-filesystem.txt"
 if [ -r "$instructions" ]; then
-  awk -v distro="${WSL_DISTRO_NAME:-<distribution-name>}" \
-    '{gsub(/<distribution-name>/, distro); print}' "$instructions"
+  sed "s/<distribution-name>/${WSL_DISTRO_NAME:-<distribution-name>}/g" "$instructions"
 fi
