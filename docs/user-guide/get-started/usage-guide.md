@@ -78,9 +78,12 @@ sudo image-composer-tool build /usr/share/image-composer-tool/examples/azl3-x86_
 
 # Override config settings with flags
 sudo -E ./image-composer-tool build --workers 16 --cache-dir /tmp/cache image-templates/azl3-x86_64-edge-raw.yml
+
+# Build from scratch in throwaway cache/workspace dirs (removed after the build)
+sudo -E ./image-composer-tool build --nocache image-templates/azl3-x86_64-edge-raw.yml
 ```
 
-Common flags: `--workers`, `--cache-dir`, `--work-dir`, `--verbose`,
+Common flags: `--workers`, `--cache-dir`, `--work-dir`, `--nocache`, `--verbose`,
 `--dotfile`, `--config`, `--log-level`.
 See the full
 [build flag reference](../architecture/image-composer-tool-cli-specification.md#build-command)
