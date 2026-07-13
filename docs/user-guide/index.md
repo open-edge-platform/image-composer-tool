@@ -92,21 +92,22 @@ Configure Multiple Package Repositories <./configuration/configure-multiple-pack
 :caption: Architecture
 
 Architecture Overview <./architecture/architecture.md>
-Build Process <./architecture/image-composer-tool-build-process.md>
-Caching <./architecture/image-composer-tool-caching.md>
 CLI Specification <./architecture/image-composer-tool-cli-specification.md>
+Security Objectives <./architecture/image-composition-tool-security-objectives.md>
+Build Process <./architecture/image-composer-tool-build-process.md>
+Image Manifest Specification <./architecture/image-manifest-specification.md>
 Coding Style Guide <./architecture/image-composer-tool-coding-style.md>
+Caching <./architecture/image-composer-tool-caching.md>
 Multiple Package Repo Support <./architecture/image-composer-tool-multi-repo-support.md>
 Image Template Reference <./architecture/image-composer-tool-templates.md>
-Security Objectives <./architecture/image-composition-tool-security-objectives.md>
-Image Manifest Specification <./architecture/image-manifest-specification.md>
 
 :::
 
 :::{toctree}
 :hidden:
+:caption: --------------------
 
-release-notes.md
+Release Notes <./release-notes.md>
 
 :::
 hide_directive-->
