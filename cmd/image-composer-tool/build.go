@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/open-edge-platform/image-composer-tool/internal/cache"
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/isomaker"
 	"github.com/open-edge-platform/image-composer-tool/internal/provider"
@@ -16,7 +17,6 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/provider/rcd"
 	"github.com/open-edge-platform/image-composer-tool/internal/provider/ubuntu"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/display"
-	fileutil "github.com/open-edge-platform/image-composer-tool/internal/utils/file"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 	"github.com/spf13/cobra"
@@ -97,17 +97,38 @@ func executeBuild(cmd *cobra.Command, args []string) error {
 	// When --nocache is set, run the build in fresh, unique cache and workspace
 	// directories so nothing is reused from previous builds, then remove them once the
 	// build finishes. The final image is copied back to the configured workspace.
-	var noCacheContext *noCacheContext
+	var isolated *cache.Isolated
 	if noCache {
 		if cmd.Flags().Changed("cache-dir") || cmd.Flags().Changed("work-dir") {
 			return fmt.Errorf("--nocache cannot be combined with --cache-dir or --work-dir")
 		}
-		createdContext, cleanup, setupErr := setupNoCache()
+		origCacheDir, err := config.CacheDir()
+		if err != nil {
+			return fmt.Errorf("resolving cache directory: %w", err)
+		}
+		origWorkDir, err := config.WorkDir()
+		if err != nil {
+			return fmt.Errorf("resolving work directory: %w", err)
+		}
+		createdIsolated, cleanup, setupErr := cache.SetupIsolated(origCacheDir, origWorkDir)
 		if setupErr != nil {
 			return fmt.Errorf("setting up --nocache directories: %w", setupErr)
 		}
-		defer cleanup()
-		noCacheContext = createdContext
+		// Point the build at the isolated dirs via the config singleton (the same
+		// mechanism --cache-dir/--work-dir use); restore it during cleanup so later
+		// code in this process never consults the removed directories.
+		cfg := config.Global()
+		cfg.CacheDir = createdIsolated.CacheDir
+		cfg.WorkDir = createdIsolated.WorkDir
+		config.SetGlobal(cfg)
+		defer func() {
+			restored := config.Global()
+			restored.CacheDir = origCacheDir
+			restored.WorkDir = origWorkDir
+			config.SetGlobal(restored)
+			cleanup()
+		}()
+		isolated = createdIsolated
 	}
 
 	var buildErr error
@@ -182,8 +203,8 @@ post:
 			// In --nocache mode the deferred cleanup would otherwise remove the unique
 			// workspace on return, discarding a successfully built image. Preserve it so
 			// the image (and any state needed for recovery) survives a PostProcess failure.
-			if noCacheContext != nil {
-				noCacheContext.keepWorkDir = true
+			if isolated != nil {
+				isolated.KeepWorkspace()
 			}
 			return fmt.Errorf("post-processing failed: %v", err)
 		}
@@ -193,10 +214,10 @@ post:
 		// For --nocache, copy the freshly built image out of the temporary workspace before
 		// reporting success: a copy-out failure is a build failure and must not be logged as a
 		// completed build. The deferred cleanup removes the temporary workspace on return.
-		if noCacheContext != nil {
+		if isolated != nil {
 			providerId := system.GetProviderId(template.Target.OS, template.Target.Dist, template.Target.Arch)
-			if err := preserveNoCacheOutput(noCacheContext, providerId, template.GetSystemConfigName()); err != nil {
-				noCacheContext.keepWorkDir = true
+			if err := isolated.PreserveOutput(providerId, template.GetSystemConfigName()); err != nil {
+				isolated.KeepWorkspace()
 				return fmt.Errorf("preserving --nocache build output: %w", err)
 			}
 		}
@@ -261,105 +282,6 @@ func applyOverlayFlagOverrides(cmd *cobra.Command, template *config.ImageTemplat
 		}
 		logger.Logger().Infof("Overriding baseline image path with %s", baselineImage)
 	}
-	return nil
-}
-
-// noCacheContext holds the unique directories created for a --nocache build so the
-// final image can be copied out and the directories removed once the build finishes.
-type noCacheContext struct {
-	uniqueCacheDir string
-	uniqueWorkDir  string
-	origWorkDir    string
-	keepWorkDir    bool // preserve the workspace for recovery when copy-out or PostProcess fails
-}
-
-// setupNoCache creates fresh, unique cache and workspace directories adjacent to the
-// configured ones, points the global config at them, and returns the context plus a
-// cleanup function that removes the unique directories.
-func setupNoCache() (*noCacheContext, func(), error) {
-	origCacheDir, err := config.CacheDir()
-	if err != nil {
-		return nil, nil, fmt.Errorf("resolving cache directory: %w", err)
-	}
-	origWorkDir, err := config.WorkDir()
-	if err != nil {
-		return nil, nil, fmt.Errorf("resolving work directory: %w", err)
-	}
-
-	uniqueCacheDir, err := os.MkdirTemp(filepath.Dir(origCacheDir), "ict-nocache-cache-*")
-	if err != nil {
-		return nil, nil, fmt.Errorf("creating unique cache directory: %w", err)
-	}
-	uniqueWorkDir, err := os.MkdirTemp(filepath.Dir(origWorkDir), "ict-nocache-workspace-*")
-	if err != nil {
-		if rmErr := os.RemoveAll(uniqueCacheDir); rmErr != nil {
-			logger.Logger().Warnf("failed to remove unique cache directory %s: %v", uniqueCacheDir, rmErr)
-		}
-		return nil, nil, fmt.Errorf("creating unique workspace directory: %w", err)
-	}
-
-	currentConfig := config.Global()
-	currentConfig.CacheDir = uniqueCacheDir
-	currentConfig.WorkDir = uniqueWorkDir
-	config.SetGlobal(currentConfig)
-
-	noCacheContext := &noCacheContext{
-		uniqueCacheDir: uniqueCacheDir,
-		uniqueWorkDir:  uniqueWorkDir,
-		origWorkDir:    origWorkDir,
-	}
-
-	log := logger.Logger()
-	log.Infof("--nocache: building in fresh cache %s and workspace %s", uniqueCacheDir, uniqueWorkDir)
-
-	cleanup := func() {
-		// Restore the original cache/work directories so later code in the same process
-		// does not consult the now-removed --nocache directories.
-		currentConfig := config.Global()
-		currentConfig.CacheDir = origCacheDir
-		currentConfig.WorkDir = origWorkDir
-		config.SetGlobal(currentConfig)
-
-		if err := os.RemoveAll(uniqueCacheDir); err != nil {
-			log.Warnf("failed to remove --nocache cache directory %s: %v", uniqueCacheDir, err)
-		}
-		if noCacheContext.keepWorkDir {
-			log.Infof("--nocache: preserving workspace %s for recovery", uniqueWorkDir)
-			return
-		}
-		if err := os.RemoveAll(uniqueWorkDir); err != nil {
-			log.Warnf("failed to remove --nocache workspace directory %s: %v", uniqueWorkDir, err)
-		}
-	}
-
-	return noCacheContext, cleanup, nil
-}
-
-// preserveNoCacheOutput copies the built image directory from the unique --nocache
-// workspace back to the originally configured workspace so it survives cleanup.
-func preserveNoCacheOutput(noCacheContext *noCacheContext, providerId, configName string) error {
-	srcImageDir := filepath.Join(noCacheContext.uniqueWorkDir, providerId, "imagebuild", configName)
-	if _, err := os.Stat(srcImageDir); err != nil {
-		if os.IsNotExist(err) {
-			// No image build directory was produced; nothing to preserve.
-			return nil
-		}
-		return fmt.Errorf("checking image output directory: %w", err)
-	}
-
-	// The build runs as root (image files are root-owned) and the copy happens in the
-	// same process, so no privilege escalation is needed here.
-	dstImageDir := filepath.Join(noCacheContext.origWorkDir, providerId, "imagebuild", configName)
-	// Pre-create the destination with 0700 to match the image build directory permissions;
-	// CopyDir's mkdir -p would otherwise create it with more permissive defaults.
-	if err := os.MkdirAll(dstImageDir, 0700); err != nil {
-		return fmt.Errorf("creating image output directory %s: %w", dstImageDir, err)
-	}
-	if err := fileutil.CopyDir(srcImageDir, dstImageDir, "-p", false); err != nil {
-		return fmt.Errorf("copying image output to %s: %w", dstImageDir, err)
-	}
-
-	logger.Logger().Infof("--nocache: build output copied to %s", dstImageDir)
 	return nil
 }
 
