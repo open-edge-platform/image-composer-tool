@@ -10,7 +10,7 @@ interface BuildImagePageProps {
 // started from the Basic (or Advanced) tab, and an empty prompt otherwise.
 export function BuildImagePage({ buildId, onRetry, retrying }: BuildImagePageProps) {
   return (
-    <div className="mx-auto max-w-2xl p-6">
+    <div className="mx-auto max-w-6xl p-6">
       <h1 className="mb-4 text-2xl font-bold text-[#00285a]">Build Image</h1>
       {buildId ? (
         <BuildView buildId={buildId} onRetry={onRetry} retrying={retrying} />

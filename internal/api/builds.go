@@ -308,6 +308,8 @@ func (s *Server) runBuild(b *build, name string, cmdArgs []string) {
 	if len(arts) == 0 {
 		arts = discoverArtifacts(b.WorkDir)
 	}
+
+
 	b.finish(statusSuccess, arts, "")
 }
 

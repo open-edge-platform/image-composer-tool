@@ -158,31 +158,39 @@ export function BuildView({ buildId, onRetry, retrying }: BuildViewProps) {
 
       <div className="mb-2 flex gap-2">
         <button
-          className="rounded border border-slate-300 px-2 py-1 text-xs hover:bg-slate-100 disabled:opacity-50"
+          className="flex items-center gap-1.5 rounded border border-slate-300 px-2 py-1 text-xs hover:bg-slate-100 disabled:opacity-50"
           disabled={logs.length === 0}
           onClick={copyLogs}
+          title="Copy logs to clipboard"
         >
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
           Copy logs
         </button>
         <button
-          className="rounded border border-slate-300 px-2 py-1 text-xs hover:bg-slate-100 disabled:opacity-50"
+          className="flex items-center gap-1.5 rounded border border-slate-300 px-2 py-1 text-xs hover:bg-slate-100 disabled:opacity-50"
           disabled={logs.length === 0}
           onClick={downloadLogs}
+          title="Download logs as a file"
         >
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
           Download logs
         </button>
       </div>
 
       <div
         ref={logRef}
-        className="h-80 overflow-auto rounded-md bg-[#00285a] p-3 font-mono text-xs leading-relaxed text-slate-100"
+        className="h-[32rem] overflow-auto rounded-md bg-[#00285a] p-3 font-mono text-xs leading-relaxed text-slate-100"
       >
         {logs.length === 0 && <div className="text-slate-400">Waiting for build output…</div>}
-        {logs.map((line, i) => (
-          <div key={i} className="whitespace-pre-wrap">
-            {stripAnsi(line)}
-          </div>
-        ))}
+        {logs.map((line, i) => {
+          const clean = cleanLine(line)
+          if (clean === '') return null
+          return (
+            <div key={i} className="whitespace-pre">
+              {clean}
+            </div>
+          )
+        })}
       </div>
 
       {artifacts.length > 0 && (
@@ -193,22 +201,36 @@ export function BuildView({ buildId, onRetry, retrying }: BuildViewProps) {
               <tr className="bg-[#e6f2fa] text-left">
                 <th className="px-3 py-2">Name</th>
                 <th className="px-3 py-2">Type</th>
-                <th className="px-3 py-2 text-right">Path</th>
+                <th className="px-3 py-2">Path</th>
+                <th className="px-3 py-2 text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
               {artifacts.map((a) => (
                 <tr key={a.path} className="border-b border-slate-200">
-                  <td className="px-3 py-2">{a.name}</td>
+                  <td className="px-3 py-2 font-mono text-xs">{a.name}</td>
                   <td className="px-3 py-2 uppercase">{a.type}</td>
+                  <td className="px-3 py-2 font-mono text-xs text-slate-500 break-all">{a.path}</td>
                   <td className="px-3 py-2 text-right">
-                    <button
-                      className="rounded border border-slate-300 px-2 py-1 text-xs hover:bg-slate-100"
-                      title={a.path}
-                      onClick={() => copyPath(a.path)}
-                    >
-                      📋 Copy path
-                    </button>
+                    <div className="flex items-center justify-end gap-1">
+                      <button
+                        className="flex items-center gap-1 rounded border border-slate-300 px-2 py-1 text-xs hover:bg-slate-100"
+                        title="Copy path to clipboard"
+                        onClick={() => copyPath(a.path)}
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                        Copy path
+                      </button>
+                      <a
+                        className="flex items-center gap-1 rounded border border-slate-300 px-2 py-1 text-xs hover:bg-slate-100"
+                        title="Download artifact"
+                        href={`/api/v1/builds/${buildId}/artifacts/${encodeURIComponent(a.name)}`}
+                        download={a.name}
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        Download
+                      </a>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -238,8 +260,14 @@ function StatusBadge({ status }: { status: Status }) {
   return <span className={`rounded px-2 py-0.5 text-xs font-medium ${cls[status]}`}>{label[status]}</span>
 }
 
-// The Go logger emits ANSI color codes; strip them for clean display.
-function stripAnsi(s: string): string {
+// Clean a raw log line for display:
+// 1. Strip all ANSI/VT100 escape sequences (color, cursor movement, line-clear, etc.)
+// 2. Handle carriage returns the way a terminal would — keep only what follows
+//    the last \r, so progress-bar overwrites show their final state rather than
+//    producing a blank line after the content.
+function cleanLine(s: string): string {
   // eslint-disable-next-line no-control-regex
-  return s.replace(/\[[0-9;]*m/g, '')
+  const stripped = s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').replace(/\x1b[^[]/g, '').replace(/\x1b/g, '')
+  const cr = stripped.lastIndexOf('\r')
+  return cr >= 0 ? stripped.slice(cr + 1) : stripped
 }

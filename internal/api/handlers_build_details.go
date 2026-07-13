@@ -4,8 +4,11 @@
 package api
 
 import (
+	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 )
 
@@ -68,4 +71,62 @@ func (s *Server) handleBuildTemplate(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/yaml")
 	w.Header().Set("Content-Disposition", "attachment; filename=\""+name+"\"")
 	_, _ = w.Write(data)
+}
+
+// handleBuildArtifactDownload serves a single build artifact by name as a
+// download. The artifact must be in the build's recorded artifact list —
+// arbitrary paths are not accepted.
+//
+// Artifact files are owned by root (ICT builds run under sudo). When --sudo is
+// configured we stream via `sudo -n cat`; otherwise we read directly (dev env).
+func (s *Server) handleBuildArtifactDownload(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	name := r.PathValue("name")
+	b, ok := s.tracker.get(id)
+	if !ok {
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "build not found")
+		return
+	}
+	res := b.snapshot()
+	var artifactPath string
+	for _, a := range res.artifacts {
+		if a.Name == name {
+			artifactPath = a.Path
+			break
+		}
+	}
+	if artifactPath == "" {
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "artifact not found")
+		return
+	}
+
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(artifactPath)))
+	w.Header().Set("Content-Type", "application/octet-stream")
+
+	if s.cfg.Sudo {
+		// Stream via `sudo cat` so large ISOs don't require buffering the whole
+		// file in memory. StdoutPipe gives us a reader we can io.Copy directly
+		// to the response writer, chunk by chunk.
+		cmd := exec.CommandContext(r.Context(), "sudo", "-n", "cat", artifactPath)
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			http.Error(w, "failed to open artifact stream", http.StatusInternalServerError)
+			return
+		}
+		if err := cmd.Start(); err != nil {
+			http.Error(w, "failed to read artifact", http.StatusInternalServerError)
+			return
+		}
+		_, _ = io.Copy(w, stdout)
+		_ = cmd.Wait()
+		return
+	}
+
+	f, err := os.Open(artifactPath)
+	if err != nil {
+		http.Error(w, "cannot read artifact file", http.StatusInternalServerError)
+		return
+	}
+	defer f.Close()
+	_, _ = io.Copy(w, f)
 }
