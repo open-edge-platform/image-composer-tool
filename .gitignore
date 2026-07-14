@@ -1,9 +1,10 @@
 # ignore build artifacts, cache files, and temporary files 
 downloads/
 builds/  
-# Anchored to the repo root so it only ignores the runtime package cache,
-# not the internal/cache source package.
-/cache/
+# Ignore cache directories anywhere (root runtime cache and provider test
+# caches), but keep the internal/cache source package tracked.
+cache/
+!internal/cache/
 tmp/ 
 workspace/
 # AI embedding cache
