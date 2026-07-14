@@ -37,8 +37,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     bc bash rpm mmdebstrap dosfstools sbsigntool xorriso grub-common cryptsetup \
     || echo "Some packages failed to install, continuing..."
 
-RUN ln -sf /bin/uname /usr/bin/uname
-
 golang-base:
     # Create Go workspace
     RUN mkdir -p /go/src /go/bin /go/pkg && chmod -R 777 /go
