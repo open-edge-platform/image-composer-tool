@@ -1,0 +1,21 @@
+@import 'tailwindcss';
+
+:root {
+  /* Intel palette */
+  --intel-primary: #0071c5;
+  --intel-navy: #00285a;
+  --intel-light: #e6f2fa;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background: #f8fafc;
+  color: #00285a;
+}

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -282,13 +283,16 @@ func TestFinishFailure(t *testing.T) {
 
 func TestBuildCommand(t *testing.T) {
 	s := &Server{cfg: Config{ICTBinary: "/opt/ict"}}
-	name, args := s.buildCommand("/tmp/t.yml", "/tmp/wd")
+	name, args := s.buildCommand("/tmp/t.yml", "/tmp/wd", "/tmp/cd")
 	if name != "/opt/ict" || args[0] != "build" || args[1] != "/tmp/t.yml" {
 		t.Fatalf("non-sudo cmd = %s %v", name, args)
 	}
+	if !slices.Contains(args, "--cache-dir") || !slices.Contains(args, "/tmp/cd") {
+		t.Fatalf("missing --cache-dir in %v", args)
+	}
 
 	s.cfg.Sudo = true
-	name, args = s.buildCommand("/tmp/t.yml", "/tmp/wd")
+	name, args = s.buildCommand("/tmp/t.yml", "/tmp/wd", "/tmp/cd")
 	if name != "sudo" || args[0] != "-n" || args[1] != "/opt/ict" || args[2] != "build" {
 		t.Fatalf("sudo cmd = %s %v", name, args)
 	}
@@ -564,5 +568,173 @@ func TestHandleBuildLogsCompletedBuild(t *testing.T) {
 	}
 	if !strings.Contains(out, "event: complete") {
 		t.Errorf("missing complete event: %q", out)
+	}
+}
+
+// --- ICT binary discovery ---
+
+func TestDiscoverICTBinary(t *testing.T) {
+	// Prefers ./build/image-composer-tool when present.
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.MkdirAll("build", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile("build/image-composer-tool", []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := discoverICTBinary(); got != "./build/image-composer-tool" {
+		t.Errorf("with build/ present, got %q, want ./build/image-composer-tool", got)
+	}
+
+	// Falls back to the repo-root binary when ./build/ has none.
+	dir2 := t.TempDir()
+	t.Chdir(dir2)
+	if err := os.WriteFile("image-composer-tool", []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := discoverICTBinary(); got != "./image-composer-tool" {
+		t.Errorf("with only root binary, got %q, want ./image-composer-tool", got)
+	}
+
+	// With neither present (and not on PATH), returns the conventional path.
+	dir3 := t.TempDir()
+	t.Chdir(dir3)
+	if got := discoverICTBinary(); got != "./build/image-composer-tool" {
+		// Note: if a real image-composer-tool is on the test host's PATH, this
+		// branch returns that instead — accept an absolute path too.
+		if !filepath.IsAbs(got) {
+			t.Errorf("with nothing present, got %q, want ./build/... or an abs PATH hit", got)
+		}
+	}
+}
+
+// --- build details / template / artifact-download handlers ---
+
+func TestHandleBuildDetails(t *testing.T) {
+	s := newTestServer(t)
+	b := &build{
+		ID:           "d1",
+		WorkDir:      "/tmp/work",
+		CacheDir:     "/tmp/cache",
+		Template:     "robotics.yml",
+		TemplatePath: "/tmp/robotics.yml",
+		Command:      "sudo -n ict build robotics.yml",
+		done:         make(chan struct{}),
+	}
+	b.finish(statusSuccess, nil, "")
+	s.tracker.add(b)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/builds/d1/details", nil)
+	req.SetPathValue("id", "d1")
+	rr := httptest.NewRecorder()
+	s.handleBuildDetails(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	var out buildDetails
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Command != b.Command || out.WorkDir != b.WorkDir {
+		t.Errorf("details mismatch: %+v", out)
+	}
+
+	// missing build -> 404
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/builds/nope/details", nil)
+	req2.SetPathValue("id", "nope")
+	rr2 := httptest.NewRecorder()
+	s.handleBuildDetails(rr2, req2)
+	if rr2.Code != http.StatusNotFound {
+		t.Errorf("missing build status = %d, want 404", rr2.Code)
+	}
+}
+
+func TestHandleBuildTemplate(t *testing.T) {
+	s := newTestServer(t)
+	// Write a real template file so the handler can read it.
+	tmpFile := filepath.Join(t.TempDir(), "robotics.yml")
+	if err := os.WriteFile(tmpFile, []byte(minimalTemplate), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	b := &build{
+		ID:           "t1",
+		Template:     "robotics.yml",
+		TemplatePath: tmpFile,
+		done:         make(chan struct{}),
+	}
+	close(b.done)
+	s.tracker.add(b)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/builds/t1/template", nil)
+	req.SetPathValue("id", "t1")
+	rr := httptest.NewRecorder()
+	s.handleBuildTemplate(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rr.Code, rr.Body)
+	}
+	if ct := rr.Header().Get("Content-Type"); ct != "application/yaml" {
+		t.Errorf("Content-Type = %q, want application/yaml", ct)
+	}
+	if !strings.Contains(rr.Body.String(), "name: test-image") {
+		t.Errorf("body missing template content: %q", rr.Body.String())
+	}
+
+	// missing build -> 404
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/builds/nope/template", nil)
+	req2.SetPathValue("id", "nope")
+	rr2 := httptest.NewRecorder()
+	s.handleBuildTemplate(rr2, req2)
+	if rr2.Code != http.StatusNotFound {
+		t.Errorf("missing build status = %d, want 404", rr2.Code)
+	}
+}
+
+func TestHandleBuildArtifactDownload(t *testing.T) {
+	s := newTestServer(t)
+	// Artifact must live inside WorkDir to pass the path validation guard.
+	workDir := t.TempDir()
+	artifactFile := filepath.Join(workDir, "image.iso")
+	if err := os.WriteFile(artifactFile, []byte("fake-iso-content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	b := &build{
+		ID:      "a1",
+		WorkDir: workDir,
+		done:    make(chan struct{}),
+	}
+	b.finish(statusSuccess, []artifact{{Name: "image.iso", Type: "image", Path: artifactFile}}, "")
+	s.tracker.add(b)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/builds/a1/artifacts/image.iso", nil)
+	req.SetPathValue("id", "a1")
+	req.SetPathValue("name", "image.iso")
+	rr := httptest.NewRecorder()
+	s.handleBuildArtifactDownload(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rr.Code, rr.Body)
+	}
+	if rr.Body.String() != "fake-iso-content" {
+		t.Errorf("body = %q, want fake-iso-content", rr.Body.String())
+	}
+
+	// unknown artifact name -> 404
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/builds/a1/artifacts/nope.iso", nil)
+	req2.SetPathValue("id", "a1")
+	req2.SetPathValue("name", "nope.iso")
+	rr2 := httptest.NewRecorder()
+	s.handleBuildArtifactDownload(rr2, req2)
+	if rr2.Code != http.StatusNotFound {
+		t.Errorf("unknown artifact status = %d, want 404", rr2.Code)
+	}
+
+	// missing build -> 404
+	req3 := httptest.NewRequest(http.MethodGet, "/api/v1/builds/nope/artifacts/image.iso", nil)
+	req3.SetPathValue("id", "nope")
+	req3.SetPathValue("name", "image.iso")
+	rr3 := httptest.NewRecorder()
+	s.handleBuildArtifactDownload(rr3, req3)
+	if rr3.Code != http.StatusNotFound {
+		t.Errorf("missing build status = %d, want 404", rr3.Code)
 	}
 }

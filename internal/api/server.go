@@ -8,6 +8,8 @@ package api
 
 import (
 	"net/http"
+	"os"
+	"os/exec"
 	"time"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
@@ -40,12 +42,31 @@ func New(cfg Config) (*Server, error) {
 		cfg.TemplatesDir = "image-templates"
 	}
 	if cfg.ICTBinary == "" {
-		cfg.ICTBinary = "./image-composer-tool"
+		cfg.ICTBinary = discoverICTBinary()
 	}
 	if cfg.WorkDir == "" {
 		cfg.WorkDir = "webui-workspace"
 	}
 	return &Server{cfg: cfg, manifest: m, tracker: newBuildTracker()}, nil
+}
+
+// discoverICTBinary picks the image-composer-tool binary to invoke when the
+// operator doesn't pass --ict-binary. We don't know whether they built with
+// `earthly +build` (outputs ./build/) or a plain `go build` (often the repo
+// root), so probe both, preferring ./build/, then fall back to a PATH lookup.
+func discoverICTBinary() string {
+	candidates := []string{"./build/image-composer-tool", "./image-composer-tool"}
+	for _, c := range candidates {
+		if fi, err := os.Stat(c); err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0 {
+			return c
+		}
+	}
+	if p, err := exec.LookPath("image-composer-tool"); err == nil {
+		return p
+	}
+	// Nothing found; return the conventional path so the eventual build failure
+	// names a sensible location.
+	return "./build/image-composer-tool"
 }
 
 // Start registers routes and blocks serving HTTP.
