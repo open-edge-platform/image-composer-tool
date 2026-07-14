@@ -79,6 +79,9 @@ var (
 	packageListURLCacheMu     sync.Mutex
 	packageListURLCache       map[string]string
 	packageListURLCacheLoaded bool
+
+	isDebPackageCacheOutdatedFunc = isDebPackageCacheOutdated
+	clearDebPackageCacheFunc      = clearDebPackageCache
 )
 
 const urlExistenceCacheFileName = "url_exists_cache.json"
@@ -1074,6 +1077,45 @@ func DownloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSour
 	return downloadPackagesComplete(pkgList, destDir, dotFile, pkgSources, systemRootsOnly, false)
 }
 
+func handleDebCacheRetry(
+	requiredPackages []string,
+	absDestDir string,
+	retriedAfterCacheClear bool,
+	retryFunc func() ([]string, []ospackage.PackageInfo, error),
+) ([]string, []ospackage.PackageInfo, bool, error) {
+	log := logger.Logger()
+
+	cacheOutdated, missingRequired, cachedFiles, cacheErr := isDebPackageCacheOutdatedFunc(requiredPackages, absDestDir)
+	if cacheErr != nil {
+		log.Warnf("Failed to evaluate DEB package cache state: %v", cacheErr)
+		return nil, nil, false, nil
+	}
+
+	if !cacheOutdated {
+		log.Infof("DEB package cache is up-to-date; all %d resolved packages are available locally", len(requiredPackages))
+		return cachedFiles, buildDebPackageInfosFromCache(absDestDir, cachedFiles), true, nil
+	}
+
+	if len(missingRequired) == 0 {
+		return nil, nil, false, nil
+	}
+
+	log.Infof("DEB package cache is outdated; missing required packages: %v", missingRequired)
+	if retriedAfterCacheClear {
+		log.Infof("DEB package cache remained outdated after retry; continuing with package download")
+		return nil, nil, false, nil
+	}
+
+	if clearErr := clearDebPackageCacheFunc(absDestDir); clearErr != nil {
+		log.Warnf("Failed to clear DEB package cache: %v", clearErr)
+		return nil, nil, false, nil
+	}
+
+	log.Infof("Retrying DEB package resolution after cache clear")
+	pkgs, infos, err := retryFunc()
+	return pkgs, infos, true, err
+}
+
 func downloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSources map[string]config.PackageSource, systemRootsOnly bool, retriedAfterCacheClear bool) ([]string, []ospackage.PackageInfo, error) {
 	var downloadPkgList []string
 
@@ -1152,20 +1194,16 @@ func downloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSour
 			requiredPackages = append(requiredPackages, pkg.Name)
 		}
 
-		cacheOutdated, missingRequired, cachedFiles, cacheErr := isDebPackageCacheOutdated(requiredPackages, absDestDir)
-		if cacheErr != nil {
-			log.Warnf("Failed to evaluate DEB package cache state: %v", cacheErr)
-		} else if !cacheOutdated {
-			log.Infof("DEB package cache is up-to-date; all %d resolved packages are available locally", len(requiredPackages))
-			return cachedFiles, buildDebPackageInfosFromCache(absDestDir, cachedFiles), nil
-		} else if len(missingRequired) > 0 {
-			log.Infof("DEB package cache is outdated; missing required packages: %v", missingRequired)
-			if clearErr := clearDebPackageCache(absDestDir); clearErr != nil {
-				log.Warnf("Failed to clear DEB package cache: %v", clearErr)
-			} else if !retriedAfterCacheClear {
-				log.Infof("Retrying DEB package resolution after cache clear")
+		handledPkgList, handledInfos, handled, handledErr := handleDebCacheRetry(
+			requiredPackages,
+			absDestDir,
+			retriedAfterCacheClear,
+			func() ([]string, []ospackage.PackageInfo, error) {
 				return downloadPackagesComplete(pkgList, destDir, dotFile, pkgSources, systemRootsOnly, true)
-			}
+			},
+		)
+		if handled {
+			return handledPkgList, handledInfos, handledErr
 		}
 	}
 

@@ -41,6 +41,9 @@ var (
 	Dist           string
 	KernelVersion  string
 	KernelPackages = make(map[string]struct{})
+
+	isRPMPackageCacheOutdatedFunc = isRPMPackageCacheOutdated
+	clearRPMMetadataCacheFunc     = clearRPMMetadataCache
 )
 
 // ConfigureKernelSelection sets the kernel package requests and version used
@@ -725,6 +728,43 @@ func DownloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSour
 	return downloadPackagesComplete(pkgList, destDir, dotFile, pkgSources, systemRootsOnly, false)
 }
 
+func handleRPMCacheRetry(
+	requiredPackages []string,
+	absDestDir string,
+	retriedAfterMetadataClear bool,
+	retryFunc func() ([]string, []ospackage.PackageInfo, error),
+) ([]string, []ospackage.PackageInfo, bool, error) {
+	log := logger.Logger()
+
+	cacheOutdated, missingRequired, cachedFiles, cacheErr := isRPMPackageCacheOutdatedFunc(requiredPackages, absDestDir)
+	if cacheErr != nil {
+		log.Warnf("Failed to evaluate RPM package cache state: %v", cacheErr)
+		return nil, nil, false, nil
+	}
+
+	if !cacheOutdated {
+		log.Infof("RPM package cache is up-to-date; all %d resolved packages are available locally", len(requiredPackages))
+		return cachedFiles, buildRPMPackageInfosFromCache(absDestDir, cachedFiles), true, nil
+	}
+
+	if len(missingRequired) == 0 {
+		return nil, nil, false, nil
+	}
+
+	log.Infof("RPM package cache is outdated; missing required packages: %v", missingRequired)
+	clearRPMMetadataCacheFunc()
+	log.Infof("Cleared RPM metadata cache due to missing required packages")
+
+	if retriedAfterMetadataClear {
+		log.Infof("Keeping existing cached RPM files and continuing to fetch only missing/new packages")
+		return nil, nil, false, nil
+	}
+
+	log.Infof("Retrying RPM package resolution after metadata cache clear")
+	pkgs, infos, err := retryFunc()
+	return pkgs, infos, true, err
+}
+
 func downloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSources map[string]config.PackageSource, systemRootsOnly bool, retriedAfterMetadataClear bool) ([]string, []ospackage.PackageInfo, error) {
 	var downloadPkgList []string
 
@@ -799,21 +839,16 @@ func downloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSour
 			requiredPackages = append(requiredPackages, pkg.Name)
 		}
 
-		cacheOutdated, missingRequired, cachedFiles, cacheErr := isRPMPackageCacheOutdated(requiredPackages, absDestDir)
-		if cacheErr != nil {
-			log.Warnf("Failed to evaluate RPM package cache state: %v", cacheErr)
-		} else if !cacheOutdated {
-			log.Infof("RPM package cache is up-to-date; all %d resolved packages are available locally", len(requiredPackages))
-			return cachedFiles, buildRPMPackageInfosFromCache(absDestDir, cachedFiles), nil
-		} else if len(missingRequired) > 0 {
-			log.Infof("RPM package cache is outdated; missing required packages: %v", missingRequired)
-			clearRPMMetadataCache()
-			log.Infof("Cleared RPM metadata cache due to missing required packages")
-			if !retriedAfterMetadataClear {
-				log.Infof("Retrying RPM package resolution after metadata cache clear")
+		handledPkgList, handledInfos, handled, handledErr := handleRPMCacheRetry(
+			requiredPackages,
+			absDestDir,
+			retriedAfterMetadataClear,
+			func() ([]string, []ospackage.PackageInfo, error) {
 				return downloadPackagesComplete(pkgList, destDir, dotFile, pkgSources, systemRootsOnly, true)
-			}
-			log.Infof("Keeping existing cached RPM files and continuing to fetch only missing/new packages")
+			},
+		)
+		if handled {
+			return handledPkgList, handledInfos, handledErr
 		}
 	}
 
