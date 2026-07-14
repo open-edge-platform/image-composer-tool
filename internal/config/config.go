@@ -142,6 +142,12 @@ type OverlayPolicy struct {
 	ConflictPolicy   string `yaml:"conflictPolicy,omitempty"`
 	KernelCmdline    string `yaml:"kernelCmdline,omitempty"`
 
+	// AllowDiskResize gates whether an overlay build may grow the baseline image
+	// to satisfy a larger disk.size. Overlay mode preserves the baseline layout by
+	// default, so a disk.size larger than the baseline is rejected unless the user
+	// opts in here. It never permits shrinking; resize stays grow-only.
+	AllowDiskResize bool `yaml:"allowDiskResize,omitempty"`
+
 	// AllowRemoval gates whether preflight permits removing a baseline package.
 	// It is intentionally NOT a YAML field, and the schema rejects it via
 	// additionalProperties:false, so it always carries its zero value (false):

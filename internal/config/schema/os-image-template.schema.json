@@ -521,6 +521,11 @@
         "kernelCmdline": {
           "type": "string",
           "description": "Optional kernel command-line override applied to the overlaid image"
+        },
+        "allowDiskResize": {
+          "type": "boolean",
+          "description": "Permit growing the baseline image to satisfy a larger disk.size. Overlay mode preserves the baseline disk layout by default; when false (the default) a disk.size larger than the baseline is rejected. Resize is always grow-only and never shrinks the image.",
+          "default": false
         }
       },
       "additionalProperties": false
