@@ -692,14 +692,16 @@ func TestHandleBuildTemplate(t *testing.T) {
 
 func TestHandleBuildArtifactDownload(t *testing.T) {
 	s := newTestServer(t)
-	// Write a real artifact file so the handler can read it.
-	artifactFile := filepath.Join(t.TempDir(), "image.iso")
+	// Artifact must live inside WorkDir to pass the path validation guard.
+	workDir := t.TempDir()
+	artifactFile := filepath.Join(workDir, "image.iso")
 	if err := os.WriteFile(artifactFile, []byte("fake-iso-content"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	b := &build{
-		ID:   "a1",
-		done: make(chan struct{}),
+		ID:      "a1",
+		WorkDir: workDir,
+		done:    make(chan struct{}),
 	}
 	b.finish(statusSuccess, []artifact{{Name: "image.iso", Type: "image", Path: artifactFile}}, "")
 	s.tracker.add(b)

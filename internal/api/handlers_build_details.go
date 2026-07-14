@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // buildDetails carries the reproducibility/troubleshooting metadata the UI shows
@@ -102,14 +103,23 @@ func (s *Server) handleBuildArtifactDownload(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	// Guard against a poisoned artifact entry escaping the per-build workspace.
+	// Artifact paths are populated from log parsing; validate they stay inside
+	// the build's work directory before serving.
+	if !strings.HasPrefix(filepath.Clean(artifactPath), filepath.Clean(b.WorkDir)) {
+		writeError(w, http.StatusForbidden, "FORBIDDEN", "artifact path outside build workspace")
+		return
+	}
+
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(artifactPath)))
 	w.Header().Set("Content-Type", "application/octet-stream")
 
 	if s.cfg.Sudo {
 		// Stream via `sudo cat` so large ISOs don't require buffering the whole
 		// file in memory. StdoutPipe gives us a reader we can io.Copy directly
-		// to the response writer, chunk by chunk.
-		cmd := exec.CommandContext(r.Context(), "sudo", "-n", "cat", artifactPath)
+		// to the response writer, chunk by chunk. `--` prevents a path starting
+		// with `-` from being interpreted as a flag by cat.
+		cmd := exec.CommandContext(r.Context(), "sudo", "-n", "cat", "--", artifactPath)
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
 			http.Error(w, "failed to open artifact stream", http.StatusInternalServerError)

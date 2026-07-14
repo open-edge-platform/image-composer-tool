@@ -57,7 +57,7 @@ func New(cfg Config) (*Server, error) {
 func discoverICTBinary() string {
 	candidates := []string{"./build/image-composer-tool", "./image-composer-tool"}
 	for _, c := range candidates {
-		if fi, err := os.Stat(c); err == nil && !fi.IsDir() {
+		if fi, err := os.Stat(c); err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0 {
 			return c
 		}
 	}

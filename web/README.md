@@ -1,32 +1,43 @@
-# React + TypeScript + Vite
+# ICT Web UI
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+React 19 + TypeScript + Vite frontend for the Image Composer Tool web UI.
 
-Currently, two official plugins are available:
+## Development
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+Start the Vite dev server (proxies `/api/v1` to the Go backend on `:8080`):
 
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npm ci
+npm run dev
+# UI available at http://localhost:5173
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+The Go backend must be running separately:
+
+```bash
+# From repo root
+go run ./cmd/image-composer-tool serve
+```
+
+## Building for embedding
+
+The compiled assets are embedded into the Go binary via `//go:embed` in
+`internal/webui/embed.go`. Build and stage them before compiling the binary:
+
+```bash
+npm run build                                        # outputs to web/dist/
+rm -rf ../internal/webui/dist
+cp -r dist ../internal/webui/dist
+```
+
+Then from the repo root:
+
+```bash
+go build -o ./build/image-composer-tool ./cmd/image-composer-tool/
+```
+
+## Type checking
+
+```bash
+npx tsc --noEmit
+```
