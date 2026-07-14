@@ -98,7 +98,7 @@ systemConfig:
     - gstreamer
     - intel-dlstreamer-2026.0.0
     - opencv
-    - util-linux-devel-2.40.2-3.emt3
+#   - util-linux-devel-2.40.2-3.emt3
     - openvino-2026.0.0
     - linux-firmware-i915
 
