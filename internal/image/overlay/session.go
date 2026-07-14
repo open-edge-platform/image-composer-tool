@@ -50,11 +50,12 @@ type Builder struct {
 	// State populated as the phases run; each is nil until its phase produces it.
 	// Only the cross-phase state is retained: the inspected inventory and install
 	// result are consumed within the phase that produces them, so they are local.
-	ctx    *Context         // loop device + workspace baseline copy
-	layout *Layout          // mounted partition layout
-	info   *BaselineInfo    // detected baseline OS/arch/package manager
-	plan   *ResolutionPlan  // resolved additive package plan
-	report *PreflightReport // preflight policy gate result
+	ctx      *Context          // loop device + workspace baseline copy
+	layout   *Layout           // mounted partition layout
+	info     *BaselineInfo     // detected baseline OS/arch/package manager
+	baseline []BaselinePackage // baseline package inventory for stats
+	plan     *ResolutionPlan   // resolved additive package plan
+	report   *PreflightReport  // preflight policy gate result
 
 	// mountTeardown unmounts the layout (reverse order). It is set by Preprocess
 	// and run once by Postprocess; nil before mounts exist or after teardown.
@@ -176,6 +177,7 @@ func (b *Builder) Preprocess() (err error) {
 		}
 		b.info = info
 		baseline = base
+		b.baseline = base // Retain for stats computation
 		return nil
 	}); err != nil {
 		return err
@@ -368,6 +370,16 @@ func (b *Builder) Postprocess(buildErr error) (err error) {
 	} else {
 		log.Infof("Overlay postprocess: image inspection disabled (--no-inspect); skipping")
 	}
+
+	// Display package statistics showing what was added/upgraded vs unchanged
+	stats := ComputePackageStats(b.baseline, b.plan)
+	PrintPackageStats(stats)
+
+	// In debug mode, also print the full unchanged package list
+	if config.IsDebugMode() {
+		PrintVerboseUnchangedPackages(stats)
+	}
+
 	return nil
 }
 
