@@ -11,7 +11,7 @@ ARG REGISTRY
 ARG VERSION="__auto__"
 
 # Use pre-built Go image that already has most tools
-FROM ${REGISTRY}golang:1.24.1-bullseye
+FROM ${REGISTRY}golang:1.25.0-bullseye
 
 ENV http_proxy=$http_proxy
 ENV https_proxy=$https_proxy
@@ -29,7 +29,7 @@ ENV PATH="${GOBIN}:${PATH}"
 # The golang image already includes:
 # - wget, curl, git, build-essential
 # - Most basic tools
-# - Go 1.24.1
+# - Go 1.25.0
 
 # Only install absolutely essential packages that might be missing
 # Use --no-install-recommends and || true to continue even if some fail
