@@ -70,5 +70,5 @@ The validator runs the JSON schema and additional semantic checks. CI will rejec
 ## When updating an existing template
 
 - Bump `image.version` if behavior changes for downstream consumers.
-- Note user-visible changes in `docs/release-notes.md`.
+- Note user-visible changes in `docs/user-guide/release-notes.md`.
 - If you change a default in `config/osv/`, audit every template under `image-templates/` that depends on it.

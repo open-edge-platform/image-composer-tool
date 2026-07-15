@@ -1,23 +1,4 @@
-# ICT Architecture
-
-## Table of Contents
-
-- [ICT Architecture](#ict-architecture)
-  - [Table of Contents](#table-of-contents)
-  - [Overview](#overview)
-  - [ICT System Network Context](#ict-system-network-context)
-    - [Network Security Considerations](#network-security-considerations)
-    - [Package Sign Verification](#package-sign-verification)
-  - [Components Overview](#components-overview)
-    - [Provider](#provider)
-    - [Chroot](#chroot)
-    - [Image](#image)
-    - [Config](#config)
-    - [OsPackage](#ospackage)
-  - [Build Process Flow](#build-process-flow)
-  - [Related Documentation](#related-documentation)
-
-## Overview
+# Architecture Overview
 
 The ICT is a tool for creating customized OS images from pre-built packages. It takes an image template file (YAML) as input and produces bootable OS images in raw or ISO formats suitable for deployment on bare metal systems, virtual machines, and edge devices.
 
@@ -29,13 +10,13 @@ Pre-built packages are fetched securely from distribution-specific remote reposi
 
 The following diagram shows the input and output of the ICT tool:
 
-![Overview](./architecture/assets/overview.drawio.svg)
+![Overview](../_assets/overview.drawio.svg)
 
 ## ICT System Network Context
 
 The following diagram shows the network context of the ICT tool:
 
-![ICT Network Diagram](./architecture/assets/image-composer-tool-network-diagram.drawio.svg)
+![ICT Network Diagram](../_assets/image-composer-tool-network-diagram.drawio.svg)
 
 The diagram illustrates how different components of the product's system architecture communicate with each other.
 
@@ -51,7 +32,7 @@ When packages are downloaded, they are verified for integrity by using the GPG p
 
 The following diagram outlines the high-level components of the ICT tool:
 
-![components high level view](./architecture/assets/components.drawio.svg)
+![components high level view](../_assets/components.drawio.svg)
 
 The tools for composing an image are grouped under the following components: **Provider**, **Chroot**, **Image**, **OsPackage**, and **Config**. For modularity, each group contains a set of components for the ICT tool's functions.
 
@@ -93,7 +74,7 @@ The chroot environment provides a clean, reproducible build environment that ens
 
 ### Image
 
-![components - image](./architecture/assets/components.drawio.image.svg)
+![components - image](../_assets/components.drawio.image.svg)
 
 The Image component groups the libraries that generate the final image output. It creates raw disk images or ISO images according to an image template file.
 
@@ -116,7 +97,7 @@ The Image component groups the libraries that generate the final image output. I
 
 ### Config
 
-![components - Config](./architecture/assets/components.drawio.config.svg)
+![components - Config](../_assets/components.drawio.config.svg)
 
 The **Config** component contains configuration data for the image that will be created. It serves as input data for the **Provider**, which builds the OS image according to that data.
 
@@ -145,7 +126,7 @@ The configuration system uses a layered approach: OS-specific default templates 
 
 ### OsPackage
 
-![components - package](./architecture/assets/components.drawio.OsPackage.svg)
+![components - package](../_assets/components.drawio.OsPackage.svg)
 
 The **OsPackage** component groups the libraries that provide the unified interface to operating system vendors' remote package repositories. It analyzes given package lists and downloads all the packages and dependencies from the target operating system's remote package repository to a local cache.
 
@@ -164,7 +145,7 @@ It verifies signatures of the downloaded packages to ensure they are authenticat
 
 The following diagram illustrates the overall image composition workflow:
 
-![Image composition workflow](./architecture/assets/image.composition.workflow.drawio.svg)
+![Image composition workflow](../_assets/image.composition.workflow.drawio.svg)
 
 The build process follows these high-level steps:
 
@@ -184,31 +165,8 @@ The build process follows these high-level steps:
 
 ## Related Documentation
 
-- [Understanding the Build Process](./architecture/image-composer-tool-build-process.md) - Detailed explanation of build stages
-- [Understanding Caching](./architecture/image-composer-tool-caching.md) - How package and chroot caching work
-- [Understanding Templates](./architecture/image-composer-tool-templates.md) - How to create and use image templates
-- [Multiple Package Repository Support](./architecture/image-composer-tool-multi-repo-support.md) - Adding custom package repositories
-- [ICT CLI Reference](./architecture/image-composer-tool-cli-specification.md) - Complete CLI documentation
-
-<!--hide_directive
-:::{toctree}
-:hidden:
-
-CLI Specification <./architecture/image-composer-tool-cli-specification.md>
-Security Objectives <./architecture/image-composition-tool-security-objectives.md>
-Build Process <./architecture/image-composer-tool-build-process.md>
-./architecture/image-manifest-specification.md
-Coding Style Guide <./architecture/image-composer-tool-coding-style.md>
-Caching in ICT <./architecture/image-composer-tool-caching.md>
-Multiple-package Repo Support <./architecture/image-composer-tool-multi-repo-support.md>
-Using Templates <./architecture/image-composer-tool-templates.md>
-./architecture/adr-template-extends
-Declarative Live ISO Installer <./architecture/adr-declarative-installer.md>
-Extending Disk Images <./architecture/adr-image-extension.md>
-Dependency Graph Analyzer <./architecture/adr-dep-analyzer.md>
-Image Inspection and Comparison <./architecture/adr-image-inspect.md>
-Template-Enriched RAG <./architecture/adr-template-enriched-rag.md>
-Web UI and API Tech Stack <./architecture/adr-web-ui-tech-stack.md>
-
-:::
-hide_directive-->
+- [Understanding the Build Process](./image-composer-tool-build-process.md) - Detailed explanation of build stages
+- [Understanding Caching](./image-composer-tool-caching.md) - How package and chroot caching work
+- [Understanding Templates](./image-composer-tool-templates.md) - How to create and use image templates
+- [Multiple Package Repository Support](./image-composer-tool-multi-repo-support.md) - Adding custom package repositories
+- [ICT CLI Reference](./image-composer-tool-cli-specification.md) - Complete CLI documentation

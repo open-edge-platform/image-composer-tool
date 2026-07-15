@@ -1,10 +1,10 @@
 # ADR: Web UI and API Tech Stack
 
-**Status**: Proposed  
-**Date**: 2026-06-26  
-**Updated**: 2026-06-28  
-**Authors**: ICT Team  
-**Technical Area**: Web Frontend, REST API, Developer Tooling  
+**Status**: Proposed
+**Date**: 2026-06-26
+**Updated**: 2026-06-28
+**Authors**: ICT Team
+**Technical Area**: Web Frontend, REST API, Developer Tooling
 **Related**: [OpenAPI Spec](../../api/v1/openapi-template-builder.yaml), [UI Prototype](../../web/prototype/template-builder.html)
 
 ---
@@ -56,11 +56,11 @@ The file `web/prototype/template-builder.html` demonstrates the exact views and 
 
 ### Architecture Diagram
 
-![Tech Stack Architecture](assets/web-ui-tech-stack.svg)
+![Tech Stack Architecture](../user-guide/_assets/web-ui-tech-stack.svg)
 
 ### Data Flow Diagram
 
-![Template Builder Data Flow](assets/web-ui-data-flow.svg)
+![Template Builder Data Flow](../user-guide/_assets/web-ui-data-flow.svg)
 
 ### Sequence Diagram — Basic flow
 

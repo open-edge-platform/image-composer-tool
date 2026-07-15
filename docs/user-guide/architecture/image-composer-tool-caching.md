@@ -637,6 +637,6 @@ sudo -E image-composer-tool build full-template.yml
 ## Related Documentation
 
 - [Build Process Documentation](./image-composer-tool-build-process.md) - How caching integrates with the build pipeline
-- [Architecture Documentation](../architecture.md) - System architecture and runtime directory structure
+- [Architecture Documentation](./architecture.md) - System architecture and runtime directory structure
 - [CLI Reference](./image-composer-tool-cli-specification.md) - Complete command-line documentation
 - [Understanding Templates](./image-composer-tool-templates.md) - How to create image templates
