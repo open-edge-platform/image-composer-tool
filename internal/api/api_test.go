@@ -741,6 +741,42 @@ func TestHandleBuildArtifactDownload(t *testing.T) {
 	}
 }
 
+// TestHandleBuildArtifactRelativeWorkDir guards the regression where a relative
+// WorkDir (the default `webui-workspace`) made the absolute-vs-relative prefix
+// check always fail, wrongly returning 403 for a legitimate artifact.
+func TestHandleBuildArtifactRelativeWorkDir(t *testing.T) {
+	s := newTestServer(t)
+
+	// Relative work dir under a temp cwd, with a deeply nested artifact like a
+	// real ICT build produces.
+	t.Chdir(t.TempDir())
+	relWorkDir := filepath.Join("webui-workspace", "builds", "rel1", "work")
+	nested := filepath.Join(relWorkDir, "debian-debian13-x86_64", "imagebuild", "out")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	artifactFile := filepath.Join(nested, "image.iso")
+	if err := os.WriteFile(artifactFile, []byte("iso-bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	b := &build{ID: "rel1", RootDir: "webui-workspace/builds/rel1", WorkDir: relWorkDir, done: make(chan struct{})}
+	b.finish(statusSuccess, []artifact{{Name: "image.iso", Type: "image", Path: artifactFile}}, "")
+	s.tracker.add(b)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/builds/rel1/artifacts/image.iso", nil)
+	req.SetPathValue("id", "rel1")
+	req.SetPathValue("name", "image.iso")
+	rr := httptest.NewRecorder()
+	s.handleBuildArtifactDownload(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rr.Code, rr.Body)
+	}
+	if rr.Body.String() != "iso-bytes" {
+		t.Errorf("body = %q, want iso-bytes", rr.Body.String())
+	}
+}
+
 // --- compose history (list + disk hydration) ---
 
 func TestHistoryListAndHydrate(t *testing.T) {

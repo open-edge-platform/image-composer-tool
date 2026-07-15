@@ -133,8 +133,14 @@ func (s *Server) handleBuildArtifactDownload(w http.ResponseWriter, r *http.Requ
 
 	// Guard against a poisoned artifact entry escaping the per-build workspace.
 	// Artifact paths are populated from log parsing; validate they stay inside
-	// the build's work directory before serving.
-	if !strings.HasPrefix(filepath.Clean(artifactPath), filepath.Clean(b.WorkDir)) {
+	// the build's work directory before serving. Resolve both to absolute paths
+	// first: b.WorkDir is relative when the server runs with a relative
+	// --work-dir (the default), while artifact paths are absolute — a raw
+	// HasPrefix would then always fail.
+	absArtifact, aerr := filepath.Abs(artifactPath)
+	absWorkDir, werr := filepath.Abs(b.WorkDir)
+	if aerr != nil || werr != nil ||
+		(absArtifact != absWorkDir && !strings.HasPrefix(absArtifact, absWorkDir+string(filepath.Separator))) {
 		writeError(w, http.StatusForbidden, "FORBIDDEN", "artifact path outside build workspace")
 		return
 	}
@@ -145,9 +151,13 @@ func (s *Server) handleBuildArtifactDownload(w http.ResponseWriter, r *http.Requ
 	if s.cfg.Sudo {
 		// Stream via `sudo cat` so large ISOs don't require buffering the whole
 		// file in memory. StdoutPipe gives us a reader we can io.Copy directly
-		// to the response writer, chunk by chunk. `--` prevents a path starting
-		// with `-` from being interpreted as a flag by cat.
-		cmd := exec.CommandContext(r.Context(), "sudo", "-n", "cat", "--", artifactPath)
+		// to the response writer, chunk by chunk.
+		//
+		// No `--` guard is needed: artifactPath is always an absolute,
+		// filepath.Clean'd path validated to live under the build work dir (never
+		// a `-`-prefixed string). Passing `--` would also add a second argument
+		// that a scoped `cat <path-glob>` sudoers rule wouldn't match.
+		cmd := exec.CommandContext(r.Context(), "sudo", "-n", "cat", artifactPath)
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
 			http.Error(w, "failed to open artifact stream", http.StatusInternalServerError)

@@ -49,7 +49,7 @@ export function BuildImagePage({ buildId, onRetry, retrying, onStatusChange }: B
   }
 
   return (
-    <div className="mx-auto max-w-screen-2xl p-6">
+    <div className="mx-auto max-w-screen-2xl px-10 py-8">
       <h1 className="mb-4 text-2xl font-bold text-[#00285a]">Compose Image</h1>
       {selectedId ? (
         <div className="flex gap-4">

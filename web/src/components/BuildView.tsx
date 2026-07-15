@@ -222,10 +222,11 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange, isActive
         </div>
       )}
 
-      {/* Log output — hover-reveal copy/download icons at the top-right corner.
-          Streams live for the active build; shows persisted text for history. */}
+      {/* Log output — copy/download icons at the top-right corner (always
+          visible). Streams live for the active build; shows persisted text for
+          history. */}
       <div className="group relative">
-        <div className="absolute right-2 top-2 z-10 flex gap-1 opacity-0 transition group-hover:opacity-100">
+        <div className="absolute right-5 top-2 z-10 flex gap-1 opacity-70 transition hover:opacity-100 group-hover:opacity-100">
           <button
             className="rounded-md border border-slate-300 bg-white p-1.5 text-slate-600 shadow-sm hover:bg-slate-100 hover:text-slate-900 disabled:opacity-40"
             disabled={logs.length === 0}
