@@ -162,6 +162,7 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
                 <tbody>
                   {([
                     ['Image', `${review.summary.imageName}${review.summary.imageVersion ? ` (v${review.summary.imageVersion})` : ''}`],
+                    review.summary.baseImage ? ['Base Image', review.summary.baseImage] : null,
                     review.summary.description ? ['Description', review.summary.description] : null,
                     ['Architecture', review.summary.architecture],
                     review.summary.kernelVersion ? ['Kernel', review.summary.kernelVersion] : null,

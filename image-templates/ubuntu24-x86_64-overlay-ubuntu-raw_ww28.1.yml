@@ -43,7 +43,7 @@ target:
 baseline:
   mode: overlay
   source:
-    path: /data/yogesht/sandbox/ubuntu_raw/ubuntu-desktop-24.04.4-custom.img 
+    path: ubuntu-desktop-24.04.4-custom.img 
     format: raw
 
 # additive-and-upgrade: in addition to adding new packages, upgrade a package

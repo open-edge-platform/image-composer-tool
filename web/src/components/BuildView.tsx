@@ -168,6 +168,7 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange, isActive
                       <tbody>
                         {([
                           ['Image', `${details.summary.imageName}${details.summary.imageVersion ? ` (v${details.summary.imageVersion})` : ''}`],
+                          details.summary.baseImage ? ['Base Image', details.summary.baseImage] : null,
                           details.summary.description ? ['Description', details.summary.description] : null,
                           ['Architecture', details.summary.architecture],
                           details.summary.kernelVersion ? ['Kernel', details.summary.kernelVersion] : null,

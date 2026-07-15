@@ -61,6 +61,7 @@ export interface ComposeSummary {
   partitionCount: number
   partitionTable: string
   hostname: string
+  baseImage?: string
 }
 
 export interface ComposeResponse {
