@@ -275,6 +275,7 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange, isActive
               <tr className="bg-[#e6f2fa] text-left">
                 <th className="px-3 py-2">Name</th>
                 <th className="px-3 py-2">Type</th>
+                <th className="px-3 py-2">Size</th>
                 <th className="px-3 py-2">Path</th>
                 <th className="px-3 py-2 text-right">Actions</th>
               </tr>
@@ -284,6 +285,7 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange, isActive
                 <tr key={a.path} className="border-b border-slate-200">
                   <td className="px-3 py-2 font-mono text-xs">{a.name}</td>
                   <td className="px-3 py-2 uppercase">{a.type}</td>
+                  <td className="px-3 py-2 whitespace-nowrap text-slate-600">{a.size || '—'}</td>
                   <td className="px-3 py-2">
                     {/* Click path (or hover copy icon) to copy to clipboard */}
                     <button

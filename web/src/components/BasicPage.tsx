@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useStore, cascadingOptions } from '../store'
 import { api } from '../api/client'
 import type { ComposeResponse } from '../api/types'
@@ -15,7 +15,6 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
   const setField = useStore((s) => s.setField)
 
   const [review, setReview] = useState<ComposeResponse | null>(null)
-  const [reviewOpen, setReviewOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -24,27 +23,31 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
     [manifest, selection],
   )
 
-  if (!manifest || !opts) return <div className="p-8">Loading…</div>
+  const complete = !!opts?.matched
 
-  const complete = !!opts.matched
-
-  const onToggleReview = async () => {
-    if (reviewOpen) {
-      setReviewOpen(false)
+  // Auto-fetch the configuration summary whenever the selection is complete, so
+  // it always reflects the current dropdowns (no manual "review" step). Guard
+  // against out-of-order responses with a cancel flag.
+  useEffect(() => {
+    if (!complete) {
+      setReview(null)
       return
     }
-    if (!complete) return
-    try {
-      setBusy(true)
-      setError(null)
-      setReview(await api.compose(selection))
-      setReviewOpen(true)
-    } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      setBusy(false)
+    let cancelled = false
+    api
+      .compose(selection)
+      .then((r) => {
+        if (!cancelled) setReview(r)
+      })
+      .catch((e) => {
+        if (!cancelled) setError((e as Error).message)
+      })
+    return () => {
+      cancelled = true
     }
-  }
+  }, [complete, selection])
+
+  if (!manifest || !opts) return <div className="p-8">Loading…</div>
 
   const onBuild = async () => {
     if (!complete) return
@@ -60,11 +63,9 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
     }
   }
 
-  // Changing any field invalidates a prior review.
   const setSel = (k: Parameters<typeof setField>[0], v: string) => {
     setField(k, v)
-    setReviewOpen(false)
-    setReview(null)
+    setError(null) // clear any stale compose error from the previous selection
   }
 
   return (
@@ -122,41 +123,14 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
           )}
           {/* Image Type (raw/iso) is auto-selected from the manifest for the
               chosen combination and not shown in Basic mode. */}
-
-          <label className="flex cursor-pointer items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={reviewOpen}
-              disabled={!complete}
-              onChange={onToggleReview}
-            />
-            Review Image Configuration
-          </label>
         </div>
 
-        {/* Review panel — sits beside the dropdowns to use the free space. */}
-        {reviewOpen && review && (
-          <div className="grid flex-1 grid-cols-1 gap-3 text-xs sm:grid-cols-2">
-            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-              <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Your Selection</p>
-              <table className="w-full">
-                <tbody>
-                  {([
-                    ['Vertical', review.summary.vertical],
-                    review.summary.sku ? ['SKU', review.summary.sku] : null,
-                    ['Platform', review.summary.platform],
-                    ['OS', review.summary.os],
-                    ['Image Type', review.summary.imageType.toUpperCase()],
-                  ] as ([string, string] | null)[]).filter((r): r is [string, string] => r !== null).map(([k, v]) => (
-                    <tr key={k}>
-                      <td className="py-0.5 pr-3 font-semibold text-slate-500 w-24">{k}</td>
-                      <td className="py-0.5 text-slate-700">{v}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+        {/* Image configuration summary — always reflects the current selection
+            (auto-fetched). "Your Selection" is intentionally omitted here since
+            the dropdowns already show it; the Compose Image tab keeps it. */}
+        {complete && review && (
+          <div className="flex-1 text-xs">
+            <div className="max-w-md rounded-lg border border-slate-200 bg-slate-50 p-4">
               <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Image Configuration</p>
               <table className="w-full">
                 <tbody>

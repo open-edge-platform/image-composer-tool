@@ -36,6 +36,7 @@ type artifact struct {
 	Name string `json:"name"`
 	Type string `json:"type"` // "image" | "sbom"
 	Path string `json:"path"`
+	Size string `json:"size,omitempty"` // human-readable, e.g. "1.13 GB" (from ICT output)
 }
 
 // build is the in-memory record of a single build (MVP-1: no persistence).
@@ -394,13 +395,14 @@ func parseArtifacts(logs []string) []artifact {
 	for _, line := range logs {
 		if idx := strings.Index(line, "• "); idx >= 0 {
 			rest := strings.TrimSpace(line[idx+len("• "):])
-			// Strip a trailing " (size)" suffix, keeping the filename.
-			name := rest
-			if p := strings.LastIndex(rest, " ("); p >= 0 {
+			// Split a trailing " (size)" suffix: keep the filename and the size.
+			name, size := rest, ""
+			if p := strings.LastIndex(rest, " ("); p >= 0 && strings.HasSuffix(rest, ")") {
 				name = strings.TrimSpace(rest[:p])
+				size = strings.TrimSpace(rest[p+2 : len(rest)-1])
 			}
 			if name != "" {
-				out = append(out, artifact{Name: name, Type: classifyArtifact(name)})
+				out = append(out, artifact{Name: name, Type: classifyArtifact(name), Size: size})
 				pending = &out[len(out)-1]
 			}
 			continue
@@ -452,14 +454,36 @@ func discoverArtifacts(workDir string) []artifact {
 		}
 		name := d.Name()
 		lower := strings.ToLower(name)
+		var typ string
 		switch {
 		case strings.Contains(lower, "sbom") || strings.HasSuffix(lower, ".spdx.json"):
-			out = append(out, artifact{Name: name, Type: "sbom", Path: path})
+			typ = "sbom"
 		case strings.HasSuffix(lower, ".raw"), strings.HasSuffix(lower, ".raw.gz"),
 			strings.HasSuffix(lower, ".iso"), strings.HasSuffix(lower, ".qcow2"):
-			out = append(out, artifact{Name: name, Type: "image", Path: path})
+			typ = "image"
+		default:
+			return nil
 		}
+		size := ""
+		if fi, statErr := d.Info(); statErr == nil {
+			size = humanSize(fi.Size())
+		}
+		out = append(out, artifact{Name: name, Type: typ, Path: path, Size: size})
 		return nil
 	})
 	return out
+}
+
+// humanSize formats a byte count as a short human-readable string (e.g. "1.13 GB").
+func humanSize(n int64) string {
+	const unit = 1000
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.2f %cB", float64(n)/float64(div), "kMGTPE"[exp])
 }

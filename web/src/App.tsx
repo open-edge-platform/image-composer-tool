@@ -162,7 +162,8 @@ function BuildIndicator({ status, onClick }: { status: BuildStatus; onClick: () 
     <button
       onClick={onClick}
       title={cfg.label}
-      className="flex items-center gap-2 rounded px-2 py-1 text-xs text-white/80 hover:bg-white/10"
+      aria-label={cfg.label}
+      className="flex items-center rounded p-1.5 hover:bg-white/10"
     >
       <span className="relative flex h-3 w-3">
         {cfg.pulse && (
@@ -170,7 +171,6 @@ function BuildIndicator({ status, onClick }: { status: BuildStatus; onClick: () 
         )}
         <span className={`relative inline-flex h-3 w-3 rounded-full ${cfg.color}`} />
       </span>
-      {cfg.label}
     </button>
   )
 }

@@ -80,6 +80,7 @@ export interface Artifact {
   name: string
   type: 'image' | 'sbom'
   path: string
+  size?: string
 }
 
 // Reproducibility/troubleshooting metadata for a build: the exact command that
