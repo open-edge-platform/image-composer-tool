@@ -31,6 +31,11 @@ var (
 	workDir            string = "" // Empty means use config file value
 	dotFile            string = "" // Generate a dot file for the dependency graph
 	systemPackagesOnly bool   = false
+
+	// Overlay-mode flags.
+	inspectImage  bool   = true  // --inspect/--no-inspect: toggle image inspection (default on)
+	cveCheck      bool   = false // --cve-check: enable CVE analysis from the CLI
+	baselineImage string = ""    // --baseline-image: override baseline.source.path from the template
 )
 
 // createBuildCommand creates the build subcommand
@@ -55,6 +60,12 @@ The template file must be in YAML format following the image template schema.`,
 	buildCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose output")
 	buildCmd.Flags().StringVarP(&dotFile, "dotfile", "f", "", "Generate a dot file for the dependency graph")
 	buildCmd.Flags().BoolVar(&systemPackagesOnly, "system-packages-only", false, "When generating a dot graph, only include roots from SystemConfig.Packages")
+
+	// Overlay-mode flags. --inspect defaults on; --no-inspect is its negation.
+	buildCmd.Flags().BoolVar(&inspectImage, "inspect", true, "Inspect the image during overlay builds (use --no-inspect to disable)")
+	buildCmd.Flags().Bool("no-inspect", false, "Disable image inspection during overlay builds (overrides --inspect)")
+	buildCmd.Flags().BoolVar(&cveCheck, "cve-check", false, "Enable CVE analysis of the built image")
+	buildCmd.Flags().StringVar(&baselineImage, "baseline-image", "", "Override baseline.source.path from the template (overlay mode)")
 
 	return buildCmd
 }
@@ -97,6 +108,12 @@ func executeBuild(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("loading and merging template: %v", err)
 	}
 	template.DotSystemOnly = systemPackagesOnly
+
+	// Apply overlay-mode CLI flags onto the loaded template. CLI values take
+	// precedence over template values.
+	if err := applyOverlayFlagOverrides(cmd, template); err != nil {
+		return err
+	}
 
 	// assign start time to storage
 	template.StartBuildTimeline(startTime)
@@ -162,6 +179,52 @@ post:
 	}
 
 	return buildErr
+}
+
+// applyOverlayFlagOverrides applies the overlay-mode CLI flags onto the loaded
+// template. CLI values take precedence over template values. The inspection
+// toggle has no YAML representation (it is a yaml:"-" field), so the CLI is its
+// only source; --baseline-image overrides baseline.source.path.
+func applyOverlayFlagOverrides(cmd *cobra.Command, template *config.ImageTemplate) error {
+	// Inspection defaults on. --no-inspect wins over --inspect when both appear.
+	template.InspectEnabled = inspectImage
+	noInspect, err := cmd.Flags().GetBool("no-inspect")
+	if err != nil {
+		return fmt.Errorf("failed to read --no-inspect flag: %w", err)
+	}
+	if noInspect {
+		template.InspectEnabled = false
+	}
+
+	// --cve-check is accepted by the parser (so it appears in --help and stays a
+	// stable CLI surface) but the CVE analysis engine does not exist yet. Fail
+	// clearly rather than silently ignoring the flag, until that engine lands.
+	if cveCheck {
+		return fmt.Errorf("--cve-check is not yet implemented")
+	}
+
+	// --baseline-image overrides baseline.source.path. Enforce overlay mode
+	// explicitly (not just non-nil source) to match the flag's documented behavior.
+	// Clearing URL keeps the "exactly one of path/url" invariant that
+	// BaselineSource.Validate enforces (NewIngestor re-validates downstream).
+	if cmd.Flags().Changed("baseline-image") {
+		if !template.IsOverlayMode() {
+			return fmt.Errorf("--baseline-image requires an overlay-mode template (baseline.mode must be %q)", config.BaselineModeOverlay)
+		}
+		// IsOverlayMode only guarantees Baseline is non-nil; the normal load path
+		// also validates Source != nil, but a programmatically-built template may
+		// omit it. Materialize an empty source so the override can't panic.
+		if template.Baseline.Source == nil {
+			template.Baseline.Source = &config.BaselineSource{}
+		}
+		template.Baseline.Source.Path = baselineImage
+		template.Baseline.Source.URL = ""
+		if err := template.Baseline.Source.Validate(); err != nil {
+			return fmt.Errorf("invalid --baseline-image override: %w", err)
+		}
+		logger.Logger().Infof("Overriding baseline image path with %s", baselineImage)
+	}
+	return nil
 }
 
 func displayImageBuildTiming(imageType string, template *config.ImageTemplate) {

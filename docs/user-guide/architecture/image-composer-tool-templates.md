@@ -267,10 +267,15 @@ baseline:
 > `disk.size`. The installed bootloader binary, the ESP, and existing baseline
 > packages are never modified.
 >
-> **Sizing:** Adding packages does **not** auto-grow the image. The resize is
-> grow-only and keyed solely on `disk.size` (compared to the baseline's current
-> size), not on how much space the added packages need. If the baseline root is
-> near-full, set `disk.size` larger than the baseline image to make room;
+> **Sizing:** Adding packages does **not** auto-grow the image, and the overlay
+> preserves the baseline disk layout by default. Growing the image is opt-in: it
+> requires **both** a `disk.size` larger than the baseline **and**
+> `overlayPolicy.allowDiskResize: true`. When `disk.size` is larger but
+> `allowDiskResize` is not set, the build fails early with a clear message rather
+> than silently resizing the baseline. The resize is grow-only and keyed solely
+> on `disk.size` (compared to the baseline's current size), not on how much space
+> the added packages need. If the baseline root is near-full, set `disk.size`
+> larger than the baseline image and enable `allowDiskResize` to make room;
 > otherwise the package install step fails with a "no space left on device"
 > error (the failure message points back here).
 
@@ -287,6 +292,7 @@ top-level peer of `baseline` and may **only** be set when `baseline.mode` is
 | `packageOperation` | string | No | `additive-only` (default), `additive-and-upgrade` | Permitted package operations. `additive-only`: packages may only be added, never removed or downgraded. `additive-and-upgrade`: also permits upgrading a package already present in the baseline to a newer version. Downgrades and removals remain blocked in both modes (see note below) |
 | `conflictPolicy` | string | No | `fail` (default), `allow-explicit` | How a package conflict detected during preflight is handled. `fail` aborts the build; `allow-explicit` permits a conflict only when the conflicting package was explicitly requested |
 | `kernelCmdline` | string | No | — | Optional kernel command-line override applied to the overlaid image |
+| `allowDiskResize` | boolean | No | `false` (default), `true` | Permit growing the baseline image to satisfy a larger `disk.size`. Overlay mode preserves the baseline disk layout by default; when `false`, a `disk.size` larger than the baseline is rejected with an error. Resize is always grow-only and never shrinks the image |
 
 > **`additive-and-upgrade` scope.** Upgrades apply only to the package set: a
 > package already installed in the baseline may be replaced by a newer version
@@ -738,6 +744,9 @@ WSL-compatible `disk` artifact definition.
 
 Additional notes for WSL builds:
 
+- The default Ubuntu WSL template seeds the standard Ubuntu apt sources via
+  `systemConfig.additionalFiles` (for example, `ubuntu-noble.list`), which is
+  the same mechanism used by the raw and initrd defaults.
 - `disk.partitionTableType` and `disk.partitions` are not used for `wsl2` templates.
 - `systemConfig.kernel` is not allowed for `wsl2` templates.
 

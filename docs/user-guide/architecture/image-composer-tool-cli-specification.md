@@ -145,6 +145,9 @@ image-composer-tool build [flags] TEMPLATE_FILE
 | `--verbose, -v` | Enable verbose output (equivalent to --log-level debug). Displays detailed information about each step of the build process. |
 | `--dotfile, -f FILE` | Generate a dot file for the merged template dependency graph (user + defaults with resolved packages). |
 | `--system-packages-only` | When paired with `--dotfile`, limit the dependency graph to roots defined in `SystemConfig.Packages`. Dependencies pulled in by those roots still appear, but essentials/kernel/bootloader packages aren't drawn unless required by a system package. |
+| `--inspect` / `--no-inspect` | Toggle post-build inspection of the emitted overlay image (default: on). The inspection reports the partition layout, filesystem, bootloader, and SBOM of the finished image. Use `--no-inspect` to skip it. |
+| `--cve-check` | Enable CVE analysis of the built image. **Not yet implemented** — passing this flag currently returns an error. |
+| `--baseline-image FILE` | Override `baseline.source.path` from the template (overlay mode only). CLI value takes precedence over the template. |
 
 **Example:**
 
@@ -162,9 +165,17 @@ sudo -E image-composer-tool build --verbose my-image-template.yml
 sudo -E image-composer-tool build --dotfile deps.dot my-image-template.yml
 # Limit the graph to SystemConfig.Packages roots
 sudo -E image-composer-tool build --dotfile system.dot --system-packages-only my-image-template.yml
+
+# Overlay build without post-build image inspection
+sudo -E image-composer-tool build --no-inspect overlay-template.yml
+
+# Overlay build overriding the baseline image path
+sudo -E image-composer-tool build --baseline-image /images/base.raw overlay-template.yml
 ```
 
 **Note:** The build command typically requires sudo privileges for operations like creating loopback devices and mounting filesystems.
+
+**Baseline image formats (overlay mode):** `baseline.source.format` accepts `raw` (default), `qcow2`, `vhd`, and `vhdx`. Non-RAW baselines are converted to RAW with `qemu-img` before mounting, so `qemu-img` must be installed on the host when a non-RAW format is used (the build fails clearly if it is missing). The declared format is verified against the image's actual format; a mismatch aborts the build. The user-supplied baseline is never modified — conversion writes into the build workspace.
 
 See also:
 
