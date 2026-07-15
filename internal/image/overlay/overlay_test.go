@@ -724,3 +724,326 @@ func (neverEnding) Read(p []byte) (int, error) {
 	}
 	return len(p), nil
 }
+
+// normalizeSeams snapshots the baseline-format normalization seams so a test can
+// override them and restore the originals via defer, matching the resizeExec
+// save/restore pattern. These are package globals, so tests using them must not run
+// in parallel.
+type normalizeSeams struct {
+	detect    func(string) (string, error)
+	convert   func(string, string, string) error
+	qemuAvail func() bool
+}
+
+func saveNormalizeSeams() normalizeSeams {
+	return normalizeSeams{detect: detectBaselineFormatFn, convert: convertBaselineToRawFn, qemuAvail: qemuImgAvailableFn}
+}
+
+func (s normalizeSeams) restore() {
+	detectBaselineFormatFn = s.detect
+	convertBaselineToRawFn = s.convert
+	qemuImgAvailableFn = s.qemuAvail
+}
+
+// TestNormalizeBaseline_RawPassthroughNoConvert verifies a declared-raw source with
+// qemu-img present is copied verbatim and never converted.
+func TestNormalizeBaseline_RawPassthroughNoConvert(t *testing.T) {
+	defer saveNormalizeSeams().restore()
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+	shell.Default = shell.NewMockExecutor(nil)
+
+	qemuImgAvailableFn = func() bool { return true }
+	detectBaselineFormatFn = func(string) (string, error) { return "raw", nil }
+	convertCalled := false
+	convertBaselineToRawFn = func(string, string, string) error { convertCalled = true; return nil }
+
+	srcPath := writeSourceImage(t)
+	loop := &fakeLoopDev{loopDevPath: "/dev/loop7"}
+	ing := newTestIngestor(t, &config.BaselineSource{Path: srcPath, Format: "raw"}, loop, false)
+
+	ctx, err := ing.acquire()
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	defer func() { _ = ing.detach(ctx) }()
+
+	if convertCalled {
+		t.Errorf("convert must not run for a raw source")
+	}
+	got, readErr := os.ReadFile(ctx.BaselineCopyPath)
+	if readErr != nil {
+		t.Fatalf("read baseline.raw: %v", readErr)
+	}
+	if string(got) != "baseline-bytes" {
+		t.Errorf("baseline.raw content = %q, want verbatim source bytes", got)
+	}
+	if loop.attachedPath != ctx.BaselineCopyPath {
+		t.Errorf("attached %q, want baseline.raw %q", loop.attachedPath, ctx.BaselineCopyPath)
+	}
+}
+
+// TestNormalizeBaseline_RawNoQemuImgSkipsDetection verifies the legacy path: a
+// declared-raw source on a host without qemu-img is copied verbatim and detection
+// is never invoked (backward compatibility).
+func TestNormalizeBaseline_RawNoQemuImgSkipsDetection(t *testing.T) {
+	defer saveNormalizeSeams().restore()
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+	shell.Default = shell.NewMockExecutor(nil)
+
+	qemuImgAvailableFn = func() bool { return false }
+	detectCalled := false
+	detectBaselineFormatFn = func(string) (string, error) { detectCalled = true; return "raw", nil }
+	convertBaselineToRawFn = func(string, string, string) error { return errors.New("must not convert") }
+
+	srcPath := writeSourceImage(t)
+	loop := &fakeLoopDev{loopDevPath: "/dev/loop1"}
+	ing := newTestIngestor(t, &config.BaselineSource{Path: srcPath, Format: "raw"}, loop, false)
+
+	ctx, err := ing.acquire()
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	defer func() { _ = ing.detach(ctx) }()
+
+	if detectCalled {
+		t.Errorf("detection must not run when qemu-img is absent for a raw source")
+	}
+	got, readErr := os.ReadFile(ctx.BaselineCopyPath)
+	if readErr != nil {
+		t.Fatalf("read baseline.raw: %v", readErr)
+	}
+	if string(got) != "baseline-bytes" {
+		t.Errorf("baseline.raw content = %q, want verbatim source bytes", got)
+	}
+}
+
+// TestNormalizeBaseline_Qcow2TriggersConvert verifies a declared-qcow2 source is
+// staged, verified, converted to baseline.raw, and the staging file is removed.
+func TestNormalizeBaseline_Qcow2TriggersConvert(t *testing.T) {
+	defer saveNormalizeSeams().restore()
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+	shell.Default = shell.NewMockExecutor(nil)
+
+	qemuImgAvailableFn = func() bool { return true }
+	detectBaselineFormatFn = func(string) (string, error) { return "qcow2", nil }
+	var gotSrc, gotDst, gotFormat string
+	convertBaselineToRawFn = func(src, dst, srcFormat string) error {
+		gotSrc, gotDst, gotFormat = src, dst, srcFormat
+		// Simulate qemu-img producing the RAW output at dst.
+		return os.WriteFile(dst, []byte("converted-raw"), 0600)
+	}
+
+	srcPath := writeSourceImage(t)
+	loop := &fakeLoopDev{loopDevPath: "/dev/loop2"}
+	ing := newTestIngestor(t, &config.BaselineSource{Path: srcPath, Format: "qcow2"}, loop, false)
+
+	ctx, err := ing.acquire()
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	defer func() { _ = ing.detach(ctx) }()
+
+	stagePath := filepath.Join(ing.workDir, baselineStageName)
+	if gotSrc != stagePath {
+		t.Errorf("convert src = %q, want staging path %q", gotSrc, stagePath)
+	}
+	if gotDst != ctx.BaselineCopyPath {
+		t.Errorf("convert dst = %q, want baseline.raw %q", gotDst, ctx.BaselineCopyPath)
+	}
+	// The verified qemu-img-detected format is passed through to -f so qemu-img
+	// does not re-probe the source independently of the detection above.
+	if gotFormat != "qcow2" {
+		t.Errorf("convert srcFormat = %q, want detected format %q", gotFormat, "qcow2")
+	}
+	if _, statErr := os.Stat(stagePath); !os.IsNotExist(statErr) {
+		t.Errorf("staging file must be removed, stat err = %v", statErr)
+	}
+	if loop.attachedPath != ctx.BaselineCopyPath {
+		t.Errorf("attached %q, want baseline.raw %q", loop.attachedPath, ctx.BaselineCopyPath)
+	}
+	got, _ := os.ReadFile(ctx.BaselineCopyPath)
+	if string(got) != "converted-raw" {
+		t.Errorf("baseline.raw content = %q, want converted output", got)
+	}
+}
+
+// TestNormalizeBaseline_FormatMismatchErrors verifies a declared format that does
+// not match the detected format fails, without converting or attaching.
+func TestNormalizeBaseline_FormatMismatchErrors(t *testing.T) {
+	defer saveNormalizeSeams().restore()
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+	shell.Default = shell.NewMockExecutor(nil)
+
+	qemuImgAvailableFn = func() bool { return true }
+	detectBaselineFormatFn = func(string) (string, error) { return "raw", nil } // actual != declared
+	convertCalled := false
+	convertBaselineToRawFn = func(string, string, string) error { convertCalled = true; return nil }
+
+	srcPath := writeSourceImage(t)
+	loop := &fakeLoopDev{loopDevPath: "/dev/loop3"}
+	ing := newTestIngestor(t, &config.BaselineSource{Path: srcPath, Format: "qcow2"}, loop, false)
+
+	_, err := ing.acquire()
+	if err == nil || !strings.Contains(err.Error(), "does not match declared") {
+		t.Fatalf("expected format-mismatch error, got %v", err)
+	}
+	if convertCalled {
+		t.Errorf("convert must not run on a format mismatch")
+	}
+	if loop.attachedPath != "" {
+		t.Errorf("loop device must not be attached on a format mismatch")
+	}
+	if _, statErr := os.Stat(filepath.Join(ing.workDir, baselineStageName)); !os.IsNotExist(statErr) {
+		t.Errorf("staging file must be cleaned up on error")
+	}
+	if _, statErr := os.Stat(filepath.Join(ing.workDir, baselineCopyName)); !os.IsNotExist(statErr) {
+		t.Errorf("baseline.raw must be cleaned up on error")
+	}
+}
+
+// TestNormalizeBaseline_NonRawRequiresQemuImg verifies a non-raw source on a host
+// without qemu-img fails clearly before any copy or attach.
+func TestNormalizeBaseline_NonRawRequiresQemuImg(t *testing.T) {
+	defer saveNormalizeSeams().restore()
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+	shell.Default = shell.NewMockExecutor(nil)
+
+	qemuImgAvailableFn = func() bool { return false }
+	detectBaselineFormatFn = func(string) (string, error) { return "", errors.New("must not detect") }
+	convertBaselineToRawFn = func(string, string, string) error { return errors.New("must not convert") }
+
+	srcPath := writeSourceImage(t)
+	loop := &fakeLoopDev{loopDevPath: "/dev/loop4"}
+	ing := newTestIngestor(t, &config.BaselineSource{Path: srcPath, Format: "qcow2"}, loop, false)
+
+	_, err := ing.acquire()
+	if err == nil || !strings.Contains(err.Error(), "requires qemu-img") {
+		t.Fatalf("expected qemu-img-required error, got %v", err)
+	}
+	if loop.attachedPath != "" {
+		t.Errorf("loop device must not be attached when qemu-img is missing")
+	}
+	if _, statErr := os.Stat(filepath.Join(ing.workDir, baselineStageName)); !os.IsNotExist(statErr) {
+		t.Errorf("no staging file should be created when qemu-img is missing")
+	}
+}
+
+// TestNormalizeBaseline_UnsupportedFormatRejected verifies a declared format
+// outside the supported set is rejected up front — without copying, detecting, or
+// converting — so programmatically-built templates get the same guard that config
+// validation applies to YAML-loaded ones.
+func TestNormalizeBaseline_UnsupportedFormatRejected(t *testing.T) {
+	defer saveNormalizeSeams().restore()
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+	shell.Default = shell.NewMockExecutor(nil)
+
+	qemuImgAvailableFn = func() bool { return true }
+	detectBaselineFormatFn = func(string) (string, error) { return "", errors.New("must not detect") }
+	convertBaselineToRawFn = func(string, string, string) error { return errors.New("must not convert") }
+
+	srcPath := writeSourceImage(t)
+	loop := &fakeLoopDev{loopDevPath: "/dev/loop6"}
+	ing := newTestIngestor(t, &config.BaselineSource{Path: srcPath, Format: "vmdk"}, loop, false)
+
+	_, err := ing.acquire()
+	if err == nil || !strings.Contains(err.Error(), "not supported") {
+		t.Fatalf("expected unsupported-format error, got %v", err)
+	}
+	if loop.attachedPath != "" {
+		t.Errorf("loop device must not be attached for an unsupported format")
+	}
+	if _, statErr := os.Stat(filepath.Join(ing.workDir, baselineStageName)); !os.IsNotExist(statErr) {
+		t.Errorf("no staging file should be created for an unsupported format")
+	}
+}
+
+// TestNormalizeBaseline_ConvertFailureCleansUp verifies a conversion failure
+// propagates and leaves neither the staging file nor baseline.raw behind.
+func TestNormalizeBaseline_ConvertFailureCleansUp(t *testing.T) {
+	defer saveNormalizeSeams().restore()
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+	shell.Default = shell.NewMockExecutor(nil)
+
+	qemuImgAvailableFn = func() bool { return true }
+	detectBaselineFormatFn = func(string) (string, error) { return "vhd", nil }
+	convertBaselineToRawFn = func(_, dst, _ string) error {
+		// Simulate qemu-img writing a partial output then failing.
+		_ = os.WriteFile(dst, []byte("partial"), 0600)
+		return errors.New("fake convert failure")
+	}
+
+	srcPath := writeSourceImage(t)
+	loop := &fakeLoopDev{loopDevPath: "/dev/loop5"}
+	ing := newTestIngestor(t, &config.BaselineSource{Path: srcPath, Format: "vhd"}, loop, false)
+
+	_, err := ing.acquire()
+	if err == nil || !strings.Contains(err.Error(), "convert") {
+		t.Fatalf("expected convert-failure error, got %v", err)
+	}
+	if loop.attachedPath != "" {
+		t.Errorf("loop device must not be attached after a convert failure")
+	}
+	if _, statErr := os.Stat(filepath.Join(ing.workDir, baselineStageName)); !os.IsNotExist(statErr) {
+		t.Errorf("staging file must be cleaned up after a convert failure")
+	}
+	if _, statErr := os.Stat(filepath.Join(ing.workDir, baselineCopyName)); !os.IsNotExist(statErr) {
+		t.Errorf("partial baseline.raw must be cleaned up after a convert failure")
+	}
+}
+
+// TestNormalizeBaseline_MislabeledRawCaught verifies a source declared raw but
+// detected as a known non-raw format is rejected (guards the stricter raw branch).
+func TestNormalizeBaseline_MislabeledRawCaught(t *testing.T) {
+	defer saveNormalizeSeams().restore()
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+	shell.Default = shell.NewMockExecutor(nil)
+
+	qemuImgAvailableFn = func() bool { return true }
+	detectBaselineFormatFn = func(string) (string, error) { return "qcow2", nil } // mislabeled
+
+	srcPath := writeSourceImage(t)
+	loop := &fakeLoopDev{loopDevPath: "/dev/loop6"}
+	ing := newTestIngestor(t, &config.BaselineSource{Path: srcPath, Format: "raw"}, loop, false)
+
+	_, err := ing.acquire()
+	if err == nil || !strings.Contains(err.Error(), "does not match declared") {
+		t.Fatalf("expected mislabeled-raw mismatch error, got %v", err)
+	}
+	if loop.attachedPath != "" {
+		t.Errorf("loop device must not be attached for a mislabeled raw source")
+	}
+}
+
+// TestNormalizeBaseline_RawDetectionErrorProceeds verifies that for a declared-raw
+// source a detection error is advisory: the copy proceeds and attaches.
+func TestNormalizeBaseline_RawDetectionErrorProceeds(t *testing.T) {
+	defer saveNormalizeSeams().restore()
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+	shell.Default = shell.NewMockExecutor(nil)
+
+	qemuImgAvailableFn = func() bool { return true }
+	detectBaselineFormatFn = func(string) (string, error) { return "", errors.New("qemu-img blew up") }
+
+	srcPath := writeSourceImage(t)
+	loop := &fakeLoopDev{loopDevPath: "/dev/loop8"}
+	ing := newTestIngestor(t, &config.BaselineSource{Path: srcPath, Format: "raw"}, loop, false)
+
+	ctx, err := ing.acquire()
+	if err != nil {
+		t.Fatalf("acquire should proceed on advisory raw detection error, got %v", err)
+	}
+	defer func() { _ = ing.detach(ctx) }()
+
+	if loop.attachedPath != ctx.BaselineCopyPath {
+		t.Errorf("attached %q, want baseline.raw %q", loop.attachedPath, ctx.BaselineCopyPath)
+	}
+}

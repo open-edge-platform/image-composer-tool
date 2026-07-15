@@ -107,7 +107,7 @@ var commandMap = map[string][]string{
 	"run":                {"/usr/bin/run"},
 	"sed":                {"/usr/bin/sed", "/bin/sed"},
 	"sfdisk":             {"/usr/sbin/sfdisk"},
-	"sgdisk":             {"/usr/bin/sgdisk"},
+	"sgdisk":             {"/usr/sbin/sgdisk", "/sbin/sgdisk", "/usr/bin/sgdisk"},
 	"sha256sum":          {"/usr/bin/sha256sum"},
 	"sh":                 {"/bin/sh"},
 	"sleep":              {"/usr/bin/sleep"},

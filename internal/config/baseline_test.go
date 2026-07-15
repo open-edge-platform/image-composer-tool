@@ -139,12 +139,47 @@ func TestValidateBaseline(t *testing.T) {
 			wantErr: "must set only one",
 		},
 		{
-			name: "overlay rejects non-raw format",
+			name: "overlay rejects unsupported format",
+			baseline: &Baseline{
+				Mode:   BaselineModeOverlay,
+				Source: &BaselineSource{Path: "/tmp/u.vmdk", Format: "vmdk"},
+			},
+			wantErr: "baseline.source.format must be one of",
+		},
+		{
+			name: "overlay accepts qcow2 format",
 			baseline: &Baseline{
 				Mode:   BaselineModeOverlay,
 				Source: &BaselineSource{Path: "/tmp/u.qcow2", Format: "qcow2"},
 			},
-			wantErr: "must be \"raw\"",
+			wantNoErr: true,
+		},
+		{
+			name: "overlay accepts vhd format",
+			baseline: &Baseline{
+				Mode:   BaselineModeOverlay,
+				Source: &BaselineSource{Path: "/tmp/u.vhd", Format: "vhd"},
+			},
+			wantNoErr: true,
+		},
+		{
+			name: "overlay accepts vhdx format",
+			baseline: &Baseline{
+				Mode:   BaselineModeOverlay,
+				Source: &BaselineSource{Path: "/tmp/u.vhdx", Format: "vhdx"},
+			},
+			wantNoErr: true,
+		},
+		{
+			// validateBaseline calls Source.Validate(), which lower-cases Format;
+			// this documents that normalization for programmatically-built templates.
+			// (YAML templates are constrained to the lower-case schema enum earlier.)
+			name: "overlay accepts upper-case format via Validate normalization",
+			baseline: &Baseline{
+				Mode:   BaselineModeOverlay,
+				Source: &BaselineSource{Path: "/tmp/u.qcow2", Format: "QCOW2"},
+			},
+			wantNoErr: true,
 		},
 		{
 			name: "overlay accepts default (empty) format",
@@ -329,18 +364,39 @@ func TestSchemaAcceptsSourceURL(t *testing.T) {
 	}
 }
 
-// TestSchemaRejectsNonRawFormat ensures the format enum rejects qcow2.
-func TestSchemaRejectsNonRawFormat(t *testing.T) {
+// TestSchemaRejectsUnsupportedFormat ensures the format enum rejects a format
+// outside the supported set (raw/qcow2/vhd/vhdx), e.g. vmdk.
+func TestSchemaRejectsUnsupportedFormat(t *testing.T) {
 	tmpl := `{
 		"image": {"name": "ub", "version": "1.0.0"},
 		"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"},
 		"baseline": {
 			"mode": "overlay",
-			"source": {"path": "/tmp/u.qcow2", "format": "qcow2"}
+			"source": {"path": "/tmp/u.vmdk", "format": "vmdk"}
 		}
 	}`
 	if err := validate.ValidateUserTemplateJSON([]byte(tmpl)); err == nil {
-		t.Fatalf("template with format=qcow2 should be rejected by schema")
+		t.Fatalf("template with format=vmdk should be rejected by schema")
+	}
+}
+
+// TestSchemaAcceptsSupportedFormats ensures the format enum accepts every
+// supported baseline format.
+func TestSchemaAcceptsSupportedFormats(t *testing.T) {
+	for _, format := range []string{"raw", "qcow2", "vhd", "vhdx"} {
+		t.Run(format, func(t *testing.T) {
+			tmpl := fmt.Sprintf(`{
+				"image": {"name": "ub", "version": "1.0.0"},
+				"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"},
+				"baseline": {
+					"mode": "overlay",
+					"source": {"path": "/tmp/u.img", "format": %q}
+				}
+			}`, format)
+			if err := validate.ValidateUserTemplateJSON([]byte(tmpl)); err != nil {
+				t.Fatalf("template with format=%s should validate: %v", format, err)
+			}
+		})
 	}
 }
 
