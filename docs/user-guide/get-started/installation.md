@@ -1,12 +1,10 @@
-# Installation Guide
+# Installation
 
 This guide covers all the ways to install ICT and its
 prerequisites.
 
 ## Table of Contents
 
-- [Installation Guide](#installation-guide)
-  - [Table of Contents](#table-of-contents)
   - [Prerequisites](#prerequisites)
   - [Development Build (Go)](#development-build-go)
     - [Including Version Information in Dev Builds](#including-version-information-in-dev-builds)
@@ -180,7 +178,7 @@ image-composer-tool version
 
 > **Important:** `mmdebstrap` version 0.8.x (included in Ubuntu 22.04) has
 > known issues. For Ubuntu 22.04, install version 1.4.3+ manually — see
-> [mmdebstrap instructions](./prerequisite.md#mmdebstrap).
+> [mmdebstrap instructions](./prerequisites.md#mmdebstrap).
 
 ### Uninstall
 
@@ -203,7 +201,7 @@ Images (UKI).
 
 - **Ubuntu 23.04+**: `sudo apt install systemd-ukify`
 - **Ubuntu 22.04 and earlier**: Install manually from systemd source — see
-  [ukify installation instructions](./prerequisite.md#ukify)
+  [ukify installation instructions](./prerequisites.md#ukify)
 
 ### mmdebstrap
 
@@ -212,14 +210,14 @@ Downloads and installs Debian packages to initialize a chroot.
 - **Ubuntu 23.04+**: Available in system repositories (version 1.4.3+)
 - **Ubuntu 22.04**: The repository version (0.8.x) will not work — install
   1.4.3+ manually per the
-  [mmdebstrap instructions](./prerequisite.md#mmdebstrap)
+  [mmdebstrap instructions](./prerequisites.md#mmdebstrap)
 - **Alternative**: `debootstrap` can be used for Debian-based images
 
 ---
 
 ## Next Steps
 
-- [Quick Start](../../README.md#quick-start) — build your first image
+- [Quick Start](./quick-start.md) — build your first image
 - [Usage Guide](./usage-guide.md) — CLI commands, configuration, and
   shell completion
 - [Image Templates](../architecture/image-composer-tool-templates.md) —

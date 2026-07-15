@@ -118,7 +118,7 @@ For path-scoped detail, see `.github/instructions/`:
 - `config/osv/` — per-OS defaults
 - `.golangci.yml` — lint config
 - `.coverage-threshold` — current coverage floor
-- `docs/architecture/` — ADRs and design docs
+- `docs/architecture-decision-record/` — ADRs and design docs
 
 ---
 

@@ -94,7 +94,7 @@ Coverage threshold is enforced and auto-ratcheted — see `.coverage-threshold`.
 1. Create package in `internal/provider/{osname}/` implementing the `provider.Provider` interface (see [internal/provider/provider.go](../internal/provider/provider.go)).
 2. Register in the `switch` in `cmd/image-composer-tool/build.go`.
 3. Add default configs in `config/osv/{osname}/` and example templates in `image-templates/`.
-4. Add tests and update `docs/architecture/architecture.md`.
+4. Add tests and update `docs/user-guide/architecture/architecture.md`.
 
 > Full provider conventions + checklist: [.github/instructions/provider.instructions.md](instructions/provider.instructions.md) (auto-applies to `internal/provider/**/*.go`).
 > End-to-end scaffold prompt: [.github/prompts/add-os-provider.prompt.md](prompts/add-os-provider.prompt.md).
@@ -112,7 +112,7 @@ stdlib `testing` only (no testify), table-driven with `t.Run()`, AAA layout, `t.
 ## Error Handling
 
 - **Always wrap** with context: `fmt.Errorf("failed to X: %w", err)`.
-- Use **named returns + `defer`** for cleanup (see `docs/architecture/image-composer-tool-coding-style.md` §4.3).
+- Use **named returns + `defer`** for cleanup (see `docs/user-guide/architecture/image-composer-tool-coding-style.md` §4.3).
 - Never ignore errors with `_` (caught by `errcheck`).
 - Validate inputs at system boundaries only — don't defensively re-validate internal callers.
 
@@ -146,7 +146,7 @@ stdlib `testing` only (no testify), table-driven with `t.Run()`, AAA layout, `t.
 - **Named returns + defer** for cleanup (the standard pattern; not "goto fail").
 - **Linters** (`earthly +lint`): `govet`, `gofmt`, `errcheck`, `staticcheck`, `unused`, `gosimple` — all errors must be handled.
 - Shell scripts: `set -euo pipefail`.
-- See `docs/architecture/image-composer-tool-coding-style.md` for the full guide.
+- See `docs/user-guide/architecture/image-composer-tool-coding-style.md` for the full guide.
 
 ---
 
@@ -168,17 +168,17 @@ stdlib `testing` only (no testify), table-driven with `t.Run()`, AAA layout, `t.
 
 | What changed | Docs to update |
 |---|---|
-| CLI flags or commands | `docs/architecture/image-composer-tool-cli-specification.md`, `docs/tutorial/usage-guide.md` |
-| Build process / Earthfile targets | `docs/tutorial/usage-guide.md`, this file's **Build and Test** section |
-| Image template schema or fields | `docs/architecture/image-composer-tool-templates.md`, relevant `image-templates/*.yml` examples |
-| New OS provider | `docs/architecture/architecture.md`, this file's **Adding a New OS Provider** section |
-| New tutorial-worthy feature | Add or update a guide in `docs/tutorial/` |
-| Architecture or design decisions | Add an ADR in `docs/architecture/` |
-| Security-related changes | `docs/architecture/image-composition-tool-security-objectives.md` |
-| Caching behavior | `docs/architecture/image-composer-tool-caching.md` |
-| Coding conventions | `docs/architecture/image-composer-tool-coding-style.md` |
-| Dependencies or multi-repo setup | `docs/architecture/image-composer-tool-multi-repo-support.md` |
-| User-facing features or fixes | `docs/release-notes.md` |
+| CLI flags or commands | `docs/user-guide/architecture/image-composer-tool-cli-specification.md`, `docs/user-guide/get-started/usage-guide.md` |
+| Build process / Earthfile targets | `docs/user-guide/get-started/usage-guide.md`, this file's **Build and Test** section |
+| Image template schema or fields | `docs/user-guide/architecture/image-composer-tool-templates.md`, relevant `image-templates/*.yml` examples |
+| New OS provider | `docs/user-guide/architecture/architecture.md`, this file's **Adding a New OS Provider** section |
+| New tutorial-worthy feature | Add or update a guide in `docs/user-guide/get-started/` |
+| Architecture or design decisions | Add an ADR in `docs/architecture-decision-record/` |
+| Security-related changes | `docs/user-guide/architecture/image-composition-tool-security-objectives.md` |
+| Caching behavior | `docs/user-guide/architecture/image-composer-tool-caching.md` |
+| Coding conventions | `docs/user-guide/architecture/image-composer-tool-coding-style.md` |
+| Dependencies or multi-repo setup | `docs/user-guide/architecture/image-composer-tool-multi-repo-support.md` |
+| User-facing features or fixes | `docs/user-guide/release-notes.md` |
 
 If no docs need updating, **say so explicitly in the PR description**.
 
@@ -249,4 +249,4 @@ When a section here grows past a screenful or only applies to a subdirectory, sp
 - `internal/utils/shell/shell.go` — Command execution with allowlist
 - `.golangci.yml` — Linter configuration
 - `.coverage-threshold` — Current test coverage threshold
-- `docs/architecture/` — ADRs and design docs
+- `docs/architecture-decision-record/` — ADRs and design docs

@@ -7,14 +7,12 @@ in real, working examples.
 
 > **Phase 1** - This guide covers the current implementation: core RAG
 > with basic CLI (semantic search, template generation, embedding cache).
-> See the [ADR](../architecture/adr-template-enriched-rag.md) for the full
+> See the [ADR](https://github.com/open-edge-platform/image-composer-tool/blob/main/docs/architecture-decision-record/adr-template-enriched-rag.md) for the full
 > roadmap (query classification, conversational refinement, agentic
 > validation).
 
 ## Table of Contents
 
-- [AI-Powered Template Generation (RAG)](#ai-powered-template-generation-rag)
-  - [Table of Contents](#table-of-contents)
   - [Prerequisites](#prerequisites)
     - [Install Ollama (recommended)](#install-ollama-recommended)
   - [Quick Start (Ollama - local, free)](#quick-start-ollama---local-free)
@@ -311,7 +309,7 @@ package lists.
 
 ## Related Documentation
 
-- [ADR: Template-Enriched RAG](../architecture/adr-template-enriched-rag.md) -
+- [ADR: Template-Enriched RAG](https://github.com/open-edge-platform/image-composer-tool/blob/main/docs/architecture-decision-record/adr-template-enriched-rag.md) -
   Full architecture decision record, design details, and roadmap
 - [Usage Guide](usage-guide.md) - General image-composer-tool usage
 - [Image Templates](../architecture/image-composer-tool-templates.md) -

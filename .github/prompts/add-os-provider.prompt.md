@@ -33,8 +33,8 @@ Create a `manage_todo_list` covering exactly these steps, then execute in order:
 5. **Example templates** in `image-templates/`, one per chosen image type, named `<dist>-<arch>-minimal-<imageType>.yml` (filenames use the `target.dist` value, e.g. `azl3-…`, `ubuntu24-…`, not the `OsName`). Each must have a populated `metadata` block.
 6. **Unit tests** in `internal/provider/{osname}/{osname}_test.go` covering at minimum: the `OsName` constant, `Name(dist, arch)` output, `Init` error paths, and registration. Mock chroot + shell — no real package installs.
 7. **Docs**:
-   - Add the provider to `docs/architecture/architecture.md`.
-   - Add a release note under `docs/release-notes.md`.
+   - Add the provider to `docs/user-guide/architecture/architecture.md`.
+   - Add a release note under `docs/user-guide/release-notes.md`.
    - Update the **Adding a New OS Provider** section of `.github/copilot-instructions.md` only if the *steps* changed (not just the provider list).
 8. **Validate**:
    - `image-composer-tool validate -t image-templates/<new-template>.yml` for each new template.

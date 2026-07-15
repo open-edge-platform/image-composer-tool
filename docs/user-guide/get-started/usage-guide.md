@@ -6,8 +6,6 @@ command reference, see the
 
 ## Table of Contents
 
-- [Usage Guide](#usage-guide)
-  - [Table of Contents](#table-of-contents)
   - [Binary Location](#binary-location)
   - [Commands Overview](#commands-overview)
   - [Building an Image](#building-an-image)
