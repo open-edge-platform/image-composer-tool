@@ -54,28 +54,31 @@ func executeResolve(cmd *cobra.Command, _ []string) error {
 	log := logger.Logger()
 	templateFile := resolveTemplateFile
 
-	leaf, err := config.LoadTemplate(templateFile, false)
-	if err != nil {
-		return fmt.Errorf("resolving template: %w", err)
-	}
-
-	hasExtends := strings.TrimSpace(leaf.Extends) != ""
-
-	if !hasExtends && !resolveFull {
-		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No extends used in template, nothing to resolve")
-		return nil
-	}
-
 	var merged *config.ImageTemplate
 	if resolveFull {
+		// --full merges OS defaults regardless of extends, so go straight to the
+		// full loader — no separate leaf load is required, avoiding a duplicate
+		// parse of the same file.
 		log.Infof("Resolving template with OS defaults: %s", templateFile)
-		merged, err = config.LoadAndMergeTemplate(templateFile)
+		fullMerged, err := config.LoadAndMergeTemplate(templateFile)
 		if err != nil {
 			return fmt.Errorf("resolving template: %w", err)
 		}
+		merged = fullMerged
 	} else {
+		// Load the leaf only to decide whether extends is present. If not,
+		// short-circuit before invoking the chain resolver.
+		leaf, err := config.LoadTemplate(templateFile, false)
+		if err != nil {
+			return fmt.Errorf("resolving template: %w", err)
+		}
+		if strings.TrimSpace(leaf.Extends) == "" {
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No extends used in template, nothing to resolve")
+			return nil
+		}
+
 		log.Infof("Resolving extends chain for template: %s", templateFile)
-		mergedChain, chainPaths, chainErr := config.ResolveAndMergeExtendsChain(templateFile, leaf)
+		chainMerged, chainPaths, chainErr := config.ResolveAndMergeExtendsChain(templateFile, leaf)
 		if chainErr != nil {
 			return fmt.Errorf("resolving template: %w", chainErr)
 		}
@@ -84,7 +87,7 @@ func executeResolve(cmd *cobra.Command, _ []string) error {
 			names[i] = filepath.Base(p)
 		}
 		log.Infof("Resolved extends chain: %s", strings.Join(names, " -> "))
-		merged = mergedChain
+		merged = chainMerged
 	}
 
 	redacted := config.RedactSensitiveData(merged)
