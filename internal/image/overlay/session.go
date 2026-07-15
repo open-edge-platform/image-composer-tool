@@ -13,6 +13,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/config/manifest"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/imageinspect"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/display"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
 
@@ -379,6 +380,14 @@ func (b *Builder) Postprocess(buildErr error) (err error) {
 	if config.IsDebugMode() {
 		PrintVerboseUnchangedPackages(stats)
 	}
+
+	// Print the same success/artifact summary box the create-mode makers emit, so
+	// overlay builds also report the generated artifacts. The build directory is the
+	// parent of the emitted RAW artifact; emitOverlayArtifact has placed the .raw
+	// there, and the SBOM sidecar too when its best-effort copy succeeded (the
+	// summary lists whatever files are actually present, so a missing sidecar simply
+	// isn't shown).
+	display.PrintImageDirectorySummary(filepath.Dir(artifact), "RAW")
 
 	return nil
 }
