@@ -3,6 +3,7 @@ package cache
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -187,9 +188,18 @@ func TestIsolated_PreserveOutput(t *testing.T) {
 			WorkDir:         filepath.Join(tempDir, "unique-workspace"),
 			originalWorkDir: filepath.Join(tempDir, "orig-workspace"),
 		}
-		// A traversal in providerID must return an error without touching the filesystem.
-		if err := isolated.PreserveOutput("../../etc", configName); err == nil {
-			t.Error("expected error when providerID contains path traversal")
+
+		err := isolated.PreserveOutput("../../etc", configName)
+
+		if err == nil {
+			t.Fatal("expected error when providerID contains path traversal")
+		}
+		if !strings.Contains(err.Error(), "escapes") {
+			t.Errorf("error message should mention 'escapes', got: %v", err)
+		}
+		// No directory should have been created inside unique-workspace as a side effect.
+		if _, statErr := os.Stat(isolated.WorkDir); !os.IsNotExist(statErr) {
+			t.Errorf("unique-workspace should not have been created before the error, stat err: %v", statErr)
 		}
 	})
 
@@ -199,9 +209,18 @@ func TestIsolated_PreserveOutput(t *testing.T) {
 			WorkDir:         filepath.Join(tempDir, "unique-workspace"),
 			originalWorkDir: filepath.Join(tempDir, "orig-workspace"),
 		}
-		// A traversal in configName must return an error without touching the filesystem.
-		if err := isolated.PreserveOutput(providerID, "../../../etc/passwd"); err == nil {
-			t.Error("expected error when configName contains path traversal")
+
+		err := isolated.PreserveOutput(providerID, "../../../etc/passwd")
+
+		if err == nil {
+			t.Fatal("expected error when configName contains path traversal")
+		}
+		if !strings.Contains(err.Error(), "escapes") {
+			t.Errorf("error message should mention 'escapes', got: %v", err)
+		}
+		// No directory should have been created inside orig-workspace as a side effect.
+		if _, statErr := os.Stat(isolated.originalWorkDir); !os.IsNotExist(statErr) {
+			t.Errorf("orig-workspace should not have been created before the error, stat err: %v", statErr)
 		}
 	})
 }
