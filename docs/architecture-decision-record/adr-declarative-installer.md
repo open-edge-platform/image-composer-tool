@@ -1,9 +1,9 @@
 # ADR: Declarative Live ISO Installer
 
-**Status**: Proposed  
-**Date**: 2026-04-17  
-**Updated**: N/A  
-**Authors**: OS Image Composer Team  
+**Status**: Proposed
+**Date**: 2026-04-17
+**Updated**: N/A
+**Authors**: OS Image Composer Team
 **Technical Area**: Provisioning / Live Installer / Security
 
 ---
@@ -317,9 +317,9 @@ systemConfig:
 
 All Phase 1 features must include corresponding documentation updates:
 
-- **Template specification**: Update `docs/architecture/os-image-composer-templates.md`
+- **Template specification**: Update `docs/user-guide/architecture/os-image-composer-templates.md`
   with `selectionPolicy`, `network`, and `cloudInit` schema definitions
-- **Usage guide**: Update `docs/tutorial/usage-guide.md` with unattended
+- **Usage guide**: Update `docs/user-guide/get-started/usage-guide.md` with unattended
   provisioning examples
 - **JSON schema**: Update `os-image-template.schema.json` with new fields
 - **Example templates**: Add example ISO templates demonstrating unattended
@@ -729,4 +729,4 @@ then deploy the target OS.
 - Live installer: `cmd/live-installer/install.go` - `install()`
 - Image template schema: `internal/config/schema/os-image-template.schema.json`
 - Shell command allowlist: `internal/utils/shell/shell.go` - `commandMap`
-- Security objectives: `docs/architecture/image-composition-tool-security-objectives.md`
+- Security objectives: `docs/user-guide/architecture/image-composition-tool-security-objectives.md`

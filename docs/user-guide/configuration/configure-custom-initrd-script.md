@@ -69,7 +69,7 @@ Notes:
 
 ## Route 1: initramfs-tools hook + boot script (`bb-raw`)
 
-Use [debian13-x86_64-bb-raw.yml](../../image-templates/debian13-x86_64-bb-raw.yml) as an example.
+Use [debian13-x86_64-bb-raw.yml](https://github.com/open-edge-platform/image-composer-tool/blob/main/image-templates/debian13-x86_64-bb-raw.yml) as an example.
 
 Paths in `**local`** are relative to the **directory that contains your template YAML** (`image-templates/…` → `additionalfiles/debian13-bb/…`).
 
@@ -124,7 +124,7 @@ Rename `debian13-bb` in `local` paths to match your folder name. Keep the `**fin
 ## Route 2: dracut module (`bb-dracut-raw`)
 
 If you want the same early-boot marker behavior using dracut modules instead of initramfs-tools hooks, use
-[debian13-x86_64-bb-dracut-raw.yml](../../image-templates/debian13-x86_64-bb-dracut-raw.yml).
+[debian13-x86_64-bb-dracut-raw.yml](https://github.com/open-edge-platform/image-composer-tool/blob/main/image-templates/debian13-x86_64-bb-dracut-raw.yml).
 
 This variant keeps the same Debian 13 + GRUB + raw image target but changes how content is added to initrd:
 
@@ -232,14 +232,14 @@ declarative, version-controlled image builds in ICT.
 
 ## Build and check
 
-**Build the tool, install prerequisites, validate, and compose the image** using the [README.md](../../README.md) (Quick Start and *Compose an Image*).
+**Build the tool, install prerequisites, validate, and compose the image** using the [README.md](https://github.com/open-edge-platform/image-composer-tool/blob/main/README.md) (Quick Start and *Compose an Image*).
 
 Pick one template based on your chosen route:
 
 - `image-templates/debian13-x86_64-bb-raw.yml`
 - `image-templates/debian13-x86_64-bb-dracut-raw.yml`
 
-Run validate if you use it (see [Usage Guide](./usage-guide.md)). If validate warns about a missing `local` file, fix the path or add the file under [Where to put files in the repo](#where-to-put-files-in-the-repo).
+Run validate if you use it (see [Usage Guide](../get-started/usage-guide.md)). If validate warns about a missing `local` file, fix the path or add the file under [Where to put files in the repo](#where-to-put-files-in-the-repo).
 
 **On the device:**
 
@@ -363,5 +363,5 @@ There is no `99` prefix naming rule; the file name (`hello`) is arbitrary.
 
 - [Custom commands at image build time](configure-additional-actions-for-build.md) — not initrd execution on the device.
 - [Image templates](../architecture/image-composer-tool-templates.md) — `additionalFiles` fields and merge behavior.
-- [README.md](../../README.md) — build and compose commands.
+- [README.md](https://github.com/open-edge-platform/image-composer-tool/blob/main/README.md) — build and compose commands.
 

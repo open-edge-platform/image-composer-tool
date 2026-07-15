@@ -27,21 +27,54 @@ type composeRequest struct {
 
 // composeSummary is the human-readable summary shown in the Review panel.
 type composeSummary struct {
+	// Selection echo — what the user chose
+	Vertical  string `json:"vertical"`
+	SKU       string `json:"sku"`
+	Platform  string `json:"platform"`
+	OS        string `json:"os"`
+	ImageType string `json:"imageType"`
+
+	// Template-derived — info the user can't see from the dropdowns
 	ImageName      string `json:"imageName"`
-	Vertical       string `json:"vertical"`
-	SKU            string `json:"sku"`
-	Platform       string `json:"platform"`
-	OS             string `json:"os"`
-	ImageType      string `json:"imageType"`
+	ImageVersion   string `json:"imageVersion"`
+	Description    string `json:"description"`
+	Architecture   string `json:"architecture"`
+	KernelVersion  string `json:"kernelVersion"`
 	PackageCount   int    `json:"packageCount"`
 	DiskSize       string `json:"diskSize"`
 	PartitionCount int    `json:"partitionCount"`
+	PartitionTable string `json:"partitionTable"`
+	Hostname       string `json:"hostname"`
 }
 
 type composeResponse struct {
 	Template string         `json:"template"` // resolved template filename
 	YAML     string         `json:"yaml"`     // matched template YAML, verbatim
 	Summary  composeSummary `json:"summary"`
+}
+
+// buildComposeSummary constructs a composeSummary from a request and a merged
+// template. Extracted so handleStartBuild can reuse it to store the summary on
+// the build record for display in the Build Details panel.
+func buildComposeSummary(req composeRequest, merged *config.ImageTemplate) composeSummary {
+	return composeSummary{
+		Vertical:  req.Vertical,
+		SKU:       req.SKU,
+		Platform:  req.Platform,
+		OS:        req.OS,
+		ImageType: req.ImageType,
+
+		ImageName:      merged.Image.Name,
+		ImageVersion:   merged.Image.Version,
+		Description:    merged.SystemConfig.Description,
+		Architecture:   merged.Target.Arch,
+		KernelVersion:  merged.SystemConfig.Kernel.Version,
+		PackageCount:   len(merged.SystemConfig.Packages),
+		DiskSize:       merged.Disk.Size,
+		PartitionCount: len(merged.Disk.Partitions),
+		PartitionTable: merged.Disk.PartitionTableType,
+		Hostname:       merged.SystemConfig.HostName,
+	}
 }
 
 // handleCompose resolves the selections to a template and returns its YAML plus
@@ -83,14 +116,7 @@ func (s *Server) handleCompose(w http.ResponseWriter, r *http.Request) {
 			"matched template failed to load/validate: "+err.Error())
 		return
 	}
-	summary := composeSummary{
-		Vertical: req.Vertical, SKU: req.SKU, Platform: req.Platform,
-		OS: req.OS, ImageType: req.ImageType,
-		ImageName:      merged.Image.Name,
-		PackageCount:   len(merged.SystemConfig.Packages),
-		DiskSize:       merged.Disk.Size,
-		PartitionCount: len(merged.Disk.Partitions),
-	}
+	summary := buildComposeSummary(req, merged)
 
 	writeJSON(w, http.StatusOK, composeResponse{
 		Template: tmpl,

@@ -1,5 +1,7 @@
 # Image Template Reference
 
+<!-- markdownlint-configure-file {"MD051": false, "MD060": false} -->
+
 Templates are YAML files that define what goes into a custom OS image, the
 target platform, packages, disk layout, users, and build-time customizations.
 This document is the authoritative field-by-field reference for the template
@@ -19,6 +21,7 @@ For a conceptual overview of how templates fit into the build pipeline, see
     - [`metadata`](#metadata)
     - [`image` (required)](#image-required)
     - [`target` (required)](#target-required)
+    - [WSL-Compatible Images](#wsl-compatible-images)
     - [`baseline`](#baseline)
       - [`baseline.source`](#baselinesource)
     - [`overlayPolicy`](#overlaypolicy)
@@ -37,18 +40,12 @@ For a conceptual overview of how templates fit into the build pipeline, see
       - [`systemConfig.configurations[]`](#systemconfigconfigurations)
   - [Template Merge Behavior](#template-merge-behavior)
   - [Variable Substitution](#variable-substitution)
-- [Using Templates to Build Images](#using-templates-to-build-images)
-- [Template Storage](#template-storage)
-- [Template Variables](#template-variables)
+- [WSL Required Fields](#wsl-required-fields)
 - [Package Repositories](#package-repositories)
   - [Repository Fields](#repository-fields)
   - [Priority Behavior](#priority-behavior)
   - [AllowPackages White List](#allowpackages-white-list)
 - [Best Practices](#best-practices)
-  - [Template Organization](#template-organization)
-  - [Template Design](#template-design)
-  - [Template Sharing](#template-sharing)
-- [Conclusion](#conclusion)
 - [Related Documentation](#related-documentation)
 
 ## What Are Templates and How Do They Work?
@@ -68,7 +65,7 @@ by providing your own template and configure or override the settings and
 values you want. The tool will internally merge the two to create the final
 template used for image composition.
 
-![image-templates](./assets/template.drawio.svg)
+![image-templates](../_assets/template.drawio.svg)
 
 ## How Templates Work
 
@@ -77,7 +74,7 @@ type (raw, ISO, initrd). When you provide a user template, the tool merges it
 with the matching default; your values override or extend the defaults. The
 merged result is validated against a JSON schema before the build begins.
 
-![image-templates](./assets/template.drawio.svg)
+![image-templates](../_assets/template.drawio.svg)
 
 Default templates live at:
 
@@ -193,7 +190,7 @@ Target platform. All four fields are required.
 | `os` | string | **Yes** | `azure-linux`, `edge-microvisor-toolkit`, `wind-river-elxr`, `ubuntu`, `redhat-compatible-distro` | Target operating system |
 | `dist` | string | **Yes** | See OS constraints below | Distribution identifier |
 | `arch` | string | **Yes** | `x86_64`, `aarch64`, `armv7hl` | Target CPU architecture |
-| `imageType` | string | **Yes** | `raw`, `iso`, `img` | Output image format |
+| `imageType` | string | **Yes** | `raw`, `iso`, `img`, `wsl2` | Output image format |
 
 **OS → dist constraints:**
 
@@ -212,6 +209,21 @@ target:
   arch: x86_64
   imageType: raw
 ```
+
+### WSL-Compatible Images
+
+Set `target.imageType: wsl2` to compose a WSL-compatible root filesystem.
+
+```yaml
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: wsl2
+```
+
+For a complete Ubuntu 24 WSL example, see
+[`image-templates/ubuntu24-x86_64-agentic-wsl2.yml`](../../image-templates/ubuntu24-x86_64-agentic-wsl2.yml).
 
 ---
 
@@ -296,7 +308,7 @@ overlayPolicy:
 ```
 
 A complete example lives at
-[`image-templates/ubuntu24-x86_64-overlay-raw.yml`](../../image-templates/ubuntu24-x86_64-overlay-raw.yml).
+[`image-templates/ubuntu24-x86_64-overlay-raw.yml`](https://github.com/open-edge-platform/image-composer-tool/blob/main/image-templates/ubuntu24-x86_64-overlay-raw.yml).
 
 ---
 
@@ -321,7 +333,7 @@ Each entry defines one output format:
 
 | Field | Type | Required | Valid Values | Description |
 |-------|------|----------|--------------|-------------|
-| `type` | string | **Yes** | `raw`, `qcow2`, `vhd`, `vhdx`, `vmdk`, `vdi` | Output image format |
+| `type` | string | **Yes** | `raw`, `qcow2`, `vhd`, `vhdx`, `vmdk`, `vdi`, `tar` | Output image format |
 | `compression` | string | No | `gz`, `gzip`, `xz`, `zstd`, `bz2` | Compression to apply |
 
 #### `disk.partitions[]`
