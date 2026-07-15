@@ -744,6 +744,9 @@ WSL-compatible `disk` artifact definition.
 
 Additional notes for WSL builds:
 
+- The default Ubuntu WSL template seeds the standard Ubuntu apt sources via
+  `systemConfig.additionalFiles` (for example, `ubuntu-noble.list`), which is
+  the same mechanism used by the raw and initrd defaults.
 - `disk.partitionTableType` and `disk.partitions` are not used for `wsl2` templates.
 - `systemConfig.kernel` is not allowed for `wsl2` templates.
 
