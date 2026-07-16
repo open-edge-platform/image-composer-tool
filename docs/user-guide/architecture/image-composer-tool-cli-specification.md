@@ -260,9 +260,10 @@ towards root) and prints the chain-merged YAML **without** OS defaults. If the
 template does not use `extends:`, the command prints
 `No extends used in template, nothing to resolve` and exits successfully.
 
-When `--full` is passed, resolve additionally merges the OS default
-configuration on top of the extends chain — this is the same merge the `build`
-command runs, so the output shows exactly what the tool would build. `--full`
+When `--full` is passed, resolve additionally folds the extends chain on top of
+the OS default configuration — OS defaults are the base layer and the extends
+chain overrides them (leaf wins). This is the same merge the `build` command
+runs, so the output shows exactly what the tool would build. `--full`
 suppresses the "nothing to resolve" short-circuit, so it also works for
 templates that do not use `extends:`.
 
