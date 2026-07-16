@@ -1414,6 +1414,99 @@ func TestDownloadPackagesComplete(t *testing.T) {
 	}
 }
 
+func TestHandleDebCacheRetry(t *testing.T) {
+	origCacheOutdatedFunc := isDebPackageCacheOutdatedFunc
+	origClearCacheFunc := clearDebPackageCacheFunc
+	t.Cleanup(func() {
+		isDebPackageCacheOutdatedFunc = origCacheOutdatedFunc
+		clearDebPackageCacheFunc = origClearCacheFunc
+	})
+
+	tests := []struct {
+		name               string
+		retried            bool
+		wantHandled        bool
+		wantClearCalls     int
+		wantRetryCalls     int
+		wantDownloadResult bool
+	}{
+		{
+			name:               "clears cache and retries once on first outdated check",
+			retried:            false,
+			wantHandled:        true,
+			wantClearCalls:     1,
+			wantRetryCalls:     1,
+			wantDownloadResult: true,
+		},
+		{
+			name:               "does not clear cache or retry again after retry flag is set",
+			retried:            true,
+			wantHandled:        false,
+			wantClearCalls:     0,
+			wantRetryCalls:     0,
+			wantDownloadResult: false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			cacheChecks := 0
+			clearCalls := 0
+			retryCalls := 0
+
+			isDebPackageCacheOutdatedFunc = func(requiredPackages []string, cacheDir string) (bool, []string, []string, error) {
+				cacheChecks++
+				return true, []string{"pkg-a"}, nil, nil
+			}
+			clearDebPackageCacheFunc = func(cacheDir string) error {
+				clearCalls++
+				return nil
+			}
+
+			gotDownloads, gotInfos, handled, err := handleDebCacheRetry(
+				[]string{"pkg-a"},
+				t.TempDir(),
+				tt.retried,
+				func() ([]string, []ospackage.PackageInfo, error) {
+					retryCalls++
+					return []string{"pkg-a_1.0_amd64.deb"}, []ospackage.PackageInfo{{Name: "pkg-a"}}, nil
+				},
+			)
+			if err != nil {
+				t.Fatalf("handleDebCacheRetry() error = %v", err)
+			}
+			if cacheChecks != 1 {
+				t.Fatalf("cache state checks = %d, want 1", cacheChecks)
+			}
+			if handled != tt.wantHandled {
+				t.Fatalf("handled = %v, want %v", handled, tt.wantHandled)
+			}
+			if clearCalls != tt.wantClearCalls {
+				t.Fatalf("clear calls = %d, want %d", clearCalls, tt.wantClearCalls)
+			}
+			if retryCalls != tt.wantRetryCalls {
+				t.Fatalf("retry calls = %d, want %d", retryCalls, tt.wantRetryCalls)
+			}
+			if tt.wantDownloadResult {
+				if len(gotDownloads) != 1 {
+					t.Fatalf("download result length = %d, want 1", len(gotDownloads))
+				}
+				if len(gotInfos) != 1 {
+					t.Fatalf("package info length = %d, want 1", len(gotInfos))
+				}
+			} else {
+				if len(gotDownloads) != 0 {
+					t.Fatalf("download result length = %d, want 0", len(gotDownloads))
+				}
+				if len(gotInfos) != 0 {
+					t.Fatalf("package info length = %d, want 0", len(gotInfos))
+				}
+			}
+		})
+	}
+}
+
 // TestDownloadPackages tests the DownloadPackages function
 func TestDownloadPackages(t *testing.T) {
 	// Save original values
