@@ -1,8 +1,10 @@
 package imageos
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -1581,12 +1583,13 @@ func reencryptPartitionInPlace(id, dev, passphrase string) (mapperPath, mapperNa
 	mapperName = id
 	mapperPath = filepath.Join("/dev/mapper", mapperName)
 
-	// resize2fs requires a clean filesystem. Tolerate e2fsck exit codes 1/2
-	// (errors found and corrected), which are not fatal.
-	fsckCmd := fmt.Sprintf("e2fsck -fy %s || test $? -le 2", shell.QuoteArg(dev))
-	if _, err = shell.ExecCmd(fsckCmd, true, shell.HostPath, nil); err != nil {
+	// resize2fs requires a clean filesystem. e2fsck exit codes 1 and 2 mean
+	// errors were found and corrected (not fatal), so tolerate anything <= 2.
+	fsckCmd := fmt.Sprintf("e2fsck -fy %s", shell.QuoteArg(dev))
+	if _, err = shell.ExecCmd(fsckCmd, true, shell.HostPath, nil); err != nil && exitCodeAbove(err, 2) {
 		return "", "", fmt.Errorf("e2fsck failed: %w", err)
 	}
+	err = nil
 
 	shrinkCmd := fmt.Sprintf("resize2fs -M %s", shell.QuoteArg(dev))
 	if _, err = shell.ExecCmd(shrinkCmd, true, shell.HostPath, nil); err != nil {
@@ -1613,6 +1616,20 @@ func reencryptPartitionInPlace(id, dev, passphrase string) (mapperPath, mapperNa
 	}
 
 	return mapperPath, mapperName, nil
+}
+
+// exitCodeAbove reports whether err represents a command that exited with a
+// status greater than max (i.e. a genuine failure). Non-exit errors (e.g. the
+// command could not be started) are always treated as failures.
+func exitCodeAbove(err error, max int) bool {
+	if err == nil {
+		return false
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode() > max
+	}
+	return true
 }
 
 // closeLuks closes a single opened LUKS device-mapper volume.

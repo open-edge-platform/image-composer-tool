@@ -67,7 +67,6 @@ systemConfig:
     passphrase: "12345"
     partitions:
       - rootfs
-      - userdata
 
   packages:
     - ubuntu-minimal
