@@ -100,7 +100,12 @@ const (
 	BaselineModeCreate  = "create"
 	BaselineModeOverlay = "overlay"
 
-	BaselineFormatRaw = "raw"
+	// Baseline image formats accepted for overlay mode. Non-RAW formats are
+	// converted to RAW (via qemu-img) before the baseline is loop-attached.
+	BaselineFormatRaw   = "raw"
+	BaselineFormatQcow2 = "qcow2"
+	BaselineFormatVHD   = "vhd"
+	BaselineFormatVHDX  = "vhdx"
 
 	OverlayPackageOpAdditiveOnly = "additive-only"
 	// OverlayPackageOpAdditiveAndUpgrade permits, in addition to adding new
@@ -136,6 +141,12 @@ type OverlayPolicy struct {
 	PackageOperation string `yaml:"packageOperation,omitempty"`
 	ConflictPolicy   string `yaml:"conflictPolicy,omitempty"`
 	KernelCmdline    string `yaml:"kernelCmdline,omitempty"`
+
+	// AllowDiskResize gates whether an overlay build may grow the baseline image
+	// to satisfy a larger disk.size. Overlay mode preserves the baseline layout by
+	// default, so a disk.size larger than the baseline is rejected unless the user
+	// opts in here. It never permits shrinking; resize stays grow-only.
+	AllowDiskResize bool `yaml:"allowDiskResize,omitempty"`
 
 	// AllowRemoval gates whether preflight permits removing a baseline package.
 	// It is intentionally NOT a YAML field, and the schema rejects it via
@@ -174,15 +185,20 @@ type ImageTemplate struct {
 	PackageRepositories []PackageRepository `yaml:"packageRepositories,omitempty"`
 
 	// Explicitly excluded from YAML serialization/deserialization
-	PathList             []string                `yaml:"-"`
-	BootloaderPkgList    []string                `yaml:"-"`
-	EssentialPkgList     []string                `yaml:"-"`
-	KernelPkgList        []string                `yaml:"-"`
-	FullPkgList          []string                `yaml:"-"`
-	FullPkgListBom       []ospackage.PackageInfo `yaml:"-"`
-	SBOMPackageMetadata  []ospackage.PackageInfo `yaml:"sbomPackageMetadata,omitempty"`
-	DotFilePath          string                  `yaml:"-"`
-	DotSystemOnly        bool                    `yaml:"-"`
+	PathList            []string                `yaml:"-"`
+	BootloaderPkgList   []string                `yaml:"-"`
+	EssentialPkgList    []string                `yaml:"-"`
+	KernelPkgList       []string                `yaml:"-"`
+	FullPkgList         []string                `yaml:"-"`
+	FullPkgListBom      []ospackage.PackageInfo `yaml:"-"`
+	SBOMPackageMetadata []ospackage.PackageInfo `yaml:"sbomPackageMetadata,omitempty"`
+	DotFilePath         string                  `yaml:"-"`
+	DotSystemOnly       bool                    `yaml:"-"`
+	// InspectEnabled toggles post-build image inspection for overlay builds. It is
+	// driven by the CLI --inspect/--no-inspect flags (default on) rather than YAML,
+	// so it is excluded from serialization. Consumed by the overlay postprocess
+	// inspection stage.
+	InspectEnabled       bool `yaml:"-"`
 	pureBuildStart       time.Time
 	pureBuildDuration    time.Duration
 	downloadPkgsStart    time.Time
@@ -1171,8 +1187,12 @@ func (t *ImageTemplate) validateBaseline() error {
 		if format == "" {
 			format = BaselineFormatRaw
 		}
-		if format != BaselineFormatRaw {
-			return fmt.Errorf("baseline.source.format must be %q (got %q)", BaselineFormatRaw, format)
+		switch format {
+		case BaselineFormatRaw, BaselineFormatQcow2, BaselineFormatVHD, BaselineFormatVHDX:
+			// supported; non-raw formats are converted to RAW before loop-attach.
+		default:
+			return fmt.Errorf("baseline.source.format must be one of %q, %q, %q, %q (got %q)",
+				BaselineFormatRaw, BaselineFormatQcow2, BaselineFormatVHD, BaselineFormatVHDX, format)
 		}
 		if t.OverlayPolicy != nil {
 			if err := t.OverlayPolicy.validate(); err != nil {
@@ -1201,6 +1221,13 @@ func (s *BaselineSource) Validate() error {
 	rawURL := strings.TrimSpace(s.URL)
 	s.Path = path
 	s.URL = rawURL
+	// Normalize the format to lower-case so downstream overlay ingestion compares
+	// the declared format against qemu-img's (lower-cased) detected format on equal
+	// footing. YAML-loaded templates are already constrained to the lower-case
+	// schema enum (raw/qcow2/vhd/vhdx) before this runs, so this primarily
+	// normalizes programmatically-built templates, which reach ingestion via
+	// Validate() without passing through schema validation.
+	s.Format = strings.ToLower(strings.TrimSpace(s.Format))
 
 	switch {
 	case path == "" && rawURL == "":

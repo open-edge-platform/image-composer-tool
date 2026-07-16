@@ -49,7 +49,8 @@ func ResizeBaseline(template *config.ImageTemplate, ctx *Context, layout *Layout
 	}
 
 	target := strings.TrimSpace(template.GetDiskConfig().Size)
-	plan, err := planResize(ctx.BaselineCopyPath, target)
+	allowResize := template.OverlayPolicy != nil && template.OverlayPolicy.AllowDiskResize
+	plan, err := planResize(ctx.BaselineCopyPath, target, allowResize)
 	if err != nil {
 		return err
 	}
@@ -115,7 +116,13 @@ func ResizeBaseline(template *config.ImageTemplate, ctx *Context, layout *Layout
 // yields Grow=false with a reason. It performs only a stat (to read the current
 // size); the size parsing is delegated to the shared imagedisc translator so units
 // match the rest of the tool ("4GiB", "8GB", ...).
-func planResize(copyPath, target string) (resizePlan, error) {
+//
+// allowResize is the explicit opt-in (overlayPolicy.allowDiskResize). When
+// a grow would be required but the caller has not opted in, planResize returns an
+// error so the build fails with a clear message rather than silently changing the
+// baseline partition layout. A target that is unset or not larger than the current
+// image never needs the opt-in: it is a no-op regardless.
+func planResize(copyPath, target string, allowResize bool) (resizePlan, error) {
 	if target == "" {
 		return resizePlan{Reason: "no disk.size requested"}, nil
 	}
@@ -143,6 +150,16 @@ func planResize(copyPath, target string) (resizePlan, error) {
 			CurrentBytes: current,
 			Reason:       fmt.Sprintf("requested size %d <= current size %d (overlay resize is grow-only)", targetBytes, current),
 		}, nil
+	}
+
+	// A grow is required. Overlay mode preserves the baseline layout unless the
+	// user has explicitly opted in, so reject rather than resize behind their back.
+	if !allowResize {
+		return resizePlan{}, fmt.Errorf(
+			"overlay resize: disk.size %q (%d bytes) is larger than the baseline image (%d bytes), "+
+				"but growing the baseline is not permitted; set overlayPolicy.allowDiskResize: true "+
+				"to allow the overlay to grow the disk, or remove/lower disk.size to keep the baseline layout",
+			target, targetBytes, current)
 	}
 
 	return resizePlan{

@@ -26,7 +26,7 @@ func writeSizedFile(t *testing.T, n int64) string {
 
 func TestPlanResize_NoTargetSkips(t *testing.T) {
 	p := writeSizedFile(t, 1<<20)
-	plan, err := planResize(p, "")
+	plan, err := planResize(p, "", false)
 	if err != nil {
 		t.Fatalf("planResize: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestPlanResize_SmallerOrEqualSkips(t *testing.T) {
 	// 100 MiB file, request 50 MiB (smaller) and 100 MiB (equal): both no-ops.
 	p := writeSizedFile(t, 100<<20)
 	for _, target := range []string{"50MiB", "100MiB"} {
-		plan, err := planResize(p, target)
+		plan, err := planResize(p, target, false)
 		if err != nil {
 			t.Fatalf("planResize(%s): %v", target, err)
 		}
@@ -54,7 +54,7 @@ func TestPlanResize_SmallerOrEqualSkips(t *testing.T) {
 
 func TestPlanResize_LargerGrows(t *testing.T) {
 	p := writeSizedFile(t, 100<<20)
-	plan, err := planResize(p, "200MiB")
+	plan, err := planResize(p, "200MiB", true)
 	if err != nil {
 		t.Fatalf("planResize: %v", err)
 	}
@@ -66,9 +66,23 @@ func TestPlanResize_LargerGrows(t *testing.T) {
 	}
 }
 
+// A grow that is requested (disk.size larger than baseline) but not opted into
+// must be a hard error, not a silent resize — overlay preserves the baseline
+// layout unless the template explicitly allows growing it.
+func TestPlanResize_LargerWithoutOptInErrors(t *testing.T) {
+	p := writeSizedFile(t, 100<<20)
+	_, err := planResize(p, "200MiB", false)
+	if err == nil {
+		t.Fatal("expected error when a grow is required but allowDiskResize is false")
+	}
+	if !strings.Contains(err.Error(), "allowDiskResize") {
+		t.Errorf("error should name the allowDiskResize opt-in; got: %v", err)
+	}
+}
+
 func TestPlanResize_InvalidSize(t *testing.T) {
 	p := writeSizedFile(t, 1<<20)
-	if _, err := planResize(p, "not-a-size"); err == nil {
+	if _, err := planResize(p, "not-a-size", true); err == nil {
 		t.Fatal("expected error for an unparseable size")
 	}
 }
@@ -78,7 +92,7 @@ func TestPlanResize_RejectsSizeAboveInt64Max(t *testing.T) {
 	// misread as "smaller than current", silently skipping the grow. It must be a
 	// hard error instead. 10000000000GiB parses to a uint64 well over MaxInt64.
 	p := writeSizedFile(t, 1<<20)
-	if _, err := planResize(p, "10000000000GiB"); err == nil {
+	if _, err := planResize(p, "10000000000GiB", true); err == nil {
 		t.Fatal("expected error for a size exceeding int64 range")
 	}
 }
@@ -90,7 +104,10 @@ func TestResizeBaseline_GrowRunsExpectedSequence(t *testing.T) {
 	resizeExec = func(cmd string) (string, error) { cmds = append(cmds, cmd); return "", nil }
 
 	p := writeSizedFile(t, 100<<20)
-	tmpl := &config.ImageTemplate{Disk: config.DiskConfig{Size: "200MiB"}}
+	tmpl := &config.ImageTemplate{
+		Disk:          config.DiskConfig{Size: "200MiB"},
+		OverlayPolicy: &config.OverlayPolicy{AllowDiskResize: true},
+	}
 	ctx := &Context{BaselineCopyPath: p, LoopDevPath: "/dev/loop0"}
 	layout := &Layout{RootDevice: "/dev/loop0p2", RootFSType: "ext4", RootMount: "/mnt/root", PartitionTable: partitionTableGPT}
 
@@ -143,6 +160,38 @@ func TestResizeBaseline_NoGrowRunsNothing(t *testing.T) {
 	}
 }
 
+func TestResizeBaseline_GrowWithoutOptInErrorsAndRunsNothing(t *testing.T) {
+	origExec := resizeExec
+	defer func() { resizeExec = origExec }()
+	ran := false
+	resizeExec = func(string) (string, error) { ran = true; return "", nil }
+
+	p := writeSizedFile(t, 100<<20)
+	// Larger target but no OverlayPolicy opt-in: must error before touching the disk.
+	tmpl := &config.ImageTemplate{Disk: config.DiskConfig{Size: "200MiB"}}
+	ctx := &Context{BaselineCopyPath: p, LoopDevPath: "/dev/loop0"}
+	layout := &Layout{RootDevice: "/dev/loop0p2", RootFSType: "ext4", RootMount: "/mnt/root", PartitionTable: partitionTableGPT}
+
+	err := ResizeBaseline(tmpl, ctx, layout)
+	if err == nil {
+		t.Fatal("expected ResizeBaseline to error when a grow is required but not opted into")
+	}
+	if !strings.Contains(err.Error(), "allowDiskResize") {
+		t.Errorf("error should name the allowDiskResize opt-in; got: %v", err)
+	}
+	if ran {
+		t.Error("no resize commands must run when the grow is rejected")
+	}
+	// The backing file must be untouched (not grown) when the resize is rejected.
+	fi, err := os.Stat(p)
+	if err != nil {
+		t.Fatalf("stat baseline file: %v", err)
+	}
+	if fi.Size() != 100<<20 {
+		t.Errorf("backing file size = %d, want %d (must not grow on rejection)", fi.Size(), 100<<20)
+	}
+}
+
 func TestResizeBaseline_XFSUsesGrowfsByMount(t *testing.T) {
 	origExec := resizeExec
 	defer func() { resizeExec = origExec }()
@@ -150,7 +199,10 @@ func TestResizeBaseline_XFSUsesGrowfsByMount(t *testing.T) {
 	resizeExec = func(cmd string) (string, error) { cmds = append(cmds, cmd); return "", nil }
 
 	p := writeSizedFile(t, 100<<20)
-	tmpl := &config.ImageTemplate{Disk: config.DiskConfig{Size: "200MiB"}}
+	tmpl := &config.ImageTemplate{
+		Disk:          config.DiskConfig{Size: "200MiB"},
+		OverlayPolicy: &config.OverlayPolicy{AllowDiskResize: true},
+	}
 	ctx := &Context{BaselineCopyPath: p, LoopDevPath: "/dev/loop0"}
 	layout := &Layout{RootDevice: "/dev/loop0p1", RootFSType: "xfs", RootMount: "/mnt/root", PartitionTable: partitionTableDOS}
 
