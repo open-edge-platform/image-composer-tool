@@ -849,3 +849,20 @@ func TestHistoryListAndHydrate(t *testing.T) {
 		t.Error("getBuild unknown id = found, want not found")
 	}
 }
+
+func TestNormalizeSize(t *testing.T) {
+	cases := map[string]string{
+		"0.01 MB": "10 KB",   // small file now shows in KB, not "0.01 MB"
+		"1.13 GB": "1.13 GB", // large unchanged
+		"512 B":   "512 B",
+		"2048 KB": "2.05 MB", // rolls up to MB
+		"4 MB":    "4.00 MB",
+		"":        "", // unparseable → unchanged
+		"weird":   "weird",
+	}
+	for in, want := range cases {
+		if got := normalizeSize(in); got != want {
+			t.Errorf("normalizeSize(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

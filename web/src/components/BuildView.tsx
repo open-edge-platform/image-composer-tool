@@ -57,40 +57,82 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange, isActive
       return
     }
 
-    const es = new EventSource(api.logsUrl(buildId))
+    let es: EventSource | null = null
+    let closed = false // set on unmount so a reconnect isn't scheduled after teardown
 
-    es.addEventListener('log', (e) => {
-      const { message } = JSON.parse((e as MessageEvent).data)
-      setLogs((prev) => [...prev, message])
-    })
-    es.addEventListener('complete', (e) => {
-      const data = JSON.parse((e as MessageEvent).data)
-      const s = data.status === 'cancelled' ? 'cancelled' : 'success'
-      setStatus(s)
-      setArtifacts(data.artifacts ?? [])
-      onStatusChange(s === 'success' ? 'success' : 'idle')
-      // Refresh details so the log-file download link appears post-completion.
+    const finishSuccess = () => {
+      setStatus('success')
+      onStatusChange('success')
+      // Refresh details/artifacts so the log-file link + artifact list appear.
       api.buildDetails(buildId).then(setDetails).catch(() => {})
-      es.close()
-    })
-    es.addEventListener('error', (e) => {
-      const raw = (e as MessageEvent).data
-      if (raw) {
-        try {
-          const data = JSON.parse(raw)
-          const s = data.status === 'cancelled' ? 'cancelled' : 'failed'
-          setStatus(s)
-          if (data.message) setErrorMsg(data.message)
-          onStatusChange('failed')
-        } catch {
-          setStatus('failed')
-          onStatusChange('failed')
-        }
-      }
-      es.close()
-    })
+      api.buildArtifacts(buildId).then(setArtifacts).catch(() => {})
+    }
+    const finishFailed = (msg?: string) => {
+      setStatus('failed')
+      if (msg) setErrorMsg(msg)
+      onStatusChange('failed')
+    }
 
-    return () => es.close()
+    const connect = () => {
+      if (closed) return
+      es = new EventSource(api.logsUrl(buildId))
+
+      // A reconnect replays the full buffered log, so reset to avoid duplicates.
+      setLogs([])
+
+      es.addEventListener('log', (e) => {
+        const { message } = JSON.parse((e as MessageEvent).data)
+        setLogs((prev) => [...prev, message])
+      })
+      es.addEventListener('complete', (e) => {
+        const data = JSON.parse((e as MessageEvent).data)
+        es?.close()
+        if (data.status === 'cancelled') {
+          setStatus('cancelled')
+          onStatusChange('idle')
+        } else {
+          setArtifacts(data.artifacts ?? [])
+          finishSuccess()
+        }
+      })
+      es.addEventListener('error', (e) => {
+        const raw = (e as MessageEvent).data
+        es?.close()
+        if (raw) {
+          // Server-sent terminal error: the build genuinely failed/cancelled.
+          try {
+            const data = JSON.parse(raw)
+            if (data.status === 'cancelled') {
+              setStatus('cancelled')
+              onStatusChange('idle')
+            } else {
+              finishFailed(data.message)
+            }
+          } catch {
+            finishFailed()
+          }
+          return
+        }
+        // No data → the connection dropped (e.g. proxy/idle timeout on a long
+        // build), NOT necessarily a failure. Reconcile against the server's
+        // authoritative status instead of leaving the indicator stuck.
+        api
+          .buildDetails(buildId)
+          .then((d) => {
+            if (d.status === 'success') finishSuccess()
+            else if (d.status === 'failed') finishFailed(d.errMsg)
+            else if (!closed) setTimeout(connect, 1000) // still running → reconnect
+          })
+          .catch(() => finishFailed())
+      })
+    }
+
+    connect()
+
+    return () => {
+      closed = true
+      es?.close()
+    }
   }, [buildId, isActive])
 
   // Auto-scroll to the newest log line.

@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -396,10 +397,11 @@ func parseArtifacts(logs []string) []artifact {
 		if idx := strings.Index(line, "• "); idx >= 0 {
 			rest := strings.TrimSpace(line[idx+len("• "):])
 			// Split a trailing " (size)" suffix: keep the filename and the size.
+			// ICT prints sizes like "0.01 MB"; normalize so small files show in KB.
 			name, size := rest, ""
 			if p := strings.LastIndex(rest, " ("); p >= 0 && strings.HasSuffix(rest, ")") {
 				name = strings.TrimSpace(rest[:p])
-				size = strings.TrimSpace(rest[p+2 : len(rest)-1])
+				size = normalizeSize(strings.TrimSpace(rest[p+2 : len(rest)-1]))
 			}
 			if name != "" {
 				out = append(out, artifact{Name: name, Type: classifyArtifact(name), Size: size})
@@ -474,7 +476,8 @@ func discoverArtifacts(workDir string) []artifact {
 	return out
 }
 
-// humanSize formats a byte count as a short human-readable string (e.g. "1.13 GB").
+// humanSize formats a byte count as a short human-readable string, choosing the
+// largest unit under which the value is >= 1 (e.g. 12 KB, 4.3 MB, 1.13 GB).
 func humanSize(n int64) string {
 	const unit = 1000
 	if n < unit {
@@ -485,5 +488,33 @@ func humanSize(n int64) string {
 		div *= unit
 		exp++
 	}
-	return fmt.Sprintf("%.2f %cB", float64(n)/float64(div), "kMGTPE"[exp])
+	val := float64(n) / float64(div)
+	// Whole KB read better without a trailing ".00" (e.g. "12 KB" not "12.00 KB").
+	if exp == 0 && val == float64(int64(val)) {
+		return fmt.Sprintf("%d KB", int64(val))
+	}
+	return fmt.Sprintf("%.2f %cB", val, "KMGTPE"[exp])
+}
+
+// normalizeSize re-formats a size string that ICT already printed (e.g.
+// "0.01 MB", "1.13 GB", "512 B") into a sensible unit, so tiny artifacts don't
+// show as "0.01 MB". Unparseable input is returned unchanged.
+func normalizeSize(s string) string {
+	fields := strings.Fields(s)
+	if len(fields) != 2 {
+		return s
+	}
+	val, err := strconv.ParseFloat(fields[0], 64)
+	if err != nil {
+		return s
+	}
+	mult := map[string]float64{
+		"B": 1, "KB": 1e3, "MB": 1e6, "GB": 1e9, "TB": 1e12,
+		"KIB": 1024, "MIB": 1 << 20, "GIB": 1 << 30, "TIB": 1 << 40,
+	}
+	m, ok := mult[strings.ToUpper(fields[1])]
+	if !ok {
+		return s
+	}
+	return humanSize(int64(val * m))
 }
