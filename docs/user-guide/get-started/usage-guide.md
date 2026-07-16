@@ -121,8 +121,8 @@ Check a template for errors before starting a build:
 
 Print the merged template YAML to stdout — useful for debugging templates that
 use `extends:` or for previewing exactly what the tool will build. Sensitive
-fields (user passwords, secure boot key/cert paths) are always redacted in the
-output:
+fields (user passwords, `systemConfig.users[*].hash_algo`, and secure boot
+key/cert paths) are always redacted in the output:
 
 ```bash
 # Chain-merge only, without OS defaults
