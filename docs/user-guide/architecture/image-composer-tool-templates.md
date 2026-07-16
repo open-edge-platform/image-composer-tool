@@ -278,6 +278,19 @@ baseline:
 > larger than the baseline image and enable `allowDiskResize` to make room;
 > otherwise the package install step fails with a "no space left on device"
 > error (the failure message points back here).
+>
+> **Resize constraints.** The grow-only resize extends the **last** partition on
+> the disk and its filesystem in place. It is rejected (before any disk mutation,
+> with an actionable error) when the root is **not** the last partition, when the
+> root sits on **LVM**, and when the root is **LUKS-encrypted** or **dm-verity**
+> protected. `ext4`/`ext3`/`ext2` roots are the supported and CI-covered target;
+> `xfs` roots use the same code path (`xfs_growfs`) but are **best-effort**: the
+> grow sequence has unit-test coverage, but no shipping baseline exercises it
+> against a real xfs filesystem in CI/e2e, so treat xfs resize as unverified
+> end-to-end. The resize shells out to `growpart` (cloud-guest-utils), `sgdisk`
+> (gdisk, GPT only), `resize2fs` (e2fsprogs) or `xfs_growfs` (xfsprogs), and
+> `losetup`/`partx` (util-linux); these must be present on the build host, and
+> the build fails early with a clear message if any is missing.
 
 ---
 

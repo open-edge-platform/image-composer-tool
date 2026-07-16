@@ -1,8 +1,9 @@
 # ADR: Grow-Only Resize for Overlay Baselines
 
-**Status**: Proposed
+**Status**: Accepted
 **Date**: 2026-07-14
-**Updated**: N/A
+**Updated**: 2026-07-16 — hardening story implemented (non-last-partition guard,
+LVM-specific rejection, resize tool pre-flight check, xfs marked best-effort).
 **Authors**: Image Composer Tool Team
 **Technical Area**: Image Composition / Overlay
 **Parent ADR**: [Baseline Image Overlay and ISO Composition Boundaries](adr-image-extension.md)
@@ -148,9 +149,10 @@ CI environment (hardening-story acceptance item).
 | Step | When | Tool | v1? |
 | --- | --- | --- | --- |
 | Reject unsupported FS | before | (map lookup) | Yes — already in `layout.go` |
-| Reject non-last root partition | before | partition-table inspection | **Yes — gap, tracked in JIRA** |
+| Reject non-last root partition | before | `lsblk` START-offset inspection | ✅ implemented (`assertRootIsLastPartition` in `resize.go`) |
 | Reject LUKS / dm-verity root | before | layout detection | ✅ already rejected in `analyzeLayout` |
-| Reject LVM root | before | layout detection | ⚠️ fails via unsupported-FS (`lvm2_member`); wants LVM-specific message |
+| Reject LVM root | before | layout detection | ✅ LVM-specific rejection in `analyzeLayout` (`lvm2_member`) |
+| Verify resize tools present | before | `IsCommandExist` | ✅ implemented (`checkResizeToolsAvailable` in `resize.go`) |
 | Reject `target ≤ current` / unparseable / > int64 | before | `planResize` | Yes — already implemented |
 | Filesystem clean check (`e2fsck -fn` / `xfs_repair -n`) | before | `e2fsck` / `xfs_repair` | **Defer** — see note |
 | Re-read table after `growpart` | during | `partx -u` | Yes — implemented |
@@ -171,21 +173,22 @@ is a fresh user-owned copy, lowering the dirty-FS risk.
 | `disk.size` > baseline but no opt-in | Hard error naming `allowDiskResize`, before touching disk | ✅ implemented |
 | Requested size ≤ current | No-op with logged reason | ✅ implemented |
 | Requested size unparseable / > int64 max | Hard error | ✅ implemented |
-| Root partition is **not** the last partition | Hard error before `growpart`; do not resize | ❌ **gap — tracked in JIRA** |
-| LVM logical-volume root | Detect and hard error | ⚠️ fails via unsupported-FS; wants LVM-specific message — tracked in JIRA |
+| Root partition is **not** the last partition | Hard error before `growpart`; do not resize | ✅ implemented (`assertRootIsLastPartition`) |
+| LVM logical-volume root | Detect and hard error | ✅ LVM-specific rejection in `analyzeLayout` |
 | LUKS / encrypted root | Detect and hard error | ✅ rejected in `analyzeLayout` |
 | dm-verity root | Refuse | ✅ rejected in `analyzeLayout` (`isDMVerity`) |
 | Unsupported FS type | Hard error | ✅ implemented (`growFilesystem` default case + layout check) |
 | Filesystem dirty | Surface `resize2fs`/tool error clearly | ⚠️ relies on tool error; no pre-check |
-| `growpart`/`resize2fs`/`sgdisk` missing in env | Fail with tool-not-found | ✅ via `commandMap` verify |
+| `growpart`/`resize2fs`/`sgdisk` missing in env | Fail with tool-not-found | ✅ pre-flight `checkResizeToolsAvailable` before mutation |
 | Any resize command fails mid-sequence | Wrapped error; build fails; artifact not emitted | ✅ implemented |
 
-The **non-last-partition** row is the one finding that makes the current code
+The **non-last-partition** row was the one finding that made the original code
 genuinely unsafe on general baselines even though it worked on the Ubuntu cloud
 image (whose root happens to be last, on a bare partition): a non-last root
-would be grown into space that belongs to a following partition. LUKS and
-dm-verity are already rejected up front; LVM already fails (as an unsupported
-FS) but deserves a clearer message. These are the core of the hardening story.
+would be grown into space that belongs to a following partition. The hardening
+story closed this by rejecting a non-last root (`assertRootIsLastPartition`)
+before any mutation. LUKS and dm-verity remain rejected up front; LVM now fails
+with an LVM-specific message rather than the generic unsupported-FS one.
 
 ---
 
@@ -210,25 +213,31 @@ tooling, and file a **JIRA hardening story** for the guard gaps and validation.
 baselines by rejecting layouts it cannot handle, rather than mis-resizing them.
 
 **Acceptance criteria**
-1. `overlayPolicy.allowDiskResize` is documented in schema + templates; a grow
-   without it is a clear hard error. *(done — verify only)*
-2. Resize **refuses** (clear error, no disk mutation) when the root partition is
-   not the last partition on the disk. *(primary safety gap)*
-3. An LVM logical-volume root is rejected with an **LVM-specific** message
-   (today it fails via the generic unsupported-FS path). LUKS and dm-verity
-   roots are already rejected in `analyzeLayout`; add a regression test pinning
-   that they never reach the resize path.
-4. Confirm `growpart`, `resize2fs`, `xfs_growfs`, `sgdisk`, `losetup`, `partx`
-   are present in the build/CI image; add a pre-flight tool-availability check
-   or documented dependency.
-5. xfs path is either CI-covered by a real xfs baseline or explicitly marked
-   best-effort/untested in docs.
-6. Unit tests: non-last-partition rejection, LVM/LUKS rejection, GPT vs MBR
-   sequence, ext4 and (if in scope) xfs grow, and the existing grow/no-grow/opt-in
-   cases. A boot-test of one grown Ubuntu image in CI.
-7. *(Optional, may split out)* pre-grow `e2fsck -fn` for ext roots (`e2fsck` is
-   already in `commandMap`); add `xfs_repair` to `commandMap` if the xfs path
-   gains a pre-grow check.
+1. ✅ `overlayPolicy.allowDiskResize` is documented in schema + templates; a grow
+   without it is a clear hard error. *(done — verified)*
+2. ✅ Resize **refuses** (clear error, no disk mutation) when the root partition
+   is not the last partition on the disk. *(primary safety gap —
+   `assertRootIsLastPartition`)*
+3. ✅ An LVM logical-volume root is rejected with an **LVM-specific** message
+   (previously it failed via the generic unsupported-FS path). LUKS and dm-verity
+   roots are already rejected in `analyzeLayout`; a regression test pins that they
+   never reach the resize path.
+4. ✅ `growpart`, `resize2fs`, `xfs_growfs`, `sgdisk`, `losetup`, `partx` are all
+   registered in `commandMap`; a pre-flight tool-availability check
+   (`checkResizeToolsAvailable`) rejects a resize up front if any is missing.
+5. ✅ xfs path is explicitly marked best-effort/untested in docs (no shipping xfs
+   baseline in CI).
+6. ✅ Unit tests: non-last-partition rejection, LVM/LUKS/dm-verity rejection,
+   GPT vs MBR sequence, ext4 and xfs grow, tool-missing rejection, and the
+   existing grow/no-grow/opt-in cases. *(A boot-test of one grown Ubuntu image in
+   CI is wired separately in the pipeline.)*
+7. *(Optional, deferred)* pre-grow `e2fsck -fn` for ext roots is **not applicable
+   as written**: the root filesystem is mounted during the resize (the mount
+   lifecycle spans install → boot-regen → resize), and `e2fsck`/`xfs_repair`
+   require an unmounted target. `resize2fs` on a mounted ext FS grows online and
+   errors clearly on inconsistency; `xfs_growfs` is online by design. A pre-grow
+   consistency check would require growing before mount, which is out of scope
+   for this story.
 
 **Out of scope**: shrinking, non-last-partition repartitioning, LVM/LUKS grow,
 FS-type conversion, multi-partition grow.
@@ -249,13 +258,13 @@ default-off `allowDiskResize` flag (safe: default is no resize).
 
 | Risk | Impact | Mitigation |
 | --- | --- | --- |
-| Root not last partition | `growpart` grows into wrong/absent space; corrupt table | Reject non-last root before any mutation (hardening story AC2) |
-| LVM root grown as bare partition | Partition grown but LV/FS unchanged, or corruption | Already fails as unsupported FS; add LVM-specific rejection (hardening story AC3) |
+| Root not last partition | `growpart` grows into wrong/absent space; corrupt table | ✅ Reject non-last root before any mutation (`assertRootIsLastPartition`) |
+| LVM root grown as bare partition | Partition grown but LV/FS unchanged, or corruption | ✅ LVM-specific rejection in `analyzeLayout` |
 | GPT backup header not moved | Table invalid on grown disk | `sgdisk -e` before `growpart` (implemented) |
 | Dirty ext filesystem | `resize2fs` aborts | Tool errors clearly; optional pre-`e2fsck` (AC7) |
-| Tool missing in build env | Runtime failure late in build | Verify via `commandMap` + pre-flight check (AC4) |
+| Tool missing in build env | Runtime failure late in build | ✅ pre-flight `checkResizeToolsAvailable` before mutation (AC4) |
 | Silent grow surprises user | Unexpected layout change | Default-off `allowDiskResize`; hard error otherwise (implemented) |
-| xfs path unexercised | Undetected regression | CI baseline or mark best-effort (AC5) |
+| xfs path unexercised | Undetected regression | ✅ Marked best-effort/untested in docs (no shipping xfs baseline) |
 
 ---
 
