@@ -275,6 +275,13 @@ type NetworkConfig struct {
 	Interfaces []NetworkInterface `yaml:"interfaces,omitempty"` // Interfaces: list of interfaces to configure
 }
 
+// FDEConfig holds the full-disk-encryption configuration
+type FDEConfig struct {
+	Enabled    bool     `yaml:"enabled"`              // Enabled: whether full-disk encryption is enabled (default: false)
+	Passphrase string   `yaml:"passphrase,omitempty"` // Passphrase: passphrase used to unlock the encrypted volume
+	Partitions []string `yaml:"partitions,omitempty"` // Partitions: disk partition IDs to encrypt (e.g., "rootfs", "userdata")
+}
+
 // SystemConfig represents a system configuration within the template
 type SystemConfig struct {
 	Name            string               `yaml:"name"`
@@ -282,6 +289,7 @@ type SystemConfig struct {
 	Initramfs       Initramfs            `yaml:"initramfs,omitempty"`
 	HostName        string               `yaml:"hostname,omitempty"`
 	Immutability    ImmutabilityConfig   `yaml:"immutability,omitempty"`
+	FDE             FDEConfig            `yaml:"fde,omitempty"`
 	Users           []UserConfig         `yaml:"users,omitempty"`
 	Bootloader      Bootloader           `yaml:"bootloader"`
 	Network         NetworkConfig        `yaml:"network,omitempty"`
@@ -839,6 +847,34 @@ func (t *ImageTemplate) GetImmutability() ImmutabilityConfig {
 // IsImmutabilityEnabled returns whether immutability is enabled
 func (t *ImageTemplate) IsImmutabilityEnabled() bool {
 	return t.SystemConfig.Immutability.Enabled
+}
+
+// IsFDEEnabled returns whether full-disk encryption is enabled
+func (t *ImageTemplate) IsFDEEnabled() bool {
+	return t.SystemConfig.FDE.Enabled
+}
+
+// GetFDEPassphrase returns the full-disk-encryption passphrase from the template
+func (t *ImageTemplate) GetFDEPassphrase() string {
+	return t.SystemConfig.FDE.Passphrase
+}
+
+// GetFDEPartitions returns the list of partition IDs to encrypt.
+func (t *ImageTemplate) GetFDEPartitions() []string {
+	return t.SystemConfig.FDE.Partitions
+}
+
+// IsFDEPartition reports whether the given partition ID is marked for encryption.
+func (t *ImageTemplate) IsFDEPartition(id string) bool {
+	if !t.IsFDEEnabled() {
+		return false
+	}
+	for _, p := range t.SystemConfig.FDE.Partitions {
+		if p == id {
+			return true
+		}
+	}
+	return false
 }
 
 // GetSecureBootDBKeyPath returns the secure boot DB key path from the immutability config

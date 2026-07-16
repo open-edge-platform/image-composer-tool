@@ -195,6 +195,7 @@ func (imageOs *ImageOs) InstallInitrd() (installRoot, versionInfo string, err er
 func (imageOs *ImageOs) InstallImageOs(diskPathIdMap map[string]string) (versionInfo string, err error) {
 	versionInfo = ""
 	var mountPointInfoList []map[string]string
+	var openedLuks []string
 	var mounted bool = false
 	log.Infof("Installing OS for image: %s", imageOs.template.GetImageName())
 
@@ -206,6 +207,13 @@ func (imageOs *ImageOs) InstallImageOs(diskPathIdMap map[string]string) (version
 				} else {
 					err = fmt.Errorf("failed to unmount disk from chroot: %w", umountErr)
 				}
+			}
+		}
+		// Close LUKS mappers after everything is unmounted so the backing loop
+		// device can later be detached without "device is busy".
+		for _, name := range openedLuks {
+			if closeErr := closeLuks(name); closeErr != nil {
+				log.Warnf("Failed to close LUKS mapper %s: %v", name, closeErr)
 			}
 		}
 	}()
@@ -271,6 +279,17 @@ func (imageOs *ImageOs) InstallImageOs(diskPathIdMap map[string]string) (version
 
 	if err = imagesecure.ConfigImageSecurity(imageOs.installRoot, imageOs.template); err != nil {
 		err = fmt.Errorf("failed to configure image security: %w", err)
+		return
+	}
+
+	mountPointInfoList, openedLuks, err = imageOs.enablingFDE(imageOs.installRoot, diskPathIdMap, mountPointInfoList)
+	if err != nil {
+		err = fmt.Errorf("failed to enable FDE: %w", err)
+		return
+	}
+
+	if err = wireFDEBoot(imageOs.installRoot, diskPathIdMap, imageOs.template); err != nil {
+		err = fmt.Errorf("failed to wire FDE boot: %w", err)
 		return
 	}
 
@@ -1375,6 +1394,245 @@ func createResolvConfSymlink(installRoot string, template *config.ImageTemplate)
 	return nil
 }
 
+// enablingFDE is the entry point for full-disk encryption. It runs after the OS
+// is installed and before the UKI is built. Because cryptsetup cannot operate on
+// a mounted (or in-use) partition, it unmounts the chroot stack, encrypts each
+// target partition in place with cryptsetup reencrypt, reopens it as a
+// /dev/mapper device, and remounts the stack so the remaining build steps run
+// against the decrypted volumes.
+//
+// It returns the (possibly updated) mount-point list to use for teardown and the
+// names of the LUKS mappers that were opened and must be closed during cleanup.
+func (imageOs *ImageOs) enablingFDE(installRoot string, diskPathIdMap map[string]string,
+	mountPointInfoList []map[string]string) ([]map[string]string, []string, error) {
+
+	template := imageOs.template
+	if !template.IsFDEEnabled() {
+		return mountPointInfoList, nil, nil
+	}
+
+	// The passphrase comes from the user template. Never log its value.
+	passphrase := template.GetFDEPassphrase()
+	if passphrase == "" {
+		return mountPointInfoList, nil, fmt.Errorf("FDE is enabled but no passphrase was provided in the template")
+	}
+
+	targets := fdeTargetPartitionIDs(template)
+	if len(targets) == 0 {
+		return mountPointInfoList, nil, fmt.Errorf("FDE is enabled but no target partition could be determined")
+	}
+
+	log.Infof("Enabling FDE for image: %s", template.GetImageName())
+
+	// cryptsetup needs the partitions unmounted; unmount the whole stack first.
+	if err := imageOs.umountDiskFromChroot(installRoot, mountPointInfoList); err != nil {
+		return mountPointInfoList, nil, fmt.Errorf("failed to unmount before FDE: %w", err)
+	}
+
+	var opened []string
+	for _, id := range targets {
+		dev, ok := diskPathIdMap[id]
+		if !ok {
+			closeLuksMappers(opened)
+			return mountPointInfoList, nil, fmt.Errorf("FDE partition %q has no device in the disk map", id)
+		}
+		mapperPath, mapperName, err := reencryptPartitionInPlace(id, dev, passphrase)
+		if err != nil {
+			closeLuksMappers(opened)
+			return mountPointInfoList, nil, fmt.Errorf("failed to encrypt partition %q: %w", id, err)
+		}
+		opened = append(opened, mapperName)
+		diskPathIdMap[id] = mapperPath
+		log.Infof("Encrypted partition %q, opened at %s", id, mapperPath)
+	}
+
+	// Remount the stack; encrypted partitions now resolve to their mappers.
+	newList, err := imageOs.mountDiskToChroot(installRoot, diskPathIdMap, template)
+	if err != nil {
+		closeLuksMappers(opened)
+		return mountPointInfoList, nil, fmt.Errorf("failed to remount after FDE: %w", err)
+	}
+
+	return newList, opened, nil
+}
+
+// fdeTargetPartitionIDs returns the partition IDs to encrypt. If the template
+// does not list any explicitly, the root partition ("/") is used by default.
+func fdeTargetPartitionIDs(template *config.ImageTemplate) []string {
+	if ids := template.GetFDEPartitions(); len(ids) > 0 {
+		return ids
+	}
+	for _, p := range template.GetDiskConfig().Partitions {
+		if p.MountPoint == "/" {
+			return []string{p.ID}
+		}
+	}
+	return nil
+}
+
+// wireFDEBoot performs all boot-side wiring for full-disk encryption in one
+// place. For every partition encrypted by enablingFDE it discovers the LUKS
+// header UUID and:
+//   - adds "rd.luks.uuid=/rd.luks.name=" to the kernel command line so the
+//     initramfs unlocks the container at boot (interactive passphrase prompt);
+//   - points the root device at the decrypted mapper (or, when dm-verity is
+//     enabled, points systemd.verity_root_data at it for a verity-on-LUKS chain);
+//   - writes /etc/crypttab entries for any non-root volumes (unlocked post-boot).
+//
+// It must run after the boot config (cmdline.conf) is generated and before the
+// UKI embeds it, while the LUKS mappers are still open.
+func wireFDEBoot(installRoot string, diskPathIdMap map[string]string, template *config.ImageTemplate) error {
+	if !template.IsFDEEnabled() {
+		return nil
+	}
+
+	targets := fdeTargetPartitionIDs(template)
+	if len(targets) == 0 {
+		return fmt.Errorf("FDE is enabled but no target partition could be determined")
+	}
+
+	rootID := ""
+	for _, p := range template.GetDiskConfig().Partitions {
+		if p.MountPoint == "/" {
+			rootID = p.ID
+			break
+		}
+	}
+
+	var luksParams []string
+	var crypttabLines []string
+	rootMapper := ""
+	for _, id := range targets {
+		mapperPath, ok := diskPathIdMap[id]
+		if !ok {
+			return fmt.Errorf("FDE partition %q has no device in the disk map", id)
+		}
+
+		// Discover the backing partition of the open mapper, then its LUKS UUID.
+		statusOut, err := shell.ExecCmd(fmt.Sprintf("cryptsetup status %s", shell.QuoteArg(id)), true, shell.HostPath, nil)
+		if err != nil {
+			return fmt.Errorf("failed to query LUKS status for %q: %w", id, err)
+		}
+		backing := ""
+		for _, line := range strings.Split(statusOut, "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "device:") {
+				backing = strings.TrimSpace(strings.TrimPrefix(line, "device:"))
+				break
+			}
+		}
+		if backing == "" {
+			return fmt.Errorf("could not determine backing device for LUKS mapper %q", id)
+		}
+		uuidOut, err := shell.ExecCmd(fmt.Sprintf("cryptsetup luksUUID %s", shell.QuoteArg(backing)), true, shell.HostPath, nil)
+		if err != nil {
+			return fmt.Errorf("failed to read LUKS UUID for %q: %w", id, err)
+		}
+		uuid := strings.TrimSpace(uuidOut)
+
+		luksParams = append(luksParams,
+			fmt.Sprintf("rd.luks.uuid=%s", uuid),
+			fmt.Sprintf("rd.luks.name=%s=%s", uuid, id))
+		if id == rootID {
+			rootMapper = mapperPath // /dev/mapper/<id>
+		} else {
+			crypttabLines = append(crypttabLines, fmt.Sprintf("%s UUID=%s none luks,discard", id, uuid))
+		}
+	}
+
+	// Rewrite the kernel command line that the UKI will embed.
+	cmdlinePath := filepath.Join(installRoot, "boot", "cmdline.conf")
+	content, err := file.Read(cmdlinePath)
+	if err != nil {
+		return fmt.Errorf("failed to read cmdline %s: %w", cmdlinePath, err)
+	}
+	fields := strings.Fields(content)
+	for i, f := range fields {
+		switch {
+		case rootMapper != "" && !template.IsImmutabilityEnabled() && strings.HasPrefix(f, "root="):
+			fields[i] = "root=" + rootMapper
+		case rootMapper != "" && template.IsImmutabilityEnabled() && strings.HasPrefix(f, "systemd.verity_root_data="):
+			fields[i] = "systemd.verity_root_data=" + rootMapper
+		}
+	}
+	fields = append(fields, luksParams...)
+	if err := file.Write(strings.Join(fields, " ")+"\n", cmdlinePath); err != nil {
+		return fmt.Errorf("failed to write cmdline %s: %w", cmdlinePath, err)
+	}
+
+	// Non-root encrypted volumes are unlocked after switch-root via crypttab.
+	if len(crypttabLines) > 0 {
+		crypttabPath := filepath.Join(installRoot, "etc", "crypttab")
+		if err := file.Write(strings.Join(crypttabLines, "\n")+"\n", crypttabPath); err != nil {
+			return fmt.Errorf("failed to write crypttab %s: %w", crypttabPath, err)
+		}
+	}
+
+	log.Infof("Wired FDE boot parameters for image: %s", template.GetImageName())
+	return nil
+}
+
+// reencryptPartitionInPlace encrypts an existing ext filesystem on dev in place
+// and opens the resulting LUKS container. The filesystem is first shrunk to make
+// room for the LUKS2 header (--reduce-device-size), then grown back to fill the
+// mapper after the container is opened. The passphrase is read from stdin so it
+// never appears on the command line or in logs.
+func reencryptPartitionInPlace(id, dev, passphrase string) (mapperPath, mapperName string, err error) {
+	mapperName = id
+	mapperPath = filepath.Join("/dev/mapper", mapperName)
+
+	// resize2fs requires a clean filesystem. Tolerate e2fsck exit codes 1/2
+	// (errors found and corrected), which are not fatal.
+	fsckCmd := fmt.Sprintf("e2fsck -fy %s || test $? -le 2", shell.QuoteArg(dev))
+	if _, err = shell.ExecCmd(fsckCmd, true, shell.HostPath, nil); err != nil {
+		return "", "", fmt.Errorf("e2fsck failed: %w", err)
+	}
+
+	shrinkCmd := fmt.Sprintf("resize2fs -M %s", shell.QuoteArg(dev))
+	if _, err = shell.ExecCmd(shrinkCmd, true, shell.HostPath, nil); err != nil {
+		return "", "", fmt.Errorf("resize2fs shrink failed: %w", err)
+	}
+
+	reCmd := fmt.Sprintf("cryptsetup reencrypt --encrypt --type luks2 --reduce-device-size 32M --batch-mode --key-file - %s",
+		shell.QuoteArg(dev))
+	if _, err = shell.ExecCmdWithInput(passphrase, reCmd, true, shell.HostPath, nil); err != nil {
+		return "", "", fmt.Errorf("cryptsetup reencrypt failed: %w", err)
+	}
+
+	openCmd := fmt.Sprintf("cryptsetup open --key-file - %s %s", shell.QuoteArg(dev), shell.QuoteArg(mapperName))
+	if _, err = shell.ExecCmdWithInput(passphrase, openCmd, true, shell.HostPath, nil); err != nil {
+		return "", "", fmt.Errorf("cryptsetup open failed: %w", err)
+	}
+
+	growCmd := fmt.Sprintf("resize2fs %s", shell.QuoteArg(mapperPath))
+	if _, err = shell.ExecCmd(growCmd, true, shell.HostPath, nil); err != nil {
+		if closeErr := closeLuks(mapperName); closeErr != nil {
+			log.Warnf("Failed to close LUKS mapper %s after grow error: %v", mapperName, closeErr)
+		}
+		return "", "", fmt.Errorf("resize2fs grow failed: %w", err)
+	}
+
+	return mapperPath, mapperName, nil
+}
+
+// closeLuks closes a single opened LUKS device-mapper volume.
+func closeLuks(mapperName string) error {
+	cmd := fmt.Sprintf("cryptsetup close %s", shell.QuoteArg(mapperName))
+	if _, err := shell.ExecCmd(cmd, true, shell.HostPath, nil); err != nil {
+		return fmt.Errorf("cryptsetup close %s failed: %w", mapperName, err)
+	}
+	return nil
+}
+
+// closeLuksMappers best-effort closes the given mappers, logging any failures.
+func closeLuksMappers(names []string) {
+	for i := len(names) - 1; i >= 0; i-- {
+		if err := closeLuks(names[i]); err != nil {
+			log.Warnf("%v", err)
+		}
+	}
+}
+
 func buildImageUKI(installRoot string, template *config.ImageTemplate) error {
 	bootloaderConfig := template.GetBootloaderConfig()
 	if bootloaderConfig.Provider == "systemd-boot" {
@@ -1511,6 +1769,10 @@ func updateInitramfs(installRoot, kernelVersion string, template *config.ImageTe
 	// Add systemd-veritysetup module if immutability is enabled
 	if template.IsImmutabilityEnabled() {
 		cmdParts = append(cmdParts, "--add", "systemd-veritysetup")
+		cmdParts = append(cmdParts, "--add", "dm")
+		cmdParts = append(cmdParts, "--add", "crypt")
+	} else if template.IsFDEEnabled() {
+		// FDE needs the crypt/dm modules so the initramfs can unlock LUKS at boot.
 		cmdParts = append(cmdParts, "--add", "dm")
 		cmdParts = append(cmdParts, "--add", "crypt")
 	}
