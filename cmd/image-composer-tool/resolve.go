@@ -12,14 +12,13 @@ import (
 
 // Resolve command flags
 var (
-	resolveTemplateFile string // Path to the template to resolve
-	resolveFull         bool   // Include OS defaults in the merged output
+	resolveFull bool // Include OS defaults in the merged output
 )
 
 // createResolveCommand creates the resolve subcommand
 func createResolveCommand() *cobra.Command {
 	resolveCmd := &cobra.Command{
-		Use:   "resolve [flags]",
+		Use:   "resolve [flags] TEMPLATE_FILE",
 		Short: "Resolve a template and print the merged YAML",
 		Long: `Resolve a template and print the merged YAML to stdout for debugging and traceability.
 
@@ -33,26 +32,21 @@ would be used at build time.
 Sensitive fields (user passwords, hash algorithms, and secure boot key/certificate
 paths) are always redacted in the output. The merged output is always computed
 on-demand and is never cached.`,
-		Args:              cobra.NoArgs,
+		Args:              cobra.ExactArgs(1),
 		RunE:              executeResolve,
 		ValidArgsFunction: templateFileCompletion,
 	}
 
-	resolveCmd.Flags().StringVarP(&resolveTemplateFile, "template", "t", "",
-		"Path to the image template YAML file (required)")
 	resolveCmd.Flags().BoolVar(&resolveFull, "full", false,
 		"Include OS defaults in the merged output, showing exactly what will be built")
-	if err := resolveCmd.MarkFlagRequired("template"); err != nil {
-		panic(fmt.Sprintf("failed to mark --template as required: %v", err))
-	}
 
 	return resolveCmd
 }
 
 // executeResolve handles the resolve command execution logic
-func executeResolve(cmd *cobra.Command, _ []string) error {
+func executeResolve(cmd *cobra.Command, args []string) error {
 	log := logger.Logger()
-	templateFile := resolveTemplateFile
+	templateFile := args[0]
 
 	var merged *config.ImageTemplate
 	if resolveFull {

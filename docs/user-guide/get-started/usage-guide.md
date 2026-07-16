@@ -126,10 +126,10 @@ output:
 
 ```bash
 # Chain-merge only, without OS defaults
-./image-composer-tool resolve -t image-templates/ubuntu24-x86_64-extends-example-raw.yml
+./image-composer-tool resolve image-templates/ubuntu24-x86_64-extends-example-raw.yml
 
 # Full build-time view: extends chain + OS defaults
-./image-composer-tool resolve -t image-templates/azl3-x86_64-edge-raw.yml --full
+./image-composer-tool resolve image-templates/azl3-x86_64-edge-raw.yml --full
 ```
 
 ## Configuration

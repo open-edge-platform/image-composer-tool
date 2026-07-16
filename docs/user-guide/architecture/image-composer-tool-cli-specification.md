@@ -238,14 +238,19 @@ traceability. Resolve does not build anything and never writes to disk; the
 merged output is computed on every invocation and is not cached.
 
 ```bash
-image-composer-tool resolve -t TEMPLATE_FILE [--full]
+image-composer-tool resolve [flags] TEMPLATE_FILE
 ```
+
+**Arguments:**
+
+| Argument | Description |
+|---|---|
+| `TEMPLATE_FILE` | Path to the image template YAML file (required, positional) |
 
 **Flags:**
 
 | Flag | Description |
 |---|---|
-| `-t, --template` | Path to the image template YAML file (required) |
 | `--full` | Include OS defaults in the output, showing exactly what will be built |
 
 **Description:**
@@ -275,13 +280,13 @@ The output is safe to paste into an issue or a code review.
 
 ```bash
 # Show the extends-chain-merged YAML for a template that inherits from a parent
-image-composer-tool resolve -t image-templates/ubuntu24-x86_64-extends-example-raw.yml
+image-composer-tool resolve image-templates/ubuntu24-x86_64-extends-example-raw.yml
 
 # Show the full build-time template (extends chain + OS defaults)
-image-composer-tool resolve -t image-templates/azl3-x86_64-edge-raw.yml --full
+image-composer-tool resolve image-templates/azl3-x86_64-edge-raw.yml --full
 
 # Pipe the merged template into a file for offline review
-image-composer-tool resolve -t my-template.yml --full > merged.yml
+image-composer-tool resolve my-template.yml --full > merged.yml
 ```
 
 See also:
@@ -681,13 +686,13 @@ image-composer-tool --log-level debug validate image-templates/azl3-x86_64-edge-
 ```bash
 # Print the extends-chain-merged YAML (without OS defaults) for a template
 # that inherits from a parent
-image-composer-tool resolve -t image-templates/ubuntu24-x86_64-extends-example-raw.yml
+image-composer-tool resolve image-templates/ubuntu24-x86_64-extends-example-raw.yml
 
 # Print the fully merged, build-ready YAML including OS defaults
-image-composer-tool resolve -t image-templates/azl3-x86_64-edge-raw.yml --full
+image-composer-tool resolve image-templates/azl3-x86_64-edge-raw.yml --full
 
 # Save the merged template to a file for offline review
-image-composer-tool resolve -t my-template.yml --full > merged.yml
+image-composer-tool resolve my-template.yml --full > merged.yml
 ```
 
 ## Configuration Files

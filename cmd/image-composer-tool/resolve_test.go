@@ -15,7 +15,6 @@ import (
 // resetResolveFlags clears package-level flag state between resolve tests so that
 // each test observes the flag defaults.
 func resetResolveFlags() {
-	resolveTemplateFile = ""
 	resolveFull = false
 }
 
@@ -102,12 +101,17 @@ func runResolveCommandWithConfig(t *testing.T, args []string, cfg *config.Global
 }
 
 // TestCreateResolveCommand_Structure verifies the command's shape: use, flags,
-// required-flag markers, arg validator, and RunE presence.
+// arg validator, and RunE presence. The template file is passed as a positional
+// argument (matching the build/validate convention), so we assert Args rejects
+// zero and two-plus positional arguments.
 func TestCreateResolveCommand_Structure(t *testing.T) {
 	cmd := createResolveCommand()
 
 	if cmd.Use == "" || !strings.HasPrefix(cmd.Use, "resolve") {
 		t.Errorf("expected Use to start with 'resolve', got %q", cmd.Use)
+	}
+	if !strings.Contains(cmd.Use, "TEMPLATE_FILE") {
+		t.Errorf("expected Use to advertise the positional TEMPLATE_FILE arg, got %q", cmd.Use)
 	}
 	if cmd.Short == "" {
 		t.Error("expected Short to be set")
@@ -119,18 +123,21 @@ func TestCreateResolveCommand_Structure(t *testing.T) {
 		t.Error("expected RunE to be set")
 	}
 	if cmd.Args == nil {
-		t.Error("expected Args validator to be set")
+		t.Fatal("expected Args validator to be set")
+	}
+	if err := cmd.Args(cmd, []string{}); err == nil {
+		t.Error("expected Args to reject zero positional arguments")
+	}
+	if err := cmd.Args(cmd, []string{"a.yml", "b.yml"}); err == nil {
+		t.Error("expected Args to reject two positional arguments")
+	}
+	if err := cmd.Args(cmd, []string{"a.yml"}); err != nil {
+		t.Errorf("expected Args to accept one positional argument, got: %v", err)
 	}
 
-	templateFlag := cmd.Flags().Lookup("template")
-	if templateFlag == nil {
-		t.Fatal("expected --template flag to exist")
-	}
-	if templateFlag.Shorthand != "t" {
-		t.Errorf("expected -t shorthand, got %q", templateFlag.Shorthand)
-	}
-	if templateFlag.DefValue != "" {
-		t.Errorf("expected --template default to be empty, got %q", templateFlag.DefValue)
+	// The --template flag was removed in favor of the positional argument.
+	if templateFlag := cmd.Flags().Lookup("template"); templateFlag != nil {
+		t.Error("did not expect --template flag; the template path is now positional")
 	}
 
 	fullFlag := cmd.Flags().Lookup("full")
@@ -139,11 +146,6 @@ func TestCreateResolveCommand_Structure(t *testing.T) {
 	}
 	if fullFlag.DefValue != "false" {
 		t.Errorf("expected --full default to be false, got %q", fullFlag.DefValue)
-	}
-
-	// MarkFlagRequired stores an annotation on the flag; ensure it was applied.
-	if _, ok := templateFlag.Annotations[cobra.BashCompOneRequiredFlag]; !ok {
-		t.Error("expected --template to be marked required")
 	}
 }
 
@@ -157,7 +159,7 @@ func TestResolveCommand_NoExtends_PrintsMessage(t *testing.T) {
 	templatePath := filepath.Join(tmpDir, "leaf.yml")
 	writeResolveTemplate(t, templatePath, "solo", "", "", "")
 
-	out, err := runResolveCommand(t, []string{"-t", templatePath})
+	out, err := runResolveCommand(t, []string{templatePath})
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -184,7 +186,7 @@ func TestResolveCommand_WithExtends_PrintsMergedYAML(t *testing.T) {
 	writeResolveTemplate(t, rootPath, "parent-image", "", "", "")
 	writeResolveTemplate(t, leafPath, "child-image", "root.yml", "", "")
 
-	out, err := runResolveCommand(t, []string{"-t", leafPath})
+	out, err := runResolveCommand(t, []string{leafPath})
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -220,7 +222,7 @@ func TestResolveCommand_WithFull_MergesOSDefaults(t *testing.T) {
 	templatePath := filepath.Join(tmpDir, "leaf.yml")
 	writeResolveTemplate(t, templatePath, "user-image", "", "", "")
 
-	out, err := runResolveCommandWithConfig(t, []string{"-t", templatePath, "--full"}, cfg)
+	out, err := runResolveCommandWithConfig(t, []string{templatePath, "--full"}, cfg)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -253,7 +255,7 @@ func TestResolveCommand_NoExtends_FullMergesDefaults(t *testing.T) {
 	templatePath := filepath.Join(tmpDir, "leaf.yml")
 	writeResolveTemplate(t, templatePath, "solo-full", "", "", "")
 
-	out, err := runResolveCommandWithConfig(t, []string{"-t", templatePath, "--full"}, cfg)
+	out, err := runResolveCommandWithConfig(t, []string{templatePath, "--full"}, cfg)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -280,7 +282,7 @@ func TestResolveCommand_RedactsSensitive(t *testing.T) {
 	writeResolveTemplate(t, rootPath, "parent-image", "", "", "")
 	writeResolveTemplate(t, leafPath, "child-image", "root.yml", "hunter2-secret", "/keys/private-db.key")
 
-	out, err := runResolveCommand(t, []string{"-t", leafPath})
+	out, err := runResolveCommand(t, []string{leafPath})
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -296,21 +298,22 @@ func TestResolveCommand_RedactsSensitive(t *testing.T) {
 	}
 }
 
-// TestResolveCommand_MissingTemplateFlag verifies that omitting -t/--template
-// yields a clear required-flag error and does not attempt to load anything.
-func TestResolveCommand_MissingTemplateFlag(t *testing.T) {
+// TestResolveCommand_MissingTemplateArg verifies that invoking resolve with no
+// positional argument yields cobra's ExactArgs(1) error and does not attempt
+// to load anything.
+func TestResolveCommand_MissingTemplateArg(t *testing.T) {
 	defer resetResolveFlags()
 
 	_, err := runResolveCommand(t, []string{})
 	if err == nil {
-		t.Fatal("expected error when --template is omitted, got none")
+		t.Fatal("expected error when TEMPLATE_FILE is omitted, got none")
 	}
-	if !strings.Contains(err.Error(), "template") {
-		t.Errorf("expected error to mention the required --template flag, got: %v", err)
+	if !strings.Contains(err.Error(), "arg") {
+		t.Errorf("expected cobra ExactArgs error mentioning 'arg', got: %v", err)
 	}
 }
 
-// TestResolveCommand_MissingTemplateFile verifies that pointing -t at a
+// TestResolveCommand_MissingTemplateFile verifies that pointing resolve at a
 // non-existent file produces a wrapped error identifying the resolution phase.
 func TestResolveCommand_MissingTemplateFile(t *testing.T) {
 	defer resetResolveFlags()
@@ -318,7 +321,7 @@ func TestResolveCommand_MissingTemplateFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	missing := filepath.Join(tmpDir, "does-not-exist.yml")
 
-	_, err := runResolveCommand(t, []string{"-t", missing})
+	_, err := runResolveCommand(t, []string{missing})
 	if err == nil {
 		t.Fatal("expected error for missing template file, got none")
 	}
@@ -337,7 +340,7 @@ func TestResolveCommand_BrokenExtendsChain(t *testing.T) {
 	leafPath := filepath.Join(tmpDir, "leaf.yml")
 	writeResolveTemplate(t, leafPath, "orphan", "missing-parent.yml", "", "")
 
-	_, err := runResolveCommand(t, []string{"-t", leafPath})
+	_, err := runResolveCommand(t, []string{leafPath})
 	if err == nil {
 		t.Fatal("expected error for broken extends chain, got none")
 	}
