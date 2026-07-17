@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,9 +19,30 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/provider/ubuntu"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/display"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/runctx"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 	"github.com/spf13/cobra"
 )
+
+// postProcessCleanupBudget bounds how long p.PostProcess (which is itself the
+// build's cleanup — CleanupChrootEnv + gpg-agent stop) may take when the
+// parent ctx has already been cancelled by a signal. Long enough to cover
+// escalating umount across ~7 mounts plus losetup detach on ~5 partitions
+// on the worst-observed path.
+const postProcessCleanupBudget = 2 * time.Minute
+
+// workspaceDirForResidualHint returns the configured work directory as a
+// hint for the "check for leftovers here" line printed after a cancel. It is
+// intentionally best-effort — when config resolution fails (very unusual,
+// since the build has already progressed past initConfig) we return the
+// literal string "<work-dir>" so the message is still readable.
+func workspaceDirForResidualHint() string {
+	if dir, err := config.WorkDir(); err == nil {
+		return dir
+	}
+	return "<work-dir>"
+}
 
 // defaultWorkers is the default number of concurrent download workers from config
 var defaultWorkers = config.DefaultGlobalConfig().Workers
@@ -137,6 +159,75 @@ func executeBuild(cmd *cobra.Command, args []string) error {
 		isolated = createdIsolated
 	}
 
+	// Wire the build to the ambient cancellation context (installed by main
+	// via signal.NotifyContext). The shell layer's four spawn sites now use
+	// this ctx to (a) put every child bash/sudo/tool in its own process group
+	// and (b) SIGTERM the whole group on cancel — this is what turns Ctrl+C
+	// from a leak-generator into cooperative teardown.
+	//
+	// cmd.Context() returns nil when the command is constructed for a unit
+	// test rather than dispatched via Execute/ExecuteContext; fall back to
+	// context.Background() so those tests don't panic on <-ctx.Done().
+	parentCtx := cmd.Context()
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
+	// Derive a cancellable child so we can tear down the cleanup goroutine
+	// on the normal-return path — without this, that goroutine would leak
+	// for the process lifetime (and forever in unit tests).
+	ctx, cancelCtx := context.WithCancel(parentCtx)
+	restoreShellCtx := shell.SetContext(ctx)
+	defer restoreShellCtx()
+
+	// Install a per-build cleanup coordinator. Resources acquired during
+	// PreProcess/BuildImage (chroot mounts, loop devices) register their
+	// idempotent teardown here so a mid-build signal reaps them even when
+	// the goto post path in this function is bypassed.
+	coord := runctx.New()
+	runctx.Set(coord)
+	defer runctx.Clear()
+
+	// Background driver: on signal, walk the coordinator's LIFO chain under
+	// a fresh per-entry timeout so cleanup itself is not cancelled by the
+	// same ctx that fired. The goroutine's <-ctx.Done() fires once — either
+	// via a real signal (parent ctx cancelled) or via cancelCtx() on the
+	// normal-return path, in which case parentCtx.Err() == nil and the
+	// goroutine skips the cleanup work. A second signal is escalated to
+	// os.Exit(130) by main's hard-exit goroutine, not this one.
+	cleanupDone := make(chan struct{})
+	go func() {
+		defer close(cleanupDone)
+		<-ctx.Done()
+		if parentCtx.Err() == nil {
+			return // normal-return path — nothing to reap
+		}
+		log := logger.Logger()
+		log.Warnf("build cancelled by signal (%v), running cleanup", parentCtx.Err())
+		residual := coord.Run(context.Background())
+		if len(residual) == 0 {
+			log.Infof("cleanup complete")
+			return
+		}
+		log.Errorf("residual cleanup issues (%d):", len(residual))
+		for _, item := range residual {
+			log.Errorf("  - %s", item)
+		}
+		log.Warnf("some resources may still be held; consider running "+
+			"'mount | grep %s' and 'losetup -l' to identify leftovers",
+			workspaceDirForResidualHint())
+	}()
+	// On any return, cancel the child ctx to release the cleanup goroutine
+	// (which may leave via the "nothing to reap" early-out or after running
+	// registered teardowns) and then wait for it. Ordering matters: this
+	// defer must run in the sequence (cancelCtx → wait), so it lives in a
+	// single func rather than as two separate defers where LIFO would
+	// deadlock — <-cleanupDone would block waiting for a cancelCtx that
+	// hadn't fired yet.
+	defer func() {
+		cancelCtx()
+		<-cleanupDone
+	}()
+
 	var buildErr error
 	log := logger.Logger()
 
@@ -205,15 +296,34 @@ func executeBuild(cmd *cobra.Command, args []string) error {
 post:
 
 	if p != nil {
-		if err := p.PostProcess(template, buildErr); err != nil {
+		// PostProcess is itself the build's cleanup: CleanupChrootEnv + gpg-agent
+		// stop + repo-config restore. Running it under a cancelled parent ctx
+		// would defeat the purpose — every shell.ExecCmd inside PostProcess would
+		// fail-fast with context.Canceled. Bind a detached, timeout-only ctx for
+		// the duration so cleanup actually completes even when a signal fired.
+		postCtx, postCancel := context.WithTimeout(context.Background(), postProcessCleanupBudget)
+		restorePost := shell.SetContext(postCtx)
+		postErr := p.PostProcess(template, buildErr)
+		restorePost()
+		postCancel()
+		if postErr != nil {
 			// In --no-cache mode the deferred cleanup would otherwise remove the unique
 			// workspace on return, discarding a successfully built image. Preserve it so
 			// the image (and any state needed for recovery) survives a PostProcess failure.
 			if isolated != nil {
 				isolated.KeepWorkspace()
 			}
-			return fmt.Errorf("post-processing failed: %w", err)
+			return fmt.Errorf("post-processing failed: %w", postErr)
 		}
+	}
+
+	// Surface signal cancellation as a distinct error so main can map it to
+	// the conventional exit code (130). Return AFTER PostProcess so any
+	// remaining registered cleanup — and the isolated --no-cache workspace
+	// cleanup defer — still run. The deferred <-cleanupDone above blocks
+	// until the coordinator goroutine finishes reporting its residuals.
+	if parentCtx.Err() != nil {
+		return fmt.Errorf("build cancelled: %w", parentCtx.Err())
 	}
 
 	if buildErr == nil {
