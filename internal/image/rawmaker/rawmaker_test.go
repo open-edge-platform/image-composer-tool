@@ -123,22 +123,22 @@ type mockLoopDev struct {
 	deleteCallCount       int
 }
 
-func (m *mockLoopDev) CreateRawImageLoopDev(filePath string, template *config.ImageTemplate) (string, map[string]string, error) {
+func (m *mockLoopDev) CreateRawImageLoopDev(filePath string, template *config.ImageTemplate) (string, map[string]string, func(), error) {
 	if m.shouldFailCreate {
-		return m.failCreateLoopDevPath, nil, fmt.Errorf("mock loop device creation failure")
+		return m.failCreateLoopDevPath, nil, func() {}, fmt.Errorf("mock loop device creation failure")
 	}
 	diskPathIdMap := map[string]string{
 		"root": "/dev/loop0p1",
 		"boot": "/dev/loop0p2",
 	}
-	return m.loopDevPath, diskPathIdMap, nil
+	return m.loopDevPath, diskPathIdMap, func() {}, nil
 }
 
-func (m *mockLoopDev) AttachImageToLoopDev(imagePath string) (string, []string, error) {
+func (m *mockLoopDev) AttachImageToLoopDev(imagePath string) (string, []string, func(), error) {
 	if m.shouldFailCreate {
-		return m.failCreateLoopDevPath, nil, fmt.Errorf("mock loop device attach failure")
+		return m.failCreateLoopDevPath, nil, func() {}, fmt.Errorf("mock loop device attach failure")
 	}
-	return m.loopDevPath, []string{"/dev/loop0p1", "/dev/loop0p2"}, nil
+	return m.loopDevPath, []string{"/dev/loop0p1", "/dev/loop0p2"}, func() {}, nil
 }
 
 func (m *mockLoopDev) LoopSetupDelete(loopDevPath string) error {

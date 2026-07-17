@@ -1,6 +1,7 @@
 package imagedisc
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,13 +10,14 @@ import (
 	"strings"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/runctx"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
 
 type LoopDevInterface interface {
 	LoopSetupDelete(loopDevPath string) error
-	CreateRawImageLoopDev(filePath string, template *config.ImageTemplate) (string, map[string]string, error)
-	AttachImageToLoopDev(imagePath string) (string, []string, error)
+	CreateRawImageLoopDev(filePath string, template *config.ImageTemplate) (string, map[string]string, func(), error)
+	AttachImageToLoopDev(imagePath string) (string, []string, func(), error)
 }
 
 type LoopDev struct{}
@@ -30,7 +32,14 @@ func NewLoopDev() *LoopDev {
 	return &LoopDev{}
 }
 
-func loopSetupCreate(imagePath string) (string, error) {
+// loopSetupCreate attaches imagePath as a loop device with partition scanning
+// (losetup -fP) and returns the canonical device path plus an unregister
+// closure. When a runctx.Coordinator is bound, the returned closure removes
+// the auto-registered detach callback and callers are expected to invoke it
+// from their happy-path defer immediately before their own explicit
+// LoopSetupDelete — this avoids double-detach warnings on successful builds.
+// When no coordinator is bound the closure is a no-op.
+func loopSetupCreate(imagePath string) (string, func(), error) {
 	// losetup runs with sudo through a bash -c string. Single-quote the path so
 	// bash performs no expansion on it: strconv.Quote uses double quotes, inside
 	// which $(...), ${...} and backticks still expand, so a crafted work-dir or
@@ -40,7 +49,7 @@ func loopSetupCreate(imagePath string) (string, error) {
 	loopDevPath, err := shell.ExecCmd(cmd, true, shell.HostPath, nil)
 	if err != nil {
 		log.Errorf("Losetup failed for %s: %v", imagePath, err)
-		return "", err
+		return "", func() {}, err
 	}
 
 	loopDevPath = strings.TrimSpace(loopDevPath)
@@ -49,61 +58,85 @@ func loopSetupCreate(imagePath string) (string, error) {
 	// path ("/dev/loopN") via an anchored regex, so a malformed or unexpected
 	// output string can never be propagated into shell execution. A substring
 	// match would let arbitrary surrounding text through.
-	if canonicalLoopDevPath.MatchString(loopDevPath) {
-		log.Infof("Losetup %s created loopback device at %s", imagePath, loopDevPath)
-		return loopDevPath, nil
-	} else {
+	if !canonicalLoopDevPath.MatchString(loopDevPath) {
 		log.Errorf("Failed to create loopback device for %s", imagePath)
-		return "", fmt.Errorf("failed to create loopback device for %s", imagePath)
+		return "", func() {}, fmt.Errorf("failed to create loopback device for %s", imagePath)
 	}
+	log.Infof("Losetup %s created loopback device at %s", imagePath, loopDevPath)
+
+	// Register a detach with the build-scoped cleanup coordinator so a
+	// SIGINT/SIGTERM mid-BuildImage releases this device even if the
+	// happy-path defer in the caller is bypassed. LoopSetupDelete is
+	// best-effort under a torn-down chroot: a still-mounted partition
+	// prevents detach and the coordinator surfaces the error in its
+	// residual list, but it won't wedge the coordinator.
+	unregister := func() {}
+	if c := runctx.Get(); c != nil {
+		devPath := loopDevPath
+		loopDev := &LoopDev{}
+		unregister = c.Register(
+			"loop:"+devPath,
+			func(context.Context) error {
+				return loopDev.LoopSetupDelete(devPath)
+			},
+		)
+	}
+	return loopDevPath, unregister, nil
 }
 
-func loopSetupCreateEmptyRawDisk(filePath, fileSize string) (string, error) {
+func loopSetupCreateEmptyRawDisk(filePath, fileSize string) (string, func(), error) {
 	// For the raw image file, create it without sudo as the folder is owned by user.
 	if err := CreateRawFile(filePath, fileSize, false); err != nil {
-		return "", err
+		return "", func() {}, err
 	}
 
 	if _, err := os.Stat(filePath); err == nil {
 		return loopSetupCreate(filePath)
 	}
 	log.Errorf("Can't find %s after creating raw file", filePath)
-	return "", fmt.Errorf("can't find %s", filePath)
+	return "", func() {}, fmt.Errorf("can't find %s", filePath)
 }
 
 // AttachImageToLoopDev attaches an already-existing disk image to a loop device
 // with partition scanning enabled (losetup -fP) and returns the loop device path
-// along with its enumerated partition nodes. Unlike CreateRawImageLoopDev it does
-// not create or partition the backing file, so it is safe to use on a baseline
-// image that must not be modified. On partition-enumeration failure the loop
-// device is detached before returning so no loop device is leaked. If that
-// detach itself fails, the device is genuinely leaked: the returned path is the
-// leaked device (non-empty) and the error is annotated with it so the caller can
-// retain the backing file and operators can reclaim the device.
-func (loopDev *LoopDev) AttachImageToLoopDev(imagePath string) (string, []string, error) {
+// along with its enumerated partition nodes and an unregister closure that
+// callers should invoke from their happy-path defer immediately before running
+// their own LoopSetupDelete to avoid double-detach warnings. Unlike
+// CreateRawImageLoopDev it does not create or partition the backing file, so it
+// is safe to use on a baseline image that must not be modified. On
+// partition-enumeration failure the loop device is detached before returning
+// so no loop device is leaked. If that detach itself fails, the device is
+// genuinely leaked: the returned path is the leaked device (non-empty) and
+// the error is annotated with it so the caller can retain the backing file
+// and operators can reclaim the device.
+func (loopDev *LoopDev) AttachImageToLoopDev(imagePath string) (string, []string, func(), error) {
 	if _, err := os.Stat(imagePath); err != nil {
-		return "", nil, fmt.Errorf("cannot access baseline image at %s: %w", imagePath, err)
+		return "", nil, func() {}, fmt.Errorf("cannot access baseline image at %s: %w", imagePath, err)
 	}
 
-	loopDevPath, err := loopSetupCreate(imagePath)
+	loopDevPath, unregister, err := loopSetupCreate(imagePath)
 	if err != nil {
-		return "", nil, fmt.Errorf("failed to attach loop device for %s: %w", imagePath, err)
+		return "", nil, func() {}, fmt.Errorf("failed to attach loop device for %s: %w", imagePath, err)
 	}
 
 	partitions, err := loopDevPartitions(loopDevPath)
 	if err != nil {
+		// Enumeration failed; detach before returning. Unregister the coordinator
+		// entry first so the coordinator doesn't try to detach a device we already
+		// released.
+		unregister()
 		if detachErr := loopDev.LoopSetupDelete(loopDevPath); detachErr != nil {
 			// Detach also failed: the loop device is leaked. Return the leaked
 			// device path (not "") together with both the enumeration error and
 			// the detach failure, wrapped with the path, so the caller can retain
 			// the backing file and operators can identify and reclaim the device.
 			log.Errorf("Failed to detach loop device %s after partition enumeration failure: %v", loopDevPath, detachErr)
-			return loopDevPath, nil, fmt.Errorf("leaked loop device %s: %w", loopDevPath, errors.Join(err, detachErr))
+			return loopDevPath, nil, func() {}, fmt.Errorf("leaked loop device %s: %w", loopDevPath, errors.Join(err, detachErr))
 		}
-		return "", nil, err
+		return "", nil, func() {}, err
 	}
 
-	return loopDevPath, partitions, nil
+	return loopDevPath, partitions, unregister, nil
 }
 
 // loopDevPartitions returns the partition device nodes of a loop device, e.g.
@@ -287,18 +320,24 @@ func GetLoopDevPathFromLoopDevPart(loopDevPart string) (string, error) {
 	}
 }
 
-func (loopDev *LoopDev) CreateRawImageLoopDev(filePath string, template *config.ImageTemplate) (string, map[string]string, error) {
+// CreateRawImageLoopDev fallocates and losetup-attaches a fresh raw image
+// file, then creates the partition table on it. Returns the loop device path,
+// the partition-path-to-partition-id map, and an unregister closure that
+// callers must invoke from their happy-path defer right before their own
+// explicit LoopSetupDelete so the build-scoped cleanup coordinator does not
+// try to detach a device that has already been released.
+func (loopDev *LoopDev) CreateRawImageLoopDev(filePath string, template *config.ImageTemplate) (string, map[string]string, func(), error) {
 	var diskPathIdMap map[string]string
 	var loopDevPath string
 
 	diskInfo := template.GetDiskConfig()
-	loopDevPath, err := loopSetupCreateEmptyRawDisk(filePath, diskInfo.Size)
+	loopDevPath, unregister, err := loopSetupCreateEmptyRawDisk(filePath, diskInfo.Size)
 	if err != nil {
-		return loopDevPath, diskPathIdMap, fmt.Errorf("failed to create loop device: %w", err)
+		return loopDevPath, diskPathIdMap, func() {}, fmt.Errorf("failed to create loop device: %w", err)
 	}
 	diskPathIdMap, err = DiskPartitionsCreate(loopDevPath, diskInfo.Partitions, diskInfo.PartitionTableType)
 	if err != nil {
-		return loopDevPath, diskPathIdMap, fmt.Errorf("failed to create partitions on loop device %s: %w", loopDevPath, err)
+		return loopDevPath, diskPathIdMap, unregister, fmt.Errorf("failed to create partitions on loop device %s: %w", loopDevPath, err)
 	}
-	return loopDevPath, diskPathIdMap, nil
+	return loopDevPath, diskPathIdMap, unregister, nil
 }

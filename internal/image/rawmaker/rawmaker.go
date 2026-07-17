@@ -119,9 +119,12 @@ func (rawMaker *RawMaker) BuildRawImage() error {
 	log.Infof("Creating raw image file: %s", imageFile)
 
 	// Create loop device
-	loopDevPath, diskPathIdMap, err := rawMaker.LoopDev.CreateRawImageLoopDev(imageFile, rawMaker.template)
+	loopDevPath, diskPathIdMap, unregister, err := rawMaker.LoopDev.CreateRawImageLoopDev(imageFile, rawMaker.template)
 	if err != nil {
 		if loopDevPath != "" {
+			// unregister the coordinator entry before detaching so the coordinator
+			// does not later try to detach a device we already released.
+			unregister()
 			if detachErr := rawMaker.LoopDev.LoopSetupDelete(loopDevPath); detachErr != nil {
 				log.Errorf("Failed to detach loopback device %s after loop creation failure: %v", loopDevPath, detachErr)
 			} else {
@@ -132,9 +135,12 @@ func (rawMaker *RawMaker) BuildRawImage() error {
 		return fmt.Errorf("failed to create loop device: %w", err)
 	}
 
-	// Setup cleanup for loop device (always needed)
+	// Setup cleanup for loop device (always needed on the normal-return path).
+	// unregister the coordinator entry first so a mid-teardown cancel doesn't
+	// see this device in its residual list.
 	defer func() {
 		if loopDevPath != "" {
+			unregister()
 			if detachErr := rawMaker.LoopDev.LoopSetupDelete(loopDevPath); detachErr != nil {
 				log.Errorf("Failed to detach loopback device %s: %v", loopDevPath, detachErr)
 			} else {
