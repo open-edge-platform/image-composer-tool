@@ -92,6 +92,8 @@
 
 - `fix(templates)`: kernel version metadata 6.14 → 6.17 (#494): Template metadata version field for Ubuntu 24 kernels corrected to match the actual installed kernel series.
 
+- `fix(templates)`: pin ubuntu24 edge kernel to noble GA (6.8) (#761): The `ubuntu24-x86_64-edge-raw` and `ubuntu24-aarch64-edge-raw` templates pinned `kernel.version: 6.17` with `linux-image-generic-hwe-24.04`, a combination Ubuntu noble no longer ships — only `6.8.0-31.31` (GA) and `7.0.0-28.28~24.04.1` (HWE-edge) are available. Pin the kernel to the noble GA combination (`6.8` + `linux-image-generic`) so the `build-ubuntu24-immutable` CI job can complete.
+
 - RPM DOT file naming bug (#538): `GenerateDot` used the raw filename (e.g., `glibc-2.38-16.azl3.x86_64.rpm`) as a node label instead of the canonical package name (`glibc`), producing incorrect dependency graphs.
 
 - Swap partition cleanup before loop device detach (#568): Building images that include a swap partition would fail at teardown because the loop device was busy. The swap partition is now detected and disabled with `swapoff` before `losetup -d`.
