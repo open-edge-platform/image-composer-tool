@@ -178,6 +178,14 @@ sudo -E image-composer-tool build --baseline-image /images/base.raw overlay-temp
 
 **Baseline image formats (overlay mode):** `baseline.source.format` accepts `raw` (default), `qcow2`, `vhd`, and `vhdx`. Non-RAW baselines are converted to RAW with `qemu-img` before mounting, so `qemu-img` must be installed on the host when a non-RAW format is used (the build fails clearly if it is missing). The declared format is verified against the image's actual format; a mismatch aborts the build. The user-supplied baseline is never modified — conversion writes into the build workspace.
 
+**Cancellation semantics:** Sending `SIGINT` (Ctrl+C) or `SIGTERM` to a running build triggers cooperative cleanup before the tool exits:
+
+1. The signal cancels an ambient `context.Context` that is bound to every subsequent shell subprocess. Because those subprocesses are spawned into their own process group, a single `SIGTERM` to the negative process-group id reaps `bash`, `sudo`, and the real tool (`mmdebstrap`, `apt`, `mksquashfs`, `losetup`, `mkfs.*`, `xorriso`, `dracut`, `ukify`, `sbsign`, `qemu-img`, …) together. If the group has not exited within 5 s, the runtime escalates to `SIGKILL`.
+2. Registered teardowns run in reverse acquisition order (loop-device detach first, then chroot unmount + gpg-agent stop) under a fresh 30 s per-entry budget so cleanup itself is not aborted by the signal that fired.
+3. `PostProcess` (which is itself part of the build's cleanup) runs under a detached 2-minute context so an already-cancelled parent does not defeat the umount escalations inside it.
+4. Any resource that could not be reaped (unmount stuck, `losetup -d` refused because a partition is still busy) is reported at ERROR level with the label and error text so the operator can `mount | grep <work-dir>` and `losetup -l` to reclaim it.
+5. Exit code is `130` (`128 + SIGINT`). A **second** signal during cleanup skips the remaining teardown and exits with `130` immediately — use this if a residual umount is hanging.
+
 See also:
 
 - [Build Stages in Detail](./image-composer-tool-build-process.md#build-stages-in-detail) for information about each build stage
@@ -704,6 +712,7 @@ automation:
 | ---- | ----------- |
 | 0 | Success: The command completed successfully. |
 | 1 | General error: An unspecified error occurred during execution. |
+| 130 | Cancelled by signal: A `SIGINT` (Ctrl+C) or `SIGTERM` was received while a build was in progress. Cooperative cleanup (chroot unmount, loop-device detach, child-process reaping) ran before exit. See the [Cancellation semantics](#build-command) subsection of the Build Command for details. |
 
 ## Troubleshooting
 
