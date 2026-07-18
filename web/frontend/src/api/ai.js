@@ -31,10 +31,14 @@ export function createQueryStream(query, sessionId = null, callbacks) {
   });
   
   source.addEventListener('error', (e) => {
-    try {
-      const data = JSON.parse(e.data);
-      callbacks.onError?.(data);
-    } catch {
+    if (e.data) {
+      try {
+        const data = JSON.parse(e.data);
+        callbacks.onError?.(data);
+      } catch {
+        callbacks.onError?.({ code: 'CONNECTION_LOST', message: 'Connection to server lost', retry: true });
+      }
+    } else {
       callbacks.onError?.({ code: 'CONNECTION_LOST', message: 'Connection to server lost', retry: true });
     }
     source.close();

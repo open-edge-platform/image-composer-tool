@@ -2,7 +2,6 @@ package api
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -12,24 +11,15 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/ai/rag"
 )
 
-// isProviderUnavailable reports whether err (or anything it wraps) indicates
-// the AI provider could not be reached. It uses typed-error matching rather
-// than fragile string inspection so that DNS, TLS, timeout, and
-// connection-refused failures are all classified consistently.
-func isProviderUnavailable(err error) bool {
-	return errors.Is(err, provider.ErrProviderUnavailable)
-}
-
 // queryRequest matches the OpenAPI QueryRequest schema.
 type queryRequest struct {
 	Query     string `json:"query"`
 	SessionID string `json:"session_id,omitempty"`
 }
 
-// queryResponse matches the OpenAPI QueryResponse schema (Phase 1 subset).
-// Fields that require session support (changes, full validation) are omitted
-// for now and will be added in Phase 3 without breaking changes.
+// queryResponse matches the OpenAPI QueryResponse schema.
 type queryResponse struct {
+	SessionID        string             `json:"session_id,omitempty"`
 	YAML             string             `json:"yaml"`
 	SearchResults    []searchResultJSON `json:"search_results"`
 	SourceTemplates  []string           `json:"source_templates"`
@@ -77,7 +67,7 @@ type templateMetaJSON struct {
 // POST /api/v1/ai/query
 //
 // Accepts a natural language query and returns the generated YAML template.
-// In Phase 1, session_id is accepted but not acted upon (sessions are Phase 3).
+// If a valid session_id is provided, it supports refinement queries.
 func handleQuery(s *Server) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req queryRequest
@@ -99,39 +89,108 @@ func handleQuery(s *Server) http.HandlerFunc {
 			return
 		}
 
-		ctx := r.Context()
+		// Look up session if provided
+		var session *Session
+		if req.SessionID != "" {
+			if s.sessionMgr == nil {
+				respondError(w, http.StatusInternalServerError, ErrCodeEngineUnavailable, "Session manager is not initialized", nil)
+				return
+			}
+			var err error
+			session, err = s.sessionMgr.Get(req.SessionID)
+			if err != nil {
+				if sessErr, ok := err.(*SessionError); ok {
+					if sessErr.Code == ErrCodeSessionExpired {
+						_ = s.sessionMgr.Delete(req.SessionID)
+						respondError(w, http.StatusGone, ErrCodeSessionExpired, sessErr.Error(), nil)
+					} else {
+						respondError(w, http.StatusNotFound, ErrCodeSessionNotFound, sessErr.Error(), nil)
+					}
+				} else {
+					respondError(w, http.StatusInternalServerError, ErrCodeEngineUnavailable, err.Error(), nil)
+				}
+				return
+			}
+			s.sessionMgr.Touch(req.SessionID)
+		}
 
-		// Call the existing Go library directly — no CLI, no subprocess.
-		result, err := s.engine.GenerateWithContext(ctx, query)
+		ctx := r.Context()
+		var generatedYaml string
+		var err error
+
+		start := time.Now()
+		isRefinement := session != nil && session.CurrentTemplate != nil
+
+		if isRefinement {
+			// Skip RAG, use direct LLM chat
+			messages := []provider.ChatMessage{
+				{Role: "system", Content: "You are an expert at modifying Image Composer Tool (ICT) YAML templates for building custom Linux images. These templates define image metadata, target OS/architecture, disk layout, partitions, and system configuration including packages and kernel settings. When asked to modify a template, you MUST return the COMPLETE template with the requested changes applied. NEVER use ellipsis (...), NEVER omit unchanged sections, NEVER return only the diff. Output the full raw YAML without markdown formatting or surrounding text."},
+				{Role: "user", Content: fmt.Sprintf("Here is the current YAML template:\n\n%s\n\nApply the following change: %s\n\nReturn the ENTIRE template from start to finish with the change applied. Do not abbreviate or skip any sections.", session.CurrentTemplate.YAML, query)},
+			}
+			generatedYaml, err = s.engine.ChatProvider().Chat(ctx, messages)
+		} else {
+			// Fresh query, use normal RAG
+			generatedYaml, err = s.engine.Generate(ctx, query)
+		}
+
 		if err != nil {
 			// Determine if this is a provider connectivity issue or a
-			// generation failure using typed-error matching.
-			if isProviderUnavailable(err) {
+			// generation failure.
+			errMsg := err.Error()
+			if strings.Contains(errMsg, "connect") || strings.Contains(errMsg, "connection") {
 				respondError(w, http.StatusServiceUnavailable, ErrCodeProviderUnavail,
-					"AI provider not reachable: "+err.Error(), nil)
+					"AI provider not reachable: "+errMsg, nil)
 				return
 			}
 			respondError(w, http.StatusBadGateway, ErrCodeGenerationFailed,
-				"Template generation failed: "+err.Error(), nil)
+				"Template generation failed: "+errMsg, nil)
 			return
 		}
 
-		// Convert the RAG search context into the OpenAPI JSON shape so the
-		// non-streaming response carries the same source information the
-		// streaming path exposes.
-		jsonResults := make([]searchResultJSON, 0, len(result.SearchResults))
-		for _, sr := range result.SearchResults {
-			jsonResults = append(jsonResults, convertSearchResult(sr))
+		genTime := time.Since(start).Milliseconds()
+
+		// Clean up markdown formatting if the model returned it
+		generatedYaml = strings.TrimSpace(generatedYaml)
+		if strings.HasPrefix(generatedYaml, "```yaml") {
+			generatedYaml = strings.TrimPrefix(generatedYaml, "```yaml")
+		} else if strings.HasPrefix(generatedYaml, "```") {
+			generatedYaml = strings.TrimPrefix(generatedYaml, "```")
 		}
-		sourceTemplates := result.SourceTemplates
-		if sourceTemplates == nil {
-			sourceTemplates = []string{}
+		generatedYaml = strings.TrimSuffix(generatedYaml, "```")
+		generatedYaml = strings.TrimSpace(generatedYaml)
+
+		if session != nil {
+			userMsg := Message{
+				Role:      "user",
+				Content:   query,
+				Timestamp: time.Now(),
+			}
+			s.sessionMgr.AddMessage(req.SessionID, userMsg)
+
+			newTmpl := &GeneratedTemplate{
+				YAML:             generatedYaml,
+				SourceTemplates:  []string{},
+				ValidationStatus: "unchecked",
+				LastModified:     time.Now(),
+			}
+			s.sessionMgr.UpdateTemplate(req.SessionID, newTmpl)
+
+			asstMsg := Message{
+				Role:             "assistant",
+				Content:          "", // No chat text, just template
+				TemplateSnapshot: generatedYaml,
+				Changes:          []Change{},
+				Timestamp:        time.Now(),
+			}
+			s.sessionMgr.AddMessage(req.SessionID, asstMsg)
 		}
 
 		resp := queryResponse{
-			YAML:            result.YAML,
-			SearchResults:   jsonResults,
-			SourceTemplates: sourceTemplates,
+			SessionID:        req.SessionID,
+			YAML:             generatedYaml,
+			SearchResults:    []searchResultJSON{}, // Populated in future
+			SourceTemplates:  []string{},           // Populated in future
+			GenerationTimeMs: genTime,
 		}
 
 		respondJSON(w, http.StatusOK, resp)
@@ -164,13 +223,14 @@ func handleSearch(s *Server) http.HandlerFunc {
 		// Call the existing Go library directly — no CLI, no subprocess.
 		results, err := s.engine.Search(ctx, query)
 		if err != nil {
-			if isProviderUnavailable(err) {
+			errMsg := err.Error()
+			if strings.Contains(errMsg, "connect") || strings.Contains(errMsg, "connection") {
 				respondError(w, http.StatusServiceUnavailable, ErrCodeProviderUnavail,
-					"AI provider not reachable: "+err.Error(), nil)
+					"AI provider not reachable: "+errMsg, nil)
 				return
 			}
 			respondError(w, http.StatusBadGateway, ErrCodeSearchFailed,
-				"Template search failed: "+err.Error(), nil)
+				"Template search failed: "+errMsg, nil)
 			return
 		}
 
@@ -265,7 +325,7 @@ type sseComplete struct {
 	SessionID  string      `json:"session_id"`
 	YAML       string      `json:"yaml"`
 	Validation interface{} `json:"validation,omitempty"`
-	Changes    []struct{}  `json:"changes"`
+	Changes    []Change    `json:"changes"`
 }
 
 // sseError matches SSEError (event: error).
@@ -297,12 +357,11 @@ func writeSSEEvent(w http.ResponseWriter, flusher http.Flusher, eventType string
 //
 //	search_results → generation_start → token (×N) → generation_complete → complete
 //
-// On error, emits a single "error" event and closes the stream.
-// session_id is accepted but ignored in Phase 2 (sessions are Phase 3).
+// For refinement queries, search_results and generation_start are omitted.
 func handleStream(s *Server) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		query := strings.TrimSpace(r.URL.Query().Get("query"))
-		sessionID := r.URL.Query().Get("session_id") // Accepted, ignored in Phase 2
+		sessionID := r.URL.Query().Get("session_id")
 
 		// Validate query is present and within length limits.
 		if query == "" {
@@ -315,6 +374,31 @@ func handleStream(s *Server) http.HandlerFunc {
 				"Query exceeds 2000 characters",
 				map[string]any{"max_length": maxQueryLength})
 			return
+		}
+
+		// Look up session if provided
+		var session *Session
+		if sessionID != "" {
+			if s.sessionMgr == nil {
+				respondError(w, http.StatusInternalServerError, ErrCodeEngineUnavailable, "Session manager is not initialized", nil)
+				return
+			}
+			var err error
+			session, err = s.sessionMgr.Get(sessionID)
+			if err != nil {
+				if sessErr, ok := err.(*SessionError); ok {
+					if sessErr.Code == ErrCodeSessionExpired {
+						_ = s.sessionMgr.Delete(sessionID)
+						respondError(w, http.StatusGone, ErrCodeSessionExpired, sessErr.Error(), nil)
+					} else {
+						respondError(w, http.StatusNotFound, ErrCodeSessionNotFound, sessErr.Error(), nil)
+					}
+				} else {
+					respondError(w, http.StatusInternalServerError, ErrCodeEngineUnavailable, err.Error(), nil)
+				}
+				return
+			}
+			s.sessionMgr.Touch(sessionID)
 		}
 
 		// Verify the response writer supports flushing (required for SSE).
@@ -332,59 +416,105 @@ func handleStream(s *Server) http.HandlerFunc {
 
 		ctx := r.Context()
 		startTime := time.Now()
-
-		// Start streaming generation (search is synchronous).
-		result, err := s.engine.GenerateStream(ctx, query)
-		if err != nil {
-			code := ErrCodeGenerationFailed
-			if isProviderUnavailable(err) {
-				code = ErrCodeProviderUnavail
-			}
-			_ = writeSSEEvent(w, flusher, "error", sseError{
-				Code:    code,
-				Message: err.Error(),
-				Retry:   true,
-			})
-			return
-		}
-
-		// Event 1: search_results — RAG search results with scores.
-		jsonResults := make([]searchResultJSON, 0, len(result.SearchResults))
-		for _, sr := range result.SearchResults {
-			jsonResults = append(jsonResults, convertSearchResult(sr))
-		}
-		if err := writeSSEEvent(w, flusher, "search_results", sseSearchResults{
-			Results: jsonResults,
-			// TODO(phase-query-classifier): report the real query type once
-			// the query classifier lands. Hardcoded to "semantic" until then.
-			QueryType: "semantic",
-		}); err != nil {
-			return // Client disconnected
-		}
-
-		// Event 2: generation_start — which templates are used as context.
-		if err := writeSSEEvent(w, flusher, "generation_start", sseGenerationStart{
-			SourceTemplates: result.SourceTemplates,
-		}); err != nil {
-			return
-		}
-
-		// Events 3…N: token — individual LLM output tokens.
+		isRefinement := session != nil && session.CurrentTemplate != nil
 		var fullYAML strings.Builder
-		for token := range result.TokenChan {
-			fullYAML.WriteString(token)
-			if err := writeSSEEvent(w, flusher, "token", sseToken{
-				Content: token,
-			}); err != nil {
-				return // Client disconnected, context cancellation will clean up
-			}
-		}
-
-		// After tokenChan closes, check for streaming errors (non-blocking).
 		var streamErr error
-		select {
-		case streamErr = <-result.ErrChan:
-		default:
+
+		if isRefinement {
+			// Refinement flow: bypass RAG, stream directly from LLM
+			sp, ok := s.engine.ChatProvider().(provider.StreamingChatProvider)
+			if !ok {
+				_ = writeSSEEvent(w, flusher, "error", sseError{
+					Code:    ErrCodeProviderUnavail,
+					Message: "Streaming not supported by current AI provider",
+					Retry:   false,
+				})
+				return
+			}
+
+			messages := []provider.ChatMessage{
+				{Role: "system", Content: "You are an expert at modifying Image Composer Tool (ICT) YAML templates for building custom Linux images. These templates define image metadata, target OS/architecture, disk layout, partitions, and system configuration including packages and kernel settings. When asked to modify a template, you MUST return the COMPLETE template with the requested changes applied. NEVER use ellipsis (...), NEVER omit unchanged sections, NEVER return only the diff. Output the full raw YAML without markdown formatting or surrounding text."},
+				{Role: "user", Content: fmt.Sprintf("Here is the current YAML template:\n\n%s\n\nApply the following change: %s\n\nReturn the ENTIRE template from start to finish with the change applied. Do not abbreviate or skip any sections.", session.CurrentTemplate.YAML, query)},
+			}
+
+			tokens, errc, err := sp.ChatStream(ctx, messages)
+			if err != nil {
+				errMsg := err.Error()
+				code := ErrCodeGenerationFailed
+				if strings.Contains(errMsg, "connect") || strings.Contains(errMsg, "connection") {
+					code = ErrCodeProviderUnavail
+				}
+				_ = writeSSEEvent(w, flusher, "error", sseError{
+					Code:    code,
+					Message: errMsg,
+					Retry:   true,
+				})
+				return
+			}
+
+			// Tokens
+			for token := range tokens {
+				fullYAML.WriteString(token)
+				if err := writeSSEEvent(w, flusher, "token", sseToken{Content: token}); err != nil {
+					return // Client disconnected
+				}
+			}
+
+			// Check for errors
+			select {
+			case streamErr = <-errc:
+			default:
+			}
+
+		} else {
+			// Fresh query flow: use normal RAG search + generation stream
+			result, err := s.engine.GenerateStream(ctx, query)
+			if err != nil {
+				errMsg := err.Error()
+				code := ErrCodeGenerationFailed
+				if strings.Contains(errMsg, "connect") || strings.Contains(errMsg, "connection") {
+					code = ErrCodeProviderUnavail
+				}
+				_ = writeSSEEvent(w, flusher, "error", sseError{
+					Code:    code,
+					Message: errMsg,
+					Retry:   true,
+				})
+				return
+			}
+
+			// search_results
+			jsonResults := make([]searchResultJSON, 0, len(result.SearchResults))
+			for _, sr := range result.SearchResults {
+				jsonResults = append(jsonResults, convertSearchResult(sr))
+			}
+			if err := writeSSEEvent(w, flusher, "search_results", sseSearchResults{
+				Results:   jsonResults,
+				QueryType: "semantic",
+			}); err != nil {
+				return
+			}
+
+			// generation_start
+			if err := writeSSEEvent(w, flusher, "generation_start", sseGenerationStart{
+				SourceTemplates: result.SourceTemplates,
+			}); err != nil {
+				return
+			}
+
+			// tokens
+			for token := range result.TokenChan {
+				fullYAML.WriteString(token)
+				if err := writeSSEEvent(w, flusher, "token", sseToken{Content: token}); err != nil {
+					return
+				}
+			}
+
+			// err check
+			select {
+			case streamErr = <-result.ErrChan:
+			default:
+			}
 		}
 
 		if streamErr != nil {
@@ -399,7 +529,7 @@ func handleStream(s *Server) http.HandlerFunc {
 		generationTimeMs := time.Since(startTime).Milliseconds()
 		cleanedYAML := rag.CleanYAMLResponse(fullYAML.String())
 
-		// Event N+1: generation_complete — full YAML and timing.
+		// generation_complete
 		if err := writeSSEEvent(w, flusher, "generation_complete", sseGenerationComplete{
 			YAML:             cleanedYAML,
 			GenerationTimeMs: generationTimeMs,
@@ -407,14 +537,38 @@ func handleStream(s *Server) http.HandlerFunc {
 			return
 		}
 
-		// Event N+2: complete — final result with session info.
-		// session_id is empty in Phase 2; will be populated when sessions
-		// are implemented in Phase 3.
+		if session != nil {
+			userMsg := Message{
+				Role:      "user",
+				Content:   query,
+				Timestamp: time.Now(),
+			}
+			s.sessionMgr.AddMessage(sessionID, userMsg)
+
+			newTmpl := &GeneratedTemplate{
+				YAML:             cleanedYAML,
+				SourceTemplates:  []string{},
+				ValidationStatus: "unchecked",
+				LastModified:     time.Now(),
+			}
+			s.sessionMgr.UpdateTemplate(sessionID, newTmpl)
+
+			asstMsg := Message{
+				Role:             "assistant",
+				Content:          "", // No chat text, just template
+				TemplateSnapshot: cleanedYAML,
+				Changes:          []Change{},
+				Timestamp:        time.Now(),
+			}
+			s.sessionMgr.AddMessage(sessionID, asstMsg)
+		}
+
+		// complete
 		_ = writeSSEEvent(w, flusher, "complete", sseComplete{
 			SessionID:  sessionID,
 			YAML:       cleanedYAML,
 			Validation: nil,
-			Changes:    []struct{}{},
+			Changes:    []Change{},
 		})
 	}
 }

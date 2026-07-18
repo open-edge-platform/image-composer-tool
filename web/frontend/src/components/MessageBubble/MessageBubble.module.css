@@ -13,9 +13,24 @@
 }
 
 .bubble {
-  max-width: 100%;
+  max-width: 85%;
   padding: var(--space-md);
   border-radius: var(--radius-lg);
+  position: relative;
+  box-shadow: var(--shadow-sm);
+}
+
+.refinementBadge {
+  display: inline-block;
+  background-color: var(--color-success-bg, #e6f4ea);
+  color: var(--color-success-text, #137333);
+  padding: 4px 8px;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  margin-bottom: var(--space-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .user .bubble {
@@ -32,4 +47,11 @@
 .text {
   margin: 0;
   line-height: 1.5;
+}
+
+.searchResultWrapper {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 12px 0;
 }

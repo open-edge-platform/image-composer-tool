@@ -1,5 +1,5 @@
 # API Package Reference
-NOTE: This is a temporary file to just get rough idea and reference about what the temporary structure of the project backend looks like. This is not a final source of truth reference document and may contain minor errors for now. Will be updated in future as project progresses-NB
+NOTE: This is a temporary file to just get rough idea and reference about what the temporary structure of the project backend looks like. This is not a final source of truth reference document and may contain minor errors-NB
 
 This document serves as a reference for the `internal/api` package, which provides the HTTP web server layer for the Image Composer Tool. It explains the purpose of each file, how they coordinate to handle requests, and the current development status.
 
@@ -14,6 +14,8 @@ The `internal/api` directory is designed to be a thin HTTP wrapper around the ex
 *   **`handlers_health.go`**: Contains the logic for the `/api/v1/health` and `/api/v1/engine/stats` endpoints. These interact with the AI engine to report on system readiness and internal metrics (like cache size and provider status).
 *   **`handlers_ai.go`**: Contains the core AI generation endpoints (`/api/v1/ai/query` and `/api/v1/ai/search`). These handlers parse the user's natural language request, call the underlying `rag.Engine.Generate()` or `rag.Engine.Search()` methods, and format the results.
 *   **`handlers_templates.go`**: Contains the logic for interacting with local OS templates (`/api/v1/templates` and `/api/v1/templates/{name}`). It calls `template.ScanTemplates()` and `template.ParseTemplate()` to read `.yml` files from the filesystem.
+*   **`session.go`**: Contains the core `SessionManager` struct, memory store, and conversation structs needed to track multi-turn chat context.
+*   **`handlers_sessions.go`**: Contains the REST endpoints for managing these conversation sessions (`POST`, `GET`, `DELETE`).
 *   **`server_test.go`**: The automated testing suite that validates the routing, CORS middleware, and JSON serialization of the API endpoints without needing to run the CLI.
 
 *(Note: There is one related file outside this folder: `cmd/image-composer-tool/serve_cmd.go`. This is the CLI entry point that initializes the AI engine, creates the `Server`, and calls `Server.Start()`).*
@@ -35,11 +37,13 @@ When a user or web browser sends a request, the files coordinate in the followin
 
 ---
 
-## What is Done (Phase 1 and Phase 2)
+## What is Done (Phases 1-3)
 
+NOTE: Some edge cases still do not work or need refinement-NB
 
-The core scaffolding and foundational architecture have been completed. The following OpenAPI specifications are fully implemented and functional:
+The core scaffolding, AI functionality, streaming, and session management have been completed. The following features are fully implemented and functional, organized by phase:
 
+### Phase 1: API Scaffolding & Core Endpoints
 *   `GET /api/v1/health` (System health check)
 *   `GET /api/v1/engine/stats` (AI engine status)
 *   `GET /api/v1/templates` (List all OS templates)
@@ -47,11 +51,15 @@ The core scaffolding and foundational architecture have been completed. The foll
 *   `GET /api/v1/ai/search` (Semantic search over templates)
 *   `POST /api/v1/ai/query` (Standard, non-streaming template generation)
 
+### Phase 2: Streaming Generation
+*   `GET /api/v1/ai/stream` (Real-time Server-Sent Events token streaming for AI generation)
+
+### Phase 3: Conversational Sessions
+*   `POST /api/v1/sessions` (Create a new chat conversation session)
+*   `GET /api/v1/sessions/{id}` (Retrieve an active session and its history)
+*   `DELETE /api/v1/sessions/{id}` (Delete/clear an active session)
 
 **Fixes Applied:** The server `WriteTimeout` was increased from 60 seconds to 5 minutes to accommodate large local LLMs (like `llama3.1:8b`) that require longer generation times.
-
-**Phase 2: Streaming Generation**
-    *   Implemented `GET /api/v1/ai/stream` to use Server-Sent Events (SSE). This allows real-time streaming of generation tokens to the frontend UI.
 
 ---
 
@@ -59,11 +67,6 @@ The core scaffolding and foundational architecture have been completed. The foll
 
 The API is built in phases according to the Architecture Decision Record (ADR). The following features are scheduled for future implementation:
 
-
-*   **Phase 3: Conversational Sessions**
-    *   Implement Session Manager.
-    *   Add endpoints: `POST /api/v1/sessions`, `GET /api/v1/sessions/{id}`, `DELETE /api/v1/sessions/{id}`.
-    *   Upgrade the existing `/ai/query` and `/ai/stream` endpoints to accept and utilize a `session_id` for chat history context.
 *   **Phase 4: Template CRUD Operations**
     *   Add endpoints to create, modify, validate, and delete template files over the API (`POST /api/v1/templates`, `PUT /api/v1/templates/{name}`, etc.).
 *   **Phase 5: Remote Builds**

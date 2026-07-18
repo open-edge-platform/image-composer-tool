@@ -33,3 +33,19 @@
   margin-bottom: var(--space-sm);
 }
 
+.searchResultWrapper {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 12px 0;
+}
+
+.searchingAnimationWrapper {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+  color: var(--color-text-secondary);
+  font-size: 1.1rem;
+}
+

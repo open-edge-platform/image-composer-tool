@@ -18,6 +18,7 @@ type engineStatsResponse struct {
 	TemplateCount  int             `json:"template_count"`
 	Provider       string          `json:"provider"`
 	EmbeddingModel string          `json:"embedding_model"`
+	ChatModel      string          `json:"chat_model"`
 	CacheEnabled   bool            `json:"cache_enabled"`
 	CacheStats     *cacheStatsJSON `json:"cache_stats"`
 }
@@ -66,6 +67,7 @@ func handleStats(s *Server) http.HandlerFunc {
 			TemplateCount:  stats.TemplateCount,
 			Provider:       stats.Provider,
 			EmbeddingModel: stats.EmbeddingModel,
+			ChatModel:      stats.ChatModel,
 			CacheEnabled:   stats.CacheEnabled,
 		}
 

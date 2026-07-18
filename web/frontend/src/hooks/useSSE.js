@@ -1,4 +1,4 @@
-import { useRef, useCallback } from 'react';
+import { useRef, useCallback, useEffect } from 'react';
 import { createQueryStream } from '../api/ai';
 
 export function useSSE() {
@@ -27,6 +27,15 @@ export function useSSE() {
       streamRef.current.close();
       streamRef.current = null;
     }
+  }, []);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.close();
+      }
+    };
   }, []);
 
   return { startStream, stopStream };

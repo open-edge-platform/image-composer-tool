@@ -9,10 +9,14 @@ export function MessageBubble({ message }) {
   return (
     <div className={`${styles.bubbleContainer} ${isUser ? styles.user : styles.assistant}`}>
       <div className={styles.bubble}>
+        {message.isRefinement && (
+          <span className={styles.refinementBadge}>Refinement</span>
+        )}
+
         {message.content && <p className={styles.text}>{message.content}</p>}
         
         {!isUser && message.searchResults && message.searchResults.length > 0 && (
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', margin: '12px 0' }}>
+          <div className={styles.searchResultWrapper}>
             {message.searchResults.map((res, i) => (
               <SearchResultCard key={i} result={res} />
             ))}

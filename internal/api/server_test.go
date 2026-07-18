@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/ai"
 	"github.com/open-edge-platform/image-composer-tool/internal/ai/rag"
@@ -279,5 +280,342 @@ func TestQueryAndSearchValidation(t *testing.T) {
 
 	if rrQueryEmpty.Code != http.StatusBadRequest {
 		t.Errorf("expected status BadRequest (400) for empty body query, got %v", rrQueryEmpty.Code)
+	}
+}
+
+// ── Session CRUD Tests (Phase 3) ────────────────────────────────────────
+
+func TestCreateSession(t *testing.T) {
+	server, tmpDir := setupTestServer(t)
+	defer os.RemoveAll(tmpDir)
+
+	handler := NewRouter(server)
+
+	req := httptest.NewRequest("POST", "/api/v1/sessions", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected status 201 Created, got %v, body: %s", rr.Code, rr.Body.String())
+	}
+
+	var session Session
+	if err := json.Unmarshal(rr.Body.Bytes(), &session); err != nil {
+		t.Fatalf("failed to decode session response: %v", err)
+	}
+
+	// Verify session ID format: "s_" + 8 hex chars
+	if len(session.ID) != 10 || session.ID[:2] != "s_" {
+		t.Errorf("expected session ID format 's_XXXXXXXX', got '%s'", session.ID)
+	}
+
+	if session.CreatedAt.IsZero() {
+		t.Error("expected CreatedAt to be set")
+	}
+
+	if session.LastActiveAt.IsZero() {
+		t.Error("expected LastActiveAt to be set")
+	}
+
+	if session.History == nil {
+		t.Error("expected History to be non-nil (empty slice)")
+	}
+}
+
+func TestGetSession(t *testing.T) {
+	server, tmpDir := setupTestServer(t)
+	defer os.RemoveAll(tmpDir)
+
+	handler := NewRouter(server)
+
+	// Create a session first
+	reqCreate := httptest.NewRequest("POST", "/api/v1/sessions", nil)
+	rrCreate := httptest.NewRecorder()
+	handler.ServeHTTP(rrCreate, reqCreate)
+
+	var created Session
+	if err := json.Unmarshal(rrCreate.Body.Bytes(), &created); err != nil {
+		t.Fatalf("failed to decode create response: %v", err)
+	}
+
+	// Get the session
+	reqGet := httptest.NewRequest("GET", "/api/v1/sessions/"+created.ID, nil)
+	rrGet := httptest.NewRecorder()
+	handler.ServeHTTP(rrGet, reqGet)
+
+	if rrGet.Code != http.StatusOK {
+		t.Fatalf("expected status 200 OK, got %v, body: %s", rrGet.Code, rrGet.Body.String())
+	}
+
+	var fetched Session
+	if err := json.Unmarshal(rrGet.Body.Bytes(), &fetched); err != nil {
+		t.Fatalf("failed to decode get response: %v", err)
+	}
+
+	if fetched.ID != created.ID {
+		t.Errorf("expected session ID '%s', got '%s'", created.ID, fetched.ID)
+	}
+}
+
+func TestGetSessionNotFound(t *testing.T) {
+	server, tmpDir := setupTestServer(t)
+	defer os.RemoveAll(tmpDir)
+
+	handler := NewRouter(server)
+
+	req := httptest.NewRequest("GET", "/api/v1/sessions/s_nonexist", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected status 404 Not Found, got %v", rr.Code)
+	}
+
+	var errResp ErrorResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("failed to decode error response: %v", err)
+	}
+
+	if errResp.Error.Code != ErrCodeSessionNotFound {
+		t.Errorf("expected error code '%s', got '%s'", ErrCodeSessionNotFound, errResp.Error.Code)
+	}
+}
+
+func TestDeleteSession(t *testing.T) {
+	server, tmpDir := setupTestServer(t)
+	defer os.RemoveAll(tmpDir)
+
+	handler := NewRouter(server)
+
+	// Create a session
+	reqCreate := httptest.NewRequest("POST", "/api/v1/sessions", nil)
+	rrCreate := httptest.NewRecorder()
+	handler.ServeHTTP(rrCreate, reqCreate)
+
+	var created Session
+	if err := json.Unmarshal(rrCreate.Body.Bytes(), &created); err != nil {
+		t.Fatalf("failed to decode create response: %v", err)
+	}
+
+	// Delete it
+	reqDelete := httptest.NewRequest("DELETE", "/api/v1/sessions/"+created.ID, nil)
+	rrDelete := httptest.NewRecorder()
+	handler.ServeHTTP(rrDelete, reqDelete)
+
+	if rrDelete.Code != http.StatusNoContent {
+		t.Fatalf("expected status 204 No Content, got %v, body: %s", rrDelete.Code, rrDelete.Body.String())
+	}
+
+	// Verify it's gone
+	reqGet := httptest.NewRequest("GET", "/api/v1/sessions/"+created.ID, nil)
+	rrGet := httptest.NewRecorder()
+	handler.ServeHTTP(rrGet, reqGet)
+
+	if rrGet.Code != http.StatusNotFound {
+		t.Errorf("expected status 404 after deletion, got %v", rrGet.Code)
+	}
+}
+
+func TestDeleteSessionNotFound(t *testing.T) {
+	server, tmpDir := setupTestServer(t)
+	defer os.RemoveAll(tmpDir)
+
+	handler := NewRouter(server)
+
+	req := httptest.NewRequest("DELETE", "/api/v1/sessions/s_nonexist", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected status 404 Not Found, got %v", rr.Code)
+	}
+}
+
+func TestSessionExpiry(t *testing.T) {
+	// ... (existing body of TestSessionExpiry) ...
+	tmpDir, err := os.MkdirTemp("", "api-test-session-expiry-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	config := ai.DefaultConfig()
+	config.Provider = ai.ProviderOllama
+	config.Cache.Enabled = false
+	config.TemplatesDir = tmpDir
+
+	engine, err := rag.NewEngine(config)
+	if err != nil {
+		t.Fatalf("failed to create rag engine: %v", err)
+	}
+
+	serverConfig := DefaultServerConfig()
+	serverConfig.TemplatesDir = tmpDir
+	// Short timeout so the session expires quickly.
+	serverConfig.Session.Timeout = 50 * time.Millisecond
+	// Very long cleanup interval — we don't want it to run during this test.
+	serverConfig.Session.CleanupInterval = 1 * time.Hour
+
+	server := NewServer(engine, serverConfig)
+	defer server.sessionMgr.Stop()
+
+	handler := NewRouter(server)
+
+	// Create a session
+	reqCreate := httptest.NewRequest("POST", "/api/v1/sessions", nil)
+	rrCreate := httptest.NewRecorder()
+	handler.ServeHTTP(rrCreate, reqCreate)
+
+	if rrCreate.Code != http.StatusCreated {
+		t.Fatalf("expected status 201, got %v", rrCreate.Code)
+	}
+
+	var created Session
+	if err := json.Unmarshal(rrCreate.Body.Bytes(), &created); err != nil {
+		t.Fatalf("failed to decode create response: %v", err)
+	}
+
+	// Wait for the session to expire (but cleanup goroutine won't run)
+	time.Sleep(100 * time.Millisecond)
+
+	// Try to get the expired session — should return 410 Gone
+	reqGet := httptest.NewRequest("GET", "/api/v1/sessions/"+created.ID, nil)
+	rrGet := httptest.NewRecorder()
+	handler.ServeHTTP(rrGet, reqGet)
+
+	if rrGet.Code != http.StatusGone {
+		t.Fatalf("expected status 410 Gone for expired session, got %v, body: %s",
+			rrGet.Code, rrGet.Body.String())
+	}
+
+	var errResp ErrorResponse
+	if err := json.Unmarshal(rrGet.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("failed to decode error response: %v", err)
+	}
+
+	if errResp.Error.Code != ErrCodeSessionExpired {
+		t.Errorf("expected error code '%s', got '%s'", ErrCodeSessionExpired, errResp.Error.Code)
+	}
+}
+
+// ── Refinement Query Tests (Phase 3) ────────────────────────────────────
+
+func TestQueryWithSessionAndRefinement(t *testing.T) {
+	server, tmpDir := setupTestServer(t)
+	defer os.RemoveAll(tmpDir)
+
+	handler := NewRouter(server)
+
+	// 1. Create a session
+	reqCreate := httptest.NewRequest("POST", "/api/v1/sessions", nil)
+	rrCreate := httptest.NewRecorder()
+	handler.ServeHTTP(rrCreate, reqCreate)
+
+	if rrCreate.Code != http.StatusCreated {
+		t.Fatalf("expected status 201, got %v", rrCreate.Code)
+	}
+
+	var session Session
+	if err := json.Unmarshal(rrCreate.Body.Bytes(), &session); err != nil {
+		t.Fatalf("failed to decode create response: %v", err)
+	}
+
+	// 2. Initial query (fresh generation, no template yet)
+	initialQuery := queryRequest{
+		Query:     "create a simple nginx image",
+		SessionID: session.ID,
+	}
+	body, _ := json.Marshal(initialQuery)
+	reqQuery := httptest.NewRequest("POST", "/api/v1/ai/query", bytes.NewReader(body))
+	rrQuery := httptest.NewRecorder()
+	handler.ServeHTTP(rrQuery, reqQuery)
+
+	if rrQuery.Code != http.StatusOK {
+		// If Ollama is not running, this might fail with 503/502. We'll skip if provider unavailable.
+		if rrQuery.Code == http.StatusServiceUnavailable || rrQuery.Code == http.StatusBadGateway {
+			t.Skipf("Provider unavailable, skipping query test. Err: %s", rrQuery.Body.String())
+		}
+		t.Fatalf("expected status 200 OK, got %v, body: %s", rrQuery.Code, rrQuery.Body.String())
+	}
+
+	var resp queryResponse
+	if err := json.Unmarshal(rrQuery.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode query response: %v", err)
+	}
+	if resp.SessionID != session.ID {
+		t.Errorf("expected SessionID %s, got %s", session.ID, resp.SessionID)
+	}
+
+	// 3. Verify session was updated
+	reqGet := httptest.NewRequest("GET", "/api/v1/sessions/"+session.ID, nil)
+	rrGet := httptest.NewRecorder()
+	handler.ServeHTTP(rrGet, reqGet)
+
+	var updatedSession Session
+	if err := json.Unmarshal(rrGet.Body.Bytes(), &updatedSession); err != nil {
+		t.Fatalf("failed to decode get response: %v", err)
+	}
+
+	if updatedSession.CurrentTemplate == nil {
+		t.Fatal("expected CurrentTemplate to be set after initial query")
+	}
+	if updatedSession.CurrentTemplate.YAML == "" {
+		t.Error("expected CurrentTemplate.YAML to be non-empty")
+	}
+	if len(updatedSession.History) != 2 {
+		t.Errorf("expected 2 messages in history, got %d", len(updatedSession.History))
+	}
+
+	// 4. Refinement query (this should hit the refinement path bypassing RAG)
+	refineQuery := queryRequest{
+		Query:     "now add the curl package",
+		SessionID: session.ID,
+	}
+	bodyRefine, _ := json.Marshal(refineQuery)
+	reqRefine := httptest.NewRequest("POST", "/api/v1/ai/query", bytes.NewReader(bodyRefine))
+	rrRefine := httptest.NewRecorder()
+	handler.ServeHTTP(rrRefine, reqRefine)
+
+	if rrRefine.Code != http.StatusOK {
+		t.Fatalf("expected status 200 OK for refinement, got %v, body: %s", rrRefine.Code, rrRefine.Body.String())
+	}
+
+	var respRefine queryResponse
+	if err := json.Unmarshal(rrRefine.Body.Bytes(), &respRefine); err != nil {
+		t.Fatalf("failed to decode refine response: %v", err)
+	}
+	if respRefine.SessionID != session.ID {
+		t.Errorf("expected SessionID %s, got %s", session.ID, respRefine.SessionID)
+	}
+
+	// Verify history grew
+	reqGet2 := httptest.NewRequest("GET", "/api/v1/sessions/"+session.ID, nil)
+	rrGet2 := httptest.NewRecorder()
+	handler.ServeHTTP(rrGet2, reqGet2)
+
+	var finalSession Session
+	_ = json.Unmarshal(rrGet2.Body.Bytes(), &finalSession)
+	if len(finalSession.History) != 4 {
+		t.Errorf("expected 4 messages in history, got %d", len(finalSession.History))
+	}
+}
+
+func TestQueryWithInvalidSession(t *testing.T) {
+	server, tmpDir := setupTestServer(t)
+	defer os.RemoveAll(tmpDir)
+
+	handler := NewRouter(server)
+
+	reqQuery := queryRequest{
+		Query:     "hello",
+		SessionID: "s_nonexist",
+	}
+	body, _ := json.Marshal(reqQuery)
+	req := httptest.NewRequest("POST", "/api/v1/ai/query", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected status 404 Not Found for invalid session, got %v", rr.Code)
 	}
 }

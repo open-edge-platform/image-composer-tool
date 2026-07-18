@@ -153,6 +153,11 @@ func (p *OllamaProvider) ModelID() string {
 	return p.embeddingModel
 }
 
+// ChatModelID returns the chat model identifier.
+func (p *OllamaProvider) ChatModelID() string {
+	return p.chatModel
+}
+
 // Dimensions returns the embedding dimensions.
 func (p *OllamaProvider) Dimensions() int {
 	return p.dimensions
@@ -441,6 +446,11 @@ func (p *OpenAIProvider) Embed(ctx context.Context, text string) ([]float32, err
 // ModelID returns the embedding model identifier.
 func (p *OpenAIProvider) ModelID() string {
 	return p.embeddingModel
+}
+
+// ChatModelID returns the chat model identifier.
+func (p *OpenAIProvider) ChatModelID() string {
+	return p.chatModel
 }
 
 // Dimensions returns the embedding dimensions.

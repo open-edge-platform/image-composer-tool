@@ -22,6 +22,7 @@ func createServeCommand() *cobra.Command {
 	var port int
 	var host string
 	var templatesDir string
+	var providerFlag string
 
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -35,23 +36,30 @@ exception is image builds which spawn a subprocess (not in this phase).
 Example:
   image-composer-tool serve
   image-composer-tool serve --port 9090
+  image-composer-tool serve --provider openai
   image-composer-tool serve --templates-dir /path/to/templates`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runServe(host, port, templatesDir)
+			return runServe(host, port, templatesDir, providerFlag)
 		},
 	}
 
 	cmd.Flags().IntVar(&port, "port", 8080, "Port to listen on")
 	cmd.Flags().StringVar(&host, "host", "127.0.0.1", "Host address to bind to (use 0.0.0.0 to expose on all interfaces; note the API is currently unauthenticated)")
 	cmd.Flags().StringVar(&templatesDir, "templates-dir", "", "Path to image-templates/ directory (default: auto-detect)")
+	cmd.Flags().StringVar(&providerFlag, "provider", "", "AI provider: ollama or openai (default: ollama). OpenAI requires OPENAI_API_KEY env var.")
 
 	return cmd
 }
 
 // runServe initializes the RAG engine and starts the API server.
-func runServe(host string, port int, templatesDir string) error {
+func runServe(host string, port int, templatesDir, providerFlag string) error {
 	// ── Step 1: Build AI config ─────────────────────────────────────────
 	config := ai.DefaultConfig()
+
+	// Override provider if specified via CLI flag.
+	if providerFlag != "" {
+		config.Provider = ai.ProviderType(providerFlag)
+	}
 
 	// Override templates directory if specified via CLI flag.
 	if templatesDir != "" {

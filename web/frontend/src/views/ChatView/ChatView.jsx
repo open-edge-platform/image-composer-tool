@@ -1,6 +1,7 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useRef, useEffect } from 'react';
 import styles from './ChatView.module.css';
-import { useSSE } from '../../hooks/useSSE';
+import { useChat } from '../../hooks/useChat';
+import { useEngineStats } from '../../hooks/useEngineStats';
 import { ChatInput } from '../../components/ChatInput/ChatInput';
 import { MessageBubble } from '../../components/MessageBubble/MessageBubble';
 import { ErrorBanner } from '../../components/ErrorBanner/ErrorBanner';
@@ -9,20 +10,21 @@ import { SearchResultCard } from '../../components/SearchResultCard/SearchResult
 import searchSvgUrl from '../../assets/search.svg';
 
 export function ChatView() {
-  const [messages, setMessages] = useState([]);
-  const [error, setError] = useState(null);
-  const [isStreaming, setIsStreaming] = useState(false);
-  
-  // Active stream state
-  const [streamBuffer, setStreamBuffer] = useState('');
-  const [activeSearchResults, setActiveSearchResults] = useState([]);
-  const activeSearchResultsRef = useRef([]);
+  const {
+    messages,
+    error,
+    isStreaming,
+    streamBuffer,
+    activeSearchResults,
+    handleSubmit: submitChat,
+    clearError
+  } = useChat();
+  const engineStats = useEngineStats();
 
-  const { startStream } = useSSE();
   const messageAreaRef = useRef(null);
   const messageEndRef = useRef(null);
 
-  const scrollToBottom = (force = false) => {
+  const scrollToBottom = React.useCallback((force = false) => {
     if (!messageAreaRef.current) return;
     
     if (force) {
@@ -37,52 +39,15 @@ export function ChatView() {
     if (!isScrolledUp) {
       messageEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  };
+  }, []);
 
   useEffect(() => {
     scrollToBottom(false);
-  }, [messages, streamBuffer, activeSearchResults]);
+  }, [messages, streamBuffer, activeSearchResults, scrollToBottom]);
 
   const handleSubmit = (query) => {
-    setError(null);
-    setStreamBuffer('');
-    setActiveSearchResults([]);
-    activeSearchResultsRef.current = [];
-    setIsStreaming(true);
-
-    // Add user message to history
-    setMessages((prev) => [...prev, { role: 'user', content: query }]);
+    submitChat(query);
     setTimeout(() => scrollToBottom(true), 50);
-
-    startStream(query, null, {
-      onSearchResults: (data) => {
-        const results = data.results || [];
-        setActiveSearchResults(results);
-        activeSearchResultsRef.current = results;
-      },
-      onToken: (data) => {
-        setStreamBuffer((prev) => prev + data.content);
-      },
-      onError: (err) => {
-        setError(err);
-        setIsStreaming(false);
-      },
-      onComplete: (data) => {
-        const finalResults = activeSearchResultsRef.current;
-        setMessages((prev) => [
-          ...prev, 
-          { 
-            role: 'assistant', 
-            yaml: data.yaml,
-            searchResults: finalResults 
-          }
-        ]);
-        setStreamBuffer('');
-        setActiveSearchResults([]);
-        activeSearchResultsRef.current = [];
-        setIsStreaming(false);
-      }
-    });
   };
 
   return (
@@ -104,14 +69,14 @@ export function ChatView() {
         {isStreaming && (
           <div style={{ marginTop: '16px' }}>
             {activeSearchResults.length === 0 && streamBuffer === '' ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '16px', padding: '16px', color: 'var(--color-text-secondary)', fontSize: '1.1rem' }}>
+              <div className={styles.searchingAnimationWrapper}>
                 <img src={searchSvgUrl} alt="Searching" style={{ width: '40px', height: '40px' }} />
                 <span>Searching similar templates in cache...</span>
               </div>
             ) : null}
 
             {activeSearchResults.length > 0 && (
-              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', margin: '12px 0' }}>
+              <div className={styles.searchResultWrapper}>
                 {activeSearchResults.map((res, i) => (
                   <SearchResultCard key={i} result={res} />
                 ))}
@@ -124,8 +89,8 @@ export function ChatView() {
       </div>
 
       <div className={styles.inputArea}>
-        <ErrorBanner error={error} onRetry={() => setError(null)} />
-        <ChatInput onSubmit={handleSubmit} isStreaming={isStreaming} />
+        <ErrorBanner error={error} onRetry={clearError} />
+        <ChatInput onSubmit={handleSubmit} isStreaming={isStreaming} providerInfo={engineStats} />
       </div>
     </div>
   );

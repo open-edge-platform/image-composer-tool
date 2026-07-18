@@ -16,6 +16,7 @@
   align-items: center;
   font-weight: 600;
   color: var(--color-text-primary);
+  gap: var(--space-md);
 }
 
 .score {

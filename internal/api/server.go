@@ -27,6 +27,9 @@ type Config struct {
 
 	// TemplatesDir is the path to the image-templates/ directory.
 	TemplatesDir string
+
+	// Session holds session management settings (Phase 3).
+	Session SessionConfig
 }
 
 // DefaultConfig returns the default server configuration
@@ -37,6 +40,7 @@ func DefaultServerConfig() Config {
 		Port:         8080,
 		CORS:         DefaultCORSConfig(),
 		TemplatesDir: "image-templates",
+		Session:      DefaultSessionConfig(),
 	}
 }
 
@@ -57,8 +61,10 @@ type Server struct {
 	// httpServer is the underlying Go HTTP server.
 	httpServer *http.Server
 
+	// sessionMgr manages in-memory conversation sessions (Phase 3).
+	sessionMgr *SessionManager
+
 	// ── Future fields (uncomment when those phases are implemented) ──
-	// sessionMgr  *session.Manager    // Phase 3: conversation sessions
 	// buildMgr    *build.Manager      // Phase 5: build tracking
 }
 
@@ -67,8 +73,9 @@ type Server struct {
 // for starting.
 func NewServer(engine *rag.Engine, config Config) *Server {
 	s := &Server{
-		engine: engine,
-		config: config,
+		engine:     engine,
+		config:     config,
+		sessionMgr: NewSessionManager(config.Session),
 	}
 
 	// Build the router with all registered routes.
@@ -107,5 +114,8 @@ func (s *Server) Start() error {
 // to complete within the given context deadline.
 func (s *Server) Shutdown(ctx context.Context) error {
 	log.Println("Shutting down API server...")
+	if s.sessionMgr != nil {
+		s.sessionMgr.Stop()
+	}
 	return s.httpServer.Shutdown(ctx)
 }

@@ -76,6 +76,12 @@ func NewEngine(config ai.Config) (*Engine, error) {
 	}, nil
 }
 
+// ChatProvider returns the chat provider for direct LLM access.
+// Used by the API layer for refinement queries that skip RAG search.
+func (e *Engine) ChatProvider() provider.ChatProvider {
+	return e.chatProvider
+}
+
 // Initialize loads templates and builds the index.
 func (e *Engine) Initialize(ctx context.Context) error {
 	// Scan templates
@@ -355,18 +361,27 @@ type Stats struct {
 	TemplateCount  int
 	Provider       string
 	EmbeddingModel string
+	ChatModel      string
 	CacheEnabled   bool
 	CacheStats     *cache.CacheStats
 }
 
 // GetStats returns engine statistics.
 func (e *Engine) GetStats() Stats {
+	// Get chat model name via type assertion (ChatModelID is on the
+	// concrete struct, not the interface, to avoid breaking changes).
+	chatModel := "unknown"
+	if cmi, ok := e.chatProvider.(interface{ ChatModelID() string }); ok {
+		chatModel = cmi.ChatModelID()
+	}
+
 	stats := Stats{
 		Initialized:    e.initialized,
 		IndexedAt:      e.indexedAt,
 		TemplateCount:  e.templateCount,
 		Provider:       string(e.config.Provider),
 		EmbeddingModel: e.embedProvider.ModelID(),
+		ChatModel:      chatModel,
 		CacheEnabled:   e.cache != nil,
 	}
 
