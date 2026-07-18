@@ -295,14 +295,20 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange, isActive
           >
             <CopyIcon className="h-4 w-4" />
           </button>
-          <a
-            className="rounded-md border border-slate-300 bg-white p-1.5 text-slate-600 shadow-sm hover:bg-slate-100 hover:text-slate-900"
-            href={api.logFileUrl(buildId)}
-            download={`compose-${buildId}.log`}
-            title="Download logs as a file"
-          >
-            <DownloadIcon className="h-4 w-4" />
-          </a>
+          {/* The persisted log file is only written when a build finishes, so
+              only offer the download once the server reports it exists on disk
+              (details.hasLogFile). Otherwise the link would 404 for an active
+              compose or a history build with no saved log. */}
+          {details?.hasLogFile && (
+            <a
+              className="rounded-md border border-slate-300 bg-white p-1.5 text-slate-600 shadow-sm hover:bg-slate-100 hover:text-slate-900"
+              href={api.logFileUrl(buildId)}
+              download={`compose-${buildId}.log`}
+              title="Download logs as a file"
+            >
+              <DownloadIcon className="h-4 w-4" />
+            </a>
+          )}
         </div>
         <div
           ref={logRef}

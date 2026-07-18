@@ -48,7 +48,7 @@ func (s *Server) handleBuildDetails(w http.ResponseWriter, r *http.Request) {
 		WorkDir:     b.WorkDir,
 		CacheDir:    b.CacheDir,
 		Summary:     b.Summary,
-		HasLogFile:  b.LogFile != "" && fileExists(b.LogFile),
+		HasLogFile:  res.logFile != "" && fileExists(res.logFile),
 		ErrMsg:      res.errMsg,
 	})
 }
@@ -68,13 +68,16 @@ func (s *Server) handleBuildLogFile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "build not found")
 		return
 	}
-	if b.LogFile == "" || !fileExists(b.LogFile) {
+	// Snapshot LogFile under the lock (finish() writes it under b.mu); reading
+	// b.LogFile directly here would race a concurrently finishing build.
+	logFile := b.snapshot().logFile
+	if logFile == "" || !fileExists(logFile) {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "no log file for this build")
 		return
 	}
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", "compose-"+id+".log"))
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	http.ServeFile(w, r, b.LogFile)
+	http.ServeFile(w, r, logFile)
 }
 
 // handleBuildTemplate serves the exact template file that was built, as a

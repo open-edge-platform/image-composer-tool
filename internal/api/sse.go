@@ -36,6 +36,14 @@ func (s *Server) handleBuildLogs(w http.ResponseWriter, r *http.Request) {
 	lastInstall := ""
 	emit := func() {
 		lines := b.snapshotLogs()
+		if len(lines) == sent {
+			// No new lines since the last tick. Phase and install progress are
+			// pure functions of the buffered lines, so they cannot have changed
+			// either — skip the full-slice rescan (and the flush) entirely. This
+			// keeps an idle 300ms tick O(1) instead of O(total log size), which
+			// matters for long composes and multiple concurrent SSE clients.
+			return
+		}
 		for ; sent < len(lines); sent++ {
 			sendEvent(w, "log", map[string]string{"message": lines[sent]})
 		}
@@ -55,7 +63,8 @@ func (s *Server) handleBuildLogs(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 	}
 
-	emit() // replay buffered history
+	emit()          // replay buffered history
+	flusher.Flush() // establish the stream even if there were no buffered lines yet
 
 	ticker := time.NewTicker(300 * time.Millisecond)
 	defer ticker.Stop()

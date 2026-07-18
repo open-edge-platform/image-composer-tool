@@ -14,8 +14,9 @@ import (
 
 // buildMeta is the persisted record written to <build-root>/meta.json. It lets
 // the compose history survive server restarts and be reconstructed from disk.
-// Logs are not persisted (they can be large and are only useful live); past
-// builds show their configuration summary and downloadable artifacts.
+// The full compose log is persisted separately to <build-root>/compose.log at
+// completion; meta.json records its path in LogFile so past builds can offer it
+// for download alongside their configuration summary and artifacts.
 type buildMeta struct {
 	ID        string          `json:"id"`
 	Status    string          `json:"status"`
@@ -50,7 +51,7 @@ func (b *build) writeMeta() error {
 		Summary:   b.Summary,
 		Artifacts: res.artifacts,
 		ErrMsg:    res.errMsg,
-		LogFile:   b.LogFile,
+		LogFile:   res.logFile,
 	}
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
@@ -61,8 +62,10 @@ func (b *build) writeMeta() error {
 
 // buildFromMeta reconstructs an in-memory build from a persisted meta record so
 // past builds (e.g. after a server restart) can be served by the existing
-// detail/logs/artifacts handlers. done is pre-closed since the build is over;
-// logs are empty (not persisted).
+// detail/logs/artifacts handlers. done is pre-closed since the build is over.
+// The in-memory logLines buffer is left empty — we don't repopulate it from
+// disk here; the persisted log is still downloadable via the logfile endpoint
+// (m.LogFile points at <build-root>/compose.log).
 func buildFromMeta(rootDir string, m buildMeta) *build {
 	done := make(chan struct{})
 	close(done)

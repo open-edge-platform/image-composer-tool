@@ -69,15 +69,19 @@ type result struct {
 	status    buildStatus
 	artifacts []artifact
 	errMsg    string
+	logFile   string
 }
 
-// snapshot returns the build's current status, artifacts, and error under lock.
+// snapshot returns the build's current status, artifacts, error, and log-file
+// path under lock. logFile is included in the snapshot because it is written
+// under b.mu in finish(); reading it directly off the struct from a handler
+// would race a concurrently finishing build.
 func (b *build) snapshot() result {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	arts := make([]artifact, len(b.artifacts))
 	copy(arts, b.artifacts)
-	return result{status: b.status, artifacts: arts, errMsg: b.errMsg}
+	return result{status: b.status, artifacts: arts, errMsg: b.errMsg, logFile: b.LogFile}
 }
 
 // buildTracker holds all builds for the process lifetime.

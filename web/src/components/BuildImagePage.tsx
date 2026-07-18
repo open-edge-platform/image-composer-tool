@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api/client'
 import type { HistoryItem } from '../api/types'
 import { BuildView } from './BuildView'
@@ -46,8 +46,6 @@ export function BuildImagePage({ buildId, onRetry, retrying, onStatusChange }: B
 
   // Poll while any build is still running so the sidebar reflects live status.
   const anyRunning = history.some((h) => h.status === 'running')
-  const runningRef = useRef(anyRunning)
-  runningRef.current = anyRunning
   useEffect(() => {
     if (!anyRunning) return
     const t = setInterval(refresh, 3000)
