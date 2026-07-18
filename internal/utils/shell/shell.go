@@ -76,11 +76,24 @@ func ctxOrBackground() context.Context {
 
 // applyExecAttrs configures a spawned command so that (a) it runs in its own
 // process group so a single kill(-pgid) reaps every descendant (bash, sudo, and
-// the real tool), (b) ctx cancellation sends SIGTERM to that whole group, and
-// (c) if the group hasn't exited within waitDelay we escalate to SIGKILL via
-// the runtime's automatic behavior. All four spawn sites use this to keep the
-// pgid/kill semantics identical across ExecCmd, ExecCmdSilent, ExecCmdWithStream,
-// and ExecCmdWithInput.
+// the real tool), and (b) ctx cancellation sends SIGTERM to that whole group.
+// All four spawn sites use this to keep the pgid/kill semantics identical
+// across ExecCmd, ExecCmdSilent, ExecCmdWithStream, and ExecCmdWithInput.
+//
+// Privilege note: the kill(-pgid) in Cancel is issued by this Go process. ICT
+// is expected to run as root (the documented `sudo -E image-composer-tool
+// build …`, and `serve --sudo`), so the parent and the root-owned sudo/tool
+// children share the privilege needed for the signal to land. If ICT is ever
+// run as a non-root user relying only on the per-command `sudo` prefix, the
+// signal to the root-owned children would fail with EPERM and they would
+// orphan — that path is unsupported.
+//
+// WaitDelay bounds how long cmd.Wait blocks after Cancel before the runtime
+// force-kills. Note the runtime's WaitDelay SIGKILL targets cmd.Process (the
+// bash group leader) only, not the whole group — the group is expected to exit
+// on the SIGTERM that Cancel already delivered to -pgid (every tool ICT spawns
+// terminates on SIGTERM). WaitDelay is the leader-level backstop for a wedged
+// pipe, not a group-wide SIGKILL escalation.
 const execCmdWaitDelay = 5 * time.Second
 
 func applyExecAttrs(cmd *exec.Cmd) {
