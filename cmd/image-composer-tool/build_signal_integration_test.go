@@ -95,10 +95,14 @@ func TestBuildSIGTERMCleansUpMountsAndLoops(t *testing.T) {
 		t.Fatalf("build finished before we could interrupt it: %v", err)
 	}
 
-	// Signal the build's process group so mmdebstrap/apt/mksquashfs children
-	// receive it too — the tool itself already sets its subprocess groups
-	// via shell.applyExecAttrs, but we send to the top group as a belt-and-
-	// suspenders check.
+	// Signal the build's process group. This targets the CLI process (which
+	// runs as its own group leader via SysProcAttr.Setpgid at build.Start).
+	// The CLI's ctx cancels; each in-flight exec.CommandContext inside the
+	// build then invokes its own Cancel closure, which does
+	// kill(-<subprocess-pgid>, SIGTERM) per shell.applyExecAttrs — so
+	// mmdebstrap/apt/mksquashfs and their descendants get their signals via
+	// their own pgids, not by pgid inheritance from the CLI (each was
+	// spawned with its own Setpgid=true).
 	if err := syscall.Kill(-buildPid, syscall.SIGTERM); err != nil {
 		t.Fatalf("kill -TERM %d: %v", -buildPid, err)
 	}
@@ -132,6 +136,26 @@ func TestBuildSIGTERMCleansUpMountsAndLoops(t *testing.T) {
 	if lines := loopDevicesBackedBy(t, workDir); len(lines) != 0 {
 		t.Errorf("expected no loop devices backed by files under %s, got %d:\n  %s",
 			workDir, len(lines), strings.Join(lines, "\n  "))
+	}
+
+	// Assert no orphaned package-management child processes remain. The list
+	// is scoped to well-known ICT-spawned commands rather than a pgid check
+	// because each subprocess had its own pgid via shell.applyExecAttrs
+	// (see the signaling comment above) — so a "descendants of buildPid"
+	// walk would miss them entirely. pgrep-by-name is host-wide, which
+	// means the test can false-positive if an unrelated mmdebstrap/dpkg is
+	// running on the same host; document that constraint so operators
+	// running this manually know to expect a clean host beforehand.
+	for _, name := range []string{"mmdebstrap", "apt-get", "dpkg", "mksquashfs"} {
+		out, err := exec.Command("pgrep", "-f", name).Output()
+		// pgrep exits 1 when nothing matches — that's the success case.
+		var ee *exec.ExitError
+		if err != nil && !(errors.As(err, &ee) && ee.ExitCode() == 1) {
+			t.Fatalf("pgrep -f %s: %v (output: %s)", name, err, out)
+		}
+		if trimmed := strings.TrimSpace(string(out)); trimmed != "" {
+			t.Errorf("orphaned %s process(es) after cancel:\n%s", name, trimmed)
+		}
 	}
 }
 

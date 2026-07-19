@@ -32,8 +32,10 @@ type CleanupFunc func(ctx context.Context) error
 var PerEntryTimeout = 30 * time.Second
 
 // entry holds a registered cleanup callback and the label used in residual
-// reporting. The generation counter protects unregister against double-run:
-// if the coordinator has already invoked an entry, unregister is a no-op.
+// reporting. Each entry carries a unique id assigned at Register time; the
+// unregister closure removes an entry by scanning c.entries under c.mu.
+// Once Run fires it flips c.fired and clears c.entries, so a late unregister
+// becomes a no-op naturally — the id scan finds nothing.
 type entry struct {
 	id    uint64
 	label string
@@ -93,11 +95,14 @@ func (c *Coordinator) Register(label string, fn CleanupFunc) (unregister func())
 }
 
 // Run executes every registered cleanup in LIFO order under a fresh
-// context.WithTimeout(background, PerEntryTimeout) per entry, ignoring the
-// caller-supplied ctx for cancellation purposes (that ctx is only consulted
-// so callers can pass logging metadata via Values if desired). Returns a
-// human-readable list of "label: err" strings for entries that failed —
-// empty on complete success.
+// context.WithTimeout(background, PerEntryTimeout) per entry. The
+// caller-supplied ctx is currently unused; it is kept in the signature
+// for symmetry with idiomatic Go APIs and future use. Cancellation of
+// the caller ctx does NOT cancel the cleanup — each per-entry ctx is
+// derived from context.Background so cleanup is not defeated by the
+// same signal that fired it. Returns a human-readable list of
+// "label: err" strings for entries that failed — empty on complete
+// success.
 //
 // Run is idempotent — subsequent calls return an empty residual list.
 func (c *Coordinator) Run(ctx context.Context) []string {

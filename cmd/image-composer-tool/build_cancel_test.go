@@ -49,12 +49,14 @@ func TestExecuteBuild_ReturnsCancelledOnPreCancelledContext(t *testing.T) {
 	}
 }
 
-// TestExecuteBuild_CleanupGoroutineDoesNotLeak wraps the standard invalid-
-// template test — which does NOT cancel the ctx — and asserts the function
-// still returns within a bounded time. The backstop cleanup now runs inline on
-// the return path (no goroutine), so this guards against a future regression
-// that reintroduces a blocking wait on the unwind.
-func TestExecuteBuild_CleanupGoroutineDoesNotLeak(t *testing.T) {
+// TestExecuteBuild_CleanupDoesNotDeadlock wraps the standard invalid-template
+// test — which does NOT cancel the ctx — and asserts the function still
+// returns within a bounded time. The backstop cleanup runs inline on the
+// return path via defer (no goroutine, since commit 4092ab5e), so this guards
+// against a future regression that reintroduces a blocking wait on the
+// unwind, e.g. by re-adding a goroutine + wait channel that could deadlock
+// if the goroutine's exit condition is misordered against the deferred wait.
+func TestExecuteBuild_CleanupDoesNotDeadlock(t *testing.T) {
 	defer resetBuildFlags()
 
 	cmd := createBuildCommand()
