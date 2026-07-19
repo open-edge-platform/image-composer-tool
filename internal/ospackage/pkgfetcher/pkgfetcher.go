@@ -134,8 +134,11 @@ func downloadWithRetry(ctx context.Context, client *http.Client, url, destPath s
 // FetchPackages downloads the given URLs into destDir using a pool of workers.
 // It shows a single progress bar tracking files completed vs total. The ctx
 // is threaded through to every HTTP request and retry-backoff sleep so a
-// SIGINT/SIGTERM during download aborts the workers within one HTTP-request
-// timeout window rather than draining the entire jobs channel.
+// SIGINT/SIGTERM during download aborts in-flight HTTP work within one
+// retry-backoff quantum. After cancellation the workers still drain the
+// remaining queued URLs (each drains near-instantly since it skips HTTP work
+// and only advances the progress bar), keeping bar.Add balanced with the
+// initial job count so bar.Finish reports a coherent state.
 func FetchPackages(ctx context.Context, urls []string, destDir string, workers int) error {
 	log := logger.Logger()
 

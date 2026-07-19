@@ -55,9 +55,10 @@ func main() {
 
 	// Second-signal hard exit: if the operator hits Ctrl+C again while
 	// cleanup is still running (e.g. a wedged umount), skip the rest and
-	// exit immediately with 130. The first signal is consumed by
-	// signal.NotifyContext above; this channel only receives from the
-	// second onward.
+	// exit immediately with 130. See watchForSecondSignal's docstring for
+	// why this needs a separate channel — signal.Notify broadcasts to every
+	// registered channel, so this one receives the first signal too and
+	// intentionally ignores it, then acts on the second.
 	go watchForSecondSignal()
 
 	if code := exitCodeForError(rootCmd.ExecuteContext(ctx)); code != 0 {
