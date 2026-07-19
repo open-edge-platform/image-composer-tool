@@ -145,9 +145,12 @@ func overlaySysConfigName(template *config.ImageTemplate) (string, error) {
 // LoopDevManager is the subset of imagedisc.LoopDevInterface needed to attach
 // and detach a baseline image. It is declared here so tests can inject a fake.
 // The unregister closure returned by AttachImageToLoopDev removes the auto-
-// registered cleanup-coordinator entry for this loop device so the coordinator
-// does not later try to detach a device we already released on the happy path;
-// tests that don't wire the coordinator can return a no-op func.
+// registered cleanup-coordinator entry for this loop device. Callers invoke
+// it AFTER a successful LoopSetupDelete, not before — see
+// imagedisc.loopSetupCreate's docstring for the ordering contract (a failed
+// detach must leave the coord entry registered so the build.go cancel
+// backstop can retry). Tests that don't wire the coordinator can return a
+// no-op func.
 type LoopDevManager interface {
 	AttachImageToLoopDev(imagePath string) (string, []string, func(), error)
 	LoopSetupDelete(loopDevPath string) error
@@ -795,18 +798,22 @@ func isAllZero(b []byte) bool {
 // detach detaches the loop device if one is attached. It returns the detach
 // error (also logged) so callers on the success path can surface a failed
 // cleanup instead of silently leaking the loop device. A no-op (nothing
-// attached) returns nil. Unregisters the coordinator entry first so a mid-
-// teardown cancel doesn't try to redetach a device we already released.
+// attached) returns nil. Detach first; unregister the coordinator entry only
+// on success. If detach fails (e.g. because the ambient shell ctx is still
+// the cancelled parent when this runs pre-PostProcess, or because a
+// partition is busy), leaving the coord entry registered lets build.go's
+// deferred cancel backstop retry the detach under its own fresh per-entry
+// ctx.
 func (ing *Ingestor) detach(ctx *Context) error {
 	if ctx == nil || ctx.LoopDevPath == "" {
 		return nil
 	}
-	if ctx.loopUnregister != nil {
-		ctx.loopUnregister()
-	}
 	if err := ing.loopDev.LoopSetupDelete(ctx.LoopDevPath); err != nil {
 		log.Errorf("Failed to detach loop device %s: %v", ctx.LoopDevPath, err)
 		return fmt.Errorf("failed to detach loop device %s: %w", ctx.LoopDevPath, err)
+	}
+	if ctx.loopUnregister != nil {
+		ctx.loopUnregister()
 	}
 	log.Infof("Detached loop device %s", ctx.LoopDevPath)
 	return nil

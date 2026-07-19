@@ -12,8 +12,10 @@ import (
 // an interface (rather than *imagedisc.LoopDev directly) so tests can inject a
 // fake and exercise partition-node mapping without touching a real disk. The
 // unregister closure returned by AttachImageToLoopDev removes the auto-registered
-// cleanup-coordinator entry for this device; callers invoke it right before
-// their own explicit LoopSetupDelete to avoid double-detach on the happy path.
+// cleanup-coordinator entry for this device; callers invoke it AFTER a
+// successful LoopSetupDelete, not before — see imagedisc.loopSetupCreate's
+// docstring for the ordering contract (a failed detach must leave the coord
+// entry registered so the build.go cancel backstop can retry).
 type loopDevAttacher interface {
 	AttachImageToLoopDev(imagePath string) (string, []string, func(), error)
 	LoopSetupDelete(loopDevPath string) error
@@ -69,11 +71,16 @@ func inspectSBOMFromImageLoopDev(imagePath string, pt PartitionTableSummary) SBO
 		return summary
 	}
 	defer func() {
-		unregister()
+		// Detach first; unregister only on success. If detach fails (busy
+		// partition or short-circuited shell ctx on a cancelled build that
+		// went through SBOM inspection), leaving the coord entry registered
+		// lets build.go's cancel backstop retry the detach.
 		if detachErr := loop.LoopSetupDelete(loopDevPath); detachErr != nil {
 			summary.Notes = append(summary.Notes,
 				fmt.Sprintf("loop-device detach failed for %s: %v", loopDevPath, detachErr))
+			return
 		}
+		unregister()
 	}()
 
 	for _, candidateIndex := range rootCandidates {

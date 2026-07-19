@@ -35,9 +35,18 @@ func NewLoopDev() *LoopDev {
 // loopSetupCreate attaches imagePath as a loop device with partition scanning
 // (losetup -fP) and returns the canonical device path plus an unregister
 // closure. When a runctx.Coordinator is bound, the returned closure removes
-// the auto-registered detach callback and callers are expected to invoke it
-// from their happy-path defer immediately before their own explicit
-// LoopSetupDelete — this avoids double-detach warnings on successful builds.
+// the auto-registered detach callback.
+//
+// Ordering contract for callers: invoke LoopSetupDelete FIRST, then call
+// unregister() only on successful detach. On the happy path this prevents a
+// double-detach warning when the coordinator backstop runs; on a cancelled
+// build the caller's LoopSetupDelete may fail-fast because its internal
+// shell.ExecCmd sees the still-cancelled ambient ctx (build.go's PostProcess
+// context re-binding hasn't happened yet when caller-side loop defers run),
+// and in that case leaving the coord entry registered lets the deferred
+// coord.Run in build.go retry the detach under its own fresh per-entry ctx
+// that binds shell/runctx to a detached timeout budget.
+//
 // When no coordinator is bound the closure is a no-op.
 func loopSetupCreate(imagePath string) (string, func(), error) {
 	// losetup runs with sudo through a bash -c string. Single-quote the path so
@@ -109,16 +118,18 @@ func loopSetupCreateEmptyRawDisk(filePath, fileSize string) (string, func(), err
 
 // AttachImageToLoopDev attaches an already-existing disk image to a loop device
 // with partition scanning enabled (losetup -fP) and returns the loop device path
-// along with its enumerated partition nodes and an unregister closure that
-// callers should invoke from their happy-path defer immediately before running
-// their own LoopSetupDelete to avoid double-detach warnings. Unlike
-// CreateRawImageLoopDev it does not create or partition the backing file, so it
-// is safe to use on a baseline image that must not be modified. On
-// partition-enumeration failure the loop device is detached before returning
-// so no loop device is leaked. If that detach itself fails, the device is
-// genuinely leaked: the returned path is the leaked device (non-empty) and
-// the error is annotated with it so the caller can retain the backing file
-// and operators can reclaim the device.
+// along with its enumerated partition nodes and an unregister closure. Callers
+// should invoke LoopSetupDelete first, then unregister() only on successful
+// detach (see loopSetupCreate's docstring for the reasoning: on cancel the
+// caller-side detach may fail-fast under the still-cancelled ambient shell
+// ctx, and keeping the coord entry registered lets the build.go backstop
+// retry). Unlike CreateRawImageLoopDev it does not create or partition the
+// backing file, so it is safe to use on a baseline image that must not be
+// modified. On partition-enumeration failure the loop device is detached
+// before returning so no loop device is leaked. If that detach itself fails,
+// the device is genuinely leaked: the returned path is the leaked device
+// (non-empty) and the error is annotated with it so the caller can retain
+// the backing file and operators can reclaim the device.
 func (loopDev *LoopDev) AttachImageToLoopDev(imagePath string) (string, []string, func(), error) {
 	if _, err := os.Stat(imagePath); err != nil {
 		return "", nil, func() {}, fmt.Errorf("cannot access baseline image at %s: %w", imagePath, err)
@@ -131,18 +142,23 @@ func (loopDev *LoopDev) AttachImageToLoopDev(imagePath string) (string, []string
 
 	partitions, err := loopDevPartitions(loopDevPath)
 	if err != nil {
-		// Enumeration failed; detach before returning. Unregister the coordinator
-		// entry first so the coordinator doesn't try to detach a device we already
-		// released.
-		unregister()
+		// Enumeration failed; detach before returning. Detach first, then
+		// unregister only on success. If detach also fails (leaked device
+		// case), leave the coord entry registered so a subsequent
+		// coordinator run can retry — the returned loopDevPath signals
+		// leaked state to the caller and the entry gives the backstop
+		// something to retry.
 		if detachErr := loopDev.LoopSetupDelete(loopDevPath); detachErr != nil {
 			// Detach also failed: the loop device is leaked. Return the leaked
 			// device path (not "") together with both the enumeration error and
 			// the detach failure, wrapped with the path, so the caller can retain
 			// the backing file and operators can identify and reclaim the device.
+			// Also return a no-op unregister — the caller intentionally cannot
+			// remove the coord entry so the backstop retries.
 			log.Errorf("Failed to detach loop device %s after partition enumeration failure: %v", loopDevPath, detachErr)
 			return loopDevPath, nil, func() {}, fmt.Errorf("leaked loop device %s: %w", loopDevPath, errors.Join(err, detachErr))
 		}
+		unregister()
 		return "", nil, func() {}, err
 	}
 

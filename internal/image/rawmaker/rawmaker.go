@@ -122,12 +122,15 @@ func (rawMaker *RawMaker) BuildRawImage() error {
 	loopDevPath, diskPathIdMap, unregister, err := rawMaker.LoopDev.CreateRawImageLoopDev(imageFile, rawMaker.template)
 	if err != nil {
 		if loopDevPath != "" {
-			// unregister the coordinator entry before detaching so the coordinator
-			// does not later try to detach a device we already released.
-			unregister()
+			// Detach first; unregister only on success. If LoopSetupDelete fails
+			// (e.g. because a still-cancelled ambient shell ctx short-circuits its
+			// internal shell.ExecCmd, or a partition is still busy), leave the
+			// coordinator entry registered so the build.go cancel backstop can
+			// retry the detach under its own detached per-entry ctx.
 			if detachErr := rawMaker.LoopDev.LoopSetupDelete(loopDevPath); detachErr != nil {
 				log.Errorf("Failed to detach loopback device %s after loop creation failure: %v", loopDevPath, detachErr)
 			} else {
+				unregister()
 				log.Infof("Successfully detached loopback device after loop creation failure: %s", loopDevPath)
 			}
 		}
@@ -136,14 +139,20 @@ func (rawMaker *RawMaker) BuildRawImage() error {
 	}
 
 	// Setup cleanup for loop device (always needed on the normal-return path).
-	// unregister the coordinator entry first so a mid-teardown cancel doesn't
-	// see this device in its residual list.
+	// Detach first; unregister only on success. On the happy path detach
+	// succeeds and unregister prevents a double-detach warning in the
+	// coordinator backstop; on a cancelled build the ambient shell ctx is
+	// still the cancelled parent when this defer runs (build.go's PostProcess
+	// re-binding hasn't happened yet), so LoopSetupDelete's shell.ExecCmd
+	// fails fast — leaving the coordinator entry registered so build.go's
+	// deferred coord.Run can retry the detach with its own fresh per-entry
+	// ctx that binds the shell/runctx layers.
 	defer func() {
 		if loopDevPath != "" {
-			unregister()
 			if detachErr := rawMaker.LoopDev.LoopSetupDelete(loopDevPath); detachErr != nil {
 				log.Errorf("Failed to detach loopback device %s: %v", loopDevPath, detachErr)
 			} else {
+				unregister()
 				log.Infof("Successfully detached loopback device: %s", loopDevPath)
 			}
 		}
