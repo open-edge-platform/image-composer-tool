@@ -213,8 +213,9 @@ func (b *Builder) Preprocess() (err error) {
 }
 
 // Build runs the overlay build phase against the already-mounted baseline: it
-// installs the approved package plan, regenerates the initramfs for any added
-// packages (never the bootloader), and performs an optional grow-only resize.
+// performs an optional grow-only resize (first, so the added packages have room),
+// installs the approved package plan, then regenerates the initramfs for any added
+// packages (never the bootloader).
 //
 // It requires Preprocess to have succeeded; the mount lifecycle opened there is
 // reused here and is not torn down until Postprocess.
@@ -224,6 +225,21 @@ func (b *Builder) Build() error {
 	}
 	if b.built {
 		return fmt.Errorf("overlay build: Build already ran")
+	}
+
+	// Resize FIRST, before installing packages: the whole point of a grow is to
+	// create the headroom the added packages need. Running it after install would
+	// be too late — a near-full baseline fails the install with "no space left on
+	// device" before the resize could ever make room. The root filesystem is
+	// mounted (resize2fs/xfs_growfs both grow online) and the loop device is
+	// already attached from Preprocess, so growing here is safe.
+	if err := b.timeStage("Resize", func() error {
+		if rerr := builderResizeFn(b.template, b.ctx, b.layout); rerr != nil {
+			return fmt.Errorf("overlay build: resize failed: %w", rerr)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	var installed *InstallResult
@@ -241,15 +257,6 @@ func (b *Builder) Build() error {
 	if err := b.timeStage("Boot Regeneration", func() error {
 		if berr := builderRegenBootFn(b.info, b.layout.RootMount, installed, b.plan); berr != nil {
 			return fmt.Errorf("overlay build: boot regeneration failed: %w", berr)
-		}
-		return nil
-	}); err != nil {
-		return err
-	}
-
-	if err := b.timeStage("Resize", func() error {
-		if rerr := builderResizeFn(b.template, b.ctx, b.layout); rerr != nil {
-			return fmt.Errorf("overlay build: resize failed: %w", rerr)
 		}
 		return nil
 	}); err != nil {

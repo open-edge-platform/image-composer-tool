@@ -174,7 +174,7 @@ func TestBuilder_HappyPathOrdersStagesAndCleansUp(t *testing.T) {
 		t.Fatalf("Postprocess: %v", err)
 	}
 
-	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "install", "regenBoot", "resize", "sbom", "emit:1.0"}
+	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "resize", "install", "regenBoot", "sbom", "emit:1.0"}
 	if !equalStrings(r.calls, want) {
 		t.Errorf("stage order = %v, want %v", r.calls, want)
 	}
@@ -190,7 +190,7 @@ func TestBuilder_HappyPathOrdersStagesAndCleansUp(t *testing.T) {
 	// execution order, so the caller can render an overlay timing table.
 	wantStages := []string{
 		"Acquire & Mount Baseline", "Inspect Baseline", "Resolve Packages", "Preflight",
-		"Install Packages", "Boot Regeneration", "Resize", "Generate SBOM", "Emit Artifact",
+		"Resize", "Install Packages", "Boot Regeneration", "Generate SBOM", "Emit Artifact",
 	}
 	gotStages := make([]string, 0, len(b.Timings()))
 	for _, ts := range b.Timings() {
@@ -218,7 +218,7 @@ func TestBuilder_InspectRunsAfterEmitWhenEnabled(t *testing.T) {
 	}
 
 	// Inspection runs immediately after emit, against the emitted artifact path.
-	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "install", "regenBoot", "resize", "sbom", "emit:1.0", "inspect:/out/img-1.0.raw"}
+	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "resize", "install", "regenBoot", "sbom", "emit:1.0", "inspect:/out/img-1.0.raw"}
 	if !equalStrings(r.calls, want) {
 		t.Errorf("stage order = %v, want %v", r.calls, want)
 	}
@@ -299,7 +299,7 @@ func TestBuilder_TimingStopsAtFailedStage(t *testing.T) {
 	}
 	want := []string{
 		"Acquire & Mount Baseline", "Inspect Baseline", "Resolve Packages", "Preflight",
-		"Install Packages",
+		"Resize", "Install Packages",
 	}
 	if !equalStrings(got, want) {
 		t.Errorf("timing stages after install failure = %v, want %v", got, want)
