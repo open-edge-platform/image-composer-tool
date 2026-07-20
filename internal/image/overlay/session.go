@@ -109,6 +109,7 @@ var (
 	builderResolveFn   = ResolveOverlayPackages
 	builderPreflightFn = Preflight
 	builderInstallFn   = InstallOverlayPackages
+	builderConfigureFn = RunOverlayConfigurations
 	builderRegenBootFn = RegenerateBoot
 	builderResizeFn    = ResizeBaseline
 	builderSBOMFn      = generateOverlaySBOM
@@ -248,6 +249,21 @@ func (b *Builder) Build() error {
 		installed, ierr = builderInstallFn(b.info, b.layout.RootMount, b.plan, b.report)
 		if ierr != nil {
 			return fmt.Errorf("overlay build: package installation failed: %w", ierr)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	// Run the template's arbitrary configuration commands AFTER the resolved package
+	// install but BEFORE boot regeneration. This mirrors create mode's ordering
+	// (addImageConfigs runs after installImagePkgs) and is deliberate: a
+	// configuration command may itself install content that affects the initramfs
+	// (e.g. an out-of-repo driver installed via wget+dpkg), so any resulting kernel
+	// module or hook must be picked up by the subsequent Boot Regeneration.
+	if err := b.timeStage("Configurations", func() error {
+		if cerr := builderConfigureFn(b.template, b.layout.RootMount); cerr != nil {
+			return fmt.Errorf("overlay build: configuration commands failed: %w", cerr)
 		}
 		return nil
 	}); err != nil {
