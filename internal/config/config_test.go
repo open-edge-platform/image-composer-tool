@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config/validate"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 	"gopkg.in/yaml.v3"
 )
 
@@ -1215,6 +1216,113 @@ func TestDefaultConfigLoaderUnsupportedImageType(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigLoaderWSL2ImageType(t *testing.T) {
+	tmpDir := t.TempDir()
+	oldConfigDir := Global().ConfigDir
+	Global().ConfigDir = tmpDir
+	t.Cleanup(func() { Global().ConfigDir = oldConfigDir })
+
+	defaultDir := filepath.Join(tmpDir, "osv", "ubuntu", "ubuntu24", "imageconfigs", "defaultconfigs")
+	if err := os.MkdirAll(defaultDir, 0755); err != nil {
+		t.Fatalf("failed to create default config dir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmpDir, "general"), 0755); err != nil {
+		t.Fatalf("failed to create general config dir: %v", err)
+	}
+
+	defaultConfig := `image:
+  name: wsl2-rootfs-ubuntu
+  version: "24.04"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: wsl2
+
+disk:
+  name: WSL2_Rootfs
+  artifacts:
+    - type: tar
+      compression: gz
+
+systemConfig:
+  name: WSL2_Rootfs
+  packages:
+    - ubuntu-minimal
+`
+	defaultPath := filepath.Join(defaultDir, "default-wsl2-x86_64.yml")
+	if err := os.WriteFile(defaultPath, []byte(defaultConfig), 0644); err != nil {
+		t.Fatalf("failed to write default config: %v", err)
+	}
+
+	loader := NewDefaultConfigLoader("ubuntu", "ubuntu24", "x86_64")
+	template, err := loader.LoadDefaultConfig("wsl2")
+	if err != nil {
+		t.Fatalf("expected WSL2 default config to load, got error: %v", err)
+	}
+	if template.Target.ImageType != "wsl2" {
+		t.Errorf("expected template image type 'wsl2', got '%s'", template.Target.ImageType)
+	}
+	if len(template.Disk.Artifacts) == 0 {
+		t.Fatal("expected WSL2 default config to include at least one artifact")
+	}
+	if template.Disk.Artifacts[0].Type != "tar" {
+		t.Errorf("expected WSL2 default config to use tar artifact, got '%s'", template.Disk.Artifacts[0].Type)
+	}
+}
+
+func TestWSL2DefaultConfigs(t *testing.T) {
+	defaults := []string{
+		"azure-linux/azl3",
+		"debian/debian13",
+		"edge-microvisor-toolkit/emt3",
+		"redhat-compatible-distro/el10",
+		"ubuntu/ubuntu24",
+		"ubuntu/ubuntu26",
+		"wind-river-elxr/elxr12",
+		"wind-river-elxr/elxr13",
+	}
+
+	for _, defaultDir := range defaults {
+		t.Run(defaultDir, func(t *testing.T) {
+			path := filepath.Join("..", "..", "config", "osv", defaultDir,
+				"imageconfigs", "defaultconfigs", "default-wsl2-x86_64.yml")
+			template, err := LoadTemplate(path, true)
+			if err != nil {
+				t.Fatalf("LoadTemplate() error = %v", err)
+			}
+			if template.Target.ImageType != "wsl2" {
+				t.Fatalf("imageType = %s, want wsl2", template.Target.ImageType)
+			}
+			if template.Disk.PartitionTableType != "" || len(template.Disk.Partitions) != 0 {
+				t.Fatalf("WSL2 default must not define partition table or partitions")
+			}
+			if !isEmptyKernelConfig(template.SystemConfig.Kernel) {
+				t.Fatalf("WSL2 default must not define kernel config")
+			}
+			if len(template.Disk.Artifacts) != 1 || template.Disk.Artifacts[0].Type != "tar" {
+				t.Fatalf("WSL2 default must define one tar artifact")
+			}
+			if template.Disk.Artifacts[0].Compression == "" {
+				t.Fatalf("WSL2 default tar artifact must define compression")
+			}
+			additionalFiles := map[string]bool{}
+			for _, file := range template.SystemConfig.AdditionalFiles {
+				additionalFiles[file.Final] = true
+			}
+			for _, final := range []string{
+				"/etc/profile.d/00-ict-wsl2.sh",
+				"/usr/share/doc/ict-wsl2/resize-filesystem.txt",
+			} {
+				if !additionalFiles[final] {
+					t.Fatalf("WSL2 default must include %s", final)
+				}
+			}
+		})
+	}
+}
+
 func TestPackageMergingWithDuplicates(t *testing.T) {
 	defaultPackages := []string{"base", "common", "utils"}
 	userPackages := []string{"common", "extra", "base", "new"}
@@ -1481,6 +1589,118 @@ func TestSaveUpdatedConfigFile(t *testing.T) {
 
 	if strings.Contains(string(data), "index: null") {
 		t.Fatalf("dumped config unexpectedly contains 'index: null'\n%s", string(data))
+	}
+}
+
+func TestSaveUpdatedConfigFileFixesInvalidBlockScalarHeader(t *testing.T) {
+	t.Parallel()
+
+	template := &ImageTemplate{
+		Image: ImageInfo{
+			Name:    "test-save-sbom",
+			Version: "1.0.0",
+		},
+		SBOMPackageMetadata: []ospackage.PackageInfo{
+			{
+				Name:        "newt-0.52.23-1.azl3.x86_64.rpm",
+				Type:        "rpm",
+				Description: "\nline1\nline2",
+				Origin:      "Microsoft",
+				License:     "GPLv2",
+				Version:     "0:0.52.23-1.azl3",
+				Arch:        "x86_64",
+				URL:         "https://example.invalid/newt.rpm",
+			},
+		},
+	}
+
+	outPath := filepath.Join(t.TempDir(), "test-sbom.yml")
+
+	if err := template.SaveUpdatedConfigFile(outPath); err != nil {
+		t.Fatalf("SaveUpdatedConfigFile returned unexpected error: %v", err)
+	}
+
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("failed to read dumped config: %v", err)
+	}
+
+	var parsed any
+	if err := yaml.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("dumped config is not valid YAML: %v\n%s", err, string(data))
+	}
+
+	var roundTrip ImageTemplate
+	if err := yaml.Unmarshal(data, &roundTrip); err != nil {
+		t.Fatalf("failed to unmarshal dumped config into ImageTemplate: %v", err)
+	}
+
+	if len(roundTrip.SBOMPackageMetadata) != 1 {
+		t.Fatalf("expected 1 sbom package metadata entry, got %d", len(roundTrip.SBOMPackageMetadata))
+	}
+
+	if roundTrip.SBOMPackageMetadata[0].Description != "line1\nline2" {
+		t.Fatalf(
+			"expected sanitized description %q, got %q",
+			"line1\\nline2",
+			roundTrip.SBOMPackageMetadata[0].Description,
+		)
+	}
+
+	if strings.Contains(string(data), "description: |4-") {
+		t.Fatalf("dumped config still contains invalid block scalar header |4-\n%s", string(data))
+	}
+
+	if roundTrip.SBOMPackageMetadata[0].Origin != "Microsoft" ||
+		roundTrip.SBOMPackageMetadata[0].License != "GPLv2" ||
+		roundTrip.SBOMPackageMetadata[0].Version != "0:0.52.23-1.azl3" ||
+		roundTrip.SBOMPackageMetadata[0].Arch != "x86_64" ||
+		roundTrip.SBOMPackageMetadata[0].URL != "https://example.invalid/newt.rpm" {
+		t.Fatalf("unexpected SBOM metadata mutation after save: %+v", roundTrip.SBOMPackageMetadata[0])
+	}
+}
+
+func TestFixInvalidBlockScalarHeader(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "removes single digit indent and preserves strip chomping",
+			input: "description: |4-\n    line1\n",
+			want:  "description: |-\n    line1\n",
+		},
+		{
+			name:  "removes multi digit indent and preserves keep chomping",
+			input: "description: |12+\n            line1\n",
+			want:  "description: |+\n            line1\n",
+		},
+		{
+			name:  "removes indent without chomping indicator",
+			input: "description: |2\n  line1\n",
+			want:  "description: |\n  line1\n",
+		},
+		{
+			name:  "leaves inferred indent header untouched",
+			input: "description: |-\n  line1\n",
+			want:  "description: |-\n  line1\n",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := string(fixInvalidBlockScalarHeader([]byte(tt.input)))
+
+			if got != tt.want {
+				t.Fatalf("fixInvalidBlockScalarHeader() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -2020,6 +2240,128 @@ func TestValidateUserTemplateJSON(t *testing.T) {
 	err = validate.ValidateUserTemplateJSON([]byte(invalidJSON))
 	if err == nil {
 		t.Errorf("invalid JSON should fail validation")
+	}
+}
+
+func TestExtendsFieldSchemaValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		json    string
+		wantErr bool
+	}{
+		{
+			name: "user template with valid extends",
+			json: `{
+				"extends": "ubuntu24-x86_64-edge-raw.yml",
+				"image": {"name": "child", "version": "1.0.0"},
+				"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"}
+			}`,
+			wantErr: false,
+		},
+		{
+			name: "user template without extends",
+			json: `{
+				"image": {"name": "standalone", "version": "1.0.0"},
+				"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"}
+			}`,
+			wantErr: false,
+		},
+		{
+			name: "user template with invalid extends type (number)",
+			json: `{
+				"extends": 42,
+				"image": {"name": "bad", "version": "1.0.0"},
+				"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"}
+			}`,
+			wantErr: true,
+		},
+		{
+			name: "user template with invalid extends type (array)",
+			json: `{
+				"extends": ["a.yml", "b.yml"],
+				"image": {"name": "bad", "version": "1.0.0"},
+				"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"}
+			}`,
+			wantErr: true,
+		},
+		{
+			name: "user template with invalid extends type (boolean)",
+			json: `{
+				"extends": true,
+				"image": {"name": "bad", "version": "1.0.0"},
+				"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"}
+			}`,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := validate.ValidateUserTemplateJSON([]byte(tt.json))
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateUserTemplateJSON() err = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestExtendsFieldParsedFromYAML(t *testing.T) {
+	t.Parallel()
+
+	templateYAML := `extends: "ubuntu24-x86_64-edge-raw.yml"
+image:
+  name: child-template
+  version: "1.0.0"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+`
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "child.yml")
+	if err := os.WriteFile(tmpFile, []byte(templateYAML), 0644); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	tmpl, err := LoadTemplate(tmpFile, false)
+	if err != nil {
+		t.Fatalf("LoadTemplate() err = %v", err)
+	}
+
+	if tmpl.Extends != "ubuntu24-x86_64-edge-raw.yml" {
+		t.Errorf("Extends = %q, want %q", tmpl.Extends, "ubuntu24-x86_64-edge-raw.yml")
+	}
+}
+
+func TestExtendsFieldAbsentInTemplate(t *testing.T) {
+	t.Parallel()
+
+	templateYAML := `image:
+  name: standalone
+  version: "1.0.0"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+`
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "standalone.yml")
+	if err := os.WriteFile(tmpFile, []byte(templateYAML), 0644); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	tmpl, err := LoadTemplate(tmpFile, false)
+	if err != nil {
+		t.Fatalf("LoadTemplate() err = %v", err)
+	}
+
+	if tmpl.Extends != "" {
+		t.Errorf("Extends = %q, want empty string for template without extends", tmpl.Extends)
 	}
 }
 
@@ -3860,6 +4202,53 @@ func TestGetConfigurationInfo(t *testing.T) {
 		if config.Cmd != expectedConfigs[i].Cmd {
 			t.Errorf("Expected command %s, got %s", expectedConfigs[i].Cmd, config.Cmd)
 		}
+	}
+}
+
+func TestLoadTemplateStoresAbsolutePath(t *testing.T) {
+	tmpDir := t.TempDir()
+	templateDir := filepath.Join(tmpDir, "templates")
+	if err := os.MkdirAll(templateDir, 0755); err != nil {
+		t.Fatalf("failed to create template dir: %v", err)
+	}
+
+	templatePath := filepath.Join(templateDir, "test.yml")
+	templateContent := `image:
+  name: test-image
+  version: "1.0.0"
+target:
+  os: debian
+  dist: debian13
+  arch: x86_64
+  imageType: raw
+`
+	if err := os.WriteFile(templatePath, []byte(templateContent), 0644); err != nil {
+		t.Fatalf("failed to write template file: %v", err)
+	}
+
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get current dir: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(originalWD)
+	})
+
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("failed to change dir: %v", err)
+	}
+
+	template, err := LoadTemplate(filepath.Join("templates", "test.yml"), false)
+	if err != nil {
+		t.Fatalf("LoadTemplate() error = %v", err)
+	}
+
+	if len(template.PathList) != 1 {
+		t.Fatalf("expected one path entry, got %d", len(template.PathList))
+	}
+
+	if template.PathList[0] != templatePath {
+		t.Fatalf("expected absolute template path %q, got %q", templatePath, template.PathList[0])
 	}
 }
 

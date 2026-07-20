@@ -1,0 +1,67 @@
+# SPDX-FileCopyrightText: (C) 2026 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+#
+# Manifest for the ICT Web UI Basic tab.
+#
+# Each `combinations` entry maps one UI selection (vertical/sku/platform/os/imageType)
+# to a pre-authored, tested template in image-templates/. The backend looks the
+# template up and returns/builds it verbatim — it never synthesizes one.
+#
+# `verticals`, `platforms`, and `targets` supply the display labels the UI uses to
+# populate its dropdowns. The UI derives valid cascading options from `combinations`.
+
+combinations:
+  - vertical: retail
+    sku: desktop-virtualization
+    platform: arl
+    os: debian13
+    imageType: iso
+    template: debian13-x86_64-desktop-virtualization-iso.yml
+
+  - vertical: robotics
+    sku: robotics-jazzy-ubuntu24
+    platform: wcl
+    os: ubuntu24
+    imageType: iso
+    template: ubuntu24-x86_64-robotics-jazzy-iso.yml
+
+  - vertical: fed-aero
+    sku: generic-handheld-blueprint
+    platform: ptl
+    os: ubuntu24
+    imageType: raw
+    template: generic-handheld-os-template.yml
+
+verticals:
+  - id: retail
+    displayName: Retail Edge
+  - id: robotics
+    displayName: Robotics
+  - id: fed-aero
+    displayName: Fed Aero
+
+skus:
+  - id: desktop-virtualization
+    displayName: Desktop Virtualization
+  - id: robotics-jazzy-ubuntu24
+    displayName: robotics-jazzy-ubuntu24
+  - id: generic-handheld-blueprint
+    displayName: Generic Handheld Blueprint
+
+platforms:
+  - id: arl
+    displayName: ARL (Arrow Lake)
+  - id: wcl
+    displayName: WCL (Wildcat Lake)
+  - id: ptl
+    displayName: PTL (Panther Lake)
+
+targets:
+  - id: debian13
+    displayName: Debian 13
+    os: debian
+    arch: x86_64
+  - id: ubuntu24
+    displayName: Ubuntu 24.04
+    os: ubuntu
+    arch: x86_64

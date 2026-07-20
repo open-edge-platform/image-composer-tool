@@ -5,7 +5,7 @@ on:
   
   pull_request:
     paths:
-      - '**.go'
+      - '**/*.go'
   push:
     branches:
       - main
@@ -23,7 +23,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd #v6.0.2
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 #v7.0.0
         with:
           persist-credentials: false
 
@@ -34,13 +34,18 @@ jobs:
           update-ca-certificates
 
       - name: Set up Go
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c #v6.4.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e #v7.0.0
         with:
-          go-version: '1.24'
+          go-version: '1.25'
 
       - name: Install golangci-lint
         run: |
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b ./bin v1.64.2
+          GOBIN="$PWD/bin" go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.2
+          ./bin/golangci-lint version
+          ./bin/golangci-lint version | grep -q 'built with go1.25' || {
+            echo "golangci-lint binary is not built with Go 1.25." >&2
+            exit 1
+          }
           echo "$PWD/bin" >> $GITHUB_PATH
 
       - name: Run golangci-lint

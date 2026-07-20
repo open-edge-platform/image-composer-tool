@@ -182,6 +182,30 @@ func releaseDiskForPartitioning(diskPath string) error {
 	return nil
 }
 
+func verifyPartitionTableLabel(diskPath, expectedLabel string) (bool, error) {
+	if _, err := shell.ExecCmd("sync", true, shell.HostPath, nil); err != nil {
+		return false, fmt.Errorf("failed to sync disk %s before partition table verification: %w", diskPath, err)
+	}
+
+	// Refresh partition table state before reading fdisk output.
+	cmdStr := fmt.Sprintf("partx -u %s", diskPath)
+	if _, err := shell.ExecCmd(cmdStr, true, shell.HostPath, nil); err != nil {
+		log.Debugf("partx refresh failed during partition table verification on %s: %v", diskPath, err)
+	}
+
+	diskInfo, err := DiskGetInfo(diskPath)
+	if err != nil {
+		return false, fmt.Errorf("failed to inspect partition table on %s: %w", diskPath, err)
+	}
+
+	actualLabel, ok := diskInfo["part_table_type"].(string)
+	if !ok {
+		return false, nil
+	}
+
+	return strings.TrimSpace(actualLabel) == expectedLabel, nil
+}
+
 func createPartitionTable(diskPath, partitionTableType string) (string, error) {
 	label := "dos"
 	if partitionTableType == "gpt" {
@@ -191,17 +215,28 @@ func createPartitionTable(diskPath, partitionTableType string) (string, error) {
 	cmdStr := fmt.Sprintf("echo 'label: %s' | sudo sfdisk %s", label, diskPath)
 	cmdOutput, err := shell.ExecCmd(cmdStr, false, shell.HostPath, nil)
 	if err == nil {
-		return cmdOutput, nil
+		verified, verifyErr := verifyPartitionTableLabel(diskPath, label)
+		if verifyErr != nil {
+			return cmdOutput, verifyErr
+		}
+		if verified {
+			return cmdOutput, nil
+		}
+
+		log.Warnf("Partition table creation command succeeded on %s but label verification failed (expected %s); retrying with force",
+			diskPath, label)
 	}
 
 	trimmedOutput := strings.TrimSpace(cmdOutput)
-	if !isDiskInUsePartitioningOutput(trimmedOutput) {
+	if err != nil && !isDiskInUsePartitioningOutput(trimmedOutput) {
 		return cmdOutput, err
 	}
 
-	log.Warnf("Disk %s reported busy during %s partition table creation; releasing disk and retrying with force", diskPath, partitionTableType)
-	if releaseErr := releaseDiskForPartitioning(diskPath); releaseErr != nil {
-		return cmdOutput, fmt.Errorf("failed to release busy disk %s before retry: %w", diskPath, releaseErr)
+	if err != nil {
+		log.Warnf("Disk %s reported busy during %s partition table creation; releasing disk and retrying with force", diskPath, partitionTableType)
+		if releaseErr := releaseDiskForPartitioning(diskPath); releaseErr != nil {
+			return cmdOutput, fmt.Errorf("failed to release busy disk %s before retry: %w", diskPath, releaseErr)
+		}
 	}
 
 	const maxRetryDuration = 30 * time.Second
@@ -422,14 +457,67 @@ func DiskGetDevInfo(diskPath string) (map[string]interface{}, error) {
 	}
 	if blockDevices, ok := partitionsInfo["blockdevices"].([]interface{}); ok {
 		for _, device := range blockDevices {
-			dev := device.(map[string]interface{})
-			if dev["path"] == diskPath {
-				return dev, nil
+			dev, ok := device.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if found := findBlockDeviceByPath(dev, diskPath); found != nil {
+				return found, nil
 			}
 		}
 	}
 	log.Errorf("Device info not found for disk %s", diskPath)
 	return nil, errors.New("device not found")
+}
+
+func findBlockDeviceByPath(device map[string]interface{}, diskPath string) map[string]interface{} {
+	if device == nil {
+		return nil
+	}
+
+	if path, ok := device["path"].(string); ok && path == diskPath {
+		return device
+	}
+
+	children, ok := device["children"].([]interface{})
+	if !ok {
+		return nil
+	}
+
+	for _, child := range children {
+		childMap, ok := child.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if found := findBlockDeviceByPath(childMap, diskPath); found != nil {
+			return found
+		}
+	}
+
+	return nil
+}
+
+func collectPartitionDevices(device map[string]interface{}, partitions *[]map[string]interface{}) {
+	if device == nil || partitions == nil {
+		return
+	}
+
+	if devType, ok := device["type"].(string); ok && devType == "part" {
+		*partitions = append(*partitions, device)
+	}
+
+	children, ok := device["children"].([]interface{})
+	if !ok {
+		return
+	}
+
+	for _, child := range children {
+		childMap, ok := child.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		collectPartitionDevices(childMap, partitions)
+	}
 }
 
 func DiskGetPartitionsInfo(diskPath string) ([]map[string]interface{}, error) {
@@ -447,10 +535,11 @@ func DiskGetPartitionsInfo(diskPath string) ([]map[string]interface{}, error) {
 	var partitions []map[string]interface{}
 	if blockDevices, ok := partitionsInfo["blockdevices"].([]interface{}); ok {
 		for _, device := range blockDevices {
-			dev := device.(map[string]interface{})
-			if dev["type"] == "part" {
-				partitions = append(partitions, dev)
+			dev, ok := device.(map[string]interface{})
+			if !ok {
+				continue
 			}
+			collectPartitionDevices(dev, &partitions)
 		}
 	}
 	return partitions, nil
@@ -1189,7 +1278,12 @@ func SystemBlockDevices() (systemDevices []SystemBlockDevice, err error) {
 
 func ResolveInstallDiskPath(diskConfig config.DiskConfig) (string, error) {
 	if diskConfig.Path != "" {
+		log.Infof("Disk selection bypassed by explicit path: %s", diskConfig.Path)
 		return diskConfig.Path, nil
+	}
+
+	if _, settleErr := shell.ExecCmd("udevadm settle --timeout=10", true, shell.HostPath, nil); settleErr != nil {
+		log.Warnf("udevadm settle failed before disk selection (continuing): %v", settleErr)
 	}
 
 	devices, err := SystemBlockDevices()
@@ -1213,6 +1307,18 @@ func ResolveInstallDiskPath(diskConfig config.DiskConfig) (string, error) {
 	requireEmpty := true
 	if diskConfig.SelectionPolicy.RequireEmpty != nil {
 		requireEmpty = *diskConfig.SelectionPolicy.RequireEmpty
+	}
+
+	log.Infof("Disk selection policy resolved: strategy=%s, excludeRemovable=%t, requireEmpty=%t", strategy, excludeRemovable, requireEmpty)
+	if len(devices) == 0 {
+		log.Infof("No block devices discovered before policy evaluation")
+	} else {
+		log.Infof("Discovered block devices before policy evaluation:")
+		for _, dev := range devices {
+			log.Infof("  candidate=%s size=%d transport=%s removable=%t external=%t rotational=%t model=%q serial=%q",
+				dev.DevicePath, dev.RawDiskSize, strings.TrimSpace(dev.Transport), dev.IsRemovable, dev.IsExternal, dev.IsRotational,
+				strings.TrimSpace(dev.Model), strings.TrimSpace(dev.Serial))
+		}
 	}
 
 	requiredDiskBytes, err := requiredInstallDiskBytes(diskConfig.Partitions)

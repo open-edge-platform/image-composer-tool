@@ -11,6 +11,7 @@ import (
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
 
 func resetURLExistenceCacheForTest(t *testing.T) {
@@ -108,6 +109,147 @@ func TestPackages(t *testing.T) {
 				if len(packages) != tt.expectedCount {
 					t.Errorf("Expected %d packages, got %d", tt.expectedCount, len(packages))
 				}
+			}
+		})
+	}
+}
+
+func TestLocalUserPackagesRegistersLocalRepoPriority(t *testing.T) {
+	origUserRepo := UserRepo
+	origArch := Architecture
+	origLocalUserRepoCfgs := LocalUserRepoCfgs
+	origExecutor := shell.Default
+	t.Cleanup(func() {
+		UserRepo = origUserRepo
+		Architecture = origArch
+		LocalUserRepoCfgs = origLocalUserRepoCfgs
+		shell.Default = origExecutor
+	})
+
+	tests := []struct {
+		name         string
+		templatePrio int
+		wantPrio     int
+	}{
+		{name: "explicit priority preserved", templatePrio: 900, wantPrio: 900},
+		{name: "default priority applied", templatePrio: 0, wantPrio: 500},
+	}
+
+	for _, tt := range tests {
+		tc := tt
+		t.Run(tc.name, func(t *testing.T) {
+			repoDir := t.TempDir()
+			debPath := filepath.Join(repoDir, "package1_1.0_amd64.deb")
+			if err := os.WriteFile(debPath, []byte("fake deb content"), 0644); err != nil {
+				t.Fatalf("failed to create fake DEB file: %v", err)
+			}
+
+			shell.Default = &scanpackagesExecutor{}
+			UserRepo = []config.PackageRepository{{Path: repoDir, Priority: tc.templatePrio}}
+			Architecture = "amd64"
+
+			_, cleanup, err := LocalUserPackages()
+			if cleanup != nil {
+				defer cleanup()
+			}
+			if err != nil {
+				t.Fatalf("LocalUserPackages() error = %v", err)
+			}
+			if len(LocalUserRepoCfgs) != 1 {
+				t.Fatalf("expected 1 local repo config, got %d", len(LocalUserRepoCfgs))
+			}
+			if got := LocalUserRepoCfgs[0].Priority; got != tc.wantPrio {
+				t.Fatalf("local repo priority = %d, want %d", got, tc.wantPrio)
+			}
+			if got := getRepositoryPriority(LocalUserRepoCfgs[0].PkgPrefix + "/pool/main/p/package1/package1_1.0_amd64.deb"); got != tc.wantPrio {
+				t.Fatalf("getRepositoryPriority(localhost package URL) = %d, want %d", got, tc.wantPrio)
+			}
+		})
+	}
+}
+
+func TestUserRepoCfgsRegistersRemoteRepoPriority(t *testing.T) {
+	origUserRepoCfgs := UserRepoCfgs
+	t.Cleanup(func() { UserRepoCfgs = origUserRepoCfgs })
+
+	tests := []struct {
+		name     string
+		priority int
+		want     int
+	}{
+		{name: "explicit priority preserved", priority: 800, want: 800},
+		{name: "zero priority stored as-is in direct lookup", priority: 0, want: 0},
+	}
+
+	for _, tt := range tests {
+		tc := tt
+		t.Run(tc.name, func(t *testing.T) {
+			UserRepoCfgs = []RepoConfig{
+				{
+					PkgPrefix: "https://remote.example.com/ubuntu",
+					Priority:  tc.priority,
+				},
+			}
+			pkgURL := "https://remote.example.com/ubuntu/pool/main/c/curl/curl_7.0_amd64.deb"
+			if got := getRepositoryPriority(pkgURL); got != tc.want {
+				t.Fatalf("getRepositoryPriority(%q) = %d, want %d", pkgURL, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestInitializeUserRepoCfgsNormalizesDefaultPriority(t *testing.T) {
+	resetURLExistenceCacheForTest(t)
+
+	origUserRepo := UserRepo
+	origUserRepoCfgs := UserRepoCfgs
+	origArch := Architecture
+	t.Cleanup(func() {
+		UserRepo = origUserRepo
+		UserRepoCfgs = origUserRepoCfgs
+		Architecture = origArch
+		resetURLExistenceCacheForTest(t)
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/dists/noble/main/binary-amd64/Packages.gz" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	tests := []struct {
+		name         string
+		templatePrio int
+		wantPrio     int
+	}{
+		{name: "explicit priority preserved", templatePrio: 900, wantPrio: 900},
+		{name: "zero priority defaults to 500", templatePrio: 0, wantPrio: 500},
+	}
+
+	for _, tt := range tests {
+		tc := tt
+		t.Run(tc.name, func(t *testing.T) {
+			UserRepoCfgs = nil
+			Architecture = "amd64"
+			UserRepo = []config.PackageRepository{{
+				URL:      server.URL,
+				Codename: "noble",
+				PKey:     "dummy-key",
+				Priority: tc.templatePrio,
+			}}
+			resetURLExistenceCacheForTest(t)
+
+			if err := initializeUserRepoCfgs(); err != nil {
+				t.Fatalf("initializeUserRepoCfgs() error = %v", err)
+			}
+			if len(UserRepoCfgs) == 0 {
+				t.Fatal("expected UserRepoCfgs to be populated")
+			}
+			if got := UserRepoCfgs[0].Priority; got != tc.wantPrio {
+				t.Fatalf("UserRepoCfgs[0].Priority = %d, want %d", got, tc.wantPrio)
 			}
 		})
 	}
@@ -428,6 +570,25 @@ func TestClearDebPackageCache(t *testing.T) {
 			wantLeft: []string{"notes.txt"},
 		},
 		{
+			name: "clears deb files in nested subdirectories",
+			setup: func(dir string) {
+				nested := filepath.Join(dir, "chrootenv")
+				if err := os.MkdirAll(nested, 0755); err != nil {
+					t.Fatalf("failed to create nested directory: %v", err)
+				}
+				for _, p := range []string{
+					filepath.Join(dir, "bash_1.0_amd64.deb"),
+					filepath.Join(nested, "libsystemd0_255.4-1ubuntu8.15-ecir8_amd64.deb"),
+					filepath.Join(nested, "keep.txt"),
+				} {
+					if err := os.WriteFile(p, []byte("x"), 0644); err != nil {
+						t.Fatalf("failed to write %s: %v", p, err)
+					}
+				}
+			},
+			wantLeft: []string{"chrootenv/keep.txt"},
+		},
+		{
 			name:  "empty cache dir is a no-op",
 			setup: func(dir string) {},
 		},
@@ -441,7 +602,20 @@ func TestClearDebPackageCache(t *testing.T) {
 				t.Fatalf("clearDebPackageCache() unexpected error: %v", err)
 			}
 
-			debs, _ := filepath.Glob(filepath.Join(dir, "*.deb"))
+			var debs []string
+			walkErr := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				if d.IsDir() || filepath.Ext(d.Name()) != ".deb" {
+					return nil
+				}
+				debs = append(debs, path)
+				return nil
+			})
+			if walkErr != nil {
+				t.Fatalf("failed to walk test cache dir: %v", walkErr)
+			}
 			if len(debs) != 0 {
 				t.Errorf("expected no .deb files after clear, got %v", debs)
 			}
@@ -490,6 +664,14 @@ func TestClearDebMetadataCache(t *testing.T) {
 		if _, statErr := os.Stat(f); !os.IsNotExist(statErr) {
 			t.Errorf("expected packages.parsed.json in build path %d (%s) to be removed", i, dir)
 		}
+	}
+}
+
+func TestClearDebPackageCache_MissingDirIsNoOp(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "does-not-exist")
+
+	if err := clearDebPackageCache(dir); err != nil {
+		t.Fatalf("clearDebPackageCache() unexpected error for missing dir: %v", err)
 	}
 }
 
@@ -1232,6 +1414,99 @@ func TestDownloadPackagesComplete(t *testing.T) {
 	}
 }
 
+func TestHandleDebCacheRetry(t *testing.T) {
+	origCacheOutdatedFunc := isDebPackageCacheOutdatedFunc
+	origClearCacheFunc := clearDebPackageCacheFunc
+	t.Cleanup(func() {
+		isDebPackageCacheOutdatedFunc = origCacheOutdatedFunc
+		clearDebPackageCacheFunc = origClearCacheFunc
+	})
+
+	tests := []struct {
+		name               string
+		retried            bool
+		wantHandled        bool
+		wantClearCalls     int
+		wantRetryCalls     int
+		wantDownloadResult bool
+	}{
+		{
+			name:               "clears cache and retries once on first outdated check",
+			retried:            false,
+			wantHandled:        true,
+			wantClearCalls:     1,
+			wantRetryCalls:     1,
+			wantDownloadResult: true,
+		},
+		{
+			name:               "does not clear cache or retry again after retry flag is set",
+			retried:            true,
+			wantHandled:        false,
+			wantClearCalls:     0,
+			wantRetryCalls:     0,
+			wantDownloadResult: false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			cacheChecks := 0
+			clearCalls := 0
+			retryCalls := 0
+
+			isDebPackageCacheOutdatedFunc = func(requiredPackages []string, cacheDir string) (bool, []string, []string, error) {
+				cacheChecks++
+				return true, []string{"pkg-a"}, nil, nil
+			}
+			clearDebPackageCacheFunc = func(cacheDir string) error {
+				clearCalls++
+				return nil
+			}
+
+			gotDownloads, gotInfos, handled, err := handleDebCacheRetry(
+				[]string{"pkg-a"},
+				t.TempDir(),
+				tt.retried,
+				func() ([]string, []ospackage.PackageInfo, error) {
+					retryCalls++
+					return []string{"pkg-a_1.0_amd64.deb"}, []ospackage.PackageInfo{{Name: "pkg-a"}}, nil
+				},
+			)
+			if err != nil {
+				t.Fatalf("handleDebCacheRetry() error = %v", err)
+			}
+			if cacheChecks != 1 {
+				t.Fatalf("cache state checks = %d, want 1", cacheChecks)
+			}
+			if handled != tt.wantHandled {
+				t.Fatalf("handled = %v, want %v", handled, tt.wantHandled)
+			}
+			if clearCalls != tt.wantClearCalls {
+				t.Fatalf("clear calls = %d, want %d", clearCalls, tt.wantClearCalls)
+			}
+			if retryCalls != tt.wantRetryCalls {
+				t.Fatalf("retry calls = %d, want %d", retryCalls, tt.wantRetryCalls)
+			}
+			if tt.wantDownloadResult {
+				if len(gotDownloads) != 1 {
+					t.Fatalf("download result length = %d, want 1", len(gotDownloads))
+				}
+				if len(gotInfos) != 1 {
+					t.Fatalf("package info length = %d, want 1", len(gotInfos))
+				}
+			} else {
+				if len(gotDownloads) != 0 {
+					t.Fatalf("download result length = %d, want 0", len(gotDownloads))
+				}
+				if len(gotInfos) != 0 {
+					t.Fatalf("package info length = %d, want 0", len(gotInfos))
+				}
+			}
+		})
+	}
+}
+
 // TestDownloadPackages tests the DownloadPackages function
 func TestDownloadPackages(t *testing.T) {
 	// Save original values
@@ -1488,5 +1763,45 @@ func TestGlobalVariables(t *testing.T) {
 
 	if RepoCfgs[1].Arch != "arm64" {
 		t.Errorf("Expected RepoCfgs[1].Arch 'arm64', got %s", RepoCfgs[1].Arch)
+	}
+}
+
+// TestBuildDebPackageInfosFromCache_RecoversVersion asserts the cache-hit path
+// recovers the package version from the .deb filename. Dropping it here made an
+// upgraded package's SBOM entry carry an empty versionInfo, so a downstream
+// name|version|url comparison reported the package as removed-and-re-added
+// instead of upgraded.
+func TestBuildDebPackageInfosFromCache_RecoversVersion(t *testing.T) {
+	cacheDir := "/cache/pkgCache/ubuntu-ubuntu24-x86_64"
+	files := []string{
+		"linux-libc-dev_6.8.0-134.134_amd64.deb",
+		"curl_8.5.0-2ubuntu10.10_amd64.deb",
+		"weirdname.deb", // no version field: name kept, version empty
+	}
+
+	infos := buildDebPackageInfosFromCache(cacheDir, files)
+	if len(infos) != len(files) {
+		t.Fatalf("expected %d infos, got %d", len(files), len(infos))
+	}
+
+	byName := make(map[string]ospackage.PackageInfo, len(infos))
+	for _, info := range infos {
+		if info.Type != "deb" {
+			t.Errorf("%s: type = %q, want deb", info.Name, info.Type)
+		}
+		byName[info.Name] = info
+	}
+
+	if p := byName["linux-libc-dev"]; p.Version != "6.8.0-134.134" {
+		t.Errorf("linux-libc-dev version = %q, want 6.8.0-134.134", p.Version)
+	}
+	if p := byName["linux-libc-dev"]; p.URL != filepath.Join(cacheDir, files[0]) {
+		t.Errorf("linux-libc-dev URL = %q, want cache path", p.URL)
+	}
+	if p := byName["curl"]; p.Version != "8.5.0-2ubuntu10.10" {
+		t.Errorf("curl version = %q, want 8.5.0-2ubuntu10.10", p.Version)
+	}
+	if p := byName["weirdname"]; p.Version != "" {
+		t.Errorf("weirdname version = %q, want empty", p.Version)
 	}
 }

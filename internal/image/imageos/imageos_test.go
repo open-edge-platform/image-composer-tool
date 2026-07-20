@@ -194,7 +194,9 @@ func (m *recordingMountExecutor) ExecCmd(cmdStr string, sudo bool, chrootPath st
 		if len(parts) < 2 {
 			return "", fmt.Errorf("invalid mount command: %s", cmdStr)
 		}
-		mountPoint := parts[len(parts)-1]
+		// mount.MountPath shell-quotes the target and mount point, so strip the
+		// surrounding single quotes before matching/recording the path.
+		mountPoint := strings.Trim(parts[len(parts)-1], "'")
 		if strings.HasSuffix(mountPoint, "/boot") {
 			return "", fmt.Errorf("mock mount failure")
 		}
@@ -205,7 +207,7 @@ func (m *recordingMountExecutor) ExecCmd(cmdStr string, sudo bool, chrootPath st
 		if len(parts) < 2 {
 			return "", fmt.Errorf("invalid umount command: %s", cmdStr)
 		}
-		mountPoint := parts[len(parts)-1]
+		mountPoint := strings.Trim(parts[len(parts)-1], "'")
 		m.umountHistory = append(m.umountHistory, mountPoint)
 		delete(m.mountedPaths, mountPoint)
 		return "", nil
@@ -1869,6 +1871,7 @@ func TestMountUmountSysfs(t *testing.T) {
 	}
 
 	template := createTestImageTemplate()
+	template.Target.ImageType = "wsl2"
 
 	// Create ImageOs directly without NewImageOs to avoid sudo dependency
 	imageOs := &ImageOs{
@@ -1972,13 +1975,81 @@ func TestPrepareVeritySetupInvalidPair(t *testing.T) {
 	}
 }
 
+func TestValidateFsType(t *testing.T) {
+	// Every real filesystem name the templates emit must pass.
+	for _, ok := range []string{"ext4", "xfs", "vfat", "btrfs", "f2fs", "linux-swap", "ext2", "fat32"} {
+		if err := validateFsType(ok); err != nil {
+			t.Errorf("validateFsType(%q) = %v, want nil", ok, err)
+		}
+	}
+
+	// A template fsType that embeds a space (or shell/option syntax) must be
+	// rejected, since it would otherwise inject extra tokens into the unquoted
+	// "-t <fsType>" mountFlags string. An empty fsType is also invalid.
+	for _, bad := range []string{
+		"",
+		"ext4 -o loop=/dev/sda1", // extra mount option smuggled in
+		"ext4 -o ro",
+		"ext4;reboot",
+		"ext4 rw",
+		"$(reboot)",
+	} {
+		if err := validateFsType(bad); err == nil {
+			t.Errorf("validateFsType(%q) = nil, want error", bad)
+		}
+	}
+}
+
+// TestMountDiskRootToChroot_RejectsFsTypeInjection asserts the root-mount path
+// refuses a template fsType that carries an embedded space/option before it can
+// reach mount.MountPath's unquoted "-t <fsType>" command line.
+func TestMountDiskRootToChroot_RejectsFsTypeInjection(t *testing.T) {
+	idx := 0
+	template := &config.ImageTemplate{
+		Disk: config.DiskConfig{
+			Partitions: []config.PartitionInfo{
+				{ID: "root", Index: &idx, MountPoint: "/", FsType: "ext4 -o loop=/dev/sda1"},
+			},
+		},
+	}
+	err := mountDiskRootToChroot("/tmp/install-root", map[string]string{"root": "/dev/loop0p1"}, template)
+	if err == nil || !strings.Contains(err.Error(), "invalid filesystem type") {
+		t.Fatalf("expected an 'invalid filesystem type' error, got: %v", err)
+	}
+}
+
+func TestResolveAdditionalFileLocalPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	templatePath := filepath.Join(tmpDir, "templates", "test.yml")
+	filePath := filepath.Join(tmpDir, "templates", "files", "profile.sh")
+	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+		t.Fatalf("failed to create file dir: %v", err)
+	}
+	if err := os.WriteFile(filePath, []byte("echo test\n"), 0644); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	got, err := resolveAdditionalFileLocalPath("files/profile.sh", []string{templatePath})
+	if err != nil {
+		t.Fatalf("resolveAdditionalFileLocalPath() error = %v", err)
+	}
+	if got != filePath {
+		t.Fatalf("resolveAdditionalFileLocalPath() = %s, want %s", got, filePath)
+	}
+}
+
 // TestInitRootfsForDeb tests the initRootfsForDeb functionality
 func TestInitRootfsForDeb(t *testing.T) {
 	// Set up mock executor
 	originalExecutor := shell.Default
 	defer func() { shell.Default = originalExecutor }()
 
-	mockExecutor := &shell.MockExecutor{}
+	mockExecutor := shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: "^mount$", Output: "", Error: nil},
+		{Pattern: "sudo rm -rf .*/imageos_deb_test_.*/test-system", Output: "", Error: nil},
+		{Pattern: "sudo mkdir -p .*/imageos_deb_test_.*/test-system", Output: "", Error: nil},
+		{Pattern: "sudo chroot /tmp/chroot .*mmdebstrap", Output: "override-test\n", Error: fmt.Errorf("command not found")},
+	})
 	shell.Default = mockExecutor
 
 	// Create test directory
@@ -2012,6 +2083,7 @@ func TestInitRootfsForDeb(t *testing.T) {
 	defer os.Remove(sourceFile)
 
 	template := createTestImageTemplate()
+	template.Target.ImageType = "wsl2"
 
 	// Create ImageOs directly without NewImageOs to avoid sudo dependency
 	imageOs := &ImageOs{
@@ -2027,7 +2099,7 @@ func TestInitRootfsForDeb(t *testing.T) {
 	if err != nil {
 		// This is expected to fail in test environment due to missing mmdebstrap or chroot setup
 		t.Logf("initRootfsForDeb failed as expected in test environment: %v", err)
-		if !strings.Contains(err.Error(), "chroot path") && !strings.Contains(err.Error(), "mmdebstrap") {
+		if !strings.Contains(err.Error(), "failed to install packages into image") {
 			t.Errorf("Unexpected error: %v", err)
 		}
 	} else {
@@ -2035,6 +2107,60 @@ func TestInitRootfsForDeb(t *testing.T) {
 	}
 
 	t.Log("initRootfsForDeb test completed")
+}
+
+func TestPrepareInstallRootForDebBootstrapRejectsInvalidRoot(t *testing.T) {
+	imageBuildDir := t.TempDir()
+	imageOs := &ImageOs{
+		chrootEnv: &MockChrootEnv{
+			chrootImageBuildDir: imageBuildDir,
+		},
+	}
+
+	for _, installRoot := range []string{"/", imageBuildDir, filepath.Dir(imageBuildDir)} {
+		t.Run(installRoot, func(t *testing.T) {
+			if err := imageOs.prepareInstallRootForDebBootstrap(installRoot); err == nil {
+				t.Fatalf("expected invalid install root %s to be rejected", installRoot)
+			}
+		})
+	}
+}
+
+func TestInitRootfsForDebDoesNotResetRawInstallRoot(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: "sudo chroot .* mmdebstrap", Output: "", Error: nil},
+	})
+
+	testDir := t.TempDir()
+	chrootRoot := filepath.Join(testDir, "chroot")
+	if err := os.MkdirAll(chrootRoot, 0755); err != nil {
+		t.Fatalf("failed to create chroot root: %v", err)
+	}
+	sourceFile := filepath.Join(testDir, "local.list")
+	if err := os.WriteFile(sourceFile, []byte("deb file:///repo bookworm main"), 0644); err != nil {
+		t.Fatalf("failed to create source file: %v", err)
+	}
+
+	template := createTestImageTemplate()
+	template.Target.ImageType = "raw"
+	imageOs := &ImageOs{
+		installRoot: filepath.Join(testDir, template.SystemConfig.Name),
+		chrootEnv: &MockChrootEnv{
+			chrootImageBuildDir: testDir,
+			essentialPkgs:       []string{"base-files", "systemd"},
+			hostPath:            sourceFile,
+			chrootPath:          "/chroot/test",
+			chrootRoot:          chrootRoot,
+		},
+		template: template,
+	}
+
+	if err := imageOs.initRootfsForDeb(imageOs.installRoot); err != nil {
+		t.Fatalf("initRootfsForDeb() error = %v", err)
+	}
 }
 
 // TestInstallImagePkgs tests the package installation functionality
@@ -2945,6 +3071,258 @@ func TestAddImageAdditionalFiles(t *testing.T) {
 	}
 
 	t.Log("addImageAdditionalFiles test completed")
+}
+
+func TestSetupFirstBootLastPartitionAutoExpand(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+	originalConfigDir := config.Global().ConfigDir
+	defer func() { config.Global().ConfigDir = originalConfigDir }()
+
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: ".*cp.*", Output: "", Error: nil},
+		{Pattern: ".*mkdir.*", Output: "", Error: nil},
+		{Pattern: ".*chmod 0755.*ict-auto-expand-last-partition\\.sh.*", Output: "", Error: nil},
+		{Pattern: ".*systemctl enable --root=.*ict-auto-expand-last-partition\\.service.*", Output: "", Error: nil},
+	})
+
+	installRoot, err := os.MkdirTemp("", "imageos_autoexpand_service_test_*")
+	if err != nil {
+		t.Fatalf("failed to create install root: %v", err)
+	}
+	defer os.RemoveAll(installRoot)
+
+	configDir, err := os.MkdirTemp("", "imageos_autoexpand_cfg_test_*")
+	if err != nil {
+		t.Fatalf("failed to create config dir: %v", err)
+	}
+	defer os.RemoveAll(configDir)
+
+	assetDir := filepath.Join(configDir, "osv", "common", "imageconfigs", "firstboot")
+	if err := os.MkdirAll(assetDir, 0755); err != nil {
+		t.Fatalf("failed to create asset dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(assetDir, "ict-auto-expand-last-partition.sh"), []byte("#!/bin/sh\n"), 0644); err != nil {
+		t.Fatalf("failed to write script asset: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(assetDir, "ict-auto-expand-last-partition.service"), []byte("[Unit]\n"), 0644); err != nil {
+		t.Fatalf("failed to write service asset: %v", err)
+	}
+	config.Global().ConfigDir = configDir
+
+	template := createTestImageTemplate()
+	template.Target.ImageType = "raw"
+	template.Disk.ExtendLastPartitionToFillDisk = true
+	template.SystemConfig.Immutability.Enabled = false
+	template.Disk.Partitions = []config.PartitionInfo{
+		{
+			ID:         "boot",
+			MountPoint: "/boot",
+			Type:       "esp",
+		},
+		{
+			ID:         "rootfs",
+			MountPoint: "/",
+			Type:       "linux-root-amd64",
+		},
+	}
+
+	err = configureFirstBootLastPartitionAutoExpand(installRoot, template)
+	if err != nil {
+		t.Fatalf("configureFirstBootLastPartitionAutoExpand returned error: %v", err)
+	}
+}
+
+func TestSetupFirstBootLastPartitionAutoExpandSkipsWhenDisabled(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	installRoot, err := os.MkdirTemp("", "imageos_autoexpand_skip_test_*")
+	if err != nil {
+		t.Fatalf("failed to create install root: %v", err)
+	}
+	defer os.RemoveAll(installRoot)
+
+	template := createTestImageTemplate()
+	template.Target.ImageType = "raw"
+	template.Disk.ExtendLastPartitionToFillDisk = false
+
+	err = configureFirstBootLastPartitionAutoExpand(installRoot, template)
+	if err != nil {
+		t.Fatalf("configureFirstBootLastPartitionAutoExpand returned error: %v", err)
+	}
+
+	scriptPath := filepath.Join(installRoot, "usr", "local", "sbin", "ict-auto-expand-last-partition.sh")
+	if _, statErr := os.Stat(scriptPath); !os.IsNotExist(statErr) {
+		t.Fatalf("script should not be generated when flag is disabled")
+	}
+}
+
+func TestSetupFirstBootLastPartitionAutoExpandSkipsWhenImmutableEnabled(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+	originalConfigDir := config.Global().ConfigDir
+	defer func() { config.Global().ConfigDir = originalConfigDir }()
+
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: ".*cp.*", Output: "", Error: nil},
+		{Pattern: ".*mkdir.*", Output: "", Error: nil},
+		{Pattern: ".*chmod 0755.*ict-auto-expand-last-partition\\.sh.*", Output: "", Error: nil},
+		{Pattern: ".*systemctl enable --root=.*ict-auto-expand-last-partition\\.service.*", Output: "", Error: nil},
+	})
+
+	installRoot, err := os.MkdirTemp("", "imageos_autoexpand_immutability_test_*")
+	if err != nil {
+		t.Fatalf("failed to create install root: %v", err)
+	}
+	defer os.RemoveAll(installRoot)
+
+	configDir, err := os.MkdirTemp("", "imageos_autoexpand_cfg_test_*")
+	if err != nil {
+		t.Fatalf("failed to create config dir: %v", err)
+	}
+	defer os.RemoveAll(configDir)
+
+	assetDir := filepath.Join(configDir, "osv", "common", "imageconfigs", "firstboot")
+	if err := os.MkdirAll(assetDir, 0755); err != nil {
+		t.Fatalf("failed to create asset dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(assetDir, "ict-auto-expand-last-partition.sh"), []byte("#!/bin/sh\n"), 0644); err != nil {
+		t.Fatalf("failed to write script asset: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(assetDir, "ict-auto-expand-last-partition.service"), []byte("[Unit]\n"), 0644); err != nil {
+		t.Fatalf("failed to write service asset: %v", err)
+	}
+	config.Global().ConfigDir = configDir
+
+	template := createTestImageTemplate()
+	template.Target.ImageType = "raw"
+	template.Disk.ExtendLastPartitionToFillDisk = true
+	template.SystemConfig.Immutability.Enabled = true
+
+	err = configureFirstBootLastPartitionAutoExpand(installRoot, template)
+	if err != nil {
+		t.Fatalf("configureFirstBootLastPartitionAutoExpand should not validate immutability: %v", err)
+	}
+}
+
+func TestSetupFirstBootLastPartitionAutoExpandSkipsWhenLastPartitionNotRootfs(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+	originalConfigDir := config.Global().ConfigDir
+	defer func() { config.Global().ConfigDir = originalConfigDir }()
+
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: ".*cp.*", Output: "", Error: nil},
+		{Pattern: ".*mkdir.*", Output: "", Error: nil},
+		{Pattern: ".*chmod 0755.*ict-auto-expand-last-partition\\.sh.*", Output: "", Error: nil},
+		{Pattern: ".*systemctl enable --root=.*ict-auto-expand-last-partition\\.service.*", Output: "", Error: nil},
+	})
+
+	installRoot, err := os.MkdirTemp("", "imageos_autoexpand_partition_test_*")
+	if err != nil {
+		t.Fatalf("failed to create install root: %v", err)
+	}
+	defer os.RemoveAll(installRoot)
+
+	configDir, err := os.MkdirTemp("", "imageos_autoexpand_cfg_test_*")
+	if err != nil {
+		t.Fatalf("failed to create config dir: %v", err)
+	}
+	defer os.RemoveAll(configDir)
+
+	assetDir := filepath.Join(configDir, "osv", "common", "imageconfigs", "firstboot")
+	if err := os.MkdirAll(assetDir, 0755); err != nil {
+		t.Fatalf("failed to create asset dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(assetDir, "ict-auto-expand-last-partition.sh"), []byte("#!/bin/sh\n"), 0644); err != nil {
+		t.Fatalf("failed to write script asset: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(assetDir, "ict-auto-expand-last-partition.service"), []byte("[Unit]\n"), 0644); err != nil {
+		t.Fatalf("failed to write service asset: %v", err)
+	}
+	config.Global().ConfigDir = configDir
+
+	template := createTestImageTemplate()
+	template.Target.ImageType = "raw"
+	template.Disk.ExtendLastPartitionToFillDisk = true
+	template.Disk.Partitions = []config.PartitionInfo{
+		{
+			ID:         "boot",
+			MountPoint: "/boot",
+			Type:       "esp",
+		},
+		{
+			ID:         "data",
+			MountPoint: "/data",
+			Type:       "linux-data",
+		},
+	}
+
+	err = configureFirstBootLastPartitionAutoExpand(installRoot, template)
+	if err != nil {
+		t.Fatalf("configureFirstBootLastPartitionAutoExpand should not validate partition semantics: %v", err)
+	}
+}
+
+func TestSetupFirstBootLastPartitionAutoExpandProceedsWhenConditionsMet(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+	originalConfigDir := config.Global().ConfigDir
+	defer func() { config.Global().ConfigDir = originalConfigDir }()
+
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: ".*cp.*", Output: "", Error: nil},
+		{Pattern: ".*mkdir.*", Output: "", Error: nil},
+		{Pattern: ".*chmod 0755.*ict-auto-expand-last-partition\\.sh.*", Output: "", Error: nil},
+		{Pattern: ".*systemctl enable --root=.*ict-auto-expand-last-partition\\.service.*", Output: "", Error: nil},
+	})
+
+	configDir, err := os.MkdirTemp("", "imageos_autoexpand_conditions_test_*")
+	if err != nil {
+		t.Fatalf("failed to create config dir: %v", err)
+	}
+	defer os.RemoveAll(configDir)
+
+	assetDir := filepath.Join(configDir, "osv", "common", "imageconfigs", "firstboot")
+	if err := os.MkdirAll(assetDir, 0755); err != nil {
+		t.Fatalf("failed to create asset dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(assetDir, "ict-auto-expand-last-partition.sh"), []byte("#!/bin/sh\n"), 0644); err != nil {
+		t.Fatalf("failed to write script asset: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(assetDir, "ict-auto-expand-last-partition.service"), []byte("[Unit]\n"), 0644); err != nil {
+		t.Fatalf("failed to write service asset: %v", err)
+	}
+	config.Global().ConfigDir = configDir
+
+	template := createTestImageTemplate()
+	template.Target.ImageType = "raw"
+	template.Disk.ExtendLastPartitionToFillDisk = true
+	template.SystemConfig.Immutability.Enabled = false
+	template.Disk.Partitions = []config.PartitionInfo{
+		{
+			ID:         "boot",
+			MountPoint: "/boot",
+			Type:       "esp",
+		},
+		{
+			ID:         "rootfs",
+			MountPoint: "/",
+			Type:       "linux-root-amd64",
+		},
+	}
+
+	installRoot, err := os.MkdirTemp("", "imageos_autoexpand_conditions_install_test_*")
+	if err != nil {
+		t.Fatalf("failed to create install root: %v", err)
+	}
+	defer os.RemoveAll(installRoot)
+
+	err = configureFirstBootLastPartitionAutoExpand(installRoot, template)
+	if err != nil {
+		t.Fatalf("configureFirstBootLastPartitionAutoExpand returned error: %v", err)
+	}
 }
 
 // TestBuildImageUKI tests the buildImageUKI function

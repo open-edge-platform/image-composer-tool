@@ -75,6 +75,68 @@ func (imageOs *ImageOs) GetInstallRoot() string {
 	return imageOs.installRoot
 }
 
+func (imageOs *ImageOs) InstallRootfs() (installRoot, versionInfo string, err error) {
+	installRoot = imageOs.installRoot
+	versionInfo = ""
+	log.Infof("Installing rootfs for image: %s", imageOs.template.GetImageName())
+
+	pkgType := imageOs.chrootEnv.GetTargetOsPkgType()
+	if pkgType == "deb" {
+		if err = imageOs.initRootfsForDeb(imageOs.installRoot); err != nil {
+			err = fmt.Errorf("failed to initialize rootfs for deb: %w", err)
+			return
+		}
+	}
+
+	if err = imageOs.mountSysfsToRootfs(imageOs.installRoot); err != nil {
+		return
+	}
+
+	defer func() {
+		if umountErr := imageOs.umountSysfsFromRootfs(imageOs.installRoot); umountErr != nil {
+			if err != nil {
+				err = fmt.Errorf("operation failed: %w, cleanup errors: %v", err, umountErr)
+			} else {
+				err = fmt.Errorf("failed to unmount sysfs from image rootfs: %w", umountErr)
+			}
+		}
+	}()
+
+	log.Infof("Image installation pre-processing...")
+	if err = preImageOsInstall(imageOs.installRoot, imageOs.template); err != nil {
+		err = fmt.Errorf("pre-install failed: %w", err)
+		return
+	}
+
+	log.Infof("Image package installation...")
+	if err = imageOs.installImagePkgs(imageOs.installRoot, imageOs.template); err != nil {
+		err = fmt.Errorf("failed to install image packages: %w", err)
+		return
+	}
+
+	log.Infof("Image system configuration...")
+	if err = updateRootfsConfig(imageOs.installRoot, imageOs.template); err != nil {
+		err = fmt.Errorf("failed to update image config: %w", err)
+		return
+	}
+
+	log.Infof("Image SBOM generation...")
+	versionInfo, err = imageOs.generateSBOM(imageOs.installRoot, imageOs.template)
+	if err != nil {
+		err = fmt.Errorf("generating SBOM failed: %w", err)
+		return
+	}
+
+	log.Infof("Image installation post-processing...")
+	versionInfo, err = imageOs.postImageOsInstall(imageOs.installRoot, imageOs.template)
+	if err != nil {
+		err = fmt.Errorf("post-install failed: %w", err)
+		return
+	}
+
+	return
+}
+
 func (imageOs *ImageOs) InstallInitrd() (installRoot, versionInfo string, err error) {
 	installRoot = imageOs.installRoot
 	versionInfo = ""
@@ -235,6 +297,12 @@ func (imageOs *ImageOs) InstallImageOs(diskPathIdMap map[string]string) (version
 }
 
 func (imageOs *ImageOs) initRootfsForDeb(installRoot string) error {
+	if imageOs.template.Target.ImageType == "wsl2" {
+		if err := imageOs.prepareInstallRootForDebBootstrap(installRoot); err != nil {
+			return err
+		}
+	}
+
 	essentialPkgsList, err := imageOs.chrootEnv.GetChrootEnvEssentialPackageList()
 	if err != nil {
 		return fmt.Errorf("failed to get essential packages list: %w", err)
@@ -285,6 +353,32 @@ func (imageOs *ImageOs) initRootfsForDeb(installRoot string) error {
 	return nil
 }
 
+func (imageOs *ImageOs) prepareInstallRootForDebBootstrap(installRoot string) error {
+	installRoot = filepath.Clean(installRoot)
+	imageBuildDir := filepath.Clean(imageOs.chrootEnv.GetChrootImageBuildDir())
+	if installRoot == "" || installRoot == string(filepath.Separator) || installRoot == imageBuildDir {
+		return fmt.Errorf("refusing to reset invalid install root %s", installRoot)
+	}
+	isSubPath, err := file.IsSubPath(imageBuildDir, installRoot)
+	if err != nil {
+		return fmt.Errorf("failed to validate install root %s: %w", installRoot, err)
+	}
+	if !isSubPath {
+		return fmt.Errorf("install root %s is not under image build directory %s", installRoot, imageBuildDir)
+	}
+
+	if err := mount.UmountSubPath(installRoot); err != nil {
+		return fmt.Errorf("failed to unmount stale rootfs mount points: %w", err)
+	}
+	if _, err := shell.ExecCmd(fmt.Sprintf("rm -rf -- %q", installRoot), true, shell.HostPath, nil); err != nil {
+		return fmt.Errorf("failed to remove stale install root %s: %w", installRoot, err)
+	}
+	if _, err := shell.ExecCmd(fmt.Sprintf("mkdir -p -- %q", installRoot), true, shell.HostPath, nil); err != nil {
+		return fmt.Errorf("failed to recreate install root %s: %w", installRoot, err)
+	}
+	return nil
+}
+
 func (imageOs *ImageOs) mountSysfsToRootfs(installRoot string) error {
 	chrootInstallRoot, err := imageOs.chrootEnv.GetChrootEnvPath(installRoot)
 	if err != nil {
@@ -327,6 +421,9 @@ func mountDiskRootToChroot(installRoot string, diskPathIdMap map[string]string, 
 			if partition.ID == diskId {
 				if partition.MountPoint == "/" {
 					mountPoint := resolveInstallRootMountPoint(installRoot, partition.MountPoint)
+					if err := validateFsType(partition.FsType); err != nil {
+						return fmt.Errorf("refusing to mount root partition %s: %w", diskPath, err)
+					}
 					mountFlags := fmt.Sprintf("-t %s", partition.FsType)
 					if err := mount.MountPath(diskPath, mountPoint, mountFlags); err != nil {
 						log.Errorf("Failed to mount %s to %s: %v", diskPath, mountPoint, err)
@@ -339,6 +436,27 @@ func mountDiskRootToChroot(installRoot string, diskPathIdMap map[string]string, 
 	}
 	log.Errorf("No root partition found in diskPathIdMap")
 	return fmt.Errorf("no root partition found in diskPathIdMap")
+}
+
+// fsTypePattern constrains a partition filesystem type to a single safe token.
+// FsType comes from the image template (config.PartitionInfo.FsType) and is
+// interpolated into a "-t <fsType>" mountFlags string that mount.MountPath passes
+// unquoted into a bash -c command line. mount.MountPath's own allowlist has to
+// permit spaces (legitimate flag strings look like "-t ext4 -o nosuid"), so a
+// template fsType such as "ext4 -o loop=/dev/sda1" would slip through as an extra
+// mount option/argument. Constraining fsType to a single non-empty run of
+// [A-Za-z0-9._-] (which covers every real filesystem name: ext4, xfs, vfat,
+// btrfs, f2fs, linux-swap, ...) rejects the embedded space before it can inject
+// options — closing option/argument injection at the template boundary.
+var fsTypePattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// validateFsType rejects a filesystem type that is not a single safe token, so a
+// template cannot smuggle extra mount options through the "-t <fsType>" flag.
+func validateFsType(fsType string) error {
+	if !fsTypePattern.MatchString(fsType) {
+		return fmt.Errorf("invalid filesystem type %q: must be a single token matching [A-Za-z0-9._-]+", fsType)
+	}
+	return nil
 }
 
 func isSwapFsType(fsType string) bool {
@@ -390,6 +508,12 @@ func (imageOs *ImageOs) mountDiskToChroot(installRoot string, diskPathIdMap map[
 				fsType := partition.FsType
 				if fsType == "fat32" || fsType == "fat16" {
 					fsType = "vfat"
+				}
+				// Validate the (normalized) fsType is a single safe token before it is
+				// interpolated into the unquoted "-t <fsType>" mountFlags string, so a
+				// template cannot inject extra mount options via the filesystem type.
+				if err := validateFsType(fsType); err != nil {
+					return nil, fmt.Errorf("refusing to mount partition %s: %w", diskId, err)
 				}
 				if strings.TrimPrefix(strings.TrimSpace(partition.MountPoint), "/") == "boot/efi" {
 					mountPointInfo["Flags"] = fmt.Sprintf("-t %s -o umask=0077", fsType)
@@ -880,11 +1004,18 @@ func restoreInitramfsBinariesAfterDebInstall(installRoot string, backupPaths map
 }
 
 func updateInitrdConfig(installRoot string, template *config.ImageTemplate) error {
+	return updateRootfsConfig(installRoot, template)
+}
+
+func updateRootfsConfig(installRoot string, template *config.ImageTemplate) error {
 	if err := updateImageHostname(installRoot, template); err != nil {
 		return fmt.Errorf("failed to update image hostname: %w", err)
 	}
 	if err := addImageAdditionalFiles(installRoot, template); err != nil {
 		return fmt.Errorf("failed to add additional files to image: %w", err)
+	}
+	if err := configureFirstBootLastPartitionAutoExpand(installRoot, template); err != nil {
+		return fmt.Errorf("failed to configure first-boot partition auto-expand: %w", err)
 	}
 	if err := updateImageUsrGroup(installRoot, template); err != nil {
 		return fmt.Errorf("failed to update image user/group: %w", err)
@@ -910,6 +1041,9 @@ func updateImageConfig(installRoot string, diskPathIdMap map[string]string, temp
 	}
 	if err := addImageAdditionalFiles(installRoot, template); err != nil {
 		return fmt.Errorf("failed to add additional files to image: %w", err)
+	}
+	if err := configureFirstBootLastPartitionAutoExpand(installRoot, template); err != nil {
+		return fmt.Errorf("failed to configure first-boot partition auto-expand: %w", err)
 	}
 	if err := updateImageUsrGroup(installRoot, template); err != nil {
 		return fmt.Errorf("failed to update image user/group: %w", err)
@@ -1051,7 +1185,10 @@ func addImageAdditionalFiles(installRoot string, template *config.ImageTemplate)
 	}
 
 	for _, fileInfo := range additionalFiles {
-		srcFile := fileInfo.Local
+		srcFile, err := resolveAdditionalFileLocalPath(fileInfo.Local, template.PathList)
+		if err != nil {
+			return fmt.Errorf("failed to resolve additional file %s: %w", fileInfo.Local, err)
+		}
 		dstFile := filepath.Join(installRoot, fileInfo.Final)
 		if err := file.CopyFile(srcFile, dstFile, "-p", true); err != nil {
 			log.Errorf("Failed to copy additional file %s to image: %v", srcFile, err)
@@ -1061,6 +1198,74 @@ func addImageAdditionalFiles(installRoot string, template *config.ImageTemplate)
 	}
 	return nil
 }
+
+func configureFirstBootLastPartitionAutoExpand(installRoot string, template *config.ImageTemplate) error {
+	if template == nil {
+		return nil
+	}
+
+	disk := template.GetDiskConfig()
+	if !disk.ExtendLastPartitionToFillDisk {
+		return nil
+	}
+
+	if template.Target.ImageType != "raw" {
+		log.Infof("Skipping first-boot partition auto-expand configuration: imageType=%s", template.Target.ImageType)
+		return nil
+	}
+
+	configDir, err := config.ConfigDir()
+	if err != nil {
+		return fmt.Errorf("failed to get config dir: %w", err)
+	}
+	assetDir := filepath.Join(configDir, "osv", "common", "imageconfigs", "firstboot")
+
+	scriptSrc := filepath.Join(assetDir, "ict-auto-expand-last-partition.sh")
+	serviceSrc := filepath.Join(assetDir, "ict-auto-expand-last-partition.service")
+	if _, err := os.Stat(scriptSrc); err != nil {
+		return fmt.Errorf("first-boot auto-expand script asset is missing: %w", err)
+	}
+	if _, err := os.Stat(serviceSrc); err != nil {
+		return fmt.Errorf("first-boot auto-expand service asset is missing: %w", err)
+	}
+
+	scriptDst := filepath.Join(installRoot, "usr", "local", "sbin", "ict-auto-expand-last-partition.sh")
+	serviceDst := filepath.Join(installRoot, "etc", "systemd", "system", "ict-auto-expand-last-partition.service")
+	if err := file.CopyFile(scriptSrc, scriptDst, "-p", true); err != nil {
+		return fmt.Errorf("failed to copy first-boot partition auto-expand script: %w", err)
+	}
+	if err := file.CopyFile(serviceSrc, serviceDst, "-p", true); err != nil {
+		return fmt.Errorf("failed to copy first-boot partition auto-expand service: %w", err)
+	}
+
+	serviceName := "ict-auto-expand-last-partition.service"
+	if _, err := shell.ExecCmd("chmod 0755 "+scriptDst, true, shell.HostPath, nil); err != nil {
+		return fmt.Errorf("failed to set permissions for first-boot partition auto-expand script: %w", err)
+	}
+
+	enableCmd := "systemctl enable --root=\"" + installRoot + "\" " + serviceName
+	if _, err := shell.ExecCmd(enableCmd, true, shell.HostPath, nil); err != nil {
+		return fmt.Errorf("failed to enable first-boot partition auto-expand service: %w", err)
+	}
+
+	return nil
+}
+
+func resolveAdditionalFileLocalPath(localPath string, templatePaths []string) (string, error) {
+	if localPath == "" || filepath.IsAbs(localPath) {
+		return localPath, nil
+	}
+
+	for _, templatePath := range templatePaths {
+		candidatePath := filepath.Join(filepath.Dir(templatePath), localPath)
+		if _, err := os.Stat(candidatePath); err == nil {
+			return candidatePath, nil
+		}
+	}
+
+	return "", fmt.Errorf("relative path not found in template search paths")
+}
+
 func addImageConfigs(installRoot string, template *config.ImageTemplate) error {
 	customConfigs := template.GetConfigurationInfo()
 	if len(customConfigs) == 0 {
@@ -2043,6 +2248,12 @@ func (imageOs *ImageOs) generateSBOM(installRoot string, template *config.ImageT
 
 	installRootPkgs := strings.Split(strings.TrimSpace(result), "\n")
 	downloadedPkgs := template.FullPkgListBom
+	if len(downloadedPkgs) == 0 {
+		// live-installer loads template-dump.yaml where FullPkgListBom is not serialized.
+		// Fallback to installed package metadata only in this case; RAW flow remains unchanged.
+		log.Warnf("SBOM metadata list is empty; falling back to installed package metadata")
+		downloadedPkgs = imageOs.installedPackageNamesAsSBOMMetadata(installRootPkgs, pkgType)
+	}
 
 	// Create a map of normalized package names from installed packages for faster lookup
 	installedPkgMap := make(map[string]bool)
@@ -2086,6 +2297,30 @@ func (imageOs *ImageOs) generateSBOM(installRoot string, template *config.ImageT
 	}
 
 	return result, nil
+}
+
+func (imageOs *ImageOs) installedPackageNamesAsSBOMMetadata(installedPkgs []string, pkgType string) []ospackage.PackageInfo {
+	pkgs := make([]ospackage.PackageInfo, 0, len(installedPkgs))
+	for _, pkg := range installedPkgs {
+		name := strings.TrimSpace(pkg)
+		if name == "" {
+			continue
+		}
+
+		if colonIndex := strings.Index(name, ":"); colonIndex != -1 {
+			name = name[:colonIndex]
+		}
+
+		pkgs = append(pkgs, ospackage.PackageInfo{
+			Name:    name,
+			Type:    pkgType,
+			URL:     "NOASSERTION",
+			License: "NOASSERTION",
+			Origin:  "NOASSERTION",
+		})
+	}
+
+	return pkgs
 }
 
 // isSymlink checks if a given path is a symbolic link

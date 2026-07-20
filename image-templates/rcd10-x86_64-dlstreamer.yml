@@ -35,6 +35,10 @@ packageRepositories:
     url: "https://packages.microsoft.com/yumrepos/cbl-mariner-2.0-prod-extended-x86_64/"
     pkey: "https://packages.microsoft.com/azurelinux/3.0/prod/base/x86_64/repodata/repomd.xml.key" # Uncomment and replace in real config
 
+  - codename: "docker-ce"
+    url: "https://download.docker.com/linux/centos/10/x86_64/stable"
+    pkey: "https://download.docker.com/linux/centos/gpg"
+
 
 disk:
   name: Minimal_Raw # 1:1 mapping to the systemConfigs name
@@ -83,9 +87,15 @@ systemConfig:
     - nano
     - paho-mqtt-c
     - ffmpeg
-    - gstreamer
     - opencv
     - intel-dlstreamer-2025.2.0
     - openvino-2025.3.0
     - linux-firmware-i915
+    - podman
+    - podman-docker
+    - docker-compose-plugin
     # - tdnf
+
+  configurations:
+    # Edit source file path for dlstreamer opencv plugin
+    - cmd: sed -i 's|export LD_LIBRARY_PATH="|export LD_LIBRARY_PATH="/usr/local/lib64:|' /opt/intel/dlstreamer/setupvars.sh

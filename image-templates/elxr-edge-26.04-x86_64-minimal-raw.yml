@@ -70,7 +70,7 @@ systemConfig:
     enabled: false # default is true, overridden to false here
 
   packages:
-    - grub-efi-amd64-signed
+    # - grub-efi-amd64-signed
     - grub2-common
     - grub-pc-bin
     - grub-efi-amd64

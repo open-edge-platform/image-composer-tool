@@ -106,6 +106,7 @@ The tool supports building custom images for:
 	// Add all subcommands
 	rootCmd.AddCommand(createBuildCommand())
 	rootCmd.AddCommand(createValidateCommand())
+	rootCmd.AddCommand(createServeCommand())
 	rootCmd.AddCommand(createVersionCommand())
 	rootCmd.AddCommand(createConfigCommand())
 	rootCmd.AddCommand(createCacheCommand())

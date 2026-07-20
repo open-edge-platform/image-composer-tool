@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -52,6 +53,9 @@ type DiskConfig struct {
 	Size               string              `yaml:"size"`
 	PartitionTableType string              `yaml:"partitionTableType"`
 	Partitions         []PartitionInfo     `yaml:"partitions"`
+	// ExtendLastPartitionToFillDisk forces the final partition's end to "0"
+	// (consume all remaining disk space) when enabled.
+	ExtendLastPartitionToFillDisk bool `yaml:"extendLastPartitionToFillDisk,omitempty"`
 }
 
 type PackageRepository struct {
@@ -91,23 +95,110 @@ type ProviderRepoConfigs struct {
 	Repositories []ProviderRepoConfig `yaml:"repositories"`
 }
 
-// ImageTemplate represents the YAML image template structure (unchanged)
+// Baseline-mode constants.
+const (
+	BaselineModeCreate  = "create"
+	BaselineModeOverlay = "overlay"
+
+	// Baseline image formats accepted for overlay mode. Non-RAW formats are
+	// converted to RAW (via qemu-img) before the baseline is loop-attached.
+	BaselineFormatRaw   = "raw"
+	BaselineFormatQcow2 = "qcow2"
+	BaselineFormatVHD   = "vhd"
+	BaselineFormatVHDX  = "vhdx"
+
+	OverlayPackageOpAdditiveOnly = "additive-only"
+	// OverlayPackageOpAdditiveAndUpgrade permits, in addition to adding new
+	// packages, upgrading a package already installed in the baseline to a newer
+	// version. Downgrades and removals remain blocked. Opting in flips the
+	// internal OverlayPolicy.AllowUpgrade gate (see OverlayPolicy.validate).
+	OverlayPackageOpAdditiveAndUpgrade = "additive-and-upgrade"
+
+	OverlayConflictPolicyFail          = "fail"
+	OverlayConflictPolicyAllowExplicit = "allow-explicit"
+)
+
+// Baseline configures whether the image is built from scratch ("create") or
+// constructed by overlaying packages onto an existing baseline image ("overlay").
+type Baseline struct {
+	Mode   string          `yaml:"mode,omitempty"`
+	Source *BaselineSource `yaml:"source,omitempty"`
+}
+
+// BaselineSource describes the source baseline image for overlay mode.
+// v1 supports a local RAW disk image, referenced either by a local filesystem
+// path or by an http(s) URL that is downloaded before the overlay runs.
+// Exactly one of Path or URL must be set.
+type BaselineSource struct {
+	Path   string `yaml:"path,omitempty"`
+	URL    string `yaml:"url,omitempty"`
+	Format string `yaml:"format,omitempty"`
+}
+
+// OverlayPolicy controls how overlay-mode preflight classifies and gates
+// package operations against the baseline image.
+type OverlayPolicy struct {
+	PackageOperation string `yaml:"packageOperation,omitempty"`
+	ConflictPolicy   string `yaml:"conflictPolicy,omitempty"`
+	KernelCmdline    string `yaml:"kernelCmdline,omitempty"`
+
+	// AllowDiskResize gates whether an overlay build may grow the baseline image
+	// to satisfy a larger disk.size. Overlay mode preserves the baseline layout by
+	// default, so a disk.size larger than the baseline is rejected unless the user
+	// opts in here. It never permits shrinking; resize stays grow-only.
+	AllowDiskResize bool `yaml:"allowDiskResize,omitempty"`
+
+	// AllowRemoval gates whether preflight permits removing a baseline package.
+	// It is intentionally NOT a YAML field, and the schema rejects it via
+	// additionalProperties:false, so it always carries its zero value (false):
+	// overlay mode is additive-only in v1. A future release can lift the
+	// restriction by surfacing this field in the schema/YAML.
+	AllowRemoval bool `yaml:"-"`
+
+	// AllowDowngrade gates whether preflight permits downgrading a baseline
+	// package to an older version. Like AllowRemoval it is intentionally NOT a
+	// YAML field (the schema rejects it via additionalProperties:false) and
+	// always carries its zero value (false): overlay mode is additive-only in
+	// v1, so downgrades are blocked by default. A future release can surface it.
+	AllowDowngrade bool `yaml:"-"`
+
+	// AllowUpgrade gates whether preflight permits upgrading a baseline package
+	// to a newer version. Like AllowRemoval/AllowDowngrade it is intentionally
+	// NOT a YAML field (the schema rejects it via additionalProperties:false);
+	// it is instead derived from PackageOperation by validate(), which sets it
+	// true when packageOperation is "additive-and-upgrade" and leaves it false
+	// (the default) for "additive-only". Enabling it lets the deb backend replace
+	// an installed package in place (dpkg -i upgrades), and switches the rpm
+	// backend to `rpm -U`; downgrades and removals stay blocked regardless.
+	AllowUpgrade bool `yaml:"-"`
+}
+
+// ImageTemplate represents the YAML image template structure
 type ImageTemplate struct {
+	Extends             string              `yaml:"extends,omitempty"`
 	Image               ImageInfo           `yaml:"image"`
 	Target              TargetInfo          `yaml:"target"`
+	Baseline            *Baseline           `yaml:"baseline,omitempty"`
+	OverlayPolicy       *OverlayPolicy      `yaml:"overlayPolicy,omitempty"`
 	Disk                DiskConfig          `yaml:"disk,omitempty"`
 	SystemConfig        SystemConfig        `yaml:"systemConfig"`
 	PackageRepositories []PackageRepository `yaml:"packageRepositories,omitempty"`
 
 	// Explicitly excluded from YAML serialization/deserialization
-	PathList             []string                `yaml:"-"`
-	BootloaderPkgList    []string                `yaml:"-"`
-	EssentialPkgList     []string                `yaml:"-"`
-	KernelPkgList        []string                `yaml:"-"`
-	FullPkgList          []string                `yaml:"-"`
-	FullPkgListBom       []ospackage.PackageInfo `yaml:"-"`
-	DotFilePath          string                  `yaml:"-"`
-	DotSystemOnly        bool                    `yaml:"-"`
+	PathList            []string                `yaml:"-"`
+	BootloaderPkgList   []string                `yaml:"-"`
+	EssentialPkgList    []string                `yaml:"-"`
+	KernelPkgList       []string                `yaml:"-"`
+	FullPkgList         []string                `yaml:"-"`
+	FullPkgListBom      []ospackage.PackageInfo `yaml:"-"`
+	SBOMPackageMetadata []ospackage.PackageInfo `yaml:"sbomPackageMetadata,omitempty"`
+	DotFilePath         string                  `yaml:"-"`
+	DotSystemOnly       bool                    `yaml:"-"`
+	// InspectEnabled toggles post-build image inspection for overlay builds. It is
+	// driven by the CLI --inspect/--no-inspect flags (default on) rather than YAML,
+	// so it is excluded from serialization. Consumed by the overlay postprocess
+	// inspection stage.
+	InspectEnabled       bool `yaml:"-"`
 	pureBuildStart       time.Time
 	pureBuildDuration    time.Duration
 	downloadPkgsStart    time.Time
@@ -238,6 +329,8 @@ type PartitionInfo struct {
 
 var log = logger.Logger()
 
+var invalidBlockScalarHeaderPattern = regexp.MustCompile(`(: \|)\d+([+-]?)\n`)
+
 // LoadTemplate loads an ImageTemplate from the specified YAML template path
 func LoadTemplate(path string, validateFull bool) (*ImageTemplate, error) {
 
@@ -261,8 +354,13 @@ func LoadTemplate(path string, validateFull bool) (*ImageTemplate, error) {
 	}
 
 	// Store the template path info
-	if !slice.Contains(template.PathList, path) {
-		template.PathList = append(template.PathList, path)
+	canonicalPath, absErr := filepath.Abs(path)
+	if absErr != nil {
+		canonicalPath = path
+	}
+
+	if !slice.Contains(template.PathList, canonicalPath) {
+		template.PathList = append(template.PathList, canonicalPath)
 	}
 
 	log.Infof("Loaded image template from %s: name=%s, os=%s, dist=%s, arch=%s",
@@ -308,6 +406,10 @@ func parseYAMLTemplate(data []byte, validateFull bool) (*ImageTemplate, error) {
 	}
 
 	if err := template.validatePackageRepositories(); err != nil {
+		return nil, err
+	}
+
+	if err := template.validateBaseline(); err != nil {
 		return nil, err
 	}
 
@@ -696,6 +798,17 @@ func (t *ImageTemplate) SaveUpdatedConfigFile(path string) error {
 		return fmt.Errorf("error marshaling template to YAML: %w", err)
 	}
 
+	if err := validateYAMLBytes(data); err != nil {
+		log.Warnf("Generated YAML is not parseable, applying block scalar header fix: %v", err)
+
+		data = fixInvalidBlockScalarHeader(data)
+
+		if validateErr := validateYAMLBytes(data); validateErr != nil {
+			log.Errorf("Generated YAML remains invalid after block scalar header fix: %v", validateErr)
+			return fmt.Errorf("generated YAML is invalid after block scalar header fix: %w", validateErr)
+		}
+	}
+
 	// Write file safely with symlink protection
 	if err := security.SafeWriteFile(path, data, 0644, security.RejectSymlinks); err != nil {
 		log.Errorf("Failed to write image template to %s: %v", path, err)
@@ -704,6 +817,18 @@ func (t *ImageTemplate) SaveUpdatedConfigFile(path string) error {
 
 	log.Infof("Saved image template to %s", path)
 	return nil
+}
+
+func validateYAMLBytes(data []byte) error {
+	var parsed any
+
+	return yaml.Unmarshal(data, &parsed)
+}
+
+func fixInvalidBlockScalarHeader(data []byte) []byte {
+	// Work around yaml.v3 emitting invalid explicit indent headers such as "|4-".
+	// Keep the payload and chomping mode untouched, and drop only the indent indicator.
+	return invalidBlockScalarHeaderPattern.ReplaceAll(data, []byte("$1$2\n"))
 }
 
 // GetImmutability returns the immutability configuration from systemConfig
@@ -1031,4 +1156,140 @@ func (pr *PackageRepository) ValidatePackageRepository() error {
 		return fmt.Errorf("repository '%s': cannot specify both 'url' and 'path', choose one", pr.Codename)
 	}
 	return nil
+}
+
+// validateBaseline enforces cross-field rules that the JSON schema cannot express:
+// mode/source coupling, format restrictions, and overlay policy invariants.
+// overlayPolicy is a top-level peer to baseline (per the image-extension ADR),
+// so it is only permitted when baseline.mode is "overlay".
+func (t *ImageTemplate) validateBaseline() error {
+	mode := BaselineModeCreate
+	if t.Baseline != nil && t.Baseline.Mode != "" {
+		mode = t.Baseline.Mode
+	}
+
+	switch mode {
+	case BaselineModeCreate:
+		if t.Baseline != nil && t.Baseline.Source != nil {
+			return fmt.Errorf("baseline: source must not be set when mode is %q", BaselineModeCreate)
+		}
+		if t.OverlayPolicy != nil {
+			return fmt.Errorf("overlayPolicy must not be set when baseline.mode is %q", BaselineModeCreate)
+		}
+	case BaselineModeOverlay:
+		if t.Baseline.Source == nil {
+			return fmt.Errorf("baseline: source is required when mode is %q", BaselineModeOverlay)
+		}
+		if err := t.Baseline.Source.Validate(); err != nil {
+			return err
+		}
+		format := t.Baseline.Source.Format
+		if format == "" {
+			format = BaselineFormatRaw
+		}
+		switch format {
+		case BaselineFormatRaw, BaselineFormatQcow2, BaselineFormatVHD, BaselineFormatVHDX:
+			// supported; non-raw formats are converted to RAW before loop-attach.
+		default:
+			return fmt.Errorf("baseline.source.format must be one of %q, %q, %q, %q (got %q)",
+				BaselineFormatRaw, BaselineFormatQcow2, BaselineFormatVHD, BaselineFormatVHDX, format)
+		}
+		if t.OverlayPolicy != nil {
+			if err := t.OverlayPolicy.validate(); err != nil {
+				return err
+			}
+		}
+	default:
+		return fmt.Errorf("baseline.mode must be %q or %q (got %q)",
+			BaselineModeCreate, BaselineModeOverlay, t.Baseline.Mode)
+	}
+	return nil
+}
+
+// Validate enforces that exactly one of Path or URL is set, and that a URL uses
+// the https scheme. Plain http is rejected so the baseline is always fetched
+// over TLS, matching the https-only policy used for other remote downloads in
+// this tool (e.g. RPM packages). Integrity verification of the downloaded image
+// is intentionally deferred. Local paths are taken from the host build system
+// as-is; https URLs are downloaded before the overlay runs.
+func (s *BaselineSource) Validate() error {
+	// Normalize by trimming surrounding whitespace and persist it back onto the
+	// struct so callers (overlay ingestion) use the same value that was
+	// validated. Otherwise a padded path/URL could pass validation here but then
+	// fail with a confusing error during copy/download.
+	path := strings.TrimSpace(s.Path)
+	rawURL := strings.TrimSpace(s.URL)
+	s.Path = path
+	s.URL = rawURL
+	// Normalize the format to lower-case so downstream overlay ingestion compares
+	// the declared format against qemu-img's (lower-cased) detected format on equal
+	// footing. YAML-loaded templates are already constrained to the lower-case
+	// schema enum (raw/qcow2/vhd/vhdx) before this runs, so this primarily
+	// normalizes programmatically-built templates, which reach ingestion via
+	// Validate() without passing through schema validation.
+	s.Format = strings.ToLower(strings.TrimSpace(s.Format))
+
+	switch {
+	case path == "" && rawURL == "":
+		return fmt.Errorf("baseline.source must set either %q or %q", "path", "url")
+	case path != "" && rawURL != "":
+		return fmt.Errorf("baseline.source must set only one of %q or %q", "path", "url")
+	case path != "":
+		// Reject any URI scheme (e.g. http:/, file:/path, file://...). Local
+		// paths have no scheme; remote images belong in baseline.source.url.
+		if parsed, err := url.Parse(path); err == nil && parsed.Scheme != "" {
+			return fmt.Errorf("baseline.source.path must be a local file path; use baseline.source.url for remote images")
+		}
+	case rawURL != "":
+		parsed, err := url.Parse(rawURL)
+		if err != nil {
+			return fmt.Errorf("baseline.source.url is not a valid URL: %w", err)
+		}
+		// Require https so the baseline is always fetched over TLS. Plain http
+		// offers no integrity or authenticity guarantee for a whole-disk image
+		// and is rejected here, consistent with other remote downloads.
+		if parsed.Scheme != "https" {
+			return fmt.Errorf("baseline.source.url must use https (got %q)", parsed.Scheme)
+		}
+		// Reject a scheme-only URL like "https://" (no host): it passes the
+		// scheme check but would fail later with an opaque download error.
+		// Catching it here gives an immediate, clear message.
+		if parsed.Host == "" {
+			return fmt.Errorf("baseline.source.url must include a host (got %q)", rawURL)
+		}
+	}
+	return nil
+}
+
+func (p *OverlayPolicy) validate() error {
+	op := p.PackageOperation
+	if op == "" {
+		op = OverlayPackageOpAdditiveOnly
+	}
+	switch op {
+	case OverlayPackageOpAdditiveOnly:
+		// Additive-only: upgrades of baseline packages stay blocked.
+		p.AllowUpgrade = false
+	case OverlayPackageOpAdditiveAndUpgrade:
+		// Opt in to upgrading already-installed baseline packages. Downgrades and
+		// removals are still gated off (AllowDowngrade/AllowRemoval stay false).
+		p.AllowUpgrade = true
+	default:
+		return fmt.Errorf("baseline.overlayPolicy.packageOperation must be %q or %q (got %q)",
+			OverlayPackageOpAdditiveOnly, OverlayPackageOpAdditiveAndUpgrade, p.PackageOperation)
+	}
+	cp := p.ConflictPolicy
+	if cp == "" {
+		cp = OverlayConflictPolicyFail
+	}
+	if cp != OverlayConflictPolicyFail && cp != OverlayConflictPolicyAllowExplicit {
+		return fmt.Errorf("baseline.overlayPolicy.conflictPolicy must be %q or %q (got %q)",
+			OverlayConflictPolicyFail, OverlayConflictPolicyAllowExplicit, p.ConflictPolicy)
+	}
+	return nil
+}
+
+// IsOverlayMode reports whether the template requests overlay-mode baseline.
+func (t *ImageTemplate) IsOverlayMode() bool {
+	return t.Baseline != nil && t.Baseline.Mode == BaselineModeOverlay
 }

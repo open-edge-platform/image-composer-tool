@@ -7,7 +7,7 @@ A command-line tool for building custom Linux images from pre-built packages. De
 
 ## How It Works
 
-![ICT Build Flow](./docs/architecture/assets/image-composer-tool-build-flow.svg)
+![ICT Build Flow](./docs/user-guide/_assets/image-composer-tool-build-flow.svg)
 
 The diagram above illustrates the overall build flow and may show representative or planned provider/architecture
 combinations. The table below lists the OS and architecture combinations that are currently supported.
@@ -44,7 +44,7 @@ builds (output: `./build/image-composer-tool`):
 earthly +build
 ```
 
-See the [Installation Guide](./docs/tutorial/installation.md) for Debian
+See the [Installation Guide](./docs/user-guide/get-started/installation.md) for Debian
 package installation, prerequisite setup, and other options.
 
 ### 2. Install Prerequisites
@@ -55,7 +55,7 @@ sudo apt install systemd-ukify mmdebstrap
 ```
 
 > Specific versions and alternative installation methods are documented in the
-> [Installation Guide](./docs/tutorial/installation.md#image-composition-prerequisites).
+> [Installation Guide](./docs/user-guide/get-started/installation.md#image-composition-prerequisites).
 
 ### 3. Compose an Image
 
@@ -118,26 +118,26 @@ systemConfig:
 ```
 
 To learn about template structure, variable substitution, and best practices,
-see [Creating and Reusing Image Templates](./docs/architecture/image-composer-tool-templates.md).
+see [Creating and Reusing Image Templates](./docs/user-guide/architecture/image-composer-tool-templates.md).
 
 ## Documentation
 
 | Guide | Description |
 |-------|-------------|
-| [Installation Guide](./docs/tutorial/installation.md) | Build options, Debian packaging, prerequisites |
-| [Usage Guide](./docs/tutorial/usage-guide.md) | CLI commands, configuration, shell completion |
-| [CLI Reference](./docs/architecture/image-composer-tool-cli-specification.md) | Complete command-line specification |
-| [Image Templates](./docs/architecture/image-composer-tool-templates.md) | Template system and customization |
-| [Build Process](./docs/architecture/image-composer-tool-build-process.md) | How image composition works, troubleshooting |
-| [Secure Boot](./docs/tutorial/configure-secure-boot.md) | Configuring secure boot for images |
-| [Multiple Repos](./docs/architecture/image-composer-tool-multi-repo-support.md) | Using multiple package repositories |
+| [Installation Guide](./docs/user-guide/get-started/installation.md) | Build options, Debian packaging, prerequisites |
+| [Usage Guide](./docs/user-guide/get-started/usage-guide.md) | CLI commands, configuration, shell completion |
+| [CLI Reference](./docs/user-guide/architecture/image-composer-tool-cli-specification.md) | Complete command-line specification |
+| [Image Templates](./docs/user-guide/architecture/image-composer-tool-templates.md) | Template system and customization |
+| [Build Process](./docs/user-guide/architecture/image-composer-tool-build-process.md) | How image composition works, troubleshooting |
+| [Secure Boot](./docs/user-guide/configuration/configure-secure-boot.md) | Configuring secure boot for images |
+| [Multiple Repos](./docs/user-guide/architecture/image-composer-tool-multi-repo-support.md) | Using multiple package repositories |
 
 ## Get Help
 
 - Run `./image-composer-tool --help`
-- [Browse the documentation](https://docs.openedgeplatform.intel.com/2026.0/image-composer-tool/index.html)
+- [Browse the documentation](https://docs.openedgeplatform.intel.com/dev/image-composer-tool/index.html)
 - [Start a discussion](https://github.com/open-edge-platform/image-composer-tool/discussions)
-- [Troubleshoot build issues](./docs/architecture/image-composer-tool-build-process.md#troubleshooting-build-issues)
+- [Troubleshoot build issues](./docs/user-guide/architecture/image-composer-tool-build-process.md#troubleshooting-build-issues)
 
 ## Contribute
 

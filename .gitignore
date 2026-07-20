@@ -1,7 +1,10 @@
 # ignore build artifacts, cache files, and temporary files 
 downloads/
 builds/  
+# Ignore cache directories anywhere (root runtime cache and provider test
+# caches), but keep the internal/cache source package tracked.
 cache/
+!internal/cache/
 tmp/ 
 workspace/
 # AI embedding cache

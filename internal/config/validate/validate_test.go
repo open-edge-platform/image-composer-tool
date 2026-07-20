@@ -170,6 +170,276 @@ systemConfig:
 	}
 }
 
+func TestValidWSL2Template(t *testing.T) {
+	wsl2TemplateYAML := `image:
+  name: test-wsl2-image
+  version: "1.0.0"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: wsl2
+
+disk:
+  name: wsl2-rootfs
+  artifacts:
+    - type: tar
+      compression: gz
+
+systemConfig:
+  name: default
+  packages:
+    - ubuntu-minimal
+`
+
+	var raw interface{}
+	if err := yaml.Unmarshal([]byte(wsl2TemplateYAML), &raw); err != nil {
+		t.Fatalf("yml parsing error: %v", err)
+	}
+
+	dataJSON, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("json marshaling error: %v", err)
+	}
+
+	if err := ValidateImageTemplateJSON(dataJSON); err != nil {
+		t.Errorf("expected WSL2 template to pass validation, but got: %v", err)
+	}
+}
+
+func TestInvalidWSL2TemplateWithPartitionTable(t *testing.T) {
+	invalidTemplateYAML := `image:
+  name: test-wsl2-image
+  version: "1.0.0"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: wsl2
+
+disk:
+  name: wsl2-rootfs
+  partitionTableType: gpt
+  artifacts:
+    - type: tar
+      compression: gz
+
+systemConfig:
+  name: default
+  packages:
+    - ubuntu-minimal
+`
+
+	var raw interface{}
+	if err := yaml.Unmarshal([]byte(invalidTemplateYAML), &raw); err != nil {
+		t.Fatalf("yml parsing error: %v", err)
+	}
+
+	dataJSON, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("json marshaling error: %v", err)
+	}
+
+	if err := ValidateImageTemplateJSON(dataJSON); err == nil {
+		t.Errorf("expected WSL2 template with partitionTableType to fail validation")
+	}
+}
+
+func TestInvalidWSL2TemplateWithoutCompression(t *testing.T) {
+	invalidTemplateYAML := `image:
+  name: test-wsl2-image
+  version: "1.0.0"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: wsl2
+
+disk:
+  name: wsl2-rootfs
+  artifacts:
+    - type: tar
+
+systemConfig:
+  name: default
+  packages:
+    - ubuntu-minimal
+`
+
+	var raw interface{}
+	if err := yaml.Unmarshal([]byte(invalidTemplateYAML), &raw); err != nil {
+		t.Fatalf("yml parsing error: %v", err)
+	}
+
+	dataJSON, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("json marshaling error: %v", err)
+	}
+
+	if err := ValidateImageTemplateJSON(dataJSON); err == nil {
+		t.Errorf("expected WSL2 template without artifact compression to fail validation")
+	}
+}
+
+func TestInvalidWSL2TemplateWithNonGzipCompression(t *testing.T) {
+	invalidTemplateYAML := `image:
+  name: test-wsl2-image
+  version: "1.0.0"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: wsl2
+
+disk:
+  name: wsl2-rootfs
+  artifacts:
+    - type: tar
+      compression: xz
+
+systemConfig:
+  name: default
+  packages:
+    - ubuntu-minimal
+`
+
+	var raw interface{}
+	if err := yaml.Unmarshal([]byte(invalidTemplateYAML), &raw); err != nil {
+		t.Fatalf("yml parsing error: %v", err)
+	}
+
+	dataJSON, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("json marshaling error: %v", err)
+	}
+
+	if err := ValidateImageTemplateJSON(dataJSON); err == nil {
+		t.Errorf("expected WSL2 template with non-gz artifact compression to fail validation")
+	}
+}
+
+func TestInvalidWSL2TemplateWithKernelSection(t *testing.T) {
+	invalidTemplateYAML := `image:
+  name: test-wsl2-image
+  version: "1.0.0"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: wsl2
+
+disk:
+  name: wsl2-rootfs
+  artifacts:
+    - type: tar
+      compression: gz
+
+systemConfig:
+  name: default
+  kernel:
+    version: "6.12"
+`
+
+	var raw interface{}
+	if err := yaml.Unmarshal([]byte(invalidTemplateYAML), &raw); err != nil {
+		t.Fatalf("yml parsing error: %v", err)
+	}
+
+	dataJSON, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("json marshaling error: %v", err)
+	}
+
+	if err := ValidateImageTemplateJSON(dataJSON); err == nil {
+		t.Errorf("expected WSL2 template with kernel section to fail validation")
+	}
+}
+
+func TestInvalidNonWSL2TemplateWithTarArtifact(t *testing.T) {
+	tests := []struct {
+		name      string
+		template  string
+		validate  func([]byte) error
+		errSubstr string
+	}{
+		{
+			name: "full-template-raw-image-with-tar-artifact",
+			template: `image:
+  name: test-raw-image
+  version: "1.0.0"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+
+disk:
+  name: default
+  artifacts:
+    - type: tar
+      compression: gz
+
+systemConfig:
+  name: default
+`,
+			validate:  ValidateImageTemplateJSON,
+			errSubstr: "not",
+		},
+		{
+			name: "user-template-raw-image-with-tar-artifact",
+			template: `image:
+  name: test-raw-user-template
+  version: "1.0.0"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+
+disk:
+  name: default
+  artifacts:
+    - type: tar
+      compression: gz
+`,
+			validate:  ValidateUserTemplateJSON,
+			errSubstr: "not",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var raw interface{}
+			if err := yaml.Unmarshal([]byte(tt.template), &raw); err != nil {
+				t.Fatalf("yml parsing error: %v", err)
+			}
+
+			dataJSON, err := json.Marshal(raw)
+			if err != nil {
+				t.Fatalf("json marshaling error: %v", err)
+			}
+
+			err = tt.validate(dataJSON)
+			if err == nil {
+				t.Fatalf("expected non-WSL2 template with tar artifact to fail validation")
+			}
+			if !strings.Contains(err.Error(), tt.errSubstr) {
+				t.Fatalf("expected error to contain %q, got: %v", tt.errSubstr, err)
+			}
+		})
+	}
+}
+
 func TestInvalidMergedTemplate(t *testing.T) {
 	// Create an invalid merged template (missing required fields)
 	invalidMergedTemplateYAML := `image:
@@ -799,5 +1069,268 @@ systemConfig:
 	}
 	if err := ValidateImageTemplateJSON(dataJSON); err == nil {
 		t.Fatal("expected dhcp4 with static addresses to fail schema validation")
+	}
+}
+
+func TestValidateImageTemplateJSON_AutoExpand(t *testing.T) {
+	tests := []struct {
+		name        string
+		templateYML string
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "rejects-immutability-enabled",
+			templateYML: `image:
+  name: test-autoexpand-immutable
+  version: "1.0.0"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+disk:
+  name: test
+  size: 4GiB
+  partitionTableType: gpt
+  extendLastPartitionToFillDisk: true
+  partitions:
+    - id: boot
+      type: esp
+      start: 1MiB
+      end: 513MiB
+      fsType: fat32
+      mountPoint: /boot/efi
+    - id: rootfs
+      type: linux-root-amd64
+      start: 513MiB
+      end: "0"
+      fsType: ext4
+      mountPoint: /
+systemConfig:
+  name: test
+  immutability:
+    enabled: true
+  packages:
+    - p
+  kernel:
+    version: "6.14"
+`,
+			wantErr:     true,
+			errContains: "immutability",
+		},
+		{
+			name: "rejects-non-rootfs-last-partition",
+			templateYML: `image:
+  name: test-autoexpand-nonroot-last
+  version: "1.0.0"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+disk:
+  name: test
+  size: 4GiB
+  partitionTableType: gpt
+  extendLastPartitionToFillDisk: true
+  partitions:
+    - id: boot
+      type: esp
+      start: 1MiB
+      end: 513MiB
+      fsType: fat32
+      mountPoint: /boot/efi
+    - id: rootfs
+      type: linux-root-amd64
+      start: 513MiB
+      end: 2561MiB
+      fsType: ext4
+      mountPoint: /
+    - id: swap
+      type: linux-swap
+      start: 2561MiB
+      end: "0"
+      fsType: linux-swap
+      mountPoint: none
+systemConfig:
+  name: test
+  immutability:
+    enabled: false
+  packages:
+    - p
+  kernel:
+    version: "6.14"
+`,
+			wantErr:     true,
+			errContains: "last partition",
+		},
+		{
+			name: "allows-rootfs-last-partition",
+			templateYML: `image:
+  name: test-autoexpand-valid
+  version: "1.0.0"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+disk:
+  name: test
+  size: 4GiB
+  partitionTableType: gpt
+  extendLastPartitionToFillDisk: true
+  partitions:
+    - id: boot
+      type: esp
+      start: 1MiB
+      end: 513MiB
+      fsType: fat32
+      mountPoint: /boot/efi
+    - id: rootfs
+      type: linux-root-amd64
+      start: 513MiB
+      end: "0"
+      fsType: ext4
+      mountPoint: /
+systemConfig:
+  name: test
+  immutability:
+    enabled: false
+  packages:
+    - p
+  kernel:
+    version: "6.14"
+`,
+			wantErr: false,
+		},
+		{
+			name: "rejects-iso-image-type",
+			templateYML: `image:
+  name: test-autoexpand-iso
+  version: "1.0.0"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: iso
+disk:
+  name: test
+  size: 4GiB
+  partitionTableType: gpt
+  extendLastPartitionToFillDisk: true
+  partitions:
+    - id: rootfs
+      type: linux-root-amd64
+      start: 1MiB
+      end: "0"
+      fsType: ext4
+      mountPoint: /
+systemConfig:
+  name: test
+  immutability:
+    enabled: false
+  packages:
+    - p
+  kernel:
+    version: "6.14"
+`,
+			wantErr:     true,
+			errContains: "imageType=\"iso\"",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var raw interface{}
+			if err := yaml.Unmarshal([]byte(tt.templateYML), &raw); err != nil {
+				t.Fatalf("YAML parsing error: %v", err)
+			}
+
+			dataJSON, err := json.Marshal(raw)
+			if err != nil {
+				t.Fatalf("JSON marshaling error: %v", err)
+			}
+
+			err = ValidateImageTemplateJSON(dataJSON)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected validation to fail")
+				}
+				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
+					t.Fatalf("expected error containing %q, got: %v", tt.errContains, err)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("expected validation to pass, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateUserTemplateJSON_AutoExpand(t *testing.T) {
+	tests := []struct {
+		name        string
+		dataJSON    []byte
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "rejects-non-rootfs-last-partition",
+			dataJSON: []byte(`{
+	"image": {"name": "test-user-autoexpand", "version": "1.0.0"},
+	"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"},
+	"disk": {
+		"name": "test",
+		"extendLastPartitionToFillDisk": true,
+		"partitions": [{"mountPoint": "/"}, {"mountPoint": "none"}]
+	},
+	"systemConfig": {"immutability": {"enabled": false}}
+}`),
+			wantErr:     true,
+			errContains: "last partition",
+		},
+		{
+			name: "rejects-iso-image-type",
+			dataJSON: []byte(`{
+	"image": {"name": "test-user-autoexpand-iso", "version": "1.0.0"},
+	"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "iso"},
+	"disk": {
+		"name": "test",
+		"extendLastPartitionToFillDisk": true,
+		"partitions": [{"mountPoint": "/"}]
+	},
+	"systemConfig": {"immutability": {"enabled": false}}
+}`),
+			wantErr:     true,
+			errContains: "imageType=\"iso\"",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := ValidateUserTemplateJSON(tt.dataJSON)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected validation to fail")
+				}
+				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
+					t.Fatalf("expected error containing %q, got: %v", tt.errContains, err)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("expected validation to pass, got: %v", err)
+			}
+		})
 	}
 }
