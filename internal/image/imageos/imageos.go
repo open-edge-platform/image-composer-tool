@@ -1580,15 +1580,24 @@ func wireFDEBoot(installRoot string, diskPathIdMap map[string]string, template *
 		return fmt.Errorf("failed to read cmdline %s: %w", cmdlinePath, err)
 	}
 	fields := strings.Fields(content)
+	hashDev := fdeHashPartitionDev(diskPathIdMap, template)
 	for i, f := range fields {
 		switch {
 		case rootMapper != "" && !template.IsImmutabilityEnabled() && strings.HasPrefix(f, "root="):
 			fields[i] = "root=" + rootMapper
 		case rootMapper != "" && template.IsImmutabilityEnabled() && strings.HasPrefix(f, "systemd.verity_root_data="):
+			// Verity-on-LUKS: data device is the decrypted mapper, not the raw PARTUUID.
 			fields[i] = "systemd.verity_root_data=" + rootMapper
+		case rootMapper != "" && template.IsImmutabilityEnabled() && strings.HasPrefix(f, "roothash="):
+			// Build-time veritysetup must hash the decrypted rootfs, not the LUKS container.
+			if hashDev == "" {
+				return fmt.Errorf("FDE with dm-verity requires a hash partition (e.g. roothashmap)")
+			}
+			fields[i] = fmt.Sprintf("roothash=%s-%s", rootMapper, hashDev)
 		}
 	}
-	fields = append(fields, luksParams...)
+	// LUKS parameters should appear before dm-verity setup in the initramfs.
+	fields = append(luksParams, fields...)
 	if err := file.Write(strings.Join(fields, " ")+"\n", cmdlinePath); err != nil {
 		return fmt.Errorf("failed to write cmdline %s: %w", cmdlinePath, err)
 	}
@@ -1611,6 +1620,25 @@ func fdeRootPartitionID(template *config.ImageTemplate) string {
 	for _, p := range template.GetDiskConfig().Partitions {
 		if p.MountPoint == "/" {
 			return p.ID
+		}
+	}
+	return ""
+}
+
+// fdeHashPartitionDev returns the block device path for the dm-verity hash partition.
+func fdeHashPartitionDev(diskPathIdMap map[string]string, template *config.ImageTemplate) string {
+	for _, p := range template.GetDiskConfig().Partitions {
+		if p.ID == "roothashmap" || p.ID == "hash" {
+			if dev, ok := diskPathIdMap[p.ID]; ok {
+				return dev
+			}
+		}
+	}
+	for _, p := range template.GetDiskConfig().Partitions {
+		if p.MountPoint == "none" {
+			if dev, ok := diskPathIdMap[p.ID]; ok {
+				return dev
+			}
 		}
 	}
 	return ""
