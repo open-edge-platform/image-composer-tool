@@ -3,7 +3,7 @@ package manifest
 import (
 	"testing"
 
-	"github.com/open-edge-platform/os-image-composer/internal/ospackage"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 )
 
 // FuzzWriteManifestToFile tests manifest file writing with various inputs
