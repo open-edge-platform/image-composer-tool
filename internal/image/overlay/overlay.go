@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -402,6 +403,57 @@ func prepareDestination(dst string) error {
 	return nil
 }
 
+// redactURL returns a URL safe to log: a non-empty query string is replaced with a
+// single "[REDACTED]" marker, the fragment is dropped, and any userinfo password is
+// masked (via url.URL.Redacted). Presigned download URLs (e.g. S3/Azure SAS) carry
+// credentials in the query parameters, so logging the raw URL at info level would
+// leak them; the marker keeps the log readable while withholding the secret tail.
+// On a parse failure the redaction is done textually (see redactURLTextual) so a
+// malformed URL can never fall through to logging a raw secret.
+func redactURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return redactURLTextual(raw)
+	}
+	if u.RawQuery != "" {
+		u.RawQuery = "[REDACTED]"
+	}
+	u.Fragment = ""
+	return u.Redacted()
+}
+
+// redactURLTextual is the best-effort fallback for a URL that url.Parse rejects. It
+// strips the query/fragment tail — preserving the original delimiter ('?' or '#') as
+// a redaction marker — and masks any userinfo password ("//user:password@" becomes
+// "//user:xxxxx@", matching url.URL.Redacted), so neither a secret query tail nor an
+// embedded credential leaks when the structured redaction path is unavailable.
+func redactURLTextual(raw string) string {
+	if i := strings.IndexAny(raw, "?#"); i >= 0 {
+		raw = raw[:i] + string(raw[i]) + "[REDACTED]"
+	}
+	// Userinfo sits between "//" and the "@" that precedes the host, before the path.
+	slashes := strings.Index(raw, "//")
+	if slashes < 0 {
+		return raw
+	}
+	authStart := slashes + 2
+	rest := raw[authStart:]
+	at := strings.Index(rest, "@")
+	if at < 0 {
+		return raw
+	}
+	// Only userinfo if the "@" comes before the path — a later "@" belongs to the path.
+	if slash := strings.Index(rest, "/"); slash >= 0 && slash < at {
+		return raw
+	}
+	userinfo := rest[:at]
+	colon := strings.Index(userinfo, ":")
+	if colon < 0 {
+		return raw
+	}
+	return raw[:authStart] + userinfo[:colon] + ":xxxxx" + rest[at:]
+}
+
 // copyBaseline copies the source baseline into dst. A local path is copied (never
 // symlinked or moved); an https URL is downloaded over TLS (BaselineSource.Validate
 // permits only https for remote sources). The user-provided source is never modified.
@@ -414,11 +466,11 @@ func (ing *Ingestor) copyBaseline(dst string) error {
 
 	switch {
 	case src.URL != "":
-		log.Debugf("Downloading baseline image from %s to %s", src.URL, dst)
+		log.Infof("Downloading baseline image from %s", redactURL(src.URL))
 		if err := downloadBaseline(src.URL, dst); err != nil {
-			return fmt.Errorf("failed to download baseline image from %s to %s: %w", src.URL, dst, err)
+			return fmt.Errorf("failed to download baseline image from %s to %s: %w", redactURL(src.URL), dst, err)
 		}
-		log.Debugf("Finished downloading baseline image to %s", dst)
+		log.Infof("Finished downloading baseline image to %s", dst)
 	default:
 		log.Debugf("Copying baseline image from %s to %s", src.Path, dst)
 		if err := copyLocalFile(src.Path, dst); err != nil {
