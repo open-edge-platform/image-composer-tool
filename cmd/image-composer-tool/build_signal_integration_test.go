@@ -90,13 +90,20 @@ func TestBuildSIGTERMCleansUpMountsAndLoops(t *testing.T) {
 	}
 	buildPid := build.Process.Pid
 
+	// Start the single Wait goroutine that both the pre-signal timeout branch
+	// and the post-signal bounded wait share. Calling cmd.Wait() a second time
+	// after the first returns raises "waitid: no child processes" on Linux
+	// because the child has already been reaped — so there must be exactly one
+	// Wait for the whole test lifetime.
+	doneCh := waitAsync(build)
+
 	// Wait long enough for PreProcess to bootstrap the chroot and mount sysfs
 	// — this is the point where cleanup work actually needs to happen. On a
 	// warm cache the shortest observed time to first mount is ~5-10 s; give
 	// it more headroom to be robust across CI hardware.
 	select {
 	case <-time.After(30 * time.Second):
-	case err := <-waitAsync(build):
+	case err := <-doneCh:
 		t.Fatalf("build finished before we could interrupt it: %v", err)
 	}
 
@@ -117,7 +124,7 @@ func TestBuildSIGTERMCleansUpMountsAndLoops(t *testing.T) {
 	// on the worst-case umount escalation + slack.
 	waitCtx, waitCancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer waitCancel()
-	exitErr := waitBounded(waitCtx, build)
+	exitErr := waitOnChan(waitCtx, build, doneCh)
 
 	// Expect exit code 130.
 	if exitErr == nil {
@@ -196,11 +203,13 @@ func waitAsync(cmd *exec.Cmd) <-chan error {
 	return ch
 }
 
-// waitBounded waits for cmd to exit under ctx; if the deadline fires first it
-// kills the process group and returns ctx.Err. Used so a hung post-cancel
-// build can't wedge the test binary indefinitely.
-func waitBounded(ctx context.Context, cmd *exec.Cmd) error {
-	done := waitAsync(cmd)
+// waitOnChan waits for cmd to exit under ctx using a pre-existing Wait channel;
+// if the deadline fires first it kills the process group and returns ctx.Err.
+// The caller owns the single cmd.Wait() lifecycle (exactly one Wait per Cmd)
+// and passes the channel in — avoiding the "waitid: no child processes" race
+// that would result from spawning a second Wait goroutine here after an
+// earlier select branch already reaped the child.
+func waitOnChan(ctx context.Context, cmd *exec.Cmd, done <-chan error) error {
 	select {
 	case err := <-done:
 		return err
