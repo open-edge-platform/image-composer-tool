@@ -5,7 +5,7 @@
 **June 17, 2026**
 
 **New**
-
+- Build from scratch with `--no-cache`: The `build` command now accepts a `--no-cache` flag that runs the build in fresh, unique cache and workspace directories (ignoring any existing caches) and removes them once the build finishes. The final image is copied into the configured `work_dir` beforehand. `--no-cache` cannot be combined with `--cache-dir` or `--work-dir`.
 - ARM64/aarch64 cross-architecture image builds: Ubuntu 24, eLxR 12, and AZL3 images can now be composed on an x86_64 host targeting ARM64. The builder validates host-side prerequisites (arch-test, qemu-user-static), normalizes architectures for `mmdebstrap` and `dpkg`, and forces a host-side ukify execution when the host and target architectures differ.
 
 - Ubuntu 24 ARM64 bootable server image: Added a user template and supporting configuration to produce a bootable Ubuntu 24 `aarch64` server image.
@@ -91,6 +91,8 @@
 - `fix(templates)`: pin intel-dlstreamer to 2025.2.0 (#492): `intel-dlstreamer` in `eLxR/RCD` templates was not version-pinned, causing uncontrolled version updates.
 
 - `fix(templates)`: kernel version metadata 6.14 → 6.17 (#494): Template metadata version field for Ubuntu 24 kernels corrected to match the actual installed kernel series.
+
+- `fix(templates)`: pin ubuntu24 edge kernel to noble GA (6.8) (#761): The `ubuntu24-x86_64-edge-raw` and `ubuntu24-aarch64-edge-raw` templates pinned `kernel.version: 6.17` with `linux-image-generic-hwe-24.04`, a combination Ubuntu noble no longer ships — only `6.8.0-31.31` (GA) and `7.0.0-28.28~24.04.1` (HWE-edge) are available. Pin the kernel to the noble GA combination (`6.8` + `linux-image-generic`) so the `build-ubuntu24-immutable` CI job can complete.
 
 - RPM DOT file naming bug (#538): `GenerateDot` used the raw filename (e.g., `glibc-2.38-16.azl3.x86_64.rpm`) as a node label instead of the canonical package name (`glibc`), producing incorrect dependency graphs.
 

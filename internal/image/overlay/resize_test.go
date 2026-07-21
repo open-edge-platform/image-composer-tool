@@ -97,11 +97,44 @@ func TestPlanResize_RejectsSizeAboveInt64Max(t *testing.T) {
 	}
 }
 
+// lastPartitionJSON is an lsblk --json layout in which rootDevice is the last
+// partition on the disk (highest START). Used to satisfy the non-last-partition
+// guard in the grow-sequence tests.
+func lastPartitionJSON(rootDevice string) string {
+	return `{"blockdevices":[{"name":"loop0","path":"/dev/loop0","type":"loop","children":[
+	  {"name":"loop0p1","path":"/dev/loop0p1","start":2048,"type":"part"},
+	  {"name":"root","path":"` + rootDevice + `","start":1050624,"type":"part"}
+	]}]}`
+}
+
+// stubResizeToolsPresent overrides the tool-availability probe so all tools
+// report present, and restores it when the test ends.
+func stubResizeToolsPresent(t *testing.T) {
+	t.Helper()
+	orig := resizeToolExists
+	t.Cleanup(func() { resizeToolExists = orig })
+	resizeToolExists = func(string) (bool, error) { return true, nil }
+}
+
+// recordingExec returns a resizeExec stub that records every command and answers
+// the lsblk START-offset probe (the non-last-partition guard) with a layout in
+// which rootDevice is last. All other commands return empty output.
+func recordingExec(cmds *[]string, rootDevice string) func(string) (string, error) {
+	return func(cmd string) (string, error) {
+		*cmds = append(*cmds, cmd)
+		if strings.Contains(cmd, "lsblk") {
+			return lastPartitionJSON(rootDevice), nil
+		}
+		return "", nil
+	}
+}
+
 func TestResizeBaseline_GrowRunsExpectedSequence(t *testing.T) {
 	origExec := resizeExec
 	defer func() { resizeExec = origExec }()
+	stubResizeToolsPresent(t)
 	var cmds []string
-	resizeExec = func(cmd string) (string, error) { cmds = append(cmds, cmd); return "", nil }
+	resizeExec = recordingExec(&cmds, "/dev/loop0p2")
 
 	p := writeSizedFile(t, 100<<20)
 	tmpl := &config.ImageTemplate{
@@ -195,8 +228,18 @@ func TestResizeBaseline_GrowWithoutOptInErrorsAndRunsNothing(t *testing.T) {
 func TestResizeBaseline_XFSUsesGrowfsByMount(t *testing.T) {
 	origExec := resizeExec
 	defer func() { resizeExec = origExec }()
+	stubResizeToolsPresent(t)
 	var cmds []string
-	resizeExec = func(cmd string) (string, error) { cmds = append(cmds, cmd); return "", nil }
+	// Single-partition disk: the xfs root is trivially the last partition.
+	resizeExec = func(cmd string) (string, error) {
+		cmds = append(cmds, cmd)
+		if strings.Contains(cmd, "lsblk") {
+			return `{"blockdevices":[{"name":"loop0","path":"/dev/loop0","type":"loop","children":[
+			  {"name":"loop0p1","path":"/dev/loop0p1","start":2048,"type":"part"}
+			]}]}`, nil
+		}
+		return "", nil
+	}
 
 	p := writeSizedFile(t, 100<<20)
 	tmpl := &config.ImageTemplate{
@@ -250,6 +293,174 @@ func TestSplitPartitionDevice(t *testing.T) {
 		if disk != tt.wantDisk || part != tt.wantPart {
 			t.Errorf("splitPartitionDevice(%q) = %q/%q, want %q/%q", tt.dev, disk, part, tt.wantDisk, tt.wantPart)
 		}
+	}
+}
+
+// A grow must be refused, with no disk mutation, when the root is not the last
+// partition on the disk: growpart would otherwise extend it into a following
+// partition and corrupt the table. This is the primary safety guard.
+func TestResizeBaseline_RejectsNonLastRootPartition(t *testing.T) {
+	origExec := resizeExec
+	defer func() { resizeExec = origExec }()
+	stubResizeToolsPresent(t)
+	var cmds []string
+	// Layout where the root (loop0p2) is followed by a later partition (loop0p3).
+	resizeExec = func(cmd string) (string, error) {
+		cmds = append(cmds, cmd)
+		if strings.Contains(cmd, "lsblk") {
+			return `{"blockdevices":[{"name":"loop0","path":"/dev/loop0","type":"loop","children":[
+			  {"name":"loop0p1","path":"/dev/loop0p1","start":2048,"type":"part"},
+			  {"name":"loop0p2","path":"/dev/loop0p2","start":1050624,"type":"part"},
+			  {"name":"loop0p3","path":"/dev/loop0p3","start":9439232,"type":"part"}
+			]}]}`, nil
+		}
+		return "", nil
+	}
+
+	p := writeSizedFile(t, 100<<20)
+	tmpl := &config.ImageTemplate{
+		Disk:          config.DiskConfig{Size: "200MiB"},
+		OverlayPolicy: &config.OverlayPolicy{AllowDiskResize: true},
+	}
+	ctx := &Context{BaselineCopyPath: p, LoopDevPath: "/dev/loop0"}
+	layout := &Layout{RootDevice: "/dev/loop0p2", RootFSType: "ext4", RootMount: "/mnt/root", PartitionTable: partitionTableGPT}
+
+	err := ResizeBaseline(tmpl, ctx, layout)
+	if err == nil {
+		t.Fatal("expected rejection when root is not the last partition")
+	}
+	if !strings.Contains(err.Error(), "last partition") {
+		t.Errorf("error should explain the last-partition requirement; got: %v", err)
+	}
+	// No mutating command may have run, and the backing file must be untouched.
+	joined := strings.Join(cmds, "\n")
+	for _, forbidden := range []string{"growpart", "sgdisk", "resize2fs", "losetup -c"} {
+		if strings.Contains(joined, forbidden) {
+			t.Errorf("no mutation must run on rejection; saw %q in:\n%s", forbidden, joined)
+		}
+	}
+	fi, err := os.Stat(p)
+	if err != nil {
+		t.Fatalf("stat backing file: %v", err)
+	}
+	if fi.Size() != 100<<20 {
+		t.Errorf("backing file size = %d, want %d (must not grow on rejection)", fi.Size(), 100<<20)
+	}
+}
+
+// A required resize tool missing on the build host must abort the grow up front,
+// before any disk mutation, with a message naming the missing tool.
+func TestResizeBaseline_RejectsWhenToolMissing(t *testing.T) {
+	origExec := resizeExec
+	defer func() { resizeExec = origExec }()
+	ran := false
+	resizeExec = func(string) (string, error) { ran = true; return "", nil }
+
+	origTool := resizeToolExists
+	defer func() { resizeToolExists = origTool }()
+	resizeToolExists = func(cmd string) (bool, error) { return cmd != "growpart", nil }
+
+	p := writeSizedFile(t, 100<<20)
+	tmpl := &config.ImageTemplate{
+		Disk:          config.DiskConfig{Size: "200MiB"},
+		OverlayPolicy: &config.OverlayPolicy{AllowDiskResize: true},
+	}
+	ctx := &Context{BaselineCopyPath: p, LoopDevPath: "/dev/loop0"}
+	layout := &Layout{RootDevice: "/dev/loop0p2", RootFSType: "ext4", RootMount: "/mnt/root", PartitionTable: partitionTableGPT}
+
+	err := ResizeBaseline(tmpl, ctx, layout)
+	if err == nil {
+		t.Fatal("expected rejection when a required resize tool is missing")
+	}
+	if !strings.Contains(err.Error(), "growpart") {
+		t.Errorf("error should name the missing tool; got: %v", err)
+	}
+	if ran {
+		t.Error("no resize command must run when a required tool is missing")
+	}
+	fi, err := os.Stat(p)
+	if err != nil {
+		t.Fatalf("stat backing file: %v", err)
+	}
+	if fi.Size() != 100<<20 {
+		t.Errorf("backing file size = %d, want %d (must not grow on rejection)", fi.Size(), 100<<20)
+	}
+}
+
+func TestResizeToolsForFS(t *testing.T) {
+	gptExt := resizeToolsForFS("ext4", partitionTableGPT)
+	if !contains(gptExt, "sgdisk") || !contains(gptExt, "resize2fs") {
+		t.Errorf("GPT ext4 tools = %v, want sgdisk + resize2fs", gptExt)
+	}
+	if contains(gptExt, "xfs_growfs") {
+		t.Errorf("GPT ext4 tools must not include xfs_growfs: %v", gptExt)
+	}
+	mbrXFS := resizeToolsForFS("xfs", partitionTableDOS)
+	if contains(mbrXFS, "sgdisk") {
+		t.Errorf("MBR must not require sgdisk: %v", mbrXFS)
+	}
+	if !contains(mbrXFS, "xfs_growfs") {
+		t.Errorf("xfs root must require xfs_growfs: %v", mbrXFS)
+	}
+}
+
+func contains(ss []string, want string) bool {
+	for _, s := range ss {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestParsePartitionStarts(t *testing.T) {
+	js := `{"blockdevices":[{"name":"loop0","path":"/dev/loop0","type":"loop","start":null,"children":[
+	  {"name":"loop0p1","path":"/dev/loop0p1","start":2048,"type":"part"},
+	  {"name":"loop0p2","path":"/dev/loop0p2","start":"1050624","type":"part"}
+	]}]}`
+	starts, err := parsePartitionStarts(js)
+	if err != nil {
+		t.Fatalf("parsePartitionStarts: %v", err)
+	}
+	if len(starts) != 2 {
+		t.Fatalf("got %d partitions, want 2: %+v", len(starts), starts)
+	}
+	if starts["/dev/loop0p1"] != 2048 {
+		t.Errorf("p1 start = %d, want 2048", starts["/dev/loop0p1"])
+	}
+	// Quoted-string START (older lsblk) must parse too.
+	if starts["/dev/loop0p2"] != 1050624 {
+		t.Errorf("p2 start = %d, want 1050624", starts["/dev/loop0p2"])
+	}
+	// The whole-disk loop node (type "loop") must be excluded.
+	if _, ok := starts["/dev/loop0"]; ok {
+		t.Error("whole-disk node must not be counted as a partition")
+	}
+}
+
+// A partition row whose START is missing/null/unparseable must fail closed: the
+// guard cannot default it to 0 (which would make a later partition look like it
+// precedes root and let an unsafe growpart through).
+func TestParsePartitionStarts_FailsClosedOnMissingStart(t *testing.T) {
+	cases := map[string]string{
+		"null start": `{"blockdevices":[{"path":"/dev/loop0","type":"loop","children":[
+		  {"path":"/dev/loop0p1","start":2048,"type":"part"},
+		  {"path":"/dev/loop0p2","start":null,"type":"part"}
+		]}]}`,
+		"missing start key": `{"blockdevices":[{"path":"/dev/loop0","type":"loop","children":[
+		  {"path":"/dev/loop0p1","start":2048,"type":"part"},
+		  {"path":"/dev/loop0p2","type":"part"}
+		]}]}`,
+		"non-numeric start": `{"blockdevices":[{"path":"/dev/loop0","type":"loop","children":[
+		  {"path":"/dev/loop0p1","start":"notanumber","type":"part"}
+		]}]}`,
+	}
+	for name, js := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parsePartitionStarts(js); err == nil {
+				t.Error("expected error for missing/unparseable partition START, got nil")
+			}
+		})
 	}
 }
 

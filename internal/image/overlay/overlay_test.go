@@ -1047,3 +1047,59 @@ func TestNormalizeBaseline_RawDetectionErrorProceeds(t *testing.T) {
 		t.Errorf("attached %q, want baseline.raw %q", loop.attachedPath, ctx.BaselineCopyPath)
 	}
 }
+
+func TestRedactURL(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "presigned query params redacted",
+			in:   "https://bucket.s3.amazonaws.com/image.raw?X-Amz-Credential=AKIA123&X-Amz-Signature=deadbeef",
+			want: "https://bucket.s3.amazonaws.com/image.raw?[REDACTED]",
+		},
+		{
+			name: "userinfo password masked",
+			in:   "https://user:secret@example.com/image.raw",
+			want: "https://user:xxxxx@example.com/image.raw",
+		},
+		{
+			name: "fragment dropped",
+			in:   "https://example.com/image.raw#token=abc",
+			want: "https://example.com/image.raw",
+		},
+		{
+			name: "plain url unchanged",
+			in:   "https://example.com/path/image.raw",
+			want: "https://example.com/path/image.raw",
+		},
+		{
+			name: "unparseable url strips query tail",
+			in:   "https://exa mple.com/image.raw?sig=secret",
+			want: "https://exa mple.com/image.raw?[REDACTED]",
+		},
+		{
+			name: "unparseable url preserves fragment delimiter",
+			in:   "https://exa mple.com/image.raw#tok=secret",
+			want: "https://exa mple.com/image.raw#[REDACTED]",
+		},
+		{
+			name: "unparseable url masks userinfo password",
+			in:   "https://user:secret@exa mple.com/image.raw",
+			want: "https://user:xxxxx@exa mple.com/image.raw",
+		},
+		{
+			name: "unparseable url masks userinfo and strips query tail",
+			in:   "https://user:secret@exa mple.com/image.raw?sig=abc",
+			want: "https://user:xxxxx@exa mple.com/image.raw?[REDACTED]",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := redactURL(tt.in); got != tt.want {
+				t.Errorf("redactURL(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}

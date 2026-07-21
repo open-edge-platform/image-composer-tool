@@ -345,6 +345,21 @@ sudo -E image-composer-tool build \
   template.yml
 ```
 
+### Bypassing the Cache (`--no-cache`)
+
+Use `--no-cache` to build entirely from scratch without reusing — or leaving behind —
+any cache or workspace state:
+
+```bash
+sudo -E image-composer-tool build --no-cache template.yml
+```
+
+When set, the build runs in fresh, unique cache and workspace directories created
+adjacent to the configured `cache_dir`/`work_dir`. These directories are removed once
+the build finishes, so nothing persists for later builds to reuse. The final image is
+copied into the configured `work_dir` before cleanup. `--no-cache` cannot be combined
+with `--cache-dir` or `--work-dir`.
+
 ## Cache Management
 
 ### Cache Locations

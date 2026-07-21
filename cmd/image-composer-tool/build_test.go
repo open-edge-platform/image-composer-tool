@@ -20,6 +20,7 @@ func resetBuildFlags() {
 	workers = defaultWorkers
 	cacheDir = ""
 	workDir = ""
+	noCache = false
 	inspectImage = true
 	cveCheck = false
 	baselineImage = ""
@@ -107,6 +108,7 @@ func TestCreateBuildCommand(t *testing.T) {
 			{name: "workers", shorthand: "w", shouldExist: true},
 			{name: "cache-dir", shorthand: "d", shouldExist: true},
 			{name: "work-dir", shorthand: "", shouldExist: true},
+			{name: "no-cache", shorthand: "", shouldExist: true},
 			{name: "inspect", shorthand: "", shouldExist: true},
 			{name: "no-inspect", shorthand: "", shouldExist: true},
 			{name: "cve-check", shorthand: "", shouldExist: true},
@@ -591,6 +593,7 @@ func TestBuildCommand_HelpText(t *testing.T) {
 		"--workers",
 		"--cache-dir",
 		"--work-dir",
+		"--no-cache",
 		"--inspect",
 		"--no-inspect",
 		"--cve-check",
@@ -995,6 +998,44 @@ func TestBuildCommand_ArgumentValidation(t *testing.T) {
 			}
 			if !tt.expectErr && err != nil {
 				t.Errorf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+// TestExecuteBuild_NoCacheMutualExclusion verifies that --no-cache cannot be combined
+// with --cache-dir or --work-dir.
+func TestExecuteBuild_NoCacheMutualExclusion(t *testing.T) {
+	prev := *config.Global()
+	defer config.SetGlobal(&prev)
+
+	tests := []struct {
+		name string
+		flag string
+		val  string
+	}{
+		{name: "WithCacheDir", flag: "cache-dir", val: "/tmp/some-cache"},
+		{name: "WithWorkDir", flag: "work-dir", val: "/tmp/some-work"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer resetBuildFlags()
+
+			cmd := createBuildCommand()
+			if err := cmd.Flags().Set("no-cache", "true"); err != nil {
+				t.Fatalf("failed to set no-cache flag: %v", err)
+			}
+			if err := cmd.Flags().Set(tt.flag, tt.val); err != nil {
+				t.Fatalf("failed to set %s flag: %v", tt.flag, err)
+			}
+
+			err := executeBuild(cmd, []string{"template.yml"})
+			if err == nil {
+				t.Fatalf("expected error when combining --no-cache with --%s", tt.flag)
+			}
+			if !strings.Contains(err.Error(), "cannot be combined") {
+				t.Errorf("expected mutual-exclusion error, got: %v", err)
 			}
 		})
 	}
