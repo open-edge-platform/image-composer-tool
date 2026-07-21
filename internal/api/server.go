@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
@@ -43,6 +44,12 @@ func New(cfg Config) (*Server, error) {
 	}
 	if cfg.ICTBinary == "" {
 		cfg.ICTBinary = discoverICTBinary()
+	}
+	// Resolve the ICT binary to an absolute path. `sudo` matches the command in
+	// its sudoers rule literally, so a relative path (e.g. ./build/...) would not
+	// match an absolute NOPASSWD rule and would fall through to a password prompt.
+	if abs, err := filepath.Abs(cfg.ICTBinary); err == nil {
+		cfg.ICTBinary = abs
 	}
 	if cfg.WorkDir == "" {
 		cfg.WorkDir = "webui-workspace"
