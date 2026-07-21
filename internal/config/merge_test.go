@@ -1566,6 +1566,7 @@ func writeChainTemplate(t *testing.T, path, imageName, extends string, target Ta
 // it a Load* error path should get nil back and can produce a normal error
 // downstream instead of crashing on the deref.
 func TestRedactSensitiveData_NilInputReturnsNil(t *testing.T) {
+	t.Parallel()
 	if got := RedactSensitiveData(nil); got != nil {
 		t.Errorf("expected nil for nil input, got %+v", got)
 	}
@@ -1575,6 +1576,7 @@ func TestRedactSensitiveData_NilInputReturnsNil(t *testing.T) {
 // path: user passwords and hash algorithms are redacted, secure-boot key/cert
 // paths are redacted, and non-sensitive fields survive unchanged.
 func TestRedactSensitiveData_RedactsUserAndSecureBootFields(t *testing.T) {
+	t.Parallel()
 	tmpl := &ImageTemplate{
 		Image: ImageInfo{Name: "img", Version: "1.0.0"},
 		SystemConfig: SystemConfig{
