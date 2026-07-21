@@ -523,8 +523,11 @@ func TestIsDebPackageCacheOutdated_VersionPinnedRequirement(t *testing.T) {
 		t.Fatalf("isDebPackageCacheOutdated returned error: %v", err)
 	}
 
-	if outdated {
-		t.Fatalf("expected version-pinned requirement to be satisfied from cache, missing=%v", missing)
+	if !outdated {
+		t.Fatalf("expected version-pinned requirement to be reported missing when only exact cached package names are checked")
+	}
+	if len(missing) != 1 || missing[0] != "intel-dlstreamer_2025.2.0" {
+		t.Fatalf("expected missing=[intel-dlstreamer_2025.2.0], got %v", missing)
 	}
 }
 
@@ -543,8 +546,11 @@ func TestIsDebPackageCacheOutdated_EpochPinnedRequirement(t *testing.T) {
 		t.Fatalf("isDebPackageCacheOutdated returned error: %v", err)
 	}
 
-	if outdated {
-		t.Fatalf("expected epoch-pinned requirement to be satisfied from cache, missing=%v", missing)
+	if !outdated {
+		t.Fatalf("expected epoch-pinned requirement to be reported missing when only exact cached package names are checked")
+	}
+	if len(missing) != 1 || missing[0] != "qemu-system_4:9.1.0+git20251029-ppa1-noble3" {
+		t.Fatalf("expected missing=[qemu-system_4:9.1.0+git20251029-ppa1-noble3], got %v", missing)
 	}
 }
 

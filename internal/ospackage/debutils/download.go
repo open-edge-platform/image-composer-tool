@@ -284,7 +284,6 @@ func requirementCandidates(required string) []string {
 
 func isDebRequirementInCache(
 	required string,
-	cachedPackageNames map[string]struct{},
 	cachedPackageInfos []ospackage.PackageInfo,
 ) bool {
 	required = strings.TrimSpace(required)
@@ -292,44 +291,9 @@ func isDebRequirementInCache(
 		return true
 	}
 
-	candidates := requirementCandidates(required)
-	if len(candidates) == 0 {
-		return true
-	}
-
-	for _, cand := range candidates {
-		if pkg, found := ResolveTopPackageConflicts(cand, cachedPackageInfos); found && pkg.Name != "" {
+	for _, pkg := range cachedPackageInfos {
+		if strings.TrimSpace(pkg.Name) == required {
 			return true
-		}
-	}
-
-	for _, cand := range candidates {
-		candName := cand
-		if idx := strings.Index(candName, "_"); idx > 0 {
-			candName = candName[:idx]
-		}
-		candName = strings.TrimSpace(candName)
-		if candName == "" {
-			continue
-		}
-		if _, ok := cachedPackageNames[candName]; ok {
-			return true
-		}
-	}
-
-	for _, cand := range candidates {
-		candName := cand
-		if idx := strings.Index(candName, "_"); idx > 0 {
-			candName = candName[:idx]
-		}
-		candName = strings.TrimSpace(candName)
-		if candName == "" {
-			continue
-		}
-		for cachedName := range cachedPackageNames {
-			if matchesPackageFilter(cachedName, []string{candName}) {
-				return true
-			}
 		}
 	}
 
@@ -443,7 +407,7 @@ func isDebPackageCacheOutdated(requiredPackages []string, cacheDir string) (bool
 		if req == "" {
 			continue
 		}
-		if isDebRequirementInCache(req, cachedPackageNames, cachedPackageInfos) {
+		if isDebRequirementInCache(req, cachedPackageInfos) {
 			continue
 		}
 		if _, seen := missingSet[req]; seen {

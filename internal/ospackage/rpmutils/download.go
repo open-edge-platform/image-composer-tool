@@ -578,17 +578,14 @@ func Resolve(req []ospackage.PackageInfo, all []ospackage.PackageInfo) ([]ospack
 	return needed, nil
 }
 
-func isRPMRequirementInCache(required string, cachedPackageNames map[string]struct{}) bool {
-	required = strings.TrimSpace(extractBaseNameFromDep(required))
+func isRPMRequirementInCache(required string, cachedPackageInfos []ospackage.PackageInfo) bool {
+	required = strings.TrimSpace(required)
 	if required == "" {
 		return true
 	}
 
-	for cachedName := range cachedPackageNames {
-		if matchesPackageFilter(cachedName, []string{required}) {
-			return true
-		}
-		if matchesPackageFilter(required, []string{cachedName}) {
+	for _, pkg := range cachedPackageInfos {
+		if strings.TrimSpace(pkg.Name) == required {
 			return true
 		}
 	}
@@ -603,12 +600,16 @@ func isRPMPackageCacheOutdated(requiredPackages []string, cacheDir string) (bool
 		return false, nil, nil, fmt.Errorf("glob %q: %w", pattern, err)
 	}
 
-	cachedPackageNames := make(map[string]struct{}, len(cachedPaths))
+	cachedPackageInfos := make([]ospackage.PackageInfo, 0, len(cachedPaths))
 	cachedFiles := make([]string, 0, len(cachedPaths))
 	for _, p := range cachedPaths {
 		base := filepath.Base(p)
 		cachedFiles = append(cachedFiles, base)
-		cachedPackageNames[extractBasePackageNameFromFile(base)] = struct{}{}
+		cachedPackageInfos = append(cachedPackageInfos, ospackage.PackageInfo{
+			Name: extractBasePackageNameFromFile(base),
+			URL:  p,
+			Type: "rpm",
+		})
 	}
 
 	missingSet := make(map[string]struct{})
@@ -618,7 +619,7 @@ func isRPMPackageCacheOutdated(requiredPackages []string, cacheDir string) (bool
 		if req == "" {
 			continue
 		}
-		if isRPMRequirementInCache(req, cachedPackageNames) {
+		if isRPMRequirementInCache(req, cachedPackageInfos) {
 			continue
 		}
 		if _, seen := missingSet[req]; seen {
