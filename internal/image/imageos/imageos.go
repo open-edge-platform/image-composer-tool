@@ -1331,6 +1331,16 @@ func updateImageFstab(installRoot string, diskPathIdMap map[string]string, templ
 				mountId := fmt.Sprintf("PARTUUID=%s", partUUID)
 				mountPoint := partition.MountPoint
 
+				// FDE-encrypted non-root partitions become LUKS containers, so
+				// their raw PARTUUID no longer resolves to a mountable filesystem.
+				// They are unlocked via /etc/crypttab into /dev/mapper/<id> at
+				// boot, so mount that mapper instead. The root volume is wired
+				// separately through the kernel command line.
+				if template.IsFDEEnabled() && template.IsFDEPartition(partition.ID) &&
+					mountPoint != rootfsMountPoint {
+					mountId = filepath.Join("/dev/mapper", partition.ID)
+				}
+
 				// Get the filesystem type
 				var fsType, options, pass string
 				if partition.FsType == "fat16" || partition.FsType == "fat32" {

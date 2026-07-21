@@ -339,10 +339,11 @@ func reencryptPartitionInPlace(id, dev, passphrase string) (mapperPath, mapperNa
 	mapperPath = filepath.Join("/dev/mapper", mapperName)
 
 	fsckCmd := fmt.Sprintf("e2fsck -fy %s", shell.QuoteArg(dev))
+	// e2fsck exit codes 1 and 2 mean errors were found and corrected, which is
+	// acceptable here; only codes above 2 indicate a real failure.
 	if _, err = shell.ExecCmd(fsckCmd, true, shell.HostPath, nil); err != nil && exitCodeAbove(err, 2) {
 		return "", "", fmt.Errorf("e2fsck failed: %w", err)
 	}
-	err = nil
 
 	shrinkCmd := fmt.Sprintf("resize2fs -M %s", shell.QuoteArg(dev))
 	if _, err = shell.ExecCmd(shrinkCmd, true, shell.HostPath, nil); err != nil {
