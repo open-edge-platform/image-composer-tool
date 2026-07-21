@@ -244,7 +244,26 @@
         }
       },
       "required": ["enabled"],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "enabled": { "const": true }
+            },
+            "required": ["enabled"]
+          },
+          "then": {
+            "required": ["passphrase"],
+            "properties": {
+              "passphrase": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      ]
     },
     "Users": {
       "type": "array",
