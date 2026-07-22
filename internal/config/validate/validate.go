@@ -113,6 +113,10 @@ func ValidateImageTemplateJSON(data []byte) error {
 		return err
 	}
 
+	if err := validateFDEConstraints(data); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -128,6 +132,10 @@ func ValidateUserTemplateJSON(data []byte) error {
 	}
 
 	if err := validateAutoExpandLastPartitionConstraints(data, false); err != nil {
+		return err
+	}
+
+	if err := validateFDEConstraints(data); err != nil {
 		return err
 	}
 
@@ -192,6 +200,39 @@ func validateAutoExpandLastPartitionConstraints(data []byte, requirePartitions b
 	mountPoint, _ := lastPartition["mountPoint"].(string)
 	if mountPoint != "/" {
 		return fmt.Errorf("first-boot partition auto-expand requires the last partition to be rootfs ('/'), got mountpoint=%q", mountPoint)
+	}
+
+	return nil
+}
+
+// validateFDEConstraints ensures a non-empty passphrase when FDE is enabled.
+// The same rule exists in os-image-template.schema.json; this check mirrors
+// validateAutoExpandLastPartitionConstraints for rules enforced in Go after
+// schema validation.
+func validateFDEConstraints(data []byte) error {
+	var doc map[string]interface{}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return fmt.Errorf("invalid JSON for FDE validation: %w", err)
+	}
+
+	systemConfig, _ := doc["systemConfig"].(map[string]interface{})
+	if systemConfig == nil {
+		return nil
+	}
+
+	fde, _ := systemConfig["fde"].(map[string]interface{})
+	if fde == nil {
+		return nil
+	}
+
+	enabled, _ := fde["enabled"].(bool)
+	if !enabled {
+		return nil
+	}
+
+	passphrase, _ := fde["passphrase"].(string)
+	if strings.TrimSpace(passphrase) == "" {
+		return fmt.Errorf("systemConfig.fde.passphrase is required when fde.enabled is true")
 	}
 
 	return nil

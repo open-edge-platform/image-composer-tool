@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1483,6 +1484,41 @@ func TestResolveExtendsChainDepthWarning(t *testing.T) {
 
 	if !strings.Contains(buf.String(), "extends chain depth 5 exceeds recommended maximum of 4") {
 		t.Errorf("log output did not contain depth warning, got %q", buf.String())
+	}
+}
+
+func TestRedactSensitiveDataFDEPassphrase(t *testing.T) {
+	t.Parallel()
+
+	const secret = "fde-passphrase-must-not-leak"
+	template := &ImageTemplate{
+		SystemConfig: SystemConfig{
+			FDE: FDEConfig{
+				Enabled:    true,
+				Passphrase: secret,
+				Unlock:     "auto",
+			},
+		},
+	}
+
+	redacted := redactSensitiveData(template)
+	if redacted.SystemConfig.FDE.Passphrase != "[REDACTED]" {
+		t.Errorf("redacted FDE passphrase = %q, want [REDACTED]", redacted.SystemConfig.FDE.Passphrase)
+	}
+	if template.SystemConfig.FDE.Passphrase != secret {
+		t.Errorf("original template passphrase was mutated, got %q", template.SystemConfig.FDE.Passphrase)
+	}
+
+	pretty, err := json.MarshalIndent(redacted, "", "  ")
+	if err != nil {
+		t.Fatalf("json.MarshalIndent: %v", err)
+	}
+	out := string(pretty)
+	if strings.Contains(out, secret) {
+		t.Errorf("redacted JSON still contains passphrase")
+	}
+	if !strings.Contains(out, "[REDACTED]") {
+		t.Errorf("redacted JSON missing [REDACTED], got %s", out)
 	}
 }
 
