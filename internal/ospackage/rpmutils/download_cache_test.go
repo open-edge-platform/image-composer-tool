@@ -56,8 +56,11 @@ func TestIsRPMPackageCacheOutdated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("isRPMPackageCacheOutdated returned error: %v", err)
 	}
-	if outdated {
-		t.Fatalf("expected version-pinned package to be satisfied from cache, missing=%v", missing)
+	if !outdated {
+		t.Fatalf("expected version-pinned package to be reported missing when only exact cached package names are checked")
+	}
+	if len(missing) != 1 || missing[0] != "kernel-drivers-gpu-6.12.55" {
+		t.Fatalf("expected missing=[kernel-drivers-gpu-6.12.55], got %v", missing)
 	}
 }
 

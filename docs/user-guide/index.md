@@ -41,6 +41,7 @@ See the [Quick Start guide](./get-started/quick-start.md) to build your first im
 | ---------------------------------------------------------------------------- | ---------------------------------------- |
 | [Prerequisites](./get-started/prerequisites.md)                                  | Manual ukify and mmdebstrap installation |
 | [Secure Boot](./configuration/configure-secure-boot.md)                           | Configuring secure boot for images       |
+| [Full-Disk Encryption](./configuration/configure-fde.md)                          | Encrypting image partitions with LUKS    |
 | [Configure Users](./configuration/configure-image-user.md)                        | Adding users to images                   |
 | [Custom Build Actions](./configuration/configure-additional-actions-for-build.md) | Commands during image compose (chroot)   |
 | [Custom Initrd Script](./configuration/configure-custom-initrd-script.md)       | Debian 13 GRUB initramfs-tools initrd hook |
@@ -80,6 +81,7 @@ AI Template Generation (RAG) <./get-started/ai-template-generation.md>
 :caption: Configuration
 
 Secure Boot Configuration <./configuration/configure-secure-boot.md>
+Configure Full-Disk Encryption <./configuration/configure-fde.md>
 Configure Users <./configuration/configure-image-user.md>
 Customize Image Build <./configuration/configure-additional-actions-for-build.md>
 Configure Custom Initrd Script <./configuration/configure-custom-initrd-script.md>

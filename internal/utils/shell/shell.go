@@ -2,6 +2,7 @@ package shell
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -10,6 +11,8 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
@@ -18,6 +21,104 @@ import (
 const HostPath string = "/"
 
 var log = logger.Logger()
+
+// currentCtx is the ctx bound by SetContext for the lifetime of a run.
+// Reads happen at every command spawn; writes happen only from executeBuild
+// on the main goroutine before any worker starts, so atomic.Value is sufficient.
+// When unset, ctxOrBackground returns context.Background so the four Exec*
+// entry points continue to work for non-build commands (validate, inspect, etc.)
+// and for tests that never call SetContext.
+//
+// The value is wrapped in ctxHolder so atomic.Value always sees a single
+// concrete type — bare context.Context values are interface-typed and stem
+// from different concrete implementations (*emptyCtx, *cancelCtx, *timerCtx,
+// *valueCtx), which would trip atomic.Value's identical-type invariant.
+type ctxHolder struct{ ctx context.Context }
+
+var currentCtx atomic.Value // holds ctxHolder
+
+// SetContext binds ctx as the ambient context used by every subsequent shell
+// command. The returned restore function reverts to whatever ctx was bound
+// before (or unbound state) — call it via defer.
+//
+// Concurrency: the returned restore closure captures the previous binding at
+// call time, so nested SetContext/restore pairs must be strictly LIFO on a
+// single goroutine. The current build path (executeBuild → PostProcess
+// wrapper → cleanup coordinator callbacks) satisfies this — only the main
+// build goroutine invokes SetContext at any given time. If a future in-process
+// caller invokes SetContext from multiple goroutines concurrently (e.g. an
+// HTTP handler that dispatches a build in-process), the restore-chain will
+// clobber and this needs to be replaced with a ctx-holder passed explicitly
+// through the call graph instead of stored in an atomic global.
+func SetContext(ctx context.Context) (restore func()) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	prev := currentCtx.Load()
+	currentCtx.Store(ctxHolder{ctx: ctx})
+	return func() {
+		if prev == nil {
+			currentCtx.Store(ctxHolder{ctx: context.Background()})
+			return
+		}
+		currentCtx.Store(prev)
+	}
+}
+
+// ctxOrBackground returns the currently bound context, or context.Background
+// if SetContext has never been called.
+func ctxOrBackground() context.Context {
+	if v := currentCtx.Load(); v != nil {
+		return v.(ctxHolder).ctx
+	}
+	return context.Background()
+}
+
+// applyExecAttrs configures a spawned command so that (a) it runs in its own
+// process group so a single kill(-pgid) reaps every descendant (bash, sudo, and
+// the real tool), and (b) ctx cancellation sends SIGTERM to that whole group.
+// All four spawn sites use this to keep the pgid/kill semantics identical
+// across ExecCmd, ExecCmdSilent, ExecCmdWithStream, and ExecCmdWithInput.
+//
+// Privilege note: the kill(-pgid) in Cancel is issued by this Go process. ICT
+// is expected to run as root (the documented `sudo -E image-composer-tool
+// build …`, and `serve --sudo`), so the parent and the root-owned sudo/tool
+// children share the privilege needed for the signal to land. If ICT is ever
+// run as a non-root user relying only on the per-command `sudo` prefix, the
+// signal to the root-owned children would fail with EPERM and they would
+// orphan — that path is unsupported.
+//
+// WaitDelay bounds how long cmd.Wait blocks after Cancel before the runtime
+// force-kills. Note the runtime's WaitDelay SIGKILL targets cmd.Process (the
+// bash group leader) only, not the whole group — the group is expected to exit
+// on the SIGTERM that Cancel already delivered to -pgid (every tool ICT spawns
+// terminates on SIGTERM). WaitDelay is the leader-level backstop for a wedged
+// pipe, not a group-wide SIGKILL escalation.
+const execCmdWaitDelay = 5 * time.Second
+
+func applyExecAttrs(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+	}
+	cmd.WaitDelay = execCmdWaitDelay
+}
+
+// sleepCtx sleeps for d unless ctx is cancelled first; returns ctx.Err on
+// cancel so the caller's retry loop can exit early.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
 
 var (
 	aptLockRetryAttempts = 20
@@ -537,7 +638,8 @@ func (d *DefaultExecutor) ExecCmdSilent(cmdStr string, sudo bool, chrootPath str
 		return "", fmt.Errorf("failed to get full command string: %w", err)
 	}
 
-	cmd := exec.Command("bash", "-c", fullCmdStr)
+	cmd := exec.CommandContext(ctxOrBackground(), "bash", "-c", fullCmdStr)
+	applyExecAttrs(cmd)
 	output, err := cmd.CombinedOutput()
 	return string(output), err
 }
@@ -588,7 +690,11 @@ func logAptRetry(attempt int, output string) {
 }
 
 func (d *DefaultExecutor) execCmdWithRetry(cmdStr, fullCmdStr string) (string, error) {
+	ctx := ctxOrBackground()
 	for attempt := 1; attempt <= aptLockRetryAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return "", fmt.Errorf("execution cancelled before attempt %d: %w", attempt, err)
+		}
 		outputStr, err := d.execCmdOnce(fullCmdStr)
 		if err == nil {
 			return outputStr, nil
@@ -597,14 +703,17 @@ func (d *DefaultExecutor) execCmdWithRetry(cmdStr, fullCmdStr string) (string, e
 			return outputStr, err
 		}
 		logAptRetry(attempt, outputStr)
-		time.Sleep(aptLockRetryDelay)
+		if sleepErr := sleepCtx(ctx, aptLockRetryDelay); sleepErr != nil {
+			return outputStr, fmt.Errorf("execution cancelled during retry backoff: %w", sleepErr)
+		}
 	}
 
 	return "", fmt.Errorf("failed to execute command after retries")
 }
 
 func (d *DefaultExecutor) execCmdOnce(fullCmdStr string) (string, error) {
-	cmd := exec.Command("bash", "-c", fullCmdStr)
+	cmd := exec.CommandContext(ctxOrBackground(), "bash", "-c", fullCmdStr)
+	applyExecAttrs(cmd)
 	output, err := cmd.CombinedOutput()
 	outputStr := string(output)
 
@@ -623,7 +732,11 @@ func (d *DefaultExecutor) execCmdOnce(fullCmdStr string) (string, error) {
 }
 
 func (d *DefaultExecutor) execCmdWithStreamRetry(cmdStr, fullCmdStr string) (string, error) {
+	ctx := ctxOrBackground()
 	for attempt := 1; attempt <= aptLockRetryAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return "", fmt.Errorf("execution cancelled before attempt %d: %w", attempt, err)
+		}
 		outputStr, err := d.execCmdWithStreamOnce(fullCmdStr)
 		if err == nil {
 			return outputStr, nil
@@ -632,14 +745,17 @@ func (d *DefaultExecutor) execCmdWithStreamRetry(cmdStr, fullCmdStr string) (str
 			return outputStr, err
 		}
 		logAptRetry(attempt, outputStr)
-		time.Sleep(aptLockRetryDelay)
+		if sleepErr := sleepCtx(ctx, aptLockRetryDelay); sleepErr != nil {
+			return outputStr, fmt.Errorf("execution cancelled during retry backoff: %w", sleepErr)
+		}
 	}
 
 	return "", fmt.Errorf("failed to execute streamed command after retries")
 }
 
 func (d *DefaultExecutor) execCmdWithStreamOnce(fullCmdStr string) (string, error) {
-	cmd := exec.Command("bash", "-c", fullCmdStr)
+	cmd := exec.CommandContext(ctxOrBackground(), "bash", "-c", fullCmdStr)
+	applyExecAttrs(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return "", fmt.Errorf("failed to get stdout pipe for command %s: %w", fullCmdStr, err)
@@ -710,7 +826,8 @@ func (d *DefaultExecutor) ExecCmdWithInput(inputStr string, cmdStr string, sudo 
 		return "", fmt.Errorf("failed to get full command string: %w", err)
 	}
 
-	cmd := exec.Command("bash", "-c", fullCmdStr)
+	cmd := exec.CommandContext(ctxOrBackground(), "bash", "-c", fullCmdStr)
+	applyExecAttrs(cmd)
 	cmd.Stdin = strings.NewReader(inputStr)
 
 	output, err := cmd.CombinedOutput()

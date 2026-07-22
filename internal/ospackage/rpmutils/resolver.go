@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -24,6 +25,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/network"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/runctx"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
 
@@ -47,14 +49,21 @@ func shouldRetryMetadataStatus(statusCode int) bool {
 	}
 }
 
-func fetchURLWithRetry(client *http.Client, targetURL, resourceName string) ([]byte, error) {
+func fetchURLWithRetry(ctx context.Context, client *http.Client, targetURL, resourceName string) ([]byte, error) {
 	log := logger.Logger()
 
 	backoff := metadataRetryBackoff
 	var lastErr error
 
 	for attempt := 1; attempt <= metadataMaxDownloadAttempts; attempt++ {
-		resp, err := client.Get(targetURL)
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("GET %s cancelled before attempt %d: %w", targetURL, attempt, err)
+		}
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
+		if reqErr != nil {
+			return nil, fmt.Errorf("build request for %s: %w", targetURL, reqErr)
+		}
+		resp, err := client.Do(req)
 		if err != nil {
 			lastErr = err
 		} else {
@@ -81,7 +90,15 @@ func fetchURLWithRetry(client *http.Client, targetURL, resourceName string) ([]b
 		}
 
 		log.Warnf("attempt %d/%d downloading %s failed: %v; retrying in %s", attempt, metadataMaxDownloadAttempts, resourceName, lastErr, backoff)
-		time.Sleep(backoff)
+		// Cancel-aware sleep: a SIGINT during backoff aborts within the
+		// delay quantum instead of running the full window.
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, fmt.Errorf("GET %s cancelled during retry backoff: %w", targetURL, ctx.Err())
+		case <-timer.C:
+		}
 		backoff *= 2
 	}
 
@@ -389,7 +406,7 @@ func ParseRepositoryMetadata(baseURL, gzHref string, packageFilter []string) ([]
 
 	client := network.NewSecureHTTPClient()
 	// First, fetch compressed XML with retry on transient failures
-	compressedData, err := fetchURLWithRetry(client, fullURL, "repository metadata")
+	compressedData, err := fetchURLWithRetry(runctx.Context(), client, fullURL, "repository metadata")
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch compressed metadata: %w", err)
 	}
@@ -719,7 +736,7 @@ func FetchPrimaryURL(repomdURL string) (string, error) {
 	}
 
 	client := network.NewSecureHTTPClient()
-	repomdData, err := fetchURLWithRetry(client, repomdURL, "repomd.xml")
+	repomdData, err := fetchURLWithRetry(runctx.Context(), client, repomdURL, "repomd.xml")
 	if err != nil {
 		return "", err
 	}

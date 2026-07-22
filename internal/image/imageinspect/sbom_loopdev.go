@@ -10,9 +10,14 @@ import (
 
 // loopDevAttacher is the slice of the loop-device API this reader needs. It is
 // an interface (rather than *imagedisc.LoopDev directly) so tests can inject a
-// fake and exercise partition-node mapping without touching a real disk.
+// fake and exercise partition-node mapping without touching a real disk. The
+// unregister closure returned by AttachImageToLoopDev removes the auto-registered
+// cleanup-coordinator entry for this device; callers invoke it AFTER a
+// successful LoopSetupDelete, not before — see imagedisc.loopSetupCreate's
+// docstring for the ordering contract (a failed detach must leave the coord
+// entry registered so the build.go cancel backstop can retry).
 type loopDevAttacher interface {
-	AttachImageToLoopDev(imagePath string) (string, []string, error)
+	AttachImageToLoopDev(imagePath string) (string, []string, func(), error)
 	LoopSetupDelete(loopDevPath string) error
 }
 
@@ -60,16 +65,22 @@ func inspectSBOMFromImageLoopDev(imagePath string, pt PartitionTableSummary) SBO
 	}
 
 	loop := newLoopDevForSBOM()
-	loopDevPath, partitionNodes, err := loop.AttachImageToLoopDev(imagePath)
+	loopDevPath, partitionNodes, unregister, err := loop.AttachImageToLoopDev(imagePath)
 	if err != nil {
 		summary.Notes = append(summary.Notes, fmt.Sprintf("loop-device attach failed: %v", err))
 		return summary
 	}
 	defer func() {
+		// Detach first; unregister only on success. If detach fails (busy
+		// partition or short-circuited shell ctx on a cancelled build that
+		// went through SBOM inspection), leaving the coord entry registered
+		// lets build.go's cancel backstop retry the detach.
 		if detachErr := loop.LoopSetupDelete(loopDevPath); detachErr != nil {
 			summary.Notes = append(summary.Notes,
 				fmt.Sprintf("loop-device detach failed for %s: %v", loopDevPath, detachErr))
+			return
 		}
+		unregister()
 	}()
 
 	for _, candidateIndex := range rootCandidates {
