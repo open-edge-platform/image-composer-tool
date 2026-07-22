@@ -53,7 +53,10 @@ func isLocalhostOrigin(origin string) bool {
 
 func logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		logger.Logger().Infof("%s %s", r.Method, r.URL.Path)
+		// Debug level: request logging is useful for troubleshooting but noisy in
+		// normal operation (the UI polls GET /builds every few seconds while a
+		// compose runs). Run the server with a debug log level to see these.
+		logger.Logger().Debugf("%s %s", r.Method, r.URL.Path)
 		next.ServeHTTP(w, r)
 	})
 }

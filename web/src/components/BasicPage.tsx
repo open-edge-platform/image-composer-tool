@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useStore, cascadingOptions } from '../store'
 import { api } from '../api/client'
 import type { ComposeResponse } from '../api/types'
@@ -15,7 +15,6 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
   const setField = useStore((s) => s.setField)
 
   const [review, setReview] = useState<ComposeResponse | null>(null)
-  const [reviewOpen, setReviewOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -24,27 +23,31 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
     [manifest, selection],
   )
 
-  if (!manifest || !opts) return <div className="p-8">Loading…</div>
+  const complete = !!opts?.matched
 
-  const complete = !!opts.matched
-
-  const onToggleReview = async () => {
-    if (reviewOpen) {
-      setReviewOpen(false)
+  // Auto-fetch the configuration summary whenever the selection is complete, so
+  // it always reflects the current dropdowns (no manual "review" step). Guard
+  // against out-of-order responses with a cancel flag.
+  useEffect(() => {
+    if (!complete) {
+      setReview(null)
       return
     }
-    if (!complete) return
-    try {
-      setBusy(true)
-      setError(null)
-      setReview(await api.compose(selection))
-      setReviewOpen(true)
-    } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      setBusy(false)
+    let cancelled = false
+    api
+      .compose(selection)
+      .then((r) => {
+        if (!cancelled) setReview(r)
+      })
+      .catch((e) => {
+        if (!cancelled) setError((e as Error).message)
+      })
+    return () => {
+      cancelled = true
     }
-  }
+  }, [complete, selection])
+
+  if (!manifest || !opts) return <div className="p-8">Loading…</div>
 
   const onBuild = async () => {
     if (!complete) return
@@ -60,111 +63,80 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
     }
   }
 
-  // Changing any field invalidates a prior review.
   const setSel = (k: Parameters<typeof setField>[0], v: string) => {
     setField(k, v)
-    setReviewOpen(false)
-    setReview(null)
+    setError(null) // clear any stale compose error from the previous selection
   }
 
   return (
-    <div className="mx-auto max-w-6xl p-6">
+    <div className="mx-auto max-w-screen-2xl px-10 py-8">
       <h1 className="mb-1 text-2xl font-bold text-[#00285a]">Choose Image Configuration</h1>
       <p className="mb-5 text-sm text-slate-500">
         Select a targeted vertical, SKU, and platform. Pre-configured defaults are applied
         based on your selection.
       </p>
 
-      <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-        <Select
-          label="Targeted Vertical"
-          placeholder="-- Select Vertical --"
-          value={selection.vertical}
-          options={opts.verticals}
-          onChange={(v) => setSel('vertical', v)}
-        />
-        <Select
-          label="SKU"
-          placeholder="-- Select SKU --"
-          value={selection.sku}
-          options={opts.skus}
-          disabled={!selection.vertical}
-          onChange={(v) => setSel('sku', v)}
-        />
-        <Select
-          label="Platform"
-          placeholder="-- Select Platform --"
-          value={selection.platform}
-          options={opts.platforms}
-          disabled={!selection.sku && opts.skus.length > 0}
-          onChange={(v) => setSel('platform', v)}
-        />
-        <Select
-          label="Operating System"
-          placeholder="-- Select Operating System --"
-          value={selection.os}
-          options={opts.oses}
-          disabled={!selection.platform}
-          onChange={(v) => setSel('os', v)}
-        />
-        {/* Kernel selector appears only when the manifest offers kernel variants
-            (e.g. standard vs real-time) for the current selection. */}
-        {opts.kernels.length > 0 && (
+      <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
+        <div className="w-full max-w-xl rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <Select
-            label="Kernel"
-            placeholder="-- Select Kernel --"
-            value={selection.kernel}
-            options={opts.kernels}
-            disabled={!selection.os}
-            onChange={(v) => setSel('kernel', v)}
+            label="Targeted Vertical"
+            placeholder="-- Select Vertical --"
+            value={selection.vertical}
+            options={opts.verticals}
+            onChange={(v) => setSel('vertical', v)}
           />
-        )}
-        <Select
-          label="Image Type"
-          placeholder="-- Select Image Type --"
-          value={selection.imageType}
-          options={opts.imageTypes}
-          disabled={!selection.os || (opts.kernels.length > 0 && !selection.kernel)}
-          onChange={(v) => setSel('imageType', v)}
-        />
-
-        <label className="flex cursor-pointer items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={reviewOpen}
-            disabled={!complete}
-            onChange={onToggleReview}
+          <Select
+            label="SKU"
+            placeholder="-- Select SKU --"
+            value={selection.sku}
+            options={opts.skus}
+            disabled={!selection.vertical}
+            onChange={(v) => setSel('sku', v)}
           />
-          Review Image Configuration
-        </label>
+          <Select
+            label="Platform"
+            placeholder="-- Select Platform --"
+            value={selection.platform}
+            options={opts.platforms}
+            disabled={!selection.sku && opts.skus.length > 0}
+            onChange={(v) => setSel('platform', v)}
+          />
+          <Select
+            label="Operating System"
+            placeholder="-- Select Operating System --"
+            value={selection.os}
+            options={opts.oses}
+            disabled={!selection.platform}
+            onChange={(v) => setSel('os', v)}
+          />
+          {/* Kernel selector appears only when the manifest offers kernel variants
+              (e.g. standard vs real-time) for the current selection. */}
+          {opts.kernels.length > 0 && (
+            <Select
+              label="Kernel"
+              placeholder="-- Select Kernel --"
+              value={selection.kernel}
+              options={opts.kernels}
+              disabled={!selection.os}
+              onChange={(v) => setSel('kernel', v)}
+            />
+          )}
+          {/* Image Type (raw/iso) is auto-selected from the manifest for the
+              chosen combination and not shown in Basic mode. */}
+        </div>
 
-        {reviewOpen && review && (
-          <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
-            <div className="rounded bg-slate-100 p-3">
-              <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Your Selection</p>
-              <table className="w-full">
-                <tbody>
-                  {([
-                    ['Vertical', review.summary.vertical],
-                    review.summary.sku ? ['SKU', review.summary.sku] : null,
-                    ['Platform', review.summary.platform],
-                    ['OS', review.summary.os],
-                    ['Image Type', review.summary.imageType.toUpperCase()],
-                  ] as ([string, string] | null)[]).filter((r): r is [string, string] => r !== null).map(([k, v]) => (
-                    <tr key={k}>
-                      <td className="py-0.5 pr-3 font-semibold text-slate-500 w-24">{k}</td>
-                      <td className="py-0.5 text-slate-700">{v}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="rounded bg-slate-100 p-3">
+        {/* Image configuration summary — always reflects the current selection
+            (auto-fetched). "Your Selection" is intentionally omitted here since
+            the dropdowns already show it; the Compose Image tab keeps it. */}
+        {complete && review && (
+          <div className="flex-1 text-xs">
+            <div className="max-w-md rounded-lg border border-slate-200 bg-slate-50 p-4">
               <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Image Configuration</p>
               <table className="w-full">
                 <tbody>
                   {([
                     ['Image', `${review.summary.imageName}${review.summary.imageVersion ? ` (v${review.summary.imageVersion})` : ''}`],
+                    review.summary.baseImage ? ['Base Image', review.summary.baseImage] : null,
                     review.summary.description ? ['Description', review.summary.description] : null,
                     ['Architecture', review.summary.architecture],
                     review.summary.kernelVersion ? ['Kernel', review.summary.kernelVersion] : null,
@@ -192,16 +164,16 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
           disabled={!complete || busy || buildInProgress}
           onClick={onBuild}
         >
-          {busy ? 'Starting…' : buildInProgress ? 'Build in progress…' : 'Build Image'}
+          {busy ? 'Starting…' : buildInProgress ? 'Composing…' : 'Compose Image'}
         </button>
         {!complete && !buildInProgress && (
           <span className="ml-3 text-sm text-slate-500">
-            Complete all selections to build.
+            Complete all selections to compose.
           </span>
         )}
         {buildInProgress && (
           <span className="ml-3 text-sm text-amber-600">
-            A build is already in progress. Switch to the Build Image tab to monitor it.
+            A compose is already in progress. Switch to the Compose Image tab to monitor it.
           </span>
         )}
       </div>

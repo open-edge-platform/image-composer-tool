@@ -39,6 +39,23 @@ export default function App() {
 
   useEffect(load, [load])
 
+  // On load, adopt any already-running build from the server so the UI reflects
+  // it after a refresh: disables the Compose button and shows the nav indicator
+  // (otherwise buildStatus resets to 'idle' and a duplicate build could start).
+  useEffect(() => {
+    if (state !== 'ready') return
+    api
+      .listBuilds()
+      .then((builds) => {
+        const running = builds.find((b) => b.status === 'running')
+        if (running) {
+          setBuildId(running.id)
+          setBuildStatus('running')
+        }
+      })
+      .catch(() => {})
+  }, [state])
+
   const onBuildStarted = (id: string) => {
     setBuildId(id)
     setBuildStatus('running')
@@ -61,7 +78,7 @@ export default function App() {
   const tabs: { id: View; label: string; enabled: boolean }[] = [
     { id: 'basic', label: 'Basic', enabled: true },
     { id: 'advanced', label: 'Advanced', enabled: false },
-    { id: 'builds', label: 'Build Image', enabled: true },
+    { id: 'builds', label: 'Compose Image', enabled: true },
   ]
 
   return (
@@ -137,15 +154,16 @@ export default function App() {
 function BuildIndicator({ status, onClick }: { status: BuildStatus; onClick: () => void }) {
   if (status === 'idle') return null
   const cfg = {
-    running: { color: 'bg-yellow-400', pulse: true,  label: 'Build in progress' },
-    success: { color: 'bg-green-400',  pulse: false, label: 'Build completed' },
-    failed:  { color: 'bg-red-500',    pulse: false, label: 'Build failed' },
+    running: { color: 'bg-yellow-400', pulse: true,  label: 'Compose in progress' },
+    success: { color: 'bg-green-400',  pulse: false, label: 'Compose completed' },
+    failed:  { color: 'bg-red-500',    pulse: false, label: 'Compose failed' },
   }[status]
   return (
     <button
       onClick={onClick}
       title={cfg.label}
-      className="flex items-center gap-2 rounded px-2 py-1 text-xs text-white/80 hover:bg-white/10"
+      aria-label={cfg.label}
+      className="flex items-center rounded p-1.5 hover:bg-white/10"
     >
       <span className="relative flex h-3 w-3">
         {cfg.pulse && (
@@ -153,7 +171,6 @@ function BuildIndicator({ status, onClick }: { status: BuildStatus; onClick: () 
         )}
         <span className={`relative inline-flex h-3 w-3 rounded-full ${cfg.color}`} />
       </span>
-      {cfg.label}
     </button>
   )
 }

@@ -34,6 +34,7 @@ For a conceptual overview of how templates fit into the build pipeline, see
       - [`systemConfig.bootloader`](#systemconfigbootloader)
       - [`systemConfig.network`](#systemconfignetwork)
       - [`systemConfig.immutability`](#systemconfigimmutability)
+      - [`systemConfig.fde`](#systemconfigfde)
       - [`systemConfig.users[]`](#systemconfigusers)
       - [`systemConfig.initramfs`](#systemconfiginitramfs)
       - [`systemConfig.additionalFiles[]`](#systemconfigadditionalfiles)
@@ -597,6 +598,30 @@ systemConfig:
     secureBootDBCer: /path/to/db.cer
 ```
 
+#### `systemConfig.fde`
+
+Configures LUKS2 full-disk encryption for selected partitions.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `enabled` | bool | **Yes** | Enable full-disk encryption |
+| `passphrase` | string | **Yes** (when `enabled: true`) | Non-empty passphrase used to unlock the volume(s) |
+| `partitions` | string[] | No | Disk partition IDs to encrypt (defaults to the root partition) |
+| `unlock` | string | No | Boot unlock mode: `auto` (default) or `manual` |
+
+```yaml
+systemConfig:
+  fde:
+    enabled: true
+    passphrase: "change-me"
+    unlock: auto
+    partitions:
+      - rootfs
+```
+
+See [Configure Full-Disk Encryption](../configuration/configure-fde.md) for a
+complete guide, including usage with dm-verity immutability.
+
 #### `systemConfig.users[]`
 
 | Field | Type | Required | Description |
@@ -727,6 +752,7 @@ follow different strategies:
 | `systemConfig.additionalFiles` | Merged by `final` path - same destination overrides; new files appended |
 | `systemConfig.configurations` | **Additive** - user commands appended after defaults |
 | `systemConfig.immutability` | Merged only if user explicitly provides the section |
+| `systemConfig.fde` | Merged only if user explicitly provides the section |
 | `packageRepositories` | Merged by `codename` - same codename overrides; new repos appended |
 
 ## Variable Substitution

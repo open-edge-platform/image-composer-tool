@@ -21,10 +21,12 @@ func (s *Server) routes() *http.ServeMux {
 
 	// Build path (implemented in builds.go)
 	mux.HandleFunc("POST /api/v1/builds", s.handleStartBuild)
+	mux.HandleFunc("GET /api/v1/builds", s.handleListBuilds)
 	mux.HandleFunc("GET /api/v1/builds/{id}/logs", s.handleBuildLogs)
 	mux.HandleFunc("GET /api/v1/builds/{id}/artifacts", s.handleBuildArtifacts)
 	mux.HandleFunc("GET /api/v1/builds/{id}/details", s.handleBuildDetails)
 	mux.HandleFunc("GET /api/v1/builds/{id}/template", s.handleBuildTemplate)
+	mux.HandleFunc("GET /api/v1/builds/{id}/logfile", s.handleBuildLogFile)
 	mux.HandleFunc("GET /api/v1/builds/{id}/artifacts/{name}", s.handleBuildArtifactDownload)
 
 	// Web UI: serve the embedded SPA at the root. API routes above are more
