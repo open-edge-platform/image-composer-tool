@@ -71,14 +71,16 @@ func TestRegenerateGrub_RealMountedBaseline(t *testing.T) {
 	}
 
 	loop := imagedisc.NewLoopDev()
-	loopDev, parts, err := loop.AttachImageToLoopDev(img)
+	loopDev, parts, unregister, err := loop.AttachImageToLoopDev(img)
 	if err != nil {
 		t.Fatalf("attach loop: %v", err)
 	}
 	defer func() {
 		if derr := loop.LoopSetupDelete(loopDev); derr != nil {
 			t.Logf("detach cleanup: %v", derr)
+			return
 		}
+		unregister()
 	}()
 	if len(parts) < 1 {
 		t.Fatalf("expected a root partition, got %v", parts)
@@ -155,14 +157,16 @@ func TestRegenerateGrub_RealGrubMkconfig(t *testing.T) {
 	}
 
 	loop := imagedisc.NewLoopDev()
-	loopDev, parts, err := loop.AttachImageToLoopDev(img)
+	loopDev, parts, unregister, err := loop.AttachImageToLoopDev(img)
 	if err != nil {
 		t.Fatalf("attach loop: %v", err)
 	}
 	defer func() {
 		if derr := loop.LoopSetupDelete(loopDev); derr != nil {
 			t.Logf("detach cleanup: %v", derr)
+			return
 		}
+		unregister()
 	}()
 	if len(parts) < 1 {
 		t.Fatalf("expected a root partition, got %v", parts)
