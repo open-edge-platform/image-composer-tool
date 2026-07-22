@@ -10,6 +10,7 @@ command reference, see the
   - [Commands Overview](#commands-overview)
   - [Building an Image](#building-an-image)
     - [Build Output](#build-output)
+  - [Building an Overlay Image](#building-an-overlay-image)
   - [Validating a Template](#validating-a-template)
   - [Configuration](#configuration)
   - [Operations Requiring Sudo](#operations-requiring-sudo)
@@ -107,6 +108,99 @@ The default `work_dir` depends on how you installed the tool:
 
 You can override it with `--work-dir` or by setting `work_dir` in your
 configuration file.
+
+## Building an Overlay Image
+
+Overlay mode layers additional packages onto an **existing** Ubuntu RAW
+baseline image instead of composing a new image from scratch. The baseline
+you supply is never modified in place — it is copied into the build
+workspace first. Overlay is strictly additive by default: packages may be
+added, but not removed or downgraded, and any conflict fails the preflight
+gate.
+
+For the full design rationale, see
+[ADR: Baseline Image Overlay](../../architecture-decision-record/adr-image-extension.md)
+and
+[ADR: Grow-Only Resize for Overlay Baselines](../../architecture-decision-record/adr-overlay-grow-resize.md).
+
+### Prerequisites
+
+- An existing baseline disk image (`raw`, `qcow2`, `vhd`, or `vhdx`) either
+  on the local filesystem or reachable over `https://`.
+- `qemu-img` installed on the build host when the baseline is not RAW
+  (used to convert into RAW before mounting).
+- Enough free disk space to hold a full copy of the baseline plus the
+  overlaid packages.
+
+### Example template
+
+The repository ships a ready-to-use example at
+[`image-templates/ubuntu24-x86_64-overlay-raw.yml`](../../../image-templates/ubuntu24-x86_64-overlay-raw.yml).
+Edit `baseline.source.path` (or switch to `baseline.source.url:`) to point
+at your own baseline before building.
+
+Key fields:
+
+```yaml
+baseline:
+  mode: overlay
+  source:
+    path: /path/to/ubuntu-24.04-base.img
+    format: raw
+
+overlayPolicy:
+  packageOperation: additive-only
+  conflictPolicy: fail
+
+systemConfig:
+  packages:
+    - tree
+    - jq
+```
+
+### Run the build
+
+```bash
+# Build using the path declared in the template
+sudo -E ./image-composer-tool build image-templates/ubuntu24-x86_64-overlay-raw.yml
+
+# Override the baseline path from the CLI (takes precedence over the template)
+sudo -E ./image-composer-tool build \
+  --baseline-image /images/ubuntu-24.04-base.img \
+  image-templates/ubuntu24-x86_64-overlay-raw.yml
+
+# Skip post-build inspection for a faster iteration loop
+sudo -E ./image-composer-tool build --no-inspect image-templates/ubuntu24-x86_64-overlay-raw.yml
+```
+
+See the
+[`--baseline-image` and `--no-inspect` flag reference](../architecture/image-composer-tool-cli-specification.md#build-command)
+for full details.
+
+### What overlay mode does and does not do
+
+| Behavior | Overlay mode |
+|----------|--------------|
+| Add packages listed in `systemConfig.packages` | Yes (plus transitive deps) |
+| Remove or downgrade packages already in the baseline | No — fails preflight |
+| Rebuild the kernel or bootloader | No — baseline artifacts are preserved |
+| Regenerate initramfs / bootloader config when required by installed packages | Yes |
+| Grow the baseline image to a larger `disk.size` | Only when `overlayPolicy.allowDiskResize: true` (grow-only, never shrinks) |
+| Modify the user-supplied baseline file in place | No — a copy is used |
+
+### Verify the result
+
+Compare the resulting overlay image against the baseline to confirm only
+the expected changes landed:
+
+```bash
+image-composer-tool compare /images/ubuntu-24.04-base.img \
+  workspace/ubuntu-ubuntu24-x86_64/imagebuild/overlay/ubuntu-overlay.raw
+```
+
+See the
+[Compare Command reference](../architecture/image-composer-tool-cli-specification.md#compare-command)
+for JSON output modes and SBOM diffs.
 
 ## Validating a Template
 

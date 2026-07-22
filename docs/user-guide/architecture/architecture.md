@@ -170,3 +170,5 @@ The build process follows these high-level steps:
 - [Understanding Templates](./image-composer-tool-templates.md) - How to create and use image templates
 - [Multiple Package Repository Support](./image-composer-tool-multi-repo-support.md) - Adding custom package repositories
 - [ICT CLI Reference](./image-composer-tool-cli-specification.md) - Complete CLI documentation
+- [ADR: Baseline Image Overlay and ISO Composition Boundaries](../../architecture-decision-record/adr-image-extension.md) - Design rationale for overlay composition mode
+- [ADR: Grow-Only Resize for Overlay Baselines](../../architecture-decision-record/adr-overlay-grow-resize.md) - Design rationale for `overlayPolicy.allowDiskResize`
