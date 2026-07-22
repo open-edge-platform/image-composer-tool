@@ -160,6 +160,39 @@ type SearchResult struct {
 	PackageScore float64
 }
 
+// StreamResult holds the results of a streaming generation.
+// It is returned by GenerateStream to provide both the search context
+// (for SSE events) and the token channel (for real-time delivery).
+type StreamResult struct {
+	// SearchResults are the RAG search results used as context.
+	SearchResults []SearchResult
+
+	// SourceTemplates are the file names of templates used for generation.
+	SourceTemplates []string
+
+	// TokenChan delivers individual tokens from the LLM. Always closed
+	// when generation completes (success or failure).
+	TokenChan <-chan string
+
+	// ErrChan receives at most one error if streaming fails mid-generation.
+	// Check this (non-blocking) after TokenChan is closed.
+	ErrChan <-chan error
+}
+
+// GenerateResult holds the results of a non-streaming generation.
+// It carries the generated YAML alongside the RAG search context so callers
+// (e.g. the API layer) can report which templates informed the result.
+type GenerateResult struct {
+	// YAML is the cleaned, generated template.
+	YAML string
+
+	// SearchResults are the RAG search results used as context.
+	SearchResults []SearchResult
+
+	// SourceTemplates are the file names of templates used for generation.
+	SourceTemplates []string
+}
+
 // Search finds templates matching the query.
 func (e *Engine) Search(ctx context.Context, query string) ([]SearchResult, error) {
 	if !e.initialized {
@@ -204,24 +237,27 @@ func (e *Engine) Search(ctx context.Context, query string) ([]SearchResult, erro
 	return results, nil
 }
 
-// Generate generates a template based on the query and retrieved context.
-func (e *Engine) Generate(ctx context.Context, query string) (string, error) {
+// prepareGeneration performs the search and builds the LLM prompt.
+// This is shared between Generate() and GenerateStream() to avoid
+// duplicating prompt construction logic (ADR: composition over duplication).
+func (e *Engine) prepareGeneration(ctx context.Context, query string) ([]SearchResult, []provider.ChatMessage, []string, error) {
 	if !e.initialized {
-		return "", fmt.Errorf("engine not initialized, call Initialize first")
+		return nil, nil, nil, fmt.Errorf("engine not initialized, call Initialize first")
 	}
 
 	// Search for relevant templates
 	results, err := e.Search(ctx, query)
 	if err != nil {
-		return "", err
+		return nil, nil, nil, err
 	}
 
 	if len(results) == 0 {
-		return "", fmt.Errorf("no relevant templates found for query")
+		return nil, nil, nil, fmt.Errorf("no relevant templates found for query")
 	}
 
 	// Build context from top results
 	var contextBuilder strings.Builder
+	var sourceTemplates []string
 	contextBuilder.WriteString("You are an expert at generating OS image YAML templates for image-composer-tool.\n")
 	contextBuilder.WriteString("Here are some example templates to use as reference:\n\n")
 
@@ -229,6 +265,7 @@ func (e *Engine) Generate(ctx context.Context, query string) (string, error) {
 		if i >= 3 { // Limit to top 3 examples
 			break
 		}
+		sourceTemplates = append(sourceTemplates, result.Template.FileName)
 		contextBuilder.WriteString(fmt.Sprintf("--- Example %d: %s (score: %.2f) ---\n", i+1, result.Template.FileName, result.Score))
 		contextBuilder.WriteString(string(result.Template.RawContent))
 		contextBuilder.WriteString("\n\n")
@@ -243,15 +280,72 @@ func (e *Engine) Generate(ctx context.Context, query string) (string, error) {
 		{Role: "user", Content: contextBuilder.String()},
 	}
 
+	return results, messages, sourceTemplates, nil
+}
+
+// Generate generates a template based on the query and retrieved context.
+// It returns only the cleaned YAML; callers that also need the search context
+// should use GenerateWithContext.
+func (e *Engine) Generate(ctx context.Context, query string) (string, error) {
+	result, err := e.GenerateWithContext(ctx, query)
+	if err != nil {
+		return "", err
+	}
+	return result.YAML, nil
+}
+
+// GenerateWithContext generates a template and returns it together with the
+// RAG search context (search results and source template names). This lets the
+// API layer populate the same source information the streaming path exposes,
+// rather than returning empty placeholder fields.
+func (e *Engine) GenerateWithContext(ctx context.Context, query string) (*GenerateResult, error) {
+	results, messages, sourceTemplates, err := e.prepareGeneration(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+
 	response, err := e.chatProvider.Chat(ctx, messages)
 	if err != nil {
-		return "", fmt.Errorf("failed to generate template: %w", err)
+		return nil, fmt.Errorf("failed to generate template: %w", err)
 	}
 
 	// Clean up response - extract YAML if wrapped in code blocks
-	response = cleanYAMLResponse(response)
+	response = CleanYAMLResponse(response)
 
-	return response, nil
+	return &GenerateResult{
+		YAML:            response,
+		SearchResults:   results,
+		SourceTemplates: sourceTemplates,
+	}, nil
+}
+
+// GenerateStream performs RAG search and starts streaming LLM generation.
+// The search is performed synchronously so the caller can emit SSE events
+// for search_results and generation_start before token streaming begins.
+// Returns an error if the provider does not support streaming.
+func (e *Engine) GenerateStream(ctx context.Context, query string) (*StreamResult, error) {
+	results, messages, sourceTemplates, err := e.prepareGeneration(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+
+	// Type-assert to StreamingChatProvider (non-breaking check).
+	sp, ok := e.chatProvider.(provider.StreamingChatProvider)
+	if !ok {
+		return nil, fmt.Errorf("chat provider does not support streaming")
+	}
+
+	tokenChan, errChan, err := sp.ChatStream(ctx, messages)
+	if err != nil {
+		return nil, fmt.Errorf("failed to start streaming generation: %w", err)
+	}
+
+	return &StreamResult{
+		SearchResults:   results,
+		SourceTemplates: sourceTemplates,
+		TokenChan:       tokenChan,
+		ErrChan:         errChan,
+	}, nil
 }
 
 // Stats returns engine statistics.
@@ -386,8 +480,9 @@ func isStopWord(word string) bool {
 	return stopWords[word]
 }
 
-// cleanYAMLResponse removes code block markers from LLM response.
-func cleanYAMLResponse(response string) string {
+// CleanYAMLResponse removes code block markers from LLM response.
+// Exported so that the API layer can clean assembled streaming tokens.
+func CleanYAMLResponse(response string) string {
 	lines := strings.Split(response, "\n")
 	var cleaned []string
 	inCodeBlock := false

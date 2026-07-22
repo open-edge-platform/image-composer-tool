@@ -1,0 +1,35 @@
+.bubbleContainer {
+  display: flex;
+  margin-bottom: var(--space-lg);
+  width: 100%;
+}
+
+.user {
+  justify-content: flex-end;
+}
+
+.assistant {
+  justify-content: flex-start;
+}
+
+.bubble {
+  max-width: 100%;
+  padding: var(--space-md);
+  border-radius: var(--radius-lg);
+}
+
+.user .bubble {
+  background-color: var(--color-bg-elevated);
+  border-bottom-right-radius: var(--radius-sm);
+  color: var(--color-text-primary);
+}
+
+.assistant .bubble {
+  background-color: transparent;
+  width: 100%;
+}
+
+.text {
+  margin: 0;
+  line-height: 1.5;
+}

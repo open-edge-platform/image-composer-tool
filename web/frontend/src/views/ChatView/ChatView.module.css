@@ -1,0 +1,35 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  padding: var(--space-xl);
+  max-width: 1400px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.messageArea {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding-right: var(--space-md);
+  margin-bottom: var(--space-lg);
+}
+
+.inputArea {
+  flex-shrink: 0;
+  margin-top: auto;
+}
+
+.emptyState {
+  margin: auto;
+  text-align: center;
+  color: var(--color-text-secondary);
+}
+
+.emptyState h2 {
+  color: var(--color-text-primary);
+  margin-bottom: var(--space-sm);
+}
+

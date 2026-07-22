@@ -1,0 +1,30 @@
+.card {
+  background-color: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+  font-size: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  min-width: 200px;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.score {
+  color: var(--color-accent-secondary);
+}
+
+.details {
+  display: flex;
+  gap: var(--space-sm);
+  color: var(--color-text-secondary);
+  font-size: 0.75rem;
+}

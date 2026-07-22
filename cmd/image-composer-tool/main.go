@@ -112,6 +112,7 @@ The tool supports building custom images for:
 	rootCmd.AddCommand(createInspectCommand())
 	rootCmd.AddCommand(createAICommand())
 	rootCmd.AddCommand(createCompareCommand())
+	rootCmd.AddCommand(createServeCommand())
 
 	// Initialize Cobra's default completion command
 	rootCmd.InitDefaultCompletionCmd()
