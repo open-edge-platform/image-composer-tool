@@ -1,7 +1,7 @@
 # ADR: Native Container Support
 
 **Status**: Proposed
-**Date**: 2026-07n-22
+**Date**: 2026-07-22
 **Updated**: N/A
 **Authors**: OS Image Composer Team
 **Technical Area**: Container Support
@@ -806,7 +806,7 @@ Build operations should use the minimum capabilities required. Privileged contai
 
 ICT logs, manifests, inspection, comparison, and SBOM results must expose the container artifacts included in the image.
 
-## Proposed Schmea Direction
+## Proposed Schema Direction
 
 The exact schema naming can be adjusted during implementation, but the following
 represents the recommended logical structure:
