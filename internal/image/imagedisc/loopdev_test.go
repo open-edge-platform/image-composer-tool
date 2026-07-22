@@ -439,3 +439,240 @@ func TestDiskPartitionDelete(t *testing.T) {
 		}
 	})
 }
+
+func TestFindAndUnmount(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	t.Run("unmount single partition", func(t *testing.T) {
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+			{Pattern: "umount -l", Output: "", Error: nil},
+		})
+
+		ld := &LoopDev{}
+		data := map[string]interface{}{
+			"name":        "loop0p1",
+			"mountpoint":  "/mnt/test",
+			"blockdevices": []interface{}{},
+		}
+
+		err := ld.findAndUnmount(data)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("skip empty mountpoint", func(t *testing.T) {
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{})
+
+		ld := &LoopDev{}
+		data := map[string]interface{}{
+			"name":       "loop0p1",
+			"mountpoint": "",
+		}
+
+		err := ld.findAndUnmount(data)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("handle nil mountpoint", func(t *testing.T) {
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{})
+
+		ld := &LoopDev{}
+		data := map[string]interface{}{
+			"name":        "loop0p1",
+			"mountpoint":  nil, // JSON null becomes Go nil
+			"blockdevices": []interface{}{},
+		}
+
+		err := ld.findAndUnmount(data)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("recurse into blockdevices array", func(t *testing.T) {
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+			{Pattern: "umount -l '/mnt/with spaces'", Output: "", Error: nil},
+		})
+
+		ld := &LoopDev{}
+		data := map[string]interface{}{
+			"name": "loop0",
+			"blockdevices": []interface{}{
+				map[string]interface{}{
+					"name":       "loop0p1",
+					"mountpoint": "/mnt/with spaces",
+				},
+			},
+		}
+
+		err := ld.findAndUnmount(data)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("continue on unmount failure", func(t *testing.T) {
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+			{Pattern: "umount -l", Output: "", Error: fmt.Errorf("umount failed")},
+		})
+
+		ld := &LoopDev{}
+		data := map[string]interface{}{
+			"name":       "loop0p1",
+			"mountpoint": "/mnt/test",
+		}
+
+		// Should not return error, just log warning
+		err := ld.findAndUnmount(data)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("process array of items", func(t *testing.T) {
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+			{Pattern: "umount -l", Output: "", Error: nil},
+		})
+
+		ld := &LoopDev{}
+		data := []interface{}{
+			map[string]interface{}{
+				"name":       "loop0p1",
+				"mountpoint": "/mnt/test1",
+			},
+			map[string]interface{}{
+				"name":       "loop0p2",
+				"mountpoint": "/mnt/test2",
+			},
+		}
+
+		err := ld.findAndUnmount(data)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
+func TestFindAndDisableSwap(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	t.Run("disable single swap partition", func(t *testing.T) {
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+			{Pattern: "swapoff /dev/loop0p2", Output: "", Error: nil},
+		})
+
+		ld := &LoopDev{}
+		data := map[string]interface{}{
+			"name":   "loop0p2",
+			"fstype": "swap",
+		}
+
+		err := ld.findAndDisableSwap(data)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("skip non-swap filesystem", func(t *testing.T) {
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{})
+
+		ld := &LoopDev{}
+		data := map[string]interface{}{
+			"name":   "loop0p1",
+			"fstype": "ext4",
+		}
+
+		err := ld.findAndDisableSwap(data)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("handle nil fstype", func(t *testing.T) {
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{})
+
+		ld := &LoopDev{}
+		data := map[string]interface{}{
+			"name":   "loop0p1",
+			"fstype": nil,
+		}
+
+		err := ld.findAndDisableSwap(data)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("recurse into blockdevices array", func(t *testing.T) {
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+			{Pattern: "swapoff /dev/loop0p2", Output: "", Error: nil},
+		})
+
+		ld := &LoopDev{}
+		data := map[string]interface{}{
+			"name": "loop0",
+			"blockdevices": []interface{}{
+				map[string]interface{}{
+					"name":   "loop0p1",
+					"fstype": "ext4",
+				},
+				map[string]interface{}{
+					"name":   "loop0p2",
+					"fstype": "swap",
+				},
+			},
+		}
+
+		err := ld.findAndDisableSwap(data)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("continue on swapoff failure", func(t *testing.T) {
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+			{Pattern: "swapoff /dev/loop0p2", Output: "", Error: fmt.Errorf("swapoff failed")},
+		})
+
+		ld := &LoopDev{}
+		data := map[string]interface{}{
+			"name":   "loop0p2",
+			"fstype": "swap",
+		}
+
+		// Should not return error, just log warning
+		err := ld.findAndDisableSwap(data)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("process multiple swap partitions", func(t *testing.T) {
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+			{Pattern: "swapoff /dev/loop0p2", Output: "", Error: nil},
+			{Pattern: "swapoff /dev/loop0p3", Output: "", Error: nil},
+		})
+
+		ld := &LoopDev{}
+		data := []interface{}{
+			map[string]interface{}{
+				"name":   "loop0p2",
+				"fstype": "swap",
+			},
+			map[string]interface{}{
+				"name":   "loop0p3",
+				"fstype": "swap",
+			},
+		}
+
+		err := ld.findAndDisableSwap(data)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}

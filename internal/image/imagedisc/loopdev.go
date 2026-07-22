@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
@@ -138,11 +139,107 @@ func (loopDev *LoopDev) LoopSetupDelete(loopDevPath string) error {
 		// Don't return error, try to continue with detach
 	}
 
+	// Unmount any partitions of this loop device
+	if err := loopDev.unmountLoopDevicePartitions(loopDevPath); err != nil {
+		log.Warnf("Warning while unmounting partitions on %s: %v", loopDevPath, err)
+		// Don't return error, try to continue with detach
+	}
+
 	cmd := fmt.Sprintf("losetup -d %s", loopDevPath)
 	if _, err := shell.ExecCmd(cmd, true, shell.HostPath, nil); err != nil {
-		log.Errorf("Failed to delete loop device %s: %v", loopDevPath, err)
-		return fmt.Errorf("failed to delete loop device %s: %w", loopDevPath, err)
+		errMsg := err.Error()
+		// Check if device was already detached (no such device - this is success)
+		if strings.Contains(errMsg, "No such device") || strings.Contains(errMsg, "cannot find") {
+			log.Infof("Loop device %s already detached or doesn't exist (likely cleaned by system)", loopDevPath)
+			return nil
+		}
+
+		log.Warnf("Standard detach failed for %s, attempting force detach: %v", loopDevPath, err)
+		// Try detach again after a brief retry. NOTE: do NOT use `losetup -D` here
+		// — that flag detaches EVERY loop device on the host and ignores the path
+		// argument, which would tear down unrelated loop mounts. Stick with `-d`.
+		forceCmd := fmt.Sprintf("losetup -d %s", loopDevPath)
+		if _, forceErr := shell.ExecCmd(forceCmd, true, shell.HostPath, nil); forceErr != nil {
+			forceErrMsg := forceErr.Error()
+			// Check if already gone
+			if strings.Contains(forceErrMsg, "No such device") || strings.Contains(forceErrMsg, "cannot find") {
+				log.Infof("Loop device %s already cleaned by system", loopDevPath)
+				return nil
+			}
+			log.Errorf("Failed to detach loop device %s after retry: %v, %v", loopDevPath, err, forceErr)
+			return fmt.Errorf("failed to delete loop device %s: %w", loopDevPath, err)
+		}
+		log.Infof("Successfully force-detached loop device: %s", loopDevPath)
+		return nil
 	}
+	return nil
+}
+
+// unmountLoopDevicePartitions unmounts all partitions of a loop device
+func (loopDev *LoopDev) unmountLoopDevicePartitions(loopDevPath string) error {
+	// Extract base loop device (e.g., /dev/loop0 from /dev/loop0p1)
+	re := regexp.MustCompile(`^(/dev/loop\d+)(?:p\d+)?$`)
+	match := re.FindStringSubmatch(loopDevPath)
+	if len(match) < 2 {
+		return nil
+	}
+
+	baseLoopDev := match[1]
+
+	// Get all partitions using lsblk
+	cmd := fmt.Sprintf("lsblk -o NAME,MOUNTPOINT %s -J", baseLoopDev)
+	output, err := shell.ExecCmd(cmd, true, shell.HostPath, nil)
+	if err != nil {
+		log.Debugf("Could not list block devices for %s: %v", baseLoopDev, err)
+		return nil
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		log.Debugf("Failed to parse lsblk output: %v", err)
+		return nil
+	}
+
+	// Find and unmount all mounted partitions
+	return loopDev.findAndUnmount(result)
+}
+
+// findAndUnmount recursively finds mounted partitions and unmounts them
+func (loopDev *LoopDev) findAndUnmount(data interface{}) error {
+	switch v := data.(type) {
+	case map[string]interface{}:
+		// Check if this entry has a mountpoint
+		if mountPoint, ok := v["mountpoint"].(string); ok && mountPoint != "" {
+			if name, ok := v["name"].(string); ok {
+				mountDev := fmt.Sprintf("/dev/%s", name)
+				log.Infof("Unmounting partition: %s from %s", mountDev, mountPoint)
+				// Shell-escape the mount point to safely handle spaces and special characters
+				escapedMountPoint := strconv.Quote(mountPoint)
+				// Already a lazy unmount (-l). If this fails, log and continue —
+				// the loop device detach below will still proceed.
+				if _, err := shell.ExecCmd(fmt.Sprintf("umount -l %s", escapedMountPoint), true, shell.HostPath, nil); err != nil {
+					log.Warnf("Failed to lazy-unmount %s: %v", mountPoint, err)
+				} else {
+					log.Infof("Successfully unmounted: %s", mountPoint)
+				}
+			}
+		}
+
+		// Recurse into nested structures
+		for _, val := range v {
+			if err := loopDev.findAndUnmount(val); err != nil {
+				return err
+			}
+		}
+
+	case []interface{}:
+		for _, item := range v {
+			if err := loopDev.findAndUnmount(item); err != nil {
+				return err
+			}
+		}
+	}
+
 	return nil
 }
 
