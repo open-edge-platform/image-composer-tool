@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 )
 
 // requestCounter is used to generate unique request IDs.
@@ -51,12 +53,12 @@ func respondJSON(w http.ResponseWriter, statusCode int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 
-	if data != nil {
-		if err := json.NewEncoder(w).Encode(data); err != nil {
-			// If encoding fails, we can't send a proper error response
-			// since headers are already written. Log it server-side.
-			http.Error(w, "internal encoding error", http.StatusInternalServerError)
-		}
+	if data == nil {
+		return
+	}
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		// Headers are already written; just log the failure server-side.
+		logger.Logger().Errorf("failed to encode JSON response: %v", err)
 	}
 }
 
