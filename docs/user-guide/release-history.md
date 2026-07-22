@@ -5,7 +5,7 @@
 
 #### The following table captures the history of ICT template support for the Intel HW Platforms.
 
-|ICT Release Version| Validated Platform Names | Target Use Cases| OEP Template | OEP Release Version|
+|ICT Release Version| Validated Intel HW Platform Names | Target Use Cases| OEP Template | OEP Release Version|
 | :--- | :---: | :---: | :---:| --:|
 | Version 1.0| **RPL** |  Initial Base Platform | N/A| Release 2025.3 |
 |Release 2026.0| RPL,**MTL** |  External OSV Focus | N/A| Release 2026.0 |
