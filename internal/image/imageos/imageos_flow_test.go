@@ -211,13 +211,7 @@ func TestUpdateInitramfsEMT(t *testing.T) {
 }
 
 func TestWireFDEBootMissingCmdline(t *testing.T) {
-	originalExecutor := shell.Default
-	t.Cleanup(func() { shell.Default = originalExecutor })
-
-	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
-		{Pattern: `cryptsetup status`, Output: "device: /dev/loop0p2\n", Error: nil},
-		{Pattern: `cryptsetup luksUUID`, Output: "uuid-1\n", Error: nil},
-	})
+	setWireFDEBootTestShell(t, "uuid-1")
 
 	template := fdeTestTemplateManual()
 	err := wireFDEBoot(t.TempDir(), map[string]string{"rootfs": "/dev/mapper/rootfs"}, template)

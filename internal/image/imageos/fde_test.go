@@ -6,12 +6,107 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/file"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
+
+// wireFDEBootTestExecutor mocks cryptsetup and performs file operations locally so
+// wireFDEBoot tests do not depend on sudo/cat/cp in CI.
+type wireFDEBootTestExecutor struct {
+	luksUUID string
+}
+
+var shellQuotedArgPattern = regexp.MustCompile(`'([^']*)'|"([^"]*)"`)
+
+func (e *wireFDEBootTestExecutor) ExecCmd(cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error) {
+	if out, ok, err := e.dispatch(cmdStr); ok {
+		return out, err
+	}
+	return "", fmt.Errorf("unexpected command in wireFDEBoot test: %s", cmdStr)
+}
+
+func (e *wireFDEBootTestExecutor) ExecCmdSilent(cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error) {
+	return e.ExecCmd(cmdStr, sudo, chrootPath, envVal)
+}
+
+func (e *wireFDEBootTestExecutor) ExecCmdWithStream(cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error) {
+	return e.ExecCmd(cmdStr, sudo, chrootPath, envVal)
+}
+
+func (e *wireFDEBootTestExecutor) ExecCmdWithInput(inputStr string, cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error) {
+	return e.ExecCmd(cmdStr, sudo, chrootPath, envVal)
+}
+
+func (e *wireFDEBootTestExecutor) dispatch(cmdStr string) (output string, handled bool, err error) {
+	switch {
+	case strings.Contains(cmdStr, "cryptsetup status"):
+		return "  device: /dev/loop0p2\n", true, nil
+	case strings.Contains(cmdStr, "cryptsetup luksUUID"):
+		return e.luksUUID + "\n", true, nil
+	case strings.Contains(cmdStr, "cryptsetup luksAddKey"):
+		return "", true, nil
+	case strings.HasPrefix(strings.TrimSpace(cmdStr), "cat "):
+		path := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(cmdStr), "cat "))
+		paths := shellQuotedPaths(cmdStr)
+		if len(paths) > 0 {
+			path = paths[len(paths)-1]
+		}
+		if path == "" {
+			return "", true, fmt.Errorf("cat missing path in %q", cmdStr)
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return "", true, readErr
+		}
+		return string(data), true, nil
+	case strings.Contains(cmdStr, "mkdir"):
+		paths := shellQuotedPaths(cmdStr)
+		if len(paths) == 0 {
+			return "", true, fmt.Errorf("mkdir missing path in %q", cmdStr)
+		}
+		return "", true, os.MkdirAll(paths[len(paths)-1], 0755)
+	case strings.Contains(cmdStr, " cp ") || strings.HasPrefix(strings.TrimSpace(cmdStr), "cp "):
+		paths := shellQuotedPaths(cmdStr)
+		if len(paths) < 2 {
+			return "", true, fmt.Errorf("cp expected two paths in %q", cmdStr)
+		}
+		src, dst := paths[len(paths)-2], paths[len(paths)-1]
+		data, readErr := os.ReadFile(src)
+		if readErr != nil {
+			return "", true, readErr
+		}
+		if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+			return "", true, err
+		}
+		return "", true, os.WriteFile(dst, data, 0644)
+	default:
+		return "", false, nil
+	}
+}
+
+func shellQuotedPaths(cmdStr string) []string {
+	var paths []string
+	for _, m := range shellQuotedArgPattern.FindAllStringSubmatch(cmdStr, -1) {
+		if m[1] != "" {
+			paths = append(paths, m[1])
+		} else if m[2] != "" {
+			paths = append(paths, m[2])
+		}
+	}
+	return paths
+}
+
+func setWireFDEBootTestShell(t *testing.T, luksUUID string) {
+	t.Helper()
+	originalExecutor := shell.Default
+	shell.Default = &wireFDEBootTestExecutor{luksUUID: luksUUID}
+	t.Cleanup(func() { shell.Default = originalExecutor })
+}
 
 func TestParseCryptsetupStatusDevice(t *testing.T) {
 	t.Parallel()
@@ -278,13 +373,7 @@ func fdeTestTemplateManual() *config.ImageTemplate {
 }
 
 func TestWireFDEBootManualUnlock(t *testing.T) {
-	originalExecutor := shell.Default
-	t.Cleanup(func() { shell.Default = originalExecutor })
-
-	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
-		{Pattern: `cryptsetup status`, Output: "device: /dev/loop0p2\n", Error: nil},
-		{Pattern: `cryptsetup luksUUID`, Output: "luks-uuid-123\n", Error: nil},
-	})
+	setWireFDEBootTestShell(t, "luks-uuid-123")
 
 	installRoot := t.TempDir()
 	cmdlinePath := filepath.Join(installRoot, "boot", "cmdline.conf")
@@ -302,11 +391,10 @@ func TestWireFDEBootManualUnlock(t *testing.T) {
 		t.Fatalf("wireFDEBoot: %v", err)
 	}
 
-	written, err := os.ReadFile(cmdlinePath)
+	content, err := file.Read(cmdlinePath)
 	if err != nil {
 		t.Fatalf("read cmdline: %v", err)
 	}
-	content := string(written)
 	if !strings.Contains(content, "rd.luks.uuid=luks-uuid-123") {
 		t.Errorf("cmdline missing LUKS uuid: %q", content)
 	}
@@ -316,14 +404,7 @@ func TestWireFDEBootManualUnlock(t *testing.T) {
 }
 
 func TestWireFDEBootAutoUnlock(t *testing.T) {
-	originalExecutor := shell.Default
-	t.Cleanup(func() { shell.Default = originalExecutor })
-
-	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
-		{Pattern: `cryptsetup status`, Output: "device: /dev/loop0p2\n", Error: nil},
-		{Pattern: `cryptsetup luksUUID`, Output: "luks-uuid-auto\n", Error: nil},
-		{Pattern: `cryptsetup luksAddKey`, Output: "", Error: nil},
-	})
+	setWireFDEBootTestShell(t, "luks-uuid-auto")
 
 	installRoot := t.TempDir()
 	cmdlinePath := filepath.Join(installRoot, "boot", "cmdline.conf")
@@ -341,12 +422,12 @@ func TestWireFDEBootAutoUnlock(t *testing.T) {
 		t.Fatalf("wireFDEBoot auto: %v", err)
 	}
 
-	written, err := os.ReadFile(cmdlinePath)
+	written, err := file.Read(cmdlinePath)
 	if err != nil {
 		t.Fatalf("read cmdline: %v", err)
 	}
-	if !strings.Contains(string(written), "rd.luks.key=/etc/cryptsetup-keys.d/fde.key") {
-		t.Errorf("cmdline missing auto key: %q", string(written))
+	if !strings.Contains(written, "rd.luks.key=/etc/cryptsetup-keys.d/fde.key") {
+		t.Errorf("cmdline missing auto key: %q", written)
 	}
 }
 
