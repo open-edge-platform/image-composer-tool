@@ -205,9 +205,10 @@ adding a parallel image-composition workflow.
 
 ### 1. Add an optional top-level containers section
 
-The template will support an optional top-level array named containers. A plural
-array is recommended rather than a singular container object because an edge
-stack commonly contains multiple independently built or acquired images.
+The template will support an optional top-level object named containers, holding
+runtime, images, and applications sections. The images field is an array rather
+than a single container object because an edge stack commonly contains multiple
+independently built or acquired images.
 
 Example:
 
@@ -1060,7 +1061,47 @@ or child processes behind.
 
 ## Alternatives Considered
 
-TBD
+### Build directly into the runtime store at composition time
+
+Use a daemonless builder (Buildah or Podman) to write the built or pulled image
+straight into the runtime's own store (for example containers-storage) during
+composition, so the image is present at first boot with no import step.
+
+- Pro: fully offline, with zero first-boot work and the simplest boot path.
+- Con: couples the composed system image to one runtime and to its
+  storage-driver, snapshotter, and version specifics. This is the same coupling
+  that section 4 rejects for /var/lib/docker.
+
+Rejected as the portable contract because it ties the image to a single runtime.
+It is retained only as the optional composition-time import optimization
+described in section 5, available where a provider and runtime can do it safely.
+The runtime-independent OCI archive plus first-boot import (the decision above)
+is preferred because it keeps the runtime choice open and the artifact portable,
+accepting one deterministic, offline first-boot import step as the cost.
+
+### Generate the runtime data directory directly
+
+Manufacture /var/lib/docker (or another runtime's internal storage hierarchy)
+during composition so the runtime finds its images already unpacked at boot.
+
+- Con: the internal layout depends on runtime version, storage driver,
+  snapshotter, backing filesystem, mount topology, and daemon configuration, so
+  the output image is not portable across any of those.
+
+Rejected. This is the coupling documented in section 4; it is recorded here as a
+formal alternative so that section reads as a decision rather than only a
+prohibition.
+
+### Defer all image acquisition to first boot (status quo)
+
+Install only a runtime and pull images from a registry on the device at first
+boot, as templates can already arrange today.
+
+- Con: requires network access at first boot, is non-deterministic, and captures
+  no digest or provenance in the image manifest.
+
+Rejected as the baseline. Removing this first-boot network dependency and making
+the embedded content deterministic is the motivation for this ADR.
 
 ## Final Recommendation
 
