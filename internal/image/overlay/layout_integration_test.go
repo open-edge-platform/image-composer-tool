@@ -75,7 +75,7 @@ func TestWithMountedLayout_RealGPTImage(t *testing.T) {
 	img := buildGPTImage(t)
 
 	loop := imagedisc.NewLoopDev()
-	loopDev, parts, err := loop.AttachImageToLoopDev(img)
+	loopDev, parts, _, err := loop.AttachImageToLoopDev(img)
 	if err != nil {
 		t.Fatalf("attach loop: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestWithMountedLayout_RejectsRealLUKS(t *testing.T) {
 	}
 
 	loop := imagedisc.NewLoopDev()
-	loopDev, parts, err := loop.AttachImageToLoopDev(img)
+	loopDev, parts, _, err := loop.AttachImageToLoopDev(img)
 	if err != nil {
 		t.Fatalf("attach loop: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestWithMountedLayout_RejectsRealDMVerity(t *testing.T) {
 	}
 
 	loop := imagedisc.NewLoopDev()
-	loopDev, _, err := loop.AttachImageToLoopDev(img)
+	loopDev, _, _, err := loop.AttachImageToLoopDev(img)
 	if err != nil {
 		t.Fatalf("attach loop: %v", err)
 	}

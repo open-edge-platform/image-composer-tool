@@ -45,7 +45,7 @@ func TestLoopSetupCreate(t *testing.T) {
 				{Pattern: "losetup --direct-io=on --show -f -P", Output: tt.output, Error: tt.cmdErr},
 			})
 
-			got, err := loopSetupCreate("/tmp/test.raw")
+			got, _, err := loopSetupCreate("/tmp/test.raw")
 			if tt.expectError {
 				if err == nil {
 					t.Fatal("expected error, got nil")
@@ -71,7 +71,7 @@ func TestLoopSetupCreateEmptyRawDisk(t *testing.T) {
 	defer func() { shell.Default = originalExecutor }()
 
 	t.Run("invalid size", func(t *testing.T) {
-		_, err := loopSetupCreateEmptyRawDisk(filepath.Join(t.TempDir(), "disk.raw"), "bad-size")
+		_, _, err := loopSetupCreateEmptyRawDisk(filepath.Join(t.TempDir(), "disk.raw"), "bad-size")
 		if err == nil {
 			t.Fatal("expected error for invalid size")
 		}
@@ -79,7 +79,7 @@ func TestLoopSetupCreateEmptyRawDisk(t *testing.T) {
 
 	t.Run("missing file after create", func(t *testing.T) {
 		shell.Default = shell.NewMockExecutor([]shell.MockCommand{{Pattern: "fallocate", Output: "", Error: nil}})
-		_, err := loopSetupCreateEmptyRawDisk(filepath.Join(t.TempDir(), "disk.raw"), "16MiB")
+		_, _, err := loopSetupCreateEmptyRawDisk(filepath.Join(t.TempDir(), "disk.raw"), "16MiB")
 		if err == nil || !strings.Contains(err.Error(), "can't find") {
 			t.Fatalf("expected can't find error, got %v", err)
 		}
@@ -162,7 +162,7 @@ func TestAttachImageToLoopDev(t *testing.T) {
 
 	t.Run("missing image", func(t *testing.T) {
 		ld := &LoopDev{}
-		if _, _, err := ld.AttachImageToLoopDev("/nonexistent/baseline.raw"); err == nil {
+		if _, _, _, err := ld.AttachImageToLoopDev("/nonexistent/baseline.raw"); err == nil {
 			t.Fatal("expected error for missing image")
 		}
 	})
@@ -174,10 +174,11 @@ func TestAttachImageToLoopDev(t *testing.T) {
 			{Pattern: `lsblk -prno NAME '/dev/loop6'`, Output: "/dev/loop6\n/dev/loop6p1\n"},
 		})
 		ld := &LoopDev{}
-		dev, parts, err := ld.AttachImageToLoopDev(img)
+		dev, parts, unregister, err := ld.AttachImageToLoopDev(img)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
+		defer unregister()
 		if dev != "/dev/loop6" {
 			t.Fatalf("dev = %q, want /dev/loop6", dev)
 		}
@@ -198,7 +199,7 @@ func TestAttachImageToLoopDev(t *testing.T) {
 			{Pattern: "losetup -d /dev/loop5", Output: ""}, // cleanup detach must run
 		})
 		ld := &LoopDev{}
-		if _, _, err := ld.AttachImageToLoopDev(img); err == nil {
+		if _, _, _, err := ld.AttachImageToLoopDev(img); err == nil {
 			t.Fatal("expected error, got nil")
 		}
 	})
@@ -215,7 +216,7 @@ func TestAttachImageToLoopDev(t *testing.T) {
 			{Pattern: "losetup -d /dev/loop2", Error: fmt.Errorf("detach failed")},
 		})
 		ld := &LoopDev{}
-		dev, _, err := ld.AttachImageToLoopDev(img)
+		dev, _, _, err := ld.AttachImageToLoopDev(img)
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
@@ -363,7 +364,7 @@ func TestCreateRawImageLoopDev(t *testing.T) {
 	t.Run("create loop device failure", func(t *testing.T) {
 		ld := &LoopDev{}
 		template := &config.ImageTemplate{Disk: config.DiskConfig{Size: "bad-size"}}
-		_, _, err := ld.CreateRawImageLoopDev(filepath.Join(t.TempDir(), "x.raw"), template)
+		_, _, _, err := ld.CreateRawImageLoopDev(filepath.Join(t.TempDir(), "x.raw"), template)
 		if err == nil || !strings.Contains(err.Error(), "failed to create loop device") {
 			t.Fatalf("expected wrapped create loop error, got %v", err)
 		}
@@ -398,10 +399,11 @@ Disklabel type: gpt`
 		ld := &LoopDev{}
 		template := &config.ImageTemplate{Disk: config.DiskConfig{Size: "1MiB", PartitionTableType: "gpt", Partitions: []config.PartitionInfo{}}}
 
-		loopPath, partMap, err := ld.CreateRawImageLoopDev(filePath, template)
+		loopPath, partMap, unregister, err := ld.CreateRawImageLoopDev(filePath, template)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
+		defer unregister()
 		if loopPath != "/dev/loop7" {
 			t.Fatalf("expected /dev/loop7, got %q", loopPath)
 		}

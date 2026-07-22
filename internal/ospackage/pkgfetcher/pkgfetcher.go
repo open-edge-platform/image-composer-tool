@@ -1,6 +1,7 @@
 package pkgfetcher
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -37,14 +38,21 @@ func shouldRetryHTTPStatus(statusCode int) bool {
 	}
 }
 
-func downloadWithRetry(client *http.Client, url, destPath string, threadcontext int) error {
+func downloadWithRetry(ctx context.Context, client *http.Client, url, destPath string, threadcontext int) error {
 	log := logger.Logger()
 
 	var lastErr error
 	backoff := initialRetryBackoff
 
 	for attempt := 1; attempt <= maxDownloadAttempts; attempt++ {
-		resp, err := client.Get(url)
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("download cancelled before attempt %d: %w", attempt, err)
+		}
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if reqErr != nil {
+			return fmt.Errorf("build request: %w", reqErr)
+		}
+		resp, err := client.Do(req)
 		if err != nil {
 			lastErr = err
 		} else {
@@ -107,7 +115,16 @@ func downloadWithRetry(client *http.Client, url, destPath string, threadcontext 
 		}
 
 		log.Warnf("download attempt %d/%d failed for %s: %v; retrying in %s", attempt, maxDownloadAttempts, url, lastErr, backoff)
-		time.Sleep(backoff)
+		// Cancel-aware sleep: break out immediately on ctx cancel so a SIGINT
+		// during download does not have to wait for the retry backoff to
+		// elapse before the worker exits.
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("download cancelled during retry backoff: %w", ctx.Err())
+		case <-timer.C:
+		}
 		backoff *= time.Duration(2 * (threadcontext + 1))
 	}
 
@@ -115,8 +132,14 @@ func downloadWithRetry(client *http.Client, url, destPath string, threadcontext 
 }
 
 // FetchPackages downloads the given URLs into destDir using a pool of workers.
-// It shows a single progress bar tracking files completed vs total.
-func FetchPackages(urls []string, destDir string, workers int) error {
+// It shows a single progress bar tracking files completed vs total. The ctx
+// is threaded through to every HTTP request and retry-backoff sleep so a
+// SIGINT/SIGTERM during download aborts in-flight HTTP work within one
+// retry-backoff quantum. After cancellation the workers still drain the
+// remaining queued URLs (each drains near-instantly since it skips HTTP work
+// and only advances the progress bar), keeping bar.Add balanced with the
+// initial job count so bar.Finish reports a coherent state.
+func FetchPackages(ctx context.Context, urls []string, destDir string, workers int) error {
 	log := logger.Logger()
 
 	total := len(urls)
@@ -149,6 +172,17 @@ func FetchPackages(urls []string, destDir string, workers int) error {
 		go func() {
 			defer wg.Done()
 			for url := range jobs {
+				// Drain remaining jobs quickly when the ambient ctx is
+				// cancelled: skip the HTTP work but still bar.Add so wg.Wait
+				// doesn't hang on an under-incremented progress bar. Setting
+				// downloadError ensures FetchPackages returns non-nil.
+				if err := ctx.Err(); err != nil {
+					downloadError.Store(true)
+					if err := bar.Add(1); err != nil {
+						log.Errorf("failed to add to progress bar: %v", err)
+					}
+					continue
+				}
 				name := path.Base(url)
 
 				// update description to current file
@@ -179,7 +213,7 @@ func FetchPackages(urls []string, destDir string, workers int) error {
 				// S3/CloudFront treats literal '+' as space; encode it as %2B in the
 				// download URL only (the local filename keeps the original '+').
 				downloadURL := strings.ReplaceAll(url, "+", "%2B")
-				err := downloadWithRetry(client, downloadURL, destPath, i)
+				err := downloadWithRetry(ctx, client, downloadURL, destPath, i)
 
 				if err != nil {
 					log.Errorf("downloading %s failed: %v", url, err)
@@ -201,7 +235,11 @@ func FetchPackages(urls []string, destDir string, workers int) error {
 
 	wg.Wait()
 
-	// error after all jobs done
+	// error after all jobs done — prefer surfacing ctx cancellation so
+	// callers can distinguish "user aborted" from a real download failure.
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("package download cancelled: %w", err)
+	}
 	if downloadError.Load() {
 		return fmt.Errorf("one or more downloads failed")
 	}

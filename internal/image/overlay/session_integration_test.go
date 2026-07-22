@@ -134,7 +134,7 @@ func TestOverlayBuilder_FullFlowRealRawBaseline(t *testing.T) {
 func bootstrapDebianBaseline(t *testing.T, img string) {
 	t.Helper()
 	loop := imagedisc.NewLoopDev()
-	loopDev, parts, err := loop.AttachImageToLoopDev(img)
+	loopDev, parts, _, err := loop.AttachImageToLoopDev(img)
 	if err != nil {
 		t.Fatalf("attach loop: %v", err)
 	}

@@ -20,6 +20,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/pkgsorter"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/network"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/runctx"
 )
 
 // repoConfig holds .repo file values
@@ -578,17 +579,14 @@ func Resolve(req []ospackage.PackageInfo, all []ospackage.PackageInfo) ([]ospack
 	return needed, nil
 }
 
-func isRPMRequirementInCache(required string, cachedPackageNames map[string]struct{}) bool {
-	required = strings.TrimSpace(extractBaseNameFromDep(required))
+func isRPMRequirementInCache(required string, cachedPackageInfos []ospackage.PackageInfo) bool {
+	required = strings.TrimSpace(required)
 	if required == "" {
 		return true
 	}
 
-	for cachedName := range cachedPackageNames {
-		if matchesPackageFilter(cachedName, []string{required}) {
-			return true
-		}
-		if matchesPackageFilter(required, []string{cachedName}) {
+	for _, pkg := range cachedPackageInfos {
+		if strings.TrimSpace(pkg.Name) == required {
 			return true
 		}
 	}
@@ -603,12 +601,16 @@ func isRPMPackageCacheOutdated(requiredPackages []string, cacheDir string) (bool
 		return false, nil, nil, fmt.Errorf("glob %q: %w", pattern, err)
 	}
 
-	cachedPackageNames := make(map[string]struct{}, len(cachedPaths))
+	cachedPackageInfos := make([]ospackage.PackageInfo, 0, len(cachedPaths))
 	cachedFiles := make([]string, 0, len(cachedPaths))
 	for _, p := range cachedPaths {
 		base := filepath.Base(p)
 		cachedFiles = append(cachedFiles, base)
-		cachedPackageNames[extractBasePackageNameFromFile(base)] = struct{}{}
+		cachedPackageInfos = append(cachedPackageInfos, ospackage.PackageInfo{
+			Name: extractBasePackageNameFromFile(base),
+			URL:  p,
+			Type: "rpm",
+		})
 	}
 
 	missingSet := make(map[string]struct{})
@@ -618,7 +620,7 @@ func isRPMPackageCacheOutdated(requiredPackages []string, cacheDir string) (bool
 		if req == "" {
 			continue
 		}
-		if isRPMRequirementInCache(req, cachedPackageNames) {
+		if isRPMRequirementInCache(req, cachedPackageInfos) {
 			continue
 		}
 		if _, seen := missingSet[req]; seen {
@@ -877,7 +879,7 @@ func downloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSour
 
 	// Download packages using configured workers and cache directory
 	log.Infof("Downloading %d packages to %s using %d workers", len(urls), absDestDir, config.Workers())
-	if err := pkgfetcher.FetchPackages(urls, absDestDir, config.Workers()); err != nil {
+	if err := pkgfetcher.FetchPackages(runctx.Context(), urls, absDestDir, config.Workers()); err != nil {
 		return downloadPkgList, nil, fmt.Errorf("fetch failed: %v", err)
 	}
 	log.Info("All downloads complete")

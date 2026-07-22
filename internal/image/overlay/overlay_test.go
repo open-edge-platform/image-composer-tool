@@ -26,17 +26,17 @@ type fakeLoopDev struct {
 	failDetach      bool
 }
 
-func (f *fakeLoopDev) AttachImageToLoopDev(imagePath string) (string, []string, error) {
+func (f *fakeLoopDev) AttachImageToLoopDev(imagePath string) (string, []string, func(), error) {
 	f.attachedPath = imagePath
 	if f.failAttach {
 		if f.leakOnAttach {
 			// Simulate a leaked loop device: a device was created but detach
 			// failed, so the path is returned even though the call errored.
-			return f.loopDevPath, nil, fmt.Errorf("fake attach failure (leaked %s)", f.loopDevPath)
+			return f.loopDevPath, nil, func() {}, fmt.Errorf("fake attach failure (leaked %s)", f.loopDevPath)
 		}
-		return "", nil, fmt.Errorf("fake attach failure")
+		return "", nil, func() {}, fmt.Errorf("fake attach failure")
 	}
-	return f.loopDevPath, f.partitions, nil
+	return f.loopDevPath, f.partitions, func() {}, nil
 }
 
 func (f *fakeLoopDev) LoopSetupDelete(loopDevPath string) error {

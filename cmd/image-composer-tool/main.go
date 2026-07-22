@@ -1,14 +1,24 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/security"
 	"github.com/spf13/cobra"
 )
+
+// signalExitCode is the conventional Unix exit code for termination by SIGINT
+// (128 + signal number 2 = 130). We use 130 for SIGTERM (signal 15, code 143)
+// as well because the build tool's cancel semantics are the same either way
+// and callers scripting around the exit code want a single "cancelled" value.
+const signalExitCode = 130
 
 // Command-line flags that can override config file settings
 var (
@@ -33,9 +43,67 @@ func main() {
 	rootCmd := createRootCommand()
 	security.AttachRecursive(rootCmd, security.DefaultLimits())
 
-	if err := rootCmd.Execute(); err != nil {
-		os.Exit(1)
+	// Install a cancellable root context that fires on SIGINT/SIGTERM.
+	// The build subcommand observes cmd.Context() to bind the shell layer
+	// to this ctx (via shell.SetContext) so a signal cascades into:
+	//   - SIGTERM to each spawned bash/sudo/tool process group (Phase 1),
+	//   - LIFO cleanup of registered mounts and loop devices (Phase 3+4),
+	//   - a wrapped context.Canceled error from executeBuild.
+	ctx, stopSignalCtx := signal.NotifyContext(context.Background(),
+		os.Interrupt, syscall.SIGTERM)
+	defer stopSignalCtx()
+
+	// Second-signal hard exit: if the operator hits Ctrl+C again while
+	// cleanup is still running (e.g. a wedged umount), skip the rest and
+	// exit immediately with 130. See watchForSecondSignal's docstring for
+	// why this needs a separate channel — signal.Notify broadcasts to every
+	// registered channel, so this one receives the first signal too and
+	// intentionally ignores it, then acts on the second.
+	go watchForSecondSignal()
+
+	if code := exitCodeForError(rootCmd.ExecuteContext(ctx)); code != 0 {
+		os.Exit(code)
 	}
+}
+
+// exitCodeForError maps a rootCmd.ExecuteContext return value to the
+// process exit code:
+//   - nil                    → 0    (success)
+//   - context.Canceled       → 130  (SIGINT/SIGTERM cooperative cancel)
+//   - anything else          → 1    (pre-existing failure semantics,
+//     including context.DeadlineExceeded surfaced by an internal timeout
+//     such as PostProcess's detached cleanup budget — those are not
+//     user-initiated cancellations and callers scripting around the tool
+//     need to distinguish them from a Ctrl+C)
+//
+// Extracted from main so tests can exercise the mapping without spawning
+// a subprocess or invoking os.Exit.
+func exitCodeForError(err error) int {
+	if err == nil {
+		return 0
+	}
+	if errors.Is(err, context.Canceled) {
+		return signalExitCode
+	}
+	return 1
+}
+
+// watchForSecondSignal installs an independent signal handler that hard-exits
+// on the second SIGINT/SIGTERM. Go delivers each signal to every channel
+// registered via signal.Notify, so this channel receives the first signal too
+// (in parallel with the one NotifyContext uses to cancel the build ctx in
+// main) — we drain that first delivery and act only on the second. Runs on its
+// own goroutine for the lifetime of the process; no shutdown handshake is
+// needed because os.Exit tears the process down. Bypasses deferred
+// loggerCleanup — acceptable trade-off for a bounded exit when cleanup is
+// wedged.
+func watchForSecondSignal() {
+	sigCh := make(chan os.Signal, 2)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	<-sigCh // first signal: also delivered to NotifyContext's channel; ignore here.
+	<-sigCh // second signal: hard exit.
+	fmt.Fprintln(os.Stderr, "second signal received; exiting immediately")
+	os.Exit(signalExitCode)
 }
 
 // initConfig reads in config file and ENV variables if set.
