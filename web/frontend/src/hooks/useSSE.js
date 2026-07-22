@@ -8,13 +8,15 @@ export function useSSE() {
     // Abort any existing stream
     if (streamRef.current) {
       streamRef.current.close();
+      streamRef.current = null;
     }
 
-    streamRef.current = createQueryStream(query, sessionId, callbacks);
-    
+    const source = createQueryStream(query, sessionId, callbacks);
+    streamRef.current = source;
+
     return () => {
-      if (streamRef.current) {
-        streamRef.current.close();
+      source.close();
+      if (streamRef.current === source) {
         streamRef.current = null;
       }
     };
