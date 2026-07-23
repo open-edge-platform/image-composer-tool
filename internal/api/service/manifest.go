@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: (C) 2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-package api
+package service
 
 import (
 	"embed"
@@ -49,6 +49,9 @@ type Manifest struct {
 	Platforms    []Option      `json:"platforms"`
 	Targets      []Target      `json:"targets"`
 }
+
+// Manifest returns the loaded configuration manifest.
+func (s *Service) Manifest() *Manifest { return s.manifest }
 
 // loadManifest parses the manifest. When path is non-empty it reads that file
 // from disk (live-editable, no rebuild needed); otherwise it uses the copy

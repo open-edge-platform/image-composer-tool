@@ -1,14 +1,27 @@
+# SPDX-FileCopyrightText: (C) 2026 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+
 openapi: 3.0.3
 info:
   title: ICT Template Builder API
   description: |
     Backend API for the Image Composer Tool (ICT) web-based template builder.
-    Provides endpoints for retrieving configuration options (verticals, platforms, OS targets),
-    searching packages, composing templates from user intent, and triggering image builds
-    with streaming logs.
 
-    Architecture: UI captures user intent → API translates to ICT template → ICT builds image.
-  version: 2.0.0
+    Architecture: the UI captures the user's selections → the API resolves them to
+    a pre-authored ICT template → ICT builds the image, streaming logs back over
+    Server-Sent Events.
+
+    This document is the source of truth for the HTTP contract. The Go server
+    types and interface in `internal/api/http/` are generated from it with
+    oapi-codegen (`go generate ./internal/api/http`), and the TypeScript client
+    types in `web/src/api/types.ts` mirror it.
+
+    Not every endpoint is modelled as a JSON operation here. The build-log stream
+    (`GET /builds/{id}/logs`) is Server-Sent Events, and the template / log-file /
+    artifact downloads return files, so they are hand-written handlers outside the
+    generated `ServerInterface` and documented with `text/event-stream` /
+    `application/octet-stream` response bodies rather than JSON schemas.
+  version: 3.0.0
   contact:
     name: ICT Team
 
@@ -19,10 +32,8 @@ servers:
 tags:
   - name: Manifest
     description: Configuration manifest (all valid combinations + display labels)
-  - name: Packages
-    description: Package repositories and search
   - name: Templates
-    description: Compose templates from user intent
+    description: Resolve a pre-authored template from the user's selections
   - name: Builds
     description: Trigger and monitor image builds
 
@@ -37,13 +48,10 @@ paths:
       operationId: getManifest
       summary: Get the full configuration manifest
       description: |
-        Returns the complete manifest in a single call — all valid combinations
-        of vertical/SKU/platform/OS/imageType mapped to their template files,
-        plus display labels for each option. The UI loads this once on startup
-        and derives dropdown cascading locally.
-
-        This replaces separate /verticals, /platforms, /targets endpoints —
-        one round-trip gives the frontend everything it needs.
+        Returns the complete manifest in a single call — all valid combinations of
+        vertical/SKU/platform/OS/imageType mapped to their template files, plus
+        display labels for each option. The UI loads this once on startup and
+        derives the cascading dropdowns locally.
       responses:
         "200":
           description: Full manifest
@@ -53,78 +61,7 @@ paths:
                 $ref: "#/components/schemas/Manifest"
 
   # ─────────────────────────────────────────────────────────────────────
-  # Packages
-  # ─────────────────────────────────────────────────────────────────────
-
-  /package-repos:
-    get:
-      tags: [Packages]
-      operationId: listPackageRepos
-      summary: List available package repositories
-      description: |
-        Returns package repositories that can be enabled in the Advanced tab
-        (e.g., Intel OpenVINO, Docker CE, ROS 2 Jazzy, Intel Compute Runtime).
-      parameters:
-        - name: os
-          in: query
-          schema:
-            type: string
-          description: Filter repos by target OS compatibility
-      responses:
-        "200":
-          description: Repository list
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PackageRepoList"
-
-  /packages/search:
-    get:
-      tags: [Packages]
-      operationId: searchPackages
-      summary: Search available packages
-      description: |
-        Search for packages available in enabled repositories for a given target.
-        Supports prefix matching. Used by the package search autocomplete
-        in the Advanced tab Step 2.
-      parameters:
-        - name: q
-          in: query
-          required: true
-          schema:
-            type: string
-            minLength: 2
-          description: Search query (package name prefix)
-        - name: os
-          in: query
-          required: true
-          schema:
-            type: string
-          description: Target OS distribution ID (e.g., ubuntu24)
-        - name: repos
-          in: query
-          schema:
-            type: array
-            items:
-              type: string
-          description: Filter by enabled repository IDs
-        - name: limit
-          in: query
-          schema:
-            type: integer
-            default: 20
-            maximum: 50
-          description: Max results to return
-      responses:
-        "200":
-          description: Matching packages
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PackageSearchResults"
-
-  # ─────────────────────────────────────────────────────────────────────
-  # Template Composition
+  # Template composition
   # ─────────────────────────────────────────────────────────────────────
 
   /templates/compose:
@@ -133,17 +70,11 @@ paths:
       operationId: composeTemplate
       summary: Resolve the base template for a set of selections
       description: |
-        Accepts the selections (vertical, SKU, platform, OS, image type) and returns
-        the matching pre-authored ICT template. The backend does NOT synthesize a
-        template — it looks up the single tested template mapped to this combination
-        (via the manifest) and returns it verbatim.
-
-        Usage:
-        - **Basic tab** calls this to show the Review summary.
-        - **Advanced tab** calls this ONCE to seed the editor with the base template.
-          Subsequent edits (packages, repos, disk) mutate the template client-side
-          and the live YAML preview re-renders in the browser — no per-change backend
-          calls. The edited YAML is sent whole to `POST /builds` at build time.
+        Accepts the selections (vertical, SKU, platform, OS, image type) and
+        returns the matching pre-authored ICT template verbatim, plus a
+        human-readable summary for the Review panel. The backend does NOT
+        synthesize or merge a template — it looks up the single tested template
+        mapped to this combination via the manifest.
 
         This endpoint is read-only and never modifies the stored template.
       requestBody:
@@ -160,56 +91,44 @@ paths:
               schema:
                 $ref: "#/components/schemas/ComposeResponse"
         "400":
-          description: Invalid request
+          description: Invalid request or no matching combination
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
         "422":
-          description: Template validation failed
+          description: The matched template failed to load/validate
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ValidationResponse"
-
-  /templates/validate:
-    post:
-      tags: [Templates]
-      operationId: validateTemplate
-      summary: Validate an edited template
-      description: |
-        Validates a complete template YAML against the ICT template schema and
-        returns any errors and warnings, each with a field path. Backs the
-        Advanced tab's "Validate" button so power users can check their edits
-        before building.
-
-        Always returns 200 with a validation result (a failed validation is a
-        successful call). The build endpoint performs the same check, so
-        validating first is optional but gives faster, in-place feedback.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [yaml]
-              properties:
-                yaml:
-                  type: string
-                  description: Complete template YAML to validate
-      responses:
-        "200":
-          description: Validation result (valid or invalid)
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Server error resolving or reading the template
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ValidationResponse"
+                $ref: "#/components/schemas/Error"
 
   # ─────────────────────────────────────────────────────────────────────
   # Builds
   # ─────────────────────────────────────────────────────────────────────
 
   /builds:
+    get:
+      tags: [Builds]
+      operationId: listBuilds
+      summary: List the compose history
+      description: |
+        Returns the compose history newest-first. Merges live in-memory builds
+        (authoritative for status) with the meta.json records persisted on disk
+        (so history survives a server restart).
+      responses:
+        "200":
+          description: Compose history
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BuildList"
     post:
       tags: [Builds]
       operationId: startBuild
@@ -222,10 +141,7 @@ paths:
           pre-authored template and builds it as-is.
         - `yaml` — the complete edited template from the Advanced tab.
 
-        The template is validated before the build starts. Returns a build ID for
-        tracking progress via SSE.
-
-        The server tracks the build in-memory (UUID, status, artifacts) with a configurable TTL after completion.
+        Returns a build ID for tracking progress via the SSE log stream.
       requestBody:
         required: true
         content:
@@ -239,19 +155,29 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/BuildAccepted"
-        "422":
-          description: Template validation failed; build not started
+        "400":
+          description: Invalid request or no matching combination
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ValidationResponse"
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Server error creating the build workspace or template
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
-  /builds/{buildId}:
+  /builds/{id}/details:
     get:
       tags: [Builds]
-      operationId: getBuild
-      summary: Get build status
-      description: Returns current build status, duration, and artifacts if complete.
+      operationId: getBuildDetails
+      summary: Get a build's command, resolved paths, and summary
+      description: |
+        Returns the reproducibility/troubleshooting metadata shown in the UI's
+        collapsible "Build details" panel: the exact command that ran, the
+        resolved template (+ a download URL), the per-build work/cache
+        directories, and whether a downloadable log file exists.
       parameters:
         - $ref: "#/components/parameters/BuildId"
       responses:
@@ -260,7 +186,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/BuildDetail"
+                $ref: "#/components/schemas/BuildDetails"
         "404":
           description: Build not found
           content:
@@ -268,49 +194,14 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
-  /builds/{buildId}/logs:
-    get:
-      tags: [Builds]
-      operationId: streamBuildLogs
-      summary: Stream build logs (SSE)
-      description: |
-        Server-Sent Events stream of build log lines.
-        Connect to this endpoint to receive real-time build output
-        in the "Build Status" log viewer.
-
-        Event types:
-        - `log`: A log line with timestamp and message
-        - `complete`: Build finished (includes pass/fail status and artifacts)
-        - `error`: Build failed with error details
-      parameters:
-        - $ref: "#/components/parameters/BuildId"
-      responses:
-        "200":
-          description: SSE stream of build logs
-          content:
-            text/event-stream:
-              schema:
-                type: string
-                description: |
-                  SSE events. Example:
-
-                  event: log
-                  data: {"timestamp":"2026-06-28T14:32:01Z","message":"Resolving packages..."}
-
-                  event: log
-                  data: {"timestamp":"2026-06-28T14:32:15Z","message":"Installing base system..."}
-
-                  event: complete
-                  data: {"status":"success","duration_seconds":390,"artifacts":[{"name":"ubuntu24-robotics-amr.raw.gz","type":"image","path":"/output/ubuntu24-robotics-amr.raw.gz"},{"name":"ubuntu24-robotics-amr.sbom.json","type":"sbom","path":"/output/ubuntu24-robotics-amr.sbom.json"}]}
-
-  /builds/{buildId}/artifacts:
+  /builds/{id}/artifacts:
     get:
       tags: [Builds]
       operationId: listBuildArtifacts
-      summary: List build artifacts
+      summary: List a build's output artifacts
       description: |
-        Returns the output artifacts for a completed build (image file and SBOM).
-        Used by the artifacts table in the Build Image tab.
+        Returns the output artifacts (image files and SBOM) for a build. Used by
+        the artifacts table, and by history rows that are not streaming logs.
       parameters:
         - $ref: "#/components/parameters/BuildId"
       responses:
@@ -327,6 +218,128 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /builds/{id}/logs:
+    get:
+      tags: [Builds]
+      operationId: streamBuildLogs
+      summary: Stream build logs (Server-Sent Events)
+      description: |
+        A Server-Sent Events stream of the build's log lines and coarse progress.
+        Buffered history is replayed on connect, then new lines follow until the
+        build finishes with a terminal `complete` or `error` event.
+
+        This is a hand-written streaming handler, not part of the generated
+        `ServerInterface` — oapi-codegen does not model `text/event-stream`
+        cleanly. Event types:
+          - `log`      `{"message": "<line>"}`
+          - `phase`    `{"phase": "<id>", "installDone": <n>, "installTotal": <n>}`
+          - `complete` `{"status": "success", "artifacts": [Artifact, ...]}`
+          - `error`    `{"status": "failed", "message": "<err>"}`
+      parameters:
+        - $ref: "#/components/parameters/BuildId"
+      responses:
+        "200":
+          description: SSE stream of build logs and progress
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "404":
+          description: Build not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /builds/{id}/template:
+    get:
+      tags: [Builds]
+      operationId: downloadBuildTemplate
+      summary: Download the exact template that was built
+      description: |
+        Serves the resolved template YAML that was built, as a file download, so
+        the operator can inspect or reuse it. Hand-written handler (file download),
+        outside the generated `ServerInterface`.
+      parameters:
+        - $ref: "#/components/parameters/BuildId"
+      responses:
+        "200":
+          description: The template file
+          content:
+            application/yaml:
+              schema:
+                type: string
+        "404":
+          description: Build or template not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /builds/{id}/logfile:
+    get:
+      tags: [Builds]
+      operationId: downloadBuildLogFile
+      summary: Download the persisted compose log
+      description: |
+        Serves the persisted compose log as a text download. Available once a build
+        has finished (the log file is written at completion). Hand-written handler
+        (file download), outside the generated `ServerInterface`.
+      parameters:
+        - $ref: "#/components/parameters/BuildId"
+      responses:
+        "200":
+          description: The compose log
+          content:
+            text/plain:
+              schema:
+                type: string
+        "404":
+          description: Build or log file not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /builds/{id}/artifacts/{name}:
+    get:
+      tags: [Builds]
+      operationId: downloadBuildArtifact
+      summary: Download a single build artifact by name
+      description: |
+        Serves one artifact (image or SBOM) as a binary download. The artifact must
+        be in the build's recorded artifact list and resolve inside the build's
+        work directory — arbitrary paths are rejected. Hand-written handler (binary
+        download), outside the generated `ServerInterface`.
+      parameters:
+        - $ref: "#/components/parameters/BuildId"
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Artifact file name (must be in the build's artifact list)
+      responses:
+        "200":
+          description: The artifact bytes
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "403":
+          description: Artifact path escapes the build workspace
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Build or artifact not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
 # ─────────────────────────────────────────────────────────────────────
 # Components
 # ─────────────────────────────────────────────────────────────────────
@@ -334,319 +347,184 @@ paths:
 components:
   parameters:
     BuildId:
-      name: buildId
+      name: id
       in: path
       required: true
       schema:
         type: string
-        format: uuid
-      description: Build identifier
+      description: Build identifier (UUID)
 
   schemas:
     # ── Manifest ──
 
+    Option:
+      type: object
+      description: A generic {id, displayName} pair used for dropdown labels.
+      required: [id, displayName]
+      properties:
+        id:
+          type: string
+        displayName:
+          type: string
+
+    Target:
+      type: object
+      description: An OS option with its family and architecture.
+      required: [id, displayName, os, arch]
+      properties:
+        id:
+          type: string
+        displayName:
+          type: string
+        os:
+          type: string
+        arch:
+          type: string
+
+    Combination:
+      type: object
+      description: Maps one valid UI selection to a pre-authored template file.
+      required: [vertical, platform, os, imageType, template]
+      properties:
+        vertical:
+          type: string
+        sku:
+          type: string
+        platform:
+          type: string
+        os:
+          type: string
+        imageType:
+          type: string
+        template:
+          type: string
+          description: Filename in the templates directory
+          example: ubuntu24-x86_64-robotics-jazzy-iso.yml
+
     Manifest:
       type: object
       description: |
-        Complete configuration manifest. Loaded once by the UI on startup.
-        Contains all valid selection combinations and the display metadata
-        for populating dropdowns with proper cascading.
+        The complete configuration manifest, loaded once by the UI on startup.
+      required: [combinations, verticals, skus, platforms, targets]
       properties:
         combinations:
           type: array
-          description: Each entry maps a valid UI selection to a template file
           items:
-            type: object
-            required: [vertical, platform, os, imageType, template]
-            properties:
-              vertical:
-                type: string
-                example: robotics
-              sku:
-                type: string
-                example: amr
-              platform:
-                type: string
-                example: ptl
-              os:
-                type: string
-                example: ubuntu24
-              imageType:
-                type: string
-                enum: [raw, iso, qcow]
-              template:
-                type: string
-                description: Filename in image-templates/
-                example: ubuntu24-x86_64-robotics-jazzy-iso.yml
+            $ref: "#/components/schemas/Combination"
         verticals:
           type: array
           items:
-            type: object
-            properties:
-              id:
-                type: string
-              displayName:
-                type: string
-              description:
-                type: string
-              supportedOs:
-                type: array
-                items:
-                  type: string
-              defaultOs:
-                type: string
+            $ref: "#/components/schemas/Option"
+        skus:
+          type: array
+          items:
+            $ref: "#/components/schemas/Option"
         platforms:
           type: array
           items:
-            type: object
-            properties:
-              id:
-                type: string
-              displayName:
-                type: string
-              description:
-                type: string
+            $ref: "#/components/schemas/Option"
         targets:
           type: array
           items:
-            type: object
-            properties:
-              id:
-                type: string
-              displayName:
-                type: string
-              os:
-                type: string
-              arch:
-                type: string
-                enum: [x86_64]
+            $ref: "#/components/schemas/Target"
 
-    # ── Packages ──
-
-    PackageRepoList:
-      type: object
-      properties:
-        repos:
-          type: array
-          items:
-            type: object
-            properties:
-              id:
-                type: string
-                example: intel-openvino
-              displayName:
-                type: string
-                example: Intel OpenVINO
-              url:
-                type: string
-                example: https://apt.repos.intel.com/openvino
-              description:
-                type: string
-                example: OpenVINO inference engine packages
-              enabledByDefault:
-                type: boolean
-                example: false
-              priority:
-                type: integer
-                default: 500
-                description: "Repository priority (higher number = preferred when packages exist in multiple repos). Default 500."
-
-    PackageSearchResults:
-      type: object
-      properties:
-        query:
-          type: string
-        total:
-          type: integer
-        packages:
-          type: array
-          items:
-            type: object
-            properties:
-              name:
-                type: string
-                example: docker-ce
-              version:
-                type: string
-                example: "27.1.1"
-                description: Latest available version
-              description:
-                type: string
-                example: Docker Community Edition
-              repository:
-                type: string
-                example: docker-ce-stable
-
-    # ── Template Composition ──
+    # ── Template composition ──
 
     ComposeRequest:
       type: object
       description: |
-        The UI selections that identify one combination. The backend uses these
-        to look up the matching pre-authored template in the manifest and returns
-        it verbatim — it does not synthesize or merge a template.
+        The UI selections that identify one combination. The backend uses these to
+        look up the matching pre-authored template in the manifest.
       required: [vertical, platform, os, imageType]
       properties:
         vertical:
           type: string
-          enum: [generic, robotics, physical-ai, agentic-ai, health, fed-aero, industrial, retail]
         sku:
           type: string
-          description: Selected SKU within the vertical
         platform:
           type: string
-          enum: [ptl, wcl, arl, nvl]
         os:
           type: string
-          description: Target OS distribution ID (e.g., ubuntu24)
         imageType:
           type: string
-          enum: [raw, iso, qcow]
+
+    ComposeSummary:
+      type: object
+      description: |
+        The human-readable summary shown in the Review panel and stored on the
+        build record for the Build Details panel.
+      required:
+        - vertical
+        - sku
+        - platform
+        - os
+        - imageType
+        - imageName
+        - imageVersion
+        - description
+        - architecture
+        - kernelVersion
+        - packageCount
+        - diskSize
+        - partitionCount
+        - partitionTable
+        - hostname
+      properties:
+        # Selection echo — what the user chose
+        vertical:
+          type: string
+        sku:
+          type: string
+        platform:
+          type: string
+        os:
+          type: string
+        imageType:
+          type: string
+        # Template-derived — info the user can't see from the dropdowns
         imageName:
           type: string
-          description: Custom image name (defaults to vertical preset if omitted)
-          pattern: "^[a-zA-Z0-9]([a-zA-Z0-9\\-_]*[a-zA-Z0-9])?$"
-        packages:
-          type: array
-          items:
-            type: string
-          description: Additional packages beyond vertical defaults
-        packageRepositories:
-          type: array
-          items:
-            type: object
-            properties:
-              id:
-                type: string
-              url:
-                type: string
-          description: Additional package repositories to enable
-        disk:
-          type: object
-          description: Custom disk configuration (overrides vertical default)
-          properties:
-            size:
-              type: string
-              example: "8GiB"
-            partitionTableType:
-              type: string
-              enum: [gpt]
-            partitions:
-              type: array
-              items:
-                $ref: "#/components/schemas/Partition"
-
-    Partition:
-      type: object
-      properties:
-        id:
+        imageVersion:
           type: string
-        name:
+        description:
           type: string
-        fsType:
+        architecture:
           type: string
-          example: ext4
-        size:
+        kernelVersion:
           type: string
-          description: "Size or 'rest' for remaining space"
-          example: "512MiB"
-        mountPoint:
+        packageCount:
+          type: integer
+        diskSize:
           type: string
-          example: /boot/efi
+        partitionCount:
+          type: integer
+        partitionTable:
+          type: string
+        hostname:
+          type: string
+        baseImage:
+          type: string
+          description: Overlay-mode only — the baseline image packages are layered onto.
 
     ComposeResponse:
       type: object
+      required: [template, yaml, summary]
       properties:
+        template:
+          type: string
+          description: Resolved template filename
         yaml:
           type: string
-          description: |
-            The matched base template's YAML, verbatim (complete, ready for ICT).
-            Advanced-tab edits are applied client-side after this response and are
-            NOT reflected here; the edited YAML is sent whole to POST /builds.
-        validation:
-          $ref: "#/components/schemas/ValidationResult"
+          description: The matched template's YAML, verbatim
         summary:
-          type: object
-          properties:
-            imageName:
-              type: string
-            vertical:
-              type: string
-            sku:
-              type: string
-            platform:
-              type: string
-            os:
-              type: string
-            imageType:
-              type: string
-            packageCount:
-              type: integer
-            diskSize:
-              type: string
-            partitionCount:
-              type: integer
-
-    # ── Validation ──
-
-    ValidationResponse:
-      type: object
-      properties:
-        valid:
-          type: boolean
-        errors:
-          type: array
-          items:
-            $ref: "#/components/schemas/ValidationIssue"
-        warnings:
-          type: array
-          items:
-            $ref: "#/components/schemas/ValidationIssue"
-
-    ValidationResult:
-      type: object
-      properties:
-        valid:
-          type: boolean
-        errors:
-          type: array
-          items:
-            $ref: "#/components/schemas/ValidationIssue"
-        warnings:
-          type: array
-          items:
-            $ref: "#/components/schemas/ValidationIssue"
-
-    ValidationIssue:
-      type: object
-      properties:
-        path:
-          type: string
-          description: JSON path to the problematic field
-          example: "target.os"
-        message:
-          type: string
-          example: "Unsupported OS for selected platform"
-        severity:
-          type: string
-          enum: [error, warning]
+          $ref: "#/components/schemas/ComposeSummary"
 
     # ── Builds ──
 
     BuildRequest:
       type: object
       description: |
-        Start a build. Carries exactly one of `compose` or `yaml` (never a diff —
-        the payload is always self-contained):
-
-        - **Basic tab** sends `compose` (the selections). The backend looks up the
-          matching pre-authored template and builds it as-is.
-        - **Advanced tab** sends `yaml` — the complete, final template shown in the
-          live preview (base template + the user's edits, serialized client-side).
-          The whole template is sent, not a delta.
-      oneOf:
-        - required: [compose]
-        - required: [yaml]
+        Start a build. Carries exactly one of `compose` or `yaml` — never a diff.
       properties:
         compose:
           $ref: "#/components/schemas/ComposeRequest"
@@ -656,61 +534,21 @@ components:
 
     BuildAccepted:
       type: object
+      required: [buildId, status, logsUrl]
       properties:
         buildId:
           type: string
-          format: uuid
         status:
           type: string
-          enum: [running]
-        startedAt:
-          type: string
-          format: date-time
+          example: running
         logsUrl:
           type: string
           description: SSE endpoint for streaming logs
           example: /api/v1/builds/abc-123/logs
 
-    BuildDetail:
-      type: object
-      properties:
-        buildId:
-          type: string
-        status:
-          type: string
-          enum: [running, success, failed]
-        startedAt:
-          type: string
-          format: date-time
-        completedAt:
-          type: string
-          format: date-time
-        durationSeconds:
-          type: integer
-        artifacts:
-          type: array
-          items:
-            $ref: "#/components/schemas/Artifact"
-        error:
-          type: object
-          properties:
-            message:
-              type: string
-            phase:
-              type: string
-
-    ArtifactList:
-      type: object
-      properties:
-        buildId:
-          type: string
-        artifacts:
-          type: array
-          items:
-            $ref: "#/components/schemas/Artifact"
-
     Artifact:
       type: object
+      required: [name, type, path]
       properties:
         name:
           type: string
@@ -718,26 +556,103 @@ components:
         type:
           type: string
           enum: [image, sbom]
-          example: image
         path:
           type: string
-          description: File path to the artifact (used by copy-path action in UI)
-          example: /output/ubuntu24-robotics-amr.raw.gz
         size:
           type: string
-          example: "1.2 GB"
+          description: Human-readable size, e.g. "1.13 GB"
+          example: "1.13 GB"
+
+    ArtifactList:
+      type: object
+      required: [buildId, status, artifacts]
+      properties:
+        buildId:
+          type: string
+        status:
+          type: string
+        artifacts:
+          type: array
+          items:
+            $ref: "#/components/schemas/Artifact"
+
+    BuildDetails:
+      type: object
+      required:
+        - buildId
+        - status
+        - command
+        - template
+        - templateUrl
+        - workDir
+        - cacheDir
+        - hasLogFile
+      properties:
+        buildId:
+          type: string
+        status:
+          type: string
+          enum: [running, success, failed]
+        command:
+          type: string
+          description: The exact command that ran, for the troubleshoot panel
+        template:
+          type: string
+        templateUrl:
+          type: string
+          description: Download URL for the resolved template
+        workDir:
+          type: string
+        cacheDir:
+          type: string
+        summary:
+          $ref: "#/components/schemas/ComposeSummary"
+        hasLogFile:
+          type: boolean
+          description: A downloadable log file exists on disk
+        errMsg:
+          type: string
+
+    HistoryItem:
+      type: object
+      description: One row in the compose history list.
+      required: [id, status, template, createdAt]
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [running, success, failed]
+        template:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        summary:
+          $ref: "#/components/schemas/ComposeSummary"
+
+    BuildList:
+      type: object
+      required: [builds]
+      properties:
+        builds:
+          type: array
+          items:
+            $ref: "#/components/schemas/HistoryItem"
 
     # ── Common ──
 
     Error:
       type: object
+      required: [error]
       properties:
         error:
           type: object
+          required: [code, message]
           properties:
             code:
               type: string
-              example: VERTICAL_NOT_FOUND
+              example: NOT_FOUND
             message:
               type: string
-              example: "Vertical 'unknown' does not exist"
+              example: build not found

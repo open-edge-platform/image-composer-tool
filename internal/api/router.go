@@ -7,24 +7,28 @@ import (
 	"io/fs"
 	"net/http"
 
+	httpapi "github.com/open-edge-platform/image-composer-tool/internal/api/http"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"github.com/open-edge-platform/image-composer-tool/internal/webui"
 )
 
 // routes registers all API endpoints on a Go 1.22+ ServeMux.
+//
+// The JSON endpoints are registered from the generated OpenAPI server
+// (httpapi.HandlerFromMux), which maps each path/method to a ServerInterface
+// method that Server implements in handlers.go. The streaming SSE endpoint and
+// the file downloads are registered directly here — they don't fit the JSON
+// interface and stay hand-written (sse.go, downloads.go).
 func (s *Server) routes() *http.ServeMux {
 	mux := http.NewServeMux()
 
-	// Read path
-	mux.HandleFunc("GET /api/v1/manifest", s.handleGetManifest)
-	mux.HandleFunc("POST /api/v1/templates/compose", s.handleCompose)
+	// Generated JSON routes: GET /manifest, POST /templates/compose,
+	// POST /builds, GET /builds, GET /builds/{id}/{details,artifacts}.
+	httpapi.HandlerFromMuxWithBaseURL(s, mux, "/api/v1")
 
-	// Build path (implemented in builds.go)
-	mux.HandleFunc("POST /api/v1/builds", s.handleStartBuild)
-	mux.HandleFunc("GET /api/v1/builds", s.handleListBuilds)
+	// Hand-written endpoints outside the generated JSON interface: SSE log stream
+	// (text/event-stream) and file/binary downloads (YAML / text / octet-stream).
 	mux.HandleFunc("GET /api/v1/builds/{id}/logs", s.handleBuildLogs)
-	mux.HandleFunc("GET /api/v1/builds/{id}/artifacts", s.handleBuildArtifacts)
-	mux.HandleFunc("GET /api/v1/builds/{id}/details", s.handleBuildDetails)
 	mux.HandleFunc("GET /api/v1/builds/{id}/template", s.handleBuildTemplate)
 	mux.HandleFunc("GET /api/v1/builds/{id}/logfile", s.handleBuildLogFile)
 	mux.HandleFunc("GET /api/v1/builds/{id}/artifacts/{name}", s.handleBuildArtifactDownload)

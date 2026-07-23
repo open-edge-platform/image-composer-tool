@@ -1,11 +1,10 @@
 // SPDX-FileCopyrightText: (C) 2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-package api
+package service
 
 import (
 	"bufio"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -23,17 +22,17 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 )
 
-// buildStatus is the lifecycle state of a build.
-type buildStatus string
+// BuildStatus is the lifecycle state of a build.
+type BuildStatus string
 
 const (
-	statusRunning buildStatus = "running"
-	statusSuccess buildStatus = "success"
-	statusFailed  buildStatus = "failed"
+	StatusRunning BuildStatus = "running"
+	StatusSuccess BuildStatus = "success"
+	StatusFailed  BuildStatus = "failed"
 )
 
-// artifact describes one output file (image or SBOM).
-type artifact struct {
+// Artifact describes one output file (image or SBOM).
+type Artifact struct {
 	Name string `json:"name"`
 	Type string `json:"type"` // "image" | "sbom"
 	Path string `json:"path"`
@@ -52,36 +51,36 @@ type build struct {
 	Template     string          // template file name (for display)
 	TemplatePath string          // resolved on-disk path (for download)
 	Command      string          // exact command run, for the UI's troubleshoot panel
-	Summary      *composeSummary // image configuration summary, nil for YAML builds
+	Summary      *ComposeSummary // image configuration summary, nil for YAML builds
 	CreatedAt    time.Time       // when the compose was started
 	LogFile      string          // on-disk log file path, written at finish
 	done         chan struct{}   // closed when the build finishes
 
 	mu        sync.Mutex
-	status    buildStatus
+	status    BuildStatus
 	logLines  []string // buffered log history for late log subscribers
-	artifacts []artifact
+	artifacts []Artifact
 	errMsg    string
 }
 
-// result is an immutable snapshot of a build's terminal state.
-type result struct {
-	status    buildStatus
-	artifacts []artifact
-	errMsg    string
-	logFile   string
+// Result is an immutable snapshot of a build's terminal state.
+type Result struct {
+	Status    BuildStatus
+	Artifacts []Artifact
+	ErrMsg    string
+	LogFile   string
 }
 
 // snapshot returns the build's current status, artifacts, error, and log-file
 // path under lock. logFile is included in the snapshot because it is written
 // under b.mu in finish(); reading it directly off the struct from a handler
 // would race a concurrently finishing build.
-func (b *build) snapshot() result {
+func (b *build) snapshot() Result {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	arts := make([]artifact, len(b.artifacts))
+	arts := make([]Artifact, len(b.artifacts))
 	copy(arts, b.artifacts)
-	return result{status: b.status, artifacts: arts, errMsg: b.errMsg, logFile: b.LogFile}
+	return Result{Status: b.status, Artifacts: arts, ErrMsg: b.errMsg, LogFile: b.LogFile}
 }
 
 // buildTracker holds all builds for the process lifetime.
@@ -133,29 +132,24 @@ func (b *build) snapshotLogs() []string {
 	return out
 }
 
-// --- request/response bodies ---
-
-type buildRequest struct {
-	Compose *composeRequest `json:"compose"`
-	YAML    string          `json:"yaml"`
+// BuildRequest starts a build. It carries exactly one of Compose (Basic-tab
+// selections) or YAML (the complete edited template from the Advanced tab).
+type BuildRequest struct {
+	Compose *Selection
+	YAML    string
 }
 
-type buildAccepted struct {
-	BuildID string `json:"buildId"`
-	Status  string `json:"status"`
-	LogsURL string `json:"logsUrl"`
+// BuildAccepted is returned when a build is accepted and started.
+type BuildAccepted struct {
+	BuildID string
+	Status  BuildStatus
+	LogsURL string
 }
 
-// handleStartBuild resolves the template, starts an os/exec build, and returns a
-// build id. Basic sends {compose}; Advanced would send {yaml} (not used by the
-// Basic slice but accepted for forward-compat).
-func (s *Server) handleStartBuild(w http.ResponseWriter, r *http.Request) {
-	var req buildRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid JSON body")
-		return
-	}
-
+// StartBuild resolves the template, starts an os/exec build, and returns a build
+// id. Client errors (bad input, no match) return a 400 *Error; server errors
+// (workspace creation, template write) return a 500 *Error.
+func (s *Service) StartBuild(req BuildRequest) (*BuildAccepted, error) {
 	id := uuid.NewString()
 	buildRoot := filepath.Join(s.cfg.WorkDir, "builds", id)
 	workDir := filepath.Join(buildRoot, "work")
@@ -164,8 +158,8 @@ func (s *Server) handleStartBuild(w http.ResponseWriter, r *http.Request) {
 	// 0700: build logs and artifact metadata may be sensitive; keep them private.
 	for _, d := range []string{workDir, cacheDir} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
-			writeError(w, http.StatusInternalServerError, "WORKDIR", "cannot create build work directory")
-			return
+			return nil, newError(http.StatusInternalServerError, "WORKDIR",
+				"cannot create build work directory")
 		}
 	}
 
@@ -174,27 +168,25 @@ func (s *Server) handleStartBuild(w http.ResponseWriter, r *http.Request) {
 	templatePath, templateName, err := s.resolveBuildTemplate(&req, workDir)
 	if err != nil {
 		if errors.Is(err, errBadBuildRequest) {
-			writeError(w, http.StatusBadRequest, "NO_MATCH", err.Error())
-		} else {
-			writeError(w, http.StatusInternalServerError, "TEMPLATE_RESOLVE", err.Error())
+			return nil, newError(http.StatusBadRequest, "NO_MATCH", err.Error())
 		}
-		return
+		return nil, newError(http.StatusInternalServerError, "TEMPLATE_RESOLVE", err.Error())
 	}
 
 	// Build the image summary. Best-effort: a merge failure here doesn't block
 	// the build (compose already validated the template; this is for display only).
-	var summary *composeSummary
+	var summary *ComposeSummary
 	if req.Compose != nil {
 		if merged, err := config.LoadAndMergeTemplate(templatePath); err == nil {
-			s := buildComposeSummary(*req.Compose, merged)
-			summary = &s
+			sum := buildComposeSummary(*req.Compose, merged)
+			summary = &sum
 		}
 	}
 
 	name, cmdArgs := s.buildCommand(templatePath, workDir, cacheDir)
 	b := &build{
 		ID:           id,
-		status:       statusRunning,
+		status:       StatusRunning,
 		RootDir:      buildRoot,
 		WorkDir:      workDir,
 		CacheDir:     cacheDir,
@@ -215,21 +207,21 @@ func (s *Server) handleStartBuild(w http.ResponseWriter, r *http.Request) {
 
 	go s.runBuild(b, name, cmdArgs)
 
-	writeJSON(w, http.StatusAccepted, buildAccepted{
+	return &BuildAccepted{
 		BuildID: id,
-		Status:  string(statusRunning),
+		Status:  StatusRunning,
 		LogsURL: fmt.Sprintf("/api/v1/builds/%s/logs", id),
-	})
+	}, nil
 }
 
 // errBadBuildRequest marks resolution failures caused by client input (bad
-// request shape or an unmatched combination) so the handler can return 400;
+// request shape or an unmatched combination) so StartBuild can return 400;
 // other errors are treated as server-side (500).
 var errBadBuildRequest = errors.New("bad build request")
 
-// resolveBuildTemplate returns the on-disk template path to build. For {compose}
-// it looks up the manifest; for {yaml} it writes the body to the work dir.
-func (s *Server) resolveBuildTemplate(req *buildRequest, workDir string) (path, name string, err error) {
+// resolveBuildTemplate returns the on-disk template path to build. For {yaml} it
+// writes the body to the work dir; for {compose} it looks up the manifest.
+func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path, name string, err error) {
 	if req.YAML != "" {
 		p := filepath.Join(workDir, "template.yml")
 		if werr := os.WriteFile(p, []byte(req.YAML), 0o600); werr != nil {
@@ -263,7 +255,7 @@ func (s *Server) resolveBuildTemplate(req *buildRequest, workDir string) (path, 
 // single hard-coded `image-composer-tool build` invocation with no user-derived
 // arguments on the command line (selections are only manifest lookup keys) — so
 // the allowlist the shell package provides adds no safety here.
-func (s *Server) buildCommand(templatePath, workDir, cacheDir string) (name string, args []string) {
+func (s *Service) buildCommand(templatePath, workDir, cacheDir string) (name string, args []string) {
 	// Per-build --work-dir and --cache-dir keep each build's scratch and package
 	// cache isolated under the build root, so concurrent/repeat builds don't share
 	// (root-owned) state and cleanup is a single directory removal.
@@ -277,7 +269,7 @@ func (s *Server) buildCommand(templatePath, workDir, cacheDir string) (name stri
 
 // runBuild executes the ICT binary, streams its output into the build's log
 // buffer, and records the terminal status + artifacts.
-func (s *Server) runBuild(b *build, name string, cmdArgs []string) {
+func (s *Service) runBuild(b *build, name string, cmdArgs []string) {
 	log := logger.Logger()
 	defer close(b.done)
 
@@ -305,7 +297,7 @@ func (s *Server) runBuild(b *build, name string, cmdArgs []string) {
 
 	if err := cmd.Start(); err != nil {
 		b.appendLog(fmt.Sprintf("failed to start build: %v", err))
-		b.finish(statusFailed, nil, err.Error())
+		b.finish(StatusFailed, nil, err.Error())
 		_ = pw.Close()
 		_ = pr.Close()
 		return
@@ -336,11 +328,11 @@ func (s *Server) runBuild(b *build, name string, cmdArgs []string) {
 	waitErr := <-waitCh
 	if waitErr != nil {
 		log.Warnf("build %s failed: %v", b.ID, waitErr)
-		b.finish(statusFailed, nil, waitErr.Error())
+		b.finish(StatusFailed, nil, waitErr.Error())
 		return
 	}
 	if scanErr != nil {
-		b.finish(statusFailed, nil, fmt.Sprintf("log stream error: %v", scanErr))
+		b.finish(StatusFailed, nil, fmt.Sprintf("log stream error: %v", scanErr))
 		return
 	}
 
@@ -352,14 +344,14 @@ func (s *Server) runBuild(b *build, name string, cmdArgs []string) {
 		arts = discoverArtifacts(b.WorkDir)
 	}
 
-	b.finish(statusSuccess, arts, "")
+	b.finish(StatusSuccess, arts, "")
 }
 
 // finish records the build's terminal status, artifacts, and error under lock,
 // persists the buffered logs to a file (so past builds can offer a log download
 // without keeping logs in memory), then writes meta.json so the compose history
 // reflects the final outcome across restarts.
-func (b *build) finish(status buildStatus, arts []artifact, errMsg string) {
+func (b *build) finish(status BuildStatus, arts []Artifact, errMsg string) {
 	b.mu.Lock()
 	b.status = status
 	b.artifacts = arts
@@ -393,9 +385,9 @@ func (b *build) finish(status buildStatus, arts []artifact, errMsg string) {
 //
 // Log lines carry a leading "<timestamp> INFO ..." prefix from the logger, so we
 // match on the bullet and on a path segment rather than line position.
-func parseArtifacts(logs []string) []artifact {
-	var out []artifact
-	var pending *artifact // artifact awaiting its path line
+func parseArtifacts(logs []string) []Artifact {
+	var out []Artifact
+	var pending *Artifact // artifact awaiting its path line
 
 	for _, line := range logs {
 		if idx := strings.Index(line, "• "); idx >= 0 {
@@ -408,7 +400,7 @@ func parseArtifacts(logs []string) []artifact {
 				size = normalizeSize(strings.TrimSpace(rest[p+2 : len(rest)-1]))
 			}
 			if name != "" {
-				out = append(out, artifact{Name: name, Type: classifyArtifact(name), Size: size})
+				out = append(out, Artifact{Name: name, Type: classifyArtifact(name), Size: size})
 				pending = &out[len(out)-1]
 			}
 			continue
@@ -452,8 +444,8 @@ func classifyArtifact(name string) string {
 
 // discoverArtifacts scans the build work dir for image + SBOM outputs. Used as a
 // fallback when ICT's artifact block cannot be parsed from the logs.
-func discoverArtifacts(workDir string) []artifact {
-	var out []artifact
+func discoverArtifacts(workDir string) []Artifact {
+	var out []Artifact
 	_ = filepath.WalkDir(workDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
@@ -474,7 +466,7 @@ func discoverArtifacts(workDir string) []artifact {
 		if fi, statErr := d.Info(); statErr == nil {
 			size = humanSize(fi.Size())
 		}
-		out = append(out, artifact{Name: name, Type: typ, Path: path, Size: size})
+		out = append(out, Artifact{Name: name, Type: typ, Path: path, Size: size})
 		return nil
 	})
 	return out
