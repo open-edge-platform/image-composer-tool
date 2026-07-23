@@ -8,6 +8,7 @@ import (
 	"net"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/api"
+	"github.com/open-edge-platform/image-composer-tool/internal/api/service"
 	"github.com/spf13/cobra"
 )
 
@@ -72,7 +73,7 @@ image builds via the image-composer-tool binary with streaming build logs.`,
 		"Print the scoped sudoers drop-in required for `--sudo` cancellation and "+
 			"artifact reads, then exit. The rules are generated for the current user, "+
 			"the resolved --ict-binary, and --work-dir. Install with:\n"+
-			"  image-composer-tool serve --print-sudoers | sudo tee /etc/sudoers.d/"+api.SudoersDropInName+"\n"+
+			"  image-composer-tool serve --print-sudoers | sudo tee /etc/sudoers.d/"+service.SudoersDropInName+"\n"+
 			"or run scripts/install-sudoers.sh, which validates with visudo first.")
 
 	return serveCmd
@@ -84,7 +85,7 @@ func executeServe(cmd *cobra.Command, args []string) error {
 	// `sudo tee /etc/sudoers.d/...`; diagnostics (if any) go to stderr via the
 	// returned error.
 	if servePrintSudoers {
-		spec, err := api.ResolveSudoersSpec(serveBinary, serveWorkDir)
+		spec, err := service.ResolveSudoersSpec(serveBinary, serveWorkDir)
 		if err != nil {
 			return fmt.Errorf("generating sudoers rules: %w", err)
 		}

@@ -8,14 +8,20 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/open-edge-platform/image-composer-tool/internal/api/service"
 )
 
 // handleBuildLogs streams a build's logs as Server-Sent Events. It replays any
 // buffered lines, follows new ones until the build finishes, then emits a
 // terminal `complete` or `error` event.
+//
+// This is intentionally outside the generated JSON ServerInterface: oapi-codegen
+// does not model text/event-stream responses cleanly, so the log stream stays a
+// hand-written handler (registered on the mux in routes()).
 func (s *Server) handleBuildLogs(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	b, ok := s.getBuild(id)
+	b, ok := s.svc.Build(id)
 	if !ok {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "build not found")
 		return
@@ -35,7 +41,7 @@ func (s *Server) handleBuildLogs(w http.ResponseWriter, r *http.Request) {
 	lastPhase := ""
 	lastInstall := ""
 	emit := func() {
-		lines := b.snapshotLogs()
+		lines := b.SnapshotLogs()
 		if len(lines) == sent {
 			// No new lines since the last tick. Phase and install progress are
 			// pure functions of the buffered lines, so they cannot have changed
@@ -49,8 +55,8 @@ func (s *Server) handleBuildLogs(w http.ResponseWriter, r *http.Request) {
 		}
 		// Derive and emit the current build phase (+ install progress) when it
 		// changes, so the UI stepper can advance. Best-effort, log-derived.
-		phase := detectPhase(lines)
-		done, total := installProgress(lines)
+		phase := service.DetectPhase(lines)
+		done, total := service.InstallProgress(lines)
 		install := fmt.Sprintf("%d/%d", done, total)
 		if phase != lastPhase || install != lastInstall {
 			lastPhase, lastInstall = phase, install
@@ -74,36 +80,28 @@ func (s *Server) handleBuildLogs(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-ticker.C:
 			emit()
-		case <-b.done:
+		case <-b.Done():
 			emit() // drain remaining lines
-			res := b.snapshot()
-			if res.status == statusSuccess {
-				arts := res.artifacts
-				if arts == nil {
-					arts = []artifact{}
-				}
+			res := b.Result()
+			if res.Status == service.StatusSuccess {
 				// Ensure the stepper shows completion.
 				sendEvent(w, "phase", map[string]any{"phase": "done"})
 				sendEvent(w, "complete", map[string]any{
-					"status":    string(statusSuccess),
-					"artifacts": arts,
+					"status":    string(service.StatusSuccess),
+					"artifacts": fromArtifacts(res.Artifacts),
 				})
 			} else {
 				// Report the real terminal status (failed or cancelled) rather than
 				// a hardcoded "failed", so the UI can show the correct badge. Include
 				// any partial artifacts (with on-disk location) and a residual-teardown
 				// warning so the UI can point the user at manual remediation.
-				arts := res.artifacts
-				if arts == nil {
-					arts = []artifact{}
-				}
 				payload := map[string]any{
-					"status":    string(res.status),
-					"message":   res.errMsg,
-					"artifacts": arts,
+					"status":    string(res.Status),
+					"message":   res.ErrMsg,
+					"artifacts": fromArtifacts(res.Artifacts),
 				}
-				if res.residual != nil {
-					payload["residual"] = res.residual
+				if r := fromResidual(res.Residual); r != nil {
+					payload["residual"] = r
 				}
 				sendEvent(w, "error", payload)
 			}

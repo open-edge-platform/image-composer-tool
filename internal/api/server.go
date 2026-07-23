@@ -1,19 +1,23 @@
 // SPDX-FileCopyrightText: (C) 2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-// Package api implements the HTTP backend for the ICT web UI. It serves a
-// configuration manifest, resolves pre-authored templates, and triggers image
-// builds via the ICT binary — see docs/architecture-decision-record/adr-web-ui-tech-stack.md.
+// Package api implements the HTTP transport for the ICT web UI. It is a thin
+// adapter over internal/api/service: handlers decode requests into the generated
+// contract types (internal/api/http), call the service, and encode the result.
+// The service holds all business logic and no HTTP types. See
+// docs/architecture-decision-record/adr-web-ui-tech-stack.md.
+//
+// The JSON endpoints implement the oapi-codegen-generated ServerInterface. The
+// build-log SSE stream and the template/log/artifact file downloads don't fit
+// that JSON interface, so they are hand-written handlers registered on the same
+// mux (see sse.go and downloads.go).
 package api
 
 import (
 	"net/http"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"sync"
 	"time"
 
+	"github.com/open-edge-platform/image-composer-tool/internal/api/service"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 )
 
@@ -27,106 +31,40 @@ type Config struct {
 	ManifestPath string // optional manifest file; empty uses the embedded copy
 }
 
-// Server holds the API's dependencies and shared state.
+// Server holds the HTTP server's dependencies: its listen address and the
+// service that implements the API's behavior.
 type Server struct {
-	cfg      Config
-	manifest *Manifest
-	tracker  *buildTracker
-
-	// buildMu serializes compose starts so at most one build runs at a time.
-	// activeBuildID names the in-flight build (empty when idle). The slot is held
-	// from the moment handleStartBuild spawns the child until runBuild observes
-	// the ICT process fully exit (post-teardown), so a second compose can't start
-	// while mounts/loop devices from the previous one may still be tearing down.
-	buildMu       sync.Mutex
-	activeBuildID string
-
-	// signalGroup delivers SIGTERM to a build's process group. It defaults to
-	// signalCancel; tests override it to exercise the cancel paths without shelling
-	// out to a real `sudo kill` or signalling the test process.
-	signalGroup func(pgid int) error
+	addr string
+	svc  *service.Service
 }
 
-// tryAcquireBuildSlot claims the single-build slot for id. It returns false (and
-// the id currently holding the slot) if a build is already in flight, so the
-// caller can reject the concurrent start.
-func (s *Server) tryAcquireBuildSlot(id string) (ok bool, activeID string) {
-	s.buildMu.Lock()
-	defer s.buildMu.Unlock()
-	if s.activeBuildID != "" {
-		return false, s.activeBuildID
-	}
-	s.activeBuildID = id
-	return true, ""
-}
-
-// releaseBuildSlot frees the single-build slot. It is a no-op if id is not the
-// current holder (defensive: only the owning build should release it).
-func (s *Server) releaseBuildSlot(id string) {
-	s.buildMu.Lock()
-	defer s.buildMu.Unlock()
-	if s.activeBuildID == id {
-		s.activeBuildID = ""
-	}
-}
-
-// New constructs a Server, loading and validating the embedded manifest.
+// New constructs a Server, building the underlying service (which loads and
+// validates the manifest and applies config defaults).
 func New(cfg Config) (*Server, error) {
-	m, err := loadManifest(cfg.ManifestPath)
+	svc, err := service.New(service.Config{
+		TemplatesDir: cfg.TemplatesDir,
+		ICTBinary:    cfg.ICTBinary,
+		WorkDir:      cfg.WorkDir,
+		Sudo:         cfg.Sudo,
+		ManifestPath: cfg.ManifestPath,
+	})
 	if err != nil {
 		return nil, err
 	}
-	if cfg.TemplatesDir == "" {
-		cfg.TemplatesDir = "image-templates"
-	}
-	if cfg.ICTBinary == "" {
-		cfg.ICTBinary = discoverICTBinary()
-	}
-	// Resolve the ICT binary to an absolute path. `sudo` matches the command in
-	// its sudoers rule literally, so a relative path (e.g. ./build/...) would not
-	// match an absolute NOPASSWD rule and would fall through to a password prompt.
-	if abs, err := filepath.Abs(cfg.ICTBinary); err == nil {
-		cfg.ICTBinary = abs
-	}
-	if cfg.WorkDir == "" {
-		cfg.WorkDir = "webui-workspace"
-	}
-	s := &Server{cfg: cfg, manifest: m, tracker: newBuildTracker()}
-	s.signalGroup = s.signalCancel
-	return s, nil
-}
-
-// discoverICTBinary picks the image-composer-tool binary to invoke when the
-// operator doesn't pass --ict-binary. We don't know whether they built with
-// `earthly +build` (outputs ./build/) or a plain `go build` (often the repo
-// root), so probe both, preferring ./build/, then fall back to a PATH lookup.
-func discoverICTBinary() string {
-	candidates := []string{"./build/image-composer-tool", "./image-composer-tool"}
-	for _, c := range candidates {
-		if fi, err := os.Stat(c); err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0 {
-			return c
-		}
-	}
-	if p, err := exec.LookPath("image-composer-tool"); err == nil {
-		return p
-	}
-	// Nothing found; return the conventional path so the eventual build failure
-	// names a sensible location.
-	return "./build/image-composer-tool"
+	return &Server{addr: cfg.Addr, svc: svc}, nil
 }
 
 // Start registers routes and blocks serving HTTP.
 func (s *Server) Start() error {
 	log := logger.Logger()
-	mux := s.routes()
-	handler := withMiddleware(mux)
+	handler := withMiddleware(s.routes())
 
 	srv := &http.Server{
-		Addr:              s.cfg.Addr,
+		Addr:              s.addr,
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	LogCancelSupport(s.cfg.Sudo)
-	log.Infof("ICT web UI API listening on %s", s.cfg.Addr)
+	service.LogCancelSupport(s.svc.UseSudo())
+	log.Infof("ICT web UI API listening on %s", s.addr)
 	return srv.ListenAndServe()
 }

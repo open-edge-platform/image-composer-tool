@@ -1,5 +1,11 @@
-// Types mirroring api/v1/openapi-template-builder.yaml (hand-written for the
-// Basic slice; can be replaced with openapi-typescript codegen later).
+// Types mirroring api/v1/openapi-template-builder.yaml. Hand-written and kept
+// wire-compatible with the spec (which the Go server types are generated from).
+//
+// Follow-up: these could be generated with openapi-typescript. Not adopted yet
+// because its output uses a nested `components['schemas'][...]` shape that isn't
+// a drop-in for the named interfaces this module exports, so switching would
+// mean reshaping every consumer. The `kernel?` fields below are forward-looking
+// UI state the backend currently ignores (not in the spec).
 
 export interface Option {
   id: string
@@ -93,10 +99,11 @@ export interface ResidualIssue {
   detail: string
 }
 
-// The server's six build states, verbatim (internal/api/builds.go). Shared by
-// every component that reports or renders a build's lifecycle so a new state
-// can't be handled in one place and silently dropped in another. 'idle' is a
-// UI-only state meaning "no build owns the session right now".
+// The server's six build states, verbatim (the BuildStatus schema in
+// api/v1/openapi-template-builder.yaml). Shared by every component that reports
+// or renders a build's lifecycle so a new state can't be handled in one place
+// and silently dropped in another. 'idle' is a UI-only state meaning "no build
+// owns the session right now".
 export type BuildStatus =
   | 'idle'
   | 'not-started'
