@@ -288,10 +288,21 @@ func ensureKernelModuleDependencies(installRoot, kernelVersion string) error {
 	depFile := filepath.Join(modulesDir, "modules.dep")
 	if _, err := os.Stat(depFile); err == nil {
 		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat kernel module dependencies %s: %w", depFile, err)
 	}
-	if _, err := os.Stat(modulesDir); os.IsNotExist(err) {
-		return fmt.Errorf("kernel module tree %s is missing (linux-modules package may not be installed)", modulesDir)
+
+	dirInfo, err := os.Stat(modulesDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("kernel module tree %s is missing (linux-modules package may not be installed)", modulesDir)
+		}
+		return fmt.Errorf("stat kernel module tree %s: %w", modulesDir, err)
 	}
+	if !dirInfo.IsDir() {
+		return fmt.Errorf("kernel module path %s exists but is not a directory", modulesDir)
+	}
+
 	cmd := fmt.Sprintf("depmod -a %s", shell.QuoteArg(kernelVersion))
 	log.Infof("Generating kernel module dependencies for %s", kernelVersion)
 	if _, err := shell.ExecCmd(cmd, true, installRoot, nil); err != nil {

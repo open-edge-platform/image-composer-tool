@@ -90,13 +90,6 @@ func TestEnsureDepmodForBootKernels_RunsDepmod(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(modulesDir, "kernel", "dummy.ko"), []byte("ko"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	depmodBin := filepath.Join(tmpDir, "usr", "sbin", "depmod")
-	if err := os.MkdirAll(filepath.Dir(depmodBin), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(depmodBin, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
-		t.Fatal(err)
-	}
 
 	originalExecutor := shell.Default
 	defer func() { shell.Default = originalExecutor }()
