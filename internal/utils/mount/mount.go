@@ -388,7 +388,14 @@ func CleanSysfs(mountPoint string) error {
 	for _, _mountPoint := range []string{"run", "sys", "proc", "dev"} {
 		fullPath := filepath.Join(mountPoint, _mountPoint)
 		if !slice.Contains(pathList, fullPath) {
-			if _, err := shell.ExecCmd("rm -rf "+fullPath, true, shell.HostPath, nil); err != nil {
+			// Use rmdir (not rm -rf) here: "dev" is mounted with devtmpfs, which is a
+			// single kernel-wide filesystem instance shared across every mountpoint of
+			// that type. If the "still mounted" check above is ever wrong (e.g. mtab
+			// parsing mismatch), a recursive rm -rf on this path would actually delete
+			// the host's real /dev entries (e.g. /dev/null, /dev/ptmx). rmdir only
+			// succeeds on an empty directory, so a false negative fails loudly instead
+			// of destroying host device nodes.
+			if _, err := shell.ExecCmd("rmdir "+shell.QuoteArg(fullPath), true, shell.HostPath, nil); err != nil {
 				return fmt.Errorf("failed to remove path %s: %w", fullPath, err)
 			}
 		} else {

@@ -840,7 +840,7 @@ func TestCleanSysfs(t *testing.T) {
 			mountPoint: "/mnt/chroot",
 			mockCommands: []shell.MockCommand{
 				{Pattern: "mount", Output: "", Error: nil}, // No mount points found
-				{Pattern: "rm", Output: "", Error: nil},
+				{Pattern: "rmdir", Output: "", Error: nil},
 			},
 			expectError: false,
 		},
@@ -858,19 +858,19 @@ func TestCleanSysfs(t *testing.T) {
 			mountPoint: "/mnt/chroot",
 			mockCommands: []shell.MockCommand{
 				{Pattern: "mount", Output: "", Error: nil},
-				{Pattern: "rm -rf /mnt/chroot/run", Output: "", Error: nil},
-				{Pattern: "rm -rf /mnt/chroot/sys", Output: "", Error: nil},
-				{Pattern: "rm -rf /mnt/chroot/proc", Output: "", Error: nil},
-				{Pattern: "rm -rf /mnt/chroot/dev", Output: "", Error: nil},
+				{Pattern: "rmdir '/mnt/chroot/run'", Output: "", Error: nil},
+				{Pattern: "rmdir '/mnt/chroot/sys'", Output: "", Error: nil},
+				{Pattern: "rmdir '/mnt/chroot/proc'", Output: "", Error: nil},
+				{Pattern: "rmdir '/mnt/chroot/dev'", Output: "", Error: nil},
 			},
 			expectError: false,
 		},
 		{
-			name:       "rm_command_failure",
+			name:       "rmdir_command_failure",
 			mountPoint: "/mnt/chroot",
 			mockCommands: []shell.MockCommand{
 				{Pattern: "mount", Output: "", Error: nil},
-				{Pattern: "rm -rf", Output: "", Error: fmt.Errorf("permission denied")},
+				{Pattern: "rmdir", Output: "", Error: fmt.Errorf("permission denied")},
 			},
 			expectError: true,
 			errorMsg:    "failed to remove path",
@@ -880,7 +880,7 @@ func TestCleanSysfs(t *testing.T) {
 			mountPoint: "/mnt/chroot",
 			mockCommands: []shell.MockCommand{
 				{Pattern: "mount", Output: "proc on /mnt/chroot/proc type proc (rw,nosuid,nodev,noexec,relatime)\n", Error: nil},
-				{Pattern: "rm", Output: "", Error: nil},
+				{Pattern: "rmdir", Output: "", Error: nil},
 			},
 			expectError: true,
 			errorMsg:    "failed to remove path: /mnt/chroot/proc still mounted",

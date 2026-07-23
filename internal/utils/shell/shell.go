@@ -204,6 +204,7 @@ var commandMap = map[string][]string{
 	"qemu-system-x86_64": {"/usr/bin/qemu-system-x86_64"},
 	"resize2fs":          {"/usr/sbin/resize2fs", "/sbin/resize2fs"},
 	"rm":                 {"/bin/rm"},
+	"rmdir":              {"/bin/rmdir", "/usr/bin/rmdir"},
 	"rpm":                {"/usr/bin/rpm"},
 	"run":                {"/usr/bin/run"},
 	"sed":                {"/usr/bin/sed", "/bin/sed"},
