@@ -11,6 +11,8 @@ command reference, see the
   - [Building an Image](#building-an-image)
     - [Build Output](#build-output)
   - [Validating a Template](#validating-a-template)
+  - [Resolving a Template](#resolving-a-template)
+    - [Debugging an Extends Chain](#debugging-an-extends-chain)
   - [Configuration](#configuration)
   - [Operations Requiring Sudo](#operations-requiring-sudo)
   - [Shell Completion](#shell-completion)
@@ -133,6 +135,26 @@ signing paths `systemConfig.immutability.secureBootDBKey`,
 # Full build-time view: extends chain + OS defaults
 ./image-composer-tool resolve image-templates/azl3-x86_64-edge-raw.yml --full
 ```
+
+### Debugging an Extends Chain
+
+When a template uses `extends:` to inherit from a parent, `resolve` folds
+the chain and prints the effective template so you can verify what the
+leaf actually inherits before running a build:
+
+```bash
+# Show what an extends child inherits from its parent
+./image-composer-tool resolve image-templates/ubuntu24-x86_64-extends-example-raw.yml
+```
+
+The output includes the union of the parent's and child's
+`systemConfig.packages`, plus every other field folded through the
+chain's per-section merge rules. OS defaults are not applied unless you
+pass `--full`, so the output reflects only what the templates in the
+chain declared — useful for spotting an accidentally-overridden field.
+For the complete inheritance semantics (single-parent chains, cycle
+detection, target-match rules, and the depth-warning threshold), see
+[Template Extends (Inheritance)](../architecture/image-composer-tool-templates.md#template-extends-inheritance).
 
 ## Configuration
 
