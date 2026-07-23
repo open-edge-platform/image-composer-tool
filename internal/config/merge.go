@@ -919,7 +919,8 @@ func LoadAndMergeTemplate(templatePath string) (*ImageTemplate, error) {
 	defaultTemplate, err := loader.LoadDefaultConfig(leafTemplate.Target.ImageType)
 	if err != nil {
 		log.Debugf("Default template: %+v", defaultTemplate)
-		log.Warnf("Could not load default configuration: %v", err)
+		log.Warnf("Could not load default configuration for %s/%s/%s (%s); proceeding without defaults",
+			leafTemplate.Target.OS, leafTemplate.Target.Dist, leafTemplate.Target.Arch, leafTemplate.Target.ImageType)
 		log.Info("Proceeding without default configuration")
 		return foldChain(chain[0], chain[1:])
 	}
