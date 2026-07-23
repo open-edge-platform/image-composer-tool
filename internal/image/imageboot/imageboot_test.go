@@ -385,6 +385,7 @@ func TestInstallImageBoot_GrubEfiMode(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(tmpDir, "boot", "vmlinuz-5.15.0-test"), []byte(""), 0644); err != nil {
 		t.Fatalf("Failed to create mock kernel file: %v", err)
 	}
+	seedKernelModulesDep(t, tmpDir, "5.15.0-test")
 
 	template := &config.ImageTemplate{
 		Image: config.ImageInfo{
@@ -549,6 +550,7 @@ func TestInstallImageBoot_SeparateBootPartition(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(tmpDir, "boot", "vmlinuz-5.15.0-test"), []byte(""), 0644); err != nil {
 		t.Fatalf("Failed to create mock kernel file: %v", err)
 	}
+	seedKernelModulesDep(t, tmpDir, "5.15.0-test")
 
 	template := &config.ImageTemplate{
 		Image: config.ImageInfo{
@@ -1559,6 +1561,7 @@ func TestInstallImageBoot_GrubWithEnableExtraModules(t *testing.T) {
 	if err := os.WriteFile(kernelFile, []byte("fake kernel"), 0644); err != nil {
 		t.Fatalf("Failed to create kernel file: %v", err)
 	}
+	seedKernelModulesDep(t, tmpDir, kernelVersion)
 
 	template := &config.ImageTemplate{
 		Image: config.ImageInfo{
@@ -1634,6 +1637,7 @@ func TestInstallImageBoot_GrubWithEnableExtraModulesUbuntu(t *testing.T) {
 	if err := os.WriteFile(kernelFile, []byte("fake kernel"), 0644); err != nil {
 		t.Fatalf("Failed to create kernel file: %v", err)
 	}
+	seedKernelModulesDep(t, tmpDir, kernelVersion)
 
 	template := &config.ImageTemplate{
 		Image: config.ImageInfo{
