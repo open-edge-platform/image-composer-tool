@@ -60,14 +60,15 @@ systemConfig:
     # secureBootDBCer: "<SECURE_BOOT_DB_CER_PATH>"
 
   # Full-disk encryption. Each listed partition ID (from the disk config) is
-  # encrypted in place with LUKS2 during the build using the passphrase below.
+  # encrypted in place with LUKS2 during the build using passphrase material
+  # read from passphraseFile.
   # unlock:
-  #   auto (default) - the template passphrase is stored in a keyfile embedded in
+  #   auto (default) - passphrase material is stored in a keyfile embedded in
   #                    the initramfs so volumes unlock at boot with no prompt.
   #   manual         - no keyfile; the passphrase is entered interactively at boot.
   fde:
     enabled: true
-    passphrase: "12345"
+    passphraseFile: "/home/user/test-fde.txt"
     unlock: auto
     partitions:
       - rootfs

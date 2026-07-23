@@ -205,7 +205,7 @@ func validateAutoExpandLastPartitionConstraints(data []byte, requirePartitions b
 	return nil
 }
 
-// validateFDEConstraints ensures a non-empty passphrase when FDE is enabled.
+// validateFDEConstraints ensures a non-empty passphrase file when FDE is enabled.
 // The same rule exists in os-image-template.schema.json; this check mirrors
 // validateAutoExpandLastPartitionConstraints for rules enforced in Go after
 // schema validation.
@@ -230,9 +230,9 @@ func validateFDEConstraints(data []byte) error {
 		return nil
 	}
 
-	passphrase, _ := fde["passphrase"].(string)
-	if strings.TrimSpace(passphrase) == "" {
-		return fmt.Errorf("systemConfig.fde.passphrase is required when fde.enabled is true")
+	passphraseFile, _ := fde["passphraseFile"].(string)
+	if strings.TrimSpace(passphraseFile) == "" {
+		return fmt.Errorf("systemConfig.fde.passphraseFile is required when fde.enabled is true")
 	}
 
 	return nil

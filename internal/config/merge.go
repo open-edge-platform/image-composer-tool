@@ -228,9 +228,12 @@ func redactSensitiveSystemConfig(config SystemConfig) SystemConfig {
 		redacted.Immutability.SecureBootDBCer = "[REDACTED]"
 	}
 
-	// Redact the FDE passphrase so it never appears in logs.
+	// Redact the resolved FDE passphrase and source path so they never appear in logs.
 	if config.FDE.Passphrase != "" {
 		redacted.FDE.Passphrase = "[REDACTED]"
+	}
+	if config.FDE.PassphraseFile != "" {
+		redacted.FDE.PassphraseFile = "[REDACTED]"
 	}
 
 	return redacted
@@ -267,7 +270,7 @@ func mergeSystemConfig(defaultConfig, userConfig SystemConfig) SystemConfig {
 
 	// Merge FDE config - defaults do not define FDE, so take the user's config
 	// whenever any FDE field was provided.
-	if userConfig.FDE.Enabled || userConfig.FDE.Passphrase != "" || len(userConfig.FDE.Partitions) > 0 || userConfig.FDE.Unlock != "" {
+	if userConfig.FDE.Enabled || userConfig.FDE.PassphraseFile != "" || len(userConfig.FDE.Partitions) > 0 || userConfig.FDE.Unlock != "" {
 		merged.FDE = userConfig.FDE
 	}
 

@@ -605,7 +605,7 @@ Configures LUKS2 full-disk encryption for selected partitions.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `enabled` | bool | **Yes** | Enable full-disk encryption |
-| `passphrase` | string | **Yes** (when `enabled: true`) | Non-empty passphrase used to unlock the volume(s) |
+| `passphraseFile` | string | **Yes** (when `enabled: true`) | Absolute or template-relative local file path containing passphrase material |
 | `partitions` | string[] | No | Disk partition IDs to encrypt (defaults to the root partition) |
 | `unlock` | string | No | Boot unlock mode: `auto` (default) or `manual` |
 
@@ -613,7 +613,7 @@ Configures LUKS2 full-disk encryption for selected partitions.
 systemConfig:
   fde:
     enabled: true
-    passphrase: "change-me"
+    passphraseFile: "/run/secrets/fde-passphrase.txt"
     unlock: auto
     partitions:
       - rootfs

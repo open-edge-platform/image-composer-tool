@@ -1494,9 +1494,10 @@ func TestRedactSensitiveDataFDEPassphrase(t *testing.T) {
 	template := &ImageTemplate{
 		SystemConfig: SystemConfig{
 			FDE: FDEConfig{
-				Enabled:    true,
-				Passphrase: secret,
-				Unlock:     "auto",
+				Enabled:        true,
+				PassphraseFile: "/tmp/fde-secret.txt",
+				Unlock:         "auto",
+				Passphrase:     secret,
 			},
 		},
 	}
@@ -1507,6 +1508,9 @@ func TestRedactSensitiveDataFDEPassphrase(t *testing.T) {
 	}
 	if template.SystemConfig.FDE.Passphrase != secret {
 		t.Errorf("original template passphrase was mutated, got %q", template.SystemConfig.FDE.Passphrase)
+	}
+	if redacted.SystemConfig.FDE.PassphraseFile != "[REDACTED]" {
+		t.Errorf("redacted FDE passphraseFile = %q, want [REDACTED]", redacted.SystemConfig.FDE.PassphraseFile)
 	}
 
 	pretty, err := json.MarshalIndent(redacted, "", "  ")
