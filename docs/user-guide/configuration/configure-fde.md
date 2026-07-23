@@ -146,7 +146,7 @@ fallback, so you can still unlock interactively for recovery.
 Validate the template before building:
 
 ```bash
-image-composer-tool validate -t your-template.yml
+image-composer-tool validate your-template.yml
 ```
 
 Then build the image as usual. Validation fails if `fde.enabled` is `true` but

@@ -567,7 +567,11 @@
         },
         "kernelCmdline": {
           "type": "string",
-          "description": "Optional kernel command-line override applied to the overlaid image"
+          "description": "Optional kernel command-line override applied to the overlaid image (full-line replacement of GRUB_CMDLINE_LINUX on a GRUB2 baseline). The value is written into a shell-sourced /etc/default/grub assignment, so it must not contain a double quote, dollar sign, backtick, backslash, or newline."
+        },
+        "grubDefault": {
+          "type": "string",
+          "description": "Optional GRUB_DEFAULT override applied to the overlaid image (pins the default boot menu entry, e.g. an Ubuntu submenu path). Only applied on a GRUB2 baseline. The value is written into a shell-sourced /etc/default/grub assignment, so it must not contain a double quote, dollar sign, backtick, backslash, or newline."
         },
         "allowDiskResize": {
           "type": "boolean",

@@ -11,6 +11,7 @@
   - [Commands](#commands)
     - [Build Command](#build-command)
     - [Validate Command](#validate-command)
+    - [Resolve Command](#resolve-command)
     - [Inspect Command](#inspect-command)
     - [Compare Command](#compare-command)
     - [Cache Command](#cache-command)
@@ -26,6 +27,7 @@
     - [Managing Cache](#managing-cache)
     - [Inspecting and Comparing Images](#inspecting-and-comparing-images)
     - [Validating Templates](#validating-templates)
+    - [Resolving Templates](#resolving-templates)
   - [Configuration Files](#configuration-files)
     - [Global Configuration File](#global-configuration-file)
     - [Image Template File](#image-template-file)
@@ -228,6 +230,70 @@ See also:
 
 - [Template Loading and Validation](./image-composer-tool-build-process.md#1-template-loading-and-validation)
   for details on the validation process
+
+### Resolve Command
+
+Resolve a template and print the merged YAML to stdout for debugging and
+traceability. Resolve does not build anything and never writes to disk; the
+merged output is computed on every invocation and is not cached.
+
+```bash
+image-composer-tool resolve [flags] TEMPLATE_FILE
+```
+
+**Arguments:**
+
+| Argument | Description |
+|---|---|
+| `TEMPLATE_FILE` | Path to the image template YAML file (required, positional) |
+
+**Flags:**
+
+| Flag | Description |
+|---|---|
+| `--full` | Include OS defaults in the output, showing exactly what will be built |
+
+**Description:**
+
+By default, the resolve command walks the template's `extends:` chain (leaf
+towards root) and prints the chain-merged YAML **without** OS defaults. If the
+template does not use `extends:`, the command prints
+`No extends used in template, nothing to resolve` and exits successfully.
+
+When `--full` is passed, resolve additionally folds the extends chain on top of
+the OS default configuration — OS defaults are the base layer and the extends
+chain overrides them (leaf wins). This is the same merge the `build` command
+runs, so the output shows exactly what the tool would build. `--full`
+suppresses the "nothing to resolve" short-circuit, so it also works for
+templates that do not use `extends:`.
+
+Sensitive fields are always redacted in the output:
+
+- `systemConfig.users[*].password`
+- `systemConfig.users[*].hash_algo`
+- `systemConfig.immutability.secureBootDBKey`
+- `systemConfig.immutability.secureBootDBCrt`
+- `systemConfig.immutability.secureBootDBCer`
+
+The output is safe to paste into an issue or a code review.
+
+**Example:**
+
+```bash
+# Show the extends-chain-merged YAML for a template that inherits from a parent
+image-composer-tool resolve image-templates/ubuntu24-x86_64-extends-example-raw.yml
+
+# Show the full build-time template (extends chain + OS defaults)
+image-composer-tool resolve image-templates/azl3-x86_64-edge-raw.yml --full
+
+# Pipe the merged template into a file for offline review
+image-composer-tool resolve my-template.yml --full > merged.yml
+```
+
+See also:
+
+- [Validate Command](#validate-command) — checks template validity without
+  emitting YAML.
 
 ### Inspect Command
 
@@ -614,6 +680,20 @@ image-composer-tool validate image-templates/azl3-x86_64-edge-raw.yml
 
 # Validate with debug output
 image-composer-tool --log-level debug validate image-templates/azl3-x86_64-edge-raw.yml
+```
+
+### Resolving Templates
+
+```bash
+# Print the extends-chain-merged YAML (without OS defaults) for a template
+# that inherits from a parent
+image-composer-tool resolve image-templates/ubuntu24-x86_64-extends-example-raw.yml
+
+# Print the fully merged, build-ready YAML including OS defaults
+image-composer-tool resolve image-templates/azl3-x86_64-edge-raw.yml --full
+
+# Save the merged template to a file for offline review
+image-composer-tool resolve my-template.yml --full > merged.yml
 ```
 
 ## Configuration Files

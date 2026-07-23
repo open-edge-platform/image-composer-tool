@@ -142,6 +142,14 @@ type OverlayPolicy struct {
 	ConflictPolicy   string `yaml:"conflictPolicy,omitempty"`
 	KernelCmdline    string `yaml:"kernelCmdline,omitempty"`
 
+	// GrubDefault, when set, is written verbatim to GRUB_DEFAULT in
+	// /etc/default/grub before the GRUB config is regenerated, pinning the boot
+	// menu entry that becomes the default (e.g. an Ubuntu submenu path such as
+	// "Advanced options for Ubuntu>Ubuntu, with Linux 6.8.0-40-generic"). It is
+	// only applied on a GRUB2 baseline. Used to make an overlay-added kernel the
+	// default boot target when it is not the entry GRUB would auto-select.
+	GrubDefault string `yaml:"grubDefault,omitempty"`
+
 	// AllowDiskResize gates whether an overlay build may grow the baseline image
 	// to satisfy a larger disk.size. Overlay mode preserves the baseline layout by
 	// default, so a disk.size larger than the baseline is rejected unless the user
@@ -800,22 +808,11 @@ func (t *ImageTemplate) SaveUpdatedConfigFile(path string) error {
 		return fmt.Errorf("failed to create directory for config file: %w", err)
 	}
 
-	// Marshal the template to YAML
-	data, err := yaml.Marshal(t)
+	// Marshal to YAML (includes the block-scalar-header repair).
+	data, err := MarshalTemplateYAML(t)
 	if err != nil {
-		log.Errorf("Error marshaling image template to YAML: %v", err)
-		return fmt.Errorf("error marshaling template to YAML: %w", err)
-	}
-
-	if err := validateYAMLBytes(data); err != nil {
-		log.Warnf("Generated YAML is not parseable, applying block scalar header fix: %v", err)
-
-		data = fixInvalidBlockScalarHeader(data)
-
-		if validateErr := validateYAMLBytes(data); validateErr != nil {
-			log.Errorf("Generated YAML remains invalid after block scalar header fix: %v", validateErr)
-			return fmt.Errorf("generated YAML is invalid after block scalar header fix: %w", validateErr)
-		}
+		log.Errorf("Failed to marshal image template: %v", err)
+		return err
 	}
 
 	// Write file safely with symlink protection
@@ -826,6 +823,29 @@ func (t *ImageTemplate) SaveUpdatedConfigFile(path string) error {
 
 	log.Infof("Saved image template to %s", path)
 	return nil
+}
+
+// MarshalTemplateYAML marshals an ImageTemplate to YAML bytes, applying the same
+// block-scalar-header repair used by SaveUpdatedConfigFile so callers can safely
+// emit the result to stdout or another sink.
+func MarshalTemplateYAML(t *ImageTemplate) ([]byte, error) {
+	if t == nil {
+		return nil, fmt.Errorf("template is nil")
+	}
+
+	data, err := yaml.Marshal(t)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling template to YAML: %w", err)
+	}
+
+	if err := validateYAMLBytes(data); err != nil {
+		data = fixInvalidBlockScalarHeader(data)
+		if verr := validateYAMLBytes(data); verr != nil {
+			return nil, fmt.Errorf("generated YAML is invalid after block scalar header fix: %w", verr)
+		}
+	}
+
+	return data, nil
 }
 
 func validateYAMLBytes(data []byte) error {
@@ -1338,6 +1358,23 @@ func (p *OverlayPolicy) validate() error {
 	if cp != OverlayConflictPolicyFail && cp != OverlayConflictPolicyAllowExplicit {
 		return fmt.Errorf("baseline.overlayPolicy.conflictPolicy must be %q or %q (got %q)",
 			OverlayConflictPolicyFail, OverlayConflictPolicyAllowExplicit, p.ConflictPolicy)
+	}
+	// kernelCmdline and grubDefault are written verbatim into
+	// GRUB_CMDLINE_LINUX="..." / GRUB_DEFAULT="..." assignments in /etc/default/grub,
+	// which update-grub/grub-mkconfig then `.`-source (as root) during regeneration.
+	// Inside that double-quoted, shell-sourced assignment a double quote prematurely
+	// closes it, a newline splits it, a '$' or backtick is expanded /
+	// command-substituted (the latter an injection surface running as root at regen
+	// time), and a trailing backslash escapes the closing quote (leaving the string
+	// unterminated). None are needed by a kernel command line or a GRUB_DEFAULT entry,
+	// so all are rejected up front rather than producing a broken or dangerous defaults
+	// file.
+	const grubValueForbidden = "\"$`\\\n"
+	if strings.ContainsAny(p.KernelCmdline, grubValueForbidden) {
+		return fmt.Errorf("baseline.overlayPolicy.kernelCmdline must not contain a double quote, dollar sign, backtick, backslash, or newline")
+	}
+	if strings.ContainsAny(p.GrubDefault, grubValueForbidden) {
+		return fmt.Errorf("baseline.overlayPolicy.grubDefault must not contain a double quote, dollar sign, backtick, backslash, or newline")
 	}
 	return nil
 }

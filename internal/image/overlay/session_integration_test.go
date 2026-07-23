@@ -62,7 +62,17 @@ func TestOverlayBuilder_FullFlowRealRawBaseline(t *testing.T) {
 			Source: &config.BaselineSource{Path: srcImg, Format: config.BaselineFormatRaw},
 		},
 		OverlayPolicy: &config.OverlayPolicy{PackageOperation: config.OverlayPackageOpAdditiveOnly},
-		SystemConfig:  config.SystemConfig{Name: "default", Packages: []string{"overlay-probe"}},
+		SystemConfig: config.SystemConfig{
+			Name:     "default",
+			Packages: []string{"overlay-probe"},
+			// Exercise the Configurations stage end-to-end against the real mounted
+			// baseline chroot. The command uses shell features (mkdir -p, redirection,
+			// `&&`) that are passed opaquely to /bin/bash inside the chroot, proving the
+			// escape hatch works — not just a bare allowlisted binary.
+			Configurations: []config.ConfigurationInfo{
+				{Cmd: "mkdir -p /usr/share/overlay-config && echo overlay-config-ran > /usr/share/overlay-config/marker"},
+			},
+		},
 	}
 
 	// 4. Stub resolution (no network): hand the Builder the local artifact directly.
@@ -98,6 +108,16 @@ func TestOverlayBuilder_FullFlowRealRawBaseline(t *testing.T) {
 	marker := filepath.Join(rootMount, "usr", "share", "overlay-probe", "installed")
 	if _, serr := os.Stat(marker); serr != nil {
 		t.Errorf("expected installed marker at %s: %v", marker, serr)
+	}
+
+	// The Configurations stage must have run its command inside the chroot: the
+	// marker it writes proves arbitrary shell (mkdir/redirect/&&) executed against
+	// the real mounted baseline, and its content confirms it ran to completion.
+	cfgMarker := filepath.Join(rootMount, "usr", "share", "overlay-config", "marker")
+	if data, serr := os.ReadFile(cfgMarker); serr != nil {
+		t.Errorf("expected configuration marker at %s: %v", cfgMarker, serr)
+	} else if got := strings.TrimSpace(string(data)); got != "overlay-config-ran" {
+		t.Errorf("configuration marker content = %q, want %q", got, "overlay-config-ran")
 	}
 
 	if err := builder.Postprocess(nil); err != nil {
