@@ -142,6 +142,14 @@ type OverlayPolicy struct {
 	ConflictPolicy   string `yaml:"conflictPolicy,omitempty"`
 	KernelCmdline    string `yaml:"kernelCmdline,omitempty"`
 
+	// GrubDefault, when set, is written verbatim to GRUB_DEFAULT in
+	// /etc/default/grub before the GRUB config is regenerated, pinning the boot
+	// menu entry that becomes the default (e.g. an Ubuntu submenu path such as
+	// "Advanced options for Ubuntu>Ubuntu, with Linux 6.8.0-40-generic"). It is
+	// only applied on a GRUB2 baseline. Used to make an overlay-added kernel the
+	// default boot target when it is not the entry GRUB would auto-select.
+	GrubDefault string `yaml:"grubDefault,omitempty"`
+
 	// AllowDiskResize gates whether an overlay build may grow the baseline image
 	// to satisfy a larger disk.size. Overlay mode preserves the baseline layout by
 	// default, so a disk.size larger than the baseline is rejected unless the user
@@ -1338,6 +1346,23 @@ func (p *OverlayPolicy) validate() error {
 	if cp != OverlayConflictPolicyFail && cp != OverlayConflictPolicyAllowExplicit {
 		return fmt.Errorf("baseline.overlayPolicy.conflictPolicy must be %q or %q (got %q)",
 			OverlayConflictPolicyFail, OverlayConflictPolicyAllowExplicit, p.ConflictPolicy)
+	}
+	// kernelCmdline and grubDefault are written verbatim into
+	// GRUB_CMDLINE_LINUX="..." / GRUB_DEFAULT="..." assignments in /etc/default/grub,
+	// which update-grub/grub-mkconfig then `.`-source (as root) during regeneration.
+	// Inside that double-quoted, shell-sourced assignment a double quote prematurely
+	// closes it, a newline splits it, a '$' or backtick is expanded /
+	// command-substituted (the latter an injection surface running as root at regen
+	// time), and a trailing backslash escapes the closing quote (leaving the string
+	// unterminated). None are needed by a kernel command line or a GRUB_DEFAULT entry,
+	// so all are rejected up front rather than producing a broken or dangerous defaults
+	// file.
+	const grubValueForbidden = "\"$`\\\n"
+	if strings.ContainsAny(p.KernelCmdline, grubValueForbidden) {
+		return fmt.Errorf("baseline.overlayPolicy.kernelCmdline must not contain a double quote, dollar sign, backtick, backslash, or newline")
+	}
+	if strings.ContainsAny(p.GrubDefault, grubValueForbidden) {
+		return fmt.Errorf("baseline.overlayPolicy.grubDefault must not contain a double quote, dollar sign, backtick, backslash, or newline")
 	}
 	return nil
 }
