@@ -234,6 +234,108 @@ body {
 .checkbox-card-title { font-weight: 600; font-size: 13px; }
 .checkbox-card-packages { font-size: 12px; color: var(--text-muted); margin-top: 3px; margin-left: 26px; }
 
+/* ── Use-Case Bundles (curated, cross-repo, all-or-none) ── */
+.bundle-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+.bundle-card { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; cursor: pointer; transition: all 0.15s; }
+.bundle-card:hover { border-color: #94a3b8; }
+.bundle-card.partial { border-color: #bfdbfe; }
+.bundle-card.applied { border-color: var(--primary); background: var(--primary-light); }
+.bundle-card-top { display: flex; align-items: center; gap: 8px; }
+.bundle-check {
+  width: 18px; height: 18px; border-radius: 50%; flex-shrink: 0;
+  border: 1px solid var(--border); background: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; color: var(--text-muted);
+}
+.bundle-card.applied .bundle-check { background: var(--primary); color: #fff; border-color: var(--primary); }
+.bundle-card.partial .bundle-check { color: var(--primary); border-color: var(--primary); }
+.bundle-name { font-weight: 600; font-size: 13px; }
+.bundle-desc { font-size: 11px; color: var(--text-muted); margin-top: 5px; line-height: 1.4; }
+.bundle-meta { font-size: 11px; color: var(--primary); margin-top: 7px; }
+.bundle-card.partial .bundle-meta { color: var(--warning); }
+
+/* ── Packages step: main column + full-height selected rail ── */
+.packages-layout { display: grid; grid-template-columns: 1fr 300px; gap: 20px; align-items: start; }
+.packages-main { min-width: 0; }
+
+/* ── Two-pane repository browser (rail + packages) ── */
+.pkg-browser {
+  display: grid; grid-template-columns: 240px 1fr;
+  border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
+}
+.repo-rail { border-right: 1px solid var(--border); background: #f8fafc; overflow-y: auto; max-height: 480px; }
+.repo-rail-item { display: flex; align-items: center; gap: 9px; padding: 10px 12px; cursor: pointer; border-bottom: 1px solid #eef2f7; }
+.repo-rail-item:hover { background: #eef4fb; }
+.repo-rail-item.active { background: #fff; box-shadow: inset 3px 0 0 var(--primary); }
+.repo-rail-item input[type="checkbox"] { accent-color: var(--primary); width: 15px; height: 15px; flex-shrink: 0; }
+.repo-rail-info { flex: 1; min-width: 0; }
+.repo-rail-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.repo-rail-count { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+.repo-rail-count.has-sel { color: var(--primary); }
+
+.repo-pane { padding: 14px 18px; overflow-y: auto; max-height: 480px; }
+.repo-pane-title { font-size: 15px; font-weight: 700; }
+.repo-pane-url { font-size: 11px; color: var(--text-muted); margin: 2px 0 6px; word-break: break-all; }
+.pkg-subhead {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--text-muted); font-weight: 600; margin: 14px 0 4px;
+  display: flex; align-items: center; gap: 6px;
+}
+.pkg-star { color: #d97706; }
+.pane-empty { color: var(--text-muted); font-size: 13px; text-align: center; padding: 48px 20px; }
+.pane-toolbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 8px 0 4px; border-bottom: 1px solid var(--border); margin-bottom: 4px;
+  position: sticky; top: 0; background: var(--surface); z-index: 1;
+}
+.suggested-toggle { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; color: var(--text); cursor: pointer; }
+.suggested-toggle input { accent-color: var(--primary); width: 15px; height: 15px; }
+.show-more { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 8px; margin-top: 6px; border-top: 1px dashed var(--border); }
+.show-more .count-note { font-size: 11px; color: var(--text-muted); }
+.pkg-list-scroll { max-height: 300px; overflow-y: auto; }
+
+/* Per-repo search box inside the pane */
+.pane-search { position: relative; margin: 6px 0 4px; }
+.pane-search input {
+  width: 100%; padding: 7px 28px 7px 10px; font-size: 12px;
+  border: 1px solid var(--border); border-radius: 6px;
+}
+.pane-search input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,0.1); }
+.pane-search .clear-search {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  border: none; background: none; cursor: pointer; color: var(--text-muted); font-size: 14px; line-height: 1;
+}
+
+/* Right rail: final selected-package list (page-level, sticky) */
+.selected-col {
+  border: 1px solid var(--border); border-radius: 8px; background: #f8fafc;
+  display: flex; flex-direction: column; position: sticky; top: 72px; max-height: calc(100vh - 120px);
+}
+.selected-col-header {
+  padding: 12px 14px; font-size: 13px; font-weight: 700; color: var(--text);
+  border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.selected-col-body { padding: 6px 10px 10px; overflow-y: auto; flex: 1; }
+.selected-group-label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-muted);
+  font-weight: 600; margin: 10px 4px 3px;
+}
+.selected-item {
+  display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: 4px; font-size: 12px;
+}
+.selected-item:hover { background: #eef4fb; }
+.selected-item-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.selected-item-x { cursor: pointer; color: var(--text-muted); font-weight: 700; }
+.selected-item-x:hover { color: var(--error); }
+.selected-empty { color: var(--text-muted); font-size: 12px; text-align: center; padding: 32px 12px; }
+.link-btn { background: none; border: none; color: var(--primary); font-size: 12px; cursor: pointer; padding: 2px 4px; }
+.link-btn:hover { text-decoration: underline; }
+.pkg-row { display: flex; align-items: center; gap: 10px; padding: 6px 4px; border-radius: 4px; cursor: pointer; }
+.pkg-row:hover { background: #f8fafc; }
+.pkg-row input[type="checkbox"] { accent-color: var(--primary); width: 15px; height: 15px; }
+.pkg-row-name { font-size: 13px; font-weight: 500; }
+.pkg-row-desc { font-size: 11px; color: var(--text-muted); }
+
 .tags-input {
   display: flex;
   flex-wrap: wrap;
@@ -379,11 +481,8 @@ body {
 
 /* ── Wizard Layout (Advanced Tab) ── */
 .wizard-container {
-  display: grid;
-  grid-template-columns: 1fr 380px;
-  gap: 24px;
   padding: 0 24px 24px;
-  max-width: 1400px;
+  max-width: 1240px;
   margin: 0 auto;
 }
 
@@ -575,20 +674,9 @@ body {
   <!-- Steps Progress -->
   <div class="steps-progress" id="adv-steps-progress"></div>
 
-  <!-- Wizard Layout: step panel + yaml preview -->
+  <!-- Wizard Layout: full-width step panel (YAML preview lives in Review step) -->
   <div class="wizard-container">
     <div id="adv-step-content"></div>
-    <div class="yaml-preview">
-      <div class="yaml-preview-header">
-        <span style="font-size:14px;font-weight:600;">Live Preview</span>
-        <div style="display:flex;gap:6px;">
-          <button class="btn btn-sm" onclick="copyAdvYaml()">Copy</button>
-          <button class="btn btn-sm btn-warning" onclick="validateAdvanced()">Validate</button>
-        </div>
-      </div>
-      <div class="yaml-content" id="yaml-output-adv"></div>
-      <div class="validation-status valid" id="adv-validation-status">&#10003; Template valid</div>
-    </div>
   </div>
 </div>
 
@@ -725,35 +813,101 @@ const VERTICAL_PRESETS = {
 };
 
 
-// Package database (simulated)
+// Suggested-package database — modeled on the real robotics-jazzy ISO template
+// (image-templates/ubuntu24-x86_64-robotics-jazzy-iso.yml). These are the
+// packages that template actually installs; in the UI they are the "suggested"
+// picks surfaced by default. Each real repo also carries hundreds/thousands of
+// other packages, simulated on the fly (see allPackagesForRepo). `curated: true`
+// marks a package as suggested for its repo.
 const PACKAGE_DB = [
-  { name: 'docker-ce', desc: 'Docker Community Edition', repo: 'docker-ce-stable' },
-  { name: 'docker-ce-cli', desc: 'Docker CLI', repo: 'docker-ce-stable' },
-  { name: 'containerd.io', desc: 'Container runtime', repo: 'docker-ce-stable' },
-  { name: 'docker-compose-plugin', desc: 'Docker Compose V2', repo: 'docker-ce-stable' },
-  { name: 'openvino-runtime', desc: 'OpenVINO inference engine', repo: 'intel-openvino' },
-  { name: 'openvino-dev', desc: 'OpenVINO development tools', repo: 'intel-openvino' },
-  { name: 'ros-jazzy-base', desc: 'ROS 2 Jazzy base', repo: 'ros2-jazzy' },
-  { name: 'ros-jazzy-navigation2', desc: 'ROS 2 Nav2 stack', repo: 'ros2-jazzy' },
-  { name: 'ros-jazzy-slam-toolbox', desc: 'SLAM Toolbox for ROS 2', repo: 'ros2-jazzy' },
-  { name: 'ros-jazzy-moveit', desc: 'MoveIt motion planning', repo: 'ros2-jazzy' },
-  { name: 'intel-level-zero-gpu', desc: 'Intel Level Zero GPU runtime', repo: 'intel-compute' },
-  { name: 'intel-opencl-icd', desc: 'Intel OpenCL driver', repo: 'intel-compute' },
-  { name: 'cloud-init', desc: 'Cloud instance init', repo: 'ubuntu-main' },
-  { name: 'curl', desc: 'URL transfer tool', repo: 'ubuntu-main' },
-  { name: 'collectd', desc: 'System metrics collector', repo: 'ubuntu-universe' },
-  { name: 'chrony', desc: 'NTP time sync', repo: 'ubuntu-main' },
-  { name: 'cryptsetup', desc: 'Disk encryption tools', repo: 'ubuntu-main' },
-  { name: 'nginx', desc: 'HTTP server', repo: 'ubuntu-main' },
-  { name: 'nodejs', desc: 'JavaScript runtime', repo: 'ubuntu-universe' },
-  { name: 'k3s', desc: 'Lightweight Kubernetes', repo: 'rancher-k3s' },
-  { name: 'kubectl', desc: 'Kubernetes CLI', repo: 'kubernetes' },
-  { name: 'helm', desc: 'Kubernetes package manager', repo: 'helm-stable' },
-  { name: 'auditd', desc: 'Linux audit daemon', repo: 'ubuntu-main' },
-  { name: 'apparmor', desc: 'Application armor profiles', repo: 'ubuntu-main' },
-  { name: 'fapolicyd', desc: 'File access policy daemon', repo: 'ubuntu-universe' },
-  { name: 'aide', desc: 'File integrity checker', repo: 'ubuntu-universe' },
-  { name: 'openscap', desc: 'SCAP compliance scanner', repo: 'ubuntu-universe' },
+  // ── Ubuntu base (noble) ──
+  { name: 'ubuntu-minimal', desc: 'Minimal Ubuntu system', repo: 'ubuntu-main', curated: true },
+  { name: 'ubuntu-desktop-minimal', desc: 'Minimal Ubuntu desktop', repo: 'ubuntu-main', curated: true },
+  { name: 'systemd', desc: 'System and service manager', repo: 'ubuntu-main', curated: true },
+  { name: 'systemd-boot', desc: 'Simple UEFI boot manager', repo: 'ubuntu-main', curated: true },
+  { name: 'openssh-server', desc: 'OpenSSH server', repo: 'ubuntu-main', curated: true },
+  { name: 'network-manager', desc: 'Network management daemon', repo: 'ubuntu-main', curated: true },
+  { name: 'dracut-core', desc: 'initramfs generator (UKI)', repo: 'ubuntu-main', curated: true },
+  { name: 'cryptsetup-bin', desc: 'Disk encryption utilities', repo: 'ubuntu-main', curated: true },
+  { name: 'linux-headers-generic', desc: 'Kernel headers (for DKMS)', repo: 'ubuntu-main', curated: true },
+  { name: 'linux-firmware', desc: 'Firmware for Linux kernel drivers', repo: 'ubuntu-main', curated: true },
+  { name: 'linux-image-generic-hwe-24.04', desc: 'HWE generic kernel image', repo: 'ubuntu-main', curated: true },
+
+  // ── ROS 2 Jazzy ──
+  { name: 'ros-jazzy-desktop', desc: 'ROS 2 Jazzy Desktop (full)', repo: 'ros2-jazzy', curated: true },
+  { name: 'ros-jazzy-openvino-wrapper-lib', desc: 'OpenVINO wrapper library for ROS 2', repo: 'ros2-jazzy', curated: true },
+  { name: 'ros-jazzy-openvino-node', desc: 'OpenVINO inference node for ROS 2', repo: 'ros2-jazzy', curated: true },
+  { name: 'ros-jazzy-librealsense2', desc: 'RealSense integration for ROS 2', repo: 'ros2-jazzy', curated: true },
+
+  // ── Intel ECI (Edge Controls for Industrial) ──
+  { name: 'libze1', desc: 'Intel Level Zero loader', repo: 'intel-eci', curated: true },
+  { name: 'libze-intel-gpu1', desc: 'Intel GPU Level Zero driver', repo: 'intel-eci', curated: true },
+  { name: 'intel-level-zero-npu', desc: 'Intel NPU Level Zero runtime', repo: 'intel-eci', curated: true },
+  { name: 'intel-driver-compiler-npu', desc: 'Intel NPU driver compiler', repo: 'intel-eci', curated: true },
+
+  // ── Intel AMR (Autonomous Mobile Robots) ──
+  { name: 'ros-jazzy-robotics-sdk', desc: 'Intel Robotics SDK for ROS 2', repo: 'intel-amr', curated: true },
+  { name: 'ros-jazzy-collab-slam-lze', desc: 'Collaborative SLAM (Xe/UHD GPU accelerated)', repo: 'intel-amr', curated: true },
+
+  // ── Intel oneAPI runtime ──
+  { name: 'intel-oneapi-runtime-compilers_2025.3.3-30', desc: 'oneAPI runtime compilers (pinned)', repo: 'intel-oneapi', curated: true },
+  { name: 'intel-oneapi-runtime-compilers-common_2025.3.3-30', desc: 'oneAPI runtime compilers common', repo: 'intel-oneapi', curated: true },
+  { name: 'intel-oneapi-runtime-opencl_2025.3.3-30', desc: 'oneAPI OpenCL runtime', repo: 'intel-oneapi', curated: true },
+
+  // ── Intel OpenVINO 2025 ──
+  { name: 'openvino_2025.3.0.19807', desc: 'Intel OpenVINO 2025 (pinned)', repo: 'intel-openvino', curated: true },
+
+  // ── Gazebo (OSRF) Harmonic ──
+  { name: 'gz-harmonic', desc: 'Gazebo Harmonic physics simulator', repo: 'gazebo', curated: true },
+
+  // ── Intel RealSense ──
+  { name: 'librealsense2-dkms', desc: 'RealSense kernel modules (DKMS)', repo: 'realsense', curated: true },
+  { name: 'librealsense2_2.56.5-0~realsense.17055', desc: 'RealSense SDK (pinned)', repo: 'realsense', curated: true },
+];
+
+// Repository catalog — the provenance grouping dimension. These are exactly the
+// `packageRepositories` from the robotics-jazzy ISO template, plus the always-on
+// Ubuntu base. In the real UI this comes from the manifest API. `base: true`
+// marks the OS default repo (always enabled). `total` is the (simulated) number
+// of packages the repo publishes — used to convey scale in the browser.
+const REPO_DB = [
+  { id: 'ubuntu-main',    name: 'Ubuntu Base (noble)',      url: 'http://archive.ubuntu.com/ubuntu', base: true, total: 61000 },
+  { id: 'ros2-jazzy',     name: 'ROS 2 Jazzy',              url: 'http://packages.ros.org/ros2/ubuntu', total: 3400 },
+  { id: 'intel-eci',      name: 'Intel ECI',                url: 'https://eci.intel.com/repos/noble', priority: 1000, total: 940 },
+  { id: 'intel-amr',      name: 'Intel AMR',                url: 'https://amrdocs.intel.com/repos/noble', priority: 1001, total: 130 },
+  { id: 'intel-oneapi',   name: 'Intel oneAPI',             url: 'https://apt.repos.intel.com/oneapi', total: 520 },
+  { id: 'intel-openvino', name: 'Intel OpenVINO 2025',      url: 'https://apt.repos.intel.com/openvino/2025', total: 60 },
+  { id: 'gazebo',         name: 'Gazebo (OSRF) Harmonic',   url: 'https://packages.osrfoundation.org/gazebo/ubuntu-stable', total: 210 },
+  { id: 'realsense',      name: 'Intel RealSense',          url: 'https://librealsense.realsenseai.com/Debian/apt-repo', total: 24 },
+];
+
+// Packages whose repo id isn't in REPO_DB are bucketed here so nothing is hidden.
+const OTHER_REPO = { id: '__other', name: 'Other / Uncategorized', url: 'Packages not tied to a listed repository' };
+
+// Use-case bundles — curated, cross-repo, all-or-none package sets. Each bundle
+// pulls packages from SEVERAL repos (e.g. RealSense from the RealSense repo +
+// ROS 2 repo + Ubuntu base), which is exactly the shape of the robotics-jazzy
+// template. Applying adds every package and enables their repos; un-applying
+// removes exactly that set. `packages` are PACKAGE_DB names; repos are derived.
+const BUNDLE_DB = [
+  { id: 'ros2-desktop', name: 'ROS 2 Jazzy Desktop', icon: '🤖',
+    desc: 'Full ROS 2 Jazzy desktop with the Intel oneAPI runtime it depends on.',
+    packages: ['ros-jazzy-desktop', 'intel-oneapi-runtime-compilers_2025.3.3-30', 'intel-oneapi-runtime-compilers-common_2025.3.3-30', 'intel-oneapi-runtime-opencl_2025.3.3-30'] },
+  { id: 'openvino-inference', name: 'OpenVINO Inference', icon: '🧠',
+    desc: 'Intel OpenVINO 2025 with ROS 2 nodes and Intel GPU Level Zero acceleration.',
+    packages: ['openvino_2025.3.0.19807', 'ros-jazzy-openvino-node', 'ros-jazzy-openvino-wrapper-lib', 'libze1', 'libze-intel-gpu1'] },
+  { id: 'realsense-camera', name: 'RealSense Camera', icon: '📷',
+    desc: 'Intel RealSense depth-camera SDK + DKMS modules + ROS 2 integration.',
+    packages: ['librealsense2-dkms', 'librealsense2_2.56.5-0~realsense.17055', 'ros-jazzy-librealsense2', 'linux-headers-generic'] },
+  { id: 'amr-robotics', name: 'AMR Robotics', icon: '🚗',
+    desc: 'Intel Robotics SDK and collaborative SLAM from the Intel AMR repository.',
+    packages: ['ros-jazzy-robotics-sdk', 'ros-jazzy-collab-slam-lze'] },
+  { id: 'intel-npu', name: 'Intel NPU', icon: '⚡',
+    desc: 'Intel NPU (Neural Processing Unit) Level Zero runtime and driver compiler.',
+    packages: ['intel-level-zero-npu', 'intel-driver-compiler-npu'] },
+  { id: 'gazebo-sim', name: 'Gazebo Simulation', icon: '🌐',
+    desc: 'Gazebo Harmonic physics simulator.',
+    packages: ['gz-harmonic'] },
 ];
 
 // ═══════════════════════════════════════════════════════════════
@@ -866,8 +1020,38 @@ const advState = {
         { id: 'rootfs', name: 'rootfs', fsType: 'ext4', size: 'rest', mountPoint: '/' }
     ]},
     packages: ['cloud-init', 'rsyslog'],
+    // Repos the user has enabled (base repo is implicitly always on).
+    enabledRepos: ['ubuntu-main'],
+    // Use-case bundles the user has applied (ids into BUNDLE_DB).
+    bundles: [],
   }
 };
+
+// UI-only view state for the package step (not part of the exported config):
+//  - activeRepo:     repo open in the right pane
+//  - suggestedOnly:  when true, the pane shows only curated/suggested packages;
+//                    unchecking reveals the repo's full catalog
+//  - shownCount:     per-repo count of full-catalog rows currently rendered,
+//                    grown by the "Show more" button (windowed for performance)
+const pkgGroupsUI = { activeRepo: 'ubuntu-main', suggestedOnly: true, shownCount: {}, paneSearch: '' };
+const PAGE_SIZE = 50; // rows revealed per "Show more" click
+
+// Simulate a repo's FULL package catalog: the real suggested packages plus
+// synthetic filler up to the repo's advertised total. Stands in for a live
+// repo-index query in the real UI (which would be paginated/virtualized).
+const _allPkgCache = {};
+function allPackagesForRepo(repoId) {
+  if (_allPkgCache[repoId]) return _allPkgCache[repoId];
+  const repo = REPO_DB.find(r => r.id === repoId) || OTHER_REPO;
+  const suggested = PACKAGE_DB.filter(p => p.repo === repoId);
+  const total = repo.total || suggested.length;
+  const list = suggested.slice();
+  for (let i = suggested.length; i < total; i++) {
+    list.push({ name: `${repoId}-pkg-${i}`, desc: 'Additional repository package', repo: repoId });
+  }
+  _allPkgCache[repoId] = list;
+  return list;
+}
 
 function renderAdvSteps() {
   const container = document.getElementById('adv-steps-progress');
@@ -990,36 +1174,36 @@ function renderAdvStepContent() {
 
     case 'packages':
       html += `<h2>${step.icon} Repositories &amp; Packages</h2>
-        <p class="step-desc">Enable repositories and add packages from repos, OS defaults, or manually.</p>
-        <div class="form-group">
-          <label class="form-label">Package Repositories</label>
-          <div class="checkbox-group">
-            <div class="checkbox-card checked"><div class="checkbox-card-header"><input type="checkbox" checked><span class="checkbox-card-title">Default OS Repository</span></div><div class="checkbox-card-packages">Base packages for selected OS</div></div>
-            <div class="checkbox-card" onclick="this.classList.toggle('checked');this.querySelector('input').checked=this.classList.contains('checked')"><div class="checkbox-card-header"><input type="checkbox"><span class="checkbox-card-title">Intel OpenVINO</span></div><div class="checkbox-card-packages">https://apt.repos.intel.com/openvino</div></div>
-            <div class="checkbox-card" onclick="this.classList.toggle('checked');this.querySelector('input').checked=this.classList.contains('checked')"><div class="checkbox-card-header"><input type="checkbox"><span class="checkbox-card-title">Docker CE</span></div><div class="checkbox-card-packages">https://download.docker.com/linux/ubuntu</div></div>
-            <div class="checkbox-card" onclick="this.classList.toggle('checked');this.querySelector('input').checked=this.classList.contains('checked')"><div class="checkbox-card-header"><input type="checkbox"><span class="checkbox-card-title">Intel Compute Runtime</span></div><div class="checkbox-card-packages">https://repositories.intel.com/gpu/ubuntu</div></div>
-            <div class="checkbox-card" onclick="this.classList.toggle('checked');this.querySelector('input').checked=this.classList.contains('checked')"><div class="checkbox-card-header"><input type="checkbox"><span class="checkbox-card-title">ROS 2 (Jazzy)</span></div><div class="checkbox-card-packages">https://packages.ros.org/ros2/ubuntu</div></div>
-            <div class="checkbox-card" onclick="this.classList.toggle('checked');this.querySelector('input').checked=this.classList.contains('checked')"><div class="checkbox-card-header"><input type="checkbox"><span class="checkbox-card-title">Intel ECI</span></div><div class="checkbox-card-packages">https://eci.intel.com/repos/noble</div></div>
+        <p class="step-desc">Search for a package, apply a use-case bundle, or browse repositories. Your selections collect on the right.</p>
+
+        <div class="packages-layout">
+          <div class="packages-main">
+            <div class="form-group">
+              <label class="form-label">Search Packages</label>
+              <div class="pkg-search-container">
+                <input class="pkg-search-input" id="pkg-search" placeholder="Start typing a package name..." oninput="onPackageSearch(this.value)" onfocus="onPackageSearch(this.value)" onblur="setTimeout(()=>closePkgDropdown(),200)">
+                <div class="pkg-search-dropdown" id="pkg-dropdown"></div>
+              </div>
+              <p class="form-hint">Search across all repositories. Results show package name and source repo.</p>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Use-Case Bundles</label>
+              <div class="bundle-grid">${renderBundles()}</div>
+              <p class="form-hint">Bundles are all-or-none: applying one adds every package it needs (across repositories) and enables their repos. Un-apply to remove exactly that set.</p>
+            </div>
+
+            <div class="form-group" style="margin-bottom:0;">
+              <label class="form-label">Browse Repositories</label>
+              <div class="pkg-browser">
+                <div class="repo-rail">${renderRepoRail()}</div>
+                <div class="repo-pane">${renderRepoPane()}</div>
+              </div>
+              <p class="form-hint">Enable a repository with its checkbox, then click it to browse. “Suggested packages only” is on by default — uncheck it to browse the repo's full catalog (loaded in pages).</p>
+            </div>
           </div>
-          <div style="margin-top:8px;">
-            <input class="form-input" placeholder="Add custom repo URL..." onkeydown="if(event.key==='Enter'){this.value=''; /* TODO: add to repo list */}">
-          </div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Search Packages</label>
-          <div class="pkg-search-container">
-            <input class="pkg-search-input" id="pkg-search" placeholder="Start typing a package name..." oninput="onPackageSearch(this.value)" onfocus="onPackageSearch(this.value)" onblur="setTimeout(()=>closePkgDropdown(),200)">
-            <div class="pkg-search-dropdown" id="pkg-dropdown"></div>
-          </div>
-          <p class="form-hint">Search across enabled repositories. Results show package name and source repo.</p>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Selected Packages (${t.packages.length})</label>
-          <div class="tags-input" id="adv-packages">
-            ${t.packages.map(p => `<span class="tag">${p}<span class="tag-remove" onclick="advRemovePackage('${p}')">x</span></span>`).join('')}
-            <input placeholder="Add package manually..." onkeydown="if(event.key==='Enter'){advAddPackage(this.value);this.value=''}">
-          </div>
-          <p class="form-hint">Packages from search are added here. You can also type a package name and press Enter.</p>
+
+          <div class="selected-col">${renderSelectedColumn()}</div>
         </div>`;
       break;
 
@@ -1036,10 +1220,17 @@ function renderAdvStepContent() {
             <tr><td style="padding:6px 0;font-weight:600;">OS</td><td>${t.target.os} (${t.target.dist}) / ${t.target.arch}</td></tr>
             <tr><td style="padding:6px 0;font-weight:600;">Image Type</td><td>${t.target.imageType.toUpperCase()}</td></tr>
             <tr><td style="padding:6px 0;font-weight:600;">Disk</td><td>${t.disk.size}, ${t.disk.partitionTableType.toUpperCase()}, ${t.disk.partitions.length} partitions</td></tr>
-            <tr><td style="padding:6px 0;font-weight:600;">Packages</td><td>${t.packages.length} packages</td></tr>
+            <tr><td style="padding:6px 0;font-weight:600;">Packages</td><td>${t.packages.length} packages${t.bundles.length ? ` (${t.bundles.length} bundle${t.bundles.length > 1 ? 's' : ''})` : ''}</td></tr>
           </table>
         </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <div class="yaml-preview" style="margin-top:0;">
+          <div class="yaml-preview-header">
+            <span style="font-size:14px;font-weight:600;">Generated YAML</span>
+            <button class="btn btn-sm" onclick="copyAdvYaml()">Copy</button>
+          </div>
+          <div class="yaml-content" id="yaml-output-adv"></div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px;">
           <button class="btn btn-primary" onclick="exportAdvYaml()">&#128190; Export YAML</button>
           <button class="btn btn-success" onclick="switchView('builds')">&#128296; Build Image</button>
         </div>`;
@@ -1068,6 +1259,292 @@ function advSelectDist(dist) {
   const osOpt = OS_OPTIONS.find(o => o.dists.includes(dist));
   if (osOpt) advState.template.target.os = osOpt.id;
   updateAdvancedYaml();
+}
+
+// Build the {repo, packages} groups by bucketing PACKAGE_DB on its `repo` field.
+// Any package whose repo isn't in REPO_DB falls into OTHER_REPO so the flat list
+// is always fully covered by the grouped view.
+function buildPackageGroups() {
+  const byId = {};
+  REPO_DB.forEach(r => { byId[r.id] = { repo: r, packages: [] }; });
+  const other = { repo: OTHER_REPO, packages: [] };
+  PACKAGE_DB.forEach(p => { (byId[p.repo] || other).packages.push(p); });
+  const groups = REPO_DB.map(r => byId[r.id]).filter(g => g.packages.length);
+  if (other.packages.length) groups.push(other);
+  return groups;
+}
+
+// ── Use-case bundles ──────────────────────────────────────────────
+// A bundle is "applied" when every package it lists is currently selected;
+// "partial" when some but not all are (e.g. the user removed one by hand).
+function bundleState(bundle) {
+  const sel = advState.template.packages;
+  const have = bundle.packages.filter(p => sel.includes(p)).length;
+  if (have === bundle.packages.length) return 'applied';
+  if (have > 0) return 'partial';
+  return 'none';
+}
+
+function renderBundles() {
+  return BUNDLE_DB.map(b => {
+    const st = bundleState(b);
+    const repos = [...new Set(b.packages.map(p => (PACKAGE_DB.find(x => x.name === p) || {}).repo).filter(Boolean))];
+    const repoNames = repos.map(id => (REPO_DB.find(r => r.id === id) || {}).name || id);
+    const mark = st === 'applied' ? '&#10003;' : (st === 'partial' ? '&#8226;' : '&#43;');
+    const meta = st === 'applied'
+      ? `${b.packages.length} packages added`
+      : st === 'partial'
+        ? `partially selected &middot; click to complete`
+        : `${b.packages.length} packages &middot; ${repoNames.length} repo${repoNames.length > 1 ? 's' : ''}`;
+    return `<div class="bundle-card ${st === 'applied' ? 'applied' : st === 'partial' ? 'partial' : ''}" onclick="toggleBundle('${b.id}')" title="${repoNames.join(', ')}">
+      <div class="bundle-card-top">
+        <span class="bundle-check">${mark}</span>
+        <span class="bundle-name">${b.icon} ${b.name}</span>
+      </div>
+      <div class="bundle-desc">${b.desc}</div>
+      <div class="bundle-meta">${meta}</div>
+    </div>`;
+  }).join('');
+}
+
+// Apply = add every package + enable their repos + record the bundle.
+// Un-apply (or complete a partial) toggles toward "fully applied":
+//  - not fully applied  → apply all
+//  - fully applied      → remove exactly this bundle's packages
+function toggleBundle(id) {
+  const t = advState.template;
+  const bundle = BUNDLE_DB.find(b => b.id === id);
+  if (!bundle) return;
+  if (bundleState(bundle) === 'applied') {
+    t.packages = t.packages.filter(p => !bundle.packages.includes(p));
+    t.bundles = t.bundles.filter(b => b !== id);
+  } else {
+    bundle.packages.forEach(name => {
+      if (!t.packages.includes(name)) t.packages.push(name);
+      const pkg = PACKAGE_DB.find(x => x.name === name);
+      if (pkg && !t.enabledRepos.includes(pkg.repo)) t.enabledRepos.push(pkg.repo);
+    });
+    if (!t.bundles.includes(id)) t.bundles.push(id);
+  }
+  renderAdvStepContent();
+}
+
+// ── Two-pane repository browser ────────────────────────────────────
+// Left rail: every repo with an enable checkbox + selected/total count.
+function renderRepoRail() {
+  const t = advState.template;
+  // A package's repo is looked up from PACKAGE_DB; synthetic full-catalog names
+  // (repoId-pkg-N) map back to their repo by prefix so counts stay accurate.
+  const repoOf = name => {
+    const p = PACKAGE_DB.find(x => x.name === name);
+    if (p) return p.repo;
+    const m = REPO_DB.find(r => name.startsWith(r.id + '-pkg-'));
+    return m ? m.id : null;
+  };
+  return buildPackageGroups().map(g => {
+    const { repo } = g;
+    const enabled = repo.base || t.enabledRepos.includes(repo.id);
+    const selected = t.packages.filter(n => repoOf(n) === repo.id).length;
+    const active = pkgGroupsUI.activeRepo === repo.id;
+    return `<div class="repo-rail-item ${active ? 'active' : ''}" onclick="setActiveRepo('${repo.id}')">
+      <input type="checkbox" ${enabled ? 'checked' : ''} ${repo.base ? 'disabled' : ''}
+        onclick="event.stopPropagation();toggleRepoEnabled('${repo.id}',this.checked)">
+      <span class="repo-rail-info">
+        <div class="repo-rail-name">${repo.name}</div>
+        <div class="repo-rail-count ${selected ? 'has-sel' : ''}">${selected} selected</div>
+      </span>
+    </div>`;
+  }).join('');
+}
+
+// Right pane: packages of the active repo. A "Suggested packages only" toggle
+// (checked by default) shows just the curated set; unchecking reveals the full
+// catalog, windowed with a "Show more" button so a 60k-package repo never
+// renders all at once.
+function renderRepoPane() {
+  const t = advState.template;
+  const repo = REPO_DB.find(r => r.id === pkgGroupsUI.activeRepo) || OTHER_REPO;
+  if (!repo) return `<div class="pane-empty">Select a repository on the left.</div>`;
+  const enabled = repo.base || t.enabledRepos.includes(repo.id);
+  const total = repo.total || PACKAGE_DB.filter(p => p.repo === repo.id).length;
+
+  const header = extra => `<div class="repo-pane-title">${repo.name}</div>
+    <div class="repo-pane-url">${repo.url}${repo.priority ? ` &middot; priority ${repo.priority}` : ''} &middot; ${total.toLocaleString()} packages</div>${extra || ''}`;
+
+  if (!enabled) {
+    return header() + `<div class="pane-empty">This repository is disabled.<br>Enable it with the checkbox on the left to pick from its ${total.toLocaleString()} packages.</div>`;
+  }
+
+  const row = p => {
+    const on = t.packages.includes(p.name);
+    return `<label class="pkg-row" onclick="event.stopPropagation()">
+      <input type="checkbox" ${on ? 'checked' : ''} onchange="togglePackage('${p.name}',this.checked)">
+      <span class="pkg-row-name">${p.name}</span>
+      <span class="pkg-row-desc">${p.desc}</span>
+    </label>`;
+  };
+
+  const suggestedOnly = pkgGroupsUI.suggestedOnly;
+  const q = (pkgGroupsUI.paneSearch || '').trim().toLowerCase();
+  const match = p => !q || p.name.toLowerCase().includes(q) || (p.desc || '').toLowerCase().includes(q);
+
+  // Source list: suggested set, or the full catalog when the toggle is off.
+  // Search always filters the source before windowing so matches deep in a
+  // 60k-package repo surface without paging to them manually.
+  const source = suggestedOnly ? PACKAGE_DB.filter(p => p.repo === repo.id) : allPackagesForRepo(repo.id);
+  const filtered = q ? source.filter(match) : source;
+
+  let listHtml = '';
+  if (!filtered.length) {
+    listHtml = q
+      ? `<div class="pane-empty">No packages match “${pkgGroupsUI.paneSearch}”.</div>`
+      : `<div class="pane-empty">No suggested packages for this repository.<br>Uncheck “Suggested packages only” to browse all ${total.toLocaleString()}.</div>`;
+  } else if (suggestedOnly) {
+    listHtml = filtered.map(row).join('');
+  } else {
+    // Full catalog: suggested first (starred), then the rest, windowed.
+    // Windowing applies to the filtered set so search results aren't truncated
+    // by an unrelated page boundary.
+    const shown = pkgGroupsUI.shownCount[repo.id] || PAGE_SIZE;
+    const window = filtered.slice(0, shown);
+    const sug = window.filter(p => p.curated);
+    const rest = window.filter(p => !p.curated);
+    if (sug.length) listHtml += `<div class="pkg-subhead"><span class="pkg-star">&#9733;</span> Suggested</div>${sug.map(row).join('')}`;
+    if (rest.length) listHtml += `<div class="pkg-subhead">${q ? 'Matches' : 'All packages'}</div>${rest.map(row).join('')}`;
+    if (shown < filtered.length) {
+      const next = Math.min(PAGE_SIZE, filtered.length - shown);
+      listHtml += `<div class="show-more">
+        <button class="btn btn-sm" onclick="showMorePackages('${repo.id}')">Show ${next} more</button>
+        <span class="count-note">${shown.toLocaleString()} of ${filtered.length.toLocaleString()}${q ? ' matches' : ''} shown</span>
+      </div>`;
+    }
+  }
+
+  const toolbar = `<div class="pane-toolbar">
+      <label class="suggested-toggle">
+        <input type="checkbox" ${suggestedOnly ? 'checked' : ''} onchange="toggleSuggestedOnly(this.checked)">
+        Suggested packages only
+      </label>
+      <button class="link-btn" onclick="toggleRepoAll('${repo.id}',true)">Select all suggested</button>
+    </div>`;
+
+  // Per-repo search sits directly below the toggle. onPaneSearch restores focus
+  // after the re-render (no autofocus — that would steal focus on every toggle).
+  const search = `<div class="pane-search">
+      <input id="pane-search-input" placeholder="Search ${repo.name}…" value="${pkgGroupsUI.paneSearch || ''}"
+        oninput="onPaneSearch(this.value)">
+      ${q ? `<button class="clear-search" onclick="onPaneSearch('')" title="Clear">&times;</button>` : ''}
+    </div>`;
+
+  return header() + toolbar + search + `<div class="pkg-list-scroll">${listHtml}</div>`;
+}
+
+function toggleSuggestedOnly(on) {
+  pkgGroupsUI.suggestedOnly = on;
+  renderAdvStepContent();
+}
+
+function showMorePackages(repoId) {
+  const cur = pkgGroupsUI.shownCount[repoId] || PAGE_SIZE;
+  pkgGroupsUI.shownCount[repoId] = cur + PAGE_SIZE;
+  renderAdvStepContent();
+}
+
+// Per-repo search. Resets the active repo's page window so results start from
+// the top, then re-renders and restores focus/caret to the search box (the full
+// step re-render would otherwise blur it on every keystroke).
+function onPaneSearch(value) {
+  pkgGroupsUI.paneSearch = value;
+  pkgGroupsUI.shownCount[pkgGroupsUI.activeRepo] = PAGE_SIZE;
+  renderAdvStepContent();
+  const input = document.getElementById('pane-search-input');
+  if (input) {
+    input.focus();
+    const end = input.value.length;
+    input.setSelectionRange(end, end);
+  }
+}
+
+// Right column: the final selected-package list, grouped by source repo, each
+// removable. This is the single source of truth for what goes into the image.
+function renderSelectedColumn() {
+  const t = advState.template;
+  const repoOf = name => {
+    const p = PACKAGE_DB.find(x => x.name === name);
+    if (p) return p.repo;
+    const m = REPO_DB.find(r => name.startsWith(r.id + '-pkg-'));
+    return m ? m.id : '__other';
+  };
+  const nameOf = id => (REPO_DB.find(r => r.id === id) || OTHER_REPO).name;
+
+  const header = `<div class="selected-col-header">
+      <span>Selected packages (${t.packages.length})</span>
+      ${t.packages.length ? `<button class="link-btn" onclick="clearAllPackages()">Clear</button>` : ''}
+    </div>`;
+
+  if (!t.packages.length) {
+    return header + `<div class="selected-col-body"><div class="selected-empty">Nothing selected yet.<br>Apply a bundle or pick packages from a repository.</div></div>`;
+  }
+
+  // Group selected packages by repo, preserving REPO_DB order.
+  const byRepo = {};
+  t.packages.forEach(n => { (byRepo[repoOf(n)] ||= []).push(n); });
+  const orderedIds = [...REPO_DB.map(r => r.id), '__other'].filter(id => byRepo[id]);
+
+  const body = orderedIds.map(id => `
+    <div class="selected-group-label">${nameOf(id)} (${byRepo[id].length})</div>
+    ${byRepo[id].map(n => `<div class="selected-item">
+      <span class="selected-item-name" title="${n}">${n}</span>
+      <span class="selected-item-x" onclick="advRemovePackage('${n}')" title="Remove">&times;</span>
+    </div>`).join('')}
+  `).join('');
+
+  return header + `<div class="selected-col-body">${body}</div>`;
+}
+
+function clearAllPackages() {
+  advState.template.packages = [];
+  advState.template.bundles = [];
+  renderAdvStepContent();
+}
+
+function setActiveRepo(id) {
+  if (id !== pkgGroupsUI.activeRepo) pkgGroupsUI.paneSearch = ''; // search is per-repo
+  pkgGroupsUI.activeRepo = id;
+  renderAdvStepContent();
+}
+
+// Enable/disable a repo. Disabling also drops that repo's selected packages so
+// the exported config never references a repo the user turned off.
+function toggleRepoEnabled(id, on) {
+  const t = advState.template;
+  const repo = REPO_DB.find(r => r.id === id);
+  if (repo && repo.base) return; // base repo is always on
+  if (on) {
+    if (!t.enabledRepos.includes(id)) t.enabledRepos.push(id);
+    pkgGroupsUI.activeRepo = id; // jump to it so packages are visible
+  } else {
+    t.enabledRepos = t.enabledRepos.filter(r => r !== id);
+    const names = PACKAGE_DB.filter(p => p.repo === id).map(p => p.name);
+    t.packages = t.packages.filter(p => !names.includes(p));
+  }
+  renderAdvStepContent();
+}
+
+function togglePackage(name, on) {
+  const t = advState.template;
+  if (on) { if (!t.packages.includes(name)) t.packages.push(name); }
+  else t.packages = t.packages.filter(p => p !== name);
+  renderAdvStepContent();
+}
+
+// Bulk select/clear every package in a repo.
+function toggleRepoAll(id, on) {
+  const t = advState.template;
+  const names = PACKAGE_DB.filter(p => p.repo === id).map(p => p.name);
+  if (on) names.forEach(n => { if (!t.packages.includes(n)) t.packages.push(n); });
+  else t.packages = t.packages.filter(p => !names.includes(p));
+  renderAdvStepContent();
 }
 
 function advAddPackage(name) {
@@ -1100,12 +1577,6 @@ function updateAdvancedYaml() {
   if (t.packages.length) { yaml += `  packages:\n`; t.packages.forEach(p => { yaml += `    - ${p}\n`; }); }
   const el = document.getElementById('yaml-output-adv');
   if (el) el.textContent = yaml;
-}
-
-function validateAdvanced() {
-  const el = document.getElementById('adv-validation-status');
-  el.className = 'validation-status valid';
-  el.innerHTML = '&#10003; Template is valid (all required fields present)';
 }
 
 
@@ -1143,8 +1614,12 @@ function highlightMatch(text, query) {
 }
 
 function addPackageFromSearch(name) {
-  if (!advState.template.packages.includes(name)) {
-    advState.template.packages.push(name);
+  const t = advState.template;
+  if (!t.packages.includes(name)) {
+    t.packages.push(name);
+    // Auto-enable the source repo so the pick is visible in its group.
+    const pkg = PACKAGE_DB.find(p => p.name === name);
+    if (pkg && !t.enabledRepos.includes(pkg.repo)) t.enabledRepos.push(pkg.repo);
     renderAdvStepContent();
   }
   document.getElementById('pkg-search').value = '';
