@@ -1501,7 +1501,7 @@ func TestRedactSensitiveDataFDEPassphrase(t *testing.T) {
 		},
 	}
 
-	redacted := redactSensitiveData(template)
+	redacted := RedactSensitiveData(template)
 	if redacted.SystemConfig.FDE.Passphrase != "[REDACTED]" {
 		t.Errorf("redacted FDE passphrase = %q, want [REDACTED]", redacted.SystemConfig.FDE.Passphrase)
 	}
@@ -1558,5 +1558,63 @@ func writeChainTemplate(t *testing.T, path, imageName, extends string, target Ta
 
 	if err := os.WriteFile(path, []byte(builder.String()), 0o644); err != nil {
 		t.Fatalf("failed to write template file %s: %v", path, err)
+	}
+}
+
+// TestRedactSensitiveData_NilInputReturnsNil verifies that RedactSensitiveData
+// does not panic when called with a nil template pointer — a caller that fed
+// it a Load* error path should get nil back and can produce a normal error
+// downstream instead of crashing on the deref.
+func TestRedactSensitiveData_NilInputReturnsNil(t *testing.T) {
+	if got := RedactSensitiveData(nil); got != nil {
+		t.Errorf("expected nil for nil input, got %+v", got)
+	}
+}
+
+// TestRedactSensitiveData_RedactsUserAndSecureBootFields verifies the happy
+// path: user passwords and hash algorithms are redacted, secure-boot key/cert
+// paths are redacted, and non-sensitive fields survive unchanged.
+func TestRedactSensitiveData_RedactsUserAndSecureBootFields(t *testing.T) {
+	tmpl := &ImageTemplate{
+		Image: ImageInfo{Name: "img", Version: "1.0.0"},
+		SystemConfig: SystemConfig{
+			Name: "sys",
+			Users: []UserConfig{
+				{Name: "alice", Password: "hunter2", HashAlgo: "sha512"},
+				{Name: "bob"}, // no password → no redaction of empty field
+			},
+			Immutability: ImmutabilityConfig{
+				Enabled:         true,
+				SecureBootDBKey: "/keys/db.key",
+				SecureBootDBCrt: "/keys/db.crt",
+				SecureBootDBCer: "/keys/db.cer",
+			},
+		},
+	}
+
+	redacted := RedactSensitiveData(tmpl)
+	if redacted == nil {
+		t.Fatal("expected non-nil redacted template, got nil")
+	}
+	if redacted.SystemConfig.Users[0].Password != "[REDACTED]" {
+		t.Errorf("expected user password redacted, got %q", redacted.SystemConfig.Users[0].Password)
+	}
+	if redacted.SystemConfig.Users[0].HashAlgo != "[REDACTED]" {
+		t.Errorf("expected hash_algo redacted, got %q", redacted.SystemConfig.Users[0].HashAlgo)
+	}
+	if redacted.SystemConfig.Users[1].Password != "" {
+		t.Errorf("expected empty password to remain empty, got %q", redacted.SystemConfig.Users[1].Password)
+	}
+	if redacted.SystemConfig.Immutability.SecureBootDBKey != "[REDACTED]" {
+		t.Errorf("expected secureBootDBKey redacted, got %q", redacted.SystemConfig.Immutability.SecureBootDBKey)
+	}
+	// Non-sensitive fields must round-trip untouched.
+	if redacted.Image.Name != "img" {
+		t.Errorf("expected image name preserved, got %q", redacted.Image.Name)
+	}
+	// The original template's SystemConfig must not be mutated — the redactor
+	// deep-copies SystemConfig before rewriting sensitive fields.
+	if tmpl.SystemConfig.Users[0].Password != "hunter2" {
+		t.Errorf("original password mutated: %q", tmpl.SystemConfig.Users[0].Password)
 	}
 }

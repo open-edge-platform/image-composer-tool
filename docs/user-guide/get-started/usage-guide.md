@@ -41,6 +41,7 @@ Substitute the path that matches your setup.
 ```bash
 image-composer-tool build         # Build an image from a template
 image-composer-tool validate      # Validate a template without building
+image-composer-tool resolve       # Print the merged template YAML for debugging
 image-composer-tool inspect       # Inspect a raw image's structure
 image-composer-tool compare       # Compare two images
 image-composer-tool ai            # AI-powered template generation (RAG)
@@ -114,6 +115,23 @@ Check a template for errors before starting a build:
 
 ```bash
 ./image-composer-tool validate image-templates/azl3-x86_64-edge-raw.yml
+```
+
+## Resolving a Template
+
+Print the merged template YAML to stdout — useful for debugging templates that
+use `extends:` or for previewing exactly what the tool will build. Sensitive
+fields (user passwords, `systemConfig.users[*].hash_algo`, and the secure boot
+signing paths `systemConfig.immutability.secureBootDBKey`,
+`systemConfig.immutability.secureBootDBCrt`, and
+`systemConfig.immutability.secureBootDBCer`) are always redacted in the output:
+
+```bash
+# Chain-merge only, without OS defaults
+./image-composer-tool resolve image-templates/ubuntu24-x86_64-extends-example-raw.yml
+
+# Full build-time view: extends chain + OS defaults
+./image-composer-tool resolve image-templates/azl3-x86_64-edge-raw.yml --full
 ```
 
 ## Configuration
