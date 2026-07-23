@@ -54,6 +54,72 @@ func setupConfigDir(t *testing.T) string {
 	return configDir
 }
 
+func TestEnsureDepmodForBootKernels_SkipsWhenModulesDepExists(t *testing.T) {
+	tmpDir := t.TempDir()
+	kernelVersion := "6.12.96+deb13-amd64"
+	if err := os.MkdirAll(filepath.Join(tmpDir, "boot"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "boot", "vmlinuz-"+kernelVersion), []byte("k"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	seedKernelModulesDep(t, tmpDir, kernelVersion)
+
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+	shell.Default = shell.NewMockExecutor(nil)
+
+	if err := EnsureDepmodForBootKernels(tmpDir); err != nil {
+		t.Fatalf("EnsureDepmodForBootKernels() err = %v", err)
+	}
+}
+
+func TestEnsureDepmodForBootKernels_RunsDepmod(t *testing.T) {
+	tmpDir := t.TempDir()
+	kernelVersion := "6.12.96+deb13-amd64"
+	if err := os.MkdirAll(filepath.Join(tmpDir, "boot"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "boot", "vmlinuz-"+kernelVersion), []byte("k"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	modulesDir := filepath.Join(tmpDir, "lib", "modules", kernelVersion)
+	if err := os.MkdirAll(filepath.Join(modulesDir, "kernel"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(modulesDir, "kernel", "dummy.ko"), []byte("ko"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	depmodBin := filepath.Join(tmpDir, "usr", "sbin", "depmod")
+	if err := os.MkdirAll(filepath.Dir(depmodBin), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(depmodBin, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: `depmod -a .*6\.12\.96\+deb13-amd64`, Output: "", Error: nil},
+	})
+
+	if err := EnsureDepmodForBootKernels(tmpDir); err != nil {
+		t.Fatalf("EnsureDepmodForBootKernels() err = %v", err)
+	}
+}
+
+func seedKernelModulesDep(t *testing.T, installRoot, kernelVersion string) {
+	t.Helper()
+	depPath := filepath.Join(installRoot, "lib", "modules", kernelVersion, "modules.dep")
+	if err := os.MkdirAll(filepath.Dir(depPath), 0755); err != nil {
+		t.Fatalf("seed modules.dep dir: %v", err)
+	}
+	if err := os.WriteFile(depPath, []byte("# mock\n"), 0644); err != nil {
+		t.Fatalf("seed modules.dep: %v", err)
+	}
+}
+
 func TestInstallImageBoot_MissingRootPartition(t *testing.T) {
 	diskPathIdMap := map[string]string{
 		"boot": "/dev/sda1",
@@ -1283,6 +1349,7 @@ func TestUpdateInitramfsForGrub_NoExtraModules(t *testing.T) {
 	}
 	shell.Default = shell.NewMockExecutor(mockExpectedOutput)
 
+	seedKernelModulesDep(t, tmpDir, kernelVersion)
 	err := updateInitramfsForGrub(tmpDir, kernelVersion, template)
 	if err != nil {
 		t.Errorf("Expected no error, got: %v", err)
@@ -1310,6 +1377,7 @@ func TestUpdateInitramfsForGrub_WithSingleExtraModule(t *testing.T) {
 	}
 	shell.Default = shell.NewMockExecutor(mockExpectedOutput)
 
+	seedKernelModulesDep(t, tmpDir, kernelVersion)
 	err := updateInitramfsForGrub(tmpDir, kernelVersion, template)
 	if err != nil {
 		t.Errorf("Expected no error, got: %v", err)
@@ -1339,6 +1407,7 @@ func TestUpdateInitramfsForGrub_WithMultipleExtraModules(t *testing.T) {
 	}
 	shell.Default = shell.NewMockExecutor(mockExpectedOutput)
 
+	seedKernelModulesDep(t, tmpDir, kernelVersion)
 	err := updateInitramfsForGrub(tmpDir, kernelVersion, template)
 	if err != nil {
 		t.Errorf("Expected no error, got: %v", err)
@@ -1367,6 +1436,7 @@ func TestUpdateInitramfsForGrub_WithWhitespaceInModules(t *testing.T) {
 	}
 	shell.Default = shell.NewMockExecutor(mockExpectedOutput)
 
+	seedKernelModulesDep(t, tmpDir, kernelVersion)
 	err := updateInitramfsForGrub(tmpDir, kernelVersion, template)
 	if err != nil {
 		t.Errorf("Expected no error, got: %v", err)
@@ -1394,6 +1464,7 @@ func TestUpdateInitramfsForGrub_UpdateInitramfsFails(t *testing.T) {
 	}
 	shell.Default = shell.NewMockExecutor(mockExpectedOutput)
 
+	seedKernelModulesDep(t, tmpDir, kernelVersion)
 	err := updateInitramfsForGrub(tmpDir, kernelVersion, template)
 	if err == nil {
 		t.Error("Expected error when update-initramfs fails")
@@ -1426,6 +1497,7 @@ func TestUpdateInitramfsForGrub_FallbackToDracut(t *testing.T) {
 	}
 	shell.Default = shell.NewMockExecutor(mockExpectedOutput)
 
+	seedKernelModulesDep(t, tmpDir, kernelVersion)
 	err := updateInitramfsForGrub(tmpDir, kernelVersion, template)
 	if err != nil {
 		t.Errorf("Expected no error when falling back to dracut, got: %v", err)
@@ -1455,6 +1527,7 @@ func TestUpdateInitramfsForGrub_ModuleAddFailsContinues(t *testing.T) {
 	shell.Default = shell.NewMockExecutor(mockExpectedOutput)
 
 	// Should continue even if one module fails
+	seedKernelModulesDep(t, tmpDir, kernelVersion)
 	err := updateInitramfsForGrub(tmpDir, kernelVersion, template)
 	if err != nil {
 		t.Errorf("Expected no error (should continue after module add failure), got: %v", err)
