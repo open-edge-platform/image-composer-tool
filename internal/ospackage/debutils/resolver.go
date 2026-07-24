@@ -17,6 +17,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/pkgfetcher"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/runctx"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
 
@@ -232,7 +233,7 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 				}
 			}
 		}
-		err := pkgfetcher.FetchPackages(metaURLList, pkgMetaDir, 1)
+		err := pkgfetcher.FetchPackages(runctx.Context(), metaURLList, pkgMetaDir, 1)
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch critical repo config packages: %w", err)
 		}
@@ -286,7 +287,7 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 				return nil, fmt.Errorf("failed to remove stale Packages.gz: %w", remErr)
 			}
 		}
-		if fetchErr := pkgfetcher.FetchPackages([]string{pkggz}, pkgMetaDir, 1); fetchErr != nil {
+		if fetchErr := pkgfetcher.FetchPackages(runctx.Context(), []string{pkggz}, pkgMetaDir, 1); fetchErr != nil {
 			return nil, fmt.Errorf("failed to fetch Packages.gz: %w", fetchErr)
 		}
 	}

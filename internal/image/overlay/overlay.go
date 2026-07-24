@@ -12,24 +12,74 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/imageconvert"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/imagedisc"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/network"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
 
 var log = logger.Logger()
 
+// Baseline-format normalization seams. They wrap the impure format detection,
+// conversion, and tool-availability probes so unit tests can exercise acquire()'s
+// normalization logic without qemu-img or real disk images (mirroring resize.go's
+// resizeExec seam). Production uses the real implementations.
+var (
+	detectBaselineFormatFn = imageconvert.DetectImageFormat
+	convertBaselineToRawFn = convertBaselineToRaw
+	qemuImgAvailableFn     = func() bool {
+		// IsCommandExist returns (false, nil) when the command is genuinely
+		// absent; a non-nil error signals an unexpected probe failure. Surface
+		// that at debug level instead of discarding it, then treat qemu-img as
+		// unavailable so non-RAW baselines fail with a clear "unsupported" path.
+		ok, err := shell.IsCommandExist("qemu-img", shell.HostPath)
+		if err != nil {
+			log.Debugf("qemu-img availability probe failed: %v", err)
+			return false
+		}
+		return ok
+	}
+)
+
+// convertBaselineToRaw converts src (a non-RAW image in a qemu-img supported
+// format) into dst as a RAW whole-disk image using qemu-img. srcFormat is the
+// qemu-img-native format string (e.g. "qcow2", "vpc") already detected and
+// verified by normalizeBaseline; it is passed via -f so qemu-img uses that
+// verified format instead of re-probing the source independently, closing a
+// format-confusion window where the re-probe could disagree with our detection.
+// All arguments are shell-quoted: they are workspace-internal and their composing
+// segments are already validated, but the overlay convention is to always quote
+// values interpolated into a command executed via bash -c. (imageconvert.ConvertImageToRaw
+// is intentionally not reused because it does not quote its convert paths.)
+func convertBaselineToRaw(src, dst, srcFormat string) error {
+	cmd := fmt.Sprintf("qemu-img convert -f %s -O raw %s %s",
+		shell.QuoteArg(srcFormat), shell.QuoteArg(src), shell.QuoteArg(dst))
+	if _, err := shell.ExecCmd(cmd, false, shell.HostPath, nil); err != nil {
+		return fmt.Errorf("failed to convert baseline to raw: %w", err)
+	}
+	return nil
+}
+
 // baselineCopyName is the fixed filename of the workspace copy of the baseline
 // image. A fixed name keeps the layout predictable regardless of the source
 // path or URL filename.
 const baselineCopyName = "baseline.raw"
+
+// baselineStageName is the fixed filename of the workspace staging copy used when
+// the source baseline is not RAW. The source is copied/downloaded here first, its
+// actual format is verified, then it is converted into baselineCopyName
+// ("baseline.raw") and this staging file is removed. A fixed name keeps the layout
+// predictable regardless of the source path or URL filename.
+const baselineStageName = "baseline.src"
 
 // maxBaselineBytes bounds the size of a downloaded baseline image so a
 // misconfigured or malicious URL cannot exhaust workspace disk. Sized generously
@@ -94,8 +144,15 @@ func overlaySysConfigName(template *config.ImageTemplate) (string, error) {
 
 // LoopDevManager is the subset of imagedisc.LoopDevInterface needed to attach
 // and detach a baseline image. It is declared here so tests can inject a fake.
+// The unregister closure returned by AttachImageToLoopDev removes the auto-
+// registered cleanup-coordinator entry for this loop device. Callers invoke
+// it AFTER a successful LoopSetupDelete, not before — see
+// imagedisc.loopSetupCreate's docstring for the ordering contract (a failed
+// detach must leave the coord entry registered so the build.go cancel
+// backstop can retry). Tests that don't wire the coordinator can return a
+// no-op func.
 type LoopDevManager interface {
-	AttachImageToLoopDev(imagePath string) (string, []string, error)
+	AttachImageToLoopDev(imagePath string) (string, []string, func(), error)
 	LoopSetupDelete(loopDevPath string) error
 }
 
@@ -108,6 +165,11 @@ type Context struct {
 	LoopDevPath string
 	// Partitions are the enumerated partition nodes, e.g. ["/dev/loop0p1"].
 	Partitions []string
+	// loopUnregister removes the coordinator-registered detach for LoopDevPath.
+	// detach() invokes it right before running the explicit LoopSetupDelete on
+	// the happy path so the coordinator doesn't later try to redetach a device
+	// we already released. Non-nil once acquire() attaches the loop; nil-safe.
+	loopUnregister func()
 }
 
 // Ingestor copies a baseline image into the workspace and attaches it to a loop
@@ -282,22 +344,26 @@ func (ing *Ingestor) acquire() (*Context, error) {
 
 	copyPath := filepath.Join(ing.workDir, baselineCopyName)
 	ctx := &Context{BaselineCopyPath: copyPath}
-	if err := ing.copyBaseline(copyPath); err != nil {
-		// copyBaseline may have created or partially written the destination
-		// before failing (a URL download truncates the output file before
-		// io.Copy completes). Force-remove it so no corrupt partial baseline
-		// is left behind, matching this function's no-leak contract.
+	if err := ing.normalizeBaseline(ctx); err != nil {
+		// normalizeBaseline may have created or partially written the destination
+		// before failing (a URL download truncates the output file before io.Copy
+		// completes; a conversion may leave a partial baseline.raw). It already
+		// removes any non-raw staging file it created, but the canonical
+		// baseline.raw is force-removed here so no corrupt partial baseline is left
+		// behind, matching this function's no-leak contract.
 		ing.removeCopy(ctx, true)
 		return nil, err
 	}
 
-	loopDevPath, partitions, err := ing.loopDev.AttachImageToLoopDev(copyPath)
+	loopDevPath, partitions, loopUnregister, err := ing.loopDev.AttachImageToLoopDev(copyPath)
 	if err != nil {
 		if loopDevPath != "" {
 			// A loop device was created but could not be detached, so it still
 			// references this backing file. Removing the file now would unlink a
 			// file the leaked device points at, making recovery/debugging harder.
 			// Retain the copy and surface the (already path-annotated) error.
+			// The coordinator entry (if any) remains registered so the leaked
+			// device is best-effort reaped on cancel.
 			log.Errorf("Retaining workspace baseline copy %s: loop device %s may still be attached after attach failure", copyPath, loopDevPath)
 			return nil, fmt.Errorf("failed to attach baseline copy to loop device: %w", err)
 		}
@@ -309,6 +375,7 @@ func (ing *Ingestor) acquire() (*Context, error) {
 	}
 	ctx.LoopDevPath = loopDevPath
 	ctx.Partitions = partitions
+	ctx.loopUnregister = loopUnregister
 
 	log.Infof("Attached baseline copy %s to loop device %s (%d partitions)",
 		copyPath, loopDevPath, len(partitions))
@@ -351,6 +418,57 @@ func prepareDestination(dst string) error {
 	return nil
 }
 
+// redactURL returns a URL safe to log: a non-empty query string is replaced with a
+// single "[REDACTED]" marker, the fragment is dropped, and any userinfo password is
+// masked (via url.URL.Redacted). Presigned download URLs (e.g. S3/Azure SAS) carry
+// credentials in the query parameters, so logging the raw URL at info level would
+// leak them; the marker keeps the log readable while withholding the secret tail.
+// On a parse failure the redaction is done textually (see redactURLTextual) so a
+// malformed URL can never fall through to logging a raw secret.
+func redactURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return redactURLTextual(raw)
+	}
+	if u.RawQuery != "" {
+		u.RawQuery = "[REDACTED]"
+	}
+	u.Fragment = ""
+	return u.Redacted()
+}
+
+// redactURLTextual is the best-effort fallback for a URL that url.Parse rejects. It
+// strips the query/fragment tail — preserving the original delimiter ('?' or '#') as
+// a redaction marker — and masks any userinfo password ("//user:password@" becomes
+// "//user:xxxxx@", matching url.URL.Redacted), so neither a secret query tail nor an
+// embedded credential leaks when the structured redaction path is unavailable.
+func redactURLTextual(raw string) string {
+	if i := strings.IndexAny(raw, "?#"); i >= 0 {
+		raw = raw[:i] + string(raw[i]) + "[REDACTED]"
+	}
+	// Userinfo sits between "//" and the "@" that precedes the host, before the path.
+	slashes := strings.Index(raw, "//")
+	if slashes < 0 {
+		return raw
+	}
+	authStart := slashes + 2
+	rest := raw[authStart:]
+	at := strings.Index(rest, "@")
+	if at < 0 {
+		return raw
+	}
+	// Only userinfo if the "@" comes before the path — a later "@" belongs to the path.
+	if slash := strings.Index(rest, "/"); slash >= 0 && slash < at {
+		return raw
+	}
+	userinfo := rest[:at]
+	colon := strings.Index(userinfo, ":")
+	if colon < 0 {
+		return raw
+	}
+	return raw[:authStart] + userinfo[:colon] + ":xxxxx" + rest[at:]
+}
+
 // copyBaseline copies the source baseline into dst. A local path is copied (never
 // symlinked or moved); an https URL is downloaded over TLS (BaselineSource.Validate
 // permits only https for remote sources). The user-provided source is never modified.
@@ -363,11 +481,11 @@ func (ing *Ingestor) copyBaseline(dst string) error {
 
 	switch {
 	case src.URL != "":
-		log.Debugf("Downloading baseline image from %s to %s", src.URL, dst)
+		log.Infof("Downloading baseline image from %s", redactURL(src.URL))
 		if err := downloadBaseline(src.URL, dst); err != nil {
-			return fmt.Errorf("failed to download baseline image from %s to %s: %w", src.URL, dst, err)
+			return fmt.Errorf("failed to download baseline image from %s to %s: %w", redactURL(src.URL), dst, err)
 		}
-		log.Debugf("Finished downloading baseline image to %s", dst)
+		log.Infof("Finished downloading baseline image to %s", dst)
 	default:
 		log.Debugf("Copying baseline image from %s to %s", src.Path, dst)
 		if err := copyLocalFile(src.Path, dst); err != nil {
@@ -376,6 +494,133 @@ func (ing *Ingestor) copyBaseline(dst string) error {
 		log.Debugf("Finished copying baseline image to %s", dst)
 	}
 	return nil
+}
+
+// normalizeBaseline gets a RAW whole-disk image into ctx.BaselineCopyPath
+// (workDir/baseline.raw), ready for loop-attach, from a source baseline that may be
+// RAW, QCOW2, VHD, or VHDX.
+//
+// The declared format (baseline.source.format, defaulting to raw) governs the flow:
+//
+//   - Non-RAW requires qemu-img: if it is missing, this fails fast before copying
+//     any bytes.
+//   - RAW with qemu-img absent preserves the legacy behavior exactly — the source is
+//     copied verbatim to baseline.raw with no format detection, so a raw-only host
+//     that never had qemu-img keeps working.
+//   - With qemu-img present, the actual format is detected and verified against the
+//     declared format. For a declared-RAW source this is advisory (a detection error
+//     is logged and ignored; only a positive mismatch to a known non-RAW format is
+//     fatal) so a legitimate raw image is never newly rejected. For a declared
+//     non-RAW source a detection error or mismatch is fatal, and the verified source
+//     is converted from a staging file into baseline.raw.
+//
+// On any failure the staging file (if created) is removed here; the caller
+// (acquire) force-removes baseline.raw. The user-provided source is never modified.
+func (ing *Ingestor) normalizeBaseline(ctx *Context) error {
+	declared := ing.template.Baseline.Source.Format
+	if declared == "" {
+		declared = config.BaselineFormatRaw
+	}
+	// config validation constrains baseline.source.format for YAML-loaded
+	// templates, but a programmatically-built template bypasses that path. Re-check
+	// the declared format against the supported set here so an unsupported value
+	// (e.g. "vmdk") fails with a clear error instead of being handed to qemu-img,
+	// keeping in-memory and YAML templates consistent.
+	switch declared {
+	case config.BaselineFormatRaw, config.BaselineFormatQcow2, config.BaselineFormatVHD, config.BaselineFormatVHDX:
+		// supported
+	default:
+		return fmt.Errorf("baseline.source.format %q is not supported (must be one of %q, %q, %q, %q)",
+			declared, config.BaselineFormatRaw, config.BaselineFormatQcow2, config.BaselineFormatVHD, config.BaselineFormatVHDX)
+	}
+	copyPath := ctx.BaselineCopyPath
+	qemuAvailable := qemuImgAvailableFn()
+
+	// Non-RAW baselines can only be handled by converting via qemu-img. Fail fast
+	// (before copying gigabytes) when the tooling is absent.
+	if declared != config.BaselineFormatRaw && !qemuAvailable {
+		return fmt.Errorf("baseline.source.format %q requires qemu-img, which was not found on the host", declared)
+	}
+
+	// RAW source, no qemu-img: legacy path. Copy bytes verbatim, no detection.
+	if declared == config.BaselineFormatRaw && !qemuAvailable {
+		log.Warnf("qemu-img not found; skipping baseline format verification for declared raw source")
+		return ing.copyBaseline(copyPath)
+	}
+
+	// qemu-img is available from here.
+	if declared == config.BaselineFormatRaw {
+		// Copy directly to baseline.raw, then verify the copied bytes really are RAW.
+		if err := ing.copyBaseline(copyPath); err != nil {
+			return err
+		}
+		actual, derr := detectBaselineFormatFn(copyPath)
+		if derr != nil {
+			// Advisory only: a detection failure must not newly reject a raw image
+			// that worked before. Warn and proceed with the copied bytes.
+			log.Warnf("skipping baseline format verification (detection failed): %v", derr)
+			return nil
+		}
+		if canon := canonicalBaselineFormat(actual); canon != config.BaselineFormatRaw && canon != "" {
+			return fmt.Errorf("baseline actual format %q does not match declared baseline.source.format %q", actual, declared)
+		}
+		return nil
+	}
+
+	// Declared non-RAW: stage the source, verify its format, then convert to RAW.
+	stagePath := filepath.Join(ing.workDir, baselineStageName)
+	// The staging file lives entirely within acquire()'s lifetime; remove it on
+	// every exit path (success or failure) so it never leaks. baseline.raw is the
+	// canonical artifact and is handled by acquire()/removeCopy.
+	defer func() {
+		if err := os.Remove(stagePath); err != nil && !os.IsNotExist(err) {
+			log.Warnf("Failed to remove baseline staging file %s: %v", stagePath, err)
+		}
+	}()
+
+	if err := ing.copyBaseline(stagePath); err != nil {
+		return err
+	}
+
+	actual, derr := detectBaselineFormatFn(stagePath)
+	if derr != nil {
+		return fmt.Errorf("failed to detect baseline format: %w", derr)
+	}
+	if canonicalBaselineFormat(actual) != declared {
+		return fmt.Errorf("baseline actual format %q does not match declared baseline.source.format %q", actual, declared)
+	}
+
+	// Clear any pre-existing entry at the canonical baseline.raw before qemu-img
+	// writes it. qemu-img opens the output itself (we cannot pass O_EXCL as
+	// copyLocalFile/writeBoundedBody do), so without this a symlink or hardlink
+	// planted at baseline.raw in an attacker-writable workspace would be followed
+	// and clobbered — the same escalation prepareDestination guards against on the
+	// raw copy/download paths. Unlinking first drops that node so the convert writes
+	// a fresh file we own.
+	if err := prepareDestination(copyPath); err != nil {
+		return err
+	}
+	log.Infof("Converting %s baseline to raw for overlay", declared)
+	// Pass the qemu-img-detected format (actual) rather than the declared one:
+	// it is what qemu-img itself reported and verified above, and it is already
+	// in qemu-img's native vocabulary (e.g. "vpc" for VHD), so -f needs no
+	// translation from the baseline.source.format spelling.
+	if err := convertBaselineToRawFn(stagePath, copyPath, actual); err != nil {
+		return err
+	}
+	return nil
+}
+
+// canonicalBaselineFormat maps a qemu-img detected format string to the format
+// vocabulary used by baseline.source.format. qemu-img reports a VHD image as "vpc"
+// (its internal name for the format), so it is folded to "vhd"; all other values
+// are returned lower-cased as-is.
+func canonicalBaselineFormat(detected string) string {
+	f := strings.ToLower(strings.TrimSpace(detected))
+	if f == "vpc" {
+		return config.BaselineFormatVHD
+	}
+	return f
 }
 
 // downloadBaseline fetches the baseline image from url over TLS and writes it to
@@ -553,7 +798,12 @@ func isAllZero(b []byte) bool {
 // detach detaches the loop device if one is attached. It returns the detach
 // error (also logged) so callers on the success path can surface a failed
 // cleanup instead of silently leaking the loop device. A no-op (nothing
-// attached) returns nil.
+// attached) returns nil. Detach first; unregister the coordinator entry only
+// on success. If detach fails (e.g. because the ambient shell ctx is still
+// the cancelled parent when this runs pre-PostProcess, or because a
+// partition is busy), leaving the coord entry registered lets build.go's
+// deferred cancel backstop retry the detach under its own fresh per-entry
+// ctx.
 func (ing *Ingestor) detach(ctx *Context) error {
 	if ctx == nil || ctx.LoopDevPath == "" {
 		return nil
@@ -561,6 +811,9 @@ func (ing *Ingestor) detach(ctx *Context) error {
 	if err := ing.loopDev.LoopSetupDelete(ctx.LoopDevPath); err != nil {
 		log.Errorf("Failed to detach loop device %s: %v", ctx.LoopDevPath, err)
 		return fmt.Errorf("failed to detach loop device %s: %w", ctx.LoopDevPath, err)
+	}
+	if ctx.loopUnregister != nil {
+		ctx.loopUnregister()
 	}
 	log.Infof("Detached loop device %s", ctx.LoopDevPath)
 	return nil

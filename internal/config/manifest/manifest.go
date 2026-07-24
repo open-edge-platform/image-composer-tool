@@ -31,6 +31,15 @@ const (
 
 var DefaultSPDXFile = "spdx_manifest.json"
 
+// validSPDXAlgos is the set of checksum algorithms the SPDX spec permits. It is
+// package-scoped so it is initialized once rather than reallocated on every
+// buildSPDXPackage call (which runs once per package in an SBOM).
+var validSPDXAlgos = map[string]bool{
+	"SHA1":   true,
+	"SHA256": true,
+	"MD5":    true,
+}
+
 // SoftwarePackageManifest represents the structure of the manifest file.
 type SoftwarePackageManifest struct {
 	SchemaVersion     string `json:"schema_version"`
@@ -124,13 +133,6 @@ func WriteSPDXToFile(pkgs []ospackage.PackageInfo, outFile string) error {
 
 	log.Infof("Generating SPDX manifest for %d packages", len(pkgs))
 
-	// SPDX allows only specific checksum algorithms: SHA1, SHA256, MD5
-	validSPDXAlgos := map[string]bool{
-		"SHA1":   true,
-		"SHA256": true,
-		"MD5":    true,
-	}
-
 	spdx := SPDXDocument{
 		SPDXVersion:       SPDXVersion,
 		DataLicense:       SPDXDataLicense,
@@ -148,43 +150,108 @@ func WriteSPDXToFile(pkgs []ospackage.PackageInfo, outFile string) error {
 	}
 
 	for _, pkg := range pkgs {
-		spdxPkg := SPDXPackage{
-			SPDXID:           fmt.Sprintf("SPDXRef-Package-%s", pkg.Name),
-			Name:             pkg.Name,
-			Type:             pkg.Type,
-			VersionInfo:      pkg.Version,
-			DownloadLocation: pkg.URL,
-			FilesAnalyzed:    false,
-			LicenseDeclared:  fallbackToDefault(pkg.License, "NOASSERTION"),
-			LicenseConcluded: "NOASSERTION",
-			Description:      pkg.Description,
-		}
-
-		// If the supplier is not specified, use a default value, for
-		// anything that appears as an email, use the Person form otherwise
-		// use the Organization form
-		spdxPkg.Supplier = spdxSupplier(pkg.Origin)
-
-		// If the checksum is not specified or missing, leave field out
-		// Valid values according to SPDX spec: SHA1, SHA256, MD5
-		var spdxChecksums []SPDXChecksum
-		for _, c := range pkg.Checksums {
-			algo := strings.ToUpper(c.Algorithm)
-			if validSPDXAlgos[algo] {
-				spdxChecksums = append(spdxChecksums, SPDXChecksum{
-					Algorithm:     algo,
-					ChecksumValue: c.Value,
-				})
-			}
-		}
-
-		if len(spdxChecksums) > 0 {
-			spdxPkg.Checksum = spdxChecksums
-		}
-
-		spdx.Packages = append(spdx.Packages, spdxPkg)
+		spdx.Packages = append(spdx.Packages, buildSPDXPackage(pkg))
 	}
 
+	return writeSPDXDocument(spdx, outFile)
+}
+
+// WriteMergedSPDXToFile writes an SPDX manifest that is the UNION of an existing
+// baseline SBOM document and a set of overlay-contributed packages. It is used by
+// overlay mode: the overlay image inherits the baseline's full SBOM, and this
+// merges the added/upgraded packages into it so the embedded manifest reflects the
+// complete inventory (baseline + overlay), not just the overlay delta.
+//
+// Packages are matched by name: an overlay package whose name maps to exactly one
+// baseline entry REPLACES that entry in place (an upgrade), and a name absent from
+// the baseline is appended (an addition). The baseline document's header (creation
+// info, namespace) is preserved so the image's SBOM lineage is unchanged; only the
+// package set grows.
+//
+// A baseline name may legitimately carry MORE than one entry (e.g. multiarch
+// installs like libc6:amd64 + libc6:i386, or several download locations for one
+// name). In that ambiguous N>1 case there is no unique baseline entry to upgrade,
+// so the overlay package is appended as a new entry rather than arbitrarily
+// replacing one of them (which would silently drop a baseline entry and produce a
+// misleading inventory).
+func WriteMergedSPDXToFile(baselineSPDX []byte, overlayPkgs []ospackage.PackageInfo, outFile string) error {
+	var doc SPDXDocument
+	if err := json.Unmarshal(baselineSPDX, &doc); err != nil {
+		return fmt.Errorf("failed to parse baseline SBOM for merge: %w", err)
+	}
+
+	// Group baseline entries by name (as slices) so a name with multiple entries
+	// is detected instead of the last one silently overwriting the earlier ones.
+	indexesByName := make(map[string][]int, len(doc.Packages))
+	for i, pkg := range doc.Packages {
+		indexesByName[pkg.Name] = append(indexesByName[pkg.Name], i)
+	}
+
+	added, upgraded := 0, 0
+	for _, pkg := range overlayPkgs {
+		merged := buildSPDXPackage(pkg)
+		// Only a single unambiguous baseline entry for this name is upgraded in
+		// place; a missing name or an ambiguous multi-entry name is appended.
+		if idxs := indexesByName[pkg.Name]; len(idxs) == 1 {
+			doc.Packages[idxs[0]] = merged // upgrade in place
+			upgraded++
+			continue
+		}
+		indexesByName[pkg.Name] = append(indexesByName[pkg.Name], len(doc.Packages))
+		doc.Packages = append(doc.Packages, merged)
+		added++
+	}
+
+	log.Infof("Merged overlay SBOM into baseline: %d added, %d upgraded, %d total packages",
+		added, upgraded, len(doc.Packages))
+
+	return writeSPDXDocument(doc, outFile)
+}
+
+// buildSPDXPackage converts a PackageInfo into its SPDX package record, applying
+// the supplier/checksum/license normalization the SPDX schema requires. It is the
+// shared per-package conversion used by both a from-scratch write and a merge.
+func buildSPDXPackage(pkg ospackage.PackageInfo) SPDXPackage {
+	spdxPkg := SPDXPackage{
+		SPDXID:           fmt.Sprintf("SPDXRef-Package-%s", pkg.Name),
+		Name:             pkg.Name,
+		Type:             pkg.Type,
+		VersionInfo:      pkg.Version,
+		DownloadLocation: pkg.URL,
+		FilesAnalyzed:    false,
+		LicenseDeclared:  fallbackToDefault(pkg.License, "NOASSERTION"),
+		LicenseConcluded: "NOASSERTION",
+		Description:      pkg.Description,
+	}
+
+	// If the supplier is not specified, use a default value, for
+	// anything that appears as an email, use the Person form otherwise
+	// use the Organization form
+	spdxPkg.Supplier = spdxSupplier(pkg.Origin)
+
+	// If the checksum is not specified or missing, leave field out
+	// Valid values according to SPDX spec: SHA1, SHA256, MD5
+	var spdxChecksums []SPDXChecksum
+	for _, c := range pkg.Checksums {
+		algo := strings.ToUpper(c.Algorithm)
+		if validSPDXAlgos[algo] {
+			spdxChecksums = append(spdxChecksums, SPDXChecksum{
+				Algorithm:     algo,
+				ChecksumValue: c.Value,
+			})
+		}
+	}
+
+	if len(spdxChecksums) > 0 {
+		spdxPkg.Checksum = spdxChecksums
+	}
+
+	return spdxPkg
+}
+
+// writeSPDXDocument marshals an SPDX document and writes it with symlink
+// protection, creating the parent directory as needed.
+func writeSPDXDocument(spdx SPDXDocument, outFile string) error {
 	if err := os.MkdirAll(filepath.Dir(outFile), 0700); err != nil {
 		log.Errorf("Failed to create SPDX output directory: %v", err)
 		return fmt.Errorf("failed to create output directory: %w", err)

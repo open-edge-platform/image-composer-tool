@@ -141,6 +141,21 @@ func MergeConfigurations(userTemplate, defaultTemplate *ImageTemplate) (*ImageTe
 		mergedTemplate.SystemConfig = defaultTemplate.SystemConfig
 	}
 
+	// Overlay mode layers packages onto an already-complete baseline image, so it
+	// must NOT inherit the create-mode default OS package set. Those defaults
+	// (ubuntu-minimal, systemd-boot, dracut-core, cryptsetup-bin, the kernel, …)
+	// describe how to build an image from scratch; the baseline already provides
+	// them. Unioning them into the overlay's additive package list re-seeds the
+	// whole base toolchain — dragging in bootloader packages whose strict version
+	// pins the frozen baseline cannot satisfy — when the user asked only to add a
+	// package or two. Restrict the overlay package set to exactly what the user
+	// declared. (The overlay seed reads only SystemConfig.Packages; kernel/bootloader
+	// package lists are already excluded from resolution downstream.)
+	if userTemplate.IsOverlayMode() {
+		mergedTemplate.SystemConfig.Packages = append([]string(nil), userTemplate.SystemConfig.Packages...)
+		log.Debugf("Overlay mode: restricted additive package set to %d user-declared package(s)", len(mergedTemplate.SystemConfig.Packages))
+	}
+
 	// Package repositories - merge intelligently
 	mergedTemplate.PackageRepositories = mergePackageRepositories(
 		defaultTemplate.PackageRepositories,
@@ -157,7 +172,7 @@ func MergeConfigurations(userTemplate, defaultTemplate *ImageTemplate) (*ImageTe
 
 	// Debug mode: Pretty print the merged template with sensitive data redacted
 	if IsDebugMode() {
-		redactedTemplate := redactSensitiveData(&mergedTemplate)
+		redactedTemplate := RedactSensitiveData(&mergedTemplate)
 		pretty, err := json.MarshalIndent(redactedTemplate, "", "  ")
 		if err != nil {
 			log.Warnf("Failed to pretty print merged template: %v", err)
@@ -172,10 +187,20 @@ func MergeConfigurations(userTemplate, defaultTemplate *ImageTemplate) (*ImageTe
 	return &mergedTemplate, nil
 }
 
-// redactSensitiveData creates a copy of the template with sensitive data redacted for safe logging.
-// This prevents passwords, keys, and other sensitive information from appearing in logs.
-func redactSensitiveData(template *ImageTemplate) *ImageTemplate {
-	// Create a deep copy
+// RedactSensitiveData returns a copy of the template with sensitive data redacted for
+// safe display or logging. The top-level ImageTemplate is shallow-copied and only
+// SystemConfig is deep-copied — via redactSensitiveSystemConfig, which replaces
+// user passwords, hash algorithms, and secure-boot key/cert/cer paths with
+// "[REDACTED]". Every other field on the returned template (Baseline, Disk,
+// PackageRepositories, per-source package slices, and any other slices, maps, or
+// pointer targets) still aliases the input, so callers must NOT mutate those on
+// the returned value. Returns nil when template is nil so callers get a
+// well-defined empty value instead of a panic on the deref.
+func RedactSensitiveData(template *ImageTemplate) *ImageTemplate {
+	if template == nil {
+		return nil
+	}
+	// Shallow-copy the top-level struct; only SystemConfig gets deep-copied below.
 	redacted := *template
 	redacted.SystemConfig = redactSensitiveSystemConfig(template.SystemConfig)
 	return &redacted
@@ -213,6 +238,14 @@ func redactSensitiveSystemConfig(config SystemConfig) SystemConfig {
 		redacted.Immutability.SecureBootDBCer = "[REDACTED]"
 	}
 
+	// Redact the resolved FDE passphrase and source path so they never appear in logs.
+	if config.FDE.Passphrase != "" {
+		redacted.FDE.Passphrase = "[REDACTED]"
+	}
+	if config.FDE.PassphraseFile != "" {
+		redacted.FDE.PassphraseFile = "[REDACTED]"
+	}
+
 	return redacted
 }
 
@@ -243,6 +276,12 @@ func mergeSystemConfig(defaultConfig, userConfig SystemConfig) SystemConfig {
 	} else {
 		// User provided some immutability config, merge it
 		merged.Immutability = mergeImmutabilityConfig(defaultConfig.Immutability, userConfig.Immutability)
+	}
+
+	// Merge FDE config - defaults do not define FDE, so take the user's config
+	// whenever any FDE field was provided.
+	if userConfig.FDE.Enabled || userConfig.FDE.PassphraseFile != "" || len(userConfig.FDE.Partitions) > 0 || userConfig.FDE.Unlock != "" {
+		merged.FDE = userConfig.FDE
 	}
 
 	// Merge users config
@@ -890,7 +929,8 @@ func LoadAndMergeTemplate(templatePath string) (*ImageTemplate, error) {
 	defaultTemplate, err := loader.LoadDefaultConfig(leafTemplate.Target.ImageType)
 	if err != nil {
 		log.Debugf("Default template: %+v", defaultTemplate)
-		log.Warnf("Could not load default configuration: %v", err)
+		log.Warnf("Could not load default configuration for %s/%s/%s (%s); proceeding without defaults",
+			leafTemplate.Target.OS, leafTemplate.Target.Dist, leafTemplate.Target.Arch, leafTemplate.Target.ImageType)
 		log.Info("Proceeding without default configuration")
 		return foldChain(chain[0], chain[1:])
 	}

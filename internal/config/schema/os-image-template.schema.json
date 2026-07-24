@@ -219,6 +219,52 @@
         }
       ]
     },
+    "FDE": {
+      "type": "object",
+      "description": "Full-disk-encryption (LUKS) configuration",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether full-disk encryption is enabled",
+          "default": false
+        },
+        "passphraseFile": {
+          "type": "string",
+          "description": "Absolute or template-relative local file path containing the passphrase"
+        },
+        "partitions": {
+          "type": "array",
+          "description": "Disk partition IDs to encrypt (e.g., \"rootfs\", \"userdata\")",
+          "items": { "type": "string" }
+        },
+        "unlock": {
+          "type": "string",
+          "description": "Boot unlock mode: \"auto\" (keyfile embedded in initramfs, no prompt; default) or \"manual\" (interactive passphrase)",
+          "enum": ["auto", "manual"]
+        }
+      },
+      "required": ["enabled"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "enabled": { "const": true }
+            },
+            "required": ["enabled"]
+          },
+          "then": {
+            "required": ["passphraseFile"],
+            "properties": {
+              "passphraseFile": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      ]
+    },
     "Users": {
       "type": "array",
       "description": "User configurations",
@@ -400,6 +446,7 @@
           "type": "string",
           "description": "Hostname of the system"},
         "immutability": { "$ref": "#/$defs/Immutability" },
+        "fde": { "$ref": "#/$defs/FDE" },
         "users": { "$ref": "#/$defs/Users" },
         "bootloader": { "$ref": "#/$defs/Bootloader" },
         "network": { "$ref": "#/$defs/NetworkConfig" },
@@ -475,7 +522,7 @@
     },
     "BaselineSource": {
       "type": "object",
-      "description": "Baseline source. v1 supports a local RAW disk image, referenced by a local path or an https URL. Exactly one of 'path' or 'url' must be set.",
+      "description": "Baseline source, referenced by a local path or an https URL. Exactly one of 'path' or 'url' must be set. Supported formats are raw (default), qcow2, vhd, and vhdx; non-raw baselines are converted to RAW (via qemu-img) before mounting.",
       "properties": {
         "path": {
           "type": "string",
@@ -491,8 +538,8 @@
         },
         "format": {
           "type": "string",
-          "description": "Baseline image format",
-          "enum": ["raw"],
+          "description": "Baseline image format. Non-raw formats are converted to RAW (via qemu-img) before the baseline is mounted.",
+          "enum": ["raw", "qcow2", "vhd", "vhdx"],
           "default": "raw"
         }
       },
@@ -508,8 +555,8 @@
       "properties": {
         "packageOperation": {
           "type": "string",
-          "description": "Permitted package operation set",
-          "enum": ["additive-only"],
+          "description": "Permitted package operation set. 'additive-only' only adds new packages; 'additive-and-upgrade' also permits upgrading a package already installed in the baseline to a newer version (downgrades and removals remain blocked).",
+          "enum": ["additive-only", "additive-and-upgrade"],
           "default": "additive-only"
         },
         "conflictPolicy": {
@@ -520,7 +567,16 @@
         },
         "kernelCmdline": {
           "type": "string",
-          "description": "Optional kernel command-line override applied to the overlaid image"
+          "description": "Optional kernel command-line override applied to the overlaid image (full-line replacement of GRUB_CMDLINE_LINUX on a GRUB2 baseline). The value is written into a shell-sourced /etc/default/grub assignment, so it must not contain a double quote, dollar sign, backtick, backslash, or newline."
+        },
+        "grubDefault": {
+          "type": "string",
+          "description": "Optional GRUB_DEFAULT override applied to the overlaid image (pins the default boot menu entry, e.g. an Ubuntu submenu path). Only applied on a GRUB2 baseline. The value is written into a shell-sourced /etc/default/grub assignment, so it must not contain a double quote, dollar sign, backtick, backslash, or newline."
+        },
+        "allowDiskResize": {
+          "type": "boolean",
+          "description": "Permit growing the baseline image to satisfy a larger disk.size. Overlay mode preserves the baseline disk layout by default; when false (the default) a disk.size larger than the baseline is rejected. Resize is always grow-only and never shrinks the image.",
+          "default": false
         }
       },
       "additionalProperties": false

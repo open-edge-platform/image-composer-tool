@@ -1334,3 +1334,59 @@ func TestValidateUserTemplateJSON_AutoExpand(t *testing.T) {
 		})
 	}
 }
+
+func TestFDEEnabledRequiresPassphraseFile(t *testing.T) {
+	base := `image:
+  name: fde-test
+  version: "1.0.0"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+systemConfig:
+  name: test
+  fde:
+    enabled: true
+`
+
+	validYAML := base + `    passphraseFile: "/tmp/fde-passphrase.txt"
+`
+	var raw interface{}
+	if err := yaml.Unmarshal([]byte(validYAML), &raw); err != nil {
+		t.Fatalf("yaml parse: %v", err)
+	}
+	validJSON, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("json marshal: %v", err)
+	}
+	if err := ValidateImageTemplateJSON(validJSON); err != nil {
+		t.Fatalf("expected valid FDE template to pass, got: %v", err)
+	}
+
+	invalidInlineYAML := base + `    passphrase: "secret"
+`
+	var rawInline interface{}
+	if err := yaml.Unmarshal([]byte(invalidInlineYAML), &rawInline); err != nil {
+		t.Fatalf("yaml parse inline passphrase: %v", err)
+	}
+	invalidInlineJSON, err := json.Marshal(rawInline)
+	if err != nil {
+		t.Fatalf("json marshal inline passphrase: %v", err)
+	}
+	if err := ValidateImageTemplateJSON(invalidInlineJSON); err == nil {
+		t.Fatal("expected validation to fail when fde.passphrase is used")
+	}
+
+	var rawInvalid interface{}
+	if err := yaml.Unmarshal([]byte(base), &rawInvalid); err != nil {
+		t.Fatalf("yaml parse: %v", err)
+	}
+	invalidJSON, err := json.Marshal(rawInvalid)
+	if err != nil {
+		t.Fatalf("json marshal: %v", err)
+	}
+	if err := ValidateImageTemplateJSON(invalidJSON); err == nil {
+		t.Fatal("expected validation to fail when fde.enabled is true without passphraseFile")
+	}
+}

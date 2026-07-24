@@ -309,8 +309,9 @@ func TestCompareCommand_SPDXMode(t *testing.T) {
 		if got.Equal {
 			t.Fatalf("expected SPDX compare to be different")
 		}
-		if len(got.AddedPackages) == 0 || len(got.RemovedPackages) == 0 {
-			t.Fatalf("expected added/removed package entries, got %+v", got)
+		// A same-name version bump is classified as one upgrade, not add + remove.
+		if len(got.UpgradedPackages) == 0 {
+			t.Fatalf("expected an upgraded package entry, got %+v", got)
 		}
 	})
 
@@ -327,6 +328,129 @@ func TestCompareCommand_SPDXMode(t *testing.T) {
 			t.Fatalf("expected SPDX text header, got:\n%s", s)
 		}
 	})
+}
+
+func TestCompareCommand_SPDXMode_ExtractsFromImages(t *testing.T) {
+	origResolver := spdxInputResolver
+	origOutFormat, origOutMode, origPretty := outFormat, outMode, prettyDiffJSON
+	t.Cleanup(func() {
+		spdxInputResolver = origResolver
+		outFormat, outMode, prettyDiffJSON = origOutFormat, origOutMode, origPretty
+	})
+
+	// Two RAW images (binary, leading NUL from the partition table): the resolver
+	// must NOT parse them directly but extract each image's embedded SBOM instead.
+	tmpDir := t.TempDir()
+	fromImg := filepath.Join(tmpDir, "from.raw")
+	toImg := filepath.Join(tmpDir, "to.raw")
+	rawBytes := []byte{0x00, 0x01, 0x02, 0x03}
+	if err := os.WriteFile(fromImg, rawBytes, 0644); err != nil {
+		t.Fatalf("write from image: %v", err)
+	}
+	if err := os.WriteFile(toImg, rawBytes, 0644); err != nil {
+		t.Fatalf("write to image: %v", err)
+	}
+
+	sbomByImage := map[string][]byte{
+		fromImg: []byte(`{"packages":[{"name":"curl","versionInfo":"8.5.0","downloadLocation":"https://x/curl.deb"}]}`),
+		toImg:   []byte(`{"packages":[{"name":"curl","versionInfo":"8.6.0","downloadLocation":"https://x/curl.deb"}]}`),
+	}
+	spdxInputResolver = func(path string) ([]byte, error) {
+		data, ok := sbomByImage[path]
+		if !ok {
+			return nil, errors.New("unexpected image path: " + path)
+		}
+		return data, nil
+	}
+
+	cmd := &cobra.Command{}
+	outFormat = "json"
+	outMode = "spdx"
+	prettyDiffJSON = false
+
+	s, err := runCompareExecute(t, cmd, []string{fromImg, toImg})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var got imageinspect.SPDXCompareResult
+	decodeJSON(t, s, &got)
+	if got.Equal {
+		t.Fatalf("expected the two images' SBOMs to differ, got equal")
+	}
+	// curl 8.5.0 -> 8.6.0 is the same package name with a differing version, so it
+	// is reported as a single upgrade rather than an unrelated add + remove.
+	if len(got.UpgradedPackages) != 1 {
+		t.Fatalf("expected one upgraded package from the version bump, got %+v", got)
+	}
+	if want := "curl: 8.5.0 -> 8.6.0"; got.UpgradedPackages[0] != want {
+		t.Errorf("upgrade line = %q, want %q", got.UpgradedPackages[0], want)
+	}
+	if len(got.AddedPackages) != 0 || len(got.RemovedPackages) != 0 {
+		t.Errorf("expected no add/remove entries, got added=%v removed=%v", got.AddedPackages, got.RemovedPackages)
+	}
+}
+
+func TestCompareCommand_SPDXMode_ImageWithoutSBOM(t *testing.T) {
+	origResolver := spdxInputResolver
+	origOutFormat, origOutMode := outFormat, outMode
+	t.Cleanup(func() {
+		spdxInputResolver = origResolver
+		outFormat, outMode = origOutFormat, origOutMode
+	})
+
+	tmpDir := t.TempDir()
+	img := filepath.Join(tmpDir, "nosbom.raw")
+	if err := os.WriteFile(img, []byte{0x00, 0x11, 0x22}, 0644); err != nil {
+		t.Fatalf("write image: %v", err)
+	}
+	spdxInputResolver = func(string) ([]byte, error) {
+		return nil, errors.New("no embedded SBOM found in image")
+	}
+
+	cmd := &cobra.Command{}
+	outFormat = "json"
+	outMode = "spdx"
+
+	_, err := runCompareExecute(t, cmd, []string{img, img})
+	if err == nil {
+		t.Fatal("expected an error when the image has no embedded SBOM")
+	}
+	if !strings.Contains(err.Error(), "no embedded SBOM") {
+		t.Fatalf("expected a missing-SBOM error, got: %v", err)
+	}
+}
+
+func TestLooksLikeJSONDocument(t *testing.T) {
+	tmpDir := t.TempDir()
+	cases := []struct {
+		name    string
+		content []byte
+		want    bool
+	}{
+		{"plain json object", []byte(`{"packages":[]}`), true},
+		{"json with leading whitespace", []byte("  \n\t{\"a\":1}"), true},
+		{"json with utf-8 bom", append([]byte{0xEF, 0xBB, 0xBF}, []byte(`{"a":1}`)...), true},
+		{"json with bom and whitespace", append([]byte{0xEF, 0xBB, 0xBF}, []byte("  \n{\"a\":1}")...), true},
+		{"raw image with leading NUL", []byte{0x00, 0x01, 0x02}, false},
+		{"json array is not an object", []byte(`[1,2,3]`), false},
+		{"empty file", []byte{}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := filepath.Join(tmpDir, tc.name)
+			if err := os.WriteFile(p, tc.content, 0644); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			got, err := looksLikeJSONDocument(p)
+			if err != nil {
+				t.Fatalf("looksLikeJSONDocument: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("looksLikeJSONDocument(%q) = %v, want %v", tc.content, got, tc.want)
+			}
+		})
+	}
 }
 
 func TestCompareCommand_InvalidFormatErrors(t *testing.T) {

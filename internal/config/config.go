@@ -100,9 +100,19 @@ const (
 	BaselineModeCreate  = "create"
 	BaselineModeOverlay = "overlay"
 
-	BaselineFormatRaw = "raw"
+	// Baseline image formats accepted for overlay mode. Non-RAW formats are
+	// converted to RAW (via qemu-img) before the baseline is loop-attached.
+	BaselineFormatRaw   = "raw"
+	BaselineFormatQcow2 = "qcow2"
+	BaselineFormatVHD   = "vhd"
+	BaselineFormatVHDX  = "vhdx"
 
 	OverlayPackageOpAdditiveOnly = "additive-only"
+	// OverlayPackageOpAdditiveAndUpgrade permits, in addition to adding new
+	// packages, upgrading a package already installed in the baseline to a newer
+	// version. Downgrades and removals remain blocked. Opting in flips the
+	// internal OverlayPolicy.AllowUpgrade gate (see OverlayPolicy.validate).
+	OverlayPackageOpAdditiveAndUpgrade = "additive-and-upgrade"
 
 	OverlayConflictPolicyFail          = "fail"
 	OverlayConflictPolicyAllowExplicit = "allow-explicit"
@@ -132,6 +142,20 @@ type OverlayPolicy struct {
 	ConflictPolicy   string `yaml:"conflictPolicy,omitempty"`
 	KernelCmdline    string `yaml:"kernelCmdline,omitempty"`
 
+	// GrubDefault, when set, is written verbatim to GRUB_DEFAULT in
+	// /etc/default/grub before the GRUB config is regenerated, pinning the boot
+	// menu entry that becomes the default (e.g. an Ubuntu submenu path such as
+	// "Advanced options for Ubuntu>Ubuntu, with Linux 6.8.0-40-generic"). It is
+	// only applied on a GRUB2 baseline. Used to make an overlay-added kernel the
+	// default boot target when it is not the entry GRUB would auto-select.
+	GrubDefault string `yaml:"grubDefault,omitempty"`
+
+	// AllowDiskResize gates whether an overlay build may grow the baseline image
+	// to satisfy a larger disk.size. Overlay mode preserves the baseline layout by
+	// default, so a disk.size larger than the baseline is rejected unless the user
+	// opts in here. It never permits shrinking; resize stays grow-only.
+	AllowDiskResize bool `yaml:"allowDiskResize,omitempty"`
+
 	// AllowRemoval gates whether preflight permits removing a baseline package.
 	// It is intentionally NOT a YAML field, and the schema rejects it via
 	// additionalProperties:false, so it always carries its zero value (false):
@@ -145,6 +169,16 @@ type OverlayPolicy struct {
 	// always carries its zero value (false): overlay mode is additive-only in
 	// v1, so downgrades are blocked by default. A future release can surface it.
 	AllowDowngrade bool `yaml:"-"`
+
+	// AllowUpgrade gates whether preflight permits upgrading a baseline package
+	// to a newer version. Like AllowRemoval/AllowDowngrade it is intentionally
+	// NOT a YAML field (the schema rejects it via additionalProperties:false);
+	// it is instead derived from PackageOperation by validate(), which sets it
+	// true when packageOperation is "additive-and-upgrade" and leaves it false
+	// (the default) for "additive-only". Enabling it lets the deb backend replace
+	// an installed package in place (dpkg -i upgrades), and switches the rpm
+	// backend to `rpm -U`; downgrades and removals stay blocked regardless.
+	AllowUpgrade bool `yaml:"-"`
 }
 
 // ImageTemplate represents the YAML image template structure
@@ -159,15 +193,20 @@ type ImageTemplate struct {
 	PackageRepositories []PackageRepository `yaml:"packageRepositories,omitempty"`
 
 	// Explicitly excluded from YAML serialization/deserialization
-	PathList             []string                `yaml:"-"`
-	BootloaderPkgList    []string                `yaml:"-"`
-	EssentialPkgList     []string                `yaml:"-"`
-	KernelPkgList        []string                `yaml:"-"`
-	FullPkgList          []string                `yaml:"-"`
-	FullPkgListBom       []ospackage.PackageInfo `yaml:"-"`
-	SBOMPackageMetadata  []ospackage.PackageInfo `yaml:"sbomPackageMetadata,omitempty"`
-	DotFilePath          string                  `yaml:"-"`
-	DotSystemOnly        bool                    `yaml:"-"`
+	PathList            []string                `yaml:"-"`
+	BootloaderPkgList   []string                `yaml:"-"`
+	EssentialPkgList    []string                `yaml:"-"`
+	KernelPkgList       []string                `yaml:"-"`
+	FullPkgList         []string                `yaml:"-"`
+	FullPkgListBom      []ospackage.PackageInfo `yaml:"-"`
+	SBOMPackageMetadata []ospackage.PackageInfo `yaml:"sbomPackageMetadata,omitempty"`
+	DotFilePath         string                  `yaml:"-"`
+	DotSystemOnly       bool                    `yaml:"-"`
+	// InspectEnabled toggles post-build image inspection for overlay builds. It is
+	// driven by the CLI --inspect/--no-inspect flags (default on) rather than YAML,
+	// so it is excluded from serialization. Consumed by the overlay postprocess
+	// inspection stage.
+	InspectEnabled       bool `yaml:"-"`
 	pureBuildStart       time.Time
 	pureBuildDuration    time.Duration
 	downloadPkgsStart    time.Time
@@ -244,6 +283,18 @@ type NetworkConfig struct {
 	Interfaces []NetworkInterface `yaml:"interfaces,omitempty"` // Interfaces: list of interfaces to configure
 }
 
+// FDEConfig holds the full-disk-encryption configuration
+type FDEConfig struct {
+	Enabled        bool     `yaml:"enabled"`                  // Enabled: whether full-disk encryption is enabled (default: false)
+	PassphraseFile string   `yaml:"passphraseFile,omitempty"` // PassphraseFile: local file containing the passphrase
+	Partitions     []string `yaml:"partitions,omitempty"`     // Partitions: disk partition IDs to encrypt (e.g., "rootfs", "userdata")
+	Unlock         string   `yaml:"unlock,omitempty"`         // Unlock: boot unlock mode, "auto" (keyfile, no prompt; default) or "manual" (interactive passphrase)
+
+	// Passphrase is resolved from PassphraseFile at load time and is intentionally
+	// never read from YAML to avoid plaintext secrets in templates.
+	Passphrase string `yaml:"-"`
+}
+
 // SystemConfig represents a system configuration within the template
 type SystemConfig struct {
 	Name            string               `yaml:"name"`
@@ -251,6 +302,7 @@ type SystemConfig struct {
 	Initramfs       Initramfs            `yaml:"initramfs,omitempty"`
 	HostName        string               `yaml:"hostname,omitempty"`
 	Immutability    ImmutabilityConfig   `yaml:"immutability,omitempty"`
+	FDE             FDEConfig            `yaml:"fde,omitempty"`
 	Users           []UserConfig         `yaml:"users,omitempty"`
 	Bootloader      Bootloader           `yaml:"bootloader"`
 	Network         NetworkConfig        `yaml:"network,omitempty"`
@@ -320,6 +372,10 @@ func LoadTemplate(path string, validateFull bool) (*ImageTemplate, error) {
 	template, err := parseYAMLTemplate(data, validateFull)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load template: %w", err)
+	}
+
+	if err := resolveFDEPassphrase(template, path); err != nil {
+		return nil, err
 	}
 
 	// Store the template path info
@@ -760,22 +816,11 @@ func (t *ImageTemplate) SaveUpdatedConfigFile(path string) error {
 		return fmt.Errorf("failed to create directory for config file: %w", err)
 	}
 
-	// Marshal the template to YAML
-	data, err := yaml.Marshal(t)
+	// Marshal to YAML (includes the block-scalar-header repair).
+	data, err := MarshalTemplateYAML(t)
 	if err != nil {
-		log.Errorf("Error marshaling image template to YAML: %v", err)
-		return fmt.Errorf("error marshaling template to YAML: %w", err)
-	}
-
-	if err := validateYAMLBytes(data); err != nil {
-		log.Warnf("Generated YAML is not parseable, applying block scalar header fix: %v", err)
-
-		data = fixInvalidBlockScalarHeader(data)
-
-		if validateErr := validateYAMLBytes(data); validateErr != nil {
-			log.Errorf("Generated YAML remains invalid after block scalar header fix: %v", validateErr)
-			return fmt.Errorf("generated YAML is invalid after block scalar header fix: %w", validateErr)
-		}
+		log.Errorf("Failed to marshal image template: %v", err)
+		return err
 	}
 
 	// Write file safely with symlink protection
@@ -786,6 +831,29 @@ func (t *ImageTemplate) SaveUpdatedConfigFile(path string) error {
 
 	log.Infof("Saved image template to %s", path)
 	return nil
+}
+
+// MarshalTemplateYAML marshals an ImageTemplate to YAML bytes, applying the same
+// block-scalar-header repair used by SaveUpdatedConfigFile so callers can safely
+// emit the result to stdout or another sink.
+func MarshalTemplateYAML(t *ImageTemplate) ([]byte, error) {
+	if t == nil {
+		return nil, fmt.Errorf("template is nil")
+	}
+
+	data, err := yaml.Marshal(t)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling template to YAML: %w", err)
+	}
+
+	if err := validateYAMLBytes(data); err != nil {
+		data = fixInvalidBlockScalarHeader(data)
+		if verr := validateYAMLBytes(data); verr != nil {
+			return nil, fmt.Errorf("generated YAML is invalid after block scalar header fix: %w", verr)
+		}
+	}
+
+	return data, nil
 }
 
 func validateYAMLBytes(data []byte) error {
@@ -808,6 +876,87 @@ func (t *ImageTemplate) GetImmutability() ImmutabilityConfig {
 // IsImmutabilityEnabled returns whether immutability is enabled
 func (t *ImageTemplate) IsImmutabilityEnabled() bool {
 	return t.SystemConfig.Immutability.Enabled
+}
+
+// IsFDEEnabled returns whether full-disk encryption is enabled
+func (t *ImageTemplate) IsFDEEnabled() bool {
+	return t.SystemConfig.FDE.Enabled
+}
+
+// GetFDEPassphrase returns the full-disk-encryption passphrase resolved in
+// memory from systemConfig.fde.passphraseFile.
+func (t *ImageTemplate) GetFDEPassphrase() string {
+	return t.SystemConfig.FDE.Passphrase
+}
+
+// GetFDEPassphraseFile returns the local file path used to source the
+// full-disk-encryption passphrase, when configured.
+func (t *ImageTemplate) GetFDEPassphraseFile() string {
+	return t.SystemConfig.FDE.PassphraseFile
+}
+
+func resolveFDEPassphrase(template *ImageTemplate, templatePath string) error {
+	if !template.IsFDEEnabled() {
+		return nil
+	}
+
+	passphraseFile := strings.TrimSpace(template.SystemConfig.FDE.PassphraseFile)
+	if passphraseFile == "" {
+		return nil
+	}
+
+	if !filepath.IsAbs(passphraseFile) {
+		passphraseFile = filepath.Join(filepath.Dir(templatePath), passphraseFile)
+	}
+
+	passphraseData, err := security.SafeReadFile(passphraseFile, security.RejectSymlinks)
+	if err != nil {
+		return fmt.Errorf("failed to read systemConfig.fde.passphraseFile %q: %w", passphraseFile, err)
+	}
+
+	passphrase := strings.TrimSpace(string(passphraseData))
+	if passphrase == "" {
+		return fmt.Errorf("systemConfig.fde.passphraseFile %q is empty", passphraseFile)
+	}
+
+	template.SystemConfig.FDE.PassphraseFile = passphraseFile
+	template.SystemConfig.FDE.Passphrase = passphrase
+
+	return nil
+}
+
+// GetFDEPartitions returns the list of partition IDs to encrypt.
+func (t *ImageTemplate) GetFDEPartitions() []string {
+	return t.SystemConfig.FDE.Partitions
+}
+
+// GetFDEUnlockMode returns the boot unlock mode for full-disk encryption. It
+// defaults to "auto" (keyfile-based, no prompt); only an explicit "manual"
+// selects interactive passphrase unlock.
+func (t *ImageTemplate) GetFDEUnlockMode() string {
+	if t.SystemConfig.FDE.Unlock == "manual" {
+		return "manual"
+	}
+	return "auto"
+}
+
+// IsFDEAutoUnlock reports whether FDE is enabled and set to automatic
+// (keyfile-based) unlock at boot.
+func (t *ImageTemplate) IsFDEAutoUnlock() bool {
+	return t.IsFDEEnabled() && t.GetFDEUnlockMode() == "auto"
+}
+
+// IsFDEPartition reports whether the given partition ID is marked for encryption.
+func (t *ImageTemplate) IsFDEPartition(id string) bool {
+	if !t.IsFDEEnabled() {
+		return false
+	}
+	for _, p := range t.SystemConfig.FDE.Partitions {
+		if p == id {
+			return true
+		}
+	}
+	return false
 }
 
 // GetSecureBootDBKeyPath returns the secure boot DB key path from the immutability config
@@ -1156,8 +1305,12 @@ func (t *ImageTemplate) validateBaseline() error {
 		if format == "" {
 			format = BaselineFormatRaw
 		}
-		if format != BaselineFormatRaw {
-			return fmt.Errorf("baseline.source.format must be %q (got %q)", BaselineFormatRaw, format)
+		switch format {
+		case BaselineFormatRaw, BaselineFormatQcow2, BaselineFormatVHD, BaselineFormatVHDX:
+			// supported; non-raw formats are converted to RAW before loop-attach.
+		default:
+			return fmt.Errorf("baseline.source.format must be one of %q, %q, %q, %q (got %q)",
+				BaselineFormatRaw, BaselineFormatQcow2, BaselineFormatVHD, BaselineFormatVHDX, format)
 		}
 		if t.OverlayPolicy != nil {
 			if err := t.OverlayPolicy.validate(); err != nil {
@@ -1186,6 +1339,13 @@ func (s *BaselineSource) Validate() error {
 	rawURL := strings.TrimSpace(s.URL)
 	s.Path = path
 	s.URL = rawURL
+	// Normalize the format to lower-case so downstream overlay ingestion compares
+	// the declared format against qemu-img's (lower-cased) detected format on equal
+	// footing. YAML-loaded templates are already constrained to the lower-case
+	// schema enum (raw/qcow2/vhd/vhdx) before this runs, so this primarily
+	// normalizes programmatically-built templates, which reach ingestion via
+	// Validate() without passing through schema validation.
+	s.Format = strings.ToLower(strings.TrimSpace(s.Format))
 
 	switch {
 	case path == "" && rawURL == "":
@@ -1224,9 +1384,17 @@ func (p *OverlayPolicy) validate() error {
 	if op == "" {
 		op = OverlayPackageOpAdditiveOnly
 	}
-	if op != OverlayPackageOpAdditiveOnly {
-		return fmt.Errorf("baseline.overlayPolicy.packageOperation must be %q (got %q)",
-			OverlayPackageOpAdditiveOnly, p.PackageOperation)
+	switch op {
+	case OverlayPackageOpAdditiveOnly:
+		// Additive-only: upgrades of baseline packages stay blocked.
+		p.AllowUpgrade = false
+	case OverlayPackageOpAdditiveAndUpgrade:
+		// Opt in to upgrading already-installed baseline packages. Downgrades and
+		// removals are still gated off (AllowDowngrade/AllowRemoval stay false).
+		p.AllowUpgrade = true
+	default:
+		return fmt.Errorf("baseline.overlayPolicy.packageOperation must be %q or %q (got %q)",
+			OverlayPackageOpAdditiveOnly, OverlayPackageOpAdditiveAndUpgrade, p.PackageOperation)
 	}
 	cp := p.ConflictPolicy
 	if cp == "" {
@@ -1235,6 +1403,23 @@ func (p *OverlayPolicy) validate() error {
 	if cp != OverlayConflictPolicyFail && cp != OverlayConflictPolicyAllowExplicit {
 		return fmt.Errorf("baseline.overlayPolicy.conflictPolicy must be %q or %q (got %q)",
 			OverlayConflictPolicyFail, OverlayConflictPolicyAllowExplicit, p.ConflictPolicy)
+	}
+	// kernelCmdline and grubDefault are written verbatim into
+	// GRUB_CMDLINE_LINUX="..." / GRUB_DEFAULT="..." assignments in /etc/default/grub,
+	// which update-grub/grub-mkconfig then `.`-source (as root) during regeneration.
+	// Inside that double-quoted, shell-sourced assignment a double quote prematurely
+	// closes it, a newline splits it, a '$' or backtick is expanded /
+	// command-substituted (the latter an injection surface running as root at regen
+	// time), and a trailing backslash escapes the closing quote (leaving the string
+	// unterminated). None are needed by a kernel command line or a GRUB_DEFAULT entry,
+	// so all are rejected up front rather than producing a broken or dangerous defaults
+	// file.
+	const grubValueForbidden = "\"$`\\\n"
+	if strings.ContainsAny(p.KernelCmdline, grubValueForbidden) {
+		return fmt.Errorf("baseline.overlayPolicy.kernelCmdline must not contain a double quote, dollar sign, backtick, backslash, or newline")
+	}
+	if strings.ContainsAny(p.GrubDefault, grubValueForbidden) {
+		return fmt.Errorf("baseline.overlayPolicy.grubDefault must not contain a double quote, dollar sign, backtick, backslash, or newline")
 	}
 	return nil
 }

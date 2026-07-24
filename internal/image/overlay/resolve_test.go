@@ -140,6 +140,214 @@ func TestResolveOverlayPackages_DebFamily(t *testing.T) {
 	}
 }
 
+// TestResolveOverlayPackages_UpgradeMode confirms that under an
+// additive-and-upgrade policy a package already present in the baseline is
+// re-resolved and, when the resolved version is strictly newer, routed into
+// ToInstall as an upgrade rather than dropped as already-present. A present
+// package whose resolved version is not newer stays already-present.
+func TestResolveOverlayPackages_UpgradeMode(t *testing.T) {
+	backend := &fakeBackend{
+		fam: PackageManagerAPT,
+		closure: []ospackage.PackageInfo{
+			// curl: baseline 8.5.0-2ubuntu10.9, repo 8.5.0-2ubuntu10.10 → upgrade.
+			{PkgName: "curl", Version: "8.5.0-2ubuntu10.10", Arch: "amd64", URL: "https://r/curl_new.deb"},
+			// bash: present at the same version the repo offers → no-op, stays present.
+			{PkgName: "bash", Version: "5.2-1", Arch: "amd64", URL: "https://r/bash.deb"},
+			// tree: genuinely new → plain add.
+			{PkgName: "tree", Version: "2.1.1-1", Arch: "amd64", URL: "https://r/tree.deb"},
+		},
+		arts: []string{"curl_new.deb", "bash.deb", "tree.deb"},
+	}
+	template := &config.ImageTemplate{
+		Target: config.TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "amd64"},
+		SystemConfig: config.SystemConfig{
+			Packages: []string{"curl", "bash", "tree"},
+		},
+		OverlayPolicy: &config.OverlayPolicy{
+			PackageOperation: config.OverlayPackageOpAdditiveAndUpgrade,
+			AllowUpgrade:     true, // set by validate() in the real load path
+		},
+	}
+	info := &BaselineInfo{OS: "ubuntu", Arch: "amd64", PackageManager: PackageManagerAPT, PackageType: pkgTypeDeb}
+	baseline := []BaselinePackage{
+		{Name: "curl", Version: "8.5.0-2ubuntu10.9", Arch: "amd64", Installed: true},
+		{Name: "bash", Version: "5.2-1", Arch: "amd64", Installed: true},
+	}
+
+	var plan *ResolutionPlan
+	withStubbedResolution(t, backend, []config.ProviderRepoConfig{debProviderRepo()}, nil, func() {
+		var err error
+		plan, err = ResolveOverlayPackages(template, info, baseline)
+		if err != nil {
+			t.Fatalf("ResolveOverlayPackages: %v", err)
+		}
+	})
+
+	// Upgrade mode seeds every requested package, including the already-present ones.
+	if !reflect.DeepEqual(backend.gotReq.seed, []string{"bash", "curl", "tree"}) {
+		t.Errorf("seed = %v, want [bash curl tree] (present packages re-resolved in upgrade mode)", backend.gotReq.seed)
+	}
+	// curl (upgrade) + tree (add) install; bash (same version) does not.
+	gotInstall := make([]string, 0, len(plan.ToInstall))
+	for _, p := range plan.ToInstall {
+		gotInstall = append(gotInstall, p.Name)
+	}
+	if !reflect.DeepEqual(gotInstall, []string{"curl", "tree"}) {
+		t.Errorf("toInstall = %v, want [curl tree]", gotInstall)
+	}
+	// bash is present at the resolved version → left untouched.
+	if !reflect.DeepEqual(plan.AlreadyPresent, []string{"bash"}) {
+		t.Errorf("alreadyPresent = %v, want [bash]", plan.AlreadyPresent)
+	}
+	for _, p := range plan.ToInstall {
+		if p.Name == "curl" && p.Version != "8.5.0-2ubuntu10.10" {
+			t.Errorf("curl upgrade version = %q, want 8.5.0-2ubuntu10.10", p.Version)
+		}
+	}
+}
+
+// TestResolveOverlayPackages_UpgradeScopeExcludesUnrequestedTransitive confirms
+// upgrade scope is bounded: a present baseline library that appears in the
+// closure only as a transitive dependency and is merely newer in the repo (no
+// versioned requirement forcing it) is NOT upgraded — only the requested package
+// is. This guards against opting into one upgrade silently bumping core libs.
+func TestResolveOverlayPackages_UpgradeScopeExcludesUnrequestedTransitive(t *testing.T) {
+	backend := &fakeBackend{
+		fam: PackageManagerAPT,
+		closure: []ospackage.PackageInfo{
+			// curl is requested and present-older → eligible upgrade. Its Depends on
+			// libssl3 carries NO version constraint, so libssl3 must not be upgraded
+			// merely because the repo has a newer one.
+			{PkgName: "curl", Version: "8.6", Arch: "amd64", URL: "https://r/curl_86.deb", RequiresVer: []string{"libssl3"}},
+			// libssl3 is present-older and newer in the repo, but only a transitive,
+			// unversioned dep → must stay on the baseline version.
+			{PkgName: "libssl3", Version: "3.2", Arch: "amd64", URL: "https://r/libssl3_32.deb"},
+		},
+		arts: []string{"curl_86.deb", "libssl3_32.deb"},
+	}
+	template := &config.ImageTemplate{
+		Target:       config.TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "amd64"},
+		SystemConfig: config.SystemConfig{Packages: []string{"curl"}},
+		OverlayPolicy: &config.OverlayPolicy{
+			PackageOperation: config.OverlayPackageOpAdditiveAndUpgrade,
+			AllowUpgrade:     true,
+		},
+	}
+	info := &BaselineInfo{OS: "ubuntu", Arch: "amd64", PackageManager: PackageManagerAPT, PackageType: pkgTypeDeb}
+	baseline := []BaselinePackage{
+		{Name: "curl", Version: "8.5", Arch: "amd64", Installed: true},
+		{Name: "libssl3", Version: "3.1", Arch: "amd64", Installed: true},
+	}
+
+	var plan *ResolutionPlan
+	withStubbedResolution(t, backend, []config.ProviderRepoConfig{debProviderRepo()}, nil, func() {
+		var err error
+		plan, err = ResolveOverlayPackages(template, info, baseline)
+		if err != nil {
+			t.Fatalf("ResolveOverlayPackages: %v", err)
+		}
+	})
+
+	gotInstall := make([]string, 0, len(plan.ToInstall))
+	for _, p := range plan.ToInstall {
+		gotInstall = append(gotInstall, p.Name)
+	}
+	if !reflect.DeepEqual(gotInstall, []string{"curl"}) {
+		t.Errorf("toInstall = %v, want [curl] (libssl3 is only an unversioned transitive dep)", gotInstall)
+	}
+	if !reflect.DeepEqual(plan.AlreadyPresent, []string{"libssl3"}) {
+		t.Errorf("alreadyPresent = %v, want [libssl3]", plan.AlreadyPresent)
+	}
+}
+
+// TestResolveOverlayPackages_UpgradeScopeIncludesRequiredDep confirms a present
+// baseline dependency IS upgraded when a to-install package requires a newer
+// version than the baseline carries (a versioned pin the baseline fails but the
+// resolved copy satisfies) — the case additive-only could never resolve.
+func TestResolveOverlayPackages_UpgradeScopeIncludesRequiredDep(t *testing.T) {
+	backend := &fakeBackend{
+		fam: PackageManagerAPT,
+		closure: []ospackage.PackageInfo{
+			// app is new and requires libfoo (>= 2.0); baseline libfoo is 1.0.
+			{PkgName: "app", Version: "1.0", Arch: "amd64", URL: "https://r/app.deb", RequiresVer: []string{"libfoo (>= 2.0)"}},
+			// libfoo present-older 1.0, repo 2.0 satisfies the pin → required upgrade.
+			{PkgName: "libfoo", Version: "2.0", Arch: "amd64", URL: "https://r/libfoo_20.deb"},
+		},
+		arts: []string{"app.deb", "libfoo_20.deb"},
+	}
+	template := &config.ImageTemplate{
+		Target:       config.TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "amd64"},
+		SystemConfig: config.SystemConfig{Packages: []string{"app"}},
+		OverlayPolicy: &config.OverlayPolicy{
+			PackageOperation: config.OverlayPackageOpAdditiveAndUpgrade,
+			AllowUpgrade:     true,
+		},
+	}
+	info := &BaselineInfo{OS: "ubuntu", Arch: "amd64", PackageManager: PackageManagerAPT, PackageType: pkgTypeDeb}
+	baseline := []BaselinePackage{
+		{Name: "libfoo", Version: "1.0", Arch: "amd64", Installed: true},
+	}
+
+	var plan *ResolutionPlan
+	withStubbedResolution(t, backend, []config.ProviderRepoConfig{debProviderRepo()}, nil, func() {
+		var err error
+		plan, err = ResolveOverlayPackages(template, info, baseline)
+		if err != nil {
+			t.Fatalf("ResolveOverlayPackages: %v", err)
+		}
+	})
+
+	gotInstall := make([]string, 0, len(plan.ToInstall))
+	for _, p := range plan.ToInstall {
+		gotInstall = append(gotInstall, p.Name)
+	}
+	if !reflect.DeepEqual(gotInstall, []string{"app", "libfoo"}) {
+		t.Errorf("toInstall = %v, want [app libfoo] (libfoo required at >= 2.0, baseline has 1.0)", gotInstall)
+	}
+}
+
+// TestResolveOverlayPackages_AdditiveOnlyLeavesPresentUntouched confirms the
+// default additive-only policy still prunes a present package from the seed and
+// never upgrades it, even when the repo offers a newer version.
+func TestResolveOverlayPackages_AdditiveOnlyLeavesPresentUntouched(t *testing.T) {
+	backend := &fakeBackend{
+		fam: PackageManagerAPT,
+		closure: []ospackage.PackageInfo{
+			{PkgName: "tree", Version: "2.1.1-1", Arch: "amd64", URL: "https://r/tree.deb"},
+		},
+		arts: []string{"tree.deb"},
+	}
+	template := &config.ImageTemplate{
+		Target: config.TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "amd64"},
+		// No OverlayPolicy → additive-only default.
+		SystemConfig: config.SystemConfig{Packages: []string{"curl", "tree"}},
+	}
+	info := &BaselineInfo{OS: "ubuntu", Arch: "amd64", PackageManager: PackageManagerAPT, PackageType: pkgTypeDeb}
+	baseline := []BaselinePackage{
+		{Name: "curl", Version: "8.5.0-2ubuntu10.9", Arch: "amd64", Installed: true},
+	}
+
+	var plan *ResolutionPlan
+	withStubbedResolution(t, backend, []config.ProviderRepoConfig{debProviderRepo()}, nil, func() {
+		var err error
+		plan, err = ResolveOverlayPackages(template, info, baseline)
+		if err != nil {
+			t.Fatalf("ResolveOverlayPackages: %v", err)
+		}
+	})
+
+	// curl is pruned from the seed (already present); only tree is resolved.
+	if !reflect.DeepEqual(backend.gotReq.seed, []string{"tree"}) {
+		t.Errorf("seed = %v, want [tree] (curl pruned under additive-only)", backend.gotReq.seed)
+	}
+	if len(plan.ToInstall) != 1 || plan.ToInstall[0].Name != "tree" {
+		t.Errorf("toInstall = %+v, want only tree", plan.ToInstall)
+	}
+	if !reflect.DeepEqual(plan.AlreadyPresent, []string{"curl"}) {
+		t.Errorf("alreadyPresent = %v, want [curl]", plan.AlreadyPresent)
+	}
+}
+
 func TestResolveOverlayPackages_RPMFamily(t *testing.T) {
 	backend := &fakeBackend{
 		fam: PackageManagerDNF,
@@ -460,12 +668,116 @@ func TestBaselinePresenceSet(t *testing.T) {
 	}
 }
 
+// TestBasePackageName confirms an APT-style ":arch" qualifier is stripped so
+// arch-qualified template requests ("gcc:amd64") reconcile against the resolver's
+// canonical base names ("gcc"), while unqualified names are left untouched.
+func TestBasePackageName(t *testing.T) {
+	cases := map[string]string{
+		"gcc":         "gcc",
+		"gcc:amd64":   "gcc",
+		"libc6:i386":  "libc6",
+		"foo:bar:baz": "foo", // only the first qualifier boundary matters
+		"":            "",
+	}
+	for in, want := range cases {
+		if got := basePackageName(in); got != want {
+			t.Errorf("basePackageName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestUpgradeEligibleNames_ArchQualifiedRequest confirms an APT-style arch-
+// qualified template request ("gcc:amd64") is still recognized as requested-and-
+// present, so its canonical closure entry ("gcc") — newer than the baseline — is
+// marked eligible for upgrade rather than skipped on a multiarch qualifier
+// mismatch.
+func TestUpgradeEligibleNames_ArchQualifiedRequest(t *testing.T) {
+	requested := []string{"gcc:amd64"}
+	closure := []ospackage.PackageInfo{
+		{PkgName: "gcc", Version: "4:13.2.0", Arch: "amd64"},
+	}
+	present := map[string]bool{"gcc": true}
+	baselineByName := map[string]BaselinePackage{
+		"gcc": {Name: "gcc", Version: "4:12.3.0", Arch: "amd64"},
+	}
+
+	eligible := upgradeEligibleNames(PackageManagerAPT, requested, closure, present, baselineByName)
+
+	if !eligible["gcc"] {
+		t.Errorf("arch-qualified request gcc:amd64 not upgrade-eligible: %v", eligible)
+	}
+}
+
 func TestOverlaySeedPackages_PreservesOrder(t *testing.T) {
 	requested := []string{"bash", "curl", "vim"}
 	present := map[string]bool{"bash": true}
 	got := overlaySeedPackages(requested, present)
 	if !reflect.DeepEqual(got, []string{"curl", "vim"}) {
 		t.Errorf("seed = %v, want [curl vim]", got)
+	}
+}
+
+// TestOverlaySeedPackages_ArchQualifiedPresent confirms an APT arch-qualified
+// request ("bash:amd64") for a package already present in the baseline (keyed by
+// the canonical base name "bash") is recognized as satisfied and NOT seeded, while
+// an arch-qualified request for an absent package keeps its original token in the
+// seed slice so the resolver still receives the qualifier.
+func TestOverlaySeedPackages_ArchQualifiedPresent(t *testing.T) {
+	requested := []string{"bash:amd64", "curl:amd64"}
+	present := map[string]bool{"bash": true}
+	got := overlaySeedPackages(requested, present)
+	if !reflect.DeepEqual(got, []string{"curl:amd64"}) {
+		t.Errorf("seed = %v, want [curl:amd64]", got)
+	}
+}
+
+// TestResolveOverlayPackages_ArchQualifiedRequestAlreadyPresent confirms that an
+// APT arch-qualified template request ("libc6:amd64") for a package the baseline
+// already has (keyed under the canonical base name "libc6") is not seeded and is
+// recorded as already-present under the base name — rather than being missed on
+// the ":arch" qualifier mismatch and mislabelled. Only the genuinely new package
+// is installed.
+func TestResolveOverlayPackages_ArchQualifiedRequestAlreadyPresent(t *testing.T) {
+	backend := &fakeBackend{
+		fam: PackageManagerAPT,
+		closure: []ospackage.PackageInfo{
+			{Name: "curl_8.deb", PkgName: "curl", Version: "8", Arch: "amd64", URL: "https://r/curl_8.deb"},
+		},
+		arts: []string{"curl_8.deb"},
+	}
+	template := &config.ImageTemplate{
+		Target: config.TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "amd64"},
+		SystemConfig: config.SystemConfig{
+			// libc6 is present in the baseline under its base name; the request is
+			// arch-qualified, so only curl should be seeded/installed.
+			Packages: []string{"curl", "libc6:amd64"},
+		},
+	}
+	info := &BaselineInfo{OS: "ubuntu", Arch: "amd64", PackageManager: PackageManagerAPT, PackageType: pkgTypeDeb}
+	baseline := []BaselinePackage{
+		{Name: "libc6", Version: "2.34", Arch: "amd64", Installed: true},
+	}
+
+	var plan *ResolutionPlan
+	withStubbedResolution(t, backend, []config.ProviderRepoConfig{debProviderRepo()}, nil, func() {
+		var err error
+		plan, err = ResolveOverlayPackages(template, info, baseline)
+		if err != nil {
+			t.Fatalf("ResolveOverlayPackages: %v", err)
+		}
+	})
+
+	// The arch-qualified libc6:amd64 request is recognized as present → not seeded.
+	if !reflect.DeepEqual(backend.gotReq.seed, []string{"curl"}) {
+		t.Errorf("seed = %v, want [curl] (libc6:amd64 already present)", backend.gotReq.seed)
+	}
+	// Only curl installs; libc6 is left on the baseline copy.
+	if len(plan.ToInstall) != 1 || plan.ToInstall[0].Name != "curl" {
+		t.Errorf("toInstall = %+v, want only curl", plan.ToInstall)
+	}
+	// Recorded already-present under the canonical base name, not the raw token.
+	if !reflect.DeepEqual(plan.AlreadyPresent, []string{"libc6"}) {
+		t.Errorf("alreadyPresent = %v, want [libc6]", plan.AlreadyPresent)
 	}
 }
 

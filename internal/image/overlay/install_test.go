@@ -171,6 +171,40 @@ func TestInstallOverlayPackages_HappyPath(t *testing.T) {
 	}
 }
 
+// TestInstallOverlayPackages_UpgradeFlagPropagates confirms the orchestration
+// derives installRequest.upgrade from the preflight report's upgrade count, so
+// the backend can pick an upgrade-capable package-manager mode (rpm -U).
+func TestInstallOverlayPackages_UpgradeFlagPropagates(t *testing.T) {
+	dir := writeArtifacts(t, t.TempDir(), "curl_new.deb")
+	plan := &ResolutionPlan{
+		Requested:   []string{"curl"},
+		DownloadDir: dir,
+		ToInstall:   []ResolvedPackage{{Name: "curl", Version: "8.10", Arch: "amd64", URL: "https://r/curl_new.deb"}},
+	}
+
+	for _, tc := range []struct {
+		name     string
+		upgrades int
+		want     bool
+	}{
+		{"plan with an upgrade sets the flag", 1, true},
+		{"pure-add plan leaves the flag off", 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := &fakeInstaller{fam: PackageManagerDNF}
+			report := &PreflightReport{Blocked: false, Upgrades: tc.upgrades}
+			withStubbedInstall(t, backend, &installHarness{}, func() {
+				if _, err := InstallOverlayPackages(aptInfo(), "/mnt/root", plan, report); err != nil {
+					t.Fatalf("InstallOverlayPackages: %v", err)
+				}
+			})
+			if backend.gotReq.upgrade != tc.want {
+				t.Errorf("installRequest.upgrade = %v, want %v", backend.gotReq.upgrade, tc.want)
+			}
+		})
+	}
+}
+
 func TestInstallOverlayPackages_NothingToInstall(t *testing.T) {
 	plan := &ResolutionPlan{Requested: []string{"bash"}, AlreadyPresent: []string{"bash"}}
 	backend := &fakeInstaller{fam: PackageManagerAPT}
@@ -724,7 +758,7 @@ func TestInstallCommandsTerminateOptions(t *testing.T) {
 	}{
 		{
 			name: "dpkg install",
-			want: "dpkg -i -- ",
+			want: "dpkg -i --auto-deconfigure -- ",
 			run:  func(shell.Executor) { _ = (&debInstallerBackend{}).install(req) },
 		},
 		{
@@ -761,5 +795,35 @@ func TestInstallCommandsTerminateOptions(t *testing.T) {
 				t.Errorf("operand not protected by leading %q: %q", "--", cap.cmds[0])
 			}
 		})
+	}
+}
+
+// TestDebInstallUsesAutoDeconfigure guards that the deb install passes
+// --auto-deconfigure. Without it, dpkg unpacks artifacts in command-line order and
+// aborts ("deconfiguration is not permitted") when a to-be-unpacked artifact
+// transiently Breaks an installed package that is ALSO being upgraded later in the
+// same batch (the vim-runtime Breaks vim-tiny (<< newver) case): the old version is
+// still present at unpack time. The break is self-resolving within the batch, so
+// the preflight gate permits it; the flag lets dpkg complete it by temporarily
+// deconfiguring and then reconfiguring the affected package.
+func TestDebInstallUsesAutoDeconfigure(t *testing.T) {
+	req := installRequest{
+		chrootPath:        "/mnt/root",
+		artifactChrootDir: chrootArtifactDir,
+		items: []plannedInstall{
+			{pkg: ResolvedPackage{Name: "vim-runtime"}, artifact: "vim-runtime_9.deb"},
+			{pkg: ResolvedPackage{Name: "vim-tiny"}, artifact: "vim-tiny_9.deb"},
+		},
+	}
+	cap := &capturingExecutor{}
+	stubShell(t, cap)
+	if err := (&debInstallerBackend{}).install(req); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if len(cap.cmds) != 1 {
+		t.Fatalf("expected exactly one command, got %v", cap.cmds)
+	}
+	if !strings.Contains(cap.cmds[0], "--auto-deconfigure") {
+		t.Errorf("dpkg install command missing --auto-deconfigure: %q", cap.cmds[0])
 	}
 }

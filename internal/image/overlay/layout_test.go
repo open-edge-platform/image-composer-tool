@@ -107,6 +107,24 @@ func TestAnalyzeLayout_RejectsLUKS(t *testing.T) {
 	assertActionable(t, err, "crypto_LUKS")
 }
 
+func TestAnalyzeLayout_RejectsLVMWithSpecificMessage(t *testing.T) {
+	// A root on an LVM logical volume surfaces as an lvm2_member PV partition.
+	// It must be rejected with an LVM-specific message, not the generic
+	// unsupported-filesystem one, so the failure is actionable.
+	parts := []partition{
+		{Path: "/dev/loop0p1", FSType: "vfat", PartType: espTypeGUID, Size: 512 << 20},
+		{Path: "/dev/loop0p2", FSType: fsTypeLVMMember, Size: 8 << 30},
+	}
+	_, err := analyzeLayout(partitionTableGPT, parts)
+	if err == nil {
+		t.Fatal("expected LVM rejection, got nil")
+	}
+	assertActionable(t, err, "LVM")
+	if !strings.Contains(strings.ToLower(err.Error()), "logical volume") {
+		t.Errorf("LVM error should mention logical volume; got: %v", err)
+	}
+}
+
 func TestAnalyzeLayout_RejectsDMVerityByGUID(t *testing.T) {
 	parts := []partition{
 		{Path: "/dev/loop0p1", FSType: "ext4", PartType: "4f68bce3-e8cd-4db1-96e7-fbcaf984b709", Size: 8 << 30},
@@ -153,6 +171,50 @@ func TestAnalyzeLayout_RejectsRootWithNoFilesystem(t *testing.T) {
 func TestAnalyzeLayout_RejectsNoPartitions(t *testing.T) {
 	if _, err := analyzeLayout(partitionTableGPT, nil); err == nil {
 		t.Fatal("expected rejection for empty partition list, got nil")
+	}
+}
+
+// Regression: LUKS, dm-verity, and LVM roots must be rejected by analyzeLayout
+// (which MountLayout calls before any Layout is produced), so they can never
+// reach the resize path. This pins that the resize hardening relies on
+// layout-time rejection rather than a guard inside ResizeBaseline for these.
+func TestAnalyzeLayout_EncryptedAndVolumeManagedRootsNeverYieldLayout(t *testing.T) {
+	cases := []struct {
+		name  string
+		parts []partition
+	}{
+		{
+			name: "luks",
+			parts: []partition{
+				{Path: "/dev/loop0p1", FSType: "vfat", PartType: espTypeGUID, Size: 512 << 20},
+				{Path: "/dev/loop0p2", FSType: fsTypeLUKS, Size: 8 << 30},
+			},
+		},
+		{
+			name: "dm-verity",
+			parts: []partition{
+				{Path: "/dev/loop0p1", FSType: "ext4", PartType: "4f68bce3-e8cd-4db1-96e7-fbcaf984b709", Size: 8 << 30},
+				{Path: "/dev/loop0p2", PartType: "2c7357ed-ebd2-46d9-aec1-23d437ec2bf5", Size: 256 << 20},
+			},
+		},
+		{
+			name: "lvm",
+			parts: []partition{
+				{Path: "/dev/loop0p1", FSType: "vfat", PartType: espTypeGUID, Size: 512 << 20},
+				{Path: "/dev/loop0p2", FSType: fsTypeLVMMember, Size: 8 << 30},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			layout, err := analyzeLayout(partitionTableGPT, tc.parts)
+			if err == nil {
+				t.Fatalf("%s root must be rejected at layout time, got layout %+v", tc.name, layout)
+			}
+			if layout != nil {
+				t.Errorf("%s: no Layout must be produced for a rejected root; got %+v", tc.name, layout)
+			}
+		})
 	}
 }
 

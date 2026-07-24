@@ -139,12 +139,47 @@ func TestValidateBaseline(t *testing.T) {
 			wantErr: "must set only one",
 		},
 		{
-			name: "overlay rejects non-raw format",
+			name: "overlay rejects unsupported format",
+			baseline: &Baseline{
+				Mode:   BaselineModeOverlay,
+				Source: &BaselineSource{Path: "/tmp/u.vmdk", Format: "vmdk"},
+			},
+			wantErr: "baseline.source.format must be one of",
+		},
+		{
+			name: "overlay accepts qcow2 format",
 			baseline: &Baseline{
 				Mode:   BaselineModeOverlay,
 				Source: &BaselineSource{Path: "/tmp/u.qcow2", Format: "qcow2"},
 			},
-			wantErr: "must be \"raw\"",
+			wantNoErr: true,
+		},
+		{
+			name: "overlay accepts vhd format",
+			baseline: &Baseline{
+				Mode:   BaselineModeOverlay,
+				Source: &BaselineSource{Path: "/tmp/u.vhd", Format: "vhd"},
+			},
+			wantNoErr: true,
+		},
+		{
+			name: "overlay accepts vhdx format",
+			baseline: &Baseline{
+				Mode:   BaselineModeOverlay,
+				Source: &BaselineSource{Path: "/tmp/u.vhdx", Format: "vhdx"},
+			},
+			wantNoErr: true,
+		},
+		{
+			// validateBaseline calls Source.Validate(), which lower-cases Format;
+			// this documents that normalization for programmatically-built templates.
+			// (YAML templates are constrained to the lower-case schema enum earlier.)
+			name: "overlay accepts upper-case format via Validate normalization",
+			baseline: &Baseline{
+				Mode:   BaselineModeOverlay,
+				Source: &BaselineSource{Path: "/tmp/u.qcow2", Format: "QCOW2"},
+			},
+			wantNoErr: true,
 		},
 		{
 			name: "overlay accepts default (empty) format",
@@ -179,6 +214,12 @@ func TestValidateBaseline(t *testing.T) {
 			wantNoErr:     true,
 		},
 		{
+			name:          "overlay policy accepts additive-and-upgrade",
+			baseline:      &Baseline{Mode: BaselineModeOverlay, Source: &BaselineSource{Path: "/tmp/u.raw"}},
+			overlayPolicy: &OverlayPolicy{PackageOperation: OverlayPackageOpAdditiveAndUpgrade},
+			wantNoErr:     true,
+		},
+		{
 			name:     "unknown mode is rejected",
 			baseline: &Baseline{Mode: "rebuild"},
 			wantErr:  "baseline.mode must be",
@@ -200,6 +241,94 @@ func TestValidateBaseline(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tt.wantErr) {
 				t.Fatalf("expected error to contain %q, got %q", tt.wantErr, err.Error())
+			}
+		})
+	}
+}
+
+// TestOverlayPolicyDerivesAllowUpgrade confirms validate() derives the internal
+// AllowUpgrade gate from packageOperation: on for additive-and-upgrade, off for
+// additive-only (and the empty default).
+func TestOverlayPolicyDerivesAllowUpgrade(t *testing.T) {
+	cases := []struct {
+		op   string
+		want bool
+	}{
+		{"", false},
+		{OverlayPackageOpAdditiveOnly, false},
+		{OverlayPackageOpAdditiveAndUpgrade, true},
+	}
+	for _, c := range cases {
+		p := &OverlayPolicy{PackageOperation: c.op}
+		if err := p.validate(); err != nil {
+			t.Fatalf("validate(%q): unexpected error %v", c.op, err)
+		}
+		if p.AllowUpgrade != c.want {
+			t.Errorf("packageOperation %q: AllowUpgrade = %v, want %v", c.op, p.AllowUpgrade, c.want)
+		}
+	}
+}
+
+// TestOverlayPolicyValidatesKernelCmdline confirms validate() rejects a
+// kernelCmdline carrying a double quote, dollar sign, backtick, backslash, or
+// newline (which would break or inject into the shell-sourced
+// GRUB_CMDLINE_LINUX="..." assignment) and accepts ordinary values.
+func TestOverlayPolicyValidatesKernelCmdline(t *testing.T) {
+	cases := []struct {
+		name    string
+		cmdline string
+		wantErr bool
+	}{
+		{"empty", "", false},
+		{"ordinary args", "console=ttyS0,115200n8 i915.force_probe=*", false},
+		{"double quote", `bad="x"`, true},
+		{"newline", "quiet\nsplash", true},
+		{"dollar sign", "root=$(reboot)", true},
+		{"backtick", "root=`reboot`", true},
+		{"backslash", `quiet\`, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := &OverlayPolicy{KernelCmdline: c.cmdline}
+			err := p.validate()
+			if c.wantErr && err == nil {
+				t.Errorf("kernelCmdline %q: expected error, got nil", c.cmdline)
+			}
+			if !c.wantErr && err != nil {
+				t.Errorf("kernelCmdline %q: unexpected error %v", c.cmdline, err)
+			}
+		})
+	}
+}
+
+// TestOverlayPolicyValidatesGrubDefault confirms validate() rejects a grubDefault
+// carrying a double quote, dollar sign, backtick, backslash, or newline (which would
+// break or inject into the shell-sourced GRUB_DEFAULT="..." assignment) and accepts
+// ordinary values, including the ">"-delimited Ubuntu submenu path.
+func TestOverlayPolicyValidatesGrubDefault(t *testing.T) {
+	cases := []struct {
+		name        string
+		grubDefault string
+		wantErr     bool
+	}{
+		{"empty", "", false},
+		{"numeric index", "0", false},
+		{"submenu path", "Advanced options for Ubuntu>Ubuntu, with Linux 6.18-intel", false},
+		{"double quote", `bad="x"`, true},
+		{"newline", "a\nb", true},
+		{"dollar sign", "$(reboot)", true},
+		{"backtick", "`reboot`", true},
+		{"backslash", `entry\`, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := &OverlayPolicy{GrubDefault: c.grubDefault}
+			err := p.validate()
+			if c.wantErr && err == nil {
+				t.Errorf("grubDefault %q: expected error, got nil", c.grubDefault)
+			}
+			if !c.wantErr && err != nil {
+				t.Errorf("grubDefault %q: unexpected error %v", c.grubDefault, err)
 			}
 		})
 	}
@@ -259,7 +388,8 @@ func TestSchemaAcceptsBaseline(t *testing.T) {
 		"overlayPolicy": {
 			"packageOperation": "additive-only",
 			"conflictPolicy": "fail",
-			"kernelCmdline": "quiet"
+			"kernelCmdline": "quiet",
+			"grubDefault": "Advanced options for Ubuntu>Ubuntu, with Linux 6.18-intel"
 		}
 	}`
 	if err := validate.ValidateUserTemplateJSON([]byte(tmpl)); err != nil {
@@ -300,18 +430,39 @@ func TestSchemaAcceptsSourceURL(t *testing.T) {
 	}
 }
 
-// TestSchemaRejectsNonRawFormat ensures the format enum rejects qcow2.
-func TestSchemaRejectsNonRawFormat(t *testing.T) {
+// TestSchemaRejectsUnsupportedFormat ensures the format enum rejects a format
+// outside the supported set (raw/qcow2/vhd/vhdx), e.g. vmdk.
+func TestSchemaRejectsUnsupportedFormat(t *testing.T) {
 	tmpl := `{
 		"image": {"name": "ub", "version": "1.0.0"},
 		"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"},
 		"baseline": {
 			"mode": "overlay",
-			"source": {"path": "/tmp/u.qcow2", "format": "qcow2"}
+			"source": {"path": "/tmp/u.vmdk", "format": "vmdk"}
 		}
 	}`
 	if err := validate.ValidateUserTemplateJSON([]byte(tmpl)); err == nil {
-		t.Fatalf("template with format=qcow2 should be rejected by schema")
+		t.Fatalf("template with format=vmdk should be rejected by schema")
+	}
+}
+
+// TestSchemaAcceptsSupportedFormats ensures the format enum accepts every
+// supported baseline format.
+func TestSchemaAcceptsSupportedFormats(t *testing.T) {
+	for _, format := range []string{"raw", "qcow2", "vhd", "vhdx"} {
+		t.Run(format, func(t *testing.T) {
+			tmpl := fmt.Sprintf(`{
+				"image": {"name": "ub", "version": "1.0.0"},
+				"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"},
+				"baseline": {
+					"mode": "overlay",
+					"source": {"path": "/tmp/u.img", "format": %q}
+				}
+			}`, format)
+			if err := validate.ValidateUserTemplateJSON([]byte(tmpl)); err != nil {
+				t.Fatalf("template with format=%s should validate: %v", format, err)
+			}
+		})
 	}
 }
 

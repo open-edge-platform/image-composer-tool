@@ -481,6 +481,137 @@ func TestBuildRepoConfigs_UsesCachedPackageListOffline(t *testing.T) {
 	}
 }
 
+func TestStripDebEpoch(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "version with epoch", input: "4:9.1.0+git", want: "9.1.0+git"},
+		{name: "trim surrounding spaces", input: " 2:1.0 ", want: "1.0"},
+		{name: "no epoch", input: "1.2.3", want: "1.2.3"},
+		{name: "colon at first position is unchanged", input: ":1.2.3", want: ":1.2.3"},
+		{name: "empty string", input: "", want: ""},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := stripDebEpoch(tt.input)
+			if got != tt.want {
+				t.Fatalf("stripDebEpoch(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRequirementCandidates(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  []string
+	}{
+		{name: "empty requirement", input: "", want: nil},
+		{name: "plain package", input: "bash", want: []string{"bash"}},
+		{
+			name:  "version pinned with epoch",
+			input: "qemu-system_4:9.1.0+git20251029",
+			want: []string{
+				"qemu-system_4:9.1.0+git20251029",
+				"qemu-system_4",
+				"qemu-system",
+				"qemu-system_9.1.0+git20251029",
+			},
+		},
+		{
+			name:  "dependency expression adds cleaned candidate",
+			input: "libc6 (>= 2.34)",
+			want: []string{
+				"libc6 (>= 2.34)",
+				"libc6",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := requirementCandidates(tt.input)
+			if len(got) != len(tt.want) {
+				t.Fatalf("requirementCandidates(%q) len = %d, want %d (%v)", tt.input, len(got), len(tt.want), got)
+			}
+			for i := range tt.want {
+				if got[i] != tt.want[i] {
+					t.Fatalf("requirementCandidates(%q)[%d] = %q, want %q (full=%v)", tt.input, i, got[i], tt.want[i], got)
+				}
+			}
+		})
+	}
+}
+
+func TestLoadDebPackageInfosFromMetadataCache(t *testing.T) {
+	origRepoCfg := RepoCfg
+	origRepoCfgs := RepoCfgs
+	origUserRepoCfgs := UserRepoCfgs
+	origLocalUserRepoCfgs := LocalUserRepoCfgs
+	t.Cleanup(func() {
+		RepoCfg = origRepoCfg
+		RepoCfgs = origRepoCfgs
+		UserRepoCfgs = origUserRepoCfgs
+		LocalUserRepoCfgs = origLocalUserRepoCfgs
+	})
+
+	dirDefault := t.TempDir()
+	dirUser := t.TempDir()
+	dirInvalid := t.TempDir()
+
+	defaultPkgs := []ospackage.PackageInfo{{
+		Name:    "bash",
+		Version: "1.0",
+		URL:     "https://repo.example/pool/bash_1.0_amd64.deb",
+		Type:    "deb",
+	}}
+	if err := saveParsedPackageCache(filepath.Join(dirDefault, "packages.parsed.json"), "sum-default", defaultPkgs); err != nil {
+		t.Fatalf("failed to write default metadata cache: %v", err)
+	}
+
+	userPkgs := []ospackage.PackageInfo{{
+		Name:    "coreutils",
+		Version: "9.0",
+		URL:     "https://repo.example/pool/coreutils_9.0_amd64.deb",
+		Type:    "deb",
+	}}
+	if err := saveParsedPackageCache(filepath.Join(dirUser, "packages.parsed.json"), "sum-user", userPkgs); err != nil {
+		t.Fatalf("failed to write user metadata cache: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dirInvalid, "packages.parsed.json"), []byte("{invalid-json"), 0644); err != nil {
+		t.Fatalf("failed to write invalid metadata cache: %v", err)
+	}
+
+	RepoCfg = RepoConfig{BuildPath: dirDefault}
+	RepoCfgs = []RepoConfig{{BuildPath: dirDefault}, {BuildPath: dirInvalid}}
+	UserRepoCfgs = []RepoConfig{{BuildPath: dirUser}}
+	LocalUserRepoCfgs = nil
+
+	got := loadDebPackageInfosFromMetadataCache()
+	if len(got) != 2 {
+		t.Fatalf("loadDebPackageInfosFromMetadataCache() returned %d packages, want 2", len(got))
+	}
+
+	if got[0].Name != "bash" || got[1].Name != "coreutils" {
+		t.Fatalf("unexpected package order/content: %#v", got)
+	}
+}
+
 func TestIsDebPackageCacheOutdated(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -523,8 +654,11 @@ func TestIsDebPackageCacheOutdated_VersionPinnedRequirement(t *testing.T) {
 		t.Fatalf("isDebPackageCacheOutdated returned error: %v", err)
 	}
 
-	if outdated {
-		t.Fatalf("expected version-pinned requirement to be satisfied from cache, missing=%v", missing)
+	if !outdated {
+		t.Fatalf("expected version-pinned requirement to be reported missing when only exact cached package names are checked")
+	}
+	if len(missing) != 1 || missing[0] != "intel-dlstreamer_2025.2.0" {
+		t.Fatalf("expected missing=[intel-dlstreamer_2025.2.0], got %v", missing)
 	}
 }
 
@@ -543,8 +677,11 @@ func TestIsDebPackageCacheOutdated_EpochPinnedRequirement(t *testing.T) {
 		t.Fatalf("isDebPackageCacheOutdated returned error: %v", err)
 	}
 
-	if outdated {
-		t.Fatalf("expected epoch-pinned requirement to be satisfied from cache, missing=%v", missing)
+	if !outdated {
+		t.Fatalf("expected epoch-pinned requirement to be reported missing when only exact cached package names are checked")
+	}
+	if len(missing) != 1 || missing[0] != "qemu-system_4:9.1.0+git20251029-ppa1-noble3" {
+		t.Fatalf("expected missing=[qemu-system_4:9.1.0+git20251029-ppa1-noble3], got %v", missing)
 	}
 }
 
@@ -1414,6 +1551,99 @@ func TestDownloadPackagesComplete(t *testing.T) {
 	}
 }
 
+func TestHandleDebCacheRetry(t *testing.T) {
+	origCacheOutdatedFunc := isDebPackageCacheOutdatedFunc
+	origClearCacheFunc := clearDebPackageCacheFunc
+	t.Cleanup(func() {
+		isDebPackageCacheOutdatedFunc = origCacheOutdatedFunc
+		clearDebPackageCacheFunc = origClearCacheFunc
+	})
+
+	tests := []struct {
+		name               string
+		retried            bool
+		wantHandled        bool
+		wantClearCalls     int
+		wantRetryCalls     int
+		wantDownloadResult bool
+	}{
+		{
+			name:               "clears cache and retries once on first outdated check",
+			retried:            false,
+			wantHandled:        true,
+			wantClearCalls:     1,
+			wantRetryCalls:     1,
+			wantDownloadResult: true,
+		},
+		{
+			name:               "does not clear cache or retry again after retry flag is set",
+			retried:            true,
+			wantHandled:        false,
+			wantClearCalls:     0,
+			wantRetryCalls:     0,
+			wantDownloadResult: false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			cacheChecks := 0
+			clearCalls := 0
+			retryCalls := 0
+
+			isDebPackageCacheOutdatedFunc = func(requiredPackages []string, cacheDir string) (bool, []string, []string, error) {
+				cacheChecks++
+				return true, []string{"pkg-a"}, nil, nil
+			}
+			clearDebPackageCacheFunc = func(cacheDir string) error {
+				clearCalls++
+				return nil
+			}
+
+			gotDownloads, gotInfos, handled, err := handleDebCacheRetry(
+				[]string{"pkg-a"},
+				t.TempDir(),
+				tt.retried,
+				func() ([]string, []ospackage.PackageInfo, error) {
+					retryCalls++
+					return []string{"pkg-a_1.0_amd64.deb"}, []ospackage.PackageInfo{{Name: "pkg-a"}}, nil
+				},
+			)
+			if err != nil {
+				t.Fatalf("handleDebCacheRetry() error = %v", err)
+			}
+			if cacheChecks != 1 {
+				t.Fatalf("cache state checks = %d, want 1", cacheChecks)
+			}
+			if handled != tt.wantHandled {
+				t.Fatalf("handled = %v, want %v", handled, tt.wantHandled)
+			}
+			if clearCalls != tt.wantClearCalls {
+				t.Fatalf("clear calls = %d, want %d", clearCalls, tt.wantClearCalls)
+			}
+			if retryCalls != tt.wantRetryCalls {
+				t.Fatalf("retry calls = %d, want %d", retryCalls, tt.wantRetryCalls)
+			}
+			if tt.wantDownloadResult {
+				if len(gotDownloads) != 1 {
+					t.Fatalf("download result length = %d, want 1", len(gotDownloads))
+				}
+				if len(gotInfos) != 1 {
+					t.Fatalf("package info length = %d, want 1", len(gotInfos))
+				}
+			} else {
+				if len(gotDownloads) != 0 {
+					t.Fatalf("download result length = %d, want 0", len(gotDownloads))
+				}
+				if len(gotInfos) != 0 {
+					t.Fatalf("package info length = %d, want 0", len(gotInfos))
+				}
+			}
+		})
+	}
+}
+
 // TestDownloadPackages tests the DownloadPackages function
 func TestDownloadPackages(t *testing.T) {
 	// Save original values
@@ -1670,5 +1900,45 @@ func TestGlobalVariables(t *testing.T) {
 
 	if RepoCfgs[1].Arch != "arm64" {
 		t.Errorf("Expected RepoCfgs[1].Arch 'arm64', got %s", RepoCfgs[1].Arch)
+	}
+}
+
+// TestBuildDebPackageInfosFromCache_RecoversVersion asserts the cache-hit path
+// recovers the package version from the .deb filename. Dropping it here made an
+// upgraded package's SBOM entry carry an empty versionInfo, so a downstream
+// name|version|url comparison reported the package as removed-and-re-added
+// instead of upgraded.
+func TestBuildDebPackageInfosFromCache_RecoversVersion(t *testing.T) {
+	cacheDir := "/cache/pkgCache/ubuntu-ubuntu24-x86_64"
+	files := []string{
+		"linux-libc-dev_6.8.0-134.134_amd64.deb",
+		"curl_8.5.0-2ubuntu10.10_amd64.deb",
+		"weirdname.deb", // no version field: name kept, version empty
+	}
+
+	infos := buildDebPackageInfosFromCache(cacheDir, files)
+	if len(infos) != len(files) {
+		t.Fatalf("expected %d infos, got %d", len(files), len(infos))
+	}
+
+	byName := make(map[string]ospackage.PackageInfo, len(infos))
+	for _, info := range infos {
+		if info.Type != "deb" {
+			t.Errorf("%s: type = %q, want deb", info.Name, info.Type)
+		}
+		byName[info.Name] = info
+	}
+
+	if p := byName["linux-libc-dev"]; p.Version != "6.8.0-134.134" {
+		t.Errorf("linux-libc-dev version = %q, want 6.8.0-134.134", p.Version)
+	}
+	if p := byName["linux-libc-dev"]; p.URL != filepath.Join(cacheDir, files[0]) {
+		t.Errorf("linux-libc-dev URL = %q, want cache path", p.URL)
+	}
+	if p := byName["curl"]; p.Version != "8.5.0-2ubuntu10.10" {
+		t.Errorf("curl version = %q, want 8.5.0-2ubuntu10.10", p.Version)
+	}
+	if p := byName["weirdname"]; p.Version != "" {
+		t.Errorf("weirdname version = %q, want empty", p.Version)
 	}
 }

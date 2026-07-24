@@ -170,10 +170,100 @@ func TestCompareSPDXFiles(t *testing.T) {
 	if result.FromPackageCount != 1 || result.ToPackageCount != 1 {
 		t.Fatalf("expected package counts 1 and 1, got %d and %d", result.FromPackageCount, result.ToPackageCount)
 	}
-	if len(result.AddedPackages) != 1 || len(result.RemovedPackages) != 1 {
-		t.Fatalf("expected one added and one removed package key, got added=%d removed=%d",
+	// Same package name with only a version change is a single upgrade, not an
+	// unrelated add + remove.
+	if len(result.AddedPackages) != 0 || len(result.RemovedPackages) != 0 {
+		t.Fatalf("expected no add/remove for a version bump, got added=%d removed=%d",
 			len(result.AddedPackages), len(result.RemovedPackages))
 	}
+	if len(result.UpgradedPackages) != 1 {
+		t.Fatalf("expected one upgraded package, got %d: %v", len(result.UpgradedPackages), result.UpgradedPackages)
+	}
+	if want := "acl: 2.3.1 -> 2.3.2"; result.UpgradedPackages[0] != want {
+		t.Errorf("upgrade line = %q, want %q", result.UpgradedPackages[0], want)
+	}
+}
+
+func TestDiffSPDXPackages_ClassifiesAddRemoveUpgrade(t *testing.T) {
+	from := []spdxComparablePackage{
+		{Name: "curl", VersionInfo: "8.5.0-1", DownloadLocation: "https://x/curl_8.5.0-1.deb"},
+		{Name: "gone", VersionInfo: "1.0", DownloadLocation: "https://x/gone_1.0.deb"},
+		// Mirrors the real overlay bug: baseline recorded an empty version and a
+		// different (cache-path) location than the upgraded artifact.
+		{Name: "linux-libc-dev", VersionInfo: "", DownloadLocation: "/cache/linux-libc-dev_6.8.0-134.134_amd64.deb"},
+	}
+	to := []spdxComparablePackage{
+		{Name: "curl", VersionInfo: "8.5.0-2", DownloadLocation: "https://x/curl_8.5.0-2.deb"},
+		{Name: "brand-new", VersionInfo: "2.0", DownloadLocation: "https://x/brand-new_2.0.deb"},
+		{Name: "linux-libc-dev", VersionInfo: "260617t095128z-r2", DownloadLocation: "https://intel/linux-libc-dev_260617t095128z-r2_amd64.deb"},
+	}
+
+	added, removed, upgraded := diffSPDXPackages(from, to)
+
+	if want := []string{"brand-new|2.0|https://x/brand-new_2.0.deb"}; !equalStrings(added, want) {
+		t.Errorf("added = %v, want %v", added, want)
+	}
+	if want := []string{"gone|1.0|https://x/gone_1.0.deb"}; !equalStrings(removed, want) {
+		t.Errorf("removed = %v, want %v", removed, want)
+	}
+	want := []string{
+		"curl: 8.5.0-1 -> 8.5.0-2",
+		"linux-libc-dev: unknown -> 260617t095128z-r2", // empty baseline version renders as "unknown"
+	}
+	if !equalStrings(upgraded, want) {
+		t.Errorf("upgraded = %v, want %v", upgraded, want)
+	}
+}
+
+// TestDiffSPDXPackages_MultipleSameNameNotCollapsed guards the multiarch case:
+// when a name carries more than one candidate add and/or remove (e.g. libc6:amd64
+// and libc6:i386, distinguished only by download location), there is no
+// unambiguous from->to pairing, so the entries must stay as genuine adds/removes
+// rather than being collapsed into a single fabricated "upgrade" line — or worse,
+// silently dropped by a name-keyed map that keeps only the last entry per name.
+func TestDiffSPDXPackages_MultipleSameNameNotCollapsed(t *testing.T) {
+	from := []spdxComparablePackage{
+		{Name: "libc6", VersionInfo: "2.35-0ubuntu1", DownloadLocation: "https://x/libc6_2.35_amd64.deb"},
+		{Name: "libc6", VersionInfo: "2.35-0ubuntu1", DownloadLocation: "https://x/libc6_2.35_i386.deb"},
+	}
+	to := []spdxComparablePackage{
+		{Name: "libc6", VersionInfo: "2.36-0ubuntu1", DownloadLocation: "https://x/libc6_2.36_amd64.deb"},
+		{Name: "libc6", VersionInfo: "2.36-0ubuntu1", DownloadLocation: "https://x/libc6_2.36_i386.deb"},
+	}
+
+	added, removed, upgraded := diffSPDXPackages(from, to)
+
+	// Two names on each side share the name "libc6": 2 adds + 2 removes is not a
+	// clean 1:1, so nothing is reconciled into an upgrade and no entry is lost.
+	if len(upgraded) != 0 {
+		t.Errorf("upgraded = %v, want none (ambiguous N:M must not collapse to an upgrade)", upgraded)
+	}
+	wantAdded := []string{
+		"libc6|2.36-0ubuntu1|https://x/libc6_2.36_amd64.deb",
+		"libc6|2.36-0ubuntu1|https://x/libc6_2.36_i386.deb",
+	}
+	if !equalStrings(added, wantAdded) {
+		t.Errorf("added = %v, want %v", added, wantAdded)
+	}
+	wantRemoved := []string{
+		"libc6|2.35-0ubuntu1|https://x/libc6_2.35_amd64.deb",
+		"libc6|2.35-0ubuntu1|https://x/libc6_2.35_i386.deb",
+	}
+	if !equalStrings(removed, wantRemoved) {
+		t.Errorf("removed = %v, want %v", removed, wantRemoved)
+	}
+}
+
+func equalStrings(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestPartitionStartOffset_DefaultSectorSize(t *testing.T) {

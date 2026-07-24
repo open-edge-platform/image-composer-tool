@@ -145,6 +145,6 @@ workspace/<os>-<dist>-<arch>/imagebuild/<system-config-name>/
 ## Next References
 
 - Main repo overview: `README.md`
-- Full CLI details: `docs/architecture/image-composer-tool-cli-specification.md`
-- Template system: `docs/architecture/image-composer-tool-templates.md`
+- Full CLI details: `docs/user-guide/architecture/image-composer-tool-cli-specification.md`
+- Template system: `docs/user-guide/architecture/image-composer-tool-templates.md`
 - Skill definitions: `.github/skills/`

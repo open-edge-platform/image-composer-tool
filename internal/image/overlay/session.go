@@ -7,12 +7,24 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/config/manifest"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/imageinspect"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/display"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
+
+// StageTiming records how long one overlay build stage took. The overlay pipeline
+// does not run through the create-mode maker/chroot stages that populate the
+// template's build timers, so it accumulates its own stage timings here for the
+// caller to render (see Builder.Timings).
+type StageTiming struct {
+	Stage    string
+	Duration time.Duration
+}
 
 // Builder drives an overlay-mode image build across the provider's three phases
 // (preprocess, build, postprocess) while keeping a SINGLE baseline mount lifecycle
@@ -29,8 +41,10 @@ import (
 //
 // Builder never mutates the user-provided baseline source (Ingestor copies it
 // first), it is strictly additive (only ResolutionPlan.ToInstall is installed), and
-// it never modifies the installed bootloader binary or the ESP (mounted read-only);
-// boot regeneration is currently restricted to the initramfs.
+// it never modifies the installed bootloader binary or the ESP (mounted read-only).
+// Boot regeneration refreshes the initramfs and, on a GRUB2 baseline, the GRUB
+// config (applying overlayPolicy.kernelCmdline and overlayPolicy.grubDefault) —
+// both live on the writable root, never the ESP; grub-install is never run.
 type Builder struct {
 	template  *config.ImageTemplate
 	ingestor  *Ingestor
@@ -39,11 +53,12 @@ type Builder struct {
 	// State populated as the phases run; each is nil until its phase produces it.
 	// Only the cross-phase state is retained: the inspected inventory and install
 	// result are consumed within the phase that produces them, so they are local.
-	ctx    *Context         // loop device + workspace baseline copy
-	layout *Layout          // mounted partition layout
-	info   *BaselineInfo    // detected baseline OS/arch/package manager
-	plan   *ResolutionPlan  // resolved additive package plan
-	report *PreflightReport // preflight policy gate result
+	ctx      *Context          // loop device + workspace baseline copy
+	layout   *Layout           // mounted partition layout
+	info     *BaselineInfo     // detected baseline OS/arch/package manager
+	baseline []BaselinePackage // baseline package inventory for stats
+	plan     *ResolutionPlan   // resolved additive package plan
+	report   *PreflightReport  // preflight policy gate result
 
 	// mountTeardown unmounts the layout (reverse order). It is set by Preprocess
 	// and run once by Postprocess; nil before mounts exist or after teardown.
@@ -52,6 +67,34 @@ type Builder struct {
 	// finalizes artifacts on a fully successful build and always runs cleanup.
 	preprocessed bool
 	built        bool
+
+	// timings accumulates per-stage durations across the three phases, in the
+	// order the stages ran, for the caller to render as a timing table.
+	timings []StageTiming
+}
+
+// nowFn is the clock seam for stage timing, exposed as a package var so a test
+// can override it for deterministic durations.
+var nowFn = time.Now
+
+// timeStage runs fn, recording its wall-clock duration under the given stage
+// label (appended to b.timings in call order) regardless of whether fn errors,
+// and returns fn's error. Stages that never run leave no row, so the rendered
+// table reflects exactly the pipeline that executed.
+func (b *Builder) timeStage(stage string, fn func() error) error {
+	start := nowFn()
+	err := fn()
+	b.timings = append(b.timings, StageTiming{Stage: stage, Duration: nowFn().Sub(start)})
+	return err
+}
+
+// Timings returns the per-stage durations recorded so far, in execution order.
+// It returns a defensive copy so callers cannot mutate the Builder's internal
+// timing state (e.g. by appending or sorting) and corrupt later reporting.
+func (b *Builder) Timings() []StageTiming {
+	out := make([]StageTiming, len(b.timings))
+	copy(out, b.timings)
+	return out
 }
 
 // Builder-stage indirection seams over the impure overlay stages so the phase
@@ -68,10 +111,13 @@ var (
 	builderResolveFn   = ResolveOverlayPackages
 	builderPreflightFn = Preflight
 	builderInstallFn   = InstallOverlayPackages
+	builderConfigureFn = RunOverlayConfigurations
 	builderRegenBootFn = RegenerateBoot
+	builderGrubRegenFn = RegenerateGrub
 	builderResizeFn    = ResizeBaseline
 	builderSBOMFn      = generateOverlaySBOM
 	builderEmitFn      = emitOverlayArtifact
+	builderInspectFn   = inspectOverlayArtifact
 )
 
 // NewBuilder constructs an overlay Builder for an overlay-mode template. It returns
@@ -110,47 +156,72 @@ func (b *Builder) Preprocess() (err error) {
 		}
 	}()
 
-	ctx, err := builderAcquire(b.ingestor)
-	if err != nil {
-		return fmt.Errorf("overlay preprocess: failed to acquire baseline: %w", err)
-	}
-	b.ctx = ctx
+	var baseline []BaselinePackage
+	if err := b.timeStage("Acquire & Mount Baseline", func() error {
+		ctx, aerr := builderAcquire(b.ingestor)
+		if aerr != nil {
+			return fmt.Errorf("overlay preprocess: failed to acquire baseline: %w", aerr)
+		}
+		b.ctx = ctx
 
-	layout, teardown, err := builderMountLayout(b.inspector, ctx.LoopDevPath)
-	if err != nil {
-		return fmt.Errorf("overlay preprocess: failed to mount baseline layout: %w", err)
+		layout, teardown, merr := builderMountLayout(b.inspector, ctx.LoopDevPath)
+		if merr != nil {
+			return fmt.Errorf("overlay preprocess: failed to mount baseline layout: %w", merr)
+		}
+		b.layout = layout
+		b.mountTeardown = teardown
+		return nil
+	}); err != nil {
+		return err
 	}
-	b.layout = layout
-	b.mountTeardown = teardown
 
-	info, baseline, err := builderDetectFn(layout.RootMount, b.template.Target)
-	if err != nil {
-		return fmt.Errorf("overlay preprocess: failed to inspect baseline: %w", err)
+	if err := b.timeStage("Inspect Baseline", func() error {
+		info, base, derr := builderDetectFn(b.layout.RootMount, b.template.Target)
+		if derr != nil {
+			return fmt.Errorf("overlay preprocess: failed to inspect baseline: %w", derr)
+		}
+		b.info = info
+		baseline = base
+		b.baseline = base // Retain for stats computation
+		return nil
+	}); err != nil {
+		return err
 	}
-	b.info = info
 
-	plan, err := builderResolveFn(b.template, info, baseline)
-	if err != nil {
-		return fmt.Errorf("overlay preprocess: dependency resolution failed: %w", err)
+	if err := b.timeStage("Resolve Packages", func() error {
+		plan, rerr := builderResolveFn(b.template, b.info, baseline)
+		if rerr != nil {
+			return fmt.Errorf("overlay preprocess: dependency resolution failed: %w", rerr)
+		}
+		b.plan = plan
+		return nil
+	}); err != nil {
+		return err
 	}
-	b.plan = plan
 
-	report, err := builderPreflightFn(info, baseline, plan, b.template.OverlayPolicy)
-	if err != nil {
+	if err := b.timeStage("Preflight", func() error {
+		report, perr := builderPreflightFn(b.info, baseline, b.plan, b.template.OverlayPolicy)
 		// Preflight returns the report alongside a blocked error; retain it for
 		// diagnostics even though installation will not proceed.
 		b.report = report
-		return fmt.Errorf("overlay preprocess: preflight gate blocked the build: %w", err)
+		if perr != nil {
+			return fmt.Errorf("overlay preprocess: preflight gate blocked the build: %w", perr)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
-	b.report = report
 
 	b.preprocessed = true
 	return nil
 }
 
 // Build runs the overlay build phase against the already-mounted baseline: it
-// installs the approved package plan, regenerates the initramfs for any added
-// packages (never the bootloader), and performs an optional grow-only resize.
+// performs an optional grow-only resize (first, so the added packages have room),
+// installs the approved package plan, runs the template's configuration commands,
+// regenerates the initramfs for any added packages, and finally — on a GRUB2
+// baseline — applies overlayPolicy.kernelCmdline and overlayPolicy.grubDefault and
+// regenerates the GRUB config (never the bootloader binary or the read-only ESP).
 //
 // It requires Preprocess to have succeeded; the mount lifecycle opened there is
 // reused here and is not torn down until Postprocess.
@@ -162,17 +233,70 @@ func (b *Builder) Build() error {
 		return fmt.Errorf("overlay build: Build already ran")
 	}
 
-	installed, err := builderInstallFn(b.info, b.layout.RootMount, b.plan, b.report)
-	if err != nil {
-		return fmt.Errorf("overlay build: package installation failed: %w", err)
+	// Resize FIRST, before installing packages: the whole point of a grow is to
+	// create the headroom the added packages need. Running it after install would
+	// be too late — a near-full baseline fails the install with "no space left on
+	// device" before the resize could ever make room. The root filesystem is
+	// mounted (resize2fs/xfs_growfs both grow online) and the loop device is
+	// already attached from Preprocess, so growing here is safe.
+	if err := b.timeStage("Resize", func() error {
+		if rerr := builderResizeFn(b.template, b.ctx, b.layout); rerr != nil {
+			return fmt.Errorf("overlay build: resize failed: %w", rerr)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
-	if err := builderRegenBootFn(b.info, b.layout.RootMount, installed); err != nil {
-		return fmt.Errorf("overlay build: boot regeneration failed: %w", err)
+	var installed *InstallResult
+	if err := b.timeStage("Install Packages", func() error {
+		var ierr error
+		installed, ierr = builderInstallFn(b.info, b.layout.RootMount, b.plan, b.report)
+		if ierr != nil {
+			return fmt.Errorf("overlay build: package installation failed: %w", ierr)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
-	if err := builderResizeFn(b.template, b.ctx, b.layout); err != nil {
-		return fmt.Errorf("overlay build: resize failed: %w", err)
+	// Run the template's arbitrary configuration commands AFTER the resolved package
+	// install but BEFORE boot regeneration. This mirrors create mode's ordering
+	// (addImageConfigs runs after installImagePkgs) and is deliberate: a
+	// configuration command may itself install content that affects the initramfs
+	// (e.g. an out-of-repo driver installed via wget+dpkg), so any resulting kernel
+	// module or hook must be picked up by the subsequent Boot Regeneration.
+	if err := b.timeStage("Configurations", func() error {
+		if cerr := builderConfigureFn(b.template, b.layout.RootMount); cerr != nil {
+			return fmt.Errorf("overlay build: configuration commands failed: %w", cerr)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	if err := b.timeStage("Boot Regeneration", func() error {
+		if berr := builderRegenBootFn(b.info, b.layout.RootMount, installed, b.plan); berr != nil {
+			return fmt.Errorf("overlay build: boot regeneration failed: %w", berr)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	// Regenerate the GRUB2 config AFTER the initramfs: grub-mkconfig enumerates the
+	// initrd images, so a newly added kernel's initramfs must already exist. This
+	// stage also applies overlayPolicy.kernelCmdline (a full-line GRUB_CMDLINE_LINUX
+	// replace) and overlayPolicy.grubDefault (a full-line GRUB_DEFAULT replace, to pin
+	// the default boot entry) before regenerating. It never touches the bootloader
+	// binary or the read-only ESP; the regenerated grub.cfg lives on the writable root.
+	if err := b.timeStage("GRUB Regeneration", func() error {
+		if gerr := builderGrubRegenFn(b.template, b.info, b.layout.RootMount); gerr != nil {
+			return fmt.Errorf("overlay build: GRUB regeneration failed: %w", gerr)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	b.built = true
@@ -245,22 +369,69 @@ func (b *Builder) Postprocess(buildErr error) (err error) {
 	}
 
 	// Embed the overlay SBOM into the baseline while the root is still mounted.
-	if err := builderSBOMFn(b.info, b.layout.RootMount, b.plan); err != nil {
-		return fmt.Errorf("overlay postprocess: SBOM generation failed: %w", err)
+	if err := b.timeStage("Generate SBOM", func() error {
+		if serr := builderSBOMFn(b.info, b.layout.RootMount, b.plan); serr != nil {
+			return fmt.Errorf("overlay postprocess: SBOM generation failed: %w", serr)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	// Release the mounts and loop device before emitting the artifact: the final
-	// image is the modified backing file, which must no longer be in use.
+	// image is the modified backing file, which must no longer be in use. The
+	// release is timed together with the emit as the finalization stage.
 	version := b.imageVersion()
-	if cerr := b.cleanupOnce(); cerr != nil {
-		return fmt.Errorf("overlay postprocess: failed to release baseline before emit: %w", cerr)
+	var artifact string
+	if err := b.timeStage("Emit Artifact", func() error {
+		if cerr := b.cleanupOnce(); cerr != nil {
+			return fmt.Errorf("overlay postprocess: failed to release baseline before emit: %w", cerr)
+		}
+		emitted, eerr := builderEmitFn(b.template, b.ctx.BaselineCopyPath, version)
+		if eerr != nil {
+			return fmt.Errorf("overlay postprocess: failed to emit image artifact: %w", eerr)
+		}
+		artifact = emitted
+		log.Infof("Overlay build complete: emitted %s", artifact)
+		return nil
+	}); err != nil {
+		return err
 	}
 
-	artifact, err := builderEmitFn(b.template, b.ctx.BaselineCopyPath, version)
-	if err != nil {
-		return fmt.Errorf("overlay postprocess: failed to emit image artifact: %w", err)
+	// Inspect the emitted image unless the operator disabled it (--no-inspect).
+	// The inspection is a post-build report on the finished artifact — distinct
+	// from the mandatory baseline inspection in Preprocess that drives package
+	// resolution — so it runs against the already-released RAW file here.
+	if b.template.InspectEnabled {
+		if err := b.timeStage("Inspect Image", func() error {
+			if ierr := builderInspectFn(artifact); ierr != nil {
+				return fmt.Errorf("overlay postprocess: image inspection failed: %w", ierr)
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+	} else {
+		log.Infof("Overlay postprocess: image inspection disabled (--no-inspect); skipping")
 	}
-	log.Infof("Overlay build complete: emitted %s", artifact)
+
+	// Display package statistics showing what was added/upgraded vs unchanged
+	stats := ComputePackageStats(b.baseline, b.plan)
+	PrintPackageStats(stats)
+
+	// In debug mode, also print the full unchanged package list
+	if config.IsDebugMode() {
+		PrintVerboseUnchangedPackages(stats)
+	}
+
+	// Print the same success/artifact summary box the create-mode makers emit, so
+	// overlay builds also report the generated artifacts. The build directory is the
+	// parent of the emitted RAW artifact; emitOverlayArtifact has placed the .raw
+	// there, and the SBOM sidecar too when its best-effort copy succeeded (the
+	// summary lists whatever files are actually present, so a missing sidecar simply
+	// isn't shown).
+	display.PrintImageDirectorySummary(filepath.Dir(artifact), "RAW")
+
 	return nil
 }
 
@@ -315,10 +486,22 @@ func (b *Builder) imageVersion() string {
 	return "overlay"
 }
 
-// generateOverlaySBOM writes an SPDX SBOM of the packages the overlay ADDED (the
-// additive ToInstall set) and embeds it into the baseline filesystem at the
-// conventional /usr/share/sbom path. It is a no-op-safe reflection of what the
-// overlay contributed, not a full re-inventory of the baseline.
+// generateOverlaySBOM updates the baseline's embedded SPDX SBOM at
+// /usr/share/sbom so it reflects the COMPLETE inventory of the overlaid image —
+// the baseline packages the image inherited plus the packages the overlay
+// contributed (ToInstall: newly added packages, and in additive-and-upgrade mode
+// baseline packages upgraded to a newer version).
+//
+// The overlay image is a copy of the baseline, so it already carries the
+// baseline's full SBOM. This reads that inherited document, merges the
+// contributed packages into it (a name already present is replaced — an upgrade;
+// a new name is appended — an addition), and writes the merged document back
+// UNDER THE BASELINE'S OWN FILENAME so it replaces the inherited SBOM rather than
+// dropping a second, delta-only file beside it. That prevents SBOM consumers
+// (compare, CVE scanners) from reading a misleading partial inventory.
+//
+// When the baseline carries no readable SBOM, it falls back to writing just the
+// contributed packages so the image still gets a manifest.
 func generateOverlaySBOM(info *BaselineInfo, rootMount string, plan *ResolutionPlan) error {
 	if plan == nil {
 		return nil
@@ -340,14 +523,110 @@ func generateOverlaySBOM(info *BaselineInfo, rootMount string, plan *ResolutionP
 		})
 	}
 
-	tempSBOM := filepath.Join(config.TempDir(), manifest.DefaultSPDXFile)
+	// Locate the SBOM the image inherited from the baseline. Its filename is
+	// build-specific (create mode timestamps it), so discover it rather than
+	// assume a fixed name.
+	baselineSBOMName, baselineSBOMData, found := readBaselineSBOM(rootMount)
+	if !found {
+		log.Warnf("Overlay SBOM: no baseline SBOM found at %s; writing overlay-contributed packages only", manifest.ImageSBOMPath)
+		return writeOverlaySBOMToChroot(pkgs, manifest.DefaultSPDXFile, rootMount)
+	}
+
+	// Stage and embed the merged SBOM under the baseline's OWN filename so it
+	// replaces the inherited file in place (same path + name) rather than
+	// shadowing it with a second, delta-only file. DefaultSPDXFile is set (not
+	// restored) so the later sidecar copy in emitOverlayArtifact — which keys off
+	// this variable — packages the same merged manifest. This mirrors create
+	// mode's generateSBOM, which likewise assigns DefaultSPDXFile.
+	manifest.DefaultSPDXFile = baselineSBOMName
+	tempSBOM := filepath.Join(config.TempDir(), baselineSBOMName)
+	if err := manifest.WriteMergedSPDXToFile(baselineSBOMData, pkgs, tempSBOM); err != nil {
+		// A malformed baseline SBOM must not fail the build; fall back to the
+		// delta so the image still gets a manifest.
+		log.Warnf("Overlay SBOM: merging into baseline SBOM %s failed (%v); writing overlay-contributed packages only", baselineSBOMName, err)
+		return writeOverlaySBOMToChroot(pkgs, baselineSBOMName, rootMount)
+	}
+
+	if err := manifest.CopySBOMToChroot(rootMount); err != nil {
+		return fmt.Errorf("embedding merged overlay SBOM into baseline: %w", err)
+	}
+	log.Infof("Overlay SBOM merged: %d contributed package(s) folded into the baseline inventory at %s/%s",
+		len(pkgs), manifest.ImageSBOMPath, baselineSBOMName)
+	return nil
+}
+
+// readBaselineSBOM finds and reads the SBOM the overlay image inherited from the
+// baseline under <rootMount>/usr/share/sbom. It returns the file's base name, its
+// bytes, and whether a usable SBOM was found. Selection mirrors the inspector's
+// picker: an "spdx_manifest*" JSON is preferred, otherwise the first JSON file.
+func readBaselineSBOM(rootMount string) (string, []byte, bool) {
+	sbomDir := filepath.Join(rootMount, strings.TrimPrefix(manifest.ImageSBOMPath, "/"))
+	entries, err := os.ReadDir(sbomDir)
+	if err != nil {
+		return "", nil, false
+	}
+
+	name, ok := pickBaselineSBOMName(entries)
+	if !ok {
+		return "", nil, false
+	}
+
+	data, err := os.ReadFile(filepath.Join(sbomDir, name))
+	if err != nil {
+		return "", nil, false
+	}
+	return name, data, true
+}
+
+// pickBaselineSBOMName selects the SBOM file among directory entries, preferring
+// a name starting with "spdx_manifest" and falling back to any ".json" file. Both
+// tiers are chosen deterministically (lexicographically smallest) so the pick is
+// stable across runs.
+func pickBaselineSBOMName(entries []os.DirEntry) (string, bool) {
+	var preferred, fallback string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		lower := strings.ToLower(name)
+		if !strings.HasSuffix(lower, ".json") {
+			continue
+		}
+		if strings.HasPrefix(lower, "spdx_manifest") {
+			if preferred == "" || name < preferred {
+				preferred = name
+			}
+			continue
+		}
+		if fallback == "" || name < fallback {
+			fallback = name
+		}
+	}
+	if preferred != "" {
+		return preferred, true
+	}
+	if fallback != "" {
+		return fallback, true
+	}
+	return "", false
+}
+
+// writeOverlaySBOMToChroot stages a from-scratch SBOM of pkgs under sbomName and
+// embeds it into the mounted root at /usr/share/sbom/<sbomName>. It backs the
+// fallback paths where no baseline SBOM is available to merge into. It sets (not
+// restores) manifest.DefaultSPDXFile so both CopySBOMToChroot here and the later
+// sidecar copy — which key off that variable — use sbomName.
+func writeOverlaySBOMToChroot(pkgs []ospackage.PackageInfo, sbomName, rootMount string) error {
+	manifest.DefaultSPDXFile = sbomName
+	tempSBOM := filepath.Join(config.TempDir(), sbomName)
 	if err := manifest.WriteSPDXToFile(pkgs, tempSBOM); err != nil {
 		return fmt.Errorf("writing overlay SBOM: %w", err)
 	}
 	if err := manifest.CopySBOMToChroot(rootMount); err != nil {
 		return fmt.Errorf("embedding overlay SBOM into baseline: %w", err)
 	}
-	log.Infof("Overlay SBOM generated for %d added package(s)", len(pkgs))
+	log.Infof("Overlay SBOM generated for %d contributed package(s) (added or upgraded)", len(pkgs))
 	return nil
 }
 
@@ -388,6 +667,33 @@ func emitOverlayArtifact(template *config.ImageTemplate, copyPath, version strin
 		log.Warnf("Overlay emit: failed to copy SBOM sidecar to %s: %v", buildDir, err)
 	}
 	return finalPath, nil
+}
+
+// inspectOverlayArtifact runs a post-build inspection of the emitted RAW image and
+// renders the summary to the build log. It reuses the same diskfs inspector the
+// standalone `inspect` command uses, so it needs no loop device or root: the image
+// is already released and inspected purely in userspace. Inspection is a reporting
+// step; a failure here is surfaced by the caller so a broken emitted image does not
+// pass silently.
+func inspectOverlayArtifact(artifactPath string) error {
+	if strings.TrimSpace(artifactPath) == "" {
+		return fmt.Errorf("overlay inspect: artifact path is empty")
+	}
+	// Enable SBOM inspection (second arg) so the reported summary includes the
+	// image's SBOM, matching the documented overlay-inspection behavior and the
+	// standalone compare/inspect commands. Hashing stays off: it is expensive and
+	// not needed for this reporting step.
+	summary, err := imageinspect.NewDiskfsInspectorWithOptions(false, true).Inspect(artifactPath)
+	if err != nil {
+		return fmt.Errorf("inspecting %s: %w", artifactPath, err)
+	}
+
+	var buf strings.Builder
+	if rerr := imageinspect.RenderSummaryText(&buf, summary, imageinspect.TextOptions{}); rerr != nil {
+		return fmt.Errorf("rendering inspection summary for %s: %w", artifactPath, rerr)
+	}
+	log.Infof("Overlay image inspection:\n%s", buf.String())
+	return nil
 }
 
 // moveFile moves src to dst without invoking a shell. It first attempts an atomic

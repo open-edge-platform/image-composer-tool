@@ -4044,6 +4044,168 @@ func TestImageTemplateImmutabilityHelpers(t *testing.T) {
 	}
 }
 
+func TestImageTemplateFDEHelpers(t *testing.T) {
+	t.Run("disabled", func(t *testing.T) {
+		template := &ImageTemplate{
+			SystemConfig: SystemConfig{
+				FDE: FDEConfig{Enabled: false, Unlock: "manual"},
+			},
+		}
+		if template.IsFDEEnabled() {
+			t.Error("IsFDEEnabled() = true, want false")
+		}
+		if template.IsFDEAutoUnlock() {
+			t.Error("IsFDEAutoUnlock() = true, want false when FDE disabled")
+		}
+		if template.IsFDEPartition("rootfs") {
+			t.Error("IsFDEPartition(rootfs) = true, want false when FDE disabled")
+		}
+	})
+
+	t.Run("enabled accessors", func(t *testing.T) {
+		template := &ImageTemplate{
+			SystemConfig: SystemConfig{
+				FDE: FDEConfig{
+					Enabled:        true,
+					PassphraseFile: "/tmp/fde-passphrase.txt",
+					Partitions:     []string{"rootfs", "userdata"},
+					Unlock:         "manual",
+					Passphrase:     "secret",
+				},
+			},
+		}
+		if !template.IsFDEEnabled() {
+			t.Error("IsFDEEnabled() = false, want true")
+		}
+		if template.GetFDEPassphrase() != "secret" {
+			t.Errorf("GetFDEPassphrase() = %q, want secret", template.GetFDEPassphrase())
+		}
+		if template.GetFDEPassphraseFile() != "/tmp/fde-passphrase.txt" {
+			t.Errorf("GetFDEPassphraseFile() = %q, want /tmp/fde-passphrase.txt", template.GetFDEPassphraseFile())
+		}
+		got := template.GetFDEPartitions()
+		if len(got) != 2 || got[0] != "rootfs" || got[1] != "userdata" {
+			t.Errorf("GetFDEPartitions() = %v, want [rootfs userdata]", got)
+		}
+		if template.GetFDEUnlockMode() != "manual" {
+			t.Errorf("GetFDEUnlockMode() = %q, want manual", template.GetFDEUnlockMode())
+		}
+		if template.IsFDEAutoUnlock() {
+			t.Error("IsFDEAutoUnlock() = true, want false for manual unlock")
+		}
+		if !template.IsFDEPartition("rootfs") {
+			t.Error("IsFDEPartition(rootfs) = false, want true")
+		}
+		if !template.IsFDEPartition("userdata") {
+			t.Error("IsFDEPartition(userdata) = false, want true")
+		}
+		if template.IsFDEPartition("boot") {
+			t.Error("IsFDEPartition(boot) = true, want false")
+		}
+	})
+
+	t.Run("unlock mode defaults to auto", func(t *testing.T) {
+		tests := []struct {
+			unlock string
+			want   string
+		}{
+			{"", "auto"},
+			{"auto", "auto"},
+			{"manual", "manual"},
+			{"unexpected", "auto"},
+		}
+		for _, tt := range tests {
+			tt := tt
+			t.Run(tt.unlock, func(t *testing.T) {
+				template := &ImageTemplate{
+					SystemConfig: SystemConfig{
+						FDE: FDEConfig{Enabled: true, PassphraseFile: "/tmp/fde-passphrase.txt", Unlock: tt.unlock},
+					},
+				}
+				if got := template.GetFDEUnlockMode(); got != tt.want {
+					t.Errorf("GetFDEUnlockMode() = %q, want %q", got, tt.want)
+				}
+				wantAuto := tt.want == "auto"
+				if template.IsFDEAutoUnlock() != wantAuto {
+					t.Errorf("IsFDEAutoUnlock() = %t, want %t", template.IsFDEAutoUnlock(), wantAuto)
+				}
+			})
+		}
+	})
+
+	t.Run("empty partitions list", func(t *testing.T) {
+		template := &ImageTemplate{
+			SystemConfig: SystemConfig{
+				FDE: FDEConfig{Enabled: true, PassphraseFile: "/tmp/fde-passphrase.txt", Partitions: nil},
+			},
+		}
+		if len(template.GetFDEPartitions()) != 0 {
+			t.Errorf("GetFDEPartitions() = %v, want empty", template.GetFDEPartitions())
+		}
+		if template.IsFDEPartition("rootfs") {
+			t.Error("IsFDEPartition(rootfs) = true with empty partitions list, want false")
+		}
+	})
+}
+
+func TestLoadTemplateFDEPassphraseFile(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	passphrasePath := filepath.Join(tmpDir, "fde-passphrase.txt")
+	if err := os.WriteFile(passphrasePath, []byte("from-file\n"), 0600); err != nil {
+		t.Fatalf("write passphrase file: %v", err)
+	}
+
+	tplPath := filepath.Join(tmpDir, "template.yml")
+	tpl := strings.Join([]string{
+		"image:",
+		"  name: fde-file-test",
+		"  version: \"1.0\"",
+		"target:",
+		"  os: ubuntu",
+		"  dist: ubuntu24",
+		"  arch: x86_64",
+		"  imageType: raw",
+		"disk:",
+		"  name: disk0",
+		"  path: /dev/vda",
+		"  partitionTableType: gpt",
+		"  partitions:",
+		"    - id: rootfs",
+		"      name: rootfs",
+		"      type: linux-root-amd64",
+		"      typeUUID: \"\"",
+		"      fsType: ext4",
+		"      fsLabel: rootfs",
+		"      start: 1MiB",
+		"      end: 100%",
+		"      mountPoint: /",
+		"systemConfig:",
+		"  name: test",
+		"  description: test",
+		"  fde:",
+		"    enabled: true",
+		"    passphraseFile: " + passphrasePath,
+		"",
+	}, "\n")
+	if err := os.WriteFile(tplPath, []byte(tpl), 0644); err != nil {
+		t.Fatalf("write template: %v", err)
+	}
+
+	template, err := LoadTemplate(tplPath, false)
+	if err != nil {
+		t.Fatalf("LoadTemplate() error = %v", err)
+	}
+
+	if got := template.GetFDEPassphrase(); got != "from-file" {
+		t.Fatalf("GetFDEPassphrase() = %q, want from-file", got)
+	}
+	if got := template.GetFDEPassphraseFile(); got != passphrasePath {
+		t.Fatalf("GetFDEPassphraseFile() = %q, want %q", got, passphrasePath)
+	}
+}
+
 func TestGetUsersAndUserByName(t *testing.T) {
 	users := []UserConfig{
 		{Name: "alice", Sudo: true},

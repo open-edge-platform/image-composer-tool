@@ -2,12 +2,15 @@ package config
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/slice"
 )
 
 func TestNewDefaultConfigLoader(t *testing.T) {
@@ -152,6 +155,65 @@ func TestMergeConfigurationsBaseline(t *testing.T) {
 		}
 		if result.Baseline == nil || result.Baseline.Mode != BaselineModeCreate {
 			t.Errorf("expected default baseline (create) to be retained, got %+v", result.Baseline)
+		}
+	})
+}
+
+// TestMergeConfigurationsOverlayPackages is the regression for the overlay build
+// that resolved a full create-mode boot toolchain (systemd-boot, dracut-core,
+// cryptsetup-bin, …) even though the user template requested only "tree". The
+// create-mode default template's package list must NOT be unioned into an overlay
+// template's additive package set — the baseline already provides those packages,
+// and re-seeding them drags in bootloader packages whose strict version pins the
+// frozen baseline cannot satisfy.
+func TestMergeConfigurationsOverlayPackages(t *testing.T) {
+	defaultTemplate := &ImageTemplate{
+		Image:  ImageInfo{Name: "default", Version: "1.0.0"},
+		Target: TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64"},
+		SystemConfig: SystemConfig{
+			Name:     "default",
+			Packages: []string{"ubuntu-minimal", "systemd-boot", "dracut-core", "cryptsetup-bin"},
+		},
+	}
+
+	t.Run("overlay drops default packages, keeps only user packages", func(t *testing.T) {
+		userTemplate := &ImageTemplate{
+			Image:  ImageInfo{Name: "user", Version: "2.0.0"},
+			Target: TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64"},
+			Baseline: &Baseline{
+				Mode:   BaselineModeOverlay,
+				Source: &BaselineSource{Path: "/tmp/u.raw"},
+			},
+			SystemConfig: SystemConfig{Name: "overlay", Packages: []string{"tree"}},
+		}
+
+		result, err := MergeConfigurations(userTemplate, defaultTemplate)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := []string{"tree"}
+		if !reflect.DeepEqual(result.SystemConfig.Packages, want) {
+			t.Errorf("overlay merged packages = %v, want %v (default boot toolchain must not be inherited)",
+				result.SystemConfig.Packages, want)
+		}
+	})
+
+	t.Run("create mode still unions default and user packages", func(t *testing.T) {
+		userTemplate := &ImageTemplate{
+			Image:        ImageInfo{Name: "user", Version: "2.0.0"},
+			Target:       TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64"},
+			SystemConfig: SystemConfig{Name: "create", Packages: []string{"tree"}},
+		}
+
+		result, err := MergeConfigurations(userTemplate, defaultTemplate)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		// Create mode is unchanged: the default base packages are still merged in.
+		if !slice.Contains(result.SystemConfig.Packages, "systemd-boot") ||
+			!slice.Contains(result.SystemConfig.Packages, "tree") {
+			t.Errorf("create merged packages = %v, want default base packages unioned with user's tree",
+				result.SystemConfig.Packages)
 		}
 	})
 }
@@ -1425,6 +1487,45 @@ func TestResolveExtendsChainDepthWarning(t *testing.T) {
 	}
 }
 
+func TestRedactSensitiveDataFDEPassphrase(t *testing.T) {
+	t.Parallel()
+
+	const secret = "fde-passphrase-must-not-leak"
+	template := &ImageTemplate{
+		SystemConfig: SystemConfig{
+			FDE: FDEConfig{
+				Enabled:        true,
+				PassphraseFile: "/tmp/fde-secret.txt",
+				Unlock:         "auto",
+				Passphrase:     secret,
+			},
+		},
+	}
+
+	redacted := RedactSensitiveData(template)
+	if redacted.SystemConfig.FDE.Passphrase != "[REDACTED]" {
+		t.Errorf("redacted FDE passphrase = %q, want [REDACTED]", redacted.SystemConfig.FDE.Passphrase)
+	}
+	if template.SystemConfig.FDE.Passphrase != secret {
+		t.Errorf("original template passphrase was mutated, got %q", template.SystemConfig.FDE.Passphrase)
+	}
+	if redacted.SystemConfig.FDE.PassphraseFile != "[REDACTED]" {
+		t.Errorf("redacted FDE passphraseFile = %q, want [REDACTED]", redacted.SystemConfig.FDE.PassphraseFile)
+	}
+
+	pretty, err := json.MarshalIndent(redacted, "", "  ")
+	if err != nil {
+		t.Fatalf("json.MarshalIndent: %v", err)
+	}
+	out := string(pretty)
+	if strings.Contains(out, secret) {
+		t.Errorf("redacted JSON still contains passphrase")
+	}
+	if !strings.Contains(out, "[REDACTED]") {
+		t.Errorf("redacted JSON missing [REDACTED], got %s", out)
+	}
+}
+
 func writeChainTemplate(t *testing.T, path, imageName, extends string, target TargetInfo) {
 	t.Helper()
 
@@ -1461,5 +1562,65 @@ func writeChainTemplate(t *testing.T, path, imageName, extends string, target Ta
 
 	if err := os.WriteFile(path, []byte(builder.String()), 0o644); err != nil {
 		t.Fatalf("failed to write template file %s: %v", path, err)
+	}
+}
+
+// TestRedactSensitiveData_NilInputReturnsNil verifies that RedactSensitiveData
+// does not panic when called with a nil template pointer — a caller that fed
+// it a Load* error path should get nil back and can produce a normal error
+// downstream instead of crashing on the deref.
+func TestRedactSensitiveData_NilInputReturnsNil(t *testing.T) {
+	t.Parallel()
+	if got := RedactSensitiveData(nil); got != nil {
+		t.Errorf("expected nil for nil input, got %+v", got)
+	}
+}
+
+// TestRedactSensitiveData_RedactsUserAndSecureBootFields verifies the happy
+// path: user passwords and hash algorithms are redacted, secure-boot key/cert
+// paths are redacted, and non-sensitive fields survive unchanged.
+func TestRedactSensitiveData_RedactsUserAndSecureBootFields(t *testing.T) {
+	t.Parallel()
+	tmpl := &ImageTemplate{
+		Image: ImageInfo{Name: "img", Version: "1.0.0"},
+		SystemConfig: SystemConfig{
+			Name: "sys",
+			Users: []UserConfig{
+				{Name: "alice", Password: "hunter2", HashAlgo: "sha512"},
+				{Name: "bob"}, // no password → no redaction of empty field
+			},
+			Immutability: ImmutabilityConfig{
+				Enabled:         true,
+				SecureBootDBKey: "/keys/db.key",
+				SecureBootDBCrt: "/keys/db.crt",
+				SecureBootDBCer: "/keys/db.cer",
+			},
+		},
+	}
+
+	redacted := RedactSensitiveData(tmpl)
+	if redacted == nil {
+		t.Fatal("expected non-nil redacted template, got nil")
+	}
+	if redacted.SystemConfig.Users[0].Password != "[REDACTED]" {
+		t.Errorf("expected user password redacted, got %q", redacted.SystemConfig.Users[0].Password)
+	}
+	if redacted.SystemConfig.Users[0].HashAlgo != "[REDACTED]" {
+		t.Errorf("expected hash_algo redacted, got %q", redacted.SystemConfig.Users[0].HashAlgo)
+	}
+	if redacted.SystemConfig.Users[1].Password != "" {
+		t.Errorf("expected empty password to remain empty, got %q", redacted.SystemConfig.Users[1].Password)
+	}
+	if redacted.SystemConfig.Immutability.SecureBootDBKey != "[REDACTED]" {
+		t.Errorf("expected secureBootDBKey redacted, got %q", redacted.SystemConfig.Immutability.SecureBootDBKey)
+	}
+	// Non-sensitive fields must round-trip untouched.
+	if redacted.Image.Name != "img" {
+		t.Errorf("expected image name preserved, got %q", redacted.Image.Name)
+	}
+	// The original template's SystemConfig must not be mutated — the redactor
+	// deep-copies SystemConfig before rewriting sensitive fields.
+	if tmpl.SystemConfig.Users[0].Password != "hunter2" {
+		t.Errorf("original password mutated: %q", tmpl.SystemConfig.Users[0].Password)
 	}
 }

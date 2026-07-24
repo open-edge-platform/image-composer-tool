@@ -195,6 +195,7 @@ func (imageOs *ImageOs) InstallInitrd() (installRoot, versionInfo string, err er
 func (imageOs *ImageOs) InstallImageOs(diskPathIdMap map[string]string) (versionInfo string, err error) {
 	versionInfo = ""
 	var mountPointInfoList []map[string]string
+	var openedLuks []string
 	var mounted bool = false
 	log.Infof("Installing OS for image: %s", imageOs.template.GetImageName())
 
@@ -206,6 +207,13 @@ func (imageOs *ImageOs) InstallImageOs(diskPathIdMap map[string]string) (version
 				} else {
 					err = fmt.Errorf("failed to unmount disk from chroot: %w", umountErr)
 				}
+			}
+		}
+		// Close LUKS mappers after everything is unmounted so the backing loop
+		// device can later be detached without "device is busy".
+		for _, name := range openedLuks {
+			if closeErr := closeLuks(name); closeErr != nil {
+				log.Warnf("Failed to close LUKS mapper %s: %v", name, closeErr)
 			}
 		}
 	}()
@@ -249,6 +257,10 @@ func (imageOs *ImageOs) InstallImageOs(diskPathIdMap map[string]string) (version
 		// Don't fail the build if symlink fix fails, just warn as some distros may not need it
 		log.Warnf("Failed to fix kernel symlinks: %v (continuing anyway)", err)
 	}
+	if err = imageboot.EnsureDepmodForBootKernels(imageOs.installRoot); err != nil {
+		err = fmt.Errorf("failed to prepare kernel module dependencies: %w", err)
+		return
+	}
 
 	log.Infof("Image system configuration...")
 	if err = updateImageConfig(imageOs.installRoot, diskPathIdMap, imageOs.template); err != nil {
@@ -271,6 +283,17 @@ func (imageOs *ImageOs) InstallImageOs(diskPathIdMap map[string]string) (version
 
 	if err = imagesecure.ConfigImageSecurity(imageOs.installRoot, imageOs.template); err != nil {
 		err = fmt.Errorf("failed to configure image security: %w", err)
+		return
+	}
+
+	mountPointInfoList, openedLuks, err = imageOs.enablingFDE(imageOs.installRoot, diskPathIdMap, mountPointInfoList)
+	if err != nil {
+		err = fmt.Errorf("failed to enable FDE: %w", err)
+		return
+	}
+
+	if err = wireFDEBoot(imageOs.installRoot, diskPathIdMap, imageOs.template); err != nil {
+		err = fmt.Errorf("failed to wire FDE boot: %w", err)
 		return
 	}
 
@@ -1312,6 +1335,16 @@ func updateImageFstab(installRoot string, diskPathIdMap map[string]string, templ
 				mountId := fmt.Sprintf("PARTUUID=%s", partUUID)
 				mountPoint := partition.MountPoint
 
+				// FDE-encrypted non-root partitions become LUKS containers, so
+				// their raw PARTUUID no longer resolves to a mountable filesystem.
+				// They are unlocked via /etc/crypttab into /dev/mapper/<id> at
+				// boot, so mount that mapper instead. The root volume is wired
+				// separately through the kernel command line.
+				if template.IsFDEEnabled() && template.IsFDEPartition(partition.ID) &&
+					mountPoint != rootfsMountPoint {
+					mountId = filepath.Join("/dev/mapper", partition.ID)
+				}
+
 				// Get the filesystem type
 				var fsType, options, pass string
 				if partition.FsType == "fat16" || partition.FsType == "fat32" {
@@ -1513,6 +1546,18 @@ func updateInitramfs(installRoot, kernelVersion string, template *config.ImageTe
 		cmdParts = append(cmdParts, "--add", "systemd-veritysetup")
 		cmdParts = append(cmdParts, "--add", "dm")
 		cmdParts = append(cmdParts, "--add", "crypt")
+	} else if template.IsFDEEnabled() {
+		// FDE needs the crypt/dm modules so the initramfs can unlock LUKS at boot.
+		cmdParts = append(cmdParts, "--add", "dm")
+		cmdParts = append(cmdParts, "--add", "crypt")
+	}
+
+	// For automatic (keyfile) unlock, embed crypttab and the shared keyfile into
+	// the initramfs so it can unlock the root volume without a prompt. dracut
+	// runs in-chroot, so these paths are relative to the image root.
+	if template.IsFDEAutoUnlock() {
+		cmdParts = append(cmdParts, "--install", "/etc/crypttab")
+		cmdParts = append(cmdParts, "--install", fdeKeyfilePath)
 	}
 
 	// Add cut utility for EMT images only
