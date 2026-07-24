@@ -25,6 +25,7 @@ type builderSeams struct {
 	sbom        func(*BaselineInfo, string, *ResolutionPlan) error
 	emit        func(*config.ImageTemplate, string, string) (string, error)
 	inspect     func(string) error
+	convert     func(string, *config.ImageTemplate) error
 }
 
 func saveBuilderSeams() builderSeams {
@@ -35,6 +36,7 @@ func saveBuilderSeams() builderSeams {
 		install: builderInstallFn, configure: builderConfigureFn, regenBoot: builderRegenBootFn,
 		grubRegen: builderGrubRegenFn, resize: builderResizeFn,
 		sbom: builderSBOMFn, emit: builderEmitFn, inspect: builderInspectFn,
+		convert: builderConvertFn,
 	}
 }
 
@@ -45,6 +47,7 @@ func (s builderSeams) restore() {
 	builderInstallFn, builderConfigureFn, builderRegenBootFn, builderResizeFn = s.install, s.configure, s.regenBoot, s.resize
 	builderGrubRegenFn = s.grubRegen
 	builderSBOMFn, builderEmitFn, builderInspectFn = s.sbom, s.emit, s.inspect
+	builderConvertFn = s.convert
 }
 
 // builderRecorder tracks calls through the seams and lets a test inject errors at
@@ -70,6 +73,7 @@ type builderRecorder struct {
 	sbomErr      error
 	emitErr      error
 	inspectErr   error
+	convertErr   error
 
 	report    *PreflightReport
 	installed *InstallResult
@@ -170,6 +174,10 @@ func installOverlayTestBuilder(t *testing.T, r *builderRecorder) *Builder {
 		r.note("inspect:" + artifact)
 		return r.inspectErr
 	}
+	builderConvertFn = func(path string, _ *config.ImageTemplate) error {
+		r.note("convert:" + path)
+		return r.convertErr
+	}
 	return b
 }
 
@@ -188,7 +196,10 @@ func TestBuilder_HappyPathOrdersStagesAndCleansUp(t *testing.T) {
 		t.Fatalf("Postprocess: %v", err)
 	}
 
-	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "resize", "install", "configure", "regenBoot", "grubRegen", "sbom", "emit:1.0"}
+	// This test template leaves InspectEnabled at its zero value (false), so
+	// inspection is skipped and conversion runs directly after emit. (The CLI
+	// defaults --inspect on; see TestBuilder_InspectRunsAfterEmitWhenEnabled.)
+	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "resize", "install", "configure", "regenBoot", "grubRegen", "sbom", "emit:1.0", "convert:/out/img-1.0.raw"}
 	if !equalStrings(r.calls, want) {
 		t.Errorf("stage order = %v, want %v", r.calls, want)
 	}
@@ -204,7 +215,7 @@ func TestBuilder_HappyPathOrdersStagesAndCleansUp(t *testing.T) {
 	// execution order, so the caller can render an overlay timing table.
 	wantStages := []string{
 		"Acquire & Mount Baseline", "Inspect Baseline", "Resolve Packages", "Preflight",
-		"Resize", "Install Packages", "Configurations", "Boot Regeneration", "GRUB Regeneration", "Generate SBOM", "Emit Artifact",
+		"Resize", "Install Packages", "Configurations", "Boot Regeneration", "GRUB Regeneration", "Generate SBOM", "Emit Artifact", "Convert Artifacts",
 	}
 	gotStages := make([]string, 0, len(b.Timings()))
 	for _, ts := range b.Timings() {
@@ -231,18 +242,21 @@ func TestBuilder_InspectRunsAfterEmitWhenEnabled(t *testing.T) {
 		t.Fatalf("Postprocess: %v", err)
 	}
 
-	// Inspection runs immediately after emit, against the emitted artifact path.
-	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "resize", "install", "configure", "regenBoot", "grubRegen", "sbom", "emit:1.0", "inspect:/out/img-1.0.raw"}
+	// Inspection runs immediately after emit, against the emitted RAW artifact,
+	// and conversion follows it (a request that omits raw would delete the RAW,
+	// so the RAW inspection must happen first).
+	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "resize", "install", "configure", "regenBoot", "grubRegen", "sbom", "emit:1.0", "inspect:/out/img-1.0.raw", "convert:/out/img-1.0.raw"}
 	if !equalStrings(r.calls, want) {
 		t.Errorf("stage order = %v, want %v", r.calls, want)
 	}
-	// The timing table gains an "Inspect Image" row after "Emit Artifact".
+	// The timing table gains an "Inspect Image" row after "Emit Artifact", then a
+	// "Convert Artifacts" row as the final stage.
 	gotStages := make([]string, 0, len(b.Timings()))
 	for _, ts := range b.Timings() {
 		gotStages = append(gotStages, ts.Stage)
 	}
-	if len(gotStages) == 0 || gotStages[len(gotStages)-1] != "Inspect Image" {
-		t.Errorf("expected last timing stage to be 'Inspect Image', got %v", gotStages)
+	if len(gotStages) < 2 || gotStages[len(gotStages)-2] != "Inspect Image" || gotStages[len(gotStages)-1] != "Convert Artifacts" {
+		t.Errorf("expected final timing stages to be 'Inspect Image' then 'Convert Artifacts', got %v", gotStages)
 	}
 }
 
@@ -289,6 +303,30 @@ func TestBuilder_InspectFailureFailsPostprocess(t *testing.T) {
 		t.Errorf("expected inspection failure to surface, got %v", err)
 	}
 	// Cleanup still ran exactly once despite the inspection failure.
+	if r.teardowns != 1 || r.detaches != 1 {
+		t.Errorf("teardown/detach = %d/%d, want 1/1", r.teardowns, r.detaches)
+	}
+}
+
+func TestBuilder_ConvertFailureFailsPostprocess(t *testing.T) {
+	defer saveBuilderSeams().restore()
+	r := &builderRecorder{convertErr: errors.New("qemu-img failed")}
+	b := installOverlayTestBuilder(t, r)
+
+	if err := b.Preprocess(); err != nil {
+		t.Fatalf("Preprocess: %v", err)
+	}
+	if err := b.Build(); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	err := b.Postprocess(nil)
+	if err == nil {
+		t.Fatal("expected Postprocess to fail when artifact conversion fails")
+	}
+	if !strings.Contains(err.Error(), "failed to convert image artifact") {
+		t.Errorf("expected conversion failure to surface, got %v", err)
+	}
+	// Cleanup still ran exactly once despite the conversion failure.
 	if r.teardowns != 1 || r.detaches != 1 {
 		t.Errorf("teardown/detach = %d/%d, want 1/1", r.teardowns, r.detaches)
 	}
@@ -675,6 +713,30 @@ func TestBuilder_ImageVersionPrefersTemplateThenBaseline(t *testing.T) {
 func TestNewBuilder_RejectsCreateMode(t *testing.T) {
 	if _, err := NewBuilder(&config.ImageTemplate{}); err == nil {
 		t.Fatal("expected NewBuilder to reject a non-overlay template")
+	}
+}
+
+func TestOverlayArtifactTypeLabel(t *testing.T) {
+	tests := []struct {
+		name      string
+		artifacts []config.ArtifactInfo
+		want      string
+	}{
+		{"no artifacts defaults to RAW", nil, "RAW"},
+		{"empty slice defaults to RAW", []config.ArtifactInfo{}, "RAW"},
+		{"only raw", []config.ArtifactInfo{{Type: "raw"}}, "RAW"},
+		{"single qcow2 uppercased", []config.ArtifactInfo{{Type: "qcow2"}}, "QCOW2"},
+		{"multiple types joined in order", []config.ArtifactInfo{{Type: "qcow2"}, {Type: "raw"}}, "QCOW2, RAW"},
+		{"empty type entries skipped", []config.ArtifactInfo{{Type: ""}, {Type: "vhd"}}, "VHD"},
+		{"all empty type entries default to RAW", []config.ArtifactInfo{{Type: ""}, {Type: ""}}, "RAW"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpl := &config.ImageTemplate{Disk: config.DiskConfig{Artifacts: tt.artifacts}}
+			if got := overlayArtifactTypeLabel(tmpl); got != tt.want {
+				t.Errorf("overlayArtifactTypeLabel() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
