@@ -1335,7 +1335,7 @@ func TestValidateUserTemplateJSON_AutoExpand(t *testing.T) {
 	}
 }
 
-func TestFDEEnabledRequiresPassphrase(t *testing.T) {
+func TestFDEEnabledRequiresPassphraseFile(t *testing.T) {
 	base := `image:
   name: fde-test
   version: "1.0.0"
@@ -1350,7 +1350,7 @@ systemConfig:
     enabled: true
 `
 
-	validYAML := base + `    passphrase: "secret"
+	validYAML := base + `    passphraseFile: "/tmp/fde-passphrase.txt"
 `
 	var raw interface{}
 	if err := yaml.Unmarshal([]byte(validYAML), &raw); err != nil {
@@ -1364,6 +1364,20 @@ systemConfig:
 		t.Fatalf("expected valid FDE template to pass, got: %v", err)
 	}
 
+	invalidInlineYAML := base + `    passphrase: "secret"
+`
+	var rawInline interface{}
+	if err := yaml.Unmarshal([]byte(invalidInlineYAML), &rawInline); err != nil {
+		t.Fatalf("yaml parse inline passphrase: %v", err)
+	}
+	invalidInlineJSON, err := json.Marshal(rawInline)
+	if err != nil {
+		t.Fatalf("json marshal inline passphrase: %v", err)
+	}
+	if err := ValidateImageTemplateJSON(invalidInlineJSON); err == nil {
+		t.Fatal("expected validation to fail when fde.passphrase is used")
+	}
+
 	var rawInvalid interface{}
 	if err := yaml.Unmarshal([]byte(base), &rawInvalid); err != nil {
 		t.Fatalf("yaml parse: %v", err)
@@ -1373,6 +1387,6 @@ systemConfig:
 		t.Fatalf("json marshal: %v", err)
 	}
 	if err := ValidateImageTemplateJSON(invalidJSON); err == nil {
-		t.Fatal("expected validation to fail when fde.enabled is true without passphrase")
+		t.Fatal("expected validation to fail when fde.enabled is true without passphraseFile")
 	}
 }
