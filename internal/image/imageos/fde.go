@@ -44,7 +44,7 @@ func (imageOs *ImageOs) enablingFDE(installRoot string, diskPathIdMap map[string
 
 	passphrase := template.GetFDEPassphrase()
 	if passphrase == "" {
-		return mountPointInfoList, nil, fmt.Errorf("FDE is enabled but no passphrase was provided in the template")
+		return mountPointInfoList, nil, fmt.Errorf("FDE is enabled but no passphrase could be loaded from systemConfig.fde.passphraseFile")
 	}
 
 	targets := fdeTargetPartitionIDs(template)
@@ -104,7 +104,7 @@ func wireFDEBoot(installRoot string, diskPathIdMap map[string]string, template *
 	keyfileChroot, keyfileHost := "", ""
 	if auto {
 		if passphrase == "" {
-			return fmt.Errorf("FDE auto unlock requires a passphrase in the template")
+			return fmt.Errorf("FDE auto unlock requires a passphrase loaded from systemConfig.fde.passphraseFile")
 		}
 		var err error
 		keyfileChroot, keyfileHost, err = generateFDEKeyfile(installRoot, passphrase)

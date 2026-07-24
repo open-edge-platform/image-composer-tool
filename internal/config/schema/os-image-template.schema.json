@@ -228,9 +228,9 @@
           "description": "Whether full-disk encryption is enabled",
           "default": false
         },
-        "passphrase": {
+        "passphraseFile": {
           "type": "string",
-          "description": "Passphrase used to unlock the encrypted volume(s)"
+          "description": "Absolute or template-relative local file path containing the passphrase"
         },
         "partitions": {
           "type": "array",
@@ -254,9 +254,9 @@
             "required": ["enabled"]
           },
           "then": {
-            "required": ["passphrase"],
+            "required": ["passphraseFile"],
             "properties": {
-              "passphrase": {
+              "passphraseFile": {
                 "type": "string",
                 "minLength": 1
               }
