@@ -40,6 +40,13 @@ For a conceptual overview of how templates fit into the build pipeline, see
       - [`systemConfig.additionalFiles[]`](#systemconfigadditionalfiles)
       - [`systemConfig.configurations[]`](#systemconfigconfigurations)
   - [Template Merge Behavior](#template-merge-behavior)
+  - [Template Extends (Inheritance)](#template-extends-inheritance)
+    - [Syntax](#syntax)
+    - [Merge Behavior in a Chain](#merge-behavior-in-a-chain)
+    - [Chain Resolution](#chain-resolution)
+    - [Limitations and Validation Rules](#limitations-and-validation-rules)
+    - [Debugging an Extends Chain](#debugging-an-extends-chain)
+    - [See Also](#see-also)
   - [Variable Substitution](#variable-substitution)
 - [WSL Required Fields](#wsl-required-fields)
 - [Package Repositories](#package-repositories)
@@ -754,6 +761,187 @@ follow different strategies:
 | `systemConfig.immutability` | Merged only if user explicitly provides the section |
 | `systemConfig.fde` | Merged only if user explicitly provides the section |
 | `packageRepositories` | Merged by `codename` - same codename overrides; new repos appended |
+
+## Template Extends (Inheritance)
+
+User templates can inherit from another template with the optional
+`extends:` field. This lets you keep minimal *delta* templates that pick up
+updates from their parent automatically, while still overriding anything
+you need to change. Each template inherits from **at most one** parent
+(single inheritance), so a chain is always a simple linear sequence
+`root → ... → leaf` — no diamond problem.
+
+### Syntax
+
+`extends:` is a top-level string field. Its value is a path to a parent
+template file, resolved **relative to the child template's directory**.
+`.yml` and `.yaml` are both accepted; symbolic links are not.
+
+The canonical two-level example ships in the repo at
+`image-templates/ubuntu24-x86_64-extends-example-raw.yml`:
+
+```yaml
+# Inherit everything (disk layout, systemConfig, immutability, ...) from the
+# parent template, resolved relative to this file's directory. The parent's
+# target must match this template's target. Values below override or extend the
+# parent using the standard merge strategies (packages are additive).
+extends: "ubuntu24-x86_64-minimal-raw.yml"
+
+image:
+  name: ubuntu24-x86_64-extends-example
+  version: "24.04"
+
+target:
+  os: ubuntu # Must match the parent template's target
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+
+systemConfig:
+  name: Extends_Example
+  # These packages are merged additively on top of the parent's package list.
+  packages:
+    - htop
+    - curl
+```
+
+### Merge Behavior in a Chain
+
+The same per-section rules that govern the [user↔default merge
+above](#template-merge-behavior) apply at every level of an `extends`
+chain. Because `MergeConfigurations(child, parent)` is a pure function of
+two inputs, applying it iteratively as a fold produces the same set of
+merged fields at any depth: if the merge is deterministic for two
+layers, it is deterministic for N. Note that the ordering of slice
+entries merged by key (`systemConfig.users` by name, and
+`systemConfig.additionalFiles` by destination path) is not guaranteed to
+be stable across runs — the merge implementation uses a map to
+deduplicate keys, so the emitted slice order for those two fields may
+vary. Every other field's ordering is stable. The table below lists the
+full behavior across a chain:
+
+| Section | Rule (chain semantics) |
+|---------|------------------------|
+| `image.name`, `image.version` | Non-empty child value overrides; last non-empty level in the chain wins |
+| `target` | Replaced wholesale by the child's value (all four sub-fields together) |
+| `baseline` / `overlayPolicy` | Non-nil child pointer replaces the parent value |
+| `disk` | Wholesale replacement when the child provides a non-empty disk config |
+| `systemConfig.name` / `.description` / `.hostname` / `.initramfs.template` | Non-empty child overrides |
+| `systemConfig.packages` | **Additive union, deduplicated**; each level's packages are appended in chain order and de-duplicated |
+| `systemConfig.users` | Merged by `name`: same-name entries are field-level merged; new users included (slice order not guaranteed to be stable across runs) |
+| `systemConfig.additionalFiles` | Merged by `final` destination path: same target overrides; new files included (slice order not guaranteed to be stable across runs) |
+| `systemConfig.configurations` | **Additive concat**: appended in chain order (root first, leaf last), no deduplication |
+| `systemConfig.kernel` | Per-field override: `version`, `cmdline`, `packages`, `enableExtraModules` |
+| `systemConfig.bootloader` | Per-field override: `bootType`, `provider` |
+| `systemConfig.network` | Per-field: `backend` overrides if non-empty; `interfaces` replaced when the child provides them |
+| `systemConfig.immutability` | Merged only when the child provides some immutability configuration |
+| `packageRepositories` | Merged by `codename`: same codename overrides; new codenames appended |
+| `extends` | **Stripped from the final merged output** — it is a build-time directive, not part of the built template |
+
+The rules quoted above are the exact per-field strategies enforced by
+`MergeConfigurations` in `internal/config/merge.go`.
+
+> **Overlay mode caveat**: when the leaf template uses `baseline.mode:
+> overlay`, the additive-packages rule is deliberately overridden. The
+> merged package list becomes exactly the user's declared packages — the
+> baseline already ships the create-mode toolchain, and unioning it back
+> in would drag in bootloader packages whose strict version pins the
+> frozen baseline cannot satisfy.
+
+### Chain Resolution
+
+At load time, the resolver walks the chain from leaf to root and then
+folds it back in **root-to-leaf order** so leaf values have the highest
+precedence. Once the chain is folded, the OS defaults for the target
+distribution are applied underneath, producing the effective layering:
+
+```
+OS defaults → root template → intermediate levels → leaf template
+```
+
+Each successive level takes precedence over everything below it. The
+merge is applied pairwise: `fold(MergeConfigurations, defaults, [root,
+level1, ..., leaf])`.
+
+The build command logs the resolved chain at info level so you can see
+the inheritance hierarchy directly in build output:
+
+```
+Extends chain: root.yml -> child.yml -> leaf.yml
+```
+
+**Worked example.** Consider three templates where the leaf declares
+`packages: [my-custom-app]`, the middle level declares `packages:
+[prometheus-node-exporter, grafana-agent]`, the root declares `packages:
+[docker-cli, containerd]`, and the OS defaults declare
+`packages: [openssh-server]`. The final merged template's package list
+is the union: `openssh-server, docker-cli, containerd,
+prometheus-node-exporter, grafana-agent, my-custom-app` (deduplicated,
+default order preserved). If any two levels also set `kernel.version`,
+the last non-empty value in the chain wins.
+
+### Limitations and Validation Rules
+
+- **Single inheritance.** Each template may reference at most one parent
+  via `extends:`. Multiple inheritance and diamond-shaped graphs are not
+  supported.
+- **Cycle detection.** The resolver walks the chain with a visited-set
+  keyed on the symlink-resolved canonical absolute path of each
+  template. Any repeat is rejected with
+  `circular extends detected: A -> B -> A`. Canonicalizing the path
+  ensures a directory symlink cannot alias two textual paths to the same
+  file and evade the check.
+- **Target match.** Every template in the chain must share the same
+  `target.os`, `target.dist`, `target.arch`, and `target.imageType`. A
+  mismatch at any level is rejected with
+  `extends target mismatch at level N: child targets os/dist/arch/imageType but parent targets ...`.
+- **Depth warning.** Chains that exceed 4 levels emit
+  `extends chain depth N exceeds recommended maximum of 4` as a
+  warning. This is a soft cap intended to keep hierarchies maintainable
+  — the build still succeeds.
+- **Path containment.** The parent path is resolved relative to the
+  child template's directory. Both a lexical guard and a
+  symlink-resolved guard reject any path that escapes that directory
+  (`extends path escapes child template's directory: ...`), so a parent
+  cannot pull a template in from an unrelated location on disk.
+- **Symlink rejection.** Parent templates that are themselves symbolic
+  links are rejected at load time, matching the same policy the CLI uses
+  for the leaf template.
+- **File extension.** Only `.yml` and `.yaml` extensions are accepted;
+  other extensions are rejected.
+- **Schema.** `extends:` is defined as a plain optional string in
+  `os-image-template.schema.json` with no `pattern` or `format`
+  constraint — all validation happens in Go at load time so the errors
+  above carry more context than a schema violation would.
+- **Output stripping.** The `extends:` field is stripped from the final
+  merged template because it is a build-time directive, not part of the
+  built image's declarative state.
+
+### Debugging an Extends Chain
+
+The `resolve` subcommand renders a template exactly as the build system
+sees it after the chain is folded:
+
+```bash
+# Chain-only merge, without OS defaults (useful for verifying inheritance)
+image-composer-tool resolve image-templates/ubuntu24-x86_64-extends-example-raw.yml
+
+# Full build-time view: OS defaults as base, extends chain folded on top (leaf wins)
+image-composer-tool resolve image-templates/ubuntu24-x86_64-extends-example-raw.yml --full
+```
+
+The output includes the merged `systemConfig.packages` union and every
+other field as it would be used at build time. Sensitive fields (user
+passwords, `hash_algo` values, and secure-boot key/cert paths) are
+redacted so the output is safe to paste into an issue or a code review.
+See [Resolve Command](./image-composer-tool-cli-specification.md#resolve-command)
+for the full CLI reference.
+
+### See Also
+
+- [ADR: template `extends`](../../architecture-decision-record/adr-template-extends.md) — design rationale and full validation matrix
+- [Resolve Command](./image-composer-tool-cli-specification.md#resolve-command) — CLI reference for `image-composer-tool resolve`
+- [Template Merge Behavior](#template-merge-behavior) — the two-layer user↔default merge rules an extends chain reuses at every level
 
 ## Variable Substitution
 

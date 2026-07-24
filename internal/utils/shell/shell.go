@@ -157,6 +157,7 @@ var commandMap = map[string][]string{
 	"df":                 {"/usr/bin/df"},
 	"dirname":            {"/usr/bin/dirname"},
 	"debugfs":            {"/usr/sbin/debugfs", "/usr/bin/debugfs", "/sbin/debugfs"},
+	"depmod":             {"/usr/sbin/depmod", "/sbin/depmod"},
 	"dnf":                {"/usr/bin/dnf"},
 	"dpkg":               {"/usr/bin/dpkg"},
 	"dpkg-divert":        {"/usr/bin/dpkg-divert"},
