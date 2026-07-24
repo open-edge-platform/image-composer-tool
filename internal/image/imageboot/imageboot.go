@@ -258,9 +258,66 @@ func getKernelVersionFromBoot(installRoot string) (string, error) {
 	return "", fmt.Errorf("kernel image not found in %s", kernelDir)
 }
 
+// EnsureDepmodForBootKernels runs depmod for each vmlinuz-* found under /boot when
+// modules.dep is missing. Kernel package postinst often skips depmod in the ICT chroot
+// because initramfs generators are temporarily diverted during apt install.
+func EnsureDepmodForBootKernels(installRoot string) error {
+	bootDir := filepath.Join(installRoot, "boot")
+	entries, err := os.ReadDir(bootDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("list boot directory: %w", err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, "vmlinuz-") {
+			continue
+		}
+		kernelVersion := strings.TrimPrefix(name, "vmlinuz-")
+		if err := ensureKernelModuleDependencies(installRoot, kernelVersion); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ensureKernelModuleDependencies(installRoot, kernelVersion string) error {
+	modulesDir := filepath.Join(installRoot, "lib", "modules", kernelVersion)
+	depFile := filepath.Join(modulesDir, "modules.dep")
+	if _, err := os.Stat(depFile); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat kernel module dependencies %s: %w", depFile, err)
+	}
+
+	dirInfo, err := os.Stat(modulesDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("kernel module tree %s is missing (linux-modules package may not be installed)", modulesDir)
+		}
+		return fmt.Errorf("stat kernel module tree %s: %w", modulesDir, err)
+	}
+	if !dirInfo.IsDir() {
+		return fmt.Errorf("kernel module path %s exists but is not a directory", modulesDir)
+	}
+
+	cmd := fmt.Sprintf("depmod -a %s", shell.QuoteArg(kernelVersion))
+	log.Infof("Generating kernel module dependencies for %s", kernelVersion)
+	if _, err := shell.ExecCmd(cmd, true, installRoot, nil); err != nil {
+		return fmt.Errorf("depmod for kernel %s: %w", kernelVersion, err)
+	}
+	return nil
+}
+
 // Helper to update initramfs for Debian/Ubuntu systems using initramfs-tools
 func updateInitramfsForGrub(installRoot, kernelVersion string, template *config.ImageTemplate) error {
 	log.Debugf("Updating initramfs for Debian/Ubuntu at kernel version: %s", kernelVersion)
+
+	if err := ensureKernelModuleDependencies(installRoot, kernelVersion); err != nil {
+		return err
+	}
 
 	// Add kernel modules specified in enableExtraModules
 	extraModules := strings.TrimSpace(template.SystemConfig.Kernel.EnableExtraModules)
