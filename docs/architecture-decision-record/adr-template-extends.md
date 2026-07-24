@@ -157,7 +157,7 @@ The current `disk` strategy replaces the entire disk configuration if any level 
 
 - **`build`**: Log the full extends chain at info level so users can see the inheritance hierarchy in build output
 - **`validate`**: Resolve the full `extends` chain and validate the merged result
-- **`resolve` (new subcommand)**: When the template uses `extends`, output the resolved chain-merged template as YAML to stdout (does not include OS defaults). If the template does not use `extends`, output the template as-is with a message: `"No extends used in template, nothing to resolve"`. The `--full` flag includes OS defaults in the output, showing exactly what will be built. Usage: `image-composer-tool resolve -t my-template.yml [--full]`. Note: `resolve` always runs on-demand against current template files; output is never cached
+- **`resolve` (new subcommand)**: When the template uses `extends`, output the resolved chain-merged template as YAML to stdout (does not include OS defaults). If the template does not use `extends`, print only the message `"No extends used in template, nothing to resolve"` and exit 0 — no YAML is emitted (use `--full` when you want the merged-with-OS-defaults YAML regardless of whether `extends` is present). The `--full` flag includes OS defaults in the output, showing exactly what will be built. Usage: `image-composer-tool resolve my-template.yml [--full]`. Note: `resolve` always runs on-demand against current template files; output is never cached
 - **Error messages**: Provide clear, actionable messages for common errors:
   - `"circular extends detected: A -> B -> A"`
   - `"extends target mismatch at level 2: child targets ubuntu/x86_64 but parent targets azure-linux/x86_64"`

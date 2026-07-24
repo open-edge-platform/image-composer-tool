@@ -62,7 +62,7 @@ If you intend to *remove* a default package, you currently cannot do that with t
 ## Before committing
 
 ```sh
-image-composer-tool validate -t image-templates/<your-template>.yml
+image-composer-tool validate image-templates/<your-template>.yml
 ```
 
 The validator runs the JSON schema and additional semantic checks. CI will reject templates that fail validation.

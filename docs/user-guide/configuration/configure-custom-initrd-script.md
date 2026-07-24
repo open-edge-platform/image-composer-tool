@@ -154,7 +154,11 @@ This variant keeps the same Debian 13 + GRUB + raw image target but changes how 
   configurations:
     - cmd: 'mkdir -p /etc/dracut.conf.d && echo ''add_dracutmodules+=" hello "'' > /etc/dracut.conf.d/91hello.conf'
     - cmd: "chmod 755 /usr/lib/dracut/modules.d/91hello/module-setup.sh /usr/lib/dracut/modules.d/91hello/hello.sh /usr/lib/dracut/modules.d/91hello/initqueue-sample.sh"
+    - cmd: "printf 'Package: systemd-boot systemd-boot-efi\\nPin: release *\\nPin-Priority: -1\\n' > /etc/apt/preferences.d/no-systemd-boot"
+    - cmd: "dpkg --purge --force-all systemd-boot systemd-boot-efi 2>/dev/null || true"
 ```
+
+Debian 13 raw templates inherit `systemd-boot` from the OS default package list even when `bootloader.provider` is `grub`. Purge it so initramfs regeneration does not run the systemd-boot `kernel/install.d` hook (which fails when dracut writes the initrd directly under `/boot/efi/...`).
 
 ### dracut module files
 
@@ -355,6 +359,7 @@ There is no `99` prefix naming rule; the file name (`hello`) is arbitrary.
 | Script on disk but not in initrd   | Missing `hooks/hello` or hook not executable.                                                        |
 | Script in initramfs but never runs | Missing or wrong `scripts/.../hello` path; wrong boot stage directory.                               |
 | Wrong image type or bootloader     | This guide targets **Debian 13 raw** with `**bootloader: grub`**.                                    |
+| `dracut -f` exits 1 after initrd is built; `install: ... are the same file` | `systemd-boot` is still installed (default merge). Purge it (see Route 2 snippet) or run `dracut --force --kver $(uname -r) /boot/initrd.img-$(uname -r)` then `update-grub`. |
 
 
 ---
