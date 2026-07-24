@@ -104,6 +104,8 @@
 
 - `fix(templates)`: pin ubuntu24 edge kernel to noble GA (6.8) (#761): The `ubuntu24-x86_64-edge-raw` and `ubuntu24-aarch64-edge-raw` templates pinned `kernel.version: 6.17` with `linux-image-generic-hwe-24.04`, a combination Ubuntu noble no longer ships — only `6.8.0-31.31` (GA) and `7.0.0-28.28~24.04.1` (HWE-edge) are available. Pin the kernel to the noble GA combination (`6.8` + `linux-image-generic`) so the `build-ubuntu24-immutable` CI job can complete.
 
+- `fix(templates)`: drop stale `kernel.version` pin across ubuntu24 metapackage templates: Every ubuntu24 template that combined a `kernel.version` string with a rolling metapackage (`linux-image-generic-hwe-24.04`, `linux-image-generic`, `linux-image-generic*`) was one HWE roll away from the same class of CI break that #494, #669, and #761 fixed. Drop the `kernel.version` line from those templates so `apt` resolves whatever the metapackage currently points to — no pin, nothing to go stale. Templates with an intentionally-pinned concrete kernel package (e.g. `linux-image-6.11.0-17-generic` in `ubuntu24-server-cloud-amd64.yml`) are unaffected.
+
 - RPM DOT file naming bug (#538): `GenerateDot` used the raw filename (e.g., `glibc-2.38-16.azl3.x86_64.rpm`) as a node label instead of the canonical package name (`glibc`), producing incorrect dependency graphs.
 
 - Swap partition cleanup before loop device detach (#568): Building images that include a swap partition would fail at teardown because the loop device was busy. The swap partition is now detected and disabled with `swapoff` before `losetup -d`.

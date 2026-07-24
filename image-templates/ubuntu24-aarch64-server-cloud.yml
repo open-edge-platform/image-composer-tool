@@ -147,7 +147,6 @@ systemConfig:
 
   # Kernel metadata used by builder to set cmdline and module hints
   kernel:
-    version: "6.11"
     cmdline: "root=LABEL=cloudimg-rootfs ro console=tty1 console=ttyS0"
     packages:
-      - linux-image-generic-hwe-24.04 
+      - linux-image-generic-hwe-24.04
