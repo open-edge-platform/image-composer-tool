@@ -228,7 +228,7 @@ func ResolveOverlayPackages(template *config.ImageTemplate, info *BaselineInfo, 
 	})
 	log.Infof("Overlay resolution complete: %d requested, %d in closure, %d to install (%d already present), %d artifact(s) in %s",
 		len(plan.Requested), len(plan.Closure), len(plan.ToInstall), len(plan.AlreadyPresent), len(plan.Artifacts), plan.DownloadDir)
-	logToInstallProvenance(plan)
+	logToInstallProvenance(info.PackageManager, plan)
 	return plan, nil
 }
 
@@ -242,18 +242,19 @@ func ResolveOverlayPackages(template *config.ImageTemplate, info *BaselineInfo, 
 // The provenance counts are logged at Info level, but the per-package breakdown
 // is logged at Debug: a large dependency closure would otherwise emit hundreds of
 // Info lines per overlay, hurting log readability and slowing CI.
-func logToInstallProvenance(plan *ResolutionPlan) {
+func logToInstallProvenance(family PackageManager, plan *ResolutionPlan) {
 	if len(plan.ToInstall) == 0 {
 		return
 	}
 	// The resolver canonicalizes plan.ToInstall names to the base name (dropping
 	// any deb ":arch" multiarch qualifier), but plan.Requested holds the raw
-	// template strings, which may be arch-qualified ("gcc:amd64"). Key and look up
-	// the requested set on the base name so an arch-qualified request is still
-	// classified as "requested" rather than skewing the dependency count.
+	// template strings, which may be arch-qualified ("gcc:amd64") or carry a deb
+	// "_version" pin ("coreutils_9.4-.."). Key and look up the requested set on the
+	// base name so a qualified or pinned request is still classified as "requested"
+	// rather than skewing the dependency count.
 	requestedSet := make(map[string]bool, len(plan.Requested))
 	for _, name := range plan.Requested {
-		requestedSet[basePackageName(name)] = true
+		requestedSet[requestedBaseName(family, name)] = true
 	}
 	requestedCount := 0
 	for _, pkg := range plan.ToInstall {
@@ -514,12 +515,13 @@ func upgradeEligibleNames(family PackageManager, requested []string, closure []o
 	}
 	// The resolver canonicalizes closure names to the base name (dropping any deb
 	// ":arch" multiarch qualifier), but the template request strings may be arch-
-	// qualified ("gcc:amd64"). Key the requested set on the base name so an arch-
-	// qualified request is still recognized as requested-and-present below and is
-	// eligible for upgrade.
+	// qualified ("gcc:amd64") or carry a deb "_version" pin ("coreutils_9.4-..").
+	// Key the requested set on the base name so a qualified or pinned request is
+	// still recognized as requested-and-present below and is eligible for upgrade;
+	// otherwise a pinned bump of a baseline package would be dropped from ToInstall.
 	requestedSet := make(map[string]bool, len(requested))
 	for _, r := range requested {
-		requestedSet[basePackageName(r)] = true
+		requestedSet[requestedBaseName(family, r)] = true
 	}
 
 	eligible := map[string]bool{}  // present baseline names approved for upgrade
@@ -676,12 +678,13 @@ func buildResolutionPlan(in planInput) *ResolutionPlan {
 	// is excluded here to avoid labelling it both installed and already-present.
 	//
 	// present/toInstallNames are keyed by canonical base name, so an arch-qualified
-	// request ("gcc:amd64") is normalized with basePackageName before the lookups
-	// (and recorded under the base name) — otherwise the qualifier mismatch would
-	// miss an already-present requested package and mislabel it.
+	// ("gcc:amd64") or deb "_version"-pinned ("coreutils_9.4-..") request is
+	// normalized with requestedBaseName before the lookups (and recorded under the
+	// base name) — otherwise the qualifier/pin mismatch would miss an already-present
+	// requested package and mislabel it.
 	toInstallNames := resolvedNameSet(toInstall)
 	for _, r := range requested {
-		base := basePackageName(r)
+		base := requestedBaseName(in.family, r)
 		if present[base] && !toInstallNames[base] {
 			alreadyPresent[base] = true
 		}
@@ -730,6 +733,24 @@ func basePackageName(name string) string {
 		return name[:colon]
 	}
 	return name
+}
+
+// requestedBaseName reduces a raw template request string to the canonical base
+// name the resolver keys closure members on. On top of basePackageName's ":arch"
+// stripping, it strips a deb "_version" pin for the APT family, whose pin syntax
+// is "name_version" ("coreutils_9.4-3ubuntu6.2" -> "coreutils"). Without this a
+// version-pinned, baseline-present request would never match its canonical
+// closure name, so upgrade classification would skip it and the pin would be
+// silently ignored. The RPM family pins as "name-version"; package names contain
+// hyphens, so that form cannot be split back to a base name unambiguously and its
+// requests are matched by base name alone (basePackageName's behavior).
+func requestedBaseName(family PackageManager, name string) string {
+	if family == PackageManagerAPT {
+		if us := strings.Index(name, "_"); us != -1 {
+			name = name[:us]
+		}
+	}
+	return basePackageName(name)
 }
 
 // sortResolved orders resolved packages by name, then version, then arch.

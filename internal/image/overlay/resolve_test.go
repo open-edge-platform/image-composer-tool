@@ -708,6 +708,54 @@ func TestUpgradeEligibleNames_ArchQualifiedRequest(t *testing.T) {
 	}
 }
 
+// TestRequestedBaseName confirms the base name a template request reduces to for
+// upgrade classification: the APT family strips both a ":arch" qualifier and a
+// "_version" pin ("coreutils_9.4-3ubuntu6.2" -> "coreutils"), while the RPM family
+// (whose "name-version" pin cannot be split back unambiguously) only strips ":arch".
+func TestRequestedBaseName(t *testing.T) {
+	cases := []struct {
+		family PackageManager
+		in     string
+		want   string
+	}{
+		{PackageManagerAPT, "coreutils", "coreutils"},
+		{PackageManagerAPT, "coreutils_9.4-3ubuntu6.2", "coreutils"},
+		{PackageManagerAPT, "gcc:amd64", "gcc"},
+		{PackageManagerAPT, "libc6_2.39-0ubuntu8:amd64", "libc6"}, // pin stripped before ":arch"
+		{PackageManagerDNF, "coreutils", "coreutils"},
+		{PackageManagerDNF, "coreutils-9.4-3.el9", "coreutils-9.4-3.el9"}, // rpm pin not split
+		{PackageManagerDNF, "gcc:x86_64", "gcc"},
+	}
+	for _, c := range cases {
+		if got := requestedBaseName(c.family, c.in); got != c.want {
+			t.Errorf("requestedBaseName(%v, %q) = %q, want %q", c.family, c.in, got, c.want)
+		}
+	}
+}
+
+// TestUpgradeEligibleNames_VersionPinnedRequest confirms an APT "_version"-pinned
+// template request ("coreutils_9.4-3ubuntu6.2") for a baseline-present package is
+// still recognized as requested-and-present, so its canonical closure entry
+// ("coreutils") — newer than the baseline — is marked upgrade-eligible rather than
+// skipped on the pin-suffix mismatch (the reported bug where pinning silently
+// suppressed the upgrade).
+func TestUpgradeEligibleNames_VersionPinnedRequest(t *testing.T) {
+	requested := []string{"coreutils_9.4-3ubuntu6.2"}
+	closure := []ospackage.PackageInfo{
+		{PkgName: "coreutils", Version: "9.4-3ubuntu6.2", Arch: "amd64"},
+	}
+	present := map[string]bool{"coreutils": true}
+	baselineByName := map[string]BaselinePackage{
+		"coreutils": {Name: "coreutils", Version: "9.4-3ubuntu6.1", Arch: "amd64"},
+	}
+
+	eligible := upgradeEligibleNames(PackageManagerAPT, requested, closure, present, baselineByName)
+
+	if !eligible["coreutils"] {
+		t.Errorf("version-pinned request coreutils_9.4-3ubuntu6.2 not upgrade-eligible: %v", eligible)
+	}
+}
+
 func TestOverlaySeedPackages_PreservesOrder(t *testing.T) {
 	requested := []string{"bash", "curl", "vim"}
 	present := map[string]bool{"bash": true}
