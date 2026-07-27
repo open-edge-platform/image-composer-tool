@@ -26,6 +26,12 @@ const (
 // Filesystem reported by lsblk/blkid for a LUKS container.
 const fsTypeLUKS = "crypto_luks"
 
+// Filesystem reported by lsblk/blkid for an LVM physical-volume member. A root on
+// an LVM logical volume sits behind this layer, which overlay's grow-only resize
+// cannot handle (it needs pvresize + lvextend and PV/VG/LV detection). Rejected
+// with an LVM-specific message rather than the generic unsupported-FS one.
+const fsTypeLVMMember = "lvm2_member"
+
 // Filesystem reported by lsblk/blkid for a swap partition. Swap is never a root
 // candidate, so it is excluded from the size-based root fallback.
 const fsTypeSwap = "swap"
@@ -353,7 +359,8 @@ func analyzeLayout(table string, parts []partition) (*Layout, error) {
 		}
 	}
 
-	// Reject integrity/encryption layouts before attempting to pick a root.
+	// Reject integrity/encryption/volume-manager layouts before attempting to pick
+	// a root.
 	for _, p := range parts {
 		if p.FSType == fsTypeLUKS {
 			return nil, &unsupportedLayoutError{
@@ -361,6 +368,15 @@ func analyzeLayout(table string, parts []partition) (*Layout, error) {
 				reason:   "overlay mode cannot modify a LUKS-encrypted filesystem in place",
 				remediation: "provide an unencrypted baseline image, or unlock and re-encrypt the " +
 					"volume out of band",
+			}
+		}
+		if p.FSType == fsTypeLVMMember {
+			return nil, &unsupportedLayoutError{
+				detected: fmt.Sprintf("LVM physical-volume member %s (filesystem type %s)", p.Path, fsTypeLVMMember),
+				reason: "overlay mode cannot mount or grow a root on an LVM logical volume: the root " +
+					"filesystem must sit directly on a partition, not behind an LVM layer",
+				remediation: "provide a baseline image whose root filesystem is on a plain partition " +
+					"(no LVM), or manage the LVM PV/VG/LV grow out of band",
 			}
 		}
 		if isDMVerity(p) {
@@ -512,5 +528,24 @@ func int64Field(dev map[string]interface{}, key string) int64 {
 		return n
 	default:
 		return 0
+	}
+}
+
+// int64FieldStrict reads an integer field like int64Field but reports whether the
+// value was actually present and parseable, so a caller that must fail closed can
+// distinguish a real 0 from a missing/unparseable/null field. A missing key, JSON
+// null, empty string, or non-numeric string returns ok=false.
+func int64FieldStrict(dev map[string]interface{}, key string) (int64, bool) {
+	switch v := dev[key].(type) {
+	case float64:
+		return int64(v), true
+	case json.Number:
+		n, err := v.Int64()
+		return n, err == nil
+	case string:
+		n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+		return n, err == nil
+	default:
+		return 0, false
 	}
 }

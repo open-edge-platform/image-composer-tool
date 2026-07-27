@@ -44,7 +44,7 @@ skus:
   - id: desktop-virtualization
     displayName: Desktop Virtualization
   - id: robotics-jazzy-ubuntu24
-    displayName: robotics-jazzy-ubuntu24
+    displayName: Autonomous Mobile Robots (AMR)
   - id: generic-handheld-blueprint
     displayName: Generic Handheld Blueprint
 

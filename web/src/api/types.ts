@@ -61,6 +61,7 @@ export interface ComposeSummary {
   partitionCount: number
   partitionTable: string
   hostname: string
+  baseImage?: string
 }
 
 export interface ComposeResponse {
@@ -79,6 +80,7 @@ export interface Artifact {
   name: string
   type: 'image' | 'sbom'
   path: string
+  size?: string
 }
 
 // Reproducibility/troubleshooting metadata for a build: the exact command that
@@ -91,6 +93,17 @@ export interface BuildDetails {
   templateUrl: string
   workDir: string
   cacheDir: string
+  summary?: ComposeSummary
+  hasLogFile: boolean
+  errMsg?: string
+}
+
+// One row in the compose history list.
+export interface HistoryItem {
+  id: string
+  status: string
+  template: string
+  createdAt: string
   summary?: ComposeSummary
 }
 

@@ -14,7 +14,7 @@ type artifactList struct {
 // handleBuildArtifacts returns the output artifacts for a build.
 func (s *Server) handleBuildArtifacts(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	b, ok := s.tracker.get(id)
+	b, ok := s.getBuild(id)
 	if !ok {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "build not found")
 		return

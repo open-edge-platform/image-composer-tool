@@ -37,7 +37,7 @@ Create a `manage_todo_list` covering exactly these steps, then execute in order:
    - Add a release note under `docs/user-guide/release-notes.md`.
    - Update the **Adding a New OS Provider** section of `.github/copilot-instructions.md` only if the *steps* changed (not just the provider list).
 8. **Validate**:
-   - `image-composer-tool validate -t image-templates/<new-template>.yml` for each new template.
+   - `image-composer-tool validate image-templates/<new-template>.yml` for each new template.
    - `go test ./internal/provider/{osname}/...`
    - `earthly +test-quick` and `earthly +lint` (or Go fallbacks).
 9. **Summary** — report what was created, what tests passed, and what the user should run to do a real integration build.

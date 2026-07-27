@@ -13,8 +13,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
@@ -35,6 +37,7 @@ type artifact struct {
 	Name string `json:"name"`
 	Type string `json:"type"` // "image" | "sbom"
 	Path string `json:"path"`
+	Size string `json:"size,omitempty"` // human-readable, e.g. "1.13 GB" (from ICT output)
 }
 
 // build is the in-memory record of a single build (MVP-1: no persistence).
@@ -43,12 +46,15 @@ type artifact struct {
 // once at construction and are safe to read without the lock.
 type build struct {
 	ID           string
+	RootDir      string // per-build root (parent of work/ and cache/)
 	WorkDir      string
 	CacheDir     string
 	Template     string          // template file name (for display)
 	TemplatePath string          // resolved on-disk path (for download)
 	Command      string          // exact command run, for the UI's troubleshoot panel
 	Summary      *composeSummary // image configuration summary, nil for YAML builds
+	CreatedAt    time.Time       // when the compose was started
+	LogFile      string          // on-disk log file path, written at finish
 	done         chan struct{}   // closed when the build finishes
 
 	mu        sync.Mutex
@@ -63,15 +69,19 @@ type result struct {
 	status    buildStatus
 	artifacts []artifact
 	errMsg    string
+	logFile   string
 }
 
-// snapshot returns the build's current status, artifacts, and error under lock.
+// snapshot returns the build's current status, artifacts, error, and log-file
+// path under lock. logFile is included in the snapshot because it is written
+// under b.mu in finish(); reading it directly off the struct from a handler
+// would race a concurrently finishing build.
 func (b *build) snapshot() result {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	arts := make([]artifact, len(b.artifacts))
 	copy(arts, b.artifacts)
-	return result{status: b.status, artifacts: arts, errMsg: b.errMsg}
+	return result{status: b.status, artifacts: arts, errMsg: b.errMsg, logFile: b.LogFile}
 }
 
 // buildTracker holds all builds for the process lifetime.
@@ -95,6 +105,17 @@ func (t *buildTracker) get(id string) (*build, bool) {
 	defer t.mu.Unlock()
 	b, ok := t.builds[id]
 	return b, ok
+}
+
+// all returns a snapshot slice of the currently tracked (in-memory) builds.
+func (t *buildTracker) all() []*build {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([]*build, 0, len(t.builds))
+	for _, b := range t.builds {
+		out = append(out, b)
+	}
+	return out
 }
 
 // appendLog records a log line and is safe for concurrent use.
@@ -139,6 +160,7 @@ func (s *Server) handleStartBuild(w http.ResponseWriter, r *http.Request) {
 	buildRoot := filepath.Join(s.cfg.WorkDir, "builds", id)
 	workDir := filepath.Join(buildRoot, "work")
 	cacheDir := filepath.Join(buildRoot, "cache")
+	createdAt := time.Now()
 	// 0700: build logs and artifact metadata may be sensitive; keep them private.
 	for _, d := range []string{workDir, cacheDir} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
@@ -173,15 +195,23 @@ func (s *Server) handleStartBuild(w http.ResponseWriter, r *http.Request) {
 	b := &build{
 		ID:           id,
 		status:       statusRunning,
+		RootDir:      buildRoot,
 		WorkDir:      workDir,
 		CacheDir:     cacheDir,
 		Template:     templateName,
 		TemplatePath: templatePath,
 		Command:      name + " " + strings.Join(cmdArgs, " "),
 		Summary:      summary,
+		CreatedAt:    createdAt,
 		done:         make(chan struct{}),
 	}
 	s.tracker.add(b)
+
+	// Persist the initial record so the build shows in history immediately (and
+	// survives a restart mid-build as a stale "running" entry).
+	if err := b.writeMeta(); err != nil {
+		logger.Logger().Warnf("build %s: writing initial meta: %v", id, err)
+	}
 
 	go s.runBuild(b, name, cmdArgs)
 
@@ -325,13 +355,33 @@ func (s *Server) runBuild(b *build, name string, cmdArgs []string) {
 	b.finish(statusSuccess, arts, "")
 }
 
-// finish records the build's terminal status, artifacts, and error under lock.
+// finish records the build's terminal status, artifacts, and error under lock,
+// persists the buffered logs to a file (so past builds can offer a log download
+// without keeping logs in memory), then writes meta.json so the compose history
+// reflects the final outcome across restarts.
 func (b *build) finish(status buildStatus, arts []artifact, errMsg string) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.status = status
 	b.artifacts = arts
 	b.errMsg = errMsg
+	b.mu.Unlock()
+
+	// Persist logs to <root>/compose.log for later download.
+	if b.RootDir != "" {
+		logPath := filepath.Join(b.RootDir, "compose.log")
+		content := strings.Join(b.snapshotLogs(), "\n")
+		if err := os.WriteFile(logPath, []byte(content), 0o600); err != nil {
+			logger.Logger().Warnf("build %s: writing log file: %v", b.ID, err)
+		} else {
+			b.mu.Lock()
+			b.LogFile = logPath
+			b.mu.Unlock()
+		}
+	}
+
+	if err := b.writeMeta(); err != nil {
+		logger.Logger().Warnf("build %s: writing final meta: %v", b.ID, err)
+	}
 }
 
 // parseArtifacts extracts the artifact list from ICT's build output. ICT prints
@@ -350,13 +400,15 @@ func parseArtifacts(logs []string) []artifact {
 	for _, line := range logs {
 		if idx := strings.Index(line, "• "); idx >= 0 {
 			rest := strings.TrimSpace(line[idx+len("• "):])
-			// Strip a trailing " (size)" suffix, keeping the filename.
-			name := rest
-			if p := strings.LastIndex(rest, " ("); p >= 0 {
+			// Split a trailing " (size)" suffix: keep the filename and the size.
+			// ICT prints sizes like "0.01 MB"; normalize so small files show in KB.
+			name, size := rest, ""
+			if p := strings.LastIndex(rest, " ("); p >= 0 && strings.HasSuffix(rest, ")") {
 				name = strings.TrimSpace(rest[:p])
+				size = normalizeSize(strings.TrimSpace(rest[p+2 : len(rest)-1]))
 			}
 			if name != "" {
-				out = append(out, artifact{Name: name, Type: classifyArtifact(name)})
+				out = append(out, artifact{Name: name, Type: classifyArtifact(name), Size: size})
 				pending = &out[len(out)-1]
 			}
 			continue
@@ -408,14 +460,65 @@ func discoverArtifacts(workDir string) []artifact {
 		}
 		name := d.Name()
 		lower := strings.ToLower(name)
+		var typ string
 		switch {
 		case strings.Contains(lower, "sbom") || strings.HasSuffix(lower, ".spdx.json"):
-			out = append(out, artifact{Name: name, Type: "sbom", Path: path})
+			typ = "sbom"
 		case strings.HasSuffix(lower, ".raw"), strings.HasSuffix(lower, ".raw.gz"),
 			strings.HasSuffix(lower, ".iso"), strings.HasSuffix(lower, ".qcow2"):
-			out = append(out, artifact{Name: name, Type: "image", Path: path})
+			typ = "image"
+		default:
+			return nil
 		}
+		size := ""
+		if fi, statErr := d.Info(); statErr == nil {
+			size = humanSize(fi.Size())
+		}
+		out = append(out, artifact{Name: name, Type: typ, Path: path, Size: size})
 		return nil
 	})
 	return out
+}
+
+// humanSize formats a byte count as a short human-readable string, choosing the
+// largest unit under which the value is >= 1 (e.g. 12 KB, 4.3 MB, 1.13 GB).
+func humanSize(n int64) string {
+	const unit = 1000
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	val := float64(n) / float64(div)
+	// Whole KB read better without a trailing ".00" (e.g. "12 KB" not "12.00 KB").
+	if exp == 0 && val == float64(int64(val)) {
+		return fmt.Sprintf("%d KB", int64(val))
+	}
+	return fmt.Sprintf("%.2f %cB", val, "KMGTPE"[exp])
+}
+
+// normalizeSize re-formats a size string that ICT already printed (e.g.
+// "0.01 MB", "1.13 GB", "512 B") into a sensible unit, so tiny artifacts don't
+// show as "0.01 MB". Unparseable input is returned unchanged.
+func normalizeSize(s string) string {
+	fields := strings.Fields(s)
+	if len(fields) != 2 {
+		return s
+	}
+	val, err := strconv.ParseFloat(fields[0], 64)
+	if err != nil {
+		return s
+	}
+	mult := map[string]float64{
+		"B": 1, "KB": 1e3, "MB": 1e6, "GB": 1e9, "TB": 1e12,
+		"KIB": 1024, "MIB": 1 << 20, "GIB": 1 << 30, "TIB": 1 << 40,
+	}
+	m, ok := mult[strings.ToUpper(fields[1])]
+	if !ok {
+		return s
+	}
+	return humanSize(int64(val * m))
 }

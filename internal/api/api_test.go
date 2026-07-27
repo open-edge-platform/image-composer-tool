@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // testManifest returns a small in-memory manifest for handler tests.
@@ -700,6 +701,7 @@ func TestHandleBuildArtifactDownload(t *testing.T) {
 	}
 	b := &build{
 		ID:      "a1",
+		RootDir: workDir, // so finish()'s writeMeta stays in the temp dir
 		WorkDir: workDir,
 		done:    make(chan struct{}),
 	}
@@ -736,5 +738,187 @@ func TestHandleBuildArtifactDownload(t *testing.T) {
 	s.handleBuildArtifactDownload(rr3, req3)
 	if rr3.Code != http.StatusNotFound {
 		t.Errorf("missing build status = %d, want 404", rr3.Code)
+	}
+}
+
+// TestHandleBuildArtifactRelativeWorkDir guards the regression where a relative
+// WorkDir (the default `webui-workspace`) made the absolute-vs-relative prefix
+// check always fail, wrongly returning 403 for a legitimate artifact.
+func TestHandleBuildArtifactRelativeWorkDir(t *testing.T) {
+	s := newTestServer(t)
+
+	// Relative work dir under a temp cwd, with a deeply nested artifact like a
+	// real ICT build produces.
+	t.Chdir(t.TempDir())
+	relWorkDir := filepath.Join("webui-workspace", "builds", "rel1", "work")
+	nested := filepath.Join(relWorkDir, "debian-debian13-x86_64", "imagebuild", "out")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	artifactFile := filepath.Join(nested, "image.iso")
+	if err := os.WriteFile(artifactFile, []byte("iso-bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	b := &build{ID: "rel1", RootDir: "webui-workspace/builds/rel1", WorkDir: relWorkDir, done: make(chan struct{})}
+	b.finish(statusSuccess, []artifact{{Name: "image.iso", Type: "image", Path: artifactFile}}, "")
+	s.tracker.add(b)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/builds/rel1/artifacts/image.iso", nil)
+	req.SetPathValue("id", "rel1")
+	req.SetPathValue("name", "image.iso")
+	rr := httptest.NewRecorder()
+	s.handleBuildArtifactDownload(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rr.Code, rr.Body)
+	}
+	if rr.Body.String() != "iso-bytes" {
+		t.Errorf("body = %q, want iso-bytes", rr.Body.String())
+	}
+}
+
+// --- compose history (list + disk hydration) ---
+
+func TestHistoryListAndHydrate(t *testing.T) {
+	s := newTestServer(t)
+
+	// A live in-memory build (running).
+	live := &build{
+		ID:        "live1",
+		RootDir:   filepath.Join(s.cfg.WorkDir, "builds", "live1"),
+		Template:  "robotics.yml",
+		Summary:   &composeSummary{Vertical: "robotics"},
+		CreatedAt: time.Now(),
+		done:      make(chan struct{}),
+	}
+	live.status = statusRunning
+	s.tracker.add(live)
+
+	// A past build present only on disk via meta.json (not in memory).
+	pastRoot := filepath.Join(s.cfg.WorkDir, "builds", "past1")
+	if err := os.MkdirAll(pastRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	meta := buildMeta{
+		ID:        "past1",
+		Status:    "success",
+		Template:  "retail.yml",
+		Command:   "ict build retail.yml",
+		CreatedAt: time.Now().Add(-time.Hour),
+		Summary:   &composeSummary{Vertical: "retail"},
+		Artifacts: []artifact{{Name: "img.iso", Type: "image", Path: filepath.Join(pastRoot, "img.iso")}},
+	}
+	data, _ := json.MarshalIndent(meta, "", "  ")
+	if err := os.WriteFile(metaPath(pastRoot), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// List returns both, newest-first (live is newer).
+	rr := httptest.NewRecorder()
+	s.handleListBuilds(rr, httptest.NewRequest(http.MethodGet, "/api/v1/builds", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	var out struct {
+		Builds []historyItem `json:"builds"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out.Builds) != 2 {
+		t.Fatalf("builds = %d, want 2: %+v", len(out.Builds), out.Builds)
+	}
+	if out.Builds[0].ID != "live1" || out.Builds[1].ID != "past1" {
+		t.Errorf("order = %s,%s want live1,past1", out.Builds[0].ID, out.Builds[1].ID)
+	}
+
+	// getBuild hydrates the past build from disk (not in tracker).
+	if _, ok := s.tracker.get("past1"); ok {
+		t.Fatal("past1 should not be in the tracker")
+	}
+	hb, ok := s.getBuild("past1")
+	if !ok {
+		t.Fatal("getBuild past1 = not found, want hydrated from disk")
+	}
+	if hb.Template != "retail.yml" || hb.snapshot().status != statusSuccess {
+		t.Errorf("hydrated build wrong: %+v", hb)
+	}
+
+	// Unknown build id is not found.
+	if _, ok := s.getBuild("does-not-exist"); ok {
+		t.Error("getBuild unknown id = found, want not found")
+	}
+}
+
+func TestNormalizeSize(t *testing.T) {
+	cases := map[string]string{
+		"0.01 MB": "10 KB",   // small file now shows in KB, not "0.01 MB"
+		"1.13 GB": "1.13 GB", // large unchanged
+		"512 B":   "512 B",
+		"2048 KB": "2.05 MB", // rolls up to MB
+		"4 MB":    "4.00 MB",
+		"":        "", // unparseable → unchanged
+		"weird":   "weird",
+	}
+	for in, want := range cases {
+		if got := normalizeSize(in); got != want {
+			t.Errorf("normalizeSize(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestDetectPhase(t *testing.T) {
+	// Empty logs → preparing.
+	if got := detectPhase(nil); got != "preparing" {
+		t.Errorf("empty logs phase = %q, want preparing", got)
+	}
+	// Furthest marker wins regardless of order of earlier lines. Resolve and
+	// download collapse into the single "packages" phase.
+	logs := []string{
+		"2026 INFO Loaded image template from x.yml",
+		"2026 INFO downloading 239 packages to /cache using 8 workers",
+		"2026 INFO resolving dependencies for 239 DEBIANs",
+		"2026 INFO Chroot environment build completed successfully",
+		"2026 INFO Image package installation...",
+	}
+	if got := detectPhase(logs); got != "installing" {
+		t.Errorf("phase = %q, want installing", got)
+	}
+	// Terminal marker.
+	if got := detectPhase([]string{"2026 INFO image build completed successfully"}); got != "done" {
+		t.Errorf("done phase = %q, want done", got)
+	}
+	// Resolve/download → the merged "packages" phase (RPM wording too).
+	if got := detectPhase([]string{"2026 INFO resolving dependencies for 100 RPMs"}); got != "packages" {
+		t.Errorf("rpm resolve phase = %q, want packages", got)
+	}
+	// Regression: chroot build and the initrd download round that FOLLOWS it are
+	// all still the "packages" phase — nothing goes green until install starts.
+	seq := []string{
+		"2026 INFO Chroot environment build completed successfully",
+		"2026 INFO Building image: debian13-x86_64-desktop-virtualization",
+		"2026 INFO downloading 239 packages to /cache using 8 workers",
+		"2026 INFO resolving dependencies for 54 DEBIANs",
+		"2026 INFO all downloads complete",
+	}
+	if got := detectPhase(seq); got != "packages" {
+		t.Errorf("chroot + post-chroot download phase = %q, want packages (not installing)", got)
+	}
+	// Install marker advances the stepper; ISO assembly marks generating.
+	if got := detectPhase(append(seq, "2026 INFO Image package installation...", "2026 INFO Creating ISO image...")); got != "generating" {
+		t.Errorf("iso-assembly phase = %q, want generating", got)
+	}
+}
+
+func TestInstallProgress(t *testing.T) {
+	logs := []string{
+		"2026 INFO Installing package 1/128: curl",
+		"2026 INFO Installing package 42/128: vim",
+	}
+	if d, tot := installProgress(logs); d != 42 || tot != 128 {
+		t.Errorf("installProgress = %d/%d, want 42/128", d, tot)
+	}
+	if d, tot := installProgress([]string{"no counter here"}); d != 0 || tot != 0 {
+		t.Errorf("installProgress(none) = %d/%d, want 0/0", d, tot)
 	}
 }

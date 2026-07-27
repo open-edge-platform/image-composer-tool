@@ -58,9 +58,37 @@ export const useStore = create<AppState>((set) => ({
       } else if (key === 'kernel') {
         selection.imageType = ''
       }
+      // Auto-fill each downstream dimension with its first available option, so
+      // selecting a vertical immediately populates a valid default combination
+      // the user can tweak, rather than forcing a click through every dropdown.
+      if (state.manifest) {
+        autoFillCascade(state.manifest, selection)
+      }
       return { selection }
     }),
 }))
+
+// autoFillCascade mutates `selection`, setting each empty downstream field to the
+// first option available for the current upstream choices. Walks the cascade in
+// order so each step sees the defaults picked by the previous one.
+function autoFillCascade(manifest: Manifest, selection: Selection): void {
+  const order: (keyof Selection)[] = ['sku', 'platform', 'os', 'kernel', 'imageType']
+  const optsKey: Record<string, keyof ReturnType<typeof cascadingOptions>> = {
+    sku: 'skus',
+    platform: 'platforms',
+    os: 'oses',
+    kernel: 'kernels',
+    imageType: 'imageTypes',
+  }
+  for (const field of order) {
+    if (selection[field]) continue
+    const opts = cascadingOptions(manifest, selection)
+    const list = opts[optsKey[field]] as DropdownOption[]
+    if (list.length > 0) {
+      selection[field] = list[0].id
+    }
+  }
+}
 
 // --- Derived cascading option helpers (pure functions over the manifest) ---
 

@@ -45,6 +45,9 @@ type composeSummary struct {
 	PartitionCount int    `json:"partitionCount"`
 	PartitionTable string `json:"partitionTable"`
 	Hostname       string `json:"hostname"`
+
+	// Overlay-mode only: the baseline image the packages are layered onto.
+	BaseImage string `json:"baseImage,omitempty"`
 }
 
 type composeResponse struct {
@@ -57,6 +60,17 @@ type composeResponse struct {
 // template. Extracted so handleStartBuild can reuse it to store the summary on
 // the build record for display in the Build Details panel.
 func buildComposeSummary(req composeRequest, merged *config.ImageTemplate) composeSummary {
+	// For overlay-mode templates, surface the baseline image the packages are
+	// layered onto (local path or URL). Empty for from-scratch builds.
+	var baseImage string
+	if merged.Baseline != nil && merged.Baseline.Mode == config.BaselineModeOverlay && merged.Baseline.Source != nil {
+		if merged.Baseline.Source.Path != "" {
+			baseImage = merged.Baseline.Source.Path
+		} else {
+			baseImage = merged.Baseline.Source.URL
+		}
+	}
+
 	return composeSummary{
 		Vertical:  req.Vertical,
 		SKU:       req.SKU,
@@ -74,6 +88,7 @@ func buildComposeSummary(req composeRequest, merged *config.ImageTemplate) compo
 		PartitionCount: len(merged.Disk.Partitions),
 		PartitionTable: merged.Disk.PartitionTableType,
 		Hostname:       merged.SystemConfig.HostName,
+		BaseImage:      baseImage,
 	}
 }
 

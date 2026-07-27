@@ -11,6 +11,7 @@
   - [Commands](#commands)
     - [Build Command](#build-command)
     - [Validate Command](#validate-command)
+    - [Resolve Command](#resolve-command)
     - [Inspect Command](#inspect-command)
     - [Compare Command](#compare-command)
     - [Cache Command](#cache-command)
@@ -26,6 +27,7 @@
     - [Managing Cache](#managing-cache)
     - [Inspecting and Comparing Images](#inspecting-and-comparing-images)
     - [Validating Templates](#validating-templates)
+    - [Resolving Templates](#resolving-templates)
   - [Configuration Files](#configuration-files)
     - [Global Configuration File](#global-configuration-file)
     - [Image Template File](#image-template-file)
@@ -178,6 +180,15 @@ sudo -E image-composer-tool build --baseline-image /images/base.raw overlay-temp
 
 **Baseline image formats (overlay mode):** `baseline.source.format` accepts `raw` (default), `qcow2`, `vhd`, and `vhdx`. Non-RAW baselines are converted to RAW with `qemu-img` before mounting, so `qemu-img` must be installed on the host when a non-RAW format is used (the build fails clearly if it is missing). The declared format is verified against the image's actual format; a mismatch aborts the build. The user-supplied baseline is never modified — conversion writes into the build workspace.
 
+**Cancellation semantics:** Sending `SIGINT` (Ctrl+C) or `SIGTERM` to a running build triggers cooperative cleanup before the tool exits:
+
+1. The signal cancels an ambient `context.Context` that is bound to every subsequent shell subprocess. Because those subprocesses are spawned into their own process group, a single `SIGTERM` to the negative process-group id reaps `bash`, `sudo`, and the real tool (`mmdebstrap`, `apt`, `mksquashfs`, `losetup`, `mkfs.*`, `xorriso`, `dracut`, `ukify`, `sbsign`, `qemu-img`, …) together. Every ICT-spawned tool terminates on `SIGTERM`, so the group exits cooperatively. If the leader (`bash` acting as the group's `cmd.Process`) has not exited within 5 s, the Go runtime's `WaitDelay` escalation sends `SIGKILL` to that leader specifically — `WaitDelay` does not broadcast `SIGKILL` to the whole process group. The group is expected to be gone by then via the earlier `SIGTERM`; the leader-level `SIGKILL` is a backstop for a wedged pipe on the leader itself, not a group-wide kill.
+2. Pure-Go HTTP work (DEB/RPM package downloads and repository metadata fetches) observes the same ambient context: `http.Client.Do` calls carry the ctx via `http.NewRequestWithContext`, in-flight requests cancel as soon as it fires, and the retry backoff aborts within one delay quantum instead of running to completion. This covers `pkgfetcher.FetchPackages`, `rpmutils.fetchURLWithRetry`, and `debutils.checkFileExists`.
+3. Registered teardowns run in reverse acquisition order (loop-device detach first, then chroot unmount + gpg-agent stop) under a fresh 30 s per-entry budget so cleanup itself is not aborted by the signal that fired. Each cleanup callback rebinds the ambient shell context to the per-entry budget so its own shell calls (unmount, `losetup -d`, `swapoff`) run under the cleanup deadline rather than the already-cancelled parent.
+4. `PostProcess` (which is itself part of the build's cleanup) runs under a detached 2-minute context so an already-cancelled parent does not defeat the umount escalations inside it.
+5. Any resource that could not be reaped (unmount stuck, `losetup -d` refused because a partition is still busy) is reported at ERROR level with the label and error text so the operator can `mount | grep <work-dir>` and `losetup -l` to reclaim it.
+6. Exit code is `130` (`128 + SIGINT`) **only for user-initiated cancellation** (a signal). Internal timeouts — such as the 2-minute PostProcess cleanup budget being exceeded — surface as exit `1` so scripts can distinguish "user aborted" from "internal cleanup timed out". A **second** signal during cleanup skips the remaining teardown and exits with `130` immediately — use this if a residual umount is hanging.
+
 See also:
 
 - [Build Stages in Detail](./image-composer-tool-build-process.md#build-stages-in-detail) for information about each build stage
@@ -219,6 +230,70 @@ See also:
 
 - [Template Loading and Validation](./image-composer-tool-build-process.md#1-template-loading-and-validation)
   for details on the validation process
+
+### Resolve Command
+
+Resolve a template and print the merged YAML to stdout for debugging and
+traceability. Resolve does not build anything and never writes to disk; the
+merged output is computed on every invocation and is not cached.
+
+```bash
+image-composer-tool resolve [flags] TEMPLATE_FILE
+```
+
+**Arguments:**
+
+| Argument | Description |
+|---|---|
+| `TEMPLATE_FILE` | Path to the image template YAML file (required, positional) |
+
+**Flags:**
+
+| Flag | Description |
+|---|---|
+| `--full` | Include OS defaults in the output, showing exactly what will be built |
+
+**Description:**
+
+By default, the resolve command walks the template's `extends:` chain (leaf
+towards root) and prints the chain-merged YAML **without** OS defaults. If the
+template does not use `extends:`, the command prints
+`No extends used in template, nothing to resolve` and exits successfully.
+
+When `--full` is passed, resolve additionally folds the extends chain on top of
+the OS default configuration — OS defaults are the base layer and the extends
+chain overrides them (leaf wins). This is the same merge the `build` command
+runs, so the output shows exactly what the tool would build. `--full`
+suppresses the "nothing to resolve" short-circuit, so it also works for
+templates that do not use `extends:`.
+
+Sensitive fields are always redacted in the output:
+
+- `systemConfig.users[*].password`
+- `systemConfig.users[*].hash_algo`
+- `systemConfig.immutability.secureBootDBKey`
+- `systemConfig.immutability.secureBootDBCrt`
+- `systemConfig.immutability.secureBootDBCer`
+
+The output is safe to paste into an issue or a code review.
+
+**Example:**
+
+```bash
+# Show the extends-chain-merged YAML for a template that inherits from a parent
+image-composer-tool resolve image-templates/ubuntu24-x86_64-extends-example-raw.yml
+
+# Show the full build-time template (extends chain + OS defaults)
+image-composer-tool resolve image-templates/azl3-x86_64-edge-raw.yml --full
+
+# Pipe the merged template into a file for offline review
+image-composer-tool resolve my-template.yml --full > merged.yml
+```
+
+See also:
+
+- [Validate Command](#validate-command) — checks template validity without
+  emitting YAML.
 
 ### Inspect Command
 
@@ -607,6 +682,20 @@ image-composer-tool validate image-templates/azl3-x86_64-edge-raw.yml
 image-composer-tool --log-level debug validate image-templates/azl3-x86_64-edge-raw.yml
 ```
 
+### Resolving Templates
+
+```bash
+# Print the extends-chain-merged YAML (without OS defaults) for a template
+# that inherits from a parent
+image-composer-tool resolve image-templates/ubuntu24-x86_64-extends-example-raw.yml
+
+# Print the fully merged, build-ready YAML including OS defaults
+image-composer-tool resolve image-templates/azl3-x86_64-edge-raw.yml --full
+
+# Save the merged template to a file for offline review
+image-composer-tool resolve my-template.yml --full > merged.yml
+```
+
 ## Configuration Files
 
 ### Global Configuration File
@@ -704,6 +793,7 @@ automation:
 | ---- | ----------- |
 | 0 | Success: The command completed successfully. |
 | 1 | General error: An unspecified error occurred during execution. |
+| 130 | Cancelled by signal: A `SIGINT` (Ctrl+C) or `SIGTERM` was received while a build was in progress. Cooperative cleanup (chroot unmount, loop-device detach, child-process reaping, aborting in-flight package downloads) ran before exit. This code is reserved for user-initiated cancellation; internal timeouts surface as `1`. See the [Cancellation semantics](#build-command) subsection of the Build Command for details. |
 
 ## Troubleshooting
 
