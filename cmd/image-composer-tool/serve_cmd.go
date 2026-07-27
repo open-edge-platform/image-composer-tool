@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -13,6 +12,7 @@ import (
 	ai "github.com/open-edge-platform/image-composer-tool/internal/ai"
 	"github.com/open-edge-platform/image-composer-tool/internal/ai/rag"
 	"github.com/open-edge-platform/image-composer-tool/internal/api"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 )
 
 // createServeCommand builds the "serve" subcommand for starting the web
@@ -66,8 +66,8 @@ func runServe(host string, port int, templatesDir, providerFlag string) error {
 		config.TemplatesDir = templatesDir
 	}
 
-	log.Printf("Using AI provider: %s", config.Provider)
-	log.Printf("Using templates directory: %s", config.TemplatesDir)
+	logger.Logger().Infof("Using AI provider: %s", config.Provider)
+	logger.Logger().Infof("Using templates directory: %s", config.TemplatesDir)
 
 	// ── Step 2: Create the RAG engine (Go library, not CLI) ─────────────
 	engine, err := rag.NewEngine(config)
@@ -77,11 +77,11 @@ func runServe(host string, port int, templatesDir, providerFlag string) error {
 
 	// ── Step 3: Initialize (index templates into memory — one-time) ─────
 	ctx := context.Background()
-	log.Println("Initializing RAG engine (indexing templates)...")
+	logger.Logger().Info("Initializing RAG engine (indexing templates)...")
 	if err := engine.Initialize(ctx); err != nil {
 		return err
 	}
-	log.Println("RAG engine initialized successfully")
+	logger.Logger().Info("RAG engine initialized successfully")
 
 	// ── Step 4: Configure and create the API server ─────────────────────
 	serverConfig := api.DefaultServerConfig()
@@ -104,7 +104,7 @@ func runServe(host string, port int, templatesDir, providerFlag string) error {
 	// Wait for either a shutdown signal or a server error.
 	select {
 	case sig := <-shutdown:
-		log.Printf("Received signal %v, shutting down...", sig)
+		logger.Logger().Infof("Received signal %v, shutting down...", sig)
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		return server.Shutdown(shutdownCtx)

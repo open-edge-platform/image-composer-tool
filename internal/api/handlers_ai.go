@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -10,6 +11,14 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/ai/provider"
 	"github.com/open-edge-platform/image-composer-tool/internal/ai/rag"
 )
+
+// isProviderUnavailable reports whether err (or anything it wraps) indicates
+// the AI provider could not be reached. It uses typed-error matching rather
+// than fragile string inspection so that DNS, TLS, timeout, and
+// connection-refused failures are all classified consistently.
+func isProviderUnavailable(err error) bool {
+	return errors.Is(err, provider.ErrProviderUnavailable)
+}
 
 // queryRequest matches the OpenAPI QueryRequest schema.
 type queryRequest struct {

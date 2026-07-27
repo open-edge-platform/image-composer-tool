@@ -3,11 +3,11 @@ package api
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"time"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/ai/rag"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 )
 
 // Config holds the web server configuration.
@@ -100,9 +100,11 @@ func NewServer(engine *rag.Engine, config Config) *Server {
 // the server is shut down.
 func (s *Server) Start() error {
 	addr := s.httpServer.Addr
-	log.Printf("Starting ICT API server on %s", addr)
-	log.Printf("Templates directory: %s", s.config.TemplatesDir)
-	log.Printf("CORS allowed origins: %v", s.config.CORS.AllowedOrigins)
+	logger.Logger().Infof("Starting ICT API server on %s", addr)
+	logger.Logger().Infof("Templates directory: %s", s.config.TemplatesDir)
+	logger.Logger().Infof("CORS allowed origins: %v", s.config.CORS.AllowedOrigins)
+	logger.Logger().Infof("Session timeout: %s, max sessions: %d, cleanup interval: %s",
+		s.config.Session.Timeout, s.config.Session.MaxSessions, s.config.Session.CleanupInterval)
 
 	if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("server failed: %w", err)
@@ -113,7 +115,7 @@ func (s *Server) Start() error {
 // Shutdown gracefully stops the server, allowing in-flight requests
 // to complete within the given context deadline.
 func (s *Server) Shutdown(ctx context.Context) error {
-	log.Println("Shutting down API server...")
+	logger.Logger().Info("Shutting down API server...")
 	if s.sessionMgr != nil {
 		s.sessionMgr.Stop()
 	}
