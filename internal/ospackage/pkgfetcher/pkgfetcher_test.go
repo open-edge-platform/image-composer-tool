@@ -1,6 +1,7 @@
 package pkgfetcher
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -74,7 +75,7 @@ func TestFetchPackages_Success(t *testing.T) {
 	}
 
 	// Call FetchPackages
-	err = FetchPackages(urls, tempDir, 2)
+	err = FetchPackages(context.Background(), urls, tempDir, 2)
 	if err != nil {
 		t.Fatalf("FetchPackages failed: %v", err)
 	}
@@ -108,7 +109,7 @@ func TestFetchPackages_EmptyURLs(t *testing.T) {
 	}
 	defer os.RemoveAll(tempDir)
 
-	err = FetchPackages([]string{}, tempDir, 1)
+	err = FetchPackages(context.Background(), []string{}, tempDir, 1)
 	if err != nil {
 		t.Errorf("FetchPackages with empty URLs should not return error, got: %v", err)
 	}
@@ -145,7 +146,7 @@ func TestFetchPackages_HTTPErrors(t *testing.T) {
 	}
 
 	// This should return an error due to HTTP failures
-	err = FetchPackages(urls, tempDir, 1)
+	err = FetchPackages(context.Background(), urls, tempDir, 1)
 	if err == nil {
 		t.Errorf("FetchPackages should return error for HTTP failures, got nil")
 	}
@@ -190,7 +191,7 @@ func TestFetchPackages_ExistingFiles(t *testing.T) {
 	}
 
 	// Call FetchPackages - should skip existing file
-	err = FetchPackages([]string{url}, tempDir, 1)
+	err = FetchPackages(context.Background(), []string{url}, tempDir, 1)
 	if err != nil {
 		t.Fatalf("FetchPackages failed: %v", err)
 	}
@@ -236,7 +237,7 @@ func TestFetchPackages_ZeroSizeFile(t *testing.T) {
 	}
 
 	// Call FetchPackages - should re-download zero-size file
-	err = FetchPackages([]string{url}, tempDir, 1)
+	err = FetchPackages(context.Background(), []string{url}, tempDir, 1)
 	if err != nil {
 		t.Fatalf("FetchPackages failed: %v", err)
 	}
@@ -277,7 +278,7 @@ func TestFetchPackages_MultipleWorkers(t *testing.T) {
 
 	// Test with multiple workers
 	start := time.Now()
-	err = FetchPackages(urls, tempDir, 3)
+	err = FetchPackages(context.Background(), urls, tempDir, 3)
 	duration := time.Since(start)
 
 	if err != nil {
@@ -327,7 +328,7 @@ func TestFetchPackages_InvalidDestDir(t *testing.T) {
 	urls := []string{server.URL + "/test.rpm"}
 
 	// This should not panic and should handle the error gracefully
-	err = FetchPackages(urls, invalidDestDir, 1)
+	err = FetchPackages(context.Background(), urls, invalidDestDir, 1)
 	if err != nil {
 		t.Errorf("FetchPackages should not return error for mkdir failures, got: %v", err)
 	}
@@ -347,7 +348,7 @@ func TestFetchPackages_NetworkError(t *testing.T) {
 	}
 
 	// This should return an error due to network failure
-	err = FetchPackages(urls, tempDir, 1)
+	err = FetchPackages(context.Background(), urls, tempDir, 1)
 	if err == nil {
 		t.Errorf("FetchPackages should return error for network failures, got nil")
 	}
@@ -377,7 +378,7 @@ func TestFetchPackages_SlowServer(t *testing.T) {
 	urls := []string{server.URL + "/slow.rpm"}
 
 	start := time.Now()
-	err = FetchPackages(urls, tempDir, 1)
+	err = FetchPackages(context.Background(), urls, tempDir, 1)
 	duration := time.Since(start)
 
 	if err != nil {
@@ -418,7 +419,7 @@ func TestFetchPackages_RetryOnTransientError(t *testing.T) {
 
 	url := server.URL + "/retry-package.rpm"
 
-	err = FetchPackages([]string{url}, tempDir, 1)
+	err = FetchPackages(context.Background(), []string{url}, tempDir, 1)
 	if err != nil {
 		t.Fatalf("FetchPackages failed unexpectedly after retries: %v", err)
 	}
@@ -448,7 +449,7 @@ func TestFetchPackages_NoRetryOnPermanentError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	err = FetchPackages([]string{server.URL + "/missing.rpm"}, tempDir, 1)
+	err = FetchPackages(context.Background(), []string{server.URL + "/missing.rpm"}, tempDir, 1)
 	if err == nil {
 		t.Fatalf("Expected FetchPackages to fail for permanent HTTP error")
 	}
@@ -480,7 +481,7 @@ func TestDownloadWithRetry_TransientThenSuccess(t *testing.T) {
 	destPath := filepath.Join(tempDir, "retry-direct.rpm")
 	client := network.GetSecureHTTPClient()
 
-	err = downloadWithRetry(client, server.URL+"/retry-direct.rpm", destPath, 0)
+	err = downloadWithRetry(context.Background(), client, server.URL+"/retry-direct.rpm", destPath, 0)
 	if err != nil {
 		t.Fatalf("downloadWithRetry should succeed after transient failures: %v", err)
 	}
@@ -511,7 +512,7 @@ func TestDownloadWithRetry_EmptyBodyFailsAfterRetries(t *testing.T) {
 	destPath := filepath.Join(tempDir, "empty-body.rpm")
 	client := network.GetSecureHTTPClient()
 
-	err = downloadWithRetry(client, server.URL+"/empty-body.rpm", destPath, 1)
+	err = downloadWithRetry(context.Background(), client, server.URL+"/empty-body.rpm", destPath, 1)
 	if err == nil {
 		t.Fatalf("expected error when response body is empty")
 	}
@@ -555,7 +556,7 @@ func TestDownloadWithRetry_RetryOnContentLengthMistmatch(t *testing.T) {
 	}
 
 	destPath := filepath.Join(tempDir, "content-length-mismatch.rpm")
-	err = downloadWithRetry(client, "http://example.test/content-length-mismatch.rpm", destPath, -1)
+	err = downloadWithRetry(context.Background(), client, "http://example.test/content-length-mismatch.rpm", destPath, -1)
 	if err != nil {
 		t.Fatalf("expected retry to recover from content-length mismatch, got: %v", err)
 	}
@@ -596,7 +597,7 @@ func TestDownloadWithRetry_RemovaPartialFileOnError(t *testing.T) {
 	}
 
 	destPath := filepath.Join(tempDir, "partial-file.rpm")
-	err = downloadWithRetry(client, "http://example.test/partial-file.rpm", destPath, -1)
+	err = downloadWithRetry(context.Background(), client, "http://example.test/partial-file.rpm", destPath, -1)
 	if err == nil {
 		t.Fatalf("expected error when stream fails after partial write")
 	}
@@ -637,7 +638,7 @@ func TestFetchPackages_PlusEncodedAsPercentTwoBInURL(t *testing.T) {
 	filename := "systemd_255.4-1ubuntu8.12-ecir8+etf+taprio_amd64.deb"
 	inputURL := server.URL + "/pool/main/s/systemd/" + filename
 
-	err = FetchPackages([]string{inputURL}, tempDir, 1)
+	err = FetchPackages(context.Background(), []string{inputURL}, tempDir, 1)
 	if err != nil {
 		t.Fatalf("FetchPackages failed: %v", err)
 	}
@@ -662,5 +663,53 @@ func TestFetchPackages_PlusEncodedAsPercentTwoBInURL(t *testing.T) {
 	}
 	if string(content) != "eci-package-content" {
 		t.Fatalf("unexpected file content: %q", string(content))
+	}
+}
+
+// TestFetchPackages_CancelledContextExitsPromptly verifies that when the
+// ambient ctx is cancelled after workers have started but before the queue
+// drains, FetchPackages returns within a bounded time with a
+// context.Canceled-wrapping error rather than blocking on the retry loops.
+// Regression guard for the "SIGINT during download hangs the process for
+// 5+ minutes" bug caught in manual smoke testing.
+func TestFetchPackages_CancelledContextExitsPromptly(t *testing.T) {
+	// Server that never responds — the goal is to sit in client.Do until
+	// ctx cancels the request.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	tempDir := t.TempDir()
+
+	// Enqueue more URLs than workers so the jobs channel has depth; if the
+	// worker loop's ctx-gate is wrong, extra URLs would keep the pool busy
+	// after the first cancel.
+	urls := make([]string, 20)
+	for i := range urls {
+		urls[i] = fmt.Sprintf("%s/slow-%d.rpm", server.URL, i)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	err := FetchPackages(ctx, urls, tempDir, 4)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatalf("expected error after context cancel, got nil")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected wrapped context.Canceled, got: %v", err)
+	}
+	// Generous ceiling: workers should exit within a couple of retry-backoff
+	// windows (initialRetryBackoff=500ms, exponential). We allow 10s so CI
+	// jitter and the http.RoundTripper's own graceful-close doesn't flake this.
+	if elapsed > 10*time.Second {
+		t.Fatalf("FetchPackages took %s to exit after cancel; expected <10s", elapsed)
 	}
 }

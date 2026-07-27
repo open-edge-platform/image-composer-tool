@@ -41,8 +41,10 @@ type StageTiming struct {
 //
 // Builder never mutates the user-provided baseline source (Ingestor copies it
 // first), it is strictly additive (only ResolutionPlan.ToInstall is installed), and
-// it never modifies the installed bootloader binary or the ESP (mounted read-only);
-// boot regeneration is currently restricted to the initramfs.
+// it never modifies the installed bootloader binary or the ESP (mounted read-only).
+// Boot regeneration refreshes the initramfs and, on a GRUB2 baseline, the GRUB
+// config (applying overlayPolicy.kernelCmdline and overlayPolicy.grubDefault) —
+// both live on the writable root, never the ESP; grub-install is never run.
 type Builder struct {
 	template  *config.ImageTemplate
 	ingestor  *Ingestor
@@ -109,7 +111,9 @@ var (
 	builderResolveFn   = ResolveOverlayPackages
 	builderPreflightFn = Preflight
 	builderInstallFn   = InstallOverlayPackages
+	builderConfigureFn = RunOverlayConfigurations
 	builderRegenBootFn = RegenerateBoot
+	builderGrubRegenFn = RegenerateGrub
 	builderResizeFn    = ResizeBaseline
 	builderSBOMFn      = generateOverlaySBOM
 	builderEmitFn      = emitOverlayArtifact
@@ -214,8 +218,10 @@ func (b *Builder) Preprocess() (err error) {
 
 // Build runs the overlay build phase against the already-mounted baseline: it
 // performs an optional grow-only resize (first, so the added packages have room),
-// installs the approved package plan, then regenerates the initramfs for any added
-// packages (never the bootloader).
+// installs the approved package plan, runs the template's configuration commands,
+// regenerates the initramfs for any added packages, and finally — on a GRUB2
+// baseline — applies overlayPolicy.kernelCmdline and overlayPolicy.grubDefault and
+// regenerates the GRUB config (never the bootloader binary or the read-only ESP).
 //
 // It requires Preprocess to have succeeded; the mount lifecycle opened there is
 // reused here and is not torn down until Postprocess.
@@ -254,9 +260,39 @@ func (b *Builder) Build() error {
 		return err
 	}
 
+	// Run the template's arbitrary configuration commands AFTER the resolved package
+	// install but BEFORE boot regeneration. This mirrors create mode's ordering
+	// (addImageConfigs runs after installImagePkgs) and is deliberate: a
+	// configuration command may itself install content that affects the initramfs
+	// (e.g. an out-of-repo driver installed via wget+dpkg), so any resulting kernel
+	// module or hook must be picked up by the subsequent Boot Regeneration.
+	if err := b.timeStage("Configurations", func() error {
+		if cerr := builderConfigureFn(b.template, b.layout.RootMount); cerr != nil {
+			return fmt.Errorf("overlay build: configuration commands failed: %w", cerr)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
 	if err := b.timeStage("Boot Regeneration", func() error {
 		if berr := builderRegenBootFn(b.info, b.layout.RootMount, installed, b.plan); berr != nil {
 			return fmt.Errorf("overlay build: boot regeneration failed: %w", berr)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	// Regenerate the GRUB2 config AFTER the initramfs: grub-mkconfig enumerates the
+	// initrd images, so a newly added kernel's initramfs must already exist. This
+	// stage also applies overlayPolicy.kernelCmdline (a full-line GRUB_CMDLINE_LINUX
+	// replace) and overlayPolicy.grubDefault (a full-line GRUB_DEFAULT replace, to pin
+	// the default boot entry) before regenerating. It never touches the bootloader
+	// binary or the read-only ESP; the regenerated grub.cfg lives on the writable root.
+	if err := b.timeStage("GRUB Regeneration", func() error {
+		if gerr := builderGrubRegenFn(b.template, b.info, b.layout.RootMount); gerr != nil {
+			return fmt.Errorf("overlay build: GRUB regeneration failed: %w", gerr)
 		}
 		return nil
 	}); err != nil {

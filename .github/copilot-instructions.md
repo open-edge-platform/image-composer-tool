@@ -168,9 +168,9 @@ stdlib `testing` only (no testify), table-driven with `t.Run()`, AAA layout, `t.
 
 | What changed | Docs to update |
 |---|---|
-| CLI flags or commands | `docs/user-guide/architecture/image-composer-tool-cli-specification.md`, `docs/user-guide/get-started/usage-guide.md` |
+| CLI flags or commands (including subcommands like `resolve`) | `docs/user-guide/architecture/image-composer-tool-cli-specification.md`, `docs/user-guide/get-started/usage-guide.md` |
 | Build process / Earthfile targets | `docs/user-guide/get-started/usage-guide.md`, this file's **Build and Test** section |
-| Image template schema or fields | `docs/user-guide/architecture/image-composer-tool-templates.md`, relevant `image-templates/*.yml` examples |
+| Image template schema or fields (including the `extends` inheritance section) | `docs/user-guide/architecture/image-composer-tool-templates.md`, relevant `image-templates/*.yml` examples |
 | New OS provider | `docs/user-guide/architecture/architecture.md`, this file's **Adding a New OS Provider** section |
 | New tutorial-worthy feature | Add or update a guide in `docs/user-guide/get-started/` |
 | Architecture or design decisions | Add an ADR in `docs/architecture-decision-record/` |
@@ -214,7 +214,7 @@ All PRs must pass before merge:
 
 ## Image Template Conventions
 
-Name `<dist>-<arch>-<purpose>-<imageType>.yml`. Minimal user templates need only `image` + `target`; always include a `metadata` block. Packages merge _additively_; `disk` _replaces_ entirely. Validate with `image-composer-tool validate -t <template.yml>` before committing.
+Name `<dist>-<arch>-<purpose>-<imageType>.yml`. Minimal user templates need only `image` + `target`; always include a `metadata` block. Packages merge _additively_; `disk` _replaces_ entirely. Templates can inherit from a single parent via `extends: "sibling.yml"` — chains fold root-to-leaf using the same per-section rules as the user↔default merge, `target` must match across the chain, symlink parents are rejected, and the `extends:` field is stripped from the final merged output. Use `image-composer-tool resolve TEMPLATE.yml` to inspect the chain-merged view (redacts sensitive fields) or `resolve TEMPLATE.yml --full` to also fold in OS defaults. Validate with `image-composer-tool validate <template.yml>` before committing.
 
 > Full conventions: [.github/instructions/image-templates.instructions.md](instructions/image-templates.instructions.md) (auto-applies to `image-templates/**/*.yml`).
 

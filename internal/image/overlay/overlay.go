@@ -144,8 +144,15 @@ func overlaySysConfigName(template *config.ImageTemplate) (string, error) {
 
 // LoopDevManager is the subset of imagedisc.LoopDevInterface needed to attach
 // and detach a baseline image. It is declared here so tests can inject a fake.
+// The unregister closure returned by AttachImageToLoopDev removes the auto-
+// registered cleanup-coordinator entry for this loop device. Callers invoke
+// it AFTER a successful LoopSetupDelete, not before — see
+// imagedisc.loopSetupCreate's docstring for the ordering contract (a failed
+// detach must leave the coord entry registered so the build.go cancel
+// backstop can retry). Tests that don't wire the coordinator can return a
+// no-op func.
 type LoopDevManager interface {
-	AttachImageToLoopDev(imagePath string) (string, []string, error)
+	AttachImageToLoopDev(imagePath string) (string, []string, func(), error)
 	LoopSetupDelete(loopDevPath string) error
 }
 
@@ -158,6 +165,11 @@ type Context struct {
 	LoopDevPath string
 	// Partitions are the enumerated partition nodes, e.g. ["/dev/loop0p1"].
 	Partitions []string
+	// loopUnregister removes the coordinator-registered detach for LoopDevPath.
+	// detach() invokes it right before running the explicit LoopSetupDelete on
+	// the happy path so the coordinator doesn't later try to redetach a device
+	// we already released. Non-nil once acquire() attaches the loop; nil-safe.
+	loopUnregister func()
 }
 
 // Ingestor copies a baseline image into the workspace and attaches it to a loop
@@ -343,13 +355,15 @@ func (ing *Ingestor) acquire() (*Context, error) {
 		return nil, err
 	}
 
-	loopDevPath, partitions, err := ing.loopDev.AttachImageToLoopDev(copyPath)
+	loopDevPath, partitions, loopUnregister, err := ing.loopDev.AttachImageToLoopDev(copyPath)
 	if err != nil {
 		if loopDevPath != "" {
 			// A loop device was created but could not be detached, so it still
 			// references this backing file. Removing the file now would unlink a
 			// file the leaked device points at, making recovery/debugging harder.
 			// Retain the copy and surface the (already path-annotated) error.
+			// The coordinator entry (if any) remains registered so the leaked
+			// device is best-effort reaped on cancel.
 			log.Errorf("Retaining workspace baseline copy %s: loop device %s may still be attached after attach failure", copyPath, loopDevPath)
 			return nil, fmt.Errorf("failed to attach baseline copy to loop device: %w", err)
 		}
@@ -361,6 +375,7 @@ func (ing *Ingestor) acquire() (*Context, error) {
 	}
 	ctx.LoopDevPath = loopDevPath
 	ctx.Partitions = partitions
+	ctx.loopUnregister = loopUnregister
 
 	log.Infof("Attached baseline copy %s to loop device %s (%d partitions)",
 		copyPath, loopDevPath, len(partitions))
@@ -783,7 +798,12 @@ func isAllZero(b []byte) bool {
 // detach detaches the loop device if one is attached. It returns the detach
 // error (also logged) so callers on the success path can surface a failed
 // cleanup instead of silently leaking the loop device. A no-op (nothing
-// attached) returns nil.
+// attached) returns nil. Detach first; unregister the coordinator entry only
+// on success. If detach fails (e.g. because the ambient shell ctx is still
+// the cancelled parent when this runs pre-PostProcess, or because a
+// partition is busy), leaving the coord entry registered lets build.go's
+// deferred cancel backstop retry the detach under its own fresh per-entry
+// ctx.
 func (ing *Ingestor) detach(ctx *Context) error {
 	if ctx == nil || ctx.LoopDevPath == "" {
 		return nil
@@ -791,6 +811,9 @@ func (ing *Ingestor) detach(ctx *Context) error {
 	if err := ing.loopDev.LoopSetupDelete(ctx.LoopDevPath); err != nil {
 		log.Errorf("Failed to detach loop device %s: %v", ctx.LoopDevPath, err)
 		return fmt.Errorf("failed to detach loop device %s: %w", ctx.LoopDevPath, err)
+	}
+	if ctx.loopUnregister != nil {
+		ctx.loopUnregister()
 	}
 	log.Infof("Detached loop device %s", ctx.LoopDevPath)
 	return nil

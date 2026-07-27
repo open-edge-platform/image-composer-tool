@@ -219,6 +219,52 @@
         }
       ]
     },
+    "FDE": {
+      "type": "object",
+      "description": "Full-disk-encryption (LUKS) configuration",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether full-disk encryption is enabled",
+          "default": false
+        },
+        "passphraseFile": {
+          "type": "string",
+          "description": "Absolute or template-relative local file path containing the passphrase"
+        },
+        "partitions": {
+          "type": "array",
+          "description": "Disk partition IDs to encrypt (e.g., \"rootfs\", \"userdata\")",
+          "items": { "type": "string" }
+        },
+        "unlock": {
+          "type": "string",
+          "description": "Boot unlock mode: \"auto\" (keyfile embedded in initramfs, no prompt; default) or \"manual\" (interactive passphrase)",
+          "enum": ["auto", "manual"]
+        }
+      },
+      "required": ["enabled"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "enabled": { "const": true }
+            },
+            "required": ["enabled"]
+          },
+          "then": {
+            "required": ["passphraseFile"],
+            "properties": {
+              "passphraseFile": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      ]
+    },
     "Users": {
       "type": "array",
       "description": "User configurations",
@@ -400,6 +446,7 @@
           "type": "string",
           "description": "Hostname of the system"},
         "immutability": { "$ref": "#/$defs/Immutability" },
+        "fde": { "$ref": "#/$defs/FDE" },
         "users": { "$ref": "#/$defs/Users" },
         "bootloader": { "$ref": "#/$defs/Bootloader" },
         "network": { "$ref": "#/$defs/NetworkConfig" },
@@ -520,7 +567,11 @@
         },
         "kernelCmdline": {
           "type": "string",
-          "description": "Optional kernel command-line override applied to the overlaid image"
+          "description": "Optional kernel command-line override applied to the overlaid image (full-line replacement of GRUB_CMDLINE_LINUX on a GRUB2 baseline). The value is written into a shell-sourced /etc/default/grub assignment, so it must not contain a double quote, dollar sign, backtick, backslash, or newline."
+        },
+        "grubDefault": {
+          "type": "string",
+          "description": "Optional GRUB_DEFAULT override applied to the overlaid image (pins the default boot menu entry, e.g. an Ubuntu submenu path). Only applied on a GRUB2 baseline. The value is written into a shell-sourced /etc/default/grub assignment, so it must not contain a double quote, dollar sign, backtick, backslash, or newline."
         },
         "allowDiskResize": {
           "type": "boolean",

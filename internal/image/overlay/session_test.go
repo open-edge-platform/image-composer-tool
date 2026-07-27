@@ -18,7 +18,9 @@ type builderSeams struct {
 	resolve     func(*config.ImageTemplate, *BaselineInfo, []BaselinePackage) (*ResolutionPlan, error)
 	preflight   func(*BaselineInfo, []BaselinePackage, *ResolutionPlan, *config.OverlayPolicy) (*PreflightReport, error)
 	install     func(*BaselineInfo, string, *ResolutionPlan, *PreflightReport) (*InstallResult, error)
+	configure   func(*config.ImageTemplate, string) error
 	regenBoot   func(*BaselineInfo, string, *InstallResult, *ResolutionPlan) error
+	grubRegen   func(*config.ImageTemplate, *BaselineInfo, string) error
 	resize      func(*config.ImageTemplate, *Context, *Layout) error
 	sbom        func(*BaselineInfo, string, *ResolutionPlan) error
 	emit        func(*config.ImageTemplate, string, string) (string, error)
@@ -30,7 +32,8 @@ func saveBuilderSeams() builderSeams {
 		acquire: builderAcquire, mountLayout: builderMountLayout, detach: builderDetach,
 		removeCopy: builderRemoveCopy,
 		detect:     builderDetectFn, resolve: builderResolveFn, preflight: builderPreflightFn,
-		install: builderInstallFn, regenBoot: builderRegenBootFn, resize: builderResizeFn,
+		install: builderInstallFn, configure: builderConfigureFn, regenBoot: builderRegenBootFn,
+		grubRegen: builderGrubRegenFn, resize: builderResizeFn,
 		sbom: builderSBOMFn, emit: builderEmitFn, inspect: builderInspectFn,
 	}
 }
@@ -39,7 +42,8 @@ func (s builderSeams) restore() {
 	builderAcquire, builderMountLayout, builderDetach = s.acquire, s.mountLayout, s.detach
 	builderRemoveCopy = s.removeCopy
 	builderDetectFn, builderResolveFn, builderPreflightFn = s.detect, s.resolve, s.preflight
-	builderInstallFn, builderRegenBootFn, builderResizeFn = s.install, s.regenBoot, s.resize
+	builderInstallFn, builderConfigureFn, builderRegenBootFn, builderResizeFn = s.install, s.configure, s.regenBoot, s.resize
+	builderGrubRegenFn = s.grubRegen
 	builderSBOMFn, builderEmitFn, builderInspectFn = s.sbom, s.emit, s.inspect
 }
 
@@ -59,7 +63,9 @@ type builderRecorder struct {
 	resolveErr   error
 	preflightErr error
 	installErr   error
+	configureErr error
 	regenErr     error
+	grubRegenErr error
 	resizeErr    error
 	sbomErr      error
 	emitErr      error
@@ -133,9 +139,17 @@ func installOverlayTestBuilder(t *testing.T, r *builderRecorder) *Builder {
 		}
 		return &InstallResult{Installed: []string{"curl"}}, nil
 	}
+	builderConfigureFn = func(*config.ImageTemplate, string) error {
+		r.note("configure")
+		return r.configureErr
+	}
 	builderRegenBootFn = func(*BaselineInfo, string, *InstallResult, *ResolutionPlan) error {
 		r.note("regenBoot")
 		return r.regenErr
+	}
+	builderGrubRegenFn = func(*config.ImageTemplate, *BaselineInfo, string) error {
+		r.note("grubRegen")
+		return r.grubRegenErr
 	}
 	builderResizeFn = func(*config.ImageTemplate, *Context, *Layout) error {
 		r.note("resize")
@@ -174,7 +188,7 @@ func TestBuilder_HappyPathOrdersStagesAndCleansUp(t *testing.T) {
 		t.Fatalf("Postprocess: %v", err)
 	}
 
-	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "resize", "install", "regenBoot", "sbom", "emit:1.0"}
+	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "resize", "install", "configure", "regenBoot", "grubRegen", "sbom", "emit:1.0"}
 	if !equalStrings(r.calls, want) {
 		t.Errorf("stage order = %v, want %v", r.calls, want)
 	}
@@ -190,7 +204,7 @@ func TestBuilder_HappyPathOrdersStagesAndCleansUp(t *testing.T) {
 	// execution order, so the caller can render an overlay timing table.
 	wantStages := []string{
 		"Acquire & Mount Baseline", "Inspect Baseline", "Resolve Packages", "Preflight",
-		"Resize", "Install Packages", "Boot Regeneration", "Generate SBOM", "Emit Artifact",
+		"Resize", "Install Packages", "Configurations", "Boot Regeneration", "GRUB Regeneration", "Generate SBOM", "Emit Artifact",
 	}
 	gotStages := make([]string, 0, len(b.Timings()))
 	for _, ts := range b.Timings() {
@@ -218,7 +232,7 @@ func TestBuilder_InspectRunsAfterEmitWhenEnabled(t *testing.T) {
 	}
 
 	// Inspection runs immediately after emit, against the emitted artifact path.
-	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "resize", "install", "regenBoot", "sbom", "emit:1.0", "inspect:/out/img-1.0.raw"}
+	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "resize", "install", "configure", "regenBoot", "grubRegen", "sbom", "emit:1.0", "inspect:/out/img-1.0.raw"}
 	if !equalStrings(r.calls, want) {
 		t.Errorf("stage order = %v, want %v", r.calls, want)
 	}
@@ -275,6 +289,69 @@ func TestBuilder_InspectFailureFailsPostprocess(t *testing.T) {
 		t.Errorf("expected inspection failure to surface, got %v", err)
 	}
 	// Cleanup still ran exactly once despite the inspection failure.
+	if r.teardowns != 1 || r.detaches != 1 {
+		t.Errorf("teardown/detach = %d/%d, want 1/1", r.teardowns, r.detaches)
+	}
+}
+
+func TestBuilder_ConfigureFailureStopsBuildBeforeBootRegen(t *testing.T) {
+	defer saveBuilderSeams().restore()
+	r := &builderRecorder{configureErr: errors.New("wget failed")}
+	b := installOverlayTestBuilder(t, r)
+
+	if err := b.Preprocess(); err != nil {
+		t.Fatalf("Preprocess: %v", err)
+	}
+	err := b.Build()
+	if err == nil {
+		t.Fatal("expected configuration failure to propagate from Build")
+	}
+	if !strings.Contains(err.Error(), "configuration commands failed") {
+		t.Errorf("expected configuration failure to surface, got %v", err)
+	}
+	// Configurations run after install; a failure there must halt the build before
+	// boot regeneration so a broken image is never carried into the artifact.
+	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "resize", "install", "configure"}
+	if !equalStrings(r.calls, want) {
+		t.Errorf("stage order on configure failure = %v, want %v", r.calls, want)
+	}
+	// Postprocess with the build error still tears the mount lifecycle down once.
+	// On a clean cleanup it returns nil (the caller prioritizes the original
+	// buildErr), so assert the teardown ran, not a Postprocess error.
+	if perr := b.Postprocess(err); perr != nil {
+		t.Fatalf("Postprocess with clean cleanup should return nil, got %v", perr)
+	}
+	if r.teardowns != 1 || r.detaches != 1 {
+		t.Errorf("teardown/detach = %d/%d, want 1/1", r.teardowns, r.detaches)
+	}
+}
+
+func TestBuilder_GrubRegenFailureStopsBuild(t *testing.T) {
+	defer saveBuilderSeams().restore()
+	r := &builderRecorder{grubRegenErr: errors.New("update-grub failed")}
+	b := installOverlayTestBuilder(t, r)
+
+	if err := b.Preprocess(); err != nil {
+		t.Fatalf("Preprocess: %v", err)
+	}
+	err := b.Build()
+	if err == nil {
+		t.Fatal("expected GRUB regeneration failure to propagate from Build")
+	}
+	if !strings.Contains(err.Error(), "GRUB regeneration failed") {
+		t.Errorf("expected GRUB regeneration failure to surface, got %v", err)
+	}
+	// GRUB regen is the last build stage; a failure there must halt before b.built
+	// is set, so no SBOM/emit runs and no image is produced.
+	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "resize", "install", "configure", "regenBoot", "grubRegen"}
+	if !equalStrings(r.calls, want) {
+		t.Errorf("stage order on GRUB regen failure = %v, want %v", r.calls, want)
+	}
+	// Postprocess with the build error tears the mount lifecycle down once and, since
+	// the build never completed, force-removes the workspace copy (it is never emitted).
+	if perr := b.Postprocess(err); perr != nil {
+		t.Fatalf("Postprocess with clean cleanup should return nil, got %v", perr)
+	}
 	if r.teardowns != 1 || r.detaches != 1 {
 		t.Errorf("teardown/detach = %d/%d, want 1/1", r.teardowns, r.detaches)
 	}

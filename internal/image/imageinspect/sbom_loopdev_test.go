@@ -19,11 +19,11 @@ type fakeLoopAttacher struct {
 	detached       bool
 }
 
-func (f *fakeLoopAttacher) AttachImageToLoopDev(string) (string, []string, error) {
+func (f *fakeLoopAttacher) AttachImageToLoopDev(string) (string, []string, func(), error) {
 	if f.attachErr != nil {
-		return "", nil, f.attachErr
+		return "", nil, func() {}, f.attachErr
 	}
-	return f.loopDevPath, f.partitionNodes, nil
+	return f.loopDevPath, f.partitionNodes, func() {}, nil
 }
 
 func (f *fakeLoopAttacher) LoopSetupDelete(string) error {

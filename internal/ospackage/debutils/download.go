@@ -20,6 +20,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/pkgsorter"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/network"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/runctx"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/slice"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
@@ -284,7 +285,6 @@ func requirementCandidates(required string) []string {
 
 func isDebRequirementInCache(
 	required string,
-	cachedPackageNames map[string]struct{},
 	cachedPackageInfos []ospackage.PackageInfo,
 ) bool {
 	required = strings.TrimSpace(required)
@@ -292,44 +292,9 @@ func isDebRequirementInCache(
 		return true
 	}
 
-	candidates := requirementCandidates(required)
-	if len(candidates) == 0 {
-		return true
-	}
-
-	for _, cand := range candidates {
-		if pkg, found := ResolveTopPackageConflicts(cand, cachedPackageInfos); found && pkg.Name != "" {
+	for _, pkg := range cachedPackageInfos {
+		if strings.TrimSpace(pkg.Name) == required {
 			return true
-		}
-	}
-
-	for _, cand := range candidates {
-		candName := cand
-		if idx := strings.Index(candName, "_"); idx > 0 {
-			candName = candName[:idx]
-		}
-		candName = strings.TrimSpace(candName)
-		if candName == "" {
-			continue
-		}
-		if _, ok := cachedPackageNames[candName]; ok {
-			return true
-		}
-	}
-
-	for _, cand := range candidates {
-		candName := cand
-		if idx := strings.Index(candName, "_"); idx > 0 {
-			candName = candName[:idx]
-		}
-		candName = strings.TrimSpace(candName)
-		if candName == "" {
-			continue
-		}
-		for cachedName := range cachedPackageNames {
-			if matchesPackageFilter(cachedName, []string{candName}) {
-				return true
-			}
 		}
 	}
 
@@ -443,7 +408,7 @@ func isDebPackageCacheOutdated(requiredPackages []string, cacheDir string) (bool
 		if req == "" {
 			continue
 		}
-		if isDebRequirementInCache(req, cachedPackageNames, cachedPackageInfos) {
+		if isDebRequirementInCache(req, cachedPackageInfos) {
 			continue
 		}
 		if _, seen := missingSet[req]; seen {
@@ -808,8 +773,11 @@ func checkFileExists(url string) (bool, error) {
 		return exists, nil
 	}
 
-	// Create a context with timeout for the request
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Create a context with timeout for the request, parented on the ambient
+	// run-scoped ctx so a SIGINT/SIGTERM during a large fan-out of HEAD checks
+	// (overlay/create modes) cancels the in-flight requests within the 30s
+	// budget instead of running each one to completion.
+	ctx, cancel := context.WithTimeout(runctx.Context(), 30*time.Second)
 	defer cancel()
 
 	client := network.NewSecureHTTPClient()
@@ -1232,7 +1200,7 @@ func downloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSour
 
 	// Download packages using configured workers and cache directory
 	log.Infof("downloading %d packages to %s using %d workers", len(urls), absDestDir, config.Workers())
-	if err := pkgfetcher.FetchPackages(urls, absDestDir, config.Workers()); err != nil {
+	if err := pkgfetcher.FetchPackages(runctx.Context(), urls, absDestDir, config.Workers()); err != nil {
 		return downloadPkgList, nil, fmt.Errorf("fetch failed: %w", err)
 	}
 	log.Info("all downloads complete")

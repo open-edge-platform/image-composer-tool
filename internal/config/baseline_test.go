@@ -269,6 +269,71 @@ func TestOverlayPolicyDerivesAllowUpgrade(t *testing.T) {
 	}
 }
 
+// TestOverlayPolicyValidatesKernelCmdline confirms validate() rejects a
+// kernelCmdline carrying a double quote, dollar sign, backtick, backslash, or
+// newline (which would break or inject into the shell-sourced
+// GRUB_CMDLINE_LINUX="..." assignment) and accepts ordinary values.
+func TestOverlayPolicyValidatesKernelCmdline(t *testing.T) {
+	cases := []struct {
+		name    string
+		cmdline string
+		wantErr bool
+	}{
+		{"empty", "", false},
+		{"ordinary args", "console=ttyS0,115200n8 i915.force_probe=*", false},
+		{"double quote", `bad="x"`, true},
+		{"newline", "quiet\nsplash", true},
+		{"dollar sign", "root=$(reboot)", true},
+		{"backtick", "root=`reboot`", true},
+		{"backslash", `quiet\`, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := &OverlayPolicy{KernelCmdline: c.cmdline}
+			err := p.validate()
+			if c.wantErr && err == nil {
+				t.Errorf("kernelCmdline %q: expected error, got nil", c.cmdline)
+			}
+			if !c.wantErr && err != nil {
+				t.Errorf("kernelCmdline %q: unexpected error %v", c.cmdline, err)
+			}
+		})
+	}
+}
+
+// TestOverlayPolicyValidatesGrubDefault confirms validate() rejects a grubDefault
+// carrying a double quote, dollar sign, backtick, backslash, or newline (which would
+// break or inject into the shell-sourced GRUB_DEFAULT="..." assignment) and accepts
+// ordinary values, including the ">"-delimited Ubuntu submenu path.
+func TestOverlayPolicyValidatesGrubDefault(t *testing.T) {
+	cases := []struct {
+		name        string
+		grubDefault string
+		wantErr     bool
+	}{
+		{"empty", "", false},
+		{"numeric index", "0", false},
+		{"submenu path", "Advanced options for Ubuntu>Ubuntu, with Linux 6.18-intel", false},
+		{"double quote", `bad="x"`, true},
+		{"newline", "a\nb", true},
+		{"dollar sign", "$(reboot)", true},
+		{"backtick", "`reboot`", true},
+		{"backslash", `entry\`, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := &OverlayPolicy{GrubDefault: c.grubDefault}
+			err := p.validate()
+			if c.wantErr && err == nil {
+				t.Errorf("grubDefault %q: expected error, got nil", c.grubDefault)
+			}
+			if !c.wantErr && err != nil {
+				t.Errorf("grubDefault %q: unexpected error %v", c.grubDefault, err)
+			}
+		})
+	}
+}
+
 func TestBaselineSourceValidateNormalizesWhitespace(t *testing.T) {
 	t.Run("path is trimmed in place", func(t *testing.T) {
 		s := &BaselineSource{Path: "  /tmp/u.raw\n"}
@@ -323,7 +388,8 @@ func TestSchemaAcceptsBaseline(t *testing.T) {
 		"overlayPolicy": {
 			"packageOperation": "additive-only",
 			"conflictPolicy": "fail",
-			"kernelCmdline": "quiet"
+			"kernelCmdline": "quiet",
+			"grubDefault": "Advanced options for Ubuntu>Ubuntu, with Linux 6.18-intel"
 		}
 	}`
 	if err := validate.ValidateUserTemplateJSON([]byte(tmpl)); err != nil {

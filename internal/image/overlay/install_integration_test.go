@@ -78,7 +78,7 @@ func TestInstallOverlayPackages_RealRawBaseline(t *testing.T) {
 	}
 
 	loop := imagedisc.NewLoopDev()
-	loopDev, parts, err := loop.AttachImageToLoopDev(img)
+	loopDev, parts, _, err := loop.AttachImageToLoopDev(img)
 	if err != nil {
 		t.Fatalf("attach loop: %v", err)
 	}
