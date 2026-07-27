@@ -371,7 +371,11 @@ func UmountSysfs(mountPoint string) error {
 	return nil
 }
 
-// CleanSysfs cleans up system directories in the chroot environment
+// CleanSysfs cleans up system directories in the chroot environment.
+//
+// Contract: callers must unmount run/sys/proc/dev first. Cleanup then removes
+// those top-level directories via rmdir, which requires each directory to be
+// present and empty. Missing/non-empty directories are returned as errors.
 func CleanSysfs(mountPoint string) error {
 	var pathList []string
 	mountPathList, err := GetMountPathList()
