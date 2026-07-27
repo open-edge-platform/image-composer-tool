@@ -553,13 +553,13 @@ func TestEnablingFDEValidationErrors(t *testing.T) {
 		}
 	})
 
-	t.Run("missing passphrase", func(t *testing.T) {
+	t.Run("missing passphrase from file", func(t *testing.T) {
 		template := baseTemplate()
 		template.SystemConfig.FDE.Passphrase = ""
 		imageOs.template = template
 		_, _, err := imageOs.enablingFDE(installRoot, nil, nil)
 		if err == nil {
-			t.Fatal("expected error for missing passphrase")
+			t.Fatal("expected error for missing passphrase loaded from file")
 		}
 	})
 
@@ -615,7 +615,7 @@ func TestWireFDEBootErrors(t *testing.T) {
 
 	installRoot := t.TempDir()
 	err := wireFDEBoot(installRoot, map[string]string{"rootfs": "/dev/mapper/rootfs"}, template)
-	if err == nil || !strings.Contains(err.Error(), "auto unlock requires a passphrase") {
+	if err == nil || !strings.Contains(err.Error(), "auto unlock requires a passphrase loaded from systemConfig.fde.passphraseFile") {
 		t.Fatalf("wireFDEBoot err = %v", err)
 	}
 

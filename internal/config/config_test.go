@@ -4048,7 +4048,7 @@ func TestImageTemplateFDEHelpers(t *testing.T) {
 	t.Run("disabled", func(t *testing.T) {
 		template := &ImageTemplate{
 			SystemConfig: SystemConfig{
-				FDE: FDEConfig{Enabled: false, Passphrase: "ignored", Unlock: "manual"},
+				FDE: FDEConfig{Enabled: false, Unlock: "manual"},
 			},
 		}
 		if template.IsFDEEnabled() {
@@ -4066,10 +4066,11 @@ func TestImageTemplateFDEHelpers(t *testing.T) {
 		template := &ImageTemplate{
 			SystemConfig: SystemConfig{
 				FDE: FDEConfig{
-					Enabled:    true,
-					Passphrase: "secret",
-					Partitions: []string{"rootfs", "userdata"},
-					Unlock:     "manual",
+					Enabled:        true,
+					PassphraseFile: "/tmp/fde-passphrase.txt",
+					Partitions:     []string{"rootfs", "userdata"},
+					Unlock:         "manual",
+					Passphrase:     "secret",
 				},
 			},
 		}
@@ -4078,6 +4079,9 @@ func TestImageTemplateFDEHelpers(t *testing.T) {
 		}
 		if template.GetFDEPassphrase() != "secret" {
 			t.Errorf("GetFDEPassphrase() = %q, want secret", template.GetFDEPassphrase())
+		}
+		if template.GetFDEPassphraseFile() != "/tmp/fde-passphrase.txt" {
+			t.Errorf("GetFDEPassphraseFile() = %q, want /tmp/fde-passphrase.txt", template.GetFDEPassphraseFile())
 		}
 		got := template.GetFDEPartitions()
 		if len(got) != 2 || got[0] != "rootfs" || got[1] != "userdata" {
@@ -4115,7 +4119,7 @@ func TestImageTemplateFDEHelpers(t *testing.T) {
 			t.Run(tt.unlock, func(t *testing.T) {
 				template := &ImageTemplate{
 					SystemConfig: SystemConfig{
-						FDE: FDEConfig{Enabled: true, Passphrase: "x", Unlock: tt.unlock},
+						FDE: FDEConfig{Enabled: true, PassphraseFile: "/tmp/fde-passphrase.txt", Unlock: tt.unlock},
 					},
 				}
 				if got := template.GetFDEUnlockMode(); got != tt.want {
@@ -4132,7 +4136,7 @@ func TestImageTemplateFDEHelpers(t *testing.T) {
 	t.Run("empty partitions list", func(t *testing.T) {
 		template := &ImageTemplate{
 			SystemConfig: SystemConfig{
-				FDE: FDEConfig{Enabled: true, Passphrase: "x", Partitions: nil},
+				FDE: FDEConfig{Enabled: true, PassphraseFile: "/tmp/fde-passphrase.txt", Partitions: nil},
 			},
 		}
 		if len(template.GetFDEPartitions()) != 0 {
@@ -4142,6 +4146,64 @@ func TestImageTemplateFDEHelpers(t *testing.T) {
 			t.Error("IsFDEPartition(rootfs) = true with empty partitions list, want false")
 		}
 	})
+}
+
+func TestLoadTemplateFDEPassphraseFile(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	passphrasePath := filepath.Join(tmpDir, "fde-passphrase.txt")
+	if err := os.WriteFile(passphrasePath, []byte("from-file\n"), 0600); err != nil {
+		t.Fatalf("write passphrase file: %v", err)
+	}
+
+	tplPath := filepath.Join(tmpDir, "template.yml")
+	tpl := strings.Join([]string{
+		"image:",
+		"  name: fde-file-test",
+		"  version: \"1.0\"",
+		"target:",
+		"  os: ubuntu",
+		"  dist: ubuntu24",
+		"  arch: x86_64",
+		"  imageType: raw",
+		"disk:",
+		"  name: disk0",
+		"  path: /dev/vda",
+		"  partitionTableType: gpt",
+		"  partitions:",
+		"    - id: rootfs",
+		"      name: rootfs",
+		"      type: linux-root-amd64",
+		"      typeUUID: \"\"",
+		"      fsType: ext4",
+		"      fsLabel: rootfs",
+		"      start: 1MiB",
+		"      end: 100%",
+		"      mountPoint: /",
+		"systemConfig:",
+		"  name: test",
+		"  description: test",
+		"  fde:",
+		"    enabled: true",
+		"    passphraseFile: " + passphrasePath,
+		"",
+	}, "\n")
+	if err := os.WriteFile(tplPath, []byte(tpl), 0644); err != nil {
+		t.Fatalf("write template: %v", err)
+	}
+
+	template, err := LoadTemplate(tplPath, false)
+	if err != nil {
+		t.Fatalf("LoadTemplate() error = %v", err)
+	}
+
+	if got := template.GetFDEPassphrase(); got != "from-file" {
+		t.Fatalf("GetFDEPassphrase() = %q, want from-file", got)
+	}
+	if got := template.GetFDEPassphraseFile(); got != passphrasePath {
+		t.Fatalf("GetFDEPassphraseFile() = %q, want %q", got, passphrasePath)
+	}
 }
 
 func TestGetUsersAndUserByName(t *testing.T) {

@@ -36,7 +36,7 @@ systemConfig:
   # ... other system configuration
   fde:
     enabled: true
-    passphrase: "change-me"
+    passphraseFile: "/path/to/fde-passphrase.txt"
     unlock: auto
     partitions:
       - rootfs
@@ -47,7 +47,7 @@ systemConfig:
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `enabled` | bool | **Yes** | Enable full-disk encryption. Default: `false`. |
-| `passphrase` | string | **Yes** (when `enabled: true`) | Passphrase used to unlock the encrypted volume(s). Must be non-empty. |
+| `passphraseFile` | string | **Yes** (when `enabled: true`) | Absolute or template-relative local file path containing passphrase material. File must be non-empty. |
 | `partitions` | string[] | No | Disk partition IDs to encrypt (for example `rootfs`, `userdata`). If omitted, only the partition with `mountPoint: /` (typically `rootfs`) is encrypted. |
 | `unlock` | string | No | Boot unlock mode: `auto` (default) or `manual`. See [Unlock Modes](#unlock-modes). |
 
@@ -64,7 +64,7 @@ systemConfig:
   name: edge
   fde:
     enabled: true
-    passphrase: "change-me"   # Do not commit real passphrases
+    passphraseFile: "/run/secrets/fde-passphrase.txt"
     unlock: auto
     partitions:
       - rootfs
@@ -113,7 +113,7 @@ systemConfig:
     enabled: true
   fde:
     enabled: true
-    passphrase: "change-me"
+    passphraseFile: "/run/secrets/fde-passphrase.txt"
     unlock: manual
     partitions:
       - rootfs
@@ -150,7 +150,7 @@ image-composer-tool validate your-template.yml
 ```
 
 Then build the image as usual. Validation fails if `fde.enabled` is `true` but
-no non-empty `passphrase` is provided.
+no non-empty `passphraseFile` is provided.
 
 ## Verify on the Device
 
@@ -178,7 +178,7 @@ In `manual` mode, expect one passphrase prompt per encrypted volume.
 ## Security Best Practices
 
 1. Never commit real passphrases to version control. Use a placeholder in the
-   template and substitute the real value in your build environment.
+  template path only, and provide the real secret in a local file during build.
 2. Prefer `manual` unlock when a stronger boot policy is required; the passphrase
    is not embedded in the image.
 3. Treat `auto` unlock as a convenience feature: the keyfile lives on the ESP and
@@ -187,7 +187,7 @@ In `manual` mode, expect one passphrase prompt per encrypted volume.
    mode.
 
 > **Note:** When ICT logs the merged template at debug level, the
-> `systemConfig.fde.passphrase` value is redacted as `[REDACTED]`, so it does not
+> `systemConfig.fde.passphraseFile` and resolved passphrase values are redacted as `[REDACTED]`, so they do not
 > leak into build logs.
 
 ## Limitations
@@ -200,8 +200,8 @@ In `manual` mode, expect one passphrase prompt per encrypted volume.
 
 **Common Issues:**
 
-1. **Validation error about a missing passphrase:** Set a non-empty
-   `passphrase` when `fde.enabled` is `true`.
+1. **Validation error about a missing passphrase file:** Set a non-empty
+  `passphraseFile` when `fde.enabled` is `true`.
 2. **Build fails with "partition has no device in the disk map":** The partition
    ID under `fde.partitions` does not exist in the merged disk configuration.
    Use IDs from the disk layout (for example `rootfs`, `userdata`).

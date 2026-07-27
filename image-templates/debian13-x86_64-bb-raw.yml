@@ -125,6 +125,8 @@ systemConfig:
 
   configurations:
     - cmd: "chmod 755 /usr/local/sbin/hello.sh /etc/initramfs-tools/hooks/hello /etc/initramfs-tools/scripts/init-bottom/hello"
+    - cmd: "printf 'Package: systemd-boot systemd-boot-efi\\nPin: release *\\nPin-Priority: -1\\n' > /etc/apt/preferences.d/no-systemd-boot"
+    - cmd: "dpkg --purge --force-all systemd-boot systemd-boot-efi 2>/dev/null || true"
 
   kernel:
     version: "6.12.74"

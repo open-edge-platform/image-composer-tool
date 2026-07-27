@@ -285,10 +285,14 @@ type NetworkConfig struct {
 
 // FDEConfig holds the full-disk-encryption configuration
 type FDEConfig struct {
-	Enabled    bool     `yaml:"enabled"`              // Enabled: whether full-disk encryption is enabled (default: false)
-	Passphrase string   `yaml:"passphrase,omitempty"` // Passphrase: passphrase used to unlock the encrypted volume
-	Partitions []string `yaml:"partitions,omitempty"` // Partitions: disk partition IDs to encrypt (e.g., "rootfs", "userdata")
-	Unlock     string   `yaml:"unlock,omitempty"`     // Unlock: boot unlock mode, "auto" (keyfile, no prompt; default) or "manual" (interactive passphrase)
+	Enabled        bool     `yaml:"enabled"`                  // Enabled: whether full-disk encryption is enabled (default: false)
+	PassphraseFile string   `yaml:"passphraseFile,omitempty"` // PassphraseFile: local file containing the passphrase
+	Partitions     []string `yaml:"partitions,omitempty"`     // Partitions: disk partition IDs to encrypt (e.g., "rootfs", "userdata")
+	Unlock         string   `yaml:"unlock,omitempty"`         // Unlock: boot unlock mode, "auto" (keyfile, no prompt; default) or "manual" (interactive passphrase)
+
+	// Passphrase is resolved from PassphraseFile at load time and is intentionally
+	// never read from YAML to avoid plaintext secrets in templates.
+	Passphrase string `yaml:"-"`
 }
 
 // SystemConfig represents a system configuration within the template
@@ -368,6 +372,10 @@ func LoadTemplate(path string, validateFull bool) (*ImageTemplate, error) {
 	template, err := parseYAMLTemplate(data, validateFull)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load template: %w", err)
+	}
+
+	if err := resolveFDEPassphrase(template, path); err != nil {
+		return nil, err
 	}
 
 	// Store the template path info
@@ -875,9 +883,46 @@ func (t *ImageTemplate) IsFDEEnabled() bool {
 	return t.SystemConfig.FDE.Enabled
 }
 
-// GetFDEPassphrase returns the full-disk-encryption passphrase from the template
+// GetFDEPassphrase returns the full-disk-encryption passphrase resolved in
+// memory from systemConfig.fde.passphraseFile.
 func (t *ImageTemplate) GetFDEPassphrase() string {
 	return t.SystemConfig.FDE.Passphrase
+}
+
+// GetFDEPassphraseFile returns the local file path used to source the
+// full-disk-encryption passphrase, when configured.
+func (t *ImageTemplate) GetFDEPassphraseFile() string {
+	return t.SystemConfig.FDE.PassphraseFile
+}
+
+func resolveFDEPassphrase(template *ImageTemplate, templatePath string) error {
+	if !template.IsFDEEnabled() {
+		return nil
+	}
+
+	passphraseFile := strings.TrimSpace(template.SystemConfig.FDE.PassphraseFile)
+	if passphraseFile == "" {
+		return nil
+	}
+
+	if !filepath.IsAbs(passphraseFile) {
+		passphraseFile = filepath.Join(filepath.Dir(templatePath), passphraseFile)
+	}
+
+	passphraseData, err := security.SafeReadFile(passphraseFile, security.RejectSymlinks)
+	if err != nil {
+		return fmt.Errorf("failed to read systemConfig.fde.passphraseFile %q: %w", passphraseFile, err)
+	}
+
+	passphrase := strings.TrimSpace(string(passphraseData))
+	if passphrase == "" {
+		return fmt.Errorf("systemConfig.fde.passphraseFile %q is empty", passphraseFile)
+	}
+
+	template.SystemConfig.FDE.PassphraseFile = passphraseFile
+	template.SystemConfig.FDE.Passphrase = passphrase
+
+	return nil
 }
 
 // GetFDEPartitions returns the list of partition IDs to encrypt.
