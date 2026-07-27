@@ -249,7 +249,7 @@ func (p *OllamaProvider) ChatStream(ctx context.Context, messages []ChatMessage)
 	// Use a client without an overall timeout: an HTTP-client Timeout would
 	// abort a long-but-healthy stream. The idle watchdog below plus context
 	// cancellation handle cleanup instead.
-	streamClient := &http.Client{}
+	streamClient := &http.Client{Transport: p.client.Transport}
 	resp, err := streamClient.Do(req)
 	if err != nil {
 		cancel()
@@ -554,7 +554,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []ChatMessage)
 	// Use a client without an overall timeout: an HTTP-client Timeout would
 	// abort a long-but-healthy stream. The idle watchdog below plus context
 	// cancellation handle cleanup instead.
-	streamClient := &http.Client{}
+	streamClient := &http.Client{Transport: p.client.Transport}
 	resp, err := streamClient.Do(req)
 	if err != nil {
 		cancel()
