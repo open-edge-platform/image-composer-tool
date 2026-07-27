@@ -43,9 +43,15 @@ image builds via the image-composer-tool binary with streaming build logs.`,
 	serveCmd.Flags().StringVar(&serveWorkDir, "work-dir", "webui-workspace", "Base directory for per-build work/output directories")
 	serveCmd.Flags().BoolVar(&serveSudo, "sudo", false,
 		"Run builds under `sudo -n` (ICT requires root for chroot/mount). "+
-			"Grant a scoped, passwordless sudoers rule for the ICT binary only, "+
-			"e.g. `<svc-user> ALL=(root) NOPASSWD: /path/to/image-composer-tool build *` "+
-			"— do not give the service blanket sudo.")
+			"Grant scoped, passwordless sudoers rules for the ICT binary only — do not "+
+			"give the service blanket sudo. Two rules are needed:\n"+
+			"  <svc-user> ALL=(root) NOPASSWD: /path/to/image-composer-tool build *\n"+
+			"  <svc-user> ALL=(root) NOPASSWD: /usr/bin/kill -TERM -[0-9]*\n"+
+			"The second rule lets the (non-root) server cancel a build by signalling the "+
+			"root-owned build process group; without it, cancellation cannot deliver "+
+			"SIGTERM across the sudo boundary. Adjust the kill path (e.g. /bin/kill) to "+
+			"your distro. Security note: this grants the service user a scoped root "+
+			"`kill` — signalling process groups only, TERM only.")
 	serveCmd.Flags().StringVar(&serveManifest, "manifest", "",
 		"Path to a manifest YAML to read from disk (live-editable, no rebuild). "+
 			"When empty, the manifest embedded at build time is used.")

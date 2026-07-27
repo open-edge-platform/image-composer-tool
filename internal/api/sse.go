@@ -89,10 +89,23 @@ func (s *Server) handleBuildLogs(w http.ResponseWriter, r *http.Request) {
 					"artifacts": arts,
 				})
 			} else {
-				sendEvent(w, "error", map[string]any{
-					"status":  string(statusFailed),
-					"message": res.errMsg,
-				})
+				// Report the real terminal status (failed or cancelled) rather than
+				// a hardcoded "failed", so the UI can show the correct badge. Include
+				// any partial artifacts (with on-disk location) and a residual-teardown
+				// warning so the UI can point the user at manual remediation.
+				arts := res.artifacts
+				if arts == nil {
+					arts = []artifact{}
+				}
+				payload := map[string]any{
+					"status":    string(res.status),
+					"message":   res.errMsg,
+					"artifacts": arts,
+				}
+				if res.residual != nil {
+					payload["residual"] = res.residual
+				}
+				sendEvent(w, "error", payload)
 			}
 			flusher.Flush()
 			return

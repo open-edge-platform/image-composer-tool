@@ -49,10 +49,13 @@ export const api = {
   listBuilds: () =>
     jsonFetch<{ builds: HistoryItem[] }>('/builds').then((r) => r.builds),
 
-  // Cancel an in-flight build. The endpoint arrives with Story 3; until then the
-  // backend returns 404 and the caller surfaces that as a cancel failure.
+  // Cancel an in-flight build. Returns 202 with the cancelling status; the
+  // terminal state (cancelled/failed) then arrives over SSE. 409 if the build is
+  // not running (already finished, or a cancel is already in flight).
   cancelBuild: (buildId: string) =>
-    jsonFetch<void>(`/builds/${buildId}/cancel`, { method: 'POST' }),
+    jsonFetch<{ buildId: string; status: string }>(`/builds/${buildId}/cancel`, {
+      method: 'POST',
+    }),
 
   // Build command + resolved paths for the troubleshoot panel.
   buildDetails: (buildId: string) =>

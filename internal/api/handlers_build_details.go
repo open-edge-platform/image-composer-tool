@@ -27,6 +27,8 @@ type buildDetails struct {
 	Summary     *composeSummary `json:"summary,omitempty"`
 	HasLogFile  bool            `json:"hasLogFile"` // a downloadable log file exists on disk
 	ErrMsg      string          `json:"errMsg,omitempty"`
+	Artifacts   []artifact      `json:"artifacts,omitempty"` // partial outputs on fail/cancel (with on-disk path)
+	Residual    *residualIssue  `json:"residual,omitempty"`  // teardown-residue warning for manual remediation
 }
 
 // handleBuildDetails returns the command and paths for a build so the UI can show
@@ -50,6 +52,8 @@ func (s *Server) handleBuildDetails(w http.ResponseWriter, r *http.Request) {
 		Summary:     b.Summary,
 		HasLogFile:  res.logFile != "" && fileExists(res.logFile),
 		ErrMsg:      res.errMsg,
+		Artifacts:   res.artifacts,
+		Residual:    res.residual,
 	})
 }
 

@@ -83,6 +83,16 @@ export interface Artifact {
   size?: string
 }
 
+// Teardown-residue warning surfaced when a cancelled/failed build may have left
+// the machine in a state needing manual cleanup. kind distinguishes a
+// cancellation-failure (the cancel signal couldn't be delivered) from a
+// cleanup-failure (ICT ran but reported leftover mounts/loop devices). detail
+// carries the remediation hint (the failing kill error, or ICT's mount/loop lines).
+export interface ResidualIssue {
+  kind: 'cancellation-failure' | 'cleanup-failure'
+  detail: string
+}
+
 // Reproducibility/troubleshooting metadata for a build: the exact command that
 // ran, the resolved template (+ a download URL), and the per-build directories.
 export interface BuildDetails {
@@ -96,6 +106,10 @@ export interface BuildDetails {
   summary?: ComposeSummary
   hasLogFile: boolean
   errMsg?: string
+  // Partial outputs left on disk after a fail/cancel (with on-disk path).
+  artifacts?: Artifact[]
+  // Teardown-residue warning, when cleanup left something behind.
+  residual?: ResidualIssue
 }
 
 // One row in the compose history list.
@@ -108,7 +122,8 @@ export interface HistoryItem {
 }
 
 export interface BuildComplete {
-  status: 'success' | 'failed'
+  status: 'success' | 'failed' | 'cancelled'
   artifacts?: Artifact[]
   message?: string
+  residual?: ResidualIssue
 }

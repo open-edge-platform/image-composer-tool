@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
@@ -31,6 +32,37 @@ type Server struct {
 	cfg      Config
 	manifest *Manifest
 	tracker  *buildTracker
+
+	// buildMu serializes compose starts so at most one build runs at a time.
+	// activeBuildID names the in-flight build (empty when idle). The slot is held
+	// from the moment handleStartBuild spawns the child until runBuild observes
+	// the ICT process fully exit (post-teardown), so a second compose can't start
+	// while mounts/loop devices from the previous one may still be tearing down.
+	buildMu       sync.Mutex
+	activeBuildID string
+}
+
+// tryAcquireBuildSlot claims the single-build slot for id. It returns false (and
+// the id currently holding the slot) if a build is already in flight, so the
+// caller can reject the concurrent start.
+func (s *Server) tryAcquireBuildSlot(id string) (ok bool, activeID string) {
+	s.buildMu.Lock()
+	defer s.buildMu.Unlock()
+	if s.activeBuildID != "" {
+		return false, s.activeBuildID
+	}
+	s.activeBuildID = id
+	return true, ""
+}
+
+// releaseBuildSlot frees the single-build slot. It is a no-op if id is not the
+// current holder (defensive: only the owning build should release it).
+func (s *Server) releaseBuildSlot(id string) {
+	s.buildMu.Lock()
+	defer s.buildMu.Unlock()
+	if s.activeBuildID == id {
+		s.activeBuildID = ""
+	}
 }
 
 // New constructs a Server, loading and validating the embedded manifest.

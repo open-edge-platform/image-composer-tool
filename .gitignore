@@ -1,6 +1,7 @@
-# ignore build artifacts, cache files, and temporary files 
+# ignore build artifacts, cache files, and temporary files
+build/
 downloads/
-builds/  
+builds/
 # Ignore cache directories anywhere (root runtime cache and provider test
 # caches), but keep the internal/cache source package tracked.
 cache/

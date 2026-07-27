@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
-import type { Artifact, BuildDetails } from '../api/types'
+import type { Artifact, BuildDetails, ResidualIssue } from '../api/types'
 import { BuildProgress } from './BuildProgress'
 
 type BuildStatus = 'idle' | 'running' | 'success' | 'failed'
@@ -24,6 +24,8 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange, isActive
   const [status, setStatus] = useState<Status>(isActive ? 'running' : 'loading')
   const [artifacts, setArtifacts] = useState<Artifact[]>([])
   const [errorMsg, setErrorMsg] = useState<string>('')
+  const [residual, setResidual] = useState<ResidualIssue | null>(null)
+  const [cancelError, setCancelError] = useState<string>('')
   const [details, setDetails] = useState<BuildDetails | null>(null)
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [phase, setPhase] = useState<string>('preparing')
@@ -35,6 +37,8 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange, isActive
     setStatus(isActive ? 'running' : 'loading')
     setArtifacts([])
     setErrorMsg('')
+    setResidual(null)
+    setCancelError('')
     setDetails(null)
     setDetailsOpen(false)
     setPhase(isActive ? 'preparing' : 'done')
@@ -55,7 +59,10 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange, isActive
         .then(([d, arts, logText]) => {
           setStatus((d.status as Status) ?? 'success')
           if (d.status === 'failed') setErrorMsg(d.errMsg ?? '')
-          setArtifacts(arts)
+          if (d.residual) setResidual(d.residual)
+          // Prefer the discovered artifact list; fall back to any partial outputs
+          // recorded on the details (present after a fail/cancel).
+          setArtifacts(arts.length > 0 ? arts : (d.artifacts ?? []))
           if (logText) setLogs(logText.split('\n'))
         })
         .catch(() => setStatus('failed'))
@@ -73,10 +80,18 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange, isActive
       api.buildDetails(buildId).then(setDetails).catch(() => {})
       api.buildArtifacts(buildId).then(setArtifacts).catch(() => {})
     }
-    const finishFailed = (msg?: string) => {
+    const finishFailed = (msg?: string, arts?: Artifact[], res?: ResidualIssue) => {
       setStatus('failed')
       if (msg) setErrorMsg(msg)
+      if (arts && arts.length > 0) setArtifacts(arts)
+      if (res) setResidual(res)
       onStatusChange('failed')
+    }
+    const finishCancelled = (arts?: Artifact[], res?: ResidualIssue) => {
+      setStatus('cancelled')
+      if (arts && arts.length > 0) setArtifacts(arts)
+      if (res) setResidual(res)
+      onStatusChange('idle')
     }
 
     const connect = () => {
@@ -99,8 +114,7 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange, isActive
         const data = JSON.parse((e as MessageEvent).data)
         es?.close()
         if (data.status === 'cancelled') {
-          setStatus('cancelled')
-          onStatusChange('idle')
+          finishCancelled(data.artifacts, data.residual)
         } else {
           setArtifacts(data.artifacts ?? [])
           finishSuccess()
@@ -110,14 +124,14 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange, isActive
         const raw = (e as MessageEvent).data
         es?.close()
         if (raw) {
-          // Server-sent terminal error: the build genuinely failed/cancelled.
+          // Server-sent terminal error: the build genuinely failed/cancelled. It
+          // carries any partial artifacts and a residual-teardown warning too.
           try {
             const data = JSON.parse(raw)
             if (data.status === 'cancelled') {
-              setStatus('cancelled')
-              onStatusChange('idle')
+              finishCancelled(data.artifacts, data.residual)
             } else {
-              finishFailed(data.message)
+              finishFailed(data.message, data.artifacts, data.residual)
             }
           } catch {
             finishFailed()
@@ -131,7 +145,8 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange, isActive
           .buildDetails(buildId)
           .then((d) => {
             if (d.status === 'success') finishSuccess()
-            else if (d.status === 'failed') finishFailed(d.errMsg)
+            else if (d.status === 'failed') finishFailed(d.errMsg, d.artifacts, d.residual)
+            else if (d.status === 'cancelled') finishCancelled(d.artifacts, d.residual)
             else if (!closed) setTimeout(connect, 1000) // still running → reconnect
           })
           .catch(() => finishFailed())
@@ -155,12 +170,37 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange, isActive
   const copyPath = (path: string) => navigator.clipboard.writeText(path)
   const copyCommand = () => details && navigator.clipboard.writeText(details.command)
 
+  // Request cancellation. Optimistically flip to the cancelling transient so the
+  // button disables immediately; the terminal state (cancelled/failed) arrives
+  // over SSE. If the request itself fails, surface it and revert to running so
+  // the user can retry the cancel.
+  const cancel = async () => {
+    setCancelError('')
+    setStatus('cancelling')
+    try {
+      await api.cancelBuild(buildId)
+    } catch (err) {
+      setCancelError(err instanceof Error ? err.message : 'cancel request failed')
+      setStatus('running')
+    }
+  }
+
   return (
     <div className="mt-6">
       <div className="mb-2 flex items-center gap-3">
         <h2 className="text-sm font-semibold text-[#00285a]">Compose Status</h2>
         <StatusBadge status={status} />
-        {/* Cancel button wired in Story 3 (build cancellation + cleanup) */}
+        {/* Cancel — available while the active build is running. Disabled during
+            the cancelling transient (request in flight / awaiting teardown). */}
+        {isActive && (status === 'running' || status === 'cancelling') && (
+          <button
+            className="ml-auto rounded border border-red-400 px-3 py-1 text-xs font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={status === 'cancelling'}
+            onClick={cancel}
+          >
+            {status === 'cancelling' ? 'Cancelling…' : '✕ Cancel compose'}
+          </button>
+        )}
         {(status === 'failed' || status === 'cancelled') && (
           <button
             className="ml-auto rounded border border-[#0071c5] px-3 py-1 text-xs font-medium text-[#0071c5] hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
@@ -172,14 +212,66 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange, isActive
         )}
       </div>
 
+      {cancelError && (
+        <div className="mb-2 rounded bg-red-50 p-2 text-xs text-red-700">
+          Cancel request failed: {cancelError}
+        </div>
+      )}
+
       {/* Phase stepper — shown for the active (streaming) build. History builds
-          have no live phase data, so it's omitted there. */}
+          have no live phase data, so it's omitted there. The active stage is
+          marked red on both failure and cancellation. */}
       {isActive && (
-        <BuildProgress phase={phase} install={install} failed={status === 'failed'} />
+        <BuildProgress
+          phase={phase}
+          install={install}
+          failed={status === 'failed' || status === 'cancelled'}
+        />
+      )}
+
+      {status === 'cancelling' && (
+        <div className="mb-2 rounded bg-amber-50 p-2 text-xs text-amber-800">
+          Cancelling compose — signalling the build to stop and clean up (unmounting,
+          detaching loop devices). This may take a moment.
+        </div>
       )}
 
       {status === 'failed' && errorMsg && (
-        <div className="mb-2 rounded bg-red-50 p-2 text-xs text-red-700">Compose failed: {errorMsg}</div>
+        <div className="mb-2 rounded bg-red-50 p-2 text-xs text-red-700">
+          Compose failed{failureStage(phase) ? ` at ${failureStage(phase)}` : ''}: {errorMsg}
+        </div>
+      )}
+
+      {status === 'cancelled' && (
+        <div className="mb-2 rounded bg-slate-100 p-2 text-xs text-slate-700">
+          Compose cancelled. The build was stopped and its mounts/loop devices were
+          torn down.
+        </div>
+      )}
+
+      {/* Teardown-residue warning: distinguish a cancellation-failure (the signal
+          didn't reach the build) from a cleanup-failure (ICT ran but left mounts /
+          loop devices behind), with the detail needed to remediate by hand. */}
+      {residual && (
+        <div className="mb-2 rounded border border-red-300 bg-red-50 p-2 text-xs text-red-800">
+          <p className="font-semibold">
+            {residual.kind === 'cancellation-failure'
+              ? 'Cancellation failure — the build could not be signalled to stop.'
+              : 'Cleanup failure — teardown left resources behind.'}
+          </p>
+          <p className="mt-1">
+            Manual remediation may be required. Check for leftover mounts and loop
+            devices under the build work directory:
+          </p>
+          <pre className="mt-1 overflow-x-auto rounded bg-red-100 p-1.5 font-mono text-[11px]">
+            {details?.workDir
+              ? `mount | grep ${details.workDir}\nlosetup -l`
+              : 'mount | grep webui-workspace/builds/<id>\nlosetup -l'}
+          </pre>
+          <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-all rounded bg-red-100 p-1.5 font-mono text-[11px]">
+            {residual.detail}
+          </pre>
+        </div>
       )}
 
       {/* Collapsible troubleshoot panel: the exact command, the resolved template
@@ -334,7 +426,15 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange, isActive
 
       {artifacts.length > 0 && (
         <div className="mt-4">
-          <h3 className="mb-2 text-sm font-semibold text-[#00285a]">Artifacts</h3>
+          <h3 className="mb-2 text-sm font-semibold text-[#00285a]">
+            {status === 'failed' || status === 'cancelled' ? 'Partial artifacts' : 'Artifacts'}
+          </h3>
+          {(status === 'failed' || status === 'cancelled') && (
+            <p className="mb-2 text-xs text-slate-500">
+              These outputs were left on disk when the compose stopped early — they
+              are incomplete. Their on-disk location is shown below.
+            </p>
+          )}
           <table className="w-full border-collapse text-sm">
             <thead>
               <tr className="bg-[#e6f2fa] text-left">
@@ -419,6 +519,20 @@ function DownloadIcon({ className }: { className?: string }) {
       <line x1="12" y1="15" x2="12" y2="3" />
     </svg>
   )
+}
+
+// failureStage maps the last-known phase id to a human label so a failure can
+// name the stage it stopped at (ICT provides the reason; this provides the
+// stage). Returns '' for the terminal/unknown phases where a stage name adds
+// nothing.
+function failureStage(phase: string): string {
+  const labels: Record<string, string> = {
+    preparing: 'the Preparing stage',
+    packages: 'the package resolution/download stage',
+    installing: 'the package install stage',
+    generating: 'image generation',
+  }
+  return labels[phase] ?? ''
 }
 
 // Clean a raw log line for display:

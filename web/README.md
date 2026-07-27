@@ -23,22 +23,35 @@ under `sudo`. Run everything from the **repository root**.
 
 ### 1. Grant a scoped, passwordless sudo rule
 
-The server invokes the ICT binary (and `cat`, to stream root-owned artifacts) via
-`sudo -n`. Grant a NOPASSWD rule scoped to exactly those commands — do **not**
-give the service blanket sudo. The path must be the **absolute** path to the
-binary you build in step 2 (the server resolves it to an absolute path, and
-`sudo` matches the rule literally).
+The server invokes the ICT binary (and `cat`, to stream root-owned artifacts, and
+`kill`, to cancel a running build) via `sudo -n`. Grant NOPASSWD rules scoped to
+exactly those commands — do **not** give the service blanket sudo. The path must
+be the **absolute** path to the binary you build in step 2 (the server resolves
+it to an absolute path, and `sudo` matches the rule literally).
 
 ```bash
 echo "$(whoami) ALL=(root) NOPASSWD: $(pwd)/build/image-composer-tool build *" \
   | sudo tee /etc/sudoers.d/ict-webui
 echo "$(whoami) ALL=(root) NOPASSWD: /usr/bin/cat $(pwd)/webui-workspace/builds/*" \
   | sudo tee -a /etc/sudoers.d/ict-webui
+echo "$(whoami) ALL=(root) NOPASSWD: /usr/bin/kill -TERM -[0-9]*" \
+  | sudo tee -a /etc/sudoers.d/ict-webui
 sudo chmod 440 /etc/sudoers.d/ict-webui
 
 # Verify (should print "sudo OK"):
 sudo -n "$(pwd)/build/image-composer-tool" build --help >/dev/null && echo "sudo OK"
 ```
+
+> **Cancellation & security posture.** The build runs as a root-owned process
+> group (so ICT can tear down its own mounts and loop devices on SIGTERM). The
+> server is non-root and cannot signal that group directly across the `sudo`
+> boundary, so **Cancel** delivers the signal as root via `sudo -n kill -TERM
+> -<pgid>`. The third rule above authorizes exactly that: a scoped root `kill`,
+> restricted to `-TERM` and to signalling a process **group** (the leading `-`
+> before the pid). Adjust the `kill` path (e.g. `/bin/kill`) to match your distro
+> — run `command -v kill`. Omit this rule and cancellation will fail with a
+> *cancellation-failure* (the signal can't be delivered); the UI surfaces that
+> distinctly from a *cleanup-failure* (ICT ran but left residue).
 
 ### 2. Build the frontend, embed it, and build the binary
 
