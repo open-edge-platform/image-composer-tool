@@ -89,6 +89,24 @@ func TestScanResidualCleanup(t *testing.T) {
 	}
 }
 
+// TestStripLogPrefix verifies the logger's fixed 3-field prefix
+// (<ts>\t<LEVEL>\t<source>\t) is removed while tabs inside the message are
+// preserved — a message with an embedded tab must not be truncated.
+func TestStripLogPrefix(t *testing.T) {
+	if got := stripLogPrefix("12:00:00\tERROR\tcleanup.go:9\tleftover loop device"); got != "leftover loop device" {
+		t.Fatalf("prefix not stripped: %q", got)
+	}
+	// A message that itself contains a tab keeps everything after the 3rd tab.
+	line := "12:00:00\tERROR\tcleanup.go:9\tmount | grep foo\tand more"
+	if got := stripLogPrefix(line); got != "mount | grep foo\tand more" {
+		t.Fatalf("embedded tab truncated: %q", got)
+	}
+	// A non-logger line (fewer than 3 tabs) is returned unchanged.
+	if got := stripLogPrefix("bare message"); got != "bare message" {
+		t.Fatalf("non-prefixed line altered: %q", got)
+	}
+}
+
 // --- build.beginCancel / setResidual ---
 
 func TestBeginCancelTransitions(t *testing.T) {
@@ -114,6 +132,41 @@ func TestBeginCancelTransitions(t *testing.T) {
 	done := &build{ID: "d", status: statusFailed, done: make(chan struct{})}
 	if ok, _ := done.beginCancel(); ok {
 		t.Fatal("cancel on failed build transitioned; want false")
+	}
+}
+
+// TestSetPgidCheckCancel covers the start-race window: a cancel can arrive after
+// the build is tracked as running but before runBuild records the process-group
+// id. beginCancel transitions to cancelling with pgid still 0; setPgidCheckCancel
+// (called once the child is started) must record the real pgid and report that a
+// cancel is pending so the caller signals the group it finally has.
+func TestSetPgidCheckCancel(t *testing.T) {
+	// No cancel pending: records the pgid, reports pending=false.
+	b := &build{ID: "b", status: statusRunning, done: make(chan struct{})}
+	if pgid, pending := b.setPgidCheckCancel(1234); pgid != 1234 || pending {
+		t.Fatalf("no-cancel: pgid=%d pending=%v, want 1234/false", pgid, pending)
+	}
+	if s := b.snapshot(); s.status != statusRunning {
+		t.Fatalf("no-cancel status = %q, want running (unchanged)", s.status)
+	}
+
+	// Cancel arrived during the window (status=cancelling, pgid still 0):
+	// setPgidCheckCancel records the pgid and reports pending=true so runBuild
+	// delivers the deferred signal.
+	raced := &build{ID: "r", status: statusRunning, done: make(chan struct{})}
+	if ok, pgid := raced.beginCancel(); !ok || pgid != 0 {
+		t.Fatalf("beginCancel before pgid set: ok=%v pgid=%d, want true/0", ok, pgid)
+	}
+	pgid, pending := raced.setPgidCheckCancel(5678)
+	if pgid != 5678 || !pending {
+		t.Fatalf("raced cancel: pgid=%d pending=%v, want 5678/true", pgid, pending)
+	}
+
+	// A build that already reached a terminal state before the pgid was recorded
+	// must not report a pending cancel (nothing to signal).
+	term := &build{ID: "t", status: statusCancelled, cancelRequested: true, done: make(chan struct{})}
+	if _, pending := term.setPgidCheckCancel(9999); pending {
+		t.Fatal("terminal build reported a pending cancel; want false")
 	}
 }
 

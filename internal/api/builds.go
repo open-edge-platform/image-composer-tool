@@ -188,6 +188,21 @@ func (b *build) beginCancel() (transitioned bool, pgid int) {
 	return true, b.pgid
 }
 
+// setPgidCheckCancel records the running child's process-group id and reports,
+// atomically under the same lock, whether a cancel was already requested while
+// pgid was still unset (the start-race window). When pending is true the caller
+// must deliver the cancel signal now, since the earlier handleCancelBuild call
+// transitioned to cancelling but had no group to signal. Returns the recorded
+// pgid so the caller can signal without re-taking the lock.
+func (b *build) setPgidCheckCancel(pgid int) (recorded int, pending bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.pgid = pgid
+	// A cancel is pending for us to service only if one was requested and the
+	// build is still in the cancelling state (not already terminal).
+	return pgid, b.cancelRequested && b.status == statusCancelling
+}
+
 // wasCancelRequested reports whether a user cancel was issued for this build.
 func (b *build) wasCancelRequested() bool {
 	b.mu.Lock()
@@ -490,9 +505,23 @@ func (s *Server) runBuild(b *build, name string, cmdArgs []string) {
 	// Record the process-group id now that the child is running. With Setpgid the
 	// child is its own group leader, so the group id equals its pid. A cancel
 	// signals -pgid to reach the whole tree.
-	b.mu.Lock()
-	b.pgid = cmd.Process.Pid
-	b.mu.Unlock()
+	//
+	// A cancel can arrive in the window between the build being tracked as running
+	// (in handleStartBuild) and this point, when pgid was still 0. beginCancel
+	// would have transitioned to cancelling but signalCancel(0) could not signal
+	// anything. setPgidCheckCancel records the pgid and, atomically under b.mu,
+	// reports whether such an early cancel is pending so we can deliver the signal
+	// now that we finally have a group to target.
+	if pgid, pending := b.setPgidCheckCancel(cmd.Process.Pid); pending {
+		if err := s.signalCancel(pgid); err != nil {
+			detail := fmt.Sprintf("failed to signal build process group %d: %v", pgid, err)
+			b.setResidual(residualCancellation, detail)
+			b.appendLog("ERROR " + detail)
+			log.Errorf("build %s: %s", b.ID, detail)
+		} else {
+			b.appendLog("• cancel requested before start completed — signalling now")
+		}
+	}
 	// Wait for the process in a goroutine and close the pipe writer when it
 	// exits, so the scanner below sees EOF. The exit error is delivered on
 	// waitCh (cmd.Wait is called exactly once, here).
@@ -647,11 +676,14 @@ func scanResidualCleanup(logs []string) string {
 }
 
 // stripLogPrefix trims the logger's leading "<ts>\t<LEVEL>\t<source>\t" fields
-// from a log line, leaving the message. Falls back to the whole line when the
-// line isn't tab-formatted.
+// from a log line, leaving the message. The prefix is exactly three tab-
+// separated fields, so we split off the first three and keep the remainder
+// verbatim — including any tabs inside the message itself (LastIndex would drop
+// everything up to the message's own last tab). Falls back to the whole line
+// when the line has fewer than three tabs (not logger-formatted).
 func stripLogPrefix(line string) string {
-	if i := strings.LastIndex(line, "\t"); i >= 0 {
-		return line[i+1:]
+	if parts := strings.SplitN(line, "\t", 4); len(parts) == 4 {
+		return parts[3]
 	}
 	return line
 }
