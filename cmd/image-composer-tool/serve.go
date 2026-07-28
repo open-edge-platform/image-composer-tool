@@ -50,8 +50,12 @@ image builds via the image-composer-tool binary with streaming build logs.`,
 			"The second rule lets the (non-root) server cancel a build by signalling the "+
 			"root-owned build process group; without it, cancellation cannot deliver "+
 			"SIGTERM across the sudo boundary. Adjust the kill path (e.g. /bin/kill) to "+
-			"your distro. Security note: this grants the service user a scoped root "+
-			"`kill` — signalling process groups only, TERM only.")
+			"your distro. SECURITY: the pgid isn't known ahead of time, so sudoers "+
+			"cannot scope it — this rule grants the service user root SIGTERM to ANY "+
+			"process group, including `kill -TERM -1` (every process on the host). The "+
+			"signal is limited to TERM. Accept this deliberately, or run the server as "+
+			"root on an isolated build host (no kill rule needed), or omit the rule and "+
+			"accept that Cancel reports a cancellation-failure. See web/README.md.")
 	serveCmd.Flags().StringVar(&serveManifest, "manifest", "",
 		"Path to a manifest YAML to read from disk (live-editable, no rebuild). "+
 			"When empty, the manifest embedded at build time is used.")

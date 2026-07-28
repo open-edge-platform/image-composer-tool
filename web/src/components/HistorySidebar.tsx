@@ -55,16 +55,21 @@ function combinationLabel(it: HistoryItem): string {
   return parts.join(' / ')
 }
 
+// One dot per server-side build state. Cancelling and cancelled need their own
+// colours: without them a cancelled build looked identical to an unknown status
+// and a cancel in progress looked like a finished one.
+const dotStyles: Record<string, string> = {
+  'not-started': 'bg-yellow-400 animate-pulse',
+  running: 'bg-yellow-400 animate-pulse',
+  cancelling: 'bg-amber-500 animate-pulse',
+  cancelled: 'bg-slate-400',
+  success: 'bg-green-400',
+  failed: 'bg-red-500',
+}
+
 function StatusDot({ status }: { status: string }) {
-  const cls =
-    status === 'running'
-      ? 'bg-yellow-400 animate-pulse'
-      : status === 'success'
-        ? 'bg-green-400'
-        : status === 'failed'
-          ? 'bg-red-500'
-          : 'bg-slate-300'
-  return <span className={`h-2 w-2 shrink-0 rounded-full ${cls}`} />
+  const cls = dotStyles[status] ?? 'bg-slate-300'
+  return <span title={status} className={`h-2 w-2 shrink-0 rounded-full ${cls}`} />
 }
 
 // relativeTime renders a compact "just now / 5m ago / 2h ago / 3d ago" label.

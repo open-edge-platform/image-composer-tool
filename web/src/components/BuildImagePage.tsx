@@ -1,10 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api/client'
-import type { HistoryItem } from '../api/types'
+import { isActiveStatus, type BuildStatus, type HistoryItem } from '../api/types'
 import { BuildView } from './BuildView'
 import { HistorySidebar } from './HistorySidebar'
-
-type BuildStatus = 'idle' | 'running' | 'success' | 'failed'
 
 interface BuildImagePageProps {
   // The active (most recently started) build, owned by App. Null until the
@@ -12,10 +10,19 @@ interface BuildImagePageProps {
   buildId: string | null
   onRetry: () => Promise<void>
   retrying: boolean
+  // Why the last retry failed (e.g. a 409 while the previous build is still
+  // tearing down), or null. Owned by App, which issues the start.
+  retryError: string | null
   onStatusChange: (s: BuildStatus) => void
 }
 
-export function BuildImagePage({ buildId, onRetry, retrying, onStatusChange }: BuildImagePageProps) {
+export function BuildImagePage({
+  buildId,
+  onRetry,
+  retrying,
+  retryError,
+  onStatusChange,
+}: BuildImagePageProps) {
   const [history, setHistory] = useState<HistoryItem[]>([])
   // Which build is shown on the right. Defaults to the active build; clicking a
   // history row overrides it.
@@ -44,19 +51,21 @@ export function BuildImagePage({ buildId, onRetry, retrying, onStatusChange }: B
     }
   }, [buildId, refresh])
 
-  // Poll while any build is still running so the sidebar reflects live status.
-  const anyRunning = history.some((h) => h.status === 'running')
+  // Poll while any build is still in flight so the sidebar reflects live status.
+  // 'cancelling' counts: the row's status changes again when teardown finishes.
+  const anyActive = history.some((h) => isActiveStatus(h.status))
   useEffect(() => {
-    if (!anyRunning) return
+    if (!anyActive) return
     const t = setInterval(refresh, 3000)
     return () => clearInterval(t)
-  }, [anyRunning, refresh])
+  }, [anyActive, refresh])
 
-  // The active build's terminal status drives the nav indicator; a past build's
-  // status must not clobber it. Also refresh history when the active build ends.
+  // The active build's status drives the nav indicator; a past build's status
+  // must not clobber it. Also refresh history whenever the active build reaches a
+  // terminal state, so its sidebar row stops showing the in-flight status.
   const handleStatusChange = (s: BuildStatus) => {
     if (selectedId === buildId) onStatusChange(s)
-    if (s === 'success' || s === 'failed') refresh()
+    if (!isActiveStatus(s) && s !== 'idle') refresh()
   }
 
   return (
@@ -71,6 +80,7 @@ export function BuildImagePage({ buildId, onRetry, retrying, onStatusChange }: B
               buildId={selectedId}
               onRetry={onRetry}
               retrying={retrying}
+              retryError={retryError}
               onStatusChange={handleStatusChange}
               isActive={selectedId === buildId}
             />

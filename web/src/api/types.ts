@@ -93,6 +93,26 @@ export interface ResidualIssue {
   detail: string
 }
 
+// The server's six build states, verbatim (internal/api/builds.go). Shared by
+// every component that reports or renders a build's lifecycle so a new state
+// can't be handled in one place and silently dropped in another. 'idle' is a
+// UI-only state meaning "no build owns the session right now".
+export type BuildStatus =
+  | 'idle'
+  | 'not-started'
+  | 'running'
+  | 'cancelling'
+  | 'cancelled'
+  | 'success'
+  | 'failed'
+
+// isActiveStatus reports whether a build is still in flight — the server holds
+// the single-build slot in exactly these states, so this is what gates starting
+// another compose and what drives history polling.
+export function isActiveStatus(s: string): boolean {
+  return s === 'not-started' || s === 'running' || s === 'cancelling'
+}
+
 // Reproducibility/troubleshooting metadata for a build: the exact command that
 // ran, the resolved template (+ a download URL), and the per-build directories.
 export interface BuildDetails {
@@ -119,6 +139,15 @@ export interface HistoryItem {
   template: string
   createdAt: string
   summary?: ComposeSummary
+}
+
+// Response to POST /builds/{id}/cancel. residual is present when the cancel was
+// accepted but the signal could not be delivered — the build stays 'cancelling',
+// so this is the only place that failure surfaces promptly.
+export interface CancelAccepted {
+  buildId: string
+  status: string
+  residual?: ResidualIssue
 }
 
 export interface BuildComplete {

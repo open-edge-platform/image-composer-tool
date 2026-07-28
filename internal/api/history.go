@@ -27,6 +27,9 @@ type buildMeta struct {
 	Artifacts []artifact      `json:"artifacts,omitempty"`
 	ErrMsg    string          `json:"errMsg,omitempty"`
 	LogFile   string          `json:"logFile,omitempty"`
+	// Residual outlives the process on purpose: leftover mounts and loop devices
+	// survive a server restart, so the remediation hint must too.
+	Residual *residualIssue `json:"residual,omitempty"`
 }
 
 // metaPath returns the meta.json path for a build root directory.
@@ -52,6 +55,7 @@ func (b *build) writeMeta() error {
 		Artifacts: res.artifacts,
 		ErrMsg:    res.errMsg,
 		LogFile:   res.logFile,
+		Residual:  res.residual,
 	}
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
@@ -83,6 +87,7 @@ func buildFromMeta(rootDir string, m buildMeta) *build {
 		status:    buildStatus(m.Status),
 		artifacts: m.Artifacts,
 		errMsg:    m.ErrMsg,
+		residual:  m.Residual,
 	}
 	return b
 }

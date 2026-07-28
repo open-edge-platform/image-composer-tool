@@ -268,6 +268,48 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /builds/{buildId}/cancel:
+    post:
+      tags: [Builds]
+      operationId: cancelBuild
+      summary: Cancel a running build
+      description: |
+        Requests cancellation of an in-flight build. The server sends `SIGTERM` to
+        the build's process group so the image-composer-tool child performs its own
+        teardown (unmounting, detaching loop devices) and exits with code 130.
+
+        The call is asynchronous: it returns `202` with status `cancelling`, and the
+        terminal state (`cancelled`, or `failed` if the child exited non-130) is
+        delivered on the SSE log stream's `complete` event.
+
+        If the signal cannot be delivered — most often because the server runs
+        non-root without the scoped `sudo kill` rule — the response is still `202`
+        but carries a `residual` of kind `cancellation-failure`. That is the only
+        prompt notification of the failure, since no terminal event may follow.
+      parameters:
+        - $ref: "#/components/parameters/BuildId"
+      responses:
+        "202":
+          description: Cancellation accepted; the build is now cancelling
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CancelAccepted"
+        "404":
+          description: Build not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: |
+            Build is not cancellable — it already reached a terminal state, or it
+            has no live process on this server (a record that predates a restart).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /builds/{buildId}/logs:
     get:
       tags: [Builds]
@@ -280,7 +322,9 @@ paths:
 
         Event types:
         - `log`: A log line with timestamp and message
-        - `complete`: Build finished (includes pass/fail status and artifacts)
+        - `complete`: Build reached a terminal state (`success`, `failed` or
+          `cancelled`). Carries the artifacts — partial ones on `failed`/`cancelled`
+          — and a `residual` warning if teardown left mounts or loop devices behind.
         - `error`: Build failed with error details
       parameters:
         - $ref: "#/components/parameters/BuildId"
@@ -661,8 +705,7 @@ components:
           type: string
           format: uuid
         status:
-          type: string
-          enum: [running]
+          $ref: "#/components/schemas/BuildStatus"
         startedAt:
           type: string
           format: date-time
@@ -671,14 +714,21 @@ components:
           description: SSE endpoint for streaming logs
           example: /api/v1/builds/abc-123/logs
 
+    BuildStatus:
+      type: string
+      description: |
+        Build lifecycle state. `not-started` is the brief window after the build is
+        accepted but before its process group exists (a cancel is already honoured
+        there). `cancelling` lasts until the child finishes its own teardown.
+      enum: [not-started, running, cancelling, cancelled, success, failed]
+
     BuildDetail:
       type: object
       properties:
         buildId:
           type: string
         status:
-          type: string
-          enum: [running, success, failed]
+          $ref: "#/components/schemas/BuildStatus"
         startedAt:
           type: string
           format: date-time
@@ -688,9 +738,15 @@ components:
         durationSeconds:
           type: integer
         artifacts:
+          description: |
+            Output artifacts. On `failed`/`cancelled` these are the *partial*
+            outputs left on disk, reported with their paths so the user can inspect
+            or delete them.
           type: array
           items:
             $ref: "#/components/schemas/Artifact"
+        residual:
+          $ref: "#/components/schemas/ResidualIssue"
         error:
           type: object
           properties:
@@ -698,6 +754,44 @@ components:
               type: string
             phase:
               type: string
+
+    CancelAccepted:
+      type: object
+      properties:
+        buildId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [cancelling]
+        residual:
+          $ref: "#/components/schemas/ResidualIssue"
+
+    ResidualIssue:
+      type: object
+      description: |
+        Warning that a cancelled or failed build may have left the machine needing
+        manual cleanup. Present on `BuildDetail`, the SSE `complete` event, and a
+        cancel response.
+      properties:
+        kind:
+          type: string
+          description: |
+            - `cancellation-failure` — the cancel signal could not be delivered (or
+              the build never exited), so teardown may never have run.
+            - `cleanup-failure` — the build ran its teardown but reported leftover
+              mounts or loop devices.
+          enum: [cancellation-failure, cleanup-failure]
+        detail:
+          type: string
+          description: |
+            Remediation detail: the failing signal error, or the tool's residual
+            cleanup report including its `mount | grep` / `losetup -l` hint.
+          example: |
+            residual cleanup issues (1):
+            - loop:/dev/loop3: detaching loop device: device or resource busy
+            some resources may still be held; consider running 'mount | grep /var/tmp/ict/builds/abc-123' and 'losetup -l' to identify leftovers
+      required: [kind, detail]
 
     ArtifactList:
       type: object

@@ -28,6 +28,10 @@ import (
 type buildStatus string
 
 const (
+	// statusNotStarted is the state between accepting the request and the ICT
+	// child actually being spawned (runBuild promotes it to running once
+	// cmd.Start succeeds). A cancel is already accepted in this window; see
+	// setPgidCheckCancel.
 	statusNotStarted buildStatus = "not-started"
 	statusRunning    buildStatus = "running"
 	statusCancelling buildStatus = "cancelling"
@@ -35,6 +39,13 @@ const (
 	statusSuccess    buildStatus = "success" // surfaced as "completed" in the UI
 	statusFailed     buildStatus = "failed"
 )
+
+// isTerminal reports whether a status is final, i.e. no further transition can
+// happen. Used to make terminal recording single-shot: both the wait path and
+// the cancel watchdog can reach a build, and the first one to classify it wins.
+func isTerminal(s buildStatus) bool {
+	return s == statusSuccess || s == statusFailed || s == statusCancelled
+}
 
 // artifact describes one output file (image or SBOM).
 type artifact struct {
@@ -60,6 +71,8 @@ type build struct {
 	CreatedAt    time.Time       // when the compose was started
 	LogFile      string          // on-disk log file path, written at finish
 	done         chan struct{}   // closed when the build finishes
+
+	doneOnce sync.Once // guards close(done): both runBuild and the cancel watchdog can finish a build
 
 	mu        sync.Mutex
 	status    buildStatus
@@ -172,15 +185,17 @@ func (b *build) snapshotLogs() []string {
 	return out
 }
 
-// beginCancel marks the build as cancel-requested and transitions running →
-// cancelling. It reports whether the transition happened (false if the build is
-// not currently running — already terminal or already cancelling) and returns
-// the process-group id to signal. Idempotent: a second cancel on an
-// already-cancelling build returns cancelling=false so the handler can 409.
+// beginCancel marks the build as cancel-requested and transitions
+// not-started/running → cancelling. It reports whether the transition happened
+// (false if the build is already terminal or already cancelling) and returns the
+// process-group id to signal — 0 when the child hasn't been spawned yet, in
+// which case runBuild delivers the signal as soon as it has a group (see
+// setPgidCheckCancel). Idempotent: a second cancel on an already-cancelling
+// build returns transitioned=false so the handler can 409.
 func (b *build) beginCancel() (transitioned bool, pgid int) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.status != statusRunning {
+	if b.status != statusRunning && b.status != statusNotStarted {
 		return false, b.pgid
 	}
 	b.cancelRequested = true
@@ -188,19 +203,38 @@ func (b *build) beginCancel() (transitioned bool, pgid int) {
 	return true, b.pgid
 }
 
-// setPgidCheckCancel records the running child's process-group id and reports,
-// atomically under the same lock, whether a cancel was already requested while
-// pgid was still unset (the start-race window). When pending is true the caller
-// must deliver the cancel signal now, since the earlier handleCancelBuild call
-// transitioned to cancelling but had no group to signal. Returns the recorded
-// pgid so the caller can signal without re-taking the lock.
+// setPgidCheckCancel records the running child's process-group id, promotes
+// not-started → running, and reports — atomically under the same lock — whether
+// a cancel was already requested while pgid was still unset (the start-race
+// window). When pending is true the caller must deliver the cancel signal now,
+// since the earlier handleCancelBuild call transitioned to cancelling but had no
+// group to signal. Returns the recorded pgid so the caller can signal without
+// re-taking the lock.
 func (b *build) setPgidCheckCancel(pgid int) (recorded int, pending bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.pgid = pgid
+	if b.status == statusNotStarted {
+		b.status = statusRunning
+	}
 	// A cancel is pending for us to service only if one was requested and the
 	// build is still in the cancelling state (not already terminal).
 	return pgid, b.cancelRequested && b.status == statusCancelling
+}
+
+// currentPgid returns the recorded process-group id under lock (0 before the
+// child is spawned). Used by the cancel watchdog, which may re-signal after the
+// start race has resolved.
+func (b *build) currentPgid() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.pgid
+}
+
+// closeDone closes the done channel exactly once. Both runBuild's wait path and
+// the cancel watchdog can conclude a build, so the close is guarded.
+func (b *build) closeDone() {
+	b.doneOnce.Do(func() { close(b.done) })
 }
 
 // wasCancelRequested reports whether a user cancel was issued for this build.
@@ -296,8 +330,11 @@ func (s *Server) handleStartBuild(w http.ResponseWriter, r *http.Request) {
 
 	name, cmdArgs := s.buildCommand(templatePath, workDir, cacheDir)
 	b := &build{
-		ID:           id,
-		status:       statusRunning,
+		ID: id,
+		// not-started until runBuild's cmd.Start succeeds and records the process
+		// group (setPgidCheckCancel promotes it to running). A cancel arriving in
+		// that window is still accepted and serviced once there's a group to signal.
+		status:       statusNotStarted,
 		RootDir:      buildRoot,
 		WorkDir:      workDir,
 		CacheDir:     cacheDir,
@@ -311,16 +348,19 @@ func (s *Server) handleStartBuild(w http.ResponseWriter, r *http.Request) {
 	s.tracker.add(b)
 
 	// Persist the initial record so the build shows in history immediately (and
-	// survives a restart mid-build as a stale "running" entry).
+	// survives a restart mid-build as a stale in-flight entry).
 	if err := b.writeMeta(); err != nil {
 		logger.Logger().Warnf("build %s: writing initial meta: %v", id, err)
 	}
 
 	go s.runBuild(b, name, cmdArgs)
 
+	// Report the build's actual status rather than a hardcoded "running": the
+	// child may not be spawned yet, and a client that echoed "running" here would
+	// contradict what GET /builds returns a moment later.
 	writeJSON(w, http.StatusAccepted, buildAccepted{
 		BuildID: id,
-		Status:  string(statusRunning),
+		Status:  string(b.snapshot().status),
 		LogsURL: fmt.Sprintf("/api/v1/builds/%s/logs", id),
 	})
 }
@@ -328,9 +368,15 @@ func (s *Server) handleStartBuild(w http.ResponseWriter, r *http.Request) {
 // cancelAccepted is the response to a successful cancel request. The build is
 // now cancelling; the terminal state (cancelled/failed) arrives later over SSE
 // once the ICT child has torn down and exited.
+//
+// Residual is set when the cancel was accepted but the signal could not be
+// delivered (cancellation-failure). The build is still reported as cancelling —
+// the watchdog will conclude it — but the caller gets the remediation detail
+// immediately rather than waiting for a terminal SSE event that may never come.
 type cancelAccepted struct {
-	BuildID string `json:"buildId"`
-	Status  string `json:"status"`
+	BuildID  string         `json:"buildId"`
+	Status   string         `json:"status"`
+	Residual *residualIssue `json:"residual,omitempty"`
 }
 
 // handleCancelBuild transitions a running build to cancelling and signals the
@@ -341,8 +387,20 @@ type cancelAccepted struct {
 // wait path, not here: this handler only requests the cancel and returns 202.
 func (s *Server) handleCancelBuild(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	b, ok := s.getBuild(id)
-	if !ok {
+	// Only a live, in-process build can be cancelled. getBuild would happily
+	// reconstruct a record from meta.json, but that copy has no process group and
+	// no runBuild goroutine behind it: cancelling it would mutate a throwaway
+	// struct and report a bogus 202. A build persisted as running whose server has
+	// since restarted falls in here — its ICT process (if any) is orphaned and
+	// must be dealt with on the host.
+	b, live := s.tracker.get(id)
+	if !live {
+		if _, onDisk := s.getBuild(id); onDisk {
+			writeError(w, http.StatusConflict, "NOT_CANCELLABLE",
+				"build has no live process on this server (it predates a restart); "+
+					"check the host for an orphaned build process")
+			return
+		}
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "build not found")
 		return
 	}
@@ -357,22 +415,104 @@ func (s *Server) handleCancelBuild(w http.ResponseWriter, r *http.Request) {
 	}
 	b.appendLog("• cancel requested — signalling build to stop and clean up")
 
-	if err := s.signalCancel(pgid); err != nil {
-		// The signal never reached the process group, so ICT may never start its
-		// teardown. Record a cancellation-failure with the underlying error so the
-		// UI can tell the user the kill itself failed (distinct from ICT running
-		// but leaving residue). The build stays in cancelling; if the child exits
-		// on its own the wait path still classifies it, otherwise it will hang as
-		// cancelling — which correctly reflects that we lost control of it.
-		detail := fmt.Sprintf("failed to signal build process group %d: %v", pgid, err)
-		b.setResidual(residualCancellation, detail)
-		b.appendLog("ERROR " + detail)
-		logger.Logger().Errorf("build %s: %s", id, detail)
-		writeJSON(w, http.StatusAccepted, cancelAccepted{BuildID: id, Status: string(statusCancelling)})
-		return
+	// pgid 0 means cmd.Start hasn't recorded the group yet; runBuild delivers the
+	// signal itself as soon as it can (setPgidCheckCancel reports it as pending),
+	// so don't treat that as a delivery failure here.
+	if pgid > 0 {
+		if err := s.signalCancel(pgid); err != nil {
+			// The signal never reached the process group, so ICT may never start its
+			// teardown. Record a cancellation-failure with the underlying error so the
+			// UI can tell the user the kill itself failed (distinct from ICT running
+			// but leaving residue), and return it in the response body — the build
+			// stays in cancelling, so a terminal SSE event may never arrive.
+			detail := fmt.Sprintf("failed to signal build process group %d: %v", pgid, err)
+			b.setResidual(residualCancellation, detail)
+			b.appendLog("ERROR " + detail)
+			logger.Logger().Errorf("build %s: %s", id, detail)
+			s.watchCancel(b) // still bound the cancelling state
+			writeJSON(w, http.StatusAccepted, cancelAccepted{
+				BuildID:  id,
+				Status:   string(statusCancelling),
+				Residual: &residualIssue{Kind: residualCancellation, Detail: detail},
+			})
+			return
+		}
 	}
 
+	// Bound the cancelling state: re-send TERM after a grace period and, past the
+	// hard deadline, conclude the build so the single-build slot is freed.
+	s.watchCancel(b)
+
 	writeJSON(w, http.StatusAccepted, cancelAccepted{BuildID: id, Status: string(statusCancelling)})
+}
+
+// Cancel watchdog timings. A cooperative ICT teardown (unmounting a chroot,
+// detaching loop devices) can legitimately take a while, so the grace period is
+// generous; the hard deadline exists only so a wedged build cannot hold the
+// single-build slot — and thus the whole compose feature — hostage until the
+// server restarts.
+const (
+	cancelGracePeriod = 2 * time.Minute
+	cancelHardDeadman = 5 * time.Minute
+)
+
+// watchCancel bounds the cancelling state for a build that has been signalled.
+//
+// It waits for the child to exit on its own (runBuild closes b.done). If the
+// grace period passes it re-sends SIGTERM once — the first signal can be missed
+// if it landed while the group was still being set up. If the hard deadline
+// passes it records a cancellation-failure, marks the build cancelled, and
+// releases the single-build slot so composing still works.
+//
+// We deliberately do not escalate to SIGKILL: killing ICT mid-teardown skips the
+// cleanup this whole feature exists to guarantee, and would need a wider root
+// `kill` grant. A build that ignores TERM is reported to the user as residue to
+// remediate by hand, which is the honest outcome.
+func (s *Server) watchCancel(b *build) {
+	go func() {
+		log := logger.Logger()
+		select {
+		case <-b.done:
+			return // exited within the grace period — the wait path classified it
+		case <-time.After(cancelGracePeriod):
+		}
+
+		if pgid := b.currentPgid(); pgid > 0 {
+			b.appendLog(fmt.Sprintf("• still cancelling after %s — re-sending SIGTERM", cancelGracePeriod))
+			if err := s.signalCancel(pgid); err != nil {
+				log.Warnf("build %s: re-signalling process group %d: %v", b.ID, pgid, err)
+			}
+		}
+
+		select {
+		case <-b.done:
+			return
+		case <-time.After(cancelHardDeadman - cancelGracePeriod):
+		}
+
+		s.concludeStalledCancel(b)
+	}()
+}
+
+// concludeStalledCancel records the terminal state for a build that never exited
+// after being cancelled. The build is marked cancelled with a
+// cancellation-failure residual (its process group may still hold mounts or loop
+// devices), the single-build slot is released so composing keeps working, and
+// b.done is closed to wake anything waiting on it.
+//
+// finish is single-shot, so if the child exited between the deadline expiring and
+// this call, the wait path's classification stands and we touch nothing else.
+func (s *Server) concludeStalledCancel(b *build) {
+	detail := fmt.Sprintf(
+		"build did not exit within %s of the cancel request; its process group (%d) may still be "+
+			"running with mounts or loop devices held", cancelHardDeadman, b.currentPgid())
+	b.setResidual(residualCancellation, detail)
+	b.appendLog("ERROR " + detail)
+	logger.Logger().Errorf("build %s: %s", b.ID, detail)
+	if b.finish(statusCancelled, discoverArtifacts(b.WorkDir), detail) {
+		s.releaseBuildSlot(b.ID)
+		b.closeDone()
+	}
 }
 
 // signalCancel delivers SIGTERM to the build's process group (negative pid).
@@ -463,11 +603,11 @@ func (s *Server) runBuild(b *build, name string, cmdArgs []string) {
 	// happens after cmd.Wait() observes the ICT child fully exit (post-teardown),
 	// or after a failed cmd.Start where no child was spawned. Either way the next
 	// compose can't start while mounts/loop devices may still be tearing down.
-	// Ordered to run after close(b.done) fires (defers run LIFO), so a waiter that
+	// Ordered to run after b.done is closed (defers run LIFO), so a waiter that
 	// unblocks on b.done and immediately re-POSTs still sees the slot as taken
 	// until this returns.
 	defer s.releaseBuildSlot(b.ID)
-	defer close(b.done)
+	defer b.closeDone()
 
 	// ICT builds require root (chroot, mounts), so the build runs under sudo, and
 	// from the repo root since ICT resolves config/osv/... relative to cwd. The
@@ -587,8 +727,17 @@ func (s *Server) runBuild(b *build, name string, cmdArgs []string) {
 // persists the buffered logs to a file (so past builds can offer a log download
 // without keeping logs in memory), then writes meta.json so the compose history
 // reflects the final outcome across restarts.
-func (b *build) finish(status buildStatus, arts []artifact, errMsg string) {
+//
+// It reports whether it recorded the terminal state. Recording is single-shot:
+// both runBuild's wait path and the cancel watchdog can conclude a build, and
+// whichever gets there first owns the outcome — so the watchdog can't relabel a
+// build that exited cleanly a moment earlier.
+func (b *build) finish(status buildStatus, arts []artifact, errMsg string) bool {
 	b.mu.Lock()
+	if isTerminal(b.status) {
+		b.mu.Unlock()
+		return false
+	}
 	b.status = status
 	b.artifacts = arts
 	b.errMsg = errMsg
@@ -610,6 +759,7 @@ func (b *build) finish(status buildStatus, arts []artifact, errMsg string) {
 	if err := b.writeMeta(); err != nil {
 		logger.Logger().Warnf("build %s: writing final meta: %v", b.ID, err)
 	}
+	return true
 }
 
 // exitCode returns the process exit code carried by a cmd.Wait error, or -1 if
@@ -651,25 +801,48 @@ func classifyExit(waitErr error, cancelRequested bool) buildStatus {
 	return statusFailed
 }
 
-// scanResidualCleanup looks for ICT's residual-cleanup ERROR lines — logged when
-// its teardown couldn't remove all mounts/loop devices, with a `mount | grep` /
-// `losetup -l` remediation hint. It returns the joined matching lines (trimmed of
-// the logger prefix) as the remediation detail, or "" if teardown was clean.
+// residualHeader is the marker ICT logs (at ERROR) when its backstop cleanup
+// couldn't release every resource. It is followed by one indented "  - <label>:
+// <error>" item per leftover resource, then a WARN line carrying the
+// `mount | grep` / `losetup -l` remediation hint. See the residual report in
+// cmd/image-composer-tool/build.go's backstop-cleanup defer.
+const residualHeader = "residual cleanup issues"
+
+// scanResidualCleanup extracts ICT's residual-cleanup report from a build's log
+// buffer. It returns the per-resource items (and the remediation hint that
+// follows them) with logger prefixes stripped, or "" when teardown was clean.
+//
+// The report is parsed as a block anchored on residualHeader rather than by
+// keyword-matching individual lines: the item labels are "chroot:<root>" and
+// "loop:<dev>" (see runctx registrations), so a leftover *mount* item carries no
+// keyword a line-by-line filter could latch onto, and the hint line is logged at
+// WARN so it wouldn't pass an ERROR gate either.
 func scanResidualCleanup(logs []string) string {
 	var hits []string
+	inReport := false
 	for _, line := range logs {
-		low := strings.ToLower(line)
-		if !strings.Contains(low, "error") {
+		msg := strings.TrimRight(stripLogPrefix(line), " \t")
+		if !inReport {
+			if strings.Contains(strings.ToLower(msg), residualHeader) {
+				inReport = true
+				// Keep the header itself: it carries the count, and it guarantees a
+				// non-empty detail even if the items never made it into the buffer.
+				hits = append(hits, strings.TrimSpace(msg))
+			}
 			continue
 		}
-		// Match the residual-cleanup signature: an error line that mentions leftover
-		// mounts / loop devices or the remediation commands ICT prints.
-		if strings.Contains(low, "losetup") ||
-			strings.Contains(low, "mount | grep") ||
-			strings.Contains(low, "leftover") ||
-			strings.Contains(low, "residual") ||
-			(strings.Contains(low, "loop") && strings.Contains(low, "device")) {
-			hits = append(hits, strings.TrimSpace(stripLogPrefix(line)))
+		// Inside the report: collect the indented "  - label: err" items, then the
+		// remediation hint that closes it. Anything else ends the block (the report
+		// is contiguous, so an unrelated line means ICT has moved on).
+		trimmed := strings.TrimSpace(msg)
+		switch {
+		case strings.HasPrefix(trimmed, "- "):
+			hits = append(hits, trimmed)
+		case strings.Contains(trimmed, "mount | grep") || strings.Contains(trimmed, "losetup -l"):
+			hits = append(hits, trimmed)
+			inReport = false
+		default:
+			inReport = false
 		}
 	}
 	return strings.Join(hits, "\n")

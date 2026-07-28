@@ -46,12 +46,28 @@ sudo -n "$(pwd)/build/image-composer-tool" build --help >/dev/null && echo "sudo
 > group (so ICT can tear down its own mounts and loop devices on SIGTERM). The
 > server is non-root and cannot signal that group directly across the `sudo`
 > boundary, so **Cancel** delivers the signal as root via `sudo -n kill -TERM
-> -<pgid>`. The third rule above authorizes exactly that: a scoped root `kill`,
-> restricted to `-TERM` and to signalling a process **group** (the leading `-`
-> before the pid). Adjust the `kill` path (e.g. `/bin/kill`) to match your distro
-> — run `command -v kill`. Omit this rule and cancellation will fail with a
-> *cancellation-failure* (the signal can't be delivered); the UI surfaces that
-> distinctly from a *cleanup-failure* (ICT ran but left residue).
+> -<pgid>`. The third rule above authorizes that. Adjust the `kill` path (e.g.
+> `/bin/kill`) to match your distro — run `command -v kill`. Omit this rule and
+> cancellation will fail with a *cancellation-failure* (the signal can't be
+> delivered); the UI surfaces that distinctly from a *cleanup-failure* (ICT ran
+> but left residue).
+>
+> **Read this before pasting the rule.** The target process group id isn't known
+> until a build starts, so sudoers cannot constrain *which* group is signalled —
+> `-[0-9]*` matches any pgid. Understand what you are granting the service user:
+>
+> - `kill -TERM -1` as root — SIGTERM to **every process on the host**, i.e. a
+>   full-system shutdown-equivalent, available to anyone who can run commands as
+>   the service user.
+> - SIGTERM to any other process group on the box, including the server's own.
+>
+> The signal is restricted to `-TERM` (no `-KILL`, no arbitrary signal), and the
+> service is expected to run as a dedicated, non-login user on a build host — but
+> this is a real privilege escalation from "may run one build command" and should
+> be accepted deliberately, not by default. If that is too broad for your
+> environment, either run the server as root on an isolated build host (no `kill`
+> rule needed — the `--sudo` path is skipped and the group is signalled directly)
+> or omit the rule and accept that Cancel reports a cancellation-failure.
 
 ### 2. Build the frontend, embed it, and build the binary
 

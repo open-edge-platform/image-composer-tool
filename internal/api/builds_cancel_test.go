@@ -4,9 +4,12 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -62,10 +65,15 @@ func TestClassifyExit(t *testing.T) {
 
 // --- residual-cleanup log scanning ---
 
+// The lines below mirror what ICT actually logs from the backstop-cleanup defer
+// in cmd/image-composer-tool/build.go: an ERROR header with the count, one
+// indented "  - <label>: <err>" item per leftover resource (labels come from the
+// runctx registrations — "chroot:<root>" and "loop:<dev>"), then a WARN hint.
+// The parser is anchored on that shape, so the fixture must keep it.
 func TestScanResidualCleanup(t *testing.T) {
 	clean := []string{
 		"2026-07-24\tINFO\tbuild.go:1\tstarting build",
-		"2026-07-24\tINFO\tbuild.go:2\tunmounting cleanly",
+		"2026-07-24\tINFO\tbuild.go:2\tcleanup complete",
 	}
 	if got := scanResidualCleanup(clean); got != "" {
 		t.Fatalf("clean teardown flagged residual: %q", got)
@@ -73,19 +81,49 @@ func TestScanResidualCleanup(t *testing.T) {
 
 	dirty := []string{
 		"2026-07-24\tINFO\tbuild.go:1\tstarting build",
-		"2026-07-24\tERROR\tcleanup.go:9\tleftover loop device /dev/loop3 — run `losetup -l`",
-		"2026-07-24\tERROR\tcleanup.go:9\tresidual mount remains — run `mount | grep builds/abc`",
+		"2026-07-24\tWARN\tbuild.go:2\tbuild cancelled by signal (context canceled), running backstop cleanup",
+		"2026-07-24\tERROR\tbuild.go:3\tresidual cleanup issues (2):",
+		"2026-07-24\tERROR\tbuild.go:4\t  - chroot:/var/tmp/ict/builds/abc/rootfs: unmounting /proc: device or resource busy",
+		"2026-07-24\tERROR\tbuild.go:5\t  - loop:/dev/loop3: detaching loop device: device or resource busy",
+		"2026-07-24\tWARN\tbuild.go:6\tsome resources may still be held; consider running 'mount | grep /var/tmp/ict/builds/abc' and 'losetup -l' to identify leftovers",
+		"2026-07-24\tINFO\tbuild.go:7\texiting",
 	}
 	got := scanResidualCleanup(dirty)
 	if got == "" {
-		t.Fatal("residual cleanup lines not detected")
+		t.Fatal("residual cleanup report not detected")
 	}
-	// The logger prefix is stripped, leaving the message.
-	if want := "leftover loop device"; !strings.Contains(got, want) {
-		t.Fatalf("residual detail %q missing %q", got, want)
+	// Every part of the report must survive: the header (carries the count), both
+	// items (a leftover *mount* item has no distinctive keyword, which is why the
+	// parser is block-based), and the remediation hint.
+	for _, want := range []string{
+		"residual cleanup issues (2):",
+		"- chroot:/var/tmp/ict/builds/abc/rootfs: unmounting /proc",
+		"- loop:/dev/loop3: detaching loop device",
+		"mount | grep /var/tmp/ict/builds/abc",
+		"losetup -l",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("residual detail missing %q:\n%s", want, got)
+		}
 	}
-	if strings.Contains(got, "INFO") {
-		t.Fatalf("residual detail %q should not include the INFO line", got)
+	// Lines outside the report block must not leak in, and logger prefixes are
+	// stripped.
+	for _, unwanted := range []string{"starting build", "exiting", "INFO", "ERROR\t"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("residual detail should not contain %q:\n%s", unwanted, got)
+		}
+	}
+}
+
+// A report whose items never made it into the log buffer (truncation, or the
+// process dying mid-report) must still yield a non-empty detail: the header
+// alone tells the user something was left behind.
+func TestScanResidualCleanupHeaderOnly(t *testing.T) {
+	got := scanResidualCleanup([]string{
+		"2026-07-24\tERROR\tbuild.go:3\tresidual cleanup issues (1):",
+	})
+	if !strings.Contains(got, "residual cleanup issues (1):") {
+		t.Fatalf("header-only report lost: %q", got)
 	}
 }
 
@@ -170,6 +208,66 @@ func TestSetPgidCheckCancel(t *testing.T) {
 	}
 }
 
+// A cancel arriving before the child is spawned must be accepted: the build
+// already holds the single-build slot, so refusing it would leave the user with
+// no way to release it. beginCancel therefore also accepts not-started.
+func TestBeginCancelBeforeStart(t *testing.T) {
+	b := &build{ID: "pre", status: statusNotStarted, done: make(chan struct{})}
+	ok, pgid := b.beginCancel()
+	if !ok || pgid != 0 {
+		t.Fatalf("cancel on not-started build: ok=%v pgid=%d, want true/0", ok, pgid)
+	}
+	if s := b.snapshot(); s.status != statusCancelling {
+		t.Fatalf("status = %q, want cancelling", s.status)
+	}
+}
+
+// setPgidCheckCancel doubles as the not-started → running promotion, so a build
+// that was never cancelled reports running once its child is up.
+func TestSetPgidPromotesNotStarted(t *testing.T) {
+	b := &build{ID: "b", status: statusNotStarted, done: make(chan struct{})}
+	if pgid, pending := b.setPgidCheckCancel(4321); pgid != 4321 || pending {
+		t.Fatalf("pgid=%d pending=%v, want 4321/false", pgid, pending)
+	}
+	if s := b.snapshot(); s.status != statusRunning {
+		t.Fatalf("status = %q, want running", s.status)
+	}
+}
+
+// finish must be single-shot: the wait path and the cancel watchdog can both
+// reach a build, and the first terminal classification has to win — otherwise a
+// build that completed successfully could be relabelled cancelled (and the slot
+// released twice).
+func TestFinishSingleShot(t *testing.T) {
+	b := &build{ID: "b", status: statusRunning, done: make(chan struct{})}
+	if !b.finish(statusSuccess, []artifact{{Name: "img.raw"}}, "") {
+		t.Fatal("first finish reported false; want true (it recorded the outcome)")
+	}
+	if b.finish(statusCancelled, nil, "watchdog gave up") {
+		t.Fatal("second finish reported true; terminal state must be single-shot")
+	}
+	s := b.snapshot()
+	if s.status != statusSuccess {
+		t.Fatalf("status = %q, want success (first writer wins)", s.status)
+	}
+	if s.errMsg != "" || len(s.artifacts) != 1 {
+		t.Fatalf("second finish mutated the record: errMsg=%q artifacts=%v", s.errMsg, s.artifacts)
+	}
+}
+
+// closeDone must tolerate being called from both the wait path and the watchdog:
+// a double close(b.done) would panic and take the server down.
+func TestCloseDoneIdempotent(t *testing.T) {
+	b := &build{ID: "b", done: make(chan struct{})}
+	b.closeDone()
+	b.closeDone() // must not panic
+	select {
+	case <-b.done:
+	default:
+		t.Fatal("done not closed")
+	}
+}
+
 func TestSetResidualFirstWins(t *testing.T) {
 	b := &build{ID: "b", done: make(chan struct{})}
 	b.setResidual(residualCancellation, "kill failed")
@@ -230,6 +328,130 @@ func TestHandleCancelBuildRunningTransitions(t *testing.T) {
 	// The bogus pgid can't be signalled, so a cancellation-failure is recorded.
 	if snap.residual == nil || snap.residual.Kind != residualCancellation {
 		t.Fatalf("residual = %+v, want cancellation-failure", snap.residual)
+	}
+}
+
+// A build record that exists only on disk (persisted as running by a server that
+// has since restarted) has no process group and no wait goroutine behind it.
+// Cancelling it would mutate a throwaway struct and report a bogus 202, so the
+// handler must 409 and point the user at the host.
+func TestHandleCancelBuildOrphanedRecord(t *testing.T) {
+	s := newTestServer(t)
+	b := &build{
+		ID:      "orphan",
+		RootDir: filepath.Join(s.buildsRoot(), "orphan"),
+		status:  statusRunning,
+		done:    make(chan struct{}),
+	}
+	if err := os.MkdirAll(b.RootDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.writeMeta(); err != nil {
+		t.Fatal(err)
+	}
+	// Deliberately NOT added to the tracker: on-disk only, as after a restart.
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/builds/orphan/cancel", nil)
+	req.SetPathValue("id", "orphan")
+	rec := httptest.NewRecorder()
+	s.handleCancelBuild(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 for an on-disk-only build", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "no live process") {
+		t.Fatalf("body should explain the orphan: %s", rec.Body.String())
+	}
+}
+
+// A cancel whose signal fails must report the residual in the 202 body: the
+// build stays in cancelling and no terminal SSE event may ever arrive, so this is
+// the only prompt notification the UI gets.
+func TestHandleCancelBuildReportsResidualInResponse(t *testing.T) {
+	s := newTestServer(t)
+	b := &build{ID: "run", status: statusRunning, pgid: 2 << 30, done: make(chan struct{})}
+	s.tracker.add(b)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/builds/run/cancel", nil)
+	req.SetPathValue("id", "run")
+	rec := httptest.NewRecorder()
+	s.handleCancelBuild(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", rec.Code)
+	}
+	var got cancelAccepted
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v (%s)", err, rec.Body.String())
+	}
+	if got.Residual == nil || got.Residual.Kind != residualCancellation {
+		t.Fatalf("response residual = %+v, want cancellation-failure", got.Residual)
+	}
+	if !strings.Contains(got.Residual.Detail, "failed to signal") {
+		t.Fatalf("residual detail lacks the underlying error: %q", got.Residual.Detail)
+	}
+}
+
+// --- cancel watchdog ---
+
+// A build that ignores the cancel must not hold the single-build slot forever.
+// concludeStalledCancel is the watchdog's hard-deadline action: it marks the
+// build cancelled with a cancellation-failure and frees the slot.
+func TestConcludeStalledCancelReleasesSlot(t *testing.T) {
+	s := newTestServer(t)
+	b := &build{ID: "wedged", status: statusCancelling, cancelRequested: true, pgid: 2 << 30, done: make(chan struct{})}
+	s.tracker.add(b)
+	if ok, _ := s.tryAcquireBuildSlot(b.ID); !ok {
+		t.Fatal("could not occupy the build slot")
+	}
+
+	s.concludeStalledCancel(b)
+
+	snap := b.snapshot()
+	if snap.status != statusCancelled {
+		t.Fatalf("status = %q, want cancelled", snap.status)
+	}
+	if snap.residual == nil || snap.residual.Kind != residualCancellation {
+		t.Fatalf("residual = %+v, want cancellation-failure", snap.residual)
+	}
+	if !strings.Contains(snap.errMsg, "did not exit") {
+		t.Fatalf("errMsg should say the build never exited: %q", snap.errMsg)
+	}
+	select {
+	case <-b.done:
+	default:
+		t.Fatal("done not closed; SSE subscribers would hang")
+	}
+	if ok, active := s.tryAcquireBuildSlot("next"); !ok {
+		t.Fatalf("slot still held by %q; a wedged cancel must not block new composes", active)
+	}
+}
+
+// If the child exits just after the hard deadline fires, the wait path's outcome
+// must stand: finish is single-shot, so the watchdog neither relabels the build
+// nor releases a slot it no longer owns.
+func TestConcludeStalledCancelLosesRaceToWaitPath(t *testing.T) {
+	s := newTestServer(t)
+	b := &build{ID: "raced", status: statusCancelling, cancelRequested: true, done: make(chan struct{})}
+	s.tracker.add(b)
+	// The wait path got there first.
+	if !b.finish(statusCancelled, nil, "") {
+		t.Fatal("setup: first finish should have recorded")
+	}
+	// A new build has since claimed the slot.
+	if ok, _ := s.tryAcquireBuildSlot("next"); !ok {
+		t.Fatal("setup: could not claim the slot for the next build")
+	}
+
+	s.concludeStalledCancel(b)
+
+	if snap := b.snapshot(); snap.errMsg != "" {
+		t.Fatalf("errMsg = %q, want empty (the wait path's clean outcome must stand)", snap.errMsg)
+	}
+	if ok, active := s.tryAcquireBuildSlot("third"); ok {
+		t.Fatal("watchdog released a slot owned by another build")
+	} else if active != "next" {
+		t.Fatalf("slot holder = %q, want next", active)
 	}
 }
 

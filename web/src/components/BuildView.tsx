@@ -1,25 +1,39 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
-import type { Artifact, BuildDetails, ResidualIssue } from '../api/types'
+import type { Artifact, BuildDetails, BuildStatus, ResidualIssue } from '../api/types'
 import { BuildProgress } from './BuildProgress'
-
-type BuildStatus = 'idle' | 'running' | 'success' | 'failed'
 
 interface BuildViewProps {
   buildId: string
   onRetry: () => Promise<void>
   retrying: boolean
+  // Why the last retry failed (owned by App, which issues the start), or null.
+  retryError: string | null
   onStatusChange: (s: BuildStatus) => void
   // The active build streams live logs. A history build (isActive=false) shows a
   // downloadable log file + artifacts instead of a live log text area.
   isActive: boolean
 }
 
-// Full MVP-1 build lifecycle. "loading" is a transient state while a history
-// build's persisted data is fetched; the others are the actual build states.
-type Status = 'loading' | 'running' | 'cancelling' | 'cancelled' | 'success' | 'failed'
+// Full build lifecycle as rendered here: the server's six states plus "loading",
+// a transient while a history build's persisted data is fetched.
+type Status =
+  | 'loading'
+  | 'not-started'
+  | 'running'
+  | 'cancelling'
+  | 'cancelled'
+  | 'success'
+  | 'failed'
 
-export function BuildView({ buildId, onRetry, retrying, onStatusChange, isActive }: BuildViewProps) {
+export function BuildView({
+  buildId,
+  onRetry,
+  retrying,
+  retryError,
+  onStatusChange,
+  isActive,
+}: BuildViewProps) {
   const [logs, setLogs] = useState<string[]>([])
   const [status, setStatus] = useState<Status>(isActive ? 'running' : 'loading')
   const [artifacts, setArtifacts] = useState<Artifact[]>([])
@@ -58,7 +72,10 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange, isActive
       ])
         .then(([d, arts, logText]) => {
           setStatus((d.status as Status) ?? 'success')
-          if (d.status === 'failed') setErrorMsg(d.errMsg ?? '')
+          // A cancel that was never delivered leaves the build stuck in
+          // 'cancelling' with the failure recorded as residue, so show the reason
+          // for both terminal failures and that stalled state.
+          if (d.status === 'failed' || d.status === 'cancelling') setErrorMsg(d.errMsg ?? '')
           if (d.residual) setResidual(d.residual)
           // Prefer the discovered artifact list; fall back to any partial outputs
           // recorded on the details (present after a fail/cancel).
@@ -87,11 +104,14 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange, isActive
       if (res) setResidual(res)
       onStatusChange('failed')
     }
+    // Report 'cancelled' rather than 'idle': the parent needs the real terminal
+    // state to refresh the history row and to show the cancelled nav indicator.
+    // Composing is re-enabled because 'cancelled' is not an active status.
     const finishCancelled = (arts?: Artifact[], res?: ResidualIssue) => {
       setStatus('cancelled')
       if (arts && arts.length > 0) setArtifacts(arts)
       if (res) setResidual(res)
-      onStatusChange('idle')
+      onStatusChange('cancelled')
     }
 
     const connect = () => {
@@ -171,17 +191,27 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange, isActive
   const copyCommand = () => details && navigator.clipboard.writeText(details.command)
 
   // Request cancellation. Optimistically flip to the cancelling transient so the
-  // button disables immediately; the terminal state (cancelled/failed) arrives
-  // over SSE. If the request itself fails, surface it and revert to running so
-  // the user can retry the cancel.
+  // button disables immediately; the terminal state (cancelled/failed) normally
+  // arrives over SSE.
+  //
+  // Two failure shapes need distinct handling:
+  //  - The request itself failed (network, 409): nothing was cancelled, so revert
+  //    to running and let the user retry.
+  //  - The request was accepted (202) but carries a residual: the signal could not
+  //    be delivered, so the build stays in cancelling and no terminal event may
+  //    ever arrive. Render the residue now — this is the cancellation-failure the
+  //    user has to remediate by hand.
   const cancel = async () => {
     setCancelError('')
     setStatus('cancelling')
+    onStatusChange('cancelling')
     try {
-      await api.cancelBuild(buildId)
+      const res = await api.cancelBuild(buildId)
+      if (res.residual) setResidual(res.residual)
     } catch (err) {
       setCancelError(err instanceof Error ? err.message : 'cancel request failed')
       setStatus('running')
+      onStatusChange('running')
     }
   }
 
@@ -190,9 +220,10 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange, isActive
       <div className="mb-2 flex items-center gap-3">
         <h2 className="text-sm font-semibold text-[#00285a]">Compose Status</h2>
         <StatusBadge status={status} />
-        {/* Cancel — available while the active build is running. Disabled during
-            the cancelling transient (request in flight / awaiting teardown). */}
-        {isActive && (status === 'running' || status === 'cancelling') && (
+        {/* Cancel — available while the active build is in flight, including the
+            pre-spawn window (the server queues the signal). Disabled during the
+            cancelling transient (request in flight / awaiting teardown). */}
+        {isActive && (status === 'not-started' || status === 'running' || status === 'cancelling') && (
           <button
             className="ml-auto rounded border border-red-400 px-3 py-1 text-xs font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
             disabled={status === 'cancelling'}
@@ -218,6 +249,15 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange, isActive
         </div>
       )}
 
+      {/* A retry that the server refused — most often 409 while the previous
+          build is still tearing down. Without this the Retry button would look
+          like it did nothing. */}
+      {retryError && (
+        <div className="mb-2 rounded bg-red-50 p-2 text-xs text-red-700">
+          Could not start a new compose: {retryError}
+        </div>
+      )}
+
       {/* Phase stepper — shown for the active (streaming) build. History builds
           have no live phase data, so it's omitted there. The active stage is
           marked red on both failure and cancellation. */}
@@ -229,7 +269,16 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange, isActive
         />
       )}
 
-      {status === 'cancelling' && (
+      {status === 'not-started' && (
+        <div className="mb-2 rounded bg-slate-100 p-2 text-xs text-slate-700">
+          Starting compose — launching the build process.
+        </div>
+      )}
+
+      {/* While cancelling, the normal message is "teardown in progress". If a
+          residual is already recorded the signal never landed, so say that
+          instead of implying an orderly cleanup is underway. */}
+      {status === 'cancelling' && !residual && (
         <div className="mb-2 rounded bg-amber-50 p-2 text-xs text-amber-800">
           Cancelling compose — signalling the build to stop and clean up (unmounting,
           detaching loop devices). This may take a moment.
@@ -485,6 +534,7 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange, isActive
 function StatusBadge({ status }: { status: Status }) {
   const cls: Record<Status, string> = {
     loading: 'bg-slate-200 text-slate-600',
+    'not-started': 'bg-slate-200 text-slate-600',
     running: 'bg-amber-100 text-amber-800',
     cancelling: 'bg-amber-100 text-amber-800',
     cancelled: 'bg-slate-200 text-slate-700',
@@ -493,6 +543,7 @@ function StatusBadge({ status }: { status: Status }) {
   }
   const label: Record<Status, string> = {
     loading: 'Loading…',
+    'not-started': 'Starting…',
     running: 'Composing…',
     cancelling: 'Cancelling…',
     cancelled: '⊘ Cancelled',
