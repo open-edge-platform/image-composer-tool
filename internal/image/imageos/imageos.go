@@ -1434,7 +1434,7 @@ func buildImageUKI(installRoot string, template *config.ImageTemplate) error {
 		if err != nil {
 			return fmt.Errorf("failed to prepare ESP directory: %w", err)
 		}
-		log.Debugf("Succesfully Creating EspPath:", espDir)
+		log.Debugf("Successfully Creating EspPath:", espDir)
 
 		outputPath := filepath.Join(espDir, "EFI", "Linux", "linux.efi")
 		log.Debugf("UKI Path:", outputPath)

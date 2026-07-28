@@ -46,19 +46,19 @@ func configOverlay(installRoot string) error {
 	if err != nil {
 		return fmt.Errorf("failed to prepare ESP directory: %w", err)
 	}
-	log.Debugf("Succesfully Creating Overlay Path:", ovlyDir)
+	log.Debugf("Successfully Creating Overlay Path:", ovlyDir)
 
 	err = updateImageFstab(installRoot, overlayDirs)
 	if err != nil {
 		return fmt.Errorf("failed to update fstab: %w", err)
 	}
-	log.Debugf("Succesfully Updating fstab for overlay")
+	log.Debugf("Successfully Updating fstab for overlay")
 
 	err = createOverlayMntSvc(installRoot, overlayDirs)
 	if err != nil {
 		return fmt.Errorf("failed to create overlay mounting service: %w", err)
 	}
-	log.Debugf("Succesfully Created overlay mounting service")
+	log.Debugf("Successfully Created overlay mounting service")
 
 	return nil
 }
