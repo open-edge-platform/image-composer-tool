@@ -62,8 +62,9 @@ sudo visudo -cf /etc/sudoers.d/image-composer-tool-webui   # validate
 
 The generator resolves the current user, the absolute binary path, and the
 `kill`/`cat` helper paths the way `sudo` will at runtime (respecting
-`secure_path`), and scopes the `cat` rule to the build workspace subtree — so the
-service user can read build artifacts but not arbitrary root-owned files. Pass
+`secure_path`), and scopes the `cat` rule to the `<work-dir>/builds` subtree
+(where all artifacts live) — so the service user can read build artifacts but not
+arbitrary root-owned files. Pass
 `--work-dir` to both the generator and `serve` if you don't use the default
 `webui-workspace`.
 
@@ -73,7 +74,7 @@ service user can read build artifacts but not arbitrary root-owned files. Pass
 ```
 <svc-user> ALL=(root) NOPASSWD: /abs/path/image-composer-tool build *
 <svc-user> ALL=(root) NOPASSWD: /usr/bin/kill -TERM -[0-9]*
-<svc-user> ALL=(root) NOPASSWD: /usr/bin/cat /abs/path/webui-workspace/*
+<svc-user> ALL=(root) NOPASSWD: /usr/bin/cat /abs/path/webui-workspace/builds/*
 ```
 
 </details>

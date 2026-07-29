@@ -68,30 +68,39 @@ func TestClassifyExit(t *testing.T) {
 
 // --- signal-failure discrimination ---
 
-// signalCancel must tell a genuine delivery failure (sudo can't authorize the
-// kill) apart from the benign teardown race where `kill` exits non-zero because
-// the process group is already gone. Only the former is a cancellation-failure;
-// the latter means the signal was delivered and the build is on its way down.
-func TestIsSudoAuthFailure(t *testing.T) {
-	real := []string{
+// signalCancel treats a failed `sudo -n kill` as delivered ONLY when the failure
+// is the benign teardown race — `kill` reporting the group already gone. Every
+// other non-zero outcome (sudo can't authorize, sudo can't execute kill, kill
+// misusage, or an unrecognized message) must be reported as a delivery failure,
+// so a hidden failure can't masquerade as a clean cancel.
+func TestIsKillTargetGone(t *testing.T) {
+	// Only these are the benign already-gone race (signal was delivered).
+	gone := []string{
+		"kill: (-12345): No such process",
+		"bash: kill: (-12345) - No such process",
+		"kill: sending signal to -12345 failed: No such process",
+	}
+	for _, out := range gone {
+		if !isKillTargetGone(out) {
+			t.Errorf("isKillTargetGone(%q) = false, want true (benign teardown race)", out)
+		}
+	}
+	// Everything else is a real delivery failure and must NOT be swallowed —
+	// including empty output (kill exited non-zero with no recognizable reason),
+	// which we now treat as a failure rather than assuming the race.
+	realFailure := []string{
+		"", // no recognizable reason — surface it, don't assume delivery
 		"sudo: a password is required",
 		"sudo: a terminal is required to read the password",
 		"Sorry, user svc is not allowed to execute '/usr/bin/kill -TERM -123' as root",
 		"sudo: no askpass program specified",
+		"sudo: kill: command not found",
+		"sudo: unable to execute /usr/bin/kill: No such file or directory",
+		"kill: invalid option -- 'x'",
 	}
-	for _, out := range real {
-		if !isSudoAuthFailure(out) {
-			t.Errorf("isSudoAuthFailure(%q) = false, want true (real delivery failure)", out)
-		}
-	}
-	benign := []string{
-		"",                                // kill exited non-zero with no message (the observed race)
-		"kill: (-12345): No such process", // group already gone
-		"bash: kill: (-12345) - No such process",
-	}
-	for _, out := range benign {
-		if isSudoAuthFailure(out) {
-			t.Errorf("isSudoAuthFailure(%q) = true, want false (benign teardown race)", out)
+	for _, out := range realFailure {
+		if isKillTargetGone(out) {
+			t.Errorf("isKillTargetGone(%q) = true, want false (real delivery failure)", out)
 		}
 	}
 }

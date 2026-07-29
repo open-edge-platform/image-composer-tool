@@ -10,19 +10,20 @@ import (
 
 func TestSudoersSpecRender(t *testing.T) {
 	spec := SudoersSpec{
-		User:    "ictsvc",
-		ICTPath: "/opt/ict/image-composer-tool",
-		KillCmd: "/usr/bin/kill",
-		CatCmd:  "/usr/bin/cat",
-		WorkDir: "/srv/ict-workspace",
+		User:      "ictsvc",
+		ICTPath:   "/opt/ict/image-composer-tool",
+		KillCmd:   "/usr/bin/kill",
+		CatCmd:    "/usr/bin/cat",
+		BuildsDir: "/srv/ict-workspace/builds",
 	}
 	out := spec.Render()
 
-	// The three privileged operations, each scoped to a single command.
+	// The three privileged operations, each scoped to a single command. The cat
+	// rule is scoped to the builds subtree, where all artifacts live.
 	want := []string{
 		"ictsvc ALL=(root) NOPASSWD: /opt/ict/image-composer-tool build *",
 		"ictsvc ALL=(root) NOPASSWD: /usr/bin/kill -TERM -[0-9]*",
-		"ictsvc ALL=(root) NOPASSWD: /usr/bin/cat /srv/ict-workspace/*",
+		"ictsvc ALL=(root) NOPASSWD: /usr/bin/cat /srv/ict-workspace/builds/*",
 	}
 	for _, w := range want {
 		if !strings.Contains(out, w) {
@@ -30,10 +31,10 @@ func TestSudoersSpecRender(t *testing.T) {
 		}
 	}
 
-	// The cat rule must be scoped to the workspace, never a bare /* that would
-	// grant reading any root-owned file on the host.
+	// The cat rule must be scoped to the builds subtree, never a bare /* (any
+	// root-owned file) nor the whole work dir.
 	if strings.Contains(out, "/usr/bin/cat /*") {
-		t.Errorf("cat rule is unscoped (grants reading any path); want workspace-scoped:\n%s", out)
+		t.Errorf("cat rule is unscoped (grants reading any path); want builds-scoped:\n%s", out)
 	}
 
 	// Every rule is NOPASSWD-scoped to root and to this user only.
@@ -62,8 +63,8 @@ func TestResolveSudoersSpecResolvesRelativePaths(t *testing.T) {
 	if !strings.HasPrefix(spec.ICTPath, "/") {
 		t.Errorf("ICTPath not absolute: %q", spec.ICTPath)
 	}
-	if !strings.HasPrefix(spec.WorkDir, "/") {
-		t.Errorf("WorkDir not absolute: %q", spec.WorkDir)
+	if !strings.HasPrefix(spec.BuildsDir, "/") || !strings.HasSuffix(spec.BuildsDir, "/builds") {
+		t.Errorf("BuildsDir not an absolute .../builds path: %q", spec.BuildsDir)
 	}
 	if !strings.HasPrefix(spec.KillCmd, "/") || !strings.HasSuffix(spec.KillCmd, "kill") {
 		t.Errorf("KillCmd not an absolute kill path: %q", spec.KillCmd)

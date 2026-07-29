@@ -546,26 +546,29 @@ func (s *Server) signalCancel(pgid int) error {
 		// process group. -n never prompts; a missing sudoers rule fails fast.
 		out, err := exec.Command("sudo", "-n", "kill", "-TERM", fmt.Sprintf("-%d", pgid)).CombinedOutput()
 		if err != nil {
-			// Distinguish a genuine delivery failure from a benign teardown race.
+			// Distinguish the one benign outcome — `kill` ran but the group was
+			// already gone — from every genuine delivery failure.
 			//
 			// The build's own group leader is the `sudo` wrapper, so signalling
 			// -pgid races that wrapper's exit: TERM reaches ICT, which begins its
 			// cleanup and exits, and by the time `kill` walks the group a member has
-			// already gone — so `kill` exits non-zero (ESRCH, sometimes with no
-			// message at all) even though the signal *was* delivered. Reporting that
-			// as a cancellation-failure raises a false "machine may need manual
-			// cleanup" alarm on a build that cancelled and tore down cleanly.
+			// already gone — so `kill` reports "no such process" (ESRCH) even though
+			// the signal *was* delivered. Reporting that as a cancellation-failure
+			// would raise a false "machine may need manual cleanup" alarm on a build
+			// that cancelled and tore down cleanly, so we swallow only that case.
 			//
-			// Only a sudo-level error means the signal never reached the group: no
-			// sudoers rule, or sudo can't authorize non-interactively. Those are the
-			// failures worth surfacing (and the ones operators actually hit). Any
-			// other non-zero exit here is `kill` racing the group's teardown; treat
-			// it as delivered and let the child's real exit (classifyExit on
-			// runBuild's wait path) and the watchdog be the source of truth.
-			if isSudoAuthFailure(string(out)) {
-				return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+			// Everything else means the signal likely never reached the group and
+			// must surface as a cancellation-failure: no sudoers rule (sudo won't
+			// authorize non-interactively), sudo unable to execute kill ("command not
+			// found", "unable to execute"), an invalid-usage error, etc. We default
+			// to treating a non-zero exit as a real failure and make an exception only
+			// for the recognizable already-gone race — the safe direction, since a
+			// hidden delivery failure would otherwise masquerade as a clean cancel
+			// until the watchdog's deadline.
+			if isKillTargetGone(string(out)) {
+				return nil
 			}
-			return nil
+			return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
 		}
 		return nil
 	}
@@ -578,20 +581,22 @@ func (s *Server) signalCancel(pgid int) error {
 	return nil
 }
 
-// isSudoAuthFailure reports whether a failed `sudo -n kill` failed at the sudo
-// layer — i.e. the signal never reached the process group — rather than inside
-// `kill` itself. sudo emits a recognizable diagnostic when it can't run the
-// command non-interactively (no NOPASSWD rule for kill, or it would need a
-// password); `kill` racing a vanishing group instead reports "no such process" or
-// nothing. We match sudo's messages so a real missing-rule misconfiguration is
-// still surfaced as a cancellation-failure, while the benign teardown race is not.
-func isSudoAuthFailure(out string) bool {
+// isKillTargetGone reports whether a failed `sudo -n kill` failed *only* because
+// the target process group had already exited by the time kill walked it — the
+// benign teardown race where the signal was nonetheless delivered. This is the
+// one non-zero `kill` outcome we treat as success.
+//
+// We match positively (and narrowly) on the "no such process" family: every
+// other failure — sudo refusing to authorize (no NOPASSWD rule, password/terminal
+// required), sudo unable to run kill ("command not found", "unable to execute"),
+// or kill misusage — means the signal likely never reached the group and must be
+// surfaced as a cancellation-failure. Matching the benign case rather than
+// enumerating every failure keeps us on the safe side: an unrecognized message
+// is reported, not silently swallowed.
+func isKillTargetGone(out string) bool {
 	o := strings.ToLower(out)
-	return strings.Contains(o, "password is required") ||
-		strings.Contains(o, "a terminal is required") ||
-		strings.Contains(o, "not allowed to execute") ||
-		strings.Contains(o, "sudo: a password") ||
-		strings.Contains(o, "no askpass")
+	return strings.Contains(o, "no such process") || // POSIX ESRCH text
+		strings.Contains(o, "(esrch)")
 }
 
 // errBadBuildRequest marks resolution failures caused by client input (bad

@@ -49,7 +49,7 @@ image builds via the image-composer-tool binary with streaming build logs.`,
 			"give the service blanket sudo. Three rules are needed (build, cancel, read):\n"+
 			"  <svc-user> ALL=(root) NOPASSWD: /path/to/image-composer-tool build *\n"+
 			"  <svc-user> ALL=(root) NOPASSWD: /usr/bin/kill -TERM -[0-9]*\n"+
-			"  <svc-user> ALL=(root) NOPASSWD: /usr/bin/cat /path/to/workspace/*\n"+
+			"  <svc-user> ALL=(root) NOPASSWD: /usr/bin/cat /path/to/workspace/builds/*\n"+
 			"The kill rule lets the (non-root) server cancel a build by signalling the "+
 			"root-owned build process group; the cat rule lets it stream root-owned "+
 			"build artifacts back to the browser. Without them, cancellation and "+
