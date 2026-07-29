@@ -2196,3 +2196,57 @@ func TestBuildUserRepoListFieldMapping(t *testing.T) {
 		t.Errorf("ID: expected %q, got %q", expectedID, r.ID)
 	}
 }
+
+// TestDebian13OverlayCapable asserts the provider advertises overlay support via
+// provider.OverlayCapable. Without it, build's capability gate rejects overlay
+// templates for every Debian target, and template merging has already stripped
+// the create-mode default package set — so a regression here is silent.
+func TestDebian13OverlayCapable(t *testing.T) {
+	var _ provider.OverlayCapable = (*debian13)(nil) // Compile-time capability check
+
+	debian := &debian13{}
+	if !provider.SupportsOverlay(debian, "debian13", "amd64") {
+		t.Error("Expected debian13 provider to report overlay support")
+	}
+}
+
+// TestDebian13OverlayBuildImageWithoutPreprocess asserts BuildImage refuses to run
+// an overlay build when PreProcess never established the baseline mount lifecycle,
+// rather than falling through to the create-mode maker path.
+func TestDebian13OverlayBuildImageWithoutPreprocess(t *testing.T) {
+	debian := &debian13{}
+	template := createTestImageTemplate()
+	template.Baseline = &config.Baseline{
+		Mode:   config.BaselineModeOverlay,
+		Source: &config.BaselineSource{Path: "/nonexistent/baseline.raw"},
+	}
+
+	err := debian.BuildImage(template)
+	if err == nil {
+		t.Fatal("Expected an error when overlay BuildImage runs without a preprocessed builder")
+	}
+	if !strings.Contains(err.Error(), "without a preprocessed overlay builder") {
+		t.Errorf("Expected preprocessed-builder error, got: %v", err)
+	}
+}
+
+// TestDebian13OverlayPostProcessWithoutBuilder asserts overlay postprocess is a
+// no-op when preprocess failed early and never created a builder — it must not
+// fall through to create-mode chroot cleanup that was never set up.
+func TestDebian13OverlayPostProcessWithoutBuilder(t *testing.T) {
+	debian := &debian13{}
+	template := createTestImageTemplate()
+	template.Baseline = &config.Baseline{
+		Mode:   config.BaselineModeOverlay,
+		Source: &config.BaselineSource{Path: "/nonexistent/baseline.raw"},
+	}
+
+	if err := debian.PostProcess(template, nil); err != nil {
+		t.Errorf("Expected nil from overlay PostProcess with no builder, got: %v", err)
+	}
+
+	// Same on the failure path: a build error must not turn cleanup into an error.
+	if err := debian.PostProcess(template, fmt.Errorf("build failed")); err != nil {
+		t.Errorf("Expected nil from overlay PostProcess with no builder on error path, got: %v", err)
+	}
+}

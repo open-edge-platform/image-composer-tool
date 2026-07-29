@@ -240,7 +240,8 @@ For a complete Ubuntu 24 WSL example, see
 Selects how the image is assembled. If omitted, the build defaults to **create**
 mode (build the image from scratch, the behavior described everywhere else in
 this reference). Set `mode: overlay` to instead layer packages onto an existing
-baseline RAW disk image without rebuilding it.
+baseline disk image without rebuilding it. The baseline may be a RAW image or a
+qcow2/vhd/vhdx image, which is converted to RAW before the overlay runs.
 
 | Field | Type | Required | Valid Values | Description |
 |-------|------|----------|--------------|-------------|
@@ -249,15 +250,15 @@ baseline RAW disk image without rebuilding it.
 
 #### `baseline.source`
 
-Identifies the baseline RAW image. Exactly one of `path` or `url` must be set.
+Identifies the baseline image. Exactly one of `path` or `url` must be set.
 The source is copied into the build workspace first and is **never modified in
 place**.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `path` | string | one of `path`/`url` | Local filesystem path to the baseline RAW image (no URI scheme) |
-| `url` | string | one of `path`/`url` | `https://` URL of the baseline RAW image; downloaded over TLS before the overlay runs (plain `http` is rejected) |
-| `format` | string | No | Baseline image format. Only `raw` is supported (default `raw`) |
+| `path` | string | one of `path`/`url` | Local filesystem path to the baseline image (no URI scheme) |
+| `url` | string | one of `path`/`url` | `https://` URL of the baseline image; downloaded over TLS before the overlay runs (plain `http` is rejected) |
+| `format` | string | No | Baseline image format: `raw`, `qcow2`, `vhd` or `vhdx` (default `raw`). Non-raw formats are converted to RAW before the overlay runs |
 
 ```yaml
 baseline:
@@ -267,8 +268,10 @@ baseline:
     format: raw
 ```
 
-> **Note:** Overlay mode is currently wired end-to-end for the **Ubuntu**
-> provider. The overlay build is **strictly additive**: packages (and their
+> **Note:** Overlay mode is currently wired end-to-end for the **Ubuntu** and
+> **Debian** providers. Targeting a provider without overlay support fails the
+> build immediately with a clear message rather than silently falling back to a
+> create-mode build. The overlay build is **strictly additive**: packages (and their
 > transitive dependencies not already present in the baseline) are installed
 > into the baseline root, the initramfs is regenerated for the added packages,
 > and an optional grow-only resize can enlarge the image to a larger

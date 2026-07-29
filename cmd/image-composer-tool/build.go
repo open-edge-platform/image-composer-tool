@@ -278,9 +278,25 @@ func executeBuild(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	p, err := InitProvider(template.Target.OS, template.Target.Dist, template.Target.Arch)
+	p, err := initProvider(template.Target.OS, template.Target.Dist, template.Target.Arch)
 	if err != nil {
 		buildErr = fmt.Errorf("initializing provider failed: %v", err)
+		goto post
+	}
+
+	// Reject an overlay-mode template on a create-only provider before any work
+	// starts. A provider without an overlay branch would silently fall through to
+	// the create-mode pipeline, and template merging has already stripped the
+	// create-mode default package set from an overlay template (the baseline is
+	// expected to supply it) — so the build would either fail deep inside the
+	// image-assembly stages or emit an image missing its base toolchain, with the
+	// baseline never read at all. Fail here with an actionable message instead.
+	if template.IsOverlayMode() &&
+		!provider.SupportsOverlay(p, template.Target.Dist, template.Target.Arch) {
+		buildErr = fmt.Errorf("overlay mode (baseline.mode: %q) is not supported for target %s/%s/%s: "+
+			"this provider only supports create-mode builds; remove the baseline and overlayPolicy "+
+			"sections to build from scratch, or target a provider with overlay support",
+			config.BaselineModeOverlay, template.Target.OS, template.Target.Dist, template.Target.Arch)
 		goto post
 	}
 
@@ -310,7 +326,16 @@ post:
 		restorePostRun()
 		restorePostShell()
 		postCancel()
-		if postErr != nil {
+		// Some providers' PostProcess (azl, emt, rcd) return the exact buildErr value
+		// they were handed back to the caller once cleanup succeeded. Relabelling that
+		// as "post-processing failed" would misattribute the original build failure to
+		// cleanup, so suppress only that passthrough. The comparison is by identity,
+		// NOT errors.Is: overlay.Builder.Postprocess returns errors.Join(buildErr,
+		// cleanupErr) when cleanup fails after a failed build, and errors.Is would walk
+		// that joined tree, match buildErr and silently drop the cleanup failure —
+		// hiding a leaked mount/loop device. Identity matches the passthrough exactly
+		// while still surfacing any error the provider added to buildErr.
+		if postErr != nil && postErr != buildErr { //nolint:errorlint // identity is intentional; see above
 			// In --no-cache mode the deferred cleanup would otherwise remove the unique
 			// workspace on return, discarding a successfully built image. Preserve it so
 			// the image (and any state needed for recovery) survives a PostProcess failure.
@@ -423,6 +448,12 @@ func displayImageBuildTiming(imageType string, template *config.ImageTemplate) {
 		convertImageFileToFinishDuration,
 	)
 }
+
+// initProvider is the seam executeBuild resolves its provider through. It points
+// at InitProvider in production; tests substitute a fake so the phases that run
+// before any provider work — notably the overlay-capability gate — are
+// exercisable without the network and disk I/O the real Init performs.
+var initProvider = InitProvider
 
 func InitProvider(os, dist, arch string) (provider.Provider, error) {
 	var p provider.Provider
