@@ -122,6 +122,30 @@ func TestSignalCancelRefusesOwnGroup(t *testing.T) {
 	}
 }
 
+// signalCancel with no recorded group (pgid 0, the pre-start window) is an error,
+// not a signal: there is nothing to target yet.
+func TestSignalCancelNoPgid(t *testing.T) {
+	s := newTestServer(t)
+	if err := s.signalCancel(0); err == nil {
+		t.Fatal("signalCancel(0) returned nil; want an error for an unrecorded group")
+	}
+}
+
+// On the direct (non-sudo) path, signalling a process group that has already
+// exited returns ESRCH, which signalCancel must swallow: the build is on its way
+// down, not a delivery failure. We use a pgid that maps to no live group.
+func TestSignalCancelDirectESRCHSwallowed(t *testing.T) {
+	s := newTestServer(t) // Sudo=false → direct syscall.Kill(-pgid)
+	// A high, almost-certainly-unused pgid that isn't the server's own group.
+	pgid := 1 << 30
+	if pgid == syscall.Getpgrp() {
+		t.Skip("chosen pgid collides with the test process group")
+	}
+	if err := s.signalCancel(pgid); err != nil {
+		t.Fatalf("signalCancel of a vanished group should swallow ESRCH, got: %v", err)
+	}
+}
+
 // End-to-end (in-process): a real child that traps SIGTERM, prints a line, and
 // exits 130 — exactly how ICT reacts to a cancel — must be classified as
 // cancelled with NO residual. This is the regression test for the false
