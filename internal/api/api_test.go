@@ -53,11 +53,13 @@ func newTestServer(t *testing.T) *Server {
 			t.Fatalf("writing template %s: %v", name, err)
 		}
 	}
-	return &Server{
+	s := &Server{
 		cfg:      Config{TemplatesDir: dir, ICTBinary: "/bin/true", WorkDir: t.TempDir()},
 		manifest: testManifest(),
 		tracker:  newBuildTracker(),
 	}
+	s.signalGroup = s.signalCancel
+	return s
 }
 
 // --- manifest ---

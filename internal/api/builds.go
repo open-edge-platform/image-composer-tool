@@ -419,7 +419,7 @@ func (s *Server) handleCancelBuild(w http.ResponseWriter, r *http.Request) {
 	// signal itself as soon as it can (setPgidCheckCancel reports it as pending),
 	// so don't treat that as a delivery failure here.
 	if pgid > 0 {
-		if err := s.signalCancel(pgid); err != nil {
+		if err := s.signalGroup(pgid); err != nil {
 			// The signal never reached the process group, so ICT may never start its
 			// teardown. Record a cancellation-failure with the underlying error so the
 			// UI can tell the user the kill itself failed (distinct from ICT running
@@ -479,7 +479,7 @@ func (s *Server) watchCancel(b *build) {
 
 		if pgid := b.currentPgid(); pgid > 0 {
 			b.appendLog(fmt.Sprintf("• still cancelling after %s — re-sending SIGTERM", cancelGracePeriod))
-			if err := s.signalCancel(pgid); err != nil {
+			if err := s.signalGroup(pgid); err != nil {
 				log.Warnf("build %s: re-signalling process group %d: %v", b.ID, pgid, err)
 			}
 		}
@@ -529,17 +529,69 @@ func (s *Server) signalCancel(pgid int) error {
 	if pgid <= 0 {
 		return fmt.Errorf("no process group recorded for build")
 	}
+	// Never signal our own process group. The build is spawned with Setpgid so it
+	// becomes its own group leader (pgid == child pid), but cmd.Start returns before
+	// the child-side setpgid necessarily completes; if a cancel is serviced in that
+	// window the recorded pgid can still be the server's own group. Signalling it
+	// with TERM would take down the server — and, when the server shares a session
+	// with the operator's shell (e.g. launched from an interactive SSH login rather
+	// than a dedicated service unit), the whole login session with it. Refuse, and
+	// report it so the caller records a cancellation-failure rather than self-terminating.
+	if self := syscall.Getpgrp(); pgid == self {
+		return fmt.Errorf("refusing to signal build process group %d: it matches the server's own group "+
+			"(the build had not yet moved into its own process group)", pgid)
+	}
 	if s.cfg.Sudo {
 		// `kill -TERM -<pgid>`: the leading `-` on the pid makes kill target the
 		// process group. -n never prompts; a missing sudoers rule fails fast.
 		out, err := exec.Command("sudo", "-n", "kill", "-TERM", fmt.Sprintf("-%d", pgid)).CombinedOutput()
 		if err != nil {
-			return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+			// Distinguish a genuine delivery failure from a benign teardown race.
+			//
+			// The build's own group leader is the `sudo` wrapper, so signalling
+			// -pgid races that wrapper's exit: TERM reaches ICT, which begins its
+			// cleanup and exits, and by the time `kill` walks the group a member has
+			// already gone — so `kill` exits non-zero (ESRCH, sometimes with no
+			// message at all) even though the signal *was* delivered. Reporting that
+			// as a cancellation-failure raises a false "machine may need manual
+			// cleanup" alarm on a build that cancelled and tore down cleanly.
+			//
+			// Only a sudo-level error means the signal never reached the group: no
+			// sudoers rule, or sudo can't authorize non-interactively. Those are the
+			// failures worth surfacing (and the ones operators actually hit). Any
+			// other non-zero exit here is `kill` racing the group's teardown; treat
+			// it as delivered and let the child's real exit (classifyExit on
+			// runBuild's wait path) and the watchdog be the source of truth.
+			if isSudoAuthFailure(string(out)) {
+				return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+			}
+			return nil
 		}
 		return nil
 	}
-	// Direct group signal (dev/root): negative pid = process group.
-	return syscall.Kill(-pgid, syscall.SIGTERM)
+	// Direct group signal (dev/root): negative pid = process group. ESRCH means the
+	// group already exited between our recording the pgid and signalling it — the
+	// build is on its way down, not a delivery failure.
+	if err := syscall.Kill(-pgid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return err
+	}
+	return nil
+}
+
+// isSudoAuthFailure reports whether a failed `sudo -n kill` failed at the sudo
+// layer — i.e. the signal never reached the process group — rather than inside
+// `kill` itself. sudo emits a recognizable diagnostic when it can't run the
+// command non-interactively (no NOPASSWD rule for kill, or it would need a
+// password); `kill` racing a vanishing group instead reports "no such process" or
+// nothing. We match sudo's messages so a real missing-rule misconfiguration is
+// still surfaced as a cancellation-failure, while the benign teardown race is not.
+func isSudoAuthFailure(out string) bool {
+	o := strings.ToLower(out)
+	return strings.Contains(o, "password is required") ||
+		strings.Contains(o, "a terminal is required") ||
+		strings.Contains(o, "not allowed to execute") ||
+		strings.Contains(o, "sudo: a password") ||
+		strings.Contains(o, "no askpass")
 }
 
 // errBadBuildRequest marks resolution failures caused by client input (bad
@@ -643,17 +695,23 @@ func (s *Server) runBuild(b *build, name string, cmdArgs []string) {
 		return
 	}
 	// Record the process-group id now that the child is running. With Setpgid the
-	// child is its own group leader, so the group id equals its pid. A cancel
-	// signals -pgid to reach the whole tree.
-	//
+	// child is its own group leader, so the group id equals its pid — but read it
+	// back with Getpgid rather than assuming pid == pgid: if the child hasn't been
+	// placed in its new group yet (or setpgid failed), Getpgid returns the group it
+	// is actually in, so we never record — and later signal — a group that isn't the
+	// build's. Fall back to the pid only if the lookup fails.
+	childPgid := cmd.Process.Pid
+	if pg, err := syscall.Getpgid(cmd.Process.Pid); err == nil {
+		childPgid = pg
+	}
 	// A cancel can arrive in the window between the build being tracked as running
 	// (in handleStartBuild) and this point, when pgid was still 0. beginCancel
 	// would have transitioned to cancelling but signalCancel(0) could not signal
 	// anything. setPgidCheckCancel records the pgid and, atomically under b.mu,
 	// reports whether such an early cancel is pending so we can deliver the signal
 	// now that we finally have a group to target.
-	if pgid, pending := b.setPgidCheckCancel(cmd.Process.Pid); pending {
-		if err := s.signalCancel(pgid); err != nil {
+	if pgid, pending := b.setPgidCheckCancel(childPgid); pending {
+		if err := s.signalGroup(pgid); err != nil {
 			detail := fmt.Sprintf("failed to signal build process group %d: %v", pgid, err)
 			b.setResidual(residualCancellation, detail)
 			b.appendLog("ERROR " + detail)

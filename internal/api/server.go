@@ -40,6 +40,11 @@ type Server struct {
 	// while mounts/loop devices from the previous one may still be tearing down.
 	buildMu       sync.Mutex
 	activeBuildID string
+
+	// signalGroup delivers SIGTERM to a build's process group. It defaults to
+	// signalCancel; tests override it to exercise the cancel paths without shelling
+	// out to a real `sudo kill` or signalling the test process.
+	signalGroup func(pgid int) error
 }
 
 // tryAcquireBuildSlot claims the single-build slot for id. It returns false (and
@@ -86,7 +91,9 @@ func New(cfg Config) (*Server, error) {
 	if cfg.WorkDir == "" {
 		cfg.WorkDir = "webui-workspace"
 	}
-	return &Server{cfg: cfg, manifest: m, tracker: newBuildTracker()}, nil
+	s := &Server{cfg: cfg, manifest: m, tracker: newBuildTracker()}
+	s.signalGroup = s.signalCancel
+	return s, nil
 }
 
 // discoverICTBinary picks the image-composer-tool binary to invoke when the

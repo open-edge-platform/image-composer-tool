@@ -21,40 +21,75 @@ hosts both the static UI and the JSON/SSE API on one port.
 Real image composition needs root (chroot/mount), so the server runs builds
 under `sudo`. Run everything from the **repository root**.
 
-### 1. Grant a scoped, passwordless sudo rule
+### 1. Build the binary first
 
-The server invokes the ICT binary (and `cat`, to stream root-owned artifacts, and
-`kill`, to cancel a running build) via `sudo -n`. Grant NOPASSWD rules scoped to
-exactly those commands — do **not** give the service blanket sudo. The path must
-be the **absolute** path to the binary you build in step 2 (the server resolves
-it to an absolute path, and `sudo` matches the rule literally).
+The sudoers rules below reference the **absolute path** of the ICT binary, so
+build it before granting them (`sudo` matches the rule literally — a relative or
+wrong path silently falls through to a password prompt and every privileged
+action fails). See step 2 for the full frontend+binary build; the short version:
 
 ```bash
-echo "$(whoami) ALL=(root) NOPASSWD: $(pwd)/build/image-composer-tool build *" \
-  | sudo tee /etc/sudoers.d/ict-webui
-echo "$(whoami) ALL=(root) NOPASSWD: /usr/bin/cat $(pwd)/webui-workspace/builds/*" \
-  | sudo tee -a /etc/sudoers.d/ict-webui
-echo "$(whoami) ALL=(root) NOPASSWD: /usr/bin/kill -TERM -[0-9]*" \
-  | sudo tee -a /etc/sudoers.d/ict-webui
-sudo chmod 440 /etc/sudoers.d/ict-webui
-
-# Verify (should print "sudo OK"):
-sudo -n "$(pwd)/build/image-composer-tool" build --help >/dev/null && echo "sudo OK"
+go build -o ./build/image-composer-tool ./cmd/image-composer-tool/
 ```
+
+### 2. Grant scoped, passwordless sudo rules (automated)
+
+The server performs exactly three privileged operations via `sudo -n`: **build**
+(chroot/mount), **kill** (SIGTERM a build's process group to cancel it), and
+**cat** (stream root-owned artifacts back to the browser). It needs one scoped
+NOPASSWD rule per operation — and nothing more. **Do not hand-write these**; a
+wrong path or a missing rule is the most common reason cancellation and downloads
+fail on a fresh host. Instead, let the binary generate the exact rules for this
+machine and install them with validation:
+
+```bash
+# One-shot: generate for this user + binary + workspace, visudo-validate, install.
+sudo ./scripts/install-sudoers.sh --ict-binary "$(pwd)/build/image-composer-tool"
+
+# Verify the rules resolve passwordless:
+sudo -l -U "$(whoami)" | grep image-composer-tool
+```
+
+Or generate and install by hand if you prefer to review first:
+
+```bash
+./build/image-composer-tool serve --print-sudoers \
+  --ict-binary "$(pwd)/build/image-composer-tool" \
+  | sudo tee /etc/sudoers.d/image-composer-tool-webui
+sudo chmod 440 /etc/sudoers.d/image-composer-tool-webui
+sudo visudo -cf /etc/sudoers.d/image-composer-tool-webui   # validate
+```
+
+The generator resolves the current user, the absolute binary path, and the
+`kill`/`cat` helper paths the way `sudo` will at runtime (respecting
+`secure_path`), and scopes the `cat` rule to the build workspace subtree — so the
+service user can read build artifacts but not arbitrary root-owned files. Pass
+`--work-dir` to both the generator and `serve` if you don't use the default
+`webui-workspace`.
+
+<details>
+<summary>Equivalent rules, for reference (what the generator emits)</summary>
+
+```
+<svc-user> ALL=(root) NOPASSWD: /abs/path/image-composer-tool build *
+<svc-user> ALL=(root) NOPASSWD: /usr/bin/kill -TERM -[0-9]*
+<svc-user> ALL=(root) NOPASSWD: /usr/bin/cat /abs/path/webui-workspace/*
+```
+
+</details>
 
 > **Cancellation & security posture.** The build runs as a root-owned process
 > group (so ICT can tear down its own mounts and loop devices on SIGTERM). The
 > server is non-root and cannot signal that group directly across the `sudo`
 > boundary, so **Cancel** delivers the signal as root via `sudo -n kill -TERM
-> -<pgid>`. The third rule above authorizes that. Adjust the `kill` path (e.g.
-> `/bin/kill`) to match your distro — run `command -v kill`. Omit this rule and
-> cancellation will fail with a *cancellation-failure* (the signal can't be
-> delivered); the UI surfaces that distinctly from a *cleanup-failure* (ICT ran
-> but left residue).
+> -<pgid>`. The kill rule above authorizes that. Omit it and cancellation fails
+> with a *cancellation-failure* (the signal can't be delivered); the UI surfaces
+> that distinctly from a *cleanup-failure* (ICT ran but left residue).
 >
-> **Read this before pasting the rule.** The target process group id isn't known
-> until a build starts, so sudoers cannot constrain *which* group is signalled —
-> `-[0-9]*` matches any pgid. Understand what you are granting the service user:
+> **Read this before granting the kill rule.** The target process group id isn't
+> known until a build starts, so sudoers cannot constrain *which* group is
+> signalled — `-[0-9]*` matches any pgid. Understand what you are granting the
+> service user:
 >
 > - `kill -TERM -1` as root — SIGTERM to **every process on the host**, i.e. a
 >   full-system shutdown-equivalent, available to anyone who can run commands as
@@ -68,8 +103,19 @@ sudo -n "$(pwd)/build/image-composer-tool" build --help >/dev/null && echo "sudo
 > environment, either run the server as root on an isolated build host (no `kill`
 > rule needed — the `--sudo` path is skipped and the group is signalled directly)
 > or omit the rule and accept that Cancel reports a cancellation-failure.
+>
+> **Run `serve` in its own session, not directly in your interactive shell.** The
+> server hardens against signalling its own process group (a cancel can never take
+> down the server or your login session), but the cleanest isolation is to give
+> the server its own session so a stray group signal can't reach your shell at
+> all. Launch it under `setsid` (`setsid ./build/image-composer-tool serve --sudo
+> &`) or, better, a systemd unit — not as a foreground job in the SSH session you
+> also use to run `kill`/cancel commands.
 
-### 2. Build the frontend, embed it, and build the binary
+### 3. Build the frontend, embed it, and rebuild the binary
+
+Step 1 built a plain binary for the sudoers path. For the actual server you need
+the frontend embedded (`//go:embed internal/webui/dist`):
 
 ```bash
 export PATH="$HOME/.local/node/bin:$PATH"          # ensure npm is on PATH
@@ -78,10 +124,10 @@ rm -rf internal/webui/dist && cp -r web/dist internal/webui/dist  # stage for //
 go build -o ./build/image-composer-tool ./cmd/image-composer-tool/
 ```
 
-### 3. Start the server
+### 4. Start the server
 
 ```bash
-./build/image-composer-tool serve --sudo
+setsid ./build/image-composer-tool serve --sudo &   # own session; see the posture note above
 # INFO  ICT web UI API listening on 127.0.0.1:8080
 ```
 
@@ -96,7 +142,7 @@ The server binds `127.0.0.1` by default (localhost only). Useful flags:
 | `--manifest` | embedded | Path to a manifest YAML to read from disk (live-editable, no rebuild) |
 | `--work-dir` | `webui-workspace` | Base dir for per-compose work/output |
 
-### 4. Open the UI
+### 5. Open the UI
 
 - **Local machine:** browse to <http://localhost:8080>.
 - **Remote build host (port forwarding):** the server listens only on the host's

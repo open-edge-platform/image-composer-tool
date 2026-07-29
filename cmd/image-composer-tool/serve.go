@@ -4,6 +4,7 @@
 package main
 
 import (
+	"fmt"
 	"net"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/api"
@@ -11,13 +12,14 @@ import (
 )
 
 var (
-	serveHost      string
-	servePort      string
-	serveTemplates string
-	serveBinary    string
-	serveWorkDir   string
-	serveSudo      bool
-	serveManifest  string
+	serveHost         string
+	servePort         string
+	serveTemplates    string
+	serveBinary       string
+	serveWorkDir      string
+	serveSudo         bool
+	serveManifest     string
+	servePrintSudoers bool
 )
 
 // createServeCommand creates the `serve` subcommand that runs the web UI API.
@@ -44,26 +46,48 @@ image builds via the image-composer-tool binary with streaming build logs.`,
 	serveCmd.Flags().BoolVar(&serveSudo, "sudo", false,
 		"Run builds under `sudo -n` (ICT requires root for chroot/mount). "+
 			"Grant scoped, passwordless sudoers rules for the ICT binary only — do not "+
-			"give the service blanket sudo. Two rules are needed:\n"+
+			"give the service blanket sudo. Three rules are needed (build, cancel, read):\n"+
 			"  <svc-user> ALL=(root) NOPASSWD: /path/to/image-composer-tool build *\n"+
 			"  <svc-user> ALL=(root) NOPASSWD: /usr/bin/kill -TERM -[0-9]*\n"+
-			"The second rule lets the (non-root) server cancel a build by signalling the "+
-			"root-owned build process group; without it, cancellation cannot deliver "+
-			"SIGTERM across the sudo boundary. Adjust the kill path (e.g. /bin/kill) to "+
-			"your distro. SECURITY: the pgid isn't known ahead of time, so sudoers "+
-			"cannot scope it — this rule grants the service user root SIGTERM to ANY "+
-			"process group, including `kill -TERM -1` (every process on the host). The "+
-			"signal is limited to TERM. Accept this deliberately, or run the server as "+
-			"root on an isolated build host (no kill rule needed), or omit the rule and "+
-			"accept that Cancel reports a cancellation-failure. See web/README.md.")
+			"  <svc-user> ALL=(root) NOPASSWD: /usr/bin/cat /path/to/workspace/*\n"+
+			"The kill rule lets the (non-root) server cancel a build by signalling the "+
+			"root-owned build process group; the cat rule lets it stream root-owned "+
+			"build artifacts back to the browser. Without them, cancellation and "+
+			"downloads fail across the sudo boundary. Don't hand-write these: run\n"+
+			"  image-composer-tool serve --print-sudoers [--ict-binary P] [--work-dir D]\n"+
+			"to generate the exact rules for this host, or scripts/install-sudoers.sh to "+
+			"generate + visudo-validate + install them in one step. SECURITY: the pgid "+
+			"isn't known ahead of time, so the kill rule grants the service user root "+
+			"SIGTERM (only TERM) to ANY process group. Accept this deliberately, or run "+
+			"the server as root on an isolated build host (no rules needed). "+
+			"See web/README.md.")
 	serveCmd.Flags().StringVar(&serveManifest, "manifest", "",
 		"Path to a manifest YAML to read from disk (live-editable, no rebuild). "+
 			"When empty, the manifest embedded at build time is used.")
+	serveCmd.Flags().BoolVar(&servePrintSudoers, "print-sudoers", false,
+		"Print the scoped sudoers drop-in required for `--sudo` cancellation and "+
+			"artifact reads, then exit. The rules are generated for the current user, "+
+			"the resolved --ict-binary, and --work-dir. Install with:\n"+
+			"  image-composer-tool serve --print-sudoers | sudo tee /etc/sudoers.d/"+api.SudoersDropInName+"\n"+
+			"or run scripts/install-sudoers.sh, which validates with visudo first.")
 
 	return serveCmd
 }
 
 func executeServe(cmd *cobra.Command, args []string) error {
+	// --print-sudoers is a setup helper: emit the scoped drop-in for this host and
+	// exit without starting the server. Printed to stdout so it can be piped to
+	// `sudo tee /etc/sudoers.d/...`; diagnostics (if any) go to stderr via the
+	// returned error.
+	if servePrintSudoers {
+		spec, err := api.ResolveSudoersSpec(serveBinary, serveWorkDir)
+		if err != nil {
+			return fmt.Errorf("generating sudoers rules: %w", err)
+		}
+		fmt.Print(spec.Render())
+		return nil
+	}
+
 	srv, err := api.New(api.Config{
 		// net.JoinHostPort brackets IPv6 hosts correctly (e.g. [::1]:8080).
 		Addr:         net.JoinHostPort(serveHost, servePort),
