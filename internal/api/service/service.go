@@ -3,11 +3,19 @@
 
 // Package service holds the business logic behind the ICT web UI API: manifest
 // lookup, template composition, build tracking/execution, compose history, phase
-// detection, and artifact discovery. It is deliberately free of HTTP types — the
-// api package decodes requests, calls this service, and encodes the generated
-// contract types (internal/api/http). Errors that carry an HTTP status/code are
-// modelled by *Error so the api layer can map them without importing net/http
-// concepts into the domain.
+// detection, and artifact discovery.
+//
+// The package handles no HTTP request/response types: it never sees an
+// http.Request, an http.ResponseWriter, headers, or the generated contract
+// types. The api package decodes requests, calls this service, and encodes the
+// generated types (internal/api/http). That keeps every behaviour here testable
+// by calling a method directly, with no server or recorder.
+//
+// It does depend on net/http for status *constants*. Failure modes like
+// "template not found" or "artifact outside workspace" carry the status the api
+// layer should return, modelled by *Error. Re-deriving those from a private
+// error taxonomy would add a mapping table in the transport layer without
+// making this package any less coupled to the fact that its caller speaks HTTP.
 package service
 
 import (

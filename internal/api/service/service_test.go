@@ -5,6 +5,7 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -395,6 +396,18 @@ func TestResolveBuildTemplate(t *testing.T) {
 	if _, _, err := s.resolveBuildTemplate(&BuildRequest{}, wd); err == nil {
 		t.Fatal("expected error when neither compose nor yaml provided")
 	}
+	// both -> error. The contract says exactly one, so an ambiguous request is
+	// rejected rather than silently resolved in favour of one of the two.
+	_, _, err = s.resolveBuildTemplate(&BuildRequest{
+		YAML:    "image:\n  name: x\n",
+		Compose: &Selection{Vertical: "robotics", SKU: "amr", Platform: "wcl", OS: "ubuntu24", ImageType: "iso"},
+	}, wd)
+	if err == nil {
+		t.Fatal("expected error when both compose and yaml provided")
+	}
+	if !errors.Is(err, errBadBuildRequest) {
+		t.Errorf("both-fields err = %v, want errBadBuildRequest (400)", err)
+	}
 	// no match -> error
 	if _, _, err := s.resolveBuildTemplate(&BuildRequest{Compose: &Selection{
 		Vertical: "robotics", Platform: "ptl", OS: "ubuntu24", ImageType: "iso",
@@ -555,6 +568,179 @@ func TestOpenArtifactRelativeWorkDir(t *testing.T) {
 	data, _ := io.ReadAll(rc)
 	if string(data) != "iso-bytes" {
 		t.Errorf("content = %q, want iso-bytes", data)
+	}
+}
+
+// TestOpenArtifactSymlinkEscape rejects an artifact that passes the lexical
+// prefix check but whose symlink target lives outside the work directory. The
+// lexical guard alone cannot catch this, so it is the symlink-resolution pass
+// that must reject it.
+func TestOpenArtifactSymlinkEscape(t *testing.T) {
+	s := newTestService(t)
+	workDir := t.TempDir()
+	secret := filepath.Join(t.TempDir(), "secret.iso")
+	if err := os.WriteFile(secret, []byte("secret-bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Inside the workspace by path, outside it by target.
+	link := filepath.Join(workDir, "image.iso")
+	if err := os.Symlink(secret, link); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+	b := &build{ID: "sym", RootDir: workDir, WorkDir: workDir, done: make(chan struct{})}
+	b.finish(StatusSuccess, []Artifact{{Name: "image.iso", Type: "image", Path: link}}, "")
+	s.tracker.add(b)
+
+	rc, _, err := s.OpenArtifact(t.Context(), "sym", "image.iso")
+	if err == nil {
+		_ = rc.Close()
+		t.Fatal("symlink escape = nil error, want 403")
+	}
+	var se *Error
+	if !errors.As(err, &se) || se.Status != http.StatusForbidden {
+		t.Errorf("err = %v, want 403 *Error", err)
+	}
+}
+
+// TestOpenArtifactSymlinkWithinWorkspace allows a symlink whose target is still
+// inside the work dir — the escape guard must not reject legitimate indirection.
+func TestOpenArtifactSymlinkWithinWorkspace(t *testing.T) {
+	s := newTestService(t)
+	workDir := t.TempDir()
+	real := filepath.Join(workDir, "out.iso")
+	if err := os.WriteFile(real, []byte("iso-bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(workDir, "image.iso")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+	b := &build{ID: "symok", RootDir: workDir, WorkDir: workDir, done: make(chan struct{})}
+	b.finish(StatusSuccess, []Artifact{{Name: "image.iso", Type: "image", Path: link}}, "")
+	s.tracker.add(b)
+
+	rc, _, err := s.OpenArtifact(t.Context(), "symok", "image.iso")
+	if err != nil {
+		t.Fatalf("OpenArtifact: %v", err)
+	}
+	defer rc.Close()
+	data, _ := io.ReadAll(rc)
+	if string(data) != "iso-bytes" {
+		t.Errorf("content = %q, want iso-bytes", data)
+	}
+}
+
+// fakeSudo puts a stub `sudo` first on PATH. The stub ignores its `-n cat`
+// arguments and instead runs the supplied shell body, so a test can simulate the
+// privileged read succeeding or failing mid-stream.
+func fakeSudo(t *testing.T, body string) {
+	t.Helper()
+	dir := t.TempDir()
+	script := "#!/bin/sh\n" + body + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "sudo"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// sudoArtifactBuild registers a completed build whose artifact file exists, so
+// OpenArtifact reaches the sudo streaming branch.
+func sudoArtifactBuild(t *testing.T, s *Service, id string) {
+	t.Helper()
+	workDir := t.TempDir()
+	f := filepath.Join(workDir, "image.iso")
+	if err := os.WriteFile(f, []byte("real-bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.cfg.Sudo = true
+	b := &build{ID: id, RootDir: workDir, WorkDir: workDir, done: make(chan struct{})}
+	b.finish(StatusSuccess, []Artifact{{Name: "image.iso", Type: "image", Path: f}}, "")
+	s.tracker.add(b)
+}
+
+// TestOpenArtifactSudoStreamFailureSurfaces asserts that a `sudo cat` that dies
+// mid-stream is reported by Close rather than silently truncating the download.
+func TestOpenArtifactSudoStreamFailureSurfaces(t *testing.T) {
+	s := newTestService(t)
+	// Emit some bytes, then fail — the failure mode that previously went unnoticed
+	// because Close discarded cmd.Wait()'s error.
+	fakeSudo(t, `printf 'partial'; exit 1`)
+	sudoArtifactBuild(t, s, "sudofail")
+
+	rc, _, err := s.OpenArtifact(t.Context(), "sudofail", "image.iso")
+	if err != nil {
+		t.Fatalf("OpenArtifact: %v", err)
+	}
+	data, rerr := io.ReadAll(rc)
+	if rerr != nil {
+		t.Fatalf("ReadAll: %v", rerr)
+	}
+	if string(data) != "partial" {
+		t.Errorf("content = %q, want partial", data)
+	}
+	if cerr := rc.Close(); cerr == nil {
+		t.Error("Close after failed sudo cat = nil, want the child's exit error")
+	}
+}
+
+// TestOpenArtifactSudoStreamSuccess is the companion case: a clean `sudo cat`
+// must not report an error from Close.
+func TestOpenArtifactSudoStreamSuccess(t *testing.T) {
+	s := newTestService(t)
+	fakeSudo(t, `printf 'real-bytes'`)
+	sudoArtifactBuild(t, s, "sudook")
+
+	rc, _, err := s.OpenArtifact(t.Context(), "sudook", "image.iso")
+	if err != nil {
+		t.Fatalf("OpenArtifact: %v", err)
+	}
+	data, _ := io.ReadAll(rc)
+	if string(data) != "real-bytes" {
+		t.Errorf("content = %q, want real-bytes", data)
+	}
+	if cerr := rc.Close(); cerr != nil {
+		t.Errorf("Close after clean sudo cat = %v, want nil", cerr)
+	}
+}
+
+// TestOpenArtifactEarlyCloseIsNotAnError covers a client disconnecting before
+// the download finishes: closing the pipe kills `cat` with a non-zero status,
+// which must not be reported as a transfer failure.
+func TestOpenArtifactEarlyCloseIsNotAnError(t *testing.T) {
+	s := newTestService(t)
+	// Produce more than the caller will read so the child is still writing.
+	fakeSudo(t, `head -c 200000 /dev/zero`)
+	sudoArtifactBuild(t, s, "sudoearly")
+
+	rc, _, err := s.OpenArtifact(t.Context(), "sudoearly", "image.iso")
+	if err != nil {
+		t.Fatalf("OpenArtifact: %v", err)
+	}
+	if _, rerr := io.ReadFull(rc, make([]byte, 16)); rerr != nil {
+		t.Fatalf("short read: %v", rerr)
+	}
+	if cerr := rc.Close(); cerr != nil {
+		t.Errorf("Close after early client close = %v, want nil", cerr)
+	}
+}
+
+// TestOpenArtifactDeletedFile reports a recorded-but-since-deleted artifact as
+// 404 rather than a 403 or an opaque 500.
+func TestOpenArtifactDeletedFile(t *testing.T) {
+	s := newTestService(t)
+	workDir := t.TempDir()
+	gone := filepath.Join(workDir, "image.iso")
+	b := &build{ID: "gone", RootDir: workDir, WorkDir: workDir, done: make(chan struct{})}
+	b.finish(StatusSuccess, []Artifact{{Name: "image.iso", Type: "image", Path: gone}}, "")
+	s.tracker.add(b)
+
+	_, _, err := s.OpenArtifact(t.Context(), "gone", "image.iso")
+	if err == nil {
+		t.Fatal("deleted artifact = nil error, want 404")
+	}
+	var se *Error
+	if !errors.As(err, &se) || se.Status != http.StatusNotFound {
+		t.Errorf("err = %v, want 404 *Error", err)
 	}
 }
 

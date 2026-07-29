@@ -570,6 +570,21 @@ components:
       type: object
       description: |
         Start a build. Carries exactly one of `compose` or `yaml` — never a diff.
+
+        Exactly one of the two properties must be present. That constraint is
+        machine-checkable via minProperties/maxProperties rather than left as
+        prose: a body with neither field, or with both, is invalid and the server
+        rejects it with 400 `NO_MATCH`.
+
+        `oneOf` would express this more idiomatically, but oapi-codegen turns a
+        `oneOf` with sibling properties into a `json.RawMessage` union type with
+        custom (un)marshalling and two empty `interface{}` branch aliases —
+        generated noise around the hot request path, and oapi-codegen does not
+        enforce the constraint at runtime either way. The property-count form
+        validates identically for a two-property schema and keeps the generated
+        struct a plain pair of optional fields.
+      minProperties: 1
+      maxProperties: 1
       properties:
         compose:
           $ref: "#/components/schemas/ComposeRequest"

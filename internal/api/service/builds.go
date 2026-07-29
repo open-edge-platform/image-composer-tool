@@ -641,7 +641,15 @@ var errBadBuildRequest = errors.New("bad build request")
 
 // resolveBuildTemplate returns the on-disk template path to build. For {yaml} it
 // writes the body to the work dir; for {compose} it looks up the manifest.
+//
+// Exactly one of the two must be set, matching the `oneOf` in the OpenAPI
+// contract. Both-set is rejected rather than silently preferring one: the two
+// inputs can disagree, and picking a winner would build something the caller
+// didn't unambiguously ask for.
 func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path, name string, err error) {
+	if req.YAML != "" && req.Compose != nil {
+		return "", "", fmt.Errorf("%w: provide either compose or yaml, not both", errBadBuildRequest)
+	}
 	if req.YAML != "" {
 		p := filepath.Join(workDir, "template.yml")
 		if werr := os.WriteFile(p, []byte(req.YAML), 0o600); werr != nil {
