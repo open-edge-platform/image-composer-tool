@@ -116,22 +116,41 @@ func sudoSecurePath() []string {
 	if err != nil {
 		return def
 	}
+	if dirs := parseSecurePath(string(out)); len(dirs) > 0 {
+		return dirs
+	}
+	return def
+}
+
+// parseSecurePath extracts the secure_path directory list from `sudo -l` output,
+// or nil if none is present. Split out from sudoSecurePath so it can be tested
+// against real sudo formatting without invoking sudo.
+func parseSecurePath(out string) []string {
 	// Look for a line like: "Matching Defaults entries ... secure_path=/usr/bin:/bin"
 	// or "    secure_path=...". Parse the value after "secure_path=".
-	for _, line := range strings.Split(string(out), "\n") {
+	for _, line := range strings.Split(out, "\n") {
 		i := strings.Index(line, "secure_path=")
 		if i < 0 {
 			continue
 		}
 		val := line[i+len("secure_path="):]
-		// The value may be quoted and/or followed by other tokens/commas.
+		// `sudo -l` escapes the ':' path separators as '\:' and lists the value
+		// among other comma-separated Defaults tokens (e.g.
+		//   secure_path=/usr/local/bin\:/usr/bin\:/bin, use_pty
+		// ). Unescape the '\:' first, then cut at the first delimiter that ends the
+		// value (a space or an *unescaped* comma) so trailing tokens like
+		// "use_pty" don't leak in.
+		val = strings.ReplaceAll(val, `\:`, ":")
 		val = strings.Trim(val, `" `)
 		if c := strings.IndexAny(val, " ,"); c >= 0 {
 			val = val[:c]
 		}
 		var dirs []string
 		for _, d := range strings.Split(val, ":") {
-			if d = strings.TrimSpace(d); d != "" {
+			// Strip any stray leading backslash (some sudo builds escape other
+			// characters too) and surrounding space.
+			d = strings.TrimSpace(strings.TrimPrefix(d, `\`))
+			if d != "" {
 				dirs = append(dirs, d)
 			}
 		}
@@ -139,7 +158,7 @@ func sudoSecurePath() []string {
 			return dirs
 		}
 	}
-	return def
+	return nil
 }
 
 // Render returns the sudoers drop-in content for this spec: three scoped

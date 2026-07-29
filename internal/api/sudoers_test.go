@@ -49,6 +49,45 @@ func TestSudoersSpecRender(t *testing.T) {
 	}
 }
 
+func TestParseSecurePath(t *testing.T) {
+	cases := []struct {
+		name string
+		out  string
+		want []string
+	}{
+		{
+			// Real `sudo -l` formatting on Debian/Ubuntu: ':' escaped as '\:',
+			// value among comma-separated Defaults tokens.
+			name: "escaped colons with trailing token",
+			out:  "    env_reset, mail_badpass, secure_path=/usr/local/sbin\\:/usr/local/bin\\:/usr/sbin\\:/usr/bin\\:/sbin\\:/bin\\:/snap/bin, use_pty\n",
+			want: []string{"/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin", "/snap/bin"},
+		},
+		{
+			name: "plain unescaped value",
+			out:  "Matching Defaults entries for svc: secure_path=/usr/bin:/bin\n",
+			want: []string{"/usr/bin", "/bin"},
+		},
+		{
+			name: "no secure_path present",
+			out:  "User svc may run the following commands:\n    (root) NOPASSWD: /usr/bin/kill\n",
+			want: nil,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := parseSecurePath(c.out)
+			if len(got) != len(c.want) {
+				t.Fatalf("parseSecurePath = %v, want %v", got, c.want)
+			}
+			for i := range got {
+				if got[i] != c.want[i] {
+					t.Errorf("dir[%d] = %q, want %q (all: %v)", i, got[i], c.want[i], got)
+				}
+			}
+		})
+	}
+}
+
 func TestResolveSudoersSpecResolvesRelativePaths(t *testing.T) {
 	// A relative binary/workdir must come back absolute — sudo matches commands
 	// literally, so a relative path would never match an absolute NOPASSWD rule.
