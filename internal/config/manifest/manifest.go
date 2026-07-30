@@ -56,13 +56,24 @@ type SoftwarePackageManifest struct {
 
 // Holds the SPDX Document header information
 type SPDXDocument struct {
-	SPDXVersion       string        `json:"spdxVersion"`
-	DataLicense       string        `json:"dataLicense"`
-	SPDXID            string        `json:"SPDXID"`
-	DocumentName      string        `json:"name"`
-	DocumentNamespace string        `json:"documentNamespace"`
-	CreationInfo      CreationInfo  `json:"creationInfo"`
-	Packages          []SPDXPackage `json:"packages"`
+	SPDXVersion       string             `json:"spdxVersion"`
+	DataLicense       string             `json:"dataLicense"`
+	SPDXID            string             `json:"SPDXID"`
+	DocumentName      string             `json:"name"`
+	DocumentNamespace string             `json:"documentNamespace"`
+	CreationInfo      CreationInfo       `json:"creationInfo"`
+	Packages          []SPDXPackage      `json:"packages"`
+	Relationships     []SPDXRelationship `json:"relationships,omitempty"`
+}
+
+// SPDXRelationship links two SPDX elements. The SBOM emits one DESCRIBES
+// relationship from the document to each package so the file is spec-conformant:
+// SPDX 2.x requires the document to describe at least one element, and strict
+// validators reject a document that carries packages but no relationships.
+type SPDXRelationship struct {
+	SPDXElementID      string `json:"spdxElementId"`
+	RelationshipType   string `json:"relationshipType"`
+	RelatedSPDXElement string `json:"relatedSpdxElement"`
 }
 
 // Time stamp and creation information
@@ -312,6 +323,28 @@ func dedupeSPDXIDs(pkgs []SPDXPackage) {
 	}
 }
 
+// describesRelationships returns one DESCRIBES relationship from the document's
+// root SPDXID to every package, in package order. This is what makes the SBOM
+// spec-conformant: SPDX 2.x requires the document to describe at least one
+// element, and the choke point that calls this runs after dedupeSPDXIDs, so each
+// RelatedSPDXElement references a final, unique package ID. Returns nil for a
+// package-less document so the omitempty field is dropped rather than emitting an
+// empty array.
+func describesRelationships(spdx SPDXDocument) []SPDXRelationship {
+	if len(spdx.Packages) == 0 {
+		return nil
+	}
+	rels := make([]SPDXRelationship, 0, len(spdx.Packages))
+	for _, pkg := range spdx.Packages {
+		rels = append(rels, SPDXRelationship{
+			SPDXElementID:      spdx.SPDXID,
+			RelationshipType:   "DESCRIBES",
+			RelatedSPDXElement: pkg.SPDXID,
+		})
+	}
+	return rels
+}
+
 // writeSPDXDocument marshals an SPDX document and writes it with symlink
 // protection, creating the parent directory as needed.
 func writeSPDXDocument(spdx SPDXDocument, outFile string) error {
@@ -322,6 +355,13 @@ func writeSPDXDocument(spdx SPDXDocument, outFile string) error {
 	// and merge writers are covered.
 	sanitizeSPDXIDs(spdx.Packages)
 	dedupeSPDXIDs(spdx.Packages)
+
+	// Emit the mandatory document->package DESCRIBES relationships AFTER dedupe so
+	// they reference the final, unique package IDs. Building them at this single
+	// choke point covers both the from-scratch and merge writers; a baseline
+	// document's own relationships (if any) are replaced with a set regenerated
+	// from the merged package list so no relationship dangles to a renamed ID.
+	spdx.Relationships = describesRelationships(spdx)
 
 	if err := os.MkdirAll(filepath.Dir(outFile), 0700); err != nil {
 		log.Errorf("Failed to create SPDX output directory: %v", err)

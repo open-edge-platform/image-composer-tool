@@ -779,3 +779,103 @@ func TestWriteMergedSPDXToFile_SanitizesLegacyBaselineSPDXIDs(t *testing.T) {
 		t.Errorf("expected sanitized IDs SPDXRef-Package-libstdc--6 and SPDXRef-Package-g--, got %+v", doc.Packages)
 	}
 }
+
+// TestWriteSPDXToFile_EmitsDescribesRelationships asserts the written document
+// carries one DESCRIBES relationship from the document root to every package,
+// referencing the final (post-dedupe) package IDs — the minimum required for a
+// spec-conformant SPDX document.
+func TestWriteSPDXToFile_EmitsDescribesRelationships(t *testing.T) {
+	tmpDir := t.TempDir()
+	outFile := filepath.Join(tmpDir, "sbom.spdx.json")
+
+	pkgs := []ospackage.PackageInfo{
+		{Name: "alpha", Type: "deb", Version: "1.0", URL: "https://x/alpha.deb"},
+		{Name: "beta", Type: "deb", Version: "2.0", URL: "https://x/beta.deb"},
+	}
+
+	if err := WriteSPDXToFile(pkgs, outFile); err != nil {
+		t.Fatalf("WriteSPDXToFile failed: %v", err)
+	}
+
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("read SBOM: %v", err)
+	}
+	var doc SPDXDocument
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("parse SBOM: %v", err)
+	}
+
+	if len(doc.Relationships) != len(doc.Packages) {
+		t.Fatalf("expected %d relationships, got %d", len(doc.Packages), len(doc.Relationships))
+	}
+	for i, rel := range doc.Relationships {
+		if rel.SPDXElementID != doc.SPDXID {
+			t.Errorf("relationship %d: spdxElementId = %q, want document root %q", i, rel.SPDXElementID, doc.SPDXID)
+		}
+		if rel.RelationshipType != "DESCRIBES" {
+			t.Errorf("relationship %d: type = %q, want DESCRIBES", i, rel.RelationshipType)
+		}
+		if rel.RelatedSPDXElement != doc.Packages[i].SPDXID {
+			t.Errorf("relationship %d: relatedSpdxElement = %q, want %q", i, rel.RelatedSPDXElement, doc.Packages[i].SPDXID)
+		}
+	}
+}
+
+// TestWriteMergedSPDXToFile_RelationshipsReferenceDedupedIDs guards the ordering
+// contract: relationships are built AFTER dedupeSPDXIDs, so a colliding overlay
+// addition that gets a disambiguated ID must be the target of a relationship
+// pointing at that final ID, never the pre-dedupe one.
+func TestWriteMergedSPDXToFile_RelationshipsReferenceDedupedIDs(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	baselineDoc := SPDXDocument{
+		SPDXVersion:       SPDXVersion,
+		DataLicense:       SPDXDataLicense,
+		SPDXID:            SPDXDocumentID,
+		DocumentName:      "baseline-doc",
+		DocumentNamespace: "https://example.com/ns",
+		Packages: []SPDXPackage{
+			{SPDXID: "SPDXRef-Package-tree", Name: "tree", Type: "deb", VersionInfo: "2.1.1-1", DownloadLocation: "https://x/tree_amd64.deb"},
+			{SPDXID: "SPDXRef-Package-tree-2", Name: "tree", Type: "deb", VersionInfo: "2.1.1-1", DownloadLocation: "https://x/tree_i386.deb"},
+		},
+	}
+	baselineData, err := json.Marshal(baselineDoc)
+	if err != nil {
+		t.Fatalf("marshal baseline: %v", err)
+	}
+
+	overlayPkgs := []ospackage.PackageInfo{
+		{Name: "tree", Type: "deb", Version: "2.1.1-2", URL: "https://x/tree_new.deb"},
+	}
+
+	outFile := filepath.Join(tmpDir, "merged.json")
+	if err := WriteMergedSPDXToFile(baselineData, overlayPkgs, outFile); err != nil {
+		t.Fatalf("WriteMergedSPDXToFile failed: %v", err)
+	}
+
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("read merged SBOM: %v", err)
+	}
+	var doc SPDXDocument
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("parse merged SBOM: %v", err)
+	}
+
+	// One relationship per package, and every relationship must target an ID that
+	// actually exists in the final package set (no dangling reference to a
+	// pre-dedupe id).
+	if len(doc.Relationships) != len(doc.Packages) {
+		t.Fatalf("expected %d relationships, got %d", len(doc.Packages), len(doc.Relationships))
+	}
+	pkgIDs := make(map[string]bool, len(doc.Packages))
+	for _, p := range doc.Packages {
+		pkgIDs[p.SPDXID] = true
+	}
+	for i, rel := range doc.Relationships {
+		if !pkgIDs[rel.RelatedSPDXElement] {
+			t.Errorf("relationship %d targets %q which is not a package ID in the final document", i, rel.RelatedSPDXElement)
+		}
+	}
+}
