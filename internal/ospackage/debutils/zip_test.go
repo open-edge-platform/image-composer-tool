@@ -485,3 +485,72 @@ func TestDecompress_DispatchesToXZ(t *testing.T) {
 		t.Fatalf("Decompress .xz dispatch failed: %v", err)
 	}
 }
+
+// TestDecompress_UncompressedInPlace covers a repository that publishes only a
+// plain Packages index. ParseRepositoryMetadata derives the output path by
+// stripping the extension, so for "Packages" it passes the input path back as the
+// output; the file must survive rather than be truncated.
+func TestDecompress_UncompressedInPlace(t *testing.T) {
+	tempDir := t.TempDir()
+
+	inFile := filepath.Join(tempDir, "Packages")
+	content := "Package: firefox\nVersion: 152.0.4~build1\n"
+	if err := os.WriteFile(inFile, []byte(content), 0644); err != nil {
+		t.Fatalf("Failed to write input file: %v", err)
+	}
+
+	result, err := Decompress(inFile, inFile)
+	if err != nil {
+		t.Fatalf("Decompress failed: %v", err)
+	}
+	if len(result) != 1 || result[0] != inFile {
+		t.Fatalf("Decompress = %v, want [%s]", result, inFile)
+	}
+
+	got, err := os.ReadFile(inFile)
+	if err != nil {
+		t.Fatalf("Failed to read file after Decompress: %v", err)
+	}
+	if string(got) != content {
+		t.Errorf("file contents = %q, want %q", got, content)
+	}
+}
+
+// TestDecompress_UncompressedToDifferentPath covers the uncompressed case when the
+// caller asks for a distinct destination.
+func TestDecompress_UncompressedToDifferentPath(t *testing.T) {
+	tempDir := t.TempDir()
+
+	inFile := filepath.Join(tempDir, "Packages")
+	outFile := filepath.Join(tempDir, "Packages.copy")
+	content := "Package: firefox\n"
+	if err := os.WriteFile(inFile, []byte(content), 0644); err != nil {
+		t.Fatalf("Failed to write input file: %v", err)
+	}
+
+	result, err := Decompress(inFile, outFile)
+	if err != nil {
+		t.Fatalf("Decompress failed: %v", err)
+	}
+	if len(result) != 1 || result[0] != outFile {
+		t.Fatalf("Decompress = %v, want [%s]", result, outFile)
+	}
+
+	got, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("Failed to read output file: %v", err)
+	}
+	if string(got) != content {
+		t.Errorf("output contents = %q, want %q", got, content)
+	}
+}
+
+// TestDecompress_UncompressedMissingInput ensures a missing plain index still errors.
+func TestDecompress_UncompressedMissingInput(t *testing.T) {
+	tempDir := t.TempDir()
+
+	_, err := Decompress(filepath.Join(tempDir, "Packages"), filepath.Join(tempDir, "out"))
+	if err == nil {
+		t.Fatal("expected an error for a missing input file")
+	}
+}

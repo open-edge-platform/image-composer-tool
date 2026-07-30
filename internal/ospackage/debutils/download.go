@@ -765,14 +765,66 @@ func UserPackages() ([]ospackage.PackageInfo, error) {
 	return allUserPackages, nil
 }
 
-// CheckFileExists sends a HEAD request to the given URL and
-// returns true if the file exists (status 200).
+// CheckFileExists reports whether the given URL serves a file, using a HEAD
+// request and falling back to a ranged GET for servers that refuse HEAD.
 // Optimized to handle timeouts and slow server responses.
 func checkFileExists(url string) (bool, error) {
 	if exists, ok := getURLExistenceFromCache(url); ok {
 		return exists, nil
 	}
 
+	found, status, err := probeURL(url, http.MethodHead)
+
+	// A HEAD rejection is not proof of absence. Some CDN-backed APT mirrors
+	// answer HEAD for a perfectly downloadable object with a client error while
+	// GET of the same URL returns 200 — packages.mozilla.org (Google Cloud
+	// Storage) answers 400 to HEAD on .../binary-amd64/Packages and 200 to GET.
+	// Believing the HEAD makes ICT declare a working repository unreachable, so
+	// confirm with a one-byte ranged GET before concluding the file is missing.
+	// 404 is left alone: it is an unambiguous answer, and re-probing every miss
+	// would double the request count across the arch/component fan-out.
+	//
+	// This is checked before err is propagated because one of the statuses that
+	// means "HEAD unsupported" (501) falls in the range probeURL reports as a
+	// server error.
+	if !found && headRejectedStatus(status) {
+		log := logger.Logger()
+		log.Debugf("HEAD %s returned %d; retrying with a ranged GET", url, status)
+		found, status, err = probeURL(url, http.MethodGet)
+	}
+	if err != nil {
+		return false, err
+	}
+
+	// Only record a verdict the server actually gave. A status of 0 means the
+	// probe never got a response (a network error mapped to absence above), and
+	// persisting that would pin a reachable repository to "missing" for every
+	// later run off the on-disk cache.
+	if status != 0 {
+		saveURLExistenceToCache(url, found)
+	}
+	return found, nil
+}
+
+// headRejectedStatus reports whether a status means "this server would not
+// answer a HEAD for this object" rather than "the object is not here".
+func headRejectedStatus(status int) bool {
+	switch status {
+	case http.StatusBadRequest,
+		http.StatusForbidden,
+		http.StatusMethodNotAllowed,
+		http.StatusNotAcceptable,
+		http.StatusNotImplemented:
+		return true
+	}
+	return false
+}
+
+// probeURL issues a single existence check for url. It returns whether the file
+// is present and the HTTP status observed (0 when no response was obtained, e.g.
+// a network error treated as absence). A GET probe asks for only the first byte
+// so a hit does not pull a multi-megabyte index down.
+func probeURL(url, method string) (bool, int, error) {
 	// Create a context with timeout for the request, parented on the ambient
 	// run-scoped ctx so a SIGINT/SIGTERM during a large fan-out of HEAD checks
 	// (overlay/create modes) cancels the in-flight requests within the 30s
@@ -783,15 +835,18 @@ func checkFileExists(url string) (bool, error) {
 	client := network.NewSecureHTTPClient()
 
 	// Create request with context
-	req, err := http.NewRequestWithContext(ctx, "HEAD", url, nil)
+	req, err := http.NewRequestWithContext(ctx, method, url, nil)
 	if err != nil {
-		return false, fmt.Errorf("creating request for %s: %w", url, err)
+		return false, 0, fmt.Errorf("creating request for %s: %w", url, err)
 	}
 
 	// Set additional headers to encourage faster responses
 	req.Header.Set("User-Agent", "image-composer-tool/1.0")
 	req.Header.Set("Accept", "*/*")
-	req.Header.Set("Connection", "close") // Don't keep connection alive for HEAD requests
+	req.Header.Set("Connection", "close") // Don't keep the connection alive for probes
+	if method == http.MethodGet {
+		req.Header.Set("Range", "bytes=0-0")
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -802,9 +857,9 @@ func checkFileExists(url string) (bool, error) {
 			strings.Contains(errStr, "connection refused") ||
 			strings.Contains(errStr, "no such host") ||
 			strings.Contains(errStr, "context deadline exceeded") {
-			return false, nil // Treat network issues as "file not found"
+			return false, 0, nil // Treat network issues as "file not found"
 		}
-		return false, fmt.Errorf("network error checking %s: %w", url, err)
+		return false, 0, fmt.Errorf("network error checking %s: %w", url, err)
 	}
 	defer func() {
 		// Properly drain and close the response body to avoid connection leaks
@@ -815,20 +870,19 @@ func checkFileExists(url string) (bool, error) {
 	}()
 
 	switch {
-	case resp.StatusCode == http.StatusOK:
-		// File exists, all good
-		saveURLExistenceToCache(url, true)
-		return true, nil
+	case resp.StatusCode == http.StatusOK, resp.StatusCode == http.StatusPartialContent:
+		// File exists, all good. A ranged GET answers 206; a server that ignores
+		// the Range header answers 200.
+		return true, resp.StatusCode, nil
 	case resp.StatusCode >= 400 && resp.StatusCode < 500:
 		// Client errors (404, 403, etc.) - treat as file not found
-		saveURLExistenceToCache(url, false)
-		return false, nil
+		return false, resp.StatusCode, nil
 	case resp.StatusCode >= 500:
 		// Server errors - treat as temporary issue, file might exist
-		return false, fmt.Errorf("server error checking file at %s: status %s", url, resp.Status)
+		return false, resp.StatusCode, fmt.Errorf("server error checking file at %s: status %s", url, resp.Status)
 	default:
 		// Unexpected status codes
-		return false, fmt.Errorf("unexpected response checking file at %s: status %s", url, resp.Status)
+		return false, resp.StatusCode, fmt.Errorf("unexpected response checking file at %s: status %s", url, resp.Status)
 	}
 }
 
