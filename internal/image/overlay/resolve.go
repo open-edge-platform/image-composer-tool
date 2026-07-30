@@ -57,12 +57,28 @@ type Repository struct {
 }
 
 // ResolvedPackage is a single package in the resolved transitive closure.
+//
+// Beyond the identity fields the resolver keys on (Name/Version/Arch/URL), it
+// carries the repo-metadata fields the SBOM writer enriches with — supplier
+// (Origin), checksums, description, license — so an overlay-added package lands
+// in the merged SBOM with the same metadata completeness as a baseline entry.
+// Without these the overlay path would rebuild a bare PackageInfo and emit
+// degraded records (missing supplier/checksum/description).
 type ResolvedPackage struct {
 	Name    string
 	Version string
 	Arch    string
 	// URL is the artifact download URL, when known.
 	URL string
+	// Type is the package family ("deb", "rpm"), used as the SPDX package type.
+	Type string
+	// Description, Origin (SPDX supplier), License, and Checksums carry the
+	// repo-metadata the SBOM writer enriches package records with. They are
+	// populated from the resolved closure's PackageInfo when available.
+	Description string
+	Origin      string
+	License     string
+	Checksums   []ospackage.Checksum
 }
 
 // ResolutionPlan is the deterministic output of overlay dependency resolution.
@@ -657,7 +673,11 @@ func buildResolutionPlan(in planInput) *ResolutionPlan {
 
 	for _, p := range in.closure {
 		name := canonicalPackageName(p)
-		rp := ResolvedPackage{Name: name, Version: p.Version, Arch: p.Arch, URL: p.URL}
+		rp := ResolvedPackage{
+			Name: name, Version: p.Version, Arch: p.Arch, URL: p.URL,
+			Type: p.Type, Description: p.Description, Origin: p.Origin,
+			License: p.License, Checksums: p.Checksums,
+		}
 		resolved = append(resolved, rp)
 		if !present[name] {
 			toInstall = append(toInstall, rp)

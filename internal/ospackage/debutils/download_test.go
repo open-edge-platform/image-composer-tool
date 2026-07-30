@@ -1942,3 +1942,93 @@ func TestBuildDebPackageInfosFromCache_RecoversVersion(t *testing.T) {
 		t.Errorf("weirdname version = %q, want empty", p.Version)
 	}
 }
+
+// TestBuildDebPackageInfosFromCache_EnrichesFromMetadata asserts the cache-hit
+// path recovers the full repo metadata (canonical URL, supplier/Origin,
+// checksums, description, epoch-qualified version) for a cached artifact from the
+// parsed metadata cache, falling back to filename parsing only when no metadata
+// entry exists.
+func TestBuildDebPackageInfosFromCache_EnrichesFromMetadata(t *testing.T) {
+	// Point the metadata build path at a temp dir holding a parsed cache, and
+	// ensure no other repo configs contribute build paths. Restore globals after.
+	origRepoCfg := RepoCfg
+	origRepoCfgs := RepoCfgs
+	origUserRepoCfgs := UserRepoCfgs
+	origLocalUserRepoCfgs := LocalUserRepoCfgs
+	defer func() {
+		RepoCfg = origRepoCfg
+		RepoCfgs = origRepoCfgs
+		UserRepoCfgs = origUserRepoCfgs
+		LocalUserRepoCfgs = origLocalUserRepoCfgs
+	}()
+	RepoCfgs = nil
+	UserRepoCfgs = nil
+	LocalUserRepoCfgs = nil
+
+	buildPath := t.TempDir()
+	RepoCfg = RepoConfig{BuildPath: buildPath}
+
+	metaPkgs := []ospackage.PackageInfo{
+		{
+			Name:        "zlib1g",
+			Type:        "deb",
+			Version:     "1:1.3.dfsg-3.1ubuntu2.1",
+			URL:         "http://archive.ubuntu.com/ubuntu/pool/main/z/zlib/zlib1g_1.3.dfsg-3.1ubuntu2.1_amd64.deb",
+			Origin:      "Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>",
+			Description: "compression library - runtime",
+			Checksums:   []ospackage.Checksum{{Algorithm: "SHA256", Value: "7074b6a2"}},
+		},
+	}
+	if err := saveParsedPackageCache(filepath.Join(buildPath, "packages.parsed.json"), "chk", metaPkgs); err != nil {
+		t.Fatalf("save parsed cache: %v", err)
+	}
+
+	cacheDir := "/cache/pkgCache/ubuntu-ubuntu24-x86_64"
+	files := []string{
+		// Matches the metadata by base filename → enriched.
+		"zlib1g_1.3.dfsg-3.1ubuntu2.1_amd64.deb",
+		// No metadata entry → filename fallback.
+		"tree_2.1.1-2_amd64.deb",
+	}
+
+	infos := buildDebPackageInfosFromCache(cacheDir, files)
+	byName := make(map[string]ospackage.PackageInfo, len(infos))
+	for _, info := range infos {
+		byName[info.Name] = info
+	}
+
+	z := byName["zlib1g"]
+	if z.URL != metaPkgs[0].URL {
+		t.Errorf("zlib1g URL = %q, want canonical repo URL", z.URL)
+	}
+	if z.Version != "1:1.3.dfsg-3.1ubuntu2.1" {
+		t.Errorf("zlib1g version = %q, want epoch-qualified index version", z.Version)
+	}
+	if z.Origin == "" || z.Description == "" || len(z.Checksums) != 1 {
+		t.Errorf("zlib1g not enriched from metadata: %+v", z)
+	}
+
+	// Unmatched file still recovered via filename parsing.
+	if tr := byName["tree"]; tr.Version != "2.1.1-2" || tr.URL != filepath.Join(cacheDir, files[1]) {
+		t.Errorf("tree fallback not applied: %+v", tr)
+	}
+}
+
+func TestParseDebFileName_DecodesEpoch(t *testing.T) {
+	cases := []struct {
+		file        string
+		wantName    string
+		wantVersion string
+	}{
+		{"zlib1g_1%3a1.3.dfsg-3.1ubuntu2.1_amd64.deb", "zlib1g", "1:1.3.dfsg-3.1ubuntu2.1"},
+		{"pkg_2%3A4.5-1_amd64.deb", "pkg", "2:4.5-1"},
+		{"curl_8.5.0-2ubuntu10.10_amd64.deb", "curl", "8.5.0-2ubuntu10.10"},
+	}
+	for _, tc := range cases {
+		name, version := parseDebFileName(tc.file)
+		if name != tc.wantName || version != tc.wantVersion {
+			t.Errorf("parseDebFileName(%q) = (%q, %q), want (%q, %q)",
+				tc.file, name, version, tc.wantName, tc.wantVersion)
+		}
+	}
+}

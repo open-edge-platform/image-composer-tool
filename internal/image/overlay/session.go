@@ -558,13 +558,26 @@ func generateOverlaySBOM(info *BaselineInfo, rootMount string, plan *ResolutionP
 
 	pkgs := make([]ospackage.PackageInfo, 0, len(plan.ToInstall))
 	for _, rp := range plan.ToInstall {
+		// Prefer the resolved package's own type; fall back to the baseline
+		// package family only when the resolver did not record one.
+		t := rp.Type
+		if t == "" {
+			t = pkgType
+		}
+		// Carry the enriched repo metadata (supplier/checksum/description/license)
+		// through so overlay-added entries reach the SBOM writer with the same
+		// completeness as baseline-derived ones.
 		pkgs = append(pkgs, ospackage.PackageInfo{
-			Name:    rp.Name,
-			PkgName: rp.Name,
-			Type:    pkgType,
-			Version: rp.Version,
-			Arch:    rp.Arch,
-			URL:     rp.URL,
+			Name:        rp.Name,
+			PkgName:     rp.Name,
+			Type:        t,
+			Version:     rp.Version,
+			Arch:        rp.Arch,
+			URL:         rp.URL,
+			Description: rp.Description,
+			Origin:      rp.Origin,
+			License:     rp.License,
+			Checksums:   rp.Checksums,
 		})
 	}
 

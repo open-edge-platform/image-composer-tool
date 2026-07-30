@@ -985,3 +985,44 @@ func TestResolveOverlayPackages_NoSeedSkipsPurge(t *testing.T) {
 		t.Error("cache must not be purged when there is nothing to resolve")
 	}
 }
+
+func TestBuildResolutionPlan_CarriesPackageMetadata(t *testing.T) {
+	// A closure member with full repo metadata must land in ToInstall carrying
+	// that metadata, so the overlay SBOM writer can enrich the record instead of
+	// emitting a degraded entry (missing supplier/checksum/description).
+	closure := []ospackage.PackageInfo{
+		{
+			Name:        "tree",
+			PkgName:     "tree",
+			Type:        "deb",
+			Version:     "2.1.1-2ubuntu3",
+			Arch:        "amd64",
+			URL:         "http://archive.ubuntu.com/ubuntu/pool/universe/t/tree/tree_2.1.1-2ubuntu3_amd64.deb",
+			Description: "displays an indented directory tree",
+			Origin:      "Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>",
+			License:     "GPL-2.0",
+			Checksums:   []ospackage.Checksum{{Algorithm: "SHA256", Value: "deadbeef"}},
+		},
+	}
+
+	plan := buildResolutionPlan(planInput{
+		family:    PackageManagerAPT,
+		requested: []string{"tree"},
+		seed:      []string{"tree"},
+		closure:   closure,
+		present:   map[string]bool{}, // absent from baseline → an addition
+	})
+
+	if len(plan.ToInstall) != 1 {
+		t.Fatalf("expected 1 package to install, got %d", len(plan.ToInstall))
+	}
+	got := plan.ToInstall[0]
+	if got.Type != "deb" || got.Description != "displays an indented directory tree" ||
+		got.Origin != "Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>" ||
+		got.License != "GPL-2.0" {
+		t.Errorf("metadata not carried into ToInstall: %+v", got)
+	}
+	if len(got.Checksums) != 1 || got.Checksums[0].Value != "deadbeef" {
+		t.Errorf("checksums not carried into ToInstall: %+v", got.Checksums)
+	}
+}

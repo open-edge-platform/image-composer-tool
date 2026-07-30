@@ -235,9 +235,24 @@ func parseDebFileName(fileName string) (string, string) {
 	base := strings.TrimSuffix(fileName, ".deb")
 	parts := strings.Split(base, "_")
 	if len(parts) >= 2 {
-		return parts[0], parts[1]
+		return parts[0], decodeDebEpoch(parts[1])
 	}
 	return base, ""
+}
+
+// decodeDebEpoch reverses dpkg's filename encoding of the epoch separator, where
+// the ':' in an epoch-qualified version (e.g. "1:1.3.dfsg-3.1") is written as
+// "%3a" in the .deb filename. Decoding it keeps a filename-derived versionInfo
+// formatted like the epoch-qualified versions sourced from the repo index, so
+// SBOM version formatting is consistent regardless of the metadata source. Only
+// the epoch delimiter is decoded — no general URL-unescape — so legitimate
+// filename characters are left untouched.
+func decodeDebEpoch(version string) string {
+	if !strings.Contains(version, "%3") {
+		return version
+	}
+	version = strings.ReplaceAll(version, "%3a", ":")
+	return strings.ReplaceAll(version, "%3A", ":")
 }
 
 func stripDebEpoch(version string) string {
@@ -483,13 +498,41 @@ func clearDebPackageCache(cacheDir string) error {
 	return nil
 }
 
+// debMetadataInfosByCachedFile indexes the parsed repo metadata by the .deb base
+// filename it downloads to (filepath.Base of the metadata URL). It lets a warm
+// cache hit recover the full metadata (canonical repo URL, Maintainer/Origin,
+// checksums, description, epoch-qualified version) for a cached artifact instead
+// of the bare name/version parseable from the filename alone. It mirrors the
+// name→info matching isDebPackageCacheOutdated does, so the two stay in step.
+func debMetadataInfosByCachedFile() map[string]ospackage.PackageInfo {
+	metadataInfos := loadDebPackageInfosFromMetadataCache()
+	byFile := make(map[string]ospackage.PackageInfo, len(metadataInfos))
+	for _, pkg := range metadataInfos {
+		if pkg.Name == "" || pkg.URL == "" {
+			continue
+		}
+		byFile[filepath.Base(pkg.URL)] = pkg
+	}
+	return byFile
+}
+
 func buildDebPackageInfosFromCache(cacheDir string, cachedFiles []string) []ospackage.PackageInfo {
+	// Prefer the parsed repo metadata for each cached artifact so warm-cache
+	// SBOM entries carry the same supplier/checksum/description/canonical-URL
+	// completeness as a fresh resolve; without it the cache-hit path emits
+	// degraded records with a local-path downloadLocation.
+	metadataByFile := debMetadataInfosByCachedFile()
+
 	infos := make([]ospackage.PackageInfo, 0, len(cachedFiles))
 	for _, file := range cachedFiles {
-		// The .deb filename follows name_version_arch.deb, so recover both the
-		// name and version from it. Dropping the version here leaves the SBOM
-		// (and any name|version|url comparison built on it) unable to tell an
-		// upgraded package from a removed-and-re-added one.
+		if meta, ok := metadataByFile[file]; ok {
+			infos = append(infos, meta)
+			continue
+		}
+		// Fallback when no parsed metadata is available: recover the name and
+		// version from the .deb filename (name_version_arch.deb). Dropping the
+		// version here leaves the SBOM (and any name|version|url comparison built
+		// on it) unable to tell an upgraded package from a removed-and-re-added one.
 		name, version := parseDebFileName(file)
 		infos = append(infos, ospackage.PackageInfo{
 			Name:    name,
