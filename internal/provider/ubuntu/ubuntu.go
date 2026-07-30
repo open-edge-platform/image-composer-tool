@@ -56,6 +56,13 @@ func (p *ubuntu) Name(dist, arch string) string {
 	return system.GetProviderId(OsName, dist, arch)
 }
 
+// SupportsOverlay implements provider.OverlayCapable: every Ubuntu target routes
+// overlay-mode templates through the overlay pipeline (see overlayPreProcess,
+// overlayBuildImage and overlayPostProcess).
+func (p *ubuntu) SupportsOverlay(_, _ string) bool {
+	return true
+}
+
 // Init will initialize the provider, fetching repo configuration
 func (p *ubuntu) Init(dist, arch string) error {
 

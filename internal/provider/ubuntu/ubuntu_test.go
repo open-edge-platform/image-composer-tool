@@ -2569,3 +2569,15 @@ func TestBuildUserRepoListSkipsPathOnlyRepos(t *testing.T) {
 		t.Errorf("expected codename %q, got %q", "noble", result[0].Codename)
 	}
 }
+
+// TestUbuntuOverlayCapable asserts the provider advertises overlay support via
+// provider.OverlayCapable, which is what build's capability gate probes before
+// letting an overlay-mode template through.
+func TestUbuntuOverlayCapable(t *testing.T) {
+	var _ provider.OverlayCapable = (*ubuntu)(nil) // Compile-time capability check
+
+	u := &ubuntu{}
+	if !provider.SupportsOverlay(u, "ubuntu24", "amd64") {
+		t.Error("Expected ubuntu provider to report overlay support")
+	}
+}

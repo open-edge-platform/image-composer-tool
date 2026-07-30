@@ -82,7 +82,6 @@ systemConfig:
     - systemd-timesyncd
 
   kernel:
-    version: "6.14"
     cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
     packages:
       - linux-image-generic*
