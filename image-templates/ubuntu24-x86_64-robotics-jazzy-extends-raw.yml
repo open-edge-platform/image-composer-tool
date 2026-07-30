@@ -111,11 +111,11 @@ disk:
 # The parent declares no repositories, so all seven below are added.
 #
 # NOTE: three of these share the codename "noble" (ROS 2, Gazebo, RealSense).
-# That is correct -- the codename is the apt suite -- but see
-# docs/architecture-decision-record/analysis-template-extends-triage.md (D1):
-# repositories are merged by codename, so if an ancestor template ever declares
-# a repository, these three collapse into one. Do not add a repository to the
-# parent without reading that note.
+# That is correct -- the codename is the apt suite name that goes into the deb
+# line -- but mergePackageRepositories (internal/config/merge.go) identifies
+# repositories BY codename, so if an ancestor template ever declares a
+# repository, these three collapse into one, silently dropping the ROS 2 and
+# Gazebo sources. Keep all repositories for this image in this layer.
 packageRepositories:
   # ROS 2 Jazzy repository
   - codename: "noble"

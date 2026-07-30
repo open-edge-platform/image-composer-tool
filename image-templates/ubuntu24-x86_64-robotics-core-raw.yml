@@ -89,9 +89,11 @@ disk:
 # and inherited by anything extending this template.
 #
 # NOTE: three of these share the codename "noble" (ROS 2, Gazebo, RealSense).
-# That is correct -- the codename is the apt suite -- but repositories are merged
-# by codename, so a parent that declares its own repository would collapse them.
-# See docs/architecture-decision-record/analysis-template-extends-triage.md (D1).
+# That is correct -- the codename is the apt suite name that goes into the deb
+# line -- but mergePackageRepositories (internal/config/merge.go) identifies
+# repositories BY codename, so a parent that declared its own repository would
+# collapse these three into one, silently dropping the ROS 2 and Gazebo sources.
+# Keep all repositories for this image in this layer.
 packageRepositories:
   # ROS 2 Jazzy repository
   - codename: "noble"

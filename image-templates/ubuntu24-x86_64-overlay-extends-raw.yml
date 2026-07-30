@@ -19,9 +19,8 @@
 # Overlay-specific merge behaviour worth knowing: in overlay mode the merged
 # package list is exactly the templates' declared packages -- the create-mode
 # OS default package set is deliberately NOT unioned in, because the baseline
-# image already provides it. See internal/config/merge.go (overlay mode
-# restriction) and the notes in
-# docs/architecture-decision-record/analysis-template-extends-triage.md.
+# image already provides it. See the overlay-mode package restriction in
+# internal/config/merge.go.
 #
 # Before building, point the parent's baseline.source at a real RAW image on
 # your build host, or override it on the command line:
