@@ -317,15 +317,28 @@ post:
 		// PostProcess is itself the build's cleanup: CleanupChrootEnv + gpg-agent
 		// stop + repo-config restore. Running it under a cancelled parent ctx
 		// would defeat the purpose — every shell.ExecCmd inside PostProcess would
-		// fail-fast with context.Canceled. Bind a detached, timeout-only ctx for
-		// the duration so cleanup actually completes even when a signal fired.
-		postCtx, postCancel := context.WithTimeout(context.Background(), postProcessCleanupBudget)
-		restorePostShell := shell.SetContext(postCtx)
-		restorePostRun := runctx.SetContext(postCtx)
-		postErr := p.PostProcess(template, buildErr)
-		restorePostRun()
-		restorePostShell()
-		postCancel()
+		// fail-fast with context.Canceled.
+		//
+		// Bind a detached, timeout-only ctx ONLY on the signal-cancel path so
+		// cleanup still completes when the ambient ctx is already dead. On a
+		// normal build the ambient ctx is live, so PostProcess runs under it with
+		// NO artificial cap: some providers (overlay) do their heavy artifact
+		// conversion and compression inside PostProcess, and a multi-GB image can
+		// legitimately take far longer than postProcessCleanupBudget — capping it
+		// there would SIGTERM the compressor mid-stream and fail an otherwise
+		// successful build.
+		var postErr error
+		if parentCtx.Err() != nil {
+			postCtx, postCancel := context.WithTimeout(context.Background(), postProcessCleanupBudget)
+			restorePostShell := shell.SetContext(postCtx)
+			restorePostRun := runctx.SetContext(postCtx)
+			postErr = p.PostProcess(template, buildErr)
+			restorePostRun()
+			restorePostShell()
+			postCancel()
+		} else {
+			postErr = p.PostProcess(template, buildErr)
+		}
 		// Some providers' PostProcess (azl, emt, rcd) return the exact buildErr value
 		// they were handed back to the caller once cleanup succeeded. Relabelling that
 		// as "post-processing failed" would misattribute the original build failure to
