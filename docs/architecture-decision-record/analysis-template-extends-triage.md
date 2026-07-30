@@ -282,6 +282,65 @@ stays true on the merged result and the `build.go:294` capability gate still see
 
 ---
 
+## 3a. Verified behaviour of nested chains and overlay composition
+
+Three shipped templates exercise the paths above end to end; the results below were
+produced with `resolve --full` against the built binary.
+
+**Three-level nesting.** `ubuntu24-x86_64-minimal-raw.yml` →
+`ubuntu24-x86_64-robotics-core-raw.yml` → `ubuntu24-x86_64-robotics-slam-raw.yml` resolves
+to a template matching the standalone `ubuntu24-x86_64-robotics-jazzy-raw.yml` on every
+*functional* field — disk size, partition table type, partition offsets and mount points,
+all seven repositories, kernel, bootloader, immutability, `additionalFiles`, and the
+**exact order of all twelve `configurations` commands** across two fold steps. The
+identity strings naturally differ (`image.name`, `systemConfig.name`,
+`systemConfig.description`, and `disk.name` — see below), since these are different
+templates producing differently-named images.
+
+Beyond those identity strings, two substantive differences remain: (a) the six GRUB
+packages inherited from the base parent, which cannot be removed because `mergePackages` is
+a union with no negation syntax, and (b) the *position* of the leaf's packages within the
+merged list.
+
+On (b): the merged set is identical (38 packages either way, ignoring GRUB), but a leaf's
+packages necessarily sort after its parent's, so the SLAM block moves from index 30 to the
+end, after `linux-firmware`. This matters only if declaration order carries meaning, and in
+one place it does — the robotics template deliberately lists the pinned
+`intel-oneapi-runtime-*` packages before `ros-jazzy-desktop` "so the resolver locks these
+versions first, preventing transitive deps from pulling 2026.0.0". That constraint survives
+the split, because both sets live in the same (core) layer: OneAPI occupies indices 25-27
+and `ros-jazzy-desktop` index 28, preserving the relative order. Final install order is in
+any case recomputed by `pkgsorter`'s SCC + topological sort
+(`internal/ospackage/pkgsorter/pkgsorter.go:16`), so template order only influences
+resolution preference, not install sequence.
+
+**Splitting a template across layers is therefore safe only when order-coupled packages
+stay in the same layer.** That is a real constraint on where to cut a template, and it is
+not documented anywhere in the extends reference.
+
+Note the interaction with build ordering: `installImagePkgs`
+(`internal/image/imageos/imageos.go:250`) runs before `addImageConfigs` (`:1055`), so an
+apt pin written by a *parent* layer still applies to a package installed by a *leaf*
+layer — the pins protect post-deployment upgrades, not build-time resolution. Splitting a
+template across layers therefore does not invalidate its pins.
+
+**Overlay + extends.** An overlay template can extend another overlay template:
+`baseline` and `overlayPolicy` propagate forward via the pointer-replace rules at `:118`
+and `:125`, and declared packages accumulate. Mode transitions behave correctly in both
+directions:
+
+| Chain | Result |
+|---|---|
+| overlay parent + overlay child | packages union (`[tree, jq]` + `[htop, ncdu]` → all four); baseline and policy inherited |
+| create-mode parent + overlay child | packages **truncated to the child's declared set**; the parent's create-mode base packages do not leak |
+| overlay parent + create-mode child | `baseline.mode: overlay` propagates; packages accumulate |
+
+The middle row is the one worth recording: the overlay truncation at `:154` tests the
+*current layer's* `IsOverlayMode()`, which invites the conclusion that a later
+non-overlay layer would re-union the create-mode defaults. It does not — see §3.
+
+---
+
 ## 4. Test-coverage gaps
 
 Seventeen extends tests in `internal/config/merge_test.go`, nine `resolve` tests, three
