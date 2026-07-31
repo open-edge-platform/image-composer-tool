@@ -829,8 +829,64 @@ func TestResolveOverlayPackages_ArchQualifiedRequestAlreadyPresent(t *testing.T)
 	}
 }
 
-// TestResolveOverlayPackages_Deterministic confirms identical inputs yield
-// byte-identical plans regardless of input ordering of the closure/artifacts.
+// TestResolveOverlayPackages_PreservesTopologicalInstallOrder reproduces the
+// pre-dependency ordering bug: gawk Pre-Depends on libmpfr6, so dpkg -i must
+// receive libmpfr6 before gawk. The resolver returns artifacts in dependency-first
+// order; the plan must carry that through to ToInstall rather than alphabetizing
+// it (which would place gawk before libmpfr6 and abort the install).
+func TestResolveOverlayPackages_PreservesTopologicalInstallOrder(t *testing.T) {
+	template := &config.ImageTemplate{
+		Target:       config.TargetInfo{OS: "debian", Dist: "debian13", Arch: "amd64"},
+		SystemConfig: config.SystemConfig{Packages: []string{"gawk"}},
+	}
+	info := &BaselineInfo{OS: "debian", Arch: "amd64", PackageManager: PackageManagerAPT}
+
+	// Dependency-first order, as pkgsorter.SortPackages yields: libmpfr6 (and the
+	// other math libs) before gawk.
+	closure := []ospackage.PackageInfo{
+		{PkgName: "libgmp10", Version: "2", URL: "https://r/libgmp10.deb"},
+		{PkgName: "libmpfr6", Version: "4", URL: "https://r/libmpfr6_4.deb"},
+		{PkgName: "libsigsegv2", Version: "2", URL: "https://r/libsigsegv2.deb"},
+		{PkgName: "gawk", Version: "5", URL: "https://r/gawk_5.deb"},
+	}
+	arts := []string{"libgmp10.deb", "libmpfr6_4.deb", "libsigsegv2.deb", "gawk_5.deb"}
+
+	backend := &fakeBackend{fam: PackageManagerAPT, closure: closure, arts: arts}
+	var plan *ResolutionPlan
+	withStubbedResolution(t, backend, []config.ProviderRepoConfig{debProviderRepo()}, nil, func() {
+		var err error
+		plan, err = ResolveOverlayPackages(template, info, nil)
+		if err != nil {
+			t.Fatalf("ResolveOverlayPackages: %v", err)
+		}
+	})
+
+	got := make([]string, 0, len(plan.ToInstall))
+	for _, p := range plan.ToInstall {
+		got = append(got, p.Name)
+	}
+	want := []string{"libgmp10", "libmpfr6", "libsigsegv2", "gawk"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("toInstall order = %v, want dependency-first %v (gawk must come after libmpfr6)", got, want)
+	}
+	// planInstalls must preserve that order onto the dpkg command line.
+	dir := writeArtifacts(t, t.TempDir(), arts...)
+	items, err := planInstalls(&ResolutionPlan{DownloadDir: dir, ToInstall: plan.ToInstall})
+	if err != nil {
+		t.Fatalf("planInstalls: %v", err)
+	}
+	gotArts := make([]string, 0, len(items))
+	for _, it := range items {
+		gotArts = append(gotArts, it.artifact)
+	}
+	if !reflect.DeepEqual(gotArts, arts) {
+		t.Errorf("planInstalls artifact order = %v, want %v", gotArts, arts)
+	}
+}
+
+// TestResolveOverlayPackages_Deterministic confirms the same resolver output yields
+// byte-identical plans, and that the plan preserves the resolver's dependency-first
+// artifact order (now meaningful for dpkg Pre-Depends) rather than alphabetizing it.
 func TestResolveOverlayPackages_Deterministic(t *testing.T) {
 	template := &config.ImageTemplate{
 		Target:       config.TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "amd64"},
@@ -851,16 +907,32 @@ func TestResolveOverlayPackages_Deterministic(t *testing.T) {
 		return plan
 	}
 
-	a := run(
-		[]ospackage.PackageInfo{{PkgName: "curl", Version: "8"}, {PkgName: "libc6", Version: "2"}},
-		[]string{"curl_8.deb", "libc6.deb"},
-	)
-	b := run(
-		[]ospackage.PackageInfo{{PkgName: "libc6", Version: "2"}, {PkgName: "curl", Version: "8"}},
-		[]string{"libc6.deb", "curl_8.deb"},
-	)
+	// The resolver's artifact order is the dependency-first (topological) install
+	// order and is now MEANINGFUL — the plan preserves it so dpkg -i can satisfy
+	// Pre-Depends left-to-right. The determinism contract is therefore "same
+	// resolver output → identical plan", so both runs feed the SAME order.
+	closure := []ospackage.PackageInfo{
+		{PkgName: "libc6", Version: "2", URL: "https://r/libc6.deb"},
+		{PkgName: "curl", Version: "8", URL: "https://r/curl_8.deb"},
+	}
+	arts := []string{"libc6.deb", "curl_8.deb"}
+	a := run(closure, arts)
+	b := run(closure, arts)
 	if !reflect.DeepEqual(a, b) {
-		t.Errorf("plans differ for reordered inputs:\n a=%+v\n b=%+v", a, b)
+		t.Errorf("plans differ for identical inputs:\n a=%+v\n b=%+v", a, b)
+	}
+
+	// ToInstall must follow the topological artifact order (libc6 before curl),
+	// NOT alphabetical (which would put curl first and break Pre-Depends).
+	gotInstall := make([]string, 0, len(a.ToInstall))
+	for _, p := range a.ToInstall {
+		gotInstall = append(gotInstall, p.Name)
+	}
+	if !reflect.DeepEqual(gotInstall, []string{"libc6", "curl"}) {
+		t.Errorf("toInstall order = %v, want dependency-first [libc6 curl]", gotInstall)
+	}
+	if !reflect.DeepEqual(a.Artifacts, arts) {
+		t.Errorf("artifacts = %v, want resolver order %v (not alphabetized)", a.Artifacts, arts)
 	}
 }
 

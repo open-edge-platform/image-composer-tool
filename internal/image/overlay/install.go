@@ -206,8 +206,11 @@ func planInstalls(plan *ResolutionPlan) ([]plannedInstall, error) {
 		items = append(items, plannedInstall{pkg: rp, artifact: artifact})
 	}
 
-	// Deterministic order by artifact filename so the install command is stable.
-	sort.Slice(items, func(i, j int) bool { return items[i].artifact < items[j].artifact })
+	// Preserve plan.ToInstall's order: the resolver put it in dependency-first
+	// (topological) install order so dpkg -i can satisfy Pre-Depends left-to-right
+	// (see orderInstallByArtifacts in resolve.go). It is already deterministic, so
+	// the install command is stable WITHOUT an alphabetical re-sort — which would
+	// reintroduce the pre-dependency ordering bug (e.g. gawk before libmpfr6).
 	return items, nil
 }
 

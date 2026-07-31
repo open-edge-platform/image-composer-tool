@@ -457,7 +457,12 @@ func TestInstallOverlayPackages_NilGuards(t *testing.T) {
 	}
 }
 
-func TestPlanInstalls_MapsAndSorts(t *testing.T) {
+// TestPlanInstalls_PreservesOrder confirms planInstalls maps packages to their
+// artifacts WITHOUT re-sorting: it must preserve plan.ToInstall's dependency-first
+// order (set by the resolver so dpkg -i can satisfy Pre-Depends left-to-right), so
+// a "zpkg before apkg" input stays z.deb before a.deb rather than being
+// alphabetized (which would reintroduce the pre-dependency ordering bug).
+func TestPlanInstalls_PreservesOrder(t *testing.T) {
 	dir := writeArtifacts(t, t.TempDir(), "a.deb", "z.deb")
 	plan := &ResolutionPlan{
 		DownloadDir: dir,
@@ -471,8 +476,8 @@ func TestPlanInstalls_MapsAndSorts(t *testing.T) {
 		t.Fatalf("planInstalls: %v", err)
 	}
 	got := []string{items[0].artifact, items[1].artifact}
-	if !reflect.DeepEqual(got, []string{"a.deb", "z.deb"}) {
-		t.Errorf("artifacts = %v, want sorted [a.deb z.deb]", got)
+	if !reflect.DeepEqual(got, []string{"z.deb", "a.deb"}) {
+		t.Errorf("artifacts = %v, want ToInstall order [z.deb a.deb]", got)
 	}
 }
 
