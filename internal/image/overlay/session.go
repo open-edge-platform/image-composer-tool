@@ -115,6 +115,7 @@ var (
 	builderConfigureFn = RunOverlayConfigurations
 	builderRegenBootFn = RegenerateBoot
 	builderGrubRegenFn = RegenerateGrub
+	builderAddFilesFn  = RunOverlayAdditionalFiles
 	builderResizeFn    = ResizeBaseline
 	builderSBOMFn      = generateOverlaySBOM
 	builderEmitFn      = emitOverlayArtifact
@@ -223,9 +224,11 @@ func (b *Builder) Preprocess() (err error) {
 // Build runs the overlay build phase against the already-mounted baseline: it
 // performs an optional grow-only resize (first, so the added packages have room),
 // installs the approved package plan, runs the template's configuration commands,
-// regenerates the initramfs for any added packages, and finally — on a GRUB2
-// baseline — applies overlayPolicy.kernelCmdline and overlayPolicy.grubDefault and
-// regenerates the GRUB config (never the bootloader binary or the read-only ESP).
+// regenerates the initramfs for any added packages, then — on a GRUB2 baseline —
+// applies overlayPolicy.kernelCmdline and overlayPolicy.grubDefault and regenerates
+// the GRUB config (never the bootloader binary or the read-only ESP), and finally
+// copies the template's additionalFiles into the baseline root (last, so a
+// user-supplied boot artifact is not clobbered by the preceding regeneration).
 //
 // It requires Preprocess to have succeeded; the mount lifecycle opened there is
 // reused here and is not torn down until Postprocess.
@@ -297,6 +300,21 @@ func (b *Builder) Build() error {
 	if err := b.timeStage("GRUB Regeneration", func() error {
 		if gerr := builderGrubRegenFn(b.template, b.info, b.layout.RootMount); gerr != nil {
 			return fmt.Errorf("overlay build: GRUB regeneration failed: %w", gerr)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	// Copy the template's additionalFiles into the baseline root LAST, after both
+	// regeneration stages. This ordering lets a user-supplied boot artifact (e.g. a
+	// prebuilt /boot/initrd.img) survive: dropping it before Boot Regeneration would
+	// let update-initramfs overwrite it. Files meant to be consumed BY regeneration
+	// (initramfs-tools hooks) belong in a configurations command that runs the
+	// generator, which executes earlier in this pipeline.
+	if err := b.timeStage("Additional Files", func() error {
+		if aerr := builderAddFilesFn(b.template, b.layout.RootMount); aerr != nil {
+			return fmt.Errorf("overlay build: additional files copy failed: %w", aerr)
 		}
 		return nil
 	}); err != nil {
