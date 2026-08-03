@@ -1,22 +1,18 @@
-# Robotics AI Suite: Full ROS 2 Jazzy Image Template
+# Robotics AI Suite: Full ROS 2 Jazzy ISO Image Template
 # Ubuntu 24.04 LTS + ROS 2 Jazzy Desktop + Intel OpenVINO + Gazebo Harmonic +
 # Intel RealSense + Robotics SDK + Collab SLAM + Intel GPU/NPU support
 #
-# Full-featured robotics development image based on the setup-robotics-jazzy.sh script.
+# Bootable ISO installer image. Flash to USB, boot, and install to internal drive.
 # Includes ROS 2 Jazzy Desktop, Intel OpenVINO 2025, Gazebo Harmonic physics simulator,
 # Intel RealSense camera libraries (DKMS), Intel NPU drivers, and more.
 #
 # Usage:
-#   sudo -E ./image-composer-tool build image-templates/ubuntu24-x86_64-robotics-jazzy-raw.yml
+#   sudo -E ./image-composer-tool build image-templates/ubuntu24-x86_64-robotics-jazzy-iso.yml
 #
-# VM launch (QEMU example):
-#   qemu-system-x86_64 -machine q35 -enable-kvm -cpu host -smp 8 -m 16384 \
-#     -drive if=pflash,format=raw,readonly=on,file=OVMF_CODE_4M.fd \
-#     -drive if=pflash,format=raw,file=OVMF_VARS_4M.fd \
-#     -drive file=robotics-jazzy-ubuntu24-24.04.raw,format=raw,if=virtio \
-#     -device virtio-net-pci,netdev=net0 \
-#     -netdev user,id=net0,hostfwd=tcp::2222-:22 \
-#     -nographic
+# Flash to USB:
+#   sudo dd if=builds/robotics-jazzy-ubuntu24-24.04.iso of=/dev/sdX bs=4M status=progress conv=fsync
+#
+# Boot from USB, then the live-installer writes to the target drive.
 #
 # ROS 2 is auto-sourced on login. Run demos:
 #   ros2 run turtlesim turtlesim_node &
@@ -31,7 +27,7 @@
 
 # AI-searchable metadata for template discovery
 metadata:
-  description: Full ROS 2 Jazzy robotics image with Intel OpenVINO, Gazebo Harmonic, RealSense, and Intel GPU/NPU support
+  description: Bootable ISO installer for ROS 2 Jazzy robotics image with Intel OpenVINO, Gazebo Harmonic, RealSense, and Intel GPU/NPU support
   use_cases:
     - Full robotics development environment
     - ROS 2 Jazzy Desktop with all tools
@@ -42,6 +38,8 @@ metadata:
     - Intel GPU acceleration (Xe/UHD Graphics)
     - Intel NPU inference offload
     - Edge robotics deployments
+    - Bootable USB installation media
+    - Bare metal provisioning
   keywords:
     - robotics
     - ros2
@@ -57,6 +55,10 @@ metadata:
     - level-zero
     - dkms
     - ubuntu
+    - iso
+    - bootable
+    - installer
+
 image:
   name: robotics-jazzy-ubuntu24
   version: "24.04"
@@ -65,34 +67,7 @@ target:
   os: ubuntu
   dist: ubuntu24
   arch: x86_64
-  imageType: raw
-
-# 24GiB to accommodate ROS 2 Desktop + Gazebo + OpenVINO + Mesa + firmware
-disk:
-  name: robotics-jazzy
-  artifacts:
-    - type: raw
-      compression: gz
-  size: 24GiB
-  partitionTableType: gpt
-  partitions:
-    - id: boot
-      type: esp
-      flags:
-        - esp
-        - boot
-      start: 1MiB
-      end: 513MiB
-      fsType: fat32
-      mountPoint: /boot/efi
-      mountOptions: umask=0077
-    - id: rootfs
-      type: linux-root-amd64
-      start: 513MiB
-      end: "0"
-      fsType: ext4
-      mountPoint: /
-      mountOptions: defaults
+  imageType: iso
 
 packageRepositories:
   # ROS 2 Jazzy repository

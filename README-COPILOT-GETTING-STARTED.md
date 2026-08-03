@@ -79,7 +79,7 @@ Use this to build an image from a template.
 **Starter prompt**
 
 ```text
-Use image-composer-build to build image-templates/debian13-x86_64-minimal-raw.yml.
+Use image-composer-build to build image-templates/debian13/debian13-x86_64-minimal-raw.yml.
 ```
 
 **More examples**
@@ -89,7 +89,7 @@ Use image-composer-build to build user-templates/ubuntu24-dev.yml and tell me wh
 ```
 
 ```text
-Use image-composer-build to build image-templates/emt3-x86_64-minimal-iso.yml and verify output files.
+Use image-composer-build to build image-templates/emt3/emt3-x86_64-minimal-iso.yml and verify output files.
 ```
 
 ```text
