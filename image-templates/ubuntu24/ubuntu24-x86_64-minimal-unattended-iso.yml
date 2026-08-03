@@ -97,5 +97,5 @@ systemConfig:
       home: /home/admin
 
   additionalFiles:
-    - local: ../config/general/isolinux/unattendedinstaller
+    - local: ../../config/general/isolinux/unattendedinstaller
       final: /root/unattendedinstaller

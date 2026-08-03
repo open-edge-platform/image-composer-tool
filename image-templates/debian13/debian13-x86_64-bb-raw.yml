@@ -116,11 +116,11 @@ systemConfig:
     - zstd
 
   additionalFiles:
-    - local: additionalfiles/debian13-bb/hello.sh
+    - local: ../additionalfiles/debian13-bb/hello.sh
       final: /usr/local/sbin/hello.sh
-    - local: additionalfiles/debian13-bb/hooks/hello
+    - local: ../additionalfiles/debian13-bb/hooks/hello
       final: /etc/initramfs-tools/hooks/hello
-    - local: additionalfiles/debian13-bb/scripts/init-bottom/hello
+    - local: ../additionalfiles/debian13-bb/scripts/init-bottom/hello
       final: /etc/initramfs-tools/scripts/init-bottom/hello
 
   configurations:
