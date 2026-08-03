@@ -29,6 +29,14 @@ combinations:
     imageType: iso
     template: ubuntu24-x86_64-robotics-jazzy-iso.yml
 
+  # Planned, no template yet — the UI grays this out (not buildable).
+  - vertical: robotics
+    sku: robotics-jazzy-ubuntu24
+    platform: ptl
+    os: ubuntu24
+    imageType: iso
+    template: ""
+
   - vertical: fed-aero
     sku: edge-node-infra-bkc
     platform: ptl
