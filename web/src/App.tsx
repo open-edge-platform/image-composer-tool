@@ -49,7 +49,7 @@ export default function App() {
     if (state !== 'ready') return
     api
       .listBuilds()
-      .then((builds) => {
+      .then(({ builds }) => {
         const active = builds.find((b) => isActiveStatus(b.status))
         if (active) {
           setBuildId(active.id)

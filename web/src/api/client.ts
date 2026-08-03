@@ -14,6 +14,12 @@ import type {
 const BASE = '/api/v1'
 
 async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await jsonFetchRaw(path, init)
+  return res.json() as Promise<T>
+}
+
+// jsonFetchRaw is jsonFetch but returns the raw Response so callers can inspect headers.
+async function jsonFetchRaw(path: string, init?: RequestInit): Promise<Response> {
   const res = await fetch(BASE + path, {
     ...init,
     headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
@@ -28,7 +34,7 @@ async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new Error(msg)
   }
-  return res.json() as Promise<T>
+  return res
 }
 
 export const api = {
@@ -47,8 +53,15 @@ export const api = {
     }),
 
   // Compose history, newest-first (merges live builds + on-disk meta records).
-  listBuilds: () =>
-    jsonFetch<{ builds: HistoryItem[] }>('/builds').then((r) => r.builds),
+  // Also returns the server↔browser clock offset for correcting elapsed-time labels.
+  listBuilds: async (): Promise<{ builds: HistoryItem[]; clockOffsetMs: number }> => {
+    const res = await jsonFetchRaw('/builds')
+    const dateHeader = res.headers.get('Date')
+    const serverNow = dateHeader ? new Date(dateHeader).getTime() : NaN
+    const clockOffsetMs = Number.isFinite(serverNow) ? serverNow - Date.now() : 0
+    const body = (await res.json()) as { builds: HistoryItem[] }
+    return { builds: body.builds, clockOffsetMs }
+  },
 
   // Cancel an in-flight build. Returns 202 with the cancelling status; the
   // terminal state (cancelled/failed) then arrives over SSE. 409 if the build is

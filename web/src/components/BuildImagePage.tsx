@@ -34,10 +34,12 @@ export function BuildImagePage({
   // Which build is shown on the right. Defaults to the active build; clicking a
   // history row overrides it.
   const [selectedId, setSelectedId] = useState<string | null>(buildId)
+  const [clockOffsetMs, setClockOffsetMs] = useState(0)
 
   const refresh = useCallback(() => {
-    return api.listBuilds().then((builds) => {
+    return api.listBuilds().then(({ builds, clockOffsetMs }) => {
       setHistory(builds)
+      setClockOffsetMs(clockOffsetMs)
       return builds
     }).catch(() => [] as HistoryItem[])
   }, [])
@@ -80,7 +82,12 @@ export function BuildImagePage({
       <h1 className="mb-4 text-2xl font-bold text-[#00285a]">Compose Image</h1>
       {selectedId ? (
         <div className="flex gap-4">
-          <HistorySidebar items={history} selectedId={selectedId} onSelect={setSelectedId} />
+          <HistorySidebar
+            items={history}
+            selectedId={selectedId}
+            onSelect={setSelectedId}
+            clockOffsetMs={clockOffsetMs}
+          />
           <div className="min-w-0 flex-1">
             <BuildView
               key={selectedId}
