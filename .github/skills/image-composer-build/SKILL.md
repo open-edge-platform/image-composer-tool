@@ -229,33 +229,33 @@ gunzip -t <artifact>.gz
 
 ```bash
 cd /path/to/project
-sudo -E ./image-composer-tool build image-templates/ubuntu24-x86_64-minimal-raw.yml
+sudo -E ./image-composer-tool build image-templates/ubuntu24/ubuntu24-x86_64-minimal-raw.yml
 ```
 Output: `*.raw.gz` + `*.vhdx`
 
 ### Debian 13 minimal raw image
 
 ```bash
-sudo -E ./image-composer-tool build image-templates/debian13-x86_64-minimal-raw.yml
+sudo -E ./image-composer-tool build image-templates/debian13/debian13-x86_64-minimal-raw.yml
 ```
 
 ### EMT3 Desktop Virtualization ISO
 
 ```bash
-sudo -E ./image-composer-tool build image-templates/emt3-x86_64-desktop-virtualization-iso.yml
+sudo -E ./image-composer-tool build image-templates/debian13/debian13-x86_64-desktop-virtualization-iso.yml
 ```
 Output: a bootable ISO with QEMU/KVM, GPU SR-IOV, X11, and SELinux.
 
 ### ELXR Cloud image
 
 ```bash
-sudo -E ./image-composer-tool build image-templates/elxr-cloud-amd64.yml
+sudo -E ./image-composer-tool build image-templates/elxr12/elxr-cloud-amd64.yml
 ```
 
 ### RCD10 Rocky Linux minimal raw
 
 ```bash
-sudo -E ./image-composer-tool build image-templates/rcd10-x86_64-minimal-raw.yml
+sudo -E ./image-composer-tool build image-templates/el10/rcd10-x86_64-minimal-raw.yml
 ```
 
 ### Quick template browse by use case
