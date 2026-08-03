@@ -6,8 +6,8 @@
 
 This tutorial supports **two routes** for Debian 13 raw + GRUB images:
 
-1. **Route 1: initramfs-tools flow** using `image-templates/debian13-x86_64-bb-raw.yml`
-2. **Route 2: dracut module flow** using `image-templates/debian13-x86_64-bb-dracut-raw.yml`
+1. **Route 1: initramfs-tools flow** using `image-templates/debian13/debian13-x86_64-bb-raw.yml`
+2. **Route 2: dracut module flow** using `image-templates/debian13/debian13-x86_64-bb-dracut-raw.yml`
 
 Both routes achieve the same goal (run your custom logic during early boot), but they use different initrd tooling and file layouts.
 
@@ -15,8 +15,8 @@ Both routes achieve the same goal (run your custom logic during early boot), but
 
 **Full working examples:**
 
-- `image-templates/debian13-x86_64-bb-raw.yml` with `image-templates/additionalfiles/debian13-bb/` (initramfs-tools flow)
-- `image-templates/debian13-x86_64-bb-dracut-raw.yml` with `image-templates/additionalfiles/debian13-bb-dracut/` (dracut module flow)
+- `image-templates/debian13/debian13-x86_64-bb-raw.yml` with `image-templates/additionalfiles/debian13-bb/` (initramfs-tools flow)
+- `image-templates/debian13/debian13-x86_64-bb-dracut-raw.yml` with `image-templates/additionalfiles/debian13-bb-dracut/` (dracut module flow)
 
 ## Choose your route first
 
@@ -24,8 +24,8 @@ Use exactly one route for your template customization.
 
 | Route | Pick this when | Start from this template |
 | ----- | -------------- | ------------------------ |
-| Route 1: initramfs-tools hook + script | You want the classic Debian `update-initramfs` hook model (`hooks/` + `scripts/init-bottom/`). | `image-templates/debian13-x86_64-bb-raw.yml` |
-| Route 2: dracut module | You prefer dracut module structure under `modules.d/` and dracut module enablement config. | `image-templates/debian13-x86_64-bb-dracut-raw.yml` |
+| Route 1: initramfs-tools hook + script | You want the classic Debian `update-initramfs` hook model (`hooks/` + `scripts/init-bottom/`). | `image-templates/debian13/debian13-x86_64-bb-raw.yml` |
+| Route 2: dracut module | You prefer dracut module structure under `modules.d/` and dracut module enablement config. | `image-templates/debian13/debian13-x86_64-bb-dracut-raw.yml` |
 
 ### Package switch required for each route
 
@@ -69,7 +69,7 @@ Notes:
 
 ## Route 1: initramfs-tools hook + boot script (`bb-raw`)
 
-Use [debian13-x86_64-bb-raw.yml](https://github.com/open-edge-platform/image-composer-tool/blob/main/image-templates/debian13-x86_64-bb-raw.yml) as an example.
+Use [debian13-x86_64-bb-raw.yml](https://github.com/open-edge-platform/image-composer-tool/blob/main/image-templates/debian13/debian13-x86_64-bb-raw.yml) as an example.
 
 Paths in `**local`** are relative to the **directory that contains your template YAML** (`image-templates/…` → `additionalfiles/debian13-bb/…`).
 
@@ -124,7 +124,7 @@ Rename `debian13-bb` in `local` paths to match your folder name. Keep the `**fin
 ## Route 2: dracut module (`bb-dracut-raw`)
 
 If you want the same early-boot marker behavior using dracut modules instead of initramfs-tools hooks, use
-[debian13-x86_64-bb-dracut-raw.yml](https://github.com/open-edge-platform/image-composer-tool/blob/main/image-templates/debian13-x86_64-bb-dracut-raw.yml).
+[debian13-x86_64-bb-dracut-raw.yml](https://github.com/open-edge-platform/image-composer-tool/blob/main/image-templates/debian13/debian13-x86_64-bb-dracut-raw.yml).
 
 This variant keeps the same Debian 13 + GRUB + raw image target but changes how content is added to initrd:
 
@@ -240,8 +240,8 @@ declarative, version-controlled image builds in ICT.
 
 Pick one template based on your chosen route:
 
-- `image-templates/debian13-x86_64-bb-raw.yml`
-- `image-templates/debian13-x86_64-bb-dracut-raw.yml`
+- `image-templates/debian13/debian13-x86_64-bb-raw.yml`
+- `image-templates/debian13/debian13-x86_64-bb-dracut-raw.yml`
 
 Run validate if you use it (see [Usage Guide](../get-started/usage-guide.md)). If validate warns about a missing `local` file, fix the path or add the file under [Where to put files in the repo](#where-to-put-files-in-the-repo).
 

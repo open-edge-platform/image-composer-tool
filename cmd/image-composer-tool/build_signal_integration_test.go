@@ -51,7 +51,7 @@ func TestBuildSIGTERMCleansUpMountsAndLoops(t *testing.T) {
 	// Pick a small user template we know builds against Ubuntu 24. The exact
 	// template doesn't matter — we only need the build to progress far enough
 	// to mount /proc/sys/dev into the chroot before we interrupt it.
-	templatePath := filepath.Join(repoRoot, "image-templates", "ubuntu24-x86_64-edge-raw.yml")
+	templatePath := filepath.Join(repoRoot, "image-templates", "ubuntu24", "ubuntu24-x86_64-edge-raw.yml")
 	if _, err := os.Stat(templatePath); err != nil {
 		t.Skipf("template not present at %s: %v", templatePath, err)
 	}

@@ -234,7 +234,7 @@ build_emt3_raw_image() {
   
   # Temporarily disable exit on error for the build command to capture output
   set +e
-  output=$( sudo -S ./image-composer-tool build image-templates/emt3-x86_64-minimal-raw.yml 2>&1)
+  output=$( sudo -S ./image-composer-tool build image-templates/emt3/emt3-x86_64-minimal-raw.yml 2>&1)
   build_exit_code=$?
   set -e
   
