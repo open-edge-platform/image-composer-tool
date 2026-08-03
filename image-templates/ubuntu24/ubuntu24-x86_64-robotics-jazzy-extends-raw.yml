@@ -1,99 +1,68 @@
-# Robotics AI Suite: Full ROS 2 Jazzy Image Template
-# Ubuntu 24.04 LTS + ROS 2 Jazzy Desktop + Intel OpenVINO + Gazebo Harmonic +
-# Intel RealSense + Robotics SDK + Collab SLAM + Intel GPU/NPU support
+# ROS 2 Jazzy robotics image, built by extending the Ubuntu 24.04 base.
 #
-# Full-featured robotics development image based on the setup-robotics-jazzy.sh script.
-# Includes ROS 2 Jazzy Desktop, Intel OpenVINO 2025, Gazebo Harmonic physics simulator,
-# Intel RealSense camera libraries (DKMS), Intel NPU drivers, and more.
+# This is the worked answer to "I have a template that works and I want to add
+# features on top of it, rather than write a new one from scratch". The image is
+# equivalent to the standalone ubuntu24-x86_64-robotics-jazzy-raw.yml, but it
+# inherits the Ubuntu 24.04 base instead of restating it.
 #
-# Usage:
-#   sudo -E ./image-composer-tool build image-templates/ubuntu24-x86_64-robotics-jazzy-raw.yml
+# Why the minimal image is the parent, and what that costs:
+#   packageRepositories merge by codename, and a codename match overrides the
+#   first existing entry instead of appending. Three of the seven repositories
+#   below share the codename "noble" (ROS 2, Gazebo and RealSense). They survive
+#   only while they sit in a layer whose base repository list is empty, because
+#   mergePackageRepositories returns the child list untouched in that case.
+#   ubuntu24-x86_64-minimal-raw.yml and the OS defaults declare no repositories,
+#   so extending the minimal image keeps all seven. Extending the edge image
+#   instead would merge them against its three placeholder entries and collapse
+#   the three "noble" repositories into one, silently dropping the ROS 2 and
+#   Gazebo sources.
 #
-# VM launch (QEMU example):
-#   qemu-system-x86_64 -machine q35 -enable-kvm -cpu host -smp 8 -m 16384 \
-#     -drive if=pflash,format=raw,readonly=on,file=OVMF_CODE_4M.fd \
-#     -drive if=pflash,format=raw,file=OVMF_VARS_4M.fd \
-#     -drive file=robotics-jazzy-ubuntu24-24.04.raw,format=raw,if=virtio \
-#     -device virtio-net-pci,netdev=net0 \
-#     -netdev user,id=net0,hostfwd=tcp::2222-:22 \
-#     -nographic
+#   The cost of that choice: package lists are a union with no removal syntax, so
+#   this image also installs the parent's six GRUB packages
+#   (grub-efi-amd64-signed, grub2-common, grub-pc-bin, grub-efi-amd64,
+#   grub-efi-amd64-bin, initramfs-tools). They are inert here — the bootloader
+#   provider is overridden back to systemd-boot below — but they do occupy space
+#   in the image. Removing them needs a removal syntax the merge layer does not
+#   have today.
 #
-# ROS 2 is auto-sourced on login. Run demos:
-#   ros2 run turtlesim turtlesim_node &
-#   ros2 run demo_nodes_cpp talker &
-#   ros2 run demo_nodes_cpp listener &
-#
-# OpenVINO inference example:
-#   ros2 launch openvino_node openvino_node.launch.py
-#
-# Gazebo Harmonic simulation:
-#   gz sim shapes.sdf
+# Run `image-composer-tool resolve <this file>` to see the merged result, or
+# `--full` to include the OS defaults as they apply at build time.
 
-# AI-searchable metadata for template discovery
+# AI-searchable metadata for template discovery.
+# metadata is not inherited, so every template declares its own.
 metadata:
-  description: Full ROS 2 Jazzy robotics image with Intel OpenVINO, Gazebo Harmonic, RealSense, and Intel GPU/NPU support
+  description: ROS 2 Jazzy robotics image composed by extending the Ubuntu 24.04 minimal base, with Intel OpenVINO, Gazebo Harmonic, RealSense and Intel GPU/NPU support
   use_cases:
-    - Full robotics development environment
-    - ROS 2 Jazzy Desktop with all tools
-    - Intel OpenVINO AI inference on robots
-    - Gazebo Harmonic physics simulation
-    - Intel RealSense depth camera integration
-    - Collaborative SLAM (collab-slam-lze)
-    - Intel GPU acceleration (Xe/UHD Graphics)
-    - Intel NPU inference offload
-    - Edge robotics deployments
+    - Adding a robotics stack on top of an existing base image
+    - Autonomous mobile robots and robot arms on Intel platforms
+    - ROS 2 development with OpenVINO inference and Gazebo simulation
   keywords:
     - robotics
     - ros2
     - jazzy
+    - extends
+    - composition
     - openvino
     - gazebo
-    - harmonic
     - realsense
     - slam
-    - intel
-    - gpu
-    - npu
-    - level-zero
-    - dkms
-    - ubuntu
+    - ubuntu24
+
+# Inherit the Ubuntu 24.04 minimal image: disk-less base, kernel cmdline and
+# base package set. See the header note for why this parent and not the edge one.
+extends: "ubuntu24-x86_64-minimal-raw.yml"
+
 image:
-  name: robotics-jazzy-ubuntu24
+  name: robotics-jazzy-ubuntu24-extends
   version: "24.04"
 
 target:
-  os: ubuntu
+  os: ubuntu # Must match the parent's target
   dist: ubuntu24
   arch: x86_64
   imageType: raw
 
-# 24GiB to accommodate ROS 2 Desktop + Gazebo + OpenVINO + Mesa + firmware
-disk:
-  name: robotics-jazzy
-  artifacts:
-    - type: raw
-      compression: gz
-  size: 24GiB
-  partitionTableType: gpt
-  partitions:
-    - id: boot
-      type: esp
-      flags:
-        - esp
-        - boot
-      start: 1MiB
-      end: 513MiB
-      fsType: fat32
-      mountPoint: /boot/efi
-      mountOptions: umask=0077
-    - id: rootfs
-      type: linux-root-amd64
-      start: 513MiB
-      end: "0"
-      fsType: ext4
-      mountPoint: /
-      mountOptions: defaults
-
+# All seven repositories are declared here, in one layer. See the header note.
 packageRepositories:
   # ROS 2 Jazzy repository
   - codename: "noble"
@@ -104,8 +73,6 @@ packageRepositories:
   # Intel Edge Controls for Industrial (ECI) repository
   # Priority 1000 ensures ECI packages (systemd+ETF/taprio, PCL+oneAPI, FLANN+oneAPI)
   # are preferred over Ubuntu defaults when version strings differ.
-  # No allowPackages filter — ECI packages have deep transitive dependency chains
-  # that require many ECI-only sub-packages to satisfy.
   - codename: "isar"
     url: "https://eci.intel.com/repos/noble"
     pkey: "https://eci.intel.com/repos/gpg-keys/GPG-PUB-KEY-INTEL-ECI.gpg"
@@ -144,22 +111,55 @@ packageRepositories:
     pkey: "https://librealsense.realsenseai.com/Debian/librealsenseai.asc"
     component: "main"
 
+# disk is replaced as a whole block, never merged field by field. The parent
+# takes the OS default layout; the robotics stack needs 24GiB.
+disk:
+  name: robotics-jazzy # 1:1 mapping to the systemConfigs name
+  artifacts:
+    - type: raw
+      compression: gz
+  size: 24GiB
+  partitionTableType: gpt
+  partitions:
+    - id: boot
+      type: esp
+      flags:
+        - esp
+        - boot
+      start: 1MiB
+      end: 513MiB
+      fsType: fat32
+      mountPoint: /boot/efi
+      mountOptions: umask=0077
+
+    - id: rootfs
+      type: linux-root-amd64
+      start: 513MiB
+      end: "0"
+      fsType: ext4
+      mountPoint: /
+      mountOptions: defaults
+
 systemConfig:
   name: robotics-jazzy
   description: Intel Robotics AI Suite - Full ROS 2 Jazzy with OpenVINO, Gazebo, RealSense, and Intel GPU/NPU
 
+  # The minimal parent selects grub; this image boots via systemd-boot, so the
+  # provider is overridden explicitly.
+  bootloader:
+    bootType: efi
+    provider: systemd-boot
+
+  # The parent enables immutability; the robotics stack needs a writable root.
   immutability:
     enabled: false
 
+  # Merged additively on top of the parent's package list. Child packages are
+  # appended after the parent's, which keeps the oneAPI entries ahead of
+  # ros-jazzy-desktop below.
   packages:
-    # ── Base system ──────────────────────────────────────────────────
-    - ubuntu-minimal
+    # ── Base system (beyond what the parent and OS defaults provide) ──
     - ubuntu-desktop-minimal
-    - systemd
-    - systemd-resolved
-    - systemd-boot
-    - systemd-timesyncd
-    - openssh-server
     - network-manager
     - sudo
     - curl
@@ -170,13 +170,10 @@ systemConfig:
     - lsb-release
     - debconf-utils
 
-    # Boot / initramfs (required for UKI)
-    - dracut-core
-    - cryptsetup-bin
-
     # ── Intel OneAPI runtime (pinned to 2025.3.x) ───────────────────
-    # Listed before ros-jazzy-desktop so the resolver locks these versions
-    # first, preventing transitive deps from pulling 2026.0.0.
+    # ORDER-COUPLED: must stay ahead of ros-jazzy-desktop so the resolver locks
+    # these versions first, preventing transitive deps from pulling 2026.0.0.
+    # Keep these in the same layer as ros-jazzy-desktop.
     - intel-oneapi-runtime-compilers_2025.3.3-30
     - intel-oneapi-runtime-compilers-common_2025.3.3-30
     - intel-oneapi-runtime-opencl_2025.3.3-30
@@ -215,11 +212,13 @@ systemConfig:
     - intel-level-zero-npu
     - intel-driver-compiler-npu
 
+  # Per-field override: the parent's cmdline is kept, the kernel package
+  # replaced with the HWE kernel the robotics drivers build against.
   kernel:
-    cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
     packages:
       - linux-image-generic-hwe-24.04
 
+  # Appended after any commands the parent declares, in chain order.
   configurations:
     # ── ROS 2 environment setup ────────────────────────────────────
     - cmd: "echo 'source /opt/ros/jazzy/setup.bash' >> /etc/bash.bashrc"
