@@ -117,11 +117,11 @@ systemConfig:
     - zstd
 
   additionalFiles:
-    - local: additionalfiles/debian13-bb-dracut/modules.d/91hello/module-setup.sh
+    - local: ../additionalfiles/debian13-bb-dracut/modules.d/91hello/module-setup.sh
       final: /usr/lib/dracut/modules.d/91hello/module-setup.sh
-    - local: additionalfiles/debian13-bb-dracut/modules.d/91hello/hello.sh
+    - local: ../additionalfiles/debian13-bb-dracut/modules.d/91hello/hello.sh
       final: /usr/lib/dracut/modules.d/91hello/hello.sh
-    - local: additionalfiles/debian13-bb-dracut/modules.d/91hello/initqueue-sample.sh
+    - local: ../additionalfiles/debian13-bb-dracut/modules.d/91hello/initqueue-sample.sh
       final: /usr/lib/dracut/modules.d/91hello/initqueue-sample.sh
 
   configurations:
