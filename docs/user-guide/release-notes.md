@@ -94,7 +94,17 @@
 
 - Network schema validation: IPv4/IPv6 CIDR addresses, gateway addresses, and nameservers in `systemConfig.network` are now validated against typed formats in the JSON schema; DHCP and static addresses cannot be combined on the same interface.
 
+- Image templates grouped by distribution: `image-templates/` is now organized into one subdirectory per `target.dist` (`azl3/`, `debian13/`, `el10/`, `elxr12/`, `elxr13/`, `emt3/`, `ubuntu24/`, `ubuntu26/`) instead of a single flat listing of 60 files. Filenames are unchanged, so `image-templates/ubuntu24-x86_64-minimal-raw.yml` becomes `image-templates/ubuntu24/ubuntu24-x86_64-minimal-raw.yml`. **If you reference a template by path in a script or automation, add the distribution directory.** Templates packaged into the `.deb` under `/usr/share/ict/examples/` gain the same subdirectories. Distribution is the grouping used because an `extends:` chain must be siblings in one directory and must share `os`/`dist`/`arch`/`imageType`, so a distribution directory can never split a valid chain. New guides ship alongside the templates: `image-templates/README.md` (catalog), `COMPOSITION.md` (`extends:` and overlay mode) and `CONVENTIONS.md` (naming), plus a `README.md` per distribution.
+
+- Templates composed with `extends` instead of duplication: Several templates now inherit a base template rather than restating it. `emt3-x86_64-emf-raw.yml` and `emt3-x86_64-dlstreamer.yml` extend `emt3-x86_64-edge-raw.yml`, `emt3-x86_64-emf-rt-raw.yml` extends `emt3-x86_64-emf-raw.yml`, and `debian13-x86_64-bb-raw.yml` extends `debian13-x86_64-minimal-raw.yml`. This removes a 41-package block that had been copied verbatim into four EMT3 templates. A new `ubuntu24-x86_64-robotics-jazzy-extends-raw.yml` shows the same technique for the robotics stack on top of `ubuntu24-x86_64-minimal-raw.yml`; the standalone `ubuntu24-x86_64-robotics-jazzy-raw.yml` is retained for comparison. Each derived template was verified with `resolve --full` to produce the same functional fields as before. Note that because package lists are a union with no removal syntax, a derived template also installs its parent's packages — the robotics example documents the six GRUB packages this costs it.
+
 **Fixed**
+
+- Templates in subdirectories are now discovered: template scanning walked only the top level of the templates directory and skipped subdirectories, which would have hidden every template from the AI/RAG index and the web UI template list once templates were grouped into per-distribution directories. The scan is now recursive, as are the `image-composer-*` Copilot skill scripts.
+
+- `elxr-cloud-amd64.yml` additional files were silently dropped: the template referenced `files/etc/...` while the files ship in `elxr-cloud-amd64/files/etc/...`, so all four `additionalFiles` entries failed to resolve and were skipped with a warning rather than being copied into the image.
+
+- Drifted RealSense apt pin in the robotics raw template: `ubuntu24-x86_64-robotics-jazzy-raw.yml` pinned `librealsense2` where its ISO counterpart pinned `librealsense2*`, leaving the RealSense sub-packages unpinned in raw images. Both templates now use the glob.
 
 - `fix(ubuntu)`: `AllowPackages` not propagated to debutils.Repository (#480): The `allowPackages` list in user-provided package repository configuration was silently dropped instead of being passed through to the DEB package resolver.
 
