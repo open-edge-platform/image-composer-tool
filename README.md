@@ -92,7 +92,13 @@ Check a template for errors before starting a build:
 
 Templates are YAML files that define what goes into your image — OS, packages,
 kernel, partitioning, and more. Ready-to-use examples are in
-[`image-templates/`](./image-templates/).
+[`image-templates/`](./image-templates/), grouped into one subdirectory per
+distribution and catalogued in
+[`image-templates/README.md`](./image-templates/README.md).
+
+To build a variant of an image that already works, inherit it with `extends:`
+rather than copying it — see
+[`image-templates/COMPOSITION.md`](./image-templates/COMPOSITION.md).
 
 A minimal template looks like this:
 
