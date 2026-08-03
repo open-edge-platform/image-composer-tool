@@ -24,13 +24,13 @@ CANDIDATE_DIRS = [
 
 def find_templates_dir():
     for d in CANDIDATE_DIRS:
-        if d.exists() and list(d.glob("*.yml")):
+        if d.exists() and list(d.rglob("*.yml")):
             return d
     # Search from cwd upward
     cwd = Path.cwd()
     for parent in [cwd] + list(cwd.parents):
         td = parent / "image-templates"
-        if td.exists() and list(td.glob("*.yml")):
+        if td.exists() and list(td.rglob("*.yml")):
             return td
     return None
 
@@ -127,7 +127,7 @@ def main():
         sys.exit(1)
 
     # Gather all template files
-    files = sorted(templates_dir.glob("*.yml"))
+    files = sorted(templates_dir.rglob("*.yml"))
 
     # Parse filter keyword
     filter_keyword = None
