@@ -1,3 +1,12 @@
+# Custom dracut module on Debian 13, route 2 of 2.
+#
+# This template stays standalone on purpose. Its initramfs-tools sibling,
+# debian13-x86_64-bb-raw.yml, inherits debian13-x86_64-minimal-raw.yml, but this
+# one cannot: the minimal image declares cloud-initramfs-growroot, which depends
+# on initramfs-tools, and package lists are a union with no removal syntax. A
+# child cannot drop an inherited package, so extending the minimal image would
+# pull initramfs-tools into a dracut image and defeat the purpose of this route.
+
 # AI-searchable metadata for template discovery
 metadata:
   description: Debian 13 minimal raw image with initrd hello hook via dracut-core (GRUB)
