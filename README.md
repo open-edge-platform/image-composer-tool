@@ -70,10 +70,10 @@ sudo apt install systemd-ukify mmdebstrap
 
 ```bash
 # If built with go build:
-sudo -E ./image-composer-tool build image-templates/azl3-x86_64-edge-raw.yml
+sudo -E ./image-composer-tool build image-templates/azl3/azl3-x86_64-edge-raw.yml
 
 # If built with earthly:
-sudo -E ./build/image-composer-tool build image-templates/azl3-x86_64-edge-raw.yml
+sudo -E ./build/image-composer-tool build image-templates/azl3/azl3-x86_64-edge-raw.yml
 ```
 
 That's it. The output image will be under
@@ -85,7 +85,7 @@ That's it. The output image will be under
 Check a template for errors before starting a build:
 
 ```bash
-./image-composer-tool validate image-templates/azl3-x86_64-edge-raw.yml
+./image-composer-tool validate image-templates/azl3/azl3-x86_64-edge-raw.yml
 ```
 
 ## Image Templates
