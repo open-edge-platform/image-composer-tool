@@ -8,6 +8,14 @@
 #     -> emt3-x86_64-emf-raw.yml   EMF: persistent /opt, verity root
 #          -> this file            EMF-RT: real-time GPU driver
 #
+# What inheritance costs here: the edge image at the root of the chain declares
+# three sample repositories — company-internal, dev-tools and intel-openvino —
+# whose URLs are the literal placeholder "<URL>". This template inherits all
+# three, where the standalone version it replaced declared none. They are inert:
+# rpmutils skips any repository whose URL is "<URL>" before fetching, and EMT3 is
+# RPM-based so apt-source generation never runs for it at all. Nothing reaches
+# the image, but `resolve --full` will show them.
+#
 # Run `image-composer-tool resolve <this file>` to see the merged result.
 
 # AI-searchable metadata for template discovery.

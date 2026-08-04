@@ -4,6 +4,14 @@
 # the persistent-mount package pair, a three-partition layout with a /opt
 # persistent partition, and a verity root on the kernel command line.
 #
+# What inheritance costs here: the edge image declares three sample
+# repositories — company-internal, dev-tools and intel-openvino — whose URLs are
+# the literal placeholder "<URL>". This template inherits all three, where the
+# standalone version it replaced declared none. They are inert: rpmutils skips
+# any repository whose URL is "<URL>" before fetching, and EMT3 is RPM-based so
+# apt-source generation never runs for it at all. Nothing reaches the image, but
+# `resolve --full` will show them.
+#
 # Run `image-composer-tool resolve <this file>` to see the merged result, or
 # `--full` to include the OS defaults as they apply at build time.
 

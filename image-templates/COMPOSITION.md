@@ -200,8 +200,23 @@ Before and after any split, compare the resolved output:
 diff /tmp/before.yml /tmp/after.yml
 ```
 
-Expect differences only in `metadata`, `image.name` and `disk.name`. Anything
-else means the image changed.
+Expect differences in `metadata`, `image.name` and `disk.name`, and in
+`packageRepositories` when the parent declares repositories the child did not.
+Anything else means the image changed.
+
+That fourth case is easy to overlook, so check it deliberately. The EMT3 chain is
+the worked example: `emt3-x86_64-edge-raw.yml` declares three sample repositories
+(`company-internal`, `dev-tools`, `intel-openvino`) whose URLs are the literal
+placeholder `<URL>`, so `emf-raw` and `emf-rt-raw` resolve to three repositories
+where their standalone versions had none, and `dlstreamer` resolves to six rather
+than three.
+
+An inherited-repository diff is benign only when the added entries are inert or
+already present. Those three are inert on two counts — `rpmutils` skips any
+repository whose URL is `<URL>` before fetching, and EMT3 is RPM-based so
+apt-source generation never runs for it. If the inherited entries are *real*
+repositories, they change what the resolver can see, and you have changed the
+image. Check the URLs, not just the count.
 
 ---
 
