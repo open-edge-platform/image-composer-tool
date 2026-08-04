@@ -35,10 +35,14 @@ Templates define the full image specification: target OS/distribution, disk layo
 | **AZL3** (Azure Linux 3) | `azl3-` | minimal-raw, minimal-iso, minimal-initrd, edge-raw, dlstreamer (×86_64 + aarch64) |
 | **ELXR12** | `elxr12-` | minimal-raw, minimal-iso, minimal-initrd, edge-raw, dlstreamer, cloud (×86_64 + aarch64) |
 | **ELXR Edge 26.04** | `elxr-edge-26.04-` | minimal-raw, minimal-iso, minimal-initrd, edge-raw (×86_64 + aarch64) |
-| **EMT3** | `emt3-` | minimal-raw, minimal-iso, minimal-initrd, edge-raw, desktop-virtualization-iso, dlstreamer, emf-raw, emf-rt-raw, elvin-emf (×86_64) |
+| **EMT3** | `emt3-` | minimal-raw, minimal-iso, minimal-initrd, edge-raw, dlstreamer, emf-raw, emf-rt-raw (×86_64) |
 | **RCD10** (Rocky Linux) | `rcd10-` | minimal-raw, rockylinux, dlstreamer (×86_64) |
 
-Each combination maps to a template file named `<prefix><variant>.yml` in `image-templates/`.
+Each combination maps to a template file named `<prefix><variant>.yml` in
+`image-templates/<target.dist>/` — templates are grouped into one subdirectory per
+distribution (`ubuntu24/`, `emt3/`, `debian13/`, `azl3/`, `elxr12/`, `elxr13/`,
+`el10/`, `ubuntu26/`). Note the directory is the distribution the template
+declares, so `rcd10-*.yml` live in `el10/` and `elxr-edge-26.04-*.yml` in `elxr13/`.
 
 > **Reference files:** `references/gpg-key-workaround.md` — GPG key verification failures and the `[trusted=yes]` fix. `references/non-fatal-chroot-warnings.md` — systemd-boot EFI variable warnings and other non-fatal chroot errors.
 
@@ -239,7 +243,7 @@ Output: `*.raw.gz` + `*.vhdx`
 sudo -E ./image-composer-tool build image-templates/debian13/debian13-x86_64-minimal-raw.yml
 ```
 
-### EMT3 Desktop Virtualization ISO
+### Debian 13 Desktop Virtualization ISO
 
 ```bash
 sudo -E ./image-composer-tool build image-templates/debian13/debian13-x86_64-desktop-virtualization-iso.yml
