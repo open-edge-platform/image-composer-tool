@@ -420,7 +420,10 @@ components:
                 enum: [raw, iso, qcow]
               template:
                 type: string
-                description: Filename in image-templates/
+                description: >-
+                  Filename in image-templates/. An empty string marks a planned
+                  combination whose template is not yet ready: the UI lists it
+                  but grays it out and refuses to compose/build it.
                 example: ubuntu24-x86_64-robotics-jazzy-iso.yml
         verticals:
           type: array

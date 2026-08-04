@@ -84,8 +84,11 @@ function autoFillCascade(manifest: Manifest, selection: Selection): void {
     if (selection[field]) continue
     const opts = cascadingOptions(manifest, selection)
     const list = opts[optsKey[field]] as DropdownOption[]
-    if (list.length > 0) {
-      selection[field] = list[0].id
+    // Skip grayed-out (unavailable) options so we never auto-select a
+    // combination that has no template behind it.
+    const first = list.find((o) => !o.disabled)
+    if (first) {
+      selection[field] = first.id
     }
   }
 }
@@ -97,26 +100,35 @@ function labelFor(options: { id: string; displayName: string }[], id: string): s
 }
 
 // Distinct ids present in combinations, optionally filtered by prior selections.
+// For each id, `available` is true when at least one matching combination has a
+// template behind it; ids reachable only through template-less (planned but not
+// ready) combinations are returned with available=false so the UI can gray them.
 function distinct(
   combos: Combination[],
   field: keyof Combination,
   filter: Partial<Selection>,
-): string[] {
-  const out: string[] = []
+): { id: string; available: boolean }[] {
+  const order: string[] = []
+  const availById = new Map<string, boolean>()
   for (const c of combos) {
     const matches = Object.entries(filter).every(
       ([k, v]) => !v || c[k as keyof Combination] === v,
     )
-    if (matches && c[field] && !out.includes(c[field] as string)) {
-      out.push(c[field] as string)
-    }
+    if (!matches) continue
+    const id = c[field] as string
+    if (!id) continue
+    if (!availById.has(id)) order.push(id)
+    // Treat a whitespace-only template as unavailable too, so a formatting slip
+    // in the manifest cannot accidentally enable a planned combination.
+    availById.set(id, (availById.get(id) ?? false) || c.template.trim() !== '')
   }
-  return out
+  return order.map((id) => ({ id, available: availById.get(id) ?? false }))
 }
 
 export interface DropdownOption {
   id: string
   label: string
+  disabled?: boolean
 }
 
 export function cascadingOptions(
@@ -132,8 +144,15 @@ export function cascadingOptions(
   matched: Combination | null
 } {
   const c = manifest.combinations
-  const map = (ids: string[], labels: { id: string; displayName: string }[]) =>
-    ids.map((id) => ({ id, label: labelFor(labels, id) }))
+  const map = (
+    entries: { id: string; available: boolean }[],
+    labels: { id: string; displayName: string }[],
+  ): DropdownOption[] =>
+    entries.map(({ id, available }) => ({
+      id,
+      label: labelFor(labels, id),
+      disabled: !available,
+    }))
 
   const verticals = map(distinct(c, 'vertical', {}), manifest.verticals)
   const skus = map(
@@ -163,7 +182,11 @@ export function cascadingOptions(
     os: selection.os,
   })
   const kernelLabels: Record<string, string> = { standard: 'Standard', rt: 'Real-Time' }
-  const kernels = kernelIds.map((id) => ({ id, label: kernelLabels[id] ?? id }))
+  const kernels = kernelIds.map(({ id, available }) => ({
+    id,
+    label: kernelLabels[id] ?? id,
+    disabled: !available,
+  }))
 
   const imageTypeIds = distinct(c, 'imageType', {
     vertical: selection.vertical,
@@ -172,11 +195,16 @@ export function cascadingOptions(
     os: selection.os,
     ...(kernels.length > 0 ? { kernel: selection.kernel } : {}),
   })
-  const imageTypes = imageTypeIds.map((id) => ({ id, label: id.toUpperCase() }))
+  const imageTypes = imageTypeIds.map(({ id, available }) => ({
+    id,
+    label: id.toUpperCase(),
+    disabled: !available,
+  }))
 
   const matched =
     c.find(
       (x) =>
+        x.template.trim() !== '' &&
         x.vertical === selection.vertical &&
         (x.sku || '') === selection.sku &&
         x.platform === selection.platform &&
