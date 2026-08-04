@@ -5,6 +5,13 @@
 # template inherits it and adds only the media/AI stack, the repositories it
 # comes from, and a larger disk.
 #
+# What inheritance costs here: alongside the three repositories declared below,
+# this template also inherits the edge image's three sample repositories —
+# company-internal, dev-tools and intel-openvino — whose URLs are the literal
+# placeholder "<URL>", so `resolve --full` reports six rather than three. They are
+# inert: rpmutils skips any repository whose URL is "<URL>" before fetching, and
+# EMT3 is RPM-based so apt-source generation never runs for it at all.
+#
 # Run `image-composer-tool resolve <this file>` to see the merged result, or
 # `--full` to include the OS defaults as they apply at build time.
 
