@@ -107,13 +107,20 @@ never uses, because it boots with systemd-boot. That is a real cost, accepted
 deliberately and documented in the template, because the alternative was worse —
 see the next point.
 
-**2. Repositories with the same codename collapse.** `packageRepositories` merge
-by `codename`, and a match overrides the first existing entry rather than
-appending. Duplicate codenames survive only inside a single layer, where the
-merge returns the child list untouched.
+**2. Repositories with the same codename collapse — but only if two layers both
+declare them.** `packageRepositories` merge by `codename`, and a match overrides
+the first existing entry rather than appending. The merge short-circuits when
+either side is empty, though, so the precondition matters:
 
-This is easy to trigger and silent when it happens. A parent declaring one
-`noble` repository plus a child declaring two yields **one**:
+```go
+// internal/config/merge.go
+if len(userRepos) == 0 { return defaultRepos }   // parent list passes through INTACT
+if len(defaultRepos) == 0 { return userRepos }   // child list passes through INTACT
+```
+
+So duplicate codenames are fine as long as **only one layer in the chain declares
+`packageRepositories`**. Two layers declaring them is where sources vanish. A
+parent declaring one `noble` plus a child declaring two yields **one**:
 
 ```yaml
 # parent.yml
@@ -128,10 +135,15 @@ packageRepositories:
     url: "https://child.example/realsense"
 ```
 
-The robotics templates declare three repositories all codenamed `noble` (ROS 2,
-Gazebo, RealSense). Split them across layers and two package sources disappear
-with no error. **Keep a repository set in one layer**, and check the result with
-`resolve --full` whenever you move one.
+The robotics chain shows the safe pattern. `ubuntu24-x86_64-robotics-core-raw.yml`
+declares all seven repositories — three of them codenamed `noble` (ROS 2, Gazebo,
+RealSense) — and `ubuntu24-x86_64-robotics-slam-raw.yml` declares **none**, so it
+inherits all seven intact. That is why the RealSense repository lives in the core
+template even though only the SLAM layer installs RealSense packages.
+
+**Declare a repository set once, in the layer nearest the root that needs it, and
+leave descendants empty.** Check with `resolve --full` whenever you move one —
+the count is the tell.
 
 **3. `metadata` does not inherit.** It is valid in the schema, but there is no
 corresponding field on `ImageTemplate`, so it is discarded at parse time. It
@@ -152,14 +164,25 @@ stable** between runs; do not depend on it.
 
 The candidates that work cleanly are the ones where the child's package set is a
 **superset** of the parent's — then inheriting adds nothing unwanted. In this
-directory that was true of the EMT3 and Debian families:
+directory that was true of the EMT3, Debian and Ubuntu robotics families:
 
 ```
 emt3-x86_64-edge-raw.yml            41 packages
   -> emt3-x86_64-emf-raw.yml        +2
   |    -> emt3-x86_64-emf-rt-raw.yml  + real-time GPU driver
   -> emt3-x86_64-dlstreamer.yml     +8, +3 repositories
+
+ubuntu24-x86_64-minimal-raw.yml     11 packages
+  -> ubuntu24-x86_64-robotics-core-raw.yml    + ROS 2 Jazzy, OpenVINO, Gazebo, 7 repos
+       -> ubuntu24-x86_64-robotics-slam-raw.yml  + collab-SLAM, RealSense, NPU
 ```
+
+**An intermediate level should be worth building on its own.** `robotics-core` is
+a complete robotics image (ROS 2 Jazzy Desktop, OpenVINO, Gazebo) that someone
+can build directly, *and* the base the SLAM layer extends. That is what makes a
+three-level chain worth having rather than just deeper. The leaf is then genuinely
+thin — 42 non-comment lines against 151 for the standalone equivalent, because it
+inherits the disk layout, the repositories, the bootloader and the kernel.
 
 Watch out for **order-coupled packages**. The robotics templates list
 `intel-oneapi-runtime-*` before `ros-jazzy-desktop` so the resolver pins those

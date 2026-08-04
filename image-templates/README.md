@@ -19,7 +19,7 @@ Templates are grouped by the distribution they target — the value of
 
 | Directory | Distribution | Templates | CI-built |
 |---|---|---|---|
-| [`ubuntu24/`](./ubuntu24/) | Ubuntu 24.04 | 26 | 6 |
+| [`ubuntu24/`](./ubuntu24/) | Ubuntu 24.04 | 27 | 6 |
 | [`debian13/`](./debian13/) | Debian 13 | 7 | 0 |
 | [`elxr12/`](./elxr12/) | Wind River eLxr 12 | 7 | 5 |
 | [`emt3/`](./emt3/) | Edge Microvisor Toolkit 3 | 7 | 4 |
@@ -27,7 +27,7 @@ Templates are grouped by the distribution they target — the value of
 | [`elxr13/`](./elxr13/) | Wind River eLxr 13 (26.04) | 5 | 4 |
 | [`el10/`](./el10/) | Red Hat compatible 10 | 2 | 0 |
 | [`ubuntu26/`](./ubuntu26/) | Ubuntu 26.04 | 1 | 0 |
-| | **Total** | **61** | **24** |
+| | **Total** | **62** | **24** |
 
 Two directories hold data rather than templates: `additionalfiles/` (files
 templates copy into the image) and `elxr-cloud-amd64/` (the payload for the
@@ -55,7 +55,7 @@ build script, a bug report, or `internal/api/data/manifest.yaml`. See
 | an installer you can boot from USB | any `*-iso.yml` |
 | a cloud image | `ubuntu24/ubuntu24-server-cloud-amd64.yml`, `elxr12/elxr-cloud-amd64.yml` |
 | AI video analytics | any `*-dlstreamer.yml` |
-| a robotics stack | `ubuntu24/ubuntu24-x86_64-robotics-jazzy-raw.yml` |
+| a robotics stack | `ubuntu24/ubuntu24-x86_64-robotics-core-raw.yml` (or `-robotics-slam-raw.yml` for SLAM/RealSense) |
 | to add features to an image that already works | [COMPOSITION.md](./COMPOSITION.md) |
 
 Pick the template whose `target` matches your hardware, copy it, and edit. If
@@ -64,7 +64,7 @@ probably want `extends:` instead of a copy.
 
 ## Composed templates
 
-Six templates inherit from another instead of restating it:
+Seven templates inherit from another instead of restating it:
 
 | Template | Inherits | Adds |
 |---|---|---|
@@ -72,8 +72,15 @@ Six templates inherit from another instead of restating it:
 | `emt3/emt3-x86_64-emf-rt-raw.yml` | `emt3-x86_64-emf-raw.yml` | real-time GPU driver |
 | `emt3/emt3-x86_64-dlstreamer.yml` | `emt3-x86_64-edge-raw.yml` | media/AI stack, 3 repositories, 8GiB disk |
 | `debian13/debian13-x86_64-bb-raw.yml` | `debian13-x86_64-minimal-raw.yml` | `initramfs-tools`, 3 hook files, 3 commands |
-| `ubuntu24/ubuntu24-x86_64-robotics-jazzy-extends-raw.yml` | `ubuntu24-x86_64-minimal-raw.yml` | ROS 2 Jazzy, OpenVINO, Gazebo, RealSense |
+| `ubuntu24/ubuntu24-x86_64-robotics-core-raw.yml` | `ubuntu24-x86_64-minimal-raw.yml` | ROS 2 Jazzy, OpenVINO, Gazebo, 7 repositories |
+| `ubuntu24/ubuntu24-x86_64-robotics-slam-raw.yml` | `ubuntu24-x86_64-robotics-core-raw.yml` | collaborative SLAM, RealSense, Intel NPU |
 | `ubuntu24/ubuntu24-x86_64-extends-example-raw.yml` | `ubuntu24-x86_64-minimal-raw.yml` | two packages (minimal demo) |
+
+The Ubuntu robotics templates form a **three-level chain** — `minimal-raw` →
+`robotics-core-raw` → `robotics-slam-raw` — where the middle level is both a
+working image and a reusable parent. The leaf is 42 non-comment lines against 151
+for `robotics-jazzy-raw.yml`, the standalone equivalent kept alongside it for
+comparison.
 
 `ubuntu24/ubuntu24-x86_64-overlay-raw.yml` demonstrates the other composition
 mode: layering packages onto a pre-built image instead of building from scratch.
@@ -87,7 +94,7 @@ To see what any of them actually resolves to:
 
 ## What CI builds
 
-24 of the 61 templates are built by a `scripts/build_*.sh` script on every pull
+24 of the 62 templates are built by a `scripts/build_*.sh` script on every pull
 request. The rest are validated by schema but **never built by CI**, so if you
 change one, build it yourself before opening a PR. Each per-distribution README
 marks which of its templates are covered.
