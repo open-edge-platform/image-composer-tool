@@ -1,6 +1,6 @@
 # Ubuntu 24.04 templates
 
-`target.dist: ubuntu24` — 26 templates.
+`target.dist: ubuntu24` — 27 templates.
 
 | Template | Arch | Type | Purpose | CI |
 |---|---|---|---|---|
@@ -26,21 +26,32 @@
 | [`ubuntu24-x86_64-minimal-raw-expand-partition.yml`](./ubuntu24-x86_64-minimal-raw-expand-partition.yml) | x86_64 | raw | partition expansion | — |
 | [`ubuntu24-x86_64-minimal-raw.yml`](./ubuntu24-x86_64-minimal-raw.yml) | x86_64 | raw | minimal | yes |
 | [`ubuntu24-x86_64-overlay-raw.yml`](./ubuntu24-x86_64-overlay-raw.yml) <br>*overlay mode* | x86_64 | raw | overlay-mode demo | — |
-| [`ubuntu24-x86_64-robotics-jazzy-extends-raw.yml`](./ubuntu24-x86_64-robotics-jazzy-extends-raw.yml) <br>*extends `ubuntu24-x86_64-minimal-raw.yml`* | x86_64 | raw | robotics / ROS 2 | — |
+| [`ubuntu24-x86_64-robotics-core-raw.yml`](./ubuntu24-x86_64-robotics-core-raw.yml) <br>*extends `ubuntu24-x86_64-minimal-raw.yml`* | x86_64 | raw | robotics / ROS 2 (core) | — |
 | [`ubuntu24-x86_64-robotics-jazzy-raw.yml`](./ubuntu24-x86_64-robotics-jazzy-raw.yml) | x86_64 | raw | robotics / ROS 2 | — |
+| [`ubuntu24-x86_64-robotics-slam-raw.yml`](./ubuntu24-x86_64-robotics-slam-raw.yml) <br>*extends `ubuntu24-x86_64-robotics-core-raw.yml`* | x86_64 | raw | robotics / ROS 2 (SLAM) | — |
 | [`ubuntu24-x86_64-ros2.yml`](./ubuntu24-x86_64-ros2.yml) | x86_64 | raw | robotics / ROS 2 | — |
 | [`ubuntu24-x86_64-agentic-wsl2.yml`](./ubuntu24-x86_64-agentic-wsl2.yml) | x86_64 | wsl2 | WSL2 agentic | — |
 
 ## Inheritance
 
-- `ubuntu24-x86_64-extends-example-raw.yml` extends `ubuntu24-x86_64-minimal-raw.yml`
-- `ubuntu24-x86_64-robotics-jazzy-extends-raw.yml` extends `ubuntu24-x86_64-minimal-raw.yml`
+The robotics templates form a three-level chain. Each level is a working image
+and the two upper levels are reusable parents:
+
+```
+ubuntu24-x86_64-minimal-raw.yml
+  -> ubuntu24-x86_64-robotics-core-raw.yml     ROS 2 Jazzy, OpenVINO, Gazebo, 7 repositories
+       -> ubuntu24-x86_64-robotics-slam-raw.yml  + collaborative SLAM, RealSense, Intel NPU
+```
+
+`ubuntu24-x86_64-robotics-jazzy-raw.yml` is the standalone equivalent of the full
+stack, kept for comparison. `ubuntu24-x86_64-extends-example-raw.yml` is a minimal
+two-line-delta demo, and `ubuntu24-x86_64-overlay-raw.yml` demonstrates overlay mode.
 
 Run `image-composer-tool resolve <template> --full` to see the merged result.
 
 ## CI coverage
 
-6 of 26 templates here are built on every pull request (via `scripts/build_*.sh`). The others are schema-validated only, so build them locally before opening a PR.
+6 of 27 templates here are built on every pull request (via `scripts/build_*.sh`). The others are schema-validated only, so build them locally before opening a PR.
 
 ---
 

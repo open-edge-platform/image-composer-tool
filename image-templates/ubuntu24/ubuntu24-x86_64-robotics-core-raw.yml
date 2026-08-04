@@ -1,21 +1,32 @@
-# ROS 2 Jazzy robotics image, built by extending the Ubuntu 24.04 base.
+# ROS 2 Jazzy core robotics image, built by extending the Ubuntu 24.04 base.
 #
 # This is the worked answer to "I have a template that works and I want to add
-# features on top of it, rather than write a new one from scratch". The image is
-# equivalent to the standalone ubuntu24-x86_64-robotics-jazzy-raw.yml, but it
-# inherits the Ubuntu 24.04 base instead of restating it.
+# features on top of it, rather than write a new one from scratch". It inherits
+# the Ubuntu 24.04 base instead of restating it.
+#
+# It is also a *reusable parent*: a complete, buildable robotics image (ROS 2
+# Jazzy Desktop, OpenVINO, Gazebo Harmonic, Intel GPU / Level Zero) and the base
+# that ubuntu24-x86_64-robotics-slam-raw.yml layers SLAM, RealSense and NPU
+# support onto, giving a three-level chain:
+#
+#   ubuntu24-x86_64-minimal-raw.yml
+#     -> this file                                  ROS 2 Jazzy + OpenVINO + Gazebo
+#          -> ubuntu24-x86_64-robotics-slam-raw.yml  + collab-SLAM, RealSense, NPU
+#
+# ubuntu24-x86_64-robotics-jazzy-raw.yml is the standalone equivalent, kept for
+# comparison: it declares the whole stack in one file with no inheritance.
 #
 # Why the minimal image is the parent, and what that costs:
-#   packageRepositories merge by codename, and a codename match overrides the
-#   first existing entry instead of appending. Three of the seven repositories
-#   below share the codename "noble" (ROS 2, Gazebo and RealSense). They survive
-#   only while they sit in a layer whose base repository list is empty, because
-#   mergePackageRepositories returns the child list untouched in that case.
-#   ubuntu24-x86_64-minimal-raw.yml and the OS defaults declare no repositories,
-#   so extending the minimal image keeps all seven. Extending the edge image
-#   instead would merge them against its three placeholder entries and collapse
-#   the three "noble" repositories into one, silently dropping the ROS 2 and
-#   Gazebo sources.
+#   packageRepositories merge by codename, and when two layers both declare
+#   repositories a codename match overrides the first existing entry instead of
+#   appending. Three of the seven repositories below share the codename "noble"
+#   (ROS 2, Gazebo and RealSense), so the whole set is declared here, in one
+#   layer; descendants declare none and inherit this list intact.
+#   ubuntu24-x86_64-minimal-raw.yml and the OS defaults also declare none, which
+#   is why extending the minimal image preserves all seven. Extending the edge
+#   image instead would merge them against its three placeholder entries and
+#   collapse the three "noble" repositories into one, silently dropping the ROS 2
+#   and Gazebo sources.
 #
 #   The cost of that choice: package lists are a union with no removal syntax, so
 #   this image also installs the parent's six GRUB packages
@@ -31,21 +42,21 @@
 # AI-searchable metadata for template discovery.
 # metadata is not inherited, so every template declares its own.
 metadata:
-  description: ROS 2 Jazzy robotics image composed by extending the Ubuntu 24.04 minimal base, with Intel OpenVINO, Gazebo Harmonic, RealSense and Intel GPU/NPU support
+  description: ROS 2 Jazzy core robotics image composed by extending the Ubuntu 24.04 minimal base, with Intel OpenVINO, Gazebo Harmonic and Intel GPU support
   use_cases:
     - Adding a robotics stack on top of an existing base image
-    - Autonomous mobile robots and robot arms on Intel platforms
+    - A reusable base for robotics image variants
     - ROS 2 development with OpenVINO inference and Gazebo simulation
   keywords:
     - robotics
     - ros2
     - jazzy
+    - core
     - extends
+    - inheritance
     - composition
     - openvino
     - gazebo
-    - realsense
-    - slam
     - ubuntu24
 
 # Inherit the Ubuntu 24.04 minimal image: disk-less base, kernel cmdline and
@@ -53,16 +64,17 @@ metadata:
 extends: "ubuntu24-x86_64-minimal-raw.yml"
 
 image:
-  name: robotics-jazzy-ubuntu24-extends
+  name: robotics-core-ubuntu24
   version: "24.04"
 
 target:
-  os: ubuntu # Must match the parent's target
+  os: ubuntu # Must match every template in the chain
   dist: ubuntu24
   arch: x86_64
   imageType: raw
 
-# All seven repositories are declared here, in one layer. See the header note.
+# All seven repositories are declared here, in one layer, and inherited intact by
+# every descendant. See the header note for why they cannot be split.
 packageRepositories:
   # ROS 2 Jazzy repository
   - codename: "noble"
@@ -106,15 +118,18 @@ packageRepositories:
     component: "main"
 
   # Intel RealSense repository (new URL as of 2026)
+  # Declared here rather than in the SLAM layer that uses it, because of the
+  # codename rule above.
   - codename: "noble"
     url: "https://librealsense.realsenseai.com/Debian/apt-repo"
     pkey: "https://librealsense.realsenseai.com/Debian/librealsenseai.asc"
     component: "main"
 
 # disk is replaced as a whole block, never merged field by field. The parent
-# takes the OS default layout; the robotics stack needs 24GiB.
+# takes the OS default layout; the robotics stack needs 24GiB. Descendants
+# inherit this block, and with it disk.name.
 disk:
-  name: robotics-jazzy # 1:1 mapping to the systemConfigs name
+  name: robotics-core # 1:1 mapping to the systemConfigs name
   artifacts:
     - type: raw
       compression: gz
@@ -141,8 +156,8 @@ disk:
       mountOptions: defaults
 
 systemConfig:
-  name: robotics-jazzy
-  description: Intel Robotics AI Suite - Full ROS 2 Jazzy with OpenVINO, Gazebo, RealSense, and Intel GPU/NPU
+  name: robotics-core
+  description: Intel Robotics AI Suite - ROS 2 Jazzy core with OpenVINO, Gazebo and Intel GPU
 
   # The minimal parent selects grub; this image boots via systemd-boot, so the
   # provider is overridden explicitly.
@@ -196,21 +211,8 @@ systemConfig:
     # ── Intel Robotics SDK ───────────────────────────────────────────
     - ros-jazzy-robotics-sdk
 
-    # ── Collaborative SLAM (Intel Xe / UHD GPU accelerated) ──────────
-    - ros-jazzy-collab-slam-lze
-
-    # ── Intel RealSense camera (DKMS + SDK, installed at build time) ──
-    - linux-headers-generic
-    - librealsense2-dkms
-    - librealsense2_2.56.5-0~realsense.17055
-    - ros-jazzy-librealsense2
-
     # ── Firmware ────────────────────────────────────────────────────
     - linux-firmware
-
-    # ── Intel NPU (Neural Processing Unit) drivers ───────────────────
-    - intel-level-zero-npu
-    - intel-driver-compiler-npu
 
   # Per-field override: the parent's cmdline is kept, the kernel package
   # replaced with the HWE kernel the robotics drivers build against.
@@ -218,7 +220,8 @@ systemConfig:
     packages:
       - linux-image-generic-hwe-24.04
 
-  # Appended after any commands the parent declares, in chain order.
+  # Appended after any commands the parent declares, in chain order. Descendants
+  # append after these.
   configurations:
     # ── ROS 2 environment setup ────────────────────────────────────
     - cmd: "echo 'source /opt/ros/jazzy/setup.bash' >> /etc/bash.bashrc"
@@ -228,6 +231,8 @@ systemConfig:
     # Note: Origin-based priority pins (ECI=1000, AMR=1001) are auto-generated
     # by the provider from packageRepositories.priority fields.
     # Only version-specific pins that the provider cannot generate are listed here.
+    # Packages are installed before configurations run, so these guard later
+    # upgrades rather than constraining this build.
     #
     # Block old FLANN 1.19.x from ECI (prefer Ubuntu's FLANN 1.9.2)
     - cmd: "printf 'Package: libflann*\\nPin: version 1.19.*\\nPin-Priority: -1\\n\\nPackage: flann*\\nPin: version 1.19.*\\nPin-Priority: -1\\n' > /etc/apt/preferences.d/eci-flann-block"
@@ -235,15 +240,10 @@ systemConfig:
     - cmd: "printf 'Package: intel-oneapi-runtime-*\\nPin: version 2025.3.*\\nPin-Priority: 1001\\n\\nPackage: intel-oneapi-compiler-*\\nPin: version 2025.3.*\\nPin-Priority: 1001\\n\\nPackage: intel-oneapi-mkl-*\\nPin: version 2025.3.*\\nPin-Priority: 1001\\n' > /etc/apt/preferences.d/oneapi"
     # OpenVINO version pins (match setup-robotics-jazzy.sh exactly)
     - cmd: "printf 'Package: openvino-libraries-dev\\nPin: version 2025.3.0*\\nPin-Priority: 1001\\n\\nPackage: openvino\\nPin: version 2025.3.0*\\nPin-Priority: 1001\\n\\nPackage: ros-jazzy-openvino-wrapper-lib\\nPin: version 2025.3.0*\\nPin-Priority: 1002\\n\\nPackage: ros-jazzy-openvino-node\\nPin: version 2025.3.0*\\nPin-Priority: 1002\\n' > /etc/apt/preferences.d/intel-openvino"
-    # RealSense SDK version pin for post-deployment upgrade protection.
-    - cmd: "printf 'Package: librealsense2*\\nPin: version 2.56.5-0~realsense.17055\\nPin-Priority: 1001\\n\\nPackage: ros-jazzy-librealsense2*\\nPin: version 2.56.4*\\nPin-Priority: 1001\\n\\nPackage: ros-jazzy-realsense2*\\nPin: version 4.56.4*\\nPin-Priority: 1001\\n' > /etc/apt/preferences.d/librealsense"
 
     # ── debconf pre-selections for OpenVINO node ─────────────────────
     - cmd: "echo 'ros-jazzy-openvino-node openvino-node/pip-proxy select true' | debconf-set-selections"
     - cmd: "echo 'ros-jazzy-openvino-node openvino-node/models select true' | debconf-set-selections"
-
-    # ── Intel NPU udev rules (render group access to /dev/accel/*) ──
-    - cmd: "printf 'SUBSYSTEM==\"accel\", KERNEL==\"accel*\", GROUP=\"render\", MODE=\"0660\"\\n' > /etc/udev/rules.d/10-intel-vpu.rules"
 
     # ── Enable required services ────────────────────────────────────
     - cmd: "systemctl enable NetworkManager"
