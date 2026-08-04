@@ -191,6 +191,28 @@ func TestHandleBuildLogFile(t *testing.T) {
 	}
 }
 
+func TestHandleBuildArtifactDownloadStreams(t *testing.T) {
+	// Success path: the fake ICT writes a real artifact inside the build work dir,
+	// so the service opens it and the handler streams it to completion. Guards the
+	// error-logging added around io.Copy/Close against regressing the happy path.
+	s, _ := newTestServerWithICT(t, fakeICTRealArtifact)
+	id := s.seedBuild(t)
+
+	rr := s.do(httptest.NewRequest(http.MethodGet, "/api/v1/builds/"+id+"/artifacts/image.raw.gz", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rr.Code, rr.Body)
+	}
+	if got := rr.Body.String(); got != "artifact-bytes" {
+		t.Errorf("body = %q, want %q", got, "artifact-bytes")
+	}
+	if ct := rr.Header().Get("Content-Type"); ct != "application/octet-stream" {
+		t.Errorf("Content-Type = %q, want application/octet-stream", ct)
+	}
+	if cd := rr.Header().Get("Content-Disposition"); !strings.Contains(cd, "image.raw.gz") {
+		t.Errorf("Content-Disposition = %q, want it to name the artifact", cd)
+	}
+}
+
 func TestHandleBuildArtifactDownloadMissing(t *testing.T) {
 	s, _ := newTestServer(t)
 	id := s.seedBuild(t)

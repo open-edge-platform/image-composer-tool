@@ -38,10 +38,29 @@ echo "	INFO	display/display.go:80	      /output/image.raw.gz"
 exit 0
 `
 
+// fakeICTRealArtifact is like fakeICT but writes a real file inside the build's
+// --work-dir and reports that path, so the artifact passes the service's
+// "inside the workspace" guard and the download handler's success path runs.
+// Args are: build <template> --work-dir <dir> --cache-dir <dir>, so $4 is the
+// work dir.
+const fakeICTRealArtifact = `#!/bin/sh
+out="$4/image.raw.gz"
+printf 'artifact-bytes' > "$out"
+echo "	INFO	display/display.go:79	    • image.raw.gz (1.13 GB)"
+echo "	INFO	display/display.go:80	      $out"
+exit 0
+`
+
 // newTestServer builds a Server backed by a real service with a temp templates
 // dir, manifest file, and a fake ICT binary, so handler tests exercise the full
 // decode→service→encode path through the generated routes.
 func newTestServer(t *testing.T) (*Server, string) {
+	t.Helper()
+	return newTestServerWithICT(t, fakeICT)
+}
+
+// newTestServerWithICT is newTestServer with a caller-supplied fake ICT script.
+func newTestServerWithICT(t *testing.T, ictScript string) (*Server, string) {
 	t.Helper()
 	tdir := t.TempDir()
 	for _, name := range []string{"robotics.yml", "retail.yml"} {
@@ -64,7 +83,7 @@ targets:
 		t.Fatalf("write manifest: %v", err)
 	}
 	ictBin := filepath.Join(t.TempDir(), "fake-ict")
-	if err := os.WriteFile(ictBin, []byte(fakeICT), 0o755); err != nil {
+	if err := os.WriteFile(ictBin, []byte(ictScript), 0o755); err != nil {
 		t.Fatalf("write fake ICT: %v", err)
 	}
 	srv, err := New(Config{

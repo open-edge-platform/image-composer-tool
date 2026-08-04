@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 )
 
 // This file holds the file/binary download endpoints. Like the SSE log stream,
@@ -36,7 +38,9 @@ func (s *Server) handleBuildTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/yaml")
 	w.Header().Set("Content-Disposition", "attachment; filename=\""+name+"\"")
-	_, _ = w.Write(data)
+	if _, err := w.Write(data); err != nil {
+		logger.Logger().Warnf("build %s template download: write failed: %v", id, err)
+	}
 }
 
 // handleBuildLogFile serves the persisted compose log as a download. Available
@@ -70,9 +74,20 @@ func (s *Server) handleBuildArtifactDownload(w http.ResponseWriter, r *http.Requ
 		writeServiceError(w, err)
 		return
 	}
-	defer func() { _ = rc.Close() }()
-
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
 	w.Header().Set("Content-Type", "application/octet-stream")
-	_, _ = io.Copy(w, rc)
+
+	// The 200 and any bytes already written can't be retracted once io.Copy has
+	// started, so a mid-stream failure (e.g. `sudo -n cat` dying on a misconfigured
+	// sudoers rule) necessarily reaches the client as a truncated download. Log
+	// both the copy error and the reader's close error — OpenArtifact's reader
+	// reports the streaming child's non-zero exit from Close — so operators can
+	// tell a truncated transfer from a complete one.
+	_, cerr := io.Copy(w, rc)
+	if cerr != nil {
+		logger.Logger().Warnf("artifact %s/%s: copy to client failed: %v", id, name, cerr)
+	}
+	if err := rc.Close(); err != nil {
+		logger.Logger().Warnf("artifact %s/%s: stream ended in error: %v", id, name, err)
+	}
 }
