@@ -710,11 +710,25 @@ func buildResolutionPlan(in planInput) *ResolutionPlan {
 		}
 	}
 
+	// Closure is order-insensitive downstream (SBOM, preflight, stats), so keep it
+	// alphabetized for a stable, readable plan.
 	sortResolved(resolved)
-	sortResolved(toInstall)
 
-	sortedArtifacts := append([]string(nil), in.artifacts...)
-	sort.Strings(sortedArtifacts)
+	// ToInstall drives the dpkg command line, whose ORDER MATTERS: dpkg -i unpacks
+	// archives left-to-right and refuses to unpack a package whose Pre-Depends is
+	// not yet CONFIGURED (dpkg only configures at the end of a run), so a
+	// pre-dependency should appear before its dependent (e.g. libmpfr6 before gawk).
+	// Ordering alone is not sufficient — a dependent whose pre-dep is unpacked but
+	// not yet configured is still skipped and the install backend retries in a later
+	// pass (see debInstallerBackend.install) — but dependency-first order maximizes
+	// how much each pass configures and minimizes the passes needed. in.artifacts
+	// arrives from the resolver already in dependency-first install order
+	// (pkgsorter.SortPackages, an SCC-based topological sort); alphabetizing it here
+	// or in planInstalls would break that invariant. Order ToInstall by each
+	// package's position in that topological artifact list instead. The order is
+	// deterministic (same resolve → same order), so plans stay reproducible without
+	// an alphabetical sort.
+	orderInstallByArtifacts(toInstall, in.artifacts)
 
 	presentNames := make([]string, 0, len(alreadyPresent))
 	for name := range alreadyPresent {
@@ -730,8 +744,40 @@ func buildResolutionPlan(in planInput) *ResolutionPlan {
 		ToInstall:      toInstall,
 		AlreadyPresent: presentNames,
 		DownloadDir:    destDir,
-		Artifacts:      sortedArtifacts,
+		// Preserve the resolver's topological install order (see above); do not sort.
+		Artifacts: append([]string(nil), in.artifacts...),
 	}
+}
+
+// orderInstallByArtifacts reorders pkgs in place to match the dependency-first
+// order of the topologically-sorted artifact list (basename of each package's
+// download URL). A package whose artifact is not found in the list — which should
+// not happen, since every to-install package was downloaded — sorts after the
+// known ones, and ties break on name so the result stays deterministic.
+func orderInstallByArtifacts(pkgs []ResolvedPackage, artifacts []string) {
+	pos := make(map[string]int, len(artifacts))
+	for i, a := range artifacts {
+		if _, seen := pos[a]; !seen {
+			pos[a] = i
+		}
+	}
+	rank := func(rp ResolvedPackage) int {
+		artifact, err := artifactFileFor(rp)
+		if err != nil {
+			return len(artifacts)
+		}
+		if i, ok := pos[artifact]; ok {
+			return i
+		}
+		return len(artifacts)
+	}
+	sort.SliceStable(pkgs, func(i, j int) bool {
+		ri, rj := rank(pkgs[i]), rank(pkgs[j])
+		if ri != rj {
+			return ri < rj
+		}
+		return pkgs[i].Name < pkgs[j].Name
+	})
 }
 
 // canonicalPackageName returns the canonical package name for a resolved package,

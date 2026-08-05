@@ -457,7 +457,12 @@ func TestInstallOverlayPackages_NilGuards(t *testing.T) {
 	}
 }
 
-func TestPlanInstalls_MapsAndSorts(t *testing.T) {
+// TestPlanInstalls_PreservesOrder confirms planInstalls maps packages to their
+// artifacts WITHOUT re-sorting: it must preserve plan.ToInstall's dependency-first
+// order (set by the resolver so dpkg -i can satisfy Pre-Depends left-to-right), so
+// a "zpkg before apkg" input stays z.deb before a.deb rather than being
+// alphabetized (which would reintroduce the pre-dependency ordering bug).
+func TestPlanInstalls_PreservesOrder(t *testing.T) {
 	dir := writeArtifacts(t, t.TempDir(), "a.deb", "z.deb")
 	plan := &ResolutionPlan{
 		DownloadDir: dir,
@@ -471,8 +476,8 @@ func TestPlanInstalls_MapsAndSorts(t *testing.T) {
 		t.Fatalf("planInstalls: %v", err)
 	}
 	got := []string{items[0].artifact, items[1].artifact}
-	if !reflect.DeepEqual(got, []string{"a.deb", "z.deb"}) {
-		t.Errorf("artifacts = %v, want sorted [a.deb z.deb]", got)
+	if !reflect.DeepEqual(got, []string{"z.deb", "a.deb"}) {
+		t.Errorf("artifacts = %v, want ToInstall order [z.deb a.deb]", got)
 	}
 }
 
@@ -784,29 +789,53 @@ func TestInstallCommandsTerminateOptions(t *testing.T) {
 			cap := &capturingExecutor{out: "Status: install ok installed\n"}
 			stubShell(t, cap)
 			tc.run(cap)
-			if len(cap.cmds) != 1 {
-				t.Fatalf("expected exactly one command, got %v", cap.cmds)
+			if len(cap.cmds) == 0 {
+				t.Fatalf("expected at least one command, got none")
 			}
-			if !strings.Contains(cap.cmds[0], tc.want) {
-				t.Errorf("command %q does not contain option terminator %q", cap.cmds[0], tc.want)
+			// The command carrying the file/name operands is the one under test —
+			// the first command in every case (the deb install also issues a second
+			// `dpkg --configure -a` with no operands, which is exercised separately).
+			operandCmd := cap.cmds[0]
+			if !strings.Contains(operandCmd, tc.want) {
+				t.Errorf("command %q does not contain option terminator %q", operandCmd, tc.want)
 			}
 			// The "--" must precede the (quoted) leading-dash operand.
-			if idx := strings.Index(cap.cmds[0], "--"); idx == -1 || strings.Index(cap.cmds[0], "-weird") < idx {
-				t.Errorf("operand not protected by leading %q: %q", "--", cap.cmds[0])
+			if idx := strings.Index(operandCmd, "--"); idx == -1 || strings.Index(operandCmd, "-weird") < idx {
+				t.Errorf("operand not protected by leading %q: %q", "--", operandCmd)
 			}
 		})
 	}
 }
 
-// TestDebInstallUsesAutoDeconfigure guards that the deb install passes
-// --auto-deconfigure. Without it, dpkg unpacks artifacts in command-line order and
-// aborts ("deconfiguration is not permitted") when a to-be-unpacked artifact
-// transiently Breaks an installed package that is ALSO being upgraded later in the
-// same batch (the vim-runtime Breaks vim-tiny (<< newver) case): the old version is
-// still present at unpack time. The break is self-resolving within the batch, so
-// the preflight gate permits it; the flag lets dpkg complete it by temporarily
-// deconfiguring and then reconfiguring the affected package.
-func TestDebInstallUsesAutoDeconfigure(t *testing.T) {
+// scriptedExecutor returns a queued (output, error) per ExecCmdWithStream call,
+// recording every command. It lets a test drive the deb install's retry loop: fail
+// the first `dpkg -i` (a Pre-Depends left a package unconfigured), then succeed.
+type scriptedExecutor struct {
+	shell.Executor // embedded so unused methods panic if ever called
+	cmds           []string
+	results        []struct {
+		out string
+		err error
+	}
+	idx int
+}
+
+func (s *scriptedExecutor) ExecCmdWithStream(cmd string, _ bool, _ string, _ []string) (string, error) {
+	s.cmds = append(s.cmds, cmd)
+	if s.idx >= len(s.results) {
+		return "", nil // default: success
+	}
+	r := s.results[s.idx]
+	s.idx++
+	return r.out, r.err
+}
+
+// TestDebInstallSucceedsFirstPass: when `dpkg -i` succeeds immediately, the backend
+// issues exactly one command (no interim configure, no retry) and it carries
+// --auto-deconfigure. --auto-deconfigure covers the transiently-Breaks case
+// (vim-runtime Breaks vim-tiny (<< newver) while both upgrade in one batch), which
+// the preflight gate permits because the break is self-resolving within the set.
+func TestDebInstallSucceedsFirstPass(t *testing.T) {
 	req := installRequest{
 		chrootPath:        "/mnt/root",
 		artifactChrootDir: chrootArtifactDir,
@@ -821,9 +850,78 @@ func TestDebInstallUsesAutoDeconfigure(t *testing.T) {
 		t.Fatalf("install: %v", err)
 	}
 	if len(cap.cmds) != 1 {
-		t.Fatalf("expected exactly one command, got %v", cap.cmds)
+		t.Fatalf("expected exactly one command on first-pass success, got %v", cap.cmds)
 	}
-	if !strings.Contains(cap.cmds[0], "--auto-deconfigure") {
-		t.Errorf("dpkg install command missing --auto-deconfigure: %q", cap.cmds[0])
+	if !strings.HasPrefix(cap.cmds[0], "dpkg -i --auto-deconfigure -- ") {
+		t.Errorf("install command wrong: %q", cap.cmds[0])
+	}
+}
+
+// TestDebInstallRetriesForPreDepends: the first `dpkg -i` fails (a Pre-Depends left
+// its dependent unconfigured, e.g. gawk before libmpfr6 is configured). The backend
+// must run an interim `dpkg --configure -a` and retry `dpkg -i`, then succeed.
+func TestDebInstallRetriesForPreDepends(t *testing.T) {
+	req := installRequest{
+		chrootPath:        "/mnt/root",
+		artifactChrootDir: chrootArtifactDir,
+		items: []plannedInstall{
+			{pkg: ResolvedPackage{Name: "libmpfr6"}, artifact: "libmpfr6_4.deb"},
+			{pkg: ResolvedPackage{Name: "gawk"}, artifact: "gawk_5.deb"},
+		},
+	}
+	sc := &scriptedExecutor{results: []struct {
+		out string
+		err error
+	}{
+		{out: "gawk pre-depends on libmpfr6 ... not installing gawk", err: errors.New("exit status 1")}, // pass 1: dpkg -i fails
+		{out: "Setting up libmpfr6 ...", err: nil},                                                      // interim configure
+		{out: "Setting up gawk ...", err: nil},                                                          // pass 2: dpkg -i succeeds
+	}}
+	stubShell(t, sc)
+	if err := (&debInstallerBackend{}).install(req); err != nil {
+		t.Fatalf("install should have recovered on retry: %v", err)
+	}
+	if len(sc.cmds) != 3 {
+		t.Fatalf("expected 3 commands (install, configure, install), got %d: %v", len(sc.cmds), sc.cmds)
+	}
+	if !strings.HasPrefix(sc.cmds[0], "dpkg -i --auto-deconfigure -- ") {
+		t.Errorf("cmd[0] not the first install pass: %q", sc.cmds[0])
+	}
+	if !strings.Contains(sc.cmds[1], "dpkg --configure -a") {
+		t.Errorf("cmd[1] not the interim configure: %q", sc.cmds[1])
+	}
+	if !strings.HasPrefix(sc.cmds[2], "dpkg -i --auto-deconfigure -- ") {
+		t.Errorf("cmd[2] not the retry install pass: %q", sc.cmds[2])
+	}
+}
+
+// TestDebInstallFailsFastOnNoProgress: when two consecutive `dpkg -i` passes emit
+// identical failure output, the set has a genuine problem (not ordering); the
+// backend must stop retrying and surface the error rather than loop.
+func TestDebInstallFailsFastOnNoProgress(t *testing.T) {
+	req := installRequest{
+		chrootPath:        "/mnt/root",
+		artifactChrootDir: chrootArtifactDir,
+		items:             []plannedInstall{{pkg: ResolvedPackage{Name: "broken"}, artifact: "broken_1.deb"}},
+	}
+	sc := &scriptedExecutor{results: []struct {
+		out string
+		err error
+	}{
+		{out: "broken depends on missing-lib; not configured", err: errors.New("exit status 1")}, // pass 1
+		{out: "", err: nil}, // interim configure
+		{out: "broken depends on missing-lib; not configured", err: errors.New("exit status 1")}, // pass 2: same output
+	}}
+	stubShell(t, sc)
+	err := (&debInstallerBackend{}).install(req)
+	if err == nil {
+		t.Fatal("expected install to fail fast on no progress")
+	}
+	if !strings.Contains(err.Error(), "no progress") {
+		t.Errorf("error should cite no progress, got: %v", err)
+	}
+	// install, configure, install → then bail. No further passes.
+	if len(sc.cmds) != 3 {
+		t.Errorf("expected 3 commands then fail-fast, got %d: %v", len(sc.cmds), sc.cmds)
 	}
 }

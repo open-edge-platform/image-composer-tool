@@ -206,8 +206,11 @@ func planInstalls(plan *ResolutionPlan) ([]plannedInstall, error) {
 		items = append(items, plannedInstall{pkg: rp, artifact: artifact})
 	}
 
-	// Deterministic order by artifact filename so the install command is stable.
-	sort.Slice(items, func(i, j int) bool { return items[i].artifact < items[j].artifact })
+	// Preserve plan.ToInstall's order: the resolver put it in dependency-first
+	// (topological) install order so dpkg -i can satisfy Pre-Depends left-to-right
+	// (see orderInstallByArtifacts in resolve.go). It is already deterministic, so
+	// the install command is stable WITHOUT an alphabetical re-sort — which would
+	// reintroduce the pre-dependency ordering bug (e.g. gawk before libmpfr6).
 	return items, nil
 }
 
@@ -345,38 +348,77 @@ func (b *debInstallerBackend) install(req installRequest) error {
 		paths = append(paths, shell.QuoteArg(filepath.Join(req.artifactChrootDir, it.artifact)))
 	}
 
-	// Non-interactive install of the local artifacts. dpkg -i takes the prepared
-	// files directly (no network, no repository resolution), keeping the install
-	// strictly to the approved, pre-downloaded set.
-	//
-	// --auto-deconfigure lets dpkg temporarily deconfigure an installed package that
-	// a to-be-unpacked artifact transiently Breaks, then reconfigure it once the
-	// batch completes — mirroring what apt does. dpkg unpacks the artifacts in
-	// command-line order, so when an upgraded package (e.g. vim-runtime) declares
-	// `Breaks: <other> (<< newver)` against a baseline package that is ALSO being
-	// upgraded to newver later in the same batch (e.g. vim-tiny), the old version is
-	// still installed at unpack time and dpkg would otherwise abort with
-	// "deconfiguration is not permitted". The break is self-resolving within the
-	// batch (the satisfying version is in the same set), which is why the preflight
-	// conflict gate correctly permits it; this flag lets dpkg carry it out.
-	//
-	// "--" terminates option parsing so a URL-derived artifact basename beginning
-	// with '-' is treated as a file path, not a dpkg option (shell-quoting stops
-	// word-splitting, not option parsing).
-	cmd := "dpkg -i --auto-deconfigure -- " + strings.Join(paths, " ")
 	envVars := []string{
 		"DEBIAN_FRONTEND=noninteractive",
 		"DEBCONF_NONINTERACTIVE_SEEN=true",
 		"DEBCONF_NOWARNINGS=yes",
 	}
-	out, err := shell.ExecCmdWithStream(cmd, true, req.chrootPath, envVars)
-	if err != nil {
-		// Surface dpkg's captured output: on its own the wrapped error is only
-		// "exit status 1", and dpkg's actual diagnostic (the failing package and
-		// maintainer-script reason) is otherwise streamed only to debug logging.
-		return fmt.Errorf("dpkg install of %d artifact(s) failed: %w%s", len(paths), err, formatCommandOutput(out))
+	joined := strings.Join(paths, " ")
+
+	// Install the prepared local artifacts, retrying to satisfy Pre-Depends.
+	//
+	// A Pre-Depends must be unpacked AND CONFIGURED before its dependent is even
+	// unpacked (e.g. gawk pre-depends on libmpfr6). A single `dpkg -i A B C…` (or
+	// `dpkg --unpack`) unpacks in command-line order but only configures at the
+	// end, so on the first pass the dependent (gawk) is skipped with a
+	// "pre-dependency problem — libmpfr6 is unpacked, but has never been
+	// configured" error, while every other package IS unpacked and configured
+	// (including the pre-dep, libmpfr6). Re-running `dpkg -i` then installs the
+	// skipped package cleanly, since its pre-dep is now configured. No
+	// command-line ordering can avoid this within one invocation, so we iterate.
+	//
+	// Between passes, `dpkg --configure -a` configures anything left unpacked so
+	// the next pass's Pre-Depends are satisfied. The loop stops as soon as a pass
+	// succeeds, and fails fast when a pass makes NO progress — its error output is
+	// byte-identical to the previous pass's, meaning the same archives failed for
+	// the same reason (a genuine dependency/conflict problem, not ordering). The
+	// hard cap is a backstop; real Pre-Depends chains in a fixed closure converge
+	// in a couple of passes.
+	//
+	// Package files are supplied directly (no network, no repository resolution),
+	// so the install stays strictly within the approved, pre-downloaded set.
+	//
+	// --auto-deconfigure lets dpkg temporarily deconfigure an installed package
+	// that an artifact transiently Breaks, then reconfigure it — mirroring apt.
+	// This covers an upgraded package (e.g. vim-runtime) that
+	// `Breaks: <other> (<< newver)` against a baseline package ALSO upgraded later
+	// in the same batch (e.g. vim-tiny): the break is self-resolving within the
+	// set, which is why the preflight conflict gate permits it.
+	//
+	// "--" terminates option parsing so a URL-derived artifact basename beginning
+	// with '-' is treated as a file path, not a dpkg option (shell-quoting stops
+	// word-splitting, not option parsing).
+	const maxInstallPasses = 6
+	installCmd := "dpkg -i --auto-deconfigure -- " + joined
+	configureCmd := "dpkg --configure -a --auto-deconfigure"
+
+	var lastOut string
+	var lastErr error
+	for pass := 1; pass <= maxInstallPasses; pass++ {
+		out, err := shell.ExecCmdWithStream(installCmd, true, req.chrootPath, envVars)
+		if err == nil {
+			// Everything unpacked and configured.
+			return nil
+		}
+		// No progress since the previous failing pass: same archives failed for the
+		// same reason, so retrying again cannot help. Surface it now.
+		if pass > 1 && out == lastOut {
+			return fmt.Errorf("dpkg install of %d artifact(s) failed (no progress after %d pass(es)): %w%s",
+				len(paths), pass, err, formatCommandOutput(out))
+		}
+		lastOut, lastErr = out, err
+		log.Infof("Overlay install: dpkg pass %d/%d left packages unconfigured (likely Pre-Depends ordering); configuring and retrying", pass, maxInstallPasses)
+		// Best-effort: configure whatever is now unpacked so the next pass's
+		// Pre-Depends are met. A failure here is not fatal on its own — the next
+		// `dpkg -i` pass surfaces any genuine problem via its own error/no-progress.
+		if _, cerr := shell.ExecCmdWithStream(configureCmd, true, req.chrootPath, envVars); cerr != nil {
+			log.Debugf("Overlay install: interim `dpkg --configure -a` reported: %v", cerr)
+		}
 	}
-	return nil
+	// Exhausted the pass budget while still making some progress each time but never
+	// fully succeeding. Surface the last failure.
+	return fmt.Errorf("dpkg install of %d artifact(s) failed after %d passes: %w%s",
+		len(paths), maxInstallPasses, lastErr, formatCommandOutput(lastOut))
 }
 
 func (b *debInstallerBackend) verifyInstalled(chrootPath string, pkgs []ResolvedPackage) ([]string, error) {

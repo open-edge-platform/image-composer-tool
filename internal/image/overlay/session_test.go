@@ -21,6 +21,7 @@ type builderSeams struct {
 	configure   func(*config.ImageTemplate, string) error
 	regenBoot   func(*BaselineInfo, string, *InstallResult, *ResolutionPlan) error
 	grubRegen   func(*config.ImageTemplate, *BaselineInfo, string) error
+	addFiles    func(*config.ImageTemplate, string) error
 	resize      func(*config.ImageTemplate, *Context, *Layout) error
 	sbom        func(*BaselineInfo, string, *ResolutionPlan) error
 	emit        func(*config.ImageTemplate, string, string) (string, error)
@@ -34,7 +35,7 @@ func saveBuilderSeams() builderSeams {
 		removeCopy: builderRemoveCopy,
 		detect:     builderDetectFn, resolve: builderResolveFn, preflight: builderPreflightFn,
 		install: builderInstallFn, configure: builderConfigureFn, regenBoot: builderRegenBootFn,
-		grubRegen: builderGrubRegenFn, resize: builderResizeFn,
+		grubRegen: builderGrubRegenFn, addFiles: builderAddFilesFn, resize: builderResizeFn,
 		sbom: builderSBOMFn, emit: builderEmitFn, inspect: builderInspectFn,
 		convert: builderConvertFn,
 	}
@@ -46,6 +47,7 @@ func (s builderSeams) restore() {
 	builderDetectFn, builderResolveFn, builderPreflightFn = s.detect, s.resolve, s.preflight
 	builderInstallFn, builderConfigureFn, builderRegenBootFn, builderResizeFn = s.install, s.configure, s.regenBoot, s.resize
 	builderGrubRegenFn = s.grubRegen
+	builderAddFilesFn = s.addFiles
 	builderSBOMFn, builderEmitFn, builderInspectFn = s.sbom, s.emit, s.inspect
 	builderConvertFn = s.convert
 }
@@ -69,6 +71,7 @@ type builderRecorder struct {
 	configureErr error
 	regenErr     error
 	grubRegenErr error
+	addFilesErr  error
 	resizeErr    error
 	sbomErr      error
 	emitErr      error
@@ -155,6 +158,10 @@ func installOverlayTestBuilder(t *testing.T, r *builderRecorder) *Builder {
 		r.note("grubRegen")
 		return r.grubRegenErr
 	}
+	builderAddFilesFn = func(*config.ImageTemplate, string) error {
+		r.note("addFiles")
+		return r.addFilesErr
+	}
 	builderResizeFn = func(*config.ImageTemplate, *Context, *Layout) error {
 		r.note("resize")
 		return r.resizeErr
@@ -199,7 +206,7 @@ func TestBuilder_HappyPathOrdersStagesAndCleansUp(t *testing.T) {
 	// This test template leaves InspectEnabled at its zero value (false), so
 	// inspection is skipped and conversion runs directly after emit. (The CLI
 	// defaults --inspect on; see TestBuilder_InspectRunsAfterEmitWhenEnabled.)
-	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "resize", "install", "configure", "regenBoot", "grubRegen", "sbom", "emit:1.0", "convert:/out/img-1.0.raw"}
+	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "resize", "install", "configure", "regenBoot", "grubRegen", "addFiles", "sbom", "emit:1.0", "convert:/out/img-1.0.raw"}
 	if !equalStrings(r.calls, want) {
 		t.Errorf("stage order = %v, want %v", r.calls, want)
 	}
@@ -215,7 +222,7 @@ func TestBuilder_HappyPathOrdersStagesAndCleansUp(t *testing.T) {
 	// execution order, so the caller can render an overlay timing table.
 	wantStages := []string{
 		"Acquire & Mount Baseline", "Inspect Baseline", "Resolve Packages", "Preflight",
-		"Resize", "Install Packages", "Configurations", "Boot Regeneration", "GRUB Regeneration", "Generate SBOM", "Emit Artifact", "Convert Artifacts",
+		"Resize", "Install Packages", "Configurations", "Boot Regeneration", "GRUB Regeneration", "Additional Files", "Generate SBOM", "Emit Artifact", "Convert Artifacts",
 	}
 	gotStages := make([]string, 0, len(b.Timings()))
 	for _, ts := range b.Timings() {
@@ -245,7 +252,7 @@ func TestBuilder_InspectRunsAfterEmitWhenEnabled(t *testing.T) {
 	// Inspection runs immediately after emit, against the emitted RAW artifact,
 	// and conversion follows it (a request that omits raw would delete the RAW,
 	// so the RAW inspection must happen first).
-	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "resize", "install", "configure", "regenBoot", "grubRegen", "sbom", "emit:1.0", "inspect:/out/img-1.0.raw", "convert:/out/img-1.0.raw"}
+	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "resize", "install", "configure", "regenBoot", "grubRegen", "addFiles", "sbom", "emit:1.0", "inspect:/out/img-1.0.raw", "convert:/out/img-1.0.raw"}
 	if !equalStrings(r.calls, want) {
 		t.Errorf("stage order = %v, want %v", r.calls, want)
 	}

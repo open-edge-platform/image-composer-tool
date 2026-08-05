@@ -274,7 +274,9 @@ baseline:
 > create-mode build. The overlay build is **strictly additive**: packages (and their
 > transitive dependencies not already present in the baseline) are installed
 > into the baseline root, the initramfs is regenerated for the added packages,
-> and an optional grow-only resize can enlarge the image to a larger
+> the template's [`systemConfig.configurations`](#systemconfigconfigurations)
+> commands and [`systemConfig.additionalFiles`](#systemconfigadditionalfiles) are
+> applied, and an optional grow-only resize can enlarge the image to a larger
 > `disk.size`. The installed bootloader binary, the ESP, and existing baseline
 > packages are never modified.
 >
@@ -683,6 +685,16 @@ systemConfig:
     - local: files/motd
       final: /etc/motd
 ```
+
+> **Overlay mode:** `additionalFiles` are honored in overlay builds and are
+> copied into the baseline root as the **last** build step — after both initramfs
+> and GRUB regeneration. This ordering is deliberate: a prebuilt boot artifact
+> (for example a custom `/boot/initrd.img-*`) dropped here survives, whereas a
+> file placed before regeneration would be overwritten by `update-initramfs`. If
+> you instead need a file to be **consumed by** regeneration (for example an
+> initramfs-tools hook under `/etc/initramfs-tools/`), place the hook and run the
+> generator from a [`systemConfig.configurations`](#systemconfigconfigurations)
+> command, which executes before boot regeneration.
 
 #### `systemConfig.configurations[]`
 
