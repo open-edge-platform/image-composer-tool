@@ -1,14 +1,27 @@
+import { useEffect, useState } from 'react'
 import type { HistoryItem } from '../api/types'
 
 interface HistorySidebarProps {
   items: HistoryItem[]
   selectedId: string | null
   onSelect: (id: string) => void
+  clockOffsetMs?: number
 }
 
 // Left-hand compose history list inside the Compose Image tab. Newest first;
 // each row shows a status dot, template name, and vertical · relative time.
-export function HistorySidebar({ items, selectedId, onSelect }: HistorySidebarProps) {
+export function HistorySidebar({
+  items,
+  selectedId,
+  onSelect,
+  clockOffsetMs = 0,
+}: HistorySidebarProps) {
+  const [nowMs, setNowMs] = useState(() => Date.now())
+  useEffect(() => {
+    if (items.length === 0) return
+    const t = setInterval(() => setNowMs(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [items.length])
   return (
     <div className="w-64 shrink-0 border-r border-slate-200 pr-3">
       <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
@@ -34,7 +47,7 @@ export function HistorySidebar({ items, selectedId, onSelect }: HistorySidebarPr
                   <span className="truncate font-medium">{combinationLabel(it)}</span>
                 </div>
                 <div className="mt-0.5 pl-3 text-[11px] text-slate-400">
-                  {relativeTime(it.createdAt)}
+                  {relativeTime(it.createdAt, nowMs + clockOffsetMs)}
                 </div>
               </button>
             </li>
@@ -73,10 +86,10 @@ function StatusDot({ status }: { status: string }) {
 }
 
 // relativeTime renders a compact "just now / 5m ago / 2h ago / 3d ago" label.
-function relativeTime(iso: string): string {
+function relativeTime(iso: string, nowMs: number): string {
   const then = new Date(iso).getTime()
   if (Number.isNaN(then)) return ''
-  const secs = Math.max(0, Math.floor((Date.now() - then) / 1000))
+  const secs = Math.max(0, Math.floor((nowMs - then) / 1000))
   if (secs < 60) return 'just now'
   const mins = Math.floor(secs / 60)
   if (mins < 60) return `${mins}m ago`
