@@ -119,6 +119,10 @@ paths:
           description: Target OS distribution ID (e.g., ubuntu24)
         - name: repos
           in: query
+          # form/explode: repeat the key per value (?repos=a&repos=b) — matches
+          # the TS client and removes generator ambiguity for array params.
+          style: form
+          explode: true
           schema:
             type: array
             items:
@@ -611,33 +615,55 @@ components:
 
     # ── Packages (Advanced tab) ──
 
+    PackageRepo:
+      type: object
+      description: One repository the Advanced tab can enable/disable.
+      properties:
+        id:
+          type: string
+          example: intel-openvino
+        displayName:
+          type: string
+          example: Intel OpenVINO
+        url:
+          type: string
+          example: https://apt.repos.intel.com/openvino
+        description:
+          type: string
+          example: OpenVINO inference engine packages
+        enabledByDefault:
+          type: boolean
+          example: false
+        priority:
+          type: integer
+          default: 500
+          description: "Repository priority (higher number = preferred when packages exist in multiple repos). Default 500."
+
     PackageRepoList:
       type: object
       properties:
         repos:
           type: array
           items:
-            type: object
-            properties:
-              id:
-                type: string
-                example: intel-openvino
-              displayName:
-                type: string
-                example: Intel OpenVINO
-              url:
-                type: string
-                example: https://apt.repos.intel.com/openvino
-              description:
-                type: string
-                example: OpenVINO inference engine packages
-              enabledByDefault:
-                type: boolean
-                example: false
-              priority:
-                type: integer
-                default: 500
-                description: "Repository priority (higher number = preferred when packages exist in multiple repos). Default 500."
+            $ref: "#/components/schemas/PackageRepo"
+
+    PackageSearchResult:
+      type: object
+      description: One package search hit.
+      properties:
+        name:
+          type: string
+          example: docker-ce
+        version:
+          type: string
+          example: "27.1.1"
+          description: Latest available version
+        description:
+          type: string
+          example: Docker Community Edition
+        repository:
+          type: string
+          example: docker-ce-stable
 
     PackageSearchResults:
       type: object
@@ -649,21 +675,7 @@ components:
         packages:
           type: array
           items:
-            type: object
-            properties:
-              name:
-                type: string
-                example: docker-ce
-              version:
-                type: string
-                example: "27.1.1"
-                description: Latest available version
-              description:
-                type: string
-                example: Docker Community Edition
-              repository:
-                type: string
-                example: docker-ce-stable
+            $ref: "#/components/schemas/PackageSearchResult"
 
     # ── Template composition ──
 
