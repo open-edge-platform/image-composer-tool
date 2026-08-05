@@ -121,11 +121,10 @@ func fromComposeResult(r *service.ComposeResult) httpapi.ComposeResponse {
 
 // fromValidationResult maps the service's structured validation result onto the
 // contract type. errors/warnings are omitempty in the spec, so empty slices map
-// to nil rather than []; valid is always sent.
+// to nil rather than []; valid is required, so it is always sent.
 func fromValidationResult(r *service.ValidationResult) httpapi.ValidationResponse {
-	valid := r.Valid
 	return httpapi.ValidationResponse{
-		Valid:    &valid,
+		Valid:    r.Valid,
 		Errors:   fromValidationIssues(r.Errors),
 		Warnings: fromValidationIssues(r.Warnings),
 	}
@@ -137,11 +136,10 @@ func fromValidationIssues(issues []service.ValidationIssue) *[]httpapi.Validatio
 	}
 	out := make([]httpapi.ValidationIssue, len(issues))
 	for i, iss := range issues {
-		sev := httpapi.ValidationIssueSeverity(iss.Severity)
 		out[i] = httpapi.ValidationIssue{
-			Path:     optStr(iss.Path),
-			Message:  optStr(iss.Message),
-			Severity: &sev,
+			Path:     iss.Path,
+			Message:  iss.Message,
+			Severity: httpapi.ValidationIssueSeverity(iss.Severity),
 		}
 	}
 	return &out

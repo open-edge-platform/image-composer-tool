@@ -262,7 +262,7 @@ func TestHandleValidateTemplateValid(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.Valid == nil || !*resp.Valid {
+	if !resp.Valid {
 		t.Errorf("valid = %v, want true (body: %s)", resp.Valid, rr.Body)
 	}
 	if resp.Errors != nil && len(*resp.Errors) != 0 {
@@ -283,17 +283,17 @@ func TestHandleValidateTemplateInvalidIs200(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.Valid == nil || *resp.Valid {
+	if resp.Valid {
 		t.Fatalf("valid = %v, want false", resp.Valid)
 	}
 	if resp.Errors == nil || len(*resp.Errors) == 0 {
 		t.Fatal("expected field-level errors")
 	}
 	for _, e := range *resp.Errors {
-		if e.Path == nil || *e.Path == "" {
+		if e.Path == "" {
 			t.Errorf("issue missing field path: %+v", e)
 		}
-		if e.Message == nil || *e.Message == "" {
+		if e.Message == "" {
 			t.Errorf("issue missing message: %+v", e)
 		}
 	}
