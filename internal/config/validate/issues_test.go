@@ -129,6 +129,9 @@ func TestValidateUserTemplateIssues_NonObjectDocument(t *testing.T) {
 		"bare string":  "hello\n",
 		"bare number":  "42\n",
 		"bare boolean": "true\n",
+		// null decodes into a nil map, which isJSONObject must not mistake for an
+		// object — otherwise it would slip into the semantic checks.
+		"null": "null\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			issues := ValidateUserTemplateIssues(toJSON(t, y))

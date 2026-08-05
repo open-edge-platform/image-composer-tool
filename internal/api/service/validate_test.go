@@ -85,15 +85,19 @@ func TestValidateTemplate_MalformedYAMLIsInvalidNotError(t *testing.T) {
 	}
 }
 
-// An empty body is the one input that is a client error: there is nothing to
-// validate, so it is a 400 rather than a (meaningless) invalid result.
+// An empty or whitespace-only body is the one input that is a client error:
+// there is nothing to validate, so it is a 400 rather than a (meaningless)
+// invalid result. Whitespace-only must be rejected the same way as "" — not
+// fall through to a "template is empty" 200 issue.
 func TestValidateTemplate_EmptyIsBadRequest(t *testing.T) {
-	_, err := newValidateService().ValidateTemplate("")
-	var se *Error
-	if !errors.As(err, &se) {
-		t.Fatalf("expected *Error, got %v", err)
-	}
-	if se.Status != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400", se.Status)
+	for _, in := range []string{"", "\n", "   ", "  \n\t "} {
+		_, err := newValidateService().ValidateTemplate(in)
+		var se *Error
+		if !errors.As(err, &se) {
+			t.Fatalf("input %q: expected *Error, got %v", in, err)
+		}
+		if se.Status != http.StatusBadRequest {
+			t.Errorf("input %q: status = %d, want 400", in, se.Status)
+		}
 	}
 }

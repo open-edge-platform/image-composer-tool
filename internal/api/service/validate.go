@@ -6,6 +6,7 @@ package service
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config/validate"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/security"
@@ -43,7 +44,11 @@ type ValidationResult struct {
 // that validates here builds without a validation failure, and one that fails
 // here fails the build for the same reason, only reported field-by-field.
 func (s *Service) ValidateTemplate(templateYAML string) (*ValidationResult, error) {
-	if len(templateYAML) == 0 {
+	// A body that is empty or only whitespace carries no template to validate;
+	// treat it as a malformed request (400), not a validation verdict. Trimming
+	// first means "\n" and "   " are rejected the same way "" is, rather than
+	// falling through to a "template is empty" 200 issue.
+	if strings.TrimSpace(templateYAML) == "" {
 		return nil, newError(http.StatusBadRequest, "BAD_REQUEST", "template yaml is required")
 	}
 

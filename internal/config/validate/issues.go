@@ -37,10 +37,13 @@ const (
 // structured list of issues instead of a single wrapped error. A nil/empty
 // result means the template is valid.
 //
-// It mirrors ValidateUserTemplateJSON exactly — the same schema subschema plus
-// the same post-schema semantic checks — so the verdict here matches what a
-// build of the same template would reach, reported field-by-field rather than as
-// one string. Kept alongside (not replacing) ValidateUserTemplateJSON so CLI
+// It runs the same checks as ValidateUserTemplateJSON — the same schema
+// subschema plus the same post-schema semantic checks (auto-expand, FDE) — so
+// the pass/fail verdict here matches what a build of the same template would
+// reach. It differs deliberately in one way: where ValidateUserTemplateJSON
+// stops at the first failure, this keeps going and collects every problem, since
+// the point is to show the user all their field errors at once rather than one
+// per round-trip. Kept alongside (not replacing) ValidateUserTemplateJSON so CLI
 // callers that only need pass/fail are unaffected.
 func ValidateUserTemplateIssues(data []byte) []Issue {
 	var issues []Issue
@@ -72,10 +75,12 @@ func ValidateUserTemplateIssues(data []byte) []Issue {
 }
 
 // isJSONObject reports whether data is a JSON object, the only shape the
-// semantic checks can inspect.
+// semantic checks can inspect. The non-nil guard matters: json.Unmarshal of the
+// literal `null` succeeds into a nil map, so without it a `null` document would
+// be treated as an object and fall into the semantic checks.
 func isJSONObject(data []byte) bool {
 	var doc map[string]interface{}
-	return json.Unmarshal(data, &doc) == nil
+	return json.Unmarshal(data, &doc) == nil && doc != nil
 }
 
 // schemaErrorIssues turns the error from ValidateAgainstSchema into field-level
