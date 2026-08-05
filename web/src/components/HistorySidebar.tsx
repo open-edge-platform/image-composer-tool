@@ -18,9 +18,10 @@ export function HistorySidebar({
 }: HistorySidebarProps) {
   const [nowMs, setNowMs] = useState(() => Date.now())
   useEffect(() => {
+    if (items.length === 0) return
     const t = setInterval(() => setNowMs(Date.now()), 1000)
     return () => clearInterval(t)
-  }, [])
+  }, [items.length])
   return (
     <div className="w-64 shrink-0 border-r border-slate-200 pr-3">
       <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
