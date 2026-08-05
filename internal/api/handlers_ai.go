@@ -126,6 +126,8 @@ func handleQuery(s *Server) http.HandlerFunc {
 		ctx := r.Context()
 		var generatedYaml string
 		var err error
+		var searchResults = []searchResultJSON{}
+		var sourceTemplates = []string{}
 
 		start := time.Now()
 		isRefinement := session != nil && session.CurrentTemplate != nil
@@ -139,14 +141,22 @@ func handleQuery(s *Server) http.HandlerFunc {
 			generatedYaml, err = s.engine.ChatProvider().Chat(ctx, messages)
 		} else {
 			// Fresh query, use normal RAG
-			generatedYaml, err = s.engine.Generate(ctx, query)
+			var result *rag.GenerateResult
+			result, err = s.engine.GenerateWithContext(ctx, query)
+			if err == nil {
+				generatedYaml = result.YAML
+				sourceTemplates = result.SourceTemplates
+				for _, sr := range result.SearchResults {
+					searchResults = append(searchResults, convertSearchResult(sr))
+				}
+			}
 		}
 
 		if err != nil {
 			// Determine if this is a provider connectivity issue or a
 			// generation failure.
 			errMsg := err.Error()
-			if strings.Contains(errMsg, "connect") || strings.Contains(errMsg, "connection") {
+			if isProviderUnavailable(err) {
 				respondError(w, http.StatusServiceUnavailable, ErrCodeProviderUnavail,
 					"AI provider not reachable: "+errMsg, nil)
 				return
@@ -178,7 +188,7 @@ func handleQuery(s *Server) http.HandlerFunc {
 
 			newTmpl := &GeneratedTemplate{
 				YAML:             generatedYaml,
-				SourceTemplates:  []string{},
+				SourceTemplates:  sourceTemplates,
 				ValidationStatus: "unchecked",
 				LastModified:     time.Now(),
 			}
@@ -188,6 +198,7 @@ func handleQuery(s *Server) http.HandlerFunc {
 				Role:             "assistant",
 				Content:          "", // No chat text, just template
 				TemplateSnapshot: generatedYaml,
+				SearchResults:    searchResults,
 				Changes:          []Change{},
 				Timestamp:        time.Now(),
 			}
@@ -197,8 +208,8 @@ func handleQuery(s *Server) http.HandlerFunc {
 		resp := queryResponse{
 			SessionID:        req.SessionID,
 			YAML:             generatedYaml,
-			SearchResults:    []searchResultJSON{}, // Populated in future
-			SourceTemplates:  []string{},           // Populated in future
+			SearchResults:    searchResults,
+			SourceTemplates:  sourceTemplates,
 			GenerationTimeMs: genTime,
 		}
 
@@ -450,7 +461,7 @@ func handleStream(s *Server) http.HandlerFunc {
 			if err != nil {
 				errMsg := err.Error()
 				code := ErrCodeGenerationFailed
-				if strings.Contains(errMsg, "connect") || strings.Contains(errMsg, "connection") {
+				if isProviderUnavailable(err) {
 					code = ErrCodeProviderUnavail
 				}
 				_ = writeSSEEvent(w, flusher, "error", sseError{
@@ -481,7 +492,7 @@ func handleStream(s *Server) http.HandlerFunc {
 			if err != nil {
 				errMsg := err.Error()
 				code := ErrCodeGenerationFailed
-				if strings.Contains(errMsg, "connect") || strings.Contains(errMsg, "connection") {
+				if isProviderUnavailable(err) {
 					code = ErrCodeProviderUnavail
 				}
 				_ = writeSSEEvent(w, flusher, "error", sseError{

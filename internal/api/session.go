@@ -149,7 +149,15 @@ func (sm *SessionManager) Get(id string) (*Session, error) {
 		return nil, &SessionError{Code: ErrCodeSessionExpired, ID: id}
 	}
 
-	return session, nil
+	// Return a defensive copy so callers don't observe or cause races on the
+	// internal mutable session state.
+	cp := *session
+	cp.History = append([]Message(nil), session.History...)
+	if session.CurrentTemplate != nil {
+		tmpl := *session.CurrentTemplate
+		cp.CurrentTemplate = &tmpl
+	}
+	return &cp, nil
 }
 
 // Delete removes a session by ID.
