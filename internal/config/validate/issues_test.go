@@ -117,6 +117,37 @@ systemConfig:
 	}
 }
 
+// A document that isn't a JSON object at all (a YAML list, or a bare scalar) must
+// produce exactly the one issue that describes the real problem. The semantic
+// checks unmarshal into a map, so before isJSONObject gated them they each failed
+// on their own unmarshal and appended an issue blaming `disk` and
+// `systemConfig.fde.passphraseFile` — fields the input never mentioned. In the UI
+// those render as inline errors on unrelated form controls.
+func TestValidateUserTemplateIssues_NonObjectDocument(t *testing.T) {
+	for name, y := range map[string]string{
+		"yaml list":    "- a\n- b\n",
+		"bare string":  "hello\n",
+		"bare number":  "42\n",
+		"bare boolean": "true\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			issues := ValidateUserTemplateIssues(toJSON(t, y))
+			if len(issues) != 1 {
+				t.Fatalf("got %d issues, want exactly 1: %+v", len(issues), issues)
+			}
+			// The single issue is document-wide, so it carries no field path.
+			if issues[0].Path != "" {
+				t.Errorf("path = %q, want \"\" (document-level)", issues[0].Path)
+			}
+			for _, iss := range issues {
+				if iss.Path == "disk" || iss.Path == "systemConfig.fde.passphraseFile" {
+					t.Errorf("issue blames unrelated field %q: %s", iss.Path, iss.Message)
+				}
+			}
+		})
+	}
+}
+
 func TestPointerToPath(t *testing.T) {
 	cases := map[string]string{
 		"":                        "",

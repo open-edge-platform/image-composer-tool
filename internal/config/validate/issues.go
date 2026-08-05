@@ -1,6 +1,7 @@
 package validate
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 
@@ -48,6 +49,16 @@ func ValidateUserTemplateIssues(data []byte) []Issue {
 		issues = append(issues, schemaErrorIssues(err)...)
 	}
 
+	// The semantic checks below unmarshal into map[string]interface{}, so a
+	// document that isn't a JSON object makes both fail on the unmarshal itself.
+	// The schema check above has already reported that ("expected object, but got
+	// array"); running them anyway would append two more issues pointing at
+	// unrelated fields (disk, systemConfig.fde.passphraseFile) that the input
+	// never mentioned. Bail out instead — the caller has the real problem.
+	if !isJSONObject(data) {
+		return issues
+	}
+
 	// Post-schema semantic checks. These return a single error each (not a schema
 	// tree), so map each to one issue anchored at the field it concerns.
 	if err := validateAutoExpandLastPartitionConstraints(data, false); err != nil {
@@ -58,6 +69,13 @@ func ValidateUserTemplateIssues(data []byte) []Issue {
 	}
 
 	return issues
+}
+
+// isJSONObject reports whether data is a JSON object, the only shape the
+// semantic checks can inspect.
+func isJSONObject(data []byte) bool {
+	var doc map[string]interface{}
+	return json.Unmarshal(data, &doc) == nil
 }
 
 // schemaErrorIssues turns the error from ValidateAgainstSchema into field-level
