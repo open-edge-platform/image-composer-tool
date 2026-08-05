@@ -4,6 +4,9 @@ import type {
   Manifest,
   ComposeRequest,
   ComposeResponse,
+  ValidationResponse,
+  PackageRepoList,
+  PackageSearchResults,
   BuildAccepted,
   BuildDetails,
   CancelAccepted,
@@ -39,6 +42,38 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(req),
     }),
+
+  // Validate an edited template's YAML. A failed validation is a successful 200
+  // call — inspect `valid` and the per-field `errors`/`warnings`. Backend returns
+  // 501 until PR 2 lands the real field-level validation.
+  validateTemplate: (yaml: string) =>
+    jsonFetch<ValidationResponse>('/templates/validate', {
+      method: 'POST',
+      body: JSON.stringify({ yaml }),
+    }),
+
+  // Package repositories the Advanced tab can enable/disable, optionally filtered
+  // by target OS. Backend returns 501 until PR 4 lands the real repo listing.
+  listPackageRepos: (os?: string) =>
+    jsonFetch<PackageRepoList>(
+      '/package-repos' + (os ? `?os=${encodeURIComponent(os)}` : ''),
+    ),
+
+  // Search packages available for a target, for the Packages-step autocomplete.
+  // `repos` filters by enabled repository IDs. Backend returns 501 until PR 5.
+  searchPackages: (params: {
+    q: string
+    os: string
+    repos?: string[]
+    limit?: number
+  }) => {
+    const qs = new URLSearchParams()
+    qs.set('q', params.q)
+    qs.set('os', params.os)
+    if (params.repos) for (const r of params.repos) qs.append('repos', r)
+    if (params.limit != null) qs.set('limit', String(params.limit))
+    return jsonFetch<PackageSearchResults>(`/packages/search?${qs.toString()}`)
+  },
 
   startBuild: (req: ComposeRequest) =>
     jsonFetch<BuildAccepted>('/builds', {

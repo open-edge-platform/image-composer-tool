@@ -87,6 +87,31 @@ func (s *Server) ListBuildArtifacts(w http.ResponseWriter, _ *http.Request, id h
 	writeJSON(w, http.StatusOK, fromArtifactList(l))
 }
 
+// ListPackageRepos handles GET /package-repos.
+//
+// Not yet implemented: the spec and generated types are in place so the frontend
+// and backend can build against the contract, but the repository-listing logic
+// lands in a later PR. Returns 501 until then.
+func (s *Server) ListPackageRepos(w http.ResponseWriter, _ *http.Request, _ httpapi.ListPackageReposParams) {
+	writeError(w, http.StatusNotImplemented, "NOT_IMPLEMENTED", "listing package repositories is not yet implemented")
+}
+
+// SearchPackages handles GET /packages/search.
+//
+// Not yet implemented: contract-only for now (see ListPackageRepos). The package
+// search logic lands in a later PR. Returns 501 until then.
+func (s *Server) SearchPackages(w http.ResponseWriter, _ *http.Request, _ httpapi.SearchPackagesParams) {
+	writeError(w, http.StatusNotImplemented, "NOT_IMPLEMENTED", "package search is not yet implemented")
+}
+
+// ValidateTemplate handles POST /templates/validate.
+//
+// Not yet implemented: contract-only for now (see ListPackageRepos). The
+// field-level validation logic lands in a later PR. Returns 501 until then.
+func (s *Server) ValidateTemplate(w http.ResponseWriter, _ *http.Request) {
+	writeError(w, http.StatusNotImplemented, "NOT_IMPLEMENTED", "template validation is not yet implemented")
+}
+
 // writeServiceError maps a service error onto the JSON error envelope. Domain
 // *service.Error carry an HTTP status and machine code; any other error is an
 // opaque 500 so internal details don't leak to clients.

@@ -34,6 +34,8 @@ tags:
     description: Configuration manifest (all valid combinations + display labels)
   - name: Templates
     description: Resolve a pre-authored template from the user's selections
+  - name: Packages
+    description: Package repositories and package search for the Advanced tab
   - name: Builds
     description: Trigger and monitor image builds
 
@@ -59,6 +61,95 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Manifest"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Packages (Advanced tab)
+  # ─────────────────────────────────────────────────────────────────────
+
+  /package-repos:
+    get:
+      tags: [Packages]
+      operationId: listPackageRepos
+      summary: List available package repositories
+      description: |
+        Returns package repositories that can be enabled in the Advanced tab
+        (e.g., Intel OpenVINO, Docker CE, ROS 2 Jazzy, Intel Compute Runtime).
+      parameters:
+        - name: os
+          in: query
+          schema:
+            type: string
+          description: Filter repos by target OS compatibility
+      responses:
+        "200":
+          description: Repository list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PackageRepoList"
+        "500":
+          description: Server error loading repositories
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /packages/search:
+    get:
+      tags: [Packages]
+      operationId: searchPackages
+      summary: Search available packages
+      description: |
+        Search for packages available in enabled repositories for a given target.
+        Supports prefix matching. Used by the package search autocomplete
+        in the Advanced tab's Packages step.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 2
+          description: Search query (package name prefix)
+        - name: os
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Target OS distribution ID (e.g., ubuntu24)
+        - name: repos
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+          description: Filter by enabled repository IDs
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 50
+          description: Max results to return
+      responses:
+        "200":
+          description: Matching packages
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PackageSearchResults"
+        "400":
+          description: Invalid or missing query parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Server error searching packages
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   # ─────────────────────────────────────────────────────────────────────
   # Template composition
@@ -104,6 +195,51 @@ paths:
                 $ref: "#/components/schemas/Error"
         "500":
           description: Server error resolving or reading the template
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /templates/validate:
+    post:
+      tags: [Templates]
+      operationId: validateTemplate
+      summary: Validate an edited template
+      description: |
+        Validates a complete template YAML against the ICT template schema and
+        returns any errors and warnings, each with a field path. Backs the
+        Advanced tab's "Validate" button so power users can check their edits
+        before building.
+
+        Always returns 200 with a validation result (a failed validation is a
+        successful call). The build endpoint performs the same check, so
+        validating first is optional but gives faster, in-place feedback.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [yaml]
+              properties:
+                yaml:
+                  type: string
+                  description: Complete template YAML to validate
+      responses:
+        "200":
+          description: Validation result (valid or invalid)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationResponse"
+        "400":
+          description: Malformed request body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Server error running validation
           content:
             application/json:
               schema:
@@ -473,6 +609,62 @@ components:
           items:
             $ref: "#/components/schemas/Target"
 
+    # ── Packages (Advanced tab) ──
+
+    PackageRepoList:
+      type: object
+      properties:
+        repos:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                example: intel-openvino
+              displayName:
+                type: string
+                example: Intel OpenVINO
+              url:
+                type: string
+                example: https://apt.repos.intel.com/openvino
+              description:
+                type: string
+                example: OpenVINO inference engine packages
+              enabledByDefault:
+                type: boolean
+                example: false
+              priority:
+                type: integer
+                default: 500
+                description: "Repository priority (higher number = preferred when packages exist in multiple repos). Default 500."
+
+    PackageSearchResults:
+      type: object
+      properties:
+        query:
+          type: string
+        total:
+          type: integer
+        packages:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+                example: docker-ce
+              version:
+                type: string
+                example: "27.1.1"
+                description: Latest available version
+              description:
+                type: string
+                example: Docker Community Edition
+              repository:
+                type: string
+                example: docker-ce-stable
+
     # ── Template composition ──
 
     ComposeRequest:
@@ -563,6 +755,34 @@ components:
           description: The matched template's YAML, verbatim
         summary:
           $ref: "#/components/schemas/ComposeSummary"
+
+    ValidationResponse:
+      type: object
+      properties:
+        valid:
+          type: boolean
+        errors:
+          type: array
+          items:
+            $ref: "#/components/schemas/ValidationIssue"
+        warnings:
+          type: array
+          items:
+            $ref: "#/components/schemas/ValidationIssue"
+
+    ValidationIssue:
+      type: object
+      properties:
+        path:
+          type: string
+          description: JSON path to the problematic field
+          example: "target.os"
+        message:
+          type: string
+          example: "Unsupported OS for selected platform"
+        severity:
+          type: string
+          enum: [error, warning]
 
     # ── Builds ──
 

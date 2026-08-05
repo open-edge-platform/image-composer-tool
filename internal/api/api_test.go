@@ -5,6 +5,7 @@ package api
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -208,6 +209,42 @@ func TestHandleComposeInvalidTemplate(t *testing.T) {
 	rr := s.do(httptest.NewRequest(http.MethodPost, "/api/v1/templates/compose", strings.NewReader(body)))
 	if rr.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want 422 (body: %s)", rr.Code, rr.Body)
+	}
+}
+
+// --- advanced-mode stubs (contract-only; replaced in later PRs) ---
+
+// The three Advanced-mode endpoints are wired to the generated interface but not
+// yet implemented — each returns 501 with the standard error envelope. This
+// guards the PR-1 contract-only behavior; the PRs that implement each endpoint
+// replace its assertion here.
+func TestHandleAdvancedStubsNotImplemented(t *testing.T) {
+	s, _ := newTestServer(t)
+	cases := []struct {
+		name, method, path, body string
+	}{
+		{"validate", http.MethodPost, "/api/v1/templates/validate", `{"yaml":"image:\n  name: x\n"}`},
+		{"package-repos", http.MethodGet, "/api/v1/package-repos", ""},
+		{"packages-search", http.MethodGet, "/api/v1/packages/search?q=doc&os=ubuntu24", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var body io.Reader
+			if c.body != "" {
+				body = strings.NewReader(c.body)
+			}
+			rr := s.do(httptest.NewRequest(c.method, c.path, body))
+			if rr.Code != http.StatusNotImplemented {
+				t.Fatalf("status = %d, want 501 (body: %s)", rr.Code, rr.Body)
+			}
+			var eb httpapi.Error
+			if err := json.Unmarshal(rr.Body.Bytes(), &eb); err != nil {
+				t.Fatalf("error decode: %v", err)
+			}
+			if eb.Error.Code != "NOT_IMPLEMENTED" || eb.Error.Message == "" {
+				t.Errorf("error envelope = %+v, want code NOT_IMPLEMENTED with message", eb.Error)
+			}
+		})
 	}
 }
 
