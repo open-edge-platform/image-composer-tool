@@ -56,13 +56,24 @@ type SoftwarePackageManifest struct {
 
 // Holds the SPDX Document header information
 type SPDXDocument struct {
-	SPDXVersion       string        `json:"spdxVersion"`
-	DataLicense       string        `json:"dataLicense"`
-	SPDXID            string        `json:"SPDXID"`
-	DocumentName      string        `json:"name"`
-	DocumentNamespace string        `json:"documentNamespace"`
-	CreationInfo      CreationInfo  `json:"creationInfo"`
-	Packages          []SPDXPackage `json:"packages"`
+	SPDXVersion       string             `json:"spdxVersion"`
+	DataLicense       string             `json:"dataLicense"`
+	SPDXID            string             `json:"SPDXID"`
+	DocumentName      string             `json:"name"`
+	DocumentNamespace string             `json:"documentNamespace"`
+	CreationInfo      CreationInfo       `json:"creationInfo"`
+	Packages          []SPDXPackage      `json:"packages"`
+	Relationships     []SPDXRelationship `json:"relationships,omitempty"`
+}
+
+// SPDXRelationship links two SPDX elements. The SBOM emits one DESCRIBES
+// relationship from the document to each package so the file is spec-conformant:
+// SPDX 2.x requires the document to describe at least one element, and strict
+// validators reject a document that carries packages but no relationships.
+type SPDXRelationship struct {
+	SPDXElementID      string `json:"spdxElementId"`
+	RelationshipType   string `json:"relationshipType"`
+	RelatedSPDXElement string `json:"relatedSpdxElement"`
 }
 
 // Time stamp and creation information
@@ -213,7 +224,7 @@ func WriteMergedSPDXToFile(baselineSPDX []byte, overlayPkgs []ospackage.PackageI
 // shared per-package conversion used by both a from-scratch write and a merge.
 func buildSPDXPackage(pkg ospackage.PackageInfo) SPDXPackage {
 	spdxPkg := SPDXPackage{
-		SPDXID:           fmt.Sprintf("SPDXRef-Package-%s", pkg.Name),
+		SPDXID:           fmt.Sprintf("SPDXRef-Package-%s", sanitizeSPDXID(pkg.Name)),
 		Name:             pkg.Name,
 		Type:             pkg.Type,
 		VersionInfo:      pkg.Version,
@@ -249,9 +260,109 @@ func buildSPDXPackage(pkg ospackage.PackageInfo) SPDXPackage {
 	return spdxPkg
 }
 
+// sanitizeSPDXID maps a package name to the SPDX element-ID grammar, which
+// permits only letters, digits, ".", and "-". Any other character (notably the
+// "+" in names like "libstdc++6" or "g++") is replaced with "-" so the emitted
+// SPDXRef-Package-<id> is spec-valid and strict SPDX validators do not reject
+// the whole document.
+func sanitizeSPDXID(name string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			return r
+		case r == '.' || r == '-':
+			return r
+		default:
+			return '-'
+		}
+	}, name)
+}
+
+// sanitizeSPDXIDs re-maps every package SPDXID in the document into the SPDX
+// element-ID grammar. buildSPDXPackage already sanitizes IDs for packages it
+// creates (new/overlay), but a baseline document loaded via WriteMergedSPDXToFile
+// carries whatever IDs it was written with — older versions of this tool built
+// SPDXRef-Package-<pkg.Name> from the raw name, so a baseline can still hold
+// invalid characters (e.g. "SPDXRef-Package-libstdc++6"). Running the whole ID
+// through the grammar fixes those in place; it is idempotent for already-valid
+// IDs (the "SPDXRef-Package-" prefix is all valid characters) and runs before
+// dedupeSPDXIDs so any collisions the re-mapping introduces are disambiguated.
+func sanitizeSPDXIDs(pkgs []SPDXPackage) {
+	for i := range pkgs {
+		pkgs[i].SPDXID = sanitizeSPDXID(pkgs[i].SPDXID)
+	}
+}
+
+// dedupeSPDXIDs guarantees every package SPDXID in the document is unique. Two
+// distinct packages can otherwise collide on the same ID — a name with a
+// sanitized character (e.g. "g-3" from both "g+3" and "g_3"), or an overlay
+// package appended beside a same-named baseline entry — which is invalid SPDX
+// (an element ID must identify exactly one element). On a collision the later
+// entry is suffixed with "-2", "-3", …; the suffix is only digits and a hyphen
+// (both valid SPDX ID characters) and is probed against the seen set so it cannot
+// itself land on an already-taken id (e.g. a baseline that already carries a
+// "-2"-suffixed entry).
+func dedupeSPDXIDs(pkgs []SPDXPackage) {
+	seen := make(map[string]int, len(pkgs))
+	for i := range pkgs {
+		id := pkgs[i].SPDXID
+		if _, taken := seen[id]; !taken {
+			seen[id] = 1
+			continue
+		}
+		// Find the next free "<id>-<n>" starting from the running count.
+		n := seen[id] + 1
+		candidate := fmt.Sprintf("%s-%d", id, n)
+		for _, exists := seen[candidate]; exists; _, exists = seen[candidate] {
+			n++
+			candidate = fmt.Sprintf("%s-%d", id, n)
+		}
+		seen[id] = n
+		seen[candidate] = 1
+		pkgs[i].SPDXID = candidate
+	}
+}
+
+// describesRelationships returns one DESCRIBES relationship from the document's
+// root SPDXID to every package, in package order. This is what makes the SBOM
+// spec-conformant: SPDX 2.x requires the document to describe at least one
+// element, and the choke point that calls this runs after dedupeSPDXIDs, so each
+// RelatedSPDXElement references a final, unique package ID. Returns nil for a
+// package-less document so the omitempty field is dropped rather than emitting an
+// empty array.
+func describesRelationships(spdx SPDXDocument) []SPDXRelationship {
+	if len(spdx.Packages) == 0 {
+		return nil
+	}
+	rels := make([]SPDXRelationship, 0, len(spdx.Packages))
+	for _, pkg := range spdx.Packages {
+		rels = append(rels, SPDXRelationship{
+			SPDXElementID:      spdx.SPDXID,
+			RelationshipType:   "DESCRIBES",
+			RelatedSPDXElement: pkg.SPDXID,
+		})
+	}
+	return rels
+}
+
 // writeSPDXDocument marshals an SPDX document and writes it with symlink
 // protection, creating the parent directory as needed.
 func writeSPDXDocument(spdx SPDXDocument, outFile string) error {
+	// Normalize every SPDXID into the element-ID grammar first, so a baseline
+	// document merged in with legacy raw-name IDs (e.g. "libstdc++6") is corrected
+	// alongside the freshly built overlay entries, then enforce uniqueness across
+	// the final package set at this single write choke point so both from-scratch
+	// and merge writers are covered.
+	sanitizeSPDXIDs(spdx.Packages)
+	dedupeSPDXIDs(spdx.Packages)
+
+	// Emit the mandatory document->package DESCRIBES relationships AFTER dedupe so
+	// they reference the final, unique package IDs. Building them at this single
+	// choke point covers both the from-scratch and merge writers; a baseline
+	// document's own relationships (if any) are replaced with a set regenerated
+	// from the merged package list so no relationship dangles to a renamed ID.
+	spdx.Relationships = describesRelationships(spdx)
+
 	if err := os.MkdirAll(filepath.Dir(outFile), 0700); err != nil {
 		log.Errorf("Failed to create SPDX output directory: %v", err)
 		return fmt.Errorf("failed to create output directory: %w", err)

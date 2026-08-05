@@ -1,12 +1,10 @@
 // SPDX-FileCopyrightText: (C) 2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-package api
+package service
 
 import (
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,9 +17,9 @@ import (
 // read back from disk, so it must not be replayed as live. Every non-terminal
 // status maps to failed with an explanation.
 func TestReconcileInterrupted(t *testing.T) {
-	for _, status := range []buildStatus{statusNotStarted, statusRunning, statusCancelling} {
+	for _, status := range []BuildStatus{StatusNotStarted, StatusRunning, StatusCancelling} {
 		got, msg := reconcileInterrupted(status, "")
-		if got != statusFailed {
+		if got != StatusFailed {
 			t.Fatalf("%q reconciled to %q, want failed", status, got)
 		}
 		if !strings.Contains(msg, "interrupted by a server restart") {
@@ -38,7 +36,7 @@ func TestReconcileInterrupted(t *testing.T) {
 // Terminal statuses are already authoritative — reconciliation must not touch
 // them, or a successful build would be relabelled on every restart.
 func TestReconcileInterruptedLeavesTerminalAlone(t *testing.T) {
-	for _, status := range []buildStatus{statusSuccess, statusFailed, statusCancelled} {
+	for _, status := range []BuildStatus{StatusSuccess, StatusFailed, StatusCancelled} {
 		got, msg := reconcileInterrupted(status, "original reason")
 		if got != status {
 			t.Fatalf("%q was rewritten to %q; terminal states are authoritative", status, got)
@@ -53,7 +51,7 @@ func TestReconcileInterruptedLeavesTerminalAlone(t *testing.T) {
 // reason is the more specific of the two, and losing it would hide why the build
 // was failing before the restart.
 func TestReconcileInterruptedPreservesExistingError(t *testing.T) {
-	_, msg := reconcileInterrupted(statusRunning, "exit status 1")
+	_, msg := reconcileInterrupted(StatusRunning, "exit status 1")
 	if !strings.HasPrefix(msg, "exit status 1") {
 		t.Fatalf("original error lost: %q", msg)
 	}
@@ -65,15 +63,15 @@ func TestReconcileInterruptedPreservesExistingError(t *testing.T) {
 // buildFromMeta is the path used by the detail/logs handlers, so it must apply
 // the same reconciliation as the list.
 func TestBuildFromMetaReconcilesInterrupted(t *testing.T) {
-	b := buildFromMeta("/tmp/x", buildMeta{ID: "b", Status: string(statusRunning)})
-	if s := b.snapshot(); s.status != statusFailed {
-		t.Fatalf("status = %q, want failed", s.status)
+	b := buildFromMeta("/tmp/x", buildMeta{ID: "b", Status: string(StatusRunning)})
+	if s := b.snapshot(); s.Status != StatusFailed {
+		t.Fatalf("status = %q, want failed", s.Status)
 	}
 }
 
 // writeInterruptedMeta persists a build record stuck in a non-terminal state,
 // exactly as a server that was killed mid-build leaves behind.
-func writeInterruptedMeta(t *testing.T, s *Server, id string, status buildStatus) {
+func writeInterruptedMeta(t *testing.T, s *Service, id string, status BuildStatus) {
 	t.Helper()
 	rootDir := filepath.Join(s.buildsRoot(), id)
 	if err := os.MkdirAll(rootDir, 0o755); err != nil {
@@ -91,49 +89,34 @@ func writeInterruptedMeta(t *testing.T, s *Server, id string, status buildStatus
 // The regression this fixes: after a restart the UI called /builds, saw a
 // not-started record, and adopted it as the in-flight compose — disabling Compose
 // and offering a Cancel that could only fail. The list must report it terminal.
-func TestHandleListBuildsReportsInterruptedAsFailed(t *testing.T) {
-	s := newTestServer(t)
-	writeInterruptedMeta(t, s, "ghost", statusNotStarted)
+func TestListBuildsReportsInterruptedAsFailed(t *testing.T) {
+	s := newTestService(t)
+	writeInterruptedMeta(t, s, "ghost", StatusNotStarted)
 
-	rec := httptest.NewRecorder()
-	s.handleListBuilds(rec, httptest.NewRequest(http.MethodGet, "/api/v1/builds", nil))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
+	got := s.ListBuilds()
+	if len(got) != 1 {
+		t.Fatalf("got %d builds, want 1", len(got))
 	}
-
-	var got struct{ Builds []historyItem }
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatalf("decoding: %v (%s)", err, rec.Body.String())
-	}
-	if len(got.Builds) != 1 {
-		t.Fatalf("got %d builds, want 1", len(got.Builds))
-	}
-	if got.Builds[0].Status != string(statusFailed) {
-		t.Fatalf("status = %q, want failed (a dead record must not look live)", got.Builds[0].Status)
+	if got[0].Status != StatusFailed {
+		t.Fatalf("status = %q, want failed (a dead record must not look live)", got[0].Status)
 	}
 }
 
 // A genuinely running build is tracked in memory and overlaid on top of the disk
 // record, so reconciliation must not downgrade it — otherwise the live build the
 // user is watching would flip to failed.
-func TestHandleListBuildsKeepsLiveBuildRunning(t *testing.T) {
-	s := newTestServer(t)
-	writeInterruptedMeta(t, s, "live", statusRunning)
+func TestListBuildsKeepsLiveBuildRunning(t *testing.T) {
+	s := newTestService(t)
+	writeInterruptedMeta(t, s, "live", StatusRunning)
 	// Same id, but present in the tracker: this build really is running.
-	s.tracker.add(&build{ID: "live", status: statusRunning, done: make(chan struct{})})
+	s.tracker.add(&build{ID: "live", status: StatusRunning, done: make(chan struct{})})
 
-	rec := httptest.NewRecorder()
-	s.handleListBuilds(rec, httptest.NewRequest(http.MethodGet, "/api/v1/builds", nil))
-
-	var got struct{ Builds []historyItem }
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatalf("decoding: %v", err)
+	got := s.ListBuilds()
+	if len(got) != 1 {
+		t.Fatalf("got %d builds, want 1 (the live record must overlay the disk one)", len(got))
 	}
-	if len(got.Builds) != 1 {
-		t.Fatalf("got %d builds, want 1 (the live record must overlay the disk one)", len(got.Builds))
-	}
-	if got.Builds[0].Status != string(statusRunning) {
-		t.Fatalf("status = %q, want running", got.Builds[0].Status)
+	if got[0].Status != StatusRunning {
+		t.Fatalf("status = %q, want running", got[0].Status)
 	}
 }
 

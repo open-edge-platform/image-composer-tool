@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: (C) 2026 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+
+# oapi-codegen configuration for the ICT web UI backend.
+# Regenerate with: go generate ./internal/api/http
+package: httpapi
+output: gen.go
+generate:
+  # Request/response models from the spec's component schemas.
+  models: true
+  # net/http-based ServerInterface + registration helper (Go 1.22 method routing),
+  # so we keep the stdlib ServeMux and add no web-framework dependency.
+  std-http-server: true
+  # Embed the spec so the server can expose/validate it if needed.
+  embedded-spec: true
+output-options:
+  # Only the JSON operations belong on the generated interface. The SSE log stream
+  # and the file/binary downloads are hand-written streaming handlers registered
+  # alongside the generated mux (oapi-codegen does not model text/event-stream or
+  # octet-stream responses cleanly), so they are excluded here by operationId.
+  exclude-operation-ids:
+    - streamBuildLogs
+    - downloadBuildTemplate
+    - downloadBuildLogFile
+    - downloadBuildArtifact
