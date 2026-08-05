@@ -74,6 +74,11 @@ paths:
       description: |
         Returns package repositories that can be enabled in the Advanced tab
         (e.g., Intel OpenVINO, Docker CE, ROS 2 Jazzy, Intel Compute Runtime).
+
+        NOT YET IMPLEMENTED — returns 501 NOT_IMPLEMENTED until the repository
+        listing lands. That 501 is a temporary stub, not part of this contract:
+        it is deliberately undocumented in `responses` below so clients cannot
+        code against a status that disappears on implementation.
       parameters:
         - name: os
           in: query
@@ -103,6 +108,11 @@ paths:
         Search for packages available in enabled repositories for a given target.
         Supports prefix matching. Used by the package search autocomplete
         in the Advanced tab's Packages step.
+
+        NOT YET IMPLEMENTED — returns 501 NOT_IMPLEMENTED until the search
+        backend lands. That 501 is a temporary stub, not part of this contract:
+        it is deliberately undocumented in `responses` below so clients cannot
+        code against a status that disappears on implementation.
       parameters:
         - name: q
           in: query
@@ -215,9 +225,15 @@ paths:
         Advanced tab's "Validate" button so power users can check their edits
         before building.
 
-        Always returns 200 with a validation result (a failed validation is a
-        successful call). The build endpoint performs the same check, so
-        validating first is optional but gives faster, in-place feedback.
+        Once implemented, always returns 200 with a validation result (a failed
+        validation is a successful call). The build endpoint performs the same
+        check, so validating first is optional but gives faster, in-place
+        feedback.
+
+        NOT YET IMPLEMENTED — returns 501 NOT_IMPLEMENTED until the validation
+        logic lands. That 501 is a temporary stub, not part of this contract:
+        it is deliberately undocumented in `responses` below so clients cannot
+        code against a status that disappears on implementation.
       requestBody:
         required: true
         content:

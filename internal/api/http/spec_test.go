@@ -32,17 +32,16 @@ func TestEmbeddedSpecIsValid(t *testing.T) {
 // its route registration without a real backend.
 type stubServer struct{}
 
-func (stubServer) ListBuilds(http.ResponseWriter, *http.Request)                  {}
-func (stubServer) StartBuild(http.ResponseWriter, *http.Request)                  {}
-func (stubServer) ListBuildArtifacts(http.ResponseWriter, *http.Request, BuildId) {}
-func (stubServer) GetBuildDetails(http.ResponseWriter, *http.Request, BuildId)    {}
-func (stubServer) CancelBuild(http.ResponseWriter, *http.Request, BuildId)        {}
-func (stubServer) GetManifest(http.ResponseWriter, *http.Request)                 {}
-func (stubServer) ComposeTemplate(http.ResponseWriter, *http.Request)             {}
-func (stubServer) ValidateTemplate(http.ResponseWriter, *http.Request)            {}
-func (stubServer) ListPackageRepos(http.ResponseWriter, *http.Request, ListPackageReposParams) {
-}
-func (stubServer) SearchPackages(http.ResponseWriter, *http.Request, SearchPackagesParams) {}
+func (stubServer) ListBuilds(http.ResponseWriter, *http.Request)                               {}
+func (stubServer) StartBuild(http.ResponseWriter, *http.Request)                               {}
+func (stubServer) ListBuildArtifacts(http.ResponseWriter, *http.Request, BuildId)              {}
+func (stubServer) GetBuildDetails(http.ResponseWriter, *http.Request, BuildId)                 {}
+func (stubServer) CancelBuild(http.ResponseWriter, *http.Request, BuildId)                     {}
+func (stubServer) GetManifest(http.ResponseWriter, *http.Request)                              {}
+func (stubServer) ComposeTemplate(http.ResponseWriter, *http.Request)                          {}
+func (stubServer) ValidateTemplate(http.ResponseWriter, *http.Request)                         {}
+func (stubServer) ListPackageRepos(http.ResponseWriter, *http.Request, ListPackageReposParams) {}
+func (stubServer) SearchPackages(http.ResponseWriter, *http.Request, SearchPackagesParams)     {}
 
 // TestHandlerFromMuxRegistersRoutes verifies the generated registration wires
 // the base URL and dispatches to the interface method (here, a 200 from the
