@@ -79,16 +79,16 @@ export interface ComposeResponse {
 // One issue from POST /templates/validate: a schema/semantic problem tied to a
 // field path. severity distinguishes a blocking error from an advisory warning.
 export interface ValidationIssue {
-  path?: string
-  message?: string
-  severity?: 'error' | 'warning'
+  path: string
+  message: string
+  severity: 'error' | 'warning'
 }
 
 // Result of validating an edited template. A failed validation is still a
 // successful 200 call — `valid` reports the outcome; `errors`/`warnings` carry
 // the per-field issues. Backs PR 2 onward; the endpoint returns 501 until then.
 export interface ValidationResponse {
-  valid?: boolean
+  valid: boolean
   errors?: ValidationIssue[]
   warnings?: ValidationIssue[]
 }
@@ -97,31 +97,31 @@ export interface ValidationResponse {
 // enabledByDefault seeds the toggle; priority breaks ties when a package exists
 // in multiple repos (higher wins).
 export interface PackageRepo {
-  id?: string
-  displayName?: string
-  url?: string
+  id: string
+  displayName: string
+  url: string
   description?: string
-  enabledByDefault?: boolean
+  enabledByDefault: boolean
   priority?: number
 }
 
 export interface PackageRepoList {
-  repos?: PackageRepo[]
+  repos: PackageRepo[]
 }
 
 // One package search hit (from GET /packages/search): name + latest version +
 // description, plus the repository it came from.
 export interface PackageSearchResult {
-  name?: string
-  version?: string
+  name: string
+  version: string
   description?: string
-  repository?: string
+  repository: string
 }
 
 export interface PackageSearchResults {
-  query?: string
-  total?: number
-  packages?: PackageSearchResult[]
+  query: string
+  total: number
+  packages: PackageSearchResult[]
 }
 
 export interface BuildAccepted {

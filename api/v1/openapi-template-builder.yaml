@@ -618,6 +618,7 @@ components:
     PackageRepo:
       type: object
       description: One repository the Advanced tab can enable/disable.
+      required: [id, displayName, url, enabledByDefault]
       properties:
         id:
           type: string
@@ -641,6 +642,7 @@ components:
 
     PackageRepoList:
       type: object
+      required: [repos]
       properties:
         repos:
           type: array
@@ -650,6 +652,7 @@ components:
     PackageSearchResult:
       type: object
       description: One package search hit.
+      required: [name, version, repository]
       properties:
         name:
           type: string
@@ -667,6 +670,7 @@ components:
 
     PackageSearchResults:
       type: object
+      required: [query, total, packages]
       properties:
         query:
           type: string
@@ -770,6 +774,7 @@ components:
 
     ValidationResponse:
       type: object
+      required: [valid]
       properties:
         valid:
           type: boolean
@@ -784,6 +789,7 @@ components:
 
     ValidationIssue:
       type: object
+      required: [path, message, severity]
       properties:
         path:
           type: string
