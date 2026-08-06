@@ -21,7 +21,54 @@ import (
 const (
 	maxDownloadAttempts = 3
 	initialRetryBackoff = 500 * time.Millisecond
+	// bodyIdleTimeout bounds the gap between successful reads of a response
+	// body. The shared client's ResponseHeaderTimeout only covers the wait for
+	// headers; once the body starts streaming, http has no read deadline, so a
+	// proxy that goes silent mid-transfer (headers received, then nothing) would
+	// otherwise block io.Copy forever. This does not cap total transfer time —
+	// the timer resets on every read that returns bytes — so a slow but
+	// progressing large package download is never killed.
+	bodyIdleTimeout = 60 * time.Second
 )
+
+// idleTimeoutReader wraps an io.ReadCloser and closes the underlying reader if
+// no bytes arrive within idle, unblocking an in-flight Read so a stalled
+// mid-body transfer fails (and retries) instead of hanging. The timer resets on
+// every read that returns data, so only a true stall — not slow progress —
+// trips it.
+type idleTimeoutReader struct {
+	rc      io.ReadCloser
+	idle    time.Duration
+	timer   *time.Timer
+	tripped atomic.Bool
+}
+
+func newIdleTimeoutReader(rc io.ReadCloser, idle time.Duration) *idleTimeoutReader {
+	r := &idleTimeoutReader{rc: rc, idle: idle}
+	r.timer = time.AfterFunc(idle, func() {
+		r.tripped.Store(true)
+		_ = rc.Close()
+	})
+	return r
+}
+
+func (r *idleTimeoutReader) Read(p []byte) (int, error) {
+	n, err := r.rc.Read(p)
+	if n > 0 {
+		r.timer.Reset(r.idle)
+	}
+	if err != nil && r.tripped.Load() {
+		return n, fmt.Errorf("stalled: no data received for %s: %w", r.idle, err)
+	}
+	return n, err
+}
+
+// stop halts the watchdog. Call it once the body has been fully read so the
+// timer does not linger; it does not close the underlying reader, which the
+// caller's deferred resp.Body.Close handles.
+func (r *idleTimeoutReader) stop() {
+	r.timer.Stop()
+}
 
 func shouldRetryHTTPStatus(statusCode int) bool {
 	switch statusCode {
@@ -75,7 +122,9 @@ func downloadWithRetry(ctx context.Context, client *http.Client, url, destPath s
 				}
 				defer out.Close()
 
-				writtenBytes, copyErr := io.Copy(out, resp.Body)
+				body := newIdleTimeoutReader(resp.Body, bodyIdleTimeout)
+				defer body.stop()
+				writtenBytes, copyErr := io.Copy(out, body)
 				if copyErr != nil {
 					lastErr = copyErr
 					if removeErr := os.Remove(destPath); removeErr != nil && !os.IsNotExist(removeErr) {

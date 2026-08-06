@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -820,5 +821,91 @@ func TestFetchPackages_CancelNotReportedAsFailures(t *testing.T) {
 func TestSummarizeFailuresEmpty(t *testing.T) {
 	if got := summarizeFailures(nil); got != "" {
 		t.Errorf("summarizeFailures(nil) = %q, want empty", got)
+	}
+}
+
+// blockingReader returns firstChunk on the first Read, then blocks forever on
+// the next Read until Close is called (which unblocks it with an error). It
+// models a proxy that sends some body bytes and then goes silent mid-transfer —
+// the exact stall that hung a real build (headers received, ~11MB streamed,
+// then the connection sat ESTAB with no further data).
+type blockingReader struct {
+	firstChunk []byte
+	sent       bool
+	closed     chan struct{}
+	once       sync.Once
+}
+
+func newBlockingReader(firstChunk []byte) *blockingReader {
+	return &blockingReader{firstChunk: firstChunk, closed: make(chan struct{})}
+}
+
+func (b *blockingReader) Read(p []byte) (int, error) {
+	if !b.sent {
+		b.sent = true
+		return copy(p, b.firstChunk), nil
+	}
+	<-b.closed // block until Close, mirroring a silent stalled socket
+	return 0, errors.New("read after close")
+}
+
+func (b *blockingReader) Close() error {
+	b.once.Do(func() { close(b.closed) })
+	return nil
+}
+
+// TestIdleTimeoutReader_TripsOnStall verifies that a body which delivers some
+// bytes and then goes silent is aborted once no data arrives for the idle
+// window, surfacing a "stalled" error rather than blocking forever. This is the
+// direct regression guard for the hung-build bug: bodyIdleTimeout is 60s in
+// production, so the mechanism is exercised here with a short window.
+func TestIdleTimeoutReader_TripsOnStall(t *testing.T) {
+	br := newBlockingReader([]byte("first"))
+	r := newIdleTimeoutReader(br, 100*time.Millisecond)
+	defer r.stop()
+
+	start := time.Now()
+	_, err := io.ReadAll(r)
+	if err == nil {
+		t.Fatal("expected a stall error, got nil")
+	}
+	if !strings.Contains(err.Error(), "stalled") {
+		t.Fatalf("expected a stalled error, got: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("reader took too long to trip: %s", elapsed)
+	}
+}
+
+// TestIdleTimeoutReader_ProgressDoesNotTrip verifies that a body which keeps
+// delivering bytes — even slowly, in gaps shorter than the idle window — is
+// never aborted, so a slow-but-progressing large package download is not
+// killed. Each read resets the idle timer.
+func TestIdleTimeoutReader_ProgressDoesNotTrip(t *testing.T) {
+	// Feed 20 chunks with a 50ms gap against a 1s idle window; each gap sits
+	// well under the window (20x headroom, so CI scheduling jitter cannot
+	// falsely trip it) while the total time (~1s) still exceeds the window,
+	// proving the timer tracks idleness, not total duration.
+	const chunks = 20
+	pr, pw := io.Pipe()
+	go func() {
+		for i := 0; i < chunks; i++ {
+			time.Sleep(50 * time.Millisecond)
+			if _, err := pw.Write([]byte("chunk")); err != nil {
+				return
+			}
+		}
+		_ = pw.Close()
+	}()
+
+	r := newIdleTimeoutReader(pr, 1*time.Second)
+	defer r.stop()
+
+	data, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("progressing reader should not trip the idle timeout: %v", err)
+	}
+	if got, want := len(data), len("chunk")*chunks; got != want {
+		t.Fatalf("read %d bytes, want %d", got, want)
 	}
 }
