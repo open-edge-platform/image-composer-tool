@@ -1,0 +1,138 @@
+# =============================================================================
+# Ubuntu 24.04 robotics CHILD template — add ROS 2 Jazzy via `extends`
+# =============================================================================
+#
+# This is the third layer of a three-layer composition:
+#
+#   Canonical noble cloud image (vendor-built, never modified)
+#     -> ubuntu24-x86_64-robotics-hw-overlay-qcow2.yml   Intel HW enablement (overlay)
+#          -> this file                                   ROS 2 Jazzy stack (extends)
+#
+# It inherits the hardware base — baseline source, overlay policy, disk/qcow2
+# output and the seven package repositories — and adds ONLY the ROS 2 robotics
+# packages. Compare ubuntu24-x86_64-robotics-jazzy-raw.yml, which produces a
+# comparable image by building the whole OS from scratch; here the base OS is
+# Canonical's and only the delta is ours.
+#
+# -----------------------------------------------------------------------------
+# WHY THIS FILE DECLARES NO baseline, overlayPolicy, packageRepositories OR disk
+# -----------------------------------------------------------------------------
+# This is the one thing to get right, and it is easy to get wrong.
+#
+# `baseline`/`overlayPolicy`: MergeConfigurations replaces the package list
+#   outright when the template being merged is itself overlay-mode, and
+#   IsOverlayMode() is true exactly when `baseline` is non-nil. A child that omits
+#   `baseline` is not overlay-mode at its own layer, so the restriction does not
+#   fire and its packages merge ADDITIVELY onto the parent's. Redeclaring
+#   `baseline` here would flip that: the merged package set would become only this
+#   file's packages and the parent's hardware enablement would be silently
+#   dropped. Verified empirically — a child that redeclares baseline resolves to
+#   its own packages alone.
+#
+# `packageRepositories`: repositories merge by codename, and when two layers both
+#   declare them a codename match overrides rather than appends. Three of the
+#   parent's seven share the codename `noble` (ROS 2, Gazebo, RealSense), so
+#   declaring any repository here would collapse them and drop package sources.
+#   The parent owns the whole list; this file inherits it intact.
+#
+# `disk`: inherited (24GiB, qcow2). disk is replaced as a whole block, so
+#   restating it to change one field means copying all of it.
+#
+# `configurations` merge additively in chain order, so the parent's hardware apt
+# pins and NPU udev rule run first, then the ROS 2 setup below.
+# =============================================================================
+
+# AI-searchable metadata for template discovery.
+# metadata is not inherited, so every template declares its own.
+metadata:
+  description: >-
+    Ubuntu 24.04 ROS 2 Jazzy robotics image — extends the Intel hardware-enablement
+    overlay base to add the ROS 2 Jazzy desktop stack, OpenVINO nodes, Gazebo
+    Harmonic and collaborative SLAM, composing a deployable qcow2 from Canonical's
+    official cloud image. Demonstrates overlay + extends composed together.
+  use_cases:
+    - Add the ROS 2 Jazzy stack to a hardware-enabled cloud image via inheritance
+    - Compose a robotics qcow2 without building the OS from scratch
+    - Autonomous mobile robots and robot arms on Intel platforms
+    - ROS 2 development with OpenVINO inference and Gazebo simulation
+  keywords:
+    - robotics
+    - ros2
+    - jazzy
+    - overlay
+    - extends
+    - inheritance
+    - composition
+    - cloud-image
+    - qcow2
+    - openvino
+    - gazebo
+    - slam
+    - realsense
+    - ubuntu24
+
+# Inherit the hardware base (baseline source, overlay policy, qcow2 output and
+# the seven repositories). Resolved relative to this file's directory, so the
+# parent must be a sibling here. The parent's target must match this template's.
+extends: "ubuntu24-x86_64-robotics-hw-overlay-qcow2.yml"
+
+image:
+  name: ubuntu24-robotics-jazzy-overlay
+  version: "24.04"
+
+target:                 # must match the parent template's target
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+
+systemConfig:
+  name: robotics-jazzy
+  description: Intel Robotics AI Suite — ROS 2 Jazzy overlaid on the Canonical cloud image
+
+  # ---------------------------------------------------------------------------
+  # ROS 2 packages, merged ADDITIVELY on top of the parent's hardware layer.
+  # Child packages are appended after the parent's, which is what keeps the
+  # parent's ORDER-COUPLED intel-oneapi-runtime-* entries ahead of
+  # ros-jazzy-desktop below — the ordering the resolver needs.
+  #
+  # Do NOT add a `baseline:` or `overlayPolicy:` block here (see the header note).
+  # ---------------------------------------------------------------------------
+  packages:
+    # ── ROS 2 Jazzy Desktop (full) ──────────────────────────────────
+    - ros-jazzy-desktop
+
+    # ── Intel OpenVINO 2025 (pinned to 2025.3.0) ─────────────────────
+    - openvino_2025.3.0.19807
+    - ros-jazzy-openvino-wrapper-lib
+    - ros-jazzy-openvino-node
+
+    # ── Gazebo Harmonic physics simulator ───────────────────────────
+    - gz-harmonic
+
+    # ── Intel Robotics SDK ───────────────────────────────────────────
+    - ros-jazzy-robotics-sdk
+
+    # ── Collaborative SLAM (Intel Xe / UHD GPU accelerated) ──────────
+    - ros-jazzy-collab-slam-lze
+
+    # ── RealSense ROS 2 bindings (SDK + DKMS come from the parent) ────
+    - ros-jazzy-librealsense2
+
+  # ---------------------------------------------------------------------------
+  # Appended after the parent's hardware configurations, in chain order.
+  # ---------------------------------------------------------------------------
+  configurations:
+    # ── ROS 2 environment setup ────────────────────────────────────
+    - cmd: "echo 'source /opt/ros/jazzy/setup.bash' >> /etc/bash.bashrc"
+    - cmd: "echo 'export ROS_DOMAIN_ID=42' >> /etc/bash.bashrc"
+
+    # ── OpenVINO version pins (post-deployment upgrade protection) ───
+    - cmd: "printf 'Package: openvino-libraries-dev\\nPin: version 2025.3.0*\\nPin-Priority: 1001\\n\\nPackage: openvino\\nPin: version 2025.3.0*\\nPin-Priority: 1001\\n\\nPackage: ros-jazzy-openvino-wrapper-lib\\nPin: version 2025.3.0*\\nPin-Priority: 1002\\n\\nPackage: ros-jazzy-openvino-node\\nPin: version 2025.3.0*\\nPin-Priority: 1002\\n' > /etc/apt/preferences.d/intel-openvino"
+
+    # ── debconf pre-selections for the OpenVINO node ─────────────────
+    - cmd: "echo 'ros-jazzy-openvino-node openvino-node/pip-proxy select true' | debconf-set-selections"
+    - cmd: "echo 'ros-jazzy-openvino-node openvino-node/models select true' | debconf-set-selections"
+
+    # ── Set hostname ────────────────────────────────────────────────
+    - cmd: "echo 'robotics-jazzy' > /etc/hostname"
