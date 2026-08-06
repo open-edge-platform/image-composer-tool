@@ -96,6 +96,8 @@
 
 **Fixed**
 
+- `fix(config)`: drop stale `kernel.version` pin from the ubuntu24 OS defaults: ubuntu24 builds failed in pre-processing with `kernel version mismatch: requires kernel version "6.17", but available versions are: [6.8.0-31.31 7.0.0-28.28~24.04.1]`. Four default configs under `config/osv/ubuntu/ubuntu24/imageconfigs/defaultconfigs/` pinned `kernel.version: "6.17"` alongside the rolling metapackage `linux-image-generic-hwe-24.04`, and Ubuntu noble no longer ships 6.17. Any template without its own `kernel.version` inherited the stale pin, so `ubuntu24-x86_64-minimal-initrd.yml` and `ubuntu24-x86_64-dkms-demo.yml` failed even though the templates themselves were already clean. #765 removed this antipattern from the 12 affected user templates but did not cover the OS defaults, which is why the failure recurred; `image-templates/robotics-demo-ubuntu24-x86_64.yml` was also missed there and is fixed here. Dropping the pin lets `apt` resolve whatever the metapackage currently points to — no pin, nothing to go stale. Templates that pin a concrete kernel package (for example `linux-image-6.11.0-17-generic`, `linux-image-6.12-intel`) are unaffected.
+
 - `fix(ubuntu)`: `AllowPackages` not propagated to debutils.Repository (#480): The `allowPackages` list in user-provided package repository configuration was silently dropped instead of being passed through to the DEB package resolver.
 
 - `fix(inspect)`: ext4 filesystem misdetection in image inspect (#484): The image inspect command was incorrectly classifying some ext4 partitions as a different filesystem type.
