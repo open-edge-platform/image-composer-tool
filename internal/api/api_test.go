@@ -271,9 +271,12 @@ func TestHandleStartBuildErrors(t *testing.T) {
 
 // TestHandleStartBuildAccepted starts a real build against the fake ICT binary,
 // which exits 0 immediately, so the handler returns 202 with the accepted
-// envelope. The status is the build's real state at that instant — not-started
-// until the child's process group is recorded, then running — so accept either
-// rather than pinning a hardcoded "running" the server no longer reports.
+// envelope. The status is the build's real state at the instant the response is
+// snapshotted: StartBuild launches the build goroutine and then reads the
+// status, so under load (few CPUs, e.g. GOMAXPROCS=1) the fast-exiting fake can
+// race all the way to success before that read. Accept any of the states this
+// happy path can legitimately be in — not-started, running, or success — rather
+// than pinning an early one and flaking when the goroutine wins the race.
 func TestHandleStartBuildAccepted(t *testing.T) {
 	s, _ := newTestServer(t)
 	body := `{"compose":{"vertical":"robotics","sku":"amr","platform":"wcl","os":"ubuntu24","imageType":"iso"}}`
@@ -289,9 +292,13 @@ func TestHandleStartBuildAccepted(t *testing.T) {
 		!strings.HasSuffix(acc.LogsUrl, "/logs") {
 		t.Errorf("unexpected accepted envelope: %+v", acc)
 	}
-	if acc.Status != httpapi.BuildStatus(service.StatusNotStarted) &&
-		acc.Status != httpapi.BuildStatus(service.StatusRunning) {
-		t.Errorf("status = %q, want not-started or running", acc.Status)
+	switch acc.Status {
+	case httpapi.BuildStatus(service.StatusNotStarted),
+		httpapi.BuildStatus(service.StatusRunning),
+		httpapi.BuildStatus(service.StatusSuccess):
+		// expected for a fast, successful build
+	default:
+		t.Errorf("status = %q, want not-started, running, or success", acc.Status)
 	}
 }
 
