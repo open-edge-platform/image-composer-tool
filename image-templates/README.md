@@ -104,10 +104,27 @@ To see what any of them actually resolves to:
 
 ## What CI builds
 
-24 of the 64 templates are built by a `scripts/build_*.sh` script on every pull
-request. The rest are validated by schema but **never built by CI**, so if you
+Two different things happen in CI, and it is worth knowing which one covers a
+template you are changing.
+
+**Every** template is checked statically. The `Template Gate` workflow runs
+`validate` and `resolve --full` over each template returned by
+`git ls-files 'image-templates/*.yml'`, so a template is covered the moment it
+is committed — no workflow to add. That catches schema breaks and, more usefully,
+broken `extends:` chains: a parent that was moved, renamed, or reached through
+`..` fails the gate. It does not build anything, so it says nothing about whether
+a template produces a working image.
+
+**21 of the 64** templates are additionally built by a `scripts/build_*.sh`
+script on a pull request. The other 43 are **never built by CI**, so if you
 change one, build it yourself before opening a PR. Each per-distribution README
 marks which of its templates are covered.
+
+Note that a build passing is not proof a composed template is correct. Overlay
+mode replaces the resolved package list rather than extending it, so a template
+that wrongly declares its own `baseline:` still builds — it just builds the wrong
+image, silently. When you split a template, compare
+`resolve --full` before and after.
 
 ## Further reading
 
