@@ -444,6 +444,24 @@ image-composer-tool compare --hash-images=true image-v1.raw image-v2.raw
 image-composer-tool compare --format=json --mode=spdx spdx-file1.json spdx-file2.json
 ```
 
+**Comparing overlay build outputs:**
+
+The compare command works directly against
+[overlay build](image-composer-tool-templates.md#baseline) artifacts — the
+baseline RAW, the overlay RAW, and the emitted `*.complete.spdx.json` /
+`*.delta.spdx.json` SBOM sidecars. Compare the baseline RAW against the overlay
+RAW for a structural/binary diff, and use `--mode=spdx` with the complete SBOM
+for an accurate package-level (added/removed/upgraded) diff. For a full
+walkthrough with sample commands and expected output, see
+[Comparing Overlay Outputs](../get-started/usage-guide.md#comparing-overlay-outputs)
+in the Usage Guide.
+
+In `--mode=spdx`, either argument may be a standalone SPDX JSON file or an OS
+image — an image's embedded SBOM (at `/usr/share/sbom`) is extracted
+automatically. In the default image-compare modes (`diff`/`summary`/`full`) the
+SBOM diff reflects metadata only (package count, canonical hash); use
+`--mode=spdx` for a per-package breakdown.
+
 ### Cache Command
 
 Manage cached artifacts created during the build process.

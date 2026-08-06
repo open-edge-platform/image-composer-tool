@@ -305,6 +305,10 @@ to delta-only); it does not fail the build. Omitting `sbomPath` entirely
 preserves the pre-existing base-resolution behavior. This applies to every
 overlay-capable provider (Ubuntu and Debian).
 
+To diff these artifacts against the baseline — the overlay RAW vs the baseline
+RAW, or the complete SBOM vs the baseline SBOM — see
+[Comparing Overlay Outputs](../get-started/usage-guide.md#comparing-overlay-outputs).
+
 > **Note:** Overlay mode is currently wired end-to-end for the **Ubuntu** and
 > **Debian** providers. Targeting a provider without overlay support fails the
 > build immediately with a clear message rather than silently falling back to a

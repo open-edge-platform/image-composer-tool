@@ -10,6 +10,10 @@ command reference, see the
   - [Commands Overview](#commands-overview)
   - [Building an Image](#building-an-image)
     - [Build Output](#build-output)
+  - [Comparing Overlay Outputs](#comparing-overlay-outputs)
+    - [Baseline RAW vs Overlay RAW](#baseline-raw-vs-overlay-raw)
+    - [SBOM Comparison (Complete SBOM)](#sbom-comparison-complete-sbom)
+    - [Delta SBOM: Optional Quick-Change View](#delta-sbom-optional-quick-change-view)
   - [Validating a Template](#validating-a-template)
   - [Resolving a Template](#resolving-a-template)
     - [Debugging an Extends Chain](#debugging-an-extends-chain)
@@ -110,6 +114,117 @@ The default `work_dir` depends on how you installed the tool:
 
 You can override it with `--work-dir` or by setting `work_dir` in your
 configuration file.
+
+## Comparing Overlay Outputs
+
+An [overlay build](../architecture/image-composer-tool-templates.md#baseline)
+layers packages onto an existing baseline RAW image and emits, alongside the
+result, two SPDX SBOM sidecars (see
+[SBOM generation (overlay mode)](../architecture/image-composer-tool-templates.md#sbom-generation-overlay-mode)):
+
+| Artifact | Name |
+|----------|------|
+| Overlay RAW image | `<name>-<version>.raw` |
+| Complete SBOM (full final inventory) | `<name>-<version>.complete.spdx.json` |
+| Delta SBOM (overlay changes only) | `<name>-<version>.delta.spdx.json` |
+
+The existing `compare` command works directly against these outputs — no
+overlay-specific flags are needed. The examples below assume the baseline is at
+`baseline.raw` and the overlay build produced `myimage-1.0.*` under the build
+output directory.
+
+### Baseline RAW vs Overlay RAW
+
+Compare the structural/binary differences between the baseline and the overlay
+result. Add `--hash-images` to compute SHA256 and get a binary-identity verdict:
+
+```bash
+# Human-readable structural diff (partition table, filesystems, bootloader, SBOM metadata)
+./image-composer-tool compare baseline.raw myimage-1.0.raw
+
+# High-level counts as JSON, suitable for CI
+./image-composer-tool compare --format=json --mode=summary baseline.raw myimage-1.0.raw
+
+# Binary-identity check (slower — hashes both images)
+./image-composer-tool compare --hash-images baseline.raw myimage-1.0.raw
+```
+
+Expected output pattern (text): a top `Equality:` verdict followed by the changed
+sections. Because the overlay grows the disk and rewrites the embedded SBOM, the
+verdict is `different`, and the summary reports `sbomChanged` and a size change:
+
+```
+Equality: different (meaningful diffs: ...)
+Image:
+  Size: 4.0 GiB -> 6.0 GiB
+SBOM:
+  PackageCount: 120 -> 123
+```
+
+The equality classes are `binary_identical` (only with `--hash-images`, when the
+SHA256s match), `semantically_identical` / `semantically_identical_unverified`
+(no meaningful diffs), or `different`.
+
+> **Note:** In the default image modes the compare tool reports SBOM *metadata*
+> (package count, canonical hash) only. For a package-by-package breakdown, use
+> the SBOM comparison below.
+
+### SBOM Comparison (Complete SBOM)
+
+Use `--mode=spdx` for an accurate package-level diff. The complete SBOM
+represents the full final image inventory, so comparing the baseline's SBOM
+against the overlay complete SBOM reports exactly which packages were added or
+upgraded:
+
+```bash
+# Compare the baseline SBOM against the overlay complete SBOM
+./image-composer-tool compare --mode=spdx baseline.spdx.json myimage-1.0.complete.spdx.json
+
+# Either argument may also be an image — its embedded SBOM (/usr/share/sbom) is
+# extracted automatically, so you can compare the baseline RAW directly:
+./image-composer-tool compare --mode=spdx baseline.raw myimage-1.0.complete.spdx.json
+
+# JSON for tooling
+./image-composer-tool compare --format=json --mode=spdx baseline.spdx.json myimage-1.0.complete.spdx.json
+```
+
+Expected output pattern (text): added, removed, and upgraded package lists. A
+same-name version bump is reported as a single upgrade (`~`), not a remove + add:
+
+```
+SPDX Compare
+============
+Equal:    false
+Packages: 120 -> 123
+
+Added packages:
+  + tree|2.1.1|...
+
+Upgraded packages:
+  ~ curl: 8.5.0 -> 8.6.0
+```
+
+Since overlay builds are additive, you should see additions and upgrades but no
+removals.
+
+### Delta SBOM: Optional Quick-Change View
+
+The delta SBOM lists only the overlay-contributed packages (what changed). It is
+an **optional** convenience for a quick "what did this overlay add?" view without
+diffing against the baseline — you can inspect it directly or diff it against an
+empty document:
+
+```bash
+# The delta SBOM is a plain SPDX JSON file — read it directly
+jq '.packages[].name' myimage-1.0.delta.spdx.json
+
+# Or diff it against an empty SBOM to render the same added-package list via compare
+echo '{"packages":[]}' > empty.spdx.json
+./image-composer-tool compare --mode=spdx empty.spdx.json myimage-1.0.delta.spdx.json
+```
+
+For an authoritative before/after picture of the image, prefer the **complete**
+SBOM comparison above; the delta is a shortcut, not a replacement.
 
 ## Validating a Template
 

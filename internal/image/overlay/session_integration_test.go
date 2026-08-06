@@ -8,6 +8,7 @@ import (
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/imagedisc"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/imageinspect"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
 
@@ -164,6 +165,34 @@ func TestOverlayBuilder_FullFlowRealRawBaseline(t *testing.T) {
 	}
 	if len(completeNames) <= len(deltaNames) {
 		t.Errorf("complete SBOM (%d pkgs) must be a superset of the delta (%d pkgs)", len(completeNames), len(deltaNames))
+	}
+
+	// 6b. Validate the `compare` command's SPDX engine against these real overlay
+	//     outputs (the CLI's --mode=spdx path calls the same CompareSPDXData core).
+	//     Comparing the baseline SBOM to the emitted complete SBOM must report the
+	//     overlay-contributed package as an addition — the accurate package-level
+	//     diff the compare workflow is meant to yield.
+	baseVsComplete, cerr := imageinspect.CompareSPDXFiles(baseSBOM, completeSBOM)
+	if cerr != nil {
+		t.Fatalf("compare baseline SBOM vs complete SBOM: %v", cerr)
+	}
+	if baseVsComplete.Equal {
+		t.Errorf("baseline vs complete SBOM should differ (overlay added a package)")
+	}
+	if !contains(baseVsComplete.AddedPackages, "overlay-probe") {
+		t.Errorf("compare should report overlay-probe as added (baseline -> complete), got added=%v upgraded=%v",
+			baseVsComplete.AddedPackages, baseVsComplete.UpgradedPackages)
+	}
+
+	// Comparing the complete SBOM against itself must report equal — the compare
+	// engine is stable/deterministic over a full final inventory.
+	selfCompare, cerr := imageinspect.CompareSPDXFiles(completeSBOM, completeSBOM)
+	if cerr != nil {
+		t.Fatalf("self-compare complete SBOM: %v", cerr)
+	}
+	if !selfCompare.Equal {
+		t.Errorf("complete SBOM compared to itself should be equal, got added=%v removed=%v upgraded=%v",
+			selfCompare.AddedPackages, selfCompare.RemovedPackages, selfCompare.UpgradedPackages)
 	}
 
 	// 7. The loop device and root mount must have been released by Postprocess.
