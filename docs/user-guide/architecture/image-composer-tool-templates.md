@@ -321,6 +321,18 @@ RAW, or the complete SBOM vs the baseline SBOM — see
 > `disk.size`. The installed bootloader binary, the ESP, and existing baseline
 > packages are never modified.
 >
+> **OS defaults do not apply.** Unlike a create-mode build, an overlay template is
+> **not** merged with the target's create-mode OS default configuration
+> (`default-raw-*.yml`). Those defaults describe how to build an image from
+> scratch — disk size and partition table, bootloader, kernel, and the base OS
+> package set — all of which the baseline image already provides. The overlay
+> pipeline reads disk/bootloader/kernel geometry from the detected baseline, not
+> from the template, so the effective overlay template is exactly what you declare
+> (folded through any `extends:` chain) with nothing inherited from the OS default.
+> In particular, an overlay template that omits `disk.size` keeps the baseline's
+> size — it does not pick up the default's `disk.size`, which against a larger
+> baseline would otherwise be rejected as a shrink.
+>
 > **Unsupported systemConfig sections.** Because overlay mode never re-runs the
 > system-provisioning stages, the following `systemConfig` sections cannot be
 > applied to an overlay build: `users`, `hostname`, `network`, `initramfs`,
