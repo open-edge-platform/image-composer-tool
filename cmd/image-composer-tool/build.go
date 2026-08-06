@@ -379,6 +379,52 @@ post:
 			}
 		}
 
+		// The build ran as root, so the output directory and image/SBOM inside it are
+		// owned by root:root and unreadable to the user who invoked `sudo`. Hand ownership
+		// of the artifact directory (and the path leading to it) back to that user so they
+		// can read/remove their own build output without root. This targets only the final
+		// artifact tree — the sibling chroot trees stay root-owned. Best-effort: a chown
+		// failure is logged but does not fail an otherwise successful build.
+		//
+		// In --no-cache mode the artifacts were just copied into the configured workspace
+		// (originalWorkDir); chown that copy, not the temporary workspace that cleanup removes.
+		chownWorkDir, workDirErr := config.WorkDir()
+		if isolated != nil {
+			chownWorkDir, workDirErr = isolated.OutputWorkDir(), nil
+		}
+		if workDirErr != nil {
+			log.Warnf("skipping artifact ownership restore: resolving work directory: %v", workDirErr)
+		} else {
+			providerId := system.GetProviderId(template.Target.OS, template.Target.Dist, template.Target.Arch)
+			imageBuildDir := filepath.Join(chownWorkDir, providerId, "imagebuild", template.GetSystemConfigName())
+			if err := system.ChownArtifactsToSudoUser(chownWorkDir, imageBuildDir); err != nil {
+				log.Warnf("could not fully restore build artifact ownership to invoking user: %v", err)
+			}
+		}
+
+		// Also hand back the temp directory, which the root build populated with GPG
+		// keys and decompressed metadata — inert scratch the user should be able to
+		// delete without root. Unlike the workspace it holds no extracted rootfs, so a
+		// full recursive chown is safe. The cache directory is intentionally LEFT
+		// root-owned: it persists across builds for reuse, and later root builds would
+		// recreate root-owned files inside it anyway.
+		//
+		// This runs in --no-cache mode too: SetupIsolated only makes the cache and
+		// workspace unique, not config.TempDir(), so a root --no-cache build still
+		// populates the shared temp dir and its cleanup does not remove it. Skipping the
+		// chown there would strand root-owned temp content the user cannot delete.
+		//
+		// config.TempDir() returns the configured temp dir (default ./tmp) as-is, or the
+		// system temp dir when temp_dir is left empty; ChownDirTreeToSudoUser refuses the
+		// latter, so an empty temp_dir safely no-ops rather than chowning /tmp. Resolve to
+		// an absolute path for that guard to apply.
+		tempDirPath, err := filepath.Abs(config.TempDir())
+		if err != nil {
+			log.Warnf("skipping temp ownership restore: resolving temp directory: %v", err)
+		} else if err := system.ChownDirTreeToSudoUser(tempDirPath); err != nil {
+			log.Warnf("could not fully restore temp directory ownership to invoking user: %v", err)
+		}
+
 		log.Info("image build completed successfully")
 		template.MarkBuildFinished()
 		// Overlay builds do not run through the create-mode stages that populate the
