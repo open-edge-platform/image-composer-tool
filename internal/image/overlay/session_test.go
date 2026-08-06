@@ -205,7 +205,7 @@ func TestBuilder_HappyPathOrdersStagesAndCleansUp(t *testing.T) {
 
 	// This test template leaves InspectEnabled at its zero value (false), so
 	// inspection is skipped and conversion runs directly after emit. (The CLI
-	// defaults --inspect on; see TestBuilder_InspectRunsAfterEmitWhenEnabled.)
+	// defaults --inspect off; see TestBuilder_InspectRunsAfterEmitWhenEnabled.)
 	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "resize", "install", "configure", "regenBoot", "grubRegen", "addFiles", "sbom", "emit:1.0", "convert:/out/img-1.0.raw"}
 	if !equalStrings(r.calls, want) {
 		t.Errorf("stage order = %v, want %v", r.calls, want)
@@ -744,6 +744,34 @@ func TestOverlayArtifactTypeLabel(t *testing.T) {
 				t.Errorf("overlayArtifactTypeLabel() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestOverlayInspectReportPath(t *testing.T) {
+	tests := []struct {
+		name     string
+		artifact string
+		want     string
+	}{
+		{"raw image", "/wd/ubuntu/imagebuild/overlay/myimage-1.0.raw", "/wd/ubuntu/imagebuild/overlay/myimage-1.0" + overlayInspectReportSuffix},
+		{"qcow2 image", "/out/img.qcow2", "/out/img" + overlayInspectReportSuffix},
+		{"no extension", "/out/img", "/out/img" + overlayInspectReportSuffix},
+		{"dotted name keeps all but final ext", "/out/img-24.04.raw", "/out/img-24.04" + overlayInspectReportSuffix},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := overlayInspectReportPath(tt.artifact); got != tt.want {
+				t.Errorf("overlayInspectReportPath(%q) = %q, want %q", tt.artifact, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestInspectOverlayArtifact_EmptyPath confirms the inspection reporter rejects an
+// empty artifact path up front rather than attempting to inspect or write.
+func TestInspectOverlayArtifact_EmptyPath(t *testing.T) {
+	if err := inspectOverlayArtifact("   "); err == nil {
+		t.Fatal("expected error for empty artifact path, got nil")
 	}
 }
 

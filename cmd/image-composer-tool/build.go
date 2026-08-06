@@ -57,7 +57,7 @@ var (
 	noCache            bool   = false // --no-cache: build from scratch in fresh, unique cache/workspace dirs
 
 	// Overlay-mode flags.
-	inspectImage  bool   = true  // --inspect/--no-inspect: toggle image inspection (default on)
+	inspectImage  bool   = false // --inspect: write a post-build inspection report to an artifact file (default off)
 	cveCheck      bool   = false // --cve-check: enable CVE analysis from the CLI
 	baselineImage string = ""    // --baseline-image: override baseline.source.path from the template
 )
@@ -87,9 +87,12 @@ The template file must be in YAML format following the image template schema.`,
 	buildCmd.Flags().BoolVar(&noCache, "no-cache", false,
 		"Build from scratch using fresh, unique cache and workspace directories that are removed after the build (the final image is copied to the configured workspace)")
 
-	// Overlay-mode flags. --inspect defaults on; --no-inspect is its negation.
-	buildCmd.Flags().BoolVar(&inspectImage, "inspect", true, "Inspect the image during overlay builds (use --no-inspect to disable)")
-	buildCmd.Flags().Bool("no-inspect", false, "Disable image inspection during overlay builds (overrides --inspect)")
+	// Overlay-mode flags. --inspect defaults off; when set, the post-build
+	// inspection report is written to an artifact file next to the emitted image
+	// (same base name as the image artifact with a .inspect.txt extension), not
+	// the console.
+	buildCmd.Flags().BoolVar(&inspectImage, "inspect", false,
+		"Write a post-build inspection report (partition layout, filesystem, bootloader, SBOM) of the overlay image to a .inspect.txt file alongside the emitted image in the build artifacts directory (default off; nothing is written and console output is unchanged when unset)")
 	buildCmd.Flags().BoolVar(&cveCheck, "cve-check", false, "Enable CVE analysis of the built image")
 	buildCmd.Flags().StringVar(&baselineImage, "baseline-image", "", "Override baseline.source.path from the template (overlay mode)")
 
@@ -447,15 +450,9 @@ post:
 // toggle has no YAML representation (it is a yaml:"-" field), so the CLI is its
 // only source; --baseline-image overrides baseline.source.path.
 func applyOverlayFlagOverrides(cmd *cobra.Command, template *config.ImageTemplate) error {
-	// Inspection defaults on. --no-inspect wins over --inspect when both appear.
+	// Inspection defaults off; --inspect opts in to writing the report to an
+	// artifact file (never to the console).
 	template.InspectEnabled = inspectImage
-	noInspect, err := cmd.Flags().GetBool("no-inspect")
-	if err != nil {
-		return fmt.Errorf("failed to read --no-inspect flag: %w", err)
-	}
-	if noInspect {
-		template.InspectEnabled = false
-	}
 
 	// --cve-check is accepted by the parser (so it appears in --help and stays a
 	// stable CLI surface) but the CVE analysis engine does not exist yet. Fail

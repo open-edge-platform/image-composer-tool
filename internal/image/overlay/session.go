@@ -15,6 +15,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/image/imageinspect"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/display"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/security"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
 
@@ -420,10 +421,11 @@ func (b *Builder) Postprocess(buildErr error) (err error) {
 		return err
 	}
 
-	// Inspect the emitted image unless the operator disabled it (--no-inspect).
-	// The inspection is a post-build report on the finished artifact — distinct
-	// from the mandatory baseline inspection in Preprocess that drives package
-	// resolution — so it runs against the already-released RAW file here.
+	// Inspect the emitted image when the operator opted in (--inspect). The
+	// inspection is a post-build report on the finished artifact — distinct from
+	// the mandatory baseline inspection in Preprocess that drives package
+	// resolution — so it runs against the already-released RAW file here. The
+	// report is written to a sidecar artifact file, not the console.
 	if b.template.InspectEnabled {
 		if err := b.timeStage("Inspect Image", func() error {
 			if ierr := builderInspectFn(artifact); ierr != nil {
@@ -434,7 +436,11 @@ func (b *Builder) Postprocess(buildErr error) (err error) {
 			return err
 		}
 	} else {
-		log.Infof("Overlay postprocess: image inspection disabled (--no-inspect); skipping")
+		log.Debugf("Overlay postprocess: image inspection not requested (--inspect off); skipping")
+		// A rebuild of the same name/version with --inspect now OFF must not leave an
+		// earlier build's inspection report at the deterministic path, or the artifact
+		// summary would present that stale report as describing the new image.
+		removeStaleArtifact(overlayInspectReportPath(artifact))
 	}
 
 	// Convert the emitted RAW into the disk.artifacts output formats (qcow2, vhd,
@@ -745,12 +751,49 @@ func emitOverlayArtifact(template *config.ImageTemplate, copyPath, version strin
 	return finalPath, nil
 }
 
+// overlayInspectReportSuffix is the extension appended to the emitted image's
+// base name to form the inspection report artifact (e.g. myimage-1.0.raw ->
+// myimage-1.0.inspect.txt). It is documented in the overlay build help text and
+// CLI specification.
+const overlayInspectReportSuffix = ".inspect.txt"
+
+// removeStaleArtifact deletes a deterministic output path that this build will NOT
+// (re)write, so a rebuild of the same name/version never leaves an earlier build's
+// artifact behind to be presented as describing the new image (e.g. a stale
+// inspection report when --inspect is now off, or a stale complete SBOM sidecar).
+// Best-effort: a missing file is the expected common case and not an error; a real
+// removal failure is logged.
+func removeStaleArtifact(path string) {
+	if strings.TrimSpace(path) == "" {
+		return
+	}
+	if err := os.Remove(path); err != nil {
+		if !os.IsNotExist(err) {
+			log.Warnf("Overlay emit: failed to remove stale artifact %s: %v", path, err)
+		}
+		return
+	}
+	log.Infof("Overlay emit: removed stale artifact %s from a previous build", path)
+}
+
+// overlayInspectReportPath returns the inspection report artifact path for an
+// emitted image artifact: the same directory and base name with the RAW/format
+// extension replaced by overlayInspectReportSuffix. Keeping it a sibling of the
+// image (rather than a fixed name) means multiple images in one build directory
+// each get their own report.
+func overlayInspectReportPath(artifactPath string) string {
+	base := filepath.Base(artifactPath)
+	base = strings.TrimSuffix(base, filepath.Ext(base))
+	return filepath.Join(filepath.Dir(artifactPath), base+overlayInspectReportSuffix)
+}
+
 // inspectOverlayArtifact runs a post-build inspection of the emitted RAW image and
-// renders the summary to the build log. It reuses the same diskfs inspector the
-// standalone `inspect` command uses, so it needs no loop device or root: the image
-// is already released and inspected purely in userspace. Inspection is a reporting
-// step; a failure here is surfaced by the caller so a broken emitted image does not
-// pass silently.
+// writes the rendered summary to an artifact file alongside the image, rather than
+// to the console. It reuses the same diskfs inspector the standalone `inspect`
+// command uses, so it needs no loop device or root: the image is already released
+// and inspected purely in userspace. The console gets only a short pointer to the
+// generated report. Inspection is a reporting step; a failure here is surfaced by
+// the caller so a broken emitted image does not pass silently.
 func inspectOverlayArtifact(artifactPath string) error {
 	if strings.TrimSpace(artifactPath) == "" {
 		return fmt.Errorf("overlay inspect: artifact path is empty")
@@ -768,7 +811,18 @@ func inspectOverlayArtifact(artifactPath string) error {
 	if rerr := imageinspect.RenderSummaryText(&buf, summary, imageinspect.TextOptions{}); rerr != nil {
 		return fmt.Errorf("rendering inspection summary for %s: %w", artifactPath, rerr)
 	}
-	log.Infof("Overlay image inspection:\n%s", buf.String())
+
+	// Write the report as a sidecar artifact next to the image. Mode 0644 and the
+	// symlink-rejecting safe writer match the SBOM sidecar convention
+	// (manifest.CopySBOMToImageBuildDir). The build directory already exists (emit
+	// created it before the artifact was placed there).
+	reportPath := overlayInspectReportPath(artifactPath)
+	if werr := security.SafeWriteFile(reportPath, []byte(buf.String()), 0o644, security.RejectSymlinks); werr != nil {
+		return fmt.Errorf("writing overlay inspection report to %s: %w", reportPath, werr)
+	}
+	// Console output stays clean: just a one-line pointer to the artifact, not the
+	// full summary.
+	log.Infof("Overlay image inspection report written to %s", reportPath)
 	return nil
 }
 
