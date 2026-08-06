@@ -89,12 +89,15 @@ export const api = {
 
   // Compose history, newest-first (merges live builds + on-disk meta records).
   // Also returns the server↔browser clock offset for correcting elapsed-time labels.
+  // Prefer serverTime from body (works through proxies/CORS); fall back to Date header.
   listBuilds: async (): Promise<{ builds: HistoryItem[]; clockOffsetMs: number }> => {
     const res = await jsonFetchRaw('/builds')
+    const body = (await res.json()) as { builds: HistoryItem[]; serverTime?: string }
+    const bodyServerNow = body.serverTime ? new Date(body.serverTime).getTime() : NaN
     const dateHeader = res.headers.get('Date')
-    const serverNow = dateHeader ? new Date(dateHeader).getTime() : NaN
+    const headerServerNow = dateHeader ? new Date(dateHeader).getTime() : NaN
+    const serverNow = Number.isFinite(bodyServerNow) ? bodyServerNow : headerServerNow
     const clockOffsetMs = Number.isFinite(serverNow) ? serverNow - Date.now() : 0
-    const body = (await res.json()) as { builds: HistoryItem[] }
     return { builds: body.builds, clockOffsetMs }
   },
 

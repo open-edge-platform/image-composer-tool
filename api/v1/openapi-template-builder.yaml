@@ -999,12 +999,16 @@ components:
 
     BuildList:
       type: object
-      required: [builds]
+      required: [builds, serverTime]
       properties:
         builds:
           type: array
           items:
             $ref: "#/components/schemas/HistoryItem"
+        serverTime:
+          type: string
+          format: date-time
+          description: Server time at response generation, used to correct client clock skew.
 
     # ── Common ──
 
