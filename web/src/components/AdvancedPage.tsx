@@ -9,7 +9,12 @@ import { Select } from './Select'
 // template's YAML read-only. It is a preview only — editing, validation, package
 // selection and export land in later PRs. The selection lives in the shared
 // store, so switching between Basic and Advanced keeps the same choices.
-export function AdvancedPage() {
+//
+// `active` is true only while the Advanced tab is the visible one. Both pages
+// stay mounted (hidden via CSS) so their state survives tab switches, but the
+// compose fetch is gated on `active` so a hidden page doesn't issue duplicate
+// requests for the same selection.
+export function AdvancedPage({ active }: { active: boolean }) {
   const manifest = useStore((s) => s.manifest)
   const selection = useStore((s) => s.selection)
   const setField = useStore((s) => s.setField)
@@ -24,16 +29,20 @@ export function AdvancedPage() {
 
   const complete = !!opts?.matched
 
-  // Resolve the template YAML whenever the selection is complete, mirroring the
-  // Basic tab's auto-fetch. Guard against out-of-order responses with a cancel
-  // flag so a slow earlier request can't overwrite a newer selection's result.
+  // Resolve the template YAML whenever the selection is complete and this tab is
+  // visible, mirroring the Basic tab's auto-fetch. Guard against out-of-order
+  // responses with a cancel flag so a slow earlier request can't overwrite a
+  // newer selection's result. Clear any prior result/error up front so a stale
+  // template never lingers while the new one loads (or after the selection
+  // becomes incomplete).
   useEffect(() => {
-    if (!complete) {
+    setError(null)
+    if (!active || !complete) {
       setComposed(null)
       return
     }
+    setComposed(null)
     let cancelled = false
-    setError(null)
     api
       .compose(selection)
       .then((r) => {
@@ -45,7 +54,7 @@ export function AdvancedPage() {
     return () => {
       cancelled = true
     }
-  }, [complete, selection])
+  }, [active, complete, selection])
 
   if (!manifest || !opts) return <div className="p-8">Loading…</div>
 

@@ -7,9 +7,13 @@ import { Select } from './Select'
 interface BasicPageProps {
   onBuildStarted: (buildId: string) => void
   buildInProgress: boolean
+  // True only while the Basic tab is visible. Both tabs stay mounted, so the
+  // compose auto-fetch is gated on this to avoid a hidden page issuing duplicate
+  // requests for the same selection (the Advanced tab fetches the same thing).
+  active: boolean
 }
 
-export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
+export function BasicPage({ onBuildStarted, buildInProgress, active }: BasicPageProps) {
   const manifest = useStore((s) => s.manifest)
   const selection = useStore((s) => s.selection)
   const setField = useStore((s) => s.setField)
@@ -29,7 +33,7 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
   // it always reflects the current dropdowns (no manual "review" step). Guard
   // against out-of-order responses with a cancel flag.
   useEffect(() => {
-    if (!complete) {
+    if (!active || !complete) {
       setReview(null)
       return
     }
@@ -45,7 +49,7 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
     return () => {
       cancelled = true
     }
-  }, [complete, selection])
+  }, [active, complete, selection])
 
   if (!manifest || !opts) return <div className="p-8">Loading…</div>
 
