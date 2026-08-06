@@ -1,0 +1,108 @@
+# Robotics AI Suite — Level 2: SLAM + RealSense + NPU
+#
+# Leaf of a three-level inheritance chain:
+#
+#   ubuntu24-x86_64-minimal-raw.yml            (OEP base)
+#     └─ ubuntu24-x86_64-robotics-core-raw.yml       (ROS 2 + OpenVINO + GPU)
+#          └─ ubuntu24-x86_64-robotics-slam-raw.yml  (this file)
+#
+# This is what `extends` is for. The core robotics stack -- 7 package
+# repositories, ~25 packages, the 24GiB disk layout, the bootloader choice and
+# the apt version pins -- all come from the parent. This file adds only what a
+# SLAM-capable robot needs on top: collaborative SLAM, the RealSense depth
+# camera stack (DKMS), and Intel NPU offload.
+#
+# Compare sizes, counting only YAML (excluding comments and blank lines): this
+# delta is 49 lines against 151 for the standalone equivalent
+# (ubuntu24-x86_64-robotics-jazzy-raw.yml) -- roughly a third.
+#
+# Inspect the full three-level chain before building:
+#   ./image-composer-tool resolve image-templates/ubuntu24-x86_64-robotics-slam-raw.yml --full
+#
+# Usage:
+#   sudo -E ./image-composer-tool build image-templates/ubuntu24-x86_64-robotics-slam-raw.yml
+
+# AI-searchable metadata for template discovery
+metadata:
+  description: Collaborative SLAM, Intel RealSense and NPU offload layered onto the ROS 2 Jazzy core robotics template via a three-level extends chain
+  use_cases:
+    - Collaborative SLAM (collab-slam-lze)
+    - Intel RealSense depth camera integration
+    - Intel NPU inference offload
+    - Edge robotics deployments
+    - Multi-level template inheritance example
+  keywords:
+    - extends
+    - inheritance
+    - nesting
+    - robotics
+    - ros2
+    - jazzy
+    - slam
+    - realsense
+    - npu
+    - dkms
+    - intel
+    - ubuntu
+    - raw
+
+# Level 2 of the chain: inherit the robotics core, which itself inherits the
+# OEP Ubuntu 24.04 minimal raw template.
+extends: "ubuntu24-x86_64-robotics-core-raw.yml"
+
+image:
+  name: robotics-slam-ubuntu24
+  version: "24.04"
+
+target:
+  os: ubuntu # Must match every template in the chain
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+
+# No `disk`, `packageRepositories`, `bootloader`, `immutability` or `kernel`
+# block: every one of those is inherited unchanged from the core template. This
+# is the whole point -- only the delta is stated.
+#
+# Consequence worth knowing: the inherited disk keeps the parent's
+# `disk.name: robotics-core`, which no longer matches this template's
+# `systemConfig.name` even though the repo convention is a 1:1 mapping. Changing
+# it would mean restating the entire 25-line disk block, because `disk` is a
+# whole-block override rather than a field-level merge. It is cosmetic here --
+# the build output directory is keyed on `systemConfig.name`
+# (internal/image/rawmaker/rawmaker.go:78), so this image still builds into
+# imagebuild/robotics-slam/ -- but it is a real limitation of inheriting a disk.
+systemConfig:
+  name: robotics-slam
+  description: Intel Robotics AI Suite - ROS 2 Jazzy with collaborative SLAM, RealSense and NPU offload
+
+  # Added on top of the core stack's package list.
+  packages:
+    # ── Collaborative SLAM (Intel Xe / UHD GPU accelerated) ──────────
+    - ros-jazzy-collab-slam-lze
+
+    # ── Intel RealSense camera (DKMS + SDK, installed at build time) ──
+    - linux-headers-generic
+    - librealsense2-dkms
+    - librealsense2_2.56.5-0~realsense.17055
+    - ros-jazzy-librealsense2
+
+    # ── Intel NPU (Neural Processing Unit) drivers ───────────────────
+    - intel-level-zero-npu
+    - intel-driver-compiler-npu
+
+  # Appended after the core template's configurations, in chain order.
+  configurations:
+    # ── debconf pre-selections for OpenVINO node ─────────────────────
+    - cmd: "echo 'ros-jazzy-openvino-node openvino-node/pip-proxy select true' | debconf-set-selections"
+    - cmd: "echo 'ros-jazzy-openvino-node openvino-node/models select true' | debconf-set-selections"
+
+    # ── Intel NPU udev rules (render group access to /dev/accel/*) ──
+    - cmd: "printf 'SUBSYSTEM==\"accel\", KERNEL==\"accel*\", GROUP=\"render\", MODE=\"0660\"\\n' > /etc/udev/rules.d/10-intel-vpu.rules"
+
+    # ── Enable required services ────────────────────────────────────
+    - cmd: "systemctl enable NetworkManager"
+    - cmd: "systemctl enable ssh"
+
+    # ── Set hostname ────────────────────────────────────────────────
+    - cmd: "echo 'robotics-jazzy' > /etc/hostname"

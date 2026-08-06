@@ -1,48 +1,56 @@
-# Robotics AI Suite: Full ROS 2 Jazzy Image Template
+# Robotics AI Suite: ROS 2 Jazzy image, composed with template inheritance
 # Ubuntu 24.04 LTS + ROS 2 Jazzy Desktop + Intel OpenVINO + Gazebo Harmonic +
 # Intel RealSense + Robotics SDK + Collab SLAM + Intel GPU/NPU support
 #
-# Full-featured robotics development image based on the setup-robotics-jazzy.sh script.
-# Includes ROS 2 Jazzy Desktop, Intel OpenVINO 2025, Gazebo Harmonic physics simulator,
-# Intel RealSense camera libraries (DKMS), Intel NPU drivers, and more.
+# This template demonstrates the `extends` feature on a real workload: instead of
+# restating a whole image definition, it inherits the Ubuntu 24.04 minimal raw
+# template and layers the robotics stack on top. Functionally it is equivalent to
+# ubuntu24-x86_64-robotics-jazzy-raw.yml, which remains the standalone reference.
+#
+# What is inherited from ubuntu24-x86_64-minimal-raw.yml:
+#   - the base package set (ubuntu-minimal, systemd, systemd-resolved,
+#     systemd-timesyncd, openssh-server)
+#   - immutability and bootloader defaults, both overridden below
+#
+# What this template adds or overrides:
+#   - a 24GiB two-partition disk (disk is a whole-block override)
+#   - seven robotics package repositories
+#   - the ROS 2 / OpenVINO / Gazebo / RealSense / NPU package set (additive)
+#   - the HWE kernel package (kernel.packages replaces, it does not union)
+#   - twelve post-install configuration commands (appended after the parent's)
+#
+# Known cost of inheriting this particular parent: the merge unions package lists
+# and offers no removal syntax, so the parent's six GRUB packages
+# (grub-efi-amd64{,-bin,-signed}, grub-pc-bin, grub2-common, initramfs-tools)
+# are installed even though this image boots via systemd-boot. Every other merged
+# field is identical to the standalone template. Prefer the standalone template
+# when image size matters more than the inheritance link.
+#
+# Inspect exactly what will be built before building it:
+#   ./image-composer-tool resolve image-templates/ubuntu24-x86_64-robotics-jazzy-extends-raw.yml --full
 #
 # Usage:
-#   sudo -E ./image-composer-tool build image-templates/ubuntu24-x86_64-robotics-jazzy-raw.yml
-#
-# VM launch (QEMU example):
-#   qemu-system-x86_64 -machine q35 -enable-kvm -cpu host -smp 8 -m 16384 \
-#     -drive if=pflash,format=raw,readonly=on,file=OVMF_CODE_4M.fd \
-#     -drive if=pflash,format=raw,file=OVMF_VARS_4M.fd \
-#     -drive file=robotics-jazzy-ubuntu24-24.04.raw,format=raw,if=virtio \
-#     -device virtio-net-pci,netdev=net0 \
-#     -netdev user,id=net0,hostfwd=tcp::2222-:22 \
-#     -nographic
+#   sudo -E ./image-composer-tool build image-templates/ubuntu24-x86_64-robotics-jazzy-extends-raw.yml
 #
 # ROS 2 is auto-sourced on login. Run demos:
 #   ros2 run turtlesim turtlesim_node &
 #   ros2 run demo_nodes_cpp talker &
 #   ros2 run demo_nodes_cpp listener &
-#
-# OpenVINO inference example:
-#   ros2 launch openvino_node openvino_node.launch.py
-#
-# Gazebo Harmonic simulation:
-#   gz sim shapes.sdf
 
 # AI-searchable metadata for template discovery
 metadata:
-  description: Full ROS 2 Jazzy robotics image with Intel OpenVINO, Gazebo Harmonic, RealSense, and Intel GPU/NPU support
+  description: ROS 2 Jazzy robotics image composed by extending the Ubuntu 24.04 minimal raw template, with Intel OpenVINO, Gazebo Harmonic, RealSense, and Intel GPU/NPU support
   use_cases:
+    - Template inheritance on a production workload
     - Full robotics development environment
     - ROS 2 Jazzy Desktop with all tools
     - Intel OpenVINO AI inference on robots
     - Gazebo Harmonic physics simulation
     - Intel RealSense depth camera integration
-    - Collaborative SLAM (collab-slam-lze)
-    - Intel GPU acceleration (Xe/UHD Graphics)
-    - Intel NPU inference offload
     - Edge robotics deployments
   keywords:
+    - extends
+    - inheritance
     - robotics
     - ros2
     - jazzy
@@ -50,24 +58,30 @@ metadata:
     - gazebo
     - harmonic
     - realsense
-    - slam
     - intel
     - gpu
     - npu
-    - level-zero
     - dkms
     - ubuntu
+    - raw
+
+# Inherit the Ubuntu 24.04 minimal raw image. Resolved relative to this file's
+# directory; the parent's target must match ours on os/dist/arch/imageType.
+extends: "ubuntu24-x86_64-minimal-raw.yml"
+
 image:
   name: robotics-jazzy-ubuntu24
   version: "24.04"
 
 target:
-  os: ubuntu
+  os: ubuntu # Must match the parent template's target
   dist: ubuntu24
   arch: x86_64
   imageType: raw
 
-# 24GiB to accommodate ROS 2 Desktop + Gazebo + OpenVINO + Mesa + firmware
+# Replaces the parent's 4GiB disk wholesale -- `disk` is a whole-block override,
+# not a field-level merge. 24GiB accommodates ROS 2 Desktop + Gazebo + OpenVINO
+# + Mesa + firmware.
 disk:
   name: robotics-jazzy
   artifacts:
@@ -94,6 +108,14 @@ disk:
       mountPoint: /
       mountOptions: defaults
 
+# The parent declares no repositories, so all seven below are added.
+#
+# NOTE: three of these share the codename "noble" (ROS 2, Gazebo, RealSense).
+# That is correct -- the codename is the apt suite name that goes into the deb
+# line -- but mergePackageRepositories (internal/config/merge.go) identifies
+# repositories BY codename, so if an ancestor template ever declares a
+# repository, these three collapse into one, silently dropping the ROS 2 and
+# Gazebo sources. Keep all repositories for this image in this layer.
 packageRepositories:
   # ROS 2 Jazzy repository
   - codename: "noble"
@@ -148,18 +170,24 @@ systemConfig:
   name: robotics-jazzy
   description: Intel Robotics AI Suite - Full ROS 2 Jazzy with OpenVINO, Gazebo, RealSense, and Intel GPU/NPU
 
+  # The parent selects GRUB. This image boots via systemd-boot with a UKI -- it
+  # installs systemd-boot, dracut-core and cryptsetup-bin below -- so pin the
+  # bootloader explicitly instead of inheriting the parent's choice.
+  bootloader:
+    bootType: efi
+    provider: systemd-boot
+
+  # Restated from the parent: this disk has no dm-verity hash partition, so
+  # immutability must stay off.
   immutability:
     enabled: false
 
   packages:
     # ── Base system ──────────────────────────────────────────────────
-    - ubuntu-minimal
+    # ubuntu-minimal, systemd, systemd-resolved, systemd-timesyncd and
+    # openssh-server are inherited from the parent template.
     - ubuntu-desktop-minimal
-    - systemd
-    - systemd-resolved
     - systemd-boot
-    - systemd-timesyncd
-    - openssh-server
     - network-manager
     - sudo
     - curl
@@ -215,6 +243,7 @@ systemConfig:
     - intel-level-zero-npu
     - intel-driver-compiler-npu
 
+  # kernel.packages REPLACES the parent's list rather than unioning with it.
   kernel:
     cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
     packages:

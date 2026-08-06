@@ -30,6 +30,12 @@
 
 - Debian 13 user templates: New raw image template and Desktop Virtualization (IDV) ISO installer template for Debian 13.
 
+- Nested (three-level) `extends` chain for the robotics templates: `ubuntu24-x86_64-robotics-core-raw.yml` extends the OEP Ubuntu 24.04 minimal raw template with the ROS 2 Jazzy core stack (ROS 2 Desktop, OpenVINO 2025, Gazebo Harmonic, Intel GPU / Level Zero, the 24GiB disk layout and all seven robotics repositories), and is itself a reusable parent that builds a working image on its own. `ubuntu24-x86_64-robotics-slam-raw.yml` extends *that* with only the SLAM delta (collab-slam-lze, RealSense DKMS, Intel NPU) in 49 lines of YAML against 151 for the standalone equivalent, excluding comments and blank lines. The merged three-level result matches the standalone `ubuntu24-x86_64-robotics-jazzy-raw.yml` on every field, including the exact order of all twelve `configurations` commands, and the chain is logged at info level as `ubuntu24-x86_64-minimal-raw.yml -> ubuntu24-x86_64-robotics-core-raw.yml -> ubuntu24-x86_64-robotics-slam-raw.yml`.
+
+- Overlay mode combined with `extends`: `ubuntu24-x86_64-overlay-extends-raw.yml` inherits its `baseline.source` and `overlayPolicy` from `ubuntu24-x86_64-overlay-raw.yml` and adds further overlay packages, so a team can share one baseline-image configuration and keep only its package delta. The overlay package restriction is preserved across the chain: the merged package list stays exactly the templates' declared packages and the create-mode OS default set is not unioned back in, verified with `resolve --full`.
+
+- ROS 2 Jazzy robotics template composed with `extends`: `ubuntu24-x86_64-robotics-jazzy-extends-raw.yml` builds the same image as the standalone `ubuntu24-x86_64-robotics-jazzy-raw.yml`, but inherits the Ubuntu 24.04 minimal raw template instead of restating a full image definition — a worked example of `extends` on a production workload. Every merged field matches the standalone template; the parent's six GRUB packages are additionally installed because package lists union and cannot be subtracted. The standalone template remains the reference for size-sensitive builds.
+
 - ROS 2 Jazzy robotics templates: New AMR raw image template and a companion ISO installer template for ROS 2 Jazzy edge robotics platforms.
 
 - PTL PV attended and unattended ISO templates: New attended and unattended ISO installer templates for PTL (Platform Validation Toolkit) PV (Para-Virtual) configurations including cloud-init example configuration files.
@@ -95,6 +101,8 @@
 - Network schema validation: IPv4/IPv6 CIDR addresses, gateway addresses, and nameservers in `systemConfig.network` are now validated against typed formats in the JSON schema; DHCP and static addresses cannot be combined on the same interface.
 
 **Fixed**
+
+- `fix(templates)`: RealSense apt pin was not a glob in the ROS 2 Jazzy raw template: `ubuntu24-x86_64-robotics-jazzy-raw.yml` pinned `Package: librealsense2` where its ISO sibling pinned `Package: librealsense2*`. The template installs both `librealsense2` and `librealsense2-dkms`, so the non-glob form left `librealsense2-dkms` unpinned and eligible for an unintended post-deployment upgrade. Both siblings now use the glob form.
 
 - `fix(ubuntu)`: `AllowPackages` not propagated to debutils.Repository (#480): The `allowPackages` list in user-provided package repository configuration was silently dropped instead of being passed through to the DEB package resolver.
 

@@ -1,0 +1,76 @@
+# Overlay + extends: layer packages onto a baseline image, inherited from a parent
+#
+# This template combines the two composition features:
+#
+#   * `baseline.mode: overlay` -- install packages into an existing RAW disk
+#     image instead of building a rootfs from scratch.
+#   * `extends:` -- inherit that overlay configuration from a parent template
+#     rather than restating it.
+#
+# It extends ubuntu24-x86_64-overlay-raw.yml, so the baseline source, the
+# overlay policy and the parent's overlay package set all come from the parent.
+# This file adds two more packages on top.
+#
+# What is inherited:
+#   - baseline.mode and baseline.source (the pointer to the baseline image)
+#   - overlayPolicy (packageOperation: additive-only, conflictPolicy: fail)
+#   - the parent's overlay packages (tree, jq), which union with ours
+#
+# Overlay-specific merge behaviour worth knowing: in overlay mode the merged
+# package list is exactly the templates' declared packages -- the create-mode
+# OS default package set is deliberately NOT unioned in, because the baseline
+# image already provides it. See the overlay-mode package restriction in
+# internal/config/merge.go.
+#
+# Before building, point the parent's baseline.source at a real RAW image on
+# your build host, or override it on the command line:
+#   ./image-composer-tool build image-templates/ubuntu24-x86_64-overlay-extends-raw.yml \
+#       --baseline-image /path/to/ubuntu-24.04-base.img
+#
+# Inspect the resolved chain (no baseline image required):
+#   ./image-composer-tool resolve image-templates/ubuntu24-x86_64-overlay-extends-raw.yml
+
+# AI-searchable metadata for template discovery
+metadata:
+  description: Overlay-mode template that inherits its baseline and overlay policy from a parent overlay template via extends, adding further packages on top
+  use_cases:
+    - Combining overlay mode with template inheritance
+    - Adding packages to a shared baseline image
+    - Reusing an overlay configuration across teams
+    - Minimal delta templates over a golden image
+  keywords:
+    - extends
+    - inheritance
+    - overlay
+    - baseline
+    - additive
+    - ubuntu
+    - ubuntu24
+    - raw
+
+# Inherit the overlay configuration: baseline source, overlayPolicy and packages.
+extends: "ubuntu24-x86_64-overlay-raw.yml"
+
+image:
+  name: ubuntu-overlay-extends
+  version: "24.04"
+
+target:
+  os: ubuntu # Must match the parent template's target
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+
+# No `baseline` or `overlayPolicy` block here: both are inherited from the
+# parent. Declaring either one would replace the parent's value wholesale,
+# since both are pointer fields rather than field-level merges.
+
+systemConfig:
+  name: overlay
+  description: Ubuntu 24.04 baseline with additional packages overlaid, composed via extends
+
+  # Added to the parent's overlay packages (tree, jq). Overlay mode is strictly
+  # additive in v1 -- packages may only be added, never removed or downgraded.
+  packages:
+    - htop
+    - ncdu
