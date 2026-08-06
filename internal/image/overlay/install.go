@@ -16,6 +16,59 @@ import (
 // baseline package path and is conventionally tmpfs-like (transient).
 const chrootArtifactDir = "/run/overlay-pkgs"
 
+// maxDpkgArgBytes caps how many bytes of quoted artifact paths go into a single
+// dpkg command line.
+//
+// Commands here are assembled as one string and executed as `bash -c "<cmd>"`,
+// which makes the entire command a single argv entry. Linux limits one argument
+// to MAX_ARG_STRLEN = PAGE_SIZE * 32 = 128 KiB (on 4 KiB pages) — far below
+// ARG_MAX (typically 2 MiB) — and execve fails with E2BIG / "argument list too
+// long" past it. Observed in the wild: 2004 ROS 2 artifacts produced a ~142 KiB
+// command line and the install failed before dpkg started.
+//
+// 96 KiB leaves ~32 KiB of headroom for everything the executor prepends to the
+// same string: `sudo `, the DEBIAN_FRONTEND/DEBCONF_* environment assignments, any
+// injected proxy variables, `chroot <path> `, and the absolute-path rewrite of
+// dpkg itself. The limit is per-argument, not per-list, so a conservative budget
+// costs only an extra batch or two.
+const maxDpkgArgBytes = 96 * 1024
+
+// chunkArgs splits pre-quoted command arguments into batches whose joined length
+// (including the single separating space between entries) stays within budget.
+//
+// An argument longer than the budget on its own is placed in a batch by itself
+// rather than dropped or truncated: dropping it would silently skip a package,
+// and the caller must see the real execve failure instead of a mystery omission.
+// A nil or empty input yields a single empty batch so callers still run once and
+// preserve existing behaviour for the no-artifact case.
+func chunkArgs(args []string, budget int) [][]string {
+	if len(args) == 0 {
+		return [][]string{nil}
+	}
+
+	var chunks [][]string
+	var current []string
+	currentLen := 0
+	for _, arg := range args {
+		// +1 for the space that will join this entry to the previous one.
+		addition := len(arg)
+		if len(current) > 0 {
+			addition++
+		}
+		if len(current) > 0 && currentLen+addition > budget {
+			chunks = append(chunks, current)
+			current, currentLen = nil, 0
+			addition = len(arg)
+		}
+		current = append(current, arg)
+		currentLen += addition
+	}
+	if len(current) > 0 {
+		chunks = append(chunks, current)
+	}
+	return chunks
+}
+
 // InstallResult records what the install step did, for logging and verification.
 type InstallResult struct {
 	// Installed are the package names confirmed present in the baseline package
@@ -568,7 +621,18 @@ func (b *debInstallerBackend) install(req installRequest) error {
 		"DEBCONF_NONINTERACTIVE_SEEN=true",
 		"DEBCONF_NOWARNINGS=yes",
 	}
-	joined := strings.Join(paths, " ")
+
+	// Split the artifact list so no single dpkg command line exceeds the kernel's
+	// per-argument limit. Commands in this tool are assembled as one string and run
+	// via `bash -c "<cmd>"`, which makes the whole command a SINGLE argv entry — so
+	// the binding limit is MAX_ARG_STRLEN (128 KiB), not the much larger ARG_MAX.
+	// A large overlay reaches it: 2004 ROS 2 artifacts produce a ~142 KiB command
+	// and execve fails with "argument list too long" before dpkg even starts.
+	chunks := chunkArgs(paths, maxDpkgArgBytes)
+	if len(chunks) > 1 {
+		log.Infof("Overlay install: %d artifact(s) exceed the per-command argument limit; "+
+			"installing in %d dpkg batch(es) per pass", len(paths), len(chunks))
+	}
 
 	// Install the prepared local artifacts, retrying to satisfy Pre-Depends.
 	//
@@ -603,14 +667,34 @@ func (b *debInstallerBackend) install(req installRequest) error {
 	// "--" terminates option parsing so a URL-derived artifact basename beginning
 	// with '-' is treated as a file path, not a dpkg option (shell-quoting stops
 	// word-splitting, not option parsing).
+	// Batching interacts with the pass loop rather than replacing it. Every batch
+	// runs within a pass, and only then does `dpkg --configure -a` run, so a
+	// Pre-Depends satisfied by a package in a *later* batch still converges on the
+	// next pass exactly as it did with one invocation. Splitting therefore adds
+	// passes at worst, never a missed dependency: the outcome after the loop is the
+	// same set of unpacked-and-configured packages.
+	//
+	// A batch failure does not abort the pass — later batches may still make
+	// progress, and their output feeds the same no-progress comparison — so the
+	// per-pass result is the concatenation of every batch's output plus the first
+	// error seen.
 	const maxInstallPasses = 6
-	installCmd := "dpkg -i --auto-deconfigure -- " + joined
 	configureCmd := "dpkg --configure -a --auto-deconfigure"
 
 	var lastOut string
 	var lastErr error
 	for pass := 1; pass <= maxInstallPasses; pass++ {
-		out, err := shell.ExecCmdWithStream(installCmd, true, req.chrootPath, envVars)
+		var passOut strings.Builder
+		var passErr error
+		for _, chunk := range chunks {
+			installCmd := "dpkg -i --auto-deconfigure -- " + strings.Join(chunk, " ")
+			out, err := shell.ExecCmdWithStream(installCmd, true, req.chrootPath, envVars)
+			passOut.WriteString(out)
+			if err != nil && passErr == nil {
+				passErr = err
+			}
+		}
+		out, err := passOut.String(), passErr
 		if err == nil {
 			// Everything unpacked and configured.
 			return nil
