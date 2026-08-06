@@ -280,6 +280,15 @@ baseline:
 > `disk.size`. The installed bootloader binary, the ESP, and existing baseline
 > packages are never modified.
 >
+> **Unsupported systemConfig sections.** Because overlay mode never re-runs the
+> system-provisioning stages, the following `systemConfig` sections cannot be
+> applied to an overlay build: `users`, `hostname`, `network`, `initramfs`,
+> `kernel`, `immutability`, `fde`, and `bootloader`. Previously these were
+> silently ignored; now setting any of them in an overlay template **fails the
+> build up front** with a message naming every offending section. Configure them
+> in the baseline image (a `create`-mode build) instead. The overlay-supported
+> `systemConfig` inputs are `packages`, `configurations`, and `additionalFiles`.
+>
 > **Sizing:** Adding packages does **not** auto-grow the image, and the overlay
 > preserves the baseline disk layout by default. Growing the image is opt-in: it
 > requires **both** a `disk.size` larger than the baseline **and**

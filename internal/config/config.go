@@ -1317,11 +1317,74 @@ func (t *ImageTemplate) validateBaseline() error {
 				return err
 			}
 		}
+		if err := t.validateOverlaySystemConfig(); err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("baseline.mode must be %q or %q (got %q)",
 			BaselineModeCreate, BaselineModeOverlay, t.Baseline.Mode)
 	}
 	return nil
+}
+
+// validateOverlaySystemConfig rejects systemConfig sections that an overlay build
+// cannot apply. Overlay mode layers packages, configurations, and additional
+// files onto an already-provisioned baseline image; it never re-runs the
+// system-provisioning stages that own users, hostname, network, initramfs,
+// kernel, immutability, FDE, and bootloader. Those sections used to pass schema
+// validation and then be dropped silently, so a template that set them appeared
+// to succeed while producing an image that ignored them. Fail the build up front
+// instead, naming every offending section so the user can remove them all in one
+// pass. Sections are checked (and reported) in a fixed order for deterministic
+// error output.
+func (t *ImageTemplate) validateOverlaySystemConfig() error {
+	sc := t.SystemConfig
+
+	var offending []string
+	if len(sc.Users) > 0 {
+		offending = append(offending, "users")
+	}
+	if sc.HostName != "" {
+		offending = append(offending, "hostname")
+	}
+	if !isEmptyNetworkConfig(sc.Network) {
+		offending = append(offending, "network")
+	}
+	if sc.Initramfs.Template != "" {
+		offending = append(offending, "initramfs")
+	}
+	if !isEmptyKernelConfig(sc.Kernel) {
+		offending = append(offending, "kernel")
+	}
+	// Detect immutability via BOTH the YAML "was this section present" marker AND the
+	// exported fields: a template built programmatically (not unmarshalled from YAML)
+	// sets Enabled / SecureBoot* directly while wasProvided stays false, and overlay
+	// mode must reject a requested immutability section either way rather than silently
+	// ignoring it.
+	if sc.Immutability.wasProvided || sc.Immutability.Enabled ||
+		sc.Immutability.SecureBootDBKey != "" || sc.Immutability.SecureBootDBCrt != "" ||
+		sc.Immutability.SecureBootDBCer != "" {
+		offending = append(offending, "immutability")
+	}
+	if sc.FDE.Enabled || sc.FDE.PassphraseFile != "" || len(sc.FDE.Partitions) > 0 || sc.FDE.Unlock != "" {
+		offending = append(offending, "fde")
+	}
+	if !isEmptyBootloader(sc.Bootloader) {
+		offending = append(offending, "bootloader")
+	}
+
+	if len(offending) == 0 {
+		return nil
+	}
+
+	sections := make([]string, len(offending))
+	for i, s := range offending {
+		sections[i] = "systemConfig." + s
+	}
+	return fmt.Errorf("overlay mode does not support the following systemConfig section(s): %s; "+
+		"an overlay layers packages, configurations, and additionalFiles onto an existing baseline "+
+		"and cannot modify these — remove them from the template",
+		strings.Join(sections, ", "))
 }
 
 // Validate enforces that exactly one of Path or URL is set, and that a URL uses

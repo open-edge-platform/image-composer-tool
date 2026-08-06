@@ -246,6 +246,137 @@ func TestValidateBaseline(t *testing.T) {
 	}
 }
 
+// TestValidateOverlaySystemConfig confirms that an overlay-mode template is
+// rejected when it sets any systemConfig section the overlay pipeline cannot
+// apply (users, hostname, network, initramfs, kernel, immutability, fde,
+// bootloader), and that overlay-supported sections (packages, configurations,
+// additionalFiles, name, description) pass. It also confirms these sections are
+// still allowed in create mode.
+func TestValidateOverlaySystemConfig(t *testing.T) {
+	overlayBaseline := func() *Baseline {
+		return &Baseline{Mode: BaselineModeOverlay, Source: &BaselineSource{Path: "/tmp/u.raw"}}
+	}
+
+	tests := []struct {
+		name    string
+		sc      SystemConfig
+		wantErr string // substring expected in the error; "" means expect success
+	}{
+		{
+			name: "overlay-supported sections pass",
+			sc: SystemConfig{
+				Name:            "overlay",
+				Description:     "adds a package",
+				Packages:        []string{"tree"},
+				Configurations:  []ConfigurationInfo{{Cmd: "echo hi"}},
+				AdditionalFiles: []AdditionalFileInfo{{Local: "a", Final: "/b"}},
+			},
+		},
+		{
+			name:    "users rejected",
+			sc:      SystemConfig{Users: []UserConfig{{Name: "bob"}}},
+			wantErr: "systemConfig.users",
+		},
+		{
+			name:    "hostname rejected",
+			sc:      SystemConfig{HostName: "myhost"},
+			wantErr: "systemConfig.hostname",
+		},
+		{
+			name:    "network rejected",
+			sc:      SystemConfig{Network: NetworkConfig{Backend: "netplan"}},
+			wantErr: "systemConfig.network",
+		},
+		{
+			name:    "initramfs rejected",
+			sc:      SystemConfig{Initramfs: Initramfs{Template: "initrd.tmpl"}},
+			wantErr: "systemConfig.initramfs",
+		},
+		{
+			name:    "kernel rejected",
+			sc:      SystemConfig{Kernel: KernelConfig{Version: "6.8.0"}},
+			wantErr: "systemConfig.kernel",
+		},
+		{
+			name:    "immutability rejected (yaml marker)",
+			sc:      SystemConfig{Immutability: ImmutabilityConfig{wasProvided: true}},
+			wantErr: "systemConfig.immutability",
+		},
+		{
+			// A programmatically-built template sets Enabled directly without the YAML
+			// marker; overlay must still reject it (exported field, not just wasProvided).
+			name:    "immutability rejected (Enabled exported field)",
+			sc:      SystemConfig{Immutability: ImmutabilityConfig{Enabled: true}},
+			wantErr: "systemConfig.immutability",
+		},
+		{
+			// A Secure Boot key set without the YAML marker must likewise be rejected.
+			name:    "immutability rejected (secure boot key exported field)",
+			sc:      SystemConfig{Immutability: ImmutabilityConfig{SecureBootDBKey: "/keys/db.key"}},
+			wantErr: "systemConfig.immutability",
+		},
+		{
+			name:    "fde rejected",
+			sc:      SystemConfig{FDE: FDEConfig{Enabled: true}},
+			wantErr: "systemConfig.fde",
+		},
+		{
+			name:    "bootloader rejected",
+			sc:      SystemConfig{Bootloader: Bootloader{Provider: "grub2"}},
+			wantErr: "systemConfig.bootloader",
+		},
+		{
+			name: "multiple sections reported together in fixed order",
+			sc: SystemConfig{
+				Bootloader: Bootloader{Provider: "grub2"},
+				Users:      []UserConfig{{Name: "bob"}},
+				HostName:   "myhost",
+			},
+			wantErr: "systemConfig.users, systemConfig.hostname, systemConfig.bootloader",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpl := &ImageTemplate{Baseline: overlayBaseline(), SystemConfig: tt.sc}
+			err := tmpl.validateBaseline()
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("expected no error, got %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected error to contain %q, got %q", tt.wantErr, err.Error())
+			}
+		})
+	}
+
+	// Create mode must not reject these sections — they are the normal
+	// full-build inputs and only overlay mode is constrained.
+	t.Run("create mode allows all sections", func(t *testing.T) {
+		tmpl := &ImageTemplate{
+			Baseline: &Baseline{Mode: BaselineModeCreate},
+			SystemConfig: SystemConfig{
+				Users:        []UserConfig{{Name: "bob"}},
+				HostName:     "myhost",
+				Network:      NetworkConfig{Backend: "netplan"},
+				Initramfs:    Initramfs{Template: "initrd.tmpl"},
+				Kernel:       KernelConfig{Version: "6.8.0"},
+				Immutability: ImmutabilityConfig{wasProvided: true},
+				FDE:          FDEConfig{Enabled: true, PassphraseFile: "/tmp/pp"},
+				Bootloader:   Bootloader{Provider: "grub2"},
+			},
+		}
+		if err := tmpl.validateBaseline(); err != nil {
+			t.Fatalf("create mode should not reject systemConfig sections, got %v", err)
+		}
+	})
+}
+
 // TestOverlayPolicyDerivesAllowUpgrade confirms validate() derives the internal
 // AllowUpgrade gate from packageOperation: on for additive-and-upgrade, off for
 // additive-only (and the empty default).
