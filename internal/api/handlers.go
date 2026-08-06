@@ -106,10 +106,21 @@ func (s *Server) SearchPackages(w http.ResponseWriter, _ *http.Request, _ httpap
 
 // ValidateTemplate handles POST /templates/validate.
 //
-// Not yet implemented: contract-only for now (see ListPackageRepos). The
-// field-level validation logic lands in a later PR. Returns 501 until then.
-func (s *Server) ValidateTemplate(w http.ResponseWriter, _ *http.Request) {
-	writeError(w, http.StatusNotImplemented, "NOT_IMPLEMENTED", "template validation is not yet implemented")
+// A failed validation is a successful call: invalid templates return 200 with
+// valid=false and one issue per problem. Only a malformed request body or an
+// empty template yields a 4xx.
+func (s *Server) ValidateTemplate(w http.ResponseWriter, r *http.Request) {
+	var req httpapi.ValidateTemplateJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid JSON body")
+		return
+	}
+	res, err := s.svc.ValidateTemplate(req.Yaml)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, fromValidationResult(res))
 }
 
 // writeServiceError maps a service error onto the JSON error envelope. Domain
