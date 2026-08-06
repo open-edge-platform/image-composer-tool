@@ -391,11 +391,16 @@ func (b *Builder) Postprocess(buildErr error) (err error) {
 		return nil
 	}
 
-	// Embed the overlay SBOM into the baseline while the root is still mounted.
+	// Generate the overlay SBOMs while the root is still mounted: this embeds the
+	// complete inventory into the image and stages both the delta and complete SBOM
+	// documents in the temp dir for the emit stage to place beside the artifact.
+	var sbomArtifacts *overlaySBOMArtifacts
 	if err := b.timeStage("Generate SBOM", func() error {
-		if serr := builderSBOMFn(b.template, b.info, b.layout.RootMount, b.plan); serr != nil {
+		staged, serr := builderSBOMFn(b.template, b.info, b.layout.RootMount, b.plan)
+		if serr != nil {
 			return fmt.Errorf("overlay postprocess: SBOM generation failed: %w", serr)
 		}
+		sbomArtifacts = staged
 		return nil
 	}); err != nil {
 		return err
@@ -410,7 +415,7 @@ func (b *Builder) Postprocess(buildErr error) (err error) {
 		if cerr := b.cleanupOnce(); cerr != nil {
 			return fmt.Errorf("overlay postprocess: failed to release baseline before emit: %w", cerr)
 		}
-		emitted, eerr := builderEmitFn(b.template, b.ctx.BaselineCopyPath, version)
+		emitted, eerr := builderEmitFn(b.template, b.ctx.BaselineCopyPath, version, sbomArtifacts)
 		if eerr != nil {
 			return fmt.Errorf("overlay postprocess: failed to emit image artifact: %w", eerr)
 		}
@@ -579,15 +584,117 @@ func (b *Builder) imageVersion() string {
 // When neither yields a readable/valid base SBOM, it falls back to writing just
 // the contributed packages so the image still gets a manifest. A missing or
 // malformed base SBOM (external or inherited) never fails the build.
-func generateOverlaySBOM(template *config.ImageTemplate, info *BaselineInfo, rootMount string, plan *ResolutionPlan) error {
+func generateOverlaySBOM(template *config.ImageTemplate, info *BaselineInfo, rootMount string, plan *ResolutionPlan) (*overlaySBOMArtifacts, error) {
 	if plan == nil {
-		return nil
+		return nil, nil
 	}
+
+	// Stage both the delta and complete SBOMs to the temp dir (no sudo). This also
+	// sets manifest.DefaultSPDXFile to the complete SBOM's name so CopySBOMToChroot
+	// below embeds the complete inventory.
+	artifacts, err := stageOverlaySBOMArtifacts(template, info, rootMount, plan)
+	if err != nil {
+		return nil, err
+	}
+
+	// Embed the COMPLETE SBOM into the image at /usr/share/sbom so the in-image
+	// manifest reflects the full final inventory (baseline + overlay), replacing the
+	// inherited file in place. CopySBOMToChroot keys off manifest.DefaultSPDXFile,
+	// which stageOverlaySBOMArtifacts set to the complete SBOM's name.
+	//
+	// The baseline is UNTRUSTED: its `cp`-based embed follows destination symlinks, so
+	// a baseline that made /usr/share/sbom (or the manifest file, or any ancestor) a
+	// symlink to a host path would cause the elevated (sudo) copy to overwrite that
+	// host file. Reject a symlinked destination chain within the mount before copying.
+	embedDst := filepath.Join(manifest.ImageSBOMPath, manifest.DefaultSPDXFile)
+	if err := assertNoSymlinkInChrootPath(rootMount, embedDst); err != nil {
+		return nil, fmt.Errorf("refusing to embed overlay SBOM: unsafe destination in baseline: %w", err)
+	}
+	if err := manifest.CopySBOMToChroot(rootMount); err != nil {
+		return nil, fmt.Errorf("embedding overlay SBOM into baseline: %w", err)
+	}
+	log.Infof("Overlay SBOM: embedded complete inventory into the image at %s/%s", manifest.ImageSBOMPath, manifest.DefaultSPDXFile)
+	return artifacts, nil
+}
+
+// assertNoSymlinkInChrootPath rejects a destination whose path inside the mounted
+// baseline traverses a symlink at ANY component — every ancestor directory from
+// rootMount down to (and including) the final element, when it exists. The baseline
+// is untrusted and the SBOM embed copies under sudo following destination symlinks,
+// so a symlinked ancestor (e.g. /usr/share -> /etc on the host) or a symlinked
+// target file would let the copy escape the mount and overwrite a host path. Each
+// component is Lstat'd (no resolution) so a symlink is detected rather than
+// followed; a not-yet-existing component (the copy's mkdir -p / cp will create it)
+// is fine and stops the walk. It is overlay-specific: create-mode makers build their
+// own trusted root and use manifest.CopySBOMToChroot directly.
+func assertNoSymlinkInChrootPath(rootMount, relPath string) error {
+	// Walk component-by-component from rootMount, appending one path element at a
+	// time, so an intermediate symlink is caught before it is traversed.
+	current := rootMount
+	for _, part := range strings.Split(filepath.Clean(relPath), string(filepath.Separator)) {
+		if part == "" || part == "." {
+			continue
+		}
+		current = filepath.Join(current, part)
+		fi, err := os.Lstat(current)
+		if err != nil {
+			if os.IsNotExist(err) {
+				// This and every deeper component do not exist yet; nothing to traverse.
+				return nil
+			}
+			return fmt.Errorf("checking %s: %w", current, err)
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("path component %s is a symlink", current)
+		}
+	}
+	return nil
+}
+
+// safeChrootDest resolves an in-image relative path against rootMount and confirms
+// the result stays WITHIN rootMount, rejecting a `..`-traversal that would escape it
+// (e.g. relPath "../../etc/passwd"). It returns the confined absolute destination.
+// It complements assertNoSymlinkInChrootPath: this blocks lexical traversal in the
+// requested path, that blocks symlink redirection through an existing chain. The
+// baseline root is untrusted and copies run under sudo, so both guards run before a
+// destination inside the mount is written.
+func safeChrootDest(rootMount, relPath string) (string, error) {
+	// A cleaned rootMount plus the joined+cleaned destination; filepath.Join cleans
+	// the result, collapsing any ".." segments.
+	cleanRoot := filepath.Clean(rootMount)
+	dst := filepath.Join(cleanRoot, relPath)
+	// The destination must be rootMount itself or a path strictly under it. Compare on
+	// a trailing-separator boundary so a sibling like "<root>-evil" cannot masquerade
+	// as being under "<root>".
+	if dst != cleanRoot && !strings.HasPrefix(dst, cleanRoot+string(filepath.Separator)) {
+		return "", fmt.Errorf("path escapes the image root")
+	}
+	return dst, nil
+}
+
+// overlaySBOMArtifacts holds the temp-staged paths of the two SBOM documents an
+// overlay build produces: the delta (only the overlay-contributed packages) and
+// the complete (the full final inventory = base + delta). Both are copied to the
+// build output directory at emit time under deterministic names.
+type overlaySBOMArtifacts struct {
+	deltaPath    string
+	completePath string
+	// completeIsDeltaOnly is true when no base SBOM was available, so the complete
+	// document degraded to exactly the delta contents. In that case the build-dir
+	// ".complete.spdx.json" sidecar is NOT emitted (it would be byte-identical to
+	// the delta and its "complete" name would misleadingly imply a full inventory);
+	// the in-image /usr/share/sbom manifest is still written from completePath.
+	completeIsDeltaOnly bool
+}
+
+// contributedPackages converts the plan's added/upgraded packages (the overlay
+// delta) into SBOM package records, carrying the enriched repo metadata so overlay
+// entries reach the SBOM writer with the same completeness as baseline-derived ones.
+func contributedPackages(info *BaselineInfo, plan *ResolutionPlan) []ospackage.PackageInfo {
 	pkgType := pkgTypeDeb
 	if info != nil && info.PackageType != "" {
 		pkgType = info.PackageType
 	}
-
 	pkgs := make([]ospackage.PackageInfo, 0, len(plan.ToInstall))
 	for _, rp := range plan.ToInstall {
 		// Prefer the resolved package's own type; fall back to the baseline
@@ -596,9 +703,6 @@ func generateOverlaySBOM(template *config.ImageTemplate, info *BaselineInfo, roo
 		if t == "" {
 			t = pkgType
 		}
-		// Carry the enriched repo metadata (supplier/checksum/description/license)
-		// through so overlay-added entries reach the SBOM writer with the same
-		// completeness as baseline-derived ones.
 		pkgs = append(pkgs, ospackage.PackageInfo{
 			Name:        rp.Name,
 			PkgName:     rp.Name,
@@ -612,37 +716,78 @@ func generateOverlaySBOM(template *config.ImageTemplate, info *BaselineInfo, roo
 			Checksums:   rp.Checksums,
 		})
 	}
+	return pkgs
+}
 
-	// Resolve the base SBOM (external override or the baseline-inherited one) plus
-	// the filename the merged document should be written under.
+// stageOverlaySBOMArtifacts writes the delta and complete SBOM documents to the
+// temp directory and returns their paths. It is pure with respect to the image
+// (it stages files and reads the base SBOM only — no sudo-backed chroot copy), so
+// it is unit-testable.
+//
+//   - delta: an SPDX doc of ONLY the overlay-contributed packages (added and, in
+//     additive-and-upgrade mode, upgraded). Always written.
+//   - complete: the full final inventory. When a base SBOM (external override or
+//     baseline-inherited) is available it is the union of that base and the delta;
+//     otherwise (or if the base is malformed) it degrades to the delta content so
+//     a manifest is always produced without failing the build.
+//
+// The complete SBOM is staged under the resolved base-SBOM name and
+// manifest.DefaultSPDXFile is set to it, so the caller's CopySBOMToChroot embeds
+// the complete inventory in place of the inherited file.
+func stageOverlaySBOMArtifacts(template *config.ImageTemplate, info *BaselineInfo, rootMount string, plan *ResolutionPlan) (*overlaySBOMArtifacts, error) {
+	pkgs := contributedPackages(info, plan)
+
+	// Resolve the base SBOM (external override or baseline-inherited) plus the name
+	// the complete document is written under.
 	sbomName, baseSBOMData, baseFound := resolveOverlayBaseSBOM(template, rootMount)
 
-	if !baseFound {
-		log.Warnf("Overlay SBOM: no base SBOM available (external or at %s); writing overlay-contributed packages only", manifest.ImageSBOMPath)
-		return writeOverlaySBOMToChroot(pkgs, sbomName, rootMount)
+	tempDir := config.TempDir()
+
+	// Delta SBOM: only the overlay-contributed packages.
+	deltaPath := filepath.Join(tempDir, overlayDeltaTempName(sbomName))
+	if err := manifest.WriteSPDXToFile(pkgs, deltaPath); err != nil {
+		return nil, fmt.Errorf("writing overlay delta SBOM: %w", err)
 	}
 
-	// Stage and embed the merged SBOM under the resolved filename so it replaces
-	// the inherited file in place (same path + name) rather than shadowing it with
-	// a second, delta-only file. DefaultSPDXFile is set (not restored) so the later
-	// sidecar copy in emitOverlayArtifact — which keys off this variable — packages
-	// the same merged manifest. This mirrors create mode's generateSBOM, which
-	// likewise assigns DefaultSPDXFile.
+	// Complete SBOM: base + delta when a base is available, else delta-only. Track
+	// whether it degraded to delta-only so the caller can skip the redundant
+	// build-dir sidecar (see overlaySBOMArtifacts.completeIsDeltaOnly).
+	completePath := filepath.Join(tempDir, sbomName)
+	completeIsDeltaOnly := false
+	if baseFound {
+		if err := manifest.WriteMergedSPDXToFile(baseSBOMData, pkgs, completePath); err != nil {
+			// A malformed base SBOM must not fail the build; degrade the complete
+			// SBOM to the delta so the image still gets a manifest.
+			log.Warnf("Overlay SBOM: merging into base SBOM %q failed (%v); complete SBOM will contain the overlay delta only", sbomName, err)
+			if werr := manifest.WriteSPDXToFile(pkgs, completePath); werr != nil {
+				return nil, fmt.Errorf("writing overlay complete SBOM (delta fallback): %w", werr)
+			}
+			completeIsDeltaOnly = true
+		}
+	} else {
+		log.Warnf("Overlay SBOM: no base SBOM available (external or at %s); the in-image manifest will contain the overlay delta only and no separate complete SBOM sidecar is emitted", manifest.ImageSBOMPath)
+		if err := manifest.WriteSPDXToFile(pkgs, completePath); err != nil {
+			return nil, fmt.Errorf("writing overlay complete SBOM: %w", err)
+		}
+		completeIsDeltaOnly = true
+	}
+
+	// The in-image embed and the build-dir "complete" sidecar both key off
+	// DefaultSPDXFile; set (not restore) it to the complete SBOM's name, mirroring
+	// create mode's generateSBOM.
 	manifest.DefaultSPDXFile = sbomName
-	tempSBOM := filepath.Join(config.TempDir(), sbomName)
-	if err := manifest.WriteMergedSPDXToFile(baseSBOMData, pkgs, tempSBOM); err != nil {
-		// A malformed base SBOM (external or inherited) must not fail the build;
-		// fall back to the delta so the image still gets a manifest.
-		log.Warnf("Overlay SBOM: merging into base SBOM %q failed (%v); writing overlay-contributed packages only", sbomName, err)
-		return writeOverlaySBOMToChroot(pkgs, sbomName, rootMount)
-	}
 
-	if err := manifest.CopySBOMToChroot(rootMount); err != nil {
-		return fmt.Errorf("embedding merged overlay SBOM into baseline: %w", err)
-	}
-	log.Infof("Overlay SBOM merged: %d contributed package(s) folded into the base inventory at %s/%s",
-		len(pkgs), manifest.ImageSBOMPath, sbomName)
-	return nil
+	return &overlaySBOMArtifacts{deltaPath: deltaPath, completePath: completePath, completeIsDeltaOnly: completeIsDeltaOnly}, nil
+}
+
+// overlayDeltaTempName derives the delta SBOM's temp-file name from the complete
+// SBOM name by inserting a ".delta" infix before the .json extension (e.g.
+// spdx_manifest_deb_x.json -> spdx_manifest_deb_x.delta.json). Keeping it distinct
+// from the complete name means both can be staged in the same temp dir without
+// clobbering each other.
+func overlayDeltaTempName(completeName string) string {
+	ext := filepath.Ext(completeName)
+	return strings.TrimSuffix(completeName, ext) + ".delta" + ext
 }
 
 // resolveOverlayBaseSBOM decides which SBOM the overlay-contributed packages are
@@ -721,7 +866,17 @@ func readExternalBaseSBOM(path string) ([]byte, bool) {
 // reader: a symlink planted under /usr/share/sbom must not be followed to read an
 // arbitrary host file and propagate its contents into output artifacts.
 func readBaselineSBOM(rootMount string) (string, []byte, bool) {
-	sbomDir := filepath.Join(rootMount, strings.TrimPrefix(manifest.ImageSBOMPath, "/"))
+	// The final-file symlink check below (SafeReadFile) does not cover a symlinked
+	// ANCESTOR: a baseline that made /usr/share/sbom itself point at a host directory
+	// would otherwise have os.ReadDir list that host dir and ingest an arbitrary host
+	// JSON into the emitted SBOM. Reject a symlink anywhere in the directory chain
+	// before listing it (a genuinely-absent dir simply yields "no inherited SBOM").
+	sbomRel := strings.TrimPrefix(manifest.ImageSBOMPath, "/")
+	if err := assertNoSymlinkInChrootPath(rootMount, sbomRel); err != nil {
+		log.Warnf("Overlay SBOM: refusing to read inherited SBOM directory (unsafe path in baseline): %v", err)
+		return "", nil, false
+	}
+	sbomDir := filepath.Join(rootMount, sbomRel)
 	entries, err := os.ReadDir(sbomDir)
 	if err != nil {
 		return "", nil, false
@@ -773,31 +928,23 @@ func pickBaselineSBOMName(entries []os.DirEntry) (string, bool) {
 	return "", false
 }
 
-// writeOverlaySBOMToChroot stages a from-scratch SBOM of pkgs under sbomName and
-// embeds it into the mounted root at /usr/share/sbom/<sbomName>. It backs the
-// fallback paths where no baseline SBOM is available to merge into. It sets (not
-// restores) manifest.DefaultSPDXFile so both CopySBOMToChroot here and the later
-// sidecar copy — which key off that variable — use sbomName.
-func writeOverlaySBOMToChroot(pkgs []ospackage.PackageInfo, sbomName, rootMount string) error {
-	manifest.DefaultSPDXFile = sbomName
-	tempSBOM := filepath.Join(config.TempDir(), sbomName)
-	if err := manifest.WriteSPDXToFile(pkgs, tempSBOM); err != nil {
-		return fmt.Errorf("writing overlay SBOM: %w", err)
-	}
-	if err := manifest.CopySBOMToChroot(rootMount); err != nil {
-		return fmt.Errorf("embedding overlay SBOM into baseline: %w", err)
-	}
-	log.Infof("Overlay SBOM generated for %d contributed package(s) (added or upgraded)", len(pkgs))
-	return nil
-}
+// Deterministic build-dir SBOM sidecar name suffixes, keyed off the emitted
+// image's base name (<name>-<version>): the delta SBOM (overlay-contributed
+// packages only) and the complete SBOM (full final baseline+overlay inventory).
+// Both are SPDX JSON, preserving the repo's spdx JSON format convention.
+const (
+	overlayDeltaSBOMSuffix    = ".delta.spdx.json"
+	overlayCompleteSBOMSuffix = ".complete.spdx.json"
+)
 
 // emitOverlayArtifact moves the modified baseline copy into the image build
-// directory as "<name>-<version>.raw" and copies the SBOM sidecar alongside it,
-// mirroring the create-mode RAW artifact naming. It returns the final image path.
+// directory as "<name>-<version>.raw" and copies the two SBOM sidecars alongside
+// it (delta + complete), mirroring the create-mode RAW artifact naming. It returns
+// the final image path.
 //
 // The loop device must already be detached (the backing file is moved, not the
 // live device).
-func emitOverlayArtifact(template *config.ImageTemplate, copyPath, version string) (string, error) {
+func emitOverlayArtifact(template *config.ImageTemplate, copyPath, version string, sbom *overlaySBOMArtifacts) (string, error) {
 	if strings.TrimSpace(copyPath) == "" {
 		return "", fmt.Errorf("overlay emit: baseline copy path is empty")
 	}
@@ -814,7 +961,8 @@ func emitOverlayArtifact(template *config.ImageTemplate, copyPath, version strin
 		return "", fmt.Errorf("overlay emit: failed to create image build directory %s: %w", buildDir, err)
 	}
 
-	finalPath := filepath.Join(buildDir, fmt.Sprintf("%s-%s.raw", template.GetImageName(), version))
+	base := fmt.Sprintf("%s-%s", template.GetImageName(), version)
+	finalPath := filepath.Join(buildDir, base+".raw")
 	// Move the finished baseline into place without a shell (same rationale as the
 	// mkdir above). os.Rename covers the common same-filesystem case; fall back to
 	// a copy+remove when the workspace and build directory are on different mounts
@@ -823,11 +971,79 @@ func emitOverlayArtifact(template *config.ImageTemplate, copyPath, version strin
 		return "", fmt.Errorf("overlay emit: failed to move %s to %s: %w", copyPath, finalPath, err)
 	}
 
-	// Best-effort SBOM sidecar next to the artifact; absence is not fatal.
-	if err := manifest.CopySBOMToImageBuildDir(buildDir); err != nil {
-		log.Warnf("Overlay emit: failed to copy SBOM sidecar to %s: %v", buildDir, err)
+	if sbom != nil {
+		// The delta sidecar is a GUARANTEED artifact (always emitted), so a failure to
+		// write it fails the emit — otherwise a "successful" build would silently omit
+		// a documented output. Remove the just-moved image first so the failed emit
+		// leaves nothing partial in the output directory (emit returns "" on error, so
+		// the deferred cleanup cannot see this path).
+		deltaDst := filepath.Join(buildDir, base+overlayDeltaSBOMSuffix)
+		if serr := emitOverlaySBOMSidecar(sbom.deltaPath, deltaDst); serr != nil {
+			removeEmittedOutputs(finalPath, deltaDst)
+			return "", fmt.Errorf("overlay emit: failed to write the delta SBOM sidecar: %w", serr)
+		}
+		// The complete sidecar is emitted ONLY when it is a true base+delta union. When
+		// no base SBOM was available it degraded to exactly the delta, so a separate
+		// ".complete.spdx.json" would be byte-identical to the delta and its name would
+		// misleadingly imply a full inventory — skip it (and clear any stale sidecar a
+		// PRIOR build left at that deterministic path, so a rebuild without a base never
+		// ships an inventory describing the old image). The in-image /usr/share/sbom
+		// manifest is still written regardless.
+		completeDst := filepath.Join(buildDir, base+overlayCompleteSBOMSuffix)
+		if !sbom.completeIsDeltaOnly {
+			// The complete sidecar is documented as emitted whenever a base SBOM is
+			// available, so a write failure is fatal (like the delta): roll back the
+			// image and both sidecars rather than ship a build missing a promised
+			// artifact — or, worse, retaining a stale complete sidecar from an earlier
+			// build at the same deterministic path.
+			if serr := emitOverlaySBOMSidecar(sbom.completePath, completeDst); serr != nil {
+				removeEmittedOutputs(finalPath, deltaDst, completeDst)
+				return "", fmt.Errorf("overlay emit: failed to write the complete SBOM sidecar: %w", serr)
+			}
+		} else {
+			log.Infof("Overlay emit: no base SBOM was available, so the complete SBOM equals the delta; skipping the redundant %s sidecar", base+overlayCompleteSBOMSuffix)
+			// A rebuild of the same name/version that now has no base must not leave a
+			// stale complete sidecar from an earlier build claiming a full inventory.
+			removeStaleArtifact(completeDst)
+		}
 	}
 	return finalPath, nil
+}
+
+// removeEmittedOutputs deletes a set of just-written output paths on the emit
+// failure path, so a fatal sidecar-write failure leaves nothing partial in the
+// output directory (emit returns "" on error, so the deferred cleanup cannot see
+// these paths). Best-effort: a removal failure is logged, never returned, and a
+// missing file is not an error.
+func removeEmittedOutputs(paths ...string) {
+	for _, p := range paths {
+		if strings.TrimSpace(p) == "" {
+			continue
+		}
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			log.Warnf("Overlay emit: failed to remove output %s during failure cleanup: %v", p, err)
+		}
+	}
+}
+
+// emitOverlaySBOMSidecar copies a staged SBOM to dst next to the emitted image,
+// returning an error on a read/write failure so the caller can decide whether it is
+// fatal (the delta sidecar, a guaranteed artifact) or best-effort (the complete
+// sidecar). It uses the symlink-rejecting safe read/write (the build dir is
+// user-owned, no sudo needed).
+func emitOverlaySBOMSidecar(src, dst string) error {
+	if strings.TrimSpace(src) == "" {
+		return fmt.Errorf("staged SBOM path is empty")
+	}
+	data, err := security.SafeReadFile(src, security.RejectSymlinks)
+	if err != nil {
+		return fmt.Errorf("reading staged SBOM %s: %w", src, err)
+	}
+	if err := security.SafeWriteFile(dst, data, 0o644, security.RejectSymlinks); err != nil {
+		return fmt.Errorf("writing SBOM sidecar %s: %w", dst, err)
+	}
+	log.Infof("Overlay emit: wrote SBOM sidecar %s", dst)
+	return nil
 }
 
 // overlayInspectReportSuffix is the extension appended to the emitted image's

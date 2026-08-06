@@ -54,12 +54,21 @@ func TestOverlayBuilder_FullFlowRealRawBaseline(t *testing.T) {
 	restoreGlobal := withTestGlobalDirs(t, workDir, cacheDir)
 	defer restoreGlobal()
 
+	// Supply an external base-image SBOM listing a representative baseline package
+	// (dpkg) so the "complete" SBOM is a true baseline+overlay union we can assert
+	// on. The mmdebstrap baseline embeds no /usr/share/sbom, so without this the
+	// complete SBOM would degrade to delta-only.
+	baseSBOM := filepath.Join(t.TempDir(), "baseline.spdx.json")
+	if werr := os.WriteFile(baseSBOM, []byte(`{"packages":[{"name":"dpkg","versionInfo":"1.21.22"}]}`), 0o644); werr != nil {
+		t.Fatalf("write base SBOM: %v", werr)
+	}
+
 	tmpl := &config.ImageTemplate{
 		Image:  config.ImageInfo{Name: "overlaytest", Version: "1.0"},
 		Target: config.TargetInfo{OS: "debian", Dist: "debian12", Arch: "amd64", ImageType: "raw"},
 		Baseline: &config.Baseline{
 			Mode:   config.BaselineModeOverlay,
-			Source: &config.BaselineSource{Path: srcImg, Format: config.BaselineFormatRaw},
+			Source: &config.BaselineSource{Path: srcImg, Format: config.BaselineFormatRaw, SBOMPath: baseSBOM},
 		},
 		OverlayPolicy: &config.OverlayPolicy{PackageOperation: config.OverlayPackageOpAdditiveOnly},
 		SystemConfig: config.SystemConfig{
@@ -124,14 +133,37 @@ func TestOverlayBuilder_FullFlowRealRawBaseline(t *testing.T) {
 		t.Fatalf("Postprocess: %v", err)
 	}
 
-	// 6. The final artifact and its SBOM sidecar must exist under the build dir.
-	finalImg := filepath.Join(workDir, "debian-debian12-amd64", "imagebuild", "default", "overlaytest-1.0.raw")
+	// 6. The final artifact and BOTH SBOM sidecars must exist under the build dir.
+	buildDir := filepath.Join(workDir, "debian-debian12-amd64", "imagebuild", "default")
+	finalImg := filepath.Join(buildDir, "overlaytest-1.0.raw")
 	if _, serr := os.Stat(finalImg); serr != nil {
 		t.Errorf("expected emitted artifact at %s: %v", finalImg, serr)
 	}
-	sbom := filepath.Join(filepath.Dir(finalImg), "spdx_manifest.json")
-	if _, serr := os.Stat(sbom); serr != nil {
-		t.Errorf("expected SBOM sidecar at %s: %v", sbom, serr)
+
+	// The delta SBOM must list the overlay-contributed package (overlay-probe) and
+	// nothing from the baseline. The complete SBOM must represent the full final
+	// inventory: the contributed package PLUS the baseline package (dpkg, from the
+	// supplied external base SBOM), i.e. strictly more than the delta.
+	deltaSBOM := filepath.Join(buildDir, "overlaytest-1.0.delta.spdx.json")
+	completeSBOM := filepath.Join(buildDir, "overlaytest-1.0.complete.spdx.json")
+
+	deltaNames := readSBOMPackageNames(t, deltaSBOM)
+	if !contains(deltaNames, "overlay-probe") {
+		t.Errorf("delta SBOM %s should list the added package overlay-probe, got %v", deltaSBOM, deltaNames)
+	}
+	if contains(deltaNames, "dpkg") {
+		t.Errorf("delta SBOM %s must contain only overlay changes, not baseline packages like dpkg: %v", deltaSBOM, deltaNames)
+	}
+
+	completeNames := readSBOMPackageNames(t, completeSBOM)
+	if !contains(completeNames, "overlay-probe") {
+		t.Errorf("complete SBOM %s should include the added package overlay-probe, got %v", completeSBOM, completeNames)
+	}
+	if !contains(completeNames, "dpkg") {
+		t.Errorf("complete SBOM %s should represent the full inventory including baseline packages (dpkg), got %v", completeSBOM, completeNames)
+	}
+	if len(completeNames) <= len(deltaNames) {
+		t.Errorf("complete SBOM (%d pkgs) must be a superset of the delta (%d pkgs)", len(completeNames), len(deltaNames))
 	}
 
 	// 7. The loop device and root mount must have been released by Postprocess.
@@ -183,6 +215,16 @@ func bootstrapDebianBaseline(t *testing.T, img string) {
 	if err != nil {
 		t.Fatalf("bootstrap WithMountedLayout: %v", err)
 	}
+}
+
+// readSBOMPackageNames reads the SPDX doc at path and returns its package names.
+func readSBOMPackageNames(t *testing.T, path string) []string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read SBOM %s: %v", path, err)
+	}
+	return spdxNames(t, data)
 }
 
 // withTestGlobalDirs points the global work/cache/temp directories at the test

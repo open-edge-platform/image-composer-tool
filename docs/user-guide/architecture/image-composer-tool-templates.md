@@ -275,25 +275,35 @@ baseline:
 
 ##### SBOM generation (overlay mode)
 
-An overlay build always writes an SPDX SBOM into the image at
-`/usr/share/sbom` (and a sidecar copy beside the emitted artifact). What it
-contains depends on which **base** SBOM is available to merge the
-overlay-contributed packages (added and, in `additive-and-upgrade` mode,
-upgraded) into:
+An overlay build emits **two** SPDX SBOM sidecar files into the build output
+directory, alongside the emitted image (`<image-name>-<version>.raw`):
 
-1. **`baseline.source.sbomPath` set and valid** — a **full SBOM** is produced by
-   combining that base SBOM with the overlay delta.
+| Artifact | Name | Contents |
+|----------|------|----------|
+| **Delta SBOM** | `<image-name>-<version>.delta.spdx.json` | Only the overlay-induced package changes — the packages the overlay added and, in `additive-and-upgrade` mode, upgraded. |
+| **Complete SBOM** | `<image-name>-<version>.complete.spdx.json` | The full final image inventory — the baseline packages plus the overlay result. |
+
+Both are SPDX 2.3 JSON, the same format the standalone SBOM/inspect tooling uses.
+The **complete** SBOM is also embedded inside the image at `/usr/share/sbom`
+(replacing the SBOM the image inherited from the baseline, so the in-image
+manifest reflects the full final inventory).
+
+The complete SBOM is the union of a **base** SBOM and the overlay delta. Which
+base is used follows this order:
+
+1. **`baseline.source.sbomPath` set and valid** — that externally-supplied base
+   SBOM is combined with the delta.
 2. **`sbomPath` unset** — the SBOM the baseline image itself carries at
-   `/usr/share/sbom` is used as the base and merged with the delta.
+   `/usr/share/sbom` is used as the base and combined with the delta.
 3. **No base SBOM available** — `sbomPath` is unset or the file is
    absent/unreadable/malformed **and** the baseline image embeds no SBOM — then
-   only the **delta SBOM** (the overlay-contributed packages) is written. This is
-   never an error: the build succeeds with a delta-only manifest.
+   the complete SBOM degrades to the delta contents. This is never an error: the
+   build always succeeds and always produces both sidecars.
 
 A missing or malformed `sbomPath` falls back to the baseline-embedded SBOM (then
 to delta-only); it does not fail the build. Omitting `sbomPath` entirely
-preserves the previous behavior. This applies to every overlay-capable provider
-(Ubuntu and Debian).
+preserves the pre-existing base-resolution behavior. This applies to every
+overlay-capable provider (Ubuntu and Debian).
 
 > **Note:** Overlay mode is currently wired end-to-end for the **Ubuntu** and
 > **Debian** providers. Targeting a provider without overlay support fails the

@@ -23,8 +23,8 @@ type builderSeams struct {
 	grubRegen   func(*config.ImageTemplate, *BaselineInfo, string) error
 	addFiles    func(*config.ImageTemplate, string) error
 	resize      func(*config.ImageTemplate, *Context, *Layout) error
-	sbom        func(*config.ImageTemplate, *BaselineInfo, string, *ResolutionPlan) error
-	emit        func(*config.ImageTemplate, string, string) (string, error)
+	sbom        func(*config.ImageTemplate, *BaselineInfo, string, *ResolutionPlan) (*overlaySBOMArtifacts, error)
+	emit        func(*config.ImageTemplate, string, string, *overlaySBOMArtifacts) (string, error)
 	inspect     func(string) error
 	convert     func(string, *config.ImageTemplate) error
 }
@@ -80,6 +80,10 @@ type builderRecorder struct {
 
 	report    *PreflightReport
 	installed *InstallResult
+
+	// emitSBOM captures the SBOM artifacts the emit seam received, so a test can
+	// assert the SBOM stage's output is threaded through to emit.
+	emitSBOM *overlaySBOMArtifacts
 }
 
 func (r *builderRecorder) note(name string) { r.calls = append(r.calls, name) }
@@ -166,12 +170,16 @@ func installOverlayTestBuilder(t *testing.T, r *builderRecorder) *Builder {
 		r.note("resize")
 		return r.resizeErr
 	}
-	builderSBOMFn = func(*config.ImageTemplate, *BaselineInfo, string, *ResolutionPlan) error {
+	builderSBOMFn = func(*config.ImageTemplate, *BaselineInfo, string, *ResolutionPlan) (*overlaySBOMArtifacts, error) {
 		r.note("sbom")
-		return r.sbomErr
+		if r.sbomErr != nil {
+			return nil, r.sbomErr
+		}
+		return &overlaySBOMArtifacts{deltaPath: "/tmp/delta.json", completePath: "/tmp/complete.json"}, nil
 	}
-	builderEmitFn = func(_ *config.ImageTemplate, _, version string) (string, error) {
+	builderEmitFn = func(_ *config.ImageTemplate, _, version string, sbom *overlaySBOMArtifacts) (string, error) {
 		r.note("emit:" + version)
+		r.emitSBOM = sbom
 		if r.emitErr != nil {
 			return "", r.emitErr
 		}
@@ -230,6 +238,32 @@ func TestBuilder_HappyPathOrdersStagesAndCleansUp(t *testing.T) {
 	}
 	if !equalStrings(gotStages, wantStages) {
 		t.Errorf("timing stages = %v, want %v", gotStages, wantStages)
+	}
+}
+
+// TestBuilder_EmitReceivesBothSBOMArtifacts confirms the SBOM stage's output (the
+// delta and complete SBOM paths) is threaded through to the emit stage, so both
+// SBOM sidecars can be written beside the artifact.
+func TestBuilder_EmitReceivesBothSBOMArtifacts(t *testing.T) {
+	defer saveBuilderSeams().restore()
+	r := &builderRecorder{}
+	b := installOverlayTestBuilder(t, r)
+
+	if err := b.Preprocess(); err != nil {
+		t.Fatalf("Preprocess: %v", err)
+	}
+	if err := b.Build(); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if err := b.Postprocess(nil); err != nil {
+		t.Fatalf("Postprocess: %v", err)
+	}
+
+	if r.emitSBOM == nil {
+		t.Fatal("emit did not receive SBOM artifacts from the SBOM stage")
+	}
+	if r.emitSBOM.deltaPath == "" || r.emitSBOM.completePath == "" {
+		t.Errorf("emit received incomplete SBOM artifacts: %+v", r.emitSBOM)
 	}
 }
 
