@@ -1318,8 +1318,9 @@ func (t *ImageTemplate) validateBaseline() error {
 		case BaselineFormatRaw, BaselineFormatQcow2, BaselineFormatVHD, BaselineFormatVHDX:
 			// supported; non-raw formats are converted to RAW before loop-attach.
 		default:
-			return fmt.Errorf("baseline.source.format must be one of %q, %q, %q, %q (got %q)",
-				BaselineFormatRaw, BaselineFormatQcow2, BaselineFormatVHD, BaselineFormatVHDX, format)
+			return fmt.Errorf("baseline.source.format %q not supported in this release: "+
+				"must be one of %q, %q, %q, %q. Support for additional formats is tracked in the overlay backlog",
+				format, BaselineFormatRaw, BaselineFormatQcow2, BaselineFormatVHD, BaselineFormatVHDX)
 		}
 		if t.OverlayPolicy != nil {
 			if err := t.OverlayPolicy.validate(); err != nil {

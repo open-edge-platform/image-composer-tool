@@ -154,7 +154,7 @@ func TestValidateBaseline(t *testing.T) {
 				Mode:   BaselineModeOverlay,
 				Source: &BaselineSource{Path: "/tmp/u.vmdk", Format: "vmdk"},
 			},
-			wantErr: "baseline.source.format must be one of",
+			wantErr: "not supported in this release",
 		},
 		{
 			name: "overlay accepts qcow2 format",
