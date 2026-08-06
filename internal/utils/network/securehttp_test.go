@@ -72,6 +72,31 @@ func TestNewSecureHTTPClient_TLSConfigBasics(t *testing.T) {
 	}
 }
 
+// TestResponseHeaderTimeoutSet guards that both constructors set
+// ResponseHeaderTimeout on their transport. Without these assertions a future
+// constructor refactor could silently drop the timeout and reintroduce the
+// indefinite header-phase hang this bounds.
+func TestResponseHeaderTimeoutSet(t *testing.T) {
+	once = sync.Once{}
+	secureClient = nil
+
+	for _, tc := range []struct {
+		name   string
+		client *http.Client
+	}{
+		{"NewSecureHTTPClient", NewSecureHTTPClient()},
+		{"GetSecureHTTPClient", GetSecureHTTPClient()},
+	} {
+		tr, ok := tc.client.Transport.(*http.Transport)
+		if !ok {
+			t.Fatalf("%s: expected *http.Transport, got %T", tc.name, tc.client.Transport)
+		}
+		if tr.ResponseHeaderTimeout != responseHeaderTimeout {
+			t.Errorf("%s: ResponseHeaderTimeout = %v, want %v", tc.name, tr.ResponseHeaderTimeout, responseHeaderTimeout)
+		}
+	}
+}
+
 func TestNewSecureHTTPClient_ConnectsToTLS13Server(t *testing.T) {
 	// TLS 1.3–only server
 	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
