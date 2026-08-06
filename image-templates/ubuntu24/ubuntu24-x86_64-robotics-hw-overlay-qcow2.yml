@@ -1,0 +1,275 @@
+# =============================================================================
+# Ubuntu 24.04 robotics BASE overlay template — Intel hardware enablement
+# (qcow2 output)
+# =============================================================================
+#
+# Composes a deployable Ubuntu 24.04 qcow2 from the OFFICIAL Canonical Ubuntu
+# cloud image using the OVERLAY mechanism. This BASE:
+#
+#   * takes Canonical's noble server cloud image (qcow2) as its input,
+#   * overlays the Intel hardware-enablement stack additively — oneAPI runtime,
+#     Level Zero, NPU drivers, RealSense DKMS — onto the cloud image,
+#   * preserves base-image immutability (overlay copies the baseline and layers
+#     onto the copy; the source image is never modified in place), and
+#   * emits a versioned qcow2 artifact.
+#
+# It deliberately ships NO ROS 2 packages: those are added by
+# ubuntu24-x86_64-robotics-jazzy-overlay-extends.yml via `extends:`. Keeping the
+# hardware layer separate means a non-ROS workload (a plain OpenVINO inference
+# image, say) can reuse this same enablement base.
+#
+# Compare ubuntu24-x86_64-robotics-jazzy-raw.yml: same destination, but it builds
+# the entire OS from scratch. This chain starts from a vendor-built cloud image
+# instead, so the base OS is Canonical's and only the delta is ours.
+#
+# -----------------------------------------------------------------------------
+# WHY THERE IS NO `kernel:` BLOCK HERE
+# -----------------------------------------------------------------------------
+# Overlay mode leaves the baseline's kernel and bootloader untouched by design —
+# the cloud image arrives already bootable. Declaring kernel.version would also
+# reintroduce the stale-pin failure class that has broken this repo repeatedly
+# (a version pinned against a rolling metapackage goes stale the next time the
+# HWE series rolls). librealsense2-dkms builds its module against whatever kernel
+# the cloud image ships, which is exactly what we want.
+#
+# For the same reason the base package set omits ubuntu-minimal, systemd-boot,
+# dracut-core and cryptsetup-bin: the cloud image already provides the base
+# toolchain. Re-seeding it is what overlay mode exists to avoid.
+#
+# -----------------------------------------------------------------------------
+# WHY ALL SEVEN REPOSITORIES LIVE IN THIS ONE FILE
+# -----------------------------------------------------------------------------
+# packageRepositories merge by `codename`, and when two layers in a chain both
+# declare repositories a codename match OVERRIDES the first entry instead of
+# appending. Three of the seven below share the codename `noble` (ROS 2, Gazebo,
+# RealSense), so they survive only while they sit in a single layer. Declaring
+# any repository in the child would collapse them and silently drop package
+# sources. The child therefore declares none and inherits this list intact.
+#
+# -----------------------------------------------------------------------------
+# BUILD HOST REQUIREMENT (disk.size below triggers the overlay resize path)
+# -----------------------------------------------------------------------------
+# Growing the baseline needs `growpart` (cloud-guest-utils), plus `sgdisk`
+# (gdisk), `resize2fs` (e2fsprogs) and `losetup`/`partx` (util-linux).
+#
+# It also needs **util-linux >= 2.38**, i.e. Ubuntu 24.04 or newer — the version
+# the README recommends. The resize safety guard reads each partition's start
+# sector with `lsblk -o PATH,START,TYPE`, and the START column did not exist
+# before util-linux 2.38. On Ubuntu 22.04 (util-linux 2.37.2) the build fails
+# with `lsblk: unknown column: START,TYPE`.
+#
+# For the record, the guard itself is satisfied by this baseline: on the noble
+# cloud image the root partition starts at sector 2099200 while the ESP starts at
+# 10240, so root IS the last partition on disk and growing it cannot run into a
+# following partition. The 22.04 failure is purely a host-tooling gap.
+#
+# -----------------------------------------------------------------------------
+# INPUT IMAGE INTEGRITY
+# -----------------------------------------------------------------------------
+# baseline.source.url is fetched over TLS (https is required and enforced; plain
+# http is rejected), which authenticates the transport. Canonical also publishes
+# a signed checksum manifest — verify the input before the build so composition
+# runs on a byte-identical source:
+#
+#   curl -fSLO https://cloud-images.ubuntu.com/noble/current/SHA256SUMS
+#   curl -fSLO https://cloud-images.ubuntu.com/noble/current/SHA256SUMS.gpg
+#   gpg --verify SHA256SUMS.gpg SHA256SUMS        # authenticate the manifest
+#   sha256sum -c --ignore-missing SHA256SUMS      # verify the image matches
+#
+# `current/` tracks the latest daily build, so the bytes behind this URL change
+# over time. To pin a reproducible input, replace the url/format pair with
+# `path: /verified/noble-server-cloudimg-amd64.img` pointing at a locally
+# checksum-verified copy.
+# =============================================================================
+
+# AI-searchable metadata for template discovery.
+# metadata is not inherited, so every template declares its own.
+metadata:
+  description: >-
+    Ubuntu 24.04 robotics BASE overlay template — overlay Canonical's official
+    noble cloud image with the Intel hardware-enablement stack (oneAPI runtime,
+    Level Zero, NPU drivers, RealSense DKMS) and emit a versioned qcow2.
+    Extensible base; the ROS 2 stack is added by a child via extends.
+  use_cases:
+    - Compose a deployable Ubuntu 24.04 qcow2 from Canonical's cloud image
+    - Overlay Intel GPU/NPU/RealSense hardware enablement onto a cloud image
+    - Provide an extensible robotics hardware base for downstream images
+    - Reuse Intel enablement for non-ROS workloads (OpenVINO inference, media)
+  keywords:
+    - overlay
+    - baseline
+    - cloud-image
+    - canonical
+    - qcow2
+    - ubuntu
+    - ubuntu24
+    - robotics
+    - hardware-enablement
+    - oneapi
+    - level-zero
+    - npu
+    - realsense
+    - base-template
+    - extends
+
+image:
+  name: ubuntu24-robotics-hw-overlay-base
+  version: "24.04"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw   # overlay works on a RAW copy internally; qcow2 is produced at
+                   # emit time from disk.artifacts (see the disk block below).
+
+# -----------------------------------------------------------------------------
+# Overlay mode — layer onto a copy of Canonical's official cloud image. The
+# source qcow2 is copied into the build workspace and converted to RAW for the
+# overlay; the ORIGINAL input is never modified (base-image immutability).
+# -----------------------------------------------------------------------------
+baseline:
+  mode: overlay
+  source:
+    url: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+    format: qcow2
+    # Or pin to a locally checksum-verified copy instead:
+    # path: /data/images/noble-server-cloudimg-amd64.img
+    # format: qcow2
+
+# -----------------------------------------------------------------------------
+# Overlay policy — strictly additive. Packages are added to the baseline;
+# nothing is removed or downgraded, and any conflict fails the preflight gate
+# (fail-closed). A robotics package that needed to UPGRADE something the cloud
+# image already ships would be rejected here rather than silently altering the
+# vendor base — that is the intended behaviour.
+# -----------------------------------------------------------------------------
+overlayPolicy:
+  packageOperation: additive-only
+  conflictPolicy: fail
+  # Explicit consent to grow the baseline to the disk.size below. Without this
+  # the build fails rather than resizing the vendor image implicitly.
+  allowDiskResize: true
+
+# -----------------------------------------------------------------------------
+# Output: a qcow2 artifact. The overlay emits a RAW copy, then the Convert
+# Artifacts stage produces every format listed here. Canonical's cloud image is
+# ~3.5GiB provisioned; 24GiB leaves room for this layer plus whatever a child
+# overlays on top (the full ROS 2 desktop stack is large). Resize is grow-only
+# and needs BOTH a larger disk.size AND allowDiskResize above.
+# -----------------------------------------------------------------------------
+disk:
+  name: overlay-disk
+  size: 24GiB
+  artifacts:
+    - type: qcow2
+
+systemConfig:
+  name: robotics-hw
+  description: Ubuntu 24.04 robotics base — Intel hardware enablement overlaid on the Canonical cloud image
+
+  # ---------------------------------------------------------------------------
+  # Intel hardware enablement, overlaid onto the cloud image. Additive-only: a
+  # package already present in the baseline is left on its baseline version, so
+  # the list is safe to over-specify.
+  #
+  # ORDER-COUPLED: the intel-oneapi-runtime-* entries must resolve BEFORE
+  # ros-jazzy-desktop so the resolver locks these versions first and transitive
+  # dependencies cannot pull 2026.0.0. Keeping them in this parent layer makes
+  # that ordering structural — parent packages are prepended ahead of the
+  # child's, so the constraint holds by construction rather than by convention.
+  # ---------------------------------------------------------------------------
+  packages:
+    # ── Intel OneAPI runtime (pinned to 2025.3.x) ───────────────────
+    - intel-oneapi-runtime-compilers_2025.3.3-30
+    - intel-oneapi-runtime-compilers-common_2025.3.3-30
+    - intel-oneapi-runtime-opencl_2025.3.3-30
+
+    # ── Intel GPU / Level Zero ──────────────────────────────────────
+    - libze1
+    - libze-intel-gpu1
+
+    # ── Intel NPU (Neural Processing Unit) drivers ───────────────────
+    - intel-level-zero-npu
+    - intel-driver-compiler-npu
+
+    # ── Intel RealSense camera (DKMS builds against the baseline kernel) ──
+    - linux-headers-generic
+    - librealsense2-dkms
+    - librealsense2_2.56.5-0~realsense.17055
+
+    # ── Firmware for the GPU/NPU the stack drives ───────────────────
+    - linux-firmware
+
+  # ---------------------------------------------------------------------------
+  # Hardware-side configuration. These apt pins are post-deployment upgrade
+  # protection, not build-time constraints: packages are installed before
+  # configurations run, so they guard the image against later bad upgrades.
+  # Child templates append their own commands after these.
+  # ---------------------------------------------------------------------------
+  configurations:
+    # Origin-based priority pins (ECI=1000, AMR=1001) are auto-generated by the
+    # provider from packageRepositories.priority. Only version-specific pins the
+    # provider cannot generate are listed here.
+    #
+    # Block old FLANN 1.19.x from ECI (prefer Ubuntu's FLANN 1.9.2)
+    - cmd: "printf 'Package: libflann*\\nPin: version 1.19.*\\nPin-Priority: -1\\n\\nPackage: flann*\\nPin: version 1.19.*\\nPin-Priority: -1\\n' > /etc/apt/preferences.d/eci-flann-block"
+    # Pin OneAPI packages to 2025.3.*
+    - cmd: "printf 'Package: intel-oneapi-runtime-*\\nPin: version 2025.3.*\\nPin-Priority: 1001\\n\\nPackage: intel-oneapi-compiler-*\\nPin: version 2025.3.*\\nPin-Priority: 1001\\n\\nPackage: intel-oneapi-mkl-*\\nPin: version 2025.3.*\\nPin-Priority: 1001\\n' > /etc/apt/preferences.d/oneapi"
+    # RealSense SDK version pin
+    - cmd: "printf 'Package: librealsense2*\\nPin: version 2.56.5-0~realsense.17055\\nPin-Priority: 1001\\n\\nPackage: ros-jazzy-librealsense2*\\nPin: version 2.56.4*\\nPin-Priority: 1001\\n\\nPackage: ros-jazzy-realsense2*\\nPin: version 4.56.4*\\nPin-Priority: 1001\\n' > /etc/apt/preferences.d/librealsense"
+
+    # Intel NPU udev rules (render group access to /dev/accel/*)
+    - cmd: "printf 'SUBSYSTEM==\"accel\", KERNEL==\"accel*\", GROUP=\"render\", MODE=\"0660\"\\n' > /etc/udev/rules.d/10-intel-vpu.rules"
+
+# -----------------------------------------------------------------------------
+# All seven repositories are declared here, in ONE layer, and inherited intact by
+# every descendant. See the header note for why they cannot be split.
+# -----------------------------------------------------------------------------
+packageRepositories:
+  # ROS 2 Jazzy repository (needed by children; declared here for the codename rule)
+  - codename: "noble"
+    url: "http://packages.ros.org/ros2/ubuntu"
+    pkey: "https://raw.githubusercontent.com/ros/rosdistro/master/ros.key"
+    component: "main"
+
+  # Intel Edge Controls for Industrial (ECI) repository
+  # Priority 1000 ensures ECI packages (systemd+ETF/taprio, PCL+oneAPI, FLANN+oneAPI)
+  # are preferred over Ubuntu defaults when version strings differ.
+  - codename: "isar"
+    url: "https://eci.intel.com/repos/noble"
+    pkey: "https://eci.intel.com/repos/gpg-keys/GPG-PUB-KEY-INTEL-ECI.gpg"
+    component: "main"
+    priority: 1000
+
+  # Intel AMR (Autonomous Mobile Robots) repository (uses ECI GPG key)
+  # Priority 1001 (above ECI) — AMR packages override ECI when both provide the same package.
+  - codename: "amr"
+    url: "https://amrdocs.intel.com/repos/noble"
+    pkey: "https://eci.intel.com/repos/gpg-keys/GPG-PUB-KEY-INTEL-ECI.gpg"
+    component: "main"
+    priority: 1001
+
+  # Intel OneAPI runtime repository
+  - codename: "all"
+    url: "https://apt.repos.intel.com/oneapi"
+    pkey: "https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB"
+    component: "main"
+
+  # Intel OpenVINO 2025 repository
+  - codename: "ubuntu24"
+    url: "https://apt.repos.intel.com/openvino/2025"
+    pkey: "https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB"
+    component: "main"
+
+  # Gazebo (OSRF) Harmonic stable repository (needed by children)
+  - codename: "noble"
+    url: "https://packages.osrfoundation.org/gazebo/ubuntu-stable"
+    pkey: "https://packages.osrfoundation.org/gazebo.gpg"
+    component: "main"
+
+  # Intel RealSense repository (new URL as of 2026)
+  - codename: "noble"
+    url: "https://librealsense.realsenseai.com/Debian/apt-repo"
+    pkey: "https://librealsense.realsenseai.com/Debian/librealsenseai.asc"
+    component: "main"
