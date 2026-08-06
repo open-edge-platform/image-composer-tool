@@ -24,6 +24,7 @@ For a conceptual overview of how templates fit into the build pipeline, see
     - [WSL-Compatible Images](#wsl-compatible-images)
     - [`baseline`](#baseline)
       - [`baseline.source`](#baselinesource)
+        - [SBOM generation (overlay mode)](#sbom-generation-overlay-mode)
     - [`overlayPolicy`](#overlaypolicy)
     - [`disk`](#disk)
       - [`disk.artifacts[]`](#diskartifacts)
@@ -259,6 +260,7 @@ place**.
 | `path` | string | one of `path`/`url` | Local filesystem path to the baseline image (no URI scheme) |
 | `url` | string | one of `path`/`url` | `https://` URL of the baseline image; downloaded over TLS before the overlay runs (plain `http` is rejected) |
 | `format` | string | No | Baseline image format: `raw`, `qcow2`, `vhd` or `vhdx` (default `raw`). Non-raw formats are converted to RAW before the overlay runs |
+| `sbomPath` | string | No | Local filesystem path (no URI scheme) to an externally-supplied SPDX SBOM (JSON) describing the baseline image. Defaults to unset. See [SBOM generation](#sbom-generation-overlay-mode) below |
 
 ```yaml
 baseline:
@@ -266,7 +268,32 @@ baseline:
   source:
     path: /path/to/ubuntu-24.04-base.img
     format: raw
+    # Optional: combine this base-image SBOM with the overlay delta to emit a
+    # full SBOM. Omit it to use the SBOM embedded in the baseline image, if any.
+    sbomPath: /path/to/ubuntu-24.04-base.spdx.json
 ```
+
+##### SBOM generation (overlay mode)
+
+An overlay build always writes an SPDX SBOM into the image at
+`/usr/share/sbom` (and a sidecar copy beside the emitted artifact). What it
+contains depends on which **base** SBOM is available to merge the
+overlay-contributed packages (added and, in `additive-and-upgrade` mode,
+upgraded) into:
+
+1. **`baseline.source.sbomPath` set and valid** — a **full SBOM** is produced by
+   combining that base SBOM with the overlay delta.
+2. **`sbomPath` unset** — the SBOM the baseline image itself carries at
+   `/usr/share/sbom` is used as the base and merged with the delta.
+3. **No base SBOM available** — `sbomPath` is unset or the file is
+   absent/unreadable/malformed **and** the baseline image embeds no SBOM — then
+   only the **delta SBOM** (the overlay-contributed packages) is written. This is
+   never an error: the build succeeds with a delta-only manifest.
+
+A missing or malformed `sbomPath` falls back to the baseline-embedded SBOM (then
+to delta-only); it does not fail the build. Omitting `sbomPath` entirely
+preserves the previous behavior. This applies to every overlay-capable provider
+(Ubuntu and Debian).
 
 > **Note:** Overlay mode is currently wired end-to-end for the **Ubuntu** and
 > **Debian** providers. Targeting a provider without overlay support fails the

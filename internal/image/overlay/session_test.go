@@ -23,7 +23,7 @@ type builderSeams struct {
 	grubRegen   func(*config.ImageTemplate, *BaselineInfo, string) error
 	addFiles    func(*config.ImageTemplate, string) error
 	resize      func(*config.ImageTemplate, *Context, *Layout) error
-	sbom        func(*BaselineInfo, string, *ResolutionPlan) error
+	sbom        func(*config.ImageTemplate, *BaselineInfo, string, *ResolutionPlan) error
 	emit        func(*config.ImageTemplate, string, string) (string, error)
 	inspect     func(string) error
 	convert     func(string, *config.ImageTemplate) error
@@ -166,7 +166,7 @@ func installOverlayTestBuilder(t *testing.T, r *builderRecorder) *Builder {
 		r.note("resize")
 		return r.resizeErr
 	}
-	builderSBOMFn = func(*BaselineInfo, string, *ResolutionPlan) error {
+	builderSBOMFn = func(*config.ImageTemplate, *BaselineInfo, string, *ResolutionPlan) error {
 		r.note("sbom")
 		return r.sbomErr
 	}

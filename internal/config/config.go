@@ -133,6 +133,15 @@ type BaselineSource struct {
 	Path   string `yaml:"path,omitempty"`
 	URL    string `yaml:"url,omitempty"`
 	Format string `yaml:"format,omitempty"`
+
+	// SBOMPath is an optional local filesystem path to an externally-supplied
+	// SPDX SBOM describing the baseline image. When set and readable, the overlay
+	// SBOM is generated as the union of this base SBOM and the overlay-contributed
+	// packages (a full inventory). When unset the overlay falls back to the SBOM
+	// the baseline image carries at /usr/share/sbom, and when neither is available
+	// only the overlay delta is written — the build never fails on a missing or
+	// malformed base SBOM. It defaults to unset for backward compatibility.
+	SBOMPath string `yaml:"sbomPath,omitempty"`
 }
 
 // OverlayPolicy controls how overlay-mode preflight classifies and gates
@@ -1409,6 +1418,18 @@ func (s *BaselineSource) Validate() error {
 	// normalizes programmatically-built templates, which reach ingestion via
 	// Validate() without passing through schema validation.
 	s.Format = strings.ToLower(strings.TrimSpace(s.Format))
+
+	// Normalize the optional external base-SBOM path and persist it. It is a local
+	// file path only (a URI scheme is rejected); existence is intentionally NOT
+	// checked here — an absent or unreadable base SBOM is handled gracefully at
+	// SBOM-generation time (delta-only fallback), so it must not fail validation.
+	sbomPath := strings.TrimSpace(s.SBOMPath)
+	s.SBOMPath = sbomPath
+	if sbomPath != "" {
+		if parsed, err := url.Parse(sbomPath); err == nil && parsed.Scheme != "" {
+			return fmt.Errorf("baseline.source.sbomPath must be a local file path (no URI scheme)")
+		}
+	}
 
 	switch {
 	case path == "" && rawURL == "":

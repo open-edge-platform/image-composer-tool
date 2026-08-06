@@ -59,6 +59,16 @@ func TestValidateBaseline(t *testing.T) {
 			wantNoErr: true,
 		},
 		{
+			name:      "overlay accepts local sbomPath",
+			baseline:  &Baseline{Mode: BaselineModeOverlay, Source: &BaselineSource{Path: "/tmp/u.raw", SBOMPath: "/tmp/base.spdx.json"}},
+			wantNoErr: true,
+		},
+		{
+			name:     "overlay rejects sbomPath with a URI scheme",
+			baseline: &Baseline{Mode: BaselineModeOverlay, Source: &BaselineSource{Path: "/tmp/u.raw", SBOMPath: "https://example.com/base.spdx.json"}},
+			wantErr:  "sbomPath must be a local file path",
+		},
+		{
 			name: "overlay accepts https URL source",
 			baseline: &Baseline{
 				Mode:   BaselineModeOverlay,
@@ -525,6 +535,34 @@ func TestSchemaAcceptsBaseline(t *testing.T) {
 	}`
 	if err := validate.ValidateUserTemplateJSON([]byte(tmpl)); err != nil {
 		t.Fatalf("user template with baseline should validate: %v", err)
+	}
+}
+
+// TestSchemaAcceptsBaselineSBOMPath ensures the optional baseline.source.sbomPath
+// field is accepted by the schema, and that a URI-scheme value is rejected.
+func TestSchemaAcceptsBaselineSBOMPath(t *testing.T) {
+	valid := `{
+		"image": {"name": "ub", "version": "1.0.0"},
+		"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"},
+		"baseline": {
+			"mode": "overlay",
+			"source": {"path": "/tmp/u.raw", "sbomPath": "/tmp/base.spdx.json"}
+		}
+	}`
+	if err := validate.ValidateUserTemplateJSON([]byte(valid)); err != nil {
+		t.Fatalf("template with baseline.source.sbomPath should validate: %v", err)
+	}
+
+	scheme := `{
+		"image": {"name": "ub", "version": "1.0.0"},
+		"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"},
+		"baseline": {
+			"mode": "overlay",
+			"source": {"path": "/tmp/u.raw", "sbomPath": "https://example.com/base.spdx.json"}
+		}
+	}`
+	if err := validate.ValidateUserTemplateJSON([]byte(scheme)); err == nil {
+		t.Fatalf("sbomPath with a URI scheme should be rejected by schema")
 	}
 }
 

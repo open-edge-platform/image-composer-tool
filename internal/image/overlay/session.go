@@ -393,7 +393,7 @@ func (b *Builder) Postprocess(buildErr error) (err error) {
 
 	// Embed the overlay SBOM into the baseline while the root is still mounted.
 	if err := b.timeStage("Generate SBOM", func() error {
-		if serr := builderSBOMFn(b.info, b.layout.RootMount, b.plan); serr != nil {
+		if serr := builderSBOMFn(b.template, b.info, b.layout.RootMount, b.plan); serr != nil {
 			return fmt.Errorf("overlay postprocess: SBOM generation failed: %w", serr)
 		}
 		return nil
@@ -569,9 +569,17 @@ func (b *Builder) imageVersion() string {
 // dropping a second, delta-only file beside it. That prevents SBOM consumers
 // (compare, CVE scanners) from reading a misleading partial inventory.
 //
-// When the baseline carries no readable SBOM, it falls back to writing just the
-// contributed packages so the image still gets a manifest.
-func generateOverlaySBOM(info *BaselineInfo, rootMount string, plan *ResolutionPlan) error {
+// The base SBOM to merge into is resolved in this order:
+//  1. An externally-supplied SBOM at baseline.source.sbomPath, when set and
+//     readable — this lets a caller provide a full baseline inventory even when
+//     the baseline image does not embed one.
+//  2. Otherwise the SBOM the overlay image inherited from the baseline at
+//     /usr/share/sbom (discovered by name).
+//
+// When neither yields a readable/valid base SBOM, it falls back to writing just
+// the contributed packages so the image still gets a manifest. A missing or
+// malformed base SBOM (external or inherited) never fails the build.
+func generateOverlaySBOM(template *config.ImageTemplate, info *BaselineInfo, rootMount string, plan *ResolutionPlan) error {
 	if plan == nil {
 		return nil
 	}
@@ -605,42 +613,113 @@ func generateOverlaySBOM(info *BaselineInfo, rootMount string, plan *ResolutionP
 		})
 	}
 
-	// Locate the SBOM the image inherited from the baseline. Its filename is
-	// build-specific (create mode timestamps it), so discover it rather than
-	// assume a fixed name.
-	baselineSBOMName, baselineSBOMData, found := readBaselineSBOM(rootMount)
-	if !found {
-		log.Warnf("Overlay SBOM: no baseline SBOM found at %s; writing overlay-contributed packages only", manifest.ImageSBOMPath)
-		return writeOverlaySBOMToChroot(pkgs, manifest.DefaultSPDXFile, rootMount)
+	// Resolve the base SBOM (external override or the baseline-inherited one) plus
+	// the filename the merged document should be written under.
+	sbomName, baseSBOMData, baseFound := resolveOverlayBaseSBOM(template, rootMount)
+
+	if !baseFound {
+		log.Warnf("Overlay SBOM: no base SBOM available (external or at %s); writing overlay-contributed packages only", manifest.ImageSBOMPath)
+		return writeOverlaySBOMToChroot(pkgs, sbomName, rootMount)
 	}
 
-	// Stage and embed the merged SBOM under the baseline's OWN filename so it
-	// replaces the inherited file in place (same path + name) rather than
-	// shadowing it with a second, delta-only file. DefaultSPDXFile is set (not
-	// restored) so the later sidecar copy in emitOverlayArtifact — which keys off
-	// this variable — packages the same merged manifest. This mirrors create
-	// mode's generateSBOM, which likewise assigns DefaultSPDXFile.
-	manifest.DefaultSPDXFile = baselineSBOMName
-	tempSBOM := filepath.Join(config.TempDir(), baselineSBOMName)
-	if err := manifest.WriteMergedSPDXToFile(baselineSBOMData, pkgs, tempSBOM); err != nil {
-		// A malformed baseline SBOM must not fail the build; fall back to the
-		// delta so the image still gets a manifest.
-		log.Warnf("Overlay SBOM: merging into baseline SBOM %s failed (%v); writing overlay-contributed packages only", baselineSBOMName, err)
-		return writeOverlaySBOMToChroot(pkgs, baselineSBOMName, rootMount)
+	// Stage and embed the merged SBOM under the resolved filename so it replaces
+	// the inherited file in place (same path + name) rather than shadowing it with
+	// a second, delta-only file. DefaultSPDXFile is set (not restored) so the later
+	// sidecar copy in emitOverlayArtifact — which keys off this variable — packages
+	// the same merged manifest. This mirrors create mode's generateSBOM, which
+	// likewise assigns DefaultSPDXFile.
+	manifest.DefaultSPDXFile = sbomName
+	tempSBOM := filepath.Join(config.TempDir(), sbomName)
+	if err := manifest.WriteMergedSPDXToFile(baseSBOMData, pkgs, tempSBOM); err != nil {
+		// A malformed base SBOM (external or inherited) must not fail the build;
+		// fall back to the delta so the image still gets a manifest.
+		log.Warnf("Overlay SBOM: merging into base SBOM %q failed (%v); writing overlay-contributed packages only", sbomName, err)
+		return writeOverlaySBOMToChroot(pkgs, sbomName, rootMount)
 	}
 
 	if err := manifest.CopySBOMToChroot(rootMount); err != nil {
 		return fmt.Errorf("embedding merged overlay SBOM into baseline: %w", err)
 	}
-	log.Infof("Overlay SBOM merged: %d contributed package(s) folded into the baseline inventory at %s/%s",
-		len(pkgs), manifest.ImageSBOMPath, baselineSBOMName)
+	log.Infof("Overlay SBOM merged: %d contributed package(s) folded into the base inventory at %s/%s",
+		len(pkgs), manifest.ImageSBOMPath, sbomName)
 	return nil
+}
+
+// resolveOverlayBaseSBOM decides which SBOM the overlay-contributed packages are
+// merged into, and the filename the merged document is written under. It is pure
+// (reads files only) so it is unit-testable without the sudo-backed chroot copy.
+//
+// Precedence:
+//  1. The externally-supplied SBOM at baseline.source.sbomPath, when set AND
+//     readable — a missing/unreadable external file is not fatal and falls through.
+//  2. The SBOM the overlay image inherited from the baseline at /usr/share/sbom.
+//
+// The inherited SBOM is always discovered (even when the external override wins)
+// so the merged document can REPLACE the inherited file in place under its own
+// name rather than leaving a stale second inventory behind. When no inherited SBOM
+// exists the package default filename is used. found is false only when neither an
+// external nor an inherited base SBOM is available, in which case the caller writes
+// the delta alone under the returned name.
+func resolveOverlayBaseSBOM(template *config.ImageTemplate, rootMount string) (name string, data []byte, found bool) {
+	inheritedName, inheritedData, inheritedFound := readBaselineSBOM(rootMount)
+
+	name = manifest.DefaultSPDXFile
+	if inheritedFound {
+		name = inheritedName
+	}
+
+	data, found = inheritedData, inheritedFound
+	if extPath := baselineExternalSBOMPath(template); extPath != "" {
+		if extData, ok := readExternalBaseSBOM(extPath); ok {
+			data, found = extData, true
+			log.Infof("Overlay SBOM: using externally-supplied base SBOM %q", extPath)
+		} else {
+			log.Warnf("Overlay SBOM: external base SBOM %q is absent or unreadable; falling back to the baseline-embedded SBOM", extPath)
+		}
+	}
+	return name, data, found
+}
+
+// baselineExternalSBOMPath returns the trimmed externally-supplied base SBOM path
+// from baseline.source.sbomPath, or "" when it is unset (or the baseline/source
+// is absent). It defaults to unset so an overlay template that omits the field
+// keeps the previous inherited-SBOM behavior.
+func baselineExternalSBOMPath(template *config.ImageTemplate) string {
+	if template == nil || template.Baseline == nil || template.Baseline.Source == nil {
+		return ""
+	}
+	return strings.TrimSpace(template.Baseline.Source.SBOMPath)
+}
+
+// readExternalBaseSBOM reads the externally-supplied base SBOM at path. It reports
+// ok=false (rather than an error) when the file is absent, unreadable, or empty,
+// so the caller can fall back to the inherited SBOM without failing the build. The
+// bytes are validated as parseable SPDX later, by the merge step.
+//
+// The path is user-controlled (baseline.source.sbomPath) and the build often runs
+// under sudo, so it is read with the symlink-rejecting safe reader: a symlink there
+// must not be followed to slurp an arbitrary host file (e.g. /etc/shadow) into the
+// generated SBOM artifacts.
+func readExternalBaseSBOM(path string) ([]byte, bool) {
+	data, err := security.SafeReadFile(path, security.RejectSymlinks)
+	if err != nil {
+		return nil, false
+	}
+	if len(data) == 0 {
+		return nil, false
+	}
+	return data, true
 }
 
 // readBaselineSBOM finds and reads the SBOM the overlay image inherited from the
 // baseline under <rootMount>/usr/share/sbom. It returns the file's base name, its
 // bytes, and whether a usable SBOM was found. Selection mirrors the inspector's
 // picker: an "spdx_manifest*" JSON is preferred, otherwise the first JSON file.
+//
+// The SBOM lives inside a mounted, potentially untrusted baseline image and the
+// build often runs under sudo, so it is read with the symlink-rejecting safe
+// reader: a symlink planted under /usr/share/sbom must not be followed to read an
+// arbitrary host file and propagate its contents into output artifacts.
 func readBaselineSBOM(rootMount string) (string, []byte, bool) {
 	sbomDir := filepath.Join(rootMount, strings.TrimPrefix(manifest.ImageSBOMPath, "/"))
 	entries, err := os.ReadDir(sbomDir)
@@ -653,7 +732,7 @@ func readBaselineSBOM(rootMount string) (string, []byte, bool) {
 		return "", nil, false
 	}
 
-	data, err := os.ReadFile(filepath.Join(sbomDir, name))
+	data, err := security.SafeReadFile(filepath.Join(sbomDir, name), security.RejectSymlinks)
 	if err != nil {
 		return "", nil, false
 	}
