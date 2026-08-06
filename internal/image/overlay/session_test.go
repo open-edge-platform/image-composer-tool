@@ -63,6 +63,7 @@ type builderRecorder struct {
 
 	acquireErr   error
 	mountErr     error
+	teardownErr  error
 	detachErr    error
 	detectErr    error
 	resolveErr   error
@@ -114,7 +115,7 @@ func installOverlayTestBuilder(t *testing.T, r *builderRecorder) *Builder {
 		if r.mountErr != nil {
 			return nil, nil, r.mountErr
 		}
-		teardown := func() error { r.teardowns++; return nil }
+		teardown := func() error { r.teardowns++; return r.teardownErr }
 		return &Layout{RootMount: "/wd/mnt/root", RootDevice: "/dev/loop0p2", RootFSType: "ext4", PartitionTable: partitionTableGPT}, teardown, nil
 	}
 	builderDetach = func(*Ingestor, *Context) error { r.detaches++; return r.detachErr }
@@ -732,6 +733,100 @@ func TestBuilder_DetachFailureRetainsLoopForRetry(t *testing.T) {
 	}
 	if r.detaches != 3 {
 		t.Errorf("detach attempts = %d, want 3 (no detach after a successful release)", r.detaches)
+	}
+}
+
+// TestBuilder_UnmountFailureRetainsTeardownForRetry asserts that a failed mount
+// teardown does NOT discard the teardown closure, so a subsequent cleanup retries
+// the unmount (rather than treating a still-mounted layout as released after the
+// first failure — which would leak the mount, mirroring the loop-detach retry
+// contract). It also confirms a later successful teardown stops the retries.
+func TestBuilder_UnmountFailureRetainsTeardownForRetry(t *testing.T) {
+	defer saveBuilderSeams().restore()
+	r := &builderRecorder{teardownErr: errors.New("target is busy")}
+	b := installOverlayTestBuilder(t, r)
+
+	if err := b.Preprocess(); err != nil {
+		t.Fatalf("Preprocess: %v", err)
+	}
+	// First cleanup: teardown fails and is retained; detach still runs.
+	if err := b.cleanupOnce(); err == nil {
+		t.Fatal("expected the unmount failure to surface")
+	}
+	if r.teardowns != 1 {
+		t.Errorf("teardown attempts = %d, want 1", r.teardowns)
+	}
+	// Second cleanup RETRIES the teardown because it was retained after the failure.
+	if err := b.cleanupOnce(); err == nil {
+		t.Fatal("expected the retained unmount to be retried and fail again")
+	}
+	if r.teardowns != 2 {
+		t.Errorf("teardown attempts = %d, want 2 (a failed unmount must be retried, not skipped)", r.teardowns)
+	}
+	// A later successful teardown clears it and stops retrying.
+	r.teardownErr = nil
+	if err := b.cleanupOnce(); err != nil {
+		t.Fatalf("cleanupOnce after clearing teardownErr: %v", err)
+	}
+	if r.teardowns != 3 {
+		t.Errorf("teardown attempts = %d, want 3 (retry once more, then succeed)", r.teardowns)
+	}
+	if err := b.cleanupOnce(); err != nil {
+		t.Fatalf("cleanupOnce after success: %v", err)
+	}
+	if r.teardowns != 3 {
+		t.Errorf("teardown attempts = %d, want 3 (no unmount after a successful release)", r.teardowns)
+	}
+}
+
+// TestBuilder_RetainsWorkspaceCopyWhenMountOutlivesLoop asserts the workspace
+// baseline copy is NOT force-removed on an unsuccessful build when a mount is still
+// live, even if the loop device released. A failed unmount followed by a successful
+// `losetup -d` clears LoopDevPath while the mount stays active; unlinking the
+// backing file then would leave a live mount over a deleted file. The copy must be
+// retained (removeCopies==0) until BOTH the loop and all mounts are released.
+func TestBuilder_RetainsWorkspaceCopyWhenMountOutlivesLoop(t *testing.T) {
+	defer saveBuilderSeams().restore()
+	// Build fails (so the path is "unsuccessful"); unmount fails but detach succeeds,
+	// so LoopDevPath clears while mountTeardown is retained.
+	r := &builderRecorder{installErr: errors.New("boom"), teardownErr: errors.New("target is busy")}
+	b := installOverlayTestBuilder(t, r)
+
+	if err := b.Preprocess(); err != nil {
+		t.Fatalf("Preprocess: %v", err)
+	}
+	buildErr := b.Build()
+	if buildErr == nil {
+		t.Fatal("expected the build to fail")
+	}
+	_ = b.Postprocess(buildErr)
+
+	// Loop released (detach succeeded) but the mount is still live (teardown failed),
+	// so the copy must be retained despite the unsuccessful build.
+	if r.removeCopies != 0 {
+		t.Errorf("workspace copy must be retained while a mount is still live, got removeCopies=%d", r.removeCopies)
+	}
+}
+
+// TestBuilder_RemovesWorkspaceCopyWhenFullyReleased is the counterpart: on an
+// unsuccessful build where BOTH the loop and all mounts released cleanly, the
+// orphaned workspace copy IS force-removed exactly once.
+func TestBuilder_RemovesWorkspaceCopyWhenFullyReleased(t *testing.T) {
+	defer saveBuilderSeams().restore()
+	r := &builderRecorder{installErr: errors.New("boom")} // clean teardown + detach
+	b := installOverlayTestBuilder(t, r)
+
+	if err := b.Preprocess(); err != nil {
+		t.Fatalf("Preprocess: %v", err)
+	}
+	buildErr := b.Build()
+	if buildErr == nil {
+		t.Fatal("expected the build to fail")
+	}
+	_ = b.Postprocess(buildErr)
+
+	if r.removeCopies != 1 {
+		t.Errorf("workspace copy must be force-removed once when fully released, got removeCopies=%d", r.removeCopies)
 	}
 }
 

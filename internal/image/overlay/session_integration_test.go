@@ -1,6 +1,7 @@
 package overlay
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -207,6 +208,107 @@ func TestOverlayBuilder_FullFlowRealRawBaseline(t *testing.T) {
 	if trimmed := strings.TrimSpace(out); trimmed != "" {
 		t.Errorf("root mount %s still mounted after postprocess: %q (findmnt err: %v)", rootMount, trimmed, ferr)
 	}
+}
+
+// TestOverlayBuilder_FailurePathLeavesNoLeak is the failure-path smoke test: it
+// drives the full Builder against a real loop-attached, mounted baseline, then
+// forces the install stage to fail. It asserts the whole lifecycle unwinds with no
+// leaked loop device (losetup -a), no leftover mount (findmnt), and no output
+// artifact in the build directory — the core rollback guarantee on the failure
+// path, verified against real kernel state rather than recorder counts.
+func TestOverlayBuilder_FailurePathLeavesNoLeak(t *testing.T) {
+	requireMountTooling(t, "losetup", "lsblk", "sgdisk", "mkfs", "mount", "umount", "mmdebstrap", "dpkg", "findmnt", "chroot")
+
+	// Real GPT/ext4 baseline with a minimal Debian rootfs (provides os-release +
+	// dpkg so detect succeeds and the pipeline reaches the install stage).
+	imgDir := t.TempDir()
+	srcImg := filepath.Join(imgDir, "source-baseline.raw")
+	if _, err := shell.ExecCmd("dd if=/dev/zero of="+shell.QuoteArg(srcImg)+" bs=1M count=1024", false, shell.HostPath, nil); err != nil {
+		t.Fatalf("create image: %v", err)
+	}
+	if _, err := shell.ExecCmd("sgdisk -n 1:1MiB:0 -t 1:8300 -c 1:root "+shell.QuoteArg(srcImg), false, shell.HostPath, nil); err != nil {
+		t.Fatalf("partition: %v", err)
+	}
+	bootstrapDebianBaseline(t, srcImg)
+
+	workDir := t.TempDir()
+	restoreGlobal := withTestGlobalDirs(t, workDir, cacheDirForTest(t))
+	defer restoreGlobal()
+
+	tmpl := &config.ImageTemplate{
+		Image:         config.ImageInfo{Name: "overlayfail", Version: "1.0"},
+		Target:        config.TargetInfo{OS: "debian", Dist: "debian12", Arch: "amd64", ImageType: "raw"},
+		Baseline:      &config.Baseline{Mode: config.BaselineModeOverlay, Source: &config.BaselineSource{Path: srcImg, Format: config.BaselineFormatRaw}},
+		OverlayPolicy: &config.OverlayPolicy{PackageOperation: config.OverlayPackageOpAdditiveOnly},
+		SystemConfig:  config.SystemConfig{Name: "default", Packages: []string{"overlay-probe"}},
+	}
+
+	// Stub resolution (no network) and force the install stage to fail, so the build
+	// fails mid-pipeline with the loop device attached and the root mounted.
+	defer saveBuilderSeams().restore()
+	builderResolveFn = func(_ *config.ImageTemplate, _ *BaselineInfo, _ []BaselinePackage) (*ResolutionPlan, error) {
+		return &ResolutionPlan{Requested: []string{"overlay-probe"}, ToInstall: []ResolvedPackage{{Name: "overlay-probe", Version: "1.0", Arch: "all"}}}, nil
+	}
+	builderInstallFn = func(*BaselineInfo, string, *ResolutionPlan, *PreflightReport) (*InstallResult, error) {
+		return nil, fmt.Errorf("injected install failure")
+	}
+
+	builder, err := NewBuilder(tmpl)
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+	if err := builder.Preprocess(); err != nil {
+		t.Fatalf("Preprocess: %v", err)
+	}
+	rootMount := builder.layout.RootMount
+	loopDev := builder.ctx.LoopDevPath
+
+	buildErr := builder.Build()
+	if buildErr == nil {
+		_ = builder.Postprocess(nil)
+		t.Fatal("expected the injected install failure to fail Build")
+	}
+	// Postprocess with the build error must unwind everything.
+	_ = builder.Postprocess(buildErr)
+
+	// No leaked loop device.
+	if builder.ctx.LoopDevPath != "" {
+		t.Errorf("loop device not released on the failure path: %q", builder.ctx.LoopDevPath)
+	}
+	activeLoops, lsErr := shell.ExecCmd("losetup -a", true, shell.HostPath, nil)
+	if lsErr == nil && loopDev != "" && strings.Contains(activeLoops, loopDev+":") {
+		t.Errorf("loop device %s still attached after failure-path cleanup:\n%s", loopDev, activeLoops)
+	}
+
+	// No leaked mount.
+	out, _ := shell.ExecCmd("findmnt -n "+shell.QuoteArg(rootMount), true, shell.HostPath, nil)
+	if trimmed := strings.TrimSpace(out); trimmed != "" {
+		t.Errorf("root mount %s still mounted after failure-path cleanup: %q", rootMount, trimmed)
+	}
+
+	// No output artifact: a build that failed before emit must leave the build dir
+	// empty (or absent).
+	buildDir := filepath.Join(workDir, "debian-debian12-amd64", "imagebuild", "default")
+	if entries, derr := os.ReadDir(buildDir); derr == nil && len(entries) > 0 {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("build output directory %s must be empty on a failed build, found: %v", buildDir, names)
+	}
+
+	// No leaked workspace baseline copy (the failed build force-removes it).
+	copyPath := builder.ctx.BaselineCopyPath
+	if _, serr := os.Stat(copyPath); !os.IsNotExist(serr) {
+		t.Errorf("workspace baseline copy %s must be removed on a failed build (stat err = %v)", copyPath, serr)
+	}
+}
+
+// cacheDirForTest returns a fresh cache dir for a test that does not build a probe
+// .deb; withTestGlobalDirs requires a cache dir argument.
+func cacheDirForTest(t *testing.T) string {
+	t.Helper()
+	return t.TempDir()
 }
 
 // bootstrapDebianBaseline formats img's root partition ext4 and bootstraps a

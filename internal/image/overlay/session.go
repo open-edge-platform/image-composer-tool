@@ -65,6 +65,11 @@ type Builder struct {
 	// mountTeardown unmounts the layout (reverse order). It is set by Preprocess
 	// and run once by Postprocess; nil before mounts exist or after teardown.
 	mountTeardown func() error
+	// emittedArtifact is the output-directory path of the emitted RAW image, set
+	// once the Emit stage moves the image into place. It is retained so a failure
+	// in a LATER Postprocess stage (inspect, convert) can remove the partial output
+	// — nothing from an unsuccessful build must be left in the output directory.
+	emittedArtifact string
 	// preprocessed and built track how far the pipeline got, so Postprocess only
 	// finalizes artifacts on a fully successful build and always runs cleanup.
 	preprocessed bool
@@ -353,19 +358,54 @@ func (b *Builder) Postprocess(buildErr error) (err error) {
 	//     rather than the cleanup error masking the root cause;
 	//   - otherwise (clean build, cleanup itself failed): surface the cleanup error.
 	defer func() {
+		// The teardown chain must never itself crash the process: a panic here (e.g.
+		// an unexpected nil deref in a stage seam that already opened mounts) would
+		// otherwise skip the loop/mount release. Recover it, convert it to an error,
+		// and still run the release below. The recovered panic is surfaced (or joined)
+		// so it is never silently swallowed.
+		if r := recover(); r != nil {
+			log.Errorf("Overlay postprocess: recovered from panic during finalization: %v", r)
+			perr := fmt.Errorf("overlay postprocess: panic during finalization: %v", r)
+			if err != nil {
+				err = errors.Join(err, perr)
+			} else {
+				err = perr
+			}
+		}
+
 		cerr := b.cleanupOnce()
 		// Only a fully successful Postprocess moves the workspace baseline copy out
 		// via emit; on any unsuccessful exit — a failed/incomplete build, or a
 		// finalization failure (SBOM/emit) where err is set — the copy is left behind
 		// and would otherwise accumulate across repeated builds (baseline images are
-		// large). Remove it unconditionally in those cases, but only once the loop
-		// device is released: a still-attached device (detach failed) references the
-		// backing file, so unlinking it would hinder recovery. builderRemoveCopy
-		// force-removes, ignoring debug retention, per the "remove on failure"
-		// contract; on the clean path emit already moved the copy so this never runs.
+		// large). Remove it unconditionally in those cases, but only once BOTH the loop
+		// device AND every mount have been released. A still-attached device references
+		// the backing file directly; and a mount can outlive the loop device — a failed
+		// unmount followed by a successful `losetup -d` leaves the loop autoclearing
+		// while the mount stays live, so LoopDevPath is cleared but the file is still in
+		// use. Unlinking it in either case would leave a live mount backed by a deleted
+		// file and hinder recovery. cleanupOnce clears mountTeardown only on a fully
+		// successful unmount, so mountTeardown==nil is the "all mounts released" signal.
+		// builderRemoveCopy force-removes, ignoring debug retention, per the "remove on
+		// failure" contract; on the clean path emit already moved the copy so this never runs.
 		unsuccessful := buildErr != nil || !b.built || err != nil
-		if unsuccessful && b.ctx != nil && b.ctx.LoopDevPath == "" {
+		released := b.ctx != nil && b.ctx.LoopDevPath == "" && b.mountTeardown == nil
+		if unsuccessful && released {
 			builderRemoveCopy(b.ingestor, b.ctx)
+		} else if unsuccessful && b.ctx != nil {
+			// The copy is retained (a still-attached loop device or a still-live mount
+			// references it), so log the workspace path for debugging rather than leaving
+			// it silently behind.
+			log.Warnf("Overlay postprocess: retaining workspace baseline copy for debugging "+
+				"(loop device %q / mounts could not be fully released): %s", b.ctx.LoopDevPath, b.ctx.BaselineCopyPath)
+		}
+		// If the artifact was already emitted to the output directory but a LATER
+		// finalization stage (inspect/convert) then failed, remove the partial
+		// output so nothing from an unsuccessful build leaks to the output directory.
+		// Only fires when err != nil AND emit had run (emittedArtifact set); on the
+		// clean path err is nil so the finished artifact is kept.
+		if err != nil && b.emittedArtifact != "" {
+			removeEmittedArtifacts(b.emittedArtifact, b.template)
 		}
 		if cerr == nil {
 			return
@@ -420,6 +460,10 @@ func (b *Builder) Postprocess(buildErr error) (err error) {
 			return fmt.Errorf("overlay postprocess: failed to emit image artifact: %w", eerr)
 		}
 		artifact = emitted
+		// Record the emitted path so the deferred cleanup can remove it (and its
+		// sidecars) if a later stage — inspect or convert — fails: a partial output
+		// must never be left in the build directory.
+		b.emittedArtifact = emitted
 		log.Infof("Overlay build complete: emitted %s", artifact)
 		return nil
 	}); err != nil {
@@ -528,7 +572,15 @@ func (b *Builder) cleanupOnce() error {
 	var umountErr, detachErr error
 	if b.mountTeardown != nil {
 		umountErr = b.mountTeardown()
-		b.mountTeardown = nil
+		// Clear the teardown ONLY when it fully succeeded, mirroring the loop-detach
+		// handling below. On failure it is retained so a later cleanup (or the deferred
+		// second cleanup in Postprocess) re-runs it — the teardown closure itself now
+		// retries only the still-mounted points. Discarding it here would make the
+		// mount teardown unretryable and leak any point that failed to unmount, even
+		// though the detach could still be retried — defeating the full-unwind guarantee.
+		if umountErr == nil {
+			b.mountTeardown = nil
+		}
 	}
 	if b.ctx != nil && b.ctx.LoopDevPath != "" {
 		detachErr = builderDetach(b.ingestor, b.ctx)
@@ -1026,6 +1078,59 @@ func removeEmittedOutputs(paths ...string) {
 	}
 }
 
+// removeEmittedArtifacts deletes the emitted image and its deterministic sidecars
+// from the build output directory. It is called on the failure path when a stage
+// AFTER emit (inspect/convert) fails, so a partial/abandoned output never lingers.
+// It is best-effort and logs-not-fails: cleanup must never itself abort or panic.
+//
+// The set covered is the emitted RAW plus every sibling this pipeline writes off
+// the same "<name>-<version>" base: the SBOM sidecars, the inspection report, and
+// the converted disk formats. The Convert Artifacts stage can also emit COMPRESSED
+// outputs (e.g. <base>.qcow2.gz, <base>.raw.xz) named "<file>.<compression>", so
+// the template's disk.artifacts type+compression pairs are added to the suffix set
+// — otherwise a partial compressed artifact from a failed convert would linger.
+// A missing file is not an error.
+func removeEmittedArtifacts(rawPath string, template *config.ImageTemplate) {
+	if strings.TrimSpace(rawPath) == "" {
+		return
+	}
+	dir := filepath.Dir(rawPath)
+	base := strings.TrimSuffix(filepath.Base(rawPath), filepath.Ext(rawPath)) // "<name>-<version>"
+	suffixes := []string{
+		".raw", ".qcow2", ".vhd", ".vhdx", ".vmdk", ".vdi",
+		overlayDeltaSBOMSuffix, overlayCompleteSBOMSuffix, overlayInspectReportSuffix,
+	}
+	// Add each configured artifact's format and, when compressed, its
+	// "<type>.<compression>" form so a partial/leftover compressed output is removed.
+	if template != nil {
+		for _, a := range template.GetDiskConfig().Artifacts {
+			t := strings.TrimSpace(a.Type)
+			if t == "" {
+				continue
+			}
+			suffixes = append(suffixes, "."+t)
+			if c := strings.TrimSpace(a.Compression); c != "" {
+				suffixes = append(suffixes, "."+t+"."+c)
+			}
+		}
+	}
+	seen := make(map[string]bool, len(suffixes))
+	for _, suf := range suffixes {
+		p := filepath.Join(dir, base+suf)
+		if seen[p] {
+			continue
+		}
+		seen[p] = true
+		if err := os.Remove(p); err != nil {
+			if !os.IsNotExist(err) {
+				log.Warnf("Overlay cleanup: failed to remove partial output artifact %s: %v", p, err)
+			}
+			continue
+		}
+		log.Infof("Overlay cleanup: removed partial output artifact %s", p)
+	}
+}
+
 // emitOverlaySBOMSidecar copies a staged SBOM to dst next to the emitted image,
 // returning an error on a read/write failure so the caller can decide whether it is
 // fatal (the delta sidecar, a guaranteed artifact) or best-effort (the complete
@@ -1132,11 +1237,24 @@ func moveFile(src, dst string) error {
 		return err
 	}
 
-	// Cross-device: copy then remove the source.
+	// Cross-device: copy then remove the source. A copy that fails partway can
+	// leave a truncated file at dst (in the output directory), so remove it before
+	// returning the error — the no-partial-state contract requires the output
+	// directory to hold nothing from a failed emit.
 	if err := copyLocalFile(src, dst); err != nil {
+		if rerr := os.Remove(dst); rerr != nil && !os.IsNotExist(rerr) {
+			log.Warnf("Overlay emit: failed to remove partial destination %s after a failed cross-device copy: %v", dst, rerr)
+		}
 		return err
 	}
 	if err := os.Remove(src); err != nil {
+		// The copy succeeded but the source could not be removed: moveFile still
+		// returns an error, and because emit never returns a path in that case the
+		// deferred cleanup cannot see the (complete) destination. Remove dst here so
+		// the failed emit leaves nothing in the output directory.
+		if rerr := os.Remove(dst); rerr != nil && !os.IsNotExist(rerr) {
+			log.Warnf("Overlay emit: failed to remove destination %s after a failed source cleanup: %v", dst, rerr)
+		}
 		return fmt.Errorf("failed to remove source %s after cross-device move: %w", src, err)
 	}
 	return nil
