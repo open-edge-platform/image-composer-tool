@@ -214,16 +214,16 @@ func TestHandleComposeInvalidTemplate(t *testing.T) {
 
 // --- advanced-mode stubs (contract-only; replaced in later PRs) ---
 
-// The three Advanced-mode endpoints are wired to the generated interface but not
-// yet implemented — each returns 501 with the standard error envelope. This
-// guards the PR-1 contract-only behavior; the PRs that implement each endpoint
-// replace its assertion here.
+// The remaining Advanced-mode endpoints are wired to the generated interface but
+// not yet implemented — each returns 501 with the standard error envelope. This
+// guards the contract-only behavior; the PRs that implement each endpoint replace
+// its assertion here. (POST /templates/validate is implemented — see
+// TestHandleValidateTemplate.)
 func TestHandleAdvancedStubsNotImplemented(t *testing.T) {
 	s, _ := newTestServer(t)
 	cases := []struct {
 		name, method, path, body string
 	}{
-		{"validate", http.MethodPost, "/api/v1/templates/validate", `{"yaml":"image:\n  name: x\n"}`},
 		{"package-repos", http.MethodGet, "/api/v1/package-repos", ""},
 		{"packages-search", http.MethodGet, "/api/v1/packages/search?q=doc&os=ubuntu24", ""},
 	}
@@ -245,6 +245,66 @@ func TestHandleAdvancedStubsNotImplemented(t *testing.T) {
 				t.Errorf("error envelope = %+v, want code NOT_IMPLEMENTED with message", eb.Error)
 			}
 		})
+	}
+}
+
+// --- validate template ---
+
+// A valid template returns 200 with valid=true and no errors.
+func TestHandleValidateTemplateValid(t *testing.T) {
+	s, _ := newTestServer(t)
+	body := `{"yaml":"image:\n  name: my-image\n  version: \"1.0\"\ntarget:\n  os: ubuntu\n  dist: ubuntu24\n  arch: x86_64\n  imageType: raw\n"}`
+	rr := s.do(httptest.NewRequest(http.MethodPost, "/api/v1/templates/validate", strings.NewReader(body)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rr.Code, rr.Body)
+	}
+	var resp httpapi.ValidationResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp.Valid {
+		t.Errorf("valid = %v, want true (body: %s)", resp.Valid, rr.Body)
+	}
+	if resp.Errors != nil && len(*resp.Errors) != 0 {
+		t.Errorf("expected no errors, got %+v", *resp.Errors)
+	}
+}
+
+// An invalid template is a SUCCESSFUL call: 200 with valid=false and one issue
+// per bad field, each carrying a usable path — not a 4xx.
+func TestHandleValidateTemplateInvalidIs200(t *testing.T) {
+	s, _ := newTestServer(t)
+	body := `{"yaml":"image:\n  name: \"-bad\"\n  version: \"1.0\"\ntarget:\n  os: not-an-os\n  imageType: qcow2\n"}`
+	rr := s.do(httptest.NewRequest(http.MethodPost, "/api/v1/templates/validate", strings.NewReader(body)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (a failed validation is a successful call); body: %s", rr.Code, rr.Body)
+	}
+	var resp httpapi.ValidationResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Valid {
+		t.Fatalf("valid = %v, want false", resp.Valid)
+	}
+	if resp.Errors == nil || len(*resp.Errors) == 0 {
+		t.Fatal("expected field-level errors")
+	}
+	for _, e := range *resp.Errors {
+		if e.Path == "" {
+			t.Errorf("issue missing field path: %+v", e)
+		}
+		if e.Message == "" {
+			t.Errorf("issue missing message: %+v", e)
+		}
+	}
+}
+
+// A malformed request body (not the template — the JSON envelope) is a 400.
+func TestHandleValidateTemplateBadJSON(t *testing.T) {
+	s, _ := newTestServer(t)
+	rr := s.do(httptest.NewRequest(http.MethodPost, "/api/v1/templates/validate", strings.NewReader(`{`)))
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body: %s)", rr.Code, rr.Body)
 	}
 }
 

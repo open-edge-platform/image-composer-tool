@@ -88,6 +88,12 @@ func walkValue(v reflect.Value, path string, lim Limits, seen map[uintptr]bool) 
 		seen[ptr] = true
 		return walkValue(v.Elem(), path, lim, seen)
 
+	case reflect.Interface:
+		if v.IsNil() {
+			return nil
+		}
+		return walkValue(v.Elem(), path, lim, seen)
+
 	case reflect.Struct:
 		t := v.Type()
 		for i := 0; i < v.NumField(); i++ {
