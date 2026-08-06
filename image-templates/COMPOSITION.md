@@ -240,9 +240,50 @@ bootloader packages whose pinned versions the frozen baseline cannot satisfy.
 
 ### Combining overlay with `extends`
 
-A child can inherit `baseline` and `overlayPolicy` from its parent. If it does,
-it must declare **neither** — `overlayPolicy` on its own fails validation before
-the merge happens, because the leaf is validated as a standalone file first.
+The two features compose, and this is the most useful shape in the directory: an
+overlay **base** that layers onto a vendor image, plus a **child** that extends
+the base to add a workload. The Ubuntu robotics pair does exactly that:
+
+```
+Canonical noble cloud image (qcow2, never modified in place)
+  -> ubuntu24-x86_64-robotics-hw-overlay-qcow2.yml        Intel oneAPI / Level Zero / NPU / RealSense
+       -> ubuntu24-x86_64-robotics-jazzy-overlay-extends.yml  + ROS 2 Jazzy, OpenVINO, Gazebo, SLAM
+```
+
+**The child must declare neither `baseline` nor `overlayPolicy`.** This is not a
+style preference — it decides whether the child's packages are *added* or
+*substituted*:
+
+```
+child WITHOUT baseline -> packages: [parent's…, child's…]   additive
+child WITH    baseline -> packages: [child's…]              parent's packages LOST
+```
+
+Why: `MergeConfigurations` replaces the package list outright when the template
+being merged is itself overlay-mode, and `IsOverlayMode()` is true exactly when
+`baseline` is non-nil. A child that omits `baseline` is not overlay-mode *at its
+own layer*, so the restriction never fires and the lists accumulate. Declaring
+`baseline` in the child flips that silently — no error, just a smaller image.
+
+`overlayPolicy` on its own is worse than useless: it fails validation before the
+merge even happens, because the leaf is validated as a standalone file first and
+`overlayPolicy` is only legal alongside `baseline.mode: overlay`.
+
+Two more consequences of the same merge order, both load-bearing:
+
+- **Parent packages are prepended.** Put order-coupled packages in the parent and
+  the ordering becomes structural. The robotics base holds the
+  `intel-oneapi-runtime-*` trio precisely so it resolves ahead of the child's
+  `ros-jazzy-desktop`, which is the ordering the resolver needs.
+- **Repositories belong in one layer.** The base declares all seven robotics
+  repositories and the child declares none. Three of them share the codename
+  `noble`; splitting them across layers would collapse them (see trap 2 above).
+
+Growing a vendor baseline needs `overlayPolicy.allowDiskResize: true` *and* a
+`disk.size` larger than the baseline. The resize path also needs a build host with
+util-linux ≥ 2.38 (Ubuntu 24.04+): it reads partition start sectors via
+`lsblk -o PATH,START,TYPE`, and the `START` column does not exist on older hosts —
+Ubuntu 22.04 fails with `lsblk: unknown column: START,TYPE`.
 
 ---
 
