@@ -1951,6 +1951,7 @@ func TestCheckFileExists_HeadRejectedFallsBackToGet(t *testing.T) {
 		http.StatusBadRequest,
 		http.StatusForbidden,
 		http.StatusMethodNotAllowed,
+		http.StatusNotAcceptable,
 		http.StatusNotImplemented,
 	} {
 		t.Run(http.StatusText(headStatus), func(t *testing.T) {

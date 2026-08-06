@@ -25,7 +25,7 @@ target:
   imageType: raw
 
 disk:
-  name: Mozilla_Apt_Raw # 1:1 mapping to the systemConfigs name
+  name: Mozilla_Apt_Raw # 1:1 mapping to the systemConfig name
   artifacts:
     - type: raw
       compression: gz
@@ -50,27 +50,6 @@ disk:
       fsType: ext4
       mountPoint: /
       mountOptions: defaults
-
-packageRepositories:
-  # Mozilla's APT repository exercises two behaviours that ICT used to reject:
-  #
-  #   1. It publishes only an uncompressed index. Both
-  #      dists/mozilla/main/binary-<arch>/Packages.gz and .xz return 404; only
-  #      the plain Packages file exists (APT's last-resort form).
-  #   2. Its Google Cloud Storage backend answers HEAD on that file with 400,
-  #      while GET returns 200, so a HEAD-only existence probe concludes the
-  #      file is absent.
-  #
-  # The base URL returning 404 is incidental: ICT never requests it.
-  #
-  # Before the fix this fails with "fail connecting to repository
-  # https://packages.mozilla.org/apt"; after it, the index resolves and Firefox
-  # installs.
-  - codename: "mozilla"
-    url: "https://packages.mozilla.org/apt"
-    pkey: "https://packages.mozilla.org/apt/repo-signing-key.gpg"
-    component: "main"
-    priority: 1000 # Prefer Mozilla's Firefox over the Ubuntu archive's
 
 systemConfig:
   name: mozilla-apt
@@ -98,8 +77,33 @@ systemConfig:
     # Resolvable only from packages.mozilla.org, so the build fails if that
     # repository's index cannot be read.
     - firefox
+    # Firefox depends on libasound2, which on noble is a virtual package. Listed
+    # explicitly so the real provider is selected: resolution through Provides
+    # alone can otherwise settle on liboss4-salsa-asound2 from universe.
+    - libasound2t64
 
   kernel:
     cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
     packages:
       - linux-image-generic*
+
+packageRepositories:
+  # Mozilla's APT repository exercises two behaviours that ICT used to reject:
+  #
+  #   1. It publishes only an uncompressed index. Both
+  #      dists/mozilla/main/binary-<arch>/Packages.gz and .xz return 404; only
+  #      the plain Packages file exists (APT's last-resort form).
+  #   2. Its Google Cloud Storage backend answers HEAD on that file with 400,
+  #      while GET returns 200, so a HEAD-only existence probe concludes the
+  #      file is absent.
+  #
+  # The base URL returning 404 is incidental: ICT never requests it.
+  #
+  # Before the fix this fails with "fail connecting to repository
+  # https://packages.mozilla.org/apt"; after it, the index resolves and Firefox
+  # installs.
+  - codename: "mozilla"
+    url: "https://packages.mozilla.org/apt"
+    pkey: "https://packages.mozilla.org/apt/repo-signing-key.gpg"
+    component: "main"
+    priority: 1000 # Prefer Mozilla's Firefox over the Ubuntu archive's
