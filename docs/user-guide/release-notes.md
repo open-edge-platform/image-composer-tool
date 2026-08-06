@@ -68,7 +68,7 @@
 
 - `apt-get` install with `--no-install-recommends`: DEB package installation in the chroot environment now passes `--no-install-recommends`, reducing unnecessary package pulls.
 
-- sudo suppressed when already root: `GetFullCmdStr` detects when the process is already running as root (`euid == 0`) and omits the sudo prefix in chroot commands, avoiding permission escalation errors in CI environments that run as root.
+- sudo suppressed when already root: `GetFullCmdStr` detects when the process is already running as root (`euid == 0`) and omits the redundant inner `sudo` prefix from both chroot and host commands. ICT is launched as root (`sudo -E image-composer-tool build ...`, or the server's `sudo -n ...`), so an inner `sudo` is a root-to-root no-op that only forks an extra process per command; dropping it also avoids permission-escalation errors in CI environments that run as root. When the process is not root the prefix is kept so the per-command sudo model still elevates.
 
 - Partition mount-point path resolution: `resolveInstallRootMountPoint` is now the single canonical function for joining the install root and partition mount points. It handles empty, /-absolute, and relative mount-point strings uniformly.
 
