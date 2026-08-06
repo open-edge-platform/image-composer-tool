@@ -3,6 +3,7 @@ import { api } from './api/client'
 import { isActiveStatus, type BuildStatus, type ComposeRequest } from './api/types'
 import { useStore } from './store'
 import { BasicPage } from './components/BasicPage'
+import { AdvancedPage } from './components/AdvancedPage'
 import { BuildImagePage } from './components/BuildImagePage'
 
 type LoadState = 'loading' | 'ready' | 'error'
@@ -112,7 +113,7 @@ export default function App() {
 
   const tabs: { id: View; label: string; enabled: boolean }[] = [
     { id: 'basic', label: 'Basic', enabled: true },
-    { id: 'advanced', label: 'Advanced', enabled: false },
+    { id: 'advanced', label: 'Advanced', enabled: true },
     { id: 'builds', label: 'Compose Image', enabled: true },
   ]
 
@@ -171,6 +172,9 @@ export default function App() {
               onBuildStarted={onBuildStarted}
               buildInProgress={isActiveStatus(buildStatus)}
             />
+          </div>
+          <div hidden={view !== 'advanced'}>
+            <AdvancedPage />
           </div>
           <div hidden={view !== 'builds'}>
             <BuildImagePage
