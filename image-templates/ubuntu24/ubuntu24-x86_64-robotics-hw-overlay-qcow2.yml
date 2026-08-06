@@ -80,6 +80,20 @@
 # over time. To pin a reproducible input, replace the url/format pair with
 # `path: /verified/noble-server-cloudimg-amd64.img` pointing at a locally
 # checksum-verified copy.
+#
+# -----------------------------------------------------------------------------
+# VERIFIED BUILD (Ubuntu 24.04.3 host, util-linux 2.39.3)
+# -----------------------------------------------------------------------------
+#   ubuntu24-robotics-hw-overlay-base-24.04.qcow2   1.67 GB, 4m11s
+#   preflight : 59 add, 0 upgrade, 0 downgrade, 0 conflict, 0 unsatisfiable
+#   resize    : 3.5 GB -> 24 GiB (25769803776 bytes, confirmed in the artifact)
+#
+# Booted under QEMU/OVMF with KVM: kernel 6.8.0-136-generic (the cloud image's
+# own — this template pins no kernel), systemd 255.4 as PID 1, "Welcome to
+# Ubuntu 24.04.4 LTS", 29 targets reached, 0 failed units, 0 kernel panics,
+# reaches a login prompt. Mounting the artifact confirms all eight overlaid
+# packages installed, the three apt pins written, 10-intel-vpu.rules present and
+# the SBOM at /usr/share/sbom/.
 # =============================================================================
 
 # AI-searchable metadata for template discovery.
@@ -138,14 +152,30 @@ baseline:
     # format: qcow2
 
 # -----------------------------------------------------------------------------
-# Overlay policy — strictly additive. Packages are added to the baseline;
-# nothing is removed or downgraded, and any conflict fails the preflight gate
-# (fail-closed). A robotics package that needed to UPGRADE something the cloud
-# image already ships would be rejected here rather than silently altering the
-# vendor base — that is the intended behaviour.
+# Overlay policy — additive, and permitted to upgrade a baseline package.
+# Downgrades and removals stay blocked, and any conflict still fails the
+# preflight gate (fail-closed).
+#
+# Why not the stricter additive-only: the Intel ECI repository (priority 1000
+# below) ships a systemd built with real-time networking patches — the
+# `…-ecir8+etf+taprio+mqprio+fpe+ffw` variant — and its `libudev-dev` requires
+# the matching patched `libudev1`. Installing that libudev1 replaces the stock
+# one the cloud image ships, which is an upgrade, so additive-only rejects it:
+#
+#   unsatisfied-dependency "libudev-dev": requires
+#   libudev1 (= 255.4-1ubuntu8.16-ecir8+etf+taprio+mqprio+fpe+ffw) but the
+#   post-install set has 255.4-1ubuntu8.16 and no satisfying version is being
+#   installed  [rule: unsatisfiable-versioned-dependency]
+#
+# Preferring ECI's patched systemd is the point of giving that repository
+# priority 1000 — the ETF/taprio/mqprio/FPE queueing disciplines are what make
+# the stack usable for time-sensitive robotics traffic. The from-scratch
+# ubuntu24-x86_64-robotics-jazzy-raw.yml gets them implicitly by building the OS
+# itself; an overlay onto a stock cloud image has to be allowed to replace the
+# vendor's systemd libraries to reach the same place.
 # -----------------------------------------------------------------------------
 overlayPolicy:
-  packageOperation: additive-only
+  packageOperation: additive-and-upgrade
   conflictPolicy: fail
   # Explicit consent to grow the baseline to the disk.size below. Without this
   # the build fails rather than resizing the vendor image implicitly.

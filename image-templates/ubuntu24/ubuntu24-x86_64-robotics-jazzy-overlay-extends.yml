@@ -40,6 +40,29 @@
 #
 # `configurations` merge additively in chain order, so the parent's hardware apt
 # pins and NPU udev rule run first, then the ROS 2 setup below.
+#
+# -----------------------------------------------------------------------------
+# KNOWN BLOCKER: this layer does not finish installing yet
+# -----------------------------------------------------------------------------
+# The parent builds and boots. This child resolves and downloads correctly — 19
+# requested packages expand to a 2241-package closure, 2004 of them to install —
+# and clears the preflight gate (2002 add, 2 upgrade, 0 downgrade, 0 conflict,
+# 0 unsatisfiable, 0 policy violations). Installation then fails before dpkg even
+# starts:
+#
+#   dpkg install of 2004 artifact(s) failed: failed to start command …
+#   argument list too long
+#
+# The overlay installer passes every artifact path in a single `dpkg -i`
+# invocation. At this scale the command string reaches ~141932 bytes, over the
+# 131072-byte per-argument ceiling (MAX_ARG_STRLEN = PAGE_SIZE * 32) that applies
+# because commands run through `bash -c`. ARG_MAX (2 MiB) is not the limit here.
+# The parent's 59 packages stay well inside it, which is why only this layer trips.
+#
+# Fixing it means batching the artifact list in
+# internal/image/overlay/install.go — a change to the install path that belongs in
+# its own PR with tests, not in a template. The two upgrades in the preflight
+# figures are ECI's patched systemd libraries; see the parent's overlayPolicy note.
 # =============================================================================
 
 # AI-searchable metadata for template discovery.
