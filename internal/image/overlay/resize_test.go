@@ -1,6 +1,7 @@
 package overlay
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -473,5 +474,193 @@ func TestResizeBaseline_NilGuards(t *testing.T) {
 	}
 	if err := ResizeBaseline(&config.ImageTemplate{}, &Context{}, nil); err == nil {
 		t.Error("expected error for nil layout")
+	}
+}
+
+// The START column that assertRootIsLastPartition relies on only exists from
+// util-linux 2.38. On an older host (Ubuntu 22.04 ships 2.37.2) lsblk fails with
+// "unknown column: START,TYPE"; the resize must then read the layout with sfdisk
+// rather than aborting the build.
+func TestPartitionStarts_FallsBackToSfdiskWhenStartColumnUnsupported(t *testing.T) {
+	origExec := resizeExec
+	defer func() { resizeExec = origExec }()
+
+	var sawSfdisk bool
+	resizeExec = func(cmd string) (string, error) {
+		if strings.Contains(cmd, "lsblk") {
+			return "lsblk: unknown column: START,TYPE", errors.New("exit status 1")
+		}
+		if strings.Contains(cmd, "sfdisk") {
+			sawSfdisk = true
+			return `label: gpt
+sector-size: 512
+
+/dev/loop0p1 : start=     2099200, size=    48232415, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4
+/dev/loop0p14 : start=        2048, size=        8192, type=21686148-6449-6E6F-744E-656564454649
+/dev/loop0p15 : start=       10240, size=      217088, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B
+`, nil
+		}
+		return "", nil
+	}
+
+	starts, err := partitionStarts("/dev/loop0")
+	if err != nil {
+		t.Fatalf("partitionStarts: %v", err)
+	}
+	if !sawSfdisk {
+		t.Fatal("expected the sfdisk fallback to run when lsblk rejects the START column")
+	}
+	// Same offsets lsblk would have reported, so the caller's comparison is unchanged.
+	for dev, want := range map[string]int64{
+		"/dev/loop0p1":  2099200,
+		"/dev/loop0p14": 2048,
+		"/dev/loop0p15": 10240,
+	} {
+		if got := starts[dev]; got != want {
+			t.Errorf("start[%s] = %d, want %d", dev, got, want)
+		}
+	}
+}
+
+// Only an unknown-column failure is recoverable. Any other lsblk error is a real
+// problem (missing device, permissions) and must surface instead of being masked
+// by a second tool.
+func TestPartitionStarts_OtherLsblkErrorDoesNotFallBack(t *testing.T) {
+	origExec := resizeExec
+	defer func() { resizeExec = origExec }()
+
+	var sawSfdisk bool
+	resizeExec = func(cmd string) (string, error) {
+		if strings.Contains(cmd, "sfdisk") {
+			sawSfdisk = true
+			return "", nil
+		}
+		return "lsblk: /dev/loop9: not a block device", errors.New("exit status 32")
+	}
+
+	if _, err := partitionStarts("/dev/loop9"); err == nil {
+		t.Fatal("expected an error when lsblk fails for a non-column reason")
+	}
+	if sawSfdisk {
+		t.Error("sfdisk must not run for an lsblk failure unrelated to column support")
+	}
+}
+
+// A root partition that is genuinely last must still pass the guard when the
+// offsets came from sfdisk, so the fallback does not change the verdict.
+func TestAssertRootIsLastPartition_AcceptsViaSfdiskFallback(t *testing.T) {
+	origExec := resizeExec
+	defer func() { resizeExec = origExec }()
+
+	resizeExec = func(cmd string) (string, error) {
+		if strings.Contains(cmd, "lsblk") {
+			return "lsblk: unknown column: START,TYPE", errors.New("exit status 1")
+		}
+		// Canonical noble cloud layout: root (p1) starts last despite its low
+		// partition number.
+		return `label: gpt
+
+/dev/loop0p1 : start=2099200, size=48232415
+/dev/loop0p15 : start=10240, size=217088
+`, nil
+	}
+
+	if err := assertRootIsLastPartition("/dev/loop0", "/dev/loop0p1"); err != nil {
+		t.Fatalf("expected the guard to accept a last-positioned root: %v", err)
+	}
+}
+
+// ...and a non-last root must still be rejected through the fallback: the
+// fallback is a different data source, not a relaxation of the safety rule.
+func TestAssertRootIsLastPartition_RejectsNonLastRootViaSfdiskFallback(t *testing.T) {
+	origExec := resizeExec
+	defer func() { resizeExec = origExec }()
+
+	resizeExec = func(cmd string) (string, error) {
+		if strings.Contains(cmd, "lsblk") {
+			return "lsblk: unknown column: START,TYPE", errors.New("exit status 1")
+		}
+		return `/dev/loop0p1 : start=2048, size=1000
+/dev/loop0p2 : start=999999, size=1000
+`, nil
+	}
+
+	err := assertRootIsLastPartition("/dev/loop0", "/dev/loop0p1")
+	if err == nil {
+		t.Fatal("expected rejection: p2 starts after the root partition")
+	}
+	var unsupported *unsupportedLayoutError
+	if !errors.As(err, &unsupported) {
+		t.Errorf("expected unsupportedLayoutError, got %T: %v", err, err)
+	}
+}
+
+func TestParseSfdiskPartitionStarts(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		dump    string
+		want    map[string]int64
+		wantErr bool
+	}{
+		{
+			name: "header lines are skipped",
+			dump: `label: gpt
+label-id: 71A3CDBA-34C4-4018-AC81-DB7EF3A22198
+device: /dev/loop0
+unit: sectors
+first-lba: 34
+last-lba: 50331614
+sector-size: 512
+
+/dev/loop0p1 : start=2099200, size=48232415, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4
+`,
+			want: map[string]int64{"/dev/loop0p1": 2099200},
+		},
+		{
+			// "device: /dev/loop0" in the header also contains a colon but carries
+			// no start= field, so it must not be mistaken for a partition.
+			name: "device header is not treated as a partition",
+			dump: `device: /dev/loop0
+/dev/loop0p1 : start=2048, size=100
+`,
+			want: map[string]int64{"/dev/loop0p1": 2048},
+		},
+		{
+			name:    "a partition line with an unparseable start fails closed",
+			dump:    `/dev/loop0p1 : start=notanumber, size=100`,
+			wantErr: true,
+		},
+		{
+			name:    "no partition lines at all is an error, never an empty map",
+			dump:    "label: gpt\nsector-size: 512\n",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := parseSfdiskPartitionStarts(tt.dump)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected an error, got starts=%v", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseSfdiskPartitionStarts: %v", err)
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %d partition(s) %v, want %d %v", len(got), got, len(tt.want), tt.want)
+			}
+			for dev, want := range tt.want {
+				if got[dev] != want {
+					t.Errorf("start[%s] = %d, want %d", dev, got[dev], want)
+				}
+			}
+		})
 	}
 }
