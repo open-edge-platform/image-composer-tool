@@ -21,7 +21,61 @@ import (
 const (
 	maxDownloadAttempts = 3
 	initialRetryBackoff = 500 * time.Millisecond
+	// bodyIdleTimeout bounds the gap between successful reads of a response
+	// body. The shared client's ResponseHeaderTimeout only covers the wait for
+	// headers; once the body starts streaming, http has no read deadline, so a
+	// proxy that goes silent mid-transfer (headers received, then nothing) would
+	// otherwise block io.Copy forever. This does not cap total transfer time —
+	// the timer resets on every read that returns bytes — so a slow but
+	// progressing large package download is never killed.
+	bodyIdleTimeout = 60 * time.Second
 )
+
+// idleTimeoutReader wraps an io.ReadCloser and, if no bytes arrive within idle,
+// cancels the request context so an in-flight Read is unblocked and a stalled
+// mid-body transfer fails (and retries) instead of hanging. The timer resets on
+// every read that returns data, so only a true stall — not slow progress —
+// trips it.
+//
+// Cancelling the context (rather than calling rc.Close) is deliberate: a real
+// net/http HTTP/1.x response body serializes Close behind the in-flight Read,
+// so a Close-based watchdog would itself block on the stalled read and leave
+// the build hung. Cancelling the request makes http.Transport tear down the
+// underlying connection, which is the mechanism that reliably unblocks the read.
+type idleTimeoutReader struct {
+	rc      io.ReadCloser
+	idle    time.Duration
+	cancel  context.CancelFunc
+	timer   *time.Timer
+	tripped atomic.Bool
+}
+
+func newIdleTimeoutReader(rc io.ReadCloser, idle time.Duration, cancel context.CancelFunc) *idleTimeoutReader {
+	r := &idleTimeoutReader{rc: rc, idle: idle, cancel: cancel}
+	r.timer = time.AfterFunc(idle, func() {
+		r.tripped.Store(true)
+		r.cancel()
+	})
+	return r
+}
+
+func (r *idleTimeoutReader) Read(p []byte) (int, error) {
+	n, err := r.rc.Read(p)
+	if n > 0 {
+		r.timer.Reset(r.idle)
+	}
+	if err != nil && r.tripped.Load() {
+		return n, fmt.Errorf("stalled: no data received for %s: %w", r.idle, err)
+	}
+	return n, err
+}
+
+// stop halts the watchdog. Call it once the body has been fully read so the
+// timer does not linger; it does not close the underlying reader, which the
+// caller's deferred resp.Body.Close handles.
+func (r *idleTimeoutReader) stop() {
+	r.timer.Stop()
+}
 
 func shouldRetryHTTPStatus(statusCode int) bool {
 	switch statusCode {
@@ -48,15 +102,21 @@ func downloadWithRetry(ctx context.Context, client *http.Client, url, destPath s
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("download cancelled before attempt %d: %w", attempt, err)
 		}
-		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		// Per-attempt cancellable context so the idle watchdog can tear down a
+		// stalled exchange without affecting the caller's ctx or later attempts.
+		reqCtx, cancel := context.WithCancel(ctx)
+		req, reqErr := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)
 		if reqErr != nil {
+			cancel()
 			return fmt.Errorf("build request: %w", reqErr)
 		}
 		resp, err := client.Do(req)
 		if err != nil {
+			cancel()
 			lastErr = err
 		} else {
 			func() {
+				defer cancel()
 				defer resp.Body.Close()
 
 				if resp.StatusCode != http.StatusOK {
@@ -75,7 +135,9 @@ func downloadWithRetry(ctx context.Context, client *http.Client, url, destPath s
 				}
 				defer out.Close()
 
-				writtenBytes, copyErr := io.Copy(out, resp.Body)
+				body := newIdleTimeoutReader(resp.Body, bodyIdleTimeout, cancel)
+				defer body.stop()
+				writtenBytes, copyErr := io.Copy(out, body)
 				if copyErr != nil {
 					lastErr = copyErr
 					if removeErr := os.Remove(destPath); removeErr != nil && !os.IsNotExist(removeErr) {
