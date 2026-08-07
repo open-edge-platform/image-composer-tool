@@ -2,7 +2,7 @@
 # Static gate for every checked-in image template.
 #
 # For each tracked template under image-templates/ this runs:
-#   1. validate      - YAML wellformedness + JSON-schema conformance
+#   1. validate      - YAML well-formedness + JSON-schema conformance
 #   2. resolve --full - the extends/overlay merge, plus the OS-defaults merge
 #
 # resolve is the load-bearing check: it is the only thing that exercises the
@@ -19,7 +19,11 @@
 # fail to load, resolve still exits 0, and the gate would pass vacuously. That
 # is why the warning below is treated as a failure rather than ignored.
 
-set -uo pipefail
+# -e catches unexpected failures in the scaffolding (git, mapfile, the build
+# check). It does not short-circuit the template loop: every per-template check
+# runs inside an `if !` condition, where -e is suspended, so all failures are
+# still collected and reported together.
+set -euo pipefail
 
 BIN="${ICT_BIN:-./build/image-composer-tool}"
 DEGRADED_MARKER="Could not load default configuration"
@@ -51,7 +55,8 @@ for template in "${TEMPLATES[@]}"; do
   for check in "validate" "resolve --full"; do
     # shellcheck disable=SC2086 # $check intentionally splits into subcommand + flag
     if ! output=$("$BIN" $check "$template" 2>&1); then
-      # Trim the cobra usage block; keep the first line, which carries the error.
+      # Trim the cobra usage block: keep the first line that names an error,
+      # falling back to the first line of output when none matches.
       reason=$(printf '%s\n' "$output" | grep -m1 -E '^(Error|.*ERROR)' || printf '%s\n' "$output" | head -1)
       echo "::error file=${template}::${check} failed: ${reason}"
       failures=$((failures + 1))
