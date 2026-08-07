@@ -328,10 +328,10 @@ baseline:
     format: raw
 
 overlayPolicy:
-  packageOperation: additive-only
+  packageOperation: additive-only   # or additive-and-upgrade to permit in-place upgrades
   conflictPolicy: fail
   allowDowngrade: false
-  allowRemoval: false
+  allowPackageRemoval: false        # opt-in; requires packageOperation: additive-and-upgrade
 
 disk:
   name: primary
@@ -623,8 +623,8 @@ What is missing is the **composition mode**.
   "properties": {
     "packageOperation": {
       "type": "string",
-      "description": "Allowed package mutation model.",
-      "enum": ["additive-only"],
+      "description": "Allowed package mutation model. 'additive-only' (default) only adds packages; 'additive-and-upgrade' additionally permits in-place upgrades of baseline packages and is a prerequisite for allowPackageRemoval.",
+      "enum": ["additive-only", "additive-and-upgrade"],
       "default": "additive-only"
     },
     "conflictPolicy": {
@@ -638,10 +638,9 @@ What is missing is the **composition mode**.
       "description": "Allow package downgrades during dependency resolution.",
       "default": false
     },
-    "allowRemoval": {
+    "allowPackageRemoval": {
       "type": "boolean",
-      "description": "Allow package removals during dependency resolution.",
-      "const": false,
+      "description": "Opt-in: allow the overlay to remove a baseline package that a to-install package conflicts with (e.g. remove initramfs-tools so dracut can install). Only valid with packageOperation 'additive-and-upgrade'; bootloader and bootable-kernel packages are never removed.",
       "default": false
     },
     "resize": {
@@ -732,7 +731,7 @@ What is missing is the **composition mode**.
 | Package conflicts when extending disk images | Broken package state or failed image builds | Use native package manager dependency and conflict resolution; fail by default on unresolved conflicts |
 | Repository incompatibility | Unexpected upgrades, downgrades, or dependency drift | Require explicit repository configuration, package priority policy, and generate package diff/SBOM output |
 | Unsafe package downgrades | Runtime instability or loss of security fixes | Disallow downgrades by default; allow only through explicit policy if ever needed |
-| Package removal requested during extension | Dependency breakage or unpredictable baseline behavior | Keep extension additive-only; require fresh composition for minimal images |
+| Package removal requested during extension | Dependency breakage or unpredictable baseline behavior | Removal is off by default (additive-only); enabling it is opt-in via allowPackageRemoval and requires additive-and-upgrade. When enabled, removal is limited to conflict-driven cases, never touches bootloader/kernel packages, and a post-removal dependency audit fails the build on newly-broken baseline packages |
 | Disk resize failure | Corrupt, unusable, or unbootable image | Support only known-good partition and filesystem combinations; validate before and after resize |
 | Filesystem growth failure | Image may boot but not expose expected capacity | Support explicit filesystem grow operations only for validated filesystems; fail clearly when unsupported |
 | Partition table or filesystem conversion requested | High complexity, data-loss risk, and poor ROI | Keep structural conversion out of scope; require fresh image composition for layout changes |

@@ -41,18 +41,18 @@ func TestRunOverlayAdditionalFiles_NoFilesIsNoOp(t *testing.T) {
 		t.Fatal("copy seam must not be called when there are no additional files")
 		return nil
 	}
-	if err := RunOverlayAdditionalFiles(overlayAddFilesTemplate(t), "/wd/mnt/root"); err != nil {
+	if err := RunOverlayAdditionalFiles(overlayAddFilesTemplate(t), "/wd/mnt/root", config.AdditionalFileStageDefault); err != nil {
 		t.Fatalf("expected no-op for empty additionalFiles, got %v", err)
 	}
 }
 
 func TestRunOverlayAdditionalFiles_Validation(t *testing.T) {
-	if err := RunOverlayAdditionalFiles(nil, "/wd/mnt/root"); err == nil {
+	if err := RunOverlayAdditionalFiles(nil, "/wd/mnt/root", config.AdditionalFileStageDefault); err == nil {
 		t.Error("expected error for nil template")
 	}
 	src := writeTempSource(t, "f")
 	tmpl := overlayAddFilesTemplate(t, config.AdditionalFileInfo{Local: src, Final: "/etc/f"})
-	if err := RunOverlayAdditionalFiles(tmpl, "   "); err == nil {
+	if err := RunOverlayAdditionalFiles(tmpl, "   ", config.AdditionalFileStageDefault); err == nil {
 		t.Error("expected error for empty root mount")
 	}
 }
@@ -78,7 +78,7 @@ func TestRunOverlayAdditionalFiles_CopiesEachEntryUnderMount(t *testing.T) {
 		config.AdditionalFileInfo{Local: conf, Final: "/etc/app/app.conf"},
 	)
 
-	if err := RunOverlayAdditionalFiles(tmpl, "/wd/mnt/root"); err != nil {
+	if err := RunOverlayAdditionalFiles(tmpl, "/wd/mnt/root", config.AdditionalFileStageDefault); err != nil {
 		t.Fatalf("RunOverlayAdditionalFiles: %v", err)
 	}
 	if len(calls) != 2 {
@@ -96,6 +96,47 @@ func TestRunOverlayAdditionalFiles_CopiesEachEntryUnderMount(t *testing.T) {
 	}
 }
 
+// TestRunOverlayAdditionalFiles_FiltersByStage confirms each pass copies ONLY the
+// entries whose Stage matches the requested stage: the default pass copies unmarked
+// (and only unmarked) entries, and the pre-initramfs pass copies only
+// stage: pre-initramfs entries. This is what lets a dracut module land before the
+// initramfs is rebuilt while ordinary files still land at the end.
+func TestRunOverlayAdditionalFiles_FiltersByStage(t *testing.T) {
+	orig := copyAdditionalFileFn
+	defer func() { copyAdditionalFileFn = orig }()
+
+	var copied []string
+	copyAdditionalFileFn = func(src, dst, flags string, sudo bool) error {
+		copied = append(copied, dst)
+		return nil
+	}
+
+	dracutMod := writeTempSource(t, "99-custom.conf")
+	appConf := writeTempSource(t, "app.conf")
+	tmpl := overlayAddFilesTemplate(t,
+		config.AdditionalFileInfo{Local: dracutMod, Final: "/usr/lib/dracut/modules.d/99custom/module-setup.sh", Stage: config.AdditionalFileStagePreInitramfs},
+		config.AdditionalFileInfo{Local: appConf, Final: "/etc/app/app.conf"}, // default stage (unmarked)
+	)
+
+	// Pre-initramfs pass copies only the dracut module.
+	copied = nil
+	if err := RunOverlayAdditionalFiles(tmpl, "/wd/mnt/root", config.AdditionalFileStagePreInitramfs); err != nil {
+		t.Fatalf("pre-initramfs pass: %v", err)
+	}
+	if len(copied) != 1 || copied[0] != "/wd/mnt/root/usr/lib/dracut/modules.d/99custom/module-setup.sh" {
+		t.Errorf("pre-initramfs pass copied %v, want only the dracut module", copied)
+	}
+
+	// Default pass copies only the unmarked entry.
+	copied = nil
+	if err := RunOverlayAdditionalFiles(tmpl, "/wd/mnt/root", config.AdditionalFileStageDefault); err != nil {
+		t.Fatalf("default pass: %v", err)
+	}
+	if len(copied) != 1 || copied[0] != "/wd/mnt/root/etc/app/app.conf" {
+		t.Errorf("default pass copied %v, want only the unmarked app.conf", copied)
+	}
+}
+
 func TestRunOverlayAdditionalFiles_CopyErrorFailsBuild(t *testing.T) {
 	orig := copyAdditionalFileFn
 	defer func() { copyAdditionalFileFn = orig }()
@@ -104,7 +145,49 @@ func TestRunOverlayAdditionalFiles_CopyErrorFailsBuild(t *testing.T) {
 	}
 	src := writeTempSource(t, "f")
 	tmpl := overlayAddFilesTemplate(t, config.AdditionalFileInfo{Local: src, Final: "/etc/f"})
-	if err := RunOverlayAdditionalFiles(tmpl, "/wd/mnt/root"); err == nil {
+	if err := RunOverlayAdditionalFiles(tmpl, "/wd/mnt/root", config.AdditionalFileStageDefault); err == nil {
 		t.Fatal("expected error when a copy fails, got nil")
 	}
+}
+
+// TestRunOverlayAdditionalFiles_RejectsTraversalAndSymlink guards the untrusted-
+// destination hardening: a `final` that escapes the mount via `..`, and a symlinked
+// destination ancestor inside the mount, must both be rejected before any copy runs.
+func TestRunOverlayAdditionalFiles_RejectsTraversalAndSymlink(t *testing.T) {
+	orig := copyAdditionalFileFn
+	defer func() { copyAdditionalFileFn = orig }()
+	copied := false
+	copyAdditionalFileFn = func(string, string, string, bool) error { copied = true; return nil }
+
+	src := writeTempSource(t, "payload")
+
+	t.Run("dot-dot traversal escapes the mount", func(t *testing.T) {
+		copied = false
+		tmpl := overlayAddFilesTemplate(t, config.AdditionalFileInfo{Local: src, Final: "../../etc/passwd"})
+		err := RunOverlayAdditionalFiles(tmpl, "/wd/mnt/root", config.AdditionalFileStageDefault)
+		if err == nil {
+			t.Fatal("expected a traversal escape to be rejected")
+		}
+		if copied {
+			t.Error("no copy may run when the destination escapes the mount")
+		}
+	})
+
+	t.Run("symlinked destination ancestor is rejected", func(t *testing.T) {
+		copied = false
+		// Real mount whose /etc is a symlink to a host dir.
+		root := t.TempDir()
+		hostDir := t.TempDir()
+		if err := os.Symlink(hostDir, filepath.Join(root, "etc")); err != nil {
+			t.Fatalf("symlink: %v", err)
+		}
+		tmpl := overlayAddFilesTemplate(t, config.AdditionalFileInfo{Local: src, Final: "/etc/app.conf"})
+		err := RunOverlayAdditionalFiles(tmpl, root, config.AdditionalFileStageDefault)
+		if err == nil {
+			t.Fatal("expected a symlinked destination ancestor to be rejected")
+		}
+		if copied {
+			t.Error("no copy may run when the destination chain contains a symlink")
+		}
+	})
 }

@@ -10,6 +10,7 @@ func TestComputePackageStats(t *testing.T) {
 		name     string
 		baseline []BaselinePackage
 		plan     *ResolutionPlan
+		report   *PreflightReport
 		want     *PackageStats
 	}{
 		{
@@ -136,13 +137,51 @@ func TestComputePackageStats(t *testing.T) {
 				Upgraded:      []PackageUpgrade{},
 			},
 		},
+		{
+			// A conflict-driven removal (in both ToRemove and ApprovedRemovals) is
+			// reported as Removed with the baseline version, and the removed package is
+			// excluded from Unchanged.
+			name: "conflict-driven removal is reported and excluded from unchanged",
+			baseline: []BaselinePackage{
+				{Name: "initramfs-tools", Version: "0.142", Installed: true},
+				{Name: "libc6", Version: "2.39", Installed: true},
+			},
+			plan:   &ResolutionPlan{ToInstall: []ResolvedPackage{{Name: "dracut", Version: "060"}}},
+			report: &PreflightReport{ToRemove: []string{"initramfs-tools"}, ApprovedRemovals: []string{"initramfs-tools"}},
+			want: &PackageStats{
+				TotalBaseline: 2,
+				Unchanged:     []string{"libc6"}, // initramfs-tools removed, not unchanged
+				Added:         []PackageAdd{{Name: "dracut", Version: "060"}},
+				Upgraded:      []PackageUpgrade{},
+				Removed:       []PackageRemove{{Name: "initramfs-tools", BaselineVersion: "0.142"}},
+			},
+		},
+		{
+			// An rpm Obsoletes-driven removal is in ApprovedRemovals but NOT ToRemove
+			// (rpm -U erases it implicitly). Stats read ApprovedRemovals, so it is still
+			// reported as Removed and excluded from Unchanged.
+			name: "obsoletes-driven removal (not in ToRemove) is still reported",
+			baseline: []BaselinePackage{
+				{Name: "oldpkg", Version: "1.0", Installed: true},
+				{Name: "libc", Version: "2.39", Installed: true},
+			},
+			plan:   &ResolutionPlan{ToInstall: []ResolvedPackage{{Name: "newpkg", Version: "2.0"}}},
+			report: &PreflightReport{ApprovedRemovals: []string{"oldpkg"}},
+			want: &PackageStats{
+				TotalBaseline: 2,
+				Unchanged:     []string{"libc"}, // oldpkg obsoleted, not unchanged
+				Added:         []PackageAdd{{Name: "newpkg", Version: "2.0"}},
+				Upgraded:      []PackageUpgrade{},
+				Removed:       []PackageRemove{{Name: "oldpkg", BaselineVersion: "1.0"}},
+			},
+		},
 	}
 
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := ComputePackageStats(tt.baseline, tt.plan)
+			got := ComputePackageStats(tt.baseline, tt.plan, tt.report)
 
 			if got.TotalBaseline != tt.want.TotalBaseline {
 				t.Errorf("TotalBaseline = %d, want %d", got.TotalBaseline, tt.want.TotalBaseline)
@@ -186,6 +225,19 @@ func TestComputePackageStats(t *testing.T) {
 					}
 				}
 			}
+
+			if len(got.Removed) != len(tt.want.Removed) {
+				t.Errorf("len(Removed) = %d, want %d", len(got.Removed), len(tt.want.Removed))
+			} else {
+				for i := range got.Removed {
+					if got.Removed[i].Name != tt.want.Removed[i].Name {
+						t.Errorf("Removed[%d].Name = %q, want %q", i, got.Removed[i].Name, tt.want.Removed[i].Name)
+					}
+					if got.Removed[i].BaselineVersion != tt.want.Removed[i].BaselineVersion {
+						t.Errorf("Removed[%d].BaselineVersion = %q, want %q", i, got.Removed[i].BaselineVersion, tt.want.Removed[i].BaselineVersion)
+					}
+				}
+			}
 		})
 	}
 }
@@ -217,6 +269,9 @@ func TestPrintPackageStats(t *testing.T) {
 				Added:         []PackageAdd{{Name: "newpkg1", Version: "3.0"}},
 				Upgraded: []PackageUpgrade{
 					{Name: "pkg3", BaselineVersion: "1.0", NewVersion: "2.0"},
+				},
+				Removed: []PackageRemove{
+					{Name: "initramfs-tools", BaselineVersion: "0.142"},
 				},
 			},
 		},

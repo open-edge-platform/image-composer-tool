@@ -410,6 +410,43 @@ func TestOverlayPolicyDerivesAllowUpgrade(t *testing.T) {
 	}
 }
 
+// TestOverlayPolicyAllowPackageRemovalRequiresUpgrade confirms validate() permits
+// allowPackageRemoval only under additive-and-upgrade: removal is more invasive
+// than an in-place upgrade, so it is rejected under additive-only (and the empty
+// default), and allowed with additive-and-upgrade.
+func TestOverlayPolicyAllowPackageRemovalRequiresUpgrade(t *testing.T) {
+	cases := []struct {
+		name    string
+		op      string
+		removal bool
+		wantErr bool
+	}{
+		{"removal with additive-and-upgrade allowed", OverlayPackageOpAdditiveAndUpgrade, true, false},
+		{"removal with additive-only rejected", OverlayPackageOpAdditiveOnly, true, true},
+		{"removal with empty (defaults to additive-only) rejected", "", true, true},
+		{"no removal with additive-only allowed", OverlayPackageOpAdditiveOnly, false, false},
+		{"no removal with additive-and-upgrade allowed", OverlayPackageOpAdditiveAndUpgrade, false, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := &OverlayPolicy{PackageOperation: c.op, AllowPackageRemoval: c.removal}
+			err := p.validate()
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("expected validate() to reject allowPackageRemoval under %q", c.op)
+				}
+				if !strings.Contains(err.Error(), "allowPackageRemoval requires packageOperation") {
+					t.Errorf("error should name the requirement, got: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validate(): unexpected error %v", err)
+			}
+		})
+	}
+}
+
 // TestOverlayPolicyValidatesKernelCmdline confirms validate() rejects a
 // kernelCmdline carrying a double quote, dollar sign, backtick, backslash, or
 // newline (which would break or inject into the shell-sourced
@@ -566,10 +603,43 @@ func TestSchemaAcceptsBaselineSBOMPath(t *testing.T) {
 	}
 }
 
-// TestSchemaRejectsAllowRemoval ensures `allowRemoval` (intentionally absent
-// from OverlayPolicy) is rejected by additionalProperties:false.
-func TestSchemaRejectsAllowRemoval(t *testing.T) {
-	tmpl := `{
+// TestSchemaAcceptsAllowPackageRemoval ensures the opt-in `allowPackageRemoval`
+// boolean is accepted by the OverlayPolicy schema when paired with
+// packageOperation "additive-and-upgrade", rejected when paired with (or
+// defaulting to) "additive-only", and that an unknown property is still rejected
+// by additionalProperties:false.
+func TestSchemaAcceptsAllowPackageRemoval(t *testing.T) {
+	// Accepted: allowPackageRemoval with additive-and-upgrade.
+	accepted := `{
+		"image": {"name": "ub", "version": "1.0.0"},
+		"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"},
+		"baseline": {
+			"mode": "overlay",
+			"source": {"path": "/tmp/u.raw"}
+		},
+		"overlayPolicy": {"packageOperation": "additive-and-upgrade", "allowPackageRemoval": true}
+	}`
+	if err := validate.ValidateUserTemplateJSON([]byte(accepted)); err != nil {
+		t.Fatalf("allowPackageRemoval with additive-and-upgrade should validate: %v", err)
+	}
+
+	// Rejected: allowPackageRemoval under the default (additive-only) — removal is
+	// only permitted with additive-and-upgrade.
+	rejectedAdditiveOnly := `{
+		"image": {"name": "ub", "version": "1.0.0"},
+		"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"},
+		"baseline": {
+			"mode": "overlay",
+			"source": {"path": "/tmp/u.raw"}
+		},
+		"overlayPolicy": {"packageOperation": "additive-only", "allowPackageRemoval": true}
+	}`
+	if err := validate.ValidateUserTemplateJSON([]byte(rejectedAdditiveOnly)); err == nil {
+		t.Fatalf("allowPackageRemoval under additive-only should be rejected by the schema")
+	}
+
+	// The old misspelling / any unknown property stays rejected.
+	rejected := `{
 		"image": {"name": "ub", "version": "1.0.0"},
 		"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"},
 		"baseline": {
@@ -578,8 +648,8 @@ func TestSchemaRejectsAllowRemoval(t *testing.T) {
 		},
 		"overlayPolicy": {"allowRemoval": true}
 	}`
-	if err := validate.ValidateUserTemplateJSON([]byte(tmpl)); err == nil {
-		t.Fatalf("template with allowRemoval should be rejected by schema")
+	if err := validate.ValidateUserTemplateJSON([]byte(rejected)); err == nil {
+		t.Fatalf("an unknown overlayPolicy property should still be rejected by the schema")
 	}
 }
 

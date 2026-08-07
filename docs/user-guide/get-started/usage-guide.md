@@ -119,14 +119,14 @@ configuration file.
 
 An [overlay build](../architecture/image-composer-tool-templates.md#baseline)
 layers packages onto an existing baseline RAW image and emits, alongside the
-result, two SPDX SBOM sidecars (see
+result, SPDX SBOM sidecars (see
 [SBOM generation (overlay mode)](../architecture/image-composer-tool-templates.md#sbom-generation-overlay-mode)):
 
 | Artifact | Name |
 |----------|------|
 | Overlay RAW image | `<name>-<version>.raw` |
-| Complete SBOM (full final inventory) | `<name>-<version>.complete.spdx.json` |
 | Delta SBOM (overlay changes only) | `<name>-<version>.delta.spdx.json` |
+| Complete SBOM (full final inventory) | `<name>-<version>.complete.spdx.json` (only when a base SBOM is available; otherwise skipped) |
 
 The existing `compare` command works directly against these outputs — no
 overlay-specific flags are needed. The examples below assume the baseline is at
@@ -204,8 +204,10 @@ Upgraded packages:
   ~ curl: 8.5.0 -> 8.6.0
 ```
 
-Since overlay builds are additive, you should see additions and upgrades but no
-removals.
+Overlay builds are additive by default, so you will typically see additions and
+upgrades. Removals appear only when
+[`overlayPolicy.allowPackageRemoval`](../architecture/image-composer-tool-templates.md#overlaypolicy)
+is enabled (a conflict-driven baseline package removal).
 
 ### Delta SBOM: Optional Quick-Change View
 

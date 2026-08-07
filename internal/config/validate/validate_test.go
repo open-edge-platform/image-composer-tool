@@ -2,6 +2,7 @@ package validate
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -134,6 +135,58 @@ systemConfig:
 
 	if err := ValidateImageTemplateJSON(dataJSON); err != nil {
 		t.Errorf("expected merged template to pass validation, but got: %v", err)
+	}
+}
+
+// TestAdditionalFilesRejectsUnknownKey guards the schema tightening: a misspelled
+// stage marker (e.g. "stgae") must FAIL validation rather than being silently
+// dropped by YAML unmarshalling and copied in the default post-initramfs pass —
+// which would produce an image where the file was not baked into the initramfs.
+func TestAdditionalFilesRejectsUnknownKey(t *testing.T) {
+	base := `image:
+  name: t
+  version: "1.0.0"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+systemConfig:
+  name: t
+  additionalFiles:
+    - local: /host/foo
+      final: /etc/foo
+      %s
+`
+	cases := []struct {
+		name    string
+		line    string
+		wantErr bool
+	}{
+		{"valid stage passes", `stage: pre-initramfs`, false},
+		{"empty stage passes", `stage: ""`, false},
+		{"omitted stage passes", ``, false}, // no stage key at all — the backward-compat path
+		{"typo'd stage key fails", `stgae: pre-initramfs`, true},
+		{"unrelated unknown key fails", `mode: "0644"`, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var raw interface{}
+			if err := yaml.Unmarshal([]byte(fmt.Sprintf(base, tc.line)), &raw); err != nil {
+				t.Fatalf("yml parsing error: %v", err)
+			}
+			dataJSON, err := json.Marshal(raw)
+			if err != nil {
+				t.Fatalf("json marshaling error: %v", err)
+			}
+			err = ValidateImageTemplateJSON(dataJSON)
+			if tc.wantErr && err == nil {
+				t.Errorf("expected %q to fail schema validation, but it passed", tc.line)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("expected %q to pass schema validation, but got: %v", tc.line, err)
+			}
+		})
 	}
 }
 

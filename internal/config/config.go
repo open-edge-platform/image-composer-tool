@@ -165,12 +165,19 @@ type OverlayPolicy struct {
 	// opts in here. It never permits shrinking; resize stays grow-only.
 	AllowDiskResize bool `yaml:"allowDiskResize,omitempty"`
 
-	// AllowRemoval gates whether preflight permits removing a baseline package.
-	// It is intentionally NOT a YAML field, and the schema rejects it via
-	// additionalProperties:false, so it always carries its zero value (false):
-	// overlay mode is additive-only in v1. A future release can lift the
-	// restriction by surfacing this field in the schema/YAML.
-	AllowRemoval bool `yaml:"-"`
+	// AllowPackageRemoval gates whether an overlay build may remove a baseline
+	// package that a to-install package conflicts with (e.g. installing dracut,
+	// which Conflicts: initramfs-tools). It defaults to false: overlay mode is
+	// additive by default and never removes a baseline package unless the template
+	// explicitly opts in here. When true, preflight reclassifies such a conflict as
+	// a permitted removal and the install step removes the conflicting package
+	// before installing. Bootloader and bootable-kernel packages are NEVER removed,
+	// regardless of this flag.
+	//
+	// It is only valid together with packageOperation "additive-and-upgrade":
+	// removal is more invasive than an in-place upgrade, so it may not be enabled
+	// under the default "additive-only" (validate() rejects that combination).
+	AllowPackageRemoval bool `yaml:"allowPackageRemoval,omitempty"`
 
 	// AllowDowngrade gates whether preflight permits downgrading a baseline
 	// package to an older version. Like AllowRemoval it is intentionally NOT a
@@ -321,10 +328,29 @@ type SystemConfig struct {
 	Kernel          KernelConfig         `yaml:"kernel"`
 }
 
+// AdditionalFile stage markers control WHEN an overlay build copies an
+// additionalFiles entry relative to initramfs/boot regeneration.
+const (
+	// AdditionalFileStageDefault copies the file at the end of the build, after
+	// initramfs and GRUB regeneration. It is the default (empty stage) and matches
+	// the historical behavior, so existing templates are unaffected.
+	AdditionalFileStageDefault = ""
+	// AdditionalFileStagePreInitramfs copies the file BEFORE boot/initramfs
+	// regeneration, so content the initramfs generator consumes (e.g. a dracut
+	// module under /usr/lib/dracut or an initramfs-tools hook) is in place when the
+	// initramfs is (re)built rather than dropped in too late to take effect.
+	AdditionalFileStagePreInitramfs = "pre-initramfs"
+)
+
 // AdditionalFileInfo holds information about local file and final path to be placed in the image
 type AdditionalFileInfo struct {
 	Local string `yaml:"local"` // path to the file on the host system
 	Final string `yaml:"final"` // path where the file should be placed in the image
+	// Stage controls WHEN the file is copied in overlay builds: "" (default) copies
+	// at the end of the build (after regeneration), "pre-initramfs" copies before
+	// boot/initramfs regeneration so the generator can consume it. Ignored by
+	// create-mode builds, which have a single file-copy step.
+	Stage string `yaml:"stage,omitempty"`
 }
 
 // ConfigurationInfo holds information about instructions to execute during system configuration
@@ -778,6 +804,7 @@ func (t *ImageTemplate) GetAdditionalFileInfo() []AdditionalFileInfo {
 							newFileInfo := AdditionalFileInfo{
 								Local: candidatePath,
 								Final: t.SystemConfig.AdditionalFiles[i].Final,
+								Stage: t.SystemConfig.AdditionalFiles[i].Stage,
 							}
 							PathUpdatedList = append(PathUpdatedList, newFileInfo)
 							found = true
@@ -1474,19 +1501,28 @@ func (p *OverlayPolicy) validate() error {
 		// Additive-only: upgrades of baseline packages stay blocked.
 		p.AllowUpgrade = false
 	case OverlayPackageOpAdditiveAndUpgrade:
-		// Opt in to upgrading already-installed baseline packages. Downgrades and
-		// removals are still gated off (AllowDowngrade/AllowRemoval stay false).
+		// Opt in to upgrading already-installed baseline packages. Downgrades stay
+		// gated off (AllowDowngrade stays false).
 		p.AllowUpgrade = true
 	default:
-		return fmt.Errorf("baseline.overlayPolicy.packageOperation must be %q or %q (got %q)",
+		return fmt.Errorf("overlayPolicy.packageOperation must be %q or %q (got %q)",
 			OverlayPackageOpAdditiveOnly, OverlayPackageOpAdditiveAndUpgrade, p.PackageOperation)
+	}
+	// Package removal is a strictly more invasive operation than an in-place
+	// upgrade, so it is only permitted under additive-and-upgrade. Under
+	// additive-only (the default) allowPackageRemoval is rejected rather than
+	// silently ignored, so a template that expects removals fails loudly instead
+	// of building an image where the conflicting baseline package was left in place.
+	if p.AllowPackageRemoval && op != OverlayPackageOpAdditiveAndUpgrade {
+		return fmt.Errorf("overlayPolicy.allowPackageRemoval requires packageOperation %q (got %q)",
+			OverlayPackageOpAdditiveAndUpgrade, op)
 	}
 	cp := p.ConflictPolicy
 	if cp == "" {
 		cp = OverlayConflictPolicyFail
 	}
 	if cp != OverlayConflictPolicyFail && cp != OverlayConflictPolicyAllowExplicit {
-		return fmt.Errorf("baseline.overlayPolicy.conflictPolicy must be %q or %q (got %q)",
+		return fmt.Errorf("overlayPolicy.conflictPolicy must be %q or %q (got %q)",
 			OverlayConflictPolicyFail, OverlayConflictPolicyAllowExplicit, p.ConflictPolicy)
 	}
 	// kernelCmdline and grubDefault are written verbatim into
@@ -1501,10 +1537,10 @@ func (p *OverlayPolicy) validate() error {
 	// file.
 	const grubValueForbidden = "\"$`\\\n"
 	if strings.ContainsAny(p.KernelCmdline, grubValueForbidden) {
-		return fmt.Errorf("baseline.overlayPolicy.kernelCmdline must not contain a double quote, dollar sign, backtick, backslash, or newline")
+		return fmt.Errorf("overlayPolicy.kernelCmdline must not contain a double quote, dollar sign, backtick, backslash, or newline")
 	}
 	if strings.ContainsAny(p.GrubDefault, grubValueForbidden) {
-		return fmt.Errorf("baseline.overlayPolicy.grubDefault must not contain a double quote, dollar sign, backtick, backslash, or newline")
+		return fmt.Errorf("overlayPolicy.grubDefault must not contain a double quote, dollar sign, backtick, backslash, or newline")
 	}
 	return nil
 }

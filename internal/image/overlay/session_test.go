@@ -21,7 +21,7 @@ type builderSeams struct {
 	configure   func(*config.ImageTemplate, string) error
 	regenBoot   func(*BaselineInfo, string, *InstallResult, *ResolutionPlan) error
 	grubRegen   func(*config.ImageTemplate, *BaselineInfo, string) error
-	addFiles    func(*config.ImageTemplate, string) error
+	addFiles    func(*config.ImageTemplate, string, string) error
 	resize      func(*config.ImageTemplate, *Context, *Layout) error
 	sbom        func(*config.ImageTemplate, *BaselineInfo, string, *ResolutionPlan) (*overlaySBOMArtifacts, error)
 	emit        func(*config.ImageTemplate, string, string, *overlaySBOMArtifacts) (string, error)
@@ -163,8 +163,12 @@ func installOverlayTestBuilder(t *testing.T, r *builderRecorder) *Builder {
 		r.note("grubRegen")
 		return r.grubRegenErr
 	}
-	builderAddFilesFn = func(*config.ImageTemplate, string) error {
-		r.note("addFiles")
+	builderAddFilesFn = func(_ *config.ImageTemplate, _ string, stage string) error {
+		if stage == config.AdditionalFileStageDefault {
+			r.note("addFiles")
+		} else {
+			r.note("addFiles:" + stage)
+		}
 		return r.addFilesErr
 	}
 	builderResizeFn = func(*config.ImageTemplate, *Context, *Layout) error {
@@ -215,7 +219,9 @@ func TestBuilder_HappyPathOrdersStagesAndCleansUp(t *testing.T) {
 	// This test template leaves InspectEnabled at its zero value (false), so
 	// inspection is skipped and conversion runs directly after emit. (The CLI
 	// defaults --inspect off; see TestBuilder_InspectRunsAfterEmitWhenEnabled.)
-	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "resize", "install", "configure", "regenBoot", "grubRegen", "addFiles", "sbom", "emit:1.0", "convert:/out/img-1.0.raw"}
+	// The pre-initramfs additionalFiles pass runs BEFORE regenBoot; the default
+	// pass runs after grubRegen, as before.
+	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "resize", "install", "configure", "addFiles:pre-initramfs", "regenBoot", "grubRegen", "addFiles", "sbom", "emit:1.0", "convert:/out/img-1.0.raw"}
 	if !equalStrings(r.calls, want) {
 		t.Errorf("stage order = %v, want %v", r.calls, want)
 	}
@@ -231,7 +237,7 @@ func TestBuilder_HappyPathOrdersStagesAndCleansUp(t *testing.T) {
 	// execution order, so the caller can render an overlay timing table.
 	wantStages := []string{
 		"Acquire & Mount Baseline", "Inspect Baseline", "Resolve Packages", "Preflight",
-		"Resize", "Install Packages", "Configurations", "Boot Regeneration", "GRUB Regeneration", "Additional Files", "Generate SBOM", "Emit Artifact", "Convert Artifacts",
+		"Resize", "Install Packages", "Configurations", "Additional Files (pre-initramfs)", "Boot Regeneration", "GRUB Regeneration", "Additional Files", "Generate SBOM", "Emit Artifact", "Convert Artifacts",
 	}
 	gotStages := make([]string, 0, len(b.Timings()))
 	for _, ts := range b.Timings() {
@@ -287,7 +293,7 @@ func TestBuilder_InspectRunsAfterEmitWhenEnabled(t *testing.T) {
 	// Inspection runs immediately after emit, against the emitted RAW artifact,
 	// and conversion follows it (a request that omits raw would delete the RAW,
 	// so the RAW inspection must happen first).
-	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "resize", "install", "configure", "regenBoot", "grubRegen", "addFiles", "sbom", "emit:1.0", "inspect:/out/img-1.0.raw", "convert:/out/img-1.0.raw"}
+	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "resize", "install", "configure", "addFiles:pre-initramfs", "regenBoot", "grubRegen", "addFiles", "sbom", "emit:1.0", "inspect:/out/img-1.0.raw", "convert:/out/img-1.0.raw"}
 	if !equalStrings(r.calls, want) {
 		t.Errorf("stage order = %v, want %v", r.calls, want)
 	}
@@ -423,7 +429,7 @@ func TestBuilder_GrubRegenFailureStopsBuild(t *testing.T) {
 	}
 	// GRUB regen is the last build stage; a failure there must halt before b.built
 	// is set, so no SBOM/emit runs and no image is produced.
-	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "resize", "install", "configure", "regenBoot", "grubRegen"}
+	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "resize", "install", "configure", "addFiles:pre-initramfs", "regenBoot", "grubRegen"}
 	if !equalStrings(r.calls, want) {
 		t.Errorf("stage order on GRUB regen failure = %v, want %v", r.calls, want)
 	}

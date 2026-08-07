@@ -459,7 +459,21 @@
         "additionalFiles": {
           "type": "array",
           "description": "Additional files to include in the system",
-          "items": { "type": "object", "additionalProperties": true }
+          "items": {
+            "type": "object",
+            "required": ["local", "final"],
+            "properties": {
+              "local": { "type": "string", "minLength": 1, "description": "Path to the file on the host system" },
+              "final": { "type": "string", "minLength": 1, "description": "Path where the file should be placed in the image" },
+              "stage": {
+                "type": "string",
+                "description": "Overlay-only: WHEN to copy the file relative to initramfs/boot regeneration. '' (default) copies at the end of the build, after regeneration (historical behavior); 'pre-initramfs' copies before boot/initramfs regeneration so the generator can consume it (e.g. a dracut module or initramfs-tools hook). Ignored by create-mode builds.",
+                "enum": ["", "pre-initramfs"],
+                "default": ""
+              }
+            },
+            "additionalProperties": false
+          }
         },
         "configurations": {
           "type": "array",
@@ -557,7 +571,7 @@
     },
     "OverlayPolicy": {
       "type": "object",
-      "description": "Policy controls for overlay-mode preflight and install. allowRemoval is intentionally absent: removals are never permitted in v1.",
+      "description": "Policy controls for overlay-mode preflight and install.",
       "properties": {
         "packageOperation": {
           "type": "string",
@@ -583,8 +597,15 @@
           "type": "boolean",
           "description": "Permit growing the baseline image to satisfy a larger disk.size. Overlay mode preserves the baseline disk layout by default; when false (the default) a disk.size larger than the baseline is rejected. Resize is always grow-only and never shrinks the image.",
           "default": false
+        },
+        "allowPackageRemoval": {
+          "type": "boolean",
+          "description": "Permit removing a baseline package that a to-install package conflicts with (e.g. installing dracut, which conflicts with initramfs-tools). Overlay mode is additive by default; when false (the default) such a conflict fails the build. When true, the conflicting baseline package is removed before install. Bootloader and bootable-kernel packages are never removed regardless of this flag. Only valid with packageOperation 'additive-and-upgrade' — removal is more invasive than an in-place upgrade, so it may not be enabled under the default 'additive-only'.",
+          "default": false
         }
       },
+      "if": { "properties": { "allowPackageRemoval": { "const": true } }, "required": ["allowPackageRemoval"] },
+      "then": { "properties": { "packageOperation": { "const": "additive-and-upgrade" } }, "required": ["packageOperation"] },
       "additionalProperties": false
     },
     "PackageRepository": {

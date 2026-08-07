@@ -288,6 +288,20 @@ func (b *Builder) Build() error {
 		return err
 	}
 
+	// Copy the pre-initramfs additionalFiles BEFORE boot regeneration, so files the
+	// initramfs generator consumes (a dracut module, an initramfs-tools hook) are in
+	// place when the initramfs is rebuilt below. Only entries marked
+	// stage: pre-initramfs are copied here; the default (unmarked) entries copy at
+	// the end, after regeneration (see the "Additional Files" stage below).
+	if err := b.timeStage("Additional Files (pre-initramfs)", func() error {
+		if aerr := builderAddFilesFn(b.template, b.layout.RootMount, config.AdditionalFileStagePreInitramfs); aerr != nil {
+			return fmt.Errorf("overlay build: pre-initramfs additional files copy failed: %w", aerr)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
 	if err := b.timeStage("Boot Regeneration", func() error {
 		if berr := builderRegenBootFn(b.info, b.layout.RootMount, installed, b.plan); berr != nil {
 			return fmt.Errorf("overlay build: boot regeneration failed: %w", berr)
@@ -312,14 +326,13 @@ func (b *Builder) Build() error {
 		return err
 	}
 
-	// Copy the template's additionalFiles into the baseline root LAST, after both
+	// Copy the default-stage additionalFiles into the baseline root LAST, after both
 	// regeneration stages. This ordering lets a user-supplied boot artifact (e.g. a
 	// prebuilt /boot/initrd.img) survive: dropping it before Boot Regeneration would
-	// let update-initramfs overwrite it. Files meant to be consumed BY regeneration
-	// (initramfs-tools hooks) belong in a configurations command that runs the
-	// generator, which executes earlier in this pipeline.
+	// let update-initramfs overwrite it. Files that must instead be consumed BY
+	// regeneration are marked stage: pre-initramfs and were copied earlier, above.
 	if err := b.timeStage("Additional Files", func() error {
-		if aerr := builderAddFilesFn(b.template, b.layout.RootMount); aerr != nil {
+		if aerr := builderAddFilesFn(b.template, b.layout.RootMount, config.AdditionalFileStageDefault); aerr != nil {
 			return fmt.Errorf("overlay build: additional files copy failed: %w", aerr)
 		}
 		return nil
@@ -509,7 +522,7 @@ func (b *Builder) Postprocess(buildErr error) (err error) {
 	}
 
 	// Display package statistics showing what was added/upgraded vs unchanged
-	stats := ComputePackageStats(b.baseline, b.plan)
+	stats := ComputePackageStats(b.baseline, b.plan, b.report)
 	PrintPackageStats(stats)
 
 	// In debug mode, also print the full unchanged package list
