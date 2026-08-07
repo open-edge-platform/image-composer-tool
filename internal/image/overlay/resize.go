@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -234,9 +235,12 @@ func resizeToolsForFS(fsType, table string) []string {
 // checkResizeToolsAvailable verifies every host tool the resize sequence needs is
 // present on the build host before any disk mutation, so a missing dependency
 // fails with a clear, actionable message up front rather than mid-sequence. The
-// partition-inspection guard also relies on lsblk, so it is included.
+// partition-inspection guard also relies on lsblk, and on sfdisk as its fallback
+// when lsblk predates the START column (util-linux < 2.38), so both are included:
+// a host missing sfdisk would otherwise only discover it after the guard had
+// already committed to the fallback path.
 func checkResizeToolsAvailable(layout *Layout) error {
-	tools := append([]string{"lsblk"}, resizeToolsForFS(layout.RootFSType, layout.PartitionTable)...)
+	tools := append([]string{"lsblk", "sfdisk"}, resizeToolsForFS(layout.RootFSType, layout.PartitionTable)...)
 	var missing []string
 	for _, t := range tools {
 		ok, err := resizeToolExists(t)
@@ -251,7 +255,7 @@ func checkResizeToolsAvailable(layout *Layout) error {
 		return fmt.Errorf(
 			"overlay resize: required tool(s) not found on the build host: %s; "+
 				"install them (growpart is in cloud-guest-utils, sgdisk in gdisk, "+
-				"resize2fs in e2fsprogs, xfs_growfs in xfsprogs, losetup/partx in util-linux) "+
+				"resize2fs in e2fsprogs, xfs_growfs in xfsprogs, losetup/partx/lsblk/sfdisk in util-linux) "+
 				"or remove/lower disk.size (optionally also set overlayPolicy.allowDiskResize: false) "+
 				"to keep the baseline layout and skip the resize",
 			strings.Join(missing, ", "))
@@ -263,18 +267,12 @@ func checkResizeToolsAvailable(layout *Layout) error {
 // last partition (by on-disk start offset) on the loop device. growpart extends
 // a partition only into the free space that immediately follows it, so growing a
 // non-last root would run into — and corrupt — a following partition. It reads
-// each partition's START sector via lsblk and confirms none starts after the
-// root partition. It performs only reads; it never mutates the disk.
+// each partition's START sector and confirms none starts after the root
+// partition. It performs only reads; it never mutates the disk.
 func assertRootIsLastPartition(loopDevPath, rootDevice string) error {
-	cmd := fmt.Sprintf("lsblk -b --json -o PATH,START,TYPE %s", shell.QuoteArg(loopDevPath))
-	out, err := resizeExec(cmd)
+	starts, err := partitionStarts(loopDevPath)
 	if err != nil {
-		return fmt.Errorf("overlay resize: failed to read partition layout of %s: %w", loopDevPath, err)
-	}
-
-	starts, err := parsePartitionStarts(out)
-	if err != nil {
-		return fmt.Errorf("overlay resize: %w", err)
+		return err
 	}
 
 	rootStart, ok := starts[rootDevice]
@@ -299,6 +297,118 @@ func assertRootIsLastPartition(loopDevPath, rootDevice string) error {
 		}
 	}
 	return nil
+}
+
+// partitionStarts returns each partition's start offset on loopDevPath, keyed by
+// device path.
+//
+// It prefers `lsblk --json -o PATH,START,TYPE`, but the START column only exists
+// from util-linux 2.38 onward. On an older host (Ubuntu 22.04 ships 2.37.2) lsblk
+// exits non-zero with "unknown column: START", which would otherwise fail the
+// resize with a message that says nothing about the real cause. Fall back to
+// `sfdisk -d`, which reports the same start offsets in sectors and has carried
+// that dump format for far longer.
+//
+// Mixing units between the two sources would be a correctness bug, so note that
+// both report SECTORS: lsblk's START is a sector offset even under -b (verified
+// against sfdisk on the same disk — both report 2099200 for a noble cloud image's
+// root). The guard only ever compares offsets against each other on one disk, so
+// a consistent unit is all it needs.
+func partitionStarts(loopDevPath string) (map[string]int64, error) {
+	lsblkCmd := fmt.Sprintf("lsblk -b --json -o PATH,START,TYPE %s", shell.QuoteArg(loopDevPath))
+	out, err := resizeExec(lsblkCmd)
+	if err == nil {
+		starts, perr := parsePartitionStarts(out)
+		if perr != nil {
+			return nil, fmt.Errorf("overlay resize: %w", perr)
+		}
+		return starts, nil
+	}
+
+	// Only an unsupported-column failure is retried through sfdisk. Any other
+	// lsblk error (missing device, permissions, …) is a genuine problem and must
+	// surface as-is rather than being masked by a second tool.
+	if !isUnknownColumnError(out, err) {
+		return nil, fmt.Errorf("overlay resize: failed to read partition layout of %s: %w", loopDevPath, err)
+	}
+	log.Infof("Overlay resize: lsblk on this host does not support the START column "+
+		"(util-linux < 2.38); reading the partition layout of %s with sfdisk instead", loopDevPath)
+
+	sfdiskCmd := fmt.Sprintf("sfdisk -d %s", shell.QuoteArg(loopDevPath))
+	sfOut, sfErr := resizeExec(sfdiskCmd)
+	if sfErr != nil {
+		return nil, fmt.Errorf(
+			"overlay resize: failed to read partition layout of %s (lsblk lacks the START column on this "+
+				"host and the sfdisk fallback also failed): %w", loopDevPath, sfErr)
+	}
+	starts, perr := parseSfdiskPartitionStarts(sfOut)
+	if perr != nil {
+		return nil, fmt.Errorf("overlay resize: %w", perr)
+	}
+	return starts, nil
+}
+
+// isUnknownColumnError reports whether an lsblk invocation failed specifically
+// because a requested output column is not known to this lsblk build. util-linux
+// prints "lsblk: unknown column: START,TYPE" on stderr and exits non-zero; the
+// exec wrapper folds that text into the captured output, so match on it there and
+// fall back only for this one recoverable cause.
+func isUnknownColumnError(out string, err error) bool {
+	if err == nil {
+		return false
+	}
+	haystack := strings.ToLower(out + " " + err.Error())
+	return strings.Contains(haystack, "unknown column")
+}
+
+// parseSfdiskPartitionStarts extracts each partition's start sector from
+// `sfdisk -d` output, keyed by device path. The dump lists one partition per line
+// after a header block:
+//
+//	label: gpt
+//	sector-size: 512
+//
+//	/dev/loop0p1 : start=     2099200, size=    48232415, type=0FC63DAF-…
+//	/dev/loop0p15 : start=       10240, size=      217088, type=C12A7328-…
+//
+// Header lines carry no "start=" field and are skipped. As with the lsblk parser
+// this fails closed: a partition line whose start is missing or unparseable
+// aborts the guard rather than defaulting to 0, since a silent 0 would make a
+// later partition look like it precedes root and could let growpart run into it.
+func parseSfdiskPartitionStarts(sfdiskDump string) (map[string]int64, error) {
+	starts := make(map[string]int64)
+	for _, line := range strings.Split(sfdiskDump, "\n") {
+		line = strings.TrimSpace(line)
+		// A partition entry is "<device> : start=<n>, size=<n>, …". Anything
+		// without both the " : " separator and a start= field is header noise.
+		devPart, fields, found := strings.Cut(line, ":")
+		if !found || !strings.Contains(fields, "start=") {
+			continue
+		}
+		device := strings.TrimSpace(devPart)
+		if device == "" {
+			continue
+		}
+
+		var startText string
+		for _, field := range strings.Split(fields, ",") {
+			key, value, ok := strings.Cut(strings.TrimSpace(field), "=")
+			if ok && strings.EqualFold(strings.TrimSpace(key), "start") {
+				startText = strings.TrimSpace(value)
+				break
+			}
+		}
+		start, convErr := strconv.ParseInt(startText, 10, 64)
+		if convErr != nil {
+			return nil, fmt.Errorf(
+				"missing or unparseable start offset for partition %s in sfdisk output", device)
+		}
+		starts[device] = start
+	}
+	if len(starts) == 0 {
+		return nil, fmt.Errorf("no partitions found in sfdisk output")
+	}
+	return starts, nil
 }
 
 // parsePartitionStarts extracts the START sector offset of each partition node
