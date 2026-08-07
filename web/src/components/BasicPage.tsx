@@ -7,9 +7,7 @@ import { Select } from './Select'
 interface BasicPageProps {
   onBuildStarted: (buildId: string) => void
   buildInProgress: boolean
-  // True only while the Basic tab is visible. Both tabs stay mounted, so the
-  // compose auto-fetch is gated on this to avoid a hidden page issuing duplicate
-  // requests for the same selection (the Advanced tab fetches the same thing).
+  // True while visible; gates the compose fetch to prevent duplicate requests.
   active: boolean
 }
 

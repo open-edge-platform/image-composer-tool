@@ -4,22 +4,14 @@ import { api } from '../api/client'
 import type { ComposeResponse } from '../api/types'
 import { Select } from './Select'
 
-// AdvancedPage is the first slice of the Advanced tab: it reuses the Basic tab's
-// cascading selection to resolve a pre-authored template, then shows that
-// template's YAML read-only. It is a preview only — editing, validation, package
-// selection and export land in later PRs. The selection lives in the shared
-// store, so switching between Basic and Advanced keeps the same choices.
-//
-// `active` is true only while the Advanced tab is the visible one. Both pages
-// stay mounted (hidden via CSS) so their state survives tab switches, but the
-// compose fetch is gated on `active` so a hidden page doesn't issue duplicate
-// requests for the same selection.
+// `active` prevents duplicate compose fetches while both pages stay mounted (hidden via CSS).
 export function AdvancedPage({ active }: { active: boolean }) {
   const manifest = useStore((s) => s.manifest)
   const selection = useStore((s) => s.selection)
   const setField = useStore((s) => s.setField)
 
   const [composed, setComposed] = useState<ComposeResponse | null>(null)
+  const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const opts = useMemo(
@@ -29,27 +21,21 @@ export function AdvancedPage({ active }: { active: boolean }) {
 
   const complete = !!opts?.matched
 
-  // Resolve the template YAML whenever the selection is complete and this tab is
-  // visible, mirroring the Basic tab's auto-fetch. Guard against out-of-order
-  // responses with a cancel flag so a slow earlier request can't overwrite a
-  // newer selection's result. Clear any prior result/error up front so a stale
-  // template never lingers while the new one loads (or after the selection
-  // becomes incomplete).
+  // Guard against out-of-order responses; clear stale state before each new fetch.
   useEffect(() => {
     setError(null)
-    if (!active || !complete) {
-      setComposed(null)
-      return
-    }
     setComposed(null)
+    setLoading(false)
+    if (!active || !complete) return
     let cancelled = false
+    setLoading(true)
     api
       .compose(selection)
       .then((r) => {
-        if (!cancelled) setComposed(r)
+        if (!cancelled) { setComposed(r); setLoading(false) }
       })
       .catch((e) => {
-        if (!cancelled) setError((e as Error).message)
+        if (!cancelled) { setError((e as Error).message); setLoading(false) }
       })
     return () => {
       cancelled = true
@@ -132,6 +118,10 @@ export function AdvancedPage({ active }: { active: boolean }) {
               <pre className="max-h-[70vh] overflow-auto px-4 py-3 font-mono text-xs leading-relaxed text-slate-700">
                 {composed.yaml}
               </pre>
+            </div>
+          ) : complete && loading ? (
+            <div className="rounded-lg border border-dashed border-slate-300 p-8 text-center text-sm text-slate-400">
+              Resolving template…
             </div>
           ) : (
             <div className="rounded-lg border border-dashed border-slate-300 p-8 text-center text-sm text-slate-400">
