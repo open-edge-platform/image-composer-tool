@@ -68,7 +68,7 @@
 
 - `apt-get` install with `--no-install-recommends`: DEB package installation in the chroot environment now passes `--no-install-recommends`, reducing unnecessary package pulls.
 
-- sudo suppressed when already root: `GetFullCmdStr` detects when the process is already running as root (`euid == 0`) and omits the sudo prefix in chroot commands, avoiding permission escalation errors in CI environments that run as root.
+- sudo suppressed when already root: `GetFullCmdStr` detects when the process is already running as root (`euid == 0`) and omits the redundant inner `sudo` prefix from both chroot and host commands. ICT is launched as root (`sudo -E image-composer-tool build ...`, or the server's `sudo -n ...`), so an inner `sudo` is a root-to-root no-op that only forks an extra process per command; dropping it also avoids permission-escalation errors in CI environments that run as root. When the process is not root the prefix is kept so the per-command sudo model still elevates.
 
 - Partition mount-point path resolution: `resolveInstallRootMountPoint` is now the single canonical function for joining the install root and partition mount points. It handles empty, /-absolute, and relative mount-point strings uniformly.
 
@@ -95,6 +95,8 @@
 - Network schema validation: IPv4/IPv6 CIDR addresses, gateway addresses, and nameservers in `systemConfig.network` are now validated against typed formats in the JSON schema; DHCP and static addresses cannot be combined on the same interface.
 
 **Fixed**
+
+- `fix(config)`: drop stale `kernel.version` pin from the ubuntu24 OS defaults: ubuntu24 builds failed in pre-processing with `kernel version mismatch: requires kernel version "6.17", but available versions are: [6.8.0-31.31 7.0.0-28.28~24.04.1]`. Four default configs under `config/osv/ubuntu/ubuntu24/imageconfigs/defaultconfigs/` pinned `kernel.version: "6.17"` alongside the rolling metapackage `linux-image-generic-hwe-24.04`, and Ubuntu noble no longer ships 6.17. Any template without its own `kernel.version` inherited the stale pin, so `ubuntu24-x86_64-minimal-initrd.yml` and `ubuntu24-x86_64-dkms-demo.yml` failed even though the templates themselves were already clean. #765 removed this antipattern from the 12 affected user templates but did not cover the OS defaults, which is why the failure recurred; `image-templates/robotics-demo-ubuntu24-x86_64.yml` was also missed there and is fixed here. Dropping the pin lets `apt` resolve whatever the metapackage currently points to — no pin, nothing to go stale. Templates that pin a concrete kernel package (for example `linux-image-6.11.0-17-generic`, `linux-image-6.12-intel`) are unaffected.
 
 - `fix(ubuntu)`: `AllowPackages` not propagated to debutils.Repository (#480): The `allowPackages` list in user-provided package repository configuration was silently dropped instead of being passed through to the DEB package resolver.
 
