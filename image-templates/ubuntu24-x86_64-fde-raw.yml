@@ -66,9 +66,14 @@ systemConfig:
   #   auto (default) - passphrase material is stored in a keyfile embedded in
   #                    the initramfs so volumes unlock at boot with no prompt.
   #   manual         - no keyfile; the passphrase is entered interactively at boot.
+  # passphraseFile is resolved relative to this template's directory when it is
+  # not absolute, so the example file below travels with the template and keeps
+  # `validate` runnable from a fresh clone. Replace it with your own secret file
+  # (or an absolute path such as /run/secrets/fde-passphrase.txt) before you
+  # build an image you intend to deploy.
   fde:
     enabled: true
-    passphraseFile: "/home/user/test-fde.txt"
+    passphraseFile: "fde-passphrase.example.txt"
     unlock: auto
     partitions:
       - rootfs
