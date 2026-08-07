@@ -205,7 +205,7 @@ func fromBuildDetails(d *service.BuildDetails) httpapi.BuildDetails {
 func fromHistory(items []service.HistoryItem, serverTime time.Time) httpapi.BuildList {
 	out := httpapi.BuildList{
 		Builds:     make([]httpapi.HistoryItem, len(items)),
-		ServerTime: serverTime,
+		ServerTime: serverTime.UTC().Truncate(time.Millisecond),
 	}
 	for i, it := range items {
 		out.Builds[i] = httpapi.HistoryItem{
