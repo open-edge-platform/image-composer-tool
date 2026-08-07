@@ -351,14 +351,14 @@ func TestChownDirTree_RefusesDangerousRoots(t *testing.T) {
 	setSudoEnv(t, "1000", "1000")
 
 	cases := map[string]string{
-		"filesystem root":     string(os.PathSeparator),
-		"system temp dir":     filepath.Clean(os.TempDir()),
-		"top-level directory": "/var",
-		"shared var tmp":      "/var/tmp",
+		"filesystem root":      string(os.PathSeparator),
+		"system temp dir":      filepath.Clean(os.TempDir()),
+		"top-level directory":  "/var",
+		"shared var tmp":       "/var/tmp",
 		"shared var tmp child": "/var/tmp/ict-temp",
-		"shared var cache":    "/var/cache",
-		"shared var lib":      "/var/lib",
-		"relative path":       "cache",
+		"shared var cache":     "/var/cache",
+		"shared var lib":       "/var/lib",
+		"relative path":        "cache",
 	}
 	for name, dir := range cases {
 		t.Run(name, func(t *testing.T) {
