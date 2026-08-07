@@ -49,7 +49,7 @@ def find_base_dir():
     cwd = Path.cwd()
     for parent in [cwd] + list(cwd.parents):
         td = parent / "image-templates"
-        if td.exists() and list(td.glob("*.yml")):
+        if td.exists() and list(td.rglob("*.yml")):
             return td
     return None
 
@@ -66,7 +66,7 @@ def list_base_templates():
         print("ERROR: No image-templates/ directory found. Run from the project root.")
         return
 
-    files = sorted(base_dir.glob("*.yml"))
+    files = sorted(base_dir.rglob("*.yml"))
     print(f"Base templates in {base_dir}:\n")
     for f in files:
         name = f.name
@@ -92,7 +92,7 @@ def list_base_templates():
 def list_user_templates():
     """Print existing user templates."""
     USER_TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
-    files = sorted(USER_TEMPLATES_DIR.glob("*.yml"))
+    files = sorted(USER_TEMPLATES_DIR.rglob("*.yml"))
     if not files:
         print(f"No user templates in {USER_TEMPLATES_DIR}")
         return

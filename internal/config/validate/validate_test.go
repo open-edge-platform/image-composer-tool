@@ -25,7 +25,7 @@ func loadFile(t *testing.T, relPath string) []byte {
 
 // Test new YAML image template format
 func TestValidImageTemplate(t *testing.T) {
-	v := loadFile(t, "../../image-templates/azl3-x86_64-edge-raw.yml")
+	v := loadFile(t, "../../image-templates/azl3/azl3-x86_64-edge-raw.yml")
 
 	// Parse to generic JSON interface
 	var raw interface{}
@@ -41,7 +41,7 @@ func TestValidImageTemplate(t *testing.T) {
 		return
 	}
 	if err := ValidateImageTemplateJSON(dataJSON); err != nil {
-		t.Errorf("expected image-templates/azl3-x86_64-edge-raw.yml to pass, but got: %v", err)
+		t.Errorf("expected image-templates/azl3/azl3-x86_64-edge-raw.yml to pass, but got: %v", err)
 	}
 }
 

@@ -281,10 +281,10 @@ The output is safe to paste into an issue or a code review.
 
 ```bash
 # Show the extends-chain-merged YAML for a template that inherits from a parent
-image-composer-tool resolve image-templates/ubuntu24-x86_64-extends-example-raw.yml
+image-composer-tool resolve image-templates/ubuntu24/ubuntu24-x86_64-extends-example-raw.yml
 
 # Show the full build-time template (extends chain + OS defaults)
-image-composer-tool resolve image-templates/azl3-x86_64-edge-raw.yml --full
+image-composer-tool resolve image-templates/azl3/azl3-x86_64-edge-raw.yml --full
 
 # Pipe the merged template into a file for offline review
 image-composer-tool resolve my-template.yml --full > merged.yml
@@ -618,16 +618,16 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 ```bash
 # Build an image with default settings
-sudo -E image-composer-tool build image-templates/azl3-x86_64-edge-raw.yml
+sudo -E image-composer-tool build image-templates/azl3/azl3-x86_64-edge-raw.yml
 
 # Build with custom configuration
-sudo -E image-composer-tool --config=/path/to/config.yaml build image-templates/azl3-x86_64-edge-raw.yml
+sudo -E image-composer-tool --config=/path/to/config.yaml build image-templates/azl3/azl3-x86_64-edge-raw.yml
 
 # Build with custom workers and cache
-sudo -E image-composer-tool build --workers 12 --cache-dir ./package-cache image-templates/azl3-x86_64-edge-raw.yml
+sudo -E image-composer-tool build --workers 12 --cache-dir ./package-cache image-templates/azl3/azl3-x86_64-edge-raw.yml
 
 # Build with debug logging
-sudo -E image-composer-tool --log-level debug build image-templates/azl3-x86_64-edge-raw.yml
+sudo -E image-composer-tool --log-level debug build image-templates/azl3/azl3-x86_64-edge-raw.yml
 ```
 
 ### Managing Configuration
@@ -676,10 +676,10 @@ image-composer-tool compare --format=json --mode=diff image-v1.raw image-v2.raw
 
 ```bash
 # Validate a template
-image-composer-tool validate image-templates/azl3-x86_64-edge-raw.yml
+image-composer-tool validate image-templates/azl3/azl3-x86_64-edge-raw.yml
 
 # Validate with debug output
-image-composer-tool --log-level debug validate image-templates/azl3-x86_64-edge-raw.yml
+image-composer-tool --log-level debug validate image-templates/azl3/azl3-x86_64-edge-raw.yml
 ```
 
 ### Resolving Templates
@@ -687,10 +687,10 @@ image-composer-tool --log-level debug validate image-templates/azl3-x86_64-edge-
 ```bash
 # Print the extends-chain-merged YAML (without OS defaults) for a template
 # that inherits from a parent
-image-composer-tool resolve image-templates/ubuntu24-x86_64-extends-example-raw.yml
+image-composer-tool resolve image-templates/ubuntu24/ubuntu24-x86_64-extends-example-raw.yml
 
 # Print the fully merged, build-ready YAML including OS defaults
-image-composer-tool resolve image-templates/azl3-x86_64-edge-raw.yml --full
+image-composer-tool resolve image-templates/azl3/azl3-x86_64-edge-raw.yml --full
 
 # Save the merged template to a file for offline review
 image-composer-tool resolve my-template.yml --full > merged.yml

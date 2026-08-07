@@ -3,6 +3,7 @@ package template
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -124,33 +125,37 @@ func ParseTemplate(filePath string) (*TemplateInfo, error) {
 	return info, nil
 }
 
-// ScanTemplates scans a directory for template files and parses them.
+// ScanTemplates walks a directory tree for template files and parses them.
+// Templates are grouped into per-distribution subdirectories, so the walk is
+// recursive; a non-recursive scan would silently skip every template.
 func ScanTemplates(dir string) ([]*TemplateInfo, error) {
 	var templates []*TemplateInfo
 
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read templates directory: %w", err)
-	}
+	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
 
-	for _, entry := range entries {
 		if entry.IsDir() {
-			continue
+			return nil
 		}
 
 		if !strings.HasSuffix(entry.Name(), ".yml") && !strings.HasSuffix(entry.Name(), ".yaml") {
-			continue
+			return nil
 		}
 
-		filePath := filepath.Join(dir, entry.Name())
-		info, err := ParseTemplate(filePath)
-		if err != nil {
+		info, parseErr := ParseTemplate(path)
+		if parseErr != nil {
 			// Log warning but continue with other templates
-			fmt.Fprintf(os.Stderr, "Warning: failed to parse template %s: %v\n", entry.Name(), err)
-			continue
+			fmt.Fprintf(os.Stderr, "Warning: failed to parse template %s: %v\n", path, parseErr)
+			return nil
 		}
 
 		templates = append(templates, info)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to read templates directory: %w", err)
 	}
 
 	return templates, nil

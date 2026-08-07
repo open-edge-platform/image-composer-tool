@@ -71,19 +71,19 @@ For the full details on every command — including `inspect`, `compare`, and
 
 ```bash
 # go build — binary is in the repo root
-sudo -E ./image-composer-tool build image-templates/azl3-x86_64-edge-raw.yml
+sudo -E ./image-composer-tool build image-templates/azl3/azl3-x86_64-edge-raw.yml
 
 # earthly +build — binary is in ./build/
-sudo -E ./build/image-composer-tool build image-templates/azl3-x86_64-edge-raw.yml
+sudo -E ./build/image-composer-tool build image-templates/azl3/azl3-x86_64-edge-raw.yml
 
 # Debian package — binary is on PATH
 sudo image-composer-tool build /usr/share/image-composer-tool/examples/azl3-x86_64-edge-raw.yml
 
 # Override config settings with flags
-sudo -E ./image-composer-tool build --workers 16 --cache-dir /tmp/cache image-templates/azl3-x86_64-edge-raw.yml
+sudo -E ./image-composer-tool build --workers 16 --cache-dir /tmp/cache image-templates/azl3/azl3-x86_64-edge-raw.yml
 
 # Build from scratch in throwaway cache/workspace dirs (removed after the build)
-sudo -E ./image-composer-tool build --no-cache image-templates/azl3-x86_64-edge-raw.yml
+sudo -E ./image-composer-tool build --no-cache image-templates/azl3/azl3-x86_64-edge-raw.yml
 ```
 
 Common flags: `--workers`, `--cache-dir`, `--work-dir`, `--no-cache`, `--verbose`,
@@ -116,7 +116,7 @@ configuration file.
 Check a template for errors before starting a build:
 
 ```bash
-./image-composer-tool validate image-templates/azl3-x86_64-edge-raw.yml
+./image-composer-tool validate image-templates/azl3/azl3-x86_64-edge-raw.yml
 ```
 
 ## Resolving a Template
@@ -130,10 +130,10 @@ signing paths `systemConfig.immutability.secureBootDBKey`,
 
 ```bash
 # Chain-merge only, without OS defaults
-./image-composer-tool resolve image-templates/ubuntu24-x86_64-extends-example-raw.yml
+./image-composer-tool resolve image-templates/ubuntu24/ubuntu24-x86_64-extends-example-raw.yml
 
 # Full build-time view: extends chain + OS defaults
-./image-composer-tool resolve image-templates/azl3-x86_64-edge-raw.yml --full
+./image-composer-tool resolve image-templates/azl3/azl3-x86_64-edge-raw.yml --full
 ```
 
 ### Debugging an Extends Chain
@@ -144,7 +144,7 @@ leaf actually inherits before running a build:
 
 ```bash
 # Show what an extends child inherits from its parent
-./image-composer-tool resolve image-templates/ubuntu24-x86_64-extends-example-raw.yml
+./image-composer-tool resolve image-templates/ubuntu24/ubuntu24-x86_64-extends-example-raw.yml
 ```
 
 The output includes the union of the parent's and child's

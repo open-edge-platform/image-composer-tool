@@ -267,7 +267,7 @@ build_ubuntu24_raw_image() {
 
   # Temporarily disable exit on error for the build command to capture output
    set +e
-   output=$( sudo -S ./image-composer-tool build image-templates/ubuntu24-aarch64-minimal-raw.yml 2>&1)
+   output=$( sudo -S ./image-composer-tool build image-templates/ubuntu24/ubuntu24-aarch64-minimal-raw.yml 2>&1)
    build_exit_code=$?
    set -e
   # Check for the success message in the output

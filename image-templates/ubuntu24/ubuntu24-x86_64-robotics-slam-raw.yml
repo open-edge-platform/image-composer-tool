@@ -1,0 +1,89 @@
+# Collaborative SLAM, Intel RealSense and NPU offload, layered onto the ROS 2
+# Jazzy core robotics image.
+#
+# This is the third level of the chain, and the point of the exercise: the whole
+# file is the delta. No disk layout, no repositories, no bootloader, no kernel —
+# all of that is inherited.
+#
+#   ubuntu24-x86_64-minimal-raw.yml
+#     -> ubuntu24-x86_64-robotics-core-raw.yml   ROS 2 Jazzy + OpenVINO + Gazebo
+#          -> this file                          + collab-SLAM, RealSense, NPU
+#
+# Note this template deliberately declares no packageRepositories, even though
+# the RealSense packages below need one. Repositories merge by codename and three
+# of the core's seven share the codename "noble", so declaring any here would
+# collapse them and silently drop the ROS 2 and Gazebo sources. Because this
+# layer declares none, mergePackageRepositories returns the core's list intact.
+# The RealSense repository therefore lives in the core template.
+#
+# disk is inherited too, so disk.name resolves to "robotics-core" rather than
+# matching systemConfig.name here. That is cosmetic: disk.name is only logged,
+# and build output paths key on systemConfig.name.
+#
+# Run `image-composer-tool resolve <this file>` to see the merged result, or
+# `--full` to include the OS defaults as they apply at build time.
+
+# AI-searchable metadata for template discovery.
+# metadata is not inherited, so every template declares its own.
+metadata:
+  description: Collaborative SLAM, Intel RealSense and NPU offload layered onto the ROS 2 Jazzy core robotics image via a three-level extends chain
+  use_cases:
+    - Collaborative SLAM (collab-slam-lze)
+    - Intel RealSense depth camera integration
+    - Intel NPU inference offload
+    - Adding features to a robotics image without rewriting it
+  keywords:
+    - robotics
+    - ros2
+    - jazzy
+    - slam
+    - realsense
+    - npu
+    - dkms
+    - extends
+    - inheritance
+    - nesting
+    - ubuntu24
+
+# Inherit the core robotics image, which in turn inherits the Ubuntu 24.04
+# minimal image — a three-level chain. Every level must live in this directory
+# and declare the same target.
+extends: "ubuntu24-x86_64-robotics-core-raw.yml"
+
+image:
+  name: robotics-slam-ubuntu24
+  version: "24.04"
+
+target:
+  os: ubuntu # Must match every template in the chain
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+
+systemConfig:
+  name: robotics-slam
+  description: Intel Robotics AI Suite - ROS 2 Jazzy with collaborative SLAM, RealSense and NPU offload
+
+  # Merged additively on top of the inherited package list.
+  packages:
+    # ── Collaborative SLAM (Intel Xe / UHD GPU accelerated) ──────────
+    - ros-jazzy-collab-slam-lze
+
+    # ── Intel RealSense camera (DKMS + SDK, installed at build time) ──
+    # Resolved from the RealSense repository declared by the core template.
+    - linux-headers-generic
+    - librealsense2-dkms
+    - librealsense2_2.56.5-0~realsense.17055
+    - ros-jazzy-librealsense2
+
+    # ── Intel NPU (Neural Processing Unit) drivers ───────────────────
+    - intel-level-zero-npu
+    - intel-driver-compiler-npu
+
+  # Appended after the core template's commands, in chain order.
+  configurations:
+    # RealSense SDK version pin for post-deployment upgrade protection.
+    - cmd: "printf 'Package: librealsense2*\\nPin: version 2.56.5-0~realsense.17055\\nPin-Priority: 1001\\n\\nPackage: ros-jazzy-librealsense2*\\nPin: version 2.56.4*\\nPin-Priority: 1001\\n\\nPackage: ros-jazzy-realsense2*\\nPin: version 4.56.4*\\nPin-Priority: 1001\\n' > /etc/apt/preferences.d/librealsense"
+
+    # ── Intel NPU udev rules (render group access to /dev/accel/*) ──
+    - cmd: "printf 'SUBSYSTEM==\"accel\", KERNEL==\"accel*\", GROUP=\"render\", MODE=\"0660\"\\n' > /etc/udev/rules.d/10-intel-vpu.rules"
