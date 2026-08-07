@@ -354,6 +354,10 @@ func TestChownDirTree_RefusesDangerousRoots(t *testing.T) {
 		"filesystem root":     string(os.PathSeparator),
 		"system temp dir":     filepath.Clean(os.TempDir()),
 		"top-level directory": "/var",
+		"shared var tmp":      "/var/tmp",
+		"shared var tmp child": "/var/tmp/ict-temp",
+		"shared var cache":    "/var/cache",
+		"shared var lib":      "/var/lib",
 		"relative path":       "cache",
 	}
 	for name, dir := range cases {
@@ -366,6 +370,30 @@ func TestChownDirTree_RefusesDangerousRoots(t *testing.T) {
 				t.Errorf("expected no chown calls when refusing %q, got %v", dir, rec.calls)
 			}
 		})
+	}
+}
+
+func TestChownDirTree_RefusesResolvedSystemTempAlias(t *testing.T) {
+	setSudoEnv(t, "1000", "1000")
+	rec := installChownRecorder(t)
+
+	root := t.TempDir()
+	realTemp := filepath.Join(root, "real-tmp")
+	if err := os.MkdirAll(realTemp, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	linkTemp := filepath.Join(root, "link-tmp")
+	if err := os.Symlink(realTemp, linkTemp); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("TMPDIR", linkTemp)
+
+	if err := ChownDirTreeToSudoUser(realTemp); err == nil {
+		t.Fatalf("expected resolved system temp alias %q to be refused, got nil error", realTemp)
+	}
+	if len(rec.calls) != 0 {
+		t.Errorf("expected no chown calls when refusing %q, got %v", realTemp, rec.calls)
 	}
 }
 

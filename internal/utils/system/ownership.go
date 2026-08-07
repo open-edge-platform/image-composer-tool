@@ -201,9 +201,20 @@ func refuseDangerousChownRoot(dir string) error {
 	if dir == string(os.PathSeparator) {
 		return fmt.Errorf("refusing to recursively chown filesystem root %q", dir)
 	}
-	if sys := filepath.Clean(os.TempDir()); dir == sys {
+	sys := filepath.Clean(os.TempDir())
+	if resolved, err := filepath.EvalSymlinks(sys); err == nil {
+		sys = resolved
+	}
+	if dir == sys {
 		return fmt.Errorf("refusing to recursively chown the system temp directory %q "+
 			"(set a dedicated temp_dir to enable ownership restore)", dir)
+	}
+	// Refuse common shared system trees (or their descendants) that are not
+	// ICT-managed private workspaces and are likely to be used by other services.
+	for _, root := range []string{"/var/tmp", "/var/cache", "/var/lib"} {
+		if dir == root || strings.HasPrefix(dir, root+string(os.PathSeparator)) {
+			return fmt.Errorf("refusing to recursively chown shared system directory %q", dir)
+		}
 	}
 	// A top-level directory like "/tmp" or "/var" has a parent of "/". ICT's own
 	// cache/temp dirs are always nested at least one level below a top-level dir
