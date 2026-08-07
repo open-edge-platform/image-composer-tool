@@ -82,6 +82,14 @@ func SetupIsolated(originalCacheDir, originalWorkDir string) (*Isolated, func(),
 	return isolated, cleanup, nil
 }
 
+// OutputWorkDir returns the workspace that holds the build's final output after
+// cleanup. For --no-cache builds the artifacts are copied by PreserveOutput from
+// the temporary workspace back to the originally configured one, so that is where
+// the user-facing image ends up — not the isolated WorkDir, which cleanup removes.
+func (isolated *Isolated) OutputWorkDir() string {
+	return isolated.originalWorkDir
+}
+
 // KeepWorkspace marks the isolated workspace to be preserved by cleanup — e.g. when a
 // PostProcess step or the output copy-out fails and the partial build is needed for
 // recovery.

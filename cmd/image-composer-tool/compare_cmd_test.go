@@ -481,6 +481,264 @@ func TestCompareCommand_InvalidFormatErrors(t *testing.T) {
 	}
 }
 
+// --- Overlay-output compare validation ---------------------------------------
+//
+// The story "Validate existing compare command works against overlay outputs"
+// asks for validation, not new features. These tests exercise the compare command
+// against inputs shaped exactly like the artifacts an overlay build emits:
+//   - a baseline RAW vs the overlay RAW (the overlay grows the disk and bumps the
+//     embedded SBOM's package count),
+//   - the baseline SBOM vs the overlay COMPLETE SBOM (package-level add/upgrade),
+//   - the DELTA SBOM as an optional quick-change view,
+// across text and JSON output and with hash-based compare on/off.
+
+// overlayBaselineImage models the baseline RAW an overlay layers onto: a fixed
+// size, one root partition, and an embedded SBOM with a small package count.
+func overlayBaselineImage() *imageinspect.ImageSummary {
+	img := minimalImage("baseline.raw", 4*1024*1024*1024)
+	img.SBOM = imageinspect.SBOMSummary{
+		Present:         true,
+		Format:          "spdx",
+		FileName:        "spdx_manifest.json",
+		PackageCount:    120,
+		CanonicalSHA256: "aaaa",
+	}
+	return img
+}
+
+// overlayResultImage models the emitted overlay RAW: the disk grew (resize) and
+// the embedded complete SBOM gained packages, so its canonical hash changed.
+func overlayResultImage() *imageinspect.ImageSummary {
+	img := minimalImage("myimage-1.0.raw", 6*1024*1024*1024)
+	img.SBOM = imageinspect.SBOMSummary{
+		Present:         true,
+		Format:          "spdx",
+		FileName:        "spdx_manifest.json",
+		PackageCount:    123,
+		CanonicalSHA256: "bbbb",
+	}
+	return img
+}
+
+// TestCompareCommand_OverlayRawVsRaw_TextAndJSON validates that comparing a
+// baseline RAW against an overlay RAW runs cleanly and yields a meaningful diff in
+// both text and JSON output modes.
+func TestCompareCommand_OverlayRawVsRaw_TextAndJSON(t *testing.T) {
+	origNewInspector := newInspector
+	origFormat, origMode, origPretty := outFormat, outMode, prettyDiffJSON
+	t.Cleanup(func() {
+		newInspector = origNewInspector
+		outFormat, outMode, prettyDiffJSON = origFormat, origMode, origPretty
+	})
+
+	fi := &fakeCompareInspector{
+		imgByPath: map[string]*imageinspect.ImageSummary{
+			"baseline.raw":    overlayBaselineImage(),
+			"myimage-1.0.raw": overlayResultImage(),
+		},
+	}
+	newInspector = func(bool) inspector { return fi }
+
+	t.Run("text diff is meaningful", func(t *testing.T) {
+		outFormat, outMode = "text", "" // defaults to diff
+		cmd := &cobra.Command{}
+		s, err := runCompareExecute(t, cmd, []string{"baseline.raw", "myimage-1.0.raw"})
+		if err != nil {
+			t.Fatalf("compare baseline vs overlay RAW: %v", err)
+		}
+		// The overlay grew the disk and changed the SBOM, so the diff must not be
+		// empty and must surface the equality verdict.
+		if !strings.Contains(s, "Equality:") {
+			t.Fatalf("expected an Equality verdict in text output, got:\n%s", s)
+		}
+		if !strings.Contains(strings.ToLower(s), "different") {
+			t.Fatalf("expected the overlay RAW to be reported as different from baseline, got:\n%s", s)
+		}
+	})
+
+	t.Run("json summary reports the change", func(t *testing.T) {
+		outFormat, outMode, prettyDiffJSON = "json", "summary", false
+		cmd := &cobra.Command{}
+		s, err := runCompareExecute(t, cmd, []string{"baseline.raw", "myimage-1.0.raw"})
+		if err != nil {
+			t.Fatalf("compare (json summary): %v", err)
+		}
+		var got struct {
+			EqualityClass imageinspect.EqualityClass  `json:"equalityClass"`
+			Summary       imageinspect.CompareSummary `json:"summary"`
+		}
+		decodeJSON(t, s, &got)
+		if got.EqualityClass != imageinspect.EqualityDifferent {
+			t.Errorf("equalityClass = %q, want %q", got.EqualityClass, imageinspect.EqualityDifferent)
+		}
+		if !got.Summary.Changed {
+			t.Errorf("expected summary.changed=true for a grown+re-SBOM'd overlay image, got %+v", got.Summary)
+		}
+		if !got.Summary.SBOMChanged {
+			t.Errorf("expected summary.sbomChanged=true (embedded SBOM package count/hash changed), got %+v", got.Summary)
+		}
+	})
+}
+
+// TestCompareCommand_OverlayHashBasedCompare validates the --hash-images equality
+// behavior against overlay modifications: identical hashes yield binary_identical,
+// while an overlay modification (different hash) yields different.
+func TestCompareCommand_OverlayHashBasedCompare(t *testing.T) {
+	origNewInspector := newInspector
+	origFormat, origMode := outFormat, outMode
+	t.Cleanup(func() {
+		newInspector = origNewInspector
+		outFormat, outMode = origFormat, origMode
+	})
+
+	t.Run("identical hash is binary_identical", func(t *testing.T) {
+		a := minimalImage("a.raw", 100)
+		b := minimalImage("b.raw", 100)
+		a.SHA256, b.SHA256 = "deadbeef", "deadbeef"
+		fi := &fakeCompareInspector{imgByPath: map[string]*imageinspect.ImageSummary{"a.raw": a, "b.raw": b}}
+		newInspector = func(bool) inspector { return fi }
+
+		outFormat, outMode = "json", "summary"
+		cmd := &cobra.Command{}
+		s, err := runCompareExecute(t, cmd, []string{"a.raw", "b.raw"})
+		if err != nil {
+			t.Fatalf("hash compare (identical): %v", err)
+		}
+		var got struct {
+			EqualityClass imageinspect.EqualityClass  `json:"equalityClass"`
+			Summary       imageinspect.CompareSummary `json:"summary"`
+		}
+		decodeJSON(t, s, &got)
+		if got.EqualityClass != imageinspect.EqualityBinary {
+			t.Errorf("equalityClass = %q, want %q", got.EqualityClass, imageinspect.EqualityBinary)
+		}
+	})
+
+	t.Run("overlay modification changes the hash", func(t *testing.T) {
+		base := overlayBaselineImage()
+		overlay := overlayResultImage()
+		base.SHA256, overlay.SHA256 = "1111", "2222" // overlay wrote packages: content differs
+		fi := &fakeCompareInspector{imgByPath: map[string]*imageinspect.ImageSummary{
+			"baseline.raw": base, "myimage-1.0.raw": overlay,
+		}}
+		newInspector = func(bool) inspector { return fi }
+
+		outFormat, outMode = "json", "summary"
+		cmd := &cobra.Command{}
+		s, err := runCompareExecute(t, cmd, []string{"baseline.raw", "myimage-1.0.raw"})
+		if err != nil {
+			t.Fatalf("hash compare (overlay modified): %v", err)
+		}
+		var got struct {
+			EqualityClass imageinspect.EqualityClass  `json:"equalityClass"`
+			Summary       imageinspect.CompareSummary `json:"summary"`
+		}
+		decodeJSON(t, s, &got)
+		if got.EqualityClass != imageinspect.EqualityDifferent {
+			t.Errorf("equalityClass = %q, want %q (overlay changed the image)", got.EqualityClass, imageinspect.EqualityDifferent)
+		}
+	})
+}
+
+// TestCompareCommand_OverlayCompleteSBOM validates SBOM compare against the overlay
+// COMPLETE SBOM artifact: comparing the baseline SBOM to the overlay complete SBOM
+// must report accurate package differences (an added package and an upgraded one).
+func TestCompareCommand_OverlayCompleteSBOM(t *testing.T) {
+	origFormat, origMode, origPretty := outFormat, outMode, prettyDiffJSON
+	t.Cleanup(func() { outFormat, outMode, prettyDiffJSON = origFormat, origMode, origPretty })
+
+	dir := t.TempDir()
+	// Baseline SBOM: two packages.
+	baselineSBOM := filepath.Join(dir, "baseline.spdx.json")
+	baselineContent := `{"packages":[
+		{"name":"libc6","versionInfo":"2.39","downloadLocation":"https://x/libc6.deb"},
+		{"name":"curl","versionInfo":"8.5.0","downloadLocation":"https://x/curl.deb"}
+	]}`
+	// Overlay COMPLETE SBOM: curl upgraded 8.5.0 -> 8.6.0, tree added; libc6 unchanged.
+	completeSBOM := filepath.Join(dir, "myimage-1.0.complete.spdx.json")
+	completeContent := `{"packages":[
+		{"name":"libc6","versionInfo":"2.39","downloadLocation":"https://x/libc6.deb"},
+		{"name":"curl","versionInfo":"8.6.0","downloadLocation":"https://x/curl.deb"},
+		{"name":"tree","versionInfo":"2.1.1","downloadLocation":"https://x/tree.deb"}
+	]}`
+	if err := os.WriteFile(baselineSBOM, []byte(baselineContent), 0644); err != nil {
+		t.Fatalf("write baseline SBOM: %v", err)
+	}
+	if err := os.WriteFile(completeSBOM, []byte(completeContent), 0644); err != nil {
+		t.Fatalf("write complete SBOM: %v", err)
+	}
+
+	outFormat, outMode, prettyDiffJSON = "json", "spdx", false
+	cmd := &cobra.Command{}
+	s, err := runCompareExecute(t, cmd, []string{baselineSBOM, completeSBOM})
+	if err != nil {
+		t.Fatalf("spdx compare baseline vs complete: %v", err)
+	}
+
+	var got imageinspect.SPDXCompareResult
+	decodeJSON(t, s, &got)
+	if got.Equal {
+		t.Fatal("expected baseline and overlay complete SBOMs to differ")
+	}
+	if got.FromPackageCount != 2 || got.ToPackageCount != 3 {
+		t.Errorf("package counts = %d -> %d, want 2 -> 3", got.FromPackageCount, got.ToPackageCount)
+	}
+	// tree is a genuine addition; curl 8.5.0 -> 8.6.0 is a single upgrade, not add+remove.
+	if len(got.UpgradedPackages) != 1 || got.UpgradedPackages[0] != "curl: 8.5.0 -> 8.6.0" {
+		t.Errorf("upgraded = %v, want [curl: 8.5.0 -> 8.6.0]", got.UpgradedPackages)
+	}
+	treeAdded := false
+	for _, a := range got.AddedPackages {
+		if strings.Contains(a, "tree") {
+			treeAdded = true
+		}
+	}
+	if !treeAdded {
+		t.Errorf("expected tree among added packages, got %v", got.AddedPackages)
+	}
+	if len(got.RemovedPackages) != 0 {
+		t.Errorf("expected no removed packages (overlay is additive), got %v", got.RemovedPackages)
+	}
+}
+
+// TestCompareCommand_OverlayDeltaSBOM validates the optional "quick-change view":
+// comparing an empty base against the overlay DELTA SBOM lists exactly the
+// overlay-contributed packages as additions.
+func TestCompareCommand_OverlayDeltaSBOM(t *testing.T) {
+	origFormat, origMode, origPretty := outFormat, outMode, prettyDiffJSON
+	t.Cleanup(func() { outFormat, outMode, prettyDiffJSON = origFormat, origMode, origPretty })
+
+	dir := t.TempDir()
+	emptyBase := filepath.Join(dir, "empty.spdx.json")
+	deltaSBOM := filepath.Join(dir, "myimage-1.0.delta.spdx.json")
+	if err := os.WriteFile(emptyBase, []byte(`{"packages":[]}`), 0644); err != nil {
+		t.Fatalf("write empty base: %v", err)
+	}
+	// The delta lists only the overlay-contributed packages.
+	deltaContent := `{"packages":[
+		{"name":"tree","versionInfo":"2.1.1","downloadLocation":"https://x/tree.deb"},
+		{"name":"curl","versionInfo":"8.6.0","downloadLocation":"https://x/curl.deb"}
+	]}`
+	if err := os.WriteFile(deltaSBOM, []byte(deltaContent), 0644); err != nil {
+		t.Fatalf("write delta SBOM: %v", err)
+	}
+
+	outFormat, outMode, prettyDiffJSON = "json", "spdx", false
+	cmd := &cobra.Command{}
+	s, err := runCompareExecute(t, cmd, []string{emptyBase, deltaSBOM})
+	if err != nil {
+		t.Fatalf("spdx compare empty vs delta: %v", err)
+	}
+	var got imageinspect.SPDXCompareResult
+	decodeJSON(t, s, &got)
+	if len(got.AddedPackages) != 2 {
+		t.Errorf("delta view should list both contributed packages as added, got %v", got.AddedPackages)
+	}
+	if got.ToPackageCount != 2 {
+		t.Errorf("delta package count = %d, want 2", got.ToPackageCount)
+	}
+}
+
 func TestWriteCompareResult_MarshalError(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetOut(&bytes.Buffer{})

@@ -31,7 +31,7 @@ func TestRegenerateBoot_SkipsWhenNothingInstalled(t *testing.T) {
 		{Installed: nil},
 	}
 	for _, ir := range cases {
-		if err := RegenerateBoot(&BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root", ir, nil); err != nil {
+		if err := RegenerateBoot(&BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root", ir, nil, false); err != nil {
 			t.Errorf("RegenerateBoot(%+v): unexpected error %v", ir, err)
 		}
 	}
@@ -40,48 +40,83 @@ func TestRegenerateBoot_SkipsWhenNothingInstalled(t *testing.T) {
 	}
 }
 
-func TestRegenerateBoot_RunsAptCommand(t *testing.T) {
-	origExec := bootRegenExec
-	origCmdExist := commandExistsFn
-	defer func() { bootRegenExec = origExec; commandExistsFn = origCmdExist }()
+// presentTools makes commandExistsFn report only the named tools as present, so a
+// test can model exactly which initramfs generator the baseline ships.
+func presentTools(t *testing.T, tools ...string) {
+	t.Helper()
+	orig := commandExistsFn
+	t.Cleanup(func() { commandExistsFn = orig })
+	set := make(map[string]bool, len(tools))
+	for _, tool := range tools {
+		set[tool] = true
+	}
+	commandExistsFn = func(tool, _ string) (bool, error) { return set[tool], nil }
+}
 
-	commandExistsFn = func(string, string) (bool, error) { return true, nil }
-	mounts, umounts := stubSysfsMounts(t)
-	var gotCmd, gotRoot string
-	bootRegenExec = func(cmd, root string) (string, error) { gotCmd, gotRoot = cmd, root; return "", nil }
+// TestRegenerateBoot_SelectsGeneratorByWhatIsInstalled asserts the generator is
+// chosen by what the baseline actually ships, NOT by package-manager family: an
+// APT baseline that ships update-initramfs uses it, but an APT baseline that
+// swapped to dracut (via allowPackageRemoval) regenerates with dracut. dracut wins
+// when both are transiently present.
+func TestRegenerateBoot_SelectsGeneratorByWhatIsInstalled(t *testing.T) {
+	tests := []struct {
+		name    string
+		family  PackageManager
+		present []string
+		wantCmd string
+	}{
+		{"apt baseline with update-initramfs", PackageManagerAPT, []string{"update-initramfs"}, "update-initramfs"},
+		{"apt baseline swapped to dracut", PackageManagerAPT, []string{"dracut"}, "dracut"},
+		{"dnf baseline with dracut", PackageManagerDNF, []string{"dracut"}, "dracut"},
+		{"both present prefers dracut", PackageManagerAPT, []string{"dracut", "update-initramfs"}, "dracut"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			origExec := bootRegenExec
+			t.Cleanup(func() { bootRegenExec = origExec })
+			presentTools(t, tt.present...)
+			mounts, umounts := stubSysfsMounts(t)
+			var gotCmd, gotRoot string
+			bootRegenExec = func(cmd, root string) (string, error) { gotCmd, gotRoot = cmd, root; return "", nil }
 
-	err := RegenerateBoot(&BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root", &InstallResult{Installed: []string{"curl"}}, nil)
-	if err != nil {
-		t.Fatalf("RegenerateBoot: %v", err)
-	}
-	if !strings.Contains(gotCmd, "update-initramfs") {
-		t.Errorf("apt family must call update-initramfs, got %q", gotCmd)
-	}
-	if gotRoot != "/mnt/root" {
-		t.Errorf("regeneration must run in the chroot root, got %q", gotRoot)
-	}
-	// The pseudo-filesystems must be mounted for the generator and torn down after.
-	if *mounts != 1 || *umounts != 1 {
-		t.Errorf("sysfs mount/umount = %d/%d, want 1/1", *mounts, *umounts)
+			err := RegenerateBoot(&BaselineInfo{PackageManager: tt.family}, "/mnt/root", &InstallResult{Installed: []string{"curl"}}, nil, false)
+			if err != nil {
+				t.Fatalf("RegenerateBoot: %v", err)
+			}
+			if !strings.Contains(gotCmd, tt.wantCmd) {
+				t.Errorf("expected generator %q, got command %q", tt.wantCmd, gotCmd)
+			}
+			if gotRoot != "/mnt/root" {
+				t.Errorf("regeneration must run in the chroot root, got %q", gotRoot)
+			}
+			if *mounts != 1 || *umounts != 1 {
+				t.Errorf("sysfs mount/umount = %d/%d, want 1/1", *mounts, *umounts)
+			}
+		})
 	}
 }
 
-func TestRegenerateBoot_RunsDnfDracut(t *testing.T) {
+// TestRegenerateBoot_ForceRegenNoGeneratorErrors asserts that when forceRegen is
+// set (a stage:pre-initramfs additionalFiles entry was copied) but the baseline
+// ships NO supported initramfs generator, the build fails with an actionable error
+// rather than silently succeeding — otherwise the staged file would never be baked
+// into the initramfs while the build claimed it took effect.
+func TestRegenerateBoot_ForceRegenNoGeneratorErrors(t *testing.T) {
 	origExec := bootRegenExec
 	origCmdExist := commandExistsFn
 	defer func() { bootRegenExec = origExec; commandExistsFn = origCmdExist }()
 
-	commandExistsFn = func(string, string) (bool, error) { return true, nil }
-	stubSysfsMounts(t)
-	var gotCmd string
-	bootRegenExec = func(cmd, _ string) (string, error) { gotCmd = cmd; return "", nil }
+	commandExistsFn = func(string, string) (bool, error) { return false, nil } // no generator present
+	called := false
+	bootRegenExec = func(string, string) (string, error) { called = true; return "", nil }
 
-	err := RegenerateBoot(&BaselineInfo{PackageManager: PackageManagerDNF}, "/mnt/root", &InstallResult{Installed: []string{"vim"}}, nil)
-	if err != nil {
-		t.Fatalf("RegenerateBoot: %v", err)
+	err := RegenerateBoot(&BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root",
+		&InstallResult{Installed: nil}, nil, true)
+	if err == nil || !strings.Contains(err.Error(), "pre-initramfs") {
+		t.Fatalf("forceRegen with no generator must fail with an actionable error, got %v", err)
 	}
-	if !strings.Contains(gotCmd, "dracut") {
-		t.Errorf("dnf family must call dracut, got %q", gotCmd)
+	if called {
+		t.Error("no generator can run when none is present")
 	}
 }
 
@@ -94,7 +129,7 @@ func TestRegenerateBoot_SkipsWhenToolAbsent(t *testing.T) {
 	called := false
 	bootRegenExec = func(string, string) (string, error) { called = true; return "", nil }
 
-	err := RegenerateBoot(&BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root", &InstallResult{Installed: []string{"curl"}}, nil)
+	err := RegenerateBoot(&BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root", &InstallResult{Installed: []string{"curl"}}, nil, false)
 	if err != nil {
 		t.Fatalf("absent generator must be a clean no-op, got %v", err)
 	}
@@ -112,24 +147,24 @@ func TestRegenerateBoot_GeneratorFailureSurfaces(t *testing.T) {
 	stubSysfsMounts(t)
 	bootRegenExec = func(string, string) (string, error) { return "", errors.New("dracut boom") }
 
-	err := RegenerateBoot(&BaselineInfo{PackageManager: PackageManagerDNF}, "/mnt/root", &InstallResult{Installed: []string{"vim"}}, nil)
+	err := RegenerateBoot(&BaselineInfo{PackageManager: PackageManagerDNF}, "/mnt/root", &InstallResult{Installed: []string{"vim"}}, nil, false)
 	if err == nil || !strings.Contains(err.Error(), "dracut") {
 		t.Fatalf("a present-but-failing generator must surface, got %v", err)
 	}
 }
 
 func TestRegenerateBoot_UnsupportedFamily(t *testing.T) {
-	err := RegenerateBoot(&BaselineInfo{PackageManager: PackageManager("apk")}, "/mnt/root", &InstallResult{Installed: []string{"x"}}, nil)
+	err := RegenerateBoot(&BaselineInfo{PackageManager: PackageManager("apk")}, "/mnt/root", &InstallResult{Installed: []string{"x"}}, nil, false)
 	if err == nil || !strings.Contains(err.Error(), "unsupported package manager") {
 		t.Fatalf("expected unsupported-family error, got %v", err)
 	}
 }
 
 func TestRegenerateBoot_NilGuards(t *testing.T) {
-	if err := RegenerateBoot(nil, "/mnt/root", &InstallResult{Installed: []string{"x"}}, nil); err == nil {
+	if err := RegenerateBoot(nil, "/mnt/root", &InstallResult{Installed: []string{"x"}}, nil, false); err == nil {
 		t.Error("expected error for nil info")
 	}
-	if err := RegenerateBoot(&BaselineInfo{PackageManager: PackageManagerAPT}, "", &InstallResult{Installed: []string{"x"}}, nil); err == nil {
+	if err := RegenerateBoot(&BaselineInfo{PackageManager: PackageManagerAPT}, "", &InstallResult{Installed: []string{"x"}}, nil, false); err == nil {
 		t.Error("expected error for empty root mount")
 	}
 }
@@ -165,6 +200,36 @@ func planWith(pkgs ...ResolvedPackage) *ResolutionPlan {
 	return &ResolutionPlan{DownloadDir: "/cache", ToInstall: pkgs}
 }
 
+// TestRegenerateBoot_ForceRegenBypassesGates asserts forceRegen makes the
+// generator run even when the two "nothing changed" gates would otherwise skip it
+// (no packages installed, or a pure-userspace install). This is the case where a
+// dracut module / initramfs-tools hook is delivered ONLY via a pre-initramfs
+// additionalFiles entry, with no boot-relevant package.
+func TestRegenerateBoot_ForceRegenBypassesGates(t *testing.T) {
+	t.Run("no packages installed", func(t *testing.T) {
+		ran := aptRegenProbes(t)
+		if err := RegenerateBoot(&BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root",
+			&InstallResult{Installed: nil}, nil, true); err != nil {
+			t.Fatalf("RegenerateBoot: %v", err)
+		}
+		if !*ran {
+			t.Error("forceRegen must regenerate even when no packages were installed")
+		}
+	})
+	t.Run("pure-userspace install", func(t *testing.T) {
+		ran := aptRegenProbes(t)
+		plan := planWith(ResolvedPackage{Name: "curl", URL: "http://x/curl.deb"})
+		stubFileList(t, map[string][]string{"/cache/curl.deb": {"./usr/bin/curl"}}, nil)
+		if err := RegenerateBoot(&BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root",
+			&InstallResult{Installed: []string{"curl"}}, plan, true); err != nil {
+			t.Fatalf("RegenerateBoot: %v", err)
+		}
+		if !*ran {
+			t.Error("forceRegen must regenerate even for a pure-userspace install")
+		}
+	})
+}
+
 func TestRegenerateBoot_SkipsPureUserspaceOverlay(t *testing.T) {
 	ran := aptRegenProbes(t)
 	plan := planWith(
@@ -177,7 +242,7 @@ func TestRegenerateBoot_SkipsPureUserspaceOverlay(t *testing.T) {
 	}, nil)
 
 	if err := RegenerateBoot(&BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root",
-		&InstallResult{Installed: []string{"curl", "vim"}}, plan); err != nil {
+		&InstallResult{Installed: []string{"curl", "vim"}}, plan, false); err != nil {
 		t.Fatalf("RegenerateBoot: %v", err)
 	}
 	if *ran {
@@ -198,7 +263,7 @@ func TestRegenerateBoot_RunsWhenBootRelevantContentAdded(t *testing.T) {
 			stubFileList(t, map[string][]string{"/cache/pkg.deb": {"./usr/bin/pkg", path}}, nil)
 
 			if err := RegenerateBoot(&BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root",
-				&InstallResult{Installed: []string{"pkg"}}, plan); err != nil {
+				&InstallResult{Installed: []string{"pkg"}}, plan, false); err != nil {
 				t.Fatalf("RegenerateBoot: %v", err)
 			}
 			if !*ran {
@@ -212,7 +277,7 @@ func TestRegenerateBoot_FailSafeRegenerates(t *testing.T) {
 	t.Run("nil plan", func(t *testing.T) {
 		ran := aptRegenProbes(t)
 		if err := RegenerateBoot(&BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root",
-			&InstallResult{Installed: []string{"curl"}}, nil); err != nil {
+			&InstallResult{Installed: []string{"curl"}}, nil, false); err != nil {
 			t.Fatalf("RegenerateBoot: %v", err)
 		}
 		if !*ran {
@@ -223,7 +288,7 @@ func TestRegenerateBoot_FailSafeRegenerates(t *testing.T) {
 		ran := aptRegenProbes(t)
 		plan := &ResolutionPlan{ToInstall: []ResolvedPackage{{Name: "curl", URL: "http://x/curl.deb"}}}
 		if err := RegenerateBoot(&BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root",
-			&InstallResult{Installed: []string{"curl"}}, plan); err != nil {
+			&InstallResult{Installed: []string{"curl"}}, plan, false); err != nil {
 			t.Fatalf("RegenerateBoot: %v", err)
 		}
 		if !*ran {
@@ -235,7 +300,7 @@ func TestRegenerateBoot_FailSafeRegenerates(t *testing.T) {
 		plan := planWith(ResolvedPackage{Name: "curl", URL: "http://x/curl.deb"})
 		stubFileList(t, nil, map[string]bool{"/cache/curl.deb": true})
 		if err := RegenerateBoot(&BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root",
-			&InstallResult{Installed: []string{"curl"}}, plan); err != nil {
+			&InstallResult{Installed: []string{"curl"}}, plan, false); err != nil {
 			t.Fatalf("RegenerateBoot: %v", err)
 		}
 		if !*ran {
@@ -279,16 +344,37 @@ func TestPathListHasBootRelevantContent(t *testing.T) {
 	}
 }
 
-func TestInitramfsCommand(t *testing.T) {
-	cmd, tool, err := initramfsCommand(PackageManagerAPT)
-	if err != nil || tool != "update-initramfs" || !strings.Contains(cmd, "-k all") {
-		t.Errorf("apt: cmd=%q tool=%q err=%v", cmd, tool, err)
+func TestSupportedInitramfsFamily(t *testing.T) {
+	if err := supportedInitramfsFamily(PackageManagerAPT); err != nil {
+		t.Errorf("apt must be supported: %v", err)
 	}
-	cmd, tool, err = initramfsCommand(PackageManagerDNF)
-	if err != nil || tool != "dracut" || !strings.Contains(cmd, "--regenerate-all") {
-		t.Errorf("dnf: cmd=%q tool=%q err=%v", cmd, tool, err)
+	if err := supportedInitramfsFamily(PackageManagerDNF); err != nil {
+		t.Errorf("dnf must be supported: %v", err)
 	}
-	if _, _, err := initramfsCommand(PackageManager("zypper")); err == nil {
+	if err := supportedInitramfsFamily(PackageManager("zypper")); err == nil {
 		t.Error("expected error for unsupported family")
+	}
+}
+
+func TestResolveInitramfsGenerator(t *testing.T) {
+	// dracut present -> dracut wins (it is first in preference order).
+	presentTools(t, "dracut")
+	if cmd, tool, found, err := resolveInitramfsGenerator("/mnt/root"); err != nil || !found || tool != "dracut" || !strings.Contains(cmd, "--regenerate-all") {
+		t.Errorf("dracut present: cmd=%q tool=%q found=%v err=%v", cmd, tool, found, err)
+	}
+	// Only update-initramfs present -> it is selected.
+	presentTools(t, "update-initramfs")
+	if cmd, tool, found, err := resolveInitramfsGenerator("/mnt/root"); err != nil || !found || tool != "update-initramfs" || !strings.Contains(cmd, "-k all") {
+		t.Errorf("update-initramfs present: cmd=%q tool=%q found=%v err=%v", cmd, tool, found, err)
+	}
+	// Both present -> dracut is preferred.
+	presentTools(t, "update-initramfs", "dracut")
+	if _, tool, found, err := resolveInitramfsGenerator("/mnt/root"); err != nil || !found || tool != "dracut" {
+		t.Errorf("both present: tool=%q found=%v err=%v, want dracut", tool, found, err)
+	}
+	// None present -> found=false, no error.
+	presentTools(t)
+	if _, _, found, err := resolveInitramfsGenerator("/mnt/root"); err != nil || found {
+		t.Errorf("none present: found=%v err=%v, want found=false", found, err)
 	}
 }

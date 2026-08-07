@@ -1,6 +1,7 @@
 package overlay
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/imagedisc"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/imageinspect"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
 
@@ -54,12 +56,21 @@ func TestOverlayBuilder_FullFlowRealRawBaseline(t *testing.T) {
 	restoreGlobal := withTestGlobalDirs(t, workDir, cacheDir)
 	defer restoreGlobal()
 
+	// Supply an external base-image SBOM listing a representative baseline package
+	// (dpkg) so the "complete" SBOM is a true baseline+overlay union we can assert
+	// on. The mmdebstrap baseline embeds no /usr/share/sbom, so without this the
+	// complete SBOM would degrade to delta-only.
+	baseSBOM := filepath.Join(t.TempDir(), "baseline.spdx.json")
+	if werr := os.WriteFile(baseSBOM, []byte(`{"packages":[{"name":"dpkg","versionInfo":"1.21.22"}]}`), 0o644); werr != nil {
+		t.Fatalf("write base SBOM: %v", werr)
+	}
+
 	tmpl := &config.ImageTemplate{
 		Image:  config.ImageInfo{Name: "overlaytest", Version: "1.0"},
 		Target: config.TargetInfo{OS: "debian", Dist: "debian12", Arch: "amd64", ImageType: "raw"},
 		Baseline: &config.Baseline{
 			Mode:   config.BaselineModeOverlay,
-			Source: &config.BaselineSource{Path: srcImg, Format: config.BaselineFormatRaw},
+			Source: &config.BaselineSource{Path: srcImg, Format: config.BaselineFormatRaw, SBOMPath: baseSBOM},
 		},
 		OverlayPolicy: &config.OverlayPolicy{PackageOperation: config.OverlayPackageOpAdditiveOnly},
 		SystemConfig: config.SystemConfig{
@@ -124,14 +135,65 @@ func TestOverlayBuilder_FullFlowRealRawBaseline(t *testing.T) {
 		t.Fatalf("Postprocess: %v", err)
 	}
 
-	// 6. The final artifact and its SBOM sidecar must exist under the build dir.
-	finalImg := filepath.Join(workDir, "debian-debian12-amd64", "imagebuild", "default", "overlaytest-1.0.raw")
+	// 6. The final artifact and BOTH SBOM sidecars must exist under the build dir.
+	buildDir := filepath.Join(workDir, "debian-debian12-amd64", "imagebuild", "default")
+	finalImg := filepath.Join(buildDir, "overlaytest-1.0.raw")
 	if _, serr := os.Stat(finalImg); serr != nil {
 		t.Errorf("expected emitted artifact at %s: %v", finalImg, serr)
 	}
-	sbom := filepath.Join(filepath.Dir(finalImg), "spdx_manifest.json")
-	if _, serr := os.Stat(sbom); serr != nil {
-		t.Errorf("expected SBOM sidecar at %s: %v", sbom, serr)
+
+	// The delta SBOM must list the overlay-contributed package (overlay-probe) and
+	// nothing from the baseline. The complete SBOM must represent the full final
+	// inventory: the contributed package PLUS the baseline package (dpkg, from the
+	// supplied external base SBOM), i.e. strictly more than the delta.
+	deltaSBOM := filepath.Join(buildDir, "overlaytest-1.0.delta.spdx.json")
+	completeSBOM := filepath.Join(buildDir, "overlaytest-1.0.complete.spdx.json")
+
+	deltaNames := readSBOMPackageNames(t, deltaSBOM)
+	if !contains(deltaNames, "overlay-probe") {
+		t.Errorf("delta SBOM %s should list the added package overlay-probe, got %v", deltaSBOM, deltaNames)
+	}
+	if contains(deltaNames, "dpkg") {
+		t.Errorf("delta SBOM %s must contain only overlay changes, not baseline packages like dpkg: %v", deltaSBOM, deltaNames)
+	}
+
+	completeNames := readSBOMPackageNames(t, completeSBOM)
+	if !contains(completeNames, "overlay-probe") {
+		t.Errorf("complete SBOM %s should include the added package overlay-probe, got %v", completeSBOM, completeNames)
+	}
+	if !contains(completeNames, "dpkg") {
+		t.Errorf("complete SBOM %s should represent the full inventory including baseline packages (dpkg), got %v", completeSBOM, completeNames)
+	}
+	if len(completeNames) <= len(deltaNames) {
+		t.Errorf("complete SBOM (%d pkgs) must be a superset of the delta (%d pkgs)", len(completeNames), len(deltaNames))
+	}
+
+	// 6b. Validate the `compare` command's SPDX engine against these real overlay
+	//     outputs (the CLI's --mode=spdx path calls the same CompareSPDXData core).
+	//     Comparing the baseline SBOM to the emitted complete SBOM must report the
+	//     overlay-contributed package as an addition — the accurate package-level
+	//     diff the compare workflow is meant to yield.
+	baseVsComplete, cerr := imageinspect.CompareSPDXFiles(baseSBOM, completeSBOM)
+	if cerr != nil {
+		t.Fatalf("compare baseline SBOM vs complete SBOM: %v", cerr)
+	}
+	if baseVsComplete.Equal {
+		t.Errorf("baseline vs complete SBOM should differ (overlay added a package)")
+	}
+	if !contains(baseVsComplete.AddedPackages, "overlay-probe") {
+		t.Errorf("compare should report overlay-probe as added (baseline -> complete), got added=%v upgraded=%v",
+			baseVsComplete.AddedPackages, baseVsComplete.UpgradedPackages)
+	}
+
+	// Comparing the complete SBOM against itself must report equal — the compare
+	// engine is stable/deterministic over a full final inventory.
+	selfCompare, cerr := imageinspect.CompareSPDXFiles(completeSBOM, completeSBOM)
+	if cerr != nil {
+		t.Fatalf("self-compare complete SBOM: %v", cerr)
+	}
+	if !selfCompare.Equal {
+		t.Errorf("complete SBOM compared to itself should be equal, got added=%v removed=%v upgraded=%v",
+			selfCompare.AddedPackages, selfCompare.RemovedPackages, selfCompare.UpgradedPackages)
 	}
 
 	// 7. The loop device and root mount must have been released by Postprocess.
@@ -146,6 +208,107 @@ func TestOverlayBuilder_FullFlowRealRawBaseline(t *testing.T) {
 	if trimmed := strings.TrimSpace(out); trimmed != "" {
 		t.Errorf("root mount %s still mounted after postprocess: %q (findmnt err: %v)", rootMount, trimmed, ferr)
 	}
+}
+
+// TestOverlayBuilder_FailurePathLeavesNoLeak is the failure-path smoke test: it
+// drives the full Builder against a real loop-attached, mounted baseline, then
+// forces the install stage to fail. It asserts the whole lifecycle unwinds with no
+// leaked loop device (losetup -a), no leftover mount (findmnt), and no output
+// artifact in the build directory — the core rollback guarantee on the failure
+// path, verified against real kernel state rather than recorder counts.
+func TestOverlayBuilder_FailurePathLeavesNoLeak(t *testing.T) {
+	requireMountTooling(t, "losetup", "lsblk", "sgdisk", "mkfs", "mount", "umount", "mmdebstrap", "dpkg", "findmnt", "chroot")
+
+	// Real GPT/ext4 baseline with a minimal Debian rootfs (provides os-release +
+	// dpkg so detect succeeds and the pipeline reaches the install stage).
+	imgDir := t.TempDir()
+	srcImg := filepath.Join(imgDir, "source-baseline.raw")
+	if _, err := shell.ExecCmd("dd if=/dev/zero of="+shell.QuoteArg(srcImg)+" bs=1M count=1024", false, shell.HostPath, nil); err != nil {
+		t.Fatalf("create image: %v", err)
+	}
+	if _, err := shell.ExecCmd("sgdisk -n 1:1MiB:0 -t 1:8300 -c 1:root "+shell.QuoteArg(srcImg), false, shell.HostPath, nil); err != nil {
+		t.Fatalf("partition: %v", err)
+	}
+	bootstrapDebianBaseline(t, srcImg)
+
+	workDir := t.TempDir()
+	restoreGlobal := withTestGlobalDirs(t, workDir, cacheDirForTest(t))
+	defer restoreGlobal()
+
+	tmpl := &config.ImageTemplate{
+		Image:         config.ImageInfo{Name: "overlayfail", Version: "1.0"},
+		Target:        config.TargetInfo{OS: "debian", Dist: "debian12", Arch: "amd64", ImageType: "raw"},
+		Baseline:      &config.Baseline{Mode: config.BaselineModeOverlay, Source: &config.BaselineSource{Path: srcImg, Format: config.BaselineFormatRaw}},
+		OverlayPolicy: &config.OverlayPolicy{PackageOperation: config.OverlayPackageOpAdditiveOnly},
+		SystemConfig:  config.SystemConfig{Name: "default", Packages: []string{"overlay-probe"}},
+	}
+
+	// Stub resolution (no network) and force the install stage to fail, so the build
+	// fails mid-pipeline with the loop device attached and the root mounted.
+	defer saveBuilderSeams().restore()
+	builderResolveFn = func(_ *config.ImageTemplate, _ *BaselineInfo, _ []BaselinePackage) (*ResolutionPlan, error) {
+		return &ResolutionPlan{Requested: []string{"overlay-probe"}, ToInstall: []ResolvedPackage{{Name: "overlay-probe", Version: "1.0", Arch: "all"}}}, nil
+	}
+	builderInstallFn = func(*BaselineInfo, string, *ResolutionPlan, *PreflightReport) (*InstallResult, error) {
+		return nil, fmt.Errorf("injected install failure")
+	}
+
+	builder, err := NewBuilder(tmpl)
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+	if err := builder.Preprocess(); err != nil {
+		t.Fatalf("Preprocess: %v", err)
+	}
+	rootMount := builder.layout.RootMount
+	loopDev := builder.ctx.LoopDevPath
+
+	buildErr := builder.Build()
+	if buildErr == nil {
+		_ = builder.Postprocess(nil)
+		t.Fatal("expected the injected install failure to fail Build")
+	}
+	// Postprocess with the build error must unwind everything.
+	_ = builder.Postprocess(buildErr)
+
+	// No leaked loop device.
+	if builder.ctx.LoopDevPath != "" {
+		t.Errorf("loop device not released on the failure path: %q", builder.ctx.LoopDevPath)
+	}
+	activeLoops, lsErr := shell.ExecCmd("losetup -a", true, shell.HostPath, nil)
+	if lsErr == nil && loopDev != "" && strings.Contains(activeLoops, loopDev+":") {
+		t.Errorf("loop device %s still attached after failure-path cleanup:\n%s", loopDev, activeLoops)
+	}
+
+	// No leaked mount.
+	out, _ := shell.ExecCmd("findmnt -n "+shell.QuoteArg(rootMount), true, shell.HostPath, nil)
+	if trimmed := strings.TrimSpace(out); trimmed != "" {
+		t.Errorf("root mount %s still mounted after failure-path cleanup: %q", rootMount, trimmed)
+	}
+
+	// No output artifact: a build that failed before emit must leave the build dir
+	// empty (or absent).
+	buildDir := filepath.Join(workDir, "debian-debian12-amd64", "imagebuild", "default")
+	if entries, derr := os.ReadDir(buildDir); derr == nil && len(entries) > 0 {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("build output directory %s must be empty on a failed build, found: %v", buildDir, names)
+	}
+
+	// No leaked workspace baseline copy (the failed build force-removes it).
+	copyPath := builder.ctx.BaselineCopyPath
+	if _, serr := os.Stat(copyPath); !os.IsNotExist(serr) {
+		t.Errorf("workspace baseline copy %s must be removed on a failed build (stat err = %v)", copyPath, serr)
+	}
+}
+
+// cacheDirForTest returns a fresh cache dir for a test that does not build a probe
+// .deb; withTestGlobalDirs requires a cache dir argument.
+func cacheDirForTest(t *testing.T) string {
+	t.Helper()
+	return t.TempDir()
 }
 
 // bootstrapDebianBaseline formats img's root partition ext4 and bootstraps a
@@ -183,6 +346,16 @@ func bootstrapDebianBaseline(t *testing.T, img string) {
 	if err != nil {
 		t.Fatalf("bootstrap WithMountedLayout: %v", err)
 	}
+}
+
+// readSBOMPackageNames reads the SPDX doc at path and returns its package names.
+func readSBOMPackageNames(t *testing.T, path string) []string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read SBOM %s: %v", path, err)
+	}
+	return spdxNames(t, data)
 }
 
 // withTestGlobalDirs points the global work/cache/temp directories at the test

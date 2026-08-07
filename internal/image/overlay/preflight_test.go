@@ -77,19 +77,19 @@ func TestEvaluatePreflight_PolicyPaths(t *testing.T) {
 			wantBlock:  false,
 		},
 		{
-			name:       "removal blocked when allowRemoval is false",
+			name:       "removal blocked when allowPackageRemoval is false",
 			baseline:   []BaselinePackage{installedDeb("oldpkg", "1.0")},
 			simulated:  []PlannedAction{{Type: ActionRemove, Package: "oldpkg"}},
-			policy:     config.OverlayPolicy{AllowRemoval: false},
+			policy:     config.OverlayPolicy{AllowPackageRemoval: false},
 			wantAction: ActionRemove,
 			wantBlock:  true,
 			wantRule:   ruleAllowRemoval,
 		},
 		{
-			name:       "removal allowed when allowRemoval is true",
+			name:       "removal allowed when allowPackageRemoval is true",
 			baseline:   []BaselinePackage{installedDeb("oldpkg", "1.0")},
 			simulated:  []PlannedAction{{Type: ActionRemove, Package: "oldpkg"}},
-			policy:     config.OverlayPolicy{AllowRemoval: true},
+			policy:     config.OverlayPolicy{AllowPackageRemoval: true},
 			wantAction: ActionRemove,
 			wantBlock:  false,
 		},
@@ -128,16 +128,16 @@ func TestEvaluatePreflight_PolicyPaths(t *testing.T) {
 			name:       "bootloader upgrade blocked even when versions bump cleanly",
 			baseline:   []BaselinePackage{installedDeb("grub-efi-amd64", "2.06")},
 			resolved:   []ResolvedPackage{{Name: "grub-efi-amd64", Version: "2.12", Arch: "amd64"}},
-			policy:     config.OverlayPolicy{AllowDowngrade: true, AllowRemoval: true},
+			policy:     config.OverlayPolicy{AllowDowngrade: true, AllowPackageRemoval: true},
 			wantAction: ActionUpgrade,
 			wantBlock:  true,
 			wantRule:   ruleBootloaderImmutable,
 		},
 		{
-			name:       "bootloader removal blocked even when allowRemoval is true",
+			name:       "bootloader removal blocked even when allowPackageRemoval is true",
 			baseline:   []BaselinePackage{installedDeb("shim-signed", "1.0")},
 			simulated:  []PlannedAction{{Type: ActionRemove, Package: "shim-signed"}},
-			policy:     config.OverlayPolicy{AllowRemoval: true},
+			policy:     config.OverlayPolicy{AllowPackageRemoval: true},
 			wantAction: ActionRemove,
 			wantBlock:  true,
 			wantRule:   ruleBootloaderImmutable,
@@ -220,7 +220,12 @@ func TestEvaluatePreflight_PolicyPaths(t *testing.T) {
 }
 
 // TestEvaluatePreflight_Counts confirms the per-class counters add up across a
-// mixed plan and that ordering is deterministic.
+// mixed plan and that ordering is deterministic. The policy is permissive
+// (allowPackageRemoval + allowDowngrade + allowUpgrade, conflictPolicy allow-explicit),
+// so the declared "foo" conflict against a present baseline package IS reclassified
+// into an explicit removal — yielding two removes (the simulated "oldpkg" plus the
+// reclassified "foo") and zero conflicts. (The gated-vs-blocked conflict behavior is
+// covered by TestEvaluatePreflight_ConflictDrivenRemoval.)
 func TestEvaluatePreflight_Counts(t *testing.T) {
 	report := EvaluatePreflight(PreflightInput{
 		Family: PackageManagerAPT,
@@ -240,25 +245,32 @@ func TestEvaluatePreflight_Counts(t *testing.T) {
 			{Type: ActionRemove, Package: "oldpkg"},
 			{Type: ActionConflict, Package: "foo", ConflictWith: "bar"},
 		},
-		Policy: config.OverlayPolicy{AllowRemoval: true, AllowDowngrade: true, AllowUpgrade: true, ConflictPolicy: config.OverlayConflictPolicyAllowExplicit},
+		Policy: config.OverlayPolicy{AllowPackageRemoval: true, AllowDowngrade: true, AllowUpgrade: true, ConflictPolicy: config.OverlayConflictPolicyAllowExplicit},
 	})
 
-	if report.Adds != 1 || report.Upgrades != 1 || report.Downgrades != 1 || report.Removes != 1 || report.Conflicts != 1 {
-		t.Errorf("counts add=%d up=%d down=%d rm=%d conflict=%d, want 1 each",
+	// allowPackageRemoval reclassifies the "foo" conflict (a present baseline
+	// package) into an explicit removal, so there are two removes and no conflicts.
+	if report.Adds != 1 || report.Upgrades != 1 || report.Downgrades != 1 || report.Removes != 2 || report.Conflicts != 0 {
+		t.Errorf("counts add=%d up=%d down=%d rm=%d conflict=%d, want add/up/down=1, rm=2, conflict=0",
 			report.Adds, report.Upgrades, report.Downgrades, report.Removes, report.Conflicts)
 	}
 	if report.Blocked {
 		t.Errorf("expected not blocked under permissive policy, violations=%+v", report.Violations)
 	}
+	// The reclassified conflict is surfaced to install as an explicit removal.
+	if !contains(report.ToRemove, "foo") {
+		t.Errorf("expected the reclassified conflict 'foo' in ToRemove, got %v", report.ToRemove)
+	}
 
-	// Actions are sorted by type, then package: add < conflict < downgrade < remove < upgrade.
+	// Actions are sorted by type, then package: add < downgrade < remove < upgrade
+	// (no conflicts remain after reclassification).
 	wantOrder := []struct {
 		typ ActionType
 		pkg string
 	}{
 		{ActionAdd, "vim"},
-		{ActionConflict, "foo"},
 		{ActionDowngrade, "wget"},
+		{ActionRemove, "foo"},
 		{ActionRemove, "oldpkg"},
 		{ActionUpgrade, "curl"},
 	}
@@ -390,7 +402,7 @@ func TestEvaluatePreflight_SimulatedEmptyPackageDropped(t *testing.T) {
 			{Type: ActionRemove, Package: "   "},        // whitespace-only -> dropped
 			{Type: ActionRemove, Package: "  oldpkg  "}, // trimmed -> backfilled
 		},
-		Policy: config.OverlayPolicy{AllowRemoval: true},
+		Policy: config.OverlayPolicy{AllowPackageRemoval: true},
 	})
 
 	if report.Removes != 1 {
@@ -541,13 +553,23 @@ func TestEvaluatePreflight_ObsoletesRemovalGated(t *testing.T) {
 			report.Removes, report.Blocked, report.Actions)
 	}
 	if report.Violations[0].Rule != ruleAllowRemoval {
-		t.Errorf("expected allowRemoval violation, got %+v", report.Violations)
+		t.Errorf("expected allowPackageRemoval violation, got %+v", report.Violations)
 	}
 
-	// Same obsoletion is permitted once removal is explicitly allowed.
-	in.Policy = config.OverlayPolicy{AllowRemoval: true}
-	if r := EvaluatePreflight(in); r.Blocked {
-		t.Errorf("obsoletion removal should pass with AllowRemoval=true, got %+v", r.Violations)
+	// Same obsoletion is permitted once removal is explicitly allowed. An
+	// Obsoletes-driven removal is implicit under `rpm -U`, so it lands in
+	// ApprovedRemovals (for stats + SBOM exclusion) but NOT ToRemove (the install
+	// step must not explicitly re-remove what rpm -U already erases).
+	in.Policy = config.OverlayPolicy{AllowPackageRemoval: true}
+	permitted := EvaluatePreflight(in)
+	if permitted.Blocked {
+		t.Errorf("obsoletion removal should pass with AllowRemoval=true, got %+v", permitted.Violations)
+	}
+	if !contains(permitted.ApprovedRemovals, "oldlib") {
+		t.Errorf("an approved obsoletion must be in ApprovedRemovals, got %v", permitted.ApprovedRemovals)
+	}
+	if contains(permitted.ToRemove, "oldlib") {
+		t.Errorf("an Obsoletes-driven removal must NOT be in ToRemove (rpm -U erases it implicitly), got %v", permitted.ToRemove)
 	}
 
 	// An Obsoletes targeting a package absent from the baseline is a no-op.
@@ -556,6 +578,196 @@ func TestEvaluatePreflight_ObsoletesRemovalGated(t *testing.T) {
 	if r := EvaluatePreflight(in); r.Blocked || r.Removes != 0 {
 		t.Errorf("obsoletion of an absent package must be a no-op, got %+v", r.Actions)
 	}
+}
+
+// TestEvaluatePreflight_SimulatorRemovalIsExplicit confirms that a removal surfaced
+// by the simulator (an ActionRemove that is neither a conflict-driven
+// reclassification nor an rpm Obsoletes) is queued for EXPLICIT execution in
+// ToRemove — not silently assumed to happen on its own. Only an ObsoletesDriven
+// removal (which `rpm -U` erases implicitly) is excluded from ToRemove. Otherwise a
+// simulator removal would appear in ApprovedRemovals (stats + SBOM report it gone)
+// while the install step never removes it, leaving the package in the image.
+func TestEvaluatePreflight_SimulatorRemovalIsExplicit(t *testing.T) {
+	base := installedDeb("obsolete-pkg", "1.0")
+	// A simulator-surfaced removal: ActionRemove with no ExplicitRemoval/ObsoletesDriven marker.
+	report := EvaluatePreflight(PreflightInput{
+		Family:           PackageManagerAPT,
+		Baseline:         []BaselinePackage{base},
+		Resolved:         []ResolvedPackage{{Name: "newpkg", Version: "1", Arch: "amd64"}},
+		SimulatedActions: []PlannedAction{{Type: ActionRemove, Package: "obsolete-pkg"}},
+		Policy:           config.OverlayPolicy{AllowPackageRemoval: true},
+	})
+	if report.Blocked {
+		t.Fatalf("simulator removal should be permitted with AllowRemoval, got %+v", report.Violations)
+	}
+	if !contains(report.ApprovedRemovals, "obsolete-pkg") {
+		t.Errorf("simulator removal must be in ApprovedRemovals, got %v", report.ApprovedRemovals)
+	}
+	if !contains(report.ToRemove, "obsolete-pkg") {
+		t.Errorf("a simulator removal must be queued for EXPLICIT execution in ToRemove (only Obsoletes-driven removals are implicit), got %v", report.ToRemove)
+	}
+}
+
+// countOccurrences returns how many times want appears in ss.
+func countOccurrences(ss []string, want string) int {
+	n := 0
+	for _, s := range ss {
+		if s == want {
+			n++
+		}
+	}
+	return n
+}
+
+// TestEvaluatePreflight_DeduplicatesRemovals confirms that when TWO installed
+// artifacts declare a conflict against the SAME baseline package, the package is
+// counted and listed only once — not appended repeatedly to ToRemove/ApprovedRemovals
+// (which would be passed twice to dpkg --purge / rpm -e and inflate the count).
+func TestEvaluatePreflight_DeduplicatesRemovals(t *testing.T) {
+	base := installedDeb("initramfs-tools", "0.142")
+	// Two different to-install artifacts both conflict with initramfs-tools.
+	report := EvaluatePreflight(PreflightInput{
+		Family:   PackageManagerAPT,
+		Baseline: []BaselinePackage{base},
+		Resolved: []ResolvedPackage{
+			{Name: "dracut", Version: "060", Arch: "amd64"},
+			{Name: "dracut-core", Version: "060", Arch: "amd64"},
+		},
+		SimulatedActions: []PlannedAction{
+			{Type: ActionConflict, Package: "initramfs-tools", ConflictWith: "dracut"},
+			{Type: ActionConflict, Package: "initramfs-tools", ConflictWith: "dracut-core"},
+		},
+		Policy: config.OverlayPolicy{AllowPackageRemoval: true},
+	})
+	if report.Blocked {
+		t.Fatalf("duplicate conflict-driven removal should be permitted, got %+v", report.Violations)
+	}
+	if report.Removes != 1 {
+		t.Errorf("Removes must count the package once, got %d", report.Removes)
+	}
+	if got := countOccurrences(report.ToRemove, "initramfs-tools"); got != 1 {
+		t.Errorf("ToRemove must list initramfs-tools once, got %d (%v)", got, report.ToRemove)
+	}
+	if got := countOccurrences(report.ApprovedRemovals, "initramfs-tools"); got != 1 {
+		t.Errorf("ApprovedRemovals must list initramfs-tools once, got %d (%v)", got, report.ApprovedRemovals)
+	}
+}
+
+// TestEvaluatePreflight_ConflictDrivenRemoval confirms that with allowPackageRemoval
+// a declared conflict against a present baseline package is reclassified into a
+// permitted, explicit removal (surfaced in ToRemove for the install step), while
+// without it the conflict is gated by conflictPolicy, and a conflict against a
+// bootloader package is NEVER reclassified/removed.
+func TestEvaluatePreflight_ConflictDrivenRemoval(t *testing.T) {
+	// dracut Conflicts: initramfs-tools, which is present in the baseline.
+	base := installedDeb("initramfs-tools", "0.142")
+	simConflict := PlannedAction{Type: ActionConflict, Package: "initramfs-tools", ConflictWith: "dracut"}
+
+	t.Run("blocked by default (conflictPolicy=fail, no allowPackageRemoval)", func(t *testing.T) {
+		report := EvaluatePreflight(PreflightInput{
+			Family:           PackageManagerAPT,
+			Baseline:         []BaselinePackage{base},
+			Resolved:         []ResolvedPackage{{Name: "dracut", Version: "060", Arch: "amd64"}},
+			SimulatedActions: []PlannedAction{simConflict},
+			Policy:           config.OverlayPolicy{},
+		})
+		if !report.Blocked {
+			t.Fatal("expected the conflict to block the build by default")
+		}
+		if report.Conflicts != 1 || report.Removes != 0 {
+			t.Errorf("expected 1 conflict and 0 removes by default, got conflict=%d rm=%d", report.Conflicts, report.Removes)
+		}
+		if len(report.ToRemove) != 0 {
+			t.Errorf("nothing may be queued for removal when allowPackageRemoval is off, got %v", report.ToRemove)
+		}
+	})
+
+	t.Run("reclassified to a permitted removal with allowPackageRemoval", func(t *testing.T) {
+		report := EvaluatePreflight(PreflightInput{
+			Family:           PackageManagerAPT,
+			Baseline:         []BaselinePackage{base},
+			Resolved:         []ResolvedPackage{{Name: "dracut", Version: "060", Arch: "amd64"}},
+			SimulatedActions: []PlannedAction{simConflict},
+			Policy:           config.OverlayPolicy{AllowPackageRemoval: true},
+		})
+		if report.Blocked {
+			t.Fatalf("conflict-driven removal should be permitted, got violations=%+v", report.Violations)
+		}
+		if report.Conflicts != 0 || report.Removes != 1 {
+			t.Errorf("expected the conflict reclassified to a removal, got conflict=%d rm=%d", report.Conflicts, report.Removes)
+		}
+		if !contains(report.ToRemove, "initramfs-tools") {
+			t.Errorf("expected initramfs-tools queued for explicit removal, got %v", report.ToRemove)
+		}
+		// An explicit conflict-driven removal appears in BOTH lists: ToRemove (the
+		// install step performs it) and ApprovedRemovals (the removed-from-final set).
+		if !contains(report.ApprovedRemovals, "initramfs-tools") {
+			t.Errorf("expected initramfs-tools in ApprovedRemovals, got %v", report.ApprovedRemovals)
+		}
+		// The reclassified action carries the ExplicitRemoval marker.
+		var found bool
+		for _, a := range report.Actions {
+			if a.Package == "initramfs-tools" && a.Type == ActionRemove && a.ExplicitRemoval {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("expected an ExplicitRemoval ActionRemove for initramfs-tools, got %+v", report.Actions)
+		}
+	})
+
+	t.Run("bootloader conflict is never removed even with allowPackageRemoval", func(t *testing.T) {
+		report := EvaluatePreflight(PreflightInput{
+			Family:           PackageManagerAPT,
+			Baseline:         []BaselinePackage{installedDeb("grub-efi-amd64", "2.06")},
+			Resolved:         []ResolvedPackage{{Name: "some-boot-pkg", Version: "1.0", Arch: "amd64"}},
+			SimulatedActions: []PlannedAction{{Type: ActionConflict, Package: "grub-efi-amd64", ConflictWith: "some-boot-pkg"}},
+			Policy:           config.OverlayPolicy{AllowPackageRemoval: true},
+		})
+		if !report.Blocked {
+			t.Fatal("a bootloader conflict must stay blocked, not be silently removed")
+		}
+		if len(report.ToRemove) != 0 {
+			t.Errorf("a bootloader package must never be queued for removal, got %v", report.ToRemove)
+		}
+		if report.Violations[0].Rule != ruleBootloaderImmutable {
+			t.Errorf("expected bootloader-immutable rule, got %+v", report.Violations)
+		}
+	})
+
+	t.Run("bare conflict (no ConflictWith) is not reclassified into a removal", func(t *testing.T) {
+		// classifyActions emits an ActionConflict with an empty ConflictWith when a
+		// version comparison fails; that uncertainty must NOT become an approved purge
+		// of a package the overlay is trying to install.
+		report := EvaluatePreflight(PreflightInput{
+			Family:   PackageManagerAPT,
+			Baseline: []BaselinePackage{installedDeb("pkg", "1.0")},
+			// An uncomparable version yields a bare ActionConflict (ConflictWith empty).
+			Resolved: []ResolvedPackage{{Name: "pkg", Version: "not-a-version", Arch: "amd64"}},
+			Policy:   config.OverlayPolicy{AllowPackageRemoval: true},
+		})
+		if len(report.ToRemove) != 0 {
+			t.Errorf("a bare conflict must not be reclassified into a removal, got %v", report.ToRemove)
+		}
+		if report.Removes != 0 {
+			t.Errorf("expected 0 removes for a bare conflict, got %d", report.Removes)
+		}
+	})
+
+	t.Run("conflict target that is also being installed is not removed", func(t *testing.T) {
+		// If the conflict target is itself in the to-install set, removing it would
+		// just be reintroduced by the install — leave it a conflict, not a removal.
+		report := EvaluatePreflight(PreflightInput{
+			Family:           PackageManagerAPT,
+			Baseline:         []BaselinePackage{installedDeb("foo", "1.0")},
+			Resolved:         []ResolvedPackage{{Name: "foo", Version: "2.0", Arch: "amd64"}},
+			SimulatedActions: []PlannedAction{{Type: ActionConflict, Package: "foo", ConflictWith: "bar"}},
+			Policy:           config.OverlayPolicy{AllowPackageRemoval: true, PackageOperation: config.OverlayPackageOpAdditiveAndUpgrade},
+		})
+		if contains(report.ToRemove, "foo") {
+			t.Errorf("a to-install target must not be queued for removal, got %v", report.ToRemove)
+		}
+	})
 }
 
 // TestEvaluatePreflight_VersionedObsoletesOutOfRange confirms a versioned

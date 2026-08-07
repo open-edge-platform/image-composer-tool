@@ -570,6 +570,33 @@ func verifyCmdWithFullPath(cmd, chrootPath string) (string, error) {
 	return updatedCmdStr, nil
 }
 
+// geteuid is indirected through a package variable so tests can exercise the
+// root and non-root branches of sudoPrefix without actually running as root.
+// Production always uses os.Geteuid.
+var geteuid = os.Geteuid
+
+// sudoPrefix returns the "sudo " command prefix only when elevation is actually
+// needed — i.e. when the process is not already root.
+//
+// ICT is documented to run as root: the CLI via `sudo -E image-composer-tool
+// build …`, and the web server (serve --sudo) via `sudo -n image-composer-tool
+// build …`. In both cases the ICT process itself is already euid 0, so an inner
+// `sudo` prepended to each spawned command is a redundant root→root elevation
+// that only forks an extra sudo process per command (and, on the serve path,
+// would otherwise need its own sudoers entry). When euid == 0 we omit it and the
+// command runs directly as the already-root process.
+//
+// When euid != 0 the prefix is kept so a non-root invocation still elevates each
+// command through sudo (the per-command sudo model). Note kill/kill semantics
+// for signal delivery still assume the documented already-root model — see the
+// privilege note on applyExecAttrs.
+func sudoPrefix() string {
+	if geteuid() == 0 {
+		return ""
+	}
+	return "sudo "
+}
+
 // GetFullCmdStr prepares a command string with necessary prefixes
 func GetFullCmdStr(cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error) {
 	var fullCmdStr string
@@ -594,7 +621,9 @@ func GetFullCmdStr(cmdStr string, sudo bool, chrootPath string, envVal []string)
 			envValStr += key + "=" + value + " "
 		}
 
-		fullCmdStr = "sudo " + envValStr + "chroot " + chrootPath + " " + fullPathCmdStr
+		// chroot always requires elevation; sudoPrefix drops the redundant inner
+		// sudo when the process is already root (see sudoPrefix docstring).
+		fullCmdStr = sudoPrefix() + envValStr + "chroot " + chrootPath + " " + fullPathCmdStr
 		chrootDir := filepath.Base(chrootPath)
 		// log.Debugf("Chroot " + chrootDir + " Exec: [" + fullPathCmdStr + "]")
 		// Avoid logging full command string to prevent leaking sensitive data.
@@ -608,7 +637,9 @@ func GetFullCmdStr(cmdStr string, sudo bool, chrootPath string, envVal []string)
 				envValStr += key + "=" + value + " "
 			}
 
-			fullCmdStr = "sudo " + envValStr + fullPathCmdStr
+			// sudoPrefix drops the redundant inner sudo when already root
+			// (see sudoPrefix docstring); otherwise elevates per command.
+			fullCmdStr = sudoPrefix() + envValStr + fullPathCmdStr
 			// log.Debugf("Exec: [sudo " + fullPathCmdStr + "]")
 			// Avoid logging full command string to prevent leaking sensitive data.
 			log.Debugf("Exec with sudo: [command executed]")

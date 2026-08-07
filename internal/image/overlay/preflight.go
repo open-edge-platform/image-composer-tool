@@ -43,7 +43,7 @@ const (
 // Policy rule identifiers reported on a blocked action, so error output can name
 // the exact rule that was violated.
 const (
-	ruleAllowRemoval        = "allowRemoval=false"
+	ruleAllowRemoval        = "allowPackageRemoval=false"
 	ruleAllowDowngrade      = "allowDowngrade=false"
 	ruleAllowUpgrade        = "allowUpgrade=false"
 	ruleConflictPolicyFail  = "conflictPolicy=fail"
@@ -119,6 +119,19 @@ type PlannedAction struct {
 	Bootloader bool
 	// Kernel reports whether this action touches a bootable kernel-image package.
 	Kernel bool
+	// ExplicitRemoval marks an ActionRemove that the install step must perform as
+	// an explicit package-manager removal BEFORE installing (a conflict-driven
+	// removal, e.g. removing initramfs-tools so dracut can install). It is not set
+	// for an rpm Obsoletes-driven removal, which `rpm -U` performs implicitly.
+	ExplicitRemoval bool
+	// ObsoletesDriven marks an ActionRemove that `rpm -U` performs IMPLICITLY because
+	// a to-install package Obsoletes: the baseline package. It is the ONLY removal
+	// kind the install step does not queue explicitly (see classifyObsoletions). Any
+	// other approved removal — a conflict-driven reclassification or a
+	// simulator-surfaced ActionRemove — must be executed explicitly, so a removal
+	// that is neither ExplicitRemoval nor ObsoletesDriven is queued into ToRemove
+	// rather than silently assumed to happen on its own.
+	ObsoletesDriven bool
 	// Detail carries optional extra diagnostic context (e.g. a simulator note).
 	Detail string
 }
@@ -141,6 +154,21 @@ type PreflightReport struct {
 	Violations []PolicyViolation
 	// Counts of each action class, for logging/diagnostics.
 	Adds, Upgrades, Downgrades, Removes, Conflicts, UnsatisfiedDeps int
+	// ToRemove are the canonical names of baseline packages the install step must
+	// explicitly remove before installing (conflict-driven removals permitted by
+	// allowPackageRemoval), in deterministic order. Empty unless a conflict was
+	// reclassified into a permitted removal. It deliberately EXCLUDES an rpm
+	// Obsoletes-driven removal: `rpm -U` erases the obsoleted package implicitly, so
+	// re-removing it explicitly is redundant (and would fail once it is gone).
+	ToRemove []string
+	// ApprovedRemovals are the canonical names of ALL baseline packages that policy
+	// approved for removal — both the explicit conflict-driven removals in ToRemove
+	// AND the rpm Obsoletes-driven removals `rpm -U` performs implicitly — in
+	// deterministic order. It is the set that will actually be gone from the final
+	// image, so it drives the removal stats and the complete-SBOM exclusion (an
+	// Obsoletes-driven removal is absent from ToRemove but must still not appear in
+	// the final inventory).
+	ApprovedRemovals []string
 	// Blocked is true when at least one policy violation was found.
 	Blocked bool
 }
@@ -317,9 +345,60 @@ func EvaluatePreflight(in PreflightInput) *PreflightReport {
 		}
 	}
 
+	// When allowPackageRemoval is opted in, reclassify a DECLARED conflict against a
+	// present baseline package into an explicit removal: installing a package that
+	// Conflicts:/Breaks: a baseline package (e.g. dracut vs initramfs-tools) is
+	// resolved by removing the conflicting baseline package before install.
+	//
+	// The reclassification is deliberately narrow:
+	//   - ConflictWith must be set — only a conflict DECLARED by an install artifact
+	//     (classifyConflicts/Obsoletes) names the declaring package. A bare
+	//     ActionConflict with no ConflictWith (e.g. classifyActions' uncomparable-
+	//     version case) is uncertainty, not a declared conflict, and must NOT be
+	//     turned into an approved purge — it stays a conflict for conflictPolicy.
+	//   - the target must NOT itself be in the to-install set: removing a package the
+	//     overlay is about to (re)install would just reintroduce the conflict, so
+	//     such a case is left as a conflict rather than a self-defeating removal.
+	//   - bootloader and bootable-kernel packages are never removed — left as
+	//     conflicts so the immutability rule still blocks them.
+	// This runs after the bootloader/kernel flags are set so the guard can consult them.
+	if in.Policy.AllowPackageRemoval {
+		toInstallNames := make(map[string]bool, len(in.Resolved))
+		for _, rp := range in.Resolved {
+			if n := strings.TrimSpace(rp.Name); n != "" {
+				toInstallNames[n] = true
+			}
+		}
+		for i := range actions {
+			a := &actions[i]
+			if a.Type != ActionConflict || a.Bootloader || a.Kernel {
+				continue
+			}
+			if strings.TrimSpace(a.ConflictWith) == "" || toInstallNames[a.Package] {
+				continue
+			}
+			a.Type = ActionRemove
+			a.ExplicitRemoval = true
+			// The removed package's baseline version is the "current"; there is no
+			// requested version for a removal.
+			a.RequestedVersion = ""
+			if a.Detail == "" {
+				a.Detail = fmt.Sprintf("removed to resolve a conflict declared by %q (allowPackageRemoval)", a.ConflictWith)
+			}
+		}
+	}
+
 	sortActions(actions)
 
 	report := &PreflightReport{Actions: actions}
+	// De-duplicate removals by package name: two installed artifacts can conflict
+	// with the SAME baseline package, or one artifact can name it in both Conflicts
+	// and Breaks, yielding several ActionRemove entries for one package. Without
+	// dedup the name would be passed repeatedly to dpkg --purge / rpm -e (the second
+	// pass failing on the already-removed package) and the removal count would be
+	// inflated. Actions are already sorted, so first-sight order stays deterministic.
+	removeSeen := make(map[string]bool)
+	toRemoveSeen := make(map[string]bool)
 	for _, a := range actions {
 		switch a.Type {
 		case ActionAdd:
@@ -329,7 +408,38 @@ func EvaluatePreflight(in PreflightInput) *PreflightReport {
 		case ActionDowngrade:
 			report.Downgrades++
 		case ActionRemove:
-			report.Removes++
+			// Count and list each removed package once, even if several conflict/Breaks/
+			// Obsoletes actions target it. The three dedup checks are INDEPENDENT (not a
+			// single early-continue): a package can appear both as a non-explicit
+			// obsoletion and as an explicit conflict-driven removal, and it must still
+			// reach ToRemove for the explicit case regardless of which entry sorts first.
+			//
+			// A policy-permitted removal leaves the baseline (a blocked removal is not
+			// recorded — the build will not proceed anyway). Two lists track it:
+			//   - ToRemove: every approved removal the install step must perform
+			//     EXPLICITLY. This is ALL approved removals EXCEPT the rpm
+			//     Obsoletes-driven ones (which `rpm -U` erases implicitly, so an
+			//     explicit re-remove is redundant and would fail once it is already
+			//     gone). A conflict-driven reclassification (ExplicitRemoval) and any
+			//     simulator-surfaced ActionRemove are both queued here — the discriminator
+			//     is ObsoletesDriven, NOT ExplicitRemoval, so a removal whose origin does
+			//     not set ExplicitRemoval is executed rather than silently assumed to
+			//     happen on its own (which would leave the package installed while stats
+			//     and the complete SBOM report it removed).
+			//   - ApprovedRemovals: EVERY approved removal (explicit + simulator +
+			//     Obsoletes), the set actually absent from the final image, used for
+			//     stats and the complete-SBOM exclusion.
+			if !removeSeen[a.Package] {
+				removeSeen[a.Package] = true
+				report.Removes++
+				if in.Policy.AllowPackageRemoval {
+					report.ApprovedRemovals = append(report.ApprovedRemovals, a.Package)
+				}
+			}
+			if in.Policy.AllowPackageRemoval && !a.ObsoletesDriven && !toRemoveSeen[a.Package] {
+				toRemoveSeen[a.Package] = true
+				report.ToRemove = append(report.ToRemove, a.Package)
+			}
 		case ActionConflict:
 			report.Conflicts++
 		case ActionUnsatisfiedDep:
@@ -476,12 +586,13 @@ func classifyObsoletions(family PackageManager, sliceA map[string]BaselinePackag
 			}
 		}
 		actions = append(actions, PlannedAction{
-			Type:           ActionRemove,
-			Package:        target,
-			CurrentVersion: base.Version,
-			Arch:           base.Arch,
-			ConflictWith:   o.Package,
-			Detail:         fmt.Sprintf("obsoleted by %q, which rpm -U would erase from the baseline", o.Package),
+			Type:            ActionRemove,
+			Package:         target,
+			CurrentVersion:  base.Version,
+			Arch:            base.Arch,
+			ConflictWith:    o.Package,
+			ObsoletesDriven: true, // rpm -U erases it implicitly; the install step must NOT re-remove it
+			Detail:          fmt.Sprintf("obsoleted by %q, which rpm -U would erase from the baseline", o.Package),
 		})
 	}
 	return actions
@@ -667,7 +778,7 @@ func violatedRule(a PlannedAction, policy config.OverlayPolicy) (string, bool) {
 
 	switch a.Type {
 	case ActionRemove:
-		if !policy.AllowRemoval {
+		if !policy.AllowPackageRemoval {
 			return ruleAllowRemoval, true
 		}
 	case ActionUpgrade:

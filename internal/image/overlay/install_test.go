@@ -18,11 +18,24 @@ import (
 type fakeInstaller struct {
 	fam          PackageManager
 	installErr   error
+	removeErr    error
 	missing      []string
 	verifyErr    error
 	gotReq       installRequest
+	gotRemoved   []string // names passed to removePackages, in call order
 	installCalls int
+	removeCalls  int
 	verifyCalls  int
+	auditCalls   int
+	// auditBroken and auditErr are indexed by the audit call (1st = pre-removal,
+	// 2nd = post-install), so a test can model the SET of packages with unmet
+	// dependencies before vs. after (letting the caller diff for NEW breakage). A
+	// missing index defaults to healthy (nil)/no-error.
+	auditBroken [][]string
+	auditErr    []error
+	// removedBeforeInstall records whether removePackages ran before install, so a
+	// test can assert the conflict-driven removal precedes the install.
+	removedBeforeInstall bool
 }
 
 func (f *fakeInstaller) family() PackageManager { return f.fam }
@@ -33,9 +46,32 @@ func (f *fakeInstaller) install(req installRequest) error {
 	return f.installErr
 }
 
+func (f *fakeInstaller) removePackages(_ string, names []string) error {
+	f.removeCalls++
+	f.gotRemoved = append(f.gotRemoved, names...)
+	if f.installCalls == 0 {
+		f.removedBeforeInstall = true
+	}
+	return f.removeErr
+}
+
 func (f *fakeInstaller) verifyInstalled(_ string, _ []ResolvedPackage) ([]string, error) {
 	f.verifyCalls++
 	return f.missing, f.verifyErr
+}
+
+func (f *fakeInstaller) auditDependencies(_ string) ([]string, string, error) {
+	idx := f.auditCalls
+	f.auditCalls++
+	var broken []string
+	if idx < len(f.auditBroken) {
+		broken = f.auditBroken[idx]
+	}
+	var err error
+	if idx < len(f.auditErr) {
+		err = f.auditErr[idx]
+	}
+	return broken, "", err
 }
 
 // installHarness wires the install-stage seams to in-memory fakes and records
@@ -171,6 +207,244 @@ func TestInstallOverlayPackages_HappyPath(t *testing.T) {
 	}
 }
 
+// TestInstallOverlayPackages_RemovesConflictingBeforeInstall confirms the
+// conflict-driven removal path (allowPackageRemoval): the packages in the preflight
+// report's ToRemove are removed via the backend BEFORE the install runs, so a
+// baseline package that the replacement conflicts with (e.g. initramfs-tools vs
+// dracut) is gone before its replacement is unpacked.
+func TestInstallOverlayPackages_RemovesConflictingBeforeInstall(t *testing.T) {
+	dir := writeArtifacts(t, t.TempDir(), "dracut_1.deb")
+	plan := &ResolutionPlan{
+		Requested:   []string{"dracut"},
+		DownloadDir: dir,
+		ToInstall: []ResolvedPackage{
+			{Name: "dracut", Version: "1", Arch: "amd64", URL: "https://r/dracut_1.deb"},
+		},
+	}
+	// Preflight approved the build and asked for initramfs-tools to be removed first.
+	report := &PreflightReport{Blocked: false, ToRemove: []string{"initramfs-tools"}}
+
+	backend := &fakeInstaller{fam: PackageManagerAPT}
+	h := &installHarness{}
+
+	var err error
+	withStubbedInstall(t, backend, h, func() {
+		_, err = InstallOverlayPackages(aptInfo(), "/mnt/root", plan, report)
+	})
+	if err != nil {
+		t.Fatalf("InstallOverlayPackages: %v", err)
+	}
+
+	if backend.removeCalls != 1 {
+		t.Errorf("removePackages calls = %d, want 1", backend.removeCalls)
+	}
+	if !reflect.DeepEqual(backend.gotRemoved, []string{"initramfs-tools"}) {
+		t.Errorf("removed = %v, want [initramfs-tools]", backend.gotRemoved)
+	}
+	if !backend.removedBeforeInstall {
+		t.Error("conflict-driven removal must run BEFORE the install, not after")
+	}
+	if backend.installCalls != 1 {
+		t.Errorf("install calls = %d, want 1", backend.installCalls)
+	}
+}
+
+// TestInstallOverlayPackages_BrokenDepsAfterRemovalFails confirms the post-install
+// dependency audit fails the build when a force-removal left the baseline with an
+// unmet dependency. The audit runs twice (pre-removal healthy, post-install broken)
+// so the NEW breakage is attributed to the overlay.
+func TestInstallOverlayPackages_BrokenDepsAfterRemovalFails(t *testing.T) {
+	dir := writeArtifacts(t, t.TempDir(), "dracut_1.deb")
+	plan := &ResolutionPlan{
+		Requested:   []string{"dracut"},
+		DownloadDir: dir,
+		ToInstall:   []ResolvedPackage{{Name: "dracut", Version: "1", Arch: "amd64", URL: "https://r/dracut_1.deb"}},
+	}
+	report := &PreflightReport{ToRemove: []string{"initramfs-tools"}, ApprovedRemovals: []string{"initramfs-tools"}}
+	// Healthy before the removal, "foo" broken after the install.
+	backend := &fakeInstaller{fam: PackageManagerAPT, auditBroken: [][]string{nil, {"foo"}}}
+	h := &installHarness{}
+
+	var err error
+	withStubbedInstall(t, backend, h, func() {
+		_, err = InstallOverlayPackages(aptInfo(), "/mnt/root", plan, report)
+	})
+	if err == nil || !strings.Contains(err.Error(), "unmet dependency failure") {
+		t.Fatalf("expected the post-install broken-dependency audit to fail the build, got %v", err)
+	}
+	if backend.auditCalls != 2 {
+		t.Errorf("audit must run pre-removal and post-install, got %d call(s)", backend.auditCalls)
+	}
+}
+
+// TestInstallOverlayPackages_PreExistingBrokenBaselineNotBlamed confirms a baseline
+// that was ALREADY broken before the overlay does not fail the build when the SAME
+// package remains broken afterward: the before/after diff finds no NEW breakage, so
+// pre-existing breakage is not attributed to the overlay. The post-install audit
+// still runs (a wholesale skip would miss a different new breakage — see below).
+func TestInstallOverlayPackages_PreExistingBrokenBaselineNotBlamed(t *testing.T) {
+	dir := writeArtifacts(t, t.TempDir(), "dracut_1.deb")
+	plan := &ResolutionPlan{
+		DownloadDir: dir,
+		ToInstall:   []ResolvedPackage{{Name: "dracut", Version: "1", URL: "https://r/dracut_1.deb"}},
+	}
+	report := &PreflightReport{ToRemove: []string{"initramfs-tools"}, ApprovedRemovals: []string{"initramfs-tools"}}
+	// "oldbroken" is broken both before and after: no NEW breakage, so it must pass.
+	backend := &fakeInstaller{fam: PackageManagerAPT, auditBroken: [][]string{{"oldbroken"}, {"oldbroken"}}}
+	h := &installHarness{}
+
+	var err error
+	withStubbedInstall(t, backend, h, func() {
+		_, err = InstallOverlayPackages(aptInfo(), "/mnt/root", plan, report)
+	})
+	if err != nil {
+		t.Fatalf("a pre-existing broken baseline must not be blamed on the overlay, got %v", err)
+	}
+	if backend.auditCalls != 2 {
+		t.Errorf("audit must run both pre-removal and post-install for a reliable diff, got %d call(s)", backend.auditCalls)
+	}
+}
+
+// TestInstallOverlayPackages_NewBreakageOnAlreadyBrokenBaselineFails is the case the
+// wholesale suppression missed: the baseline starts with one broken package and the
+// removal introduces a DIFFERENT new breakage. The before/after diff must flag the
+// new package (and not the pre-existing one) and fail the build.
+func TestInstallOverlayPackages_NewBreakageOnAlreadyBrokenBaselineFails(t *testing.T) {
+	dir := writeArtifacts(t, t.TempDir(), "dracut_1.deb")
+	plan := &ResolutionPlan{
+		DownloadDir: dir,
+		ToInstall:   []ResolvedPackage{{Name: "dracut", Version: "1", URL: "https://r/dracut_1.deb"}},
+	}
+	report := &PreflightReport{ToRemove: []string{"initramfs-tools"}, ApprovedRemovals: []string{"initramfs-tools"}}
+	// "oldbroken" pre-exists; "newbroken" is introduced by the removal.
+	backend := &fakeInstaller{fam: PackageManagerAPT, auditBroken: [][]string{{"oldbroken"}, {"oldbroken", "newbroken"}}}
+	h := &installHarness{}
+
+	var err error
+	withStubbedInstall(t, backend, h, func() {
+		_, err = InstallOverlayPackages(aptInfo(), "/mnt/root", plan, report)
+	})
+	if err == nil || !strings.Contains(err.Error(), "newbroken") {
+		t.Fatalf("expected NEW breakage 'newbroken' to fail the build, got %v", err)
+	}
+	if strings.Contains(err.Error(), "oldbroken") {
+		t.Errorf("pre-existing breakage 'oldbroken' must not be attributed to the overlay: %v", err)
+	}
+}
+
+// TestInstallOverlayPackages_UnauditableBaselineFailsClosed confirms that when the
+// pre-removal audit tool cannot run (no reliable before snapshot), the build FAILS
+// CLOSED — the destructive force-removal is refused before it runs rather than
+// executing with the only whole-database integrity check disabled.
+func TestInstallOverlayPackages_UnauditableBaselineFailsClosed(t *testing.T) {
+	dir := writeArtifacts(t, t.TempDir(), "dracut_1.deb")
+	plan := &ResolutionPlan{
+		DownloadDir: dir,
+		ToInstall:   []ResolvedPackage{{Name: "dracut", Version: "1", URL: "https://r/dracut_1.deb"}},
+	}
+	report := &PreflightReport{ToRemove: []string{"initramfs-tools"}, ApprovedRemovals: []string{"initramfs-tools"}}
+	// Pre-removal audit errors (tool absent from the baseline).
+	backend := &fakeInstaller{
+		fam:      PackageManagerAPT,
+		auditErr: []error{errors.New("apt-get: not found")},
+	}
+	h := &installHarness{}
+
+	var err error
+	withStubbedInstall(t, backend, h, func() {
+		_, err = InstallOverlayPackages(aptInfo(), "/mnt/root", plan, report)
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot verify dependency integrity") {
+		t.Fatalf("an unauditable baseline must fail closed before removing, got %v", err)
+	}
+	// The destructive removal and the install must NOT have run.
+	if backend.removeCalls != 0 {
+		t.Errorf("removal must not run when integrity cannot be verified, got %d call(s)", backend.removeCalls)
+	}
+	if backend.installCalls != 0 {
+		t.Errorf("install must not run after a fail-closed abort, got %d call(s)", backend.installCalls)
+	}
+	// Only the pre-removal audit was attempted.
+	if backend.auditCalls != 1 {
+		t.Errorf("only the pre-removal audit should be attempted, got %d call(s)", backend.auditCalls)
+	}
+}
+
+// TestInstallOverlayPackages_NoAuditWithoutRemoval confirms the dependency audit
+// runs ONLY when a force-removal occurred: a pure additive build (no ToRemove)
+// never invokes it.
+func TestInstallOverlayPackages_NoAuditWithoutRemoval(t *testing.T) {
+	dir := writeArtifacts(t, t.TempDir(), "curl_8.deb")
+	plan := &ResolutionPlan{
+		DownloadDir: dir,
+		ToInstall:   []ResolvedPackage{{Name: "curl", Version: "8", URL: "https://r/curl_8.deb"}},
+	}
+	backend := &fakeInstaller{fam: PackageManagerAPT, auditBroken: [][]string{{"x"}}}
+	h := &installHarness{}
+
+	var err error
+	withStubbedInstall(t, backend, h, func() {
+		_, err = InstallOverlayPackages(aptInfo(), "/mnt/root", plan, passedReport())
+	})
+	if err != nil {
+		t.Fatalf("InstallOverlayPackages: %v", err)
+	}
+	if backend.auditCalls != 0 {
+		t.Errorf("no removal means no dependency audit, got %d call(s)", backend.auditCalls)
+	}
+}
+
+// TestInstallOverlayPackages_NoRemovalWhenToRemoveEmpty confirms the removal step
+// is skipped entirely when preflight approved no removals (the default path), so a
+// build that opted into nothing never touches removePackages.
+func TestInstallOverlayPackages_NoRemovalWhenToRemoveEmpty(t *testing.T) {
+	dir := writeArtifacts(t, t.TempDir(), "curl_8.deb")
+	plan := &ResolutionPlan{
+		Requested:   []string{"curl"},
+		DownloadDir: dir,
+		ToInstall:   []ResolvedPackage{{Name: "curl", Version: "8", Arch: "amd64", URL: "https://r/curl_8.deb"}},
+	}
+	backend := &fakeInstaller{fam: PackageManagerAPT}
+	h := &installHarness{}
+
+	var err error
+	withStubbedInstall(t, backend, h, func() {
+		_, err = InstallOverlayPackages(aptInfo(), "/mnt/root", plan, passedReport())
+	})
+	if err != nil {
+		t.Fatalf("InstallOverlayPackages: %v", err)
+	}
+	if backend.removeCalls != 0 {
+		t.Errorf("removePackages must not run when ToRemove is empty, got %d call(s)", backend.removeCalls)
+	}
+}
+
+// TestInstallOverlayPackages_RemovalFailureAbortsBeforeInstall confirms a failed
+// conflict-driven removal aborts the build before any install runs, so a
+// half-removed baseline is never handed to the installer.
+func TestInstallOverlayPackages_RemovalFailureAbortsBeforeInstall(t *testing.T) {
+	dir := writeArtifacts(t, t.TempDir(), "dracut_1.deb")
+	plan := &ResolutionPlan{
+		Requested:   []string{"dracut"},
+		DownloadDir: dir,
+		ToInstall:   []ResolvedPackage{{Name: "dracut", Version: "1", Arch: "amd64", URL: "https://r/dracut_1.deb"}},
+	}
+	report := &PreflightReport{Blocked: false, ToRemove: []string{"initramfs-tools"}}
+	backend := &fakeInstaller{fam: PackageManagerAPT, removeErr: errors.New("dpkg --purge failed")}
+	h := &installHarness{}
+
+	var err error
+	withStubbedInstall(t, backend, h, func() {
+		_, err = InstallOverlayPackages(aptInfo(), "/mnt/root", plan, report)
+	})
+	if err == nil {
+		t.Fatal("expected the removal failure to abort the install")
+	}
+	if backend.installCalls != 0 {
+		t.Errorf("install must not run after a removal failure, got %d call(s)", backend.installCalls)
+	}
+}
+
 // TestInstallOverlayPackages_UpgradeFlagPropagates confirms the orchestration
 // derives installRequest.upgrade from the preflight report's upgrade count, so
 // the backend can pick an upgrade-capable package-manager mode (rpm -U).
@@ -183,18 +457,25 @@ func TestInstallOverlayPackages_UpgradeFlagPropagates(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		name     string
-		upgrades int
-		want     bool
+		name   string
+		report *PreflightReport
+		want   bool
 	}{
-		{"plan with an upgrade sets the flag", 1, true},
-		{"pure-add plan leaves the flag off", 0, false},
+		{"plan with an upgrade sets the flag", &PreflightReport{Upgrades: 1}, true},
+		{"pure-add plan leaves the flag off", &PreflightReport{}, false},
+		// An rpm Obsoletes-driven removal is NOT an upgrade (Upgrades==0) and is
+		// absent from ToRemove (rpm -U erases it implicitly), so it shows up as
+		// ApprovedRemovals having more entries than ToRemove. That must still select
+		// -U, or the obsoletion silently would not happen under `rpm -i`.
+		{"obsoletion-only plan sets the flag", &PreflightReport{ApprovedRemovals: []string{"oldpkg"}}, true},
+		// An explicit conflict-driven removal (in both lists) is not an obsoletion, so
+		// it alone does not force -U — the removal is performed separately via rpm -e.
+		{"explicit-removal-only plan leaves the flag off", &PreflightReport{ToRemove: []string{"initramfs-tools"}, ApprovedRemovals: []string{"initramfs-tools"}}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			backend := &fakeInstaller{fam: PackageManagerDNF}
-			report := &PreflightReport{Blocked: false, Upgrades: tc.upgrades}
 			withStubbedInstall(t, backend, &installHarness{}, func() {
-				if _, err := InstallOverlayPackages(aptInfo(), "/mnt/root", plan, report); err != nil {
+				if _, err := InstallOverlayPackages(aptInfo(), "/mnt/root", plan, tc.report); err != nil {
 					t.Fatalf("InstallOverlayPackages: %v", err)
 				}
 			})
@@ -739,6 +1020,161 @@ func TestVerifyInstalled_DistinguishesMissingFromToolFailure(t *testing.T) {
 				t.Errorf("missing = %v, want %v", missing, tc.wantMissing)
 			}
 		})
+	}
+}
+
+func TestHasUnmetDependencyMarker(t *testing.T) {
+	broken := []string{
+		"You might want to run 'apt --fix-broken install' to correct these.\nThe following packages have unmet dependencies:",
+		"Error: \n Problem: broken dependency detected",
+		"Depsolve Error occurred",
+		// dnf per-package line shape — must be gated too, or it is misclassified as a
+		// tool failure and never reaches parseUnmetDependencyPackages.
+		"foo-1.0-1.x86_64 has missing requires of bar",
+	}
+	for _, out := range broken {
+		if !hasUnmetDependencyMarker(out) {
+			t.Errorf("expected %q to be recognized as unmet-dependency output", out)
+		}
+	}
+	healthy := []string{"", "Reading package lists...", "bash: apt-get: command not found"}
+	for _, out := range healthy {
+		if hasUnmetDependencyMarker(out) {
+			t.Errorf("output %q must not be flagged as unmet dependencies", out)
+		}
+	}
+}
+
+// TestAuditDependencies_DistinguishesBrokenFromToolFailure guards the audit's
+// three-way outcome: a clean exit is healthy, a non-zero exit carrying the
+// unmet-dependency marker is genuine breakage, and any other failure (tool absent)
+// is a real audit error the caller treats as "cannot audit" rather than breakage.
+func TestAuditDependencies_DistinguishesBrokenFromToolFailure(t *testing.T) {
+	tests := []struct {
+		name       string
+		backend    installerBackend
+		out        string
+		err        error
+		wantBroken []string // expected offending package names (nil = healthy)
+		wantErr    bool
+	}{
+		{name: "deb healthy", backend: &debInstallerBackend{}, out: "", err: nil, wantBroken: nil},
+		{
+			name:       "deb broken",
+			backend:    &debInstallerBackend{},
+			out:        "The following packages have unmet dependencies:\n libfoo : Depends: libbar but it is not installed",
+			err:        errors.New("exit status 100"),
+			wantBroken: []string{"libfoo | Depends: libbar but it is not installed"},
+		},
+		{name: "deb tool absent", backend: &debInstallerBackend{}, out: "bash: apt-get: command not found", err: errors.New("exit status 127"), wantErr: true},
+		{
+			// Marked broken (marker present) but no package parseable: must be an error,
+			// not a clean empty set that the caller would read as "no new breakage".
+			name:    "deb broken-but-unparseable",
+			backend: &debInstallerBackend{},
+			out:     "E: Unmet dependencies. Try 'apt --fix-broken install' with no packages",
+			err:     errors.New("exit status 100"),
+			wantErr: true,
+		},
+		{name: "rpm healthy", backend: &rpmInstallerBackend{}, out: "", err: nil, wantBroken: nil},
+		{
+			name:    "rpm broken",
+			backend: &rpmInstallerBackend{},
+			out:     "package foo-1.0-1.x86_64 requires bar, but none of the providers can be installed\nfoo-1.0-1.x86_64 has broken dependencies",
+			err:     errors.New("exit status 1"),
+			// NEVRA reduced to name.arch; two distinct failures (the requires + the bare
+			// "has broken dependencies"), sorted.
+			wantBroken: []string{"foo.x86_64 | ", "foo.x86_64 | bar, but none of the providers can be installed"},
+		},
+		{name: "rpm tool absent", backend: &rpmInstallerBackend{}, out: "bash: dnf: command not found", err: errors.New("exit status 127"), wantErr: true},
+		{
+			// A bare "Depsolve Error" carries the broken marker but no parseable package.
+			name:    "rpm broken-but-unparseable",
+			backend: &rpmInstallerBackend{},
+			out:     "Error: Depsolve Error occurred",
+			err:     errors.New("exit status 1"),
+			wantErr: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			stubShell(t, &stubExecutor{out: tc.out, err: tc.err})
+			broken, _, err := tc.backend.auditDependencies("/mnt/root")
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected an audit-tool error, got broken=%v err=nil", broken)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !reflect.DeepEqual(broken, tc.wantBroken) {
+				t.Errorf("broken = %v, want %v", broken, tc.wantBroken)
+			}
+		})
+	}
+}
+
+// TestParseUnmetDependencyFailures covers the apt-get and dnf report line shapes,
+// the (identity | requirement) descriptor format, deb-arch preservation, rpm NEVRA
+// reduction, and de-duplication.
+func TestParseUnmetDependencyFailures(t *testing.T) {
+	// apt: identity keeps :arch (multiarch instances are distinct); requirement is
+	// the text after ':'.
+	apt := "The following packages have unmet dependencies:\n" +
+		" libfoo : Depends: libbar (>= 2) but it is not installable\n" +
+		" libc6:amd64 : Depends: libqux but it is not installed\n"
+	got := parseUnmetDependencyFailures(apt)
+	want := []string{
+		"libc6:amd64 | Depends: libqux but it is not installed",
+		"libfoo | Depends: libbar (>= 2) but it is not installable",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("apt parse = %v, want %v", got, want)
+	}
+
+	// dnf: NEVRA reduced to name.arch so an upgrade's version churn does not look new;
+	// the repeat "foo ... requires quux" is a distinct requirement, not a dup.
+	dnf := "package foo-1.0-1.x86_64 requires bar >= 2, but none of the providers can be installed\n" +
+		"baz-2.0-3.noarch has broken dependencies\n" +
+		"foo-1.0-1.x86_64 requires quux\n"
+	got = parseUnmetDependencyFailures(dnf)
+	want = []string{
+		"baz.noarch | ",
+		"foo.x86_64 | bar >= 2, but none of the providers can be installed",
+		"foo.x86_64 | quux",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("dnf parse = %v, want %v", got, want)
+	}
+
+	// The SAME package upgraded (NEVRA changes) but missing the SAME requirement must
+	// produce the SAME descriptor, so a pre/post diff does not flag it as new.
+	before := parseUnmetDependencyFailures("foo-1.0-1.x86_64 requires bar")
+	after := parseUnmetDependencyFailures("foo-1.1-2.x86_64 requires bar")
+	if !reflect.DeepEqual(before, after) {
+		t.Errorf("NEVRA change must not alter the descriptor: before=%v after=%v", before, after)
+	}
+
+	if got := parseUnmetDependencyFailures(""); got != nil {
+		t.Errorf("empty output must yield nil, got %v", got)
+	}
+}
+
+// TestRpmNameArch covers NEVRA reduction to a version-independent name.arch identity.
+func TestRpmNameArch(t *testing.T) {
+	cases := map[string]string{
+		"kernel-core-6.8.0-1.x86_64": "kernel-core.x86_64", // name with '-'
+		"foo-1.0-1.x86_64":           "foo.x86_64",
+		"baz-2.0-3.noarch":           "baz.noarch",
+		"nodots":                     "nodots",     // not a NEVRA: no arch
+		"foo.x86_64":                 "foo.x86_64", // too few '-' fields: returned as-is
+	}
+	for in, want := range cases {
+		if got := rpmNameArch(in); got != want {
+			t.Errorf("rpmNameArch(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
