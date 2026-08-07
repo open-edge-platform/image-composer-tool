@@ -185,10 +185,44 @@ func WriteSPDXToFile(pkgs []ospackage.PackageInfo, outFile string) error {
 // so the overlay package is appended as a new entry rather than arbitrarily
 // replacing one of them (which would silently drop a baseline entry and produce a
 // misleading inventory).
-func WriteMergedSPDXToFile(baselineSPDX []byte, overlayPkgs []ospackage.PackageInfo, outFile string) error {
+func WriteMergedSPDXToFile(baselineSPDX []byte, overlayPkgs []ospackage.PackageInfo, removedNames []string, outFile string) error {
 	var doc SPDXDocument
 	if err := json.Unmarshal(baselineSPDX, &doc); err != nil {
 		return fmt.Errorf("failed to parse baseline SBOM for merge: %w", err)
+	}
+	// JSON that unmarshals is not necessarily SPDX: a CycloneDX document, "{}", or
+	// any unrelated object decodes into an all-zero SPDXDocument without error.
+	// Merging into that would emit a ".complete.spdx.json" containing only the
+	// overlay packages (a bogus "full inventory"), so reject a base that is not
+	// recognizably an SPDX package inventory and let the caller run its documented
+	// external -> inherited -> delta-only fallback instead.
+	if err := validateSPDXBase(doc); err != nil {
+		return fmt.Errorf("baseline SBOM is not a usable SPDX document: %w", err)
+	}
+
+	// Drop packages the overlay removed (conflict-driven removal) so the merged
+	// document reflects the FINAL image inventory rather than the pre-removal
+	// baseline. Without this a purged baseline package (e.g. initramfs-tools,
+	// removed so dracut can install) would still appear in the complete SBOM and
+	// the in-image manifest, and an SPDX comparison would miss the removal.
+	if len(removedNames) > 0 {
+		removed := make(map[string]bool, len(removedNames))
+		for _, n := range removedNames {
+			removed[strings.TrimSpace(n)] = true
+		}
+		kept := doc.Packages[:0]
+		removedCount := 0
+		for _, pkg := range doc.Packages {
+			if removed[pkg.Name] {
+				removedCount++
+				continue
+			}
+			kept = append(kept, pkg)
+		}
+		doc.Packages = kept
+		if removedCount > 0 {
+			log.Infof("Merged overlay SBOM: dropped %d removed package(s) from the base inventory", removedCount)
+		}
 	}
 
 	// Group baseline entries by name (as slices) so a name with multiple entries
@@ -217,6 +251,57 @@ func WriteMergedSPDXToFile(baselineSPDX []byte, overlayPkgs []ospackage.PackageI
 		added, upgraded, len(doc.Packages))
 
 	return writeSPDXDocument(doc, outFile)
+}
+
+// validateSPDXBase reports whether a decoded document is a usable SPDX base to
+// merge overlay packages into. JSON from an unrelated schema (CycloneDX, "{}", a
+// bare array) decodes into an all-zero SPDXDocument without a decode error, so a
+// structural check is the only way to tell "valid but header-light SPDX" (which we
+// normalize) from "not SPDX at all" (which must trigger the caller's fallback).
+//
+// A base is accepted only when it is recognizably SPDX AND carries a usable package
+// inventory:
+//   - a declared spdxVersion, when present, must be a CONCRETE published SPDX 2.x
+//     version (see supportedSPDX2Versions); AND
+//   - it must carry a non-empty package inventory in which EVERY entry has a name.
+//
+// The version check requires an exact known version rather than an "SPDX-2." prefix:
+// a prefix match accepts malformed values like "SPDX-2.bad" or "SPDX-2.999", which
+// normalizeSPDXHeader would then preserve, emitting a "complete" document that
+// advertises an invalid spdxVersion. The package-name check runs REGARDLESS of the
+// version header and requires ALL entries to be named (not merely one), because an
+// SPDX package name is mandatory — a base carrying one valid package plus any
+// nameless record would otherwise be accepted and the nameless record emitted in the
+// complete SBOM. Any violation (a CycloneDX "components" doc, an empty object, a
+// malformed/unsupported version, or a doc with even one nameless package) triggers
+// the caller's documented external -> inherited -> delta-only fallback.
+func validateSPDXBase(doc SPDXDocument) error {
+	if ver := strings.TrimSpace(doc.SPDXVersion); ver != "" && !supportedSPDX2Versions[ver] {
+		return fmt.Errorf("unsupported spdxVersion %q (expected a concrete SPDX 2.x version)", ver)
+	}
+	if len(doc.Packages) == 0 {
+		return fmt.Errorf("no package entries")
+	}
+	for i, p := range doc.Packages {
+		if strings.TrimSpace(p.Name) == "" {
+			return fmt.Errorf("package entry %d has no name (SPDX requires every package to be named)", i)
+		}
+	}
+	return nil
+}
+
+// supportedSPDX2Versions is the set of published SPDX 2.x document-version strings a
+// base SBOM may declare. The tool emits SPDXVersion ("SPDX-2.3"); a base at any
+// earlier 2.x is still mergeable since the 2.x package schema is compatible. A value
+// outside this set (including a malformed "SPDX-2.bad") is rejected so the emitted
+// complete document never advertises an invalid spdxVersion.
+var supportedSPDX2Versions = map[string]bool{
+	"SPDX-2.0":   true,
+	"SPDX-2.1":   true,
+	"SPDX-2.2":   true,
+	"SPDX-2.2.1": true,
+	"SPDX-2.2.2": true,
+	"SPDX-2.3":   true,
 }
 
 // buildSPDXPackage converts a PackageInfo into its SPDX package record, applying
@@ -287,9 +372,24 @@ func sanitizeSPDXID(name string) string {
 // through the grammar fixes those in place; it is idempotent for already-valid
 // IDs (the "SPDXRef-Package-" prefix is all valid characters) and runs before
 // dedupeSPDXIDs so any collisions the re-mapping introduces are disambiguated.
+//
+// A base package that carries NO SPDXID (a header-light or hand-authored base)
+// would otherwise leave an empty element ID, which then surfaces as an invalid
+// `relatedSpdxElement: ""` in the generated DESCRIBES relationships. Such an entry
+// is given a synthesized "SPDXRef-Package-<name>" ID (or an index-based fallback
+// when the name is also empty), so every package ends with a stable, non-empty,
+// spec-valid ID before dedupeSPDXIDs enforces uniqueness.
 func sanitizeSPDXIDs(pkgs []SPDXPackage) {
 	for i := range pkgs {
-		pkgs[i].SPDXID = sanitizeSPDXID(pkgs[i].SPDXID)
+		id := strings.TrimSpace(pkgs[i].SPDXID)
+		if id == "" {
+			if name := strings.TrimSpace(pkgs[i].Name); name != "" {
+				id = "SPDXRef-Package-" + name
+			} else {
+				id = fmt.Sprintf("SPDXRef-Package-%d", i)
+			}
+		}
+		pkgs[i].SPDXID = sanitizeSPDXID(id)
 	}
 }
 
@@ -345,9 +445,79 @@ func describesRelationships(spdx SPDXDocument) []SPDXRelationship {
 	return rels
 }
 
+// normalizeSPDXHeader fills any required SPDX 2.3 document-header field that is
+// empty with its spec-valid default, so a document merged from a header-light
+// base SBOM (one carrying only a `packages` array, with no spdxVersion,
+// dataLicense, SPDXID, namespace, or creationInfo) is still a valid SPDX 2.3
+// document rather than one that merely claims to be. It only fills empties, so it
+// is a no-op for a from-scratch document (WriteSPDXToFile already sets every
+// field) and preserves a real base document's own header/lineage untouched.
+func normalizeSPDXHeader(spdx *SPDXDocument) {
+	if strings.TrimSpace(spdx.SPDXVersion) == "" {
+		spdx.SPDXVersion = SPDXVersion
+	}
+	if strings.TrimSpace(spdx.DataLicense) == "" {
+		spdx.DataLicense = SPDXDataLicense
+	}
+	if strings.TrimSpace(spdx.SPDXID) == "" {
+		spdx.SPDXID = SPDXDocumentID
+	}
+	if strings.TrimSpace(spdx.DocumentName) == "" {
+		spdx.DocumentName = fmt.Sprintf("%s-%s", version.Toolname, time.Now().UTC().Format("20060102T150405Z"))
+	}
+	if strings.TrimSpace(spdx.DocumentNamespace) == "" {
+		spdx.DocumentNamespace = generateDocumentNamespace()
+	}
+	if strings.TrimSpace(spdx.CreationInfo.Created) == "" {
+		spdx.CreationInfo.Created = time.Now().UTC().Format("2006-01-02T15:04:05Z")
+	}
+	if len(spdx.CreationInfo.Creators) == 0 {
+		spdx.CreationInfo.Creators = []string{
+			fmt.Sprintf("Tool: %s %s", version.Toolname, version.Version),
+			fmt.Sprintf("Organization: %s", version.Organization),
+		}
+	}
+}
+
+// normalizeSPDXPackages fills the SPDX-required per-package fields that a merged-in
+// base document may have left empty, so the emitted document validates as SPDX 2.3.
+// The SPDX spec requires each package to carry a downloadLocation and license
+// fields; a base SBOM (or a hand-authored fixture) supplying only name/version would
+// otherwise emit empty strings there. Empty values are filled with NOASSERTION (the
+// spec's sentinel for "no assertion made"); SPDXID is normalized separately by
+// sanitizeSPDXIDs. It only fills empties, so a freshly built package (buildSPDXPackage
+// already sets these) is left untouched.
+func normalizeSPDXPackages(pkgs []SPDXPackage) {
+	for i := range pkgs {
+		if strings.TrimSpace(pkgs[i].DownloadLocation) == "" {
+			pkgs[i].DownloadLocation = "NOASSERTION"
+		}
+		if strings.TrimSpace(pkgs[i].LicenseConcluded) == "" {
+			pkgs[i].LicenseConcluded = "NOASSERTION"
+		}
+		if strings.TrimSpace(pkgs[i].LicenseDeclared) == "" {
+			pkgs[i].LicenseDeclared = "NOASSERTION"
+		}
+	}
+}
+
 // writeSPDXDocument marshals an SPDX document and writes it with symlink
 // protection, creating the parent directory as needed.
 func writeSPDXDocument(spdx SPDXDocument, outFile string) error {
+	// Backfill any missing required document-header field before writing, so a
+	// document merged from a header-light base SBOM is emitted as valid SPDX 2.3
+	// rather than with an empty spdxVersion/dataLicense/SPDXID/namespace/creationInfo.
+	normalizeSPDXHeader(&spdx)
+
+	// Backfill required per-package fields before writing. A base SBOM merged in may
+	// carry package records that omit fields the SPDX spec requires (e.g. an
+	// integration fixture supplying only name/version), which would make the emitted
+	// document fail strict SPDX validation despite being labeled SPDX 2.3. Fill each
+	// empty required field with NOASSERTION (the spec's "no assertion" sentinel);
+	// SPDXID is handled separately by sanitizeSPDXIDs below. This only fills empties,
+	// so freshly built packages (buildSPDXPackage already sets these) are unchanged.
+	normalizeSPDXPackages(spdx.Packages)
+
 	// Normalize every SPDXID into the element-ID grammar first, so a baseline
 	// document merged in with legacy raw-name IDs (e.g. "libstdc++6") is corrected
 	// alongside the freshly built overlay entries, then enforce uniqueness across

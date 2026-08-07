@@ -193,15 +193,22 @@ func TestResolveOverlayBaseSBOM_ExternalWins(t *testing.T) {
 	}
 	tmpl := &config.ImageTemplate{Baseline: &config.Baseline{Source: &config.BaselineSource{SBOMPath: extPath}}}
 
-	name, data, found := resolveOverlayBaseSBOM(tmpl, root)
-	if !found {
+	base := resolveOverlayBaseSBOM(tmpl, root)
+	if !base.found {
 		t.Fatal("expected a base SBOM to be found")
 	}
-	if name != inheritedName {
-		t.Errorf("output name = %q, want inherited name %q (replace in place)", name, inheritedName)
+	if !base.fromExternal {
+		t.Error("expected the external SBOM to win")
 	}
-	if got := spdxNames(t, data); len(got) != 1 || got[0] != "libc6" {
+	if base.name != inheritedName {
+		t.Errorf("output name = %q, want inherited name %q (replace in place)", base.name, inheritedName)
+	}
+	if got := spdxNames(t, base.data); len(got) != 1 || got[0] != "libc6" {
 		t.Errorf("base SBOM = %v, want the external one [libc6]", got)
+	}
+	// The inherited bytes are retained as a fallback even when the external base won.
+	if got := spdxNames(t, base.inheritedData); len(got) != 1 || got[0] != "bash" {
+		t.Errorf("inherited fallback = %v, want [bash]", got)
 	}
 }
 
@@ -213,14 +220,17 @@ func TestResolveOverlayBaseSBOM_FallsBackToInheritedWhenExternalMissing(t *testi
 
 	tmpl := &config.ImageTemplate{Baseline: &config.Baseline{Source: &config.BaselineSource{SBOMPath: filepath.Join(t.TempDir(), "missing.json")}}}
 
-	name, data, found := resolveOverlayBaseSBOM(tmpl, root)
-	if !found {
+	base := resolveOverlayBaseSBOM(tmpl, root)
+	if !base.found {
 		t.Fatal("expected fallback to the inherited SBOM")
 	}
-	if name != inheritedName {
-		t.Errorf("output name = %q, want %q", name, inheritedName)
+	if base.fromExternal {
+		t.Error("an unreadable external path must not be treated as the external base")
 	}
-	if got := spdxNames(t, data); len(got) != 1 || got[0] != "bash" {
+	if base.name != inheritedName {
+		t.Errorf("output name = %q, want %q", base.name, inheritedName)
+	}
+	if got := spdxNames(t, base.data); len(got) != 1 || got[0] != "bash" {
 		t.Errorf("base SBOM = %v, want the inherited one [bash]", got)
 	}
 }
@@ -231,12 +241,12 @@ func TestResolveOverlayBaseSBOM_NoBaseAvailable(t *testing.T) {
 	root := t.TempDir() // no usr/share/sbom
 	tmpl := &config.ImageTemplate{Baseline: &config.Baseline{Source: &config.BaselineSource{Path: "/b.raw"}}}
 
-	name, _, found := resolveOverlayBaseSBOM(tmpl, root)
-	if found {
+	base := resolveOverlayBaseSBOM(tmpl, root)
+	if base.found {
 		t.Error("expected no base SBOM available")
 	}
-	if name != manifest.DefaultSPDXFile {
-		t.Errorf("output name = %q, want default %q", name, manifest.DefaultSPDXFile)
+	if base.name != manifest.DefaultSPDXFile {
+		t.Errorf("output name = %q, want default %q", base.name, manifest.DefaultSPDXFile)
 	}
 }
 
@@ -248,11 +258,14 @@ func TestResolveOverlayBaseSBOM_BackwardCompatibleWhenFieldAbsent(t *testing.T) 
 
 	tmpl := &config.ImageTemplate{Baseline: &config.Baseline{Source: &config.BaselineSource{Path: "/b.raw"}}}
 
-	name, data, found := resolveOverlayBaseSBOM(tmpl, root)
-	if !found || name != inheritedName {
-		t.Fatalf("resolve = (%q,%v), want inherited %q,true", name, found, inheritedName)
+	base := resolveOverlayBaseSBOM(tmpl, root)
+	if !base.found || base.name != inheritedName {
+		t.Fatalf("resolve = (%q,%v), want inherited %q,true", base.name, base.found, inheritedName)
 	}
-	if got := spdxNames(t, data); len(got) != 1 || got[0] != "bash" {
+	if base.fromExternal {
+		t.Error("no external field set, so fromExternal must be false")
+	}
+	if got := spdxNames(t, base.data); len(got) != 1 || got[0] != "bash" {
 		t.Errorf("base SBOM = %v, want [bash]", got)
 	}
 }
@@ -298,7 +311,7 @@ func TestStageOverlaySBOMArtifacts_WritesDeltaAndCompleteWithBase(t *testing.T) 
 
 	plan := &ResolutionPlan{ToInstall: []ResolvedPackage{{Name: "tree", Version: "2.1.1", Arch: "amd64", Type: "deb"}}}
 
-	arts, err := stageOverlaySBOMArtifacts(&config.ImageTemplate{}, &BaselineInfo{PackageType: "deb"}, root, plan)
+	arts, err := stageOverlaySBOMArtifacts(&config.ImageTemplate{}, &BaselineInfo{PackageType: "deb"}, root, plan, nil)
 	if err != nil {
 		t.Fatalf("stageOverlaySBOMArtifacts: %v", err)
 	}
@@ -346,7 +359,7 @@ func TestStageOverlaySBOMArtifacts_DeltaOnlyWhenNoBase(t *testing.T) {
 	root := t.TempDir() // no usr/share/sbom -> no inherited base
 	plan := &ResolutionPlan{ToInstall: []ResolvedPackage{{Name: "tree", Version: "2.1.1", Type: "deb"}}}
 
-	arts, err := stageOverlaySBOMArtifacts(&config.ImageTemplate{}, &BaselineInfo{PackageType: "deb"}, root, plan)
+	arts, err := stageOverlaySBOMArtifacts(&config.ImageTemplate{}, &BaselineInfo{PackageType: "deb"}, root, plan, nil)
 	if err != nil {
 		t.Fatalf("stageOverlaySBOMArtifacts: %v", err)
 	}

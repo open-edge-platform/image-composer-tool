@@ -302,8 +302,13 @@ func (b *Builder) Build() error {
 		return err
 	}
 
+	// A pre-initramfs additionalFiles entry (a dracut module / initramfs-tools hook)
+	// forces initramfs regeneration: it is boot-relevant content the package
+	// manifests do not reflect, so without this the regen gate would skip it when no
+	// boot-relevant PACKAGE was installed and the file would never be baked in.
+	forceRegen := b.hasPreInitramfsAdditionalFiles()
 	if err := b.timeStage("Boot Regeneration", func() error {
-		if berr := builderRegenBootFn(b.info, b.layout.RootMount, installed, b.plan); berr != nil {
+		if berr := builderRegenBootFn(b.info, b.layout.RootMount, installed, b.plan, forceRegen); berr != nil {
 			return fmt.Errorf("overlay build: boot regeneration failed: %w", berr)
 		}
 		return nil
@@ -449,7 +454,7 @@ func (b *Builder) Postprocess(buildErr error) (err error) {
 	// documents in the temp dir for the emit stage to place beside the artifact.
 	var sbomArtifacts *overlaySBOMArtifacts
 	if err := b.timeStage("Generate SBOM", func() error {
-		staged, serr := builderSBOMFn(b.template, b.info, b.layout.RootMount, b.plan)
+		staged, serr := builderSBOMFn(b.template, b.info, b.layout.RootMount, b.plan, b.report)
 		if serr != nil {
 			return fmt.Errorf("overlay postprocess: SBOM generation failed: %w", serr)
 		}
@@ -581,22 +586,31 @@ func (b *Builder) cleanup() {
 // surfaced rather than silently dropping the detach failure). A leaked loop
 // device is thereby never mistaken for a clean build. It is safe to call
 // multiple times.
+//
+// Each operation is individually panic-safe: a panic in mountTeardown is recovered
+// and converted to an error so the loop-device detach STILL runs, and a panic in
+// detach is likewise converted to an error. Neither can crash the process or skip
+// the other release step — the cleanup-never-panics guarantee holds even for the
+// teardown chain itself, not just the finalization stages around it.
 func (b *Builder) cleanupOnce() error {
 	var umountErr, detachErr error
 	if b.mountTeardown != nil {
-		umountErr = b.mountTeardown()
+		umountErr = callWithRecover("overlay cleanup: unmount", b.mountTeardown)
 		// Clear the teardown ONLY when it fully succeeded, mirroring the loop-detach
 		// handling below. On failure it is retained so a later cleanup (or the deferred
 		// second cleanup in Postprocess) re-runs it — the teardown closure itself now
 		// retries only the still-mounted points. Discarding it here would make the
 		// mount teardown unretryable and leak any point that failed to unmount, even
-		// though the detach could still be retried — defeating the full-unwind guarantee.
+		// though the detach could still be retried — defeating the full-unwind
+		// guarantee. A panic is treated as failure too (retain and retry).
 		if umountErr == nil {
 			b.mountTeardown = nil
 		}
 	}
 	if b.ctx != nil && b.ctx.LoopDevPath != "" {
-		detachErr = builderDetach(b.ingestor, b.ctx)
+		detachErr = callWithRecover("overlay cleanup: loop detach", func() error {
+			return builderDetach(b.ingestor, b.ctx)
+		})
 		if detachErr == nil {
 			// Clear the loop path ONLY after a successful detach, so a second
 			// cleanup does not re-detach an already-released device (idempotence).
@@ -608,6 +622,19 @@ func (b *Builder) cleanupOnce() error {
 		}
 	}
 	return errors.Join(umountErr, detachErr)
+}
+
+// callWithRecover runs fn and returns its error, converting a panic into an error
+// (tagged with label) so a panicking cleanup step neither crashes the process nor
+// skips the steps that follow it.
+func callWithRecover(label string, fn func() error) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Errorf("%s: recovered from panic: %v", label, r)
+			err = fmt.Errorf("%s: panic: %v", label, r)
+		}
+	}()
+	return fn()
 }
 
 // imageVersion derives the artifact version tag. The overlaid image fundamentally
@@ -623,6 +650,19 @@ func (b *Builder) imageVersion() string {
 		}
 	}
 	return "overlay"
+}
+
+// hasPreInitramfsAdditionalFiles reports whether the template declares any
+// additionalFiles entry staged pre-initramfs (after path resolution / dropping of
+// missing entries). It drives the boot-regeneration force flag so such a file is
+// baked into the initramfs even when no boot-relevant package was installed.
+func (b *Builder) hasPreInitramfsAdditionalFiles() bool {
+	for _, f := range b.template.GetAdditionalFileInfo() {
+		if additionalFileStage(f) == config.AdditionalFileStagePreInitramfs {
+			return true
+		}
+	}
+	return false
 }
 
 // generateOverlaySBOM updates the baseline's embedded SPDX SBOM at
@@ -649,7 +689,7 @@ func (b *Builder) imageVersion() string {
 // When neither yields a readable/valid base SBOM, it falls back to writing just
 // the contributed packages so the image still gets a manifest. A missing or
 // malformed base SBOM (external or inherited) never fails the build.
-func generateOverlaySBOM(template *config.ImageTemplate, info *BaselineInfo, rootMount string, plan *ResolutionPlan) (*overlaySBOMArtifacts, error) {
+func generateOverlaySBOM(template *config.ImageTemplate, info *BaselineInfo, rootMount string, plan *ResolutionPlan, report *PreflightReport) (*overlaySBOMArtifacts, error) {
 	if plan == nil {
 		return nil, nil
 	}
@@ -657,7 +697,7 @@ func generateOverlaySBOM(template *config.ImageTemplate, info *BaselineInfo, roo
 	// Stage both the delta and complete SBOMs to the temp dir (no sudo). This also
 	// sets manifest.DefaultSPDXFile to the complete SBOM's name so CopySBOMToChroot
 	// below embeds the complete inventory.
-	artifacts, err := stageOverlaySBOMArtifacts(template, info, rootMount, plan)
+	artifacts, err := stageOverlaySBOMArtifacts(template, info, rootMount, plan, report)
 	if err != nil {
 		return nil, err
 	}
@@ -799,31 +839,49 @@ func contributedPackages(info *BaselineInfo, plan *ResolutionPlan) []ospackage.P
 // The complete SBOM is staged under the resolved base-SBOM name and
 // manifest.DefaultSPDXFile is set to it, so the caller's CopySBOMToChroot embeds
 // the complete inventory in place of the inherited file.
-func stageOverlaySBOMArtifacts(template *config.ImageTemplate, info *BaselineInfo, rootMount string, plan *ResolutionPlan) (*overlaySBOMArtifacts, error) {
+func stageOverlaySBOMArtifacts(template *config.ImageTemplate, info *BaselineInfo, rootMount string, plan *ResolutionPlan, report *PreflightReport) (*overlaySBOMArtifacts, error) {
 	pkgs := contributedPackages(info, plan)
+
+	// Packages the overlay removed must be dropped from the base document so the
+	// complete SBOM reflects the final inventory, not the pre-removal baseline. Uses
+	// ApprovedRemovals (not ToRemove) so an rpm Obsoletes-driven removal — which
+	// `rpm -U` erases implicitly and so never appears in ToRemove — is still excluded
+	// from the complete inventory.
+	var removedNames []string
+	if report != nil {
+		removedNames = report.ApprovedRemovals
+	}
 
 	// Resolve the base SBOM (external override or baseline-inherited) plus the name
 	// the complete document is written under.
-	sbomName, baseSBOMData, baseFound := resolveOverlayBaseSBOM(template, rootMount)
+	base := resolveOverlayBaseSBOM(template, rootMount)
 
 	tempDir := config.TempDir()
 
 	// Delta SBOM: only the overlay-contributed packages.
-	deltaPath := filepath.Join(tempDir, overlayDeltaTempName(sbomName))
+	deltaPath := filepath.Join(tempDir, overlayDeltaTempName(base.name))
 	if err := manifest.WriteSPDXToFile(pkgs, deltaPath); err != nil {
 		return nil, fmt.Errorf("writing overlay delta SBOM: %w", err)
 	}
 
-	// Complete SBOM: base + delta when a base is available, else delta-only. Track
-	// whether it degraded to delta-only so the caller can skip the redundant
-	// build-dir sidecar (see overlaySBOMArtifacts.completeIsDeltaOnly).
-	completePath := filepath.Join(tempDir, sbomName)
+	// Complete SBOM: base + delta (minus removals) when a base is available, else
+	// delta-only. Track whether it degraded to delta-only so the caller can skip the
+	// redundant build-dir sidecar (see overlaySBOMArtifacts.completeIsDeltaOnly).
+	completePath := filepath.Join(tempDir, base.name)
 	completeIsDeltaOnly := false
-	if baseFound {
-		if err := manifest.WriteMergedSPDXToFile(baseSBOMData, pkgs, completePath); err != nil {
-			// A malformed base SBOM must not fail the build; degrade the complete
-			// SBOM to the delta so the image still gets a manifest.
-			log.Warnf("Overlay SBOM: merging into base SBOM %q failed (%v); complete SBOM will contain the overlay delta only", sbomName, err)
+	if base.found {
+		err := manifest.WriteMergedSPDXToFile(base.data, pkgs, removedNames, completePath)
+		// A malformed EXTERNAL base must fall back to the inherited SBOM before
+		// degrading to delta-only, matching the documented external -> inherited ->
+		// delta-only order. (A malformed inherited base has no further base to try.)
+		if err != nil && base.fromExternal && base.inheritedFound {
+			log.Warnf("Overlay SBOM: external base SBOM failed to merge (%v); falling back to the baseline-embedded SBOM", err)
+			err = manifest.WriteMergedSPDXToFile(base.inheritedData, pkgs, removedNames, completePath)
+		}
+		if err != nil {
+			// No usable base left; degrade the complete SBOM to the delta so the
+			// image still gets a manifest.
+			log.Warnf("Overlay SBOM: merging into base SBOM %q failed (%v); complete SBOM will contain the overlay delta only", base.name, err)
 			if werr := manifest.WriteSPDXToFile(pkgs, completePath); werr != nil {
 				return nil, fmt.Errorf("writing overlay complete SBOM (delta fallback): %w", werr)
 			}
@@ -837,10 +895,12 @@ func stageOverlaySBOMArtifacts(template *config.ImageTemplate, info *BaselineInf
 		completeIsDeltaOnly = true
 	}
 
-	// The in-image embed and the build-dir "complete" sidecar both key off
-	// DefaultSPDXFile; set (not restore) it to the complete SBOM's name, mirroring
-	// create mode's generateSBOM.
-	manifest.DefaultSPDXFile = sbomName
+	// Set (not restore) DefaultSPDXFile to the complete SBOM's name so the in-image
+	// embed (manifest.CopySBOMToChroot, which keys off this variable) writes the
+	// complete inventory under that name, mirroring create mode's generateSBOM. The
+	// build-dir sidecars do NOT consult this variable — they are copied from the
+	// staged completePath/deltaPath threaded via overlaySBOMArtifacts.
+	manifest.DefaultSPDXFile = base.name
 
 	return &overlaySBOMArtifacts{deltaPath: deltaPath, completePath: completePath, completeIsDeltaOnly: completeIsDeltaOnly}, nil
 }
@@ -870,24 +930,51 @@ func overlayDeltaTempName(completeName string) string {
 // exists the package default filename is used. found is false only when neither an
 // external nor an inherited base SBOM is available, in which case the caller writes
 // the delta alone under the returned name.
-func resolveOverlayBaseSBOM(template *config.ImageTemplate, rootMount string) (name string, data []byte, found bool) {
+// overlayBaseSBOM is the resolved base-SBOM choice for the complete SBOM merge. It
+// carries the chosen base bytes plus the baseline-inherited bytes as a fallback,
+// so the merge step can retry the inherited SBOM when a chosen EXTERNAL base is
+// readable but malformed (see stageOverlaySBOMArtifacts) — matching the documented
+// external -> inherited -> delta-only fallback order.
+type overlaySBOMBase struct {
+	// name is the filename the complete document is written under (the inherited
+	// SBOM's own name when present, else the package default).
+	name string
+	// data is the chosen base: the external SBOM when set+readable, otherwise the
+	// inherited one. found is false when neither is available.
+	data  []byte
+	found bool
+	// fromExternal is true when data came from baseline.source.sbomPath rather than
+	// the inherited SBOM.
+	fromExternal bool
+	// inheritedData/inheritedFound are the baseline-embedded SBOM, retained as a
+	// fallback for the malformed-external case even when the external base won.
+	inheritedData  []byte
+	inheritedFound bool
+}
+
+func resolveOverlayBaseSBOM(template *config.ImageTemplate, rootMount string) overlaySBOMBase {
 	inheritedName, inheritedData, inheritedFound := readBaselineSBOM(rootMount)
 
-	name = manifest.DefaultSPDXFile
+	base := overlaySBOMBase{
+		name:           manifest.DefaultSPDXFile,
+		data:           inheritedData,
+		found:          inheritedFound,
+		inheritedData:  inheritedData,
+		inheritedFound: inheritedFound,
+	}
 	if inheritedFound {
-		name = inheritedName
+		base.name = inheritedName
 	}
 
-	data, found = inheritedData, inheritedFound
 	if extPath := baselineExternalSBOMPath(template); extPath != "" {
 		if extData, ok := readExternalBaseSBOM(extPath); ok {
-			data, found = extData, true
+			base.data, base.found, base.fromExternal = extData, true, true
 			log.Infof("Overlay SBOM: using externally-supplied base SBOM %q", extPath)
 		} else {
 			log.Warnf("Overlay SBOM: external base SBOM %q is absent or unreadable; falling back to the baseline-embedded SBOM", extPath)
 		}
 	}
-	return name, data, found
+	return base
 }
 
 // baselineExternalSBOMPath returns the trimmed externally-supplied base SBOM path

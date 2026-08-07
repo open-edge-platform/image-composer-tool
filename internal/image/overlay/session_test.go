@@ -19,11 +19,11 @@ type builderSeams struct {
 	preflight   func(*BaselineInfo, []BaselinePackage, *ResolutionPlan, *config.OverlayPolicy) (*PreflightReport, error)
 	install     func(*BaselineInfo, string, *ResolutionPlan, *PreflightReport) (*InstallResult, error)
 	configure   func(*config.ImageTemplate, string) error
-	regenBoot   func(*BaselineInfo, string, *InstallResult, *ResolutionPlan) error
+	regenBoot   func(*BaselineInfo, string, *InstallResult, *ResolutionPlan, bool) error
 	grubRegen   func(*config.ImageTemplate, *BaselineInfo, string) error
 	addFiles    func(*config.ImageTemplate, string, string) error
 	resize      func(*config.ImageTemplate, *Context, *Layout) error
-	sbom        func(*config.ImageTemplate, *BaselineInfo, string, *ResolutionPlan) (*overlaySBOMArtifacts, error)
+	sbom        func(*config.ImageTemplate, *BaselineInfo, string, *ResolutionPlan, *PreflightReport) (*overlaySBOMArtifacts, error)
 	emit        func(*config.ImageTemplate, string, string, *overlaySBOMArtifacts) (string, error)
 	inspect     func(string) error
 	convert     func(string, *config.ImageTemplate) error
@@ -155,7 +155,7 @@ func installOverlayTestBuilder(t *testing.T, r *builderRecorder) *Builder {
 		r.note("configure")
 		return r.configureErr
 	}
-	builderRegenBootFn = func(*BaselineInfo, string, *InstallResult, *ResolutionPlan) error {
+	builderRegenBootFn = func(*BaselineInfo, string, *InstallResult, *ResolutionPlan, bool) error {
 		r.note("regenBoot")
 		return r.regenErr
 	}
@@ -175,7 +175,7 @@ func installOverlayTestBuilder(t *testing.T, r *builderRecorder) *Builder {
 		r.note("resize")
 		return r.resizeErr
 	}
-	builderSBOMFn = func(*config.ImageTemplate, *BaselineInfo, string, *ResolutionPlan) (*overlaySBOMArtifacts, error) {
+	builderSBOMFn = func(*config.ImageTemplate, *BaselineInfo, string, *ResolutionPlan, *PreflightReport) (*overlaySBOMArtifacts, error) {
 		r.note("sbom")
 		if r.sbomErr != nil {
 			return nil, r.sbomErr
