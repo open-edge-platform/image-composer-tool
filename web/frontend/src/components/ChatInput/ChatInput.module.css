@@ -1,0 +1,106 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  background-color: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-sm);
+}
+
+.textarea {
+  background: transparent;
+  border: none;
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  font-size: 1rem;
+  resize: none;
+  padding: var(--space-xs);
+  min-height: 48px;
+  max-height: 200px;
+  outline: none;
+}
+
+.textarea::placeholder {
+  color: var(--color-text-muted);
+}
+
+.footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: var(--space-sm);
+}
+
+.modelSelectors {
+  display: flex;
+  gap: var(--space-sm);
+  align-items: center;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+
+.modelSelector {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+  transition: all 0.2s ease;
+}
+
+.modelSelector:hover {
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+}
+
+.sendButton {
+  padding: var(--space-sm) var(--space-xl);
+  background-color: var(--color-text-primary);
+  color: var(--color-bg-primary);
+  border: none;
+  border-radius: var(--radius-md);
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.sendButton:hover:not(:disabled) {
+  background-color: #408bf0;
+}
+
+.sendButton:disabled {
+  background-color: var(--color-bg-elevated);
+  color: var(--color-text-muted);
+  cursor: not-allowed;
+}
+
+.sendButton.generating {
+  background-color: var(--color-accent-primary);
+  color: #fff;
+  cursor: not-allowed;
+  opacity: 0.9;
+}
+
+.generatingState {
+  display: inline-flex;
+  align-items: center;
+}
+
+.generatingState span {
+  animation: bounce 1.4s infinite ease-in-out both;
+  display: inline-block;
+}
+
+.dot1 { animation-delay: -0.32s !important; }
+.dot2 { animation-delay: -0.16s !important; }
+.dot3 { animation-delay: 0s !important; }
+
+@keyframes bounce {
+  0%, 80%, 100% { transform: translateY(0); }
+  40% { transform: translateY(-4px); }
+}

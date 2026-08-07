@@ -888,35 +888,35 @@ components:
 
   responses:
     SessionNotFound:
-  description: |
-    No active session exists for this ID (unknown ID or session was deleted).
-    For timed-out sessions on **GET** `/api/v1/sessions/{id}`, the server
-    returns **410** with `SESSION_EXPIRED` instead.
-  content:
-    application/json:
-      schema:
-        $ref: "#/components/schemas/ErrorResponse"
-      example:
-        error:
-          code: "SESSION_NOT_FOUND"
-          message: "Session 's_7f3a1b2c' not found"
-          details: {}
-          request_id: "req_abc123"
+      description: |
+        No active session exists for this ID (unknown ID or session was deleted).
+        For timed-out sessions on **GET** `/api/v1/sessions/{id}`, the server
+        returns **410** with `SESSION_EXPIRED` instead.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: "SESSION_NOT_FOUND"
+              message: "Session 's_7f3a1b2c' not found"
+              details: {}
+              request_id: "req_abc123"
 
-SessionExpired:
-  description: |
-    The session ID was recognized but the session exceeded the inactivity
-    timeout and was removed. Create a new session to continue.
-  content:
-    application/json:
-      schema:
-        $ref: "#/components/schemas/ErrorResponse"
-      example:
-        error:
-          code: "SESSION_EXPIRED"
-          message: "Session 's_7f3a1b2c' has expired"
-          details: {}
-          request_id: "req_abc124"
+    SessionExpired:
+      description: |
+        The session ID was recognized but the session exceeded the inactivity
+        timeout and was removed. Create a new session to continue.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: "SESSION_EXPIRED"
+              message: "Session 's_7f3a1b2c' has expired"
+              details: {}
+              request_id: "req_abc124"
 
     QueryRequired:
       description: No query string provided.

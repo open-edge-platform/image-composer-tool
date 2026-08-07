@@ -146,9 +146,9 @@ func TestCleanYAMLResponse(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := cleanYAMLResponse(tt.input)
+			result := CleanYAMLResponse(tt.input)
 			if result != tt.expected {
-				t.Errorf("cleanYAMLResponse() = %q, expected %q", result, tt.expected)
+				t.Errorf("CleanYAMLResponse() = %q, expected %q", result, tt.expected)
 			}
 		})
 	}
