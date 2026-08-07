@@ -46,6 +46,7 @@ See the [Quick Start guide](./get-started/quick-start.md) to build your first im
 | [Custom Build Actions](./configuration/configure-additional-actions-for-build.md) | Commands during image compose (chroot)   |
 | [Custom Initrd Script](./configuration/configure-custom-initrd-script.md)       | Debian 13 GRUB initramfs-tools initrd hook |
 | [Multiple Repos](./configuration/configure-multiple-package-repositories.md)      | Using multiple package repositories      |
+| [Run with Reduced Privilege](./get-started/run-confined.md)                       | Confine builds to a minimal capability set |
 
 ## Get Help
 
@@ -72,6 +73,7 @@ Quick Start <./get-started/quick-start.md>
 Prerequisites <./get-started/prerequisites.md>
 Installation <./get-started/installation.md>
 Usage Guide <./get-started/usage-guide.md>
+Run with Reduced Privilege <./get-started/run-confined.md>
 AI Template Generation (RAG) <./get-started/ai-template-generation.md>
 
 :::

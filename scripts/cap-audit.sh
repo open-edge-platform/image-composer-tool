@@ -28,23 +28,21 @@
 
 set -uo pipefail
 
-# --- Candidate minimal capability set (keep list). Kept in sync with the ADR. ---
-# CAP_SYS_ADMIN    losetup, mount, bind, sysfs, mkswap
-# CAP_SYS_CHROOT   entering the chroot
-# CAP_CHOWN        own root-owned rootfs files
-# CAP_FOWNER       operate on files not owned by the euid
-# CAP_DAC_OVERRIDE read/traverse root-owned trees regardless of perms
-# CAP_MKNOD        device nodes in the rootfs
-# CAP_SETUID/SETGID accounts created inside the rootfs (useradd/passwd)
-# CAP_SETFCAP      file capabilities set on binaries inside the rootfs (e.g. ping)
-# CAP_DAC_READ_SEARCH read-bypass distinct from DAC_OVERRIDE (metadata/loop reads)
-# CAP_FSETID       preserve setuid/setgid bits when writing rootfs files
-DEFAULT_KEEP_CAPS="cap_sys_admin,cap_sys_chroot,cap_chown,cap_fowner,cap_dac_override,cap_mknod,cap_setuid,cap_setgid,cap_setfcap,cap_dac_read_search,cap_fsetid"
+err() { printf 'cap-audit: %s\n' "$*" >&2; }
+
+# --- Candidate minimal capability set (keep list). ---
+# Single-sourced from ict-capabilities.env so the audit and the production
+# wrapper (ict-confined.sh) / systemd unit never diverge. Override for an
+# experiment with KEEP_CAPS=... in the environment.
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+if ! source "$_SCRIPT_DIR/ict-capabilities.env"; then
+    err "cannot source $_SCRIPT_DIR/ict-capabilities.env"
+    exit 2
+fi
 
 ICT_BIN="${ICT_BIN:-./image-composer-tool}"
-KEEP_CAPS="${KEEP_CAPS:-$DEFAULT_KEEP_CAPS}"
-
-err() { printf 'cap-audit: %s\n' "$*" >&2; }
+KEEP_CAPS="${KEEP_CAPS:-$ICT_MIN_CAPS}"
 
 if [[ $# -lt 1 ]]; then
     err "usage: sudo $0 <template.yml> [extra ict build args...]"

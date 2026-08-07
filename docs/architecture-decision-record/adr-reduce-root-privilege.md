@@ -104,10 +104,22 @@ ICT under a dropped capability set (via `capsh`) and run one real Ubuntu 24.04
 build. Whatever fails identifies the true minimal set. This is the go/no-go gate
 before any code rework. Deliverable: `scripts/cap-audit.sh` + this ADR.
 
-**Phase 1 — ship the minimal-capability invocation as the portable default.**
-Document and provide a `setcap` wrapper / systemd unit granting only the
-confirmed set. No change to the build mechanism. Verify across the build matrix
-(Ubuntu / ELXR / EMT / azl, x86 + ARM).
+**Phase 1 (DELIVERED, 2026-08-07) — minimal-capability invocation as the
+portable default.** No change to the build mechanism. Deliverables:
+- `scripts/ict-capabilities.env` — the minimal set, single-sourced.
+- `scripts/ict-confined.sh` — CLI wrapper that reduces the bounding set to the
+  minimal set (the audited `capsh --drop` mechanism) and runs ICT, so every
+  build child is bounded too.
+- `deploy/systemd/image-composer-tool.service` — server unit with
+  `CapabilityBoundingSet` reduced to the same set. Documents that the server's
+  `--sudo` per-command model would escape a process-level bounding set, so the
+  unit runs the server as root without `--sudo` (build steps are direct
+  children the unit bounds).
+- `docs/user-guide/get-started/run-confined.md` — how-to.
+
+The audit harness (`scripts/cap-audit.sh`) now also sources the shared env, so
+the audited set and the shipped set cannot drift. Remaining verification: the
+full build matrix (Ubuntu / ELXR / EMT / azl, x86 + ARM) under the wrapper.
 
 **Phase 2 (optional) — privileged-helper split.** Route the
 `CAP_SYS_ADMIN` / `CAP_SYS_CHROOT` core (loopdev + mount + chroot-enter) through
