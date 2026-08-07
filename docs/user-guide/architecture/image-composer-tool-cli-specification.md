@@ -148,7 +148,7 @@ image-composer-tool build [flags] TEMPLATE_FILE
 | `--dotfile, -f FILE` | Generate a dot file for the merged template dependency graph (user + defaults with resolved packages). |
 | `--system-packages-only` | When paired with `--dotfile`, limit the dependency graph to roots defined in `SystemConfig.Packages`. Dependencies pulled in by those roots still appear, but essentials/kernel/bootloader packages aren't drawn unless required by a system package. |
 | `--no-cache` | Build from scratch: create fresh, unique cache and workspace directories (ignoring any existing caches), then remove them once the build finishes. The final image is copied into the configured `work_dir`. Cannot be combined with `--cache-dir` or `--work-dir`. |
-| `--inspect` / `--no-inspect` | Toggle post-build inspection of the emitted overlay image (default: on). The inspection reports the partition layout, filesystem, bootloader, and SBOM of the finished image. Use `--no-inspect` to skip it. |
+| `--inspect` | Run a post-build inspection of the emitted overlay image and write the report to an artifact file (default: **off**). The report covers the partition layout, filesystem, bootloader, and SBOM of the finished image. It is written next to the emitted image in the build artifacts directory as `<image-name>-<version>.inspect.txt` (the image artifact's base name with a `.inspect.txt` extension); the console shows only a one-line pointer to that file, not the report itself. When the flag is unset, no inspection runs, no file is written, and console output is unchanged. |
 | `--cve-check` | Enable CVE analysis of the built image. **Not yet implemented** — passing this flag currently returns an error. |
 | `--baseline-image FILE` | Override `baseline.source.path` from the template (overlay mode only). CLI value takes precedence over the template. |
 
@@ -169,8 +169,9 @@ sudo -E image-composer-tool build --dotfile deps.dot my-image-template.yml
 # Limit the graph to SystemConfig.Packages roots
 sudo -E image-composer-tool build --dotfile system.dot --system-packages-only my-image-template.yml
 
-# Overlay build without post-build image inspection
-sudo -E image-composer-tool build --no-inspect overlay-template.yml
+# Overlay build with a post-build image inspection report written to
+# <image-name>-<version>.inspect.txt in the build artifacts directory
+sudo -E image-composer-tool build --inspect overlay-template.yml
 
 # Overlay build overriding the baseline image path
 sudo -E image-composer-tool build --baseline-image /images/base.raw overlay-template.yml
@@ -442,6 +443,24 @@ image-composer-tool compare --hash-images=true image-v1.raw image-v2.raw
 # Perform SPDX comparison
 image-composer-tool compare --format=json --mode=spdx spdx-file1.json spdx-file2.json
 ```
+
+**Comparing overlay build outputs:**
+
+The compare command works directly against
+[overlay build](image-composer-tool-templates.md#baseline) artifacts — the
+baseline RAW, the overlay RAW, and the emitted `*.complete.spdx.json` /
+`*.delta.spdx.json` SBOM sidecars. Compare the baseline RAW against the overlay
+RAW for a structural/binary diff, and use `--mode=spdx` with the complete SBOM
+for an accurate package-level (added/removed/upgraded) diff. For a full
+walkthrough with sample commands and expected output, see
+[Comparing Overlay Outputs](../get-started/usage-guide.md#comparing-overlay-outputs)
+in the Usage Guide.
+
+In `--mode=spdx`, either argument may be a standalone SPDX JSON file or an OS
+image — an image's embedded SBOM (at `/usr/share/sbom`) is extracted
+automatically. In the default image-compare modes (`diff`/`summary`/`full`) the
+SBOM diff reflects metadata only (package count, canonical hash); use
+`--mode=spdx` for a per-package breakdown.
 
 ### Cache Command
 

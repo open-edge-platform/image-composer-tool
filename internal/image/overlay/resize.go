@@ -170,10 +170,24 @@ func planResize(copyPath, target string, allowResize bool) (resizePlan, error) {
 		return resizePlan{}, fmt.Errorf("overlay resize: requested disk.size %q (%d bytes) is too large", target, targetBytes)
 	}
 
-	if int64(targetBytes) <= current {
+	// A target smaller than the current image is a shrink request. Overlay resize
+	// is grow-only — shrinking a disk image safely requires shrinking the
+	// filesystem and partition first, which overlay mode does not do — so reject it
+	// with an actionable error rather than silently ignoring the smaller size (which
+	// would leave the user believing the image was shrunk).
+	if int64(targetBytes) < current {
+		return resizePlan{}, fmt.Errorf(
+			"overlay resize: shrink not supported: requested disk.size %q (%d bytes) is smaller than the "+
+				"current baseline image (%d bytes); overlay resize is grow-only. Remove or raise disk.size to "+
+				"at least the baseline size to proceed",
+			target, targetBytes, current)
+	}
+
+	// An equal target needs no resize: it is a legitimate no-op, not a shrink.
+	if int64(targetBytes) == current {
 		return resizePlan{
 			CurrentBytes: current,
-			Reason:       fmt.Sprintf("requested size %d <= current size %d (overlay resize is grow-only)", targetBytes, current),
+			Reason:       fmt.Sprintf("requested size %d == current size %d (no resize needed)", targetBytes, current),
 		}, nil
 	}
 

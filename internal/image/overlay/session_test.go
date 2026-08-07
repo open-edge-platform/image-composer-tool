@@ -19,12 +19,12 @@ type builderSeams struct {
 	preflight   func(*BaselineInfo, []BaselinePackage, *ResolutionPlan, *config.OverlayPolicy) (*PreflightReport, error)
 	install     func(*BaselineInfo, string, *ResolutionPlan, *PreflightReport) (*InstallResult, error)
 	configure   func(*config.ImageTemplate, string) error
-	regenBoot   func(*BaselineInfo, string, *InstallResult, *ResolutionPlan) error
+	regenBoot   func(*BaselineInfo, string, *InstallResult, *ResolutionPlan, bool) error
 	grubRegen   func(*config.ImageTemplate, *BaselineInfo, string) error
-	addFiles    func(*config.ImageTemplate, string) error
+	addFiles    func(*config.ImageTemplate, string, string) error
 	resize      func(*config.ImageTemplate, *Context, *Layout) error
-	sbom        func(*BaselineInfo, string, *ResolutionPlan) error
-	emit        func(*config.ImageTemplate, string, string) (string, error)
+	sbom        func(*config.ImageTemplate, *BaselineInfo, string, *ResolutionPlan, *PreflightReport) (*overlaySBOMArtifacts, error)
+	emit        func(*config.ImageTemplate, string, string, *overlaySBOMArtifacts) (string, error)
 	inspect     func(string) error
 	convert     func(string, *config.ImageTemplate) error
 }
@@ -63,6 +63,7 @@ type builderRecorder struct {
 
 	acquireErr   error
 	mountErr     error
+	teardownErr  error
 	detachErr    error
 	detectErr    error
 	resolveErr   error
@@ -80,6 +81,10 @@ type builderRecorder struct {
 
 	report    *PreflightReport
 	installed *InstallResult
+
+	// emitSBOM captures the SBOM artifacts the emit seam received, so a test can
+	// assert the SBOM stage's output is threaded through to emit.
+	emitSBOM *overlaySBOMArtifacts
 }
 
 func (r *builderRecorder) note(name string) { r.calls = append(r.calls, name) }
@@ -110,7 +115,7 @@ func installOverlayTestBuilder(t *testing.T, r *builderRecorder) *Builder {
 		if r.mountErr != nil {
 			return nil, nil, r.mountErr
 		}
-		teardown := func() error { r.teardowns++; return nil }
+		teardown := func() error { r.teardowns++; return r.teardownErr }
 		return &Layout{RootMount: "/wd/mnt/root", RootDevice: "/dev/loop0p2", RootFSType: "ext4", PartitionTable: partitionTableGPT}, teardown, nil
 	}
 	builderDetach = func(*Ingestor, *Context) error { r.detaches++; return r.detachErr }
@@ -150,7 +155,7 @@ func installOverlayTestBuilder(t *testing.T, r *builderRecorder) *Builder {
 		r.note("configure")
 		return r.configureErr
 	}
-	builderRegenBootFn = func(*BaselineInfo, string, *InstallResult, *ResolutionPlan) error {
+	builderRegenBootFn = func(*BaselineInfo, string, *InstallResult, *ResolutionPlan, bool) error {
 		r.note("regenBoot")
 		return r.regenErr
 	}
@@ -158,20 +163,28 @@ func installOverlayTestBuilder(t *testing.T, r *builderRecorder) *Builder {
 		r.note("grubRegen")
 		return r.grubRegenErr
 	}
-	builderAddFilesFn = func(*config.ImageTemplate, string) error {
-		r.note("addFiles")
+	builderAddFilesFn = func(_ *config.ImageTemplate, _ string, stage string) error {
+		if stage == config.AdditionalFileStageDefault {
+			r.note("addFiles")
+		} else {
+			r.note("addFiles:" + stage)
+		}
 		return r.addFilesErr
 	}
 	builderResizeFn = func(*config.ImageTemplate, *Context, *Layout) error {
 		r.note("resize")
 		return r.resizeErr
 	}
-	builderSBOMFn = func(*BaselineInfo, string, *ResolutionPlan) error {
+	builderSBOMFn = func(*config.ImageTemplate, *BaselineInfo, string, *ResolutionPlan, *PreflightReport) (*overlaySBOMArtifacts, error) {
 		r.note("sbom")
-		return r.sbomErr
+		if r.sbomErr != nil {
+			return nil, r.sbomErr
+		}
+		return &overlaySBOMArtifacts{deltaPath: "/tmp/delta.json", completePath: "/tmp/complete.json"}, nil
 	}
-	builderEmitFn = func(_ *config.ImageTemplate, _, version string) (string, error) {
+	builderEmitFn = func(_ *config.ImageTemplate, _, version string, sbom *overlaySBOMArtifacts) (string, error) {
 		r.note("emit:" + version)
+		r.emitSBOM = sbom
 		if r.emitErr != nil {
 			return "", r.emitErr
 		}
@@ -205,8 +218,10 @@ func TestBuilder_HappyPathOrdersStagesAndCleansUp(t *testing.T) {
 
 	// This test template leaves InspectEnabled at its zero value (false), so
 	// inspection is skipped and conversion runs directly after emit. (The CLI
-	// defaults --inspect on; see TestBuilder_InspectRunsAfterEmitWhenEnabled.)
-	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "resize", "install", "configure", "regenBoot", "grubRegen", "addFiles", "sbom", "emit:1.0", "convert:/out/img-1.0.raw"}
+	// defaults --inspect off; see TestBuilder_InspectRunsAfterEmitWhenEnabled.)
+	// The pre-initramfs additionalFiles pass runs BEFORE regenBoot; the default
+	// pass runs after grubRegen, as before.
+	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "resize", "install", "configure", "addFiles:pre-initramfs", "regenBoot", "grubRegen", "addFiles", "sbom", "emit:1.0", "convert:/out/img-1.0.raw"}
 	if !equalStrings(r.calls, want) {
 		t.Errorf("stage order = %v, want %v", r.calls, want)
 	}
@@ -222,7 +237,7 @@ func TestBuilder_HappyPathOrdersStagesAndCleansUp(t *testing.T) {
 	// execution order, so the caller can render an overlay timing table.
 	wantStages := []string{
 		"Acquire & Mount Baseline", "Inspect Baseline", "Resolve Packages", "Preflight",
-		"Resize", "Install Packages", "Configurations", "Boot Regeneration", "GRUB Regeneration", "Additional Files", "Generate SBOM", "Emit Artifact", "Convert Artifacts",
+		"Resize", "Install Packages", "Configurations", "Additional Files (pre-initramfs)", "Boot Regeneration", "GRUB Regeneration", "Additional Files", "Generate SBOM", "Emit Artifact", "Convert Artifacts",
 	}
 	gotStages := make([]string, 0, len(b.Timings()))
 	for _, ts := range b.Timings() {
@@ -230,6 +245,32 @@ func TestBuilder_HappyPathOrdersStagesAndCleansUp(t *testing.T) {
 	}
 	if !equalStrings(gotStages, wantStages) {
 		t.Errorf("timing stages = %v, want %v", gotStages, wantStages)
+	}
+}
+
+// TestBuilder_EmitReceivesBothSBOMArtifacts confirms the SBOM stage's output (the
+// delta and complete SBOM paths) is threaded through to the emit stage, so both
+// SBOM sidecars can be written beside the artifact.
+func TestBuilder_EmitReceivesBothSBOMArtifacts(t *testing.T) {
+	defer saveBuilderSeams().restore()
+	r := &builderRecorder{}
+	b := installOverlayTestBuilder(t, r)
+
+	if err := b.Preprocess(); err != nil {
+		t.Fatalf("Preprocess: %v", err)
+	}
+	if err := b.Build(); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if err := b.Postprocess(nil); err != nil {
+		t.Fatalf("Postprocess: %v", err)
+	}
+
+	if r.emitSBOM == nil {
+		t.Fatal("emit did not receive SBOM artifacts from the SBOM stage")
+	}
+	if r.emitSBOM.deltaPath == "" || r.emitSBOM.completePath == "" {
+		t.Errorf("emit received incomplete SBOM artifacts: %+v", r.emitSBOM)
 	}
 }
 
@@ -252,7 +293,7 @@ func TestBuilder_InspectRunsAfterEmitWhenEnabled(t *testing.T) {
 	// Inspection runs immediately after emit, against the emitted RAW artifact,
 	// and conversion follows it (a request that omits raw would delete the RAW,
 	// so the RAW inspection must happen first).
-	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "resize", "install", "configure", "regenBoot", "grubRegen", "addFiles", "sbom", "emit:1.0", "inspect:/out/img-1.0.raw", "convert:/out/img-1.0.raw"}
+	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "resize", "install", "configure", "addFiles:pre-initramfs", "regenBoot", "grubRegen", "addFiles", "sbom", "emit:1.0", "inspect:/out/img-1.0.raw", "convert:/out/img-1.0.raw"}
 	if !equalStrings(r.calls, want) {
 		t.Errorf("stage order = %v, want %v", r.calls, want)
 	}
@@ -388,7 +429,7 @@ func TestBuilder_GrubRegenFailureStopsBuild(t *testing.T) {
 	}
 	// GRUB regen is the last build stage; a failure there must halt before b.built
 	// is set, so no SBOM/emit runs and no image is produced.
-	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "resize", "install", "configure", "regenBoot", "grubRegen"}
+	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "resize", "install", "configure", "addFiles:pre-initramfs", "regenBoot", "grubRegen"}
 	if !equalStrings(r.calls, want) {
 		t.Errorf("stage order on GRUB regen failure = %v, want %v", r.calls, want)
 	}
@@ -701,6 +742,100 @@ func TestBuilder_DetachFailureRetainsLoopForRetry(t *testing.T) {
 	}
 }
 
+// TestBuilder_UnmountFailureRetainsTeardownForRetry asserts that a failed mount
+// teardown does NOT discard the teardown closure, so a subsequent cleanup retries
+// the unmount (rather than treating a still-mounted layout as released after the
+// first failure — which would leak the mount, mirroring the loop-detach retry
+// contract). It also confirms a later successful teardown stops the retries.
+func TestBuilder_UnmountFailureRetainsTeardownForRetry(t *testing.T) {
+	defer saveBuilderSeams().restore()
+	r := &builderRecorder{teardownErr: errors.New("target is busy")}
+	b := installOverlayTestBuilder(t, r)
+
+	if err := b.Preprocess(); err != nil {
+		t.Fatalf("Preprocess: %v", err)
+	}
+	// First cleanup: teardown fails and is retained; detach still runs.
+	if err := b.cleanupOnce(); err == nil {
+		t.Fatal("expected the unmount failure to surface")
+	}
+	if r.teardowns != 1 {
+		t.Errorf("teardown attempts = %d, want 1", r.teardowns)
+	}
+	// Second cleanup RETRIES the teardown because it was retained after the failure.
+	if err := b.cleanupOnce(); err == nil {
+		t.Fatal("expected the retained unmount to be retried and fail again")
+	}
+	if r.teardowns != 2 {
+		t.Errorf("teardown attempts = %d, want 2 (a failed unmount must be retried, not skipped)", r.teardowns)
+	}
+	// A later successful teardown clears it and stops retrying.
+	r.teardownErr = nil
+	if err := b.cleanupOnce(); err != nil {
+		t.Fatalf("cleanupOnce after clearing teardownErr: %v", err)
+	}
+	if r.teardowns != 3 {
+		t.Errorf("teardown attempts = %d, want 3 (retry once more, then succeed)", r.teardowns)
+	}
+	if err := b.cleanupOnce(); err != nil {
+		t.Fatalf("cleanupOnce after success: %v", err)
+	}
+	if r.teardowns != 3 {
+		t.Errorf("teardown attempts = %d, want 3 (no unmount after a successful release)", r.teardowns)
+	}
+}
+
+// TestBuilder_RetainsWorkspaceCopyWhenMountOutlivesLoop asserts the workspace
+// baseline copy is NOT force-removed on an unsuccessful build when a mount is still
+// live, even if the loop device released. A failed unmount followed by a successful
+// `losetup -d` clears LoopDevPath while the mount stays active; unlinking the
+// backing file then would leave a live mount over a deleted file. The copy must be
+// retained (removeCopies==0) until BOTH the loop and all mounts are released.
+func TestBuilder_RetainsWorkspaceCopyWhenMountOutlivesLoop(t *testing.T) {
+	defer saveBuilderSeams().restore()
+	// Build fails (so the path is "unsuccessful"); unmount fails but detach succeeds,
+	// so LoopDevPath clears while mountTeardown is retained.
+	r := &builderRecorder{installErr: errors.New("boom"), teardownErr: errors.New("target is busy")}
+	b := installOverlayTestBuilder(t, r)
+
+	if err := b.Preprocess(); err != nil {
+		t.Fatalf("Preprocess: %v", err)
+	}
+	buildErr := b.Build()
+	if buildErr == nil {
+		t.Fatal("expected the build to fail")
+	}
+	_ = b.Postprocess(buildErr)
+
+	// Loop released (detach succeeded) but the mount is still live (teardown failed),
+	// so the copy must be retained despite the unsuccessful build.
+	if r.removeCopies != 0 {
+		t.Errorf("workspace copy must be retained while a mount is still live, got removeCopies=%d", r.removeCopies)
+	}
+}
+
+// TestBuilder_RemovesWorkspaceCopyWhenFullyReleased is the counterpart: on an
+// unsuccessful build where BOTH the loop and all mounts released cleanly, the
+// orphaned workspace copy IS force-removed exactly once.
+func TestBuilder_RemovesWorkspaceCopyWhenFullyReleased(t *testing.T) {
+	defer saveBuilderSeams().restore()
+	r := &builderRecorder{installErr: errors.New("boom")} // clean teardown + detach
+	b := installOverlayTestBuilder(t, r)
+
+	if err := b.Preprocess(); err != nil {
+		t.Fatalf("Preprocess: %v", err)
+	}
+	buildErr := b.Build()
+	if buildErr == nil {
+		t.Fatal("expected the build to fail")
+	}
+	_ = b.Postprocess(buildErr)
+
+	if r.removeCopies != 1 {
+		t.Errorf("workspace copy must be force-removed once when fully released, got removeCopies=%d", r.removeCopies)
+	}
+}
+
 func TestBuilder_ImageVersionPrefersTemplateThenBaseline(t *testing.T) {
 	b := &Builder{template: &config.ImageTemplate{Image: config.ImageInfo{Version: "2.5"}}}
 	if got := b.imageVersion(); got != "2.5" {
@@ -744,6 +879,34 @@ func TestOverlayArtifactTypeLabel(t *testing.T) {
 				t.Errorf("overlayArtifactTypeLabel() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestOverlayInspectReportPath(t *testing.T) {
+	tests := []struct {
+		name     string
+		artifact string
+		want     string
+	}{
+		{"raw image", "/wd/ubuntu/imagebuild/overlay/myimage-1.0.raw", "/wd/ubuntu/imagebuild/overlay/myimage-1.0" + overlayInspectReportSuffix},
+		{"qcow2 image", "/out/img.qcow2", "/out/img" + overlayInspectReportSuffix},
+		{"no extension", "/out/img", "/out/img" + overlayInspectReportSuffix},
+		{"dotted name keeps all but final ext", "/out/img-24.04.raw", "/out/img-24.04" + overlayInspectReportSuffix},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := overlayInspectReportPath(tt.artifact); got != tt.want {
+				t.Errorf("overlayInspectReportPath(%q) = %q, want %q", tt.artifact, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestInspectOverlayArtifact_EmptyPath confirms the inspection reporter rejects an
+// empty artifact path up front rather than attempting to inspect or write.
+func TestInspectOverlayArtifact_EmptyPath(t *testing.T) {
+	if err := inspectOverlayArtifact("   "); err == nil {
+		t.Fatal("expected error for empty artifact path, got nil")
 	}
 }
 

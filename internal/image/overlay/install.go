@@ -46,11 +46,12 @@ type installRequest struct {
 	artifactChrootDir string
 	// items are the packages to install, each paired with its artifact filename.
 	items []plannedInstall
-	// upgrade is true when the approved plan replaces at least one baseline
-	// package with a newer version (preflight classified an upgrade under an
-	// allowUpgrade policy). It selects the package-manager mode that can replace
-	// an installed package: the rpm backend switches from `rpm -i` to `rpm -U`.
-	// The deb backend ignores it — `dpkg -i` already upgrades in place.
+	// upgrade is true when the approved plan replaces at least one baseline package
+	// with a newer version (an allowUpgrade-gated upgrade) OR carries an rpm
+	// Obsoletes-driven removal (which `rpm -U` performs implicitly). It selects the
+	// package-manager mode that can replace/obsolete an installed package: the rpm
+	// backend switches from `rpm -i` to `rpm -U`. The deb backend ignores it —
+	// `dpkg -i` already upgrades in place and deb has no Obsoletes mechanism.
 	upgrade bool
 }
 
@@ -63,9 +64,30 @@ type installerBackend interface {
 	// install installs the request's artifacts into the chroot, capturing the
 	// package-manager output to the build log.
 	install(req installRequest) error
+	// removePackages removes the named baseline packages from the chroot BEFORE
+	// install (a conflict-driven removal permitted by allowPackageRemoval, e.g.
+	// removing initramfs-tools so dracut can install). It is a no-op when names is
+	// empty. Preflight has already gated every removal (bootloader/kernel packages
+	// are never in this set), so the backend removes exactly the approved names.
+	removePackages(chrootPath string, names []string) error
 	// verifyInstalled queries the baseline package database in chrootPath and
 	// returns the names of the requested packages that are NOT installed.
 	verifyInstalled(chrootPath string, pkgs []ResolvedPackage) (missing []string, err error)
+	// auditDependencies recomputes the dependency graph from the on-disk package
+	// state in chrootPath and returns the set of UNMET-dependency FAILURES as stable,
+	// comparable descriptors ("<package-identity> | <requirement>"; see
+	// parseUnmetDependencyFailures). It reads local state only (no network), so it
+	// catches a baseline package left with a broken dependency after a force-removal —
+	// which verifyInstalled (new packages only) and the package DB's install-state
+	// flags cannot see. `broken` is empty when the dependency tree is satisfied;
+	// `output` carries the tool's diagnostic. A non-nil error means the audit itself
+	// could not run (e.g. the check tool is absent from the baseline), which the
+	// caller treats as "cannot audit". Diffing the pre-removal descriptor set against
+	// the post-install set lets the caller fail on a dependency failure the removal
+	// INTRODUCED while ignoring failures the baseline already had — at
+	// package+requirement granularity, so a new failure on an already-broken package
+	// is still caught and a version/arch change is not mistaken for new breakage.
+	auditDependencies(chrootPath string) (broken []string, output string, err error)
 }
 
 // Install-stage indirection seams over the impure dependencies (the package
@@ -145,11 +167,69 @@ func InstallOverlayPackages(info *BaselineInfo, rootMount string, plan *Resoluti
 	}
 	defer teardown(&err)
 
+	// Conflict-driven removals (permitted by allowPackageRemoval) run FIRST, so the
+	// conflicting baseline package is gone before its replacement is unpacked (e.g.
+	// remove initramfs-tools before installing dracut). Preflight populated ToRemove
+	// only when the policy opted in and never includes bootloader/kernel packages.
+	//
+	// A force-removal (dpkg --force-depends / rpm -e --nodeps) can leave an UNRELATED
+	// baseline package with an unmet dependency that its replacement does not
+	// satisfy. verifyInstalled only checks the newly-added packages, so such
+	// collateral breakage would otherwise go unreported and the build would claim
+	// success. To catch it, snapshot the SET of unmet-dependency FAILURES
+	// (package-identity + requirement) BEFORE the removal, then audit again after
+	// install and fail on any failure that is new (present after but not before) — a
+	// pre-existing broken baseline is not blamed on the overlay, yet a NEW breakage
+	// the removal introduces is caught, INCLUDING a new missing requirement on a
+	// package that was already broken on a different requirement.
+	//
+	// preRemovalBroken holds the failure descriptors already present before the
+	// removal, so the post-install audit can fail only on NEW ones.
+	var preRemovalBroken map[string]bool
+	if len(report.ToRemove) > 0 {
+		// Fail CLOSED when the audit cannot be established: a force-removal
+		// (--force-depends / --nodeps) with no working whole-database integrity check
+		// could silently leave unrelated baseline packages broken. Rather than run the
+		// destructive removal with the only safety net disabled, abort with an
+		// actionable error BEFORE removing anything. The build has changed nothing yet,
+		// so this is a clean refusal, not a partial state.
+		broken, _, aerr := backend.auditDependencies(rootMount)
+		if aerr != nil {
+			return nil, fmt.Errorf("overlay install: cannot verify dependency integrity for the requested package removal(s) — "+
+				"the baseline dependency-audit tool is unavailable (%w); install it in the baseline (apt-get for deb, dnf for rpm) "+
+				"or drop allowPackageRemoval so no baseline package is removed", aerr)
+		}
+		preRemovalBroken = make(map[string]bool, len(broken))
+		for _, f := range broken {
+			preRemovalBroken[f] = true
+		}
+		if len(broken) > 0 {
+			sort.Strings(broken)
+			log.Warnf("Overlay install: the baseline already has %d unmet-dependency failure(s) BEFORE the overlay (%s); only NEW failures introduced by the removal will fail the build",
+				len(broken), strings.Join(broken, "; "))
+		}
+
+		log.Infof("Overlay install: removing %d conflicting baseline package(s) before install: %s",
+			len(report.ToRemove), strings.Join(report.ToRemove, ", "))
+		if err = backend.removePackages(rootMount, report.ToRemove); err != nil {
+			return nil, fmt.Errorf("overlay install: failed to remove %d conflicting baseline package(s): %w",
+				len(report.ToRemove), err)
+		}
+	}
+
+	// Select the upgrade-capable package-manager mode (rpm -U) when the approved plan
+	// either upgrades a baseline package OR carries an rpm Obsoletes-driven removal.
+	// An obsoletion is NOT an ActionUpgrade, so report.Upgrades would miss it and the
+	// batch would run under `rpm -i`, which neither replaces nor obsoletes an
+	// installed package — the obsoletion would silently not happen. An Obsoletes-
+	// driven removal is precisely an approved removal that is not an explicit one, so
+	// it shows up as ApprovedRemovals having more entries than ToRemove.
+	upgradeMode := report.Upgrades > 0 || len(report.ApprovedRemovals) > len(report.ToRemove)
 	if err = backend.install(installRequest{
 		chrootPath:        rootMount,
 		artifactChrootDir: chrootArtifactDir,
 		items:             items,
-		upgrade:           report.Upgrades > 0,
+		upgrade:           upgradeMode,
 	}); err != nil {
 		// A "no space left on device" failure here means the baseline root filled up
 		// while unpacking the added packages. Overlay mode does not auto-grow the
@@ -169,6 +249,36 @@ func InstallOverlayPackages(info *BaselineInfo, rootMount string, plan *Resoluti
 		sort.Strings(missing)
 		return nil, fmt.Errorf("overlay install: %d requested package(s) not present after install: %s",
 			len(missing), strings.Join(missing, ", "))
+	}
+
+	// After a force-removal, audit the whole installed set's dependency graph so
+	// collateral breakage of an UNRELATED baseline package (an unmet dependency the
+	// replacement does not satisfy) fails the build rather than shipping silently.
+	// The pre-removal audit above already established a reliable snapshot (the build
+	// aborts before removing anything if it could not), so this always runs when a
+	// removal occurred and fails on packages that are NEWLY broken (broken after
+	// install but not before) — a pre-existing broken baseline is not blamed on the
+	// overlay, while a new (possibly different) breakage the removal introduced is
+	// still caught.
+	if len(report.ToRemove) > 0 {
+		broken, out, aerr := backend.auditDependencies(rootMount)
+		if aerr != nil {
+			// The audit could not run post-install even though it ran pre-removal:
+			// surface it rather than silently skipping the integrity guarantee.
+			return nil, fmt.Errorf("overlay install: failed to audit dependency integrity after removals: %w", aerr)
+		}
+		var newlyBroken []string
+		for _, f := range broken {
+			if !preRemovalBroken[f] {
+				newlyBroken = append(newlyBroken, f)
+			}
+		}
+		if len(newlyBroken) > 0 {
+			sort.Strings(newlyBroken)
+			return nil, fmt.Errorf("overlay install: package removals introduced %d unmet dependency failure(s) that were satisfied before the overlay (%s) "+
+				"(a removed package was still required by an unrelated baseline package); add the missing dependency to the overlay or drop the removal:%s",
+				len(newlyBroken), strings.Join(newlyBroken, "; "), formatCommandOutput(out))
+		}
 	}
 
 	installed := make([]string, 0, len(pkgs))
@@ -421,6 +531,68 @@ func (b *debInstallerBackend) install(req installRequest) error {
 		len(paths), maxInstallPasses, lastErr, formatCommandOutput(lastOut))
 }
 
+// removePackages purges the named baseline packages with dpkg before the install.
+// --force-depends is required for the conflict-driven case: the package being
+// removed (e.g. initramfs-tools) may still be depended on at removal time by
+// packages the replacement (dracut) will satisfy once installed, so dpkg's normal
+// dependency check would refuse. Preflight has already approved the removal set
+// (and excluded bootloader/kernel packages), so forcing the dependency check here
+// is the deliberate, gated behavior — not a blanket override. --purge also drops
+// config files so the replacement package's files do not collide with orphaned
+// conffiles. "--" guards a name that begins with '-'.
+func (b *debInstallerBackend) removePackages(chrootPath string, names []string) error {
+	if len(names) == 0 {
+		return nil
+	}
+	quoted := make([]string, 0, len(names))
+	for _, n := range names {
+		quoted = append(quoted, shell.QuoteArg(n))
+	}
+	envVars := []string{
+		"DEBIAN_FRONTEND=noninteractive",
+		"DEBCONF_NONINTERACTIVE_SEEN=true",
+		"DEBCONF_NOWARNINGS=yes",
+	}
+	cmd := "dpkg --purge --force-depends -- " + strings.Join(quoted, " ")
+	out, err := shell.ExecCmdWithStream(cmd, true, chrootPath, envVars)
+	if err != nil {
+		return fmt.Errorf("dpkg --purge of %d package(s) failed: %w%s", len(names), err, formatCommandOutput(out))
+	}
+	return nil
+}
+
+// auditDependencies runs `apt-get check`, which recomputes the dependency graph
+// from the local dpkg status database (no network, no list update) and exits
+// non-zero printing "unmet dependencies" when an installed package's dependency
+// is missing — exactly the collateral damage a `dpkg --purge --force-depends`
+// removal can leave behind. A clean run (exit 0) returns an empty set; a non-zero
+// exit whose output carries the "unmet dependencies" marker returns the offending
+// package names parsed from the report; any other failure (apt-get absent from a
+// minimal baseline, etc.) is returned as an error so the caller skips the check.
+func (b *debInstallerBackend) auditDependencies(chrootPath string) ([]string, string, error) {
+	envVars := []string{
+		"DEBIAN_FRONTEND=noninteractive",
+		"DEBCONF_NONINTERACTIVE_SEEN=true",
+		"DEBCONF_NOWARNINGS=yes",
+	}
+	out, err := shell.ExecCmdSilent("apt-get check", true, chrootPath, envVars)
+	if err == nil {
+		return nil, out, nil // dependency tree is satisfied
+	}
+	if hasUnmetDependencyMarker(out) {
+		broken := parseUnmetDependencyFailures(out)
+		if len(broken) == 0 {
+			// The report is marked broken but no offending package could be parsed (an
+			// unhandled diagnostic shape). Returning an empty set would make the caller
+			// conclude "no new breakage" and ship a possibly-broken image, so treat an
+			// unparseable-but-broken report as an integrity-check failure instead.
+			return nil, out, fmt.Errorf("apt-get check reported unmet dependencies but no package could be parsed from the report%s", formatCommandOutput(out))
+		}
+		return broken, out, nil // genuine unmet dependencies
+	}
+	return nil, out, fmt.Errorf("apt-get check could not run: %w%s", err, formatCommandOutput(out))
+}
+
 func (b *debInstallerBackend) verifyInstalled(chrootPath string, pkgs []ResolvedPackage) ([]string, error) {
 	var missing []string
 	for _, p := range pkgs {
@@ -495,6 +667,54 @@ func (b *rpmInstallerBackend) install(req installRequest) error {
 	return nil
 }
 
+// removePackages erases the named baseline packages with rpm before the install.
+// --nodeps mirrors the deb --force-depends rationale: the conflicting package
+// being removed may still be depended on until its replacement is installed, so
+// rpm's dependency check would otherwise refuse. Preflight has already approved
+// the set (bootloader/kernel packages excluded), so bypassing the dependency check
+// here is the deliberate, gated behavior. "--" guards a name beginning with '-'.
+func (b *rpmInstallerBackend) removePackages(chrootPath string, names []string) error {
+	if len(names) == 0 {
+		return nil
+	}
+	quoted := make([]string, 0, len(names))
+	for _, n := range names {
+		quoted = append(quoted, shell.QuoteArg(n))
+	}
+	cmd := "rpm -e --nodeps -- " + strings.Join(quoted, " ")
+	out, err := shell.ExecCmdWithStream(cmd, true, chrootPath, nil)
+	if err != nil {
+		return fmt.Errorf("rpm -e of %d package(s) failed: %w%s", len(names), err, formatCommandOutput(out))
+	}
+	return nil
+}
+
+// auditDependencies runs `dnf check --dependencies`, which inspects the local
+// rpmdb (no network, no metadata refresh) and exits non-zero listing broken
+// dependencies when an installed package requires something no installed package
+// provides — the collateral damage an `rpm -e --nodeps` removal can leave. A clean
+// run returns an empty set; a non-zero exit whose output carries the broken-
+// dependency marker returns the offending package names parsed from the report;
+// any other failure (dnf absent from the baseline, etc.) is returned as an error so
+// the caller skips the check rather than misreporting.
+func (b *rpmInstallerBackend) auditDependencies(chrootPath string) ([]string, string, error) {
+	out, err := shell.ExecCmdSilent("dnf check --dependencies", true, chrootPath, nil)
+	if err == nil {
+		return nil, out, nil // dependency tree is satisfied
+	}
+	if hasUnmetDependencyMarker(out) {
+		broken := parseUnmetDependencyFailures(out)
+		if len(broken) == 0 {
+			// Marked broken but nothing parseable (e.g. a bare "Depsolve Error"): treat
+			// as an integrity-check failure rather than a clean empty result, so the
+			// caller never mistakes an unparseable breakage report for "no new breakage".
+			return nil, out, fmt.Errorf("dnf check reported broken dependencies but no package could be parsed from the report%s", formatCommandOutput(out))
+		}
+		return broken, out, nil // genuine broken dependencies
+	}
+	return nil, out, fmt.Errorf("dnf check could not run: %w%s", err, formatCommandOutput(out))
+}
+
 func (b *rpmInstallerBackend) verifyInstalled(chrootPath string, pkgs []ResolvedPackage) ([]string, error) {
 	var missing []string
 	for _, p := range pkgs {
@@ -522,6 +742,134 @@ func (b *rpmInstallerBackend) verifyInstalled(chrootPath string, pkgs []Resolved
 // distinguish that expected signal from a genuine tool/DB failure.
 func isNotInstalledOutput(out string) bool {
 	return strings.Contains(out, "is not installed")
+}
+
+// hasUnmetDependencyMarker reports whether a dependency-audit tool's output
+// carries its "broken/unmet dependency" diagnostic, distinguishing a genuine
+// dependency-integrity failure (which must fail the build) from the tool failing
+// to run at all (e.g. absent from a minimal baseline). apt-get emits "unmet
+// dependencies"; dnf's `check` emits "broken dependency"/"broken dependencies",
+// "has missing requires", and on some versions "Depsolve Error". The markers here
+// MUST cover every line shape parseUnmetDependencyFailures recognizes — otherwise a
+// standard broken report (e.g. dnf's "has missing requires") would be misclassified
+// as a tool failure and never reach the parser. The match is case-insensitive since
+// casing varies across tool versions.
+func hasUnmetDependencyMarker(out string) bool {
+	lower := strings.ToLower(out)
+	for _, marker := range []string{
+		"unmet dependencies", // apt-get check
+		"broken dependency",  // dnf check --dependencies
+		"broken dependencies",
+		"has missing requires", // dnf check --dependencies (per-package line)
+		"depsolve error",       // dnf (some versions)
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// parseUnmetDependencyFailures extracts the set of unmet-dependency FAILURES from an
+// `apt-get check` / `dnf check --dependencies` report as stable, comparable
+// descriptors, so the caller can diff the pre-removal snapshot against the
+// post-install snapshot and fail only on breakage the removal actually introduced.
+//
+// Each descriptor pairs a stable PACKAGE IDENTITY with the specific missing
+// REQUIREMENT ("<identity> | <requirement>"), because diffing by identity alone is
+// too coarse in three ways the before/after comparison must survive:
+//   - a package that was ALREADY broken on one requirement and is broken on a
+//     DIFFERENT requirement after the removal (identity unchanged, new pair);
+//   - deb multiarch, where libc6:amd64 and libc6:i386 are distinct instances (the
+//     apt token already carries :arch, so it is kept, NOT trimmed);
+//   - rpm version churn, where an upgraded package's NEVRA changes between audits —
+//     so an rpm token (NAME-VERSION-RELEASE.ARCH) is reduced to a version-independent
+//     name.arch identity (see rpmNameArch) that stays equal across the upgrade.
+//
+// A line that names a broken package but no specific requirement (e.g. dnf's bare
+// "<pkg> has broken dependencies") yields a "<identity> | " descriptor, which still
+// compares correctly at identity granularity. The result is de-duplicated and
+// sorted; an empty result means nothing could be attributed (the caller keeps the
+// raw output for diagnostics).
+//
+// Recognized shapes:
+//   - apt-get: " <pkg> : Depends: <dep> ..." (identity before ':', requirement after)
+//   - dnf:     "package <pkg> requires <dep> ...", "<pkg-nevra> requires <dep>",
+//     "<pkg-nevra> has broken dependencies", "<pkg-nevra> has missing requires ..."
+func parseUnmetDependencyFailures(out string) []string {
+	seen := make(map[string]bool)
+	var failures []string
+	add := func(identity, requirement string) {
+		identity = strings.TrimSpace(identity)
+		if identity == "" {
+			return
+		}
+		descriptor := identity + " | " + strings.TrimSpace(requirement)
+		if seen[descriptor] {
+			return
+		}
+		seen[descriptor] = true
+		failures = append(failures, descriptor)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		switch {
+		case len(fields) >= 2 && fields[1] == ":":
+			// apt-get: "<pkg> : <requirement...>". The apt token is name or name:arch
+			// (no version), so it is a stable identity as-is — keep the arch qualifier.
+			add(fields[0], strings.Join(fields[2:], " "))
+		case len(fields) >= 4 && fields[0] == "package" && fields[2] == "requires":
+			// dnf: "package <nevra> requires <dep>, but none of the providers ..."
+			add(rpmNameArch(fields[1]), strings.Join(fields[3:], " "))
+		case len(fields) >= 3 && fields[1] == "requires":
+			// dnf: "<nevra> requires <dep>"
+			add(rpmNameArch(fields[0]), strings.Join(fields[2:], " "))
+		case strings.Contains(line, "has broken dependencies") || strings.Contains(line, "has missing requires"):
+			// dnf: "<nevra> has broken dependencies" / "<nevra> has missing requires <dep>".
+			// Requirement text (if any) follows the marker; the identity is the leading token.
+			req := ""
+			if idx := strings.Index(line, "has missing requires"); idx != -1 {
+				req = strings.TrimSpace(line[idx+len("has missing requires"):])
+			}
+			add(rpmNameArch(fields[0]), req)
+		}
+	}
+	sort.Strings(failures)
+	return failures
+}
+
+// rpmNameArch reduces an rpm NEVRA token (NAME-VERSION-RELEASE.ARCH, e.g.
+// "kernel-core-6.8.0-1.x86_64") to a version-INDEPENDENT "name.arch" identity
+// ("kernel-core.x86_64"), so a package upgraded in the same transaction — whose
+// NEVRA changes between the pre-removal and post-install audits — is not mistaken
+// for newly-broken. The arch is the suffix after the final '.'; version and release
+// are the last two '-'-delimited fields of the remainder (NAME may itself contain
+// '-', which is why only the trailing two fields are stripped). A token that does
+// not look like a NEVRA (no '.', or too few '-' fields) is returned trimmed as-is.
+func rpmNameArch(nevra string) string {
+	nevra = strings.TrimSpace(nevra)
+	dot := strings.LastIndexByte(nevra, '.')
+	if dot <= 0 || dot == len(nevra)-1 {
+		return nevra // no arch suffix; not a NEVRA we can split
+	}
+	arch := nevra[dot+1:]
+	nvr := nevra[:dot] // NAME-VERSION-RELEASE
+	// Strip the trailing release and version fields (last two '-' segments).
+	if i := strings.LastIndexByte(nvr, '-'); i > 0 {
+		nvr = nvr[:i] // drop release
+		if j := strings.LastIndexByte(nvr, '-'); j > 0 {
+			nvr = nvr[:j] // drop version
+		} else {
+			return nevra // only one '-' segment before arch: not a full NEVRA
+		}
+	} else {
+		return nevra // no '-' segments: not a full NEVRA
+	}
+	return nvr + "." + arch
 }
 
 // diskSpaceHint returns an actionable, indented hint appended to an install error

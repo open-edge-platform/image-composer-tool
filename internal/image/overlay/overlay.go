@@ -530,7 +530,8 @@ func (ing *Ingestor) normalizeBaseline(ctx *Context) error {
 	case config.BaselineFormatRaw, config.BaselineFormatQcow2, config.BaselineFormatVHD, config.BaselineFormatVHDX:
 		// supported
 	default:
-		return fmt.Errorf("baseline.source.format %q is not supported (must be one of %q, %q, %q, %q)",
+		return fmt.Errorf("baseline.source.format %q not supported in this release: "+
+			"must be one of %q, %q, %q, %q. Support for additional formats is tracked in the overlay backlog",
 			declared, config.BaselineFormatRaw, config.BaselineFormatQcow2, config.BaselineFormatVHD, config.BaselineFormatVHDX)
 	}
 	copyPath := ctx.BaselineCopyPath
@@ -726,6 +727,16 @@ const sparseCopyChunk = 64 * 1024
 func copyLocalFile(src, dst string) (err error) {
 	in, err := os.Open(src)
 	if err != nil {
+		// Give the two most common failures an actionable message that names the
+		// offending path, rather than surfacing a bare os.PathError. baseline.source
+		// existence is intentionally not checked earlier (see BaselineSource.Validate),
+		// so this is the first place a missing/unreadable local baseline is caught.
+		if os.IsNotExist(err) {
+			return fmt.Errorf("baseline image file not found: %s (check baseline.source.path): %w", src, err)
+		}
+		if os.IsPermission(err) {
+			return fmt.Errorf("baseline image file is not readable: %s (check file permissions): %w", src, err)
+		}
 		return err
 	}
 	defer in.Close()

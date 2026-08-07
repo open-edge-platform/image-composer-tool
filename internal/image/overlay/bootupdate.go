@@ -86,7 +86,13 @@ var bootRelevantPathPrefixes = []string{
 // /sys, /dev, ...) mounted: the install step mounts them only for its own duration
 // and tears them down on return, so this stage establishes its own set (dracut in
 // particular reads /proc and /sys) and removes them afterward.
-func RegenerateBoot(info *BaselineInfo, rootMount string, installed *InstallResult, plan *ResolutionPlan) (err error) {
+// forceRegen forces initramfs regeneration even when the two "nothing changed"
+// gates below would otherwise skip it. The overlay build sets it when a
+// stage: pre-initramfs additionalFiles entry was copied: such a file (e.g. a
+// dracut module or initramfs-tools hook delivered purely through additionalFiles,
+// with no boot-relevant PACKAGE installed) must still be baked into the initramfs,
+// which the package-manifest-based gate cannot see.
+func RegenerateBoot(info *BaselineInfo, rootMount string, installed *InstallResult, plan *ResolutionPlan, forceRegen bool) (err error) {
 	if info == nil {
 		return fmt.Errorf("overlay boot regen: baseline info cannot be nil")
 	}
@@ -94,8 +100,10 @@ func RegenerateBoot(info *BaselineInfo, rootMount string, installed *InstallResu
 		return fmt.Errorf("overlay boot regen: baseline root mount path cannot be empty")
 	}
 
-	// Nothing was added (or the install was skipped): no initramfs change needed.
-	if installed == nil || installed.Skipped || len(installed.Installed) == 0 {
+	// Nothing was added (or the install was skipped): no initramfs change needed —
+	// unless a pre-initramfs additionalFiles entry was copied, which the generator
+	// must still bake in.
+	if !forceRegen && (installed == nil || installed.Skipped || len(installed.Installed) == 0) {
 		log.Infof("Overlay boot regen: no packages added, skipping initramfs regeneration")
 		return nil
 	}
@@ -104,24 +112,43 @@ func RegenerateBoot(info *BaselineInfo, rootMount string, installed *InstallResu
 	// the boot-time initramfs cannot have changed, so regeneration is unnecessary
 	// (and on an ESP/BLS baseline would fail on the read-only ESP). The gate fails
 	// safe — an unreadable manifest regenerates rather than risk a stale initramfs.
-	if !overlayAddedBootRelevantContent(info.PackageManager, plan) {
+	// forceRegen bypasses it: a pre-initramfs additionalFiles entry is boot-relevant
+	// content the package manifests do not reflect.
+	if !forceRegen && !overlayAddedBootRelevantContent(info.PackageManager, plan) {
 		log.Infof("Overlay boot regen: no kernel modules, firmware, or initramfs hooks added; skipping initramfs regeneration")
 		return nil
 	}
+	if forceRegen {
+		log.Infof("Overlay boot regen: pre-initramfs additionalFiles present; regenerating initramfs so they take effect")
+	}
 
-	cmd, tool, err := initramfsCommand(info.PackageManager)
-	if err != nil {
+	// Reject a package-manager family overlay does not support before probing.
+	if err := supportedInitramfsFamily(info.PackageManager); err != nil {
 		return err
 	}
 
-	// Skip cleanly when the baseline does not ship the generator; some minimal
-	// images legitimately have none.
-	present, err := commandExistsFn(tool, rootMount)
+	// Select the generator by what the baseline actually ships, NOT by the
+	// package-manager family: an overlay that installs dracut (removing
+	// initramfs-tools) on a Debian baseline must regenerate with dracut, and one
+	// that keeps initramfs-tools must use update-initramfs. This mirrors a
+	// create-mode build, where the installed generator's own maintainer scripts run.
+	// The first generator present in the baseline wins (see initramfsGenerators).
+	cmd, tool, found, err := resolveInitramfsGenerator(rootMount)
 	if err != nil {
-		return fmt.Errorf("overlay boot regen: failed to probe for %s in baseline: %w", tool, err)
+		return err
 	}
-	if !present {
-		log.Warnf("Overlay boot regen: %s not present in baseline; skipping initramfs regeneration", tool)
+	// No known generator in the baseline. For an ordinary build this is a clean
+	// no-op (some minimal images legitimately have none). But when forceRegen is set
+	// a stage: pre-initramfs file was copied specifically to be baked into the
+	// initramfs — silently succeeding would let the build claim the staged file took
+	// effect when it did not, so fail with an actionable error instead.
+	if !found {
+		if forceRegen {
+			return fmt.Errorf("overlay boot regen: a stage:pre-initramfs additionalFiles entry requires initramfs regeneration, "+
+				"but no supported generator (%s) is present in the baseline; install one (e.g. dracut or initramfs-tools) or remove the pre-initramfs entry",
+				knownInitramfsToolNames())
+		}
+		log.Warnf("Overlay boot regen: no supported initramfs generator (%s) present in baseline; skipping initramfs regeneration", knownInitramfsToolNames())
 		return nil
 	}
 
@@ -244,20 +271,60 @@ func normalizeArtifactPath(p string) string {
 	return p
 }
 
-// initramfsCommand returns the initramfs-regeneration command and the tool name it
-// depends on for a package-manager family. The bootloader is intentionally out of
-// scope; only the initramfs is regenerated.
-//
-//   - apt/dpkg: update-initramfs -u -k all (rebuilds for every installed kernel)
-//   - dnf/rpm:  dracut --force --regenerate-all (rebuilds every initramfs in place)
-func initramfsCommand(family PackageManager) (cmd, tool string, err error) {
+// initramfsGenerator pairs an initramfs-generator tool with the command that
+// rebuilds every installed kernel's initramfs in place.
+type initramfsGenerator struct {
+	tool string
+	cmd  string
+}
+
+// initramfsGenerators are the supported generators in PREFERENCE order. Selection
+// is by what the baseline actually ships, not by package-manager family, so an
+// overlay that swaps the generator (e.g. installs dracut and removes
+// initramfs-tools on a Debian baseline via allowPackageRemoval) regenerates with
+// the tool that is now installed. dracut is listed first: when both are present
+// (a transient state mid-swap) dracut is the intended generator, and it is also
+// the cross-distro tool. Each command rebuilds the initramfs for every installed
+// kernel in place; the bootloader is out of scope (only the initramfs is rebuilt).
+var initramfsGenerators = []initramfsGenerator{
+	{tool: "dracut", cmd: "dracut --force --regenerate-all"},
+	{tool: "update-initramfs", cmd: "update-initramfs -u -k all"},
+}
+
+// supportedInitramfsFamily rejects a package-manager family overlay does not
+// support, preserving the previous explicit error for an unknown family.
+func supportedInitramfsFamily(family PackageManager) error {
 	switch family {
-	case PackageManagerAPT:
-		return "update-initramfs -u -k all", "update-initramfs", nil
-	case PackageManagerDNF:
-		return "dracut --force --regenerate-all", "dracut", nil
+	case PackageManagerAPT, PackageManagerDNF:
+		return nil
 	default:
-		return "", "", fmt.Errorf("overlay boot regen: unsupported package manager %q (expected %q or %q)",
+		return fmt.Errorf("overlay boot regen: unsupported package manager %q (expected %q or %q)",
 			family, PackageManagerAPT, PackageManagerDNF)
 	}
+}
+
+// resolveInitramfsGenerator probes the baseline for each known generator in
+// preference order and returns the first one present, along with its regeneration
+// command. found is false when the baseline ships none. A probe error is surfaced
+// so a failed detection is never mistaken for "absent".
+func resolveInitramfsGenerator(rootMount string) (cmd, tool string, found bool, err error) {
+	for _, g := range initramfsGenerators {
+		present, perr := commandExistsFn(g.tool, rootMount)
+		if perr != nil {
+			return "", "", false, fmt.Errorf("overlay boot regen: failed to probe for %s in baseline: %w", g.tool, perr)
+		}
+		if present {
+			return g.cmd, g.tool, true, nil
+		}
+	}
+	return "", "", false, nil
+}
+
+// knownInitramfsToolNames lists the supported generator tool names for diagnostics.
+func knownInitramfsToolNames() string {
+	names := make([]string, 0, len(initramfsGenerators))
+	for _, g := range initramfsGenerators {
+		names = append(names, g.tool)
+	}
+	return strings.Join(names, ", ")
 }
