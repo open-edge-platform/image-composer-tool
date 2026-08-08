@@ -1,0 +1,55 @@
+# image-composer-tool build server, confined to the minimal capability set.
+# See docs/architecture-decision-record/adr-reduce-root-privilege.md (Phase 1)
+# and docs/user-guide/get-started/run-confined.md.
+#
+# Install:
+#   sudo install -m0644 deploy/systemd/image-composer-tool.service \
+#       /etc/systemd/system/image-composer-tool.service
+#   # edit ExecStart / User below for your deployment, then:
+#   sudo systemctl daemon-reload && sudo systemctl enable --now image-composer-tool
+#
+# IMPORTANT — read before relying on this for the WEB SERVER (`serve`):
+# The server's --sudo mode runs each privileged build step via `sudo -n <cmd>`.
+# A `sudo` child starts a NEW process whose capabilities are derived from the
+# bounding set at exec time, so CapabilityBoundingSet= here confines the server
+# process itself but NOT a `sudo -n`-spawned build child. To actually confine
+# builds, run the server WITHOUT --sudo as a root service (so build steps are
+# direct children bounded by this unit) — the configuration below does that:
+# User=root with the bounding set reduced, and no per-command sudo.
+#
+# CapabilityBoundingSet lists ONLY the capabilities a build needs (kept in sync
+# with scripts/ict-capabilities.env). systemd drops everything else; the empty
+# AmbientCapabilities means children still derive permitted caps from the
+# bounding set as uid-0 processes, matching the audited `capsh --drop` model.
+
+[Unit]
+Description=Image Composer Tool build server (capability-confined)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+
+# Adjust to your install path and desired listen address/flags.
+# Note: no --sudo — builds run as direct root children so this unit's bounding
+# set confines them.
+ExecStart=/usr/bin/image-composer-tool serve
+
+# Minimal capability set (mirror of scripts/ict-capabilities.env).
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_CHROOT CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_FSETID CAP_MKNOD CAP_SETUID CAP_SETGID CAP_SETFCAP
+# No ambient caps: uid-0 children inherit permitted caps from the bounding set.
+AmbientCapabilities=
+
+# Defence in depth (safe with the bounding set above; loosen only if a build step needs it).
+NoNewPrivileges=no
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=no
+
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
