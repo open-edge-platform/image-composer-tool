@@ -21,15 +21,21 @@ func writeRepos(t *testing.T, body string) string {
 	return p
 }
 
-// reposService builds a Service around a caller-supplied catalog, bypassing the
-// build/template config the repo endpoints don't touch.
-func reposService(t *testing.T, catalog string) *Service {
+// reposService builds a Service around a caller-supplied catalog and the target
+// ids that count as known, bypassing the build/template config the repo
+// endpoints don't touch. The manifest matters here: PackageRepos rejects any
+// osID the manifest doesn't offer.
+func reposService(t *testing.T, catalog string, targets ...string) *Service {
 	t.Helper()
 	repos, err := loadPackageRepos(writeRepos(t, catalog))
 	if err != nil {
 		t.Fatalf("loadPackageRepos: %v", err)
 	}
-	return &Service{repos: repos}
+	m := &Manifest{}
+	for _, id := range targets {
+		m.Targets = append(m.Targets, Target{ID: id, DisplayName: id})
+	}
+	return &Service{manifest: m, repos: repos}
 }
 
 // The embedded catalog is what ships, so it must satisfy the same invariants the
@@ -61,7 +67,7 @@ func TestEmbeddedCatalogCoversManifestTargets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadPackageRepos: %v", err)
 	}
-	svc := &Service{repos: repos}
+	svc := &Service{manifest: m, repos: repos}
 	for _, target := range m.Targets {
 		got := svc.PackageRepos(target.ID)
 		if len(got) == 0 {
@@ -86,7 +92,7 @@ repos:
   - {id: ubuntu-base, displayName: Ubuntu, url: "http://u", enabledByDefault: true, os: [ubuntu24]}
   - {id: debian-base, displayName: Debian, url: "http://d", enabledByDefault: true, os: [debian13]}
   - {id: everywhere, displayName: Everywhere, url: "http://e"}
-`)
+`, "ubuntu24", "debian13")
 	cases := []struct {
 		name, osID string
 		want       []string
@@ -96,8 +102,9 @@ repos:
 		{"debian13", "debian13", []string{"debian-base", "everywhere"}},
 		// An empty query is the pre-selection case: show the whole catalog.
 		{"unfiltered", "", []string{"debian-base", "everywhere", "ubuntu-base"}},
-		// An unknown target still matches the unscoped repo, and nothing else.
-		{"unknown os", "no-such-os", []string{"everywhere"}},
+		// An unknown target offers nothing at all — not even the unscoped repo,
+		// which applies to every *known* target rather than to any string.
+		{"unknown os", "no-such-os", nil},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -113,6 +120,27 @@ repos:
 	}
 }
 
+// An unknown target must stay empty even when the catalog carries a repo that
+// applies everywhere. Without the manifest check this passes only by accident of
+// the shipped data — adding one global repo would silently start returning
+// results for targets that don't exist.
+func TestPackageReposUnknownTargetIgnoresGlobalRepos(t *testing.T) {
+	svc := reposService(t, `
+repos:
+  - {id: everywhere, displayName: Everywhere, url: "http://e"}
+`, "ubuntu24")
+	if got := svc.PackageRepos("ubuntu24"); len(got) != 1 {
+		t.Fatalf("known target got %d repos, want the global one", len(got))
+	}
+	got := svc.PackageRepos("no-such-os")
+	if len(got) != 0 {
+		t.Errorf("unknown target got %d repos, want 0", len(got))
+	}
+	if got == nil {
+		t.Error("unknown target returned nil, want an empty slice (serializes as [])")
+	}
+}
+
 // Unset priorities are reported as the default rather than 0, so callers never
 // have to special-case it, and ordering is by descending priority then id.
 func TestPackageReposPriorityDefaultAndOrder(t *testing.T) {
@@ -122,7 +150,7 @@ repos:
   - {id: alpha, displayName: Alpha, url: "http://a"}
   - {id: high, displayName: High, url: "http://h", priority: 2000}
   - {id: mid, displayName: Mid, url: "http://m", priority: 1000}
-`)
+`, "ubuntu24")
 	got := svc.PackageRepos("")
 	want := []string{"high", "mid", "alpha", "zeta"} // 2000, 1000, then 500-ties by id
 	var ids []string
@@ -148,7 +176,7 @@ func TestPackageReposDoesNotMutateCatalog(t *testing.T) {
 	svc := reposService(t, `
 repos:
   - {id: unset, displayName: Unset, url: "http://u"}
-`)
+`, "ubuntu24")
 	if got := svc.PackageRepos("")[0].Priority; got != defaultRepoPriority {
 		t.Fatalf("first call priority = %d, want %d", got, defaultRepoPriority)
 	}
@@ -234,7 +262,7 @@ func TestNewRejectsInvalidPackageRepos(t *testing.T) {
 // An empty catalog is legal (an operator can ship one with no repos): the picker
 // is simply empty, and the result must still be a non-nil slice.
 func TestPackageReposEmptyCatalog(t *testing.T) {
-	svc := reposService(t, "repos: []\n")
+	svc := reposService(t, "repos: []\n", "ubuntu24")
 	got := svc.PackageRepos("ubuntu24")
 	if got == nil {
 		t.Fatal("PackageRepos returned nil, want an empty slice")

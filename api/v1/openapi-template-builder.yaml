@@ -81,7 +81,7 @@ paths:
         template's `packageRepositories` block and the per-OS provider configs.
 
         Repositories are returned highest-priority first, so the repo that would
-        win a package tie is listed first. An `os` that matches no repository
+        win a package tie is listed first. An `os` the manifest does not offer
         returns an empty list rather than an error.
       parameters:
         - name: os
@@ -89,8 +89,9 @@ paths:
           schema:
             type: string
           description: |
-            Filter repos by target OS compatibility, matching a `targets[].id`
-            from the manifest (e.g. `ubuntu24`). Omit to return every repository.
+            Filter repos by target OS compatibility, matching an OS the manifest
+            offers — a `targets[].id` or a `combinations[].os` (e.g. `ubuntu24`).
+            Omit to return every repository.
       responses:
         "200":
           description: Repository list

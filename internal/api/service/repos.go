@@ -53,10 +53,17 @@ type packageRepoCatalog struct {
 //
 // An empty osID returns the whole catalog: the UI asks for repos before a target
 // is chosen, and showing everything is more useful there than showing nothing.
-// An osID that matches no repo yields an empty (non-nil) slice rather than an
-// error — an unknown target simply has nothing to offer, which the UI renders
-// as an empty picker instead of a failure.
+//
+// An osID the manifest doesn't offer yields an empty (non-nil) slice rather than
+// an error — an unknown target has nothing to offer, which the UI renders as an
+// empty picker instead of a failure. That check is against the manifest, not
+// against the catalog: a repo with no OS list applies to every *known* target,
+// so without it, adding one global repo would start returning results for
+// targets that don't exist.
 func (s *Service) PackageRepos(osID string) []PackageRepo {
+	if osID != "" && !s.manifest.knowsTargetOS(osID) {
+		return []PackageRepo{}
+	}
 	out := make([]PackageRepo, 0, len(s.repos))
 	for _, r := range s.repos {
 		if !r.appliesTo(osID) {
@@ -79,7 +86,9 @@ func (s *Service) PackageRepos(osID string) []PackageRepo {
 }
 
 // appliesTo reports whether the repo is offered for a target OS id. A repo with
-// no OS list applies everywhere, and an empty query matches every repo.
+// no OS list applies to every known target, and an empty query matches every
+// repo. Callers must reject unknown targets before this point — see
+// PackageRepos, which does.
 func (r PackageRepo) appliesTo(osID string) bool {
 	if osID == "" || len(r.OS) == 0 {
 		return true

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
 import type { PackageRepo } from '../api/types'
 
@@ -25,15 +25,28 @@ export function RepoPicker({ os, active }: RepoPickerProps) {
   const [enabled, setEnabled] = useState<Set<string>>(new Set())
   const [error, setError] = useState<string | null>(null)
 
-  // Refetch whenever the target changes (repos are OS-scoped) or the tab becomes
-  // visible. Clear the previous target's list and error up front so a stale set
-  // of repos never lingers under a new selection, and guard against out-of-order
-  // responses with a cancel flag.
+  // The target whose repos are currently loaded. Kept in a ref so the effect can
+  // tell an actual target change (refetch, and drop the old list) from the tab
+  // merely being hidden and shown again (keep everything, including the user's
+  // toggles — that's the point of leaving both pages mounted).
+  const loadedOS = useRef<string | null>(null)
+
   useEffect(() => {
+    // Selection reset upstream: the loaded repos belong to no target now, so drop
+    // them regardless of visibility and fall back to the empty state.
+    if (!os) {
+      loadedOS.current = null
+      setRepos(null)
+      setEnabled(new Set())
+      setError(null)
+      return
+    }
+    if (!active || loadedOS.current === os) return
+
+    loadedOS.current = os
     setError(null)
     setRepos(null)
     setEnabled(new Set())
-    if (!active || !os) return
     let cancelled = false
     api
       .listPackageRepos(os)
@@ -43,7 +56,11 @@ export function RepoPicker({ os, active }: RepoPickerProps) {
         setEnabled(new Set(r.repos.filter((x) => x.enabledByDefault).map((x) => x.id)))
       })
       .catch((e) => {
-        if (!cancelled) setError((e as Error).message)
+        if (cancelled) return
+        setError((e as Error).message)
+        // Let a later visit retry: leaving the ref set would make a transient
+        // failure stick until the target changed.
+        loadedOS.current = null
       })
     return () => {
       cancelled = true
@@ -88,7 +105,7 @@ export function RepoPicker({ os, active }: RepoPickerProps) {
         </p>
       )}
 
-      {!error && repos && repos.length > 0 && (
+      {!error && os && repos && repos.length > 0 && (
         <ul className="divide-y divide-slate-100">
           {repos.map((r) => (
             <li key={r.id} className="flex items-start gap-3 px-4 py-2.5">
