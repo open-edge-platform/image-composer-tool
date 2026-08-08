@@ -3,6 +3,7 @@ import { useStore, cascadingOptions } from '../store'
 import { api } from '../api/client'
 import type { ComposeResponse } from '../api/types'
 import { Select } from './Select'
+import { RepoPicker } from './RepoPicker'
 
 // `active` prevents duplicate compose fetches while both pages stay mounted (hidden via CSS).
 export function AdvancedPage({ active }: { active: boolean }) {
@@ -53,8 +54,9 @@ export function AdvancedPage({ active }: { active: boolean }) {
     <div className="mx-auto max-w-screen-2xl px-10 py-8">
       <h1 className="mb-1 text-2xl font-bold text-[#00285a]">Advanced Template Preview</h1>
       <p className="mb-5 text-sm text-slate-500">
-        Select a combination to see the exact pre-authored template it resolves to.
-        This is a read-only preview — editing and export will arrive in a later update.
+        Select a combination to see the exact pre-authored template it resolves to,
+        and the package repositories available for that target. The template is a
+        read-only preview — editing and export will arrive in a later update.
       </p>
 
       <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
@@ -100,6 +102,13 @@ export function AdvancedPage({ active }: { active: boolean }) {
               onChange={(v) => setSel('kernel', v)}
             />
           )}
+
+          {/* Repositories are scoped to the target OS, so this keys off
+              selection.os rather than the full combination — it can populate as
+              soon as an OS is picked, before image type narrows things down. */}
+          <div className="mt-5">
+            <RepoPicker os={selection.os} active={active} />
+          </div>
         </div>
 
         {/* Read-only YAML preview of the resolved template. */}

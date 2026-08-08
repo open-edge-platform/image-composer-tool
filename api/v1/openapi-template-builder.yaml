@@ -75,16 +75,22 @@ paths:
         Returns package repositories that can be enabled in the Advanced tab
         (e.g., Intel OpenVINO, Docker CE, ROS 2 Jazzy, Intel Compute Runtime).
 
-        NOT YET IMPLEMENTED — returns 501 NOT_IMPLEMENTED until the repository
-        listing lands. That 501 is a temporary stub, not part of this contract:
-        it is deliberately undocumented in `responses` below so clients cannot
-        code against a status that disappears on implementation.
+        This is presentation metadata for the repository picker — a label,
+        description and default toggle state per repository. It is not the build
+        configuration: the repositories a build actually uses come from the
+        template's `packageRepositories` block and the per-OS provider configs.
+
+        Repositories are returned highest-priority first, so the repo that would
+        win a package tie is listed first. An `os` that matches no repository
+        returns an empty list rather than an error.
       parameters:
         - name: os
           in: query
           schema:
             type: string
-          description: Filter repos by target OS compatibility
+          description: |
+            Filter repos by target OS compatibility, matching a `targets[].id`
+            from the manifest (e.g. `ubuntu24`). Omit to return every repository.
       responses:
         "200":
           description: Repository list

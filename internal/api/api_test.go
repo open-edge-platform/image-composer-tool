@@ -214,17 +214,16 @@ func TestHandleComposeInvalidTemplate(t *testing.T) {
 
 // --- advanced-mode stubs (contract-only; replaced in later PRs) ---
 
-// The remaining Advanced-mode endpoints are wired to the generated interface but
-// not yet implemented — each returns 501 with the standard error envelope. This
-// guards the contract-only behavior; the PRs that implement each endpoint replace
-// its assertion here. (POST /templates/validate is implemented — see
-// TestHandleValidateTemplate.)
+// The remaining Advanced-mode endpoint is wired to the generated interface but
+// not yet implemented — it returns 501 with the standard error envelope. This
+// guards the contract-only behavior; the PR that implements it deletes this test.
+// (POST /templates/validate and GET /package-repos are implemented — see
+// TestHandleValidateTemplate and TestHandleListPackageRepos.)
 func TestHandleAdvancedStubsNotImplemented(t *testing.T) {
 	s, _ := newTestServer(t)
 	cases := []struct {
 		name, method, path, body string
 	}{
-		{"package-repos", http.MethodGet, "/api/v1/package-repos", ""},
 		{"packages-search", http.MethodGet, "/api/v1/packages/search?q=doc&os=ubuntu24", ""},
 	}
 	for _, c := range cases {
@@ -305,6 +304,105 @@ func TestHandleValidateTemplateBadJSON(t *testing.T) {
 	rr := s.do(httptest.NewRequest(http.MethodPost, "/api/v1/templates/validate", strings.NewReader(`{`)))
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (body: %s)", rr.Code, rr.Body)
+	}
+}
+
+// --- package repos ---
+
+// getRepos issues GET /package-repos (with an optional ?os=) and returns the
+// decoded list, failing the test on any non-200 or undecodable response.
+func (s *Server) getRepos(t *testing.T, query string) httpapi.PackageRepoList {
+	t.Helper()
+	rr := s.do(httptest.NewRequest(http.MethodGet, "/api/v1/package-repos"+query, nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rr.Code, rr.Body)
+	}
+	var out httpapi.PackageRepoList
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return out
+}
+
+// The unfiltered list serves the embedded catalog. Assert the wire contract —
+// required fields populated and priority always present — rather than specific
+// repo ids, so editing the catalog doesn't break the test.
+func TestHandleListPackageRepos(t *testing.T) {
+	s, _ := newTestServer(t)
+	out := s.getRepos(t, "")
+	if len(out.Repos) == 0 {
+		t.Fatal("repos is empty; want the embedded catalog")
+	}
+	for _, r := range out.Repos {
+		if r.Id == "" || r.DisplayName == "" || r.Url == "" {
+			t.Errorf("repo missing required field: %+v", r)
+		}
+		// Priority is always emitted: the service defaults unset entries, so a nil
+		// here would read as "no priority" rather than "the default".
+		if r.Priority == nil {
+			t.Errorf("repo %q: priority not serialized", r.Id)
+		} else if *r.Priority <= 0 {
+			t.Errorf("repo %q: priority = %d, want > 0", r.Id, *r.Priority)
+		}
+	}
+	// Highest priority first, so the repo that wins a package tie leads.
+	for i := 1; i < len(out.Repos); i++ {
+		if *out.Repos[i-1].Priority < *out.Repos[i].Priority {
+			t.Errorf("repos not ordered by descending priority at %d: %d then %d",
+				i, *out.Repos[i-1].Priority, *out.Repos[i].Priority)
+		}
+	}
+}
+
+func TestHandleListPackageReposOSFilter(t *testing.T) {
+	s, _ := newTestServer(t)
+	all := s.getRepos(t, "")
+
+	// A known target filters to a non-empty subset of the full catalog.
+	ubuntu := s.getRepos(t, "?os=ubuntu24")
+	if len(ubuntu.Repos) == 0 {
+		t.Fatal("os=ubuntu24 returned no repos")
+	}
+	if len(ubuntu.Repos) > len(all.Repos) {
+		t.Errorf("filtered list (%d) larger than full catalog (%d)", len(ubuntu.Repos), len(all.Repos))
+	}
+	inAll := make(map[string]struct{}, len(all.Repos))
+	for _, r := range all.Repos {
+		inAll[r.Id] = struct{}{}
+	}
+	for _, r := range ubuntu.Repos {
+		if _, ok := inAll[r.Id]; !ok {
+			t.Errorf("filtered repo %q not present in the unfiltered catalog", r.Id)
+		}
+	}
+	// Exactly one base repo is enabled by default per target — the OS's own.
+	base := 0
+	for _, r := range ubuntu.Repos {
+		if r.EnabledByDefault {
+			base++
+		}
+	}
+	if base != 1 {
+		t.Errorf("os=ubuntu24 has %d enabledByDefault repos, want exactly 1", base)
+	}
+
+	// A different target yields a different set (repos are OS-scoped).
+	debian := s.getRepos(t, "?os=debian13")
+	if len(debian.Repos) == 0 {
+		t.Fatal("os=debian13 returned no repos")
+	}
+	if debian.Repos[0].Id == ubuntu.Repos[0].Id && len(debian.Repos) == len(ubuntu.Repos) {
+		t.Errorf("debian13 and ubuntu24 returned the same repos; OS filter not applied")
+	}
+
+	// An unknown target is not an error: it just has nothing to offer, and the
+	// empty list must serialize as [] rather than null so the UI can map over it.
+	unknown := s.getRepos(t, "?os=no-such-os")
+	if len(unknown.Repos) != 0 {
+		t.Errorf("unknown os returned %d repos, want 0", len(unknown.Repos))
+	}
+	if unknown.Repos == nil {
+		t.Error("empty repo list serialized as null, want []")
 	}
 }
 
