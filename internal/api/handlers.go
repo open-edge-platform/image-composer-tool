@@ -89,11 +89,16 @@ func (s *Server) ListBuildArtifacts(w http.ResponseWriter, _ *http.Request, id h
 
 // ListPackageRepos handles GET /package-repos.
 //
-// Not yet implemented: the spec and generated types are in place so the frontend
-// and backend can build against the contract, but the repository-listing logic
-// lands in a later PR. Returns 501 until then.
-func (s *Server) ListPackageRepos(w http.ResponseWriter, _ *http.Request, _ httpapi.ListPackageReposParams) {
-	writeError(w, http.StatusNotImplemented, "NOT_IMPLEMENTED", "listing package repositories is not yet implemented")
+// The optional `os` query parameter filters the catalog to repositories offered
+// for that target; omitting it returns the whole catalog. An unknown target is
+// not an error — it simply has no repositories, which the UI renders as an empty
+// picker.
+func (s *Server) ListPackageRepos(w http.ResponseWriter, _ *http.Request, params httpapi.ListPackageReposParams) {
+	var osID string
+	if params.Os != nil {
+		osID = *params.Os
+	}
+	writeJSON(w, http.StatusOK, fromPackageRepoList(s.svc.PackageRepos(osID)))
 }
 
 // SearchPackages handles GET /packages/search.

@@ -29,6 +29,9 @@ type Config struct {
 	WorkDir      string // base directory for per-build work/output directories
 	Sudo         bool   // run builds under `sudo -n` (ICT needs root for chroot)
 	ManifestPath string // optional manifest file; empty uses the embedded copy
+	// PackageReposPath is an optional repository-catalog file; empty uses the
+	// embedded copy.
+	PackageReposPath string
 }
 
 // Server holds the HTTP server's dependencies: its listen address and the
@@ -47,6 +50,8 @@ func New(cfg Config) (*Server, error) {
 		WorkDir:      cfg.WorkDir,
 		Sudo:         cfg.Sudo,
 		ManifestPath: cfg.ManifestPath,
+
+		PackageReposPath: cfg.PackageReposPath,
 	})
 	if err != nil {
 		return nil, err

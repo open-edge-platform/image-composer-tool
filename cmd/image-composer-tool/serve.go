@@ -20,6 +20,7 @@ var (
 	serveWorkDir      string
 	serveSudo         bool
 	serveManifest     string
+	servePackageRepos string
 	servePrintSudoers bool
 )
 
@@ -69,6 +70,10 @@ image builds via the image-composer-tool binary with streaming build logs.`,
 	serveCmd.Flags().StringVar(&serveManifest, "manifest", "",
 		"Path to a manifest YAML to read from disk (live-editable, no rebuild). "+
 			"When empty, the manifest embedded at build time is used.")
+	serveCmd.Flags().StringVar(&servePackageRepos, "package-repos", "",
+		"Path to a package-repository catalog YAML to read from disk (live-editable, "+
+			"no rebuild). Backs the Advanced tab's repository picker. When empty, the "+
+			"catalog embedded at build time is used.")
 	serveCmd.Flags().BoolVar(&servePrintSudoers, "print-sudoers", false,
 		"Print the scoped sudoers drop-in required for `--sudo` cancellation and "+
 			"artifact reads, then exit. The rules are generated for the current user, "+
@@ -101,6 +106,8 @@ func executeServe(cmd *cobra.Command, args []string) error {
 		WorkDir:      serveWorkDir,
 		Sudo:         serveSudo,
 		ManifestPath: serveManifest,
+
+		PackageReposPath: servePackageRepos,
 	})
 	if err != nil {
 		return err

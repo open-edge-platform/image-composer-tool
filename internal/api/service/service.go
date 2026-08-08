@@ -32,13 +32,19 @@ type Config struct {
 	WorkDir      string // base directory for per-build work/output directories
 	Sudo         bool   // run builds under `sudo -n` (ICT needs root for chroot)
 	ManifestPath string // optional manifest file; empty uses the embedded copy
+	// PackageReposPath is an optional repository-catalog file; empty uses the
+	// embedded copy.
+	PackageReposPath string
 }
 
 // Service holds the API's dependencies and shared state.
 type Service struct {
 	cfg      Config
 	manifest *Manifest
-	tracker  *buildTracker
+	// repos is the Advanced tab's repository catalog, loaded once at
+	// construction. Read-only after New, so it needs no lock.
+	repos   []PackageRepo
+	tracker *buildTracker
 
 	// buildMu serializes compose starts so at most one build runs at a time.
 	// activeBuildID names the in-flight build (empty when idle). The slot is held
@@ -77,10 +83,17 @@ func (s *Service) releaseBuildSlot(id string) {
 	}
 }
 
-// New constructs a Service, loading and validating the manifest and applying
-// defaults for any unset config fields.
+// New constructs a Service, loading and validating the manifest and the package
+// repository catalog, and applying defaults for any unset config fields.
 func New(cfg Config) (*Service, error) {
 	m, err := loadManifest(cfg.ManifestPath)
+	if err != nil {
+		return nil, err
+	}
+	// Fail construction on a bad catalog rather than at first request: an
+	// operator-supplied file is a startup misconfiguration, and surfacing it now
+	// beats a server that boots and then 500s on the Advanced tab.
+	repos, err := loadPackageRepos(cfg.PackageReposPath)
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +112,7 @@ func New(cfg Config) (*Service, error) {
 	if cfg.WorkDir == "" {
 		cfg.WorkDir = "webui-workspace"
 	}
-	svc := &Service{cfg: cfg, manifest: m, tracker: newBuildTracker()}
+	svc := &Service{cfg: cfg, manifest: m, repos: repos, tracker: newBuildTracker()}
 	svc.signalGroup = svc.signalCancel
 	return svc, nil
 }

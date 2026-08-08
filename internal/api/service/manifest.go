@@ -53,6 +53,28 @@ type Manifest struct {
 // Manifest returns the loaded configuration manifest.
 func (s *Service) Manifest() *Manifest { return s.manifest }
 
+// knowsTargetOS reports whether id names an OS this manifest offers — either a
+// declared target or the OS of some combination.
+//
+// Both lists matter. `targets` supplies display labels and `combinations`
+// supplies what the UI can actually select, and neither is guaranteed to be a
+// superset of the other: a combination may name an OS that has no label entry
+// (the UI falls back to the raw id). Accepting an id from either means this can
+// never reject an OS the user legitimately selected.
+func (m *Manifest) knowsTargetOS(id string) bool {
+	for _, t := range m.Targets {
+		if t.ID == id {
+			return true
+		}
+	}
+	for _, c := range m.Combinations {
+		if c.OS == id {
+			return true
+		}
+	}
+	return false
+}
+
 // loadManifest parses the manifest. When path is non-empty it reads that file
 // from disk (live-editable, no rebuild needed); otherwise it uses the copy
 // embedded at build time (the single-binary default).
