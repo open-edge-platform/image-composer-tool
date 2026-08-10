@@ -35,20 +35,36 @@ func TestPlanResize_NoTargetSkips(t *testing.T) {
 	}
 }
 
-func TestPlanResize_SmallerOrEqualSkips(t *testing.T) {
-	// 100 MiB file, request 50 MiB (smaller) and 100 MiB (equal): both no-ops.
+func TestPlanResize_EqualSkips(t *testing.T) {
+	// 100 MiB file, request exactly 100 MiB: a legitimate no-op, not a shrink.
 	p := writeSizedFile(t, 100<<20)
-	for _, target := range []string{"50MiB", "100MiB"} {
-		plan, err := planResize(p, target, false)
-		if err != nil {
-			t.Fatalf("planResize(%s): %v", target, err)
-		}
-		if plan.Grow {
-			t.Errorf("grow-only: target %s must not grow a 100MiB image: %+v", target, plan)
-		}
-		if plan.Reason == "" {
-			t.Errorf("a skipped resize should carry a reason, got %+v", plan)
-		}
+	plan, err := planResize(p, "100MiB", false)
+	if err != nil {
+		t.Fatalf("planResize(100MiB): %v", err)
+	}
+	if plan.Grow {
+		t.Errorf("grow-only: an equal target must not grow a 100MiB image: %+v", plan)
+	}
+	if plan.Reason == "" {
+		t.Errorf("a skipped resize should carry a reason, got %+v", plan)
+	}
+}
+
+// A target smaller than the current image is a shrink request. Overlay resize is
+// grow-only, so it must be a hard error with an actionable "shrink not supported"
+// message rather than a silent no-op (which would mislead the user into thinking
+// the image was shrunk).
+func TestPlanResize_SmallerErrorsAsShrinkUnsupported(t *testing.T) {
+	p := writeSizedFile(t, 100<<20)
+	_, err := planResize(p, "50MiB", false)
+	if err == nil {
+		t.Fatal("expected an error when the requested size is smaller than the baseline")
+	}
+	if !strings.Contains(err.Error(), "shrink not supported") {
+		t.Errorf("error should say 'shrink not supported'; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "grow-only") {
+		t.Errorf("error should explain overlay resize is grow-only; got: %v", err)
 	}
 }
 
@@ -181,7 +197,8 @@ func TestResizeBaseline_NoGrowRunsNothing(t *testing.T) {
 	resizeExec = func(string) (string, error) { ran = true; return "", nil }
 
 	p := writeSizedFile(t, 100<<20)
-	tmpl := &config.ImageTemplate{Disk: config.DiskConfig{Size: "50MiB"}} // smaller
+	// Equal target: a legitimate no-op (not a shrink), so no resize commands run.
+	tmpl := &config.ImageTemplate{Disk: config.DiskConfig{Size: "100MiB"}}
 	ctx := &Context{BaselineCopyPath: p, LoopDevPath: "/dev/loop0"}
 	layout := &Layout{RootDevice: "/dev/loop0p2", RootFSType: "ext4", RootMount: "/mnt/root"}
 
@@ -189,7 +206,32 @@ func TestResizeBaseline_NoGrowRunsNothing(t *testing.T) {
 		t.Fatalf("ResizeBaseline: %v", err)
 	}
 	if ran {
-		t.Error("a grow-only resize must run no commands when the target is not larger")
+		t.Error("an equal-size resize must run no commands (no grow needed)")
+	}
+}
+
+// A smaller disk.size must fail the resize with "shrink not supported" before any
+// disk mutation — overlay resize is grow-only.
+func TestResizeBaseline_ShrinkErrorsAndRunsNothing(t *testing.T) {
+	origExec := resizeExec
+	defer func() { resizeExec = origExec }()
+	ran := false
+	resizeExec = func(string) (string, error) { ran = true; return "", nil }
+
+	p := writeSizedFile(t, 100<<20)
+	tmpl := &config.ImageTemplate{Disk: config.DiskConfig{Size: "50MiB"}} // smaller than baseline
+	ctx := &Context{BaselineCopyPath: p, LoopDevPath: "/dev/loop0"}
+	layout := &Layout{RootDevice: "/dev/loop0p2", RootFSType: "ext4", RootMount: "/mnt/root"}
+
+	err := ResizeBaseline(tmpl, ctx, layout)
+	if err == nil {
+		t.Fatal("expected a shrink to be rejected")
+	}
+	if !strings.Contains(err.Error(), "shrink not supported") {
+		t.Errorf("error should say 'shrink not supported'; got: %v", err)
+	}
+	if ran {
+		t.Error("a rejected shrink must run no commands (fail before any disk mutation)")
 	}
 }
 

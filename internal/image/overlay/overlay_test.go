@@ -354,6 +354,14 @@ func TestWithBaseline_MissingSourceFileFails(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected copy failure error, got nil")
 	}
+	// The error must be actionable: name the missing file and its config source so
+	// the operator can fix the path without decoding a bare os.PathError.
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("error should report the baseline file was not found; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "/nonexistent/baseline.raw") {
+		t.Errorf("error should name the missing baseline path; got: %v", err)
+	}
 	if loop.detachCallCount != 0 {
 		t.Errorf("detach call count = %d, want 0", loop.detachCallCount)
 	}

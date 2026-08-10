@@ -329,7 +329,7 @@ func TestWriteMergedSPDXToFile_AddsUpgradesAndPreservesBaseline(t *testing.T) {
 	}
 
 	outFile := filepath.Join(tmpDir, "merged.json")
-	if err := WriteMergedSPDXToFile(baselineData, overlayPkgs, outFile); err != nil {
+	if err := WriteMergedSPDXToFile(baselineData, overlayPkgs, nil, outFile); err != nil {
 		t.Fatalf("WriteMergedSPDXToFile failed: %v", err)
 	}
 
@@ -374,6 +374,52 @@ func TestWriteMergedSPDXToFile_AddsUpgradesAndPreservesBaseline(t *testing.T) {
 	}
 }
 
+// TestWriteMergedSPDXToFile_DropsRemovedPackages asserts that packages named in
+// removedNames are dropped from the merged (complete) inventory, so a
+// conflict-driven removal is reflected rather than the pre-removal baseline.
+func TestWriteMergedSPDXToFile_DropsRemovedPackages(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	baselineDoc := SPDXDocument{
+		SPDXVersion: SPDXVersion, DataLicense: SPDXDataLicense, SPDXID: SPDXDocumentID,
+		DocumentName: "baseline-doc", DocumentNamespace: "https://example.com/ns",
+		Packages: []SPDXPackage{
+			{SPDXID: "SPDXRef-Package-initramfs-tools", Name: "initramfs-tools", Type: "deb", VersionInfo: "0.142"},
+			{SPDXID: "SPDXRef-Package-libc6", Name: "libc6", Type: "deb", VersionInfo: "2.39"},
+		},
+	}
+	baselineData, err := json.Marshal(baselineDoc)
+	if err != nil {
+		t.Fatalf("marshal baseline: %v", err)
+	}
+
+	// dracut is added; initramfs-tools is removed (the conflict-driven removal).
+	overlayPkgs := []ospackage.PackageInfo{{Name: "dracut", Type: "deb", Version: "060"}}
+	outFile := filepath.Join(tmpDir, "merged.json")
+	if err := WriteMergedSPDXToFile(baselineData, overlayPkgs, []string{"initramfs-tools"}, outFile); err != nil {
+		t.Fatalf("WriteMergedSPDXToFile failed: %v", err)
+	}
+
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("read merged SBOM: %v", err)
+	}
+	var doc SPDXDocument
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("parse merged SBOM: %v", err)
+	}
+	names := make(map[string]bool, len(doc.Packages))
+	for _, p := range doc.Packages {
+		names[p.Name] = true
+	}
+	if names["initramfs-tools"] {
+		t.Error("removed package initramfs-tools must not appear in the complete SBOM")
+	}
+	if !names["libc6"] || !names["dracut"] {
+		t.Errorf("expected libc6 (kept) and dracut (added) in the complete SBOM, got %v", names)
+	}
+}
+
 func TestWriteMergedSPDXToFile_AmbiguousMultiEntryNameNotReplaced(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -414,7 +460,7 @@ func TestWriteMergedSPDXToFile_AmbiguousMultiEntryNameNotReplaced(t *testing.T) 
 	}
 
 	outFile := filepath.Join(tmpDir, "merged.json")
-	if err := WriteMergedSPDXToFile(baselineData, overlayPkgs, outFile); err != nil {
+	if err := WriteMergedSPDXToFile(baselineData, overlayPkgs, nil, outFile); err != nil {
 		t.Fatalf("WriteMergedSPDXToFile failed: %v", err)
 	}
 
@@ -457,12 +503,191 @@ func TestWriteMergedSPDXToFile_RejectsMalformedBaseline(t *testing.T) {
 	tmpDir := t.TempDir()
 	outFile := filepath.Join(tmpDir, "merged.json")
 
-	err := WriteMergedSPDXToFile([]byte("not json"), nil, outFile)
+	err := WriteMergedSPDXToFile([]byte("not json"), nil, nil, outFile)
 	if err == nil {
 		t.Fatalf("expected error for malformed baseline SBOM")
 	}
 	if _, statErr := os.Stat(outFile); statErr == nil {
 		t.Errorf("no output file should be written when the baseline is unparseable")
+	}
+}
+
+// TestWriteMergedSPDXToFile_RejectsNonSPDXBase asserts that a base which is valid
+// JSON but NOT SPDX (a CycloneDX document, an empty object, or one declaring a
+// non-2.x spdxVersion) is rejected rather than silently merged into an all-zero
+// document — so the caller runs its documented external -> inherited -> delta-only
+// fallback instead of emitting a bogus "complete" SBOM containing only the overlay
+// packages. No output file is written on rejection.
+func TestWriteMergedSPDXToFile_RejectsNonSPDXBase(t *testing.T) {
+	tmpDir := t.TempDir()
+	overlayPkgs := []ospackage.PackageInfo{{Name: "curl", Version: "8.0", Type: "deb"}}
+	cases := map[string]string{
+		"empty object":          `{}`,
+		"cyclonedx-like":        `{"bomFormat":"CycloneDX","specVersion":"1.5","components":[{"name":"libc"}]}`,
+		"packages without name": `{"packages":[{"versionInfo":"1.0"}]}`,
+		"wrong spdxVersion":     `{"spdxVersion":"SPDX-3.0","packages":[{"name":"libc"}]}`,
+		// Malformed 2.x versions that a prefix match would wrongly accept: only concrete
+		// published SPDX 2.x versions are allowed, so these are rejected.
+		"malformed 2.x version (SPDX-2.bad)":   `{"spdxVersion":"SPDX-2.bad","packages":[{"name":"libc"}]}`,
+		"unpublished 2.x version (SPDX-2.999)": `{"spdxVersion":"SPDX-2.999","packages":[{"name":"libc"}]}`,
+		// An SPDX-2.x header does NOT excuse a nameless inventory: the package-name
+		// check runs regardless of the version header.
+		"spdx2 header but nameless packages": `{"spdxVersion":"SPDX-2.3","packages":[{"versionInfo":"1"}]}`,
+		"spdx2 header but no packages":       `{"spdxVersion":"SPDX-2.3","packages":[]}`,
+		// EVERY package must be named: one valid package plus one nameless record is
+		// still rejected (an SPDX package name is mandatory).
+		"one named plus one nameless": `{"spdxVersion":"SPDX-2.3","packages":[{"name":"libc6"},{"versionInfo":"9"}]}`,
+	}
+	for name, base := range cases {
+		t.Run(name, func(t *testing.T) {
+			outFile := filepath.Join(tmpDir, "merged-"+strings.ReplaceAll(name, " ", "-")+".json")
+			err := WriteMergedSPDXToFile([]byte(base), overlayPkgs, nil, outFile)
+			if err == nil {
+				t.Fatalf("expected a non-SPDX base to be rejected: %s", base)
+			}
+			if _, statErr := os.Stat(outFile); statErr == nil {
+				t.Error("no output file should be written when the base is not usable SPDX")
+			}
+		})
+	}
+}
+
+// TestWriteMergedSPDXToFile_SynthesizesEmptyPackageIDs asserts that a preserved
+// base package with an EMPTY SPDXID is given a stable, non-empty, spec-valid ID
+// before the DESCRIBES relationships are generated, so no relationship carries an
+// empty relatedSpdxElement.
+func TestWriteMergedSPDXToFile_SynthesizesEmptyPackageIDs(t *testing.T) {
+	tmpDir := t.TempDir()
+	outFile := filepath.Join(tmpDir, "merged.json")
+
+	// A valid SPDX base (spdxVersion present) whose package omits SPDXID.
+	base := []byte(`{"spdxVersion":"SPDX-2.3","packages":[{"name":"libc6","versionInfo":"2.39","downloadLocation":"NOASSERTION"}]}`)
+	if err := WriteMergedSPDXToFile(base, nil, nil, outFile); err != nil {
+		t.Fatalf("WriteMergedSPDXToFile failed: %v", err)
+	}
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("read merged SBOM: %v", err)
+	}
+	var doc SPDXDocument
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("merged SBOM is not valid JSON: %v", err)
+	}
+	for _, p := range doc.Packages {
+		if strings.TrimSpace(p.SPDXID) == "" {
+			t.Errorf("package %q has an empty SPDXID after merge", p.Name)
+		}
+	}
+	// No DESCRIBES relationship may dangle to an empty element.
+	for _, r := range doc.Relationships {
+		if strings.TrimSpace(r.RelatedSPDXElement) == "" {
+			t.Errorf("relationship has an empty relatedSpdxElement: %+v", r)
+		}
+	}
+}
+
+// TestWriteMergedSPDXToFile_NormalizesRequiredPackageFields asserts that a base
+// package supplying only name/version (no downloadLocation or license fields — as
+// the integration fixture does) is emitted with the SPDX-required fields filled to
+// NOASSERTION, so the merged document validates as SPDX 2.3 rather than carrying
+// empty required fields.
+func TestWriteMergedSPDXToFile_NormalizesRequiredPackageFields(t *testing.T) {
+	tmpDir := t.TempDir()
+	outFile := filepath.Join(tmpDir, "merged.json")
+
+	base := []byte(`{"spdxVersion":"SPDX-2.3","packages":[{"name":"libc6","versionInfo":"2.39"}]}`)
+	if err := WriteMergedSPDXToFile(base, nil, nil, outFile); err != nil {
+		t.Fatalf("WriteMergedSPDXToFile failed: %v", err)
+	}
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("read merged SBOM: %v", err)
+	}
+	var doc SPDXDocument
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("merged SBOM is not valid JSON: %v", err)
+	}
+	if len(doc.Packages) != 1 {
+		t.Fatalf("expected 1 package, got %d", len(doc.Packages))
+	}
+	p := doc.Packages[0]
+	if p.DownloadLocation != "NOASSERTION" {
+		t.Errorf("downloadLocation = %q, want NOASSERTION", p.DownloadLocation)
+	}
+	if p.LicenseConcluded != "NOASSERTION" {
+		t.Errorf("licenseConcluded = %q, want NOASSERTION", p.LicenseConcluded)
+	}
+	if p.LicenseDeclared != "NOASSERTION" {
+		t.Errorf("licenseDeclared = %q, want NOASSERTION", p.LicenseDeclared)
+	}
+	if strings.TrimSpace(p.SPDXID) == "" {
+		t.Error("SPDXID must be synthesized, not empty")
+	}
+}
+
+// TestWriteMergedSPDXToFile_NormalizesHeaderLightBaseline asserts that a
+// parseable-but-header-light base SBOM (only a `packages` array, with no
+// spdxVersion/dataLicense/SPDXID/namespace/creationInfo) yields a VALID SPDX 2.3
+// document: the merge backfills every required header field rather than emitting a
+// document that claims SPDX 2.3 with empty headers.
+func TestWriteMergedSPDXToFile_NormalizesHeaderLightBaseline(t *testing.T) {
+	tmpDir := t.TempDir()
+	outFile := filepath.Join(tmpDir, "merged.json")
+
+	// A base carrying only packages — every document-header field is absent.
+	headerLight := []byte(`{"packages":[{"SPDXID":"SPDXRef-Package-libc6","name":"libc6","versionInfo":"2.39","downloadLocation":"NOASSERTION"}]}`)
+	overlayPkgs := []ospackage.PackageInfo{{Name: "curl", Version: "8.0", Type: "deb"}}
+
+	if err := WriteMergedSPDXToFile(headerLight, overlayPkgs, nil, outFile); err != nil {
+		t.Fatalf("WriteMergedSPDXToFile failed: %v", err)
+	}
+
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("read merged SBOM: %v", err)
+	}
+	var doc SPDXDocument
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("merged SBOM is not valid JSON: %v", err)
+	}
+	if doc.SPDXVersion != SPDXVersion {
+		t.Errorf("spdxVersion = %q, want %q", doc.SPDXVersion, SPDXVersion)
+	}
+	if doc.DataLicense != SPDXDataLicense {
+		t.Errorf("dataLicense = %q, want %q", doc.DataLicense, SPDXDataLicense)
+	}
+	if doc.SPDXID != SPDXDocumentID {
+		t.Errorf("SPDXID = %q, want %q", doc.SPDXID, SPDXDocumentID)
+	}
+	if strings.TrimSpace(doc.DocumentNamespace) == "" {
+		t.Error("documentNamespace must be filled")
+	}
+	if strings.TrimSpace(doc.CreationInfo.Created) == "" || len(doc.CreationInfo.Creators) == 0 {
+		t.Errorf("creationInfo must be filled, got %+v", doc.CreationInfo)
+	}
+	// Both the base and the overlay package survive the merge.
+	if len(doc.Packages) != 2 {
+		t.Errorf("expected 2 packages (base libc6 + overlay curl), got %d", len(doc.Packages))
+	}
+}
+
+// TestNormalizeSPDXHeader_PreservesExistingHeader asserts the backfill only fills
+// empties: a document with a real header keeps its own lineage untouched.
+func TestNormalizeSPDXHeader_PreservesExistingHeader(t *testing.T) {
+	doc := SPDXDocument{
+		SPDXVersion:       "SPDX-2.3",
+		DataLicense:       "CC0-1.0",
+		SPDXID:            "SPDXRef-DOCUMENT",
+		DocumentName:      "my-existing-doc",
+		DocumentNamespace: "https://example.com/my-namespace",
+		CreationInfo:      CreationInfo{Created: "2020-01-01T00:00:00Z", Creators: []string{"Tool: existing"}},
+	}
+	normalizeSPDXHeader(&doc)
+	if doc.DocumentName != "my-existing-doc" || doc.DocumentNamespace != "https://example.com/my-namespace" {
+		t.Errorf("normalize must not overwrite an existing header, got name=%q ns=%q", doc.DocumentName, doc.DocumentNamespace)
+	}
+	if doc.CreationInfo.Created != "2020-01-01T00:00:00Z" || len(doc.CreationInfo.Creators) != 1 {
+		t.Errorf("normalize must not overwrite existing creationInfo, got %+v", doc.CreationInfo)
 	}
 }
 
@@ -700,7 +925,7 @@ func TestWriteMergedSPDXToFile_DisambiguatesAppendedSameNameSPDXID(t *testing.T)
 	}
 
 	outFile := filepath.Join(tmpDir, "merged.json")
-	if err := WriteMergedSPDXToFile(baselineData, overlayPkgs, outFile); err != nil {
+	if err := WriteMergedSPDXToFile(baselineData, overlayPkgs, nil, outFile); err != nil {
 		t.Fatalf("WriteMergedSPDXToFile failed: %v", err)
 	}
 
@@ -752,7 +977,7 @@ func TestWriteMergedSPDXToFile_SanitizesLegacyBaselineSPDXIDs(t *testing.T) {
 	}
 
 	outFile := filepath.Join(tmpDir, "merged.json")
-	if err := WriteMergedSPDXToFile(baselineData, nil, outFile); err != nil {
+	if err := WriteMergedSPDXToFile(baselineData, nil, nil, outFile); err != nil {
 		t.Fatalf("WriteMergedSPDXToFile failed: %v", err)
 	}
 
@@ -850,7 +1075,7 @@ func TestWriteMergedSPDXToFile_RelationshipsReferenceDedupedIDs(t *testing.T) {
 	}
 
 	outFile := filepath.Join(tmpDir, "merged.json")
-	if err := WriteMergedSPDXToFile(baselineData, overlayPkgs, outFile); err != nil {
+	if err := WriteMergedSPDXToFile(baselineData, overlayPkgs, nil, outFile); err != nil {
 		t.Fatalf("WriteMergedSPDXToFile failed: %v", err)
 	}
 

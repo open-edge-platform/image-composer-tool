@@ -293,6 +293,7 @@ func (isoMaker *IsoMaker) copyConfigFilesToIso(template *config.ImageTemplate, i
 			newFileInfo := config.AdditionalFileInfo{
 				Local: newPath,
 				Final: fileInfo.Final,
+				Stage: fileInfo.Stage,
 			}
 			PathUpdatedList = append(PathUpdatedList, newFileInfo)
 		}

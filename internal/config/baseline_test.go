@@ -59,6 +59,16 @@ func TestValidateBaseline(t *testing.T) {
 			wantNoErr: true,
 		},
 		{
+			name:      "overlay accepts local sbomPath",
+			baseline:  &Baseline{Mode: BaselineModeOverlay, Source: &BaselineSource{Path: "/tmp/u.raw", SBOMPath: "/tmp/base.spdx.json"}},
+			wantNoErr: true,
+		},
+		{
+			name:     "overlay rejects sbomPath with a URI scheme",
+			baseline: &Baseline{Mode: BaselineModeOverlay, Source: &BaselineSource{Path: "/tmp/u.raw", SBOMPath: "https://example.com/base.spdx.json"}},
+			wantErr:  "sbomPath must be a local file path",
+		},
+		{
 			name: "overlay accepts https URL source",
 			baseline: &Baseline{
 				Mode:   BaselineModeOverlay,
@@ -144,7 +154,7 @@ func TestValidateBaseline(t *testing.T) {
 				Mode:   BaselineModeOverlay,
 				Source: &BaselineSource{Path: "/tmp/u.vmdk", Format: "vmdk"},
 			},
-			wantErr: "baseline.source.format must be one of",
+			wantErr: "not supported in this release",
 		},
 		{
 			name: "overlay accepts qcow2 format",
@@ -246,6 +256,137 @@ func TestValidateBaseline(t *testing.T) {
 	}
 }
 
+// TestValidateOverlaySystemConfig confirms that an overlay-mode template is
+// rejected when it sets any systemConfig section the overlay pipeline cannot
+// apply (users, hostname, network, initramfs, kernel, immutability, fde,
+// bootloader), and that overlay-supported sections (packages, configurations,
+// additionalFiles, name, description) pass. It also confirms these sections are
+// still allowed in create mode.
+func TestValidateOverlaySystemConfig(t *testing.T) {
+	overlayBaseline := func() *Baseline {
+		return &Baseline{Mode: BaselineModeOverlay, Source: &BaselineSource{Path: "/tmp/u.raw"}}
+	}
+
+	tests := []struct {
+		name    string
+		sc      SystemConfig
+		wantErr string // substring expected in the error; "" means expect success
+	}{
+		{
+			name: "overlay-supported sections pass",
+			sc: SystemConfig{
+				Name:            "overlay",
+				Description:     "adds a package",
+				Packages:        []string{"tree"},
+				Configurations:  []ConfigurationInfo{{Cmd: "echo hi"}},
+				AdditionalFiles: []AdditionalFileInfo{{Local: "a", Final: "/b"}},
+			},
+		},
+		{
+			name:    "users rejected",
+			sc:      SystemConfig{Users: []UserConfig{{Name: "bob"}}},
+			wantErr: "systemConfig.users",
+		},
+		{
+			name:    "hostname rejected",
+			sc:      SystemConfig{HostName: "myhost"},
+			wantErr: "systemConfig.hostname",
+		},
+		{
+			name:    "network rejected",
+			sc:      SystemConfig{Network: NetworkConfig{Backend: "netplan"}},
+			wantErr: "systemConfig.network",
+		},
+		{
+			name:    "initramfs rejected",
+			sc:      SystemConfig{Initramfs: Initramfs{Template: "initrd.tmpl"}},
+			wantErr: "systemConfig.initramfs",
+		},
+		{
+			name:    "kernel rejected",
+			sc:      SystemConfig{Kernel: KernelConfig{Version: "6.8.0"}},
+			wantErr: "systemConfig.kernel",
+		},
+		{
+			name:    "immutability rejected (yaml marker)",
+			sc:      SystemConfig{Immutability: ImmutabilityConfig{wasProvided: true}},
+			wantErr: "systemConfig.immutability",
+		},
+		{
+			// A programmatically-built template sets Enabled directly without the YAML
+			// marker; overlay must still reject it (exported field, not just wasProvided).
+			name:    "immutability rejected (Enabled exported field)",
+			sc:      SystemConfig{Immutability: ImmutabilityConfig{Enabled: true}},
+			wantErr: "systemConfig.immutability",
+		},
+		{
+			// A Secure Boot key set without the YAML marker must likewise be rejected.
+			name:    "immutability rejected (secure boot key exported field)",
+			sc:      SystemConfig{Immutability: ImmutabilityConfig{SecureBootDBKey: "/keys/db.key"}},
+			wantErr: "systemConfig.immutability",
+		},
+		{
+			name:    "fde rejected",
+			sc:      SystemConfig{FDE: FDEConfig{Enabled: true}},
+			wantErr: "systemConfig.fde",
+		},
+		{
+			name:    "bootloader rejected",
+			sc:      SystemConfig{Bootloader: Bootloader{Provider: "grub2"}},
+			wantErr: "systemConfig.bootloader",
+		},
+		{
+			name: "multiple sections reported together in fixed order",
+			sc: SystemConfig{
+				Bootloader: Bootloader{Provider: "grub2"},
+				Users:      []UserConfig{{Name: "bob"}},
+				HostName:   "myhost",
+			},
+			wantErr: "systemConfig.users, systemConfig.hostname, systemConfig.bootloader",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpl := &ImageTemplate{Baseline: overlayBaseline(), SystemConfig: tt.sc}
+			err := tmpl.validateBaseline()
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("expected no error, got %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected error to contain %q, got %q", tt.wantErr, err.Error())
+			}
+		})
+	}
+
+	// Create mode must not reject these sections — they are the normal
+	// full-build inputs and only overlay mode is constrained.
+	t.Run("create mode allows all sections", func(t *testing.T) {
+		tmpl := &ImageTemplate{
+			Baseline: &Baseline{Mode: BaselineModeCreate},
+			SystemConfig: SystemConfig{
+				Users:        []UserConfig{{Name: "bob"}},
+				HostName:     "myhost",
+				Network:      NetworkConfig{Backend: "netplan"},
+				Initramfs:    Initramfs{Template: "initrd.tmpl"},
+				Kernel:       KernelConfig{Version: "6.8.0"},
+				Immutability: ImmutabilityConfig{wasProvided: true},
+				FDE:          FDEConfig{Enabled: true, PassphraseFile: "/tmp/pp"},
+				Bootloader:   Bootloader{Provider: "grub2"},
+			},
+		}
+		if err := tmpl.validateBaseline(); err != nil {
+			t.Fatalf("create mode should not reject systemConfig sections, got %v", err)
+		}
+	})
+}
+
 // TestOverlayPolicyDerivesAllowUpgrade confirms validate() derives the internal
 // AllowUpgrade gate from packageOperation: on for additive-and-upgrade, off for
 // additive-only (and the empty default).
@@ -266,6 +407,43 @@ func TestOverlayPolicyDerivesAllowUpgrade(t *testing.T) {
 		if p.AllowUpgrade != c.want {
 			t.Errorf("packageOperation %q: AllowUpgrade = %v, want %v", c.op, p.AllowUpgrade, c.want)
 		}
+	}
+}
+
+// TestOverlayPolicyAllowPackageRemovalRequiresUpgrade confirms validate() permits
+// allowPackageRemoval only under additive-and-upgrade: removal is more invasive
+// than an in-place upgrade, so it is rejected under additive-only (and the empty
+// default), and allowed with additive-and-upgrade.
+func TestOverlayPolicyAllowPackageRemovalRequiresUpgrade(t *testing.T) {
+	cases := []struct {
+		name    string
+		op      string
+		removal bool
+		wantErr bool
+	}{
+		{"removal with additive-and-upgrade allowed", OverlayPackageOpAdditiveAndUpgrade, true, false},
+		{"removal with additive-only rejected", OverlayPackageOpAdditiveOnly, true, true},
+		{"removal with empty (defaults to additive-only) rejected", "", true, true},
+		{"no removal with additive-only allowed", OverlayPackageOpAdditiveOnly, false, false},
+		{"no removal with additive-and-upgrade allowed", OverlayPackageOpAdditiveAndUpgrade, false, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := &OverlayPolicy{PackageOperation: c.op, AllowPackageRemoval: c.removal}
+			err := p.validate()
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("expected validate() to reject allowPackageRemoval under %q", c.op)
+				}
+				if !strings.Contains(err.Error(), "allowPackageRemoval requires packageOperation") {
+					t.Errorf("error should name the requirement, got: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validate(): unexpected error %v", err)
+			}
+		})
 	}
 }
 
@@ -397,10 +575,71 @@ func TestSchemaAcceptsBaseline(t *testing.T) {
 	}
 }
 
-// TestSchemaRejectsAllowRemoval ensures `allowRemoval` (intentionally absent
-// from OverlayPolicy) is rejected by additionalProperties:false.
-func TestSchemaRejectsAllowRemoval(t *testing.T) {
-	tmpl := `{
+// TestSchemaAcceptsBaselineSBOMPath ensures the optional baseline.source.sbomPath
+// field is accepted by the schema, and that a URI-scheme value is rejected.
+func TestSchemaAcceptsBaselineSBOMPath(t *testing.T) {
+	valid := `{
+		"image": {"name": "ub", "version": "1.0.0"},
+		"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"},
+		"baseline": {
+			"mode": "overlay",
+			"source": {"path": "/tmp/u.raw", "sbomPath": "/tmp/base.spdx.json"}
+		}
+	}`
+	if err := validate.ValidateUserTemplateJSON([]byte(valid)); err != nil {
+		t.Fatalf("template with baseline.source.sbomPath should validate: %v", err)
+	}
+
+	scheme := `{
+		"image": {"name": "ub", "version": "1.0.0"},
+		"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"},
+		"baseline": {
+			"mode": "overlay",
+			"source": {"path": "/tmp/u.raw", "sbomPath": "https://example.com/base.spdx.json"}
+		}
+	}`
+	if err := validate.ValidateUserTemplateJSON([]byte(scheme)); err == nil {
+		t.Fatalf("sbomPath with a URI scheme should be rejected by schema")
+	}
+}
+
+// TestSchemaAcceptsAllowPackageRemoval ensures the opt-in `allowPackageRemoval`
+// boolean is accepted by the OverlayPolicy schema when paired with
+// packageOperation "additive-and-upgrade", rejected when paired with (or
+// defaulting to) "additive-only", and that an unknown property is still rejected
+// by additionalProperties:false.
+func TestSchemaAcceptsAllowPackageRemoval(t *testing.T) {
+	// Accepted: allowPackageRemoval with additive-and-upgrade.
+	accepted := `{
+		"image": {"name": "ub", "version": "1.0.0"},
+		"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"},
+		"baseline": {
+			"mode": "overlay",
+			"source": {"path": "/tmp/u.raw"}
+		},
+		"overlayPolicy": {"packageOperation": "additive-and-upgrade", "allowPackageRemoval": true}
+	}`
+	if err := validate.ValidateUserTemplateJSON([]byte(accepted)); err != nil {
+		t.Fatalf("allowPackageRemoval with additive-and-upgrade should validate: %v", err)
+	}
+
+	// Rejected: allowPackageRemoval under the default (additive-only) — removal is
+	// only permitted with additive-and-upgrade.
+	rejectedAdditiveOnly := `{
+		"image": {"name": "ub", "version": "1.0.0"},
+		"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"},
+		"baseline": {
+			"mode": "overlay",
+			"source": {"path": "/tmp/u.raw"}
+		},
+		"overlayPolicy": {"packageOperation": "additive-only", "allowPackageRemoval": true}
+	}`
+	if err := validate.ValidateUserTemplateJSON([]byte(rejectedAdditiveOnly)); err == nil {
+		t.Fatalf("allowPackageRemoval under additive-only should be rejected by the schema")
+	}
+
+	// The old misspelling / any unknown property stays rejected.
+	rejected := `{
 		"image": {"name": "ub", "version": "1.0.0"},
 		"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"},
 		"baseline": {
@@ -409,8 +648,8 @@ func TestSchemaRejectsAllowRemoval(t *testing.T) {
 		},
 		"overlayPolicy": {"allowRemoval": true}
 	}`
-	if err := validate.ValidateUserTemplateJSON([]byte(tmpl)); err == nil {
-		t.Fatalf("template with allowRemoval should be rejected by schema")
+	if err := validate.ValidateUserTemplateJSON([]byte(rejected)); err == nil {
+		t.Fatalf("an unknown overlayPolicy property should still be rejected by the schema")
 	}
 }
 

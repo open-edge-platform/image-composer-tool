@@ -42,8 +42,13 @@ baseline:
     path: /path/to/ubuntu-24.04-base.img
     format: raw
 
-# Overlay is strictly additive in v1: packages may only be added, never removed
-# or downgraded, and any conflict fails the preflight gate.
+# This example uses the default additive-only policy: packages may only be added,
+# never upgraded, removed, or downgraded, and any conflict fails the preflight gate.
+# To upgrade baseline packages, set `packageOperation: additive-and-upgrade`; to let
+# the overlay remove a baseline package a new package conflicts with (e.g. remove
+# initramfs-tools so dracut can install), additionally set `allowPackageRemoval: true`
+# (removal requires additive-and-upgrade). Bootloader and bootable-kernel packages
+# are never removed. See the "Package removal" note in the templates reference.
 overlayPolicy:
   packageOperation: additive-only
   conflictPolicy: fail
