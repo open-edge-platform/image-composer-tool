@@ -23,9 +23,22 @@ guidance on component behavior, state shape, and layout ordering.
 
 ### Problem Statement
 
-The original prototype exposed package version selection as two separate
-buttons per row — **Latest** and **Pin** — where **Pin** toggled a secondary
-row of version buttons. This had three problems surfaced during review:
+In the `main` baseline, the Packages step's package rows had **no version
+selection UI at all**: each row was a checkbox plus the package name and
+description, full stop. A handful of curated example packages simulated
+"pinning" by baking a version straight into the package `name` string (e.g.
+`intel-oneapi-runtime-compilers_2025.3.3-30`, `openvino_2025.3.0.19807`) —
+there was no control for a user to choose or change that version, and no way
+to tell, at a glance, which of a package's available versions (if any) was in
+play. The section order was **Search Packages → Use-Case Bundles (always
+expanded) → Browse Repositories**.
+
+An interim iteration (not shipped, superseded by this ADR) tried adding
+interactive version control via two separate buttons per row — **Latest** and
+**Pin** — where **Pin** toggled a secondary row of version buttons. Review of
+that iteration surfaced three problems, which this ADR's design (see
+[Comparison](#comparison-main-baseline-vs-proposed-design) below) resolves
+directly against the `main` baseline:
 
 1. **Two competing controls for one decision.** "Latest" and "Pin" are not
    independent toggles; a package is *either* tracking latest *or* pinned to
@@ -34,11 +47,13 @@ row of version buttons. This had three problems surfaced during review:
    pinned version (Pin, then pick a version).
 2. **Page-order friction.** The Use-Case Bundles grid rendered fully expanded
    above the Search box on every visit to the Packages step, pushing the more
-   frequently used search/browse controls below the fold.
+   frequently used search/browse controls below the fold. (This friction
+   already existed in `main`, just with the sections in the other order.)
 3. **Weak scanability.** The selected version and the source repository were
    not visually anchored to the package name, so a dense package list (repos
    with hundreds/thousands of packages) was hard to scan for "what did I pick,
-   and from where."
+   and from where." `main` had no version affordance to anchor at all, and no
+   repo-name line on the row either.
 
 ### Constraints
 
@@ -51,6 +66,25 @@ row of version buttons. This had three problems surfaced during review:
   in the prototype and not being revisited here.
 - Must remain usable with only a handful of packages selected as well as
   dozens — bundle discovery shouldn't dominate the page in either case.
+
+---
+
+## Comparison: `main` Baseline vs Proposed Design
+
+| Aspect | `main` baseline | Proposed (this ADR) |
+|---|---|---|
+| Version selection control | None. Version is either absent or hardcoded into the package `name` string (e.g. `openvino_2025.3.0.19807`); not user-selectable. | A single row of mutually-exclusive chips: `Latest` + each known version, capped with `+N more`/`show less`. |
+| Package data model | Some `PACKAGE_DB` entries encode a fixed version in `name`; no separate `version`/`versions` fields. | Every entry carries an explicit `version` (latest) and optional `versions` array; `name` is always the plain package name. |
+| Package row layout | Single line: checkbox, name, description. | Multi-line: name + version badge on top, repo name below, version chips below that. |
+| Repo attribution on the row | Not shown per-row (only implied by which repo pane you're browsing). | Repo name shown explicitly on every row, including in global search results. |
+| Use-Case Bundles default state | Always expanded. | Collapsed by default with a `Show`/`Hide` disclosure toggle. |
+| Packages step section order | Search Packages → Use-Case Bundles → Browse Repositories. | Use-Case Bundles (collapsed) → Search Packages → Browse Repositories. |
+| Search dropdown rows | Name + description + repo id chip; no version affordance. | Name + version badge, repo name, and the same version-chip row used in the browse pane. |
+| Selection wire format (`systemConfig.packages`) | `name` or a `name` with a version baked in by hand. | Unchanged: `name` (latest) or `name_version` (pinned) — see [State shape](#state-shape). |
+
+The row layout, version-chip control, and bundle-ordering changes above are
+this ADR's decisions; the wire format they produce is intentionally identical
+to what `main` already accepted.
 
 ---
 
@@ -161,9 +195,10 @@ encoding:
 
 | Option | Rejected because |
 |---|---|
+| Keep `main`'s baseline: no version UI, versions hardcoded into `name` | Not user-selectable at all; doesn't scale past a handful of hand-picked demo packages and blocks any real "pin a version" use case |
 | Keep separate Latest/Pin buttons, just restyle them | Doesn't resolve the invalid-intermediate-state problem; only a visual patch |
 | Dropdown/`<Select>` for version instead of chips | Hides all versions behind an extra click even for the common 2-3-version case; chips keep the common case one click while still scaling via "show more" |
-| Bundles expanded by default, Search below | Keeps the original page-order friction this ADR sets out to fix |
+| Bundles expanded by default, Search below (either order, as in `main`) | Keeps the page-order friction this ADR sets out to fix |
 | Version badge as a tooltip instead of inline text | Tooltips aren't scannable at a glance across a long list; an always-visible badge is |
 
 ---
