@@ -4,6 +4,8 @@
 package api
 
 import (
+	"time"
+
 	httpapi "github.com/open-edge-platform/image-composer-tool/internal/api/http"
 	"github.com/open-edge-platform/image-composer-tool/internal/api/service"
 )
@@ -226,8 +228,11 @@ func fromBuildDetails(d *service.BuildDetails) httpapi.BuildDetails {
 	}
 }
 
-func fromHistory(items []service.HistoryItem) httpapi.BuildList {
-	out := httpapi.BuildList{Builds: make([]httpapi.HistoryItem, len(items))}
+func fromHistory(items []service.HistoryItem, serverTime time.Time) httpapi.BuildList {
+	out := httpapi.BuildList{
+		Builds:     make([]httpapi.HistoryItem, len(items)),
+		ServerTime: serverTime.UTC().Truncate(time.Millisecond),
+	}
 	for i, it := range items {
 		out.Builds[i] = httpapi.HistoryItem{
 			Id:        it.ID,
