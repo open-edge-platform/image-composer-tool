@@ -3,7 +3,7 @@
 **Status**: Proposed
 **Date**: 2026-08-10
 **Authors**: ICT Team
-**Technical Area**: Web Frontend (Advanced tab — Packages step)
+**Technical Area**: Web Frontend (Advanced tab, Packages step)
 **Related**: [ADR: Web UI and API Tech Stack](adr-web-ui-tech-stack.md), [UI Prototype](../../web/prototype/template-builder.html)
 
 ---
@@ -14,8 +14,8 @@ This ADR records the interaction model for selecting packages and package
 versions in the Advanced tab's Packages step, as implemented in the
 `web/prototype/template-builder.html` reference prototype. It supersedes the
 "Packages step" row of the parent [Web UI Tech Stack ADR](adr-web-ui-tech-stack.md#advanced-tab)
-with a more detailed design, and gives the production frontend team concrete
-guidance on component behavior, state shape, and layout ordering.
+with a more detailed design, and gives the guidance on component behavior,
+state shape, and layout ordering.
 
 ---
 
