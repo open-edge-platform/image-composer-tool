@@ -249,11 +249,12 @@ func TestInstallOverlayPackages_RemovesConflictingBeforeInstall(t *testing.T) {
 	}
 }
 
-// TestInstallOverlayPackages_BrokenDepsAfterRemovalFails confirms the post-install
-// dependency audit fails the build when a force-removal left the baseline with an
-// unmet dependency. The audit runs twice (pre-removal healthy, post-install broken)
-// so the NEW breakage is attributed to the overlay.
-func TestInstallOverlayPackages_BrokenDepsAfterRemovalFails(t *testing.T) {
+// TestInstallOverlayPackages_CascadeRemovesOrphanedReverseDep confirms the
+// post-install audit CASCADES: a reverse-dependency the force-removal orphaned (an
+// unmet dependency that is new after the install) is itself removed, and the build
+// succeeds. The removal is folded into the report so stats/SBOM see the final
+// inventory. This is the dracut → initramfs-tools → cloud-initramfs-growroot case.
+func TestInstallOverlayPackages_CascadeRemovesOrphanedReverseDep(t *testing.T) {
 	dir := writeArtifacts(t, t.TempDir(), "dracut_1.deb")
 	plan := &ResolutionPlan{
 		Requested:   []string{"dracut"},
@@ -261,27 +262,112 @@ func TestInstallOverlayPackages_BrokenDepsAfterRemovalFails(t *testing.T) {
 		ToInstall:   []ResolvedPackage{{Name: "dracut", Version: "1", Arch: "amd64", URL: "https://r/dracut_1.deb"}},
 	}
 	report := &PreflightReport{ToRemove: []string{"initramfs-tools"}, ApprovedRemovals: []string{"initramfs-tools"}}
-	// Healthy before the removal, "foo" broken after the install.
-	backend := &fakeInstaller{fam: PackageManagerAPT, auditBroken: [][]string{nil, {"foo"}}}
+	// Healthy before the removal; "cloud-initramfs-growroot" orphaned after the
+	// install; clean once it is cascade-removed.
+	backend := &fakeInstaller{fam: PackageManagerAPT, auditBroken: [][]string{nil, {"cloud-initramfs-growroot"}, nil}}
 	h := &installHarness{}
 
+	var result *InstallResult
 	var err error
 	withStubbedInstall(t, backend, h, func() {
-		_, err = InstallOverlayPackages(aptInfo(), "/mnt/root", plan, report)
+		result, err = InstallOverlayPackages(aptInfo(), "/mnt/root", plan, report)
 	})
-	if err == nil || !strings.Contains(err.Error(), "unmet dependency failure") {
-		t.Fatalf("expected the post-install broken-dependency audit to fail the build, got %v", err)
+	if err != nil {
+		t.Fatalf("cascade removal of an orphaned reverse-dependency should succeed, got %v", err)
 	}
-	if backend.auditCalls != 2 {
-		t.Errorf("audit must run pre-removal and post-install, got %d call(s)", backend.auditCalls)
+	// pre-removal + post-install + post-cascade = 3 audits.
+	if backend.auditCalls != 3 {
+		t.Errorf("audit must run pre-removal, post-install, and post-cascade, got %d call(s)", backend.auditCalls)
+	}
+	// initramfs-tools removed first, then the orphaned reverse-dependency.
+	if !reflect.DeepEqual(backend.gotRemoved, []string{"initramfs-tools", "cloud-initramfs-growroot"}) {
+		t.Errorf("removed = %v, want [initramfs-tools cloud-initramfs-growroot]", backend.gotRemoved)
+	}
+	if !reflect.DeepEqual(result.CascadeRemoved, []string{"cloud-initramfs-growroot"}) {
+		t.Errorf("result.CascadeRemoved = %v, want [cloud-initramfs-growroot]", result.CascadeRemoved)
+	}
+	// Folded into the report so stats/SBOM reflect the final inventory.
+	if !contains(report.ApprovedRemovals, "cloud-initramfs-growroot") {
+		t.Errorf("cascade removal must be folded into report.ApprovedRemovals, got %v", report.ApprovedRemovals)
+	}
+	if report.Removes != 1 {
+		t.Errorf("report.Removes = %d, want 1 (the cascade removal)", report.Removes)
+	}
+}
+
+// TestInstallOverlayPackages_CascadeTransitiveChain confirms the cascade is
+// transitive: removing an orphaned package that in turn orphans ANOTHER package
+// removes both, over successive passes, until the dependency tree is whole.
+func TestInstallOverlayPackages_CascadeTransitiveChain(t *testing.T) {
+	dir := writeArtifacts(t, t.TempDir(), "dracut_1.deb")
+	plan := &ResolutionPlan{
+		DownloadDir: dir,
+		ToInstall:   []ResolvedPackage{{Name: "dracut", Version: "1", URL: "https://r/dracut_1.deb"}},
+	}
+	report := &PreflightReport{ToRemove: []string{"initramfs-tools"}, ApprovedRemovals: []string{"initramfs-tools"}}
+	// pre: healthy; post-install: "a" broken; after removing "a": "b" broken; then clean.
+	backend := &fakeInstaller{fam: PackageManagerAPT, auditBroken: [][]string{nil, {"a"}, {"b"}, nil}}
+	h := &installHarness{}
+
+	var result *InstallResult
+	var err error
+	withStubbedInstall(t, backend, h, func() {
+		result, err = InstallOverlayPackages(aptInfo(), "/mnt/root", plan, report)
+	})
+	if err != nil {
+		t.Fatalf("transitive cascade should succeed, got %v", err)
+	}
+	if !reflect.DeepEqual(backend.gotRemoved, []string{"initramfs-tools", "a", "b"}) {
+		t.Errorf("removed = %v, want [initramfs-tools a b]", backend.gotRemoved)
+	}
+	if !reflect.DeepEqual(result.CascadeRemoved, []string{"a", "b"}) {
+		t.Errorf("result.CascadeRemoved = %v, want [a b]", result.CascadeRemoved)
+	}
+	if report.Removes != 2 {
+		t.Errorf("report.Removes = %d, want 2", report.Removes)
+	}
+}
+
+// TestInstallOverlayPackages_CascadeRemovesExactMultiarchInstance confirms that on a
+// multiarch (deb) baseline the cascade purges the EXACT broken instance by its
+// arch-qualified identity (e.g. "libc6:i386"), not the ambiguous bare name — while the
+// bare name is what is reported (folded into ApprovedRemovals / CascadeRemoved).
+func TestInstallOverlayPackages_CascadeRemovesExactMultiarchInstance(t *testing.T) {
+	dir := writeArtifacts(t, t.TempDir(), "dracut_1.deb")
+	plan := &ResolutionPlan{
+		DownloadDir: dir,
+		ToInstall:   []ResolvedPackage{{Name: "dracut", Version: "1", URL: "https://r/dracut_1.deb"}},
+	}
+	report := &PreflightReport{ToRemove: []string{"initramfs-tools"}, ApprovedRemovals: []string{"initramfs-tools"}}
+	// apt-get check reports the i386 instance broken with its arch qualifier.
+	backend := &fakeInstaller{fam: PackageManagerAPT, auditBroken: [][]string{nil, {"libfoo:i386 | Depends: libbar"}, nil}}
+	h := &installHarness{}
+
+	var result *InstallResult
+	var err error
+	withStubbedInstall(t, backend, h, func() {
+		result, err = InstallOverlayPackages(aptInfo(), "/mnt/root", plan, report)
+	})
+	if err != nil {
+		t.Fatalf("cascade of a multiarch instance should succeed, got %v", err)
+	}
+	// The removal operand keeps the arch qualifier so dpkg targets the exact instance.
+	if !reflect.DeepEqual(backend.gotRemoved, []string{"initramfs-tools", "libfoo:i386"}) {
+		t.Errorf("removed = %v, want [initramfs-tools libfoo:i386]", backend.gotRemoved)
+	}
+	// Reporting uses the bare name (matches BaselinePackage.Name for stats/SBOM).
+	if !reflect.DeepEqual(result.CascadeRemoved, []string{"libfoo"}) {
+		t.Errorf("result.CascadeRemoved = %v, want [libfoo]", result.CascadeRemoved)
+	}
+	if !contains(report.ApprovedRemovals, "libfoo") {
+		t.Errorf("cascade removal must fold the bare name into ApprovedRemovals, got %v", report.ApprovedRemovals)
 	}
 }
 
 // TestInstallOverlayPackages_PreExistingBrokenBaselineNotBlamed confirms a baseline
-// that was ALREADY broken before the overlay does not fail the build when the SAME
-// package remains broken afterward: the before/after diff finds no NEW breakage, so
-// pre-existing breakage is not attributed to the overlay. The post-install audit
-// still runs (a wholesale skip would miss a different new breakage — see below).
+// that was ALREADY broken before the overlay is neither failed nor cascade-removed
+// when the SAME package remains broken afterward: the before/after diff finds no NEW
+// breakage, so pre-existing breakage is not attributed to (or "fixed" by) the overlay.
 func TestInstallOverlayPackages_PreExistingBrokenBaselineNotBlamed(t *testing.T) {
 	dir := writeArtifacts(t, t.TempDir(), "dracut_1.deb")
 	plan := &ResolutionPlan{
@@ -289,46 +375,134 @@ func TestInstallOverlayPackages_PreExistingBrokenBaselineNotBlamed(t *testing.T)
 		ToInstall:   []ResolvedPackage{{Name: "dracut", Version: "1", URL: "https://r/dracut_1.deb"}},
 	}
 	report := &PreflightReport{ToRemove: []string{"initramfs-tools"}, ApprovedRemovals: []string{"initramfs-tools"}}
-	// "oldbroken" is broken both before and after: no NEW breakage, so it must pass.
+	// "oldbroken" is broken both before and after: no NEW breakage, so it must pass
+	// WITHOUT cascade-removing the pre-existing broken package.
 	backend := &fakeInstaller{fam: PackageManagerAPT, auditBroken: [][]string{{"oldbroken"}, {"oldbroken"}}}
 	h := &installHarness{}
 
+	var result *InstallResult
 	var err error
 	withStubbedInstall(t, backend, h, func() {
-		_, err = InstallOverlayPackages(aptInfo(), "/mnt/root", plan, report)
+		result, err = InstallOverlayPackages(aptInfo(), "/mnt/root", plan, report)
 	})
 	if err != nil {
 		t.Fatalf("a pre-existing broken baseline must not be blamed on the overlay, got %v", err)
 	}
 	if backend.auditCalls != 2 {
-		t.Errorf("audit must run both pre-removal and post-install for a reliable diff, got %d call(s)", backend.auditCalls)
+		t.Errorf("audit must run pre-removal and post-install (no cascade needed), got %d call(s)", backend.auditCalls)
+	}
+	if len(result.CascadeRemoved) != 0 {
+		t.Errorf("a pre-existing broken package must NOT be cascade-removed, got %v", result.CascadeRemoved)
+	}
+	if contains(backend.gotRemoved, "oldbroken") {
+		t.Errorf("pre-existing broken 'oldbroken' must not be removed, got %v", backend.gotRemoved)
 	}
 }
 
-// TestInstallOverlayPackages_NewBreakageOnAlreadyBrokenBaselineFails is the case the
-// wholesale suppression missed: the baseline starts with one broken package and the
-// removal introduces a DIFFERENT new breakage. The before/after diff must flag the
-// new package (and not the pre-existing one) and fail the build.
-func TestInstallOverlayPackages_NewBreakageOnAlreadyBrokenBaselineFails(t *testing.T) {
+// TestInstallOverlayPackages_CascadeRemovesOnlyNewBreakage confirms the cascade
+// removes a NEW breakage the removal introduced while leaving a DIFFERENT, pre-existing
+// broken package untouched.
+func TestInstallOverlayPackages_CascadeRemovesOnlyNewBreakage(t *testing.T) {
 	dir := writeArtifacts(t, t.TempDir(), "dracut_1.deb")
 	plan := &ResolutionPlan{
 		DownloadDir: dir,
 		ToInstall:   []ResolvedPackage{{Name: "dracut", Version: "1", URL: "https://r/dracut_1.deb"}},
 	}
 	report := &PreflightReport{ToRemove: []string{"initramfs-tools"}, ApprovedRemovals: []string{"initramfs-tools"}}
-	// "oldbroken" pre-exists; "newbroken" is introduced by the removal.
-	backend := &fakeInstaller{fam: PackageManagerAPT, auditBroken: [][]string{{"oldbroken"}, {"oldbroken", "newbroken"}}}
+	// "oldbroken" pre-exists; "newbroken" is introduced by the removal; after removing
+	// "newbroken" only "oldbroken" (pre-existing) remains → no further cascade.
+	backend := &fakeInstaller{fam: PackageManagerAPT, auditBroken: [][]string{{"oldbroken"}, {"oldbroken", "newbroken"}, {"oldbroken"}}}
+	h := &installHarness{}
+
+	var result *InstallResult
+	var err error
+	withStubbedInstall(t, backend, h, func() {
+		result, err = InstallOverlayPackages(aptInfo(), "/mnt/root", plan, report)
+	})
+	if err != nil {
+		t.Fatalf("cascade of the new breakage should succeed, got %v", err)
+	}
+	if !reflect.DeepEqual(result.CascadeRemoved, []string{"newbroken"}) {
+		t.Errorf("result.CascadeRemoved = %v, want [newbroken]", result.CascadeRemoved)
+	}
+	if contains(backend.gotRemoved, "oldbroken") {
+		t.Errorf("pre-existing breakage 'oldbroken' must not be cascade-removed, got %v", backend.gotRemoved)
+	}
+}
+
+// TestInstallOverlayPackages_CascadeFailsClosedOnBootloader confirms the cascade will
+// NOT remove a bootloader/kernel-image package: if an approved removal would orphan
+// one, the build fails closed with an actionable error rather than removing it.
+func TestInstallOverlayPackages_CascadeFailsClosedOnBootloader(t *testing.T) {
+	dir := writeArtifacts(t, t.TempDir(), "dracut_1.deb")
+	plan := &ResolutionPlan{
+		DownloadDir: dir,
+		ToInstall:   []ResolvedPackage{{Name: "dracut", Version: "1", URL: "https://r/dracut_1.deb"}},
+	}
+	report := &PreflightReport{ToRemove: []string{"initramfs-tools"}, ApprovedRemovals: []string{"initramfs-tools"}}
+	// A bootloader package is orphaned: it must never be cascade-removed.
+	backend := &fakeInstaller{fam: PackageManagerAPT, auditBroken: [][]string{nil, {"grub-efi-amd64"}}}
 	h := &installHarness{}
 
 	var err error
 	withStubbedInstall(t, backend, h, func() {
 		_, err = InstallOverlayPackages(aptInfo(), "/mnt/root", plan, report)
 	})
-	if err == nil || !strings.Contains(err.Error(), "newbroken") {
-		t.Fatalf("expected NEW breakage 'newbroken' to fail the build, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "grub-efi-amd64") {
+		t.Fatalf("cascade must fail closed on an orphaned bootloader package, got %v", err)
 	}
-	if strings.Contains(err.Error(), "oldbroken") {
-		t.Errorf("pre-existing breakage 'oldbroken' must not be attributed to the overlay: %v", err)
+	// Only the initial approved removal ran; the bootloader was NOT removed.
+	if !reflect.DeepEqual(backend.gotRemoved, []string{"initramfs-tools"}) {
+		t.Errorf("bootloader must not be cascade-removed; gotRemoved = %v", backend.gotRemoved)
+	}
+}
+
+// TestInstallOverlayPackages_CascadeFailsClosedOnToInstall confirms the cascade will
+// NOT remove a package the overlay is installing, even if the audit reports it broken.
+func TestInstallOverlayPackages_CascadeFailsClosedOnToInstall(t *testing.T) {
+	dir := writeArtifacts(t, t.TempDir(), "dracut_1.deb")
+	plan := &ResolutionPlan{
+		DownloadDir: dir,
+		ToInstall:   []ResolvedPackage{{Name: "dracut", Version: "1", URL: "https://r/dracut_1.deb"}},
+	}
+	report := &PreflightReport{ToRemove: []string{"initramfs-tools"}, ApprovedRemovals: []string{"initramfs-tools"}}
+	backend := &fakeInstaller{fam: PackageManagerAPT, auditBroken: [][]string{nil, {"dracut"}}}
+	h := &installHarness{}
+
+	var err error
+	withStubbedInstall(t, backend, h, func() {
+		_, err = InstallOverlayPackages(aptInfo(), "/mnt/root", plan, report)
+	})
+	if err == nil || !strings.Contains(err.Error(), "dracut") {
+		t.Fatalf("cascade must fail closed rather than remove a to-install package, got %v", err)
+	}
+	if contains(backend.gotRemoved, "dracut") {
+		t.Errorf("a to-install package must never be cascade-removed, got %v", backend.gotRemoved)
+	}
+}
+
+// TestBrokenDescriptorPackage confirms the family-specific extraction of a bare
+// package name from an audit failure descriptor.
+func TestBrokenDescriptorPackage(t *testing.T) {
+	cases := []struct {
+		name       string
+		family     PackageManager
+		descriptor string
+		want       string
+	}{
+		{"deb plain", PackageManagerAPT, "cloud-initramfs-growroot | Depends: initramfs-tools", "cloud-initramfs-growroot"},
+		{"deb multiarch", PackageManagerAPT, "libc6:i386 | Depends: libgcc-s1", "libc6"},
+		{"deb dotted name", PackageManagerAPT, "libssl1.1 | Depends: x", "libssl1.1"},
+		{"rpm name.arch", PackageManagerDNF, "kernel-core.x86_64 | requires foo", "kernel-core"},
+		{"rpm noarch", PackageManagerDNF, "python3-foo.noarch | ", "python3-foo"},
+		{"no requirement", PackageManagerAPT, "barepkg", "barepkg"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := brokenDescriptorPackage(tc.family, tc.descriptor); got != tc.want {
+				t.Errorf("brokenDescriptorPackage(%q, %q) = %q, want %q", tc.family, tc.descriptor, got, tc.want)
+			}
+		})
 	}
 }
 
