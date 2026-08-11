@@ -100,7 +100,6 @@ systemConfig: # Required
     - setools-console
 
     # intel-gpu-base
-    - kernel-drivers-gpu
     - linux-firmware-i915
     - linux-firmware-ice
     - intel-npu-firmware
@@ -114,11 +113,6 @@ systemConfig: # Required
     - dracut-hyperv
     - dracut-virtio
     - dracut-xen
-
-    # docker
-    - moby-engine
-    - docker-cli
-    - docker-compose
 
     # intel-wireless
     - linux-firmware-iwlwifi
