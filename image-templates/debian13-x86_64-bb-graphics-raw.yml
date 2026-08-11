@@ -1,0 +1,93 @@
+# =============================================================================
+# Debian 13 ("Trixie") CHILD template — add graphics packages via `extends`
+# Bayonne Bridge Project — GUI desktop variant
+# =============================================================================
+#
+# This template demonstrates the EXTENDS feature: it inherits the Debian 13
+# Bayonne Bridge base (Debian 13 qcow2 input + custom initrd + qcow2 output) and
+# adds ONLY the graphics packages needed to run GUI desktop apps. It does NOT
+# declare a baseline or an overlay policy of its own — those come from the parent.
+#
+# HOW THE MERGE WORKS (why this file only lists packages):
+#   * `extends` pulls in the parent, resolved relative to this file's directory.
+#   * The parent declares the baseline + policy; this child inherits them and MUST
+#     NOT redeclare them. The tool restricts an additive package set to exactly
+#     what the baseline-declaring template lists — so if this child re-declared
+#     the baseline, it would REPLACE the base's package/initrd set instead of
+#     adding to it. By leaving that config to the parent, this child's `packages`
+#     merge ADDITIVELY on top of the parent's (base packages ∪ graphics).
+#   * `configurations` also merge additively; the base's custom-initrd commands
+#     run first, so the initrd already reflects any graphics firmware added here.
+#
+# Output remains qcow2 and the custom initrd is inherited unchanged from the base.
+# =============================================================================
+
+# AI-searchable metadata for template discovery
+metadata:
+  description: >-
+    Debian 13 (Trixie) Bayonne Bridge GUI variant — extends the Debian 13 base and
+    adds graphics packages (Xorg, Mesa/Vulkan, fonts, GPU firmware) so the composed
+    qcow2 supports graphical desktop applications. Demonstrates the extends feature.
+  use_cases:
+    - Add GUI/graphics support to the Debian 13 base via template inheritance
+    - Demonstrate the extends feature adding packages onto a base template
+    - Compose a Debian 13 desktop-capable qcow2 for Bayonne Bridge
+  keywords:
+    - extends
+    - inheritance
+    - debian
+    - debian13
+    - trixie
+    - qcow2
+    - graphics
+    - desktop
+    - gui
+    - bayonne-bridge
+
+# Inherit the base (baseline source, policy, disk/qcow2 output, and the custom
+# initrd). Resolved relative to this file's directory. The parent's target must
+# match this template's target.
+extends: "debian13-x86_64-bb-overlay-initrd-raw.yml"
+
+image:
+  name: debian13-bb-graphics
+  version: "13.0"
+
+target:                 # must match the parent template's target
+  os: debian
+  dist: debian13
+  arch: x86_64
+  imageType: raw
+
+systemConfig:
+  name: graphics
+  description: Debian 13 Bayonne Bridge GUI variant — graphics stack added via extends
+
+  # ---------------------------------------------------------------------------
+  # Graphics packages — merged ADDITIVELY on top of the base. Enough of an
+  # X/Mesa stack to run GUI desktop apps: xserver-xorg pulls the video drivers,
+  # Mesa provides GL/Vulkan, fonts + GTK cover rendering, and firmware-* covers
+  # common GPUs (loaded by the base's custom initrd, which is regenerated there).
+  #
+  # Do NOT add a `baseline:` or `overlayPolicy:` block here — inheriting them
+  # from the parent is what keeps these packages ADDITIVE to the base.
+  # ---------------------------------------------------------------------------
+  packages:
+    # X server + input/video drivers + session bring-up
+    - xserver-xorg
+    - xserver-xorg-video-all
+    - xserver-xorg-input-all
+    - xinit
+    - x11-xserver-utils
+    - x11-utils
+    # OpenGL / Mesa userspace
+    - libgl1-mesa-dri
+    - libglx-mesa0
+    - mesa-utils
+    - mesa-vulkan-drivers
+    # Fonts + rendering so GUI apps display correctly
+    - fonts-dejavu-core
+    - libgtk-3-0
+    # GPU firmware the graphics stack / initrd may load at boot
+    - firmware-linux
+    - firmware-misc-nonfree
