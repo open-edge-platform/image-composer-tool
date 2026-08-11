@@ -5,10 +5,11 @@
 #
 # This template demonstrates the EXTENDS feature: it inherits the Debian 13
 # Bayonne Bridge base (Debian 13 qcow2 input + custom initrd + qcow2 output) and
-# adds ONLY the graphics packages needed to run GUI desktop apps. It does NOT
-# declare a baseline or an overlay policy of its own — those come from the parent.
+# adds the graphics packages plus the display-manager configuration needed to
+# boot into a GUI desktop. It does NOT declare a baseline or an overlay policy
+# of its own — those come from the parent.
 #
-# HOW THE MERGE WORKS (why this file only lists packages):
+# HOW THE MERGE WORKS (why this file only adds `packages` + `configurations`):
 #   * `extends` pulls in the parent, resolved relative to this file's directory.
 #   * The parent declares the baseline + policy; this child inherits them and MUST
 #     NOT redeclare them. The tool restricts an additive package set to exactly
@@ -91,3 +92,29 @@ systemConfig:
     # GPU firmware the graphics stack / initrd may load at boot
     - firmware-linux
     - firmware-misc-nonfree
+    # Display manager + GNOME session — turns the backend X/Mesa stack into a
+    # graphical login. gdm3 is the GNOME Display Manager; gnome-session provides
+    # the session gdm launches; gnome-shell is that session's compositor and is
+    # also what GDM's own greeter renders with. Without these the image has the
+    # graphics backend but nothing to bring up a login, so it boots to a tty.
+    - gdm3
+    - gnome-session
+    - gnome-shell
+
+  # ---------------------------------------------------------------------------
+  # Enable the graphical login. These commands run in the baseline chroot after
+  # package install; they merge AFTER the parent's configurations (which enable
+  # the 91hello dracut module), so ordering is safe.
+  #
+  # Installing gdm3 is NOT sufficient on its own: the Debian cloud baseline's
+  # default systemd target is multi-user.target, and gdm3.service is
+  # WantedBy=graphical.target — so at boot the system stops at multi-user and
+  # gdm never starts (hence the tty console, XDG_SESSION_TYPE=tty). Switching
+  # the default target to graphical.target is what actually flips the image to a
+  # graphical login. `systemctl enable gdm3` makes gdm3 the display-manager
+  # service explicitly; both operations only create symlinks, so they work
+  # offline inside the build chroot.
+  # ---------------------------------------------------------------------------
+  configurations:
+    - cmd: 'systemctl set-default graphical.target'
+    - cmd: 'systemctl enable gdm3'
