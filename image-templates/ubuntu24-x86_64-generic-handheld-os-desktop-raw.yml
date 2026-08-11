@@ -5,10 +5,12 @@
 # Ubuntu 24.04 generic handheld OS desktop image (raw) — extends child
 # =============================================================================
 # This is a THIN child of ubuntu24-x86_64-minimal-ptl-pv-desktop-base-raw.yml.
-# It inherits the base's disk layout, package repositories, bootloader,
+# It inherits the base's disk layout, the base overlay repository, bootloader,
 # immutability, kernel, network-manager netplan file, base package set and base
 # configuration commands, and layers on ONLY the handheld additions:
 #
+#   * packageRepositories: the child-only apt repos it alone consumes — Docker
+#     CE, RealSense, Mozilla (Firefox), OpenVINO and oneAPI,
 #   * packages: Docker CE engine, Firefox (.deb), Intel RealSense SDK, oneVPL,
 #     power/thermal daemons, cloud-init/chrony, benchmarking & profiling tools,
 #     and the linux-tools runtime deps refresh,
@@ -21,10 +23,11 @@
 #   - configurations are APPENDED after the base's — the base's GPU/NPU/
 #     linux-tools steps run first, then the commands below;
 #   - users merge by name (this `user` is added);
-#   - disk / packageRepositories / kernel / bootloader / immutability are NOT
-#     redeclared here, so they are inherited from the base verbatim. In
-#     particular repositories MUST stay in the base: the merge keys repos by
-#     `codename` only, so a `noble` repo here would collapse the base's.
+#   - packageRepositories merge by the (codename, url) PAIR, so the child-only
+#     repos below (Docker CE, RealSense, Mozilla, OpenVINO, oneAPI) are ADDED
+#     alongside the base's overlay `noble` repo instead of colliding with it;
+#   - disk / kernel / bootloader / immutability are NOT redeclared here, so they
+#     are inherited from the base verbatim.
 # =============================================================================
 
 # AI-searchable metadata for template discovery
@@ -60,6 +63,48 @@ target:
   dist: ubuntu24
   arch: x86_64
   imageType: raw
+
+# Child-only package repositories. Merged with the base by the (codename, url)
+# pair, so the `noble` repos here coexist with the base's overlay `noble` repo
+# rather than overriding it.
+packageRepositories:
+  # ----- OpenVINO -----
+  - codename: "ubuntu24"
+    url: "https://apt.repos.intel.com/openvino/2025"
+    pkey: "https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB"
+  # ----- Intel oneAPI (oneDNN / Base Toolkit) -----
+  - codename: "all"
+    url: "https://apt.repos.intel.com/oneapi"
+    pkey: "https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB"
+    component: "main"
+    priority: 500
+  # ----- Docker CE official -----
+  - codename: "noble"
+    url: "https://download.docker.com/linux/ubuntu"
+    pkey: "https://download.docker.com/linux/ubuntu/gpg"
+    component: "stable"
+    priority: 500
+  # ----- Intel RealSense SDK -----
+  # ref: https://docs.ros.org/en/iron/p/librealsense2/user_docs/distribution_linux.html
+  # TODO: the key ID below is hardcoded; need to find a better way to handle dynamic key discovery
+  #       in the packageRepositories section (ICT does not support shell substitution here).
+  # To get the current key ID if the build fails with NO_PUBKEY, run:
+  #   curl -sSf "https://librealsense.intel.com/Debian/apt-repo/dists/$(lsb_release -cs)/InRelease" \
+  #     | gpg --status-fd 1 --verify 2>/dev/null | grep "NO_PUBKEY" | awk '{print $3}'
+  # Then update the key ID in the pkey URL below.
+  - codename: "noble"
+    url: "https://librealsense.intel.com/Debian/apt-repo"
+    pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xFB0B24895113F120"
+    component: "main"
+    priority: 500
+  # ----- Mozilla Team PPA (Firefox .deb, avoids Ubuntu's snap-transitional package) -----
+  - codename: "noble"
+    url: "https://ppa.launchpadcontent.net/mozillateam/ppa/ubuntu"
+    pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x0AB215679C571D1C8325275B9BDB3D89CE49EC21"
+    component: "main"
+    priority: 1001
+    allowPackages:
+      - firefox
 
 systemConfig:
   name: generic-handheld-os

@@ -12,18 +12,17 @@
 # children (e.g. Ubuntu24-x86_64-generic-handheld-os-desktop-raw.yml), which add
 # their own packages/users/configurations additively on top.
 #
-# NOTE ON REPOSITORIES: this base intentionally owns the COMPLETE
-# packageRepositories list — including repos only consumed by children
-# (Docker CE, RealSense, Mozilla, OpenVINO, oneAPI). The extends merge keys
-# package repositories by `codename` ALONE and keeps one repo per codename, so
-# base and child cannot each contribute a `noble` repo without collapsing them.
-# Keeping every repo here lets children declare none and inherit the full set
-# intact (the merge's zero-repos fast path skips the codename-collapse entirely).
+# NOTE ON REPOSITORIES: this base owns only the repositories its OWN package
+# set needs — the Intel linux-overlay `noble` repo. Repos consumed solely by
+# children (Docker CE, RealSense, Mozilla, OpenVINO, oneAPI) now live in those
+# children. The extends merge keys package repositories by the (codename, url)
+# PAIR, so a child may contribute its own `noble` repos (Docker/RealSense/
+# Mozilla) alongside this base's overlay `noble` repo without collapsing them.
 # =============================================================================
 
 # AI-searchable metadata for template discovery
 metadata:
-  description: "Ubuntu 24.04 PTL PV desktop base image (raw) — trimmed foundation for extends children; owns the full apt repository set"
+  description: "Ubuntu 24.04 PTL PV desktop base image (raw) — trimmed foundation for extends children; owns the Intel linux-overlay apt repository its base package set needs"
   use_cases:
     - "PTL platform validation base"
     - "Intel GPU and NPU enablement"
@@ -102,8 +101,9 @@ disk:
       mountOptions: defaults
       flags: []
 
-# Additional package repositories for this image.
-# Owns the COMPLETE set so extends children can inherit them all (see header).
+# Package repositories required by this base's own package set. Child templates
+# add their own repos additively; the merge keys on (codename, url) so children
+# may contribute further `noble` repos without overriding this one (see header).
 packageRepositories:
   # Intel overlay repository (aligned with installer script)
   - codename: "noble"
@@ -178,43 +178,6 @@ packageRepositories:
       # Power and Thermal daemons for power and performance management
       - intel-lpmd
       - thermald
-  # ----- OpenVINO -----
-  - codename: "ubuntu24"
-    url: "https://apt.repos.intel.com/openvino/2025"
-    pkey: "https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB"
-  # ----- Intel oneAPI (oneDNN / Base Toolkit) -----
-  - codename: "all"
-    url: "https://apt.repos.intel.com/oneapi"
-    pkey: "https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB"
-    component: "main"
-    priority: 500
-  # ----- Docker CE official -----
-  - codename: "noble"
-    url: "https://download.docker.com/linux/ubuntu"
-    pkey: "https://download.docker.com/linux/ubuntu/gpg"
-    component: "stable"
-    priority: 500
-  # ----- Intel RealSense SDK -----
-  # ref: https://docs.ros.org/en/iron/p/librealsense2/user_docs/distribution_linux.html
-  # TODO: the key ID below is hardcoded; need to find a better way to handle dynamic key discovery
-  #       in the packageRepositories section (ICT does not support shell substitution here).
-  # To get the current key ID if the build fails with NO_PUBKEY, run:
-  #   curl -sSf "https://librealsense.intel.com/Debian/apt-repo/dists/$(lsb_release -cs)/InRelease" \
-  #     | gpg --status-fd 1 --verify 2>/dev/null | grep "NO_PUBKEY" | awk '{print $3}'
-  # Then update the key ID in the pkey URL below.
-  - codename: "noble"
-    url: "https://librealsense.intel.com/Debian/apt-repo"
-    pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xFB0B24895113F120"
-    component: "main"
-    priority: 500
-  # ----- Mozilla Team PPA (Firefox .deb, avoids Ubuntu's snap-transitional package) -----
-  - codename: "noble"
-    url: "https://ppa.launchpadcontent.net/mozillateam/ppa/ubuntu"
-    pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x0AB215679C571D1C8325275B9BDB3D89CE49EC21"
-    component: "main"
-    priority: 1001
-    allowPackages:
-      - firefox
 
 systemConfig:
   name: minimal
