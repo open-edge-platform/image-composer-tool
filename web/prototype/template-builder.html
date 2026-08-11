@@ -1028,7 +1028,7 @@ function syncBasicToAdvanced() {
   advState.template.target.imageType = state.imageType || preset.imageType || 'raw';
   advState.template.image.name = preset.imageName || 'my-edge-image';
   advState.template.packages = (preset.packages || ['cloud-init', 'rsyslog']).slice();
-  // Jump straight to Packages so repo/package actions (Latest/Pin) are visible immediately.
+  // Jump straight to Packages so repo/package actions (version chips) are visible immediately.
   advState.currentStep = 1;
   renderAdvSteps();
   renderAdvStepContent();
@@ -1144,11 +1144,12 @@ function isBaseSelected(baseName) {
 function setPackageSelection(baseName, mode) {
   const t = advState.template;
   const pkg = PACKAGE_DB.find(p => p.name === baseName);
-  if (!pkg) return;
 
+  // pkg is absent for synthetic full-catalog packages (allPackagesForRepo);
+  // still allow selecting those, just without a pinned version or repo lookup.
   t.packages = t.packages.filter(sel => selectionBaseName(sel) !== baseName);
-  t.packages.push(mode === 'pin' ? toPinnedSelection(pkg) : baseName);
-  if (!t.enabledRepos.includes(pkg.repo)) t.enabledRepos.push(pkg.repo);
+  t.packages.push(mode === 'pin' && pkg ? toPinnedSelection(pkg) : baseName);
+  if (pkg && !t.enabledRepos.includes(pkg.repo)) t.enabledRepos.push(pkg.repo);
 }
 
 function setPinnedVersion(baseName, version) {
@@ -1184,6 +1185,23 @@ function toggleBundlesCollapsed() {
   renderAdvStepContent();
 }
 
+// Escapes a value for safe interpolation into an inline onclick="...('value')"
+// handler: JS-string-escape first, then HTML-attribute-escape the result.
+function escapeJsAttr(str) {
+  const jsEscaped = String(str).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  return jsEscaped.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Escapes a value for safe insertion as HTML text content.
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 // Shared row markup for the version chip list: "Latest" first (default), then
 // known versions (capped, with +N more/show less). `handler` is the name of
 // the click handler function to invoke — differs between the browse pane
@@ -1195,10 +1213,14 @@ function renderVersionChips(name, versions, handler) {
   const visible = visibleVersions(name, extraVersions, DEFAULT_VISIBLE_VERSIONS);
   const hiddenCount = Math.max(0, extraVersions.length - visible.length);
   const expanded = isVersionListExpanded(name);
-  let html = `<button type="button" class="ver-chip ${!pinnedVersion ? 'active' : ''}" onclick="${handler}('${name}','latest')">Latest</button>`;
-  html += visible.map(v => `<button type="button" class="ver-chip ${pinnedVersion === v ? 'active' : ''}" onclick="${handler}('${name}','${v}')">${v}</button>`).join('');
-  if (hiddenCount > 0) html += `<button type="button" class="pin-versions-more" onclick="toggleVersionList('${name}')">+${hiddenCount} more</button>`;
-  if (expanded && extraVersions.length > DEFAULT_VISIBLE_VERSIONS) html += `<button type="button" class="pin-versions-more" onclick="toggleVersionList('${name}')">show less</button>`;
+  const safeName = escapeJsAttr(name);
+  // Chips render inside a <label> (see renderRepoPane); prevent their click from
+  // also toggling the row's checkbox via the label's default forwarding behavior.
+  const stop = 'event.preventDefault();event.stopPropagation();';
+  let html = `<button type="button" class="ver-chip ${!pinnedVersion ? 'active' : ''}" onclick="${stop}${handler}('${safeName}','latest')">Latest</button>`;
+  html += visible.map(v => `<button type="button" class="ver-chip ${pinnedVersion === v ? 'active' : ''}" onclick="${stop}${handler}('${safeName}','${escapeJsAttr(v)}')">${escapeHtml(v)}</button>`).join('');
+  if (hiddenCount > 0) html += `<button type="button" class="pin-versions-more" onclick="${stop}toggleVersionList('${safeName}')">+${hiddenCount} more</button>`;
+  if (expanded && extraVersions.length > DEFAULT_VISIBLE_VERSIONS) html += `<button type="button" class="pin-versions-more" onclick="${stop}toggleVersionList('${safeName}')">show less</button>`;
   return html;
 }
 
@@ -1328,7 +1350,7 @@ function renderAdvStepContent() {
         <div class="packages-layout">
           <div class="packages-main">
             <div class="form-group">
-              <div class="bundles-header" onclick="toggleBundlesCollapsed()">
+              <div class="bundles-header" role="button" tabindex="0" aria-expanded="${!pkgGroupsUI.bundlesCollapsed}" onclick="toggleBundlesCollapsed()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleBundlesCollapsed();}">
                 <label class="form-label" style="margin:0;cursor:pointer;">Use-Case Bundles</label>
                 <span class="bundles-toggle-icon">${pkgGroupsUI.bundlesCollapsed ? '&#9656; Show' : '&#9662; Hide'}</span>
               </div>
@@ -1562,7 +1584,7 @@ function renderRepoPane() {
   let listHtml = '';
   if (!filtered.length) {
     listHtml = q
-      ? `<div class="pane-empty">No packages match “${pkgGroupsUI.paneSearch}”.</div>`
+      ? `<div class="pane-empty">No packages match “${escapeHtml(pkgGroupsUI.paneSearch)}”.</div>`
       : `<div class="pane-empty">No suggested packages for this repository.<br>Uncheck “Suggested packages only” to browse all ${total.toLocaleString()}.</div>`;
   } else if (suggestedOnly) {
     listHtml = filtered.map(row).join('');
@@ -1772,7 +1794,7 @@ function onPackageSearch(query) {
     : PACKAGE_DB.filter(p => p.curated).slice(0, 8);
 
   if (results.length === 0) {
-    dropdown.innerHTML = `<div class="pkg-search-item" style="cursor:default;color:var(--text-muted);">No packages found for "${normalized}"</div>`;
+    dropdown.innerHTML = `<div class="pkg-search-item" style="cursor:default;color:var(--text-muted);">No packages found for "${escapeHtml(normalized)}"</div>`;
   } else {
     dropdown.innerHTML = results.map(p => {
       const pinnedVersion = selectionPinnedVersion(selectedEntryForBase(p.name));
