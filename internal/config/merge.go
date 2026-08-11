@@ -574,11 +574,18 @@ func mergePackageRepositories(defaultRepos, userRepos []PackageRepository) []Pac
 	merged := make([]PackageRepository, len(defaultRepos))
 	copy(merged, defaultRepos)
 
-	// For each user repo, override if codename matches a default, otherwise append
+	// The merge key is the (codename, url, path) tuple, not codename alone. This
+	// lets an extend template add multiple repositories that share a codename but
+	// differ in location — remote repos with different URLs, or local/path-based
+	// repos (which leave url empty and set path) with different paths. A user repo
+	// overrides a default only when codename, url and path all match (updating the
+	// other fields); otherwise it is appended.
 	for _, userRepo := range userRepos {
 		found := false
 		for i, defRepo := range merged {
-			if defRepo.Codename == userRepo.Codename {
+			if defRepo.Codename == userRepo.Codename &&
+				defRepo.URL == userRepo.URL &&
+				defRepo.Path == userRepo.Path {
 				merged[i] = userRepo
 				found = true
 				break

@@ -589,30 +589,53 @@ func TestMergeKernelConfig(t *testing.T) {
 
 func TestMergePackageRepositoriesDetailed(t *testing.T) {
 	defaultRepos := []PackageRepository{
-		{Codename: "main", URL: "http://default.com/main"},
+		{Codename: "main", URL: "http://default.com/main", Component: "main"},
 		{Codename: "universe", URL: "http://default.com/universe"},
 	}
 
 	userRepos := []PackageRepository{
-		{Codename: "main", URL: "http://user.com/main"},     // Override by codename
-		{Codename: "extras", URL: "http://user.com/extras"}, // Add new
+		{Codename: "main", URL: "http://default.com/main", Component: "restricted"}, // Same codename+url: override in place
+		{Codename: "main", URL: "http://user.com/main"},                             // Same codename, different url: coexists
+		{Codename: "extras", URL: "http://user.com/extras"},                         // New codename: appended
 	}
 
 	merged := mergePackageRepositories(defaultRepos, userRepos)
 
-	// User repos are appended to defaults; matching codenames override defaults
-	if len(merged) != 3 {
-		t.Errorf("expected 3 repositories (default universe + user main override + user extras appended), got %d", len(merged))
+	// (codename, url) is the merge key: the same-url "main" overrides in place,
+	// the different-url "main" is added alongside it, and "extras" is appended.
+	if len(merged) != 4 {
+		t.Errorf("expected 4 repositories (universe + main override + second main + extras), got %d", len(merged))
+	}
+
+	// The default "main" (same codename+url) must be overridden, not duplicated.
+	var defaultMain *PackageRepository
+	mainURLs := make(map[string]bool)
+	for i := range merged {
+		if merged[i].Codename == "main" {
+			mainURLs[merged[i].URL] = true
+			if merged[i].URL == "http://default.com/main" {
+				defaultMain = &merged[i]
+			}
+		}
+	}
+
+	// Both "main" URLs should be present (same-codename repos coexist).
+	if !mainURLs["http://default.com/main"] || !mainURLs["http://user.com/main"] {
+		t.Errorf("expected both main URLs to be present, got %v", mainURLs)
+	}
+	if defaultMain == nil {
+		t.Fatalf("expected default-url main repo to be present")
+	}
+	// The matching (codename+url) user repo overrides other fields.
+	if defaultMain.Component != "restricted" {
+		t.Errorf("expected default main component overridden to 'restricted', got '%s'", defaultMain.Component)
 	}
 
 	repoMap := make(map[string]string)
 	for _, repo := range merged {
-		repoMap[repo.Codename] = repo.URL
-	}
-
-	// main should be overridden by user
-	if repoMap["main"] != "http://user.com/main" {
-		t.Errorf("expected main repo to be from user, got '%s'", repoMap["main"])
+		if repo.Codename != "main" {
+			repoMap[repo.Codename] = repo.URL
+		}
 	}
 
 	// extras should be appended from user
@@ -623,6 +646,49 @@ func TestMergePackageRepositoriesDetailed(t *testing.T) {
 	// universe should still be present from defaults
 	if repoMap["universe"] != "http://default.com/universe" {
 		t.Errorf("expected universe repo from defaults, got '%s'", repoMap["universe"])
+	}
+}
+
+// TestMergePackageRepositoriesPathBased verifies that local/path-based repos
+// (url empty, path set) merge on (codename, path) just as remote repos merge on
+// (codename, url): same path overrides in place, a different path coexists.
+func TestMergePackageRepositoriesPathBased(t *testing.T) {
+	defaultRepos := []PackageRepository{
+		{Codename: "local", Path: "/srv/repo-a", Component: "main"},
+		{Codename: "local", Path: "/srv/repo-b"},
+	}
+
+	userRepos := []PackageRepository{
+		{Codename: "local", Path: "/srv/repo-a", Component: "restricted"}, // Same codename+path: override in place
+		{Codename: "local", Path: "/srv/repo-c"},                          // Same codename, different path: coexists
+	}
+
+	merged := mergePackageRepositories(defaultRepos, userRepos)
+
+	// repo-a is overridden in place; repo-b is preserved; repo-c is appended.
+	if len(merged) != 3 {
+		t.Fatalf("expected 3 repositories (repo-a override + repo-b + repo-c), got %d", len(merged))
+	}
+
+	paths := make(map[string]string) // path -> component
+	for _, repo := range merged {
+		if repo.Codename != "local" {
+			t.Errorf("unexpected codename %q", repo.Codename)
+		}
+		paths[repo.Path] = repo.Component
+	}
+
+	// Same (codename, path) must override, not duplicate.
+	if paths["/srv/repo-a"] != "restricted" {
+		t.Errorf("expected repo-a component overridden to 'restricted', got '%s'", paths["/srv/repo-a"])
+	}
+	// Untouched default path preserved.
+	if _, ok := paths["/srv/repo-b"]; !ok {
+		t.Errorf("expected repo-b to be preserved from defaults")
+	}
+	// Different path coexists rather than colliding on the empty URL.
+	if _, ok := paths["/srv/repo-c"]; !ok {
+		t.Errorf("expected repo-c to be appended from user")
 	}
 }
 
