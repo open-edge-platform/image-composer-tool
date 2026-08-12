@@ -57,7 +57,7 @@ var (
 	noCache            bool   = false // --no-cache: build from scratch in fresh, unique cache/workspace dirs
 
 	// Overlay-mode flags.
-	inspectImage  bool   = true  // --inspect/--no-inspect: toggle image inspection (default on)
+	inspectImage  bool   = false // --inspect: write a post-build inspection report to an artifact file (default off)
 	cveCheck      bool   = false // --cve-check: enable CVE analysis from the CLI
 	baselineImage string = ""    // --baseline-image: override baseline.source.path from the template
 )
@@ -87,9 +87,12 @@ The template file must be in YAML format following the image template schema.`,
 	buildCmd.Flags().BoolVar(&noCache, "no-cache", false,
 		"Build from scratch using fresh, unique cache and workspace directories that are removed after the build (the final image is copied to the configured workspace)")
 
-	// Overlay-mode flags. --inspect defaults on; --no-inspect is its negation.
-	buildCmd.Flags().BoolVar(&inspectImage, "inspect", true, "Inspect the image during overlay builds (use --no-inspect to disable)")
-	buildCmd.Flags().Bool("no-inspect", false, "Disable image inspection during overlay builds (overrides --inspect)")
+	// Overlay-mode flags. --inspect defaults off; when set, the post-build
+	// inspection report is written to an artifact file next to the emitted image
+	// (same base name as the image artifact with a .inspect.txt extension), not
+	// the console.
+	buildCmd.Flags().BoolVar(&inspectImage, "inspect", false,
+		"Write a post-build inspection report (partition layout, filesystem, bootloader, SBOM) of the overlay image to a .inspect.txt file alongside the emitted image in the build artifacts directory (default off; nothing is written and console output is unchanged when unset)")
 	buildCmd.Flags().BoolVar(&cveCheck, "cve-check", false, "Enable CVE analysis of the built image")
 	buildCmd.Flags().StringVar(&baselineImage, "baseline-image", "", "Override baseline.source.path from the template (overlay mode)")
 
@@ -317,15 +320,28 @@ post:
 		// PostProcess is itself the build's cleanup: CleanupChrootEnv + gpg-agent
 		// stop + repo-config restore. Running it under a cancelled parent ctx
 		// would defeat the purpose — every shell.ExecCmd inside PostProcess would
-		// fail-fast with context.Canceled. Bind a detached, timeout-only ctx for
-		// the duration so cleanup actually completes even when a signal fired.
-		postCtx, postCancel := context.WithTimeout(context.Background(), postProcessCleanupBudget)
-		restorePostShell := shell.SetContext(postCtx)
-		restorePostRun := runctx.SetContext(postCtx)
-		postErr := p.PostProcess(template, buildErr)
-		restorePostRun()
-		restorePostShell()
-		postCancel()
+		// fail-fast with context.Canceled.
+		//
+		// Bind a detached, timeout-only ctx ONLY on the signal-cancel path so
+		// cleanup still completes when the ambient ctx is already dead. On a
+		// normal build the ambient ctx is live, so PostProcess runs under it with
+		// NO artificial cap: some providers (overlay) do their heavy artifact
+		// conversion and compression inside PostProcess, and a multi-GB image can
+		// legitimately take far longer than postProcessCleanupBudget — capping it
+		// there would SIGTERM the compressor mid-stream and fail an otherwise
+		// successful build.
+		var postErr error
+		if parentCtx.Err() != nil {
+			postCtx, postCancel := context.WithTimeout(context.Background(), postProcessCleanupBudget)
+			restorePostShell := shell.SetContext(postCtx)
+			restorePostRun := runctx.SetContext(postCtx)
+			postErr = p.PostProcess(template, buildErr)
+			restorePostRun()
+			restorePostShell()
+			postCancel()
+		} else {
+			postErr = p.PostProcess(template, buildErr)
+		}
 		// Some providers' PostProcess (azl, emt, rcd) return the exact buildErr value
 		// they were handed back to the caller once cleanup succeeded. Relabelling that
 		// as "post-processing failed" would misattribute the original build failure to
@@ -366,6 +382,52 @@ post:
 			}
 		}
 
+		// The build ran as root, so the output directory and image/SBOM inside it are
+		// owned by root:root and unreadable to the user who invoked `sudo`. Hand ownership
+		// of the artifact directory (and the path leading to it) back to that user so they
+		// can read/remove their own build output without root. This targets only the final
+		// artifact tree — the sibling chroot trees stay root-owned. Best-effort: a chown
+		// failure is logged but does not fail an otherwise successful build.
+		//
+		// In --no-cache mode the artifacts were just copied into the configured workspace
+		// (originalWorkDir); chown that copy, not the temporary workspace that cleanup removes.
+		chownWorkDir, workDirErr := config.WorkDir()
+		if isolated != nil {
+			chownWorkDir, workDirErr = isolated.OutputWorkDir(), nil
+		}
+		if workDirErr != nil {
+			log.Warnf("skipping artifact ownership restore: resolving work directory: %v", workDirErr)
+		} else {
+			providerId := system.GetProviderId(template.Target.OS, template.Target.Dist, template.Target.Arch)
+			imageBuildDir := filepath.Join(chownWorkDir, providerId, "imagebuild", template.GetSystemConfigName())
+			if err := system.ChownArtifactsToSudoUser(chownWorkDir, imageBuildDir); err != nil {
+				log.Warnf("could not fully restore build artifact ownership to invoking user: %v", err)
+			}
+		}
+
+		// Also hand back the temp directory, which the root build populated with GPG
+		// keys and decompressed metadata — inert scratch the user should be able to
+		// delete without root. Unlike the workspace it holds no extracted rootfs, so a
+		// full recursive chown is safe. The cache directory is intentionally LEFT
+		// root-owned: it persists across builds for reuse, and later root builds would
+		// recreate root-owned files inside it anyway.
+		//
+		// This runs in --no-cache mode too: SetupIsolated only makes the cache and
+		// workspace unique, not config.TempDir(), so a root --no-cache build still
+		// populates the shared temp dir and its cleanup does not remove it. Skipping the
+		// chown there would strand root-owned temp content the user cannot delete.
+		//
+		// config.TempDir() returns the configured temp dir (default ./tmp) as-is, or the
+		// system temp dir when temp_dir is left empty; ChownDirTreeToSudoUser refuses the
+		// latter, so an empty temp_dir safely no-ops rather than chowning /tmp. Resolve to
+		// an absolute path for that guard to apply.
+		tempDirPath, err := filepath.Abs(config.TempDir())
+		if err != nil {
+			log.Warnf("skipping temp ownership restore: resolving temp directory: %v", err)
+		} else if err := system.ChownDirTreeToSudoUser(tempDirPath); err != nil {
+			log.Warnf("could not fully restore temp directory ownership to invoking user: %v", err)
+		}
+
 		log.Info("image build completed successfully")
 		template.MarkBuildFinished()
 		// Overlay builds do not run through the create-mode stages that populate the
@@ -388,15 +450,9 @@ post:
 // toggle has no YAML representation (it is a yaml:"-" field), so the CLI is its
 // only source; --baseline-image overrides baseline.source.path.
 func applyOverlayFlagOverrides(cmd *cobra.Command, template *config.ImageTemplate) error {
-	// Inspection defaults on. --no-inspect wins over --inspect when both appear.
+	// Inspection defaults off; --inspect opts in to writing the report to an
+	// artifact file (never to the console).
 	template.InspectEnabled = inspectImage
-	noInspect, err := cmd.Flags().GetBool("no-inspect")
-	if err != nil {
-		return fmt.Errorf("failed to read --no-inspect flag: %w", err)
-	}
-	if noInspect {
-		template.InspectEnabled = false
-	}
 
 	// --cve-check is accepted by the parser (so it appears in --help and stays a
 	// stable CLI surface) but the CVE analysis engine does not exist yet. Fail

@@ -1,0 +1,264 @@
+# =============================================================================
+# Debian 13 ("Trixie") BASE overlay template  —  custom dracut initrd  (qcow2)
+# Bayonne Bridge Project base image
+# =============================================================================
+#
+# Composes a deployable Debian 13 qcow2 from the OFFICIAL Debian 13 generic cloud
+# qcow2 using the Image Composer Tool's OVERLAY mechanism. This BASE:
+#
+#   * takes an official Debian 13 (Trixie) cloud image in qcow2 as its input,
+#   * overlays a general-purpose base package set (diagnostics, editors,
+#     networking, boot firmware) additively onto the cloud image,
+#   * switches the initramfs generator to DRACUT and injects a custom dracut
+#     module (91hello) tailored to Bayonne Bridge early-boot needs,
+#   * preserves base-image immutability (overlay copies the baseline and layers
+#     onto the copy; the source image is never modified in place), and
+#   * emits a validated, versioned qcow2 artifact.
+#
+# It deliberately ships NO graphics/GUI packages: those are added by child
+# templates via `extends:`. The graphics layer lives in the sibling child
+# template debian13-x86_64-bb-graphics-raw.yml, which adds the GUI stack
+# additively on top of this base. Keeping graphics out of the base lets different
+# downstream images layer different package sets onto the same base + initrd
+# foundation.
+#
+# A child MUST inherit (NOT redeclare) this file's `baseline` and `overlayPolicy`
+# so its added packages merge ADDITIVELY onto the overlay; see the child template
+# for the mechanism.
+#
+# -----------------------------------------------------------------------------
+# INPUT IMAGE INTEGRITY (cryptographic checksum verification)
+# -----------------------------------------------------------------------------
+# baseline.source.url is fetched over TLS (https is REQUIRED and enforced by the
+# tool; plain http is rejected), which authenticates the transport. Debian also
+# publishes a signed checksum manifest; verify the input's SHA512 against it
+# BEFORE the build so the composition runs on a byte-identical source:
+#
+#   URL     : https://cloud.debian.org/images/cloud/trixie/20260601-2496/debian-13-generic-amd64-20260601-2496.qcow2
+#   Format  : qcow2      Architecture: amd64      OS: Trixie (Debian 13)
+#   Build   : 2026-06-01                          Build ID: 2496
+#
+#   curl -fSLO https://cloud.debian.org/images/cloud/trixie/20260601-2496/SHA512SUMS
+#   curl -fSLO https://cloud.debian.org/images/cloud/trixie/20260601-2496/SHA512SUMS.sign
+#   gpg --verify SHA512SUMS.sign SHA512SUMS          # authenticate the manifest
+#   sha512sum -c --ignore-missing SHA512SUMS         # verify the qcow2 matches
+#
+# To pin to a locally-verified copy instead of re-downloading, replace the
+# `url:`/`format:` pair under baseline.source with `path: /verified/debian-13-...qcow2`.
+# =============================================================================
+
+# AI-searchable metadata for template discovery
+metadata:
+  description: >-
+    Debian 13 (Trixie) Bayonne Bridge BASE overlay template — overlay an official
+    Debian 13 generic cloud qcow2 with a general-purpose base package set
+    (diagnostics, editors, networking, boot firmware), switch the initramfs
+    generator to dracut and inject a custom dracut module (91hello), emitting a
+    versioned qcow2. Extensible base; graphics added by a child via extends.
+  use_cases:
+    - Compose a deployable Debian 13 qcow2 from the official Debian 13 cloud image
+    - Overlay base diagnostic/networking/editor packages onto a Debian 13 cloud image
+    - Inject a custom dracut initrd module for Bayonne Bridge boot requirements
+    - Replace the baseline's initramfs-tools generator with dracut in an overlay
+    - Provide an extensible Debian 13 overlay base for downstream images to extend
+  keywords:
+    - overlay
+    - baseline
+    - debian
+    - debian13
+    - trixie
+    - qcow2
+    - initrd
+    - initramfs
+    - dracut
+    - bayonne-bridge
+    - base-template
+    - extends
+
+image:
+  name: debian13-bb-overlay-base
+  version: "13.0"
+
+target:
+  os: debian
+  dist: debian13
+  arch: x86_64
+  imageType: raw   # overlay works on a RAW copy internally; qcow2 is produced at
+                   # emit time from disk.artifacts (see the disk block below).
+
+# -----------------------------------------------------------------------------
+# Overlay mode — layer onto a copy of the official Debian 13 cloud image.
+# The source qcow2 is copied into the build workspace and converted to RAW for
+# the overlay; the ORIGINAL input is never modified (base-image immutability).
+# -----------------------------------------------------------------------------
+baseline:
+  mode: overlay
+  source:
+    url: https://cloud.debian.org/images/cloud/trixie/20260601-2496/debian-13-generic-amd64-20260601-2496.qcow2
+    format: qcow2
+    # Or pin to a locally checksum-verified copy instead:
+    # path: /data/images/debian-13-generic-amd64-20260601-2496.qcow2
+    # format: qcow2
+
+# -----------------------------------------------------------------------------
+# Output: a qcow2 artifact. The overlay emits a RAW copy, then the Convert
+# Artifacts stage produces every format listed here. The disk is grown to leave
+# room for whatever a child template overlays on top; resize is grow-only and
+# requires BOTH a disk.size larger than the baseline AND allowDiskResize below.
+# -----------------------------------------------------------------------------
+disk:
+  name: overlay-disk
+  size: 8GiB
+  artifacts:
+    - type: qcow2
+
+# -----------------------------------------------------------------------------
+# Overlay policy — additive-and-upgrade, plus the ONE removal this base requires.
+#
+# This base switches the initramfs generator to dracut, and Debian's dracut
+# declares an unversioned "Conflicts: initramfs-tools" (which the cloud baseline
+# ships). allowPackageRemoval: true lets the overlay resolve that conflict by
+# removing initramfs-tools before installing dracut — the ONLY removal this
+# template performs. Bootloader and bootable-kernel packages are never removed
+# regardless of this flag, so the boot path stays intact.
+#
+# packageOperation MUST be additive-and-upgrade: allowPackageRemoval is only
+# valid under additive-and-upgrade (removal is more invasive than an in-place
+# upgrade, so it is not permitted under the default additive-only). This also
+# lets the resolver bump a baseline package when a to-install package requires a
+# newer version; child templates still add packages additively on top.
+#
+# conflictPolicy stays fail: any OTHER (unexpected) conflict still fails the
+# preflight gate — only the dracut/initramfs-tools swap is turned into a removal.
+# -----------------------------------------------------------------------------
+overlayPolicy:
+  packageOperation: additive-and-upgrade
+  conflictPolicy: fail
+  # Explicit consent to grow the baseline to the 8GiB disk.size above.
+  allowDiskResize: true
+  # Permit removing a baseline package a to-install package conflicts with. Needed
+  # because dracut conflicts with the baseline's initramfs-tools; see note above.
+  # Requires packageOperation: additive-and-upgrade (set above).
+  #
+  # This consent CASCADES: if removing the conflicting package orphans a baseline
+  # reverse-dependency (a package that only Depends on the removed one, e.g. the cloud
+  # image's cloud-initramfs-growroot depends on initramfs-tools), that orphan is removed
+  # too — transitively — so the final image has no unmet dependencies. The cascade is
+  # driven by the package manager's own dependency audit (apt-get check), so a
+  # dependency an alternative still satisfies is never removed, and it still fails closed
+  # if resolving the breakage would require removing a bootloader/kernel-image package.
+  allowPackageRemoval: true
+
+systemConfig:
+  name: overlay
+  description: Debian 13 Bayonne Bridge base — overlaid base packages + custom dracut initrd
+
+  # ---------------------------------------------------------------------------
+  # Base packages overlaid onto the Debian 13 cloud image. The overlay is
+  # additive-and-upgrade (see overlayPolicy above): each package and its
+  # not-yet-present transitive dependencies are resolved, downloaded, and
+  # installed; a package already in the baseline is left on its baseline version
+  # unless a to-install package requires a newer one, in which case it is upgraded
+  # in place. The list is therefore safe to over-specify — anything the cloud
+  # image already satisfies is simply skipped. Child templates (e.g. the graphics
+  # variant) add more on top of these.
+  #
+  # dracut + dracut-core switch the initramfs generator from the baseline's
+  # initramfs-tools to dracut. The overlay removes the conflicting initramfs-tools
+  # first (allowPackageRemoval, above), then installs dracut; the overlay's Boot
+  # Regeneration stage then rebuilds the initramfs with whatever generator is now
+  # installed (dracut), so the 91hello module below is baked in.
+  packages:
+    # Initramfs generator — replaces the baseline's initramfs-tools (removed by
+    # the conflict-driven removal that allowPackageRemoval permits).
+    - dracut
+    - dracut-core
+    # Editors / terminal utilities
+    - vim
+    - nano
+    - less
+    - tree
+    - jq
+    - htop
+    - tmux
+    - rsync
+    # Networking / transfer / diagnostics
+    #
+    # NB: dnsutils is intentionally omitted to keep this base minimal — use
+    # iputils-ping / traceroute for reachability instead. It pulls in bind9-host,
+    # which Depends on a version-locked bind9-libs (= same upstream version) newer
+    # than the one the Debian cloud baseline ships; under this base's
+    # additive-and-upgrade policy the resolver WOULD upgrade bind9-libs in place to
+    # satisfy it, so add dnsutils in a child template if a downstream image needs
+    # DNS-lookup tooling.
+    - curl
+    - wget
+    - ca-certificates
+    - iproute2
+    - iputils-ping
+    - net-tools
+    - traceroute
+    - tcpdump
+    - openssh-client
+    # Hardware / system introspection
+    - pciutils
+    - usbutils
+    - lshw
+    - lsof
+    - strace
+    # Firmware the base / initrd may load at boot
+    - firmware-linux-free
+    - firmware-misc-nonfree
+
+  # ---------------------------------------------------------------------------
+  # Custom dracut module (91hello) for Bayonne Bridge early-boot requirements.
+  #
+  # These are the SAME module files the create-mode sibling
+  # debian13-x86_64-bb-dracut-raw.yml uses, dropped into the dracut module tree
+  # at /usr/lib/dracut/modules.d/91hello. Overlay now applies additionalFiles, so
+  # the module is delivered declaratively rather than via base64-encoded config
+  # commands as before.
+  #
+  # stage: pre-initramfs is REQUIRED. It copies these files BEFORE the overlay's
+  # Boot Regeneration stage runs, so the module is present in the dracut tree when
+  # dracut regenerates the initramfs and gets baked in. A default-stage
+  # (end-of-build) copy would land AFTER regeneration and the already-built
+  # initramfs would ignore it.
+  #
+  # module-setup.sh registers the module (inst_hook pre-mount 91 hello.sh, plus
+  # the cmdline/initqueue hooks that drive initqueue-sample.sh's bounded wait-root
+  # poll); hello.sh emits the early-boot kmsg marker.
+  #
+  # The source scripts are executable (0755) in the repo, and the additionalFiles
+  # copy preserves mode (cp -p), so they land executable in the image — no runtime
+  # chmod is needed (and none could run here anyway: the configurations stage runs
+  # BEFORE this pre-initramfs copy, so a chmod there would not yet see the files).
+  additionalFiles:
+    - local: additionalfiles/debian13-bb-dracut/modules.d/91hello/module-setup.sh
+      final: /usr/lib/dracut/modules.d/91hello/module-setup.sh
+      stage: pre-initramfs
+    - local: additionalfiles/debian13-bb-dracut/modules.d/91hello/hello.sh
+      final: /usr/lib/dracut/modules.d/91hello/hello.sh
+      stage: pre-initramfs
+    - local: additionalfiles/debian13-bb-dracut/modules.d/91hello/initqueue-sample.sh
+      final: /usr/lib/dracut/modules.d/91hello/initqueue-sample.sh
+      stage: pre-initramfs
+
+  # ---------------------------------------------------------------------------
+  # Configuration commands run inside the baseline chroot AFTER package install
+  # and BEFORE boot regeneration. They enable the 91hello dracut module. The
+  # module scripts are already executable (copied 0755 from the repo via
+  # additionalFiles, above), and the initramfs itself is (re)built by the overlay's
+  # own Boot Regeneration stage, which selects the installed generator (dracut) —
+  # no explicit chmod or `dracut` invocation is needed here.
+  #
+  # NB: this stage runs BEFORE the pre-initramfs additionalFiles copy, so a command
+  # here must NOT reference the copied module files (they are not in place yet).
+  # Enabling the module via a dracut.conf.d drop-in is safe because it only names
+  # the module; dracut resolves the module tree at regeneration time.
+  #
+  # A child template's configurations merge AFTER these.
+  # ---------------------------------------------------------------------------
+  configurations:
+    # Enable the 91hello module in the composed initramfs.
+    - cmd: 'mkdir -p /etc/dracut.conf.d && echo ''add_dracutmodules+=" hello "'' > /etc/dracut.conf.d/91hello.conf'

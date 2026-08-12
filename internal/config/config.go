@@ -133,6 +133,15 @@ type BaselineSource struct {
 	Path   string `yaml:"path,omitempty"`
 	URL    string `yaml:"url,omitempty"`
 	Format string `yaml:"format,omitempty"`
+
+	// SBOMPath is an optional local filesystem path to an externally-supplied
+	// SPDX SBOM describing the baseline image. When set and readable, the overlay
+	// SBOM is generated as the union of this base SBOM and the overlay-contributed
+	// packages (a full inventory). When unset the overlay falls back to the SBOM
+	// the baseline image carries at /usr/share/sbom, and when neither is available
+	// only the overlay delta is written — the build never fails on a missing or
+	// malformed base SBOM. It defaults to unset for backward compatibility.
+	SBOMPath string `yaml:"sbomPath,omitempty"`
 }
 
 // OverlayPolicy controls how overlay-mode preflight classifies and gates
@@ -156,12 +165,19 @@ type OverlayPolicy struct {
 	// opts in here. It never permits shrinking; resize stays grow-only.
 	AllowDiskResize bool `yaml:"allowDiskResize,omitempty"`
 
-	// AllowRemoval gates whether preflight permits removing a baseline package.
-	// It is intentionally NOT a YAML field, and the schema rejects it via
-	// additionalProperties:false, so it always carries its zero value (false):
-	// overlay mode is additive-only in v1. A future release can lift the
-	// restriction by surfacing this field in the schema/YAML.
-	AllowRemoval bool `yaml:"-"`
+	// AllowPackageRemoval gates whether an overlay build may remove a baseline
+	// package that a to-install package conflicts with (e.g. installing dracut,
+	// which Conflicts: initramfs-tools). It defaults to false: overlay mode is
+	// additive by default and never removes a baseline package unless the template
+	// explicitly opts in here. When true, preflight reclassifies such a conflict as
+	// a permitted removal and the install step removes the conflicting package
+	// before installing. Bootloader and bootable-kernel packages are NEVER removed,
+	// regardless of this flag.
+	//
+	// It is only valid together with packageOperation "additive-and-upgrade":
+	// removal is more invasive than an in-place upgrade, so it may not be enabled
+	// under the default "additive-only" (validate() rejects that combination).
+	AllowPackageRemoval bool `yaml:"allowPackageRemoval,omitempty"`
 
 	// AllowDowngrade gates whether preflight permits downgrading a baseline
 	// package to an older version. Like AllowRemoval it is intentionally NOT a
@@ -312,10 +328,29 @@ type SystemConfig struct {
 	Kernel          KernelConfig         `yaml:"kernel"`
 }
 
+// AdditionalFile stage markers control WHEN an overlay build copies an
+// additionalFiles entry relative to initramfs/boot regeneration.
+const (
+	// AdditionalFileStageDefault copies the file at the end of the build, after
+	// initramfs and GRUB regeneration. It is the default (empty stage) and matches
+	// the historical behavior, so existing templates are unaffected.
+	AdditionalFileStageDefault = ""
+	// AdditionalFileStagePreInitramfs copies the file BEFORE boot/initramfs
+	// regeneration, so content the initramfs generator consumes (e.g. a dracut
+	// module under /usr/lib/dracut or an initramfs-tools hook) is in place when the
+	// initramfs is (re)built rather than dropped in too late to take effect.
+	AdditionalFileStagePreInitramfs = "pre-initramfs"
+)
+
 // AdditionalFileInfo holds information about local file and final path to be placed in the image
 type AdditionalFileInfo struct {
 	Local string `yaml:"local"` // path to the file on the host system
 	Final string `yaml:"final"` // path where the file should be placed in the image
+	// Stage controls WHEN the file is copied in overlay builds: "" (default) copies
+	// at the end of the build (after regeneration), "pre-initramfs" copies before
+	// boot/initramfs regeneration so the generator can consume it. Ignored by
+	// create-mode builds, which have a single file-copy step.
+	Stage string `yaml:"stage,omitempty"`
 }
 
 // ConfigurationInfo holds information about instructions to execute during system configuration
@@ -769,6 +804,7 @@ func (t *ImageTemplate) GetAdditionalFileInfo() []AdditionalFileInfo {
 							newFileInfo := AdditionalFileInfo{
 								Local: candidatePath,
 								Final: t.SystemConfig.AdditionalFiles[i].Final,
+								Stage: t.SystemConfig.AdditionalFiles[i].Stage,
 							}
 							PathUpdatedList = append(PathUpdatedList, newFileInfo)
 							found = true
@@ -1309,19 +1345,83 @@ func (t *ImageTemplate) validateBaseline() error {
 		case BaselineFormatRaw, BaselineFormatQcow2, BaselineFormatVHD, BaselineFormatVHDX:
 			// supported; non-raw formats are converted to RAW before loop-attach.
 		default:
-			return fmt.Errorf("baseline.source.format must be one of %q, %q, %q, %q (got %q)",
-				BaselineFormatRaw, BaselineFormatQcow2, BaselineFormatVHD, BaselineFormatVHDX, format)
+			return fmt.Errorf("baseline.source.format %q not supported in this release: "+
+				"must be one of %q, %q, %q, %q. Support for additional formats is tracked in the overlay backlog",
+				format, BaselineFormatRaw, BaselineFormatQcow2, BaselineFormatVHD, BaselineFormatVHDX)
 		}
 		if t.OverlayPolicy != nil {
 			if err := t.OverlayPolicy.validate(); err != nil {
 				return err
 			}
 		}
+		if err := t.validateOverlaySystemConfig(); err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("baseline.mode must be %q or %q (got %q)",
 			BaselineModeCreate, BaselineModeOverlay, t.Baseline.Mode)
 	}
 	return nil
+}
+
+// validateOverlaySystemConfig rejects systemConfig sections that an overlay build
+// cannot apply. Overlay mode layers packages, configurations, and additional
+// files onto an already-provisioned baseline image; it never re-runs the
+// system-provisioning stages that own users, hostname, network, initramfs,
+// kernel, immutability, FDE, and bootloader. Those sections used to pass schema
+// validation and then be dropped silently, so a template that set them appeared
+// to succeed while producing an image that ignored them. Fail the build up front
+// instead, naming every offending section so the user can remove them all in one
+// pass. Sections are checked (and reported) in a fixed order for deterministic
+// error output.
+func (t *ImageTemplate) validateOverlaySystemConfig() error {
+	sc := t.SystemConfig
+
+	var offending []string
+	if len(sc.Users) > 0 {
+		offending = append(offending, "users")
+	}
+	if sc.HostName != "" {
+		offending = append(offending, "hostname")
+	}
+	if !isEmptyNetworkConfig(sc.Network) {
+		offending = append(offending, "network")
+	}
+	if sc.Initramfs.Template != "" {
+		offending = append(offending, "initramfs")
+	}
+	if !isEmptyKernelConfig(sc.Kernel) {
+		offending = append(offending, "kernel")
+	}
+	// Detect immutability via BOTH the YAML "was this section present" marker AND the
+	// exported fields: a template built programmatically (not unmarshalled from YAML)
+	// sets Enabled / SecureBoot* directly while wasProvided stays false, and overlay
+	// mode must reject a requested immutability section either way rather than silently
+	// ignoring it.
+	if sc.Immutability.wasProvided || sc.Immutability.Enabled ||
+		sc.Immutability.SecureBootDBKey != "" || sc.Immutability.SecureBootDBCrt != "" ||
+		sc.Immutability.SecureBootDBCer != "" {
+		offending = append(offending, "immutability")
+	}
+	if sc.FDE.Enabled || sc.FDE.PassphraseFile != "" || len(sc.FDE.Partitions) > 0 || sc.FDE.Unlock != "" {
+		offending = append(offending, "fde")
+	}
+	if !isEmptyBootloader(sc.Bootloader) {
+		offending = append(offending, "bootloader")
+	}
+
+	if len(offending) == 0 {
+		return nil
+	}
+
+	sections := make([]string, len(offending))
+	for i, s := range offending {
+		sections[i] = "systemConfig." + s
+	}
+	return fmt.Errorf("overlay mode does not support the following systemConfig section(s): %s; "+
+		"an overlay layers packages, configurations, and additionalFiles onto an existing baseline "+
+		"and cannot modify these — remove them from the template",
+		strings.Join(sections, ", "))
 }
 
 // Validate enforces that exactly one of Path or URL is set, and that a URL uses
@@ -1346,6 +1446,18 @@ func (s *BaselineSource) Validate() error {
 	// normalizes programmatically-built templates, which reach ingestion via
 	// Validate() without passing through schema validation.
 	s.Format = strings.ToLower(strings.TrimSpace(s.Format))
+
+	// Normalize the optional external base-SBOM path and persist it. It is a local
+	// file path only (a URI scheme is rejected); existence is intentionally NOT
+	// checked here — an absent or unreadable base SBOM is handled gracefully at
+	// SBOM-generation time (delta-only fallback), so it must not fail validation.
+	sbomPath := strings.TrimSpace(s.SBOMPath)
+	s.SBOMPath = sbomPath
+	if sbomPath != "" {
+		if parsed, err := url.Parse(sbomPath); err == nil && parsed.Scheme != "" {
+			return fmt.Errorf("baseline.source.sbomPath must be a local file path (no URI scheme)")
+		}
+	}
 
 	switch {
 	case path == "" && rawURL == "":
@@ -1389,19 +1501,28 @@ func (p *OverlayPolicy) validate() error {
 		// Additive-only: upgrades of baseline packages stay blocked.
 		p.AllowUpgrade = false
 	case OverlayPackageOpAdditiveAndUpgrade:
-		// Opt in to upgrading already-installed baseline packages. Downgrades and
-		// removals are still gated off (AllowDowngrade/AllowRemoval stay false).
+		// Opt in to upgrading already-installed baseline packages. Downgrades stay
+		// gated off (AllowDowngrade stays false).
 		p.AllowUpgrade = true
 	default:
-		return fmt.Errorf("baseline.overlayPolicy.packageOperation must be %q or %q (got %q)",
+		return fmt.Errorf("overlayPolicy.packageOperation must be %q or %q (got %q)",
 			OverlayPackageOpAdditiveOnly, OverlayPackageOpAdditiveAndUpgrade, p.PackageOperation)
+	}
+	// Package removal is a strictly more invasive operation than an in-place
+	// upgrade, so it is only permitted under additive-and-upgrade. Under
+	// additive-only (the default) allowPackageRemoval is rejected rather than
+	// silently ignored, so a template that expects removals fails loudly instead
+	// of building an image where the conflicting baseline package was left in place.
+	if p.AllowPackageRemoval && op != OverlayPackageOpAdditiveAndUpgrade {
+		return fmt.Errorf("overlayPolicy.allowPackageRemoval requires packageOperation %q (got %q)",
+			OverlayPackageOpAdditiveAndUpgrade, op)
 	}
 	cp := p.ConflictPolicy
 	if cp == "" {
 		cp = OverlayConflictPolicyFail
 	}
 	if cp != OverlayConflictPolicyFail && cp != OverlayConflictPolicyAllowExplicit {
-		return fmt.Errorf("baseline.overlayPolicy.conflictPolicy must be %q or %q (got %q)",
+		return fmt.Errorf("overlayPolicy.conflictPolicy must be %q or %q (got %q)",
 			OverlayConflictPolicyFail, OverlayConflictPolicyAllowExplicit, p.ConflictPolicy)
 	}
 	// kernelCmdline and grubDefault are written verbatim into
@@ -1416,10 +1537,10 @@ func (p *OverlayPolicy) validate() error {
 	// file.
 	const grubValueForbidden = "\"$`\\\n"
 	if strings.ContainsAny(p.KernelCmdline, grubValueForbidden) {
-		return fmt.Errorf("baseline.overlayPolicy.kernelCmdline must not contain a double quote, dollar sign, backtick, backslash, or newline")
+		return fmt.Errorf("overlayPolicy.kernelCmdline must not contain a double quote, dollar sign, backtick, backslash, or newline")
 	}
 	if strings.ContainsAny(p.GrubDefault, grubValueForbidden) {
-		return fmt.Errorf("baseline.overlayPolicy.grubDefault must not contain a double quote, dollar sign, backtick, backslash, or newline")
+		return fmt.Errorf("overlayPolicy.grubDefault must not contain a double quote, dollar sign, backtick, backslash, or newline")
 	}
 	return nil
 }

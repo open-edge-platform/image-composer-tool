@@ -3,6 +3,7 @@ import { api } from './api/client'
 import { isActiveStatus, type BuildStatus, type ComposeRequest } from './api/types'
 import { useStore } from './store'
 import { BasicPage } from './components/BasicPage'
+import { AdvancedPage } from './components/AdvancedPage'
 import { BuildImagePage } from './components/BuildImagePage'
 
 type LoadState = 'loading' | 'ready' | 'error'
@@ -49,7 +50,7 @@ export default function App() {
     if (state !== 'ready') return
     api
       .listBuilds()
-      .then((builds) => {
+      .then(({ builds }) => {
         const active = builds.find((b) => isActiveStatus(b.status))
         if (active) {
           setBuildId(active.id)
@@ -112,7 +113,7 @@ export default function App() {
 
   const tabs: { id: View; label: string; enabled: boolean }[] = [
     { id: 'basic', label: 'Basic', enabled: true },
-    { id: 'advanced', label: 'Advanced', enabled: false },
+    { id: 'advanced', label: 'Advanced', enabled: true },
     { id: 'builds', label: 'Compose Image', enabled: true },
   ]
 
@@ -170,7 +171,11 @@ export default function App() {
             <BasicPage
               onBuildStarted={onBuildStarted}
               buildInProgress={isActiveStatus(buildStatus)}
+              active={view === 'basic'}
             />
+          </div>
+          <div hidden={view !== 'advanced'}>
+            <AdvancedPage active={view === 'advanced'} />
           </div>
           <div hidden={view !== 'builds'}>
             <BuildImagePage

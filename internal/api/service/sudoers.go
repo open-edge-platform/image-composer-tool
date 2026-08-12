@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: (C) 2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-package api
+package service
 
 import (
 	"fmt"
@@ -54,7 +54,7 @@ func ResolveSudoersSpec(ictBinary, workDir string) (SudoersSpec, error) {
 		return SudoersSpec{}, fmt.Errorf("resolving ICT binary path %q: %w", ictBinary, err)
 	}
 
-	// Match server.go's default so the generated cat rule covers where artifacts
+	// Match New's default so the generated cat rule covers where artifacts
 	// actually land when the operator doesn't pass --work-dir.
 	if workDir == "" {
 		workDir = "webui-workspace"
@@ -64,7 +64,7 @@ func ResolveSudoersSpec(ictBinary, workDir string) (SudoersSpec, error) {
 		return SudoersSpec{}, fmt.Errorf("resolving work dir %q: %w", workDir, err)
 	}
 	// Builds — and therefore all artifacts the server reads with `sudo cat` — live
-	// under <work-dir>/builds/<id>/... (see handleStartBuild and history.go). Scope
+	// under <work-dir>/builds/<id>/... (see StartBuild and history.go). Scope
 	// the cat rule to that subtree, not the whole work dir, so the service user
 	// can't read unrelated root-owned files placed elsewhere under the work dir.
 	buildsDir := filepath.Join(workAbs, "builds")

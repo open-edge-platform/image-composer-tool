@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: (C) 2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-package api
+package service
 
 import "strings"
 
@@ -55,9 +55,9 @@ var phaseMarkers = []struct {
 	{phaseDone, []string{"image build completed successfully"}},
 }
 
-// detectPhase returns the id of the furthest phase reached across all log lines.
+// DetectPhase returns the id of the furthest phase reached across all log lines.
 // Defaults to "preparing" before any marker appears.
-func detectPhase(logs []string) string {
+func DetectPhase(logs []string) string {
 	reached := phasePreparing
 	for _, line := range logs {
 		lower := strings.ToLower(line)
@@ -76,10 +76,10 @@ func detectPhase(logs []string) string {
 	return phaseNames[reached]
 }
 
-// installProgress extracts the most recent "Installing package X/Y" counter from
+// InstallProgress extracts the most recent "Installing package X/Y" counter from
 // the logs, returning done/total (0,0 if none seen). Lets the UI show a real
 // percentage during the install phase.
-func installProgress(logs []string) (done, total int) {
+func InstallProgress(logs []string) (done, total int) {
 	const marker = "installing package "
 	for _, line := range logs {
 		lower := strings.ToLower(line)

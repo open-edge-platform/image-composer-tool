@@ -822,3 +822,100 @@ func TestSummarizeFailuresEmpty(t *testing.T) {
 		t.Errorf("summarizeFailures(nil) = %q, want empty", got)
 	}
 }
+
+// TestIdleTimeoutReader_TripsOnStall verifies that a body which delivers some
+// bytes and then goes silent is aborted once no data arrives for the idle
+// window, surfacing a "stalled" error rather than blocking forever. This is the
+// direct regression guard for the hung-build bug (headers received, ~11MB
+// streamed, then the connection sat ESTAB with no further data): bodyIdleTimeout
+// is 60s in production, so the mechanism is exercised here with a short window.
+//
+// It runs against a real httptest.Server that flushes a partial body and then
+// blocks, rather than a fake reader, so the test exercises the actual net/http
+// transport path — the one where resp.Body.Close does NOT interrupt an in-flight
+// Read and only context cancellation reliably tears the exchange down.
+func TestIdleTimeoutReader_TripsOnStall(t *testing.T) {
+	release := make(chan struct{})
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "1048576") // promise more than we send
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("first chunk"))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		// Go silent mid-body, mirroring a stalled proxy. Return once the test is
+		// done or the client's request context is cancelled (which is what the
+		// watchdog does), so the handler never outlives the request.
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	// Order matters: close(release) is registered last so it runs first (LIFO),
+	// unblocking the handler before ts.Close() waits for it to return.
+	defer ts.Close()
+	defer close(release)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL, nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	resp, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatalf("GET %s failed: %v", ts.URL, err)
+	}
+	defer resp.Body.Close()
+
+	r := newIdleTimeoutReader(resp.Body, 100*time.Millisecond, cancel)
+	defer r.stop()
+
+	start := time.Now()
+	_, err = io.ReadAll(r)
+	if err == nil {
+		t.Fatal("expected a stall error, got nil")
+	}
+	if !strings.Contains(err.Error(), "stalled") {
+		t.Fatalf("expected a stalled error, got: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("reader took too long to trip: %s", elapsed)
+	}
+}
+
+// TestIdleTimeoutReader_ProgressDoesNotTrip verifies that a body which keeps
+// delivering bytes — even slowly, in gaps shorter than the idle window — is
+// never aborted, so a slow-but-progressing large package download is not
+// killed. Each read resets the idle timer.
+func TestIdleTimeoutReader_ProgressDoesNotTrip(t *testing.T) {
+	// Feed 20 chunks with a 50ms gap against a 1s idle window; each gap sits
+	// well under the window (20x headroom, so CI scheduling jitter cannot
+	// falsely trip it) while the total time (~1s) still exceeds the window,
+	// proving the timer tracks idleness, not total duration.
+	const chunks = 20
+	pr, pw := io.Pipe()
+	go func() {
+		for i := 0; i < chunks; i++ {
+			time.Sleep(50 * time.Millisecond)
+			if _, err := pw.Write([]byte("chunk")); err != nil {
+				return
+			}
+		}
+		_ = pw.Close()
+	}()
+
+	// The cancel here closes the pipe reader; if the watchdog ever tripped, the
+	// read would fail — so a successful read proves it never did.
+	r := newIdleTimeoutReader(pr, 1*time.Second, func() { _ = pr.CloseWithError(errors.New("watchdog tripped")) })
+	defer r.stop()
+
+	data, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("progressing reader should not trip the idle timeout: %v", err)
+	}
+	if got, want := len(data), len("chunk")*chunks; got != want {
+		t.Fatalf("read %d bytes, want %d", got, want)
+	}
+}

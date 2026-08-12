@@ -6,11 +6,13 @@ on:
   pull_request:
     paths:
       - '**/*.go'
+      - 'api/v1/*.yaml'
   push:
     branches:
       - main
     paths:
       - '**/*.go'
+      - 'api/v1/*.yaml'
 
 permissions:
   contents: read
@@ -47,6 +49,15 @@ jobs:
             exit 1
           }
           echo "$PWD/bin" >> $GITHUB_PATH
+
+      - name: Verify generated OpenAPI code is up to date
+        run: |
+          cp internal/api/http/gen.go /tmp/gen.go.committed
+          go generate ./internal/api/http
+          diff -u /tmp/gen.go.committed internal/api/http/gen.go || {
+            echo "::error::internal/api/http/gen.go is stale. Run 'go generate ./internal/api/http' and commit the result." >&2
+            exit 1
+          }
 
       - name: Run golangci-lint
         run: golangci-lint run ./...

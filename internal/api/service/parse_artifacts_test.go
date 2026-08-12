@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: (C) 2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-package api
+package service
 
 import (
 	"strings"
@@ -26,17 +26,17 @@ func TestParseArtifacts(t *testing.T) {
 		t.Fatalf("expected 3 artifacts, got %d: %+v", len(got), got)
 	}
 
-	want := []artifact{
+	want := []Artifact{
 		{Name: "minimal-os-image-ubuntu-26.04.raw.gz", Type: "image"},
 		{Name: "minimal-os-image-ubuntu-26.04.vhdx", Type: "image"},
 		{Name: "spdx_manifest_deb_minimal-os-image-ubuntu_20260707_165343.json", Type: "sbom"},
 	}
-	for i, w := range want {
-		if got[i].Name != w.Name {
-			t.Errorf("artifact[%d] name = %q, want %q", i, got[i].Name, w.Name)
+	for i, wnt := range want {
+		if got[i].Name != wnt.Name {
+			t.Errorf("artifact[%d] name = %q, want %q", i, got[i].Name, wnt.Name)
 		}
-		if got[i].Type != w.Type {
-			t.Errorf("artifact[%d] type = %q, want %q", i, got[i].Type, w.Type)
+		if got[i].Type != wnt.Type {
+			t.Errorf("artifact[%d] type = %q, want %q", i, got[i].Type, wnt.Type)
 		}
 		// Path must be a clean absolute path — no leftover logger prefix such as
 		// "/display.go:80\t..." and it must end with the artifact name.
@@ -46,8 +46,8 @@ func TestParseArtifacts(t *testing.T) {
 		if strings.Contains(got[i].Path, "\t") || strings.Contains(got[i].Path, "display.go") {
 			t.Errorf("artifact[%d] path has logger prefix: %q", i, got[i].Path)
 		}
-		if !strings.HasSuffix(got[i].Path, w.Name) {
-			t.Errorf("artifact[%d] path %q does not end with name %q", i, got[i].Path, w.Name)
+		if !strings.HasSuffix(got[i].Path, wnt.Name) {
+			t.Errorf("artifact[%d] path %q does not end with name %q", i, got[i].Path, wnt.Name)
 		}
 	}
 }

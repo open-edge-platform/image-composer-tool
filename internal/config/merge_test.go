@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -176,8 +175,21 @@ func TestMergeConfigurationsOverlayPackages(t *testing.T) {
 		},
 	}
 
-	t.Run("overlay drops default packages, keeps only user packages", func(t *testing.T) {
-		userTemplate := &ImageTemplate{
+	t.Run("overlay layer merge is additive (parent packages inherited)", func(t *testing.T) {
+		// MergeConfigurations is the per-LAYER primitive used to fold a user's extends
+		// chain (parent -> overlay leaf), so its second argument here is a PARENT USER
+		// layer, not the OS default. Package inheritance across user layers is additive,
+		// so a parent's package must survive into an overlay leaf — a regression here is
+		// the "overlay extends drops inherited packages" bug. The OS-default exclusion is
+		// enforced structurally in LoadAndMergeTemplate (see
+		// TestLoadAndMergeTemplate_OverlaySkipsOSDefault), not by suppressing packages in
+		// this layer merge.
+		parentUserLayer := &ImageTemplate{
+			Image:        ImageInfo{Name: "parent", Version: "1.0.0"},
+			Target:       TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64"},
+			SystemConfig: SystemConfig{Name: "parent", Packages: []string{"curl"}},
+		}
+		overlayLeaf := &ImageTemplate{
 			Image:  ImageInfo{Name: "user", Version: "2.0.0"},
 			Target: TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64"},
 			Baseline: &Baseline{
@@ -187,14 +199,14 @@ func TestMergeConfigurationsOverlayPackages(t *testing.T) {
 			SystemConfig: SystemConfig{Name: "overlay", Packages: []string{"tree"}},
 		}
 
-		result, err := MergeConfigurations(userTemplate, defaultTemplate)
+		result, err := MergeConfigurations(overlayLeaf, parentUserLayer)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		want := []string{"tree"}
-		if !reflect.DeepEqual(result.SystemConfig.Packages, want) {
-			t.Errorf("overlay merged packages = %v, want %v (default boot toolchain must not be inherited)",
-				result.SystemConfig.Packages, want)
+		if !slice.Contains(result.SystemConfig.Packages, "curl") ||
+			!slice.Contains(result.SystemConfig.Packages, "tree") {
+			t.Errorf("overlay layer merge must inherit the parent's packages additively, got %v (want both curl and tree)",
+				result.SystemConfig.Packages)
 		}
 	})
 
@@ -577,30 +589,53 @@ func TestMergeKernelConfig(t *testing.T) {
 
 func TestMergePackageRepositoriesDetailed(t *testing.T) {
 	defaultRepos := []PackageRepository{
-		{Codename: "main", URL: "http://default.com/main"},
+		{Codename: "main", URL: "http://default.com/main", Component: "main"},
 		{Codename: "universe", URL: "http://default.com/universe"},
 	}
 
 	userRepos := []PackageRepository{
-		{Codename: "main", URL: "http://user.com/main"},     // Override by codename
-		{Codename: "extras", URL: "http://user.com/extras"}, // Add new
+		{Codename: "main", URL: "http://default.com/main", Component: "restricted"}, // Same codename+url: override in place
+		{Codename: "main", URL: "http://user.com/main"},                             // Same codename, different url: coexists
+		{Codename: "extras", URL: "http://user.com/extras"},                         // New codename: appended
 	}
 
 	merged := mergePackageRepositories(defaultRepos, userRepos)
 
-	// User repos are appended to defaults; matching codenames override defaults
-	if len(merged) != 3 {
-		t.Errorf("expected 3 repositories (default universe + user main override + user extras appended), got %d", len(merged))
+	// (codename, url) is the merge key: the same-url "main" overrides in place,
+	// the different-url "main" is added alongside it, and "extras" is appended.
+	if len(merged) != 4 {
+		t.Errorf("expected 4 repositories (universe + main override + second main + extras), got %d", len(merged))
+	}
+
+	// The default "main" (same codename+url) must be overridden, not duplicated.
+	var defaultMain *PackageRepository
+	mainURLs := make(map[string]bool)
+	for i := range merged {
+		if merged[i].Codename == "main" {
+			mainURLs[merged[i].URL] = true
+			if merged[i].URL == "http://default.com/main" {
+				defaultMain = &merged[i]
+			}
+		}
+	}
+
+	// Both "main" URLs should be present (same-codename repos coexist).
+	if !mainURLs["http://default.com/main"] || !mainURLs["http://user.com/main"] {
+		t.Errorf("expected both main URLs to be present, got %v", mainURLs)
+	}
+	if defaultMain == nil {
+		t.Fatalf("expected default-url main repo to be present")
+	}
+	// The matching (codename+url) user repo overrides other fields.
+	if defaultMain.Component != "restricted" {
+		t.Errorf("expected default main component overridden to 'restricted', got '%s'", defaultMain.Component)
 	}
 
 	repoMap := make(map[string]string)
 	for _, repo := range merged {
-		repoMap[repo.Codename] = repo.URL
-	}
-
-	// main should be overridden by user
-	if repoMap["main"] != "http://user.com/main" {
-		t.Errorf("expected main repo to be from user, got '%s'", repoMap["main"])
+		if repo.Codename != "main" {
+			repoMap[repo.Codename] = repo.URL
+		}
 	}
 
 	// extras should be appended from user
@@ -611,6 +646,49 @@ func TestMergePackageRepositoriesDetailed(t *testing.T) {
 	// universe should still be present from defaults
 	if repoMap["universe"] != "http://default.com/universe" {
 		t.Errorf("expected universe repo from defaults, got '%s'", repoMap["universe"])
+	}
+}
+
+// TestMergePackageRepositoriesPathBased verifies that local/path-based repos
+// (url empty, path set) merge on (codename, path) just as remote repos merge on
+// (codename, url): same path overrides in place, a different path coexists.
+func TestMergePackageRepositoriesPathBased(t *testing.T) {
+	defaultRepos := []PackageRepository{
+		{Codename: "local", Path: "/srv/repo-a", Component: "main"},
+		{Codename: "local", Path: "/srv/repo-b"},
+	}
+
+	userRepos := []PackageRepository{
+		{Codename: "local", Path: "/srv/repo-a", Component: "restricted"}, // Same codename+path: override in place
+		{Codename: "local", Path: "/srv/repo-c"},                          // Same codename, different path: coexists
+	}
+
+	merged := mergePackageRepositories(defaultRepos, userRepos)
+
+	// repo-a is overridden in place; repo-b is preserved; repo-c is appended.
+	if len(merged) != 3 {
+		t.Fatalf("expected 3 repositories (repo-a override + repo-b + repo-c), got %d", len(merged))
+	}
+
+	paths := make(map[string]string) // path -> component
+	for _, repo := range merged {
+		if repo.Codename != "local" {
+			t.Errorf("unexpected codename %q", repo.Codename)
+		}
+		paths[repo.Path] = repo.Component
+	}
+
+	// Same (codename, path) must override, not duplicate.
+	if paths["/srv/repo-a"] != "restricted" {
+		t.Errorf("expected repo-a component overridden to 'restricted', got '%s'", paths["/srv/repo-a"])
+	}
+	// Untouched default path preserved.
+	if _, ok := paths["/srv/repo-b"]; !ok {
+		t.Errorf("expected repo-b to be preserved from defaults")
+	}
+	// Different path coexists rather than colliding on the empty URL.
+	if _, ok := paths["/srv/repo-c"]; !ok {
+		t.Errorf("expected repo-c to be appended from user")
 	}
 }
 
@@ -762,6 +840,175 @@ systemConfig:
 	// If it succeeds, verify the basic structure
 	if result.Image.Name != "test-merge" {
 		t.Errorf("expected image name 'test-merge', got '%s'", result.Image.Name)
+	}
+}
+
+// TestLoadAndMergeTemplate_OverlaySkipsOSDefault verifies that an overlay-mode
+// template does NOT inherit the create-mode OS default configuration: the default
+// disk.size / partitions / bootloader / base packages describe a build-from-scratch
+// image, and applying them to an overlay is wrong (most visibly, the default's
+// disk.size would trip the grow-only shrink guard against a larger baseline). A
+// create-mode template with the same target must still inherit the default.
+//
+// It points ConfigDir at the real repo config tree (../../config, relative to this
+// package's test working directory) so it exercises the actual ubuntu24 default
+// that carries `size: 6GiB`.
+func TestLoadAndMergeTemplate_OverlaySkipsOSDefault(t *testing.T) {
+	repoConfig, err := filepath.Abs(filepath.Join("..", "..", "config"))
+	if err != nil {
+		t.Fatalf("resolve repo config dir: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repoConfig, "osv", "ubuntu", "ubuntu24", "imageconfigs", "defaultconfigs", "default-raw-x86_64.yml")); err != nil {
+		t.Skipf("ubuntu24 default config not found (%v); skipping", err)
+	}
+
+	prev := Global()
+	cfg := *prev
+	cfg.ConfigDir = repoConfig
+	SetGlobal(&cfg)
+	defer SetGlobal(prev)
+
+	writeTemplate := func(t *testing.T, overlay bool) string {
+		t.Helper()
+		dir := t.TempDir()
+		p := filepath.Join(dir, "tmpl.yml")
+		var b strings.Builder
+		b.WriteString("image:\n  name: t\n  version: \"1.0\"\n")
+		b.WriteString("target:\n  os: ubuntu\n  dist: ubuntu24\n  arch: x86_64\n  imageType: raw\n")
+		if overlay {
+			b.WriteString("baseline:\n  mode: overlay\n  source:\n    path: /tmp/baseline.raw\n")
+		}
+		b.WriteString("systemConfig:\n  name: t\n  packages:\n    - tree\n")
+		if err := os.WriteFile(p, []byte(b.String()), 0o644); err != nil {
+			t.Fatalf("write template: %v", err)
+		}
+		return p
+	}
+
+	t.Run("overlay does not inherit the default disk.size", func(t *testing.T) {
+		merged, err := LoadAndMergeTemplate(writeTemplate(t, true))
+		if err != nil {
+			t.Fatalf("LoadAndMergeTemplate (overlay): %v", err)
+		}
+		if !merged.IsOverlayMode() {
+			t.Fatalf("expected overlay mode, got baseline=%+v", merged.Baseline)
+		}
+		// The default sets disk.size: 6GiB; an overlay must NOT inherit it.
+		if merged.Disk.Size != "" {
+			t.Errorf("overlay must not inherit the OS default disk.size, got %q", merged.Disk.Size)
+		}
+		// Nor the default's build-from-scratch partitions/bootloader/base packages.
+		if len(merged.Disk.Partitions) != 0 {
+			t.Errorf("overlay must not inherit default partitions, got %d", len(merged.Disk.Partitions))
+		}
+		if merged.SystemConfig.Bootloader.Provider != "" {
+			t.Errorf("overlay must not inherit default bootloader, got %q", merged.SystemConfig.Bootloader.Provider)
+		}
+		if hasPackage(merged.SystemConfig.Packages, "ubuntu-minimal") {
+			t.Errorf("overlay must not inherit the default base package set, got %v", merged.SystemConfig.Packages)
+		}
+		// The user's own overlay package is preserved.
+		if !hasPackage(merged.SystemConfig.Packages, "tree") {
+			t.Errorf("expected the user's overlay package 'tree', got %v", merged.SystemConfig.Packages)
+		}
+	})
+
+	t.Run("create mode still inherits the default disk.size", func(t *testing.T) {
+		merged, err := LoadAndMergeTemplate(writeTemplate(t, false))
+		if err != nil {
+			t.Fatalf("LoadAndMergeTemplate (create): %v", err)
+		}
+		if merged.IsOverlayMode() {
+			t.Fatal("expected create mode")
+		}
+		if merged.Disk.Size != "6GiB" {
+			t.Errorf("create mode should inherit the default disk.size 6GiB, got %q", merged.Disk.Size)
+		}
+		// Create mode unions the default base packages with the user's.
+		if !hasPackage(merged.SystemConfig.Packages, "ubuntu-minimal") {
+			t.Errorf("create mode should inherit the default base packages, got %v", merged.SystemConfig.Packages)
+		}
+	})
+}
+
+// TestLoadAndMergeTemplate_OverlayRejectsFoldedUnsupportedSection verifies the
+// re-validation of the MERGED overlay template: each layer is validated in
+// isolation before merging, so a create-mode PARENT that declares a systemConfig
+// section an overlay cannot apply (e.g. users) folds into an overlay leaf without
+// either layer failing on its own. The merged result must be rejected rather than
+// silently dropping the section at build time.
+func TestLoadAndMergeTemplate_OverlayRejectsFoldedUnsupportedSection(t *testing.T) {
+	dir := t.TempDir()
+
+	// Parent: a plain (create-mode) template that declares systemConfig.users.
+	parentPath := filepath.Join(dir, "parent.yml")
+	parent := "image:\n  name: parent\n  version: \"1.0\"\n" +
+		"target:\n  os: ubuntu\n  dist: ubuntu24\n  arch: x86_64\n  imageType: raw\n" +
+		"systemConfig:\n  name: parent\n  users:\n    - name: alice\n"
+	if err := os.WriteFile(parentPath, []byte(parent), 0o644); err != nil {
+		t.Fatalf("write parent: %v", err)
+	}
+
+	// Leaf: an overlay-mode template extending the parent. Neither layer fails in
+	// isolation (create-mode parent may set users; overlay leaf sets none), but the
+	// merged overlay inherits the parent's users section.
+	leafPath := filepath.Join(dir, "leaf.yml")
+	leaf := "extends: \"parent.yml\"\n" +
+		"image:\n  name: leaf\n  version: \"1.0\"\n" +
+		"target:\n  os: ubuntu\n  dist: ubuntu24\n  arch: x86_64\n  imageType: raw\n" +
+		"baseline:\n  mode: overlay\n  source:\n    path: /tmp/baseline.raw\n" +
+		"systemConfig:\n  name: leaf\n  packages:\n    - tree\n"
+	if err := os.WriteFile(leafPath, []byte(leaf), 0o644); err != nil {
+		t.Fatalf("write leaf: %v", err)
+	}
+
+	_, err := LoadAndMergeTemplate(leafPath)
+	if err == nil {
+		t.Fatal("expected the merged overlay to be rejected for the folded-in users section")
+	}
+	if !strings.Contains(err.Error(), "invalid") && !strings.Contains(err.Error(), "users") {
+		t.Errorf("error should name the merged-overlay validation failure, got %v", err)
+	}
+}
+
+// TestLoadAndMergeTemplate_OverlayExtendsInheritsParentPackages verifies the
+// end-to-end fix for the "overlay extends drops inherited packages" bug: an overlay
+// leaf that extends a parent declaring `curl` and itself declaring `tree` must
+// resolve to BOTH packages (user-to-user package inheritance is additive), while
+// still not inheriting any create-mode OS-default package.
+func TestLoadAndMergeTemplate_OverlayExtendsInheritsParentPackages(t *testing.T) {
+	dir := t.TempDir()
+
+	parentPath := filepath.Join(dir, "parent.yml")
+	parent := "image:\n  name: parent\n  version: \"1.0\"\n" +
+		"target:\n  os: ubuntu\n  dist: ubuntu24\n  arch: x86_64\n  imageType: raw\n" +
+		"systemConfig:\n  name: parent\n  packages:\n    - curl\n"
+	if err := os.WriteFile(parentPath, []byte(parent), 0o644); err != nil {
+		t.Fatalf("write parent: %v", err)
+	}
+
+	leafPath := filepath.Join(dir, "leaf.yml")
+	leaf := "extends: \"parent.yml\"\n" +
+		"image:\n  name: leaf\n  version: \"1.0\"\n" +
+		"target:\n  os: ubuntu\n  dist: ubuntu24\n  arch: x86_64\n  imageType: raw\n" +
+		"baseline:\n  mode: overlay\n  source:\n    path: /tmp/baseline.raw\n" +
+		"systemConfig:\n  name: leaf\n  packages:\n    - tree\n"
+	if err := os.WriteFile(leafPath, []byte(leaf), 0o644); err != nil {
+		t.Fatalf("write leaf: %v", err)
+	}
+
+	merged, err := LoadAndMergeTemplate(leafPath)
+	if err != nil {
+		t.Fatalf("LoadAndMergeTemplate (overlay extends): %v", err)
+	}
+	if !merged.IsOverlayMode() {
+		t.Fatalf("expected overlay mode, got baseline=%+v", merged.Baseline)
+	}
+	if !hasPackage(merged.SystemConfig.Packages, "curl") {
+		t.Errorf("overlay leaf must inherit the parent's 'curl' package, got %v", merged.SystemConfig.Packages)
+	}
+	if !hasPackage(merged.SystemConfig.Packages, "tree") {
+		t.Errorf("overlay leaf must keep its own 'tree' package, got %v", merged.SystemConfig.Packages)
 	}
 }
 

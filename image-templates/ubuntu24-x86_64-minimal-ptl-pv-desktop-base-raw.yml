@@ -1,0 +1,381 @@
+# SPDX-FileCopyrightText: (C) 2026 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+#
+# =============================================================================
+# Ubuntu 24.04 PTL PV desktop BASE template (raw)
+# =============================================================================
+# A trimmed desktop foundation derived from ubuntu24-x86_64-minimal-ptl-pv-raw.yml
+# with the heavyweight PTL/virtualisation content removed (qemu, libvirt, spice,
+# swtpm/tpm2, ibus/i18n input methods, and assorted dev/profiling extras).
+#
+# It is a standalone, buildable image AND the parent for downstream `extends:`
+# children (e.g. Ubuntu24-x86_64-generic-handheld-os-desktop-raw.yml), which add
+# their own packages/users/configurations additively on top.
+#
+# NOTE ON REPOSITORIES: this base owns only the repositories its OWN package
+# set needs — the Intel linux-overlay `noble` repo. Repos consumed solely by
+# children (Docker CE, RealSense, Mozilla, OpenVINO, oneAPI) now live in those
+# children. The extends merge keys package repositories by the (codename, url)
+# PAIR, so a child may contribute its own `noble` repos (Docker/RealSense/
+# Mozilla) alongside this base's overlay `noble` repo without collapsing them.
+# =============================================================================
+
+# AI-searchable metadata for template discovery
+metadata:
+  description: "Ubuntu 24.04 PTL PV desktop base image (raw) — trimmed foundation for extends children; owns the Intel linux-overlay apt repository its base package set needs"
+  use_cases:
+    - "PTL platform validation base"
+    - "Intel GPU and NPU enablement"
+    - "extends parent for downstream desktop/handheld images"
+    - "raw image deployment"
+  keywords:
+    - ptl
+    - pv
+    - ubuntu
+    - raw
+    - desktop
+    - base
+    - extends
+    - intel
+    - gpu
+    - npu
+
+image:
+  name: minimal-ptl-pv-desktop-base
+  version: "24.04"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+
+# Disk layout and output artifact definition
+disk:
+  # Human friendly name logged by builders
+  name: minimal-ptl-pv-desktop-base
+  artifacts:
+    # Request conversion to raw
+    - type: raw
+      compression: gz
+  size: 32GiB
+  # GPT partition table per installer spec
+  partitionTableType: gpt
+  partitions:
+    # EFI system partition for bootloaders
+    - id: EFI
+      name: EFI
+      type: esp
+      # GPT type GUID for EFI system partition
+      typeUUID: c12a7328-f81f-11d2-ba4b-00a0c93ec93b
+      fsType: vfat
+      # Builder expects explicit MiB offsets
+      start: 1MiB
+      end: 1025MiB
+      mountPoint: /boot/efi
+      mountOptions: defaults
+      flags:
+        - boot
+        - esp
+    # Root filesystem
+    - id: SWAP
+      name: SWAP
+      type: linux-swap
+      typeUUID: 0657fd6d-a4ab-43c4-84e5-0933c84b4f4f
+      fsType: linux-swap
+      start: 1025MiB
+      end: 3073MiB
+      mountPoint: none
+      mountOptions: sw
+      flags: []
+
+    - id: ROOT
+      name: ROOT
+      type: linux-root-amd64
+      # Standard Linux root filesystem GUID for x86_64
+      typeUUID: 4f68bce3-e8cd-4db1-96e7-fbcaf984b709
+      fsType: ext4
+      start: 3073MiB
+      end: "0"
+      mountPoint: /
+      mountOptions: defaults
+      flags: []
+
+# Package repositories required by this base's own package set. Child templates
+# add their own repos additively; the merge keys on (codename, url) so children
+# may contribute further `noble` repos without overriding this one (see header).
+packageRepositories:
+  # Intel overlay repository (aligned with installer script)
+  - codename: "noble"
+    url: "https://download.01.org/intel-linux-overlay/ubuntu"
+    pkey: "https://download.01.org/intel-linux-overlay/ubuntu/E6FA98203588250569758E97D176E3162086EE4C.gpg"
+    component: "multimedia main non-free kernels"
+    priority: 2000
+    allowPackages:
+      - libigfxcmrt7
+      - curl
+      - gir1.2-gst-plugins-bad-1.0
+      - gir1.2-gstreamer-1.0
+      - gstreamer1.0-plugins-bad
+      - gstreamer1.0-plugins-good
+      - gstreamer1.0-plugins-base
+      - gstreamer1.0-pulseaudio
+      # base gstreamer libs (pulled in as deps of the plugins above; the
+      # overlay ships 1.26.x while stock noble only has 1.24.x, so they must
+      # be allowed from the overlay to satisfy the >=1.26 version constraints)
+      - libgstreamer1.0-0
+      - libgstreamer-gl1.0-0
+      - libgstreamer-plugins-base1.0-0
+      - libgstreamer-plugins-bad1.0-0
+      - libigdgmm12
+      - libmfx-gen1.2
+      - libva-dev
+      - libva-drm2
+      - libva-glx2
+      - libva-wayland2
+      - libva-x11-2
+      - libva2
+      - libwayland-bin
+      - libwayland-client0
+      - libwayland-cursor0
+      - libwayland-dev
+      - libwayland-doc
+      - libwayland-egl-backend-dev
+      - libwayland-egl1
+      - libwayland-server0
+      - linux-firmware
+      - mesa-vulkan-drivers
+      - va-driver-all
+      - vainfo
+      - weston
+      - ffmpeg
+      - wayland-protocols
+      - linuxptp
+      - util-linux-extra
+      - dbus-x11
+      - sg3-utils
+      - linux-headers-6.18-intel
+      - linux-image-6.18-intel
+      # overlay dependencies
+      - libvpl2
+      - libavcodec62
+      - libavformat62
+      - libavutil60
+      - libavdevice62
+      - libavfilter11
+      - libswresample6
+      - libswscale9
+      - libweston-10-0
+      - dnsmasq-base
+      # additional PTL packages
+      - xdp-tools
+      - rpc-go
+      - lms
+      - metee
+      - libxdp-dev
+      - libxdp1
+      - intel-media-va-driver-non-free
+      # Power and Thermal daemons for power and performance management
+      - intel-lpmd
+      - thermald
+
+systemConfig:
+  name: minimal
+  description: Minimal desktop ubuntu base for PTL
+
+  bootloader:
+    bootType: efi
+    provider: grub
+
+  immutability:
+    enabled: false # default is true
+
+  # Base package set = the shared foundation. Downstream children add their own
+  # packages additively (the extends merge unions + dedups these with the child's).
+  packages:
+    - vim
+    - ocl-icd-libopencl1
+    - openssh-server
+    - net-tools
+    - libdrm-amdgpu1
+    - libdrm-common
+    - libdrm-dev
+    - libdrm-intel1
+    - libdrm-nouveau2
+    - libdrm-radeon1
+    - libdrm2
+    - bluez
+    - bsdutils
+    - debianutils
+    - diffutils
+    - findutils
+    - grep
+    - grub-efi-amd64-signed
+    - gzip
+    - language-pack-en
+    - language-pack-en-base
+    - language-pack-gnome-en
+    - language-pack-gnome-en-base
+    - libattr1
+    - va-driver-all
+    - linux-base
+    - mawk
+    - ncurses-base
+    - ncurses-bin
+    - python3-netifaces
+    - shim-signed
+    - ubuntu-desktop-minimal
+    - ubuntu-minimal
+    - ubuntu-standard
+    - gdm3
+    - systemd
+    - systemd-resolved
+    - util-linux
+    - udev
+    - initramfs-tools
+    - grub2-common
+    - grub-pc-bin
+    - grub-efi-amd64
+    - grub-efi-amd64-bin
+    - efibootmgr
+    # PTL network stack
+    - libbpf1
+    - wget
+    - cron
+    - ethtool
+    - iproute2
+    - network-manager
+    - libtbb12
+    # PTL packages
+    - libigfxcmrt7
+    - nano
+    - gir1.2-gst-plugins-bad-1.0
+    - gir1.2-gstreamer-1.0
+    - gstreamer1.0-plugins-bad
+    - gstreamer1.0-plugins-good
+    - gstreamer1.0-pulseaudio
+    - libigdgmm12
+    - libmfx-gen1.2
+    - libtpms-dev
+    - libtpms0
+    - libva-dev
+    - libva-drm2
+    - libva-glx2
+    - libva-wayland2
+    - libva-x11-2
+    - libva2
+    - libwayland-bin
+    - libwayland-client0
+    - libwayland-cursor0
+    - libwayland-dev
+    - libwayland-doc
+    - libwayland-egl-backend-dev
+    - libwayland-egl1
+    - libwayland-server0
+    - linux-firmware
+    - mesa-utils
+    - vainfo
+    - weston
+    - xserver-xorg-core
+    - cmake
+    - git
+    - intel-gpu-tools
+    - make
+    - mosquitto
+    - mosquitto-clients
+    - build-essential
+    - apt-transport-https
+    - ffmpeg
+    - git-lfs
+    - libglew-dev
+    - libglm-dev
+    - libsdl2-dev
+    - mc
+    - openssl
+    - pciutils
+    - python3-pip
+    - wayland-protocols
+    - msr-tools
+    - linuxptp
+    - lsscsi
+    - i2c-tools
+    - gnupg
+    - lsb-release
+    - socat
+    - rpm
+    # additional packages
+    - tcpdump
+    - mesa-vulkan-drivers
+    - xdp-tools
+    - rpc-go
+    - lms
+    - metee
+    - libxdp-dev
+    - libxdp1
+    - intel-media-va-driver-non-free
+    - firmware-sof-signed
+    # linux-tools runtime dependencies
+    - pahole
+    - libconfig9
+    - libbabeltrace1
+    - libdebuginfod1t64
+    - libopencsd1
+    - libtracefs1
+    - libtraceevent1
+    - libnuma1
+    - libslang2
+    - libpython3.12t64
+    - libdw1t64
+    - libnl-3-200
+    - libnl-genl-3-200
+    - libpci3
+
+  additionalFiles:
+    - local: ../additionalfiles/ptl/01-network-manager-all.yaml
+      final: /etc/netplan/01-network-manager-all.yaml
+
+  kernel:
+    cmdline: "xe.max_vfs=7 xe.force_probe=* modprobe.blacklist=i915 udmabuf.list_limit=8192 console=tty0 console=ttyS0,115200n8"
+    enableExtraModules: "intel_vpu uas"
+
+  configurations:
+    # Install Intel Graphics Compiler and compute runtime packages for PTL
+    - cmd: "mkdir -p /tmp/gpu-packages"
+    - cmd: "wget -q https://github.com/intel/intel-graphics-compiler/releases/download/v2.28.4/intel-igc-core-2_2.28.4+20760_amd64.deb -O /tmp/gpu-packages/intel-igc-core-2_2.28.4+20760_amd64.deb"
+    - cmd: "wget -q https://github.com/intel/intel-graphics-compiler/releases/download/v2.28.4/intel-igc-opencl-2_2.28.4+20760_amd64.deb -O /tmp/gpu-packages/intel-igc-opencl-2_2.28.4+20760_amd64.deb"
+    - cmd: "wget -q https://github.com/intel/compute-runtime/releases/download/26.05.37020.3/intel-ocloc_26.05.37020.3-0_amd64.deb -O /tmp/gpu-packages/intel-ocloc_26.05.37020.3-0_amd64.deb"
+    - cmd: "wget -q https://github.com/intel/compute-runtime/releases/download/26.05.37020.3/intel-opencl-icd_26.05.37020.3-0_amd64.deb -O /tmp/gpu-packages/intel-opencl-icd_26.05.37020.3-0_amd64.deb"
+    - cmd: "wget -q https://github.com/intel/compute-runtime/releases/download/26.05.37020.3/libze-intel-gpu1_26.05.37020.3-0_amd64.deb -O /tmp/gpu-packages/libze-intel-gpu1_26.05.37020.3-0_amd64.deb"
+    - cmd: "wget -q https://github.com/oneapi-src/level-zero/releases/download/v1.22.4/level-zero_1.22.4+u24.04_amd64.deb -O /tmp/gpu-packages/level-zero_1.22.4+u24.04_amd64.deb"
+    - cmd: "wget -q https://github.com/oneapi-src/level-zero/releases/download/v1.22.4/level-zero-devel_1.22.4+u24.04_amd64.deb -O /tmp/gpu-packages/level-zero-devel_1.22.4+u24.04_amd64.deb"
+
+    - cmd: "find /tmp/gpu-packages -maxdepth 1 -type f -name '*.deb' | xargs -r dpkg -i; apt-get install -y --fix-broken -o Dpkg::Options::=\"--force-overwrite\" || true"
+    # Install NPU driver for PTL
+    - cmd: "dpkg --purge --force-remove-reinstreq intel-driver-compiler-npu intel-fw-npu intel-level-zero-npu intel-level-zero-npu-dbgsym 2>/dev/null "
+    - cmd: "mkdir -p /tmp/npu-driver"
+    - cmd: "cd /tmp/npu-driver && wget -q https://github.com/intel/linux-npu-driver/releases/download/v1.32.0/linux-npu-driver-v1.32.0.20260402-23905121947-ubuntu2404.tar.gz -O /tmp/npu-driver/linux-npu-driver-v1.32.0.20260402-23905121947-ubuntu2404.tar.gz"
+    - cmd: "cd /tmp/npu-driver && tar -xf linux-npu-driver-v1.32.0.20260402-23905121947-ubuntu2404.tar.gz"
+    - cmd: "find /tmp/npu-driver -name '*.deb' -print0 | xargs -0 dpkg -i"
+    # Install linux-tools packages from flat repo directory
+    - cmd: "dpkg --purge --force-depends linux-kbuild-6.18.23-intel+260427T075939Z linux-misc-tools linux-perf rtla libcpupower1 libcpupower-dev linux-cpupower bpftool hyperv-daemons intel-sdsi linux-bpf-dev linux-config-6.18 usbip 2>/dev/null "
+    - cmd: "mkdir -p /tmp/linux-tools"
+    - cmd: "wget -q https://download.01.org/intel-linux-overlay/ubuntu/linux-tools/libcpupower1_6.18.23-intel+260427T075939Z_amd64.deb -O /tmp/linux-tools/libcpupower1.deb"
+    - cmd: "wget -q https://download.01.org/intel-linux-overlay/ubuntu/linux-tools/bpftool_7.7.0+6.18.23-intel+260427T075939Z_amd64.deb -O /tmp/linux-tools/bpftool.deb"
+    - cmd: "wget -q https://download.01.org/intel-linux-overlay/ubuntu/linux-tools/hyperv-daemons_6.18.23-intel+260427T075939Z_amd64.deb -O /tmp/linux-tools/hyperv-daemons.deb"
+    - cmd: "wget -q https://download.01.org/intel-linux-overlay/ubuntu/linux-tools/intel-sdsi_6.18.23-intel+260427T075939Z_amd64.deb -O /tmp/linux-tools/intel-sdsi.deb"
+    - cmd: "wget -q https://download.01.org/intel-linux-overlay/ubuntu/linux-tools/libcpupower-dev_6.18.23-intel+260427T075939Z_amd64.deb -O /tmp/linux-tools/libcpupower-dev.deb"
+    - cmd: "wget -q https://download.01.org/intel-linux-overlay/ubuntu/linux-tools/linux-bpf-dev_6.18.23-intel+260427T075939Z_amd64.deb -O /tmp/linux-tools/linux-bpf-dev.deb"
+    - cmd: "wget -q https://download.01.org/intel-linux-overlay/ubuntu/linux-tools/linux-config-6.18_6.18.23-intel+260427T075939Z_amd64.deb -O /tmp/linux-tools/linux-config-6.18.deb"
+    - cmd: "wget -q https://download.01.org/intel-linux-overlay/ubuntu/linux-tools/linux-cpupower_6.18.23-intel+260427T075939Z_amd64.deb -O /tmp/linux-tools/linux-cpupower.deb"
+    - cmd: "wget -q https://download.01.org/intel-linux-overlay/ubuntu/linux-tools/linux-kbuild-6.18.23-intel+260427T075939Z_6.18.23-intel+260427T075939Z_amd64.deb -O /tmp/linux-tools/linux-kbuild.deb"
+    - cmd: "wget -q https://download.01.org/intel-linux-overlay/ubuntu/linux-tools/linux-misc-tools_6.18.23-intel+260427T075939Z_amd64.deb -O /tmp/linux-tools/linux-misc-tools.deb"
+    - cmd: "wget -q https://download.01.org/intel-linux-overlay/ubuntu/linux-tools/linux-perf_6.18.23-intel+260427T075939Z_amd64.deb -O /tmp/linux-tools/linux-perf.deb"
+    - cmd: "wget -q https://download.01.org/intel-linux-overlay/ubuntu/linux-tools/rtla_6.18.23-intel+260427T075939Z_amd64.deb -O /tmp/linux-tools/rtla.deb"
+    - cmd: "wget -q https://download.01.org/intel-linux-overlay/ubuntu/linux-tools/usbip_2.0+6.18.23-intel+260427T075939Z_amd64.deb -O /tmp/linux-tools/usbip.deb"
+    - cmd: "dpkg -i /tmp/linux-tools/libcpupower1.deb"
+    - cmd: "find /tmp/linux-tools -maxdepth 1 -type f -name '*.deb' | xargs -r dpkg -i; apt-get install -y --fix-broken -o Dpkg::Options::=\"--force-overwrite\" || true"
+    # Pin linux-tools packages to prevent apt from downgrading or removing them
+    - cmd: "printf 'Package: bpftool hyperv-daemons intel-sdsi libcpupower1 libcpupower-dev linux-bpf-dev linux-config-6.18 linux-cpupower linux-kbuild-6.18.23-intel+260427T075939Z linux-misc-tools linux-perf rtla usbip\nPin: version *260427T075939Z*\nPin-Priority: 1001\n' > /etc/apt/preferences.d/linux-tools-pin"
+    # Fix broken deps but ignore systemd-boot EFI variable error (not accessible in chroot)
+    - cmd: "apt-get install -y --fix-broken -o Dpkg::Options::=\"--force-overwrite\" || true"
+    - cmd: "dpkg --configure -a --force-configure-any || true"

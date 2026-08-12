@@ -4,6 +4,9 @@ import type {
   Manifest,
   ComposeRequest,
   ComposeResponse,
+  ValidationResponse,
+  PackageRepoList,
+  PackageSearchResults,
   BuildAccepted,
   BuildDetails,
   CancelAccepted,
@@ -14,6 +17,12 @@ import type {
 const BASE = '/api/v1'
 
 async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await jsonFetchRaw(path, init)
+  return res.json() as Promise<T>
+}
+
+// jsonFetchRaw is jsonFetch but returns the raw Response so callers can inspect headers.
+async function jsonFetchRaw(path: string, init?: RequestInit): Promise<Response> {
   const res = await fetch(BASE + path, {
     ...init,
     headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
@@ -28,7 +37,7 @@ async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new Error(msg)
   }
-  return res.json() as Promise<T>
+  return res
 }
 
 export const api = {
@@ -40,6 +49,38 @@ export const api = {
       body: JSON.stringify(req),
     }),
 
+  // Validate an edited template's YAML. A failed validation is a successful 200
+  // call — inspect `valid` and the per-field `errors`/`warnings`. Backend returns
+  // 501 until PR 2 lands the real field-level validation.
+  validateTemplate: (yaml: string) =>
+    jsonFetch<ValidationResponse>('/templates/validate', {
+      method: 'POST',
+      body: JSON.stringify({ yaml }),
+    }),
+
+  // Package repositories the Advanced tab can enable/disable, optionally filtered
+  // by target OS. Backend returns 501 until PR 4 lands the real repo listing.
+  listPackageRepos: (os?: string) =>
+    jsonFetch<PackageRepoList>(
+      '/package-repos' + (os ? `?os=${encodeURIComponent(os)}` : ''),
+    ),
+
+  // Search packages available for a target, for the Packages-step autocomplete.
+  // `repos` filters by enabled repository IDs. Backend returns 501 until PR 5.
+  searchPackages: (params: {
+    q: string
+    os: string
+    repos?: string[]
+    limit?: number
+  }) => {
+    const qs = new URLSearchParams()
+    qs.set('q', params.q)
+    qs.set('os', params.os)
+    if (params.repos) for (const r of params.repos) qs.append('repos', r)
+    if (params.limit != null) qs.set('limit', String(params.limit))
+    return jsonFetch<PackageSearchResults>(`/packages/search?${qs.toString()}`)
+  },
+
   startBuild: (req: ComposeRequest) =>
     jsonFetch<BuildAccepted>('/builds', {
       method: 'POST',
@@ -47,8 +88,18 @@ export const api = {
     }),
 
   // Compose history, newest-first (merges live builds + on-disk meta records).
-  listBuilds: () =>
-    jsonFetch<{ builds: HistoryItem[] }>('/builds').then((r) => r.builds),
+  // Also returns the server↔browser clock offset for correcting elapsed-time labels.
+  // Prefer serverTime from body (works through proxies/CORS); fall back to Date header.
+  listBuilds: async (): Promise<{ builds: HistoryItem[]; clockOffsetMs: number }> => {
+    const res = await jsonFetchRaw('/builds')
+    const body = (await res.json()) as { builds: HistoryItem[]; serverTime?: string }
+    const bodyServerNow = body.serverTime ? new Date(body.serverTime).getTime() : NaN
+    const dateHeader = res.headers.get('Date')
+    const headerServerNow = dateHeader ? new Date(dateHeader).getTime() : NaN
+    const serverNow = Number.isFinite(bodyServerNow) ? bodyServerNow : headerServerNow
+    const clockOffsetMs = Number.isFinite(serverNow) ? serverNow - Date.now() : 0
+    return { builds: body.builds, clockOffsetMs }
+  },
 
   // Cancel an in-flight build. Returns 202 with the cancelling status; the
   // terminal state (cancelled/failed) then arrives over SSE. 409 if the build is

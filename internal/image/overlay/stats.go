@@ -6,6 +6,8 @@
 //  1. Unchanged: Baseline packages that were not modified by the overlay
 //  2. Added: New packages installed by the overlay (not present in baseline)
 //  3. Upgraded: Baseline packages upgraded to newer versions
+//  4. Removed: Baseline packages removed by the overlay (conflict-driven removal
+//     permitted by allowPackageRemoval)
 //
 // The statistics are computed by comparing the baseline package inventory
 // (detected during the Inspect Baseline stage) with the packages in the
@@ -35,6 +37,9 @@ type PackageStats struct {
 	Added []PackageAdd
 	// Upgraded are baseline packages upgraded to a newer version (sorted).
 	Upgraded []PackageUpgrade
+	// Removed are baseline packages removed by the overlay (conflict-driven removal
+	// permitted by allowPackageRemoval, sorted).
+	Removed []PackageRemove
 }
 
 // PackageAdd describes one package that was newly added by the overlay.
@@ -50,6 +55,12 @@ type PackageUpgrade struct {
 	NewVersion      string
 }
 
+// PackageRemove describes one baseline package that was removed by the overlay.
+type PackageRemove struct {
+	Name            string
+	BaselineVersion string
+}
+
 // ComputePackageStats analyzes the baseline inventory and resolution plan to
 // categorize packages as unchanged, newly added, or upgraded.
 //
@@ -57,7 +68,14 @@ type PackageUpgrade struct {
 //     ToInstall whose resolved version equals the baseline version (no-op reinstall)
 //   - Added: packages in ToInstall that were not present in the baseline
 //   - Upgraded: packages in ToInstall that existed in baseline at a different version
-func ComputePackageStats(baseline []BaselinePackage, plan *ResolutionPlan) *PackageStats {
+//   - Removed: baseline packages the overlay removed (report.ApprovedRemovals — a
+//     conflict-driven removal or an rpm Obsoletes-driven removal, permitted by
+//     allowPackageRemoval)
+//
+// report may be nil (e.g. when no preflight ran); in that case no removals are
+// reported. A removed baseline package is excluded from the Unchanged set — it is
+// no longer present in the final image.
+func ComputePackageStats(baseline []BaselinePackage, plan *ResolutionPlan, report *PreflightReport) *PackageStats {
 	if plan == nil {
 		return &PackageStats{}
 	}
@@ -70,11 +88,24 @@ func ComputePackageStats(baseline []BaselinePackage, plan *ResolutionPlan) *Pack
 		}
 	}
 
+	// Removed set: baseline packages the overlay removed. Uses ApprovedRemovals, not
+	// ToRemove, so an rpm Obsoletes-driven removal (which `rpm -U` performs
+	// implicitly, so it is absent from ToRemove) is still reported as removed and
+	// excluded from the unchanged scan below — a removed package is not "unchanged",
+	// it is gone from the final image.
+	removedSet := make(map[string]bool)
+	if report != nil {
+		for _, name := range report.ApprovedRemovals {
+			removedSet[name] = true
+		}
+	}
+
 	stats := &PackageStats{
 		TotalBaseline: len(baselineByName),
 		Unchanged:     []string{},
 		Added:         []PackageAdd{},
 		Upgraded:      []PackageUpgrade{},
+		Removed:       []PackageRemove{},
 	}
 
 	// Categorize packages in ToInstall
@@ -106,11 +137,26 @@ func ComputePackageStats(baseline []BaselinePackage, plan *ResolutionPlan) *Pack
 		}
 	}
 
-	// Identify unchanged packages: in baseline but not in ToInstall
+	// Removed: baseline packages named in report.ApprovedRemovals. Look up the baseline
+	// version for display; a removal that names a package not in the baseline index
+	// (should not happen — preflight only removes present packages) still lists the
+	// name with an empty version rather than being silently dropped.
+	for name := range removedSet {
+		stats.Removed = append(stats.Removed, PackageRemove{
+			Name:            name,
+			BaselineVersion: baselineByName[name].Version,
+		})
+	}
+
+	// Identify unchanged packages: in baseline but neither in ToInstall nor removed.
 	for name := range baselineByName {
-		if _, installed := toInstallSet[name]; !installed {
-			stats.Unchanged = append(stats.Unchanged, name)
+		if _, installed := toInstallSet[name]; installed {
+			continue
 		}
+		if removedSet[name] {
+			continue
+		}
+		stats.Unchanged = append(stats.Unchanged, name)
 	}
 
 	// Sort all categories for deterministic output
@@ -120,6 +166,9 @@ func ComputePackageStats(baseline []BaselinePackage, plan *ResolutionPlan) *Pack
 	})
 	sort.Slice(stats.Upgraded, func(i, j int) bool {
 		return stats.Upgraded[i].Name < stats.Upgraded[j].Name
+	})
+	sort.Slice(stats.Removed, func(i, j int) bool {
+		return stats.Removed[i].Name < stats.Removed[j].Name
 	})
 
 	return stats
@@ -145,6 +194,7 @@ func PrintPackageStats(stats *PackageStats) {
 	fmt.Fprintf(summary, "Unchanged\t%d\n", len(stats.Unchanged))
 	fmt.Fprintf(summary, "Added\t%d\n", len(stats.Added))
 	fmt.Fprintf(summary, "Upgraded\t%d\n", len(stats.Upgraded))
+	fmt.Fprintf(summary, "Removed\t%d\n", len(stats.Removed))
 	_ = summary.Flush()
 	sb.WriteString("\n")
 
@@ -152,7 +202,7 @@ func PrintPackageStats(stats *PackageStats) {
 	// rows cluster into an "added" group followed by an "upgraded" group. Added
 	// packages have no baseline version (shown as "-"); upgraded packages show
 	// the baseline -> new version transition.
-	if len(stats.Added) > 0 || len(stats.Upgraded) > 0 {
+	if len(stats.Added) > 0 || len(stats.Upgraded) > 0 || len(stats.Removed) > 0 {
 		sb.WriteString("━━━ Package Changes ━━━\n")
 		details := tabwriter.NewWriter(&sb, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(details, "CHANGE\tPACKAGE\tFROM\tTO")
@@ -161,6 +211,11 @@ func PrintPackageStats(stats *PackageStats) {
 		}
 		for _, upg := range stats.Upgraded {
 			fmt.Fprintf(details, "upgraded\t%s\t%s\t%s\n", upg.Name, upg.BaselineVersion, upg.NewVersion)
+		}
+		// Removed packages show the baseline version they were removed from and no
+		// "to" version (they are gone from the final image).
+		for _, rem := range stats.Removed {
+			fmt.Fprintf(details, "removed\t%s\t%s\t%s\n", rem.Name, versionOrDash(rem.BaselineVersion), "-")
 		}
 		_ = details.Flush()
 		sb.WriteString("\n")
@@ -178,6 +233,15 @@ func PrintPackageStats(stats *PackageStats) {
 	sb.WriteString("═══════════════════════════════════════════════════════════════\n")
 
 	log.Info(sb.String())
+}
+
+// versionOrDash renders a version string, substituting "-" for an empty value so
+// a removed package with an unknown baseline version still prints a placeholder.
+func versionOrDash(v string) string {
+	if strings.TrimSpace(v) == "" {
+		return "-"
+	}
+	return v
 }
 
 // PrintVerboseUnchangedPackages prints the full list of unchanged packages,

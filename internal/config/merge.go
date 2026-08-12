@@ -141,20 +141,18 @@ func MergeConfigurations(userTemplate, defaultTemplate *ImageTemplate) (*ImageTe
 		mergedTemplate.SystemConfig = defaultTemplate.SystemConfig
 	}
 
-	// Overlay mode layers packages onto an already-complete baseline image, so it
-	// must NOT inherit the create-mode default OS package set. Those defaults
-	// (ubuntu-minimal, systemd-boot, dracut-core, cryptsetup-bin, the kernel, …)
-	// describe how to build an image from scratch; the baseline already provides
-	// them. Unioning them into the overlay's additive package list re-seeds the
-	// whole base toolchain — dragging in bootloader packages whose strict version
-	// pins the frozen baseline cannot satisfy — when the user asked only to add a
-	// package or two. Restrict the overlay package set to exactly what the user
-	// declared. (The overlay seed reads only SystemConfig.Packages; kernel/bootloader
-	// package lists are already excluded from resolution downstream.)
-	if userTemplate.IsOverlayMode() {
-		mergedTemplate.SystemConfig.Packages = append([]string(nil), userTemplate.SystemConfig.Packages...)
-		log.Debugf("Overlay mode: restricted additive package set to %d user-declared package(s)", len(mergedTemplate.SystemConfig.Packages))
-	}
+	// NOTE on overlay package sets: overlay mode must not inherit the create-mode
+	// default OS package set (ubuntu-minimal, systemd-boot, dracut-core, the kernel,
+	// …), which describes how to build an image from scratch and would re-seed the
+	// whole base toolchain the frozen baseline already provides. That suppression is
+	// NOT applied here: MergeConfigurations is also the per-layer step used to fold a
+	// user's `extends` chain (parent -> leaf), where `defaultTemplate` is a PARENT
+	// USER layer, not the OS default — stripping to the current layer's packages there
+	// would drop packages an overlay leaf legitimately inherits from its parent
+	// (user-to-user package inheritance is additive). Instead, overlay's own default
+	// exclusion is structural: LoadAndMergeTemplate returns the folded user chain
+	// BEFORE the OS default is ever merged (see the IsOverlayMode early return), so
+	// no OS-default package can enter an overlay build in the first place.
 
 	// Package repositories - merge intelligently
 	mergedTemplate.PackageRepositories = mergePackageRepositories(
@@ -576,11 +574,18 @@ func mergePackageRepositories(defaultRepos, userRepos []PackageRepository) []Pac
 	merged := make([]PackageRepository, len(defaultRepos))
 	copy(merged, defaultRepos)
 
-	// For each user repo, override if codename matches a default, otherwise append
+	// The merge key is the (codename, url, path) tuple, not codename alone. This
+	// lets an extend template add multiple repositories that share a codename but
+	// differ in location — remote repos with different URLs, or local/path-based
+	// repos (which leave url empty and set path) with different paths. A user repo
+	// overrides a default only when codename, url and path all match (updating the
+	// other fields); otherwise it is appended.
 	for _, userRepo := range userRepos {
 		found := false
 		for i, defRepo := range merged {
-			if defRepo.Codename == userRepo.Codename {
+			if defRepo.Codename == userRepo.Codename &&
+				defRepo.URL == userRepo.URL &&
+				defRepo.Path == userRepo.Path {
 				merged[i] = userRepo
 				found = true
 				break
@@ -922,7 +927,39 @@ func LoadAndMergeTemplate(templatePath string) (*ImageTemplate, error) {
 		log.Infof("Extends chain: %s", strings.Join(names, " -> "))
 	}
 
-	// The leaf template's target determines which default configuration applies.
+	// Fold the user's own extends chain first (leaf over its parents), with NO OS
+	// default layered in. This is the effective user template and is also what
+	// lets overlay mode be detected robustly even when baseline.mode lives in a
+	// parent layer rather than the leaf.
+	userMerged, err := foldChain(chain[0], chain[1:])
+	if err != nil {
+		return nil, err
+	}
+
+	// Overlay mode layers packages onto an already-complete baseline image, so the
+	// create-mode OS default configuration does NOT apply: disk geometry,
+	// partition table, bootloader, kernel, and the base OS package set all come
+	// from the baseline image (the overlay pipeline reads them from the detected
+	// baseline, never from the merged template). Applying the default here would
+	// bleed build-from-scratch values into the overlay — most visibly the default
+	// disk.size, which against a larger baseline turns into a spurious "shrink not
+	// supported" resize failure. Return the user template as-is; the baseline
+	// governs.
+	if userMerged.IsOverlayMode() {
+		log.Infof("Overlay mode: skipping OS default configuration (the baseline image governs disk, bootloader, kernel, and base packages)")
+		userMerged.Extends = ""
+		// Re-validate the merged overlay: each layer is validated in isolation before
+		// merging, but an unsupported systemConfig section (e.g. users) declared by a
+		// create-mode PARENT can fold into an overlay leaf without either layer failing.
+		// Re-running the overlay validation on the merged result rejects that rather
+		// than silently ignoring the section at build time.
+		if err := userMerged.validateBaseline(); err != nil {
+			return nil, fmt.Errorf("merged overlay template is invalid: %w", err)
+		}
+		return userMerged, nil
+	}
+
+	// Create mode: the leaf template's target determines which default applies.
 	loader := NewDefaultConfigLoader(leafTemplate.Target.OS, leafTemplate.Target.Dist, leafTemplate.Target.Arch)
 
 	// Load the appropriate default configuration
@@ -932,7 +969,8 @@ func LoadAndMergeTemplate(templatePath string) (*ImageTemplate, error) {
 		log.Warnf("Could not load default configuration for %s/%s/%s (%s); proceeding without defaults",
 			leafTemplate.Target.OS, leafTemplate.Target.Dist, leafTemplate.Target.Arch, leafTemplate.Target.ImageType)
 		log.Info("Proceeding without default configuration")
-		return foldChain(chain[0], chain[1:])
+		userMerged.Extends = ""
+		return userMerged, nil
 	}
 
 	// Iterative fold: start from the default configuration as the base, then

@@ -57,12 +57,28 @@ type Repository struct {
 }
 
 // ResolvedPackage is a single package in the resolved transitive closure.
+//
+// Beyond the identity fields the resolver keys on (Name/Version/Arch/URL), it
+// carries the repo-metadata fields the SBOM writer enriches with — supplier
+// (Origin), checksums, description, license — so an overlay-added package lands
+// in the merged SBOM with the same metadata completeness as a baseline entry.
+// Without these the overlay path would rebuild a bare PackageInfo and emit
+// degraded records (missing supplier/checksum/description).
 type ResolvedPackage struct {
 	Name    string
 	Version string
 	Arch    string
 	// URL is the artifact download URL, when known.
 	URL string
+	// Type is the package family ("deb", "rpm"), used as the SPDX package type.
+	Type string
+	// Description, Origin (SPDX supplier), License, and Checksums carry the
+	// repo-metadata the SBOM writer enriches package records with. They are
+	// populated from the resolved closure's PackageInfo when available.
+	Description string
+	Origin      string
+	License     string
+	Checksums   []ospackage.Checksum
 }
 
 // ResolutionPlan is the deterministic output of overlay dependency resolution.
@@ -657,7 +673,11 @@ func buildResolutionPlan(in planInput) *ResolutionPlan {
 
 	for _, p := range in.closure {
 		name := canonicalPackageName(p)
-		rp := ResolvedPackage{Name: name, Version: p.Version, Arch: p.Arch, URL: p.URL}
+		rp := ResolvedPackage{
+			Name: name, Version: p.Version, Arch: p.Arch, URL: p.URL,
+			Type: p.Type, Description: p.Description, Origin: p.Origin,
+			License: p.License, Checksums: p.Checksums,
+		}
 		resolved = append(resolved, rp)
 		if !present[name] {
 			toInstall = append(toInstall, rp)
@@ -690,11 +710,25 @@ func buildResolutionPlan(in planInput) *ResolutionPlan {
 		}
 	}
 
+	// Closure is order-insensitive downstream (SBOM, preflight, stats), so keep it
+	// alphabetized for a stable, readable plan.
 	sortResolved(resolved)
-	sortResolved(toInstall)
 
-	sortedArtifacts := append([]string(nil), in.artifacts...)
-	sort.Strings(sortedArtifacts)
+	// ToInstall drives the dpkg command line, whose ORDER MATTERS: dpkg -i unpacks
+	// archives left-to-right and refuses to unpack a package whose Pre-Depends is
+	// not yet CONFIGURED (dpkg only configures at the end of a run), so a
+	// pre-dependency should appear before its dependent (e.g. libmpfr6 before gawk).
+	// Ordering alone is not sufficient — a dependent whose pre-dep is unpacked but
+	// not yet configured is still skipped and the install backend retries in a later
+	// pass (see debInstallerBackend.install) — but dependency-first order maximizes
+	// how much each pass configures and minimizes the passes needed. in.artifacts
+	// arrives from the resolver already in dependency-first install order
+	// (pkgsorter.SortPackages, an SCC-based topological sort); alphabetizing it here
+	// or in planInstalls would break that invariant. Order ToInstall by each
+	// package's position in that topological artifact list instead. The order is
+	// deterministic (same resolve → same order), so plans stay reproducible without
+	// an alphabetical sort.
+	orderInstallByArtifacts(toInstall, in.artifacts)
 
 	presentNames := make([]string, 0, len(alreadyPresent))
 	for name := range alreadyPresent {
@@ -710,8 +744,40 @@ func buildResolutionPlan(in planInput) *ResolutionPlan {
 		ToInstall:      toInstall,
 		AlreadyPresent: presentNames,
 		DownloadDir:    destDir,
-		Artifacts:      sortedArtifacts,
+		// Preserve the resolver's topological install order (see above); do not sort.
+		Artifacts: append([]string(nil), in.artifacts...),
 	}
+}
+
+// orderInstallByArtifacts reorders pkgs in place to match the dependency-first
+// order of the topologically-sorted artifact list (basename of each package's
+// download URL). A package whose artifact is not found in the list — which should
+// not happen, since every to-install package was downloaded — sorts after the
+// known ones, and ties break on name so the result stays deterministic.
+func orderInstallByArtifacts(pkgs []ResolvedPackage, artifacts []string) {
+	pos := make(map[string]int, len(artifacts))
+	for i, a := range artifacts {
+		if _, seen := pos[a]; !seen {
+			pos[a] = i
+		}
+	}
+	rank := func(rp ResolvedPackage) int {
+		artifact, err := artifactFileFor(rp)
+		if err != nil {
+			return len(artifacts)
+		}
+		if i, ok := pos[artifact]; ok {
+			return i
+		}
+		return len(artifacts)
+	}
+	sort.SliceStable(pkgs, func(i, j int) bool {
+		ri, rj := rank(pkgs[i]), rank(pkgs[j])
+		if ri != rj {
+			return ri < rj
+		}
+		return pkgs[i].Name < pkgs[j].Name
+	})
 }
 
 // canonicalPackageName returns the canonical package name for a resolved package,

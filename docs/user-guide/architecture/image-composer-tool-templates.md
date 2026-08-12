@@ -24,6 +24,7 @@ For a conceptual overview of how templates fit into the build pipeline, see
     - [WSL-Compatible Images](#wsl-compatible-images)
     - [`baseline`](#baseline)
       - [`baseline.source`](#baselinesource)
+        - [SBOM generation (overlay mode)](#sbom-generation-overlay-mode)
     - [`overlayPolicy`](#overlaypolicy)
     - [`disk`](#disk)
       - [`disk.artifacts[]`](#diskartifacts)
@@ -259,6 +260,7 @@ place**.
 | `path` | string | one of `path`/`url` | Local filesystem path to the baseline image (no URI scheme) |
 | `url` | string | one of `path`/`url` | `https://` URL of the baseline image; downloaded over TLS before the overlay runs (plain `http` is rejected) |
 | `format` | string | No | Baseline image format: `raw`, `qcow2`, `vhd` or `vhdx` (default `raw`). Non-raw formats are converted to RAW before the overlay runs |
+| `sbomPath` | string | No | Local filesystem path (no URI scheme) to an externally-supplied SPDX SBOM (JSON) describing the baseline image. Defaults to unset. See [SBOM generation](#sbom-generation-overlay-mode) below |
 
 ```yaml
 baseline:
@@ -266,17 +268,84 @@ baseline:
   source:
     path: /path/to/ubuntu-24.04-base.img
     format: raw
+    # Optional: combine this base-image SBOM with the overlay delta to emit a
+    # full SBOM. Omit it to use the SBOM embedded in the baseline image, if any.
+    sbomPath: /path/to/ubuntu-24.04-base.spdx.json
 ```
+
+##### SBOM generation (overlay mode)
+
+An overlay build emits SPDX SBOM sidecar files into the build output directory,
+alongside the emitted image (`<image-name>-<version>.raw`):
+
+| Artifact | Name | Contents |
+|----------|------|----------|
+| **Delta SBOM** | `<image-name>-<version>.delta.spdx.json` | Always emitted. Only the overlay-induced package changes — the packages the overlay added and, in `additive-and-upgrade` mode, upgraded. |
+| **Complete SBOM** | `<image-name>-<version>.complete.spdx.json` | Emitted only when a base SBOM is available (see below). The full final image inventory — the baseline packages plus the overlay result. When no base SBOM exists the complete document would be identical to the delta, so this sidecar is skipped. |
+
+Both are SPDX 2.3 JSON, the same format the standalone SBOM/inspect tooling uses.
+The **complete** SBOM is also embedded inside the image at `/usr/share/sbom`
+(replacing the SBOM the image inherited from the baseline, so the in-image
+manifest reflects the full final inventory).
+
+The complete SBOM is the union of a **base** SBOM and the overlay delta. Which
+base is used follows this order:
+
+1. **`baseline.source.sbomPath` set and valid** — that externally-supplied base
+   SBOM is combined with the delta.
+2. **`sbomPath` unset** — the SBOM the baseline image itself carries at
+   `/usr/share/sbom` is used as the base and combined with the delta.
+3. **No base SBOM available** — `sbomPath` is unset or the file is
+   absent/unreadable/malformed **and** the baseline image embeds no SBOM — then
+   there is no full inventory to build, so the **complete** sidecar is skipped
+   (it would be identical to the delta) while the in-image `/usr/share/sbom`
+   manifest and the **delta** sidecar are still written. This is never an error:
+   the build succeeds.
+
+A missing or malformed `sbomPath` falls back to the baseline-embedded SBOM (then
+to delta-only); it does not fail the build. Omitting `sbomPath` entirely
+preserves the pre-existing base-resolution behavior. This applies to every
+overlay-capable provider (Ubuntu and Debian).
+
+To diff these artifacts against the baseline — the overlay RAW vs the baseline
+RAW, or the complete SBOM vs the baseline SBOM — see
+[Comparing Overlay Outputs](../get-started/usage-guide.md#comparing-overlay-outputs).
 
 > **Note:** Overlay mode is currently wired end-to-end for the **Ubuntu** and
 > **Debian** providers. Targeting a provider without overlay support fails the
 > build immediately with a clear message rather than silently falling back to a
-> create-mode build. The overlay build is **strictly additive**: packages (and their
+> create-mode build. The overlay build is **additive by default**: packages (and their
 > transitive dependencies not already present in the baseline) are installed
 > into the baseline root, the initramfs is regenerated for the added packages,
-> and an optional grow-only resize can enlarge the image to a larger
-> `disk.size`. The installed bootloader binary, the ESP, and existing baseline
-> packages are never modified.
+> the template's [`systemConfig.configurations`](#systemconfigconfigurations)
+> commands and [`systemConfig.additionalFiles`](#systemconfigadditionalfiles) are
+> applied, and an optional grow-only resize can enlarge the image to a larger
+> `disk.size`. Existing baseline packages are not removed unless
+> [`overlayPolicy.allowPackageRemoval`](#overlaypolicy) is enabled, which permits a
+> conflict-driven removal of a baseline package a to-install package conflicts
+> with. The installed bootloader binary, the ESP, and the bootable kernel are
+> never modified regardless of policy.
+>
+> **OS defaults do not apply.** Unlike a create-mode build, an overlay template is
+> **not** merged with the target's create-mode OS default configuration
+> (`default-raw-*.yml`). Those defaults describe how to build an image from
+> scratch — disk size and partition table, bootloader, kernel, and the base OS
+> package set — all of which the baseline image already provides. The overlay
+> pipeline reads disk/bootloader/kernel geometry from the detected baseline, not
+> from the template, so the effective overlay template is exactly what you declare
+> (folded through any `extends:` chain) with nothing inherited from the OS default.
+> In particular, an overlay template that omits `disk.size` keeps the baseline's
+> size — it does not pick up the default's `disk.size`, which against a larger
+> baseline would otherwise be rejected as a shrink.
+>
+> **Unsupported systemConfig sections.** Because overlay mode never re-runs the
+> system-provisioning stages, the following `systemConfig` sections cannot be
+> applied to an overlay build: `users`, `hostname`, `network`, `initramfs`,
+> `kernel`, `immutability`, `fde`, and `bootloader`. Previously these were
+> silently ignored; now setting any of them in an overlay template **fails the
+> build up front** with a message naming every offending section. Configure them
+> in the baseline image (a `create`-mode build) instead. The overlay-supported
+> `systemConfig` inputs are `packages`, `configurations`, and `additionalFiles`.
 >
 > **Sizing:** Adding packages does **not** auto-grow the image, and the overlay
 > preserves the baseline disk layout by default. Growing the image is opt-in: it
@@ -317,14 +386,26 @@ top-level peer of `baseline` and may **only** be set when `baseline.mode` is
 | `conflictPolicy` | string | No | `fail` (default), `allow-explicit` | How a package conflict detected during preflight is handled. `fail` aborts the build; `allow-explicit` permits a conflict only when the conflicting package was explicitly requested |
 | `kernelCmdline` | string | No | — | Optional kernel command-line override applied to the overlaid image |
 | `allowDiskResize` | boolean | No | `false` (default), `true` | Permit growing the baseline image to satisfy a larger `disk.size`. Overlay mode preserves the baseline disk layout by default; when `false`, a `disk.size` larger than the baseline is rejected with an error. Resize is always grow-only and never shrinks the image |
+| `allowPackageRemoval` | boolean | No | `false` (default), `true` | Permit removing a baseline package that a to-install package conflicts with (e.g. installing `dracut`, which conflicts with `initramfs-tools`). When `false` (the default) such a conflict fails the build; when `true`, the conflicting baseline package is removed before install. **Only valid with `packageOperation: additive-and-upgrade`** — removal is more invasive than an in-place upgrade, so it is rejected under the default `additive-only`. Bootloader and bootable-kernel packages are never removed regardless of this flag |
 
 > **`additive-and-upgrade` scope.** Upgrades apply only to the package set: a
 > package already installed in the baseline may be replaced by a newer version
-> when the resolved overlay closure requires it. Downgrades and removals are
-> still rejected at preflight, and the baseline kernel and bootloader remain
-> immutable — an overlay never replaces the kernel or reinstalls the bootloader,
-> regardless of `packageOperation`. Choose `additive-only` (the default) to fail
-> the build on any version bump to a baseline package.
+> when the resolved overlay closure requires it. Downgrades are still rejected at
+> preflight, and the baseline kernel and bootloader remain immutable — an overlay
+> never replaces the kernel or reinstalls the bootloader, regardless of
+> `packageOperation`. Choose `additive-only` (the default) to fail the build on
+> any version bump to a baseline package.
+
+> **Package removal (`allowPackageRemoval`).** Opt-in, and permitted **only under
+> `packageOperation: additive-and-upgrade`** — removal is more invasive than an
+> in-place upgrade, so pairing it with the default `additive-only` is rejected at
+> validation. By default an overlay never removes a baseline package: a to-install
+> package that `Conflicts:`/`Breaks:` a present baseline package fails the build.
+> Set `allowPackageRemoval: true` (with `additive-and-upgrade`) to let the overlay
+> remove the conflicting baseline package before installing its replacement — the
+> case that makes `dracut` (which conflicts with `initramfs-tools`) installable on
+> a stock baseline. Bootloader and bootable-kernel packages are still never
+> removed, so the flag cannot break the boot path.
 
 ```yaml
 baseline:
@@ -333,12 +414,20 @@ baseline:
     path: /path/to/ubuntu-24.04-base.img
 
 overlayPolicy:
-  packageOperation: additive-only
+  # Removal requires additive-and-upgrade (not the default additive-only).
+  packageOperation: additive-and-upgrade
   conflictPolicy: fail
+
+  # Opt in to removing a baseline package a new package conflicts with
+  # (e.g. remove initramfs-tools so dracut can install). Default: false.
+  allowPackageRemoval: true
 ```
 
-A complete example lives at
-[`image-templates/ubuntu24-x86_64-overlay-raw.yml`](https://github.com/open-edge-platform/image-composer-tool/blob/main/image-templates/ubuntu24-x86_64-overlay-raw.yml).
+A complete **additive-only** starter template (the default policy, without package
+removal) lives at
+[`image-templates/ubuntu24-x86_64-overlay-raw.yml`](https://github.com/open-edge-platform/image-composer-tool/blob/main/image-templates/ubuntu24-x86_64-overlay-raw.yml);
+to enable removal, add the `overlayPolicy` block shown above (`additive-and-upgrade`
+plus `allowPackageRemoval: true`) to it.
 
 ---
 
@@ -674,6 +763,7 @@ Copy host files into the image at build time.
 |-------|------|-------------|
 | `local` | string | Source path on the host (absolute, or relative to template directory) |
 | `final` | string | Destination path inside the image |
+| `stage` | string | Overlay-only. When to copy the file relative to initramfs/boot regeneration: `""` (default) copies at the end of the build, after regeneration; `pre-initramfs` copies **before** boot/initramfs regeneration so the generator can consume it. Ignored by create-mode builds |
 
 ```yaml
 systemConfig:
@@ -682,7 +772,30 @@ systemConfig:
       final: /etc/systemd/network/dhcp.network
     - local: files/motd
       final: /etc/motd
+    # A dracut module must be in place BEFORE the initramfs is (re)built, or the
+    # already-built initramfs would ignore it — mark it pre-initramfs.
+    - local: files/90-custom.conf
+      final: /usr/lib/dracut/dracut.conf.d/90-custom.conf
+      stage: pre-initramfs
 ```
+
+> **Overlay mode:** `additionalFiles` are honored in overlay builds, and each
+> entry's copy timing is controlled by its `stage` marker:
+>
+> - **`stage: ""` (default)** — copied as the **last** build step, after both
+>   initramfs and GRUB regeneration. This is the historical behavior, so existing
+>   templates are unaffected. It is deliberate: a prebuilt boot artifact (for
+>   example a custom `/boot/initrd.img-*`) dropped here survives, whereas a file
+>   placed before regeneration would be overwritten by `update-initramfs`.
+> - **`stage: pre-initramfs`** — copied **before** boot/initramfs regeneration, so
+>   content the generator consumes (a dracut module under `/usr/lib/dracut`, an
+>   initramfs-tools hook under `/etc/initramfs-tools/`) is in place when the
+>   initramfs is rebuilt. Without this, such a file dropped at the end would be
+>   ignored by the already-built initramfs.
+>
+> A file only needs `pre-initramfs` when the initramfs build must see it; a file
+> that must instead run a generator itself still belongs in a
+> [`systemConfig.configurations`](#systemconfigconfigurations) command.
 
 #### `systemConfig.configurations[]`
 

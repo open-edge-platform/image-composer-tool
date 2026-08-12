@@ -34,8 +34,9 @@ export function Select({
           {placeholder}
         </option>
         {options.map((o) => (
-          <option key={o.id} value={o.id}>
+          <option key={o.id} value={o.id} disabled={o.disabled}>
             {o.label}
+            {o.disabled ? ' (coming soon)' : ''}
           </option>
         ))}
       </select>

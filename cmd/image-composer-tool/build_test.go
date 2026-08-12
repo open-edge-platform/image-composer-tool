@@ -21,7 +21,7 @@ func resetBuildFlags() {
 	cacheDir = ""
 	workDir = ""
 	noCache = false
-	inspectImage = true
+	inspectImage = false
 	cveCheck = false
 	baselineImage = ""
 }
@@ -110,7 +110,7 @@ func TestCreateBuildCommand(t *testing.T) {
 			{name: "work-dir", shorthand: "", shouldExist: true},
 			{name: "no-cache", shorthand: "", shouldExist: true},
 			{name: "inspect", shorthand: "", shouldExist: true},
-			{name: "no-inspect", shorthand: "", shouldExist: true},
+			{name: "no-inspect", shorthand: "", shouldExist: false},
 			{name: "cve-check", shorthand: "", shouldExist: true},
 			{name: "baseline-image", shorthand: "", shouldExist: true},
 		}
@@ -533,8 +533,8 @@ func TestBuildFlags_DefaultValues(t *testing.T) {
 	if verbose != false {
 		t.Errorf("verbose should default to false, got %v", verbose)
 	}
-	if inspectImage != true {
-		t.Errorf("inspectImage should default to true, got %v", inspectImage)
+	if inspectImage != false {
+		t.Errorf("inspectImage should default to false, got %v", inspectImage)
 	}
 	if cveCheck != false {
 		t.Errorf("cveCheck should default to false, got %v", cveCheck)
@@ -595,7 +595,6 @@ func TestBuildCommand_HelpText(t *testing.T) {
 		"--work-dir",
 		"--no-cache",
 		"--inspect",
-		"--no-inspect",
 		"--cve-check",
 		"--baseline-image",
 	}
@@ -739,22 +738,22 @@ func TestExecuteBuild_ConfigOverrides(t *testing.T) {
 func TestBuildCommand_OverlayFlagParsing(t *testing.T) {
 	defer resetBuildFlags()
 
-	t.Run("NoInspect", func(t *testing.T) {
+	t.Run("Inspect", func(t *testing.T) {
 		resetBuildFlags()
 		cmd := createBuildCommand()
-		if err := cmd.ParseFlags([]string{"--no-inspect", "template.yml"}); err != nil {
+		if err := cmd.ParseFlags([]string{"--inspect", "template.yml"}); err != nil {
 			t.Fatalf("failed to parse flags: %v", err)
 		}
-		noInspect, err := cmd.Flags().GetBool("no-inspect")
+		inspect, err := cmd.Flags().GetBool("inspect")
 		if err != nil {
-			t.Fatalf("failed to get no-inspect flag: %v", err)
+			t.Fatalf("failed to get inspect flag: %v", err)
 		}
-		if !noInspect {
-			t.Errorf("expected no-inspect=true, got %v", noInspect)
+		if !inspect {
+			t.Errorf("expected inspect=true with --inspect, got %v", inspect)
 		}
 	})
 
-	t.Run("InspectDefaultsOn", func(t *testing.T) {
+	t.Run("InspectDefaultsOff", func(t *testing.T) {
 		resetBuildFlags()
 		cmd := createBuildCommand()
 		if err := cmd.ParseFlags([]string{"template.yml"}); err != nil {
@@ -764,8 +763,8 @@ func TestBuildCommand_OverlayFlagParsing(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to get inspect flag: %v", err)
 		}
-		if !inspect {
-			t.Errorf("expected inspect to default to true, got %v", inspect)
+		if inspect {
+			t.Errorf("expected inspect to default to false, got %v", inspect)
 		}
 	})
 
@@ -822,10 +821,10 @@ func TestBuildCommand_OverlayFlagParsing(t *testing.T) {
 func TestExecuteBuild_OverlayFlagOverrides(t *testing.T) {
 	defer resetBuildFlags()
 
-	t.Run("NoInspectStoredOnTemplate", func(t *testing.T) {
+	t.Run("InspectStoredOnTemplate", func(t *testing.T) {
 		resetBuildFlags()
 		cmd := createBuildCommand()
-		if err := cmd.ParseFlags([]string{"--no-inspect"}); err != nil {
+		if err := cmd.ParseFlags([]string{"--inspect"}); err != nil {
 			t.Fatalf("failed to parse flags: %v", err)
 		}
 
@@ -833,8 +832,8 @@ func TestExecuteBuild_OverlayFlagOverrides(t *testing.T) {
 		if err := applyOverlayFlagOverrides(cmd, template); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if template.InspectEnabled {
-			t.Errorf("expected InspectEnabled=false with --no-inspect, got true")
+		if !template.InspectEnabled {
+			t.Errorf("expected InspectEnabled=true with --inspect, got false")
 		}
 	})
 
@@ -886,9 +885,9 @@ func TestExecuteBuild_OverlayFlagOverrides(t *testing.T) {
 		if template.Baseline.Source.Path != "/original/path.raw" {
 			t.Errorf("expected baseline path unchanged, got %q", template.Baseline.Source.Path)
 		}
-		// ...and inspection defaults on.
-		if !template.InspectEnabled {
-			t.Error("InspectEnabled should default to true when no flags set")
+		// ...and inspection defaults off.
+		if template.InspectEnabled {
+			t.Error("InspectEnabled should default to false when no flags set")
 		}
 	})
 }
@@ -953,7 +952,7 @@ func TestApplyOverlayFlagOverrides_AppliesToTemplate(t *testing.T) {
 	resetBuildFlags()
 
 	cmd := createBuildCommand()
-	if err := cmd.ParseFlags([]string{"--no-inspect", "--baseline-image", "/tmp/override.raw"}); err != nil {
+	if err := cmd.ParseFlags([]string{"--inspect", "--baseline-image", "/tmp/override.raw"}); err != nil {
 		t.Fatalf("failed to parse flags: %v", err)
 	}
 
@@ -967,8 +966,8 @@ func TestApplyOverlayFlagOverrides_AppliesToTemplate(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if template.InspectEnabled {
-		t.Errorf("expected InspectEnabled=false with --no-inspect")
+	if !template.InspectEnabled {
+		t.Errorf("expected InspectEnabled=true with --inspect")
 	}
 	if template.Baseline.Source.Path != "/tmp/override.raw" {
 		t.Errorf("expected baseline path /tmp/override.raw, got %q", template.Baseline.Source.Path)

@@ -1,11 +1,10 @@
 // SPDX-FileCopyrightText: (C) 2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-package api
+package service
 
 import (
 	"bufio"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -24,31 +23,31 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 )
 
-// buildStatus is the lifecycle state of a build.
-type buildStatus string
+// BuildStatus is the lifecycle state of a build.
+type BuildStatus string
 
 const (
-	// statusNotStarted is the state between accepting the request and the ICT
+	// StatusNotStarted is the state between accepting the request and the ICT
 	// child actually being spawned (runBuild promotes it to running once
 	// cmd.Start succeeds). A cancel is already accepted in this window; see
 	// setPgidCheckCancel.
-	statusNotStarted buildStatus = "not-started"
-	statusRunning    buildStatus = "running"
-	statusCancelling buildStatus = "cancelling"
-	statusCancelled  buildStatus = "cancelled"
-	statusSuccess    buildStatus = "success" // surfaced as "completed" in the UI
-	statusFailed     buildStatus = "failed"
+	StatusNotStarted BuildStatus = "not-started"
+	StatusRunning    BuildStatus = "running"
+	StatusCancelling BuildStatus = "cancelling"
+	StatusCancelled  BuildStatus = "cancelled"
+	StatusSuccess    BuildStatus = "success" // surfaced as "completed" in the UI
+	StatusFailed     BuildStatus = "failed"
 )
 
 // isTerminal reports whether a status is final, i.e. no further transition can
 // happen. Used to make terminal recording single-shot: both the wait path and
 // the cancel watchdog can reach a build, and the first one to classify it wins.
-func isTerminal(s buildStatus) bool {
-	return s == statusSuccess || s == statusFailed || s == statusCancelled
+func isTerminal(s BuildStatus) bool {
+	return s == StatusSuccess || s == StatusFailed || s == StatusCancelled
 }
 
-// artifact describes one output file (image or SBOM).
-type artifact struct {
+// Artifact describes one output file (image or SBOM).
+type Artifact struct {
 	Name string `json:"name"`
 	Type string `json:"type"` // "image" | "sbom"
 	Path string `json:"path"`
@@ -67,7 +66,7 @@ type build struct {
 	Template     string          // template file name (for display)
 	TemplatePath string          // resolved on-disk path (for download)
 	Command      string          // exact command run, for the UI's troubleshoot panel
-	Summary      *composeSummary // image configuration summary, nil for YAML builds
+	Summary      *ComposeSummary // image configuration summary, nil for YAML builds
 	CreatedAt    time.Time       // when the compose was started
 	LogFile      string          // on-disk log file path, written at finish
 	done         chan struct{}   // closed when the build finishes
@@ -75,9 +74,9 @@ type build struct {
 	doneOnce sync.Once // guards close(done): both runBuild and the cancel watchdog can finish a build
 
 	mu        sync.Mutex
-	status    buildStatus
+	status    BuildStatus
 	logLines  []string // buffered log history for late log subscribers
-	artifacts []artifact
+	artifacts []Artifact
 	errMsg    string
 	// pgid is the process-group id of the running ICT build (0 until started).
 	// The build is spawned as its own group leader, so a cancel can signal the
@@ -91,49 +90,49 @@ type build struct {
 	// a state a user may need to fix by hand: either the cancel signal itself
 	// failed (cancellation-failure) or ICT reported leftover mounts/loop devices
 	// during its own cleanup (cleanup-failure). Surfaced to the API/UI.
-	residual *residualIssue
+	residual *ResidualIssue
 }
 
-// residualKind classifies why teardown may have left residue.
-type residualKind string
+// ResidualKind classifies why teardown may have left residue.
+type ResidualKind string
 
 const (
 	// residualCancellation: the cancel signal could not be delivered (e.g. the
 	// `sudo -n kill` call failed), so ICT may never have started its teardown.
-	residualCancellation residualKind = "cancellation-failure"
+	residualCancellation ResidualKind = "cancellation-failure"
 	// residualCleanup: ICT ran but reported leftover mounts/loop devices at ERROR
 	// (with a `mount | grep` / `losetup -l` hint) — its own cleanup didn't fully
 	// succeed.
-	residualCleanup residualKind = "cleanup-failure"
+	residualCleanup ResidualKind = "cleanup-failure"
 )
 
-// residualIssue carries enough detail for a user to remediate leftover state
+// ResidualIssue carries enough detail for a user to remediate leftover state
 // manually. Detail holds the specific hint (the failing kill error, or the
 // mount/loop lines ICT logged).
-type residualIssue struct {
-	Kind   residualKind `json:"kind"`
+type ResidualIssue struct {
+	Kind   ResidualKind `json:"kind"`
 	Detail string       `json:"detail"`
 }
 
-// result is an immutable snapshot of a build's terminal state.
-type result struct {
-	status    buildStatus
-	artifacts []artifact
-	errMsg    string
-	logFile   string
-	residual  *residualIssue
+// Result is an immutable snapshot of a build's terminal state.
+type Result struct {
+	Status    BuildStatus
+	Artifacts []Artifact
+	ErrMsg    string
+	LogFile   string
+	Residual  *ResidualIssue
 }
 
 // snapshot returns the build's current status, artifacts, error, and log-file
 // path under lock. logFile is included in the snapshot because it is written
 // under b.mu in finish(); reading it directly off the struct from a handler
 // would race a concurrently finishing build.
-func (b *build) snapshot() result {
+func (b *build) snapshot() Result {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	arts := make([]artifact, len(b.artifacts))
+	arts := make([]Artifact, len(b.artifacts))
 	copy(arts, b.artifacts)
-	return result{status: b.status, artifacts: arts, errMsg: b.errMsg, logFile: b.LogFile, residual: b.residual}
+	return Result{Status: b.status, Artifacts: arts, ErrMsg: b.errMsg, LogFile: b.LogFile, Residual: b.residual}
 }
 
 // buildTracker holds all builds for the process lifetime.
@@ -191,15 +190,15 @@ func (b *build) snapshotLogs() []string {
 // process-group id to signal — 0 when the child hasn't been spawned yet, in
 // which case runBuild delivers the signal as soon as it has a group (see
 // setPgidCheckCancel). Idempotent: a second cancel on an already-cancelling
-// build returns transitioned=false so the handler can 409.
+// build returns transitioned=false so CancelBuild can 409.
 func (b *build) beginCancel() (transitioned bool, pgid int) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.status != statusRunning && b.status != statusNotStarted {
+	if b.status != StatusRunning && b.status != StatusNotStarted {
 		return false, b.pgid
 	}
 	b.cancelRequested = true
-	b.status = statusCancelling
+	b.status = StatusCancelling
 	return true, b.pgid
 }
 
@@ -207,19 +206,19 @@ func (b *build) beginCancel() (transitioned bool, pgid int) {
 // not-started → running, and reports — atomically under the same lock — whether
 // a cancel was already requested while pgid was still unset (the start-race
 // window). When pending is true the caller must deliver the cancel signal now,
-// since the earlier handleCancelBuild call transitioned to cancelling but had no
+// since the earlier CancelBuild call transitioned to cancelling but had no
 // group to signal. Returns the recorded pgid so the caller can signal without
 // re-taking the lock.
 func (b *build) setPgidCheckCancel(pgid int) (recorded int, pending bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.pgid = pgid
-	if b.status == statusNotStarted {
-		b.status = statusRunning
+	if b.status == StatusNotStarted {
+		b.status = StatusRunning
 	}
 	// A cancel is pending for us to service only if one was requested and the
 	// build is still in the cancelling state (not already terminal).
-	return pgid, b.cancelRequested && b.status == statusCancelling
+	return pgid, b.cancelRequested && b.status == StatusCancelling
 }
 
 // currentPgid returns the recorded process-group id under lock (0 before the
@@ -248,37 +247,32 @@ func (b *build) wasCancelRequested() bool {
 // cleanup-failure) so the terminal snapshot can surface it to the UI. The first
 // issue recorded wins: a failed cancel signal (cancellation-failure) is the root
 // cause and shouldn't be overwritten by a later cleanup observation.
-func (b *build) setResidual(kind residualKind, detail string) {
+func (b *build) setResidual(kind ResidualKind, detail string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.residual == nil {
-		b.residual = &residualIssue{Kind: kind, Detail: detail}
+		b.residual = &ResidualIssue{Kind: kind, Detail: detail}
 	}
 }
 
-// --- request/response bodies ---
-
-type buildRequest struct {
-	Compose *composeRequest `json:"compose"`
-	YAML    string          `json:"yaml"`
+// BuildRequest starts a build. It carries exactly one of Compose (Basic-tab
+// selections) or YAML (the complete edited template from the Advanced tab).
+type BuildRequest struct {
+	Compose *Selection
+	YAML    string
 }
 
-type buildAccepted struct {
-	BuildID string `json:"buildId"`
-	Status  string `json:"status"`
-	LogsURL string `json:"logsUrl"`
+// BuildAccepted is returned when a build is accepted and started.
+type BuildAccepted struct {
+	BuildID string
+	Status  BuildStatus
+	LogsURL string
 }
 
-// handleStartBuild resolves the template, starts an os/exec build, and returns a
-// build id. Basic sends {compose}; Advanced would send {yaml} (not used by the
-// Basic slice but accepted for forward-compat).
-func (s *Server) handleStartBuild(w http.ResponseWriter, r *http.Request) {
-	var req buildRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid JSON body")
-		return
-	}
-
+// StartBuild resolves the template, starts an os/exec build, and returns a build
+// id. Client errors (bad input, no match) return a 400 *Error; server errors
+// (workspace creation, template write) return a 500 *Error.
+func (s *Service) StartBuild(req BuildRequest) (*BuildAccepted, error) {
 	id := uuid.NewString()
 
 	// Claim the single-build slot before doing any setup. If a build is already
@@ -287,9 +281,8 @@ func (s *Server) handleStartBuild(w http.ResponseWriter, r *http.Request) {
 	// slot is released by runBuild only after the ICT child fully exits; on the
 	// error paths below we release it explicitly since no child was spawned.
 	if ok, activeID := s.tryAcquireBuildSlot(id); !ok {
-		writeError(w, http.StatusConflict, "BUILD_IN_PROGRESS",
+		return nil, newError(http.StatusConflict, "BUILD_IN_PROGRESS",
 			fmt.Sprintf("a build is already in progress (%s); only one compose runs at a time", activeID))
-		return
 	}
 
 	buildRoot := filepath.Join(s.cfg.WorkDir, "builds", id)
@@ -300,8 +293,8 @@ func (s *Server) handleStartBuild(w http.ResponseWriter, r *http.Request) {
 	for _, d := range []string{workDir, cacheDir} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			s.releaseBuildSlot(id) // no child spawned; free the slot for the next start
-			writeError(w, http.StatusInternalServerError, "WORKDIR", "cannot create build work directory")
-			return
+			return nil, newError(http.StatusInternalServerError, "WORKDIR",
+				"cannot create build work directory")
 		}
 	}
 
@@ -311,20 +304,18 @@ func (s *Server) handleStartBuild(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.releaseBuildSlot(id) // no child spawned; free the slot for the next start
 		if errors.Is(err, errBadBuildRequest) {
-			writeError(w, http.StatusBadRequest, "NO_MATCH", err.Error())
-		} else {
-			writeError(w, http.StatusInternalServerError, "TEMPLATE_RESOLVE", err.Error())
+			return nil, newError(http.StatusBadRequest, "NO_MATCH", err.Error())
 		}
-		return
+		return nil, newError(http.StatusInternalServerError, "TEMPLATE_RESOLVE", err.Error())
 	}
 
 	// Build the image summary. Best-effort: a merge failure here doesn't block
 	// the build (compose already validated the template; this is for display only).
-	var summary *composeSummary
+	var summary *ComposeSummary
 	if req.Compose != nil {
 		if merged, err := config.LoadAndMergeTemplate(templatePath); err == nil {
-			s := buildComposeSummary(*req.Compose, merged)
-			summary = &s
+			sum := buildComposeSummary(*req.Compose, merged)
+			summary = &sum
 		}
 	}
 
@@ -334,7 +325,7 @@ func (s *Server) handleStartBuild(w http.ResponseWriter, r *http.Request) {
 		// not-started until runBuild's cmd.Start succeeds and records the process
 		// group (setPgidCheckCancel promotes it to running). A cancel arriving in
 		// that window is still accepted and serviced once there's a group to signal.
-		status:       statusNotStarted,
+		status:       StatusNotStarted,
 		RootDir:      buildRoot,
 		WorkDir:      workDir,
 		CacheDir:     cacheDir,
@@ -358,35 +349,36 @@ func (s *Server) handleStartBuild(w http.ResponseWriter, r *http.Request) {
 	// Report the build's actual status rather than a hardcoded "running": the
 	// child may not be spawned yet, and a client that echoed "running" here would
 	// contradict what GET /builds returns a moment later.
-	writeJSON(w, http.StatusAccepted, buildAccepted{
+	return &BuildAccepted{
 		BuildID: id,
-		Status:  string(b.snapshot().status),
+		Status:  b.snapshot().Status,
 		LogsURL: fmt.Sprintf("/api/v1/builds/%s/logs", id),
-	})
+	}, nil
 }
 
-// cancelAccepted is the response to a successful cancel request. The build is
-// now cancelling; the terminal state (cancelled/failed) arrives later over SSE
-// once the ICT child has torn down and exited.
+// CancelAccepted is the result of a successful cancel request. The build is now
+// cancelling; the terminal state (cancelled/failed) arrives later over SSE once
+// the ICT child has torn down and exited.
 //
 // Residual is set when the cancel was accepted but the signal could not be
 // delivered (cancellation-failure). The build is still reported as cancelling —
 // the watchdog will conclude it — but the caller gets the remediation detail
 // immediately rather than waiting for a terminal SSE event that may never come.
-type cancelAccepted struct {
-	BuildID  string         `json:"buildId"`
-	Status   string         `json:"status"`
-	Residual *residualIssue `json:"residual,omitempty"`
+type CancelAccepted struct {
+	BuildID  string
+	Status   BuildStatus
+	Residual *ResidualIssue
 }
 
-// handleCancelBuild transitions a running build to cancelling and signals the
-// ICT process group with SIGTERM, letting ICT perform its own teardown (mounts,
-// loop devices) and exit. We do not reimplement a mount/loop reconciler here.
+// CancelBuild transitions a running build to cancelling and signals the ICT
+// process group with SIGTERM, letting ICT perform its own teardown (mounts, loop
+// devices) and exit. We do not reimplement a mount/loop reconciler here.
 //
 // Terminal classification and the single-build slot release happen on runBuild's
-// wait path, not here: this handler only requests the cancel and returns 202.
-func (s *Server) handleCancelBuild(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+// wait path, not here: this only requests the cancel. A 404 *Error means the
+// build is unknown; a 409 *Error means it isn't cancellable (already terminal,
+// already cancelling, or with no live process on this server).
+func (s *Service) CancelBuild(id string) (*CancelAccepted, error) {
 	// Only a live, in-process build can be cancelled. getBuild would happily
 	// reconstruct a record from meta.json, but that copy has no process group and
 	// no runBuild goroutine behind it: cancelling it would mutate a throwaway
@@ -396,22 +388,19 @@ func (s *Server) handleCancelBuild(w http.ResponseWriter, r *http.Request) {
 	b, live := s.tracker.get(id)
 	if !live {
 		if _, onDisk := s.getBuild(id); onDisk {
-			writeError(w, http.StatusConflict, "NOT_CANCELLABLE",
+			return nil, newError(http.StatusConflict, "NOT_CANCELLABLE",
 				"build has no live process on this server (it predates a restart); "+
 					"check the host for an orphaned build process")
-			return
 		}
-		writeError(w, http.StatusNotFound, "NOT_FOUND", "build not found")
-		return
+		return nil, newError(http.StatusNotFound, "NOT_FOUND", "build not found")
 	}
 
 	transitioned, pgid := b.beginCancel()
 	if !transitioned {
 		// Already terminal, or a cancel is already in flight. 409 so the caller
 		// knows the request didn't change anything.
-		writeError(w, http.StatusConflict, "NOT_CANCELLABLE",
+		return nil, newError(http.StatusConflict, "NOT_CANCELLABLE",
 			"build is not running (already finished or cancelling)")
-		return
 	}
 	b.appendLog("• cancel requested — signalling build to stop and clean up")
 
@@ -436,12 +425,11 @@ func (s *Server) handleCancelBuild(w http.ResponseWriter, r *http.Request) {
 			// what happened.
 			logger.Logger().Warnf("build %s: %s", id, detail)
 			s.watchCancel(b) // still bound the cancelling state
-			writeJSON(w, http.StatusAccepted, cancelAccepted{
+			return &CancelAccepted{
 				BuildID:  id,
-				Status:   string(statusCancelling),
-				Residual: &residualIssue{Kind: residualCancellation, Detail: detail},
-			})
-			return
+				Status:   StatusCancelling,
+				Residual: &ResidualIssue{Kind: residualCancellation, Detail: detail},
+			}, nil
 		}
 	}
 
@@ -449,7 +437,7 @@ func (s *Server) handleCancelBuild(w http.ResponseWriter, r *http.Request) {
 	// hard deadline, conclude the build so the single-build slot is freed.
 	s.watchCancel(b)
 
-	writeJSON(w, http.StatusAccepted, cancelAccepted{BuildID: id, Status: string(statusCancelling)})
+	return &CancelAccepted{BuildID: id, Status: StatusCancelling}, nil
 }
 
 // Cancel watchdog timings. A cooperative ICT teardown (unmounting a chroot,
@@ -474,7 +462,7 @@ const (
 // cleanup this whole feature exists to guarantee, and would need a wider root
 // `kill` grant. A build that ignores TERM is reported to the user as residue to
 // remediate by hand, which is the honest outcome.
-func (s *Server) watchCancel(b *build) {
+func (s *Service) watchCancel(b *build) {
 	go func() {
 		log := logger.Logger()
 		select {
@@ -508,14 +496,14 @@ func (s *Server) watchCancel(b *build) {
 //
 // finish is single-shot, so if the child exited between the deadline expiring and
 // this call, the wait path's classification stands and we touch nothing else.
-func (s *Server) concludeStalledCancel(b *build) {
+func (s *Service) concludeStalledCancel(b *build) {
 	detail := fmt.Sprintf(
 		"build did not exit within %s of the cancel request; its process group (%d) may still be "+
 			"running with mounts or loop devices held", cancelHardDeadman, b.currentPgid())
 	b.setResidual(residualCancellation, detail)
 	b.appendLog("ERROR " + detail)
 	logger.Logger().Errorf("build %s: %s", b.ID, detail)
-	if b.finish(statusCancelled, discoverArtifacts(b.WorkDir), detail) {
+	if b.finish(StatusCancelled, discoverArtifacts(b.WorkDir), detail) {
 		s.releaseBuildSlot(b.ID)
 		b.closeDone()
 	}
@@ -531,7 +519,7 @@ func (s *Server) concludeStalledCancel(b *build) {
 // under --sudo we deliver the signal as root via `sudo -n kill`. This requires a
 // scoped sudoers rule for the kill (see serve.go's --sudo help). Without --sudo
 // (dev/root), we signal the group directly.
-func (s *Server) signalCancel(pgid int) error {
+func (s *Service) signalCancel(pgid int) error {
 	if pgid <= 0 {
 		return fmt.Errorf("no process group recorded for build")
 	}
@@ -647,13 +635,21 @@ func LogCancelSupport(sudo bool) {
 }
 
 // errBadBuildRequest marks resolution failures caused by client input (bad
-// request shape or an unmatched combination) so the handler can return 400;
+// request shape or an unmatched combination) so StartBuild can return 400;
 // other errors are treated as server-side (500).
 var errBadBuildRequest = errors.New("bad build request")
 
-// resolveBuildTemplate returns the on-disk template path to build. For {compose}
-// it looks up the manifest; for {yaml} it writes the body to the work dir.
-func (s *Server) resolveBuildTemplate(req *buildRequest, workDir string) (path, name string, err error) {
+// resolveBuildTemplate returns the on-disk template path to build. For {yaml} it
+// writes the body to the work dir; for {compose} it looks up the manifest.
+//
+// Exactly one of the two must be set, matching the `oneOf` in the OpenAPI
+// contract. Both-set is rejected rather than silently preferring one: the two
+// inputs can disagree, and picking a winner would build something the caller
+// didn't unambiguously ask for.
+func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path, name string, err error) {
+	if req.YAML != "" && req.Compose != nil {
+		return "", "", fmt.Errorf("%w: provide either compose or yaml, not both", errBadBuildRequest)
+	}
 	if req.YAML != "" {
 		p := filepath.Join(workDir, "template.yml")
 		if werr := os.WriteFile(p, []byte(req.YAML), 0o600); werr != nil {
@@ -687,7 +683,7 @@ func (s *Server) resolveBuildTemplate(req *buildRequest, workDir string) (path, 
 // single hard-coded `image-composer-tool build` invocation with no user-derived
 // arguments on the command line (selections are only manifest lookup keys) — so
 // the allowlist the shell package provides adds no safety here.
-func (s *Server) buildCommand(templatePath, workDir, cacheDir string) (name string, args []string) {
+func (s *Service) buildCommand(templatePath, workDir, cacheDir string) (name string, args []string) {
 	// Per-build --work-dir and --cache-dir keep each build's scratch and package
 	// cache isolated under the build root, so concurrent/repeat builds don't share
 	// (root-owned) state and cleanup is a single directory removal.
@@ -701,7 +697,7 @@ func (s *Server) buildCommand(templatePath, workDir, cacheDir string) (name stri
 
 // runBuild executes the ICT binary, streams its output into the build's log
 // buffer, and records the terminal status + artifacts.
-func (s *Server) runBuild(b *build, name string, cmdArgs []string) {
+func (s *Service) runBuild(b *build, name string, cmdArgs []string) {
 	log := logger.Logger()
 	// Release the single-build slot only once this function returns — which
 	// happens after cmd.Wait() observes the ICT child fully exit (post-teardown),
@@ -741,7 +737,7 @@ func (s *Server) runBuild(b *build, name string, cmdArgs []string) {
 
 	if err := cmd.Start(); err != nil {
 		b.appendLog(fmt.Sprintf("failed to start build: %v", err))
-		b.finish(statusFailed, nil, err.Error())
+		b.finish(StatusFailed, nil, err.Error())
 		_ = pw.Close()
 		_ = pr.Close()
 		return
@@ -757,7 +753,7 @@ func (s *Server) runBuild(b *build, name string, cmdArgs []string) {
 		childPgid = pg
 	}
 	// A cancel can arrive in the window between the build being tracked as running
-	// (in handleStartBuild) and this point, when pgid was still 0. beginCancel
+	// (in StartBuild) and this point, when pgid was still 0. beginCancel
 	// would have transitioned to cancelling but signalCancel(0) could not signal
 	// anything. setPgidCheckCancel records the pgid and, atomically under b.mu,
 	// reports whether such an early cancel is pending so we can deliver the signal
@@ -807,7 +803,7 @@ func (s *Server) runBuild(b *build, name string, cmdArgs []string) {
 		// If ICT ran its own teardown but reported leftover mounts/loop devices,
 		// surface that as a cleanup-failure so the UI can point the user at manual
 		// remediation. (A cancellation-failure — the signal itself failing — is
-		// recorded earlier, in the cancel handler, and takes precedence.)
+		// recorded earlier, by Cancel, and takes precedence.)
 		if detail := scanResidualCleanup(b.snapshotLogs()); detail != "" {
 			b.setResidual(residualCleanup, detail)
 		}
@@ -818,7 +814,7 @@ func (s *Server) runBuild(b *build, name string, cmdArgs []string) {
 		return
 	}
 	if scanErr != nil {
-		b.finish(statusFailed, nil, fmt.Sprintf("log stream error: %v", scanErr))
+		b.finish(StatusFailed, nil, fmt.Sprintf("log stream error: %v", scanErr))
 		return
 	}
 
@@ -830,7 +826,7 @@ func (s *Server) runBuild(b *build, name string, cmdArgs []string) {
 		arts = discoverArtifacts(b.WorkDir)
 	}
 
-	b.finish(statusSuccess, arts, "")
+	b.finish(StatusSuccess, arts, "")
 }
 
 // finish records the build's terminal status, artifacts, and error under lock,
@@ -842,7 +838,7 @@ func (s *Server) runBuild(b *build, name string, cmdArgs []string) {
 // both runBuild's wait path and the cancel watchdog can conclude a build, and
 // whichever gets there first owns the outcome — so the watchdog can't relabel a
 // build that exited cleanly a moment earlier.
-func (b *build) finish(status buildStatus, arts []artifact, errMsg string) bool {
+func (b *build) finish(status BuildStatus, arts []Artifact, errMsg string) bool {
 	b.mu.Lock()
 	if isTerminal(b.status) {
 		b.mu.Unlock()
@@ -891,24 +887,24 @@ func exitCode(err error) int {
 // terminated by the signal instead we see 143 (128+SIGTERM) or 137 (128+SIGKILL),
 // and a signal-terminated child reports via WaitStatus.Signaled() with no code
 // at all. Any of these, under a requested cancel, is a clean cancellation.
-func classifyExit(waitErr error, cancelRequested bool) buildStatus {
+func classifyExit(waitErr error, cancelRequested bool) BuildStatus {
 	if !cancelRequested {
-		return statusFailed
+		return StatusFailed
 	}
 	switch exitCode(waitErr) {
 	case 130, 143, 137: // 128 + SIGINT / SIGTERM / SIGKILL
-		return statusCancelled
+		return StatusCancelled
 	}
 	// A child killed by a signal (not exiting with a code) surfaces as Signaled().
 	var ee *exec.ExitError
 	if errors.As(waitErr, &ee) {
 		if ws, ok := ee.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
-			return statusCancelled
+			return StatusCancelled
 		}
 	}
 	// Cancel was requested but the child failed for an unrelated reason before the
 	// signal took effect — report the real failure.
-	return statusFailed
+	return StatusFailed
 }
 
 // residualHeader is the marker ICT logs (at ERROR) when its backstop cleanup
@@ -980,9 +976,9 @@ func stripLogPrefix(line string) string {
 //
 // Log lines carry a leading "<timestamp> INFO ..." prefix from the logger, so we
 // match on the bullet and on a path segment rather than line position.
-func parseArtifacts(logs []string) []artifact {
-	var out []artifact
-	var pending *artifact // artifact awaiting its path line
+func parseArtifacts(logs []string) []Artifact {
+	var out []Artifact
+	var pending *Artifact // artifact awaiting its path line
 
 	for _, line := range logs {
 		if idx := strings.Index(line, "• "); idx >= 0 {
@@ -995,7 +991,7 @@ func parseArtifacts(logs []string) []artifact {
 				size = normalizeSize(strings.TrimSpace(rest[p+2 : len(rest)-1]))
 			}
 			if name != "" {
-				out = append(out, artifact{Name: name, Type: classifyArtifact(name), Size: size})
+				out = append(out, Artifact{Name: name, Type: classifyArtifact(name), Size: size})
 				pending = &out[len(out)-1]
 			}
 			continue
@@ -1039,8 +1035,8 @@ func classifyArtifact(name string) string {
 
 // discoverArtifacts scans the build work dir for image + SBOM outputs. Used as a
 // fallback when ICT's artifact block cannot be parsed from the logs.
-func discoverArtifacts(workDir string) []artifact {
-	var out []artifact
+func discoverArtifacts(workDir string) []Artifact {
+	var out []Artifact
 	_ = filepath.WalkDir(workDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
@@ -1061,7 +1057,7 @@ func discoverArtifacts(workDir string) []artifact {
 		if fi, statErr := d.Info(); statErr == nil {
 			size = humanSize(fi.Size())
 		}
-		out = append(out, artifact{Name: name, Type: typ, Path: path, Size: size})
+		out = append(out, Artifact{Name: name, Type: typ, Path: path, Size: size})
 		return nil
 	})
 	return out

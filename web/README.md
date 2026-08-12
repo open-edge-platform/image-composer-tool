@@ -32,6 +32,16 @@ action fails). See step 2 for the full frontend+binary build; the short version:
 go build -o ./build/image-composer-tool ./cmd/image-composer-tool/
 ```
 
+> **ISO images require the `live-installer` binary.** Build it before starting
+> an ISO build from the UI, otherwise ISO composes fail immediately with a
+> missing-prerequisite error:
+>
+> ```bash
+> go build -buildmode=pie -o ./build/live-installer ./cmd/live-installer
+> ```
+>
+> If you use `earthly +build`, both binaries are built automatically.
+
 ### 2. Grant scoped, passwordless sudo rules (automated)
 
 The server performs exactly three privileged operations via `sudo -n`: **build**

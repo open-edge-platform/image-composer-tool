@@ -190,17 +190,24 @@ func (insp *Inspector) MountLayout(loopDevPath string) (*Layout, func() error, e
 	var mounted []string
 	teardown := func() error {
 		var firstErr error
+		// Retain only the mount points that FAILED to unmount, so a later retry (the
+		// deferred second cleanup) re-attempts exactly those rather than treating a
+		// partial teardown as complete and leaking them. On full success `remaining`
+		// is empty, so a second call unmounts nothing (idempotent). Order is preserved
+		// (still deepest-first) by prepending each retained entry.
+		var remaining []string
 		for i := len(mounted) - 1; i >= 0; i-- {
 			if uerr := mount.UmountPath(mounted[i]); uerr != nil {
 				log.Errorf("Failed to unmount %s during overlay cleanup: %v", mounted[i], uerr)
 				if firstErr == nil {
 					firstErr = fmt.Errorf("failed to unmount %s: %w", mounted[i], uerr)
 				}
+				remaining = append([]string{mounted[i]}, remaining...)
 			} else {
 				log.Debugf("Unmounted %s", mounted[i])
 			}
 		}
-		mounted = nil // idempotent: a second call unmounts nothing.
+		mounted = remaining
 		return firstErr
 	}
 

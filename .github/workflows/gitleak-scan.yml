@@ -19,6 +19,7 @@ jobs:
         with:
           scan-scope: "all"
           source: "./"
+          version: "8.28.0"
           config_path: "./ci/gitleaks_baselines/image-composer-tool-gitleaks.sarif"
           report_format: "sarif"
           redact: "true"

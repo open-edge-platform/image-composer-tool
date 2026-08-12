@@ -19,3 +19,9 @@ body {
   background: #f8fafc;
   color: #00285a;
 }
+
+/* Many browsers ignore a className on <option>, so gray out unavailable
+   (coming soon) entries with a rule that targets the disabled state directly. */
+select option:disabled {
+  color: #94a3b8;
+}

@@ -1,13 +1,12 @@
 // SPDX-FileCopyrightText: (C) 2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-package api
+package service
 
 import (
-	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,21 +34,21 @@ func signaledErr(t *testing.T, sig string) error {
 func TestClassifyExit(t *testing.T) {
 	// A non-zero exit that is NOT a cancel is always a failure, regardless of code.
 	failErr := exec.Command("sh", "-c", "exit 2").Run()
-	if got := classifyExit(failErr, false); got != statusFailed {
+	if got := classifyExit(failErr, false); got != StatusFailed {
 		t.Fatalf("non-cancel exit 2: got %q, want failed", got)
 	}
-	if got := classifyExit(failErr, true); got != statusFailed {
+	if got := classifyExit(failErr, true); got != StatusFailed {
 		t.Fatalf("cancel-requested exit 2 (unrelated failure): got %q, want failed", got)
 	}
 
 	// Signal-code exits under a requested cancel map to cancelled.
 	for _, code := range []int{130, 143, 137} {
 		err := exec.Command("sh", "-c", "exit "+strconv.Itoa(code)).Run()
-		if got := classifyExit(err, true); got != statusCancelled {
+		if got := classifyExit(err, true); got != StatusCancelled {
 			t.Fatalf("cancel-requested exit %d: got %q, want cancelled", code, got)
 		}
 		// Same code without a cancel request is a failure.
-		if got := classifyExit(err, false); got != statusFailed {
+		if got := classifyExit(err, false); got != StatusFailed {
 			t.Fatalf("no-cancel exit %d: got %q, want failed", code, got)
 		}
 	}
@@ -58,10 +57,10 @@ func TestClassifyExit(t *testing.T) {
 	// cancelled — this is the path where sudo/ICT is TERM/KILLed rather than
 	// exiting with a translated code.
 	sigErr := signaledErr(t, "TERM")
-	if got := classifyExit(sigErr, true); got != statusCancelled {
+	if got := classifyExit(sigErr, true); got != StatusCancelled {
 		t.Fatalf("cancel-requested SIGTERM-killed child: got %q, want cancelled", got)
 	}
-	if got := classifyExit(sigErr, false); got != statusFailed {
+	if got := classifyExit(sigErr, false); got != StatusFailed {
 		t.Fatalf("no-cancel SIGTERM-killed child: got %q, want failed", got)
 	}
 }
@@ -117,7 +116,7 @@ func TestIsKillTargetGone(t *testing.T) {
 // a session with the operator's shell, the login session too). The guard turns that
 // into a reported error instead, which the caller records as a cancellation-failure.
 func TestSignalCancelRefusesOwnGroup(t *testing.T) {
-	s := newTestServer(t)
+	s := newTestService(t)
 	self := syscall.Getpgrp()
 	err := s.signalCancel(self)
 	if err == nil {
@@ -131,7 +130,7 @@ func TestSignalCancelRefusesOwnGroup(t *testing.T) {
 // signalCancel with no recorded group (pgid 0, the pre-start window) is an error,
 // not a signal: there is nothing to target yet.
 func TestSignalCancelNoPgid(t *testing.T) {
-	s := newTestServer(t)
+	s := newTestService(t)
 	if err := s.signalCancel(0); err == nil {
 		t.Fatal("signalCancel(0) returned nil; want an error for an unrecorded group")
 	}
@@ -141,7 +140,7 @@ func TestSignalCancelNoPgid(t *testing.T) {
 // exited returns ESRCH, which signalCancel must swallow: the build is on its way
 // down, not a delivery failure. We use a pgid that maps to no live group.
 func TestSignalCancelDirectESRCHSwallowed(t *testing.T) {
-	s := newTestServer(t) // Sudo=false → direct syscall.Kill(-pgid)
+	s := newTestService(t) // Sudo=false → direct syscall.Kill(-pgid)
 	// A high, almost-certainly-unused pgid that isn't the server's own group.
 	pgid := 1 << 30
 	if pgid == syscall.Getpgrp() {
@@ -163,7 +162,7 @@ func TestRunBuildCancelClassifiesCancelledNoResidual(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
 	}
-	s := newTestServer(t)          // Sudo=false → signalCancel uses syscall.Kill(-pgid)
+	s := newTestService(t)         // Sudo=false → signalCancel uses syscall.Kill(-pgid)
 	s.signalGroup = s.signalCancel // exercise the real signal path, not a stub
 
 	// A fake "build": trap TERM, emit a cleanup line, exit 130 like ICT's handler.
@@ -180,7 +179,7 @@ func TestRunBuildCancelClassifiesCancelledNoResidual(t *testing.T) {
 		ID:      "e2e",
 		RootDir: filepath.Join(s.buildsRoot(), "e2e"),
 		WorkDir: filepath.Join(s.buildsRoot(), "e2e", "work"),
-		status:  statusNotStarted,
+		status:  StatusNotStarted,
 		done:    make(chan struct{}),
 	}
 	if err := os.MkdirAll(b.WorkDir, 0o755); err != nil {
@@ -221,11 +220,11 @@ func TestRunBuildCancelClassifiesCancelledNoResidual(t *testing.T) {
 	}
 
 	snap := b.snapshot()
-	if snap.status != statusCancelled {
-		t.Fatalf("status = %q, want cancelled\nlogs:\n%s", snap.status, strings.Join(b.snapshotLogs(), "\n"))
+	if snap.Status != StatusCancelled {
+		t.Fatalf("status = %q, want cancelled\nlogs:\n%s", snap.Status, strings.Join(b.snapshotLogs(), "\n"))
 	}
-	if snap.residual != nil {
-		t.Fatalf("residual = %+v, want nil (cancel delivered and child cleaned up)", snap.residual)
+	if snap.Residual != nil {
+		t.Fatalf("residual = %+v, want nil (cancel delivered and child cleaned up)", snap.Residual)
 	}
 }
 
@@ -314,14 +313,14 @@ func TestStripLogPrefix(t *testing.T) {
 // --- build.beginCancel / setResidual ---
 
 func TestBeginCancelTransitions(t *testing.T) {
-	b := &build{ID: "b", status: statusRunning, pgid: 4242, done: make(chan struct{})}
+	b := &build{ID: "b", status: StatusRunning, pgid: 4242, done: make(chan struct{})}
 
 	ok, pgid := b.beginCancel()
 	if !ok || pgid != 4242 {
 		t.Fatalf("first cancel: ok=%v pgid=%d, want true/4242", ok, pgid)
 	}
-	if s := b.snapshot(); s.status != statusCancelling {
-		t.Fatalf("status after cancel = %q, want cancelling", s.status)
+	if s := b.snapshot(); s.Status != StatusCancelling {
+		t.Fatalf("status after cancel = %q, want cancelling", s.Status)
 	}
 	if !b.wasCancelRequested() {
 		t.Fatal("cancelRequested not set")
@@ -333,7 +332,7 @@ func TestBeginCancelTransitions(t *testing.T) {
 	}
 
 	// A cancel on a terminal build is rejected.
-	done := &build{ID: "d", status: statusFailed, done: make(chan struct{})}
+	done := &build{ID: "d", status: StatusFailed, done: make(chan struct{})}
 	if ok, _ := done.beginCancel(); ok {
 		t.Fatal("cancel on failed build transitioned; want false")
 	}
@@ -346,18 +345,18 @@ func TestBeginCancelTransitions(t *testing.T) {
 // cancel is pending so the caller signals the group it finally has.
 func TestSetPgidCheckCancel(t *testing.T) {
 	// No cancel pending: records the pgid, reports pending=false.
-	b := &build{ID: "b", status: statusRunning, done: make(chan struct{})}
+	b := &build{ID: "b", status: StatusRunning, done: make(chan struct{})}
 	if pgid, pending := b.setPgidCheckCancel(1234); pgid != 1234 || pending {
 		t.Fatalf("no-cancel: pgid=%d pending=%v, want 1234/false", pgid, pending)
 	}
-	if s := b.snapshot(); s.status != statusRunning {
-		t.Fatalf("no-cancel status = %q, want running (unchanged)", s.status)
+	if s := b.snapshot(); s.Status != StatusRunning {
+		t.Fatalf("no-cancel status = %q, want running (unchanged)", s.Status)
 	}
 
 	// Cancel arrived during the window (status=cancelling, pgid still 0):
 	// setPgidCheckCancel records the pgid and reports pending=true so runBuild
 	// delivers the deferred signal.
-	raced := &build{ID: "r", status: statusRunning, done: make(chan struct{})}
+	raced := &build{ID: "r", status: StatusRunning, done: make(chan struct{})}
 	if ok, pgid := raced.beginCancel(); !ok || pgid != 0 {
 		t.Fatalf("beginCancel before pgid set: ok=%v pgid=%d, want true/0", ok, pgid)
 	}
@@ -368,7 +367,7 @@ func TestSetPgidCheckCancel(t *testing.T) {
 
 	// A build that already reached a terminal state before the pgid was recorded
 	// must not report a pending cancel (nothing to signal).
-	term := &build{ID: "t", status: statusCancelled, cancelRequested: true, done: make(chan struct{})}
+	term := &build{ID: "t", status: StatusCancelled, cancelRequested: true, done: make(chan struct{})}
 	if _, pending := term.setPgidCheckCancel(9999); pending {
 		t.Fatal("terminal build reported a pending cancel; want false")
 	}
@@ -378,25 +377,25 @@ func TestSetPgidCheckCancel(t *testing.T) {
 // already holds the single-build slot, so refusing it would leave the user with
 // no way to release it. beginCancel therefore also accepts not-started.
 func TestBeginCancelBeforeStart(t *testing.T) {
-	b := &build{ID: "pre", status: statusNotStarted, done: make(chan struct{})}
+	b := &build{ID: "pre", status: StatusNotStarted, done: make(chan struct{})}
 	ok, pgid := b.beginCancel()
 	if !ok || pgid != 0 {
 		t.Fatalf("cancel on not-started build: ok=%v pgid=%d, want true/0", ok, pgid)
 	}
-	if s := b.snapshot(); s.status != statusCancelling {
-		t.Fatalf("status = %q, want cancelling", s.status)
+	if s := b.snapshot(); s.Status != StatusCancelling {
+		t.Fatalf("status = %q, want cancelling", s.Status)
 	}
 }
 
 // setPgidCheckCancel doubles as the not-started → running promotion, so a build
 // that was never cancelled reports running once its child is up.
 func TestSetPgidPromotesNotStarted(t *testing.T) {
-	b := &build{ID: "b", status: statusNotStarted, done: make(chan struct{})}
+	b := &build{ID: "b", status: StatusNotStarted, done: make(chan struct{})}
 	if pgid, pending := b.setPgidCheckCancel(4321); pgid != 4321 || pending {
 		t.Fatalf("pgid=%d pending=%v, want 4321/false", pgid, pending)
 	}
-	if s := b.snapshot(); s.status != statusRunning {
-		t.Fatalf("status = %q, want running", s.status)
+	if s := b.snapshot(); s.Status != StatusRunning {
+		t.Fatalf("status = %q, want running", s.Status)
 	}
 }
 
@@ -405,19 +404,19 @@ func TestSetPgidPromotesNotStarted(t *testing.T) {
 // build that completed successfully could be relabelled cancelled (and the slot
 // released twice).
 func TestFinishSingleShot(t *testing.T) {
-	b := &build{ID: "b", status: statusRunning, done: make(chan struct{})}
-	if !b.finish(statusSuccess, []artifact{{Name: "img.raw"}}, "") {
+	b := &build{ID: "b", status: StatusRunning, done: make(chan struct{})}
+	if !b.finish(StatusSuccess, []Artifact{{Name: "img.raw"}}, "") {
 		t.Fatal("first finish reported false; want true (it recorded the outcome)")
 	}
-	if b.finish(statusCancelled, nil, "watchdog gave up") {
+	if b.finish(StatusCancelled, nil, "watchdog gave up") {
 		t.Fatal("second finish reported true; terminal state must be single-shot")
 	}
 	s := b.snapshot()
-	if s.status != statusSuccess {
-		t.Fatalf("status = %q, want success (first writer wins)", s.status)
+	if s.Status != StatusSuccess {
+		t.Fatalf("status = %q, want success (first writer wins)", s.Status)
 	}
-	if s.errMsg != "" || len(s.artifacts) != 1 {
-		t.Fatalf("second finish mutated the record: errMsg=%q artifacts=%v", s.errMsg, s.artifacts)
+	if s.ErrMsg != "" || len(s.Artifacts) != 1 {
+		t.Fatalf("second finish mutated the record: errMsg=%q artifacts=%v", s.ErrMsg, s.Artifacts)
 	}
 }
 
@@ -439,106 +438,105 @@ func TestSetResidualFirstWins(t *testing.T) {
 	b.setResidual(residualCancellation, "kill failed")
 	b.setResidual(residualCleanup, "leftover mount") // must not overwrite
 	s := b.snapshot()
-	if s.residual == nil || s.residual.Kind != residualCancellation {
-		t.Fatalf("residual = %+v, want first (cancellation-failure) to win", s.residual)
+	if s.Residual == nil || s.Residual.Kind != residualCancellation {
+		t.Fatalf("residual = %+v, want first (cancellation-failure) to win", s.Residual)
 	}
 }
 
-// --- cancel handler ---
+// --- CancelBuild ---
 
-func TestHandleCancelBuildNotFound(t *testing.T) {
-	s := newTestServer(t)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/builds/nope/cancel", nil)
-	req.SetPathValue("id", "nope")
-	rec := httptest.NewRecorder()
-	s.handleCancelBuild(rec, req)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404", rec.Code)
+// assertServiceError asserts err is a domain *Error with the wanted status, and
+// returns its machine code and message so callers can assert on those too. It
+// returns the fields rather than the *Error itself so callers that only need the
+// status assertion don't have to discard an error-typed return value.
+func assertServiceError(t *testing.T, err error, wantStatus int) (code, message string) {
+	t.Helper()
+	var se *Error
+	if !errors.As(err, &se) {
+		t.Fatalf("err = %v, want a *service.Error", err)
 	}
+	if se.Status != wantStatus {
+		t.Fatalf("status = %d, want %d (%s)", se.Status, wantStatus, se.Message)
+	}
+	return se.Code, se.Message
 }
 
-func TestHandleCancelBuildNotRunning(t *testing.T) {
-	s := newTestServer(t)
-	b := &build{ID: "done", status: statusSuccess, done: make(chan struct{})}
-	s.tracker.add(b)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/builds/done/cancel", nil)
-	req.SetPathValue("id", "done")
-	rec := httptest.NewRecorder()
-	s.handleCancelBuild(rec, req)
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("status = %d, want 409", rec.Code)
-	}
+func TestCancelBuildNotFound(t *testing.T) {
+	s := newTestService(t)
+	_, err := s.CancelBuild("nope")
+	assertServiceError(t, err, http.StatusNotFound)
 }
 
-func TestHandleCancelBuildRunningTransitions(t *testing.T) {
-	s := newTestServer(t)
-	// The signal is delivered successfully; the handler should transition to
+func TestCancelBuildNotRunning(t *testing.T) {
+	s := newTestService(t)
+	s.tracker.add(&build{ID: "done", status: StatusSuccess, done: make(chan struct{})})
+	_, err := s.CancelBuild("done")
+	assertServiceError(t, err, http.StatusConflict)
+}
+
+func TestCancelBuildRunningTransitions(t *testing.T) {
+	s := newTestService(t)
+	// The signal is delivered successfully; CancelBuild should transition to
 	// cancelling and record no residual. The terminal state arrives later on
 	// runBuild's wait path.
 	delivered := false
 	s.signalGroup = func(pgid int) error { delivered = true; return nil }
-	b := &build{ID: "run", status: statusRunning, pgid: 2 << 30, done: make(chan struct{})}
+	b := &build{ID: "run", status: StatusRunning, pgid: 2 << 30, done: make(chan struct{})}
 	s.tracker.add(b)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/builds/run/cancel", nil)
-	req.SetPathValue("id", "run")
-	rec := httptest.NewRecorder()
-	s.handleCancelBuild(rec, req)
-
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("status = %d, want 202", rec.Code)
+	acc, err := s.CancelBuild("run")
+	if err != nil {
+		t.Fatalf("CancelBuild: %v", err)
+	}
+	if acc.Status != StatusCancelling {
+		t.Fatalf("accepted status = %q, want cancelling", acc.Status)
 	}
 	if !delivered {
 		t.Fatal("signalGroup was not called")
 	}
 	snap := b.snapshot()
-	if snap.status != statusCancelling {
-		t.Fatalf("status after cancel = %q, want cancelling", snap.status)
+	if snap.Status != StatusCancelling {
+		t.Fatalf("status after cancel = %q, want cancelling", snap.Status)
 	}
 	// A delivered signal must not raise a residual: the build cancelled cleanly.
-	if snap.residual != nil {
-		t.Fatalf("residual = %+v, want nil on a delivered signal", snap.residual)
+	if snap.Residual != nil {
+		t.Fatalf("residual = %+v, want nil on a delivered signal", snap.Residual)
 	}
 }
 
 // A signal that genuinely fails to deliver (e.g. a missing `kill` sudoers rule, so
 // sudo can't authorize) must still be surfaced as a cancellation-failure: ICT may
 // never have started its teardown, and no terminal SSE event may arrive.
-func TestHandleCancelBuildSignalFailureRecordsResidual(t *testing.T) {
-	s := newTestServer(t)
+func TestCancelBuildSignalFailureRecordsResidual(t *testing.T) {
+	s := newTestService(t)
 	s.signalGroup = func(pgid int) error {
 		return fmt.Errorf("exit status 1: sudo: a password is required")
 	}
-	b := &build{ID: "run", status: statusRunning, pgid: 2 << 30, done: make(chan struct{})}
+	b := &build{ID: "run", status: StatusRunning, pgid: 2 << 30, done: make(chan struct{})}
 	s.tracker.add(b)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/builds/run/cancel", nil)
-	req.SetPathValue("id", "run")
-	rec := httptest.NewRecorder()
-	s.handleCancelBuild(rec, req)
-
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("status = %d, want 202", rec.Code)
+	if _, err := s.CancelBuild("run"); err != nil {
+		t.Fatalf("CancelBuild: %v", err)
 	}
 	snap := b.snapshot()
-	if snap.status != statusCancelling {
-		t.Fatalf("status after cancel = %q, want cancelling", snap.status)
+	if snap.Status != StatusCancelling {
+		t.Fatalf("status after cancel = %q, want cancelling", snap.Status)
 	}
-	if snap.residual == nil || snap.residual.Kind != residualCancellation {
-		t.Fatalf("residual = %+v, want cancellation-failure", snap.residual)
+	if snap.Residual == nil || snap.Residual.Kind != residualCancellation {
+		t.Fatalf("residual = %+v, want cancellation-failure", snap.Residual)
 	}
 }
 
 // A build record that exists only on disk (persisted as running by a server that
 // has since restarted) has no process group and no wait goroutine behind it.
-// Cancelling it would mutate a throwaway struct and report a bogus 202, so the
-// handler must 409 and point the user at the host.
-func TestHandleCancelBuildOrphanedRecord(t *testing.T) {
-	s := newTestServer(t)
+// Cancelling it would mutate a throwaway struct and report a bogus 202, so it
+// must be rejected with a 409 pointing the user at the host.
+func TestCancelBuildOrphanedRecord(t *testing.T) {
+	s := newTestService(t)
 	b := &build{
 		ID:      "orphan",
 		RootDir: filepath.Join(s.buildsRoot(), "orphan"),
-		status:  statusRunning,
+		status:  StatusRunning,
 		done:    make(chan struct{}),
 	}
 	if err := os.MkdirAll(b.RootDir, 0o755); err != nil {
@@ -549,47 +547,33 @@ func TestHandleCancelBuildOrphanedRecord(t *testing.T) {
 	}
 	// Deliberately NOT added to the tracker: on-disk only, as after a restart.
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/builds/orphan/cancel", nil)
-	req.SetPathValue("id", "orphan")
-	rec := httptest.NewRecorder()
-	s.handleCancelBuild(rec, req)
-
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("status = %d, want 409 for an on-disk-only build", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), "no live process") {
-		t.Fatalf("body should explain the orphan: %s", rec.Body.String())
+	_, err := s.CancelBuild("orphan")
+	_, msg := assertServiceError(t, err, http.StatusConflict)
+	if !strings.Contains(msg, "no live process") {
+		t.Fatalf("message should explain the orphan: %q", msg)
 	}
 }
 
-// A cancel whose signal fails must report the residual in the 202 body: the
-// build stays in cancelling and no terminal SSE event may ever arrive, so this is
-// the only prompt notification the UI gets.
-func TestHandleCancelBuildReportsResidualInResponse(t *testing.T) {
-	s := newTestServer(t)
+// A cancel whose signal fails must report the residual in the accepted result:
+// the build stays in cancelling and no terminal SSE event may ever arrive, so
+// this is the only prompt notification the UI gets.
+func TestCancelBuildReportsResidualInResult(t *testing.T) {
+	s := newTestService(t)
 	s.signalGroup = func(pgid int) error {
 		return fmt.Errorf("exit status 1: sudo: a password is required")
 	}
-	b := &build{ID: "run", status: statusRunning, pgid: 2 << 30, done: make(chan struct{})}
+	b := &build{ID: "run", status: StatusRunning, pgid: 2 << 30, done: make(chan struct{})}
 	s.tracker.add(b)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/builds/run/cancel", nil)
-	req.SetPathValue("id", "run")
-	rec := httptest.NewRecorder()
-	s.handleCancelBuild(rec, req)
-
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("status = %d, want 202", rec.Code)
+	acc, err := s.CancelBuild("run")
+	if err != nil {
+		t.Fatalf("CancelBuild: %v", err)
 	}
-	var got cancelAccepted
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatalf("decoding response: %v (%s)", err, rec.Body.String())
+	if acc.Residual == nil || acc.Residual.Kind != residualCancellation {
+		t.Fatalf("result residual = %+v, want cancellation-failure", acc.Residual)
 	}
-	if got.Residual == nil || got.Residual.Kind != residualCancellation {
-		t.Fatalf("response residual = %+v, want cancellation-failure", got.Residual)
-	}
-	if !strings.Contains(got.Residual.Detail, "failed to signal") {
-		t.Fatalf("residual detail lacks the underlying error: %q", got.Residual.Detail)
+	if !strings.Contains(acc.Residual.Detail, "failed to signal") {
+		t.Fatalf("residual detail lacks the underlying error: %q", acc.Residual.Detail)
 	}
 }
 
@@ -599,8 +583,8 @@ func TestHandleCancelBuildReportsResidualInResponse(t *testing.T) {
 // concludeStalledCancel is the watchdog's hard-deadline action: it marks the
 // build cancelled with a cancellation-failure and frees the slot.
 func TestConcludeStalledCancelReleasesSlot(t *testing.T) {
-	s := newTestServer(t)
-	b := &build{ID: "wedged", status: statusCancelling, cancelRequested: true, pgid: 2 << 30, done: make(chan struct{})}
+	s := newTestService(t)
+	b := &build{ID: "wedged", status: StatusCancelling, cancelRequested: true, pgid: 2 << 30, done: make(chan struct{})}
 	s.tracker.add(b)
 	if ok, _ := s.tryAcquireBuildSlot(b.ID); !ok {
 		t.Fatal("could not occupy the build slot")
@@ -609,14 +593,14 @@ func TestConcludeStalledCancelReleasesSlot(t *testing.T) {
 	s.concludeStalledCancel(b)
 
 	snap := b.snapshot()
-	if snap.status != statusCancelled {
-		t.Fatalf("status = %q, want cancelled", snap.status)
+	if snap.Status != StatusCancelled {
+		t.Fatalf("status = %q, want cancelled", snap.Status)
 	}
-	if snap.residual == nil || snap.residual.Kind != residualCancellation {
-		t.Fatalf("residual = %+v, want cancellation-failure", snap.residual)
+	if snap.Residual == nil || snap.Residual.Kind != residualCancellation {
+		t.Fatalf("residual = %+v, want cancellation-failure", snap.Residual)
 	}
-	if !strings.Contains(snap.errMsg, "did not exit") {
-		t.Fatalf("errMsg should say the build never exited: %q", snap.errMsg)
+	if !strings.Contains(snap.ErrMsg, "did not exit") {
+		t.Fatalf("errMsg should say the build never exited: %q", snap.ErrMsg)
 	}
 	select {
 	case <-b.done:
@@ -632,11 +616,11 @@ func TestConcludeStalledCancelReleasesSlot(t *testing.T) {
 // must stand: finish is single-shot, so the watchdog neither relabels the build
 // nor releases a slot it no longer owns.
 func TestConcludeStalledCancelLosesRaceToWaitPath(t *testing.T) {
-	s := newTestServer(t)
-	b := &build{ID: "raced", status: statusCancelling, cancelRequested: true, done: make(chan struct{})}
+	s := newTestService(t)
+	b := &build{ID: "raced", status: StatusCancelling, cancelRequested: true, done: make(chan struct{})}
 	s.tracker.add(b)
 	// The wait path got there first.
-	if !b.finish(statusCancelled, nil, "") {
+	if !b.finish(StatusCancelled, nil, "") {
 		t.Fatal("setup: first finish should have recorded")
 	}
 	// A new build has since claimed the slot.
@@ -646,8 +630,8 @@ func TestConcludeStalledCancelLosesRaceToWaitPath(t *testing.T) {
 
 	s.concludeStalledCancel(b)
 
-	if snap := b.snapshot(); snap.errMsg != "" {
-		t.Fatalf("errMsg = %q, want empty (the wait path's clean outcome must stand)", snap.errMsg)
+	if snap := b.snapshot(); snap.ErrMsg != "" {
+		t.Fatalf("errMsg = %q, want empty (the wait path's clean outcome must stand)", snap.ErrMsg)
 	}
 	if ok, active := s.tryAcquireBuildSlot("third"); ok {
 		t.Fatal("watchdog released a slot owned by another build")
@@ -659,7 +643,7 @@ func TestConcludeStalledCancelLosesRaceToWaitPath(t *testing.T) {
 // --- single-build lock ---
 
 func TestSingleBuildSlot(t *testing.T) {
-	s := newTestServer(t)
+	s := newTestService(t)
 	if ok, _ := s.tryAcquireBuildSlot("a"); !ok {
 		t.Fatal("first acquire failed")
 	}
@@ -682,20 +666,19 @@ func TestSingleBuildSlot(t *testing.T) {
 	}
 }
 
-func TestHandleStartBuildRejectsConcurrent(t *testing.T) {
-	s := newTestServer(t)
+func TestStartBuildRejectsConcurrent(t *testing.T) {
+	s := newTestService(t)
 	// Occupy the slot as if a build were already running.
 	if ok, _ := s.tryAcquireBuildSlot("in-flight"); !ok {
 		t.Fatal("could not occupy the build slot")
 	}
 
-	body := `{"compose":{"vertical":"robotics","sku":"amr","platform":"wcl","os":"ubuntu24","imageType":"iso"}}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/builds", strings.NewReader(body))
-	rec := httptest.NewRecorder()
-	s.handleStartBuild(rec, req)
-
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("status = %d, want 409 (build in progress)", rec.Code)
+	_, err := s.StartBuild(BuildRequest{Compose: &Selection{
+		Vertical: "robotics", SKU: "amr", Platform: "wcl", OS: "ubuntu24", ImageType: "iso",
+	}})
+	code, _ := assertServiceError(t, err, http.StatusConflict)
+	if code != "BUILD_IN_PROGRESS" {
+		t.Fatalf("code = %q, want BUILD_IN_PROGRESS", code)
 	}
 	// No second build should have been tracked.
 	if n := len(s.tracker.all()); n != 0 {

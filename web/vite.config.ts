@@ -9,6 +9,10 @@ export default defineConfig({
     // Listen on all interfaces so a remote browser (e.g. over SSH) can reach the
     // dev server at the host's IP without a tunnel. Harmless for local use.
     host: true,
+    // Pin the dev-server port so the SSH port-forward is deterministic; fail
+    // fast instead of silently hopping to the next free port.
+    port: 5174,
+    strictPort: true,
     // Proxy API calls to the Go backend during development.
     proxy: {
       '/api': {
