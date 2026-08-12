@@ -232,7 +232,7 @@ target:
 ```
 
 For a complete Ubuntu 24 WSL example, see
-[`image-templates/ubuntu24-x86_64-agentic-wsl2.yml`](../../image-templates/ubuntu24-x86_64-agentic-wsl2.yml).
+[`image-templates/ubuntu24/ubuntu24-x86_64-agentic-wsl2.yml`](../../image-templates/ubuntu24/ubuntu24-x86_64-agentic-wsl2.yml).
 
 ---
 
@@ -425,7 +425,7 @@ overlayPolicy:
 
 A complete **additive-only** starter template (the default policy, without package
 removal) lives at
-[`image-templates/ubuntu24-x86_64-overlay-raw.yml`](https://github.com/open-edge-platform/image-composer-tool/blob/main/image-templates/ubuntu24-x86_64-overlay-raw.yml);
+[`image-templates/ubuntu24/ubuntu24-x86_64-overlay-raw.yml`](https://github.com/open-edge-platform/image-composer-tool/blob/main/image-templates/ubuntu24/ubuntu24-x86_64-overlay-raw.yml);
 to enable removal, add the `overlayPolicy` block shown above (`additive-and-upgrade`
 plus `allowPackageRemoval: true`) to it.
 
@@ -894,7 +894,7 @@ template file, resolved **relative to the child template's directory**.
 `.yml` and `.yaml` are both accepted; symbolic links are not.
 
 The canonical two-level example ships in the repo at
-`image-templates/ubuntu24-x86_64-extends-example-raw.yml`:
+`image-templates/ubuntu24/ubuntu24-x86_64-extends-example-raw.yml`:
 
 ```yaml
 # Inherit everything (disk layout, systemConfig, immutability, ...) from the
@@ -1040,10 +1040,10 @@ sees it after the chain is folded:
 
 ```bash
 # Chain-only merge, without OS defaults (useful for verifying inheritance)
-image-composer-tool resolve image-templates/ubuntu24-x86_64-extends-example-raw.yml
+image-composer-tool resolve image-templates/ubuntu24/ubuntu24-x86_64-extends-example-raw.yml
 
 # Full build-time view: OS defaults as base, extends chain folded on top (leaf wins)
-image-composer-tool resolve image-templates/ubuntu24-x86_64-extends-example-raw.yml --full
+image-composer-tool resolve image-templates/ubuntu24/ubuntu24-x86_64-extends-example-raw.yml --full
 ```
 
 The output includes the merged `systemConfig.packages` union and every
@@ -1104,7 +1104,7 @@ disk:
 ```
 
 See the full end-to-end example at
-[`image-templates/ubuntu24-x86_64-agentic-wsl2.yml`](../../image-templates/ubuntu24-x86_64-agentic-wsl2.yml).
+[`image-templates/ubuntu24/ubuntu24-x86_64-agentic-wsl2.yml`](../../image-templates/ubuntu24/ubuntu24-x86_64-agentic-wsl2.yml).
 
 ## Best Practices
 

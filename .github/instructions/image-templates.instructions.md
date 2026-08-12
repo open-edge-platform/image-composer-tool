@@ -6,16 +6,26 @@ applyTo: "image-templates/**/*.yml"
 
 Use these in addition to the root `copilot-instructions.md`. Schema: [os-image-template.schema.json](../../internal/config/schema/os-image-template.schema.json).
 
-## Naming
+## Location and naming
 
-`<dist>-<arch>-<purpose>-<imageType>.yml`
+`image-templates/<target.dist>/<dist>-<arch>-<purpose>-<imageType>.yml`
 
-Examples: `emt3-x86_64-minimal-raw.yml`, `ubuntu24-aarch64-edge-raw.yml`, `azl3-x86_64-minimal-iso.yml`.
+Examples: `emt3/emt3-x86_64-minimal-raw.yml`, `ubuntu24/ubuntu24-aarch64-edge-raw.yml`, `azl3/azl3-x86_64-minimal-iso.yml`.
 
+- The directory is the template's `target.dist` value, not its filename prefix. So `rcd10-*.yml` (which declare `dist: el10`) live in `el10/`, and `elxr-edge-26.04-*.yml` (which declare `dist: elxr13`) live in `elxr13/`.
+- The filename keeps the full `<dist>-` prefix even though the directory repeats it, so a bare filename stays unambiguous in build scripts, `internal/api/data/manifest.yaml`, and bug reports.
 - `<dist>`: lowercase distro + major version (`emt3`, `azl3`, `elxr12`, `ubuntu24`, `debian13`, `rcd10`).
 - `<arch>`: `x86_64` or `aarch64` (match Go's `runtime.GOARCH` convention only when the schema requires it — otherwise use these).
 - `<purpose>`: `minimal`, `edge`, `dlstreamer`, `desktop-virtualization`, etc.
 - `<imageType>`: `raw`, `iso`, `initrd`.
+
+Grouping is by distribution because a chain of `extends:` templates must all be siblings in one directory and must share `os`/`dist`/`arch`/`imageType`. Any grouping drawn from those four fields can never split a legal chain; grouping by purpose would. See [image-templates/COMPOSITION.md](../../image-templates/COMPOSITION.md).
+
+When you move or add a template, update the `scripts/build_*.sh` path that references it (24 templates are wired to a build script), and the per-distribution `README.md`.
+
+## Reusing an existing template
+
+If your template would be an existing one plus a few packages or commands, use `extends:` instead of copying it. `image-templates/COMPOSITION.md` covers the rules and the traps — chiefly that packages are a union with no removal syntax, and that `packageRepositories` sharing a `codename` collapse when split across layers.
 
 ## Required sections for a user-facing template
 
