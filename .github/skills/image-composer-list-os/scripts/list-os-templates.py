@@ -16,7 +16,7 @@ def find_templates_dir() -> Path | None:
     cwd = Path.cwd().resolve()
     for parent in [cwd] + list(cwd.parents):
         candidate = parent / "image-templates"
-        if candidate.is_dir() and any(candidate.glob("*.yml")):
+        if candidate.is_dir() and any(candidate.rglob("*.yml")):
             return candidate
     return None
 
@@ -150,7 +150,7 @@ def main() -> int:
     records: list[dict] = []
     parse_errors = 0
 
-    for path in sorted(templates_dir.glob("*.yml")):
+    for path in sorted(templates_dir.rglob("*.yml")):
         try:
             records.append(parse_template(path))
         except Exception as err:  # pylint: disable=broad-except
