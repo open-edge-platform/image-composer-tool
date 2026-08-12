@@ -100,6 +100,16 @@ systemConfig:
     - gdm3
     - gnome-session
     - gnome-shell
+    # Terminal emulator — gnome-shell/gnome-session do NOT pull one in (only the
+    # larger gnome-core/gnome metapackages do), so without this the desktop boots
+    # into GNOME Shell with no terminal application in the Activities overview.
+    # gnome-terminal is the mature, full-featured VTE terminal (tabs, profiles,
+    # scrollback) for running apt, editing configs, and general work in the GUI.
+    - gnome-terminal
+    # Graphical package installer — the GUI equivalent of apt. gnome-software pulls
+    # in PackageKit (aptcc backend) so users can browse and install/remove packages
+    # from the desktop; the CLI apt still works unchanged alongside it.
+    - gnome-software
 
   # ---------------------------------------------------------------------------
   # Enable the graphical login. These commands run in the baseline chroot after
