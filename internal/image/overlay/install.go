@@ -23,6 +23,13 @@ type InstallResult struct {
 	Installed []string
 	// Artifacts are the artifact filenames that were installed (sorted).
 	Artifacts []string
+	// CascadeRemoved are baseline packages removed AFTER install because an
+	// approved (conflict-driven) removal orphaned them — reverse-dependencies left
+	// with an unmet dependency that the install did not satisfy (sorted). Empty
+	// unless a removal triggered a cascade. These are also folded into the
+	// preflight report's ApprovedRemovals so stats and the complete SBOM reflect
+	// the final inventory.
+	CascadeRemoved []string
 	// Skipped is true when the plan had nothing to install and the step was a
 	// no-op (the chroot was never entered).
 	Skipped bool
@@ -176,15 +183,20 @@ func InstallOverlayPackages(info *BaselineInfo, rootMount string, plan *Resoluti
 	// baseline package with an unmet dependency that its replacement does not
 	// satisfy. verifyInstalled only checks the newly-added packages, so such
 	// collateral breakage would otherwise go unreported and the build would claim
-	// success. To catch it, snapshot the SET of unmet-dependency FAILURES
+	// success. To detect it, snapshot the SET of unmet-dependency FAILURES
 	// (package-identity + requirement) BEFORE the removal, then audit again after
-	// install and fail on any failure that is new (present after but not before) — a
-	// pre-existing broken baseline is not blamed on the overlay, yet a NEW breakage
-	// the removal introduces is caught, INCLUDING a new missing requirement on a
-	// package that was already broken on a different requirement.
+	// install and act only on failures that are new (present after but not before) — a
+	// pre-existing broken baseline is neither blamed on nor "fixed" by the overlay, yet
+	// a NEW breakage the removal introduces is caught, INCLUDING a new missing
+	// requirement on a package that was already broken on a different requirement.
+	//
+	// The post-install audit (below) then CASCADES: the reverse-dependency the removal
+	// orphaned is itself removed, transitively, because the policy already consented to
+	// removing a baseline package. It still fails closed when the orphan is a
+	// bootloader/kernel image or a to-install package.
 	//
 	// preRemovalBroken holds the failure descriptors already present before the
-	// removal, so the post-install audit can fail only on NEW ones.
+	// removal, so the post-install audit acts only on NEW ones.
 	var preRemovalBroken map[string]bool
 	if len(report.ToRemove) > 0 {
 		// Fail CLOSED when the audit cannot be established: a force-removal
@@ -251,33 +263,126 @@ func InstallOverlayPackages(info *BaselineInfo, rootMount string, plan *Resoluti
 			len(missing), strings.Join(missing, ", "))
 	}
 
-	// After a force-removal, audit the whole installed set's dependency graph so
-	// collateral breakage of an UNRELATED baseline package (an unmet dependency the
-	// replacement does not satisfy) fails the build rather than shipping silently.
-	// The pre-removal audit above already established a reliable snapshot (the build
-	// aborts before removing anything if it could not), so this always runs when a
-	// removal occurred and fails on packages that are NEWLY broken (broken after
-	// install but not before) — a pre-existing broken baseline is not blamed on the
-	// overlay, while a new (possibly different) breakage the removal introduced is
-	// still caught.
+	// After a force-removal, re-audit the whole installed set's dependency graph. A
+	// removal permitted by allowPackageRemoval can orphan an UNRELATED baseline package
+	// that only DEPENDS on the removed one — a reverse-dependency the replacement does
+	// not satisfy (e.g. cloud-initramfs-growroot depends on the removed initramfs-tools).
+	// verifyInstalled only checks the newly-added packages, so such collateral breakage
+	// would otherwise ship silently; the pre-removal snapshot (preRemovalBroken) makes
+	// the audit fail only on breakage the removal INTRODUCED, never on a pre-existing
+	// broken baseline.
+	//
+	// Because the policy already consented to removing a baseline package, that consent
+	// cascades to the reverse-dependencies the removal orphaned: each newly-broken
+	// baseline package is removed too, transitively, until the dependency tree is whole.
+	// The package manager's own audit (apt-get check / dnf check) is the ground truth, so
+	// only genuinely-unsatisfiable packages are removed — an alternative dependency the
+	// baseline still satisfies is never mistaken for breakage (which a static reverse-dep
+	// walk over the first-alternative-only baseline metadata could not guarantee).
+	//
+	// The cascade is bounded and fails CLOSED: a newly-broken package that is a
+	// bootloader or bootable-kernel image (immutable) or that is itself in the to-install
+	// set is NOT removed — the build aborts with an actionable error instead, because
+	// removing it would break an invariant stronger than the cascade.
+	var cascadeRemoved []string
 	if len(report.ToRemove) > 0 {
-		broken, out, aerr := backend.auditDependencies(rootMount)
-		if aerr != nil {
-			// The audit could not run post-install even though it ran pre-removal:
-			// surface it rather than silently skipping the integrity guarantee.
-			return nil, fmt.Errorf("overlay install: failed to audit dependency integrity after removals: %w", aerr)
+		toInstallNames := make(map[string]bool, len(pkgs))
+		for _, p := range pkgs {
+			toInstallNames[p.Name] = true
 		}
-		var newlyBroken []string
-		for _, f := range broken {
-			if !preRemovalBroken[f] {
-				newlyBroken = append(newlyBroken, f)
+		family := backend.family()
+		// The installed set strictly shrinks each pass (every pass purges the packages
+		// it found newly broken, so they cannot reappear), so a real cascade converges in
+		// a handful of passes. The cap is a pure backstop against a pathological audit
+		// that never stabilizes.
+		const maxCascadePasses = 100
+		for pass := 0; ; pass++ {
+			broken, out, aerr := backend.auditDependencies(rootMount)
+			if aerr != nil {
+				// The audit could not run post-install even though it ran pre-removal:
+				// surface it rather than silently skipping the integrity guarantee.
+				return nil, fmt.Errorf("overlay install: failed to audit dependency integrity after removals: %w", aerr)
 			}
-		}
-		if len(newlyBroken) > 0 {
+			var newlyBroken []string
+			for _, f := range broken {
+				if !preRemovalBroken[f] {
+					newlyBroken = append(newlyBroken, f)
+				}
+			}
+			if len(newlyBroken) == 0 {
+				break // dependency tree is whole again
+			}
 			sort.Strings(newlyBroken)
-			return nil, fmt.Errorf("overlay install: package removals introduced %d unmet dependency failure(s) that were satisfied before the overlay (%s) "+
-				"(a removed package was still required by an unrelated baseline package); add the missing dependency to the overlay or drop the removal:%s",
-				len(newlyBroken), strings.Join(newlyBroken, "; "), formatCommandOutput(out))
+
+			// Resolve each broken descriptor to two values, refusing to cascade past a
+			// protected (bootloader/kernel) or to-install package:
+			//   - name:    the BARE package name, used for the guards and for reporting —
+			//              both are arch-agnostic (guards match at a name boundary;
+			//              ApprovedRemovals is matched against BaselinePackage.Name).
+			//   - operand: the package-manager REMOVAL operand. On deb it keeps the audit
+			//              identity's arch qualifier (e.g. "libc6:i386") so `dpkg --purge`
+			//              removes the exact broken instance instead of an ambiguous bare
+			//              name on a multiarch baseline; on rpm the bare name is used, as
+			//              `rpm -e` does not accept a version-less "name.arch" erase spec.
+			removeSet := make(map[string]bool) // dedup removal operands
+			var removeOperands []string
+			nameSet := make(map[string]bool) // dedup bare names for reporting
+			var removedNames []string
+			for _, desc := range newlyBroken {
+				name := brokenDescriptorPackage(family, desc)
+				if name == "" {
+					// A broken descriptor that names no removable package cannot be resolved
+					// by removal and would loop forever: fail closed with the raw report.
+					return nil, fmt.Errorf("overlay install: package removals introduced an unmet dependency failure that could not be attributed to a removable package (%q); add the missing dependency to the overlay or drop the removal:%s",
+						desc, formatCommandOutput(out))
+				}
+				if isBootloaderPackage(name) || isKernelImagePackage(name) || toInstallNames[name] {
+					return nil, fmt.Errorf("overlay install: package removals introduced %d unmet dependency failure(s) that were satisfied before the overlay (%s), "+
+						"and resolving them would require removing %q — a bootloader/kernel image or a package the overlay installs, which must not be removed; "+
+						"add the missing dependency to the overlay or drop the removal:%s",
+						len(newlyBroken), strings.Join(newlyBroken, "; "), name, formatCommandOutput(out))
+				}
+				operand := name
+				if family == PackageManagerAPT {
+					operand = brokenDescriptorIdentity(desc)
+				}
+				if !removeSet[operand] {
+					removeSet[operand] = true
+					removeOperands = append(removeOperands, operand)
+				}
+				if !nameSet[name] {
+					nameSet[name] = true
+					removedNames = append(removedNames, name)
+				}
+			}
+
+			if pass >= maxCascadePasses {
+				return nil, fmt.Errorf("overlay install: cascade removal did not converge after %d passes (still %d unmet dependency failure(s): %s); "+
+					"add the missing dependency to the overlay or drop the removal:%s",
+					maxCascadePasses, len(newlyBroken), strings.Join(newlyBroken, "; "), formatCommandOutput(out))
+			}
+
+			sort.Strings(removeOperands)
+			sort.Strings(removedNames)
+			log.Infof("Overlay install: cascade-removing %d baseline reverse-dependency package(s) orphaned by the approved removal(s): %s",
+				len(removeOperands), strings.Join(removeOperands, ", "))
+			if rerr := backend.removePackages(rootMount, removeOperands); rerr != nil {
+				return nil, fmt.Errorf("overlay install: failed to cascade-remove %d orphaned baseline package(s): %w", len(removeOperands), rerr)
+			}
+			cascadeRemoved = append(cascadeRemoved, removedNames...)
+		}
+
+		// Fold the cascade removals into the preflight report so downstream reporting
+		// reflects the FINAL inventory: both ComputePackageStats and the complete SBOM
+		// (stageOverlaySBOMArtifacts) key off report.ApprovedRemovals and run after this
+		// install stage over the same report pointer. ToRemove is deliberately left alone
+		// — it is the explicit pre-install removal set already consumed above.
+		if len(cascadeRemoved) > 0 {
+			sort.Strings(cascadeRemoved)
+			report.ApprovedRemovals = append(report.ApprovedRemovals, cascadeRemoved...)
+			report.Removes += len(cascadeRemoved)
+			log.Infof("Overlay install: cascade removal complete — %d additional baseline package(s) removed to keep dependencies satisfied: %s",
+				len(cascadeRemoved), strings.Join(cascadeRemoved, ", "))
 		}
 	}
 
@@ -288,7 +393,7 @@ func InstallOverlayPackages(info *BaselineInfo, rootMount string, plan *Resoluti
 	sort.Strings(installed)
 
 	log.Infof("Overlay install complete: %d package(s) installed and verified in %s", len(installed), rootMount)
-	return &InstallResult{Installed: installed, Artifacts: artifactNames}, nil
+	return &InstallResult{Installed: installed, Artifacts: artifactNames, CascadeRemoved: cascadeRemoved}, nil
 }
 
 // planInstalls maps the plan's additive ToInstall packages to their prepared
@@ -840,6 +945,50 @@ func parseUnmetDependencyFailures(out string) []string {
 	}
 	sort.Strings(failures)
 	return failures
+}
+
+// brokenDescriptorIdentity returns the package IDENTITY from an audit failure
+// descriptor produced by parseUnmetDependencyFailures ("<identity> | <requirement>"):
+// the portion before " | ", trimmed. The identity retains its family-specific
+// qualifier — a deb "name:arch" multiarch suffix or an rpm "name.arch" — so the deb
+// removal can target the exact broken instance (see brokenDescriptorPackage for why the
+// GUARDS instead use the bare name). Returns "" when the descriptor carries no identity.
+func brokenDescriptorIdentity(descriptor string) string {
+	identity := descriptor
+	if i := strings.Index(descriptor, " | "); i != -1 {
+		identity = descriptor[:i]
+	}
+	return strings.TrimSpace(identity)
+}
+
+// brokenDescriptorPackage extracts the bare package name from an audit failure
+// descriptor, so the cascade can apply the bootloader/kernel and to-install guards to
+// it and report it — all of which are arch-agnostic. The identity's family-specific
+// qualifier is stripped so the guards (which match at a name boundary) see the bare name:
+//   - deb: an apt identity is "name" or "name:arch"; deb names never contain ':', so
+//     the ":arch" multiarch suffix is cut at the first ':'.
+//   - rpm: rpmNameArch produced "name.arch"; the arch is the final '.'-delimited field
+//     by construction, so it is cut at the LAST '.' (an rpm name may itself contain a
+//     '.', which this leaves intact). Stripping it matters: matchesPackagePrefix treats
+//     '.' as a non-boundary, so "kernel-core.x86_64" would evade the kernel-image guard.
+//
+// The bare name is NOT necessarily the removal operand: on deb the arch-qualified
+// identity is used to purge the exact broken instance on a multiarch system (see the
+// cascade loop). Returns "" when the descriptor carries no identity (an un-actionable
+// report the caller must fail closed on rather than loop over).
+func brokenDescriptorPackage(family PackageManager, descriptor string) string {
+	identity := brokenDescriptorIdentity(descriptor)
+	switch family {
+	case PackageManagerAPT:
+		if i := strings.IndexByte(identity, ':'); i != -1 {
+			identity = identity[:i]
+		}
+	case PackageManagerDNF:
+		if i := strings.LastIndexByte(identity, '.'); i > 0 {
+			identity = identity[:i]
+		}
+	}
+	return strings.TrimSpace(identity)
 }
 
 // rpmNameArch reduces an rpm NEVRA token (NAME-VERSION-RELEASE.ARCH, e.g.

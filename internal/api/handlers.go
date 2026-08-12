@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 
 	httpapi "github.com/open-edge-platform/image-composer-tool/internal/api/http"
 	"github.com/open-edge-platform/image-composer-tool/internal/api/service"
@@ -64,7 +65,7 @@ func (s *Server) CancelBuild(w http.ResponseWriter, _ *http.Request, id httpapi.
 
 // ListBuilds handles GET /builds.
 func (s *Server) ListBuilds(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, fromHistory(s.svc.ListBuilds()))
+	writeJSON(w, http.StatusOK, fromHistory(s.svc.ListBuilds(), time.Now().UTC()))
 }
 
 // GetBuildDetails handles GET /builds/{id}/details.
