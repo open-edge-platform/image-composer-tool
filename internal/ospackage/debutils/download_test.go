@@ -381,7 +381,7 @@ func TestBuildRepoConfigs(t *testing.T) {
 					Component: "", // Should default to "main"
 				},
 			},
-			arch:          "amd64",
+			arch:        "amd64",
 			expectError: true, // Will fail because GetPackagesNames is not mocked
 		},
 		{
@@ -395,7 +395,7 @@ func TestBuildRepoConfigs(t *testing.T) {
 					Component: "contrib",
 				},
 			},
-			arch:          "amd64",
+			arch:        "amd64",
 			expectError: true, // Will fail because GetPackagesNames is not mocked
 		},
 		{
@@ -409,7 +409,7 @@ func TestBuildRepoConfigs(t *testing.T) {
 					Component: "main contrib non-free",
 				},
 			},
-			arch:          "amd64",
+			arch:        "amd64",
 			expectError: true, // Will fail because GetPackagesNames is not mocked
 		},
 	}
