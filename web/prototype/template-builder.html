@@ -236,6 +236,12 @@ body {
 
 /* ── Use-Case Bundles (curated, cross-repo, all-or-none) ── */
 .bundles-header { display: flex; align-items: center; justify-content: space-between; cursor: pointer; user-select: none; }
+.bundles-header-label { display: flex; align-items: center; gap: 8px; margin: 0; cursor: pointer; }
+/* Standard disclosure caret: points right when collapsed, rotates down when
+   expanded. Sits next to the title so the section reads as expandable at a
+   glance (the right-hand Show/Hide text alone was too easy to miss). */
+.bundles-caret { display: inline-block; font-size: 12px; color: var(--text); transition: transform 0.15s ease; }
+.bundles-caret.expanded { transform: rotate(90deg); }
 .bundles-toggle-icon { font-size: 11px; color: var(--text-muted); }
 .bundle-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
 .bundle-card { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; cursor: pointer; transition: all 0.15s; }
@@ -292,8 +298,16 @@ body {
 }
 .suggested-toggle { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; color: var(--text); cursor: pointer; }
 .suggested-toggle input { accent-color: var(--primary); width: 15px; height: 15px; }
-.show-more { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 8px; margin-top: 6px; border-top: 1px dashed var(--border); }
-.show-more .count-note { font-size: 11px; color: var(--text-muted); }
+.pkg-pager { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 6px; padding: 8px 8px 4px; margin-top: 6px; border-top: 1px dashed var(--border); }
+.pager-jump { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-muted); }
+.pager-page-input {
+  width: 54px; padding: 3px 6px; font-size: 11px; text-align: center; color: var(--text);
+  border: 1px solid var(--border); border-radius: 4px;
+}
+.pager-page-input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 2px rgba(0,113,197,0.12); }
+/* Row indices live on their own line: the button row is already wide, and the
+   range is reference information rather than a control. */
+.pager-range { font-size: 11px; color: var(--text-muted); text-align: center; padding: 0 8px 8px; }
 .pkg-list-scroll { max-height: 300px; overflow-y: auto; overflow-x: hidden; }
 
 /* Per-repo search box inside the pane */
@@ -968,6 +982,7 @@ function switchView(view) {
   document.querySelectorAll('.topnav-tab').forEach(t => t.classList.remove('active'));
   document.querySelector(`[data-view="${view}"]`).classList.add('active');
   if (view === 'advanced') { syncBasicToAdvanced(); }
+  if (view === 'basic') { syncAdvancedToBasic(); }
 }
 
 document.querySelectorAll('.topnav-tab').forEach(tab => {
@@ -1009,6 +1024,9 @@ function onVerticalChange() {
   state.os = preset.defaultOs;
   state.imageType = preset.imageType;
   state.unattended = preset.unattended;
+  // Changing the vertical is a fresh start, so it re-seeds Advanced from the
+  // new preset. Every other Basic edit leaves Advanced's package work alone.
+  seedAdvancedFromPreset();
   uncheckReview();
 }
 
@@ -1019,20 +1037,76 @@ function onSelectionChange() {
   uncheckReview();
 }
 
+// ── Basic ⇄ Advanced sync ──────────────────────────────────────────
+// The two panes share four fields (vertical, SKU, platform, OS) plus image
+// type. Advanced owns everything else. The rules:
+//   - seedAdvancedFromPreset() replaces Advanced's packages/image name from the
+//     vertical preset. Fired only when the vertical changes in BASIC, which is
+//     the one edit that invalidates the previous package set. Changing the
+//     vertical inside Advanced deliberately keeps the hand-picked packages —
+//     discarding curated work there would be unrecoverable.
+//   - syncBasicToAdvanced() / syncAdvancedToBasic() copy ONLY the shared
+//     fields, in whichever direction the user is moving. Neither touches
+//     packages, so a round trip preserves selections, bundles, and pins.
+function seedAdvancedFromPreset() {
+  const preset = VERTICAL_PRESETS[state.vertical] || {};
+  advState.template.image.name = preset.imageName || 'my-edge-image';
+  advState.template.packages = (preset.packages || ['cloud-init', 'rsyslog']).slice();
+  advState.template.bundles = [];
+}
+
 function syncBasicToAdvanced() {
   const preset = VERTICAL_PRESETS[state.vertical] || {};
   advState.template.target.vertical = state.vertical;
   advState.template.target.sku = state.sku;
   advState.template.target.platform = state.platform;
   advState.template.target.dist = state.os;
+  advSyncOsFamily(state.os);
   advState.template.target.imageType = state.imageType || preset.imageType || 'raw';
-  advState.template.image.name = preset.imageName || 'my-edge-image';
-  advState.template.packages = (preset.packages || ['cloud-init', 'rsyslog']).slice();
   // Always land on the first step (Choose Image Configuration) so the wizard
   // starts from the beginning rather than mid-flow.
   advState.currentStep = 0;
   renderAdvSteps();
   renderAdvStepContent();
+}
+
+// Reverse direction: push Advanced's shared fields back onto Basic's state and
+// its <select> elements. The SKU and OS lists are rebuilt first, because both
+// are derived from the vertical and may not contain the incoming value yet.
+function syncAdvancedToBasic() {
+  const t = advState.template.target;
+  state.vertical = t.vertical || 'generic';
+  state.imageType = advState.template.target.imageType;
+
+  const preset = VERTICAL_PRESETS[state.vertical] || {};
+  const verticalSelect = document.getElementById('select-vertical');
+  if (verticalSelect) verticalSelect.value = state.vertical;
+
+  const skuSelect = document.getElementById('select-sku');
+  if (skuSelect) {
+    const skus = VERTICAL_SKUS[state.vertical] || [];
+    skuSelect.innerHTML = '<option value="">-- Select SKU --</option>' +
+      skus.map(s => `<option value="${s.id}">${s.label}</option>`).join('');
+    skuSelect.value = t.sku || '';
+  }
+  state.sku = skuSelect ? skuSelect.value : (t.sku || '');
+
+  const osSelect = document.getElementById('select-os');
+  if (osSelect) {
+    const supportedOs = preset.supportedOs || [];
+    osSelect.innerHTML = supportedOs.map(id => `<option value="${id}">${OS_LABELS[id] || id}</option>`).join('');
+    osSelect.value = t.dist || preset.defaultOs || '';
+  }
+  state.os = osSelect ? osSelect.value : (t.dist || '');
+
+  const platformSelect = document.getElementById('select-platform');
+  if (platformSelect) platformSelect.value = t.platform || '';
+  state.platform = t.platform || '';
+
+  // The review panel is a snapshot, so refresh it in place when it is open
+  // rather than collapsing it and making the user re-tick the box.
+  const reviewOpen = document.getElementById('view-image-content');
+  if (reviewOpen && reviewOpen.checked) toggleImageContent();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1081,10 +1155,13 @@ const advState = {
 //  - activeRepo:     repo open in the right pane
 //  - suggestedOnly:  when true, the pane shows only curated/suggested packages;
 //                    unchecking reveals the repo's full catalog
-//  - shownCount:     per-repo count of full-catalog rows currently rendered,
-//                    grown by the "Show more" button (windowed for performance)
-const pkgGroupsUI = { activeRepo: 'ubuntu-main', suggestedOnly: true, shownCount: {}, paneSearch: '', expandedVersionRows: {}, bundlesCollapsed: true };
-const PAGE_SIZE = 50; // rows revealed per "Show more" click
+//  - pageStart:      per-repo index of the first full-catalog row currently
+//                    rendered; the pane shows a fixed-width window starting
+//                    here, moved by the Prev/Next buttons
+const pkgGroupsUI = { activeRepo: 'ubuntu-main', suggestedOnly: true, pageStart: {}, paneSearch: '', expandedVersionRows: {}, bundlesCollapsed: true };
+// Width of the full-catalog window. Fixed rather than cumulative: paging deep
+// into a 60k-package repo never puts more than this many rows in the DOM.
+const PAGE_SIZE = 100;
 const DEFAULT_VISIBLE_VERSIONS = 2;
 
 // Simulate a repo's FULL package catalog: the real suggested packages plus
@@ -1254,7 +1331,7 @@ function renderAdvStepContent() {
         <p class="step-desc">Select a targeted vertical, SKU, and platform. Pre-configured defaults will be applied based on your selection.</p>
         <div class="form-group">
           <label class="form-label">Targeted Vertical</label>
-          <select class="form-input" onchange="advState.template.target.vertical=this.value; renderAdvStepContent(); updateAdvancedYaml()">
+          <select class="form-input" onchange="advSelectVertical(this.value)">
             <option ${t.target.vertical==='generic'?'selected':''} value="generic">Generic</option>
             <optgroup label="Verticals">
               <option ${t.target.vertical==='robotics'?'selected':''} value="robotics">Robotics</option>
@@ -1286,14 +1363,11 @@ function renderAdvStepContent() {
         </div>
         <div class="form-group">
           <label class="form-label">Operating System</label>
+          <!-- Same option set as Basic: both panes list the selected vertical's
+               supportedOs, so the OS field always round-trips between them. -->
           <select class="form-input" onchange="advSelectDist(this.value)">
             <option value="" disabled ${!t.target.dist?'selected':''}>-- Select Operating System --</option>
-            <option ${t.target.dist==='ubuntu24'?'selected':''} value="ubuntu24">Ubuntu 24.04</option>
-            <option ${t.target.dist==='ubuntu26'?'selected':''} value="ubuntu26">Ubuntu 26.04</option>
-            <option ${t.target.dist==='debian13'?'selected':''} value="debian13">Debian 13</option>
-            <option ${t.target.dist==='azl3'?'selected':''} value="azl3">Azure Linux 3</option>
-            <option ${t.target.dist==='elxr13'?'selected':''} value="elxr13">Wind River eLxr 13</option>
-            <option ${t.target.dist==='emt3'?'selected':''} value="emt3">Edge Microvisor Toolkit 3</option>
+            ${((VERTICAL_PRESETS[t.target.vertical]||{}).supportedOs||[]).map(id => `<option ${t.target.dist===id?'selected':''} value="${id}">${OS_LABELS[id] || id}</option>`).join('')}
           </select>
         </div>
         <hr style="border:none;border-top:1px solid var(--border);margin:24px 0;">
@@ -1352,8 +1426,11 @@ function renderAdvStepContent() {
           <div class="packages-main">
             <div class="form-group">
               <div class="bundles-header" role="button" tabindex="0" aria-expanded="${!pkgGroupsUI.bundlesCollapsed}" onclick="toggleBundlesCollapsed()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleBundlesCollapsed();}">
-                <label class="form-label" style="margin:0;cursor:pointer;">Use-Case Bundles</label>
-                <span class="bundles-toggle-icon">${pkgGroupsUI.bundlesCollapsed ? '&#9656; Show' : '&#9662; Hide'}</span>
+                <label class="form-label bundles-header-label">
+                  <span class="bundles-caret ${pkgGroupsUI.bundlesCollapsed ? '' : 'expanded'}" aria-hidden="true">&#9656;</span>
+                  Use-Case Bundles
+                </label>
+                <span class="bundles-toggle-icon">${pkgGroupsUI.bundlesCollapsed ? 'Show' : 'Hide'}</span>
               </div>
               ${pkgGroupsUI.bundlesCollapsed ? '' : `
                 <div class="bundle-grid" style="margin-top:10px;">${renderBundles()}</div>
@@ -1429,12 +1506,36 @@ function advSelectOS(osId) {
   renderAdvStepContent();
 }
 
+// Keeps target.os (the family) consistent with a chosen dist, e.g. dist
+// "debian13" → os "debian". Shared by advSelectDist and syncBasicToAdvanced.
+function advSyncOsFamily(dist) {
+  const osOpt = OS_OPTIONS.find(o => o.dists.includes(dist));
+  if (osOpt) advState.template.target.os = osOpt.id;
+}
+
 // Selecting a distribution also updates the parent os family so target.os and
 // target.dist stay consistent (e.g. dist "debian13" → os "debian").
 function advSelectDist(dist) {
   advState.template.target.dist = dist;
-  const osOpt = OS_OPTIONS.find(o => o.dists.includes(dist));
-  if (osOpt) advState.template.target.os = osOpt.id;
+  advSyncOsFamily(dist);
+  updateAdvancedYaml();
+}
+
+// Changing the vertical in Advanced mirrors Basic's behaviour: the SKU and OS
+// lists are derived from it, so a stale SKU is cleared and the OS falls back to
+// the vertical's default when the current one is not in its supported set.
+function advSelectVertical(vertical) {
+  const t = advState.template.target;
+  const preset = VERTICAL_PRESETS[vertical] || {};
+  const supportedOs = preset.supportedOs || [];
+  t.vertical = vertical;
+  t.sku = '';
+  if (!supportedOs.includes(t.dist)) {
+    t.dist = preset.defaultOs || t.dist;
+    advSyncOsFamily(t.dist);
+  }
+  if (preset.imageType) t.imageType = preset.imageType;
+  renderAdvStepContent();
   updateAdvancedYaml();
 }
 
@@ -1538,8 +1639,8 @@ function renderRepoRail() {
 
 // Right pane: packages of the active repo. A "Suggested packages only" toggle
 // (checked by default) shows just the curated set; unchecking reveals the full
-// catalog, windowed with a "Show more" button so a 60k-package repo never
-// renders all at once.
+// catalog, paged with Prev/Next so a 60k-package repo never renders all at
+// once.
 function renderRepoPane() {
   const t = advState.template;
   const repo = REPO_DB.find(r => r.id === pkgGroupsUI.activeRepo) || OTHER_REPO;
@@ -1592,19 +1693,35 @@ function renderRepoPane() {
   } else {
     // Full catalog: suggested first (starred), then the rest, windowed.
     // Windowing applies to the filtered set so search results aren't truncated
-    // by an unrelated page boundary.
-    const shown = pkgGroupsUI.shownCount[repo.id] || PAGE_SIZE;
-    const window = filtered.slice(0, shown);
-    const sug = window.filter(p => p.curated);
-    const rest = window.filter(p => !p.curated);
+    // by an unrelated page boundary. clampPageStart keeps the offset legal when
+    // the filtered set shrinks (e.g. the user types into the pane search while
+    // parked on a deep page).
+    const start = clampPageStart(repo.id, filtered.length);
+    const end = Math.min(start + PAGE_SIZE, filtered.length);
+    const pageRows = filtered.slice(start, end);
+    const sug = pageRows.filter(p => p.curated);
+    const rest = pageRows.filter(p => !p.curated);
     if (sug.length) listHtml += `<div class="pkg-subhead"><span class="pkg-star">&#9733;</span> Suggested</div>${sug.map(row).join('')}`;
     if (rest.length) listHtml += `<div class="pkg-subhead">${q ? 'Matches' : 'All packages'}</div>${rest.map(row).join('')}`;
-    if (shown < filtered.length) {
-      const next = Math.min(PAGE_SIZE, filtered.length - shown);
-      listHtml += `<div class="show-more">
-        <button class="btn btn-sm" onclick="showMorePackages('${repo.id}')">Show ${next} more</button>
-        <span class="count-note">${shown.toLocaleString()} of ${filtered.length.toLocaleString()}${q ? ' matches' : ''} shown</span>
-      </div>`;
+    if (filtered.length > PAGE_SIZE) {
+      const pageCount = Math.ceil(filtered.length / PAGE_SIZE);
+      const page = Math.floor(start / PAGE_SIZE) + 1;
+      const atStart = start === 0;
+      const atEnd = end >= filtered.length;
+      // The page box commits on change (blur or Enter) rather than on input, so
+      // typing "12" does not re-render at "1" and steal the caret mid-entry.
+      listHtml += `<div class="pkg-pager">
+        <button class="btn btn-sm" ${atStart ? 'disabled' : ''} onclick="pkgFirstPage('${repo.id}')" title="First page">&laquo;</button>
+        <button class="btn btn-sm" ${atStart ? 'disabled' : ''} onclick="pkgPrevPage('${repo.id}')">&#8249; Prev</button>
+        <span class="pager-jump">Page
+          <input class="pager-page-input" type="number" min="1" max="${pageCount}" value="${page}"
+            aria-label="Page number, 1 to ${pageCount}"
+            onchange="pkgGoToPage('${repo.id}', this.value, ${pageCount})">
+          of ${pageCount.toLocaleString()}</span>
+        <button class="btn btn-sm" ${atEnd ? 'disabled' : ''} onclick="pkgNextPage('${repo.id}')">Next &#8250;</button>
+        <button class="btn btn-sm" ${atEnd ? 'disabled' : ''} onclick="pkgLastPage('${repo.id}', ${pageCount})" title="Last page">&raquo;</button>
+      </div>
+      <div class="pager-range">${(start + 1).toLocaleString()}&ndash;${end.toLocaleString()} of ${filtered.length.toLocaleString()}${q ? ' matches' : ''}</div>`;
     }
   }
 
@@ -1632,10 +1749,57 @@ function toggleSuggestedOnly(on) {
   renderAdvStepContent();
 }
 
-function showMorePackages(repoId) {
-  const cur = pkgGroupsUI.shownCount[repoId] || PAGE_SIZE;
-  pkgGroupsUI.shownCount[repoId] = cur + PAGE_SIZE;
+// Snaps a repo's stored window offset back into range for a list of `total`
+// rows, and writes the corrected value back so Prev/Next start from what the
+// user actually sees. Offsets always land on a page boundary.
+function clampPageStart(repoId, total) {
+  const raw = pkgGroupsUI.pageStart[repoId] || 0;
+  const lastPageStart = Math.max(0, Math.floor((total - 1) / PAGE_SIZE) * PAGE_SIZE);
+  const start = Math.min(Math.max(0, raw), lastPageStart);
+  pkgGroupsUI.pageStart[repoId] = start;
+  return start;
+}
+
+function pkgNextPage(repoId) {
+  pkgGroupsUI.pageStart[repoId] = (pkgGroupsUI.pageStart[repoId] || 0) + PAGE_SIZE;
   renderAdvStepContent();
+  scrollPkgListToTop();
+}
+
+function pkgPrevPage(repoId) {
+  pkgGroupsUI.pageStart[repoId] = Math.max(0, (pkgGroupsUI.pageStart[repoId] || 0) - PAGE_SIZE);
+  renderAdvStepContent();
+  scrollPkgListToTop();
+}
+
+function pkgFirstPage(repoId) {
+  pkgGroupsUI.pageStart[repoId] = 0;
+  renderAdvStepContent();
+  scrollPkgListToTop();
+}
+
+function pkgLastPage(repoId, pageCount) {
+  pkgGroupsUI.pageStart[repoId] = Math.max(0, (pageCount - 1) * PAGE_SIZE);
+  renderAdvStepContent();
+  scrollPkgListToTop();
+}
+
+// Jump straight to a typed page. Anything unparseable or out of range is
+// clamped rather than rejected, so the box can never strand the list on a page
+// that does not exist — the re-render echoes back the page actually shown.
+function pkgGoToPage(repoId, value, pageCount) {
+  const requested = parseInt(value, 10);
+  const page = Math.min(Math.max(1, Number.isNaN(requested) ? 1 : requested), pageCount);
+  pkgGroupsUI.pageStart[repoId] = (page - 1) * PAGE_SIZE;
+  renderAdvStepContent();
+  scrollPkgListToTop();
+}
+
+// Paging replaces the visible rows wholesale, so leaving the scroll position
+// mid-list would drop the user into the middle of the new page.
+function scrollPkgListToTop() {
+  const list = document.querySelector('.pkg-list-scroll');
+  if (list) list.scrollTop = 0;
 }
 
 // Per-repo search. Resets the active repo's page window so results start from
@@ -1643,7 +1807,7 @@ function showMorePackages(repoId) {
 // step re-render would otherwise blur it on every keystroke).
 function onPaneSearch(value) {
   pkgGroupsUI.paneSearch = value;
-  pkgGroupsUI.shownCount[pkgGroupsUI.activeRepo] = PAGE_SIZE;
+  pkgGroupsUI.pageStart[pkgGroupsUI.activeRepo] = 0;
   renderAdvStepContent();
   const input = document.getElementById('pane-search-input');
   if (input) {
@@ -1923,22 +2087,26 @@ function toggleImageContent() {
   if (cb.checked) {
     const v = state.vertical || 'generic';
     const skuLabel = (VERTICAL_SKUS[v]||[]).find(s => s.id === state.sku);
-    const preset = VERTICAL_PRESETS[v] || {};
-    const imageName = preset.imageName || 'my-edge-image';
-    const packages = preset.packages || ['cloud-init', 'rsyslog'];
-    const disk = preset.disk || { size: '4GiB', partitionTableType: 'GPT', partitions: 2 };
+    // Read the live Advanced template rather than the vertical preset, so edits
+    // made in Advanced (packages, image name, disk) show up here too. The two
+    // are identical until the user changes something in Advanced.
+    const t = advState.template;
+    const imageName = t.image.name || 'my-edge-image';
+    const packages = t.packages;
+    const disk = { size: t.disk.size, partitionTableType: t.disk.partitionTableType.toUpperCase(), partitions: t.disk.partitions.length };
+    const bundleCount = t.bundles.length;
     container.innerHTML = `
       <div style="background:#f8fafc;border:1px solid var(--border);border-radius:6px;padding:16px;margin-top:12px;">
         <h4 style="margin:0 0 10px;color:var(--text);font-size:14px;">Review Image Configuration</h4>
         <table style="width:100%;font-size:13px;border-collapse:collapse;">
-          <tr><td style="padding:6px 0;font-weight:600;width:120px;">Image</td><td>${imageName} v1.0.0</td></tr>
+          <tr><td style="padding:6px 0;font-weight:600;width:120px;">Image</td><td>${imageName} v${t.image.version}</td></tr>
           <tr><td style="padding:6px 0;font-weight:600;">Vertical</td><td>${VERTICAL_LABELS[v] || v}</td></tr>
           <tr><td style="padding:6px 0;font-weight:600;">SKU</td><td>${skuLabel ? skuLabel.label : '—'}</td></tr>
           <tr><td style="padding:6px 0;font-weight:600;">Platform</td><td>${PLATFORM_LABELS[state.platform] || '—'}</td></tr>
           <tr><td style="padding:6px 0;font-weight:600;">OS</td><td>${OS_LABELS[state.os] || '—'}</td></tr>
           <tr><td style="padding:6px 0;font-weight:600;">Image Type</td><td>${(state.imageType || 'raw').toUpperCase()}</td></tr>
           <tr><td style="padding:6px 0;font-weight:600;">Disk</td><td>${disk.size}, ${disk.partitionTableType}, ${disk.partitions} partitions</td></tr>
-          <tr><td style="padding:6px 0;font-weight:600;">Packages</td><td>${packages.length} packages</td></tr>
+          <tr><td style="padding:6px 0;font-weight:600;">Packages</td><td>${packages.length} packages${bundleCount ? ` (${bundleCount} bundle${bundleCount > 1 ? 's' : ''})` : ''}</td></tr>
         </table>
       </div>`;
     container.style.display = 'block';
