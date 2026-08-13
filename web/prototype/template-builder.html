@@ -658,7 +658,7 @@ body {
   <div class="topnav-tabs">
     <button class="topnav-tab active" data-view="basic">Basic</button>
     <button class="topnav-tab" data-view="advanced">Advanced</button>
-    <button class="topnav-tab" data-view="builds">Build Image</button>
+    <button class="topnav-tab" data-view="builds">Compose Image</button>
   </div>
 </nav>
 
@@ -723,7 +723,7 @@ body {
 
     <!-- Actions (always visible) -->
     <div style="margin-top: 24px; display:flex; gap:12px;">
-      <button class="btn btn-lg btn-success" onclick="switchView('builds')">Build Image</button>
+      <button class="btn btn-lg btn-success" onclick="switchView('builds')">Compose Image</button>
       <button class="btn btn-lg" onclick="switchView('advanced')">Edit in Advanced</button>
     </div>
   </div>
@@ -747,14 +747,14 @@ body {
 <!-- ════════════════════════════════════════════════════════════ -->
 <div class="view" id="view-builds">
   <div class="builds-container">
-    <h1 class="page-title" style="margin-bottom:20px;">Build Image</h1>
+    <h1 class="page-title" style="margin-bottom:20px;">Compose Image</h1>
     <div class="build-active">
       <div class="build-header">
         <div class="build-title">&#128296; ubuntu24-robotics-amr v1.0.0</div>
         <span id="build-result" style="font-weight:600;"></span>
       </div>
       <div style="margin-top:16px;">
-        <div style="font-size:14px;font-weight:600;margin-bottom:8px;">Build Status <span id="build-status-text" class="build-status"></span></div>
+        <div style="font-size:14px;font-weight:600;margin-bottom:8px;">Compose Status <span id="build-status-text" class="build-status"></span></div>
         <div class="build-logs" id="build-logs">
           <div class="log-line"><span class="log-time">[14:32:01]</span> <span class="log-info">Resolving package dependencies...</span></div>
           <div class="log-line"><span class="log-time">[14:32:03]</span> Downloading ros-jazzy-base (120 MB)</div>
@@ -1464,7 +1464,7 @@ function renderAdvStepContent() {
 
     case 'review':
       html += `<h2>&#10003; Review Image Configuration</h2>
-        <p class="step-desc">Review your configuration before building.</p>
+        <p class="step-desc">Review your configuration before composing.</p>
         <div style="background:#f8fafc;border:1px solid var(--border);border-radius:6px;padding:16px;margin-bottom:16px;">
           <table style="width:100%;font-size:13px;border-collapse:collapse;">
             <tr><td style="padding:6px 0;font-weight:600;width:120px;">Image</td><td>${t.image.name} v${t.image.version}</td></tr>
@@ -1486,7 +1486,7 @@ function renderAdvStepContent() {
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px;">
           <button class="btn btn-primary" onclick="exportAdvYaml()">&#128190; Export YAML</button>
-          <button class="btn btn-success" onclick="switchView('builds')">&#128296; Build Image</button>
+          <button class="btn btn-success" onclick="switchView('builds')">&#128296; Compose Image</button>
         </div>`;
       break;
   }
@@ -2039,16 +2039,16 @@ function simulateBuild() {
   const logs = document.getElementById('build-logs');
   const statusText = document.getElementById('build-status-text');
   const resultEl = document.getElementById('build-result');
-  const msgs = ['Resolving packages...','Configuring partitions...','Installing base system...','Installing packages...','Generating image...','Compressing output...','Build complete!'];
+  const msgs = ['Resolving packages...','Configuring partitions...','Installing base system...','Installing packages...','Generating image...','Compressing output...','Compose complete!'];
   let i = 0;
   clearInterval(buildInterval);
-  if (statusText) statusText.textContent = 'Building...';
+  if (statusText) statusText.textContent = 'Composing…';
   if (resultEl) resultEl.innerHTML = '';
   buildInterval = setInterval(() => {
     if (i >= msgs.length) {
       clearInterval(buildInterval);
       if (statusText) statusText.textContent = 'Finished';
-      if (resultEl) resultEl.innerHTML = '<span style="color:#16a34a;">&#10003; Build Passed</span>';
+      if (resultEl) resultEl.innerHTML = '<span style="color:#16a34a;">&#10003; Compose Passed</span>';
       return;
     }
     const line = document.createElement('div'); line.className='log-line';
@@ -2060,7 +2060,7 @@ function simulateBuild() {
 function copyBuildLogs() {
   const logs = document.getElementById('build-logs').innerText;
   navigator.clipboard.writeText(logs);
-  alert('Build logs copied to clipboard.');
+  alert('Compose logs copied to clipboard.');
 }
 
 function downloadBuildLogs() {
