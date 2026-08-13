@@ -258,10 +258,56 @@ func TestValidateBaseline(t *testing.T) {
 
 // TestValidateOverlaySystemConfig confirms that an overlay-mode template is
 // rejected when it sets any systemConfig section the overlay pipeline cannot
-// apply (users, hostname, network, initramfs, kernel, immutability, fde,
-// bootloader), and that overlay-supported sections (packages, configurations,
-// additionalFiles, name, description) pass. It also confirms these sections are
-// still allowed in create mode.
+// apply (hostname, network, initramfs, kernel, immutability, fde, bootloader),
+// and that overlay-supported sections (packages, configurations, additionalFiles,
+// users, name, description) pass. It also confirms these sections are still
+// allowed in create mode.
+// TestValidateUsers guards the account-name and group-name safety check that closes a
+// command-injection path (names and groups are interpolated into shell command strings
+// during user provisioning) and keeps the overlay baseline-conflict comparison reliable.
+func TestValidateUsers(t *testing.T) {
+	tests := []struct {
+		name    string
+		users   []UserConfig
+		wantErr bool
+	}{
+		{"valid names", []UserConfig{{Name: "admin"}, {Name: "svc-account"}, {Name: "user_1"}, {Name: "a.b"}, {Name: "root"}}, false},
+		{"no users", nil, false},
+		{"command injection via semicolon", []UserConfig{{Name: "root; passwd -d root"}}, true},
+		{"command substitution", []UserConfig{{Name: "a$(id)"}}, true},
+		{"whitespace in name", []UserConfig{{Name: "bad name"}}, true},
+		{"leading dash", []UserConfig{{Name: "-root"}}, true},
+		{"path separator", []UserConfig{{Name: "a/b"}}, true},
+		{"empty name", []UserConfig{{Name: ""}}, true},
+		{"too long", []UserConfig{{Name: strings.Repeat("a", 33)}}, true},
+		{"valid groups", []UserConfig{{Name: "admin", Groups: []string{"sudo", "video", "render"}}}, false},
+		{"group placeholder skipped", []UserConfig{{Name: "admin", Groups: []string{"<REQUIRED_GROUP>"}}}, false},
+		{"empty group skipped", []UserConfig{{Name: "admin", Groups: []string{""}}}, false},
+		{"group command injection", []UserConfig{{Name: "admin", Groups: []string{"sudo; passwd -d root #"}}}, true},
+		{"group command substitution", []UserConfig{{Name: "admin", Groups: []string{"g$(id)"}}}, true},
+		{"group whitespace", []UserConfig{{Name: "admin", Groups: []string{"bad group"}}}, true},
+		{"valid startup script", []UserConfig{{Name: "admin", StartupScript: "/usr/local/bin/startup.sh"}}, false},
+		{"empty startup script skipped", []UserConfig{{Name: "admin", StartupScript: ""}}, false},
+		{"startup script relative", []UserConfig{{Name: "admin", StartupScript: "bin/sh"}}, true},
+		{"startup script traversal", []UserConfig{{Name: "admin", StartupScript: "../../bin/sh"}}, true},
+		{"startup script non-canonical", []UserConfig{{Name: "admin", StartupScript: "/root/../etc/passwd"}}, true},
+		{"startup script passwd delimiter", []UserConfig{{Name: "admin", StartupScript: "/root/x:y"}}, true},
+		{"startup script newline", []UserConfig{{Name: "admin", StartupScript: "/root/x\ny"}}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpl := &ImageTemplate{SystemConfig: SystemConfig{Users: tt.users}}
+			err := tmpl.validateUsers()
+			if tt.wantErr && err == nil {
+				t.Fatalf("expected an error for users %v", tt.users)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("unexpected error for users %v: %v", tt.users, err)
+			}
+		})
+	}
+}
+
 func TestValidateOverlaySystemConfig(t *testing.T) {
 	overlayBaseline := func() *Baseline {
 		return &Baseline{Mode: BaselineModeOverlay, Source: &BaselineSource{Path: "/tmp/u.raw"}}
@@ -280,12 +326,15 @@ func TestValidateOverlaySystemConfig(t *testing.T) {
 				Packages:        []string{"tree"},
 				Configurations:  []ConfigurationInfo{{Cmd: "echo hi"}},
 				AdditionalFiles: []AdditionalFileInfo{{Local: "a", Final: "/b"}},
+				Users:           []UserConfig{{Name: "bob"}},
 			},
 		},
 		{
-			name:    "users rejected",
-			sc:      SystemConfig{Users: []UserConfig{{Name: "bob"}}},
-			wantErr: "systemConfig.users",
+			// Users ARE supported in overlay mode: they are provisioned onto the
+			// baseline (with a build-stopping guard when a requested user already
+			// exists in the baseline, enforced later in the overlay pipeline).
+			name: "users allowed",
+			sc:   SystemConfig{Users: []UserConfig{{Name: "bob"}}},
 		},
 		{
 			name:    "hostname rejected",
@@ -339,10 +388,10 @@ func TestValidateOverlaySystemConfig(t *testing.T) {
 			name: "multiple sections reported together in fixed order",
 			sc: SystemConfig{
 				Bootloader: Bootloader{Provider: "grub2"},
-				Users:      []UserConfig{{Name: "bob"}},
+				Users:      []UserConfig{{Name: "bob"}}, // supported: must NOT appear in the error
 				HostName:   "myhost",
 			},
-			wantErr: "systemConfig.users, systemConfig.hostname, systemConfig.bootloader",
+			wantErr: "systemConfig.hostname, systemConfig.bootloader",
 		},
 	}
 

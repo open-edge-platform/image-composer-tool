@@ -473,6 +473,10 @@ func parseYAMLTemplate(data []byte, validateFull bool) (*ImageTemplate, error) {
 		return nil, err
 	}
 
+	if err := template.validateUsers(); err != nil {
+		return nil, err
+	}
+
 	return &template, nil
 }
 
@@ -1365,10 +1369,10 @@ func (t *ImageTemplate) validateBaseline() error {
 }
 
 // validateOverlaySystemConfig rejects systemConfig sections that an overlay build
-// cannot apply. Overlay mode layers packages, configurations, and additional
-// files onto an already-provisioned baseline image; it never re-runs the
-// system-provisioning stages that own users, hostname, network, initramfs,
-// kernel, immutability, FDE, and bootloader. Those sections used to pass schema
+// cannot apply. Overlay mode layers packages, users, configurations, and
+// additional files onto an already-provisioned baseline image; it does not re-run
+// the system-provisioning stages that own hostname, network, initramfs, kernel,
+// immutability, FDE, and bootloader. Those sections used to pass schema
 // validation and then be dropped silently, so a template that set them appeared
 // to succeed while producing an image that ignored them. Fail the build up front
 // instead, naming every offending section so the user can remove them all in one
@@ -1378,9 +1382,9 @@ func (t *ImageTemplate) validateOverlaySystemConfig() error {
 	sc := t.SystemConfig
 
 	var offending []string
-	if len(sc.Users) > 0 {
-		offending = append(offending, "users")
-	}
+	// Note: systemConfig.users IS supported in overlay mode — the overlay build
+	// provisions them onto the baseline (and stops the build if a requested user
+	// already exists in the baseline image). It is intentionally absent here.
 	if sc.HostName != "" {
 		offending = append(offending, "hostname")
 	}
@@ -1422,6 +1426,82 @@ func (t *ImageTemplate) validateOverlaySystemConfig() error {
 		"an overlay layers packages, configurations, and additionalFiles onto an existing baseline "+
 		"and cannot modify these — remove them from the template",
 		strings.Join(sections, ", "))
+}
+
+// unixUserNameRe matches a safe account name: it starts with a letter, digit, or
+// underscore and then allows letters, digits, underscore, dot, and dash, up to 32
+// characters. It deliberately excludes whitespace, path separators, and every
+// shell metacharacter. User names are interpolated into commands executed via
+// `bash -c` during provisioning, so an unconstrained name (for example
+// "root; passwd -d root") would be a command-injection vector; constraining the
+// name here also makes the overlay baseline-conflict check reliable, since an
+// exact-name comparison cannot then be bypassed by embedding shell syntax.
+var unixUserNameRe = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,31}$`)
+
+// isConfinedImagePath reports whether p is a safe absolute in-image path for a
+// user's startupScript. configUserStartupScript joins it onto installRoot and
+// writes it into the shell field of /etc/passwd, so it must be absolute and
+// already canonical (filepath.Clean is a no-op) — otherwise a "../" component
+// would let filepath.Join escape installRoot — and it must contain neither ":"
+// (the /etc/passwd field delimiter) nor any control character (a newline would
+// inject an extra passwd line).
+func isConfinedImagePath(p string) bool {
+	if !strings.HasPrefix(p, "/") || filepath.Clean(p) != p {
+		return false
+	}
+	for _, r := range p {
+		if r == ':' || r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+// validateUsers rejects any systemConfig.users entry whose name — or supplementary
+// group name — is not a safe Unix name. It runs in both create and overlay modes
+// (users are provisioned by the same code path) as a defense-in-depth guard for
+// templates that reach the Go layer without passing JSON-schema validation. Group
+// names are interpolated into getent/groupadd/usermod command strings during
+// provisioning exactly like the account name, so they need the same constraint;
+// placeholder entries (e.g. "<REQUIRED_GROUP>") are skipped here because they are
+// also skipped at provisioning time (see collectUserGroups). A user's startupScript
+// is rewritten into /etc/passwd from a path joined onto installRoot, so it must be a
+// clean, confined in-image path (see isConfinedImagePath).
+func (t *ImageTemplate) validateUsers() error {
+	var invalidNames, invalidGroups, invalidScripts []string
+	for _, u := range t.SystemConfig.Users {
+		if !unixUserNameRe.MatchString(u.Name) {
+			invalidNames = append(invalidNames, fmt.Sprintf("%q", u.Name))
+		}
+		for _, g := range u.Groups {
+			g = strings.TrimSpace(g)
+			if g == "" || (strings.HasPrefix(g, "<") && strings.HasSuffix(g, ">")) {
+				continue
+			}
+			if !unixUserNameRe.MatchString(g) {
+				invalidGroups = append(invalidGroups, fmt.Sprintf("%q", g))
+			}
+		}
+		if u.StartupScript != "" && !isConfinedImagePath(u.StartupScript) {
+			invalidScripts = append(invalidScripts, fmt.Sprintf("%q", u.StartupScript))
+		}
+	}
+	if len(invalidNames) > 0 {
+		return fmt.Errorf("invalid systemConfig.users name(s) %s: a user name must match %s "+
+			"(letters, digits, underscore, dot, dash; first character a letter, digit, or underscore; max 32 characters)",
+			strings.Join(invalidNames, ", "), unixUserNameRe.String())
+	}
+	if len(invalidGroups) > 0 {
+		return fmt.Errorf("invalid systemConfig.users group name(s) %s: a group name must match %s "+
+			"(letters, digits, underscore, dot, dash; first character a letter, digit, or underscore; max 32 characters)",
+			strings.Join(invalidGroups, ", "), unixUserNameRe.String())
+	}
+	if len(invalidScripts) > 0 {
+		return fmt.Errorf("invalid systemConfig.users startupScript path(s) %s: a startup script must be a clean, "+
+			"absolute in-image path with no \"..\" traversal and no \":\" or control characters (for example \"/usr/local/bin/startup.sh\")",
+			strings.Join(invalidScripts, ", "))
+	}
+	return nil
 }
 
 // Validate enforces that exactly one of Path or URL is set, and that a URL uses

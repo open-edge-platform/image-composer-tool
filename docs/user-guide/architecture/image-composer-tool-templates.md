@@ -338,14 +338,29 @@ RAW, or the complete SBOM vs the baseline SBOM — see
 > size — it does not pick up the default's `disk.size`, which against a larger
 > baseline would otherwise be rejected as a shrink.
 >
-> **Unsupported systemConfig sections.** Because overlay mode never re-runs the
-> system-provisioning stages, the following `systemConfig` sections cannot be
-> applied to an overlay build: `users`, `hostname`, `network`, `initramfs`,
-> `kernel`, `immutability`, `fde`, and `bootloader`. Previously these were
-> silently ignored; now setting any of them in an overlay template **fails the
-> build up front** with a message naming every offending section. Configure them
-> in the baseline image (a `create`-mode build) instead. The overlay-supported
-> `systemConfig` inputs are `packages`, `configurations`, and `additionalFiles`.
+> **Unsupported systemConfig sections.** Because overlay mode does not re-run the
+> boot/system-provisioning stages, the following `systemConfig` sections cannot be
+> applied to an overlay build: `hostname`, `network`, `initramfs`, `kernel`,
+> `immutability`, `fde`, and `bootloader`. Previously these were silently ignored;
+> now setting any of them in an overlay template **fails the build up front** with
+> a message naming every offending section. Configure them in the baseline image
+> (a `create`-mode build) instead. The overlay-supported `systemConfig` inputs are
+> `packages`, `users`, `configurations`, and `additionalFiles`.
+>
+> **Users in overlay.** `systemConfig.users` is provisioned onto the baseline. A
+> requested user that **already exists in the baseline image fails the build up
+> front** (an overlay cannot redefine a baseline account); the check is re-run
+> immediately before creation, so a name that a package's maintainer script adds
+> during install also fails rather than being silently modified. A user's
+> `startupScript` must reference a path already present when users are created —
+> i.e. shipped by the baseline or installed by an overlay `packages` entry — not a
+> file delivered via `additionalFiles`, which are copied later in the overlay
+> pipeline.
+>
+> The following `systemConfig.users` fields are **not currently applied** (an
+> inherited create-mode limitation, in both create and overlay builds): `home`,
+> `shell`, and `passwordMaxAge`. The login shell is always set to `/bin/bash`, so
+> a service account cannot yet be pinned to `/usr/sbin/nologin` via the template.
 >
 > **Sizing:** Adding packages does **not** auto-grow the image, and the overlay
 > preserves the baseline disk layout by default. Growing the image is opt-in: it

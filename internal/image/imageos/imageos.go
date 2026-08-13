@@ -2,6 +2,7 @@ package imageos
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -2040,6 +2041,14 @@ func verifyUserCreated(installRoot, username string) error {
 	return nil
 }
 
+// CreateUsers provisions the template's systemConfig.users into the image rooted
+// at installRoot, reusing the create-mode useradd/password/group/sudo/startupScript
+// logic. It is exported so the overlay build path can apply users onto a mounted
+// baseline root without duplicating this logic.
+func CreateUsers(installRoot string, template *config.ImageTemplate) error {
+	return createUser(installRoot, template)
+}
+
 func createUser(installRoot string, template *config.ImageTemplate) error {
 	// Check if there are any users to create
 	if len(template.SystemConfig.Users) == 0 {
@@ -2175,8 +2184,9 @@ func setUserPassword(installRoot string, user config.UserConfig) error {
 
 		// Check if password is already in hashed format (starts with $)
 		if strings.HasPrefix(user.Password, "$") {
-			// Password is already hashed, use usermod to set it directly
-			usermodCmd := fmt.Sprintf("usermod -p '%s' %s", user.Password, user.Name)
+			// Password is already hashed, use usermod to set it directly. The hash is
+			// template-supplied data, so quote it to keep shell metacharacters inert.
+			usermodCmd := fmt.Sprintf("usermod -p %s %s", shell.QuoteArg(user.Password), user.Name)
 			if _, err := shell.ExecCmd(usermodCmd, true, installRoot, nil); err != nil {
 				// log.Errorf("Failed to set hashed password for user %s: %v", user.Name, err)
 				// return fmt.Errorf("failed to set hashed password for user %s: %w", user.Name, err)
@@ -2190,7 +2200,7 @@ func setUserPassword(installRoot string, user config.UserConfig) error {
 				return fmt.Errorf("failed to hash password for user %s: %w", user.Name, err)
 			}
 
-			usermodCmd := fmt.Sprintf("usermod -p '%s' %s", hashedPassword, user.Name)
+			usermodCmd := fmt.Sprintf("usermod -p %s %s", shell.QuoteArg(hashedPassword), user.Name)
 			if _, err := shell.ExecCmd(usermodCmd, true, installRoot, nil); err != nil {
 				// log.Errorf("Failed to set hashed password for user %s: %v", user.Name, err)
 				// return fmt.Errorf("failed to set hashed password for user %s: %w", user.Name, err)
@@ -2216,27 +2226,31 @@ func setUserPassword(installRoot string, user config.UserConfig) error {
 // Helper function to hash password using specified algorithm
 func hashPassword(password, hashAlgo, installRoot string) (string, error) {
 	var cmd string
+	var env []string
 
 	switch strings.ToLower(hashAlgo) {
 	case "sha512":
 		// Use openssl to generate SHA-512 hash
-		cmd = fmt.Sprintf("openssl passwd -6 '%s'", password)
+		cmd = fmt.Sprintf("openssl passwd -6 %s", shell.QuoteArg(password))
 	case "sha256":
 		// Use openssl to generate SHA-256 hash
-		cmd = fmt.Sprintf("openssl passwd -5 '%s'", password)
+		cmd = fmt.Sprintf("openssl passwd -5 %s", shell.QuoteArg(password))
 	case "md5":
 		// Use openssl to generate MD5 hash (not recommended for production)
-		cmd = fmt.Sprintf("openssl passwd -1 '%s'", password)
+		cmd = fmt.Sprintf("openssl passwd -1 %s", shell.QuoteArg(password))
 	case "bcrypt":
-		// Use python3 to generate bcrypt hash
-		pythonScript := fmt.Sprintf("import bcrypt; print(bcrypt.hashpw(b'%s', bcrypt.gensalt()).decode())", password)
-		cmd = fmt.Sprintf("python3 -c \"%s\"", pythonScript)
+		// Pass the password through the environment rather than interpolating it
+		// into the Python source, so quotes or shell metacharacters in the password
+		// cannot break out of the string literal and inject commands.
+		env = []string{"ICT_HASH_PASSWORD=" + shell.QuoteArg(password)}
+		pythonScript := "import bcrypt, os; print(bcrypt.hashpw(os.environ['ICT_HASH_PASSWORD'].encode(), bcrypt.gensalt()).decode())"
+		cmd = fmt.Sprintf("python3 -c %s", shell.QuoteArg(pythonScript))
 	default:
 		return "", fmt.Errorf("unsupported hash algorithm: %s", hashAlgo)
 	}
 
 	log.Debugf("Hashing password with algorithm %s", hashAlgo)
-	output, err := shell.ExecCmd(cmd, true, installRoot, nil)
+	output, err := shell.ExecCmd(cmd, true, installRoot, env)
 	if err != nil {
 		// log.Errorf("Failed to hash password with algorithm %s: %v", hashAlgo, err)
 		log.Errorf("Failed to hash password with algorithm %s", hashAlgo)
@@ -2249,32 +2263,96 @@ func hashPassword(password, hashAlgo, installRoot string) (string, error) {
 	return hashedPassword, nil
 }
 
-func configUserStartupScript(installRoot string, user config.UserConfig) error {
+func configUserStartupScript(installRoot string, user config.UserConfig) (err error) {
 	log.Infof("Configuring user '%s' startup script to: %s", user.Name, user.StartupScript)
 
-	// Escape user.Name and user.StartupScript for regex safety
-	escapedUserName := regexp.QuoteMeta(user.Name)
-	escapedStartupScript := regexp.QuoteMeta(user.StartupScript)
-	startupScriptHostPath := filepath.Join(installRoot, user.StartupScript)
+	// Reject a relative/non-canonical path, or one carrying the /etc/passwd field
+	// delimiter or a control character, up front (clear error; also keeps the passwd
+	// line well-formed). This mirrors config.validateUsers; confinement itself is
+	// enforced below by resolving through the image root.
+	if !filepath.IsAbs(user.StartupScript) || filepath.Clean(user.StartupScript) != user.StartupScript ||
+		strings.ContainsRune(user.StartupScript, ':') || strings.ContainsAny(user.StartupScript, "\x00\n\r") {
+		return fmt.Errorf("invalid startup script for user %s: must be a clean absolute in-image path "+
+			"with no ':' or control characters", user.Name)
+	}
 
-	// Verify that the startup script exists in the image
-	if _, err := os.Stat(startupScriptHostPath); os.IsNotExist(err) {
-		log.Errorf("Startup script %s does not exist in image for user %s", user.StartupScript, user.Name)
+	// Open the image root ONCE and do every subsequent lookup relative to that
+	// retained directory descriptor. os.Root resolves each component with openat
+	// under the root, so neither the existence check nor the passwd write can be
+	// redirected outside installRoot — and, unlike resolving to a path string and
+	// reopening it, there is no window in which a concurrent process (e.g. one left
+	// running by a package maintainer script) can swap a component for a
+	// host-pointing symlink between the check and the write.
+	root, err := os.OpenRoot(installRoot)
+	if err != nil {
+		return fmt.Errorf("opening image root %s: %w", installRoot, err)
+	}
+	defer func() {
+		if cerr := root.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("closing image root %s: %w", installRoot, cerr)
+		}
+	}()
+
+	// os.Root names are relative to the root, so drop the leading separator.
+	if _, serr := root.Stat(strings.TrimPrefix(user.StartupScript, "/")); serr != nil {
+		log.Errorf("Startup script does not resolve to a file in image for user %s", user.Name)
 		return fmt.Errorf("startup script %s does not exist in image for user %s", user.StartupScript, user.Name)
 	}
 
-	findPattern := fmt.Sprintf(`^(%s.*):[^:]*$`, escapedUserName)
-	replacePattern := fmt.Sprintf(`\1:%s`, escapedStartupScript)
-	passwdFile := filepath.Join(installRoot, "etc", "passwd")
-
-	if err := file.ReplaceRegexInFile(findPattern, replacePattern, passwdFile); err != nil {
-		// log.Errorf("Failed to update user %s startup command: %v", user.Name, err)
-		// Log only high-level context to avoid leaking potentially sensitive details from the underlying error.
+	// Edit passwd through that same confined handle as structured text: read,
+	// replace the login-shell (7th) field of the exact account in Go, write back.
+	// The value never reaches a shell or sed, so metacharacters stay inert.
+	f, err := root.OpenFile("etc/passwd", os.O_RDWR, 0)
+	if err != nil {
+		log.Errorf("Failed to open passwd file while updating startup command for user %s", user.Name)
+		return fmt.Errorf("opening /etc/passwd under image root: %w", err)
+	}
+	defer func() {
+		if cerr := f.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("closing /etc/passwd: %w", cerr)
+		}
+	}()
+	content, err := io.ReadAll(f)
+	if err != nil {
+		return fmt.Errorf("reading /etc/passwd: %w", err)
+	}
+	updated, err := replacePasswdShell(string(content), user.Name, user.StartupScript)
+	if err != nil {
 		log.Errorf("Failed to update startup command for user %s", user.Name)
 		return fmt.Errorf("failed to update user %s startup command: %w", user.Name, err)
 	}
+	if err = f.Truncate(0); err != nil {
+		return fmt.Errorf("truncating /etc/passwd: %w", err)
+	}
+	if _, err = f.WriteAt([]byte(updated), 0); err != nil {
+		return fmt.Errorf("writing /etc/passwd: %w", err)
+	}
 	return nil
 }
+
+// replacePasswdShell returns the /etc/passwd content with the login-shell (7th)
+// field of the named user's entry set to shellPath. It matches the account name
+// exactly (not as a line prefix, as the previous sed did) and leaves every other
+// line byte-for-byte unchanged, returning an error if no entry matches so a silent
+// no-op cannot be mistaken for success.
+func replacePasswdShell(content, name, shellPath string) (string, error) {
+	lines := strings.Split(content, "\n")
+	found := false
+	for i, line := range lines {
+		fields := strings.Split(line, ":")
+		if len(fields) != 7 || fields[0] != name {
+			continue
+		}
+		fields[6] = shellPath
+		lines[i] = strings.Join(fields, ":")
+		found = true
+	}
+	if !found {
+		return "", fmt.Errorf("no /etc/passwd entry for user %q", name)
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
 func (imageOs *ImageOs) generateSBOM(installRoot string, template *config.ImageTemplate) (string, error) {
 	pkgType := imageOs.chrootEnv.GetTargetOsPkgType()
 	sBomFNm := rpmutils.GenerateSPDXFileName(template.GetImageName())

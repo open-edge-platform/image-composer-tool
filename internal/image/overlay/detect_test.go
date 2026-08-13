@@ -650,6 +650,60 @@ func TestResolveInRootDir_SymlinkStaysConfined(t *testing.T) {
 	}
 }
 
+// TestResolveInRoot_IntermediateDirSymlinkStaysConfined guards that a symlinked
+// INTERMEDIATE directory component cannot redirect resolution onto the host.
+// os.Lstat only declines to follow the final component, so a fully-joined path
+// used to let the OS follow a symlinked parent: a baseline whose /etc is a symlink
+// to an absolute host directory would make resolveInRoot read that host's passwd.
+// The confined walk must instead re-resolve /etc under the root and never escape.
+func TestResolveInRoot_IntermediateDirSymlinkStaysConfined(t *testing.T) {
+	root := t.TempDir()
+
+	// A host directory ABOVE the fake root holding a sensitive file.
+	hostEtc := t.TempDir()
+	writeFile(t, hostEtc, "passwd", "root:x:0:0:host:/root:/bin/bash\n")
+
+	// Make the baseline's /etc a symlink to that absolute host directory.
+	if err := os.Symlink(hostEtc, filepath.Join(root, "etc")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	// Resolving /etc/passwd must not reach the host file: either it errors (the
+	// confined path is absent under root) or, if it resolves, the path is under root.
+	got, err := resolveInRoot(root, "/etc/passwd")
+	if err == nil {
+		if !strings.HasPrefix(got, root) {
+			t.Fatalf("resolveInRoot escaped root via intermediate symlink: got %q, want under %q", got, root)
+		}
+		if got == filepath.Join(hostEtc, "passwd") {
+			t.Fatalf("resolveInRoot resolved to host passwd %q; confinement leaked", filepath.Join(hostEtc, "passwd"))
+		}
+	}
+}
+
+// TestResolveInRoot_IntermediateDirSymlinkWithinRootResolves confirms a legit
+// intermediate directory symlink that stays WITHIN the root is still followed —
+// the confined walk restricts escape, it does not break valid in-root symlinks.
+func TestResolveInRoot_IntermediateDirSymlinkWithinRootResolves(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "realetc"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	writeFile(t, filepath.Join(root, "realetc"), "passwd", "alice:x:1000:1000::/home/alice:/bin/bash\n")
+	// /etc -> realetc (relative symlink that stays under root).
+	if err := os.Symlink("realetc", filepath.Join(root, "etc")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	got, err := resolveInRoot(root, "/etc/passwd")
+	if err != nil {
+		t.Fatalf("resolveInRoot should follow an in-root intermediate symlink, got %v", err)
+	}
+	if want := filepath.Join(root, "realetc", "passwd"); got != want {
+		t.Fatalf("resolveInRoot = %q, want %q", got, want)
+	}
+}
+
 // newFakeRoot builds a temp directory that looks enough like a mounted Linux
 // root for detection: an os-release file and a real ELF binary (a copy of the
 // test binary itself, so its architecture matches whichever host runs the suite)
