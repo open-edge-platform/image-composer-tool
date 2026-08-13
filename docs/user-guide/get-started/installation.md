@@ -20,6 +20,7 @@ prerequisites.
   - [Image Composition Prerequisites](#image-composition-prerequisites)
     - [ukify](#ukify)
     - [mmdebstrap](#mmdebstrap)
+    - [util-linux (lsblk) and e2fsprogs (resize2fs)](#util-linux-lsblk-and-e2fsprogs-resize2fs)
   - [Next Steps](#next-steps)
 
 ---
@@ -212,6 +213,18 @@ Downloads and installs Debian packages to initialize a chroot.
   1.4.3+ manually per the
   [mmdebstrap instructions](./prerequisites.md#mmdebstrap)
 - **Alternative**: `debootstrap` can be used for Debian-based images
+
+### util-linux (lsblk) and e2fsprogs (resize2fs)
+
+Required for overlay-mode disk resize (`overlayPolicy.allowDiskResize`);
+not needed for `create`-mode builds.
+
+- **Ubuntu 24.04+**: Already ships util-linux >= 2.38 and a compatible
+  `resize2fs`
+- **Ubuntu 22.04**: The repository versions (util-linux 2.37, e2fsprogs
+  1.46.5) are too old and cannot be upgraded via `apt` — build both from
+  source per the
+  [util-linux/e2fsprogs instructions](./prerequisites.md#util-linux-lsblk-and-e2fsprogs-resize2fs)
 
 ---
 
