@@ -1028,8 +1028,9 @@ function syncBasicToAdvanced() {
   advState.template.target.imageType = state.imageType || preset.imageType || 'raw';
   advState.template.image.name = preset.imageName || 'my-edge-image';
   advState.template.packages = (preset.packages || ['cloud-init', 'rsyslog']).slice();
-  // Jump straight to Packages so repo/package actions (version chips) are visible immediately.
-  advState.currentStep = 1;
+  // Always land on the first step (Choose Image Configuration) so the wizard
+  // starts from the beginning rather than mid-flow.
+  advState.currentStep = 0;
   renderAdvSteps();
   renderAdvStepContent();
 }
