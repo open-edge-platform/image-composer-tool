@@ -11,6 +11,7 @@ A command-line tool for building custom Linux images from pre-built packages. De
 
 The diagram above illustrates the overall build flow and may show representative or planned provider/architecture
 combinations. The table below lists the OS and architecture combinations that are currently supported.
+
 ## Supported Distributions
 
 | OS | Distribution | Architecture |
