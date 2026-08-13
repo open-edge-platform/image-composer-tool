@@ -19,7 +19,7 @@ Templates are grouped by the distribution they target — the value of
 
 | Directory | Distribution | Templates | CI-built |
 |---|---|---|---|
-| [`ubuntu24/`](./ubuntu24/) | Ubuntu 24.04 | 24 | 6 |
+| [`ubuntu24/`](./ubuntu24/) | Ubuntu 24.04 | 25 | 6 |
 | [`debian13/`](./debian13/) | Debian 13 | 4 | 0 |
 | [`elxr12/`](./elxr12/) | Wind River eLxr 12 | 7 | 5 |
 | [`emt3/`](./emt3/) | Edge Microvisor Toolkit 3 | 7 | 4 |
@@ -27,7 +27,7 @@ Templates are grouped by the distribution they target — the value of
 | [`elxr13/`](./elxr13/) | Wind River eLxr 13 (26.04) | 5 | 4 |
 | [`el10/`](./el10/) | Red Hat compatible 10 | 2 | 0 |
 | [`ubuntu26/`](./ubuntu26/) | Ubuntu 26.04 | 1 | 0 |
-| _(root)_ | root-level templates | 7 | 0 |
+| _(root)_ | root-level templates | 6 | 0 |
 | | **Total** | **63** | **24** |
 
 The `_(root)_` row counts templates that live directly under `image-templates/`

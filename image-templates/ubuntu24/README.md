@@ -1,6 +1,6 @@
 # Ubuntu 24.04 templates
 
-`target.dist: ubuntu24` — 24 templates.
+`target.dist: ubuntu24` — 25 templates.
 
 | Template | Arch | Type | Purpose | CI |
 |---|---|---|---|---|
@@ -23,6 +23,7 @@
 | [`ubuntu24-x86_64-minimal-desktop-raw.yml`](./ubuntu24-x86_64-minimal-desktop-raw.yml) | x86_64 | raw | desktop | — |
 | [`ubuntu24-x86_64-minimal-raw-expand-partition.yml`](./ubuntu24-x86_64-minimal-raw-expand-partition.yml) | x86_64 | raw | partition expansion | — |
 | [`ubuntu24-x86_64-minimal-raw.yml`](./ubuntu24-x86_64-minimal-raw.yml) | x86_64 | raw | minimal | yes |
+| [`ubuntu24-x86_64-mozilla-apt-raw.yml`](./ubuntu24-x86_64-mozilla-apt-raw.yml) | x86_64 | raw | Mozilla APT regression | — |
 | [`ubuntu24-x86_64-overlay-raw.yml`](./ubuntu24-x86_64-overlay-raw.yml) <br>*overlay mode* | x86_64 | raw | overlay-mode demo | — |
 | [`ubuntu24-x86_64-robotics-hw-overlay-qcow2.yml`](./ubuntu24-x86_64-robotics-hw-overlay-qcow2.yml) <br>*overlay mode* | x86_64 | raw | robotics HW enablement (overlay base) | — |
 | [`ubuntu24-x86_64-robotics-jazzy-overlay-extends.yml`](./ubuntu24-x86_64-robotics-jazzy-overlay-extends.yml) <br>*extends `ubuntu24-x86_64-robotics-hw-overlay-qcow2.yml`* | x86_64 | raw | robotics / ROS 2 (overlay+extends) | — |
@@ -49,7 +50,7 @@ Run `image-composer-tool resolve <template> --full` to see the merged result.
 
 ## CI coverage
 
-6 of 24 templates here are built on every pull request (via `scripts/build_*.sh`). The others are schema-validated only, so build them locally before opening a PR.
+6 of 25 templates here are built on every pull request (via `scripts/build_*.sh`). The others are schema-validated only, so build them locally before opening a PR.
 
 ---
 
