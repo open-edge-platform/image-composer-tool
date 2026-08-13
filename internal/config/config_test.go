@@ -4736,6 +4736,61 @@ func TestGetAdditionalFileInfo(t *testing.T) {
 	}
 }
 
+func TestGetAdditionalFileInfoResolvesFromAncestorTemplateDir(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	nestedTemplateDir := filepath.Join(tmpDir, "image-templates", "debian13")
+	if err := os.MkdirAll(nestedTemplateDir, 0755); err != nil {
+		t.Fatalf("failed to create nested template dir: %v", err)
+	}
+
+	sharedFilePath := filepath.Join(
+		tmpDir,
+		"image-templates",
+		"additionalfiles",
+		"debian13-bb-dracut",
+		"modules.d",
+		"91hello",
+		"module-setup.sh",
+	)
+	if err := os.MkdirAll(filepath.Dir(sharedFilePath), 0755); err != nil {
+		t.Fatalf("failed to create additionalfiles dir: %v", err)
+	}
+	if err := os.WriteFile(sharedFilePath, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatalf("failed to write shared additional file: %v", err)
+	}
+
+	templatePath := filepath.Join(nestedTemplateDir, "debian13-x86_64-bb-overlay-initrd-raw.yml")
+	if err := os.WriteFile(templatePath, []byte("image: {}\n"), 0644); err != nil {
+		t.Fatalf("failed to write template file: %v", err)
+	}
+
+	template := &ImageTemplate{
+		PathList: []string{templatePath},
+		SystemConfig: SystemConfig{
+			AdditionalFiles: []AdditionalFileInfo{
+				{
+					Local: "additionalfiles/debian13-bb-dracut/modules.d/91hello/module-setup.sh",
+					Final: "/usr/lib/dracut/modules.d/91hello/module-setup.sh",
+					Stage: AdditionalFileStagePreInitramfs,
+				},
+			},
+		},
+	}
+
+	files := template.GetAdditionalFileInfo()
+	if len(files) != 1 {
+		t.Fatalf("expected 1 resolved additional file, got %d", len(files))
+	}
+	if files[0].Local != sharedFilePath {
+		t.Fatalf("resolved local path = %q, want %q", files[0].Local, sharedFilePath)
+	}
+	if files[0].Stage != AdditionalFileStagePreInitramfs {
+		t.Fatalf("resolved stage = %q, want %q", files[0].Stage, AdditionalFileStagePreInitramfs)
+	}
+}
+
 // TestWasProvided tests the WasProvided method for ImmutabilityConfig
 func TestWasProvided(t *testing.T) {
 	tests := []struct {

@@ -796,22 +796,15 @@ func (t *ImageTemplate) GetAdditionalFileInfo() []AdditionalFileInfo {
 					log.Warnf("Cannot resolve relative additional file path without template file context: %+v",
 						t.SystemConfig.AdditionalFiles[i])
 				} else {
-					var found bool
-					for _, path := range t.PathList {
-						templateDir := filepath.Dir(path)
-						candidatePath := filepath.Join(templateDir, t.SystemConfig.AdditionalFiles[i].Local)
-						if _, err := os.Stat(candidatePath); err == nil {
-							newFileInfo := AdditionalFileInfo{
-								Local: candidatePath,
-								Final: t.SystemConfig.AdditionalFiles[i].Final,
-								Stage: t.SystemConfig.AdditionalFiles[i].Stage,
-							}
-							PathUpdatedList = append(PathUpdatedList, newFileInfo)
-							found = true
-							break
+					candidatePath, found := resolveTemplateRelativePath(t.PathList, t.SystemConfig.AdditionalFiles[i].Local)
+					if found {
+						newFileInfo := AdditionalFileInfo{
+							Local: candidatePath,
+							Final: t.SystemConfig.AdditionalFiles[i].Final,
+							Stage: t.SystemConfig.AdditionalFiles[i].Stage,
 						}
-					}
-					if !found {
+						PathUpdatedList = append(PathUpdatedList, newFileInfo)
+					} else {
 						log.Warnf("Ignoring additional file entry with non-existent local path: %+v",
 							t.SystemConfig.AdditionalFiles[i])
 					}
@@ -820,6 +813,32 @@ func (t *ImageTemplate) GetAdditionalFileInfo() []AdditionalFileInfo {
 		}
 	}
 	return PathUpdatedList
+}
+
+// resolveTemplateRelativePath resolves a relative path against each template path
+// and each of its ancestor directories. This lets nested templates reference
+// shared assets from a parent template directory (for example,
+// image-templates/additionalfiles).
+func resolveTemplateRelativePath(templatePaths []string, relativePath string) (string, bool) {
+	cleanRelativePath := filepath.Clean(relativePath)
+
+	for _, templatePath := range templatePaths {
+		templateDir := filepath.Dir(templatePath)
+		for {
+			candidatePath := filepath.Join(templateDir, cleanRelativePath)
+			if _, err := os.Stat(candidatePath); err == nil {
+				return candidatePath, true
+			}
+
+			parentDir := filepath.Dir(templateDir)
+			if parentDir == templateDir {
+				break
+			}
+			templateDir = parentDir
+		}
+	}
+
+	return "", false
 }
 
 func (t *ImageTemplate) GetConfigurationInfo() []ConfigurationInfo {
