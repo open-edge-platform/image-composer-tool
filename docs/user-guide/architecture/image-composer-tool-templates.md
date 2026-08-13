@@ -370,7 +370,11 @@ RAW, or the complete SBOM vs the baseline SBOM — see
 > end-to-end. The resize shells out to `growpart` (cloud-guest-utils), `sgdisk`
 > (gdisk, GPT only), `resize2fs` (e2fsprogs) or `xfs_growfs` (xfsprogs), and
 > `losetup`/`partx` (util-linux); these must be present on the build host, and
-> the build fails early with a clear message if any is missing.
+> the build fails early with a clear message if any is missing. Resize also
+> reads partition start sectors via `lsblk -o PATH,START,TYPE`, which requires
+> **util-linux >= 2.38**; Ubuntu 22.04's stock `lsblk`/`resize2fs` are too old
+> and not upgradable via `apt` — see the
+> [util-linux/e2fsprogs build-from-source instructions](../get-started/prerequisites.md#util-linux-lsblk-and-e2fsprogs-resize2fs).
 
 ---
 
