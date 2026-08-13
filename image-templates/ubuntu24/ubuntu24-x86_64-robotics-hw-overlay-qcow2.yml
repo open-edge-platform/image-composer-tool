@@ -231,6 +231,9 @@ systemConfig:
     # ── Firmware for the GPU/NPU the stack drives ───────────────────
     - linux-firmware
 
+    # ── SSH server access ────────────────────────────────────────────
+    - openssh-server
+
   # ---------------------------------------------------------------------------
   # Hardware-side configuration. These apt pins are post-deployment upgrade
   # protection, not build-time constraints: packages are installed before
@@ -251,6 +254,9 @@ systemConfig:
 
     # Intel NPU udev rules (render group access to /dev/accel/*)
     - cmd: "printf 'SUBSYSTEM==\"accel\", KERNEL==\"accel*\", GROUP=\"render\", MODE=\"0660\"\\n' > /etc/udev/rules.d/10-intel-vpu.rules"
+
+    # Enable the ssh service
+    - cmd: "systemctl enable ssh"
 
 # -----------------------------------------------------------------------------
 # All seven repositories are declared here, in ONE layer, and inherited intact by

@@ -378,4 +378,6 @@ systemConfig:
     - cmd: "printf 'Package: bpftool hyperv-daemons intel-sdsi libcpupower1 libcpupower-dev linux-bpf-dev linux-config-6.18 linux-cpupower linux-kbuild-6.18.23-intel+260427T075939Z linux-misc-tools linux-perf rtla usbip\nPin: version *260427T075939Z*\nPin-Priority: 1001\n' > /etc/apt/preferences.d/linux-tools-pin"
     # Fix broken deps but ignore systemd-boot EFI variable error (not accessible in chroot)
     - cmd: "apt-get install -y --fix-broken -o Dpkg::Options::=\"--force-overwrite\" || true"
+    # Enable the ssh service (openssh-server is already in the base package set above)
+    - cmd: "systemctl enable ssh"
     - cmd: "dpkg --configure -a --force-configure-any || true"
