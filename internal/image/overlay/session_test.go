@@ -10,31 +10,33 @@ import (
 
 // builderSeams snapshots every Builder-stage seam so a test can restore them.
 type builderSeams struct {
-	acquire     func(*Ingestor) (*Context, error)
-	mountLayout func(*Inspector, string) (*Layout, func() error, error)
-	detach      func(*Ingestor, *Context) error
-	removeCopy  func(*Ingestor, *Context)
-	detect      func(string, config.TargetInfo) (*BaselineInfo, []BaselinePackage, error)
-	resolve     func(*config.ImageTemplate, *BaselineInfo, []BaselinePackage) (*ResolutionPlan, error)
-	preflight   func(*BaselineInfo, []BaselinePackage, *ResolutionPlan, *config.OverlayPolicy) (*PreflightReport, error)
-	install     func(*BaselineInfo, string, *ResolutionPlan, *PreflightReport) (*InstallResult, error)
-	configure   func(*config.ImageTemplate, string) error
-	regenBoot   func(*BaselineInfo, string, *InstallResult, *ResolutionPlan, bool) error
-	grubRegen   func(*config.ImageTemplate, *BaselineInfo, string) error
-	addFiles    func(*config.ImageTemplate, string, string) error
-	resize      func(*config.ImageTemplate, *Context, *Layout) error
-	sbom        func(*config.ImageTemplate, *BaselineInfo, string, *ResolutionPlan, *PreflightReport) (*overlaySBOMArtifacts, error)
-	emit        func(*config.ImageTemplate, string, string, *overlaySBOMArtifacts) (string, error)
-	inspect     func(string) error
-	convert     func(string, *config.ImageTemplate) error
+	acquire       func(*Ingestor) (*Context, error)
+	mountLayout   func(*Inspector, string) (*Layout, func() error, error)
+	detach        func(*Ingestor, *Context) error
+	removeCopy    func(*Ingestor, *Context)
+	detect        func(string, config.TargetInfo) (*BaselineInfo, []BaselinePackage, error)
+	validateUsers func(*config.ImageTemplate, string) error
+	resolve       func(*config.ImageTemplate, *BaselineInfo, []BaselinePackage) (*ResolutionPlan, error)
+	preflight     func(*BaselineInfo, []BaselinePackage, *ResolutionPlan, *config.OverlayPolicy) (*PreflightReport, error)
+	install       func(*BaselineInfo, string, *ResolutionPlan, *PreflightReport) (*InstallResult, error)
+	createUsers   func(*config.ImageTemplate, string) error
+	configure     func(*config.ImageTemplate, string) error
+	regenBoot     func(*BaselineInfo, string, *InstallResult, *ResolutionPlan, bool) error
+	grubRegen     func(*config.ImageTemplate, *BaselineInfo, string) error
+	addFiles      func(*config.ImageTemplate, string, string) error
+	resize        func(*config.ImageTemplate, *Context, *Layout) error
+	sbom          func(*config.ImageTemplate, *BaselineInfo, string, *ResolutionPlan, *PreflightReport) (*overlaySBOMArtifacts, error)
+	emit          func(*config.ImageTemplate, string, string, *overlaySBOMArtifacts) (string, error)
+	inspect       func(string) error
+	convert       func(string, *config.ImageTemplate) error
 }
 
 func saveBuilderSeams() builderSeams {
 	return builderSeams{
 		acquire: builderAcquire, mountLayout: builderMountLayout, detach: builderDetach,
 		removeCopy: builderRemoveCopy,
-		detect:     builderDetectFn, resolve: builderResolveFn, preflight: builderPreflightFn,
-		install: builderInstallFn, configure: builderConfigureFn, regenBoot: builderRegenBootFn,
+		detect:     builderDetectFn, validateUsers: builderValidateUsersFn, resolve: builderResolveFn, preflight: builderPreflightFn,
+		install: builderInstallFn, createUsers: builderCreateUsersFn, configure: builderConfigureFn, regenBoot: builderRegenBootFn,
 		grubRegen: builderGrubRegenFn, addFiles: builderAddFilesFn, resize: builderResizeFn,
 		sbom: builderSBOMFn, emit: builderEmitFn, inspect: builderInspectFn,
 		convert: builderConvertFn,
@@ -45,6 +47,7 @@ func (s builderSeams) restore() {
 	builderAcquire, builderMountLayout, builderDetach = s.acquire, s.mountLayout, s.detach
 	builderRemoveCopy = s.removeCopy
 	builderDetectFn, builderResolveFn, builderPreflightFn = s.detect, s.resolve, s.preflight
+	builderValidateUsersFn, builderCreateUsersFn = s.validateUsers, s.createUsers
 	builderInstallFn, builderConfigureFn, builderRegenBootFn, builderResizeFn = s.install, s.configure, s.regenBoot, s.resize
 	builderGrubRegenFn = s.grubRegen
 	builderAddFilesFn = s.addFiles
@@ -61,23 +64,25 @@ type builderRecorder struct {
 	detaches     int
 	removeCopies int
 
-	acquireErr   error
-	mountErr     error
-	teardownErr  error
-	detachErr    error
-	detectErr    error
-	resolveErr   error
-	preflightErr error
-	installErr   error
-	configureErr error
-	regenErr     error
-	grubRegenErr error
-	addFilesErr  error
-	resizeErr    error
-	sbomErr      error
-	emitErr      error
-	inspectErr   error
-	convertErr   error
+	acquireErr       error
+	mountErr         error
+	teardownErr      error
+	detachErr        error
+	detectErr        error
+	validateUsersErr error
+	resolveErr       error
+	preflightErr     error
+	installErr       error
+	createUsersErr   error
+	configureErr     error
+	regenErr         error
+	grubRegenErr     error
+	addFilesErr      error
+	resizeErr        error
+	sbomErr          error
+	emitErr          error
+	inspectErr       error
+	convertErr       error
 
 	report    *PreflightReport
 	installed *InstallResult
@@ -127,6 +132,10 @@ func installOverlayTestBuilder(t *testing.T, r *builderRecorder) *Builder {
 		}
 		return &BaselineInfo{OS: "ubuntu", Arch: "x86_64", PackageManager: PackageManagerAPT, PackageType: pkgTypeDeb, Version: "24.04"}, nil, nil
 	}
+	builderValidateUsersFn = func(*config.ImageTemplate, string) error {
+		r.note("validateUsers")
+		return r.validateUsersErr
+	}
 	builderResolveFn = func(*config.ImageTemplate, *BaselineInfo, []BaselinePackage) (*ResolutionPlan, error) {
 		r.note("resolve")
 		if r.resolveErr != nil {
@@ -150,6 +159,10 @@ func installOverlayTestBuilder(t *testing.T, r *builderRecorder) *Builder {
 			return r.installed, nil
 		}
 		return &InstallResult{Installed: []string{"curl"}}, nil
+	}
+	builderCreateUsersFn = func(*config.ImageTemplate, string) error {
+		r.note("users")
+		return r.createUsersErr
 	}
 	builderConfigureFn = func(*config.ImageTemplate, string) error {
 		r.note("configure")
@@ -221,7 +234,7 @@ func TestBuilder_HappyPathOrdersStagesAndCleansUp(t *testing.T) {
 	// defaults --inspect off; see TestBuilder_InspectRunsAfterEmitWhenEnabled.)
 	// The pre-initramfs additionalFiles pass runs BEFORE regenBoot; the default
 	// pass runs after grubRegen, as before.
-	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "resize", "install", "configure", "addFiles:pre-initramfs", "regenBoot", "grubRegen", "addFiles", "sbom", "emit:1.0", "convert:/out/img-1.0.raw"}
+	want := []string{"acquire", "mount", "detect", "validateUsers", "resolve", "preflight", "resize", "install", "users", "configure", "addFiles:pre-initramfs", "regenBoot", "grubRegen", "addFiles", "sbom", "emit:1.0", "convert:/out/img-1.0.raw"}
 	if !equalStrings(r.calls, want) {
 		t.Errorf("stage order = %v, want %v", r.calls, want)
 	}
@@ -236,8 +249,8 @@ func TestBuilder_HappyPathOrdersStagesAndCleansUp(t *testing.T) {
 	// A fully successful build records one timing row per pipeline stage, in
 	// execution order, so the caller can render an overlay timing table.
 	wantStages := []string{
-		"Acquire & Mount Baseline", "Inspect Baseline", "Resolve Packages", "Preflight",
-		"Resize", "Install Packages", "Configurations", "Additional Files (pre-initramfs)", "Boot Regeneration", "GRUB Regeneration", "Additional Files", "Generate SBOM", "Emit Artifact", "Convert Artifacts",
+		"Acquire & Mount Baseline", "Inspect Baseline", "Validate Users", "Resolve Packages", "Preflight",
+		"Resize", "Install Packages", "Users", "Configurations", "Additional Files (pre-initramfs)", "Boot Regeneration", "GRUB Regeneration", "Additional Files", "Generate SBOM", "Emit Artifact", "Convert Artifacts",
 	}
 	gotStages := make([]string, 0, len(b.Timings()))
 	for _, ts := range b.Timings() {
@@ -293,7 +306,7 @@ func TestBuilder_InspectRunsAfterEmitWhenEnabled(t *testing.T) {
 	// Inspection runs immediately after emit, against the emitted RAW artifact,
 	// and conversion follows it (a request that omits raw would delete the RAW,
 	// so the RAW inspection must happen first).
-	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "resize", "install", "configure", "addFiles:pre-initramfs", "regenBoot", "grubRegen", "addFiles", "sbom", "emit:1.0", "inspect:/out/img-1.0.raw", "convert:/out/img-1.0.raw"}
+	want := []string{"acquire", "mount", "detect", "validateUsers", "resolve", "preflight", "resize", "install", "users", "configure", "addFiles:pre-initramfs", "regenBoot", "grubRegen", "addFiles", "sbom", "emit:1.0", "inspect:/out/img-1.0.raw", "convert:/out/img-1.0.raw"}
 	if !equalStrings(r.calls, want) {
 		t.Errorf("stage order = %v, want %v", r.calls, want)
 	}
@@ -397,13 +410,73 @@ func TestBuilder_ConfigureFailureStopsBuildBeforeBootRegen(t *testing.T) {
 	}
 	// Configurations run after install; a failure there must halt the build before
 	// boot regeneration so a broken image is never carried into the artifact.
-	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "resize", "install", "configure"}
+	want := []string{"acquire", "mount", "detect", "validateUsers", "resolve", "preflight", "resize", "install", "users", "configure"}
 	if !equalStrings(r.calls, want) {
 		t.Errorf("stage order on configure failure = %v, want %v", r.calls, want)
 	}
 	// Postprocess with the build error still tears the mount lifecycle down once.
 	// On a clean cleanup it returns nil (the caller prioritizes the original
 	// buildErr), so assert the teardown ran, not a Postprocess error.
+	if perr := b.Postprocess(err); perr != nil {
+		t.Fatalf("Postprocess with clean cleanup should return nil, got %v", perr)
+	}
+	if r.teardowns != 1 || r.detaches != 1 {
+		t.Errorf("teardown/detach = %d/%d, want 1/1", r.teardowns, r.detaches)
+	}
+}
+
+// TestBuilder_ValidateUsersFailureStopsPreprocess confirms a requested user that
+// already exists in the baseline (surfaced by the Validate Users stage) fails the
+// build during Preprocess — before Resolve/Preflight and before any mutation
+// (resize/install) — and that the mount lifecycle is unwound.
+func TestBuilder_ValidateUsersFailureStopsPreprocess(t *testing.T) {
+	defer saveBuilderSeams().restore()
+	r := &builderRecorder{validateUsersErr: errors.New("user \"root\" already exists in the baseline image")}
+	b := installOverlayTestBuilder(t, r)
+
+	err := b.Preprocess()
+	if err == nil {
+		t.Fatal("expected user validation failure to propagate from Preprocess")
+	}
+	if !strings.Contains(err.Error(), "user validation failed") {
+		t.Errorf("expected user validation failure to surface, got %v", err)
+	}
+	// The guard runs right after Inspect Baseline and halts before Resolve/Preflight,
+	// so no package resolution or image mutation happens.
+	want := []string{"acquire", "mount", "detect", "validateUsers"}
+	if !equalStrings(r.calls, want) {
+		t.Errorf("stage order on user validation failure = %v, want %v", r.calls, want)
+	}
+	// The partial mount/loop state is unwound immediately (Preprocess defers cleanup
+	// on error), so nothing leaks.
+	if r.teardowns != 1 || r.detaches != 1 {
+		t.Errorf("teardown/detach = %d/%d, want 1/1", r.teardowns, r.detaches)
+	}
+}
+
+// TestBuilder_UsersFailureStopsBuildBeforeConfigure confirms a failure creating
+// users halts the build before the configuration commands (and everything after),
+// so a half-provisioned image is never carried into the artifact.
+func TestBuilder_UsersFailureStopsBuildBeforeConfigure(t *testing.T) {
+	defer saveBuilderSeams().restore()
+	r := &builderRecorder{createUsersErr: errors.New("useradd failed")}
+	b := installOverlayTestBuilder(t, r)
+
+	if err := b.Preprocess(); err != nil {
+		t.Fatalf("Preprocess: %v", err)
+	}
+	err := b.Build()
+	if err == nil {
+		t.Fatal("expected user creation failure to propagate from Build")
+	}
+	if !strings.Contains(err.Error(), "user creation failed") {
+		t.Errorf("expected user creation failure to surface, got %v", err)
+	}
+	// Users run after install and before configure; a failure there stops the build.
+	want := []string{"acquire", "mount", "detect", "validateUsers", "resolve", "preflight", "resize", "install", "users"}
+	if !equalStrings(r.calls, want) {
+		t.Errorf("stage order on user creation failure = %v, want %v", r.calls, want)
+	}
 	if perr := b.Postprocess(err); perr != nil {
 		t.Fatalf("Postprocess with clean cleanup should return nil, got %v", perr)
 	}
@@ -429,7 +502,7 @@ func TestBuilder_GrubRegenFailureStopsBuild(t *testing.T) {
 	}
 	// GRUB regen is the last build stage; a failure there must halt before b.built
 	// is set, so no SBOM/emit runs and no image is produced.
-	want := []string{"acquire", "mount", "detect", "resolve", "preflight", "resize", "install", "configure", "addFiles:pre-initramfs", "regenBoot", "grubRegen"}
+	want := []string{"acquire", "mount", "detect", "validateUsers", "resolve", "preflight", "resize", "install", "users", "configure", "addFiles:pre-initramfs", "regenBoot", "grubRegen"}
 	if !equalStrings(r.calls, want) {
 		t.Errorf("stage order on GRUB regen failure = %v, want %v", r.calls, want)
 	}
@@ -461,7 +534,7 @@ func TestBuilder_TimingStopsAtFailedStage(t *testing.T) {
 		got = append(got, ts.Stage)
 	}
 	want := []string{
-		"Acquire & Mount Baseline", "Inspect Baseline", "Resolve Packages", "Preflight",
+		"Acquire & Mount Baseline", "Inspect Baseline", "Validate Users", "Resolve Packages", "Preflight",
 		"Resize", "Install Packages",
 	}
 	if !equalStrings(got, want) {

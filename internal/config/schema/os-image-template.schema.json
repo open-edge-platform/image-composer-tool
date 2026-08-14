@@ -271,12 +271,12 @@
       "items": {
         "type": "object",
         "properties": {
-          "name": { "type": "string", "description": "Username for the user account" },
+          "name": { "type": "string", "description": "Username for the user account", "pattern": "^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,31}$" },
           "password": { "type": "string", "description": "Plain text password (discouraged for security)" },
           "hash_algo": { "type": "string", "description": "Hash algorithm (e.g., sha512, bcrypt)" },
           "passwordMaxAge": { "type": "integer", "description": "Maximum password age in days" },
-          "startupScript": { "type": "string", "description": "Shell/script to run on login" },
-          "groups": { "type": "array", "items": { "type": "string" }, "description": "Additional groups" },
+          "startupScript": { "type": "string", "description": "Shell/script to run on login", "pattern": "^(/[^:\\s]*)?$" },
+          "groups": { "type": "array", "items": { "type": "string", "pattern": "^(?:<[A-Za-z0-9_]+>|[a-zA-Z0-9_][a-zA-Z0-9._-]{0,31})$" }, "description": "Additional groups" },
           "sudo": { "type": "boolean", "description": "Grant sudo permissions" },
           "home": { "type": "string", "description": "Home directory path" },
           "shell": { "type": "string", "description": "Login shell" }

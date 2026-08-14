@@ -200,6 +200,7 @@ systemConfig:
     - traceroute
     - tcpdump
     - openssh-client
+    - openssh-server
     # Hardware / system introspection
     - pciutils
     - usbutils
@@ -262,3 +263,5 @@ systemConfig:
   configurations:
     # Enable the 91hello module in the composed initramfs.
     - cmd: 'mkdir -p /etc/dracut.conf.d && echo ''add_dracutmodules+=" hello "'' > /etc/dracut.conf.d/91hello.conf'
+    # Enable the ssh service (Debian's unit is named "ssh", not "sshd").
+    - cmd: "systemctl enable ssh"

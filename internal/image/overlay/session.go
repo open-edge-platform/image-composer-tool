@@ -112,21 +112,23 @@ var (
 	builderMountLayout = func(insp *Inspector, loopDev string) (*Layout, func() error, error) {
 		return insp.MountLayout(loopDev)
 	}
-	builderDetach      = func(ing *Ingestor, ctx *Context) error { return ing.detach(ctx) }
-	builderRemoveCopy  = func(ing *Ingestor, ctx *Context) { ing.removeCopy(ctx, true) }
-	builderDetectFn    = DetectBaseline
-	builderResolveFn   = ResolveOverlayPackages
-	builderPreflightFn = Preflight
-	builderInstallFn   = InstallOverlayPackages
-	builderConfigureFn = RunOverlayConfigurations
-	builderRegenBootFn = RegenerateBoot
-	builderGrubRegenFn = RegenerateGrub
-	builderAddFilesFn  = RunOverlayAdditionalFiles
-	builderResizeFn    = ResizeBaseline
-	builderSBOMFn      = generateOverlaySBOM
-	builderEmitFn      = emitOverlayArtifact
-	builderInspectFn   = inspectOverlayArtifact
-	builderConvertFn   = func(path string, template *config.ImageTemplate) error {
+	builderDetach          = func(ing *Ingestor, ctx *Context) error { return ing.detach(ctx) }
+	builderRemoveCopy      = func(ing *Ingestor, ctx *Context) { ing.removeCopy(ctx, true) }
+	builderDetectFn        = DetectBaseline
+	builderValidateUsersFn = ValidateOverlayUsers
+	builderResolveFn       = ResolveOverlayPackages
+	builderPreflightFn     = Preflight
+	builderInstallFn       = InstallOverlayPackages
+	builderCreateUsersFn   = RunOverlayUsers
+	builderConfigureFn     = RunOverlayConfigurations
+	builderRegenBootFn     = RegenerateBoot
+	builderGrubRegenFn     = RegenerateGrub
+	builderAddFilesFn      = RunOverlayAdditionalFiles
+	builderResizeFn        = ResizeBaseline
+	builderSBOMFn          = generateOverlaySBOM
+	builderEmitFn          = emitOverlayArtifact
+	builderInspectFn       = inspectOverlayArtifact
+	builderConvertFn       = func(path string, template *config.ImageTemplate) error {
 		return imageconvert.NewImageConvert().ConvertImageFile(path, template)
 	}
 )
@@ -194,6 +196,19 @@ func (b *Builder) Preprocess() (err error) {
 		b.info = info
 		baseline = base
 		b.baseline = base // Retain for stats computation
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	// Reject a requested user that already exists in the baseline BEFORE any
+	// mutation (resize, install) occurs. The baseline is mounted (from the stage
+	// above) so its /etc/passwd is readable; failing here unwinds the mount via the
+	// deferred cleanup and stops the build early, per the fail-fast guarantee.
+	if err := b.timeStage("Validate Users", func() error {
+		if verr := builderValidateUsersFn(b.template, b.layout.RootMount); verr != nil {
+			return fmt.Errorf("overlay preprocess: user validation failed: %w", verr)
+		}
 		return nil
 	}); err != nil {
 		return err
@@ -267,6 +282,20 @@ func (b *Builder) Build() error {
 		installed, ierr = builderInstallFn(b.info, b.layout.RootMount, b.plan, b.report)
 		if ierr != nil {
 			return fmt.Errorf("overlay build: package installation failed: %w", ierr)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	// Create the template's users AFTER the package install but BEFORE the
+	// configuration commands, so a configuration command can reference a
+	// newly-created account (e.g. chown, install a per-user unit). This mirrors
+	// create mode, where user provisioning precedes the arbitrary config step.
+	// Base-image conflicts were already rejected in Preprocess ("Validate Users").
+	if err := b.timeStage("Users", func() error {
+		if uerr := builderCreateUsersFn(b.template, b.layout.RootMount); uerr != nil {
+			return fmt.Errorf("overlay build: user creation failed: %w", uerr)
 		}
 		return nil
 	}); err != nil {
