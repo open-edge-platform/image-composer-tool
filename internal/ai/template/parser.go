@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/open-edge-platform/image-composer-tool/internal/ai/index"
 )
 
 const (
@@ -280,3 +282,18 @@ func (t *TemplateInfo) GetPackageSet() map[string]bool {
 	}
 	return set
 }
+
+// ID returns the template filename as its unique ID (satisfies index.Item).
+func (t *TemplateInfo) ID() string { return t.FileName }
+
+// Keywords returns the template keywords (satisfies index.Item).
+func (t *TemplateInfo) Keywords() []string { return t.GetAllKeywords() }
+
+// PackageNames returns the template package list (satisfies index.Item).
+func (t *TemplateInfo) PackageNames() []string { return t.Packages }
+
+// SearchableText returns the embedded text representation (satisfies index.Item).
+func (t *TemplateInfo) SearchableText() string { return t.BuildSearchableText() }
+
+// Ensure TemplateInfo satisfies the index.Item interface at compile time.
+var _ index.Item = (*TemplateInfo)(nil)

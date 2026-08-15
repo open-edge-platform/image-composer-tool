@@ -3,9 +3,21 @@ package index
 import (
 	"math"
 	"testing"
-
-	"github.com/open-edge-platform/image-composer-tool/internal/ai/template"
 )
+
+type fakeItem struct {
+	id             string
+	keywords       []string
+	packageNames   []string
+	searchableText string
+}
+
+func (f *fakeItem) ID() string             { return f.id }
+func (f *fakeItem) Keywords() []string     { return f.keywords }
+func (f *fakeItem) PackageNames() []string { return f.packageNames }
+func (f *fakeItem) SearchableText() string { return f.searchableText }
+
+var _ Item = (*fakeItem)(nil)
 
 func TestNewIndex(t *testing.T) {
 	idx := NewIndex()
@@ -18,8 +30,8 @@ func TestIndexAddAndSize(t *testing.T) {
 	idx := NewIndex()
 
 	doc := &Document{
-		TemplateInfo: &template.TemplateInfo{
-			FileName: "test.yml",
+		Item: &fakeItem{
+			id: "test.yml",
 		},
 		Embedding: []float32{0.1, 0.2, 0.3},
 	}
@@ -39,8 +51,8 @@ func TestIndexClear(t *testing.T) {
 	idx := NewIndex()
 
 	doc := &Document{
-		TemplateInfo: &template.TemplateInfo{FileName: "test.yml"},
-		Embedding:    []float32{0.1, 0.2, 0.3},
+		Item:      &fakeItem{id: "test.yml"},
+		Embedding: []float32{0.1, 0.2, 0.3},
 	}
 
 	idx.Add(doc)
@@ -115,14 +127,9 @@ func TestCosineSimilarity(t *testing.T) {
 }
 
 func TestCalculateKeywordScore(t *testing.T) {
-	tmpl := &template.TemplateInfo{
-		FileName:     "elxr12-x86_64-edge-raw.yml",
-		Distribution: "elxr12",
-		ImageType:    "raw",
-		Architecture: "x86_64",
-		Metadata: template.Metadata{
-			Keywords: []string{"edge", "minimal", "iot"},
-		},
+	tmpl := &fakeItem{
+		id:       "elxr12-x86_64-edge-raw.yml",
+		keywords: []string{"edge", "minimal", "iot"},
 	}
 
 	tests := []struct {
@@ -175,8 +182,8 @@ func TestCalculateKeywordScore(t *testing.T) {
 }
 
 func TestCalculatePackageScore(t *testing.T) {
-	tmpl := &template.TemplateInfo{
-		Packages: []string{"nginx", "docker-ce", "openssh-server", "curl"},
+	tmpl := &fakeItem{
+		packageNames: []string{"nginx", "docker-ce", "openssh-server", "curl"},
 	}
 
 	tests := []struct {
@@ -223,11 +230,9 @@ func TestCalculatePackageScore(t *testing.T) {
 }
 
 func TestCalculateNegationPenalty(t *testing.T) {
-	tmpl := &template.TemplateInfo{
-		Packages: []string{"docker-ce", "nginx"},
-		Metadata: template.Metadata{
-			Keywords: []string{"container", "web"},
-		},
+	tmpl := &fakeItem{
+		packageNames: []string{"docker-ce", "nginx"},
+		keywords:     []string{"container", "web"},
 	}
 
 	tests := []struct {
@@ -278,29 +283,19 @@ func TestSearch(t *testing.T) {
 
 	// Add documents with different embeddings
 	doc1 := &Document{
-		TemplateInfo: &template.TemplateInfo{
-			FileName:     "cloud-template.yml",
-			Distribution: "elxr12",
-			ImageType:    "raw",
-			Architecture: "x86_64",
-			Packages:     []string{"cloud-init", "docker-ce"},
-			Metadata: template.Metadata{
-				Keywords: []string{"cloud", "aws", "azure"},
-			},
+		Item: &fakeItem{
+			id:           "cloud-template.yml",
+			packageNames: []string{"cloud-init", "docker-ce"},
+			keywords:     []string{"cloud", "aws", "azure"},
 		},
 		Embedding: []float32{0.9, 0.1, 0.0}, // Similar to query
 	}
 
 	doc2 := &Document{
-		TemplateInfo: &template.TemplateInfo{
-			FileName:     "edge-template.yml",
-			Distribution: "emt3",
-			ImageType:    "raw",
-			Architecture: "x86_64",
-			Packages:     []string{"kernel", "systemd"},
-			Metadata: template.Metadata{
-				Keywords: []string{"edge", "iot", "minimal"},
-			},
+		Item: &fakeItem{
+			id:           "edge-template.yml",
+			packageNames: []string{"kernel", "systemd"},
+			keywords:     []string{"edge", "iot", "minimal"},
 		},
 		Embedding: []float32{0.1, 0.9, 0.0}, // Less similar to query
 	}
@@ -321,9 +316,9 @@ func TestSearch(t *testing.T) {
 	}
 
 	// First result should be doc1 (higher semantic similarity + keyword match)
-	if results[0].Document.TemplateInfo.FileName != "cloud-template.yml" {
+	if results[0].Document.Item.ID() != "cloud-template.yml" {
 		t.Errorf("expected first result to be cloud-template.yml, got %s",
-			results[0].Document.TemplateInfo.FileName)
+			results[0].Document.Item.ID())
 	}
 
 	// Score should be higher for first result
@@ -337,17 +332,17 @@ func TestSearchWithNegation(t *testing.T) {
 	idx := NewIndex()
 
 	doc1 := &Document{
-		TemplateInfo: &template.TemplateInfo{
-			FileName: "with-docker.yml",
-			Packages: []string{"docker-ce", "nginx"},
+		Item: &fakeItem{
+			id:           "with-docker.yml",
+			packageNames: []string{"docker-ce", "nginx"},
 		},
 		Embedding: []float32{0.9, 0.1, 0.0},
 	}
 
 	doc2 := &Document{
-		TemplateInfo: &template.TemplateInfo{
-			FileName: "without-docker.yml",
-			Packages: []string{"podman", "nginx"},
+		Item: &fakeItem{
+			id:           "without-docker.yml",
+			packageNames: []string{"podman", "nginx"},
 		},
 		Embedding: []float32{0.85, 0.15, 0.0},
 	}
@@ -369,9 +364,9 @@ func TestSearchWithNegation(t *testing.T) {
 	}
 
 	// First result should be doc2 (without docker) due to negation penalty
-	if results[0].Document.TemplateInfo.FileName != "without-docker.yml" {
+	if results[0].Document.Item.ID() != "without-docker.yml" {
 		t.Errorf("expected first result to be without-docker.yml, got %s",
-			results[0].Document.TemplateInfo.FileName)
+			results[0].Document.Item.ID())
 	}
 }
 
@@ -379,8 +374,8 @@ func TestSearchMinScoreThreshold(t *testing.T) {
 	idx := NewIndex()
 
 	doc := &Document{
-		TemplateInfo: &template.TemplateInfo{
-			FileName: "low-match.yml",
+		Item: &fakeItem{
+			id: "low-match.yml",
 		},
 		Embedding: []float32{0.1, 0.9, 0.0}, // Low similarity to query
 	}
@@ -405,8 +400,8 @@ func TestSearchTopK(t *testing.T) {
 	// Add 10 documents
 	for i := 0; i < 10; i++ {
 		doc := &Document{
-			TemplateInfo: &template.TemplateInfo{
-				FileName: "template.yml",
+			Item: &fakeItem{
+				id: "template.yml",
 			},
 			Embedding: []float32{float32(i) / 10, 0.5, 0.5},
 		}
@@ -430,12 +425,12 @@ func TestGetDocuments(t *testing.T) {
 	idx := NewIndex()
 
 	doc1 := &Document{
-		TemplateInfo: &template.TemplateInfo{FileName: "doc1.yml"},
-		Embedding:    []float32{0.1, 0.2},
+		Item:      &fakeItem{id: "doc1.yml"},
+		Embedding: []float32{0.1, 0.2},
 	}
 	doc2 := &Document{
-		TemplateInfo: &template.TemplateInfo{FileName: "doc2.yml"},
-		Embedding:    []float32{0.3, 0.4},
+		Item:      &fakeItem{id: "doc2.yml"},
+		Embedding: []float32{0.3, 0.4},
 	}
 
 	idx.Add(doc1)

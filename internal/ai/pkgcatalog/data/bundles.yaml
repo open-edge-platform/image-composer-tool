@@ -1,0 +1,112 @@
+bundles:
+  - id: ros2-desktop
+    name: "ROS 2 Jazzy Desktop"
+    description: "Full ROS 2 Jazzy desktop with the Intel oneAPI runtime it depends on."
+    keywords:
+      - ros2
+      - jazzy
+      - robotics
+      - desktop
+      - oneapi
+      - middleware
+    packages:
+      - ros-jazzy-desktop
+      - intel-oneapi-runtime-compilers_2025.3.3-30
+      - intel-oneapi-runtime-compilers-common_2025.3.3-30
+      - intel-oneapi-runtime-opencl_2025.3.3-30
+    repos:
+      - ros2-jazzy
+      - intel-oneapi
+
+  - id: openvino-inference
+    name: "OpenVINO Inference"
+    description: "Intel OpenVINO 2025 with ROS 2 nodes and Intel GPU Level Zero acceleration."
+    keywords:
+      - openvino
+      - ai
+      - inference
+      - model
+      - neural network
+      - gpu
+      - acceleration
+      - deep learning
+    packages:
+      - openvino_2025.3.0.19807
+      - ros-jazzy-openvino-node
+      - ros-jazzy-openvino-wrapper-lib
+      - libze1
+      - libze-intel-gpu1
+    repos:
+      - intel-openvino
+      - ros2-jazzy
+      - intel-eci
+
+  - id: realsense-camera
+    name: "Intel RealSense Depth Camera"
+    description: "Kernel driver, SDK and ROS 2 bridge for Intel RealSense depth cameras."
+    keywords:
+      - depth camera
+      - realsense
+      - stereo
+      - rgb-d
+      - camera
+      - vision
+      - 3d
+    packages:
+      - librealsense2-dkms
+      - librealsense2_2.56.5-0~realsense.17055
+      - ros-jazzy-librealsense2
+      - linux-headers-generic
+    repos:
+      - realsense
+      - ros2-jazzy
+      - ubuntu-main
+
+  - id: amr-robotics
+    name: "AMR Robotics"
+    description: "Intel Robotics SDK and collaborative SLAM from the Intel AMR repository."
+    keywords:
+      - amr
+      - robotics
+      - slam
+      - navigation
+      - autonomous
+      - mobile robot
+      - lidar
+      - mapping
+    packages:
+      - ros-jazzy-robotics-sdk
+      - ros-jazzy-collab-slam-lze
+    repos:
+      - intel-amr
+
+  - id: intel-npu
+    name: "Intel NPU"
+    description: "Intel NPU (Neural Processing Unit) Level Zero runtime and driver compiler."
+    keywords:
+      - npu
+      - neural processing unit
+      - ai acceleration
+      - level zero
+      - driver compiler
+    packages:
+      - intel-level-zero-npu
+      - intel-driver-compiler-npu
+    repos:
+      - intel-eci
+
+  - id: gazebo-sim
+    name: "Gazebo Simulation"
+    description: "Gazebo Harmonic physics simulator."
+    keywords:
+      - gazebo
+      - simulation
+      - physics
+      - simulator
+      - gz
+      - harmonic
+      - robot simulation
+    packages:
+      - gz-harmonic
+    repos:
+      - gazebo

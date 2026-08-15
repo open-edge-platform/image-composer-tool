@@ -62,7 +62,14 @@ func TestCachePutAndGet(t *testing.T) {
 	embedding := []float32{0.1, 0.2, 0.3, 0.4, 0.5}
 
 	// Put embedding
-	if err := cache.Put(contentHash, modelID, templateName, dimensions, embedding); err != nil {
+	if err := cache.Put(PutRequest{
+		ContentHash: contentHash,
+		ModelID:     modelID,
+		Source:      templateName,
+		Kind:        "template",
+		Dimensions:  dimensions,
+		Embedding:   embedding,
+	}); err != nil {
 		t.Fatalf("Put failed: %v", err)
 	}
 
@@ -106,7 +113,14 @@ func TestCacheMissForDifferentModel(t *testing.T) {
 	embedding := []float32{0.1, 0.2, 0.3}
 
 	// Put with one model
-	if err := cache.Put(contentHash, "nomic-embed-text", "test.yml", 768, embedding); err != nil {
+	if err := cache.Put(PutRequest{
+		ContentHash: contentHash,
+		ModelID:     "nomic-embed-text",
+		Source:      "test.yml",
+		Kind:        "template",
+		Dimensions:  768,
+		Embedding:   embedding,
+	}); err != nil {
 		t.Fatalf("Put failed: %v", err)
 	}
 
@@ -139,10 +153,24 @@ func TestCacheClear(t *testing.T) {
 
 	// Add some entries
 	embedding := []float32{0.1, 0.2, 0.3}
-	if err := cache.Put("hash1", "model", "t1.yml", 3, embedding); err != nil {
+	if err := cache.Put(PutRequest{
+		ContentHash: "hash1",
+		ModelID:     "model",
+		Source:      "t1.yml",
+		Kind:        "template",
+		Dimensions:  3,
+		Embedding:   embedding,
+	}); err != nil {
 		t.Fatalf("Put failed: %v", err)
 	}
-	if err := cache.Put("hash2", "model", "t2.yml", 3, embedding); err != nil {
+	if err := cache.Put(PutRequest{
+		ContentHash: "hash2",
+		ModelID:     "model",
+		Source:      "t2.yml",
+		Kind:        "template",
+		Dimensions:  3,
+		Embedding:   embedding,
+	}); err != nil {
 		t.Fatalf("Put failed: %v", err)
 	}
 
@@ -181,12 +209,26 @@ func TestCacheModelChange(t *testing.T) {
 	embedding2 := []float32{0.4, 0.5, 0.6, 0.7}
 
 	// Put with first model
-	if err := cache.Put("hash1", "model1", "t1.yml", 3, embedding1); err != nil {
+	if err := cache.Put(PutRequest{
+		ContentHash: "hash1",
+		ModelID:     "model1",
+		Source:      "t1.yml",
+		Kind:        "template",
+		Dimensions:  3,
+		Embedding:   embedding1,
+	}); err != nil {
 		t.Fatalf("Put failed: %v", err)
 	}
 
 	// Put with different model should clear cache
-	if err := cache.Put("hash2", "model2", "t2.yml", 4, embedding2); err != nil {
+	if err := cache.Put(PutRequest{
+		ContentHash: "hash2",
+		ModelID:     "model2",
+		Source:      "t2.yml",
+		Kind:        "template",
+		Dimensions:  4,
+		Embedding:   embedding2,
+	}); err != nil {
 		t.Fatalf("Put failed: %v", err)
 	}
 
@@ -217,7 +259,14 @@ func TestCachePersistence(t *testing.T) {
 	}
 
 	embedding := []float32{0.1, 0.2, 0.3, 0.4, 0.5}
-	if err := cache1.Put("persistent-hash", "model", "test.yml", 5, embedding); err != nil {
+	if err := cache1.Put(PutRequest{
+		ContentHash: "persistent-hash",
+		ModelID:     "model",
+		Source:      "test.yml",
+		Kind:        "template",
+		Dimensions:  5,
+		Embedding:   embedding,
+	}); err != nil {
 		t.Fatalf("Put failed: %v", err)
 	}
 
@@ -240,6 +289,121 @@ func TestCachePersistence(t *testing.T) {
 		if retrieved[i] != embedding[i] {
 			t.Errorf("embedding[%d] = %f, expected %f", i, retrieved[i], embedding[i])
 		}
+	}
+}
+
+func TestCachePutAndGetBundleAndPackage(t *testing.T) {
+	tmpDir := t.TempDir()
+	cache, err := NewCache(tmpDir)
+	if err != nil {
+		t.Fatalf("NewCache failed: %v", err)
+	}
+
+	bundleReq := PutRequest{
+		ContentHash: "bundlehash123456",
+		ModelID:     "nomic-embed-text",
+		Source:      "realsense-camera",
+		Kind:        "bundle",
+		Dimensions:  3,
+		Embedding:   []float32{0.5, 0.6, 0.7},
+	}
+	if err := cache.Put(bundleReq); err != nil {
+		t.Fatalf("Put bundle failed: %v", err)
+	}
+
+	pkgReq := PutRequest{
+		ContentHash: "pkghash123456789",
+		ModelID:     "nomic-embed-text",
+		Source:      "librealsense2",
+		Kind:        "package",
+		Dimensions:  3,
+		Embedding:   []float32{0.8, 0.9, 1.0},
+	}
+	if err := cache.Put(pkgReq); err != nil {
+		t.Fatalf("Put package failed: %v", err)
+	}
+
+	// Retrieve bundle
+	bundleVec, ok := cache.Get("bundlehash123456", "nomic-embed-text")
+	if !ok {
+		t.Fatal("expected bundle to be retrieved")
+	}
+	if len(bundleVec) != 3 || bundleVec[0] != 0.5 {
+		t.Errorf("unexpected bundle vec: %v", bundleVec)
+	}
+
+	// Retrieve package
+	pkgVec, ok := cache.Get("pkghash123456789", "nomic-embed-text")
+	if !ok {
+		t.Fatal("expected package to be retrieved")
+	}
+	if len(pkgVec) != 3 || pkgVec[0] != 0.8 {
+		t.Errorf("unexpected package vec: %v", pkgVec)
+	}
+}
+
+func TestCacheOldFormatMissesOnce(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Write a fake old-format index.json where the key was "template"
+	oldIndexJSON := `{
+  "model_id": "nomic-embed-text",
+  "dimensions": 3,
+  "created_at": "2026-01-01T00:00:00Z",
+  "entries": {
+    "oldhash12345678": {
+      "template": "legacy-template.yml",
+      "content_hash": "oldhash12345678",
+      "updated_at": "2026-01-01T00:00:00Z"
+    }
+  }
+}`
+	embeddingsDir := filepath.Join(tmpDir, "embeddings")
+	vectorsDir := filepath.Join(embeddingsDir, "vectors")
+	if err := os.MkdirAll(vectorsDir, 0755); err != nil {
+		t.Fatalf("failed to create vectors dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(embeddingsDir, "index.json"), []byte(oldIndexJSON), 0644); err != nil {
+		t.Fatalf("failed to write old index.json: %v", err)
+	}
+
+	// Save vector file
+	vectorPath := filepath.Join(vectorsDir, "oldhash12345678.bin")
+	if err := saveEmbedding(vectorPath, []float32{0.1, 0.2, 0.3}); err != nil {
+		t.Fatalf("failed to save vector: %v", err)
+	}
+
+	// Open cache
+	cache, err := NewCache(tmpDir)
+	if err != nil {
+		t.Fatalf("NewCache failed: %v", err)
+	}
+
+	// Calling Get should miss once without crashing (because Source is empty)
+	_, ok := cache.Get("oldhash12345678", "nomic-embed-text")
+	if ok {
+		t.Error("expected old format cache entry to miss once")
+	}
+
+	// Subsequent Put with new PutRequest updates it
+	if err := cache.Put(PutRequest{
+		ContentHash: "oldhash12345678",
+		ModelID:     "nomic-embed-text",
+		Source:      "legacy-template.yml",
+		Kind:        "template",
+		Dimensions:  3,
+		Embedding:   []float32{0.1, 0.2, 0.3},
+	}); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+
+	// Now Get should hit
+	retrieved, ok := cache.Get("oldhash12345678", "nomic-embed-text")
+	if !ok {
+		t.Fatal("expected entry to hit after Put")
+	}
+	if len(retrieved) != 3 {
+		t.Errorf("expected 3 dimensions, got %d", len(retrieved))
 	}
 }
 
