@@ -45,6 +45,7 @@ See the [Quick Start guide](./get-started/quick-start.md) to build your first im
 | [Configure Users](./configuration/configure-image-user.md)                        | Adding users to images                   |
 | [Custom Build Actions](./configuration/configure-additional-actions-for-build.md) | Commands during image compose (chroot)   |
 | [Custom Initrd Script](./configuration/configure-custom-initrd-script.md)       | Debian 13 GRUB initramfs-tools initrd hook |
+| [Bare-Metal Networking + SSH](./configuration/configure-baremetal-network-ssh.md) | DHCP + SSH for a Debian 13 overlay on bare metal |
 | [Multiple Repos](./configuration/configure-multiple-package-repositories.md)      | Using multiple package repositories      |
 
 ## Get Help
@@ -85,6 +86,7 @@ Configure Full-Disk Encryption <./configuration/configure-fde.md>
 Configure Users <./configuration/configure-image-user.md>
 Customize Image Build <./configuration/configure-additional-actions-for-build.md>
 Configure Custom Initrd Script <./configuration/configure-custom-initrd-script.md>
+Enable Bare-Metal Networking and SSH <./configuration/configure-baremetal-network-ssh.md>
 Configure Multiple Package Repositories <./configuration/configure-multiple-package-repositories.md>
 
 :::
