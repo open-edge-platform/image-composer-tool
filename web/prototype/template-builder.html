@@ -302,15 +302,24 @@ body {
 .repo-rail { border-right: 1px solid var(--border); background: #f8fafc; overflow-y: auto; max-height: 480px; }
 .repo-rail-item { display: flex; align-items: center; gap: 9px; padding: 10px 12px; cursor: pointer; border-bottom: 1px solid #eef2f7; }
 .repo-rail-item:hover { background: #eef4fb; }
-.repo-rail-item.active { background: #fff; box-shadow: inset 3px 0 0 var(--primary); }
+/* The active row is the only thing on the page that says "this is the repo
+   you're browsing" without reading the pane. margin-right:-1px paints the
+   row's own background 1px past the rail's border, erasing that sliver of the
+   divider for exactly this row's height so it visually fuses with the pane
+   its content describes; the caret reinforces the same "opens into" relationship. */
+.repo-rail-item.active { background: var(--primary-light); box-shadow: inset 4px 0 0 var(--primary); margin-right: -1px; }
 .repo-rail-item input[type="checkbox"] { accent-color: var(--primary); width: 15px; height: 15px; flex-shrink: 0; }
 .repo-rail-info { flex: 1; min-width: 0; }
 .repo-rail-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.repo-rail-item.active .repo-rail-name { color: var(--primary); font-weight: 700; }
 .repo-rail-count { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
 .repo-rail-count.has-sel { color: var(--primary); }
+.repo-rail-caret { color: var(--primary); font-size: 12px; flex-shrink: 0; visibility: hidden; }
+.repo-rail-item.active .repo-rail-caret { visibility: visible; }
 
 .repo-pane { padding: 14px 18px; overflow-y: auto; max-height: 480px; }
-.repo-pane-title { font-size: 15px; font-weight: 700; }
+.repo-pane-eyebrow { font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px; font-weight: 700; color: var(--primary); }
+.repo-pane-title { font-size: 15px; font-weight: 700; margin-top: 1px; }
 .repo-pane-url { font-size: 11px; color: var(--text-muted); margin: 2px 0 6px; word-break: break-all; }
 .pkg-subhead {
   font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
@@ -319,11 +328,16 @@ body {
 }
 .pkg-star { color: #d97706; }
 .pane-empty { color: var(--text-muted); font-size: 13px; text-align: center; padding: 48px 20px; }
+/* Tinted to match the active rail row (see .repo-rail-item.active), so the
+   color itself — not just the text — ties the pane back to the repo it's
+   showing. Sticky so the repo name stays on screen while the list scrolls. */
 .pane-toolbar {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 8px 0 4px; border-bottom: 1px solid var(--border); margin-bottom: 4px;
-  position: sticky; top: 0; background: var(--surface); z-index: 1;
+  padding: 7px 10px; border-radius: 6px; margin-bottom: 8px;
+  position: sticky; top: 0; background: var(--primary-light); z-index: 1;
 }
+.pane-toolbar-repo { font-size: 12px; font-weight: 700; color: var(--primary); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pane-toolbar-controls { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
 .frequent-toggle { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; color: var(--text); cursor: pointer; }
 .frequent-toggle input { accent-color: var(--primary); width: 15px; height: 15px; }
 .pkg-pager { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 6px; padding: 8px 8px 4px; margin-top: 6px; border-top: 1px dashed var(--border); }
@@ -1644,6 +1658,7 @@ function renderRepoRail() {
         <div class="repo-rail-name">${repo.name}</div>
         <div class="repo-rail-count ${selected ? 'has-sel' : ''}">${selected} selected</div>
       </span>
+      <span class="repo-rail-caret" aria-hidden="true">&#9656;</span>
     </div>`;
   }).join('');
 }
@@ -1669,7 +1684,8 @@ function renderRepoPane() {
   const enabled = repo.base || t.enabledRepos.includes(repo.id);
   const total = repo.total || PACKAGE_DB.filter(p => p.repo === repo.id).length;
 
-  const header = extra => `<div class="repo-pane-title">${repo.name}</div>
+  const header = extra => `<div class="repo-pane-eyebrow">Browsing</div>
+    <div class="repo-pane-title">${repo.name}</div>
     <div class="repo-pane-url">${repo.url}${repo.priority ? ` &middot; priority ${repo.priority}` : ''} &middot; ${total.toLocaleString()} packages</div>${extra || ''}`;
 
   if (!enabled) {
@@ -1737,12 +1753,17 @@ function renderRepoPane() {
 
   // "Select all" acts on the rows currently on screen — the frequently-used set
   // when the toggle is on, otherwise the page of the full catalog being shown.
+  // The repo name repeats here (it's also in the header above) because this
+  // bar is sticky and the header scrolls out of view first on a long list.
   const toolbar = `<div class="pane-toolbar">
-      <label class="frequent-toggle">
-        <input type="checkbox" ${frequentOnly ? 'checked' : ''} onchange="toggleFrequentOnly(this.checked)">
-        Show frequently used
-      </label>
-      <button class="link-btn" onclick="selectAllVisible('${repo.id}')">Select all</button>
+      <span class="pane-toolbar-repo" title="${escapeHtml(repo.name)}">${escapeHtml(repo.name)}</span>
+      <div class="pane-toolbar-controls">
+        <label class="frequent-toggle">
+          <input type="checkbox" ${frequentOnly ? 'checked' : ''} onchange="toggleFrequentOnly(this.checked)">
+          Show frequently used
+        </label>
+        <button class="link-btn" onclick="selectAllVisible('${repo.id}')">Select all</button>
+      </div>
     </div>`;
 
   return header() + toolbar + `<div class="pkg-list-scroll">${listHtml}</div>`;
