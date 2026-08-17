@@ -1,4 +1,22 @@
-# AI-searchable metadata for template discovery
+# Intel DL Streamer on EMT3.
+#
+# This is the "add features to a working image" case: the edge image already
+# carries the agent, tinker, selinux, GPU and docker package set, so this
+# template inherits it and adds only the media/AI stack, the repositories it
+# comes from, and a larger disk.
+#
+# What inheritance costs here: alongside the three repositories declared below,
+# this template also inherits the edge image's three sample repositories —
+# company-internal, dev-tools and intel-openvino — whose URLs are the literal
+# placeholder "<URL>", so `resolve --full` reports six rather than three. They are
+# inert: rpmutils skips any repository whose URL is "<URL>" before fetching, and
+# EMT3 is RPM-based so apt-source generation never runs for it at all.
+#
+# Run `image-composer-tool resolve <this file>` to see the merged result, or
+# `--full` to include the OS defaults as they apply at build time.
+
+# AI-searchable metadata for template discovery.
+# metadata is not inherited, so every template declares its own.
 metadata:
   description: "Edge Microvisor Toolkit 3 image with Intel DL Streamer for AI video analytics and deep learning inference at the edge"
   use_cases:
@@ -19,18 +37,21 @@ metadata:
     - emt3
     - microvisor
 
+# Inherit the edge image's package set and immutability defaults.
+extends: "emt3-x86_64-edge-raw.yml"
+
 image:
   name: emt3-x86_64-dlstreamer
   version: "1.0.0"
 
 target:
-  os: edge-microvisor-toolkit # Target OS name
-  dist: emt3 # Target OS distribution
-  arch: x86_64 # Target OS architecture
-  imageType: raw # Image type, valid value: [raw, iso].
+  os: edge-microvisor-toolkit # Must match the parent's target
+  dist: emt3
+  arch: x86_64
+  imageType: raw
 
-# Additional package repositories for this image
-# Sample list of additional package repositories; replace codename, url, and pkey values as needed
+# Repositories are merged by codename. These three codenames do not appear in
+# the parent, so they are appended rather than overriding anything.
 packageRepositories:
   - codename: "EdgeAI"
     url: "https://yum.repos.intel.com/edgeai/"
@@ -44,6 +65,8 @@ packageRepositories:
     url: "https://packages.microsoft.com/yumrepos/cbl-mariner-2.0-prod-extended-x86_64/"
     pkey: "https://packages.microsoft.com/azurelinux/3.0/prod/base/x86_64/repodata/repomd.xml.key" # Uncomment and replace in real config
 
+# disk is replaced as a whole block, never merged field by field. The media
+# stack needs more room than the parent's default, hence 8GiB.
 disk:
   name: Minimal_Raw # 1:1 mapping to the systemConfigs name
   artifacts:
@@ -80,75 +103,13 @@ systemConfig:
     bootType: efi # (efi or legacy)
     provider: systemd-boot # (grub for efi and legacy mode, or systemd-boot for efi mode)
 
+  # The parent enables immutability; the media stack needs a writable root.
   immutability:
-    enabled: false # default is true
+    enabled: false
 
+  # Merged additively on top of the parent's package list, and appended after
+  # it, so the media stack resolves against the repositories declared above.
   packages:
-    # ssh server
-    - openssh-server
-
-    # virtualization host
-    - qemu-kvm
-
-    # agent packages
-    - hardware-discovery-agent
-    - cluster-agent
-    - node-agent
-    - platform-observability-agent
-    - platform-telemetry-agent
-    - platform-update-agent
-    - in-band-manageability
-    - reporting-agent
-
-    # tinker tools
-    - gptfdisk
-    - cloud-init
-    - cloud-utils-growpart
-    - tpm2-tools
-    - lvm2
-    - netplan
-    - efibootmgr
-    - unzip
-    - rsyslog
-    - tpm2-initramfs-tool
-    - veritysetup
-    - python3-pyserial
-
-    # persistent mount
-    - rsync
-
-    # selinux full
-    - selinux-policy
-    - selinux-policy-devel
-    - policycoreutils-python-utils
-    - checkpolicy
-    - secilc
-    - setools-console
-
-    # intel gpu base
-    #- kernel-drivers-gpu
-    - linux-firmware-i915
-    - linux-firmware-ice
-    - intel-npu-firmware
-
-    # intel wireless
-    - linux-firmware-iwlwifi
-    - wireless-regdb
-
-    # os update
-    - os-update
-
-    # vpro amt
-    - platform-manageability-agent
-    - rpc
-    - intel-lms
-
-    # docker
-    - moby-engine
-    - docker-cli
-    - docker-compose
-
-    # dl streamer packages
     - tdnf
     - curl
     - nano
@@ -158,7 +119,7 @@ systemConfig:
     - intel-dlstreamer-2026.0.0
     - openvino-2026.0.0
 
-  # Kernel Configuration
+  # Per-field override: the parent's cmdline is kept, the GPU driver pinned.
   kernel:
     version: "6.12"
     cmdline: "console=ttyS0,115200 console=tty0 loglevel=7 i915.force_probe=*"

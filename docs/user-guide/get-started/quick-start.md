@@ -28,5 +28,5 @@ sudo apt install systemd-ukify mmdebstrap
 1. Compose an image using one of the templates:
 
 ```bash
-sudo -E ./image-composer-tool build image-templates/azl3-x86_64-edge-raw.yml
+sudo -E ./image-composer-tool build image-templates/azl3/azl3-x86_64-edge-raw.yml
 ```

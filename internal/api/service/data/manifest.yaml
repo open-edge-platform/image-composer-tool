@@ -49,7 +49,7 @@ combinations:
     platform: ptl
     os: ubuntu24
     imageType: raw
-    template: generic-handheld-os-template.yml
+    template: ubuntu24/generic-handheld-os-template.yml
 
   # Planned, no template yet — the UI grays this out (not buildable).
   - vertical: fed-aero

@@ -148,13 +148,13 @@ systemConfig:
 
   # Static file overlays reproducing customize_hooks from cloud.yaml
   additionalFiles:
-    - local: files/etc/hostname
+    - local: ../elxr-cloud-amd64/files/etc/hostname
       final: /etc/hostname
-    - local: files/etc/modules-load.d/netfilter.conf
+    - local: ../elxr-cloud-amd64/files/etc/modules-load.d/netfilter.conf
       final: /etc/modules-load.d/netfilter.conf
-    - local: files/etc/sysctl.d/disable_swappiness.conf
+    - local: ../elxr-cloud-amd64/files/etc/sysctl.d/disable_swappiness.conf
       final: /etc/sysctl.d/disable_swappiness.conf
-    - local: files/etc/sysctl.d/enable_forwarding.conf
+    - local: ../elxr-cloud-amd64/files/etc/sysctl.d/enable_forwarding.conf
       final: /etc/sysctl.d/enable_forwarding.conf
   # Kernel metadata used by builder to set cmdline and module hints
   kernel:

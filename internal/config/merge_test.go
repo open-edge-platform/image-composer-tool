@@ -934,24 +934,25 @@ func TestLoadAndMergeTemplate_OverlaySkipsOSDefault(t *testing.T) {
 // TestLoadAndMergeTemplate_OverlayRejectsFoldedUnsupportedSection verifies the
 // re-validation of the MERGED overlay template: each layer is validated in
 // isolation before merging, so a create-mode PARENT that declares a systemConfig
-// section an overlay cannot apply (e.g. users) folds into an overlay leaf without
-// either layer failing on its own. The merged result must be rejected rather than
-// silently dropping the section at build time.
+// section an overlay cannot apply (e.g. hostname) folds into an overlay leaf
+// without either layer failing on its own. The merged result must be rejected
+// rather than silently dropping the section at build time.
 func TestLoadAndMergeTemplate_OverlayRejectsFoldedUnsupportedSection(t *testing.T) {
 	dir := t.TempDir()
 
-	// Parent: a plain (create-mode) template that declares systemConfig.users.
+	// Parent: a plain (create-mode) template that declares systemConfig.hostname
+	// (an overlay-unsupported section; note users ARE supported in overlay).
 	parentPath := filepath.Join(dir, "parent.yml")
 	parent := "image:\n  name: parent\n  version: \"1.0\"\n" +
 		"target:\n  os: ubuntu\n  dist: ubuntu24\n  arch: x86_64\n  imageType: raw\n" +
-		"systemConfig:\n  name: parent\n  users:\n    - name: alice\n"
+		"systemConfig:\n  name: parent\n  hostname: myhost\n"
 	if err := os.WriteFile(parentPath, []byte(parent), 0o644); err != nil {
 		t.Fatalf("write parent: %v", err)
 	}
 
 	// Leaf: an overlay-mode template extending the parent. Neither layer fails in
-	// isolation (create-mode parent may set users; overlay leaf sets none), but the
-	// merged overlay inherits the parent's users section.
+	// isolation (create-mode parent may set hostname; overlay leaf sets none), but
+	// the merged overlay inherits the parent's hostname section.
 	leafPath := filepath.Join(dir, "leaf.yml")
 	leaf := "extends: \"parent.yml\"\n" +
 		"image:\n  name: leaf\n  version: \"1.0\"\n" +
@@ -964,9 +965,9 @@ func TestLoadAndMergeTemplate_OverlayRejectsFoldedUnsupportedSection(t *testing.
 
 	_, err := LoadAndMergeTemplate(leafPath)
 	if err == nil {
-		t.Fatal("expected the merged overlay to be rejected for the folded-in users section")
+		t.Fatal("expected the merged overlay to be rejected for the folded-in hostname section")
 	}
-	if !strings.Contains(err.Error(), "invalid") && !strings.Contains(err.Error(), "users") {
+	if !strings.Contains(err.Error(), "invalid") && !strings.Contains(err.Error(), "hostname") {
 		t.Errorf("error should name the merged-overlay validation failure, got %v", err)
 	}
 }

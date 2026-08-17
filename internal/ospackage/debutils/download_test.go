@@ -381,9 +381,8 @@ func TestBuildRepoConfigs(t *testing.T) {
 					Component: "", // Should default to "main"
 				},
 			},
-			arch:          "amd64",
-			expectError:   true, // Will fail because GetPackagesNames is not mocked
-			errorContains: "fail connecting to repository",
+			arch:        "amd64",
+			expectError: true, // Will fail because GetPackagesNames is not mocked
 		},
 		{
 			name: "single repository with specified component",
@@ -396,9 +395,8 @@ func TestBuildRepoConfigs(t *testing.T) {
 					Component: "contrib",
 				},
 			},
-			arch:          "amd64",
-			expectError:   true, // Will fail because GetPackagesNames is not mocked
-			errorContains: "fail connecting to repository",
+			arch:        "amd64",
+			expectError: true, // Will fail because GetPackagesNames is not mocked
 		},
 		{
 			name: "multiple components",
@@ -411,9 +409,8 @@ func TestBuildRepoConfigs(t *testing.T) {
 					Component: "main contrib non-free",
 				},
 			},
-			arch:          "amd64",
-			expectError:   true, // Will fail because GetPackagesNames is not mocked
-			errorContains: "fail connecting to repository",
+			arch:        "amd64",
+			expectError: true, // Will fail because GetPackagesNames is not mocked
 		},
 	}
 
@@ -1940,6 +1937,144 @@ func TestBuildDebPackageInfosFromCache_RecoversVersion(t *testing.T) {
 	}
 	if p := byName["weirdname"]; p.Version != "" {
 		t.Errorf("weirdname version = %q, want empty", p.Version)
+	}
+}
+
+// TestCheckFileExists_HeadRejectedFallsBackToGet covers CDN-backed APT mirrors
+// that answer HEAD with a client error but serve the object over GET. Believing
+// the HEAD made ICT report a working repository as unreachable.
+func TestCheckFileExists_HeadRejectedFallsBackToGet(t *testing.T) {
+	for _, headStatus := range []int{
+		http.StatusBadRequest,
+		http.StatusForbidden,
+		http.StatusMethodNotAllowed,
+		http.StatusNotAcceptable,
+		http.StatusNotImplemented,
+	} {
+		t.Run(http.StatusText(headStatus), func(t *testing.T) {
+			resetURLExistenceCacheForTest(t)
+
+			var sawRangedGet bool
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodHead {
+					w.WriteHeader(headStatus)
+					return
+				}
+				if r.Header.Get("Range") != "" {
+					sawRangedGet = true
+				}
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte("Package: firefox\n"))
+			}))
+			defer server.Close()
+
+			exists, err := checkFileExists(server.URL + "/dists/mozilla/main/binary-amd64/Packages")
+			if err != nil {
+				t.Fatalf("checkFileExists returned error: %v", err)
+			}
+			if !exists {
+				t.Errorf("expected file to be found via GET fallback after HEAD %d", headStatus)
+			}
+			if !sawRangedGet {
+				t.Errorf("expected the GET fallback to request only the first byte")
+			}
+		})
+	}
+}
+
+// TestCheckFileExists_NotFoundDoesNotRetry keeps the fallback narrow: a 404 is an
+// unambiguous answer, so re-probing it would double requests across the
+// arch/component fan-out for no benefit.
+func TestCheckFileExists_NotFoundDoesNotRetry(t *testing.T) {
+	resetURLExistenceCacheForTest(t)
+
+	var gets int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			gets++
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	exists, err := checkFileExists(server.URL + "/missing")
+	if err != nil {
+		t.Fatalf("checkFileExists returned error: %v", err)
+	}
+	if exists {
+		t.Errorf("expected 404 to report absence")
+	}
+	if gets != 0 {
+		t.Errorf("expected no GET retry for a 404, got %d", gets)
+	}
+}
+
+// TestCheckFileExists_PartialContentCountsAsPresent covers servers that honour the
+// Range header on the fallback and answer 206 rather than 200.
+func TestCheckFileExists_PartialContentCountsAsPresent(t *testing.T) {
+	resetURLExistenceCacheForTest(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Range", "bytes 0-0/110695")
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write([]byte("P"))
+	}))
+	defer server.Close()
+
+	exists, err := checkFileExists(server.URL + "/Packages")
+	if err != nil {
+		t.Fatalf("checkFileExists returned error: %v", err)
+	}
+	if !exists {
+		t.Errorf("expected a 206 response to count as present")
+	}
+}
+
+// TestGetPackagesNames_FallsBackToUncompressedPackages covers a repository that
+// publishes only a plain Packages index, as packages.mozilla.org does.
+func TestGetPackagesNames_FallsBackToUncompressedPackages(t *testing.T) {
+	resetURLExistenceCacheForTest(t)
+
+	const wantPath = "/dists/mozilla/main/binary-amd64/Packages"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == wantPath {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	got, err := GetPackagesNames(server.URL, "mozilla", "amd64", "main")
+	if err != nil {
+		t.Fatalf("GetPackagesNames returned error: %v", err)
+	}
+	if got != server.URL+wantPath {
+		t.Errorf("GetPackagesNames = %q, want %q", got, server.URL+wantPath)
+	}
+}
+
+// TestGetPackagesNames_PrefersCompressedIndex guards the ordering: the plain
+// Packages file is a last resort, not a replacement for Packages.gz.
+func TestGetPackagesNames_PrefersCompressedIndex(t *testing.T) {
+	resetURLExistenceCacheForTest(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	got, err := GetPackagesNames(server.URL, "noble", "amd64", "main")
+	if err != nil {
+		t.Fatalf("GetPackagesNames returned error: %v", err)
+	}
+	want := server.URL + "/dists/noble/main/binary-amd64/Packages.gz"
+	if got != want {
+		t.Errorf("GetPackagesNames = %q, want %q", got, want)
 	}
 }
 

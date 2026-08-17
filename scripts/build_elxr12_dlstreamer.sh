@@ -165,7 +165,7 @@ build_elxr12_dlstreamer_image() {
   echo "Current working directory: $(pwd)"
   
   set +e
-  output=$(sudo -S ./image-composer-tool build image-templates/elxr12-x86_64-dlstreamer.yml 2>&1)
+  output=$(sudo -S ./image-composer-tool build image-templates/elxr12/elxr12-x86_64-dlstreamer.yml 2>&1)
   build_exit_code=$?
   set -e
   

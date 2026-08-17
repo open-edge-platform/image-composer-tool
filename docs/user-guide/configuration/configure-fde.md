@@ -77,7 +77,7 @@ systemConfig:
     - cryptsetup-bin
 ```
 
-See [`image-templates/ubuntu24-x86_64-fde.yml`](../../../image-templates/ubuntu24-x86_64-fde.yml)
+See [`image-templates/ubuntu24/ubuntu24-x86_64-fde-raw.yml`](../../../image-templates/ubuntu24/ubuntu24-x86_64-fde-raw.yml)
 for a complete working example.
 
 ## Example: FDE with Immutability (dm-verity)
@@ -216,4 +216,4 @@ In `manual` mode, expect one passphrase prompt per encrypted volume.
 - [Image Templates](../architecture/image-composer-tool-templates.md)
 - [Understanding the OS Image Build Process](../architecture/image-composer-tool-build-process.md)
 - [Configure Secure Boot](configure-secure-boot.md)
-- Sample template: [`image-templates/ubuntu24-x86_64-fde.yml`](../../../image-templates/ubuntu24-x86_64-fde.yml)
+- Sample template: [`image-templates/ubuntu24/ubuntu24-x86_64-fde-raw.yml`](../../../image-templates/ubuntu24/ubuntu24-x86_64-fde-raw.yml)

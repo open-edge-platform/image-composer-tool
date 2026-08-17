@@ -45,8 +45,21 @@ body {
   box-shadow: 0 2px 8px rgba(0,40,90,0.15);
 }
 
+.topnav-mark { height: 32px; width: 32px; margin-right: 16px; flex: none; }
 .topnav-logo { font-weight: 700; font-size: 18px; color: #ffffff; margin-right: 32px; }
 .topnav-tabs { display: flex; gap: 4px; }
+
+/* Compose status dot (BuildIndicator equivalent). */
+.compose-dot {
+  border: none; background: none; cursor: pointer; padding: 6px;
+  border-radius: 6px; display: flex; align-items: center;
+}
+.compose-dot:hover { background: rgba(255,255,255,0.1); }
+.compose-dot > span { width: 12px; height: 12px; border-radius: 50%; display: block; }
+.compose-dot.running > span { background: #facc15; animation: dotPing 1.4s cubic-bezier(0,0,0.2,1) infinite; }
+.compose-dot.success > span { background: #4ade80; }
+.compose-dot.failed  > span { background: #ef4444; }
+@keyframes dotPing { 0% { box-shadow: 0 0 0 0 rgba(250,204,21,0.7); } 70%,100% { box-shadow: 0 0 0 8px rgba(250,204,21,0); } }
 
 .topnav-tab {
   padding: 8px 20px;
@@ -91,13 +104,28 @@ body {
 .view { display: none; }
 .view.active { display: block; }
 
-.page-container { max-width: 960px; margin: 0 auto; padding: 32px 24px; }
+/* Matches the React page's `mx-auto max-w-screen-2xl px-10 py-8`. */
+.page-container { max-width: 1536px; margin: 0 auto; padding: 32px 40px; }
 .page-title { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
 .page-desc { font-size: 14px; color: var(--text-muted); margin-bottom: 28px; }
 
 .form-group { margin-bottom: 24px; }
 .form-label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: var(--text); }
 .form-hint { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+
+/* Basic tab: selectors beside the configuration summary. */
+.basic-row { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
+.basic-form { flex: 1 1 380px; max-width: 520px; }
+.basic-form .form-group:last-child { margin-bottom: 0; }
+.basic-summary { flex: 1 1 320px; }
+.summary-card { background: #f8fafc; border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
+.summary-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; margin-bottom: 8px; }
+.summary-table { width: 100%; font-size: 12px; border-collapse: collapse; }
+.summary-table td { padding: 3px 0; vertical-align: top; }
+.summary-table td:first-child { font-weight: 600; color: var(--text-muted); width: 96px; padding-right: 12px; }
+
+.form-select:disabled, .form-input:disabled { background: #f1f5f9; color: #94a3b8; cursor: not-allowed; }
+.form-select option:disabled { color: #94a3b8; }
 
 .form-select {
   width: 100%;
@@ -233,6 +261,122 @@ body {
 .checkbox-card-header input[type="checkbox"] { accent-color: var(--primary); width: 16px; height: 16px; }
 .checkbox-card-title { font-weight: 600; font-size: 13px; }
 .checkbox-card-packages { font-size: 12px; color: var(--text-muted); margin-top: 3px; margin-left: 26px; }
+
+/* ── AI package assist (describe-the-image → grounded proposals) ── */
+.ai-card {
+  border: 1px solid #bcdcf3; border-radius: 10px; overflow: hidden;
+  background: linear-gradient(180deg, #f2f9ff 0%, #ffffff 60%);
+}
+.ai-head { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px 6px; }
+.ai-spark {
+  width: 32px; height: 32px; border-radius: 8px; flex-shrink: 0; display: flex;
+  align-items: center; justify-content: center; font-size: 16px; color: #fff;
+  background: linear-gradient(135deg, #0071C5, #00285A);
+}
+.ai-title { font-size: 14px; font-weight: 700; }
+.ai-sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; line-height: 1.45; }
+.ai-body { padding: 4px 16px 14px; }
+.ai-input {
+  width: 100%; min-height: 60px; resize: vertical; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: 8px; font-size: 13px;
+  font-family: inherit; color: var(--text); background: #fff; line-height: 1.5;
+}
+.ai-input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(0,113,197,0.12); }
+.ai-input::placeholder { color: #90a9c0; }
+.ai-controls {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; margin-top: 9px; flex-wrap: wrap;
+}
+.ai-examples { display: flex; flex-wrap: wrap; gap: 6px; }
+.ai-example {
+  font-size: 11.5px; color: var(--primary); background: #fff; border: 1px solid #cfe4f6;
+  border-radius: 999px; padding: 4px 10px; cursor: pointer; transition: all .15s;
+}
+.ai-example:hover { background: var(--primary-light); border-color: var(--primary); }
+
+/* Grounding trace: the three real backend stages, streamed over SSE */
+.ai-thinking { padding: 6px 2px 2px; display: none; }
+.ai-thinking.show { display: block; }
+.think-row {
+  display: flex; align-items: center; gap: 9px; font-size: 12.5px;
+  color: var(--text-muted); padding: 3px 0;
+}
+.think-row .tick { color: var(--success); font-weight: 700; }
+.think-row .spin {
+  width: 12px; height: 12px; border-radius: 50%; border: 2px solid #cfe0ef;
+  border-top-color: var(--primary); animation: ai-spin .7s linear infinite;
+}
+.think-row .detail { color: var(--text); }
+@keyframes ai-spin { to { transform: rotate(360deg); } }
+
+/* Proposals */
+.ai-results { display: none; margin-top: 12px; }
+.ai-results.show { display: block; }
+.ai-results-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; margin-bottom: 10px; flex-wrap: wrap;
+}
+.ai-summary { font-size: 12.5px; }
+.ai-summary b { color: var(--primary-hover); }
+.ai-legend {
+  display: flex; flex-wrap: wrap; gap: 4px 14px; margin-bottom: 10px;
+  font-size: 10.5px; color: var(--text-muted);
+}
+.ai-legend span { display: flex; align-items: center; gap: 5px; }
+.ai-legend .sw { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
+.sw-verified   { background: var(--success); }
+.sw-resolved   { background: var(--warning); }
+.sw-unverified { background: #94a3b8; }
+.sw-missing    { background: var(--error); }
+.prop-group + .prop-group { margin-top: 13px; }
+.prop-group-label {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: .5px;
+  font-weight: 700; color: var(--text-muted); margin-bottom: 6px;
+}
+.prop {
+  border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+  margin-bottom: 7px; background: #fff; display: flex; gap: 12px; align-items: flex-start;
+}
+.prop.verified   { border-left: 3px solid var(--success); }
+.prop.resolved   { border-left: 3px solid var(--warning); background: var(--warning-light); }
+.prop.unverified { border-left: 3px solid #94a3b8; background: #f8fafc; }
+.prop.missing    { border-left: 3px solid var(--error); background: var(--error-light); }
+.prop-main { flex: 1; min-width: 0; }
+.prop-name-row { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.prop-name { font-size: 13px; font-weight: 700; }
+.prop-reason { font-size: 11.5px; color: var(--text-muted); margin-top: 3px; line-height: 1.45; }
+.prop-pkglist {
+  font-size: 11px; color: var(--text-muted); margin-top: 5px;
+  font-family: ui-monospace, monospace; line-height: 1.5;
+}
+.prop-pkglist .pkg-bad { color: var(--error); text-decoration: line-through; }
+.prop-badge { font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 4px; white-space: nowrap; }
+.badge-repo       { color: var(--primary); background: #eaf4fc; }
+.badge-verified   { color: #166534; background: #dcfce7; }
+.badge-resolved   { color: #92400e; background: #fef3c7; }
+.badge-unverified { color: #334155; background: #e2e8f0; }
+.badge-missing    { color: #991b1b; background: #fee2e2; }
+.prop-add {
+  flex-shrink: 0; border: 1px solid var(--primary); color: var(--primary); background: #fff;
+  border-radius: 6px; padding: 5px 11px; font-size: 11.5px; font-weight: 600;
+  cursor: pointer; transition: all .12s; align-self: center;
+}
+.prop-add:hover { background: var(--primary); color: #fff; }
+.prop-add.added {
+  border-color: var(--success); color: var(--success);
+  background: var(--success-light); cursor: default;
+}
+.prop-add.suggest { border-color: var(--warning); color: var(--warning); }
+.prop-add.suggest:hover { background: var(--warning); color: #fff; }
+.ai-foot {
+  display: flex; gap: 10px; align-items: center; margin-top: 12px;
+  padding-top: 12px; border-top: 1px solid #e5eef7; flex-wrap: wrap;
+}
+.ai-foot .note { font-size: 11px; color: var(--text-muted); flex: 1; min-width: 180px; }
+.ai-degraded {
+  font-size: 11.5px; color: #92400e; background: var(--warning-light);
+  border: 1px solid #fde68a; border-radius: 6px; padding: 7px 10px; margin-bottom: 10px;
+}
 
 /* ── Use-Case Bundles (curated, cross-repo, all-or-none) ── */
 .bundles-header { display: flex; align-items: center; justify-content: space-between; cursor: pointer; user-select: none; }
@@ -654,11 +798,23 @@ body {
 
 <!-- ═══ TOP NAV ═══ -->
 <nav class="topnav">
+  <!-- Inlined web/public/intel-logo.svg so the prototype stays a single file. -->
+  <svg class="topnav-mark" viewBox="0 0 72 72" aria-label="Intel" role="img">
+    <path d="M0,0v72h72V0H0Z"/>
+    <rect fill="#00c7fd" x="11.9" y="24.72" width="3.79" height="3.79"/>
+    <path fill="#fff" d="M15.59,44.45v-13.64h-3.59v13.64h3.59ZM39.41,44.59v-3.34c-.53,0-.97-.03-1.3-.08-.37-.06-.65-.18-.84-.37-.19-.19-.32-.46-.37-.82-.06-.34-.08-.78-.08-1.32v-4.77h2.6v-3.07h-2.6v-5.31h-3.59v13.18c0,1.11.1,2.06.29,2.81.19.75.51,1.35.96,1.81.45.46,1.04.79,1.75.98.72.2,1.65.3,2.74.3h.45ZM60,44.45v-20h-3.59v20h3.59ZM29.75,32.15c-1-1.07-2.4-1.62-4.18-1.62-.86,0-1.65.18-2.36.52-.71.35-1.31.84-1.79,1.46l-.2.25v-.23s0-1.73,0-1.73h-3.54v13.64h3.57v-6.76c0-.08,0-.17,0-.25.04-1.27.36-2.23.95-2.83.63-.64,1.4-.97,2.28-.97,1.04,0,1.83.32,2.35.94.51.61.78,1.49.78,2.61h0s0,.03,0,.03c0,0,0,0,0,0h0v7.21h3.63v-7.74c0-1.94-.51-3.48-1.5-4.55ZM54.54,37.6c0-.98-.17-1.91-.52-2.76-.34-.85-.83-1.61-1.45-2.25-.61-.64-1.36-1.15-2.22-1.51-.86-.36-1.82-.55-2.85-.55-.98,0-1.91.19-2.77.56-.86.37-1.62.88-2.25,1.52-.63.63-1.14,1.39-1.52,2.25-.37.86-.56,1.79-.56,2.77s.18,1.91.53,2.77c.35.86.85,1.62,1.47,2.25.62.63,1.39,1.14,2.28,1.51.89.37,1.87.56,2.92.56,3.04,0,4.94-1.38,6.07-2.68l-2.59-1.97c-.55.65-1.84,1.52-3.45,1.52-1.01,0-1.85-.23-2.48-.7-.63-.46-1.07-1.1-1.3-1.89l-.04-.13h10.72v-1.28ZM43.85,36.35c0-1,1.15-2.74,3.62-2.74,2.47,0,3.62,1.74,3.62,2.74h-7.24Z"/>
+  </svg>
   <div class="topnav-logo">Image Composer Tool</div>
   <div class="topnav-tabs">
     <button class="topnav-tab active" data-view="basic">Basic</button>
     <button class="topnav-tab" data-view="advanced">Advanced</button>
     <button class="topnav-tab" data-view="builds">Compose Image</button>
+  </div>
+  <!-- Compose status indicator, mirroring BuildIndicator in web/src/App.tsx:
+       hidden while idle, pulsing amber while running, solid once finished. -->
+  <div class="topnav-actions">
+    <button class="compose-dot running" id="compose-indicator" title="Compose in progress"
+            aria-label="Compose in progress" onclick="switchView('builds')"><span></span></button>
   </div>
 </nav>
 
@@ -668,63 +824,24 @@ body {
 <div class="view active" id="view-basic">
   <div class="page-container">
     <h1 class="page-title">Choose Image Configuration</h1>
-    <p class="page-desc">Select a targeted vertical, SKU, and platform. Pre-configured defaults will be applied based on your selection.</p>
+    <p class="page-desc">Select a targeted vertical, SKU, and platform. Pre-configured defaults are applied based on your selection.</p>
 
-    <div class="step-panel">
-      <div class="form-group">
-        <label class="form-label">Targeted Vertical</label>
-        <select class="form-select" id="select-vertical" onchange="onVerticalChange()">
-          <option value="generic">Generic</option>
-          <optgroup label="Verticals">
-            <option value="robotics">Robotics</option>
-            <option value="physical-ai">Physical AI</option>
-            <option value="agentic-ai">Agentic AI</option>
-            <option value="health">Health</option>
-            <option value="fed-aero">Fed Aero</option>
-            <option value="industrial">Industrial IoT</option>
-            <option value="retail">Retail Edge</option>
-          </optgroup>
-        </select>
-        <p class="form-hint">Verticals come with pre-configured defaults optimized for the use case.</p>
+    <!-- Selectors on the left, configuration summary on the right. Both are
+         rendered by renderBasic() from the manifest (see MANIFEST). -->
+    <div class="basic-row">
+      <div class="step-panel basic-form">
+        <div id="basic-selectors"></div>
+        <!-- Image Type (raw/iso) is auto-selected from the manifest for the
+             chosen combination and not shown in Basic mode. -->
       </div>
-
-      <div class="form-group">
-        <label class="form-label">SKU</label>
-        <select class="form-select" id="select-sku" onchange="onSelectionChange()">
-        </select>
-      </div>
-
-      <div class="form-group">
-        <label class="form-label">Platform</label>
-        <select class="form-select" id="select-platform" onchange="onSelectionChange()">
-          <option value="">-- Select Platform --</option>
-          <option value="ptl">PTL (Panther Lake)</option>
-          <option value="wcl">WCL (Wildcat Lake)</option>
-          <option value="arl">ARL (Arrow Lake)</option>
-          <option value="nvl">NVL (Nova Lake)</option>
-        </select>
-      </div>
-
-      <div class="form-group" id="os-selection">
-        <label class="form-label">Operating System</label>
-        <select class="form-select" id="select-os" onchange="onSelectionChange()">
-          <!-- Options populated by onVerticalChange() from the vertical's supportedOs list -->
-        </select>
-      </div>
-
-      <!-- Review Image Configuration toggle -->
-      <div class="form-group" id="view-content-section" style="margin-bottom:0;">
-        <label style="font-size:13px;display:flex;align-items:center;gap:8px;cursor:pointer;">
-          <input type="checkbox" id="view-image-content" onchange="toggleImageContent()"> Review Image Configuration
-        </label>
-        <div id="image-content-details" style="display:none;"></div>
-      </div>
+      <div class="basic-summary" id="basic-summary" style="display:none;"></div>
     </div>
 
     <!-- Actions (always visible) -->
-    <div style="margin-top: 24px; display:flex; gap:12px;">
-      <button class="btn btn-lg btn-success" onclick="switchView('builds')">Compose Image</button>
+    <div style="margin-top: 24px; display:flex; gap:12px; align-items:center;">
+      <button class="btn btn-lg btn-primary" id="basic-compose" onclick="switchView('builds')">Compose Image</button>
       <button class="btn btn-lg" onclick="switchView('advanced')">Edit in Advanced</button>
+      <span class="form-hint" id="basic-compose-hint" style="margin-top:0;">Complete all selections to compose.</span>
     </div>
   </div>
 </div>
@@ -750,18 +867,18 @@ body {
     <h1 class="page-title" style="margin-bottom:20px;">Compose Image</h1>
     <div class="build-active">
       <div class="build-header">
-        <div class="build-title">&#128296; ubuntu24-robotics-amr v1.0.0</div>
+        <div class="build-title">&#128296; robotics-jazzy-ubuntu24 v24.04</div>
         <span id="build-result" style="font-weight:600;"></span>
       </div>
       <div style="margin-top:16px;">
         <div style="font-size:14px;font-weight:600;margin-bottom:8px;">Compose Status <span id="build-status-text" class="build-status"></span></div>
         <div class="build-logs" id="build-logs">
           <div class="log-line"><span class="log-time">[14:32:01]</span> <span class="log-info">Resolving package dependencies...</span></div>
-          <div class="log-line"><span class="log-time">[14:32:03]</span> Downloading ros-jazzy-base (120 MB)</div>
-          <div class="log-line"><span class="log-time">[14:32:15]</span> Downloading docker-ce-24.0.7 (45 MB)</div>
-          <div class="log-line"><span class="log-time">[14:32:22]</span> <span class="log-info">Installing ros-jazzy-base...</span></div>
-          <div class="log-line"><span class="log-time">[14:32:30]</span> <span class="log-info">Installing docker-ce...</span></div>
-          <div class="log-line"><span class="log-time">[14:32:35]</span> <span class="log-success">Installing cloud-init... done</span></div>
+          <div class="log-line"><span class="log-time">[14:32:03]</span> Downloading ros-jazzy-desktop (120 MB)</div>
+          <div class="log-line"><span class="log-time">[14:32:15]</span> Downloading librealsense2-dkms (45 MB)</div>
+          <div class="log-line"><span class="log-time">[14:32:22]</span> <span class="log-info">Installing ros-jazzy-desktop...</span></div>
+          <div class="log-line"><span class="log-time">[14:32:30]</span> <span class="log-info">Installing openvino_2025.3.0.19807...</span></div>
+          <div class="log-line"><span class="log-time">[14:32:35]</span> <span class="log-success">Installing libze-intel-gpu1... done</span></div>
         </div>
         <div style="margin-top:8px; display:flex; gap:8px;">
           <button class="btn btn-sm" onclick="copyBuildLogs()">Copy Logs</button>
@@ -774,8 +891,8 @@ body {
           <table style="width:100%;font-size:13px;border-collapse:collapse;">
             <thead><tr style="background:var(--bg);"><th style="padding:8px 12px;text-align:left;">Name</th><th style="padding:8px 12px;text-align:left;">Type</th><th style="padding:8px 12px;text-align:right;">Path</th></tr></thead>
             <tbody id="artifacts-table">
-              <tr><td style="padding:8px 12px;">ubuntu24-robotics-amr.raw.gz</td><td style="padding:8px 12px;">Image</td><td style="padding:8px 12px;text-align:right;"><button class="btn btn-sm" onclick="copyArtifactLink('/output/ubuntu24-robotics-amr.raw.gz', this)" title="Copy path">&#128203;</button></td></tr>
-              <tr><td style="padding:8px 12px;">ubuntu24-robotics-amr.sbom.json</td><td style="padding:8px 12px;">SBOM</td><td style="padding:8px 12px;text-align:right;"><button class="btn btn-sm" onclick="copyArtifactLink('/output/ubuntu24-robotics-amr.sbom.json', this)" title="Copy path">&#128203;</button></td></tr>
+              <tr><td style="padding:8px 12px;">robotics-jazzy-ubuntu24.iso</td><td style="padding:8px 12px;">Image</td><td style="padding:8px 12px;text-align:right;"><button class="btn btn-sm" onclick="copyArtifactLink('/output/robotics-jazzy-ubuntu24.iso', this)" title="Copy path">&#128203;</button></td></tr>
+              <tr><td style="padding:8px 12px;">robotics-jazzy-ubuntu24.sbom.json</td><td style="padding:8px 12px;">SBOM</td><td style="padding:8px 12px;text-align:right;"><button class="btn btn-sm" onclick="copyArtifactLink('/output/robotics-jazzy-ubuntu24.sbom.json', this)" title="Copy path">&#128203;</button></td></tr>
             </tbody>
           </table>
         </div>
@@ -789,88 +906,85 @@ body {
 // STATE
 // ═══════════════════════════════════════════════════════════════
 
+// Basic-tab selection. Mirrors the shipped `Selection` interface in
+// web/src/store.ts exactly: same six fields, same cascade order. Everything
+// starts empty: the real UI has no default vertical, it auto-fills from the
+// manifest the moment you pick one.
 const state = {
-  vertical: 'generic',
+  vertical: '',
   sku: '',
   platform: '',
-  os: 'ubuntu24',
-  imageType: 'raw',
-  unattended: false
+  os: '',
+  kernel: '',
+  imageType: ''
 };
 
-const VERTICAL_SKUS = {
-  'generic': [
-    { id: 'non-realtime', label: 'Non-Realtime' },
-    { id: 'realtime', label: 'Realtime' }
+// ── MANIFEST ──────────────────────────────────────────────────────────────
+// A verbatim transcription of internal/api/service/data/manifest.yaml, which
+// is what GET /api/v1/manifest returns. The Basic tab derives every dropdown
+// from `combinations`; `verticals`/`skus`/`platforms`/`targets` only supply
+// display labels. A combination with an empty `template` is planned-but-not-
+// ready: it is still listed (so the supported matrix is exhaustive) but grayed
+// out and not composable.
+const MANIFEST = {
+  combinations: [
+    { vertical: 'retail',   sku: 'desktop-virtualization',      platform: 'arl', os: 'debian13',       imageType: 'iso', template: 'debian13-x86_64-desktop-virtualization-iso.yml' },
+    { vertical: 'robotics', sku: 'robotics-jazzy-ubuntu24',     platform: 'wcl', os: 'ubuntu24',       imageType: 'iso', template: 'ubuntu24-x86_64-robotics-jazzy-iso.yml' },
+    { vertical: 'robotics', sku: 'robotics-jazzy-ubuntu24',     platform: 'ptl', os: 'ubuntu24',       imageType: 'iso', template: '' },
+    { vertical: 'fed-aero', sku: 'edge-node-infra-bkc',         platform: 'ptl', os: 'ubuntu24',       imageType: 'raw', template: 'ubuntu24-x86_64-minimal-ptl-pv-raw.yml' },
+    { vertical: 'fed-aero', sku: 'generic-handheld-blueprint',  platform: 'ptl', os: 'ubuntu24',       imageType: 'raw', template: 'generic-handheld-os-template.yml' },
+    { vertical: 'fed-aero', sku: 'drone-image-bkc',             platform: 'ptl', os: 'ubuntu26-server', imageType: 'raw', template: '' }
   ],
-  'physical-ai': [
-    { id: 'sku-1', label: 'SKU-1 (Inference Edge)' },
-    { id: 'sku-2', label: 'SKU-2 (Training Node)' },
-    { id: 'sku-3', label: 'SKU-3 (Multi-GPU Server)' }
+  verticals: [
+    { id: 'retail',   displayName: 'Retail Edge' },
+    { id: 'robotics', displayName: 'Robotics' },
+    { id: 'fed-aero', displayName: 'Fed Aero' }
   ],
-  'robotics': [
-    { id: 'amr', label: 'AMR (Autonomous Mobile Robot)' },
-    { id: 'humanoid', label: 'Humanoid Robots' },
-    { id: 'stationary', label: 'Stationary Robot' }
+  skus: [
+    { id: 'desktop-virtualization',     displayName: 'Desktop Virtualization' },
+    { id: 'robotics-jazzy-ubuntu24',    displayName: 'Autonomous Mobile Robots (AMR)' },
+    { id: 'edge-node-infra-bkc',        displayName: 'Edge Node Infrastructure Blueprint BKC' },
+    { id: 'generic-handheld-blueprint', displayName: 'Generic Handheld Blueprint' },
+    { id: 'drone-image-bkc',            displayName: 'Drone Image - From BKC Team' }
   ],
-  'agentic-ai': [
-    { id: 'sku-1', label: 'SKU-1 (Edge Agent)' },
-    { id: 'sku-2', label: 'SKU-2 (Multi-Agent Server)' }
+  platforms: [
+    { id: 'arl', displayName: 'ARL (Arrow Lake)' },
+    { id: 'wcl', displayName: 'WCL (Wildcat Lake)' },
+    { id: 'ptl', displayName: 'PTL (Panther Lake)' }
   ],
-  'health': [
-    { id: 'sku-1', label: 'SKU-1 (Medical Device Edge)' },
-    { id: 'sku-2', label: 'SKU-2 (Clinical Workstation)' }
-  ],
-  'fed-aero': [
-    { id: 'sku-1', label: 'SKU-1 (Tactical Edge)' },
-    { id: 'sku-2', label: 'SKU-2 (Command Post)' },
-    { id: 'sku-3', label: 'SKU-3 (Airborne Platform)' }
-  ],
-  'industrial': [
-    { id: 'sku-1', label: 'SKU-1 (PLC Gateway)' },
-    { id: 'sku-2', label: 'SKU-2 (Vision Inspection)' }
-  ],
-  'retail': [
-    { id: 'sku-1', label: 'SKU-1 (POS Terminal)' },
-    { id: 'sku-2', label: 'SKU-2 (Smart Shelf)' }
+  targets: [
+    { id: 'debian13',       displayName: 'Debian 13',            os: 'debian', arch: 'x86_64' },
+    { id: 'ubuntu24',       displayName: 'Ubuntu 24.04',         os: 'ubuntu', arch: 'x86_64' },
+    { id: 'ubuntu26-server', displayName: 'Ubuntu 26.04 Server', os: 'ubuntu', arch: 'x86_64' }
   ]
 };
 
-// supportedOs is a list per vertical (future-proof). MVP-1 ships one OS per
-// vertical except Generic, which is intentionally flexible. defaultOs is the
-// pre-selected option. When a vertical gains more OSes, just extend supportedOs.
-const VERTICAL_PRESETS = {
-  'generic': { imageType: 'raw', unattended: false,
-    supportedOs: ['ubuntu24', 'ubuntu26', 'debian13', 'azl3', 'elxr13', 'emt3'], defaultOs: 'ubuntu24',
-    imageName: 'generic-edge-image', packages: ['cloud-init', 'rsyslog', 'systemd-networkd'], disk: { size: '4GiB', partitionTableType: 'GPT', partitions: 2 }
+// Compose summaries, keyed by template file. This is what POST /api/v1/compose returns
+// in `summary`. Transcribed from the real templates in image-templates/ so the
+// counts shown here are the counts the server would report.
+const TEMPLATE_SUMMARIES = {
+  'debian13-x86_64-desktop-virtualization-iso.yml': {
+    imageName: 'debian13-x86_64-desktop-virtualization', imageVersion: '1.0.0',
+    description: 'Debian 13 Desktop Virtualization ISO with Intel graphics SR-IOV support. Provides GPU-accelerated virtual desktops using QEMU/KVM.',
+    architecture: 'x86_64', kernelVersion: '6.12.74', packageCount: 112
   },
-  'physical-ai': {
-    imageType: 'raw', unattended: false, supportedOs: ['ubuntu24'], defaultOs: 'ubuntu24',
-    imageName: 'physical-ai-image', packages: ['openvino-runtime', 'intel-level-zero-gpu', 'docker-ce', 'onnxruntime', 'cloud-init'], disk: { size: '8GiB', partitionTableType: 'GPT', partitions: 2 }
+  'ubuntu24-x86_64-robotics-jazzy-iso.yml': {
+    imageName: 'robotics-jazzy-ubuntu24', imageVersion: '24.04',
+    description: 'Intel Robotics AI Suite - Full ROS 2 Jazzy with OpenVINO, Gazebo, RealSense, and Intel GPU/NPU',
+    architecture: 'x86_64', packageCount: 37
   },
-  'robotics': {
-    imageType: 'iso', unattended: false, supportedOs: ['ubuntu24'], defaultOs: 'ubuntu24',
-    imageName: 'robotics-image', packages: ['ros-jazzy-base', 'ros-jazzy-navigation2', 'openvino-runtime', 'docker-ce', 'intel-level-zero-gpu', 'cloud-init'], disk: { size: '8GiB', partitionTableType: 'GPT', partitions: 2 }
+  'ubuntu24-x86_64-minimal-ptl-pv-raw.yml': {
+    imageName: 'minimal-desktop-ubuntu-ptl-pv', imageVersion: '24.04',
+    description: 'Minimal desktop ubuntu image for PTL',
+    architecture: 'x86_64', kernelVersion: '260427t075939z-r2', packageCount: 256,
+    diskSize: '32GiB', partitionTable: 'gpt', partitionCount: 3
   },
-  'agentic-ai': {
-    imageType: 'raw', unattended: false, supportedOs: ['ubuntu24'], defaultOs: 'ubuntu24',
-    imageName: 'agentic-ai-image', packages: ['vllm', 'langchain', 'openvino-genai', 'k3s', 'docker-ce', 'cloud-init'], disk: { size: '16GiB', partitionTableType: 'GPT', partitions: 2 }
-  },
-  'health': {
-    imageType: 'qcow', unattended: false, supportedOs: ['ubuntu24'], defaultOs: 'ubuntu24',
-    imageName: 'health-edge-image', packages: ['openvino-runtime', 'auditd', 'cryptsetup', 'cloud-init', 'apparmor'], disk: { size: '8GiB', partitionTableType: 'GPT', partitions: 3 }
-  },
-  'fed-aero': {
-    imageType: 'raw', unattended: true, supportedOs: ['ubuntu24'], defaultOs: 'ubuntu24',
-    imageName: 'fed-aero-image', packages: ['auditd', 'aide', 'fapolicyd', 'openscap', 'cryptsetup', 'apparmor'], disk: { size: '8GiB', partitionTableType: 'GPT', partitions: 3 }
-  },
-  'industrial': {
-    imageType: 'raw', unattended: true, supportedOs: ['elxr13'], defaultOs: 'elxr13',
-    imageName: 'industrial-iot-image', packages: ['opcua-stack', 'mosquitto', 'collectd', 'docker-ce', 'cloud-init'], disk: { size: '4GiB', partitionTableType: 'GPT', partitions: 2 }
-  },
-  'retail': {
-    imageType: 'qcow', unattended: false, supportedOs: ['ubuntu24'], defaultOs: 'ubuntu24',
-    imageName: 'retail-edge-image', packages: ['docker-ce', 'nginx', 'cloud-init', 'collectd'], disk: { size: '8GiB', partitionTableType: 'GPT', partitions: 2 }
+  'generic-handheld-os-template.yml': {
+    imageName: 'minimal-desktop-ubuntu', imageVersion: '24.04',
+    description: 'Minimal desktop ubuntu image for PTL',
+    architecture: 'x86_64', kernelVersion: '260427t075939z-r2', packageCount: 264,
+    diskSize: '32GiB', partitionTable: 'gpt', partitionCount: 3,
+    hostname: 'minimal-desktop-ubuntu'
   }
 };
 
@@ -927,11 +1041,11 @@ const PACKAGE_DB = [
   { name: 'librealsense2', desc: 'RealSense SDK (pinned)', repo: 'realsense', version: '2.56.5-0~realsense.17055', versions: ['2.56.5-0~realsense.17055', '2.55.1-0~realsense.16630'], curated: true },
 ];
 
-// Repository catalog — the provenance grouping dimension. These are exactly the
+// Repository catalog, the provenance grouping dimension. These are exactly the
 // `packageRepositories` from the robotics-jazzy ISO template, plus the always-on
 // Ubuntu base. In the real UI this comes from the manifest API. `base: true`
 // marks the OS default repo (always enabled). `total` is the (simulated) number
-// of packages the repo publishes — used to convey scale in the browser.
+// of packages the repo publishes, used to convey scale in the browser.
 const REPO_DB = [
   { id: 'ubuntu-main',    name: 'Ubuntu Base (noble)',      url: 'http://archive.ubuntu.com/ubuntu', base: true, total: 61000 },
   { id: 'ros2-jazzy',     name: 'ROS 2 Jazzy',              url: 'http://packages.ros.org/ros2/ubuntu', total: 3400 },
@@ -946,7 +1060,7 @@ const REPO_DB = [
 // Packages whose repo id isn't in REPO_DB are bucketed here so nothing is hidden.
 const OTHER_REPO = { id: '__other', name: 'Other / Uncategorized', url: 'Packages not tied to a listed repository' };
 
-// Use-case bundles — curated, cross-repo, all-or-none package sets. Each bundle
+// Use-case bundles: curated, cross-repo, all-or-none package sets. Each bundle
 // pulls packages from SEVERAL repos (e.g. RealSense from the RealSense repo +
 // ROS 2 repo + Ubuntu base), which is exactly the shape of the robotics-jazzy
 // template. Applying adds every package and enables their repos; un-applying
@@ -993,76 +1107,162 @@ document.querySelectorAll('.topnav-tab').forEach(tab => {
 // BASIC TAB
 // ═══════════════════════════════════════════════════════════════
 
-function uncheckReview() {
-  const cb = document.getElementById('view-image-content');
-  if (cb && cb.checked) {
-    cb.checked = false;
-    const container = document.getElementById('image-content-details');
-    if (container) { container.innerHTML = ''; container.style.display = 'none'; }
+// ── Derived cascading options (a port of web/src/store.ts) ────────────────
+// Every dropdown is derived from MANIFEST.combinations filtered by the choices
+// above it. An id reachable only through template-less combinations comes back
+// with available=false so the option can be grayed out.
+function distinctIds(field, filter) {
+  const order = [];
+  const avail = {};
+  for (const c of MANIFEST.combinations) {
+    const matches = Object.keys(filter).every(k => !filter[k] || c[k] === filter[k]);
+    if (!matches) continue;
+    const id = c[field];
+    if (!id) continue;
+    if (!(id in avail)) { order.push(id); avail[id] = false; }
+    avail[id] = avail[id] || c.template.trim() !== '';
   }
+  return order.map(id => ({ id, available: avail[id] }));
 }
 
-function onVerticalChange() {
-  const vertical = document.getElementById('select-vertical').value;
-  state.vertical = vertical;
-  const preset = VERTICAL_PRESETS[vertical];
-
-  // Update SKU dropdown
-  const skuSelect = document.getElementById('select-sku');
-  const skus = VERTICAL_SKUS[vertical] || [];
-  skuSelect.innerHTML = '<option value="">-- Select SKU --</option>' + skus.map(s => `<option value="${s.id}">${s.label}</option>`).join('');
-
-  // Populate OS dropdown from the vertical's supported OSes (defaultOs preselected).
-  // MVP-1 has one OS per vertical, but this scales as supportedOs grows.
-  const osSelect = document.getElementById('select-os');
-  const supportedOs = preset.supportedOs || [];
-  osSelect.innerHTML = supportedOs.map(id => `<option value="${id}" ${id === preset.defaultOs ? 'selected' : ''}>${OS_LABELS[id] || id}</option>`).join('');
-
-  state.sku = '';
-  state.platform = '';
-  document.getElementById('select-platform').value = '';
-  state.os = preset.defaultOs;
-  state.imageType = preset.imageType;
-  state.unattended = preset.unattended;
-  // Changing the vertical is a fresh start, so it re-seeds Advanced from the
-  // new preset. Every other Basic edit leaves Advanced's package work alone.
-  seedAdvancedFromPreset();
-  uncheckReview();
+function labelFor(list, id) {
+  const hit = list.find(o => o.id === id);
+  return hit ? hit.displayName : id;
 }
 
-function onSelectionChange() {
-  state.sku = document.getElementById('select-sku').value;
-  state.platform = document.getElementById('select-platform').value;
-  state.os = document.getElementById('select-os').value;
-  uncheckReview();
+const KERNEL_LABELS = { standard: 'Standard', rt: 'Real-Time' };
+
+function cascadingOptions(sel) {
+  const map = (entries, labels) => entries.map(e => ({ id: e.id, label: labelFor(labels, e.id), disabled: !e.available }));
+
+  const verticals = map(distinctIds('vertical', {}), MANIFEST.verticals);
+  const skus = map(distinctIds('sku', { vertical: sel.vertical }), MANIFEST.skus);
+  const platforms = map(distinctIds('platform', { vertical: sel.vertical, sku: sel.sku }), MANIFEST.platforms);
+  const oses = map(distinctIds('os', { vertical: sel.vertical, sku: sel.sku, platform: sel.platform }), MANIFEST.targets);
+
+  // Kernel is an optional dimension: only combinations that carry a kernel value
+  // contribute. When none do, `kernels` is empty and the selector is omitted, so
+  // so RT vs standard shows up only where the manifest actually offers it.
+  const kernels = distinctIds('kernel', { vertical: sel.vertical, sku: sel.sku, platform: sel.platform, os: sel.os })
+    .map(e => ({ id: e.id, label: KERNEL_LABELS[e.id] || e.id, disabled: !e.available }));
+
+  const itFilter = { vertical: sel.vertical, sku: sel.sku, platform: sel.platform, os: sel.os };
+  if (kernels.length) { itFilter.kernel = sel.kernel; }
+  const imageTypes = distinctIds('imageType', itFilter)
+    .map(e => ({ id: e.id, label: e.id.toUpperCase(), disabled: !e.available }));
+
+  // A planned combination never matches, so it can never be composed.
+  const matched = MANIFEST.combinations.find(x =>
+    x.template.trim() !== '' &&
+    x.vertical === sel.vertical &&
+    (x.sku || '') === sel.sku &&
+    x.platform === sel.platform &&
+    x.os === sel.os &&
+    (x.kernel || '') === sel.kernel &&
+    x.imageType === sel.imageType) || null;
+
+  return { verticals, skus, platforms, oses, kernels, imageTypes, matched };
+}
+
+// setField mirrors the zustand store's setter: resetting everything downstream,
+// then auto-filling each empty field with its first *available* option, so
+// picking a vertical lands on a valid, composable combination immediately.
+const CASCADE = ['vertical', 'sku', 'platform', 'os', 'kernel', 'imageType'];
+const OPTS_KEY = { sku: 'skus', platform: 'platforms', os: 'oses', kernel: 'kernels', imageType: 'imageTypes' };
+
+function setField(key, value) {
+  state[key] = value;
+  const from = CASCADE.indexOf(key) + 1;
+  for (let i = from; i < CASCADE.length; i++) { state[CASCADE[i]] = ''; }
+  for (let i = 1; i < CASCADE.length; i++) {
+    const field = CASCADE[i];
+    if (state[field]) continue;
+    const list = cascadingOptions(state)[OPTS_KEY[field]];
+    const first = list.find(o => !o.disabled);
+    if (first) { state[field] = first.id; }
+  }
+  renderBasic();
+}
+
+// ── Basic tab render ─────────────────────────────────────────────────────
+// The five selectors (Image Type is auto-selected from the manifest and not
+// shown here) plus the configuration summary, which appears on its own as soon
+// as the selection resolves to a template. There is no "review" checkbox.
+function basicSelect(label, field, placeholder, options, disabled) {
+  return `<div class="form-group">
+    <label class="form-label" for="select-${field}">${label}</label>
+    <select class="form-select" id="select-${field}" ${disabled ? 'disabled' : ''}
+            onchange="setField('${field}', this.value)">
+      <option value="" disabled ${state[field] ? '' : 'selected'}>${placeholder}</option>
+      ${options.map(o => `<option value="${o.id}" ${o.disabled ? 'disabled' : ''} ${state[field] === o.id ? 'selected' : ''}>${o.label}${o.disabled ? ' (coming soon)' : ''}</option>`).join('')}
+    </select>
+  </div>`;
+}
+
+function renderBasic() {
+  const opts = cascadingOptions(state);
+  const complete = !!opts.matched;
+
+  let html = basicSelect('Targeted Vertical', 'vertical', '-- Select Vertical --', opts.verticals, false)
+    + basicSelect('SKU', 'sku', '-- Select SKU --', opts.skus, !state.vertical)
+    + basicSelect('Platform', 'platform', '-- Select Platform --', opts.platforms, !state.sku && opts.skus.length > 0)
+    + basicSelect('Operating System', 'os', '-- Select Operating System --', opts.oses, !state.platform);
+  if (opts.kernels.length) {
+    html += basicSelect('Kernel', 'kernel', '-- Select Kernel --', opts.kernels, !state.os);
+  }
+  document.getElementById('basic-selectors').innerHTML = html;
+
+  // Summary: the shape of the `summary` object in the compose response.
+  const panel = document.getElementById('basic-summary');
+  if (!complete) {
+    panel.innerHTML = '';
+    panel.style.display = 'none';
+  } else {
+    const s = TEMPLATE_SUMMARIES[opts.matched.template] || {};
+    const rows = [
+      ['Image', `${s.imageName}${s.imageVersion ? ` (v${s.imageVersion})` : ''}`],
+      s.baseImage ? ['Base Image', s.baseImage] : null,
+      s.description ? ['Description', s.description] : null,
+      ['Architecture', s.architecture],
+      s.kernelVersion ? ['Kernel', s.kernelVersion] : null,
+      ['Packages', `${s.packageCount} packages`],
+      s.diskSize ? ['Disk', `${s.diskSize}${s.partitionTable ? `, ${s.partitionTable.toUpperCase()}` : ''}${s.partitionCount ? `, ${s.partitionCount} partitions` : ''}`] : null,
+      s.hostname ? ['Hostname', s.hostname] : null
+    ].filter(Boolean);
+    panel.innerHTML = `<div class="summary-card">
+      <p class="summary-label">Image Configuration</p>
+      <table class="summary-table"><tbody>
+        ${rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('')}
+      </tbody></table>
+    </div>`;
+    panel.style.display = 'block';
+  }
+
+  // Compose is gated on a complete selection, exactly as in the React page.
+  const btn = document.getElementById('basic-compose');
+  btn.disabled = !complete;
+  document.getElementById('basic-compose-hint').style.display = complete ? 'none' : 'inline';
 }
 
 // ── Basic ⇄ Advanced sync ──────────────────────────────────────────
-// The two panes share four fields (vertical, SKU, platform, OS) plus image
-// type. Advanced owns everything else. The rules:
-//   - seedAdvancedFromPreset() replaces Advanced's packages/image name from the
-//     vertical preset. Fired only when the vertical changes in BASIC, which is
-//     the one edit that invalidates the previous package set. Changing the
-//     vertical inside Advanced deliberately keeps the hand-picked packages —
-//     discarding curated work there would be unrecoverable.
-//   - syncBasicToAdvanced() / syncAdvancedToBasic() copy ONLY the shared
-//     fields, in whichever direction the user is moving. Neither touches
-//     packages, so a round trip preserves selections, bundles, and pins.
-function seedAdvancedFromPreset() {
-  const preset = VERTICAL_PRESETS[state.vertical] || {};
-  advState.template.image.name = preset.imageName || 'my-edge-image';
-  advState.template.packages = (preset.packages || ['cloud-init', 'rsyslog']).slice();
-  advState.template.bundles = [];
-}
-
+// The two panes share the manifest's selection fields (vertical, SKU, platform,
+// OS) plus image type. Advanced owns everything else. syncBasicToAdvanced() and
+// syncAdvancedToBasic() copy ONLY those shared fields, in whichever direction
+// the user is moving. Neither touches packages, so a round trip preserves
+// selections, bundles, and pins.
 function syncBasicToAdvanced() {
-  const preset = VERTICAL_PRESETS[state.vertical] || {};
+  const opts = cascadingOptions(state);
+  const s = (opts.matched && TEMPLATE_SUMMARIES[opts.matched.template]) || {};
+  const target = MANIFEST.targets.find(t => t.id === state.os);
   advState.template.target.vertical = state.vertical;
   advState.template.target.sku = state.sku;
   advState.template.target.platform = state.platform;
-  advState.template.target.dist = state.os;
-  advSyncOsFamily(state.os);
-  advState.template.target.imageType = state.imageType || preset.imageType || 'raw';
+  advState.template.target.os = target ? target.os : advState.template.target.os;
+  advState.template.target.dist = state.os || advState.template.target.dist;
+  advState.template.target.arch = target ? target.arch : advState.template.target.arch;
+  advState.template.target.imageType = state.imageType || advState.template.target.imageType;
+  if (s.imageName) { advState.template.image.name = s.imageName; }
+  if (s.imageVersion) { advState.template.image.version = s.imageVersion; }
   // Always land on the first step (Choose Image Configuration) so the wizard
   // starts from the beginning rather than mid-flow.
   advState.currentStep = 0;
@@ -1070,43 +1270,31 @@ function syncBasicToAdvanced() {
   renderAdvStepContent();
 }
 
-// Reverse direction: push Advanced's shared fields back onto Basic's state and
-// its <select> elements. The SKU and OS lists are rebuilt first, because both
-// are derived from the vertical and may not contain the incoming value yet.
+// Reverse direction: push Advanced's shared fields back onto Basic's selection
+// and re-render. The values are written straight through rather than fed to
+// setField(), because setField() resets everything downstream of the field it
+// touches — which would discard the very values being carried back. Advanced is
+// deliberately less constrained than Basic, so a combination edited there may
+// not match any pre-authored template; renderBasic() already handles that by
+// hiding the summary and gating Compose.
 function syncAdvancedToBasic() {
   const t = advState.template.target;
-  state.vertical = t.vertical || 'generic';
-  state.imageType = advState.template.target.imageType;
-
-  const preset = VERTICAL_PRESETS[state.vertical] || {};
-  const verticalSelect = document.getElementById('select-vertical');
-  if (verticalSelect) verticalSelect.value = state.vertical;
-
-  const skuSelect = document.getElementById('select-sku');
-  if (skuSelect) {
-    const skus = VERTICAL_SKUS[state.vertical] || [];
-    skuSelect.innerHTML = '<option value="">-- Select SKU --</option>' +
-      skus.map(s => `<option value="${s.id}">${s.label}</option>`).join('');
-    skuSelect.value = t.sku || '';
-  }
-  state.sku = skuSelect ? skuSelect.value : (t.sku || '');
-
-  const osSelect = document.getElementById('select-os');
-  if (osSelect) {
-    const supportedOs = preset.supportedOs || [];
-    osSelect.innerHTML = supportedOs.map(id => `<option value="${id}">${OS_LABELS[id] || id}</option>`).join('');
-    osSelect.value = t.dist || preset.defaultOs || '';
-  }
-  state.os = osSelect ? osSelect.value : (t.dist || '');
-
-  const platformSelect = document.getElementById('select-platform');
-  if (platformSelect) platformSelect.value = t.platform || '';
+  state.vertical = t.vertical || '';
+  state.sku = t.sku || '';
   state.platform = t.platform || '';
+  state.os = t.dist || '';
+  state.imageType = t.imageType || '';
 
-  // The review panel is a snapshot, so refresh it in place when it is open
-  // rather than collapsing it and making the user re-tick the box.
-  const reviewOpen = document.getElementById('view-image-content');
-  if (reviewOpen && reviewOpen.checked) toggleImageContent();
+  // Kernel is not an Advanced field, so the incoming combination says nothing
+  // about it. Keep the current choice while the manifest still offers it, and
+  // otherwise fall back to the first available one.
+  const kernels = cascadingOptions(state).kernels;
+  if (!kernels.some(k => k.id === state.kernel && !k.disabled)) {
+    const first = kernels.find(k => !k.disabled);
+    state.kernel = first ? first.id : '';
+  }
+
+  renderBasic();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1124,20 +1312,35 @@ const ADV_STEPS = [
   { id: 'review', label: 'Review', icon: '&#10003;' }
 ];
 
+// The distributions the builder itself supports. Advanced is deliberately wider
+// than the Basic manifest, which only lists targets that have a template.
 const OS_OPTIONS = [
   { id: 'azure-linux', name: 'Azure Linux', dists: ['azl3'] },
   { id: 'edge-microvisor-toolkit', name: 'Edge Microvisor Toolkit', dists: ['emt3'] },
   { id: 'wind-river-elxr', name: 'Wind River eLxr', dists: ['elxr12', 'elxr13'] },
-  { id: 'ubuntu', name: 'Ubuntu', dists: ['ubuntu24', 'ubuntu26'] },
+  { id: 'ubuntu', name: 'Ubuntu', dists: ['ubuntu24', 'ubuntu26-server'] },
   { id: 'redhat-compatible-distro', name: 'Red Hat Compatible', dists: ['el10'] },
   { id: 'debian', name: 'Debian', dists: ['debian13'] }
 ];
+
+// Display names for every dist above. The three the manifest also carries
+// (debian13, ubuntu24, ubuntu26-server) use the manifest's exact wording.
+const DIST_LABELS = {
+  'azl3': 'Azure Linux 3',
+  'emt3': 'Edge Microvisor Toolkit 3',
+  'elxr12': 'Wind River eLxr 12',
+  'elxr13': 'Wind River eLxr 13',
+  'ubuntu24': 'Ubuntu 24.04',
+  'ubuntu26-server': 'Ubuntu 26.04 Server',
+  'el10': 'Red Hat Compatible 10',
+  'debian13': 'Debian 13'
+};
 
 const advState = {
   currentStep: 0,
   template: {
     image: { name: 'my-edge-image', version: '1.0.0' },
-    target: { vertical: 'generic', sku: '', platform: '', os: 'ubuntu', dist: 'ubuntu24', arch: 'x86_64', imageType: 'raw' },
+    target: { vertical: '', sku: '', platform: '', os: 'ubuntu', dist: 'ubuntu24', arch: 'x86_64', imageType: 'raw' },
     disk: { size: '4GiB', partitionTableType: 'gpt',
       partitions: [
         { id: 'boot', name: 'boot', fsType: 'vfat', size: '512MiB', mountPoint: '/boot/efi' },
@@ -1329,46 +1532,37 @@ function renderAdvStepContent() {
     case 'target':
       html += `<h2>Choose Image Configuration</h2>
         <p class="step-desc">Select a targeted vertical, SKU, and platform. Pre-configured defaults will be applied based on your selection.</p>
+        <!-- Vertical / SKU / Platform use the same vocabulary as Basic (the
+             manifest), but Advanced does not restrict them to a pre-authored
+             combination. That is the point of Advanced. -->
         <div class="form-group">
           <label class="form-label">Targeted Vertical</label>
           <select class="form-input" onchange="advSelectVertical(this.value)">
-            <option ${t.target.vertical==='generic'?'selected':''} value="generic">Generic</option>
-            <optgroup label="Verticals">
-              <option ${t.target.vertical==='robotics'?'selected':''} value="robotics">Robotics</option>
-              <option ${t.target.vertical==='physical-ai'?'selected':''} value="physical-ai">Physical AI</option>
-              <option ${t.target.vertical==='agentic-ai'?'selected':''} value="agentic-ai">Agentic AI</option>
-              <option ${t.target.vertical==='health'?'selected':''} value="health">Health</option>
-              <option ${t.target.vertical==='fed-aero'?'selected':''} value="fed-aero">Fed Aero</option>
-              <option ${t.target.vertical==='industrial'?'selected':''} value="industrial">Industrial IoT</option>
-              <option ${t.target.vertical==='retail'?'selected':''} value="retail">Retail Edge</option>
-            </optgroup>
+            <option value="" ${!t.target.vertical?'selected':''}>-- Select Vertical --</option>
+            ${MANIFEST.verticals.map(v => `<option ${t.target.vertical===v.id?'selected':''} value="${v.id}">${v.displayName}</option>`).join('')}
           </select>
         </div>
         <div class="form-group">
           <label class="form-label">SKU</label>
           <select class="form-input" onchange="advState.template.target.sku=this.value; updateAdvancedYaml()">
             <option value="">-- Select SKU --</option>
-            ${(VERTICAL_SKUS[t.target.vertical]||[]).map(s => `<option ${t.target.sku===s.id?'selected':''} value="${s.id}">${s.label}</option>`).join('')}
+            ${distinctIds('sku', { vertical: t.target.vertical }).map(e => `<option ${t.target.sku===e.id?'selected':''} value="${e.id}">${labelFor(MANIFEST.skus, e.id)}</option>`).join('')}
           </select>
         </div>
         <div class="form-group">
           <label class="form-label">Platform</label>
           <select class="form-input" onchange="advState.template.target.platform=this.value; updateAdvancedYaml()">
             <option value="">-- Select Platform --</option>
-            <option ${t.target.platform==='ptl'?'selected':''} value="ptl">PTL (Panther Lake)</option>
-            <option ${t.target.platform==='wcl'?'selected':''} value="wcl">WCL (Wildcat Lake)</option>
-            <option ${t.target.platform==='arl'?'selected':''} value="arl">ARL (Arrow Lake)</option>
-            <option ${t.target.platform==='nvl'?'selected':''} value="nvl">NVL (Nova Lake)</option>
+            ${MANIFEST.platforms.map(p => `<option ${t.target.platform===p.id?'selected':''} value="${p.id}">${p.displayName}</option>`).join('')}
           </select>
         </div>
         <div class="form-group">
           <label class="form-label">Operating System</label>
-          <!-- Same option set as Basic: both panes list the selected vertical's
-               supportedOs, so the OS field always round-trips between them. -->
           <select class="form-input" onchange="advSelectDist(this.value)">
             <option value="" disabled ${!t.target.dist?'selected':''}>-- Select Operating System --</option>
-            ${((VERTICAL_PRESETS[t.target.vertical]||{}).supportedOs||[]).map(id => `<option ${t.target.dist===id?'selected':''} value="${id}">${OS_LABELS[id] || id}</option>`).join('')}
+            ${OS_OPTIONS.map(o => `<optgroup label="${o.name}">${o.dists.map(d => `<option ${t.target.dist===d?'selected':''} value="${d}">${DIST_LABELS[d] || d}</option>`).join('')}</optgroup>`).join('')}
           </select>
+          <p class="form-hint">Advanced offers every distribution the builder supports, not just the ones the Basic manifest has templates for.</p>
         </div>
         <hr style="border:none;border-top:1px solid var(--border);margin:24px 0;">
         <div class="form-group">
@@ -1420,10 +1614,36 @@ function renderAdvStepContent() {
 
     case 'packages':
       html += `<h2>${step.icon} Repositories &amp; Packages</h2>
-        <p class="step-desc">Apply a use-case bundle, search for a package, or browse repositories. Your selections collect on the right.</p>
+        <p class="step-desc">Describe what the image needs, apply a use-case bundle, search for a package, or browse repositories. Your selections collect on the right.</p>
 
         <div class="packages-layout">
           <div class="packages-main">
+            <div class="form-group">
+              <div class="ai-card">
+                <div class="ai-head">
+                  <div class="ai-spark">&#10022;</div>
+                  <div>
+                    <div class="ai-title">Describe what this image needs</div>
+                    <div class="ai-sub">Matches your description to bundles and packages, then looks up every one in the
+                      real package metadata of this target's repositories. Nothing is marked <b>verified</b> unless it was
+                      actually found there. Adding it enables the repository it comes from.</div>
+                  </div>
+                </div>
+                <div class="ai-body">
+                  <textarea id="ai-input" class="ai-input"
+                    placeholder="e.g. Autonomous mobile robot with a depth camera and on-device AI inference&hellip;"
+                    oninput="aiState.query=this.value">${aiState.query || ''}</textarea>
+                  <div class="ai-controls">
+                    <div class="ai-examples">${renderAiExamples()}</div>
+                    <button class="btn btn-primary" onclick="runAiAssist()">&#10022;&nbsp; Suggest packages</button>
+                  </div>
+                  <div class="ai-thinking ${aiState.stages.length ? 'show' : ''}" id="ai-thinking">${renderAiThinking()}</div>
+                  <div class="ai-results ${aiState.result ? 'show' : ''}" id="ai-results">${renderAiResults()}</div>
+                </div>
+              </div>
+              <p class="form-hint">Suggestions are proposals; you add what you want. Everything below stays fully manual.</p>
+            </div>
+
             <div class="form-group">
               <div class="bundles-header" role="button" tabindex="0" aria-expanded="${!pkgGroupsUI.bundlesCollapsed}" onclick="toggleBundlesCollapsed()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleBundlesCollapsed();}">
                 <label class="form-label bundles-header-label">
@@ -1453,7 +1673,7 @@ function renderAdvStepContent() {
                 <div class="repo-rail">${renderRepoRail()}</div>
                 <div class="repo-pane">${renderRepoPane()}</div>
               </div>
-              <p class="form-hint">Enable a repository with its checkbox, then click it to browse. “Suggested packages only” is on by default — uncheck it to browse the repo's full catalog (loaded in pages).</p>
+              <p class="form-hint">Enable a repository with its checkbox, then click it to browse. “Suggested packages only” is on by default; uncheck it to browse the repo's full catalog (loaded in pages).</p>
             </div>
           </div>
 
@@ -1468,10 +1688,10 @@ function renderAdvStepContent() {
         <div style="background:#f8fafc;border:1px solid var(--border);border-radius:6px;padding:16px;margin-bottom:16px;">
           <table style="width:100%;font-size:13px;border-collapse:collapse;">
             <tr><td style="padding:6px 0;font-weight:600;width:120px;">Image</td><td>${t.image.name} v${t.image.version}</td></tr>
-            <tr><td style="padding:6px 0;font-weight:600;">Vertical</td><td>${t.target.vertical || 'Generic'}</td></tr>
-            <tr><td style="padding:6px 0;font-weight:600;">SKU</td><td>${t.target.sku || '—'}</td></tr>
-            <tr><td style="padding:6px 0;font-weight:600;">Platform</td><td>${t.target.platform || '—'}</td></tr>
-            <tr><td style="padding:6px 0;font-weight:600;">OS</td><td>${t.target.os} (${t.target.dist}) / ${t.target.arch}</td></tr>
+            <tr><td style="padding:6px 0;font-weight:600;">Vertical</td><td>${t.target.vertical ? labelFor(MANIFEST.verticals, t.target.vertical) : 'not set'}</td></tr>
+            <tr><td style="padding:6px 0;font-weight:600;">SKU</td><td>${t.target.sku ? labelFor(MANIFEST.skus, t.target.sku) : 'not set'}</td></tr>
+            <tr><td style="padding:6px 0;font-weight:600;">Platform</td><td>${t.target.platform ? labelFor(MANIFEST.platforms, t.target.platform) : 'not set'}</td></tr>
+            <tr><td style="padding:6px 0;font-weight:600;">OS</td><td>${DIST_LABELS[t.target.dist] || t.target.dist} (${t.target.dist}) / ${t.target.arch}</td></tr>
             <tr><td style="padding:6px 0;font-weight:600;">Image Type</td><td>${t.target.imageType.toUpperCase()}</td></tr>
             <tr><td style="padding:6px 0;font-weight:600;">Disk</td><td>${t.disk.size}, ${t.disk.partitionTableType.toUpperCase()}, ${t.disk.partitions.length} partitions</td></tr>
             <tr><td style="padding:6px 0;font-weight:600;">Packages</td><td>${t.packages.length} packages${t.bundles.length ? ` (${t.bundles.length} bundle${t.bundles.length > 1 ? 's' : ''})` : ''}</td></tr>
@@ -1521,20 +1741,16 @@ function advSelectDist(dist) {
   updateAdvancedYaml();
 }
 
-// Changing the vertical in Advanced mirrors Basic's behaviour: the SKU and OS
-// lists are derived from it, so a stale SKU is cleared and the OS falls back to
-// the vertical's default when the current one is not in its supported set.
+// Changing the vertical in Advanced mirrors Basic's behaviour for the one field
+// that is derived from it: the SKU list comes from the vertical, so a SKU that
+// the new vertical does not offer is cleared rather than left showing a value
+// absent from the rebuilt list. The OS is left alone — Advanced offers every
+// distribution regardless of vertical, so it can never go stale.
 function advSelectVertical(vertical) {
   const t = advState.template.target;
-  const preset = VERTICAL_PRESETS[vertical] || {};
-  const supportedOs = preset.supportedOs || [];
   t.vertical = vertical;
-  t.sku = '';
-  if (!supportedOs.includes(t.dist)) {
-    t.dist = preset.defaultOs || t.dist;
-    advSyncOsFamily(t.dist);
-  }
-  if (preset.imageType) t.imageType = preset.imageType;
+  const skus = distinctIds('sku', { vertical });
+  if (!skus.some(e => e.id === t.sku)) { t.sku = ''; }
   renderAdvStepContent();
   updateAdvancedYaml();
 }
@@ -1550,6 +1766,359 @@ function buildPackageGroups() {
   const groups = REPO_DB.map(r => byId[r.id]).filter(g => g.packages.length);
   if (other.packages.length) groups.push(other);
   return groups;
+}
+
+// ── AI package assist ─────────────────────────────────────────────
+// UI-only state. In the real UI this is a Zustand slice; `result` holds exactly
+// the POST /ai/select-packages payload so the renderers below are the production
+// renderers. Only the transport is faked here.
+const aiState = {
+  query: '',
+  stages: [],   // streamed progress rows: {label, detail, done}
+  result: null, // {bundles, packages, resolutions, misses, repoStatus, llmUsed}
+  running: false,
+};
+
+const AI_EXAMPLES = [
+  'Autonomous mobile robot with a depth camera and on-device AI inference',
+  'Headless ROS 2 dev box with Intel GPU acceleration and disk encryption',
+  'Robot vision using NVIDIA CUDA',
+];
+
+function renderAiExamples() {
+  return AI_EXAMPLES.map((e, i) =>
+    `<button class="ai-example" onclick="runAiExample(${i})">${e}</button>`).join('');
+}
+
+function runAiExample(i) {
+  aiState.query = AI_EXAMPLES[i];
+  runAiAssist();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// SIMULATED BACKEND. Everything from here to `aiSimulate` is thrown away in
+// production: the real Packages step POSTs the description to
+// /api/v1/ai/select-packages and consumes the retrieve/assemble/verify/result
+// SSE events. The keyword tables below stand in for RAG retrieval + LLM
+// assembly; the repo checks stand in for real apt/dnf metadata lookups.
+// ═══════════════════════════════════════════════════════════════════
+
+// Retrieval: description → candidate bundles (what the vector index would rank).
+const AI_INTENTS = [
+  { kw: ['ros', 'ros 2', 'robot operating', 'middleware'], bundle: 'ros2-desktop',
+    why: 'ROS 2 middleware for robot control and messaging.' },
+  { kw: ['depth camera', 'realsense', 'stereo', 'rgb-d', 'depth'], bundle: 'realsense-camera',
+    why: 'Intel RealSense depth camera: kernel driver, SDK and ROS 2 bridge.' },
+  { kw: ['inference', 'openvino', 'on-device ai', 'on device ai', 'vision model', 'object detection', 'neural network'],
+    bundle: 'openvino-inference', why: 'On-device inference accelerated on Intel GPU via OpenVINO.' },
+  { kw: ['slam', 'navigation', 'autonomous', 'amr', 'mapping', 'localization', 'path planning'],
+    bundle: 'amr-robotics', why: 'Autonomous navigation with the Intel Robotics SDK and collaborative SLAM.' },
+  { kw: ['npu', 'neural processing'], bundle: 'intel-npu', why: 'Offload inference to the Intel NPU.' },
+  { kw: ['simulation', 'simulate', 'gazebo', 'digital twin'], bundle: 'gazebo-sim',
+    why: 'Physics simulation for testing before hardware is available.' },
+];
+
+// Retrieval: description → individual candidate packages.
+const AI_LOOSE = [
+  { kw: ['ssh', 'headless', 'remote access', 'remote login'], pkg: 'openssh-server',
+    why: 'Remote/headless access to the device.' },
+  { kw: ['encrypt', 'luks', 'disk encryption', 'fde'], pkg: 'cryptsetup-bin',
+    why: 'LUKS full-disk encryption for data at rest.' },
+  { kw: ['gpu accel', 'gpu acceleration', 'level zero', 'intel gpu', 'igpu'], pkg: 'libze-intel-gpu1',
+    why: 'Intel GPU compute acceleration via Level Zero.' },
+];
+
+// Things users ask for that no enabled repo publishes. Grounding requires we say
+// so and offer a real alternative rather than silently dropping the request.
+const AI_MISSES = [
+  { kw: ['nvidia', 'cuda', 'tensorrt', 'jetson', 'geforce', 'rtx'], asked: 'nvidia-cuda-toolkit, tensorrt',
+    why: 'No NVIDIA CUDA packages are published by any repository enabled for this target; this is an Intel platform build.',
+    suggestBundle: 'openvino-inference', suggestLabel: 'Use OpenVINO instead' },
+];
+
+// Simulated verification. In production this is one pkgquery.Lookup() call
+// against real apt/dnf metadata for the target's repositories.
+//
+// Verification is against every repository configured for this target, not just
+// the ones currently ticked: proposing a package from a not-yet-enabled repo is
+// the point, and adding it enables that repo (see aiAddPackage). The three demo
+// outcomes are fixed so the walkthrough is deterministic:
+const AI_UNREACHABLE = ['intel-amr'];                 // repo we cannot reach → unverified
+const AI_WITHDRAWN = ['ros-jazzy-librealsense2'];     // repo reachable, package absent → missing
+
+function aiVerify(pkgName) {
+  const pkg = PACKAGE_DB.find(p => p.name === pkgName);
+  if (!pkg) return { state: 'missing', repo: null };
+  if (AI_UNREACHABLE.includes(pkg.repo)) return { state: 'unverified', repo: pkg.repo };
+  if (AI_WITHDRAWN.includes(pkgName)) return { state: 'missing', repo: pkg.repo };
+  return { state: 'verified', repo: pkg.repo, version: '(from repo metadata)' };
+}
+
+// Produce the response shape the real endpoint returns.
+function aiSimulate(query) {
+  const s = ' ' + query.toLowerCase() + ' ';
+  const hit = r => r.kw.some(k => s.includes(k));
+  const bundles = [], packages = [], resolutions = [], misses = [];
+  const seenB = new Set();
+
+  const addBundle = (id, why, viaSuggestion) => {
+    if (seenB.has(id)) return;
+    seenB.add(id);
+    const b = BUNDLE_DB.find(x => x.id === id);
+    if (!b) return;
+    // Verify every member; a bundle reports per-package outcomes, never a bare count.
+    const verified = [], unverified = [], unavailable = [];
+    b.packages.forEach(n => {
+      const v = aiVerify(n);
+      if (v.state === 'verified') verified.push(n);
+      else if (v.state === 'unverified') unverified.push(n);
+      else unavailable.push(n);
+    });
+    bundles.push({ id, why, viaSuggestion, verified, unverified, unavailable });
+  };
+
+  AI_INTENTS.filter(hit).forEach(r => addBundle(r.bundle, r.why));
+  AI_MISSES.filter(hit).forEach(r => {
+    misses.push(r);
+    if (r.suggestBundle) {
+      const alt = BUNDLE_DB.find(b => b.id === r.suggestBundle);
+      addBundle(r.suggestBundle, alt ? alt.desc : '', true);
+    }
+  });
+  AI_LOOSE.filter(hit).forEach(r => {
+    const v = aiVerify(r.pkg);
+    packages.push({ name: r.pkg, why: r.why, state: v.state, repo: v.repo });
+  });
+
+  // Name resolution: what the user said → what the repo actually publishes.
+  if (seenB.has('realsense-camera')) {
+    resolutions.push({
+      asked: '"depth camera driver"',
+      resolved: ['librealsense2-dkms', 'librealsense2_2.56.5-0~realsense.17055'],
+      why: 'Resolved to the DKMS kernel module plus the pinned SDK build actually published in the RealSense repo.',
+    });
+  }
+
+  const repoStatus = REPO_DB.map(r => ({
+    id: r.id, name: r.name,
+    reachable: !AI_UNREACHABLE.includes(r.id),
+  }));
+  return { bundles, packages, resolutions, misses, repoStatus, llmUsed: true };
+}
+
+// Drive the three stages the way the SSE stream will: each event appends a row,
+// marks the previous one done, and carries a real detail string.
+function runAiAssist() {
+  const q = (aiState.query || '').trim();
+  if (!q || aiState.running) return;
+  aiState.running = true;
+  aiState.result = null;
+  aiState.stages = [];
+  renderAdvStepContent();
+
+  const repoCount = REPO_DB.length;
+  const steps = [
+    { label: 'Retrieving candidates', detail: 'semantic + keyword search over bundles and packages' },
+    { label: 'Selecting and explaining', detail: 'choosing from retrieved candidates only' },
+    { label: 'Verifying against repositories', detail: `looking up every name in ${repoCount} repository package indexes` },
+  ];
+
+  steps.forEach((st, i) => setTimeout(() => {
+    if (i > 0) aiState.stages[i - 1].done = true;
+    aiState.stages.push({ ...st, done: false });
+    renderAdvStepContent();
+  }, i * 620));
+
+  setTimeout(() => {
+    aiState.stages.forEach(s => { s.done = true; });
+    aiState.result = aiSimulate(q);
+    aiState.running = false;
+    renderAdvStepContent();
+  }, steps.length * 620);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// PRODUCTION RENDERERS. These port to React as-is; they read only the
+// response shape, never the simulation above.
+// ═══════════════════════════════════════════════════════════════════
+
+function renderAiThinking() {
+  return aiState.stages.map(s => `<div class="think-row">
+    ${s.done ? '<span class="tick">&#10003;</span>' : '<span class="spin"></span>'}
+    <span><span class="detail">${s.label}</span> &middot; ${s.detail}</span>
+  </div>`).join('');
+}
+
+// One proposal row. `state` drives the four grounding outcomes.
+function aiPropRow(opts) {
+  const { state, name, badges, why, pkglist, button } = opts;
+  return `<div class="prop ${state}"><div class="prop-main">
+      <div class="prop-name-row"><span class="prop-name">${name}</span>${badges || ''}</div>
+      ${why ? `<div class="prop-reason">${why}</div>` : ''}
+      ${pkglist ? `<div class="prop-pkglist">${pkglist}</div>` : ''}
+    </div>${button || ''}</div>`;
+}
+
+function renderAiResults() {
+  const res = aiState.result;
+  if (!res) return '';
+
+  const verifiedTotal = res.bundles.reduce((n, b) => n + b.verified.length, 0)
+    + res.packages.filter(p => p.state === 'verified').length;
+
+  if (!res.bundles.length && !res.packages.length && !res.misses.length) {
+    return `<div class="prop"><div class="prop-main"><div class="prop-reason">
+      Nothing in this target's repositories matches that description. Try naming the capability
+      (&ldquo;depth camera&rdquo;, &ldquo;SLAM&rdquo;, &ldquo;disk encryption&rdquo;) or browse the repositories below.
+    </div></div></div>`;
+  }
+
+  let html = '';
+
+  // Degraded-mode banner: unreachable repos are named, never silently ignored.
+  const down = (res.repoStatus || []).filter(r => !r.reachable);
+  if (down.length) {
+    html += `<div class="ai-degraded"><b>${down.length} repositor${down.length === 1 ? 'y' : 'ies'} unreachable</b>
+      (${down.map(r => r.name).join(', ')}). Packages from them are shown as
+      <b>unverified</b>: they may exist, but we could not confirm it.</div>`;
+  }
+
+  html += `<div class="ai-results-head">
+    <div class="ai-summary">Proposed <b>${verifiedTotal} verified package${verifiedTotal === 1 ? '' : 's'}</b>
+      across <b>${res.bundles.length} bundle${res.bundles.length === 1 ? '' : 's'}</b>.</div>
+    <button class="btn btn-primary btn-sm" onclick="aiAddAllVerified()">Add all verified</button>
+  </div>`;
+
+  // Legend. Every proposal carries one of exactly four outcomes; showing them
+  // up front is what makes "verified" mean something to the person reading it.
+  html += `<div class="ai-legend">
+    <span><i class="sw sw-verified"></i>verified: found in a repository index</span>
+    <span><i class="sw sw-resolved"></i>resolved: renamed to what the repo publishes</span>
+    <span><i class="sw sw-unverified"></i>unverified: repository unreachable</span>
+    <span><i class="sw sw-missing"></i>not available: an alternative is offered</span>
+  </div>`;
+
+  if (res.bundles.length) {
+    html += `<div class="prop-group"><div class="prop-group-label">Recommended bundles</div>`;
+    html += res.bundles.map(b => {
+      const bundle = BUNDLE_DB.find(x => x.id === b.id) || {};
+      const addable = [...b.verified, ...b.unverified];
+      // isBaseSelected, not a raw includes(): a selection may be stored pinned
+      // (name_version), and a pinned package still counts as added.
+      const added = addable.length && addable.every(p => isBaseSelected(p));
+      const badges = `<span class="prop-badge badge-verified">&#10003; ${b.verified.length} verified</span>`
+        + (b.unverified.length ? `<span class="prop-badge badge-unverified">${b.unverified.length} unverified</span>` : '')
+        + (b.unavailable.length ? `<span class="prop-badge badge-missing">${b.unavailable.length} unavailable</span>` : '')
+        + (b.viaSuggestion ? `<span class="prop-badge badge-resolved">suggested alternative</span>` : '');
+      const list = [
+        ...b.verified.map(n => n),
+        ...b.unverified.map(n => `${n} (unverified)`),
+        ...b.unavailable.map(n => `<span class="pkg-bad">${n}</span>`),
+      ].join('  &middot;  ');
+      return aiPropRow({
+        state: 'verified',
+        name: `${bundle.icon || ''} ${bundle.name || b.id}`,
+        badges, why: b.why, pkglist: list,
+        button: `<button class="prop-add ${added ? 'added' : ''}" onclick="aiAddBundle('${b.id}')">${added ? '&#10003; Added' : 'Add'}</button>`,
+      });
+    }).join('');
+    html += `</div>`;
+  }
+
+  if (res.packages.length) {
+    html += `<div class="prop-group"><div class="prop-group-label">Individual packages</div>`;
+    html += res.packages.map(p => {
+      const added = isBaseSelected(p.name);
+      const repo = REPO_DB.find(r => r.id === p.repo);
+      const badge = p.state === 'verified'
+        ? `<span class="prop-badge badge-verified">&#10003; verified</span>`
+        : p.state === 'unverified'
+          ? `<span class="prop-badge badge-unverified">unverified</span>`
+          : `<span class="prop-badge badge-missing">not found</span>`;
+      return aiPropRow({
+        state: p.state,
+        name: p.name,
+        badges: (repo ? `<span class="prop-badge badge-repo">${repo.name}</span>` : '') + badge,
+        why: p.why,
+        button: p.state === 'missing' ? '' :
+          `<button class="prop-add ${added ? 'added' : ''}" onclick="aiAddPackage('${p.name}')">${added ? '&#10003; Added' : 'Add'}</button>`,
+      });
+    }).join('');
+    html += `</div>`;
+  }
+
+  if (res.resolutions.length) {
+    html += `<div class="prop-group"><div class="prop-group-label">Resolved to real package names</div>`;
+    html += res.resolutions.map(r => aiPropRow({
+      state: 'resolved',
+      name: r.asked,
+      badges: `<span class="prop-badge badge-resolved">name resolved</span>`,
+      why: r.why,
+      pkglist: '&rarr; ' + r.resolved.join('  &middot;  '),
+    })).join('');
+    html += `</div>`;
+  }
+
+  if (res.misses.length) {
+    html += `<div class="prop-group"><div class="prop-group-label">Not available in your repositories</div>`;
+    html += res.misses.map(m => aiPropRow({
+      state: 'missing',
+      name: m.asked,
+      badges: `<span class="prop-badge badge-missing">not found</span>`,
+      why: m.why + (m.suggestBundle ? ' A grounded equivalent is offered above.' : ''),
+      button: m.suggestBundle
+        ? `<button class="prop-add suggest" onclick="aiAddBundle('${m.suggestBundle}')">${m.suggestLabel}</button>`
+        : '',
+    })).join('');
+    html += `</div>`;
+  }
+
+  html += `<div class="ai-foot"><span class="note">Every &ldquo;verified&rdquo; package was found by name in a
+    repository's own package index, not suggested from memory. Adding one enables its repository;
+    dependencies are resolved at build time.</span></div>`;
+  return html;
+}
+
+// ── Assist → selection actions. These write to the SAME advState.template the
+// manual controls use, so a suggested package is indistinguishable from a
+// hand-picked one once added (and is removable in the rail like any other).
+function aiAddPackage(name) {
+  const pkg = PACKAGE_DB.find(p => p.name === name);
+  if (pkg && !advState.template.enabledRepos.includes(pkg.repo)) {
+    advState.template.enabledRepos.push(pkg.repo);
+  }
+  advAddPackage(name);
+}
+
+function aiAddBundle(id) {
+  const b = BUNDLE_DB.find(x => x.id === id);
+  if (!b) return;
+  const res = aiState.result;
+  const entry = res && res.bundles.find(x => x.id === id);
+  // Add only what verification could actually find, never the unavailable names.
+  const names = entry ? [...entry.verified, ...entry.unverified] : b.packages;
+  names.forEach(n => {
+    const pkg = PACKAGE_DB.find(p => p.name === n);
+    if (pkg && !advState.template.enabledRepos.includes(pkg.repo)) {
+      advState.template.enabledRepos.push(pkg.repo);
+    }
+    // Leave an existing selection alone so a version the user pinned by hand
+    // survives; otherwise add the package tracking latest.
+    if (!isBaseSelected(n)) setPackageSelection(n, 'latest');
+  });
+  // Only claim the bundle as applied when its full set is present.
+  if (!advState.template.bundles.includes(id) && bundleState(b) === 'applied') {
+    advState.template.bundles.push(id);
+  }
+  renderAdvStepContent();
+}
+
+function aiAddAllVerified() {
+  const res = aiState.result;
+  if (!res) return;
+  res.bundles.forEach(b => aiAddBundle(b.id));
+  res.packages.filter(p => p.state === 'verified').forEach(p => aiAddPackage(p.name));
+  renderAdvStepContent();
 }
 
 // ── Use-case bundles ──────────────────────────────────────────────
@@ -1734,7 +2303,7 @@ function renderRepoPane() {
     </div>`;
 
   // Per-repo search sits directly below the toggle. onPaneSearch restores focus
-  // after the re-render (no autofocus — that would steal focus on every toggle).
+  // after the re-render (no autofocus, which would steal focus on every toggle).
   const search = `<div class="pane-search">
       <input id="pane-search-input" placeholder="Search ${repo.name}…" value="${pkgGroupsUI.paneSearch || ''}"
         oninput="onPaneSearch(this.value)">
@@ -2034,6 +2603,20 @@ function copyAdvYaml() {
 // BUILD SIMULATION
 // ═══════════════════════════════════════════════════════════════
 
+// Drives the nav status dot. In the real UI this is `buildStatus` in App.tsx,
+// fed by the SSE build stream; the dot is hidden entirely while idle.
+const COMPOSE_INDICATOR_TITLES = { running: 'Compose in progress', success: 'Compose completed', failed: 'Compose failed' };
+
+function setComposeIndicator(status) {
+  const dot = document.getElementById('compose-indicator');
+  if (!dot) return;
+  dot.className = 'compose-dot' + (status === 'idle' ? '' : ' ' + status);
+  dot.style.display = status === 'idle' ? 'none' : 'flex';
+  const title = COMPOSE_INDICATOR_TITLES[status] || '';
+  dot.title = title;
+  dot.setAttribute('aria-label', title);
+}
+
 let buildInterval;
 function simulateBuild() {
   const logs = document.getElementById('build-logs');
@@ -2042,13 +2625,15 @@ function simulateBuild() {
   const msgs = ['Resolving packages...','Configuring partitions...','Installing base system...','Installing packages...','Generating image...','Compressing output...','Compose complete!'];
   let i = 0;
   clearInterval(buildInterval);
-  if (statusText) statusText.textContent = 'Composing…';
+  if (statusText) statusText.textContent = 'Composing...';
   if (resultEl) resultEl.innerHTML = '';
+  setComposeIndicator('running');
   buildInterval = setInterval(() => {
     if (i >= msgs.length) {
       clearInterval(buildInterval);
       if (statusText) statusText.textContent = 'Finished';
-      if (resultEl) resultEl.innerHTML = '<span style="color:#16a34a;">&#10003; Compose Passed</span>';
+      if (resultEl) resultEl.innerHTML = '<span style="color:#16a34a;">&#10003; Compose Succeeded</span>';
+      setComposeIndicator('success');
       return;
     }
     const line = document.createElement('div'); line.className='log-line';
@@ -2073,48 +2658,8 @@ function downloadBuildLogs() {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// REVIEW IMAGE CONFIGURATION & ARTIFACT COPY
+// ARTIFACT COPY
 // ═══════════════════════════════════════════════════════════════
-
-const VERTICAL_LABELS = { 'generic':'Generic', 'robotics':'Robotics', 'physical-ai':'Physical AI', 'agentic-ai':'Agentic AI', 'health':'Health', 'fed-aero':'Fed Aero', 'industrial':'Industrial IoT', 'retail':'Retail Edge' };
-const PLATFORM_LABELS = { 'ptl':'PTL (Panther Lake)', 'wcl':'WCL (Wildcat Lake)', 'arl':'ARL (Arrow Lake)', 'nvl':'NVL (Nova Lake)' };
-const OS_LABELS = { 'ubuntu24':'Ubuntu 24.04', 'ubuntu26':'Ubuntu 26.04', 'debian13':'Debian 13', 'azl3':'Azure Linux 3', 'elxr13':'Wind River eLxr 13', 'emt3':'Edge Microvisor Toolkit 3' };
-
-function toggleImageContent() {
-  const cb = document.getElementById('view-image-content');
-  const container = document.getElementById('image-content-details');
-  if (!container) return;
-  if (cb.checked) {
-    const v = state.vertical || 'generic';
-    const skuLabel = (VERTICAL_SKUS[v]||[]).find(s => s.id === state.sku);
-    // Read the live Advanced template rather than the vertical preset, so edits
-    // made in Advanced (packages, image name, disk) show up here too. The two
-    // are identical until the user changes something in Advanced.
-    const t = advState.template;
-    const imageName = t.image.name || 'my-edge-image';
-    const packages = t.packages;
-    const disk = { size: t.disk.size, partitionTableType: t.disk.partitionTableType.toUpperCase(), partitions: t.disk.partitions.length };
-    const bundleCount = t.bundles.length;
-    container.innerHTML = `
-      <div style="background:#f8fafc;border:1px solid var(--border);border-radius:6px;padding:16px;margin-top:12px;">
-        <h4 style="margin:0 0 10px;color:var(--text);font-size:14px;">Review Image Configuration</h4>
-        <table style="width:100%;font-size:13px;border-collapse:collapse;">
-          <tr><td style="padding:6px 0;font-weight:600;width:120px;">Image</td><td>${imageName} v${t.image.version}</td></tr>
-          <tr><td style="padding:6px 0;font-weight:600;">Vertical</td><td>${VERTICAL_LABELS[v] || v}</td></tr>
-          <tr><td style="padding:6px 0;font-weight:600;">SKU</td><td>${skuLabel ? skuLabel.label : '—'}</td></tr>
-          <tr><td style="padding:6px 0;font-weight:600;">Platform</td><td>${PLATFORM_LABELS[state.platform] || '—'}</td></tr>
-          <tr><td style="padding:6px 0;font-weight:600;">OS</td><td>${OS_LABELS[state.os] || '—'}</td></tr>
-          <tr><td style="padding:6px 0;font-weight:600;">Image Type</td><td>${(state.imageType || 'raw').toUpperCase()}</td></tr>
-          <tr><td style="padding:6px 0;font-weight:600;">Disk</td><td>${disk.size}, ${disk.partitionTableType}, ${disk.partitions} partitions</td></tr>
-          <tr><td style="padding:6px 0;font-weight:600;">Packages</td><td>${packages.length} packages${bundleCount ? ` (${bundleCount} bundle${bundleCount > 1 ? 's' : ''})` : ''}</td></tr>
-        </table>
-      </div>`;
-    container.style.display = 'block';
-  } else {
-    container.innerHTML = '';
-    container.style.display = 'none';
-  }
-}
 
 function copyArtifactLink(path, btn) {
   navigator.clipboard.writeText(path);
@@ -2127,7 +2672,7 @@ function copyArtifactLink(path, btn) {
 // ═══════════════════════════════════════════════════════════════
 // INIT
 // ═══════════════════════════════════════════════════════════════
-onVerticalChange();
+renderBasic();
 renderAdvSteps();
 renderAdvStepContent();
 simulateBuild();
