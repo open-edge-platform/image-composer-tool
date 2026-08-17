@@ -308,3 +308,63 @@ deb:
     RUN VERSION=$(cat /tmp/pkg_version) && cp /tmp/pkg_version /tmp/dist/image-composer-tool.version
     SAVE ARTIFACT /tmp/dist/ict_*_${ARCH}.deb AS LOCAL dist/
     SAVE ARTIFACT /tmp/dist/image-composer-tool.version AS LOCAL dist/image-composer-tool.version
+
+# ── Builder container image ───────────────────────────────────────────────────
+# Builds the ICT builder image: Ubuntu 24.04 + complete toolchain + ICT binary.
+# The toolchain apt-install layer is ordered before the binary copy so it stays
+# cached across binary-only rebuilds.
+#
+# Build locally:
+#   earthly +builder-image
+# Push to registry:
+#   earthly +builder-image-push --REGISTRY=<registry> --VERSION=<tag>
+
+builder-image:
+    ARG VERSION="dev"
+    ARG BUILDER_IMAGE_NAME="image-composer-tool-builder"
+
+    # Ensure the ICT binary is built first
+    BUILD +build
+
+    FROM DOCKERFILE \
+        --build-arg http_proxy=$http_proxy \
+        --build-arg https_proxy=$https_proxy \
+        --build-arg no_proxy=$no_proxy \
+        --build-arg HTTP_PROXY=$HTTP_PROXY \
+        --build-arg HTTPS_PROXY=$HTTPS_PROXY \
+        --build-arg NO_PROXY=$NO_PROXY \
+        -f build/builder/Dockerfile .
+
+    SAVE IMAGE ${BUILDER_IMAGE_NAME}:${VERSION}
+    SAVE IMAGE ${BUILDER_IMAGE_NAME}:latest
+
+builder-image-push:
+    ARG VERSION="dev"
+    ARG REGISTRY
+    ARG BUILDER_IMAGE_NAME="image-composer-tool-builder"
+
+    BUILD +build
+
+    FROM DOCKERFILE \
+        --build-arg http_proxy=$http_proxy \
+        --build-arg https_proxy=$https_proxy \
+        --build-arg no_proxy=$no_proxy \
+        --build-arg HTTP_PROXY=$HTTP_PROXY \
+        --build-arg HTTPS_PROXY=$HTTPS_PROXY \
+        --build-arg NO_PROXY=$NO_PROXY \
+        -f build/builder/Dockerfile .
+
+    SAVE IMAGE --push ${REGISTRY}/${BUILDER_IMAGE_NAME}:${VERSION}
+    SAVE IMAGE --push ${REGISTRY}/${BUILDER_IMAGE_NAME}:latest
+
+# Run preflight in a separate target to keep builder-image (Subtask 1)
+# independent from runtime validation (Subtask 2).
+builder-image-preflight:
+    FROM +builder-image
+
+    # Preflight derives required commands from shell commandMap source.
+    COPY scripts/preflight.sh /usr/local/bin/preflight.sh
+    COPY internal/utils/shell/shell.go /tmp/shell.go
+
+    RUN chmod +x /usr/local/bin/preflight.sh
+    RUN /usr/local/bin/preflight.sh --check-only --command-map-file /tmp/shell.go

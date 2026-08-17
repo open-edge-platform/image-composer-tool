@@ -1,0 +1,41 @@
+name: Builder Image Preflight
+
+on:
+  pull_request:
+    paths:
+      - 'Earthfile'
+      - 'build/builder/Dockerfile'
+      - 'internal/utils/shell/shell.go'
+      - 'scripts/preflight.sh'
+  push:
+    branches:
+      - main
+    paths:
+      - 'Earthfile'
+      - 'build/builder/Dockerfile'
+      - 'internal/utils/shell/shell.go'
+      - 'scripts/preflight.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    name: Validate builder toolchain
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 #v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Earthly
+        uses: earthly/actions-setup@43211c7a0eae5344d6d79fb4aaf209c8f8866203 #v1.0.13
+        with:
+          version: latest
+
+      - name: Build builder image and run preflight
+        run: earthly +builder-image-preflight
