@@ -197,6 +197,19 @@ disk:
 systemConfig:
   name: robotics-hw
   description: Ubuntu 24.04 robotics base — Intel hardware enablement overlaid on the Canonical cloud image
+  # ---------------------------------------------------------------------------
+  # Login account. This BASE bakes NO credential of its own. In MODE A the
+  # bring-up script turns ON password SSH, but sshd has nothing to log into until
+  # an account exists — and MODE A disables cloud-init, so cloud-init will not
+  # create one either. Provide a login here (or in a child/user template) so MODE
+  # A yields a usable shell; under MODE B, cloud-init provisions the user instead.
+  # Uncomment and set a password HASH, or leave the password unset and drop an
+  # authorized_keys via additionalFiles for key-only auth. Do NOT commit a real
+  # plaintext password.
+  # users:
+  #   - name: user
+  #     password: "<SHA512-CRYPT HASH>"   # e.g. `mkpasswd -m sha512crypt`; NOT plaintext
+  #     groups: ["sudo"]
 
   # ---------------------------------------------------------------------------
   # Intel hardware enablement, overlaid onto the cloud image. Additive-only: a
@@ -232,7 +245,35 @@ systemConfig:
     - linux-firmware
 
     # ── SSH server access ────────────────────────────────────────────
-    - openssh-server
+    - openssh-server   # SSH login on bare metal (started by bare-metal-bringup.sh at boot)
+
+    # ── EFI boot order support ───────────────────────────────────────
+    - efibootmgr   # hardware cleanup: revert EFI boot order back to the host disk
+
+  # ---------------------------------------------------------------------------
+  # Bare-metal bring-up (DHCP networking + SSH) — runs at BOOT, not build.
+  #
+  # The Ubuntu cloud baseline leans on cloud-init to configure networking and
+  # SSH from a datasource at first boot. On bare metal there is no datasource,
+  # so networking and sshd never come up. Rather than provisioning sshd at build
+  # time (which bakes shared host keys and does nothing for networking), the
+  # bring-up runs at BOOT via the shared script bare-metal-bringup.sh: DHCP every
+  # wired NIC via systemd-networkd, generate PER-DEVICE host keys, start sshd.
+  #
+  # The script and its systemd unit are delivered regardless of mode; the MODE
+  # toggle in configurations (below) decides whether they are activated. In
+  # MODE B (cloud) they are shipped but left inert, and cloud-init provisions
+  # networking/SSH from the cloud datasource instead. (No cloud-init seed is
+  # baked in: a local NoCloud seed would shadow the real cloud datasource.)
+  #
+  # The script is 0755 in the repo and additionalFiles preserves mode (cp -p),
+  # so it lands executable.
+  # ---------------------------------------------------------------------------
+  additionalFiles:
+    - local: additionalfiles/ubuntu24-robotics-baremetal/usr/local/sbin/bare-metal-bringup.sh
+      final: /usr/local/sbin/bare-metal-bringup.sh
+    - local: additionalfiles/ubuntu24-robotics-baremetal/etc/systemd/system/bare-metal-bringup.service
+      final: /etc/systemd/system/bare-metal-bringup.service
 
   # ---------------------------------------------------------------------------
   # Hardware-side configuration. These apt pins are post-deployment upgrade
@@ -255,8 +296,48 @@ systemConfig:
     # Intel NPU udev rules (render group access to /dev/accel/*)
     - cmd: "printf 'SUBSYSTEM==\"accel\", KERNEL==\"accel*\", GROUP=\"render\", MODE=\"0660\"\\n' > /etc/udev/rules.d/10-intel-vpu.rules"
 
-    # Enable the ssh service
-    - cmd: "systemctl enable ssh"
+    # ==========================================================================
+    # BARE-METAL vs CLOUD MODE — THE SWITCH. Exactly ONE of the two `- cmd:` lines
+    # below is uncommented. To change mode, move the `#`: comment the active line
+    # and uncomment the other. Nothing else in this template changes.
+    #
+    #   MODE A (bare metal) : disable cloud-init, drop baked SSH host keys, enable
+    #                         our systemd bring-up.
+    #   MODE B (cloud)      : leave cloud-init enabled so it provisions from the
+    #                         cloud datasource; our script/unit stay shipped-inert.
+    #
+    - cmd: mkdir -p /etc/cloud && touch /etc/cloud/cloud-init.disabled && rm -f /etc/ssh/ssh_host_* && mkdir -p /etc/systemd/system/multi-user.target.wants && ln -sf /etc/systemd/system/bare-metal-bringup.service /etc/systemd/system/multi-user.target.wants/bare-metal-bringup.service   # MODE A (default)
+    # - cmd: rm -f /etc/cloud/cloud-init.disabled                                                                                                                                                                                            # MODE B
+    #
+    # WHY: the Ubuntu cloud baseline relies on cloud-init to bring up networking and
+    # SSH from a datasource at first boot.
+    #
+    #   * MODE A (bare metal): there is NO datasource, so cloud-init stalls boot and
+    #     never brings up DHCP or sshd (QEMU masked this via instant DHCP). We
+    #     DISABLE cloud-init and run bare-metal-bringup.sh from a systemd oneshot
+    #     instead — DHCP every wired NIC via systemd-networkd, PER-DEVICE host keys,
+    #     start sshd. We also `rm -f /etc/ssh/ssh_host_*` at build so first boot
+    #     regenerates keys UNIQUE per unit: ssh-keygen -A only fills in MISSING keys,
+    #     so any keys baked by the openssh-server install would otherwise be shared
+    #     fleet-wide. The steps are chained with `&&` (not `;`) so the build fails
+    #     fast if any of them did not actually happen. We create the wants symlink
+    #     directly because `systemctl enable` cannot run in this stage (it executes
+    #     before additionalFiles are copied in). Trade-off: disabling cloud-init
+    #     forfeits its first-boot rootfs growpart. INSECURE bring-up: password SSH
+    #     auth is on.
+    #
+    #   * MODE B (cloud): there IS a datasource, so leave cloud-init ENABLED and let
+    #     it provision networking/SSH normally from the cloud metadata. The `rm -f`
+    #     just clears any inherited disable flag; our bring-up script/unit remain
+    #     shipped but unenabled, and NO local seed is baked (it would shadow the
+    #     cloud datasource).
+    #
+    # The login account is NOT provisioned by this BASE (see the commented
+    # systemConfig.users example near the top of systemConfig). MODE A turns on
+    # password SSH, but with cloud-init disabled nothing creates a user, so add
+    # one (a password hash or an authorized_keys file) or MODE A starts sshd with
+    # no way to log in.
+    # ==========================================================================
 
 # -----------------------------------------------------------------------------
 # All seven repositories are declared here, in ONE layer, and inherited intact by
