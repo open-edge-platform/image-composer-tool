@@ -61,9 +61,9 @@ directly against the `main` baseline:
   encoding used by `systemConfig.packages` (see
   [Web UI Tech Stack ADR](adr-web-ui-tech-stack.md)) — this ADR only changes
   the UI layer, not the wire/template format.
-- Must scale to repositories with tens of thousands of packages (suggested vs.
-  full-catalog browsing, windowed rendering) — already an established pattern
-  in the prototype and not being revisited here.
+- Must scale to repositories with tens of thousands of packages (frequently
+  used vs. full-catalog browsing, windowed rendering) — already an established
+  pattern in the prototype and not being revisited here.
 - Must remain usable with only a handful of packages selected as well as
   dozens — bundle discovery shouldn't dominate the page in either case.
 

@@ -262,122 +262,6 @@ body {
 .checkbox-card-title { font-weight: 600; font-size: 13px; }
 .checkbox-card-packages { font-size: 12px; color: var(--text-muted); margin-top: 3px; margin-left: 26px; }
 
-/* ── AI package assist (describe-the-image → grounded proposals) ── */
-.ai-card {
-  border: 1px solid #bcdcf3; border-radius: 10px; overflow: hidden;
-  background: linear-gradient(180deg, #f2f9ff 0%, #ffffff 60%);
-}
-.ai-head { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px 6px; }
-.ai-spark {
-  width: 32px; height: 32px; border-radius: 8px; flex-shrink: 0; display: flex;
-  align-items: center; justify-content: center; font-size: 16px; color: #fff;
-  background: linear-gradient(135deg, #0071C5, #00285A);
-}
-.ai-title { font-size: 14px; font-weight: 700; }
-.ai-sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; line-height: 1.45; }
-.ai-body { padding: 4px 16px 14px; }
-.ai-input {
-  width: 100%; min-height: 60px; resize: vertical; padding: 10px 12px;
-  border: 1px solid var(--border); border-radius: 8px; font-size: 13px;
-  font-family: inherit; color: var(--text); background: #fff; line-height: 1.5;
-}
-.ai-input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(0,113,197,0.12); }
-.ai-input::placeholder { color: #90a9c0; }
-.ai-controls {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 12px; margin-top: 9px; flex-wrap: wrap;
-}
-.ai-examples { display: flex; flex-wrap: wrap; gap: 6px; }
-.ai-example {
-  font-size: 11.5px; color: var(--primary); background: #fff; border: 1px solid #cfe4f6;
-  border-radius: 999px; padding: 4px 10px; cursor: pointer; transition: all .15s;
-}
-.ai-example:hover { background: var(--primary-light); border-color: var(--primary); }
-
-/* Grounding trace: the three real backend stages, streamed over SSE */
-.ai-thinking { padding: 6px 2px 2px; display: none; }
-.ai-thinking.show { display: block; }
-.think-row {
-  display: flex; align-items: center; gap: 9px; font-size: 12.5px;
-  color: var(--text-muted); padding: 3px 0;
-}
-.think-row .tick { color: var(--success); font-weight: 700; }
-.think-row .spin {
-  width: 12px; height: 12px; border-radius: 50%; border: 2px solid #cfe0ef;
-  border-top-color: var(--primary); animation: ai-spin .7s linear infinite;
-}
-.think-row .detail { color: var(--text); }
-@keyframes ai-spin { to { transform: rotate(360deg); } }
-
-/* Proposals */
-.ai-results { display: none; margin-top: 12px; }
-.ai-results.show { display: block; }
-.ai-results-head {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 12px; margin-bottom: 10px; flex-wrap: wrap;
-}
-.ai-summary { font-size: 12.5px; }
-.ai-summary b { color: var(--primary-hover); }
-.ai-legend {
-  display: flex; flex-wrap: wrap; gap: 4px 14px; margin-bottom: 10px;
-  font-size: 10.5px; color: var(--text-muted);
-}
-.ai-legend span { display: flex; align-items: center; gap: 5px; }
-.ai-legend .sw { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
-.sw-verified   { background: var(--success); }
-.sw-resolved   { background: var(--warning); }
-.sw-unverified { background: #94a3b8; }
-.sw-missing    { background: var(--error); }
-.prop-group + .prop-group { margin-top: 13px; }
-.prop-group-label {
-  font-size: 10.5px; text-transform: uppercase; letter-spacing: .5px;
-  font-weight: 700; color: var(--text-muted); margin-bottom: 6px;
-}
-.prop {
-  border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
-  margin-bottom: 7px; background: #fff; display: flex; gap: 12px; align-items: flex-start;
-}
-.prop.verified   { border-left: 3px solid var(--success); }
-.prop.resolved   { border-left: 3px solid var(--warning); background: var(--warning-light); }
-.prop.unverified { border-left: 3px solid #94a3b8; background: #f8fafc; }
-.prop.missing    { border-left: 3px solid var(--error); background: var(--error-light); }
-.prop-main { flex: 1; min-width: 0; }
-.prop-name-row { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
-.prop-name { font-size: 13px; font-weight: 700; }
-.prop-reason { font-size: 11.5px; color: var(--text-muted); margin-top: 3px; line-height: 1.45; }
-.prop-pkglist {
-  font-size: 11px; color: var(--text-muted); margin-top: 5px;
-  font-family: ui-monospace, monospace; line-height: 1.5;
-}
-.prop-pkglist .pkg-bad { color: var(--error); text-decoration: line-through; }
-.prop-badge { font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 4px; white-space: nowrap; }
-.badge-repo       { color: var(--primary); background: #eaf4fc; }
-.badge-verified   { color: #166534; background: #dcfce7; }
-.badge-resolved   { color: #92400e; background: #fef3c7; }
-.badge-unverified { color: #334155; background: #e2e8f0; }
-.badge-missing    { color: #991b1b; background: #fee2e2; }
-.prop-add {
-  flex-shrink: 0; border: 1px solid var(--primary); color: var(--primary); background: #fff;
-  border-radius: 6px; padding: 5px 11px; font-size: 11.5px; font-weight: 600;
-  cursor: pointer; transition: all .12s; align-self: center;
-}
-.prop-add:hover { background: var(--primary); color: #fff; }
-.prop-add.added {
-  border-color: var(--success); color: var(--success);
-  background: var(--success-light); cursor: default;
-}
-.prop-add.suggest { border-color: var(--warning); color: var(--warning); }
-.prop-add.suggest:hover { background: var(--warning); color: #fff; }
-.ai-foot {
-  display: flex; gap: 10px; align-items: center; margin-top: 12px;
-  padding-top: 12px; border-top: 1px solid #e5eef7; flex-wrap: wrap;
-}
-.ai-foot .note { font-size: 11px; color: var(--text-muted); flex: 1; min-width: 180px; }
-.ai-degraded {
-  font-size: 11.5px; color: #92400e; background: var(--warning-light);
-  border: 1px solid #fde68a; border-radius: 6px; padding: 7px 10px; margin-bottom: 10px;
-}
-
 /* ── Use-Case Bundles (curated, cross-repo, all-or-none) ── */
 .bundles-header { display: flex; align-items: center; justify-content: space-between; cursor: pointer; user-select: none; }
 .bundles-header-label { display: flex; align-items: center; gap: 8px; margin: 0; cursor: pointer; }
@@ -440,8 +324,8 @@ body {
   padding: 8px 0 4px; border-bottom: 1px solid var(--border); margin-bottom: 4px;
   position: sticky; top: 0; background: var(--surface); z-index: 1;
 }
-.suggested-toggle { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; color: var(--text); cursor: pointer; }
-.suggested-toggle input { accent-color: var(--primary); width: 15px; height: 15px; }
+.frequent-toggle { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; color: var(--text); cursor: pointer; }
+.frequent-toggle input { accent-color: var(--primary); width: 15px; height: 15px; }
 .pkg-pager { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 6px; padding: 8px 8px 4px; margin-top: 6px; border-top: 1px dashed var(--border); }
 .pager-jump { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-muted); }
 .pager-page-input {
@@ -453,18 +337,6 @@ body {
    range is reference information rather than a control. */
 .pager-range { font-size: 11px; color: var(--text-muted); text-align: center; padding: 0 8px 8px; }
 .pkg-list-scroll { max-height: 300px; overflow-y: auto; overflow-x: hidden; }
-
-/* Per-repo search box inside the pane */
-.pane-search { position: relative; margin: 6px 0 4px; }
-.pane-search input {
-  width: 100%; padding: 7px 28px 7px 10px; font-size: 12px;
-  border: 1px solid var(--border); border-radius: 6px;
-}
-.pane-search input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,0.1); }
-.pane-search .clear-search {
-  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
-  border: none; background: none; cursor: pointer; color: var(--text-muted); font-size: 14px; line-height: 1;
-}
 
 /* Right rail: final selected-package list (page-level, sticky) */
 .selected-col {
@@ -989,12 +861,13 @@ const TEMPLATE_SUMMARIES = {
 };
 
 
-// Suggested-package database — modeled on the real robotics-jazzy ISO template
-// (image-templates/ubuntu24-x86_64-robotics-jazzy-iso.yml). These are the
-// packages that template actually installs; in the UI they are the "suggested"
-// picks surfaced by default. Each real repo also carries hundreds/thousands of
-// other packages, simulated on the fly (see allPackagesForRepo). `curated: true`
-// marks a package as suggested for its repo.
+// Frequently-used package database — modeled on the real robotics-jazzy ISO
+// template (image-templates/ubuntu24-x86_64-robotics-jazzy-iso.yml). These are
+// the packages that template actually installs; in the UI they are the
+// "frequently used" picks surfaced by default. Each real repo also carries
+// hundreds/thousands of other packages, simulated on the fly (see
+// allPackagesForRepo). `curated: true` marks a package as frequently used for
+// its repo.
 const PACKAGE_DB = [
   // ── Ubuntu base (noble) ──
   { name: 'ubuntu-minimal', desc: 'Minimal Ubuntu system', repo: 'ubuntu-main', version: '1.539.2', curated: true },
@@ -1355,28 +1228,28 @@ const advState = {
 
 // UI-only view state for the package step (not part of the exported config):
 //  - activeRepo:     repo open in the right pane
-//  - suggestedOnly:  when true, the pane shows only curated/suggested packages;
-//                    unchecking reveals the repo's full catalog
+//  - frequentOnly:   when true, the pane shows only the frequently used
+//                    (curated) packages; unchecking reveals the full catalog
 //  - pageStart:      per-repo index of the first full-catalog row currently
 //                    rendered; the pane shows a fixed-width window starting
 //                    here, moved by the Prev/Next buttons
-const pkgGroupsUI = { activeRepo: 'ubuntu-main', suggestedOnly: true, pageStart: {}, paneSearch: '', expandedVersionRows: {}, bundlesCollapsed: true };
+const pkgGroupsUI = { activeRepo: 'ubuntu-main', frequentOnly: true, pageStart: {}, expandedVersionRows: {}, bundlesCollapsed: true };
 // Width of the full-catalog window. Fixed rather than cumulative: paging deep
 // into a 60k-package repo never puts more than this many rows in the DOM.
 const PAGE_SIZE = 100;
 const DEFAULT_VISIBLE_VERSIONS = 2;
 
-// Simulate a repo's FULL package catalog: the real suggested packages plus
+// Simulate a repo's FULL package catalog: the frequently used packages plus
 // synthetic filler up to the repo's advertised total. Stands in for a live
 // repo-index query in the real UI (which would be paginated/virtualized).
 const _allPkgCache = {};
 function allPackagesForRepo(repoId) {
   if (_allPkgCache[repoId]) return _allPkgCache[repoId];
   const repo = REPO_DB.find(r => r.id === repoId) || OTHER_REPO;
-  const suggested = PACKAGE_DB.filter(p => p.repo === repoId);
-  const total = repo.total || suggested.length;
-  const list = suggested.slice();
-  for (let i = suggested.length; i < total; i++) {
+  const frequent = PACKAGE_DB.filter(p => p.repo === repoId);
+  const total = repo.total || frequent.length;
+  const list = frequent.slice();
+  for (let i = frequent.length; i < total; i++) {
     list.push({ name: `${repoId}-pkg-${i}`, desc: 'Additional repository package', repo: repoId });
   }
   _allPkgCache[repoId] = list;
@@ -1584,36 +1457,10 @@ function renderAdvStepContent() {
 
     case 'packages':
       html += `<h2>${step.icon} Repositories &amp; Packages</h2>
-        <p class="step-desc">Describe what the image needs, apply a use-case bundle, search for a package, or browse repositories. Your selections collect on the right.</p>
+        <p class="step-desc">Apply a use-case bundle, search for a package, or browse repositories. Your selections collect on the right.</p>
 
         <div class="packages-layout">
           <div class="packages-main">
-            <div class="form-group">
-              <div class="ai-card">
-                <div class="ai-head">
-                  <div class="ai-spark">&#10022;</div>
-                  <div>
-                    <div class="ai-title">Describe what this image needs</div>
-                    <div class="ai-sub">Matches your description to bundles and packages, then looks up every one in the
-                      real package metadata of this target's repositories. Nothing is marked <b>verified</b> unless it was
-                      actually found there. Adding it enables the repository it comes from.</div>
-                  </div>
-                </div>
-                <div class="ai-body">
-                  <textarea id="ai-input" class="ai-input"
-                    placeholder="e.g. Autonomous mobile robot with a depth camera and on-device AI inference&hellip;"
-                    oninput="aiState.query=this.value">${aiState.query || ''}</textarea>
-                  <div class="ai-controls">
-                    <div class="ai-examples">${renderAiExamples()}</div>
-                    <button class="btn btn-primary" onclick="runAiAssist()">&#10022;&nbsp; Suggest packages</button>
-                  </div>
-                  <div class="ai-thinking ${aiState.stages.length ? 'show' : ''}" id="ai-thinking">${renderAiThinking()}</div>
-                  <div class="ai-results ${aiState.result ? 'show' : ''}" id="ai-results">${renderAiResults()}</div>
-                </div>
-              </div>
-              <p class="form-hint">Suggestions are proposals; you add what you want. Everything below stays fully manual.</p>
-            </div>
-
             <div class="form-group">
               <div class="bundles-header" role="button" tabindex="0" aria-expanded="${!pkgGroupsUI.bundlesCollapsed}" onclick="toggleBundlesCollapsed()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleBundlesCollapsed();}">
                 <label class="form-label bundles-header-label">
@@ -1643,7 +1490,7 @@ function renderAdvStepContent() {
                 <div class="repo-rail">${renderRepoRail()}</div>
                 <div class="repo-pane">${renderRepoPane()}</div>
               </div>
-              <p class="form-hint">Enable a repository with its checkbox, then click it to browse. “Suggested packages only” is on by default; uncheck it to browse the repo's full catalog (loaded in pages).</p>
+              <p class="form-hint">Enable a repository with its checkbox, then click it to browse. “Show frequently used” is on by default; uncheck it to browse the repo's full catalog (loaded in pages of ${PAGE_SIZE}). “Select all” takes everything currently listed.</p>
             </div>
           </div>
 
@@ -1714,359 +1561,6 @@ function buildPackageGroups() {
   const groups = REPO_DB.map(r => byId[r.id]).filter(g => g.packages.length);
   if (other.packages.length) groups.push(other);
   return groups;
-}
-
-// ── AI package assist ─────────────────────────────────────────────
-// UI-only state. In the real UI this is a Zustand slice; `result` holds exactly
-// the POST /ai/select-packages payload so the renderers below are the production
-// renderers. Only the transport is faked here.
-const aiState = {
-  query: '',
-  stages: [],   // streamed progress rows: {label, detail, done}
-  result: null, // {bundles, packages, resolutions, misses, repoStatus, llmUsed}
-  running: false,
-};
-
-const AI_EXAMPLES = [
-  'Autonomous mobile robot with a depth camera and on-device AI inference',
-  'Headless ROS 2 dev box with Intel GPU acceleration and disk encryption',
-  'Robot vision using NVIDIA CUDA',
-];
-
-function renderAiExamples() {
-  return AI_EXAMPLES.map((e, i) =>
-    `<button class="ai-example" onclick="runAiExample(${i})">${e}</button>`).join('');
-}
-
-function runAiExample(i) {
-  aiState.query = AI_EXAMPLES[i];
-  runAiAssist();
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// SIMULATED BACKEND. Everything from here to `aiSimulate` is thrown away in
-// production: the real Packages step POSTs the description to
-// /api/v1/ai/select-packages and consumes the retrieve/assemble/verify/result
-// SSE events. The keyword tables below stand in for RAG retrieval + LLM
-// assembly; the repo checks stand in for real apt/dnf metadata lookups.
-// ═══════════════════════════════════════════════════════════════════
-
-// Retrieval: description → candidate bundles (what the vector index would rank).
-const AI_INTENTS = [
-  { kw: ['ros', 'ros 2', 'robot operating', 'middleware'], bundle: 'ros2-desktop',
-    why: 'ROS 2 middleware for robot control and messaging.' },
-  { kw: ['depth camera', 'realsense', 'stereo', 'rgb-d', 'depth'], bundle: 'realsense-camera',
-    why: 'Intel RealSense depth camera: kernel driver, SDK and ROS 2 bridge.' },
-  { kw: ['inference', 'openvino', 'on-device ai', 'on device ai', 'vision model', 'object detection', 'neural network'],
-    bundle: 'openvino-inference', why: 'On-device inference accelerated on Intel GPU via OpenVINO.' },
-  { kw: ['slam', 'navigation', 'autonomous', 'amr', 'mapping', 'localization', 'path planning'],
-    bundle: 'amr-robotics', why: 'Autonomous navigation with the Intel Robotics SDK and collaborative SLAM.' },
-  { kw: ['npu', 'neural processing'], bundle: 'intel-npu', why: 'Offload inference to the Intel NPU.' },
-  { kw: ['simulation', 'simulate', 'gazebo', 'digital twin'], bundle: 'gazebo-sim',
-    why: 'Physics simulation for testing before hardware is available.' },
-];
-
-// Retrieval: description → individual candidate packages.
-const AI_LOOSE = [
-  { kw: ['ssh', 'headless', 'remote access', 'remote login'], pkg: 'openssh-server',
-    why: 'Remote/headless access to the device.' },
-  { kw: ['encrypt', 'luks', 'disk encryption', 'fde'], pkg: 'cryptsetup-bin',
-    why: 'LUKS full-disk encryption for data at rest.' },
-  { kw: ['gpu accel', 'gpu acceleration', 'level zero', 'intel gpu', 'igpu'], pkg: 'libze-intel-gpu1',
-    why: 'Intel GPU compute acceleration via Level Zero.' },
-];
-
-// Things users ask for that no enabled repo publishes. Grounding requires we say
-// so and offer a real alternative rather than silently dropping the request.
-const AI_MISSES = [
-  { kw: ['nvidia', 'cuda', 'tensorrt', 'jetson', 'geforce', 'rtx'], asked: 'nvidia-cuda-toolkit, tensorrt',
-    why: 'No NVIDIA CUDA packages are published by any repository enabled for this target; this is an Intel platform build.',
-    suggestBundle: 'openvino-inference', suggestLabel: 'Use OpenVINO instead' },
-];
-
-// Simulated verification. In production this is one pkgquery.Lookup() call
-// against real apt/dnf metadata for the target's repositories.
-//
-// Verification is against every repository configured for this target, not just
-// the ones currently ticked: proposing a package from a not-yet-enabled repo is
-// the point, and adding it enables that repo (see aiAddPackage). The three demo
-// outcomes are fixed so the walkthrough is deterministic:
-const AI_UNREACHABLE = ['intel-amr'];                 // repo we cannot reach → unverified
-const AI_WITHDRAWN = ['ros-jazzy-librealsense2'];     // repo reachable, package absent → missing
-
-function aiVerify(pkgName) {
-  const pkg = PACKAGE_DB.find(p => p.name === pkgName);
-  if (!pkg) return { state: 'missing', repo: null };
-  if (AI_UNREACHABLE.includes(pkg.repo)) return { state: 'unverified', repo: pkg.repo };
-  if (AI_WITHDRAWN.includes(pkgName)) return { state: 'missing', repo: pkg.repo };
-  return { state: 'verified', repo: pkg.repo, version: '(from repo metadata)' };
-}
-
-// Produce the response shape the real endpoint returns.
-function aiSimulate(query) {
-  const s = ' ' + query.toLowerCase() + ' ';
-  const hit = r => r.kw.some(k => s.includes(k));
-  const bundles = [], packages = [], resolutions = [], misses = [];
-  const seenB = new Set();
-
-  const addBundle = (id, why, viaSuggestion) => {
-    if (seenB.has(id)) return;
-    seenB.add(id);
-    const b = BUNDLE_DB.find(x => x.id === id);
-    if (!b) return;
-    // Verify every member; a bundle reports per-package outcomes, never a bare count.
-    const verified = [], unverified = [], unavailable = [];
-    b.packages.forEach(n => {
-      const v = aiVerify(n);
-      if (v.state === 'verified') verified.push(n);
-      else if (v.state === 'unverified') unverified.push(n);
-      else unavailable.push(n);
-    });
-    bundles.push({ id, why, viaSuggestion, verified, unverified, unavailable });
-  };
-
-  AI_INTENTS.filter(hit).forEach(r => addBundle(r.bundle, r.why));
-  AI_MISSES.filter(hit).forEach(r => {
-    misses.push(r);
-    if (r.suggestBundle) {
-      const alt = BUNDLE_DB.find(b => b.id === r.suggestBundle);
-      addBundle(r.suggestBundle, alt ? alt.desc : '', true);
-    }
-  });
-  AI_LOOSE.filter(hit).forEach(r => {
-    const v = aiVerify(r.pkg);
-    packages.push({ name: r.pkg, why: r.why, state: v.state, repo: v.repo });
-  });
-
-  // Name resolution: what the user said → what the repo actually publishes.
-  if (seenB.has('realsense-camera')) {
-    resolutions.push({
-      asked: '"depth camera driver"',
-      resolved: ['librealsense2-dkms', 'librealsense2_2.56.5-0~realsense.17055'],
-      why: 'Resolved to the DKMS kernel module plus the pinned SDK build actually published in the RealSense repo.',
-    });
-  }
-
-  const repoStatus = REPO_DB.map(r => ({
-    id: r.id, name: r.name,
-    reachable: !AI_UNREACHABLE.includes(r.id),
-  }));
-  return { bundles, packages, resolutions, misses, repoStatus, llmUsed: true };
-}
-
-// Drive the three stages the way the SSE stream will: each event appends a row,
-// marks the previous one done, and carries a real detail string.
-function runAiAssist() {
-  const q = (aiState.query || '').trim();
-  if (!q || aiState.running) return;
-  aiState.running = true;
-  aiState.result = null;
-  aiState.stages = [];
-  renderAdvStepContent();
-
-  const repoCount = REPO_DB.length;
-  const steps = [
-    { label: 'Retrieving candidates', detail: 'semantic + keyword search over bundles and packages' },
-    { label: 'Selecting and explaining', detail: 'choosing from retrieved candidates only' },
-    { label: 'Verifying against repositories', detail: `looking up every name in ${repoCount} repository package indexes` },
-  ];
-
-  steps.forEach((st, i) => setTimeout(() => {
-    if (i > 0) aiState.stages[i - 1].done = true;
-    aiState.stages.push({ ...st, done: false });
-    renderAdvStepContent();
-  }, i * 620));
-
-  setTimeout(() => {
-    aiState.stages.forEach(s => { s.done = true; });
-    aiState.result = aiSimulate(q);
-    aiState.running = false;
-    renderAdvStepContent();
-  }, steps.length * 620);
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// PRODUCTION RENDERERS. These port to React as-is; they read only the
-// response shape, never the simulation above.
-// ═══════════════════════════════════════════════════════════════════
-
-function renderAiThinking() {
-  return aiState.stages.map(s => `<div class="think-row">
-    ${s.done ? '<span class="tick">&#10003;</span>' : '<span class="spin"></span>'}
-    <span><span class="detail">${s.label}</span> &middot; ${s.detail}</span>
-  </div>`).join('');
-}
-
-// One proposal row. `state` drives the four grounding outcomes.
-function aiPropRow(opts) {
-  const { state, name, badges, why, pkglist, button } = opts;
-  return `<div class="prop ${state}"><div class="prop-main">
-      <div class="prop-name-row"><span class="prop-name">${name}</span>${badges || ''}</div>
-      ${why ? `<div class="prop-reason">${why}</div>` : ''}
-      ${pkglist ? `<div class="prop-pkglist">${pkglist}</div>` : ''}
-    </div>${button || ''}</div>`;
-}
-
-function renderAiResults() {
-  const res = aiState.result;
-  if (!res) return '';
-
-  const verifiedTotal = res.bundles.reduce((n, b) => n + b.verified.length, 0)
-    + res.packages.filter(p => p.state === 'verified').length;
-
-  if (!res.bundles.length && !res.packages.length && !res.misses.length) {
-    return `<div class="prop"><div class="prop-main"><div class="prop-reason">
-      Nothing in this target's repositories matches that description. Try naming the capability
-      (&ldquo;depth camera&rdquo;, &ldquo;SLAM&rdquo;, &ldquo;disk encryption&rdquo;) or browse the repositories below.
-    </div></div></div>`;
-  }
-
-  let html = '';
-
-  // Degraded-mode banner: unreachable repos are named, never silently ignored.
-  const down = (res.repoStatus || []).filter(r => !r.reachable);
-  if (down.length) {
-    html += `<div class="ai-degraded"><b>${down.length} repositor${down.length === 1 ? 'y' : 'ies'} unreachable</b>
-      (${down.map(r => r.name).join(', ')}). Packages from them are shown as
-      <b>unverified</b>: they may exist, but we could not confirm it.</div>`;
-  }
-
-  html += `<div class="ai-results-head">
-    <div class="ai-summary">Proposed <b>${verifiedTotal} verified package${verifiedTotal === 1 ? '' : 's'}</b>
-      across <b>${res.bundles.length} bundle${res.bundles.length === 1 ? '' : 's'}</b>.</div>
-    <button class="btn btn-primary btn-sm" onclick="aiAddAllVerified()">Add all verified</button>
-  </div>`;
-
-  // Legend. Every proposal carries one of exactly four outcomes; showing them
-  // up front is what makes "verified" mean something to the person reading it.
-  html += `<div class="ai-legend">
-    <span><i class="sw sw-verified"></i>verified: found in a repository index</span>
-    <span><i class="sw sw-resolved"></i>resolved: renamed to what the repo publishes</span>
-    <span><i class="sw sw-unverified"></i>unverified: repository unreachable</span>
-    <span><i class="sw sw-missing"></i>not available: an alternative is offered</span>
-  </div>`;
-
-  if (res.bundles.length) {
-    html += `<div class="prop-group"><div class="prop-group-label">Recommended bundles</div>`;
-    html += res.bundles.map(b => {
-      const bundle = BUNDLE_DB.find(x => x.id === b.id) || {};
-      const addable = [...b.verified, ...b.unverified];
-      // isBaseSelected, not a raw includes(): a selection may be stored pinned
-      // (name_version), and a pinned package still counts as added.
-      const added = addable.length && addable.every(p => isBaseSelected(p));
-      const badges = `<span class="prop-badge badge-verified">&#10003; ${b.verified.length} verified</span>`
-        + (b.unverified.length ? `<span class="prop-badge badge-unverified">${b.unverified.length} unverified</span>` : '')
-        + (b.unavailable.length ? `<span class="prop-badge badge-missing">${b.unavailable.length} unavailable</span>` : '')
-        + (b.viaSuggestion ? `<span class="prop-badge badge-resolved">suggested alternative</span>` : '');
-      const list = [
-        ...b.verified.map(n => n),
-        ...b.unverified.map(n => `${n} (unverified)`),
-        ...b.unavailable.map(n => `<span class="pkg-bad">${n}</span>`),
-      ].join('  &middot;  ');
-      return aiPropRow({
-        state: 'verified',
-        name: `${bundle.icon || ''} ${bundle.name || b.id}`,
-        badges, why: b.why, pkglist: list,
-        button: `<button class="prop-add ${added ? 'added' : ''}" onclick="aiAddBundle('${b.id}')">${added ? '&#10003; Added' : 'Add'}</button>`,
-      });
-    }).join('');
-    html += `</div>`;
-  }
-
-  if (res.packages.length) {
-    html += `<div class="prop-group"><div class="prop-group-label">Individual packages</div>`;
-    html += res.packages.map(p => {
-      const added = isBaseSelected(p.name);
-      const repo = REPO_DB.find(r => r.id === p.repo);
-      const badge = p.state === 'verified'
-        ? `<span class="prop-badge badge-verified">&#10003; verified</span>`
-        : p.state === 'unverified'
-          ? `<span class="prop-badge badge-unverified">unverified</span>`
-          : `<span class="prop-badge badge-missing">not found</span>`;
-      return aiPropRow({
-        state: p.state,
-        name: p.name,
-        badges: (repo ? `<span class="prop-badge badge-repo">${repo.name}</span>` : '') + badge,
-        why: p.why,
-        button: p.state === 'missing' ? '' :
-          `<button class="prop-add ${added ? 'added' : ''}" onclick="aiAddPackage('${p.name}')">${added ? '&#10003; Added' : 'Add'}</button>`,
-      });
-    }).join('');
-    html += `</div>`;
-  }
-
-  if (res.resolutions.length) {
-    html += `<div class="prop-group"><div class="prop-group-label">Resolved to real package names</div>`;
-    html += res.resolutions.map(r => aiPropRow({
-      state: 'resolved',
-      name: r.asked,
-      badges: `<span class="prop-badge badge-resolved">name resolved</span>`,
-      why: r.why,
-      pkglist: '&rarr; ' + r.resolved.join('  &middot;  '),
-    })).join('');
-    html += `</div>`;
-  }
-
-  if (res.misses.length) {
-    html += `<div class="prop-group"><div class="prop-group-label">Not available in your repositories</div>`;
-    html += res.misses.map(m => aiPropRow({
-      state: 'missing',
-      name: m.asked,
-      badges: `<span class="prop-badge badge-missing">not found</span>`,
-      why: m.why + (m.suggestBundle ? ' A grounded equivalent is offered above.' : ''),
-      button: m.suggestBundle
-        ? `<button class="prop-add suggest" onclick="aiAddBundle('${m.suggestBundle}')">${m.suggestLabel}</button>`
-        : '',
-    })).join('');
-    html += `</div>`;
-  }
-
-  html += `<div class="ai-foot"><span class="note">Every &ldquo;verified&rdquo; package was found by name in a
-    repository's own package index, not suggested from memory. Adding one enables its repository;
-    dependencies are resolved at build time.</span></div>`;
-  return html;
-}
-
-// ── Assist → selection actions. These write to the SAME advState.template the
-// manual controls use, so a suggested package is indistinguishable from a
-// hand-picked one once added (and is removable in the rail like any other).
-function aiAddPackage(name) {
-  const pkg = PACKAGE_DB.find(p => p.name === name);
-  if (pkg && !advState.template.enabledRepos.includes(pkg.repo)) {
-    advState.template.enabledRepos.push(pkg.repo);
-  }
-  advAddPackage(name);
-}
-
-function aiAddBundle(id) {
-  const b = BUNDLE_DB.find(x => x.id === id);
-  if (!b) return;
-  const res = aiState.result;
-  const entry = res && res.bundles.find(x => x.id === id);
-  // Add only what verification could actually find, never the unavailable names.
-  const names = entry ? [...entry.verified, ...entry.unverified] : b.packages;
-  names.forEach(n => {
-    const pkg = PACKAGE_DB.find(p => p.name === n);
-    if (pkg && !advState.template.enabledRepos.includes(pkg.repo)) {
-      advState.template.enabledRepos.push(pkg.repo);
-    }
-    // Leave an existing selection alone so a version the user pinned by hand
-    // survives; otherwise add the package tracking latest.
-    if (!isBaseSelected(n)) setPackageSelection(n, 'latest');
-  });
-  // Only claim the bundle as applied when its full set is present.
-  if (!advState.template.bundles.includes(id) && bundleState(b) === 'applied') {
-    advState.template.bundles.push(id);
-  }
-  renderAdvStepContent();
-}
-
-function aiAddAllVerified() {
-  const res = aiState.result;
-  if (!res) return;
-  res.bundles.forEach(b => aiAddBundle(b.id));
-  res.packages.filter(p => p.state === 'verified').forEach(p => aiAddPackage(p.name));
-  renderAdvStepContent();
 }
 
 // ── Use-case bundles ──────────────────────────────────────────────
@@ -2154,7 +1648,17 @@ function renderRepoRail() {
   }).join('');
 }
 
-// Right pane: packages of the active repo. A "Suggested packages only" toggle
+// The rows the pane is showing right now, in render order: the frequently-used
+// set, or one page of the full catalog. renderRepoPane() and "Select all" both
+// call this, so the button acts on exactly what the user can see.
+function visibleRepoRows(repoId) {
+  if (pkgGroupsUI.frequentOnly) return PACKAGE_DB.filter(p => p.repo === repoId);
+  const all = allPackagesForRepo(repoId);
+  const start = clampPageStart(repoId, all.length);
+  return all.slice(start, start + PAGE_SIZE);
+}
+
+// Right pane: packages of the active repo. A "Show frequently used" toggle
 // (checked by default) shows just the curated set; unchecking reveals the full
 // catalog, paged with Prev/Next so a 60k-package repo never renders all at
 // once.
@@ -2190,41 +1694,30 @@ function renderRepoPane() {
     </label>`;
   };
 
-  const suggestedOnly = pkgGroupsUI.suggestedOnly;
-  const q = (pkgGroupsUI.paneSearch || '').trim().toLowerCase();
-  const match = p => !q || p.name.toLowerCase().includes(q) || (p.desc || '').toLowerCase().includes(q);
-
-  // Source list: suggested set, or the full catalog when the toggle is off.
-  // Search always filters the source before windowing so matches deep in a
-  // 60k-package repo surface without paging to them manually.
-  const source = suggestedOnly ? PACKAGE_DB.filter(p => p.repo === repo.id) : allPackagesForRepo(repo.id);
-  const filtered = q ? source.filter(match) : source;
+  const frequentOnly = pkgGroupsUI.frequentOnly;
+  const pageRows = visibleRepoRows(repo.id);
 
   let listHtml = '';
-  if (!filtered.length) {
-    listHtml = q
-      ? `<div class="pane-empty">No packages match “${escapeHtml(pkgGroupsUI.paneSearch)}”.</div>`
-      : `<div class="pane-empty">No suggested packages for this repository.<br>Uncheck “Suggested packages only” to browse all ${total.toLocaleString()}.</div>`;
-  } else if (suggestedOnly) {
-    listHtml = filtered.map(row).join('');
+  if (!pageRows.length) {
+    listHtml = frequentOnly
+      ? `<div class="pane-empty">No frequently used packages for this repository.<br>Uncheck “Show frequently used” to browse all ${total.toLocaleString()}.</div>`
+      : `<div class="pane-empty">This repository lists no packages.</div>`;
+  } else if (frequentOnly) {
+    listHtml = pageRows.map(row).join('');
   } else {
-    // Full catalog: suggested first (starred), then the rest, windowed.
-    // Windowing applies to the filtered set so search results aren't truncated
-    // by an unrelated page boundary. clampPageStart keeps the offset legal when
-    // the filtered set shrinks (e.g. the user types into the pane search while
-    // parked on a deep page).
-    const start = clampPageStart(repo.id, filtered.length);
-    const end = Math.min(start + PAGE_SIZE, filtered.length);
-    const pageRows = filtered.slice(start, end);
-    const sug = pageRows.filter(p => p.curated);
+    // Full catalog: frequently used first (starred), then the rest.
+    const all = allPackagesForRepo(repo.id);
+    const start = clampPageStart(repo.id, all.length);
+    const end = start + pageRows.length;
+    const freq = pageRows.filter(p => p.curated);
     const rest = pageRows.filter(p => !p.curated);
-    if (sug.length) listHtml += `<div class="pkg-subhead"><span class="pkg-star">&#9733;</span> Suggested</div>${sug.map(row).join('')}`;
-    if (rest.length) listHtml += `<div class="pkg-subhead">${q ? 'Matches' : 'All packages'}</div>${rest.map(row).join('')}`;
-    if (filtered.length > PAGE_SIZE) {
-      const pageCount = Math.ceil(filtered.length / PAGE_SIZE);
+    if (freq.length) listHtml += `<div class="pkg-subhead"><span class="pkg-star">&#9733;</span> Frequently used</div>${freq.map(row).join('')}`;
+    if (rest.length) listHtml += `<div class="pkg-subhead">All packages</div>${rest.map(row).join('')}`;
+    if (all.length > PAGE_SIZE) {
+      const pageCount = Math.ceil(all.length / PAGE_SIZE);
       const page = Math.floor(start / PAGE_SIZE) + 1;
       const atStart = start === 0;
-      const atEnd = end >= filtered.length;
+      const atEnd = end >= all.length;
       // The page box commits on change (blur or Enter) rather than on input, so
       // typing "12" does not re-render at "1" and steal the caret mid-entry.
       listHtml += `<div class="pkg-pager">
@@ -2238,31 +1731,34 @@ function renderRepoPane() {
         <button class="btn btn-sm" ${atEnd ? 'disabled' : ''} onclick="pkgNextPage('${repo.id}')">Next &#8250;</button>
         <button class="btn btn-sm" ${atEnd ? 'disabled' : ''} onclick="pkgLastPage('${repo.id}', ${pageCount})" title="Last page">&raquo;</button>
       </div>
-      <div class="pager-range">${(start + 1).toLocaleString()}&ndash;${end.toLocaleString()} of ${filtered.length.toLocaleString()}${q ? ' matches' : ''}</div>`;
+      <div class="pager-range">${(start + 1).toLocaleString()}&ndash;${end.toLocaleString()} of ${all.length.toLocaleString()}</div>`;
     }
   }
 
+  // "Select all" acts on the rows currently on screen — the frequently-used set
+  // when the toggle is on, otherwise the page of the full catalog being shown.
   const toolbar = `<div class="pane-toolbar">
-      <label class="suggested-toggle">
-        <input type="checkbox" ${suggestedOnly ? 'checked' : ''} onchange="toggleSuggestedOnly(this.checked)">
-        Suggested packages only
+      <label class="frequent-toggle">
+        <input type="checkbox" ${frequentOnly ? 'checked' : ''} onchange="toggleFrequentOnly(this.checked)">
+        Show frequently used
       </label>
-      <button class="link-btn" onclick="toggleRepoAll('${repo.id}',true)">Select all suggested</button>
+      <button class="link-btn" onclick="selectAllVisible('${repo.id}')">Select all</button>
     </div>`;
 
-  // Per-repo search sits directly below the toggle. onPaneSearch restores focus
-  // after the re-render (no autofocus, which would steal focus on every toggle).
-  const search = `<div class="pane-search">
-      <input id="pane-search-input" placeholder="Search ${repo.name}…" value="${pkgGroupsUI.paneSearch || ''}"
-        oninput="onPaneSearch(this.value)">
-      ${q ? `<button class="clear-search" onclick="onPaneSearch('')" title="Clear">&times;</button>` : ''}
-    </div>`;
-
-  return header() + toolbar + search + `<div class="pkg-list-scroll">${listHtml}</div>`;
+  return header() + toolbar + `<div class="pkg-list-scroll">${listHtml}</div>`;
 }
 
-function toggleSuggestedOnly(on) {
-  pkgGroupsUI.suggestedOnly = on;
+function toggleFrequentOnly(on) {
+  pkgGroupsUI.frequentOnly = on;
+  renderAdvStepContent();
+}
+
+// Select every package the pane is currently listing. Rows that are already
+// selected are skipped rather than re-set, so a version the user pinned by hand
+// is not silently reset to "Latest".
+function selectAllVisible(repoId) {
+  visibleRepoRows(repoId).forEach(p => { if (!isBaseSelected(p.name)) setPackageSelection(p.name, 'latest'); });
+  updateAdvancedYaml();
   renderAdvStepContent();
 }
 
@@ -2319,21 +1815,6 @@ function scrollPkgListToTop() {
   if (list) list.scrollTop = 0;
 }
 
-// Per-repo search. Resets the active repo's page window so results start from
-// the top, then re-renders and restores focus/caret to the search box (the full
-// step re-render would otherwise blur it on every keystroke).
-function onPaneSearch(value) {
-  pkgGroupsUI.paneSearch = value;
-  pkgGroupsUI.pageStart[pkgGroupsUI.activeRepo] = 0;
-  renderAdvStepContent();
-  const input = document.getElementById('pane-search-input');
-  if (input) {
-    input.focus();
-    const end = input.value.length;
-    input.setSelectionRange(end, end);
-  }
-}
-
 // Right column: the final selected-package list, grouped by source repo, each
 // removable. This is the single source of truth for what goes into the image.
 function renderSelectedColumn() {
@@ -2379,7 +1860,6 @@ function clearAllPackages() {
 }
 
 function setActiveRepo(id) {
-  if (id !== pkgGroupsUI.activeRepo) pkgGroupsUI.paneSearch = ''; // search is per-repo
   pkgGroupsUI.activeRepo = id;
   renderAdvStepContent();
 }
@@ -2416,15 +1896,6 @@ function togglePackage(name, on) {
   } else {
     clearPackageSelection(name);
   }
-  renderAdvStepContent();
-}
-
-// Bulk select/clear every package in a repo.
-function toggleRepoAll(id, on) {
-  const t = advState.template;
-  const names = PACKAGE_DB.filter(p => p.repo === id).map(p => p.name);
-  if (on) names.forEach(n => setPackageSelection(n, 'latest'));
-  else t.packages = t.packages.filter(sel => !names.includes(selectionBaseName(sel)));
   renderAdvStepContent();
 }
 
@@ -2470,7 +1941,7 @@ function onPackageSearch(query) {
   const normalized = (query || '').trim();
   const q = normalized.toLowerCase();
 
-  // Show suggested packages on focus/empty query so actions are immediately discoverable.
+  // Show frequently used packages on focus/empty query so actions are immediately discoverable.
   const results = normalized
     ? PACKAGE_DB.filter(p => p.name.toLowerCase().includes(q) || p.desc.toLowerCase().includes(q)).slice(0, 8)
     : PACKAGE_DB.filter(p => p.curated).slice(0, 8);
