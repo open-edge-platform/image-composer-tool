@@ -1095,8 +1095,7 @@ function switchView(view) {
   document.getElementById('view-' + view).classList.add('active');
   document.querySelectorAll('.topnav-tab').forEach(t => t.classList.remove('active'));
   document.querySelector(`[data-view="${view}"]`).classList.add('active');
-  if (view === 'advanced') { syncBasicToAdvanced(); }
-  if (view === 'basic') { syncAdvancedToBasic(); }
+  if (view === 'advanced') { enterAdvanced(); }
 }
 
 document.querySelectorAll('.topnav-tab').forEach(tab => {
@@ -1181,36 +1180,70 @@ function setField(key, value) {
     const first = list.find(o => !o.disabled);
     if (first) { state[field] = first.id; }
   }
+  // `state` is the single source of truth for the shared fields, so a change
+  // made in either pane is mirrored into the Advanced template and both panes
+  // re-render. That is what makes the two dropdown sets track each other live
+  // rather than only at the moment the user switches tabs.
+  applySelectionToAdvanced();
   renderBasic();
+  renderAdvStepContent();
 }
 
-// ── Basic tab render ─────────────────────────────────────────────────────
-// The five selectors (Image Type is auto-selected from the manifest and not
-// shown here) plus the configuration summary, which appears on its own as soon
-// as the selection resolves to a template. There is no "review" checkbox.
-function basicSelect(label, field, placeholder, options, disabled) {
+// ── Shared selection selectors ───────────────────────────────────────────
+// One definition per field in the cascade: label, placeholder, which
+// cascadingOptions list feeds it, and when it is disabled. BOTH panes render
+// their dropdowns from this table, so the two can never offer different
+// options — the same arrangement as the shipped app, where BasicPage and
+// AdvancedPage both read `selection` and `cascadingOptions` from the one
+// zustand store (web/src/components/AdvancedPage.tsx).
+const SELECTION_FIELDS = [
+  { field: 'vertical', label: 'Targeted Vertical', placeholder: '-- Select Vertical --', optsKey: 'verticals', disabled: () => false },
+  { field: 'sku', label: 'SKU', placeholder: '-- Select SKU --', optsKey: 'skus', disabled: () => !state.vertical },
+  { field: 'platform', label: 'Platform', placeholder: '-- Select Platform --', optsKey: 'platforms', disabled: opts => !state.sku && opts.skus.length > 0 },
+  { field: 'os', label: 'Operating System', placeholder: '-- Select Operating System --', optsKey: 'oses', disabled: () => !state.platform },
+  // Optional dimension: only rendered where the manifest actually offers it.
+  { field: 'kernel', label: 'Kernel', placeholder: '-- Select Kernel --', optsKey: 'kernels', disabled: () => !state.os, optional: true }
+];
+
+// Image Type is part of the same cascade but is presented differently: Basic
+// auto-fills it from the manifest and hides it, Advanced exposes it as an
+// editable field. Its option list comes from the same derivation either way.
+const IMAGE_TYPE_FIELD = {
+  field: 'imageType', label: 'Image Type', placeholder: '-- Select Image Type --',
+  optsKey: 'imageTypes', disabled: () => !state.os
+};
+
+// `idPrefix` keeps the two panes' element ids distinct while the markup stays
+// identical; both write through setField(), which re-renders both panes.
+function selectionSelect(spec, opts, idPrefix) {
+  const id = `${idPrefix}-${spec.field}`;
+  const list = opts[spec.optsKey];
   return `<div class="form-group">
-    <label class="form-label" for="select-${field}">${label}</label>
-    <select class="form-select" id="select-${field}" ${disabled ? 'disabled' : ''}
-            onchange="setField('${field}', this.value)">
-      <option value="" disabled ${state[field] ? '' : 'selected'}>${placeholder}</option>
-      ${options.map(o => `<option value="${o.id}" ${o.disabled ? 'disabled' : ''} ${state[field] === o.id ? 'selected' : ''}>${o.label}${o.disabled ? ' (coming soon)' : ''}</option>`).join('')}
+    <label class="form-label" for="${id}">${spec.label}</label>
+    <select class="form-select" id="${id}" ${spec.disabled(opts) ? 'disabled' : ''}
+            onchange="setField('${spec.field}', this.value)">
+      <option value="" disabled ${state[spec.field] ? '' : 'selected'}>${spec.placeholder}</option>
+      ${list.map(o => `<option value="${o.id}" ${o.disabled ? 'disabled' : ''} ${state[spec.field] === o.id ? 'selected' : ''}>${o.label}${o.disabled ? ' (coming soon)' : ''}</option>`).join('')}
     </select>
   </div>`;
 }
 
+function renderSelectionFields(opts, idPrefix) {
+  return SELECTION_FIELDS
+    .filter(spec => !spec.optional || opts[spec.optsKey].length)
+    .map(spec => selectionSelect(spec, opts, idPrefix))
+    .join('');
+}
+
+// ── Basic tab render ─────────────────────────────────────────────────────
+// The shared selectors (Image Type is auto-selected from the manifest and not
+// shown here) plus the configuration summary, which appears on its own as soon
+// as the selection resolves to a template. There is no "review" checkbox.
 function renderBasic() {
   const opts = cascadingOptions(state);
   const complete = !!opts.matched;
 
-  let html = basicSelect('Targeted Vertical', 'vertical', '-- Select Vertical --', opts.verticals, false)
-    + basicSelect('SKU', 'sku', '-- Select SKU --', opts.skus, !state.vertical)
-    + basicSelect('Platform', 'platform', '-- Select Platform --', opts.platforms, !state.sku && opts.skus.length > 0)
-    + basicSelect('Operating System', 'os', '-- Select Operating System --', opts.oses, !state.platform);
-  if (opts.kernels.length) {
-    html += basicSelect('Kernel', 'kernel', '-- Select Kernel --', opts.kernels, !state.os);
-  }
-  document.getElementById('basic-selectors').innerHTML = html;
+  document.getElementById('basic-selectors').innerHTML = renderSelectionFields(opts, 'basic-select');
 
   // Summary: the shape of the `summary` object in the compose response.
   const panel = document.getElementById('basic-summary');
@@ -1245,56 +1278,43 @@ function renderBasic() {
 }
 
 // ── Basic ⇄ Advanced sync ──────────────────────────────────────────
-// The two panes share the manifest's selection fields (vertical, SKU, platform,
-// OS) plus image type. Advanced owns everything else. syncBasicToAdvanced() and
-// syncAdvancedToBasic() copy ONLY those shared fields, in whichever direction
-// the user is moving. Neither touches packages, so a round trip preserves
-// selections, bundles, and pins.
-function syncBasicToAdvanced() {
+// There is no copying back and forth: both panes render the selection fields
+// from `state` and write to it through setField(), so they are always showing
+// the same values from the same options. What still has to be derived is the
+// rest of the Advanced template — target.os/dist/arch and the default image
+// name/version, which follow from the selection but are not part of it.
+//
+// Packages are untouched here, so moving between panes never disturbs
+// selections, bundles, or pins.
+function applySelectionToAdvanced() {
   const opts = cascadingOptions(state);
   const s = (opts.matched && TEMPLATE_SUMMARIES[opts.matched.template]) || {};
   const target = MANIFEST.targets.find(t => t.id === state.os);
-  advState.template.target.vertical = state.vertical;
-  advState.template.target.sku = state.sku;
-  advState.template.target.platform = state.platform;
-  advState.template.target.os = target ? target.os : advState.template.target.os;
-  advState.template.target.dist = state.os || advState.template.target.dist;
-  advState.template.target.arch = target ? target.arch : advState.template.target.arch;
-  advState.template.target.imageType = state.imageType || advState.template.target.imageType;
-  if (s.imageName) { advState.template.image.name = s.imageName; }
-  if (s.imageVersion) { advState.template.image.version = s.imageVersion; }
-  // Always land on the first step (Choose Image Configuration) so the wizard
-  // starts from the beginning rather than mid-flow.
+  const t = advState.template;
+
+  t.target.vertical = state.vertical;
+  t.target.sku = state.sku;
+  t.target.platform = state.platform;
+  // Empty selection fields leave the template's own defaults in place, so the
+  // generated YAML stays valid before anything has been picked.
+  t.target.os = target ? target.os : t.target.os;
+  t.target.dist = state.os || t.target.dist;
+  t.target.arch = target ? target.arch : t.target.arch;
+  t.target.imageType = state.imageType || t.target.imageType;
+
+  // The image name/version default to the matched template's, but a name typed
+  // in Advanced is the user's and survives later selection changes.
+  if (s.imageName && !advState.imageNameEdited) { t.image.name = s.imageName; }
+  if (s.imageVersion && !advState.imageNameEdited) { t.image.version = s.imageVersion; }
+}
+
+// Entering Advanced always lands on the first step (Choose Image Configuration)
+// so the wizard starts from the beginning rather than mid-flow.
+function enterAdvanced() {
+  applySelectionToAdvanced();
   advState.currentStep = 0;
   renderAdvSteps();
   renderAdvStepContent();
-}
-
-// Reverse direction: push Advanced's shared fields back onto Basic's selection
-// and re-render. The values are written straight through rather than fed to
-// setField(), because setField() resets everything downstream of the field it
-// touches — which would discard the very values being carried back. Advanced is
-// deliberately less constrained than Basic, so a combination edited there may
-// not match any pre-authored template; renderBasic() already handles that by
-// hiding the summary and gating Compose.
-function syncAdvancedToBasic() {
-  const t = advState.template.target;
-  state.vertical = t.vertical || '';
-  state.sku = t.sku || '';
-  state.platform = t.platform || '';
-  state.os = t.dist || '';
-  state.imageType = t.imageType || '';
-
-  // Kernel is not an Advanced field, so the incoming combination says nothing
-  // about it. Keep the current choice while the manifest still offers it, and
-  // otherwise fall back to the first available one.
-  const kernels = cascadingOptions(state).kernels;
-  if (!kernels.some(k => k.id === state.kernel && !k.disabled)) {
-    const first = kernels.find(k => !k.disabled);
-    state.kernel = first ? first.id : '';
-  }
-
-  renderBasic();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1312,32 +1332,11 @@ const ADV_STEPS = [
   { id: 'review', label: 'Review', icon: '&#10003;' }
 ];
 
-// The distributions the builder itself supports. Advanced is deliberately wider
-// than the Basic manifest, which only lists targets that have a template.
-const OS_OPTIONS = [
-  { id: 'azure-linux', name: 'Azure Linux', dists: ['azl3'] },
-  { id: 'edge-microvisor-toolkit', name: 'Edge Microvisor Toolkit', dists: ['emt3'] },
-  { id: 'wind-river-elxr', name: 'Wind River eLxr', dists: ['elxr12', 'elxr13'] },
-  { id: 'ubuntu', name: 'Ubuntu', dists: ['ubuntu24', 'ubuntu26-server'] },
-  { id: 'redhat-compatible-distro', name: 'Red Hat Compatible', dists: ['el10'] },
-  { id: 'debian', name: 'Debian', dists: ['debian13'] }
-];
-
-// Display names for every dist above. The three the manifest also carries
-// (debian13, ubuntu24, ubuntu26-server) use the manifest's exact wording.
-const DIST_LABELS = {
-  'azl3': 'Azure Linux 3',
-  'emt3': 'Edge Microvisor Toolkit 3',
-  'elxr12': 'Wind River eLxr 12',
-  'elxr13': 'Wind River eLxr 13',
-  'ubuntu24': 'Ubuntu 24.04',
-  'ubuntu26-server': 'Ubuntu 26.04 Server',
-  'el10': 'Red Hat Compatible 10',
-  'debian13': 'Debian 13'
-};
-
 const advState = {
   currentStep: 0,
+  // Set once the user types an image name, so applySelectionToAdvanced() stops
+  // overwriting it with the matched template's default.
+  imageNameEdited: false,
   template: {
     image: { name: 'my-edge-image', version: '1.0.0' },
     target: { vertical: '', sku: '', platform: '', os: 'ubuntu', dist: 'ubuntu24', arch: 'x86_64', imageType: 'raw' },
@@ -1532,50 +1531,21 @@ function renderAdvStepContent() {
     case 'target':
       html += `<h2>Choose Image Configuration</h2>
         <p class="step-desc">Select a targeted vertical, SKU, and platform. Pre-configured defaults will be applied based on your selection.</p>
-        <!-- Vertical / SKU / Platform use the same vocabulary as Basic (the
-             manifest), but Advanced does not restrict them to a pre-authored
-             combination. That is the point of Advanced. -->
-        <div class="form-group">
-          <label class="form-label">Targeted Vertical</label>
-          <select class="form-input" onchange="advSelectVertical(this.value)">
-            <option value="" ${!t.target.vertical?'selected':''}>-- Select Vertical --</option>
-            ${MANIFEST.verticals.map(v => `<option ${t.target.vertical===v.id?'selected':''} value="${v.id}">${v.displayName}</option>`).join('')}
-          </select>
-        </div>
-        <div class="form-group">
-          <label class="form-label">SKU</label>
-          <select class="form-input" onchange="advState.template.target.sku=this.value; updateAdvancedYaml()">
-            <option value="">-- Select SKU --</option>
-            ${distinctIds('sku', { vertical: t.target.vertical }).map(e => `<option ${t.target.sku===e.id?'selected':''} value="${e.id}">${labelFor(MANIFEST.skus, e.id)}</option>`).join('')}
-          </select>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Platform</label>
-          <select class="form-input" onchange="advState.template.target.platform=this.value; updateAdvancedYaml()">
-            <option value="">-- Select Platform --</option>
-            ${MANIFEST.platforms.map(p => `<option ${t.target.platform===p.id?'selected':''} value="${p.id}">${p.displayName}</option>`).join('')}
-          </select>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Operating System</label>
-          <select class="form-input" onchange="advSelectDist(this.value)">
-            <option value="" disabled ${!t.target.dist?'selected':''}>-- Select Operating System --</option>
-            ${OS_OPTIONS.map(o => `<optgroup label="${o.name}">${o.dists.map(d => `<option ${t.target.dist===d?'selected':''} value="${d}">${DIST_LABELS[d] || d}</option>`).join('')}</optgroup>`).join('')}
-          </select>
-          <p class="form-hint">Advanced offers every distribution the builder supports, not just the ones the Basic manifest has templates for.</p>
-        </div>
+        <!-- Rendered by the same renderSelectionFields() the Basic tab uses, from
+             the same manifest-derived option lists, writing to the same state
+             object. Basic and Advanced therefore offer identical choices, and a
+             change made here shows up there immediately (and vice versa). -->
+        ${renderSelectionFields(cascadingOptions(state), 'adv-select')}
+        <p class="form-hint">These are the same options the Basic tab offers; whichever pane you change, both stay in step.</p>
         <hr style="border:none;border-top:1px solid var(--border);margin:24px 0;">
+        <!-- Image Type completes the same cascade. Basic auto-fills it and keeps
+             it hidden; Advanced exposes it, but from the identical option list. -->
+        ${selectionSelect(IMAGE_TYPE_FIELD, cascadingOptions(state), 'adv-select')}
         <div class="form-group">
-          <label class="form-label">Image Type</label>
-          <select class="form-input" onchange="advState.template.target.imageType=this.value; updateAdvancedYaml()">
-            <option ${t.target.imageType==='raw'?'selected':''} value="raw">RAW (Disk image)</option>
-            <option ${t.target.imageType==='iso'?'selected':''} value="iso">ISO (Live/Installer)</option>
-            <option ${t.target.imageType==='qcow'?'selected':''} value="qcow">QCOW (Virtual machine)</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Image Name</label>
-          <input class="form-input" value="${t.image.name}" onchange="advState.template.image.name=this.value; updateAdvancedYaml()">
+          <label class="form-label" for="adv-image-name">Image Name</label>
+          <input class="form-input" id="adv-image-name" value="${escapeHtml(t.image.name)}"
+                 onchange="advSetImageName(this.value)">
+          <p class="form-hint">Defaults to the matched template's image name; once you edit it, your name is kept.</p>
         </div>`;
       break;
 
@@ -1691,7 +1661,7 @@ function renderAdvStepContent() {
             <tr><td style="padding:6px 0;font-weight:600;">Vertical</td><td>${t.target.vertical ? labelFor(MANIFEST.verticals, t.target.vertical) : 'not set'}</td></tr>
             <tr><td style="padding:6px 0;font-weight:600;">SKU</td><td>${t.target.sku ? labelFor(MANIFEST.skus, t.target.sku) : 'not set'}</td></tr>
             <tr><td style="padding:6px 0;font-weight:600;">Platform</td><td>${t.target.platform ? labelFor(MANIFEST.platforms, t.target.platform) : 'not set'}</td></tr>
-            <tr><td style="padding:6px 0;font-weight:600;">OS</td><td>${DIST_LABELS[t.target.dist] || t.target.dist} (${t.target.dist}) / ${t.target.arch}</td></tr>
+            <tr><td style="padding:6px 0;font-weight:600;">OS</td><td>${labelFor(MANIFEST.targets, t.target.dist)} (${t.target.dist}) / ${t.target.arch}</td></tr>
             <tr><td style="padding:6px 0;font-weight:600;">Image Type</td><td>${t.target.imageType.toUpperCase()}</td></tr>
             <tr><td style="padding:6px 0;font-weight:600;">Disk</td><td>${t.disk.size}, ${t.disk.partitionTableType.toUpperCase()}, ${t.disk.partitions.length} partitions</td></tr>
             <tr><td style="padding:6px 0;font-weight:600;">Packages</td><td>${t.packages.length} packages${t.bundles.length ? ` (${t.bundles.length} bundle${t.bundles.length > 1 ? 's' : ''})` : ''}</td></tr>
@@ -1720,38 +1690,16 @@ function renderAdvStepContent() {
   updateAdvancedYaml();
 }
 
-function advSelectOS(osId) {
-  advState.template.target.os = osId;
-  advState.template.target.dist = OS_OPTIONS.find(o=>o.id===osId).dists[0];
-  renderAdvStepContent();
-}
+// The OS family (target.os) and architecture are derived from the selected
+// target rather than picked separately — see applySelectionToAdvanced(). All
+// four selection dropdowns go through setField(), so there are no
+// Advanced-specific target handlers left.
 
-// Keeps target.os (the family) consistent with a chosen dist, e.g. dist
-// "debian13" → os "debian". Shared by advSelectDist and syncBasicToAdvanced.
-function advSyncOsFamily(dist) {
-  const osOpt = OS_OPTIONS.find(o => o.dists.includes(dist));
-  if (osOpt) advState.template.target.os = osOpt.id;
-}
-
-// Selecting a distribution also updates the parent os family so target.os and
-// target.dist stay consistent (e.g. dist "debian13" → os "debian").
-function advSelectDist(dist) {
-  advState.template.target.dist = dist;
-  advSyncOsFamily(dist);
-  updateAdvancedYaml();
-}
-
-// Changing the vertical in Advanced mirrors Basic's behaviour for the one field
-// that is derived from it: the SKU list comes from the vertical, so a SKU that
-// the new vertical does not offer is cleared rather than left showing a value
-// absent from the rebuilt list. The OS is left alone — Advanced offers every
-// distribution regardless of vertical, so it can never go stale.
-function advSelectVertical(vertical) {
-  const t = advState.template.target;
-  t.vertical = vertical;
-  const skus = distinctIds('sku', { vertical });
-  if (!skus.some(e => e.id === t.sku)) { t.sku = ''; }
-  renderAdvStepContent();
+// Once the name is the user's, keep it: applySelectionToAdvanced() will no
+// longer replace it with the matched template's default.
+function advSetImageName(name) {
+  advState.template.image.name = name;
+  advState.imageNameEdited = true;
   updateAdvancedYaml();
 }
 
