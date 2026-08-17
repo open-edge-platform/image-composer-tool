@@ -6,22 +6,26 @@ import (
 	"sort"
 	"strings"
 	"sync"
-
-	"github.com/open-edge-platform/image-composer-tool/internal/ai/template"
 )
 
-// Document represents an indexed template with its embedding.
+// Item is anything the index can rank: a template, a bundle, or a package.
+// Defined here to keep the index package free of concrete-type imports.
+type Item interface {
+	ID() string             // stable identity (filename, bundle id, package name)
+	Keywords() []string     // keyword-overlap scoring input
+	PackageNames() []string // package-overlap + negation scoring input
+	SearchableText() string // text that was embedded
+}
+
+// Document represents an indexed item with its embedding.
 type Document struct {
-	// TemplateInfo is the parsed template information
-	TemplateInfo *template.TemplateInfo
+	// Item is the indexed item (template, bundle, or package)
+	Item Item
 
 	// Embedding is the vector representation
 	Embedding []float32
 
-	// SearchableText is the text used for generating the embedding
-	SearchableText string
-
-	// ContentHash is the hash of the template content
+	// ContentHash is the hash of the item content
 	ContentHash string
 }
 
@@ -146,10 +150,10 @@ func (idx *Index) Search(queryEmbedding []float32, queryTokens []string, queryPa
 		semanticScore := cosineSimilarity(queryEmbedding, doc.Embedding)
 
 		// Calculate keyword score
-		keywordScore := calculateKeywordScore(normalizedTokens, doc.TemplateInfo)
+		keywordScore := calculateKeywordScore(normalizedTokens, doc.Item)
 
 		// Calculate package score
-		packageScore := calculatePackageScore(normalizedPackages, doc.TemplateInfo)
+		packageScore := calculatePackageScore(normalizedPackages, doc.Item)
 
 		// Calculate combined score
 		score := (opts.SemanticWeight * semanticScore) +
@@ -158,7 +162,7 @@ func (idx *Index) Search(queryEmbedding []float32, queryTokens []string, queryPa
 
 		// Apply negation penalty
 		if len(negativeLower) > 0 {
-			penalty := calculateNegationPenalty(negativeLower, doc.TemplateInfo, opts.NegationPenalty)
+			penalty := calculateNegationPenalty(negativeLower, doc.Item, opts.NegationPenalty)
 			score *= penalty
 		}
 
@@ -211,28 +215,25 @@ func cosineSimilarity(a, b []float32) float64 {
 	return dotProduct / (math.Sqrt(normA) * math.Sqrt(normB))
 }
 
-// calculateKeywordScore calculates keyword overlap between query and template.
-func calculateKeywordScore(queryTokens []string, tmpl *template.TemplateInfo) float64 {
-	if len(queryTokens) == 0 {
+// calculateKeywordScore calculates keyword overlap between query and item.
+func calculateKeywordScore(queryTokens []string, item Item) float64 {
+	if len(queryTokens) == 0 || item == nil {
 		return 0.0
 	}
 
-	keywords := tmpl.GetAllKeywords()
+	keywords := item.Keywords()
 	keywordSet := make(map[string]bool)
 	for _, k := range keywords {
 		keywordSet[strings.ToLower(k)] = true
 	}
 
-	// Also include filename parts as keywords
-	nameParts := strings.Split(strings.TrimSuffix(tmpl.FileName, ".yml"), "-")
-	for _, p := range nameParts {
-		keywordSet[strings.ToLower(p)] = true
+	// Also include ID parts as keywords (e.g. filename parts or bundle id parts)
+	idParts := strings.Split(strings.TrimSuffix(strings.TrimSuffix(item.ID(), ".yaml"), ".yml"), "-")
+	for _, p := range idParts {
+		if p != "" {
+			keywordSet[strings.ToLower(p)] = true
+		}
 	}
-
-	// Add distribution and image type
-	keywordSet[strings.ToLower(tmpl.Distribution)] = true
-	keywordSet[strings.ToLower(tmpl.ImageType)] = true
-	keywordSet[strings.ToLower(tmpl.Architecture)] = true
 
 	matches := 0
 	for _, token := range queryTokens {
@@ -244,17 +245,20 @@ func calculateKeywordScore(queryTokens []string, tmpl *template.TemplateInfo) fl
 	return float64(matches) / float64(len(queryTokens))
 }
 
-// calculatePackageScore calculates package matching between query and template.
-func calculatePackageScore(queryPackages []string, tmpl *template.TemplateInfo) float64 {
-	if len(queryPackages) == 0 {
+// calculatePackageScore calculates package matching between query and item.
+func calculatePackageScore(queryPackages []string, item Item) float64 {
+	if len(queryPackages) == 0 || item == nil {
 		return 0.0
 	}
 
-	packageSet := tmpl.GetPackageSet()
-	// Normalize package set to lowercase
+	packageNames := item.PackageNames()
 	normalizedSet := make(map[string]bool)
-	for pkg := range packageSet {
+	for _, pkg := range packageNames {
 		normalizedSet[strings.ToLower(pkg)] = true
+		// Also add base name without version suffixes
+		if idx := strings.Index(pkg, "="); idx > 0 {
+			normalizedSet[strings.ToLower(pkg[:idx])] = true
+		}
 	}
 
 	matches := 0
@@ -265,8 +269,8 @@ func calculatePackageScore(queryPackages []string, tmpl *template.TemplateInfo) 
 			continue
 		}
 		// Check prefix match (e.g., "docker" matches "docker-ce")
-		for tmplPkg := range normalizedSet {
-			if strings.HasPrefix(tmplPkg, pkg) || strings.HasPrefix(pkg, tmplPkg) {
+		for itemPkg := range normalizedSet {
+			if strings.HasPrefix(itemPkg, pkg) || strings.HasPrefix(pkg, itemPkg) {
 				matches++
 				break
 			}
@@ -276,16 +280,15 @@ func calculatePackageScore(queryPackages []string, tmpl *template.TemplateInfo) 
 	return float64(matches) / float64(len(queryPackages))
 }
 
-// calculateNegationPenalty calculates penalty for templates containing excluded terms.
-func calculateNegationPenalty(negativeTerms []string, tmpl *template.TemplateInfo, basePenalty float64) float64 {
-	if len(negativeTerms) == 0 {
+// calculateNegationPenalty calculates penalty for items containing excluded terms.
+func calculateNegationPenalty(negativeTerms []string, item Item, basePenalty float64) float64 {
+	if len(negativeTerms) == 0 || item == nil {
 		return 1.0 // No penalty
 	}
 
 	// Check packages
-	packageSet := tmpl.GetPackageSet()
 	for _, term := range negativeTerms {
-		for pkg := range packageSet {
+		for _, pkg := range item.PackageNames() {
 			if strings.Contains(strings.ToLower(pkg), term) {
 				return basePenalty // Apply penalty
 			}
@@ -293,9 +296,8 @@ func calculateNegationPenalty(negativeTerms []string, tmpl *template.TemplateInf
 	}
 
 	// Check keywords
-	keywords := tmpl.GetAllKeywords()
 	for _, term := range negativeTerms {
-		for _, kw := range keywords {
+		for _, kw := range item.Keywords() {
 			if strings.Contains(strings.ToLower(kw), term) {
 				return basePenalty
 			}

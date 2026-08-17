@@ -118,7 +118,15 @@ func (e *Engine) Initialize(ctx context.Context) error {
 
 			// Store in cache
 			if e.cache != nil {
-				if err := e.cache.Put(contentHash, modelID, tmpl.FileName, dimensions, embedding); err != nil {
+				putReq := cache.PutRequest{
+					ContentHash: contentHash,
+					ModelID:     modelID,
+					Source:      tmpl.FileName,
+					Kind:        "template",
+					Dimensions:  dimensions,
+					Embedding:   embedding,
+				}
+				if err := e.cache.Put(putReq); err != nil {
 					// Log warning but continue
 					fmt.Printf("Warning: failed to cache embedding for %s: %v\n", tmpl.FileName, err)
 				}
@@ -127,10 +135,9 @@ func (e *Engine) Initialize(ctx context.Context) error {
 
 		// Add to index
 		doc := &index.Document{
-			TemplateInfo:   tmpl,
-			Embedding:      embedding,
-			SearchableText: tmpl.BuildSearchableText(),
-			ContentHash:    contentHash,
+			Item:        tmpl,
+			Embedding:   embedding,
+			ContentHash: contentHash,
 		}
 		e.index.Add(doc)
 	}
@@ -190,15 +197,23 @@ func (e *Engine) Search(ctx context.Context, query string) ([]SearchResult, erro
 	indexResults := e.index.Search(queryEmbedding, tokens, packages, opts)
 
 	// Convert to SearchResult
-	results := make([]SearchResult, len(indexResults))
-	for i, ir := range indexResults {
-		results[i] = SearchResult{
-			Template:      ir.Document.TemplateInfo,
+	var results []SearchResult
+	for _, ir := range indexResults {
+		// Safety filter: The shared index contains templates, bundles, and packages.
+		// However, the Search and Generate methods are designed strictly for templates.
+		// We skip any non-template items here to prevent nil pointer panics downstream.
+		tmpl, ok := ir.Document.Item.(*template.TemplateInfo)
+		if !ok {
+			continue
+		}
+
+		results = append(results, SearchResult{
+			Template:      tmpl,
 			Score:         ir.Score,
 			SemanticScore: ir.SemanticScore,
 			KeywordScore:  ir.KeywordScore,
 			PackageScore:  ir.PackageScore,
-		}
+		})
 	}
 
 	return results, nil

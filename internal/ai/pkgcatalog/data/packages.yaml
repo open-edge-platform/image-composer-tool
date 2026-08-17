@@ -1,0 +1,195 @@
+packages:
+  - name: ubuntu-minimal
+    description: "Minimal Ubuntu system"
+    repo: ubuntu-main
+    co_occurs:
+      - systemd
+      - openssh-server
+      - network-manager
+
+  - name: ubuntu-desktop-minimal
+    description: "Minimal Ubuntu desktop"
+    repo: ubuntu-main
+    co_occurs:
+      - ubuntu-minimal
+      - systemd
+
+  - name: systemd
+    description: "System and service manager"
+    repo: ubuntu-main
+    co_occurs:
+      - ubuntu-minimal
+      - systemd-boot
+      - openssh-server
+
+  - name: systemd-boot
+    description: "Simple UEFI boot manager"
+    repo: ubuntu-main
+    co_occurs:
+      - systemd
+      - dracut-core
+
+  - name: openssh-server
+    description: "OpenSSH server"
+    repo: ubuntu-main
+    co_occurs:
+      - systemd
+      - network-manager
+
+  - name: network-manager
+    description: "Network management daemon"
+    repo: ubuntu-main
+    co_occurs:
+      - systemd
+      - openssh-server
+
+  - name: dracut-core
+    description: "initramfs generator (UKI)"
+    repo: ubuntu-main
+    co_occurs:
+      - systemd
+      - systemd-boot
+
+  - name: cryptsetup-bin
+    description: "Disk encryption utilities"
+    repo: ubuntu-main
+    co_occurs:
+      - systemd
+      - dracut-core
+
+  - name: linux-headers-generic
+    description: "Kernel headers (for DKMS)"
+    repo: ubuntu-main
+    co_occurs:
+      - librealsense2-dkms
+      - linux-image-generic-hwe-24.04
+
+  - name: linux-firmware
+    description: "Firmware for Linux kernel drivers"
+    repo: ubuntu-main
+    co_occurs:
+      - linux-image-generic-hwe-24.04
+
+  - name: linux-image-generic-hwe-24.04
+    description: "HWE generic kernel image"
+    repo: ubuntu-main
+    co_occurs:
+      - linux-firmware
+      - linux-headers-generic
+
+  - name: ros-jazzy-desktop
+    description: "ROS 2 Jazzy Desktop (full)"
+    repo: ros2-jazzy
+    co_occurs:
+      - intel-oneapi-runtime-compilers_2025.3.3-30
+      - ros-jazzy-openvino-node
+
+  - name: ros-jazzy-openvino-wrapper-lib
+    description: "OpenVINO wrapper library for ROS 2"
+    repo: ros2-jazzy
+    co_occurs:
+      - ros-jazzy-openvino-node
+      - openvino_2025.3.0.19807
+
+  - name: ros-jazzy-openvino-node
+    description: "OpenVINO inference node for ROS 2"
+    repo: ros2-jazzy
+    co_occurs:
+      - ros-jazzy-openvino-wrapper-lib
+      - openvino_2025.3.0.19807
+      - libze1
+
+  - name: ros-jazzy-librealsense2
+    description: "RealSense integration for ROS 2"
+    repo: ros2-jazzy
+    co_occurs:
+      - librealsense2-dkms
+      - librealsense2_2.56.5-0~realsense.17055
+
+  - name: libze1
+    description: "Intel Level Zero loader"
+    repo: intel-eci
+    co_occurs:
+      - libze-intel-gpu1
+      - intel-level-zero-npu
+
+  - name: libze-intel-gpu1
+    description: "Intel GPU Level Zero driver"
+    repo: intel-eci
+    co_occurs:
+      - libze1
+      - openvino_2025.3.0.19807
+
+  - name: intel-level-zero-npu
+    description: "Intel NPU Level Zero runtime"
+    repo: intel-eci
+    co_occurs:
+      - intel-driver-compiler-npu
+      - libze1
+
+  - name: intel-driver-compiler-npu
+    description: "Intel NPU driver compiler"
+    repo: intel-eci
+    co_occurs:
+      - intel-level-zero-npu
+
+  - name: ros-jazzy-robotics-sdk
+    description: "Intel Robotics SDK for ROS 2"
+    repo: intel-amr
+    co_occurs:
+      - ros-jazzy-collab-slam-lze
+      - ros-jazzy-desktop
+
+  - name: ros-jazzy-collab-slam-lze
+    description: "Collaborative SLAM (Xe/UHD GPU accelerated)"
+    repo: intel-amr
+    co_occurs:
+      - ros-jazzy-robotics-sdk
+      - libze1
+
+  - name: intel-oneapi-runtime-compilers_2025.3.3-30
+    description: "oneAPI runtime compilers (pinned)"
+    repo: intel-oneapi
+    co_occurs:
+      - intel-oneapi-runtime-compilers-common_2025.3.3-30
+      - intel-oneapi-runtime-opencl_2025.3.3-30
+
+  - name: intel-oneapi-runtime-compilers-common_2025.3.3-30
+    description: "oneAPI runtime compilers common"
+    repo: intel-oneapi
+    co_occurs:
+      - intel-oneapi-runtime-compilers_2025.3.3-30
+
+  - name: intel-oneapi-runtime-opencl_2025.3.3-30
+    description: "oneAPI OpenCL runtime"
+    repo: intel-oneapi
+    co_occurs:
+      - intel-oneapi-runtime-compilers_2025.3.3-30
+
+  - name: openvino_2025.3.0.19807
+    description: "Intel OpenVINO 2025 (pinned)"
+    repo: intel-openvino
+    co_occurs:
+      - libze1
+      - libze-intel-gpu1
+      - ros-jazzy-openvino-node
+
+  - name: gz-harmonic
+    description: "Gazebo Harmonic physics simulator"
+    repo: gazebo
+    co_occurs:
+      - ros-jazzy-desktop
+
+  - name: librealsense2-dkms
+    description: "RealSense kernel modules (DKMS)"
+    repo: realsense
+    co_occurs:
+      - librealsense2_2.56.5-0~realsense.17055
+      - linux-headers-generic
+
+  - name: librealsense2_2.56.5-0~realsense.17055
+    description: "RealSense SDK (pinned)"
+    repo: realsense
+    co_occurs:
+      - librealsense2-dkms
+      - ros-jazzy-librealsense2

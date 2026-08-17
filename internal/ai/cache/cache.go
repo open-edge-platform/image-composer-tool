@@ -40,14 +40,27 @@ type CacheIndex struct {
 
 // CacheEntry represents metadata for a single cached embedding.
 type CacheEntry struct {
-	// Template is the template filename
-	Template string `json:"template"`
+	// Source is the human-readable source label (e.g. template filename, bundle id, package name)
+	Source string `json:"source"`
+
+	// Kind is the entry type ("template", "bundle", "package")
+	Kind string `json:"kind"`
 
 	// ContentHash is the SHA256 hash of the template file content
 	ContentHash string `json:"content_hash"`
 
 	// UpdatedAt is when the embedding was last updated
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// PutRequest groups all parameters for Cache.Put.
+type PutRequest struct {
+	ContentHash string
+	ModelID     string
+	Source      string // human-readable source label (e.g. template filename, bundle id)
+	Kind        string // "template" | "bundle" | "package"
+	Dimensions  int    // vector size (optional; defaults to len(Embedding) if <= 0)
+	Embedding   []float32
 }
 
 // NewCache creates a new cache instance.
@@ -121,9 +134,9 @@ func (c *Cache) Get(contentHash, modelID string) ([]float32, bool) {
 		return nil, false
 	}
 
-	// Check if entry exists
+	// Check if entry exists and has new schema (Source != "")
 	entry, exists := c.index.Entries[contentHash]
-	if !exists {
+	if !exists || entry.Source == "" {
 		return nil, false
 	}
 
@@ -140,33 +153,39 @@ func (c *Cache) Get(contentHash, modelID string) ([]float32, bool) {
 }
 
 // Put stores an embedding in the cache.
-func (c *Cache) Put(contentHash, modelID, templateName string, dimensions int, embedding []float32) error {
+func (c *Cache) Put(req PutRequest) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	dimensions := req.Dimensions
+	if dimensions <= 0 {
+		dimensions = len(req.Embedding)
+	}
+
 	// Update model info if not set or if it changed
 	if c.index.ModelID == "" {
-		c.index.ModelID = modelID
+		c.index.ModelID = req.ModelID
 		c.index.Dimensions = dimensions
-	} else if c.index.ModelID != modelID {
+	} else if c.index.ModelID != req.ModelID {
 		// Model changed, clear entire cache
 		if err := c.clearUnsafe(); err != nil {
 			return fmt.Errorf("failed to clear cache for model change: %w", err)
 		}
-		c.index.ModelID = modelID
+		c.index.ModelID = req.ModelID
 		c.index.Dimensions = dimensions
 	}
 
 	// Save embedding to disk
-	vectorPath := filepath.Join(c.vectorsDir, contentHash+".bin")
-	if err := saveEmbedding(vectorPath, embedding); err != nil {
+	vectorPath := filepath.Join(c.vectorsDir, req.ContentHash+".bin")
+	if err := saveEmbedding(vectorPath, req.Embedding); err != nil {
 		return fmt.Errorf("failed to save embedding: %w", err)
 	}
 
 	// Update index
-	c.index.Entries[contentHash] = CacheEntry{
-		Template:    templateName,
-		ContentHash: contentHash,
+	c.index.Entries[req.ContentHash] = CacheEntry{
+		Source:      req.Source,
+		Kind:        req.Kind,
+		ContentHash: req.ContentHash,
 		UpdatedAt:   time.Now(),
 	}
 
