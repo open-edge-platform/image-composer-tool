@@ -318,25 +318,23 @@ body {
 .repo-rail-item.active .repo-rail-caret { visibility: visible; }
 
 .repo-pane { padding: 14px 18px; overflow-y: auto; max-height: 480px; }
+/* The only place the repo's identity is stated in text now (the toolbar below
+   used to repeat it; see .pane-toolbar), so it's boxed and tinted to draw the
+   eye the way the repeated line used to. */
+.repo-pane-header { background: var(--primary-light); border-radius: 6px; padding: 10px 12px; margin-bottom: 10px; }
 .repo-pane-eyebrow { font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px; font-weight: 700; color: var(--primary); }
 .repo-pane-title { font-size: 15px; font-weight: 700; margin-top: 1px; }
-.repo-pane-url { font-size: 11px; color: var(--text-muted); margin: 2px 0 6px; word-break: break-all; }
-.pkg-subhead {
-  font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
-  color: var(--text-muted); font-weight: 600; margin: 14px 0 4px;
-  display: flex; align-items: center; gap: 6px;
-}
-.pkg-star { color: #d97706; }
+.repo-pane-url { font-size: 11px; color: var(--text-muted); margin: 2px 0 0; word-break: break-all; }
 .pane-empty { color: var(--text-muted); font-size: 13px; text-align: center; padding: 48px 20px; }
-/* Tinted to match the active rail row (see .repo-rail-item.active), so the
-   color itself — not just the text — ties the pane back to the repo it's
-   showing. Sticky so the repo name stays on screen while the list scrolls. */
+/* Tinted to match the active rail row and the pane header above (see
+   .repo-rail-item.active, .repo-pane-header), so the color itself ties this
+   bar back to the repo it's showing. Sticky so the controls stay reachable
+   while the list scrolls, even once the header scrolls out of view. */
 .pane-toolbar {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  display: flex; align-items: center; justify-content: flex-end; gap: 12px;
   padding: 7px 10px; border-radius: 6px; margin-bottom: 8px;
   position: sticky; top: 0; background: var(--primary-light); z-index: 1;
 }
-.pane-toolbar-repo { font-size: 12px; font-weight: 700; color: var(--primary); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pane-toolbar-controls { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
 .frequent-toggle { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; color: var(--text); cursor: pointer; }
 .frequent-toggle input { accent-color: var(--primary); width: 15px; height: 15px; }
@@ -351,6 +349,9 @@ body {
    range is reference information rather than a control. */
 .pager-range { font-size: 11px; color: var(--text-muted); text-align: center; padding: 0 8px 8px; }
 .pkg-list-scroll { max-height: 300px; overflow-y: auto; overflow-x: hidden; }
+/* Sticky within the scrolling list (not the outer .pane-toolbar) so it stays
+   directly above the row checkboxes it acts on, even once they've scrolled. */
+.select-all-row { align-items: center; font-weight: 600; position: sticky; top: 0; background: var(--surface); border-bottom: 1px solid var(--border); margin-bottom: 4px; z-index: 1; }
 
 /* Right rail: final selected-package list (page-level, sticky) */
 .selected-col {
@@ -1242,12 +1243,12 @@ const advState = {
 
 // UI-only view state for the package step (not part of the exported config):
 //  - activeRepo:     repo open in the right pane
-//  - frequentOnly:   when true, the pane shows only the frequently used
-//                    (curated) packages; unchecking reveals the full catalog
+//  - frequentOnly:   off by default (browse the full catalog); when true, the
+//                    pane narrows to just the frequently used (curated) packages
 //  - pageStart:      per-repo index of the first full-catalog row currently
 //                    rendered; the pane shows a fixed-width window starting
 //                    here, moved by the Prev/Next buttons
-const pkgGroupsUI = { activeRepo: 'ubuntu-main', frequentOnly: true, pageStart: {}, expandedVersionRows: {}, bundlesCollapsed: true };
+const pkgGroupsUI = { activeRepo: 'ubuntu-main', frequentOnly: false, pageStart: {}, expandedVersionRows: {}, bundlesCollapsed: true };
 // Width of the full-catalog window. Fixed rather than cumulative: paging deep
 // into a 60k-package repo never puts more than this many rows in the DOM.
 const PAGE_SIZE = 100;
@@ -1504,7 +1505,7 @@ function renderAdvStepContent() {
                 <div class="repo-rail">${renderRepoRail()}</div>
                 <div class="repo-pane">${renderRepoPane()}</div>
               </div>
-              <p class="form-hint">Enable a repository with its checkbox, then click it to browse. “Show frequently used” is on by default; uncheck it to browse the repo's full catalog (loaded in pages of ${PAGE_SIZE}). “Select all” takes everything currently listed.</p>
+              <p class="form-hint">Enable a repository with its checkbox, then click it to browse. Browsing starts on the repo's full catalog (loaded in pages of ${PAGE_SIZE}); check “Show frequently used” to narrow the list to its curated picks. The “Select all” checkbox above the list adds everything currently shown to your selection, and removes it again when unchecked.</p>
             </div>
           </div>
 
@@ -1664,8 +1665,8 @@ function renderRepoRail() {
 }
 
 // The rows the pane is showing right now, in render order: the frequently-used
-// set, or one page of the full catalog. renderRepoPane() and "Select all" both
-// call this, so the button acts on exactly what the user can see.
+// set, or one page of the full catalog. renderRepoPane() and the "select all"
+// checkbox both call this, so it acts on exactly what the user can see.
 function visibleRepoRows(repoId) {
   if (pkgGroupsUI.frequentOnly) return PACKAGE_DB.filter(p => p.repo === repoId);
   const all = allPackagesForRepo(repoId);
@@ -1674,9 +1675,10 @@ function visibleRepoRows(repoId) {
 }
 
 // Right pane: packages of the active repo. A "Show frequently used" toggle
-// (checked by default) shows just the curated set; unchecking reveals the full
-// catalog, paged with Prev/Next so a 60k-package repo never renders all at
-// once.
+// (unchecked by default) narrows the list to just the curated set; off, it's
+// the full catalog, paged with Prev/Next so a 60k-package repo never renders
+// all at once. The "Frequently used" grouping only ever appears when that
+// toggle is on — the full-catalog page is always a flat, unstarred list.
 function renderRepoPane() {
   const t = advState.template;
   const repo = REPO_DB.find(r => r.id === pkgGroupsUI.activeRepo) || OTHER_REPO;
@@ -1684,9 +1686,11 @@ function renderRepoPane() {
   const enabled = repo.base || t.enabledRepos.includes(repo.id);
   const total = repo.total || PACKAGE_DB.filter(p => p.repo === repo.id).length;
 
-  const header = extra => `<div class="repo-pane-eyebrow">Browsing</div>
+  const header = extra => `<div class="repo-pane-header">
+    <div class="repo-pane-eyebrow">Browsing</div>
     <div class="repo-pane-title">${repo.name}</div>
-    <div class="repo-pane-url">${repo.url}${repo.priority ? ` &middot; priority ${repo.priority}` : ''} &middot; ${total.toLocaleString()} packages</div>${extra || ''}`;
+    <div class="repo-pane-url">${repo.url}${repo.priority ? ` &middot; priority ${repo.priority}` : ''} &middot; ${total.toLocaleString()} packages</div>
+  </div>${extra || ''}`;
 
   if (!enabled) {
     return header() + `<div class="pane-empty">This repository is disabled.<br>Enable it with the checkbox on the left to pick from its ${total.toLocaleString()} packages.</div>`;
@@ -1712,57 +1716,60 @@ function renderRepoPane() {
 
   const frequentOnly = pkgGroupsUI.frequentOnly;
   const pageRows = visibleRepoRows(repo.id);
+  const allVisibleSelected = pageRows.length > 0 && pageRows.every(p => isBaseSelected(p.name));
+
+  // Sits above the row checkboxes it acts on (see .select-all-row). Checking
+  // it adds every row currently listed to the selection; unchecking removes
+  // exactly those rows — see toggleSelectAllVisible.
+  const selectAllRow = `<label class="pkg-row select-all-row" onclick="event.stopPropagation()">
+      <input type="checkbox" ${allVisibleSelected ? 'checked' : ''} onchange="toggleSelectAllVisible('${repo.id}', this.checked)">
+      <span class="pkg-row-name">Select all</span>
+    </label>`;
 
   let listHtml = '';
   if (!pageRows.length) {
     listHtml = frequentOnly
       ? `<div class="pane-empty">No frequently used packages for this repository.<br>Uncheck “Show frequently used” to browse all ${total.toLocaleString()}.</div>`
       : `<div class="pane-empty">This repository lists no packages.</div>`;
-  } else if (frequentOnly) {
-    listHtml = pageRows.map(row).join('');
   } else {
-    // Full catalog: frequently used first (starred), then the rest.
-    const all = allPackagesForRepo(repo.id);
-    const start = clampPageStart(repo.id, all.length);
-    const end = start + pageRows.length;
-    const freq = pageRows.filter(p => p.curated);
-    const rest = pageRows.filter(p => !p.curated);
-    if (freq.length) listHtml += `<div class="pkg-subhead"><span class="pkg-star">&#9733;</span> Frequently used</div>${freq.map(row).join('')}`;
-    if (rest.length) listHtml += `<div class="pkg-subhead">All packages</div>${rest.map(row).join('')}`;
-    if (all.length > PAGE_SIZE) {
-      const pageCount = Math.ceil(all.length / PAGE_SIZE);
-      const page = Math.floor(start / PAGE_SIZE) + 1;
-      const atStart = start === 0;
-      const atEnd = end >= all.length;
-      // The page box commits on change (blur or Enter) rather than on input, so
-      // typing "12" does not re-render at "1" and steal the caret mid-entry.
-      listHtml += `<div class="pkg-pager">
-        <button class="btn btn-sm" ${atStart ? 'disabled' : ''} onclick="pkgFirstPage('${repo.id}')" title="First page">&laquo;</button>
-        <button class="btn btn-sm" ${atStart ? 'disabled' : ''} onclick="pkgPrevPage('${repo.id}')">&#8249; Prev</button>
-        <span class="pager-jump">Page
-          <input class="pager-page-input" type="number" min="1" max="${pageCount}" value="${page}"
-            aria-label="Page number, 1 to ${pageCount}"
-            onchange="pkgGoToPage('${repo.id}', this.value, ${pageCount})">
-          of ${pageCount.toLocaleString()}</span>
-        <button class="btn btn-sm" ${atEnd ? 'disabled' : ''} onclick="pkgNextPage('${repo.id}')">Next &#8250;</button>
-        <button class="btn btn-sm" ${atEnd ? 'disabled' : ''} onclick="pkgLastPage('${repo.id}', ${pageCount})" title="Last page">&raquo;</button>
-      </div>
-      <div class="pager-range">${(start + 1).toLocaleString()}&ndash;${end.toLocaleString()} of ${all.length.toLocaleString()}</div>`;
+    // Flat list either way — the "Frequently used" grouping only exists when
+    // the toggle above is on; the full-catalog page never splits it back out.
+    listHtml = selectAllRow + pageRows.map(row).join('');
+    if (!frequentOnly) {
+      const all = allPackagesForRepo(repo.id);
+      const start = clampPageStart(repo.id, all.length);
+      const end = start + pageRows.length;
+      if (all.length > PAGE_SIZE) {
+        const pageCount = Math.ceil(all.length / PAGE_SIZE);
+        const page = Math.floor(start / PAGE_SIZE) + 1;
+        const atStart = start === 0;
+        const atEnd = end >= all.length;
+        // The page box commits on change (blur or Enter) rather than on input, so
+        // typing "12" does not re-render at "1" and steal the caret mid-entry.
+        listHtml += `<div class="pkg-pager">
+          <button class="btn btn-sm" ${atStart ? 'disabled' : ''} onclick="pkgFirstPage('${repo.id}')" title="First page">&laquo;</button>
+          <button class="btn btn-sm" ${atStart ? 'disabled' : ''} onclick="pkgPrevPage('${repo.id}')">&#8249; Prev</button>
+          <span class="pager-jump">Page
+            <input class="pager-page-input" type="number" min="1" max="${pageCount}" value="${page}"
+              aria-label="Page number, 1 to ${pageCount}"
+              onchange="pkgGoToPage('${repo.id}', this.value, ${pageCount})">
+            of ${pageCount.toLocaleString()}</span>
+          <button class="btn btn-sm" ${atEnd ? 'disabled' : ''} onclick="pkgNextPage('${repo.id}')">Next &#8250;</button>
+          <button class="btn btn-sm" ${atEnd ? 'disabled' : ''} onclick="pkgLastPage('${repo.id}', ${pageCount})" title="Last page">&raquo;</button>
+        </div>
+        <div class="pager-range">${(start + 1).toLocaleString()}&ndash;${end.toLocaleString()} of ${all.length.toLocaleString()}</div>`;
+      }
     }
   }
 
-  // "Select all" acts on the rows currently on screen — the frequently-used set
-  // when the toggle is on, otherwise the page of the full catalog being shown.
-  // The repo name repeats here (it's also in the header above) because this
-  // bar is sticky and the header scrolls out of view first on a long list.
+  // Now holds just the frequent-only toggle — "Select all" moved into the
+  // list itself (see selectAllRow) so it sits directly above the rows it acts on.
   const toolbar = `<div class="pane-toolbar">
-      <span class="pane-toolbar-repo" title="${escapeHtml(repo.name)}">${escapeHtml(repo.name)}</span>
       <div class="pane-toolbar-controls">
         <label class="frequent-toggle">
           <input type="checkbox" ${frequentOnly ? 'checked' : ''} onchange="toggleFrequentOnly(this.checked)">
           Show frequently used
         </label>
-        <button class="link-btn" onclick="selectAllVisible('${repo.id}')">Select all</button>
       </div>
     </div>`;
 
@@ -1774,11 +1781,17 @@ function toggleFrequentOnly(on) {
   renderAdvStepContent();
 }
 
-// Select every package the pane is currently listing. Rows that are already
-// selected are skipped rather than re-set, so a version the user pinned by hand
-// is not silently reset to "Latest".
-function selectAllVisible(repoId) {
-  visibleRepoRows(repoId).forEach(p => { if (!isBaseSelected(p.name)) setPackageSelection(p.name, 'latest'); });
+// Checking the "select all" row adds every package the pane is currently
+// listing; unchecking it removes exactly those rows again. Rows already
+// selected are skipped on the add side rather than re-set, so a version the
+// user pinned by hand is not silently reset to "Latest".
+function toggleSelectAllVisible(repoId, checked) {
+  const visible = visibleRepoRows(repoId);
+  if (checked) {
+    visible.forEach(p => { if (!isBaseSelected(p.name)) setPackageSelection(p.name, 'latest'); });
+  } else {
+    visible.forEach(p => clearPackageSelection(p.name));
+  }
   updateAdvancedYaml();
   renderAdvStepContent();
 }
