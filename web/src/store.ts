@@ -14,9 +14,38 @@ export interface Selection {
 interface AppState {
   manifest: Manifest | null
   selection: Selection
+  // Advanced-tab override for the image name. Kept out of `Selection` so it never
+  // leaks into the compose request body; it seeds from the resolved template's
+  // imageName and, once the user types, `imageNameEdited` guards it from reseeds.
+  imageName: string
+  imageNameEdited: boolean
+  // Advanced-tab override for the output image type (RAW/ISO/QCOW2). Decoupled
+  // from `selection.imageType` (which matches a pre-authored template) so the
+  // user can pick a format the manifest has no template for without blanking the
+  // preview. State-only for now; seeded from the resolved type until edited.
+  imageType: string
+  imageTypeEdited: boolean
   setManifest: (m: Manifest) => void
   setField: (key: keyof Selection, value: string) => void
+  // User-typed image name (marks it edited so seedImageName stops overwriting it).
+  setImageName: (value: string) => void
+  // Default image name from the resolved template; ignored once the user edits.
+  seedImageName: (value: string) => void
+  // User-chosen output image type (marks it edited so seedImageType stops overwriting it).
+  setImageType: (value: string) => void
+  // Default image type from the resolved template; ignored once the user edits.
+  seedImageType: (value: string) => void
 }
+
+// The fixed set of output image types the Advanced tab can target. Not every
+// type has a pre-authored template in the manifest yet (RAW/QCOW2 may be
+// build-time-only); this override is state-only until the compose/build wiring
+// lands, so all three are always selectable.
+export const IMAGE_TYPE_OPTIONS: DropdownOption[] = [
+  { id: 'raw', label: 'RAW' },
+  { id: 'iso', label: 'ISO' },
+  { id: 'qcow2', label: 'QCOW2' },
+]
 
 const emptySelection: Selection = {
   vertical: '',
@@ -30,7 +59,17 @@ const emptySelection: Selection = {
 export const useStore = create<AppState>((set) => ({
   manifest: null,
   selection: emptySelection,
+  imageName: '',
+  imageNameEdited: false,
+  imageType: '',
+  imageTypeEdited: false,
   setManifest: (m) => set({ manifest: m }),
+  setImageName: (value) => set({ imageName: value, imageNameEdited: true }),
+  seedImageName: (value) =>
+    set((state) => (state.imageNameEdited ? {} : { imageName: value })),
+  setImageType: (value) => set({ imageType: value, imageTypeEdited: true }),
+  seedImageType: (value) =>
+    set((state) => (state.imageTypeEdited ? {} : { imageType: value })),
   setField: (key, value) =>
     set((state) => {
       const selection = { ...state.selection, [key]: value }
@@ -64,7 +103,9 @@ export const useStore = create<AppState>((set) => ({
       if (state.manifest) {
         autoFillCascade(state.manifest, selection)
       }
-      return { selection }
+      // Any selection change resolves to a (possibly) different template, so let
+      // the image name and type re-track the new defaults until edited again.
+      return { selection, imageNameEdited: false, imageTypeEdited: false }
     }),
 }))
 
