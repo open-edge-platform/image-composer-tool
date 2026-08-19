@@ -674,38 +674,43 @@ func (b *debInstallerBackend) install(req installRequest) error {
 	// passes at worst, never a missed dependency: the outcome after the loop is the
 	// same set of unpacked-and-configured packages.
 	//
-	// A batch failure does not abort the pass — later batches may still make
-	// progress, and their output feeds the same no-progress comparison — so the
-	// per-pass result is the concatenation of every batch's output plus the first
-	// error seen.
+		// A batch failure does not abort the pass — later batches may still make
+		// progress. No-progress detection therefore uses a per-batch fingerprint
+		// (batch index + output + error) rather than only the concatenated output, so
+		// a failure migrating from one batch to another is not misclassified as
+		// "no progress" when outputs happen to match.
 	const maxInstallPasses = 6
 	configureCmd := "dpkg --configure -a --auto-deconfigure"
 
+		var lastFingerprint string
 	var lastOut string
 	var lastErr error
 	for pass := 1; pass <= maxInstallPasses; pass++ {
 		var passOut strings.Builder
+			var passFingerprint strings.Builder
 		var passErr error
-		for _, chunk := range chunks {
+			for i, chunk := range chunks {
 			installCmd := "dpkg -i --auto-deconfigure -- " + strings.Join(chunk, " ")
 			out, err := shell.ExecCmdWithStream(installCmd, true, req.chrootPath, envVars)
 			passOut.WriteString(out)
+				fmt.Fprintf(&passFingerprint, "batch=%d\nout=%q\nerr=%v\n", i, out, err)
 			if err != nil && passErr == nil {
 				passErr = err
 			}
 		}
 		out, err := passOut.String(), passErr
+			fingerprint := passFingerprint.String()
 		if err == nil {
 			// Everything unpacked and configured.
 			return nil
 		}
 		// No progress since the previous failing pass: same archives failed for the
 		// same reason, so retrying again cannot help. Surface it now.
-		if pass > 1 && out == lastOut {
+			if pass > 1 && fingerprint == lastFingerprint {
 			return fmt.Errorf("dpkg install of %d artifact(s) failed (no progress after %d pass(es)): %w%s",
 				len(paths), pass, err, formatCommandOutput(out))
 		}
-		lastOut, lastErr = out, err
+			lastFingerprint, lastOut, lastErr = fingerprint, out, err
 		log.Infof("Overlay install: dpkg pass %d/%d left packages unconfigured (likely Pre-Depends ordering); configuring and retrying", pass, maxInstallPasses)
 		// Best-effort: configure whatever is now unpacked so the next pass's
 		// Pre-Depends are met. A failure here is not fatal on its own — the next
