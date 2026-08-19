@@ -113,10 +113,21 @@ func GenerateDot(pkgs []ospackage.PackageInfo, file string, pkgSources map[strin
 	return nil
 }
 
+// parsedPackageCacheVersion is the schema version of the on-disk parsed metadata
+// cache. Bump it whenever the parsed shape changes (e.g. a new PackageInfo field
+// the parser now populates) so caches written by an older binary are treated as a
+// miss and re-parsed, rather than silently returning records missing the new data.
+// v2: PackageInfo.Breaks is now parsed and consumed by the overlay Breaks-driven
+// upgrade; a v1 cache would omit it.
+const parsedPackageCacheVersion = 2
+
 // packageMetadataCache stores parsed package metadata keyed by the Packages.gz SHA256
 // checksum recorded in the Release file. A matching checksum means the upstream
 // repository has not changed, so we can skip downloading, decompressing, and re-parsing.
+// Version guards against reusing a cache written by an older parser (see
+// parsedPackageCacheVersion).
 type packageMetadataCache struct {
+	Version  int                     `json:"version"`
 	Checksum string                  `json:"checksum"`
 	Packages []ospackage.PackageInfo `json:"packages"`
 }
@@ -144,7 +155,7 @@ func loadParsedPackageCache(cacheFile string) (*packageMetadataCache, error) {
 }
 
 func saveParsedPackageCache(cacheFile, checksum string, pkgs []ospackage.PackageInfo) error {
-	cache := packageMetadataCache{Checksum: checksum, Packages: pkgs}
+	cache := packageMetadataCache{Version: parsedPackageCacheVersion, Checksum: checksum, Packages: pkgs}
 	data, err := json.Marshal(cache)
 	if err != nil {
 		return fmt.Errorf("failed to marshal package cache: %w", err)
@@ -276,7 +287,10 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 	}
 	var cached *packageMetadataCache
 	if allowParsedCache {
-		if c, loadErr := loadParsedPackageCache(cacheFile); loadErr == nil && c.Checksum != "" {
+		// Require both a non-empty checksum and a matching schema version; a cache
+		// written by an older parser (different version) is ignored and re-parsed so
+		// newly-parsed fields (e.g. Breaks) are populated.
+		if c, loadErr := loadParsedPackageCache(cacheFile); loadErr == nil && c.Checksum != "" && c.Version == parsedPackageCacheVersion {
 			cached = c
 		}
 	}
@@ -501,6 +515,17 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 				cleanedDep := CleanDependencyName(dep)
 				if cleanedDep != "" {
 					pkg.Requires = append(pkg.Requires, cleanedDep)
+				}
+			}
+		case "Breaks":
+			// Store the raw Breaks terms (comma-separated "name [(op ver)]"). Unlike
+			// Depends they are not cleaned here: the overlay resolver needs the version
+			// constraint to decide whether a baseline package must be upgraded to clear
+			// a versioned break (rather than removed). Debian policy forbids "|"
+			// alternatives in Breaks, so each comma term is a single package.
+			for _, term := range strings.Split(val, ",") {
+				if term = strings.TrimSpace(term); term != "" {
+					pkg.Breaks = append(pkg.Breaks, term)
 				}
 			}
 		case "Provides":
