@@ -37,14 +37,25 @@ interface AppState {
   seedImageType: (value: string) => void
 }
 
-// The fixed set of output image types the Advanced tab can target. Not every
-// type has a pre-authored template in the manifest yet (RAW/QCOW2 may be
-// build-time-only); this override is state-only until the compose/build wiring
-// lands, so all three are always selectable.
+// The image types the Advanced tab can target. This is the full `target.imageType`
+// enum from internal/config/schema/os-image-template.schema.json — the same values
+// the builder switches on (see e.g. internal/provider/ubuntu/ubuntu.go) — so any
+// choice here is a value ICT can actually build, even where the manifest has no
+// pre-authored template for it. The override is state-only until the compose/build
+// wiring lands, but keeping the list schema-aligned means it stays valid once it
+// does, and means a type seeded from a resolved template always has a matching
+// option to render.
+//
+// `img` is an initrd image, NOT QCOW2. QCOW2 is a real ICT output format, but it
+// lives on a different axis: `disk.artifacts[].type`
+// (enum raw/qcow2/vhd/vhdx/vmdk/vdi/tar), which converts the finished image
+// rather than changing how it is built. Surfacing QCOW2 therefore belongs to a
+// future artifact-format control, not to this dropdown.
 export const IMAGE_TYPE_OPTIONS: DropdownOption[] = [
   { id: 'raw', label: 'RAW' },
+  { id: 'img', label: 'IMG (initrd)' },
   { id: 'iso', label: 'ISO' },
-  { id: 'qcow2', label: 'QCOW2' },
+  { id: 'wsl2', label: 'WSL2' },
 ]
 
 const emptySelection: Selection = {
