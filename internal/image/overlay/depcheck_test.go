@@ -272,6 +272,7 @@ func TestClassifyConflicts(t *testing.T) {
 		wantCount    int
 		wantTarget   string
 		wantConflict string // the declaring artifact (ConflictWith)
+		wantVersion  string // the reported CurrentVersion, when asserted
 	}{
 		{
 			name:         "bare conflict on present package fires",
@@ -307,6 +308,78 @@ func TestClassifyConflicts(t *testing.T) {
 			conflicts: []ArtifactConflict{{Package: "newpkg", Conflicts: DependencyAlternative{Name: "libfoo", Constraint: &VersionConstraint{"<<", "2.0"}}}},
 			wantCount: 0,
 		},
+		{
+			// Two packages the overlay adds in the SAME batch conflict. The target is
+			// absent from the baseline but present in the to-install set, so it must be
+			// gated here rather than slip through to dpkg unpack (the free vs non-free
+			// intel-media-va-driver case).
+			name:         "conflict on a co-added (new) package fires",
+			resolved:     []ResolvedPackage{{Name: "intel-media-va-driver", Version: "24.1.0"}},
+			conflicts:    []ArtifactConflict{{Package: "intel-media-va-driver-non-free", Conflicts: DependencyAlternative{Name: "intel-media-va-driver"}}},
+			wantCount:    1,
+			wantTarget:   "intel-media-va-driver",
+			wantConflict: "intel-media-va-driver-non-free",
+		},
+		{
+			// A versioned conflict on a co-added package whose to-install version is out
+			// of the declared range is not a clash.
+			name:      "versioned conflict on a co-added package out of range is skipped",
+			resolved:  []ResolvedPackage{{Name: "newlib", Version: "3.0"}},
+			conflicts: []ArtifactConflict{{Package: "otherpkg", Conflicts: DependencyAlternative{Name: "newlib", Constraint: &VersionConstraint{"<<", "2.0"}}}},
+			wantCount: 0,
+		},
+		{
+			// The target is in the baseline AND upgraded in the same batch to a version
+			// that still falls in the conflict range, so the clash fires — and it must
+			// report the upgraded (post-install) version, not the superseded baseline one.
+			name:         "conflict on an upgraded baseline target reports the upgraded version",
+			resolved:     []ResolvedPackage{{Name: "libfoo", Version: "1.9"}},
+			conflicts:    []ArtifactConflict{{Package: "newpkg", Conflicts: DependencyAlternative{Name: "libfoo", Constraint: &VersionConstraint{"<<", "2.0"}}}},
+			wantCount:    1,
+			wantTarget:   "libfoo",
+			wantConflict: "newpkg",
+			wantVersion:  "1.9",
+		},
+		{
+			// Two co-added packages both Provide and Conflict the same virtual name (the
+			// classic "only one mail-transport-agent" pattern). Neither is literally named
+			// the virtual target, so the clash is visible only via the provider index; it
+			// must fire against the other REAL provider (reported by its package name so a
+			// removal-enabled policy targets a package that exists), not the virtual name.
+			name: "conflict on a co-added provided virtual name fires",
+			resolved: []ResolvedPackage{
+				{Name: "postfix", Version: "3.8", Provides: []string{"mail-transport-agent"}},
+				{Name: "exim4", Version: "4.97", Provides: []string{"mail-transport-agent"}},
+			},
+			conflicts:    []ArtifactConflict{{Package: "postfix", Conflicts: DependencyAlternative{Name: "mail-transport-agent"}}},
+			wantCount:    1,
+			wantTarget:   "exim4",
+			wantConflict: "postfix",
+			wantVersion:  "4.97",
+		},
+		{
+			// A VERSIONED conflict against a virtual name provided (unversioned) by a
+			// co-added package is not matched: this resolver carries only unversioned
+			// Provides, and per Debian policy a versioned conflict does not match an
+			// unversioned virtual provider, so it must not be flagged.
+			name: "versioned conflict on a co-added provided virtual name is skipped",
+			resolved: []ResolvedPackage{
+				{Name: "postfix", Version: "3.8", Provides: []string{"mail-transport-agent"}},
+				{Name: "exim4", Version: "4.97", Provides: []string{"mail-transport-agent"}},
+			},
+			conflicts: []ArtifactConflict{{Package: "postfix", Conflicts: DependencyAlternative{Name: "mail-transport-agent", Constraint: &VersionConstraint{"<<", "5.0"}}}},
+			wantCount: 0,
+		},
+		{
+			// A lone package that Provides and Conflicts the same virtual name does not
+			// clash with itself (Debian policy), so it must not be flagged.
+			name: "self-provided virtual conflict is skipped",
+			resolved: []ResolvedPackage{
+				{Name: "postfix", Version: "3.8", Provides: []string{"mail-transport-agent"}},
+			},
+			conflicts: []ArtifactConflict{{Package: "postfix", Conflicts: DependencyAlternative{Name: "mail-transport-agent"}}},
+			wantCount: 0,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -325,6 +398,9 @@ func TestClassifyConflicts(t *testing.T) {
 			}
 			if actions[0].ConflictWith != tt.wantConflict {
 				t.Errorf("conflictWith = %q, want %q", actions[0].ConflictWith, tt.wantConflict)
+			}
+			if tt.wantVersion != "" && actions[0].CurrentVersion != tt.wantVersion {
+				t.Errorf("currentVersion = %q, want %q", actions[0].CurrentVersion, tt.wantVersion)
 			}
 		})
 	}

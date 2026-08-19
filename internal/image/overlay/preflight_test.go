@@ -284,6 +284,35 @@ func TestEvaluatePreflight_Counts(t *testing.T) {
 	}
 }
 
+// TestEvaluatePreflight_CoAddedVirtualConflictNotRemoved covers the removal-enabled
+// path for a co-added virtual conflict. classifyConflicts reports such a conflict
+// against the REAL provider (exim4), which is in the to-install set, so even with
+// allowPackageRemoval the reclassification guard must leave it a blocking conflict
+// rather than turn it into a no-op removal that lets both packages reach dpkg.
+func TestEvaluatePreflight_CoAddedVirtualConflictNotRemoved(t *testing.T) {
+	report := EvaluatePreflight(PreflightInput{
+		Family: PackageManagerAPT,
+		Resolved: []ResolvedPackage{
+			{Name: "postfix", Version: "3.8", Arch: "amd64", Provides: []string{"mail-transport-agent"}},
+			{Name: "exim4", Version: "4.97", Arch: "amd64", Provides: []string{"mail-transport-agent"}},
+		},
+		SimulatedActions: []PlannedAction{
+			{Type: ActionConflict, Package: "exim4", ConflictWith: "postfix"},
+		},
+		Policy: config.OverlayPolicy{PackageOperation: config.OverlayPackageOpAdditiveAndUpgrade, AllowUpgrade: true, AllowPackageRemoval: true},
+	})
+
+	if report.Removes != 0 {
+		t.Errorf("removes = %d, want 0 (co-added conflict must not become a removal): %+v", report.Removes, report.Actions)
+	}
+	if report.Conflicts != 1 {
+		t.Errorf("conflicts = %d, want 1: %+v", report.Conflicts, report.Actions)
+	}
+	if !report.Blocked {
+		t.Errorf("expected blocked (conflict left in place under the default fail policy), violations=%+v", report.Violations)
+	}
+}
+
 // TestEvaluatePreflight_Deterministic confirms reordered inputs produce an
 // identical report.
 func TestEvaluatePreflight_Deterministic(t *testing.T) {

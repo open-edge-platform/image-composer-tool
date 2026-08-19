@@ -79,6 +79,11 @@ type ResolvedPackage struct {
 	Origin      string
 	License     string
 	Checksums   []ospackage.Checksum
+	// Provides are the virtual capability names this package provides. They are
+	// carried so conflict gating can recognize a Conflicts:/Breaks: aimed at a
+	// virtual name that a co-added package satisfies (e.g. two packages that both
+	// Provide and Conflict "mail-transport-agent").
+	Provides []string
 }
 
 // ResolutionPlan is the deterministic output of overlay dependency resolution.
@@ -676,7 +681,7 @@ func buildResolutionPlan(in planInput) *ResolutionPlan {
 		rp := ResolvedPackage{
 			Name: name, Version: p.Version, Arch: p.Arch, URL: p.URL,
 			Type: p.Type, Description: p.Description, Origin: p.Origin,
-			License: p.License, Checksums: p.Checksums,
+			License: p.License, Checksums: p.Checksums, Provides: p.Provides,
 		}
 		resolved = append(resolved, rp)
 		if !present[name] {
