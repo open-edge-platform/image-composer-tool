@@ -101,6 +101,27 @@ Coverage threshold is enforced and auto-ratcheted — see `.coverage-threshold`.
 
 ---
 
+## UI Development (web/)
+
+The web UI (`web/`) is a React 19 + TypeScript + Vite + Tailwind frontend, embedded into
+the `image-composer-tool` Go binary via `//go:embed` and served by the `serve` subcommand
+(see [web/README.md](../web/README.md)).
+
+- **Dev loop**: run the backend and frontend separately for hot-reload — `go run
+  ./cmd/image-composer-tool serve --sudo` (Terminal 1) and `cd web && npm run dev`
+  (Terminal 2). Vite serves at `http://localhost:5173` and proxies `/api/v1` to `:8080`.
+- **Type check**: `cd web && npx tsc --noEmit` before declaring a frontend change done.
+- **Verify in a browser**: for any UI change, load it via the dev server (or the rebuilt
+  binary) and exercise the feature — passing `tsc`/tests does not confirm the UI actually
+  works. Check the golden path and obvious edge cases.
+- **Full embed rebuild** (needed to test through the real Go binary, not just Vite):
+  `(cd web && npm ci && npm run build)` → `rm -rf internal/webui/dist && cp -r web/dist
+  internal/webui/dist` → `go build -o ./build/image-composer-tool
+  ./cmd/image-composer-tool/`. Hard-refresh (Ctrl/Cmd+Shift+R) after restarting `serve`
+  to bypass the cached bundle.
+
+---
+
 ## Testing Patterns
 
 stdlib `testing` only (no testify), table-driven with `t.Run()`, AAA layout, `t.TempDir()` for filesystem, `t.Parallel()` where safe.
@@ -158,7 +179,8 @@ stdlib `testing` only (no testify), table-driven with `t.Run()`, AAA layout, `t.
 - **Template validation**: Templates are validated against `os-image-template.schema.json` via `image-composer-tool validate`.
 - **File permissions**: `0700` chroot dirs, `0755` general dirs, `0644` data files, `0640` log files.
 - **Secrets**: Never write tokens/keys to files or logs. Do not embed secrets in test fixtures.
-- CI runs **Trivy** (HIGH/CRITICAL fail), **Gitleaks** (secret detection), **Zizmor** (Actions auditing).
+- CI runs **Trivy** (HIGH/CRITICAL fail), **Gitleaks** (secret detection), **Zizmor** (Actions auditing),
+  and per-OS/arch **integration builds** — all must pass before merge.
 
 ---
 
@@ -191,24 +213,11 @@ If no docs need updating, **say so explicitly in the PR description**.
 - Branch prefixes: `feature/`, `fix/`, `docs/`, `refactor/`.
 - **Use `.github/PULL_REQUEST_TEMPLATE.md`** for every PR.
 - **Do not** add AI co-author trailers (e.g. `Co-authored-by: Copilot …`) unless the repo explicitly asks for them.
+- **Do not** reference JIRA ticket IDs, internal chat threads, or session/conversation
+  details in PR descriptions — write descriptions to stand alone for any reader.
 - **Do not** force-push to shared branches. Never use `--no-verify`.
 - Squash trivial fixup commits locally before pushing.
 - The `gh` CLI is available — use it for PR/issue interactions over manual web steps.
-
----
-
-## CI Quality Gates
-
-All PRs must pass before merge:
-
-| Gate | What it checks |
-|------|----------------|
-| Unit tests + coverage | `earthly +test` — threshold auto-ratchets via `.coverage-threshold` |
-| Lint | `earthly +lint` — `govet`, `gofmt`, `errcheck`, `staticcheck`, `unused`, `gosimple` |
-| Trivy scan | Dependency vulns (HIGH/CRITICAL) + SBOM generation |
-| Gitleaks | Secret-leak detection |
-| Zizmor | GitHub Actions security auditing |
-| Integration builds | Per-OS/arch image builds |
 
 ---
 
