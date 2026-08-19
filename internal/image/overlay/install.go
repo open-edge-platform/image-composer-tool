@@ -40,7 +40,7 @@ const maxDpkgArgBytes = 96 * 1024
 // rather than dropped or truncated: dropping it would silently skip a package,
 // and the caller must see the real execve failure instead of a mystery omission.
 // A nil or empty input yields a single empty batch so callers still run once and
-// preserve existing behaviour for the no-artifact case.
+// preserve existing behavior for the no-artifact case.
 func chunkArgs(args []string, budget int) [][]string {
 	if len(args) == 0 {
 		return [][]string{nil}
@@ -660,8 +660,8 @@ func (b *debInstallerBackend) install(req installRequest) error {
 	// and execve fails with "argument list too long" before dpkg even starts.
 	chunks := chunkArgs(paths, maxDpkgArgBytes)
 	if len(chunks) > 1 {
-		log.Infof("Overlay install: %d artifact(s) exceed the per-command argument limit; "+
-			"installing in %d dpkg batch(es) per pass", len(paths), len(chunks))
+		log.Infof("Overlay install: splitting %d artifact(s) into %d dpkg batch(es) per pass "+
+			"to keep each command under the internal argument budget", len(paths), len(chunks))
 	}
 
 	// Install the prepared local artifacts, retrying to satisfy Pre-Depends.
