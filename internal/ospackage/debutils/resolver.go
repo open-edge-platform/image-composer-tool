@@ -693,6 +693,18 @@ func filterCandidatesByPriorityWithTarget(candidates []ospackage.PackageInfo, ta
 		}
 	}
 
+	// firstSeen records each provider name's first index in the filtered slice so the
+	// provides tiebreak below is a TOTAL order. Ordering different providers by their
+	// first-seen position (rather than treating them as equal) keeps sort.Slice's
+	// comparator transitive: without it, an interleaving like [A@1, B@1, A@3] can leave
+	// A@1 ahead of A@3, so a virtual request would still resolve to the oldest build.
+	firstSeen := make(map[string]int, len(filtered))
+	for idx, candidate := range filtered {
+		if _, ok := firstSeen[candidate.Name]; !ok {
+			firstSeen[candidate.Name] = idx
+		}
+	}
+
 	// Sort by simple rule: exact name matches first, then provides matches
 	sort.Slice(filtered, func(i, j int) bool {
 		pkgI := filtered[i]
@@ -739,8 +751,19 @@ func filterCandidatesByPriorityWithTarget(candidates []ospackage.PackageInfo, ta
 			return versionCmp
 		}
 
-		// For provides matches, maintain stable order (don't compare different versioning schemes)
-		return false
+		// Both are provides matches for the target virtual name. Across DIFFERENT
+		// provider packages the version schemes are not comparable, so keep a stable
+		// order. But when both candidates are the SAME real package at different
+		// versions (e.g. two libssl3t64 builds both providing the virtual "libssl3"),
+		// rank the newer one first: otherwise a virtual-name dependency resolves to
+		// whichever version the Packages file happened to list first (effectively the
+		// oldest), which then fails a later exact "= <newer>" pin on the real package.
+		if pkgI.Name == pkgJ.Name {
+			return compareVersions(pkgI.Version, pkgJ.Version) > 0
+		}
+		// Different providers of the same virtual name: order by first-seen position so
+		// the comparator stays a total order (see firstSeen above).
+		return firstSeen[pkgI.Name] < firstSeen[pkgJ.Name]
 	})
 
 	return filtered
