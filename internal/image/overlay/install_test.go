@@ -1805,3 +1805,90 @@ func TestDebInstallMultiBatchPreservesPassSemantics(t *testing.T) {
 		}
 	}
 }
+
+// TestDebInstallNoProgressFingerprintByBatch verifies no-progress detection keys
+// on per-batch failure identity, not only concatenated output. Two consecutive
+// failing passes with empty output but different failing batches must not
+// fail-fast as "no progress".
+func TestDebInstallNoProgressFingerprintByBatch(t *testing.T) {
+	items := make([]plannedInstall, 0, 2200)
+	for i := 0; i < 2200; i++ {
+		name := fmt.Sprintf("pkg-%04d", i)
+		items = append(items, plannedInstall{
+			pkg:      ResolvedPackage{Name: name},
+			artifact: fmt.Sprintf("%s-very-long-overlay-artifact-name-for-no-progress-fingerprint_1_amd64.deb", name),
+		})
+	}
+	req := installRequest{
+		chrootPath:        "/mnt/root",
+		artifactChrootDir: chrootArtifactDir,
+		items:             items,
+	}
+
+	paths := make([]string, 0, len(items))
+	for _, it := range items {
+		paths = append(paths, shell.QuoteArg(filepath.Join(chrootArtifactDir, it.artifact)))
+	}
+	chunks := chunkArgs(paths, maxDpkgArgBytes)
+	if len(chunks) < 2 {
+		t.Fatalf("test setup failed: expected multiple batches, got %d", len(chunks))
+	}
+
+	results := make([]struct {
+		out string
+		err error
+	}, 0, len(chunks)*3+2)
+
+	// Pass 1: first batch fails with empty output; others succeed with empty output.
+	for i := range chunks {
+		if i == 0 {
+			results = append(results, struct {
+				out string
+				err error
+			}{out: "", err: errors.New("exit status 1")})
+			continue
+		}
+		results = append(results, struct {
+			out string
+			err error
+		}{out: "", err: nil})
+	}
+	results = append(results, struct {
+		out string
+		err error
+	}{out: "", err: nil})
+
+	// Pass 2: a different batch fails, still with empty output.
+	for i := range chunks {
+		if i == 1 {
+			results = append(results, struct {
+				out string
+				err error
+			}{out: "", err: errors.New("exit status 1")})
+			continue
+		}
+		results = append(results, struct {
+			out string
+			err error
+		}{out: "", err: nil})
+	}
+	results = append(results, struct {
+		out string
+		err error
+	}{out: "", err: nil})
+
+	// Pass 3: all batches succeed.
+	for range chunks {
+		results = append(results, struct {
+			out string
+			err error
+		}{out: "", err: nil})
+	}
+
+	sc := &scriptedExecutor{results: results}
+	stubShell(t, sc)
+
+	if err := (&debInstallerBackend{}).install(req); err != nil {
+		t.Fatalf("install should not fail-fast on changed failing batch: %v", err)
+	}
+}
