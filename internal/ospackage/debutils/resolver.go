@@ -482,8 +482,11 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 		case "Version":
 			pkg.Version = val
 		case "Pre-Depends":
-			// Split dependencies by comma and clean each dependency
+			// Split dependencies by comma and clean each dependency. Pre-Depends is
+			// stored in RequiresVer too (like Depends) so the OR-alternative selection
+			// and version-constraint logic apply to its "a | b" and versioned terms.
 			deps := strings.Split(val, ",")
+			pkg.RequiresVer = append(pkg.RequiresVer, deps...)
 			for _, dep := range deps {
 				cleanedDep := CleanDependencyName(dep)
 				if cleanedDep != "" {
@@ -838,6 +841,14 @@ func ResolveDependencies(requested []ospackage.PackageInfo, all []ospackage.Pack
 	}
 	neededSet := make(map[string]struct{})
 	resolvedDeps := make(map[string]ospackage.PackageInfo) // Track resolved dependencies for conflict detection
+	// seedByName holds the explicitly requested packages (the resolution seed) keyed
+	// by name. It lets an OR-dependency prefer an alternative the caller already asked
+	// for, even before that alternative has been dequeued into neededSet/resolvedDeps,
+	// and carries the requested version so a versioned alternative can be evaluated.
+	seedByName := make(map[string]ospackage.PackageInfo, len(requested))
+	for _, pi := range requested {
+		seedByName[pi.Name] = pi
+	}
 	queue := make([]ospackage.PackageInfo, 0, len(requested))
 	for _, pi := range requested {
 		if pi.Version != "" {
@@ -875,6 +886,30 @@ func ResolveDependencies(requested []ospackage.PackageInfo, all []ospackage.Pack
 
 			depName := CleanDependencyName(dep)
 			if depName == "" {
+				continue
+			}
+			// OR-dependency ("a | b") handling: cur.Requires carries only the FIRST
+			// alternative (depName). apt takes the first alternative UNLESS another
+			// alternative is already installed/selected AND satisfies its version
+			// constraint, in which case the edge is already met and the first must NOT
+			// be pulled in — pulling it can drag in a package that conflicts with the
+			// already-selected one (e.g. va-driver-all's
+			// "intel-media-va-driver | intel-media-va-driver-non-free" pulling the free
+			// driver even though the non-free one was requested). Only the requested
+			// seed and already-resolved packages count as "selected"; the baseline is
+			// not visible to this repo-only resolver.
+			if alternativeAlreadySelected(cur.RequiresVer, depName, func(name string) (string, bool) {
+				if p, ok := resolvedDeps[name]; ok {
+					return p.Version, true
+				}
+				if p, ok := seedByName[name]; ok {
+					return p.Version, true
+				}
+				if _, ok := neededSet[name]; ok {
+					return "", true
+				}
+				return "", false
+			}) {
 				continue
 			}
 			if resolvedPkg, seen := resolvedDeps[depName]; seen {
@@ -1665,6 +1700,116 @@ func extractRepoBase(rawURL string) (string, error) {
 	// Rebuild base URL: scheme + host + prefix before /pool/ (without trailing slash)
 	base := fmt.Sprintf("%s://%s%s", u.Scheme, u.Host, parts[0])
 	return base, nil
+}
+
+// alternativeAlreadySelected reports whether the OR-dependency edge whose first
+// (default) alternative is depName has any OTHER alternative that is already
+// selected AND satisfies that alternative's version constraint. It scans the raw
+// Depends terms (reqVers) for the term whose first "|"-alternative cleans to
+// depName, then checks every remaining alternative of that term. selectedVersion
+// returns the version chosen for a name and whether it is selected at all (an
+// empty version means "selected but concrete version unknown"). A versioned
+// alternative counts as satisfied only when the selected version is known and
+// meets the constraint; an unversioned alternative is satisfied by mere presence.
+// Single-alternative terms and terms belonging to a different edge are ignored.
+// This implements apt's rule that an already-installed/selected alternative
+// satisfies the edge, so the first alternative should not be pulled in.
+func alternativeAlreadySelected(reqVers []string, depName string, selectedVersion func(string) (string, bool)) bool {
+	edgeFound := false
+	for _, reqVer := range reqVers {
+		alts := strings.Split(reqVer, "|")
+		if len(alts) < 2 {
+			// A bare (non-OR) term naming depName is a mandatory direct dependency —
+			// e.g. "Depends: a, a | b" — so depName must be pulled regardless of any
+			// satisfied OR edge that happens to share it as a first alternative.
+			if CleanDependencyName(alts[0]) == depName {
+				return false
+			}
+			continue // an unrelated non-OR term
+		}
+		if CleanDependencyName(alts[0]) != depName {
+			continue // a different dependency edge
+		}
+		edgeFound = true
+		// depName is THIS edge's first alternative, so pulling it satisfies this edge.
+		// Distinct edges can share the same first alternative (e.g. "a | b, a | c"); the
+		// first is skippable only if EVERY such edge is already met by another selected
+		// alternative — otherwise depName is still needed to satisfy the unmet edge.
+		if !edgeSatisfiedByOtherAlternative(alts[1:], selectedVersion) {
+			return false
+		}
+	}
+	return edgeFound
+}
+
+// edgeSatisfiedByOtherAlternative reports whether any of an OR-edge's non-first
+// alternatives is already selected and (when the alternative is versioned) meets
+// its version constraint. An unknown selected version is treated conservatively as
+// NOT satisfying, so the first alternative is still taken.
+func edgeSatisfiedByOtherAlternative(alts []string, selectedVersion func(string) (string, bool)) bool {
+	for _, alt := range alts {
+		name, op, ver := splitAltNameConstraint(alt)
+		if name == "" {
+			continue
+		}
+		selVer, ok := selectedVersion(name)
+		if !ok {
+			continue // this alternative is not selected
+		}
+		if op == "" || ver == "" {
+			return true // unversioned alternative: presence satisfies it
+		}
+		if selVer != "" && debVersionSatisfies(selVer, op, ver) {
+			return true
+		}
+	}
+	return false
+}
+
+// splitAltNameConstraint parses one OR-dependency alternative ("e2fsprogs (<< 1.45)")
+// into its package name and optional version constraint. It returns an empty name
+// for an unparseable/empty alternative, and empty op/ver when the alternative
+// carries no version constraint.
+func splitAltNameConstraint(alt string) (name, op, ver string) {
+	name = CleanDependencyName(alt)
+	if name == "" {
+		return "", "", ""
+	}
+	open := strings.Index(alt, "(")
+	if open == -1 {
+		return name, "", ""
+	}
+	rel := strings.Index(alt[open:], ")")
+	if rel == -1 {
+		return name, "", ""
+	}
+	if fields := strings.Fields(alt[open+1 : open+rel]); len(fields) == 2 {
+		return name, fields[0], fields[1]
+	}
+	return name, "", ""
+}
+
+// debVersionSatisfies reports whether candidate satisfies the Debian version
+// relation "op ver" (e.g. ">= 1.2", "<< 3"). An unrecognized operator or an
+// uncomparable version pair is treated as not satisfied.
+func debVersionSatisfies(candidate, op, ver string) bool {
+	cmp, err := CompareDebianVersions(candidate, ver)
+	if err != nil {
+		return false
+	}
+	switch op {
+	case "<<", "<":
+		return cmp < 0
+	case "<=":
+		return cmp <= 0
+	case "=", "==":
+		return cmp == 0
+	case ">=":
+		return cmp >= 0
+	case ">>", ">":
+		return cmp > 0
+	}
+	return false
 }
 
 // hasDirectDependency checks if a dependency appears as a direct requirement (not in alternatives)
