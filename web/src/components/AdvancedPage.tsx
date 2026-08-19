@@ -36,6 +36,14 @@ export function AdvancedPage({ active }: { active: boolean }) {
 
   const complete = !!opts?.matched
 
+  // Entering Advanced always lands on the first step, mirroring the prototype's
+  // enterAdvanced(). The page stays mounted while hidden (tabs toggle via CSS),
+  // so without this the wizard resumes wherever it was last left — including
+  // when arriving from Basic's "Edit in Advanced".
+  useEffect(() => {
+    if (active) setStep(0)
+  }, [active])
+
   // Guard against out-of-order responses; clear stale state before each new fetch.
   useEffect(() => {
     setError(null)

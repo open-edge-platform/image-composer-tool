@@ -9,9 +9,17 @@ interface BasicPageProps {
   buildInProgress: boolean
   // True while visible; gates the compose fetch to prevent duplicate requests.
   active: boolean
+  // Switches to the Advanced tab carrying the current selection. Selections live
+  // in the shared store, so there is nothing to copy — this only changes the view.
+  onEditInAdvanced: () => void
 }
 
-export function BasicPage({ onBuildStarted, buildInProgress, active }: BasicPageProps) {
+export function BasicPage({
+  onBuildStarted,
+  buildInProgress,
+  active,
+  onEditInAdvanced,
+}: BasicPageProps) {
   const manifest = useStore((s) => s.manifest)
   const selection = useStore((s) => s.selection)
   const setField = useStore((s) => s.setField)
@@ -19,6 +27,10 @@ export function BasicPage({ onBuildStarted, buildInProgress, active }: BasicPage
   const [review, setReview] = useState<ComposeResponse | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // True while the summary for a newly completed selection is in flight. The
+  // previous summary stays on screen during a refetch, so this only drives the
+  // placeholder shown before the first one arrives.
+  const [loadingSummary, setLoadingSummary] = useState(false)
 
   const opts = useMemo(
     () => (manifest ? cascadingOptions(manifest, selection) : null),
@@ -33,16 +45,26 @@ export function BasicPage({ onBuildStarted, buildInProgress, active }: BasicPage
   useEffect(() => {
     if (!active || !complete) {
       setReview(null)
+      setLoadingSummary(false)
       return
     }
     let cancelled = false
+    setLoadingSummary(true)
     api
       .compose(selection)
       .then((r) => {
-        if (!cancelled) setReview(r)
+        if (cancelled) return
+        setReview(r)
+        // A successful compose supersedes any earlier compose failure; without
+        // this the banner from a transient error sat above a valid summary until
+        // the user happened to touch a dropdown.
+        setError(null)
+        setLoadingSummary(false)
       })
       .catch((e) => {
-        if (!cancelled) setError((e as Error).message)
+        if (cancelled) return
+        setError((e as Error).message)
+        setLoadingSummary(false)
       })
     return () => {
       cancelled = true
@@ -156,11 +178,21 @@ export function BasicPage({ onBuildStarted, buildInProgress, active }: BasicPage
             </div>
           </div>
         )}
+
+        {/* First-load placeholder only: a refetch keeps the previous summary on
+            screen rather than flashing this in between. */}
+        {complete && !review && loadingSummary && (
+          <div className="flex-1 text-xs">
+            <div className="max-w-md rounded-lg border border-dashed border-slate-300 p-4 text-center text-sm text-slate-400">
+              Resolving template…
+            </div>
+          </div>
+        )}
       </div>
 
       {error && <div className="mt-3 rounded bg-red-50 p-3 text-sm text-red-700">{error}</div>}
 
-      <div className="mt-6">
+      <div className="mt-6 flex flex-wrap items-center gap-3">
         <button
           className="rounded-md bg-[#0071c5] px-5 py-2.5 font-semibold text-white hover:bg-[#00285a] disabled:cursor-not-allowed disabled:opacity-50"
           disabled={!complete || busy || buildInProgress}
@@ -168,13 +200,22 @@ export function BasicPage({ onBuildStarted, buildInProgress, active }: BasicPage
         >
           {busy ? 'Starting…' : buildInProgress ? 'Composing…' : 'Compose Image'}
         </button>
+        {/* Deliberately not gated on `complete` — the prototype lets you open
+            Advanced at any point and finish the selection there. */}
+        <button
+          type="button"
+          className="rounded-md border border-slate-300 bg-white px-5 py-2.5 font-semibold text-[#00285a] hover:border-slate-400 hover:bg-slate-50"
+          onClick={onEditInAdvanced}
+        >
+          Edit in Advanced
+        </button>
         {!complete && !buildInProgress && (
-          <span className="ml-3 text-sm text-slate-500">
+          <span className="text-sm text-slate-500">
             Complete all selections to compose.
           </span>
         )}
         {buildInProgress && (
-          <span className="ml-3 text-sm text-amber-600">
+          <span className="text-sm text-amber-600">
             A compose is already in progress. Switch to the Compose Image tab to monitor it.
           </span>
         )}
