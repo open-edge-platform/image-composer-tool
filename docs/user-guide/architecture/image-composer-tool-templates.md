@@ -390,6 +390,15 @@ RAW, or the complete SBOM vs the baseline SBOM — see
 > **util-linux >= 2.38**; Ubuntu 22.04's stock `lsblk`/`resize2fs` are too old
 > and not upgradable via `apt` — see the
 > [util-linux/e2fsprogs build-from-source instructions](../get-started/prerequisites.md#util-linux-lsblk-and-e2fsprogs-resize2fs).
+>
+> **Output formats.** Overlay honors [`disk.artifacts`](#diskartifacts) exactly as
+> a create-mode build does: every supported output format (`raw`, `qcow2`, `vhd`,
+> `vhdx`, `vmdk`, `vdi`, `tar`) and compression build mode is available. The
+> overlay always produces a RAW image internally and then converts it to the
+> requested formats after the post-build inspection; a template whose
+> `disk.artifacts` omits `raw` deletes the intermediate RAW during conversion.
+> When `disk.artifacts` is empty or lists only `raw`, a plain RAW image is emitted
+> and no conversion runs.
 
 ---
 
@@ -425,6 +434,22 @@ top-level peer of `baseline` and may **only** be set when `baseline.mode` is
 > case that makes `dracut` (which conflicts with `initramfs-tools`) installable on
 > a stock baseline. Bootloader and bootable-kernel packages are still never
 > removed, so the flag cannot break the boot path.
+>
+> **Cascade removal of orphaned reverse-dependencies.** A conflict-driven removal
+> can leave an unrelated baseline package that only `Depends:` on the removed one
+> with an unmet dependency (for example, the Debian cloud image's
+> `cloud-initramfs-growroot` depends on `initramfs-tools`). When
+> `allowPackageRemoval` is enabled, the post-install dependency audit turns into a
+> bounded cascade: each baseline package that is broken *after* a removal but was
+> whole *before* it is itself removed, transitively, until the package manager's
+> own check (`apt-get check` / `dnf check`) reports the dependency tree is whole
+> again. A dependency that an alternative still satisfies is never treated as broken, so
+> nothing is over-removed. The cascade still fails **closed**: if resolving the
+> breakage would require removing a bootloader/kernel-image package or a package
+> the overlay is installing, the build fails instead. Cascade removals are folded
+> into the package statistics and the complete SBOM so the final inventory is
+> accurate. This behavior is entirely gated by `allowPackageRemoval`; when it is
+> `false`, a removal that would orphan another package fails the build as before.
 
 ```yaml
 baseline:
