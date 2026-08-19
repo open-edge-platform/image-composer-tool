@@ -194,15 +194,24 @@ For iterating on the frontend, run the Vite dev server (hot module reload) and
 the Go backend separately. Vite proxies `/api/v1` to the backend on `:8080`.
 
 ```bash
-# Terminal 1 — backend API
+# Terminal 1 — backend API. Start it FROM THE REPO ROOT: serve resolves
+# --templates-dir and the config file relative to its working directory, so
+# from anywhere else every selection fails with "matched template file not
+# found on disk".
 go run ./cmd/image-composer-tool serve --sudo
 
 # Terminal 2 — Vite dev server
 cd web && npm ci && npm run dev
-# UI with hot-reload at http://localhost:5173
+# UI with hot-reload at http://localhost:5174
 ```
 
-Port-forward `5173` (and `8080`) the same way if the backend is on a remote host.
+Port-forward `5174` (and `8080`) the same way if the backend is on a remote host.
+The dev-server port is pinned to `5174` with `strictPort` in `vite.config.ts`, so
+it fails fast rather than hopping to another port and breaking the forward.
+
+If the UI shows *"Failed to load configuration: 500 Internal Server Error"*, the
+backend is not up: Vite reports a refused proxy connection as a 500. Check
+terminal 1, not the browser.
 
 ## Type checking
 
