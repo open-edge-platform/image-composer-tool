@@ -133,10 +133,8 @@ systemConfig:
     # ── Gazebo Harmonic physics simulator ───────────────────────────
     - gz-harmonic
 
-    # ── Intel Robotics SDK ───────────────────────────────────────────
-    - ros-jazzy-robotics-sdk
-
     # ── Collaborative SLAM (Intel Xe / UHD GPU accelerated) ──────────
+    # Avoid ros-jazzy-robotics-sdk here; it pulls the conflicting SSE SLAM provider.
     - ros-jazzy-collab-slam-lze
 
     # ── RealSense ROS 2 bindings (SDK + DKMS come from the parent) ────
