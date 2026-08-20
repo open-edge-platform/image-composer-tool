@@ -393,10 +393,21 @@ func purgeOverlayArtifacts(destDir string) error {
 // template: the explicit system packages, trimmed, de-duplicated, and sorted.
 // Overlay mode is additive-only, so kernel and bootloader package lists are
 // deliberately excluded — they belong to the baseline and must not be touched.
+//
+// The one kernel exception is overlayPolicy.replaceKernel: its replacement kernel
+// package is appended here so it flows through the normal resolve → download →
+// closure → ToInstall path and is preflighted as an ActionAdd (allowed). The
+// matching removal of the baseline kernel family is handled separately, in
+// preflight (classifyKernelReplacementRemovals).
 func overlayRequestedPackages(template *config.ImageTemplate) []string {
 	var pkgs []string
 	for _, p := range template.SystemConfig.Packages {
 		if p = strings.TrimSpace(p); p != "" {
+			pkgs = append(pkgs, p)
+		}
+	}
+	if op := template.OverlayPolicy; op != nil && op.ReplaceKernel != nil {
+		if p := strings.TrimSpace(op.ReplaceKernel.Package); p != "" {
 			pkgs = append(pkgs, p)
 		}
 	}

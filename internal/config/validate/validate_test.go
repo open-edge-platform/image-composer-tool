@@ -46,6 +46,62 @@ func TestValidImageTemplate(t *testing.T) {
 	}
 }
 
+// TestOverlayReplaceKernelTemplateValid confirms the shipped kernel-replacement
+// example template validates against the schema (exercising the replaceKernel
+// definition and the replaceKernel => additive-and-upgrade conditional).
+func TestOverlayReplaceKernelTemplateValid(t *testing.T) {
+	v := loadFile(t, "../../image-templates/ubuntu24/ubuntu24-x86_64-overlay-replace-kernel-raw.yml")
+
+	var raw interface{}
+	if err := yaml.Unmarshal(v, &raw); err != nil {
+		t.Fatalf("yml parsing error: %v", err)
+	}
+	dataJSON, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("json marshaling error: %v", err)
+	}
+	if err := ValidateImageTemplateJSON(dataJSON); err != nil {
+		t.Errorf("expected the replace-kernel template to pass, but got: %v", err)
+	}
+}
+
+// TestOverlayReplaceKernelRequiresAdditiveAndUpgrade confirms the schema's
+// conditional rejects overlayPolicy.replaceKernel under the default additive-only
+// packageOperation.
+func TestOverlayReplaceKernelRequiresAdditiveAndUpgrade(t *testing.T) {
+	tmpl := `image:
+  name: t
+  version: "1.0.0"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+baseline:
+  mode: overlay
+  source:
+    path: /path/to/base.img
+    format: raw
+overlayPolicy:
+  packageOperation: additive-only
+  replaceKernel:
+    package: linux-image-6.11.0-1004-oem
+systemConfig:
+  name: t
+`
+	var raw interface{}
+	if err := yaml.Unmarshal([]byte(tmpl), &raw); err != nil {
+		t.Fatalf("yml parsing error: %v", err)
+	}
+	dataJSON, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("json marshaling error: %v", err)
+	}
+	if err := ValidateImageTemplateJSON(dataJSON); err == nil {
+		t.Error("expected replaceKernel under additive-only to fail schema validation")
+	}
+}
+
 func TestInvalidImageTemplate(t *testing.T) {
 	v := loadFile(t, "/testdata/invalid-image.yml")
 

@@ -43,13 +43,14 @@ const (
 // Policy rule identifiers reported on a blocked action, so error output can name
 // the exact rule that was violated.
 const (
-	ruleAllowRemoval        = "allowPackageRemoval=false"
-	ruleAllowDowngrade      = "allowDowngrade=false"
-	ruleAllowUpgrade        = "allowUpgrade=false"
-	ruleConflictPolicyFail  = "conflictPolicy=fail"
-	ruleBootloaderImmutable = "bootloader-immutable"
-	ruleKernelImmutable     = "kernel-immutable"
-	ruleUnsatisfiedDep      = "unsatisfiable-versioned-dependency"
+	ruleAllowRemoval         = "allowPackageRemoval=false"
+	ruleAllowDowngrade       = "allowDowngrade=false"
+	ruleAllowUpgrade         = "allowUpgrade=false"
+	ruleConflictPolicyFail   = "conflictPolicy=fail"
+	ruleBootloaderImmutable  = "bootloader-immutable"
+	ruleKernelImmutable      = "kernel-immutable"
+	ruleUnsatisfiedDep       = "unsatisfiable-versioned-dependency"
+	ruleReplaceKernelInvalid = "replaceKernel-no-kernel-installed"
 )
 
 // bootloaderPackagePrefixes are package-name prefixes (case-insensitive) that
@@ -98,6 +99,25 @@ var kernelSafeExactNames = map[string]bool{
 	"kernel-tools-libs":    true,
 }
 
+// kernelFamilyPackagePrefixes identify the FULL kernel package family that a
+// kernel replacement (overlayPolicy.replaceKernel) removes from the baseline so
+// the swapped image ships only the new kernel. It is deliberately broader than
+// kernelImagePackagePrefixes (only the bootable image): removing the image alone
+// would orphan the modules/headers/meta-packages that pin the old kernel version
+// and trip the install step's post-removal cascade guard, so the whole family is
+// removed as one batch. Userspace kernel-adjacent packages with no per-kernel
+// identity (linux-libc-dev, linux-tools-common, and the kernel-headers/-devel/
+// -tools names in kernelSafeExactNames) are excluded so a swap never drags them out.
+var kernelFamilyPackagePrefixes = []string{
+	"linux-image",      // Debian/Ubuntu bootable image + the "linux-image-generic" meta
+	"linux-modules",    // per-kernel modules ("linux-modules-6.8.0-40-generic", "-extra")
+	"linux-headers",    // per-kernel headers ("linux-headers-6.8.0-40-generic", "-generic" meta)
+	"linux-generic",    // Ubuntu kernel meta flavour ("linux-generic", "linux-generic-hwe-*")
+	"linux-oem",        // Ubuntu OEM kernel meta flavour
+	"linux-lowlatency", // Ubuntu low-latency kernel meta flavour
+	"kernel",           // rpm "kernel", "kernel-core", "kernel-modules", "kernel-modules-extra"
+}
+
 // PlannedAction is a single classified package operation.
 type PlannedAction struct {
 	// Type is the classified action (add/upgrade/downgrade/remove/conflict).
@@ -132,6 +152,14 @@ type PlannedAction struct {
 	// that is neither ExplicitRemoval nor ObsoletesDriven is queued into ToRemove
 	// rather than silently assumed to happen on its own.
 	ObsoletesDriven bool
+	// KernelReplacement marks an ActionRemove of a baseline kernel-family package
+	// sanctioned by overlayPolicy.replaceKernel (the full kernel swap). It is what
+	// permits a removal that touches a bootable kernel image — normally blocked by
+	// ruleKernelImmutable — and it approves the removal WITHOUT requiring
+	// allowPackageRemoval. It is set only for the auto-detected old-kernel family,
+	// never for any other package, so kernel immutability is untouched for every
+	// build that does not opt into replaceKernel.
+	KernelReplacement bool
 	// Detail carries optional extra diagnostic context (e.g. a simulator note).
 	Detail string
 }
@@ -169,6 +197,14 @@ type PreflightReport struct {
 	// Obsoletes-driven removal is absent from ToRemove but must still not appear in
 	// the final inventory).
 	ApprovedRemovals []string
+	// CollateralRemovalAuthorized reports whether the install step may cascade-remove
+	// a baseline package that a permitted removal ORPHANS (a reverse-dependency of a
+	// removed package). It mirrors overlayPolicy.allowPackageRemoval: a kernel
+	// replacement self-authorizes ONLY its own kernel-family removals (recorded
+	// explicitly in ToRemove), so when allowPackageRemoval is off the cascade must
+	// fail on any collateral non-kernel breakage rather than silently purging an
+	// unrelated package the operator never consented to remove.
+	CollateralRemovalAuthorized bool
 	// Blocked is true when at least one policy violation was found.
 	Blocked bool
 }
@@ -190,6 +226,13 @@ type PreflightInput struct {
 	// being changed, so classifyActions never spuriously flags an untouched
 	// baseline package.
 	Resolved []ResolvedPackage
+	// ResolvedClosure is the FULL transitive dependency closure the resolver
+	// produced (plan.Closure), including members already satisfied by the baseline
+	// and therefore absent from Resolved (ToInstall). It is used only to build the
+	// keep-set for a kernel replacement, so a kernel-family package the replacement
+	// depends on but that is already present in the baseline is never swept into the
+	// removal set. It is optional: when empty, the keep-set falls back to Resolved.
+	ResolvedClosure []ResolvedPackage
 	// SimulatedActions are removals/conflicts surfaced by a package-manager
 	// simulate run, merged in as a validation aid. The two-slice comparison
 	// remains authoritative for add/upgrade/downgrade; this only contributes the
@@ -302,6 +345,7 @@ func Preflight(info *BaselineInfo, baseline []BaselinePackage, plan *ResolutionP
 		Family:           info.PackageManager,
 		Baseline:         baseline,
 		Resolved:         plan.ToInstall,
+		ResolvedClosure:  plan.Closure,
 		SimulatedActions: simulated,
 		ArtifactDeps:     artifactDeps,
 		Obsoletions:      obsoletions,
@@ -310,6 +354,19 @@ func Preflight(info *BaselineInfo, baseline []BaselinePackage, plan *ResolutionP
 
 	log.Infof("Overlay preflight: %d add, %d upgrade, %d downgrade, %d remove, %d conflict, %d unsatisfiable dep; %d policy violation(s)",
 		report.Adds, report.Upgrades, report.Downgrades, report.Removes, report.Conflicts, report.UnsatisfiedDeps, len(report.Violations))
+
+	// Surface the kernel swap explicitly (from -> to) so the operator can see the
+	// baseline kernel packages being removed and the replacement being installed.
+	if effectivePolicy.ReplaceKernel != nil {
+		var removedKernel []string
+		for _, a := range report.Actions {
+			if a.KernelReplacement {
+				removedKernel = append(removedKernel, a.Package)
+			}
+		}
+		log.Infof("Overlay preflight: replacing kernel in baseline image: removing %d baseline kernel package(s) [%s] -> installing %q",
+			len(removedKernel), strings.Join(removedKernel, ", "), strings.TrimSpace(effectivePolicy.ReplaceKernel.Package))
+	}
 
 	if report.Blocked {
 		return report, fmt.Errorf("overlay preflight failed: %s", formatViolations(report.Violations))
@@ -326,6 +383,7 @@ func EvaluatePreflight(in PreflightInput) *PreflightReport {
 	actions = append(actions, normalizeSimulatedActions(in.SimulatedActions, sliceA)...)
 	actions = append(actions, classifyUnsatisfiedDeps(in.Family, sliceA, in.Resolved, in.ArtifactDeps)...)
 	actions = append(actions, classifyObsoletions(in.Family, sliceA, in.Obsoletions)...)
+	actions = append(actions, classifyKernelReplacementRemovals(sliceA, in.Resolved, in.ResolvedClosure, in.Policy)...)
 
 	// Flag any action that touches a bootloader package so the policy gate can
 	// block bootloader replacement regardless of the other knobs. An
@@ -342,6 +400,26 @@ func EvaluatePreflight(in PreflightInput) *PreflightReport {
 		}
 		if isKernelImagePackage(actions[i].Package) {
 			actions[i].Kernel = true
+		}
+	}
+
+	// Mark the NAMED replacement kernel's own install action as part of the swap so
+	// the kernel-immutable rule permits it. On deb the replacement is a new,
+	// version-qualified package name (an ActionAdd, already allowed), but on rpm the
+	// installonly kernel keeps the same name ("kernel"/"kernel-core") across versions,
+	// so a newer resolved kernel is classified as ActionUpgrade and would otherwise be
+	// blocked by ruleKernelImmutable. This is deliberately narrow — only the exact
+	// package named in replaceKernel, and only an add/upgrade of a kernel image — so an
+	// unrelated kernel upgrade stays blocked.
+	if in.Policy.ReplaceKernel != nil {
+		replacement := strings.TrimSpace(in.Policy.ReplaceKernel.Package)
+		if replacement != "" {
+			for i := range actions {
+				a := &actions[i]
+				if a.Package == replacement && a.Kernel && (a.Type == ActionAdd || a.Type == ActionUpgrade) {
+					a.KernelReplacement = true
+				}
+			}
 		}
 	}
 
@@ -390,7 +468,10 @@ func EvaluatePreflight(in PreflightInput) *PreflightReport {
 
 	sortActions(actions)
 
-	report := &PreflightReport{Actions: actions}
+	// A kernel replacement self-authorizes only its own kernel-family removals; the
+	// install step's reverse-dependency cascade may remove COLLATERAL (non-kernel)
+	// orphans only when allowPackageRemoval is explicitly enabled.
+	report := &PreflightReport{Actions: actions, CollateralRemovalAuthorized: in.Policy.AllowPackageRemoval}
 	// De-duplicate removals by package name: two installed artifacts can conflict
 	// with the SAME baseline package, or one artifact can name it in both Conflicts
 	// and Breaks, yielding several ActionRemove entries for one package. Without
@@ -429,14 +510,19 @@ func EvaluatePreflight(in PreflightInput) *PreflightReport {
 			//   - ApprovedRemovals: EVERY approved removal (explicit + simulator +
 			//     Obsoletes), the set actually absent from the final image, used for
 			//     stats and the complete-SBOM exclusion.
+			//
+			// A kernel-replacement removal (KernelReplacement) is approved without
+			// allowPackageRemoval — replaceKernel self-authorizes the kernel-family
+			// swap — so it too is recorded in ApprovedRemovals and ToRemove.
+			approved := in.Policy.AllowPackageRemoval || a.KernelReplacement
 			if !removeSeen[a.Package] {
 				removeSeen[a.Package] = true
 				report.Removes++
-				if in.Policy.AllowPackageRemoval {
+				if approved {
 					report.ApprovedRemovals = append(report.ApprovedRemovals, a.Package)
 				}
 			}
-			if in.Policy.AllowPackageRemoval && !a.ObsoletesDriven && !toRemoveSeen[a.Package] {
+			if approved && !a.ObsoletesDriven && !toRemoveSeen[a.Package] {
 				toRemoveSeen[a.Package] = true
 				report.ToRemove = append(report.ToRemove, a.Package)
 			}
@@ -448,6 +534,25 @@ func EvaluatePreflight(in PreflightInput) *PreflightReport {
 		if rule, blocked := violatedRule(a, in.Policy); blocked {
 			report.Violations = append(report.Violations, PolicyViolation{Action: a, Rule: rule})
 		}
+	}
+
+	// A kernel replacement must actually supply a bootable kernel image via the NAMED
+	// replacement, or the swap would remove the baseline kernel family and leave the
+	// image with no kernel. classifyKernelReplacementRemovals already declined to
+	// authorize the removals in that case; raise a blocking violation so a replaceKernel
+	// package that does not itself resolve to a kernel (a typo, or a non-kernel package
+	// like "curl") fails loudly instead of silently producing a no-op or an unbootable
+	// image — even if an unrelated systemConfig package independently added a kernel.
+	if in.Policy.ReplaceKernel != nil &&
+		!replaceKernelSuppliesKernel(strings.TrimSpace(in.Policy.ReplaceKernel.Package), in.Resolved, in.ResolvedClosure) {
+		report.Violations = append(report.Violations, PolicyViolation{
+			Action: PlannedAction{
+				Type:    ActionAdd,
+				Package: strings.TrimSpace(in.Policy.ReplaceKernel.Package),
+				Detail:  "overlayPolicy.replaceKernel.package does not itself supply a bootable kernel image, so no kernel would remain after the swap",
+			},
+			Rule: ruleReplaceKernelInvalid,
+		})
 	}
 
 	report.Blocked = len(report.Violations) > 0
@@ -596,6 +701,126 @@ func classifyObsoletions(family PackageManager, sliceA map[string]BaselinePackag
 		})
 	}
 	return actions
+}
+
+// classifyKernelReplacementRemovals emits an ActionRemove for every installed
+// baseline package in the old-kernel family when overlayPolicy.replaceKernel is
+// set — the "full swap" side of a kernel replacement. The new kernel is added
+// through the normal resolve/ToInstall path (an ActionAdd), and the baseline
+// kernel family is removed here so the image ships only the new kernel.
+//
+// The removal set is every installed baseline package matched by
+// isKernelFamilyPackage, MINUS anything the overlay is itself installing (the
+// resolved ToInstall set) and the named replacement package — so a kernel-family
+// package the new kernel legitimately (re)installs is never removed. Removing the
+// COMPLETE family (image + meta + modules + headers) as one batch is deliberate:
+// it leaves no kernel package orphaned, so the install step's post-removal cascade
+// never has to remove a kernel package (which its guard forbids).
+//
+// Each emitted action is marked KernelReplacement so violatedRule permits it (past
+// both the kernel-immutable rule and the allowPackageRemoval gate) and the report
+// records it in ToRemove/ApprovedRemovals. It returns nil when replaceKernel is
+// unset, so a normal overlay build is entirely unaffected. Map iteration order is
+// irrelevant: sortActions orders the result deterministically downstream.
+//
+// It also returns nil (authorizing NO removals) when the resolved install set
+// contains no bootable kernel image: a replaceKernel package that resolves to a
+// non-kernel (e.g. "curl") must not purge the baseline kernel family and leave an
+// unbootable image. EvaluatePreflight raises the blocking violation for that case
+// (ruleReplaceKernelInvalid); refusing the removals here is the belt-and-suspenders.
+//
+// The keep-set is built from the FULL resolved closure (not just ToInstall) plus
+// the named replacement, so a kernel-family package the replacement depends on but
+// that is already present in the baseline — and thus absent from ToInstall — is not
+// swept into the removal set. The old baseline kernel family is not in the new
+// kernel's closure, so it is still removed.
+func classifyKernelReplacementRemovals(sliceA map[string]BaselinePackage, resolved, closure []ResolvedPackage, policy config.OverlayPolicy) []PlannedAction {
+	if policy.ReplaceKernel == nil {
+		return nil
+	}
+	replacement := strings.TrimSpace(policy.ReplaceKernel.Package)
+	if !replaceKernelSuppliesKernel(replacement, resolved, closure) {
+		return nil
+	}
+
+	keep := make(map[string]bool, len(resolved)+len(closure)+1)
+	for _, rp := range resolved {
+		if n := strings.TrimSpace(rp.Name); n != "" {
+			keep[n] = true
+		}
+	}
+	for _, rp := range closure {
+		if n := strings.TrimSpace(rp.Name); n != "" {
+			keep[n] = true
+		}
+	}
+	if replacement != "" {
+		keep[replacement] = true
+	}
+
+	var actions []PlannedAction
+	for name, base := range sliceA {
+		if keep[name] || !isKernelFamilyPackage(name) {
+			continue
+		}
+		actions = append(actions, PlannedAction{
+			Type:              ActionRemove,
+			Package:           name,
+			CurrentVersion:    base.Version,
+			Arch:              base.Arch,
+			ExplicitRemoval:   true,
+			KernelReplacement: true,
+			Detail:            fmt.Sprintf("removed as part of kernel replacement by %q", replacement),
+		})
+	}
+	return actions
+}
+
+// resolvedHasKernelImage reports whether the set the overlay will install contains
+// at least one bootable kernel-image package. A kernel replacement removes the
+// entire baseline kernel family, so the swap is only safe when a new bootable
+// kernel is actually being installed — otherwise the image would ship with no
+// kernel. It underpins both the removal guard above and the ruleReplaceKernelInvalid
+// gate in EvaluatePreflight.
+func resolvedHasKernelImage(resolved []ResolvedPackage) bool {
+	for _, rp := range resolved {
+		if isKernelImagePackage(strings.TrimSpace(rp.Name)) {
+			return true
+		}
+	}
+	return false
+}
+
+// replaceKernelSuppliesKernel reports whether overlayPolicy.replaceKernel.package
+// actually provides the post-swap bootable kernel. The check is scoped to the NAMED
+// replacement so a swap proceeds only when that package is what supplies the kernel —
+// never merely because an unrelated systemConfig package independently added one, and
+// without being fooled by a replacement that is already installed (and so absent from
+// the resolved ToInstall set).
+//
+// It is valid when either:
+//   - the named replacement is itself a bootable kernel image (linux-image-<ver>, the
+//     linux-image-* metas, kernel, kernel-core) — matched whether it is being installed
+//     or is ALREADY present in the baseline (a removal-only swap); or
+//   - the named replacement is a kernel meta of another family (e.g. linux-oem,
+//     linux-generic) whose dependency closure pulls a bootable kernel image into the
+//     resolved set or closure.
+//
+// A non-kernel package such as "curl" matches neither and is rejected even when a
+// kernel image is present from another source, so a typo cannot silently purge the
+// baseline kernel family.
+func replaceKernelSuppliesKernel(replacement string, resolved, closure []ResolvedPackage) bool {
+	replacement = strings.TrimSpace(replacement)
+	if replacement == "" {
+		return false
+	}
+	if isKernelImagePackage(replacement) {
+		return true
+	}
+	if !isKernelFamilyPackage(replacement) {
+		return false
+	}
+	return resolvedHasKernelImage(resolved) || resolvedHasKernelImage(closure)
 }
 
 // classifyConflicts turns each declared Conflicts:/Breaks: (deb) or Conflicts:
@@ -771,13 +996,22 @@ func violatedRule(a PlannedAction, policy config.OverlayPolicy) (string, bool) {
 	// The bootable kernel image is likewise immutable: adding a new kernel
 	// alongside the existing one is allowed, but upgrading/replacing/removing an
 	// installed kernel image is blocked because boot regeneration only refreshes
-	// the initramfs, not the bootloader's menu entries for a changed kernel.
-	if a.Kernel && a.Type != ActionAdd {
+	// the initramfs, not the bootloader's menu entries for a changed kernel. The
+	// sole exception is a removal sanctioned by overlayPolicy.replaceKernel (a full
+	// swap), where the GRUB config IS regenerated for the new kernel — that removal
+	// carries KernelReplacement and is permitted here.
+	if a.Kernel && a.Type != ActionAdd && !a.KernelReplacement {
 		return ruleKernelImmutable, true
 	}
 
 	switch a.Type {
 	case ActionRemove:
+		// A kernel-replacement removal (overlayPolicy.replaceKernel) is self-
+		// authorizing: it does not require allowPackageRemoval, which governs only
+		// conflict-driven removal of non-kernel baseline packages.
+		if a.KernelReplacement {
+			break
+		}
 		if !policy.AllowPackageRemoval {
 			return ruleAllowRemoval, true
 		}
@@ -862,6 +1096,18 @@ func isKernelImagePackage(name string) bool {
 		return false
 	}
 	return matchesPackagePrefix(name, kernelImagePackagePrefixes)
+}
+
+// isKernelFamilyPackage reports whether a package name belongs to the kernel
+// family that a kernel replacement removes (image + modules + headers + meta; see
+// kernelFamilyPackagePrefixes). It is a superset of isKernelImagePackage. The same
+// kernelSafeExactNames exclusion applies, so userspace dev/tools packages are never
+// swept into the removal set.
+func isKernelFamilyPackage(name string) bool {
+	if kernelSafeExactNames[strings.ToLower(strings.TrimSpace(name))] {
+		return false
+	}
+	return matchesPackagePrefix(name, kernelFamilyPackagePrefixes)
 }
 
 // matchesPackagePrefix reports whether name matches any of prefixes at a
@@ -949,7 +1195,10 @@ func describeViolation(v PolicyViolation) string {
 		msg += " (bootloader packages must not be replaced in overlay mode)"
 	}
 	if a.Kernel && v.Rule == ruleKernelImmutable {
-		msg += " (bootable kernel image must not be replaced in overlay mode; boot regeneration refreshes only the initramfs, not the bootloader menu entries)"
+		msg += " (bootable kernel image is immutable in overlay mode: it cannot be upgraded, downgraded, or removed in place; to swap the kernel set overlayPolicy.replaceKernel, which installs the new kernel, removes the baseline kernel family, and regenerates the GRUB menu)"
+	}
+	if v.Rule == ruleReplaceKernelInvalid {
+		msg += " (overlayPolicy.replaceKernel.package must resolve to a bootable kernel image so a kernel remains after the swap; name a kernel package such as linux-image-<flavour> and ensure a repository provides it)"
 	}
 	if a.ConflictWith != "" && a.Type == ActionConflict {
 		msg += fmt.Sprintf(" (conflicts with %q)", a.ConflictWith)
