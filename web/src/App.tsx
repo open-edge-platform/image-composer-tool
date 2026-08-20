@@ -176,7 +176,11 @@ export default function App() {
             />
           </div>
           <div hidden={view !== 'advanced'}>
-            <AdvancedPage active={view === 'advanced'} />
+            <AdvancedPage
+              active={view === 'advanced'}
+              onBuildStarted={onBuildStarted}
+              buildInProgress={isActiveStatus(buildStatus)}
+            />
           </div>
           <div hidden={view !== 'builds'}>
             <BuildImagePage

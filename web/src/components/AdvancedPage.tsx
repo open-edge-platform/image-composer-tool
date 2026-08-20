@@ -12,8 +12,14 @@ import { Input } from './Input'
 // that lands in later tasks.
 const STEPS = ['Target', 'Packages', 'Disk', 'Review'] as const
 
+interface AdvancedPageProps {
+  active: boolean
+  onBuildStarted: (buildId: string) => void
+  buildInProgress: boolean
+}
+
 // `active` prevents duplicate compose fetches while both pages stay mounted (hidden via CSS).
-export function AdvancedPage({ active }: { active: boolean }) {
+export function AdvancedPage({ active, onBuildStarted, buildInProgress }: AdvancedPageProps) {
   const manifest = useStore((s) => s.manifest)
   const selection = useStore((s) => s.selection)
   const setField = useStore((s) => s.setField)
@@ -25,6 +31,7 @@ export function AdvancedPage({ active }: { active: boolean }) {
   const [composed, setComposed] = useState<ComposeResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
 
   const opts = useMemo(
     () => (manifest ? cascadingOptions(manifest, selection) : null),
@@ -73,6 +80,32 @@ export function AdvancedPage({ active }: { active: boolean }) {
   const setSel = (k: keyof Selection, v: string) => {
     setField(k, v)
     setError(null) // clear any stale compose error from the previous selection
+  }
+
+  const onBuild = async () => {
+    if (!complete) return
+    try {
+      setBusy(true)
+      setError(null)
+      const accepted = await api.startBuild(selection)
+      onBuildStarted(accepted.buildId)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const copyYaml = () => composed && navigator.clipboard.writeText(composed.yaml)
+
+  const exportYaml = () => {
+    if (!composed) return
+    const blob = new Blob([composed.yaml], { type: 'text/yaml' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = composed.template || `${imageName || 'image'}.yml`
+    a.click()
+    URL.revokeObjectURL(a.href)
   }
 
   return (
@@ -144,17 +177,72 @@ export function AdvancedPage({ active }: { active: boolean }) {
               <div className="mb-3 rounded bg-red-50 p-3 text-sm text-red-700">{error}</div>
             )}
             {complete && composed ? (
-              <div className="rounded-lg border border-slate-200 bg-white">
-                <div className="flex items-center justify-between border-b border-slate-200 px-4 py-2">
-                  <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Template
-                  </span>
-                  <span className="font-mono text-xs text-slate-400">{composed.template}</span>
+              <>
+                {/* Section 1: Review Image Configuration — the same summary shape
+                    the Basic tab shows, so both panes agree on what will compose. */}
+                <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-4 text-xs">
+                  <table className="w-full">
+                    <tbody>
+                      {([
+                        ['Image', `${composed.summary.imageName}${composed.summary.imageVersion ? ` (v${composed.summary.imageVersion})` : ''}`],
+                        composed.summary.baseImage ? ['Base Image', composed.summary.baseImage] : null,
+                        composed.summary.description ? ['Description', composed.summary.description] : null,
+                        ['Architecture', composed.summary.architecture],
+                        composed.summary.kernelVersion ? ['Kernel', composed.summary.kernelVersion] : null,
+                        ['Packages', `${composed.summary.packageCount} packages`],
+                        composed.summary.diskSize ? ['Disk', `${composed.summary.diskSize}${composed.summary.partitionTable ? `, ${composed.summary.partitionTable.toUpperCase()}` : ''}${composed.summary.partitionCount ? `, ${composed.summary.partitionCount} partitions` : ''}`] : null,
+                        composed.summary.hostname ? ['Hostname', composed.summary.hostname] : null,
+                      ] as ([string, string] | null)[]).filter((r): r is [string, string] => r !== null).map(([k, v]) => (
+                        <tr key={k}>
+                          <td className="py-0.5 pr-3 font-semibold text-slate-500 w-24">{k}</td>
+                          <td className="py-0.5 text-slate-700">{v}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
-                <pre className="max-h-[60vh] overflow-auto px-4 py-3 font-mono text-xs leading-relaxed text-slate-700">
-                  {composed.yaml}
-                </pre>
-              </div>
+
+                {/* Section 2: Generated YAML — the resolved template, verbatim. */}
+                <div className="rounded-lg border border-slate-200 bg-white">
+                  <div className="flex items-center justify-between border-b border-slate-200 px-4 py-2">
+                    <span className="text-sm font-semibold text-[#00285a]">Generated YAML</span>
+                    <button
+                      type="button"
+                      onClick={copyYaml}
+                      title="Copy YAML to clipboard"
+                      className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                    >
+                      Copy
+                    </button>
+                  </div>
+                  <pre className="max-h-[60vh] overflow-auto px-4 py-3 font-mono text-xs leading-relaxed text-slate-700">
+                    {composed.yaml}
+                  </pre>
+                </div>
+
+                <div className="mt-4 flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={exportYaml}
+                    className="rounded-md border border-slate-300 bg-white px-5 py-2.5 font-semibold text-[#00285a] hover:border-slate-400 hover:bg-slate-50"
+                  >
+                    Export YAML
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onBuild}
+                    disabled={busy || buildInProgress}
+                    className="rounded-md bg-[#0071c5] px-5 py-2.5 font-semibold text-white hover:bg-[#00285a] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {busy ? 'Starting…' : buildInProgress ? 'Composing…' : 'Compose Image'}
+                  </button>
+                  {buildInProgress && (
+                    <span className="text-sm text-amber-600">
+                      A compose is already in progress. Switch to the Compose Image tab to monitor it.
+                    </span>
+                  )}
+                </div>
+              </>
             ) : complete && loading ? (
               <div className="rounded-lg border border-dashed border-slate-300 p-8 text-center text-sm text-slate-400">
                 Resolving template…
@@ -177,14 +265,15 @@ export function AdvancedPage({ active }: { active: boolean }) {
           >
             Back
           </button>
-          <button
-            type="button"
-            onClick={() => setStep((s) => Math.min(STEPS.length - 1, s + 1))}
-            disabled={step === STEPS.length - 1}
-            className="rounded-md bg-[#0071c5] px-4 py-2 text-sm font-semibold text-white hover:bg-[#005a9e] disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Next
-          </button>
+          {step < STEPS.length - 1 && (
+            <button
+              type="button"
+              onClick={() => setStep((s) => Math.min(STEPS.length - 1, s + 1))}
+              className="rounded-md bg-[#0071c5] px-4 py-2 text-sm font-semibold text-white hover:bg-[#005a9e]"
+            >
+              Next
+            </button>
+          )}
         </div>
       </div>
     </div>
