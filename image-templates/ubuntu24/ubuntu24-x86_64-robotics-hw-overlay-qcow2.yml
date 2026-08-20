@@ -184,13 +184,13 @@ overlayPolicy:
 # -----------------------------------------------------------------------------
 # Output: a qcow2 artifact. The overlay emits a RAW copy, then the Convert
 # Artifacts stage produces every format listed here. Canonical's cloud image is
-# ~3.5GiB provisioned; 24GiB leaves room for this layer plus whatever a child
+# ~3.5GiB provisioned; 64GiB leaves room for this layer plus whatever a child
 # overlays on top (the full ROS 2 desktop stack is large). Resize is grow-only
 # and needs BOTH a larger disk.size AND allowDiskResize above.
 # -----------------------------------------------------------------------------
 disk:
   name: overlay-disk
-  size: 24GiB
+  size: 64GiB
   artifacts:
     - type: qcow2
 
