@@ -599,10 +599,16 @@ func classifyObsoletions(family PackageManager, sliceA map[string]BaselinePackag
 }
 
 // classifyConflicts turns each declared Conflicts:/Breaks: (deb) or Conflicts:
-// (rpm) on a present baseline package into an ActionConflict, so conflictPolicy
-// gates a conflict that the package manager would otherwise only reveal by
-// aborting at unpack time. A conflict whose target is absent from the baseline is
-// a no-op (nothing to clash with) and is skipped.
+// (rpm) on a present baseline package — OR on another package this same overlay
+// is adding — into an ActionConflict, so conflictPolicy gates a conflict that the
+// package manager would otherwise only reveal by aborting at unpack time. A
+// conflict whose target is neither installed in the baseline nor being added by
+// the overlay is a no-op (nothing to clash with) and is skipped.
+//
+// The new-vs-new case matters because the resolver can pull two conflicting
+// packages into the same install set (historically only baseline targets were
+// checked here, so two newly-added conflicting packages slipped through to dpkg
+// unpack — e.g. the free and non-free intel-media-va-driver both being installed).
 //
 // A versioned conflict is evaluated against the POST-INSTALL version of the
 // target, not the baseline version: a Breaks:/Conflicts: bound to a version range
@@ -615,6 +621,25 @@ func classifyObsoletions(family PackageManager, sliceA map[string]BaselinePackag
 // (better to gate than to miss it).
 func classifyConflicts(family PackageManager, sliceA map[string]BaselinePackage, resolved []ResolvedPackage, conflicts []ArtifactConflict) []PlannedAction {
 	postInstall := postInstallVersionIndex(sliceA, resolved)
+	// Index the to-install set so a conflict whose target is not in the baseline can
+	// still be gated when the overlay is adding that target in the same batch.
+	addedByName := make(map[string]ResolvedPackage, len(resolved))
+	for _, rp := range resolved {
+		addedByName[rp.Name] = rp
+	}
+	// Index every virtual name a to-install package Provides, so a conflict declared
+	// against a virtual name a co-added package satisfies is gated too (dpkg would
+	// otherwise reject the batch — e.g. two packages that both Provide and Conflict
+	// "mail-transport-agent"). The declaring package is excluded at lookup time so a
+	// package that Provides and Conflicts the same name does not clash with itself.
+	providedByName := make(map[string][]ResolvedPackage)
+	for _, rp := range resolved {
+		for _, prov := range rp.Provides {
+			if prov = strings.TrimSpace(prov); prov != "" && prov != rp.Name {
+				providedByName[prov] = append(providedByName[prov], rp)
+			}
+		}
+	}
 
 	var actions []PlannedAction
 	for _, c := range conflicts {
@@ -622,29 +647,72 @@ func classifyConflicts(family PackageManager, sliceA map[string]BaselinePackage,
 		if target == "" {
 			continue
 		}
+		// A package declaring a conflict against itself is not a real clash.
+		if target == c.Package {
+			continue
+		}
 		base, present := sliceA[target]
-		if !present {
-			continue // nothing installed under this name to conflict with
+		added, adding := addedByName[target]
+		reportTarget := target
+		if !present && !adding {
+			// Not a real package on either side, but a co-added package may satisfy it as
+			// a virtual name (e.g. two packages that both Provide and Conflict
+			// "mail-transport-agent"). Gate that, but report/act on the REAL provider
+			// package — not the virtual name — so a removal-enabled policy targets a
+			// package that actually exists. A VERSIONED conflict is not matched here:
+			// this resolver carries only unversioned Provides, and per Debian policy a
+			// versioned conflict does not match an unversioned virtual provider.
+			provider, ok := firstProviderExcluding(providedByName[target], c.Package)
+			if !ok || c.Conflicts.Constraint != nil {
+				continue
+			}
+			added, adding = provider, true
+			reportTarget = provider.Name
 		}
 		// A versioned conflict only clashes when the version that will be present
 		// after install falls within the declared range; a version outside it — most
 		// commonly because the overlay upgrades the target in the same batch — is not
 		// a conflict.
 		if vc := c.Conflicts.Constraint; vc != nil {
-			if cmp, err := comparePkgVersions(family, postInstall[target], vc.Ver); err == nil && !constraintSatisfied(vc.Op, cmp) {
+			if cmp, err := comparePkgVersions(family, postInstall[reportTarget], vc.Ver); err == nil && !constraintSatisfied(vc.Op, cmp) {
 				continue
 			}
 		}
+		// Report the version/arch of the copy that will be present AFTER install: when
+		// the overlay adds or upgrades the target in this same batch, that is the version
+		// it installs (added), not the baseline copy it supersedes; only an untouched
+		// baseline target reports base.Version. The new-vs-new case (target added but not
+		// in the baseline) also gets a distinct diagnostic.
+		curVersion, arch := base.Version, base.Arch
+		detail := fmt.Sprintf("declared as a conflict by %q, which would abort the install at unpack time", c.Package)
+		if adding {
+			curVersion, arch = added.Version, added.Arch
+		}
+		if !present {
+			detail = fmt.Sprintf("declared as a conflict by %q; both are added by this overlay, which would abort the install at unpack time", c.Package)
+		}
 		actions = append(actions, PlannedAction{
 			Type:           ActionConflict,
-			Package:        target,
-			CurrentVersion: base.Version,
-			Arch:           base.Arch,
+			Package:        reportTarget,
+			CurrentVersion: curVersion,
+			Arch:           arch,
 			ConflictWith:   c.Package,
-			Detail:         fmt.Sprintf("declared as a conflict by %q, which would abort the install at unpack time", c.Package),
+			Detail:         detail,
 		})
 	}
 	return actions
+}
+
+// firstProviderExcluding returns the first package in providers whose name is not
+// exclude, so a package that Provides and Conflicts the same virtual name is not
+// treated as conflicting with itself.
+func firstProviderExcluding(providers []ResolvedPackage, exclude string) (ResolvedPackage, bool) {
+	for _, p := range providers {
+		if p.Name != exclude {
+			return p, true
+		}
+	}
+	return ResolvedPackage{}, false
 }
 
 // postInstallVersionIndex builds a name→version map of the state that will exist
