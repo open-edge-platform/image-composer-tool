@@ -1,6 +1,6 @@
 # Ubuntu 24.04 templates
 
-`target.dist: ubuntu24` — 25 templates.
+`target.dist: ubuntu24` — 26 templates.
 
 | Template | Arch | Type | Purpose | CI |
 |---|---|---|---|---|
@@ -25,6 +25,7 @@
 | [`ubuntu24-x86_64-minimal-raw.yml`](./ubuntu24-x86_64-minimal-raw.yml) | x86_64 | raw | minimal | yes |
 | [`ubuntu24-x86_64-mozilla-apt-raw.yml`](./ubuntu24-x86_64-mozilla-apt-raw.yml) | x86_64 | raw | Mozilla APT regression | — |
 | [`ubuntu24-x86_64-overlay-raw.yml`](./ubuntu24-x86_64-overlay-raw.yml) <br>*overlay mode* | x86_64 | raw | overlay-mode demo | — |
+| [`ubuntu24-x86_64-overlay-replace-kernel-raw.yml`](./ubuntu24-x86_64-overlay-replace-kernel-raw.yml) <br>*overlay mode* | x86_64 | raw | overlay kernel replacement (full swap) | — |
 | [`ubuntu24-x86_64-robotics-hw-overlay-qcow2.yml`](./ubuntu24-x86_64-robotics-hw-overlay-qcow2.yml) <br>*overlay mode* | x86_64 | raw | robotics HW enablement (overlay base) | — |
 | [`ubuntu24-x86_64-robotics-jazzy-overlay-extends.yml`](./ubuntu24-x86_64-robotics-jazzy-overlay-extends.yml) <br>*extends `ubuntu24-x86_64-robotics-hw-overlay-qcow2.yml`* | x86_64 | raw | robotics / ROS 2 (overlay+extends) | — |
 | [`ubuntu24-x86_64-ros2.yml`](./ubuntu24-x86_64-ros2.yml) | x86_64 | raw | robotics / ROS 2 | — |

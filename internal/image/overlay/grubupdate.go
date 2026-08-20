@@ -111,29 +111,50 @@ func RegenerateGrub(template *config.ImageTemplate, info *BaselineInfo, rootMoun
 	}
 
 	cmdline, grubDefault := "", ""
+	replaceKernel := false
 	if template.OverlayPolicy != nil {
 		cmdline = strings.TrimSpace(template.OverlayPolicy.KernelCmdline)
 		grubDefault = strings.TrimSpace(template.OverlayPolicy.GrubDefault)
+		replaceKernel = template.OverlayPolicy.ReplaceKernel != nil
 	}
 
-	// Only a GRUB2 baseline is in scope. A requested cmdline/grubDefault on a
-	// non-GRUB baseline fails loudly; with neither set it is a no-op.
+	// Only a GRUB2 baseline is in scope. A requested cmdline/grubDefault or a kernel
+	// swap on a non-GRUB baseline fails loudly; with none set it is a no-op.
 	if info.Bootloader != "grub2" {
-		if cmdline != "" || grubDefault != "" {
-			return fmt.Errorf("overlay grub regen: overlayPolicy.kernelCmdline/grubDefault is set but the baseline "+
-				"bootloader is %q, not grub2; these overrides are only supported on GRUB2 baselines", info.Bootloader)
+		if cmdline != "" || grubDefault != "" || replaceKernel {
+			return fmt.Errorf("overlay grub regen: overlayPolicy.kernelCmdline/grubDefault/replaceKernel is set but the baseline "+
+				"bootloader is %q, not grub2; these are only supported on GRUB2 baselines", info.Bootloader)
 		}
 		log.Infof("Overlay grub regen: baseline bootloader is %q (not grub2); skipping GRUB regeneration", info.Bootloader)
 		return nil
 	}
 
-	newKernels := addedKernels(info.Kernels, detectKernelsFn(rootMount))
+	// A kernel swap removes the baseline kernel and installs the replacement, which
+	// then becomes the sole remaining kernel. Pin it as the default boot entry when
+	// the template did not specify one: entry "0" is the new kernel once the baseline
+	// kernel's menu entry is gone. An explicit grubDefault always wins.
+	if replaceKernel && grubDefault == "" {
+		grubDefault = "0"
+		log.Infof("Overlay grub regen: kernel replacement in effect; defaulting GRUB_DEFAULT to %q (the new kernel)", grubDefault)
+	}
+
+	afterKernels := detectKernelsFn(rootMount)
+	newKernels := addedKernels(info.Kernels, afterKernels)
 	if len(newKernels) > 0 {
 		log.Infof("Overlay grub regen: new kernel(s) detected since baseline: %v", newKernels)
 	}
+	// For a kernel swap, report the concrete version change (from -> to): info.Kernels
+	// is the pre-install baseline set, afterKernels the post-install set, so this is
+	// the actual kernel versions removed and installed.
+	if replaceKernel {
+		log.Infof("Overlay grub regen: kernel replaced in baseline image: %v -> %v", info.Kernels, afterKernels)
+	}
 
-	// Nothing to do: no overrides and no newly-added kernel.
-	if cmdline == "" && grubDefault == "" && len(newKernels) == 0 {
+	// Nothing to do: no overrides, no newly-added kernel, and no kernel swap. A
+	// kernel swap always forces regeneration (independent of addedKernels) so the
+	// removed kernel's menu entry is dropped even in the edge case where the new
+	// kernel's version string coincides with the removed one's.
+	if cmdline == "" && grubDefault == "" && len(newKernels) == 0 && !replaceKernel {
 		log.Infof("Overlay grub regen: no kernel command line/default override and no new kernel; skipping GRUB regeneration")
 		return nil
 	}
@@ -144,9 +165,9 @@ func RegenerateGrub(template *config.ImageTemplate, info *BaselineInfo, rootMoun
 		return aerr
 	}
 
-	// Best-effort Secure Boot advisory before regenerating: a locally-added kernel
-	// or regenerated boot artifact may be unsigned on an SB baseline.
-	warnIfSecureBootUnsigned(template, rootMount, len(newKernels) > 0)
+	// Best-effort Secure Boot advisory before regenerating: a locally-added or
+	// swapped-in kernel may be unsigned on an SB baseline.
+	warnIfSecureBootUnsigned(template, rootMount, len(newKernels) > 0 || replaceKernel)
 
 	cmd, tool, present, cerr := grubRegenCommand(rootMount)
 	if cerr != nil {
