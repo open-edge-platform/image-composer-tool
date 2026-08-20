@@ -19,44 +19,13 @@ interface AppState {
   // imageName and, once the user types, `imageNameEdited` guards it from reseeds.
   imageName: string
   imageNameEdited: boolean
-  // Advanced-tab override for the output image type (RAW/ISO/QCOW2). Decoupled
-  // from `selection.imageType` (which matches a pre-authored template) so the
-  // user can pick a format the manifest has no template for without blanking the
-  // preview. State-only for now; seeded from the resolved type until edited.
-  imageType: string
-  imageTypeEdited: boolean
   setManifest: (m: Manifest) => void
   setField: (key: keyof Selection, value: string) => void
   // User-typed image name (marks it edited so seedImageName stops overwriting it).
   setImageName: (value: string) => void
   // Default image name from the resolved template; ignored once the user edits.
   seedImageName: (value: string) => void
-  // User-chosen output image type (marks it edited so seedImageType stops overwriting it).
-  setImageType: (value: string) => void
-  // Default image type from the resolved template; ignored once the user edits.
-  seedImageType: (value: string) => void
 }
-
-// The image types the Advanced tab can target. This is the full `target.imageType`
-// enum from internal/config/schema/os-image-template.schema.json — the same values
-// the builder switches on (see e.g. internal/provider/ubuntu/ubuntu.go) — so any
-// choice here is a value ICT can actually build, even where the manifest has no
-// pre-authored template for it. The override is state-only until the compose/build
-// wiring lands, but keeping the list schema-aligned means it stays valid once it
-// does, and means a type seeded from a resolved template always has a matching
-// option to render.
-//
-// `img` is an initrd image, NOT QCOW2. QCOW2 is a real ICT output format, but it
-// lives on a different axis: `disk.artifacts[].type`
-// (enum raw/qcow2/vhd/vhdx/vmdk/vdi/tar), which converts the finished image
-// rather than changing how it is built. Surfacing QCOW2 therefore belongs to a
-// future artifact-format control, not to this dropdown.
-export const IMAGE_TYPE_OPTIONS: DropdownOption[] = [
-  { id: 'raw', label: 'RAW' },
-  { id: 'img', label: 'IMG (initrd)' },
-  { id: 'iso', label: 'ISO' },
-  { id: 'wsl2', label: 'WSL2' },
-]
 
 const emptySelection: Selection = {
   vertical: '',
@@ -72,15 +41,10 @@ export const useStore = create<AppState>((set) => ({
   selection: emptySelection,
   imageName: '',
   imageNameEdited: false,
-  imageType: '',
-  imageTypeEdited: false,
   setManifest: (m) => set({ manifest: m }),
   setImageName: (value) => set({ imageName: value, imageNameEdited: true }),
   seedImageName: (value) =>
     set((state) => (state.imageNameEdited ? {} : { imageName: value })),
-  setImageType: (value) => set({ imageType: value, imageTypeEdited: true }),
-  seedImageType: (value) =>
-    set((state) => (state.imageTypeEdited ? {} : { imageType: value })),
   setField: (key, value) =>
     set((state) => {
       const selection = { ...state.selection, [key]: value }
@@ -115,8 +79,8 @@ export const useStore = create<AppState>((set) => ({
         autoFillCascade(state.manifest, selection)
       }
       // Any selection change resolves to a (possibly) different template, so let
-      // the image name and type re-track the new defaults until edited again.
-      return { selection, imageNameEdited: false, imageTypeEdited: false }
+      // the image name re-track the new default until edited again.
+      return { selection, imageNameEdited: false }
     }),
 }))
 

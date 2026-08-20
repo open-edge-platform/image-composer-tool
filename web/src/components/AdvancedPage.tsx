@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useStore, cascadingOptions, IMAGE_TYPE_OPTIONS } from '../store'
+import { useStore, cascadingOptions } from '../store'
 import type { Selection } from '../store'
 import { api } from '../api/client'
 import type { ComposeResponse } from '../api/types'
@@ -20,9 +20,6 @@ export function AdvancedPage({ active }: { active: boolean }) {
   const imageName = useStore((s) => s.imageName)
   const setImageName = useStore((s) => s.setImageName)
   const seedImageName = useStore((s) => s.seedImageName)
-  const imageType = useStore((s) => s.imageType)
-  const setImageType = useStore((s) => s.setImageType)
-  const seedImageType = useStore((s) => s.seedImageType)
 
   const [step, setStep] = useState(0)
   const [composed, setComposed] = useState<ComposeResponse | null>(null)
@@ -58,10 +55,9 @@ export function AdvancedPage({ active }: { active: boolean }) {
         if (!cancelled) {
           setComposed(r)
           setLoading(false)
-          // Seed the editable image name/type from the resolved template (no-op
-          // once the user has edited — guarded by the *Edited flags in the store).
+          // Seed the editable image name from the resolved template (no-op once
+          // the user has edited — guarded by the *Edited flag in the store).
           seedImageName(r.summary.imageName)
-          seedImageType(r.summary.imageType)
         }
       })
       .catch((e) => {
@@ -115,8 +111,6 @@ export function AdvancedPage({ active }: { active: boolean }) {
             opts={opts}
             selection={selection}
             setSel={setSel}
-            imageType={imageType}
-            setImageType={setImageType}
             imageName={imageName}
             setImageName={setImageName}
           />
@@ -198,21 +192,17 @@ export function AdvancedPage({ active }: { active: boolean }) {
 }
 
 // Step 1: "Choose Image Configuration" — the selection cascade (shared with the
-// Basic tab), plus the editable Image Type and Image Name overrides.
+// Basic tab), plus the editable Image Name override.
 function TargetStep({
   opts,
   selection,
   setSel,
-  imageType,
-  setImageType,
   imageName,
   setImageName,
 }: {
   opts: NonNullable<ReturnType<typeof cascadingOptions>>
   selection: Selection
   setSel: (k: keyof Selection, v: string) => void
-  imageType: string
-  setImageType: (v: string) => void
   imageName: string
   setImageName: (v: string) => void
 }) {
@@ -273,13 +263,6 @@ function TargetStep({
 
       <hr className="my-6 border-slate-200" />
 
-      <Select
-        label="Image Type"
-        placeholder="-- Select Image Type --"
-        value={imageType}
-        options={IMAGE_TYPE_OPTIONS}
-        onChange={setImageType}
-      />
       <Input
         label="Image Name"
         placeholder="Image name"
