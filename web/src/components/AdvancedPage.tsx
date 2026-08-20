@@ -87,6 +87,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     try {
       setBusy(true)
       setError(null)
+      console.log('Composing image with template YAML:\n' + composed?.yaml)
       const accepted = await api.startBuild(selection)
       onBuildStarted(accepted.buildId)
     } catch (e) {

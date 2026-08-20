@@ -78,6 +78,7 @@ export function BasicPage({
     try {
       setBusy(true)
       setError(null)
+      console.log('Composing image with template YAML:\n' + review?.yaml)
       const accepted = await api.startBuild(selection)
       onBuildStarted(accepted.buildId)
     } catch (e) {
