@@ -16,6 +16,8 @@ import (
 // baseline package path and is conventionally tmpfs-like (transient).
 const chrootArtifactDir = "/run/overlay-pkgs"
 
+// maxDpkgArgBytes and chunkArgs live in chunk.go.
+
 // InstallResult records what the install step did, for logging and verification.
 type InstallResult struct {
 	// Installed are the package names confirmed present in the baseline package
@@ -568,7 +570,18 @@ func (b *debInstallerBackend) install(req installRequest) error {
 		"DEBCONF_NONINTERACTIVE_SEEN=true",
 		"DEBCONF_NOWARNINGS=yes",
 	}
-	joined := strings.Join(paths, " ")
+
+	// Split the artifact list so no single dpkg command line exceeds the kernel's
+	// per-argument limit. Commands in this tool are assembled as one string and run
+	// via `bash -c "<cmd>"`, which makes the whole command a SINGLE argv entry — so
+	// the binding limit is MAX_ARG_STRLEN (128 KiB), not the much larger ARG_MAX.
+	// A large overlay reaches it: 2004 ROS 2 artifacts produce a ~142 KiB command
+	// and execve fails with "argument list too long" before dpkg even starts.
+	chunks := chunkArgs(paths, maxDpkgArgBytes)
+	if len(chunks) > 1 {
+		log.Infof("Overlay install: splitting %d artifact(s) into %d dpkg batch(es) per pass "+
+			"to keep each command under the internal argument budget", len(paths), len(chunks))
+	}
 
 	// Install the prepared local artifacts, retrying to satisfy Pre-Depends.
 	//
@@ -603,25 +616,50 @@ func (b *debInstallerBackend) install(req installRequest) error {
 	// "--" terminates option parsing so a URL-derived artifact basename beginning
 	// with '-' is treated as a file path, not a dpkg option (shell-quoting stops
 	// word-splitting, not option parsing).
+	// Batching interacts with the pass loop rather than replacing it. Every batch
+	// runs within a pass, and only then does `dpkg --configure -a` run, so a
+	// Pre-Depends satisfied by a package in a *later* batch still converges on the
+	// next pass exactly as it did with one invocation. Splitting therefore adds
+	// passes at worst, never a missed dependency: the outcome after the loop is the
+	// same set of unpacked-and-configured packages.
+	//
+	// A batch failure does not abort the pass — later batches may still make
+	// progress. No-progress detection therefore uses a per-batch fingerprint
+	// (batch index + output + error) rather than only the concatenated output, so
+	// a failure migrating from one batch to another is not misclassified as
+	// "no progress" when outputs happen to match.
 	const maxInstallPasses = 6
-	installCmd := "dpkg -i --auto-deconfigure -- " + joined
 	configureCmd := "dpkg --configure -a --auto-deconfigure"
 
+	var lastFingerprint string
 	var lastOut string
 	var lastErr error
 	for pass := 1; pass <= maxInstallPasses; pass++ {
-		out, err := shell.ExecCmdWithStream(installCmd, true, req.chrootPath, envVars)
+		var passOut strings.Builder
+		var passFingerprint strings.Builder
+		var passErr error
+		for i, chunk := range chunks {
+			installCmd := "dpkg -i --auto-deconfigure -- " + strings.Join(chunk, " ")
+			out, err := shell.ExecCmdWithStream(installCmd, true, req.chrootPath, envVars)
+			passOut.WriteString(out)
+			fmt.Fprintf(&passFingerprint, "batch=%d\nout=%q\nerr=%v\n", i, out, err)
+			if err != nil && passErr == nil {
+				passErr = err
+			}
+		}
+		out, err := passOut.String(), passErr
+		fingerprint := passFingerprint.String()
 		if err == nil {
 			// Everything unpacked and configured.
 			return nil
 		}
 		// No progress since the previous failing pass: same archives failed for the
 		// same reason, so retrying again cannot help. Surface it now.
-		if pass > 1 && out == lastOut {
+		if pass > 1 && fingerprint == lastFingerprint {
 			return fmt.Errorf("dpkg install of %d artifact(s) failed (no progress after %d pass(es)): %w%s",
 				len(paths), pass, err, formatCommandOutput(out))
 		}
-		lastOut, lastErr = out, err
+		lastFingerprint, lastOut, lastErr = fingerprint, out, err
 		log.Infof("Overlay install: dpkg pass %d/%d left packages unconfigured (likely Pre-Depends ordering); configuring and retrying", pass, maxInstallPasses)
 		// Best-effort: configure whatever is now unpacked so the next pass's
 		// Pre-Depends are met. A failure here is not fatal on its own — the next

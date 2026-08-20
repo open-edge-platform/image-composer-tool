@@ -2,6 +2,7 @@ package overlay
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1533,5 +1534,182 @@ func TestDebInstallFailsFastOnNoProgress(t *testing.T) {
 	// install, configure, install → then bail. No further passes.
 	if len(sc.cmds) != 3 {
 		t.Errorf("expected 3 commands then fail-fast, got %d: %v", len(sc.cmds), sc.cmds)
+	}
+}
+
+// TestChunkArgs and TestChunkArgs_EveryBatchRespectsBudget live in chunk_test.go.
+
+// TestDebInstallMultiBatchPreservesPassSemantics forces chunking and asserts the
+// command order inside each pass: all dpkg install batches run first, then exactly
+// one interim `dpkg --configure -a`, then the next pass retries in the same order.
+func TestDebInstallMultiBatchPreservesPassSemantics(t *testing.T) {
+	items := make([]plannedInstall, 0, 2200)
+	for i := 0; i < 2200; i++ {
+		name := fmt.Sprintf("pkg-%04d", i)
+		items = append(items, plannedInstall{
+			pkg:      ResolvedPackage{Name: name},
+			artifact: fmt.Sprintf("%s-very-long-overlay-artifact-name-for-chunking-validation_1_amd64.deb", name),
+		})
+	}
+	req := installRequest{
+		chrootPath:        "/mnt/root",
+		artifactChrootDir: chrootArtifactDir,
+		items:             items,
+	}
+
+	paths := make([]string, 0, len(items))
+	for _, it := range items {
+		paths = append(paths, shell.QuoteArg(filepath.Join(chrootArtifactDir, it.artifact)))
+	}
+	chunks := chunkArgs(paths, maxDpkgArgBytes)
+	if len(chunks) < 2 {
+		t.Fatalf("test setup failed: expected multiple batches, got %d", len(chunks))
+	}
+
+	results := make([]struct {
+		out string
+		err error
+	}, 0, len(chunks)*2+1)
+	for i := range chunks {
+		if i == 0 {
+			results = append(results, struct {
+				out string
+				err error
+			}{out: "first pass leaves some packages unconfigured", err: errors.New("exit status 1")})
+			continue
+		}
+		results = append(results, struct {
+			out string
+			err error
+		}{out: "", err: nil})
+	}
+	results = append(results, struct {
+		out string
+		err error
+	}{out: "interim configure", err: nil})
+	for i := range chunks {
+		results = append(results, struct {
+			out string
+			err error
+		}{out: fmt.Sprintf("pass 2 batch %d ok", i), err: nil})
+	}
+
+	sc := &scriptedExecutor{results: results}
+	stubShell(t, sc)
+
+	if err := (&debInstallerBackend{}).install(req); err != nil {
+		t.Fatalf("install should succeed after second pass: %v", err)
+	}
+
+	wantCmds := len(chunks)*2 + 1
+	if len(sc.cmds) != wantCmds {
+		t.Fatalf("expected %d commands (%d installs, configure, %d installs), got %d", wantCmds, len(chunks), len(chunks), len(sc.cmds))
+	}
+
+	for i, c := range chunks {
+		want := "dpkg -i --auto-deconfigure -- " + strings.Join(c, " ")
+		if sc.cmds[i] != want {
+			t.Errorf("first-pass cmd[%d] mismatch", i)
+		}
+	}
+
+	configureIndex := len(chunks)
+	if sc.cmds[configureIndex] != "dpkg --configure -a --auto-deconfigure" {
+		t.Errorf("configure command mismatch: got %q", sc.cmds[configureIndex])
+	}
+
+	for i, c := range chunks {
+		want := "dpkg -i --auto-deconfigure -- " + strings.Join(c, " ")
+		got := sc.cmds[configureIndex+1+i]
+		if got != want {
+			t.Errorf("second-pass cmd[%d] mismatch", i)
+		}
+	}
+}
+
+// TestDebInstallNoProgressFingerprintByBatch verifies no-progress detection keys
+// on per-batch failure identity, not only concatenated output. Two consecutive
+// failing passes with empty output but different failing batches must not
+// fail-fast as "no progress".
+func TestDebInstallNoProgressFingerprintByBatch(t *testing.T) {
+	items := make([]plannedInstall, 0, 2200)
+	for i := 0; i < 2200; i++ {
+		name := fmt.Sprintf("pkg-%04d", i)
+		items = append(items, plannedInstall{
+			pkg:      ResolvedPackage{Name: name},
+			artifact: fmt.Sprintf("%s-very-long-overlay-artifact-name-for-no-progress-fingerprint_1_amd64.deb", name),
+		})
+	}
+	req := installRequest{
+		chrootPath:        "/mnt/root",
+		artifactChrootDir: chrootArtifactDir,
+		items:             items,
+	}
+
+	paths := make([]string, 0, len(items))
+	for _, it := range items {
+		paths = append(paths, shell.QuoteArg(filepath.Join(chrootArtifactDir, it.artifact)))
+	}
+	chunks := chunkArgs(paths, maxDpkgArgBytes)
+	if len(chunks) < 2 {
+		t.Fatalf("test setup failed: expected multiple batches, got %d", len(chunks))
+	}
+
+	results := make([]struct {
+		out string
+		err error
+	}, 0, len(chunks)*3+2)
+
+	// Pass 1: first batch fails with empty output; others succeed with empty output.
+	for i := range chunks {
+		if i == 0 {
+			results = append(results, struct {
+				out string
+				err error
+			}{out: "", err: errors.New("exit status 1")})
+			continue
+		}
+		results = append(results, struct {
+			out string
+			err error
+		}{out: "", err: nil})
+	}
+	results = append(results, struct {
+		out string
+		err error
+	}{out: "", err: nil})
+
+	// Pass 2: a different batch fails, still with empty output.
+	for i := range chunks {
+		if i == 1 {
+			results = append(results, struct {
+				out string
+				err error
+			}{out: "", err: errors.New("exit status 1")})
+			continue
+		}
+		results = append(results, struct {
+			out string
+			err error
+		}{out: "", err: nil})
+	}
+	results = append(results, struct {
+		out string
+		err error
+	}{out: "", err: nil})
+
+	// Pass 3: all batches succeed.
+	for range chunks {
+		results = append(results, struct {
+			out string
+			err error
+		}{out: "", err: nil})
+	}
+
+	sc := &scriptedExecutor{results: results}
+	stubShell(t, sc)
+
+	if err := (&debInstallerBackend{}).install(req); err != nil {
+		t.Fatalf("install should not fail-fast on changed failing batch: %v", err)
 	}
 }

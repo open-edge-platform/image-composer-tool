@@ -821,6 +821,7 @@ func ResolveDependencies(requested []ospackage.PackageInfo, all []ospackage.Pack
 			key := fmt.Sprintf("%s=%s", pi.Name, pi.Version)
 			if pkg, ok := byNameVer[key]; ok {
 				queue = append(queue, pkg)
+				rememberResolvedDependency(resolvedDeps, pkg.Name, pkg)
 				continue
 			}
 		}
@@ -844,7 +845,7 @@ func ResolveDependencies(requested []ospackage.PackageInfo, all []ospackage.Pack
 
 		// Track in resolvedDeps so later packages reuse this version
 		if _, alreadyResolved := resolvedDeps[cur.Name]; !alreadyResolved {
-			resolvedDeps[cur.Name] = cur
+			rememberResolvedDependency(resolvedDeps, cur.Name, cur)
 		}
 
 		// Traverse dependencies
@@ -1011,6 +1012,10 @@ func ResolveDependencies(requested []ospackage.PackageInfo, all []ospackage.Pack
 				continue
 			}
 
+			if alternativeDependencyAlreadyResolved(cur.RequiresVer, depName, resolvedDeps) {
+				continue
+			}
+
 			candidates := findAllCandidates(depName, all)
 			if len(candidates) >= 1 {
 				// Pick the candidate using the resolver and add it to the queue
@@ -1022,7 +1027,7 @@ func ResolveDependencies(requested []ospackage.PackageInfo, all []ospackage.Pack
 					continue
 				}
 				queue = append(queue, chosenCandidate)
-				resolvedDeps[depName] = chosenCandidate // Track resolved dependency
+				rememberResolvedDependency(resolvedDeps, depName, chosenCandidate) // Track resolved dependency
 				AddParentChildPair(cur, chosenCandidate, &parentChildPairs)
 				continue
 			} else {
@@ -1040,7 +1045,7 @@ func ResolveDependencies(requested []ospackage.PackageInfo, all []ospackage.Pack
 								if err == nil {
 									log.Infof("Successfully resolved alternative %q version %q for missing dependency %q", altName, chosenCandidate.Version, depName)
 									queue = append(queue, chosenCandidate)
-									resolvedDeps[altName] = chosenCandidate // Track resolved alternative dependency
+									rememberResolvedDependency(resolvedDeps, altName, chosenCandidate) // Track resolved alternative dependency
 									AddParentChildPair(cur, chosenCandidate, &parentChildPairs)
 									alternativeResolved = true
 									break
@@ -1623,6 +1628,45 @@ func findAllCandidates(depName string, all []ospackage.PackageInfo) []ospackage.
 	// Apply APT priority filtering and sorting with exact name preference
 	filtered := filterCandidatesByPriorityWithTarget(candidates, depName)
 	return filtered
+}
+
+func rememberResolvedDependency(resolvedDeps map[string]ospackage.PackageInfo, key string, pkg ospackage.PackageInfo) {
+	if key != "" {
+		resolvedDeps[key] = pkg
+	}
+	resolvedDeps[pkg.Name] = pkg
+}
+
+func alternativeDependencyAlreadyResolved(reqVers []string, depName string, resolvedDeps map[string]ospackage.PackageInfo) bool {
+	versionConstraints, _ := extractVersionRequirement(reqVers, depName)
+	for _, constraint := range versionConstraints {
+		if constraint.Alternative == "" {
+			continue
+		}
+		for _, altName := range strings.Split(constraint.Alternative, "|") {
+			if resolvedDependencySatisfies(strings.TrimSpace(altName), resolvedDeps) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func resolvedDependencySatisfies(name string, resolvedDeps map[string]ospackage.PackageInfo) bool {
+	if name == "" {
+		return false
+	}
+	if _, seen := resolvedDeps[name]; seen {
+		return true
+	}
+	for _, pkg := range resolvedDeps {
+		for _, provided := range pkg.Provides {
+			if provided == name {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Helper function to resolve multiple candidates by picking the last one
