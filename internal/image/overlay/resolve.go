@@ -79,6 +79,11 @@ type ResolvedPackage struct {
 	Origin      string
 	License     string
 	Checksums   []ospackage.Checksum
+	// Provides are the virtual capability names this package provides. They are
+	// carried so conflict gating can recognize a Conflicts:/Breaks: aimed at a
+	// virtual name that a co-added package satisfies (e.g. two packages that both
+	// Provide and Conflict "mail-transport-agent").
+	Provides []string
 }
 
 // ResolutionPlan is the deterministic output of overlay dependency resolution.
@@ -176,28 +181,114 @@ func ResolveOverlayPackages(template *config.ImageTemplate, info *BaselineInfo, 
 	requested := overlayRequestedPackages(template)
 	present := baselinePresenceSet(baseline)
 	allowUpgrade := overlayAllowsUpgrade(template)
-	// Additive-only prunes requested packages already present in the baseline so
-	// they are never re-resolved. In upgrade mode we must re-resolve them too, so
-	// the resolver surfaces the repository's candidate version and the upgrade set
-	// can decide whether it is strictly newer (an upgrade to install) or not (a
-	// no-op we leave untouched). Absent packages are always seeded.
-	seed := overlaySeedPackages(requested, present)
-	if allowUpgrade {
-		seed = append([]string(nil), requested...)
-	}
 
 	destDir, err := overlayCacheDir(info, template.Target.Dist, arch)
 	if err != nil {
 		return nil, err
 	}
 
+	// The baseline version index is only consulted to classify upgrades and to
+	// drive the Breaks-driven upgrade scan, so build it only in upgrade mode; the
+	// additive-only path never reads it.
+	var baselineByName map[string]BaselinePackage
+	if allowUpgrade {
+		baselineByName = baselineVersionIndex(baseline)
+	}
+
+	// forcedUpgrades accumulates baseline packages that a to-install package Breaks
+	// (via a versioned Breaks/Conflicts the baseline copy still falls within) and
+	// that must therefore be upgraded rather than removed. Adding a package here and
+	// re-resolving pulls its newer version — and its own dependencies — into the
+	// closure, and routes it through the requested-and-present upgrade path so it is
+	// installed as an upgrade. The loop is bounded: each target is added at most once
+	// (the forcedUpgrades guard) and the pass count is capped, so it always
+	// terminates even if no repo version escapes the break range (preflight then
+	// blocks the residual conflict fail-closed).
+	passCtx := resolvePassContext{
+		backend: backend, template: template, info: info, repos: repos,
+		present: present, baselineByName: baselineByName,
+		allowUpgrade: allowUpgrade, arch: arch, destDir: destDir,
+	}
+
+	forcedUpgrades := map[string]bool{}
+	var plan *ResolutionPlan
+	for pass := 0; ; pass++ {
+		effectiveRequested := requested
+		if len(forcedUpgrades) > 0 {
+			effectiveRequested = mergeRequestedWithForced(requested, forcedUpgrades)
+		}
+
+		var closure []ospackage.PackageInfo
+		plan, closure, err = resolveSinglePass(passCtx, effectiveRequested)
+		if err != nil {
+			return nil, err
+		}
+
+		// Breaks-driven upgrade only applies in upgrade mode (adding a package to
+		// clear a Breaks is itself an upgrade of a baseline package). Re-resolve only
+		// when a new target appears, and never more than maxBreaksResolvePasses times.
+		if !allowUpgrade || pass >= maxBreaksResolvePasses {
+			break
+		}
+		newTargets := breaksDrivenUpgradeTargets(info.PackageManager, closure, plan, baselineByName, forcedUpgrades)
+		if len(newTargets) == 0 {
+			break
+		}
+		for _, t := range newTargets {
+			forcedUpgrades[t] = true
+		}
+		log.Infof("Overlay resolution: %d baseline package(s) %v must be upgraded to satisfy a versioned Breaks/Conflicts; re-resolving",
+			len(newTargets), newTargets)
+	}
+
+	// A Breaks-driven pass resolves against forcedUpgrades merged into the request
+	// list, but those are internal targets; the plan reports only the template's
+	// requested set (per ResolutionPlan.Requested's contract) so the completion and
+	// provenance logs do not misclassify forced dependencies as user requests.
+	plan.Requested = append([]string(nil), requested...)
+
+	log.Infof("Overlay resolution complete: %d requested, %d in closure, %d to install (%d already present), %d artifact(s) in %s",
+		len(plan.Requested), len(plan.Closure), len(plan.ToInstall), len(plan.AlreadyPresent), len(plan.Artifacts), plan.DownloadDir)
+	logToInstallProvenance(info.PackageManager, plan)
+	return plan, nil
+}
+
+// resolvePassContext carries the inputs that stay fixed across every resolution
+// pass of ResolveOverlayPackages, so a single pass can run in isolation.
+type resolvePassContext struct {
+	backend        resolverBackend
+	template       *config.ImageTemplate
+	info           *BaselineInfo
+	repos          []Repository
+	present        map[string]bool
+	baselineByName map[string]BaselinePackage
+	allowUpgrade   bool
+	arch           string
+	destDir        string
+}
+
+// resolveSinglePass runs one resolution pass for effectiveRequested: it seeds the
+// resolver, downloads the closure into a freshly cleared cache, and builds the
+// deterministic plan. It returns the plan plus the raw closure the caller's
+// Breaks-driven upgrade scan inspects.
+func resolveSinglePass(ctx resolvePassContext, effectiveRequested []string) (*ResolutionPlan, []ospackage.PackageInfo, error) {
+	// Additive-only prunes requested packages already present in the baseline so
+	// they are never re-resolved. In upgrade mode we must re-resolve them too, so
+	// the resolver surfaces the repository's candidate version and the upgrade set
+	// can decide whether it is strictly newer (an upgrade to install) or not (a
+	// no-op we leave untouched). Absent packages are always seeded.
+	seed := overlaySeedPackages(effectiveRequested, ctx.present)
+	if ctx.allowUpgrade {
+		seed = append([]string(nil), effectiveRequested...)
+	}
+
 	var closure []ospackage.PackageInfo
 	var artifacts []string
 	if len(seed) == 0 {
-		log.Infof("Overlay resolution: all %d requested package(s) are already present in the baseline; nothing to resolve", len(requested))
+		log.Infof("Overlay resolution: all %d requested package(s) are already present in the baseline; nothing to resolve", len(effectiveRequested))
 	} else {
 		log.Infof("Overlay resolution: resolving %d package(s) %v against %d %s repositor(ies) [%s]",
-			len(seed), seed, len(repos), info.PackageManager, summarizeRepositories(repos))
+			len(seed), seed, len(ctx.repos), ctx.info.PackageManager, summarizeRepositories(ctx.repos))
 		// Start from a clean download directory so a superset left by an earlier
 		// build with a larger package list cannot be mistaken for this request's
 		// closure. The underlying package cache treats "requested packages present"
@@ -205,47 +296,118 @@ func ResolveOverlayPackages(template *config.ImageTemplate, info *BaselineInfo, 
 		// would return every cached .deb — dragging in packages (e.g. systemd-boot)
 		// the current template never asked for. Purging guarantees the closure comes
 		// from a real resolve of exactly this seed.
-		if err = clearOverlayCacheDir(destDir); err != nil {
-			return nil, fmt.Errorf("overlay resolution: failed to clear stale artifact cache %s: %w", destDir, err)
+		if err := clearOverlayCacheDir(ctx.destDir); err != nil {
+			return nil, nil, fmt.Errorf("overlay resolution: failed to clear stale artifact cache %s: %w", ctx.destDir, err)
 		}
-		closure, artifacts, err = backend.resolveAndDownload(resolveRequest{
+		var err error
+		closure, artifacts, err = ctx.backend.resolveAndDownload(resolveRequest{
 			seed:      seed,
-			repos:     repos,
-			userRepos: template.GetPackageRepositories(),
-			arch:      arch,
-			dist:      template.Target.Dist,
-			destDir:   destDir,
-			dotFile:   template.DotFilePath,
+			repos:     ctx.repos,
+			userRepos: ctx.template.GetPackageRepositories(),
+			arch:      ctx.arch,
+			dist:      ctx.template.Target.Dist,
+			destDir:   ctx.destDir,
+			dotFile:   ctx.template.DotFilePath,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("overlay dependency resolution failed for package(s) %v using %d %s repositor(ies) [%s]: %w",
-				seed, len(repos), info.PackageManager, summarizeRepositories(repos), err)
+			return nil, nil, fmt.Errorf("overlay dependency resolution failed for package(s) %v using %d %s repositor(ies) [%s]: %w",
+				seed, len(ctx.repos), ctx.info.PackageManager, summarizeRepositories(ctx.repos), err)
 		}
-	}
-
-	// The baseline version index is only consulted to classify upgrades, so build
-	// it only in upgrade mode; the additive-only path never reads it.
-	var baselineByName map[string]BaselinePackage
-	if allowUpgrade {
-		baselineByName = baselineVersionIndex(baseline)
 	}
 
 	plan := buildResolutionPlan(planInput{
-		family:         info.PackageManager,
-		requested:      requested,
+		family:         ctx.info.PackageManager,
+		requested:      effectiveRequested,
 		seed:           seed,
-		repos:          repos,
+		repos:          ctx.repos,
 		closure:        closure,
 		artifacts:      artifacts,
-		present:        present,
-		baselineByName: baselineByName,
-		allowUpgrade:   allowUpgrade,
-		destDir:        destDir,
+		present:        ctx.present,
+		baselineByName: ctx.baselineByName,
+		allowUpgrade:   ctx.allowUpgrade,
+		destDir:        ctx.destDir,
 	})
-	log.Infof("Overlay resolution complete: %d requested, %d in closure, %d to install (%d already present), %d artifact(s) in %s",
-		len(plan.Requested), len(plan.Closure), len(plan.ToInstall), len(plan.AlreadyPresent), len(plan.Artifacts), plan.DownloadDir)
-	logToInstallProvenance(info.PackageManager, plan)
-	return plan, nil
+	return plan, closure, nil
+}
+
+// maxBreaksResolvePasses bounds how many extra resolution passes the Breaks-driven
+// upgrade loop may run. The forcedUpgrades guard already guarantees termination
+// (each target is added at most once); this is a defensive cap against pathological
+// repository metadata producing an unbounded chain of break targets.
+const maxBreaksResolvePasses = 4
+
+// mergeRequestedWithForced returns the requested set unioned with the forced
+// upgrade targets, de-duplicated and sorted so the resolve stays deterministic.
+func mergeRequestedWithForced(requested []string, forced map[string]bool) []string {
+	merged := append([]string(nil), requested...)
+	for name := range forced {
+		merged = append(merged, name)
+	}
+	merged = dedupeStrings(merged)
+	sort.Strings(merged)
+	return merged
+}
+
+// breaksDrivenUpgradeTargets returns baseline packages that a to-install package
+// declares a versioned Breaks: against, where the version that will be present
+// after the current plan still falls within the declared break range — i.e. the
+// break is real and not yet resolved by an upgrade in this batch. Such a target
+// must be upgraded (pulled into the install set at a newer version), not removed,
+// so the caller adds it to the resolve seed and re-resolves. This is the case that
+// otherwise forced the user to list the broken package by hand (e.g. vim-runtime
+// "Breaks: vim-tiny (<< ...)" whose only automated remedy was removal).
+//
+// The break declarations are read from the in-memory closure metadata (parsed from
+// the repository Packages files), so the scan is pure — no artifact/chroot access.
+// Only Breaks from packages actually being installed are considered, and only
+// versioned ones are actionable: an unversioned Breaks cannot be cleared by an
+// upgrade (it breaks every version), so it is left to preflight (removal, gated by
+// AllowPackageRemoval). Breaks is a deb-only field, so this is a no-op for rpm.
+// Targets already forced in a prior pass, or absent from the baseline, are skipped.
+func breaksDrivenUpgradeTargets(family PackageManager, closure []ospackage.PackageInfo, plan *ResolutionPlan, baselineByName map[string]BaselinePackage, alreadyForced map[string]bool) []string {
+	if family != PackageManagerAPT {
+		return nil
+	}
+	// Only Breaks introduced by packages this overlay actually installs matter; a
+	// baseline package left untouched already had its Breaks satisfied.
+	toInstall := make(map[string]bool, len(plan.ToInstall))
+	for _, rp := range plan.ToInstall {
+		toInstall[rp.Name] = true
+	}
+	postInstall := postInstallVersionIndex(baselineByName, plan.ToInstall)
+
+	seen := map[string]bool{}
+	var targets []string
+	for _, pi := range closure {
+		name := canonicalPackageName(pi)
+		if !toInstall[name] || len(pi.Breaks) == 0 {
+			continue
+		}
+		for _, c := range parseDebConflictsField(name, strings.Join(pi.Breaks, ",")) {
+			vc := c.Conflicts.Constraint
+			if vc == nil {
+				continue // unversioned break: not fixable by an upgrade
+			}
+			target := c.Conflicts.Name
+			if alreadyForced[target] || seen[target] {
+				continue
+			}
+			if _, present := baselineByName[target]; !present {
+				continue // not a baseline package; nothing to upgrade
+			}
+			// Act only when the post-install version still satisfies the break range
+			// (the break is real and unresolved). A target already upgraded past the
+			// range in this batch, or an uncomparable version, is not forced.
+			cmp, err := comparePkgVersions(family, postInstall[target], vc.Ver)
+			if err != nil || !constraintSatisfied(vc.Op, cmp) {
+				continue
+			}
+			seen[target] = true
+			targets = append(targets, target)
+		}
+	}
+	sort.Strings(targets)
+	return targets
 }
 
 // logToInstallProvenance annotates each to-be-installed package as either
@@ -676,7 +838,7 @@ func buildResolutionPlan(in planInput) *ResolutionPlan {
 		rp := ResolvedPackage{
 			Name: name, Version: p.Version, Arch: p.Arch, URL: p.URL,
 			Type: p.Type, Description: p.Description, Origin: p.Origin,
-			License: p.License, Checksums: p.Checksums,
+			License: p.License, Checksums: p.Checksums, Provides: p.Provides,
 		}
 		resolved = append(resolved, rp)
 		if !present[name] {
