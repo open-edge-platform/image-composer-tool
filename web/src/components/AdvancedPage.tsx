@@ -4,6 +4,7 @@ import type { Selection } from '../store'
 import { api } from '../api/client'
 import type { ComposeRequest, ComposeResponse } from '../api/types'
 import { Select } from './Select'
+import { RepoPicker } from './RepoPicker'
 import { Input } from './Input'
 
 // How long to wait after the last keystroke in Image Name before re-composing.
@@ -189,9 +190,11 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
         {step === 1 && (
           <div>
             <h2 className="mb-1 text-lg font-bold text-[#00285a]">Repositories &amp; Packages</h2>
-            <p className="text-sm text-slate-500">
-              Repository and package selection will arrive in a later update.
+            <p className="mb-5 text-sm text-slate-500">
+              Choose which package repositories to pull from. Package search and
+              selection will arrive in a later update.
             </p>
+            <RepoPicker os={selection.os} active={active} />
           </div>
         )}
 

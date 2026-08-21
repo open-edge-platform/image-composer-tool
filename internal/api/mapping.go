@@ -84,6 +84,26 @@ func fromManifest(m *service.Manifest) httpapi.Manifest {
 	return out
 }
 
+// fromPackageRepoList maps the repository catalog to the wire type. Priority is
+// always populated by the service (unset entries get the default), so it is
+// emitted rather than omitted — the UI shows it, and a missing value would read
+// as "no priority" instead of "the default".
+func fromPackageRepoList(repos []service.PackageRepo) httpapi.PackageRepoList {
+	out := httpapi.PackageRepoList{Repos: make([]httpapi.PackageRepo, len(repos))}
+	for i, r := range repos {
+		priority := r.Priority
+		out.Repos[i] = httpapi.PackageRepo{
+			Id:               r.ID,
+			DisplayName:      r.DisplayName,
+			Url:              r.URL,
+			Description:      optStr(r.Description),
+			EnabledByDefault: r.EnabledByDefault,
+			Priority:         &priority,
+		}
+	}
+	return out
+}
+
 func fromOptions(opts []service.Option) []httpapi.Option {
 	out := make([]httpapi.Option, len(opts))
 	for i, o := range opts {
