@@ -602,10 +602,32 @@
           "type": "boolean",
           "description": "Permit removing a baseline package that a to-install package conflicts with (e.g. installing dracut, which conflicts with initramfs-tools). Overlay mode is additive by default; when false (the default) such a conflict fails the build. When true, the conflicting baseline package is removed before install. Bootloader and bootable-kernel packages are never removed regardless of this flag. Only valid with packageOperation 'additive-and-upgrade' — removal is more invasive than an in-place upgrade, so it may not be enabled under the default 'additive-only'.",
           "default": false
+        },
+        "replaceKernel": {
+          "type": "object",
+          "description": "Replace the baseline kernel: install this kernel package and remove the baseline kernel family (image + meta + modules + headers) so the image ships only the new kernel, then regenerate the GRUB config so the boot menu defaults to it. The ESP and bootloader binary are never touched (no grub-install, no Secure Boot re-signing). Self-authorizes its kernel-family removals, so it does not require allowPackageRemoval. Only valid with packageOperation 'additive-and-upgrade'.",
+          "properties": {
+            "package": {
+              "type": "string",
+              "description": "The replacement kernel image package to install, resolved from the configured repositories (e.g. 'linux-image-6.11.0-1004-oem').",
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._+:-]*$"
+            }
+          },
+          "required": ["package"],
+          "additionalProperties": false
         }
       },
-      "if": { "properties": { "allowPackageRemoval": { "const": true } }, "required": ["allowPackageRemoval"] },
-      "then": { "properties": { "packageOperation": { "const": "additive-and-upgrade" } }, "required": ["packageOperation"] },
+      "allOf": [
+        {
+          "if": { "properties": { "allowPackageRemoval": { "const": true } }, "required": ["allowPackageRemoval"] },
+          "then": { "properties": { "packageOperation": { "const": "additive-and-upgrade" } }, "required": ["packageOperation"] }
+        },
+        {
+          "if": { "required": ["replaceKernel"] },
+          "then": { "properties": { "packageOperation": { "const": "additive-and-upgrade" } }, "required": ["packageOperation"] }
+        }
+      ],
       "additionalProperties": false
     },
     "PackageRepository": {

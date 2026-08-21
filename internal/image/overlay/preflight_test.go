@@ -564,6 +564,347 @@ func TestEvaluatePreflight_KernelAdjacentUpgradeAllowed(t *testing.T) {
 	}
 }
 
+// TestIsKernelFamilyPackage confirms the broader kernel-family matcher used by a
+// kernel replacement catches the whole family (image + meta + modules + headers,
+// deb and rpm) while still excluding userspace kernel-adjacent packages.
+func TestIsKernelFamilyPackage(t *testing.T) {
+	family := []string{
+		"linux-image-generic", "linux-image-6.8.0-40-generic",
+		"linux-modules-6.8.0-40-generic", "linux-modules-extra-6.8.0-40-generic",
+		"linux-headers-6.8.0-40-generic", "linux-headers-generic",
+		"linux-generic", "linux-generic-hwe-24.04", "linux-oem-24.04", "linux-lowlatency",
+		"kernel", "kernel-core", "kernel-modules", "kernel-modules-extra", "kernel-5.14.0-427",
+	}
+	for _, n := range family {
+		if !isKernelFamilyPackage(n) {
+			t.Errorf("isKernelFamilyPackage(%q) = false, want true", n)
+		}
+	}
+	for _, n := range []string{
+		"linux-libc-dev", "linux-tools-common", "linux-tools-6.8.0-40",
+		"kernel-headers", "kernel-devel", "kernel-tools", "kernelshark",
+		"curl", "vim", "",
+	} {
+		if isKernelFamilyPackage(n) {
+			t.Errorf("isKernelFamilyPackage(%q) = true, want false", n)
+		}
+	}
+}
+
+// TestClassifyKernelReplacementRemovals exercises the pure removal-set builder:
+// it emits every baseline kernel-family package EXCEPT the replacement and
+// anything the overlay is installing, and returns nothing when replaceKernel is
+// unset.
+func TestClassifyKernelReplacementRemovals(t *testing.T) {
+	baseline := baselineVersionIndex([]BaselinePackage{
+		installedDeb("linux-image-6.8.0-40-generic", "6.8.0-40"),
+		installedDeb("linux-image-generic", "6.8.0.40"),
+		installedDeb("linux-modules-6.8.0-40-generic", "6.8.0-40"),
+		installedDeb("linux-headers-6.8.0-40-generic", "6.8.0-40"),
+		installedDeb("linux-headers-generic", "6.8.0.40"),
+		installedDeb("linux-libc-dev", "6.8.0-40"), // userspace: must stay
+		installedDeb("curl", "8.0"),                // unrelated: must stay
+	})
+
+	// The overlay is installing the OEM replacement kernel and its modules; those
+	// names must never appear in the removal set even though they are kernel-family.
+	resolved := []ResolvedPackage{
+		{Name: "linux-image-6.11.0-1004-oem", Version: "6.11.0-1004", Arch: "amd64"},
+		{Name: "linux-modules-6.11.0-1004-oem", Version: "6.11.0-1004", Arch: "amd64"},
+	}
+	policy := config.OverlayPolicy{ReplaceKernel: &config.ReplaceKernel{Package: "linux-image-6.11.0-1004-oem"}}
+
+	got := classifyKernelReplacementRemovals(baseline, resolved, nil, policy)
+	gotNames := map[string]bool{}
+	for _, a := range got {
+		if a.Type != ActionRemove || !a.KernelReplacement || !a.ExplicitRemoval {
+			t.Errorf("action %+v: want ActionRemove with KernelReplacement+ExplicitRemoval set", a)
+		}
+		gotNames[a.Package] = true
+	}
+	want := []string{
+		"linux-image-6.8.0-40-generic", "linux-image-generic",
+		"linux-modules-6.8.0-40-generic",
+		"linux-headers-6.8.0-40-generic", "linux-headers-generic",
+	}
+	if len(gotNames) != len(want) {
+		t.Fatalf("removal set = %v, want exactly %v", gotNames, want)
+	}
+	for _, n := range want {
+		if !gotNames[n] {
+			t.Errorf("removal set missing %q (got %v)", n, gotNames)
+		}
+	}
+	for _, n := range []string{"linux-libc-dev", "curl", "linux-image-6.11.0-1004-oem", "linux-modules-6.11.0-1004-oem"} {
+		if gotNames[n] {
+			t.Errorf("removal set wrongly contains %q", n)
+		}
+	}
+
+	// Unset replaceKernel yields no removals.
+	if got := classifyKernelReplacementRemovals(baseline, resolved, nil, config.OverlayPolicy{}); got != nil {
+		t.Errorf("expected nil removals when replaceKernel is unset, got %+v", got)
+	}
+}
+
+// TestEvaluatePreflight_KernelReplacement is the end-to-end policy view of a full
+// kernel swap: the new kernel is added, the baseline kernel family is removed and
+// approved (recorded in ToRemove/ApprovedRemovals) WITHOUT allowPackageRemoval,
+// and the build is not blocked.
+func TestEvaluatePreflight_KernelReplacement(t *testing.T) {
+	report := EvaluatePreflight(PreflightInput{
+		Family: PackageManagerAPT,
+		Baseline: []BaselinePackage{
+			installedDeb("linux-image-6.8.0-40-generic", "6.8.0-40"),
+			installedDeb("linux-image-generic", "6.8.0.40"),
+			installedDeb("linux-modules-6.8.0-40-generic", "6.8.0-40"),
+			installedDeb("curl", "8.0"),
+		},
+		// ToInstall carries the injected replacement kernel (an add).
+		Resolved: []ResolvedPackage{{Name: "linux-image-6.11.0-1004-oem", Version: "6.11.0-1004", Arch: "amd64"}},
+		Policy: config.OverlayPolicy{
+			PackageOperation: config.OverlayPackageOpAdditiveAndUpgrade,
+			AllowUpgrade:     true,
+			ReplaceKernel:    &config.ReplaceKernel{Package: "linux-image-6.11.0-1004-oem"},
+			// Note: AllowPackageRemoval deliberately left false.
+		},
+	})
+
+	if report.Blocked {
+		t.Fatalf("kernel replacement should not be blocked, violations=%+v", report.Violations)
+	}
+	if report.Adds != 1 {
+		t.Errorf("expected 1 add (the new kernel), got %d (%+v)", report.Adds, report.Actions)
+	}
+	if report.Removes != 3 {
+		t.Errorf("expected 3 kernel-family removals, got %d (%+v)", report.Removes, report.Actions)
+	}
+	for _, n := range []string{"linux-image-6.8.0-40-generic", "linux-image-generic", "linux-modules-6.8.0-40-generic"} {
+		if !contains(report.ToRemove, n) {
+			t.Errorf("expected %q in ToRemove without allowPackageRemoval, got %v", n, report.ToRemove)
+		}
+		if !contains(report.ApprovedRemovals, n) {
+			t.Errorf("expected %q in ApprovedRemovals, got %v", n, report.ApprovedRemovals)
+		}
+	}
+	if contains(report.ToRemove, "curl") {
+		t.Errorf("unrelated package wrongly queued for removal: %v", report.ToRemove)
+	}
+	// replaceKernel self-authorizes only its kernel-family removals; it must NOT grant
+	// the install cascade blanket consent to purge collateral packages.
+	if report.CollateralRemovalAuthorized {
+		t.Errorf("CollateralRemovalAuthorized must stay false when allowPackageRemoval is off")
+	}
+}
+
+// TestEvaluatePreflight_KernelRemoveBlockedWithoutReplaceKernel confirms a kernel
+// removal is still blocked by kernel immutability when replaceKernel is NOT set,
+// so the swap path does not weaken the default guard.
+func TestEvaluatePreflight_KernelRemoveBlockedWithoutReplaceKernel(t *testing.T) {
+	report := EvaluatePreflight(PreflightInput{
+		Family:           PackageManagerAPT,
+		Baseline:         []BaselinePackage{installedDeb("linux-image-6.8.0-40-generic", "6.8.0-40")},
+		SimulatedActions: []PlannedAction{{Type: ActionRemove, Package: "linux-image-6.8.0-40-generic"}},
+		Policy:           config.OverlayPolicy{AllowPackageRemoval: true}, // even with removals allowed
+	})
+	if !report.Blocked || len(report.Violations) != 1 || report.Violations[0].Rule != ruleKernelImmutable {
+		t.Fatalf("expected kernel-immutable block without replaceKernel, got blocked=%v violations=%+v",
+			report.Blocked, report.Violations)
+	}
+}
+
+// TestEvaluatePreflight_KernelReplacementRejectsNonKernel confirms a replaceKernel
+// whose package does not resolve to a bootable kernel image (e.g. "curl") is blocked
+// and authorizes NO baseline kernel removals — so a typo can never produce an
+// unbootable image.
+func TestEvaluatePreflight_KernelReplacementRejectsNonKernel(t *testing.T) {
+	report := EvaluatePreflight(PreflightInput{
+		Family: PackageManagerAPT,
+		Baseline: []BaselinePackage{
+			installedDeb("linux-image-6.8.0-40-generic", "6.8.0-40"),
+			installedDeb("linux-image-generic", "6.8.0.40"),
+		},
+		Resolved: []ResolvedPackage{{Name: "curl", Version: "8.0", Arch: "amd64"}}, // not a kernel image
+		Policy: config.OverlayPolicy{
+			PackageOperation: config.OverlayPackageOpAdditiveAndUpgrade,
+			AllowUpgrade:     true,
+			ReplaceKernel:    &config.ReplaceKernel{Package: "curl"},
+		},
+	})
+	if !report.Blocked {
+		t.Fatalf("replaceKernel naming a non-kernel package must be blocked, got %+v", report.Actions)
+	}
+	found := false
+	for _, v := range report.Violations {
+		if v.Rule == ruleReplaceKernelInvalid {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a %q violation, got %+v", ruleReplaceKernelInvalid, report.Violations)
+	}
+	if len(report.ToRemove) != 0 || len(report.ApprovedRemovals) != 0 {
+		t.Errorf("no removals may be authorized for an invalid replacement, got ToRemove=%v ApprovedRemovals=%v",
+			report.ToRemove, report.ApprovedRemovals)
+	}
+}
+
+// TestEvaluatePreflight_KernelReplacementAlreadyInstalled confirms a removal-only
+// swap is NOT blocked: when the named replacement kernel is already present in the
+// baseline it is absent from ToInstall, yet the swap is valid because the named
+// replacement is itself a bootable kernel image. The stale baseline kernel family is
+// still removed while the replacement is kept.
+func TestEvaluatePreflight_KernelReplacementAlreadyInstalled(t *testing.T) {
+	report := EvaluatePreflight(PreflightInput{
+		Family: PackageManagerAPT,
+		Baseline: []BaselinePackage{
+			installedDeb("linux-image-6.8.0-40-generic", "6.8.0-40"),   // old kernel -> remove
+			installedDeb("linux-image-generic", "6.8.0.40"),            // old meta -> remove
+			installedDeb("linux-image-6.11.0-1004-oem", "6.11.0-1004"), // replacement, already present
+		},
+		Resolved: nil, // already installed, so nothing to install
+		Policy: config.OverlayPolicy{
+			PackageOperation: config.OverlayPackageOpAdditiveAndUpgrade,
+			AllowUpgrade:     true,
+			ReplaceKernel:    &config.ReplaceKernel{Package: "linux-image-6.11.0-1004-oem"},
+		},
+	})
+	if report.Blocked {
+		t.Fatalf("a removal-only swap with an already-installed replacement must not be blocked, violations=%+v", report.Violations)
+	}
+	for _, n := range []string{"linux-image-6.8.0-40-generic", "linux-image-generic"} {
+		if !contains(report.ToRemove, n) {
+			t.Errorf("stale baseline kernel %q must still be removed, got %v", n, report.ToRemove)
+		}
+	}
+	if contains(report.ToRemove, "linux-image-6.11.0-1004-oem") {
+		t.Errorf("the already-installed replacement must be kept, not removed, got %v", report.ToRemove)
+	}
+}
+
+// TestEvaluatePreflight_KernelReplacementNonKernelWithForeignKernel confirms a
+// replaceKernel naming a non-kernel package (curl) is blocked even when an unrelated
+// systemConfig package independently adds a bootable kernel image — the swap must be
+// authorized by the NAMED replacement, not by a coincidental foreign kernel.
+func TestEvaluatePreflight_KernelReplacementNonKernelWithForeignKernel(t *testing.T) {
+	report := EvaluatePreflight(PreflightInput{
+		Family: PackageManagerAPT,
+		Baseline: []BaselinePackage{
+			installedDeb("linux-image-6.8.0-40-generic", "6.8.0-40"),
+			installedDeb("linux-image-generic", "6.8.0.40"),
+		},
+		// curl is the (mistaken) replacement; a kernel image is added independently.
+		Resolved: []ResolvedPackage{
+			{Name: "curl", Version: "8.0", Arch: "amd64"},
+			{Name: "linux-image-6.11.0-1004-oem", Version: "6.11.0-1004", Arch: "amd64"},
+		},
+		Policy: config.OverlayPolicy{
+			PackageOperation: config.OverlayPackageOpAdditiveAndUpgrade,
+			AllowUpgrade:     true,
+			ReplaceKernel:    &config.ReplaceKernel{Package: "curl"},
+		},
+	})
+	found := false
+	for _, v := range report.Violations {
+		if v.Rule == ruleReplaceKernelInvalid {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("replaceKernel: curl must be blocked even with a foreign kernel present, got %+v", report.Violations)
+	}
+	if len(report.ToRemove) != 0 {
+		t.Errorf("no baseline kernel removals may be authorized for an invalid replacement, got %v", report.ToRemove)
+	}
+}
+
+// TestReplaceKernelSuppliesKernel covers the scoped bootable-kernel check: a direct
+// kernel image (installed or not), an rpm kernel, a kernel meta whose closure supplies
+// an image, and the rejection of a non-kernel replacement even with a foreign kernel.
+func TestReplaceKernelSuppliesKernel(t *testing.T) {
+	kimg := []ResolvedPackage{{Name: "linux-image-6.11.0-1004-oem"}}
+	cases := []struct {
+		name        string
+		replacement string
+		resolved    []ResolvedPackage
+		closure     []ResolvedPackage
+		want        bool
+	}{
+		{"direct kernel image in ToInstall", "linux-image-6.11.0-1004-oem", kimg, nil, true},
+		{"direct kernel image already installed (empty ToInstall)", "linux-image-6.8.0-40-generic", nil, nil, true},
+		{"rpm kernel", "kernel", nil, nil, true},
+		{"kernel meta with image in closure", "linux-oem-24.04", nil, kimg, true},
+		{"kernel meta without any image", "linux-oem-24.04", nil, nil, false},
+		{"non-kernel with foreign kernel in ToInstall", "curl", kimg, nil, false},
+		{"empty replacement", "", kimg, nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := replaceKernelSuppliesKernel(tc.replacement, tc.resolved, tc.closure); got != tc.want {
+				t.Errorf("replaceKernelSuppliesKernel(%q) = %v, want %v", tc.replacement, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestEvaluatePreflight_KernelReplacementRpmSameNameUpgrade confirms the rpm case
+// where the installonly kernel keeps the same name across versions: the resolved
+// replacement is an ActionUpgrade of `kernel`, which is permitted (not blocked by
+// kernel immutability) because it is the named replacement, while the package is
+// kept (upgraded in place) rather than removed.
+func TestEvaluatePreflight_KernelReplacementRpmSameNameUpgrade(t *testing.T) {
+	report := EvaluatePreflight(PreflightInput{
+		Family:   PackageManagerDNF,
+		Baseline: []BaselinePackage{{Name: "kernel", Version: "6.8.0-1", Arch: "x86_64", Installed: true}},
+		Resolved: []ResolvedPackage{{Name: "kernel", Version: "6.18.0-1", Arch: "x86_64"}}, // same name, newer
+		Policy: config.OverlayPolicy{
+			PackageOperation: config.OverlayPackageOpAdditiveAndUpgrade,
+			AllowUpgrade:     true,
+			ReplaceKernel:    &config.ReplaceKernel{Package: "kernel"},
+		},
+	})
+	if report.Blocked {
+		t.Fatalf("rpm same-name kernel replacement (upgrade) must not be blocked, violations=%+v", report.Violations)
+	}
+	if report.Upgrades != 1 {
+		t.Errorf("expected the replacement kernel to be classified as an upgrade, got %+v", report.Actions)
+	}
+	if len(report.ToRemove) != 0 {
+		t.Errorf("same-name rpm swap upgrades the kernel in place, so nothing is removed, got ToRemove=%v", report.ToRemove)
+	}
+}
+
+// TestClassifyKernelReplacementRemovals_KeepsClosureMembers confirms the keep-set is
+// built from the full resolved closure, so a kernel-family package the replacement
+// depends on but that is already present in the baseline (absent from ToInstall) is
+// NOT swept into the removal set.
+func TestClassifyKernelReplacementRemovals_KeepsClosureMembers(t *testing.T) {
+	baseline := baselineVersionIndex([]BaselinePackage{
+		installedDeb("linux-image-6.8.0-40-generic", "6.8.0-40"), // old kernel -> remove
+		installedDeb("linux-modules-6.18-intel", "6.18"),         // dep of the new kernel, baseline-satisfied
+	})
+	// ToInstall carries only the new image; its modules are already present in the
+	// baseline, so they appear in the closure but not in resolved.
+	resolved := []ResolvedPackage{{Name: "linux-image-6.18-intel", Version: "6.18", Arch: "amd64"}}
+	closure := []ResolvedPackage{
+		{Name: "linux-image-6.18-intel", Version: "6.18", Arch: "amd64"},
+		{Name: "linux-modules-6.18-intel", Version: "6.18", Arch: "amd64"},
+	}
+	policy := config.OverlayPolicy{ReplaceKernel: &config.ReplaceKernel{Package: "linux-image-6.18-intel"}}
+
+	got := classifyKernelReplacementRemovals(baseline, resolved, closure, policy)
+	var names []string
+	for _, a := range got {
+		names = append(names, a.Package)
+		if a.Package == "linux-modules-6.18-intel" {
+			t.Errorf("a closure member the new kernel needs must not be removed: %+v", a)
+		}
+	}
+	if !contains(names, "linux-image-6.8.0-40-generic") {
+		t.Errorf("the old baseline kernel should still be removed, got %v", names)
+	}
+}
+
 // TestEvaluatePreflight_ObsoletesRemovalGated confirms an rpm Obsoletes on a
 // present baseline package is classified as a removal and blocked by the default
 // AllowRemoval=false, closing the rpm -U silent-removal gap.

@@ -179,6 +179,24 @@ type OverlayPolicy struct {
 	// under the default "additive-only" (validate() rejects that combination).
 	AllowPackageRemoval bool `yaml:"allowPackageRemoval,omitempty"`
 
+	// ReplaceKernel, when set, swaps the baseline's bootable kernel for a different
+	// one: the named replacement kernel package is installed and the baseline kernel
+	// family (image + meta + modules + headers) is removed, so the final image ships
+	// only the new kernel. The GRUB config is then regenerated so the boot menu drops
+	// the old entry and defaults to the new kernel; the ESP and the bootloader binary
+	// are never touched (no grub-install, no Secure Boot re-signing).
+	//
+	// It self-authorizes its own kernel-family removals through a dedicated preflight
+	// path and therefore does NOT require (or imply) allowPackageRemoval — the two
+	// knobs are orthogonal: allowPackageRemoval governs conflict-driven removal of
+	// NON-kernel baseline packages, which overlay never does to a kernel image.
+	//
+	// Like allowPackageRemoval it is only valid together with packageOperation
+	// "additive-and-upgrade": a full kernel swap is strictly more invasive than an
+	// in-place upgrade, so it may not be enabled under the default "additive-only"
+	// (validate() rejects that combination).
+	ReplaceKernel *ReplaceKernel `yaml:"replaceKernel,omitempty"`
+
 	// AllowDowngrade gates whether preflight permits downgrading a baseline
 	// package to an older version. Like AllowRemoval it is intentionally NOT a
 	// YAML field (the schema rejects it via additionalProperties:false) and
@@ -195,6 +213,17 @@ type OverlayPolicy struct {
 	// an installed package in place (dpkg -i upgrades), and switches the rpm
 	// backend to `rpm -U`; downgrades and removals stay blocked regardless.
 	AllowUpgrade bool `yaml:"-"`
+}
+
+// ReplaceKernel names the replacement kernel for an overlay kernel swap (see
+// OverlayPolicy.ReplaceKernel). Only the replacement package is specified; the
+// baseline kernel packages to remove are auto-detected from the baseline
+// inventory (the kernel family minus the replacement kernel's own closure), so a
+// caller cannot leave the swap half-applied with a stale partial remove list.
+type ReplaceKernel struct {
+	// Package is the replacement kernel image package to install, resolved from the
+	// configured repositories (e.g. "linux-image-6.11.0-1004-oem"). Required.
+	Package string `yaml:"package"`
 }
 
 // ImageTemplate represents the YAML image template structure
@@ -1615,6 +1644,28 @@ func (p *OverlayPolicy) validate() error {
 	if p.AllowPackageRemoval && op != OverlayPackageOpAdditiveAndUpgrade {
 		return fmt.Errorf("overlayPolicy.allowPackageRemoval requires packageOperation %q (got %q)",
 			OverlayPackageOpAdditiveAndUpgrade, op)
+	}
+	// A kernel swap installs a new kernel and removes the baseline kernel family, so
+	// it is strictly more invasive than an in-place upgrade and — like
+	// allowPackageRemoval — is only permitted under additive-and-upgrade. It
+	// self-authorizes its kernel-family removals in preflight, so it does NOT also
+	// require allowPackageRemoval.
+	if p.ReplaceKernel != nil {
+		pkg := strings.TrimSpace(p.ReplaceKernel.Package)
+		if pkg == "" {
+			return fmt.Errorf("overlayPolicy.replaceKernel.package must be set")
+		}
+		// The package name seeds the resolver and is passed to the package manager
+		// (dpkg/rpm) inside the baseline chroot, so reject whitespace and shell
+		// metacharacters up front rather than letting a malformed name reach a
+		// command line. A real kernel package name never needs any of these.
+		if strings.ContainsAny(pkg, " \t\n\"'`$\\;&|<>(){}*?!") {
+			return fmt.Errorf("overlayPolicy.replaceKernel.package %q must not contain whitespace or shell metacharacters", pkg)
+		}
+		if op != OverlayPackageOpAdditiveAndUpgrade {
+			return fmt.Errorf("overlayPolicy.replaceKernel requires packageOperation %q (got %q)",
+				OverlayPackageOpAdditiveAndUpgrade, op)
+		}
 	}
 	cp := p.ConflictPolicy
 	if cp == "" {

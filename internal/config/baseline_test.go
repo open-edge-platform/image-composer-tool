@@ -561,6 +561,62 @@ func TestOverlayPolicyValidatesGrubDefault(t *testing.T) {
 	}
 }
 
+// TestOverlayPolicyReplaceKernelValidation confirms validate() gates
+// overlayPolicy.replaceKernel: it requires a non-empty, metacharacter-free package
+// name and packageOperation additive-and-upgrade, and does NOT require
+// allowPackageRemoval.
+func TestOverlayPolicyReplaceKernelValidation(t *testing.T) {
+	cases := []struct {
+		name    string
+		op      string
+		pkg     string
+		set     bool   // whether ReplaceKernel is set at all
+		wantErr string // substring expected in the error, "" for success
+	}{
+		{"unset is fine under additive-only", OverlayPackageOpAdditiveOnly, "", false, ""},
+		{"valid swap under additive-and-upgrade", OverlayPackageOpAdditiveAndUpgrade, "linux-image-6.11.0-1004-oem", true, ""},
+		{"rejected under additive-only", OverlayPackageOpAdditiveOnly, "linux-image-6.11.0-1004-oem", true, "replaceKernel requires packageOperation"},
+		{"rejected under empty (defaults to additive-only)", "", "linux-image-6.11.0-1004-oem", true, "replaceKernel requires packageOperation"},
+		{"empty package rejected", OverlayPackageOpAdditiveAndUpgrade, "   ", true, "replaceKernel.package must be set"},
+		{"whitespace in package rejected", OverlayPackageOpAdditiveAndUpgrade, "linux image", true, "must not contain whitespace or shell metacharacters"},
+		{"shell metachar in package rejected", OverlayPackageOpAdditiveAndUpgrade, "linux-image;reboot", true, "must not contain whitespace or shell metacharacters"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := &OverlayPolicy{PackageOperation: c.op}
+			if c.set {
+				p.ReplaceKernel = &ReplaceKernel{Package: c.pkg}
+			}
+			err := p.validate()
+			if c.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", c.wantErr)
+			}
+			if !strings.Contains(err.Error(), c.wantErr) {
+				t.Errorf("error = %v, want substring %q", err, c.wantErr)
+			}
+		})
+	}
+}
+
+// TestOverlayPolicyReplaceKernelDoesNotRequireRemoval confirms a kernel swap is
+// permitted WITHOUT allowPackageRemoval — the two knobs are orthogonal.
+func TestOverlayPolicyReplaceKernelDoesNotRequireRemoval(t *testing.T) {
+	p := &OverlayPolicy{
+		PackageOperation: OverlayPackageOpAdditiveAndUpgrade,
+		ReplaceKernel:    &ReplaceKernel{Package: "linux-image-6.11.0-1004-oem"},
+		// AllowPackageRemoval deliberately false.
+	}
+	if err := p.validate(); err != nil {
+		t.Fatalf("replaceKernel must not require allowPackageRemoval, got %v", err)
+	}
+}
+
 func TestBaselineSourceValidateNormalizesWhitespace(t *testing.T) {
 	t.Run("path is trimmed in place", func(t *testing.T) {
 		s := &BaselineSource{Path: "  /tmp/u.raw\n"}
