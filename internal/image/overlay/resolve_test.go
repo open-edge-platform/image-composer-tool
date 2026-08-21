@@ -654,6 +654,36 @@ func TestOverlayRequestedPackages_SortedDeduped(t *testing.T) {
 	}
 }
 
+// TestOverlayRequestedPackages_ReplaceKernel confirms overlayPolicy.replaceKernel's
+// package is folded into the requested set (so it flows through resolution) and
+// that a nil policy / nil ReplaceKernel is safe.
+func TestOverlayRequestedPackages_ReplaceKernel(t *testing.T) {
+	template := &config.ImageTemplate{
+		SystemConfig: config.SystemConfig{Packages: []string{"curl"}},
+		OverlayPolicy: &config.OverlayPolicy{
+			ReplaceKernel: &config.ReplaceKernel{Package: "linux-image-6.11.0-1004-oem"},
+		},
+	}
+	got := overlayRequestedPackages(template)
+	want := []string{"curl", "linux-image-6.11.0-1004-oem"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("requested = %v, want %v", got, want)
+	}
+
+	// Nil policy and nil ReplaceKernel must not panic and must add nothing.
+	noKernel := &config.ImageTemplate{
+		SystemConfig:  config.SystemConfig{Packages: []string{"curl"}},
+		OverlayPolicy: &config.OverlayPolicy{},
+	}
+	if got := overlayRequestedPackages(noKernel); !reflect.DeepEqual(got, []string{"curl"}) {
+		t.Errorf("requested = %v, want [curl]", got)
+	}
+	nilPolicy := &config.ImageTemplate{SystemConfig: config.SystemConfig{Packages: []string{"curl"}}}
+	if got := overlayRequestedPackages(nilPolicy); !reflect.DeepEqual(got, []string{"curl"}) {
+		t.Errorf("requested = %v, want [curl]", got)
+	}
+}
+
 func TestBaselinePresenceSet(t *testing.T) {
 	baseline := []BaselinePackage{
 		{Name: "bash", Installed: true, Provides: []string{"sh"}},

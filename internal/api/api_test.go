@@ -458,6 +458,13 @@ func TestHandleStartBuildAccepted(t *testing.T) {
 	default:
 		t.Errorf("status = %q, want not-started, running, or success", acc.Status)
 	}
+	// Wait for the async build goroutine to finish before returning, so its
+	// writes under WorkDir complete before t.TempDir()'s deferred RemoveAll
+	// runs. Otherwise cleanup races the still-running build and flakes with
+	// "directory not empty".
+	if h, ok := s.svc.Build(acc.BuildId); ok {
+		<-h.Done()
+	}
 }
 
 // --- artifacts / details handlers (through the mux, with path params) ---

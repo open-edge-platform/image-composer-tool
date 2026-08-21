@@ -4161,9 +4161,6 @@ func TestHashPassword(t *testing.T) {
 }
 
 func TestConfigUserStartupScript(t *testing.T) {
-	originalExecutor := shell.Default
-	defer func() { shell.Default = originalExecutor }()
-
 	// Create a temporary directory for testing
 	testDir := t.TempDir()
 	installRoot := testDir
@@ -4187,14 +4184,6 @@ func TestConfigUserStartupScript(t *testing.T) {
 		t.Fatalf("Failed to create passwd file: %v", err)
 	}
 
-	// Mock the sed command used by file.ReplaceRegexInFile
-	// The command is: sed -E -i 's|^(testuser.*):[^:]*$|\1:/usr/local/bin/startup\.sh|g' /tmp/.../etc/passwd
-	// We can just mock "sed .*"
-	mockCommands := []shell.MockCommand{
-		{Pattern: "sed .*", Output: "", Error: nil},
-	}
-	shell.Default = shell.NewMockExecutor(mockCommands)
-
 	user := config.UserConfig{
 		Name:          "testuser",
 		StartupScript: "/usr/local/bin/startup.sh",
@@ -4202,14 +4191,131 @@ func TestConfigUserStartupScript(t *testing.T) {
 
 	err := configUserStartupScript(installRoot, user)
 	if err != nil {
-		t.Errorf("configUserStartupScript failed: %v", err)
+		t.Fatalf("configUserStartupScript failed: %v", err)
 	}
 
-	// Since we mocked sed, the file won't actually be changed.
-	// But we verified that the function runs without error and calls the mock.
-	// If we want to verify the file change, we would need to implement the sed logic in the mock,
-	// or use a real sed if available and not requiring sudo.
-	// But file.ReplaceRegexInFile forces sudo.
+	// The structured rewrite must set only testuser's shell field and leave the rest intact.
+	got, err := os.ReadFile(passwdPath)
+	if err != nil {
+		t.Fatalf("Failed to read passwd file: %v", err)
+	}
+	want := "root:x:0:0:root:/root:/bin/bash\ntestuser:x:1000:1000::/home/testuser:/usr/local/bin/startup.sh\n"
+	if string(got) != want {
+		t.Errorf("passwd not updated correctly:\n got: %q\nwant: %q", string(got), want)
+	}
+}
+
+// TestConfigUserStartupScript_RejectsUnsafePaths verifies the confinement guard:
+// a startupScript that escapes installRoot via "../" (or a non-canonical prefix)
+// or that carries a passwd delimiter/control character is rejected before any
+// /etc/passwd rewrite, so an overlay template cannot read a host path or corrupt
+// the passwd file.
+func TestConfigUserStartupScript_RejectsUnsafePaths(t *testing.T) {
+	installRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(installRoot, "etc"), 0o755); err != nil {
+		t.Fatalf("mkdir etc: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(installRoot, "etc", "passwd"),
+		[]byte("root:x:0:0::/root:/bin/bash\n"), 0o644); err != nil {
+		t.Fatalf("write passwd: %v", err)
+	}
+
+	cases := []struct {
+		name          string
+		startupScript string
+	}{
+		{"parent traversal escapes root", "../../bin/sh"},
+		{"non-canonical escapes root", "/../etc/passwd"},
+		{"passwd delimiter", "/root/x:y"},
+		{"newline", "/root/x\ny"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := configUserStartupScript(installRoot,
+				config.UserConfig{Name: "testuser", StartupScript: tc.startupScript})
+			if err == nil {
+				t.Fatalf("expected rejection for startup script %q", tc.startupScript)
+			}
+		})
+	}
+}
+
+// TestConfigUserStartupScript_MetacharPathWrittenLiterally confirms the structured
+// /etc/passwd edit: a path that clears the confinement/delimiter guard but carries
+// shell/sed metacharacters (quotes, `&`, `;`, `#`) is written verbatim into the
+// shell field — never executed — so the former sed/shell rewrite injection is gone.
+func TestConfigUserStartupScript_MetacharPathWrittenLiterally(t *testing.T) {
+	installRoot := t.TempDir()
+	rel := "/opt/x'&;#.sh"
+	hostPath := filepath.Join(installRoot, rel)
+	if err := os.MkdirAll(filepath.Dir(hostPath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(hostPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	passwdPath := filepath.Join(installRoot, "etc", "passwd")
+	if err := os.MkdirAll(filepath.Dir(passwdPath), 0o755); err != nil {
+		t.Fatalf("mkdir etc: %v", err)
+	}
+	if err := os.WriteFile(passwdPath,
+		[]byte("testuser:x:1000:1000::/home/testuser:/bin/bash\n"), 0o644); err != nil {
+		t.Fatalf("write passwd: %v", err)
+	}
+
+	if err := configUserStartupScript(installRoot,
+		config.UserConfig{Name: "testuser", StartupScript: rel}); err != nil {
+		t.Fatalf("configUserStartupScript failed: %v", err)
+	}
+
+	got, err := os.ReadFile(passwdPath)
+	if err != nil {
+		t.Fatalf("read passwd: %v", err)
+	}
+	want := "testuser:x:1000:1000::/home/testuser:/opt/x'&;#.sh\n"
+	if string(got) != want {
+		t.Errorf("metacharacter path not written literally:\n got: %q\nwant: %q", string(got), want)
+	}
+}
+
+// TestConfigUserStartupScript_SymlinkedPasswdStaysConfined asserts the passwd edit
+// is confined to the image root: a baseline whose /etc points at an absolute host
+// directory must not have its host passwd read or rewritten.
+func TestConfigUserStartupScript_SymlinkedPasswdStaysConfined(t *testing.T) {
+	installRoot := t.TempDir()
+	hostEtc := t.TempDir() // outside the image root
+	hostPasswd := filepath.Join(hostEtc, "passwd")
+	const hostContent = "testuser:x:1000:1000::/home/testuser:/bin/bash\n"
+	if err := os.WriteFile(hostPasswd, []byte(hostContent), 0o644); err != nil {
+		t.Fatalf("write host passwd: %v", err)
+	}
+
+	// The startup script itself is a legitimate in-root file.
+	script := filepath.Join(installRoot, "usr", "local", "bin", "startup.sh")
+	if err := os.MkdirAll(filepath.Dir(script), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(script, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	// /etc is a symlink to an absolute host directory.
+	if err := os.Symlink(hostEtc, filepath.Join(installRoot, "etc")); err != nil {
+		t.Fatalf("symlink etc: %v", err)
+	}
+
+	err := configUserStartupScript(installRoot,
+		config.UserConfig{Name: "testuser", StartupScript: "/usr/local/bin/startup.sh"})
+	if err == nil {
+		t.Fatal("expected confinement error for host-pointing /etc symlink")
+	}
+	got, rerr := os.ReadFile(hostPasswd)
+	if rerr != nil {
+		t.Fatalf("read host passwd: %v", rerr)
+	}
+	if string(got) != hostContent {
+		t.Fatalf("host passwd was modified; confinement leaked:\n%q", string(got))
+	}
 }
 
 // TestGenerateSBOM tests the generateSBOM functionality

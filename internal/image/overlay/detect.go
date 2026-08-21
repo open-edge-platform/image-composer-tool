@@ -274,32 +274,93 @@ func elfArch(path string) (string, error) {
 // It is the shared confinement primitive behind resolveInRoot (regular files)
 // and resolveInRootDir (directories).
 func resolveInRootInfo(rootMount, rootPath string) (string, os.FileInfo, error) {
-	current := rootPath // absolute, relative to the baseline root
-	for i := 0; i < 16; i++ {
-		hostPath := filepath.Join(rootMount, current)
+	// Resolve rootPath ONE component at a time on top of an already-resolved,
+	// symlink-free prefix. os.Lstat only declines to follow the FINAL component of
+	// the path it is given, so Lstat-ing a fully-joined multi-component path lets
+	// the OS follow a symlinked INTERMEDIATE component — e.g. a baseline whose /etc
+	// is a symlink to an absolute host directory would make Lstat(rootMount+/etc/
+	// passwd) read the host's passwd, escaping rootMount. By appending exactly one
+	// component to a prefix known to contain no symlinks and re-checking at each
+	// hop, every intermediate symlink is caught and re-resolved under confinement.
+	resolved := string(filepath.Separator) // fully-resolved, root-absolute dir prefix
+	pending := splitPathComponents(rootPath)
+	hops := 0
+	for len(pending) > 0 {
+		name := pending[0]
+		pending = pending[1:]
+		switch name {
+		case "", ".":
+			continue
+		case "..":
+			resolved = parentDir(resolved) // clamp at the baseline root
+			continue
+		}
+
+		candidate := filepath.Join(resolved, name) // root-absolute, one new component
+		hostPath := filepath.Join(rootMount, candidate)
 		fi, err := os.Lstat(hostPath)
 		if err != nil {
 			return "", nil, err
 		}
 		if fi.Mode()&os.ModeSymlink == 0 {
-			return hostPath, fi, nil
+			resolved = candidate
+			if len(pending) == 0 {
+				return hostPath, fi, nil
+			}
+			continue
+		}
+
+		// Symlink: splice its target into the pending components instead of
+		// Lstat-ing through it, so the target is itself resolved hop-by-hop under
+		// confinement.
+		hops++
+		if hops > 255 {
+			return "", nil, fmt.Errorf("too many symlink levels resolving %s", rootPath)
 		}
 		target, err := os.Readlink(hostPath)
 		if err != nil {
 			return "", nil, err
 		}
+		var targetComps []string
 		if filepath.IsAbs(target) {
-			// Clean the target as a root-absolute path so leading ".." segments
-			// collapse at "/" (the baseline root) rather than eating into
-			// rootMount when joined next iteration — mirroring how the kernel
-			// resolves an absolute symlink inside a chroot. Without this, a
-			// target like "/../../etc/passwd" would escape rootMount.
-			current = filepath.Clean(target)
+			// An absolute symlink restarts at the baseline root; Clean collapses any
+			// leading ".." at "/" so "/../../etc/passwd" resolves to "/etc/passwd"
+			// rather than eating into rootMount — mirroring how the kernel resolves
+			// an absolute symlink inside a chroot.
+			resolved = string(filepath.Separator)
+			targetComps = splitPathComponents(filepath.Clean(target))
 		} else {
-			current = filepath.Join(filepath.Dir(current), target)
+			// A relative symlink resolves against the directory that contains it (the
+			// current resolved prefix); the "." / ".." handling above keeps it confined.
+			targetComps = splitPathComponents(target)
 		}
+		pending = append(targetComps, pending...)
 	}
-	return "", nil, fmt.Errorf("too many symlink levels resolving %s", rootPath)
+
+	// rootPath resolved to the baseline root itself (e.g. "/" or ".." back to root).
+	hostPath := filepath.Join(rootMount, resolved)
+	fi, err := os.Lstat(hostPath)
+	if err != nil {
+		return "", nil, err
+	}
+	return hostPath, fi, nil
+}
+
+// splitPathComponents splits a guest path into its non-empty components, dropping
+// the leading separator, so "/etc/passwd" -> ["etc", "passwd"]. It preserves "."
+// and ".." segments for the caller's confined walk to interpret.
+func splitPathComponents(p string) []string {
+	return strings.FieldsFunc(p, func(r rune) bool { return r == filepath.Separator })
+}
+
+// parentDir returns the parent of a root-absolute path, clamped at the baseline
+// root so it can never ascend above it.
+func parentDir(p string) string {
+	parent := filepath.Dir(p)
+	if parent == "." {
+		return string(filepath.Separator)
+	}
+	return parent
 }
 
 // resolveInRoot resolves a possibly-symlinked path that is expressed relative to

@@ -179,6 +179,24 @@ type OverlayPolicy struct {
 	// under the default "additive-only" (validate() rejects that combination).
 	AllowPackageRemoval bool `yaml:"allowPackageRemoval,omitempty"`
 
+	// ReplaceKernel, when set, swaps the baseline's bootable kernel for a different
+	// one: the named replacement kernel package is installed and the baseline kernel
+	// family (image + meta + modules + headers) is removed, so the final image ships
+	// only the new kernel. The GRUB config is then regenerated so the boot menu drops
+	// the old entry and defaults to the new kernel; the ESP and the bootloader binary
+	// are never touched (no grub-install, no Secure Boot re-signing).
+	//
+	// It self-authorizes its own kernel-family removals through a dedicated preflight
+	// path and therefore does NOT require (or imply) allowPackageRemoval — the two
+	// knobs are orthogonal: allowPackageRemoval governs conflict-driven removal of
+	// NON-kernel baseline packages, which overlay never does to a kernel image.
+	//
+	// Like allowPackageRemoval it is only valid together with packageOperation
+	// "additive-and-upgrade": a full kernel swap is strictly more invasive than an
+	// in-place upgrade, so it may not be enabled under the default "additive-only"
+	// (validate() rejects that combination).
+	ReplaceKernel *ReplaceKernel `yaml:"replaceKernel,omitempty"`
+
 	// AllowDowngrade gates whether preflight permits downgrading a baseline
 	// package to an older version. Like AllowRemoval it is intentionally NOT a
 	// YAML field (the schema rejects it via additionalProperties:false) and
@@ -195,6 +213,17 @@ type OverlayPolicy struct {
 	// an installed package in place (dpkg -i upgrades), and switches the rpm
 	// backend to `rpm -U`; downgrades and removals stay blocked regardless.
 	AllowUpgrade bool `yaml:"-"`
+}
+
+// ReplaceKernel names the replacement kernel for an overlay kernel swap (see
+// OverlayPolicy.ReplaceKernel). Only the replacement package is specified; the
+// baseline kernel packages to remove are auto-detected from the baseline
+// inventory (the kernel family minus the replacement kernel's own closure), so a
+// caller cannot leave the swap half-applied with a stale partial remove list.
+type ReplaceKernel struct {
+	// Package is the replacement kernel image package to install, resolved from the
+	// configured repositories (e.g. "linux-image-6.11.0-1004-oem"). Required.
+	Package string `yaml:"package"`
 }
 
 // ImageTemplate represents the YAML image template structure
@@ -470,6 +499,10 @@ func parseYAMLTemplate(data []byte, validateFull bool) (*ImageTemplate, error) {
 	}
 
 	if err := template.validateBaseline(); err != nil {
+		return nil, err
+	}
+
+	if err := template.validateUsers(); err != nil {
 		return nil, err
 	}
 
@@ -796,22 +829,15 @@ func (t *ImageTemplate) GetAdditionalFileInfo() []AdditionalFileInfo {
 					log.Warnf("Cannot resolve relative additional file path without template file context: %+v",
 						t.SystemConfig.AdditionalFiles[i])
 				} else {
-					var found bool
-					for _, path := range t.PathList {
-						templateDir := filepath.Dir(path)
-						candidatePath := filepath.Join(templateDir, t.SystemConfig.AdditionalFiles[i].Local)
-						if _, err := os.Stat(candidatePath); err == nil {
-							newFileInfo := AdditionalFileInfo{
-								Local: candidatePath,
-								Final: t.SystemConfig.AdditionalFiles[i].Final,
-								Stage: t.SystemConfig.AdditionalFiles[i].Stage,
-							}
-							PathUpdatedList = append(PathUpdatedList, newFileInfo)
-							found = true
-							break
+					candidatePath, found := resolveTemplateRelativePath(t.PathList, t.SystemConfig.AdditionalFiles[i].Local)
+					if found {
+						newFileInfo := AdditionalFileInfo{
+							Local: candidatePath,
+							Final: t.SystemConfig.AdditionalFiles[i].Final,
+							Stage: t.SystemConfig.AdditionalFiles[i].Stage,
 						}
-					}
-					if !found {
+						PathUpdatedList = append(PathUpdatedList, newFileInfo)
+					} else {
 						log.Warnf("Ignoring additional file entry with non-existent local path: %+v",
 							t.SystemConfig.AdditionalFiles[i])
 					}
@@ -820,6 +846,32 @@ func (t *ImageTemplate) GetAdditionalFileInfo() []AdditionalFileInfo {
 		}
 	}
 	return PathUpdatedList
+}
+
+// resolveTemplateRelativePath resolves a relative path against each template path
+// and each of its ancestor directories. This lets nested templates reference
+// shared assets from a parent template directory (for example,
+// image-templates/additionalfiles).
+func resolveTemplateRelativePath(templatePaths []string, relativePath string) (string, bool) {
+	cleanRelativePath := filepath.Clean(relativePath)
+
+	for _, templatePath := range templatePaths {
+		templateDir := filepath.Dir(templatePath)
+		for {
+			candidatePath := filepath.Join(templateDir, cleanRelativePath)
+			if _, err := os.Stat(candidatePath); err == nil {
+				return candidatePath, true
+			}
+
+			parentDir := filepath.Dir(templateDir)
+			if parentDir == templateDir {
+				break
+			}
+			templateDir = parentDir
+		}
+	}
+
+	return "", false
 }
 
 func (t *ImageTemplate) GetConfigurationInfo() []ConfigurationInfo {
@@ -1365,10 +1417,10 @@ func (t *ImageTemplate) validateBaseline() error {
 }
 
 // validateOverlaySystemConfig rejects systemConfig sections that an overlay build
-// cannot apply. Overlay mode layers packages, configurations, and additional
-// files onto an already-provisioned baseline image; it never re-runs the
-// system-provisioning stages that own users, hostname, network, initramfs,
-// kernel, immutability, FDE, and bootloader. Those sections used to pass schema
+// cannot apply. Overlay mode layers packages, users, configurations, and
+// additional files onto an already-provisioned baseline image; it does not re-run
+// the system-provisioning stages that own hostname, network, initramfs, kernel,
+// immutability, FDE, and bootloader. Those sections used to pass schema
 // validation and then be dropped silently, so a template that set them appeared
 // to succeed while producing an image that ignored them. Fail the build up front
 // instead, naming every offending section so the user can remove them all in one
@@ -1378,9 +1430,9 @@ func (t *ImageTemplate) validateOverlaySystemConfig() error {
 	sc := t.SystemConfig
 
 	var offending []string
-	if len(sc.Users) > 0 {
-		offending = append(offending, "users")
-	}
+	// Note: systemConfig.users IS supported in overlay mode — the overlay build
+	// provisions them onto the baseline (and stops the build if a requested user
+	// already exists in the baseline image). It is intentionally absent here.
 	if sc.HostName != "" {
 		offending = append(offending, "hostname")
 	}
@@ -1422,6 +1474,82 @@ func (t *ImageTemplate) validateOverlaySystemConfig() error {
 		"an overlay layers packages, configurations, and additionalFiles onto an existing baseline "+
 		"and cannot modify these — remove them from the template",
 		strings.Join(sections, ", "))
+}
+
+// unixUserNameRe matches a safe account name: it starts with a letter, digit, or
+// underscore and then allows letters, digits, underscore, dot, and dash, up to 32
+// characters. It deliberately excludes whitespace, path separators, and every
+// shell metacharacter. User names are interpolated into commands executed via
+// `bash -c` during provisioning, so an unconstrained name (for example
+// "root; passwd -d root") would be a command-injection vector; constraining the
+// name here also makes the overlay baseline-conflict check reliable, since an
+// exact-name comparison cannot then be bypassed by embedding shell syntax.
+var unixUserNameRe = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,31}$`)
+
+// isConfinedImagePath reports whether p is a safe absolute in-image path for a
+// user's startupScript. configUserStartupScript joins it onto installRoot and
+// writes it into the shell field of /etc/passwd, so it must be absolute and
+// already canonical (filepath.Clean is a no-op) — otherwise a "../" component
+// would let filepath.Join escape installRoot — and it must contain neither ":"
+// (the /etc/passwd field delimiter) nor any control character (a newline would
+// inject an extra passwd line).
+func isConfinedImagePath(p string) bool {
+	if !strings.HasPrefix(p, "/") || filepath.Clean(p) != p {
+		return false
+	}
+	for _, r := range p {
+		if r == ':' || r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+// validateUsers rejects any systemConfig.users entry whose name — or supplementary
+// group name — is not a safe Unix name. It runs in both create and overlay modes
+// (users are provisioned by the same code path) as a defense-in-depth guard for
+// templates that reach the Go layer without passing JSON-schema validation. Group
+// names are interpolated into getent/groupadd/usermod command strings during
+// provisioning exactly like the account name, so they need the same constraint;
+// placeholder entries (e.g. "<REQUIRED_GROUP>") are skipped here because they are
+// also skipped at provisioning time (see collectUserGroups). A user's startupScript
+// is rewritten into /etc/passwd from a path joined onto installRoot, so it must be a
+// clean, confined in-image path (see isConfinedImagePath).
+func (t *ImageTemplate) validateUsers() error {
+	var invalidNames, invalidGroups, invalidScripts []string
+	for _, u := range t.SystemConfig.Users {
+		if !unixUserNameRe.MatchString(u.Name) {
+			invalidNames = append(invalidNames, fmt.Sprintf("%q", u.Name))
+		}
+		for _, g := range u.Groups {
+			g = strings.TrimSpace(g)
+			if g == "" || (strings.HasPrefix(g, "<") && strings.HasSuffix(g, ">")) {
+				continue
+			}
+			if !unixUserNameRe.MatchString(g) {
+				invalidGroups = append(invalidGroups, fmt.Sprintf("%q", g))
+			}
+		}
+		if u.StartupScript != "" && !isConfinedImagePath(u.StartupScript) {
+			invalidScripts = append(invalidScripts, fmt.Sprintf("%q", u.StartupScript))
+		}
+	}
+	if len(invalidNames) > 0 {
+		return fmt.Errorf("invalid systemConfig.users name(s) %s: a user name must match %s "+
+			"(letters, digits, underscore, dot, dash; first character a letter, digit, or underscore; max 32 characters)",
+			strings.Join(invalidNames, ", "), unixUserNameRe.String())
+	}
+	if len(invalidGroups) > 0 {
+		return fmt.Errorf("invalid systemConfig.users group name(s) %s: a group name must match %s "+
+			"(letters, digits, underscore, dot, dash; first character a letter, digit, or underscore; max 32 characters)",
+			strings.Join(invalidGroups, ", "), unixUserNameRe.String())
+	}
+	if len(invalidScripts) > 0 {
+		return fmt.Errorf("invalid systemConfig.users startupScript path(s) %s: a startup script must be a clean, "+
+			"absolute in-image path with no \"..\" traversal and no \":\" or control characters (for example \"/usr/local/bin/startup.sh\")",
+			strings.Join(invalidScripts, ", "))
+	}
+	return nil
 }
 
 // Validate enforces that exactly one of Path or URL is set, and that a URL uses
@@ -1516,6 +1644,28 @@ func (p *OverlayPolicy) validate() error {
 	if p.AllowPackageRemoval && op != OverlayPackageOpAdditiveAndUpgrade {
 		return fmt.Errorf("overlayPolicy.allowPackageRemoval requires packageOperation %q (got %q)",
 			OverlayPackageOpAdditiveAndUpgrade, op)
+	}
+	// A kernel swap installs a new kernel and removes the baseline kernel family, so
+	// it is strictly more invasive than an in-place upgrade and — like
+	// allowPackageRemoval — is only permitted under additive-and-upgrade. It
+	// self-authorizes its kernel-family removals in preflight, so it does NOT also
+	// require allowPackageRemoval.
+	if p.ReplaceKernel != nil {
+		pkg := strings.TrimSpace(p.ReplaceKernel.Package)
+		if pkg == "" {
+			return fmt.Errorf("overlayPolicy.replaceKernel.package must be set")
+		}
+		// The package name seeds the resolver and is passed to the package manager
+		// (dpkg/rpm) inside the baseline chroot, so reject whitespace and shell
+		// metacharacters up front rather than letting a malformed name reach a
+		// command line. A real kernel package name never needs any of these.
+		if strings.ContainsAny(pkg, " \t\n\"'`$\\;&|<>(){}*?!") {
+			return fmt.Errorf("overlayPolicy.replaceKernel.package %q must not contain whitespace or shell metacharacters", pkg)
+		}
+		if op != OverlayPackageOpAdditiveAndUpgrade {
+			return fmt.Errorf("overlayPolicy.replaceKernel requires packageOperation %q (got %q)",
+				OverlayPackageOpAdditiveAndUpgrade, op)
+		}
 	}
 	cp := p.ConflictPolicy
 	if cp == "" {

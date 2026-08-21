@@ -246,7 +246,7 @@ sudo -E ./image-composer-tool build image-templates/debian13/debian13-x86_64-min
 ### Debian 13 Desktop Virtualization ISO
 
 ```bash
-sudo -E ./image-composer-tool build image-templates/debian13/debian13-x86_64-desktop-virtualization-iso.yml
+sudo -E ./image-composer-tool build image-templates/debian13-x86_64-desktop-virtualization-iso.yml
 ```
 Output: a bootable ISO with QEMU/KVM, GPU SR-IOV, X11, and SELinux.
 

@@ -61,6 +61,12 @@ touches the bootloader binary or the ESP (mounted read-only), and never runs
 
 ### 1. Kernel scope — add-only (no policy relaxation)
 
+> **Superseded (2026-08-19)** by
+> [Kernel replacement (full swap) for overlay baselines](adr-overlay-kernel-replacement.md),
+> which adds an opt-in `overlayPolicy.replaceKernel` that installs a new kernel and
+> removes the baseline kernel family (a full swap), regenerating the GRUB config to
+> boot it. The add-only default below still holds when `replaceKernel` is unset.
+
 **Decision:** Keep the existing preflight gate blocking in-place kernel-image
 *replacement*. Support only **adding** a new kernel alongside the existing one
 (the Ubuntu norm); GRUB regeneration then generates its menu entry.
@@ -225,7 +231,9 @@ config — functional, and gives overlay-added kernels a working boot entry.
   path is template-supplied via `overlayPolicy.grubDefault`; inference is too
   fragile — see Decision 2).
 - Separate `/boot` partition handling (detect + mount, or skip-with-warning).
-- In-place kernel-image replacement (would require relaxing `ruleKernelImmutable`).
+- ~~In-place kernel-image replacement (would require relaxing `ruleKernelImmutable`).~~
+  Implemented as a full swap in
+  [adr-overlay-kernel-replacement.md](adr-overlay-kernel-replacement.md).
 - Re-signing boot artifacts for Secure Boot within overlay mode.
 - A full real `linux-image-*` end-to-end integration test (kernel package
   postinst + menu entry) — heavier than the current simulated-kernel integration

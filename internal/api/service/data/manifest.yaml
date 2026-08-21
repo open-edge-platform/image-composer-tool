@@ -20,14 +20,14 @@ combinations:
     platform: arl
     os: debian13
     imageType: iso
-    template: debian13/debian13-x86_64-desktop-virtualization-iso.yml
+    template: debian13-x86_64-desktop-virtualization-iso.yml
 
   - vertical: robotics
     sku: robotics-jazzy-ubuntu24
     platform: wcl
     os: ubuntu24
     imageType: iso
-    template: ubuntu24/ubuntu24-x86_64-robotics-jazzy-iso.yml
+    template: ubuntu24-x86_64-robotics-jazzy-iso.yml
 
   # Planned, no template yet — the UI grays this out (not buildable).
   - vertical: robotics
@@ -42,7 +42,7 @@ combinations:
     platform: ptl
     os: ubuntu24
     imageType: raw
-    template: ubuntu24/ubuntu24-x86_64-minimal-ptl-pv-raw.yml
+    template: ubuntu24-x86_64-minimal-ptl-pv-raw.yml
 
   - vertical: fed-aero
     sku: generic-handheld-blueprint

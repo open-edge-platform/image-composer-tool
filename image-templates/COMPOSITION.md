@@ -229,9 +229,16 @@ Rules the loader enforces:
 - `overlayPolicy` is only allowed when `mode` is `overlay`. Because `mode`
   defaults to `create`, a template that sets `overlayPolicy` without a
   `baseline` is rejected.
-- Overlay is additive in v1: packages are added, never removed or downgraded,
-  and a conflict fails the preflight gate.
-- The bootloader and kernel are left alone.
+- Overlay is additive by default: packages are added, never removed or
+  downgraded, and a conflict fails the preflight gate. `packageOperation:
+  additive-and-upgrade` also permits upgrading a present baseline package, and
+  `allowPackageRemoval: true` permits conflict-driven removal of a non-kernel
+  baseline package.
+- The bootloader binary and ESP are always left alone. The kernel is left alone
+  too, unless `overlayPolicy.replaceKernel` is set — that swaps the kernel
+  (install the new one, remove the baseline kernel family) and regenerates the
+  GRUB config to boot it. See the templates reference for details, and
+  `ubuntu24/ubuntu24-x86_64-overlay-replace-kernel-raw.yml` for an example.
 
 **Overlay changes the package rule.** Normally packages are a union; in overlay
 mode the merged list is *exactly* what the template declares. The baseline

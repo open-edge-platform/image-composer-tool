@@ -949,11 +949,14 @@ func LoadAndMergeTemplate(templatePath string) (*ImageTemplate, error) {
 		log.Infof("Overlay mode: skipping OS default configuration (the baseline image governs disk, bootloader, kernel, and base packages)")
 		userMerged.Extends = ""
 		// Re-validate the merged overlay: each layer is validated in isolation before
-		// merging, but an unsupported systemConfig section (e.g. users) declared by a
-		// create-mode PARENT can fold into an overlay leaf without either layer failing.
-		// Re-running the overlay validation on the merged result rejects that rather
-		// than silently ignoring the section at build time.
+		// merging, but an unsupported systemConfig section (e.g. hostname) declared by
+		// a create-mode PARENT can fold into an overlay leaf without either layer
+		// failing. Re-running the overlay validation on the merged result rejects that
+		// rather than silently ignoring the section at build time.
 		if err := userMerged.validateBaseline(); err != nil {
+			return nil, fmt.Errorf("merged overlay template is invalid: %w", err)
+		}
+		if err := userMerged.validateUsers(); err != nil {
 			return nil, fmt.Errorf("merged overlay template is invalid: %w", err)
 		}
 		return userMerged, nil
