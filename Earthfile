@@ -333,6 +333,8 @@ builder-image:
         --build-arg HTTPS_PROXY=$HTTPS_PROXY \
         --build-arg NO_PROXY=$NO_PROXY \
         -f build/builder/Dockerfile .
+    COPY +build/image-composer-tool /usr/local/bin/image-composer-tool
+    RUN chmod +x /usr/local/bin/image-composer-tool
 
     SAVE IMAGE ${BUILDER_IMAGE_NAME}:${VERSION}
     SAVE IMAGE ${BUILDER_IMAGE_NAME}:latest
@@ -352,6 +354,8 @@ builder-image-push:
         --build-arg HTTPS_PROXY=$HTTPS_PROXY \
         --build-arg NO_PROXY=$NO_PROXY \
         -f build/builder/Dockerfile .
+    COPY +build/image-composer-tool /usr/local/bin/image-composer-tool
+    RUN chmod +x /usr/local/bin/image-composer-tool
 
     SAVE IMAGE --push ${REGISTRY}/${BUILDER_IMAGE_NAME}:${VERSION}
     SAVE IMAGE --push ${REGISTRY}/${BUILDER_IMAGE_NAME}:latest

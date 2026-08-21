@@ -28,8 +28,9 @@ ENV http_proxy=${http_proxy} \
 
 # ── Layer 2: full ICT toolchain ───────────────────────────────────────────────
 # Packages are grouped by the functional area they cover.
-# Special tools: tdnf (Azure-Linux-only), opkg (OpenWrt-only), snap (needs snapd),
-# and run (legacy allowlist entry) are handled after the main install block.
+# Special tools: tdnf (Azure-Linux-only), yum/opkg (non-Ubuntu package managers),
+# snap (needs snapd), and run (legacy allowlist entry) are handled after the main
+# install block.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     \
     # core OS utilities (coreutils, util-linux, procps, etc.)
@@ -67,6 +68,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     \
     # disk / block device tools
     fdisk \
+    eject \
     \
     # crypto / integrity
     cryptsetup-bin \
@@ -78,7 +80,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     \
     # initramfs / UKI / systemd
     initramfs-tools \
-    dracut \
+    dracut-core \
     systemd \
     systemd-boot \
     systemd-ukify \
@@ -100,7 +102,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rpm \
     createrepo-c \
     dnf \
-    yum \
     \
     # misc
     lsof \
@@ -108,11 +109,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Special tools ─────────────────────────────────────────────────────────────
-# tdnf/opkg/snap are distro-specific and not installable on Ubuntu.
+# tdnf/yum/opkg/snap are distro-specific and not installable on Ubuntu.
 # run is a legacy allowlist entry and may be absent in Ubuntu.
 # Create explicit stubs at the allowlist path (/usr/bin/<cmd>) so commandMap
 # entries resolve and fail clearly when invoked.
-RUN for cmd in tdnf opkg snap run; do \
+RUN for cmd in tdnf yum opkg snap run; do \
       if [ ! -e /usr/bin/$cmd ]; then \
         printf '#!/bin/sh\necho "ERROR: %s is not available in this builder image (distro-specific tool)" >&2\nexit 127\n' "$cmd" \
           > /usr/bin/$cmd && \
@@ -125,12 +126,12 @@ RUN if [ ! -e /usr/sbin/grub2-mkconfig ] && [ -e /usr/sbin/grub-mkconfig ]; then
       ln -s /usr/sbin/grub-mkconfig /usr/sbin/grub2-mkconfig; \
     fi
 
-# ── Layer 3: ICT binary ───────────────────────────────────────────────────────
-# Copied last so toolchain layer stays cached on binary-only rebuilds.
-COPY build/image-composer-tool /usr/local/bin/image-composer-tool
+# ── Layer 3: runtime support files ────────────────────────────────────────────
+# The ICT binary is injected by Earthly after this Dockerfile build so the
+# toolchain layer stays cached and the image does not depend on a host-local
+# build artifact being present in the Docker build context.
 COPY scripts/preflight.sh /usr/local/bin/preflight.sh
 COPY internal/utils/shell/shell.go /usr/share/image-composer-tool/shell.go
-RUN chmod +x /usr/local/bin/image-composer-tool
 RUN chmod +x /usr/local/bin/preflight.sh
 
 ENTRYPOINT ["/usr/local/bin/preflight.sh", "--command-map-file", "/usr/share/image-composer-tool/shell.go"]
