@@ -23,7 +23,7 @@ func packagesTestService(t *testing.T) *Service {
 }
 
 func robotics() TemplateQuery {
-	return TemplateQuery{Vertical: "robotics", SKU: "amr", Platform: "wcl", OS: "ubuntu24", ImageType: "iso"}
+	return TemplateQuery{Vertical: "robotics", SKU: "robotics-jazzy-ubuntu24", Platform: "wcl", OS: "ubuntu24", ImageType: "iso"}
 }
 
 func TestListPackageRepos(t *testing.T) {
@@ -138,3 +138,26 @@ func TestSearchPackagesNoMatchCombination(t *testing.T) {
 	_, _, err := s.SearchPackages(TemplateQuery{Vertical: "robotics", Platform: "ptl", OS: "ubuntu24", ImageType: "iso"}, "ba", nil, 0)
 	assertServiceError(t, err, http.StatusBadRequest)
 }
+
+const templateWithPackagesAndRepo = `image:
+  name: robotics-test
+  version: "1.0"
+target:
+  os: ubuntu24
+  dist: ubuntu24
+  platform: wcl
+  arch: x86_64
+  imageType: iso
+disk:
+  name: disk0
+  size: 5GB
+systemConfig:
+  hostname: robotics
+packageRepositories:
+  - codename: test-repo
+    pkey: ubuntu
+    url: https://example.com/repo
+allowPackages:
+  - bar
+  - baz-dev
+`

@@ -148,14 +148,6 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
 
   return (
     <div className="mx-auto max-w-screen-2xl px-10 py-8">
-<<<<<<< HEAD
-      <h1 className="mb-1 text-2xl font-bold text-[#00285a]">Advanced Template Preview</h1>
-      <p className="mb-5 text-sm text-slate-500">
-        Select a combination to see the exact pre-authored template it resolves to,
-        and the package repositories available for that target. The template is a
-        read-only preview — editing and export will arrive in a later update.
-      </p>
-=======
       {/* Step progress indicator (matches the prototype's numbered dots + lines). */}
       <div className="mb-6 flex items-center justify-center gap-1">
         {STEPS.map((label, i) => (
@@ -183,7 +175,6 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
           </div>
         ))}
       </div>
->>>>>>> origin/main
 
       <div className="mx-auto max-w-3xl rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
         {step === 0 && (
@@ -194,59 +185,16 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
             imageName={imageName}
             setImageName={setImageName}
           />
-<<<<<<< HEAD
-          <Select
-            label="SKU"
-            placeholder="-- Select SKU --"
-            value={selection.sku}
-            options={opts.skus}
-            disabled={!selection.vertical}
-            onChange={(v) => setSel('sku', v)}
-          />
-          <Select
-            label="Platform"
-            placeholder="-- Select Platform --"
-            value={selection.platform}
-            options={opts.platforms}
-            disabled={!selection.sku && opts.skus.length > 0}
-            onChange={(v) => setSel('platform', v)}
-          />
-          <Select
-            label="Operating System"
-            placeholder="-- Select Operating System --"
-            value={selection.os}
-            options={opts.oses}
-            disabled={!selection.platform}
-            onChange={(v) => setSel('os', v)}
-          />
-          {opts.kernels.length > 0 && (
-            <Select
-              label="Kernel"
-              placeholder="-- Select Kernel --"
-              value={selection.kernel}
-              options={opts.kernels}
-              disabled={!selection.os}
-              onChange={(v) => setSel('kernel', v)}
-            />
-          )}
-
-          {/* Repositories are scoped to the target OS, so this keys off
-              selection.os rather than the full combination — it can populate as
-              soon as an OS is picked, before image type narrows things down. */}
-          <div className="mt-5">
-            <RepoPicker os={selection.os} active={active} />
-          </div>
-        </div>
-=======
         )}
->>>>>>> origin/main
 
         {step === 1 && (
           <div>
             <h2 className="mb-1 text-lg font-bold text-[#00285a]">Repositories &amp; Packages</h2>
-            <p className="text-sm text-slate-500">
-              Repository and package selection will arrive in a later update.
+            <p className="mb-5 text-sm text-slate-500">
+              Choose which package repositories to pull from. Package search and
+              selection will arrive in a later update.
             </p>
+            <RepoPicker os={selection.os} active={active} />
           </div>
         )}
 
