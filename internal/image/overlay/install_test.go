@@ -261,7 +261,7 @@ func TestInstallOverlayPackages_CascadeRemovesOrphanedReverseDep(t *testing.T) {
 		DownloadDir: dir,
 		ToInstall:   []ResolvedPackage{{Name: "dracut", Version: "1", Arch: "amd64", URL: "https://r/dracut_1.deb"}},
 	}
-	report := &PreflightReport{ToRemove: []string{"initramfs-tools"}, ApprovedRemovals: []string{"initramfs-tools"}}
+	report := &PreflightReport{ToRemove: []string{"initramfs-tools"}, ApprovedRemovals: []string{"initramfs-tools"}, CollateralRemovalAuthorized: true}
 	// Healthy before the removal; "cloud-initramfs-growroot" orphaned after the
 	// install; clean once it is cascade-removed.
 	backend := &fakeInstaller{fam: PackageManagerAPT, auditBroken: [][]string{nil, {"cloud-initramfs-growroot"}, nil}}
@@ -304,7 +304,7 @@ func TestInstallOverlayPackages_CascadeTransitiveChain(t *testing.T) {
 		DownloadDir: dir,
 		ToInstall:   []ResolvedPackage{{Name: "dracut", Version: "1", URL: "https://r/dracut_1.deb"}},
 	}
-	report := &PreflightReport{ToRemove: []string{"initramfs-tools"}, ApprovedRemovals: []string{"initramfs-tools"}}
+	report := &PreflightReport{ToRemove: []string{"initramfs-tools"}, ApprovedRemovals: []string{"initramfs-tools"}, CollateralRemovalAuthorized: true}
 	// pre: healthy; post-install: "a" broken; after removing "a": "b" broken; then clean.
 	backend := &fakeInstaller{fam: PackageManagerAPT, auditBroken: [][]string{nil, {"a"}, {"b"}, nil}}
 	h := &installHarness{}
@@ -338,7 +338,7 @@ func TestInstallOverlayPackages_CascadeRemovesExactMultiarchInstance(t *testing.
 		DownloadDir: dir,
 		ToInstall:   []ResolvedPackage{{Name: "dracut", Version: "1", URL: "https://r/dracut_1.deb"}},
 	}
-	report := &PreflightReport{ToRemove: []string{"initramfs-tools"}, ApprovedRemovals: []string{"initramfs-tools"}}
+	report := &PreflightReport{ToRemove: []string{"initramfs-tools"}, ApprovedRemovals: []string{"initramfs-tools"}, CollateralRemovalAuthorized: true}
 	// apt-get check reports the i386 instance broken with its arch qualifier.
 	backend := &fakeInstaller{fam: PackageManagerAPT, auditBroken: [][]string{nil, {"libfoo:i386 | Depends: libbar"}, nil}}
 	h := &installHarness{}
@@ -408,7 +408,7 @@ func TestInstallOverlayPackages_CascadeRemovesOnlyNewBreakage(t *testing.T) {
 		DownloadDir: dir,
 		ToInstall:   []ResolvedPackage{{Name: "dracut", Version: "1", URL: "https://r/dracut_1.deb"}},
 	}
-	report := &PreflightReport{ToRemove: []string{"initramfs-tools"}, ApprovedRemovals: []string{"initramfs-tools"}}
+	report := &PreflightReport{ToRemove: []string{"initramfs-tools"}, ApprovedRemovals: []string{"initramfs-tools"}, CollateralRemovalAuthorized: true}
 	// "oldbroken" pre-exists; "newbroken" is introduced by the removal; after removing
 	// "newbroken" only "oldbroken" (pre-existing) remains → no further cascade.
 	backend := &fakeInstaller{fam: PackageManagerAPT, auditBroken: [][]string{{"oldbroken"}, {"oldbroken", "newbroken"}, {"oldbroken"}}}
@@ -478,6 +478,40 @@ func TestInstallOverlayPackages_CascadeFailsClosedOnToInstall(t *testing.T) {
 	}
 	if contains(backend.gotRemoved, "dracut") {
 		t.Errorf("a to-install package must never be cascade-removed, got %v", backend.gotRemoved)
+	}
+}
+
+// TestInstallOverlayPackages_CascadeFailsClosedOnUnauthorizedCollateral confirms a
+// kernel replacement (which self-authorizes only its kernel-family removals, so
+// CollateralRemovalAuthorized is false) does NOT silently cascade-remove an unrelated
+// non-kernel package it orphaned: the build fails closed, telling the operator to opt
+// into allowPackageRemoval or add the missing dependency.
+func TestInstallOverlayPackages_CascadeFailsClosedOnUnauthorizedCollateral(t *testing.T) {
+	dir := writeArtifacts(t, t.TempDir(), "linux-image-6.11.0-generic_1.deb")
+	plan := &ResolutionPlan{
+		DownloadDir: dir,
+		ToInstall:   []ResolvedPackage{{Name: "linux-image-6.11.0-generic", Version: "1", URL: "https://r/linux-image-6.11.0-generic_1.deb"}},
+	}
+	// A kernel-family removal self-authorized by replaceKernel, WITHOUT allowPackageRemoval.
+	report := &PreflightReport{
+		ToRemove:                    []string{"linux-modules-6.8.0-40-generic"},
+		ApprovedRemovals:            []string{"linux-modules-6.8.0-40-generic"},
+		CollateralRemovalAuthorized: false,
+	}
+	// A DKMS-style package bound to the old modules is orphaned by the swap.
+	backend := &fakeInstaller{fam: PackageManagerAPT, auditBroken: [][]string{nil, {"some-dkms-module"}}}
+	h := &installHarness{}
+
+	var err error
+	withStubbedInstall(t, backend, h, func() {
+		_, err = InstallOverlayPackages(aptInfo(), "/mnt/root", plan, report)
+	})
+	if err == nil || !strings.Contains(err.Error(), "some-dkms-module") || !strings.Contains(err.Error(), "allowPackageRemoval") {
+		t.Fatalf("an unauthorized collateral removal must fail closed pointing at allowPackageRemoval, got %v", err)
+	}
+	// Only the self-authorized kernel-family removal ran; the collateral was NOT removed.
+	if !reflect.DeepEqual(backend.gotRemoved, []string{"linux-modules-6.8.0-40-generic"}) {
+		t.Errorf("collateral package must not be cascade-removed; gotRemoved = %v", backend.gotRemoved)
 	}
 }
 
@@ -680,6 +714,44 @@ func TestInstallOverlayPackages_NothingToInstall(t *testing.T) {
 	if backend.installCalls != 0 || len(h.mountedSysfs) != 0 || len(h.bindMounts) != 0 {
 		t.Errorf("no-op must not mount or install: installCalls=%d sysfs=%d binds=%d",
 			backend.installCalls, len(h.mountedSysfs), len(h.bindMounts))
+	}
+}
+
+// TestInstallOverlayPackages_RemovalOnlySwap confirms a removal-only plan (empty
+// ToInstall but non-empty ToRemove — e.g. a kernel swap where the replacement kernel
+// is already present, so only the baseline kernel family must be removed) still
+// performs the removals and is NOT reported as Skipped; only the package-install call
+// is skipped.
+func TestInstallOverlayPackages_RemovalOnlySwap(t *testing.T) {
+	plan := &ResolutionPlan{
+		Requested:   []string{"linux-image-6.18-intel"},
+		DownloadDir: t.TempDir(), // required to mount the chroot; no artifacts needed
+		ToInstall:   nil,         // replacement already present -> nothing to install
+	}
+	report := &PreflightReport{Blocked: false, ToRemove: []string{"linux-image-6.8.0-40-generic", "linux-image-generic"}}
+
+	backend := &fakeInstaller{fam: PackageManagerAPT}
+	h := &installHarness{}
+
+	var result *InstallResult
+	var err error
+	withStubbedInstall(t, backend, h, func() {
+		result, err = InstallOverlayPackages(aptInfo(), "/mnt/root", plan, report)
+	})
+	if err != nil {
+		t.Fatalf("InstallOverlayPackages: %v", err)
+	}
+	if result.Skipped {
+		t.Error("a removal-only swap must not be reported as Skipped")
+	}
+	if backend.installCalls != 0 {
+		t.Errorf("install must not run when there are no items, got %d call(s)", backend.installCalls)
+	}
+	if backend.removeCalls != 1 || !reflect.DeepEqual(backend.gotRemoved, []string{"linux-image-6.8.0-40-generic", "linux-image-generic"}) {
+		t.Errorf("expected the baseline kernel family to be removed, removeCalls=%d removed=%v", backend.removeCalls, backend.gotRemoved)
+	}
+	if len(h.mountedSysfs) == 0 {
+		t.Error("removal-only swap must still mount the chroot to run the removal")
 	}
 }
 

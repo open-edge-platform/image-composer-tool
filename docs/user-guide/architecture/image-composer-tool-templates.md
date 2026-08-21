@@ -323,8 +323,12 @@ RAW, or the complete SBOM vs the baseline SBOM — see
 > `disk.size`. Existing baseline packages are not removed unless
 > [`overlayPolicy.allowPackageRemoval`](#overlaypolicy) is enabled, which permits a
 > conflict-driven removal of a baseline package a to-install package conflicts
-> with. The installed bootloader binary, the ESP, and the bootable kernel are
-> never modified regardless of policy.
+> with. The installed bootloader binary and the ESP are never modified regardless
+> of policy. The bootable kernel is likewise immutable unless
+> [`overlayPolicy.replaceKernel`](#overlaypolicy) is set, which swaps the kernel by
+> installing a new one and removing the baseline kernel family (the GRUB **config**
+> on the writable root is regenerated to boot it; the bootloader binary and ESP
+> still stay untouched).
 >
 > **OS defaults do not apply.** Unlike a create-mode build, an overlay template is
 > **not** merged with the target's create-mode OS default configuration
@@ -412,17 +416,20 @@ top-level peer of `baseline` and may **only** be set when `baseline.mode` is
 |-------|------|----------|--------------|-------------|
 | `packageOperation` | string | No | `additive-only` (default), `additive-and-upgrade` | Permitted package operations. `additive-only`: packages may only be added, never removed or downgraded. `additive-and-upgrade`: also permits upgrading a package already present in the baseline to a newer version. Downgrades and removals remain blocked in both modes (see note below) |
 | `conflictPolicy` | string | No | `fail` (default), `allow-explicit` | How a package conflict detected during preflight is handled. `fail` aborts the build; `allow-explicit` permits a conflict only when the conflicting package was explicitly requested |
-| `kernelCmdline` | string | No | — | Optional kernel command-line override applied to the overlaid image |
+| `kernelCmdline` | string | No | — | Optional kernel command-line override applied to the overlaid image (full-line replacement of `GRUB_CMDLINE_LINUX` on a GRUB2 baseline). Must not contain a double quote, dollar sign, backtick, backslash, or newline |
+| `grubDefault` | string | No | — | Optional `GRUB_DEFAULT` override (pins the default boot menu entry, e.g. the Ubuntu submenu path `Advanced options for Ubuntu>Ubuntu, with Linux <ver>`). Only applied on a GRUB2 baseline. Same character restrictions as `kernelCmdline` |
 | `allowDiskResize` | boolean | No | `false` (default), `true` | Permit growing the baseline image to satisfy a larger `disk.size`. Overlay mode preserves the baseline disk layout by default; when `false`, a `disk.size` larger than the baseline is rejected with an error. Resize is always grow-only and never shrinks the image |
-| `allowPackageRemoval` | boolean | No | `false` (default), `true` | Permit removing a baseline package that a to-install package conflicts with (e.g. installing `dracut`, which conflicts with `initramfs-tools`). When `false` (the default) such a conflict fails the build; when `true`, the conflicting baseline package is removed before install. **Only valid with `packageOperation: additive-and-upgrade`** — removal is more invasive than an in-place upgrade, so it is rejected under the default `additive-only`. Bootloader and bootable-kernel packages are never removed regardless of this flag |
+| `allowPackageRemoval` | boolean | No | `false` (default), `true` | Permit removing a baseline package that a to-install package conflicts with (e.g. installing `dracut`, which conflicts with `initramfs-tools`). When `false` (the default) such a conflict fails the build; when `true`, the conflicting baseline package is removed before install. **Only valid with `packageOperation: additive-and-upgrade`** — removal is more invasive than an in-place upgrade, so it is rejected under the default `additive-only`. Bootloader and bootable-kernel packages are never removed regardless of this flag (to swap the kernel, use `replaceKernel`) |
+| `replaceKernel` | object | No | `{ package: <name> }` | Replace the baseline kernel: install the named kernel package and remove the baseline kernel family (image + meta + modules + headers) so the image ships **only** the new kernel, then regenerate the GRUB menu to default to it. The ESP and bootloader binary are never touched (no `grub-install`, no Secure Boot re-signing). **Only valid with `packageOperation: additive-and-upgrade`**; does **not** require `allowPackageRemoval` (it self-authorizes its own kernel-family removals). See the note below |
 
 > **`additive-and-upgrade` scope.** Upgrades apply only to the package set: a
 > package already installed in the baseline may be replaced by a newer version
 > when the resolved overlay closure requires it. Downgrades are still rejected at
-> preflight, and the baseline kernel and bootloader remain immutable — an overlay
-> never replaces the kernel or reinstalls the bootloader, regardless of
-> `packageOperation`. Choose `additive-only` (the default) to fail the build on
-> any version bump to a baseline package.
+> preflight. The bootloader binary remains immutable in all cases, and the kernel
+> is immutable **unless** you explicitly opt into a swap with `replaceKernel` (see
+> below) — an overlay never upgrades a kernel image in place or reinstalls the
+> bootloader, regardless of `packageOperation`. Choose `additive-only` (the
+> default) to fail the build on any version bump to a baseline package.
 
 > **Package removal (`allowPackageRemoval`).** Opt-in, and permitted **only under
 > `packageOperation: additive-and-upgrade`** — removal is more invasive than an
@@ -472,6 +479,64 @@ removal) lives at
 [`image-templates/ubuntu24/ubuntu24-x86_64-overlay-raw.yml`](https://github.com/open-edge-platform/image-composer-tool/blob/main/image-templates/ubuntu24/ubuntu24-x86_64-overlay-raw.yml);
 to enable removal, add the `overlayPolicy` block shown above (`additive-and-upgrade`
 plus `allowPackageRemoval: true`) to it.
+
+> **Kernel replacement (`replaceKernel`).** By default the baseline kernel is
+> immutable: an overlay may *add* a new kernel alongside the existing one (a
+> version-qualified `linux-image-*` package is an addition, and GRUB gains a menu
+> entry for it), but it never upgrades or removes an installed kernel image. Set
+> `overlayPolicy.replaceKernel.package: <kernel-package>` to perform a **full
+> swap** instead:
+>
+> 1. the named replacement kernel is resolved from the configured repositories and
+>    installed (like any other overlay package);
+> 2. the baseline kernel **family** — the bootable image plus its meta-package,
+>    modules, and headers (e.g. `linux-image-6.8.0-40-generic`,
+>    `linux-image-generic`, `linux-modules-*`, `linux-headers-*`) — is auto-detected
+>    and removed, so the emitted image ships **only** the new kernel;
+> 3. the GRUB config is regenerated so the removed kernel's menu entry is dropped
+>    and `GRUB_DEFAULT` points at the new kernel (auto-pinned to `"0"` when you do
+>    not set `grubDefault` explicitly).
+>
+> Only the GRUB **config** on the writable root is updated — the ESP and the
+> bootloader binary are never touched (no `grub-install`), matching the overlay
+> read-only-ESP contract. On a Secure Boot baseline the newly installed kernel may
+> be **unsigned**; overlay does not re-sign it, so sign it out of band if the image
+> must boot under Secure Boot. `replaceKernel` requires
+> `packageOperation: additive-and-upgrade` but does **not** require
+> `allowPackageRemoval` — the two are orthogonal (`allowPackageRemoval` governs
+> conflict-driven removal of *non-kernel* baseline packages). Because the swap
+> self-authorizes **only** its own kernel-family removals, if it orphans an
+> unrelated non-kernel baseline package (for example a DKMS module bound to the
+> removed kernel's modules/headers) the build fails **closed** unless you *also*
+> enable `allowPackageRemoval`. A `replaceKernel` set
+> on a non-GRUB2 baseline is a hard error. Userspace kernel-adjacent packages
+> (`linux-libc-dev`, `linux-tools-common`, rpm `kernel-headers`/`kernel-devel`) are
+> **not** removed.
+
+```yaml
+baseline:
+  mode: overlay
+  source:
+    path: /path/to/ubuntu-24.04-base.img
+
+overlayPolicy:
+  # A kernel swap requires additive-and-upgrade (not the default additive-only).
+  packageOperation: additive-and-upgrade
+  conflictPolicy: fail
+
+  # Install this kernel and remove the baseline kernel family. GRUB_DEFAULT is
+  # auto-pinned to the new kernel unless grubDefault is set below.
+  replaceKernel:
+    package: linux-image-6.11.0-1004-oem
+
+  # Optional: the exact command line the new kernel boots with.
+  # kernelCmdline: "quiet splash"
+  # Optional: pin a specific GRUB entry instead of the auto "0" default.
+  # grubDefault: "Advanced options for Ubuntu>Ubuntu, with Linux 6.11.0-1004-oem"
+```
+
+A complete kernel-replacement example lives at
+[`image-templates/ubuntu24/ubuntu24-x86_64-overlay-replace-kernel-raw.yml`](https://github.com/open-edge-platform/image-composer-tool/blob/main/image-templates/ubuntu24/ubuntu24-x86_64-overlay-replace-kernel-raw.yml).
 
 ---
 

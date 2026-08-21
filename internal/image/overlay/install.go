@@ -150,7 +150,12 @@ func InstallOverlayPackages(info *BaselineInfo, rootMount string, plan *Resoluti
 	if err != nil {
 		return nil, err
 	}
-	if len(items) == 0 {
+	// A build with neither install items nor approved removals is a true no-op. But a
+	// removal-only swap (e.g. the replacement kernel is already installed, so ToInstall
+	// is empty while the baseline kernel family must still be removed) has removals to
+	// perform: fall through so the removal + audit + cascade below still run, skipping
+	// only the package-install call itself.
+	if len(items) == 0 && len(report.ToRemove) == 0 {
 		log.Infof("Overlay install: nothing to install (all %d requested package(s) already satisfied by the baseline)", len(plan.Requested))
 		return &InstallResult{Skipped: true}, nil
 	}
@@ -163,8 +168,12 @@ func InstallOverlayPackages(info *BaselineInfo, rootMount string, plan *Resoluti
 	}
 	sort.Strings(artifactNames)
 
-	log.Infof("Overlay install: installing %d package(s) from %d prepared artifact(s) in %s into %s",
-		len(items), len(artifactNames), plan.DownloadDir, rootMount)
+	if len(items) > 0 {
+		log.Infof("Overlay install: installing %d package(s) from %d prepared artifact(s) in %s into %s",
+			len(items), len(artifactNames), plan.DownloadDir, rootMount)
+	} else {
+		log.Infof("Overlay install: no packages to install; performing %d approved baseline removal(s) only in %s", len(report.ToRemove), rootMount)
+	}
 
 	// Establish the chroot bind-mount lifecycle (sysfs + artifact cache) and tear
 	// it down in reverse on every return path, including a panic inside install.
@@ -221,46 +230,51 @@ func InstallOverlayPackages(info *BaselineInfo, rootMount string, plan *Resoluti
 				len(broken), strings.Join(broken, "; "))
 		}
 
-		log.Infof("Overlay install: removing %d conflicting baseline package(s) before install: %s",
+		log.Infof("Overlay install: removing %d baseline package(s) before install (conflict-driven and/or kernel replacement): %s",
 			len(report.ToRemove), strings.Join(report.ToRemove, ", "))
 		if err = backend.removePackages(rootMount, report.ToRemove); err != nil {
-			return nil, fmt.Errorf("overlay install: failed to remove %d conflicting baseline package(s): %w",
+			return nil, fmt.Errorf("overlay install: failed to remove %d baseline package(s): %w",
 				len(report.ToRemove), err)
 		}
 	}
 
-	// Select the upgrade-capable package-manager mode (rpm -U) when the approved plan
-	// either upgrades a baseline package OR carries an rpm Obsoletes-driven removal.
-	// An obsoletion is NOT an ActionUpgrade, so report.Upgrades would miss it and the
-	// batch would run under `rpm -i`, which neither replaces nor obsoletes an
-	// installed package — the obsoletion would silently not happen. An Obsoletes-
-	// driven removal is precisely an approved removal that is not an explicit one, so
-	// it shows up as ApprovedRemovals having more entries than ToRemove.
-	upgradeMode := report.Upgrades > 0 || len(report.ApprovedRemovals) > len(report.ToRemove)
-	if err = backend.install(installRequest{
-		chrootPath:        rootMount,
-		artifactChrootDir: chrootArtifactDir,
-		items:             items,
-		upgrade:           upgradeMode,
-	}); err != nil {
-		// A "no space left on device" failure here means the baseline root filled up
-		// while unpacking the added packages. Overlay mode does not auto-grow the
-		// image to fit the packages (resize is a later, grow-only step keyed purely
-		// on disk.size), so surface an actionable hint pointing at disk.size rather
-		// than leaving the user with an opaque dpkg/rpm ENOSPC diagnostic.
-		return nil, fmt.Errorf("overlay install failed for %d package(s) using %s: %w%s",
-			len(items), info.PackageManager, err, diskSpaceHint(err))
-	}
+	// Install the prepared artifacts, unless this is a removal-only swap (no items).
+	// The removal + audit + cascade below still run in that case; only the package
+	// install and its post-condition verification are skipped.
+	if len(items) > 0 {
+		// Select the upgrade-capable package-manager mode (rpm -U) when the approved plan
+		// either upgrades a baseline package OR carries an rpm Obsoletes-driven removal.
+		// An obsoletion is NOT an ActionUpgrade, so report.Upgrades would miss it and the
+		// batch would run under `rpm -i`, which neither replaces nor obsoletes an
+		// installed package — the obsoletion would silently not happen. An Obsoletes-
+		// driven removal is precisely an approved removal that is not an explicit one, so
+		// it shows up as ApprovedRemovals having more entries than ToRemove.
+		upgradeMode := report.Upgrades > 0 || len(report.ApprovedRemovals) > len(report.ToRemove)
+		if err = backend.install(installRequest{
+			chrootPath:        rootMount,
+			artifactChrootDir: chrootArtifactDir,
+			items:             items,
+			upgrade:           upgradeMode,
+		}); err != nil {
+			// A "no space left on device" failure here means the baseline root filled up
+			// while unpacking the added packages. Overlay mode does not auto-grow the
+			// image to fit the packages (resize is a later, grow-only step keyed purely
+			// on disk.size), so surface an actionable hint pointing at disk.size rather
+			// than leaving the user with an opaque dpkg/rpm ENOSPC diagnostic.
+			return nil, fmt.Errorf("overlay install failed for %d package(s) using %s: %w%s",
+				len(items), info.PackageManager, err, diskSpaceHint(err))
+		}
 
-	// Post-condition: every requested package must be installed in the baseline DB.
-	missing, verifyErr := backend.verifyInstalled(rootMount, pkgs)
-	if verifyErr != nil {
-		return nil, fmt.Errorf("overlay install: failed to verify installed packages: %w", verifyErr)
-	}
-	if len(missing) > 0 {
-		sort.Strings(missing)
-		return nil, fmt.Errorf("overlay install: %d requested package(s) not present after install: %s",
-			len(missing), strings.Join(missing, ", "))
+		// Post-condition: every requested package must be installed in the baseline DB.
+		missing, verifyErr := backend.verifyInstalled(rootMount, pkgs)
+		if verifyErr != nil {
+			return nil, fmt.Errorf("overlay install: failed to verify installed packages: %w", verifyErr)
+		}
+		if len(missing) > 0 {
+			sort.Strings(missing)
+			return nil, fmt.Errorf("overlay install: %d requested package(s) not present after install: %s",
+				len(missing), strings.Join(missing, ", "))
+		}
 	}
 
 	// After a force-removal, re-audit the whole installed set's dependency graph. A
@@ -279,6 +293,12 @@ func InstallOverlayPackages(info *BaselineInfo, rootMount string, plan *Resoluti
 	// only genuinely-unsatisfiable packages are removed — an alternative dependency the
 	// baseline still satisfies is never mistaken for breakage (which a static reverse-dep
 	// walk over the first-alternative-only baseline metadata could not guarantee).
+	//
+	// That cascading consent applies ONLY when allowPackageRemoval is enabled. A kernel
+	// replacement self-authorizes just its own kernel-family removals (carried explicitly
+	// in ToRemove), so a COLLATERAL non-kernel package it orphans (e.g. a DKMS module
+	// bound to an old kernel-headers) is NOT within that narrow authorization: with
+	// allowPackageRemoval off the cascade fails closed on it (report.CollateralRemovalAuthorized).
 	//
 	// The cascade is bounded and fails CLOSED: a newly-broken package that is a
 	// bootloader or bootable-kernel image (immutable) or that is itself in the to-install
@@ -340,6 +360,16 @@ func InstallOverlayPackages(info *BaselineInfo, rootMount string, plan *Resoluti
 					return nil, fmt.Errorf("overlay install: package removals introduced %d unmet dependency failure(s) that were satisfied before the overlay (%s), "+
 						"and resolving them would require removing %q — a bootloader/kernel image or a package the overlay installs, which must not be removed; "+
 						"add the missing dependency to the overlay or drop the removal:%s",
+						len(newlyBroken), strings.Join(newlyBroken, "; "), name, formatCommandOutput(out))
+				}
+				// A kernel replacement self-authorizes ONLY its own kernel-family removals; a
+				// collateral non-kernel package it orphans is outside that scope. Removing it
+				// requires the operator to opt in via allowPackageRemoval, so fail closed here
+				// rather than silently purging an unrelated baseline package.
+				if !report.CollateralRemovalAuthorized {
+					return nil, fmt.Errorf("overlay install: the approved removal(s) orphaned %d baseline package(s) that were satisfied before the overlay (%s), "+
+						"and removing %q is not authorized — a kernel replacement self-authorizes only its own kernel-family swap, not collateral packages; "+
+						"enable allowPackageRemoval to cascade-remove orphaned packages, or add the missing dependency to the overlay:%s",
 						len(newlyBroken), strings.Join(newlyBroken, "; "), name, formatCommandOutput(out))
 				}
 				operand := name
@@ -778,6 +808,13 @@ func (b *rpmInstallerBackend) install(req installRequest) error {
 // rpm's dependency check would otherwise refuse. Preflight has already approved
 // the set (bootloader/kernel packages excluded), so bypassing the dependency check
 // here is the deliberate, gated behavior. "--" guards a name beginning with '-'.
+//
+// --allmatches erases EVERY installed version that matches a name, not just a
+// unique one. RPM keeps multiple installonly kernel versions under the SAME name
+// (e.g. two `kernel-core`), and a replaceKernel swap must clear the whole baseline
+// kernel family; a bare `rpm -e kernel-core` would abort as ambiguous
+// ("specifies multiple packages") and leave the old kernels behind. It is a no-op
+// for an ordinary single-version package, so it is safe to apply to every removal.
 func (b *rpmInstallerBackend) removePackages(chrootPath string, names []string) error {
 	if len(names) == 0 {
 		return nil
@@ -786,7 +823,7 @@ func (b *rpmInstallerBackend) removePackages(chrootPath string, names []string) 
 	for _, n := range names {
 		quoted = append(quoted, shell.QuoteArg(n))
 	}
-	cmd := "rpm -e --nodeps -- " + strings.Join(quoted, " ")
+	cmd := "rpm -e --nodeps --allmatches -- " + strings.Join(quoted, " ")
 	out, err := shell.ExecCmdWithStream(cmd, true, chrootPath, nil)
 	if err != nil {
 		return fmt.Errorf("rpm -e of %d package(s) failed: %w%s", len(names), err, formatCommandOutput(out))

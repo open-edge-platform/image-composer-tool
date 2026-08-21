@@ -295,6 +295,76 @@ func TestRegenerateGrub_RunsOnGrubDefaultSet(t *testing.T) {
 	}
 }
 
+// grubTemplateReplaceKernel builds an overlay template that requests a kernel
+// swap, optionally with an explicit grubDefault (empty for the auto-pin path).
+func grubTemplateReplaceKernel(grubDefault string) *config.ImageTemplate {
+	return &config.ImageTemplate{
+		OverlayPolicy: &config.OverlayPolicy{
+			PackageOperation: config.OverlayPackageOpAdditiveAndUpgrade,
+			GrubDefault:      grubDefault,
+			ReplaceKernel:    &config.ReplaceKernel{Package: "linux-image-6.11.0-1004-oem"},
+		},
+	}
+}
+
+// TestRegenerateGrub_ReplaceKernelForcesRegenAndPinsDefault confirms a kernel swap
+// forces GRUB regeneration EVEN WHEN detectKernels reports no version change, and
+// auto-pins GRUB_DEFAULT to "0" (the sole remaining kernel) when the template left
+// grubDefault unset.
+func TestRegenerateGrub_ReplaceKernelForcesRegenAndPinsDefault(t *testing.T) {
+	gotCmd := stubGrubRegen(t)
+	stubDetectKernels(t, []string{"6.8.0-40-generic"}) // no NEW version detected
+	content := "GRUB_DEFAULT=5\nGRUB_CMDLINE_LINUX=\"quiet\"\n"
+	written := stubGrubDefaults(t, &content)
+
+	info := &BaselineInfo{Bootloader: "grub2", Kernels: []string{"6.8.0-40-generic"}}
+	if err := RegenerateGrub(grubTemplateReplaceKernel(""), info, "/mnt/root"); err != nil {
+		t.Fatalf("RegenerateGrub: %v", err)
+	}
+	if *gotCmd == "" {
+		t.Error("a kernel replacement must force GRUB regeneration even with no detected new kernel")
+	}
+	if !strings.Contains(*written, "GRUB_DEFAULT=\"0\"") {
+		t.Errorf("GRUB_DEFAULT must be auto-pinned to \"0\" for a kernel swap, got %q", *written)
+	}
+}
+
+// TestRegenerateGrub_ReplaceKernelKeepsExplicitDefault confirms an operator-supplied
+// grubDefault wins over the "0" auto-pin.
+func TestRegenerateGrub_ReplaceKernelKeepsExplicitDefault(t *testing.T) {
+	stubGrubRegen(t)
+	stubDetectKernels(t, nil)
+	content := "GRUB_DEFAULT=0\n"
+	written := stubGrubDefaults(t, &content)
+
+	const wantDefault = "Advanced options for Ubuntu>Ubuntu, with Linux 6.11.0-1004-oem"
+	info := &BaselineInfo{Bootloader: "grub2"}
+	if err := RegenerateGrub(grubTemplateReplaceKernel(wantDefault), info, "/mnt/root"); err != nil {
+		t.Fatalf("RegenerateGrub: %v", err)
+	}
+	if !strings.Contains(*written, "GRUB_DEFAULT=\""+wantDefault+"\"") {
+		t.Errorf("explicit grubDefault must be preserved, got %q", *written)
+	}
+}
+
+// TestRegenerateGrub_ReplaceKernelErrorsOnNonGrub confirms a kernel swap on a
+// non-GRUB2 baseline fails loudly rather than silently regenerating nothing.
+func TestRegenerateGrub_ReplaceKernelErrorsOnNonGrub(t *testing.T) {
+	origExec := grubRegenExec
+	defer func() { grubRegenExec = origExec }()
+	called := false
+	grubRegenExec = func(string, string) (string, error) { called = true; return "", nil }
+
+	info := &BaselineInfo{Bootloader: "systemd-boot"}
+	err := RegenerateGrub(grubTemplateReplaceKernel(""), info, "/mnt/root")
+	if err == nil {
+		t.Fatal("expected an error for replaceKernel on a non-grub2 baseline")
+	}
+	if called {
+		t.Error("generator must not run on a non-grub2 baseline")
+	}
+}
+
 func TestRegenerateGrub_AppliesBothOverridesInOnePass(t *testing.T) {
 	stubGrubRegen(t)
 	stubDetectKernels(t, nil)
