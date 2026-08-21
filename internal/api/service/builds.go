@@ -919,7 +919,7 @@ func (b *build) archiveAndCleanupDelta() {
 
 	merged, err := config.LoadAndMergeTemplate(b.DeltaPath)
 	if err != nil {
-		logger.Logger().Warnf("build %s: re-resolving delta template for archive: %v", b.ID, err)
+		logger.Logger().Warnf("build %s: re-resolving delta template for archive failed", b.ID)
 		return
 	}
 	data, err := config.MarshalTemplateYAML(config.RedactSensitiveData(merged))
