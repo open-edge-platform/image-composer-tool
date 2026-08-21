@@ -113,10 +113,21 @@ func GenerateDot(pkgs []ospackage.PackageInfo, file string, pkgSources map[strin
 	return nil
 }
 
+// parsedPackageCacheVersion is the schema version of the on-disk parsed metadata
+// cache. Bump it whenever the parsed shape changes (e.g. a new PackageInfo field
+// the parser now populates) so caches written by an older binary are treated as a
+// miss and re-parsed, rather than silently returning records missing the new data.
+// v2: PackageInfo.Breaks is now parsed and consumed by the overlay Breaks-driven
+// upgrade; a v1 cache would omit it.
+const parsedPackageCacheVersion = 2
+
 // packageMetadataCache stores parsed package metadata keyed by the Packages.gz SHA256
 // checksum recorded in the Release file. A matching checksum means the upstream
 // repository has not changed, so we can skip downloading, decompressing, and re-parsing.
+// Version guards against reusing a cache written by an older parser (see
+// parsedPackageCacheVersion).
 type packageMetadataCache struct {
+	Version  int                     `json:"version"`
 	Checksum string                  `json:"checksum"`
 	Packages []ospackage.PackageInfo `json:"packages"`
 }
@@ -144,7 +155,7 @@ func loadParsedPackageCache(cacheFile string) (*packageMetadataCache, error) {
 }
 
 func saveParsedPackageCache(cacheFile, checksum string, pkgs []ospackage.PackageInfo) error {
-	cache := packageMetadataCache{Checksum: checksum, Packages: pkgs}
+	cache := packageMetadataCache{Version: parsedPackageCacheVersion, Checksum: checksum, Packages: pkgs}
 	data, err := json.Marshal(cache)
 	if err != nil {
 		return fmt.Errorf("failed to marshal package cache: %w", err)
@@ -276,7 +287,10 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 	}
 	var cached *packageMetadataCache
 	if allowParsedCache {
-		if c, loadErr := loadParsedPackageCache(cacheFile); loadErr == nil && c.Checksum != "" {
+		// Require both a non-empty checksum and a matching schema version; a cache
+		// written by an older parser (different version) is ignored and re-parsed so
+		// newly-parsed fields (e.g. Breaks) are populated.
+		if c, loadErr := loadParsedPackageCache(cacheFile); loadErr == nil && c.Checksum != "" && c.Version == parsedPackageCacheVersion {
 			cached = c
 		}
 	}
@@ -482,8 +496,11 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 		case "Version":
 			pkg.Version = val
 		case "Pre-Depends":
-			// Split dependencies by comma and clean each dependency
+			// Split dependencies by comma and clean each dependency. Pre-Depends is
+			// stored in RequiresVer too (like Depends) so the OR-alternative selection
+			// and version-constraint logic apply to its "a | b" and versioned terms.
 			deps := strings.Split(val, ",")
+			pkg.RequiresVer = append(pkg.RequiresVer, deps...)
 			for _, dep := range deps {
 				cleanedDep := CleanDependencyName(dep)
 				if cleanedDep != "" {
@@ -498,6 +515,17 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 				cleanedDep := CleanDependencyName(dep)
 				if cleanedDep != "" {
 					pkg.Requires = append(pkg.Requires, cleanedDep)
+				}
+			}
+		case "Breaks":
+			// Store the raw Breaks terms (comma-separated "name [(op ver)]"). Unlike
+			// Depends they are not cleaned here: the overlay resolver needs the version
+			// constraint to decide whether a baseline package must be upgraded to clear
+			// a versioned break (rather than removed). Debian policy forbids "|"
+			// alternatives in Breaks, so each comma term is a single package.
+			for _, term := range strings.Split(val, ",") {
+				if term = strings.TrimSpace(term); term != "" {
+					pkg.Breaks = append(pkg.Breaks, term)
 				}
 			}
 		case "Provides":
@@ -693,6 +721,18 @@ func filterCandidatesByPriorityWithTarget(candidates []ospackage.PackageInfo, ta
 		}
 	}
 
+	// firstSeen records each provider name's first index in the filtered slice so the
+	// provides tiebreak below is a TOTAL order. Ordering different providers by their
+	// first-seen position (rather than treating them as equal) keeps sort.Slice's
+	// comparator transitive: without it, an interleaving like [A@1, B@1, A@3] can leave
+	// A@1 ahead of A@3, so a virtual request would still resolve to the oldest build.
+	firstSeen := make(map[string]int, len(filtered))
+	for idx, candidate := range filtered {
+		if _, ok := firstSeen[candidate.Name]; !ok {
+			firstSeen[candidate.Name] = idx
+		}
+	}
+
 	// Sort by simple rule: exact name matches first, then provides matches
 	sort.Slice(filtered, func(i, j int) bool {
 		pkgI := filtered[i]
@@ -739,8 +779,19 @@ func filterCandidatesByPriorityWithTarget(candidates []ospackage.PackageInfo, ta
 			return versionCmp
 		}
 
-		// For provides matches, maintain stable order (don't compare different versioning schemes)
-		return false
+		// Both are provides matches for the target virtual name. Across DIFFERENT
+		// provider packages the version schemes are not comparable, so keep a stable
+		// order. But when both candidates are the SAME real package at different
+		// versions (e.g. two libssl3t64 builds both providing the virtual "libssl3"),
+		// rank the newer one first: otherwise a virtual-name dependency resolves to
+		// whichever version the Packages file happened to list first (effectively the
+		// oldest), which then fails a later exact "= <newer>" pin on the real package.
+		if pkgI.Name == pkgJ.Name {
+			return compareVersions(pkgI.Version, pkgJ.Version) > 0
+		}
+		// Different providers of the same virtual name: order by first-seen position so
+		// the comparator stays a total order (see firstSeen above).
+		return firstSeen[pkgI.Name] < firstSeen[pkgJ.Name]
 	})
 
 	return filtered
@@ -815,6 +866,14 @@ func ResolveDependencies(requested []ospackage.PackageInfo, all []ospackage.Pack
 	}
 	neededSet := make(map[string]struct{})
 	resolvedDeps := make(map[string]ospackage.PackageInfo) // Track resolved dependencies for conflict detection
+	// seedByName holds the explicitly requested packages (the resolution seed) keyed
+	// by name. It lets an OR-dependency prefer an alternative the caller already asked
+	// for, even before that alternative has been dequeued into neededSet/resolvedDeps,
+	// and carries the requested version so a versioned alternative can be evaluated.
+	seedByName := make(map[string]ospackage.PackageInfo, len(requested))
+	for _, pi := range requested {
+		seedByName[pi.Name] = pi
+	}
 	queue := make([]ospackage.PackageInfo, 0, len(requested))
 	for _, pi := range requested {
 		if pi.Version != "" {
@@ -852,6 +911,30 @@ func ResolveDependencies(requested []ospackage.PackageInfo, all []ospackage.Pack
 
 			depName := CleanDependencyName(dep)
 			if depName == "" {
+				continue
+			}
+			// OR-dependency ("a | b") handling: cur.Requires carries only the FIRST
+			// alternative (depName). apt takes the first alternative UNLESS another
+			// alternative is already installed/selected AND satisfies its version
+			// constraint, in which case the edge is already met and the first must NOT
+			// be pulled in — pulling it can drag in a package that conflicts with the
+			// already-selected one (e.g. va-driver-all's
+			// "intel-media-va-driver | intel-media-va-driver-non-free" pulling the free
+			// driver even though the non-free one was requested). Only the requested
+			// seed and already-resolved packages count as "selected"; the baseline is
+			// not visible to this repo-only resolver.
+			if alternativeAlreadySelected(cur.RequiresVer, depName, func(name string) (string, bool) {
+				if p, ok := resolvedDeps[name]; ok {
+					return p.Version, true
+				}
+				if p, ok := seedByName[name]; ok {
+					return p.Version, true
+				}
+				if _, ok := neededSet[name]; ok {
+					return "", true
+				}
+				return "", false
+			}) {
 				continue
 			}
 			if resolvedPkg, seen := resolvedDeps[depName]; seen {
@@ -1642,6 +1725,116 @@ func extractRepoBase(rawURL string) (string, error) {
 	// Rebuild base URL: scheme + host + prefix before /pool/ (without trailing slash)
 	base := fmt.Sprintf("%s://%s%s", u.Scheme, u.Host, parts[0])
 	return base, nil
+}
+
+// alternativeAlreadySelected reports whether the OR-dependency edge whose first
+// (default) alternative is depName has any OTHER alternative that is already
+// selected AND satisfies that alternative's version constraint. It scans the raw
+// Depends terms (reqVers) for the term whose first "|"-alternative cleans to
+// depName, then checks every remaining alternative of that term. selectedVersion
+// returns the version chosen for a name and whether it is selected at all (an
+// empty version means "selected but concrete version unknown"). A versioned
+// alternative counts as satisfied only when the selected version is known and
+// meets the constraint; an unversioned alternative is satisfied by mere presence.
+// Single-alternative terms and terms belonging to a different edge are ignored.
+// This implements apt's rule that an already-installed/selected alternative
+// satisfies the edge, so the first alternative should not be pulled in.
+func alternativeAlreadySelected(reqVers []string, depName string, selectedVersion func(string) (string, bool)) bool {
+	edgeFound := false
+	for _, reqVer := range reqVers {
+		alts := strings.Split(reqVer, "|")
+		if len(alts) < 2 {
+			// A bare (non-OR) term naming depName is a mandatory direct dependency —
+			// e.g. "Depends: a, a | b" — so depName must be pulled regardless of any
+			// satisfied OR edge that happens to share it as a first alternative.
+			if CleanDependencyName(alts[0]) == depName {
+				return false
+			}
+			continue // an unrelated non-OR term
+		}
+		if CleanDependencyName(alts[0]) != depName {
+			continue // a different dependency edge
+		}
+		edgeFound = true
+		// depName is THIS edge's first alternative, so pulling it satisfies this edge.
+		// Distinct edges can share the same first alternative (e.g. "a | b, a | c"); the
+		// first is skippable only if EVERY such edge is already met by another selected
+		// alternative — otherwise depName is still needed to satisfy the unmet edge.
+		if !edgeSatisfiedByOtherAlternative(alts[1:], selectedVersion) {
+			return false
+		}
+	}
+	return edgeFound
+}
+
+// edgeSatisfiedByOtherAlternative reports whether any of an OR-edge's non-first
+// alternatives is already selected and (when the alternative is versioned) meets
+// its version constraint. An unknown selected version is treated conservatively as
+// NOT satisfying, so the first alternative is still taken.
+func edgeSatisfiedByOtherAlternative(alts []string, selectedVersion func(string) (string, bool)) bool {
+	for _, alt := range alts {
+		name, op, ver := splitAltNameConstraint(alt)
+		if name == "" {
+			continue
+		}
+		selVer, ok := selectedVersion(name)
+		if !ok {
+			continue // this alternative is not selected
+		}
+		if op == "" || ver == "" {
+			return true // unversioned alternative: presence satisfies it
+		}
+		if selVer != "" && debVersionSatisfies(selVer, op, ver) {
+			return true
+		}
+	}
+	return false
+}
+
+// splitAltNameConstraint parses one OR-dependency alternative ("e2fsprogs (<< 1.45)")
+// into its package name and optional version constraint. It returns an empty name
+// for an unparseable/empty alternative, and empty op/ver when the alternative
+// carries no version constraint.
+func splitAltNameConstraint(alt string) (name, op, ver string) {
+	name = CleanDependencyName(alt)
+	if name == "" {
+		return "", "", ""
+	}
+	open := strings.Index(alt, "(")
+	if open == -1 {
+		return name, "", ""
+	}
+	rel := strings.Index(alt[open:], ")")
+	if rel == -1 {
+		return name, "", ""
+	}
+	if fields := strings.Fields(alt[open+1 : open+rel]); len(fields) == 2 {
+		return name, fields[0], fields[1]
+	}
+	return name, "", ""
+}
+
+// debVersionSatisfies reports whether candidate satisfies the Debian version
+// relation "op ver" (e.g. ">= 1.2", "<< 3"). An unrecognized operator or an
+// uncomparable version pair is treated as not satisfied.
+func debVersionSatisfies(candidate, op, ver string) bool {
+	cmp, err := CompareDebianVersions(candidate, ver)
+	if err != nil {
+		return false
+	}
+	switch op {
+	case "<<", "<":
+		return cmp < 0
+	case "<=":
+		return cmp <= 0
+	case "=", "==":
+		return cmp == 0
+	case ">=":
+		return cmp >= 0
+	case ">>", ">":
+		return cmp > 0
+	}
+	return false
 }
 
 // hasDirectDependency checks if a dependency appears as a direct requirement (not in alternatives)

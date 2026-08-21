@@ -48,6 +48,17 @@ Coverage threshold lives in `.coverage-threshold` and auto-ratchets.
 
 ---
 
+## UI development (web/)
+
+React 19 + TypeScript + Vite + Tailwind frontend in `web/`, embedded into the Go binary via `//go:embed` and served by the `serve` subcommand.
+
+- **Dev loop:** `go run ./cmd/image-composer-tool serve --sudo` (backend) + `cd web && npm run dev` (frontend, hot-reload at `localhost:5173`, proxies `/api/v1` to `:8080`).
+- **Type check:** `cd web && npx tsc --noEmit`.
+- **Verify in a browser** before declaring a UI change done — passing type checks/tests doesn't confirm the feature works. Check the golden path and obvious edge cases.
+- **Full rebuild to test the real binary:** `(cd web && npm ci && npm run build)` → `rm -rf internal/webui/dist && cp -r web/dist internal/webui/dist` → `go build -o ./build/image-composer-tool ./cmd/image-composer-tool/` (see `web/README.md`). Hard-refresh (Ctrl/Cmd+Shift+R) after restarting `serve` to bypass the cached bundle.
+
+---
+
 ## Project conventions
 
 - **Logger:** `var log = logger.Logger()` from `internal/utils/logger`. Never `fmt.Println` or stdlib `log`.
@@ -68,6 +79,28 @@ For path-scoped detail, see `.github/instructions/`:
 
 ---
 
+## Documentation
+
+**Every PR that changes behavior must include corresponding documentation updates.** Treat docs as part of the change, not an afterthought.
+
+| What changed | Docs to update |
+|---|---|
+| CLI flags or commands (including subcommands like `resolve`) | `docs/user-guide/architecture/image-composer-tool-cli-specification.md`, `docs/user-guide/get-started/usage-guide.md` |
+| Build process / Earthfile targets | `docs/user-guide/get-started/usage-guide.md`, this file's **Build, test, lint** section |
+| Image template schema or fields (including the `extends` inheritance section) | `docs/user-guide/architecture/image-composer-tool-templates.md`, relevant `image-templates/*.yml` examples |
+| New OS provider | `docs/user-guide/architecture/architecture.md`, [`provider.instructions.md`](.github/instructions/provider.instructions.md) |
+| New tutorial-worthy feature | Add or update a guide in `docs/user-guide/get-started/` |
+| Architecture or design decisions | Add an ADR in `docs/architecture-decision-record/` |
+| Security-related changes | `docs/user-guide/architecture/image-composition-tool-security-objectives.md` |
+| Caching behavior | `docs/user-guide/architecture/image-composer-tool-caching.md` |
+| Coding conventions | `docs/user-guide/architecture/image-composer-tool-coding-style.md` |
+| Dependencies or multi-repo setup | `docs/user-guide/architecture/image-composer-tool-multi-repo-support.md` |
+| User-facing features or fixes | `docs/user-guide/release-notes.md` |
+
+If no docs need updating, **say so explicitly in the PR description**.
+
+---
+
 ## Security
 
 - TLS 1.2+ via the project HTTP client.
@@ -75,7 +108,7 @@ For path-scoped detail, see `.github/instructions/`:
 - Validate templates against `os-image-template.schema.json` (`image-composer-tool validate -t …`).
 - File permissions: `0700` chroot dirs, `0755` general dirs, `0644` data, `0640` logs.
 - Never embed secrets in fixtures, code, or logs.
-- CI gates: Trivy (HIGH/CRITICAL fails), Gitleaks, Zizmor.
+- CI gates (all must pass before merge): Trivy (HIGH/CRITICAL fails), Gitleaks, Zizmor, per-OS/arch integration builds.
 
 ---
 
@@ -87,6 +120,8 @@ For path-scoped detail, see `.github/instructions/`:
 - Use `.github/PULL_REQUEST_TEMPLATE.md`.
 - **Never** force-push shared branches, **never** `--no-verify`.
 - Do **not** add AI co-author trailers unless the repo asks for them.
+- Do **not** reference JIRA ticket IDs, internal chat threads, or session/conversation
+  details in PR descriptions — write descriptions to stand alone for any reader.
 - The `gh` CLI is available — prefer it over manual web steps.
 
 ---
