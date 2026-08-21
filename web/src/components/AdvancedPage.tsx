@@ -2,9 +2,16 @@ import { useEffect, useMemo, useState } from 'react'
 import { useStore, cascadingOptions } from '../store'
 import type { Selection } from '../store'
 import { api } from '../api/client'
-import type { ComposeResponse } from '../api/types'
+import type { ComposeRequest, ComposeResponse } from '../api/types'
 import { Select } from './Select'
 import { Input } from './Input'
+
+// How long to wait after the last keystroke in Image Name before re-composing.
+// Each compose call with an override generates and deletes a server-side file
+// (internal/api/service/delta.go), so debouncing avoids a write+delete pair per
+// keystroke. Build itself never waits on this — it always sends whatever is
+// currently typed.
+const IMAGE_NAME_DEBOUNCE_MS = 400
 
 // The Advanced tab is a wizard, mirroring the prototype's step flow. Only the
 // first step (Target / "Choose Image Configuration") is built out today; the
@@ -24,6 +31,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   const selection = useStore((s) => s.selection)
   const setField = useStore((s) => s.setField)
   const imageName = useStore((s) => s.imageName)
+  const imageNameEdited = useStore((s) => s.imageNameEdited)
   const setImageName = useStore((s) => s.setImageName)
   const seedImageName = useStore((s) => s.seedImageName)
 
@@ -39,6 +47,23 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   )
 
   const complete = !!opts?.matched
+
+  // Debounced so an override compose call (which generates and removes a
+  // server-side delta file) fires once after the user pauses, not per keystroke.
+  const [debouncedImageName, setDebouncedImageName] = useState(imageName)
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedImageName(imageName), IMAGE_NAME_DEBOUNCE_MS)
+    return () => clearTimeout(t)
+  }, [imageName])
+
+  // The request the backend actually resolves against: the cascade selection,
+  // plus the image name override — only once the user has edited it, and only
+  // the settled (debounced) value, so an in-progress edit doesn't compose
+  // against a half-typed name.
+  const composeReq: ComposeRequest = useMemo(
+    () => ({ ...selection, imageName: imageNameEdited ? debouncedImageName : undefined }),
+    [selection, imageNameEdited, debouncedImageName],
+  )
 
   // Entering Advanced always lands on the first step, mirroring the prototype's
   // enterAdvanced(). The page stays mounted while hidden (tabs toggle via CSS),
@@ -57,7 +82,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     let cancelled = false
     setLoading(true)
     api
-      .compose(selection)
+      .compose(composeReq)
       .then((r) => {
         if (!cancelled) {
           setComposed(r)
@@ -73,7 +98,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     return () => {
       cancelled = true
     }
-  }, [active, complete, selection])
+  }, [active, complete, composeReq])
 
   if (!manifest || !opts) return <div className="p-8">Loading…</div>
 
@@ -87,8 +112,15 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     try {
       setBusy(true)
       setError(null)
+      // Build always sends whatever is currently typed, not the debounced value
+      // the Review preview is showing — a discrete action shouldn't wait on a
+      // typing pause.
+      const buildReq: ComposeRequest = {
+        ...selection,
+        imageName: imageNameEdited ? imageName : undefined,
+      }
       console.log('Composing image with template YAML:\n' + composed?.yaml)
-      const accepted = await api.startBuild(selection)
+      const accepted = await api.startBuild(buildReq)
       onBuildStarted(accepted.buildId)
     } catch (e) {
       setError((e as Error).message)

@@ -1097,9 +1097,45 @@ redacted so the output is safe to paste into an issue or a code review.
 See [Resolve Command](./image-composer-tool-cli-specification.md#resolve-command)
 for the full CLI reference.
 
+### Advanced Mode's Use of Extends
+
+The web UI's Advanced tab applies its Image Name override by generating a
+small `extends` delta over the matched curated template, rather than rewriting
+the curated file or inventing a separate override mechanism. For a selection
+with an override, `POST /templates/compose` and `POST /builds` both:
+
+1. Look up the matched curated template via the manifest, exactly as Basic
+   mode does.
+2. Generate a delta (`extends: <curated template>`, restating `image`/`target`
+   with the override applied) and write it into the templates directory under
+   a server-generated name (`.ict-adv-<uuid>.yml`, gitignored).
+3. Resolve or build that delta instead of the curated file.
+4. Remove the generated delta once it is no longer needed — immediately after
+   a compose response, or once a build finishes (a self-contained copy of the
+   resolved template is archived to the build's directory first, so the
+   per-build template download keeps working after the delta is gone).
+
+The delta must live in the templates directory (or an ancestor of it) because
+of the path containment rule above — a parent must resolve at or below the
+child's own directory, so a generated child cannot reference a curated parent
+from anywhere else, such as a per-build work directory.
+
+Consequently, `POST /templates/compose`'s `yaml` field is **not** the curated
+template's bytes verbatim (as it is for Basic mode's own preview) — it is the
+fully resolved template, equivalent to running `resolve --full` against
+whichever file (curated or delta) was actually resolved. This guarantees the
+template shown in the Review step and the template a build runs are always the
+same file, merged the same way.
+
+See [ADR: Advanced mode template modification via
+extends](../../architecture-decision-record/adr-web-ui-advanced-mode-extends.md)
+for the full design rationale, including why an image-type override is not
+supported the same way.
+
 ### See Also
 
 - [ADR: template `extends`](../../architecture-decision-record/adr-template-extends.md) — design rationale and full validation matrix
+- [ADR: Advanced mode template modification via extends](../../architecture-decision-record/adr-web-ui-advanced-mode-extends.md) — how the web UI applies overrides through a generated delta
 - [Resolve Command](./image-composer-tool-cli-specification.md#resolve-command) — CLI reference for `image-composer-tool resolve`
 - [Template Merge Behavior](#template-merge-behavior) — the two-layer user↔default merge rules an extends chain reuses at every level
 

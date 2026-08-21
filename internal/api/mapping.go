@@ -35,6 +35,9 @@ func toSelection(r httpapi.ComposeRequest) service.Selection {
 	if r.Sku != nil {
 		sel.SKU = *r.Sku
 	}
+	if r.ImageName != nil {
+		sel.ImageName = *r.ImageName
+	}
 	return sel
 }
 
