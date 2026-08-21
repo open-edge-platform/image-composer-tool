@@ -63,13 +63,13 @@ fi
 
 mapfile -t command_entries < <(
     awk '
-        /var commandMap = map\[string\]\[\]string{/ {in_map=1; next}
-        in_map && /^}/ {in_map=0}
+        /var[[:space:]]+commandMap[[:space:]]*=[[:space:]]*map\[string\]\[\]string{/ {in_map=1; next}
+        in_map && /^[[:space:]]*}/ {in_map=0}
         in_map {
-            if (match($0, /^[[:space:]]*"([^"]+)":[[:space:]]*\{([^}]*)\}/, m)) {
+            if (match($0, /^[[:space:]]*\"([^\"]+)\":[[:space:]]*\{([^}]*)\}/, m)) {
                 cmd = m[1]
                 paths = m[2]
-                gsub(/"/, "", paths)
+                gsub(/\"/, "", paths)
                 gsub(/[[:space:]]+/, "", paths)
                 print cmd "|" paths
             }
@@ -77,8 +77,20 @@ mapfile -t command_entries < <(
     ' "$command_map_file"
 )
 
+expected_count=$(awk '
+    /var[[:space:]]+commandMap[[:space:]]*=[[:space:]]*map\[string\]\[\]string{/ {in_map=1; next}
+    in_map && /^[[:space:]]*}/ {in_map=0}
+    in_map && match($0, /^[[:space:]]*\"[^\"]+\":[[:space:]]*/, m) {count++}
+    END {print count+0}
+' "$command_map_file")
+
 if [[ ${#command_entries[@]} -eq 0 ]]; then
     echo "ERROR: no commands parsed from $command_map_file" >&2
+    exit 1
+fi
+
+if [[ ${#command_entries[@]} -ne "$expected_count" ]]; then
+    echo "ERROR: parsed ${#command_entries[@]} commandMap entries, expected $expected_count; preflight parser may be out of date" >&2
     exit 1
 fi
 
