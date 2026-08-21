@@ -35,7 +35,7 @@ jobs:
       - name: Setup Earthly
         uses: earthly/actions-setup@43211c7a0eae5344d6d79fb4aaf209c8f8866203 #v1.0.13
         with:
-          version: latest
+          version: 0.8.15
 
       - name: Build builder image and run preflight
         run: earthly +builder-image-preflight

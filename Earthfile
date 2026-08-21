@@ -344,7 +344,7 @@ builder-image-push:
     ARG REGISTRY
     ARG BUILDER_IMAGE_NAME="image-composer-tool-builder"
 
-    BUILD +build
+    BUILD +build --VERSION=$VERSION --version=$VERSION
 
     FROM DOCKERFILE \
         --build-arg http_proxy=$http_proxy \
