@@ -95,10 +95,16 @@ func (s *Service) Compose(sel Selection) (*ComposeResult, error) {
 	// A manifest entry pointing at a file that isn't on disk is a server-side
 	// configuration error, not "this template is invalid" — surface it as its
 	// own code/status rather than letting it fall through to the generic
-	// load/merge failure below.
+	// load/merge failure below. Distinguish "not found" from other stat
+	// failures (permissions, transient IO) so the latter isn't misreported as
+	// a missing file and its cause isn't lost.
 	if _, statErr := os.Stat(path); statErr != nil {
-		return nil, newError(http.StatusInternalServerError, "TEMPLATE_MISSING",
-			"matched template file not found on disk")
+		if os.IsNotExist(statErr) {
+			return nil, newError(http.StatusInternalServerError, "TEMPLATE_MISSING",
+				"matched template file not found on disk")
+		}
+		return nil, newError(http.StatusInternalServerError, "TEMPLATE_STAT_FAILED",
+			fmt.Sprintf("checking matched template file: %v", statErr))
 	}
 
 	resolvePath := path

@@ -4,6 +4,7 @@
 package service
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -33,8 +34,8 @@ func TestValidateImageName(t *testing.T) {
 		{strings.Repeat("a", 64), true},  // exactly at the cap
 		{"café", false},                  // non-ASCII rejected by the pattern
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
+	for i, c := range cases {
+		t.Run(fmt.Sprintf("%d_%q", i, c.name), func(t *testing.T) {
 			err := ValidateImageName(c.name)
 			if c.want && err != nil {
 				t.Errorf("ValidateImageName(%q) = %v, want valid", c.name, err)

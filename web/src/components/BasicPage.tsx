@@ -78,7 +78,11 @@ export function BasicPage({
     try {
       setBusy(true)
       setError(null)
-      console.log('Composing image with template YAML:\n' + review?.yaml)
+      // Re-compose against the current selection right before starting the
+      // build, so the logged YAML matches the request even if it changed
+      // since the last auto-fetch (or that fetch is still in flight).
+      const fresh = await api.compose(selection)
+      console.log('Composing image with template YAML:\n' + fresh.yaml)
       const accepted = await api.startBuild(selection)
       onBuildStarted(accepted.buildId)
     } catch (e) {

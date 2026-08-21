@@ -119,7 +119,11 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
         ...selection,
         imageName: imageNameEdited ? imageName : undefined,
       }
-      console.log('Composing image with template YAML:\n' + composed?.yaml)
+      // Re-compose against buildReq (the current, non-debounced image name)
+      // right before starting the build, so the logged YAML matches what the
+      // build actually runs rather than the debounced preview.
+      const fresh = await api.compose(buildReq)
+      console.log('Composing image with template YAML:\n' + fresh.yaml)
       const accepted = await api.startBuild(buildReq)
       onBuildStarted(accepted.buildId)
     } catch (e) {
