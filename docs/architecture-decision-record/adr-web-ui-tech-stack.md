@@ -5,7 +5,7 @@
 **Updated**: 2026-06-28
 **Authors**: ICT Team
 **Technical Area**: Web Frontend, REST API, Developer Tooling
-**Related**: [OpenAPI Spec](../../api/v1/openapi-template-builder.yaml), [UI Prototype](../../web/prototype/template-builder.html)
+**Related**: [OpenAPI Spec](../../api/v1/openapi-template-builder.yaml), [UI Prototype](../../web/prototype/template-builder.html), [ADR: Package Picker UX](adr-package-picker-ux.md)
 
 ---
 

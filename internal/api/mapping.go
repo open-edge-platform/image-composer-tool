@@ -35,6 +35,9 @@ func toSelection(r httpapi.ComposeRequest) service.Selection {
 	if r.Sku != nil {
 		sel.SKU = *r.Sku
 	}
+	if r.ImageName != nil {
+		sel.ImageName = *r.ImageName
+	}
 	return sel
 }
 
@@ -76,6 +79,26 @@ func fromManifest(m *service.Manifest) httpapi.Manifest {
 			DisplayName: t.DisplayName,
 			Os:          t.OS,
 			Arch:        t.Arch,
+		}
+	}
+	return out
+}
+
+// fromPackageRepoList maps the repository catalog to the wire type. Priority is
+// always populated by the service (unset entries get the default), so it is
+// emitted rather than omitted — the UI shows it, and a missing value would read
+// as "no priority" instead of "the default".
+func fromPackageRepoList(repos []service.PackageRepo) httpapi.PackageRepoList {
+	out := httpapi.PackageRepoList{Repos: make([]httpapi.PackageRepo, len(repos))}
+	for i, r := range repos {
+		priority := r.Priority
+		out.Repos[i] = httpapi.PackageRepo{
+			Id:               r.ID,
+			DisplayName:      r.DisplayName,
+			Url:              r.URL,
+			Description:      optStr(r.Description),
+			EnabledByDefault: r.EnabledByDefault,
+			Priority:         &priority,
 		}
 	}
 	return out

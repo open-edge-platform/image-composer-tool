@@ -69,7 +69,15 @@ type build struct {
 	Summary      *ComposeSummary // image configuration summary, nil for YAML builds
 	CreatedAt    time.Time       // when the compose was started
 	LogFile      string          // on-disk log file path, written at finish
-	done         chan struct{}   // closed when the build finishes
+	// DeltaPath is set only for a build started from an Advanced-mode override:
+	// the path of the generated extends delta this build actually runs against
+	// (TemplatePath, above). finish() re-resolves it into a self-contained
+	// archived copy at RootDir/template.yml, repoints TemplatePath there, and
+	// removes the delta from TemplatesDir — so an override never leaves a
+	// generated file behind and the download endpoint keeps working after it's
+	// gone. Empty for a build against a curated template directly.
+	DeltaPath string
+	done      chan struct{} // closed when the build finishes
 
 	doneOnce sync.Once // guards close(done): both runBuild and the cancel watchdog can finish a build
 
@@ -319,6 +327,14 @@ func (s *Service) StartBuild(req BuildRequest) (*BuildAccepted, error) {
 		}
 	}
 
+	// A compose selection carrying an override resolved to a generated delta
+	// (resolveBuildTemplate), not the curated file directly — remember that so
+	// finish() knows to archive+clean it up.
+	var deltaPath string
+	if req.Compose != nil && req.Compose.ImageName != "" {
+		deltaPath = templatePath
+	}
+
 	name, cmdArgs := s.buildCommand(templatePath, workDir, cacheDir)
 	b := &build{
 		ID: id,
@@ -331,6 +347,7 @@ func (s *Service) StartBuild(req BuildRequest) (*BuildAccepted, error) {
 		CacheDir:     cacheDir,
 		Template:     templateName,
 		TemplatePath: templatePath,
+		DeltaPath:    deltaPath,
 		Command:      name + " " + strings.Join(cmdArgs, " "),
 		Summary:      summary,
 		CreatedAt:    createdAt,
@@ -669,7 +686,21 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 	if perr != nil {
 		return "", "", fmt.Errorf("resolving template path: %w", perr) // server-side (bad manifest)
 	}
-	return full, tmpl, nil
+	if c.ImageName == "" {
+		return full, tmpl, nil
+	}
+	// StartBuild can be posted directly, bypassing /templates/compose, so the
+	// override must be validated here too rather than trusting a prior compose.
+	if verr := ValidateImageName(c.ImageName); verr != nil {
+		return "", "", fmt.Errorf("%w: %v", errBadBuildRequest, verr)
+	}
+	deltaPath, _, derr := s.deltaForOverride(tmpl, full, *c)
+	if derr != nil {
+		return "", "", fmt.Errorf("generating override template: %w", derr) // server-side
+	}
+	// Display name stays the curated parent's, not the generated delta's — the
+	// history/build-details panels show what the user actually chose.
+	return deltaPath, tmpl, nil
 }
 
 // buildCommand assembles the argv for an ICT build, prefixing sudo when
@@ -849,6 +880,14 @@ func (b *build) finish(status BuildStatus, arts []Artifact, errMsg string) bool 
 	b.errMsg = errMsg
 	b.mu.Unlock()
 
+	// finish() only reaches here once per build (the isTerminal guard above),
+	// so this is the single point at which a delta-backed build's generated
+	// file is archived and removed — regardless of terminal status, so a
+	// failed or cancelled override build doesn't leak a file into TemplatesDir.
+	if b.DeltaPath != "" {
+		b.archiveAndCleanupDelta()
+	}
+
 	// Persist logs to <root>/compose.log for later download.
 	if b.RootDir != "" {
 		logPath := filepath.Join(b.RootDir, "compose.log")
@@ -866,6 +905,36 @@ func (b *build) finish(status BuildStatus, arts []Artifact, errMsg string) bool 
 		logger.Logger().Warnf("build %s: writing final meta: %v", b.ID, err)
 	}
 	return true
+}
+
+// archiveAndCleanupDelta resolves a delta-backed build's generated extends
+// delta one final time, writes the fully-resolved, redacted result to
+// RootDir/template.yml, and repoints TemplatePath there — so the download
+// endpoint keeps serving a self-contained file after the delta itself is
+// removed from TemplatesDir. On any failure the delta is still removed (the
+// generated file must never be left behind), but TemplatePath is left as-is,
+// which then 404s on download exactly as an already-missing template would.
+func (b *build) archiveAndCleanupDelta() {
+	defer func() { _ = os.Remove(b.DeltaPath) }()
+
+	merged, err := config.LoadAndMergeTemplate(b.DeltaPath)
+	if err != nil {
+		logger.Logger().Warnf("build %s: re-resolving delta template for archive failed", b.ID)
+		return
+	}
+	data, err := config.MarshalTemplateYAML(config.RedactSensitiveData(merged))
+	if err != nil {
+		logger.Logger().Warnf("build %s: marshaling archived template: %v", b.ID, err)
+		return
+	}
+	archivePath := filepath.Join(b.RootDir, "template.yml")
+	if err := os.WriteFile(archivePath, data, 0o600); err != nil {
+		logger.Logger().Warnf("build %s: writing archived template: %v", b.ID, err)
+		return
+	}
+	b.mu.Lock()
+	b.TemplatePath = archivePath
+	b.mu.Unlock()
 }
 
 // exitCode returns the process exit code carried by a cmd.Wait error, or -1 if

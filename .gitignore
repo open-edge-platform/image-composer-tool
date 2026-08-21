@@ -16,3 +16,9 @@ workspace/
 /image-composer-tool
 /live-installer
 /image-composer-tool.log
+
+# Advanced-mode extends deltas: generated server-side into image-templates/ at
+# compose/build time (extends can only reference a parent at or below the
+# child's own directory) and removed once resolved/built. Should never be
+# committed if one is ever left behind by a crashed server.
+image-templates/.ict-adv-*.yml
