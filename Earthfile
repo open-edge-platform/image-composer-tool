@@ -324,8 +324,7 @@ builder-image:
     ARG BUILDER_IMAGE_NAME="image-composer-tool-builder"
 
     # Ensure the ICT binary is built first
-    BUILD +build
-
+    BUILD +build --VERSION=$VERSION --version=$VERSION
     FROM DOCKERFILE \
         --build-arg http_proxy=$http_proxy \
         --build-arg https_proxy=$https_proxy \
