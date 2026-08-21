@@ -175,13 +175,22 @@ paths:
       operationId: composeTemplate
       summary: Resolve the base template for a set of selections
       description: |
-        Accepts the selections (vertical, SKU, platform, OS, image type) and
-        returns the matching pre-authored ICT template verbatim, plus a
-        human-readable summary for the Review panel. The backend does NOT
-        synthesize or merge a template — it looks up the single tested template
-        mapped to this combination via the manifest.
+        Accepts the selections (vertical, SKU, platform, OS, image type) plus
+        any Advanced-mode overrides (currently just imageName), and returns the
+        resolved final template — exactly what a build from this same request
+        would run — plus a human-readable summary for the Review panel.
 
-        This endpoint is read-only and never modifies the stored template.
+        The backend looks up the single tested template mapped to this
+        combination via the manifest. With no overrides, the returned YAML is
+        that template resolved through ICT's normal merge (OS defaults +
+        extends chain), identical to `resolve --full`. With an override, the
+        backend generates a small `extends` delta over the matched template and
+        resolves that instead — so the returned YAML is the same file a build
+        would use.
+
+        This endpoint is read-only: it never modifies the curated template on
+        disk, and any generated delta is a temporary, gitignored file removed
+        before the response is returned.
       requestBody:
         required: true
         content:
@@ -702,8 +711,11 @@ components:
     ComposeRequest:
       type: object
       description: |
-        The UI selections that identify one combination. The backend uses these to
-        look up the matching pre-authored template in the manifest.
+        The UI selections that identify one combination, plus any Advanced-mode
+        overrides. The backend uses vertical/sku/platform/os/imageType to look
+        up the matching pre-authored template in the manifest; imageName never
+        participates in that lookup — it is applied afterward, via a generated
+        extends delta over the matched template.
       required: [vertical, platform, os, imageType]
       properties:
         vertical:
@@ -716,6 +728,13 @@ components:
           type: string
         imageType:
           type: string
+        imageName:
+          type: string
+          description: |
+            Overrides the matched template's image.name. Omitted or empty means
+            "not overridden" — the matched template's own name is used.
+          pattern: '^[a-zA-Z0-9]([a-zA-Z0-9\-_]*[a-zA-Z0-9])?$'
+          maxLength: 64
 
     ComposeSummary:
       type: object
@@ -784,7 +803,10 @@ components:
           description: Resolved template filename
         yaml:
           type: string
-          description: The matched template's YAML, verbatim
+          description: |
+            The resolved final template — what building this same request would
+            run. Identical to the matched template's own `resolve --full` output
+            when no overrides are set.
         summary:
           $ref: "#/components/schemas/ComposeSummary"
 

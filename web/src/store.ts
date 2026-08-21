@@ -14,8 +14,17 @@ export interface Selection {
 interface AppState {
   manifest: Manifest | null
   selection: Selection
+  // Advanced-tab override for the image name. Kept out of `Selection` so it never
+  // leaks into the compose request body; it seeds from the resolved template's
+  // imageName and, once the user types, `imageNameEdited` guards it from reseeds.
+  imageName: string
+  imageNameEdited: boolean
   setManifest: (m: Manifest) => void
   setField: (key: keyof Selection, value: string) => void
+  // User-typed image name (marks it edited so seedImageName stops overwriting it).
+  setImageName: (value: string) => void
+  // Default image name from the resolved template; ignored once the user edits.
+  seedImageName: (value: string) => void
 }
 
 const emptySelection: Selection = {
@@ -30,7 +39,12 @@ const emptySelection: Selection = {
 export const useStore = create<AppState>((set) => ({
   manifest: null,
   selection: emptySelection,
+  imageName: '',
+  imageNameEdited: false,
   setManifest: (m) => set({ manifest: m }),
+  setImageName: (value) => set({ imageName: value, imageNameEdited: true }),
+  seedImageName: (value) =>
+    set((state) => (state.imageNameEdited ? {} : { imageName: value })),
   setField: (key, value) =>
     set((state) => {
       const selection = { ...state.selection, [key]: value }
@@ -64,7 +78,9 @@ export const useStore = create<AppState>((set) => ({
       if (state.manifest) {
         autoFillCascade(state.manifest, selection)
       }
-      return { selection }
+      // Any selection change resolves to a (possibly) different template, so let
+      // the image name re-track the new default until edited again.
+      return { selection, imageNameEdited: false }
     }),
 }))
 

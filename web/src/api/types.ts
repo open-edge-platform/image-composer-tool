@@ -47,6 +47,10 @@ export interface ComposeRequest {
   os: string
   kernel?: string
   imageType: string
+  // Advanced-mode override for the matched template's image.name. Omitted (not
+  // just empty) means "not overridden" — the backend resolves the curated
+  // template directly rather than generating an override delta for it.
+  imageName?: string
 }
 
 export interface ComposeSummary {
