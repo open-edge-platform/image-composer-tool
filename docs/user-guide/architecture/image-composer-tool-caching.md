@@ -9,6 +9,8 @@ The ICT implements sophisticated caching mechanisms to significantly improve bui
   - [Overview of Caching Mechanisms](#overview-of-caching-mechanisms)
   - [Package Caching](#package-caching)
     - [How Package Caching Works](#how-package-caching-works)
+    - [Repository Metadata Caching](#repository-metadata-caching)
+    - [Web UI Package Index Cache](#web-ui-package-index-cache)
     - [Package Cache Organization](#package-cache-organization)
     - [Package Cache Benefits](#package-cache-benefits)
   - [Chroot Environment Reuse](#chroot-environment-reuse)
@@ -136,6 +138,44 @@ file has arrived, so a failed or interrupted refresh cannot leave a partial
 Metadata caching is bypassed entirely for `localhost`/loopback repository URLs
 (a local mirror is assumed to be under active development) and during live-installer
 execution.
+
+### Web UI Package Index Cache
+
+The web UI's package picker reads repository indexes through a **separate,
+in-memory cache** (`internal/api/service/pkgindex`). It shares no state and no
+files with the build-path metadata cache described above.
+
+| | Build path | Web UI picker |
+|---|---|---|
+| Stored | on disk, under `tmp/builds/` | in memory only |
+| Invalidation | `Release` SHA256 checksum | time-to-live, 6 hours by default |
+| Retained | indefinitely | 24 indexes or 600,000 packages, whichever binds first |
+| Kept per package | full metadata: dependencies, checksums, file lists | name, version, architecture, one-line summary |
+
+The two are kept apart deliberately:
+
+- **The build path's cache lives in a root-owned directory.** Builds run under
+  `sudo`, so `tmp/builds/` is typically owned by root, while `serve` runs as an
+  ordinary user and could neither read nor rewrite it.
+- **The picker needs far less data.** It renders four fields per package, so it
+  keeps only those. Ubuntu noble `universe` for amd64 is a useful yardstick:
+  64,755 packages, a 69 MB uncompressed index that the build path stores as a
+  64 MB `packages.parsed.json`, against 13.5 MB held as picker entries.
+- **Concurrent HTTP requests must not corrupt each other.** The build-path
+  parsers are driven by package-level mutable state and are not safe to call
+  from several requests at once.
+
+Both retention limits are needed because index sizes vary by two orders of
+magnitude — noble `main` holds 6,099 packages where `universe` holds 64,755 — so
+a count of indexes alone is not a memory bound. The package budget caps the cache
+at roughly 130 MB. An index that alone exceeds the budget is still kept rather
+than dropped and refetched on every request.
+
+Requests for the same index are **coalesced**: when several browser requests need
+one repository at the same time, the first fetches it and the rest wait for that
+result, so a repository is never downloaded more than once concurrently. Nothing
+in this cache is written to disk, so it is empty after every `serve` restart and
+needs no clean-up.
 
 ### Package Cache Organization
 
