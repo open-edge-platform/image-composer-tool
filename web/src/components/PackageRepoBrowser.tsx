@@ -1,10 +1,17 @@
+import { useEffect, useState } from 'react'
 import { useStore } from '../store'
-import type { PackageRepo } from '../api/types'
+import { api } from '../api/client'
+import type { PackageRepo, PackageSearchResult } from '../api/types'
+import { PackageRow } from './PackageRow'
+
+// Packages fetched per page when browsing a repo's full contents (no query).
+const PAGE_SIZE = 25
 
 interface PackageRepoBrowserProps {
   repos: PackageRepo[]
   activeRepo: string
   onActiveRepo: (id: string) => void
+  os: string
 }
 
 // PackageRepoBrowser is the two-pane repository browser: a rail listing every
@@ -15,7 +22,7 @@ interface PackageRepoBrowserProps {
 // repository, the row body selects it for browsing. They are siblings rather
 // than nested (the prototype nests a checkbox inside a clickable div, which
 // leaves the browse action unreachable by keyboard).
-export function PackageRepoBrowser({ repos, activeRepo, onActiveRepo }: PackageRepoBrowserProps) {
+export function PackageRepoBrowser({ repos, activeRepo, onActiveRepo, os }: PackageRepoBrowserProps) {
   const enabledRepos = useStore((s) => s.enabledRepos)
   const setRepoEnabled = useStore((s) => s.setRepoEnabled)
   const active = repos.find((r) => r.id === activeRepo)
@@ -55,7 +62,7 @@ export function PackageRepoBrowser({ repos, activeRepo, onActiveRepo }: PackageR
         aria-label="Repository details"
         className="max-h-[480px] overflow-y-auto px-[18px] py-3.5"
       >
-        {active ? <RepoPane repo={active} enabled={isEnabled(active)} /> : <RepoPaneEmpty />}
+        {active ? <RepoPane repo={active} enabled={isEnabled(active)} os={os} /> : <RepoPaneEmpty />}
       </div>
     </div>
   )
@@ -129,7 +136,54 @@ function RepoRailRow({
   )
 }
 
-function RepoPane({ repo, enabled }: { repo: PackageRepo; enabled: boolean }) {
+function RepoPane({ repo, enabled, os }: { repo: PackageRepo; enabled: boolean; os: string }) {
+  const [hits, setHits] = useState<PackageSearchResult[]>([])
+  const [total, setTotal] = useState(0)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const addedPackages = useStore((s) => s.addedPackages)
+  const setPackage = useStore((s) => s.setPackage)
+  const removePackage = useStore((s) => s.removePackage)
+
+  // Browse this repo's full contents (no query) on mount and whenever the
+  // repo being browsed changes. Disabled repos don't fetch — there's nothing
+  // to show until the user re-enables it.
+  useEffect(() => {
+    setHits([])
+    setTotal(0)
+    setError(null)
+    if (!enabled) return
+    setLoading(true)
+    let cancelled = false
+    api
+      .searchPackages({ os, repos: [repo.id], limit: PAGE_SIZE, offset: 0 })
+      .then((r) => {
+        if (cancelled) return
+        setHits(r.packages)
+        setTotal(r.total)
+      })
+      .catch((e) => {
+        if (cancelled) return
+        setError((e as Error).message)
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [repo.id, enabled, os])
+
+  const loadMore = () => {
+    setLoading(true)
+    setError(null)
+    api
+      .searchPackages({ os, repos: [repo.id], limit: PAGE_SIZE, offset: hits.length })
+      .then((r) => setHits((prev) => [...prev, ...r.packages]))
+      .catch((e) => setError((e as Error).message))
+      .finally(() => setLoading(false))
+  }
+
   return (
     <>
       <div className="mb-2.5 rounded-md bg-[#e6f2fa] px-3 py-2.5">
@@ -145,21 +199,52 @@ function RepoPane({ repo, enabled }: { repo: PackageRepo; enabled: boolean }) {
           <p className="mt-1 text-xs text-slate-600">{repo.description}</p>
         )}
       </div>
-      {enabled ? (
-        <p className="px-5 py-12 text-center text-[13px] text-slate-500">
-          <span className="font-semibold text-slate-600">
-            This repository's package list isn't available yet.
-          </span>
-          <br />
-          Browsing and searching a repository's packages needs the package index
-          API, which arrives in a later update.
-        </p>
-      ) : (
+      {!enabled ? (
         <p className="px-5 py-12 text-center text-[13px] text-slate-500">
           <span className="font-semibold text-slate-600">This repository is disabled.</span>
           <br />
           Enable it with the checkbox on the left to pick from its packages.
         </p>
+      ) : error ? (
+        <p className="px-5 py-12 text-center text-[13px] text-red-600">{error}</p>
+      ) : hits.length === 0 ? (
+        <p className="px-5 py-12 text-center text-[13px] text-slate-500">
+          {loading ? 'Loading packages…' : 'No packages found in this repository.'}
+        </p>
+      ) : (
+        <>
+          <div className="rounded border border-slate-100">
+            {hits.map((h) => (
+              <PackageRow
+                key={h.name}
+                name={h.name}
+                version={h.version}
+                description={h.description}
+                repoLabel={repo.displayName}
+                showRepo={false}
+                selection={addedPackages.find((p) => p.name === h.name)}
+                onToggle={(checked) =>
+                  checked
+                    ? setPackage({ name: h.name, version: '', repo: h.repository })
+                    : removePackage(h.name)
+                }
+                onChooseVersion={(v) =>
+                  setPackage({ name: h.name, version: v, repo: h.repository })
+                }
+              />
+            ))}
+          </div>
+          {hits.length < total && (
+            <button
+              type="button"
+              onClick={loadMore}
+              disabled={loading}
+              className="mt-2 w-full rounded border border-slate-200 py-1.5 text-[12px] font-medium text-[#0071c5] hover:bg-[#eef4fb] disabled:opacity-50"
+            >
+              {loading ? 'Loading…' : `Load more (${hits.length} of ${total})`}
+            </button>
+          )}
+        </>
       )}
     </>
   )

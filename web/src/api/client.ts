@@ -59,25 +59,27 @@ export const api = {
     }),
 
   // Package repositories the Advanced tab can enable/disable, optionally filtered
-  // by target OS. Backend returns 501 until PR 4 lands the real repo listing.
+  // by target OS.
   listPackageRepos: (os?: string) =>
     jsonFetch<PackageRepoList>(
       '/package-repos' + (os ? `?os=${encodeURIComponent(os)}` : ''),
     ),
 
-  // Search packages available for a target, for the Packages-step autocomplete.
-  // `repos` filters by enabled repository IDs. Backend returns 501 until PR 5.
+  // Search (or browse, when `q` is omitted) packages available for a target.
+  // `repos` filters by repository IDs; `offset`/`limit` page a browse.
   searchPackages: (params: {
-    q: string
+    q?: string
     os: string
     repos?: string[]
     limit?: number
+    offset?: number
   }) => {
     const qs = new URLSearchParams()
-    qs.set('q', params.q)
+    if (params.q) qs.set('q', params.q)
     qs.set('os', params.os)
     if (params.repos) for (const r of params.repos) qs.append('repos', r)
     if (params.limit != null) qs.set('limit', String(params.limit))
+    if (params.offset != null) qs.set('offset', String(params.offset))
     return jsonFetch<PackageSearchResults>(`/packages/search?${qs.toString()}`)
   },
 
