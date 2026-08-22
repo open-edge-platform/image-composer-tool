@@ -4,140 +4,52 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
 	"sort"
 	"strings"
 
-	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/api/service/pkgindex"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"golang.org/x/sync/errgroup"
 )
 
-// TemplateQuery is the 5-tuple used to look up the matched curated template
-// for the Packages step — the same lookup Compose uses, minus the
-// Advanced-mode override fields that don't apply to browsing/searching.
-type TemplateQuery struct {
-	Vertical  string
-	SKU       string
-	Platform  string
-	OS        string
-	ImageType string
-}
-
-// resolveCuratedTemplate looks up q's matched template and loads it
-// unmerged — i.e. the curated template's own fields, not the fully resolved
-// extends+OS-defaults chain. This mirrors deltaForOverride's parent load and
-// backs the ticket's decision that /package-repos and /packages/search
-// reflect the matched template's own packageRepositories, not a synthesized
-// global catalog.
-func (s *Service) resolveCuratedTemplate(q TemplateQuery) (*config.ImageTemplate, error) {
-	if q.Vertical == "" || q.Platform == "" || q.OS == "" || q.ImageType == "" {
-		return nil, newError(http.StatusBadRequest, "BAD_REQUEST",
-			"vertical, platform, os, and imageType are required")
-	}
-	tmpl := s.manifest.findTemplate(q.Vertical, q.SKU, q.Platform, q.OS, q.ImageType)
-	if tmpl == "" {
-		return nil, newError(http.StatusBadRequest, "NO_MATCH",
-			"no template maps to the selected combination")
-	}
-	path, err := safeTemplatePath(s.cfg.TemplatesDir, tmpl)
-	if err != nil {
-		return nil, newError(http.StatusInternalServerError, "TEMPLATE_INVALID",
-			"manifest template path is invalid")
-	}
-	if _, statErr := os.Stat(path); statErr != nil {
-		if os.IsNotExist(statErr) {
-			return nil, newError(http.StatusInternalServerError, "TEMPLATE_MISSING",
-				"matched template file not found on disk")
-		}
-		return nil, newError(http.StatusInternalServerError, "TEMPLATE_STAT_FAILED",
-			fmt.Sprintf("checking matched template file: %v", statErr))
-	}
-	parent, err := config.LoadTemplate(path, false)
-	if err != nil {
-		return nil, newError(http.StatusUnprocessableEntity, "TEMPLATE_INVALID",
-			"matched template failed to load: "+err.Error())
-	}
-	return parent, nil
-}
-
-// repoIdentity derives a stable (id, displayName) pair for a repository,
-// falling back the same way getRepositoryName (internal/config/apt_sources.go)
-// does: explicit ID, then codename, then URL — so a repo without an
-// auto-assigned ID still gets a usable, consistent identifier across
-// /package-repos and /packages/search's repos filter.
-func repoIdentity(repo config.PackageRepository) (id, displayName string) {
-	switch {
-	case repo.ID != "":
-		return repo.ID, repo.ID
-	case repo.Codename != "":
-		return repo.Codename, repo.Codename
-	default:
-		return repo.URL, repo.URL
-	}
-}
-
-// PackageRepoInfo is one repository declared on the matched curated
-// template, with its identity resolved the same way SearchPackages resolves
-// each hit's repo — so a repos filter passed to SearchPackages always lines
-// up with the id returned here.
-type PackageRepoInfo struct {
-	ID          string
-	DisplayName string
-	URL         string
-	Priority    int // 0 means "unset" — caller falls back to the schema default.
-}
-
-// ListPackageRepos returns the matched curated template's own
-// packageRepositories entries. There is no separate, global repository
-// catalog — see TemplateQuery's doc comment.
-func (s *Service) ListPackageRepos(q TemplateQuery) ([]PackageRepoInfo, error) {
-	parent, err := s.resolveCuratedTemplate(q)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]PackageRepoInfo, len(parent.PackageRepositories))
-	for i, repo := range parent.PackageRepositories {
-		id, displayName := repoIdentity(repo)
-		out[i] = PackageRepoInfo{ID: id, DisplayName: displayName, URL: repo.URL, Priority: repo.Priority}
-	}
-	return out, nil
-}
-
-// PackageSearchHit is one package search result: a package name available
-// from one of the matched template's repositories.
+// PackageSearchHit is one package search result: a package available from
+// one of osID's catalog repositories.
 type PackageSearchHit struct {
-	Name            string
-	Version         string
-	Description     string
-	RepoID          string
-	RepoDisplayName string
+	Name        string
+	Version     string
+	Description string
+	RepoID      string
 }
 
 const (
 	defaultSearchLimit = 20
 	maxSearchLimit     = 50
 	minSearchQueryLen  = 2
+	// maxConcurrentLookups bounds how many pkgindex.Cache.Lookup calls one
+	// search issues at once, so fanning out across a repo's several indexes
+	// doesn't open dozens of simultaneous upstream connections.
+	maxConcurrentLookups = 8
 )
 
-// SearchPackages prefix-matches query against the AllowPackages lists of the
-// matched curated template's own packageRepositories (there is no
-// package-index integration, so AllowPackages — the only place real package
-// names appear in a template — is the sole data source). Every hit's Version
-// is the literal "latest": without a real package index there is no version
-// history to report, so a specific version can only be pinned by hand in the
-// UI, not chosen from a real list.
+// SearchPackages searches (or, with an empty query, browses) the package
+// indexes of osID's catalog repositories.
 //
-// total is the full match count before limit is applied, so callers can
-// report "N of total" even though hits itself is capped.
-func (s *Service) SearchPackages(q TemplateQuery, query string, repoFilter []string, limit int) (hits []PackageSearchHit, total int, err error) {
-	if len(query) < minSearchQueryLen {
+// Unknown or empty osID behaves exactly like PackageRepos: an empty osID
+// searches the whole catalog, an osID the manifest doesn't know returns an
+// empty, non-error result. A non-empty query shorter than minSearchQueryLen
+// is a 400 — empty is allowed (it means browse) but a single character is not
+// a useful prefix.
+//
+// total is the deduplicated match count before offset/limit is applied, so
+// callers can report "N of total" even though hits itself is paginated.
+func (s *Service) SearchPackages(ctx context.Context, osID, query string, repoFilter []string, limit, offset int) (hits []PackageSearchHit, total int, err error) {
+	if query != "" && len(query) < minSearchQueryLen {
 		return nil, 0, newError(http.StatusBadRequest, "BAD_REQUEST",
 			fmt.Sprintf("query must be at least %d characters", minSearchQueryLen))
-	}
-	parent, err := s.resolveCuratedTemplate(q)
-	if err != nil {
-		return nil, 0, err
 	}
 	if limit <= 0 {
 		limit = defaultSearchLimit
@@ -145,43 +57,199 @@ func (s *Service) SearchPackages(q TemplateQuery, query string, repoFilter []str
 	if limit > maxSearchLimit {
 		limit = maxSearchLimit
 	}
-
-	var allow map[string]bool
-	if len(repoFilter) > 0 {
-		allow = make(map[string]bool, len(repoFilter))
-		for _, r := range repoFilter {
-			allow[r] = true
-		}
+	if offset < 0 {
+		offset = 0
 	}
 
-	needle := strings.ToLower(query)
-	for _, repo := range parent.PackageRepositories {
-		id, displayName := repoIdentity(repo)
-		if allow != nil && !allow[id] {
-			continue
-		}
-		for _, pkg := range repo.AllowPackages {
-			if !strings.HasPrefix(strings.ToLower(pkg), needle) {
-				continue
-			}
-			hits = append(hits, PackageSearchHit{
-				Name:            pkg,
-				Version:         "latest",
-				RepoID:          id,
-				RepoDisplayName: displayName,
-			})
-		}
-	}
+	repos := filterReposByID(s.PackageRepos(osID), repoFilter)
+	results := runLookups(ctx, s.pkgindexCache, s.planLookups(osID, repos))
 
+	hits = dedupAndFilter(results, query)
 	sort.Slice(hits, func(i, j int) bool {
 		if hits[i].Name != hits[j].Name {
 			return hits[i].Name < hits[j].Name
 		}
 		return hits[i].RepoID < hits[j].RepoID
 	})
-	total = len(hits)
-	if len(hits) > limit {
-		hits = hits[:limit]
+	return paginate(hits, offset, limit), len(hits), nil
+}
+
+// filterReposByID keeps only repos whose ID appears in ids; an empty ids
+// keeps everything.
+func filterReposByID(repos []PackageRepo, ids []string) []PackageRepo {
+	if len(ids) == 0 {
+		return repos
 	}
-	return hits, total, nil
+	allow := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		allow[id] = true
+	}
+	out := make([]PackageRepo, 0, len(repos))
+	for _, r := range repos {
+		if allow[r.ID] {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// repoLookup pairs a pkgindex.Repo with the catalog repo id it came from, so
+// a fetched entry can be attributed back to it.
+type repoLookup struct {
+	repo   pkgindex.Repo
+	repoID string
+}
+
+// planLookups expands each repo's Index entries into individual pkgindex.Repo
+// lookups: deb splits Component on whitespace and pairs every component with
+// every resolved arch; rpm gets one lookup per arch. An index's own Arch wins
+// when set; empty resolves via archesForOS, since most of the catalog omits
+// it to mean "every arch the OS builds".
+func (s *Service) planLookups(osID string, repos []PackageRepo) []repoLookup {
+	osArches := s.manifest.archesForOS(osID)
+	var lookups []repoLookup
+	for _, r := range repos {
+		repoType := r.Type
+		if repoType == "" {
+			repoType = repoTypeDeb
+		}
+		gpgKeyPath := verifiableGPGKeyPath(r.GPGKeyPath)
+		for _, idx := range r.Index {
+			lookups = append(lookups, indexLookups(r, idx, repoType, gpgKeyPath, osArches)...)
+		}
+	}
+	return lookups
+}
+
+// verifiableGPGKeyPath returns path if it names a file that exists on disk,
+// else "" — a configured-but-missing key silently falls back to unverified
+// rather than failing every lookup for that repo.
+func verifiableGPGKeyPath(path string) string {
+	if path == "" {
+		return ""
+	}
+	if _, err := os.Stat(path); err != nil {
+		return ""
+	}
+	return path
+}
+
+// indexLookups expands one RepoIndex into its component pkgindex.Repo lookups.
+func indexLookups(r PackageRepo, idx RepoIndex, repoType, gpgKeyPath string, osArches []string) []repoLookup {
+	url := idx.URL
+	if url == "" {
+		url = r.URL
+	}
+	arches := idx.Arch
+	if len(arches) == 0 {
+		arches = osArches
+	}
+	components := []string{""}
+	if repoType == repoTypeDeb && idx.Component != "" {
+		components = strings.Fields(idx.Component)
+	}
+
+	var out []repoLookup
+	for _, arch := range arches {
+		if repoType == repoTypeDeb {
+			arch = debArch(arch)
+		}
+		for _, comp := range components {
+			out = append(out, repoLookup{
+				repo: pkgindex.Repo{
+					Type: repoType, URL: url, Codename: idx.Codename,
+					Component: comp, Arch: arch, GPGKeyPath: gpgKeyPath,
+				},
+				repoID: r.ID,
+			})
+		}
+	}
+	return out
+}
+
+// debArch maps a manifest/catalog arch name to the name deb archives publish
+// their binary-<arch>/ directories under. Provider Init does the same
+// translation for builds (internal/provider/ubuntu/ubuntu.go); rpm needs no
+// equivalent, since dnf repodata already uses the manifest's own x86_64 /
+// aarch64 names.
+func debArch(arch string) string {
+	switch arch {
+	case "x86_64":
+		return "amd64"
+	case "aarch64":
+		return "arm64"
+	default:
+		return arch
+	}
+}
+
+// lookupResult pairs one repo's fetched entries with the catalog repo id they
+// belong to.
+type lookupResult struct {
+	entries []pkgindex.Entry
+	repoID  string
+}
+
+// runLookups fetches every planned lookup concurrently, bounded by
+// maxConcurrentLookups. A failed lookup logs a warning and contributes
+// nothing rather than failing the whole search — the same tolerance any
+// other per-index fetch error already gets.
+func runLookups(ctx context.Context, cache *pkgindex.Cache, lookups []repoLookup) []lookupResult {
+	results := make([]lookupResult, len(lookups))
+	g := new(errgroup.Group)
+	g.SetLimit(maxConcurrentLookups)
+	for i, lk := range lookups {
+		i, lk := i, lk
+		g.Go(func() error {
+			entries, err := cache.Lookup(ctx, lk.repo)
+			if err != nil {
+				logger.Logger().Warnf("pkgindex: search lookup failed for repo %s (%s %s %s %s): %v",
+					lk.repoID, lk.repo.Type, lk.repo.URL, lk.repo.Codename, lk.repo.Arch, err)
+				return nil
+			}
+			results[i] = lookupResult{entries: entries, repoID: lk.repoID}
+			return nil
+		})
+	}
+	_ = g.Wait() // workers never return a non-nil error; nothing to check
+	return results
+}
+
+// dedupAndFilter flattens results into hits whose Name matches query as a
+// case-insensitive prefix (query empty matches everything), deduplicating by
+// (Name, Version, RepoID) — the wire schema has no arch field, so the same
+// package published for several arches would otherwise appear once per arch.
+func dedupAndFilter(results []lookupResult, query string) []PackageSearchHit {
+	type key struct{ name, version, repoID string }
+	seen := make(map[key]bool)
+	needle := strings.ToLower(query)
+	hits := make([]PackageSearchHit, 0)
+	for _, res := range results {
+		for _, e := range res.entries {
+			if needle != "" && !strings.HasPrefix(strings.ToLower(e.Name), needle) {
+				continue
+			}
+			k := key{e.Name, e.Version, res.repoID}
+			if seen[k] {
+				continue
+			}
+			seen[k] = true
+			hits = append(hits, PackageSearchHit{
+				Name: e.Name, Version: e.Version, Description: e.Description, RepoID: res.repoID,
+			})
+		}
+	}
+	return hits
+}
+
+// paginate slices hits by offset/limit, clamped to bounds.
+func paginate(hits []PackageSearchHit, offset, limit int) []PackageSearchHit {
+	if offset >= len(hits) {
+		return []PackageSearchHit{}
+	}
+	end := offset + limit
+	if end > len(hits) {
+		end = len(hits)
+	}
+	return hits[offset:end]
 }

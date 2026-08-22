@@ -44,6 +44,13 @@ type Repo struct {
 	Codename  string
 	Component string
 	Arch      string
+	// GPGKeyPath, when non-empty, is a local path to a GPG keyring that this
+	// index's Release must verify against before its packages are trusted —
+	// fetching it and its detached signature is the caller's job to opt into,
+	// not pkgindex's to guess at. Empty means the caller decided this repo has
+	// no usable local trust anchor and skip verification; deb only, ignored
+	// for rpm.
+	GPGKeyPath string
 }
 
 // Repo types accepted by Lookup.

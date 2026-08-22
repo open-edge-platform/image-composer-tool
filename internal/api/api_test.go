@@ -4,8 +4,10 @@
 package api
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
-	"io"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -212,38 +214,87 @@ func TestHandleComposeInvalidTemplate(t *testing.T) {
 	}
 }
 
-// --- advanced-mode stubs (contract-only; replaced in later PRs) ---
+// --- package search ---
 
-// The remaining Advanced-mode endpoint is wired to the generated interface but
-// not yet implemented — it returns 501 with the standard error envelope. This
-// guards the contract-only behavior; the PR that implements it deletes this test.
-// (POST /templates/validate and GET /package-repos are implemented — see
-// TestHandleValidateTemplate and TestHandleListPackageRepos.)
-func TestHandleAdvancedStubsNotImplemented(t *testing.T) {
-	s, _ := newTestServer(t)
-	cases := []struct {
-		name, method, path, body string
-	}{
-		{"packages-search", http.MethodGet, "/api/v1/packages/search?q=doc&os=ubuntu24", ""},
+// packagesFixtureServer serves a single Packages.gz for the noble/main/amd64
+// deb index, so a real /packages/search request has something to fetch.
+func packagesFixtureServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	stanza := "Package: ros-jazzy-rviz2\nVersion: 14.1.4-1\nArchitecture: amd64\n" +
+		"Description: ROS 2 3D visualization tool\n\n"
+	if _, err := gz.Write([]byte(stanza)); err != nil {
+		t.Fatalf("gzip write: %v", err)
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			var body io.Reader
-			if c.body != "" {
-				body = strings.NewReader(c.body)
-			}
-			rr := s.do(httptest.NewRequest(c.method, c.path, body))
-			if rr.Code != http.StatusNotImplemented {
-				t.Fatalf("status = %d, want 501 (body: %s)", rr.Code, rr.Body)
-			}
-			var eb httpapi.Error
-			if err := json.Unmarshal(rr.Body.Bytes(), &eb); err != nil {
-				t.Fatalf("error decode: %v", err)
-			}
-			if eb.Error.Code != "NOT_IMPLEMENTED" || eb.Error.Message == "" {
-				t.Errorf("error envelope = %+v, want code NOT_IMPLEMENTED with message", eb.Error)
-			}
-		})
+	if err := gz.Close(); err != nil {
+		t.Fatalf("gzip close: %v", err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/dists/noble/main/binary-amd64/Packages.gz", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(buf.Bytes())
+	})
+	return httptest.NewServer(mux)
+}
+
+// TestHandleSearchPackages exercises GET /packages/search end to end — decode,
+// service, pkgindex fetch, and response mapping — through a fixture repo
+// catalog and a local httptest index server. This replaces the earlier 501
+// stub test, which only asserted the endpoint was wired, not that it worked.
+func TestHandleSearchPackages(t *testing.T) {
+	fixture := packagesFixtureServer(t)
+	defer fixture.Close()
+
+	reposYAML := fmt.Sprintf(`repos:
+  - id: ros2-jazzy
+    displayName: ROS 2 Jazzy
+    url: %s
+    index:
+      - codename: noble
+        component: main
+`, fixture.URL)
+	reposPath := filepath.Join(t.TempDir(), "package-repos.yaml")
+	if err := os.WriteFile(reposPath, []byte(reposYAML), 0o644); err != nil {
+		t.Fatalf("write repos fixture: %v", err)
+	}
+
+	manifest := `targets:
+  - {id: ubuntu24, displayName: "Ubuntu 24.04", os: ubuntu, arch: x86_64}
+`
+	mpath := filepath.Join(t.TempDir(), "manifest.yaml")
+	if err := os.WriteFile(mpath, []byte(manifest), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	srv, err := New(Config{TemplatesDir: t.TempDir(), ManifestPath: mpath, PackageReposPath: reposPath})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	rr := srv.do(httptest.NewRequest(http.MethodGet, "/api/v1/packages/search?os=ubuntu24&q=ros", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rr.Code, rr.Body)
+	}
+	var out httpapi.PackageSearchResults
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out.Packages) != 1 || out.Packages[0].Name != "ros-jazzy-rviz2" {
+		t.Fatalf("got %+v, want exactly ros-jazzy-rviz2", out.Packages)
+	}
+	if out.Packages[0].Repository != "ros2-jazzy" || out.Packages[0].Version != "14.1.4-1" {
+		t.Errorf("got repo %q version %q, want ros2-jazzy / 14.1.4-1",
+			out.Packages[0].Repository, out.Packages[0].Version)
+	}
+}
+
+// A query below the minimum length is a 400, surfaced through the real handler
+// and its error envelope — not just the service layer.
+func TestHandleSearchPackagesQueryTooShort(t *testing.T) {
+	s, _ := newTestServer(t)
+	rr := s.do(httptest.NewRequest(http.MethodGet, "/api/v1/packages/search?os=ubuntu24&q=a", nil))
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body: %s)", rr.Code, rr.Body)
 	}
 }
 

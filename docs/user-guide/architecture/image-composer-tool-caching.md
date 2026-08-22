@@ -177,6 +177,21 @@ result, so a repository is never downloaded more than once concurrently. Nothing
 in this cache is written to disk, so it is empty after every `serve` restart and
 needs no clean-up.
 
+**GPG verification is conditional, per repository.** A repository whose catalog
+entry names a local keyring path fetches and verifies that repository's
+`Release`/`Release.gpg`, and checks the fetched index's checksum against
+`Release`, before the index is searched. A repository with no configured
+keyring, or one whose configured keyring path doesn't exist on disk, is
+searched unverified rather than failing the request — the same tolerance the
+cache already applies to a fetch error. Today only the Ubuntu base repositories
+(`ubuntu-noble-base`, `ubuntu-resolute-base`) carry a genuine local trust
+anchor, the archive keyring apt itself installs at
+`/usr/share/keyrings/ubuntu-archive-keyring.gpg`; every other catalog entry is
+unverified by design, not oversight. A failed verification drops that
+repository's contribution to the search results and logs a warning rather than
+failing the whole request, so one broken or tampered mirror can't take down
+search for every other repository.
+
 ### Package Cache Organization
 
 The package cache is organized by provider to ensure each unique package is stored only once:

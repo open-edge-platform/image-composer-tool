@@ -75,6 +75,20 @@ func (m *Manifest) knowsTargetOS(id string) bool {
 	return false
 }
 
+// archesForOS reports the manifest arches osID builds for, so a repo index
+// with no explicit arch (empty means "every arch the OS builds") still
+// resolves to something concrete for a search to look up. Target ids are
+// unique, so at most one match exists; an osID matching none returns nil,
+// leaving that index unsearched rather than guessed at.
+func (m *Manifest) archesForOS(osID string) []string {
+	for _, t := range m.Targets {
+		if t.ID == osID {
+			return []string{t.Arch}
+		}
+	}
+	return nil
+}
+
 // loadManifest parses the manifest. When path is non-empty it reads that file
 // from disk (live-editable, no rebuild needed); otherwise it uses the copy
 // embedded at build time (the single-binary default).

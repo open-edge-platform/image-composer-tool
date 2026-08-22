@@ -74,6 +74,15 @@ type PackageRepo struct {
 	// Index names the package indexes to read for this repository. Empty means
 	// the repository is offered in the picker but not yet searchable.
 	Index []RepoIndex `json:"index,omitempty"`
+	// GPGKeyPath is a local filesystem path to the GPG keyring a search
+	// verifies this repository's Release against before trusting its index.
+	// Empty means the repository has no genuine local trust anchor and is
+	// searched unverified — true today for every entry except the Ubuntu
+	// base repos, which carry the archive keyring apt itself installs at
+	// /usr/share/keyrings/ubuntu-archive-keyring.gpg. Like Index, it is kept
+	// out of the wire type by fromPackageRepoList rather than by this tag, so
+	// it never reaches the browser.
+	GPGKeyPath string `json:"gpgKeyPath,omitempty"`
 }
 
 // Repository types recognised in the catalog. Empty defaults to repoTypeDeb.

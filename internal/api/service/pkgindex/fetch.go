@@ -46,6 +46,32 @@ func get(ctx context.Context, client *http.Client, url string) (io.ReadCloser, e
 	return newLimitedBody(resp.Body), nil
 }
 
+// fetchRelease reads releaseDir's Release file and its detached signature,
+// for verifyDebRelease to check before trusting an index fetched from the
+// same suite.
+func fetchRelease(ctx context.Context, client *http.Client, releaseDir string) (release, sig []byte, err error) {
+	releaseBody, err := get(ctx, client, releaseDir+"Release")
+	if err != nil {
+		return nil, nil, fmt.Errorf("fetch Release: %w", err)
+	}
+	release, err = io.ReadAll(releaseBody)
+	releaseBody.Close()
+	if err != nil {
+		return nil, nil, fmt.Errorf("read Release: %w", err)
+	}
+
+	sigBody, err := get(ctx, client, releaseDir+"Release.gpg")
+	if err != nil {
+		return nil, nil, fmt.Errorf("fetch Release.gpg: %w", err)
+	}
+	sig, err = io.ReadAll(sigBody)
+	sigBody.Close()
+	if err != nil {
+		return nil, nil, fmt.Errorf("read Release.gpg: %w", err)
+	}
+	return release, sig, nil
+}
+
 // decompress wraps r according to url's suffix. The returned reader must be
 // closed; for an uncompressed index that is r itself.
 //

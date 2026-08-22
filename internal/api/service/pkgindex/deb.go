@@ -5,11 +5,15 @@ package pkgindex
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path"
 	"strings"
 )
 
@@ -34,12 +38,12 @@ func fetchDeb(ctx context.Context, client *http.Client, r Repo) ([]Entry, error)
 	if r.Codename == "" {
 		return nil, fmt.Errorf("deb repository %s has no codename", r.URL)
 	}
-	dir := fmt.Sprintf("%s/dists/%s/%s/binary-%s/",
-		strings.TrimSuffix(r.URL, "/"), r.Codename, r.Component, r.Arch)
+	base := strings.TrimSuffix(r.URL, "/")
+	dir := fmt.Sprintf("%s/dists/%s/%s/binary-%s/", base, r.Codename, r.Component, r.Arch)
 
 	var missing []string
 	for _, name := range debIndexNames {
-		entries, err := readDebIndex(ctx, client, dir+name)
+		entries, err := readDebIndex(ctx, client, r, base, dir+name)
 		if err == nil {
 			return entries, nil
 		}
@@ -51,15 +55,28 @@ func fetchDeb(ctx context.Context, client *http.Client, r Repo) ([]Entry, error)
 	return nil, fmt.Errorf("no package index under %s (tried %s)", dir, strings.Join(missing, ", "))
 }
 
-// readDebIndex fetches one candidate index and parses it as it streams.
-func readDebIndex(ctx context.Context, client *http.Client, url string) ([]Entry, error) {
+// readDebIndex fetches one candidate index and parses it. The raw
+// (compressed) body is buffered rather than streamed straight into the
+// decompressor, because verifyDebRelease needs those exact bytes to check
+// against the checksum Release lists for this file.
+func readDebIndex(ctx context.Context, client *http.Client, r Repo, base, url string) ([]Entry, error) {
 	body, err := get(ctx, client, url)
 	if err != nil {
 		return nil, err
 	}
-	defer body.Close()
+	raw, err := io.ReadAll(body)
+	body.Close()
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", url, err)
+	}
 
-	rd, err := decompress(url, body)
+	if r.GPGKeyPath != "" {
+		if err := verifyDebRelease(ctx, client, r, base, url, raw); err != nil {
+			return nil, fmt.Errorf("verify %s: %w", url, err)
+		}
+	}
+
+	rd, err := decompress(url, io.NopCloser(bytes.NewReader(raw)))
 	if err != nil {
 		return nil, err
 	}
@@ -70,6 +87,39 @@ func readDebIndex(ctx context.Context, client *http.Client, url string) ([]Entry
 		return nil, fmt.Errorf("parse %s: %w", url, err)
 	}
 	return entries, nil
+}
+
+// verifyDebRelease checks that indexURL's already-fetched raw bytes match the
+// checksum this suite's Release lists for it, and that Release itself carries
+// a signature verifiable against r.GPGKeyPath. Any failure — a missing key
+// file, a bad signature, a checksum mismatch — is returned as an error, which
+// the caller treats the same as a failed fetch: it drops this one repo/index
+// from the results rather than failing the whole search.
+func verifyDebRelease(ctx context.Context, client *http.Client, r Repo, base, indexURL string, raw []byte) error {
+	keyring, err := os.ReadFile(r.GPGKeyPath)
+	if err != nil {
+		return fmt.Errorf("read GPG key %s: %w", r.GPGKeyPath, err)
+	}
+
+	releaseDir := fmt.Sprintf("%s/dists/%s/", base, r.Codename)
+	release, sig, err := fetchRelease(ctx, client, releaseDir)
+	if err != nil {
+		return err
+	}
+	if err := verifyRelease(release, sig, keyring); err != nil {
+		return err
+	}
+
+	wantPath := fmt.Sprintf("%s/binary-%s/%s", r.Component, r.Arch, path.Base(indexURL))
+	want, err := findChecksumInRelease(release, "SHA256", wantPath)
+	if err != nil {
+		return err
+	}
+	got := fmt.Sprintf("%x", sha256.Sum256(raw))
+	if !strings.EqualFold(got, want) {
+		return fmt.Errorf("checksum mismatch: Release lists %s, got %s", want, got)
+	}
+	return nil
 }
 
 // parseDebIndex reads RFC822 stanzas, keeping only the four fields the picker

@@ -116,18 +116,15 @@ paths:
         Supports prefix matching. Used by the package search autocomplete
         in the Advanced tab's Packages step.
 
-        NOT YET IMPLEMENTED — returns 501 NOT_IMPLEMENTED until the search
-        backend lands. That 501 is a temporary stub, not part of this contract:
-        it is deliberately undocumented in `responses` below so clients cannot
-        code against a status that disappears on implementation.
+        Omitting `q` browses a repository's catalog instead of searching it —
+        the `limit`/`offset` pair pages through the result either way.
       parameters:
         - name: q
           in: query
-          required: true
           schema:
             type: string
             minLength: 2
-          description: Search query (package name prefix)
+          description: Search query (package name prefix). Omit to browse.
         - name: os
           in: query
           required: true
@@ -152,6 +149,12 @@ paths:
             default: 20
             maximum: 50
           description: Max results to return
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+          description: Number of matching results to skip, for paging
       responses:
         "200":
           description: Matching packages

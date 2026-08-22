@@ -55,6 +55,7 @@ repos:
     description: Ubuntu 24.04 LTS main, restricted, universe and multiverse components.
     enabledByDefault: true
     os: [ubuntu24]
+    gpgKeyPath: /usr/share/keyrings/ubuntu-archive-keyring.gpg
     index:
       - codename: noble
         component: main restricted universe multiverse
@@ -85,6 +86,7 @@ repos:
     description: Ubuntu 26.04 main, restricted, universe and multiverse components.
     enabledByDefault: true
     os: [ubuntu26-server]
+    gpgKeyPath: /usr/share/keyrings/ubuntu-archive-keyring.gpg
     index:
       - codename: resolute
         component: main restricted universe multiverse
