@@ -63,6 +63,15 @@ overlayPolicy:
   conflictPolicy: fail
   replaceKernel:
     package: linux-image-6.11.0-1004-oem
+    # Optionally install further kernel-family packages alongside the image
+    # (e.g. the matching headers), following the same rules as package above:
+    # additionalPackages:
+    #   - linux-headers-6.11.0-1004-oem
+    # Optionally force driver modules into the replacement kernel's initramfs
+    # (dracut --add-drivers, or an initramfs-tools modules entry):
+    # enableExtraModules: "intel_vpu uas"
+    # Optional, descriptive only — never used to resolve/install packages:
+    # version: "6.11.0-1004-oem"
   # Optionally set the kernel command line the new kernel boots with (a full-line
   # replacement of GRUB_CMDLINE_LINUX). Uncomment and adjust as needed:
   # kernelCmdline: "quiet splash"

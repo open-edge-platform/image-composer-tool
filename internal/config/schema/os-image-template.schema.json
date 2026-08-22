@@ -609,9 +609,27 @@
           "properties": {
             "package": {
               "type": "string",
-              "description": "The replacement kernel image package to install, resolved from the configured repositories (e.g. 'linux-image-6.11.0-1004-oem').",
+              "description": "The replacement kernel image package to install, resolved from the configured repositories (e.g. 'linux-image-6.11.0-1004-oem'). Glob wildcards ('*', '?', '[...]') are accepted, matching the syntax used for ordinary systemConfig packages (e.g. 'linux-image-*-oem').",
               "minLength": 1,
-              "pattern": "^[A-Za-z0-9][A-Za-z0-9._+:-]*$"
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9+_.:~*?\\[\\]-]*$"
+            },
+            "additionalPackages": {
+              "type": "array",
+              "description": "Further kernel-family packages to install alongside 'package' (e.g. the matching headers package). Each entry follows the same resolve/preflight path as 'package', so a stale baseline package sharing its kernel-family prefix (e.g. old headers) is removed as part of the swap.",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9+_.:~*?\\[\\]-]*$"
+              }
+            },
+            "enableExtraModules": {
+              "type": "string",
+              "description": "Driver modules (space-separated, e.g. 'intel_vpu uas') to force into the replacement kernel's initramfs. Only module names and separating spaces are accepted; each module must start with an alphanumeric character or underscore.",
+              "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*( [A-Za-z0-9_][A-Za-z0-9_.-]*)*$"
+            },
+            "version": {
+              "type": "string",
+              "description": "Descriptive-only kernel version tag; never used to resolve or install packages, only surfaced for reporting."
             }
           },
           "required": ["package"],

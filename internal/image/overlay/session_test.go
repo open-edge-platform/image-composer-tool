@@ -21,7 +21,7 @@ type builderSeams struct {
 	install       func(*BaselineInfo, string, *ResolutionPlan, *PreflightReport) (*InstallResult, error)
 	createUsers   func(*config.ImageTemplate, string) error
 	configure     func(*config.ImageTemplate, string) error
-	regenBoot     func(*BaselineInfo, string, *InstallResult, *ResolutionPlan, bool) error
+	regenBoot     func(*config.ImageTemplate, *BaselineInfo, string, *InstallResult, *ResolutionPlan, bool) error
 	grubRegen     func(*config.ImageTemplate, *BaselineInfo, string) error
 	addFiles      func(*config.ImageTemplate, string, string) error
 	resize        func(*config.ImageTemplate, *Context, *Layout) error
@@ -168,7 +168,7 @@ func installOverlayTestBuilder(t *testing.T, r *builderRecorder) *Builder {
 		r.note("configure")
 		return r.configureErr
 	}
-	builderRegenBootFn = func(*BaselineInfo, string, *InstallResult, *ResolutionPlan, bool) error {
+	builderRegenBootFn = func(*config.ImageTemplate, *BaselineInfo, string, *InstallResult, *ResolutionPlan, bool) error {
 		r.note("regenBoot")
 		return r.regenErr
 	}

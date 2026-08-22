@@ -337,7 +337,7 @@ func (b *Builder) Build() error {
 	// boot-relevant PACKAGE was installed and the file would never be baked in.
 	forceRegen := b.hasPreInitramfsAdditionalFiles()
 	if err := b.timeStage("Boot Regeneration", func() error {
-		if berr := builderRegenBootFn(b.info, b.layout.RootMount, installed, b.plan, forceRegen); berr != nil {
+		if berr := builderRegenBootFn(b.template, b.info, b.layout.RootMount, installed, b.plan, forceRegen); berr != nil {
 			return fmt.Errorf("overlay build: boot regeneration failed: %w", berr)
 		}
 		return nil

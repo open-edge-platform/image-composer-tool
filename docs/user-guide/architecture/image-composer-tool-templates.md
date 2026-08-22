@@ -420,7 +420,7 @@ top-level peer of `baseline` and may **only** be set when `baseline.mode` is
 | `grubDefault` | string | No | — | Optional `GRUB_DEFAULT` override (pins the default boot menu entry, e.g. the Ubuntu submenu path `Advanced options for Ubuntu>Ubuntu, with Linux <ver>`). Only applied on a GRUB2 baseline. Same character restrictions as `kernelCmdline` |
 | `allowDiskResize` | boolean | No | `false` (default), `true` | Permit growing the baseline image to satisfy a larger `disk.size`. Overlay mode preserves the baseline disk layout by default; when `false`, a `disk.size` larger than the baseline is rejected with an error. Resize is always grow-only and never shrinks the image |
 | `allowPackageRemoval` | boolean | No | `false` (default), `true` | Permit removing a baseline package that a to-install package conflicts with (e.g. installing `dracut`, which conflicts with `initramfs-tools`). When `false` (the default) such a conflict fails the build; when `true`, the conflicting baseline package is removed before install. **Only valid with `packageOperation: additive-and-upgrade`** — removal is more invasive than an in-place upgrade, so it is rejected under the default `additive-only`. Bootloader and bootable-kernel packages are never removed regardless of this flag (to swap the kernel, use `replaceKernel`) |
-| `replaceKernel` | object | No | `{ package: <name> }` | Replace the baseline kernel: install the named kernel package and remove the baseline kernel family (image + meta + modules + headers) so the image ships **only** the new kernel, then regenerate the GRUB menu to default to it. The ESP and bootloader binary are never touched (no `grub-install`, no Secure Boot re-signing). **Only valid with `packageOperation: additive-and-upgrade`**; does **not** require `allowPackageRemoval` (it self-authorizes its own kernel-family removals). See the note below |
+| `replaceKernel` | object | No | `{ package: <name>, additionalPackages: [...], enableExtraModules: <string>, version: <string> }` | Replace the baseline kernel: install the named kernel package (plus any `additionalPackages`, e.g. the matching headers) and remove the baseline kernel family (image + meta + modules + headers) so the image ships **only** the new kernel, then regenerate the GRUB menu to default to it. The ESP and bootloader binary are never touched (no `grub-install`, no Secure Boot re-signing). **Only valid with `packageOperation: additive-and-upgrade`**; does **not** require `allowPackageRemoval` (it self-authorizes its own kernel-family removals). See the note below |
 
 > **`additive-and-upgrade` scope.** Upgrades apply only to the package set: a
 > package already installed in the baseline may be replaced by a newer version
@@ -488,14 +488,31 @@ plus `allowPackageRemoval: true`) to it.
 > swap** instead:
 >
 > 1. the named replacement kernel is resolved from the configured repositories and
->    installed (like any other overlay package);
-> 2. the baseline kernel **family** — the bootable image plus its meta-package,
+>    installed (like any other overlay package). The `package` value accepts the same
+>    glob wildcards as an ordinary `systemConfig` package (`*`, `?`, `[...]`), so you
+>    can write `linux-image-*-oem` instead of pinning an exact version. The pattern must
+>    resolve to **exactly one** bootable kernel image: a value that matches no kernel
+>    (a typo, or a userspace-only package) or several kernels (an over-broad glob)
+>    fails preflight, which lists what it matched so you can narrow it;
+> 2. any `additionalPackages` (e.g. the matching `linux-headers-*` package) are
+>    resolved and installed alongside `package`, following the same rules as
+>    `package` itself;
+> 3. the baseline kernel **family** — the bootable image plus its meta-package,
 >    modules, and headers (e.g. `linux-image-6.8.0-40-generic`,
 >    `linux-image-generic`, `linux-modules-*`, `linux-headers-*`) — is auto-detected
->    and removed, so the emitted image ships **only** the new kernel;
-> 3. the GRUB config is regenerated so the removed kernel's menu entry is dropped
+>    and removed, so the emitted image ships **only** the new kernel and whatever
+>    `additionalPackages` you named;
+> 4. the GRUB config is regenerated so the removed kernel's menu entry is dropped
 >    and `GRUB_DEFAULT` points at the new kernel (auto-pinned to `"0"` when you do
 >    not set `grubDefault` explicitly).
+>
+> `enableExtraModules` (space-separated driver modules, e.g. `"intel_vpu uas"`)
+> mirrors `systemConfig.kernel.enableExtraModules` but is scoped to the
+> replacement kernel: the named modules are forced into its regenerated
+> initramfs (`dracut --add-drivers`, or an `/etc/initramfs-tools/modules` entry
+> on an `initramfs-tools` baseline). `version` is descriptive only — it is never
+> used to resolve or install packages, only surfaced for reporting (e.g. the
+> compose summary).
 >
 > Only the GRUB **config** on the writable root is updated — the ESP and the
 > bootloader binary are never touched (no `grub-install`), matching the overlay
@@ -508,8 +525,9 @@ plus `allowPackageRemoval: true`) to it.
 > self-authorizes **only** its own kernel-family removals, if it orphans an
 > unrelated non-kernel baseline package (for example a DKMS module bound to the
 > removed kernel's modules/headers) the build fails **closed** unless you *also*
-> enable `allowPackageRemoval`. A `replaceKernel` set
-> on a non-GRUB2 baseline is a hard error. Userspace kernel-adjacent packages
+> enable `allowPackageRemoval`. A `replaceKernel` set on a non-GRUB2 baseline
+> (including a UKI baseline) is a hard error, raised at preflight before any
+> package is installed or removed. Userspace kernel-adjacent packages
 > (`linux-libc-dev`, `linux-tools-common`, rpm `kernel-headers`/`kernel-devel`) are
 > **not** removed.
 
@@ -528,6 +546,13 @@ overlayPolicy:
   # auto-pinned to the new kernel unless grubDefault is set below.
   replaceKernel:
     package: linux-image-6.11.0-1004-oem
+    # Optional: further kernel-family packages to install alongside package.
+    additionalPackages:
+      - linux-headers-6.11.0-1004-oem
+    # Optional: driver modules forced into the replacement kernel's initramfs.
+    enableExtraModules: "intel_vpu uas"
+    # Optional: descriptive only, never used to resolve/install packages.
+    version: "6.11.0-1004-oem"
 
   # Optional: the exact command line the new kernel boots with.
   # kernelCmdline: "quiet splash"

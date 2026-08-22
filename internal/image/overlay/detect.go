@@ -463,8 +463,31 @@ func detectKernels(rootMount string) []string {
 }
 
 // detectBootloader classifies the bootloader type by inspecting well-known paths
-// under the mounted root (the ESP is mounted at <root>/boot/efi). It is a
-// best-effort classification used for reporting, not a gate.
+// under the mounted root (the ESP is mounted at <root>/boot/efi). Despite the
+// original "reporting only" framing, the result IS now a gate: RegenerateGrub
+// trusts info.Bootloader == "grub2" to authorize overlayPolicy.kernelCmdline,
+// grubDefault, and replaceKernel, all of which assume a GRUB-config-only
+// regeneration is safe. Preflight enforces the SAME gate but only for
+// replaceKernel — before any package is installed or removed, so a systemd-boot
+// or UKI baseline fails fast instead of leaving the chroot partially mutated;
+// kernelCmdline and grubDefault have no preflight equivalent and are rejected
+// only later, when RegenerateGrub itself runs.
+//
+// The cases are therefore ordered MOST- to LEAST-invasive-to-trust: a UKI or an
+// UNAMBIGUOUS EFI systemd-boot signature is checked before a GRUB one, so a
+// baseline carrying BOTH (e.g. a leftover /boot/grub directory from a prior
+// installation that migrated to a UKI/systemd-boot setup) is classified by the
+// non-GRUB signature and fails those gates, rather than being misread as a safe
+// GRUB2 baseline. A baseline actually booting via GRUB2 never has a genuine
+// reason to also carry a UKI or EFI systemd-boot signature, so this ordering
+// costs nothing in the common case and fails closed in the mixed/ambiguous one.
+//
+// The one shared signature is /boot/loader/entries: it is the Boot Loader Spec
+// layout that systemd-boot uses, but GRUB2 on the RHEL/Rocky family also emits
+// it. Treating it as systemd-boot ahead of GRUB would misclassify a genuine
+// GRUB2+BLS baseline and reject a supported kernel replacement, so it is checked
+// only AFTER the GRUB directory, as a systemd-boot fallback when no GRUB
+// directory is present.
 func detectBootloader(rootMount string) string {
 	// Probe through the confined symlink walk rather than os.Stat(filepath.Join(
 	// rootMount, ...)): a baseline that symlinks a component (e.g. boot/efi -> /)
@@ -478,12 +501,14 @@ func detectBootloader(rootMount string) string {
 	}
 
 	switch {
-	case exists("boot", "grub2"), exists("boot", "grub"):
-		return "grub2"
-	case exists("boot", "efi", "EFI", "systemd"), exists("boot", "efi", "loader"), exists("boot", "loader", "entries"):
-		return "systemd-boot"
 	case exists("boot", "efi", "EFI", "Linux"):
 		return "uki"
+	case exists("boot", "efi", "EFI", "systemd"), exists("boot", "efi", "loader"):
+		return "systemd-boot"
+	case exists("boot", "grub2"), exists("boot", "grub"):
+		return "grub2"
+	case exists("boot", "loader", "entries"):
+		return "systemd-boot"
 	default:
 		return "unknown"
 	}

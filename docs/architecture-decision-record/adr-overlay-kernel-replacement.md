@@ -139,7 +139,7 @@ leaves kernel immutability intact for every build that does not opt in.
 | New kernel version equals removed one | GRUB menu keeps a stale entry | Swap forces regeneration regardless of the `addedKernels` diff |
 | New kernel not the boot default | Machine boots the wrong entry | `GRUB_DEFAULT` auto-pinned to `"0"` (or the template's `grubDefault`) |
 | Unsigned swapped-in kernel on Secure Boot baseline | Image fails to boot under SB | Best-effort warning; overlay never signs (ESP read-only) — documented |
-| `replaceKernel` on a non-GRUB2 baseline | Would silently ship an unbootable swap | Hard error at the GRUB stage |
+| `replaceKernel` on a non-GRUB2 baseline (including UKI) | Would silently ship an unbootable swap | Hard error raised at preflight, before any install/removal work; also enforced defense-in-depth at the GRUB stage |
 
 ## Alternatives Considered
 
@@ -159,4 +159,38 @@ leaves kernel immutability intact for every build that does not opt in.
 - rpm-family end-to-end validation of a `kernel` swap under `rpm -e`/`rpm -i`.
 - ESP-staged kernel/initrd layouts and separate `/boot` partitions (shared
   limitation with the parent ADR).
+- Detecting a UKI-packaged *replacement* kernel specifically (as opposed to a
+  non-GRUB2 *baseline*, which is already a hard error): a package's file
+  manifest does not reliably reveal UKI-ness, since `kernel-install`-based
+  tooling assembles the combined `.efi` at postinst time rather than shipping
+  it in the package.
 - Re-signing the swapped-in kernel for Secure Boot within overlay mode.
+
+## Amendments
+
+- **`package` accepts glob wildcards**: Decision Point 1 above describes
+  `replaceKernel.package` as "a single package name"; it now also accepts the
+  same glob syntax (`*`, `?`, `[...]`) as an ordinary `systemConfig` package
+  (e.g. `linux-image-*-oem`), so a swap can name a kernel by pattern rather than
+  an exact version-qualified string. Whitespace and genuine shell metacharacters
+  stay rejected. The swap logic is unchanged: the resolver glob-expands the name,
+  and the request must still resolve to **exactly one concrete replacement
+  kernel** (an ambiguous glob matching several distinct kernel images is a hard
+  error), so the old-kernel removal and GRUB default pin remain unambiguous.
+- **`additionalPackages []string`**: further kernel-family packages (e.g. the
+  matching `linux-headers-*`) to install alongside `package`. Each entry is
+  appended to the requested set in `overlayRequestedPackages` exactly like
+  `package`, so no change was needed to the removal-family keep-set logic
+  (Decision Point 2) — it already spans the full resolved closure.
+- **`enableExtraModules string`**: mirrors `systemConfig.kernel.enableExtraModules`
+  for create mode, scoped to the replacement kernel's initramfs (dracut
+  `--add-drivers`, or an `initramfs-tools` modules-file entry). Validated by
+  allowlist (module names and separating spaces only) since it is interpolated
+  into a generator shell command.
+- **`version string`**: descriptive-only kernel version tag, surfaced in the
+  compose API summary; never consulted by the resolver or package manager.
+- **Fail-fast non-GRUB2 guard**: the check in Decision Point 4/row above now
+  also runs in `Preflight()`, before any package is installed or removed, so a
+  `systemd-boot`/`uki` baseline is rejected before mutating the chroot. The
+  original GRUB-stage check (Decision Point 4) is unchanged and still runs as
+  defense-in-depth.

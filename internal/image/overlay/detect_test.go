@@ -138,6 +138,18 @@ func TestDetectBootloader(t *testing.T) {
 		{"systemd-boot loader", []string{"boot/efi/loader"}, "systemd-boot"},
 		{"uki", []string{"boot/efi/EFI/Linux"}, "uki"},
 		{"unknown", nil, "unknown"},
+		// A baseline carrying BOTH a GRUB directory and a UKI/systemd-boot signature
+		// (e.g. a leftover /boot/grub from a prior installation that migrated to UKI)
+		// must classify by the non-GRUB signature: Preflight/RegenerateGrub trust
+		// "grub2" to authorize a GRUB-config-only kernel swap, which is unsafe here.
+		{"mixed grub2 + uki classifies as uki", []string{"boot/grub2", "boot/efi/EFI/Linux"}, "uki"},
+		{"mixed grub + systemd-boot classifies as systemd-boot", []string{"boot/grub", "boot/efi/loader"}, "systemd-boot"},
+		// /boot/loader/entries is the shared BLS layout GRUB2 also emits on the
+		// RHEL/Rocky family, so a baseline carrying it alongside a GRUB directory
+		// must still classify as grub2 (a supported kernel-replacement baseline),
+		// not systemd-boot. Only a bare loader/entries (no GRUB dir) is systemd-boot.
+		{"mixed grub2 + BLS loader/entries classifies as grub2", []string{"boot/grub2", "boot/loader/entries"}, "grub2"},
+		{"bare BLS loader/entries classifies as systemd-boot", []string{"boot/loader/entries"}, "systemd-boot"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

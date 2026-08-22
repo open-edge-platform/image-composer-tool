@@ -579,7 +579,10 @@ func TestOverlayPolicyReplaceKernelValidation(t *testing.T) {
 		{"rejected under empty (defaults to additive-only)", "", "linux-image-6.11.0-1004-oem", true, "replaceKernel requires packageOperation"},
 		{"empty package rejected", OverlayPackageOpAdditiveAndUpgrade, "   ", true, "replaceKernel.package must be set"},
 		{"whitespace in package rejected", OverlayPackageOpAdditiveAndUpgrade, "linux image", true, "must not contain whitespace or shell metacharacters"},
+		{"embedded carriage return in package rejected", OverlayPackageOpAdditiveAndUpgrade, "linux\rimage", true, "must not contain whitespace or shell metacharacters"},
 		{"shell metachar in package rejected", OverlayPackageOpAdditiveAndUpgrade, "linux-image;reboot", true, "must not contain whitespace or shell metacharacters"},
+		{"glob wildcard package accepted", OverlayPackageOpAdditiveAndUpgrade, "linux-image-*", true, ""},
+		{"glob char class package accepted", OverlayPackageOpAdditiveAndUpgrade, "kernel-[0-9]*", true, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -614,6 +617,85 @@ func TestOverlayPolicyReplaceKernelDoesNotRequireRemoval(t *testing.T) {
 	}
 	if err := p.validate(); err != nil {
 		t.Fatalf("replaceKernel must not require allowPackageRemoval, got %v", err)
+	}
+}
+
+// TestOverlayPolicyReplaceKernelAdditionalPackagesValidation confirms validate()
+// applies the same non-empty, metacharacter-free rule to each
+// replaceKernel.additionalPackages entry as it does to package.
+func TestOverlayPolicyReplaceKernelAdditionalPackagesValidation(t *testing.T) {
+	cases := []struct {
+		name    string
+		extra   []string
+		wantErr string
+	}{
+		{"unset is fine", nil, ""},
+		{"valid headers package accepted", []string{"linux-headers-6.11.0-1004-oem"}, ""},
+		{"valid glob accepted", []string{"linux-headers-*"}, ""},
+		{"multiple valid entries accepted", []string{"linux-headers-6.11.0-1004-oem", "linux-modules-extra-6.11.0-1004-oem"}, ""},
+		{"empty entry rejected", []string{"   "}, "additionalPackages entries must not be empty"},
+		{"shell metachar rejected", []string{"linux-headers;reboot"}, "must not contain whitespace or shell metacharacters"},
+		{"whitespace rejected", []string{"linux headers"}, "must not contain whitespace or shell metacharacters"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := &OverlayPolicy{
+				PackageOperation: OverlayPackageOpAdditiveAndUpgrade,
+				ReplaceKernel: &ReplaceKernel{
+					Package:            "linux-image-6.11.0-1004-oem",
+					AdditionalPackages: c.extra,
+				},
+			}
+			err := p.validate()
+			if c.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+				t.Errorf("error = %v, want substring %q", err, c.wantErr)
+			}
+		})
+	}
+}
+
+// TestOverlayPolicyReplaceKernelEnableExtraModulesValidation confirms validate()
+// allowlists replaceKernel.enableExtraModules to module names and separating
+// spaces, since it is interpolated into an initramfs-generator shell command.
+func TestOverlayPolicyReplaceKernelEnableExtraModulesValidation(t *testing.T) {
+	cases := []struct {
+		name    string
+		modules string
+		wantErr string
+	}{
+		{"unset is fine", "", ""},
+		{"single module accepted", "intel_vpu", ""},
+		{"multiple modules accepted", "intel_vpu uas", ""},
+		{"dotted/dashed module names accepted", "my-mod my.mod", ""},
+		{"shell metachar rejected", "intel_vpu; reboot", "must contain only module names"},
+		{"embedded quote rejected", "intel_vpu' uas", "must contain only module names"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := &OverlayPolicy{
+				PackageOperation: OverlayPackageOpAdditiveAndUpgrade,
+				ReplaceKernel: &ReplaceKernel{
+					Package:            "linux-image-6.11.0-1004-oem",
+					EnableExtraModules: c.modules,
+				},
+			}
+			err := p.validate()
+			if c.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+				t.Errorf("error = %v, want substring %q", err, c.wantErr)
+			}
+		})
 	}
 }
 

@@ -557,10 +557,11 @@ func purgeOverlayArtifacts(destDir string) error {
 // deliberately excluded — they belong to the baseline and must not be touched.
 //
 // The one kernel exception is overlayPolicy.replaceKernel: its replacement kernel
-// package is appended here so it flows through the normal resolve → download →
-// closure → ToInstall path and is preflighted as an ActionAdd (allowed). The
-// matching removal of the baseline kernel family is handled separately, in
-// preflight (classifyKernelReplacementRemovals).
+// package, plus any additionalPackages (e.g. the matching headers package), are
+// appended here so they flow through the normal resolve → download → closure →
+// ToInstall path and are preflighted as ActionAdd (allowed). The matching removal
+// of the baseline kernel family is handled separately, in preflight
+// (classifyKernelReplacementRemovals).
 func overlayRequestedPackages(template *config.ImageTemplate) []string {
 	var pkgs []string
 	for _, p := range template.SystemConfig.Packages {
@@ -571,6 +572,11 @@ func overlayRequestedPackages(template *config.ImageTemplate) []string {
 	if op := template.OverlayPolicy; op != nil && op.ReplaceKernel != nil {
 		if p := strings.TrimSpace(op.ReplaceKernel.Package); p != "" {
 			pkgs = append(pkgs, p)
+		}
+		for _, ap := range op.ReplaceKernel.AdditionalPackages {
+			if ap = strings.TrimSpace(ap); ap != "" {
+				pkgs = append(pkgs, ap)
+			}
 		}
 	}
 	pkgs = dedupeStrings(pkgs)
