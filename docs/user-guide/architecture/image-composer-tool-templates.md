@@ -319,8 +319,9 @@ RAW, or the complete SBOM vs the baseline SBOM — see
 > into the baseline root, the initramfs is regenerated for the added packages,
 > the template's [`systemConfig.configurations`](#systemconfigconfigurations)
 > commands and [`systemConfig.additionalFiles`](#systemconfigadditionalfiles) are
-> applied, and an optional grow-only resize can enlarge the image to a larger
-> `disk.size`. Existing baseline packages are not removed unless
+> applied, and an optional grow-only resize — auto-sized from the resolved
+> packages' installed-size metadata, optionally capped by `disk.size` — can
+> enlarge the image to fit them. Existing baseline packages are not removed unless
 > [`overlayPolicy.allowPackageRemoval`](#overlaypolicy) is enabled, which permits a
 > conflict-driven removal of a baseline package a to-install package conflicts
 > with. The installed bootloader binary and the ESP are never modified regardless
@@ -338,9 +339,12 @@ RAW, or the complete SBOM vs the baseline SBOM — see
 > pipeline reads disk/bootloader/kernel geometry from the detected baseline, not
 > from the template, so the effective overlay template is exactly what you declare
 > (folded through any `extends:` chain) with nothing inherited from the OS default.
-> In particular, an overlay template that omits `disk.size` keeps the baseline's
-> size — it does not pick up the default's `disk.size`, which against a larger
-> baseline would otherwise be rejected as a shrink.
+> In particular, an overlay template that omits `disk.size` does not pick up the
+> default's `disk.size` for an exact target. With
+> [`overlayPolicy.allowDiskResize`](#overlaypolicy) enabled, resize is instead
+> auto-sized from the resolved packages' installed-size needs — uncapped when
+> `disk.size` is left unset — so an overlay build can still grow the image
+> without `disk.size` set at all; see the **Sizing** note below.
 >
 > **Unsupported systemConfig sections.** Because overlay mode does not re-run the
 > boot/system-provisioning stages, the following `systemConfig` sections cannot be
@@ -366,17 +370,43 @@ RAW, or the complete SBOM vs the baseline SBOM — see
 > `shell`, and `passwordMaxAge`. The login shell is always set to `/bin/bash`, so
 > a service account cannot yet be pinned to `/usr/sbin/nologin` via the template.
 >
-> **Sizing:** Adding packages does **not** auto-grow the image, and the overlay
-> preserves the baseline disk layout by default. Growing the image is opt-in: it
-> requires **both** a `disk.size` larger than the baseline **and**
-> `overlayPolicy.allowDiskResize: true`. When `disk.size` is larger but
-> `allowDiskResize` is not set, the build fails early with a clear message rather
-> than silently resizing the baseline. The resize is grow-only and keyed solely
-> on `disk.size` (compared to the baseline's current size), not on how much space
-> the added packages need. If the baseline root is near-full, set `disk.size`
-> larger than the baseline image and enable `allowDiskResize` to make room;
-> otherwise the package install step fails with a "no space left on device"
-> error (the failure message points back here).
+> **Sizing:** Growing the image is opt-in via `overlayPolicy.allowDiskResize:
+> true`. When it is `false` and the resolved packages' installed-size metadata
+> shows the baseline needs more room, the build fails immediately during resize
+> planning — before any package is installed — naming the `allowDiskResize`
+> opt-in. If no package reports a size **and** `disk.size` is also unset, resize
+> planning has nothing to act on and is skipped instead of failing; a real
+> shortage then only surfaces later, at package install, as "no space left on
+> device". If no package reports a size but `disk.size` **is** set, resize
+> planning falls back to that ceiling as the target, so the same
+> `allowDiskResize: false` failure applies whenever the ceiling exceeds the
+> baseline. When resize is enabled, the tool
+> **auto-sizes** the grow: it estimates the space the packages being installed
+> need — summing each package's reported installed size (Debian `Installed-Size`,
+> RPM `<size installed=…>`) with a conservative overhead factor and margin —
+> measures the baseline's real free space, and grows the image only by the
+> shortfall (rounded up). `disk.size`, if set, acts as a **ceiling**: the final
+> image may be *smaller* than `disk.size`, but never larger; a configured
+> `disk.size` smaller than the baseline is rejected up front as an impossible
+> constraint. If the computed need
+> exceeds the ceiling, the tool caps at it and logs a warning (the install may
+> then hit "no space left on device"). Leaving `disk.size` unset (with
+> `allowDiskResize: true`) auto-sizes with **no cap**: the image grows freely to
+> the computed need.
+>
+> If no package reports a size (missing metadata), the tool falls back to
+> `disk.size` (or, with no ceiling, performs no grow). Resize is grow-only and
+> never shrinks the image.
+>
+> **Partial metadata is not treated as complete.** When some (but not all)
+> resolved packages report a size, summing only the known ones would understate
+> the real need. The tool does not auto-size from that partial estimate: with
+> `disk.size` set, it grows straight to that ceiling instead (skipping the
+> free-space measurement) and logs a warning that the estimate was incomplete;
+> with `disk.size` unset, the build fails up front with an actionable error
+> asking you to set a ceiling. The uncapped, measured-shortfall auto-sizing
+> described above only applies when every resolved package reports a size (or
+> none does).
 >
 > **Resize constraints.** The grow-only resize extends the **last** partition on
 > the disk and its filesystem in place. It is rejected (before any disk mutation,
@@ -418,7 +448,7 @@ top-level peer of `baseline` and may **only** be set when `baseline.mode` is
 | `conflictPolicy` | string | No | `fail` (default), `allow-explicit` | How a package conflict detected during preflight is handled. `fail` aborts the build; `allow-explicit` permits a conflict only when the conflicting package was explicitly requested |
 | `kernelCmdline` | string | No | — | Optional kernel command-line override applied to the overlaid image (full-line replacement of `GRUB_CMDLINE_LINUX` on a GRUB2 baseline). Must not contain a double quote, dollar sign, backtick, backslash, or newline |
 | `grubDefault` | string | No | — | Optional `GRUB_DEFAULT` override (pins the default boot menu entry, e.g. the Ubuntu submenu path `Advanced options for Ubuntu>Ubuntu, with Linux <ver>`). Only applied on a GRUB2 baseline. Same character restrictions as `kernelCmdline` |
-| `allowDiskResize` | boolean | No | `false` (default), `true` | Permit growing the baseline image to satisfy a larger `disk.size`. Overlay mode preserves the baseline disk layout by default; when `false`, a `disk.size` larger than the baseline is rejected with an error. Resize is always grow-only and never shrinks the image |
+| `allowDiskResize` | boolean | No | `false` (default), `true` | Permit growing the baseline image to fit the added packages. When `true`, the tool auto-sizes the grow from the resolved packages' installed sizes, capped at `disk.size` when it is set (unset auto-sizes with no cap). When `false` and the resolved packages' size metadata shows more room is needed, the build fails immediately during resize planning, before any package is installed; when no package reports a size, resize planning falls back to `disk.size` (if set) as the target, so the same early failure applies whenever that ceiling exceeds the baseline — only when both are unset does the shortage instead surface later, at install, as "no space left on device". Resize is always grow-only and never shrinks the image |
 | `allowPackageRemoval` | boolean | No | `false` (default), `true` | Permit removing a baseline package that a to-install package conflicts with (e.g. installing `dracut`, which conflicts with `initramfs-tools`). When `false` (the default) such a conflict fails the build; when `true`, the conflicting baseline package is removed before install. **Only valid with `packageOperation: additive-and-upgrade`** — removal is more invasive than an in-place upgrade, so it is rejected under the default `additive-only`. Bootloader and bootable-kernel packages are never removed regardless of this flag (to swap the kernel, use `replaceKernel`) |
 | `replaceKernel` | object | No | `{ package: <name>, additionalPackages: [...], enableExtraModules: <string>, version: <string> }` | Replace the baseline kernel: install the named kernel package (plus any `additionalPackages`, e.g. the matching headers) and remove the baseline kernel family (image + meta + modules + headers) so the image ships **only** the new kernel, then regenerate the GRUB menu to default to it. The ESP and bootloader binary are never touched (no `grub-install`, no Secure Boot re-signing). **Only valid with `packageOperation: additive-and-upgrade`**; does **not** require `allowPackageRemoval` (it self-authorizes its own kernel-family removals). See the note below |
 
@@ -575,7 +605,7 @@ boot and ext4 root partitions).
 |-------|------|----------|-------------|
 | `name` | string | **Yes** (schema) | Disk configuration name (e.g., `"Default_Raw"`) |
 | `path` | string | No | Disk device path (used by live installer, e.g., `/dev/sda`) |
-| `size` | string | No | Disk size. Accepts: `"4GiB"`, `"8GB"`, `"4096 MiB"` |
+| `size` | string | No | Disk size. Accepts: `"4GiB"`, `"8GB"`, `"4096 MiB"`. In create mode this is the exact disk size; in overlay mode it is the auto-size ceiling with `overlayPolicy.allowDiskResize` (see the overlay **Sizing** note) |
 | `partitionTableType` | string | No | `gpt` or `mbr` |
 | `artifacts` | artifact[] | No | Output formats and optional compression |
 | `partitions` | partition[] | No | Partition layout definitions |

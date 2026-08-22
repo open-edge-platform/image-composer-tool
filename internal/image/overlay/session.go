@@ -268,7 +268,7 @@ func (b *Builder) Build() error {
 	// mounted (resize2fs/xfs_growfs both grow online) and the loop device is
 	// already attached from Preprocess, so growing here is safe.
 	if err := b.timeStage("Resize", func() error {
-		if rerr := builderResizeFn(b.template, b.ctx, b.layout); rerr != nil {
+		if rerr := builderResizeFn(b.template, b.ctx, b.layout, b.plan); rerr != nil {
 			return fmt.Errorf("overlay build: resize failed: %w", rerr)
 		}
 		return nil

@@ -84,6 +84,14 @@ type ResolvedPackage struct {
 	// virtual name that a co-added package satisfies (e.g. two packages that both
 	// Provide and Conflict "mail-transport-agent").
 	Provides []string
+	// InstalledSizeBytes is the package's estimated unpacked on-disk footprint in
+	// bytes (from the repo metadata). Meaningful only when HasInstalledSize is
+	// true. It is summed across ToInstall to estimate how far to grow the
+	// baseline before installing.
+	InstalledSizeBytes int64
+	// HasInstalledSize reports whether the repository metadata included a
+	// parsable installed size for this package; see ospackage.PackageInfo.
+	HasInstalledSize bool
 }
 
 // ResolutionPlan is the deterministic output of overlay dependency resolution.
@@ -856,6 +864,7 @@ func buildResolutionPlan(in planInput) *ResolutionPlan {
 			Name: name, Version: p.Version, Arch: p.Arch, URL: p.URL,
 			Type: p.Type, Description: p.Description, Origin: p.Origin,
 			License: p.License, Checksums: p.Checksums, Provides: p.Provides,
+			InstalledSizeBytes: p.InstalledSizeBytes, HasInstalledSize: p.HasInstalledSize,
 		}
 		resolved = append(resolved, rp)
 		if !present[name] {

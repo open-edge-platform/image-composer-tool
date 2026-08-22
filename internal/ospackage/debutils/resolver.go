@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -119,7 +121,12 @@ func GenerateDot(pkgs []ospackage.PackageInfo, file string, pkgSources map[strin
 // miss and re-parsed, rather than silently returning records missing the new data.
 // v2: PackageInfo.Breaks is now parsed and consumed by the overlay Breaks-driven
 // upgrade; a v1 cache would omit it.
-const parsedPackageCacheVersion = 2
+// v3: PackageInfo.InstalledSizeBytes is now parsed from Installed-Size and feeds
+// overlay auto-sizing; a v2 (or older) cache would report every package as size 0.
+// v4: PackageInfo.HasInstalledSize is now parsed alongside InstalledSizeBytes to
+// distinguish an explicit zero footprint from a missing size; a v3 cache would
+// report every package as HasInstalledSize=false (treated as unknown).
+const parsedPackageCacheVersion = 4
 
 // packageMetadataCache stores parsed package metadata keyed by the Packages.gz SHA256
 // checksum recorded in the Release file. A matching checksum means the upstream
@@ -558,6 +565,15 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 				Algorithm: "SHA512",
 				Value:     val,
 			})
+		case "Installed-Size":
+			// Installed-Size is the estimated unpacked footprint in KiB; store it in
+			// bytes. A malformed value, or one whose ×1024 conversion would overflow
+			// int64, is treated as "unknown" (HasInstalledSize stays false) rather than
+			// fatal — it only feeds an overlay disk-size estimate, never correctness.
+			if kib, perr := strconv.ParseInt(val, 10, 64); perr == nil && kib >= 0 && kib <= math.MaxInt64/1024 {
+				pkg.InstalledSizeBytes = kib * 1024
+				pkg.HasInstalledSize = true
+			}
 		case "Description":
 			pkg.Description = val
 		case "Architecture":

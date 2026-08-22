@@ -382,7 +382,9 @@ This confirms the package name is correct before running the build, preventing
 
 4. **Disk size** — extra packages need space. If the base template is 4 GiB
    and you're adding ROS2, Docker, or large SDKs, edit `disk.size` in the
-   custom template before building.
+   custom template before building. For an **overlay** template, instead set
+   `overlayPolicy.allowDiskResize: true`; the tool auto-sizes the grow from what
+   the added packages need, and `disk.size` (if set) caps that auto-sized grow.
 
 4. **Build from user-templates** — the build command should reference the
   workspace-local path: `sudo -E ./image-composer-tool build user-templates/<name>.yml`.

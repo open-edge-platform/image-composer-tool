@@ -3,6 +3,8 @@ package rpmutils
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -409,6 +411,47 @@ func TestParsePrimary(t *testing.T) {
 	}
 }
 
+// TestParsePrimary_InstalledSize confirms the rpm-md <size installed="…"/>
+// element is parsed into PackageInfo.InstalledSizeBytes (used to auto-size an
+// overlay disk grow), and that a package without a <size> element reports 0.
+func TestParsePrimary_InstalledSize(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="UTF-8"?><metadata xmlns="http://linux.duke.edu/metadata/common" xmlns:rpm="http://linux.duke.edu/metadata/rpm" packages="3">` +
+		`<package type="rpm"><name>bash</name><arch>x86_64</arch><size package="1000" installed="524288" archive="2000"/><location href="bash.rpm"/><format></format></package>` +
+		`<package type="rpm"><name>nosize</name><arch>x86_64</arch><location href="nosize.rpm"/><format></format></package>` +
+		`<package type="rpm"><name>zerosize</name><arch>x86_64</arch><size package="1000" installed="0" archive="2000"/><location href="zerosize.rpm"/><format></format></package>` +
+		`</metadata>`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/gzip")
+		_, _ = w.Write(compressGzip(t, xml))
+	}))
+	defer server.Close()
+
+	packages, err := ParseRepositoryMetadata(server.URL+"/", "primary.xml.gz", nil)
+	if err != nil {
+		t.Fatalf("ParseRepositoryMetadata: %v", err)
+	}
+	// Key on PkgName (the canonical <name>): <location> overwrites Name with the
+	// rpm filename basename.
+	got := map[string]int64{}
+	hasSize := map[string]bool{}
+	for _, p := range packages {
+		got[p.PkgName] = p.InstalledSizeBytes
+		hasSize[p.PkgName] = p.HasInstalledSize
+	}
+	if got["bash"] != 524288 || !hasSize["bash"] {
+		t.Errorf("bash InstalledSizeBytes/HasInstalledSize = %d/%v, want 524288/true", got["bash"], hasSize["bash"])
+	}
+	if got["nosize"] != 0 || hasSize["nosize"] {
+		t.Errorf("nosize InstalledSizeBytes/HasInstalledSize = %d/%v, want 0/false (no <size> element)", got["nosize"], hasSize["nosize"])
+	}
+	// An explicit installed="0" is a real, reported footprint — distinct from a
+	// package that omits <size> entirely — and must be marked known.
+	if got["zerosize"] != 0 || !hasSize["zerosize"] {
+		t.Errorf("zerosize InstalledSizeBytes/HasInstalledSize = %d/%v, want 0/true (confirmed zero footprint)", got["zerosize"], hasSize["zerosize"])
+	}
+}
+
 func TestMatchesPackageFilter(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -772,6 +815,289 @@ func TestParseRepositoryMetadata_UsesCacheOffline(t *testing.T) {
 	}
 	if atomic.LoadInt32(&requestCount) != 1 {
 		t.Fatalf("expected no additional network requests when using cache, got %d", atomic.LoadInt32(&requestCount))
+	}
+}
+
+// A cache written before InstalledSizeBytes was added (no "version" key, so it
+// unmarshals to the zero value) must be rejected as stale and re-fetched, rather
+// than served with every package's installed size silently missing.
+func TestParseRepositoryMetadata_StaleUnversionedCacheIsRejected(t *testing.T) {
+	origCfg := config.Global()
+	updatedCfg := origCfg
+	updatedCfg.CacheDir = t.TempDir()
+	config.SetGlobal(updatedCfg)
+	defer config.SetGlobal(origCfg)
+
+	var requestCount int32
+	xmlContent := `<?xml version="1.0" encoding="UTF-8"?><metadata xmlns="http://linux.duke.edu/metadata/common" xmlns:rpm="http://linux.duke.edu/metadata/rpm" packages="1"><package type="rpm"><name>bash</name><arch>x86_64</arch><location href="bash-5.1-8.el9.x86_64.rpm"/></package></metadata>`
+	compressed := compressGzip(t, xmlContent)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requestCount, 1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(compressed)
+	}))
+	defer server.Close()
+
+	cacheDir := filepath.Join(updatedCfg.CacheDir, "rpm-metadata", generateRPMMetadataDir(server.URL+"/"))
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		t.Fatalf("mkdir cache dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(cacheDir) })
+
+	// Pre-seed a pre-versioning cache: no "version" key at all.
+	staleCache := `{"metadata_url":"` + server.URL + `/primary.xml.gz","packages":[{"PkgName":"stale-cached-package"}]}`
+	if err := os.WriteFile(filepath.Join(cacheDir, "primary.parsed.json"), []byte(staleCache), 0600); err != nil {
+		t.Fatalf("seed stale cache: %v", err)
+	}
+
+	pkgs, err := ParseRepositoryMetadata(server.URL+"/", "primary.xml.gz", nil)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if len(pkgs) != 1 || pkgs[0].PkgName != "bash" {
+		t.Errorf("expected the freshly parsed package, got %+v (stale unversioned cache must not be served)", pkgs)
+	}
+	if atomic.LoadInt32(&requestCount) != 1 {
+		t.Errorf("expected a network request when the cache is stale/unversioned, got %d", atomic.LoadInt32(&requestCount))
+	}
+}
+
+// A stale/missing parsed cache must still be served offline when a raw primary
+// XML from an earlier run is cached: reparse it instead of forcing a network
+// fetch, so a parsed-cache version bump alone does not break an otherwise warm
+// offline rebuild.
+func TestParseRepositoryMetadata_ReparsesCachedRawXMLOffline(t *testing.T) {
+	origCfg := config.Global()
+	updatedCfg := origCfg
+	updatedCfg.CacheDir = t.TempDir()
+	config.SetGlobal(updatedCfg)
+	defer config.SetGlobal(origCfg)
+
+	var requestCount int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requestCount, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	baseURL := server.URL + "/"
+	cacheDir := filepath.Join(updatedCfg.CacheDir, "rpm-metadata", generateRPMMetadataDir(baseURL))
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		t.Fatalf("mkdir cache dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(cacheDir) })
+
+	xmlContent := `<?xml version="1.0" encoding="UTF-8"?><metadata xmlns="http://linux.duke.edu/metadata/common" xmlns:rpm="http://linux.duke.edu/metadata/rpm" packages="1"><package type="rpm"><name>bash</name><arch>x86_64</arch><location href="bash-5.1-8.el9.x86_64.rpm"/></package></metadata>`
+	saveOriginalXML(cacheDir, "primary.xml.gz", baseURL+"primary.xml.gz", compressGzip(t, xmlContent))
+
+	// No parsed cache seeded at all — equivalent to a version mismatch/miss.
+	pkgs, err := ParseRepositoryMetadata(baseURL, "primary.xml.gz", nil)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if len(pkgs) != 1 || pkgs[0].PkgName != "bash" {
+		t.Errorf("expected the reparsed cached package, got %+v", pkgs)
+	}
+	if got := atomic.LoadInt32(&requestCount); got != 0 {
+		t.Errorf("expected no network requests when raw metadata is cached offline, got %d", got)
+	}
+
+	// The parsed cache is rewritten at the current version after the reparse.
+	cached, err := loadRPMParsedMetadataCache(filepath.Join(cacheDir, "primary.parsed.json"))
+	if err != nil {
+		t.Fatalf("loading rewritten parsed cache: %v", err)
+	}
+	if cached.Version != rpmParsedMetadataCacheVersion {
+		t.Errorf("rewritten cache version = %d, want %d", cached.Version, rpmParsedMetadataCacheVersion)
+	}
+}
+
+// A raw cache entry saved for one metadata href must not be reused when repomd
+// later points at a different href sharing the same basename (e.g. the primary
+// XML moves to a new repodata path) — reusing it would reparse stale content and
+// silently corrupt the rewritten parsed cache under the new metadata URL.
+func TestParseRepositoryMetadata_DoesNotReuseRawCacheAcrossHrefChange(t *testing.T) {
+	origCfg := config.Global()
+	updatedCfg := origCfg
+	updatedCfg.CacheDir = t.TempDir()
+	config.SetGlobal(updatedCfg)
+	defer config.SetGlobal(origCfg)
+
+	newXML := `<?xml version="1.0" encoding="UTF-8"?><metadata xmlns="http://linux.duke.edu/metadata/common" xmlns:rpm="http://linux.duke.edu/metadata/rpm" packages="1"><package type="rpm"><name>new-package</name><arch>x86_64</arch><location href="new-package-1.0.x86_64.rpm"/></package></metadata>`
+	compressedNew := compressGzip(t, newXML)
+
+	var requestCount int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requestCount, 1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(compressedNew)
+	}))
+	defer server.Close()
+
+	baseURL := server.URL + "/"
+	cacheDir := filepath.Join(updatedCfg.CacheDir, "rpm-metadata", generateRPMMetadataDir(baseURL))
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		t.Fatalf("mkdir cache dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(cacheDir) })
+
+	// Pre-seed raw cache content under the OLD href — same repo, different path,
+	// same basename ("primary.xml.gz").
+	oldXML := `<?xml version="1.0" encoding="UTF-8"?><metadata xmlns="http://linux.duke.edu/metadata/common" xmlns:rpm="http://linux.duke.edu/metadata/rpm" packages="1"><package type="rpm"><name>old-package</name><arch>x86_64</arch><location href="old-package-1.0.x86_64.rpm"/></package></metadata>`
+	saveOriginalXML(cacheDir, "repodata-old/primary.xml.gz", baseURL+"repodata-old/primary.xml.gz", compressGzip(t, oldXML))
+
+	// repomd now points at a different href for the same repo.
+	pkgs, err := ParseRepositoryMetadata(baseURL, "repodata-new/primary.xml.gz", nil)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if len(pkgs) != 1 || pkgs[0].PkgName != "new-package" {
+		t.Errorf("expected the new package fetched over the network, got %+v "+
+			"(must not reuse the raw cache saved for a different href)", pkgs)
+	}
+	if got := atomic.LoadInt32(&requestCount); got != 1 {
+		t.Errorf("expected exactly one network fetch (no raw cache matches the new href), got %d", got)
+	}
+}
+
+// A stale (version-mismatched) parsed cache whose MetadataURL matches fullURL is
+// trusted evidence that a legacy, baseURL-only-keyed raw cache (saved by a
+// binary built before the fullURL key existed) belongs to this exact URL: it
+// must be reparsed offline instead of forcing a network fetch, then migrated to
+// the current key so future lookups don't need the legacy fallback.
+func TestParseRepositoryMetadata_MigratesLegacyRawCacheOffline(t *testing.T) {
+	origCfg := config.Global()
+	updatedCfg := origCfg
+	updatedCfg.CacheDir = t.TempDir()
+	config.SetGlobal(updatedCfg)
+	defer config.SetGlobal(origCfg)
+
+	var requestCount int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requestCount, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	baseURL := server.URL + "/"
+	fullURL := baseURL + "primary.xml.gz"
+	cacheDir := filepath.Join(updatedCfg.CacheDir, "rpm-metadata", generateRPMMetadataDir(baseURL))
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		t.Fatalf("mkdir cache dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(cacheDir) })
+
+	// Legacy raw cache, as a pre-fullURL-key binary would have saved it: keyed by
+	// baseURL only.
+	xmlContent := `<?xml version="1.0" encoding="UTF-8"?><metadata xmlns="http://linux.duke.edu/metadata/common" xmlns:rpm="http://linux.duke.edu/metadata/rpm" packages="1"><package type="rpm"><name>bash</name><arch>x86_64</arch><location href="bash-5.1-8.el9.x86_64.rpm"/></package></metadata>`
+	saveOriginalXML(cacheDir, "primary.xml.gz", baseURL, compressGzip(t, xmlContent))
+
+	// A stale (older-version) parsed cache confirming this legacy raw file was
+	// fetched for this exact fullURL.
+	staleCache := fmt.Sprintf(`{"version":%d,"metadata_url":%q,"packages":[{"PkgName":"stale-cached-package"}]}`,
+		rpmParsedMetadataCacheVersion-1, fullURL)
+	if err := os.WriteFile(filepath.Join(cacheDir, "primary.parsed.json"), []byte(staleCache), 0600); err != nil {
+		t.Fatalf("seed stale cache: %v", err)
+	}
+
+	pkgs, err := ParseRepositoryMetadata(baseURL, "primary.xml.gz", nil)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if len(pkgs) != 1 || pkgs[0].PkgName != "bash" {
+		t.Errorf("expected the reparsed legacy-cached package, got %+v", pkgs)
+	}
+	if got := atomic.LoadInt32(&requestCount); got != 0 {
+		t.Errorf("expected no network requests when a legacy raw cache is confirmed by the stale parsed cache, got %d", got)
+	}
+
+	// The raw file must now also exist under the current (fullURL-keyed) name.
+	if _, findErr := findLatestCachedRawMetadata(cacheDir, "primary.xml.gz", fullURL); findErr != nil {
+		t.Errorf("expected the legacy raw cache to be migrated to the current key, lookup error: %v", findErr)
+	}
+}
+
+// A cached raw file that fails to decompress/parse (e.g. truncated by an
+// interrupted earlier write) must not abort an otherwise-online build: it is
+// treated as a cache miss and the build falls through to a real network fetch.
+func TestParseRepositoryMetadata_CorruptedRawCacheFallsBackToNetwork(t *testing.T) {
+	origCfg := config.Global()
+	updatedCfg := origCfg
+	updatedCfg.CacheDir = t.TempDir()
+	config.SetGlobal(updatedCfg)
+	defer config.SetGlobal(origCfg)
+
+	goodXML := `<?xml version="1.0" encoding="UTF-8"?><metadata xmlns="http://linux.duke.edu/metadata/common" xmlns:rpm="http://linux.duke.edu/metadata/rpm" packages="1"><package type="rpm"><name>bash</name><arch>x86_64</arch><location href="bash-5.1-8.el9.x86_64.rpm"/></package></metadata>`
+	compressedGood := compressGzip(t, goodXML)
+
+	var requestCount int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requestCount, 1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(compressedGood)
+	}))
+	defer server.Close()
+
+	baseURL := server.URL + "/"
+	fullURL := baseURL + "primary.xml.gz"
+	cacheDir := filepath.Join(updatedCfg.CacheDir, "rpm-metadata", generateRPMMetadataDir(baseURL))
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		t.Fatalf("mkdir cache dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(cacheDir) })
+
+	// Cache a truncated (corrupted) raw file under the current key.
+	saveOriginalXML(cacheDir, "primary.xml.gz", fullURL, compressedGood[:len(compressedGood)/2])
+
+	pkgs, err := ParseRepositoryMetadata(baseURL, "primary.xml.gz", nil)
+	if err != nil {
+		t.Fatalf("expected a fallback to the network, not a hard failure: %v", err)
+	}
+	if len(pkgs) != 1 || pkgs[0].PkgName != "bash" {
+		t.Errorf("expected the network-fetched package, got %+v", pkgs)
+	}
+	if got := atomic.LoadInt32(&requestCount); got != 1 {
+		t.Errorf("expected exactly one network fetch after the corrupted cache was rejected, got %d", got)
+	}
+}
+
+// The raw-metadata cache must not grow one timestamped file per fetch forever:
+// saving a new file for a key prunes every older file cached under that key.
+func TestSaveOriginalXML_PrunesOlderFilesForSameKey(t *testing.T) {
+	cacheDir := t.TempDir()
+	metadataHref := "primary.xml.gz"
+	fullURL := "https://example.com/repo/primary.xml.gz"
+
+	urlHash := sha256.Sum256([]byte(fullURL))
+	urlHashStr := hex.EncodeToString(urlHash[:])[:8]
+	pattern := fmt.Sprintf("primary.xml_%s_*.gz", urlHashStr)
+
+	// Seed a "stale" file with an old timestamp, matching the naming scheme
+	// saveOriginalXML uses, so a fresh save has something to prune.
+	oldPath := filepath.Join(cacheDir, fmt.Sprintf("primary.xml_%s_2000-01-01_00-00-00.gz", urlHashStr))
+	if err := os.WriteFile(oldPath, []byte("stale"), 0644); err != nil {
+		t.Fatalf("seed stale raw cache file: %v", err)
+	}
+
+	saveOriginalXML(cacheDir, metadataHref, fullURL, []byte("fresh"))
+
+	if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
+		t.Errorf("expected the old cached raw file to be pruned, stat error: %v", err)
+	}
+	matches, err := filepath.Glob(filepath.Join(cacheDir, pattern))
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected exactly 1 cached raw file after pruning, got %d: %v", len(matches), matches)
+	}
+	data, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatalf("read surviving cached file: %v", err)
+	}
+	if string(data) != "fresh" {
+		t.Errorf("surviving cached file content = %q, want %q", data, "fresh")
 	}
 }
 

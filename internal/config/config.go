@@ -46,13 +46,16 @@ type DiskSelectionPolicy struct {
 }
 
 type DiskConfig struct {
-	Name               string              `yaml:"name"`
-	Path               string              `yaml:"path"` // Path to the disk device (e.g., /dev/sda), used by live installer
-	SelectionPolicy    DiskSelectionPolicy `yaml:"selectionPolicy,omitempty"`
-	Artifacts          []ArtifactInfo      `yaml:"artifacts"`
-	Size               string              `yaml:"size"`
-	PartitionTableType string              `yaml:"partitionTableType"`
-	Partitions         []PartitionInfo     `yaml:"partitions"`
+	Name            string              `yaml:"name"`
+	Path            string              `yaml:"path"` // Path to the disk device (e.g., /dev/sda), used by live installer
+	SelectionPolicy DiskSelectionPolicy `yaml:"selectionPolicy,omitempty"`
+	Artifacts       []ArtifactInfo      `yaml:"artifacts"`
+	// Size is an exact disk size in create mode. In overlay mode it instead acts as
+	// an auto-size ceiling: with overlayPolicy.allowDiskResize, the resize grows the
+	// baseline only as far as the resolved packages need, never past this cap.
+	Size               string          `yaml:"size"`
+	PartitionTableType string          `yaml:"partitionTableType"`
+	Partitions         []PartitionInfo `yaml:"partitions"`
 	// ExtendLastPartitionToFillDisk forces the final partition's end to "0"
 	// (consume all remaining disk space) when enabled.
 	ExtendLastPartitionToFillDisk bool `yaml:"extendLastPartitionToFillDisk,omitempty"`
@@ -160,9 +163,10 @@ type OverlayPolicy struct {
 	GrubDefault string `yaml:"grubDefault,omitempty"`
 
 	// AllowDiskResize gates whether an overlay build may grow the baseline image
-	// to satisfy a larger disk.size. Overlay mode preserves the baseline layout by
-	// default, so a disk.size larger than the baseline is rejected unless the user
-	// opts in here. It never permits shrinking; resize stays grow-only.
+	// to fit the packages being installed. Overlay mode preserves the baseline
+	// layout by default, so a grow — whether driven by the resolved packages'
+	// installed-size metadata or by a disk.size ceiling alone — is rejected unless
+	// the user opts in here. It never permits shrinking; resize stays grow-only.
 	AllowDiskResize bool `yaml:"allowDiskResize,omitempty"`
 
 	// AllowPackageRemoval gates whether an overlay build may remove a baseline
