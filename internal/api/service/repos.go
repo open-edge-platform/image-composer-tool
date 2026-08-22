@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"sigs.k8s.io/yaml"
@@ -21,12 +22,37 @@ var packageReposFS embed.FS
 // internal/config, so the picker shows the same number a build would apply.
 const defaultRepoPriority = 500
 
+// RepoIndex locates one package index belonging to a repository.
+//
+// A single picker entry can need several: Ubuntu's base repo spans three suites
+// across two hosts (noble and noble-updates on archive.ubuntu.com,
+// noble-security on security.ubuntu.com), and its arm64 packages live on
+// ports.ubuntu.com rather than either. Modelling those as one entry with
+// several indexes keeps the picker to one row per repository while still
+// naming every index a search has to read.
+type RepoIndex struct {
+	// URL overrides the parent PackageRepo.URL for this index only; empty
+	// inherits it. Set it where a suite or an architecture is served from a
+	// different host.
+	URL string `json:"url,omitempty"`
+	// Codename is the deb suite (the dists/ path segment), e.g. "noble" or
+	// "isar". Required for deb repositories, unused for rpm.
+	Codename string `json:"codename,omitempty"`
+	// Component is space-separated, matching config.PackageRepository and the
+	// providerconfigs, e.g. "main restricted universe multiverse".
+	Component string `json:"component,omitempty"`
+	// Arch lists the manifest target arches this index serves. Empty means all.
+	Arch []string `json:"arch,omitempty"`
+}
+
 // PackageRepo is one repository offered by the Advanced tab's repository picker.
 //
-// This is presentation metadata, not build configuration: it labels and
-// describes a repository and seeds its toggle. The repos a build actually uses
-// still come from the template's packageRepositories block and the per-OS
-// providerconfigs — see data/package-repos.yaml for the full rationale.
+// The presentation fields (DisplayName, Description, EnabledByDefault) label the
+// repository and seed its toggle. The repos a build actually uses still come from
+// the template's packageRepositories block and the per-OS providerconfigs — see
+// data/package-repos.yaml for the full rationale. Index carries the metadata a
+// package search needs to read the repository's own index; it is deliberately
+// absent from the wire type, so it never reaches the browser.
 type PackageRepo struct {
 	ID               string `json:"id"`
 	DisplayName      string `json:"displayName"`
@@ -41,7 +67,20 @@ type PackageRepo struct {
 	// applies to every target, so a repo can be offered everywhere without
 	// having to enumerate (and then maintain) the full target list.
 	OS []string `json:"os,omitempty"`
+	// Type selects how the indexes are laid out: "deb" (dists/<codename>/
+	// <component>/binary-<arch>/Packages) or "rpm" (repodata/repomd.xml).
+	// Empty means deb.
+	Type string `json:"type,omitempty"`
+	// Index names the package indexes to read for this repository. Empty means
+	// the repository is offered in the picker but not yet searchable.
+	Index []RepoIndex `json:"index,omitempty"`
 }
+
+// Repository types recognised in the catalog. Empty defaults to repoTypeDeb.
+const (
+	repoTypeDeb = "deb"
+	repoTypeRPM = "rpm"
+)
 
 // packageRepoCatalog is the on-disk shape of the repository catalog.
 type packageRepoCatalog struct {
@@ -135,11 +174,36 @@ func loadPackageRepos(path string) ([]PackageRepo, error) {
 			return nil, fmt.Errorf("package repo %q: missing displayName", r.ID)
 		case r.URL == "":
 			return nil, fmt.Errorf("package repo %q: missing url", r.ID)
+		// Templates use "<URL>" as a fill-me-in placeholder for private repos.
+		// Copying one into the catalog would offer the user a repository that
+		// cannot resolve, so reject it at load rather than at fetch.
+		case strings.Contains(r.URL, "<URL>"):
+			return nil, fmt.Errorf("package repo %q: url is a placeholder", r.ID)
+		case r.Type != "" && r.Type != repoTypeDeb && r.Type != repoTypeRPM:
+			return nil, fmt.Errorf("package repo %q: unknown type %q", r.ID, r.Type)
 		}
 		if _, dup := seen[r.ID]; dup {
 			return nil, fmt.Errorf("package repo %q: duplicate id", r.ID)
 		}
 		seen[r.ID] = struct{}{}
+		if err := validateRepoIndexes(r); err != nil {
+			return nil, err
+		}
 	}
 	return c.Repos, nil
+}
+
+// validateRepoIndexes rejects index entries a search could not act on. A deb
+// index without a codename has no dists/ path to read, and a placeholder
+// override URL is as unusable here as it is on the repo itself.
+func validateRepoIndexes(r PackageRepo) error {
+	for i, idx := range r.Index {
+		if r.Type != repoTypeRPM && idx.Codename == "" {
+			return fmt.Errorf("package repo %q index %d: missing codename", r.ID, i)
+		}
+		if strings.Contains(idx.URL, "<URL>") {
+			return fmt.Errorf("package repo %q index %d: url is a placeholder", r.ID, i)
+		}
+	}
+	return nil
 }

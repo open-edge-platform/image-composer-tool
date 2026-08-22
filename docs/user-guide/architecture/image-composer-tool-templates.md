@@ -1197,9 +1197,39 @@ extends](../../architecture-decision-record/adr-web-ui-advanced-mode-extends.md)
 for the full design rationale, including why an image-type override is not
 supported the same way.
 
+### Advanced Mode's Repository Catalog
+
+The Advanced tab's repository picker is driven by a catalog at
+`internal/api/service/data/package-repos.yaml`, not by the selected template.
+The catalog mirrors the two places repositories are really declared — each
+template's own `packageRepositories:` block, and the per-OS
+`config/osv/<os>/<dist>/providerconfigs/*_repo.yml` — so the picker only offers
+repositories that a build of that target could actually install from.
+
+Alongside the picker's presentation fields, each entry carries an `index:` list
+naming the package indexes a search reads. One catalog entry can need several
+indexes: a Debian-style base repository spans a release, `-security` and
+`-updates` suite, and Ubuntu serves those from two different hosts plus a third
+for `aarch64`. Each index entry may therefore override the repository's base
+`url` and restrict itself to particular `arch` values. Where a template omits
+`component`, the catalog records `main`, matching the default that
+`generateAptSourcesContent` applies when writing a build's apt sources — so a
+search reads the same component a build installs from.
+
+Because the catalog duplicates information, unit tests assert the mirroring
+holds in both directions: every repository a manifest-reachable template or
+providerconfig declares must be covered by a catalog index. Adding a repository
+to a template therefore fails the build until it is catalogued too, rather than
+silently producing a package picker that cannot find that repository's packages.
+
+Repositories for target OSes the manifest does not offer are deliberately
+absent; the picker can never query them. They should be added alongside the
+manifest combination that makes them reachable.
+
 ### See Also
 
 - [ADR: template `extends`](../../architecture-decision-record/adr-template-extends.md) — design rationale and full validation matrix
+- [ADR: package picker UX](../../architecture-decision-record/adr-package-picker-ux.md) — the Advanced tab's repository and package selection design
 - [ADR: Advanced mode template modification via extends](../../architecture-decision-record/adr-web-ui-advanced-mode-extends.md) — how the web UI applies overrides through a generated delta
 - [Resolve Command](./image-composer-tool-cli-specification.md#resolve-command) — CLI reference for `image-composer-tool resolve`
 - [Template Merge Behavior](#template-merge-behavior) — the two-layer user↔default merge rules an extends chain reuses at every level

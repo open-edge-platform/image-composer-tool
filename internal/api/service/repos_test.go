@@ -6,8 +6,11 @@ package service
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
+
+	"sigs.k8s.io/yaml"
 )
 
 // writeRepos writes a catalog YAML to a temp file and returns its path, for
@@ -83,6 +86,171 @@ func TestEmbeddedCatalogCoversManifestTargets(t *testing.T) {
 		if defaults != 1 {
 			t.Errorf("target %q: %d enabledByDefault repos, want exactly 1", target.ID, defaults)
 		}
+	}
+}
+
+// repoRef is one (url, codename, component) triple, normalised so a template and
+// the catalog can be compared regardless of trailing slashes, component order,
+// or an omitted component.
+type repoRef struct {
+	url, codename, component string
+}
+
+// normalizeRepoRef makes a triple comparable. An omitted component becomes
+// "main" because that is what generateAptSourcesContent substitutes
+// (internal/config/apt_sources.go), so an index reading "main" is reading
+// exactly what a build would install from. Components are sorted because they
+// are independent path segments, not an ordered list.
+func normalizeRepoRef(url, codename, component string) repoRef {
+	component = strings.TrimSpace(component)
+	if component == "" {
+		component = "main"
+	}
+	parts := strings.Fields(component)
+	sort.Strings(parts)
+	return repoRef{
+		url:       strings.TrimSuffix(strings.TrimSpace(url), "/"),
+		codename:  strings.TrimSpace(codename),
+		component: strings.Join(parts, " "),
+	}
+}
+
+// catalogRefs is every triple the shipped catalog can search, keyed by the
+// manifest target it is offered for.
+func catalogRefs(t *testing.T, repos []PackageRepo) map[string]map[repoRef]string {
+	t.Helper()
+	byTarget := make(map[string]map[repoRef]string)
+	for _, r := range repos {
+		for _, idx := range r.Index {
+			url := idx.URL
+			if url == "" {
+				url = r.URL
+			}
+			ref := normalizeRepoRef(url, idx.Codename, idx.Component)
+			for _, osID := range r.OS {
+				if byTarget[osID] == nil {
+					byTarget[osID] = make(map[repoRef]string)
+				}
+				byTarget[osID][ref] = r.ID
+			}
+		}
+	}
+	return byTarget
+}
+
+// templateRepos parses a template's own packageRepositories. None of the
+// manifest's templates use `extends`, so reading the file directly is the whole
+// picture and avoids dragging the config loader (and its OS-defaults lookup)
+// into a unit test.
+func templateRepos(t *testing.T, path string) []repoRef {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read template %s: %v", path, err)
+	}
+	var doc struct {
+		PackageRepositories []struct {
+			URL       string `json:"url"`
+			Codename  string `json:"codename"`
+			Component string `json:"component"`
+		} `json:"packageRepositories"`
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse template %s: %v", path, err)
+	}
+	var out []repoRef
+	for _, r := range doc.PackageRepositories {
+		// "<URL>" is the fill-me-in placeholder for a private repo; it is not a
+		// real repository and must never be mirrored into the catalog.
+		if r.URL == "" || strings.Contains(r.URL, "<URL>") {
+			continue
+		}
+		out = append(out, normalizeRepoRef(r.URL, r.Codename, r.Component))
+	}
+	return out
+}
+
+// Drift guard: every repository a manifest-reachable template installs from must
+// be searchable in the catalog. Without this, adding a repo to a template
+// silently produces a package picker that cannot find that repo's packages —
+// the failure is invisible until someone goes looking for a package.
+func TestEmbeddedCatalogCoversTemplateRepos(t *testing.T) {
+	m, err := loadManifest("")
+	if err != nil {
+		t.Fatalf("loadManifest: %v", err)
+	}
+	repos, err := loadPackageRepos("")
+	if err != nil {
+		t.Fatalf("loadPackageRepos: %v", err)
+	}
+	byTarget := catalogRefs(t, repos)
+
+	// Tests run in the package dir; the templates live at the repo root.
+	root := filepath.Join("..", "..", "..", "image-templates")
+	for _, c := range m.Combinations {
+		if strings.TrimSpace(c.Template) == "" {
+			continue
+		}
+		for _, ref := range templateRepos(t, filepath.Join(root, c.Template)) {
+			if _, ok := byTarget[c.OS][ref]; !ok {
+				t.Errorf("template %s (target %s) installs from %+v, which no catalog index covers.\n"+
+					"Add an index entry for it in data/package-repos.yaml.", c.Template, c.OS, ref)
+			}
+		}
+	}
+}
+
+// The base repos must mirror the per-OS providerconfigs, since those are the
+// repositories every build of that target reads regardless of template.
+func TestEmbeddedCatalogCoversProviderRepos(t *testing.T) {
+	repos, err := loadPackageRepos("")
+	if err != nil {
+		t.Fatalf("loadPackageRepos: %v", err)
+	}
+	byTarget := catalogRefs(t, repos)
+
+	// Only the manifest's own targets are catalogued, so only their
+	// providerconfigs are checked. See the note in data/package-repos.yaml.
+	cases := []struct{ osID, dir string }{
+		{"ubuntu24", filepath.Join("ubuntu", "ubuntu24")},
+		{"ubuntu26-server", filepath.Join("ubuntu", "ubuntu26")},
+		{"debian13", filepath.Join("debian", "debian13")},
+	}
+	for _, c := range cases {
+		t.Run(c.osID, func(t *testing.T) {
+			pattern := filepath.Join("..", "..", "..", "config", "osv", c.dir, "providerconfigs", "*_repo.yml")
+			files, err := filepath.Glob(pattern)
+			if err != nil || len(files) == 0 {
+				t.Fatalf("no providerconfigs matched %s (err %v)", pattern, err)
+			}
+			for _, f := range files {
+				raw, err := os.ReadFile(f)
+				if err != nil {
+					t.Fatalf("read %s: %v", f, err)
+				}
+				var doc struct {
+					Repositories []struct {
+						Name      string `json:"name"`
+						BaseURL   string `json:"baseURL"`
+						Component string `json:"component"`
+					} `json:"repositories"`
+				}
+				if err := yaml.Unmarshal(raw, &doc); err != nil {
+					t.Fatalf("parse %s: %v", f, err)
+				}
+				for _, r := range doc.Repositories {
+					// The default repo.yml omits component for some targets; the
+					// arch-specific files carry the authoritative value.
+					if r.BaseURL == "" || r.Component == "" {
+						continue
+					}
+					ref := normalizeRepoRef(r.BaseURL, r.Name, r.Component)
+					if _, ok := byTarget[c.osID][ref]; !ok {
+						t.Errorf("%s declares %+v, which no catalog index covers", f, ref)
+					}
+				}
+			}
+		})
 	}
 }
 
@@ -219,6 +387,26 @@ func TestLoadPackageReposRejectsInvalid(t *testing.T) {
 			"repos: [oops\n",
 			"parsing package repos",
 		},
+		{
+			"placeholder url",
+			"repos:\n  - {id: x, displayName: X, url: \"<URL>\"}\n",
+			"url is a placeholder",
+		},
+		{
+			"unknown type",
+			"repos:\n  - {id: x, displayName: X, url: \"http://x\", type: snap}\n",
+			"unknown type",
+		},
+		{
+			"deb index without codename",
+			"repos:\n  - {id: x, displayName: X, url: \"http://x\", index: [{component: main}]}\n",
+			"missing codename",
+		},
+		{
+			"placeholder index url",
+			"repos:\n  - {id: x, displayName: X, url: \"http://x\", index: [{url: \"<URL>\", codename: noble}]}\n",
+			"index 0: url is a placeholder",
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -230,6 +418,26 @@ func TestLoadPackageReposRejectsInvalid(t *testing.T) {
 				t.Errorf("error = %q, want it to mention %q", err, c.wantErr)
 			}
 		})
+	}
+}
+
+// The codename requirement is deb-specific: an rpm repository is addressed by
+// its repodata path, so requiring a suite there would reject a valid entry.
+func TestLoadPackageReposRPMIndexNeedsNoCodename(t *testing.T) {
+	repos, err := loadPackageRepos(writeRepos(t, `
+repos:
+  - id: emt-base
+    displayName: EMT Base
+    url: "https://example.invalid/rpms/3.0/base"
+    type: rpm
+    index:
+      - {component: emt3.0-base}
+`))
+	if err != nil {
+		t.Fatalf("loadPackageRepos rejected a valid rpm catalog: %v", err)
+	}
+	if len(repos) != 1 || len(repos[0].Index) != 1 {
+		t.Fatalf("repos = %+v, want one repo with one index", repos)
 	}
 }
 
