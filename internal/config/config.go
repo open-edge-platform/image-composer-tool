@@ -1658,9 +1658,14 @@ func (p *OverlayPolicy) validate() error {
 		// The package name seeds the resolver and is passed to the package manager
 		// (dpkg/rpm) inside the baseline chroot, so reject whitespace and shell
 		// metacharacters up front rather than letting a malformed name reach a
-		// command line. A real kernel package name never needs any of these.
-		if strings.ContainsAny(pkg, " \t\n\"'`$\\;&|<>(){}*?!") {
-			return fmt.Errorf("overlayPolicy.replaceKernel.package %q must not contain whitespace or shell metacharacters", pkg)
+		// command line. The glob wildcards the resolver itself understands (`*`, `?`,
+		// `[...]`) are intentionally NOT rejected, so a replacement kernel can be
+		// specified with the same wildcard syntax as any other systemConfig package;
+		// the swap logic tolerates a globbed name (kernel-family detection is
+		// prefix-based and the removal set is derived from the resolved concrete
+		// packages). A real kernel package name never needs the rejected characters.
+		if strings.ContainsAny(pkg, " \t\n\"'`$\\;&|<>(){}!") {
+			return fmt.Errorf("overlayPolicy.replaceKernel.package %q must not contain whitespace or shell metacharacters (glob wildcards *, ?, and [...] are allowed)", pkg)
 		}
 		if op != OverlayPackageOpAdditiveAndUpgrade {
 			return fmt.Errorf("overlayPolicy.replaceKernel requires packageOperation %q (got %q)",

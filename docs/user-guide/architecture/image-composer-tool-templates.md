@@ -488,7 +488,9 @@ plus `allowPackageRemoval: true`) to it.
 > swap** instead:
 >
 > 1. the named replacement kernel is resolved from the configured repositories and
->    installed (like any other overlay package);
+>    installed (like any other overlay package). The `package` value accepts the same
+>    glob wildcards as an ordinary `systemConfig` package (`*`, `?`, `[...]`), so you
+>    can write `linux-image-*-oem` instead of pinning an exact version;
 > 2. the baseline kernel **family** — the bootable image plus its meta-package,
 >    modules, and headers (e.g. `linux-image-6.8.0-40-generic`,
 >    `linux-image-generic`, `linux-modules-*`, `linux-headers-*`) — is auto-detected
