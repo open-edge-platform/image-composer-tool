@@ -580,6 +580,8 @@ func TestOverlayPolicyReplaceKernelValidation(t *testing.T) {
 		{"empty package rejected", OverlayPackageOpAdditiveAndUpgrade, "   ", true, "replaceKernel.package must be set"},
 		{"whitespace in package rejected", OverlayPackageOpAdditiveAndUpgrade, "linux image", true, "must not contain whitespace or shell metacharacters"},
 		{"shell metachar in package rejected", OverlayPackageOpAdditiveAndUpgrade, "linux-image;reboot", true, "must not contain whitespace or shell metacharacters"},
+		{"glob wildcard package accepted", OverlayPackageOpAdditiveAndUpgrade, "linux-image-*", true, ""},
+		{"glob char class package accepted", OverlayPackageOpAdditiveAndUpgrade, "kernel-[0-9]*", true, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
