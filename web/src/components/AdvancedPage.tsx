@@ -4,7 +4,7 @@ import type { Selection } from '../store'
 import { api } from '../api/client'
 import type { ComposeRequest, ComposeResponse } from '../api/types'
 import { Select } from './Select'
-import { RepoPicker } from './RepoPicker'
+import { PackagesStep } from './PackagesStep'
 import { Input } from './Input'
 
 // How long to wait after the last keystroke in Image Name before re-composing.
@@ -176,7 +176,14 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
         ))}
       </div>
 
-      <div className="mx-auto max-w-3xl rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+      {/* The Packages step holds a 240px rail beside a package pane, which is
+          cramped at the 3xl the single-column steps use. */}
+      <div
+        className={
+          'mx-auto rounded-lg border border-slate-200 bg-white p-6 shadow-sm ' +
+          (step === 1 ? 'max-w-5xl' : 'max-w-3xl')
+        }
+      >
         {step === 0 && (
           <TargetStep
             opts={opts}
@@ -187,16 +194,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
           />
         )}
 
-        {step === 1 && (
-          <div>
-            <h2 className="mb-1 text-lg font-bold text-[#00285a]">Repositories &amp; Packages</h2>
-            <p className="mb-5 text-sm text-slate-500">
-              Choose which package repositories to pull from. Package search and
-              selection will arrive in a later update.
-            </p>
-            <RepoPicker os={selection.os} active={active} />
-          </div>
-        )}
+        {step === 1 && <PackagesStep os={selection.os} active={active} />}
 
         {step === 2 && (
           <div>

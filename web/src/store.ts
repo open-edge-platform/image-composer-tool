@@ -19,12 +19,18 @@ interface AppState {
   // imageName and, once the user types, `imageNameEdited` guards it from reseeds.
   imageName: string
   imageNameEdited: boolean
+  // Repos the user turned on in the Packages step. A repo the catalog marks
+  // enabledByDefault is always on and is never listed here — its toggle renders
+  // disabled. Kept out of `Selection` for the same reason imageName is: the
+  // compose request has no field for it.
+  enabledRepos: string[]
   setManifest: (m: Manifest) => void
   setField: (key: keyof Selection, value: string) => void
   // User-typed image name (marks it edited so seedImageName stops overwriting it).
   setImageName: (value: string) => void
   // Default image name from the resolved template; ignored once the user edits.
   seedImageName: (value: string) => void
+  setRepoEnabled: (repo: string, on: boolean) => void
 }
 
 const emptySelection: Selection = {
@@ -41,10 +47,19 @@ export const useStore = create<AppState>((set) => ({
   selection: emptySelection,
   imageName: '',
   imageNameEdited: false,
+  enabledRepos: [],
   setManifest: (m) => set({ manifest: m }),
   setImageName: (value) => set({ imageName: value, imageNameEdited: true }),
   seedImageName: (value) =>
     set((state) => (state.imageNameEdited ? {} : { imageName: value })),
+  setRepoEnabled: (repo, on) =>
+    set((state) => ({
+      enabledRepos: on
+        ? state.enabledRepos.includes(repo)
+          ? state.enabledRepos
+          : [...state.enabledRepos, repo]
+        : state.enabledRepos.filter((r) => r !== repo),
+    })),
   setField: (key, value) =>
     set((state) => {
       const selection = { ...state.selection, [key]: value }
@@ -80,7 +95,21 @@ export const useStore = create<AppState>((set) => ({
       }
       // Any selection change resolves to a (possibly) different template, so let
       // the image name re-track the new default until edited again.
-      return { selection, imageNameEdited: false }
+      //
+      // Enabled repos are dropped only when the target OS actually changes,
+      // because repo ids are scoped to a target — keeping them would leave an
+      // ubuntu24 repo enabled under a Debian target. Unlike imageName, which
+      // re-seeds itself from the next compose response, there is no server-side
+      // default to fall back to, so empty is the only sane value. Comparing the
+      // post-cascade os (autoFillCascade above may refill it with the same
+      // value) means a SKU or platform tweak within one OS keeps the user's
+      // toggles.
+      const osChanged = selection.os !== state.selection.os
+      return {
+        selection,
+        imageNameEdited: false,
+        ...(osChanged ? { enabledRepos: [] } : {}),
+      }
     }),
 }))
 
