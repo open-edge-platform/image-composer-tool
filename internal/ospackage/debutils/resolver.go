@@ -374,11 +374,15 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 
 	// verify the sham256 checksum of the Packages.gz file
 	log.Infof("verifying checksum of package metadata file %s %s", baseURL, localPkggzFile)
-	// get component from buildPath
 	component := "main"
-	// Detect last underscore and extract the word after it as component
-	if idx := strings.LastIndex(buildPath, "_"); idx != -1 && len(buildPath) > idx+1 {
-		component = buildPath[idx+1:]
+	if parsedURL, parseErr := url.Parse(pkggz); parseErr == nil {
+		parts := strings.Split(strings.Trim(parsedURL.Path, "/"), "/")
+		for index, part := range parts {
+			if strings.HasPrefix(part, "binary-") && index > 0 {
+				component = parts[index-1]
+				break
+			}
+		}
 	}
 
 	// Retrieve the expected SHA256 for Packages.gz from the Release file.
@@ -419,7 +423,14 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 				return nil, fmt.Errorf("failed to remove stale Packages.gz: %w", remErr)
 			}
 		}
-		if fetchErr := pkgfetcher.FetchPackages(runctx.Context(), []string{pkggz}, pkgMetaDir, 1); fetchErr != nil {
+		metadataURL, parseErr := url.Parse(pkggz)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse package metadata URL: %w", parseErr)
+		}
+		query := metadataURL.Query()
+		query.Set("ict-release-sha256", expectedChecksum)
+		metadataURL.RawQuery = query.Encode()
+		if fetchErr := pkgfetcher.FetchPackages(runctx.Context(), []string{metadataURL.String()}, pkgMetaDir, 1); fetchErr != nil {
 			return nil, fmt.Errorf("failed to fetch Packages.gz: %w", fetchErr)
 		}
 	}

@@ -601,37 +601,16 @@ func (b *debInstallerBackend) install(req installRequest) error {
 		"DEBCONF_NOWARNINGS=yes",
 	}
 
-	// Split the artifact list so no single dpkg command line exceeds the kernel's
-	// per-argument limit. Commands in this tool are assembled as one string and run
-	// via `bash -c "<cmd>"`, which makes the whole command a SINGLE argv entry — so
-	// the binding limit is MAX_ARG_STRLEN (128 KiB), not the much larger ARG_MAX.
-	// A large overlay reaches it: 2004 ROS 2 artifacts produce a ~142 KiB command
-	// and execve fails with "argument list too long" before dpkg even starts.
-	chunks := chunkArgs(paths, maxDpkgArgBytes)
-	if len(chunks) > 1 {
-		log.Infof("Overlay install: splitting %d artifact(s) into %d dpkg batch(es) per pass "+
-			"to keep each command under the internal argument budget", len(paths), len(chunks))
-	}
-
-	// Install the prepared local artifacts, retrying to satisfy Pre-Depends.
+	// Install the prepared local artifacts in dependency-first order.
 	//
 	// A Pre-Depends must be unpacked AND CONFIGURED before its dependent is even
-	// unpacked (e.g. gawk pre-depends on libmpfr6). A single `dpkg -i A B C…` (or
-	// `dpkg --unpack`) unpacks in command-line order but only configures at the
-	// end, so on the first pass the dependent (gawk) is skipped with a
-	// "pre-dependency problem — libmpfr6 is unpacked, but has never been
-	// configured" error, while every other package IS unpacked and configured
-	// (including the pre-dep, libmpfr6). Re-running `dpkg -i` then installs the
-	// skipped package cleanly, since its pre-dep is now configured. No
-	// command-line ordering can avoid this within one invocation, so we iterate.
-	//
-	// Between passes, `dpkg --configure -a` configures anything left unpacked so
-	// the next pass's Pre-Depends are satisfied. The loop stops as soon as a pass
-	// succeeds, and fails fast when a pass makes NO progress — its error output is
-	// byte-identical to the previous pass's, meaning the same archives failed for
-	// the same reason (a genuine dependency/conflict problem, not ordering). The
-	// hard cap is a backstop; real Pre-Depends chains in a fixed closure converge
-	// in a couple of passes.
+	// unpacked (e.g. gawk pre-depends on libmpfr6). `dpkg -i A B C…` does not
+	// configure A until it has attempted C, so it can skip C even in a correctly
+	// sorted list. Running one archive per invocation preserves the resolver's
+	// dependency-first order while configuring each provider before its dependent.
+	// It also removes the MAX_ARG_STRLEN limit that affects large overlays. A
+	// package can still be encountered before a regular dependency in the resolver
+	// order, so only the failed archives are retried after the first pass.
 	//
 	// Package files are supplied directly (no network, no repository resolution),
 	// so the install stays strictly within the approved, pre-downloaded set.
@@ -646,62 +625,43 @@ func (b *debInstallerBackend) install(req installRequest) error {
 	// "--" terminates option parsing so a URL-derived artifact basename beginning
 	// with '-' is treated as a file path, not a dpkg option (shell-quoting stops
 	// word-splitting, not option parsing).
-	// Batching interacts with the pass loop rather than replacing it. Every batch
-	// runs within a pass, and only then does `dpkg --configure -a` run, so a
-	// Pre-Depends satisfied by a package in a *later* batch still converges on the
-	// next pass exactly as it did with one invocation. Splitting therefore adds
-	// passes at worst, never a missed dependency: the outcome after the loop is the
-	// same set of unpacked-and-configured packages.
-	//
-	// A batch failure does not abort the pass — later batches may still make
-	// progress. No-progress detection therefore uses a per-batch fingerprint
-	// (batch index + output + error) rather than only the concatenated output, so
-	// a failure migrating from one batch to another is not misclassified as
-	// "no progress" when outputs happen to match.
-	const maxInstallPasses = 6
 	configureCmd := "dpkg --configure -a --auto-deconfigure"
-
-	var lastFingerprint string
-	var lastOut string
+	const maxInstallPasses = 6
+	pending := paths
 	var lastErr error
+	var lastOut string
 	for pass := 1; pass <= maxInstallPasses; pass++ {
-		var passOut strings.Builder
-		var passFingerprint strings.Builder
-		var passErr error
-		for i, chunk := range chunks {
-			installCmd := "dpkg -i --auto-deconfigure -- " + strings.Join(chunk, " ")
-			out, err := shell.ExecCmdWithStream(installCmd, true, req.chrootPath, envVars)
-			passOut.WriteString(out)
-			fmt.Fprintf(&passFingerprint, "batch=%d\nout=%q\nerr=%v\n", i, out, err)
-			if err != nil && passErr == nil {
-				passErr = err
+		nextPending := make([]string, 0, len(pending))
+		for _, path := range pending {
+			out, err := shell.ExecCmdWithStream("dpkg -i --auto-deconfigure -- "+path, true, req.chrootPath, envVars)
+			if err != nil {
+				nextPending = append(nextPending, path)
+				if lastErr == nil {
+					lastErr, lastOut = err, out
+				}
 			}
 		}
-		out, err := passOut.String(), passErr
-		fingerprint := passFingerprint.String()
-		if err == nil {
-			// Everything unpacked and configured.
+
+		configureOut, configureErr := shell.ExecCmdWithStream(configureCmd, true, req.chrootPath, envVars)
+		if len(nextPending) == 0 && configureErr == nil {
 			return nil
 		}
-		// No progress since the previous failing pass: same archives failed for the
-		// same reason, so retrying again cannot help. Surface it now.
-		if pass > 1 && fingerprint == lastFingerprint {
-			return fmt.Errorf("dpkg install of %d artifact(s) failed (no progress after %d pass(es)): %w%s",
-				len(paths), pass, err, formatCommandOutput(out))
+		if configureErr != nil {
+			lastErr, lastOut = configureErr, configureOut
 		}
-		lastFingerprint, lastOut, lastErr = fingerprint, out, err
-		log.Infof("Overlay install: dpkg pass %d/%d left packages unconfigured (likely Pre-Depends ordering); configuring and retrying", pass, maxInstallPasses)
-		// Best-effort: configure whatever is now unpacked so the next pass's
-		// Pre-Depends are met. A failure here is not fatal on its own — the next
-		// `dpkg -i` pass surfaces any genuine problem via its own error/no-progress.
-		if _, cerr := shell.ExecCmdWithStream(configureCmd, true, req.chrootPath, envVars); cerr != nil {
-			log.Debugf("Overlay install: interim `dpkg --configure -a` reported: %v", cerr)
+		if len(nextPending) == 0 {
+			return fmt.Errorf("dpkg configure of %d artifact(s) failed: %w%s", len(paths), lastErr, formatCommandOutput(lastOut))
 		}
+		if len(nextPending) >= len(pending) {
+			return fmt.Errorf("dpkg install of %d artifact(s) failed with %d archive(s) still pending after pass %d: %w%s",
+				len(paths), len(nextPending), pass, lastErr, formatCommandOutput(lastOut))
+		}
+		log.Infof("Overlay install: %d/%d artifact(s) need a dependency-order retry after pass %d", len(nextPending), len(paths), pass)
+		pending = nextPending
+		lastErr = nil
 	}
-	// Exhausted the pass budget while still making some progress each time but never
-	// fully succeeding. Surface the last failure.
-	return fmt.Errorf("dpkg install of %d artifact(s) failed after %d passes: %w%s",
-		len(paths), maxInstallPasses, lastErr, formatCommandOutput(lastOut))
+	return fmt.Errorf("dpkg install of %d artifact(s) failed with %d archive(s) still pending after %d passes: %w%s",
+		len(paths), len(pending), maxInstallPasses, lastErr, formatCommandOutput(lastOut))
 }
 
 // removePackages purges the named baseline packages with dpkg before the install.

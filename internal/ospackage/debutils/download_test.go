@@ -478,6 +478,17 @@ func TestBuildRepoConfigs_UsesCachedPackageListOffline(t *testing.T) {
 	}
 }
 
+func TestRepoMetadataBuildPathSeparatesRepositories(t *testing.T) {
+	first := repoMetadataBuildPath("noble", "http://archive.ubuntu.com/ubuntu", "noble", "amd64", "universe", "http://archive.ubuntu.com/ubuntu/dists/noble/universe/binary-amd64/Packages.gz")
+	second := repoMetadataBuildPath("noble", "https://packages.example.invalid/repo", "noble", "amd64", "universe", "https://packages.example.invalid/repo/dists/noble/universe/binary-amd64/Packages.gz")
+	if first == second {
+		t.Fatalf("metadata paths collide: %q", first)
+	}
+	if first != repoMetadataBuildPath("noble", "http://archive.ubuntu.com/ubuntu", "noble", "amd64", "universe", "http://archive.ubuntu.com/ubuntu/dists/noble/universe/binary-amd64/Packages.gz") {
+		t.Fatalf("metadata path is not deterministic: %q", first)
+	}
+}
+
 func TestStripDebEpoch(t *testing.T) {
 	t.Parallel()
 

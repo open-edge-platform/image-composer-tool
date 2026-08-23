@@ -2,6 +2,7 @@ package debutils
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -647,6 +648,12 @@ func PackagesFromMultipleRepos() ([]ospackage.PackageInfo, error) {
 	return allPackages, nil
 }
 
+func repoMetadataBuildPath(id, baseURL, codename, arch, component, packageListURL string) string {
+	identity := strings.Join([]string{baseURL, codename, arch, component, packageListURL}, "\x00")
+	digest := sha256.Sum256([]byte(identity))
+	return filepath.Join(config.TempDir(), "builds", fmt.Sprintf("%s_%s_%x_%s", id, arch, digest[:6], component))
+}
+
 // BuildRepoConfigs converts Repository entries to RepoConfig format
 func BuildRepoConfigs(userRepoList []Repository, arch string) ([]RepoConfig, error) {
 	log := logger.Logger()
@@ -684,7 +691,7 @@ func BuildRepoConfigs(userRepoList []Repository, arch string) ([]RepoConfig, err
 					RepoGPGCheck:  true,
 					Enabled:       true,
 					PbGPGKey:      pkey,
-					BuildPath:     filepath.Join(config.TempDir(), "builds", fmt.Sprintf("%s_%s_%s", id, localArch, componentName)),
+					BuildPath:     repoMetadataBuildPath(id, baseURL, codename, localArch, componentName, package_list_url),
 					Arch:          localArch,
 					Priority:      repoItem.Priority,
 					AllowPackages: repoItem.AllowPackages,

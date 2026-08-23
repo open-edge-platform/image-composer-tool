@@ -306,6 +306,44 @@ func TestResolveOverlayPackages_UpgradeScopeIncludesRequiredDep(t *testing.T) {
 	}
 }
 
+func TestResolveOverlayPackages_UpgradeScopeIncludesSelectedAlternative(t *testing.T) {
+	backend := &fakeBackend{
+		fam: PackageManagerAPT,
+		closure: []ospackage.PackageInfo{
+			{PkgName: "app", Version: "1.0", Arch: "amd64", URL: "https://r/app.deb", RequiresVer: []string{"libcodec-a (= 2.0) | libcodec-b (= 2.0)"}},
+			{PkgName: "libcodec-a", Version: "2.0", Arch: "amd64", URL: "https://r/libcodec-a_20.deb"},
+		},
+		arts: []string{"app.deb", "libcodec-a_20.deb"},
+	}
+	template := &config.ImageTemplate{
+		Target:       config.TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "amd64"},
+		SystemConfig: config.SystemConfig{Packages: []string{"app"}},
+		OverlayPolicy: &config.OverlayPolicy{
+			PackageOperation: config.OverlayPackageOpAdditiveAndUpgrade,
+			AllowUpgrade:     true,
+		},
+	}
+	info := &BaselineInfo{OS: "ubuntu", Arch: "amd64", PackageManager: PackageManagerAPT, PackageType: pkgTypeDeb}
+	baseline := []BaselinePackage{{Name: "libcodec-a", Version: "1.0", Arch: "amd64", Installed: true}}
+
+	var plan *ResolutionPlan
+	withStubbedResolution(t, backend, []config.ProviderRepoConfig{debProviderRepo()}, nil, func() {
+		var err error
+		plan, err = ResolveOverlayPackages(template, info, baseline)
+		if err != nil {
+			t.Fatalf("ResolveOverlayPackages: %v", err)
+		}
+	})
+
+	gotInstall := make([]string, 0, len(plan.ToInstall))
+	for _, pkg := range plan.ToInstall {
+		gotInstall = append(gotInstall, pkg.Name)
+	}
+	if !reflect.DeepEqual(gotInstall, []string{"app", "libcodec-a"}) {
+		t.Errorf("toInstall = %v, want [app libcodec-a]", gotInstall)
+	}
+}
+
 // TestResolveOverlayPackages_AdditiveOnlyLeavesPresentUntouched confirms the
 // default additive-only policy still prunes a present package from the seed and
 // never upgrades it, even when the repo offers a newer version.
