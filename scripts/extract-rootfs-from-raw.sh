@@ -19,7 +19,7 @@ require_cmd() {
   fi
 }
 
-for cmd in sudo fdisk losetup mount umount tar gzip mktemp; do
+for cmd in sudo fdisk losetup mount umount mountpoint tar gzip mktemp; do
   require_cmd "$cmd"
 done
 
