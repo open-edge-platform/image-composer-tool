@@ -949,6 +949,20 @@ func ResolveDependencies(requested []ospackage.PackageInfo, all []ospackage.Pack
 				if p, ok := seedByName[name]; ok {
 					return p.Version, true
 				}
+				for _, p := range resolvedDeps {
+					for _, provided := range p.Provides {
+						if CleanDependencyName(provided) == name {
+							return "", true
+						}
+					}
+				}
+				for _, p := range seedByName {
+					for _, provided := range p.Provides {
+						if CleanDependencyName(provided) == name {
+							return "", true
+						}
+					}
+				}
 				if _, ok := neededSet[name]; ok {
 					return "", true
 				}

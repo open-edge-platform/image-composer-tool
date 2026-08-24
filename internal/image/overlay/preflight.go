@@ -285,7 +285,19 @@ var simulateOverlayInstall = func(info *BaselineInfo, baseline []BaselinePackage
 	if err != nil {
 		return nil, err
 	}
-	actions := classifyConflicts(info.PackageManager, baselineVersionIndex(baseline), plan.ToInstall, conflicts)
+	provides, err := readOverlayArtifactProvides(info.PackageManager, plan)
+	if err != nil {
+		return nil, err
+	}
+	toInstall := append([]ResolvedPackage(nil), plan.ToInstall...)
+	providesByPackage := make(map[string][]string, len(provides))
+	for _, artifact := range provides {
+		providesByPackage[artifact.Package] = artifact.Provides
+	}
+	for i := range toInstall {
+		toInstall[i].Provides = append(toInstall[i].Provides, providesByPackage[toInstall[i].Name]...)
+	}
+	actions := classifyConflicts(info.PackageManager, baselineVersionIndex(baseline), toInstall, conflicts)
 
 	return actions, nil
 }
