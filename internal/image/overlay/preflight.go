@@ -287,19 +287,6 @@ var simulateOverlayInstall = func(info *BaselineInfo, baseline []BaselinePackage
 	}
 	actions := classifyConflicts(info.PackageManager, baselineVersionIndex(baseline), plan.ToInstall, conflicts)
 
-	// The above only catches a to-install package conflicting with the BASELINE;
-	// two to-install packages that conflict with EACH OTHER (neither is in the
-	// baseline) need their own check, since the closure resolver does not itself
-	// exclude mutually exclusive alternatives (e.g. requesting both
-	// libcurl4-gnutls-dev and libcurl4-openssl-dev, or both the "-sse" and "-lze"
-	// hardware variants of a package). The Provides read is best-effort like the
-	// conflict read above: its failure only loses this one cross-check.
-	provides, err := readOverlayArtifactProvides(info.PackageManager, plan)
-	if err != nil {
-		log.Warnf("Overlay preflight: could not read artifact Provides, skipping intra-set conflict check: %v", err)
-		return actions, nil
-	}
-	actions = append(actions, classifyIntraSetConflicts(info.PackageManager, plan.ToInstall, conflicts, provides)...)
 	return actions, nil
 }
 
@@ -1309,7 +1296,6 @@ func firstProviderExcluding(providers []ResolvedPackage, exclude string) (Resolv
 	}
 	return ResolvedPackage{}, false
 }
-// classifyIntraSetConflicts lives in intraset_conflict.go.
 
 // postInstallVersionIndex builds a name→version map of the state that will exist
 // after the overlay install: the baseline overlaid with the versions the overlay

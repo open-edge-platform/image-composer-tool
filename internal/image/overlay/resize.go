@@ -325,7 +325,7 @@ func readPartitionStarts(loopDevPath string) (map[string]int64, error) {
 	fallbackCmd := fmt.Sprintf("parted -sm %s unit B print", shell.QuoteArg(loopDevPath))
 	fallbackOut, fallbackErr := resizeExec(fallbackCmd)
 	if fallbackErr != nil {
-		return nil, fmt.Errorf("overlay resize: failed to read partition layout of %s: %w", loopDevPath, err)
+		return nil, fmt.Errorf("overlay resize: failed to read partition layout of %s with lsblk (%v) and parted (%w)", loopDevPath, err, fallbackErr)
 	}
 	starts, parseErr := parsePartedPartitionStarts(fallbackOut, loopDevPath)
 	if parseErr != nil {

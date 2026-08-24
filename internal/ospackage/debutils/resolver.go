@@ -163,6 +163,13 @@ func saveParsedPackageCache(cacheFile, checksum string, pkgs []ospackage.Package
 	return os.WriteFile(cacheFile, data, 0600)
 }
 
+func metadataFileName(raw string) string {
+	if parsed, err := url.Parse(raw); err == nil && parsed.Path != "" {
+		return path.Base(parsed.Path)
+	}
+	return filepath.Base(raw)
+}
+
 // refreshRepoMetadata re-downloads the repository metadata files (Release, its
 // signature, and the archive key where applicable) into pkgMetaDir.
 //
@@ -189,20 +196,20 @@ func refreshRepoMetadata(pkgMetaDir string, localFiles, urls []string) (bool, er
 	// Require every expected file before committing: FetchPackages reports failures
 	// in aggregate, and a partial set must not overwrite a complete one.
 	for _, f := range localFiles {
-		staged := filepath.Join(stageDir, filepath.Base(f))
+		staged := filepath.Join(stageDir, metadataFileName(f))
 		if fi, statErr := os.Stat(staged); statErr != nil || fi.Size() == 0 {
-			return false, fmt.Errorf("refreshed metadata is missing or empty: %s", filepath.Base(f))
+			return false, fmt.Errorf("refreshed metadata is missing or empty: %s", metadataFileName(f))
 		}
 	}
 
 	for _, f := range localFiles {
-		staged := filepath.Join(stageDir, filepath.Base(f))
+		staged := filepath.Join(stageDir, metadataFileName(f))
 		if err := os.Rename(staged, f); err != nil {
 			// Past the first successful rename this leaves a mixed set. Report it
 			// rather than pressing on: the caller treats a refresh error as
 			// "continue with what's on disk", and verification will catch a
 			// Release/signature pair that no longer agrees.
-			return false, fmt.Errorf("installing refreshed metadata %s: %w", filepath.Base(f), err)
+			return false, fmt.Errorf("installing refreshed metadata %s: %w", metadataFileName(f), err)
 		}
 	}
 	return true, nil
@@ -296,10 +303,10 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 	}
 
 	//verify release file
-	localPkggzFile := filepath.Join(pkgMetaDir, filepath.Base(pkggz))
-	localReleaseFile := filepath.Join(pkgMetaDir, filepath.Base(releaseFile))
-	localReleaseSign := filepath.Join(pkgMetaDir, filepath.Base(releaseSign))
-	localPBGPGKey := filepath.Join(pkgMetaDir, filepath.Base(pbGPGKey))
+	localPkggzFile := filepath.Join(pkgMetaDir, metadataFileName(pkggz))
+	localReleaseFile := filepath.Join(pkgMetaDir, metadataFileName(releaseFile))
+	localReleaseSign := filepath.Join(pkgMetaDir, metadataFileName(releaseSign))
+	localPBGPGKey := filepath.Join(pkgMetaDir, metadataFileName(pbGPGKey))
 
 	// Determine if pbGPGKey is a URL or file path
 	pbkeyIsURL := false
@@ -387,7 +394,7 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 
 	// Retrieve the expected SHA256 for Packages.gz from the Release file.
 	// This serves as the authoritative cache key for the download cache.
-	pkgPathSrch := fmt.Sprintf("%s/binary-%s/%s", component, arch, filepath.Base(pkggz))
+	pkgPathSrch := fmt.Sprintf("%s/binary-%s/%s", component, arch, metadataFileName(pkggz))
 	expectedChecksum, err := findChecksumInRelease(localReleaseFile, "SHA256", pkgPathSrch)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get checksum from Release file: %w", err)
@@ -446,7 +453,7 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 
 	//Decompress the Packages (xz or gz) file
 	// The decompressed file will be named as Packages
-	PkgMetaFile := filepath.Join(pkgMetaDir, filepath.Base(pkggz))
+	PkgMetaFile := filepath.Join(pkgMetaDir, metadataFileName(pkggz))
 	pkgMetaFileNoExt := filepath.Join(filepath.Dir(PkgMetaFile), strings.TrimSuffix(filepath.Base(PkgMetaFile), filepath.Ext(PkgMetaFile)))
 	log.Infof("decompressing package metadata file %s to %s", PkgMetaFile, pkgMetaFileNoExt)
 
@@ -1106,10 +1113,6 @@ func ResolveDependencies(requested []ospackage.PackageInfo, all []ospackage.Pack
 				continue
 			}
 
-			if alternativeDependencyAlreadyResolved(cur.RequiresVer, depName, resolvedDeps) {
-				continue
-			}
-
 			candidates := findAllCandidates(depName, all)
 			if len(candidates) >= 1 {
 				// Pick the candidate using the resolver and add it to the queue
@@ -1764,38 +1767,6 @@ func rememberResolvedDependency(resolvedDeps map[string]ospackage.PackageInfo, k
 		resolvedDeps[key] = pkg
 	}
 	resolvedDeps[pkg.Name] = pkg
-}
-
-func alternativeDependencyAlreadyResolved(reqVers []string, depName string, resolvedDeps map[string]ospackage.PackageInfo) bool {
-	versionConstraints, _ := extractVersionRequirement(reqVers, depName)
-	for _, constraint := range versionConstraints {
-		if constraint.Alternative == "" {
-			continue
-		}
-		for _, altName := range strings.Split(constraint.Alternative, "|") {
-			if resolvedDependencySatisfies(strings.TrimSpace(altName), resolvedDeps) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func resolvedDependencySatisfies(name string, resolvedDeps map[string]ospackage.PackageInfo) bool {
-	if name == "" {
-		return false
-	}
-	if _, seen := resolvedDeps[name]; seen {
-		return true
-	}
-	for _, pkg := range resolvedDeps {
-		for _, provided := range pkg.Provides {
-			if provided == name {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // Helper function to resolve multiple candidates by picking the last one

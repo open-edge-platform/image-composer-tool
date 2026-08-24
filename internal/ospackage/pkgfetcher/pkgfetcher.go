@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	urlpkg "net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -292,8 +293,11 @@ func FetchPackages(ctx context.Context, urls []string, destDir string, workers i
 					}
 					continue
 				}
-				urlPath := strings.SplitN(url, "?", 2)[0]
-				name := path.Base(urlPath)
+				parsedURL, parseErr := urlpkg.Parse(url)
+				if parseErr != nil || parsedURL.Path == "" {
+					parsedURL = &urlpkg.URL{Path: strings.SplitN(url, "?", 2)[0]}
+				}
+				name := path.Base(parsedURL.Path)
 
 				// update description to current file
 				bar.Describe(name)

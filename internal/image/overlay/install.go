@@ -577,8 +577,8 @@ func selectInstaller(family PackageManager) (installerBackend, error) {
 }
 
 // debInstallerBackend installs prepared .deb artifacts into the baseline chroot
-// with dpkg. The closure was already resolved, so installing the set in one dpkg
-// invocation satisfies inter-package dependencies among them; deps that were
+// with dpkg. The closure was already resolved, so installing the set in ordered,
+// size-bounded dpkg batches satisfies inter-package dependencies among them; deps that were
 // already present in the baseline remain untouched. `dpkg -i` installs new
 // packages and upgrades an installed one in place, so it serves both the
 // additive-only and additive-and-upgrade policies without a mode switch (the
@@ -601,16 +601,15 @@ func (b *debInstallerBackend) install(req installRequest) error {
 		"DEBCONF_NOWARNINGS=yes",
 	}
 
-	// Install the prepared local artifacts in dependency-first order.
+	// Install the prepared local artifacts in dependency-first batches.
 	//
 	// A Pre-Depends must be unpacked AND CONFIGURED before its dependent is even
 	// unpacked (e.g. gawk pre-depends on libmpfr6). `dpkg -i A B C…` does not
 	// configure A until it has attempted C, so it can skip C even in a correctly
 	// sorted list. Running one archive per invocation preserves the resolver's
 	// dependency-first order while configuring each provider before its dependent.
-	// It also removes the MAX_ARG_STRLEN limit that affects large overlays. A
-	// package can still be encountered before a regular dependency in the resolver
-	// order, so only the failed archives are retried after the first pass.
+	// It also removes the MAX_ARG_STRLEN limit that affects large overlays. Failed
+	// batches are retried after configuration without replaying successful batches.
 	//
 	// Package files are supplied directly (no network, no repository resolution),
 	// so the install stays strictly within the approved, pre-downloaded set.
@@ -627,15 +626,19 @@ func (b *debInstallerBackend) install(req installRequest) error {
 	// word-splitting, not option parsing).
 	configureCmd := "dpkg --configure -a --auto-deconfigure"
 	const maxInstallPasses = 6
-	pending := paths
+	chunks := chunkArgs(paths, maxDpkgArgBytes)
+	pending := chunks
 	var lastErr error
 	var lastOut string
+	var lastFingerprint string
 	for pass := 1; pass <= maxInstallPasses; pass++ {
-		nextPending := make([]string, 0, len(pending))
-		for _, path := range pending {
-			out, err := shell.ExecCmdWithStream("dpkg -i --auto-deconfigure -- "+path, true, req.chrootPath, envVars)
+		nextPending := make([][]string, 0, len(pending))
+		var fingerprint strings.Builder
+		for index, chunk := range pending {
+			out, err := shell.ExecCmdWithStream("dpkg -i --auto-deconfigure -- "+strings.Join(chunk, " "), true, req.chrootPath, envVars)
+			fmt.Fprintf(&fingerprint, "batch=%d\nout=%q\nerr=%v\n", index, out, err)
 			if err != nil {
-				nextPending = append(nextPending, path)
+				nextPending = append(nextPending, chunk)
 				if lastErr == nil {
 					lastErr, lastOut = err, out
 				}
@@ -643,6 +646,8 @@ func (b *debInstallerBackend) install(req installRequest) error {
 		}
 
 		configureOut, configureErr := shell.ExecCmdWithStream(configureCmd, true, req.chrootPath, envVars)
+		fmt.Fprintf(&fingerprint, "configure-out=%q\nconfigure-err=%v\n", configureOut, configureErr)
+		currentFingerprint := fingerprint.String()
 		if len(nextPending) == 0 && configureErr == nil {
 			return nil
 		}
@@ -652,11 +657,12 @@ func (b *debInstallerBackend) install(req installRequest) error {
 		if len(nextPending) == 0 {
 			return fmt.Errorf("dpkg configure of %d artifact(s) failed: %w%s", len(paths), lastErr, formatCommandOutput(lastOut))
 		}
-		if len(nextPending) >= len(pending) {
+		if currentFingerprint == lastFingerprint {
 			return fmt.Errorf("dpkg install of %d artifact(s) failed with %d archive(s) still pending after pass %d: %w%s",
 				len(paths), len(nextPending), pass, lastErr, formatCommandOutput(lastOut))
 		}
-		log.Infof("Overlay install: %d/%d artifact(s) need a dependency-order retry after pass %d", len(nextPending), len(paths), pass)
+		log.Infof("Overlay install: %d/%d batch(es) need a dependency-order retry after pass %d", len(nextPending), len(pending), pass)
+		lastFingerprint = currentFingerprint
 		pending = nextPending
 		lastErr = nil
 	}

@@ -2,6 +2,7 @@ package overlay
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1531,17 +1532,81 @@ func TestDebInstallSucceedsFirstPass(t *testing.T) {
 	if err := (&debInstallerBackend{}).install(req); err != nil {
 		t.Fatalf("install: %v", err)
 	}
-	if len(cap.cmds) != 3 {
-		t.Fatalf("expected two installs and final configure, got %v", cap.cmds)
+	if len(cap.cmds) != 2 {
+		t.Fatalf("expected one bounded install and final configure, got %v", cap.cmds)
 	}
 	if !strings.HasPrefix(cap.cmds[0], "dpkg -i --auto-deconfigure -- ") {
 		t.Errorf("install command wrong: %q", cap.cmds[0])
 	}
-	if !strings.HasPrefix(cap.cmds[1], "dpkg -i --auto-deconfigure -- ") {
-		t.Errorf("second install command wrong: %q", cap.cmds[1])
+	if !strings.Contains(cap.cmds[0], "vim-runtime_9.deb") || !strings.Contains(cap.cmds[0], "vim-tiny_9.deb") {
+		t.Errorf("bounded install command missing artifacts: %q", cap.cmds[0])
 	}
-	if cap.cmds[2] != "dpkg --configure -a --auto-deconfigure" {
-		t.Errorf("final configure command wrong: %q", cap.cmds[2])
+	if cap.cmds[1] != "dpkg --configure -a --auto-deconfigure" {
+		t.Errorf("final configure command wrong: %q", cap.cmds[1])
+	}
+}
+
+func TestDebInstallRetriesOnlyFailedBatch(t *testing.T) {
+	items := make([]plannedInstall, 0, 2200)
+	for index := 0; index < 2200; index++ {
+		name := fmt.Sprintf("pkg-%04d", index)
+		items = append(items, plannedInstall{
+			pkg:      ResolvedPackage{Name: name},
+			artifact: fmt.Sprintf("%s-long-artifact-name-for-batching_1_amd64.deb", name),
+		})
+	}
+	req := installRequest{chrootPath: "/mnt/root", artifactChrootDir: chrootArtifactDir, items: items}
+	paths := make([]string, 0, len(items))
+	for _, item := range items {
+		paths = append(paths, shell.QuoteArg(filepath.Join(chrootArtifactDir, item.artifact)))
+	}
+	chunks := chunkArgs(paths, maxDpkgArgBytes)
+	if len(chunks) < 2 {
+		t.Fatalf("expected multiple batches, got %d", len(chunks))
+	}
+	results := make([]struct {
+		out string
+		err error
+	}, 0, len(chunks)*2+2)
+	for index := range chunks {
+		if index == 0 {
+			results = append(results, struct {
+				out string
+				err error
+			}{out: "first batch failed", err: errors.New("exit status 1")})
+		} else {
+			results = append(results, struct {
+				out string
+				err error
+			}{})
+		}
+	}
+	results = append(results, struct {
+		out string
+		err error
+	}{out: "configured", err: nil})
+	results = append(results, struct {
+		out string
+		err error
+	}{})
+	results = append(results, struct {
+		out string
+		err error
+	}{out: "configured", err: nil})
+	sc := &scriptedExecutor{results: results}
+	stubShell(t, sc)
+	if err := (&debInstallerBackend{}).install(req); err != nil {
+		t.Fatalf("install should recover failed batch: %v", err)
+	}
+	wantCommands := len(chunks) + 3
+	if len(sc.cmds) != wantCommands {
+		t.Fatalf("commands = %d, want %d: %v", len(sc.cmds), wantCommands, sc.cmds)
+	}
+	if sc.cmds[len(chunks)] != "dpkg --configure -a --auto-deconfigure" {
+		t.Errorf("missing configure after first batch pass: %q", sc.cmds[len(chunks)])
+	}
+	if !strings.Contains(sc.cmds[len(chunks)+1], chunks[0][0]) || strings.Contains(sc.cmds[len(chunks)+1], chunks[len(chunks)-1][len(chunks[len(chunks)-1])-1]) {
+		t.Errorf("retry did not contain only the failed batch: %q", sc.cmds[len(chunks)+1])
 	}
 }
 
@@ -1561,7 +1626,6 @@ func TestDebInstallRetriesForPreDepends(t *testing.T) {
 		out string
 		err error
 	}{
-		{out: "Setting up libmpfr6", err: nil},
 		{out: "gawk pre-depends on libmpfr6 ... not installing gawk", err: errors.New("exit status 1")},
 		{out: "Setting up libmpfr6", err: nil},
 		{out: "Setting up gawk", err: nil},
@@ -1571,17 +1635,14 @@ func TestDebInstallRetriesForPreDepends(t *testing.T) {
 	if err := (&debInstallerBackend{}).install(req); err != nil {
 		t.Fatalf("install should have recovered on retry: %v", err)
 	}
-	if len(sc.cmds) != 5 {
-		t.Fatalf("expected provider, dependent, configure, retry, configure; got %d: %v", len(sc.cmds), sc.cmds)
+	if len(sc.cmds) != 4 {
+		t.Fatalf("expected install, configure, retry, configure; got %d: %v", len(sc.cmds), sc.cmds)
 	}
 	if !strings.HasPrefix(sc.cmds[0], "dpkg -i --auto-deconfigure -- ") {
 		t.Errorf("cmd[0] not the first install pass: %q", sc.cmds[0])
 	}
-	if !strings.HasPrefix(sc.cmds[1], "dpkg -i --auto-deconfigure -- ") {
-		t.Errorf("cmd[1] not the second install: %q", sc.cmds[1])
-	}
-	if sc.cmds[2] != "dpkg --configure -a --auto-deconfigure" || !strings.Contains(sc.cmds[3], "gawk_5.deb") || sc.cmds[4] != "dpkg --configure -a --auto-deconfigure" {
-		t.Errorf("commands should configure then retry only gawk: %v", sc.cmds)
+	if sc.cmds[1] != "dpkg --configure -a --auto-deconfigure" || !strings.Contains(sc.cmds[2], "gawk_5.deb") || sc.cmds[3] != "dpkg --configure -a --auto-deconfigure" {
+		t.Errorf("commands should configure then retry the batch: %v", sc.cmds)
 	}
 }
 
@@ -1598,7 +1659,6 @@ func TestDebInstallConfiguresAfterOrderedArtifacts(t *testing.T) {
 		out string
 		err error
 	}{
-		{out: "Setting up libmpfr6", err: nil},
 		{out: "gawk pre-depends on libmpfr6 ... not installing gawk", err: errors.New("exit status 1")},
 		{out: "Setting up libmpfr6", err: nil},
 		{out: "Setting up gawk", err: nil},
@@ -1609,14 +1669,14 @@ func TestDebInstallConfiguresAfterOrderedArtifacts(t *testing.T) {
 	if err := (&debInstallerBackend{}).install(req); err != nil {
 		t.Fatalf("install should succeed after configure: %v", err)
 	}
-	if len(sc.cmds) != 5 {
-		t.Fatalf("expected provider, dependent, configure, retry, configure; got %d: %v", len(sc.cmds), sc.cmds)
+	if len(sc.cmds) != 4 {
+		t.Fatalf("expected install, configure, retry, configure; got %d: %v", len(sc.cmds), sc.cmds)
 	}
-	if !strings.Contains(sc.cmds[3], "gawk_5.deb") {
-		t.Errorf("cmd[3] not the retried dependent artifact: %q", sc.cmds[3])
+	if !strings.Contains(sc.cmds[2], "gawk_5.deb") {
+		t.Errorf("cmd[2] not the retried batch: %q", sc.cmds[2])
 	}
-	if sc.cmds[4] != "dpkg --configure -a --auto-deconfigure" {
-		t.Errorf("cmd[4] not the final configure: %q", sc.cmds[4])
+	if sc.cmds[3] != "dpkg --configure -a --auto-deconfigure" {
+		t.Errorf("cmd[3] not the final configure: %q", sc.cmds[3])
 	}
 }
 
@@ -1633,7 +1693,6 @@ func TestDebInstallContinuesAfterIndividualFailure(t *testing.T) {
 		out string
 		err error
 	}{
-		{out: "Setting up libmpfr6", err: nil},
 		{out: "gawk pre-depends on libmpfr6 ... not installing gawk", err: errors.New("exit status 1")},
 		{out: "Setting up libmpfr6", err: nil},
 		{out: "Setting up gawk", err: nil},
@@ -1644,11 +1703,11 @@ func TestDebInstallContinuesAfterIndividualFailure(t *testing.T) {
 	if err := (&debInstallerBackend{}).install(req); err != nil {
 		t.Fatalf("install should succeed after configuration retries: %v", err)
 	}
-	if len(sc.cmds) != 5 {
-		t.Fatalf("expected provider, dependent, configure, retry, configure; got %d: %v", len(sc.cmds), sc.cmds)
+	if len(sc.cmds) != 4 {
+		t.Fatalf("expected install, configure, retry, configure; got %d: %v", len(sc.cmds), sc.cmds)
 	}
-	if !strings.Contains(sc.cmds[3], "gawk_5.deb") {
-		t.Errorf("cmd[3] should retry only the failed artifact: %q", sc.cmds[3])
+	if !strings.Contains(sc.cmds[2], "gawk_5.deb") {
+		t.Errorf("cmd[2] should retry the failed batch: %q", sc.cmds[2])
 	}
 }
 
@@ -1667,6 +1726,8 @@ func TestDebInstallFailsFastOnNoProgress(t *testing.T) {
 	}{
 		{out: "broken depends on missing-lib; not configured", err: errors.New("exit status 1")},
 		{out: "broken depends on missing-lib; not configured", err: errors.New("exit status 1")},
+		{out: "broken depends on missing-lib; not configured", err: errors.New("exit status 1")},
+		{out: "broken depends on missing-lib; not configured", err: errors.New("exit status 1")},
 	}}
 	stubShell(t, sc)
 	err := (&debInstallerBackend{}).install(req)
@@ -1676,7 +1737,7 @@ func TestDebInstallFailsFastOnNoProgress(t *testing.T) {
 	if !strings.Contains(err.Error(), "still pending") {
 		t.Errorf("error should cite pending archive, got: %v", err)
 	}
-	if len(sc.cmds) != 2 {
-		t.Errorf("expected install and configure, got %d: %v", len(sc.cmds), sc.cmds)
+	if len(sc.cmds) != 4 {
+		t.Errorf("expected two install/configure attempts, got %d: %v", len(sc.cmds), sc.cmds)
 	}
 }
