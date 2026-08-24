@@ -74,7 +74,11 @@ var ErrUnsupportedType = errors.New("unsupported repository type")
 const (
 	DefaultTTL          = 6 * time.Hour
 	DefaultFetchTimeout = 90 * time.Second
-	DefaultMaxRepos     = 24
+	// DefaultFailureTTL is short on purpose: it exists to stop an unreachable
+	// mirror from being redialled on every keystroke of an autocomplete, not to
+	// remember an outage. A mirror that comes back is picked up within minutes.
+	DefaultFailureTTL = 2 * time.Minute
+	DefaultMaxRepos   = 24
 	// DefaultMaxEntries bounds retained packages rather than retained indexes,
 	// because index sizes differ by two orders of magnitude: Ubuntu noble
 	// amd64 main holds 6,099 packages while universe holds 64,755. Measured at
@@ -92,6 +96,11 @@ type Config struct {
 	// unbounded (see network/securehttp.go), so without it a stalled mirror
 	// would pin a request forever.
 	FetchTimeout time.Duration
+	// FailureTTL is how long a failed fetch is remembered before it is retried.
+	// Without it an unreachable repository costs its full dial timeout on every
+	// single search, since a search fans out across the whole catalog and
+	// failures would otherwise never be cached.
+	FailureTTL time.Duration
 	// MaxRepos caps how many parsed indexes are retained. The least recently
 	// used is dropped past the cap, so a session touching many repositories
 	// cannot grow the heap without bound.
@@ -118,6 +127,13 @@ func (c Config) fetchTimeout() time.Duration {
 		return c.FetchTimeout
 	}
 	return DefaultFetchTimeout
+}
+
+func (c Config) failureTTL() time.Duration {
+	if c.FailureTTL > 0 {
+		return c.FailureTTL
+	}
+	return DefaultFailureTTL
 }
 
 func (c Config) maxRepos() int {
@@ -148,11 +164,22 @@ type Cache struct {
 	entries  map[string]*cached
 	order    []string // keys, least recently used first
 	inflight map[string]*fetch
+	failures map[string]failed
 }
 
 type cached struct {
 	entries []Entry
 	fetched time.Time
+}
+
+// failed is a remembered fetch error. Failures are held apart from entries
+// rather than as a variant of it, because the two caps in evictLocked bound
+// retained *memory*: a failure holds no packages, so letting it consume an LRU
+// slot would let a handful of dead mirrors evict real indexes — and a search
+// fans out over more indexes than MaxRepos to begin with.
+type failed struct {
+	err    error
+	failed time.Time
 }
 
 // fetch is one in-progress index read. Callers that arrive while it is running
@@ -175,6 +202,7 @@ func New(cfg Config) *Cache {
 		now:      time.Now,
 		entries:  make(map[string]*cached),
 		inflight: make(map[string]*fetch),
+		failures: make(map[string]failed),
 	}
 }
 
@@ -185,11 +213,18 @@ func (r Repo) key() string {
 }
 
 // Lookup returns the packages r offers, reading the index over the network on a
-// miss or once the cached copy has aged past the TTL.
+// miss or once the cached copy has aged past the TTL. A recent failure is
+// returned from cache too, so an unreachable repository is not redialled on
+// every request.
 //
-// Concurrent lookups of the same repository share one fetch: the first caller
-// performs it and the rest wait for that result. A waiter still honours its own
-// ctx, so a client that gives up does not block on someone else's slow fetch.
+// Concurrent lookups of the same repository share one fetch. The fetch runs on
+// its own goroutine under a context detached from whichever caller happened to
+// start it, and every caller — starter included — waits through f.wait on its
+// own ctx. That split matters: the package search stream is cancelled on every
+// keystroke, and were the fetch bound to the caller that began it, abandoning
+// that request would hand context.Canceled to everyone else waiting on the same
+// index. Instead the fetch runs to completion and warms the cache for the next
+// keystroke, while each caller is still free to give up on its own deadline.
 func (c *Cache) Lookup(ctx context.Context, r Repo) ([]Entry, error) {
 	if r.Type != TypeDeb && r.Type != TypeRPM {
 		return nil, fmt.Errorf("%w: %q", ErrUnsupportedType, r.Type)
@@ -202,6 +237,13 @@ func (c *Cache) Lookup(ctx context.Context, r Repo) ([]Entry, error) {
 		c.mu.Unlock()
 		return hit.entries, nil
 	}
+	if bad, ok := c.failures[key]; ok {
+		if c.now().Sub(bad.failed) < c.cfg.failureTTL() {
+			c.mu.Unlock()
+			return nil, bad.err
+		}
+		delete(c.failures, key)
+	}
 	if f, ok := c.inflight[key]; ok {
 		c.mu.Unlock()
 		return f.wait(ctx)
@@ -210,19 +252,30 @@ func (c *Cache) Lookup(ctx context.Context, r Repo) ([]Entry, error) {
 	c.inflight[key] = f
 	c.mu.Unlock()
 
-	f.entries, f.err = c.load(ctx, r)
-	close(f.done)
+	// Detached from ctx: see the doc comment above. load() imposes its own
+	// FetchTimeout, so this cannot outlive that bound.
+	go func() {
+		f.entries, f.err = c.load(context.WithoutCancel(ctx), r)
+		close(f.done)
 
-	c.mu.Lock()
-	delete(c.inflight, key)
-	if f.err == nil {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		delete(c.inflight, key)
+		if f.err != nil {
+			// Remember the failure so a dead mirror is not redialled on every
+			// request. This cannot be a caller's cancellation: the fetch above
+			// runs detached, so a caller that gives up does not fail it — only
+			// a genuine fetch error or the FetchTimeout lands here, and both
+			// mean this index is unusable for now.
+			c.failures[key] = failed{err: f.err, failed: c.now()}
+			return
+		}
 		c.entries[key] = &cached{entries: f.entries, fetched: c.now()}
 		c.touchLocked(key)
 		c.evictLocked()
-	}
-	c.mu.Unlock()
+	}()
 
-	return f.entries, f.err
+	return f.wait(ctx)
 }
 
 // wait blocks until the shared fetch finishes or ctx is done, whichever first.

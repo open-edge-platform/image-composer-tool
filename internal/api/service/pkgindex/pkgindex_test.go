@@ -208,12 +208,10 @@ func TestLookupEnforcesFetchTimeout(t *testing.T) {
 	}
 }
 
-func TestLookupDoesNotCacheFailures(t *testing.T) {
-	// A repository that is briefly unreachable must be retried, not remembered
-	// as empty for the whole TTL.
-	var fail atomic.Bool
-	fail.Store(true)
-	var hits atomic.Int64
+// failingDebServer serves a valid index once fail is cleared, counting every
+// request, so a test can tell a cached failure from a re-dialled one.
+func failingDebServer(t *testing.T, fail *atomic.Bool, hits *atomic.Int64) *httptest.Server {
+	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
 		if fail.Load() || !hasSuffix(r.URL.Path, "Packages.gz") {
@@ -224,23 +222,108 @@ func TestLookupDoesNotCacheFailures(t *testing.T) {
 			t.Errorf("write: %v", err)
 		}
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
+	return srv
+}
 
-	c := New(Config{Client: srv.Client()})
+func TestLookupCachesFailuresForFailureTTL(t *testing.T) {
+	// An unreachable repository must not be redialled on every request: a
+	// search fans out across the whole catalog, so one dead mirror would
+	// otherwise cost its full dial timeout on every keystroke.
+	var fail atomic.Bool
+	fail.Store(true)
+	var hits atomic.Int64
+	srv := failingDebServer(t, &fail, &hits)
+
+	c := New(Config{Client: srv.Client(), FailureTTL: time.Minute})
+	var now atomic.Int64
+	now.Store(time.Now().UnixNano())
+	c.now = func() time.Time { return time.Unix(0, now.Load()) }
+
 	r := debRepo(srv.URL, "noble")
 	if _, err := c.Lookup(context.Background(), r); err == nil {
 		t.Fatal("want an error while the server is failing")
 	}
+	first := hits.Load()
+
+	// Inside the failure TTL: served from the negative cache, still an error,
+	// but without touching the upstream again.
+	if _, err := c.Lookup(context.Background(), r); err == nil {
+		t.Fatal("want the remembered error inside the failure TTL")
+	}
+	if got := hits.Load(); got != first {
+		t.Errorf("upstream hit %d times inside the failure TTL, want %d", got, first)
+	}
+
+	// Past it: retried, and the recovered repository is served normally.
 	fail.Store(false)
+	now.Add(int64(2 * time.Minute))
 	got, err := c.Lookup(context.Background(), r)
 	if err != nil {
-		t.Fatalf("second lookup after recovery: %v", err)
+		t.Fatalf("lookup past the failure TTL: %v", err)
 	}
 	if len(got) != 2 {
 		t.Errorf("got %d entries, want 2", len(got))
 	}
-	if hits.Load() < 2 {
-		t.Errorf("upstream hit %d times; the failure appears to have been cached", hits.Load())
+	if hits.Load() <= first {
+		t.Errorf("upstream hit %d times; the failure was never retried", hits.Load())
+	}
+}
+
+func TestLookupFetchSurvivesItsInitiator(t *testing.T) {
+	// The fetch is detached from whichever caller started it, so abandoning
+	// that request must not hand context.Canceled to a concurrent waiter on the
+	// same index — and the fetch should still warm the cache.
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var hits atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hits.Add(1) == 1 {
+			close(started)
+			<-release
+		}
+		if _, err := w.Write(gzipped(t, twoStanzas)); err != nil {
+			t.Errorf("write: %v", err)
+		}
+	}))
+	defer srv.Close()
+
+	c := New(Config{Client: srv.Client()})
+	r := debRepo(srv.URL, "noble")
+
+	// Caller one starts the fetch, then gives up while it is still in flight.
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Lookup(ctx, r)
+		done <- err
+	}()
+	<-started
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("initiator: want context.Canceled, got %v", err)
+	}
+
+	// Caller two, on a live context, gets the real result rather than the
+	// departed initiator's cancellation.
+	close(release)
+	got, err := c.Lookup(context.Background(), r)
+	if err != nil {
+		t.Fatalf("waiter after the initiator left: %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("got %d entries, want 2", len(got))
+	}
+	if n := hits.Load(); n != 1 {
+		t.Errorf("upstream hit %d times; the abandoned fetch did not warm the cache", n)
+	}
+	// The caller that gave up must not have been recorded as the repository's
+	// failure — that would blank it out for the whole FailureTTL.
+	c.mu.Lock()
+	n := len(c.failures)
+	c.mu.Unlock()
+	if n != 0 {
+		t.Errorf("an abandoned caller left %d negative-cache entries, want 0", n)
 	}
 }
 

@@ -17,10 +17,12 @@ info:
     types in `web/src/api/types.ts` mirror it.
 
     Not every endpoint is modelled as a JSON operation here. The build-log stream
-    (`GET /builds/{id}/logs`) is Server-Sent Events, and the template / log-file /
-    artifact downloads return files, so they are hand-written handlers outside the
-    generated `ServerInterface` and documented with `text/event-stream` /
-    `application/octet-stream` response bodies rather than JSON schemas.
+    (`GET /builds/{id}/logs`) and the package-search stream
+    (`GET /packages/search/stream`) are Server-Sent Events, and the template /
+    log-file / artifact downloads return files, so they are hand-written handlers
+    outside the generated `ServerInterface` and documented with
+    `text/event-stream` / `application/octet-stream` response bodies rather than
+    JSON schemas.
   version: 3.0.0
   contact:
     name: ICT Team
@@ -170,6 +172,84 @@ paths:
                 $ref: "#/components/schemas/Error"
         "500":
           description: Server error searching packages
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /packages/search/stream:
+    get:
+      tags: [Packages]
+      operationId: streamPackageSearch
+      summary: Search packages across repositories (Server-Sent Events)
+      description: |
+        The same cross-repository search as `GET /packages/search`, but each
+        repository's matches are emitted as soon as that repository responds
+        instead of after every one has. A search fans out over the whole
+        catalog, so one unreachable mirror would otherwise set the latency of
+        the entire request — reaching its TCP dial timeout while results
+        already gathered from reachable repositories sit unsent.
+
+        Unlike the JSON endpoint this is not paginated: there is no `offset`,
+        and `limit` caps each repository's contribution rather than the merged
+        list. Clients merge, dedupe and rank the batches as they arrive. The
+        JSON endpoint remains the right choice for paging one known repository.
+
+        The stream closes after a fixed budget even if some repositories have
+        not answered; `done.truncated` reports that, and `done.failed` counts
+        repositories that reported an error. Nothing is retried.
+
+        This is a hand-written streaming handler, not part of the generated
+        `ServerInterface` — oapi-codegen does not model `text/event-stream`
+        cleanly. Event types:
+          - `hits`      `{"repo": "<id>", "packages": [PackageSearchResult, ...]}`
+          - `repoError` `{"repo": "<id>", "message": "<err>"}`
+          - `done`      `{"repos": <n>, "failed": <n>, "truncated": <bool>}`
+
+        There is deliberately no `error` event: `EventSource` already delivers
+        transport failures under that name, so a server-sent event of the same
+        name cannot be told apart from a dropped connection.
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+            minLength: 2
+          description: Search query (package name prefix). Omit to browse.
+        - name: os
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Target OS distribution ID (e.g., ubuntu24)
+        - name: repos
+          in: query
+          style: form
+          explode: true
+          schema:
+            type: array
+            items:
+              type: string
+          description: Filter by enabled repository IDs
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 50
+          description: Max results per repository (not a total across the stream)
+      responses:
+        "200":
+          description: SSE stream of per-repository search results
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "400":
+          description: |
+            Invalid or missing query parameters. Returned as JSON before the
+            stream starts, since a status cannot be changed once SSE headers
+            and a body have been written.
           content:
             application/json:
               schema:

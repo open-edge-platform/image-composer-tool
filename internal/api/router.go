@@ -25,10 +25,15 @@ func (s *Server) routes() *http.ServeMux {
 	// Generated JSON routes: GET /manifest, POST /templates/compose,
 	// POST /builds, GET /builds, POST /builds/{id}/cancel,
 	// GET /builds/{id}/{details,artifacts}.
+	//
+	// Registered first, but /packages/search/stream below still wins for its own
+	// path: ServeMux matches the most specific pattern, not the first registered.
 	httpapi.HandlerFromMuxWithBaseURL(s, mux, "/api/v1")
 
-	// Hand-written endpoints outside the generated JSON interface: SSE log stream
-	// (text/event-stream) and file/binary downloads (YAML / text / octet-stream).
+	// Hand-written endpoints outside the generated JSON interface: the SSE log
+	// and package-search streams (text/event-stream) and file/binary downloads
+	// (YAML / text / octet-stream).
+	mux.HandleFunc("GET /api/v1/packages/search/stream", s.handleSearchPackageStream)
 	mux.HandleFunc("GET /api/v1/builds/{id}/logs", s.handleBuildLogs)
 	mux.HandleFunc("GET /api/v1/builds/{id}/template", s.handleBuildTemplate)
 	mux.HandleFunc("GET /api/v1/builds/{id}/logfile", s.handleBuildLogFile)

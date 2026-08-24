@@ -83,6 +83,20 @@ export const api = {
     return jsonFetch<PackageSearchResults>(`/packages/search?${qs.toString()}`)
   },
 
+  // SSE URL for a cross-repository search. Each repository's matches arrive as
+  // they land rather than after the slowest one, so one unreachable mirror
+  // can't hold up results already gathered from the rest. Not paginated:
+  // `limit` caps each repository, and merging/ranking is the caller's job —
+  // use searchPackages when paging one known repository.
+  searchStreamUrl: (params: { q?: string; os: string; repos?: string[]; limit?: number }) => {
+    const qs = new URLSearchParams()
+    if (params.q) qs.set('q', params.q)
+    qs.set('os', params.os)
+    if (params.repos) for (const r of params.repos) qs.append('repos', r)
+    if (params.limit != null) qs.set('limit', String(params.limit))
+    return `${BASE}/packages/search/stream?${qs.toString()}`
+  },
+
   startBuild: (req: ComposeRequest) =>
     jsonFetch<BuildAccepted>('/builds', {
       method: 'POST',

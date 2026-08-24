@@ -148,7 +148,7 @@ files with the build-path metadata cache described above.
 | | Build path | Web UI picker |
 |---|---|---|
 | Stored | on disk, under `tmp/builds/` | in memory only |
-| Invalidation | `Release` SHA256 checksum | time-to-live, 6 hours by default |
+| Invalidation | `Release` SHA256 checksum | time-to-live, 6 hours by default (2 minutes for a failed fetch) |
 | Retained | indefinitely | 24 indexes or 600,000 packages, whichever binds first |
 | Kept per package | full metadata: dependencies, checksums, file lists | name, version, architecture, one-line summary |
 
@@ -173,9 +173,25 @@ than dropped and refetched on every request.
 
 Requests for the same index are **coalesced**: when several browser requests need
 one repository at the same time, the first fetches it and the rest wait for that
-result, so a repository is never downloaded more than once concurrently. Nothing
-in this cache is written to disk, so it is empty after every `serve` restart and
-needs no clean-up.
+result, so a repository is never downloaded more than once concurrently. The
+fetch itself runs detached from whichever request started it, and each waiter
+still honours its own deadline. That split matters because the package-search
+stream is cancelled on every keystroke: were the download bound to the request
+that began it, abandoning that request would hand a cancellation to every other
+request waiting on the same index. Instead the download finishes and warms the
+cache for the next keystroke. Nothing in this cache is written to disk, so it is
+empty after every `serve` restart and needs no clean-up.
+
+**Failed fetches are cached too, briefly** — two minutes by default, against six
+hours for a successful one. A search fans out across every repository the target
+offers, so without this an unreachable mirror is redialled on every keystroke and
+costs its full TCP dial timeout each time. The short lifetime is deliberate: it
+exists to stop a dead mirror being retried within one search session, not to
+remember an outage, so a repository that comes back is picked up within minutes.
+Failures are held separately from parsed indexes rather than as a variant of
+them, because the two retention limits above bound *memory*: a remembered failure
+holds no packages, and letting it consume one of the 24 index slots would let a
+handful of dead mirrors evict real indexes.
 
 **GPG verification is conditional, per repository.** A repository whose catalog
 entry names a local keyring path fetches and verifies that repository's

@@ -21,7 +21,7 @@ func TestEmbeddedSpecIsValid(t *testing.T) {
 		t.Fatalf("embedded spec invalid: %v", err)
 	}
 	// Sanity-check that the JSON operations we rely on are present.
-	for _, p := range []string{"/manifest", "/templates/compose", "/templates/validate", "/package-repos", "/packages/search", "/builds", "/builds/{id}/details", "/builds/{id}/artifacts", "/builds/{id}/cancel"} {
+	for _, p := range []string{"/manifest", "/templates/compose", "/templates/validate", "/package-repos", "/packages/search", "/packages/search/stream", "/builds", "/builds/{id}/details", "/builds/{id}/artifacts", "/builds/{id}/cancel"} {
 		if swagger.Paths.Find(p) == nil {
 			t.Errorf("spec missing path %q", p)
 		}

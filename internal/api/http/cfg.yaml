@@ -14,12 +14,13 @@ generate:
   # Embed the spec so the server can expose/validate it if needed.
   embedded-spec: true
 output-options:
-  # Only the JSON operations belong on the generated interface. The SSE log stream
+  # Only the JSON operations belong on the generated interface. The SSE streams
   # and the file/binary downloads are hand-written streaming handlers registered
   # alongside the generated mux (oapi-codegen does not model text/event-stream or
   # octet-stream responses cleanly), so they are excluded here by operationId.
   exclude-operation-ids:
     - streamBuildLogs
+    - streamPackageSearch
     - downloadBuildTemplate
     - downloadBuildLogFile
     - downloadBuildArtifact

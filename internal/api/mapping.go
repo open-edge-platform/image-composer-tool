@@ -108,13 +108,19 @@ func fromPackageRepoList(repos []service.PackageRepo) httpapi.PackageRepoList {
 // is the hit's RepoID — the same id the `repos` filter param and
 // /package-repos both use, so a client can round-trip one into the other.
 func fromPackageSearchResults(query string, hits []service.PackageSearchHit, total int) httpapi.PackageSearchResults {
-	out := httpapi.PackageSearchResults{
-		Packages: make([]httpapi.PackageSearchResult, len(hits)),
+	return httpapi.PackageSearchResults{
+		Packages: fromPackageSearchHits(hits),
 		Query:    query,
 		Total:    total,
 	}
+}
+
+// fromPackageSearchHits maps hits to the wire type. Shared with the SSE search
+// stream, so a package looks identical however it reached the client.
+func fromPackageSearchHits(hits []service.PackageSearchHit) []httpapi.PackageSearchResult {
+	out := make([]httpapi.PackageSearchResult, len(hits))
 	for i, h := range hits {
-		out.Packages[i] = httpapi.PackageSearchResult{
+		out[i] = httpapi.PackageSearchResult{
 			Name:        h.Name,
 			Version:     h.Version,
 			Description: optStr(h.Description),
