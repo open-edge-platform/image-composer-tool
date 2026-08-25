@@ -214,6 +214,7 @@ packageRepositories:
       - lbzip2
       - libglew-dev
       - libglm-dev
+      - libsdl2-dev
       - mc
       - openssl
       - pciutils
@@ -260,6 +261,8 @@ packageRepositories:
       - libswresample6
       - libswscale9
       - libweston-10-0
+      - xnest
+      - xvfb
       - dnsmasq-base
       # additional PTL packages
       - xdp-tools
@@ -510,6 +513,7 @@ systemConfig:
     - lbzip2
     - libglew-dev
     - libglm-dev
+    - libsdl2-dev
     - mc
     - openssl
     - pciutils
@@ -542,6 +546,8 @@ systemConfig:
     - usb-modeswitch
     - fwupd
     - clinfo
+    - xvfb
+    - xnest
     - mesa-vulkan-drivers
     - xdp-tools
     - rpc-go
@@ -596,12 +602,11 @@ systemConfig:
       final: /etc/netplan/01-network-manager-all.yaml
 
   kernel:
-    version: "260713t060441z-r2"
     cmdline: "xe.max_vfs=7 xe.force_probe=* modprobe.blacklist=i915 udmabuf.list_limit=8192 console=tty0 console=ttyS0,115200n8"
     enableExtraModules: "intel_vpu uas"
     packages:
-      - linux-image-6.18-intel*
-      - linux-headers-6.18-intel*
+        - linux-image-6.18-intel*
+        - linux-headers-6.18-intel*
 
   users:
     - name: user
