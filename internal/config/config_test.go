@@ -5170,3 +5170,33 @@ func TestSaveUpdatedConfigFileYAMLSerialization(t *testing.T) {
 		t.Error("YAML should not contain 'index: null' for partition with nil Index")
 	}
 }
+
+// TestResolvedKernelPackagesRoundTrip confirms the installer metadata field
+// survives a save and reloads cleanly through both the user schema (used by the
+// live installer, validateFull=false) and the full schema (validateFull=true).
+func TestResolvedKernelPackagesRoundTrip(t *testing.T) {
+	tmpl := &ImageTemplate{
+		Image:                  ImageInfo{Name: "test", Version: "1.0.0"},
+		Target:                 TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"},
+		SystemConfig:           SystemConfig{Name: "test", Bootloader: Bootloader{BootType: "efi", Provider: "grub"}},
+		ResolvedKernelPackages: []string{"linux-image-generic-7.0"},
+	}
+
+	path := filepath.Join(t.TempDir(), "template-dump.yaml")
+	if err := tmpl.SaveUpdatedConfigFile(path); err != nil {
+		t.Fatalf("SaveUpdatedConfigFile failed: %v", err)
+	}
+
+	// The live installer loads the dump with validateFull=false (user schema).
+	loaded, err := LoadTemplate(path, false)
+	if err != nil {
+		t.Fatalf("LoadTemplate(false) failed: %v", err)
+	}
+	if len(loaded.ResolvedKernelPackages) != 1 || loaded.ResolvedKernelPackages[0] != "linux-image-generic-7.0" {
+		t.Fatalf("expected resolvedKernelPackages preserved, got %v", loaded.ResolvedKernelPackages)
+	}
+
+	if _, err := LoadTemplate(path, true); err != nil {
+		t.Fatalf("LoadTemplate(true) failed: %v", err)
+	}
+}

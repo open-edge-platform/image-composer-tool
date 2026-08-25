@@ -1297,6 +1297,159 @@ func TestMatchRequestedKernelWildcardVersion(t *testing.T) {
 	}
 }
 
+// TestMatchRequestedKernelWildcardMultiplePicksLatest confirms that a kernel
+// wildcard expanding to more than one kernel package installs only the latest
+// version instead of every match.
+func TestMatchRequestedKernelWildcardMultiplePicksLatest(t *testing.T) {
+	ConfigureKernelSelection([]string{"linux-image-generic*"}, "")
+	defer ConfigureKernelSelection(nil, "")
+
+	all := []ospackage.PackageInfo{
+		{
+			Name:    "linux-image-generic",
+			Version: "6.8.0-138.138",
+			URL:     "pool/main/l/linux-meta/linux-image-generic_6.8.0-138.138_amd64.deb",
+		},
+		{
+			Name:    "linux-image-generic-hwe-24.04",
+			Version: "6.14.2.1.0",
+			URL:     "pool/main/l/linux-meta-hwe-6.14/linux-image-generic-hwe-24.04_6.14.2.1.0_amd64.deb",
+		},
+	}
+
+	matched, err := MatchRequested([]string{"linux-image-generic*"}, all)
+	if err != nil {
+		t.Fatalf("expected wildcard kernel request to resolve, got error: %v", err)
+	}
+
+	if len(matched) != 1 {
+		t.Fatalf("expected only the latest kernel, got %d packages", len(matched))
+	}
+
+	if matched[0].Name != "linux-image-generic-hwe-24.04" || matched[0].Version != "6.14.2.1.0" {
+		t.Fatalf("expected latest kernel linux-image-generic-hwe-24.04 (6.14.2.1.0), got %s (%s)",
+			matched[0].Name, matched[0].Version)
+	}
+}
+
+// TestMatchRequestedMultipleExplicitKernelsAllowed confirms that explicitly
+// listing several exact kernel packages is intentional and is NOT blocked by
+// the wildcard multi-match guard.
+func TestMatchRequestedMultipleExplicitKernelsAllowed(t *testing.T) {
+	ConfigureKernelSelection([]string{"linux-image-generic", "linux-image-generic-hwe-24.04"}, "")
+	defer ConfigureKernelSelection(nil, "")
+
+	all := []ospackage.PackageInfo{
+		{
+			Name:    "linux-image-generic",
+			Version: "6.8.0-138.138",
+			URL:     "pool/main/l/linux-meta/linux-image-generic_6.8.0-138.138_amd64.deb",
+		},
+		{
+			Name:    "linux-image-generic-hwe-24.04",
+			Version: "6.14.2.1.0",
+			URL:     "pool/main/l/linux-meta-hwe-6.14/linux-image-generic-hwe-24.04_6.14.2.1.0_amd64.deb",
+		},
+	}
+
+	matched, err := MatchRequested([]string{"linux-image-generic", "linux-image-generic-hwe-24.04"}, all)
+	if err != nil {
+		t.Fatalf("expected explicit multi-kernel request to succeed, got error: %v", err)
+	}
+
+	if len(matched) != 2 {
+		t.Fatalf("expected both explicit kernels resolved, got %d", len(matched))
+	}
+}
+
+// TestExpandKernelInstallNames confirms a kernel glob is rewritten to the single
+// newest resolved package name (so apt is not handed a glob), while non-glob
+// entries and globs with no resolved match pass through unchanged.
+func TestExpandKernelInstallNames(t *testing.T) {
+	resolved := []ospackage.PackageInfo{
+		{Name: "linux-image-generic", Version: "6.8.0-138.138"},
+		{Name: "linux-image-generic-6.8", Version: "6.8.0-138.138"},
+		{Name: "linux-image-generic-6.14", Version: "6.14.0-37.37~24.04.1"},
+		{Name: "linux-image-generic-7.0", Version: "7.0.0-30.30~24.04.1"},
+		{Name: "linux-image-generic-hwe-24.04-edge", Version: "7.0.0-30.30~24.04.1"},
+		{Name: "linux-image-7.0.0-30-generic", Version: "7.0.0-30.30"},
+		{Name: "systemd", Version: "255"},
+	}
+
+	tests := []struct {
+		name      string
+		kernelPkg []string
+		want      []string
+	}{
+		{
+			name:      "glob expands to the newest matching meta only",
+			kernelPkg: []string{"linux-image-generic*"},
+			want:      []string{"linux-image-generic-7.0"},
+		},
+		{
+			name:      "exact name passes through",
+			kernelPkg: []string{"linux-image-generic-hwe-24.04-edge"},
+			want:      []string{"linux-image-generic-hwe-24.04-edge"},
+		},
+		{
+			name:      "glob with no match falls back to the pattern",
+			kernelPkg: []string{"linux-image-lowlatency*"},
+			want:      []string{"linux-image-lowlatency*"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ExpandKernelInstallNames(tt.kernelPkg, resolved)
+			if len(got) != len(tt.want) {
+				t.Fatalf("expected %v, got %v", tt.want, got)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("expected %v, got %v", tt.want, got)
+				}
+			}
+		})
+	}
+}
+
+// TestSelectedKernelPackagesRespectsVersionPin confirms MatchRequested records
+// the concrete kernel it resolved (honoring a pinned kernel version), and that
+// expanding the install glob against that selection is not overridden by a newer
+// kernel that may linger in the cache-derived BOM.
+func TestSelectedKernelPackagesRespectsVersionPin(t *testing.T) {
+	ConfigureKernelSelection([]string{"linux-image-generic*"}, "6.14")
+	defer ConfigureKernelSelection(nil, "")
+
+	all := []ospackage.PackageInfo{
+		{
+			Name:    "linux-image-generic-6.14",
+			Version: "6.14.0-37.37~24.04.1",
+			URL:     "pool/main/l/linux-meta-hwe-6.14/linux-image-generic-6.14_6.14.0-37.37~24.04.1_amd64.deb",
+		},
+		{
+			Name:    "linux-image-generic-7.0",
+			Version: "7.0.0-30.30~24.04.1",
+			URL:     "pool/main/l/linux-meta-7.0/linux-image-generic-7.0_7.0.0-30.30~24.04.1_amd64.deb",
+		},
+	}
+
+	if _, err := MatchRequested([]string{"linux-image-generic*"}, all); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	sel := SelectedKernelPackages()
+	if len(sel) != 1 || sel[0].Name != "linux-image-generic-6.14" {
+		t.Fatalf("expected recorded selection [linux-image-generic-6.14], got %v", sel)
+	}
+
+	// A cache-derived BOM containing a newer 7.0 meta must not override the pin.
+	install := ExpandKernelInstallNames([]string{"linux-image-generic*"}, sel)
+	if len(install) != 1 || install[0] != "linux-image-generic-6.14" {
+		t.Fatalf("expected install list [linux-image-generic-6.14], got %v", install)
+	}
+}
+
 // TestWriteArrayToFile tests the WriteArrayToFile function
 func TestWriteArrayToFile(t *testing.T) {
 	// Save original ReportPath

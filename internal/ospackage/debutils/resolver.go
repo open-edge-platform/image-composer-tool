@@ -1635,6 +1635,41 @@ func ResolveTopPackageConflicts(want string, all []ospackage.PackageInfo) (ospac
 	return candidates[0], true
 }
 
+// ExpandKernelInstallNames replaces a glob kernel entry (for example
+// linux-image-generic*) with the single newest matching package name from
+// resolved, so the deb install step passes one concrete name to apt instead of
+// a glob. apt would otherwise expand the glob against the shared local repo (and
+// dependency resolution pulls every provider of the linux-image-generic virtual
+// package), installing multiple kernels. Non-glob entries, and globs with no
+// resolved match, pass through unchanged.
+func ExpandKernelInstallNames(kernelPkgs []string, resolved []ospackage.PackageInfo) []string {
+	var out []string
+	for _, pkg := range kernelPkgs {
+		if !isGlobPattern(pkg) {
+			out = append(out, pkg)
+			continue
+		}
+		var matches []ospackage.PackageInfo
+		for _, r := range resolved {
+			if ok, err := path.Match(pkg, r.Name); err == nil && ok {
+				matches = append(matches, r)
+			}
+		}
+		if len(matches) == 0 {
+			out = append(out, pkg)
+			continue
+		}
+		sort.Slice(matches, func(i, j int) bool {
+			if c := compareVersions(matches[i].Version, matches[j].Version); c != 0 {
+				return c > 0
+			}
+			return matches[i].Name < matches[j].Name
+		})
+		out = append(out, matches[0].Name)
+	}
+	return out
+}
+
 // ResolveWildcardPackageConflicts expands a wildcard request to the best package
 // for each matched base package name.
 func ResolveWildcardPackageConflicts(want string, all []ospackage.PackageInfo) ([]ospackage.PackageInfo, bool) {

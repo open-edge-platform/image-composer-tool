@@ -777,6 +777,11 @@
           "description": "Optional SBOM package metadata preserved for installer-time SBOM generation",
           "items": { "type": "object", "additionalProperties": true }
         },
+        "resolvedKernelPackages": {
+          "type": "array",
+          "description": "Concrete kernel package names resolved at build time, preserved so an installer ISO installs the same kernel",
+          "items": { "type": "string" }
+        },
         "packageRepositories": {
           "type": "array",
           "description": "Additional package repositories",
@@ -878,6 +883,11 @@
           "type": "array",
           "description": "Optional SBOM package metadata preserved for installer-time SBOM generation",
           "items": { "type": "object", "additionalProperties": true }
+        },
+        "resolvedKernelPackages": {
+          "type": "array",
+          "description": "Concrete kernel package names resolved at build time, preserved so an installer ISO installs the same kernel",
+          "items": { "type": "string" }
         },
         "packageRepositories": {
           "type": "array",

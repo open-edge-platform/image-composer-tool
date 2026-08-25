@@ -267,8 +267,14 @@ type ImageTemplate struct {
 	FullPkgList         []string                `yaml:"-"`
 	FullPkgListBom      []ospackage.PackageInfo `yaml:"-"`
 	SBOMPackageMetadata []ospackage.PackageInfo `yaml:"sbomPackageMetadata,omitempty"`
-	DotFilePath         string                  `yaml:"-"`
-	DotSystemOnly       bool                    `yaml:"-"`
+	// ResolvedKernelPackages holds the concrete kernel package names a build
+	// resolved from systemConfig.kernel.packages (a glob is narrowed to the single
+	// selected kernel). It is serialized so an installer ISO's separate
+	// live-installer process installs exactly that kernel instead of re-expanding
+	// the glob against apt.
+	ResolvedKernelPackages []string `yaml:"resolvedKernelPackages,omitempty"`
+	DotFilePath            string   `yaml:"-"`
+	DotSystemOnly          bool     `yaml:"-"`
 	// InspectEnabled toggles post-build image inspection for overlay builds. It is
 	// driven by the CLI --inspect/--no-inspect flags (default on) rather than YAML,
 	// so it is excluded from serialization. Consumed by the overlay postprocess
