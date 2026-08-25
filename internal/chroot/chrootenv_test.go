@@ -798,11 +798,19 @@ func TestChrootEnv_UpdateSystemPkgs(t *testing.T) {
 			expectedLoader: nil,
 			expectError:    true,
 		},
+		{
+			name:           "wsl2-rootfs-skips-bootloader",
+			bootloader:     "unknown",
+			bootType:       "efi",
+			expectedLoader: []string{},
+			expectError:    false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			template := &config.ImageTemplate{
+				Target: config.TargetInfo{ImageType: "raw"},
 				SystemConfig: config.SystemConfig{
 					Bootloader: config.Bootloader{
 						Provider: tt.bootloader,
@@ -812,6 +820,9 @@ func TestChrootEnv_UpdateSystemPkgs(t *testing.T) {
 						Packages: []string{"kernel-pkg"},
 					},
 				},
+			}
+			if tt.name == "wsl2-rootfs-skips-bootloader" {
+				template.Target.ImageType = "wsl2"
 			}
 
 			err := chrootEnv.UpdateSystemPkgs(template)

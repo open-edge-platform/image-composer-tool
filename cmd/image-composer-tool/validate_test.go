@@ -494,3 +494,101 @@ func TestValidateCommand_ErrorMessages(t *testing.T) {
 		})
 	}
 }
+
+// writeValidateTemplate writes a minimal valid user template that optionally
+// declares an extends parent, for exercising extends-aware validation.
+func writeValidateTemplate(t *testing.T, path, imageName, extends string) {
+	t.Helper()
+
+	var b strings.Builder
+	if extends != "" {
+		b.WriteString("extends: \"" + extends + "\"\n")
+	}
+	b.WriteString("image:\n")
+	b.WriteString("  name: " + imageName + "\n")
+	b.WriteString("  version: \"1.0.0\"\n")
+	b.WriteString("target:\n")
+	b.WriteString("  os: azure-linux\n")
+	b.WriteString("  dist: azl3\n")
+	b.WriteString("  arch: x86_64\n")
+	b.WriteString("  imageType: raw\n")
+	b.WriteString("systemConfig:\n")
+	b.WriteString("  name: " + imageName + "-config\n")
+
+	if err := os.WriteFile(path, []byte(b.String()), 0644); err != nil {
+		t.Fatalf("failed to write template %s: %v", path, err)
+	}
+}
+
+// TestValidateCommand_ValidExtends verifies that validating a template with a
+// well-formed extends chain resolves and merges the chain successfully.
+func TestValidateCommand_ValidExtends(t *testing.T) {
+	defer resetValidateFlags()
+
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "root.yml")
+	leafPath := filepath.Join(tmpDir, "leaf.yml")
+
+	writeValidateTemplate(t, rootPath, "root", "")
+	writeValidateTemplate(t, leafPath, "leaf", "root.yml")
+
+	cmd := createValidateCommand()
+	cmd.SetArgs([]string{leafPath})
+
+	if err := cmd.Execute(); err != nil {
+		t.Errorf("expected valid extends chain to pass validation, got: %v", err)
+	}
+}
+
+// TestValidateCommand_BrokenExtendsChain verifies that validation fails and
+// reports the offending file when a template in the extends chain is missing.
+func TestValidateCommand_BrokenExtendsChain(t *testing.T) {
+	defer resetValidateFlags()
+
+	tmpDir := t.TempDir()
+	leafPath := filepath.Join(tmpDir, "leaf.yml")
+
+	// Parent "missing.yml" is intentionally never created.
+	writeValidateTemplate(t, leafPath, "leaf", "missing.yml")
+
+	cmd := createValidateCommand()
+	cmd.SetArgs([]string{leafPath})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for broken extends chain, got none")
+	}
+	if !strings.Contains(err.Error(), "validation failed") {
+		t.Errorf("error should mention validation failure, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "missing.yml") {
+		t.Errorf("error should identify the missing chain file, got: %v", err)
+	}
+}
+
+// TestValidateCommand_BrokenParentInChain verifies that when a parent template
+// in the chain is itself invalid, the error names that parent file.
+func TestValidateCommand_BrokenParentInChain(t *testing.T) {
+	defer resetValidateFlags()
+
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "root.yml")
+	leafPath := filepath.Join(tmpDir, "leaf.yml")
+
+	// Root is malformed YAML so it fails to load/validate.
+	if err := os.WriteFile(rootPath, []byte("image:\n  name: root\n\tbad: indent\n"), 0644); err != nil {
+		t.Fatalf("failed to write root template: %v", err)
+	}
+	writeValidateTemplate(t, leafPath, "leaf", "root.yml")
+
+	cmd := createValidateCommand()
+	cmd.SetArgs([]string{leafPath})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for invalid parent in chain, got none")
+	}
+	if !strings.Contains(err.Error(), "root.yml") {
+		t.Errorf("error should identify the offending parent file, got: %v", err)
+	}
+}

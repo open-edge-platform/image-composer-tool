@@ -1,0 +1,111 @@
+# Edge Multifunction (EMF), non-real-time.
+#
+# This template inherits the EMT3 edge image and adds only what EMF needs:
+# the persistent-mount package pair, a three-partition layout with a /opt
+# persistent partition, and a verity root on the kernel command line.
+#
+# What inheritance costs here: the edge image declares three sample
+# repositories — company-internal, dev-tools and intel-openvino — whose URLs are
+# the literal placeholder "<URL>". This template inherits all three, where the
+# standalone version it replaced declared none. They are inert: rpmutils skips
+# any repository whose URL is "<URL>" before fetching, and EMT3 is RPM-based so
+# apt-source generation never runs for it at all. Nothing reaches the image, but
+# `resolve --full` will show them.
+#
+# Run `image-composer-tool resolve <this file>` to see the merged result, or
+# `--full` to include the OS defaults as they apply at build time.
+
+# AI-searchable metadata for template discovery.
+# metadata is not inherited, so every template declares its own.
+metadata:
+  description: "Edge Microvisor Toolkit 3 Edge Multifunction (EMF) raw image for edge multifunction deployments without real-time requirements"
+  use_cases:
+    - "edge multifunction"
+    - "industrial edge"
+    - "non-realtime edge"
+    - "edge workloads"
+  keywords:
+    - emf
+    - edge
+    - multifunction
+    - industrial
+    - emt3
+    - microvisor
+    - raw
+
+# Inherit the edge image: its package set, repositories and immutability
+# settings. The parent must live in this directory and declare the same
+# target.
+extends: "emt3-x86_64-edge-raw.yml"
+
+image:
+  name: emt3-x86_64-minimal-emf
+  version: "1.0.0"
+
+target:
+  os: edge-microvisor-toolkit # Must match the parent's target
+  dist: emt3
+  arch: x86_64
+  imageType: raw
+
+# disk is replaced as a whole block, never merged field by field, so the
+# complete EMF layout is restated here.
+disk:
+  name: edge-non-rt # 1:1 mapping to the systemConfigs name
+  artifacts:
+    -
+      type: raw  # image file format, valid value [raw, vhd, vhdx, qcow2, vmdk, vdi]
+      compression: gz # image compression format (optional)
+  size: 4GiB # 4G, 4GB, 4096 MiB also valid. (Required for raw)
+  partitionTableType: gpt # Partition table type, valid value: [gpt, mbr]
+  partitions: # Required for raw, optional for ISO, not needed for rootfs.
+    - id: boot
+      type: esp
+      flags:
+        - esp
+        - boot
+      start: 1MiB
+      end: 384MiB
+      fsType: fat32
+      fsLabel: esp
+      mountPoint: /boot/efi
+      mountOptions: umask=0077
+
+    - id: rootfs
+      type: linux-root-amd64
+      start: 384MiB
+      end: 3584MiB
+      fsType: ext4
+      mountPoint: /
+
+      mountOptions: defaults
+
+    - id: edge_persistent
+      type: linux
+      start: 3584MiB
+      end: "0"  # use the rest of the disk space
+      fsType: ext4
+      mountPoint: /opt
+
+systemConfig:
+  name: edge-non-rt
+  description: Default yml configuration for raw image
+
+  additionalFiles:
+    - local: ../additionalfiles/layout.env
+      final: /etc/layout.env
+
+  # The parent enables immutability; EMF turns it off.
+  immutability:
+    enabled: false
+
+  # Merged additively on top of the parent's package list.
+  packages:
+    # emf packages
+    - tpm-cryptsetup
+    - persistent-mount
+
+  # Per-field override: the parent's version is kept, the cmdline replaced so
+  # the root is the verity mapper device.
+  kernel:
+    cmdline: "root=/dev/mapper/rootfs_verity console=ttyS0,115200 console=tty0 loglevel=7 sysctl.vm.overcommit_memory=1 sysctl.kernel.panic=10 sysctl.kernel.panic_on_oops=1 sysctl.fs.inotify.max_user_instances=8192 rd.parallel=1 rd.shell=0 rd.timeout=200 rd.emergency=reboot i915.force_probe=*"

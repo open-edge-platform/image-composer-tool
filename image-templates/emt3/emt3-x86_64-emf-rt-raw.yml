@@ -1,0 +1,101 @@
+# Edge Multifunction (EMF), real-time variant.
+#
+# The only functional difference from the non-real-time EMF image is the
+# real-time GPU driver package and the disk label, so this template inherits
+# EMF and states just that delta. The chain is three levels deep:
+#
+#   emt3-x86_64-edge-raw.yml       base edge image
+#     -> emt3-x86_64-emf-raw.yml   EMF: persistent /opt, verity root
+#          -> this file            EMF-RT: real-time GPU driver
+#
+# What inheritance costs here: the edge image at the root of the chain declares
+# three sample repositories — company-internal, dev-tools and intel-openvino —
+# whose URLs are the literal placeholder "<URL>". This template inherits all
+# three, where the standalone version it replaced declared none. They are inert:
+# rpmutils skips any repository whose URL is "<URL>" before fetching, and EMT3 is
+# RPM-based so apt-source generation never runs for it at all. Nothing reaches
+# the image, but `resolve --full` will show them.
+#
+# Run `image-composer-tool resolve <this file>` to see the merged result.
+
+# AI-searchable metadata for template discovery.
+# metadata is not inherited, so every template declares its own.
+metadata:
+  description: "Edge Microvisor Toolkit 3 Edge Multifunction Real-Time (EMF-RT) raw image with real-time kernel for time-sensitive edge workloads"
+  use_cases:
+    - "real-time edge"
+    - "industrial automation"
+    - "time-sensitive networking"
+    - "deterministic computing"
+  keywords:
+    - emf
+    - realtime
+    - rt
+    - edge
+    - industrial
+    - automation
+    - emt3
+    - microvisor
+    - deterministic
+
+# Inherit the EMF image: layout, persistent /opt, verity cmdline and the full
+# package set.
+extends: "emt3-x86_64-emf-raw.yml"
+
+image:
+  name: emt3-x86_64-minimal-emf-rt
+  version: "1.0.0"
+
+target:
+  os: edge-microvisor-toolkit # Must match the parent's target
+  dist: emt3
+  arch: x86_64
+  imageType: raw
+
+# disk is replaced as a whole block, never merged field by field, so the
+# layout is restated to change only the label.
+disk:
+  name: edge-rt # 1:1 mapping to the systemConfigs name
+  artifacts:
+    -
+      type: raw  # image file format, valid value [raw, vhd, vhdx, qcow2, vmdk, vdi]
+      compression: gz # image compression format (optional)
+  size: 4GiB # 4G, 4GB, 4096 MiB also valid. (Required for raw)
+  partitionTableType: gpt # Partition table type, valid value: [gpt, mbr]
+  partitions: # Required for raw, optional for ISO, not needed for rootfs.
+    - id: boot
+      type: esp
+      flags:
+        - esp
+        - boot
+      start: 1MiB
+      end: 384MiB
+      fsType: fat32
+      fsLabel: esp
+      mountPoint: /boot/efi
+      mountOptions: umask=0077
+
+    - id: rootfs
+      type: linux-root-amd64
+      start: 384MiB
+      end: 3584MiB
+      fsType: ext4
+      mountPoint: /
+      mountOptions: defaults
+
+    - id: edge_persistent
+      type: linux
+      start: 3584MiB
+      end: "0"  # use the rest of the disk space
+      fsType: ext4
+      mountPoint: /opt
+
+systemConfig:
+  name: edge-rt
+  description: Default yml configuration for raw image
+
+  # Per-field override: the inherited version and cmdline are kept, only the
+  # kernel package list is replaced.
+  kernel:
+    packages:
+      - kernel-rt-drivers-gpu

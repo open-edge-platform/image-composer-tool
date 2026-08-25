@@ -1,0 +1,109 @@
+# AI-searchable metadata for template discovery
+metadata:
+  description: Ubuntu 24.04 image pulling Firefox from the Mozilla APT repository, which publishes an uncompressed Packages index
+  use_cases:
+    - Regression test for repositories without a compressed Packages index
+    - Regression test for mirrors that reject HEAD requests
+    - Installing upstream Firefox from packages.mozilla.org
+  keywords:
+    - ubuntu
+    - mozilla
+    - firefox
+    - apt
+    - uncompressed
+    - packages-index
+    - regression
+
+image:
+  name: mozilla-apt-image-ubuntu
+  version: "24.04"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+
+disk:
+  name: Mozilla_Apt_Raw # 1:1 mapping to the systemConfig name
+  artifacts:
+    - type: raw
+      compression: gz
+  size: 8GiB # Firefox and its dependencies need more room than the minimal image
+  partitionTableType: gpt
+  partitions:
+    - id: boot
+      type: esp
+      flags:
+        - esp
+        - boot
+      start: 1MiB
+      end: 513MiB
+      fsType: fat32
+      mountPoint: /boot/efi
+      mountOptions: umask=0077
+
+    - id: rootfs
+      type: linux-root-amd64
+      start: 513MiB
+      end: "0"
+      fsType: ext4
+      mountPoint: /
+      mountOptions: defaults
+
+systemConfig:
+  name: mozilla-apt
+  description: Ubuntu image with Firefox from the Mozilla APT repository
+
+  bootloader:
+    bootType: efi
+    provider: grub
+
+  immutability:
+    enabled: false
+
+  packages:
+    - ubuntu-minimal
+    - grub-efi-amd64-signed
+    - initramfs-tools
+    - grub2-common
+    - grub-pc-bin
+    - grub-efi-amd64
+    - grub-efi-amd64-bin
+    - systemd
+    - openssh-server
+    - systemd-resolved
+    - systemd-timesyncd
+    # Resolvable only from packages.mozilla.org, so the build fails if that
+    # repository's index cannot be read.
+    - firefox
+    # Firefox depends on libasound2, which on noble is a virtual package. Listed
+    # explicitly so the real provider is selected: resolution through Provides
+    # alone can otherwise settle on liboss4-salsa-asound2 from universe.
+    - libasound2t64
+
+  kernel:
+    cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
+    packages:
+      - linux-image-generic*
+
+packageRepositories:
+  # Mozilla's APT repository exercises two behaviours that ICT used to reject:
+  #
+  #   1. It publishes only an uncompressed index. Both
+  #      dists/mozilla/main/binary-<arch>/Packages.gz and .xz return 404; only
+  #      the plain Packages file exists (APT's last-resort form).
+  #   2. Its Google Cloud Storage backend answers HEAD on that file with 400,
+  #      while GET returns 200, so a HEAD-only existence probe concludes the
+  #      file is absent.
+  #
+  # The base URL returning 404 is incidental: ICT never requests it.
+  #
+  # Before the fix this fails with "fail connecting to repository
+  # https://packages.mozilla.org/apt"; after it, the index resolves and Firefox
+  # installs.
+  - codename: "mozilla"
+    url: "https://packages.mozilla.org/apt"
+    pkey: "https://packages.mozilla.org/apt/repo-signing-key.gpg"
+    component: "main"
+    priority: 1000 # Prefer Mozilla's Firefox over the Ubuntu archive's

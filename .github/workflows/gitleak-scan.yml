@@ -11,7 +11,7 @@ jobs:
   gitleaks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 #v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 #v7.0.1
         with:
           persist-credentials: true
       - name: Run Gitleaks scan
@@ -19,6 +19,7 @@ jobs:
         with:
           scan-scope: "all"
           source: "./"
+          version: "8.28.0"
           config_path: "./ci/gitleaks_baselines/image-composer-tool-gitleaks.sarif"
           report_format: "sarif"
           redact: "true"
