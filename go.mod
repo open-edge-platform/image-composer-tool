@@ -3,7 +3,7 @@ module github.com/open-edge-platform/image-composer-tool
 go 1.25.0
 
 require (
-	github.com/ProtonMail/go-crypto v1.3.0
+	github.com/ProtonMail/go-crypto v1.4.1
 	github.com/bendahl/uinput v1.4.0
 	github.com/diskfs/go-diskfs v1.7.0
 	github.com/gdamore/tcell v1.4.0
