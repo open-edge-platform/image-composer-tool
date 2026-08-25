@@ -316,6 +316,9 @@ func (p *eLxr) downloadImagePkgs(template *config.ImageTemplate) error {
 	}
 	template.FullPkgList = fullPkgList
 	template.FullPkgListBom = fullPkgListBom
+	// Narrow a kernel glob to the concrete package selected during download so the
+	// install step (including an installer ISO's separate process) installs only it.
+	template.ResolvedKernelPackages = debutils.ExpandKernelInstallNames(template.GetKernelPackages(), debutils.SelectedKernelPackages())
 
 	return nil
 }

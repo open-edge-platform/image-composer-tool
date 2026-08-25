@@ -73,6 +73,12 @@ var (
 	KernelVersion     string
 	KernelPackages    = make(map[string]struct{})
 
+	// selectedKernelPackages records the concrete kernel packages MatchRequested
+	// resolved for the current build (respecting the configured kernel version and
+	// the latest-match selection). The deb install step uses this instead of the
+	// cache-derived BOM, which can contain kernels from other builds.
+	selectedKernelPackages []ospackage.PackageInfo
+
 	urlExistenceCacheMu     sync.Mutex
 	urlExistenceCache       map[string]bool
 	urlExistenceCacheLoaded bool
@@ -542,6 +548,40 @@ func buildDebPackageInfosFromCache(cacheDir string, cachedFiles []string) []ospa
 		})
 	}
 	return infos
+}
+
+// selectLatestKernel picks the highest-version package from a kernel wildcard
+// expansion and warns which kernels matched and which one was installed, so the
+// user can pin an exact kernel if they wanted a different one.
+func selectLatestKernel(want string, pkgs []ospackage.PackageInfo) ospackage.PackageInfo {
+	sorted := make([]ospackage.PackageInfo, len(pkgs))
+	copy(sorted, pkgs)
+	sort.Slice(sorted, func(i, j int) bool {
+		if c := compareVersions(sorted[i].Version, sorted[j].Version); c != 0 {
+			return c > 0
+		}
+		return sorted[i].Name < sorted[j].Name
+	})
+	latest := sorted[0]
+
+	names := make([]string, 0, len(sorted))
+	for _, pkg := range sorted {
+		names = append(names, fmt.Sprintf("  - %s (%s)", pkg.Name, pkg.Version))
+	}
+	logger.Logger().Warnf(
+		"kernel wildcard %q matched %d kernel packages:\n%s\n"+
+			"installing the latest, %s (%s); pin an exact kernel in the template's "+
+			"systemConfig.kernel.packages to install a different one",
+		want, len(sorted), strings.Join(names, "\n"), latest.Name, latest.Version)
+	return latest
+}
+
+// SelectedKernelPackages returns the concrete kernel packages MatchRequested
+// resolved for the current build. The deb install step uses this to expand a
+// kernel glob to the exact selected package instead of scanning the
+// cache-derived BOM.
+func SelectedKernelPackages() []ospackage.PackageInfo {
+	return append([]ospackage.PackageInfo(nil), selectedKernelPackages...)
 }
 
 // ConfigureKernelSelection sets the kernel package requests and version used
@@ -1025,6 +1065,7 @@ func MatchRequested(requests []string, all []ospackage.PackageInfo) ([]ospackage
 	var requestedPkgs []string
 	gotMissingPkg := false
 	gotMissingKernelPkg := false
+	selectedKernelPackages = nil
 
 	for _, want := range requests {
 		if isGlobPattern(want) {
@@ -1039,6 +1080,16 @@ func MatchRequested(requests []string, all []ospackage.PackageInfo) ([]ospackage
 				continue
 			}
 
+			// A kernel wildcard can expand to several kernel meta-packages; install
+			// only the latest and warn which ones matched so the user can pin a
+			// specific kernel if they wanted a different one.
+			if isKernelPackageRequest(want) && len(pkgs) > 1 {
+				pkgs = []ospackage.PackageInfo{selectLatestKernel(want, pkgs)}
+			}
+			if isKernelPackageRequest(want) {
+				selectedKernelPackages = append(selectedKernelPackages, pkgs...)
+			}
+
 			for _, pkg := range pkgs {
 				key := fmt.Sprintf("%s=%s", pkg.Name, pkg.Version)
 				if _, ok := seen[key]; ok {
@@ -1051,6 +1102,9 @@ func MatchRequested(requests []string, all []ospackage.PackageInfo) ([]ospackage
 		}
 
 		if pkg, found := ResolveTopPackageConflicts(want, all); found {
+			if isKernelPackageRequest(want) {
+				selectedKernelPackages = append(selectedKernelPackages, pkg)
+			}
 			key := fmt.Sprintf("%s=%s", pkg.Name, pkg.Version)
 			if _, ok := seen[key]; ok {
 				continue
