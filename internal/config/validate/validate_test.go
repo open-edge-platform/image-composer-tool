@@ -102,6 +102,110 @@ systemConfig:
 	}
 }
 
+// overlayReplaceKernelTemplate renders a minimal overlay template with the given
+// replaceKernel.package value, for schema-level (not just Go validate()) checks.
+func overlayReplaceKernelTemplate(pkg string) string {
+	return fmt.Sprintf(`image:
+  name: t
+  version: "1.0.0"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+baseline:
+  mode: overlay
+  source:
+    path: /path/to/base.img
+    format: raw
+overlayPolicy:
+  packageOperation: additive-and-upgrade
+  replaceKernel:
+    package: %s
+systemConfig:
+  name: t
+`, pkg)
+}
+
+// TestOverlayReplaceKernelSchemaAcceptsGlobWildcards confirms the JSON schema
+// itself (not just internal/config's Go validate()) accepts the same glob
+// wildcards in replaceKernel.package as an ordinary systemConfig package, and
+// still rejects a disallowed character/whitespace, so the schema and the Go
+// check cannot silently drift apart.
+func TestOverlayReplaceKernelSchemaAcceptsGlobWildcards(t *testing.T) {
+	cases := []struct {
+		name    string
+		pkg     string
+		wantErr bool
+	}{
+		{"star glob", "linux-image-*-oem", false},
+		{"question mark glob", "linux-image-?-oem", false},
+		{"bracket range", "kernel-[0-9]*", false},
+		{"disallowed shell metacharacter", "linux-image;reboot", true},
+		{"embedded whitespace", "linux image", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var raw interface{}
+			if err := yaml.Unmarshal([]byte(overlayReplaceKernelTemplate(c.pkg)), &raw); err != nil {
+				t.Fatalf("yml parsing error: %v", err)
+			}
+			dataJSON, err := json.Marshal(raw)
+			if err != nil {
+				t.Fatalf("json marshaling error: %v", err)
+			}
+			err = ValidateImageTemplateJSON(dataJSON)
+			if c.wantErr && err == nil {
+				t.Errorf("expected replaceKernel.package %q to fail schema validation", c.pkg)
+			}
+			if !c.wantErr && err != nil {
+				t.Errorf("expected replaceKernel.package %q to pass schema validation, got: %v", c.pkg, err)
+			}
+		})
+	}
+}
+
+// TestOverlayReplaceKernelSchemaAcceptsAdditionalFields confirms the JSON schema
+// accepts replaceKernel.additionalPackages, enableExtraModules, and version
+// together (not just the Go-level checks in internal/config).
+func TestOverlayReplaceKernelSchemaAcceptsAdditionalFields(t *testing.T) {
+	tmpl := `image:
+  name: t
+  version: "1.0.0"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+baseline:
+  mode: overlay
+  source:
+    path: /path/to/base.img
+    format: raw
+overlayPolicy:
+  packageOperation: additive-and-upgrade
+  replaceKernel:
+    package: linux-image-6.11.0-1004-oem
+    additionalPackages:
+      - linux-headers-6.11.0-1004-oem
+    enableExtraModules: "intel_vpu uas"
+    version: "6.11.0-1004-oem"
+systemConfig:
+  name: t
+`
+	var raw interface{}
+	if err := yaml.Unmarshal([]byte(tmpl), &raw); err != nil {
+		t.Fatalf("yml parsing error: %v", err)
+	}
+	dataJSON, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("json marshaling error: %v", err)
+	}
+	if err := ValidateImageTemplateJSON(dataJSON); err != nil {
+		t.Errorf("expected replaceKernel with additionalPackages/enableExtraModules/version to pass schema validation, got: %v", err)
+	}
+}
+
 func TestInvalidImageTemplate(t *testing.T) {
 	v := loadFile(t, "/testdata/invalid-image.yml")
 

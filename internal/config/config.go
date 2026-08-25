@@ -216,14 +216,36 @@ type OverlayPolicy struct {
 }
 
 // ReplaceKernel names the replacement kernel for an overlay kernel swap (see
-// OverlayPolicy.ReplaceKernel). Only the replacement package is specified; the
-// baseline kernel packages to remove are auto-detected from the baseline
-// inventory (the kernel family minus the replacement kernel's own closure), so a
-// caller cannot leave the swap half-applied with a stale partial remove list.
+// OverlayPolicy.ReplaceKernel). The baseline kernel packages to remove are
+// auto-detected from the baseline inventory (the kernel family minus the
+// replacement kernel's own closure), so a caller cannot leave the swap
+// half-applied with a stale partial remove list.
 type ReplaceKernel struct {
 	// Package is the replacement kernel image package to install, resolved from the
 	// configured repositories (e.g. "linux-image-6.11.0-1004-oem"). Required.
 	Package string `yaml:"package"`
+
+	// AdditionalPackages names further kernel-family packages to install alongside
+	// Package (e.g. the matching "linux-headers-*" package). Each entry is appended
+	// to the overlay's requested package set exactly like Package, so it flows
+	// through the same resolve -> download -> closure -> ToInstall path and is
+	// preflighted as an ActionAdd; a stale baseline package sharing its kernel-family
+	// prefix (e.g. old headers) is swept by the existing kernel-replacement removal
+	// logic without any special-casing, since that logic's keep-set already spans
+	// the full resolved closure.
+	AdditionalPackages []string `yaml:"additionalPackages,omitempty"`
+
+	// EnableExtraModules lists driver modules (space-separated, e.g. "intel_vpu
+	// uas") to force into the replacement kernel's initramfs, mirroring
+	// systemConfig.kernel.enableExtraModules but scoped to the replacement kernel
+	// swap. Passed to the baseline's initramfs generator (dracut --add-drivers or an
+	// initramfs-tools /etc/initramfs-tools/modules entry).
+	EnableExtraModules string `yaml:"enableExtraModules,omitempty"`
+
+	// Version is descriptive only (mirrors systemConfig.kernel.version): it is
+	// never fed into the resolver or the package manager, only surfaced for
+	// reporting (e.g. the compose API summary).
+	Version string `yaml:"version,omitempty"`
 }
 
 // ImageTemplate represents the YAML image template structure
@@ -1619,6 +1641,29 @@ func (s *BaselineSource) Validate() error {
 	return nil
 }
 
+// kernelModulesPattern allowlists overlayPolicy.replaceKernel.enableExtraModules:
+// module names and the spaces separating them, nothing else. Each module must
+// start with an alphanumeric character or underscore so a leading "-" (e.g.
+// "-n") can never be mistaken for an option by a downstream command consuming it.
+var kernelModulesPattern = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*( [A-Za-z0-9_][A-Za-z0-9_.-]*)*$`)
+
+// validateKernelPackageName rejects whitespace and shell metacharacters in a
+// replaceKernel package name (Package or an AdditionalPackages entry): the name
+// seeds the resolver and is passed to the package manager (dpkg/rpm) inside the
+// baseline chroot, so a malformed name must never reach a command line. The glob
+// wildcards the resolver itself understands (`*`, `?`, `[...]`) are intentionally
+// NOT rejected, so a replacement kernel can be specified with the same wildcard
+// syntax as any other systemConfig package; the swap logic tolerates a globbed
+// name (kernel-family detection is prefix-based and the removal set is derived
+// from the resolved concrete packages). A real kernel package name never needs
+// the rejected characters.
+func validateKernelPackageName(field, name string) error {
+	if strings.ContainsAny(name, " \t\r\n\"'`$\\;&|<>(){}!") {
+		return fmt.Errorf("%s %q must not contain whitespace or shell metacharacters (glob wildcards *, ?, and [...] are allowed)", field, name)
+	}
+	return nil
+}
+
 func (p *OverlayPolicy) validate() error {
 	op := p.PackageOperation
 	if op == "" {
@@ -1655,12 +1700,25 @@ func (p *OverlayPolicy) validate() error {
 		if pkg == "" {
 			return fmt.Errorf("overlayPolicy.replaceKernel.package must be set")
 		}
-		// The package name seeds the resolver and is passed to the package manager
-		// (dpkg/rpm) inside the baseline chroot, so reject whitespace and shell
-		// metacharacters up front rather than letting a malformed name reach a
-		// command line. A real kernel package name never needs any of these.
-		if strings.ContainsAny(pkg, " \t\n\"'`$\\;&|<>(){}*?!") {
-			return fmt.Errorf("overlayPolicy.replaceKernel.package %q must not contain whitespace or shell metacharacters", pkg)
+		if err := validateKernelPackageName("overlayPolicy.replaceKernel.package", pkg); err != nil {
+			return err
+		}
+		for _, ap := range p.ReplaceKernel.AdditionalPackages {
+			ap = strings.TrimSpace(ap)
+			if ap == "" {
+				return fmt.Errorf("overlayPolicy.replaceKernel.additionalPackages entries must not be empty")
+			}
+			if err := validateKernelPackageName("overlayPolicy.replaceKernel.additionalPackages", ap); err != nil {
+				return err
+			}
+		}
+		// EnableExtraModules is interpolated into the baseline's initramfs-generator
+		// command (dracut --add-drivers, or an initramfs-tools modules file entry), so
+		// it is validated by allowlist rather than denylist: module names and the
+		// spaces separating them are the only content it ever needs.
+		if em := p.ReplaceKernel.EnableExtraModules; em != "" && !kernelModulesPattern.MatchString(em) {
+			return fmt.Errorf("overlayPolicy.replaceKernel.enableExtraModules %q must contain only module names "+
+				"(letters, digits, underscore, dot, dash) separated by spaces", em)
 		}
 		if op != OverlayPackageOpAdditiveAndUpgrade {
 			return fmt.Errorf("overlayPolicy.replaceKernel requires packageOperation %q (got %q)",

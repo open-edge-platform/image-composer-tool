@@ -200,6 +200,7 @@ var commandMap = map[string][]string{
 	"opkg":               {"/usr/bin/opkg"},
 	"parted":             {"/usr/sbin/parted"},
 	"partx":              {"/usr/bin/partx", "/sbin/partx"},
+	"printf":             {"/usr/bin/printf", "/bin/printf"},
 	"pvcreate":           {"/usr/sbin/pvcreate"},
 	"qemu-img":           {"/usr/bin/qemu-img"},
 	"qemu-system-x86_64": {"/usr/bin/qemu-system-x86_64"},

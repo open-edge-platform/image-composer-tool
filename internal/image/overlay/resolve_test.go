@@ -684,6 +684,26 @@ func TestOverlayRequestedPackages_ReplaceKernel(t *testing.T) {
 	}
 }
 
+// TestOverlayRequestedPackages_ReplaceKernelAdditionalPackages confirms
+// replaceKernel.additionalPackages entries are folded into the requested set
+// alongside package, trimmed, so they flow through the same resolve path.
+func TestOverlayRequestedPackages_ReplaceKernelAdditionalPackages(t *testing.T) {
+	template := &config.ImageTemplate{
+		SystemConfig: config.SystemConfig{Packages: []string{"curl"}},
+		OverlayPolicy: &config.OverlayPolicy{
+			ReplaceKernel: &config.ReplaceKernel{
+				Package:            "linux-image-6.11.0-1004-oem",
+				AdditionalPackages: []string{" linux-headers-6.11.0-1004-oem ", "linux-modules-extra-6.11.0-1004-oem", ""},
+			},
+		},
+	}
+	got := overlayRequestedPackages(template)
+	want := []string{"curl", "linux-headers-6.11.0-1004-oem", "linux-image-6.11.0-1004-oem", "linux-modules-extra-6.11.0-1004-oem"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("requested = %v, want %v", got, want)
+	}
+}
+
 func TestBaselinePresenceSet(t *testing.T) {
 	baseline := []BaselinePackage{
 		{Name: "bash", Installed: true, Provides: []string{"sh"}},

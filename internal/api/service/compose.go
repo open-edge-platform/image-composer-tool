@@ -179,6 +179,13 @@ func buildComposeSummary(sel Selection, merged *config.ImageTemplate) ComposeSum
 		}
 	}
 
+	// Overlay mode doesn't populate systemConfig.kernel; when a kernel swap is
+	// configured, surface its (descriptive-only) version instead.
+	kernelVersion := merged.SystemConfig.Kernel.Version
+	if merged.OverlayPolicy != nil && merged.OverlayPolicy.ReplaceKernel != nil && merged.OverlayPolicy.ReplaceKernel.Version != "" {
+		kernelVersion = merged.OverlayPolicy.ReplaceKernel.Version
+	}
+
 	return ComposeSummary{
 		Vertical:  sel.Vertical,
 		SKU:       sel.SKU,
@@ -190,7 +197,7 @@ func buildComposeSummary(sel Selection, merged *config.ImageTemplate) ComposeSum
 		ImageVersion:   merged.Image.Version,
 		Description:    merged.SystemConfig.Description,
 		Architecture:   merged.Target.Arch,
-		KernelVersion:  merged.SystemConfig.Kernel.Version,
+		KernelVersion:  kernelVersion,
 		PackageCount:   len(merged.SystemConfig.Packages),
 		DiskSize:       merged.Disk.Size,
 		PartitionCount: len(merged.Disk.Partitions),
