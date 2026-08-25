@@ -141,7 +141,7 @@ see [Creating and Reusing Image Templates](./docs/user-guide/architecture/image-
 ## Get Help
 
 - Run `./image-composer-tool --help`
-- [Browse the documentation](https://docs.openedgeplatform.intel.com/dev/image-composer-tool/index.html)
+- [Browse the documentation](https://docs.openedgeplatform.intel.com/2026.2/image-composer-tool/index.html)
 - [Start a discussion](https://github.com/open-edge-platform/image-composer-tool/discussions)
 - [Troubleshoot build issues](./docs/user-guide/architecture/image-composer-tool-build-process.md#troubleshooting-build-issues)
 
