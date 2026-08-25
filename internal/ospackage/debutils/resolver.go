@@ -5,18 +5,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/pkgfetcher"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/runctx"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
 
@@ -110,10 +113,21 @@ func GenerateDot(pkgs []ospackage.PackageInfo, file string, pkgSources map[strin
 	return nil
 }
 
+// parsedPackageCacheVersion is the schema version of the on-disk parsed metadata
+// cache. Bump it whenever the parsed shape changes (e.g. a new PackageInfo field
+// the parser now populates) so caches written by an older binary are treated as a
+// miss and re-parsed, rather than silently returning records missing the new data.
+// v2: PackageInfo.Breaks is now parsed and consumed by the overlay Breaks-driven
+// upgrade; a v1 cache would omit it.
+const parsedPackageCacheVersion = 2
+
 // packageMetadataCache stores parsed package metadata keyed by the Packages.gz SHA256
 // checksum recorded in the Release file. A matching checksum means the upstream
 // repository has not changed, so we can skip downloading, decompressing, and re-parsing.
+// Version guards against reusing a cache written by an older parser (see
+// parsedPackageCacheVersion).
 type packageMetadataCache struct {
+	Version  int                     `json:"version"`
 	Checksum string                  `json:"checksum"`
 	Packages []ospackage.PackageInfo `json:"packages"`
 }
@@ -141,7 +155,7 @@ func loadParsedPackageCache(cacheFile string) (*packageMetadataCache, error) {
 }
 
 func saveParsedPackageCache(cacheFile, checksum string, pkgs []ospackage.PackageInfo) error {
-	cache := packageMetadataCache{Checksum: checksum, Packages: pkgs}
+	cache := packageMetadataCache{Version: parsedPackageCacheVersion, Checksum: checksum, Packages: pkgs}
 	data, err := json.Marshal(cache)
 	if err != nil {
 		return fmt.Errorf("failed to marshal package cache: %w", err)
@@ -149,13 +163,105 @@ func saveParsedPackageCache(cacheFile, checksum string, pkgs []ospackage.Package
 	return os.WriteFile(cacheFile, data, 0600)
 }
 
+// refreshRepoMetadata re-downloads the repository metadata files (Release, its
+// signature, and the archive key where applicable) into pkgMetaDir.
+//
+// The download is staged in a sibling temporary directory and moved into place
+// only after every file has arrived, so an interrupted or failed refresh cannot
+// leave pkgMetaDir holding a partial Release — which would fail signature
+// verification and break an otherwise working offline build. Returns whether the
+// files were replaced; on error the existing files are untouched.
+func refreshRepoMetadata(pkgMetaDir string, localFiles, urls []string) (bool, error) {
+	stageDir, err := os.MkdirTemp(pkgMetaDir, ".meta-refresh-")
+	if err != nil {
+		return false, fmt.Errorf("creating metadata staging directory: %w", err)
+	}
+	defer func() {
+		if remErr := os.RemoveAll(stageDir); remErr != nil {
+			logger.Logger().Warnf("failed to remove metadata staging directory %s: %v", stageDir, remErr)
+		}
+	}()
+
+	if err := pkgfetcher.FetchPackages(runctx.Context(), urls, stageDir, 1); err != nil {
+		return false, err
+	}
+
+	// Require every expected file before committing: FetchPackages reports failures
+	// in aggregate, and a partial set must not overwrite a complete one.
+	for _, f := range localFiles {
+		staged := filepath.Join(stageDir, filepath.Base(f))
+		if fi, statErr := os.Stat(staged); statErr != nil || fi.Size() == 0 {
+			return false, fmt.Errorf("refreshed metadata is missing or empty: %s", filepath.Base(f))
+		}
+	}
+
+	for _, f := range localFiles {
+		staged := filepath.Join(stageDir, filepath.Base(f))
+		if err := os.Rename(staged, f); err != nil {
+			// Past the first successful rename this leaves a mixed set. Report it
+			// rather than pressing on: the caller treats a refresh error as
+			// "continue with what's on disk", and verification will catch a
+			// Release/signature pair that no longer agrees.
+			return false, fmt.Errorf("installing refreshed metadata %s: %w", filepath.Base(f), err)
+		}
+	}
+	return true, nil
+}
+
+// warnIfReleaseExpired logs when a Release file we could not refresh has passed
+// its Valid-Until. Debian sets that field precisely to bound how long a mirror
+// snapshot should be trusted, and past it the recorded package versions are
+// likely to have been superseded and deleted from the pool — the failure then
+// surfaces much later as a 404 on a single .deb, which reads like a broken
+// mirror rather than an expired local cache. Advisory only: a repository with no
+// Valid-Until is silently accepted, and this never fails the build.
+func warnIfReleaseExpired(releaseFile, baseURL string) {
+	f, err := os.Open(releaseFile)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		// Stop at the checksum blocks: they are the bulk of the file and cannot
+		// contain the field (indented continuation lines).
+		if strings.HasPrefix(line, " ") {
+			continue
+		}
+		value, ok := strings.CutPrefix(line, "Valid-Until:")
+		if !ok {
+			continue
+		}
+		until, perr := http.ParseTime(strings.TrimSpace(value))
+		if perr != nil {
+			return
+		}
+		if time.Now().After(until) {
+			logger.Logger().Warnf("cached metadata for %s expired on %s; package versions it "+
+				"names may no longer exist in the repository (a download failing with 404 is the "+
+				"usual symptom). Restore network access, or clear %s to force a refresh",
+				baseURL, until.UTC().Format(time.RFC1123), filepath.Dir(releaseFile))
+		}
+		return
+	}
+}
+
 // ParseRepositoryMetadata parses the Packages.gz file from gzHref.
-// Caching is applied at two levels:
-//  1. If a valid parse cache (packages.parsed.json) exists from a previous run it is
-//     returned immediately with zero network operations, enabling fully offline use.
-//  2. On the first (online) run the Packages.gz is only downloaded when its SHA256
-//     checksum in the freshly-fetched Release file differs from the local copy.
-//     Once parsed, the result is persisted to the cache for future offline runs.
+//
+// Caching is validated against the repository, not merely reused. The Release
+// file is small and is re-fetched on every online run; the SHA256 it records for
+// Packages.gz is the cache key for both the parse cache (packages.parsed.json)
+// and the downloaded Packages.gz itself. A cache entry is used only when its key
+// still matches the repository's current Release, so a mirror that has moved on
+// invalidates the cache instead of being ignored.
+//
+// Offline use is preserved by falling back, not by skipping validation: if the
+// Release re-fetch fails, the previously downloaded metadata is used as-is (and a
+// warning is logged if it has passed its Valid-Until). The refresh is staged in a
+// temporary directory and moved into place only once complete, so a failed
+// refresh cannot destroy the copies an offline build depends on.
 func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, releaseSign string, pbGPGKey string, buildPath string, arch string, packageFilter []string) ([]ospackage.PackageInfo, error) {
 	log := logger.Logger()
 
@@ -166,18 +272,26 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 		return nil, fmt.Errorf("failed to create pkgMetaDir: %w", err)
 	}
 
-	// --- Parse cache check (offline-first) ---
-	// Check the cache before any network operation. If a valid cache exists from a
-	// previous run it is returned immediately, enabling fully offline operation.
+	// --- Parse cache load ---
+	// Loaded up front but deliberately NOT returned yet: it is only usable once
+	// its checksum has been checked against the repository's current Release
+	// (below). Returning it here — as this code previously did — pins a build to
+	// whatever package versions were current when the cache was first written.
+	// Debian's security pool deletes superseded files, so a stale index makes
+	// every subsequent build request a .deb that now 404s, with no way out short
+	// of deleting the cache directory by hand.
 	cacheFile := filepath.Join(pkgMetaDir, "packages.parsed.json")
 	allowParsedCache := !shouldBypassParsedPackageCache(baseURL) && !system.IsLiveInstallerExecution()
 	if !allowParsedCache {
 		log.Debugf("Bypassing parsed package metadata cache for %s", baseURL)
 	}
+	var cached *packageMetadataCache
 	if allowParsedCache {
-		if cached, loadErr := loadParsedPackageCache(cacheFile); loadErr == nil && cached.Checksum != "" {
-			log.Infof("Using cached package metadata for %s (checksum %s)", baseURL, cached.Checksum)
-			return cached.Packages, nil
+		// Require both a non-empty checksum and a matching schema version; a cache
+		// written by an older parser (different version) is ignored and re-parsed so
+		// newly-parsed fields (e.g. Breaks) are populated.
+		if c, loadErr := loadParsedPackageCache(cacheFile); loadErr == nil && c.Checksum != "" && c.Version == parsedPackageCacheVersion {
+			cached = c
 		}
 	}
 
@@ -212,36 +326,41 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 		metaURLList = []string{releaseFile, releaseSign}
 	}
 
-	// Only skip Release file refresh if local files exist; allow network check for freshness.
-	// This balances offline resilience with metadata staleness detection.
-	refreshNeeded := false
+	// Re-fetch the Release file every online run so the cache is validated rather
+	// than trusted. Release (plus its signature) is a few tens of KB against a
+	// Packages index measured in tens of MB, so this costs little and is what makes
+	// staleness detectable at all: the checksum it carries is the cache key used
+	// below for both the parse cache and Packages.gz.
+	//
+	// Staged into a temp dir and committed only on success, so a refresh that fails
+	// midway leaves the existing metadata intact for an offline build. A missing
+	// local file makes the refresh mandatory; otherwise a failure is a warning and
+	// the build proceeds against what it already has.
+	haveLocalMeta := true
 	for _, f := range metaLocalFiles {
 		if _, err := os.Stat(f); err != nil {
-			refreshNeeded = true
+			haveLocalMeta = false
 			break
 		}
 	}
 
-	// Download the metadata files only if missing
-	if refreshNeeded {
-		log.Infof("Refreshing metadata files for %s", baseURL)
-		for _, f := range metaLocalFiles {
-			if _, err := os.Stat(f); err == nil {
-				if remErr := os.Remove(f); remErr != nil {
-					return nil, fmt.Errorf("failed to remove old file %s: %w", f, remErr)
-				}
-			}
-		}
-		err := pkgfetcher.FetchPackages(metaURLList, pkgMetaDir, 1)
-		if err != nil {
-			return nil, fmt.Errorf("failed to fetch critical repo config packages: %w", err)
-		}
-	} else {
-		log.Debugf("Using existing metadata files for %s (offline mode)", baseURL)
+	refreshed, refreshErr := refreshRepoMetadata(pkgMetaDir, metaLocalFiles, metaURLList)
+	switch {
+	case refreshErr != nil && !haveLocalMeta:
+		// Nothing cached to fall back to, so this is fatal — as it was before.
+		return nil, fmt.Errorf("failed to fetch critical repo config packages: %w", refreshErr)
+	case refreshErr != nil:
+		log.Warnf("Could not refresh metadata for %s (%v); continuing with previously "+
+			"downloaded metadata, which may name package versions the repository no "+
+			"longer serves", baseURL, refreshErr)
+		warnIfReleaseExpired(localReleaseFile, baseURL)
+	default:
+		log.Infof("Refreshed metadata files for %s", baseURL)
 	}
 
-	// Verify the release file if it was refreshed online; offline cached files are trusted.
-	if refreshNeeded {
+	// Verify the release file whenever it came off the network this run; metadata
+	// we could not refresh was verified when it was originally fetched.
+	if refreshed {
 		relVryResult, err := VerifyRelease(localReleaseFile, localReleaseSign, localPBGPGKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to verify release file: %w", err)
@@ -270,6 +389,20 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 		return nil, fmt.Errorf("failed to get checksum from Release file: %w", err)
 	}
 
+	// --- Parse cache check (validated) ---
+	// Now that the current Release has been read, the parse cache can be used —
+	// but only if it was built from the same Packages index. A mismatch means the
+	// repository has published a new index, so the cache is discarded and the
+	// metadata re-downloaded and re-parsed below.
+	if cached != nil {
+		if strings.EqualFold(cached.Checksum, expectedChecksum) {
+			log.Infof("Using cached package metadata for %s (checksum %s)", baseURL, cached.Checksum)
+			return cached.Packages, nil
+		}
+		log.Infof("Cached package metadata for %s is stale (cached checksum %s, repository now %s); re-parsing",
+			baseURL, cached.Checksum, expectedChecksum)
+	}
+
 	// --- Download cache check ---
 	// Only re-download Packages.gz when the local copy is absent or has a different checksum.
 	needsDownload := true
@@ -286,7 +419,7 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 				return nil, fmt.Errorf("failed to remove stale Packages.gz: %w", remErr)
 			}
 		}
-		if fetchErr := pkgfetcher.FetchPackages([]string{pkggz}, pkgMetaDir, 1); fetchErr != nil {
+		if fetchErr := pkgfetcher.FetchPackages(runctx.Context(), []string{pkggz}, pkgMetaDir, 1); fetchErr != nil {
 			return nil, fmt.Errorf("failed to fetch Packages.gz: %w", fetchErr)
 		}
 	}
@@ -363,8 +496,11 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 		case "Version":
 			pkg.Version = val
 		case "Pre-Depends":
-			// Split dependencies by comma and clean each dependency
+			// Split dependencies by comma and clean each dependency. Pre-Depends is
+			// stored in RequiresVer too (like Depends) so the OR-alternative selection
+			// and version-constraint logic apply to its "a | b" and versioned terms.
 			deps := strings.Split(val, ",")
+			pkg.RequiresVer = append(pkg.RequiresVer, deps...)
 			for _, dep := range deps {
 				cleanedDep := CleanDependencyName(dep)
 				if cleanedDep != "" {
@@ -379,6 +515,17 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 				cleanedDep := CleanDependencyName(dep)
 				if cleanedDep != "" {
 					pkg.Requires = append(pkg.Requires, cleanedDep)
+				}
+			}
+		case "Breaks":
+			// Store the raw Breaks terms (comma-separated "name [(op ver)]"). Unlike
+			// Depends they are not cleaned here: the overlay resolver needs the version
+			// constraint to decide whether a baseline package must be upgraded to clear
+			// a versioned break (rather than removed). Debian policy forbids "|"
+			// alternatives in Breaks, so each comma term is a single package.
+			for _, term := range strings.Split(val, ",") {
+				if term = strings.TrimSpace(term); term != "" {
+					pkg.Breaks = append(pkg.Breaks, term)
 				}
 			}
 		case "Provides":
@@ -461,6 +608,18 @@ func getRepositoryPriority(packageURL string) int {
 			if strings.TrimSuffix(repoCfg.PkgPrefix, "/") == repoBaseNorm {
 				return repoCfg.Priority
 			}
+		}
+	}
+
+	for _, repoCfg := range UserRepoCfgs {
+		if strings.TrimSuffix(repoCfg.PkgPrefix, "/") == repoBaseNorm {
+			return repoCfg.Priority
+		}
+	}
+
+	for _, repoCfg := range LocalUserRepoCfgs {
+		if strings.TrimSuffix(repoCfg.PkgPrefix, "/") == repoBaseNorm {
+			return repoCfg.Priority
 		}
 	}
 
@@ -562,6 +721,18 @@ func filterCandidatesByPriorityWithTarget(candidates []ospackage.PackageInfo, ta
 		}
 	}
 
+	// firstSeen records each provider name's first index in the filtered slice so the
+	// provides tiebreak below is a TOTAL order. Ordering different providers by their
+	// first-seen position (rather than treating them as equal) keeps sort.Slice's
+	// comparator transitive: without it, an interleaving like [A@1, B@1, A@3] can leave
+	// A@1 ahead of A@3, so a virtual request would still resolve to the oldest build.
+	firstSeen := make(map[string]int, len(filtered))
+	for idx, candidate := range filtered {
+		if _, ok := firstSeen[candidate.Name]; !ok {
+			firstSeen[candidate.Name] = idx
+		}
+	}
+
 	// Sort by simple rule: exact name matches first, then provides matches
 	sort.Slice(filtered, func(i, j int) bool {
 		pkgI := filtered[i]
@@ -608,8 +779,19 @@ func filterCandidatesByPriorityWithTarget(candidates []ospackage.PackageInfo, ta
 			return versionCmp
 		}
 
-		// For provides matches, maintain stable order (don't compare different versioning schemes)
-		return false
+		// Both are provides matches for the target virtual name. Across DIFFERENT
+		// provider packages the version schemes are not comparable, so keep a stable
+		// order. But when both candidates are the SAME real package at different
+		// versions (e.g. two libssl3t64 builds both providing the virtual "libssl3"),
+		// rank the newer one first: otherwise a virtual-name dependency resolves to
+		// whichever version the Packages file happened to list first (effectively the
+		// oldest), which then fails a later exact "= <newer>" pin on the real package.
+		if pkgI.Name == pkgJ.Name {
+			return compareVersions(pkgI.Version, pkgJ.Version) > 0
+		}
+		// Different providers of the same virtual name: order by first-seen position so
+		// the comparator stays a total order (see firstSeen above).
+		return firstSeen[pkgI.Name] < firstSeen[pkgJ.Name]
 	})
 
 	return filtered
@@ -684,6 +866,14 @@ func ResolveDependencies(requested []ospackage.PackageInfo, all []ospackage.Pack
 	}
 	neededSet := make(map[string]struct{})
 	resolvedDeps := make(map[string]ospackage.PackageInfo) // Track resolved dependencies for conflict detection
+	// seedByName holds the explicitly requested packages (the resolution seed) keyed
+	// by name. It lets an OR-dependency prefer an alternative the caller already asked
+	// for, even before that alternative has been dequeued into neededSet/resolvedDeps,
+	// and carries the requested version so a versioned alternative can be evaluated.
+	seedByName := make(map[string]ospackage.PackageInfo, len(requested))
+	for _, pi := range requested {
+		seedByName[pi.Name] = pi
+	}
 	queue := make([]ospackage.PackageInfo, 0, len(requested))
 	for _, pi := range requested {
 		if pi.Version != "" {
@@ -721,6 +911,30 @@ func ResolveDependencies(requested []ospackage.PackageInfo, all []ospackage.Pack
 
 			depName := CleanDependencyName(dep)
 			if depName == "" {
+				continue
+			}
+			// OR-dependency ("a | b") handling: cur.Requires carries only the FIRST
+			// alternative (depName). apt takes the first alternative UNLESS another
+			// alternative is already installed/selected AND satisfies its version
+			// constraint, in which case the edge is already met and the first must NOT
+			// be pulled in — pulling it can drag in a package that conflicts with the
+			// already-selected one (e.g. va-driver-all's
+			// "intel-media-va-driver | intel-media-va-driver-non-free" pulling the free
+			// driver even though the non-free one was requested). Only the requested
+			// seed and already-resolved packages count as "selected"; the baseline is
+			// not visible to this repo-only resolver.
+			if alternativeAlreadySelected(cur.RequiresVer, depName, func(name string) (string, bool) {
+				if p, ok := resolvedDeps[name]; ok {
+					return p.Version, true
+				}
+				if p, ok := seedByName[name]; ok {
+					return p.Version, true
+				}
+				if _, ok := neededSet[name]; ok {
+					return "", true
+				}
+				return "", false
+			}) {
 				continue
 			}
 			if resolvedPkg, seen := resolvedDeps[depName]; seen {
@@ -1421,6 +1635,41 @@ func ResolveTopPackageConflicts(want string, all []ospackage.PackageInfo) (ospac
 	return candidates[0], true
 }
 
+// ExpandKernelInstallNames replaces a glob kernel entry (for example
+// linux-image-generic*) with the single newest matching package name from
+// resolved, so the deb install step passes one concrete name to apt instead of
+// a glob. apt would otherwise expand the glob against the shared local repo (and
+// dependency resolution pulls every provider of the linux-image-generic virtual
+// package), installing multiple kernels. Non-glob entries, and globs with no
+// resolved match, pass through unchanged.
+func ExpandKernelInstallNames(kernelPkgs []string, resolved []ospackage.PackageInfo) []string {
+	var out []string
+	for _, pkg := range kernelPkgs {
+		if !isGlobPattern(pkg) {
+			out = append(out, pkg)
+			continue
+		}
+		var matches []ospackage.PackageInfo
+		for _, r := range resolved {
+			if ok, err := path.Match(pkg, r.Name); err == nil && ok {
+				matches = append(matches, r)
+			}
+		}
+		if len(matches) == 0 {
+			out = append(out, pkg)
+			continue
+		}
+		sort.Slice(matches, func(i, j int) bool {
+			if c := compareVersions(matches[i].Version, matches[j].Version); c != 0 {
+				return c > 0
+			}
+			return matches[i].Name < matches[j].Name
+		})
+		out = append(out, matches[0].Name)
+	}
+	return out
+}
+
 // ResolveWildcardPackageConflicts expands a wildcard request to the best package
 // for each matched base package name.
 func ResolveWildcardPackageConflicts(want string, all []ospackage.PackageInfo) ([]ospackage.PackageInfo, bool) {
@@ -1511,6 +1760,116 @@ func extractRepoBase(rawURL string) (string, error) {
 	// Rebuild base URL: scheme + host + prefix before /pool/ (without trailing slash)
 	base := fmt.Sprintf("%s://%s%s", u.Scheme, u.Host, parts[0])
 	return base, nil
+}
+
+// alternativeAlreadySelected reports whether the OR-dependency edge whose first
+// (default) alternative is depName has any OTHER alternative that is already
+// selected AND satisfies that alternative's version constraint. It scans the raw
+// Depends terms (reqVers) for the term whose first "|"-alternative cleans to
+// depName, then checks every remaining alternative of that term. selectedVersion
+// returns the version chosen for a name and whether it is selected at all (an
+// empty version means "selected but concrete version unknown"). A versioned
+// alternative counts as satisfied only when the selected version is known and
+// meets the constraint; an unversioned alternative is satisfied by mere presence.
+// Single-alternative terms and terms belonging to a different edge are ignored.
+// This implements apt's rule that an already-installed/selected alternative
+// satisfies the edge, so the first alternative should not be pulled in.
+func alternativeAlreadySelected(reqVers []string, depName string, selectedVersion func(string) (string, bool)) bool {
+	edgeFound := false
+	for _, reqVer := range reqVers {
+		alts := strings.Split(reqVer, "|")
+		if len(alts) < 2 {
+			// A bare (non-OR) term naming depName is a mandatory direct dependency —
+			// e.g. "Depends: a, a | b" — so depName must be pulled regardless of any
+			// satisfied OR edge that happens to share it as a first alternative.
+			if CleanDependencyName(alts[0]) == depName {
+				return false
+			}
+			continue // an unrelated non-OR term
+		}
+		if CleanDependencyName(alts[0]) != depName {
+			continue // a different dependency edge
+		}
+		edgeFound = true
+		// depName is THIS edge's first alternative, so pulling it satisfies this edge.
+		// Distinct edges can share the same first alternative (e.g. "a | b, a | c"); the
+		// first is skippable only if EVERY such edge is already met by another selected
+		// alternative — otherwise depName is still needed to satisfy the unmet edge.
+		if !edgeSatisfiedByOtherAlternative(alts[1:], selectedVersion) {
+			return false
+		}
+	}
+	return edgeFound
+}
+
+// edgeSatisfiedByOtherAlternative reports whether any of an OR-edge's non-first
+// alternatives is already selected and (when the alternative is versioned) meets
+// its version constraint. An unknown selected version is treated conservatively as
+// NOT satisfying, so the first alternative is still taken.
+func edgeSatisfiedByOtherAlternative(alts []string, selectedVersion func(string) (string, bool)) bool {
+	for _, alt := range alts {
+		name, op, ver := splitAltNameConstraint(alt)
+		if name == "" {
+			continue
+		}
+		selVer, ok := selectedVersion(name)
+		if !ok {
+			continue // this alternative is not selected
+		}
+		if op == "" || ver == "" {
+			return true // unversioned alternative: presence satisfies it
+		}
+		if selVer != "" && debVersionSatisfies(selVer, op, ver) {
+			return true
+		}
+	}
+	return false
+}
+
+// splitAltNameConstraint parses one OR-dependency alternative ("e2fsprogs (<< 1.45)")
+// into its package name and optional version constraint. It returns an empty name
+// for an unparseable/empty alternative, and empty op/ver when the alternative
+// carries no version constraint.
+func splitAltNameConstraint(alt string) (name, op, ver string) {
+	name = CleanDependencyName(alt)
+	if name == "" {
+		return "", "", ""
+	}
+	open := strings.Index(alt, "(")
+	if open == -1 {
+		return name, "", ""
+	}
+	rel := strings.Index(alt[open:], ")")
+	if rel == -1 {
+		return name, "", ""
+	}
+	if fields := strings.Fields(alt[open+1 : open+rel]); len(fields) == 2 {
+		return name, fields[0], fields[1]
+	}
+	return name, "", ""
+}
+
+// debVersionSatisfies reports whether candidate satisfies the Debian version
+// relation "op ver" (e.g. ">= 1.2", "<< 3"). An unrecognized operator or an
+// uncomparable version pair is treated as not satisfied.
+func debVersionSatisfies(candidate, op, ver string) bool {
+	cmp, err := CompareDebianVersions(candidate, ver)
+	if err != nil {
+		return false
+	}
+	switch op {
+	case "<<", "<":
+		return cmp < 0
+	case "<=":
+		return cmp <= 0
+	case "=", "==":
+		return cmp == 0
+	case ">=":
+		return cmp >= 0
+	case ">>", ">":
+		return cmp > 0
+	}
+	return false
 }
 
 // hasDirectDependency checks if a dependency appears as a direct requirement (not in alternatives)

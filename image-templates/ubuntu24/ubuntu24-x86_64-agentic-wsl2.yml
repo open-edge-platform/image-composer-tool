@@ -1,0 +1,33 @@
+image:
+  name: ubuntu24-x86_64-agentic
+  version: "1.0.0"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: wsl2
+
+disk:
+  name: ubuntu24-x86_64-agentic
+  artifacts:
+    - type: tar
+      compression: gz
+
+systemConfig:
+  name: ubuntu24-x86_64-agentic
+  packages:
+    - ubuntu-minimal
+    - systemd-boot
+    - dracut-core
+    - systemd
+    - cryptsetup-bin
+    - openssh-server
+    - systemd-resolved
+    - systemd-timesyncd
+    - ca-certificates
+    - curl
+    - gnupg
+  additionalFiles:
+    - local: ../additionalfiles/agent-install.sh
+      final: /opt/agent/agent-install.sh

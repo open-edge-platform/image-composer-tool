@@ -52,6 +52,17 @@ func (m *MockProvider) PostProcess(template *config.ImageTemplate, err error) er
 	return nil
 }
 
+// MockOverlayProvider embeds MockProvider and adds the OverlayCapable method so
+// the capability probe can be exercised for both answers.
+type MockOverlayProvider struct {
+	MockProvider
+	supports bool
+}
+
+func (m *MockOverlayProvider) SupportsOverlay(_, _ string) bool {
+	return m.supports
+}
+
 // Helper function to create a test ImageTemplate
 func createTestImageTemplate() *config.ImageTemplate {
 	return &config.ImageTemplate{
@@ -465,4 +476,45 @@ func TestProviderWorkflow(t *testing.T) {
 			t.Errorf("Call %d: expected %s, got %s", i, expected, callLog[i])
 		}
 	}
+}
+
+// TestSupportsOverlay covers the capability probe: a provider that does not
+// implement OverlayCapable is create-only, and one that does answers for itself.
+func TestSupportsOverlay(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider Provider
+		want     bool
+	}{
+		{
+			name:     "provider without OverlayCapable is create-only",
+			provider: &MockProvider{},
+			want:     false,
+		},
+		{
+			name:     "OverlayCapable provider reporting support",
+			provider: &MockOverlayProvider{supports: true},
+			want:     true,
+		},
+		{
+			name:     "OverlayCapable provider declining support",
+			provider: &MockOverlayProvider{supports: false},
+			want:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := SupportsOverlay(tt.provider, "azl3", "amd64"); got != tt.want {
+				t.Errorf("SupportsOverlay() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestOverlayCapableInterface is a compile-time check that the mock satisfies
+// both interfaces, so OverlayCapable stays a superset of Provider.
+func TestOverlayCapableInterface(t *testing.T) {
+	var _ Provider = (*MockOverlayProvider)(nil)
+	var _ OverlayCapable = (*MockOverlayProvider)(nil)
 }

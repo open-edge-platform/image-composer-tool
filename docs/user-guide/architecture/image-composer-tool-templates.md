@@ -1,0 +1,1307 @@
+# Image Template Reference
+
+<!-- markdownlint-configure-file {"MD051": false, "MD060": false} -->
+
+Templates are YAML files that define what goes into a custom OS image, the
+target platform, packages, disk layout, users, and build-time customizations.
+This document is the authoritative field-by-field reference for the template
+format.
+
+For a conceptual overview of how templates fit into the build pipeline, see
+[Understanding the Build Process](./image-composer-tool-build-process.md).
+
+## Table of Contents
+
+- [Image Template Reference](#image-template-reference)
+  - [Table of Contents](#table-of-contents)
+  - [How Templates Work](#how-templates-work)
+  - [Quick Start Example](#quick-start-example)
+  - [Top-Level Structure](#top-level-structure)
+  - [Field Reference](#field-reference)
+    - [`metadata`](#metadata)
+    - [`image` (required)](#image-required)
+    - [`target` (required)](#target-required)
+    - [WSL-Compatible Images](#wsl-compatible-images)
+    - [`baseline`](#baseline)
+      - [`baseline.source`](#baselinesource)
+        - [SBOM generation (overlay mode)](#sbom-generation-overlay-mode)
+    - [`overlayPolicy`](#overlaypolicy)
+    - [`disk`](#disk)
+      - [`disk.artifacts[]`](#diskartifacts)
+      - [`disk.partitions[]`](#diskpartitions)
+    - [`packageRepositories`](#packagerepositories)
+    - [`systemConfig`](#systemconfig)
+      - [`systemConfig.kernel`](#systemconfigkernel)
+      - [`systemConfig.bootloader`](#systemconfigbootloader)
+      - [`systemConfig.network`](#systemconfignetwork)
+      - [`systemConfig.immutability`](#systemconfigimmutability)
+      - [`systemConfig.fde`](#systemconfigfde)
+      - [`systemConfig.users[]`](#systemconfigusers)
+      - [`systemConfig.initramfs`](#systemconfiginitramfs)
+      - [`systemConfig.additionalFiles[]`](#systemconfigadditionalfiles)
+      - [`systemConfig.configurations[]`](#systemconfigconfigurations)
+  - [Template Merge Behavior](#template-merge-behavior)
+  - [Template Extends (Inheritance)](#template-extends-inheritance)
+    - [Syntax](#syntax)
+    - [Merge Behavior in a Chain](#merge-behavior-in-a-chain)
+    - [Chain Resolution](#chain-resolution)
+    - [Limitations and Validation Rules](#limitations-and-validation-rules)
+    - [Debugging an Extends Chain](#debugging-an-extends-chain)
+    - [See Also](#see-also)
+  - [Variable Substitution](#variable-substitution)
+- [WSL Required Fields](#wsl-required-fields)
+- [Package Repositories](#package-repositories)
+  - [Repository Fields](#repository-fields)
+  - [Priority Behavior](#priority-behavior)
+  - [AllowPackages White List](#allowpackages-white-list)
+- [Best Practices](#best-practices)
+- [Related Documentation](#related-documentation)
+
+## What Are Templates and How Do They Work?
+
+Templates are predefined build specifications that serve as a foundation for
+building operating system images. Here's what templates empower you to do:
+
+- Create standardized baseline configurations.
+- Impose consistency across multiple images.
+- Reduce duplication of effort.
+- Share and reuse common configurations with your team.
+
+The ICT provides default image templates on a per-distribution
+basis and image type (RAW vs. ISO) that can be used directly to build an
+operating system from those defaults. You can override these default templates
+by providing your own template and configure or override the settings and
+values you want. The tool will internally merge the two to create the final
+template used for image composition.
+
+![image-templates](../_assets/template.drawio.svg)
+
+## How Templates Work
+
+ICT ships **default templates** for each distribution and image
+type (raw, ISO, initrd). When you provide a user template, the tool merges it
+with the matching default; your values override or extend the defaults. The
+merged result is validated against a JSON schema before the build begins.
+
+![image-templates](../_assets/template.drawio.svg)
+
+Default templates live at:
+
+```text
+config/osv/<target.os>/<target.dist>/imageconfigs/defaultconfigs/default-<imageType>-<arch>.yml
+```
+
+> **Note:** `imageType: img` maps to `default-initrd-<arch>.yml` (there is no
+> `default-img-` filename).
+
+You do not need to edit the defaults. You can start from one of the examples in
+`image-templates/` and override only what you need.
+
+## Quick Start Example
+
+A minimal user template only needs `image`, `target`, and optionally
+`systemConfig` with extra packages:
+
+```yaml
+image:
+  name: my-edge-device
+  version: "1.0.0"
+
+target:
+  os: edge-microvisor-toolkit
+  dist: emt3
+  arch: x86_64
+  imageType: raw
+
+systemConfig:
+  name: edge
+  packages:
+    - cloud-init
+    - rsyslog
+```
+
+Everything else (disk layout, bootloader, kernel, default packages) comes from
+the default template for `emt3 / raw / x86_64`.
+
+## Top-Level Structure
+
+A template file has up to five top-level sections plus an optional `metadata`
+block:
+
+```yaml
+metadata:       # Optional - AI-searchable discovery metadata
+  ...
+image:          # Required - image name and version
+  ...
+target:         # Required - OS, distribution, architecture, image type
+  ...
+baseline:       # Optional - "create" (default) or "overlay" an existing image
+  ...
+overlayPolicy:  # Optional - overlay-mode policy (only with baseline.mode: overlay)
+  ...
+disk:           # Optional - disk layout, partitions, output artifacts
+  ...
+packageRepositories:  # Optional - additional package repositories
+  - ...
+systemConfig:   # Required in merged template - packages, kernel, users, etc.
+  ...
+```
+
+> **Note:** **User templates** require only `image` and `target`. The remaining sections
+> are merged from the default template if omitted.
+
+---
+
+## Field Reference
+
+### `metadata`
+
+Optional block for AI-powered template discovery. Ignored by the build engine.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `description` | string | Human-readable description of the template |
+| `use_cases` | string[] | Use cases this template targets |
+| `keywords` | string[] | Keywords for search and discovery |
+
+```yaml
+metadata:
+  description: "Edge device image with container runtime"
+  use_cases: ["edge computing", "IoT gateway"]
+  keywords: [edge, docker, emt3]
+```
+
+---
+
+### `image` (required)
+
+Image identification. Both fields are required.
+
+| Field | Type | Required | Validation | Description |
+|-------|------|----------|------------|-------------|
+| `name` | string | **Yes** | `^[a-zA-Z0-9]([a-zA-Z0-9\-_]*[a-zA-Z0-9])?$` | Image name (alphanumeric, hyphens, underscores) |
+| `version` | string | **Yes** | Semver-like: `1.0.0`, `24.04`, `1.0.0+build1` | Version string |
+
+```yaml
+image:
+  name: my-edge-device
+  version: "1.0.0"
+```
+
+---
+
+### `target` (required)
+
+Target platform. All four fields are required.
+
+| Field | Type | Required | Valid Values | Description |
+|-------|------|----------|--------------|-------------|
+| `os` | string | **Yes** | `azure-linux`, `edge-microvisor-toolkit`, `wind-river-elxr`, `ubuntu`, `redhat-compatible-distro` | Target operating system |
+| `dist` | string | **Yes** | See OS constraints below | Distribution identifier |
+| `arch` | string | **Yes** | `x86_64`, `aarch64`, `armv7hl` | Target CPU architecture |
+| `imageType` | string | **Yes** | `raw`, `iso`, `img`, `wsl2` | Output image format |
+
+**OS → dist constraints:**
+
+| OS | Valid `dist` |
+|----|-------------|
+| `azure-linux` | `azl3` |
+| `edge-microvisor-toolkit` | `emt3` |
+| `wind-river-elxr` | `elxr12` |
+| `ubuntu` | `ubuntu24`, `ubuntu26` |
+| `redhat-compatible-distro` | Any (e.g., `el10`) |
+
+```yaml
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+```
+
+### WSL-Compatible Images
+
+Set `target.imageType: wsl2` to compose a WSL-compatible root filesystem.
+
+```yaml
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: wsl2
+```
+
+For a complete Ubuntu 24 WSL example, see
+[`image-templates/ubuntu24/ubuntu24-x86_64-agentic-wsl2.yml`](../../image-templates/ubuntu24/ubuntu24-x86_64-agentic-wsl2.yml).
+
+---
+
+### `baseline`
+
+Selects how the image is assembled. If omitted, the build defaults to **create**
+mode (build the image from scratch, the behavior described everywhere else in
+this reference). Set `mode: overlay` to instead layer packages onto an existing
+baseline disk image without rebuilding it. The baseline may be a RAW image or a
+qcow2/vhd/vhdx image, which is converted to RAW before the overlay runs.
+
+| Field | Type | Required | Valid Values | Description |
+|-------|------|----------|--------------|-------------|
+| `mode` | string | No | `create` (default), `overlay` | Assembly mode |
+| `source` | object | **Yes** when `mode: overlay` (must be **absent** for `create`) | — | The baseline image to overlay |
+
+#### `baseline.source`
+
+Identifies the baseline image. Exactly one of `path` or `url` must be set.
+The source is copied into the build workspace first and is **never modified in
+place**.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `path` | string | one of `path`/`url` | Local filesystem path to the baseline image (no URI scheme) |
+| `url` | string | one of `path`/`url` | `https://` URL of the baseline image; downloaded over TLS before the overlay runs (plain `http` is rejected) |
+| `format` | string | No | Baseline image format: `raw`, `qcow2`, `vhd` or `vhdx` (default `raw`). Non-raw formats are converted to RAW before the overlay runs |
+| `sbomPath` | string | No | Local filesystem path (no URI scheme) to an externally-supplied SPDX SBOM (JSON) describing the baseline image. Defaults to unset. See [SBOM generation](#sbom-generation-overlay-mode) below |
+
+```yaml
+baseline:
+  mode: overlay
+  source:
+    path: /path/to/ubuntu-24.04-base.img
+    format: raw
+    # Optional: combine this base-image SBOM with the overlay delta to emit a
+    # full SBOM. Omit it to use the SBOM embedded in the baseline image, if any.
+    sbomPath: /path/to/ubuntu-24.04-base.spdx.json
+```
+
+##### SBOM generation (overlay mode)
+
+An overlay build emits SPDX SBOM sidecar files into the build output directory,
+alongside the emitted image (`<image-name>-<version>.raw`):
+
+| Artifact | Name | Contents |
+|----------|------|----------|
+| **Delta SBOM** | `<image-name>-<version>.delta.spdx.json` | Always emitted. Only the overlay-induced package changes — the packages the overlay added and, in `additive-and-upgrade` mode, upgraded. |
+| **Complete SBOM** | `<image-name>-<version>.complete.spdx.json` | Emitted only when a base SBOM is available (see below). The full final image inventory — the baseline packages plus the overlay result. When no base SBOM exists the complete document would be identical to the delta, so this sidecar is skipped. |
+
+Both are SPDX 2.3 JSON, the same format the standalone SBOM/inspect tooling uses.
+The **complete** SBOM is also embedded inside the image at `/usr/share/sbom`
+(replacing the SBOM the image inherited from the baseline, so the in-image
+manifest reflects the full final inventory).
+
+The complete SBOM is the union of a **base** SBOM and the overlay delta. Which
+base is used follows this order:
+
+1. **`baseline.source.sbomPath` set and valid** — that externally-supplied base
+   SBOM is combined with the delta.
+2. **`sbomPath` unset** — the SBOM the baseline image itself carries at
+   `/usr/share/sbom` is used as the base and combined with the delta.
+3. **No base SBOM available** — `sbomPath` is unset or the file is
+   absent/unreadable/malformed **and** the baseline image embeds no SBOM — then
+   there is no full inventory to build, so the **complete** sidecar is skipped
+   (it would be identical to the delta) while the in-image `/usr/share/sbom`
+   manifest and the **delta** sidecar are still written. This is never an error:
+   the build succeeds.
+
+A missing or malformed `sbomPath` falls back to the baseline-embedded SBOM (then
+to delta-only); it does not fail the build. Omitting `sbomPath` entirely
+preserves the pre-existing base-resolution behavior. This applies to every
+overlay-capable provider (Ubuntu and Debian).
+
+To diff these artifacts against the baseline — the overlay RAW vs the baseline
+RAW, or the complete SBOM vs the baseline SBOM — see
+[Comparing Overlay Outputs](../get-started/usage-guide.md#comparing-overlay-outputs).
+
+> **Note:** Overlay mode is currently wired end-to-end for the **Ubuntu** and
+> **Debian** providers. Targeting a provider without overlay support fails the
+> build immediately with a clear message rather than silently falling back to a
+> create-mode build. The overlay build is **additive by default**: packages (and their
+> transitive dependencies not already present in the baseline) are installed
+> into the baseline root, the initramfs is regenerated for the added packages,
+> the template's [`systemConfig.configurations`](#systemconfigconfigurations)
+> commands and [`systemConfig.additionalFiles`](#systemconfigadditionalfiles) are
+> applied, and an optional grow-only resize can enlarge the image to a larger
+> `disk.size`. Existing baseline packages are not removed unless
+> [`overlayPolicy.allowPackageRemoval`](#overlaypolicy) is enabled, which permits a
+> conflict-driven removal of a baseline package a to-install package conflicts
+> with. The installed bootloader binary and the ESP are never modified regardless
+> of policy. The bootable kernel is likewise immutable unless
+> [`overlayPolicy.replaceKernel`](#overlaypolicy) is set, which swaps the kernel by
+> installing a new one and removing the baseline kernel family (the GRUB **config**
+> on the writable root is regenerated to boot it; the bootloader binary and ESP
+> still stay untouched).
+>
+> **OS defaults do not apply.** Unlike a create-mode build, an overlay template is
+> **not** merged with the target's create-mode OS default configuration
+> (`default-raw-*.yml`). Those defaults describe how to build an image from
+> scratch — disk size and partition table, bootloader, kernel, and the base OS
+> package set — all of which the baseline image already provides. The overlay
+> pipeline reads disk/bootloader/kernel geometry from the detected baseline, not
+> from the template, so the effective overlay template is exactly what you declare
+> (folded through any `extends:` chain) with nothing inherited from the OS default.
+> In particular, an overlay template that omits `disk.size` keeps the baseline's
+> size — it does not pick up the default's `disk.size`, which against a larger
+> baseline would otherwise be rejected as a shrink.
+>
+> **Unsupported systemConfig sections.** Because overlay mode does not re-run the
+> boot/system-provisioning stages, the following `systemConfig` sections cannot be
+> applied to an overlay build: `hostname`, `network`, `initramfs`, `kernel`,
+> `immutability`, `fde`, and `bootloader`. Previously these were silently ignored;
+> now setting any of them in an overlay template **fails the build up front** with
+> a message naming every offending section. Configure them in the baseline image
+> (a `create`-mode build) instead. The overlay-supported `systemConfig` inputs are
+> `packages`, `users`, `configurations`, and `additionalFiles`.
+>
+> **Users in overlay.** `systemConfig.users` is provisioned onto the baseline. A
+> requested user that **already exists in the baseline image fails the build up
+> front** (an overlay cannot redefine a baseline account); the check is re-run
+> immediately before creation, so a name that a package's maintainer script adds
+> during install also fails rather than being silently modified. A user's
+> `startupScript` must reference a path already present when users are created —
+> i.e. shipped by the baseline or installed by an overlay `packages` entry — not a
+> file delivered via `additionalFiles`, which are copied later in the overlay
+> pipeline.
+>
+> The following `systemConfig.users` fields are **not currently applied** (an
+> inherited create-mode limitation, in both create and overlay builds): `home`,
+> `shell`, and `passwordMaxAge`. The login shell is always set to `/bin/bash`, so
+> a service account cannot yet be pinned to `/usr/sbin/nologin` via the template.
+>
+> **Sizing:** Adding packages does **not** auto-grow the image, and the overlay
+> preserves the baseline disk layout by default. Growing the image is opt-in: it
+> requires **both** a `disk.size` larger than the baseline **and**
+> `overlayPolicy.allowDiskResize: true`. When `disk.size` is larger but
+> `allowDiskResize` is not set, the build fails early with a clear message rather
+> than silently resizing the baseline. The resize is grow-only and keyed solely
+> on `disk.size` (compared to the baseline's current size), not on how much space
+> the added packages need. If the baseline root is near-full, set `disk.size`
+> larger than the baseline image and enable `allowDiskResize` to make room;
+> otherwise the package install step fails with a "no space left on device"
+> error (the failure message points back here).
+>
+> **Resize constraints.** The grow-only resize extends the **last** partition on
+> the disk and its filesystem in place. It is rejected (before any disk mutation,
+> with an actionable error) when the root is **not** the last partition, when the
+> root sits on **LVM**, and when the root is **LUKS-encrypted** or **dm-verity**
+> protected. `ext4`/`ext3`/`ext2` roots are the supported and CI-covered target;
+> `xfs` roots use the same code path (`xfs_growfs`) but are **best-effort**: the
+> grow sequence has unit-test coverage, but no shipping baseline exercises it
+> against a real xfs filesystem in CI/e2e, so treat xfs resize as unverified
+> end-to-end. The resize shells out to `growpart` (cloud-guest-utils), `sgdisk`
+> (gdisk, GPT only), `resize2fs` (e2fsprogs) or `xfs_growfs` (xfsprogs), and
+> `losetup`/`partx` (util-linux); these must be present on the build host, and
+> the build fails early with a clear message if any is missing. Resize also
+> reads partition start sectors via `lsblk -o PATH,START,TYPE`, which requires
+> **util-linux >= 2.38**; Ubuntu 22.04's stock `lsblk`/`resize2fs` are too old
+> and not upgradable via `apt` — see the
+> [util-linux/e2fsprogs build-from-source instructions](../get-started/prerequisites.md#util-linux-lsblk-and-e2fsprogs-resize2fs).
+>
+> **Output formats.** Overlay honors [`disk.artifacts`](#diskartifacts) exactly as
+> a create-mode build does: every supported output format (`raw`, `qcow2`, `vhd`,
+> `vhdx`, `vmdk`, `vdi`, `tar`) and compression build mode is available. The
+> overlay always produces a RAW image internally and then converts it to the
+> requested formats after the post-build inspection; a template whose
+> `disk.artifacts` omits `raw` deletes the intermediate RAW during conversion.
+> When `disk.artifacts` is empty or lists only `raw`, a plain RAW image is emitted
+> and no conversion runs.
+
+---
+
+### `overlayPolicy`
+
+Optional policy controls for overlay-mode preflight and install. It is a
+top-level peer of `baseline` and may **only** be set when `baseline.mode` is
+`overlay`. If omitted, the defaults below apply.
+
+| Field | Type | Required | Valid Values | Description |
+|-------|------|----------|--------------|-------------|
+| `packageOperation` | string | No | `additive-only` (default), `additive-and-upgrade` | Permitted package operations. `additive-only`: packages may only be added, never removed or downgraded. `additive-and-upgrade`: also permits upgrading a package already present in the baseline to a newer version. Downgrades and removals remain blocked in both modes (see note below) |
+| `conflictPolicy` | string | No | `fail` (default), `allow-explicit` | How a package conflict detected during preflight is handled. `fail` aborts the build; `allow-explicit` permits a conflict only when the conflicting package was explicitly requested |
+| `kernelCmdline` | string | No | — | Optional kernel command-line override applied to the overlaid image (full-line replacement of `GRUB_CMDLINE_LINUX` on a GRUB2 baseline). Must not contain a double quote, dollar sign, backtick, backslash, or newline |
+| `grubDefault` | string | No | — | Optional `GRUB_DEFAULT` override (pins the default boot menu entry, e.g. the Ubuntu submenu path `Advanced options for Ubuntu>Ubuntu, with Linux <ver>`). Only applied on a GRUB2 baseline. Same character restrictions as `kernelCmdline` |
+| `allowDiskResize` | boolean | No | `false` (default), `true` | Permit growing the baseline image to satisfy a larger `disk.size`. Overlay mode preserves the baseline disk layout by default; when `false`, a `disk.size` larger than the baseline is rejected with an error. Resize is always grow-only and never shrinks the image |
+| `allowPackageRemoval` | boolean | No | `false` (default), `true` | Permit removing a baseline package that a to-install package conflicts with (e.g. installing `dracut`, which conflicts with `initramfs-tools`). When `false` (the default) such a conflict fails the build; when `true`, the conflicting baseline package is removed before install. **Only valid with `packageOperation: additive-and-upgrade`** — removal is more invasive than an in-place upgrade, so it is rejected under the default `additive-only`. Bootloader and bootable-kernel packages are never removed regardless of this flag (to swap the kernel, use `replaceKernel`) |
+| `replaceKernel` | object | No | `{ package: <name>, additionalPackages: [...], enableExtraModules: <string>, version: <string> }` | Replace the baseline kernel: install the named kernel package (plus any `additionalPackages`, e.g. the matching headers) and remove the baseline kernel family (image + meta + modules + headers) so the image ships **only** the new kernel, then regenerate the GRUB menu to default to it. The ESP and bootloader binary are never touched (no `grub-install`, no Secure Boot re-signing). **Only valid with `packageOperation: additive-and-upgrade`**; does **not** require `allowPackageRemoval` (it self-authorizes its own kernel-family removals). See the note below |
+
+> **`additive-and-upgrade` scope.** Upgrades apply only to the package set: a
+> package already installed in the baseline may be replaced by a newer version
+> when the resolved overlay closure requires it. Downgrades are still rejected at
+> preflight. The bootloader binary remains immutable in all cases, and the kernel
+> is immutable **unless** you explicitly opt into a swap with `replaceKernel` (see
+> below) — an overlay never upgrades a kernel image in place or reinstalls the
+> bootloader, regardless of `packageOperation`. Choose `additive-only` (the
+> default) to fail the build on any version bump to a baseline package.
+
+> **Package removal (`allowPackageRemoval`).** Opt-in, and permitted **only under
+> `packageOperation: additive-and-upgrade`** — removal is more invasive than an
+> in-place upgrade, so pairing it with the default `additive-only` is rejected at
+> validation. By default an overlay never removes a baseline package: a to-install
+> package that `Conflicts:`/`Breaks:` a present baseline package fails the build.
+> Set `allowPackageRemoval: true` (with `additive-and-upgrade`) to let the overlay
+> remove the conflicting baseline package before installing its replacement — the
+> case that makes `dracut` (which conflicts with `initramfs-tools`) installable on
+> a stock baseline. Bootloader and bootable-kernel packages are still never
+> removed, so the flag cannot break the boot path.
+>
+> **Cascade removal of orphaned reverse-dependencies.** A conflict-driven removal
+> can leave an unrelated baseline package that only `Depends:` on the removed one
+> with an unmet dependency (for example, the Debian cloud image's
+> `cloud-initramfs-growroot` depends on `initramfs-tools`). When
+> `allowPackageRemoval` is enabled, the post-install dependency audit turns into a
+> bounded cascade: each baseline package that is broken *after* a removal but was
+> whole *before* it is itself removed, transitively, until the package manager's
+> own check (`apt-get check` / `dnf check`) reports the dependency tree is whole
+> again. A dependency that an alternative still satisfies is never treated as broken, so
+> nothing is over-removed. The cascade still fails **closed**: if resolving the
+> breakage would require removing a bootloader/kernel-image package or a package
+> the overlay is installing, the build fails instead. Cascade removals are folded
+> into the package statistics and the complete SBOM so the final inventory is
+> accurate. This behavior is entirely gated by `allowPackageRemoval`; when it is
+> `false`, a removal that would orphan another package fails the build as before.
+
+```yaml
+baseline:
+  mode: overlay
+  source:
+    path: /path/to/ubuntu-24.04-base.img
+
+overlayPolicy:
+  # Removal requires additive-and-upgrade (not the default additive-only).
+  packageOperation: additive-and-upgrade
+  conflictPolicy: fail
+
+  # Opt in to removing a baseline package a new package conflicts with
+  # (e.g. remove initramfs-tools so dracut can install). Default: false.
+  allowPackageRemoval: true
+```
+
+A complete **additive-only** starter template (the default policy, without package
+removal) lives at
+[`image-templates/ubuntu24/ubuntu24-x86_64-overlay-raw.yml`](https://github.com/open-edge-platform/image-composer-tool/blob/main/image-templates/ubuntu24/ubuntu24-x86_64-overlay-raw.yml);
+to enable removal, add the `overlayPolicy` block shown above (`additive-and-upgrade`
+plus `allowPackageRemoval: true`) to it.
+
+> **Kernel replacement (`replaceKernel`).** By default the baseline kernel is
+> immutable: an overlay may *add* a new kernel alongside the existing one (a
+> version-qualified `linux-image-*` package is an addition, and GRUB gains a menu
+> entry for it), but it never upgrades or removes an installed kernel image. Set
+> `overlayPolicy.replaceKernel.package: <kernel-package>` to perform a **full
+> swap** instead:
+>
+> 1. the named replacement kernel is resolved from the configured repositories and
+>    installed (like any other overlay package). The `package` value accepts the same
+>    glob wildcards as an ordinary `systemConfig` package (`*`, `?`, `[...]`), so you
+>    can write `linux-image-*-oem` instead of pinning an exact version. The pattern must
+>    resolve to **exactly one** bootable kernel image: a value that matches no kernel
+>    (a typo, or a userspace-only package) or several kernels (an over-broad glob)
+>    fails preflight, which lists what it matched so you can narrow it;
+> 2. any `additionalPackages` (e.g. the matching `linux-headers-*` package) are
+>    resolved and installed alongside `package`, following the same rules as
+>    `package` itself;
+> 3. the baseline kernel **family** — the bootable image plus its meta-package,
+>    modules, and headers (e.g. `linux-image-6.8.0-40-generic`,
+>    `linux-image-generic`, `linux-modules-*`, `linux-headers-*`) — is auto-detected
+>    and removed, so the emitted image ships **only** the new kernel and whatever
+>    `additionalPackages` you named;
+> 4. the GRUB config is regenerated so the removed kernel's menu entry is dropped
+>    and `GRUB_DEFAULT` points at the new kernel (auto-pinned to `"0"` when you do
+>    not set `grubDefault` explicitly).
+>
+> `enableExtraModules` (space-separated driver modules, e.g. `"intel_vpu uas"`)
+> mirrors `systemConfig.kernel.enableExtraModules` but is scoped to the
+> replacement kernel: the named modules are forced into its regenerated
+> initramfs (`dracut --add-drivers`, or an `/etc/initramfs-tools/modules` entry
+> on an `initramfs-tools` baseline). `version` is descriptive only — it is never
+> used to resolve or install packages, only surfaced for reporting (e.g. the
+> compose summary).
+>
+> Only the GRUB **config** on the writable root is updated — the ESP and the
+> bootloader binary are never touched (no `grub-install`), matching the overlay
+> read-only-ESP contract. On a Secure Boot baseline the newly installed kernel may
+> be **unsigned**; overlay does not re-sign it, so sign it out of band if the image
+> must boot under Secure Boot. `replaceKernel` requires
+> `packageOperation: additive-and-upgrade` but does **not** require
+> `allowPackageRemoval` — the two are orthogonal (`allowPackageRemoval` governs
+> conflict-driven removal of *non-kernel* baseline packages). Because the swap
+> self-authorizes **only** its own kernel-family removals, if it orphans an
+> unrelated non-kernel baseline package (for example a DKMS module bound to the
+> removed kernel's modules/headers) the build fails **closed** unless you *also*
+> enable `allowPackageRemoval`. A `replaceKernel` set on a non-GRUB2 baseline
+> (including a UKI baseline) is a hard error, raised at preflight before any
+> package is installed or removed. Userspace kernel-adjacent packages
+> (`linux-libc-dev`, `linux-tools-common`, rpm `kernel-headers`/`kernel-devel`) are
+> **not** removed.
+
+```yaml
+baseline:
+  mode: overlay
+  source:
+    path: /path/to/ubuntu-24.04-base.img
+
+overlayPolicy:
+  # A kernel swap requires additive-and-upgrade (not the default additive-only).
+  packageOperation: additive-and-upgrade
+  conflictPolicy: fail
+
+  # Install this kernel and remove the baseline kernel family. GRUB_DEFAULT is
+  # auto-pinned to the new kernel unless grubDefault is set below.
+  replaceKernel:
+    package: linux-image-6.11.0-1004-oem
+    # Optional: further kernel-family packages to install alongside package.
+    additionalPackages:
+      - linux-headers-6.11.0-1004-oem
+    # Optional: driver modules forced into the replacement kernel's initramfs.
+    enableExtraModules: "intel_vpu uas"
+    # Optional: descriptive only, never used to resolve/install packages.
+    version: "6.11.0-1004-oem"
+
+  # Optional: the exact command line the new kernel boots with.
+  # kernelCmdline: "quiet splash"
+  # Optional: pin a specific GRUB entry instead of the auto "0" default.
+  # grubDefault: "Advanced options for Ubuntu>Ubuntu, with Linux 6.11.0-1004-oem"
+```
+
+A complete kernel-replacement example lives at
+[`image-templates/ubuntu24/ubuntu24-x86_64-overlay-replace-kernel-raw.yml`](https://github.com/open-edge-platform/image-composer-tool/blob/main/image-templates/ubuntu24/ubuntu24-x86_64-overlay-replace-kernel-raw.yml).
+
+---
+
+### `disk`
+
+Disk layout, partition scheme, and output artifact formats. If omitted, the
+default template provides sensible values (typically 4–6 GiB GPT disk with EFI
+boot and ext4 root partitions).
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | **Yes** (schema) | Disk configuration name (e.g., `"Default_Raw"`) |
+| `path` | string | No | Disk device path (used by live installer, e.g., `/dev/sda`) |
+| `size` | string | No | Disk size. Accepts: `"4GiB"`, `"8GB"`, `"4096 MiB"` |
+| `partitionTableType` | string | No | `gpt` or `mbr` |
+| `artifacts` | artifact[] | No | Output formats and optional compression |
+| `partitions` | partition[] | No | Partition layout definitions |
+
+#### `disk.artifacts[]`
+
+Each entry defines one output format:
+
+| Field | Type | Required | Valid Values | Description |
+|-------|------|----------|--------------|-------------|
+| `type` | string | **Yes** | `raw`, `qcow2`, `vhd`, `vhdx`, `vmdk`, `vdi`, `tar` | Output image format |
+| `compression` | string | No | `gz`, `gzip`, `xz`, `zstd`, `bz2` | Compression to apply |
+
+#### `disk.partitions[]`
+
+Each entry defines one partition:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Partition identifier (e.g., `boot`, `rootfs`, `roothashmap`, `userdata`) |
+| `name` | string | Partition label |
+| `type` | string | Partition type (e.g., `esp`, `linux-root-amd64`, `linux`) |
+| `typeUUID` | string | GPT type GUID (e.g., `8300`) |
+| `fsType` | string | Filesystem type: `ext4`, `fat32`, `xfs`, etc. |
+| `fsLabel` | string | Filesystem label |
+| `start` | string | Start offset (e.g., `1MiB`, `513MiB`) |
+| `end` | string | End offset (`0` means rest of disk) |
+| `mountPoint` | string | Mount point (e.g., `/boot/efi`, `/`, `none`) |
+| `mountOptions` | string | Mount options (e.g., `defaults`, `umask=0077`) |
+| `flags` | string[] | Partition flags (e.g., `boot`, `esp`, `hidden`) |
+
+**Example - raw disk with two partitions and two output formats:**
+
+```yaml
+disk:
+  name: Edge_Raw
+  size: 4GiB
+  partitionTableType: gpt
+  artifacts:
+    - type: raw
+      compression: gz
+    - type: vhdx
+  partitions:
+    - id: boot
+      type: esp
+      flags: [esp, boot]
+      start: 1MiB
+      end: 513MiB
+      fsType: fat32
+      mountPoint: /boot/efi
+      mountOptions: umask=0077
+    - id: rootfs
+      type: linux-root-amd64
+      start: 513MiB
+      end: "0"
+      fsType: ext4
+      mountPoint: /
+      mountOptions: defaults
+```
+
+---
+
+### `packageRepositories`
+
+Optional list of additional package repositories beyond the OS base repos.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `codename` | string | **Yes** | Repository identifier (e.g., `company-internal`) |
+| `url` | string | **Yes** | Repository base URL (must be a valid URI) |
+| `pkey` | string | **Yes** | GPG key URL, absolute file path, or `[trusted=yes]` to skip verification |
+| `component` | string | No | Repository component (e.g., `main`, `restricted`) |
+| `priority` | int | No | Priority from `-9999` to `9999` (default: `0`, higher = preferred) |
+| `AllowPackages` | string[] | No | Specific packages to include from this repo (package pinning) |
+
+```yaml
+packageRepositories:
+  - codename: "company-internal"
+    url: "https://packages.example.com/repo"
+    pkey: "https://packages.example.com/gpg.key"
+    component: "main"
+    priority: 100
+  - codename: "dev-tools"
+    url: "https://dev.example.com/repo"
+    pkey: "[trusted=yes]"
+```
+
+See [Multiple Package Repository Support](./image-composer-tool-multi-repo-support.md)
+for detailed configuration guidance.
+
+---
+
+### `systemConfig`
+
+System configuration - packages, kernel, users, bootloader, build-time
+commands, and more. Required in the final merged template, but optional in
+user templates (as defaults already provide a complete base).
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | No | Configuration name |
+| `description` | string | No | Human-readable description |
+| `hostname` | string | No | System hostname |
+| `packages` | string[] | No | Packages to install (additive with defaults) |
+| `kernel` | object | No | Kernel configuration |
+| `bootloader` | object | No | Bootloader configuration |
+| `immutability` | object | No | dm-verity / Secure Boot configuration |
+| `users` | user[] | No | User account definitions |
+| `initramfs` | object | No | Initramfs config (ISO/initrd builds) |
+| `additionalFiles` | file[] | No | Extra files to copy into the image |
+| `configurations` | cmd[] | No | Shell commands to run during build |
+
+Package names must match: `^[A-Za-z0-9](?:[A-Za-z0-9+_.:~-]*[A-Za-z0-9+])?$`
+and must be unique within the list.
+
+#### `systemConfig.kernel`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `version` | string | Kernel version (e.g., `"6.12"`, `"6.14"`) |
+| `cmdline` | string | Kernel boot command line |
+| `packages` | string[] | Kernel packages (e.g., `["linux-image-generic-hwe-24.04"]`) |
+| `enableExtraModules` | string | Additional kernel modules to load |
+| `uki` | bool | Enable Unified Kernel Image (typically set by defaults) |
+
+```yaml
+systemConfig:
+  kernel:
+    version: "6.14"
+    cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
+    packages:
+      - linux-image-generic-hwe-24.04
+
+# Optional additional repositories
+packageRepositories:
+  - codename: emtNext
+    url: https://example.com/rpms/next/base
+    pkey: https://example.com/RPM-GPG-KEY
+    priority: 1001
+    allowPackages:
+      - kernel-6.17.11
+      - kernel-drivers-gpu-6.17.11
+      - libva*
+
+  - codename: edgeai
+    url: https://example2.com/edgeai/
+    pkey: https://example2.com/edgeai/GPG-PUB-KEY.gpg
+    priority: 500
+```
+
+#### `systemConfig.bootloader`
+
+| Field | Type | Valid Values | Description |
+|-------|------|--------------|-------------|
+| `bootType` | string | `efi`, `legacy` | Boot firmware type |
+| `provider` | string | `grub`, `grub2`, `systemd-boot` | Bootloader software |
+
+Typical defaults: raw images use `efi` / `systemd-boot`; ISO images use
+`efi` / `grub`.
+
+#### `systemConfig.network`
+
+Declarative network configuration for the installed OS. This is a minimal
+explicit-interface implementation.
+
+| Field | Type | Required | Valid Values | Description |
+|-------|------|----------|--------------|-------------|
+| `backend` | string | **Yes** (when section present) | `systemd-networkd`, `netplan` | Network configuration backend |
+| `interfaces` | object[] | No | See below | List of interface configurations |
+
+`interfaces[]` fields:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | **Yes** | Interface name (for example, `enp1s0`, `ens3`) |
+| `dhcp4` | bool | No | Enable DHCPv4 |
+| `dhcp6` | bool | No | Enable DHCPv6 |
+| `addresses` | string[] | No | Static addresses in CIDR format |
+| `routes` | object[] | No | Static routes (see below) |
+| `nameservers` | string[] | No | DNS server addresses |
+
+`routes[]` fields:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `to` | string | **Yes** | Destination (`default` for default gateway, or CIDR) |
+| `via` | string | **Yes** | Gateway address |
+
+> **Note:** Interface names are explicit and user-provided. The current
+> implementation does not auto-discover or auto-select NICs at install time.
+>
+> When `backend` is `systemd-networkd`, the builder enables the
+> `systemd-networkd` service in the image. When `backend` is `netplan`,
+> `systemd-networkd` is **not** forcibly enabled — netplan manages its own
+> renderer.
+
+```yaml
+systemConfig:
+  network:
+    backend: systemd-networkd
+    interfaces:
+      - name: enp1s0
+        dhcp4: true
+      - name: enp2s0
+        addresses:
+          - "10.0.0.100/24"
+        routes:
+          - to: default
+            via: "10.0.0.1"
+        nameservers:
+          - "8.8.8.8"
+          - "8.8.4.4"
+```
+
+```yaml
+systemConfig:
+  network:
+    backend: netplan
+    interfaces:
+      - name: enp1s0
+        dhcp4: true
+      - name: enp2s0
+        addresses:
+          - "192.168.1.10/24"
+        routes:
+          - to: default
+            via: "192.168.1.1"
+        nameservers:
+          - "1.1.1.1"
+```
+
+#### `systemConfig.immutability`
+
+Configures dm-verity immutable root filesystem and optional UEFI Secure Boot
+signing.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `enabled` | bool | **Yes** (when section present) | Enable dm-verity immutable root |
+| `secureBootDBKey` | string | Conditional | Private key file (`.key` or `.pem`) |
+| `secureBootDBCrt` | string | Conditional | Certificate in PEM format (`.crt` or `.pem`) |
+| `secureBootDBCer` | string | Conditional | Certificate in DER format (`.cer`) |
+
+> **Note:** If **any** Secure Boot field is provided, **all three** must be provided and
+> `enabled` must be `true`.
+
+```yaml
+systemConfig:
+  immutability:
+    enabled: true
+    secureBootDBKey: /path/to/db.key
+    secureBootDBCrt: /path/to/db.crt
+    secureBootDBCer: /path/to/db.cer
+```
+
+#### `systemConfig.fde`
+
+Configures LUKS2 full-disk encryption for selected partitions.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `enabled` | bool | **Yes** | Enable full-disk encryption |
+| `passphraseFile` | string | **Yes** (when `enabled: true`) | Absolute or template-relative local file path containing passphrase material |
+| `partitions` | string[] | No | Disk partition IDs to encrypt (defaults to the root partition) |
+| `unlock` | string | No | Boot unlock mode: `auto` (default) or `manual` |
+
+```yaml
+systemConfig:
+  fde:
+    enabled: true
+    passphraseFile: "/run/secrets/fde-passphrase.txt"
+    unlock: auto
+    partitions:
+      - rootfs
+```
+
+See [Configure Full-Disk Encryption](../configuration/configure-fde.md) for a
+complete guide, including usage with dm-verity immutability.
+
+#### `systemConfig.users[]`
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | **Yes** | Username |
+| `password` | string | No | Password (plain text or pre-hashed with `$` prefix) |
+| `hash_algo` | string | No | Hash algorithm: `bcrypt`, `sha512`, `sha256`, `md5` (md5 is insecure — avoid in production) |
+| `passwordMaxAge` | int | No | Max password age in days |
+| `startupScript` | string | No | Script to run on login |
+| `groups` | string[] | No | Additional groups |
+| `sudo` | bool | No | Grant sudo permissions |
+| `home` | string | No | Custom home directory |
+| `shell` | string | No | Login shell (e.g., `/bin/bash`) |
+
+```yaml
+systemConfig:
+  users:
+    - name: admin
+      password: "changeme"
+      sudo: true
+      groups: [docker, wheel]
+      shell: /bin/bash
+      - name: service-account
+      shell: /usr/sbin/nologin
+```
+
+#### `systemConfig.initramfs`
+
+Used for ISO and initrd builds. Points to the initramfs configuration template.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `template` | string | **Yes** (when section present) | Path to the initramfs config template file |
+
+#### `systemConfig.additionalFiles[]`
+
+Copy host files into the image at build time.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `local` | string | Source path on the host (absolute, or relative to template directory) |
+| `final` | string | Destination path inside the image |
+| `stage` | string | Overlay-only. When to copy the file relative to initramfs/boot regeneration: `""` (default) copies at the end of the build, after regeneration; `pre-initramfs` copies **before** boot/initramfs regeneration so the generator can consume it. Ignored by create-mode builds |
+
+```yaml
+systemConfig:
+  additionalFiles:
+    - local: files/dhcp.network
+      final: /etc/systemd/network/dhcp.network
+    - local: files/motd
+      final: /etc/motd
+    # A dracut module must be in place BEFORE the initramfs is (re)built, or the
+    # already-built initramfs would ignore it — mark it pre-initramfs.
+    - local: files/90-custom.conf
+      final: /usr/lib/dracut/dracut.conf.d/90-custom.conf
+      stage: pre-initramfs
+```
+
+> **Overlay mode:** `additionalFiles` are honored in overlay builds, and each
+> entry's copy timing is controlled by its `stage` marker:
+>
+> - **`stage: ""` (default)** — copied as the **last** build step, after both
+>   initramfs and GRUB regeneration. This is the historical behavior, so existing
+>   templates are unaffected. It is deliberate: a prebuilt boot artifact (for
+>   example a custom `/boot/initrd.img-*`) dropped here survives, whereas a file
+>   placed before regeneration would be overwritten by `update-initramfs`.
+> - **`stage: pre-initramfs`** — copied **before** boot/initramfs regeneration, so
+>   content the generator consumes (a dracut module under `/usr/lib/dracut`, an
+>   initramfs-tools hook under `/etc/initramfs-tools/`) is in place when the
+>   initramfs is rebuilt. Without this, such a file dropped at the end would be
+>   ignored by the already-built initramfs.
+>
+> A file only needs `pre-initramfs` when the initramfs build must see it; a file
+> that must instead run a generator itself still belongs in a
+> [`systemConfig.configurations`](#systemconfigconfigurations) command.
+
+#### `systemConfig.configurations[]`
+
+Shell commands executed inside the chroot during the configuration stage.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `cmd` | string | Shell command to execute |
+
+```yaml
+systemConfig:
+  configurations:
+    - cmd: systemctl enable docker
+    - cmd: echo "BuildDate=$(date)" >> /etc/image-info
+```
+
+## Package Repositories
+
+Use `packageRepositories` to add extra Debian or RPM repositories to a build.
+Each entry defines where to fetch package metadata and how candidates are
+selected when the same package exists in multiple repositories.
+
+### Repository Fields
+
+- `codename`: repository identifier.
+- `url`: repository base URL.
+- `component`: optional Debian component (for example, `main`, `universe`) for multi-component repositories.
+- `pkey`: GPG key reference; supports `http://`/`https://` URLs, `file://` URLs, absolute local paths, or `[trusted=yes]` for supported Debian flows.
+- `priority`: numeric repository preference used in conflict resolution.
+- `allowPackages`: optional package white list for metadata filtering.
+
+### Priority Behavior
+
+`priority` is evaluated during package candidate selection across repositories.
+
+- Higher numeric values are preferred.
+- Debian resolver also supports APT-like behavior:
+  - `< 0`: block packages from that repository
+  - `990`: prefer over default repositories
+  - `1000`: install even if lower version
+  - `> 1000`: force preference
+
+When candidates have equivalent priority, version constraints and dependency
+context determine the final package choice.
+
+### AllowPackages White List
+
+`allowPackages` limits which package names are indexed from a specific
+repository.
+
+- If omitted or empty, all repository packages are eligible.
+- If present, only matching package names are indexed.
+- Supported matching modes:
+  - exact name (for example `spice-server`)
+  - prefix/version pin (for example `kernel-6.17.11`)
+  - glob patterns (for example `libva*`, `wayland*`)
+
+Filtering happens at metadata-parse time, before dependency resolution.
+
+---
+
+## Template Merge Behavior
+
+When your user template is merged with the default template, different sections
+follow different strategies:
+
+| Section | Strategy |
+|---------|----------|
+| `image.name`, `image.version` | User overrides default if non-empty |
+| `target` | User value used entirely |
+| `disk` | User replaces entire default if non-empty |
+| `systemConfig.packages` | **Additive** - user packages appended to defaults (deduplicated) |
+| `systemConfig.kernel` | User overrides `version`, `cmdline`, `packages` individually if non-empty |
+| `systemConfig.bootloader` | User overrides individual fields if non-empty |
+| `systemConfig.network` | User overrides `backend` if non-empty; `interfaces` replaced when provided |
+| `systemConfig.users` | Merged by `name` - same-name users merged field-by-field; new users appended |
+| `systemConfig.additionalFiles` | Merged by `final` path - same destination overrides; new files appended |
+| `systemConfig.configurations` | **Additive** - user commands appended after defaults |
+| `systemConfig.immutability` | Merged only if user explicitly provides the section |
+| `systemConfig.fde` | Merged only if user explicitly provides the section |
+| `packageRepositories` | Merged by `codename` - same codename overrides; new repos appended |
+
+## Template Extends (Inheritance)
+
+User templates can inherit from another template with the optional
+`extends:` field. This lets you keep minimal *delta* templates that pick up
+updates from their parent automatically, while still overriding anything
+you need to change. Each template inherits from **at most one** parent
+(single inheritance), so a chain is always a simple linear sequence
+`root → ... → leaf` — no diamond problem.
+
+### Syntax
+
+`extends:` is a top-level string field. Its value is a path to a parent
+template file, resolved **relative to the child template's directory**.
+`.yml` and `.yaml` are both accepted; symbolic links are not.
+
+The canonical two-level example ships in the repo at
+`image-templates/ubuntu24/ubuntu24-x86_64-extends-example-raw.yml`:
+
+```yaml
+# Inherit everything (disk layout, systemConfig, immutability, ...) from the
+# parent template, resolved relative to this file's directory. The parent's
+# target must match this template's target. Values below override or extend the
+# parent using the standard merge strategies (packages are additive).
+extends: "ubuntu24-x86_64-minimal-raw.yml"
+
+image:
+  name: ubuntu24-x86_64-extends-example
+  version: "24.04"
+
+target:
+  os: ubuntu # Must match the parent template's target
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+
+systemConfig:
+  name: Extends_Example
+  # These packages are merged additively on top of the parent's package list.
+  packages:
+    - htop
+    - curl
+```
+
+### Merge Behavior in a Chain
+
+The same per-section rules that govern the [user↔default merge
+above](#template-merge-behavior) apply at every level of an `extends`
+chain. Because `MergeConfigurations(child, parent)` is a pure function of
+two inputs, applying it iteratively as a fold produces the same set of
+merged fields at any depth: if the merge is deterministic for two
+layers, it is deterministic for N. Note that the ordering of slice
+entries merged by key (`systemConfig.users` by name, and
+`systemConfig.additionalFiles` by destination path) is not guaranteed to
+be stable across runs — the merge implementation uses a map to
+deduplicate keys, so the emitted slice order for those two fields may
+vary. Every other field's ordering is stable. The table below lists the
+full behavior across a chain:
+
+| Section | Rule (chain semantics) |
+|---------|------------------------|
+| `image.name`, `image.version` | Non-empty child value overrides; last non-empty level in the chain wins |
+| `target` | Replaced wholesale by the child's value (all four sub-fields together) |
+| `baseline` / `overlayPolicy` | Non-nil child pointer replaces the parent value |
+| `disk` | Wholesale replacement when the child provides a non-empty disk config |
+| `systemConfig.name` / `.description` / `.hostname` / `.initramfs.template` | Non-empty child overrides |
+| `systemConfig.packages` | **Additive union, deduplicated**; each level's packages are appended in chain order and de-duplicated |
+| `systemConfig.users` | Merged by `name`: same-name entries are field-level merged; new users included (slice order not guaranteed to be stable across runs) |
+| `systemConfig.additionalFiles` | Merged by `final` destination path: same target overrides; new files included (slice order not guaranteed to be stable across runs) |
+| `systemConfig.configurations` | **Additive concat**: appended in chain order (root first, leaf last), no deduplication |
+| `systemConfig.kernel` | Per-field override: `version`, `cmdline`, `packages`, `enableExtraModules` |
+| `systemConfig.bootloader` | Per-field override: `bootType`, `provider` |
+| `systemConfig.network` | Per-field: `backend` overrides if non-empty; `interfaces` replaced when the child provides them |
+| `systemConfig.immutability` | Merged only when the child provides some immutability configuration |
+| `packageRepositories` | Merged by `codename`: same codename overrides; new codenames appended |
+| `extends` | **Stripped from the final merged output** — it is a build-time directive, not part of the built template |
+
+The rules quoted above are the exact per-field strategies enforced by
+`MergeConfigurations` in `internal/config/merge.go`.
+
+> **Overlay mode caveat**: when the leaf template uses `baseline.mode:
+> overlay`, the additive-packages rule is deliberately overridden. The
+> merged package list becomes exactly the user's declared packages — the
+> baseline already ships the create-mode toolchain, and unioning it back
+> in would drag in bootloader packages whose strict version pins the
+> frozen baseline cannot satisfy.
+
+### Chain Resolution
+
+At load time, the resolver walks the chain from leaf to root and then
+folds it back in **root-to-leaf order** so leaf values have the highest
+precedence. Once the chain is folded, the OS defaults for the target
+distribution are applied underneath, producing the effective layering:
+
+```
+OS defaults → root template → intermediate levels → leaf template
+```
+
+Each successive level takes precedence over everything below it. The
+merge is applied pairwise: `fold(MergeConfigurations, defaults, [root,
+level1, ..., leaf])`.
+
+The build command logs the resolved chain at info level so you can see
+the inheritance hierarchy directly in build output:
+
+```
+Extends chain: root.yml -> child.yml -> leaf.yml
+```
+
+**Worked example.** Consider three templates where the leaf declares
+`packages: [my-custom-app]`, the middle level declares `packages:
+[prometheus-node-exporter, grafana-agent]`, the root declares `packages:
+[docker-cli, containerd]`, and the OS defaults declare
+`packages: [openssh-server]`. The final merged template's package list
+is the union: `openssh-server, docker-cli, containerd,
+prometheus-node-exporter, grafana-agent, my-custom-app` (deduplicated,
+default order preserved). If any two levels also set `kernel.version`,
+the last non-empty value in the chain wins.
+
+### Limitations and Validation Rules
+
+- **Single inheritance.** Each template may reference at most one parent
+  via `extends:`. Multiple inheritance and diamond-shaped graphs are not
+  supported.
+- **Cycle detection.** The resolver walks the chain with a visited-set
+  keyed on the symlink-resolved canonical absolute path of each
+  template. Any repeat is rejected with
+  `circular extends detected: A -> B -> A`. Canonicalizing the path
+  ensures a directory symlink cannot alias two textual paths to the same
+  file and evade the check.
+- **Target match.** Every template in the chain must share the same
+  `target.os`, `target.dist`, `target.arch`, and `target.imageType`. A
+  mismatch at any level is rejected with
+  `extends target mismatch at level N: child targets os/dist/arch/imageType but parent targets ...`.
+- **Depth warning.** Chains that exceed 4 levels emit
+  `extends chain depth N exceeds recommended maximum of 4` as a
+  warning. This is a soft cap intended to keep hierarchies maintainable
+  — the build still succeeds.
+- **Path containment.** The parent path is resolved relative to the
+  child template's directory. Both a lexical guard and a
+  symlink-resolved guard reject any path that escapes that directory
+  (`extends path escapes child template's directory: ...`), so a parent
+  cannot pull a template in from an unrelated location on disk.
+- **Symlink rejection.** Parent templates that are themselves symbolic
+  links are rejected at load time, matching the same policy the CLI uses
+  for the leaf template.
+- **File extension.** Only `.yml` and `.yaml` extensions are accepted;
+  other extensions are rejected.
+- **Schema.** `extends:` is defined as a plain optional string in
+  `os-image-template.schema.json` with no `pattern` or `format`
+  constraint — all validation happens in Go at load time so the errors
+  above carry more context than a schema violation would.
+- **Output stripping.** The `extends:` field is stripped from the final
+  merged template because it is a build-time directive, not part of the
+  built image's declarative state.
+
+### Debugging an Extends Chain
+
+The `resolve` subcommand renders a template exactly as the build system
+sees it after the chain is folded:
+
+```bash
+# Chain-only merge, without OS defaults (useful for verifying inheritance)
+image-composer-tool resolve image-templates/ubuntu24/ubuntu24-x86_64-extends-example-raw.yml
+
+# Full build-time view: OS defaults as base, extends chain folded on top (leaf wins)
+image-composer-tool resolve image-templates/ubuntu24/ubuntu24-x86_64-extends-example-raw.yml --full
+```
+
+The output includes the merged `systemConfig.packages` union and every
+other field as it would be used at build time. Sensitive fields (user
+passwords, `hash_algo` values, and secure-boot key/cert paths) are
+redacted so the output is safe to paste into an issue or a code review.
+See [Resolve Command](./image-composer-tool-cli-specification.md#resolve-command)
+for the full CLI reference.
+
+### Advanced Mode's Use of Extends
+
+The web UI's Advanced tab applies its Image Name override by generating a
+small `extends` delta over the matched curated template, rather than rewriting
+the curated file or inventing a separate override mechanism. For a selection
+with an override, `POST /templates/compose` and `POST /builds` both:
+
+1. Look up the matched curated template via the manifest, exactly as Basic
+   mode does.
+2. Generate a delta (`extends: <curated template>`, restating `image`/`target`
+   with the override applied) and write it into the templates directory under
+   a server-generated name (`.ict-adv-<uuid>.yml`, gitignored).
+3. Resolve or build that delta instead of the curated file.
+4. Remove the generated delta once it is no longer needed — immediately after
+   a compose response, or once a build finishes (a self-contained copy of the
+   resolved template is archived to the build's directory first, so the
+   per-build template download keeps working after the delta is gone).
+
+The delta must live in the templates directory (or an ancestor of it) because
+of the path containment rule above — a parent must resolve at or below the
+child's own directory, so a generated child cannot reference a curated parent
+from anywhere else, such as a per-build work directory.
+
+Consequently, `POST /templates/compose`'s `yaml` field is **not** the curated
+template's bytes verbatim (as it is for Basic mode's own preview) — it is the
+fully resolved template, equivalent to running `resolve --full` against
+whichever file (curated or delta) was actually resolved. This guarantees the
+template shown in the Review step and the template a build runs are always the
+same file, merged the same way.
+
+See [ADR: Advanced mode template modification via
+extends](../../architecture-decision-record/adr-web-ui-advanced-mode-extends.md)
+for the full design rationale, including why an image-type override is not
+supported the same way.
+
+### See Also
+
+- [ADR: template `extends`](../../architecture-decision-record/adr-template-extends.md) — design rationale and full validation matrix
+- [ADR: Advanced mode template modification via extends](../../architecture-decision-record/adr-web-ui-advanced-mode-extends.md) — how the web UI applies overrides through a generated delta
+- [Resolve Command](./image-composer-tool-cli-specification.md#resolve-command) — CLI reference for `image-composer-tool resolve`
+- [Template Merge Behavior](#template-merge-behavior) — the two-layer user↔default merge rules an extends chain reuses at every level
+
+## Variable Substitution
+
+Templates support variable substitution using `${variable_name}` syntax. You
+can provide variable values via a separate YAML file or command-line flags at
+build time.
+
+To learn how variables interact with each build stage, see
+[Build Stages in Detail](./image-composer-tool-build-process.md#build-stages-in-detail).
+
+## WSL Required Fields
+
+To compose a WSL-compatible image, set `target.imageType: wsl2` and include a
+WSL-compatible `disk` artifact definition.
+
+| Field | Required for WSL | Requirement |
+|-------|------------------|-------------|
+| `image.name` | **Yes** | Standard image identifier |
+| `image.version` | **Yes** | Standard image version |
+| `target.os` | **Yes** | Any supported OS/distribution with a WSL2 default template |
+| `target.dist` | **Yes** | Distribution for the selected OS (for example, `ubuntu24`) |
+| `target.arch` | **Yes** | Use `x86_64` for current WSL2 templates |
+| `target.imageType` | **Yes** | Must be `wsl2` |
+| `disk.name` | **Yes** | Required when `imageType: wsl2` |
+| `disk.artifacts[].type` | **Yes** | Must be `tar` |
+| `disk.artifacts[].compression` | **Yes** | Must be `gz` |
+
+Additional notes for WSL builds:
+
+- The default Ubuntu WSL template seeds the standard Ubuntu apt sources via
+  `systemConfig.additionalFiles` (for example, `ubuntu-noble.list`), which is
+  the same mechanism used by the raw and initrd defaults.
+- `disk.partitionTableType` and `disk.partitions` are not used for `wsl2` templates.
+- `systemConfig.kernel` is not allowed for `wsl2` templates.
+
+Example `disk` block for WSL:
+
+```yaml
+disk:
+  name: ubuntu24-x86_64-agentic
+  artifacts:
+    - type: tar
+      compression: gz
+```
+
+See the full end-to-end example at
+[`image-templates/ubuntu24/ubuntu24-x86_64-agentic-wsl2.yml`](../../image-templates/ubuntu24/ubuntu24-x86_64-agentic-wsl2.yml).
+
+## Best Practices
+
+1. **Start from examples** - copy a template from `image-templates/` and modify
+   only the fields you need. Let defaults handle the rest.
+2. **Keep templates minimal** - override only what differs from the default.
+   Smaller templates are easier to maintain and review.
+3. **Use descriptive names** - name images and configs after their purpose
+   (e.g., `factory-floor-edge`, not `test-image-3`).
+4. **Version control your templates** - store them in Git alongside your
+   deployment code.
+5. **Validate before building** - run `image-composer-tool validate template.yml`
+   to catch errors early.
+6. **Prefer `additionalFiles` over `configurations`** - copying config files is
+   more reproducible than running arbitrary shell commands.
+
+## Related Documentation
+
+- [Understanding the Build Process](./image-composer-tool-build-process.md)
+- [Multiple Package Repository Support](./image-composer-tool-multi-repo-support.md)
+- [ICT CLI Reference](./image-composer-tool-cli-specification.md)
+- [Common Build Patterns](./image-composer-tool-build-process.md#common-build-patterns)
+
+<!--hide_directive
+:::{toctree}
+:hidden:
+
+image-composer-tool-multi-repo-support
+:::
+hide_directive-->

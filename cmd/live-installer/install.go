@@ -418,6 +418,16 @@ func createNewBootEntry(template *config.ImageTemplate, diskPathIdMap map[string
 	return nil
 }
 
+func hydrateSBOMMetadataForInstaller(template *config.ImageTemplate) {
+	if template == nil {
+		return
+	}
+
+	if len(template.FullPkgListBom) == 0 && len(template.SBOMPackageMetadata) > 0 {
+		template.FullPkgListBom = template.SBOMPackageMetadata
+	}
+}
+
 func unattendedInstall(templateFile, localRepo string) error {
 	templateDir := filepath.Dir(templateFile)
 	configDir := filepath.Join(templateDir, "..", "..", "..", "..", "..")
@@ -430,6 +440,7 @@ func unattendedInstall(templateFile, localRepo string) error {
 	if err != nil {
 		return fmt.Errorf("failed to load template: %w", err)
 	}
+	hydrateSBOMMetadataForInstaller(template)
 	log.Infof("Loaded template: %s (type: %s)", template.Image.Name, template.Target.ImageType)
 
 	return install(template, configDir, localRepo)
@@ -447,6 +458,7 @@ func attendedInstall(templateFile, localRepo string) (installationQuit bool, err
 	if err != nil {
 		return false, fmt.Errorf("failed to load template: %w", err)
 	}
+	hydrateSBOMMetadataForInstaller(template)
 	log.Infof("Loaded template: %s (type: %s)", template.Image.Name, template.Target.ImageType)
 
 	attendedInstaller, err := attendedinstaller.New(template, configDir, localRepo, install)

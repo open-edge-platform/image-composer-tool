@@ -1076,7 +1076,7 @@ func TestUbuntuBuildImageUnsupportedType(t *testing.T) {
 func TestUbuntuBuildImageValidTypes(t *testing.T) {
 	ubuntu := &ubuntu{}
 
-	validTypes := []string{"raw", "img", "iso"}
+	validTypes := []string{"raw", "img", "iso", "wsl2"}
 
 	for _, imageType := range validTypes {
 		t.Run(imageType, func(t *testing.T) {
@@ -2351,7 +2351,7 @@ func TestUbuntuBuildImageAllTypes(t *testing.T) {
 		chrootEnv: &mockChrootEnv{},
 	}
 
-	imageTypes := []string{"raw", "img", "iso"}
+	imageTypes := []string{"raw", "img", "iso", "wsl2"}
 
 	for _, imgType := range imageTypes {
 		t.Run(imgType, func(t *testing.T) {
@@ -2567,5 +2567,17 @@ func TestBuildUserRepoListSkipsPathOnlyRepos(t *testing.T) {
 	}
 	if result[0].Codename != "noble" {
 		t.Errorf("expected codename %q, got %q", "noble", result[0].Codename)
+	}
+}
+
+// TestUbuntuOverlayCapable asserts the provider advertises overlay support via
+// provider.OverlayCapable, which is what build's capability gate probes before
+// letting an overlay-mode template through.
+func TestUbuntuOverlayCapable(t *testing.T) {
+	var _ provider.OverlayCapable = (*ubuntu)(nil) // Compile-time capability check
+
+	u := &ubuntu{}
+	if !provider.SupportsOverlay(u, "ubuntu24", "amd64") {
+		t.Error("Expected ubuntu provider to report overlay support")
 	}
 }
