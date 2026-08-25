@@ -422,4 +422,4 @@ systemConfig:
 - [Image Templates](../architecture/image-composer-tool-templates.md)
 - [Build Process](../architecture/image-composer-tool-build-process.md)
 - [Installation Guide](./installation.md)
-- [Edge Microvisor Toolkit](https://docs.openedgeplatform.intel.com/2026.0/edge-microvisor-toolkit/index.html)
+- [Edge Microvisor Toolkit](https://docs.openedgeplatform.intel.com/2026.2/edge-microvisor-toolkit/index.html)

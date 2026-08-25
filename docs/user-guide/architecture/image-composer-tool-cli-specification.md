@@ -42,7 +42,7 @@
 `image-composer-tool` is a command-line tool for generating custom images for
 different operating systems, including
 Azure Linux, Wind River eLxr, RCD, and
-[Edge Microvisor Toolkit](https://docs.openedgeplatform.intel.com/2026.0/edge-microvisor-toolkit/index.html).
+[Edge Microvisor Toolkit](https://docs.openedgeplatform.intel.com/2026.2/edge-microvisor-toolkit/index.html).
 The tool provides a flexible approach to creating and configuring
 production-ready OS images with precise customization.
 
