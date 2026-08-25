@@ -1,9 +1,15 @@
 package config
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/slice"
 )
 
 func TestNewDefaultConfigLoader(t *testing.T) {
@@ -96,6 +102,132 @@ func TestMergeConfigurationsImageInfo(t *testing.T) {
 	if result.Target.OS != "azure-linux" {
 		t.Errorf("expected target OS 'azure-linux', got '%s'", result.Target.OS)
 	}
+}
+
+func TestMergeConfigurationsBaseline(t *testing.T) {
+	// A user-provided overlay baseline must survive the merge even when the
+	// default template has none; otherwise the build silently falls back to
+	// create mode and ignores the overlay request.
+	t.Run("user overlay baseline overrides nil default", func(t *testing.T) {
+		defaultTemplate := &ImageTemplate{
+			Image:  ImageInfo{Name: "default", Version: "1.0.0"},
+			Target: TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64"},
+		}
+		userTemplate := &ImageTemplate{
+			Image:  ImageInfo{Name: "user", Version: "2.0.0"},
+			Target: TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64"},
+			Baseline: &Baseline{
+				Mode:   BaselineModeOverlay,
+				Source: &BaselineSource{Path: "/tmp/u.raw"},
+			},
+		}
+
+		result, err := MergeConfigurations(userTemplate, defaultTemplate)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Baseline == nil {
+			t.Fatal("expected merged baseline to be preserved, got nil")
+		}
+		if !result.IsOverlayMode() {
+			t.Errorf("expected merged template to be overlay mode, got mode=%q", result.Baseline.Mode)
+		}
+		if result.Baseline.Source == nil || result.Baseline.Source.Path != "/tmp/u.raw" {
+			t.Errorf("expected baseline source path '/tmp/u.raw', got %+v", result.Baseline.Source)
+		}
+	})
+
+	t.Run("default baseline retained when user provides none", func(t *testing.T) {
+		defaultTemplate := &ImageTemplate{
+			Image:    ImageInfo{Name: "default", Version: "1.0.0"},
+			Target:   TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64"},
+			Baseline: &Baseline{Mode: BaselineModeCreate},
+		}
+		userTemplate := &ImageTemplate{
+			Image:  ImageInfo{Name: "user", Version: "2.0.0"},
+			Target: TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64"},
+		}
+
+		result, err := MergeConfigurations(userTemplate, defaultTemplate)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Baseline == nil || result.Baseline.Mode != BaselineModeCreate {
+			t.Errorf("expected default baseline (create) to be retained, got %+v", result.Baseline)
+		}
+	})
+}
+
+// TestMergeConfigurationsOverlayPackages is the regression for the overlay build
+// that resolved a full create-mode boot toolchain (systemd-boot, dracut-core,
+// cryptsetup-bin, …) even though the user template requested only "tree". The
+// create-mode default template's package list must NOT be unioned into an overlay
+// template's additive package set — the baseline already provides those packages,
+// and re-seeding them drags in bootloader packages whose strict version pins the
+// frozen baseline cannot satisfy.
+func TestMergeConfigurationsOverlayPackages(t *testing.T) {
+	defaultTemplate := &ImageTemplate{
+		Image:  ImageInfo{Name: "default", Version: "1.0.0"},
+		Target: TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64"},
+		SystemConfig: SystemConfig{
+			Name:     "default",
+			Packages: []string{"ubuntu-minimal", "systemd-boot", "dracut-core", "cryptsetup-bin"},
+		},
+	}
+
+	t.Run("overlay layer merge is additive (parent packages inherited)", func(t *testing.T) {
+		// MergeConfigurations is the per-LAYER primitive used to fold a user's extends
+		// chain (parent -> overlay leaf), so its second argument here is a PARENT USER
+		// layer, not the OS default. Package inheritance across user layers is additive,
+		// so a parent's package must survive into an overlay leaf — a regression here is
+		// the "overlay extends drops inherited packages" bug. The OS-default exclusion is
+		// enforced structurally in LoadAndMergeTemplate (see
+		// TestLoadAndMergeTemplate_OverlaySkipsOSDefault), not by suppressing packages in
+		// this layer merge.
+		parentUserLayer := &ImageTemplate{
+			Image:        ImageInfo{Name: "parent", Version: "1.0.0"},
+			Target:       TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64"},
+			SystemConfig: SystemConfig{Name: "parent", Packages: []string{"curl"}},
+		}
+		overlayLeaf := &ImageTemplate{
+			Image:  ImageInfo{Name: "user", Version: "2.0.0"},
+			Target: TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64"},
+			Baseline: &Baseline{
+				Mode:   BaselineModeOverlay,
+				Source: &BaselineSource{Path: "/tmp/u.raw"},
+			},
+			SystemConfig: SystemConfig{Name: "overlay", Packages: []string{"tree"}},
+		}
+
+		result, err := MergeConfigurations(overlayLeaf, parentUserLayer)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !slice.Contains(result.SystemConfig.Packages, "curl") ||
+			!slice.Contains(result.SystemConfig.Packages, "tree") {
+			t.Errorf("overlay layer merge must inherit the parent's packages additively, got %v (want both curl and tree)",
+				result.SystemConfig.Packages)
+		}
+	})
+
+	t.Run("create mode still unions default and user packages", func(t *testing.T) {
+		userTemplate := &ImageTemplate{
+			Image:        ImageInfo{Name: "user", Version: "2.0.0"},
+			Target:       TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64"},
+			SystemConfig: SystemConfig{Name: "create", Packages: []string{"tree"}},
+		}
+
+		result, err := MergeConfigurations(userTemplate, defaultTemplate)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		// Create mode is unchanged: the default base packages are still merged in.
+		if !slice.Contains(result.SystemConfig.Packages, "systemd-boot") ||
+			!slice.Contains(result.SystemConfig.Packages, "tree") {
+			t.Errorf("create merged packages = %v, want default base packages unioned with user's tree",
+				result.SystemConfig.Packages)
+		}
+	})
 }
 
 func TestMergeConfigurationsPathList(t *testing.T) {
@@ -457,30 +589,53 @@ func TestMergeKernelConfig(t *testing.T) {
 
 func TestMergePackageRepositoriesDetailed(t *testing.T) {
 	defaultRepos := []PackageRepository{
-		{Codename: "main", URL: "http://default.com/main"},
+		{Codename: "main", URL: "http://default.com/main", Component: "main"},
 		{Codename: "universe", URL: "http://default.com/universe"},
 	}
 
 	userRepos := []PackageRepository{
-		{Codename: "main", URL: "http://user.com/main"},     // Override by codename
-		{Codename: "extras", URL: "http://user.com/extras"}, // Add new
+		{Codename: "main", URL: "http://default.com/main", Component: "restricted"}, // Same codename+url: override in place
+		{Codename: "main", URL: "http://user.com/main"},                             // Same codename, different url: coexists
+		{Codename: "extras", URL: "http://user.com/extras"},                         // New codename: appended
 	}
 
 	merged := mergePackageRepositories(defaultRepos, userRepos)
 
-	// User repos are appended to defaults; matching codenames override defaults
-	if len(merged) != 3 {
-		t.Errorf("expected 3 repositories (default universe + user main override + user extras appended), got %d", len(merged))
+	// (codename, url) is the merge key: the same-url "main" overrides in place,
+	// the different-url "main" is added alongside it, and "extras" is appended.
+	if len(merged) != 4 {
+		t.Errorf("expected 4 repositories (universe + main override + second main + extras), got %d", len(merged))
+	}
+
+	// The default "main" (same codename+url) must be overridden, not duplicated.
+	var defaultMain *PackageRepository
+	mainURLs := make(map[string]bool)
+	for i := range merged {
+		if merged[i].Codename == "main" {
+			mainURLs[merged[i].URL] = true
+			if merged[i].URL == "http://default.com/main" {
+				defaultMain = &merged[i]
+			}
+		}
+	}
+
+	// Both "main" URLs should be present (same-codename repos coexist).
+	if !mainURLs["http://default.com/main"] || !mainURLs["http://user.com/main"] {
+		t.Errorf("expected both main URLs to be present, got %v", mainURLs)
+	}
+	if defaultMain == nil {
+		t.Fatalf("expected default-url main repo to be present")
+	}
+	// The matching (codename+url) user repo overrides other fields.
+	if defaultMain.Component != "restricted" {
+		t.Errorf("expected default main component overridden to 'restricted', got '%s'", defaultMain.Component)
 	}
 
 	repoMap := make(map[string]string)
 	for _, repo := range merged {
-		repoMap[repo.Codename] = repo.URL
-	}
-
-	// main should be overridden by user
-	if repoMap["main"] != "http://user.com/main" {
-		t.Errorf("expected main repo to be from user, got '%s'", repoMap["main"])
+		if repo.Codename != "main" {
+			repoMap[repo.Codename] = repo.URL
+		}
 	}
 
 	// extras should be appended from user
@@ -491,6 +646,49 @@ func TestMergePackageRepositoriesDetailed(t *testing.T) {
 	// universe should still be present from defaults
 	if repoMap["universe"] != "http://default.com/universe" {
 		t.Errorf("expected universe repo from defaults, got '%s'", repoMap["universe"])
+	}
+}
+
+// TestMergePackageRepositoriesPathBased verifies that local/path-based repos
+// (url empty, path set) merge on (codename, path) just as remote repos merge on
+// (codename, url): same path overrides in place, a different path coexists.
+func TestMergePackageRepositoriesPathBased(t *testing.T) {
+	defaultRepos := []PackageRepository{
+		{Codename: "local", Path: "/srv/repo-a", Component: "main"},
+		{Codename: "local", Path: "/srv/repo-b"},
+	}
+
+	userRepos := []PackageRepository{
+		{Codename: "local", Path: "/srv/repo-a", Component: "restricted"}, // Same codename+path: override in place
+		{Codename: "local", Path: "/srv/repo-c"},                          // Same codename, different path: coexists
+	}
+
+	merged := mergePackageRepositories(defaultRepos, userRepos)
+
+	// repo-a is overridden in place; repo-b is preserved; repo-c is appended.
+	if len(merged) != 3 {
+		t.Fatalf("expected 3 repositories (repo-a override + repo-b + repo-c), got %d", len(merged))
+	}
+
+	paths := make(map[string]string) // path -> component
+	for _, repo := range merged {
+		if repo.Codename != "local" {
+			t.Errorf("unexpected codename %q", repo.Codename)
+		}
+		paths[repo.Path] = repo.Component
+	}
+
+	// Same (codename, path) must override, not duplicate.
+	if paths["/srv/repo-a"] != "restricted" {
+		t.Errorf("expected repo-a component overridden to 'restricted', got '%s'", paths["/srv/repo-a"])
+	}
+	// Untouched default path preserved.
+	if _, ok := paths["/srv/repo-b"]; !ok {
+		t.Errorf("expected repo-b to be preserved from defaults")
+	}
+	// Different path coexists rather than colliding on the empty URL.
+	if _, ok := paths["/srv/repo-c"]; !ok {
+		t.Errorf("expected repo-c to be appended from user")
 	}
 }
 
@@ -531,6 +729,12 @@ func TestIsEmptyDiskConfig(t *testing.T) {
 	diskWithPolicy := DiskConfig{SelectionPolicy: DiskSelectionPolicy{Strategy: "largest"}}
 	if isEmptyDiskConfig(diskWithPolicy) {
 		t.Errorf("disk config with selection policy should not be empty")
+	}
+
+	// Test non-empty disk config with extend-last-partition option
+	diskWithExtendLast := DiskConfig{ExtendLastPartitionToFillDisk: true}
+	if isEmptyDiskConfig(diskWithExtendLast) {
+		t.Errorf("disk config with extendLastPartitionToFillDisk should not be empty")
 	}
 }
 
@@ -636,6 +840,377 @@ systemConfig:
 	// If it succeeds, verify the basic structure
 	if result.Image.Name != "test-merge" {
 		t.Errorf("expected image name 'test-merge', got '%s'", result.Image.Name)
+	}
+}
+
+// TestLoadAndMergeTemplate_OverlaySkipsOSDefault verifies that an overlay-mode
+// template does NOT inherit the create-mode OS default configuration: the default
+// disk.size / partitions / bootloader / base packages describe a build-from-scratch
+// image, and applying them to an overlay is wrong (most visibly, the default's
+// disk.size would trip the grow-only shrink guard against a larger baseline). A
+// create-mode template with the same target must still inherit the default.
+//
+// It points ConfigDir at the real repo config tree (../../config, relative to this
+// package's test working directory) so it exercises the actual ubuntu24 default
+// that carries `size: 6GiB`.
+func TestLoadAndMergeTemplate_OverlaySkipsOSDefault(t *testing.T) {
+	repoConfig, err := filepath.Abs(filepath.Join("..", "..", "config"))
+	if err != nil {
+		t.Fatalf("resolve repo config dir: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repoConfig, "osv", "ubuntu", "ubuntu24", "imageconfigs", "defaultconfigs", "default-raw-x86_64.yml")); err != nil {
+		t.Skipf("ubuntu24 default config not found (%v); skipping", err)
+	}
+
+	prev := Global()
+	cfg := *prev
+	cfg.ConfigDir = repoConfig
+	SetGlobal(&cfg)
+	defer SetGlobal(prev)
+
+	writeTemplate := func(t *testing.T, overlay bool) string {
+		t.Helper()
+		dir := t.TempDir()
+		p := filepath.Join(dir, "tmpl.yml")
+		var b strings.Builder
+		b.WriteString("image:\n  name: t\n  version: \"1.0\"\n")
+		b.WriteString("target:\n  os: ubuntu\n  dist: ubuntu24\n  arch: x86_64\n  imageType: raw\n")
+		if overlay {
+			b.WriteString("baseline:\n  mode: overlay\n  source:\n    path: /tmp/baseline.raw\n")
+		}
+		b.WriteString("systemConfig:\n  name: t\n  packages:\n    - tree\n")
+		if err := os.WriteFile(p, []byte(b.String()), 0o644); err != nil {
+			t.Fatalf("write template: %v", err)
+		}
+		return p
+	}
+
+	t.Run("overlay does not inherit the default disk.size", func(t *testing.T) {
+		merged, err := LoadAndMergeTemplate(writeTemplate(t, true))
+		if err != nil {
+			t.Fatalf("LoadAndMergeTemplate (overlay): %v", err)
+		}
+		if !merged.IsOverlayMode() {
+			t.Fatalf("expected overlay mode, got baseline=%+v", merged.Baseline)
+		}
+		// The default sets disk.size: 6GiB; an overlay must NOT inherit it.
+		if merged.Disk.Size != "" {
+			t.Errorf("overlay must not inherit the OS default disk.size, got %q", merged.Disk.Size)
+		}
+		// Nor the default's build-from-scratch partitions/bootloader/base packages.
+		if len(merged.Disk.Partitions) != 0 {
+			t.Errorf("overlay must not inherit default partitions, got %d", len(merged.Disk.Partitions))
+		}
+		if merged.SystemConfig.Bootloader.Provider != "" {
+			t.Errorf("overlay must not inherit default bootloader, got %q", merged.SystemConfig.Bootloader.Provider)
+		}
+		if hasPackage(merged.SystemConfig.Packages, "ubuntu-minimal") {
+			t.Errorf("overlay must not inherit the default base package set, got %v", merged.SystemConfig.Packages)
+		}
+		// The user's own overlay package is preserved.
+		if !hasPackage(merged.SystemConfig.Packages, "tree") {
+			t.Errorf("expected the user's overlay package 'tree', got %v", merged.SystemConfig.Packages)
+		}
+	})
+
+	t.Run("create mode still inherits the default disk.size", func(t *testing.T) {
+		merged, err := LoadAndMergeTemplate(writeTemplate(t, false))
+		if err != nil {
+			t.Fatalf("LoadAndMergeTemplate (create): %v", err)
+		}
+		if merged.IsOverlayMode() {
+			t.Fatal("expected create mode")
+		}
+		if merged.Disk.Size != "6GiB" {
+			t.Errorf("create mode should inherit the default disk.size 6GiB, got %q", merged.Disk.Size)
+		}
+		// Create mode unions the default base packages with the user's.
+		if !hasPackage(merged.SystemConfig.Packages, "ubuntu-minimal") {
+			t.Errorf("create mode should inherit the default base packages, got %v", merged.SystemConfig.Packages)
+		}
+	})
+}
+
+// TestLoadAndMergeTemplate_OverlayRejectsFoldedUnsupportedSection verifies the
+// re-validation of the MERGED overlay template: each layer is validated in
+// isolation before merging, so a create-mode PARENT that declares a systemConfig
+// section an overlay cannot apply (e.g. hostname) folds into an overlay leaf
+// without either layer failing on its own. The merged result must be rejected
+// rather than silently dropping the section at build time.
+func TestLoadAndMergeTemplate_OverlayRejectsFoldedUnsupportedSection(t *testing.T) {
+	dir := t.TempDir()
+
+	// Parent: a plain (create-mode) template that declares systemConfig.hostname
+	// (an overlay-unsupported section; note users ARE supported in overlay).
+	parentPath := filepath.Join(dir, "parent.yml")
+	parent := "image:\n  name: parent\n  version: \"1.0\"\n" +
+		"target:\n  os: ubuntu\n  dist: ubuntu24\n  arch: x86_64\n  imageType: raw\n" +
+		"systemConfig:\n  name: parent\n  hostname: myhost\n"
+	if err := os.WriteFile(parentPath, []byte(parent), 0o644); err != nil {
+		t.Fatalf("write parent: %v", err)
+	}
+
+	// Leaf: an overlay-mode template extending the parent. Neither layer fails in
+	// isolation (create-mode parent may set hostname; overlay leaf sets none), but
+	// the merged overlay inherits the parent's hostname section.
+	leafPath := filepath.Join(dir, "leaf.yml")
+	leaf := "extends: \"parent.yml\"\n" +
+		"image:\n  name: leaf\n  version: \"1.0\"\n" +
+		"target:\n  os: ubuntu\n  dist: ubuntu24\n  arch: x86_64\n  imageType: raw\n" +
+		"baseline:\n  mode: overlay\n  source:\n    path: /tmp/baseline.raw\n" +
+		"systemConfig:\n  name: leaf\n  packages:\n    - tree\n"
+	if err := os.WriteFile(leafPath, []byte(leaf), 0o644); err != nil {
+		t.Fatalf("write leaf: %v", err)
+	}
+
+	_, err := LoadAndMergeTemplate(leafPath)
+	if err == nil {
+		t.Fatal("expected the merged overlay to be rejected for the folded-in hostname section")
+	}
+	if !strings.Contains(err.Error(), "invalid") && !strings.Contains(err.Error(), "hostname") {
+		t.Errorf("error should name the merged-overlay validation failure, got %v", err)
+	}
+}
+
+// TestLoadAndMergeTemplate_OverlayExtendsInheritsParentPackages verifies the
+// end-to-end fix for the "overlay extends drops inherited packages" bug: an overlay
+// leaf that extends a parent declaring `curl` and itself declaring `tree` must
+// resolve to BOTH packages (user-to-user package inheritance is additive), while
+// still not inheriting any create-mode OS-default package.
+func TestLoadAndMergeTemplate_OverlayExtendsInheritsParentPackages(t *testing.T) {
+	dir := t.TempDir()
+
+	parentPath := filepath.Join(dir, "parent.yml")
+	parent := "image:\n  name: parent\n  version: \"1.0\"\n" +
+		"target:\n  os: ubuntu\n  dist: ubuntu24\n  arch: x86_64\n  imageType: raw\n" +
+		"systemConfig:\n  name: parent\n  packages:\n    - curl\n"
+	if err := os.WriteFile(parentPath, []byte(parent), 0o644); err != nil {
+		t.Fatalf("write parent: %v", err)
+	}
+
+	leafPath := filepath.Join(dir, "leaf.yml")
+	leaf := "extends: \"parent.yml\"\n" +
+		"image:\n  name: leaf\n  version: \"1.0\"\n" +
+		"target:\n  os: ubuntu\n  dist: ubuntu24\n  arch: x86_64\n  imageType: raw\n" +
+		"baseline:\n  mode: overlay\n  source:\n    path: /tmp/baseline.raw\n" +
+		"systemConfig:\n  name: leaf\n  packages:\n    - tree\n"
+	if err := os.WriteFile(leafPath, []byte(leaf), 0o644); err != nil {
+		t.Fatalf("write leaf: %v", err)
+	}
+
+	merged, err := LoadAndMergeTemplate(leafPath)
+	if err != nil {
+		t.Fatalf("LoadAndMergeTemplate (overlay extends): %v", err)
+	}
+	if !merged.IsOverlayMode() {
+		t.Fatalf("expected overlay mode, got baseline=%+v", merged.Baseline)
+	}
+	if !hasPackage(merged.SystemConfig.Packages, "curl") {
+		t.Errorf("overlay leaf must inherit the parent's 'curl' package, got %v", merged.SystemConfig.Packages)
+	}
+	if !hasPackage(merged.SystemConfig.Packages, "tree") {
+		t.Errorf("overlay leaf must keep its own 'tree' package, got %v", merged.SystemConfig.Packages)
+	}
+}
+
+// writeExtendsTemplate writes a template that may declare an extends parent and a
+// list of system-config packages, for exercising the iterative extends fold.
+func writeExtendsTemplate(t *testing.T, path, imageName, extends string, target TargetInfo, packages []string) {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("failed to create template directory: %v", err)
+	}
+
+	var b strings.Builder
+	if extends != "" {
+		b.WriteString("extends: \"" + extends + "\"\n")
+	}
+	b.WriteString("image:\n")
+	b.WriteString("  name: " + imageName + "\n")
+	b.WriteString("  version: \"1.0.0\"\n")
+	b.WriteString("target:\n")
+	b.WriteString("  os: " + target.OS + "\n")
+	b.WriteString("  dist: " + target.Dist + "\n")
+	b.WriteString("  arch: " + target.Arch + "\n")
+	b.WriteString("  imageType: " + target.ImageType + "\n")
+	b.WriteString("systemConfig:\n")
+	b.WriteString("  name: " + imageName + "-config\n")
+	if len(packages) > 0 {
+		b.WriteString("  packages:\n")
+		for _, pkg := range packages {
+			b.WriteString("    - " + pkg + "\n")
+		}
+	}
+
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		t.Fatalf("failed to write template %s: %v", path, err)
+	}
+}
+
+func hasPackage(packages []string, want string) bool {
+	for _, pkg := range packages {
+		if pkg == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestLoadAndMergeTemplateSingleExtends(t *testing.T) {
+	dir := t.TempDir()
+	target := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+
+	rootPath := filepath.Join(dir, "root.yml")
+	leafPath := filepath.Join(dir, "leaf.yml")
+	writeExtendsTemplate(t, rootPath, "root", "", target, []string{"root-pkg"})
+	writeExtendsTemplate(t, leafPath, "leaf", "root.yml", target, []string{"leaf-pkg"})
+
+	result, err := LoadAndMergeTemplate(leafPath)
+	if err != nil {
+		t.Fatalf("LoadAndMergeTemplate() error = %v", err)
+	}
+
+	// Leaf wins for identity fields.
+	if result.Image.Name != "leaf" {
+		t.Errorf("Image.Name = %q, want leaf", result.Image.Name)
+	}
+	// Packages from both layers are present (additive merge).
+	if !hasPackage(result.SystemConfig.Packages, "root-pkg") {
+		t.Errorf("packages %v missing root-pkg", result.SystemConfig.Packages)
+	}
+	if !hasPackage(result.SystemConfig.Packages, "leaf-pkg") {
+		t.Errorf("packages %v missing leaf-pkg", result.SystemConfig.Packages)
+	}
+	// Extends is a build-time directive and must not survive into the merged result.
+	if result.Extends != "" {
+		t.Errorf("Extends = %q, want empty after merge", result.Extends)
+	}
+}
+
+func TestResolveAndMergeExtendsChainValid(t *testing.T) {
+	dir := t.TempDir()
+	target := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+
+	rootPath := filepath.Join(dir, "root.yml")
+	midPath := filepath.Join(dir, "mid.yml")
+	leafPath := filepath.Join(dir, "leaf.yml")
+	writeExtendsTemplate(t, rootPath, "root", "", target, []string{"root-pkg"})
+	writeExtendsTemplate(t, midPath, "mid", "root.yml", target, []string{"mid-pkg"})
+	writeExtendsTemplate(t, leafPath, "leaf", "mid.yml", target, []string{"leaf-pkg"})
+
+	merged, chainPaths, err := ResolveAndMergeExtendsChain(leafPath, nil)
+	if err != nil {
+		t.Fatalf("ResolveAndMergeExtendsChain() error = %v", err)
+	}
+
+	if merged.Image.Name != "leaf" {
+		t.Errorf("Image.Name = %q, want leaf", merged.Image.Name)
+	}
+	for _, pkg := range []string{"root-pkg", "mid-pkg", "leaf-pkg"} {
+		if !hasPackage(merged.SystemConfig.Packages, pkg) {
+			t.Errorf("packages %v missing %s", merged.SystemConfig.Packages, pkg)
+		}
+	}
+	if merged.Extends != "" {
+		t.Errorf("Extends = %q, want empty after merge", merged.Extends)
+	}
+
+	wantOrder := []string{"root.yml", "mid.yml", "leaf.yml"}
+	if len(chainPaths) != len(wantOrder) {
+		t.Fatalf("chainPaths length = %d, want %d", len(chainPaths), len(wantOrder))
+	}
+	for i, want := range wantOrder {
+		if got := filepath.Base(chainPaths[i]); got != want {
+			t.Errorf("chainPaths[%d] = %q, want %q", i, got, want)
+		}
+	}
+}
+
+func TestResolveAndMergeExtendsChainMissingParent(t *testing.T) {
+	dir := t.TempDir()
+	target := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+
+	leafPath := filepath.Join(dir, "leaf.yml")
+	writeExtendsTemplate(t, leafPath, "leaf", "missing.yml", target, nil)
+
+	_, _, err := ResolveAndMergeExtendsChain(leafPath, nil)
+	if err == nil {
+		t.Fatal("ResolveAndMergeExtendsChain() expected error for missing parent")
+	}
+	if !strings.Contains(err.Error(), "missing.yml") {
+		t.Errorf("error = %q, want reference to missing.yml", err.Error())
+	}
+}
+
+func TestResolveAndMergeExtendsChainInvalidParent(t *testing.T) {
+	dir := t.TempDir()
+	target := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+
+	rootPath := filepath.Join(dir, "root.yml")
+	leafPath := filepath.Join(dir, "leaf.yml")
+
+	// Root parent is malformed YAML.
+	if err := os.WriteFile(rootPath, []byte("image:\n  name: root\n\tbad: indent\n"), 0o644); err != nil {
+		t.Fatalf("failed to write root template: %v", err)
+	}
+	writeExtendsTemplate(t, leafPath, "leaf", "root.yml", target, nil)
+
+	_, _, err := ResolveAndMergeExtendsChain(leafPath, nil)
+	if err == nil {
+		t.Fatal("ResolveAndMergeExtendsChain() expected error for invalid parent")
+	}
+	if !strings.Contains(err.Error(), "root.yml") {
+		t.Errorf("error = %q, want reference to root.yml", err.Error())
+	}
+}
+
+func TestLoadAndMergeTemplateMultiLevelExtends(t *testing.T) {
+	dir := t.TempDir()
+	target := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+
+	rootPath := filepath.Join(dir, "root.yml")
+	midPath := filepath.Join(dir, "mid.yml")
+	leafPath := filepath.Join(dir, "leaf.yml")
+	writeExtendsTemplate(t, rootPath, "root", "", target, []string{"root-pkg"})
+	writeExtendsTemplate(t, midPath, "mid", "root.yml", target, []string{"mid-pkg"})
+	writeExtendsTemplate(t, leafPath, "leaf", "mid.yml", target, []string{"leaf-pkg"})
+
+	result, err := LoadAndMergeTemplate(leafPath)
+	if err != nil {
+		t.Fatalf("LoadAndMergeTemplate() error = %v", err)
+	}
+
+	if result.Image.Name != "leaf" {
+		t.Errorf("Image.Name = %q, want leaf", result.Image.Name)
+	}
+	for _, want := range []string{"root-pkg", "mid-pkg", "leaf-pkg"} {
+		if !hasPackage(result.SystemConfig.Packages, want) {
+			t.Errorf("packages %v missing %s", result.SystemConfig.Packages, want)
+		}
+	}
+	if result.Extends != "" {
+		t.Errorf("Extends = %q, want empty after merge", result.Extends)
+	}
+}
+
+func TestLoadAndMergeTemplateNoExtendsRegression(t *testing.T) {
+	dir := t.TempDir()
+	target := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+
+	leafPath := filepath.Join(dir, "standalone.yml")
+	writeExtendsTemplate(t, leafPath, "standalone", "", target, []string{"only-pkg"})
+
+	result, err := LoadAndMergeTemplate(leafPath)
+	if err != nil {
+		t.Fatalf("LoadAndMergeTemplate() error = %v", err)
+	}
+
+	if result.Image.Name != "standalone" {
+		t.Errorf("Image.Name = %q, want standalone", result.Image.Name)
+	}
+	if !hasPackage(result.SystemConfig.Packages, "only-pkg") {
+		t.Errorf("packages %v missing only-pkg", result.SystemConfig.Packages)
 	}
 }
 
@@ -843,6 +1418,60 @@ gpgkey: "https://example.com/key.gpg"
 	_ = originalGetTargetOsConfigDir // Prevent unused variable error
 }
 
+func TestMergeConfigurationsStripsExtends(t *testing.T) {
+	t.Parallel()
+
+	userTemplate := &ImageTemplate{
+		Extends: "parent-template.yml",
+		Image:   ImageInfo{Name: "child", Version: "1.0.0"},
+		Target:  TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"},
+		SystemConfig: SystemConfig{
+			Name:     "child-config",
+			Packages: []string{"pkg-a"},
+		},
+	}
+	defaultTemplate := &ImageTemplate{
+		Image:  ImageInfo{Name: "default", Version: "0.1.0"},
+		Target: TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"},
+		SystemConfig: SystemConfig{
+			Name:     "default-config",
+			Packages: []string{"pkg-default"},
+		},
+	}
+
+	merged, err := MergeConfigurations(userTemplate, defaultTemplate)
+	if err != nil {
+		t.Fatalf("MergeConfigurations() err = %v", err)
+	}
+
+	if merged.Extends != "" {
+		t.Errorf("merged.Extends = %q, want empty string (should be stripped)", merged.Extends)
+	}
+}
+
+func TestMergeConfigurationsStripsExtendsWhenDefaultNil(t *testing.T) {
+	t.Parallel()
+
+	userTemplate := &ImageTemplate{
+		Extends: "parent-template.yml",
+		Image:   ImageInfo{Name: "child", Version: "1.0.0"},
+		Target:  TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"},
+		SystemConfig: SystemConfig{
+			Name:     "child-config",
+			Packages: []string{"pkg-a"},
+		},
+	}
+
+	merged, err := MergeConfigurations(userTemplate, nil)
+	if err != nil {
+		t.Fatalf("MergeConfigurations() err = %v", err)
+	}
+
+	if merged.Extends != "" {
+		t.Errorf("merged.Extends = %q, want empty string (should be stripped even with nil default)", merged.Extends)
+	}
+}
+
 // TestLoadProviderRepoConfigArchVariants tests different architecture naming
 func TestLoadProviderRepoConfigArchVariants(t *testing.T) {
 	archVariants := []string{"amd64", "x86_64", "arm64", "aarch64"}
@@ -857,5 +1486,389 @@ func TestLoadProviderRepoConfigArchVariants(t *testing.T) {
 				t.Logf("Expected error for arch %s: %v", arch, err)
 			}
 		})
+	}
+}
+
+func TestResolveExtendsChainSingleExtends(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	basePath := filepath.Join(tmpDir, "base.yml")
+	leafPath := filepath.Join(tmpDir, "leaf.yml")
+	target := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+
+	writeChainTemplate(t, basePath, "base", "", target)
+	writeChainTemplate(t, leafPath, "leaf", "base.yml", target)
+
+	chain, err := resolveExtendsChain(leafPath)
+	if err != nil {
+		t.Fatalf("resolveExtendsChain() err = %v", err)
+	}
+
+	if len(chain) != 2 {
+		t.Fatalf("len(chain) = %d, want 2", len(chain))
+	}
+	if chain[0].Image.Name != "base" {
+		t.Errorf("chain[0].Image.Name = %q, want %q", chain[0].Image.Name, "base")
+	}
+	if chain[1].Image.Name != "leaf" {
+		t.Errorf("chain[1].Image.Name = %q, want %q", chain[1].Image.Name, "leaf")
+	}
+}
+
+func TestResolveExtendsChainMultiLevel(t *testing.T) {
+	tmpDir := t.TempDir()
+	target := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+
+	rootPath := filepath.Join(tmpDir, "root.yml")
+	level1Path := filepath.Join(tmpDir, "level1.yml")
+	level2Path := filepath.Join(tmpDir, "level2.yml")
+	leafPath := filepath.Join(tmpDir, "leaf.yml")
+
+	writeChainTemplate(t, rootPath, "root", "", target)
+	writeChainTemplate(t, level1Path, "level1", "root.yml", target)
+	writeChainTemplate(t, level2Path, "level2", "level1.yml", target)
+	writeChainTemplate(t, leafPath, "leaf", "level2.yml", target)
+
+	chain, err := resolveExtendsChain(leafPath)
+	if err != nil {
+		t.Fatalf("resolveExtendsChain() err = %v", err)
+	}
+
+	if len(chain) != 4 {
+		t.Fatalf("len(chain) = %d, want 4", len(chain))
+	}
+
+	wantOrder := []string{"root", "level1", "level2", "leaf"}
+	for i, want := range wantOrder {
+		if chain[i].Image.Name != want {
+			t.Errorf("chain[%d].Image.Name = %q, want %q", i, chain[i].Image.Name, want)
+		}
+	}
+}
+
+func TestResolveExtendsChainCycleDetection(t *testing.T) {
+	tmpDir := t.TempDir()
+	target := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+
+	aPath := filepath.Join(tmpDir, "a.yml")
+	bPath := filepath.Join(tmpDir, "b.yml")
+
+	writeChainTemplate(t, aPath, "a", "b.yml", target)
+	writeChainTemplate(t, bPath, "b", "a.yml", target)
+
+	_, err := resolveExtendsChain(aPath)
+	if err == nil {
+		t.Fatalf("resolveExtendsChain() expected cycle error")
+	}
+
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "circular extends detected") {
+		t.Errorf("error = %q, want contains %q", errMsg, "circular extends detected")
+	}
+	if !strings.Contains(errMsg, "a.yml -> b.yml -> a.yml") {
+		t.Errorf("error = %q, want contains %q", errMsg, "a.yml -> b.yml -> a.yml")
+	}
+}
+
+func TestResolveExtendsChainCycleViaDirectorySymlink(t *testing.T) {
+	tmpDir := t.TempDir()
+	target := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+
+	realDir := filepath.Join(tmpDir, "real")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatalf("failed to create real directory: %v", err)
+	}
+
+	// A directory symlink that lives inside the child directory and points back to
+	// it. Reaching a.yml through "self/" yields a different textual path for the
+	// same file. Without canonicalization the self-extends cycle would go
+	// undetected; the traversal guard still permits it because it stays within the
+	// child directory.
+	if err := os.Symlink(realDir, filepath.Join(realDir, "self")); err != nil {
+		t.Skipf("symlinks not supported on this platform: %v", err)
+	}
+
+	aReal := filepath.Join(realDir, "a.yml")
+	writeChainTemplate(t, aReal, "a", "self/a.yml", target)
+
+	_, err := resolveExtendsChain(aReal)
+	if err == nil {
+		t.Fatalf("resolveExtendsChain() expected cycle error via directory symlink")
+	}
+
+	if !strings.Contains(err.Error(), "circular extends detected") {
+		t.Errorf("error = %q, want contains %q", err.Error(), "circular extends detected")
+	}
+}
+
+func TestResolveExtendsChainTargetMismatch(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	parentPath := filepath.Join(tmpDir, "parent.yml")
+	leafPath := filepath.Join(tmpDir, "leaf.yml")
+
+	parentTarget := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "aarch64", ImageType: "raw"}
+	leafTarget := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+
+	writeChainTemplate(t, parentPath, "parent", "", parentTarget)
+	writeChainTemplate(t, leafPath, "leaf", "parent.yml", leafTarget)
+
+	_, err := resolveExtendsChain(leafPath)
+	if err == nil {
+		t.Fatalf("resolveExtendsChain() expected target mismatch error")
+	}
+
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "extends target mismatch at level") {
+		t.Errorf("error = %q, want contains %q", errMsg, "extends target mismatch at level")
+	}
+}
+
+func TestResolveExtendsChainMissingParent(t *testing.T) {
+	tmpDir := t.TempDir()
+	target := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+
+	leafPath := filepath.Join(tmpDir, "leaf.yml")
+	writeChainTemplate(t, leafPath, "leaf", "missing.yml", target)
+
+	_, err := resolveExtendsChain(leafPath)
+	if err == nil {
+		t.Fatalf("resolveExtendsChain() expected missing parent error")
+	}
+
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "extends path not found:") {
+		t.Errorf("error = %q, want contains %q", errMsg, "extends path not found:")
+	}
+}
+
+func TestResolveExtendsChainPathTraversalAttack(t *testing.T) {
+	tmpDir := t.TempDir()
+	target := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+
+	childDir := filepath.Join(tmpDir, "child")
+	if err := os.MkdirAll(childDir, 0o755); err != nil {
+		t.Fatalf("failed to create child directory: %v", err)
+	}
+
+	leafPath := filepath.Join(childDir, "leaf.yml")
+	writeChainTemplate(t, leafPath, "leaf", "../parent.yml", target)
+
+	_, err := resolveExtendsChain(leafPath)
+	if err == nil {
+		t.Fatalf("resolveExtendsChain() expected traversal rejection")
+	}
+
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "extends path escapes child template's directory") {
+		t.Errorf("error = %q, want contains path escape message", errMsg)
+	}
+}
+
+func TestResolveExtendsChainDirectorySymlinkEscape(t *testing.T) {
+	tmpDir := t.TempDir()
+	target := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+
+	childDir := filepath.Join(tmpDir, "child")
+	outsideDir := filepath.Join(tmpDir, "outside")
+	if err := os.MkdirAll(childDir, 0o755); err != nil {
+		t.Fatalf("failed to create child directory: %v", err)
+	}
+	if err := os.MkdirAll(outsideDir, 0o755); err != nil {
+		t.Fatalf("failed to create outside directory: %v", err)
+	}
+
+	// Parent template lives outside the child directory.
+	writeChainTemplate(t, filepath.Join(outsideDir, "parent.yml"), "parent", "", target)
+
+	// A directory symlink inside the child directory points outside it. The lexical
+	// guard sees "link/parent.yml" (no ".."), so only the symlink-resolved
+	// containment check can catch this escape.
+	if err := os.Symlink(outsideDir, filepath.Join(childDir, "link")); err != nil {
+		t.Skipf("symlinks not supported on this platform: %v", err)
+	}
+
+	leafPath := filepath.Join(childDir, "leaf.yml")
+	writeChainTemplate(t, leafPath, "leaf", "link/parent.yml", target)
+
+	_, err := resolveExtendsChain(leafPath)
+	if err == nil {
+		t.Fatalf("resolveExtendsChain() expected directory-symlink escape rejection")
+	}
+
+	if !strings.Contains(err.Error(), "extends path escapes child template's directory") {
+		t.Errorf("error = %q, want contains path escape message", err.Error())
+	}
+}
+
+func TestResolveExtendsChainDepthWarning(t *testing.T) {
+	tmpDir := t.TempDir()
+	target := TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+
+	fileNames := []string{"root.yml", "l1.yml", "l2.yml", "l3.yml", "l4.yml", "leaf.yml"}
+	for i := range fileNames {
+		path := filepath.Join(tmpDir, fileNames[i])
+		extends := ""
+		if i > 0 {
+			extends = fileNames[i-1]
+		}
+		writeChainTemplate(t, path, strings.TrimSuffix(fileNames[i], ".yml"), extends, target)
+	}
+
+	var buf bytes.Buffer
+	prevWriter := logger.ReplaceStderrWriter(&buf)
+	t.Cleanup(func() {
+		logger.ReplaceStderrWriter(prevWriter)
+	})
+
+	chain, err := resolveExtendsChain(filepath.Join(tmpDir, "leaf.yml"))
+	if err != nil {
+		t.Fatalf("resolveExtendsChain() err = %v", err)
+	}
+
+	if len(chain) != 6 {
+		t.Fatalf("len(chain) = %d, want 6", len(chain))
+	}
+
+	if !strings.Contains(buf.String(), "extends chain depth 5 exceeds recommended maximum of 4") {
+		t.Errorf("log output did not contain depth warning, got %q", buf.String())
+	}
+}
+
+func TestRedactSensitiveDataFDEPassphrase(t *testing.T) {
+	t.Parallel()
+
+	const secret = "fde-passphrase-must-not-leak"
+	template := &ImageTemplate{
+		SystemConfig: SystemConfig{
+			FDE: FDEConfig{
+				Enabled:        true,
+				PassphraseFile: "/tmp/fde-secret.txt",
+				Unlock:         "auto",
+				Passphrase:     secret,
+			},
+		},
+	}
+
+	redacted := RedactSensitiveData(template)
+	if redacted.SystemConfig.FDE.Passphrase != "[REDACTED]" {
+		t.Errorf("redacted FDE passphrase = %q, want [REDACTED]", redacted.SystemConfig.FDE.Passphrase)
+	}
+	if template.SystemConfig.FDE.Passphrase != secret {
+		t.Errorf("original template passphrase was mutated, got %q", template.SystemConfig.FDE.Passphrase)
+	}
+	if redacted.SystemConfig.FDE.PassphraseFile != "[REDACTED]" {
+		t.Errorf("redacted FDE passphraseFile = %q, want [REDACTED]", redacted.SystemConfig.FDE.PassphraseFile)
+	}
+
+	pretty, err := json.MarshalIndent(redacted, "", "  ")
+	if err != nil {
+		t.Fatalf("json.MarshalIndent: %v", err)
+	}
+	out := string(pretty)
+	if strings.Contains(out, secret) {
+		t.Errorf("redacted JSON still contains passphrase")
+	}
+	if !strings.Contains(out, "[REDACTED]") {
+		t.Errorf("redacted JSON missing [REDACTED], got %s", out)
+	}
+}
+
+func writeChainTemplate(t *testing.T, path, imageName, extends string, target TargetInfo) {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("failed to create template directory: %v", err)
+	}
+
+	var builder strings.Builder
+	if extends != "" {
+		builder.WriteString("extends: ")
+		builder.WriteString("\"")
+		builder.WriteString(extends)
+		builder.WriteString("\"\n")
+	}
+
+	builder.WriteString("image:\n")
+	builder.WriteString("  name: ")
+	builder.WriteString(imageName)
+	builder.WriteString("\n")
+	builder.WriteString("  version: \"1.0.0\"\n")
+	builder.WriteString("target:\n")
+	builder.WriteString("  os: ")
+	builder.WriteString(target.OS)
+	builder.WriteString("\n")
+	builder.WriteString("  dist: ")
+	builder.WriteString(target.Dist)
+	builder.WriteString("\n")
+	builder.WriteString("  arch: ")
+	builder.WriteString(target.Arch)
+	builder.WriteString("\n")
+	builder.WriteString("  imageType: ")
+	builder.WriteString(target.ImageType)
+	builder.WriteString("\n")
+
+	if err := os.WriteFile(path, []byte(builder.String()), 0o644); err != nil {
+		t.Fatalf("failed to write template file %s: %v", path, err)
+	}
+}
+
+// TestRedactSensitiveData_NilInputReturnsNil verifies that RedactSensitiveData
+// does not panic when called with a nil template pointer — a caller that fed
+// it a Load* error path should get nil back and can produce a normal error
+// downstream instead of crashing on the deref.
+func TestRedactSensitiveData_NilInputReturnsNil(t *testing.T) {
+	t.Parallel()
+	if got := RedactSensitiveData(nil); got != nil {
+		t.Errorf("expected nil for nil input, got %+v", got)
+	}
+}
+
+// TestRedactSensitiveData_RedactsUserAndSecureBootFields verifies the happy
+// path: user passwords and hash algorithms are redacted, secure-boot key/cert
+// paths are redacted, and non-sensitive fields survive unchanged.
+func TestRedactSensitiveData_RedactsUserAndSecureBootFields(t *testing.T) {
+	t.Parallel()
+	tmpl := &ImageTemplate{
+		Image: ImageInfo{Name: "img", Version: "1.0.0"},
+		SystemConfig: SystemConfig{
+			Name: "sys",
+			Users: []UserConfig{
+				{Name: "alice", Password: "hunter2", HashAlgo: "sha512"},
+				{Name: "bob"}, // no password → no redaction of empty field
+			},
+			Immutability: ImmutabilityConfig{
+				Enabled:         true,
+				SecureBootDBKey: "/keys/db.key",
+				SecureBootDBCrt: "/keys/db.crt",
+				SecureBootDBCer: "/keys/db.cer",
+			},
+		},
+	}
+
+	redacted := RedactSensitiveData(tmpl)
+	if redacted == nil {
+		t.Fatal("expected non-nil redacted template, got nil")
+	}
+	if redacted.SystemConfig.Users[0].Password != "[REDACTED]" {
+		t.Errorf("expected user password redacted, got %q", redacted.SystemConfig.Users[0].Password)
+	}
+	if redacted.SystemConfig.Users[0].HashAlgo != "[REDACTED]" {
+		t.Errorf("expected hash_algo redacted, got %q", redacted.SystemConfig.Users[0].HashAlgo)
+	}
+	if redacted.SystemConfig.Users[1].Password != "" {
+		t.Errorf("expected empty password to remain empty, got %q", redacted.SystemConfig.Users[1].Password)
+	}
+	if redacted.SystemConfig.Immutability.SecureBootDBKey != "[REDACTED]" {
+		t.Errorf("expected secureBootDBKey redacted, got %q", redacted.SystemConfig.Immutability.SecureBootDBKey)
+	}
+	// Non-sensitive fields must round-trip untouched.
+	if redacted.Image.Name != "img" {
+		t.Errorf("expected image name preserved, got %q", redacted.Image.Name)
+	}
+	// The original template's SystemConfig must not be mutated — the redactor
+	// deep-copies SystemConfig before rewriting sensitive fields.
+	if tmpl.SystemConfig.Users[0].Password != "hunter2" {
+		t.Errorf("original password mutated: %q", tmpl.SystemConfig.Users[0].Password)
 	}
 }

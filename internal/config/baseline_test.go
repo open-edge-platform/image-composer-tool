@@ -1,0 +1,954 @@
+package config
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+
+	"github.com/open-edge-platform/image-composer-tool/internal/config/validate"
+)
+
+func TestValidateBaseline(t *testing.T) {
+	tests := []struct {
+		name          string
+		baseline      *Baseline
+		overlayPolicy *OverlayPolicy
+		wantErr       string
+		wantNoErr     bool
+	}{
+		{
+			name:      "nil baseline is allowed (equivalent to create)",
+			baseline:  nil,
+			wantNoErr: true,
+		},
+		{
+			name:      "explicit create with no source is allowed",
+			baseline:  &Baseline{Mode: BaselineModeCreate},
+			wantNoErr: true,
+		},
+		{
+			name:      "empty mode defaults to create",
+			baseline:  &Baseline{},
+			wantNoErr: true,
+		},
+		{
+			name:     "create rejects source",
+			baseline: &Baseline{Mode: BaselineModeCreate, Source: &BaselineSource{Path: "/tmp/x.raw"}},
+			wantErr:  "source must not be set",
+		},
+		{
+			name:          "create rejects overlayPolicy",
+			baseline:      &Baseline{Mode: BaselineModeCreate},
+			overlayPolicy: &OverlayPolicy{},
+			wantErr:       "overlayPolicy must not be set",
+		},
+		{
+			name:          "overlayPolicy without baseline (default create) is rejected",
+			baseline:      nil,
+			overlayPolicy: &OverlayPolicy{},
+			wantErr:       "overlayPolicy must not be set",
+		},
+		{
+			name:     "overlay requires source",
+			baseline: &Baseline{Mode: BaselineModeOverlay},
+			wantErr:  "source is required",
+		},
+		{
+			name:      "overlay with valid local source path passes",
+			baseline:  &Baseline{Mode: BaselineModeOverlay, Source: &BaselineSource{Path: "/tmp/u.raw"}},
+			wantNoErr: true,
+		},
+		{
+			name:      "overlay accepts local sbomPath",
+			baseline:  &Baseline{Mode: BaselineModeOverlay, Source: &BaselineSource{Path: "/tmp/u.raw", SBOMPath: "/tmp/base.spdx.json"}},
+			wantNoErr: true,
+		},
+		{
+			name:     "overlay rejects sbomPath with a URI scheme",
+			baseline: &Baseline{Mode: BaselineModeOverlay, Source: &BaselineSource{Path: "/tmp/u.raw", SBOMPath: "https://example.com/base.spdx.json"}},
+			wantErr:  "sbomPath must be a local file path",
+		},
+		{
+			name: "overlay accepts https URL source",
+			baseline: &Baseline{
+				Mode:   BaselineModeOverlay,
+				Source: &BaselineSource{URL: "https://example.com/u.raw"},
+			},
+			wantNoErr: true,
+		},
+		{
+			name: "overlay rejects plain http URL source",
+			baseline: &Baseline{
+				Mode:   BaselineModeOverlay,
+				Source: &BaselineSource{URL: "http://example.com/u.raw"},
+			},
+			wantErr: "must use https",
+		},
+		{
+			name: "overlay rejects URL written into path field",
+			baseline: &Baseline{
+				Mode:   BaselineModeOverlay,
+				Source: &BaselineSource{Path: "https://example.com/u.raw"},
+			},
+			wantErr: "use baseline.source.url for remote images",
+		},
+		{
+			name: "overlay rejects single-slash scheme in path field",
+			baseline: &Baseline{
+				Mode:   BaselineModeOverlay,
+				Source: &BaselineSource{Path: "file:/tmp/u.raw"},
+			},
+			wantErr: "use baseline.source.url for remote images",
+		},
+		{
+			name: "overlay rejects non-https URL scheme",
+			baseline: &Baseline{
+				Mode:   BaselineModeOverlay,
+				Source: &BaselineSource{URL: "file:///tmp/u.raw"},
+			},
+			wantErr: "must use https",
+		},
+		{
+			name: "overlay rejects https URL with no host",
+			baseline: &Baseline{
+				Mode:   BaselineModeOverlay,
+				Source: &BaselineSource{URL: "https://"},
+			},
+			wantErr: "must include a host",
+		},
+		{
+			name: "overlay rejects https URL with query but no host",
+			baseline: &Baseline{
+				Mode:   BaselineModeOverlay,
+				Source: &BaselineSource{URL: "https://?q=x"},
+			},
+			wantErr: "must include a host",
+		},
+		{
+			name: "overlay rejects https URL with fragment but no host",
+			baseline: &Baseline{
+				Mode:   BaselineModeOverlay,
+				Source: &BaselineSource{URL: "https://#frag"},
+			},
+			wantErr: "must include a host",
+		},
+		{
+			name: "overlay rejects source with neither path nor url",
+			baseline: &Baseline{
+				Mode:   BaselineModeOverlay,
+				Source: &BaselineSource{Path: "   "},
+			},
+			wantErr: "must set either",
+		},
+		{
+			name: "overlay rejects source with both path and url",
+			baseline: &Baseline{
+				Mode:   BaselineModeOverlay,
+				Source: &BaselineSource{Path: "/tmp/u.raw", URL: "https://example.com/u.raw"},
+			},
+			wantErr: "must set only one",
+		},
+		{
+			name: "overlay rejects unsupported format",
+			baseline: &Baseline{
+				Mode:   BaselineModeOverlay,
+				Source: &BaselineSource{Path: "/tmp/u.vmdk", Format: "vmdk"},
+			},
+			wantErr: "not supported in this release",
+		},
+		{
+			name: "overlay accepts qcow2 format",
+			baseline: &Baseline{
+				Mode:   BaselineModeOverlay,
+				Source: &BaselineSource{Path: "/tmp/u.qcow2", Format: "qcow2"},
+			},
+			wantNoErr: true,
+		},
+		{
+			name: "overlay accepts vhd format",
+			baseline: &Baseline{
+				Mode:   BaselineModeOverlay,
+				Source: &BaselineSource{Path: "/tmp/u.vhd", Format: "vhd"},
+			},
+			wantNoErr: true,
+		},
+		{
+			name: "overlay accepts vhdx format",
+			baseline: &Baseline{
+				Mode:   BaselineModeOverlay,
+				Source: &BaselineSource{Path: "/tmp/u.vhdx", Format: "vhdx"},
+			},
+			wantNoErr: true,
+		},
+		{
+			// validateBaseline calls Source.Validate(), which lower-cases Format;
+			// this documents that normalization for programmatically-built templates.
+			// (YAML templates are constrained to the lower-case schema enum earlier.)
+			name: "overlay accepts upper-case format via Validate normalization",
+			baseline: &Baseline{
+				Mode:   BaselineModeOverlay,
+				Source: &BaselineSource{Path: "/tmp/u.qcow2", Format: "QCOW2"},
+			},
+			wantNoErr: true,
+		},
+		{
+			name: "overlay accepts default (empty) format",
+			baseline: &Baseline{
+				Mode:   BaselineModeOverlay,
+				Source: &BaselineSource{Path: "/tmp/u.raw"},
+			},
+			wantNoErr: true,
+		},
+		{
+			name:          "overlay policy rejects unknown packageOperation",
+			baseline:      &Baseline{Mode: BaselineModeOverlay, Source: &BaselineSource{Path: "/tmp/u.raw"}},
+			overlayPolicy: &OverlayPolicy{PackageOperation: "destructive"},
+			wantErr:       "packageOperation must be",
+		},
+		{
+			name:          "overlay policy rejects unknown conflictPolicy",
+			baseline:      &Baseline{Mode: BaselineModeOverlay, Source: &BaselineSource{Path: "/tmp/u.raw"}},
+			overlayPolicy: &OverlayPolicy{ConflictPolicy: "ignore"},
+			wantErr:       "conflictPolicy must be",
+		},
+		{
+			name:          "overlay policy with explicit fail conflictPolicy is allowed",
+			baseline:      &Baseline{Mode: BaselineModeOverlay, Source: &BaselineSource{Path: "/tmp/u.raw"}},
+			overlayPolicy: &OverlayPolicy{ConflictPolicy: OverlayConflictPolicyFail},
+			wantNoErr:     true,
+		},
+		{
+			name:          "overlay policy with allow-explicit is allowed",
+			baseline:      &Baseline{Mode: BaselineModeOverlay, Source: &BaselineSource{Path: "/tmp/u.raw"}},
+			overlayPolicy: &OverlayPolicy{ConflictPolicy: OverlayConflictPolicyAllowExplicit},
+			wantNoErr:     true,
+		},
+		{
+			name:          "overlay policy accepts additive-and-upgrade",
+			baseline:      &Baseline{Mode: BaselineModeOverlay, Source: &BaselineSource{Path: "/tmp/u.raw"}},
+			overlayPolicy: &OverlayPolicy{PackageOperation: OverlayPackageOpAdditiveAndUpgrade},
+			wantNoErr:     true,
+		},
+		{
+			name:     "unknown mode is rejected",
+			baseline: &Baseline{Mode: "rebuild"},
+			wantErr:  "baseline.mode must be",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpl := &ImageTemplate{Baseline: tt.baseline, OverlayPolicy: tt.overlayPolicy}
+			err := tmpl.validateBaseline()
+			if tt.wantNoErr {
+				if err != nil {
+					t.Fatalf("expected no error, got %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected error to contain %q, got %q", tt.wantErr, err.Error())
+			}
+		})
+	}
+}
+
+// TestValidateOverlaySystemConfig confirms that an overlay-mode template is
+// rejected when it sets any systemConfig section the overlay pipeline cannot
+// apply (hostname, network, initramfs, kernel, immutability, fde, bootloader),
+// and that overlay-supported sections (packages, configurations, additionalFiles,
+// users, name, description) pass. It also confirms these sections are still
+// allowed in create mode.
+// TestValidateUsers guards the account-name and group-name safety check that closes a
+// command-injection path (names and groups are interpolated into shell command strings
+// during user provisioning) and keeps the overlay baseline-conflict comparison reliable.
+func TestValidateUsers(t *testing.T) {
+	tests := []struct {
+		name    string
+		users   []UserConfig
+		wantErr bool
+	}{
+		{"valid names", []UserConfig{{Name: "admin"}, {Name: "svc-account"}, {Name: "user_1"}, {Name: "a.b"}, {Name: "root"}}, false},
+		{"no users", nil, false},
+		{"command injection via semicolon", []UserConfig{{Name: "root; passwd -d root"}}, true},
+		{"command substitution", []UserConfig{{Name: "a$(id)"}}, true},
+		{"whitespace in name", []UserConfig{{Name: "bad name"}}, true},
+		{"leading dash", []UserConfig{{Name: "-root"}}, true},
+		{"path separator", []UserConfig{{Name: "a/b"}}, true},
+		{"empty name", []UserConfig{{Name: ""}}, true},
+		{"too long", []UserConfig{{Name: strings.Repeat("a", 33)}}, true},
+		{"valid groups", []UserConfig{{Name: "admin", Groups: []string{"sudo", "video", "render"}}}, false},
+		{"group placeholder skipped", []UserConfig{{Name: "admin", Groups: []string{"<REQUIRED_GROUP>"}}}, false},
+		{"empty group skipped", []UserConfig{{Name: "admin", Groups: []string{""}}}, false},
+		{"group command injection", []UserConfig{{Name: "admin", Groups: []string{"sudo; passwd -d root #"}}}, true},
+		{"group command substitution", []UserConfig{{Name: "admin", Groups: []string{"g$(id)"}}}, true},
+		{"group whitespace", []UserConfig{{Name: "admin", Groups: []string{"bad group"}}}, true},
+		{"valid startup script", []UserConfig{{Name: "admin", StartupScript: "/usr/local/bin/startup.sh"}}, false},
+		{"empty startup script skipped", []UserConfig{{Name: "admin", StartupScript: ""}}, false},
+		{"startup script relative", []UserConfig{{Name: "admin", StartupScript: "bin/sh"}}, true},
+		{"startup script traversal", []UserConfig{{Name: "admin", StartupScript: "../../bin/sh"}}, true},
+		{"startup script non-canonical", []UserConfig{{Name: "admin", StartupScript: "/root/../etc/passwd"}}, true},
+		{"startup script passwd delimiter", []UserConfig{{Name: "admin", StartupScript: "/root/x:y"}}, true},
+		{"startup script newline", []UserConfig{{Name: "admin", StartupScript: "/root/x\ny"}}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpl := &ImageTemplate{SystemConfig: SystemConfig{Users: tt.users}}
+			err := tmpl.validateUsers()
+			if tt.wantErr && err == nil {
+				t.Fatalf("expected an error for users %v", tt.users)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("unexpected error for users %v: %v", tt.users, err)
+			}
+		})
+	}
+}
+
+func TestValidateOverlaySystemConfig(t *testing.T) {
+	overlayBaseline := func() *Baseline {
+		return &Baseline{Mode: BaselineModeOverlay, Source: &BaselineSource{Path: "/tmp/u.raw"}}
+	}
+
+	tests := []struct {
+		name    string
+		sc      SystemConfig
+		wantErr string // substring expected in the error; "" means expect success
+	}{
+		{
+			name: "overlay-supported sections pass",
+			sc: SystemConfig{
+				Name:            "overlay",
+				Description:     "adds a package",
+				Packages:        []string{"tree"},
+				Configurations:  []ConfigurationInfo{{Cmd: "echo hi"}},
+				AdditionalFiles: []AdditionalFileInfo{{Local: "a", Final: "/b"}},
+				Users:           []UserConfig{{Name: "bob"}},
+			},
+		},
+		{
+			// Users ARE supported in overlay mode: they are provisioned onto the
+			// baseline (with a build-stopping guard when a requested user already
+			// exists in the baseline, enforced later in the overlay pipeline).
+			name: "users allowed",
+			sc:   SystemConfig{Users: []UserConfig{{Name: "bob"}}},
+		},
+		{
+			name:    "hostname rejected",
+			sc:      SystemConfig{HostName: "myhost"},
+			wantErr: "systemConfig.hostname",
+		},
+		{
+			name:    "network rejected",
+			sc:      SystemConfig{Network: NetworkConfig{Backend: "netplan"}},
+			wantErr: "systemConfig.network",
+		},
+		{
+			name:    "initramfs rejected",
+			sc:      SystemConfig{Initramfs: Initramfs{Template: "initrd.tmpl"}},
+			wantErr: "systemConfig.initramfs",
+		},
+		{
+			name:    "kernel rejected",
+			sc:      SystemConfig{Kernel: KernelConfig{Version: "6.8.0"}},
+			wantErr: "systemConfig.kernel",
+		},
+		{
+			name:    "immutability rejected (yaml marker)",
+			sc:      SystemConfig{Immutability: ImmutabilityConfig{wasProvided: true}},
+			wantErr: "systemConfig.immutability",
+		},
+		{
+			// A programmatically-built template sets Enabled directly without the YAML
+			// marker; overlay must still reject it (exported field, not just wasProvided).
+			name:    "immutability rejected (Enabled exported field)",
+			sc:      SystemConfig{Immutability: ImmutabilityConfig{Enabled: true}},
+			wantErr: "systemConfig.immutability",
+		},
+		{
+			// A Secure Boot key set without the YAML marker must likewise be rejected.
+			name:    "immutability rejected (secure boot key exported field)",
+			sc:      SystemConfig{Immutability: ImmutabilityConfig{SecureBootDBKey: "/keys/db.key"}},
+			wantErr: "systemConfig.immutability",
+		},
+		{
+			name:    "fde rejected",
+			sc:      SystemConfig{FDE: FDEConfig{Enabled: true}},
+			wantErr: "systemConfig.fde",
+		},
+		{
+			name:    "bootloader rejected",
+			sc:      SystemConfig{Bootloader: Bootloader{Provider: "grub2"}},
+			wantErr: "systemConfig.bootloader",
+		},
+		{
+			name: "multiple sections reported together in fixed order",
+			sc: SystemConfig{
+				Bootloader: Bootloader{Provider: "grub2"},
+				Users:      []UserConfig{{Name: "bob"}}, // supported: must NOT appear in the error
+				HostName:   "myhost",
+			},
+			wantErr: "systemConfig.hostname, systemConfig.bootloader",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpl := &ImageTemplate{Baseline: overlayBaseline(), SystemConfig: tt.sc}
+			err := tmpl.validateBaseline()
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("expected no error, got %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected error to contain %q, got %q", tt.wantErr, err.Error())
+			}
+		})
+	}
+
+	// Create mode must not reject these sections — they are the normal
+	// full-build inputs and only overlay mode is constrained.
+	t.Run("create mode allows all sections", func(t *testing.T) {
+		tmpl := &ImageTemplate{
+			Baseline: &Baseline{Mode: BaselineModeCreate},
+			SystemConfig: SystemConfig{
+				Users:        []UserConfig{{Name: "bob"}},
+				HostName:     "myhost",
+				Network:      NetworkConfig{Backend: "netplan"},
+				Initramfs:    Initramfs{Template: "initrd.tmpl"},
+				Kernel:       KernelConfig{Version: "6.8.0"},
+				Immutability: ImmutabilityConfig{wasProvided: true},
+				FDE:          FDEConfig{Enabled: true, PassphraseFile: "/tmp/pp"},
+				Bootloader:   Bootloader{Provider: "grub2"},
+			},
+		}
+		if err := tmpl.validateBaseline(); err != nil {
+			t.Fatalf("create mode should not reject systemConfig sections, got %v", err)
+		}
+	})
+}
+
+// TestOverlayPolicyDerivesAllowUpgrade confirms validate() derives the internal
+// AllowUpgrade gate from packageOperation: on for additive-and-upgrade, off for
+// additive-only (and the empty default).
+func TestOverlayPolicyDerivesAllowUpgrade(t *testing.T) {
+	cases := []struct {
+		op   string
+		want bool
+	}{
+		{"", false},
+		{OverlayPackageOpAdditiveOnly, false},
+		{OverlayPackageOpAdditiveAndUpgrade, true},
+	}
+	for _, c := range cases {
+		p := &OverlayPolicy{PackageOperation: c.op}
+		if err := p.validate(); err != nil {
+			t.Fatalf("validate(%q): unexpected error %v", c.op, err)
+		}
+		if p.AllowUpgrade != c.want {
+			t.Errorf("packageOperation %q: AllowUpgrade = %v, want %v", c.op, p.AllowUpgrade, c.want)
+		}
+	}
+}
+
+// TestOverlayPolicyAllowPackageRemovalRequiresUpgrade confirms validate() permits
+// allowPackageRemoval only under additive-and-upgrade: removal is more invasive
+// than an in-place upgrade, so it is rejected under additive-only (and the empty
+// default), and allowed with additive-and-upgrade.
+func TestOverlayPolicyAllowPackageRemovalRequiresUpgrade(t *testing.T) {
+	cases := []struct {
+		name    string
+		op      string
+		removal bool
+		wantErr bool
+	}{
+		{"removal with additive-and-upgrade allowed", OverlayPackageOpAdditiveAndUpgrade, true, false},
+		{"removal with additive-only rejected", OverlayPackageOpAdditiveOnly, true, true},
+		{"removal with empty (defaults to additive-only) rejected", "", true, true},
+		{"no removal with additive-only allowed", OverlayPackageOpAdditiveOnly, false, false},
+		{"no removal with additive-and-upgrade allowed", OverlayPackageOpAdditiveAndUpgrade, false, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := &OverlayPolicy{PackageOperation: c.op, AllowPackageRemoval: c.removal}
+			err := p.validate()
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("expected validate() to reject allowPackageRemoval under %q", c.op)
+				}
+				if !strings.Contains(err.Error(), "allowPackageRemoval requires packageOperation") {
+					t.Errorf("error should name the requirement, got: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validate(): unexpected error %v", err)
+			}
+		})
+	}
+}
+
+// TestOverlayPolicyValidatesKernelCmdline confirms validate() rejects a
+// kernelCmdline carrying a double quote, dollar sign, backtick, backslash, or
+// newline (which would break or inject into the shell-sourced
+// GRUB_CMDLINE_LINUX="..." assignment) and accepts ordinary values.
+func TestOverlayPolicyValidatesKernelCmdline(t *testing.T) {
+	cases := []struct {
+		name    string
+		cmdline string
+		wantErr bool
+	}{
+		{"empty", "", false},
+		{"ordinary args", "console=ttyS0,115200n8 i915.force_probe=*", false},
+		{"double quote", `bad="x"`, true},
+		{"newline", "quiet\nsplash", true},
+		{"dollar sign", "root=$(reboot)", true},
+		{"backtick", "root=`reboot`", true},
+		{"backslash", `quiet\`, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := &OverlayPolicy{KernelCmdline: c.cmdline}
+			err := p.validate()
+			if c.wantErr && err == nil {
+				t.Errorf("kernelCmdline %q: expected error, got nil", c.cmdline)
+			}
+			if !c.wantErr && err != nil {
+				t.Errorf("kernelCmdline %q: unexpected error %v", c.cmdline, err)
+			}
+		})
+	}
+}
+
+// TestOverlayPolicyValidatesGrubDefault confirms validate() rejects a grubDefault
+// carrying a double quote, dollar sign, backtick, backslash, or newline (which would
+// break or inject into the shell-sourced GRUB_DEFAULT="..." assignment) and accepts
+// ordinary values, including the ">"-delimited Ubuntu submenu path.
+func TestOverlayPolicyValidatesGrubDefault(t *testing.T) {
+	cases := []struct {
+		name        string
+		grubDefault string
+		wantErr     bool
+	}{
+		{"empty", "", false},
+		{"numeric index", "0", false},
+		{"submenu path", "Advanced options for Ubuntu>Ubuntu, with Linux 6.18-intel", false},
+		{"double quote", `bad="x"`, true},
+		{"newline", "a\nb", true},
+		{"dollar sign", "$(reboot)", true},
+		{"backtick", "`reboot`", true},
+		{"backslash", `entry\`, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := &OverlayPolicy{GrubDefault: c.grubDefault}
+			err := p.validate()
+			if c.wantErr && err == nil {
+				t.Errorf("grubDefault %q: expected error, got nil", c.grubDefault)
+			}
+			if !c.wantErr && err != nil {
+				t.Errorf("grubDefault %q: unexpected error %v", c.grubDefault, err)
+			}
+		})
+	}
+}
+
+// TestOverlayPolicyReplaceKernelValidation confirms validate() gates
+// overlayPolicy.replaceKernel: it requires a non-empty, metacharacter-free package
+// name and packageOperation additive-and-upgrade, and does NOT require
+// allowPackageRemoval.
+func TestOverlayPolicyReplaceKernelValidation(t *testing.T) {
+	cases := []struct {
+		name    string
+		op      string
+		pkg     string
+		set     bool   // whether ReplaceKernel is set at all
+		wantErr string // substring expected in the error, "" for success
+	}{
+		{"unset is fine under additive-only", OverlayPackageOpAdditiveOnly, "", false, ""},
+		{"valid swap under additive-and-upgrade", OverlayPackageOpAdditiveAndUpgrade, "linux-image-6.11.0-1004-oem", true, ""},
+		{"rejected under additive-only", OverlayPackageOpAdditiveOnly, "linux-image-6.11.0-1004-oem", true, "replaceKernel requires packageOperation"},
+		{"rejected under empty (defaults to additive-only)", "", "linux-image-6.11.0-1004-oem", true, "replaceKernel requires packageOperation"},
+		{"empty package rejected", OverlayPackageOpAdditiveAndUpgrade, "   ", true, "replaceKernel.package must be set"},
+		{"whitespace in package rejected", OverlayPackageOpAdditiveAndUpgrade, "linux image", true, "must not contain whitespace or shell metacharacters"},
+		{"embedded carriage return in package rejected", OverlayPackageOpAdditiveAndUpgrade, "linux\rimage", true, "must not contain whitespace or shell metacharacters"},
+		{"shell metachar in package rejected", OverlayPackageOpAdditiveAndUpgrade, "linux-image;reboot", true, "must not contain whitespace or shell metacharacters"},
+		{"glob wildcard package accepted", OverlayPackageOpAdditiveAndUpgrade, "linux-image-*", true, ""},
+		{"glob char class package accepted", OverlayPackageOpAdditiveAndUpgrade, "kernel-[0-9]*", true, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := &OverlayPolicy{PackageOperation: c.op}
+			if c.set {
+				p.ReplaceKernel = &ReplaceKernel{Package: c.pkg}
+			}
+			err := p.validate()
+			if c.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", c.wantErr)
+			}
+			if !strings.Contains(err.Error(), c.wantErr) {
+				t.Errorf("error = %v, want substring %q", err, c.wantErr)
+			}
+		})
+	}
+}
+
+// TestOverlayPolicyReplaceKernelDoesNotRequireRemoval confirms a kernel swap is
+// permitted WITHOUT allowPackageRemoval — the two knobs are orthogonal.
+func TestOverlayPolicyReplaceKernelDoesNotRequireRemoval(t *testing.T) {
+	p := &OverlayPolicy{
+		PackageOperation: OverlayPackageOpAdditiveAndUpgrade,
+		ReplaceKernel:    &ReplaceKernel{Package: "linux-image-6.11.0-1004-oem"},
+		// AllowPackageRemoval deliberately false.
+	}
+	if err := p.validate(); err != nil {
+		t.Fatalf("replaceKernel must not require allowPackageRemoval, got %v", err)
+	}
+}
+
+// TestOverlayPolicyReplaceKernelAdditionalPackagesValidation confirms validate()
+// applies the same non-empty, metacharacter-free rule to each
+// replaceKernel.additionalPackages entry as it does to package.
+func TestOverlayPolicyReplaceKernelAdditionalPackagesValidation(t *testing.T) {
+	cases := []struct {
+		name    string
+		extra   []string
+		wantErr string
+	}{
+		{"unset is fine", nil, ""},
+		{"valid headers package accepted", []string{"linux-headers-6.11.0-1004-oem"}, ""},
+		{"valid glob accepted", []string{"linux-headers-*"}, ""},
+		{"multiple valid entries accepted", []string{"linux-headers-6.11.0-1004-oem", "linux-modules-extra-6.11.0-1004-oem"}, ""},
+		{"empty entry rejected", []string{"   "}, "additionalPackages entries must not be empty"},
+		{"shell metachar rejected", []string{"linux-headers;reboot"}, "must not contain whitespace or shell metacharacters"},
+		{"whitespace rejected", []string{"linux headers"}, "must not contain whitespace or shell metacharacters"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := &OverlayPolicy{
+				PackageOperation: OverlayPackageOpAdditiveAndUpgrade,
+				ReplaceKernel: &ReplaceKernel{
+					Package:            "linux-image-6.11.0-1004-oem",
+					AdditionalPackages: c.extra,
+				},
+			}
+			err := p.validate()
+			if c.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+				t.Errorf("error = %v, want substring %q", err, c.wantErr)
+			}
+		})
+	}
+}
+
+// TestOverlayPolicyReplaceKernelEnableExtraModulesValidation confirms validate()
+// allowlists replaceKernel.enableExtraModules to module names and separating
+// spaces, since it is interpolated into an initramfs-generator shell command.
+func TestOverlayPolicyReplaceKernelEnableExtraModulesValidation(t *testing.T) {
+	cases := []struct {
+		name    string
+		modules string
+		wantErr string
+	}{
+		{"unset is fine", "", ""},
+		{"single module accepted", "intel_vpu", ""},
+		{"multiple modules accepted", "intel_vpu uas", ""},
+		{"dotted/dashed module names accepted", "my-mod my.mod", ""},
+		{"shell metachar rejected", "intel_vpu; reboot", "must contain only module names"},
+		{"embedded quote rejected", "intel_vpu' uas", "must contain only module names"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := &OverlayPolicy{
+				PackageOperation: OverlayPackageOpAdditiveAndUpgrade,
+				ReplaceKernel: &ReplaceKernel{
+					Package:            "linux-image-6.11.0-1004-oem",
+					EnableExtraModules: c.modules,
+				},
+			}
+			err := p.validate()
+			if c.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+				t.Errorf("error = %v, want substring %q", err, c.wantErr)
+			}
+		})
+	}
+}
+
+func TestBaselineSourceValidateNormalizesWhitespace(t *testing.T) {
+	t.Run("path is trimmed in place", func(t *testing.T) {
+		s := &BaselineSource{Path: "  /tmp/u.raw\n"}
+		if err := s.Validate(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if s.Path != "/tmp/u.raw" {
+			t.Errorf("Path = %q, want trimmed %q", s.Path, "/tmp/u.raw")
+		}
+	})
+
+	t.Run("url is trimmed in place", func(t *testing.T) {
+		s := &BaselineSource{URL: "  https://example.com/u.raw  "}
+		if err := s.Validate(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if s.URL != "https://example.com/u.raw" {
+			t.Errorf("URL = %q, want trimmed %q", s.URL, "https://example.com/u.raw")
+		}
+	})
+}
+
+func TestIsOverlayMode(t *testing.T) {
+	cases := []struct {
+		name string
+		tmpl *ImageTemplate
+		want bool
+	}{
+		{"nil baseline", &ImageTemplate{}, false},
+		{"create mode", &ImageTemplate{Baseline: &Baseline{Mode: BaselineModeCreate}}, false},
+		{"overlay mode", &ImageTemplate{Baseline: &Baseline{Mode: BaselineModeOverlay}}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.tmpl.IsOverlayMode(); got != c.want {
+				t.Fatalf("IsOverlayMode = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// TestSchemaAcceptsBaseline verifies the JSON schema recognises the new
+// baseline / overlayPolicy fields.
+func TestSchemaAcceptsBaseline(t *testing.T) {
+	tmpl := `{
+		"image": {"name": "ub", "version": "1.0.0"},
+		"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"},
+		"baseline": {
+			"mode": "overlay",
+			"source": {"path": "/tmp/u.raw", "format": "raw"}
+		},
+		"overlayPolicy": {
+			"packageOperation": "additive-only",
+			"conflictPolicy": "fail",
+			"kernelCmdline": "quiet",
+			"grubDefault": "Advanced options for Ubuntu>Ubuntu, with Linux 6.18-intel"
+		}
+	}`
+	if err := validate.ValidateUserTemplateJSON([]byte(tmpl)); err != nil {
+		t.Fatalf("user template with baseline should validate: %v", err)
+	}
+}
+
+// TestSchemaAcceptsBaselineSBOMPath ensures the optional baseline.source.sbomPath
+// field is accepted by the schema, and that a URI-scheme value is rejected.
+func TestSchemaAcceptsBaselineSBOMPath(t *testing.T) {
+	valid := `{
+		"image": {"name": "ub", "version": "1.0.0"},
+		"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"},
+		"baseline": {
+			"mode": "overlay",
+			"source": {"path": "/tmp/u.raw", "sbomPath": "/tmp/base.spdx.json"}
+		}
+	}`
+	if err := validate.ValidateUserTemplateJSON([]byte(valid)); err != nil {
+		t.Fatalf("template with baseline.source.sbomPath should validate: %v", err)
+	}
+
+	scheme := `{
+		"image": {"name": "ub", "version": "1.0.0"},
+		"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"},
+		"baseline": {
+			"mode": "overlay",
+			"source": {"path": "/tmp/u.raw", "sbomPath": "https://example.com/base.spdx.json"}
+		}
+	}`
+	if err := validate.ValidateUserTemplateJSON([]byte(scheme)); err == nil {
+		t.Fatalf("sbomPath with a URI scheme should be rejected by schema")
+	}
+}
+
+// TestSchemaAcceptsAllowPackageRemoval ensures the opt-in `allowPackageRemoval`
+// boolean is accepted by the OverlayPolicy schema when paired with
+// packageOperation "additive-and-upgrade", rejected when paired with (or
+// defaulting to) "additive-only", and that an unknown property is still rejected
+// by additionalProperties:false.
+func TestSchemaAcceptsAllowPackageRemoval(t *testing.T) {
+	// Accepted: allowPackageRemoval with additive-and-upgrade.
+	accepted := `{
+		"image": {"name": "ub", "version": "1.0.0"},
+		"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"},
+		"baseline": {
+			"mode": "overlay",
+			"source": {"path": "/tmp/u.raw"}
+		},
+		"overlayPolicy": {"packageOperation": "additive-and-upgrade", "allowPackageRemoval": true}
+	}`
+	if err := validate.ValidateUserTemplateJSON([]byte(accepted)); err != nil {
+		t.Fatalf("allowPackageRemoval with additive-and-upgrade should validate: %v", err)
+	}
+
+	// Rejected: allowPackageRemoval under the default (additive-only) — removal is
+	// only permitted with additive-and-upgrade.
+	rejectedAdditiveOnly := `{
+		"image": {"name": "ub", "version": "1.0.0"},
+		"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"},
+		"baseline": {
+			"mode": "overlay",
+			"source": {"path": "/tmp/u.raw"}
+		},
+		"overlayPolicy": {"packageOperation": "additive-only", "allowPackageRemoval": true}
+	}`
+	if err := validate.ValidateUserTemplateJSON([]byte(rejectedAdditiveOnly)); err == nil {
+		t.Fatalf("allowPackageRemoval under additive-only should be rejected by the schema")
+	}
+
+	// The old misspelling / any unknown property stays rejected.
+	rejected := `{
+		"image": {"name": "ub", "version": "1.0.0"},
+		"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"},
+		"baseline": {
+			"mode": "overlay",
+			"source": {"path": "/tmp/u.raw"}
+		},
+		"overlayPolicy": {"allowRemoval": true}
+	}`
+	if err := validate.ValidateUserTemplateJSON([]byte(rejected)); err == nil {
+		t.Fatalf("an unknown overlayPolicy property should still be rejected by the schema")
+	}
+}
+
+// TestSchemaAcceptsSourceURL ensures `source.url` (an http(s) baseline image)
+// is accepted by the schema.
+func TestSchemaAcceptsSourceURL(t *testing.T) {
+	tmpl := `{
+		"image": {"name": "ub", "version": "1.0.0"},
+		"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"},
+		"baseline": {
+			"mode": "overlay",
+			"source": {"url": "https://example.com/u.raw"}
+		}
+	}`
+	if err := validate.ValidateUserTemplateJSON([]byte(tmpl)); err != nil {
+		t.Fatalf("template with baseline.source.url should validate: %v", err)
+	}
+}
+
+// TestSchemaRejectsUnsupportedFormat ensures the format enum rejects a format
+// outside the supported set (raw/qcow2/vhd/vhdx), e.g. vmdk.
+func TestSchemaRejectsUnsupportedFormat(t *testing.T) {
+	tmpl := `{
+		"image": {"name": "ub", "version": "1.0.0"},
+		"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"},
+		"baseline": {
+			"mode": "overlay",
+			"source": {"path": "/tmp/u.vmdk", "format": "vmdk"}
+		}
+	}`
+	if err := validate.ValidateUserTemplateJSON([]byte(tmpl)); err == nil {
+		t.Fatalf("template with format=vmdk should be rejected by schema")
+	}
+}
+
+// TestSchemaAcceptsSupportedFormats ensures the format enum accepts every
+// supported baseline format.
+func TestSchemaAcceptsSupportedFormats(t *testing.T) {
+	for _, format := range []string{"raw", "qcow2", "vhd", "vhdx"} {
+		t.Run(format, func(t *testing.T) {
+			tmpl := fmt.Sprintf(`{
+				"image": {"name": "ub", "version": "1.0.0"},
+				"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"},
+				"baseline": {
+					"mode": "overlay",
+					"source": {"path": "/tmp/u.img", "format": %q}
+				}
+			}`, format)
+			if err := validate.ValidateUserTemplateJSON([]byte(tmpl)); err != nil {
+				t.Fatalf("template with format=%s should validate: %v", format, err)
+			}
+		})
+	}
+}
+
+// TestSchemaAcceptsCreateMode_NoBaseline verifies that omitting baseline
+// (the legacy default) still validates.
+func TestSchemaAcceptsCreateMode_NoBaseline(t *testing.T) {
+	tmpl := `{
+		"image": {"name": "ub", "version": "1.0.0"},
+		"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"}
+	}`
+	if err := validate.ValidateUserTemplateJSON([]byte(tmpl)); err != nil {
+		t.Fatalf("template without baseline should validate: %v", err)
+	}
+}
+
+// TestSchemaRejectsURLInPath ensures the path pattern guard rejects a URL
+// (e.g. an https:// value) written into baseline.source.path.
+func TestSchemaRejectsURLInPath(t *testing.T) {
+	tmpl := `{
+		"image": {"name": "ub", "version": "1.0.0"},
+		"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"},
+		"baseline": {
+			"mode": "overlay",
+			"source": {"path": "https://example.com/u.raw"}
+		}
+	}`
+	if err := validate.ValidateUserTemplateJSON([]byte(tmpl)); err == nil {
+		t.Fatalf("template with a URL in baseline.source.path should be rejected by schema")
+	}
+}
+
+// TestSchemaEnforcesModeSourceCoupling exercises the schema-layer allOf/if-then
+// rules: overlay requires source; create (explicit or defaulted) forbids it.
+func TestSchemaEnforcesModeSourceCoupling(t *testing.T) {
+	base := `{
+		"image": {"name": "ub", "version": "1.0.0"},
+		"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"},
+		"baseline": %s
+	}`
+	cases := []struct {
+		name     string
+		baseline string
+		wantErr  bool
+	}{
+		{"overlay without source is rejected", `{"mode": "overlay"}`, true},
+		{"overlay with source is accepted", `{"mode": "overlay", "source": {"path": "/tmp/u.raw"}}`, false},
+		{"create with source is rejected", `{"mode": "create", "source": {"path": "/tmp/u.raw"}}`, true},
+		{"create without source is accepted", `{"mode": "create"}`, false},
+		{"defaulted mode with source is rejected", `{"source": {"path": "/tmp/u.raw"}}`, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			tmpl := fmt.Sprintf(base, c.baseline)
+			err := validate.ValidateUserTemplateJSON([]byte(tmpl))
+			if c.wantErr && err == nil {
+				t.Fatalf("expected schema rejection, got nil")
+			}
+			if !c.wantErr && err != nil {
+				t.Fatalf("expected schema acceptance, got %v", err)
+			}
+		})
+	}
+}

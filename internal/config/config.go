@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -52,6 +53,9 @@ type DiskConfig struct {
 	Size               string              `yaml:"size"`
 	PartitionTableType string              `yaml:"partitionTableType"`
 	Partitions         []PartitionInfo     `yaml:"partitions"`
+	// ExtendLastPartitionToFillDisk forces the final partition's end to "0"
+	// (consume all remaining disk space) when enabled.
+	ExtendLastPartitionToFillDisk bool `yaml:"extendLastPartitionToFillDisk,omitempty"`
 }
 
 type PackageRepository struct {
@@ -91,23 +95,191 @@ type ProviderRepoConfigs struct {
 	Repositories []ProviderRepoConfig `yaml:"repositories"`
 }
 
-// ImageTemplate represents the YAML image template structure (unchanged)
+// Baseline-mode constants.
+const (
+	BaselineModeCreate  = "create"
+	BaselineModeOverlay = "overlay"
+
+	// Baseline image formats accepted for overlay mode. Non-RAW formats are
+	// converted to RAW (via qemu-img) before the baseline is loop-attached.
+	BaselineFormatRaw   = "raw"
+	BaselineFormatQcow2 = "qcow2"
+	BaselineFormatVHD   = "vhd"
+	BaselineFormatVHDX  = "vhdx"
+
+	OverlayPackageOpAdditiveOnly = "additive-only"
+	// OverlayPackageOpAdditiveAndUpgrade permits, in addition to adding new
+	// packages, upgrading a package already installed in the baseline to a newer
+	// version. Downgrades and removals remain blocked. Opting in flips the
+	// internal OverlayPolicy.AllowUpgrade gate (see OverlayPolicy.validate).
+	OverlayPackageOpAdditiveAndUpgrade = "additive-and-upgrade"
+
+	OverlayConflictPolicyFail          = "fail"
+	OverlayConflictPolicyAllowExplicit = "allow-explicit"
+)
+
+// Baseline configures whether the image is built from scratch ("create") or
+// constructed by overlaying packages onto an existing baseline image ("overlay").
+type Baseline struct {
+	Mode   string          `yaml:"mode,omitempty"`
+	Source *BaselineSource `yaml:"source,omitempty"`
+}
+
+// BaselineSource describes the source baseline image for overlay mode.
+// v1 supports a local RAW disk image, referenced either by a local filesystem
+// path or by an http(s) URL that is downloaded before the overlay runs.
+// Exactly one of Path or URL must be set.
+type BaselineSource struct {
+	Path   string `yaml:"path,omitempty"`
+	URL    string `yaml:"url,omitempty"`
+	Format string `yaml:"format,omitempty"`
+
+	// SBOMPath is an optional local filesystem path to an externally-supplied
+	// SPDX SBOM describing the baseline image. When set and readable, the overlay
+	// SBOM is generated as the union of this base SBOM and the overlay-contributed
+	// packages (a full inventory). When unset the overlay falls back to the SBOM
+	// the baseline image carries at /usr/share/sbom, and when neither is available
+	// only the overlay delta is written — the build never fails on a missing or
+	// malformed base SBOM. It defaults to unset for backward compatibility.
+	SBOMPath string `yaml:"sbomPath,omitempty"`
+}
+
+// OverlayPolicy controls how overlay-mode preflight classifies and gates
+// package operations against the baseline image.
+type OverlayPolicy struct {
+	PackageOperation string `yaml:"packageOperation,omitempty"`
+	ConflictPolicy   string `yaml:"conflictPolicy,omitempty"`
+	KernelCmdline    string `yaml:"kernelCmdline,omitempty"`
+
+	// GrubDefault, when set, is written verbatim to GRUB_DEFAULT in
+	// /etc/default/grub before the GRUB config is regenerated, pinning the boot
+	// menu entry that becomes the default (e.g. an Ubuntu submenu path such as
+	// "Advanced options for Ubuntu>Ubuntu, with Linux 6.8.0-40-generic"). It is
+	// only applied on a GRUB2 baseline. Used to make an overlay-added kernel the
+	// default boot target when it is not the entry GRUB would auto-select.
+	GrubDefault string `yaml:"grubDefault,omitempty"`
+
+	// AllowDiskResize gates whether an overlay build may grow the baseline image
+	// to satisfy a larger disk.size. Overlay mode preserves the baseline layout by
+	// default, so a disk.size larger than the baseline is rejected unless the user
+	// opts in here. It never permits shrinking; resize stays grow-only.
+	AllowDiskResize bool `yaml:"allowDiskResize,omitempty"`
+
+	// AllowPackageRemoval gates whether an overlay build may remove a baseline
+	// package that a to-install package conflicts with (e.g. installing dracut,
+	// which Conflicts: initramfs-tools). It defaults to false: overlay mode is
+	// additive by default and never removes a baseline package unless the template
+	// explicitly opts in here. When true, preflight reclassifies such a conflict as
+	// a permitted removal and the install step removes the conflicting package
+	// before installing. Bootloader and bootable-kernel packages are NEVER removed,
+	// regardless of this flag.
+	//
+	// It is only valid together with packageOperation "additive-and-upgrade":
+	// removal is more invasive than an in-place upgrade, so it may not be enabled
+	// under the default "additive-only" (validate() rejects that combination).
+	AllowPackageRemoval bool `yaml:"allowPackageRemoval,omitempty"`
+
+	// ReplaceKernel, when set, swaps the baseline's bootable kernel for a different
+	// one: the named replacement kernel package is installed and the baseline kernel
+	// family (image + meta + modules + headers) is removed, so the final image ships
+	// only the new kernel. The GRUB config is then regenerated so the boot menu drops
+	// the old entry and defaults to the new kernel; the ESP and the bootloader binary
+	// are never touched (no grub-install, no Secure Boot re-signing).
+	//
+	// It self-authorizes its own kernel-family removals through a dedicated preflight
+	// path and therefore does NOT require (or imply) allowPackageRemoval — the two
+	// knobs are orthogonal: allowPackageRemoval governs conflict-driven removal of
+	// NON-kernel baseline packages, which overlay never does to a kernel image.
+	//
+	// Like allowPackageRemoval it is only valid together with packageOperation
+	// "additive-and-upgrade": a full kernel swap is strictly more invasive than an
+	// in-place upgrade, so it may not be enabled under the default "additive-only"
+	// (validate() rejects that combination).
+	ReplaceKernel *ReplaceKernel `yaml:"replaceKernel,omitempty"`
+
+	// AllowDowngrade gates whether preflight permits downgrading a baseline
+	// package to an older version. Like AllowRemoval it is intentionally NOT a
+	// YAML field (the schema rejects it via additionalProperties:false) and
+	// always carries its zero value (false): overlay mode is additive-only in
+	// v1, so downgrades are blocked by default. A future release can surface it.
+	AllowDowngrade bool `yaml:"-"`
+
+	// AllowUpgrade gates whether preflight permits upgrading a baseline package
+	// to a newer version. Like AllowRemoval/AllowDowngrade it is intentionally
+	// NOT a YAML field (the schema rejects it via additionalProperties:false);
+	// it is instead derived from PackageOperation by validate(), which sets it
+	// true when packageOperation is "additive-and-upgrade" and leaves it false
+	// (the default) for "additive-only". Enabling it lets the deb backend replace
+	// an installed package in place (dpkg -i upgrades), and switches the rpm
+	// backend to `rpm -U`; downgrades and removals stay blocked regardless.
+	AllowUpgrade bool `yaml:"-"`
+}
+
+// ReplaceKernel names the replacement kernel for an overlay kernel swap (see
+// OverlayPolicy.ReplaceKernel). The baseline kernel packages to remove are
+// auto-detected from the baseline inventory (the kernel family minus the
+// replacement kernel's own closure), so a caller cannot leave the swap
+// half-applied with a stale partial remove list.
+type ReplaceKernel struct {
+	// Package is the replacement kernel image package to install, resolved from the
+	// configured repositories (e.g. "linux-image-6.11.0-1004-oem"). Required.
+	Package string `yaml:"package"`
+
+	// AdditionalPackages names further kernel-family packages to install alongside
+	// Package (e.g. the matching "linux-headers-*" package). Each entry is appended
+	// to the overlay's requested package set exactly like Package, so it flows
+	// through the same resolve -> download -> closure -> ToInstall path and is
+	// preflighted as an ActionAdd; a stale baseline package sharing its kernel-family
+	// prefix (e.g. old headers) is swept by the existing kernel-replacement removal
+	// logic without any special-casing, since that logic's keep-set already spans
+	// the full resolved closure.
+	AdditionalPackages []string `yaml:"additionalPackages,omitempty"`
+
+	// EnableExtraModules lists driver modules (space-separated, e.g. "intel_vpu
+	// uas") to force into the replacement kernel's initramfs, mirroring
+	// systemConfig.kernel.enableExtraModules but scoped to the replacement kernel
+	// swap. Passed to the baseline's initramfs generator (dracut --add-drivers or an
+	// initramfs-tools /etc/initramfs-tools/modules entry).
+	EnableExtraModules string `yaml:"enableExtraModules,omitempty"`
+
+	// Version is descriptive only (mirrors systemConfig.kernel.version): it is
+	// never fed into the resolver or the package manager, only surfaced for
+	// reporting (e.g. the compose API summary).
+	Version string `yaml:"version,omitempty"`
+}
+
+// ImageTemplate represents the YAML image template structure
 type ImageTemplate struct {
+	Extends             string              `yaml:"extends,omitempty"`
 	Image               ImageInfo           `yaml:"image"`
 	Target              TargetInfo          `yaml:"target"`
+	Baseline            *Baseline           `yaml:"baseline,omitempty"`
+	OverlayPolicy       *OverlayPolicy      `yaml:"overlayPolicy,omitempty"`
 	Disk                DiskConfig          `yaml:"disk,omitempty"`
 	SystemConfig        SystemConfig        `yaml:"systemConfig"`
 	PackageRepositories []PackageRepository `yaml:"packageRepositories,omitempty"`
 
 	// Explicitly excluded from YAML serialization/deserialization
-	PathList             []string                `yaml:"-"`
-	BootloaderPkgList    []string                `yaml:"-"`
-	EssentialPkgList     []string                `yaml:"-"`
-	KernelPkgList        []string                `yaml:"-"`
-	FullPkgList          []string                `yaml:"-"`
-	FullPkgListBom       []ospackage.PackageInfo `yaml:"-"`
-	DotFilePath          string                  `yaml:"-"`
-	DotSystemOnly        bool                    `yaml:"-"`
+	PathList            []string                `yaml:"-"`
+	BootloaderPkgList   []string                `yaml:"-"`
+	EssentialPkgList    []string                `yaml:"-"`
+	KernelPkgList       []string                `yaml:"-"`
+	FullPkgList         []string                `yaml:"-"`
+	FullPkgListBom      []ospackage.PackageInfo `yaml:"-"`
+	SBOMPackageMetadata []ospackage.PackageInfo `yaml:"sbomPackageMetadata,omitempty"`
+	// ResolvedKernelPackages holds the concrete kernel package names a build
+	// resolved from systemConfig.kernel.packages (a glob is narrowed to the single
+	// selected kernel). It is serialized so an installer ISO's separate
+	// live-installer process installs exactly that kernel instead of re-expanding
+	// the glob against apt.
+	ResolvedKernelPackages []string `yaml:"resolvedKernelPackages,omitempty"`
+	DotFilePath            string   `yaml:"-"`
+	DotSystemOnly          bool     `yaml:"-"`
+	// InspectEnabled toggles post-build image inspection for overlay builds. It is
+	// driven by the CLI --inspect/--no-inspect flags (default on) rather than YAML,
+	// so it is excluded from serialization. Consumed by the overlay postprocess
+	// inspection stage.
+	InspectEnabled       bool `yaml:"-"`
 	pureBuildStart       time.Time
 	pureBuildDuration    time.Duration
 	downloadPkgsStart    time.Time
@@ -184,6 +356,18 @@ type NetworkConfig struct {
 	Interfaces []NetworkInterface `yaml:"interfaces,omitempty"` // Interfaces: list of interfaces to configure
 }
 
+// FDEConfig holds the full-disk-encryption configuration
+type FDEConfig struct {
+	Enabled        bool     `yaml:"enabled"`                  // Enabled: whether full-disk encryption is enabled (default: false)
+	PassphraseFile string   `yaml:"passphraseFile,omitempty"` // PassphraseFile: local file containing the passphrase
+	Partitions     []string `yaml:"partitions,omitempty"`     // Partitions: disk partition IDs to encrypt (e.g., "rootfs", "userdata")
+	Unlock         string   `yaml:"unlock,omitempty"`         // Unlock: boot unlock mode, "auto" (keyfile, no prompt; default) or "manual" (interactive passphrase)
+
+	// Passphrase is resolved from PassphraseFile at load time and is intentionally
+	// never read from YAML to avoid plaintext secrets in templates.
+	Passphrase string `yaml:"-"`
+}
+
 // SystemConfig represents a system configuration within the template
 type SystemConfig struct {
 	Name            string               `yaml:"name"`
@@ -191,6 +375,7 @@ type SystemConfig struct {
 	Initramfs       Initramfs            `yaml:"initramfs,omitempty"`
 	HostName        string               `yaml:"hostname,omitempty"`
 	Immutability    ImmutabilityConfig   `yaml:"immutability,omitempty"`
+	FDE             FDEConfig            `yaml:"fde,omitempty"`
 	Users           []UserConfig         `yaml:"users,omitempty"`
 	Bootloader      Bootloader           `yaml:"bootloader"`
 	Network         NetworkConfig        `yaml:"network,omitempty"`
@@ -200,10 +385,29 @@ type SystemConfig struct {
 	Kernel          KernelConfig         `yaml:"kernel"`
 }
 
+// AdditionalFile stage markers control WHEN an overlay build copies an
+// additionalFiles entry relative to initramfs/boot regeneration.
+const (
+	// AdditionalFileStageDefault copies the file at the end of the build, after
+	// initramfs and GRUB regeneration. It is the default (empty stage) and matches
+	// the historical behavior, so existing templates are unaffected.
+	AdditionalFileStageDefault = ""
+	// AdditionalFileStagePreInitramfs copies the file BEFORE boot/initramfs
+	// regeneration, so content the initramfs generator consumes (e.g. a dracut
+	// module under /usr/lib/dracut or an initramfs-tools hook) is in place when the
+	// initramfs is (re)built rather than dropped in too late to take effect.
+	AdditionalFileStagePreInitramfs = "pre-initramfs"
+)
+
 // AdditionalFileInfo holds information about local file and final path to be placed in the image
 type AdditionalFileInfo struct {
 	Local string `yaml:"local"` // path to the file on the host system
 	Final string `yaml:"final"` // path where the file should be placed in the image
+	// Stage controls WHEN the file is copied in overlay builds: "" (default) copies
+	// at the end of the build (after regeneration), "pre-initramfs" copies before
+	// boot/initramfs regeneration so the generator can consume it. Ignored by
+	// create-mode builds, which have a single file-copy step.
+	Stage string `yaml:"stage,omitempty"`
 }
 
 // ConfigurationInfo holds information about instructions to execute during system configuration
@@ -238,6 +442,8 @@ type PartitionInfo struct {
 
 var log = logger.Logger()
 
+var invalidBlockScalarHeaderPattern = regexp.MustCompile(`(: \|)\d+([+-]?)\n`)
+
 // LoadTemplate loads an ImageTemplate from the specified YAML template path
 func LoadTemplate(path string, validateFull bool) (*ImageTemplate, error) {
 
@@ -260,9 +466,18 @@ func LoadTemplate(path string, validateFull bool) (*ImageTemplate, error) {
 		return nil, fmt.Errorf("failed to load template: %w", err)
 	}
 
+	if err := resolveFDEPassphrase(template, path); err != nil {
+		return nil, err
+	}
+
 	// Store the template path info
-	if !slice.Contains(template.PathList, path) {
-		template.PathList = append(template.PathList, path)
+	canonicalPath, absErr := filepath.Abs(path)
+	if absErr != nil {
+		canonicalPath = path
+	}
+
+	if !slice.Contains(template.PathList, canonicalPath) {
+		template.PathList = append(template.PathList, canonicalPath)
 	}
 
 	log.Infof("Loaded image template from %s: name=%s, os=%s, dist=%s, arch=%s",
@@ -308,6 +523,14 @@ func parseYAMLTemplate(data []byte, validateFull bool) (*ImageTemplate, error) {
 	}
 
 	if err := template.validatePackageRepositories(); err != nil {
+		return nil, err
+	}
+
+	if err := template.validateBaseline(); err != nil {
+		return nil, err
+	}
+
+	if err := template.validateUsers(); err != nil {
 		return nil, err
 	}
 
@@ -634,21 +857,15 @@ func (t *ImageTemplate) GetAdditionalFileInfo() []AdditionalFileInfo {
 					log.Warnf("Cannot resolve relative additional file path without template file context: %+v",
 						t.SystemConfig.AdditionalFiles[i])
 				} else {
-					var found bool
-					for _, path := range t.PathList {
-						templateDir := filepath.Dir(path)
-						candidatePath := filepath.Join(templateDir, t.SystemConfig.AdditionalFiles[i].Local)
-						if _, err := os.Stat(candidatePath); err == nil {
-							newFileInfo := AdditionalFileInfo{
-								Local: candidatePath,
-								Final: t.SystemConfig.AdditionalFiles[i].Final,
-							}
-							PathUpdatedList = append(PathUpdatedList, newFileInfo)
-							found = true
-							break
+					candidatePath, found := resolveTemplateRelativePath(t.PathList, t.SystemConfig.AdditionalFiles[i].Local)
+					if found {
+						newFileInfo := AdditionalFileInfo{
+							Local: candidatePath,
+							Final: t.SystemConfig.AdditionalFiles[i].Final,
+							Stage: t.SystemConfig.AdditionalFiles[i].Stage,
 						}
-					}
-					if !found {
+						PathUpdatedList = append(PathUpdatedList, newFileInfo)
+					} else {
 						log.Warnf("Ignoring additional file entry with non-existent local path: %+v",
 							t.SystemConfig.AdditionalFiles[i])
 					}
@@ -657,6 +874,32 @@ func (t *ImageTemplate) GetAdditionalFileInfo() []AdditionalFileInfo {
 		}
 	}
 	return PathUpdatedList
+}
+
+// resolveTemplateRelativePath resolves a relative path against each template path
+// and each of its ancestor directories. This lets nested templates reference
+// shared assets from a parent template directory (for example,
+// image-templates/additionalfiles).
+func resolveTemplateRelativePath(templatePaths []string, relativePath string) (string, bool) {
+	cleanRelativePath := filepath.Clean(relativePath)
+
+	for _, templatePath := range templatePaths {
+		templateDir := filepath.Dir(templatePath)
+		for {
+			candidatePath := filepath.Join(templateDir, cleanRelativePath)
+			if _, err := os.Stat(candidatePath); err == nil {
+				return candidatePath, true
+			}
+
+			parentDir := filepath.Dir(templateDir)
+			if parentDir == templateDir {
+				break
+			}
+			templateDir = parentDir
+		}
+	}
+
+	return "", false
 }
 
 func (t *ImageTemplate) GetConfigurationInfo() []ConfigurationInfo {
@@ -689,11 +932,11 @@ func (t *ImageTemplate) SaveUpdatedConfigFile(path string) error {
 		return fmt.Errorf("failed to create directory for config file: %w", err)
 	}
 
-	// Marshal the template to YAML
-	data, err := yaml.Marshal(t)
+	// Marshal to YAML (includes the block-scalar-header repair).
+	data, err := MarshalTemplateYAML(t)
 	if err != nil {
-		log.Errorf("Error marshaling image template to YAML: %v", err)
-		return fmt.Errorf("error marshaling template to YAML: %w", err)
+		log.Errorf("Failed to marshal image template: %v", err)
+		return err
 	}
 
 	// Write file safely with symlink protection
@@ -706,6 +949,41 @@ func (t *ImageTemplate) SaveUpdatedConfigFile(path string) error {
 	return nil
 }
 
+// MarshalTemplateYAML marshals an ImageTemplate to YAML bytes, applying the same
+// block-scalar-header repair used by SaveUpdatedConfigFile so callers can safely
+// emit the result to stdout or another sink.
+func MarshalTemplateYAML(t *ImageTemplate) ([]byte, error) {
+	if t == nil {
+		return nil, fmt.Errorf("template is nil")
+	}
+
+	data, err := yaml.Marshal(t)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling template to YAML: %w", err)
+	}
+
+	if err := validateYAMLBytes(data); err != nil {
+		data = fixInvalidBlockScalarHeader(data)
+		if verr := validateYAMLBytes(data); verr != nil {
+			return nil, fmt.Errorf("generated YAML is invalid after block scalar header fix: %w", verr)
+		}
+	}
+
+	return data, nil
+}
+
+func validateYAMLBytes(data []byte) error {
+	var parsed any
+
+	return yaml.Unmarshal(data, &parsed)
+}
+
+func fixInvalidBlockScalarHeader(data []byte) []byte {
+	// Work around yaml.v3 emitting invalid explicit indent headers such as "|4-".
+	// Keep the payload and chomping mode untouched, and drop only the indent indicator.
+	return invalidBlockScalarHeaderPattern.ReplaceAll(data, []byte("$1$2\n"))
+}
+
 // GetImmutability returns the immutability configuration from systemConfig
 func (t *ImageTemplate) GetImmutability() ImmutabilityConfig {
 	return t.SystemConfig.Immutability
@@ -714,6 +992,87 @@ func (t *ImageTemplate) GetImmutability() ImmutabilityConfig {
 // IsImmutabilityEnabled returns whether immutability is enabled
 func (t *ImageTemplate) IsImmutabilityEnabled() bool {
 	return t.SystemConfig.Immutability.Enabled
+}
+
+// IsFDEEnabled returns whether full-disk encryption is enabled
+func (t *ImageTemplate) IsFDEEnabled() bool {
+	return t.SystemConfig.FDE.Enabled
+}
+
+// GetFDEPassphrase returns the full-disk-encryption passphrase resolved in
+// memory from systemConfig.fde.passphraseFile.
+func (t *ImageTemplate) GetFDEPassphrase() string {
+	return t.SystemConfig.FDE.Passphrase
+}
+
+// GetFDEPassphraseFile returns the local file path used to source the
+// full-disk-encryption passphrase, when configured.
+func (t *ImageTemplate) GetFDEPassphraseFile() string {
+	return t.SystemConfig.FDE.PassphraseFile
+}
+
+func resolveFDEPassphrase(template *ImageTemplate, templatePath string) error {
+	if !template.IsFDEEnabled() {
+		return nil
+	}
+
+	passphraseFile := strings.TrimSpace(template.SystemConfig.FDE.PassphraseFile)
+	if passphraseFile == "" {
+		return nil
+	}
+
+	if !filepath.IsAbs(passphraseFile) {
+		passphraseFile = filepath.Join(filepath.Dir(templatePath), passphraseFile)
+	}
+
+	passphraseData, err := security.SafeReadFile(passphraseFile, security.RejectSymlinks)
+	if err != nil {
+		return fmt.Errorf("failed to read systemConfig.fde.passphraseFile %q: %w", passphraseFile, err)
+	}
+
+	passphrase := strings.TrimSpace(string(passphraseData))
+	if passphrase == "" {
+		return fmt.Errorf("systemConfig.fde.passphraseFile %q is empty", passphraseFile)
+	}
+
+	template.SystemConfig.FDE.PassphraseFile = passphraseFile
+	template.SystemConfig.FDE.Passphrase = passphrase
+
+	return nil
+}
+
+// GetFDEPartitions returns the list of partition IDs to encrypt.
+func (t *ImageTemplate) GetFDEPartitions() []string {
+	return t.SystemConfig.FDE.Partitions
+}
+
+// GetFDEUnlockMode returns the boot unlock mode for full-disk encryption. It
+// defaults to "auto" (keyfile-based, no prompt); only an explicit "manual"
+// selects interactive passphrase unlock.
+func (t *ImageTemplate) GetFDEUnlockMode() string {
+	if t.SystemConfig.FDE.Unlock == "manual" {
+		return "manual"
+	}
+	return "auto"
+}
+
+// IsFDEAutoUnlock reports whether FDE is enabled and set to automatic
+// (keyfile-based) unlock at boot.
+func (t *ImageTemplate) IsFDEAutoUnlock() bool {
+	return t.IsFDEEnabled() && t.GetFDEUnlockMode() == "auto"
+}
+
+// IsFDEPartition reports whether the given partition ID is marked for encryption.
+func (t *ImageTemplate) IsFDEPartition(id string) bool {
+	if !t.IsFDEEnabled() {
+		return false
+	}
+	for _, p := range t.SystemConfig.FDE.Partitions {
+		if p == id {
+			return true
+		}
+	}
+	return false
 }
 
 // GetSecureBootDBKeyPath returns the secure boot DB key path from the immutability config
@@ -1031,4 +1390,376 @@ func (pr *PackageRepository) ValidatePackageRepository() error {
 		return fmt.Errorf("repository '%s': cannot specify both 'url' and 'path', choose one", pr.Codename)
 	}
 	return nil
+}
+
+// validateBaseline enforces cross-field rules that the JSON schema cannot express:
+// mode/source coupling, format restrictions, and overlay policy invariants.
+// overlayPolicy is a top-level peer to baseline (per the image-extension ADR),
+// so it is only permitted when baseline.mode is "overlay".
+func (t *ImageTemplate) validateBaseline() error {
+	mode := BaselineModeCreate
+	if t.Baseline != nil && t.Baseline.Mode != "" {
+		mode = t.Baseline.Mode
+	}
+
+	switch mode {
+	case BaselineModeCreate:
+		if t.Baseline != nil && t.Baseline.Source != nil {
+			return fmt.Errorf("baseline: source must not be set when mode is %q", BaselineModeCreate)
+		}
+		if t.OverlayPolicy != nil {
+			return fmt.Errorf("overlayPolicy must not be set when baseline.mode is %q", BaselineModeCreate)
+		}
+	case BaselineModeOverlay:
+		if t.Baseline.Source == nil {
+			return fmt.Errorf("baseline: source is required when mode is %q", BaselineModeOverlay)
+		}
+		if err := t.Baseline.Source.Validate(); err != nil {
+			return err
+		}
+		format := t.Baseline.Source.Format
+		if format == "" {
+			format = BaselineFormatRaw
+		}
+		switch format {
+		case BaselineFormatRaw, BaselineFormatQcow2, BaselineFormatVHD, BaselineFormatVHDX:
+			// supported; non-raw formats are converted to RAW before loop-attach.
+		default:
+			return fmt.Errorf("baseline.source.format %q not supported in this release: "+
+				"must be one of %q, %q, %q, %q. Support for additional formats is tracked in the overlay backlog",
+				format, BaselineFormatRaw, BaselineFormatQcow2, BaselineFormatVHD, BaselineFormatVHDX)
+		}
+		if t.OverlayPolicy != nil {
+			if err := t.OverlayPolicy.validate(); err != nil {
+				return err
+			}
+		}
+		if err := t.validateOverlaySystemConfig(); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("baseline.mode must be %q or %q (got %q)",
+			BaselineModeCreate, BaselineModeOverlay, t.Baseline.Mode)
+	}
+	return nil
+}
+
+// validateOverlaySystemConfig rejects systemConfig sections that an overlay build
+// cannot apply. Overlay mode layers packages, users, configurations, and
+// additional files onto an already-provisioned baseline image; it does not re-run
+// the system-provisioning stages that own hostname, network, initramfs, kernel,
+// immutability, FDE, and bootloader. Those sections used to pass schema
+// validation and then be dropped silently, so a template that set them appeared
+// to succeed while producing an image that ignored them. Fail the build up front
+// instead, naming every offending section so the user can remove them all in one
+// pass. Sections are checked (and reported) in a fixed order for deterministic
+// error output.
+func (t *ImageTemplate) validateOverlaySystemConfig() error {
+	sc := t.SystemConfig
+
+	var offending []string
+	// Note: systemConfig.users IS supported in overlay mode — the overlay build
+	// provisions them onto the baseline (and stops the build if a requested user
+	// already exists in the baseline image). It is intentionally absent here.
+	if sc.HostName != "" {
+		offending = append(offending, "hostname")
+	}
+	if !isEmptyNetworkConfig(sc.Network) {
+		offending = append(offending, "network")
+	}
+	if sc.Initramfs.Template != "" {
+		offending = append(offending, "initramfs")
+	}
+	if !isEmptyKernelConfig(sc.Kernel) {
+		offending = append(offending, "kernel")
+	}
+	// Detect immutability via BOTH the YAML "was this section present" marker AND the
+	// exported fields: a template built programmatically (not unmarshalled from YAML)
+	// sets Enabled / SecureBoot* directly while wasProvided stays false, and overlay
+	// mode must reject a requested immutability section either way rather than silently
+	// ignoring it.
+	if sc.Immutability.wasProvided || sc.Immutability.Enabled ||
+		sc.Immutability.SecureBootDBKey != "" || sc.Immutability.SecureBootDBCrt != "" ||
+		sc.Immutability.SecureBootDBCer != "" {
+		offending = append(offending, "immutability")
+	}
+	if sc.FDE.Enabled || sc.FDE.PassphraseFile != "" || len(sc.FDE.Partitions) > 0 || sc.FDE.Unlock != "" {
+		offending = append(offending, "fde")
+	}
+	if !isEmptyBootloader(sc.Bootloader) {
+		offending = append(offending, "bootloader")
+	}
+
+	if len(offending) == 0 {
+		return nil
+	}
+
+	sections := make([]string, len(offending))
+	for i, s := range offending {
+		sections[i] = "systemConfig." + s
+	}
+	return fmt.Errorf("overlay mode does not support the following systemConfig section(s): %s; "+
+		"an overlay layers packages, configurations, and additionalFiles onto an existing baseline "+
+		"and cannot modify these — remove them from the template",
+		strings.Join(sections, ", "))
+}
+
+// unixUserNameRe matches a safe account name: it starts with a letter, digit, or
+// underscore and then allows letters, digits, underscore, dot, and dash, up to 32
+// characters. It deliberately excludes whitespace, path separators, and every
+// shell metacharacter. User names are interpolated into commands executed via
+// `bash -c` during provisioning, so an unconstrained name (for example
+// "root; passwd -d root") would be a command-injection vector; constraining the
+// name here also makes the overlay baseline-conflict check reliable, since an
+// exact-name comparison cannot then be bypassed by embedding shell syntax.
+var unixUserNameRe = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,31}$`)
+
+// isConfinedImagePath reports whether p is a safe absolute in-image path for a
+// user's startupScript. configUserStartupScript joins it onto installRoot and
+// writes it into the shell field of /etc/passwd, so it must be absolute and
+// already canonical (filepath.Clean is a no-op) — otherwise a "../" component
+// would let filepath.Join escape installRoot — and it must contain neither ":"
+// (the /etc/passwd field delimiter) nor any control character (a newline would
+// inject an extra passwd line).
+func isConfinedImagePath(p string) bool {
+	if !strings.HasPrefix(p, "/") || filepath.Clean(p) != p {
+		return false
+	}
+	for _, r := range p {
+		if r == ':' || r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+// validateUsers rejects any systemConfig.users entry whose name — or supplementary
+// group name — is not a safe Unix name. It runs in both create and overlay modes
+// (users are provisioned by the same code path) as a defense-in-depth guard for
+// templates that reach the Go layer without passing JSON-schema validation. Group
+// names are interpolated into getent/groupadd/usermod command strings during
+// provisioning exactly like the account name, so they need the same constraint;
+// placeholder entries (e.g. "<REQUIRED_GROUP>") are skipped here because they are
+// also skipped at provisioning time (see collectUserGroups). A user's startupScript
+// is rewritten into /etc/passwd from a path joined onto installRoot, so it must be a
+// clean, confined in-image path (see isConfinedImagePath).
+func (t *ImageTemplate) validateUsers() error {
+	var invalidNames, invalidGroups, invalidScripts []string
+	for _, u := range t.SystemConfig.Users {
+		if !unixUserNameRe.MatchString(u.Name) {
+			invalidNames = append(invalidNames, fmt.Sprintf("%q", u.Name))
+		}
+		for _, g := range u.Groups {
+			g = strings.TrimSpace(g)
+			if g == "" || (strings.HasPrefix(g, "<") && strings.HasSuffix(g, ">")) {
+				continue
+			}
+			if !unixUserNameRe.MatchString(g) {
+				invalidGroups = append(invalidGroups, fmt.Sprintf("%q", g))
+			}
+		}
+		if u.StartupScript != "" && !isConfinedImagePath(u.StartupScript) {
+			invalidScripts = append(invalidScripts, fmt.Sprintf("%q", u.StartupScript))
+		}
+	}
+	if len(invalidNames) > 0 {
+		return fmt.Errorf("invalid systemConfig.users name(s) %s: a user name must match %s "+
+			"(letters, digits, underscore, dot, dash; first character a letter, digit, or underscore; max 32 characters)",
+			strings.Join(invalidNames, ", "), unixUserNameRe.String())
+	}
+	if len(invalidGroups) > 0 {
+		return fmt.Errorf("invalid systemConfig.users group name(s) %s: a group name must match %s "+
+			"(letters, digits, underscore, dot, dash; first character a letter, digit, or underscore; max 32 characters)",
+			strings.Join(invalidGroups, ", "), unixUserNameRe.String())
+	}
+	if len(invalidScripts) > 0 {
+		return fmt.Errorf("invalid systemConfig.users startupScript path(s) %s: a startup script must be a clean, "+
+			"absolute in-image path with no \"..\" traversal and no \":\" or control characters (for example \"/usr/local/bin/startup.sh\")",
+			strings.Join(invalidScripts, ", "))
+	}
+	return nil
+}
+
+// Validate enforces that exactly one of Path or URL is set, and that a URL uses
+// the https scheme. Plain http is rejected so the baseline is always fetched
+// over TLS, matching the https-only policy used for other remote downloads in
+// this tool (e.g. RPM packages). Integrity verification of the downloaded image
+// is intentionally deferred. Local paths are taken from the host build system
+// as-is; https URLs are downloaded before the overlay runs.
+func (s *BaselineSource) Validate() error {
+	// Normalize by trimming surrounding whitespace and persist it back onto the
+	// struct so callers (overlay ingestion) use the same value that was
+	// validated. Otherwise a padded path/URL could pass validation here but then
+	// fail with a confusing error during copy/download.
+	path := strings.TrimSpace(s.Path)
+	rawURL := strings.TrimSpace(s.URL)
+	s.Path = path
+	s.URL = rawURL
+	// Normalize the format to lower-case so downstream overlay ingestion compares
+	// the declared format against qemu-img's (lower-cased) detected format on equal
+	// footing. YAML-loaded templates are already constrained to the lower-case
+	// schema enum (raw/qcow2/vhd/vhdx) before this runs, so this primarily
+	// normalizes programmatically-built templates, which reach ingestion via
+	// Validate() without passing through schema validation.
+	s.Format = strings.ToLower(strings.TrimSpace(s.Format))
+
+	// Normalize the optional external base-SBOM path and persist it. It is a local
+	// file path only (a URI scheme is rejected); existence is intentionally NOT
+	// checked here — an absent or unreadable base SBOM is handled gracefully at
+	// SBOM-generation time (delta-only fallback), so it must not fail validation.
+	sbomPath := strings.TrimSpace(s.SBOMPath)
+	s.SBOMPath = sbomPath
+	if sbomPath != "" {
+		if parsed, err := url.Parse(sbomPath); err == nil && parsed.Scheme != "" {
+			return fmt.Errorf("baseline.source.sbomPath must be a local file path (no URI scheme)")
+		}
+	}
+
+	switch {
+	case path == "" && rawURL == "":
+		return fmt.Errorf("baseline.source must set either %q or %q", "path", "url")
+	case path != "" && rawURL != "":
+		return fmt.Errorf("baseline.source must set only one of %q or %q", "path", "url")
+	case path != "":
+		// Reject any URI scheme (e.g. http:/, file:/path, file://...). Local
+		// paths have no scheme; remote images belong in baseline.source.url.
+		if parsed, err := url.Parse(path); err == nil && parsed.Scheme != "" {
+			return fmt.Errorf("baseline.source.path must be a local file path; use baseline.source.url for remote images")
+		}
+	case rawURL != "":
+		parsed, err := url.Parse(rawURL)
+		if err != nil {
+			return fmt.Errorf("baseline.source.url is not a valid URL: %w", err)
+		}
+		// Require https so the baseline is always fetched over TLS. Plain http
+		// offers no integrity or authenticity guarantee for a whole-disk image
+		// and is rejected here, consistent with other remote downloads.
+		if parsed.Scheme != "https" {
+			return fmt.Errorf("baseline.source.url must use https (got %q)", parsed.Scheme)
+		}
+		// Reject a scheme-only URL like "https://" (no host): it passes the
+		// scheme check but would fail later with an opaque download error.
+		// Catching it here gives an immediate, clear message.
+		if parsed.Host == "" {
+			return fmt.Errorf("baseline.source.url must include a host (got %q)", rawURL)
+		}
+	}
+	return nil
+}
+
+// kernelModulesPattern allowlists overlayPolicy.replaceKernel.enableExtraModules:
+// module names and the spaces separating them, nothing else. Each module must
+// start with an alphanumeric character or underscore so a leading "-" (e.g.
+// "-n") can never be mistaken for an option by a downstream command consuming it.
+var kernelModulesPattern = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*( [A-Za-z0-9_][A-Za-z0-9_.-]*)*$`)
+
+// validateKernelPackageName rejects whitespace and shell metacharacters in a
+// replaceKernel package name (Package or an AdditionalPackages entry): the name
+// seeds the resolver and is passed to the package manager (dpkg/rpm) inside the
+// baseline chroot, so a malformed name must never reach a command line. The glob
+// wildcards the resolver itself understands (`*`, `?`, `[...]`) are intentionally
+// NOT rejected, so a replacement kernel can be specified with the same wildcard
+// syntax as any other systemConfig package; the swap logic tolerates a globbed
+// name (kernel-family detection is prefix-based and the removal set is derived
+// from the resolved concrete packages). A real kernel package name never needs
+// the rejected characters.
+func validateKernelPackageName(field, name string) error {
+	if strings.ContainsAny(name, " \t\r\n\"'`$\\;&|<>(){}!") {
+		return fmt.Errorf("%s %q must not contain whitespace or shell metacharacters (glob wildcards *, ?, and [...] are allowed)", field, name)
+	}
+	return nil
+}
+
+func (p *OverlayPolicy) validate() error {
+	op := p.PackageOperation
+	if op == "" {
+		op = OverlayPackageOpAdditiveOnly
+	}
+	switch op {
+	case OverlayPackageOpAdditiveOnly:
+		// Additive-only: upgrades of baseline packages stay blocked.
+		p.AllowUpgrade = false
+	case OverlayPackageOpAdditiveAndUpgrade:
+		// Opt in to upgrading already-installed baseline packages. Downgrades stay
+		// gated off (AllowDowngrade stays false).
+		p.AllowUpgrade = true
+	default:
+		return fmt.Errorf("overlayPolicy.packageOperation must be %q or %q (got %q)",
+			OverlayPackageOpAdditiveOnly, OverlayPackageOpAdditiveAndUpgrade, p.PackageOperation)
+	}
+	// Package removal is a strictly more invasive operation than an in-place
+	// upgrade, so it is only permitted under additive-and-upgrade. Under
+	// additive-only (the default) allowPackageRemoval is rejected rather than
+	// silently ignored, so a template that expects removals fails loudly instead
+	// of building an image where the conflicting baseline package was left in place.
+	if p.AllowPackageRemoval && op != OverlayPackageOpAdditiveAndUpgrade {
+		return fmt.Errorf("overlayPolicy.allowPackageRemoval requires packageOperation %q (got %q)",
+			OverlayPackageOpAdditiveAndUpgrade, op)
+	}
+	// A kernel swap installs a new kernel and removes the baseline kernel family, so
+	// it is strictly more invasive than an in-place upgrade and — like
+	// allowPackageRemoval — is only permitted under additive-and-upgrade. It
+	// self-authorizes its kernel-family removals in preflight, so it does NOT also
+	// require allowPackageRemoval.
+	if p.ReplaceKernel != nil {
+		pkg := strings.TrimSpace(p.ReplaceKernel.Package)
+		if pkg == "" {
+			return fmt.Errorf("overlayPolicy.replaceKernel.package must be set")
+		}
+		if err := validateKernelPackageName("overlayPolicy.replaceKernel.package", pkg); err != nil {
+			return err
+		}
+		for _, ap := range p.ReplaceKernel.AdditionalPackages {
+			ap = strings.TrimSpace(ap)
+			if ap == "" {
+				return fmt.Errorf("overlayPolicy.replaceKernel.additionalPackages entries must not be empty")
+			}
+			if err := validateKernelPackageName("overlayPolicy.replaceKernel.additionalPackages", ap); err != nil {
+				return err
+			}
+		}
+		// EnableExtraModules is interpolated into the baseline's initramfs-generator
+		// command (dracut --add-drivers, or an initramfs-tools modules file entry), so
+		// it is validated by allowlist rather than denylist: module names and the
+		// spaces separating them are the only content it ever needs.
+		if em := p.ReplaceKernel.EnableExtraModules; em != "" && !kernelModulesPattern.MatchString(em) {
+			return fmt.Errorf("overlayPolicy.replaceKernel.enableExtraModules %q must contain only module names "+
+				"(letters, digits, underscore, dot, dash) separated by spaces", em)
+		}
+		if op != OverlayPackageOpAdditiveAndUpgrade {
+			return fmt.Errorf("overlayPolicy.replaceKernel requires packageOperation %q (got %q)",
+				OverlayPackageOpAdditiveAndUpgrade, op)
+		}
+	}
+	cp := p.ConflictPolicy
+	if cp == "" {
+		cp = OverlayConflictPolicyFail
+	}
+	if cp != OverlayConflictPolicyFail && cp != OverlayConflictPolicyAllowExplicit {
+		return fmt.Errorf("overlayPolicy.conflictPolicy must be %q or %q (got %q)",
+			OverlayConflictPolicyFail, OverlayConflictPolicyAllowExplicit, p.ConflictPolicy)
+	}
+	// kernelCmdline and grubDefault are written verbatim into
+	// GRUB_CMDLINE_LINUX="..." / GRUB_DEFAULT="..." assignments in /etc/default/grub,
+	// which update-grub/grub-mkconfig then `.`-source (as root) during regeneration.
+	// Inside that double-quoted, shell-sourced assignment a double quote prematurely
+	// closes it, a newline splits it, a '$' or backtick is expanded /
+	// command-substituted (the latter an injection surface running as root at regen
+	// time), and a trailing backslash escapes the closing quote (leaving the string
+	// unterminated). None are needed by a kernel command line or a GRUB_DEFAULT entry,
+	// so all are rejected up front rather than producing a broken or dangerous defaults
+	// file.
+	const grubValueForbidden = "\"$`\\\n"
+	if strings.ContainsAny(p.KernelCmdline, grubValueForbidden) {
+		return fmt.Errorf("overlayPolicy.kernelCmdline must not contain a double quote, dollar sign, backtick, backslash, or newline")
+	}
+	if strings.ContainsAny(p.GrubDefault, grubValueForbidden) {
+		return fmt.Errorf("overlayPolicy.grubDefault must not contain a double quote, dollar sign, backtick, backslash, or newline")
+	}
+	return nil
+}
+
+// IsOverlayMode reports whether the template requests overlay-mode baseline.
+func (t *ImageTemplate) IsOverlayMode() bool {
+	return t.Baseline != nil && t.Baseline.Mode == BaselineModeOverlay
 }

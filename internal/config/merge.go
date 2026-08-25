@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/security"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/slice"
 )
 
@@ -38,6 +39,8 @@ func (d *DefaultConfigLoader) LoadDefaultConfig(imageType string) (*ImageTemplat
 		defaultConfigFile = fmt.Sprintf("default-initrd-%s.yml", d.targetArch)
 	case "iso":
 		defaultConfigFile = fmt.Sprintf("default-iso-%s.yml", d.targetArch)
+	case "wsl2":
+		defaultConfigFile = fmt.Sprintf("default-wsl2-%s.yml", d.targetArch)
 	default:
 		log.Errorf("Unsupported image type: %s", imageType)
 		return nil, fmt.Errorf("unsupported image type: %s", imageType)
@@ -84,6 +87,7 @@ func MergeConfigurations(userTemplate, defaultTemplate *ImageTemplate) (*ImageTe
 	// If no default template, use user template as-is
 	if defaultTemplate == nil {
 		log.Warn("Default template is nil, using user template as-is")
+		userTemplate.Extends = ""
 		return userTemplate, nil
 	}
 
@@ -108,6 +112,20 @@ func MergeConfigurations(userTemplate, defaultTemplate *ImageTemplate) (*ImageTe
 
 	mergedTemplate.Target = userTemplate.Target
 
+	// Baseline configuration - user override if provided. The struct copy above
+	// only carries the default's baseline; without this the user's overlay-mode
+	// baseline would be silently dropped and the build would fall back to create.
+	if userTemplate.Baseline != nil {
+		mergedTemplate.Baseline = userTemplate.Baseline
+		log.Debugf("User baseline config overrides default (mode=%s)", userTemplate.Baseline.Mode)
+	}
+
+	// OverlayPolicy is a top-level peer to baseline; carry the user override
+	// so it is not dropped by the struct copy above.
+	if userTemplate.OverlayPolicy != nil {
+		mergedTemplate.OverlayPolicy = userTemplate.OverlayPolicy
+	}
+
 	// Disk configuration - user override if provided
 	if !isEmptyDiskConfig(userTemplate.Disk) {
 		mergedTemplate.Disk = userTemplate.Disk
@@ -123,6 +141,19 @@ func MergeConfigurations(userTemplate, defaultTemplate *ImageTemplate) (*ImageTe
 		mergedTemplate.SystemConfig = defaultTemplate.SystemConfig
 	}
 
+	// NOTE on overlay package sets: overlay mode must not inherit the create-mode
+	// default OS package set (ubuntu-minimal, systemd-boot, dracut-core, the kernel,
+	// …), which describes how to build an image from scratch and would re-seed the
+	// whole base toolchain the frozen baseline already provides. That suppression is
+	// NOT applied here: MergeConfigurations is also the per-layer step used to fold a
+	// user's `extends` chain (parent -> leaf), where `defaultTemplate` is a PARENT
+	// USER layer, not the OS default — stripping to the current layer's packages there
+	// would drop packages an overlay leaf legitimately inherits from its parent
+	// (user-to-user package inheritance is additive). Instead, overlay's own default
+	// exclusion is structural: LoadAndMergeTemplate returns the folded user chain
+	// BEFORE the OS default is ever merged (see the IsOverlayMode early return), so
+	// no OS-default package can enter an overlay build in the first place.
+
 	// Package repositories - merge intelligently
 	mergedTemplate.PackageRepositories = mergePackageRepositories(
 		defaultTemplate.PackageRepositories,
@@ -132,14 +163,14 @@ func MergeConfigurations(userTemplate, defaultTemplate *ImageTemplate) (*ImageTe
 		log.Debugf("Merged %d package repositories", len(mergedTemplate.PackageRepositories))
 	}
 
-	log.Infof("Successfully merged user and default configurations")
+	// Strip extends from merged result — it is a build-time directive, not part of the output
+	mergedTemplate.Extends = ""
 
-	// Validate immutability configuration and fix if needed
 	validateAndFixImmutabilityConfig(&mergedTemplate)
 
 	// Debug mode: Pretty print the merged template with sensitive data redacted
 	if IsDebugMode() {
-		redactedTemplate := redactSensitiveData(&mergedTemplate)
+		redactedTemplate := RedactSensitiveData(&mergedTemplate)
 		pretty, err := json.MarshalIndent(redactedTemplate, "", "  ")
 		if err != nil {
 			log.Warnf("Failed to pretty print merged template: %v", err)
@@ -154,10 +185,20 @@ func MergeConfigurations(userTemplate, defaultTemplate *ImageTemplate) (*ImageTe
 	return &mergedTemplate, nil
 }
 
-// redactSensitiveData creates a copy of the template with sensitive data redacted for safe logging.
-// This prevents passwords, keys, and other sensitive information from appearing in logs.
-func redactSensitiveData(template *ImageTemplate) *ImageTemplate {
-	// Create a deep copy
+// RedactSensitiveData returns a copy of the template with sensitive data redacted for
+// safe display or logging. The top-level ImageTemplate is shallow-copied and only
+// SystemConfig is deep-copied — via redactSensitiveSystemConfig, which replaces
+// user passwords, hash algorithms, and secure-boot key/cert/cer paths with
+// "[REDACTED]". Every other field on the returned template (Baseline, Disk,
+// PackageRepositories, per-source package slices, and any other slices, maps, or
+// pointer targets) still aliases the input, so callers must NOT mutate those on
+// the returned value. Returns nil when template is nil so callers get a
+// well-defined empty value instead of a panic on the deref.
+func RedactSensitiveData(template *ImageTemplate) *ImageTemplate {
+	if template == nil {
+		return nil
+	}
+	// Shallow-copy the top-level struct; only SystemConfig gets deep-copied below.
 	redacted := *template
 	redacted.SystemConfig = redactSensitiveSystemConfig(template.SystemConfig)
 	return &redacted
@@ -195,6 +236,14 @@ func redactSensitiveSystemConfig(config SystemConfig) SystemConfig {
 		redacted.Immutability.SecureBootDBCer = "[REDACTED]"
 	}
 
+	// Redact the resolved FDE passphrase and source path so they never appear in logs.
+	if config.FDE.Passphrase != "" {
+		redacted.FDE.Passphrase = "[REDACTED]"
+	}
+	if config.FDE.PassphraseFile != "" {
+		redacted.FDE.PassphraseFile = "[REDACTED]"
+	}
+
 	return redacted
 }
 
@@ -225,6 +274,12 @@ func mergeSystemConfig(defaultConfig, userConfig SystemConfig) SystemConfig {
 	} else {
 		// User provided some immutability config, merge it
 		merged.Immutability = mergeImmutabilityConfig(defaultConfig.Immutability, userConfig.Immutability)
+	}
+
+	// Merge FDE config - defaults do not define FDE, so take the user's config
+	// whenever any FDE field was provided.
+	if userConfig.FDE.Enabled || userConfig.FDE.PassphraseFile != "" || len(userConfig.FDE.Partitions) > 0 || userConfig.FDE.Unlock != "" {
+		merged.FDE = userConfig.FDE
 	}
 
 	// Merge users config
@@ -519,11 +574,18 @@ func mergePackageRepositories(defaultRepos, userRepos []PackageRepository) []Pac
 	merged := make([]PackageRepository, len(defaultRepos))
 	copy(merged, defaultRepos)
 
-	// For each user repo, override if codename matches a default, otherwise append
+	// The merge key is the (codename, url, path) tuple, not codename alone. This
+	// lets an extend template add multiple repositories that share a codename but
+	// differ in location — remote repos with different URLs, or local/path-based
+	// repos (which leave url empty and set path) with different paths. A user repo
+	// overrides a default only when codename, url and path all match (updating the
+	// other fields); otherwise it is appended.
 	for _, userRepo := range userRepos {
 		found := false
 		for i, defRepo := range merged {
-			if defRepo.Codename == userRepo.Codename {
+			if defRepo.Codename == userRepo.Codename &&
+				defRepo.URL == userRepo.URL &&
+				defRepo.Path == userRepo.Path {
 				merged[i] = userRepo
 				found = true
 				break
@@ -544,6 +606,7 @@ func isEmptyDiskConfig(disk DiskConfig) bool {
 		disk.Path == "" &&
 		disk.SelectionPolicy.Strategy == "" &&
 		disk.SelectionPolicy.ExcludeRemovable == nil &&
+		!disk.ExtendLastPartitionToFillDisk &&
 		disk.Size == "" &&
 		disk.PartitionTableType == "" &&
 		len(disk.Artifacts) == 0 &&
@@ -612,37 +675,331 @@ func validateAndFixImmutabilityConfig(template *ImageTemplate) {
 	}
 }
 
+func resolveExtendsChain(templatePath string) ([]*ImageTemplate, error) {
+	templates, _, err := resolveExtendsChainWithPaths(templatePath)
+	return templates, err
+}
+
+// ResolveAndMergeExtendsChain resolves the full extends chain for the template at
+// templatePath and folds it into a single merged template in root-to-leaf order
+// (leaf values win), without applying OS defaults. Each template in the chain is
+// validated as it is loaded, and errors identify the file in the chain that
+// failed. The returned paths are the resolved chain files in root-to-leaf order,
+// for logging the effective inheritance.
+//
+// If leaf is non-nil it is used as the already-parsed leaf template, avoiding a
+// redundant re-read of templatePath; pass nil to have the resolver load it.
+func ResolveAndMergeExtendsChain(templatePath string, leaf *ImageTemplate) (*ImageTemplate, []string, error) {
+	chain, chainPaths, err := resolveExtendsChainFromLeaf(templatePath, leaf)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	merged, err := foldChain(chain[0], chain[1:])
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return merged, chainPaths, nil
+}
+
+// resolveExtendsChainWithPaths behaves like resolveExtendsChain but additionally
+// returns the absolute file path of each template in root-to-leaf order, which
+// callers use for logging the resolved chain.
+func resolveExtendsChainWithPaths(templatePath string) ([]*ImageTemplate, []string, error) {
+	return resolveExtendsChainFromLeaf(templatePath, nil)
+}
+
+// resolveExtendsChainFromLeaf walks the extends references from leaf to root. When
+// preloadedLeaf is non-nil it is reused for the first (leaf) iteration instead of
+// re-reading templatePath from disk, so callers that already parsed the leaf do
+// not pay for a second YAML parse.
+func resolveExtendsChainFromLeaf(templatePath string, preloadedLeaf *ImageTemplate) ([]*ImageTemplate, []string, error) {
+	startPath, err := filepath.Abs(filepath.Clean(templatePath))
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to resolve template path: %w", err)
+	}
+
+	leafToRoot := make([]*ImageTemplate, 0)
+	displayPaths := make([]string, 0)
+	// visited maps a canonicalized (symlink-resolved) path to its position in the
+	// chain. Canonicalizing guards against directory symlinks aliasing two distinct
+	// textual paths to the same file, which would otherwise evade cycle detection.
+	visited := make(map[string]int)
+	currentPath := startPath
+
+	var leafTarget TargetInfo
+
+	for {
+		var tmpl *ImageTemplate
+		if len(leafToRoot) == 0 && preloadedLeaf != nil {
+			tmpl = preloadedLeaf
+		} else {
+			loaded, err := LoadTemplate(currentPath, false)
+			if err != nil {
+				return nil, nil, fmt.Errorf("template %s failed validation in extends chain: %w", currentPath, err)
+			}
+			tmpl = loaded
+		}
+
+		if len(leafToRoot) == 0 {
+			leafTarget = tmpl.Target
+		} else if !targetsMatch(leafTarget, tmpl.Target) {
+			level := len(leafToRoot)
+			return nil, nil, fmt.Errorf(
+				"extends target mismatch at level %d: child targets %s but parent targets %s",
+				level,
+				formatTarget(leafTarget),
+				formatTarget(tmpl.Target),
+			)
+		}
+
+		visited[canonicalPath(currentPath)] = len(displayPaths)
+		leafToRoot = append(leafToRoot, tmpl)
+		displayPaths = append(displayPaths, currentPath)
+
+		if strings.TrimSpace(tmpl.Extends) == "" {
+			break
+		}
+
+		parentPath, err := resolveExtendsParentPath(currentPath, tmpl.Extends)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		if _, err := os.Stat(parentPath); err != nil {
+			if os.IsNotExist(err) {
+				return nil, nil, fmt.Errorf("extends path not found: %s", parentPath)
+			}
+			return nil, nil, fmt.Errorf("failed to access extends path %s: %w", parentPath, err)
+		}
+
+		if _, err := security.CheckSymlink(parentPath, security.RejectSymlinks); err != nil {
+			return nil, nil, fmt.Errorf("invalid extends path: %w", err)
+		}
+
+		// The lexical guard in resolveExtendsParentPath cannot see through directory
+		// symlinks inside the child directory. Re-check containment against the fully
+		// symlink-resolved paths so a symlink like child/link -> /outside cannot escape.
+		if err := verifyResolvedContainment(currentPath, parentPath); err != nil {
+			return nil, nil, err
+		}
+
+		if cycleStart, exists := visited[canonicalPath(parentPath)]; exists {
+			cyclePaths := append([]string{}, displayPaths[cycleStart:]...)
+			cyclePaths = append(cyclePaths, parentPath)
+			return nil, nil, fmt.Errorf("circular extends detected: %s", formatCyclePath(cyclePaths))
+		}
+
+		currentPath = parentPath
+	}
+
+	depth := len(leafToRoot) - 1
+	if depth > 4 {
+		log.Warnf("extends chain depth %d exceeds recommended maximum of 4", depth)
+	}
+
+	rootToLeaf := make([]*ImageTemplate, len(leafToRoot))
+	rootToLeafPaths := make([]string, len(displayPaths))
+	for i := range leafToRoot {
+		rootToLeaf[len(leafToRoot)-1-i] = leafToRoot[i]
+		rootToLeafPaths[len(displayPaths)-1-i] = displayPaths[i]
+	}
+
+	return rootToLeaf, rootToLeafPaths, nil
+}
+
+func resolveExtendsParentPath(childTemplatePath, extendsRef string) (string, error) {
+	childPath, err := filepath.Abs(filepath.Clean(childTemplatePath))
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve child template path: %w", err)
+	}
+
+	childDir := filepath.Dir(childPath)
+
+	var parentCandidate string
+	if filepath.IsAbs(extendsRef) {
+		parentCandidate = filepath.Clean(extendsRef)
+	} else {
+		parentCandidate = filepath.Clean(filepath.Join(childDir, extendsRef))
+	}
+
+	parentPath, err := filepath.Abs(parentCandidate)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve extends path %q: %w", extendsRef, err)
+	}
+
+	rel, err := filepath.Rel(childDir, parentPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to evaluate extends path %q: %w", extendsRef, err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("extends path escapes child template's directory: %s", parentPath)
+	}
+
+	return parentPath, nil
+}
+
+// verifyResolvedContainment ensures that, after resolving all symlinks, the parent
+// template still lives within the child template's directory. This defends against
+// directory symlinks inside the child directory that the lexical check in
+// resolveExtendsParentPath cannot detect. Both paths must already exist.
+func verifyResolvedContainment(childTemplatePath, parentPath string) error {
+	resolvedChildDir, err := filepath.EvalSymlinks(filepath.Dir(childTemplatePath))
+	if err != nil {
+		return fmt.Errorf("failed to resolve child template directory: %w", err)
+	}
+
+	resolvedParent, err := filepath.EvalSymlinks(parentPath)
+	if err != nil {
+		return fmt.Errorf("failed to resolve extends path %s: %w", parentPath, err)
+	}
+
+	rel, err := filepath.Rel(resolvedChildDir, resolvedParent)
+	if err != nil {
+		return fmt.Errorf("failed to evaluate resolved extends path %s: %w", parentPath, err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("extends path escapes child template's directory: %s", parentPath)
+	}
+
+	return nil
+}
+
+// canonicalPath returns a symlink-resolved absolute path for use as a stable
+// cycle-detection key. It falls back to the cleaned absolute path when the file
+// cannot be resolved (e.g. it does not exist yet), so callers always receive a
+// deterministic key.
+func canonicalPath(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	if abs, err := filepath.Abs(filepath.Clean(path)); err == nil {
+		return abs
+	}
+	return filepath.Clean(path)
+}
+
+func targetsMatch(a, b TargetInfo) bool {
+	return a.OS == b.OS &&
+		a.Dist == b.Dist &&
+		a.Arch == b.Arch &&
+		a.ImageType == b.ImageType
+}
+
+func formatTarget(target TargetInfo) string {
+	return fmt.Sprintf("%s/%s/%s/%s", target.OS, target.Dist, target.Arch, target.ImageType)
+}
+
+func formatCyclePath(paths []string) string {
+	names := make([]string, 0, len(paths))
+	for _, p := range paths {
+		names = append(names, filepath.Base(p))
+	}
+	return strings.Join(names, " -> ")
+}
+
 // LoadAndMergeTemplate loads a user template and merges it with the appropriate default config
 func LoadAndMergeTemplate(templatePath string) (*ImageTemplate, error) {
 
-	// Load the user template first
-	userTemplate, err := LoadTemplate(templatePath, false)
+	// Load the leaf (user) template first so malformed input yields a clear error.
+	leafTemplate, err := LoadTemplate(templatePath, false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load user template: %w", err)
 	}
 
-	log.Infof("Loaded user template: %s (type: %s)", userTemplate.Image.Name, userTemplate.Target.ImageType)
+	log.Infof("Loaded user template: %s (type: %s)", leafTemplate.Image.Name, leafTemplate.Target.ImageType)
 
-	// Create default config loader
-	loader := NewDefaultConfigLoader(userTemplate.Target.OS, userTemplate.Target.Dist, userTemplate.Target.Arch)
+	// Build the layer chain (root -> ... -> leaf). Without an extends field this
+	// is a single-element chain, preserving the existing two-layer merge behavior.
+	chain := []*ImageTemplate{leafTemplate}
+	if strings.TrimSpace(leafTemplate.Extends) != "" {
+		resolved, chainPaths, err := resolveExtendsChainFromLeaf(templatePath, leafTemplate)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve extends chain: %w", err)
+		}
+		chain = resolved
 
-	// Load the appropriate default configuration
-	defaultTemplate, err := loader.LoadDefaultConfig(userTemplate.Target.ImageType)
-	if err != nil {
-		log.Debugf("Default template: %+v", defaultTemplate)
-		log.Warnf("Could not load default configuration: %v", err)
-		log.Info("Proceeding with user template only")
-		return userTemplate, nil
+		names := make([]string, len(chainPaths))
+		for i, p := range chainPaths {
+			names[i] = filepath.Base(p)
+		}
+		log.Infof("Extends chain: %s", strings.Join(names, " -> "))
 	}
 
-	// Merge configurations
-	mergedTemplate, err := MergeConfigurations(userTemplate, defaultTemplate)
+	// Fold the user's own extends chain first (leaf over its parents), with NO OS
+	// default layered in. This is the effective user template and is also what
+	// lets overlay mode be detected robustly even when baseline.mode lives in a
+	// parent layer rather than the leaf.
+	userMerged, err := foldChain(chain[0], chain[1:])
 	if err != nil {
-		return nil, fmt.Errorf("failed to merge configurations: %w", err)
+		return nil, err
+	}
+
+	// Overlay mode layers packages onto an already-complete baseline image, so the
+	// create-mode OS default configuration does NOT apply: disk geometry,
+	// partition table, bootloader, kernel, and the base OS package set all come
+	// from the baseline image (the overlay pipeline reads them from the detected
+	// baseline, never from the merged template). Applying the default here would
+	// bleed build-from-scratch values into the overlay — most visibly the default
+	// disk.size, which against a larger baseline turns into a spurious "shrink not
+	// supported" resize failure. Return the user template as-is; the baseline
+	// governs.
+	if userMerged.IsOverlayMode() {
+		log.Infof("Overlay mode: skipping OS default configuration (the baseline image governs disk, bootloader, kernel, and base packages)")
+		userMerged.Extends = ""
+		// Re-validate the merged overlay: each layer is validated in isolation before
+		// merging, but an unsupported systemConfig section (e.g. hostname) declared by
+		// a create-mode PARENT can fold into an overlay leaf without either layer
+		// failing. Re-running the overlay validation on the merged result rejects that
+		// rather than silently ignoring the section at build time.
+		if err := userMerged.validateBaseline(); err != nil {
+			return nil, fmt.Errorf("merged overlay template is invalid: %w", err)
+		}
+		if err := userMerged.validateUsers(); err != nil {
+			return nil, fmt.Errorf("merged overlay template is invalid: %w", err)
+		}
+		return userMerged, nil
+	}
+
+	// Create mode: the leaf template's target determines which default applies.
+	loader := NewDefaultConfigLoader(leafTemplate.Target.OS, leafTemplate.Target.Dist, leafTemplate.Target.Arch)
+
+	// Load the appropriate default configuration
+	defaultTemplate, err := loader.LoadDefaultConfig(leafTemplate.Target.ImageType)
+	if err != nil {
+		log.Debugf("Default template: %+v", defaultTemplate)
+		log.Warnf("Could not load default configuration for %s/%s/%s (%s); proceeding without defaults",
+			leafTemplate.Target.OS, leafTemplate.Target.Dist, leafTemplate.Target.Arch, leafTemplate.Target.ImageType)
+		log.Info("Proceeding without default configuration")
+		userMerged.Extends = ""
+		return userMerged, nil
+	}
+
+	// Iterative fold: start from the default configuration as the base, then
+	// merge each layer from root to leaf so more specific layers win.
+	mergedTemplate, err := foldChain(defaultTemplate, chain)
+	if err != nil {
+		return nil, err
 	}
 
 	log.Infof("Successfully created merged configuration with system config: %s and disk config: %s",
 		mergedTemplate.SystemConfig.Name, mergedTemplate.Disk.Name)
 
 	return mergedTemplate, nil
+}
+
+// foldChain merges each layer over an accumulating base. The base acts as the
+// lowest-precedence configuration and each successive layer takes precedence,
+// so the final leaf template overrides everything before it.
+func foldChain(base *ImageTemplate, layers []*ImageTemplate) (*ImageTemplate, error) {
+	merged := base
+	for _, layer := range layers {
+		next, err := MergeConfigurations(layer, merged)
+		if err != nil {
+			return nil, fmt.Errorf("failed to merge configurations: %w", err)
+		}
+		merged = next
+	}
+	return merged, nil
 }

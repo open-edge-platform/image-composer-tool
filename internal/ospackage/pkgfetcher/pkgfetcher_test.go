@@ -1,6 +1,7 @@
 package pkgfetcher
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -74,7 +75,7 @@ func TestFetchPackages_Success(t *testing.T) {
 	}
 
 	// Call FetchPackages
-	err = FetchPackages(urls, tempDir, 2)
+	err = FetchPackages(context.Background(), urls, tempDir, 2)
 	if err != nil {
 		t.Fatalf("FetchPackages failed: %v", err)
 	}
@@ -108,7 +109,7 @@ func TestFetchPackages_EmptyURLs(t *testing.T) {
 	}
 	defer os.RemoveAll(tempDir)
 
-	err = FetchPackages([]string{}, tempDir, 1)
+	err = FetchPackages(context.Background(), []string{}, tempDir, 1)
 	if err != nil {
 		t.Errorf("FetchPackages with empty URLs should not return error, got: %v", err)
 	}
@@ -145,7 +146,7 @@ func TestFetchPackages_HTTPErrors(t *testing.T) {
 	}
 
 	// This should return an error due to HTTP failures
-	err = FetchPackages(urls, tempDir, 1)
+	err = FetchPackages(context.Background(), urls, tempDir, 1)
 	if err == nil {
 		t.Errorf("FetchPackages should return error for HTTP failures, got nil")
 	}
@@ -190,7 +191,7 @@ func TestFetchPackages_ExistingFiles(t *testing.T) {
 	}
 
 	// Call FetchPackages - should skip existing file
-	err = FetchPackages([]string{url}, tempDir, 1)
+	err = FetchPackages(context.Background(), []string{url}, tempDir, 1)
 	if err != nil {
 		t.Fatalf("FetchPackages failed: %v", err)
 	}
@@ -236,7 +237,7 @@ func TestFetchPackages_ZeroSizeFile(t *testing.T) {
 	}
 
 	// Call FetchPackages - should re-download zero-size file
-	err = FetchPackages([]string{url}, tempDir, 1)
+	err = FetchPackages(context.Background(), []string{url}, tempDir, 1)
 	if err != nil {
 		t.Fatalf("FetchPackages failed: %v", err)
 	}
@@ -277,7 +278,7 @@ func TestFetchPackages_MultipleWorkers(t *testing.T) {
 
 	// Test with multiple workers
 	start := time.Now()
-	err = FetchPackages(urls, tempDir, 3)
+	err = FetchPackages(context.Background(), urls, tempDir, 3)
 	duration := time.Since(start)
 
 	if err != nil {
@@ -327,7 +328,7 @@ func TestFetchPackages_InvalidDestDir(t *testing.T) {
 	urls := []string{server.URL + "/test.rpm"}
 
 	// This should not panic and should handle the error gracefully
-	err = FetchPackages(urls, invalidDestDir, 1)
+	err = FetchPackages(context.Background(), urls, invalidDestDir, 1)
 	if err != nil {
 		t.Errorf("FetchPackages should not return error for mkdir failures, got: %v", err)
 	}
@@ -347,7 +348,7 @@ func TestFetchPackages_NetworkError(t *testing.T) {
 	}
 
 	// This should return an error due to network failure
-	err = FetchPackages(urls, tempDir, 1)
+	err = FetchPackages(context.Background(), urls, tempDir, 1)
 	if err == nil {
 		t.Errorf("FetchPackages should return error for network failures, got nil")
 	}
@@ -377,7 +378,7 @@ func TestFetchPackages_SlowServer(t *testing.T) {
 	urls := []string{server.URL + "/slow.rpm"}
 
 	start := time.Now()
-	err = FetchPackages(urls, tempDir, 1)
+	err = FetchPackages(context.Background(), urls, tempDir, 1)
 	duration := time.Since(start)
 
 	if err != nil {
@@ -418,7 +419,7 @@ func TestFetchPackages_RetryOnTransientError(t *testing.T) {
 
 	url := server.URL + "/retry-package.rpm"
 
-	err = FetchPackages([]string{url}, tempDir, 1)
+	err = FetchPackages(context.Background(), []string{url}, tempDir, 1)
 	if err != nil {
 		t.Fatalf("FetchPackages failed unexpectedly after retries: %v", err)
 	}
@@ -448,7 +449,7 @@ func TestFetchPackages_NoRetryOnPermanentError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	err = FetchPackages([]string{server.URL + "/missing.rpm"}, tempDir, 1)
+	err = FetchPackages(context.Background(), []string{server.URL + "/missing.rpm"}, tempDir, 1)
 	if err == nil {
 		t.Fatalf("Expected FetchPackages to fail for permanent HTTP error")
 	}
@@ -480,7 +481,7 @@ func TestDownloadWithRetry_TransientThenSuccess(t *testing.T) {
 	destPath := filepath.Join(tempDir, "retry-direct.rpm")
 	client := network.GetSecureHTTPClient()
 
-	err = downloadWithRetry(client, server.URL+"/retry-direct.rpm", destPath, 0)
+	err = downloadWithRetry(context.Background(), client, server.URL+"/retry-direct.rpm", destPath, 0)
 	if err != nil {
 		t.Fatalf("downloadWithRetry should succeed after transient failures: %v", err)
 	}
@@ -511,7 +512,7 @@ func TestDownloadWithRetry_EmptyBodyFailsAfterRetries(t *testing.T) {
 	destPath := filepath.Join(tempDir, "empty-body.rpm")
 	client := network.GetSecureHTTPClient()
 
-	err = downloadWithRetry(client, server.URL+"/empty-body.rpm", destPath, 1)
+	err = downloadWithRetry(context.Background(), client, server.URL+"/empty-body.rpm", destPath, 1)
 	if err == nil {
 		t.Fatalf("expected error when response body is empty")
 	}
@@ -555,7 +556,7 @@ func TestDownloadWithRetry_RetryOnContentLengthMistmatch(t *testing.T) {
 	}
 
 	destPath := filepath.Join(tempDir, "content-length-mismatch.rpm")
-	err = downloadWithRetry(client, "http://example.test/content-length-mismatch.rpm", destPath, -1)
+	err = downloadWithRetry(context.Background(), client, "http://example.test/content-length-mismatch.rpm", destPath, -1)
 	if err != nil {
 		t.Fatalf("expected retry to recover from content-length mismatch, got: %v", err)
 	}
@@ -596,7 +597,7 @@ func TestDownloadWithRetry_RemovaPartialFileOnError(t *testing.T) {
 	}
 
 	destPath := filepath.Join(tempDir, "partial-file.rpm")
-	err = downloadWithRetry(client, "http://example.test/partial-file.rpm", destPath, -1)
+	err = downloadWithRetry(context.Background(), client, "http://example.test/partial-file.rpm", destPath, -1)
 	if err == nil {
 		t.Fatalf("expected error when stream fails after partial write")
 	}
@@ -637,7 +638,7 @@ func TestFetchPackages_PlusEncodedAsPercentTwoBInURL(t *testing.T) {
 	filename := "systemd_255.4-1ubuntu8.12-ecir8+etf+taprio_amd64.deb"
 	inputURL := server.URL + "/pool/main/s/systemd/" + filename
 
-	err = FetchPackages([]string{inputURL}, tempDir, 1)
+	err = FetchPackages(context.Background(), []string{inputURL}, tempDir, 1)
 	if err != nil {
 		t.Fatalf("FetchPackages failed: %v", err)
 	}
@@ -662,5 +663,259 @@ func TestFetchPackages_PlusEncodedAsPercentTwoBInURL(t *testing.T) {
 	}
 	if string(content) != "eci-package-content" {
 		t.Fatalf("unexpected file content: %q", string(content))
+	}
+}
+
+// TestFetchPackages_CancelledContextExitsPromptly verifies that when the
+// ambient ctx is cancelled after workers have started but before the queue
+// drains, FetchPackages returns within a bounded time with a
+// context.Canceled-wrapping error rather than blocking on the retry loops.
+// Regression guard for the "SIGINT during download hangs the process for
+// 5+ minutes" bug caught in manual smoke testing.
+func TestFetchPackages_CancelledContextExitsPromptly(t *testing.T) {
+	// Server that never responds — the goal is to sit in client.Do until
+	// ctx cancels the request.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	tempDir := t.TempDir()
+
+	// Enqueue more URLs than workers so the jobs channel has depth; if the
+	// worker loop's ctx-gate is wrong, extra URLs would keep the pool busy
+	// after the first cancel.
+	urls := make([]string, 20)
+	for i := range urls {
+		urls[i] = fmt.Sprintf("%s/slow-%d.rpm", server.URL, i)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	err := FetchPackages(ctx, urls, tempDir, 4)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatalf("expected error after context cancel, got nil")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected wrapped context.Canceled, got: %v", err)
+	}
+	// Generous ceiling: workers should exit within a couple of retry-backoff
+	// windows (initialRetryBackoff=500ms, exponential). We allow 10s so CI
+	// jitter and the http.RoundTripper's own graceful-close doesn't flake this.
+	if elapsed > 10*time.Second {
+		t.Fatalf("FetchPackages took %s to exit after cancel; expected <10s", elapsed)
+	}
+}
+
+// --- failure reporting ---
+
+// TestFetchPackages_ErrorNamesFailures covers the diagnosability gap behind a
+// real build failure: 858 packages were requested, exactly one 404'd (a stale
+// cached version the mirror had superseded), and the returned error said only
+// "one or more downloads failed" — leaving the actionable detail buried thousands
+// of progress-bar lines deep in the log. The error must name the package and the
+// reason.
+func TestFetchPackages_ErrorNamesFailures(t *testing.T) {
+	tempDir := t.TempDir()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/good.deb" {
+			_, _ = w.Write([]byte("content"))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	err := FetchPackages(context.Background(), []string{
+		server.URL + "/good.deb",
+		server.URL + "/ntfs-3g_2022.10.3-5+deb13u1_amd64.deb",
+	}, tempDir, 1)
+	if err == nil {
+		t.Fatal("expected an error when a package 404s")
+	}
+	// The count locates the failure against the whole set: 1 of 2 is a bad package,
+	// 2 of 2 would be a bad network.
+	if !strings.Contains(err.Error(), "1 of 2 package downloads failed") {
+		t.Errorf("error should count failures against the total, got: %v", err)
+	}
+	// The offending package must be named — this is the whole point.
+	if !strings.Contains(err.Error(), "ntfs-3g_2022.10.3-5") {
+		t.Errorf("error should name the failed package, got: %v", err)
+	}
+	// ...along with why it failed, so a 404 (stale metadata) is distinguishable
+	// from a connection error (bad proxy).
+	if !strings.Contains(err.Error(), "404") {
+		t.Errorf("error should carry the underlying reason, got: %v", err)
+	}
+	// The package that succeeded must not be listed as a failure.
+	if strings.Contains(err.Error(), "good.deb") {
+		t.Errorf("error should not name the successful download, got: %v", err)
+	}
+}
+
+// A dead proxy fails every package. The error stays readable by truncating, but
+// must say how many it omitted — a silent cut would understate the scale and
+// suggest a single bad package rather than a broken network.
+func TestFetchPackages_ErrorTruncatesManyFailures(t *testing.T) {
+	tempDir := t.TempDir()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	total := maxReportedFailures + 3
+	urls := make([]string, 0, total)
+	for i := 0; i < total; i++ {
+		urls = append(urls, fmt.Sprintf("%s/pkg%d.deb", server.URL, i))
+	}
+
+	err := FetchPackages(context.Background(), urls, tempDir, 4)
+	if err == nil {
+		t.Fatal("expected an error when every package 404s")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, fmt.Sprintf("%d of %d package downloads failed", total, total)) {
+		t.Errorf("error should report every package as failed, got: %v", err)
+	}
+	if !strings.Contains(msg, "and 3 more") {
+		t.Errorf("error should report the omitted count, got: %v", err)
+	}
+	// Only maxReportedFailures items are listed.
+	if got := strings.Count(msg, "\n  - "); got != maxReportedFailures {
+		t.Errorf("listed %d failures, want %d", got, maxReportedFailures)
+	}
+}
+
+// A cancelled fetch must keep reporting cancellation rather than being reframed
+// as a pile of download failures: the two need different responses from the user.
+func TestFetchPackages_CancelNotReportedAsFailures(t *testing.T) {
+	tempDir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := FetchPackages(ctx, []string{"http://example.invalid/pkg.deb"}, tempDir, 1)
+	if err == nil {
+		t.Fatal("expected an error for a cancelled fetch")
+	}
+	if !strings.Contains(err.Error(), "cancelled") {
+		t.Errorf("cancellation should be surfaced as such, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "package downloads failed") {
+		t.Errorf("cancellation must not be reported as download failures, got: %v", err)
+	}
+}
+
+// summarizeFailures is called on the error path only, but a downloadError set
+// without a recorded URL (the ctx-drain branch) must not produce a dangling
+// "failed:" with nothing after it.
+func TestSummarizeFailuresEmpty(t *testing.T) {
+	if got := summarizeFailures(nil); got != "" {
+		t.Errorf("summarizeFailures(nil) = %q, want empty", got)
+	}
+}
+
+// TestIdleTimeoutReader_TripsOnStall verifies that a body which delivers some
+// bytes and then goes silent is aborted once no data arrives for the idle
+// window, surfacing a "stalled" error rather than blocking forever. This is the
+// direct regression guard for the hung-build bug (headers received, ~11MB
+// streamed, then the connection sat ESTAB with no further data): bodyIdleTimeout
+// is 60s in production, so the mechanism is exercised here with a short window.
+//
+// It runs against a real httptest.Server that flushes a partial body and then
+// blocks, rather than a fake reader, so the test exercises the actual net/http
+// transport path — the one where resp.Body.Close does NOT interrupt an in-flight
+// Read and only context cancellation reliably tears the exchange down.
+func TestIdleTimeoutReader_TripsOnStall(t *testing.T) {
+	release := make(chan struct{})
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "1048576") // promise more than we send
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("first chunk"))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		// Go silent mid-body, mirroring a stalled proxy. Return once the test is
+		// done or the client's request context is cancelled (which is what the
+		// watchdog does), so the handler never outlives the request.
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	// Order matters: close(release) is registered last so it runs first (LIFO),
+	// unblocking the handler before ts.Close() waits for it to return.
+	defer ts.Close()
+	defer close(release)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL, nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	resp, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatalf("GET %s failed: %v", ts.URL, err)
+	}
+	defer resp.Body.Close()
+
+	r := newIdleTimeoutReader(resp.Body, 100*time.Millisecond, cancel)
+	defer r.stop()
+
+	start := time.Now()
+	_, err = io.ReadAll(r)
+	if err == nil {
+		t.Fatal("expected a stall error, got nil")
+	}
+	if !strings.Contains(err.Error(), "stalled") {
+		t.Fatalf("expected a stalled error, got: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("reader took too long to trip: %s", elapsed)
+	}
+}
+
+// TestIdleTimeoutReader_ProgressDoesNotTrip verifies that a body which keeps
+// delivering bytes — even slowly, in gaps shorter than the idle window — is
+// never aborted, so a slow-but-progressing large package download is not
+// killed. Each read resets the idle timer.
+func TestIdleTimeoutReader_ProgressDoesNotTrip(t *testing.T) {
+	// Feed 20 chunks with a 50ms gap against a 1s idle window; each gap sits
+	// well under the window (20x headroom, so CI scheduling jitter cannot
+	// falsely trip it) while the total time (~1s) still exceeds the window,
+	// proving the timer tracks idleness, not total duration.
+	const chunks = 20
+	pr, pw := io.Pipe()
+	go func() {
+		for i := 0; i < chunks; i++ {
+			time.Sleep(50 * time.Millisecond)
+			if _, err := pw.Write([]byte("chunk")); err != nil {
+				return
+			}
+		}
+		_ = pw.Close()
+	}()
+
+	// The cancel here closes the pipe reader; if the watchdog ever tripped, the
+	// read would fail — so a successful read proves it never did.
+	r := newIdleTimeoutReader(pr, 1*time.Second, func() { _ = pr.CloseWithError(errors.New("watchdog tripped")) })
+	defer r.stop()
+
+	data, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("progressing reader should not trip the idle timeout: %v", err)
+	}
+	if got, want := len(data), len("chunk")*chunks; got != want {
+		t.Fatalf("read %d bytes, want %d", got, want)
 	}
 }

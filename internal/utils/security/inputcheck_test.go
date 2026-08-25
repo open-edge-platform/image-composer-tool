@@ -126,6 +126,38 @@ func TestValidateStructStrings_SliceAndMap(t *testing.T) {
 	}
 }
 
+// YAML/JSON decoded into interface{} nests values as map[string]interface{} and
+// []interface{}, so every leaf string sits behind a reflect.Interface. Without an
+// Interface case in walkValue the traversal stopped at the first such value and
+// silently validated nothing — an oversized or NUL-bearing string slipped through.
+// This mirrors how config.parseYAMLTemplate and Service.ValidateTemplate feed
+// decoded template data in (&interface{}).
+func TestValidateStructStrings_DecodedInterfaceTree(t *testing.T) {
+	lim := DefaultLimits()
+	doc := map[string]interface{}{
+		"image": map[string]interface{}{
+			"name":    "ok",
+			"aliases": []interface{}{"a", "b"},
+		},
+	}
+	if err := ValidateStructStrings(&doc, lim); err != nil {
+		t.Fatalf("valid decoded tree rejected: %v", err)
+	}
+
+	// Oversized string behind two interface hops must be rejected.
+	doc["image"].(map[string]interface{})["name"] = strings.Repeat("A", lim.MaxString+1)
+	if err := ValidateStructStrings(&doc, lim); err == nil {
+		t.Fatal("expected oversized string in decoded tree to be rejected")
+	}
+
+	// NUL inside an []interface{} element must be rejected too.
+	doc["image"].(map[string]interface{})["name"] = "ok"
+	doc["image"].(map[string]interface{})["aliases"] = []interface{}{"a", "bad\x00"}
+	if err := ValidateStructStrings(&doc, lim); err == nil {
+		t.Fatal("expected NUL in interface slice element to be rejected")
+	}
+}
+
 func TestValidateStructStrings_PointerCycle(t *testing.T) {
 	type Node struct {
 		Value string

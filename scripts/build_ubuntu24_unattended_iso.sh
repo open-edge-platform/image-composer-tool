@@ -140,7 +140,7 @@ build_ubuntu24_unattended_iso_image() {
 
   # Temporarily disable exit on error for the build command to capture output
   set +e
-  output=$(sudo -S ./build/image-composer-tool build image-templates/ubuntu24-x86_64-minimal-unattended-iso.yml 2>&1)
+  output=$(sudo -S ./build/image-composer-tool build image-templates/ubuntu24/ubuntu24-x86_64-minimal-unattended-iso.yml 2>&1)
   build_exit_code=$?
   set -e
 

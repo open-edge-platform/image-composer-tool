@@ -1,0 +1,207 @@
+# SPDX-FileCopyrightText: (C) 2026 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+#
+# =============================================================================
+# Ubuntu 24.04 generic handheld OS desktop image (raw) — extends child
+# =============================================================================
+# This is a THIN child of ubuntu24-x86_64-minimal-ptl-pv-desktop-base-raw.yml.
+# It inherits the base's disk layout, the base overlay repository, bootloader,
+# immutability, kernel, network-manager netplan file, base package set and base
+# configuration commands, and layers on ONLY the handheld additions:
+#
+#   * packageRepositories: the child-only apt repos it alone consumes — Docker
+#     CE, RealSense, Mozilla (Firefox), OpenVINO and oneAPI,
+#   * packages: Docker CE engine, Firefox (.deb), Intel RealSense SDK, oneVPL,
+#     power/thermal daemons, cloud-init/chrony, benchmarking & profiling tools,
+#     and the linux-tools runtime deps refresh,
+#   * a default `user`,
+#   * NoCloud datasource lockdown + systemd-boot purge, the kernel hotfix
+#     install, and K3s/Docker pre-install (disabled by default) commands.
+#
+# MERGE BEHAVIOUR (see internal/config/merge.go):
+#   - packages union+dedup with the base (base first, these appended);
+#   - configurations are APPENDED after the base's — the base's GPU/NPU/
+#     linux-tools steps run first, then the commands below;
+#   - users merge by name (this `user` is added);
+#   - packageRepositories merge by the (codename, url) PAIR, so the child-only
+#     repos below (Docker CE, RealSense, Mozilla, OpenVINO, oneAPI) are ADDED
+#     alongside the base's overlay `noble` repo instead of colliding with it;
+#   - disk / kernel / bootloader / immutability are NOT redeclared here, so they
+#     are inherited from the base verbatim.
+# =============================================================================
+
+# AI-searchable metadata for template discovery
+metadata:
+  description: "Ubuntu 24.04 generic handheld OS desktop image (raw) — extends the PTL PV desktop base with Docker/K3s, Firefox, RealSense, oneVPL, power/thermal daemons and cloud-init"
+  use_cases:
+    - "generic handheld / edge device OS image"
+    - "container (Docker) or Kubernetes (K3s) edge host provisioned via cloud-init"
+    - "Intel RealSense + media/AI workloads"
+    - "raw image deployment"
+  keywords:
+    - handheld
+    - edge
+    - ptl
+    - ubuntu
+    - raw
+    - desktop
+    - docker
+    - k3s
+    - realsense
+    - cloud-init
+
+# Parent template — resolved relative to this file's directory.
+extends: "ubuntu24-x86_64-minimal-ptl-pv-desktop-base-raw.yml"
+
+image:
+  name: generic-handheld-os-desktop
+  version: "24.04"
+
+# Must match the parent's target exactly (extends chain validation).
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+
+# Child-only package repositories. Merged with the base by the (codename, url)
+# pair, so the `noble` repos here coexist with the base's overlay `noble` repo
+# rather than overriding it.
+packageRepositories:
+  # ----- OpenVINO -----
+  - codename: "ubuntu24"
+    url: "https://apt.repos.intel.com/openvino/2025"
+    pkey: "https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB"
+  # ----- Intel oneAPI (oneDNN / Base Toolkit) -----
+  - codename: "all"
+    url: "https://apt.repos.intel.com/oneapi"
+    pkey: "https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB"
+    component: "main"
+    priority: 500
+  # ----- Docker CE official -----
+  - codename: "noble"
+    url: "https://download.docker.com/linux/ubuntu"
+    pkey: "https://download.docker.com/linux/ubuntu/gpg"
+    component: "stable"
+    priority: 500
+  # ----- Intel RealSense SDK -----
+  # ref: https://docs.ros.org/en/iron/p/librealsense2/user_docs/distribution_linux.html
+  # TODO: the key ID below is hardcoded; need to find a better way to handle dynamic key discovery
+  #       in the packageRepositories section (ICT does not support shell substitution here).
+  # To get the current key ID if the build fails with NO_PUBKEY, run:
+  #   curl -sSf "https://librealsense.intel.com/Debian/apt-repo/dists/$(lsb_release -cs)/InRelease" \
+  #     | gpg --status-fd 1 --verify 2>/dev/null | grep "NO_PUBKEY" | awk '{print $3}'
+  # Then update the key ID in the pkey URL below.
+  - codename: "noble"
+    url: "https://librealsense.intel.com/Debian/apt-repo"
+    pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xFB0B24895113F120"
+    component: "main"
+    priority: 500
+  # ----- Mozilla Team PPA (Firefox .deb, avoids Ubuntu's snap-transitional package) -----
+  - codename: "noble"
+    url: "https://ppa.launchpadcontent.net/mozillateam/ppa/ubuntu"
+    pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x0AB215679C571D1C8325275B9BDB3D89CE49EC21"
+    component: "main"
+    priority: 1001
+    allowPackages:
+      - firefox
+
+systemConfig:
+  name: generic-handheld-os
+  description: Generic handheld OS desktop image (extends the PTL PV desktop base)
+  hostname: minimal-desktop-ubuntu
+
+  # Default interactive user (groups for GPU/render/audio access).
+  users:
+    - name: user
+      password: ""               # Do not commit real credentials; set at deploy time (cloud-init/SSH keys) or a sha512 hash below
+      # password: "<HASHED_PASSWORD>"  # Uncomment and replace with a sha512 hash in real config
+      groups: ["sudo", "video", "render", "audio"]
+      hash_algo: sha512
+
+  # Handheld additions — unioned with the base's package set at merge time.
+  packages:
+    - curl
+    # libssl-dev hard-depends on "libssl3t64 (= <its own version>)". The resolver
+    # resolves the transitive libssl3t64 (pulled in by many base packages) to the
+    # -updates build 3.0.13-0ubuntu3.12, so libssl-dev must be pinned to the same
+    # -updates version or the exact "=" dep conflicts. Do NOT also list libssl3t64
+    # explicitly — that routes it through a path that stages the GA build instead.
+    - libssl-dev_3.0.13-0ubuntu3.12
+    # Docker CE engine (pre-installed, disabled by default; cloud-init enables on first boot)
+    - docker-ce
+    - docker-ce-cli
+    - containerd.io
+    - docker-buildx-plugin
+    - docker-compose-plugin
+    - firefox
+    - cloud-init
+    - chrony
+    - sg3-utils
+    - util-linux-extra
+    # -- Performance & Profiling Tools ------------------------------------------
+    # Intel Performance Counter Monitor - CPU/uncore/PCIe counters
+    - pcm
+    # Multi-purpose CPU / memory / I/O benchmark
+    - sysbench
+    # CPU, memory, I/O and device stress & benchmark suite
+    - stress-ng
+    # Flexible I/O tester for storage benchmarking
+    - fio
+    # -- Intel AI / Media Stack -------------------------------------------------
+    # oneVPL runtime - H.264 / HEVC / AV1 HW encode & decode via VA-API
+    - libvpl2
+    # Intel RealSense SDK
+    - librealsense2-dkms
+    - librealsense2
+    - librealsense2-utils
+    - librealsense2-dev
+    - librealsense2-gl
+    # Power and Thermal daemons for power and performance management
+    - intel-lpmd
+    - thermald
+
+  # Appended AFTER the base's configurations (GPU/NPU/linux-tools). All commands
+  # are idempotent / guarded, so running them after the base steps is safe.
+  configurations:
+    # ----------------------------------------------------------------------------------
+    # Cloud-init: restrict to NoCloud datasource only
+    # ----------------------------------------------------------------------------------
+    - cmd: "mkdir -p /etc/cloud/cloud.cfg.d"
+    - cmd: "printf 'datasource_list: [NoCloud, None]\\n' > /etc/cloud/cloud.cfg.d/99-datasource.cfg"
+    # Mask systemd-networkd-wait-online — NetworkManager-wait-online already provides network-online.target
+    - cmd: "systemctl mask systemd-networkd-wait-online.service"
+    # Purge systemd-boot — installed transitively. GRUB is the actual bootloader, so systemd-boot
+    # is unused — but its postinst (`bootctl install`) fails inside the chroot. Force-purge to recover, then pin to -1
+    # so later apt steps cannot re-pull it.
+    - cmd: "printf 'Package: systemd-boot systemd-boot-efi\\nPin: release *\\nPin-Priority: -1\\n' > /etc/apt/preferences.d/no-systemd-boot"
+    - cmd: "dpkg --purge --force-all systemd-boot systemd-boot-efi 2>/dev/null || true"
+    # Reconfigure linux-tools debs downloaded by the base stage after the additions above
+    - cmd: "find /tmp/linux-tools -maxdepth 1 -type f -name '*.deb' | xargs -r dpkg -i; apt-get install -y --fix-broken -o Dpkg::Options::=\"--force-overwrite\""
+    # Install hotfix kernel packages
+    - cmd: "mkdir -p /tmp/kernel-hotfix"
+    - cmd: "wget -q https://download.01.org/intel-linux-overlay/ubuntu/hotfix/linux-intel-6.18/linux-image-6.18.23-lts-preprod-v6.18.23-linux-260708t100001z_6.18.23-260708t100001z-40_amd64.deb -O /tmp/kernel-hotfix/linux-image-6.18.23-lts-preprod-v6.18.23-linux-260708t100001z_6.18.23-260708t100001z-40_amd64.deb"
+    - cmd: "wget -q https://download.01.org/intel-linux-overlay/ubuntu/hotfix/linux-intel-6.18/linux-headers-6.18.23-lts-preprod-v6.18.23-linux-260708t100001z_6.18.23-260708t100001z-40_amd64.deb -O /tmp/kernel-hotfix/linux-headers-6.18.23-lts-preprod-v6.18.23-linux-260708t100001z_6.18.23-260708t100001z-40_amd64.deb"
+    # Verify SHA-256 against pinned hashes
+    - cmd: "cd /tmp/kernel-hotfix && printf '%s  %s\n' '998cb2daafee4d07616e561074830427950421955cabb876cecdfa8c2e738068' 'linux-image-6.18.23-lts-preprod-v6.18.23-linux-260708t100001z_6.18.23-260708t100001z-40_amd64.deb' '651afe5a312bc796564e62b50c83031b5bba493fd79827524226df5ce07ab1f9' 'linux-headers-6.18.23-lts-preprod-v6.18.23-linux-260708t100001z_6.18.23-260708t100001z-40_amd64.deb' | sha256sum -c -"
+    - cmd: "find /tmp/kernel-hotfix -maxdepth 1 -type f -name '*.deb' | xargs -r dpkg -i; apt-get install -y --fix-broken -o Dpkg::Options::=\"--force-overwrite\""
+    # ----------------------------------------------------------------------------------
+    # Pre-install K3s and Docker CE (both disabled by default)
+    # On first boot, cloud-init reads host_type from /etc/cloud/config-file and
+    # enables the correct service:
+    #   host_type=kubernetes  ? systemctl enable --now k3s + copies kubeconfig
+    #   host_type=container   ? systemctl disable k3s, enable --now docker
+    # See additionalfiles/ptl/edge-provisioning.cfg for the cloud-init runcmd.
+    # ----------------------------------------------------------------------------------
+    # Pre-install K3s binary and service (network available during build)
+    - cmd: "curl -sfL https://get.k3s.io | INSTALL_K3S_SKIP_ENABLE=true INSTALL_K3S_SKIP_START=true INSTALL_K3S_EXEC='server --disable=traefik' sh - 2>&1 || echo Warning: K3s pre-install failed"
+    # Ensure both services are disabled by default; cloud-init activates the right one
+    - cmd: "systemctl disable k3s 2>/dev/null || true"
+    - cmd: "systemctl disable docker 2>/dev/null || true"
+    # Pre-create docker data-root and daemon config (avoids first-boot delay)
+    - cmd: "mkdir -p /opt/docker-data /etc/docker && echo '{\"data-root\": \"/opt/docker-data\"}' > /etc/docker/daemon.json"
+    # ----------------------------------------------------------------------------------
+    # Remove ICT-generated ubuntu-noble.list — duplicates the Ubuntu 24.04 native
+    # ubuntu.sources (DEB822 format)
+    # ----------------------------------------------------------------------------------
+    - cmd: "rm -f /etc/apt/sources.list.d/ubuntu-noble.list"

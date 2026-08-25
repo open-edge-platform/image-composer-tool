@@ -20,6 +20,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/pkgsorter"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/network"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/runctx"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/slice"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
@@ -60,16 +61,23 @@ type pkgChecksum struct {
 }
 
 var (
-	RepoCfg        RepoConfig
-	RepoCfgs       []RepoConfig // Support for multiple repositories
-	UserRepoCfgs   []RepoConfig // Populated from UserRepo packageRepositories
-	PkgChecksum    []pkgChecksum
-	GzHref         string
-	Architecture   string
-	UserRepo       []config.PackageRepository
-	ReportPath     = "builds"
-	KernelVersion  string
-	KernelPackages = make(map[string]struct{})
+	RepoCfg           RepoConfig
+	RepoCfgs          []RepoConfig // Support for multiple repositories
+	UserRepoCfgs      []RepoConfig // Populated from UserRepo packageRepositories
+	LocalUserRepoCfgs []RepoConfig // Populated from path/packages-backed local packageRepositories
+	PkgChecksum       []pkgChecksum
+	GzHref            string
+	Architecture      string
+	UserRepo          []config.PackageRepository
+	ReportPath        = "builds"
+	KernelVersion     string
+	KernelPackages    = make(map[string]struct{})
+
+	// selectedKernelPackages records the concrete kernel packages MatchRequested
+	// resolved for the current build (respecting the configured kernel version and
+	// the latest-match selection). The deb install step uses this instead of the
+	// cache-derived BOM, which can contain kernels from other builds.
+	selectedKernelPackages []ospackage.PackageInfo
 
 	urlExistenceCacheMu     sync.Mutex
 	urlExistenceCache       map[string]bool
@@ -78,6 +86,9 @@ var (
 	packageListURLCacheMu     sync.Mutex
 	packageListURLCache       map[string]string
 	packageListURLCacheLoaded bool
+
+	isDebPackageCacheOutdatedFunc = isDebPackageCacheOutdated
+	clearDebPackageCacheFunc      = clearDebPackageCache
 )
 
 const urlExistenceCacheFileName = "url_exists_cache.json"
@@ -226,21 +237,28 @@ func savePackageListURLToCache(baseURL, codename, arch, component, packageListUR
 	}
 }
 
-func extractDebPackageNameFromFile(fileName string) string {
-	base := strings.TrimSuffix(fileName, ".deb")
-	if idx := strings.Index(base, "_"); idx > 0 {
-		return base[:idx]
-	}
-	return base
-}
-
 func parseDebFileName(fileName string) (string, string) {
 	base := strings.TrimSuffix(fileName, ".deb")
 	parts := strings.Split(base, "_")
 	if len(parts) >= 2 {
-		return parts[0], parts[1]
+		return parts[0], decodeDebEpoch(parts[1])
 	}
 	return base, ""
+}
+
+// decodeDebEpoch reverses dpkg's filename encoding of the epoch separator, where
+// the ':' in an epoch-qualified version (e.g. "1:1.3.dfsg-3.1") is written as
+// "%3a" in the .deb filename. Decoding it keeps a filename-derived versionInfo
+// formatted like the epoch-qualified versions sourced from the repo index, so
+// SBOM version formatting is consistent regardless of the metadata source. Only
+// the epoch delimiter is decoded — no general URL-unescape — so legitimate
+// filename characters are left untouched.
+func decodeDebEpoch(version string) string {
+	if !strings.Contains(version, "%3") {
+		return version
+	}
+	version = strings.ReplaceAll(version, "%3a", ":")
+	return strings.ReplaceAll(version, "%3A", ":")
 }
 
 func stripDebEpoch(version string) string {
@@ -288,7 +306,6 @@ func requirementCandidates(required string) []string {
 
 func isDebRequirementInCache(
 	required string,
-	cachedPackageNames map[string]struct{},
 	cachedPackageInfos []ospackage.PackageInfo,
 ) bool {
 	required = strings.TrimSpace(required)
@@ -296,44 +313,9 @@ func isDebRequirementInCache(
 		return true
 	}
 
-	candidates := requirementCandidates(required)
-	if len(candidates) == 0 {
-		return true
-	}
-
-	for _, cand := range candidates {
-		if pkg, found := ResolveTopPackageConflicts(cand, cachedPackageInfos); found && pkg.Name != "" {
+	for _, pkg := range cachedPackageInfos {
+		if strings.TrimSpace(pkg.Name) == required {
 			return true
-		}
-	}
-
-	for _, cand := range candidates {
-		candName := cand
-		if idx := strings.Index(candName, "_"); idx > 0 {
-			candName = candName[:idx]
-		}
-		candName = strings.TrimSpace(candName)
-		if candName == "" {
-			continue
-		}
-		if _, ok := cachedPackageNames[candName]; ok {
-			return true
-		}
-	}
-
-	for _, cand := range candidates {
-		candName := cand
-		if idx := strings.Index(candName, "_"); idx > 0 {
-			candName = candName[:idx]
-		}
-		candName = strings.TrimSpace(candName)
-		if candName == "" {
-			continue
-		}
-		for cachedName := range cachedPackageNames {
-			if matchesPackageFilter(cachedName, []string{candName}) {
-				return true
-			}
 		}
 	}
 
@@ -341,7 +323,7 @@ func isDebRequirementInCache(
 }
 
 func debMetadataBuildPaths() []string {
-	buildPaths := make([]string, 0, 1+len(RepoCfgs)+len(UserRepoCfgs))
+	buildPaths := make([]string, 0, 1+len(RepoCfgs)+len(UserRepoCfgs)+len(LocalUserRepoCfgs))
 	seen := make(map[string]struct{})
 	add := func(path string) {
 		path = strings.TrimSpace(path)
@@ -360,6 +342,9 @@ func debMetadataBuildPaths() []string {
 		add(rc.BuildPath)
 	}
 	for _, rc := range UserRepoCfgs {
+		add(rc.BuildPath)
+	}
+	for _, rc := range LocalUserRepoCfgs {
 		add(rc.BuildPath)
 	}
 
@@ -444,7 +429,7 @@ func isDebPackageCacheOutdated(requiredPackages []string, cacheDir string) (bool
 		if req == "" {
 			continue
 		}
-		if isDebRequirementInCache(req, cachedPackageNames, cachedPackageInfos) {
+		if isDebRequirementInCache(req, cachedPackageInfos) {
 			continue
 		}
 		if _, seen := missingSet[req]; seen {
@@ -461,6 +446,10 @@ func isDebPackageCacheOutdated(requiredPackages []string, cacheDir string) (bool
 // build-path so that metadata is re-fetched on the next run.
 func clearDebMetadataCache() {
 	log := logger.Logger()
+
+	if err := initializeUserRepoCfgs(); err != nil {
+		log.Warnf("failed to initialize user repo configs during DEB metadata cache clear: %v", err)
+	}
 
 	for _, dir := range debMetadataBuildPaths() {
 		cacheFile := filepath.Join(dir, "packages.parsed.json")
@@ -515,16 +504,84 @@ func clearDebPackageCache(cacheDir string) error {
 	return nil
 }
 
+// debMetadataInfosByCachedFile indexes the parsed repo metadata by the .deb base
+// filename it downloads to (filepath.Base of the metadata URL). It lets a warm
+// cache hit recover the full metadata (canonical repo URL, Maintainer/Origin,
+// checksums, description, epoch-qualified version) for a cached artifact instead
+// of the bare name/version parseable from the filename alone. It mirrors the
+// name→info matching isDebPackageCacheOutdated does, so the two stay in step.
+func debMetadataInfosByCachedFile() map[string]ospackage.PackageInfo {
+	metadataInfos := loadDebPackageInfosFromMetadataCache()
+	byFile := make(map[string]ospackage.PackageInfo, len(metadataInfos))
+	for _, pkg := range metadataInfos {
+		if pkg.Name == "" || pkg.URL == "" {
+			continue
+		}
+		byFile[filepath.Base(pkg.URL)] = pkg
+	}
+	return byFile
+}
+
 func buildDebPackageInfosFromCache(cacheDir string, cachedFiles []string) []ospackage.PackageInfo {
+	// Prefer the parsed repo metadata for each cached artifact so warm-cache
+	// SBOM entries carry the same supplier/checksum/description/canonical-URL
+	// completeness as a fresh resolve; without it the cache-hit path emits
+	// degraded records with a local-path downloadLocation.
+	metadataByFile := debMetadataInfosByCachedFile()
+
 	infos := make([]ospackage.PackageInfo, 0, len(cachedFiles))
 	for _, file := range cachedFiles {
+		if meta, ok := metadataByFile[file]; ok {
+			infos = append(infos, meta)
+			continue
+		}
+		// Fallback when no parsed metadata is available: recover the name and
+		// version from the .deb filename (name_version_arch.deb). Dropping the
+		// version here leaves the SBOM (and any name|version|url comparison built
+		// on it) unable to tell an upgraded package from a removed-and-re-added one.
+		name, version := parseDebFileName(file)
 		infos = append(infos, ospackage.PackageInfo{
-			Name: extractDebPackageNameFromFile(file),
-			Type: "deb",
-			URL:  filepath.Join(cacheDir, file),
+			Name:    name,
+			Version: version,
+			Type:    "deb",
+			URL:     filepath.Join(cacheDir, file),
 		})
 	}
 	return infos
+}
+
+// selectLatestKernel picks the highest-version package from a kernel wildcard
+// expansion and warns which kernels matched and which one was installed, so the
+// user can pin an exact kernel if they wanted a different one.
+func selectLatestKernel(want string, pkgs []ospackage.PackageInfo) ospackage.PackageInfo {
+	sorted := make([]ospackage.PackageInfo, len(pkgs))
+	copy(sorted, pkgs)
+	sort.Slice(sorted, func(i, j int) bool {
+		if c := compareVersions(sorted[i].Version, sorted[j].Version); c != 0 {
+			return c > 0
+		}
+		return sorted[i].Name < sorted[j].Name
+	})
+	latest := sorted[0]
+
+	names := make([]string, 0, len(sorted))
+	for _, pkg := range sorted {
+		names = append(names, fmt.Sprintf("  - %s (%s)", pkg.Name, pkg.Version))
+	}
+	logger.Logger().Warnf(
+		"kernel wildcard %q matched %d kernel packages:\n%s\n"+
+			"installing the latest, %s (%s); pin an exact kernel in the template's "+
+			"systemConfig.kernel.packages to install a different one",
+		want, len(sorted), strings.Join(names, "\n"), latest.Name, latest.Version)
+	return latest
+}
+
+// SelectedKernelPackages returns the concrete kernel packages MatchRequested
+// resolved for the current build. The deb install step uses this to expand a
+// kernel glob to the exact selected package instead of scanning the
+// cache-derived BOM.
+func SelectedKernelPackages() []ospackage.PackageInfo {
+	return append([]ospackage.PackageInfo(nil), selectedKernelPackages...)
 }
 
 // ConfigureKernelSelection sets the kernel package requests and version used
@@ -592,6 +649,7 @@ func PackagesFromMultipleRepos() ([]ospackage.PackageInfo, error) {
 
 // BuildRepoConfigs converts Repository entries to RepoConfig format
 func BuildRepoConfigs(userRepoList []Repository, arch string) ([]RepoConfig, error) {
+	log := logger.Logger()
 	var userRepo []RepoConfig
 	for _, repoItem := range userRepoList {
 		connectSuccess := false
@@ -612,10 +670,10 @@ func BuildRepoConfigs(userRepoList []Repository, arch string) ([]RepoConfig, err
 					return nil, fmt.Errorf("getting package metadata name: %w, baseURL %s codename %s localArch %s componentName %s\n", err, baseURL, codename, localArch, componentName)
 				}
 				if package_list_url == "" {
-					fmt.Printf("getting package metadata name: %v, baseURL %s codename %s localArch %s componentName %s\n", err, baseURL, codename, localArch, componentName)
+					log.Debugf("no package metadata found: baseURL %s codename %s localArch %s componentName %s", baseURL, codename, localArch, componentName)
 					continue // No valid package list found for this arch/component
 				}
-				fmt.Printf("SUCCESS: baseURL %s codename %s localArch %s componentName %s\n", baseURL, codename, localArch, componentName)
+				log.Debugf("found package metadata: baseURL %s codename %s localArch %s componentName %s", baseURL, codename, localArch, componentName)
 				repo := RepoConfig{
 					PkgList:       package_list_url,
 					ReleaseFile:   fmt.Sprintf("%s/dists/%s/%s", baseURL, codename, releaseNm),
@@ -647,8 +705,10 @@ func BuildRepoConfigs(userRepoList []Repository, arch string) ([]RepoConfig, err
 func LocalUserPackages() ([]ospackage.PackageInfo, func(), error) {
 	log := logger.Logger()
 	log.Infof("fetching packages from local user package list")
+	LocalUserRepoCfgs = nil
 
 	var allLocalPackages []ospackage.PackageInfo
+	var localRepoCfgs []RepoConfig
 	var cleanups []func()
 	combinedCleanup := func() {
 		for _, fn := range cleanups {
@@ -691,6 +751,20 @@ func LocalUserPackages() ([]ospackage.PackageInfo, func(), error) {
 		pkggz := fmt.Sprintf("%s/dists/stable/%s/binary-%s/Packages.gz", tempURL, component, Architecture)
 		releaseFile := fmt.Sprintf("%s/dists/stable/Release", tempURL)
 		buildPath := filepath.Join(config.TempDir(), "builds", fmt.Sprintf("%s_%s_%s", repoName, Architecture, component))
+		priority := repo.Priority
+		if priority == 0 {
+			priority = 500
+		}
+		localRepoCfgs = append(localRepoCfgs, RepoConfig{
+			PkgList:       pkggz,
+			ReleaseFile:   releaseFile,
+			PkgPrefix:     tempURL,
+			Name:          repoName,
+			BuildPath:     buildPath,
+			Arch:          Architecture,
+			Priority:      priority,
+			AllowPackages: repo.AllowPackages,
+		})
 
 		localPkgs, err := ParseRepositoryMetadata(tempURL, pkggz, releaseFile, "", "[trusted=yes]", buildPath, Architecture, repo.AllowPackages)
 		if err != nil {
@@ -700,6 +774,7 @@ func LocalUserPackages() ([]ospackage.PackageInfo, func(), error) {
 		}
 		allLocalPackages = append(allLocalPackages, localPkgs...)
 	}
+	LocalUserRepoCfgs = localRepoCfgs
 
 	return allLocalPackages, combinedCleanup, nil
 }
@@ -722,6 +797,10 @@ func initializeUserRepoCfgs() error {
 		}
 
 		baseURL := strings.TrimPrefix(strings.TrimPrefix(repo.URL, "http://"), "https://")
+		priority := repo.Priority
+		if priority == 0 {
+			priority = 500
+		}
 		repoList = append(repoList, Repository{
 			ID:            fmt.Sprintf("%s%d", repoGroup+"-"+baseURL, i+1),
 			Codename:      repo.Codename,
@@ -729,7 +808,7 @@ func initializeUserRepoCfgs() error {
 			Path:          repo.Path,
 			PKey:          repo.PKey,
 			Component:     repo.Component,
-			Priority:      repo.Priority,
+			Priority:      priority,
 			AllowPackages: repo.AllowPackages,
 		})
 	}
@@ -769,30 +848,88 @@ func UserPackages() ([]ospackage.PackageInfo, error) {
 	return allUserPackages, nil
 }
 
-// CheckFileExists sends a HEAD request to the given URL and
-// returns true if the file exists (status 200).
+// CheckFileExists reports whether the given URL serves a file, using a HEAD
+// request and falling back to a ranged GET for servers that refuse HEAD.
 // Optimized to handle timeouts and slow server responses.
 func checkFileExists(url string) (bool, error) {
 	if exists, ok := getURLExistenceFromCache(url); ok {
 		return exists, nil
 	}
 
-	// Create a context with timeout for the request
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	found, status, err := probeURL(url, http.MethodHead)
+
+	// A HEAD rejection is not proof of absence. Some CDN-backed APT mirrors
+	// answer HEAD for a perfectly downloadable object with a client error while
+	// GET of the same URL returns 200 — packages.mozilla.org (Google Cloud
+	// Storage) answers 400 to HEAD on .../binary-amd64/Packages and 200 to GET.
+	// Believing the HEAD makes ICT declare a working repository unreachable, so
+	// confirm with a one-byte ranged GET before concluding the file is missing.
+	// 404 is left alone: it is an unambiguous answer, and re-probing every miss
+	// would double the request count across the arch/component fan-out.
+	//
+	// This is checked before err is propagated because one of the statuses that
+	// means "HEAD unsupported" (501) falls in the range probeURL reports as a
+	// server error.
+	if !found && headRejectedStatus(status) {
+		log := logger.Logger()
+		log.Debugf("HEAD %s returned %d; retrying with a ranged GET", url, status)
+		found, status, err = probeURL(url, http.MethodGet)
+	}
+	if err != nil {
+		return false, err
+	}
+
+	// Only record a verdict the server actually gave. A status of 0 means the
+	// probe never got a response (a network error mapped to absence above), and
+	// persisting that would pin a reachable repository to "missing" for every
+	// later run off the on-disk cache.
+	if status != 0 {
+		saveURLExistenceToCache(url, found)
+	}
+	return found, nil
+}
+
+// headRejectedStatus reports whether a status means "this server would not
+// answer a HEAD for this object" rather than "the object is not here".
+func headRejectedStatus(status int) bool {
+	switch status {
+	case http.StatusBadRequest,
+		http.StatusForbidden,
+		http.StatusMethodNotAllowed,
+		http.StatusNotAcceptable,
+		http.StatusNotImplemented:
+		return true
+	}
+	return false
+}
+
+// probeURL issues a single existence check for url. It returns whether the file
+// is present and the HTTP status observed (0 when no response was obtained, e.g.
+// a network error treated as absence). A GET probe asks for only the first byte
+// so a hit does not pull a multi-megabyte index down.
+func probeURL(url, method string) (bool, int, error) {
+	// Create a context with timeout for the request, parented on the ambient
+	// run-scoped ctx so a SIGINT/SIGTERM during a large fan-out of HEAD checks
+	// (overlay/create modes) cancels the in-flight requests within the 30s
+	// budget instead of running each one to completion.
+	ctx, cancel := context.WithTimeout(runctx.Context(), 30*time.Second)
 	defer cancel()
 
 	client := network.NewSecureHTTPClient()
 
 	// Create request with context
-	req, err := http.NewRequestWithContext(ctx, "HEAD", url, nil)
+	req, err := http.NewRequestWithContext(ctx, method, url, nil)
 	if err != nil {
-		return false, fmt.Errorf("creating request for %s: %w", url, err)
+		return false, 0, fmt.Errorf("creating request for %s: %w", url, err)
 	}
 
 	// Set additional headers to encourage faster responses
 	req.Header.Set("User-Agent", "image-composer-tool/1.0")
 	req.Header.Set("Accept", "*/*")
-	req.Header.Set("Connection", "close") // Don't keep connection alive for HEAD requests
+	req.Header.Set("Connection", "close") // Don't keep the connection alive for probes
+	if method == http.MethodGet {
+		req.Header.Set("Range", "bytes=0-0")
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -803,9 +940,9 @@ func checkFileExists(url string) (bool, error) {
 			strings.Contains(errStr, "connection refused") ||
 			strings.Contains(errStr, "no such host") ||
 			strings.Contains(errStr, "context deadline exceeded") {
-			return false, nil // Treat network issues as "file not found"
+			return false, 0, nil // Treat network issues as "file not found"
 		}
-		return false, fmt.Errorf("network error checking %s: %w", url, err)
+		return false, 0, fmt.Errorf("network error checking %s: %w", url, err)
 	}
 	defer func() {
 		// Properly drain and close the response body to avoid connection leaks
@@ -816,20 +953,19 @@ func checkFileExists(url string) (bool, error) {
 	}()
 
 	switch {
-	case resp.StatusCode == http.StatusOK:
-		// File exists, all good
-		saveURLExistenceToCache(url, true)
-		return true, nil
+	case resp.StatusCode == http.StatusOK, resp.StatusCode == http.StatusPartialContent:
+		// File exists, all good. A ranged GET answers 206; a server that ignores
+		// the Range header answers 200.
+		return true, resp.StatusCode, nil
 	case resp.StatusCode >= 400 && resp.StatusCode < 500:
 		// Client errors (404, 403, etc.) - treat as file not found
-		saveURLExistenceToCache(url, false)
-		return false, nil
+		return false, resp.StatusCode, nil
 	case resp.StatusCode >= 500:
 		// Server errors - treat as temporary issue, file might exist
-		return false, fmt.Errorf("server error checking file at %s: status %s", url, resp.Status)
+		return false, resp.StatusCode, fmt.Errorf("server error checking file at %s: status %s", url, resp.Status)
 	default:
 		// Unexpected status codes
-		return false, fmt.Errorf("unexpected response checking file at %s: status %s", url, resp.Status)
+		return false, resp.StatusCode, fmt.Errorf("unexpected response checking file at %s: status %s", url, resp.Status)
 	}
 }
 
@@ -929,6 +1065,7 @@ func MatchRequested(requests []string, all []ospackage.PackageInfo) ([]ospackage
 	var requestedPkgs []string
 	gotMissingPkg := false
 	gotMissingKernelPkg := false
+	selectedKernelPackages = nil
 
 	for _, want := range requests {
 		if isGlobPattern(want) {
@@ -943,6 +1080,16 @@ func MatchRequested(requests []string, all []ospackage.PackageInfo) ([]ospackage
 				continue
 			}
 
+			// A kernel wildcard can expand to several kernel meta-packages; install
+			// only the latest and warn which ones matched so the user can pin a
+			// specific kernel if they wanted a different one.
+			if isKernelPackageRequest(want) && len(pkgs) > 1 {
+				pkgs = []ospackage.PackageInfo{selectLatestKernel(want, pkgs)}
+			}
+			if isKernelPackageRequest(want) {
+				selectedKernelPackages = append(selectedKernelPackages, pkgs...)
+			}
+
 			for _, pkg := range pkgs {
 				key := fmt.Sprintf("%s=%s", pkg.Name, pkg.Version)
 				if _, ok := seen[key]; ok {
@@ -955,6 +1102,9 @@ func MatchRequested(requests []string, all []ospackage.PackageInfo) ([]ospackage
 		}
 
 		if pkg, found := ResolveTopPackageConflicts(want, all); found {
+			if isKernelPackageRequest(want) {
+				selectedKernelPackages = append(selectedKernelPackages, pkg)
+			}
 			key := fmt.Sprintf("%s=%s", pkg.Name, pkg.Version)
 			if _, ok := seen[key]; ok {
 				continue
@@ -1043,6 +1193,49 @@ func DownloadPackages(pkgList []string, destDir, dotFile string, pkgSources map[
 }
 
 func DownloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSources map[string]config.PackageSource, systemRootsOnly bool) ([]string, []ospackage.PackageInfo, error) {
+	return downloadPackagesComplete(pkgList, destDir, dotFile, pkgSources, systemRootsOnly, false)
+}
+
+func handleDebCacheRetry(
+	requiredPackages []string,
+	absDestDir string,
+	retriedAfterCacheClear bool,
+	retryFunc func() ([]string, []ospackage.PackageInfo, error),
+) ([]string, []ospackage.PackageInfo, bool, error) {
+	log := logger.Logger()
+
+	cacheOutdated, missingRequired, cachedFiles, cacheErr := isDebPackageCacheOutdatedFunc(requiredPackages, absDestDir)
+	if cacheErr != nil {
+		log.Warnf("Failed to evaluate DEB package cache state: %v", cacheErr)
+		return nil, nil, false, nil
+	}
+
+	if !cacheOutdated {
+		log.Infof("DEB package cache is up-to-date; all %d resolved packages are available locally", len(requiredPackages))
+		return cachedFiles, buildDebPackageInfosFromCache(absDestDir, cachedFiles), true, nil
+	}
+
+	if len(missingRequired) == 0 {
+		return nil, nil, false, nil
+	}
+
+	log.Infof("DEB package cache is outdated; missing required packages: %v", missingRequired)
+	if retriedAfterCacheClear {
+		log.Infof("DEB package cache remained outdated after retry; continuing with package download")
+		return nil, nil, false, nil
+	}
+
+	if clearErr := clearDebPackageCacheFunc(absDestDir); clearErr != nil {
+		log.Warnf("Failed to clear DEB package cache: %v", clearErr)
+		return nil, nil, false, nil
+	}
+
+	log.Infof("Retrying DEB package resolution after cache clear")
+	pkgs, infos, err := retryFunc()
+	return pkgs, infos, true, err
+}
+
+func downloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSources map[string]config.PackageSource, systemRootsOnly bool, retriedAfterCacheClear bool) ([]string, []ospackage.PackageInfo, error) {
 	var downloadPkgList []string
 
 	log := logger.Logger()
@@ -1056,21 +1249,6 @@ func DownloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSour
 	absDestDir, err := filepath.Abs(destDir)
 	if err != nil {
 		return downloadPkgList, nil, fmt.Errorf("resolving cache directory: %w", err)
-	}
-
-	if len(pkgList) > 0 {
-		cacheOutdated, missingRequired, cachedFiles, cacheErr := isDebPackageCacheOutdated(pkgList, absDestDir)
-		if cacheErr != nil {
-			log.Warnf("Failed to evaluate DEB package cache state: %v", cacheErr)
-		} else if !cacheOutdated {
-			log.Infof("DEB package cache is up-to-date; all %d required packages are available locally", len(pkgList))
-			return cachedFiles, buildDebPackageInfosFromCache(absDestDir, cachedFiles), nil
-		} else if len(missingRequired) > 0 {
-			log.Infof("DEB package cache is outdated; missing required packages: %v", missingRequired)
-			if clearErr := clearDebPackageCache(absDestDir); clearErr != nil {
-				log.Warnf("Failed to clear DEB package cache: %v", clearErr)
-			}
-		}
 	}
 
 	// Fetch the entire base package list from multiple repositories if configured
@@ -1129,6 +1307,25 @@ func DownloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSour
 	}
 	log.Infof("sorted %d packages for installation", len(sorted_pkgs))
 
+	if len(sorted_pkgs) > 0 {
+		requiredPackages := make([]string, 0, len(sorted_pkgs))
+		for _, pkg := range sorted_pkgs {
+			requiredPackages = append(requiredPackages, pkg.Name)
+		}
+
+		handledPkgList, handledInfos, handled, handledErr := handleDebCacheRetry(
+			requiredPackages,
+			absDestDir,
+			retriedAfterCacheClear,
+			func() ([]string, []ospackage.PackageInfo, error) {
+				return downloadPackagesComplete(pkgList, destDir, dotFile, pkgSources, systemRootsOnly, true)
+			},
+		)
+		if handled {
+			return handledPkgList, handledInfos, handledErr
+		}
+	}
+
 	// If a dot file is specified, generate the dependency graph
 	if dotFile != "" {
 		graphPkgs := needed
@@ -1154,7 +1351,7 @@ func DownloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSour
 
 	// Download packages using configured workers and cache directory
 	log.Infof("downloading %d packages to %s using %d workers", len(urls), absDestDir, config.Workers())
-	if err := pkgfetcher.FetchPackages(urls, absDestDir, config.Workers()); err != nil {
+	if err := pkgfetcher.FetchPackages(runctx.Context(), urls, absDestDir, config.Workers()); err != nil {
 		return downloadPkgList, nil, fmt.Errorf("fetch failed: %w", err)
 	}
 	log.Info("all downloads complete")
