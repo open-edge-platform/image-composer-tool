@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { api } from '../api/client'
-import type { PackageRepo, PackageSearchResult } from '../api/types'
+import type { PackageRepo, PackageSearchResult, PackageVersion } from '../api/types'
 import { PackageRepoBrowser } from './PackageRepoBrowser'
 import { PackageRow } from './PackageRow'
 import { SelectedPackages } from './SelectedPackages'
@@ -124,29 +124,51 @@ interface SearchOutcome {
   truncated: boolean
 }
 
+// versionsOf normalises a hit's version list, tolerating a backend that
+// predates the `versions` field by falling back to the single version it does
+// report.
+function versionsOf(p: PackageSearchResult): PackageVersion[] {
+  return p.versions?.length ? p.versions : [{ version: p.version, repository: p.repository }]
+}
+
 // mergeHits flattens the per-repository batches into one ranked list.
 //
-// A package several repositories carry is shown once, credited to the
-// highest-priority one. Batches arrive in completion order, not catalog order,
-// so picking the first to report would make the "via <repo>" label — and which
-// repository a pick enables — depend on which mirror happened to answer first.
+// A package several repositories carry appears once, offering the versions
+// from all of them: the server groups versions within a repository, but only
+// the client sees every repository's batch. Which repository leads the merged
+// list is decided by catalog priority rather than arrival order — batches
+// arrive as each repository finishes, so otherwise the "via <repo>" label and
+// the repository a pick enables would depend on which mirror answered first.
 function mergeHits(
   byRepo: Map<string, PackageSearchResult[]>,
   priorityOf: (repoId: string) => number,
 ): PackageSearchResult[] {
-  const best = new Map<string, PackageSearchResult>()
+  const merged = new Map<string, PackageSearchResult>()
   for (const batch of byRepo.values()) {
     for (const p of batch) {
-      const held = best.get(p.name)
+      const held = merged.get(p.name)
       if (!held) {
-        best.set(p.name, p)
+        merged.set(p.name, { ...p, versions: versionsOf(p) })
         continue
       }
+      // Union the version lists, keeping each repository's own ordering and
+      // putting the higher-priority repository's versions first. Comparing
+      // versions across repositories would need the target's version rules,
+      // which only the server has.
       const [a, b] = [priorityOf(p.repository), priorityOf(held.repository)]
-      if (a > b || (a === b && p.repository < held.repository)) best.set(p.name, p)
+      const leadsWithP = a > b || (a === b && p.repository < held.repository)
+      const [first, second] = leadsWithP ? [p, held] : [held, p]
+      const seen = new Set<string>()
+      const versions = [...versionsOf(first), ...versionsOf(second)].filter((v) => {
+        const k = `${v.repository} ${v.version}`
+        if (seen.has(k)) return false
+        seen.add(k)
+        return true
+      })
+      merged.set(p.name, { ...first, versions })
     }
   }
-  return [...best.values()]
+  return [...merged.values()]
     .sort((a, b) => a.name.localeCompare(b.name))
     .slice(0, SEARCH_LIMIT)
 }
@@ -210,11 +232,25 @@ function PackageSearch({ os, repos }: { os: string; repos: PackageRepo[] }) {
       })
       // `error` is EventSource's own transport-failure event — the server
       // deliberately never sends one by that name, so reaching here always
-      // means the stream itself broke.
+      // means the stream itself broke (or the backend has no such route and
+      // the SPA fallback answered with HTML).
       es.addEventListener('error', () => {
         es?.close()
-        setLoading(false)
-        setError('Search connection failed.')
+        if (byRepo.size > 0) {
+          // Keep what already arrived rather than replacing it with an error:
+          // a stream that dies partway still found real packages.
+          setLoading(false)
+          setOutcome({ repos: byRepo.size, failed: 0, truncated: true })
+          return
+        }
+        // Nothing arrived, so fall back to the non-streaming endpoint. It is
+        // slower, but it works against a backend that predates the stream
+        // route or a proxy that buffers text/event-stream.
+        api
+          .searchPackages({ q, os, limit: SEARCH_LIMIT })
+          .then((r) => setResults(r.packages))
+          .catch((e) => setError((e as Error).message))
+          .finally(() => setLoading(false))
       })
     }, 300)
     return () => {
@@ -234,9 +270,19 @@ function PackageSearch({ os, repos }: { os: string; repos: PackageRepo[] }) {
 
   // Adding a package is a statement of interest in its repo, so it's brought
   // into the enabled set even if the user never touched that repo's checkbox.
-  const pick = (hit: PackageSearchResult, version: string) => {
-    setPackage({ name: hit.name, version, repo: hit.repository })
-    if (!isEnabled(hit.repository)) setRepoEnabled(hit.repository, true)
+  // The repo comes from the chosen version, not the row: pinning an older
+  // version can select a different repository than the newest one came from.
+  const add = (hit: PackageSearchResult, repo: string, version: string) => {
+    setPackage({ name: hit.name, version, repo })
+    if (!isEnabled(repo)) setRepoEnabled(repo, true)
+  }
+
+  // Ticking the checkbox is a finished decision, so the dropdown gets out of
+  // the way. Choosing a version is not: the point of showing several is to let
+  // one be compared against another, which a dropdown that vanishes on the
+  // first click makes impossible.
+  const pick = (hit: PackageSearchResult, repo: string, version: string) => {
+    add(hit, repo, version)
     setQuery('')
     setOpen(false)
   }
@@ -281,9 +327,11 @@ function PackageSearch({ os, repos }: { os: string; repos: PackageRepo[] }) {
                   description={hit.description}
                   repoLabel={labelFor(hit.repository)}
                   showRepo
+                  versions={versionsOf(hit)}
+                  repoLabelFor={labelFor}
                   selection={addedPackages.find((p) => p.name === hit.name)}
-                  onToggle={(checked) => (checked ? pick(hit, '') : removePackage(hit.name))}
-                  onChooseVersion={(v) => pick(hit, v)}
+                  onToggle={(checked) => (checked ? pick(hit, hit.repository, '') : removePackage(hit.name))}
+                  onChooseVersion={(v) => add(hit, v.repository, v.version)}
                 />
               ))}
               {loading ? (

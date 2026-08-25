@@ -120,11 +120,16 @@ func fromPackageSearchResults(query string, hits []service.PackageSearchHit, tot
 func fromPackageSearchHits(hits []service.PackageSearchHit) []httpapi.PackageSearchResult {
 	out := make([]httpapi.PackageSearchResult, len(hits))
 	for i, h := range hits {
+		versions := make([]httpapi.PackageVersion, len(h.Versions))
+		for j, v := range h.Versions {
+			versions[j] = httpapi.PackageVersion{Version: v.Version, Repository: v.RepoID}
+		}
 		out[i] = httpapi.PackageSearchResult{
 			Name:        h.Name,
 			Version:     h.Version,
 			Description: optStr(h.Description),
 			Repository:  h.RepoID,
+			Versions:    &versions,
 		}
 	}
 	return out

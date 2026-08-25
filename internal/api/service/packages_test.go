@@ -191,3 +191,100 @@ func TestSearchPackagesRepoWithNoIndexIsSkipped(t *testing.T) {
 		t.Fatalf("got %d hits, want 0 for a repo with no Index entries", len(hits))
 	}
 }
+
+func TestDedupAndFilterGroupsVersions(t *testing.T) {
+	// A Debian-style repository publishes release, -updates and -security as
+	// separate indexes, so the same package arrives several times at different
+	// versions. They must collapse into one hit offering every version.
+	deb := func(string) bool { return false }
+	results := []lookupResult{
+		{repoID: "noble", entries: []pkgindex.Entry{
+			{Name: "curl", Version: "8.5.0-2ubuntu10.9", Description: "transfer a URL"},
+			{Name: "vim", Version: "2.0"},
+			{Name: "nginx", Version: "1.0~rc1"},
+		}},
+		{repoID: "noble", entries: []pkgindex.Entry{
+			{Name: "curl", Version: "8.5.0-2ubuntu10.13"},
+			{Name: "curl", Version: "8.5.0-2ubuntu10.9"}, // duplicate, must not repeat
+			{Name: "vim", Version: "1:1.0"},
+			{Name: "nginx", Version: "1.0"},
+		}},
+	}
+
+	hits := dedupAndFilter(results, "", deb)
+	if len(hits) != 3 {
+		t.Fatalf("got %d hits, want 3 (one per package name): %+v", len(hits), hits)
+	}
+
+	byName := map[string]PackageSearchHit{}
+	for _, h := range hits {
+		byName[h.Name] = h
+	}
+
+	curl := byName["curl"]
+	if len(curl.Versions) != 2 {
+		t.Errorf("curl has %d versions, want 2: %+v", len(curl.Versions), curl.Versions)
+	}
+	if curl.Version != curl.Versions[0].Version || curl.RepoID != curl.Versions[0].RepoID {
+		t.Errorf("hit fields %q/%q do not mirror Versions[0] %+v", curl.Version, curl.RepoID, curl.Versions[0])
+	}
+	if curl.Description != "transfer a URL" {
+		t.Errorf("description = %q; a later suite's empty one overwrote it", curl.Description)
+	}
+
+	// Each case inverts under plain string comparison, so these pin the
+	// ordering to the target's real version rules rather than to byte order.
+	for _, tc := range []struct{ name, wantNewest, why string }{
+		{"curl", "8.5.0-2ubuntu10.13", "numeric segments: 13 > 9, but \"...10.9\" > \"...10.13\" as strings"},
+		{"vim", "1:1.0", "an epoch outranks a higher upstream version"},
+		{"nginx", "1.0", "a tilde sorts before its release, so 1.0 > 1.0~rc1"},
+	} {
+		if got := byName[tc.name].Versions[0].Version; got != tc.wantNewest {
+			t.Errorf("%s newest = %q, want %q (%s)", tc.name, got, tc.wantNewest, tc.why)
+		}
+	}
+}
+
+func TestDedupAndFilterVersionsCarryTheirRepo(t *testing.T) {
+	// The same package from two repositories: pinning a version has to pick
+	// the repository that actually provides it.
+	deb := func(string) bool { return false }
+	results := []lookupResult{
+		{repoID: "ubuntu-noble-base", entries: []pkgindex.Entry{{Name: "gz-harmonic", Version: "8.8.2-1~noble"}}},
+		{repoID: "gazebo", entries: []pkgindex.Entry{{Name: "gz-harmonic", Version: "8.9.0-1~noble"}}},
+	}
+	hits := dedupAndFilter(results, "", deb)
+	if len(hits) != 1 {
+		t.Fatalf("got %d hits, want 1", len(hits))
+	}
+	got := hits[0].Versions
+	if len(got) != 2 {
+		t.Fatalf("got %d versions, want 2: %+v", len(got), got)
+	}
+	if got[0].Version != "8.9.0-1~noble" || got[0].RepoID != "gazebo" {
+		t.Errorf("newest = %+v, want 8.9.0-1~noble from gazebo", got[0])
+	}
+	if got[1].RepoID != "ubuntu-noble-base" {
+		t.Errorf("older version lost its repository: %+v", got[1])
+	}
+}
+
+func TestSearchPackagesLimitCountsPackagesNotVersions(t *testing.T) {
+	// `limit` must page over packages; counting versions would silently return
+	// fewer packages than asked for whenever any of them had an update.
+	deb := func(string) bool { return false }
+	results := []lookupResult{
+		{repoID: "noble", entries: []pkgindex.Entry{
+			{Name: "aaa", Version: "1.0"}, {Name: "aaa", Version: "1.1"},
+			{Name: "bbb", Version: "2.0"}, {Name: "bbb", Version: "2.1"},
+			{Name: "ccc", Version: "3.0"},
+		}},
+	}
+	hits := dedupAndFilter(results, "", deb)
+	if len(hits) != 3 {
+		t.Fatalf("got %d hits, want 3 packages", len(hits))
+	}
+	if got := paginate(hits, 0, 2); len(got) != 2 {
+		t.Errorf("paginate returned %d, want 2 packages", len(got))
+	}
+}

@@ -57,8 +57,15 @@ export function SelectedPackages({ repos }: SelectedPackagesProps) {
                   >
                     {p.name}
                   </span>
-                  <span className="shrink-0 rounded-full bg-[#e6f2fa] px-1.5 py-0.5 text-[10px] font-medium text-[#0071c5]">
-                    {p.version ? `pinned ${p.version}` : 'latest'}
+                  <span
+                    className="shrink-0 rounded-full bg-[#e6f2fa] px-1.5 py-0.5 font-mono text-[10px] font-medium text-[#0071c5]"
+                    title={
+                      p.version
+                        ? `pinned to ${p.version} from ${labelFor(p.repo)}`
+                        : `follows the latest version ${labelFor(p.repo)} publishes`
+                    }
+                  >
+                    {p.version || 'latest'}
                   </span>
                   <button
                     type="button"

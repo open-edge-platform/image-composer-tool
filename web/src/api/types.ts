@@ -115,11 +115,23 @@ export interface PackageRepoList {
 
 // One package search hit (from GET /packages/search): name + latest version +
 // description, plus the repository it came from.
+// One available version of a package and the repository providing it. Pinning
+// a version therefore also picks a repository.
+export interface PackageVersion {
+  version: string
+  repository: string
+}
+
 export interface PackageSearchResult {
   name: string
   version: string
   description?: string
   repository: string
+  // Every version found, newest first (server-ordered by the target's own
+  // version rules, not string order). `version`/`repository` mirror
+  // `versions[0]`. Optional because a repository can be searched by an older
+  // backend that predates the field.
+  versions?: PackageVersion[]
 }
 
 export interface PackageSearchResults {

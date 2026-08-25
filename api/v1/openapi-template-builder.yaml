@@ -766,7 +766,11 @@ components:
 
     PackageSearchResult:
       type: object
-      description: One package search hit.
+      description: |
+        One package, with every version of it the search found. A package is
+        reported once no matter how many indexes carry it — a Debian-style
+        repository publishes the release, -updates and -security suites
+        separately, so the same package routinely exists at several versions.
       required: [name, version, repository]
       properties:
         name:
@@ -775,13 +779,38 @@ components:
         version:
           type: string
           example: "27.1.1"
-          description: Latest available version
+          description: |
+            The newest available version, and the one used when a package is
+            added without pinning. Always equal to `versions[0].version`.
         description:
           type: string
           example: Docker Community Edition
         repository:
           type: string
           example: docker-ce-stable
+          description: ID of the repository providing `version`.
+        versions:
+          type: array
+          description: |
+            Every version found, newest first, each with the repository that
+            provides it — pinning a version therefore also selects a
+            repository. Ordering uses the target's native version comparison
+            (Debian or RPM), not string ordering, so `1:9.6p1-3ubuntu13.9`
+            correctly outranks `1:9.6p1-3ubuntu13.7`.
+          items:
+            $ref: "#/components/schemas/PackageVersion"
+
+    PackageVersion:
+      type: object
+      description: One available version of a package, and where it comes from.
+      required: [version, repository]
+      properties:
+        version:
+          type: string
+          example: "1:9.6p1-3ubuntu13.9"
+        repository:
+          type: string
+          example: ubuntu-noble-base
 
     PackageSearchResults:
       type: object

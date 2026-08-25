@@ -222,6 +222,8 @@ function RepoPane({ repo, enabled, os }: { repo: PackageRepo; enabled: boolean; 
                 description={h.description}
                 repoLabel={repo.displayName}
                 showRepo={false}
+                versions={h.versions?.length ? h.versions : [{ version: h.version, repository: h.repository }]}
+                repoLabelFor={() => repo.displayName}
                 selection={addedPackages.find((p) => p.name === h.name)}
                 onToggle={(checked) =>
                   checked
@@ -229,7 +231,7 @@ function RepoPane({ repo, enabled, os }: { repo: PackageRepo; enabled: boolean; 
                     : removePackage(h.name)
                 }
                 onChooseVersion={(v) =>
-                  setPackage({ name: h.name, version: v, repo: h.repository })
+                  setPackage({ name: h.name, version: v.version, repo: v.repository })
                 }
               />
             ))}

@@ -13,6 +13,8 @@ import (
 	"sync"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/api/service/pkgindex"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/debutils"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/rpmutils"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"golang.org/x/sync/errgroup"
 )
@@ -24,6 +26,18 @@ type PackageSearchHit struct {
 	Version     string
 	Description string
 	RepoID      string
+	// Versions is every version of this package the search found, newest
+	// first; Version/RepoID mirror Versions[0]. A package routinely exists at
+	// several versions because a Debian-style repository publishes its
+	// release, -updates and -security suites as separate indexes.
+	Versions []PackageVersion
+}
+
+// PackageVersion is one available version of a package and the repository
+// providing it. Pinning a version therefore also picks a repository.
+type PackageVersion struct {
+	Version string
+	RepoID  string
 }
 
 const (
@@ -83,9 +97,10 @@ func (s *Service) SearchPackages(ctx context.Context, osID, query string, repoFi
 	}
 
 	repos := filterReposByID(s.PackageRepos(osID), repoFilter)
-	results := runLookups(ctx, s.pkgindexCache, s.planLookups(osID, repos))
+	lookups := s.planLookups(osID, repos)
+	results := runLookups(ctx, s.pkgindexCache, lookups)
 
-	hits = dedupAndFilter(results, query)
+	hits = dedupAndFilter(results, query, rpmRepoSet(lookups))
 	sort.Slice(hits, func(i, j int) bool {
 		if hits[i].Name != hits[j].Name {
 			return hits[i].Name < hits[j].Name
@@ -219,7 +234,7 @@ func (s *Service) lookupRepo(ctx context.Context, g repoGroup, sem chan struct{}
 	if failed := countNonNil(errs); failed == len(errs) && failed > 0 {
 		return PackageSearchBatch{RepoID: g.repoID, Err: errs[0]}
 	}
-	hits := dedupAndFilter(results, query)
+	hits := dedupAndFilter(results, query, rpmRepoSet(g.lookups))
 	sort.Slice(hits, func(i, j int) bool { return hits[i].Name < hits[j].Name })
 	if len(hits) > limit {
 		hits = hits[:limit]
@@ -353,6 +368,20 @@ type lookupResult struct {
 	repoID  string
 }
 
+// rpmRepoSet reports which of these lookups' repositories are rpm, so version
+// ordering can pick the matching comparator. Derived from the planned lookups
+// rather than re-read from the catalog, so it can only describe repositories
+// this search actually touched.
+func rpmRepoSet(lookups []repoLookup) func(repoID string) bool {
+	rpm := make(map[string]bool)
+	for _, lk := range lookups {
+		if lk.repo.Type == pkgindex.TypeRPM {
+			rpm[lk.repoID] = true
+		}
+	}
+	return func(repoID string) bool { return rpm[repoID] }
+}
+
 // runLookups fetches every planned lookup concurrently, bounded by
 // maxConcurrentLookups. A failed lookup logs a warning and contributes
 // nothing rather than failing the whole search — the same tolerance any
@@ -382,27 +411,80 @@ func runLookups(ctx context.Context, cache *pkgindex.Cache, lookups []repoLookup
 // case-insensitive prefix (query empty matches everything), deduplicating by
 // (Name, Version, RepoID) — the wire schema has no arch field, so the same
 // package published for several arches would otherwise appear once per arch.
-func dedupAndFilter(results []lookupResult, query string) []PackageSearchHit {
-	type key struct{ name, version, repoID string }
-	seen := make(map[key]bool)
+// dedupAndFilter reduces raw index entries to one hit per package name,
+// carrying every distinct version found so the picker can offer a choice.
+//
+// It groups rather than emitting a row per version because the same package
+// legitimately appears in several indexes: a Debian-style repository publishes
+// release, -updates and -security separately, so `curl` is present at both
+// 8.5.0-2ubuntu10 and 8.5.0-2ubuntu10.13. Listing those as unrelated rows
+// would read as two different packages, and would also make `limit` count
+// versions instead of packages.
+//
+// isRPM selects the version ordering: deb and rpm order versions by different
+// rules, and neither is string ordering.
+func dedupAndFilter(results []lookupResult, query string, isRPM func(repoID string) bool) []PackageSearchHit {
+	type versionKey struct{ version, repoID string }
 	needle := strings.ToLower(query)
-	hits := make([]PackageSearchHit, 0)
+	byName := make(map[string]*PackageSearchHit)
+	seen := make(map[string]map[versionKey]bool)
+	var order []string
+
 	for _, res := range results {
 		for _, e := range res.entries {
 			if needle != "" && !strings.HasPrefix(strings.ToLower(e.Name), needle) {
 				continue
 			}
-			k := key{e.Name, e.Version, res.repoID}
-			if seen[k] {
+			hit, ok := byName[e.Name]
+			if !ok {
+				hit = &PackageSearchHit{Name: e.Name, Description: e.Description}
+				byName[e.Name] = hit
+				seen[e.Name] = make(map[versionKey]bool)
+				order = append(order, e.Name)
+			}
+			// The first index to describe a package wins the description;
+			// later suites repeat it and an empty one shouldn't blank it out.
+			if hit.Description == "" {
+				hit.Description = e.Description
+			}
+			k := versionKey{e.Version, res.repoID}
+			if seen[e.Name][k] {
 				continue
 			}
-			seen[k] = true
-			hits = append(hits, PackageSearchHit{
-				Name: e.Name, Version: e.Version, Description: e.Description, RepoID: res.repoID,
-			})
+			seen[e.Name][k] = true
+			hit.Versions = append(hit.Versions, PackageVersion{Version: e.Version, RepoID: res.repoID})
 		}
 	}
+
+	hits := make([]PackageSearchHit, 0, len(order))
+	for _, name := range order {
+		hit := byName[name]
+		sortVersionsNewestFirst(hit.Versions, isRPM)
+		hit.Version = hit.Versions[0].Version
+		hit.RepoID = hit.Versions[0].RepoID
+		hits = append(hits, *hit)
+	}
 	return hits
+}
+
+// sortVersionsNewestFirst orders versions by the target's own version rules,
+// reusing the build path's comparators rather than a second implementation.
+// Ties break on repository ID so the result is stable regardless of the order
+// indexes happened to load in.
+func sortVersionsNewestFirst(versions []PackageVersion, isRPM func(repoID string) bool) {
+	sort.SliceStable(versions, func(i, j int) bool {
+		a, b := versions[i], versions[j]
+		var cmp int
+		if isRPM(a.RepoID) && isRPM(b.RepoID) {
+			cmp, _ = rpmutils.CompareRPMVersions(a.Version, b.Version)
+		} else {
+			cmp, _ = debutils.CompareDebianVersions(a.Version, b.Version)
+		}
+		if cmp != 0 {
+			return cmp > 0 // newest first
+		}
+		return a.RepoID < b.RepoID
+	})
 }
 
 // paginate slices hits by offset/limit, clamped to bounds.
