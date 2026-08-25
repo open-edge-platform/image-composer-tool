@@ -9,7 +9,9 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/initrdmaker"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/isomaker"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/overlay"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/rawmaker"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/wsl2maker"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/debutils"
 	"github.com/open-edge-platform/image-composer-tool/internal/provider"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/display"
@@ -30,6 +32,11 @@ var log = logger.Logger()
 type debian13 struct {
 	repoCfgs  []debutils.RepoConfig
 	chrootEnv chroot.ChrootEnvInterface
+	// overlayBuilder holds the overlay-mode build lifecycle when the template is
+	// in overlay mode. It is created in PreProcess and reused across BuildImage and
+	// PostProcess so the single baseline mount spans all three phases. It is nil for
+	// ordinary create-mode builds, which take the unchanged maker path.
+	overlayBuilder *overlay.Builder
 }
 
 func Register(targetOs, targetDist, targetArch string) error {
@@ -47,6 +54,13 @@ func Register(targetOs, targetDist, targetArch string) error {
 // Name returns the unique name of the provider
 func (p *debian13) Name(dist, arch string) string {
 	return system.GetProviderId(OsName, dist, arch)
+}
+
+// SupportsOverlay implements provider.OverlayCapable: every Debian target routes
+// overlay-mode templates through the overlay pipeline (see overlayPreProcess,
+// overlayBuildImage and overlayPostProcess).
+func (p *debian13) SupportsOverlay(_, _ string) bool {
+	return true
 }
 
 // Init will initialize the provider, fetching repo configuration
@@ -75,6 +89,13 @@ func (p *debian13) Init(dist, arch string) error {
 }
 
 func (p *debian13) PreProcess(template *config.ImageTemplate) error {
+	// Overlay mode takes a separate, baseline-driven pipeline that keeps a single
+	// mount lifecycle open across preprocess and build; create mode falls through
+	// to the unchanged package-download + chroot-init flow below.
+	if template.IsOverlayMode() {
+		return p.overlayPreProcess(template)
+	}
+
 	// Generate apt sources file from packageRepositories
 	if err := template.GenerateAptSourcesFromRepositories(); err != nil {
 		return fmt.Errorf("failed to generate apt sources from repositories: %w", err)
@@ -106,6 +127,10 @@ func (p *debian13) BuildImage(template *config.ImageTemplate) error {
 		return fmt.Errorf("template cannot be nil")
 	}
 
+	if template.IsOverlayMode() {
+		return p.overlayBuildImage(template)
+	}
+
 	log.Infof("Building image: %s", template.GetImageName())
 
 	// Create makers with template when needed
@@ -116,9 +141,22 @@ func (p *debian13) BuildImage(template *config.ImageTemplate) error {
 		return p.buildInitrdImage(template)
 	case "iso":
 		return p.buildIsoImage(template)
+	case "wsl2":
+		return p.buildWslImage(template)
 	default:
 		return fmt.Errorf("unsupported image type: %s", template.Target.ImageType)
 	}
+}
+
+func (p *debian13) buildWslImage(template *config.ImageTemplate) error {
+	maker, err := wsl2maker.NewWSL2Maker(p.chrootEnv, template)
+	if err != nil {
+		return fmt.Errorf("failed to create WSL2 maker: %w", err)
+	}
+	if err := maker.Init(); err != nil {
+		return fmt.Errorf("failed to initialize WSL2 maker: %w", err)
+	}
+	return maker.BuildWSL2Image()
 }
 
 func (p *debian13) buildRawImage(template *config.ImageTemplate) error {
@@ -210,11 +248,88 @@ func (p *debian13) buildIsoImage(template *config.ImageTemplate) error {
 }
 
 func (p *debian13) PostProcess(template *config.ImageTemplate, err error) error {
+	if template.IsOverlayMode() {
+		return p.overlayPostProcess(template, err)
+	}
+
 	if err := p.chrootEnv.CleanupChrootEnv(template.Target.OS,
 		template.Target.Dist, template.Target.Arch); err != nil {
 		return fmt.Errorf("failed to cleanup chroot environment: %w", err)
 	}
 	return nil
+}
+
+// overlayPreProcess runs the overlay-mode preprocess phase: it creates the overlay
+// Builder (which gates on overlay mode) and runs its Preprocess, which copies and
+// mounts the baseline, inspects it, resolves the requested packages, and runs the
+// preflight policy gate. The Builder is retained on the provider so BuildImage and
+// PostProcess reuse the same open mount lifecycle.
+func (p *debian13) overlayPreProcess(template *config.ImageTemplate) error {
+	builder, err := overlay.NewBuilder(template)
+	if err != nil {
+		return fmt.Errorf("failed to create overlay builder: %w", err)
+	}
+	p.overlayBuilder = builder
+
+	if err := builder.Preprocess(); err != nil {
+		return fmt.Errorf("overlay pre-processing failed: %w", err)
+	}
+	return nil
+}
+
+// overlayBuildImage runs the overlay-mode build phase against the baseline mounted
+// in preprocess: install the approved package plan, regenerate the initramfs for
+// added packages (never the bootloader), and apply any grow-only resize.
+func (p *debian13) overlayBuildImage(template *config.ImageTemplate) error {
+	if p.overlayBuilder == nil {
+		return fmt.Errorf("overlay build invoked without a preprocessed overlay builder")
+	}
+	log.Infof("Building overlay image: %s", template.GetImageName())
+	if err := p.overlayBuilder.Build(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// overlayPostProcess runs the overlay-mode postprocess phase: generate the SBOM,
+// emit the final RAW artifact, and ALWAYS unmount/detach the baseline. buildErr is
+// threaded in so a failed build still triggers the full cleanup chain. When
+// preprocess never created a builder (it failed early), there is nothing to clean.
+func (p *debian13) overlayPostProcess(template *config.ImageTemplate, buildErr error) error {
+	if p.overlayBuilder == nil {
+		return nil
+	}
+	// Clear the retained builder once postprocess has run (success or failure) so it
+	// cannot be accidentally reused across builds and its retained state (paths,
+	// plan, report, mount lifecycle) can be garbage-collected promptly.
+	builder := p.overlayBuilder
+	defer func() { p.overlayBuilder = nil }()
+	if err := builder.Postprocess(buildErr); err != nil {
+		return fmt.Errorf("overlay post-processing failed: %w", err)
+	}
+
+	// The overlay pipeline does not run through the create-mode maker/chroot stages
+	// that populate the template build timers, so print the overlay's own per-stage
+	// timing table. Only on a clean build — a failed run's partial timings would be
+	// misleading. The generic build-timing table (all zeros for overlay) is skipped
+	// upstream in the same success path.
+	if buildErr == nil {
+		printOverlayTiming(builder.Timings())
+	}
+	return nil
+}
+
+// printOverlayTiming renders the overlay Builder's per-stage timings as a timing
+// table. It is a no-op when no stages were recorded.
+func printOverlayTiming(timings []overlay.StageTiming) {
+	if len(timings) == 0 {
+		return
+	}
+	rows := make([]display.TimingRow, 0, len(timings))
+	for _, t := range timings {
+		rows = append(rows, display.TimingRow{Stage: t.Stage, Duration: t.Duration})
+	}
+	display.PrintTimingTable("Overlay Build Timings", rows)
 }
 
 func (p *debian13) installHostDependency() error {
@@ -307,12 +422,18 @@ func (p *debian13) downloadImagePkgs(template *config.ImageTemplate) error {
 			i+1, cfg.Name, cfg.PkgList, cfg.PkgPrefix, cfg.Priority)
 	}
 
+	debutils.ConfigureKernelSelection(template.GetKernelPackages(), template.GetKernel().Version)
+	defer debutils.ConfigureKernelSelection(nil, "")
+
 	fullPkgList, fullPkgListBom, err := debutils.DownloadPackagesComplete(pkgList, pkgCacheDir, template.DotFilePath, pkgSources, template.DotSystemOnly)
 	if err != nil {
 		return fmt.Errorf("failed to download packages: %w", err)
 	}
 	template.FullPkgList = fullPkgList
 	template.FullPkgListBom = fullPkgListBom
+	// Narrow a kernel glob to the concrete package selected during download so the
+	// install step (including an installer ISO's separate process) installs only it.
+	template.ResolvedKernelPackages = debutils.ExpandKernelInstallNames(template.GetKernelPackages(), debutils.SelectedKernelPackages())
 
 	return nil
 }

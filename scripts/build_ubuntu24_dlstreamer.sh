@@ -165,7 +165,7 @@ build_ubuntu24_dlstreamer_image() {
   echo "Current working directory: $(pwd)"
   
   set +e
-  output=$(sudo -S ./image-composer-tool build image-templates/ubuntu24-x86_64-dlstreamer.yml 2>&1)
+  output=$(sudo -S ./image-composer-tool build image-templates/ubuntu24/ubuntu24-x86_64-dlstreamer.yml 2>&1)
   build_exit_code=$?
   set -e
   

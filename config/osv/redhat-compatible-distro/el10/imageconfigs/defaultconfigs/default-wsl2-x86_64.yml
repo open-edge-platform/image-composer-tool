@@ -1,0 +1,43 @@
+image:
+  name: wsl2-rootfs-rcd
+  version: "10.0"
+
+target:
+  os: redhat-compatible-distro
+  dist: el10
+  arch: x86_64
+  imageType: wsl2
+
+packageRepositories:
+  - codename: "CentOS-Stream-10-AppStream"
+    url: "https://mirror.stream.centos.org/10-stream/AppStream/x86_64/os"
+    pkey: "https://www.centos.org/keys/RPM-GPG-KEY-centosofficial-SHA256"
+
+disk:
+  name: WSL2_Rootfs
+  artifacts:
+    - type: tar
+      compression: gz
+
+systemConfig:
+  name: WSL2_Rootfs
+  packages:
+    - basesystem
+    - bash
+    - centos-stream-release
+    - coreutils
+    - dnf
+    - filesystem
+    - glibc
+    - openssh-server
+    - setup
+    - shadow-utils
+    - sudo
+    - systemd
+    - util-linux
+
+  additionalFiles:
+    - local: ../../../../../general/wsl2/ict-wsl2-profile.sh
+      final: /etc/profile.d/00-ict-wsl2.sh
+    - local: ../../../../../general/wsl2/resize-filesystem.txt
+      final: /usr/share/doc/ict-wsl2/resize-filesystem.txt

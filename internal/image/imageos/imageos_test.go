@@ -194,7 +194,9 @@ func (m *recordingMountExecutor) ExecCmd(cmdStr string, sudo bool, chrootPath st
 		if len(parts) < 2 {
 			return "", fmt.Errorf("invalid mount command: %s", cmdStr)
 		}
-		mountPoint := parts[len(parts)-1]
+		// mount.MountPath shell-quotes the target and mount point, so strip the
+		// surrounding single quotes before matching/recording the path.
+		mountPoint := strings.Trim(parts[len(parts)-1], "'")
 		if strings.HasSuffix(mountPoint, "/boot") {
 			return "", fmt.Errorf("mock mount failure")
 		}
@@ -205,7 +207,7 @@ func (m *recordingMountExecutor) ExecCmd(cmdStr string, sudo bool, chrootPath st
 		if len(parts) < 2 {
 			return "", fmt.Errorf("invalid umount command: %s", cmdStr)
 		}
-		mountPoint := parts[len(parts)-1]
+		mountPoint := strings.Trim(parts[len(parts)-1], "'")
 		m.umountHistory = append(m.umountHistory, mountPoint)
 		delete(m.mountedPaths, mountPoint)
 		return "", nil
@@ -442,6 +444,28 @@ func TestGetDebPkgInstallList(t *testing.T) {
 	}
 
 	t.Logf("DEB package ordering: %v", result)
+}
+
+// TestGetDebPkgInstallListPrefersResolvedKernel confirms the install list uses the
+// concrete ResolvedKernelPackages (persisted for the installer ISO) over the raw
+// KernelPkgList glob, and falls back to KernelPkgList when none is recorded.
+func TestGetDebPkgInstallListPrefersResolvedKernel(t *testing.T) {
+	withResolved := &config.ImageTemplate{
+		KernelPkgList:          []string{"linux-image-generic*"},
+		ResolvedKernelPackages: []string{"linux-image-generic-7.0"},
+	}
+	got := getDebPkgInstallList(withResolved)
+	if len(got) != 1 || got[0] != "linux-image-generic-7.0" {
+		t.Fatalf("expected [linux-image-generic-7.0], got %v", got)
+	}
+
+	fallback := &config.ImageTemplate{
+		KernelPkgList: []string{"linux-image-amd64"},
+	}
+	got = getDebPkgInstallList(fallback)
+	if len(got) != 1 || got[0] != "linux-image-amd64" {
+		t.Fatalf("expected fallback [linux-image-amd64], got %v", got)
+	}
 }
 
 // TestInstallInitrd tests the InstallInitrd method with mocked dependencies
@@ -1869,6 +1893,7 @@ func TestMountUmountSysfs(t *testing.T) {
 	}
 
 	template := createTestImageTemplate()
+	template.Target.ImageType = "wsl2"
 
 	// Create ImageOs directly without NewImageOs to avoid sudo dependency
 	imageOs := &ImageOs{
@@ -1972,13 +1997,81 @@ func TestPrepareVeritySetupInvalidPair(t *testing.T) {
 	}
 }
 
+func TestValidateFsType(t *testing.T) {
+	// Every real filesystem name the templates emit must pass.
+	for _, ok := range []string{"ext4", "xfs", "vfat", "btrfs", "f2fs", "linux-swap", "ext2", "fat32"} {
+		if err := validateFsType(ok); err != nil {
+			t.Errorf("validateFsType(%q) = %v, want nil", ok, err)
+		}
+	}
+
+	// A template fsType that embeds a space (or shell/option syntax) must be
+	// rejected, since it would otherwise inject extra tokens into the unquoted
+	// "-t <fsType>" mountFlags string. An empty fsType is also invalid.
+	for _, bad := range []string{
+		"",
+		"ext4 -o loop=/dev/sda1", // extra mount option smuggled in
+		"ext4 -o ro",
+		"ext4;reboot",
+		"ext4 rw",
+		"$(reboot)",
+	} {
+		if err := validateFsType(bad); err == nil {
+			t.Errorf("validateFsType(%q) = nil, want error", bad)
+		}
+	}
+}
+
+// TestMountDiskRootToChroot_RejectsFsTypeInjection asserts the root-mount path
+// refuses a template fsType that carries an embedded space/option before it can
+// reach mount.MountPath's unquoted "-t <fsType>" command line.
+func TestMountDiskRootToChroot_RejectsFsTypeInjection(t *testing.T) {
+	idx := 0
+	template := &config.ImageTemplate{
+		Disk: config.DiskConfig{
+			Partitions: []config.PartitionInfo{
+				{ID: "root", Index: &idx, MountPoint: "/", FsType: "ext4 -o loop=/dev/sda1"},
+			},
+		},
+	}
+	err := mountDiskRootToChroot("/tmp/install-root", map[string]string{"root": "/dev/loop0p1"}, template)
+	if err == nil || !strings.Contains(err.Error(), "invalid filesystem type") {
+		t.Fatalf("expected an 'invalid filesystem type' error, got: %v", err)
+	}
+}
+
+func TestResolveAdditionalFileLocalPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	templatePath := filepath.Join(tmpDir, "templates", "test.yml")
+	filePath := filepath.Join(tmpDir, "templates", "files", "profile.sh")
+	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+		t.Fatalf("failed to create file dir: %v", err)
+	}
+	if err := os.WriteFile(filePath, []byte("echo test\n"), 0644); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	got, err := resolveAdditionalFileLocalPath("files/profile.sh", []string{templatePath})
+	if err != nil {
+		t.Fatalf("resolveAdditionalFileLocalPath() error = %v", err)
+	}
+	if got != filePath {
+		t.Fatalf("resolveAdditionalFileLocalPath() = %s, want %s", got, filePath)
+	}
+}
+
 // TestInitRootfsForDeb tests the initRootfsForDeb functionality
 func TestInitRootfsForDeb(t *testing.T) {
 	// Set up mock executor
 	originalExecutor := shell.Default
 	defer func() { shell.Default = originalExecutor }()
 
-	mockExecutor := &shell.MockExecutor{}
+	mockExecutor := shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: "^mount$", Output: "", Error: nil},
+		{Pattern: "sudo rm -rf .*/imageos_deb_test_.*/test-system", Output: "", Error: nil},
+		{Pattern: "sudo mkdir -p .*/imageos_deb_test_.*/test-system", Output: "", Error: nil},
+		{Pattern: "sudo chroot /tmp/chroot .*mmdebstrap", Output: "override-test\n", Error: fmt.Errorf("command not found")},
+	})
 	shell.Default = mockExecutor
 
 	// Create test directory
@@ -2012,6 +2105,7 @@ func TestInitRootfsForDeb(t *testing.T) {
 	defer os.Remove(sourceFile)
 
 	template := createTestImageTemplate()
+	template.Target.ImageType = "wsl2"
 
 	// Create ImageOs directly without NewImageOs to avoid sudo dependency
 	imageOs := &ImageOs{
@@ -2027,7 +2121,7 @@ func TestInitRootfsForDeb(t *testing.T) {
 	if err != nil {
 		// This is expected to fail in test environment due to missing mmdebstrap or chroot setup
 		t.Logf("initRootfsForDeb failed as expected in test environment: %v", err)
-		if !strings.Contains(err.Error(), "chroot path") && !strings.Contains(err.Error(), "mmdebstrap") {
+		if !strings.Contains(err.Error(), "failed to install packages into image") {
 			t.Errorf("Unexpected error: %v", err)
 		}
 	} else {
@@ -2035,6 +2129,60 @@ func TestInitRootfsForDeb(t *testing.T) {
 	}
 
 	t.Log("initRootfsForDeb test completed")
+}
+
+func TestPrepareInstallRootForDebBootstrapRejectsInvalidRoot(t *testing.T) {
+	imageBuildDir := t.TempDir()
+	imageOs := &ImageOs{
+		chrootEnv: &MockChrootEnv{
+			chrootImageBuildDir: imageBuildDir,
+		},
+	}
+
+	for _, installRoot := range []string{"/", imageBuildDir, filepath.Dir(imageBuildDir)} {
+		t.Run(installRoot, func(t *testing.T) {
+			if err := imageOs.prepareInstallRootForDebBootstrap(installRoot); err == nil {
+				t.Fatalf("expected invalid install root %s to be rejected", installRoot)
+			}
+		})
+	}
+}
+
+func TestInitRootfsForDebDoesNotResetRawInstallRoot(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: "sudo chroot .* mmdebstrap", Output: "", Error: nil},
+	})
+
+	testDir := t.TempDir()
+	chrootRoot := filepath.Join(testDir, "chroot")
+	if err := os.MkdirAll(chrootRoot, 0755); err != nil {
+		t.Fatalf("failed to create chroot root: %v", err)
+	}
+	sourceFile := filepath.Join(testDir, "local.list")
+	if err := os.WriteFile(sourceFile, []byte("deb file:///repo bookworm main"), 0644); err != nil {
+		t.Fatalf("failed to create source file: %v", err)
+	}
+
+	template := createTestImageTemplate()
+	template.Target.ImageType = "raw"
+	imageOs := &ImageOs{
+		installRoot: filepath.Join(testDir, template.SystemConfig.Name),
+		chrootEnv: &MockChrootEnv{
+			chrootImageBuildDir: testDir,
+			essentialPkgs:       []string{"base-files", "systemd"},
+			hostPath:            sourceFile,
+			chrootPath:          "/chroot/test",
+			chrootRoot:          chrootRoot,
+		},
+		template: template,
+	}
+
+	if err := imageOs.initRootfsForDeb(imageOs.installRoot); err != nil {
+		t.Fatalf("initRootfsForDeb() error = %v", err)
+	}
 }
 
 // TestInstallImagePkgs tests the package installation functionality
@@ -2947,6 +3095,258 @@ func TestAddImageAdditionalFiles(t *testing.T) {
 	t.Log("addImageAdditionalFiles test completed")
 }
 
+func TestSetupFirstBootLastPartitionAutoExpand(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+	originalConfigDir := config.Global().ConfigDir
+	defer func() { config.Global().ConfigDir = originalConfigDir }()
+
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: ".*cp.*", Output: "", Error: nil},
+		{Pattern: ".*mkdir.*", Output: "", Error: nil},
+		{Pattern: ".*chmod 0755.*ict-auto-expand-last-partition\\.sh.*", Output: "", Error: nil},
+		{Pattern: ".*systemctl enable --root=.*ict-auto-expand-last-partition\\.service.*", Output: "", Error: nil},
+	})
+
+	installRoot, err := os.MkdirTemp("", "imageos_autoexpand_service_test_*")
+	if err != nil {
+		t.Fatalf("failed to create install root: %v", err)
+	}
+	defer os.RemoveAll(installRoot)
+
+	configDir, err := os.MkdirTemp("", "imageos_autoexpand_cfg_test_*")
+	if err != nil {
+		t.Fatalf("failed to create config dir: %v", err)
+	}
+	defer os.RemoveAll(configDir)
+
+	assetDir := filepath.Join(configDir, "osv", "common", "imageconfigs", "firstboot")
+	if err := os.MkdirAll(assetDir, 0755); err != nil {
+		t.Fatalf("failed to create asset dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(assetDir, "ict-auto-expand-last-partition.sh"), []byte("#!/bin/sh\n"), 0644); err != nil {
+		t.Fatalf("failed to write script asset: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(assetDir, "ict-auto-expand-last-partition.service"), []byte("[Unit]\n"), 0644); err != nil {
+		t.Fatalf("failed to write service asset: %v", err)
+	}
+	config.Global().ConfigDir = configDir
+
+	template := createTestImageTemplate()
+	template.Target.ImageType = "raw"
+	template.Disk.ExtendLastPartitionToFillDisk = true
+	template.SystemConfig.Immutability.Enabled = false
+	template.Disk.Partitions = []config.PartitionInfo{
+		{
+			ID:         "boot",
+			MountPoint: "/boot",
+			Type:       "esp",
+		},
+		{
+			ID:         "rootfs",
+			MountPoint: "/",
+			Type:       "linux-root-amd64",
+		},
+	}
+
+	err = configureFirstBootLastPartitionAutoExpand(installRoot, template)
+	if err != nil {
+		t.Fatalf("configureFirstBootLastPartitionAutoExpand returned error: %v", err)
+	}
+}
+
+func TestSetupFirstBootLastPartitionAutoExpandSkipsWhenDisabled(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	installRoot, err := os.MkdirTemp("", "imageos_autoexpand_skip_test_*")
+	if err != nil {
+		t.Fatalf("failed to create install root: %v", err)
+	}
+	defer os.RemoveAll(installRoot)
+
+	template := createTestImageTemplate()
+	template.Target.ImageType = "raw"
+	template.Disk.ExtendLastPartitionToFillDisk = false
+
+	err = configureFirstBootLastPartitionAutoExpand(installRoot, template)
+	if err != nil {
+		t.Fatalf("configureFirstBootLastPartitionAutoExpand returned error: %v", err)
+	}
+
+	scriptPath := filepath.Join(installRoot, "usr", "local", "sbin", "ict-auto-expand-last-partition.sh")
+	if _, statErr := os.Stat(scriptPath); !os.IsNotExist(statErr) {
+		t.Fatalf("script should not be generated when flag is disabled")
+	}
+}
+
+func TestSetupFirstBootLastPartitionAutoExpandSkipsWhenImmutableEnabled(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+	originalConfigDir := config.Global().ConfigDir
+	defer func() { config.Global().ConfigDir = originalConfigDir }()
+
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: ".*cp.*", Output: "", Error: nil},
+		{Pattern: ".*mkdir.*", Output: "", Error: nil},
+		{Pattern: ".*chmod 0755.*ict-auto-expand-last-partition\\.sh.*", Output: "", Error: nil},
+		{Pattern: ".*systemctl enable --root=.*ict-auto-expand-last-partition\\.service.*", Output: "", Error: nil},
+	})
+
+	installRoot, err := os.MkdirTemp("", "imageos_autoexpand_immutability_test_*")
+	if err != nil {
+		t.Fatalf("failed to create install root: %v", err)
+	}
+	defer os.RemoveAll(installRoot)
+
+	configDir, err := os.MkdirTemp("", "imageos_autoexpand_cfg_test_*")
+	if err != nil {
+		t.Fatalf("failed to create config dir: %v", err)
+	}
+	defer os.RemoveAll(configDir)
+
+	assetDir := filepath.Join(configDir, "osv", "common", "imageconfigs", "firstboot")
+	if err := os.MkdirAll(assetDir, 0755); err != nil {
+		t.Fatalf("failed to create asset dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(assetDir, "ict-auto-expand-last-partition.sh"), []byte("#!/bin/sh\n"), 0644); err != nil {
+		t.Fatalf("failed to write script asset: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(assetDir, "ict-auto-expand-last-partition.service"), []byte("[Unit]\n"), 0644); err != nil {
+		t.Fatalf("failed to write service asset: %v", err)
+	}
+	config.Global().ConfigDir = configDir
+
+	template := createTestImageTemplate()
+	template.Target.ImageType = "raw"
+	template.Disk.ExtendLastPartitionToFillDisk = true
+	template.SystemConfig.Immutability.Enabled = true
+
+	err = configureFirstBootLastPartitionAutoExpand(installRoot, template)
+	if err != nil {
+		t.Fatalf("configureFirstBootLastPartitionAutoExpand should not validate immutability: %v", err)
+	}
+}
+
+func TestSetupFirstBootLastPartitionAutoExpandSkipsWhenLastPartitionNotRootfs(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+	originalConfigDir := config.Global().ConfigDir
+	defer func() { config.Global().ConfigDir = originalConfigDir }()
+
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: ".*cp.*", Output: "", Error: nil},
+		{Pattern: ".*mkdir.*", Output: "", Error: nil},
+		{Pattern: ".*chmod 0755.*ict-auto-expand-last-partition\\.sh.*", Output: "", Error: nil},
+		{Pattern: ".*systemctl enable --root=.*ict-auto-expand-last-partition\\.service.*", Output: "", Error: nil},
+	})
+
+	installRoot, err := os.MkdirTemp("", "imageos_autoexpand_partition_test_*")
+	if err != nil {
+		t.Fatalf("failed to create install root: %v", err)
+	}
+	defer os.RemoveAll(installRoot)
+
+	configDir, err := os.MkdirTemp("", "imageos_autoexpand_cfg_test_*")
+	if err != nil {
+		t.Fatalf("failed to create config dir: %v", err)
+	}
+	defer os.RemoveAll(configDir)
+
+	assetDir := filepath.Join(configDir, "osv", "common", "imageconfigs", "firstboot")
+	if err := os.MkdirAll(assetDir, 0755); err != nil {
+		t.Fatalf("failed to create asset dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(assetDir, "ict-auto-expand-last-partition.sh"), []byte("#!/bin/sh\n"), 0644); err != nil {
+		t.Fatalf("failed to write script asset: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(assetDir, "ict-auto-expand-last-partition.service"), []byte("[Unit]\n"), 0644); err != nil {
+		t.Fatalf("failed to write service asset: %v", err)
+	}
+	config.Global().ConfigDir = configDir
+
+	template := createTestImageTemplate()
+	template.Target.ImageType = "raw"
+	template.Disk.ExtendLastPartitionToFillDisk = true
+	template.Disk.Partitions = []config.PartitionInfo{
+		{
+			ID:         "boot",
+			MountPoint: "/boot",
+			Type:       "esp",
+		},
+		{
+			ID:         "data",
+			MountPoint: "/data",
+			Type:       "linux-data",
+		},
+	}
+
+	err = configureFirstBootLastPartitionAutoExpand(installRoot, template)
+	if err != nil {
+		t.Fatalf("configureFirstBootLastPartitionAutoExpand should not validate partition semantics: %v", err)
+	}
+}
+
+func TestSetupFirstBootLastPartitionAutoExpandProceedsWhenConditionsMet(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+	originalConfigDir := config.Global().ConfigDir
+	defer func() { config.Global().ConfigDir = originalConfigDir }()
+
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: ".*cp.*", Output: "", Error: nil},
+		{Pattern: ".*mkdir.*", Output: "", Error: nil},
+		{Pattern: ".*chmod 0755.*ict-auto-expand-last-partition\\.sh.*", Output: "", Error: nil},
+		{Pattern: ".*systemctl enable --root=.*ict-auto-expand-last-partition\\.service.*", Output: "", Error: nil},
+	})
+
+	configDir, err := os.MkdirTemp("", "imageos_autoexpand_conditions_test_*")
+	if err != nil {
+		t.Fatalf("failed to create config dir: %v", err)
+	}
+	defer os.RemoveAll(configDir)
+
+	assetDir := filepath.Join(configDir, "osv", "common", "imageconfigs", "firstboot")
+	if err := os.MkdirAll(assetDir, 0755); err != nil {
+		t.Fatalf("failed to create asset dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(assetDir, "ict-auto-expand-last-partition.sh"), []byte("#!/bin/sh\n"), 0644); err != nil {
+		t.Fatalf("failed to write script asset: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(assetDir, "ict-auto-expand-last-partition.service"), []byte("[Unit]\n"), 0644); err != nil {
+		t.Fatalf("failed to write service asset: %v", err)
+	}
+	config.Global().ConfigDir = configDir
+
+	template := createTestImageTemplate()
+	template.Target.ImageType = "raw"
+	template.Disk.ExtendLastPartitionToFillDisk = true
+	template.SystemConfig.Immutability.Enabled = false
+	template.Disk.Partitions = []config.PartitionInfo{
+		{
+			ID:         "boot",
+			MountPoint: "/boot",
+			Type:       "esp",
+		},
+		{
+			ID:         "rootfs",
+			MountPoint: "/",
+			Type:       "linux-root-amd64",
+		},
+	}
+
+	installRoot, err := os.MkdirTemp("", "imageos_autoexpand_conditions_install_test_*")
+	if err != nil {
+		t.Fatalf("failed to create install root: %v", err)
+	}
+	defer os.RemoveAll(installRoot)
+
+	err = configureFirstBootLastPartitionAutoExpand(installRoot, template)
+	if err != nil {
+		t.Fatalf("configureFirstBootLastPartitionAutoExpand returned error: %v", err)
+	}
+}
+
 // TestBuildImageUKI tests the buildImageUKI function
 func TestBuildImageUKI(t *testing.T) {
 	// Set up mock executor
@@ -3783,9 +4183,6 @@ func TestHashPassword(t *testing.T) {
 }
 
 func TestConfigUserStartupScript(t *testing.T) {
-	originalExecutor := shell.Default
-	defer func() { shell.Default = originalExecutor }()
-
 	// Create a temporary directory for testing
 	testDir := t.TempDir()
 	installRoot := testDir
@@ -3809,14 +4206,6 @@ func TestConfigUserStartupScript(t *testing.T) {
 		t.Fatalf("Failed to create passwd file: %v", err)
 	}
 
-	// Mock the sed command used by file.ReplaceRegexInFile
-	// The command is: sed -E -i 's|^(testuser.*):[^:]*$|\1:/usr/local/bin/startup\.sh|g' /tmp/.../etc/passwd
-	// We can just mock "sed .*"
-	mockCommands := []shell.MockCommand{
-		{Pattern: "sed .*", Output: "", Error: nil},
-	}
-	shell.Default = shell.NewMockExecutor(mockCommands)
-
 	user := config.UserConfig{
 		Name:          "testuser",
 		StartupScript: "/usr/local/bin/startup.sh",
@@ -3824,14 +4213,131 @@ func TestConfigUserStartupScript(t *testing.T) {
 
 	err := configUserStartupScript(installRoot, user)
 	if err != nil {
-		t.Errorf("configUserStartupScript failed: %v", err)
+		t.Fatalf("configUserStartupScript failed: %v", err)
 	}
 
-	// Since we mocked sed, the file won't actually be changed.
-	// But we verified that the function runs without error and calls the mock.
-	// If we want to verify the file change, we would need to implement the sed logic in the mock,
-	// or use a real sed if available and not requiring sudo.
-	// But file.ReplaceRegexInFile forces sudo.
+	// The structured rewrite must set only testuser's shell field and leave the rest intact.
+	got, err := os.ReadFile(passwdPath)
+	if err != nil {
+		t.Fatalf("Failed to read passwd file: %v", err)
+	}
+	want := "root:x:0:0:root:/root:/bin/bash\ntestuser:x:1000:1000::/home/testuser:/usr/local/bin/startup.sh\n"
+	if string(got) != want {
+		t.Errorf("passwd not updated correctly:\n got: %q\nwant: %q", string(got), want)
+	}
+}
+
+// TestConfigUserStartupScript_RejectsUnsafePaths verifies the confinement guard:
+// a startupScript that escapes installRoot via "../" (or a non-canonical prefix)
+// or that carries a passwd delimiter/control character is rejected before any
+// /etc/passwd rewrite, so an overlay template cannot read a host path or corrupt
+// the passwd file.
+func TestConfigUserStartupScript_RejectsUnsafePaths(t *testing.T) {
+	installRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(installRoot, "etc"), 0o755); err != nil {
+		t.Fatalf("mkdir etc: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(installRoot, "etc", "passwd"),
+		[]byte("root:x:0:0::/root:/bin/bash\n"), 0o644); err != nil {
+		t.Fatalf("write passwd: %v", err)
+	}
+
+	cases := []struct {
+		name          string
+		startupScript string
+	}{
+		{"parent traversal escapes root", "../../bin/sh"},
+		{"non-canonical escapes root", "/../etc/passwd"},
+		{"passwd delimiter", "/root/x:y"},
+		{"newline", "/root/x\ny"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := configUserStartupScript(installRoot,
+				config.UserConfig{Name: "testuser", StartupScript: tc.startupScript})
+			if err == nil {
+				t.Fatalf("expected rejection for startup script %q", tc.startupScript)
+			}
+		})
+	}
+}
+
+// TestConfigUserStartupScript_MetacharPathWrittenLiterally confirms the structured
+// /etc/passwd edit: a path that clears the confinement/delimiter guard but carries
+// shell/sed metacharacters (quotes, `&`, `;`, `#`) is written verbatim into the
+// shell field — never executed — so the former sed/shell rewrite injection is gone.
+func TestConfigUserStartupScript_MetacharPathWrittenLiterally(t *testing.T) {
+	installRoot := t.TempDir()
+	rel := "/opt/x'&;#.sh"
+	hostPath := filepath.Join(installRoot, rel)
+	if err := os.MkdirAll(filepath.Dir(hostPath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(hostPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	passwdPath := filepath.Join(installRoot, "etc", "passwd")
+	if err := os.MkdirAll(filepath.Dir(passwdPath), 0o755); err != nil {
+		t.Fatalf("mkdir etc: %v", err)
+	}
+	if err := os.WriteFile(passwdPath,
+		[]byte("testuser:x:1000:1000::/home/testuser:/bin/bash\n"), 0o644); err != nil {
+		t.Fatalf("write passwd: %v", err)
+	}
+
+	if err := configUserStartupScript(installRoot,
+		config.UserConfig{Name: "testuser", StartupScript: rel}); err != nil {
+		t.Fatalf("configUserStartupScript failed: %v", err)
+	}
+
+	got, err := os.ReadFile(passwdPath)
+	if err != nil {
+		t.Fatalf("read passwd: %v", err)
+	}
+	want := "testuser:x:1000:1000::/home/testuser:/opt/x'&;#.sh\n"
+	if string(got) != want {
+		t.Errorf("metacharacter path not written literally:\n got: %q\nwant: %q", string(got), want)
+	}
+}
+
+// TestConfigUserStartupScript_SymlinkedPasswdStaysConfined asserts the passwd edit
+// is confined to the image root: a baseline whose /etc points at an absolute host
+// directory must not have its host passwd read or rewritten.
+func TestConfigUserStartupScript_SymlinkedPasswdStaysConfined(t *testing.T) {
+	installRoot := t.TempDir()
+	hostEtc := t.TempDir() // outside the image root
+	hostPasswd := filepath.Join(hostEtc, "passwd")
+	const hostContent = "testuser:x:1000:1000::/home/testuser:/bin/bash\n"
+	if err := os.WriteFile(hostPasswd, []byte(hostContent), 0o644); err != nil {
+		t.Fatalf("write host passwd: %v", err)
+	}
+
+	// The startup script itself is a legitimate in-root file.
+	script := filepath.Join(installRoot, "usr", "local", "bin", "startup.sh")
+	if err := os.MkdirAll(filepath.Dir(script), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(script, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	// /etc is a symlink to an absolute host directory.
+	if err := os.Symlink(hostEtc, filepath.Join(installRoot, "etc")); err != nil {
+		t.Fatalf("symlink etc: %v", err)
+	}
+
+	err := configUserStartupScript(installRoot,
+		config.UserConfig{Name: "testuser", StartupScript: "/usr/local/bin/startup.sh"})
+	if err == nil {
+		t.Fatal("expected confinement error for host-pointing /etc symlink")
+	}
+	got, rerr := os.ReadFile(hostPasswd)
+	if rerr != nil {
+		t.Fatalf("read host passwd: %v", rerr)
+	}
+	if string(got) != hostContent {
+		t.Fatalf("host passwd was modified; confinement leaked:\n%q", string(got))
+	}
 }
 
 // TestGenerateSBOM tests the generateSBOM functionality
