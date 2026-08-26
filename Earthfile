@@ -10,8 +10,8 @@ ARG NO_PROXY=$(echo $NO_PROXY)
 ARG REGISTRY
 ARG VERSION="__auto__"
 
-# Use pre-built Go image that already has most tools
-FROM ${REGISTRY}golang:1.24.1-bullseye
+# Use a pinned Go image tag for reproducible builds
+FROM ${REGISTRY}golang:1.25.0
 
 ENV http_proxy=$http_proxy
 ENV https_proxy=$https_proxy
@@ -29,7 +29,7 @@ ENV PATH="${GOBIN}:${PATH}"
 # The golang image already includes:
 # - wget, curl, git, build-essential
 # - Most basic tools
-# - Go 1.24.1
+# - Go (pinned to 1.25.0)
 
 # Only install absolutely essential packages that might be missing
 # Use --no-install-recommends and || true to continue even if some fail
@@ -37,23 +37,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     bc bash rpm mmdebstrap dosfstools sbsigntool xorriso grub-common cryptsetup \
     || echo "Some packages failed to install, continuing..."
 
-RUN ln -s /bin/uname /usr/bin/uname
-
 golang-base:
     # Create Go workspace
     RUN mkdir -p /go/src /go/bin /go/pkg && chmod -R 777 /go
-    
+
     # Install golangci-lint
     RUN go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.7
-    
+
     WORKDIR /work
     COPY go.mod .
     COPY go.sum .
     RUN go mod download # for caching
     COPY cmd/ ./cmd
     COPY internal/ ./internal
+    COPY config/ ./config
     COPY image-templates/ ./image-templates
     COPY scripts/ ./scripts
+    COPY api/ ./api
     RUN chmod +x ./scripts/*.sh || true
 
 version-info:
@@ -84,17 +84,17 @@ build:
     FROM +golang-base
     ARG VERSION="__auto__"
     ARG version="__auto__"
-    
+
     # Copy git metadata for commit stamping
     COPY .git .git
     BUILD +version-info --VERSION=$VERSION --version=$version
     # Reuse canonical version metadata emitted by +version-info
     COPY +version-info/version.txt /tmp/version.txt
-    
+
     # Get git commit SHA
     RUN COMMIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown") && \
         echo "$COMMIT_SHA" > /tmp/commit_sha
-    
+
     # Get build date in UTC
     RUN BUILD_DATE=$(date -u '+%Y-%m-%d') && \
         echo "$BUILD_DATE" > /tmp/build_date
@@ -114,7 +114,7 @@ build:
             ./cmd/live-installer
 
     SAVE ARTIFACT build/live-installer AS LOCAL ./build/live-installer
-    
+
     # Build with variables instead of cat substitution
     RUN VERSION=$(cat /tmp/version.txt) && \
         COMMIT_SHA=$(cat /tmp/commit_sha) && \
@@ -128,7 +128,7 @@ build:
                      -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.BuildDate=$BUILD_DATE' \
                      -X 'github.com/open-edge-platform/image-composer-tool/internal/config/version.CommitSHA=$COMMIT_SHA'" \
             ./cmd/image-composer-tool
-            
+
     SAVE ARTIFACT build/image-composer-tool AS LOCAL ./build/image-composer-tool
     SAVE ARTIFACT /tmp/version.txt AS LOCAL ./build/image-composer-tool.version
 
@@ -139,18 +139,39 @@ lint:
     RUN --mount=type=cache,target=/root/.cache \
         golangci-lint run ./...
 
+# generate re-runs `go generate` (oapi-codegen for the web API contract) and
+# fails if the committed generated code is stale — i.e. the OpenAPI spec was
+# edited without regenerating internal/api/http/gen.go. The generator is pinned
+# via the `tool` directive in go.mod, so this uses the module-locked version.
+# Run `go generate ./internal/api/http` locally after editing the spec.
+generate:
+    FROM +golang-base
+    WORKDIR /work
+    COPY . /work
+    # Snapshot the committed file, regenerate, and diff. A mismatch means the
+    # OpenAPI spec was edited without regenerating — fail with the diff so CI
+    # catches contract drift.
+    RUN cp internal/api/http/gen.go /tmp/gen.go.committed && \
+        go generate ./internal/api/http && \
+        if ! diff -u /tmp/gen.go.committed internal/api/http/gen.go; then \
+            echo "ERROR: internal/api/http/gen.go is out of date." >&2; \
+            echo "Run 'go generate ./internal/api/http' and commit the result." >&2; \
+            exit 1; \
+        fi
+    SAVE ARTIFACT internal/api/http/gen.go AS LOCAL ./internal/api/http/gen.go
+
 test:
     FROM +golang-base
     ARG COV_THRESHOLD=""
     ARG PRINT_TS=""
     ARG FAIL_ON_NO_TESTS=false
-    
+
     # Copy the entire project (including scripts directory)
     COPY . /work
-    
+
     # Make the coverage script executable
     RUN chmod +x /work/scripts/run_coverage_tests.sh
-    
+
     # Run the comprehensive coverage tests using our script
     # Args: COV_THRESHOLD PRINT_TS FAIL_ON_NO_TESTS DEBUG
     # If COV_THRESHOLD not provided or empty, read from .coverage-threshold file
@@ -161,7 +182,7 @@ test:
         THRESHOLD="${THRESHOLD:-65.0}" && \
         echo "Using coverage threshold: ${THRESHOLD}%" && \
         ./scripts/run_coverage_tests.sh "${THRESHOLD}" "${PRINT_TS}" "${FAIL_ON_NO_TESTS}"
-    
+
     # Save coverage artifacts locally
     SAVE ARTIFACT coverage.out AS LOCAL ./coverage.out
     SAVE ARTIFACT coverage_report.txt AS LOCAL ./coverage_report.txt
@@ -171,13 +192,13 @@ test-debug:
     ARG COV_THRESHOLD=""
     ARG PRINT_TS=""
     ARG FAIL_ON_NO_TESTS=false
-    
+
     # Copy the entire project (including scripts directory)
     COPY . /work
-    
+
     # Make the coverage script executable
     RUN chmod +x /work/scripts/run_coverage_tests.sh
-    
+
     # Run the coverage tests with debug output (keeps temp files for inspection)
     # Args: COV_THRESHOLD PRINT_TS FAIL_ON_NO_TESTS DEBUG
     # If COV_THRESHOLD not provided or empty, read from .coverage-threshold file
@@ -188,7 +209,7 @@ test-debug:
         THRESHOLD="${THRESHOLD:-65.0}" && \
         echo "Using coverage threshold: ${THRESHOLD}%" && \
         ./scripts/run_coverage_tests.sh "${THRESHOLD}" "${PRINT_TS}" "${FAIL_ON_NO_TESTS}" "true"
-    
+
     # Save coverage artifacts locally
     SAVE ARTIFACT coverage.out AS LOCAL ./coverage.out
     SAVE ARTIFACT coverage_report.txt AS LOCAL ./coverage_report.txt
@@ -209,7 +230,7 @@ deb:
     BUILD +version-info --VERSION=$VERSION --version=$version
     COPY +version-info/version.txt /tmp/version.txt
     RUN cp /tmp/version.txt /tmp/pkg_version
-    
+
     # Create directory structure following FHS (Filesystem Hierarchy Standard)
     RUN mkdir -p usr/local/bin \
                  etc/ict/config \
@@ -217,13 +238,13 @@ deb:
                  usr/share/doc/ict \
                  var/cache/ict \
                  DEBIAN
-    
+
     # Copy the built binary from the build target
     COPY +build/image-composer-tool usr/local/bin/image-composer-tool
-    
+
     # Make the binary executable
     RUN chmod +x usr/local/bin/image-composer-tool
-    
+
     # Create default global configuration with system paths (user-editable)
     # Note: Must be named config.yml to match the default search paths in the code
     RUN echo "# ICT - Global Configuration" > etc/ict/config.yml && \
@@ -250,18 +271,18 @@ deb:
         echo "logging:" >> etc/ict/config.yml && \
         echo "  level: \"info\"" >> etc/ict/config.yml && \
         echo "  # Log verbosity level: debug, info, warn, error" >> etc/ict/config.yml
-    
+
     # Copy OS variant configuration files (user-editable)
     COPY config etc/ict/config
-    
+
     # Copy image templates as examples (read-only, for reference)
     COPY image-templates usr/share/ict/examples
-    
+
     # Copy documentation
     COPY README.md usr/share/doc/ict/
     COPY LICENSE usr/share/doc/ict/
-    COPY docs/architecture/ict-cli-specification.md usr/share/doc/ict/
-    
+    COPY docs/user-guide/architecture/image-composer-tool-cli-specification.md usr/share/doc/ict/
+
     # Create the DEBIAN control file with proper metadata
     RUN VERSION=$(cat /tmp/pkg_version) && \
         echo "Package: ict" > DEBIAN/control && \
@@ -277,7 +298,7 @@ deb:
         echo " ICT enables users to compose custom bootable OS images based on a" >> DEBIAN/control && \
         echo " user-provided template that specifies package lists, configurations," >> DEBIAN/control && \
         echo " and output formats for supported distributions." >> DEBIAN/control
-    
+
     # Build the debian package and stage in a stable location
     RUN VERSION=$(cat /tmp/pkg_version) && \
         mkdir -p /tmp/dist && \
@@ -287,3 +308,66 @@ deb:
     RUN VERSION=$(cat /tmp/pkg_version) && cp /tmp/pkg_version /tmp/dist/image-composer-tool.version
     SAVE ARTIFACT /tmp/dist/ict_*_${ARCH}.deb AS LOCAL dist/
     SAVE ARTIFACT /tmp/dist/image-composer-tool.version AS LOCAL dist/image-composer-tool.version
+
+# ── Builder container image ───────────────────────────────────────────────────
+# Builds the ICT builder image: Ubuntu 24.04 + complete toolchain + ICT binary.
+# The toolchain apt-install layer is ordered before the binary copy so it stays
+# cached across binary-only rebuilds.
+#
+# Build locally:
+#   earthly +builder-image
+# Push to registry:
+#   earthly +builder-image-push --REGISTRY=<registry> --VERSION=<tag>
+
+builder-image:
+    ARG VERSION="dev"
+    ARG BUILDER_IMAGE_NAME="image-composer-tool-builder"
+
+    # Ensure the ICT binary is built first
+    BUILD +build --VERSION=$VERSION --version=$VERSION
+    FROM DOCKERFILE \
+        --build-arg http_proxy=$http_proxy \
+        --build-arg https_proxy=$https_proxy \
+        --build-arg no_proxy=$no_proxy \
+        --build-arg HTTP_PROXY=$HTTP_PROXY \
+        --build-arg HTTPS_PROXY=$HTTPS_PROXY \
+        --build-arg NO_PROXY=$NO_PROXY \
+        -f build/builder/Dockerfile .
+    COPY +build/image-composer-tool /usr/local/bin/image-composer-tool
+    RUN chmod +x /usr/local/bin/image-composer-tool
+
+    SAVE IMAGE ${BUILDER_IMAGE_NAME}:${VERSION}
+    SAVE IMAGE ${BUILDER_IMAGE_NAME}:latest
+
+builder-image-push:
+    ARG VERSION="dev"
+    ARG REGISTRY
+    ARG BUILDER_IMAGE_NAME="image-composer-tool-builder"
+
+    BUILD +build --VERSION=$VERSION --version=$VERSION
+
+    FROM DOCKERFILE \
+        --build-arg http_proxy=$http_proxy \
+        --build-arg https_proxy=$https_proxy \
+        --build-arg no_proxy=$no_proxy \
+        --build-arg HTTP_PROXY=$HTTP_PROXY \
+        --build-arg HTTPS_PROXY=$HTTPS_PROXY \
+        --build-arg NO_PROXY=$NO_PROXY \
+        -f build/builder/Dockerfile .
+    COPY +build/image-composer-tool /usr/local/bin/image-composer-tool
+    RUN chmod +x /usr/local/bin/image-composer-tool
+
+    SAVE IMAGE --push ${REGISTRY}/${BUILDER_IMAGE_NAME}:${VERSION}
+    SAVE IMAGE --push ${REGISTRY}/${BUILDER_IMAGE_NAME}:latest
+
+# Run preflight in a separate target to keep builder-image (Subtask 1)
+# independent from runtime validation (Subtask 2).
+builder-image-preflight:
+    FROM +builder-image
+
+    # Preflight derives required commands from shell commandMap source.
+    COPY scripts/preflight.sh /usr/local/bin/preflight.sh
+    COPY internal/utils/shell/shell.go /tmp/shell.go
+
+    RUN chmod +x /usr/local/bin/preflight.sh
+    RUN /usr/local/bin/preflight.sh --check-only --command-map-file /tmp/shell.go

@@ -22,6 +22,30 @@ type Provider interface {
 	PostProcess(template *config.ImageTemplate, err error) error
 }
 
+// OverlayCapable is implemented by providers that route overlay-mode templates
+// (baseline.mode: overlay) through the overlay pipeline in all three phases.
+//
+// Overlay mode is not a no-op for a provider that ignores it: template merging
+// strips the create-mode default package set from an overlay template (the
+// baseline is expected to already provide it), so a provider without an overlay
+// branch would build a create-mode image from a crippled package list instead of
+// layering onto the baseline. Declaring the capability explicitly lets the build
+// entry point reject that combination up front rather than emit a broken image.
+type OverlayCapable interface {
+	Provider
+
+	// SupportsOverlay reports whether this provider implements the overlay-mode
+	// pipeline for the given target.
+	SupportsOverlay(dist, arch string) bool
+}
+
+// SupportsOverlay reports whether p can build overlay-mode templates for the
+// given target. Providers that do not implement OverlayCapable are create-only.
+func SupportsOverlay(p Provider, dist, arch string) bool {
+	capable, ok := p.(OverlayCapable)
+	return ok && capable.SupportsOverlay(dist, arch)
+}
+
 var (
 	providers = make(map[string]Provider)
 )

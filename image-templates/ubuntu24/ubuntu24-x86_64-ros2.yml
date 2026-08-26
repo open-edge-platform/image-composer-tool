@@ -1,0 +1,60 @@
+image:
+  name: edge-os-image-ubuntu
+  version: "24.04"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+
+# Sample list of additional package repositories; replace codename, url, and pkey values as needed
+packageRepositories:  
+  # ros 2
+  - codename: "noble"
+    url: "http://packages.ros.org/ros2/ubuntu"
+    pkey: "https://raw.githubusercontent.com/ros/rosdistro/master/ros.key"
+    # pkey: "[trusted=yes]"
+    component: "main"  
+
+systemConfig:
+  name: edge
+  description: edge ubuntu image with immutable rootfs
+
+  immutability:
+    enabled: true # default is true
+    # To enable Secure Boot, provide the actual file paths for your environment below and uncomment the relevant lines.
+    # secureBootDBKey: "<SECURE_BOOT_DB_KEY_PATH>"
+    # secureBootDBCrt: "<SECURE_BOOT_DB_CRT_PATH>"
+    # secureBootDBCer: "<SECURE_BOOT_DB_CER_PATH>"
+
+  packages:
+    - ubuntu-minimal
+    - systemd-boot
+    - dracut-core
+    - systemd
+    - cryptsetup-bin
+    - openssh-server
+    - systemd-resolved
+    - systemd-timesyncd
+    # ROS2
+    - ros-jazzy-ros-base
+    - ros-jazzy-rmw-cyclonedds-cpp
+    - ros-jazzy-demo-nodes-py
+
+  kernel:
+    cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
+    packages:
+      - linux-image-generic-hwe-24.04
+  
+  configurations:
+    # Create ROS data directories with full permissions
+    - cmd: "mkdir -p /opt/ros-data/log"
+    - cmd: "mkdir -p /opt/ros-data/tmp"
+    - cmd: "chmod -R 777 /opt/ros-data"
+
+    # Add basic environment variables to /etc/environment (optional, for non-shell processes)
+    - cmd: "echo 'ROS_HOME=/opt/ros-data' >> /etc/environment"
+    - cmd: "echo 'ROS_LOG_DIR=/opt/ros-data/log' >> /etc/environment"
+    - cmd: "echo 'TMPDIR=/opt/ros-data/tmp' >> /etc/environment"
+    - cmd: "echo 'RMW_IMPLEMENTATION=rmw_cyclonedds_cpp' >> /etc/environment"

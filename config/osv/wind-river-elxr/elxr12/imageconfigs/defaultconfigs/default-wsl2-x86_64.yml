@@ -1,0 +1,37 @@
+image:
+  name: wsl2-rootfs-elxr
+  version: "12.0.0"
+
+target:
+  os: wind-river-elxr
+  dist: elxr12
+  arch: x86_64
+  imageType: wsl2
+
+disk:
+  name: WSL2_Rootfs
+  artifacts:
+    - type: tar
+      compression: gz
+
+systemConfig:
+  name: WSL2_Rootfs
+  packages:
+    - ca-certificates
+    - curl
+    - dbus
+    - less
+    - openssh-server
+    - procps
+    - sudo
+    - systemd
+    - systemd-resolved
+    - systemd-timesyncd
+    - vim
+    - wget
+
+  additionalFiles:
+    - local: ../../../../../general/wsl2/ict-wsl2-profile.sh
+      final: /etc/profile.d/00-ict-wsl2.sh
+    - local: ../../../../../general/wsl2/resize-filesystem.txt
+      final: /usr/share/doc/ict-wsl2/resize-filesystem.txt

@@ -330,9 +330,27 @@ systemConfig:
 		}
 	}
 
-	// Create a subdirectory (should be skipped)
-	if err := os.Mkdir(filepath.Join(tmpDir, "subdir"), 0755); err != nil {
+	// Templates live in per-distribution subdirectories, so a template nested one
+	// level down must be discovered too.
+	subDir := filepath.Join(tmpDir, "subdir")
+	if err := os.Mkdir(subDir, 0755); err != nil {
 		t.Fatalf("failed to create subdir: %v", err)
+	}
+	nested := `
+image:
+  name: template3
+  version: "3.0.0"
+target:
+  os: test
+  dist: test3
+  arch: x86_64
+  imageType: raw
+systemConfig:
+  name: config3
+  packages: []
+`
+	if err := os.WriteFile(filepath.Join(subDir, "template3.yml"), []byte(nested), 0644); err != nil {
+		t.Fatalf("failed to write nested template: %v", err)
 	}
 
 	scanned, err := ScanTemplates(tmpDir)
@@ -340,17 +358,19 @@ systemConfig:
 		t.Fatalf("ScanTemplates failed: %v", err)
 	}
 
-	if len(scanned) != 2 {
-		t.Errorf("expected 2 templates, got %d", len(scanned))
+	if len(scanned) != 3 {
+		t.Errorf("expected 3 templates, got %d", len(scanned))
 	}
 
-	// Verify both templates were parsed
+	// Verify every template was parsed, including the one in the subdirectory
 	names := make(map[string]bool)
 	for _, tmpl := range scanned {
 		names[tmpl.ImageName] = true
 	}
 
-	if !names["template1"] || !names["template2"] {
-		t.Errorf("expected both template1 and template2 to be parsed, got %v", names)
+	for _, want := range []string{"template1", "template2", "template3"} {
+		if !names[want] {
+			t.Errorf("expected %s to be parsed, got %v", want, names)
+		}
 	}
 }

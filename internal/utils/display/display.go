@@ -85,8 +85,14 @@ func PrintImageDirectorySummary(
 	log.Info("")
 }
 
+// TimingRow is one labelled stage duration in a timing table.
+type TimingRow struct {
+	Stage    string
+	Duration time.Duration
+}
+
 // PrintImageBuildingTiming displays timing information
-// for each stage of the image build process
+// for each stage of the (create-mode) image build process.
 func PrintImageBuildingTiming(
 	imageType string,
 	startToDownloadImagePkgsTime,
@@ -97,69 +103,68 @@ func PrintImageBuildingTiming(
 	convertImageTime time.Duration,
 	convertImageFileToFinishTime time.Duration,
 ) {
+	PrintTimingTable("Build Timings", []TimingRow{
+		{Stage: "Initialization and Configuration", Duration: startToDownloadImagePkgsTime},
+		{Stage: "Package Download", Duration: downloadImagePkgsTime},
+		{Stage: "Chroot Package Download", Duration: chrootPkgDownloadTime},
+		{Stage: "Chroot Env Initialization", Duration: downloadImagePkgsToPureBuildTime},
+		{Stage: "Image Build", Duration: pureImageBuildTime},
+		{Stage: "Image Conversion", Duration: convertImageTime},
+		{Stage: "Finalization and Clean Up", Duration: convertImageFileToFinishTime},
+	})
+}
+
+// PrintTimingTable renders a per-stage timing table with a "Total Time" footer
+// summing the rows. The title labels the table (e.g. "Build Timings"); it is a
+// no-op when there are no rows.
+func PrintTimingTable(title string, rows []TimingRow) {
+	if len(rows) == 0 {
+		return
+	}
 	log := logger.Logger()
-	timingRows := []struct {
-		stage    string
-		duration time.Duration
-	}{
-		{stage: "Initialization and Configuration", duration: startToDownloadImagePkgsTime},
-		{stage: "Package Download", duration: downloadImagePkgsTime},
-		{stage: "Chroot Package Download", duration: chrootPkgDownloadTime},
-		{stage: "Chroot Env Initialization", duration: downloadImagePkgsToPureBuildTime},
-		{stage: "Image Build", duration: pureImageBuildTime},
-		{stage: "Image Conversion", duration: convertImageTime},
-		{stage: "Finalization and Clean Up", duration: convertImageFileToFinishTime},
-	}
 
-	var visibleTimingRows []struct {
-		stage    string
-		duration time.Duration
-	}
 	var totalDuration time.Duration
-	for _, row := range timingRows {
-		visibleTimingRows = append(visibleTimingRows, row)
-		totalDuration += row.duration
+	for _, row := range rows {
+		totalDuration += row.Duration
 	}
 
-	if len(visibleTimingRows) > 0 {
-		stageWidth := len("Stage")
-		durationWidth := len("Duration")
-		durationStrings := make([]string, len(visibleTimingRows))
-		totalDurationText := totalDuration.Round(time.Millisecond).String()
-		for i, row := range visibleTimingRows {
-			durationText := row.duration.Round(time.Millisecond).String()
-			durationStrings[i] = durationText
-			if len(row.stage) > stageWidth {
-				stageWidth = len(row.stage)
-			}
-			if len(durationText) > durationWidth {
-				durationWidth = len(durationText)
-			}
+	stageWidth := len("Stage")
+	durationWidth := len("Duration")
+	durationStrings := make([]string, len(rows))
+	totalDurationText := totalDuration.Round(time.Millisecond).String()
+	for i, row := range rows {
+		durationText := row.Duration.Round(time.Millisecond).String()
+		durationStrings[i] = durationText
+		if len(row.Stage) > stageWidth {
+			stageWidth = len(row.Stage)
 		}
-		if stageWidth < 20 {
-			stageWidth = 20
+		if len(durationText) > durationWidth {
+			durationWidth = len(durationText)
 		}
-		if durationWidth < 14 {
-			durationWidth = 14
-		}
-		if len("Total Time") > stageWidth {
-			stageWidth = len("Total Time")
-		}
-		if len(totalDurationText) > durationWidth {
-			durationWidth = len(totalDurationText)
-		}
-
-		border := fmt.Sprintf("  +-%s-+-%s-+", strings.Repeat("-", stageWidth), strings.Repeat("-", durationWidth))
-
-		log.Info("  Build Timings:")
-		log.Info(border)
-		log.Infof("  | %-*s | %-*s |", stageWidth, "Stage", durationWidth, "Duration")
-		log.Info(border)
-		for i, row := range visibleTimingRows {
-			log.Infof("  | %-*s | %-*s |", stageWidth, row.stage, durationWidth, durationStrings[i])
-		}
-		log.Info(border)
-		log.Infof("  | %-*s | %-*s |", stageWidth, "Total Time", durationWidth, totalDurationText)
-		log.Info(border)
 	}
+	if stageWidth < 20 {
+		stageWidth = 20
+	}
+	if durationWidth < 14 {
+		durationWidth = 14
+	}
+	if len("Total Time") > stageWidth {
+		stageWidth = len("Total Time")
+	}
+	if len(totalDurationText) > durationWidth {
+		durationWidth = len(totalDurationText)
+	}
+
+	border := fmt.Sprintf("  +-%s-+-%s-+", strings.Repeat("-", stageWidth), strings.Repeat("-", durationWidth))
+
+	log.Infof("  %s:", title)
+	log.Info(border)
+	log.Infof("  | %-*s | %-*s |", stageWidth, "Stage", durationWidth, "Duration")
+	log.Info(border)
+	for i, row := range rows {
+		log.Infof("  | %-*s | %-*s |", stageWidth, row.Stage, durationWidth, durationStrings[i])
+	}
+	log.Info(border)
+	log.Infof("  | %-*s | %-*s |", stageWidth, "Total Time", durationWidth, totalDurationText)
+	log.Info(border)
 }
