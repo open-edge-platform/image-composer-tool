@@ -5,7 +5,7 @@ go 1.25.0
 require (
 	github.com/ProtonMail/go-crypto v1.4.1
 	github.com/bendahl/uinput v1.7.0
-	github.com/diskfs/go-diskfs v1.9.2
+	github.com/diskfs/go-diskfs v1.9.4
 	github.com/gdamore/tcell/v2 v2.8.1
 	github.com/getkin/kin-openapi v0.147.0
 	github.com/google/uuid v1.6.0
