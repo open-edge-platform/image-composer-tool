@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/api/service/pkgindex"
@@ -286,5 +287,63 @@ func TestSearchPackagesLimitCountsPackagesNotVersions(t *testing.T) {
 	}
 	if got := paginate(hits, 0, 2); len(got) != 2 {
 		t.Errorf("paginate returned %d, want 2 packages", len(got))
+	}
+}
+
+func TestArchesToFetchNarrowsToTheTarget(t *testing.T) {
+	// A catalog entry lists an arch per publishing host (Ubuntu serves x86_64
+	// from archive.ubuntu.com and aarch64 from ports.ubuntu.com). Only the
+	// target's own arch is worth fetching.
+	tests := []struct {
+		name      string
+		idxArches []string
+		osArches  []string
+		want      []string
+	}{
+		{"narrows to the target's arch", []string{"x86_64", "aarch64"}, []string{"x86_64"}, []string{"x86_64"}},
+		{"drops an index the target cannot use", []string{"aarch64"}, []string{"x86_64"}, nil},
+		{"no declared arch means every arch the OS builds", nil, []string{"x86_64"}, []string{"x86_64"}},
+		{"unknown OS keeps the index's own arches", []string{"x86_64", "aarch64"}, nil, []string{"x86_64", "aarch64"}},
+		{"a matching multi-arch target keeps both", []string{"x86_64", "aarch64"}, []string{"x86_64", "aarch64"}, []string{"x86_64", "aarch64"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := archesToFetch(tc.idxArches, tc.osArches)
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("got %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+func TestPlanLookupsSkipsTheWrongArch(t *testing.T) {
+	// End to end through planLookups: the aarch64 half of a two-host repo must
+	// not be planned for an x86_64 target, and the deb arch name is translated.
+	s := &Service{manifest: &Manifest{Targets: []Target{{ID: "ubuntu24", Arch: "x86_64"}}}}
+	repos := []PackageRepo{{
+		ID: "ubuntu-noble-base", URL: "http://archive.ubuntu.com/ubuntu", Type: repoTypeDeb,
+		Index: []RepoIndex{
+			{Codename: "noble", Component: "main universe", Arch: []string{"x86_64"}},
+			{URL: "http://ports.ubuntu.com/ubuntu-ports", Codename: "noble",
+				Component: "main universe", Arch: []string{"aarch64"}},
+		},
+	}}
+
+	got := s.planLookups("ubuntu24", repos)
+	if len(got) != 2 {
+		t.Fatalf("planned %d lookups, want 2 (main+universe for x86_64 only): %+v", len(got), got)
+	}
+	for _, lk := range got {
+		if lk.repo.Arch != "amd64" {
+			t.Errorf("planned arch %q, want amd64", lk.repo.Arch)
+		}
+		if strings.Contains(lk.repo.URL, "ports.ubuntu.com") {
+			t.Errorf("planned an aarch64 host for an x86_64 target: %s", lk.repo.URL)
+		}
 	}
 }

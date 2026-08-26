@@ -318,10 +318,7 @@ func indexLookups(r PackageRepo, idx RepoIndex, repoType, gpgKeyPath string, osA
 	if url == "" {
 		url = r.URL
 	}
-	arches := idx.Arch
-	if len(arches) == 0 {
-		arches = osArches
-	}
+	arches := archesToFetch(idx.Arch, osArches)
 	components := []string{""}
 	if repoType == repoTypeDeb && idx.Component != "" {
 		components = strings.Fields(idx.Component)
@@ -340,6 +337,38 @@ func indexLookups(r PackageRepo, idx RepoIndex, repoType, gpgKeyPath string, osA
 				},
 				repoID: r.ID,
 			})
+		}
+	}
+	return out
+}
+
+// archesToFetch narrows an index's declared arches to the ones the target
+// actually builds for. A catalog entry commonly lists an arch per publishing
+// host — Ubuntu serves x86_64 from archive.ubuntu.com and aarch64 from
+// ports.ubuntu.com — and fetching both meant downloading an 18 MB index the
+// selected target can never install from, doubling the cost of every cold
+// search.
+//
+// An index that declares no arch means "every arch the OS builds", which
+// osArches already answers. An index that declares arches but none matching
+// the target is dropped: it has nothing that target could install.
+func archesToFetch(idxArches, osArches []string) []string {
+	if len(idxArches) == 0 {
+		return osArches
+	}
+	// Nothing to narrow against (an OS the manifest doesn't list): keep the
+	// index's own arches rather than silently dropping every lookup.
+	if len(osArches) == 0 {
+		return idxArches
+	}
+	want := make(map[string]bool, len(osArches))
+	for _, a := range osArches {
+		want[a] = true
+	}
+	var out []string
+	for _, a := range idxArches {
+		if want[a] {
+			out = append(out, a)
 		}
 	}
 	return out

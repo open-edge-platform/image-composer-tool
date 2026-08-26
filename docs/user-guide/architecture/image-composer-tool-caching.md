@@ -149,7 +149,7 @@ files with the build-path metadata cache described above.
 |---|---|---|
 | Stored | on disk, under `tmp/builds/` | in memory only |
 | Invalidation | `Release` SHA256 checksum | time-to-live, 6 hours by default (2 minutes for a failed fetch) |
-| Retained | indefinitely | 24 indexes or 600,000 packages, whichever binds first |
+| Retained | indefinitely | 128 indexes or 600,000 packages, whichever binds first |
 | Kept per package | full metadata: dependencies, checksums, file lists | name, version, architecture, one-line summary |
 
 The two are kept apart deliberately:
@@ -170,6 +170,18 @@ magnitude — noble `main` holds 6,099 packages where `universe` holds 64,755 �
 a count of indexes alone is not a memory bound. The package budget caps the cache
 at roughly 130 MB. An index that alone exceeds the budget is still kept rather
 than dropped and refetched on every request.
+
+The index count is sized against the whole catalog rather than one repository.
+A catalog repository expands to one index per (suite, component, architecture),
+so `ubuntu-noble-base` alone is 12 and a target's full repository set is around
+50. A cap below that evicts an index the next request needs: browsing a
+repository straight after a cross-repository search re-downloaded tens of
+megabytes that were already in memory.
+
+Only the target's own architecture is fetched. A catalog entry commonly lists
+one architecture per publishing host — Ubuntu serves x86_64 from
+`archive.ubuntu.com` and aarch64 from `ports.ubuntu.com` — and an index the
+selected target cannot install from is never requested.
 
 Requests for the same index are **coalesced**: when several browser requests need
 one repository at the same time, the first fetches it and the rest wait for that

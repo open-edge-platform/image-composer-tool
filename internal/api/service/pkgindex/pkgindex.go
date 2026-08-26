@@ -78,7 +78,13 @@ const (
 	// mirror from being redialled on every keystroke of an autocomplete, not to
 	// remember an outage. A mirror that comes back is picked up within minutes.
 	DefaultFailureTTL = 2 * time.Minute
-	DefaultMaxRepos   = 24
+	// DefaultMaxRepos must exceed the index count of the whole catalog, not of
+	// one repository. A single catalog repo expands to one index per
+	// (suite, component, arch): ubuntu-noble-base alone is 12, and a target's
+	// full repo set is around 50. A cap below that evicts an index the very
+	// next search needs, so browsing after searching re-downloaded tens of MB
+	// that were already in hand. MaxEntries, not this, is the memory bound.
+	DefaultMaxRepos = 128
 	// DefaultMaxEntries bounds retained packages rather than retained indexes,
 	// because index sizes differ by two orders of magnitude: Ubuntu noble
 	// amd64 main holds 6,099 packages while universe holds 64,755. Measured at
