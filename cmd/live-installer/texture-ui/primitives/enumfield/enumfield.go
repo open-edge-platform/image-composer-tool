@@ -6,7 +6,7 @@ package enumfield
 import (
 	"math"
 
-	"github.com/gdamore/tcell"
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
 
@@ -45,6 +45,9 @@ type EnumField struct {
 
 	// A callback invoked when the user leaves this form item
 	onFinished func(tcell.Key)
+
+	// Whether this form item is disabled / read-only.
+	disabled bool
 
 	// A callback invoked when this primitive receives focus.
 	onFocus func()
@@ -182,6 +185,17 @@ func (n *EnumField) GetLabel() string {
 func (n *EnumField) GetFieldWidth() int {
 	// Same as the text length
 	return 0
+}
+
+// GetFieldHeight returns this primitive's field height.
+func (n *EnumField) GetFieldHeight() int {
+	return 1
+}
+
+// SetDisabled sets whether or not the item is disabled / read-only.
+func (n *EnumField) SetDisabled(disabled bool) tview.FormItem {
+	n.disabled = disabled
+	return n
 }
 
 // SetFormAttributes sets attributes shared by all form items. Only bgColor is considered for bg colors.

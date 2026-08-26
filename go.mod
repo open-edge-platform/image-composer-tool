@@ -6,13 +6,13 @@ require (
 	github.com/ProtonMail/go-crypto v1.4.1
 	github.com/bendahl/uinput v1.7.0
 	github.com/diskfs/go-diskfs v1.9.2
-	github.com/gdamore/tcell v1.4.0
+	github.com/gdamore/tcell/v2 v2.8.1
 	github.com/getkin/kin-openapi v0.135.0
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.18.6
 	github.com/muesli/crunchy v0.4.0
 	github.com/oapi-codegen/runtime v1.6.0
-	github.com/rivo/tview v0.0.0-20200219135020-0ba8301b415c
+	github.com/rivo/tview v0.42.0
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
 	github.com/sassoftware/go-rpmutils v0.4.0
 	github.com/schollz/progressbar/v3 v3.7.0
@@ -39,7 +39,7 @@ require (
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/mailru/easyjson v0.9.1 // indirect
-	github.com/mattn/go-runewidth v0.0.9 // indirect
+	github.com/mattn/go-runewidth v0.0.16 // indirect
 	github.com/mitchellh/colorstring v0.0.0-20190213212951-d06e56a500db // indirect
 	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826 // indirect
 	github.com/oapi-codegen/oapi-codegen/v2 v2.7.2 // indirect
