@@ -8,10 +8,32 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gdamore/tcell"
+	"github.com/gdamore/tcell/v2"
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/rivo/tview"
 )
+
+// runAppEventLoop starts app.Run() against a simulation screen so that
+// app.Draw() (which blocks until the event loop drains its update queue in
+// tview >= v0.42.0) does not deadlock in tests. The returned func stops the
+// event loop and must be called before the test ends.
+func runAppEventLoop(t *testing.T, app *tview.Application) func() {
+	t.Helper()
+
+	app.SetScreen(tcell.NewSimulationScreen(""))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if err := app.Run(); err != nil {
+			t.Errorf("app.Run() returned error: %v", err)
+		}
+	}()
+
+	return func() {
+		app.Stop()
+		<-done
+	}
+}
 
 func TestNew(t *testing.T) {
 	mockInstallFunc := func(progress chan int, status chan string) {
@@ -537,6 +559,11 @@ func TestProgressView_MonitorProgress(t *testing.T) {
 		t.Fatalf("Initialize() returned error: %v", err)
 	}
 
+	// app.Draw() (invoked by SetProgress) blocks until app.Run() drains its
+	// update queue, so the event loop must be running during this test.
+	stopApp := runAppEventLoop(t, app)
+	defer stopApp()
+
 	// Test monitorProgress
 	progress := make(chan int, 3)
 	wg := new(sync.WaitGroup)
@@ -586,6 +613,11 @@ func TestProgressView_MonitorStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Initialize() returned error: %v", err)
 	}
+
+	// app.Draw() (invoked by SetStatus) blocks until app.Run() drains its
+	// update queue, so the event loop must be running during this test.
+	stopApp := runAppEventLoop(t, app)
+	defer stopApp()
 
 	// Test monitorStatus
 	progress := make(chan int)
@@ -649,6 +681,11 @@ func TestProgressView_StartInstallation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Initialize() returned error: %v", err)
 	}
+
+	// app.Draw() (invoked by SetProgress/SetStatus) blocks until app.Run()
+	// drains its update queue, so the event loop must be running during this test.
+	stopApp := runAppEventLoop(t, app)
+	defer stopApp()
 
 	// Start installation in the same goroutine for testing
 	pv.startInstallation()

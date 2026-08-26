@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gdamore/tcell"
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
 	"github.com/open-edge-platform/image-composer-tool/cmd/live-installer/texture-ui/primitives/enumfield"
@@ -225,12 +225,14 @@ func (mp *ManualPartitionWidget) Initialize(backButtonText string, template *con
 		AddItem(mp.navBar, navBarHeight, navBarProportion, false)
 
 	mp.pages = tview.NewPages()
+	mp.pages.AddPage(tablePage, mp.flex, true, true)
+	mp.pages.AddPage(addPartitionPage, mp.formFlex, true, false)
+
+	// Set after the initial AddPage calls so construction-time changes don't
+	// synchronously call app.Draw() before app.Run() is draining updates.
 	mp.pages.SetChangedFunc(func() {
 		app.Draw()
 	})
-
-	mp.pages.AddPage(tablePage, mp.flex, true, true)
-	mp.pages.AddPage(addPartitionPage, mp.formFlex, true, false)
 
 	// Box styling
 	mp.spaceLeftText.SetBorderPadding(defaultPadding, defaultPadding, defaultPadding, defaultPadding)
