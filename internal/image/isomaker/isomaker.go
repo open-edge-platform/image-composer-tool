@@ -293,11 +293,13 @@ func (isoMaker *IsoMaker) copyConfigFilesToIso(template *config.ImageTemplate, i
 			newFileInfo := config.AdditionalFileInfo{
 				Local: newPath,
 				Final: fileInfo.Final,
+				Stage: fileInfo.Stage,
 			}
 			PathUpdatedList = append(PathUpdatedList, newFileInfo)
 		}
 	}
 	template.SystemConfig.AdditionalFiles = PathUpdatedList
+	template.SBOMPackageMetadata = template.FullPkgListBom
 
 	// Dump updated template to ISO
 	templateDumpFilePath := filepath.Join(isoMaker.ImageBuildDir, "template-dump.yaml")

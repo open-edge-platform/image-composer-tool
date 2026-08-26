@@ -1,0 +1,6 @@
+# Real UI build output is generated (cd web && npm run build, copied here) and
+# must not be committed. Only the placeholder dist/index.html is tracked so
+# //go:embed always has a target.
+dist/assets/
+dist/favicon.svg
+dist/intel-logo.svg

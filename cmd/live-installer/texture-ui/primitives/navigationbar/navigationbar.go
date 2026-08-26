@@ -4,7 +4,7 @@
 package navigationbar
 
 import (
-	"github.com/gdamore/tcell"
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
 	"github.com/open-edge-platform/image-composer-tool/cmd/live-installer/texture-ui/uitext"
@@ -51,6 +51,9 @@ type NavigationBar struct {
 
 	// A callback invoked when the user leaves the navigation bar when it is a form item.
 	onFinished func(tcell.Key)
+
+	// Whether this form item is disabled / read-only.
+	disabled bool
 
 	// A callback invoked when this primitive receives focus.
 	onFocus func()
@@ -277,6 +280,17 @@ func (n *NavigationBar) GetFieldWidth() int {
 	}
 
 	return buttonsWidth
+}
+
+// GetFieldHeight returns this primitive's field height.
+func (n *NavigationBar) GetFieldHeight() int {
+	return 1
+}
+
+// SetDisabled sets whether or not the item is disabled / read-only.
+func (n *NavigationBar) SetDisabled(disabled bool) tview.FormItem {
+	n.disabled = disabled
+	return n
 }
 
 // SetFormAttributes sets attributes shared by all form items.

@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/image/imageinspect"
@@ -74,7 +77,16 @@ func executeCompare(cmd *cobra.Command, args []string) error {
 	format, mode := resolveDefaults(outFormat, outMode)
 
 	if mode == "spdx" {
-		spdxResult, err := imageinspect.CompareSPDXFiles(imageFile1, imageFile2)
+		fromData, err := resolveSPDXInput(imageFile1)
+		if err != nil {
+			return fmt.Errorf("SPDX compare failed: reading %s: %w", imageFile1, err)
+		}
+		toData, err := resolveSPDXInput(imageFile2)
+		if err != nil {
+			return fmt.Errorf("SPDX compare failed: reading %s: %w", imageFile2, err)
+		}
+
+		spdxResult, err := imageinspect.CompareSPDXData(imageFile1, fromData, imageFile2, toData)
 		if err != nil {
 			return fmt.Errorf("SPDX compare failed: %w", err)
 		}
@@ -131,6 +143,78 @@ func executeCompare(cmd *cobra.Command, args []string) error {
 	default:
 		return fmt.Errorf("invalid --format %q (expected text|json)", format)
 	}
+}
+
+// spdxInputResolver extracts the embedded SBOM from an image. It is a package
+// var so tests can inject a fake without touching a real disk image.
+var spdxInputResolver = extractImageSBOM
+
+// resolveSPDXInput returns the SPDX JSON bytes for a compare input. The input is
+// either a standalone SPDX JSON document or an OS image with an embedded SBOM;
+// they are distinguished by peeking at the first non-whitespace byte ('{' means
+// a JSON document). A raw image can be many GB, so a JSON file is read directly
+// while an image is opened and only its embedded SBOM is extracted, never slurped
+// whole.
+func resolveSPDXInput(path string) ([]byte, error) {
+	isJSON, err := looksLikeJSONDocument(path)
+	if err != nil {
+		return nil, err
+	}
+	if isJSON {
+		return os.ReadFile(path)
+	}
+	return spdxInputResolver(path)
+}
+
+// looksLikeJSONDocument reports whether the file's first non-whitespace byte is
+// '{', i.e. it is a JSON object rather than a binary disk image. A leading UTF-8
+// BOM is skipped first. It reads only a small prefix, so it is safe on multi-GB
+// images.
+func looksLikeJSONDocument(path string) (bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = f.Close() }()
+
+	buf := make([]byte, 512)
+	n, err := f.Read(buf)
+	if err != nil && err != io.EOF {
+		return false, err
+	}
+	prefix := buf[:n]
+	// Skip a leading UTF-8 BOM so a BOM-prefixed JSON document is not mistaken
+	// for a binary disk image.
+	prefix = bytes.TrimPrefix(prefix, []byte{0xEF, 0xBB, 0xBF})
+	for _, b := range prefix {
+		switch b {
+		case ' ', '\t', '\r', '\n':
+			continue // skip leading whitespace
+		case '{':
+			return true, nil
+		default:
+			return false, nil
+		}
+	}
+	return false, nil // empty or all-whitespace: not JSON
+}
+
+// extractImageSBOM inspects an OS image and returns its embedded SBOM document.
+// It fails with a clear message when the image carries no SBOM, so the compare
+// error names the missing artifact rather than surfacing a JSON parse error.
+func extractImageSBOM(imagePath string) ([]byte, error) {
+	summary, err := imageinspect.NewDiskfsInspectorWithOptions(false, true).Inspect(imagePath)
+	if err != nil {
+		return nil, fmt.Errorf("inspecting image: %w", err)
+	}
+	if !summary.SBOM.Present || len(summary.SBOM.Content) == 0 {
+		notes := ""
+		if len(summary.SBOM.Notes) > 0 {
+			notes = ": " + strings.Join(summary.SBOM.Notes, "; ")
+		}
+		return nil, fmt.Errorf("no embedded SBOM found in image (expected at %s)%s", "/usr/share/sbom", notes)
+	}
+	return summary.SBOM.Content, nil
 }
 
 func writeCompareResult(cmd *cobra.Command, v any, pretty bool) error {

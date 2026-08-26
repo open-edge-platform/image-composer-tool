@@ -17,6 +17,7 @@ type PackageInfo struct {
 	RequiresPkgNames []string // canonical package names of dependencies (extracted from Requires)
 	Files            []string // list of files in this package (rpm:files)
 	PkgName          string   // name of the package
+	Breaks           []string // deb Breaks: field terms (raw "name (op ver)" strings)
 }
 
 // Checksum holds the algorithm and value of a checksum.
