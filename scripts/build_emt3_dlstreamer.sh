@@ -165,7 +165,7 @@ build_emt3_dlstreamer_image() {
   echo "Current working directory: $(pwd)"
   
   set +e
-  output=$(sudo -S ./image-composer-tool build image-templates/emt3-x86_64-dlstreamer.yml 2>&1)
+  output=$(sudo -S ./image-composer-tool build image-templates/emt3/emt3-x86_64-dlstreamer.yml 2>&1)
   build_exit_code=$?
   set -e
   

@@ -2,6 +2,7 @@ package imageos
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -75,6 +76,68 @@ func (imageOs *ImageOs) GetInstallRoot() string {
 	return imageOs.installRoot
 }
 
+func (imageOs *ImageOs) InstallRootfs() (installRoot, versionInfo string, err error) {
+	installRoot = imageOs.installRoot
+	versionInfo = ""
+	log.Infof("Installing rootfs for image: %s", imageOs.template.GetImageName())
+
+	pkgType := imageOs.chrootEnv.GetTargetOsPkgType()
+	if pkgType == "deb" {
+		if err = imageOs.initRootfsForDeb(imageOs.installRoot); err != nil {
+			err = fmt.Errorf("failed to initialize rootfs for deb: %w", err)
+			return
+		}
+	}
+
+	if err = imageOs.mountSysfsToRootfs(imageOs.installRoot); err != nil {
+		return
+	}
+
+	defer func() {
+		if umountErr := imageOs.umountSysfsFromRootfs(imageOs.installRoot); umountErr != nil {
+			if err != nil {
+				err = fmt.Errorf("operation failed: %w, cleanup errors: %v", err, umountErr)
+			} else {
+				err = fmt.Errorf("failed to unmount sysfs from image rootfs: %w", umountErr)
+			}
+		}
+	}()
+
+	log.Infof("Image installation pre-processing...")
+	if err = preImageOsInstall(imageOs.installRoot, imageOs.template); err != nil {
+		err = fmt.Errorf("pre-install failed: %w", err)
+		return
+	}
+
+	log.Infof("Image package installation...")
+	if err = imageOs.installImagePkgs(imageOs.installRoot, imageOs.template); err != nil {
+		err = fmt.Errorf("failed to install image packages: %w", err)
+		return
+	}
+
+	log.Infof("Image system configuration...")
+	if err = updateRootfsConfig(imageOs.installRoot, imageOs.template); err != nil {
+		err = fmt.Errorf("failed to update image config: %w", err)
+		return
+	}
+
+	log.Infof("Image SBOM generation...")
+	versionInfo, err = imageOs.generateSBOM(imageOs.installRoot, imageOs.template)
+	if err != nil {
+		err = fmt.Errorf("generating SBOM failed: %w", err)
+		return
+	}
+
+	log.Infof("Image installation post-processing...")
+	versionInfo, err = imageOs.postImageOsInstall(imageOs.installRoot, imageOs.template)
+	if err != nil {
+		err = fmt.Errorf("post-install failed: %w", err)
+		return
+	}
+
+	return
+}
+
 func (imageOs *ImageOs) InstallInitrd() (installRoot, versionInfo string, err error) {
 	installRoot = imageOs.installRoot
 	versionInfo = ""
@@ -133,6 +196,7 @@ func (imageOs *ImageOs) InstallInitrd() (installRoot, versionInfo string, err er
 func (imageOs *ImageOs) InstallImageOs(diskPathIdMap map[string]string) (versionInfo string, err error) {
 	versionInfo = ""
 	var mountPointInfoList []map[string]string
+	var openedLuks []string
 	var mounted bool = false
 	log.Infof("Installing OS for image: %s", imageOs.template.GetImageName())
 
@@ -144,6 +208,13 @@ func (imageOs *ImageOs) InstallImageOs(diskPathIdMap map[string]string) (version
 				} else {
 					err = fmt.Errorf("failed to unmount disk from chroot: %w", umountErr)
 				}
+			}
+		}
+		// Close LUKS mappers after everything is unmounted so the backing loop
+		// device can later be detached without "device is busy".
+		for _, name := range openedLuks {
+			if closeErr := closeLuks(name); closeErr != nil {
+				log.Warnf("Failed to close LUKS mapper %s: %v", name, closeErr)
 			}
 		}
 	}()
@@ -187,6 +258,10 @@ func (imageOs *ImageOs) InstallImageOs(diskPathIdMap map[string]string) (version
 		// Don't fail the build if symlink fix fails, just warn as some distros may not need it
 		log.Warnf("Failed to fix kernel symlinks: %v (continuing anyway)", err)
 	}
+	if err = imageboot.EnsureDepmodForBootKernels(imageOs.installRoot); err != nil {
+		err = fmt.Errorf("failed to prepare kernel module dependencies: %w", err)
+		return
+	}
 
 	log.Infof("Image system configuration...")
 	if err = updateImageConfig(imageOs.installRoot, diskPathIdMap, imageOs.template); err != nil {
@@ -209,6 +284,17 @@ func (imageOs *ImageOs) InstallImageOs(diskPathIdMap map[string]string) (version
 
 	if err = imagesecure.ConfigImageSecurity(imageOs.installRoot, imageOs.template); err != nil {
 		err = fmt.Errorf("failed to configure image security: %w", err)
+		return
+	}
+
+	mountPointInfoList, openedLuks, err = imageOs.enablingFDE(imageOs.installRoot, diskPathIdMap, mountPointInfoList)
+	if err != nil {
+		err = fmt.Errorf("failed to enable FDE: %w", err)
+		return
+	}
+
+	if err = wireFDEBoot(imageOs.installRoot, diskPathIdMap, imageOs.template); err != nil {
+		err = fmt.Errorf("failed to wire FDE boot: %w", err)
 		return
 	}
 
@@ -235,6 +321,12 @@ func (imageOs *ImageOs) InstallImageOs(diskPathIdMap map[string]string) (version
 }
 
 func (imageOs *ImageOs) initRootfsForDeb(installRoot string) error {
+	if imageOs.template.Target.ImageType == "wsl2" {
+		if err := imageOs.prepareInstallRootForDebBootstrap(installRoot); err != nil {
+			return err
+		}
+	}
+
 	essentialPkgsList, err := imageOs.chrootEnv.GetChrootEnvEssentialPackageList()
 	if err != nil {
 		return fmt.Errorf("failed to get essential packages list: %w", err)
@@ -285,6 +377,32 @@ func (imageOs *ImageOs) initRootfsForDeb(installRoot string) error {
 	return nil
 }
 
+func (imageOs *ImageOs) prepareInstallRootForDebBootstrap(installRoot string) error {
+	installRoot = filepath.Clean(installRoot)
+	imageBuildDir := filepath.Clean(imageOs.chrootEnv.GetChrootImageBuildDir())
+	if installRoot == "" || installRoot == string(filepath.Separator) || installRoot == imageBuildDir {
+		return fmt.Errorf("refusing to reset invalid install root %s", installRoot)
+	}
+	isSubPath, err := file.IsSubPath(imageBuildDir, installRoot)
+	if err != nil {
+		return fmt.Errorf("failed to validate install root %s: %w", installRoot, err)
+	}
+	if !isSubPath {
+		return fmt.Errorf("install root %s is not under image build directory %s", installRoot, imageBuildDir)
+	}
+
+	if err := mount.UmountSubPath(installRoot); err != nil {
+		return fmt.Errorf("failed to unmount stale rootfs mount points: %w", err)
+	}
+	if _, err := shell.ExecCmd(fmt.Sprintf("rm -rf -- %q", installRoot), true, shell.HostPath, nil); err != nil {
+		return fmt.Errorf("failed to remove stale install root %s: %w", installRoot, err)
+	}
+	if _, err := shell.ExecCmd(fmt.Sprintf("mkdir -p -- %q", installRoot), true, shell.HostPath, nil); err != nil {
+		return fmt.Errorf("failed to recreate install root %s: %w", installRoot, err)
+	}
+	return nil
+}
+
 func (imageOs *ImageOs) mountSysfsToRootfs(installRoot string) error {
 	chrootInstallRoot, err := imageOs.chrootEnv.GetChrootEnvPath(installRoot)
 	if err != nil {
@@ -327,6 +445,9 @@ func mountDiskRootToChroot(installRoot string, diskPathIdMap map[string]string, 
 			if partition.ID == diskId {
 				if partition.MountPoint == "/" {
 					mountPoint := resolveInstallRootMountPoint(installRoot, partition.MountPoint)
+					if err := validateFsType(partition.FsType); err != nil {
+						return fmt.Errorf("refusing to mount root partition %s: %w", diskPath, err)
+					}
 					mountFlags := fmt.Sprintf("-t %s", partition.FsType)
 					if err := mount.MountPath(diskPath, mountPoint, mountFlags); err != nil {
 						log.Errorf("Failed to mount %s to %s: %v", diskPath, mountPoint, err)
@@ -339,6 +460,27 @@ func mountDiskRootToChroot(installRoot string, diskPathIdMap map[string]string, 
 	}
 	log.Errorf("No root partition found in diskPathIdMap")
 	return fmt.Errorf("no root partition found in diskPathIdMap")
+}
+
+// fsTypePattern constrains a partition filesystem type to a single safe token.
+// FsType comes from the image template (config.PartitionInfo.FsType) and is
+// interpolated into a "-t <fsType>" mountFlags string that mount.MountPath passes
+// unquoted into a bash -c command line. mount.MountPath's own allowlist has to
+// permit spaces (legitimate flag strings look like "-t ext4 -o nosuid"), so a
+// template fsType such as "ext4 -o loop=/dev/sda1" would slip through as an extra
+// mount option/argument. Constraining fsType to a single non-empty run of
+// [A-Za-z0-9._-] (which covers every real filesystem name: ext4, xfs, vfat,
+// btrfs, f2fs, linux-swap, ...) rejects the embedded space before it can inject
+// options — closing option/argument injection at the template boundary.
+var fsTypePattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// validateFsType rejects a filesystem type that is not a single safe token, so a
+// template cannot smuggle extra mount options through the "-t <fsType>" flag.
+func validateFsType(fsType string) error {
+	if !fsTypePattern.MatchString(fsType) {
+		return fmt.Errorf("invalid filesystem type %q: must be a single token matching [A-Za-z0-9._-]+", fsType)
+	}
+	return nil
 }
 
 func isSwapFsType(fsType string) bool {
@@ -390,6 +532,12 @@ func (imageOs *ImageOs) mountDiskToChroot(installRoot string, diskPathIdMap map[
 				fsType := partition.FsType
 				if fsType == "fat32" || fsType == "fat16" {
 					fsType = "vfat"
+				}
+				// Validate the (normalized) fsType is a single safe token before it is
+				// interpolated into the unquoted "-t <fsType>" mountFlags string, so a
+				// template cannot inject extra mount options via the filesystem type.
+				if err := validateFsType(fsType); err != nil {
+					return nil, fmt.Errorf("refusing to mount partition %s: %w", diskId, err)
 				}
 				if strings.TrimPrefix(strings.TrimSpace(partition.MountPoint), "/") == "boot/efi" {
 					mountPointInfo["Flags"] = fmt.Sprintf("-t %s -o umask=0077", fsType)
@@ -471,8 +619,15 @@ func getRpmPkgInstallList(template *config.ImageTemplate) []string {
 func getDebPkgInstallList(template *config.ImageTemplate) []string {
 	var head, middle, tail []string
 	var imagePkgList []string
-	// Exclude the template.EssentialPkgList as it is already installed by mmdebstrap
-	imagePkgList = append(imagePkgList, template.KernelPkgList...)
+	// Exclude the template.EssentialPkgList as it is already installed by mmdebstrap.
+	// Prefer the concrete kernel packages resolved at build time (persisted on the
+	// template so an installer ISO's separate process installs only that kernel); a
+	// glob would otherwise be re-expanded against apt and pull every matching kernel.
+	if len(template.ResolvedKernelPackages) > 0 {
+		imagePkgList = append(imagePkgList, template.ResolvedKernelPackages...)
+	} else {
+		imagePkgList = append(imagePkgList, template.KernelPkgList...)
+	}
 	imagePkgList = append(imagePkgList, template.SystemConfig.Packages...)
 	imagePkgList = append(imagePkgList, template.BootloaderPkgList...)
 
@@ -880,11 +1035,18 @@ func restoreInitramfsBinariesAfterDebInstall(installRoot string, backupPaths map
 }
 
 func updateInitrdConfig(installRoot string, template *config.ImageTemplate) error {
+	return updateRootfsConfig(installRoot, template)
+}
+
+func updateRootfsConfig(installRoot string, template *config.ImageTemplate) error {
 	if err := updateImageHostname(installRoot, template); err != nil {
 		return fmt.Errorf("failed to update image hostname: %w", err)
 	}
 	if err := addImageAdditionalFiles(installRoot, template); err != nil {
 		return fmt.Errorf("failed to add additional files to image: %w", err)
+	}
+	if err := configureFirstBootLastPartitionAutoExpand(installRoot, template); err != nil {
+		return fmt.Errorf("failed to configure first-boot partition auto-expand: %w", err)
 	}
 	if err := updateImageUsrGroup(installRoot, template); err != nil {
 		return fmt.Errorf("failed to update image user/group: %w", err)
@@ -910,6 +1072,9 @@ func updateImageConfig(installRoot string, diskPathIdMap map[string]string, temp
 	}
 	if err := addImageAdditionalFiles(installRoot, template); err != nil {
 		return fmt.Errorf("failed to add additional files to image: %w", err)
+	}
+	if err := configureFirstBootLastPartitionAutoExpand(installRoot, template); err != nil {
+		return fmt.Errorf("failed to configure first-boot partition auto-expand: %w", err)
 	}
 	if err := updateImageUsrGroup(installRoot, template); err != nil {
 		return fmt.Errorf("failed to update image user/group: %w", err)
@@ -1051,7 +1216,10 @@ func addImageAdditionalFiles(installRoot string, template *config.ImageTemplate)
 	}
 
 	for _, fileInfo := range additionalFiles {
-		srcFile := fileInfo.Local
+		srcFile, err := resolveAdditionalFileLocalPath(fileInfo.Local, template.PathList)
+		if err != nil {
+			return fmt.Errorf("failed to resolve additional file %s: %w", fileInfo.Local, err)
+		}
 		dstFile := filepath.Join(installRoot, fileInfo.Final)
 		if err := file.CopyFile(srcFile, dstFile, "-p", true); err != nil {
 			log.Errorf("Failed to copy additional file %s to image: %v", srcFile, err)
@@ -1061,6 +1229,74 @@ func addImageAdditionalFiles(installRoot string, template *config.ImageTemplate)
 	}
 	return nil
 }
+
+func configureFirstBootLastPartitionAutoExpand(installRoot string, template *config.ImageTemplate) error {
+	if template == nil {
+		return nil
+	}
+
+	disk := template.GetDiskConfig()
+	if !disk.ExtendLastPartitionToFillDisk {
+		return nil
+	}
+
+	if template.Target.ImageType != "raw" {
+		log.Infof("Skipping first-boot partition auto-expand configuration: imageType=%s", template.Target.ImageType)
+		return nil
+	}
+
+	configDir, err := config.ConfigDir()
+	if err != nil {
+		return fmt.Errorf("failed to get config dir: %w", err)
+	}
+	assetDir := filepath.Join(configDir, "osv", "common", "imageconfigs", "firstboot")
+
+	scriptSrc := filepath.Join(assetDir, "ict-auto-expand-last-partition.sh")
+	serviceSrc := filepath.Join(assetDir, "ict-auto-expand-last-partition.service")
+	if _, err := os.Stat(scriptSrc); err != nil {
+		return fmt.Errorf("first-boot auto-expand script asset is missing: %w", err)
+	}
+	if _, err := os.Stat(serviceSrc); err != nil {
+		return fmt.Errorf("first-boot auto-expand service asset is missing: %w", err)
+	}
+
+	scriptDst := filepath.Join(installRoot, "usr", "local", "sbin", "ict-auto-expand-last-partition.sh")
+	serviceDst := filepath.Join(installRoot, "etc", "systemd", "system", "ict-auto-expand-last-partition.service")
+	if err := file.CopyFile(scriptSrc, scriptDst, "-p", true); err != nil {
+		return fmt.Errorf("failed to copy first-boot partition auto-expand script: %w", err)
+	}
+	if err := file.CopyFile(serviceSrc, serviceDst, "-p", true); err != nil {
+		return fmt.Errorf("failed to copy first-boot partition auto-expand service: %w", err)
+	}
+
+	serviceName := "ict-auto-expand-last-partition.service"
+	if _, err := shell.ExecCmd("chmod 0755 "+scriptDst, true, shell.HostPath, nil); err != nil {
+		return fmt.Errorf("failed to set permissions for first-boot partition auto-expand script: %w", err)
+	}
+
+	enableCmd := "systemctl enable --root=\"" + installRoot + "\" " + serviceName
+	if _, err := shell.ExecCmd(enableCmd, true, shell.HostPath, nil); err != nil {
+		return fmt.Errorf("failed to enable first-boot partition auto-expand service: %w", err)
+	}
+
+	return nil
+}
+
+func resolveAdditionalFileLocalPath(localPath string, templatePaths []string) (string, error) {
+	if localPath == "" || filepath.IsAbs(localPath) {
+		return localPath, nil
+	}
+
+	for _, templatePath := range templatePaths {
+		candidatePath := filepath.Join(filepath.Dir(templatePath), localPath)
+		if _, err := os.Stat(candidatePath); err == nil {
+			return candidatePath, nil
+		}
+	}
+
+	return "", fmt.Errorf("relative path not found in template search paths")
+}
+
 func addImageConfigs(installRoot string, template *config.ImageTemplate) error {
 	customConfigs := template.GetConfigurationInfo()
 	if len(customConfigs) == 0 {
@@ -1106,6 +1342,16 @@ func updateImageFstab(installRoot string, diskPathIdMap map[string]string, templ
 				}
 				mountId := fmt.Sprintf("PARTUUID=%s", partUUID)
 				mountPoint := partition.MountPoint
+
+				// FDE-encrypted non-root partitions become LUKS containers, so
+				// their raw PARTUUID no longer resolves to a mountable filesystem.
+				// They are unlocked via /etc/crypttab into /dev/mapper/<id> at
+				// boot, so mount that mapper instead. The root volume is wired
+				// separately through the kernel command line.
+				if template.IsFDEEnabled() && template.IsFDEPartition(partition.ID) &&
+					mountPoint != rootfsMountPoint {
+					mountId = filepath.Join("/dev/mapper", partition.ID)
+				}
 
 				// Get the filesystem type
 				var fsType, options, pass string
@@ -1308,6 +1554,18 @@ func updateInitramfs(installRoot, kernelVersion string, template *config.ImageTe
 		cmdParts = append(cmdParts, "--add", "systemd-veritysetup")
 		cmdParts = append(cmdParts, "--add", "dm")
 		cmdParts = append(cmdParts, "--add", "crypt")
+	} else if template.IsFDEEnabled() {
+		// FDE needs the crypt/dm modules so the initramfs can unlock LUKS at boot.
+		cmdParts = append(cmdParts, "--add", "dm")
+		cmdParts = append(cmdParts, "--add", "crypt")
+	}
+
+	// For automatic (keyfile) unlock, embed crypttab and the shared keyfile into
+	// the initramfs so it can unlock the root volume without a prompt. dracut
+	// runs in-chroot, so these paths are relative to the image root.
+	if template.IsFDEAutoUnlock() {
+		cmdParts = append(cmdParts, "--install", "/etc/crypttab")
+		cmdParts = append(cmdParts, "--install", fdeKeyfilePath)
 	}
 
 	// Add cut utility for EMT images only
@@ -1790,6 +2048,14 @@ func verifyUserCreated(installRoot, username string) error {
 	return nil
 }
 
+// CreateUsers provisions the template's systemConfig.users into the image rooted
+// at installRoot, reusing the create-mode useradd/password/group/sudo/startupScript
+// logic. It is exported so the overlay build path can apply users onto a mounted
+// baseline root without duplicating this logic.
+func CreateUsers(installRoot string, template *config.ImageTemplate) error {
+	return createUser(installRoot, template)
+}
+
 func createUser(installRoot string, template *config.ImageTemplate) error {
 	// Check if there are any users to create
 	if len(template.SystemConfig.Users) == 0 {
@@ -1925,8 +2191,9 @@ func setUserPassword(installRoot string, user config.UserConfig) error {
 
 		// Check if password is already in hashed format (starts with $)
 		if strings.HasPrefix(user.Password, "$") {
-			// Password is already hashed, use usermod to set it directly
-			usermodCmd := fmt.Sprintf("usermod -p '%s' %s", user.Password, user.Name)
+			// Password is already hashed, use usermod to set it directly. The hash is
+			// template-supplied data, so quote it to keep shell metacharacters inert.
+			usermodCmd := fmt.Sprintf("usermod -p %s %s", shell.QuoteArg(user.Password), user.Name)
 			if _, err := shell.ExecCmd(usermodCmd, true, installRoot, nil); err != nil {
 				// log.Errorf("Failed to set hashed password for user %s: %v", user.Name, err)
 				// return fmt.Errorf("failed to set hashed password for user %s: %w", user.Name, err)
@@ -1940,7 +2207,7 @@ func setUserPassword(installRoot string, user config.UserConfig) error {
 				return fmt.Errorf("failed to hash password for user %s: %w", user.Name, err)
 			}
 
-			usermodCmd := fmt.Sprintf("usermod -p '%s' %s", hashedPassword, user.Name)
+			usermodCmd := fmt.Sprintf("usermod -p %s %s", shell.QuoteArg(hashedPassword), user.Name)
 			if _, err := shell.ExecCmd(usermodCmd, true, installRoot, nil); err != nil {
 				// log.Errorf("Failed to set hashed password for user %s: %v", user.Name, err)
 				// return fmt.Errorf("failed to set hashed password for user %s: %w", user.Name, err)
@@ -1966,27 +2233,31 @@ func setUserPassword(installRoot string, user config.UserConfig) error {
 // Helper function to hash password using specified algorithm
 func hashPassword(password, hashAlgo, installRoot string) (string, error) {
 	var cmd string
+	var env []string
 
 	switch strings.ToLower(hashAlgo) {
 	case "sha512":
 		// Use openssl to generate SHA-512 hash
-		cmd = fmt.Sprintf("openssl passwd -6 '%s'", password)
+		cmd = fmt.Sprintf("openssl passwd -6 %s", shell.QuoteArg(password))
 	case "sha256":
 		// Use openssl to generate SHA-256 hash
-		cmd = fmt.Sprintf("openssl passwd -5 '%s'", password)
+		cmd = fmt.Sprintf("openssl passwd -5 %s", shell.QuoteArg(password))
 	case "md5":
 		// Use openssl to generate MD5 hash (not recommended for production)
-		cmd = fmt.Sprintf("openssl passwd -1 '%s'", password)
+		cmd = fmt.Sprintf("openssl passwd -1 %s", shell.QuoteArg(password))
 	case "bcrypt":
-		// Use python3 to generate bcrypt hash
-		pythonScript := fmt.Sprintf("import bcrypt; print(bcrypt.hashpw(b'%s', bcrypt.gensalt()).decode())", password)
-		cmd = fmt.Sprintf("python3 -c \"%s\"", pythonScript)
+		// Pass the password through the environment rather than interpolating it
+		// into the Python source, so quotes or shell metacharacters in the password
+		// cannot break out of the string literal and inject commands.
+		env = []string{"ICT_HASH_PASSWORD=" + shell.QuoteArg(password)}
+		pythonScript := "import bcrypt, os; print(bcrypt.hashpw(os.environ['ICT_HASH_PASSWORD'].encode(), bcrypt.gensalt()).decode())"
+		cmd = fmt.Sprintf("python3 -c %s", shell.QuoteArg(pythonScript))
 	default:
 		return "", fmt.Errorf("unsupported hash algorithm: %s", hashAlgo)
 	}
 
 	log.Debugf("Hashing password with algorithm %s", hashAlgo)
-	output, err := shell.ExecCmd(cmd, true, installRoot, nil)
+	output, err := shell.ExecCmd(cmd, true, installRoot, env)
 	if err != nil {
 		// log.Errorf("Failed to hash password with algorithm %s: %v", hashAlgo, err)
 		log.Errorf("Failed to hash password with algorithm %s", hashAlgo)
@@ -1999,32 +2270,96 @@ func hashPassword(password, hashAlgo, installRoot string) (string, error) {
 	return hashedPassword, nil
 }
 
-func configUserStartupScript(installRoot string, user config.UserConfig) error {
+func configUserStartupScript(installRoot string, user config.UserConfig) (err error) {
 	log.Infof("Configuring user '%s' startup script to: %s", user.Name, user.StartupScript)
 
-	// Escape user.Name and user.StartupScript for regex safety
-	escapedUserName := regexp.QuoteMeta(user.Name)
-	escapedStartupScript := regexp.QuoteMeta(user.StartupScript)
-	startupScriptHostPath := filepath.Join(installRoot, user.StartupScript)
+	// Reject a relative/non-canonical path, or one carrying the /etc/passwd field
+	// delimiter or a control character, up front (clear error; also keeps the passwd
+	// line well-formed). This mirrors config.validateUsers; confinement itself is
+	// enforced below by resolving through the image root.
+	if !filepath.IsAbs(user.StartupScript) || filepath.Clean(user.StartupScript) != user.StartupScript ||
+		strings.ContainsRune(user.StartupScript, ':') || strings.ContainsAny(user.StartupScript, "\x00\n\r") {
+		return fmt.Errorf("invalid startup script for user %s: must be a clean absolute in-image path "+
+			"with no ':' or control characters", user.Name)
+	}
 
-	// Verify that the startup script exists in the image
-	if _, err := os.Stat(startupScriptHostPath); os.IsNotExist(err) {
-		log.Errorf("Startup script %s does not exist in image for user %s", user.StartupScript, user.Name)
+	// Open the image root ONCE and do every subsequent lookup relative to that
+	// retained directory descriptor. os.Root resolves each component with openat
+	// under the root, so neither the existence check nor the passwd write can be
+	// redirected outside installRoot — and, unlike resolving to a path string and
+	// reopening it, there is no window in which a concurrent process (e.g. one left
+	// running by a package maintainer script) can swap a component for a
+	// host-pointing symlink between the check and the write.
+	root, err := os.OpenRoot(installRoot)
+	if err != nil {
+		return fmt.Errorf("opening image root %s: %w", installRoot, err)
+	}
+	defer func() {
+		if cerr := root.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("closing image root %s: %w", installRoot, cerr)
+		}
+	}()
+
+	// os.Root names are relative to the root, so drop the leading separator.
+	if _, serr := root.Stat(strings.TrimPrefix(user.StartupScript, "/")); serr != nil {
+		log.Errorf("Startup script does not resolve to a file in image for user %s", user.Name)
 		return fmt.Errorf("startup script %s does not exist in image for user %s", user.StartupScript, user.Name)
 	}
 
-	findPattern := fmt.Sprintf(`^(%s.*):[^:]*$`, escapedUserName)
-	replacePattern := fmt.Sprintf(`\1:%s`, escapedStartupScript)
-	passwdFile := filepath.Join(installRoot, "etc", "passwd")
-
-	if err := file.ReplaceRegexInFile(findPattern, replacePattern, passwdFile); err != nil {
-		// log.Errorf("Failed to update user %s startup command: %v", user.Name, err)
-		// Log only high-level context to avoid leaking potentially sensitive details from the underlying error.
+	// Edit passwd through that same confined handle as structured text: read,
+	// replace the login-shell (7th) field of the exact account in Go, write back.
+	// The value never reaches a shell or sed, so metacharacters stay inert.
+	f, err := root.OpenFile("etc/passwd", os.O_RDWR, 0)
+	if err != nil {
+		log.Errorf("Failed to open passwd file while updating startup command for user %s", user.Name)
+		return fmt.Errorf("opening /etc/passwd under image root: %w", err)
+	}
+	defer func() {
+		if cerr := f.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("closing /etc/passwd: %w", cerr)
+		}
+	}()
+	content, err := io.ReadAll(f)
+	if err != nil {
+		return fmt.Errorf("reading /etc/passwd: %w", err)
+	}
+	updated, err := replacePasswdShell(string(content), user.Name, user.StartupScript)
+	if err != nil {
 		log.Errorf("Failed to update startup command for user %s", user.Name)
 		return fmt.Errorf("failed to update user %s startup command: %w", user.Name, err)
 	}
+	if err = f.Truncate(0); err != nil {
+		return fmt.Errorf("truncating /etc/passwd: %w", err)
+	}
+	if _, err = f.WriteAt([]byte(updated), 0); err != nil {
+		return fmt.Errorf("writing /etc/passwd: %w", err)
+	}
 	return nil
 }
+
+// replacePasswdShell returns the /etc/passwd content with the login-shell (7th)
+// field of the named user's entry set to shellPath. It matches the account name
+// exactly (not as a line prefix, as the previous sed did) and leaves every other
+// line byte-for-byte unchanged, returning an error if no entry matches so a silent
+// no-op cannot be mistaken for success.
+func replacePasswdShell(content, name, shellPath string) (string, error) {
+	lines := strings.Split(content, "\n")
+	found := false
+	for i, line := range lines {
+		fields := strings.Split(line, ":")
+		if len(fields) != 7 || fields[0] != name {
+			continue
+		}
+		fields[6] = shellPath
+		lines[i] = strings.Join(fields, ":")
+		found = true
+	}
+	if !found {
+		return "", fmt.Errorf("no /etc/passwd entry for user %q", name)
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
 func (imageOs *ImageOs) generateSBOM(installRoot string, template *config.ImageTemplate) (string, error) {
 	pkgType := imageOs.chrootEnv.GetTargetOsPkgType()
 	sBomFNm := rpmutils.GenerateSPDXFileName(template.GetImageName())
@@ -2043,6 +2378,12 @@ func (imageOs *ImageOs) generateSBOM(installRoot string, template *config.ImageT
 
 	installRootPkgs := strings.Split(strings.TrimSpace(result), "\n")
 	downloadedPkgs := template.FullPkgListBom
+	if len(downloadedPkgs) == 0 {
+		// live-installer loads template-dump.yaml where FullPkgListBom is not serialized.
+		// Fallback to installed package metadata only in this case; RAW flow remains unchanged.
+		log.Warnf("SBOM metadata list is empty; falling back to installed package metadata")
+		downloadedPkgs = imageOs.installedPackageNamesAsSBOMMetadata(installRootPkgs, pkgType)
+	}
 
 	// Create a map of normalized package names from installed packages for faster lookup
 	installedPkgMap := make(map[string]bool)
@@ -2086,6 +2427,30 @@ func (imageOs *ImageOs) generateSBOM(installRoot string, template *config.ImageT
 	}
 
 	return result, nil
+}
+
+func (imageOs *ImageOs) installedPackageNamesAsSBOMMetadata(installedPkgs []string, pkgType string) []ospackage.PackageInfo {
+	pkgs := make([]ospackage.PackageInfo, 0, len(installedPkgs))
+	for _, pkg := range installedPkgs {
+		name := strings.TrimSpace(pkg)
+		if name == "" {
+			continue
+		}
+
+		if colonIndex := strings.Index(name, ":"); colonIndex != -1 {
+			name = name[:colonIndex]
+		}
+
+		pkgs = append(pkgs, ospackage.PackageInfo{
+			Name:    name,
+			Type:    pkgType,
+			URL:     "NOASSERTION",
+			License: "NOASSERTION",
+			Origin:  "NOASSERTION",
+		})
+	}
+
+	return pkgs
 }
 
 // isSymlink checks if a given path is a symbolic link

@@ -31,6 +31,15 @@ const (
 
 var DefaultSPDXFile = "spdx_manifest.json"
 
+// validSPDXAlgos is the set of checksum algorithms the SPDX spec permits. It is
+// package-scoped so it is initialized once rather than reallocated on every
+// buildSPDXPackage call (which runs once per package in an SBOM).
+var validSPDXAlgos = map[string]bool{
+	"SHA1":   true,
+	"SHA256": true,
+	"MD5":    true,
+}
+
 // SoftwarePackageManifest represents the structure of the manifest file.
 type SoftwarePackageManifest struct {
 	SchemaVersion     string `json:"schema_version"`
@@ -47,13 +56,24 @@ type SoftwarePackageManifest struct {
 
 // Holds the SPDX Document header information
 type SPDXDocument struct {
-	SPDXVersion       string        `json:"spdxVersion"`
-	DataLicense       string        `json:"dataLicense"`
-	SPDXID            string        `json:"SPDXID"`
-	DocumentName      string        `json:"name"`
-	DocumentNamespace string        `json:"documentNamespace"`
-	CreationInfo      CreationInfo  `json:"creationInfo"`
-	Packages          []SPDXPackage `json:"packages"`
+	SPDXVersion       string             `json:"spdxVersion"`
+	DataLicense       string             `json:"dataLicense"`
+	SPDXID            string             `json:"SPDXID"`
+	DocumentName      string             `json:"name"`
+	DocumentNamespace string             `json:"documentNamespace"`
+	CreationInfo      CreationInfo       `json:"creationInfo"`
+	Packages          []SPDXPackage      `json:"packages"`
+	Relationships     []SPDXRelationship `json:"relationships,omitempty"`
+}
+
+// SPDXRelationship links two SPDX elements. The SBOM emits one DESCRIBES
+// relationship from the document to each package so the file is spec-conformant:
+// SPDX 2.x requires the document to describe at least one element, and strict
+// validators reject a document that carries packages but no relationships.
+type SPDXRelationship struct {
+	SPDXElementID      string `json:"spdxElementId"`
+	RelationshipType   string `json:"relationshipType"`
+	RelatedSPDXElement string `json:"relatedSpdxElement"`
 }
 
 // Time stamp and creation information
@@ -124,13 +144,6 @@ func WriteSPDXToFile(pkgs []ospackage.PackageInfo, outFile string) error {
 
 	log.Infof("Generating SPDX manifest for %d packages", len(pkgs))
 
-	// SPDX allows only specific checksum algorithms: SHA1, SHA256, MD5
-	validSPDXAlgos := map[string]bool{
-		"SHA1":   true,
-		"SHA256": true,
-		"MD5":    true,
-	}
-
 	spdx := SPDXDocument{
 		SPDXVersion:       SPDXVersion,
 		DataLicense:       SPDXDataLicense,
@@ -148,42 +161,377 @@ func WriteSPDXToFile(pkgs []ospackage.PackageInfo, outFile string) error {
 	}
 
 	for _, pkg := range pkgs {
-		spdxPkg := SPDXPackage{
-			SPDXID:           fmt.Sprintf("SPDXRef-Package-%s", pkg.Name),
-			Name:             pkg.Name,
-			Type:             pkg.Type,
-			VersionInfo:      pkg.Version,
-			DownloadLocation: pkg.URL,
-			FilesAnalyzed:    false,
-			LicenseDeclared:  fallbackToDefault(pkg.License, "NOASSERTION"),
-			LicenseConcluded: "NOASSERTION",
-			Description:      pkg.Description,
+		spdx.Packages = append(spdx.Packages, buildSPDXPackage(pkg))
+	}
+
+	return writeSPDXDocument(spdx, outFile)
+}
+
+// WriteMergedSPDXToFile writes an SPDX manifest that is the UNION of an existing
+// baseline SBOM document and a set of overlay-contributed packages. It is used by
+// overlay mode: the overlay image inherits the baseline's full SBOM, and this
+// merges the added/upgraded packages into it so the embedded manifest reflects the
+// complete inventory (baseline + overlay), not just the overlay delta.
+//
+// Packages are matched by name: an overlay package whose name maps to exactly one
+// baseline entry REPLACES that entry in place (an upgrade), and a name absent from
+// the baseline is appended (an addition). The baseline document's header (creation
+// info, namespace) is preserved so the image's SBOM lineage is unchanged; only the
+// package set grows.
+//
+// A baseline name may legitimately carry MORE than one entry (e.g. multiarch
+// installs like libc6:amd64 + libc6:i386, or several download locations for one
+// name). In that ambiguous N>1 case there is no unique baseline entry to upgrade,
+// so the overlay package is appended as a new entry rather than arbitrarily
+// replacing one of them (which would silently drop a baseline entry and produce a
+// misleading inventory).
+func WriteMergedSPDXToFile(baselineSPDX []byte, overlayPkgs []ospackage.PackageInfo, removedNames []string, outFile string) error {
+	var doc SPDXDocument
+	if err := json.Unmarshal(baselineSPDX, &doc); err != nil {
+		return fmt.Errorf("failed to parse baseline SBOM for merge: %w", err)
+	}
+	// JSON that unmarshals is not necessarily SPDX: a CycloneDX document, "{}", or
+	// any unrelated object decodes into an all-zero SPDXDocument without error.
+	// Merging into that would emit a ".complete.spdx.json" containing only the
+	// overlay packages (a bogus "full inventory"), so reject a base that is not
+	// recognizably an SPDX package inventory and let the caller run its documented
+	// external -> inherited -> delta-only fallback instead.
+	if err := validateSPDXBase(doc); err != nil {
+		return fmt.Errorf("baseline SBOM is not a usable SPDX document: %w", err)
+	}
+
+	// Drop packages the overlay removed (conflict-driven removal) so the merged
+	// document reflects the FINAL image inventory rather than the pre-removal
+	// baseline. Without this a purged baseline package (e.g. initramfs-tools,
+	// removed so dracut can install) would still appear in the complete SBOM and
+	// the in-image manifest, and an SPDX comparison would miss the removal.
+	if len(removedNames) > 0 {
+		removed := make(map[string]bool, len(removedNames))
+		for _, n := range removedNames {
+			removed[strings.TrimSpace(n)] = true
 		}
+		kept := doc.Packages[:0]
+		removedCount := 0
+		for _, pkg := range doc.Packages {
+			if removed[pkg.Name] {
+				removedCount++
+				continue
+			}
+			kept = append(kept, pkg)
+		}
+		doc.Packages = kept
+		if removedCount > 0 {
+			log.Infof("Merged overlay SBOM: dropped %d removed package(s) from the base inventory", removedCount)
+		}
+	}
 
-		// If the supplier is not specified, use a default value, for
-		// anything that appears as an email, use the Person form otherwise
-		// use the Organization form
-		spdxPkg.Supplier = spdxSupplier(pkg.Origin)
+	// Group baseline entries by name (as slices) so a name with multiple entries
+	// is detected instead of the last one silently overwriting the earlier ones.
+	indexesByName := make(map[string][]int, len(doc.Packages))
+	for i, pkg := range doc.Packages {
+		indexesByName[pkg.Name] = append(indexesByName[pkg.Name], i)
+	}
 
-		// If the checksum is not specified or missing, leave field out
-		// Valid values according to SPDX spec: SHA1, SHA256, MD5
-		var spdxChecksums []SPDXChecksum
-		for _, c := range pkg.Checksums {
-			algo := strings.ToUpper(c.Algorithm)
-			if validSPDXAlgos[algo] {
-				spdxChecksums = append(spdxChecksums, SPDXChecksum{
-					Algorithm:     algo,
-					ChecksumValue: c.Value,
-				})
+	added, upgraded := 0, 0
+	for _, pkg := range overlayPkgs {
+		merged := buildSPDXPackage(pkg)
+		// Only a single unambiguous baseline entry for this name is upgraded in
+		// place; a missing name or an ambiguous multi-entry name is appended.
+		if idxs := indexesByName[pkg.Name]; len(idxs) == 1 {
+			doc.Packages[idxs[0]] = merged // upgrade in place
+			upgraded++
+			continue
+		}
+		indexesByName[pkg.Name] = append(indexesByName[pkg.Name], len(doc.Packages))
+		doc.Packages = append(doc.Packages, merged)
+		added++
+	}
+
+	log.Infof("Merged overlay SBOM into baseline: %d added, %d upgraded, %d total packages",
+		added, upgraded, len(doc.Packages))
+
+	return writeSPDXDocument(doc, outFile)
+}
+
+// validateSPDXBase reports whether a decoded document is a usable SPDX base to
+// merge overlay packages into. JSON from an unrelated schema (CycloneDX, "{}", a
+// bare array) decodes into an all-zero SPDXDocument without a decode error, so a
+// structural check is the only way to tell "valid but header-light SPDX" (which we
+// normalize) from "not SPDX at all" (which must trigger the caller's fallback).
+//
+// A base is accepted only when it is recognizably SPDX AND carries a usable package
+// inventory:
+//   - a declared spdxVersion, when present, must be a CONCRETE published SPDX 2.x
+//     version (see supportedSPDX2Versions); AND
+//   - it must carry a non-empty package inventory in which EVERY entry has a name.
+//
+// The version check requires an exact known version rather than an "SPDX-2." prefix:
+// a prefix match accepts malformed values like "SPDX-2.bad" or "SPDX-2.999", which
+// normalizeSPDXHeader would then preserve, emitting a "complete" document that
+// advertises an invalid spdxVersion. The package-name check runs REGARDLESS of the
+// version header and requires ALL entries to be named (not merely one), because an
+// SPDX package name is mandatory — a base carrying one valid package plus any
+// nameless record would otherwise be accepted and the nameless record emitted in the
+// complete SBOM. Any violation (a CycloneDX "components" doc, an empty object, a
+// malformed/unsupported version, or a doc with even one nameless package) triggers
+// the caller's documented external -> inherited -> delta-only fallback.
+func validateSPDXBase(doc SPDXDocument) error {
+	if ver := strings.TrimSpace(doc.SPDXVersion); ver != "" && !supportedSPDX2Versions[ver] {
+		return fmt.Errorf("unsupported spdxVersion %q (expected a concrete SPDX 2.x version)", ver)
+	}
+	if len(doc.Packages) == 0 {
+		return fmt.Errorf("no package entries")
+	}
+	for i, p := range doc.Packages {
+		if strings.TrimSpace(p.Name) == "" {
+			return fmt.Errorf("package entry %d has no name (SPDX requires every package to be named)", i)
+		}
+	}
+	return nil
+}
+
+// supportedSPDX2Versions is the set of published SPDX 2.x document-version strings a
+// base SBOM may declare. The tool emits SPDXVersion ("SPDX-2.3"); a base at any
+// earlier 2.x is still mergeable since the 2.x package schema is compatible. A value
+// outside this set (including a malformed "SPDX-2.bad") is rejected so the emitted
+// complete document never advertises an invalid spdxVersion.
+var supportedSPDX2Versions = map[string]bool{
+	"SPDX-2.0":   true,
+	"SPDX-2.1":   true,
+	"SPDX-2.2":   true,
+	"SPDX-2.2.1": true,
+	"SPDX-2.2.2": true,
+	"SPDX-2.3":   true,
+}
+
+// buildSPDXPackage converts a PackageInfo into its SPDX package record, applying
+// the supplier/checksum/license normalization the SPDX schema requires. It is the
+// shared per-package conversion used by both a from-scratch write and a merge.
+func buildSPDXPackage(pkg ospackage.PackageInfo) SPDXPackage {
+	spdxPkg := SPDXPackage{
+		SPDXID:           fmt.Sprintf("SPDXRef-Package-%s", sanitizeSPDXID(pkg.Name)),
+		Name:             pkg.Name,
+		Type:             pkg.Type,
+		VersionInfo:      pkg.Version,
+		DownloadLocation: pkg.URL,
+		FilesAnalyzed:    false,
+		LicenseDeclared:  fallbackToDefault(pkg.License, "NOASSERTION"),
+		LicenseConcluded: "NOASSERTION",
+		Description:      pkg.Description,
+	}
+
+	// If the supplier is not specified, use a default value, for
+	// anything that appears as an email, use the Person form otherwise
+	// use the Organization form
+	spdxPkg.Supplier = spdxSupplier(pkg.Origin)
+
+	// If the checksum is not specified or missing, leave field out
+	// Valid values according to SPDX spec: SHA1, SHA256, MD5
+	var spdxChecksums []SPDXChecksum
+	for _, c := range pkg.Checksums {
+		algo := strings.ToUpper(c.Algorithm)
+		if validSPDXAlgos[algo] {
+			spdxChecksums = append(spdxChecksums, SPDXChecksum{
+				Algorithm:     algo,
+				ChecksumValue: c.Value,
+			})
+		}
+	}
+
+	if len(spdxChecksums) > 0 {
+		spdxPkg.Checksum = spdxChecksums
+	}
+
+	return spdxPkg
+}
+
+// sanitizeSPDXID maps a package name to the SPDX element-ID grammar, which
+// permits only letters, digits, ".", and "-". Any other character (notably the
+// "+" in names like "libstdc++6" or "g++") is replaced with "-" so the emitted
+// SPDXRef-Package-<id> is spec-valid and strict SPDX validators do not reject
+// the whole document.
+func sanitizeSPDXID(name string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			return r
+		case r == '.' || r == '-':
+			return r
+		default:
+			return '-'
+		}
+	}, name)
+}
+
+// sanitizeSPDXIDs re-maps every package SPDXID in the document into the SPDX
+// element-ID grammar. buildSPDXPackage already sanitizes IDs for packages it
+// creates (new/overlay), but a baseline document loaded via WriteMergedSPDXToFile
+// carries whatever IDs it was written with — older versions of this tool built
+// SPDXRef-Package-<pkg.Name> from the raw name, so a baseline can still hold
+// invalid characters (e.g. "SPDXRef-Package-libstdc++6"). Running the whole ID
+// through the grammar fixes those in place; it is idempotent for already-valid
+// IDs (the "SPDXRef-Package-" prefix is all valid characters) and runs before
+// dedupeSPDXIDs so any collisions the re-mapping introduces are disambiguated.
+//
+// A base package that carries NO SPDXID (a header-light or hand-authored base)
+// would otherwise leave an empty element ID, which then surfaces as an invalid
+// `relatedSpdxElement: ""` in the generated DESCRIBES relationships. Such an entry
+// is given a synthesized "SPDXRef-Package-<name>" ID (or an index-based fallback
+// when the name is also empty), so every package ends with a stable, non-empty,
+// spec-valid ID before dedupeSPDXIDs enforces uniqueness.
+func sanitizeSPDXIDs(pkgs []SPDXPackage) {
+	for i := range pkgs {
+		id := strings.TrimSpace(pkgs[i].SPDXID)
+		if id == "" {
+			if name := strings.TrimSpace(pkgs[i].Name); name != "" {
+				id = "SPDXRef-Package-" + name
+			} else {
+				id = fmt.Sprintf("SPDXRef-Package-%d", i)
 			}
 		}
-
-		if len(spdxChecksums) > 0 {
-			spdxPkg.Checksum = spdxChecksums
-		}
-
-		spdx.Packages = append(spdx.Packages, spdxPkg)
+		pkgs[i].SPDXID = sanitizeSPDXID(id)
 	}
+}
+
+// dedupeSPDXIDs guarantees every package SPDXID in the document is unique. Two
+// distinct packages can otherwise collide on the same ID — a name with a
+// sanitized character (e.g. "g-3" from both "g+3" and "g_3"), or an overlay
+// package appended beside a same-named baseline entry — which is invalid SPDX
+// (an element ID must identify exactly one element). On a collision the later
+// entry is suffixed with "-2", "-3", …; the suffix is only digits and a hyphen
+// (both valid SPDX ID characters) and is probed against the seen set so it cannot
+// itself land on an already-taken id (e.g. a baseline that already carries a
+// "-2"-suffixed entry).
+func dedupeSPDXIDs(pkgs []SPDXPackage) {
+	seen := make(map[string]int, len(pkgs))
+	for i := range pkgs {
+		id := pkgs[i].SPDXID
+		if _, taken := seen[id]; !taken {
+			seen[id] = 1
+			continue
+		}
+		// Find the next free "<id>-<n>" starting from the running count.
+		n := seen[id] + 1
+		candidate := fmt.Sprintf("%s-%d", id, n)
+		for _, exists := seen[candidate]; exists; _, exists = seen[candidate] {
+			n++
+			candidate = fmt.Sprintf("%s-%d", id, n)
+		}
+		seen[id] = n
+		seen[candidate] = 1
+		pkgs[i].SPDXID = candidate
+	}
+}
+
+// describesRelationships returns one DESCRIBES relationship from the document's
+// root SPDXID to every package, in package order. This is what makes the SBOM
+// spec-conformant: SPDX 2.x requires the document to describe at least one
+// element, and the choke point that calls this runs after dedupeSPDXIDs, so each
+// RelatedSPDXElement references a final, unique package ID. Returns nil for a
+// package-less document so the omitempty field is dropped rather than emitting an
+// empty array.
+func describesRelationships(spdx SPDXDocument) []SPDXRelationship {
+	if len(spdx.Packages) == 0 {
+		return nil
+	}
+	rels := make([]SPDXRelationship, 0, len(spdx.Packages))
+	for _, pkg := range spdx.Packages {
+		rels = append(rels, SPDXRelationship{
+			SPDXElementID:      spdx.SPDXID,
+			RelationshipType:   "DESCRIBES",
+			RelatedSPDXElement: pkg.SPDXID,
+		})
+	}
+	return rels
+}
+
+// normalizeSPDXHeader fills any required SPDX 2.3 document-header field that is
+// empty with its spec-valid default, so a document merged from a header-light
+// base SBOM (one carrying only a `packages` array, with no spdxVersion,
+// dataLicense, SPDXID, namespace, or creationInfo) is still a valid SPDX 2.3
+// document rather than one that merely claims to be. It only fills empties, so it
+// is a no-op for a from-scratch document (WriteSPDXToFile already sets every
+// field) and preserves a real base document's own header/lineage untouched.
+func normalizeSPDXHeader(spdx *SPDXDocument) {
+	if strings.TrimSpace(spdx.SPDXVersion) == "" {
+		spdx.SPDXVersion = SPDXVersion
+	}
+	if strings.TrimSpace(spdx.DataLicense) == "" {
+		spdx.DataLicense = SPDXDataLicense
+	}
+	if strings.TrimSpace(spdx.SPDXID) == "" {
+		spdx.SPDXID = SPDXDocumentID
+	}
+	if strings.TrimSpace(spdx.DocumentName) == "" {
+		spdx.DocumentName = fmt.Sprintf("%s-%s", version.Toolname, time.Now().UTC().Format("20060102T150405Z"))
+	}
+	if strings.TrimSpace(spdx.DocumentNamespace) == "" {
+		spdx.DocumentNamespace = generateDocumentNamespace()
+	}
+	if strings.TrimSpace(spdx.CreationInfo.Created) == "" {
+		spdx.CreationInfo.Created = time.Now().UTC().Format("2006-01-02T15:04:05Z")
+	}
+	if len(spdx.CreationInfo.Creators) == 0 {
+		spdx.CreationInfo.Creators = []string{
+			fmt.Sprintf("Tool: %s %s", version.Toolname, version.Version),
+			fmt.Sprintf("Organization: %s", version.Organization),
+		}
+	}
+}
+
+// normalizeSPDXPackages fills the SPDX-required per-package fields that a merged-in
+// base document may have left empty, so the emitted document validates as SPDX 2.3.
+// The SPDX spec requires each package to carry a downloadLocation and license
+// fields; a base SBOM (or a hand-authored fixture) supplying only name/version would
+// otherwise emit empty strings there. Empty values are filled with NOASSERTION (the
+// spec's sentinel for "no assertion made"); SPDXID is normalized separately by
+// sanitizeSPDXIDs. It only fills empties, so a freshly built package (buildSPDXPackage
+// already sets these) is left untouched.
+func normalizeSPDXPackages(pkgs []SPDXPackage) {
+	for i := range pkgs {
+		if strings.TrimSpace(pkgs[i].DownloadLocation) == "" {
+			pkgs[i].DownloadLocation = "NOASSERTION"
+		}
+		if strings.TrimSpace(pkgs[i].LicenseConcluded) == "" {
+			pkgs[i].LicenseConcluded = "NOASSERTION"
+		}
+		if strings.TrimSpace(pkgs[i].LicenseDeclared) == "" {
+			pkgs[i].LicenseDeclared = "NOASSERTION"
+		}
+	}
+}
+
+// writeSPDXDocument marshals an SPDX document and writes it with symlink
+// protection, creating the parent directory as needed.
+func writeSPDXDocument(spdx SPDXDocument, outFile string) error {
+	// Backfill any missing required document-header field before writing, so a
+	// document merged from a header-light base SBOM is emitted as valid SPDX 2.3
+	// rather than with an empty spdxVersion/dataLicense/SPDXID/namespace/creationInfo.
+	normalizeSPDXHeader(&spdx)
+
+	// Backfill required per-package fields before writing. A base SBOM merged in may
+	// carry package records that omit fields the SPDX spec requires (e.g. an
+	// integration fixture supplying only name/version), which would make the emitted
+	// document fail strict SPDX validation despite being labeled SPDX 2.3. Fill each
+	// empty required field with NOASSERTION (the spec's "no assertion" sentinel);
+	// SPDXID is handled separately by sanitizeSPDXIDs below. This only fills empties,
+	// so freshly built packages (buildSPDXPackage already sets these) are unchanged.
+	normalizeSPDXPackages(spdx.Packages)
+
+	// Normalize every SPDXID into the element-ID grammar first, so a baseline
+	// document merged in with legacy raw-name IDs (e.g. "libstdc++6") is corrected
+	// alongside the freshly built overlay entries, then enforce uniqueness across
+	// the final package set at this single write choke point so both from-scratch
+	// and merge writers are covered.
+	sanitizeSPDXIDs(spdx.Packages)
+	dedupeSPDXIDs(spdx.Packages)
+
+	// Emit the mandatory document->package DESCRIBES relationships AFTER dedupe so
+	// they reference the final, unique package IDs. Building them at this single
+	// choke point covers both the from-scratch and merge writers; a baseline
+	// document's own relationships (if any) are replaced with a set regenerated
+	// from the merged package list so no relationship dangles to a renamed ID.
+	spdx.Relationships = describesRelationships(spdx)
 
 	if err := os.MkdirAll(filepath.Dir(outFile), 0700); err != nil {
 		log.Errorf("Failed to create SPDX output directory: %v", err)

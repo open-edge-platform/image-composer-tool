@@ -337,11 +337,17 @@ func (d *DiskfsInspector) Inspect(imagePath string) (*ImageSummary, error) {
 	}
 	defer disk.Close()
 
-	// Use original path in the summary, not the temporary converted path
-	return d.inspectCore(img, disk, disk.LogicalBlocksize, imagePath, fi.Size(), sha)
+	// Use original path in the summary, not the temporary converted path.
+	// actualImagePath is the RAW file on disk (== imagePath unless we converted
+	// a non-raw format above); the loop-device SBOM reader needs the real raw
+	// path to attach, so pass it separately from the display path.
+	return d.inspectCore(img, disk, disk.LogicalBlocksize, imagePath, actualImagePath, fi.Size(), sha)
 }
 
 // inspectCoreNoHash is a helper that calls inspectCore without SHA256 computation.
+// It passes an empty rawImagePath so the loop-device SBOM strategy is skipped:
+// callers driving inspectCore directly (e.g. tests over an in-memory disk) have
+// no real raw file to attach.
 func (d *DiskfsInspector) inspectCoreNoHash(
 	img io.ReaderAt,
 	disk diskAccessorFS,
@@ -349,15 +355,22 @@ func (d *DiskfsInspector) inspectCoreNoHash(
 	imagePath string,
 	sizeBytes int64,
 ) (*ImageSummary, error) {
-	return d.inspectCore(img, disk, logicalBlockSize, imagePath, sizeBytes, "")
+	return d.inspectCore(img, disk, logicalBlockSize, imagePath, "", sizeBytes, "")
 }
 
 // inspectCore performs the core inspection logic given a disk accessor.
+//
+// rawImagePath is the RAW file on disk backing this inspection (after any format
+// conversion), passed in rather than stored so the inspector stays stateless and
+// safe to reuse. It is consumed by the loop-device SBOM reader, which must attach
+// the real raw file; an empty value (as passed by inspectCoreNoHash) skips that
+// strategy for callers with no real raw file, e.g. tests over an in-memory disk.
 func (d *DiskfsInspector) inspectCore(
 	img io.ReaderAt,
 	disk diskAccessorFS,
 	logicalBlockSize int64,
 	imagePath string,
+	rawImagePath string,
 	sizeBytes int64,
 	sha256sum string,
 ) (*ImageSummary, error) {
@@ -384,16 +397,37 @@ func (d *DiskfsInspector) inspectCore(
 	// Detect dm-verity configuration
 	verityInfo := detectVerity(ptSummary)
 
-	// Detect SBOM information if requested by user
+	// Detect SBOM information if requested by user.
+	//
+	// Three strategies are tried in cost order, each falling through only when
+	// the previous did not find the SBOM:
+	//
+	//  1. go-diskfs in-place reader — no copy, no privileges. Fails on real
+	//     ext4 roots whose feature set (64bit/metadata_csum/large extent trees)
+	//     go-diskfs cannot walk.
+	//  2. loop-device + debugfs — attaches the raw image via losetup -P and runs
+	//     debugfs read-only against the partition node in place, no copy. Handles
+	//     multi-GB ext4 roots but requires root; skipped (with a note) otherwise.
+	//  3. raw/debugfs copy — copies the ENTIRE partition to a temp file first, so
+	//     it wastes time and fails outright when the temp dir cannot hold a
+	//     multi-GB root. Last resort for non-ext filesystems and non-root runs.
 	var sbomInfo SBOMSummary
 	if d.InspectSBOM {
-		sbomInfo = inspectSBOMFromImageRaw(img, ptSummary)
-		if !sbomInfo.Present {
-			fsSummary := inspectSBOMFromImageFilesystem(disk, ptSummary)
-			if fsSummary.Present {
-				sbomInfo = fsSummary
+		sbomInfo = inspectSBOMFromImageFilesystem(disk, ptSummary)
+		if !sbomInfo.Present && rawImagePath != "" {
+			loopSummary := inspectSBOMFromImageLoopDev(rawImagePath, ptSummary)
+			if loopSummary.Present {
+				sbomInfo = loopSummary
 			} else {
-				sbomInfo.Notes = append(sbomInfo.Notes, fsSummary.Notes...)
+				sbomInfo.Notes = append(sbomInfo.Notes, loopSummary.Notes...)
+			}
+		}
+		if !sbomInfo.Present {
+			rawSummary := inspectSBOMFromImageRaw(img, ptSummary)
+			if rawSummary.Present {
+				sbomInfo = rawSummary
+			} else {
+				sbomInfo.Notes = append(sbomInfo.Notes, rawSummary.Notes...)
 			}
 		}
 	}

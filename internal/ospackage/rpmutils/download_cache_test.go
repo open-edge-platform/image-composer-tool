@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 )
 
 func TestIsRPMPackageCacheOutdated(t *testing.T) {
@@ -55,8 +56,11 @@ func TestIsRPMPackageCacheOutdated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("isRPMPackageCacheOutdated returned error: %v", err)
 	}
-	if outdated {
-		t.Fatalf("expected version-pinned package to be satisfied from cache, missing=%v", missing)
+	if !outdated {
+		t.Fatalf("expected version-pinned package to be reported missing when only exact cached package names are checked")
+	}
+	if len(missing) != 1 || missing[0] != "kernel-drivers-gpu-6.12.55" {
+		t.Fatalf("expected missing=[kernel-drivers-gpu-6.12.55], got %v", missing)
 	}
 }
 
@@ -149,5 +153,97 @@ func TestClearRPMMetadataCache(t *testing.T) {
 		if _, statErr := os.Stat(f); !os.IsNotExist(statErr) {
 			t.Errorf("expected %s to be removed after cache clear", name)
 		}
+	}
+}
+
+func TestHandleRPMCacheRetry(t *testing.T) {
+	origCacheOutdatedFunc := isRPMPackageCacheOutdatedFunc
+	origClearMetadataFunc := clearRPMMetadataCacheFunc
+	t.Cleanup(func() {
+		isRPMPackageCacheOutdatedFunc = origCacheOutdatedFunc
+		clearRPMMetadataCacheFunc = origClearMetadataFunc
+	})
+
+	tests := []struct {
+		name               string
+		retried            bool
+		wantHandled        bool
+		wantClearCalls     int
+		wantRetryCalls     int
+		wantDownloadResult bool
+	}{
+		{
+			name:               "clears metadata and retries once on first outdated check",
+			retried:            false,
+			wantHandled:        true,
+			wantClearCalls:     1,
+			wantRetryCalls:     1,
+			wantDownloadResult: true,
+		},
+		{
+			name:               "clears metadata but does not retry again after retry flag is set",
+			retried:            true,
+			wantHandled:        false,
+			wantClearCalls:     1,
+			wantRetryCalls:     0,
+			wantDownloadResult: false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			cacheChecks := 0
+			clearCalls := 0
+			retryCalls := 0
+
+			isRPMPackageCacheOutdatedFunc = func(requiredPackages []string, cacheDir string) (bool, []string, []string, error) {
+				cacheChecks++
+				return true, []string{"pkg-a"}, nil, nil
+			}
+			clearRPMMetadataCacheFunc = func() {
+				clearCalls++
+			}
+
+			gotDownloads, gotInfos, handled, err := handleRPMCacheRetry(
+				[]string{"pkg-a"},
+				t.TempDir(),
+				tt.retried,
+				func() ([]string, []ospackage.PackageInfo, error) {
+					retryCalls++
+					return []string{"pkg-a-1.0-1.x86_64.rpm"}, []ospackage.PackageInfo{{Name: "pkg-a"}}, nil
+				},
+			)
+			if err != nil {
+				t.Fatalf("handleRPMCacheRetry() error = %v", err)
+			}
+			if cacheChecks != 1 {
+				t.Fatalf("cache state checks = %d, want 1", cacheChecks)
+			}
+			if handled != tt.wantHandled {
+				t.Fatalf("handled = %v, want %v", handled, tt.wantHandled)
+			}
+			if clearCalls != tt.wantClearCalls {
+				t.Fatalf("metadata clear calls = %d, want %d", clearCalls, tt.wantClearCalls)
+			}
+			if retryCalls != tt.wantRetryCalls {
+				t.Fatalf("retry calls = %d, want %d", retryCalls, tt.wantRetryCalls)
+			}
+			if tt.wantDownloadResult {
+				if len(gotDownloads) != 1 {
+					t.Fatalf("download result length = %d, want 1", len(gotDownloads))
+				}
+				if len(gotInfos) != 1 {
+					t.Fatalf("package info length = %d, want 1", len(gotInfos))
+				}
+			} else {
+				if len(gotDownloads) != 0 {
+					t.Fatalf("download result length = %d, want 0", len(gotDownloads))
+				}
+				if len(gotInfos) != 0 {
+					t.Fatalf("package info length = %d, want 0", len(gotInfos))
+				}
+			}
+		})
 	}
 }

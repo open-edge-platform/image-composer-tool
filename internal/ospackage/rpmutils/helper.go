@@ -675,6 +675,15 @@ func extractVersionRequirement(reqVers []string, depName string) (op string, ver
 	return "", "", false
 }
 
+// CompareRPMVersions compares two RPM EVR (epoch:version-release) strings.
+// Returns -1 if a < b, 0 if a == b, 1 if a > b. It is the exported entry point
+// over the package-internal comparator so callers outside rpmutils (e.g. overlay
+// preflight) can classify upgrades vs downgrades using the same logic the
+// resolver uses.
+func CompareRPMVersions(a, b string) (int, error) {
+	return comparePackageVersions(a, b)
+}
+
 func comparePackageVersions(a, b string) (int, error) {
 	// Empty-version handling: empty < any non-empty
 	if a == "" && b == "" {
