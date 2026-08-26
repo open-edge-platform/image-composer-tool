@@ -420,6 +420,112 @@ func TestConflictingVersionRequirements(t *testing.T) {
 	}
 }
 
+// TestConstraintSatisfyingReplacementSamePriority tests that when a resolved
+// package violates a version constraint required by a later package, the
+// resolver replaces it with a constraint-satisfying candidate even when both
+// come from repositories with the same priority. This mirrors the real-world
+// oneAPI scenario: shared-lib 2.0 is resolved first, then a later package
+// requires shared-lib (<< 2.0) — the resolver should replace unconditionally.
+func TestConstraintSatisfyingReplacementSamePriority(t *testing.T) {
+	// Both shared-lib versions come from the same repo (same priority).
+	// shared-lib 2.0 is explicitly requested (enters neededSet first).
+	// pkg-b depends on shared-lib (<< 2.0) → must replace 2.0 with 1.0.
+	all := []ospackage.PackageInfo{
+		{
+			Name:        "pkg-b",
+			Version:     "1.0",
+			URL:         "http://archive.ubuntu.com/ubuntu/pool/main/p/pkg-b/pkg-b_1.0_amd64.deb",
+			Requires:    []string{"shared-lib"},
+			RequiresVer: []string{"shared-lib (<< 2.0)"},
+		},
+		{
+			Name:    "shared-lib",
+			Version: "1.0",
+			URL:     "http://archive.ubuntu.com/ubuntu/pool/main/s/shared-lib/shared-lib_1.0_amd64.deb",
+		},
+		{
+			Name:    "shared-lib",
+			Version: "2.0",
+			URL:     "http://archive.ubuntu.com/ubuntu/pool/main/s/shared-lib/shared-lib_2.0_amd64.deb",
+		},
+	}
+
+	// shared-lib 2.0 is requested first (enters neededSet/resolvedDeps),
+	// then pkg-b requires shared-lib (<< 2.0) — triggers replacement path.
+	req := []ospackage.PackageInfo{
+		{Name: "shared-lib", Version: "2.0"},
+		{Name: "pkg-b", Version: "1.0"},
+	}
+
+	result, err := debutils.ResolveDependencies(req, all)
+	if err != nil {
+		t.Fatalf("Expected successful resolution with constraint-satisfying replacement, got error: %v", err)
+	}
+
+	// Verify shared-lib 1.0 is in the result (satisfies << 2.0), not 2.0
+	foundSharedLib := false
+	for _, pkg := range result {
+		if pkg.Name == "shared-lib" {
+			if pkg.Version != "1.0" {
+				t.Errorf("Expected shared-lib version 1.0 (constraint-satisfying), got %s", pkg.Version)
+			}
+			foundSharedLib = true
+		}
+	}
+	if !foundSharedLib {
+		t.Error("Expected shared-lib in resolved packages")
+	}
+}
+
+// TestRequestedPackageVersionPreserved tests that when a package is explicitly
+// requested with a specific version, later transitive dependencies don't
+// replace it with a different version. This validates the resolvedDeps tracking
+// for dequeued requested packages.
+func TestRequestedPackageVersionPreserved(t *testing.T) {
+	// User explicitly requests shared-lib 1.0. pkg-a has a transitive dep on
+	// shared-lib (no version pin). The resolver should keep the user's 1.0.
+	all := []ospackage.PackageInfo{
+		{
+			Name:     "pkg-a",
+			Version:  "1.0",
+			URL:      "http://archive.ubuntu.com/ubuntu/pool/main/p/pkg-a/pkg-a_1.0_amd64.deb",
+			Requires: []string{"shared-lib"},
+		},
+		{
+			Name:    "shared-lib",
+			Version: "1.0",
+			URL:     "http://archive.ubuntu.com/ubuntu/pool/main/s/shared-lib/shared-lib_1.0_amd64.deb",
+		},
+		{
+			Name:    "shared-lib",
+			Version: "2.0",
+			URL:     "http://archive.ubuntu.com/ubuntu/pool/main/s/shared-lib/shared-lib_2.0_amd64.deb",
+		},
+	}
+
+	// User explicitly requests shared-lib 1.0 before pkg-a
+	req := []ospackage.PackageInfo{
+		{Name: "shared-lib", Version: "1.0"},
+		{Name: "pkg-a", Version: "1.0"},
+	}
+
+	result, err := debutils.ResolveDependencies(req, all)
+	if err != nil {
+		t.Fatalf("Expected successful resolution, got error: %v", err)
+	}
+
+	// Verify shared-lib 1.0 is preserved (not replaced by 2.0)
+	for _, pkg := range result {
+		if pkg.Name == "shared-lib" {
+			if pkg.Version != "1.0" {
+				t.Errorf("Expected explicitly requested shared-lib 1.0 to be preserved, got %s", pkg.Version)
+			}
+			return
+		}
+	}
+	t.Error("Expected shared-lib in resolved packages")
+}
+
 // TestProviderResolution tests resolution via Provides field
 func TestProviderResolution(t *testing.T) {
 	all := []ospackage.PackageInfo{

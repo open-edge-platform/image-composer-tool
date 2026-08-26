@@ -1,0 +1,130 @@
+# =============================================================================
+# Debian 13 ("Trixie") CHILD template — add graphics packages via `extends`
+# Bayonne Bridge Project — GUI desktop variant
+# =============================================================================
+#
+# This template demonstrates the EXTENDS feature: it inherits the Debian 13
+# Bayonne Bridge base (Debian 13 qcow2 input + custom initrd + qcow2 output) and
+# adds the graphics packages plus the display-manager configuration needed to
+# boot into a GUI desktop. It does NOT declare a baseline or an overlay policy
+# of its own — those come from the parent.
+#
+# HOW THE MERGE WORKS (why this file only adds `packages` + `configurations`):
+#   * `extends` pulls in the parent, resolved relative to this file's directory.
+#   * The parent declares the baseline + policy; this child inherits them and MUST
+#     NOT redeclare them. The tool restricts an additive package set to exactly
+#     what the baseline-declaring template lists — so if this child re-declared
+#     the baseline, it would REPLACE the base's package/initrd set instead of
+#     adding to it. By leaving that config to the parent, this child's `packages`
+#     merge ADDITIVELY on top of the parent's (base packages ∪ graphics).
+#   * `configurations` also merge additively; the base's custom-initrd commands
+#     run first, so the initrd already reflects any graphics firmware added here.
+#
+# Output remains qcow2 and the custom initrd is inherited unchanged from the base.
+# =============================================================================
+
+# AI-searchable metadata for template discovery
+metadata:
+  description: >-
+    Debian 13 (Trixie) Bayonne Bridge GUI variant — extends the Debian 13 base and
+    adds graphics packages (Xorg, Mesa/Vulkan, fonts, GPU firmware) so the composed
+    qcow2 supports graphical desktop applications. Demonstrates the extends feature.
+  use_cases:
+    - Add GUI/graphics support to the Debian 13 base via template inheritance
+    - Demonstrate the extends feature adding packages onto a base template
+    - Compose a Debian 13 desktop-capable qcow2 for Bayonne Bridge
+  keywords:
+    - extends
+    - inheritance
+    - debian
+    - debian13
+    - trixie
+    - qcow2
+    - graphics
+    - desktop
+    - gui
+    - bayonne-bridge
+
+# Inherit the base (baseline source, policy, disk/qcow2 output, and the custom
+# initrd). Resolved relative to this file's directory. The parent's target must
+# match this template's target.
+extends: "debian13-x86_64-bb-overlay-initrd-raw.yml"
+
+image:
+  name: debian13-bb-graphics
+  version: "13.0"
+
+target:                 # must match the parent template's target
+  os: debian
+  dist: debian13
+  arch: x86_64
+  imageType: raw
+
+systemConfig:
+  name: graphics
+  description: Debian 13 Bayonne Bridge GUI variant — graphics stack added via extends
+
+  # ---------------------------------------------------------------------------
+  # Graphics packages — merged ADDITIVELY on top of the base. Enough of an
+  # X/Mesa stack to run GUI desktop apps: xserver-xorg pulls the video drivers,
+  # Mesa provides GL/Vulkan, fonts + GTK cover rendering, and firmware-* covers
+  # common GPUs (loaded by the base's custom initrd, which is regenerated there).
+  #
+  # Do NOT add a `baseline:` or `overlayPolicy:` block here — inheriting them
+  # from the parent is what keeps these packages ADDITIVE to the base.
+  # ---------------------------------------------------------------------------
+  packages:
+    # X server + input/video drivers + session bring-up
+    - xserver-xorg
+    - xserver-xorg-video-all
+    - xserver-xorg-input-all
+    - xinit
+    - x11-xserver-utils
+    - x11-utils
+    # OpenGL / Mesa userspace
+    - libgl1-mesa-dri
+    - libglx-mesa0
+    - mesa-utils
+    - mesa-vulkan-drivers
+    # Fonts + rendering so GUI apps display correctly
+    - fonts-dejavu-core
+    - libgtk-3-0
+    # GPU firmware the graphics stack / initrd may load at boot
+    - firmware-linux
+    - firmware-misc-nonfree
+    # Display manager + GNOME session — turns the backend X/Mesa stack into a
+    # graphical login. gdm3 is the GNOME Display Manager; gnome-session provides
+    # the session gdm launches; gnome-shell is that session's compositor and is
+    # also what GDM's own greeter renders with. Without these the image has the
+    # graphics backend but nothing to bring up a login, so it boots to a tty.
+    - gdm3
+    - gnome-session
+    - gnome-shell
+    # Terminal emulator — gnome-shell/gnome-session do NOT pull one in (only the
+    # larger gnome-core/gnome metapackages do), so without this the desktop boots
+    # into GNOME Shell with no terminal application in the Activities overview.
+    # gnome-terminal is the mature, full-featured VTE terminal (tabs, profiles,
+    # scrollback) for running apt, editing configs, and general work in the GUI.
+    - gnome-terminal
+    # Graphical package installer — the GUI equivalent of apt. gnome-software pulls
+    # in PackageKit (aptcc backend) so users can browse and install/remove packages
+    # from the desktop; the CLI apt still works unchanged alongside it.
+    - gnome-software
+
+  # ---------------------------------------------------------------------------
+  # Enable the graphical login. These commands run in the baseline chroot after
+  # package install; they merge AFTER the parent's configurations (which enable
+  # the 91hello dracut module), so ordering is safe.
+  #
+  # Installing gdm3 is NOT sufficient on its own: the Debian cloud baseline's
+  # default systemd target is multi-user.target, and gdm3.service is
+  # WantedBy=graphical.target — so at boot the system stops at multi-user and
+  # gdm never starts (hence the tty console, XDG_SESSION_TYPE=tty). Switching
+  # the default target to graphical.target is what actually flips the image to a
+  # graphical login. `systemctl enable gdm3` makes gdm3 the display-manager
+  # service explicitly; both operations only create symlinks, so they work
+  # offline inside the build chroot.
+  # ---------------------------------------------------------------------------
+  configurations:
+    - cmd: 'systemctl set-default graphical.target'
+    - cmd: 'systemctl enable gdm3'

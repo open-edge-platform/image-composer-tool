@@ -12,10 +12,44 @@ import (
 )
 
 func Decompress(inFile string, outFile string) ([]string, error) {
-	if filepath.Ext(inFile) == ".xz" {
+	switch filepath.Ext(inFile) {
+	case ".xz":
 		return DecompressXZ(inFile, outFile)
+	case ".gz":
+		return DecompressGZ(inFile, outFile)
 	}
-	return DecompressGZ(inFile, outFile)
+
+	// An index with no compression suffix (a repository publishing only a plain
+	// Packages) is already in its final form. Copying it to outFile would be a
+	// no-op at best and truncate the input at worst, since callers derive outFile
+	// by stripping the extension and so hand us the same path back.
+	if inFile == outFile {
+		return []string{outFile}, nil
+	}
+	if err := copyFileContents(inFile, outFile); err != nil {
+		return nil, err
+	}
+	return []string{outFile}, nil
+}
+
+// copyFileContents copies src to dst, creating or truncating dst.
+func copyFileContents(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("failed to open %s: %w", src, err)
+	}
+	defer in.Close()
+
+	out, err := os.Create(dst)
+	if err != nil {
+		return fmt.Errorf("failed to create %s: %w", dst, err)
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, in); err != nil {
+		return fmt.Errorf("failed to copy %s to %s: %w", src, dst, err)
+	}
+	return nil
 }
 
 func DecompressGZ(inFile string, outFile string) ([]string, error) {
@@ -84,7 +118,16 @@ func GetPackagesNames(baseURL string, codename string, arch string, component st
 	if baseURL == "<URL>" || baseURL == "" {
 		return "", nil
 	}
-	possibleFiles := []string{"Packages.gz", "Packages.xz"}
+	if cachedURL, ok := getPackageListURLFromCache(baseURL, codename, arch, component); ok {
+		logger.Logger().Debugf("Using cached package list URL for %s/%s/%s/%s: %s", baseURL, codename, arch, component, cachedURL)
+		return cachedURL, nil
+	}
+	// Ordered by preference: compressed indexes first, then the uncompressed
+	// Packages. The plain file is what APT calls the last resort and some
+	// repositories publish only that — packages.mozilla.org serves
+	// dists/mozilla/main/binary-amd64/Packages and 404s both compressed names,
+	// so omitting it makes an otherwise valid repository look unreachable.
+	possibleFiles := []string{"Packages.gz", "Packages.xz", "Packages"}
 	var foundFile string
 	for _, fname := range possibleFiles {
 		packageListURL := baseURL + "/dists/" + codename + "/" + component + "/binary-" + arch + "/" + fname
@@ -94,6 +137,7 @@ func GetPackagesNames(baseURL string, codename string, arch string, component st
 		}
 		if fileExist {
 			foundFile = packageListURL
+			savePackageListURLToCache(baseURL, codename, arch, component, packageListURL)
 			break
 		} else {
 			logger.Logger().Debugf("Searching package list at: %s", packageListURL)

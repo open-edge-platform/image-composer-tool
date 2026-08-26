@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -19,6 +20,31 @@ const (
 	maxBlockDeviceMountAttempts = 5
 	blockDeviceRetryDelay       = 200 * time.Millisecond
 )
+
+// mountFlagsPattern is the allowlist of characters permitted in a mountFlags
+// string. Unlike the target and mount point, mountFlags cannot be shell-quoted
+// because it legitimately expands to multiple tokens (e.g. "-t ext4 -o
+// nosuid,noexec"); instead we constrain it to the characters that real mount
+// option strings use: flag letters/dashes, a literal space as the token
+// separator, and the "key=value,key=value" option syntax. Only a plain space
+// is allowed as a separator (no tabs or other whitespace), which is all the
+// callers ever emit. Some callers build mountFlags from
+// externally influenced data (e.g. a partition's filesystem type coming from an
+// image template), so any shell metacharacter (;, &, |, $, backtick, quotes,
+// redirects, newlines, ...) must be rejected to close off command injection
+// into the bash -c line.
+var mountFlagsPattern = regexp.MustCompile(`^[A-Za-z0-9 ,=:./_-]*$`)
+
+// validateMountFlags rejects a mountFlags string that contains characters
+// outside the safe allowlist, preventing shell metacharacters from escaping the
+// unquoted mountFlags into arbitrary shell syntax when the command runs via
+// bash -c.
+func validateMountFlags(mountFlags string) error {
+	if !mountFlagsPattern.MatchString(mountFlags) {
+		return fmt.Errorf("invalid mount flags %q: contains characters outside the allowed set [A-Za-z0-9 ,=:./_-]", mountFlags)
+	}
+	return nil
+}
 
 func isBlockDevicePath(path string) bool {
 	return strings.HasPrefix(path, "/dev/")
@@ -123,8 +149,21 @@ func IsMountPathExist(mountPoint string) (bool, error) {
 
 // MountPath mounts a target path to a mount point with specific flags
 func MountPath(targetPath, mountPoint, mountFlags string) error {
+	// targetPath and mountPoint are single arguments that get concatenated into a
+	// bash -c command line, so quote them to survive whitespace/metacharacters and
+	// to close off command injection when either is (partly) externally influenced.
+	// mountFlags is intentionally left unquoted: it is a caller-controlled option
+	// string that legitimately expands to multiple tokens (e.g. "-t proc"). Since
+	// it cannot be quoted, validate it against a strict allowlist so a caller that
+	// builds it from externally influenced data (e.g. a template's filesystem
+	// type) cannot inject shell syntax into the bash -c command line.
+	if err := validateMountFlags(mountFlags); err != nil {
+		return fmt.Errorf("refusing to mount %s to %s: %w", targetPath, mountPoint, err)
+	}
+	quotedTarget := shell.QuoteArg(targetPath)
+	quotedMountPoint := shell.QuoteArg(mountPoint)
 	if _, err := os.Stat(mountPoint); os.IsNotExist(err) {
-		if _, err := shell.ExecCmd("mkdir -p "+mountPoint, true, shell.HostPath, nil); err != nil {
+		if _, err := shell.ExecCmd("mkdir -p "+quotedMountPoint, true, shell.HostPath, nil); err != nil {
 			return fmt.Errorf("failed to create mount point %s: %w", mountPoint, err)
 		}
 	}
@@ -133,7 +172,7 @@ func MountPath(targetPath, mountPoint, mountFlags string) error {
 		return fmt.Errorf("failed to check if mount point %s exists: %w", mountPoint, err)
 	}
 	if !pathExist {
-		mountCmdStr := "mount " + mountFlags + " " + targetPath + " " + mountPoint
+		mountCmdStr := "mount " + mountFlags + " " + quotedTarget + " " + quotedMountPoint
 		if isBlockDevicePath(targetPath) {
 			if err := mountPathWithRetry(targetPath, mountPoint, mountCmdStr); err != nil {
 				return fmt.Errorf("failed to mount %s to %s after retries: %w", targetPath, mountPoint, err)
@@ -151,14 +190,17 @@ func MountPath(targetPath, mountPoint, mountFlags string) error {
 
 func umountPath(mountPoint string) error {
 	// Try different unmount strategies with increasing aggressiveness
+	// mountPoint is a single argument interpolated into a bash -c command line;
+	// quote it against whitespace/metacharacters and command injection.
+	quotedMountPoint := shell.QuoteArg(mountPoint)
 	unmountStrategies := []struct {
 		cmd  string
 		desc string
 	}{
-		{"umount " + mountPoint, "standard"},
-		{"umount -l " + mountPoint, "lazy"},
-		{"umount -f " + mountPoint, "force"},
-		{"umount -lf " + mountPoint, "lazy-force"},
+		{"umount " + quotedMountPoint, "standard"},
+		{"umount -l " + quotedMountPoint, "lazy"},
+		{"umount -f " + quotedMountPoint, "force"},
+		{"umount -lf " + quotedMountPoint, "lazy-force"},
 	}
 	var lastErr error
 	for _, strategy := range unmountStrategies {
@@ -193,7 +235,7 @@ func UmountAndDeletePath(mountPoint string) error {
 	if err := UmountPath(mountPoint); err != nil {
 		return fmt.Errorf("failed to unmount %s: %w", mountPoint, err)
 	}
-	if _, err := shell.ExecCmd("rm -rf "+mountPoint, true, shell.HostPath, nil); err != nil {
+	if _, err := shell.ExecCmd("rm -rf "+shell.QuoteArg(mountPoint), true, shell.HostPath, nil); err != nil {
 		return fmt.Errorf("failed to remove mount point directory %s: %w", mountPoint, err)
 	}
 	return nil
@@ -219,49 +261,75 @@ func UmountSubPath(mountPoint string) error {
 	return nil
 }
 
+func umountPathListReverse(pathList []string) error {
+	for i := len(pathList) - 1; i >= 0; i-- {
+		path := pathList[i]
+		if err := umountPath(path); err != nil {
+			if !strings.Contains(err.Error(), "not found") {
+				return fmt.Errorf("failed to unmount %s: %w", path, err)
+			}
+		}
+	}
+	return nil
+}
+
 // MountSysfs mounts system directories (e.g., /dev, /proc, /sys) into the chroot environment
 func MountSysfs(mountPoint string) error {
+	mountedPaths := make([]string, 0, 6)
+	failWithRollback := func(message string, mountErr error) error {
+		if rollbackErr := umountPathListReverse(mountedPaths); rollbackErr != nil {
+			return fmt.Errorf("%s: %w; rollback failed: %v", message, mountErr, rollbackErr)
+		}
+		return fmt.Errorf("%s: %w", message, mountErr)
+	}
+
 	procMountPoint := filepath.Join(mountPoint, "proc")
 	if err := MountPath("proc", procMountPoint, "-t proc"); err != nil {
-		return fmt.Errorf("failed to mount /proc to %s: %w", procMountPoint, err)
+		return failWithRollback(fmt.Sprintf("failed to mount /proc to %s", procMountPoint), err)
 	}
+	mountedPaths = append(mountedPaths, procMountPoint)
 
 	sysMountPoint := filepath.Join(mountPoint, "sys")
 	if err := MountPath("sysfs", sysMountPoint, "-t sysfs -o nosuid,noexec,nodev"); err != nil {
-		return fmt.Errorf("failed to mount /sys to %s: %w", sysMountPoint, err)
+		return failWithRollback(fmt.Sprintf("failed to mount /sys to %s", sysMountPoint), err)
 	}
+	mountedPaths = append(mountedPaths, sysMountPoint)
 
 	devMountPoint := filepath.Join(mountPoint, "dev")
 	if err := MountPath("devtmpfs", devMountPoint, "-t devtmpfs -o mode=0700,nosuid"); err != nil {
-		return fmt.Errorf("failed to mount /dev to %s: %w", devMountPoint, err)
+		return failWithRollback(fmt.Sprintf("failed to mount /dev to %s", devMountPoint), err)
 	}
+	mountedPaths = append(mountedPaths, devMountPoint)
 
 	devPtsMountPoint := filepath.Join(mountPoint, "dev/pts")
 	if err := MountPath("devpts", devPtsMountPoint, "-t devpts -o gid=5,mode=620"); err != nil {
-		return fmt.Errorf("failed to mount /dev/pts to %s: %w", devPtsMountPoint, err)
+		return failWithRollback(fmt.Sprintf("failed to mount /dev/pts to %s", devPtsMountPoint), err)
 	}
+	mountedPaths = append(mountedPaths, devPtsMountPoint)
 
 	devShmMountPoint := filepath.Join(mountPoint, "dev/shm")
 	if err := MountPath("tmpfs", devShmMountPoint, "-t tmpfs -o mode=1700"); err != nil {
-		return fmt.Errorf("failed to mount /dev/shm to %s: %w", devShmMountPoint, err)
+		return failWithRollback(fmt.Sprintf("failed to mount /dev/shm to %s", devShmMountPoint), err)
 	}
+	mountedPaths = append(mountedPaths, devShmMountPoint)
 
 	runMountPoint := filepath.Join(mountPoint, "run")
 	if err := MountPath("tmpfs", runMountPoint, "-t tmpfs -o mode=0700"); err != nil {
-		return fmt.Errorf("failed to mount /run to %s: %w", runMountPoint, err)
+		return failWithRollback(fmt.Sprintf("failed to mount /run to %s", runMountPoint), err)
 	}
+	mountedPaths = append(mountedPaths, runMountPoint)
 
 	runShmMountPoint := filepath.Join(mountPoint, "run/shm")
-	if _, err := shell.ExecCmd("mkdir -p "+runShmMountPoint, true, shell.HostPath, nil); err != nil {
-		return fmt.Errorf("failed to create %s: %w", runShmMountPoint, err)
+	if _, err := shell.ExecCmd("mkdir -p "+shell.QuoteArg(runShmMountPoint), true, shell.HostPath, nil); err != nil {
+		return failWithRollback(fmt.Sprintf("failed to create %s", runShmMountPoint), err)
 	}
-	if _, err := shell.ExecCmd("chmod 1700 "+runShmMountPoint, true, shell.HostPath, nil); err != nil {
-		return fmt.Errorf("failed to set permissions on %s: %w", runShmMountPoint, err)
+	if _, err := shell.ExecCmd("chmod 1700 "+shell.QuoteArg(runShmMountPoint), true, shell.HostPath, nil); err != nil {
+		return failWithRollback(fmt.Sprintf("failed to set permissions on %s", runShmMountPoint), err)
 	}
 
 	runLockMountPoint := filepath.Join(mountPoint, "run/lock")
-	if _, err := shell.ExecCmd("mkdir -p "+runLockMountPoint, true, shell.HostPath, nil); err != nil {
-		return fmt.Errorf("failed to create %s: %w", runLockMountPoint, err)
+	if _, err := shell.ExecCmd("mkdir -p "+shell.QuoteArg(runLockMountPoint), true, shell.HostPath, nil); err != nil {
+		return failWithRollback(fmt.Sprintf("failed to create %s", runLockMountPoint), err)
 	}
 
 	return nil
@@ -303,7 +371,11 @@ func UmountSysfs(mountPoint string) error {
 	return nil
 }
 
-// CleanSysfs cleans up system directories in the chroot environment
+// CleanSysfs cleans up system directories in the chroot environment.
+//
+// Contract: callers must unmount run/sys/proc/dev first. Cleanup then removes
+// those top-level directories via rmdir, which requires each directory to be
+// present and empty. Missing/non-empty directories are returned as errors.
 func CleanSysfs(mountPoint string) error {
 	var pathList []string
 	mountPathList, err := GetMountPathList()
@@ -320,7 +392,14 @@ func CleanSysfs(mountPoint string) error {
 	for _, _mountPoint := range []string{"run", "sys", "proc", "dev"} {
 		fullPath := filepath.Join(mountPoint, _mountPoint)
 		if !slice.Contains(pathList, fullPath) {
-			if _, err := shell.ExecCmd("rm -rf "+fullPath, true, shell.HostPath, nil); err != nil {
+			// Use rmdir (not rm -rf) here: "dev" is mounted with devtmpfs, which is a
+			// single kernel-wide filesystem instance shared across every mountpoint of
+			// that type. If the "still mounted" check above is ever wrong (e.g. mtab
+			// parsing mismatch), a recursive rm -rf on this path would actually delete
+			// the host's real /dev entries (e.g. /dev/null, /dev/ptmx). rmdir only
+			// succeeds on an empty directory, so a false negative fails loudly instead
+			// of destroying host device nodes.
+			if _, err := shell.ExecCmd("rmdir "+shell.QuoteArg(fullPath), true, shell.HostPath, nil); err != nil {
 				return fmt.Errorf("failed to remove path %s: %w", fullPath, err)
 			}
 		} else {

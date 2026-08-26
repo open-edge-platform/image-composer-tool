@@ -1,0 +1,7 @@
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty --noclear --autologin root --keep-baud %I $TERM
+
+# Default to tty1 but allow other choices
+[Install]
+Alias=getty.target.wants/getty@tty1.service

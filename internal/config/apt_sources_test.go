@@ -764,3 +764,60 @@ func TestCreateTempAptPreferencesFile(t *testing.T) {
 		t.Errorf("File content mismatch. Expected:\n%s\nGot:\n%s", content, string(fileContent))
 	}
 }
+
+func TestGPGKeyCacheFilePath_StableForSameURL(t *testing.T) {
+	oldCacheDir := Global().CacheDir
+	Global().CacheDir = t.TempDir()
+	t.Cleanup(func() {
+		Global().CacheDir = oldCacheDir
+	})
+
+	keyURL := "https://example.com/keys/repo-key.gpg"
+
+	path1, err := gpgKeyCacheFilePath(keyURL)
+	if err != nil {
+		t.Fatalf("gpgKeyCacheFilePath failed: %v", err)
+	}
+
+	path2, err := gpgKeyCacheFilePath(keyURL)
+	if err != nil {
+		t.Fatalf("gpgKeyCacheFilePath failed on second call: %v", err)
+	}
+
+	if path1 != path2 {
+		t.Errorf("Expected stable cache path, got %q and %q", path1, path2)
+	}
+
+	if !strings.HasSuffix(path1, ".gpg") {
+		t.Errorf("Expected cache path to end with .gpg, got %q", path1)
+	}
+}
+
+func TestGetCachedOrDownloadGPGKey_UsesCacheOnHit(t *testing.T) {
+	oldCacheDir := Global().CacheDir
+	Global().CacheDir = t.TempDir()
+	t.Cleanup(func() {
+		Global().CacheDir = oldCacheDir
+	})
+
+	keyURL := "https://invalid.example.test/non-routable-key.gpg"
+	want := []byte("cached-key-data")
+
+	cachePath, err := gpgKeyCacheFilePath(keyURL)
+	if err != nil {
+		t.Fatalf("gpgKeyCacheFilePath failed: %v", err)
+	}
+
+	if err := os.WriteFile(cachePath, want, 0644); err != nil {
+		t.Fatalf("failed to seed cached key: %v", err)
+	}
+
+	got, err := getCachedOrDownloadGPGKey(keyURL)
+	if err != nil {
+		t.Fatalf("getCachedOrDownloadGPGKey should use cache hit, got error: %v", err)
+	}
+
+	if string(got) != string(want) {
+		t.Errorf("cache hit returned wrong key data: got %q want %q", string(got), string(want))
+	}
+}

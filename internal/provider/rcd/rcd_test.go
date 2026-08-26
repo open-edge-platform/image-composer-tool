@@ -526,7 +526,7 @@ func TestRCDBuildImageUnsupportedType(t *testing.T) {
 func TestRCDBuildImageValidTypes(t *testing.T) {
 	rcd := &RCD{}
 
-	validTypes := []string{"raw", "img", "iso"}
+	validTypes := []string{"raw", "img", "iso", "wsl2"}
 
 	for _, imageType := range validTypes {
 		t.Run(imageType, func(t *testing.T) {

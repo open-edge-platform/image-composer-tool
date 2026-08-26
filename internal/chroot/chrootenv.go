@@ -1,6 +1,7 @@
 package chroot
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/file"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/mount"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/runctx"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
@@ -194,12 +196,19 @@ func (chrootEnv *ChrootEnv) UmountChrootSysfs(chrootPath string) error {
 		return fmt.Errorf("failed to get chroot host path for %s: %w", chrootPath, err)
 	}
 
+	var cleanupErr error
 	if err := system.StopGPGComponents(chrootHostPath); err != nil {
-		return fmt.Errorf("failed to stop GPG components in chroot environment: %w", err)
+		cleanupErr = fmt.Errorf("failed to stop GPG components in chroot environment: %w", err)
 	}
 
 	if err = mount.UmountSysfs(chrootHostPath); err != nil {
+		if cleanupErr != nil {
+			return fmt.Errorf("operation failed: %w, cleanup errors: %v", cleanupErr, err)
+		}
 		return fmt.Errorf("failed to unmount sysfs for %s: %w", chrootHostPath, err)
+	}
+	if cleanupErr != nil {
+		return cleanupErr
 	}
 	return nil
 }
@@ -337,6 +346,11 @@ func (chrootEnv *ChrootEnv) initChrootLocalRepo(targetArch string) error {
 			chrootPkgCacheDir, ChrootRepoDir, err)
 	}
 
+	if system.IsLiveInstallerExecution() {
+		log.Infof("Skipping local cache repository metadata/refresh in live-installer mode")
+		return nil
+	}
+
 	if chrootEnv.ChrootEnvRoot != shell.HostPath {
 		// Within iso initramfs system, local repo metadata should have been generated
 		// And the repo cache is read-only, not able to update by live-installer
@@ -446,6 +460,33 @@ func (chrootEnv *ChrootEnv) InitChrootEnv(targetOs, targetDist, targetArch strin
 			return fmt.Errorf("failed to mount sysfs for chroot environment: %w", err)
 		}
 
+		// Register the full chroot teardown with the build-scoped cleanup
+		// coordinator so a mid-build SIGINT/SIGTERM unmounts sysfs, stops
+		// gpg-agent, and restores repo configs even when the goto post
+		// path in build.go is bypassed. CleanupChrootEnv is idempotent
+		// (os.Stat early-out on a missing chroot root), so double-running
+		// on the normal-return path is safe.
+		if c := runctx.Get(); c != nil {
+			// Bind the coordinator's per-entry timeout ctx to shell and runctx
+			// so CleanupChrootEnv's internal shell.ExecCmd calls (umount,
+			// swapoff, rm -rf of the repo-config-backup dir, StopGPGComponents)
+			// run under the cleanup budget instead of the already-cancelled
+			// parent ctx. Without this the coordinator's guarantee — cleanup
+			// isn't cancelled by the signal that fired it — is defeated
+			// silently because every shell call short-circuits with
+			// context.Canceled at execCmdWithRetry's loop-head.
+			c.Register(
+				"chroot:"+chrootEnv.ChrootEnvRoot,
+				func(ctx context.Context) error {
+					restoreShell := shell.SetContext(ctx)
+					defer restoreShell()
+					restoreRun := runctx.SetContext(ctx)
+					defer restoreRun()
+					return chrootEnv.CleanupChrootEnv(targetOs, targetDist, targetArch)
+				},
+			)
+		}
+
 		defer func() {
 			if err != nil {
 				if umountErr := chrootEnv.UmountChrootSysfs("/"); umountErr != nil {
@@ -471,11 +512,16 @@ func (chrootEnv *ChrootEnv) InitChrootEnv(targetOs, targetDist, targetArch strin
 func (chrootEnv *ChrootEnv) CleanupChrootEnv(targetOs, targetDist, targetArch string) error {
 	log := logger.Logger()
 	if _, err := os.Stat(chrootEnv.ChrootEnvRoot); err == nil {
+		var cleanupErr error
 		if err := system.StopGPGComponents(chrootEnv.ChrootEnvRoot); err != nil {
-			return fmt.Errorf("failed to stop GPG components in chroot environment: %w", err)
+			cleanupErr = fmt.Errorf("failed to stop GPG components in chroot environment: %w", err)
 		}
 		if err := mount.UmountSubPath(chrootEnv.ChrootEnvRoot); err != nil {
-			return fmt.Errorf("failed to unmount path for chroot environment: %w", err)
+			if cleanupErr == nil {
+				cleanupErr = fmt.Errorf("failed to unmount path for chroot environment: %w", err)
+			} else {
+				cleanupErr = fmt.Errorf("operation failed: %w, cleanup errors: %v", cleanupErr, err)
+			}
 		}
 
 		// Restore existing local repo config files in chroot environment
@@ -508,6 +554,10 @@ func (chrootEnv *ChrootEnv) CleanupChrootEnv(targetOs, targetDist, targetArch st
 					}
 				}
 			}
+		}
+
+		if cleanupErr != nil {
+			return cleanupErr
 		}
 	} else {
 		log.Infof("Chroot environment root %s does not exist, skipping cleanup", chrootEnv.ChrootEnvRoot)
@@ -638,6 +688,10 @@ func (chrootEnv *ChrootEnv) AptInstallPackage(packageName, installRoot string, r
 }
 
 func (chrootEnv *ChrootEnv) UpdateSystemPkgs(template *config.ImageTemplate) error {
+	if template == nil {
+		return fmt.Errorf("image template cannot be nil")
+	}
+
 	// Update essential packages
 	essentialPkgList, err := chrootEnv.GetChrootEnvEssentialPackageList()
 	if err != nil {
@@ -645,22 +699,27 @@ func (chrootEnv *ChrootEnv) UpdateSystemPkgs(template *config.ImageTemplate) err
 	}
 	template.EssentialPkgList = essentialPkgList
 
-	// Update bootloader packages by bootloader type
-	bootloaderConfig := template.GetBootloaderConfig()
-	// To do: support bootloader package selection by bootloader type
-	switch bootloaderConfig.Provider {
-	case "grub":
-		if bootloaderConfig.BootType == "efi" {
-			template.BootloaderPkgList = []string{}
-		} else if bootloaderConfig.BootType == "legacy" {
-			template.BootloaderPkgList = []string{}
-		} else {
-			return fmt.Errorf("unsupported boot type: %s", bootloaderConfig.BootType)
-		}
-	case "systemd-boot":
+	// WSL2 and other rootfs-only image types do not need bootloader packages.
+	if template.Target.ImageType == "wsl2" {
 		template.BootloaderPkgList = []string{}
-	default:
-		return fmt.Errorf("unsupported bootloader provider: %s", bootloaderConfig.Provider)
+	} else {
+		// Update bootloader packages by bootloader type
+		bootloaderConfig := template.GetBootloaderConfig()
+		// To do: support bootloader package selection by bootloader type
+		switch bootloaderConfig.Provider {
+		case "grub":
+			if bootloaderConfig.BootType == "efi" {
+				template.BootloaderPkgList = []string{}
+			} else if bootloaderConfig.BootType == "legacy" {
+				template.BootloaderPkgList = []string{}
+			} else {
+				return fmt.Errorf("unsupported boot type: %s", bootloaderConfig.BootType)
+			}
+		case "systemd-boot":
+			template.BootloaderPkgList = []string{}
+		default:
+			return fmt.Errorf("unsupported bootloader provider: %s", bootloaderConfig.Provider)
+		}
 	}
 
 	// Update kernel packages by kernel version

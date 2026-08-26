@@ -20,6 +20,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/pkgsorter"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/network"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/runctx"
 )
 
 // repoConfig holds .repo file values
@@ -41,6 +42,9 @@ var (
 	Dist           string
 	KernelVersion  string
 	KernelPackages = make(map[string]struct{})
+
+	isRPMPackageCacheOutdatedFunc = isRPMPackageCacheOutdated
+	clearRPMMetadataCacheFunc     = clearRPMMetadataCache
 )
 
 // ConfigureKernelSelection sets the kernel package requests and version used
@@ -84,22 +88,38 @@ func LocalUserPackages() ([]ospackage.PackageInfo, func(), error) {
 	}
 
 	for i, repo := range UserRepo {
-		if repo.Path == "" {
-			continue
+		repoPath := repo.Path
+		if repoPath == "" {
+			if len(repo.Packages) == 0 {
+				continue
+			}
+			// auto-create a temp dir when path is not specified but packages are
+			tmpPath, err := os.MkdirTemp(config.TempDir(), "ict-localrepo-*")
+			if err != nil {
+				combinedCleanup()
+				return nil, nil, fmt.Errorf("failed to create temporary directory for local repository: %w", err)
+			}
+			cleanups = append(cleanups, func() { os.RemoveAll(tmpPath) })
+			repoPath = tmpPath
+		}
+
+		if err := PrepareLocalRepositoryFiles(repoPath, repo.Packages, repo.InsecureSkipVerify); err != nil {
+			combinedCleanup()
+			return nil, nil, fmt.Errorf("failed to prepare local RPM repository source path %s: %w", repoPath, err)
 		}
 
 		repoName := fmt.Sprintf("rpmlocrepo%d", i+1)
 		var repoURL string
 
 		// Check if it's already a proper repository with repodata metadata
-		repoMetaDataPath := filepath.Join(repo.Path, "repodata/repomd.xml")
+		repoMetaDataPath := filepath.Join(repoPath, "repodata/repomd.xml")
 		if _, err := os.Stat(repoMetaDataPath); err != nil {
 			if os.IsNotExist(err) {
 				// Not a proper repo - copy RPMs, generate metadata, and serve over HTTP
-				_, tempURL, cleanup, err := CreateTemporaryRepository(repo.Path, repoName)
+				_, tempURL, cleanup, err := CreateTemporaryRepository(repoPath, repoName)
 				if err != nil {
 					combinedCleanup()
-					return nil, nil, fmt.Errorf("failed to create temporary RPM repository for %s: %w", repo.Path, err)
+					return nil, nil, fmt.Errorf("failed to create temporary RPM repository for %s: %w", repoPath, err)
 				}
 				cleanups = append(cleanups, cleanup)
 				repoURL = tempURL
@@ -109,10 +129,10 @@ func LocalUserPackages() ([]ospackage.PackageInfo, func(), error) {
 			}
 		} else {
 			// Already a proper repo - serve it directly over HTTP
-			tempURL, serverCleanup, err := network.ServeRepositoryHTTP(repo.Path)
+			tempURL, serverCleanup, err := network.ServeRepositoryHTTP(repoPath)
 			if err != nil {
 				combinedCleanup()
-				return nil, nil, fmt.Errorf("failed to serve local RPM repository %s via HTTP: %w", repo.Path, err)
+				return nil, nil, fmt.Errorf("failed to serve local RPM repository %s via HTTP: %w", repoPath, err)
 			}
 			cleanups = append(cleanups, serverCleanup)
 			repoURL = tempURL
@@ -128,7 +148,7 @@ func LocalUserPackages() ([]ospackage.PackageInfo, func(), error) {
 		localPkgs, err := ParseRepositoryMetadata(repoURL, primaryXmlURL, repo.AllowPackages)
 		if err != nil {
 			combinedCleanup()
-			return nil, nil, fmt.Errorf("parsing local RPM repository %s failed: %w", repo.Path, err)
+			return nil, nil, fmt.Errorf("parsing local RPM repository %s failed: %w", repoPath, err)
 		}
 		allLocalPackages = append(allLocalPackages, localPkgs...)
 	}
@@ -559,6 +579,146 @@ func Resolve(req []ospackage.PackageInfo, all []ospackage.PackageInfo) ([]ospack
 	return needed, nil
 }
 
+func isRPMRequirementInCache(required string, cachedPackageInfos []ospackage.PackageInfo) bool {
+	required = strings.TrimSpace(required)
+	if required == "" {
+		return true
+	}
+
+	for _, pkg := range cachedPackageInfos {
+		if strings.TrimSpace(pkg.Name) == required {
+			return true
+		}
+	}
+
+	return false
+}
+
+func isRPMPackageCacheOutdated(requiredPackages []string, cacheDir string) (bool, []string, []string, error) {
+	pattern := filepath.Join(cacheDir, "*.rpm")
+	cachedPaths, err := filepath.Glob(pattern)
+	if err != nil {
+		return false, nil, nil, fmt.Errorf("glob %q: %w", pattern, err)
+	}
+
+	cachedPackageInfos := make([]ospackage.PackageInfo, 0, len(cachedPaths))
+	cachedFiles := make([]string, 0, len(cachedPaths))
+	for _, p := range cachedPaths {
+		base := filepath.Base(p)
+		cachedFiles = append(cachedFiles, base)
+		cachedPackageInfos = append(cachedPackageInfos, ospackage.PackageInfo{
+			Name: extractBasePackageNameFromFile(base),
+			URL:  p,
+			Type: "rpm",
+		})
+	}
+
+	missingSet := make(map[string]struct{})
+	var missing []string
+	for _, req := range requiredPackages {
+		req = strings.TrimSpace(req)
+		if req == "" {
+			continue
+		}
+		if isRPMRequirementInCache(req, cachedPackageInfos) {
+			continue
+		}
+		if _, seen := missingSet[req]; seen {
+			continue
+		}
+		missingSet[req] = struct{}{}
+		missing = append(missing, req)
+	}
+
+	return len(missing) > 0, missing, cachedFiles, nil
+}
+
+func configuredRPMRepoURLs() []string {
+	seen := make(map[string]struct{})
+	urls := make([]string, 0, 1+len(UserRepo))
+	add := func(url string) {
+		url = strings.TrimSpace(url)
+		if url == "" || url == "<URL>" {
+			return
+		}
+		if _, ok := seen[url]; ok {
+			return
+		}
+		seen[url] = struct{}{}
+		urls = append(urls, url)
+	}
+
+	add(RepoCfg.URL)
+	for _, repo := range UserRepo {
+		add(repo.URL)
+	}
+
+	return urls
+}
+
+// clearRPMMetadataCache removes primary.parsed.json and primary.location.json
+// from the metadata cache directory derived from the configured repo URL so that
+// repository metadata is re-fetched on the next run.
+func clearRPMMetadataCache() {
+	log := logger.Logger()
+
+	repoURLs := configuredRPMRepoURLs()
+	if len(repoURLs) == 0 {
+		return
+	}
+
+	for _, repoURL := range repoURLs {
+		metaDir, err := rpmMetadataCacheDir(repoURL)
+		if err != nil {
+			log.Warnf("failed to resolve RPM metadata cache directory for %s: %v", repoURL, err)
+			continue
+		}
+
+		for _, name := range []string{"primary.parsed.json", "primary.location.json"} {
+			f := filepath.Join(metaDir, name)
+			if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
+				log.Warnf("failed to remove RPM metadata cache %s: %v", f, err)
+				continue
+			}
+			log.Infof("removed RPM metadata cache: %s", f)
+		}
+	}
+}
+
+// clearRPMPackageCache removes all .rpm files from cacheDir and invalidates
+// the repository metadata cache (primary.parsed.json, primary.location.json)
+// so that a full re-download including fresh repository metadata is performed
+// on the next run.
+func clearRPMPackageCache(cacheDir string) error {
+	log := logger.Logger()
+	pattern := filepath.Join(cacheDir, "*.rpm")
+	files, err := filepath.Glob(pattern)
+	if err != nil {
+		return fmt.Errorf("glob %q: %w", pattern, err)
+	}
+	for _, f := range files {
+		if err := os.Remove(f); err != nil {
+			return fmt.Errorf("removing cached file %s: %w", f, err)
+		}
+		log.Debugf("removed stale cached file: %s", filepath.Base(f))
+	}
+	log.Infof("cleared %d stale RPM files from cache directory %s", len(files), cacheDir)
+	clearRPMMetadataCache()
+	return nil
+}
+
+func buildRPMPackageInfosFromCache(cacheDir string, cachedFiles []string) []ospackage.PackageInfo {
+	infos := make([]ospackage.PackageInfo, 0, len(cachedFiles))
+	for _, file := range cachedFiles {
+		infos = append(infos, ospackage.PackageInfo{
+			Name: extractBasePackageNameFromFile(file),
+			Type: "rpm",
+			URL:  filepath.Join(cacheDir, file),
+		})
+	}
+	return infos
+}
+
 // DownloadPackages downloads packages and returns the list of downloaded package names.
 func DownloadPackages(pkgList []string, destDir, dotFile string, pkgSources map[string]config.PackageSource, systemRootsOnly bool) ([]string, error) {
 	downloadedPkgs, _, err := DownloadPackagesComplete(pkgList, destDir, dotFile, pkgSources, systemRootsOnly)
@@ -567,9 +727,55 @@ func DownloadPackages(pkgList []string, destDir, dotFile string, pkgSources map[
 
 // DownloadPackagesComplete downloads packages and returns both package names and full package info.
 func DownloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSources map[string]config.PackageSource, systemRootsOnly bool) ([]string, []ospackage.PackageInfo, error) {
+	return downloadPackagesComplete(pkgList, destDir, dotFile, pkgSources, systemRootsOnly, false)
+}
+
+func handleRPMCacheRetry(
+	requiredPackages []string,
+	absDestDir string,
+	retriedAfterMetadataClear bool,
+	retryFunc func() ([]string, []ospackage.PackageInfo, error),
+) ([]string, []ospackage.PackageInfo, bool, error) {
+	log := logger.Logger()
+
+	cacheOutdated, missingRequired, cachedFiles, cacheErr := isRPMPackageCacheOutdatedFunc(requiredPackages, absDestDir)
+	if cacheErr != nil {
+		log.Warnf("Failed to evaluate RPM package cache state: %v", cacheErr)
+		return nil, nil, false, nil
+	}
+
+	if !cacheOutdated {
+		log.Infof("RPM package cache is up-to-date; all %d resolved packages are available locally", len(requiredPackages))
+		return cachedFiles, buildRPMPackageInfosFromCache(absDestDir, cachedFiles), true, nil
+	}
+
+	if len(missingRequired) == 0 {
+		return nil, nil, false, nil
+	}
+
+	log.Infof("RPM package cache is outdated; missing required packages: %v", missingRequired)
+	clearRPMMetadataCacheFunc()
+	log.Infof("Cleared RPM metadata cache due to missing required packages")
+
+	if retriedAfterMetadataClear {
+		log.Infof("Keeping existing cached RPM files and continuing to fetch only missing/new packages")
+		return nil, nil, false, nil
+	}
+
+	log.Infof("Retrying RPM package resolution after metadata cache clear")
+	pkgs, infos, err := retryFunc()
+	return pkgs, infos, true, err
+}
+
+func downloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSources map[string]config.PackageSource, systemRootsOnly bool, retriedAfterMetadataClear bool) ([]string, []ospackage.PackageInfo, error) {
 	var downloadPkgList []string
 
 	log := logger.Logger()
+	absDestDir, err := filepath.Abs(destDir)
+	if err != nil {
+		return downloadPkgList, nil, fmt.Errorf("resolving cache directory: %v", err)
+	}
+
 	// Fetch the entire package list
 	all, err := Packages()
 	if err != nil {
@@ -629,6 +835,25 @@ func DownloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSour
 	}
 	log.Infof("Sorted %d packages for installation", len(sorted_pkgs))
 
+	if len(sorted_pkgs) > 0 {
+		requiredPackages := make([]string, 0, len(sorted_pkgs))
+		for _, pkg := range sorted_pkgs {
+			requiredPackages = append(requiredPackages, pkg.Name)
+		}
+
+		handledPkgList, handledInfos, handled, handledErr := handleRPMCacheRetry(
+			requiredPackages,
+			absDestDir,
+			retriedAfterMetadataClear,
+			func() ([]string, []ospackage.PackageInfo, error) {
+				return downloadPackagesComplete(pkgList, destDir, dotFile, pkgSources, systemRootsOnly, true)
+			},
+		)
+		if handled {
+			return handledPkgList, handledInfos, handledErr
+		}
+	}
+
 	// If a dot file is specified, generate the dependency graph
 	if dotFile != "" {
 		graphPkgs := sorted_pkgs
@@ -648,17 +873,13 @@ func DownloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSour
 	}
 
 	// Ensure dest directory exists
-	absDestDir, err := filepath.Abs(destDir)
-	if err != nil {
-		return downloadPkgList, nil, fmt.Errorf("resolving cache directory: %v", err)
-	}
 	if err := os.MkdirAll(absDestDir, 0755); err != nil {
 		return downloadPkgList, nil, fmt.Errorf("creating cache directory %s: %v", absDestDir, err)
 	}
 
 	// Download packages using configured workers and cache directory
 	log.Infof("Downloading %d packages to %s using %d workers", len(urls), absDestDir, config.Workers())
-	if err := pkgfetcher.FetchPackages(urls, absDestDir, config.Workers()); err != nil {
+	if err := pkgfetcher.FetchPackages(runctx.Context(), urls, absDestDir, config.Workers()); err != nil {
 		return downloadPkgList, nil, fmt.Errorf("fetch failed: %v", err)
 	}
 	log.Info("All downloads complete")

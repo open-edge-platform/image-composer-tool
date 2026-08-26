@@ -1,0 +1,12 @@
+[Unit]
+Description=One-time auto-expand last partition on first boot
+After=local-fs.target
+ConditionPathExists=!/var/lib/image-composer-tool/last-partition-expanded
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ict-auto-expand-last-partition.sh
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target

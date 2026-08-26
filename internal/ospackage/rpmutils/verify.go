@@ -105,6 +105,7 @@ func VerifyAll(paths []string, pubkeyPaths []string, workers int) []Result {
 	if err := bar.Finish(); err != nil {
 		log.Errorf("failed to finish progress bar: %v", err)
 	}
+	fmt.Println()
 
 	return results
 }

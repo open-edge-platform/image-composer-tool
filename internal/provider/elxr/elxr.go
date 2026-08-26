@@ -9,6 +9,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/image/initrdmaker"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/isomaker"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/rawmaker"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/wsl2maker"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/debutils"
 	"github.com/open-edge-platform/image-composer-tool/internal/provider"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/display"
@@ -61,7 +62,7 @@ func (p *eLxr) Init(dist, arch string) error {
 		arch = "arm64"
 	}
 
-	cfgs, err := loadRepoConfig("", arch)
+	cfgs, err := loadRepoConfig(dist, arch)
 	if err != nil {
 		log.Errorf("Parsing repo config failed: %v", err)
 		return err
@@ -118,9 +119,22 @@ func (p *eLxr) BuildImage(template *config.ImageTemplate) error {
 		return p.buildInitrdImage(template)
 	case "iso":
 		return p.buildIsoImage(template)
+	case "wsl2":
+		return p.buildWslImage(template)
 	default:
 		return fmt.Errorf("unsupported image type: %s", template.Target.ImageType)
 	}
+}
+
+func (p *eLxr) buildWslImage(template *config.ImageTemplate) error {
+	maker, err := wsl2maker.NewWSL2Maker(p.chrootEnv, template)
+	if err != nil {
+		return fmt.Errorf("failed to create WSL2 maker: %w", err)
+	}
+	if err := maker.Init(); err != nil {
+		return fmt.Errorf("failed to initialize WSL2 maker: %w", err)
+	}
+	return maker.BuildWSL2Image()
 }
 
 func (p *eLxr) buildRawImage(template *config.ImageTemplate) error {
@@ -233,6 +247,7 @@ func (p *eLxr) installHostDependency() error {
 		"veritysetup":       "cryptsetup",       // For the veritysetup command
 		"sbsign":            "sbsigntool",       // For the UKI image creation
 		"dpkg-scanpackages": "dpkg-dev",         // For DEB repository metadata creation
+		"bootctl":           "systemd-boot-efi", // For bootctl on Ubuntu hosts
 		"arch-test":         "arch-test",        // Required by mmdebstrap for foreign-architecture bootstrap
 		"qemu-user-static":  "qemu-user-static", // For cross-architecture binary execution support
 	}
@@ -301,41 +316,24 @@ func (p *eLxr) downloadImagePkgs(template *config.ImageTemplate) error {
 	}
 	template.FullPkgList = fullPkgList
 	template.FullPkgListBom = fullPkgListBom
+	// Narrow a kernel glob to the concrete package selected during download so the
+	// install step (including an installer ISO's separate process) installs only it.
+	template.ResolvedKernelPackages = debutils.ExpandKernelInstallNames(template.GetKernelPackages(), debutils.SelectedKernelPackages())
 
 	return nil
 }
 
-func loadRepoConfig(repoUrl string, arch string) ([]debutils.RepoConfig, error) {
+func loadRepoConfig(dist string, arch string) ([]debutils.RepoConfig, error) {
 	var repoConfigs []debutils.RepoConfig
+	dist = normalizeElxrDist(dist)
 
-	// Load provider repo config for elxr - use correct OS name
-	providerConfigs, err := config.LoadProviderRepoConfig(OsName, "elxr12", arch) // Use "wind-river-elxr" and "aria" dist
+	// Load provider repo config for eLxr based on requested distribution.
+	providerConfigs, err := config.LoadProviderRepoConfig(OsName, dist, arch)
 	if err != nil {
 		return repoConfigs, fmt.Errorf("failed to load provider repo config: %w", err)
 	}
 
-	repoList := make([]debutils.Repository, len(providerConfigs))
-	repoGroup := "elxr"
-
-	// Convert each ProviderRepoConfig to debutils.RepoConfig
-	for i, providerConfig := range providerConfigs {
-		repoType, name, _, gpgKey, component, _, _, _, _, baseURL, _, _, _ := providerConfig.ToRepoConfigData(arch)
-
-		// Verify this is a DEB repository
-		if repoType != "deb" {
-			log.Warnf("Skipping non-DEB repository: %s (type: %s)", name, repoType)
-			continue
-		}
-
-		repoList[i] = debutils.Repository{
-			ID:        fmt.Sprintf("%s%d", repoGroup, i+1),
-			Codename:  name,
-			URL:       baseURL,
-			PKey:      gpgKey,
-			Component: component,
-			Priority:  0, // Default priority
-		}
-	}
+	repoList := buildRepositoryList(providerConfigs, arch)
 
 	repoConfigs, err = debutils.BuildRepoConfigs(repoList, arch)
 	if err != nil {
@@ -347,6 +345,43 @@ func loadRepoConfig(repoUrl string, arch string) ([]debutils.RepoConfig, error) 
 	}
 
 	return repoConfigs, nil
+}
+
+func buildRepositoryList(providerConfigs []config.ProviderRepoConfig, arch string) []debutils.Repository {
+	repoList := make([]debutils.Repository, len(providerConfigs))
+	repoGroup := "elxr"
+
+	for i, providerConfig := range providerConfigs {
+		repoType, name, _, gpgKey, component, _, _, _, _, baseURL, _, _, _ := providerConfig.ToRepoConfigData(arch)
+
+		if repoType != "deb" {
+			log.Warnf("Skipping non-DEB repository: %s (type: %s)", name, repoType)
+			continue
+		}
+
+		repoList[i] = debutils.Repository{
+			ID:        fmt.Sprintf("%s%d", repoGroup, i+1),
+			Codename:  name,
+			URL:       baseURL,
+			PKey:      gpgKey,
+			Component: component,
+			Priority:  500,
+		}
+	}
+
+	return repoList
+}
+
+// normalizeElxrDist maps user/config aliases to supported distribution directory names.
+func normalizeElxrDist(dist string) string {
+	switch dist {
+	case "", "elxr12", "aria":
+		return "elxr12"
+	case "elxr13", "bianca":
+		return "elxr13"
+	default:
+		return dist
+	}
 }
 
 // displayImageArtifacts displays all image artifacts in the build directory

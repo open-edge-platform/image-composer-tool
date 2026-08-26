@@ -13,5 +13,5 @@
 .github/ @adimoft @daveroge @shanedonohue @manilk1x @open-edge-platform/image-composer-tool-maintain
 
 # documentation content
-/docs @open-edge-platform/open-edge-platform-docs-write
-README.md @open-edge-platform/open-edge-platform-docs-write
+/docs     @open-edge-platform/image-composer-tool-maintain @open-edge-platform/open-edge-platform-docs-write
+README.md @open-edge-platform/image-composer-tool-maintain @open-edge-platform/open-edge-platform-docs-write

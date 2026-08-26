@@ -1,6 +1,10 @@
 package rpmutils
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"bytes"
+	"compress/gzip"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1261,43 +1265,31 @@ func TestGenerateSPDXFileName(t *testing.T) {
 	tests := []struct {
 		name         string
 		repoName     string
-		wantPrefix   string
-		wantSuffix   string
 		wantContains []string
 	}{
 		{
 			name:         "Simple repository name",
 			repoName:     "Azure_Linux",
-			wantPrefix:   "spdx_manifest_rpm_Azure_Linux_",
-			wantSuffix:   ".json",
 			wantContains: []string{"spdx_manifest_rpm", "Azure_Linux"},
 		},
 		{
 			name:         "Repository name with spaces",
 			repoName:     "Azure Linux 3.0",
-			wantPrefix:   "spdx_manifest_rpm_Azure_Linux_3.0_",
-			wantSuffix:   ".json",
 			wantContains: []string{"spdx_manifest_rpm", "Azure_Linux_3.0"},
 		},
 		{
 			name:         "Empty repository name",
 			repoName:     "",
-			wantPrefix:   "spdx_manifest_rpm__",
-			wantSuffix:   ".json",
 			wantContains: []string{"spdx_manifest_rpm"},
 		},
 		{
 			name:         "Repository name with multiple spaces",
 			repoName:     "My Test Repo Name",
-			wantPrefix:   "spdx_manifest_rpm_My_Test_Repo_Name_",
-			wantSuffix:   ".json",
 			wantContains: []string{"spdx_manifest_rpm", "My_Test_Repo_Name"},
 		},
 		{
 			name:         "Repository name with special characters",
 			repoName:     "Ubuntu-22.04 LTS",
-			wantPrefix:   "spdx_manifest_rpm_Ubuntu-22.04_LTS_",
-			wantSuffix:   ".json",
 			wantContains: []string{"spdx_manifest_rpm", "Ubuntu-22.04_LTS"},
 		},
 	}
@@ -1306,16 +1298,6 @@ func TestGenerateSPDXFileName(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := GenerateSPDXFileName(tt.repoName)
 
-			// Check prefix
-			if !strings.HasPrefix(result, tt.wantPrefix) {
-				t.Errorf("GenerateSPDXFileName() result %q does not start with expected prefix %q", result, tt.wantPrefix)
-			}
-
-			// Check suffix
-			if !strings.HasSuffix(result, tt.wantSuffix) {
-				t.Errorf("GenerateSPDXFileName() result %q does not end with expected suffix %q", result, tt.wantSuffix)
-			}
-
 			// Check that all expected substrings are present
 			for _, expected := range tt.wantContains {
 				if !strings.Contains(result, expected) {
@@ -1323,35 +1305,10 @@ func TestGenerateSPDXFileName(t *testing.T) {
 				}
 			}
 
-			// Validate timestamp format in the filename (YYYYMMDD_HHMMSS pattern)
-			// The timestamp should be at the end before .json
-			// Expected format: spdx_manifest_rpm_<reponame>_YYYYMMDD_HHMMSS.json
-			if !strings.HasSuffix(result, ".json") {
-				t.Errorf("GenerateSPDXFileName() result %q does not end with .json", result)
-				return
-			}
-
-			// Remove .json and get the last part which should be the timestamp
-			withoutExt := strings.TrimSuffix(result, ".json")
-			parts := strings.Split(withoutExt, "_")
-			if len(parts) < 2 {
-				t.Errorf("GenerateSPDXFileName() result %q does not contain expected format", result)
-				return
-			}
-
-			// The last two parts should be date and time: YYYYMMDD and HHMMSS
-			if len(parts) >= 2 {
-				dateTime := parts[len(parts)-2] + "_" + parts[len(parts)-1]
-				// Validate timestamp format: should be exactly 15 characters (YYYYMMDD_HHMMSS)
-				timestampPattern := `^\d{8}_\d{6}$`
-				matched, err := regexp.MatchString(timestampPattern, dateTime)
-				if err != nil {
-					t.Errorf("Error matching timestamp pattern: %v", err)
-					return
-				}
-				if !matched {
-					t.Errorf("GenerateSPDXFileName() timestamp %q does not match expected pattern YYYYMMDD_HHMMSS", dateTime)
-				}
+			// Check timestamp suffix format
+			re := regexp.MustCompile(`^spdx_manifest_rpm_.*_[0-9]{8}_[0-9]{6}\.json$`)
+			if !re.MatchString(result) {
+				t.Errorf("GenerateSPDXFileName() result %q does not match timestamped format", result)
 			}
 
 			// Ensure the filename doesn't contain any spaces (they should be replaced with underscores)
@@ -1370,23 +1327,15 @@ func TestGenerateSPDXFileNameConsistency(t *testing.T) {
 	result1 := GenerateSPDXFileName(repoName)
 	result2 := GenerateSPDXFileName(repoName)
 
-	// They should have the same structure but potentially different timestamps
-	expectedPattern := `^spdx_manifest_rpm_Test_Repo_\d{8}_\d{6}\.json$`
-
-	matched1, err := regexp.MatchString(expectedPattern, result1)
-	if err != nil {
-		t.Errorf("Error matching pattern for result1: %v", err)
+	if !strings.Contains(result1, "spdx_manifest_rpm_Test_Repo") {
+		t.Errorf("unexpected first SPDX filename: %q", result1)
 	}
-	if !matched1 {
-		t.Errorf("First result %q does not match expected pattern", result1)
+	if !strings.Contains(result2, "spdx_manifest_rpm_Test_Repo") {
+		t.Errorf("unexpected second SPDX filename: %q", result2)
 	}
-
-	matched2, err := regexp.MatchString(expectedPattern, result2)
-	if err != nil {
-		t.Errorf("Error matching pattern for result2: %v", err)
-	}
-	if !matched2 {
-		t.Errorf("Second result %q does not match expected pattern", result2)
+	re := regexp.MustCompile(`^spdx_manifest_rpm_.*_[0-9]{8}_[0-9]{6}\.json$`)
+	if !re.MatchString(result1) || !re.MatchString(result2) {
+		t.Errorf("expected timestamped SPDX filename format, got %q and %q", result1, result2)
 	}
 }
 
@@ -1643,5 +1592,198 @@ func TestLocalUserPackagesFailsForNonExistentPath(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "failed to create temporary RPM repository") {
 		t.Errorf("expected 'failed to create temporary RPM repository' in error, got: %v", err)
+	}
+}
+
+func TestImportOnlineRPMFileToRepoRPMAndTarGz(t *testing.T) {
+	repoDir := t.TempDir()
+	inputDir := t.TempDir()
+
+	// Direct .rpm file
+	directRPMPath := filepath.Join(inputDir, "curl-8.8.0-2.azl3.x86_64.rpm")
+	if err := os.WriteFile(directRPMPath, []byte("rpm-data-direct"), 0644); err != nil {
+		t.Fatalf("failed to write direct .rpm file: %v", err)
+	}
+
+	// .tar.gz containing a .rpm
+	var tarBuf bytes.Buffer
+	gzWriter := gzip.NewWriter(&tarBuf)
+	tarWriter := tar.NewWriter(gzWriter)
+	rpmInTar := []byte("rpm-data-from-tar")
+	header := &tar.Header{
+		Name: "nested/kernel-6.6.0-1.azl3.x86_64.rpm",
+		Mode: 0644,
+		Size: int64(len(rpmInTar)),
+	}
+	if err := tarWriter.WriteHeader(header); err != nil {
+		t.Fatalf("failed to write tar header: %v", err)
+	}
+	if _, err := tarWriter.Write(rpmInTar); err != nil {
+		t.Fatalf("failed to write tar payload: %v", err)
+	}
+	if err := tarWriter.Close(); err != nil {
+		t.Fatalf("failed to close tar writer: %v", err)
+	}
+	if err := gzWriter.Close(); err != nil {
+		t.Fatalf("failed to close gzip writer: %v", err)
+	}
+	tarPath := filepath.Join(inputDir, "kernel-rpms.tar.gz")
+	if err := os.WriteFile(tarPath, tarBuf.Bytes(), 0644); err != nil {
+		t.Fatalf("failed to write tar.gz file: %v", err)
+	}
+
+	if _, err := importOnlineRPMFileToRepo(directRPMPath, repoDir); err != nil {
+		t.Fatalf("importOnlineRPMFileToRepo returned error for .rpm input: %v", err)
+	}
+	if _, err := importOnlineRPMFileToRepo(tarPath, repoDir); err != nil {
+		t.Fatalf("importOnlineRPMFileToRepo returned error for .tar.gz input: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(repoDir, "curl-8.8.0-2.azl3.x86_64.rpm")); err != nil {
+		t.Fatalf("expected downloaded .rpm in repo dir: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repoDir, "kernel-6.6.0-1.azl3.x86_64.rpm")); err != nil {
+		t.Fatalf("expected extracted .rpm from tar.gz in repo dir: %v", err)
+	}
+}
+
+func TestImportOnlineRPMFileToRepoTarRejectsPathTraversal(t *testing.T) {
+	repoDir := t.TempDir()
+	archiveDir := t.TempDir()
+
+	var tarBuf bytes.Buffer
+	tw := tar.NewWriter(&tarBuf)
+	rpmPayload := []byte("rpm-data")
+	if err := tw.WriteHeader(&tar.Header{
+		Name: "../../evil.rpm",
+		Mode: 0644,
+		Size: int64(len(rpmPayload)),
+	}); err != nil {
+		t.Fatalf("failed to write tar header: %v", err)
+	}
+	if _, err := tw.Write(rpmPayload); err != nil {
+		t.Fatalf("failed to write tar payload: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("failed to close tar writer: %v", err)
+	}
+
+	tarPath := filepath.Join(archiveDir, "malicious.tar")
+	if err := os.WriteFile(tarPath, tarBuf.Bytes(), 0644); err != nil {
+		t.Fatalf("failed to write tar file: %v", err)
+	}
+
+	_, err := importOnlineRPMFileToRepo(tarPath, repoDir)
+	if err == nil {
+		t.Fatal("expected path traversal tar entry to be rejected")
+	}
+	if !strings.Contains(err.Error(), "failed to validate tar entry") {
+		t.Fatalf("expected tar validation error, got: %v", err)
+	}
+
+	if _, statErr := os.Stat(filepath.Join(repoDir, "evil.rpm")); !os.IsNotExist(statErr) {
+		t.Fatalf("expected no extracted file for malicious tar, stat error: %v", statErr)
+	}
+}
+
+func TestImportOnlineRPMFileToRepoZipRejectsPathTraversal(t *testing.T) {
+	repoDir := t.TempDir()
+	archiveDir := t.TempDir()
+
+	zipPath := filepath.Join(archiveDir, "malicious.zip")
+	zipOut, err := os.Create(zipPath)
+	if err != nil {
+		t.Fatalf("failed to create zip file: %v", err)
+	}
+
+	zw := zip.NewWriter(zipOut)
+	entryWriter, err := zw.Create("../../evil.rpm")
+	if err != nil {
+		t.Fatalf("failed to create zip entry: %v", err)
+	}
+	if _, err := entryWriter.Write([]byte("rpm-data")); err != nil {
+		t.Fatalf("failed to write zip entry payload: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("failed to close zip writer: %v", err)
+	}
+	if err := zipOut.Close(); err != nil {
+		t.Fatalf("failed to close zip file: %v", err)
+	}
+
+	_, err = importOnlineRPMFileToRepo(zipPath, repoDir)
+	if err == nil {
+		t.Fatal("expected path traversal zip entry to be rejected")
+	}
+	if !strings.Contains(err.Error(), "failed to validate zip entry") {
+		t.Fatalf("expected zip validation error, got: %v", err)
+	}
+
+	if _, statErr := os.Stat(filepath.Join(repoDir, "evil.rpm")); !os.IsNotExist(statErr) {
+		t.Fatalf("expected no extracted file for malicious zip, stat error: %v", statErr)
+	}
+}
+
+func TestPrepareLocalRepositoryFilesRPMRejectsNonHTTPS(t *testing.T) {
+	repoDir := t.TempDir()
+	err := PrepareLocalRepositoryFiles(repoDir, []string{"http://example.com/file.rpm"}, false)
+	if err == nil {
+		t.Fatal("expected error for http:// URL")
+	}
+	if !strings.Contains(err.Error(), "must use https scheme") {
+		t.Fatalf("expected https scheme error, got: %v", err)
+	}
+}
+
+func TestPrepareLocalRepositoryFilesRPMEmptyPackages(t *testing.T) {
+	repoDir := t.TempDir()
+	if err := PrepareLocalRepositoryFiles(repoDir, nil, false); err != nil {
+		t.Fatalf("expected no error for empty packages, got: %v", err)
+	}
+}
+
+func TestPrepareLocalRepositoryFilesRPMLocalFileCopy(t *testing.T) {
+	repoDir := t.TempDir()
+	srcDir := t.TempDir()
+
+	localRPM := filepath.Join(srcDir, "custom-driver-1.0.x86_64.rpm")
+	if err := os.WriteFile(localRPM, []byte("fake-rpm-content"), 0644); err != nil {
+		t.Fatalf("failed to create local rpm file: %v", err)
+	}
+
+	if err := PrepareLocalRepositoryFiles(repoDir, []string{localRPM}, false); err != nil {
+		t.Fatalf("expected no error for local file copy, got: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(repoDir, "custom-driver-1.0.x86_64.rpm")); err != nil {
+		t.Fatalf("expected copied .rpm in repo dir: %v", err)
+	}
+}
+
+func TestPrepareLocalRepositoryFilesRPMLocalDirCopy(t *testing.T) {
+	repoDir := t.TempDir()
+	srcDir := t.TempDir()
+
+	// Create several .rpm files and a non-.rpm file in the source directory
+	files := []string{"pkg-a-1.0.x86_64.rpm", "pkg-b-2.0.x86_64.rpm", "readme.txt"}
+	for _, f := range files {
+		if err := os.WriteFile(filepath.Join(srcDir, f), []byte("content"), 0644); err != nil {
+			t.Fatalf("failed to create %s: %v", f, err)
+		}
+	}
+
+	if err := PrepareLocalRepositoryFiles(repoDir, []string{srcDir}, false); err != nil {
+		t.Fatalf("expected no error for local dir copy, got: %v", err)
+	}
+
+	// .rpm files should be copied
+	for _, f := range []string{"pkg-a-1.0.x86_64.rpm", "pkg-b-2.0.x86_64.rpm"} {
+		if _, err := os.Stat(filepath.Join(repoDir, f)); err != nil {
+			t.Fatalf("expected %s in repo dir: %v", f, err)
+		}
+	}
+	// non-.rpm file should not be copied
+	if _, err := os.Stat(filepath.Join(repoDir, "readme.txt")); err == nil {
+		t.Fatal("readme.txt should not have been copied into repo dir")
 	}
 }

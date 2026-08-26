@@ -64,6 +64,9 @@ func (rpmInstaller *RpmInstaller) InstallRpmPkg(targetOs, chrootEnvPath, chrootP
 	}
 
 	if err = mount.MountSysfs(chrootEnvPath); err != nil {
+		if cleanupErr := mount.UmountSysfs(chrootEnvPath); cleanupErr != nil {
+			log.Warnf("best-effort cleanup after failed sysfs mount also failed: %v", cleanupErr)
+		}
 		log.Errorf("failed to mount system directories in chroot environment: %v", err)
 		return fmt.Errorf("failed to mount system directories in chroot environment: %w", err)
 	}

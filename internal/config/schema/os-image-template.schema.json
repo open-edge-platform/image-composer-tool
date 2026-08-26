@@ -43,7 +43,7 @@
         "imageType": {
           "type": "string",
           "description": "Type of image to build",
-          "enum": ["raw", "img", "iso"]
+          "enum": ["raw", "img", "iso", "wsl2"]
         }
       },
       "required": ["os", "dist", "arch", "imageType"],
@@ -59,7 +59,7 @@
         },
         {
           "if": { "properties": { "os": { "const": "wind-river-elxr" } } },
-          "then": { "properties": { "dist": { "enum": ["elxr12"] } } }
+          "then": { "properties": { "dist": { "enum": ["elxr12", "elxr13"] } } }
         },
         {
           "if": { "properties": { "os": { "const": "debian" } } },
@@ -90,15 +90,24 @@
             "strategy": {
               "type": "string",
               "description": "Disk selection strategy",
-              "enum": ["first", "largest", "fastest", "largest-free"]
+              "enum": ["first", "largest", "fastest"]
             },
             "excludeRemovable": {
               "type": "boolean",
               "description": "Exclude removable or externally attached disks from selection using RM, transport, hotplug, udev, and sysfs heuristics",
               "default": true
+            },
+            "requireEmpty": {
+             "type": "boolean",
+             "description": "Require the selected disk to have no existing partitions before installation. This check does not detect raw or unpartitioned data already on the disk. When false, installation may overwrite existing data on the selected disk.",
+             "default": true
             }
           },
           "additionalProperties": false
+        },
+        "extendLastPartitionToFillDisk": {
+          "type": "boolean",
+          "description": "When true, force only the last partition to use all remaining disk space"
         },
         "artifacts": {
           "type": "array",
@@ -109,7 +118,7 @@
               "type": {
                 "type": "string",
                 "description": "Output format type",
-                "enum": ["raw", "qcow2", "vhd", "vhdx", "vmdk", "vdi"]
+                "enum": ["raw", "qcow2", "vhd", "vhdx", "vmdk", "vdi", "tar"]
               },
               "compression": {
                 "type": "string",
@@ -210,18 +219,64 @@
         }
       ]
     },
+    "FDE": {
+      "type": "object",
+      "description": "Full-disk-encryption (LUKS) configuration",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether full-disk encryption is enabled",
+          "default": false
+        },
+        "passphraseFile": {
+          "type": "string",
+          "description": "Absolute or template-relative local file path containing the passphrase"
+        },
+        "partitions": {
+          "type": "array",
+          "description": "Disk partition IDs to encrypt (e.g., \"rootfs\", \"userdata\")",
+          "items": { "type": "string" }
+        },
+        "unlock": {
+          "type": "string",
+          "description": "Boot unlock mode: \"auto\" (keyfile embedded in initramfs, no prompt; default) or \"manual\" (interactive passphrase)",
+          "enum": ["auto", "manual"]
+        }
+      },
+      "required": ["enabled"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "enabled": { "const": true }
+            },
+            "required": ["enabled"]
+          },
+          "then": {
+            "required": ["passphraseFile"],
+            "properties": {
+              "passphraseFile": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      ]
+    },
     "Users": {
       "type": "array",
       "description": "User configurations",
       "items": {
         "type": "object",
         "properties": {
-          "name": { "type": "string", "description": "Username for the user account" },
+          "name": { "type": "string", "description": "Username for the user account", "pattern": "^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,31}$" },
           "password": { "type": "string", "description": "Plain text password (discouraged for security)" },
           "hash_algo": { "type": "string", "description": "Hash algorithm (e.g., sha512, bcrypt)" },
           "passwordMaxAge": { "type": "integer", "description": "Maximum password age in days" },
-          "startupScript": { "type": "string", "description": "Shell/script to run on login" },
-          "groups": { "type": "array", "items": { "type": "string" }, "description": "Additional groups" },
+          "startupScript": { "type": "string", "description": "Shell/script to run on login", "pattern": "^(/[^:\\s]*)?$" },
+          "groups": { "type": "array", "items": { "type": "string", "pattern": "^(?:<[A-Za-z0-9_]+>|[a-zA-Z0-9_][a-zA-Z0-9._-]{0,31})$" }, "description": "Additional groups" },
           "sudo": { "type": "boolean", "description": "Grant sudo permissions" },
           "home": { "type": "string", "description": "Home directory path" },
           "shell": { "type": "string", "description": "Login shell" }
@@ -248,6 +303,118 @@
       "properties": {
         "bootType": { "type": "string", "enum": ["efi", "legacy"] },
         "provider": { "type": "string", "enum": ["grub", "grub2", "systemd-boot"] }
+      },
+      "additionalProperties": false
+    },
+    "NetworkInterface": {
+      "type": "object",
+      "description": "Network interface configuration",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Interface name (e.g., enp1s0, ens3)",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,14}$"
+        },
+        "dhcp4": {
+          "type": "boolean",
+          "description": "Enable DHCPv4"
+        },
+        "dhcp6": {
+          "type": "boolean",
+          "description": "Enable DHCPv6"
+        },
+        "addresses": {
+          "type": "array",
+          "description": "Static IP addresses in CIDR notation (e.g., 192.168.1.10/24). Omit or use an empty list when DHCP is enabled; static addresses must not be set together with DHCP on the same interface.",
+          "items": {
+            "type": "string",
+            "oneOf": [
+              { "format": "ipv4-cidr" },
+              { "format": "ipv6-cidr" }
+            ]
+          }
+        },
+        "routes": {
+          "type": "array",
+          "description": "Static routes (use 'default' as destination for default gateway)",
+          "items": {
+            "type": "object",
+            "properties": {
+              "to": {
+                "type": "string",
+                "description": "Route destination (e.g., 'default', '10.0.0.0/8')",
+                "oneOf": [
+                  { "const": "default" },
+                  { "format": "ipv4-cidr" },
+                  { "format": "ipv6-cidr" }
+                ]
+              },
+              "via": {
+                "type": "string",
+                "description": "Gateway address (e.g., '10.0.0.1')",
+                "oneOf": [
+                  { "format": "ipv4" },
+                  { "format": "ipv6" }
+                ]
+              }
+            },
+            "required": ["to", "via"],
+            "additionalProperties": false
+          }
+        },
+        "nameservers": {
+          "type": "array",
+          "description": "DNS server addresses",
+          "items": {
+            "type": "string",
+            "oneOf": [
+              { "format": "ipv4" },
+              { "format": "ipv6" }
+            ]
+          }
+        }
+      },
+      "required": ["name"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "required": ["dhcp4"],
+                "properties": { "dhcp4": { "const": true } }
+              },
+              {
+                "required": ["dhcp6"],
+                "properties": { "dhcp6": { "const": true } }
+              }
+            ]
+          },
+          "then": {
+            "properties": {
+              "addresses": {
+                "type": "array",
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    "NetworkConfig": {
+      "type": "object",
+      "description": "Network configuration for the installed OS",
+      "properties": {
+        "backend": {
+          "type": "string",
+          "description": "Network backend to use",
+          "enum": ["systemd-networkd", "netplan"]
+        },
+        "interfaces": {
+          "type": "array",
+          "description": "List of network interfaces to configure",
+          "items": { "$ref": "#/$defs/NetworkInterface" }
+        }
       },
       "additionalProperties": false
     },
@@ -279,8 +446,10 @@
           "type": "string",
           "description": "Hostname of the system"},
         "immutability": { "$ref": "#/$defs/Immutability" },
+        "fde": { "$ref": "#/$defs/FDE" },
         "users": { "$ref": "#/$defs/Users" },
         "bootloader": { "$ref": "#/$defs/Bootloader" },
+        "network": { "$ref": "#/$defs/NetworkConfig" },
         "packages": {
           "type": "array",
           "description": "List of packages to include in the system. Supports simple glob-style patterns on package names, such as wayland* or libva-?[0-9]. Wildcards are limited to *, ?, and bracket ranges (e.g. [0-9]); patterns must match the allowed character set in this schema and are applied only to package names (versioned globs or comparison operators like pkg>=1.2 are not supported). Invalid patterns will cause template validation to fail.",
@@ -290,7 +459,21 @@
         "additionalFiles": {
           "type": "array",
           "description": "Additional files to include in the system",
-          "items": { "type": "object", "additionalProperties": true }
+          "items": {
+            "type": "object",
+            "required": ["local", "final"],
+            "properties": {
+              "local": { "type": "string", "minLength": 1, "description": "Path to the file on the host system" },
+              "final": { "type": "string", "minLength": 1, "description": "Path where the file should be placed in the image" },
+              "stage": {
+                "type": "string",
+                "description": "Overlay-only: WHEN to copy the file relative to initramfs/boot regeneration. '' (default) copies at the end of the build, after regeneration (historical behavior); 'pre-initramfs' copies before boot/initramfs regeneration so the generator can consume it (e.g. a dracut module or initramfs-tools hook). Ignored by create-mode builds.",
+                "enum": ["", "pre-initramfs"],
+                "default": ""
+              }
+            },
+            "additionalProperties": false
+          }
         },
         "configurations": {
           "type": "array",
@@ -322,6 +505,149 @@
       },
       "additionalProperties": false
     },
+    "Baseline": {
+      "type": "object",
+      "description": "Baseline image mode selector. Default mode is 'create' (build from scratch). 'overlay' layers packages onto an existing baseline image.",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "description": "Baseline assembly mode",
+          "enum": ["create", "overlay"],
+          "default": "create"
+        },
+        "source": { "$ref": "#/$defs/BaselineSource" }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "properties": { "mode": { "const": "overlay" } }, "required": ["mode"] },
+          "then": { "required": ["source"] }
+        },
+        {
+          "if": {
+            "anyOf": [
+              { "properties": { "mode": { "const": "create" } }, "required": ["mode"] },
+              { "not": { "required": ["mode"] } }
+            ]
+          },
+          "then": { "not": { "required": ["source"] } }
+        }
+      ]
+    },
+    "BaselineSource": {
+      "type": "object",
+      "description": "Baseline source, referenced by a local path or an https URL. Exactly one of 'path' or 'url' must be set. Supported formats are raw (default), qcow2, vhd, and vhdx; non-raw baselines are converted to RAW (via qemu-img) before mounting.",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Local filesystem path to the baseline RAW disk image (no URI scheme; use 'url' for remote images)",
+          "minLength": 1,
+          "not": { "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:" }
+        },
+        "url": {
+          "type": "string",
+          "description": "https URL of the baseline RAW disk image; downloaded over TLS before the overlay runs (plain http is rejected)",
+          "minLength": 1,
+          "pattern": "^https://[^/?#]"
+        },
+        "format": {
+          "type": "string",
+          "description": "Baseline image format. Non-raw formats are converted to RAW (via qemu-img) before the baseline is mounted.",
+          "enum": ["raw", "qcow2", "vhd", "vhdx"],
+          "default": "raw"
+        },
+        "sbomPath": {
+          "type": "string",
+          "description": "Optional local filesystem path to an externally-supplied SPDX SBOM (JSON) describing the baseline image (no URI scheme). When set and valid, the overlay SBOM is generated by combining this base SBOM with the overlay-contributed packages. When unset the SBOM the baseline image carries at /usr/share/sbom is used; when neither is available only the overlay delta is written and the build does not fail.",
+          "minLength": 1,
+          "not": { "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:" }
+        }
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        { "required": ["path"] },
+        { "required": ["url"] }
+      ]
+    },
+    "OverlayPolicy": {
+      "type": "object",
+      "description": "Policy controls for overlay-mode preflight and install.",
+      "properties": {
+        "packageOperation": {
+          "type": "string",
+          "description": "Permitted package operation set. 'additive-only' only adds new packages; 'additive-and-upgrade' also permits upgrading a package already installed in the baseline to a newer version (downgrades and removals remain blocked).",
+          "enum": ["additive-only", "additive-and-upgrade"],
+          "default": "additive-only"
+        },
+        "conflictPolicy": {
+          "type": "string",
+          "description": "How to handle package conflicts detected during preflight",
+          "enum": ["fail", "allow-explicit"],
+          "default": "fail"
+        },
+        "kernelCmdline": {
+          "type": "string",
+          "description": "Optional kernel command-line override applied to the overlaid image (full-line replacement of GRUB_CMDLINE_LINUX on a GRUB2 baseline). The value is written into a shell-sourced /etc/default/grub assignment, so it must not contain a double quote, dollar sign, backtick, backslash, or newline."
+        },
+        "grubDefault": {
+          "type": "string",
+          "description": "Optional GRUB_DEFAULT override applied to the overlaid image (pins the default boot menu entry, e.g. an Ubuntu submenu path). Only applied on a GRUB2 baseline. The value is written into a shell-sourced /etc/default/grub assignment, so it must not contain a double quote, dollar sign, backtick, backslash, or newline."
+        },
+        "allowDiskResize": {
+          "type": "boolean",
+          "description": "Permit growing the baseline image to satisfy a larger disk.size. Overlay mode preserves the baseline disk layout by default; when false (the default) a disk.size larger than the baseline is rejected. Resize is always grow-only and never shrinks the image.",
+          "default": false
+        },
+        "allowPackageRemoval": {
+          "type": "boolean",
+          "description": "Permit removing a baseline package that a to-install package conflicts with (e.g. installing dracut, which conflicts with initramfs-tools). Overlay mode is additive by default; when false (the default) such a conflict fails the build. When true, the conflicting baseline package is removed before install. Bootloader and bootable-kernel packages are never removed regardless of this flag. Only valid with packageOperation 'additive-and-upgrade' — removal is more invasive than an in-place upgrade, so it may not be enabled under the default 'additive-only'.",
+          "default": false
+        },
+        "replaceKernel": {
+          "type": "object",
+          "description": "Replace the baseline kernel: install this kernel package and remove the baseline kernel family (image + meta + modules + headers) so the image ships only the new kernel, then regenerate the GRUB config so the boot menu defaults to it. The ESP and bootloader binary are never touched (no grub-install, no Secure Boot re-signing). Self-authorizes its kernel-family removals, so it does not require allowPackageRemoval. Only valid with packageOperation 'additive-and-upgrade'.",
+          "properties": {
+            "package": {
+              "type": "string",
+              "description": "The replacement kernel image package to install, resolved from the configured repositories (e.g. 'linux-image-6.11.0-1004-oem'). Glob wildcards ('*', '?', '[...]') are accepted, matching the syntax used for ordinary systemConfig packages (e.g. 'linux-image-*-oem').",
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9+_.:~*?\\[\\]-]*$"
+            },
+            "additionalPackages": {
+              "type": "array",
+              "description": "Further kernel-family packages to install alongside 'package' (e.g. the matching headers package). Each entry follows the same resolve/preflight path as 'package', so a stale baseline package sharing its kernel-family prefix (e.g. old headers) is removed as part of the swap.",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9+_.:~*?\\[\\]-]*$"
+              }
+            },
+            "enableExtraModules": {
+              "type": "string",
+              "description": "Driver modules (space-separated, e.g. 'intel_vpu uas') to force into the replacement kernel's initramfs. Only module names and separating spaces are accepted; each module must start with an alphanumeric character or underscore.",
+              "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*( [A-Za-z0-9_][A-Za-z0-9_.-]*)*$"
+            },
+            "version": {
+              "type": "string",
+              "description": "Descriptive-only kernel version tag; never used to resolve or install packages, only surfaced for reporting."
+            }
+          },
+          "required": ["package"],
+          "additionalProperties": false
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "allowPackageRemoval": { "const": true } }, "required": ["allowPackageRemoval"] },
+          "then": { "properties": { "packageOperation": { "const": "additive-and-upgrade" } }, "required": ["packageOperation"] }
+        },
+        {
+          "if": { "required": ["replaceKernel"] },
+          "then": { "properties": { "packageOperation": { "const": "additive-and-upgrade" } }, "required": ["packageOperation"] }
+        }
+      ],
+      "additionalProperties": false
+    },
     "PackageRepository": {
       "type": "object",
       "description": "Additional package repository configuration",
@@ -334,12 +660,33 @@
         "url": {
           "type": "string",
           "description": "Repository base URL",
-          "format": "uri"
+          "oneOf": [
+            { "format": "uri" },
+            { "const": "<URL>", "description": "Placeholder used in example templates" }
+          ]
         },
         "path": {
           "type": "string",
           "description": "Local directory path for file-based repositories",
           "pattern": "^/"
+        },
+        "packages": {
+          "type": "array",
+          "description": "Files to populate the local repository path: each entry is an https:// URL (downloaded), a local directory (all .deb/.rpm files inside are copied), or a local file path (copied/extracted). Supports .deb, .rpm, .tar, .tar.gz, and .zip archives.",
+          "items": {
+            "type": "string",
+            "anyOf": [
+              { "pattern": "^https://", "description": "HTTPS URL to download" },
+              { "pattern": "^/", "description": "Absolute local file path" },
+              { "pattern": "^\\./|\\.\\./", "description": "Relative local file path" }
+            ]
+          },
+          "minItems": 1
+        },
+        "insecureSkipVerify": {
+          "type": "boolean",
+          "description": "Skip TLS certificate verification for onlineFiles downloads (insecure, use with caution for untrusted or self-signed certificates)",
+          "default": false
         },
         "pkey": {
           "type": "string",
@@ -405,7 +752,8 @@
       },
       "oneOf": [
         { "required": ["codename", "path"] },
-        { "required": ["codename", "url"] }
+        { "required": ["codename", "url"] },
+        { "required": ["codename", "packages"] }
       ],
       "anyOf": [
         { "required": ["pkey"] },
@@ -420,8 +768,20 @@
         "metadata": { "$ref": "#/$defs/Metadata" },
         "image": { "$ref": "#/$defs/Image" },
         "target": { "$ref": "#/$defs/Target" },
+        "baseline": { "$ref": "#/$defs/Baseline" },
+        "overlayPolicy": { "$ref": "#/$defs/OverlayPolicy" },
         "disk": { "$ref": "#/$defs/Disk" },
         "systemConfig": { "$ref": "#/$defs/SystemConfig" },
+        "sbomPackageMetadata": {
+          "type": "array",
+          "description": "Optional SBOM package metadata preserved for installer-time SBOM generation",
+          "items": { "type": "object", "additionalProperties": true }
+        },
+        "resolvedKernelPackages": {
+          "type": "array",
+          "description": "Concrete kernel package names resolved at build time, preserved so an installer ISO installs the same kernel",
+          "items": { "type": "string" }
+        },
         "packageRepositories": {
           "type": "array",
           "description": "Additional package repositories",
@@ -429,17 +789,106 @@
         }
       },
       "required": ["image", "target", "systemConfig"],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "target": {
+                "properties": {
+                  "imageType": { "const": "wsl2" }
+                },
+                "required": ["imageType"]
+              }
+            },
+            "required": ["target"]
+          },
+          "then": {
+            "required": ["disk"],
+            "properties": {
+              "systemConfig": {
+                "properties": {
+                  "kernel": false
+                }
+              },
+              "disk": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "artifacts": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": ["tar"]
+                        },
+                        "compression": {
+                          "type": "string",
+                          "enum": ["gz"]
+                        }
+                      },
+                      "required": ["type", "compression"],
+                      "additionalProperties": false
+                    }
+                  },
+                  "partitionTableType": false,
+                  "partitions": false
+                },
+                "required": ["name", "artifacts"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "disk": {
+                "properties": {
+                  "artifacts": {
+                    "items": {
+                      "properties": {
+                        "type": {
+                          "not": { "const": "tar" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
     },
 
     "UserTemplate": {
       "type": "object",
       "properties": {
+        "extends": {
+          "type": "string",
+          "description": "Path to a parent template to inherit from. The child template overrides or extends the parent using the standard merge strategies."
+        },
         "metadata": { "$ref": "#/$defs/Metadata" },
         "image": { "$ref": "#/$defs/Image" },
         "target": { "$ref": "#/$defs/Target" },
+        "baseline": { "$ref": "#/$defs/Baseline" },
+        "overlayPolicy": { "$ref": "#/$defs/OverlayPolicy" },
         "disk": { "$ref": "#/$defs/Disk" },
         "systemConfig": { "$ref": "#/$defs/SystemConfig" },
+        "sbomPackageMetadata": {
+          "type": "array",
+          "description": "Optional SBOM package metadata preserved for installer-time SBOM generation",
+          "items": { "type": "object", "additionalProperties": true }
+        },
+        "resolvedKernelPackages": {
+          "type": "array",
+          "description": "Concrete kernel package names resolved at build time, preserved so an installer ISO installs the same kernel",
+          "items": { "type": "string" }
+        },
         "packageRepositories": {
           "type": "array",
           "description": "Additional package repositories",
@@ -447,7 +896,79 @@
         }
       },
       "required": ["image", "target"],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "target": {
+                "properties": {
+                  "imageType": { "const": "wsl2" }
+                },
+                "required": ["imageType"]
+              }
+            },
+            "required": ["target"]
+          },
+          "then": {
+            "properties": {
+              "systemConfig": {
+                "properties": {
+                  "kernel": false
+                }
+              },
+              "disk": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "artifacts": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": ["tar"]
+                        },
+                        "compression": {
+                          "type": "string",
+                          "enum": ["gz"]
+                        }
+                      },
+                      "required": ["type", "compression"],
+                      "additionalProperties": false
+                    }
+                  },
+                  "partitionTableType": false,
+                  "partitions": false
+                },
+                "required": ["name", "artifacts"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "disk": {
+                "properties": {
+                  "artifacts": {
+                    "items": {
+                      "properties": {
+                        "type": {
+                          "not": { "const": "tar" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
     }
   }
 }

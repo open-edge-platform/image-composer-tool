@@ -44,30 +44,73 @@ func installGrubWithLegacyMode(installRoot, bootUUID, bootPrefix string, templat
 	return fmt.Errorf("legacy boot mode is not implemented yet")
 }
 
-func getGrubVersion(installRoot string) (string, error) {
-	var grubVersion string
-	program := "grub2-mkconfig"
-	exists, err := shell.IsCommandExist(program, installRoot)
+func resolveCommandInInstallRoot(installRoot string, candidates []string) (string, error) {
+	for _, candidate := range candidates {
+		fullPath := filepath.Join(installRoot, strings.TrimPrefix(candidate, "/"))
+		if info, err := os.Stat(fullPath); err == nil {
+			if !info.IsDir() {
+				return candidate, nil
+			}
+		} else if !os.IsNotExist(err) {
+			return "", fmt.Errorf("failed to stat %s: %w", fullPath, err)
+		}
+	}
+	return "", nil
+}
+
+func commandExistsInInstallRoot(installRoot string, command string, candidates []string) (bool, string, error) {
+	resolvedPath, err := resolveCommandInInstallRoot(installRoot, candidates)
 	if err != nil {
-		return "", fmt.Errorf("failed to check if %s exists: %w", program, err)
+		return false, "", err
 	}
-	if !exists {
-		log.Debugf("%s not found, try grub-mkconfig instead", program)
-		program = "grub-mkconfig"
-		exists, err = shell.IsCommandExist(program, installRoot)
-		if err != nil {
-			return "", fmt.Errorf("failed to check if %s exists: %w", program, err)
-		}
-		if !exists {
-			return "", fmt.Errorf("neither grub2-mkconfig nor grub-mkconfig found in the install root")
-		}
-		grubVersion = "grub"
-		log.Debugf("Found %s, setting grub version to grub", program)
-	} else {
-		grubVersion = "grub2"
-		log.Debugf("Found %s, setting grub version to grub2", program)
+	if resolvedPath != "" {
+		return true, resolvedPath, nil
 	}
-	return grubVersion, nil
+
+	// Fallback for environments/tests that rely on command lookup behavior in chroot.
+	exists, err := shell.IsCommandExist(command, installRoot)
+	if err != nil {
+		return false, "", err
+	}
+	if exists {
+		return true, command, nil
+	}
+
+	return false, "", nil
+}
+
+func getGrubVersion(installRoot string) (string, error) {
+	grub2Exists, grub2Program, err := commandExistsInInstallRoot(installRoot, "grub2-mkconfig",
+		[]string{"/usr/sbin/grub2-mkconfig", "/usr/bin/grub2-mkconfig"})
+	if err != nil {
+		return "", fmt.Errorf("failed to detect grub2-mkconfig in install root: %w", err)
+	}
+	if grub2Exists {
+		log.Debugf("Found %s, setting grub version to grub2", grub2Program)
+		return "grub2", nil
+	}
+
+	grubExists, grubProgram, err := commandExistsInInstallRoot(installRoot, "grub-mkconfig",
+		[]string{"/usr/sbin/grub-mkconfig", "/usr/bin/grub-mkconfig"})
+	if err != nil {
+		return "", fmt.Errorf("failed to detect grub-mkconfig in install root: %w", err)
+	}
+	if grubExists {
+		log.Debugf("Found %s, setting grub version to grub", grubProgram)
+		return "grub", nil
+	}
+
+	updateGrubExists, updateGrubProgram, err := commandExistsInInstallRoot(installRoot, "update-grub",
+		[]string{"/usr/sbin/update-grub", "/usr/bin/update-grub"})
+	if err != nil {
+		return "", fmt.Errorf("failed to detect update-grub in install root: %w", err)
+	}
+	if updateGrubExists {
+		log.Debugf("Found %s, setting grub version to grub", updateGrubProgram)
+		return "grub", nil
+	}
+
+	return "", fmt.Errorf("none of grub2-mkconfig, grub-mkconfig, or update-grub found in the install root")
 }
 
 func getGrubEfiTarget(arch string) (string, error) {
@@ -165,8 +208,32 @@ func copyGrubEnvFile(installRoot, grubVersion string) error {
 
 func updateGrubConfig(installRoot, grubVersion string) error {
 	grubConfigFile := fmt.Sprintf("/boot/%s/grub.cfg", grubVersion)
-	program := fmt.Sprintf("%s-mkconfig", grubVersion)
-	cmdStr := fmt.Sprintf("%s -o %s", program, grubConfigFile)
+	mkconfigCommand := fmt.Sprintf("%s-mkconfig", grubVersion)
+	mkconfigCandidates := []string{fmt.Sprintf("/usr/sbin/%s-mkconfig", grubVersion), fmt.Sprintf("/usr/bin/%s-mkconfig", grubVersion)}
+	programExists, _, err := commandExistsInInstallRoot(installRoot, mkconfigCommand, mkconfigCandidates)
+	if err != nil {
+		return fmt.Errorf("failed to resolve grub mkconfig command in install root: %w", err)
+	}
+
+	cmdStr := ""
+	if programExists {
+		cmdStr = fmt.Sprintf("%s -o %s", mkconfigCommand, grubConfigFile)
+	} else {
+		updateGrubExists, _, updateErr := commandExistsInInstallRoot(
+			installRoot,
+			"update-grub",
+			[]string{"/usr/sbin/update-grub", "/usr/bin/update-grub"},
+		)
+		if updateErr != nil {
+			return fmt.Errorf("failed to resolve update-grub command in install root: %w", updateErr)
+		}
+		if updateGrubExists {
+			cmdStr = "update-grub"
+		} else {
+			return fmt.Errorf("failed to find grub config generator in install root")
+		}
+	}
+
 	if _, err := shell.ExecCmd(cmdStr, true, installRoot, nil); err != nil {
 		log.Errorf("Failed to update grub configuration: %v", err)
 		return fmt.Errorf("failed to update grub configuration: %w", err)
@@ -191,9 +258,66 @@ func getKernelVersionFromBoot(installRoot string) (string, error) {
 	return "", fmt.Errorf("kernel image not found in %s", kernelDir)
 }
 
+// EnsureDepmodForBootKernels runs depmod for each vmlinuz-* found under /boot when
+// modules.dep is missing. Kernel package postinst often skips depmod in the ICT chroot
+// because initramfs generators are temporarily diverted during apt install.
+func EnsureDepmodForBootKernels(installRoot string) error {
+	bootDir := filepath.Join(installRoot, "boot")
+	entries, err := os.ReadDir(bootDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("list boot directory: %w", err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, "vmlinuz-") {
+			continue
+		}
+		kernelVersion := strings.TrimPrefix(name, "vmlinuz-")
+		if err := ensureKernelModuleDependencies(installRoot, kernelVersion); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ensureKernelModuleDependencies(installRoot, kernelVersion string) error {
+	modulesDir := filepath.Join(installRoot, "lib", "modules", kernelVersion)
+	depFile := filepath.Join(modulesDir, "modules.dep")
+	if _, err := os.Stat(depFile); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat kernel module dependencies %s: %w", depFile, err)
+	}
+
+	dirInfo, err := os.Stat(modulesDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("kernel module tree %s is missing (linux-modules package may not be installed)", modulesDir)
+		}
+		return fmt.Errorf("stat kernel module tree %s: %w", modulesDir, err)
+	}
+	if !dirInfo.IsDir() {
+		return fmt.Errorf("kernel module path %s exists but is not a directory", modulesDir)
+	}
+
+	cmd := fmt.Sprintf("depmod -a %s", shell.QuoteArg(kernelVersion))
+	log.Infof("Generating kernel module dependencies for %s", kernelVersion)
+	if _, err := shell.ExecCmd(cmd, true, installRoot, nil); err != nil {
+		return fmt.Errorf("depmod for kernel %s: %w", kernelVersion, err)
+	}
+	return nil
+}
+
 // Helper to update initramfs for Debian/Ubuntu systems using initramfs-tools
 func updateInitramfsForGrub(installRoot, kernelVersion string, template *config.ImageTemplate) error {
 	log.Debugf("Updating initramfs for Debian/Ubuntu at kernel version: %s", kernelVersion)
+
+	if err := ensureKernelModuleDependencies(installRoot, kernelVersion); err != nil {
+		return err
+	}
 
 	// Add kernel modules specified in enableExtraModules
 	extraModules := strings.TrimSpace(template.SystemConfig.Kernel.EnableExtraModules)

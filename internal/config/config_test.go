@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config/validate"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 	"gopkg.in/yaml.v3"
 )
 
@@ -1215,6 +1216,113 @@ func TestDefaultConfigLoaderUnsupportedImageType(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigLoaderWSL2ImageType(t *testing.T) {
+	tmpDir := t.TempDir()
+	oldConfigDir := Global().ConfigDir
+	Global().ConfigDir = tmpDir
+	t.Cleanup(func() { Global().ConfigDir = oldConfigDir })
+
+	defaultDir := filepath.Join(tmpDir, "osv", "ubuntu", "ubuntu24", "imageconfigs", "defaultconfigs")
+	if err := os.MkdirAll(defaultDir, 0755); err != nil {
+		t.Fatalf("failed to create default config dir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmpDir, "general"), 0755); err != nil {
+		t.Fatalf("failed to create general config dir: %v", err)
+	}
+
+	defaultConfig := `image:
+  name: wsl2-rootfs-ubuntu
+  version: "24.04"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: wsl2
+
+disk:
+  name: WSL2_Rootfs
+  artifacts:
+    - type: tar
+      compression: gz
+
+systemConfig:
+  name: WSL2_Rootfs
+  packages:
+    - ubuntu-minimal
+`
+	defaultPath := filepath.Join(defaultDir, "default-wsl2-x86_64.yml")
+	if err := os.WriteFile(defaultPath, []byte(defaultConfig), 0644); err != nil {
+		t.Fatalf("failed to write default config: %v", err)
+	}
+
+	loader := NewDefaultConfigLoader("ubuntu", "ubuntu24", "x86_64")
+	template, err := loader.LoadDefaultConfig("wsl2")
+	if err != nil {
+		t.Fatalf("expected WSL2 default config to load, got error: %v", err)
+	}
+	if template.Target.ImageType != "wsl2" {
+		t.Errorf("expected template image type 'wsl2', got '%s'", template.Target.ImageType)
+	}
+	if len(template.Disk.Artifacts) == 0 {
+		t.Fatal("expected WSL2 default config to include at least one artifact")
+	}
+	if template.Disk.Artifacts[0].Type != "tar" {
+		t.Errorf("expected WSL2 default config to use tar artifact, got '%s'", template.Disk.Artifacts[0].Type)
+	}
+}
+
+func TestWSL2DefaultConfigs(t *testing.T) {
+	defaults := []string{
+		"azure-linux/azl3",
+		"debian/debian13",
+		"edge-microvisor-toolkit/emt3",
+		"redhat-compatible-distro/el10",
+		"ubuntu/ubuntu24",
+		"ubuntu/ubuntu26",
+		"wind-river-elxr/elxr12",
+		"wind-river-elxr/elxr13",
+	}
+
+	for _, defaultDir := range defaults {
+		t.Run(defaultDir, func(t *testing.T) {
+			path := filepath.Join("..", "..", "config", "osv", defaultDir,
+				"imageconfigs", "defaultconfigs", "default-wsl2-x86_64.yml")
+			template, err := LoadTemplate(path, true)
+			if err != nil {
+				t.Fatalf("LoadTemplate() error = %v", err)
+			}
+			if template.Target.ImageType != "wsl2" {
+				t.Fatalf("imageType = %s, want wsl2", template.Target.ImageType)
+			}
+			if template.Disk.PartitionTableType != "" || len(template.Disk.Partitions) != 0 {
+				t.Fatalf("WSL2 default must not define partition table or partitions")
+			}
+			if !isEmptyKernelConfig(template.SystemConfig.Kernel) {
+				t.Fatalf("WSL2 default must not define kernel config")
+			}
+			if len(template.Disk.Artifacts) != 1 || template.Disk.Artifacts[0].Type != "tar" {
+				t.Fatalf("WSL2 default must define one tar artifact")
+			}
+			if template.Disk.Artifacts[0].Compression == "" {
+				t.Fatalf("WSL2 default tar artifact must define compression")
+			}
+			additionalFiles := map[string]bool{}
+			for _, file := range template.SystemConfig.AdditionalFiles {
+				additionalFiles[file.Final] = true
+			}
+			for _, final := range []string{
+				"/etc/profile.d/00-ict-wsl2.sh",
+				"/usr/share/doc/ict-wsl2/resize-filesystem.txt",
+			} {
+				if !additionalFiles[final] {
+					t.Fatalf("WSL2 default must include %s", final)
+				}
+			}
+		})
+	}
+}
+
 func TestPackageMergingWithDuplicates(t *testing.T) {
 	defaultPackages := []string{"base", "common", "utils"}
 	userPackages := []string{"common", "extra", "base", "new"}
@@ -1481,6 +1589,118 @@ func TestSaveUpdatedConfigFile(t *testing.T) {
 
 	if strings.Contains(string(data), "index: null") {
 		t.Fatalf("dumped config unexpectedly contains 'index: null'\n%s", string(data))
+	}
+}
+
+func TestSaveUpdatedConfigFileFixesInvalidBlockScalarHeader(t *testing.T) {
+	t.Parallel()
+
+	template := &ImageTemplate{
+		Image: ImageInfo{
+			Name:    "test-save-sbom",
+			Version: "1.0.0",
+		},
+		SBOMPackageMetadata: []ospackage.PackageInfo{
+			{
+				Name:        "newt-0.52.23-1.azl3.x86_64.rpm",
+				Type:        "rpm",
+				Description: "\nline1\nline2",
+				Origin:      "Microsoft",
+				License:     "GPLv2",
+				Version:     "0:0.52.23-1.azl3",
+				Arch:        "x86_64",
+				URL:         "https://example.invalid/newt.rpm",
+			},
+		},
+	}
+
+	outPath := filepath.Join(t.TempDir(), "test-sbom.yml")
+
+	if err := template.SaveUpdatedConfigFile(outPath); err != nil {
+		t.Fatalf("SaveUpdatedConfigFile returned unexpected error: %v", err)
+	}
+
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("failed to read dumped config: %v", err)
+	}
+
+	var parsed any
+	if err := yaml.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("dumped config is not valid YAML: %v\n%s", err, string(data))
+	}
+
+	var roundTrip ImageTemplate
+	if err := yaml.Unmarshal(data, &roundTrip); err != nil {
+		t.Fatalf("failed to unmarshal dumped config into ImageTemplate: %v", err)
+	}
+
+	if len(roundTrip.SBOMPackageMetadata) != 1 {
+		t.Fatalf("expected 1 sbom package metadata entry, got %d", len(roundTrip.SBOMPackageMetadata))
+	}
+
+	if roundTrip.SBOMPackageMetadata[0].Description != "line1\nline2" {
+		t.Fatalf(
+			"expected sanitized description %q, got %q",
+			"line1\\nline2",
+			roundTrip.SBOMPackageMetadata[0].Description,
+		)
+	}
+
+	if strings.Contains(string(data), "description: |4-") {
+		t.Fatalf("dumped config still contains invalid block scalar header |4-\n%s", string(data))
+	}
+
+	if roundTrip.SBOMPackageMetadata[0].Origin != "Microsoft" ||
+		roundTrip.SBOMPackageMetadata[0].License != "GPLv2" ||
+		roundTrip.SBOMPackageMetadata[0].Version != "0:0.52.23-1.azl3" ||
+		roundTrip.SBOMPackageMetadata[0].Arch != "x86_64" ||
+		roundTrip.SBOMPackageMetadata[0].URL != "https://example.invalid/newt.rpm" {
+		t.Fatalf("unexpected SBOM metadata mutation after save: %+v", roundTrip.SBOMPackageMetadata[0])
+	}
+}
+
+func TestFixInvalidBlockScalarHeader(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "removes single digit indent and preserves strip chomping",
+			input: "description: |4-\n    line1\n",
+			want:  "description: |-\n    line1\n",
+		},
+		{
+			name:  "removes multi digit indent and preserves keep chomping",
+			input: "description: |12+\n            line1\n",
+			want:  "description: |+\n            line1\n",
+		},
+		{
+			name:  "removes indent without chomping indicator",
+			input: "description: |2\n  line1\n",
+			want:  "description: |\n  line1\n",
+		},
+		{
+			name:  "leaves inferred indent header untouched",
+			input: "description: |-\n  line1\n",
+			want:  "description: |-\n  line1\n",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := string(fixInvalidBlockScalarHeader([]byte(tt.input)))
+
+			if got != tt.want {
+				t.Fatalf("fixInvalidBlockScalarHeader() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -2020,6 +2240,128 @@ func TestValidateUserTemplateJSON(t *testing.T) {
 	err = validate.ValidateUserTemplateJSON([]byte(invalidJSON))
 	if err == nil {
 		t.Errorf("invalid JSON should fail validation")
+	}
+}
+
+func TestExtendsFieldSchemaValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		json    string
+		wantErr bool
+	}{
+		{
+			name: "user template with valid extends",
+			json: `{
+				"extends": "ubuntu24-x86_64-edge-raw.yml",
+				"image": {"name": "child", "version": "1.0.0"},
+				"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"}
+			}`,
+			wantErr: false,
+		},
+		{
+			name: "user template without extends",
+			json: `{
+				"image": {"name": "standalone", "version": "1.0.0"},
+				"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"}
+			}`,
+			wantErr: false,
+		},
+		{
+			name: "user template with invalid extends type (number)",
+			json: `{
+				"extends": 42,
+				"image": {"name": "bad", "version": "1.0.0"},
+				"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"}
+			}`,
+			wantErr: true,
+		},
+		{
+			name: "user template with invalid extends type (array)",
+			json: `{
+				"extends": ["a.yml", "b.yml"],
+				"image": {"name": "bad", "version": "1.0.0"},
+				"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"}
+			}`,
+			wantErr: true,
+		},
+		{
+			name: "user template with invalid extends type (boolean)",
+			json: `{
+				"extends": true,
+				"image": {"name": "bad", "version": "1.0.0"},
+				"target": {"os": "ubuntu", "dist": "ubuntu24", "arch": "x86_64", "imageType": "raw"}
+			}`,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := validate.ValidateUserTemplateJSON([]byte(tt.json))
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateUserTemplateJSON() err = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestExtendsFieldParsedFromYAML(t *testing.T) {
+	t.Parallel()
+
+	templateYAML := `extends: "ubuntu24-x86_64-edge-raw.yml"
+image:
+  name: child-template
+  version: "1.0.0"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+`
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "child.yml")
+	if err := os.WriteFile(tmpFile, []byte(templateYAML), 0644); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	tmpl, err := LoadTemplate(tmpFile, false)
+	if err != nil {
+		t.Fatalf("LoadTemplate() err = %v", err)
+	}
+
+	if tmpl.Extends != "ubuntu24-x86_64-edge-raw.yml" {
+		t.Errorf("Extends = %q, want %q", tmpl.Extends, "ubuntu24-x86_64-edge-raw.yml")
+	}
+}
+
+func TestExtendsFieldAbsentInTemplate(t *testing.T) {
+	t.Parallel()
+
+	templateYAML := `image:
+  name: standalone
+  version: "1.0.0"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+`
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "standalone.yml")
+	if err := os.WriteFile(tmpFile, []byte(templateYAML), 0644); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	tmpl, err := LoadTemplate(tmpFile, false)
+	if err != nil {
+		t.Fatalf("LoadTemplate() err = %v", err)
+	}
+
+	if tmpl.Extends != "" {
+		t.Errorf("Extends = %q, want empty string for template without extends", tmpl.Extends)
 	}
 }
 
@@ -3056,6 +3398,123 @@ func TestEmptyPackageRepositories(t *testing.T) {
 	}
 }
 
+func TestValidatePackageRepositoryPackages(t *testing.T) {
+	tests := []struct {
+		name        string
+		repo        PackageRepository
+		expectError string
+	}{
+		{
+			name: "valid local repo with https package URLs",
+			repo: PackageRepository{
+				Codename: "localdeb",
+				Path:     "/tmp/localdeb",
+				PKey:     "[trusted=yes]",
+				Packages: []string{"https://example.com/pkg.deb", "https://example.com/archive.tar.gz"},
+			},
+		},
+		{
+			name: "valid local repo with local file path packages",
+			repo: PackageRepository{
+				Codename: "localdeb",
+				Path:     "/tmp/localdeb",
+				PKey:     "[trusted=yes]",
+				Packages: []string{"/opt/packages/custom.deb", "./relative/package.rpm"},
+			},
+		},
+		{
+			name: "packages without path is valid (temp dir auto-created at runtime)",
+			repo: PackageRepository{
+				Codename: "localdeb",
+				PKey:     "[trusted=yes]",
+				Packages: []string{"https://example.com/pkg.deb"},
+			},
+		},
+		{
+			name: "packages URL must be https",
+			repo: PackageRepository{
+				Codename: "localdeb",
+				Path:     "/tmp/localdeb",
+				PKey:     "[trusted=yes]",
+				Packages: []string{"http://example.com/pkg.deb"},
+			},
+			expectError: "must use https",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.repo.ValidatePackageRepository()
+			if tt.expectError == "" && err != nil {
+				t.Fatalf("expected no error, got: %v", err)
+			}
+			if tt.expectError != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tt.expectError)
+				}
+				if !strings.Contains(err.Error(), tt.expectError) {
+					t.Fatalf("expected error containing %q, got: %v", tt.expectError, err)
+				}
+			}
+		})
+	}
+}
+
+func TestValidatePackageRepositoryInsecureSkipVerify(t *testing.T) {
+	tests := []struct {
+		name        string
+		repo        PackageRepository
+		expectError string
+	}{
+		{
+			name: "valid repo with insecureSkipVerify=true",
+			repo: PackageRepository{
+				Codename:           "localdeb",
+				Path:               "/tmp/localdeb",
+				PKey:               "[trusted=yes]",
+				Packages:           []string{"https://example.com/pkg.deb"},
+				InsecureSkipVerify: true,
+			},
+		},
+		{
+			name: "valid repo with insecureSkipVerify=false",
+			repo: PackageRepository{
+				Codename:           "localdeb",
+				Path:               "/tmp/localdeb",
+				PKey:               "[trusted=yes]",
+				Packages:           []string{"https://example.com/pkg.deb"},
+				InsecureSkipVerify: false,
+			},
+		},
+		{
+			name: "insecureSkipVerify without packages is accepted",
+			repo: PackageRepository{
+				Codename:           "localdeb",
+				Path:               "/tmp/localdeb",
+				PKey:               "[trusted=yes]",
+				InsecureSkipVerify: true,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.repo.ValidatePackageRepository()
+			if tt.expectError == "" && err != nil {
+				t.Fatalf("expected no error, got: %v", err)
+			}
+			if tt.expectError != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tt.expectError)
+				}
+				if !strings.Contains(err.Error(), tt.expectError) {
+					t.Fatalf("expected error containing %q, got: %v", tt.expectError, err)
+				}
+			}
+		})
+	}
+}
+
 func TestMergePackageRepositories(t *testing.T) {
 	defaultRepos := []PackageRepository{
 		{Codename: "default1", URL: "https://default.com/1", PKey: "https://default.com/1.pub"},
@@ -3585,6 +4044,168 @@ func TestImageTemplateImmutabilityHelpers(t *testing.T) {
 	}
 }
 
+func TestImageTemplateFDEHelpers(t *testing.T) {
+	t.Run("disabled", func(t *testing.T) {
+		template := &ImageTemplate{
+			SystemConfig: SystemConfig{
+				FDE: FDEConfig{Enabled: false, Unlock: "manual"},
+			},
+		}
+		if template.IsFDEEnabled() {
+			t.Error("IsFDEEnabled() = true, want false")
+		}
+		if template.IsFDEAutoUnlock() {
+			t.Error("IsFDEAutoUnlock() = true, want false when FDE disabled")
+		}
+		if template.IsFDEPartition("rootfs") {
+			t.Error("IsFDEPartition(rootfs) = true, want false when FDE disabled")
+		}
+	})
+
+	t.Run("enabled accessors", func(t *testing.T) {
+		template := &ImageTemplate{
+			SystemConfig: SystemConfig{
+				FDE: FDEConfig{
+					Enabled:        true,
+					PassphraseFile: "/tmp/fde-passphrase.txt",
+					Partitions:     []string{"rootfs", "userdata"},
+					Unlock:         "manual",
+					Passphrase:     "secret",
+				},
+			},
+		}
+		if !template.IsFDEEnabled() {
+			t.Error("IsFDEEnabled() = false, want true")
+		}
+		if template.GetFDEPassphrase() != "secret" {
+			t.Errorf("GetFDEPassphrase() = %q, want secret", template.GetFDEPassphrase())
+		}
+		if template.GetFDEPassphraseFile() != "/tmp/fde-passphrase.txt" {
+			t.Errorf("GetFDEPassphraseFile() = %q, want /tmp/fde-passphrase.txt", template.GetFDEPassphraseFile())
+		}
+		got := template.GetFDEPartitions()
+		if len(got) != 2 || got[0] != "rootfs" || got[1] != "userdata" {
+			t.Errorf("GetFDEPartitions() = %v, want [rootfs userdata]", got)
+		}
+		if template.GetFDEUnlockMode() != "manual" {
+			t.Errorf("GetFDEUnlockMode() = %q, want manual", template.GetFDEUnlockMode())
+		}
+		if template.IsFDEAutoUnlock() {
+			t.Error("IsFDEAutoUnlock() = true, want false for manual unlock")
+		}
+		if !template.IsFDEPartition("rootfs") {
+			t.Error("IsFDEPartition(rootfs) = false, want true")
+		}
+		if !template.IsFDEPartition("userdata") {
+			t.Error("IsFDEPartition(userdata) = false, want true")
+		}
+		if template.IsFDEPartition("boot") {
+			t.Error("IsFDEPartition(boot) = true, want false")
+		}
+	})
+
+	t.Run("unlock mode defaults to auto", func(t *testing.T) {
+		tests := []struct {
+			unlock string
+			want   string
+		}{
+			{"", "auto"},
+			{"auto", "auto"},
+			{"manual", "manual"},
+			{"unexpected", "auto"},
+		}
+		for _, tt := range tests {
+			tt := tt
+			t.Run(tt.unlock, func(t *testing.T) {
+				template := &ImageTemplate{
+					SystemConfig: SystemConfig{
+						FDE: FDEConfig{Enabled: true, PassphraseFile: "/tmp/fde-passphrase.txt", Unlock: tt.unlock},
+					},
+				}
+				if got := template.GetFDEUnlockMode(); got != tt.want {
+					t.Errorf("GetFDEUnlockMode() = %q, want %q", got, tt.want)
+				}
+				wantAuto := tt.want == "auto"
+				if template.IsFDEAutoUnlock() != wantAuto {
+					t.Errorf("IsFDEAutoUnlock() = %t, want %t", template.IsFDEAutoUnlock(), wantAuto)
+				}
+			})
+		}
+	})
+
+	t.Run("empty partitions list", func(t *testing.T) {
+		template := &ImageTemplate{
+			SystemConfig: SystemConfig{
+				FDE: FDEConfig{Enabled: true, PassphraseFile: "/tmp/fde-passphrase.txt", Partitions: nil},
+			},
+		}
+		if len(template.GetFDEPartitions()) != 0 {
+			t.Errorf("GetFDEPartitions() = %v, want empty", template.GetFDEPartitions())
+		}
+		if template.IsFDEPartition("rootfs") {
+			t.Error("IsFDEPartition(rootfs) = true with empty partitions list, want false")
+		}
+	})
+}
+
+func TestLoadTemplateFDEPassphraseFile(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	passphrasePath := filepath.Join(tmpDir, "fde-passphrase.txt")
+	if err := os.WriteFile(passphrasePath, []byte("from-file\n"), 0600); err != nil {
+		t.Fatalf("write passphrase file: %v", err)
+	}
+
+	tplPath := filepath.Join(tmpDir, "template.yml")
+	tpl := strings.Join([]string{
+		"image:",
+		"  name: fde-file-test",
+		"  version: \"1.0\"",
+		"target:",
+		"  os: ubuntu",
+		"  dist: ubuntu24",
+		"  arch: x86_64",
+		"  imageType: raw",
+		"disk:",
+		"  name: disk0",
+		"  path: /dev/vda",
+		"  partitionTableType: gpt",
+		"  partitions:",
+		"    - id: rootfs",
+		"      name: rootfs",
+		"      type: linux-root-amd64",
+		"      typeUUID: \"\"",
+		"      fsType: ext4",
+		"      fsLabel: rootfs",
+		"      start: 1MiB",
+		"      end: 100%",
+		"      mountPoint: /",
+		"systemConfig:",
+		"  name: test",
+		"  description: test",
+		"  fde:",
+		"    enabled: true",
+		"    passphraseFile: " + passphrasePath,
+		"",
+	}, "\n")
+	if err := os.WriteFile(tplPath, []byte(tpl), 0644); err != nil {
+		t.Fatalf("write template: %v", err)
+	}
+
+	template, err := LoadTemplate(tplPath, false)
+	if err != nil {
+		t.Fatalf("LoadTemplate() error = %v", err)
+	}
+
+	if got := template.GetFDEPassphrase(); got != "from-file" {
+		t.Fatalf("GetFDEPassphrase() = %q, want from-file", got)
+	}
+	if got := template.GetFDEPassphraseFile(); got != passphrasePath {
+		t.Fatalf("GetFDEPassphraseFile() = %q, want %q", got, passphrasePath)
+	}
+}
+
 func TestGetUsersAndUserByName(t *testing.T) {
 	users := []UserConfig{
 		{Name: "alice", Sudo: true},
@@ -3743,6 +4364,53 @@ func TestGetConfigurationInfo(t *testing.T) {
 		if config.Cmd != expectedConfigs[i].Cmd {
 			t.Errorf("Expected command %s, got %s", expectedConfigs[i].Cmd, config.Cmd)
 		}
+	}
+}
+
+func TestLoadTemplateStoresAbsolutePath(t *testing.T) {
+	tmpDir := t.TempDir()
+	templateDir := filepath.Join(tmpDir, "templates")
+	if err := os.MkdirAll(templateDir, 0755); err != nil {
+		t.Fatalf("failed to create template dir: %v", err)
+	}
+
+	templatePath := filepath.Join(templateDir, "test.yml")
+	templateContent := `image:
+  name: test-image
+  version: "1.0.0"
+target:
+  os: debian
+  dist: debian13
+  arch: x86_64
+  imageType: raw
+`
+	if err := os.WriteFile(templatePath, []byte(templateContent), 0644); err != nil {
+		t.Fatalf("failed to write template file: %v", err)
+	}
+
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get current dir: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(originalWD)
+	})
+
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("failed to change dir: %v", err)
+	}
+
+	template, err := LoadTemplate(filepath.Join("templates", "test.yml"), false)
+	if err != nil {
+		t.Fatalf("LoadTemplate() error = %v", err)
+	}
+
+	if len(template.PathList) != 1 {
+		t.Fatalf("expected one path entry, got %d", len(template.PathList))
+	}
+
+	if template.PathList[0] != templatePath {
+		t.Fatalf("expected absolute template path %q, got %q", templatePath, template.PathList[0])
 	}
 }
 
@@ -4065,6 +4733,61 @@ func TestGetAdditionalFileInfo(t *testing.T) {
 				t.Errorf("%s: expected %d files, got %d", tt.description, tt.expectedCount, len(result))
 			}
 		})
+	}
+}
+
+func TestGetAdditionalFileInfoResolvesFromAncestorTemplateDir(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	nestedTemplateDir := filepath.Join(tmpDir, "image-templates", "debian13")
+	if err := os.MkdirAll(nestedTemplateDir, 0755); err != nil {
+		t.Fatalf("failed to create nested template dir: %v", err)
+	}
+
+	sharedFilePath := filepath.Join(
+		tmpDir,
+		"image-templates",
+		"additionalfiles",
+		"debian13-bb-dracut",
+		"modules.d",
+		"91hello",
+		"module-setup.sh",
+	)
+	if err := os.MkdirAll(filepath.Dir(sharedFilePath), 0755); err != nil {
+		t.Fatalf("failed to create additionalfiles dir: %v", err)
+	}
+	if err := os.WriteFile(sharedFilePath, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatalf("failed to write shared additional file: %v", err)
+	}
+
+	templatePath := filepath.Join(nestedTemplateDir, "debian13-x86_64-bb-overlay-initrd-raw.yml")
+	if err := os.WriteFile(templatePath, []byte("image: {}\n"), 0644); err != nil {
+		t.Fatalf("failed to write template file: %v", err)
+	}
+
+	template := &ImageTemplate{
+		PathList: []string{templatePath},
+		SystemConfig: SystemConfig{
+			AdditionalFiles: []AdditionalFileInfo{
+				{
+					Local: "additionalfiles/debian13-bb-dracut/modules.d/91hello/module-setup.sh",
+					Final: "/usr/lib/dracut/modules.d/91hello/module-setup.sh",
+					Stage: AdditionalFileStagePreInitramfs,
+				},
+			},
+		},
+	}
+
+	files := template.GetAdditionalFileInfo()
+	if len(files) != 1 {
+		t.Fatalf("expected 1 resolved additional file, got %d", len(files))
+	}
+	if files[0].Local != sharedFilePath {
+		t.Fatalf("resolved local path = %q, want %q", files[0].Local, sharedFilePath)
+	}
+	if files[0].Stage != AdditionalFileStagePreInitramfs {
+		t.Fatalf("resolved stage = %q, want %q", files[0].Stage, AdditionalFileStagePreInitramfs)
 	}
 }
 
@@ -4445,5 +5168,35 @@ func TestSaveUpdatedConfigFileYAMLSerialization(t *testing.T) {
 
 	if foundIndexNull {
 		t.Error("YAML should not contain 'index: null' for partition with nil Index")
+	}
+}
+
+// TestResolvedKernelPackagesRoundTrip confirms the installer metadata field
+// survives a save and reloads cleanly through both the user schema (used by the
+// live installer, validateFull=false) and the full schema (validateFull=true).
+func TestResolvedKernelPackagesRoundTrip(t *testing.T) {
+	tmpl := &ImageTemplate{
+		Image:                  ImageInfo{Name: "test", Version: "1.0.0"},
+		Target:                 TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"},
+		SystemConfig:           SystemConfig{Name: "test", Bootloader: Bootloader{BootType: "efi", Provider: "grub"}},
+		ResolvedKernelPackages: []string{"linux-image-generic-7.0"},
+	}
+
+	path := filepath.Join(t.TempDir(), "template-dump.yaml")
+	if err := tmpl.SaveUpdatedConfigFile(path); err != nil {
+		t.Fatalf("SaveUpdatedConfigFile failed: %v", err)
+	}
+
+	// The live installer loads the dump with validateFull=false (user schema).
+	loaded, err := LoadTemplate(path, false)
+	if err != nil {
+		t.Fatalf("LoadTemplate(false) failed: %v", err)
+	}
+	if len(loaded.ResolvedKernelPackages) != 1 || loaded.ResolvedKernelPackages[0] != "linux-image-generic-7.0" {
+		t.Fatalf("expected resolvedKernelPackages preserved, got %v", loaded.ResolvedKernelPackages)
+	}
+
+	if _, err := LoadTemplate(path, true); err != nil {
+		t.Fatalf("LoadTemplate(true) failed: %v", err)
 	}
 }

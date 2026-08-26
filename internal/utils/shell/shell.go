@@ -2,6 +2,7 @@ package shell
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -10,6 +11,8 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
@@ -18,6 +21,104 @@ import (
 const HostPath string = "/"
 
 var log = logger.Logger()
+
+// currentCtx is the ctx bound by SetContext for the lifetime of a run.
+// Reads happen at every command spawn; writes happen only from executeBuild
+// on the main goroutine before any worker starts, so atomic.Value is sufficient.
+// When unset, ctxOrBackground returns context.Background so the four Exec*
+// entry points continue to work for non-build commands (validate, inspect, etc.)
+// and for tests that never call SetContext.
+//
+// The value is wrapped in ctxHolder so atomic.Value always sees a single
+// concrete type — bare context.Context values are interface-typed and stem
+// from different concrete implementations (*emptyCtx, *cancelCtx, *timerCtx,
+// *valueCtx), which would trip atomic.Value's identical-type invariant.
+type ctxHolder struct{ ctx context.Context }
+
+var currentCtx atomic.Value // holds ctxHolder
+
+// SetContext binds ctx as the ambient context used by every subsequent shell
+// command. The returned restore function reverts to whatever ctx was bound
+// before (or unbound state) — call it via defer.
+//
+// Concurrency: the returned restore closure captures the previous binding at
+// call time, so nested SetContext/restore pairs must be strictly LIFO on a
+// single goroutine. The current build path (executeBuild → PostProcess
+// wrapper → cleanup coordinator callbacks) satisfies this — only the main
+// build goroutine invokes SetContext at any given time. If a future in-process
+// caller invokes SetContext from multiple goroutines concurrently (e.g. an
+// HTTP handler that dispatches a build in-process), the restore-chain will
+// clobber and this needs to be replaced with a ctx-holder passed explicitly
+// through the call graph instead of stored in an atomic global.
+func SetContext(ctx context.Context) (restore func()) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	prev := currentCtx.Load()
+	currentCtx.Store(ctxHolder{ctx: ctx})
+	return func() {
+		if prev == nil {
+			currentCtx.Store(ctxHolder{ctx: context.Background()})
+			return
+		}
+		currentCtx.Store(prev)
+	}
+}
+
+// ctxOrBackground returns the currently bound context, or context.Background
+// if SetContext has never been called.
+func ctxOrBackground() context.Context {
+	if v := currentCtx.Load(); v != nil {
+		return v.(ctxHolder).ctx
+	}
+	return context.Background()
+}
+
+// applyExecAttrs configures a spawned command so that (a) it runs in its own
+// process group so a single kill(-pgid) reaps every descendant (bash, sudo, and
+// the real tool), and (b) ctx cancellation sends SIGTERM to that whole group.
+// All four spawn sites use this to keep the pgid/kill semantics identical
+// across ExecCmd, ExecCmdSilent, ExecCmdWithStream, and ExecCmdWithInput.
+//
+// Privilege note: the kill(-pgid) in Cancel is issued by this Go process. ICT
+// is expected to run as root (the documented `sudo -E image-composer-tool
+// build …`, and `serve --sudo`), so the parent and the root-owned sudo/tool
+// children share the privilege needed for the signal to land. If ICT is ever
+// run as a non-root user relying only on the per-command `sudo` prefix, the
+// signal to the root-owned children would fail with EPERM and they would
+// orphan — that path is unsupported.
+//
+// WaitDelay bounds how long cmd.Wait blocks after Cancel before the runtime
+// force-kills. Note the runtime's WaitDelay SIGKILL targets cmd.Process (the
+// bash group leader) only, not the whole group — the group is expected to exit
+// on the SIGTERM that Cancel already delivered to -pgid (every tool ICT spawns
+// terminates on SIGTERM). WaitDelay is the leader-level backstop for a wedged
+// pipe, not a group-wide SIGKILL escalation.
+const execCmdWaitDelay = 5 * time.Second
+
+func applyExecAttrs(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+	}
+	cmd.WaitDelay = execCmdWaitDelay
+}
+
+// sleepCtx sleeps for d unless ctx is cancelled first; returns ctx.Err on
+// cancel so the caller's retry loop can exit early.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
 
 var (
 	aptLockRetryAttempts = 20
@@ -55,7 +156,8 @@ var commandMap = map[string][]string{
 	"dd":                 {"/usr/bin/dd"},
 	"df":                 {"/usr/bin/df"},
 	"dirname":            {"/usr/bin/dirname"},
-	"debugfs":            {"/usr/sbin/debugfs", "/usr/bin/debugfs"},
+	"debugfs":            {"/usr/sbin/debugfs", "/usr/bin/debugfs", "/sbin/debugfs"},
+	"depmod":             {"/usr/sbin/depmod", "/sbin/depmod"},
 	"dnf":                {"/usr/bin/dnf"},
 	"dpkg":               {"/usr/bin/dpkg"},
 	"dpkg-divert":        {"/usr/bin/dpkg-divert"},
@@ -75,6 +177,7 @@ var commandMap = map[string][]string{
 	"groupadd":           {"/usr/sbin/groupadd"},
 	"gunzip":             {"/usr/bin/gunzip"},
 	"grep":               {"/usr/bin/grep", "/bin/grep"},
+	"growpart":           {"/usr/bin/growpart"},
 	"grub-mkconfig":      {"/usr/sbin/grub-mkconfig"},
 	"grub2-mkconfig":     {"/usr/sbin/grub2-mkconfig"},
 	"gzip":               {"/usr/bin/gzip"},
@@ -84,7 +187,7 @@ var commandMap = map[string][]string{
 	"lsof":               {"/usr/bin/lsof"},
 	"lsb_release":        {"/usr/bin/lsb_release"},
 	"lsblk":              {"/usr/bin/lsblk"},
-	"losetup":            {"/usr/sbin/losetup"},
+	"losetup":            {"/usr/sbin/losetup", "/sbin/losetup"},
 	"lvcreate":           {"/usr/sbin/lvcreate"},
 	"mformat":            {"/usr/bin/mformat"},
 	"mcopy":              {"/usr/bin/mcopy"},
@@ -97,15 +200,18 @@ var commandMap = map[string][]string{
 	"opkg":               {"/usr/bin/opkg"},
 	"parted":             {"/usr/sbin/parted"},
 	"partx":              {"/usr/bin/partx", "/sbin/partx"},
+	"printf":             {"/usr/bin/printf", "/bin/printf"},
 	"pvcreate":           {"/usr/sbin/pvcreate"},
 	"qemu-img":           {"/usr/bin/qemu-img"},
 	"qemu-system-x86_64": {"/usr/bin/qemu-system-x86_64"},
+	"resize2fs":          {"/usr/sbin/resize2fs", "/sbin/resize2fs"},
 	"rm":                 {"/bin/rm"},
+	"rmdir":              {"/bin/rmdir", "/usr/bin/rmdir"},
 	"rpm":                {"/usr/bin/rpm"},
 	"run":                {"/usr/bin/run"},
 	"sed":                {"/usr/bin/sed", "/bin/sed"},
 	"sfdisk":             {"/usr/sbin/sfdisk"},
-	"sgdisk":             {"/usr/bin/sgdisk"},
+	"sgdisk":             {"/usr/sbin/sgdisk", "/sbin/sgdisk", "/usr/bin/sgdisk"},
 	"sha256sum":          {"/usr/bin/sha256sum"},
 	"sh":                 {"/bin/sh"},
 	"sleep":              {"/usr/bin/sleep"},
@@ -124,11 +230,14 @@ var commandMap = map[string][]string{
 	"ukify":              {"/usr/bin/ukify", "/usr/local/bin/ukify"},
 	"umount":             {"/usr/bin/umount"},
 	"uname":              {"/usr/bin/uname"},
+	"udevadm":            {"/usr/bin/udevadm", "/bin/udevadm"},
+	"update-binfmts":     {"/usr/sbin/update-binfmts", "/usr/bin/update-binfmts"},
 	"uniq":               {"/usr/bin/uniq"},
 	"veritysetup":        {"/usr/sbin/veritysetup"},
 	"vgcreate":           {"/usr/sbin/vgcreate"},
 	"wget":               {"/usr/bin/wget"},
 	"wipefs":             {"/usr/sbin/wipefs"},
+	"xfs_growfs":         {"/usr/sbin/xfs_growfs", "/sbin/xfs_growfs"},
 	"xorriso":            {"/usr/bin/xorriso"},
 	"xz":                 {"/usr/bin/xz"},
 	"yum":                {"/usr/bin/yum"},
@@ -228,6 +337,23 @@ func IsCommandExist(cmd string, chrootPath string) (bool, error) {
 	}
 
 	return strings.TrimSpace(output) != "", nil
+}
+
+// QuoteArg returns s wrapped as a single shell argument that bash -c will pass
+// through literally, neutralizing every shell metacharacter it may contain.
+//
+// Commands in this tool are assembled as strings and run via `bash -c`, so any
+// interpolated value that is (even partially) attacker-influenced — e.g. an
+// artifact filename derived from a package URL basename, or a workspace path —
+// must be quoted here before being concatenated into a command. Single-quote
+// wrapping is used deliberately (not strconv.Quote / double quotes): inside
+// double quotes bash still expands $(...), backticks and $var, whereas nothing
+// is special inside single quotes. An embedded single quote is emitted as the
+// standard close-quote, escaped-quote, reopen-quote sequence (see the
+// ReplaceAll below), so the result is safe for arbitrary input including
+// quotes themselves.
+func QuoteArg(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func extractSedPattern(command string) (string, error) {
@@ -445,11 +571,37 @@ func verifyCmdWithFullPath(cmd, chrootPath string) (string, error) {
 	return updatedCmdStr, nil
 }
 
+// geteuid is indirected through a package variable so tests can exercise the
+// root and non-root branches of sudoPrefix without actually running as root.
+// Production always uses os.Geteuid.
+var geteuid = os.Geteuid
+
+// sudoPrefix returns the "sudo " command prefix only when elevation is actually
+// needed — i.e. when the process is not already root.
+//
+// ICT is documented to run as root: the CLI via `sudo -E image-composer-tool
+// build …`, and the web server (serve --sudo) via `sudo -n image-composer-tool
+// build …`. In both cases the ICT process itself is already euid 0, so an inner
+// `sudo` prepended to each spawned command is a redundant root→root elevation
+// that only forks an extra sudo process per command (and, on the serve path,
+// would otherwise need its own sudoers entry). When euid == 0 we omit it and the
+// command runs directly as the already-root process.
+//
+// When euid != 0 the prefix is kept so a non-root invocation still elevates each
+// command through sudo (the per-command sudo model). Note kill/kill semantics
+// for signal delivery still assume the documented already-root model — see the
+// privilege note on applyExecAttrs.
+func sudoPrefix() string {
+	if geteuid() == 0 {
+		return ""
+	}
+	return "sudo "
+}
+
 // GetFullCmdStr prepares a command string with necessary prefixes
 func GetFullCmdStr(cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error) {
 	var fullCmdStr string
 	envValStr := ""
-	runningAsRoot := os.Geteuid() == 0
 	for _, env := range envVal {
 		envValStr += env + " "
 	}
@@ -470,11 +622,9 @@ func GetFullCmdStr(cmdStr string, sudo bool, chrootPath string, envVal []string)
 			envValStr += key + "=" + value + " "
 		}
 
-		if sudo && !runningAsRoot {
-			fullCmdStr = "sudo " + envValStr + "chroot " + chrootPath + " " + fullPathCmdStr
-		} else {
-			fullCmdStr = envValStr + "chroot " + chrootPath + " " + fullPathCmdStr
-		}
+		// chroot always requires elevation; sudoPrefix drops the redundant inner
+		// sudo when the process is already root (see sudoPrefix docstring).
+		fullCmdStr = sudoPrefix() + envValStr + "chroot " + chrootPath + " " + fullPathCmdStr
 		chrootDir := filepath.Base(chrootPath)
 		// log.Debugf("Chroot " + chrootDir + " Exec: [" + fullPathCmdStr + "]")
 		// Avoid logging full command string to prevent leaking sensitive data.
@@ -488,15 +638,12 @@ func GetFullCmdStr(cmdStr string, sudo bool, chrootPath string, envVal []string)
 				envValStr += key + "=" + value + " "
 			}
 
-			if runningAsRoot {
-				fullCmdStr = envValStr + fullPathCmdStr
-				log.Debugf("Exec without sudo: [already running as root]")
-			} else {
-				fullCmdStr = "sudo " + envValStr + fullPathCmdStr
-				// log.Debugf("Exec: [sudo " + fullPathCmdStr + "]")
-				// Avoid logging full command string to prevent leaking sensitive data.
-				log.Debugf("Exec with sudo: [command executed]")
-			}
+			// sudoPrefix drops the redundant inner sudo when already root
+			// (see sudoPrefix docstring); otherwise elevates per command.
+			fullCmdStr = sudoPrefix() + envValStr + fullPathCmdStr
+			// log.Debugf("Exec: [sudo " + fullPathCmdStr + "]")
+			// Avoid logging full command string to prevent leaking sensitive data.
+			log.Debugf("Exec with sudo: [command executed]")
 		} else {
 			fullCmdStr = fullPathCmdStr
 			// log.Debugf("Exec: [" + fullPathCmdStr + "]")
@@ -525,7 +672,8 @@ func (d *DefaultExecutor) ExecCmdSilent(cmdStr string, sudo bool, chrootPath str
 		return "", fmt.Errorf("failed to get full command string: %w", err)
 	}
 
-	cmd := exec.Command("bash", "-c", fullCmdStr)
+	cmd := exec.CommandContext(ctxOrBackground(), "bash", "-c", fullCmdStr)
+	applyExecAttrs(cmd)
 	output, err := cmd.CombinedOutput()
 	return string(output), err
 }
@@ -576,7 +724,11 @@ func logAptRetry(attempt int, output string) {
 }
 
 func (d *DefaultExecutor) execCmdWithRetry(cmdStr, fullCmdStr string) (string, error) {
+	ctx := ctxOrBackground()
 	for attempt := 1; attempt <= aptLockRetryAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return "", fmt.Errorf("execution cancelled before attempt %d: %w", attempt, err)
+		}
 		outputStr, err := d.execCmdOnce(fullCmdStr)
 		if err == nil {
 			return outputStr, nil
@@ -585,14 +737,17 @@ func (d *DefaultExecutor) execCmdWithRetry(cmdStr, fullCmdStr string) (string, e
 			return outputStr, err
 		}
 		logAptRetry(attempt, outputStr)
-		time.Sleep(aptLockRetryDelay)
+		if sleepErr := sleepCtx(ctx, aptLockRetryDelay); sleepErr != nil {
+			return outputStr, fmt.Errorf("execution cancelled during retry backoff: %w", sleepErr)
+		}
 	}
 
 	return "", fmt.Errorf("failed to execute command after retries")
 }
 
 func (d *DefaultExecutor) execCmdOnce(fullCmdStr string) (string, error) {
-	cmd := exec.Command("bash", "-c", fullCmdStr)
+	cmd := exec.CommandContext(ctxOrBackground(), "bash", "-c", fullCmdStr)
+	applyExecAttrs(cmd)
 	output, err := cmd.CombinedOutput()
 	outputStr := string(output)
 
@@ -611,7 +766,11 @@ func (d *DefaultExecutor) execCmdOnce(fullCmdStr string) (string, error) {
 }
 
 func (d *DefaultExecutor) execCmdWithStreamRetry(cmdStr, fullCmdStr string) (string, error) {
+	ctx := ctxOrBackground()
 	for attempt := 1; attempt <= aptLockRetryAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return "", fmt.Errorf("execution cancelled before attempt %d: %w", attempt, err)
+		}
 		outputStr, err := d.execCmdWithStreamOnce(fullCmdStr)
 		if err == nil {
 			return outputStr, nil
@@ -620,14 +779,17 @@ func (d *DefaultExecutor) execCmdWithStreamRetry(cmdStr, fullCmdStr string) (str
 			return outputStr, err
 		}
 		logAptRetry(attempt, outputStr)
-		time.Sleep(aptLockRetryDelay)
+		if sleepErr := sleepCtx(ctx, aptLockRetryDelay); sleepErr != nil {
+			return outputStr, fmt.Errorf("execution cancelled during retry backoff: %w", sleepErr)
+		}
 	}
 
 	return "", fmt.Errorf("failed to execute streamed command after retries")
 }
 
 func (d *DefaultExecutor) execCmdWithStreamOnce(fullCmdStr string) (string, error) {
-	cmd := exec.Command("bash", "-c", fullCmdStr)
+	cmd := exec.CommandContext(ctxOrBackground(), "bash", "-c", fullCmdStr)
+	applyExecAttrs(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return "", fmt.Errorf("failed to get stdout pipe for command %s: %w", fullCmdStr, err)
@@ -698,7 +860,8 @@ func (d *DefaultExecutor) ExecCmdWithInput(inputStr string, cmdStr string, sudo 
 		return "", fmt.Errorf("failed to get full command string: %w", err)
 	}
 
-	cmd := exec.Command("bash", "-c", fullCmdStr)
+	cmd := exec.CommandContext(ctxOrBackground(), "bash", "-c", fullCmdStr)
+	applyExecAttrs(cmd)
 	cmd.Stdin = strings.NewReader(inputStr)
 
 	output, err := cmd.CombinedOutput()

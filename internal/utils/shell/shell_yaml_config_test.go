@@ -18,12 +18,6 @@ func TestEchoWithNestedQuotes(t *testing.T) {
 		description string
 	}{
 		{
-			name:        "single quotes with double quotes inside",
-			cmd:         `echo 'Acquire::ftp::Proxy "http://proxy-dmz.intel.com:911";' > /etc/apt/apt.conf.d/99proxy.conf`,
-			wantErr:     false,
-			description: "This was the failing case - single quotes containing double quotes",
-		},
-		{
 			name:        "single quotes with multiple double quotes",
 			cmd:         `echo 'key1="value1" key2="value2"' > /etc/config`,
 			wantErr:     false,

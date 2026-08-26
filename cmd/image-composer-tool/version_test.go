@@ -20,7 +20,11 @@ func captureOutput(t *testing.T, fn func()) string {
 	if err != nil {
 		t.Fatalf("pipe: %v", err)
 	}
-	defer pr.Close()
+	defer func() {
+		if err := pr.Close(); err != nil {
+			t.Errorf("close read pipe: %v", err)
+		}
+	}()
 
 	oldOut := os.Stdout
 	oldErr := os.Stderr
@@ -43,7 +47,9 @@ func captureOutput(t *testing.T, fn func()) string {
 	fn()
 
 	// Close writer to unblock reader goroutine
-	_ = pw.Close()
+	if err := pw.Close(); err != nil {
+		t.Fatalf("close write pipe: %v", err)
+	}
 
 	// Wait for the captured output
 	return <-done

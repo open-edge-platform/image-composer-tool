@@ -230,6 +230,14 @@ func (chrootBuilder *ChrootBuilder) GetChrootEnvPackageList() ([]string, error) 
 	return pkgList, nil
 }
 
+// chrootenvPkgCacheDir returns the isolated subdirectory used to download and install
+// the chroot-build packages (e.g. mmdebstrap, grub). Keeping it separate from
+// ChrootPkgCacheDir (the image-package cache) prevents the stale-cache check from
+// wiping the image packages when the two package sets do not overlap.
+func (chrootBuilder *ChrootBuilder) chrootenvPkgCacheDir() string {
+	return filepath.Join(chrootBuilder.ChrootPkgCacheDir, "chrootenv")
+}
+
 func (chrootBuilder *ChrootBuilder) downloadChrootEnvPackages() ([]string, []string, error) {
 	var pkgsList []string
 	var allPkgsList []string
@@ -245,23 +253,24 @@ func (chrootBuilder *ChrootBuilder) downloadChrootEnvPackages() ([]string, []str
 	}
 	pkgsList = append(essentialPkgsList, pkgsList...)
 
-	if _, err := os.Stat(chrootBuilder.ChrootPkgCacheDir); os.IsNotExist(err) {
-		if err := os.MkdirAll(chrootBuilder.ChrootPkgCacheDir, 0700); err != nil {
+	downloadDir := chrootBuilder.chrootenvPkgCacheDir()
+	if _, err := os.Stat(downloadDir); os.IsNotExist(err) {
+		if err := os.MkdirAll(downloadDir, 0700); err != nil {
 			log.Errorf("Failed to create chroot package cache directory: %v", err)
 			return pkgsList, allPkgsList, fmt.Errorf("failed to create chroot package cache directory: %w", err)
 		}
 	}
 
-	dotFilePath := filepath.Join(chrootBuilder.ChrootPkgCacheDir, "chrootpkgs.dot")
+	dotFilePath := filepath.Join(downloadDir, "chrootpkgs.dot")
 
 	if pkgType == "rpm" {
-		allPkgsList, err = rpmutils.DownloadPackages(pkgsList, chrootBuilder.ChrootPkgCacheDir, dotFilePath, nil, false)
+		allPkgsList, err = rpmutils.DownloadPackages(pkgsList, downloadDir, dotFilePath, nil, false)
 		if err != nil {
 			return pkgsList, allPkgsList, fmt.Errorf("failed to download chroot environment packages: %w", err)
 		}
 		return pkgsList, allPkgsList, nil
 	} else if pkgType == "deb" {
-		allPkgsList, err = debutils.DownloadPackages(pkgsList, chrootBuilder.ChrootPkgCacheDir, dotFilePath, nil, false)
+		allPkgsList, err = debutils.DownloadPackages(pkgsList, downloadDir, dotFilePath, nil, false)
 		if err != nil {
 			return pkgsList, allPkgsList, fmt.Errorf("failed to download chroot environment packages: %w", err)
 		}
@@ -294,19 +303,21 @@ func (chrootBuilder *ChrootBuilder) BuildChrootEnv(targetOs string, targetDist s
 	}
 	log.Infof("Downloaded %d packages for chroot environment", len(allPkgsList))
 
-	chrootPkgCacheDir := chrootBuilder.GetChrootPkgCacheDir()
+	// Use the isolated chrootenv download dir (not the shared image-package cache dir)
+	// so that UpdateLocalDebRepo and InstallDebPkg operate on the chrootenv-specific packages.
+	chrootenvDir := chrootBuilder.chrootenvPkgCacheDir()
 	if pkgType == "rpm" {
 		if err := chrootBuilder.RpmInstaller.InstallRpmPkg(targetOs, chrootEnvPath,
-			chrootPkgCacheDir, allPkgsList); err != nil {
+			chrootenvDir, allPkgsList); err != nil {
 			return fmt.Errorf("failed to install packages in chroot environment: %w", err)
 		}
 	} else if pkgType == "deb" {
-		if err = chrootBuilder.DebInstaller.UpdateLocalDebRepo(chrootPkgCacheDir, targetArch, false); err != nil {
+		if err = chrootBuilder.DebInstaller.UpdateLocalDebRepo(chrootenvDir, targetArch, false); err != nil {
 			return fmt.Errorf("failed to create debian local repository: %w", err)
 		}
 
 		if err := chrootBuilder.DebInstaller.InstallDebPkg(chrootBuilder.TargetOsConfigDir,
-			chrootEnvPath, chrootPkgCacheDir, pkgsList); err != nil {
+			chrootEnvPath, chrootenvDir, pkgsList); err != nil {
 			return fmt.Errorf("failed to install packages in chroot environment: %w", err)
 		}
 	} else {

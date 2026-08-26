@@ -2,14 +2,16 @@ package deb
 
 import (
 	"fmt"
-	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/debutils"
-	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
-	"github.com/open-edge-platform/image-composer-tool/internal/utils/mount"
-	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/debutils"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/mount"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
 
 var log = logger.Logger()
@@ -133,6 +135,11 @@ func (debInstaller *DebInstaller) UpdateLocalDebRepo(repoPath, targetArch string
 	}
 	targetArch = normalizedArch
 	debInstaller.targetArch = normalizedArch
+
+	if system.IsLiveInstallerExecution() {
+		log.Infof("Skipping local DEB repository metadata update in live-installer mode")
+		return nil
+	}
 
 	metaDataPath := filepath.Join(repoPath,
 		fmt.Sprintf("dists/stable/main/binary-%s", targetArch), "Packages.gz")

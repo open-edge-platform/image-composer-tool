@@ -68,7 +68,7 @@ systemConfig:
       final: /etc/apt/sources.list.d/ubuntu-resolute.list
 
   kernel:
-    version: "6.17"
+    version: "7.0"
     cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
     packages:
       - linux-image-generic
