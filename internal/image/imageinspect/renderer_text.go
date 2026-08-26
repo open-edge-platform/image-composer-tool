@@ -272,6 +272,14 @@ func RenderSPDXCompareText(w io.Writer, result *SPDXCompareResult) error {
 		}
 	}
 
+	if len(result.UpgradedPackages) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Upgraded packages:")
+		for _, pkg := range result.UpgradedPackages {
+			fmt.Fprintf(w, "  ~ %s\n", pkg)
+		}
+	}
+
 	return nil
 }
 

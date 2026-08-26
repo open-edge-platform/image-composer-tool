@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+SPDX-FileCopyrightText: (C) 2026 Intel Corporation
+SPDX-License-Identifier: Apache-2.0
+
+Grounded package assist: the three-stage pipeline.
+Green = no LLM. Blue = the one stage that uses one.
+Colours for the four output states are taken from the prototype's legend
+(web/prototype/template-builder.html) so they mean the same thing in both.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1"
+     width="960" height="550" viewBox="0 0 960 550">
+
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#4a6d8c"/>
+    </marker>
+    <style>
+      .t     { font-family: Inter, 'Segoe UI', -apple-system, sans-serif; }
+      .mono  { font-family: 'SF Mono', Consolas, 'Liberation Mono', monospace; }
+      .title { font-size: 17px; font-weight: 700; fill: #00285A; }
+      .lbl   { font-size: 8.5px; font-weight: 700; letter-spacing: 0.8px; fill: #4a6d8c; }
+      .body  { font-size: 11px; fill: #00285A; }
+      .ex    { font-size: 9px; fill: #4a6d8c; }
+      .gua   { font-size: 10px; fill: #00285A; }
+      .stage { font-size: 13px; font-weight: 700; }
+      .pill  { font-size: 9px; font-weight: 700; }
+      .num   { font-size: 12px; font-weight: 700; fill: #ffffff; }
+      .edge  { font-size: 8.5px; font-weight: 600; fill: #4a6d8c; }
+      .foot  { font-size: 9px; fill: #4a6d8c; }
+    </style>
+  </defs>
+
+  <rect width="960" height="550" fill="#ffffff"/>
+
+  <text class="t title" x="480" y="30" text-anchor="middle">Grounded Package Assist: the three-stage pipeline</text>
+
+  <!-- ═══ INPUT ═══ -->
+  <rect x="36" y="64" width="240" height="64" rx="8" fill="#f5f8fb" stroke="#d6e3f0" stroke-width="1.5"/>
+  <text class="t lbl"  x="52" y="84">USER DESCRIPTION</text>
+  <text class="t body" x="52" y="102" font-style="italic">Autonomous mobile robot with a</text>
+  <text class="t body" x="52" y="118" font-style="italic">depth camera and on-device AI</text>
+
+  <!-- ═══ THESIS ═══ -->
+  <rect x="360" y="64" width="564" height="64" rx="8" fill="#e6f2fa" stroke="#0071C5" stroke-width="1.5"/>
+  <text class="t" x="376" y="86" font-size="12" font-weight="700" fill="#00285A">The model occupies only the middle stage. It has no authority over what exists.</text>
+  <text class="t body" x="376" y="105">Stages 1 and 3 use no LLM. Grounding correctness lives entirely in stage 3, which</text>
+  <text class="t body" x="376" y="120">consults the repository's own package index, never the model.</text>
+
+  <!-- input to stage 1 -->
+  <line x1="156" y1="128" x2="156" y2="164" stroke="#4a6d8c" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- ═══════════ STAGE 1: RETRIEVE (no LLM) ═══════════ -->
+  <rect x="36" y="170" width="240" height="216" rx="8" fill="#f0fdf4" stroke="#16a34a" stroke-width="2"/>
+  <path d="M 36 200 L 36 178 Q 36 170 44 170 L 268 170 Q 276 170 276 178 L 276 200 Z" fill="#16a34a"/>
+  <circle cx="58" cy="185" r="11" fill="#ffffff" fill-opacity="0.25"/>
+  <text class="t num"   x="58"  y="189" text-anchor="middle">1</text>
+  <text class="t stage" x="78"  y="190" fill="#ffffff">RETRIEVE</text>
+  <rect x="198" y="176" width="62" height="18" rx="9" fill="#ffffff"/>
+  <text class="t pill"  x="229" y="189" text-anchor="middle" fill="#166534">no LLM</text>
+
+  <text class="t body" x="52" y="222">Hybrid semantic + keyword</text>
+  <text class="t body" x="52" y="238">search over the bundle index.</text>
+  <line x1="52" y1="252" x2="260" y2="252" stroke="#bbf7d0" stroke-width="1"/>
+  <text class="t lbl"  x="52" y="268">EXAMPLE</text>
+  <text class="t ex"   x="52" y="284">"depth camera + on-device AI"</text>
+  <text class="t ex"   x="52" y="297">yields 3 bundles, ~40 packages</text>
+  <line x1="52" y1="311" x2="260" y2="311" stroke="#bbf7d0" stroke-width="1"/>
+  <text class="t lbl"  x="52" y="327">GUARANTEE</text>
+  <text class="t gua"  x="52" y="343">Bounded vocabulary: nothing</text>
+  <text class="t gua"  x="52" y="357">outside this set can ever be</text>
+  <text class="t gua"  x="52" y="371">proposed downstream.</text>
+
+  <!-- stage 1 to stage 2 -->
+  <text class="t edge" x="318" y="292" text-anchor="middle">candidate</text>
+  <text class="t edge" x="318" y="303" text-anchor="middle">set C</text>
+  <line x1="278" y1="314" x2="358" y2="314" stroke="#4a6d8c" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- ═══════════ STAGE 2: ASSEMBLE (LLM) ═══════════ -->
+  <rect x="360" y="170" width="240" height="216" rx="8" fill="#e6f2fa" stroke="#0071C5" stroke-width="2"/>
+  <path d="M 360 200 L 360 178 Q 360 170 368 170 L 592 170 Q 600 170 600 178 L 600 200 Z" fill="#0071C5"/>
+  <circle cx="382" cy="185" r="11" fill="#ffffff" fill-opacity="0.25"/>
+  <text class="t num"   x="382" y="189" text-anchor="middle">2</text>
+  <text class="t stage" x="402" y="190" fill="#ffffff">ASSEMBLE</text>
+  <rect x="522" y="176" width="62" height="18" rx="9" fill="#ffffff"/>
+  <text class="t pill"  x="553" y="189" text-anchor="middle" fill="#00285A">LLM</text>
+
+  <text class="t body" x="376" y="222">Pick from the candidate set</text>
+  <text class="t body" x="376" y="238">only. One rationale per item.</text>
+  <line x1="376" y1="252" x2="584" y2="252" stroke="#b6dcf5" stroke-width="1"/>
+  <text class="t lbl"  x="376" y="268">EXAMPLE</text>
+  <text class="t ex"   x="376" y="284">RealSense + OpenVINO + AMR,</text>
+  <text class="t ex"   x="376" y="297">each with a stated reason</text>
+  <line x1="376" y1="311" x2="584" y2="311" stroke="#b6dcf5" stroke-width="1"/>
+  <text class="t lbl"  x="376" y="327">GUARANTEE</text>
+  <text class="t gua"  x="376" y="343">The answer is intersected</text>
+  <text class="t gua"  x="376" y="357">with C server-side, so an</text>
+  <text class="t gua"  x="376" y="371">invented name dies here.</text>
+
+  <!-- stage 2 to stage 3 -->
+  <text class="t edge" x="642" y="292" text-anchor="middle">selection,</text>
+  <text class="t edge" x="642" y="303" text-anchor="middle">a subset of C</text>
+  <line x1="602" y1="314" x2="682" y2="314" stroke="#4a6d8c" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- ═══════════ STAGE 3: VERIFY (no LLM) ═══════════ -->
+  <rect x="684" y="170" width="240" height="216" rx="8" fill="#f0fdf4" stroke="#16a34a" stroke-width="2"/>
+  <path d="M 684 200 L 684 178 Q 684 170 692 170 L 916 170 Q 924 170 924 178 L 924 200 Z" fill="#16a34a"/>
+  <circle cx="706" cy="185" r="11" fill="#ffffff" fill-opacity="0.25"/>
+  <text class="t num"   x="706" y="189" text-anchor="middle">3</text>
+  <text class="t stage" x="726" y="190" fill="#ffffff">VERIFY</text>
+  <rect x="846" y="176" width="62" height="18" rx="9" fill="#ffffff"/>
+  <text class="t pill"  x="877" y="189" text-anchor="middle" fill="#166534">no LLM</text>
+
+  <text class="t body" x="700" y="222">Look up every surviving name</text>
+  <text class="t body" x="700" y="238">in the target's repo indexes.</text>
+  <line x1="700" y1="252" x2="908" y2="252" stroke="#bbf7d0" stroke-width="1"/>
+  <text class="t lbl"  x="700" y="268">EXAMPLE</text>
+  <text class="t mono" x="700" y="284" font-size="8" fill="#166534">librealsense2_2.56.5-0~realsense.17055</text>
+  <text class="t ex"   x="700" y="297">found in the RealSense index</text>
+  <line x1="700" y1="311" x2="908" y2="311" stroke="#bbf7d0" stroke-width="1"/>
+  <text class="t lbl"  x="700" y="327">GUARANTEE</text>
+  <text class="t gua"  x="700" y="343">Independent oracle: the same</text>
+  <text class="t gua"  x="700" y="357">parse the builder uses to</text>
+  <text class="t gua"  x="700" y="371">fetch. No install, no badge.</text>
+
+  <!-- stage 3 to output -->
+  <line x1="804" y1="386" x2="804" y2="420" stroke="#4a6d8c" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- ═══ OUTPUT: the four grounding states ═══ -->
+  <rect x="36" y="424" width="888" height="80" rx="8" fill="#f5f8fb" stroke="#d6e3f0" stroke-width="1.5"/>
+  <text class="t lbl" x="52" y="444">OUTPUT: EVERY ITEM CARRIES EXACTLY ONE OF FOUR GROUNDING STATES</text>
+
+  <rect x="52"  y="459" width="9" height="9" rx="2" fill="#16a34a"/>
+  <text class="t" x="68"  y="468" font-size="11" font-weight="700" fill="#00285A">verified</text>
+  <text class="t ex" x="52" y="486">found by name in a repository index</text>
+
+  <rect x="274" y="459" width="9" height="9" rx="2" fill="#d97706"/>
+  <text class="t" x="290" y="468" font-size="11" font-weight="700" fill="#00285A">resolved</text>
+  <text class="t ex" x="274" y="486">renamed to what the repo publishes</text>
+
+  <rect x="496" y="459" width="9" height="9" rx="2" fill="#94a3b8"/>
+  <text class="t" x="512" y="468" font-size="11" font-weight="700" fill="#00285A">unverified</text>
+  <text class="t ex" x="496" y="486">repository unreachable, unconfirmed</text>
+
+  <rect x="718" y="459" width="9" height="9" rx="2" fill="#dc2626"/>
+  <text class="t" x="734" y="468" font-size="11" font-weight="700" fill="#00285A">not available</text>
+  <text class="t ex" x="718" y="486">an alternative, never a silent drop</text>
+
+  <text class="t foot" x="480" y="528" text-anchor="middle">Nothing is auto-added. Every proposal carries its rationale and an explicit Add button.</text>
+</svg>

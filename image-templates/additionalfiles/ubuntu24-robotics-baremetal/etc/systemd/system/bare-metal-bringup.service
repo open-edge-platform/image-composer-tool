@@ -1,0 +1,20 @@
+[Unit]
+Description=Bare-metal bring-up: DHCP networking + SSH (no cloud-init datasource)
+Documentation=file:/usr/local/sbin/bare-metal-bringup.sh
+# Order our config work before networking comes up; we (re)start networkd and ssh
+# from inside the script. We deliberately do NOT order Before=ssh.service: the
+# script runs `systemctl restart ssh` synchronously, so ordering this oneshot
+# before ssh.service would form a cycle and stall until TimeoutStartSec.
+Wants=network.target
+Before=network.target
+ConditionPathExists=/usr/local/sbin/bare-metal-bringup.sh
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/bare-metal-bringup.sh
+StandardOutput=journal+console
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

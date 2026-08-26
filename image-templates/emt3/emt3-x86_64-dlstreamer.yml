@@ -1,0 +1,127 @@
+# Intel DL Streamer on EMT3.
+#
+# This is the "add features to a working image" case: the edge image already
+# carries the agent, tinker, selinux, GPU and docker package set, so this
+# template inherits it and adds only the media/AI stack, the repositories it
+# comes from, and a larger disk.
+#
+# What inheritance costs here: alongside the three repositories declared below,
+# this template also inherits the edge image's three sample repositories —
+# company-internal, dev-tools and intel-openvino — whose URLs are the literal
+# placeholder "<URL>", so `resolve --full` reports six rather than three. They are
+# inert: rpmutils skips any repository whose URL is "<URL>" before fetching, and
+# EMT3 is RPM-based so apt-source generation never runs for it at all.
+#
+# Run `image-composer-tool resolve <this file>` to see the merged result, or
+# `--full` to include the OS defaults as they apply at build time.
+
+# AI-searchable metadata for template discovery.
+# metadata is not inherited, so every template declares its own.
+metadata:
+  description: "Edge Microvisor Toolkit 3 image with Intel DL Streamer for AI video analytics and deep learning inference at the edge"
+  use_cases:
+    - "video analytics"
+    - "AI inference"
+    - "deep learning"
+    - "computer vision"
+    - "media processing"
+  keywords:
+    - dlstreamer
+    - ai
+    - inference
+    - video
+    - analytics
+    - deep-learning
+    - opencv
+    - gstreamer
+    - emt3
+    - microvisor
+
+# Inherit the edge image's package set and immutability defaults.
+extends: "emt3-x86_64-edge-raw.yml"
+
+image:
+  name: emt3-x86_64-dlstreamer
+  version: "1.0.0"
+
+target:
+  os: edge-microvisor-toolkit # Must match the parent's target
+  dist: emt3
+  arch: x86_64
+  imageType: raw
+
+# Repositories are merged by codename. These three codenames do not appear in
+# the parent, so they are appended rather than overriding anything.
+packageRepositories:
+  - codename: "EdgeAI"
+    url: "https://yum.repos.intel.com/edgeai/"
+    pkey: "https://yum.repos.intel.com/edgeai/GPG-PUB-KEY-INTEL-DLS.gpg" # Uncomment and replace in real config
+
+  - codename: "OpenVINO"
+    url: "https://yum.repos.intel.com/openvino/"
+    pkey: "https://yum.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB" # Uncomment and replace in real config
+
+  - codename: "mariner"
+    url: "https://packages.microsoft.com/yumrepos/cbl-mariner-2.0-prod-extended-x86_64/"
+    pkey: "https://packages.microsoft.com/azurelinux/3.0/prod/base/x86_64/repodata/repomd.xml.key" # Uncomment and replace in real config
+
+# disk is replaced as a whole block, never merged field by field. The media
+# stack needs more room than the parent's default, hence 8GiB.
+disk:
+  name: Minimal_Raw # 1:1 mapping to the systemConfigs name
+  artifacts:
+    -
+      type: raw  # image file format, valid value [raw, vhd, vhdx, qcow2, vmdk, vdi]
+      compression: gz # image compression format (optional)
+  size: 8GiB # 4G, 4GB, 4096 MiB also valid. (Required for raw)
+  partitionTableType: gpt # Partition table type, valid value: [gpt, mbr]
+  partitions: # Required for raw, optional for ISO, not needed for rootfs.
+    - id: boot
+      type: esp
+      flags:
+        - esp
+        - boot
+      start: 1MiB
+      end: 513MiB
+      fsType: fat32
+      mountPoint: /boot/efi
+      mountOptions: umask=0077
+
+    - id: rootfs
+      type: linux-root-amd64
+      start: 513MiB
+      end: "0"
+      fsType: ext4
+      mountPoint: /
+      mountOptions: defaults
+
+systemConfig:
+  name: Minimal_Raw
+  description: dlstreamer yml configuration for raw image
+
+  bootloader:
+    bootType: efi # (efi or legacy)
+    provider: systemd-boot # (grub for efi and legacy mode, or systemd-boot for efi mode)
+
+  # The parent enables immutability; the media stack needs a writable root.
+  immutability:
+    enabled: false
+
+  # Merged additively on top of the parent's package list, and appended after
+  # it, so the media stack resolves against the repositories declared above.
+  packages:
+    - tdnf
+    - curl
+    - nano
+    - paho-mqtt-c
+    - ffmpeg
+    - opencv
+    - intel-dlstreamer-2026.0.0
+    - openvino-2026.0.0
+
+  # Per-field override: the parent's cmdline is kept, the GPU driver pinned.
+  kernel:
+    version: "6.12"
+    cmdline: "console=ttyS0,115200 console=tty0 loglevel=7 i915.force_probe=*"
+    packages:
+      - kernel-drivers-gpu-6.12.55

@@ -50,6 +50,7 @@ systemConfig: # Required
     - cryptsetup-bin
     - systemd-resolved
     - efibootmgr
+    - openssh-server
 
   additionalFiles:
     - local: ../additionalfiles/dhcp.network

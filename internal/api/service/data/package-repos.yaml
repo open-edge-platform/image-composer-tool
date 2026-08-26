@@ -1,0 +1,106 @@
+# SPDX-FileCopyrightText: (C) 2026 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+#
+# Catalog of package repositories offered by the ICT Web UI Advanced tab.
+#
+# This is presentation metadata for the repository picker: it gives each repo a
+# human label, a description, and a default toggle state. It is NOT the build
+# configuration — the repos a build actually uses come from the template's
+# `packageRepositories:` block and the per-OS `providerconfigs/`. The URLs here
+# mirror those sources so the picker offers real, tested repositories.
+#
+# Fields:
+#   id                stable identifier; what the UI and /packages/search send back
+#   displayName       label shown in the picker
+#   url               repository base URL (informational in the UI)
+#   description       one-line explanation of what the repo provides
+#   enabledByDefault  seeds the toggle; true for each target's base OS repo
+#   priority          higher wins when a package exists in several repos.
+#                     Omitted means the default of 500; set it only where the
+#                     authored templates set it, so the picker matches a real build.
+#   os                target ids (manifest `targets[].id`) this repo applies to.
+#                     Omitted means it applies to every target.
+
+repos:
+  # ── Base OS repositories: always on, one per target ──────────────────
+  - id: ubuntu-noble-base
+    displayName: Ubuntu 24.04 Base (noble)
+    url: http://archive.ubuntu.com/ubuntu
+    description: Ubuntu 24.04 LTS main, restricted, universe and multiverse components.
+    enabledByDefault: true
+    os: [ubuntu24]
+
+  - id: ubuntu-resolute-base
+    displayName: Ubuntu 26.04 Base (resolute)
+    url: http://archive.ubuntu.com/ubuntu
+    description: Ubuntu 26.04 main, restricted, universe and multiverse components.
+    enabledByDefault: true
+    os: [ubuntu26-server]
+
+  - id: debian-trixie-base
+    displayName: Debian 13 Base (trixie)
+    url: http://deb.debian.org/debian
+    description: Debian 13 main, contrib, non-free and non-free-firmware components.
+    enabledByDefault: true
+    os: [debian13]
+
+  # ── Optional repositories for Ubuntu 24.04 targets ───────────────────
+  - id: ros2-jazzy
+    displayName: ROS 2 Jazzy
+    url: http://packages.ros.org/ros2/ubuntu
+    description: ROS 2 Jazzy Jalisco robotics middleware, tooling and message packages.
+    enabledByDefault: false
+    os: [ubuntu24]
+
+  - id: intel-eci
+    displayName: Intel Edge Controls for Industrial (ECI)
+    url: https://eci.intel.com/repos/noble
+    description: Real-time and industrial packages — systemd with ETF/TAPRIO, PCL and FLANN built against oneAPI.
+    enabledByDefault: false
+    priority: 1000
+    os: [ubuntu24]
+
+  - id: intel-amr
+    displayName: Intel Autonomous Mobile Robots (AMR)
+    url: https://amrdocs.intel.com/repos/noble
+    description: AMR robotics stack; overrides ECI where both provide a package.
+    enabledByDefault: false
+    priority: 1001
+    os: [ubuntu24]
+
+  - id: intel-openvino
+    displayName: Intel OpenVINO 2025
+    url: https://apt.repos.intel.com/openvino/2025
+    description: OpenVINO inference engine runtime and development packages.
+    enabledByDefault: false
+    os: [ubuntu24]
+
+  - id: intel-dlstreamer
+    displayName: Intel DL Streamer
+    url: https://apt.repos.intel.com/edgeai/dlstreamer/ubuntu24
+    description: Deep Learning Streamer media analytics pipeline framework.
+    enabledByDefault: false
+    os: [ubuntu24]
+
+  - id: intel-linux-overlay
+    displayName: Intel Linux Overlay
+    url: https://download.01.org/intel-linux-overlay/ubuntu
+    description: Intel-tuned kernels, multimedia and firmware packages.
+    enabledByDefault: false
+    priority: 2000
+    os: [ubuntu24]
+
+  - id: intel-graphics
+    displayName: Intel Graphics (kobuk-team)
+    url: https://ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu
+    description: Intel client GPU compute runtime and media driver packages.
+    enabledByDefault: false
+    os: [ubuntu24]
+
+  # ── Optional repositories for Debian 13 targets ──────────────────────
+  - id: docker-ce
+    displayName: Docker CE
+    url: https://download.docker.com/linux/debian
+    description: Docker Community Edition engine, CLI and containerd packages.
+    enabledByDefault: false
+    os: [debian13]

@@ -1,0 +1,101 @@
+# Overlay template: REPLACE the kernel in an existing Ubuntu 24.04 RAW image.
+#
+# This performs a full kernel swap: the replacement kernel named in
+# overlayPolicy.replaceKernel is installed, and the baseline kernel family (image
+# + meta + modules + headers) is removed, so the emitted image ships ONLY the new
+# kernel. The GRUB config is then regenerated so the boot menu drops the removed
+# kernel's entry and defaults to the new one. The ESP and the bootloader binary
+# are never touched (grub-install is never run; no Secure Boot re-signing).
+#
+# Notes:
+#   - replaceKernel requires packageOperation "additive-and-upgrade" (a swap is
+#     more invasive than an in-place upgrade). It does NOT require
+#     allowPackageRemoval — it self-authorizes its own kernel-family removals.
+#   - The replacement kernel and its modules are resolved from the repositories
+#     configured for the baseline (plus any packageRepositories below), so those
+#     repos must publish the kernel package named here.
+#   - On a Secure Boot baseline a locally-installed kernel may be unsigned and can
+#     be rejected by firmware; sign it out of band if required.
+
+# AI-searchable metadata for template discovery
+metadata:
+  description: Replace the kernel in an existing Ubuntu 24.04 RAW image (install a new kernel, remove the baseline kernel, regenerate GRUB) without a full rebuild
+  use_cases:
+    - Swap the kernel of a golden image for a different flavour (e.g. generic -> OEM/HWE)
+    - Ship an image with only a specific vendor kernel
+    - Move a baseline onto a newer kernel line without rebuilding from scratch
+  keywords:
+    - overlay
+    - replace-kernel
+    - kernel-swap
+    - additive-and-upgrade
+    - grub
+    - ubuntu
+    - raw
+
+image:
+  name: ubuntu-overlay-replace-kernel
+  version: "24.04"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+
+# Overlay mode: layer the kernel swap onto an existing baseline RAW image. The
+# source image is copied into the build workspace first and is never modified in
+# place. Replace the path with your own baseline image.
+baseline:
+  mode: overlay
+  source:
+    # Replace with a real baseline RAW image path on your build host, or use
+    # `url: https://...` to fetch one over TLS.
+    path: /path/to/ubuntu-24.04-base.img
+    format: raw
+
+# additive-and-upgrade is required for a kernel swap. replaceKernel names the new
+# kernel image package to install; the baseline kernel family is auto-detected and
+# removed. GRUB_DEFAULT is auto-pinned to the new kernel ("0") unless grubDefault
+# is set below.
+overlayPolicy:
+  packageOperation: additive-and-upgrade
+  conflictPolicy: fail
+  replaceKernel:
+    package: linux-image-6.11.0-1004-oem
+    # Optionally install further kernel-family packages alongside the image
+    # (e.g. the matching headers), following the same rules as package above:
+    # additionalPackages:
+    #   - linux-headers-6.11.0-1004-oem
+    # Optionally force driver modules into the replacement kernel's initramfs
+    # (dracut --add-drivers, or an initramfs-tools modules entry):
+    # enableExtraModules: "intel_vpu uas"
+    # Optional, descriptive only — never used to resolve/install packages:
+    # version: "6.11.0-1004-oem"
+  # Optionally set the kernel command line the new kernel boots with (a full-line
+  # replacement of GRUB_CMDLINE_LINUX). Uncomment and adjust as needed:
+  # kernelCmdline: "quiet splash"
+  # Optionally pin a specific GRUB menu entry instead of the auto "0" default:
+  # grubDefault: "Advanced options for Ubuntu>Ubuntu, with Linux 6.11.0-1004-oem"
+
+# The replacement kernel resolves from the repositories configured for the ubuntu24
+# baseline (base/updates/security are supplied automatically by the provider). Add a
+# repository here if the kernel package lives in a vendor/OEM feed, for example:
+#
+# packageRepositories:
+#   - codename: "noble"
+#     url: "https://example.com/oem/noble"
+#     pkey: "https://example.com/oem/keys/oem.gpg"
+#     component: "main"
+#     priority: 2000
+#     allowPackages:
+#       - linux-image-6.11.0-1004-oem
+#       - linux-modules-6.11.0-1004-oem
+
+systemConfig:
+  name: overlay
+  description: Ubuntu 24.04 baseline with its kernel replaced by linux-image-6.11.0-1004-oem
+  # No extra packages are required for a kernel swap; the replacement kernel is
+  # supplied via overlayPolicy.replaceKernel above. Add packages here as usual to
+  # combine a kernel swap with other overlay additions.
+  packages: []
