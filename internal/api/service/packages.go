@@ -42,7 +42,7 @@ type PackageVersion struct {
 
 const (
 	defaultSearchLimit = 20
-	maxSearchLimit     = 50
+	maxSearchLimit     = 100
 	minSearchQueryLen  = 2
 	// maxConcurrentLookups bounds how many pkgindex.Cache.Lookup calls one
 	// search issues at once, so fanning out across a repo's several indexes
@@ -82,7 +82,13 @@ func (s *Service) ValidateSearchQuery(query string) error {
 //
 // total is the deduplicated match count before offset/limit is applied, so
 // callers can report "N of total" even though hits itself is paginated.
-func (s *Service) SearchPackages(ctx context.Context, osID, query string, repoFilter []string, limit, offset int) (hits []PackageSearchHit, total int, err error) {
+//
+// curatedOnly narrows the result to the matched repos' hand-picked
+// CuratedPackages instead of their full catalog — what the browse pane's
+// "Show frequently used" toggle uses. A matched repo with no curated list
+// contributes nothing to that narrowed set, so the caller sees zero results
+// rather than silently falling back to the full catalog.
+func (s *Service) SearchPackages(ctx context.Context, osID, query string, repoFilter []string, limit, offset int, curatedOnly bool) (hits []PackageSearchHit, total int, err error) {
 	if err := s.ValidateSearchQuery(query); err != nil {
 		return nil, 0, err
 	}
@@ -101,6 +107,9 @@ func (s *Service) SearchPackages(ctx context.Context, osID, query string, repoFi
 	results := runLookups(ctx, s.pkgindexCache, lookups)
 
 	hits = dedupAndFilter(results, query, rpmRepoSet(lookups))
+	if curatedOnly {
+		hits = filterCurated(hits, curatedNameSet(repos))
+	}
 	sort.Slice(hits, func(i, j int) bool {
 		if hits[i].Name != hits[j].Name {
 			return hits[i].Name < hits[j].Name
@@ -108,6 +117,29 @@ func (s *Service) SearchPackages(ctx context.Context, osID, query string, repoFi
 		return hits[i].RepoID < hits[j].RepoID
 	})
 	return paginate(hits, offset, limit), len(hits), nil
+}
+
+// curatedNameSet unions the CuratedPackages of every given repo into a
+// lookup set.
+func curatedNameSet(repos []PackageRepo) map[string]bool {
+	set := make(map[string]bool)
+	for _, r := range repos {
+		for _, name := range r.CuratedPackages {
+			set[name] = true
+		}
+	}
+	return set
+}
+
+// filterCurated keeps only hits whose Name is in curated.
+func filterCurated(hits []PackageSearchHit, curated map[string]bool) []PackageSearchHit {
+	out := make([]PackageSearchHit, 0, len(hits))
+	for _, h := range hits {
+		if curated[h.Name] {
+			out = append(out, h)
+		}
+	}
+	return out
 }
 
 // PackageSearchBatch is one repository's contribution to a streaming search.

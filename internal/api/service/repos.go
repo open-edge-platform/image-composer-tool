@@ -83,6 +83,13 @@ type PackageRepo struct {
 	// out of the wire type by fromPackageRepoList rather than by this tag, so
 	// it never reaches the browser.
 	GPGKeyPath string `json:"gpgKeyPath,omitempty"`
+	// CuratedPackages is a hand-picked "frequently used" subset of this
+	// repo's packages the browse pane's "Show frequently used" toggle
+	// narrows to. Empty means the toggle has nothing to narrow to for this
+	// repo. Like Index and GPGKeyPath, it is kept out of the wire type: the
+	// browser sends a curated=true query flag and the server does the
+	// filtering, rather than shipping the list itself.
+	CuratedPackages []string `json:"curatedPackages,omitempty"`
 }
 
 // Repository types recognised in the catalog. Empty defaults to repoTypeDeb.

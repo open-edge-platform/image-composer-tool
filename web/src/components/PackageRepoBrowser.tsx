@@ -5,7 +5,7 @@ import type { PackageRepo, PackageSearchResult } from '../api/types'
 import { PackageRow } from './PackageRow'
 
 // Packages fetched per page when browsing a repo's full contents (no query).
-const PAGE_SIZE = 25
+const PAGE_SIZE = 100
 
 interface PackageRepoBrowserProps {
   repos: PackageRepo[]
@@ -40,31 +40,40 @@ export function PackageRepoBrowser({ repos, activeRepo, onActiveRepo, os }: Pack
   }
 
   return (
-    <div className="grid grid-cols-[240px_minmax(0,1fr)] overflow-hidden rounded-lg border border-slate-200">
-      <div
-        role="group"
-        aria-label="Package repositories"
-        className="max-h-[480px] overflow-y-auto border-r border-slate-200 bg-slate-50"
-      >
-        {repos.map((r) => (
-          <RepoRailRow
-            key={r.id}
-            repo={r}
-            enabled={isEnabled(r)}
-            active={r.id === activeRepo}
-            onToggle={(on) => onToggle(r, on)}
-            onBrowse={() => onActiveRepo(r.id)}
-          />
-        ))}
+    <>
+      <p className="mb-3 text-sm text-slate-500">
+        Enable a repository with its checkbox, then click it to browse. Browsing
+        starts on the repo&apos;s full catalog (loaded in pages of 100); check
+        &quot;Show frequently used&quot; to narrow the list to its curated picks.
+        The &quot;Select all&quot; checkbox above the list adds everything
+        currently shown to your selection, and removes it again when unchecked.
+      </p>
+      <div className="grid grid-cols-[240px_minmax(0,1fr)] overflow-hidden rounded-lg border border-slate-200">
+        <div
+          role="group"
+          aria-label="Package repositories"
+          className="max-h-[480px] overflow-y-auto border-r border-slate-200 bg-slate-50"
+        >
+          {repos.map((r) => (
+            <RepoRailRow
+              key={r.id}
+              repo={r}
+              enabled={isEnabled(r)}
+              active={r.id === activeRepo}
+              onToggle={(on) => onToggle(r, on)}
+              onBrowse={() => onActiveRepo(r.id)}
+            />
+          ))}
+        </div>
+        <div
+          role="region"
+          aria-label="Repository details"
+          className="max-h-[480px] overflow-y-auto px-[18px] py-3.5"
+        >
+          {active ? <RepoPane repo={active} enabled={isEnabled(active)} os={os} /> : <RepoPaneEmpty />}
+        </div>
       </div>
-      <div
-        role="region"
-        aria-label="Repository details"
-        className="max-h-[480px] overflow-y-auto px-[18px] py-3.5"
-      >
-        {active ? <RepoPane repo={active} enabled={isEnabled(active)} os={os} /> : <RepoPaneEmpty />}
-      </div>
-    </div>
+    </>
   )
 }
 
@@ -139,15 +148,28 @@ function RepoRailRow({
 function RepoPane({ repo, enabled, os }: { repo: PackageRepo; enabled: boolean; os: string }) {
   const [hits, setHits] = useState<PackageSearchResult[]>([])
   const [total, setTotal] = useState(0)
+  // The full-catalog count, tracked separately from `total` so the empty
+  // state under "Show frequently used" can say how many packages are being
+  // hidden rather than just that none are curated.
+  const [fullTotal, setFullTotal] = useState(0)
+  const [frequentOnly, setFrequentOnly] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const addedPackages = useStore((s) => s.addedPackages)
   const setPackage = useStore((s) => s.setPackage)
   const removePackage = useStore((s) => s.removePackage)
+  const setPackages = useStore((s) => s.setPackages)
+  const removePackages = useStore((s) => s.removePackages)
 
-  // Browse this repo's full contents (no query) on mount and whenever the
-  // repo being browsed changes. Disabled repos don't fetch — there's nothing
-  // to show until the user re-enables it.
+  // Switching repos always starts back on the full catalog.
+  useEffect(() => {
+    setFrequentOnly(false)
+  }, [repo.id])
+
+  // Browse this repo's full contents (or its curated subset) on mount and
+  // whenever the repo being browsed, or the curation toggle, changes.
+  // Disabled repos don't fetch — there's nothing to show until the user
+  // re-enables it.
   useEffect(() => {
     setHits([])
     setTotal(0)
@@ -156,11 +178,12 @@ function RepoPane({ repo, enabled, os }: { repo: PackageRepo; enabled: boolean; 
     setLoading(true)
     let cancelled = false
     api
-      .searchPackages({ os, repos: [repo.id], limit: PAGE_SIZE, offset: 0 })
+      .searchPackages({ os, repos: [repo.id], limit: PAGE_SIZE, offset: 0, curated: frequentOnly })
       .then((r) => {
         if (cancelled) return
         setHits(r.packages)
         setTotal(r.total)
+        if (!frequentOnly) setFullTotal(r.total)
       })
       .catch((e) => {
         if (cancelled) return
@@ -172,16 +195,33 @@ function RepoPane({ repo, enabled, os }: { repo: PackageRepo; enabled: boolean; 
     return () => {
       cancelled = true
     }
-  }, [repo.id, enabled, os])
+  }, [repo.id, enabled, os, frequentOnly])
 
   const loadMore = () => {
     setLoading(true)
     setError(null)
     api
-      .searchPackages({ os, repos: [repo.id], limit: PAGE_SIZE, offset: hits.length })
+      .searchPackages({ os, repos: [repo.id], limit: PAGE_SIZE, offset: hits.length, curated: frequentOnly })
       .then((r) => setHits((prev) => [...prev, ...r.packages]))
       .catch((e) => setError((e as Error).message))
       .finally(() => setLoading(false))
+  }
+
+  // Checked when every currently-loaded package is already selected.
+  const allVisibleSelected =
+    hits.length > 0 && hits.every((h) => addedPackages.some((p) => p.name === h.name))
+
+  const onToggleSelectAll = (checked: boolean) => {
+    if (checked) {
+      // Skip rows already selected so a manually pinned version isn't reset
+      // back to "latest".
+      const toAdd = hits
+        .filter((h) => !addedPackages.some((p) => p.name === h.name))
+        .map((h) => ({ name: h.name, version: '', repo: h.repository }))
+      setPackages(toAdd)
+    } else {
+      removePackages(hits.map((h) => h.name))
+    }
   }
 
   return (
@@ -205,46 +245,72 @@ function RepoPane({ repo, enabled, os }: { repo: PackageRepo; enabled: boolean; 
           <br />
           Enable it with the checkbox on the left to pick from its packages.
         </p>
-      ) : error ? (
-        <p className="px-5 py-12 text-center text-[13px] text-red-600">{error}</p>
-      ) : hits.length === 0 ? (
-        <p className="px-5 py-12 text-center text-[13px] text-slate-500">
-          {loading ? 'Loading packages…' : 'No packages found in this repository.'}
-        </p>
       ) : (
         <>
-          <div className="rounded border border-slate-100">
-            {hits.map((h) => (
-              <PackageRow
-                key={h.name}
-                name={h.name}
-                version={h.version}
-                description={h.description}
-                repoLabel={repo.displayName}
-                showRepo={false}
-                versions={h.versions?.length ? h.versions : [{ version: h.version, repository: h.repository }]}
-                repoLabelFor={() => repo.displayName}
-                selection={addedPackages.find((p) => p.name === h.name)}
-                onToggle={(checked) =>
-                  checked
-                    ? setPackage({ name: h.name, version: '', repo: h.repository })
-                    : removePackage(h.name)
-                }
-                onChooseVersion={(v) =>
-                  setPackage({ name: h.name, version: v.version, repo: v.repository })
-                }
-              />
-            ))}
-          </div>
-          {hits.length < total && (
-            <button
-              type="button"
-              onClick={loadMore}
-              disabled={loading}
-              className="mt-2 w-full rounded border border-slate-200 py-1.5 text-[12px] font-medium text-[#0071c5] hover:bg-[#eef4fb] disabled:opacity-50"
-            >
-              {loading ? 'Loading…' : `Load more (${hits.length} of ${total})`}
-            </button>
+          <label className="mb-2 flex items-center gap-1.5 text-[12px] text-slate-600">
+            <input
+              type="checkbox"
+              checked={frequentOnly}
+              onChange={(e) => setFrequentOnly(e.target.checked)}
+              className="h-[13px] w-[13px] accent-[#0071c5]"
+            />
+            Show frequently used
+          </label>
+          {error ? (
+            <p className="px-5 py-12 text-center text-[13px] text-red-600">{error}</p>
+          ) : hits.length === 0 ? (
+            <p className="px-5 py-12 text-center text-[13px] text-slate-500">
+              {loading
+                ? 'Loading packages…'
+                : frequentOnly
+                  ? `No frequently used packages for this repository. Uncheck "Show frequently used" to browse all ${fullTotal}.`
+                  : 'No packages found in this repository.'}
+            </p>
+          ) : (
+            <>
+              <label className="mb-1.5 flex items-center gap-1.5 border-b border-slate-100 pb-1.5 text-[12px] font-medium text-slate-600">
+                <input
+                  type="checkbox"
+                  checked={allVisibleSelected}
+                  onChange={(e) => onToggleSelectAll(e.target.checked)}
+                  className="h-[13px] w-[13px] accent-[#0071c5]"
+                />
+                Select all
+              </label>
+              <div className="rounded border border-slate-100">
+                {hits.map((h) => (
+                  <PackageRow
+                    key={h.name}
+                    name={h.name}
+                    version={h.version}
+                    description={h.description}
+                    repoLabel={repo.displayName}
+                    showRepo={false}
+                    versions={h.versions?.length ? h.versions : [{ version: h.version, repository: h.repository }]}
+                    repoLabelFor={() => repo.displayName}
+                    selection={addedPackages.find((p) => p.name === h.name)}
+                    onToggle={(checked) =>
+                      checked
+                        ? setPackage({ name: h.name, version: '', repo: h.repository })
+                        : removePackage(h.name)
+                    }
+                    onChooseVersion={(v) =>
+                      setPackage({ name: h.name, version: v.version, repo: v.repository })
+                    }
+                  />
+                ))}
+              </div>
+              {hits.length < total && (
+                <button
+                  type="button"
+                  onClick={loadMore}
+                  disabled={loading}
+                  className="mt-2 w-full rounded border border-slate-200 py-1.5 text-[12px] font-medium text-[#0071c5] hover:bg-[#eef4fb] disabled:opacity-50"
+                >
+                  {loading ? 'Loading…' : `Load more (${hits.length} of ${total})`}
+                </button>
+              )}
+            </>
           )}
         </>
       )}

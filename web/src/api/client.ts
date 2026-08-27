@@ -67,12 +67,15 @@ export const api = {
 
   // Search (or browse, when `q` is omitted) packages available for a target.
   // `repos` filters by repository IDs; `offset`/`limit` page a browse.
+  // `curated` narrows a browse to each matched repo's hand-picked "frequently
+  // used" packages — a repo with none defined then contributes nothing.
   searchPackages: (params: {
     q?: string
     os: string
     repos?: string[]
     limit?: number
     offset?: number
+    curated?: boolean
   }) => {
     const qs = new URLSearchParams()
     if (params.q) qs.set('q', params.q)
@@ -80,6 +83,7 @@ export const api = {
     if (params.repos) for (const r of params.repos) qs.append('repos', r)
     if (params.limit != null) qs.set('limit', String(params.limit))
     if (params.offset != null) qs.set('offset', String(params.offset))
+    if (params.curated) qs.set('curated', 'true')
     return jsonFetch<PackageSearchResults>(`/packages/search?${qs.toString()}`)
   },
 

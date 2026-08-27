@@ -56,6 +56,10 @@ interface AppState {
   // version) replaces the existing entry rather than duplicating it.
   setPackage: (p: AddedPackage) => void
   removePackage: (name: string) => void
+  // Batch forms of setPackage/removePackage for "Select all": one state
+  // update for the whole list instead of one per package.
+  setPackages: (pkgs: AddedPackage[]) => void
+  removePackages: (names: string[]) => void
   clearPackages: () => void
 }
 
@@ -96,6 +100,16 @@ export const useStore = create<AppState>((set) => ({
     set((state) => ({
       addedPackages: state.addedPackages.filter((p) => p.name !== name),
     })),
+  setPackages: (pkgs) =>
+    set((state) => {
+      const names = new Set(pkgs.map((p) => p.name))
+      return { addedPackages: [...state.addedPackages.filter((x) => !names.has(x.name)), ...pkgs] }
+    }),
+  removePackages: (names) =>
+    set((state) => {
+      const drop = new Set(names)
+      return { addedPackages: state.addedPackages.filter((p) => !drop.has(p.name)) }
+    }),
   clearPackages: () => set({ addedPackages: [] }),
   setField: (key, value) =>
     set((state) => {

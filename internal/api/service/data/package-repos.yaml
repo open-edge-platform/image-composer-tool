@@ -31,6 +31,11 @@
 #                       arch        manifest arches this index serves; omitted = all
 #                     Omitting `index` entirely means the repo is offered in the
 #                     picker but is not yet searchable.
+#   curatedPackages   hand-picked "frequently used" package names for this repo;
+#                     what the browse pane's "Show frequently used" toggle narrows
+#                     the list to. Omitted or empty means the toggle has nothing to
+#                     narrow to — the browse pane then shows an empty state rather
+#                     than falling back to the full catalog.
 #
 # Where a template omits `component`, the value here is `main` — that is what
 # generateAptSourcesContent in internal/config/apt_sources.go substitutes, so
@@ -56,6 +61,16 @@ repos:
     enabledByDefault: true
     os: [ubuntu24]
     gpgKeyPath: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+    curatedPackages:
+      - build-essential
+      - ca-certificates
+      - curl
+      - network-manager
+      - openssh-server
+      - python3
+      - sudo
+      - systemd
+      - vim
     index:
       - codename: noble
         component: main restricted universe multiverse
@@ -87,6 +102,16 @@ repos:
     enabledByDefault: true
     os: [ubuntu26-server]
     gpgKeyPath: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+    curatedPackages:
+      - build-essential
+      - ca-certificates
+      - curl
+      - network-manager
+      - openssh-server
+      - python3
+      - sudo
+      - systemd
+      - vim
     index:
       - codename: resolute
         component: main restricted universe multiverse
@@ -117,6 +142,16 @@ repos:
     description: Debian 13 main, contrib, non-free and non-free-firmware components.
     enabledByDefault: true
     os: [debian13]
+    curatedPackages:
+      - build-essential
+      - ca-certificates
+      - curl
+      - network-manager
+      - openssh-server
+      - python3
+      - sudo
+      - systemd
+      - vim
     index:
       - codename: trixie
         component: main contrib non-free non-free-firmware

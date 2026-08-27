@@ -149,7 +149,7 @@ paths:
           schema:
             type: integer
             default: 20
-            maximum: 50
+            maximum: 100
           description: Max results to return
         - name: offset
           in: query
@@ -157,6 +157,16 @@ paths:
             type: integer
             default: 0
           description: Number of matching results to skip, for paging
+        - name: curated
+          in: query
+          schema:
+            type: boolean
+            default: false
+          description: >
+            When true, narrow results to each matched repository's hand-picked
+            "frequently used" packages instead of its full catalog. A matched
+            repository with none defined then contributes nothing, rather than
+            falling back to its full catalog.
       responses:
         "200":
           description: Matching packages
@@ -236,7 +246,7 @@ paths:
           schema:
             type: integer
             default: 20
-            maximum: 50
+            maximum: 100
           description: Max results per repository (not a total across the stream)
       responses:
         "200":

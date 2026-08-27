@@ -82,7 +82,7 @@ func TestSearchPackagesBrowseAndQuery(t *testing.T) {
 	defer srv.Close()
 	s := newSearchTestService(t, jazzyRepo(srv.URL), srv.Client())
 
-	hits, total, err := s.SearchPackages(context.Background(), "ubuntu24", "", nil, 0, 0)
+	hits, total, err := s.SearchPackages(context.Background(), "ubuntu24", "", nil, 0, 0, false)
 	if err != nil {
 		t.Fatalf("browse: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestSearchPackagesBrowseAndQuery(t *testing.T) {
 		t.Fatalf("got %d hits (total %d), want 2", len(hits), total)
 	}
 
-	hits, total, err = s.SearchPackages(context.Background(), "ubuntu24", "ros-jazzy-rviz", nil, 0, 0)
+	hits, total, err = s.SearchPackages(context.Background(), "ubuntu24", "ros-jazzy-rviz", nil, 0, 0, false)
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestSearchPackagesBrowseAndQuery(t *testing.T) {
 
 func TestSearchPackagesQueryTooShort(t *testing.T) {
 	s := newSearchTestService(t, nil, http.DefaultClient)
-	_, _, err := s.SearchPackages(context.Background(), "ubuntu24", "a", nil, 0, 0)
+	_, _, err := s.SearchPackages(context.Background(), "ubuntu24", "a", nil, 0, 0, false)
 	assertServiceError(t, err, http.StatusBadRequest)
 }
 
@@ -113,7 +113,7 @@ func TestSearchPackagesUnknownOS(t *testing.T) {
 	defer srv.Close()
 	s := newSearchTestService(t, jazzyRepo(srv.URL), srv.Client())
 
-	hits, total, err := s.SearchPackages(context.Background(), "not-a-real-os", "", nil, 0, 0)
+	hits, total, err := s.SearchPackages(context.Background(), "not-a-real-os", "", nil, 0, 0, false)
 	if err != nil {
 		t.Fatalf("unknown os: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestSearchPackagesRepoFilter(t *testing.T) {
 	repos = append(repos, PackageRepo{ID: "other-repo", DisplayName: "Other", URL: srv.URL})
 	s := newSearchTestService(t, repos, srv.Client())
 
-	hits, _, err := s.SearchPackages(context.Background(), "ubuntu24", "", []string{"other-repo"}, 0, 0)
+	hits, _, err := s.SearchPackages(context.Background(), "ubuntu24", "", []string{"other-repo"}, 0, 0, false)
 	if err != nil {
 		t.Fatalf("SearchPackages: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestSearchPackagesPagination(t *testing.T) {
 	defer srv.Close()
 	s := newSearchTestService(t, jazzyRepo(srv.URL), srv.Client())
 
-	hits, total, err := s.SearchPackages(context.Background(), "ubuntu24", "", nil, 1, 1)
+	hits, total, err := s.SearchPackages(context.Background(), "ubuntu24", "", nil, 1, 1, false)
 	if err != nil {
 		t.Fatalf("SearchPackages: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestSearchPackagesLookupFailureSkipsRepo(t *testing.T) {
 	})
 	s := newSearchTestService(t, repos, good.Client())
 
-	hits, total, err := s.SearchPackages(context.Background(), "ubuntu24", "", nil, 0, 0)
+	hits, total, err := s.SearchPackages(context.Background(), "ubuntu24", "", nil, 0, 0, false)
 	if err != nil {
 		t.Fatalf("a broken repo should not fail the whole search: %v", err)
 	}
@@ -184,12 +184,44 @@ func TestSearchPackagesLookupFailureSkipsRepo(t *testing.T) {
 func TestSearchPackagesRepoWithNoIndexIsSkipped(t *testing.T) {
 	s := newSearchTestService(t, []PackageRepo{{ID: "no-index", DisplayName: "No Index", URL: "http://example.invalid"}},
 		http.DefaultClient)
-	hits, total, err := s.SearchPackages(context.Background(), "ubuntu24", "", nil, 0, 0)
+	hits, total, err := s.SearchPackages(context.Background(), "ubuntu24", "", nil, 0, 0, false)
 	if err != nil {
 		t.Fatalf("SearchPackages: %v", err)
 	}
 	if total != 0 || len(hits) != 0 {
 		t.Fatalf("got %d hits, want 0 for a repo with no Index entries", len(hits))
+	}
+}
+
+func TestSearchPackagesCuratedOnlyNarrowsToTheCuratedList(t *testing.T) {
+	srv := debFixtureServer(t, "noble", "main", "amd64", jazzyStanzas)
+	defer srv.Close()
+	repos := jazzyRepo(srv.URL)
+	repos[0].CuratedPackages = []string{"ros-jazzy-rviz2"}
+	s := newSearchTestService(t, repos, srv.Client())
+
+	hits, total, err := s.SearchPackages(context.Background(), "ubuntu24", "", nil, 0, 0, true)
+	if err != nil {
+		t.Fatalf("SearchPackages: %v", err)
+	}
+	if total != 1 || len(hits) != 1 || hits[0].Name != "ros-jazzy-rviz2" {
+		t.Fatalf("got %+v (total %d), want exactly the curated ros-jazzy-rviz2", hits, total)
+	}
+}
+
+func TestSearchPackagesCuratedOnlyEmptyListYieldsNoResults(t *testing.T) {
+	// A matched repo with no CuratedPackages must contribute nothing to a
+	// curated search, not silently fall back to its full catalog.
+	srv := debFixtureServer(t, "noble", "main", "amd64", jazzyStanzas)
+	defer srv.Close()
+	s := newSearchTestService(t, jazzyRepo(srv.URL), srv.Client())
+
+	hits, total, err := s.SearchPackages(context.Background(), "ubuntu24", "", nil, 0, 0, true)
+	if err != nil {
+		t.Fatalf("SearchPackages: %v", err)
+	}
+	if total != 0 || len(hits) != 0 {
+		t.Fatalf("got %d hits (total %d), want 0 for a repo with no curated packages", len(hits), total)
 	}
 }
 

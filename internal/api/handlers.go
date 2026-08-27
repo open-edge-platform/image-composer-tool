@@ -123,7 +123,11 @@ func (s *Server) SearchPackages(w http.ResponseWriter, r *http.Request, params h
 	if params.Offset != nil {
 		offset = *params.Offset
 	}
-	hits, total, err := s.svc.SearchPackages(r.Context(), params.Os, query, repos, limit, offset)
+	curated := false
+	if params.Curated != nil {
+		curated = *params.Curated
+	}
+	hits, total, err := s.svc.SearchPackages(r.Context(), params.Os, query, repos, limit, offset, curated)
 	if err != nil {
 		writeServiceError(w, err)
 		return
