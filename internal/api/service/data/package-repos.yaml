@@ -174,7 +174,9 @@ repos:
     url: https://apt.repos.intel.com/oneapi
     description: Intel oneAPI runtime libraries — compilers, OpenCL and math kernels.
     enabledByDefault: false
-    os: [ubuntu24]
+    # Offered to every target: the "all" codename is distribution-neutral, so
+    # one index serves Ubuntu and Debian alike.
+    os: [ubuntu24, debian13, ubuntu26-server]
     index:
       - codename: all
         component: main
@@ -260,7 +262,10 @@ repos:
     description: Mozilla-built Firefox and Thunderbird packages.
     enabledByDefault: false
     priority: 1000
-    os: [ubuntu24]
+    # Distribution-neutral, like oneAPI: a single "mozilla" suite serves every
+    # Debian-family target. Publishes an uncompressed Packages only, which the
+    # fetcher falls back to after Packages.gz and .xz.
+    os: [ubuntu24, debian13, ubuntu26-server]
     index:
       - codename: mozilla
         component: main
@@ -273,5 +278,38 @@ repos:
     enabledByDefault: false
     os: [debian13]
     index:
-      - codename: bookworm
+      # trixie is Debian 13's own suite; bookworm here served Debian 12
+      # packages to a Debian 13 target.
+      - codename: trixie
         component: stable
+
+  - id: docker-ce-ubuntu-resolute
+    displayName: Docker CE (Ubuntu)
+    url: https://download.docker.com/linux/ubuntu
+    description: Docker Community Edition engine, CLI and containerd packages.
+    enabledByDefault: false
+    priority: 500
+    os: [ubuntu26-server]
+    index:
+      - codename: resolute
+        component: stable
+
+  - id: gazebo-resolute
+    displayName: Gazebo (OSRF)
+    url: https://packages.osrfoundation.org/gazebo/ubuntu-stable
+    description: Open Source Robotics Foundation simulator packages.
+    enabledByDefault: false
+    os: [ubuntu26-server]
+    index:
+      - codename: resolute
+        component: main
+
+  - id: ros2-lyrical
+    displayName: ROS 2 Lyrical
+    url: http://packages.ros.org/ros2/ubuntu
+    description: ROS 2 Lyrical, the distribution built for Ubuntu 26.04.
+    enabledByDefault: false
+    os: [ubuntu26-server]
+    index:
+      - codename: resolute
+        component: main
