@@ -159,7 +159,12 @@ func (pv *ProgressView) startInstallation() {
 
 	wg.Wait()
 
-	pv.nextPage()
+	// startInstallation runs on its own goroutine (see OnShow), so unlike
+	// direct button-driven navigation, nextPage must be marshaled onto the
+	// event-loop goroutine here.
+	pv.app.QueueUpdateDraw(func() {
+		pv.nextPage()
+	})
 }
 
 func (pv *ProgressView) monitorProgress(progress chan int, wg *sync.WaitGroup) {
