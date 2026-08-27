@@ -257,7 +257,7 @@ func TestValidateBaseline(t *testing.T) {
 }
 
 // TestValidateBaselineDiskSizing confirms disk.size validates in both modes: an
-// exact size in create mode, an auto-size ceiling in overlay mode.
+// exact size in create mode, a mandatory floor expanded to first in overlay mode.
 func TestValidateBaselineDiskSizing(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -273,6 +273,18 @@ func TestValidateBaselineDiskSizing(t *testing.T) {
 			name: "create mode allows size",
 			disk: DiskConfig{Size: "24GiB"},
 		},
+		{
+			name:     "overlay with size and maxSize is allowed",
+			baseline: &Baseline{Mode: BaselineModeOverlay, Source: &BaselineSource{Path: "/tmp/u.raw"}},
+			disk:     DiskConfig{Size: "24GiB", MaxSize: "32GiB"},
+		},
+		{
+			// The create-mode maxSize-presence check trims whitespace like
+			// validateDiskMaxSize does, so a whitespace-only value is treated as
+			// unset here too, matching the raw JSON/API validator.
+			name: "whitespace-only maxSize in create mode is treated as unset",
+			disk: DiskConfig{MaxSize: "  "},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -281,6 +293,87 @@ func TestValidateBaselineDiskSizing(t *testing.T) {
 				t.Fatalf("expected no error, got %v", err)
 			}
 		})
+	}
+}
+
+// TestValidateBaselineDiskMaxSize confirms disk.maxSize is rejected in create
+// mode, requires disk.size to also be set in overlay mode, and must parse to a
+// byte value strictly greater than disk.size (checked numerically here, not
+// just presence, so an invalid template fails validation before any build work
+// starts).
+func TestValidateBaselineDiskMaxSize(t *testing.T) {
+	tests := []struct {
+		name     string
+		baseline *Baseline
+		disk     DiskConfig
+		wantErr  string
+	}{
+		{
+			name:    "maxSize in create mode is rejected",
+			disk:    DiskConfig{MaxSize: "32GiB"},
+			wantErr: "disk.maxSize is only supported when baseline.mode is",
+		},
+		{
+			name:     "maxSize without size in overlay mode is rejected",
+			baseline: &Baseline{Mode: BaselineModeOverlay, Source: &BaselineSource{Path: "/tmp/u.raw"}},
+			disk:     DiskConfig{MaxSize: "32GiB"},
+			wantErr:  "disk.maxSize requires disk.size to also be set",
+		},
+		{
+			name:     "maxSize equal to size is rejected",
+			baseline: &Baseline{Mode: BaselineModeOverlay, Source: &BaselineSource{Path: "/tmp/u.raw"}},
+			disk:     DiskConfig{Size: "24GiB", MaxSize: "24GiB"},
+			wantErr:  "disk.maxSize (25769803776 bytes) must be greater than disk.size (25769803776 bytes)",
+		},
+		{
+			name:     "maxSize smaller than size is rejected",
+			baseline: &Baseline{Mode: BaselineModeOverlay, Source: &BaselineSource{Path: "/tmp/u.raw"}},
+			disk:     DiskConfig{Size: "24GiB", MaxSize: "20GiB"},
+			wantErr:  "disk.maxSize (21474836480 bytes) must be greater than disk.size (25769803776 bytes)",
+		},
+		{
+			// 17179869216 * 1073741824 (1GiB) overflows uint64 and wraps to a
+			// small value that would otherwise slip past the maxSize > size check.
+			name:     "maxSize overflowing uint64 is rejected, not silently wrapped",
+			baseline: &Baseline{Mode: BaselineModeOverlay, Source: &BaselineSource{Path: "/tmp/u.raw"}},
+			disk:     DiskConfig{Size: "24GiB", MaxSize: "17179869216GiB"},
+			wantErr:  "size overflows the supported range",
+		},
+		{
+			// disk.size's format must be validated even when maxSize is unset, not
+			// only as a side effect of the maxSize > size comparison — otherwise a
+			// malformed disk.size only fails much later, in ResizeBaseline.
+			name:     "malformed size without maxSize is rejected",
+			baseline: &Baseline{Mode: BaselineModeOverlay, Source: &BaselineSource{Path: "/tmp/u.raw"}},
+			disk:     DiskConfig{Size: "not-a-size"},
+			wantErr:  "size format incorrect",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpl := &ImageTemplate{Baseline: tt.baseline, Disk: tt.disk}
+			err := tmpl.validateBaseline()
+			if err == nil {
+				t.Fatal("expected an error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("expected error to contain %q, got %q", tt.wantErr, err.Error())
+			}
+		})
+	}
+}
+
+// TestParseDiskSizeBytes_Overflow confirms the multiplication in
+// parseDiskSizeBytes fails closed on uint64 overflow rather than silently
+// wrapping to a small value.
+func TestParseDiskSizeBytes_Overflow(t *testing.T) {
+	if _, err := parseDiskSizeBytes("disk.size", "8GiB"); err != nil {
+		t.Errorf("parseDiskSizeBytes(8GiB): unexpected error %v", err)
+	}
+	if _, err := parseDiskSizeBytes("disk.maxSize", "17179869216GiB"); err == nil {
+		t.Fatal("expected an overflow error for 17179869216GiB")
+	} else if !strings.Contains(err.Error(), "overflows the supported range") {
+		t.Errorf("expected an overflow error, got: %v", err)
 	}
 }
 

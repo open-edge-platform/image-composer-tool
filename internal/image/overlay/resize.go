@@ -15,8 +15,9 @@ import (
 )
 
 // Disk-space estimation constants for the auto-sized overlay grow. The estimate is
-// deliberately conservative: it is cheaper to over-provision (the disk.size ceiling,
-// when set, still caps it) than to under-provision and fail the install with ENOSPC.
+// deliberately conservative: it is cheaper to over-provision (the disk.maxSize
+// ceiling, when set, still caps it) than to under-provision and fail the install
+// with ENOSPC.
 const (
 	// overlayInstallOverheadNum/Den scale the summed Installed-Size to account for
 	// per-file 4 KiB-cluster rounding (the ext4 block size the create-mode maker
@@ -102,15 +103,17 @@ var resizeToolExists = func(cmd string) (bool, error) {
 }
 
 // ResizeBaseline performs an optional, GROW-ONLY resize of the overlaid baseline
-// so it has room for the packages being installed. The target is auto-sized from
-// the resolved packages' installed-size metadata measured against the baseline's
-// real free space; disk.size, when set, is a ceiling on that auto-sized grow, not
-// an exact target — the final image may end up smaller than disk.size. It never
-// shrinks: an unset or computed target no larger than the baseline is a no-op,
-// while a configured disk.size ceiling smaller than the baseline is rejected up
-// front as an invalid configuration, before any grow is planned. It grows the
-// existing root partition and filesystem in place — it never repartitions or
-// relocates the bootloader, preserving the overlay immutability contract.
+// so it has room for the packages being installed. disk.size is expanded to
+// unconditionally first (a mandatory floor, not gated by any opt-in; a disk.size
+// at or below the baseline is already satisfied and is a no-op, not an error);
+// the resize then grows further, auto-sized from the resolved packages'
+// installed-size metadata measured against the baseline's real free space, but
+// only when disk.maxSize is set — package-driven growth beyond the floor needs
+// that explicit consent too, so an unset disk.maxSize caps growth at the floor
+// itself. It never shrinks: an unset or computed target no larger than the
+// baseline is a no-op. It grows the existing root partition and filesystem in
+// place — it never repartitions or relocates the bootloader, preserving the
+// overlay immutability contract.
 //
 // The sequence, when a grow is needed, is: extend the backing file, refresh the
 // loop device capacity, fix the GPT backup header, re-read the partition table,
@@ -128,18 +131,18 @@ func ResizeBaseline(template *config.ImageTemplate, ctx *Context, layout *Layout
 	current := fi.Size()
 
 	dc := template.GetDiskConfig()
-	sizeCeiling := strings.TrimSpace(dc.Size)
-	allowResize := template.OverlayPolicy != nil && template.OverlayPolicy.AllowDiskResize
+	sizeFloor := strings.TrimSpace(dc.Size)
+	maxSizeCeiling := strings.TrimSpace(dc.MaxSize)
 
-	// Derive the effective target: the space the resolved package set needs
-	// (estimated from repo metadata, measured against the baseline's real free
-	// space), capped at disk.size when it is set.
-	targetBytes, err := computeOverlayTarget(resolvePlan, current, layout.RootMount, sizeCeiling)
+	// Derive the effective target: disk.size expanded to first, then grown further
+	// to fit the resolved package set's estimated need (measured against the
+	// baseline's real free space), capped at disk.maxSize when it is set.
+	targetBytes, err := computeOverlayTarget(resolvePlan, current, layout.RootMount, sizeFloor, maxSizeCeiling)
 	if err != nil {
 		return err
 	}
 
-	rp, err := planResize(current, targetBytes, allowResize)
+	rp, err := planResize(current, targetBytes)
 	if err != nil {
 		return err
 	}
@@ -220,18 +223,12 @@ func ResizeBaseline(template *config.ImageTemplate, ctx *Context, layout *Layout
 // planResize decides whether to grow a baseline image of size `current` to
 // `targetBytes`. It is a pure, grow-only decision: a zero (unset) or
 // exactly-equal target yields Grow=false with a reason; a smaller (nonzero)
-// target is rejected as an unsupported shrink; a larger target requires the
-// opt-in below. The byte target is computed by the caller (computeOverlayTarget)
-// so this stays free of I/O and unit-testable directly.
-//
-// allowResize is the explicit opt-in (overlayPolicy.allowDiskResize). When a grow
-// would be required but the caller has not opted in, planResize returns an error so
-// the build fails with a clear message rather than silently changing the baseline
-// partition layout. A target that is unset or exactly equal to the current image
-// never needs the opt-in: it is a no-op regardless. A smaller target is rejected
-// as an unsupported shrink regardless of the opt-in too, since resize is
-// grow-only.
-func planResize(current, targetBytes int64, allowResize bool) (resizePlan, error) {
+// target is rejected as an unsupported shrink; a larger target always grows —
+// disk.size/disk.maxSize are themselves the user's explicit consent, so no
+// separate opt-in flag gates the grow. The byte target is computed by the
+// caller (computeOverlayTarget) so this stays free of I/O and unit-testable
+// directly.
+func planResize(current, targetBytes int64) (resizePlan, error) {
 	if targetBytes == 0 {
 		return resizePlan{CurrentBytes: current, Reason: "no disk.size requested and no package sizes to compute one"}, nil
 	}
@@ -240,8 +237,7 @@ func planResize(current, targetBytes int64, allowResize bool) (resizePlan, error
 	// is grow-only — shrinking a disk image safely requires shrinking the
 	// filesystem and partition first, which overlay mode does not do — so reject it
 	// with an actionable error rather than silently ignoring the smaller size (which
-	// would leave the user believing the image was shrunk). This also fires when a
-	// disk.size ceiling is set below the baseline size.
+	// would leave the user believing the image was shrunk).
 	if targetBytes < current {
 		return resizePlan{}, fmt.Errorf(
 			"overlay resize: shrink not supported: requested/computed size %d bytes is smaller than the "+
@@ -256,17 +252,6 @@ func planResize(current, targetBytes int64, allowResize bool) (resizePlan, error
 			CurrentBytes: current,
 			Reason:       fmt.Sprintf("requested size %d == current size %d (no resize needed)", targetBytes, current),
 		}, nil
-	}
-
-	// A grow is required. Overlay mode preserves the baseline layout unless the
-	// user has explicitly opted in, so reject rather than resize behind their back.
-	if !allowResize {
-		return resizePlan{}, fmt.Errorf(
-			"overlay resize: computed/requested size %d bytes is larger than the baseline image (%d bytes), "+
-				"but growing the baseline is not permitted; set overlayPolicy.allowDiskResize: true "+
-				"to allow the overlay to grow the disk, or reduce the packages being installed to fit within "+
-				"the current baseline size",
-			targetBytes, current)
 	}
 
 	return resizePlan{
@@ -327,7 +312,7 @@ func sumInstalledSizes(resolvePlan *ResolutionPlan) (sum int64, unknownCount, to
 // fallbackForIncompleteMetadata handles a resolved plan where only some packages
 // report an installed size: summing just the known ones would understate the
 // real need, so it is never treated as a complete estimate. It falls back to the
-// disk.size ceiling (the safer, user-declared cap) when one is set, or fails
+// disk.maxSize ceiling (the safer, user-declared cap) when one is set, or fails
 // closed when not. applies is true when the caller should return (target, err)
 // immediately without computing an estimate.
 func fallbackForIncompleteMetadata(unknownCount, total int, ceilingSet bool, ceilingBytes int64) (target int64, applies bool, err error) {
@@ -337,11 +322,11 @@ func fallbackForIncompleteMetadata(unknownCount, total int, ceilingSet bool, cei
 	if !ceilingSet {
 		return 0, true, fmt.Errorf(
 			"overlay resize: %d of %d packages being installed report no installed-size metadata; "+
-				"the auto-size estimate would be incomplete and could under-provision the grow; set disk.size "+
+				"the auto-size estimate would be incomplete and could under-provision the grow; set disk.maxSize "+
 				"as a ceiling to grow to a safe fixed cap instead", unknownCount, total)
 	}
 	log.Warnf("Overlay resize: %d of %d packages being installed report no installed-size metadata; "+
-		"the estimate would be incomplete, so growing straight to the disk.size ceiling (%d bytes) instead",
+		"the estimate would be incomplete, so growing straight to the disk.maxSize ceiling (%d bytes) instead",
 		unknownCount, total, ceilingBytes)
 	return ceilingBytes, true, nil
 }
@@ -380,57 +365,91 @@ func growTargetBytes(current, shortfall int64) (int64, error) {
 	return current + rounded, nil
 }
 
-// capAtCeiling caps target at ceilingBytes when a ceiling is set and target
-// exceeds it, warning that the install may then run out of room.
-func capAtCeiling(target, ceilingBytes int64, ceilingSet bool) int64 {
-	if !ceilingSet || target <= ceilingBytes {
+// capAtCeiling caps target at ceilingBytes, which always bounds package-driven
+// growth (when disk.maxSize is unset, ceilingBytes is the disk.size floor, or
+// the raw baseline if disk.size is also unset). field names whichever of those
+// ceilingBytes actually is, for the warning message.
+func capAtCeiling(target, ceilingBytes int64, field string) int64 {
+	if target <= ceilingBytes {
 		return target
 	}
-	log.Warnf("Overlay resize: computed disk need (%d bytes) exceeds the disk.size ceiling (%d bytes); "+
-		"capping at the ceiling — the package install may fail with 'no space left on device'", target, ceilingBytes)
+	log.Warnf("Overlay resize: computed disk need (%d bytes) exceeds the %s (%d bytes); "+
+		"capping at it — the package install may fail with 'no space left on device'", target, field, ceilingBytes)
 	return ceilingBytes
 }
 
-// computeOverlayTarget derives the backing-file size the overlay should grow to:
-// it estimates the space the packages being installed need (summed
-// Installed-Size × overhead + a fixed margin), measures the baseline's real free
-// space, and returns current + the rounded-up shortfall, capped at disk.size when
-// it is set (disk.size is a ceiling, not an exact target, in overlay mode).
-// Returns `current` (a planResize no-op) when the baseline already has room, or
-// when a resolved plan has nothing left to install — a ceiling caps a grow, it
-// never requests one on its own. Falls back to the disk.size ceiling (or 0 = no
-// resize) when no package in the plan has a known size at all (distinct from
-// every package confirming a real zero footprint, which is a complete estimate
-// and proceeds normally). When only some packages report a size, the partial sum
-// would understate the real need, so it falls back to the ceiling (if set) or
-// fails closed (if not) rather than auto-sizing from an incomplete estimate. All
+// computeOverlayTarget derives the backing-file size the overlay should grow to.
+// It first expands to disk.size unconditionally (a mandatory floor: disk.size is
+// the user's explicit consent to resize, no separate opt-in is needed; a
+// disk.size at or below the baseline is already satisfied and is a no-op, not
+// an error), then grows further as the packages being installed need —
+// estimated from summed Installed-Size × overhead + a fixed margin, measured
+// against the baseline's real free space (adjusted for the headroom the floor
+// expand itself adds) — but ONLY when disk.maxSize is set: package-driven
+// growth beyond the floor needs that explicit consent too, so an unset
+// disk.maxSize caps growth at the floor itself (disk.size, or the raw baseline
+// when disk.size is also unset) rather than resizing without any user-declared
+// field at all. Returns the floor (a no-op when it equals `current`) when the
+// baseline already has room, or when a resolved plan has nothing left to
+// install. Falls back to the disk.maxSize ceiling (or the floor, if unset) when
+// no package in the plan has a known size at all (distinct from every package
+// confirming a real zero footprint, which is a complete estimate and proceeds
+// normally). When only some packages report a size, the partial sum would
+// understate the real need, so it falls back to disk.maxSize (if set) or fails
+// closed (if not) rather than auto-sizing from an incomplete estimate. All
 // arithmetic on repo-reported package sizes is checked for int64 overflow and
 // fails closed rather than silently wrapping negative.
-func computeOverlayTarget(resolvePlan *ResolutionPlan, current int64, rootMount, sizeCeiling string) (int64, error) {
-	ceilingBytes, err := resolveSizeBytes("disk.size", sizeCeiling)
+func computeOverlayTarget(resolvePlan *ResolutionPlan, current int64, rootMount, sizeStr, maxSizeStr string) (int64, error) {
+	sizeBytes, err := resolveSizeBytes("disk.size", sizeStr)
 	if err != nil {
 		return 0, err
 	}
 	// A size string is distinct from an unset one, so an explicit "disk.size: 0"
-	// is treated as a real (if useless) ceiling rather than "no ceiling".
-	ceilingSet := strings.TrimSpace(sizeCeiling) != ""
+	// is treated as a real (if useless) floor rather than "no floor".
+	sizeSet := strings.TrimSpace(sizeStr) != ""
 
-	// A configured ceiling smaller than the baseline is an impossible constraint:
-	// reject it here, before any of the branches below, rather than risk one of
-	// them silently returning `current` (no resize) and masking the mistake.
-	if ceilingSet && ceilingBytes < current {
+	maxSizeBytes, err := resolveSizeBytes("disk.maxSize", maxSizeStr)
+	if err != nil {
+		return 0, err
+	}
+	maxSizeSet := strings.TrimSpace(maxSizeStr) != ""
+
+	if maxSizeSet && maxSizeBytes <= sizeBytes {
 		return 0, fmt.Errorf(
-			"overlay resize: disk.size ceiling (%d bytes) is smaller than the baseline image (%d bytes); "+
-				"remove or raise disk.size, or leave it unset to auto-size with no cap", ceilingBytes, current)
+			"overlay resize: disk.maxSize (%d bytes) must be greater than disk.size (%d bytes)",
+			maxSizeBytes, sizeBytes)
+	}
+
+	// Step 1: unconditionally expand to disk.size first — the mandatory floor for
+	// everything that follows. disk.size at or below the baseline is already
+	// satisfied (grow-only never needs to act here), not an error.
+	floor := current
+	if sizeSet && sizeBytes > current {
+		floor = sizeBytes
+	}
+
+	// The ceiling any further, package-driven growth beyond the floor may reach.
+	// That growth requires disk.maxSize to be set; its absence caps growth at the
+	// floor itself, so an overlay is never resized beyond what disk.size/
+	// disk.maxSize explicitly consented to.
+	ceiling := floor
+	ceilingSet := false
+	if maxSizeSet {
+		if maxSizeBytes < floor {
+			return 0, fmt.Errorf(
+				"overlay resize: disk.maxSize (%d bytes) is smaller than the disk.size floor (%d bytes); "+
+					"remove or raise disk.maxSize", maxSizeBytes, floor)
+		}
+		ceiling = maxSizeBytes
+		ceilingSet = true
 	}
 
 	// A resolved plan with nothing to install (e.g. every requested package is
-	// already present) needs no headroom at all — a configured ceiling caps an
-	// auto-sized grow, it does not by itself request one. A nil plan is distinct:
-	// it means no information, not "known to be empty", so it still falls through
-	// to the no-metadata ceiling fallback below.
+	// already present) needs no headroom beyond the mandatory disk.size floor. A
+	// nil plan is distinct: it means no information, not "known to be empty", so
+	// it still falls through to the no-metadata ceiling fallback below.
 	if resolvePlan != nil && len(resolvePlan.ToInstall) == 0 {
-		return current, nil
+		return floor, nil
 	}
 
 	sumInstalled, unknownCount, total, err := sumInstalledSizes(resolvePlan)
@@ -439,16 +458,21 @@ func computeOverlayTarget(resolvePlan *ResolutionPlan, current int64, rootMount,
 	}
 
 	// No package in the plan reports a usable size at all (including a nil plan,
-	// total == 0): fall back to the disk.size ceiling (grow to the declared cap).
-	// Returns 0 when disk.size is also unset, which planResize treats as "no
-	// resize". A plan whose packages are all confirmed zero-footprint (total > 0,
-	// unknownCount == 0, sumInstalled == 0) is a complete estimate, not this case,
-	// and falls through to the normal margin-only estimate below.
+	// total == 0): fall back to the disk.maxSize ceiling when set (grow straight
+	// to the declared cap), else stop at the disk.size floor. A plan whose
+	// packages are all confirmed zero-footprint (total > 0, unknownCount == 0,
+	// sumInstalled == 0) is a complete estimate, not this case, and falls through
+	// to the normal margin-only estimate below.
 	if unknownCount == total {
-		return ceilingBytes, nil
+		if ceilingSet {
+			log.Warnf("Overlay resize: no package being installed reports installed-size metadata; "+
+				"growing straight to the disk.maxSize ceiling (%d bytes)", ceiling)
+			return ceiling, nil
+		}
+		return floor, nil
 	}
 
-	if target, applies, err := fallbackForIncompleteMetadata(unknownCount, total, ceilingSet, ceilingBytes); applies {
+	if target, applies, err := fallbackForIncompleteMetadata(unknownCount, total, ceilingSet, ceiling); applies {
 		return target, err
 	}
 
@@ -461,20 +485,33 @@ func computeOverlayTarget(resolvePlan *ResolutionPlan, current int64, rootMount,
 	if err != nil {
 		return 0, fmt.Errorf("overlay resize: failed to measure free space on %s: %w", rootMount, err)
 	}
+	// The mandatory floor expand (if any) adds (floor - current) bytes of free
+	// space once grown, ahead of the package-driven growth estimated here.
+	effectiveFree := free + (floor - current)
 
-	shortfall := required - free
+	shortfall := required - effectiveFree
 	if shortfall <= 0 {
-		log.Infof("Overlay resize: baseline has %d bytes free; estimated install needs %d — no grow required", free, required)
-		return current, nil
+		log.Infof("Overlay resize: baseline will have %d bytes free at %d bytes; estimated install needs %d — "+
+			"no additional grow required", effectiveFree, floor, required)
+		return floor, nil
 	}
 
-	target, err := growTargetBytes(current, shortfall)
+	target, err := growTargetBytes(floor, shortfall)
 	if err != nil {
 		return 0, err
 	}
-	target = capAtCeiling(target, ceilingBytes, ceilingSet)
-	log.Infof("Overlay resize: estimated install %d bytes (incl. overhead), %d free; growing image to %d bytes",
-		required, free, target)
+	// Name whichever field ceiling actually reflects, so the warning never blames
+	// the user for a field they never configured.
+	ceilingField := "current baseline image size"
+	switch {
+	case ceilingSet:
+		ceilingField = "disk.maxSize ceiling"
+	case sizeSet:
+		ceilingField = "disk.size floor"
+	}
+	target = capAtCeiling(target, ceiling, ceilingField)
+	log.Infof("Overlay resize: estimated install %d bytes (incl. overhead), %d free at %d bytes; growing image to %d bytes",
+		required, effectiveFree, floor, target)
 	return target, nil
 }
 

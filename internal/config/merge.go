@@ -608,6 +608,7 @@ func isEmptyDiskConfig(disk DiskConfig) bool {
 		disk.SelectionPolicy.ExcludeRemovable == nil &&
 		!disk.ExtendLastPartitionToFillDisk &&
 		disk.Size == "" &&
+		disk.MaxSize == "" &&
 		disk.PartitionTableType == "" &&
 		len(disk.Artifacts) == 0 &&
 		len(disk.Partitions) == 0
@@ -698,6 +699,16 @@ func ResolveAndMergeExtendsChain(templatePath string, leaf *ImageTemplate) (*Ima
 	merged, err := foldChain(chain[0], chain[1:])
 	if err != nil {
 		return nil, nil, err
+	}
+
+	// Re-validate the folded result: each layer defers its own disk.maxSize
+	// rejection when extends is set (it may be inheriting baseline.mode: overlay
+	// from a parent), so a create-mode chain is only rejected here, once the
+	// final mode is known. LoadAndMergeTemplate re-validates its own merge result
+	// the same way; this is the equivalent check for callers (`validate`,
+	// `resolve`) that fold the chain without applying OS defaults.
+	if err := merged.validateBaseline(); err != nil {
+		return nil, nil, fmt.Errorf("merged template is invalid: %w", err)
 	}
 
 	return merged, chainPaths, nil
@@ -973,6 +984,9 @@ func LoadAndMergeTemplate(templatePath string) (*ImageTemplate, error) {
 			leafTemplate.Target.OS, leafTemplate.Target.Dist, leafTemplate.Target.Arch, leafTemplate.Target.ImageType)
 		log.Info("Proceeding without default configuration")
 		userMerged.Extends = ""
+		if err := userMerged.validateBaseline(); err != nil {
+			return nil, fmt.Errorf("merged template is invalid: %w", err)
+		}
 		return userMerged, nil
 	}
 
@@ -981,6 +995,15 @@ func LoadAndMergeTemplate(templatePath string) (*ImageTemplate, error) {
 	mergedTemplate, err := foldChain(defaultTemplate, chain)
 	if err != nil {
 		return nil, err
+	}
+
+	// Re-validate the merged result: each layer is validated in isolation before
+	// merging, and a create-mode layer with `extends` set defers its own
+	// disk.maxSize check (it may be inheriting baseline.mode: overlay from a
+	// parent). foldChain always clears Extends, so this is the authoritative,
+	// final-mode check for a genuine create-mode build.
+	if err := mergedTemplate.validateBaseline(); err != nil {
+		return nil, fmt.Errorf("merged template is invalid: %w", err)
 	}
 
 	log.Infof("Successfully created merged configuration with system config: %s and disk config: %s",

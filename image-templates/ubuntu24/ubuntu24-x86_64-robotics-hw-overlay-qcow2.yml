@@ -47,7 +47,7 @@
 # sources. The child therefore declares none and inherits this list intact.
 #
 # -----------------------------------------------------------------------------
-# BUILD HOST REQUIREMENT (allowDiskResize below triggers the overlay resize path)
+# BUILD HOST REQUIREMENT (disk.size below triggers the overlay resize path)
 # -----------------------------------------------------------------------------
 # Growing the baseline needs `growpart` (cloud-guest-utils), plus `sgdisk`
 # (gdisk), `resize2fs` (e2fsprogs) and `losetup`/`partx` (util-linux).
@@ -128,7 +128,7 @@ metadata:
 
 image:
   name: ubuntu24-robotics-hw-overlay-base
-  version: "24.04"
+  version: "24.04.1"
 
 target:
   os: ubuntu
@@ -177,22 +177,22 @@ baseline:
 overlayPolicy:
   packageOperation: additive-and-upgrade
   conflictPolicy: fail
-  # Explicit consent to auto-size the grow from the resolved packages' installed
-  # sizes, capped at the disk.size below. Without this the build fails rather
-  # than resizing the vendor image implicitly.
-  allowDiskResize: true
 
 # -----------------------------------------------------------------------------
 # Output: a qcow2 artifact. The overlay emits a RAW copy, then the Convert
 # Artifacts stage produces every format listed here. Canonical's cloud image is
-# ~3.5GiB provisioned; disk.size below is a ceiling (not an exact target) on the
-# auto-sized grow, leaving room for this layer plus whatever a child overlays on
-# top (the full ROS 2 desktop stack is large) — the final image may end up
-# smaller than 24GiB. Resize needs allowDiskResize above; disk.size is optional.
+# ~3.5GiB provisioned; disk.size below is a floor the resize unconditionally
+# expands the baseline to first (no opt-in needed), sized for this layer alone
+# (verified: this base build stops at exactly 24GiB, no further growth needed).
+# disk.maxSize gives a child template — layering the full ROS 2 desktop stack on
+# top — room to auto-grow further: package-driven growth beyond disk.size always
+# requires disk.maxSize to be set, so a child inheriting only disk.size here
+# would otherwise be capped at 24GiB with no room for its own added packages.
 # -----------------------------------------------------------------------------
 disk:
   name: overlay-disk
   size: 24GiB
+  maxSize: 40GiB
   artifacts:
     - type: qcow2
 

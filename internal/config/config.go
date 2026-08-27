@@ -3,10 +3,12 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -50,10 +52,16 @@ type DiskConfig struct {
 	Path            string              `yaml:"path"` // Path to the disk device (e.g., /dev/sda), used by live installer
 	SelectionPolicy DiskSelectionPolicy `yaml:"selectionPolicy,omitempty"`
 	Artifacts       []ArtifactInfo      `yaml:"artifacts"`
-	// Size is an exact disk size in create mode. In overlay mode it instead acts as
-	// an auto-size ceiling: with overlayPolicy.allowDiskResize, the resize grows the
-	// baseline only as far as the resolved packages need, never past this cap.
-	Size               string          `yaml:"size"`
+	// Size is an exact disk size in create mode. In overlay mode the resize
+	// unconditionally expands the baseline to this size first (grow-only; never
+	// shrinks), before any package-driven growth is considered.
+	Size string `yaml:"size"`
+	// MaxSize is an overlay-mode-only ceiling: once the baseline has been expanded
+	// to Size, the resize may grow further to fit the packages being installed,
+	// but never past MaxSize. Package-driven growth beyond Size requires MaxSize
+	// to be set; unset, growth does not extend beyond Size. When set, it must
+	// always be greater than Size, and requires Size to also be set.
+	MaxSize            string          `yaml:"maxSize,omitempty"`
 	PartitionTableType string          `yaml:"partitionTableType"`
 	Partitions         []PartitionInfo `yaml:"partitions"`
 	// ExtendLastPartitionToFillDisk forces the final partition's end to "0"
@@ -161,13 +169,6 @@ type OverlayPolicy struct {
 	// only applied on a GRUB2 baseline. Used to make an overlay-added kernel the
 	// default boot target when it is not the entry GRUB would auto-select.
 	GrubDefault string `yaml:"grubDefault,omitempty"`
-
-	// AllowDiskResize gates whether an overlay build may grow the baseline image
-	// to fit the packages being installed. Overlay mode preserves the baseline
-	// layout by default, so a grow — whether driven by the resolved packages'
-	// installed-size metadata or by a disk.size ceiling alone — is rejected unless
-	// the user opts in here. It never permits shrinking; resize stays grow-only.
-	AllowDiskResize bool `yaml:"allowDiskResize,omitempty"`
 
 	// AllowPackageRemoval gates whether an overlay build may remove a baseline
 	// package that a to-install package conflicts with (e.g. installing dracut,
@@ -1396,6 +1397,78 @@ func (pr *PackageRepository) ValidatePackageRepository() error {
 	return nil
 }
 
+// diskSizeSuffixes/diskSizeSuffixBytes mirror imagedisc.TranslateSizeStrToBytes's unit
+// table (KiB/MiB/GiB and their K/M/G, KB/MB/GB variants) purely to validate
+// disk.maxSize > disk.size at template-validation time. config cannot import
+// internal/image/imagedisc, which itself imports config, so the byte parsing
+// needed for this one cross-field check is duplicated here rather than shared.
+var (
+	diskSizeSuffixes    = []string{"KiB", "MiB", "GiB", "K", "M", "G", "KB", "MB", "GB"}
+	diskSizeSuffixBytes = []uint64{1024, 1048576, 1073741824, 1024, 1048576, 1073741824, 1000, 1000000, 1000000000}
+	diskSizePattern     = regexp.MustCompile(`^(\d+)(.*)$`)
+)
+
+// parseDiskSizeBytes parses a disk.size/disk.maxSize string (e.g. "8GiB") into bytes.
+// field names the value in error messages.
+func parseDiskSizeBytes(field, s string) (uint64, error) {
+	match := diskSizePattern.FindStringSubmatch(s)
+	if len(match) != 3 {
+		return 0, fmt.Errorf("%s %q: size format incorrect", field, s)
+	}
+	num, err := strconv.ParseUint(match[1], 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s %q: %w", field, s, err)
+	}
+	for i, suf := range diskSizeSuffixes {
+		if match[2] == suf {
+			unit := diskSizeSuffixBytes[i]
+			// The build-time parser (resolveSizeBytes) narrows to int64, so match its
+			// MaxInt64 ceiling here rather than the wider MaxUint64.
+			if num > math.MaxInt64/unit {
+				return 0, fmt.Errorf("%s %q: size overflows the supported range", field, s)
+			}
+			return num * unit, nil
+		}
+	}
+	return 0, fmt.Errorf("%s %q: size suffix %q not recognized", field, s, match[2])
+}
+
+// validateDiskMaxSize enforces disk.maxSize's overlay-mode invariants: it requires
+// disk.size to also be set, and must parse to a byte value strictly greater than
+// disk.size. Both values are parsed and compared numerically here (not just
+// presence-checked) so an invalid template fails `image-composer-tool validate`
+// at the validation boundary rather than only once a build reaches the mounted
+// resize stage. disk.size's format is validated independently of disk.maxSize
+// being set, so a malformed disk.size (with no maxSize) is also caught here
+// instead of only failing later in ResizeBaseline.
+func validateDiskMaxSize(disk DiskConfig) error {
+	size := strings.TrimSpace(disk.Size)
+	var sizeBytes uint64
+	if size != "" {
+		var err error
+		sizeBytes, err = parseDiskSizeBytes("disk.size", size)
+		if err != nil {
+			return err
+		}
+	}
+
+	maxSize := strings.TrimSpace(disk.MaxSize)
+	if maxSize == "" {
+		return nil
+	}
+	if size == "" {
+		return fmt.Errorf("disk.maxSize requires disk.size to also be set")
+	}
+	maxSizeBytes, err := parseDiskSizeBytes("disk.maxSize", maxSize)
+	if err != nil {
+		return err
+	}
+	if maxSizeBytes <= sizeBytes {
+		return fmt.Errorf("disk.maxSize (%d bytes) must be greater than disk.size (%d bytes)", maxSizeBytes, sizeBytes)
+	}
+	return nil
+}
+
 // validateBaseline enforces cross-field rules that the JSON schema cannot express:
 // mode/source coupling, format restrictions, and overlay policy invariants.
 // overlayPolicy is a top-level peer to baseline (per the image-extension ADR),
@@ -1414,9 +1487,21 @@ func (t *ImageTemplate) validateBaseline() error {
 		if t.OverlayPolicy != nil {
 			return fmt.Errorf("overlayPolicy must not be set when baseline.mode is %q", BaselineModeCreate)
 		}
+		// A template with `extends` set may be inheriting `baseline.mode: overlay`
+		// from a parent layer without redeclaring it here, so this layer's own
+		// (defaulted) create-mode determination is not yet authoritative — defer
+		// the disk.maxSize rejection to the final, folded template instead of
+		// rejecting a valid overlay child mid-chain (see LoadAndMergeTemplate,
+		// which re-validates both the overlay and create-mode merge results).
+		if strings.TrimSpace(t.Disk.MaxSize) != "" && strings.TrimSpace(t.Extends) == "" {
+			return fmt.Errorf("disk.maxSize is only supported when baseline.mode is %q", BaselineModeOverlay)
+		}
 	case BaselineModeOverlay:
 		if t.Baseline.Source == nil {
 			return fmt.Errorf("baseline: source is required when mode is %q", BaselineModeOverlay)
+		}
+		if err := validateDiskMaxSize(t.Disk); err != nil {
+			return err
 		}
 		if err := t.Baseline.Source.Validate(); err != nil {
 			return err

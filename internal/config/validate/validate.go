@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config/schema"
@@ -117,6 +120,10 @@ func ValidateImageTemplateJSON(data []byte) error {
 		return err
 	}
 
+	if _, err := validateDiskMaxSizeConstraints(data); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -136,6 +143,10 @@ func ValidateUserTemplateJSON(data []byte) error {
 	}
 
 	if err := validateFDEConstraints(data); err != nil {
+		return err
+	}
+
+	if _, err := validateDiskMaxSizeConstraints(data); err != nil {
 		return err
 	}
 
@@ -236,4 +247,111 @@ func validateFDEConstraints(data []byte) error {
 	}
 
 	return nil
+}
+
+// diskSizeSuffixes/diskSizeSuffixBytes/diskSizePattern mirror config.go's
+// parseDiskSizeBytes (itself mirroring imagedisc.TranslateSizeStrToBytes's unit
+// table). Duplicated here because this package validates raw JSON before it is
+// unmarshaled into config.ImageTemplate, and internal/config already imports
+// this package, so it cannot be imported back.
+var (
+	diskSizeSuffixes    = []string{"KiB", "MiB", "GiB", "K", "M", "G", "KB", "MB", "GB"}
+	diskSizeSuffixBytes = []uint64{1024, 1048576, 1073741824, 1024, 1048576, 1073741824, 1000, 1000000, 1000000000}
+	diskSizePattern     = regexp.MustCompile(`^(\d+)(.*)$`)
+)
+
+// parseDiskSizeBytes parses a disk.size/disk.maxSize string (e.g. "8GiB") into
+// bytes, capped at math.MaxInt64 to match the int64 the build-time resize path
+// (resolveSizeBytes) narrows to.
+func parseDiskSizeBytes(field, s string) (uint64, error) {
+	match := diskSizePattern.FindStringSubmatch(s)
+	if len(match) != 3 {
+		return 0, fmt.Errorf("%s %q: size format incorrect", field, s)
+	}
+	num, err := strconv.ParseUint(match[1], 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s %q: %w", field, s, err)
+	}
+	for i, suf := range diskSizeSuffixes {
+		if match[2] == suf {
+			unit := diskSizeSuffixBytes[i]
+			if num > math.MaxInt64/unit {
+				return 0, fmt.Errorf("%s %q: size overflows the supported range", field, s)
+			}
+			return num * unit, nil
+		}
+	}
+	return 0, fmt.Errorf("%s %q: size suffix %q not recognized", field, s, match[2])
+}
+
+// validateDiskMaxSizeConstraints enforces disk.maxSize's invariants against raw
+// template JSON: it is only supported when baseline.mode is "overlay", requires
+// disk.size to also be set, and must parse to a byte value strictly greater than
+// disk.size. This mirrors config.go's validateDiskMaxSize/validateBaseline
+// checks so the REST validation path (ValidateUserTemplateIssues) reports the
+// same verdict a build would reach, instead of deferring to the mounted resize
+// stage. disk.size's format is validated independently of disk.maxSize being
+// set, so a malformed disk.size (with no maxSize) is also caught here instead
+// of only failing later in ResolveSizeBytes/ResizeBaseline.
+//
+// Like validateBaseline, the baseline.mode check is skipped when extends is
+// set: a layer with extends may be inheriting baseline.mode: overlay from its
+// parent without redeclaring it, so this raw, single-layer document is not yet
+// authoritative about mode. LoadAndMergeTemplate re-validates the folded result.
+//
+// It returns the offending field's path ("disk.size" or "disk.maxSize")
+// alongside the error, so structured callers (ValidateUserTemplateIssues) can
+// anchor the Issue at the field that is actually wrong instead of always
+// blaming disk.maxSize. The path is "" when err is nil.
+func validateDiskMaxSizeConstraints(data []byte) (string, error) {
+	var doc map[string]interface{}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return "", fmt.Errorf("invalid JSON for disk.maxSize validation: %w", err)
+	}
+
+	disk, _ := doc["disk"].(map[string]interface{})
+	size := strings.TrimSpace(stringField(disk, "size"))
+	var sizeBytes uint64
+	if size != "" {
+		var err error
+		sizeBytes, err = parseDiskSizeBytes("disk.size", size)
+		if err != nil {
+			return "disk.size", err
+		}
+	}
+
+	maxSize := strings.TrimSpace(stringField(disk, "maxSize"))
+	if maxSize == "" {
+		return "", nil
+	}
+
+	baseline, _ := doc["baseline"].(map[string]interface{})
+	mode := stringField(baseline, "mode")
+	extends := strings.TrimSpace(stringField(doc, "extends"))
+	if mode != "overlay" && extends == "" {
+		return "disk.maxSize", fmt.Errorf("disk.maxSize is only supported when baseline.mode is \"overlay\"")
+	}
+
+	if size == "" {
+		return "disk.maxSize", fmt.Errorf("disk.maxSize requires disk.size to also be set")
+	}
+
+	maxSizeBytes, err := parseDiskSizeBytes("disk.maxSize", maxSize)
+	if err != nil {
+		return "disk.maxSize", err
+	}
+	if maxSizeBytes <= sizeBytes {
+		return "disk.maxSize", fmt.Errorf("disk.maxSize (%d bytes) must be greater than disk.size (%d bytes)", maxSizeBytes, sizeBytes)
+	}
+	return "", nil
+}
+
+// stringField reads a string field from a possibly-nil JSON object map,
+// returning "" when the map is nil or the field is absent/non-string.
+func stringField(m map[string]interface{}, key string) string {
+	if m == nil {
+		return ""
+	}
+	s, _ := m[key].(string)
+	return s
 }

@@ -2,6 +2,7 @@ package validate
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"sigs.k8s.io/yaml"
@@ -114,6 +115,66 @@ systemConfig:
 	got := pathsOf(issues)
 	if _, ok := got["systemConfig.fde.passphraseFile"]; !ok {
 		t.Errorf("expected FDE passphrase issue; got paths %v", keys(got))
+	}
+}
+
+func TestValidateUserTemplateIssues_SemanticDiskMaxSize(t *testing.T) {
+	// Schema-valid, but disk.maxSize's Go-level invariant fails: no baseline.mode:
+	// overlay, so image-composer-tool validate must reject it the same as a build
+	// would, not just accept it and defer the error to the mounted resize stage.
+	y := `image:
+  name: my-image
+  version: "1.0"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+disk:
+  name: test
+  size: 8GiB
+  maxSize: 4GiB
+`
+	issues := ValidateUserTemplateIssues(toJSON(t, y))
+	got := pathsOf(issues)
+	if _, ok := got["disk.maxSize"]; !ok {
+		t.Errorf("expected disk.maxSize issue; got paths %v", keys(got))
+	}
+}
+
+// TestValidateUserTemplateIssues_SemanticDiskSizeMalformedWithMaxSize confirms a
+// malformed disk.size is anchored at the "disk.size" path even when disk.maxSize
+// is also set (and itself valid) — not lumped under "disk.maxSize", which would
+// point the UI at the wrong field.
+func TestValidateUserTemplateIssues_SemanticDiskSizeMalformedWithMaxSize(t *testing.T) {
+	y := `image:
+  name: my-image
+  version: "1.0"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+baseline:
+  mode: overlay
+  source:
+    path: /tmp/u.raw
+disk:
+  name: test
+  size: not-a-size
+  maxSize: 8GiB
+`
+	issues := ValidateUserTemplateIssues(toJSON(t, y))
+	got := pathsOf(issues)
+	msg, ok := got["disk.size"]
+	if !ok {
+		t.Fatalf("expected disk.size issue; got paths %v", keys(got))
+	}
+	if !strings.Contains(msg, "size format incorrect") {
+		t.Errorf("disk.size issue message = %q, want it to mention the format error", msg)
+	}
+	if _, ok := got["disk.maxSize"]; ok {
+		t.Errorf("did not expect a disk.maxSize issue for a disk.size format error; got paths %v", keys(got))
 	}
 }
 
