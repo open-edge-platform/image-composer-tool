@@ -315,11 +315,7 @@ func TestVerifyRelease(t *testing.T) {
 // their choosing could get it accepted outright. Verification must fail
 // closed for both armored and binary signatures from an untrusted key.
 func TestVerifyRelease_RejectsUntrustedSigner(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "verify_release_untrusted_test")
-	if err != nil {
-		t.Fatalf("Failed to create temp directory: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
+	tempDir := t.TempDir()
 
 	// Build the "trusted" key from one entity so the private key used to sign
 	// below matches the public key written to keyPath (generateArmoredTestKey
@@ -387,6 +383,9 @@ func TestVerifyRelease_RejectsUntrustedSigner(t *testing.T) {
 		ok, err := VerifyRelease(relPath, sigPath, keyPath)
 		if ok || err == nil {
 			t.Fatalf("expected untrusted armored signature to be rejected, got ok=%v err=%v", ok, err)
+		}
+		if !strings.Contains(err.Error(), "signature verification failed") {
+			t.Fatalf("expected a signature verification error, got: %v", err)
 		}
 	})
 
