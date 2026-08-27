@@ -448,3 +448,47 @@ func TestSimulateOverlayInstall_DeclaredConflictBlocked(t *testing.T) {
 		}
 	}
 }
+
+// TestClassifyIntraSetConflicts lives in intraset_conflict_test.go.
+
+// TestSimulateOverlayInstall_IntraSetConflictBlocked exercises the full seam
+// end-to-end for the ITEP-95568 regression: an overlay that resolves two
+// mutually exclusive ROS 2 univloc hardware variants (neither present in the
+// baseline) must be blocked at preflight instead of failing mid-dpkg-unpack.
+func TestSimulateOverlayInstall_IntraSetConflictBlocked(t *testing.T) {
+	origConflicts, origProvides := readOverlayArtifactConflicts, readOverlayArtifactProvides
+	defer func() {
+		readOverlayArtifactConflicts = origConflicts
+		readOverlayArtifactProvides = origProvides
+	}()
+	readOverlayArtifactConflicts = func(PackageManager, *ResolutionPlan) ([]ArtifactConflict, error) {
+		return []ArtifactConflict{
+			{Package: "ros-jazzy-univloc-slam-lze", Conflicts: DependencyAlternative{Name: "ros-jazzy-univloc-slam"}},
+		}, nil
+	}
+	readOverlayArtifactProvides = func(PackageManager, *ResolutionPlan) ([]ArtifactProvides, error) {
+		return []ArtifactProvides{
+			{Package: "ros-jazzy-univloc-slam-sse", Provides: []string{"ros-jazzy-univloc-slam"}},
+		}, nil
+	}
+
+	info := &BaselineInfo{OS: "ubuntu", Arch: "amd64", PackageManager: PackageManagerAPT}
+	plan := &ResolutionPlan{
+		DownloadDir: "/tmp/does-not-matter", // both readers are stubbed
+		ToInstall: []ResolvedPackage{
+			{Name: "ros-jazzy-univloc-slam-sse", Version: "2.3-2", Arch: "amd64", URL: "https://x/sse.deb"},
+			{Name: "ros-jazzy-univloc-slam-lze", Version: "2.3-2", Arch: "amd64", URL: "https://x/lze.deb"},
+		},
+	}
+
+	report, err := Preflight(info, nil, plan, &config.OverlayPolicy{})
+	if err == nil || report == nil || !report.Blocked {
+		t.Fatalf("expected the intra-set conflict to block, err=%v report=%+v", err, report)
+	}
+	if report.Conflicts != 1 {
+		t.Fatalf("conflicts = %d, want 1: %+v", report.Conflicts, report.Actions)
+	}
+	if report.Violations[0].Rule != ruleConflictPolicyFail {
+		t.Errorf("rule = %s, want %s", report.Violations[0].Rule, ruleConflictPolicyFail)
+	}
+}

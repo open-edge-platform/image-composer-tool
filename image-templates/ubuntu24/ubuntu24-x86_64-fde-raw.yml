@@ -68,7 +68,7 @@ systemConfig:
   #   manual         - no keyfile; the passphrase is entered interactively at boot.
   fde:
     enabled: true
-    passphraseFile: "/home/user/test-fde.txt"
+    passphraseFile: "sample-fde-passphrase.txt"
     unlock: auto
     partitions:
       - rootfs

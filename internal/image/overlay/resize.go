@@ -499,10 +499,11 @@ func growFilesystem(layout *Layout) error {
 
 // resizeToolsForFS returns the host commands the resize sequence shells out to
 // for the given root filesystem type. losetup/partx/growpart are always needed;
-// sgdisk is only used on GPT; resize2fs vs xfs_growfs depends on the FS. The
-// backing-file grow uses os.Truncate (no tool), so it is intentionally omitted.
+// parted backs up the partition-start safety probe; sgdisk is only used on GPT;
+// resize2fs vs xfs_growfs depends on the FS. The backing-file grow uses
+// os.Truncate (no tool), so it is intentionally omitted.
 func resizeToolsForFS(fsType, table string) []string {
-	tools := []string{"losetup", "partx", "growpart"}
+	tools := []string{"losetup", "partx", "growpart", "parted"}
 	if table == partitionTableGPT {
 		tools = append(tools, "sgdisk")
 	}
@@ -547,18 +548,12 @@ func checkResizeToolsAvailable(layout *Layout) error {
 // last partition (by on-disk start offset) on the loop device. growpart extends
 // a partition only into the free space that immediately follows it, so growing a
 // non-last root would run into — and corrupt — a following partition. It reads
-// each partition's START sector via lsblk and confirms none starts after the
-// root partition. It performs only reads; it never mutates the disk.
+// each partition's start offset and confirms none starts after the root
+// partition. It performs only reads; it never mutates the disk.
 func assertRootIsLastPartition(loopDevPath, rootDevice string) error {
-	cmd := fmt.Sprintf("lsblk -b --json -o PATH,START,TYPE %s", shell.QuoteArg(loopDevPath))
-	out, err := resizeExec(cmd)
+	starts, err := readPartitionStarts(loopDevPath)
 	if err != nil {
-		return fmt.Errorf("overlay resize: failed to read partition layout of %s: %w", loopDevPath, err)
-	}
-
-	starts, err := parsePartitionStarts(out)
-	if err != nil {
-		return fmt.Errorf("overlay resize: %w", err)
+		return err
 	}
 
 	rootStart, ok := starts[rootDevice]
@@ -584,6 +579,29 @@ func assertRootIsLastPartition(loopDevPath, rootDevice string) error {
 		}
 	}
 	return nil
+}
+
+func readPartitionStarts(loopDevPath string) (map[string]int64, error) {
+	cmd := fmt.Sprintf("lsblk -b --json -o PATH,START,TYPE %s", shell.QuoteArg(loopDevPath))
+	out, err := resizeExec(cmd)
+	if err == nil {
+		starts, parseErr := parsePartitionStarts(out)
+		if parseErr == nil {
+			return starts, nil
+		}
+		return nil, fmt.Errorf("overlay resize: %w", parseErr)
+	}
+
+	fallbackCmd := fmt.Sprintf("parted -sm %s unit B print", shell.QuoteArg(loopDevPath))
+	fallbackOut, fallbackErr := resizeExec(fallbackCmd)
+	if fallbackErr != nil {
+		return nil, fmt.Errorf("overlay resize: failed to read partition layout of %s with lsblk (%v) and parted (%w)", loopDevPath, err, fallbackErr)
+	}
+	starts, parseErr := parsePartedPartitionStarts(fallbackOut, loopDevPath)
+	if parseErr != nil {
+		return nil, fmt.Errorf("overlay resize: %w", parseErr)
+	}
+	return starts, nil
 }
 
 // parsePartitionStarts extracts the START sector offset of each partition node
@@ -635,6 +653,37 @@ func parsePartitionStarts(lsblkJSON string) (map[string]int64, error) {
 		return nil, parseErr
 	}
 	return starts, nil
+}
+
+func parsePartedPartitionStarts(partedOutput, diskPath string) (map[string]int64, error) {
+	starts := make(map[string]int64)
+	for _, line := range strings.Split(partedOutput, "\n") {
+		fields := strings.Split(strings.TrimSpace(line), ":")
+		if len(fields) < 2 {
+			continue
+		}
+		partNum, err := strconv.Atoi(fields[0])
+		if err != nil || partNum <= 0 {
+			continue
+		}
+		startField := strings.TrimSuffix(fields[1], "B")
+		start, err := strconv.ParseInt(startField, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("missing or unparseable start offset for partition %d in parted output", partNum)
+		}
+		starts[partitionPathForNumber(diskPath, partNum)] = start
+	}
+	if len(starts) == 0 {
+		return nil, fmt.Errorf("no partition starts found in parted output")
+	}
+	return starts, nil
+}
+
+func partitionPathForNumber(diskPath string, partNum int) string {
+	if len(diskPath) > 0 && unicode.IsDigit(rune(diskPath[len(diskPath)-1])) {
+		return fmt.Sprintf("%sp%d", diskPath, partNum)
+	}
+	return fmt.Sprintf("%s%d", diskPath, partNum)
 }
 
 // splitPartitionDevice splits a partition device node into its parent disk and

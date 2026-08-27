@@ -237,6 +237,11 @@ systemConfig:
     # ── Intel NPU (Neural Processing Unit) drivers ───────────────────
     - intel-level-zero-npu
     - intel-driver-compiler-npu
+    # Keep ECI's patched systemd/libudev pair coherent. The LLVM SPIR-V runtime
+    # is required by ECI's Intel OpenCL driver and is present in Ubuntu universe.
+    - systemd
+    - udev
+    - libllvmspirvlib14_14.0.8-1~ubuntu0.24.04.1
 
     # ── Intel RealSense camera (DKMS builds against the baseline kernel) ──
     - linux-headers-generic
@@ -346,6 +351,17 @@ systemConfig:
 # every descendant. See the header note for why they cannot be split.
 # -----------------------------------------------------------------------------
 packageRepositories:
+  # Ubuntu universe supplies libllvmspirvlib14, required by Intel OpenCL.
+  - codename: "noble"
+    url: "http://archive.ubuntu.com/ubuntu"
+    pkey: "/usr/share/keyrings/ubuntu-archive-keyring.gpg"
+    component: "main universe"
+
+  - codename: "noble-updates"
+    url: "http://archive.ubuntu.com/ubuntu"
+    pkey: "/usr/share/keyrings/ubuntu-archive-keyring.gpg"
+    component: "main universe"
+
   # ROS 2 Jazzy repository (needed by children; declared here for the codename rule)
   - codename: "noble"
     url: "http://packages.ros.org/ros2/ubuntu"

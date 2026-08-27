@@ -16,6 +16,8 @@ import (
 // baseline package path and is conventionally tmpfs-like (transient).
 const chrootArtifactDir = "/run/overlay-pkgs"
 
+// maxDpkgArgBytes and chunkArgs live in chunk.go.
+
 // InstallResult records what the install step did, for logging and verification.
 type InstallResult struct {
 	// Installed are the package names confirmed present in the baseline package
@@ -575,8 +577,8 @@ func selectInstaller(family PackageManager) (installerBackend, error) {
 }
 
 // debInstallerBackend installs prepared .deb artifacts into the baseline chroot
-// with dpkg. The closure was already resolved, so installing the set in one dpkg
-// invocation satisfies inter-package dependencies among them; deps that were
+// with dpkg. The closure was already resolved, so installing the set in ordered,
+// size-bounded dpkg batches satisfies inter-package dependencies among them; deps that were
 // already present in the baseline remain untouched. `dpkg -i` installs new
 // packages and upgrades an installed one in place, so it serves both the
 // additive-only and additive-and-upgrade policies without a mode switch (the
@@ -598,27 +600,16 @@ func (b *debInstallerBackend) install(req installRequest) error {
 		"DEBCONF_NONINTERACTIVE_SEEN=true",
 		"DEBCONF_NOWARNINGS=yes",
 	}
-	joined := strings.Join(paths, " ")
 
-	// Install the prepared local artifacts, retrying to satisfy Pre-Depends.
+	// Install the prepared local artifacts in dependency-first batches.
 	//
 	// A Pre-Depends must be unpacked AND CONFIGURED before its dependent is even
-	// unpacked (e.g. gawk pre-depends on libmpfr6). A single `dpkg -i A B C…` (or
-	// `dpkg --unpack`) unpacks in command-line order but only configures at the
-	// end, so on the first pass the dependent (gawk) is skipped with a
-	// "pre-dependency problem — libmpfr6 is unpacked, but has never been
-	// configured" error, while every other package IS unpacked and configured
-	// (including the pre-dep, libmpfr6). Re-running `dpkg -i` then installs the
-	// skipped package cleanly, since its pre-dep is now configured. No
-	// command-line ordering can avoid this within one invocation, so we iterate.
-	//
-	// Between passes, `dpkg --configure -a` configures anything left unpacked so
-	// the next pass's Pre-Depends are satisfied. The loop stops as soon as a pass
-	// succeeds, and fails fast when a pass makes NO progress — its error output is
-	// byte-identical to the previous pass's, meaning the same archives failed for
-	// the same reason (a genuine dependency/conflict problem, not ordering). The
-	// hard cap is a backstop; real Pre-Depends chains in a fixed closure converge
-	// in a couple of passes.
+	// unpacked (e.g. gawk pre-depends on libmpfr6). `dpkg -i A B C…` does not
+	// configure A until it has attempted C, so it can skip C even in a correctly
+	// sorted list. Running one archive per invocation preserves the resolver's
+	// dependency-first order while configuring each provider before its dependent.
+	// It also removes the MAX_ARG_STRLEN limit that affects large overlays. Failed
+	// batches are retried after configuration without replaying successful batches.
 	//
 	// Package files are supplied directly (no network, no repository resolution),
 	// so the install stays strictly within the approved, pre-downloaded set.
@@ -633,37 +624,50 @@ func (b *debInstallerBackend) install(req installRequest) error {
 	// "--" terminates option parsing so a URL-derived artifact basename beginning
 	// with '-' is treated as a file path, not a dpkg option (shell-quoting stops
 	// word-splitting, not option parsing).
-	const maxInstallPasses = 6
-	installCmd := "dpkg -i --auto-deconfigure -- " + joined
 	configureCmd := "dpkg --configure -a --auto-deconfigure"
-
-	var lastOut string
+	const maxInstallPasses = 6
+	chunks := chunkArgs(paths, maxDpkgArgBytes)
+	pending := chunks
 	var lastErr error
+	var lastOut string
+	var lastFingerprint string
 	for pass := 1; pass <= maxInstallPasses; pass++ {
-		out, err := shell.ExecCmdWithStream(installCmd, true, req.chrootPath, envVars)
-		if err == nil {
-			// Everything unpacked and configured.
+		nextPending := make([][]string, 0, len(pending))
+		var fingerprint strings.Builder
+		for index, chunk := range pending {
+			out, err := shell.ExecCmdWithStream("dpkg -i --auto-deconfigure -- "+strings.Join(chunk, " "), true, req.chrootPath, envVars)
+			fmt.Fprintf(&fingerprint, "batch=%d\nout=%q\nerr=%v\n", index, out, err)
+			if err != nil {
+				nextPending = append(nextPending, chunk)
+				if lastErr == nil {
+					lastErr, lastOut = err, out
+				}
+			}
+		}
+
+		configureOut, configureErr := shell.ExecCmdWithStream(configureCmd, true, req.chrootPath, envVars)
+		fmt.Fprintf(&fingerprint, "configure-out=%q\nconfigure-err=%v\n", configureOut, configureErr)
+		currentFingerprint := fingerprint.String()
+		if len(nextPending) == 0 && configureErr == nil {
 			return nil
 		}
-		// No progress since the previous failing pass: same archives failed for the
-		// same reason, so retrying again cannot help. Surface it now.
-		if pass > 1 && out == lastOut {
-			return fmt.Errorf("dpkg install of %d artifact(s) failed (no progress after %d pass(es)): %w%s",
-				len(paths), pass, err, formatCommandOutput(out))
+		if configureErr != nil {
+			lastErr, lastOut = configureErr, configureOut
 		}
-		lastOut, lastErr = out, err
-		log.Infof("Overlay install: dpkg pass %d/%d left packages unconfigured (likely Pre-Depends ordering); configuring and retrying", pass, maxInstallPasses)
-		// Best-effort: configure whatever is now unpacked so the next pass's
-		// Pre-Depends are met. A failure here is not fatal on its own — the next
-		// `dpkg -i` pass surfaces any genuine problem via its own error/no-progress.
-		if _, cerr := shell.ExecCmdWithStream(configureCmd, true, req.chrootPath, envVars); cerr != nil {
-			log.Debugf("Overlay install: interim `dpkg --configure -a` reported: %v", cerr)
+		if len(nextPending) == 0 {
+			return fmt.Errorf("dpkg configure of %d artifact(s) failed: %w%s", len(paths), lastErr, formatCommandOutput(lastOut))
 		}
+		if currentFingerprint == lastFingerprint {
+			return fmt.Errorf("dpkg install of %d artifact(s) failed with %d archive(s) still pending after pass %d: %w%s",
+				len(paths), len(nextPending), pass, lastErr, formatCommandOutput(lastOut))
+		}
+		log.Infof("Overlay install: %d/%d batch(es) need a dependency-order retry after pass %d", len(nextPending), len(pending), pass)
+		lastFingerprint = currentFingerprint
+		pending = nextPending
+		lastErr = nil
 	}
-	// Exhausted the pass budget while still making some progress each time but never
-	// fully succeeding. Surface the last failure.
-	return fmt.Errorf("dpkg install of %d artifact(s) failed after %d passes: %w%s",
-		len(paths), maxInstallPasses, lastErr, formatCommandOutput(lastOut))
+	return fmt.Errorf("dpkg install of %d artifact(s) failed with %d archive(s) still pending after %d passes: %w%s",
+		len(paths), len(pending), maxInstallPasses, lastErr, formatCommandOutput(lastOut))
 }
 
 // removePackages purges the named baseline packages with dpkg before the install.

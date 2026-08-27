@@ -1,6 +1,7 @@
 package overlay
 
 import (
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -473,6 +474,55 @@ func TestParsePartitionStarts(t *testing.T) {
 	// The whole-disk loop node (type "loop") must be excluded.
 	if _, ok := starts["/dev/loop0"]; ok {
 		t.Error("whole-disk node must not be counted as a partition")
+	}
+}
+
+func TestParsePartedPartitionStarts(t *testing.T) {
+	out := `BYT;
+/dev/loop26:10737418240B:loopback:512:512:gpt:Loopback device:;
+1:1048576B:536870911B:535822336B:ext4::;
+15:1048576000B:1072693247B:224117248B:fat32::boot, esp;
+`
+	starts, err := parsePartedPartitionStarts(out, "/dev/loop26")
+	if err != nil {
+		t.Fatalf("parsePartedPartitionStarts: %v", err)
+	}
+	if starts["/dev/loop26p1"] != 1048576 {
+		t.Errorf("p1 start = %d, want 1048576", starts["/dev/loop26p1"])
+	}
+	if starts["/dev/loop26p15"] != 1048576000 {
+		t.Errorf("p15 start = %d, want 1048576000", starts["/dev/loop26p15"])
+	}
+}
+
+func TestAssertRootIsLastPartitionFallsBackToParted(t *testing.T) {
+	origExec := resizeExec
+	defer func() { resizeExec = origExec }()
+	var cmds []string
+	resizeExec = func(cmd string) (string, error) {
+		cmds = append(cmds, cmd)
+		if strings.Contains(cmd, "lsblk") {
+			return "", fmt.Errorf("lsblk: unknown column: START,TYPE")
+		}
+		if strings.Contains(cmd, "parted") {
+			return `BYT;
+/dev/loop26:10737418240B:loopback:512:512:gpt:Loopback device:;
+1:1048576B:536870911B:535822336B:ext4::;
+2:1048576000B:1072693247B:224117248B:ext4::;
+`, nil
+		}
+		return "", nil
+	}
+
+	if err := assertRootIsLastPartition("/dev/loop26", "/dev/loop26p2"); err != nil {
+		t.Fatalf("assertRootIsLastPartition: %v", err)
+	}
+	joined := strings.Join(cmds, "\n")
+	if !strings.Contains(joined, "lsblk -b --json -o PATH,START,TYPE '/dev/loop26'") {
+		t.Errorf("expected lsblk probe first; got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "parted -sm '/dev/loop26' unit B print") {
+		t.Errorf("expected parted fallback; got:\n%s", joined)
 	}
 }
 

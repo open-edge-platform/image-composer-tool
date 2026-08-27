@@ -699,15 +699,15 @@ func resolvedNameSet(pkgs []ResolvedPackage) map[string]bool {
 //  1. Requested-and-present: a package named in the template that the baseline
 //     already has at an older version.
 //  2. Required transitive dependency: a package a to-install package depends on
-//     via a single-alternative, version-constrained edge that the baseline copy
-//     does NOT satisfy but the resolved (newer) copy does. This is the case
+//     via a version-constrained edge that the baseline copy does NOT satisfy but
+//     the resolved (newer) copy does. This is the case
 //     additive-only could not resolve — the install would fail at configure time
 //     otherwise — so it is upgraded to keep the requested set installable.
 //
-// Every other present closure member (merely newer in the repo, or required only
-// through a multi-alternative edge that might be satisfiable another way) is left
-// on its baseline version. A genuinely unsatisfiable pin that this scoping does
-// not upgrade is caught fail-closed by preflight's unsatisfied-dependency check.
+// Every other present closure member (merely newer in the repo, or not selected
+// by the resolved dependency closure) is left on its baseline version. A
+// genuinely unsatisfiable pin that this scoping does not upgrade is caught
+// fail-closed by preflight's unsatisfied-dependency check.
 //
 // The eligible set is grown to a fixpoint so an upgraded dependency's own
 // required upgrades are also pulled in.
@@ -788,12 +788,10 @@ func upgradeEligibleNames(family PackageManager, requested []string, closure []o
 	return eligible
 }
 
-// directVersionedDeps returns the single-alternative, version-constrained
-// dependency edges a resolved package declares, parsed from its family-specific
-// dependency metadata. Multi-alternative edges ("a | b") are skipped: forcing an
-// upgrade to satisfy one branch could be wrong when another branch is already
-// met, so those are left to preflight's unsatisfied-dependency check. Unversioned
-// edges carry no upgrade signal and are dropped.
+// directVersionedDeps returns the version-constrained dependency alternatives a
+// resolved package declares. A candidate is upgraded only when it is also in the
+// resolved closure, so accepting each branch of a Debian alternative is safe:
+// unselected branches have no closure entry and are ignored by the caller.
 func directVersionedDeps(family PackageManager, pi ospackage.PackageInfo) []DependencyAlternative {
 	var out []DependencyAlternative
 	if family == PackageManagerDNF {
@@ -805,10 +803,12 @@ func directVersionedDeps(family PackageManager, pi ospackage.PackageInfo) []Depe
 		return out
 	}
 	// deb: RequiresVer holds the individual Depends terms; parse them back into
-	// edges and keep only the unambiguous single-alternative versioned ones.
+	// versioned alternatives, including the selected branch of `a | b` terms.
 	for _, edge := range parseDebDependsField(canonicalPackageName(pi), strings.Join(pi.RequiresVer, ",")) {
-		if len(edge.Alternatives) == 1 && edge.Alternatives[0].Constraint != nil {
-			out = append(out, edge.Alternatives[0])
+		for _, alternative := range edge.Alternatives {
+			if alternative.Constraint != nil {
+				out = append(out, alternative)
+			}
 		}
 	}
 	return out
