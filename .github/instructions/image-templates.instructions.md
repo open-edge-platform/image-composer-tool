@@ -13,7 +13,7 @@ Use these in addition to the root `copilot-instructions.md`. Schema: [os-image-t
 Examples: `emt3/emt3-x86_64-minimal-raw.yml`, `ubuntu24/ubuntu24-aarch64-edge-raw.yml`, `azl3/azl3-x86_64-minimal-iso.yml`.
 
 - The directory is the template's `target.dist` value, not its filename prefix. So `rcd10-*.yml` (which declare `dist: el10`) live in `el10/`, and `elxr-edge-26.04-*.yml` (which declare `dist: elxr13`) live in `elxr13/`.
-- The filename keeps the full `<dist>-` prefix even though the directory repeats it, so a bare filename stays unambiguous in build scripts, `internal/api/data/manifest.yaml`, and bug reports.
+- The filename keeps the full `<dist>-` prefix even though the directory repeats it, so a bare filename stays unambiguous in build scripts and bug reports.
 - `<dist>`: lowercase distro + major version (`emt3`, `azl3`, `elxr12`, `ubuntu24`, `debian13`, `rcd10`).
 - `<arch>`: `x86_64` or `aarch64` (match Go's `runtime.GOARCH` convention only when the schema requires it — otherwise use these).
 - `<purpose>`: `minimal`, `edge`, `dlstreamer`, `desktop-virtualization`, etc.

@@ -48,17 +48,6 @@ Coverage threshold lives in `.coverage-threshold` and auto-ratchets.
 
 ---
 
-## UI development (web/)
-
-React 19 + TypeScript + Vite + Tailwind frontend in `web/`, embedded into the Go binary via `//go:embed` and served by the `serve` subcommand.
-
-- **Dev loop:** `go run ./cmd/image-composer-tool serve --sudo` (backend) + `cd web && npm run dev` (frontend, hot-reload at `localhost:5173`, proxies `/api/v1` to `:8080`).
-- **Type check:** `cd web && npx tsc --noEmit`.
-- **Verify in a browser** before declaring a UI change done — passing type checks/tests doesn't confirm the feature works. Check the golden path and obvious edge cases.
-- **Full rebuild to test the real binary:** `(cd web && npm ci && npm run build)` → `rm -rf internal/webui/dist && cp -r web/dist internal/webui/dist` → `go build -o ./build/image-composer-tool ./cmd/image-composer-tool/` (see `web/README.md`). Hard-refresh (Ctrl/Cmd+Shift+R) after restarting `serve` to bypass the cached bundle.
-
----
-
 ## Project conventions
 
 - **Logger:** `var log = logger.Logger()` from `internal/utils/logger`. Never `fmt.Println` or stdlib `log`.
