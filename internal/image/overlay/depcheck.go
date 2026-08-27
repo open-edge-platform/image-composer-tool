@@ -178,6 +178,9 @@ var readOverlayArtifactConflicts = func(family PackageManager, plan *ResolutionP
 	return conflicts, nil
 }
 
+// ArtifactProvides, readOverlayArtifactProvides, readDebArtifactProvides, and
+// readRPMArtifactProvides live in provides.go.
+
 // readDebArtifactConflicts reads the Conflicts and Breaks control fields of a
 // prepared .deb with `dpkg -f` and parses their (optionally versioned) entries.
 // Both fields are read because dpkg -i refuses to unpack over either one. The

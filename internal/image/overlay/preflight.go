@@ -2,6 +2,7 @@ package overlay
 
 import (
 	"fmt"
+	"path"
 	"sort"
 	"strings"
 
@@ -51,6 +52,7 @@ const (
 	ruleKernelImmutable      = "kernel-immutable"
 	ruleUnsatisfiedDep       = "unsatisfiable-versioned-dependency"
 	ruleReplaceKernelInvalid = "replaceKernel-no-kernel-installed"
+	ruleReplaceKernelAmbig   = "replaceKernel-ambiguous"
 )
 
 // bootloaderPackagePrefixes are package-name prefixes (case-insensitive) that
@@ -205,6 +207,12 @@ type PreflightReport struct {
 	// fail on any collateral non-kernel breakage rather than silently purging an
 	// unrelated package the operator never consented to remove.
 	CollateralRemovalAuthorized bool
+	// ReplacementKernels are the concrete bootable kernel-image packages that
+	// overlayPolicy.replaceKernel.package resolved to (empty when replaceKernel is
+	// unset). A valid swap resolves to exactly one; zero (no kernel would remain) or
+	// several (an over-broad glob) block the build (ruleReplaceKernelInvalid /
+	// ruleReplaceKernelAmbig) and are surfaced so the operator can narrow the request.
+	ReplacementKernels []string
 	// Blocked is true when at least one policy violation was found.
 	Blocked bool
 }
@@ -277,7 +285,21 @@ var simulateOverlayInstall = func(info *BaselineInfo, baseline []BaselinePackage
 	if err != nil {
 		return nil, err
 	}
-	return classifyConflicts(info.PackageManager, baselineVersionIndex(baseline), plan.ToInstall, conflicts), nil
+	provides, err := readOverlayArtifactProvides(info.PackageManager, plan)
+	if err != nil {
+		return nil, err
+	}
+	toInstall := append([]ResolvedPackage(nil), plan.ToInstall...)
+	providesByPackage := make(map[string][]string, len(provides))
+	for _, artifact := range provides {
+		providesByPackage[artifact.Package] = artifact.Provides
+	}
+	for i := range toInstall {
+		toInstall[i].Provides = append(toInstall[i].Provides, providesByPackage[toInstall[i].Name]...)
+	}
+	actions := classifyConflicts(info.PackageManager, baselineVersionIndex(baseline), toInstall, conflicts)
+
+	return actions, nil
 }
 
 // Preflight runs the two-slice dependency/conflict preflight for an overlay
@@ -308,6 +330,17 @@ func Preflight(info *BaselineInfo, baseline []BaselinePackage, plan *ResolutionP
 	effectivePolicy := config.OverlayPolicy{}
 	if policy != nil {
 		effectivePolicy = *policy
+	}
+
+	// A kernel swap regenerates only the GRUB config (see RegenerateGrub) and never
+	// touches the ESP or bootloader binary; that is only safe on a GRUB2 baseline.
+	// This is the same gate RegenerateGrub enforces, but checked here — before any
+	// package is installed or removed — so a systemd-boot or UKI baseline (detected
+	// distinctly from grub2 by detectBootloader) fails fast instead of leaving the
+	// chroot partially mutated.
+	if effectivePolicy.ReplaceKernel != nil && info.Bootloader != "grub2" {
+		return nil, fmt.Errorf("overlay preflight: overlayPolicy.replaceKernel is set but the baseline "+
+			"bootloader is %q, not grub2; kernel replacement is only supported on GRUB2 baselines", info.Bootloader)
 	}
 
 	// The simulate step is an optional validation aid; its failure must not mask
@@ -356,16 +389,27 @@ func Preflight(info *BaselineInfo, baseline []BaselinePackage, plan *ResolutionP
 		report.Adds, report.Upgrades, report.Downgrades, report.Removes, report.Conflicts, report.UnsatisfiedDeps, len(report.Violations))
 
 	// Surface the kernel swap explicitly (from -> to) so the operator can see the
-	// baseline kernel packages being removed and the replacement being installed.
+	// baseline kernel packages being removed and the concrete replacement being
+	// installed. When the request did not resolve to exactly one bootable kernel, log
+	// what it matched (nothing, or several) so the operator can correct the pattern.
 	if effectivePolicy.ReplaceKernel != nil {
-		var removedKernel []string
-		for _, a := range report.Actions {
-			if a.KernelReplacement {
-				removedKernel = append(removedKernel, a.Package)
+		req := strings.TrimSpace(effectivePolicy.ReplaceKernel.Package)
+		switch len(report.ReplacementKernels) {
+		case 1:
+			var removedKernel []string
+			for _, a := range report.Actions {
+				if a.KernelReplacement && a.Type == ActionRemove {
+					removedKernel = append(removedKernel, a.Package)
+				}
 			}
+			log.Infof("Overlay preflight: replacing kernel in baseline image: removing %d baseline kernel package(s) [%s] -> installing %q (matched by %q)",
+				len(removedKernel), strings.Join(removedKernel, ", "), report.ReplacementKernels[0], req)
+		case 0:
+			log.Warnf("Overlay preflight: overlayPolicy.replaceKernel.package %q did not resolve to any bootable kernel image; nothing to swap", req)
+		default:
+			log.Warnf("Overlay preflight: overlayPolicy.replaceKernel.package %q is ambiguous — it matched %d bootable kernel images: %s; narrow the pattern to name exactly one",
+				req, len(report.ReplacementKernels), strings.Join(report.ReplacementKernels, ", "))
 		}
-		log.Infof("Overlay preflight: replacing kernel in baseline image: removing %d baseline kernel package(s) [%s] -> installing %q",
-			len(removedKernel), strings.Join(removedKernel, ", "), strings.TrimSpace(effectivePolicy.ReplaceKernel.Package))
 	}
 
 	if report.Blocked {
@@ -378,6 +422,16 @@ func Preflight(info *BaselineInfo, baseline []BaselinePackage, plan *ResolutionP
 // enforcement. It is deterministic and side-effect free.
 func EvaluatePreflight(in PreflightInput) *PreflightReport {
 	sliceA := baselineVersionIndex(in.Baseline)
+
+	// The concrete bootable kernel image(s) the replaceKernel request resolves to. A
+	// valid swap must resolve to exactly one; zero (no kernel would remain) or several
+	// (an over-broad glob) are surfaced as blocking violations below and never
+	// authorize removal of the baseline kernel family.
+	var replacementKernels []string
+	if in.Policy.ReplaceKernel != nil {
+		replacementKernels = replacementKernelImages(
+			strings.TrimSpace(in.Policy.ReplaceKernel.Package), in.Resolved, in.ResolvedClosure, sliceA)
+	}
 
 	actions := classifyActions(in.Family, sliceA, in.Resolved)
 	actions = append(actions, normalizeSimulatedActions(in.SimulatedActions, sliceA)...)
@@ -403,22 +457,30 @@ func EvaluatePreflight(in PreflightInput) *PreflightReport {
 		}
 	}
 
-	// Mark the NAMED replacement kernel's own install action as part of the swap so
-	// the kernel-immutable rule permits it. On deb the replacement is a new,
+	// Mark the replacement kernel's own install action as part of the swap so the
+	// kernel-immutable rule permits it. On deb the replacement is a new,
 	// version-qualified package name (an ActionAdd, already allowed), but on rpm the
 	// installonly kernel keeps the same name ("kernel"/"kernel-core") across versions,
 	// so a newer resolved kernel is classified as ActionUpgrade and would otherwise be
-	// blocked by ruleKernelImmutable. This is deliberately narrow — only the exact
-	// package named in replaceKernel, and only an add/upgrade of a kernel image — so an
-	// unrelated kernel upgrade stays blocked.
-	if in.Policy.ReplaceKernel != nil {
-		replacement := strings.TrimSpace(in.Policy.ReplaceKernel.Package)
-		if replacement != "" {
-			for i := range actions {
-				a := &actions[i]
-				if a.Package == replacement && a.Kernel && (a.Type == ActionAdd || a.Type == ActionUpgrade) {
-					a.KernelReplacement = true
-				}
+	// blocked by ruleKernelImmutable. This is deliberately narrow — only the CONCRETE
+	// kernel image the request resolved to (so a glob is matched by its resolved name,
+	// not its raw pattern) plus any verified rpm kernel-build companion (e.g. the
+	// "kernel" tracking package alongside "kernel-core", the package that actually
+	// carries the bootable image — see isSameKernelBuildComponent) — and only an
+	// add/upgrade of a kernel image — so an unrelated kernel upgrade stays blocked.
+	// Only a request that resolves to exactly one kernel authorizes the swap; zero
+	// or several is blocked below.
+	if len(replacementKernels) == 1 {
+		concrete := replacementKernels[0]
+		concreteVersion := kernelImageVersion(concrete, in.Resolved, in.ResolvedClosure)
+		for i := range actions {
+			a := &actions[i]
+			if !a.Kernel || (a.Type != ActionAdd && a.Type != ActionUpgrade) {
+				continue
+			}
+			if a.Package == concrete ||
+				isSameKernelBuildComponent(in.Family, concrete, concreteVersion, a.Package, a.RequestedVersion) {
+				a.KernelReplacement = true
 			}
 		}
 	}
@@ -536,24 +598,74 @@ func EvaluatePreflight(in PreflightInput) *PreflightReport {
 		}
 	}
 
-	// A kernel replacement must actually supply a bootable kernel image via the NAMED
-	// replacement, or the swap would remove the baseline kernel family and leave the
-	// image with no kernel. classifyKernelReplacementRemovals already declined to
-	// authorize the removals in that case; raise a blocking violation so a replaceKernel
-	// package that does not itself resolve to a kernel (a typo, or a non-kernel package
-	// like "curl") fails loudly instead of silently producing a no-op or an unbootable
-	// image — even if an unrelated systemConfig package independently added a kernel.
-	if in.Policy.ReplaceKernel != nil &&
-		!replaceKernelSuppliesKernel(strings.TrimSpace(in.Policy.ReplaceKernel.Package), in.Resolved, in.ResolvedClosure) {
-		report.Violations = append(report.Violations, PolicyViolation{
-			Action: PlannedAction{
-				Type:    ActionAdd,
-				Package: strings.TrimSpace(in.Policy.ReplaceKernel.Package),
-				Detail:  "overlayPolicy.replaceKernel.package does not itself supply a bootable kernel image, so no kernel would remain after the swap",
-			},
-			Rule: ruleReplaceKernelInvalid,
-		})
+	// A kernel replacement must resolve to EXACTLY ONE bootable kernel image via the
+	// request, or the swap would remove the baseline kernel family and leave the image
+	// with either no kernel or an ambiguous choice of default. classifyKernelReplacementRemovals
+	// already declined to authorize the removals in either case; raise a blocking
+	// violation so the operator sees which packages (if any) the request matched and
+	// can correct it, rather than silently producing a no-op or an unbootable image.
+	if in.Policy.ReplaceKernel != nil {
+		req := strings.TrimSpace(in.Policy.ReplaceKernel.Package)
+		switch {
+		case len(replacementKernels) == 0:
+			report.Violations = append(report.Violations, PolicyViolation{
+				Action: PlannedAction{
+					Type:    ActionAdd,
+					Package: req,
+					Detail:  "overlayPolicy.replaceKernel.package does not resolve to a bootable kernel image, so no kernel would remain after the swap",
+				},
+				Rule: ruleReplaceKernelInvalid,
+			})
+		case len(replacementKernels) > 1:
+			report.Violations = append(report.Violations, PolicyViolation{
+				Action: PlannedAction{
+					Type:    ActionAdd,
+					Package: req,
+					Detail: fmt.Sprintf("matched %d bootable kernel images (%s); narrow overlayPolicy.replaceKernel.package to name exactly one",
+						len(replacementKernels), strings.Join(replacementKernels, ", ")),
+				},
+				Rule: ruleReplaceKernelAmbig,
+			})
+		default:
+			// Exactly one concrete kernel resolved from `package` (and its closure). But
+			// additionalPackages — or any other requested package — can independently
+			// resolve to ANOTHER bootable kernel image; GRUB is defaulted to entry 0 on
+			// the assumption the chosen replacement is the only new kernel, so a second
+			// one installed alongside it would leave the wrong kernel bootable.
+			// kernelImagesIn's alias-vs-concrete filtering means a legitimate
+			// kernel-meta swap's own intermediary alias package is never mistaken for a
+			// second kernel here. A verified rpm kernel-build companion (e.g.
+			// "kernel-core" alongside a "kernel" request — both share one NEVRA) is
+			// likewise excluded via isSameKernelBuildComponent: it is part of the SAME
+			// build as the chosen replacement, not an independently requested second
+			// kernel.
+			chosen := replacementKernels[0]
+			chosenVersion := kernelImageVersion(chosen, in.Resolved, in.ResolvedClosure)
+			var extra []string
+			for _, img := range kernelImagesIn(in.Resolved, in.ResolvedClosure) {
+				if img == chosen {
+					continue
+				}
+				imgVersion := kernelImageVersion(img, in.Resolved, in.ResolvedClosure)
+				if isSameKernelBuildComponent(in.Family, chosen, chosenVersion, img, imgVersion) {
+					continue
+				}
+				extra = append(extra, img)
+			}
+			if len(extra) > 0 {
+				report.Violations = append(report.Violations, PolicyViolation{
+					Action: PlannedAction{
+						Type:    ActionAdd,
+						Package: req,
+						Detail: fmt.Sprintf("resolves to %q, but the install set also supplies additional bootable kernel image(s) %s; drop them from additionalPackages/systemConfig.packages or narrow replaceKernel.package to cover them",
+							chosen, strings.Join(extra, ", ")),
+					},
+					Rule: ruleReplaceKernelAmbig,
+				})
+			}
+		}
 	}
+	report.ReplacementKernels = replacementKernels
 
 	report.Blocked = len(report.Violations) > 0
 	return report
@@ -723,23 +835,26 @@ func classifyObsoletions(family PackageManager, sliceA map[string]BaselinePackag
 // unset, so a normal overlay build is entirely unaffected. Map iteration order is
 // irrelevant: sortActions orders the result deterministically downstream.
 //
-// It also returns nil (authorizing NO removals) when the resolved install set
-// contains no bootable kernel image: a replaceKernel package that resolves to a
-// non-kernel (e.g. "curl") must not purge the baseline kernel family and leave an
-// unbootable image. EvaluatePreflight raises the blocking violation for that case
-// (ruleReplaceKernelInvalid); refusing the removals here is the belt-and-suspenders.
+// It also returns nil (authorizing NO removals) unless the request resolves to
+// EXACTLY ONE bootable kernel image: a replaceKernel package that resolves to a
+// non-kernel (e.g. "curl") or to several kernels (an over-broad glob) must not purge
+// the baseline kernel family and leave an unbootable or ambiguous image.
+// EvaluatePreflight raises the blocking violation for those cases
+// (ruleReplaceKernelInvalid / ruleReplaceKernelAmbig); refusing the removals here is
+// the belt-and-suspenders.
 //
-// The keep-set is built from the FULL resolved closure (not just ToInstall) plus
-// the named replacement, so a kernel-family package the replacement depends on but
-// that is already present in the baseline — and thus absent from ToInstall — is not
-// swept into the removal set. The old baseline kernel family is not in the new
+// The keep-set is built from the FULL resolved closure (not just ToInstall) plus the
+// concrete replacement kernel, so a kernel-family package the replacement depends on
+// but that is already present in the baseline — and thus absent from ToInstall — is
+// not swept into the removal set. The old baseline kernel family is not in the new
 // kernel's closure, so it is still removed.
 func classifyKernelReplacementRemovals(sliceA map[string]BaselinePackage, resolved, closure []ResolvedPackage, policy config.OverlayPolicy) []PlannedAction {
 	if policy.ReplaceKernel == nil {
 		return nil
 	}
 	replacement := strings.TrimSpace(policy.ReplaceKernel.Package)
-	if !replaceKernelSuppliesKernel(replacement, resolved, closure) {
+	kernels := replacementKernelImages(replacement, resolved, closure, sliceA)
+	if len(kernels) != 1 {
 		return nil
 	}
 
@@ -754,9 +869,7 @@ func classifyKernelReplacementRemovals(sliceA map[string]BaselinePackage, resolv
 			keep[n] = true
 		}
 	}
-	if replacement != "" {
-		keep[replacement] = true
-	}
+	keep[kernels[0]] = true
 
 	var actions []PlannedAction
 	for name, base := range sliceA {
@@ -770,57 +883,313 @@ func classifyKernelReplacementRemovals(sliceA map[string]BaselinePackage, resolv
 			Arch:              base.Arch,
 			ExplicitRemoval:   true,
 			KernelReplacement: true,
-			Detail:            fmt.Sprintf("removed as part of kernel replacement by %q", replacement),
+			Detail:            fmt.Sprintf("removed as part of kernel replacement by %q", kernels[0]),
 		})
 	}
 	return actions
 }
 
-// resolvedHasKernelImage reports whether the set the overlay will install contains
-// at least one bootable kernel-image package. A kernel replacement removes the
-// entire baseline kernel family, so the swap is only safe when a new bootable
-// kernel is actually being installed — otherwise the image would ship with no
-// kernel. It underpins both the removal guard above and the ruleReplaceKernelInvalid
-// gate in EvaluatePreflight.
-func resolvedHasKernelImage(resolved []ResolvedPackage) bool {
-	for _, rp := range resolved {
-		if isKernelImagePackage(strings.TrimSpace(rp.Name)) {
-			return true
-		}
-	}
-	return false
-}
-
-// replaceKernelSuppliesKernel reports whether overlayPolicy.replaceKernel.package
-// actually provides the post-swap bootable kernel. The check is scoped to the NAMED
-// replacement so a swap proceeds only when that package is what supplies the kernel —
-// never merely because an unrelated systemConfig package independently added one, and
-// without being fooled by a replacement that is already installed (and so absent from
-// the resolved ToInstall set).
+// matchReplacementRequest reports whether a concrete package name satisfies the
+// replaceKernel request. The request is an exact package name unless it contains a
+// glob metacharacter (*, ?, [...]), in which case it is matched with the same
+// shell-glob semantics the package resolver accepts.
 //
-// It is valid when either:
-//   - the named replacement is itself a bootable kernel image (linux-image-<ver>, the
-//     linux-image-* metas, kernel, kernel-core) — matched whether it is being installed
-//     or is ALREADY present in the baseline (a removal-only swap); or
-//   - the named replacement is a kernel meta of another family (e.g. linux-oem,
-//     linux-generic) whose dependency closure pulls a bootable kernel image into the
-//     resolved set or closure.
-//
-// A non-kernel package such as "curl" matches neither and is rejected even when a
-// kernel image is present from another source, so a typo cannot silently purge the
-// baseline kernel family.
-func replaceKernelSuppliesKernel(replacement string, resolved, closure []ResolvedPackage) bool {
-	replacement = strings.TrimSpace(replacement)
-	if replacement == "" {
+// RPM wildcard resolution (rpmutils.ResolveWildcardPackageConflicts) canonicalizes
+// a version-specific glob match down to its base package name — e.g.
+// "kernel-[0-9]*" matches the artifact "kernel-5.14.0-570...x86_64.rpm" but
+// resolves to the plain ResolvedPackage.Name "kernel" — so the canonical name a
+// glob is later re-matched against here may no longer contain the version text
+// the pattern targeted, and a direct path.Match against it fails even though the
+// resolver genuinely satisfied the request. As a fallback, a name is also
+// accepted when it exactly equals the glob's literal prefix (the text before its
+// first metacharacter) with a trailing "-" separator trimmed — e.g.
+// "kernel-[0-9]*" additionally accepts "kernel". The fallback applies ONLY when
+// everything from that metacharacter onward is plausible version-glob syntax
+// (digits, ".", "-", "_", and glob metacharacters); a pattern carrying further
+// literal name text after the wildcard (e.g. "kernel*headers") never qualifies,
+// so a resolved "kernel" can never be misattributed to it. This keeps the
+// fallback narrow enough that it can never turn one glob into matching several
+// unrelated packages; a Debian glob's canonical resolved name always retains the
+// version text a real match requires, so the fallback is inert there.
+func matchReplacementRequest(request, name string) bool {
+	request = strings.TrimSpace(request)
+	name = strings.TrimSpace(name)
+	if request == "" || name == "" {
 		return false
 	}
-	if isKernelImagePackage(replacement) {
+	if !strings.ContainsAny(request, "*?[") {
+		return name == request
+	}
+	ok, err := path.Match(request, name)
+	if err != nil {
+		// Invalid glob syntax (e.g. an unclosed "[") matches nothing, including via
+		// the canonical-name fallback below.
+		return false
+	}
+	if ok {
 		return true
 	}
-	if !isKernelFamilyPackage(replacement) {
+	fallback := globCanonicalFallbackName(request)
+	return fallback != "" && name == fallback
+}
+
+// globCanonicalFallbackName returns the literal text before a glob pattern's
+// first metacharacter, with a trailing "-" package-name separator trimmed (e.g.
+// "kernel-[0-9]*" -> "kernel"), but ONLY when everything from that
+// metacharacter to the end of the pattern is plausible RPM version-glob syntax
+// (digits, ".", "-", "_", and glob metacharacters). A pattern that carries
+// further literal name text after the wildcard (e.g. "kernel*headers", whose
+// "headers" text a canonicalized "kernel" package name never carries) returns
+// "", meaning the fallback does not apply. See matchReplacementRequest.
+func globCanonicalFallbackName(pattern string) string {
+	i := strings.IndexAny(pattern, "*?[")
+	if i == -1 {
+		return ""
+	}
+	lit, tail := pattern[:i], pattern[i:]
+	for _, r := range tail {
+		switch {
+		case r >= '0' && r <= '9':
+		case r == '.' || r == '-' || r == '_' || r == '*' || r == '?' || r == '[' || r == ']':
+		default:
+			return ""
+		}
+	}
+	return strings.TrimSuffix(lit, "-")
+}
+
+// kernelImagesIn returns the sorted, de-duplicated bootable kernel-image packages
+// present across the given resolved sets.
+//
+// A Debian/Ubuntu kernel meta flavor (e.g. "linux-oem-24.04") commonly resolves a
+// closure containing BOTH an intermediary "linux-image-<flavor>" alias package
+// (e.g. "linux-image-oem-24.04", itself no more bootable than the top-level meta)
+// AND the concrete, per-build image it in turn depends on (e.g.
+// "linux-image-6.11.0-1004-oem"). Both match isKernelImagePackage's "linux-image"
+// prefix, so naively collecting every match here would report two "replacement
+// kernels" for a single valid meta-driven swap. isLinuxImageMetaAlias filters the
+// alias out whenever a concrete image is also present, so only the real bootable
+// image is returned; the alias is kept only as a fallback when it is the sole
+// "linux-image"-prefixed match found (so a genuinely ambiguous/empty result is
+// never manufactured by over-filtering).
+func kernelImagesIn(sets ...[]ResolvedPackage) []string {
+	seen := map[string]bool{}
+	var images, aliases []string
+	for _, set := range sets {
+		for _, rp := range set {
+			n := strings.TrimSpace(rp.Name)
+			if n == "" || !isKernelImagePackage(n) || seen[n] {
+				continue
+			}
+			seen[n] = true
+			if isLinuxImageMetaAlias(n) {
+				aliases = append(aliases, n)
+				continue
+			}
+			images = append(images, n)
+		}
+	}
+	if len(images) == 0 {
+		images = aliases
+	}
+	sort.Strings(images)
+	return images
+}
+
+// kernelImageVersion returns the Version recorded for a package name across the
+// given resolved sets, or "" if the name is not found in any of them.
+func kernelImageVersion(name string, sets ...[]ResolvedPackage) string {
+	for _, set := range sets {
+		for _, rp := range set {
+			if strings.TrimSpace(rp.Name) == name {
+				return strings.TrimSpace(rp.Version)
+			}
+		}
+	}
+	return ""
+}
+
+// rpmKernelComponentPrefixes are the subset of kernelImagePackagePrefixes that
+// name an individual rpm per-build kernel package. "linux-image" is deliberately
+// excluded: unlike rpm's "kernel"/"kernel-core" pair (which always share one
+// NEVRA), a same-Version match between two Debian packages does not establish
+// they are the same build — see isSameKernelBuildComponent.
+var rpmKernelComponentPrefixes = []string{
+	"kernel-image",
+	"kernel-core",
+	"kernel",
+}
+
+// isRpmKernelComponentPackage reports whether name is one of the recognized rpm
+// per-build kernel component packages (see rpmKernelComponentPrefixes).
+func isRpmKernelComponentPackage(name string) bool {
+	if kernelSafeExactNames[strings.ToLower(strings.TrimSpace(name))] {
 		return false
 	}
-	return resolvedHasKernelImage(resolved) || resolvedHasKernelImage(closure)
+	return matchesPackagePrefix(name, rpmKernelComponentPrefixes)
+}
+
+// isSameKernelBuildComponent reports whether candidate is a verified companion of
+// concrete within the SAME rpm kernel build: rpm's "kernel" tracking package and
+// its "kernel-core" companion (the package that actually carries the bootable
+// image) always share one NEVRA, so a request naming one must also authorize the
+// other's own install/upgrade and must not count it as an independent second
+// kernel. This is deliberately narrow to the verified rpm pairing — NOT a bare
+// "same Version" shortcut — since neither its package-manager family nor its
+// name/component scoping may be relaxed:
+//   - family: rpm (PackageManagerDNF) only. Debian's own alias/concrete pairing
+//     is resolved by NAME through kernelImagesIn, not by version, because a deb
+//     meta and its concrete dependency do not reliably share a version string;
+//     applying a same-version shortcut there could instead pair two
+//     independently built images that coincidentally share one.
+//   - name: both concrete and candidate must be recognized rpm kernel component
+//     names (isRpmKernelComponentPackage), never any isKernelImagePackage match —
+//     otherwise a distinct rpm kernel build that happens to share a version
+//     string with the chosen one would be wrongly treated as a companion.
+func isSameKernelBuildComponent(family PackageManager, concrete, concreteVersion, candidate, candidateVersion string) bool {
+	if family != PackageManagerDNF || concreteVersion == "" || candidateVersion == "" {
+		return false
+	}
+	if !isRpmKernelComponentPackage(concrete) || !isRpmKernelComponentPackage(candidate) {
+		return false
+	}
+	return candidateVersion == concreteVersion
+}
+
+// isLinuxImageMetaAlias reports whether a "linux-image-"-prefixed name is a
+// flavor alias (e.g. "linux-image-generic", "linux-image-oem-24.04") rather than
+// a concrete, per-build bootable image (e.g. "linux-image-6.11.0-1004-oem" or
+// "linux-image-6.8.0-40-generic"). A concrete image's version segment right after
+// the prefix always starts with a digit; an alias's flavor name starts with a
+// letter. Ubuntu also ships a parallel "unsigned" variant of the concrete image
+// (e.g. "linux-image-unsigned-6.17.0-1017-oem"), so that optional segment is
+// stripped before the digit check, or it would be misread as a flavor name. Names
+// outside the "linux-image-" prefix (rpm's bare "kernel"/"kernel-core", which
+// carry no such alias tier) are never aliases here.
+func isLinuxImageMetaAlias(name string) bool {
+	const prefix = "linux-image-"
+	if !strings.HasPrefix(name, prefix) {
+		return false
+	}
+	rest := strings.TrimPrefix(name[len(prefix):], "unsigned-")
+	return rest == "" || rest[0] < '0' || rest[0] > '9'
+}
+
+// replacementKernelImages returns the concrete bootable kernel-image packages that
+// overlayPolicy.replaceKernel.package resolves to. The request may name an exact
+// package or use the resolver's glob syntax (*, ?, [...]). The result drives both the
+// exactly-one-kernel invariant enforced in EvaluatePreflight and the removal
+// authorization: a request that resolves to zero kernels (a typo, or a non-kernel
+// package) or to several (an over-broad glob) is rejected there rather than silently
+// purging the baseline kernel family.
+//
+// An EXACT request is classified by name (matching the historical behavior): a name
+// that is itself a bootable kernel image supplies that kernel directly — valid whether
+// it is being installed or is already present in the baseline (a removal-only swap) —
+// EXCEPT a Debian flavor alias (e.g. "linux-image-generic"), which is resolved to its
+// concrete per-build image the same way the glob/meta paths are, so it is never
+// treated as a package distinct from the concrete image the extra-kernel-image check
+// below expects; a kernel meta of another family (e.g. linux-oem) supplies the
+// bootable kernel image its resolution pulls into the install set or closure.
+//
+// A GLOB request is resolved against CONCRETE package names — first those in the
+// install set and its closure, so the swap logic never treats a raw pattern as a
+// package: matched names that are bootable kernel images ARE the replacement kernels;
+// if none are but the pattern matches a kernel meta, the bootable image its resolution
+// pulls in is used instead. This prevents an over-broad pattern such as
+// "kernel-headers*" (which matches only a userspace package) from being mistaken for a
+// bootable kernel and authorizing removal of the real baseline kernel. The baseline is
+// consulted ONLY when the install set and closure produced no concrete match at all
+// (the removal-only case, where the requested kernel is already installed) — never
+// combined with a resolved match, since an ordinary same-flavor upgrade would
+// otherwise make the old (not-yet-removed) baseline kernel and the newly resolved one
+// both match the glob and look ambiguous.
+func replacementKernelImages(request string, resolved, closure []ResolvedPackage, sliceA map[string]BaselinePackage) []string {
+	request = strings.TrimSpace(request)
+	if request == "" {
+		return nil
+	}
+
+	if !strings.ContainsAny(request, "*?[") {
+		if isKernelImagePackage(request) {
+			if isLinuxImageMetaAlias(request) {
+				if imgs := kernelImagesIn(resolved, closure); len(imgs) > 0 {
+					return imgs
+				}
+			}
+			return []string{request}
+		}
+		if isKernelFamilyPackage(request) {
+			return kernelImagesIn(resolved, closure)
+		}
+		return nil
+	}
+
+	// Glob: resolve against the concrete package names we know will be present.
+	seen := map[string]bool{}
+	var matched []string
+	add := func(name string) {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] || !matchReplacementRequest(request, name) {
+			return
+		}
+		seen[name] = true
+		matched = append(matched, name)
+	}
+	for _, rp := range resolved {
+		add(rp.Name)
+	}
+	for _, rp := range closure {
+		add(rp.Name)
+	}
+
+	imgSeen := map[string]bool{}
+	var images []string
+	// metaOrAliasMatched tracks a matched kernel-family meta (e.g. "linux-oem") OR a
+	// matched Debian flavor ALIAS (e.g. "linux-image-generic"): neither is itself
+	// bootable, so either is resolved through kernelImagesIn to find the concrete
+	// per-build image it depends on, exactly like the exact-request path above. A
+	// glob such as "linux-image-[g]eneric" that matches only the alias must not
+	// return the alias name directly — kernelImagesIn's alias-filtering is what
+	// keeps that concrete dependency from later being misread as a second kernel.
+	metaOrAliasMatched := false
+	for _, m := range matched {
+		switch {
+		case isKernelImagePackage(m):
+			if isLinuxImageMetaAlias(m) {
+				metaOrAliasMatched = true
+				continue
+			}
+			if !imgSeen[m] {
+				imgSeen[m] = true
+				images = append(images, m)
+			}
+		case isKernelFamilyPackage(m):
+			metaOrAliasMatched = true
+		}
+	}
+	if len(images) > 0 {
+		sort.Strings(images)
+		return images
+	}
+	if metaOrAliasMatched {
+		return kernelImagesIn(resolved, closure)
+	}
+	// Resolution (install set + closure) produced no concrete match at all — this is
+	// the removal-only case, where the requested kernel is already installed and
+	// nothing new is being resolved. Only THEN fall back to the baseline: consulting
+	// it unconditionally would make an ordinary same-flavor upgrade look ambiguous,
+	// since the old (not-yet-removed) baseline kernel and the newly resolved one can
+	// both match a glob like "linux-image-*-oem".
+	for name := range sliceA {
+		if !matchReplacementRequest(request, name) || !isKernelImagePackage(name) || imgSeen[name] {
+			continue
+		}
+		imgSeen[name] = true
+		images = append(images, name)
+	}
+	sort.Strings(images)
+	return images
 }
 
 // classifyConflicts turns each declared Conflicts:/Breaks: (deb) or Conflicts:
@@ -1267,6 +1636,9 @@ func describeViolation(v PolicyViolation) string {
 	}
 	if v.Rule == ruleReplaceKernelInvalid {
 		msg += " (overlayPolicy.replaceKernel.package must resolve to a bootable kernel image so a kernel remains after the swap; name a kernel package such as linux-image-<flavour> and ensure a repository provides it)"
+	}
+	if v.Rule == ruleReplaceKernelAmbig {
+		msg += " (overlayPolicy.replaceKernel.package must resolve to exactly one bootable kernel image; narrow the pattern so it matches a single kernel)"
 	}
 	if a.ConflictWith != "" && a.Type == ActionConflict {
 		msg += fmt.Sprintf(" (conflicts with %q)", a.ConflictWith)

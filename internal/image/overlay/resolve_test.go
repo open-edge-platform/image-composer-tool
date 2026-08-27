@@ -306,6 +306,44 @@ func TestResolveOverlayPackages_UpgradeScopeIncludesRequiredDep(t *testing.T) {
 	}
 }
 
+func TestResolveOverlayPackages_UpgradeScopeIncludesSelectedAlternative(t *testing.T) {
+	backend := &fakeBackend{
+		fam: PackageManagerAPT,
+		closure: []ospackage.PackageInfo{
+			{PkgName: "app", Version: "1.0", Arch: "amd64", URL: "https://r/app.deb", RequiresVer: []string{"libcodec-a (= 2.0) | libcodec-b (= 2.0)"}},
+			{PkgName: "libcodec-a", Version: "2.0", Arch: "amd64", URL: "https://r/libcodec-a_20.deb"},
+		},
+		arts: []string{"app.deb", "libcodec-a_20.deb"},
+	}
+	template := &config.ImageTemplate{
+		Target:       config.TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "amd64"},
+		SystemConfig: config.SystemConfig{Packages: []string{"app"}},
+		OverlayPolicy: &config.OverlayPolicy{
+			PackageOperation: config.OverlayPackageOpAdditiveAndUpgrade,
+			AllowUpgrade:     true,
+		},
+	}
+	info := &BaselineInfo{OS: "ubuntu", Arch: "amd64", PackageManager: PackageManagerAPT, PackageType: pkgTypeDeb}
+	baseline := []BaselinePackage{{Name: "libcodec-a", Version: "1.0", Arch: "amd64", Installed: true}}
+
+	var plan *ResolutionPlan
+	withStubbedResolution(t, backend, []config.ProviderRepoConfig{debProviderRepo()}, nil, func() {
+		var err error
+		plan, err = ResolveOverlayPackages(template, info, baseline)
+		if err != nil {
+			t.Fatalf("ResolveOverlayPackages: %v", err)
+		}
+	})
+
+	gotInstall := make([]string, 0, len(plan.ToInstall))
+	for _, pkg := range plan.ToInstall {
+		gotInstall = append(gotInstall, pkg.Name)
+	}
+	if !reflect.DeepEqual(gotInstall, []string{"app", "libcodec-a"}) {
+		t.Errorf("toInstall = %v, want [app libcodec-a]", gotInstall)
+	}
+}
+
 // TestResolveOverlayPackages_AdditiveOnlyLeavesPresentUntouched confirms the
 // default additive-only policy still prunes a present package from the seed and
 // never upgrades it, even when the repo offers a newer version.
@@ -681,6 +719,26 @@ func TestOverlayRequestedPackages_ReplaceKernel(t *testing.T) {
 	nilPolicy := &config.ImageTemplate{SystemConfig: config.SystemConfig{Packages: []string{"curl"}}}
 	if got := overlayRequestedPackages(nilPolicy); !reflect.DeepEqual(got, []string{"curl"}) {
 		t.Errorf("requested = %v, want [curl]", got)
+	}
+}
+
+// TestOverlayRequestedPackages_ReplaceKernelAdditionalPackages confirms
+// replaceKernel.additionalPackages entries are folded into the requested set
+// alongside package, trimmed, so they flow through the same resolve path.
+func TestOverlayRequestedPackages_ReplaceKernelAdditionalPackages(t *testing.T) {
+	template := &config.ImageTemplate{
+		SystemConfig: config.SystemConfig{Packages: []string{"curl"}},
+		OverlayPolicy: &config.OverlayPolicy{
+			ReplaceKernel: &config.ReplaceKernel{
+				Package:            "linux-image-6.11.0-1004-oem",
+				AdditionalPackages: []string{" linux-headers-6.11.0-1004-oem ", "linux-modules-extra-6.11.0-1004-oem", ""},
+			},
+		},
+	}
+	got := overlayRequestedPackages(template)
+	want := []string{"curl", "linux-headers-6.11.0-1004-oem", "linux-image-6.11.0-1004-oem", "linux-modules-extra-6.11.0-1004-oem"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("requested = %v, want %v", got, want)
 	}
 }
 
@@ -1094,16 +1152,18 @@ func TestBuildResolutionPlan_CarriesPackageMetadata(t *testing.T) {
 	// emitting a degraded entry (missing supplier/checksum/description).
 	closure := []ospackage.PackageInfo{
 		{
-			Name:        "tree",
-			PkgName:     "tree",
-			Type:        "deb",
-			Version:     "2.1.1-2ubuntu3",
-			Arch:        "amd64",
-			URL:         "http://archive.ubuntu.com/ubuntu/pool/universe/t/tree/tree_2.1.1-2ubuntu3_amd64.deb",
-			Description: "displays an indented directory tree",
-			Origin:      "Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>",
-			License:     "GPL-2.0",
-			Checksums:   []ospackage.Checksum{{Algorithm: "SHA256", Value: "deadbeef"}},
+			Name:               "tree",
+			PkgName:            "tree",
+			Type:               "deb",
+			Version:            "2.1.1-2ubuntu3",
+			Arch:               "amd64",
+			URL:                "http://archive.ubuntu.com/ubuntu/pool/universe/t/tree/tree_2.1.1-2ubuntu3_amd64.deb",
+			Description:        "displays an indented directory tree",
+			Origin:             "Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>",
+			License:            "GPL-2.0",
+			Checksums:          []ospackage.Checksum{{Algorithm: "SHA256", Value: "deadbeef"}},
+			InstalledSizeBytes: 2097152,
+			HasInstalledSize:   true,
 		},
 	}
 
@@ -1126,5 +1186,11 @@ func TestBuildResolutionPlan_CarriesPackageMetadata(t *testing.T) {
 	}
 	if len(got.Checksums) != 1 || got.Checksums[0].Value != "deadbeef" {
 		t.Errorf("checksums not carried into ToInstall: %+v", got.Checksums)
+	}
+	// Guards the only bridge between repo parsing and overlay auto-sizing: if this
+	// assignment is ever dropped, auto-sizing silently falls back to the disk.size
+	// ceiling instead of failing loudly.
+	if got.InstalledSizeBytes != 2097152 || !got.HasInstalledSize {
+		t.Errorf("InstalledSizeBytes/HasInstalledSize not carried into ToInstall: %+v", got)
 	}
 }

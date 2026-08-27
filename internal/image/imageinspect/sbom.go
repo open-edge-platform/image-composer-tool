@@ -212,10 +212,13 @@ func pickSBOMFileNameFromFAT(entries []fatDirEntry) (string, bool) {
 	return "", false
 }
 
-func pickSBOMFileNameFromFS(entries []os.FileInfo) (string, bool) {
+func pickSBOMFileNameFromFS[T interface {
+	Name() string
+	IsDir() bool
+}](entries []T) (string, bool) {
 	fileNames := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		if entry == nil || entry.IsDir() {
+		if entry.IsDir() {
 			continue
 		}
 		fileNames = append(fileNames, entry.Name())

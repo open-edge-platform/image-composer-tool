@@ -4,6 +4,30 @@
 **Date**: 2026-07-14
 **Updated**: 2026-07-16 — hardening story implemented (non-last-partition guard,
 LVM-specific rejection, resize tool pre-flight check, xfs marked best-effort).
+**Updated**: 2026-08-21 — added an **auto-size** path alongside the exact
+`disk.size` target: a new, mutually-exclusive `disk.maxSize` grows the baseline
+only as far as the resolved packages need (installed-size metadata measured
+against the baseline's real free space), capped at that ceiling. `disk.size`
+keeps its exact-size meaning. This supersedes the original "keyed solely on
+`disk.size`" sizing and the rejection of auto-sizing (see Alternatives).
+**Updated**: 2026-08-26 — `disk.maxSize` removed; `disk.size` is now the single
+disk-sizing field. In overlay mode it is always an auto-size **ceiling**
+(the grow target is computed from the resolved packages' installed-size
+metadata, capped at `disk.size` when set), not an exact target. `disk.size`
+keeps its exact-size meaning in create mode.
+**Updated**: 2026-08-26 (follow-up) — `overlayPolicy.allowDiskResize` dropped.
+`disk.maxSize` is reintroduced with different semantics: `disk.size` is now an
+unconditional **floor** the overlay resize always expands the baseline to
+first (no opt-in needed — the presence of `disk.size` itself is the user's
+consent to resize; a `disk.size` at or below the baseline is simply a no-op,
+never an error); `disk.maxSize`, when set, is the ceiling any further,
+package-driven growth beyond that floor may reach (must be greater than
+`disk.size`; requires `disk.size` to also be set). Package-driven growth
+beyond the floor always requires `disk.maxSize` to be set — an unset
+`disk.maxSize` caps growth at the floor itself, so an overlay is never resized
+further than what `disk.size`/`disk.maxSize` explicitly consented to (a build
+with neither field set never auto-grows beyond its current baseline size,
+regardless of package installed-size metadata).
 **Authors**: Image Composer Tool Team
 **Technical Area**: Image Composition / Overlay
 **Parent ADR**: [Baseline Image Overlay and ISO Composition Boundaries](adr-image-extension.md)
@@ -27,18 +51,23 @@ mutation of existing images").
 
 A first-cut implementation already exists in
 [`internal/image/overlay/resize.go`](../../internal/image/overlay/resize.go),
-gated behind an explicit `overlayPolicy.allowDiskResize` opt-in. This note
-documents the design that code implements, records the one safety gap that
-blocks calling it production-ready on arbitrary baselines (a non-last root
-partition) plus a minor LVM-message improvement, and files them as a hardening
-implementation story tracked in JIRA.
+gated by the presence of `disk.size`/`disk.maxSize` in the template (no
+separate opt-in flag). This note documents the design that code implements,
+records the one safety gap that blocks calling it production-ready on
+arbitrary baselines (a non-last root partition) plus a minor LVM-message
+improvement, and files them as a hardening implementation story tracked in
+JIRA.
 
 ---
 
 ## Context
 
-- Overlay adds packages but does **not** auto-grow the image. Sizing is keyed
-  solely on `disk.size` vs. the baseline's current size.
+- Overlay adds packages and can grow the image. `disk.size` is an unconditional
+  floor the resize always expands the baseline to first; further, package-driven
+  growth is auto-computed from the resolved packages' installed-size metadata
+  against the baseline's real free space, capped at `disk.maxSize` when it is
+  set (2026-08-26 follow-up; previously a single `disk.size` field served both
+  roles behind an `overlayPolicy.allowDiskResize` opt-in).
 - Without headroom the install step fails with "no space left on device".
 - The parent ADR lists "Resize the disk image where supported" and "Grow
   supported filesystems" as in-scope Phase-1 capabilities, and "Shrinking images
@@ -51,7 +80,7 @@ implementation story tracked in JIRA.
 
 ## Decision Points
 
-### 1. Schema shape — `disk.size` + an explicit opt-in flag
+### 1. Schema shape — `disk.size` floor + `disk.maxSize` ceiling
 
 **Options considered**
 
@@ -59,34 +88,46 @@ implementation story tracked in JIRA.
 | --- | --- | --- |
 | A. Reuse `disk.size` alone | Grow whenever `disk.size` > baseline | **Rejected** — silent structural change; violates immutability contract; surprised users (this was the original behavior and the reason for this note) |
 | B. New `overlayPolicy.resize` block | `{ enabled, growFilesystems }` (as sketched in parent ADR) | Rejected for v1 — `growFilesystems` has no meaningful `false` case (a grown partition with an ungrown FS exposes no capacity), so the sub-object is over-modelled |
-| C. `disk.size` + `overlayPolicy.allowDiskResize: bool` | Target from `disk.size`; a single boolean opt-in | **Recommended** |
+| C. `disk.size` + `overlayPolicy.allowDiskResize: bool` | Target from `disk.size`; a single boolean opt-in | **Superseded 2026-08-26 (follow-up)** — see Option D; `overlayPolicy.allowDiskResize` is removed |
+| D. `disk.size` (floor) + `disk.maxSize` (ceiling), no opt-in flag | Floor expand always runs when `disk.size` is set; further, package-driven growth is capped at `disk.maxSize` when it is also set | **Recommended (current decision, 2026-08-26 follow-up)** |
 
-**Recommendation: Option C.** The target size already has a home (`disk.size`)
+**Recommendation: Option D.** Option C (`disk.size` + `overlayPolicy.allowDiskResize`)
+was the original recommendation: the target size already had a home (`disk.size`)
 and a shared unit parser (`imagedisc.TranslateSizeStrToBytes`, accepting
-`"6GiB"`, `"8GB"`, …). All that is missing is *consent*. A single boolean keeps
-the surface minimal and fits the existing `overlayPolicy` block, whose other
-controls (`packageOperation`, `conflictPolicy`) are likewise small, explicit
-opt-ins — `allowDiskResize` would be its first boolean gate. (Note: downgrade
-and removal are *not* user-facing `overlayPolicy` flags; they are internal
-policy fields that the schema deliberately rejects, so they set no precedent
-here.) Growing the partition without growing the filesystem is never useful, so
-the two are one atomic operation with no separate flag.
+`"6GiB"`, `"8GB"`, …), and a single boolean kept the surface minimal alongside
+`overlayPolicy`'s other small, explicit opt-ins (`packageOperation`,
+`conflictPolicy`). That design is now superseded: `disk.size`/`disk.maxSize`
+are themselves the user's explicit consent to resize, so the separate
+`allowDiskResize` gate added a redundant opt-in without changing what the user
+had to declare. Removing it collapses two fields (`disk.size` +
+`allowDiskResize`) plus the auto-size ceiling back down to the two sizing
+fields alone. Growing the partition without growing the filesystem is never
+useful, so the two remain one atomic operation with no separate flag.
 
 ```yaml
 disk:
-  size: 6GiB            # target; grow-only relative to the baseline
-
-overlayPolicy:
-  allowDiskResize: true # explicit consent; default false
+  size: 6GiB       # mandatory floor; the overlay always expands to this first
+  maxSize: 12GiB   # optional ceiling for further package-driven growth (must be > size)
 ```
 
 Semantics:
-- `disk.size` unset **or** ≤ baseline → no-op (resize never needed; opt-in not required).
-- `disk.size` > baseline **and** `allowDiskResize: false` (default) → **hard error** with remediation text.
-- `disk.size` > baseline **and** `allowDiskResize: true` → grow.
+- `disk.size` unset **or** ≤ baseline → no floor-expand (a no-op unless packages need more, see below).
+- `disk.size` > baseline → the baseline is unconditionally expanded to `disk.size` first; no opt-in is required.
+- Once at the floor, package-driven growth beyond it is estimated from resolved packages' installed-size metadata, but **only when `disk.maxSize` is set** — it is then capped at `disk.maxSize`. Without `disk.maxSize`, growth never extends past the floor, however much room the packages need.
+- `disk.maxSize` must always be greater than `disk.size`, and requires `disk.size` to also be set.
 
-The schema uses `additionalProperties: false`, so the flag must be declared in
-`OverlayPolicy` in both the Go struct and `os-image-template.schema.json`.
+> **Superseded 2026-08-21 — auto-size added, then 2026-08-26 — unified on
+> `disk.size`, then 2026-08-26 (follow-up) — split back into `disk.size` (floor)
+> + `disk.maxSize` (ceiling), dropping `allowDiskResize`.** The grow target is
+> computed from the resolved packages' installed-size metadata measured
+> against the baseline's real free space (credited with the headroom the floor
+> expand itself adds), capped at `disk.maxSize` — but only when `disk.maxSize`
+> is set at all; unset, growth stops at the floor regardless of package need.
+> See the 2026-08-26 update notes and Alternatives.
+
+`disk.maxSize` is declared alongside `disk.size` in `DiskConfig`, in both the
+Go struct and `os-image-template.schema.json`; `overlayPolicy` no longer carries
+a resize-related field.
 
 ### 2. Supported filesystems (v1)
 
@@ -170,8 +211,7 @@ is a fresh user-owned copy, lowering the dirty-FS risk.
 
 | Failure mode | Required behavior (v1) | Status |
 | --- | --- | --- |
-| `disk.size` > baseline but no opt-in | Hard error naming `allowDiskResize`, before touching disk | ✅ implemented |
-| Requested size ≤ current | No-op with logged reason | ✅ implemented |
+| Requested size ≤ current | No-op with logged reason (this covers `disk.size` at or below the baseline — it is a satisfied floor, not an error) | ✅ implemented |
 | Requested size unparseable / > int64 max | Hard error | ✅ implemented |
 | Root partition is **not** the last partition | Hard error before `growpart`; do not resize | ✅ implemented (`assertRootIsLastPartition`) |
 | LVM logical-volume root | Detect and hard error | ✅ LVM-specific rejection in `analyzeLayout` |
@@ -213,8 +253,9 @@ tooling, and file a **JIRA hardening story** for the guard gaps and validation.
 baselines by rejecting layouts it cannot handle, rather than mis-resizing them.
 
 **Acceptance criteria**
-1. ✅ `overlayPolicy.allowDiskResize` is documented in schema + templates; a grow
-   without it is a clear hard error. *(done — verified)*
+1. ✅ `disk.size` (floor) and `disk.maxSize` (ceiling) are documented in schema +
+   templates; `disk.maxSize` must be greater than `disk.size` and requires it to
+   be set. *(done — verified)*
 2. ✅ Resize **refuses** (clear error, no disk mutation) when the root partition
    is not the last partition on the disk. *(primary safety gap —
    `assertRootIsLastPartition`)*
@@ -249,8 +290,9 @@ wiring (0.5). Add **+3 points** if the optional pre/post fsck (AC 7) and an xfs
 CI baseline are pulled into the same story rather than split.
 
 If the team instead decides resize is not needed near-term, **the hardening
-story stays a backlog placeholder** and the existing code remains behind its
-default-off `allowDiskResize` flag (safe: default is no resize).
+story stays a backlog placeholder** and the existing code remains gated behind
+the presence of `disk.size`/`disk.maxSize` in the template (safe: unset fields
+mean no resize).
 
 ---
 
@@ -263,7 +305,7 @@ default-off `allowDiskResize` flag (safe: default is no resize).
 | GPT backup header not moved | Table invalid on grown disk | `sgdisk -e` before `growpart` (implemented) |
 | Dirty ext filesystem | `resize2fs` aborts | Tool errors clearly; optional pre-`e2fsck` (AC7) |
 | Tool missing in build env | Runtime failure late in build | ✅ pre-flight `checkResizeToolsAvailable` before mutation (AC4) |
-| Silent grow surprises user | Unexpected layout change | Default-off `allowDiskResize`; hard error otherwise (implemented) |
+| Silent grow surprises user | Unexpected layout change | `disk.size`/`disk.maxSize` are themselves the explicit consent; shrink and unparseable/oversized values still hard-error |
 | xfs path unexercised | Undetected regression | ✅ Marked best-effort/untested in docs (no shipping xfs baseline) |
 
 ---
@@ -272,8 +314,16 @@ default-off `allowDiskResize` flag (safe: default is no resize).
 
 - **`overlayPolicy.resize` sub-object** (parent ADR sketch): rejected for v1 —
   `growFilesystems: false` has no useful semantics; a single boolean is clearer.
-- **Auto-size from package footprint**: rejected — non-deterministic, hides real
-  disk sizing from the template; resize stays keyed on explicit `disk.size`.
+- **Auto-size from package footprint**: originally rejected as non-deterministic,
+  but **adopted 2026-08-21** as the grow-target computation. In overlay mode the
+  input is deterministic given the resolved plan and the baseline: the estimate
+  sums the packages' repo-reported installed sizes (Debian `Installed-Size`, RPM
+  `<size installed=…>`) with a fixed overhead factor and margin, and measures the
+  baseline's real free space. It was initially exposed as a separate,
+  mutually-exclusive `disk.maxSize` ceiling field, alongside an exact-target
+  `disk.size`; **2026-08-26** dropped `disk.maxSize` and unified on `disk.size` as
+  the single field, acting as a ceiling on the auto-sized grow in overlay mode. See
+  the 2026-08-26 update note.
 - **`parted`/`sfdisk` instead of `growpart`**: rejected — more sector math, more
   failure surface, for no gain over the purpose-built tool.
 - **Always allow grow when `disk.size` larger** (original behavior): rejected —

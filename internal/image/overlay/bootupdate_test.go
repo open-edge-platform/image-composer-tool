@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
 )
 
 // stubSysfsMounts swaps the sysfs mount/unmount seams (shared with the install
@@ -31,7 +33,7 @@ func TestRegenerateBoot_SkipsWhenNothingInstalled(t *testing.T) {
 		{Installed: nil},
 	}
 	for _, ir := range cases {
-		if err := RegenerateBoot(&BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root", ir, nil, false); err != nil {
+		if err := RegenerateBoot(nil, &BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root", ir, nil, false); err != nil {
 			t.Errorf("RegenerateBoot(%+v): unexpected error %v", ir, err)
 		}
 	}
@@ -79,7 +81,7 @@ func TestRegenerateBoot_SelectsGeneratorByWhatIsInstalled(t *testing.T) {
 			var gotCmd, gotRoot string
 			bootRegenExec = func(cmd, root string) (string, error) { gotCmd, gotRoot = cmd, root; return "", nil }
 
-			err := RegenerateBoot(&BaselineInfo{PackageManager: tt.family}, "/mnt/root", &InstallResult{Installed: []string{"curl"}}, nil, false)
+			err := RegenerateBoot(nil, &BaselineInfo{PackageManager: tt.family}, "/mnt/root", &InstallResult{Installed: []string{"curl"}}, nil, false)
 			if err != nil {
 				t.Fatalf("RegenerateBoot: %v", err)
 			}
@@ -93,6 +95,129 @@ func TestRegenerateBoot_SelectsGeneratorByWhatIsInstalled(t *testing.T) {
 				t.Errorf("sysfs mount/umount = %d/%d, want 1/1", *mounts, *umounts)
 			}
 		})
+	}
+}
+
+// replaceKernelTemplate builds a minimal template requesting the given
+// enableExtraModules under overlayPolicy.replaceKernel.
+func replaceKernelTemplate(enableExtraModules string) *config.ImageTemplate {
+	return &config.ImageTemplate{
+		OverlayPolicy: &config.OverlayPolicy{
+			ReplaceKernel: &config.ReplaceKernel{
+				Package:            "linux-image-6.11.0-1004-oem",
+				EnableExtraModules: enableExtraModules,
+			},
+		},
+	}
+}
+
+// TestRegenerateBoot_EnableExtraModulesDracut asserts that when
+// replaceKernel.enableExtraModules is set and dracut is the selected generator,
+// the modules are passed via --add-drivers on the same regeneration command.
+func TestRegenerateBoot_EnableExtraModulesDracut(t *testing.T) {
+	origExec := bootRegenExec
+	t.Cleanup(func() { bootRegenExec = origExec })
+	presentTools(t, "dracut")
+	stubSysfsMounts(t)
+	var gotCmd string
+	bootRegenExec = func(cmd, _ string) (string, error) { gotCmd = cmd; return "", nil }
+
+	err := RegenerateBoot(replaceKernelTemplate("intel_vpu uas"), &BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root",
+		&InstallResult{Installed: []string{"linux-image-6.11.0-1004-oem"}}, nil, false)
+	if err != nil {
+		t.Fatalf("RegenerateBoot: %v", err)
+	}
+	if !strings.Contains(gotCmd, "--regenerate-all") || !strings.Contains(gotCmd, "--add-drivers") || !strings.Contains(gotCmd, "intel_vpu uas") {
+		t.Errorf("dracut command = %q, want --regenerate-all and --add-drivers with the requested modules", gotCmd)
+	}
+}
+
+// TestRegenerateBoot_EnableExtraModulesUpdateInitramfs asserts that when
+// replaceKernel.enableExtraModules is set and update-initramfs is the selected
+// generator (no --add-drivers equivalent), each module is appended to
+// /etc/initramfs-tools/modules before the generator itself runs.
+func TestRegenerateBoot_EnableExtraModulesUpdateInitramfs(t *testing.T) {
+	origExec := bootRegenExec
+	t.Cleanup(func() { bootRegenExec = origExec })
+	presentTools(t, "update-initramfs")
+	stubSysfsMounts(t)
+	var gotCmds []string
+	bootRegenExec = func(cmd, _ string) (string, error) { gotCmds = append(gotCmds, cmd); return "", nil }
+
+	err := RegenerateBoot(replaceKernelTemplate("intel_vpu uas"), &BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root",
+		&InstallResult{Installed: []string{"linux-image-6.11.0-1004-oem"}}, nil, false)
+	if err != nil {
+		t.Fatalf("RegenerateBoot: %v", err)
+	}
+	if len(gotCmds) != 3 {
+		t.Fatalf("expected 2 module-append commands + 1 generator command, got %v", gotCmds)
+	}
+	for i, mod := range []string{"intel_vpu", "uas"} {
+		if !strings.Contains(gotCmds[i], "/etc/initramfs-tools/modules") || !strings.Contains(gotCmds[i], mod) {
+			t.Errorf("cmd[%d] = %q, want it to append %q to /etc/initramfs-tools/modules", i, gotCmds[i], mod)
+		}
+	}
+	if !strings.Contains(gotCmds[2], "update-initramfs") {
+		t.Errorf("last command = %q, want the update-initramfs generator run", gotCmds[2])
+	}
+}
+
+// TestRegenerateBoot_NoExtraModulesLeavesCommandUnchanged confirms an unset
+// enableExtraModules (the common case) does not alter the generator command.
+func TestRegenerateBoot_NoExtraModulesLeavesCommandUnchanged(t *testing.T) {
+	origExec := bootRegenExec
+	t.Cleanup(func() { bootRegenExec = origExec })
+	presentTools(t, "dracut")
+	stubSysfsMounts(t)
+	var gotCmd string
+	bootRegenExec = func(cmd, _ string) (string, error) { gotCmd = cmd; return "", nil }
+
+	err := RegenerateBoot(nil, &BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root", &InstallResult{Installed: []string{"curl"}}, nil, false)
+	if err != nil {
+		t.Fatalf("RegenerateBoot: %v", err)
+	}
+	if strings.Contains(gotCmd, "--add-drivers") {
+		t.Errorf("no enableExtraModules requested, but command gained --add-drivers: %q", gotCmd)
+	}
+}
+
+// TestRegenerateBoot_EnableExtraModulesBypassesNothingInstalledGate asserts that
+// enableExtraModules still triggers regeneration for a removal-only kernel swap
+// (the requested kernel is already installed, so InstallResult.Installed is
+// empty) — the case that would otherwise hit the "no packages added" skip gate
+// before enableExtraModules is ever read.
+func TestRegenerateBoot_EnableExtraModulesBypassesNothingInstalledGate(t *testing.T) {
+	ran := aptRegenProbes(t)
+
+	err := RegenerateBoot(replaceKernelTemplate("intel_vpu uas"), &BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root",
+		&InstallResult{Installed: nil}, nil, false)
+	if err != nil {
+		t.Fatalf("RegenerateBoot: %v", err)
+	}
+	if !*ran {
+		t.Error("enableExtraModules must regenerate even when nothing was installed (a removal-only swap)")
+	}
+}
+
+// TestRegenerateBoot_EnableExtraModulesNoGeneratorErrors asserts that
+// enableExtraModules with no supported generator present fails loudly, like
+// forceRegen, instead of silently dropping the requested modules.
+func TestRegenerateBoot_EnableExtraModulesNoGeneratorErrors(t *testing.T) {
+	origExec := bootRegenExec
+	origCmdExist := commandExistsFn
+	defer func() { bootRegenExec = origExec; commandExistsFn = origCmdExist }()
+
+	commandExistsFn = func(string, string) (bool, error) { return false, nil } // no generator present
+	called := false
+	bootRegenExec = func(string, string) (string, error) { called = true; return "", nil }
+
+	err := RegenerateBoot(replaceKernelTemplate("intel_vpu uas"), &BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root",
+		&InstallResult{Installed: nil}, nil, false)
+	if err == nil || !strings.Contains(err.Error(), "enableExtraModules") {
+		t.Fatalf("enableExtraModules with no generator must fail with an actionable error, got %v", err)
+	}
+	if called {
+		t.Error("no generator can run when none is present")
 	}
 }
 
@@ -110,7 +235,7 @@ func TestRegenerateBoot_ForceRegenNoGeneratorErrors(t *testing.T) {
 	called := false
 	bootRegenExec = func(string, string) (string, error) { called = true; return "", nil }
 
-	err := RegenerateBoot(&BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root",
+	err := RegenerateBoot(nil, &BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root",
 		&InstallResult{Installed: nil}, nil, true)
 	if err == nil || !strings.Contains(err.Error(), "pre-initramfs") {
 		t.Fatalf("forceRegen with no generator must fail with an actionable error, got %v", err)
@@ -129,7 +254,7 @@ func TestRegenerateBoot_SkipsWhenToolAbsent(t *testing.T) {
 	called := false
 	bootRegenExec = func(string, string) (string, error) { called = true; return "", nil }
 
-	err := RegenerateBoot(&BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root", &InstallResult{Installed: []string{"curl"}}, nil, false)
+	err := RegenerateBoot(nil, &BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root", &InstallResult{Installed: []string{"curl"}}, nil, false)
 	if err != nil {
 		t.Fatalf("absent generator must be a clean no-op, got %v", err)
 	}
@@ -147,24 +272,24 @@ func TestRegenerateBoot_GeneratorFailureSurfaces(t *testing.T) {
 	stubSysfsMounts(t)
 	bootRegenExec = func(string, string) (string, error) { return "", errors.New("dracut boom") }
 
-	err := RegenerateBoot(&BaselineInfo{PackageManager: PackageManagerDNF}, "/mnt/root", &InstallResult{Installed: []string{"vim"}}, nil, false)
+	err := RegenerateBoot(nil, &BaselineInfo{PackageManager: PackageManagerDNF}, "/mnt/root", &InstallResult{Installed: []string{"vim"}}, nil, false)
 	if err == nil || !strings.Contains(err.Error(), "dracut") {
 		t.Fatalf("a present-but-failing generator must surface, got %v", err)
 	}
 }
 
 func TestRegenerateBoot_UnsupportedFamily(t *testing.T) {
-	err := RegenerateBoot(&BaselineInfo{PackageManager: PackageManager("apk")}, "/mnt/root", &InstallResult{Installed: []string{"x"}}, nil, false)
+	err := RegenerateBoot(nil, &BaselineInfo{PackageManager: PackageManager("apk")}, "/mnt/root", &InstallResult{Installed: []string{"x"}}, nil, false)
 	if err == nil || !strings.Contains(err.Error(), "unsupported package manager") {
 		t.Fatalf("expected unsupported-family error, got %v", err)
 	}
 }
 
 func TestRegenerateBoot_NilGuards(t *testing.T) {
-	if err := RegenerateBoot(nil, "/mnt/root", &InstallResult{Installed: []string{"x"}}, nil, false); err == nil {
+	if err := RegenerateBoot(nil, nil, "/mnt/root", &InstallResult{Installed: []string{"x"}}, nil, false); err == nil {
 		t.Error("expected error for nil info")
 	}
-	if err := RegenerateBoot(&BaselineInfo{PackageManager: PackageManagerAPT}, "", &InstallResult{Installed: []string{"x"}}, nil, false); err == nil {
+	if err := RegenerateBoot(nil, &BaselineInfo{PackageManager: PackageManagerAPT}, "", &InstallResult{Installed: []string{"x"}}, nil, false); err == nil {
 		t.Error("expected error for empty root mount")
 	}
 }
@@ -208,7 +333,7 @@ func planWith(pkgs ...ResolvedPackage) *ResolutionPlan {
 func TestRegenerateBoot_ForceRegenBypassesGates(t *testing.T) {
 	t.Run("no packages installed", func(t *testing.T) {
 		ran := aptRegenProbes(t)
-		if err := RegenerateBoot(&BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root",
+		if err := RegenerateBoot(nil, &BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root",
 			&InstallResult{Installed: nil}, nil, true); err != nil {
 			t.Fatalf("RegenerateBoot: %v", err)
 		}
@@ -220,7 +345,7 @@ func TestRegenerateBoot_ForceRegenBypassesGates(t *testing.T) {
 		ran := aptRegenProbes(t)
 		plan := planWith(ResolvedPackage{Name: "curl", URL: "http://x/curl.deb"})
 		stubFileList(t, map[string][]string{"/cache/curl.deb": {"./usr/bin/curl"}}, nil)
-		if err := RegenerateBoot(&BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root",
+		if err := RegenerateBoot(nil, &BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root",
 			&InstallResult{Installed: []string{"curl"}}, plan, true); err != nil {
 			t.Fatalf("RegenerateBoot: %v", err)
 		}
@@ -241,7 +366,7 @@ func TestRegenerateBoot_SkipsPureUserspaceOverlay(t *testing.T) {
 		"/cache/vim.deb":  {"./usr/bin/vim", "./usr/share/vim/vimrc"},
 	}, nil)
 
-	if err := RegenerateBoot(&BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root",
+	if err := RegenerateBoot(nil, &BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root",
 		&InstallResult{Installed: []string{"curl", "vim"}}, plan, false); err != nil {
 		t.Fatalf("RegenerateBoot: %v", err)
 	}
@@ -262,7 +387,7 @@ func TestRegenerateBoot_RunsWhenBootRelevantContentAdded(t *testing.T) {
 			plan := planWith(ResolvedPackage{Name: "pkg", URL: "http://x/pkg.deb"})
 			stubFileList(t, map[string][]string{"/cache/pkg.deb": {"./usr/bin/pkg", path}}, nil)
 
-			if err := RegenerateBoot(&BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root",
+			if err := RegenerateBoot(nil, &BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root",
 				&InstallResult{Installed: []string{"pkg"}}, plan, false); err != nil {
 				t.Fatalf("RegenerateBoot: %v", err)
 			}
@@ -276,7 +401,7 @@ func TestRegenerateBoot_RunsWhenBootRelevantContentAdded(t *testing.T) {
 func TestRegenerateBoot_FailSafeRegenerates(t *testing.T) {
 	t.Run("nil plan", func(t *testing.T) {
 		ran := aptRegenProbes(t)
-		if err := RegenerateBoot(&BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root",
+		if err := RegenerateBoot(nil, &BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root",
 			&InstallResult{Installed: []string{"curl"}}, nil, false); err != nil {
 			t.Fatalf("RegenerateBoot: %v", err)
 		}
@@ -287,7 +412,7 @@ func TestRegenerateBoot_FailSafeRegenerates(t *testing.T) {
 	t.Run("missing download dir", func(t *testing.T) {
 		ran := aptRegenProbes(t)
 		plan := &ResolutionPlan{ToInstall: []ResolvedPackage{{Name: "curl", URL: "http://x/curl.deb"}}}
-		if err := RegenerateBoot(&BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root",
+		if err := RegenerateBoot(nil, &BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root",
 			&InstallResult{Installed: []string{"curl"}}, plan, false); err != nil {
 			t.Fatalf("RegenerateBoot: %v", err)
 		}
@@ -299,7 +424,7 @@ func TestRegenerateBoot_FailSafeRegenerates(t *testing.T) {
 		ran := aptRegenProbes(t)
 		plan := planWith(ResolvedPackage{Name: "curl", URL: "http://x/curl.deb"})
 		stubFileList(t, nil, map[string]bool{"/cache/curl.deb": true})
-		if err := RegenerateBoot(&BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root",
+		if err := RegenerateBoot(nil, &BaselineInfo{PackageManager: PackageManagerAPT}, "/mnt/root",
 			&InstallResult{Installed: []string{"curl"}}, plan, false); err != nil {
 			t.Fatalf("RegenerateBoot: %v", err)
 		}

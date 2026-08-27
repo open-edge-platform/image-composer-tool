@@ -256,6 +256,127 @@ func TestValidateBaseline(t *testing.T) {
 	}
 }
 
+// TestValidateBaselineDiskSizing confirms disk.size validates in both modes: an
+// exact size in create mode, a mandatory floor expanded to first in overlay mode.
+func TestValidateBaselineDiskSizing(t *testing.T) {
+	tests := []struct {
+		name     string
+		baseline *Baseline
+		disk     DiskConfig
+	}{
+		{
+			name:     "overlay with size is allowed",
+			baseline: &Baseline{Mode: BaselineModeOverlay, Source: &BaselineSource{Path: "/tmp/u.raw"}},
+			disk:     DiskConfig{Size: "24GiB"},
+		},
+		{
+			name: "create mode allows size",
+			disk: DiskConfig{Size: "24GiB"},
+		},
+		{
+			name:     "overlay with size and maxSize is allowed",
+			baseline: &Baseline{Mode: BaselineModeOverlay, Source: &BaselineSource{Path: "/tmp/u.raw"}},
+			disk:     DiskConfig{Size: "24GiB", MaxSize: "32GiB"},
+		},
+		{
+			// The create-mode maxSize-presence check trims whitespace like
+			// validateDiskMaxSize does, so a whitespace-only value is treated as
+			// unset here too, matching the raw JSON/API validator.
+			name: "whitespace-only maxSize in create mode is treated as unset",
+			disk: DiskConfig{MaxSize: "  "},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpl := &ImageTemplate{Baseline: tt.baseline, Disk: tt.disk}
+			if err := tmpl.validateBaseline(); err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+		})
+	}
+}
+
+// TestValidateBaselineDiskMaxSize confirms disk.maxSize is rejected in create
+// mode, requires disk.size to also be set in overlay mode, and must parse to a
+// byte value strictly greater than disk.size (checked numerically here, not
+// just presence, so an invalid template fails validation before any build work
+// starts).
+func TestValidateBaselineDiskMaxSize(t *testing.T) {
+	tests := []struct {
+		name     string
+		baseline *Baseline
+		disk     DiskConfig
+		wantErr  string
+	}{
+		{
+			name:    "maxSize in create mode is rejected",
+			disk:    DiskConfig{MaxSize: "32GiB"},
+			wantErr: "disk.maxSize is only supported when baseline.mode is",
+		},
+		{
+			name:     "maxSize without size in overlay mode is rejected",
+			baseline: &Baseline{Mode: BaselineModeOverlay, Source: &BaselineSource{Path: "/tmp/u.raw"}},
+			disk:     DiskConfig{MaxSize: "32GiB"},
+			wantErr:  "disk.maxSize requires disk.size to also be set",
+		},
+		{
+			name:     "maxSize equal to size is rejected",
+			baseline: &Baseline{Mode: BaselineModeOverlay, Source: &BaselineSource{Path: "/tmp/u.raw"}},
+			disk:     DiskConfig{Size: "24GiB", MaxSize: "24GiB"},
+			wantErr:  "disk.maxSize (25769803776 bytes) must be greater than disk.size (25769803776 bytes)",
+		},
+		{
+			name:     "maxSize smaller than size is rejected",
+			baseline: &Baseline{Mode: BaselineModeOverlay, Source: &BaselineSource{Path: "/tmp/u.raw"}},
+			disk:     DiskConfig{Size: "24GiB", MaxSize: "20GiB"},
+			wantErr:  "disk.maxSize (21474836480 bytes) must be greater than disk.size (25769803776 bytes)",
+		},
+		{
+			// 17179869216 * 1073741824 (1GiB) overflows uint64 and wraps to a
+			// small value that would otherwise slip past the maxSize > size check.
+			name:     "maxSize overflowing uint64 is rejected, not silently wrapped",
+			baseline: &Baseline{Mode: BaselineModeOverlay, Source: &BaselineSource{Path: "/tmp/u.raw"}},
+			disk:     DiskConfig{Size: "24GiB", MaxSize: "17179869216GiB"},
+			wantErr:  "size overflows the supported range",
+		},
+		{
+			// disk.size's format must be validated even when maxSize is unset, not
+			// only as a side effect of the maxSize > size comparison — otherwise a
+			// malformed disk.size only fails much later, in ResizeBaseline.
+			name:     "malformed size without maxSize is rejected",
+			baseline: &Baseline{Mode: BaselineModeOverlay, Source: &BaselineSource{Path: "/tmp/u.raw"}},
+			disk:     DiskConfig{Size: "not-a-size"},
+			wantErr:  "size format incorrect",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpl := &ImageTemplate{Baseline: tt.baseline, Disk: tt.disk}
+			err := tmpl.validateBaseline()
+			if err == nil {
+				t.Fatal("expected an error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("expected error to contain %q, got %q", tt.wantErr, err.Error())
+			}
+		})
+	}
+}
+
+// TestParseDiskSizeBytes_Overflow confirms the multiplication in
+// parseDiskSizeBytes fails closed on uint64 overflow rather than silently
+// wrapping to a small value.
+func TestParseDiskSizeBytes_Overflow(t *testing.T) {
+	if _, err := parseDiskSizeBytes("disk.size", "8GiB"); err != nil {
+		t.Errorf("parseDiskSizeBytes(8GiB): unexpected error %v", err)
+	}
+	if _, err := parseDiskSizeBytes("disk.maxSize", "17179869216GiB"); err == nil {
+		t.Fatal("expected an overflow error for 17179869216GiB")
+	} else if !strings.Contains(err.Error(), "overflows the supported range") {
+		t.Errorf("expected an overflow error, got: %v", err)
+	}
+}
+
 // TestValidateOverlaySystemConfig confirms that an overlay-mode template is
 // rejected when it sets any systemConfig section the overlay pipeline cannot
 // apply (hostname, network, initramfs, kernel, immutability, fde, bootloader),
@@ -579,7 +700,10 @@ func TestOverlayPolicyReplaceKernelValidation(t *testing.T) {
 		{"rejected under empty (defaults to additive-only)", "", "linux-image-6.11.0-1004-oem", true, "replaceKernel requires packageOperation"},
 		{"empty package rejected", OverlayPackageOpAdditiveAndUpgrade, "   ", true, "replaceKernel.package must be set"},
 		{"whitespace in package rejected", OverlayPackageOpAdditiveAndUpgrade, "linux image", true, "must not contain whitespace or shell metacharacters"},
+		{"embedded carriage return in package rejected", OverlayPackageOpAdditiveAndUpgrade, "linux\rimage", true, "must not contain whitespace or shell metacharacters"},
 		{"shell metachar in package rejected", OverlayPackageOpAdditiveAndUpgrade, "linux-image;reboot", true, "must not contain whitespace or shell metacharacters"},
+		{"glob wildcard package accepted", OverlayPackageOpAdditiveAndUpgrade, "linux-image-*", true, ""},
+		{"glob char class package accepted", OverlayPackageOpAdditiveAndUpgrade, "kernel-[0-9]*", true, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -614,6 +738,85 @@ func TestOverlayPolicyReplaceKernelDoesNotRequireRemoval(t *testing.T) {
 	}
 	if err := p.validate(); err != nil {
 		t.Fatalf("replaceKernel must not require allowPackageRemoval, got %v", err)
+	}
+}
+
+// TestOverlayPolicyReplaceKernelAdditionalPackagesValidation confirms validate()
+// applies the same non-empty, metacharacter-free rule to each
+// replaceKernel.additionalPackages entry as it does to package.
+func TestOverlayPolicyReplaceKernelAdditionalPackagesValidation(t *testing.T) {
+	cases := []struct {
+		name    string
+		extra   []string
+		wantErr string
+	}{
+		{"unset is fine", nil, ""},
+		{"valid headers package accepted", []string{"linux-headers-6.11.0-1004-oem"}, ""},
+		{"valid glob accepted", []string{"linux-headers-*"}, ""},
+		{"multiple valid entries accepted", []string{"linux-headers-6.11.0-1004-oem", "linux-modules-extra-6.11.0-1004-oem"}, ""},
+		{"empty entry rejected", []string{"   "}, "additionalPackages entries must not be empty"},
+		{"shell metachar rejected", []string{"linux-headers;reboot"}, "must not contain whitespace or shell metacharacters"},
+		{"whitespace rejected", []string{"linux headers"}, "must not contain whitespace or shell metacharacters"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := &OverlayPolicy{
+				PackageOperation: OverlayPackageOpAdditiveAndUpgrade,
+				ReplaceKernel: &ReplaceKernel{
+					Package:            "linux-image-6.11.0-1004-oem",
+					AdditionalPackages: c.extra,
+				},
+			}
+			err := p.validate()
+			if c.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+				t.Errorf("error = %v, want substring %q", err, c.wantErr)
+			}
+		})
+	}
+}
+
+// TestOverlayPolicyReplaceKernelEnableExtraModulesValidation confirms validate()
+// allowlists replaceKernel.enableExtraModules to module names and separating
+// spaces, since it is interpolated into an initramfs-generator shell command.
+func TestOverlayPolicyReplaceKernelEnableExtraModulesValidation(t *testing.T) {
+	cases := []struct {
+		name    string
+		modules string
+		wantErr string
+	}{
+		{"unset is fine", "", ""},
+		{"single module accepted", "intel_vpu", ""},
+		{"multiple modules accepted", "intel_vpu uas", ""},
+		{"dotted/dashed module names accepted", "my-mod my.mod", ""},
+		{"shell metachar rejected", "intel_vpu; reboot", "must contain only module names"},
+		{"embedded quote rejected", "intel_vpu' uas", "must contain only module names"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := &OverlayPolicy{
+				PackageOperation: OverlayPackageOpAdditiveAndUpgrade,
+				ReplaceKernel: &ReplaceKernel{
+					Package:            "linux-image-6.11.0-1004-oem",
+					EnableExtraModules: c.modules,
+				},
+			}
+			err := p.validate()
+			if c.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+				t.Errorf("error = %v, want substring %q", err, c.wantErr)
+			}
+		})
 	}
 }
 

@@ -252,35 +252,25 @@ type stringError struct{ s string }
 func (e *stringError) Error() string { return e.s }
 
 // TestNegative_ResizeShrink covers the grow-only resize guard: a target smaller
-// than the current image must be rejected with "shrink not supported", and a grow
-// without the allowDiskResize opt-in must name that opt-in.
+// than the current image must be rejected with "shrink not supported".
 func TestNegative_ResizeShrink(t *testing.T) {
 	current := int64(100 << 20)
-	p := writeSizedFile(t, current)
 
 	tests := []struct {
 		name           string
-		target         string
-		allowResize    bool
+		targetBytes    int64
 		wantSubstrings []string
 	}{
 		{
 			name:           "shrink is rejected",
-			target:         "50MiB",
-			allowResize:    false,
+			targetBytes:    50 << 20,
 			wantSubstrings: []string{"shrink not supported", "grow-only"},
-		},
-		{
-			name:           "grow without opt-in is rejected",
-			target:         "200MiB",
-			allowResize:    false,
-			wantSubstrings: []string{"allowDiskResize"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := planResize(p, tt.target, tt.allowResize)
+			_, err := planResize(current, tt.targetBytes)
 			assertActionableError(t, err, tt.wantSubstrings...)
 		})
 	}

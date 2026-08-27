@@ -422,12 +422,18 @@ func (p *debian13) downloadImagePkgs(template *config.ImageTemplate) error {
 			i+1, cfg.Name, cfg.PkgList, cfg.PkgPrefix, cfg.Priority)
 	}
 
+	debutils.ConfigureKernelSelection(template.GetKernelPackages(), template.GetKernel().Version)
+	defer debutils.ConfigureKernelSelection(nil, "")
+
 	fullPkgList, fullPkgListBom, err := debutils.DownloadPackagesComplete(pkgList, pkgCacheDir, template.DotFilePath, pkgSources, template.DotSystemOnly)
 	if err != nil {
 		return fmt.Errorf("failed to download packages: %w", err)
 	}
 	template.FullPkgList = fullPkgList
 	template.FullPkgListBom = fullPkgListBom
+	// Narrow a kernel glob to the concrete package selected during download so the
+	// install step (including an installer ISO's separate process) installs only it.
+	template.ResolvedKernelPackages = debutils.ExpandKernelInstallNames(template.GetKernelPackages(), debutils.SelectedKernelPackages())
 
 	return nil
 }

@@ -227,9 +227,9 @@ func TestResolveDependenciesWithDirectAndAlternativeDeps(t *testing.T) {
 		t.Fatalf("ResolveDependencies failed: %v", err)
 	}
 
-	// Should resolve main-pkg, logsave, and e2fsprogs with latest version (direct dependency takes priority)
+	// Should resolve main-pkg and e2fsprogs with latest version. e2fsprogs also
+	// satisfies the logsave alternative, so logsave does not need to be installed.
 	foundMainPkg := false
-	foundLogsave := false
 	foundE2fsprogs := false
 	e2fsprogsVersion := ""
 
@@ -239,8 +239,6 @@ func TestResolveDependenciesWithDirectAndAlternativeDeps(t *testing.T) {
 		switch pkg.Name {
 		case "main-pkg":
 			foundMainPkg = true
-		case "logsave":
-			foundLogsave = true
 		case "e2fsprogs":
 			foundE2fsprogs = true
 			e2fsprogsVersion = pkg.Version
@@ -251,16 +249,50 @@ func TestResolveDependenciesWithDirectAndAlternativeDeps(t *testing.T) {
 		t.Error("main-pkg not found in resolved dependencies")
 	}
 
-	if !foundLogsave {
-		t.Error("logsave not found in resolved dependencies")
-	}
-
 	if !foundE2fsprogs {
 		t.Error("e2fsprogs not found in resolved dependencies")
 	} else {
 		// Should pick the latest version since e2fsprogs is a direct dependency without constraints
 		if e2fsprogsVersion != "1.47.0-2.4~exp1ubuntu4" {
 			t.Errorf("Expected e2fsprogs version 1.47.0-2.4~exp1ubuntu4 (latest), got %s", e2fsprogsVersion)
+		}
+	}
+}
+
+func TestResolveDependenciesAlternativeSatisfiedByResolvedProvides(t *testing.T) {
+	packages := []ospackage.PackageInfo{
+		{
+			Name:     "libcurl4-openssl-dev",
+			Version:  "8.5.0-2ubuntu10.12",
+			URL:      "http://example.com/pool/main/c/curl/libcurl4-openssl-dev_8.5.0-2ubuntu10.12_amd64.deb",
+			Type:     "deb",
+			Provides: []string{"libcurl-dev", "libcurl-ssl-dev", "libcurl4-dev"},
+		},
+		{
+			Name:     "libcurl4-gnutls-dev",
+			Version:  "8.5.0-2ubuntu10.12",
+			URL:      "http://example.com/pool/main/c/curl/libcurl4-gnutls-dev_8.5.0-2ubuntu10.12_amd64.deb",
+			Type:     "deb",
+			Provides: []string{"libcurl-dev", "libcurl-ssl-dev", "libcurl4-dev"},
+		},
+		{
+			Name:        "needs-curl-dev",
+			Version:     "1.0.0",
+			URL:         "http://example.com/pool/main/n/needs-curl-dev/needs-curl-dev_1.0.0_amd64.deb",
+			Type:        "deb",
+			Requires:    []string{"libcurl4-gnutls-dev"},
+			RequiresVer: []string{"libcurl4-gnutls-dev | libcurl-ssl-dev"},
+		},
+	}
+
+	resolved, err := ResolveDependencies([]ospackage.PackageInfo{packages[0], packages[2]}, packages)
+	if err != nil {
+		t.Fatalf("ResolveDependencies failed: %v", err)
+	}
+
+	for _, pkg := range resolved {
+		if pkg.Name == "libcurl4-gnutls-dev" {
+			t.Fatalf("resolved conflicting primary alternative %q even though libcurl4-openssl-dev provides libcurl-ssl-dev", pkg.Name)
 		}
 	}
 }

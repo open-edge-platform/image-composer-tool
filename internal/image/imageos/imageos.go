@@ -619,8 +619,15 @@ func getRpmPkgInstallList(template *config.ImageTemplate) []string {
 func getDebPkgInstallList(template *config.ImageTemplate) []string {
 	var head, middle, tail []string
 	var imagePkgList []string
-	// Exclude the template.EssentialPkgList as it is already installed by mmdebstrap
-	imagePkgList = append(imagePkgList, template.KernelPkgList...)
+	// Exclude the template.EssentialPkgList as it is already installed by mmdebstrap.
+	// Prefer the concrete kernel packages resolved at build time (persisted on the
+	// template so an installer ISO's separate process installs only that kernel); a
+	// glob would otherwise be re-expanded against apt and pull every matching kernel.
+	if len(template.ResolvedKernelPackages) > 0 {
+		imagePkgList = append(imagePkgList, template.ResolvedKernelPackages...)
+	} else {
+		imagePkgList = append(imagePkgList, template.KernelPkgList...)
+	}
 	imagePkgList = append(imagePkgList, template.SystemConfig.Packages...)
 	imagePkgList = append(imagePkgList, template.BootloaderPkgList...)
 

@@ -3,7 +3,7 @@
 The ICT is a tool for creating customized OS images from pre-built packages. It takes an image template file (YAML) as input and produces bootable OS images in raw or ISO formats suitable for deployment on bare metal systems, virtual machines, and edge devices.
 
 The tool uses a layered configuration approach: OS-specific default templates provide base settings for supported distributions (Azure Linux,
-[Edge Microvisor Toolkit](https://docs.openedgeplatform.intel.com/2026.0/edge-microvisor-toolkit/index.html),
+[Edge Microvisor Toolkit](https://docs.openedgeplatform.intel.com/2026.2/edge-microvisor-toolkit/index.html),
 Wind River eLxr, Ubuntu, and Red Hat-compatible distributions), which are merged with user-provided image templates to generate the final image specification. This approach simplifies the process by handling OS-specific details automatically while allowing full customization when needed.
 
 Pre-built packages are fetched securely from distribution-specific remote repositories over HTTPS, with automatic dependency resolution and GPG signature verification. The tool maintains local caches for both packages and reusable chroot environments to optimize build performance across multiple image builds.

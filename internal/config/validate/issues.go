@@ -70,6 +70,9 @@ func ValidateUserTemplateIssues(data []byte) []Issue {
 	if err := validateFDEConstraints(data); err != nil {
 		issues = append(issues, Issue{Path: "systemConfig.fde.passphraseFile", Message: err.Error(), Severity: SeverityError})
 	}
+	if path, err := validateDiskMaxSizeConstraints(data); err != nil {
+		issues = append(issues, Issue{Path: path, Message: err.Error(), Severity: SeverityError})
+	}
 
 	return issues
 }

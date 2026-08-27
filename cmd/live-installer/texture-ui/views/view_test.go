@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gdamore/tcell"
+	"github.com/gdamore/tcell/v2"
 	"github.com/open-edge-platform/image-composer-tool/cmd/live-installer/texture-ui/views/confirmview"
 	"github.com/open-edge-platform/image-composer-tool/cmd/live-installer/texture-ui/views/diskview"
 	"github.com/open-edge-platform/image-composer-tool/cmd/live-installer/texture-ui/views/finishview"

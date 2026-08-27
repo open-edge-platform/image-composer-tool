@@ -102,6 +102,110 @@ systemConfig:
 	}
 }
 
+// overlayReplaceKernelTemplate renders a minimal overlay template with the given
+// replaceKernel.package value, for schema-level (not just Go validate()) checks.
+func overlayReplaceKernelTemplate(pkg string) string {
+	return fmt.Sprintf(`image:
+  name: t
+  version: "1.0.0"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+baseline:
+  mode: overlay
+  source:
+    path: /path/to/base.img
+    format: raw
+overlayPolicy:
+  packageOperation: additive-and-upgrade
+  replaceKernel:
+    package: %s
+systemConfig:
+  name: t
+`, pkg)
+}
+
+// TestOverlayReplaceKernelSchemaAcceptsGlobWildcards confirms the JSON schema
+// itself (not just internal/config's Go validate()) accepts the same glob
+// wildcards in replaceKernel.package as an ordinary systemConfig package, and
+// still rejects a disallowed character/whitespace, so the schema and the Go
+// check cannot silently drift apart.
+func TestOverlayReplaceKernelSchemaAcceptsGlobWildcards(t *testing.T) {
+	cases := []struct {
+		name    string
+		pkg     string
+		wantErr bool
+	}{
+		{"star glob", "linux-image-*-oem", false},
+		{"question mark glob", "linux-image-?-oem", false},
+		{"bracket range", "kernel-[0-9]*", false},
+		{"disallowed shell metacharacter", "linux-image;reboot", true},
+		{"embedded whitespace", "linux image", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var raw interface{}
+			if err := yaml.Unmarshal([]byte(overlayReplaceKernelTemplate(c.pkg)), &raw); err != nil {
+				t.Fatalf("yml parsing error: %v", err)
+			}
+			dataJSON, err := json.Marshal(raw)
+			if err != nil {
+				t.Fatalf("json marshaling error: %v", err)
+			}
+			err = ValidateImageTemplateJSON(dataJSON)
+			if c.wantErr && err == nil {
+				t.Errorf("expected replaceKernel.package %q to fail schema validation", c.pkg)
+			}
+			if !c.wantErr && err != nil {
+				t.Errorf("expected replaceKernel.package %q to pass schema validation, got: %v", c.pkg, err)
+			}
+		})
+	}
+}
+
+// TestOverlayReplaceKernelSchemaAcceptsAdditionalFields confirms the JSON schema
+// accepts replaceKernel.additionalPackages, enableExtraModules, and version
+// together (not just the Go-level checks in internal/config).
+func TestOverlayReplaceKernelSchemaAcceptsAdditionalFields(t *testing.T) {
+	tmpl := `image:
+  name: t
+  version: "1.0.0"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+baseline:
+  mode: overlay
+  source:
+    path: /path/to/base.img
+    format: raw
+overlayPolicy:
+  packageOperation: additive-and-upgrade
+  replaceKernel:
+    package: linux-image-6.11.0-1004-oem
+    additionalPackages:
+      - linux-headers-6.11.0-1004-oem
+    enableExtraModules: "intel_vpu uas"
+    version: "6.11.0-1004-oem"
+systemConfig:
+  name: t
+`
+	var raw interface{}
+	if err := yaml.Unmarshal([]byte(tmpl), &raw); err != nil {
+		t.Fatalf("yml parsing error: %v", err)
+	}
+	dataJSON, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("json marshaling error: %v", err)
+	}
+	if err := ValidateImageTemplateJSON(dataJSON); err != nil {
+		t.Errorf("expected replaceKernel with additionalPackages/enableExtraModules/version to pass schema validation, got: %v", err)
+	}
+}
+
 func TestInvalidImageTemplate(t *testing.T) {
 	v := loadFile(t, "/testdata/invalid-image.yml")
 
@@ -1497,5 +1601,150 @@ systemConfig:
 	}
 	if err := ValidateImageTemplateJSON(invalidJSON); err == nil {
 		t.Fatal("expected validation to fail when fde.enabled is true without passphraseFile")
+	}
+}
+
+// overlayDiskSizeTemplate renders a minimal overlay template with the given
+// disk.size/disk.maxSize values (either may be omitted).
+func overlayDiskSizeTemplate(size, maxSize string) string {
+	tmpl := `image:
+  name: t
+  version: "1.0.0"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+baseline:
+  mode: overlay
+  source:
+    path: /path/to/base.img
+    format: raw
+disk:
+  name: test
+`
+	if size != "" {
+		tmpl += fmt.Sprintf("  size: %s\n", size)
+	}
+	if maxSize != "" {
+		tmpl += fmt.Sprintf("  maxSize: %s\n", maxSize)
+	}
+	tmpl += `systemConfig:
+  name: t
+`
+	return tmpl
+}
+
+func TestValidateImageTemplateJSON_DiskMaxSize(t *testing.T) {
+	tests := []struct {
+		name        string
+		size        string
+		maxSize     string
+		wantErr     bool
+		errContains string
+	}{
+		{name: "unset both", size: "", maxSize: "", wantErr: false},
+		{name: "size only", size: "8GiB", maxSize: "", wantErr: false},
+		{name: "maxSize greater than size", size: "8GiB", maxSize: "16GiB", wantErr: false},
+		{name: "maxSize without size", size: "", maxSize: "16GiB", wantErr: true, errContains: "requires disk.size"},
+		{name: "maxSize equal to size", size: "8GiB", maxSize: "8GiB", wantErr: true, errContains: "must be greater than"},
+		{name: "maxSize less than size", size: "8GiB", maxSize: "4GiB", wantErr: true, errContains: "must be greater than"},
+		{name: "overflowing maxSize", size: "1GiB", maxSize: "9000000000GiB", wantErr: true, errContains: "overflows"},
+		{
+			// disk.size's format must be validated even when maxSize is unset, not
+			// only as a side effect of the maxSize > size comparison.
+			name: "malformed size without maxSize", size: "not-a-size", maxSize: "",
+			wantErr: true, errContains: "size format incorrect",
+		},
+	}
+	for _, c := range tests {
+		t.Run(c.name, func(t *testing.T) {
+			var raw interface{}
+			if err := yaml.Unmarshal([]byte(overlayDiskSizeTemplate(c.size, c.maxSize)), &raw); err != nil {
+				t.Fatalf("yaml parse: %v", err)
+			}
+			dataJSON, err := json.Marshal(raw)
+			if err != nil {
+				t.Fatalf("json marshal: %v", err)
+			}
+			err = ValidateImageTemplateJSON(dataJSON)
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got none")
+				}
+				if !strings.Contains(err.Error(), c.errContains) {
+					t.Errorf("error = %q, want it to contain %q", err.Error(), c.errContains)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("expected no error, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateImageTemplateJSON_DiskMaxSizeRequiresOverlayMode(t *testing.T) {
+	tmpl := `image:
+  name: t
+  version: "1.0.0"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+disk:
+  name: test
+  size: 8GiB
+  maxSize: 16GiB
+systemConfig:
+  name: t
+`
+	var raw interface{}
+	if err := yaml.Unmarshal([]byte(tmpl), &raw); err != nil {
+		t.Fatalf("yaml parse: %v", err)
+	}
+	dataJSON, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("json marshal: %v", err)
+	}
+	if err := ValidateImageTemplateJSON(dataJSON); err == nil {
+		t.Fatal("expected disk.maxSize in create mode (no baseline.mode: overlay) to fail validation")
+	}
+}
+
+// TestValidateUserTemplateJSON_DiskMaxSizeExtendsDefersMode confirms a
+// document with `extends` set is not rejected for disk.maxSize without
+// baseline.mode: overlay declared locally — mode may be inherited from the
+// parent layer being folded by LoadAndMergeTemplate. Uses the user (minimal)
+// schema, the same one a raw `extends` layer validates against before folding;
+// the full/merged schema rejects `extends` outright since it's stripped by then.
+func TestValidateUserTemplateJSON_DiskMaxSizeExtendsDefersMode(t *testing.T) {
+	tmpl := `extends: parent.yml
+image:
+  name: t
+  version: "1.0.0"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+disk:
+  name: test
+  size: 8GiB
+  maxSize: 16GiB
+systemConfig:
+  name: t
+`
+	var raw interface{}
+	if err := yaml.Unmarshal([]byte(tmpl), &raw); err != nil {
+		t.Fatalf("yaml parse: %v", err)
+	}
+	dataJSON, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("json marshal: %v", err)
+	}
+	if err := ValidateUserTemplateJSON(dataJSON); err != nil {
+		t.Errorf("expected disk.maxSize with extends set to defer the mode check, got: %v", err)
 	}
 }

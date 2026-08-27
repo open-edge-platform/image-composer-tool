@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -12,6 +13,66 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/image/imagedisc"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
+
+// Disk-space estimation constants for the auto-sized overlay grow. The estimate is
+// deliberately conservative: it is cheaper to over-provision (the disk.maxSize
+// ceiling, when set, still caps it) than to under-provision and fail the install
+// with ENOSPC.
+const (
+	// overlayInstallOverheadNum/Den scale the summed Installed-Size to account for
+	// per-file 4 KiB-cluster rounding (the ext4 block size the create-mode maker
+	// uses) plus filesystem metadata (journal, inode tables, reserved blocks). The
+	// package metadata reports only per-package totals, so exact rounding is not
+	// derivable — a flat 1.30× factor approximates it.
+	overlayInstallOverheadNum = 130
+	overlayInstallOverheadDen = 100
+	// overlayInstallMarginBytes is a fixed floor added on top of the scaled install
+	// size to cover space the package manifests do not reflect: initramfs
+	// regeneration (tens of MiB per kernel), apt/dpkg or rpm database growth, the
+	// regenerated GRUB config, and package-manager caches.
+	overlayInstallMarginBytes = 512 << 20 // 512 MiB
+	// mibBytes is one MiB, used to round a computed grow target up to a whole MiB.
+	mibBytes = int64(1 << 20)
+)
+
+// overlayFreeBytesFn reports the bytes currently available on the mounted baseline
+// root filesystem. It is a package var so tests can stub it deterministically
+// (mirroring the resizeExec / resizeToolExists seams). The default shells out to df
+// through resizeExec — consistent with the rest of this file, which shells out for
+// every disk operation — and reports the space available to an unprivileged user
+// (df's Avail column excludes root-reserved blocks), biasing the estimate toward
+// growing rather than under-provisioning.
+var overlayFreeBytesFn = func(rootMount string) (int64, error) {
+	out, err := resizeExec(fmt.Sprintf("df -B1 --output=avail %s", shell.QuoteArg(rootMount)))
+	if err != nil {
+		return 0, err
+	}
+	return parseDfAvail(out)
+}
+
+// parseDfAvail extracts the available-bytes number from `df -B1 --output=avail`
+// output, which is a header line ("Avail") followed by the byte count. It returns
+// the last field that parses as a non-negative integer, tolerating the leading
+// header and any surrounding whitespace.
+func parseDfAvail(out string) (int64, error) {
+	fields := strings.Fields(out)
+	for i := len(fields) - 1; i >= 0; i-- {
+		if n, err := strconv.ParseInt(fields[i], 10, 64); err == nil && n >= 0 {
+			return n, nil
+		}
+	}
+	return 0, fmt.Errorf("overlay resize: could not parse available space from df output %q", out)
+}
+
+// roundUpToMiB rounds n up to the next whole MiB (partition/filesystem grows align
+// naturally to large boundaries; a MiB-granular target avoids sub-block churn). A
+// non-positive n rounds to 0.
+func roundUpToMiB(n int64) int64 {
+	if n <= 0 {
+		return 0
+	}
+	return ((n + mibBytes - 1) / mibBytes) * mibBytes
+}
 
 // resizePlan is the deterministic, side-effect-free decision of whether and how
 // far to grow the baseline image. It is the unit-tested core of the resize stage.
@@ -41,29 +102,52 @@ var resizeToolExists = func(cmd string) (bool, error) {
 	return shell.IsCommandExist(cmd, shell.HostPath)
 }
 
-// ResizeBaseline performs an optional, GROW-ONLY resize of the overlaid baseline so
-// the final image matches a larger disk.size requested in the template. It never
-// shrinks (a smaller or unset target is a no-op) and it grows the existing root
-// partition and filesystem in place — it never repartitions or relocates the
-// bootloader, preserving the overlay immutability contract.
+// ResizeBaseline performs an optional, GROW-ONLY resize of the overlaid baseline
+// so it has room for the packages being installed. disk.size is expanded to
+// unconditionally first (a mandatory floor, not gated by any opt-in; a disk.size
+// at or below the baseline is already satisfied and is a no-op, not an error);
+// the resize then grows further, auto-sized from the resolved packages'
+// installed-size metadata measured against the baseline's real free space, but
+// only when disk.maxSize is set — package-driven growth beyond the floor needs
+// that explicit consent too, so an unset disk.maxSize caps growth at the floor
+// itself. It never shrinks: an unset or computed target no larger than the
+// baseline is a no-op. It grows the existing root partition and filesystem in
+// place — it never repartitions or relocates the bootloader, preserving the
+// overlay immutability contract.
 //
 // The sequence, when a grow is needed, is: extend the backing file, refresh the
 // loop device capacity, fix the GPT backup header, re-read the partition table,
 // grow the root partition, then grow its filesystem. ext{2,3,4} and xfs roots are
 // supported (matching the layouts the inspector accepts).
-func ResizeBaseline(template *config.ImageTemplate, ctx *Context, layout *Layout) error {
+func ResizeBaseline(template *config.ImageTemplate, ctx *Context, layout *Layout, resolvePlan *ResolutionPlan) error {
 	if template == nil || ctx == nil || layout == nil {
 		return fmt.Errorf("overlay resize: template, context, and layout are required")
 	}
 
-	target := strings.TrimSpace(template.GetDiskConfig().Size)
-	allowResize := template.OverlayPolicy != nil && template.OverlayPolicy.AllowDiskResize
-	plan, err := planResize(ctx.BaselineCopyPath, target, allowResize)
+	fi, err := os.Stat(ctx.BaselineCopyPath)
+	if err != nil {
+		return fmt.Errorf("overlay resize: failed to stat baseline copy %s: %w", ctx.BaselineCopyPath, err)
+	}
+	current := fi.Size()
+
+	dc := template.GetDiskConfig()
+	sizeFloor := strings.TrimSpace(dc.Size)
+	maxSizeCeiling := strings.TrimSpace(dc.MaxSize)
+
+	// Derive the effective target: disk.size expanded to first, then grown further
+	// to fit the resolved package set's estimated need (measured against the
+	// baseline's real free space), capped at disk.maxSize when it is set.
+	targetBytes, err := computeOverlayTarget(resolvePlan, current, layout.RootMount, sizeFloor, maxSizeCeiling)
 	if err != nil {
 		return err
 	}
-	if !plan.Grow {
-		log.Infof("Overlay resize: skipping (%s)", plan.Reason)
+
+	rp, err := planResize(current, targetBytes)
+	if err != nil {
+		return err
+	}
+	if !rp.Grow {
+		log.Infof("Overlay resize: skipping (%s)", rp.Reason)
 		return nil
 	}
 
@@ -90,14 +174,14 @@ func ResizeBaseline(template *config.ImageTemplate, ctx *Context, layout *Layout
 	}
 
 	log.Infof("Overlay resize: growing image from %d to %d bytes (root %s on %s part %s)",
-		plan.CurrentBytes, plan.TargetBytes, layout.RootDevice, disk, partNum)
+		rp.CurrentBytes, rp.TargetBytes, layout.RootDevice, disk, partNum)
 
 	// 1. Extend the backing file to the target size, in-process rather than via a
 	//    shell `truncate` (avoids shell parsing of the workspace path and drops a
 	//    host-tool dependency for a trivial file op). This is grow-only: os.Truncate
 	//    never shrinks here because planResize already guaranteed target > current.
 	//    The copy is user-owned, so no sudo is needed.
-	if err := os.Truncate(ctx.BaselineCopyPath, plan.TargetBytes); err != nil {
+	if err := os.Truncate(ctx.BaselineCopyPath, rp.TargetBytes); err != nil {
 		return fmt.Errorf("overlay resize: failed to grow backing file: %w", err)
 	}
 
@@ -132,42 +216,21 @@ func ResizeBaseline(template *config.ImageTemplate, ctx *Context, layout *Layout
 		return err
 	}
 
-	log.Infof("Overlay resize: grew root filesystem to fill %d bytes", plan.TargetBytes)
+	log.Infof("Overlay resize: grew root filesystem to fill %d bytes", rp.TargetBytes)
 	return nil
 }
 
-// planResize decides whether to grow the image at copyPath to the requested target
-// size. It is grow-only: an unset, unparseable-as-smaller, or not-larger target
-// yields Grow=false with a reason. It performs only a stat (to read the current
-// size); the size parsing is delegated to the shared imagedisc translator so units
-// match the rest of the tool ("4GiB", "8GB", ...).
-//
-// allowResize is the explicit opt-in (overlayPolicy.allowDiskResize). When
-// a grow would be required but the caller has not opted in, planResize returns an
-// error so the build fails with a clear message rather than silently changing the
-// baseline partition layout. A target that is unset or not larger than the current
-// image never needs the opt-in: it is a no-op regardless.
-func planResize(copyPath, target string, allowResize bool) (resizePlan, error) {
-	if target == "" {
-		return resizePlan{Reason: "no disk.size requested"}, nil
-	}
-
-	fi, err := os.Stat(copyPath)
-	if err != nil {
-		return resizePlan{}, fmt.Errorf("overlay resize: failed to stat baseline copy %s: %w", copyPath, err)
-	}
-	current := fi.Size()
-
-	targetBytes, err := imagedisc.TranslateSizeStrToBytes(target)
-	if err != nil {
-		return resizePlan{}, fmt.Errorf("overlay resize: invalid disk.size %q: %w", target, err)
-	}
-	// TranslateSizeStrToBytes returns a uint64; guard before narrowing to the int64
-	// used for the file size, since a value above math.MaxInt64 would wrap to a
-	// negative number and be misread as "smaller than current" (silently skipping a
-	// requested grow). Such a size is nonsensical for a disk image, so reject it.
-	if targetBytes > math.MaxInt64 {
-		return resizePlan{}, fmt.Errorf("overlay resize: requested disk.size %q (%d bytes) is too large", target, targetBytes)
+// planResize decides whether to grow a baseline image of size `current` to
+// `targetBytes`. It is a pure, grow-only decision: a zero (unset) or
+// exactly-equal target yields Grow=false with a reason; a smaller (nonzero)
+// target is rejected as an unsupported shrink; a larger target always grows —
+// disk.size/disk.maxSize are themselves the user's explicit consent, so no
+// separate opt-in flag gates the grow. The byte target is computed by the
+// caller (computeOverlayTarget) so this stays free of I/O and unit-testable
+// directly.
+func planResize(current, targetBytes int64) (resizePlan, error) {
+	if targetBytes == 0 {
+		return resizePlan{CurrentBytes: current, Reason: "no disk.size requested and no package sizes to compute one"}, nil
 	}
 
 	// A target smaller than the current image is a shrink request. Overlay resize
@@ -175,37 +238,281 @@ func planResize(copyPath, target string, allowResize bool) (resizePlan, error) {
 	// filesystem and partition first, which overlay mode does not do — so reject it
 	// with an actionable error rather than silently ignoring the smaller size (which
 	// would leave the user believing the image was shrunk).
-	if int64(targetBytes) < current {
+	if targetBytes < current {
 		return resizePlan{}, fmt.Errorf(
-			"overlay resize: shrink not supported: requested disk.size %q (%d bytes) is smaller than the "+
+			"overlay resize: shrink not supported: requested/computed size %d bytes is smaller than the "+
 				"current baseline image (%d bytes); overlay resize is grow-only. Remove or raise disk.size to "+
 				"at least the baseline size to proceed",
-			target, targetBytes, current)
+			targetBytes, current)
 	}
 
 	// An equal target needs no resize: it is a legitimate no-op, not a shrink.
-	if int64(targetBytes) == current {
+	if targetBytes == current {
 		return resizePlan{
 			CurrentBytes: current,
 			Reason:       fmt.Sprintf("requested size %d == current size %d (no resize needed)", targetBytes, current),
 		}, nil
 	}
 
-	// A grow is required. Overlay mode preserves the baseline layout unless the
-	// user has explicitly opted in, so reject rather than resize behind their back.
-	if !allowResize {
-		return resizePlan{}, fmt.Errorf(
-			"overlay resize: disk.size %q (%d bytes) is larger than the baseline image (%d bytes), "+
-				"but growing the baseline is not permitted; set overlayPolicy.allowDiskResize: true "+
-				"to allow the overlay to grow the disk, or remove/lower disk.size to keep the baseline layout",
-			target, targetBytes, current)
-	}
-
 	return resizePlan{
 		Grow:         true,
 		CurrentBytes: current,
-		TargetBytes:  int64(targetBytes),
+		TargetBytes:  targetBytes,
 	}, nil
+}
+
+// resolveSizeBytes parses a disk size string (disk.size) into bytes, returning 0
+// when it is unset. Parsing is delegated to the shared imagedisc translator so
+// units match the rest of the tool ("4GiB", "8GB", ...). A value above
+// math.MaxInt64 is rejected: narrowed to the int64 used for file sizes it would
+// wrap negative and be misread as a shrink, silently skipping a requested grow.
+// field names the value ("disk.size") for error messages.
+func resolveSizeBytes(field, sizeStr string) (int64, error) {
+	if strings.TrimSpace(sizeStr) == "" {
+		return 0, nil
+	}
+	b, err := imagedisc.TranslateSizeStrToBytes(sizeStr)
+	if err != nil {
+		return 0, fmt.Errorf("overlay resize: invalid %s %q: %w", field, sizeStr, err)
+	}
+	if b > math.MaxInt64 {
+		return 0, fmt.Errorf("overlay resize: requested %s %q (%d bytes) is too large", field, sizeStr, b)
+	}
+	return int64(b), nil
+}
+
+// sumInstalledSizes sums the resolved packages' installed sizes, checked for
+// int64 overflow, and reports how many packages (if any) had no usable size —
+// distinguishing a complete estimate from a partial one for the caller. A
+// package's HasInstalledSize flag, not InstalledSizeBytes == 0, decides whether
+// its size is known: the metadata may legitimately report a real zero footprint,
+// which is not the same as not reporting a size at all. total is 0 for a nil
+// plan, letting the caller tell "no information" from "confirmed zero".
+func sumInstalledSizes(resolvePlan *ResolutionPlan) (sum int64, unknownCount, total int, err error) {
+	if resolvePlan == nil {
+		return 0, 0, 0, nil
+	}
+	total = len(resolvePlan.ToInstall)
+	for i := range resolvePlan.ToInstall {
+		pkg := resolvePlan.ToInstall[i]
+		if !pkg.HasInstalledSize || pkg.InstalledSizeBytes < 0 {
+			unknownCount++
+			continue
+		}
+		s := pkg.InstalledSizeBytes
+		if sum > math.MaxInt64-s {
+			return 0, 0, 0, fmt.Errorf("overlay resize: sum of resolved packages' installed sizes overflows int64; " +
+				"repository package metadata reports an implausibly large size")
+		}
+		sum += s
+	}
+	return sum, unknownCount, total, nil
+}
+
+// fallbackForIncompleteMetadata handles a resolved plan where only some packages
+// report an installed size: summing just the known ones would understate the
+// real need, so it is never treated as a complete estimate. It falls back to the
+// disk.maxSize ceiling (the safer, user-declared cap) when one is set, or fails
+// closed when not. applies is true when the caller should return (target, err)
+// immediately without computing an estimate.
+func fallbackForIncompleteMetadata(unknownCount, total int, ceilingSet bool, ceilingBytes int64) (target int64, applies bool, err error) {
+	if unknownCount == 0 {
+		return 0, false, nil
+	}
+	if !ceilingSet {
+		return 0, true, fmt.Errorf(
+			"overlay resize: %d of %d packages being installed report no installed-size metadata; "+
+				"the auto-size estimate would be incomplete and could under-provision the grow; set disk.maxSize "+
+				"as a ceiling to grow to a safe fixed cap instead", unknownCount, total)
+	}
+	log.Warnf("Overlay resize: %d of %d packages being installed report no installed-size metadata; "+
+		"the estimate would be incomplete, so growing straight to the disk.maxSize ceiling (%d bytes) instead",
+		unknownCount, total, ceilingBytes)
+	return ceilingBytes, true, nil
+}
+
+// estimateRequiredBytes scales the summed installed size by the conservative
+// overhead factor and adds the fixed margin, checked for int64 overflow. The
+// scaling uses ceiling (round-up) division so the estimate never under-shoots
+// due to integer truncation, keeping it conservative as intended.
+func estimateRequiredBytes(sumInstalled int64) (int64, error) {
+	// The guard covers both the ×num multiplication and the +(den-1) rounding
+	// term added below, so the ceiling division itself cannot overflow.
+	if sumInstalled > (math.MaxInt64-(overlayInstallOverheadDen-1))/overlayInstallOverheadNum {
+		return 0, fmt.Errorf("overlay resize: estimated install size overflows int64 scaling by the overhead factor; " +
+			"repository package metadata reports an implausibly large size")
+	}
+	scaled := (sumInstalled*overlayInstallOverheadNum + (overlayInstallOverheadDen - 1)) / overlayInstallOverheadDen
+	if scaled > math.MaxInt64-overlayInstallMarginBytes {
+		return 0, fmt.Errorf("overlay resize: estimated install size overflows int64 after adding the margin; " +
+			"repository package metadata reports an implausibly large size")
+	}
+	return scaled + overlayInstallMarginBytes, nil
+}
+
+// growTargetBytes rounds shortfall up to a whole MiB and adds it to current,
+// checked for int64 overflow at each step.
+func growTargetBytes(current, shortfall int64) (int64, error) {
+	if shortfall > math.MaxInt64-(mibBytes-1) {
+		return 0, fmt.Errorf("overlay resize: computed shortfall overflows int64 rounding up to a MiB boundary; " +
+			"repository package metadata reports an implausibly large size")
+	}
+	rounded := roundUpToMiB(shortfall)
+	if current > math.MaxInt64-rounded {
+		return 0, fmt.Errorf("overlay resize: computed grow target overflows int64; " +
+			"repository package metadata reports an implausibly large size")
+	}
+	return current + rounded, nil
+}
+
+// capAtCeiling caps target at ceilingBytes, which always bounds package-driven
+// growth (when disk.maxSize is unset, ceilingBytes is the disk.size floor, or
+// the raw baseline if disk.size is also unset). field names whichever of those
+// ceilingBytes actually is, for the warning message.
+func capAtCeiling(target, ceilingBytes int64, field string) int64 {
+	if target <= ceilingBytes {
+		return target
+	}
+	log.Warnf("Overlay resize: computed disk need (%d bytes) exceeds the %s (%d bytes); "+
+		"capping at it — the package install may fail with 'no space left on device'", target, field, ceilingBytes)
+	return ceilingBytes
+}
+
+// computeOverlayTarget derives the backing-file size the overlay should grow to.
+// It first expands to disk.size unconditionally (a mandatory floor: disk.size is
+// the user's explicit consent to resize, no separate opt-in is needed; a
+// disk.size at or below the baseline is already satisfied and is a no-op, not
+// an error), then grows further as the packages being installed need —
+// estimated from summed Installed-Size × overhead + a fixed margin, measured
+// against the baseline's real free space (adjusted for the headroom the floor
+// expand itself adds) — but ONLY when disk.maxSize is set: package-driven
+// growth beyond the floor needs that explicit consent too, so an unset
+// disk.maxSize caps growth at the floor itself (disk.size, or the raw baseline
+// when disk.size is also unset) rather than resizing without any user-declared
+// field at all. Returns the floor (a no-op when it equals `current`) when the
+// baseline already has room, or when a resolved plan has nothing left to
+// install. Falls back to the disk.maxSize ceiling (or the floor, if unset) when
+// no package in the plan has a known size at all (distinct from every package
+// confirming a real zero footprint, which is a complete estimate and proceeds
+// normally). When only some packages report a size, the partial sum would
+// understate the real need, so it falls back to disk.maxSize (if set) or fails
+// closed (if not) rather than auto-sizing from an incomplete estimate. All
+// arithmetic on repo-reported package sizes is checked for int64 overflow and
+// fails closed rather than silently wrapping negative.
+func computeOverlayTarget(resolvePlan *ResolutionPlan, current int64, rootMount, sizeStr, maxSizeStr string) (int64, error) {
+	sizeBytes, err := resolveSizeBytes("disk.size", sizeStr)
+	if err != nil {
+		return 0, err
+	}
+	// A size string is distinct from an unset one, so an explicit "disk.size: 0"
+	// is treated as a real (if useless) floor rather than "no floor".
+	sizeSet := strings.TrimSpace(sizeStr) != ""
+
+	maxSizeBytes, err := resolveSizeBytes("disk.maxSize", maxSizeStr)
+	if err != nil {
+		return 0, err
+	}
+	maxSizeSet := strings.TrimSpace(maxSizeStr) != ""
+
+	if maxSizeSet && maxSizeBytes <= sizeBytes {
+		return 0, fmt.Errorf(
+			"overlay resize: disk.maxSize (%d bytes) must be greater than disk.size (%d bytes)",
+			maxSizeBytes, sizeBytes)
+	}
+
+	// Step 1: unconditionally expand to disk.size first — the mandatory floor for
+	// everything that follows. disk.size at or below the baseline is already
+	// satisfied (grow-only never needs to act here), not an error.
+	floor := current
+	if sizeSet && sizeBytes > current {
+		floor = sizeBytes
+	}
+
+	// The ceiling any further, package-driven growth beyond the floor may reach.
+	// That growth requires disk.maxSize to be set; its absence caps growth at the
+	// floor itself, so an overlay is never resized beyond what disk.size/
+	// disk.maxSize explicitly consented to.
+	ceiling := floor
+	ceilingSet := false
+	if maxSizeSet {
+		if maxSizeBytes < floor {
+			return 0, fmt.Errorf(
+				"overlay resize: disk.maxSize (%d bytes) is smaller than the disk.size floor (%d bytes); "+
+					"remove or raise disk.maxSize", maxSizeBytes, floor)
+		}
+		ceiling = maxSizeBytes
+		ceilingSet = true
+	}
+
+	// A resolved plan with nothing to install (e.g. every requested package is
+	// already present) needs no headroom beyond the mandatory disk.size floor. A
+	// nil plan is distinct: it means no information, not "known to be empty", so
+	// it still falls through to the no-metadata ceiling fallback below.
+	if resolvePlan != nil && len(resolvePlan.ToInstall) == 0 {
+		return floor, nil
+	}
+
+	sumInstalled, unknownCount, total, err := sumInstalledSizes(resolvePlan)
+	if err != nil {
+		return 0, err
+	}
+
+	// No package in the plan reports a usable size at all (including a nil plan,
+	// total == 0): fall back to the disk.maxSize ceiling when set (grow straight
+	// to the declared cap), else stop at the disk.size floor. A plan whose
+	// packages are all confirmed zero-footprint (total > 0, unknownCount == 0,
+	// sumInstalled == 0) is a complete estimate, not this case, and falls through
+	// to the normal margin-only estimate below.
+	if unknownCount == total {
+		if ceilingSet {
+			log.Warnf("Overlay resize: no package being installed reports installed-size metadata; "+
+				"growing straight to the disk.maxSize ceiling (%d bytes)", ceiling)
+			return ceiling, nil
+		}
+		return floor, nil
+	}
+
+	if target, applies, err := fallbackForIncompleteMetadata(unknownCount, total, ceilingSet, ceiling); applies {
+		return target, err
+	}
+
+	required, err := estimateRequiredBytes(sumInstalled)
+	if err != nil {
+		return 0, err
+	}
+
+	free, err := overlayFreeBytesFn(rootMount)
+	if err != nil {
+		return 0, fmt.Errorf("overlay resize: failed to measure free space on %s: %w", rootMount, err)
+	}
+	// The mandatory floor expand (if any) adds (floor - current) bytes of free
+	// space once grown, ahead of the package-driven growth estimated here.
+	effectiveFree := free + (floor - current)
+
+	shortfall := required - effectiveFree
+	if shortfall <= 0 {
+		log.Infof("Overlay resize: baseline will have %d bytes free at %d bytes; estimated install needs %d — "+
+			"no additional grow required", effectiveFree, floor, required)
+		return floor, nil
+	}
+
+	target, err := growTargetBytes(floor, shortfall)
+	if err != nil {
+		return 0, err
+	}
+	// Name whichever field ceiling actually reflects, so the warning never blames
+	// the user for a field they never configured.
+	ceilingField := "current baseline image size"
+	switch {
+	case ceilingSet:
+		ceilingField = "disk.maxSize ceiling"
+	case sizeSet:
+		ceilingField = "disk.size floor"
+	}
+	target = capAtCeiling(target, ceiling, ceilingField)
+	log.Infof("Overlay resize: estimated install %d bytes (incl. overhead), %d free at %d bytes; growing image to %d bytes",
+		required, effectiveFree, floor, target)
+	return target, nil
 }
 
 // growFilesystem grows the root filesystem in place to fill its (already enlarged)
@@ -229,10 +536,11 @@ func growFilesystem(layout *Layout) error {
 
 // resizeToolsForFS returns the host commands the resize sequence shells out to
 // for the given root filesystem type. losetup/partx/growpart are always needed;
-// sgdisk is only used on GPT; resize2fs vs xfs_growfs depends on the FS. The
-// backing-file grow uses os.Truncate (no tool), so it is intentionally omitted.
+// parted backs up the partition-start safety probe; sgdisk is only used on GPT;
+// resize2fs vs xfs_growfs depends on the FS. The backing-file grow uses
+// os.Truncate (no tool), so it is intentionally omitted.
 func resizeToolsForFS(fsType, table string) []string {
-	tools := []string{"losetup", "partx", "growpart"}
+	tools := []string{"losetup", "partx", "growpart", "parted"}
 	if table == partitionTableGPT {
 		tools = append(tools, "sgdisk")
 	}
@@ -265,9 +573,9 @@ func checkResizeToolsAvailable(layout *Layout) error {
 		return fmt.Errorf(
 			"overlay resize: required tool(s) not found on the build host: %s; "+
 				"install them (growpart is in cloud-guest-utils, sgdisk in gdisk, "+
-				"resize2fs in e2fsprogs, xfs_growfs in xfsprogs, losetup/partx in util-linux) "+
-				"or remove/lower disk.size (optionally also set overlayPolicy.allowDiskResize: false) "+
-				"to keep the baseline layout and skip the resize",
+				"resize2fs in e2fsprogs, xfs_growfs in xfsprogs, losetup/partx in util-linux), "+
+				"or reduce the packages being installed (or use a baseline with enough free space) "+
+				"so the grow is not needed",
 			strings.Join(missing, ", "))
 	}
 	return nil
@@ -277,18 +585,12 @@ func checkResizeToolsAvailable(layout *Layout) error {
 // last partition (by on-disk start offset) on the loop device. growpart extends
 // a partition only into the free space that immediately follows it, so growing a
 // non-last root would run into — and corrupt — a following partition. It reads
-// each partition's START sector via lsblk and confirms none starts after the
-// root partition. It performs only reads; it never mutates the disk.
+// each partition's start offset and confirms none starts after the root
+// partition. It performs only reads; it never mutates the disk.
 func assertRootIsLastPartition(loopDevPath, rootDevice string) error {
-	cmd := fmt.Sprintf("lsblk -b --json -o PATH,START,TYPE %s", shell.QuoteArg(loopDevPath))
-	out, err := resizeExec(cmd)
+	starts, err := readPartitionStarts(loopDevPath)
 	if err != nil {
-		return fmt.Errorf("overlay resize: failed to read partition layout of %s: %w", loopDevPath, err)
-	}
-
-	starts, err := parsePartitionStarts(out)
-	if err != nil {
-		return fmt.Errorf("overlay resize: %w", err)
+		return err
 	}
 
 	rootStart, ok := starts[rootDevice]
@@ -308,11 +610,35 @@ func assertRootIsLastPartition(loopDevPath, rootDevice string) error {
 				reason: "overlay grow-only resize can only extend the last partition on the disk into the " +
 					"free space that follows it; growing a non-last root would corrupt the following partition",
 				remediation: "use a baseline whose root filesystem is the last partition on the disk, or " +
-					"remove/lower disk.size (or set overlayPolicy.allowDiskResize: false) to keep the baseline layout",
+					"reduce the packages being installed (or use a baseline with enough free space) so the grow " +
+					"is not needed",
 			}
 		}
 	}
 	return nil
+}
+
+func readPartitionStarts(loopDevPath string) (map[string]int64, error) {
+	cmd := fmt.Sprintf("lsblk -b --json -o PATH,START,TYPE %s", shell.QuoteArg(loopDevPath))
+	out, err := resizeExec(cmd)
+	if err == nil {
+		starts, parseErr := parsePartitionStarts(out)
+		if parseErr == nil {
+			return starts, nil
+		}
+		return nil, fmt.Errorf("overlay resize: %w", parseErr)
+	}
+
+	fallbackCmd := fmt.Sprintf("parted -sm %s unit B print", shell.QuoteArg(loopDevPath))
+	fallbackOut, fallbackErr := resizeExec(fallbackCmd)
+	if fallbackErr != nil {
+		return nil, fmt.Errorf("overlay resize: failed to read partition layout of %s with lsblk (%v) and parted (%w)", loopDevPath, err, fallbackErr)
+	}
+	starts, parseErr := parsePartedPartitionStarts(fallbackOut, loopDevPath)
+	if parseErr != nil {
+		return nil, fmt.Errorf("overlay resize: %w", parseErr)
+	}
+	return starts, nil
 }
 
 // parsePartitionStarts extracts the START sector offset of each partition node
@@ -364,6 +690,37 @@ func parsePartitionStarts(lsblkJSON string) (map[string]int64, error) {
 		return nil, parseErr
 	}
 	return starts, nil
+}
+
+func parsePartedPartitionStarts(partedOutput, diskPath string) (map[string]int64, error) {
+	starts := make(map[string]int64)
+	for _, line := range strings.Split(partedOutput, "\n") {
+		fields := strings.Split(strings.TrimSpace(line), ":")
+		if len(fields) < 2 {
+			continue
+		}
+		partNum, err := strconv.Atoi(fields[0])
+		if err != nil || partNum <= 0 {
+			continue
+		}
+		startField := strings.TrimSuffix(fields[1], "B")
+		start, err := strconv.ParseInt(startField, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("missing or unparseable start offset for partition %d in parted output", partNum)
+		}
+		starts[partitionPathForNumber(diskPath, partNum)] = start
+	}
+	if len(starts) == 0 {
+		return nil, fmt.Errorf("no partition starts found in parted output")
+	}
+	return starts, nil
+}
+
+func partitionPathForNumber(diskPath string, partNum int) string {
+	if len(diskPath) > 0 && unicode.IsDigit(rune(diskPath[len(diskPath)-1])) {
+		return fmt.Sprintf("%sp%d", diskPath, partNum)
+	}
+	return fmt.Sprintf("%s%d", diskPath, partNum)
 }
 
 // splitPartitionDevice splits a partition device node into its parent disk and

@@ -4,7 +4,7 @@
 package diskview
 
 import (
-	"github.com/gdamore/tcell"
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
 	"github.com/open-edge-platform/image-composer-tool/cmd/live-installer/texture-ui/views/diskview/autopartitionwidget"

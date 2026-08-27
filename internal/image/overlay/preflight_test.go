@@ -818,32 +818,391 @@ func TestEvaluatePreflight_KernelReplacementNonKernelWithForeignKernel(t *testin
 	}
 }
 
-// TestReplaceKernelSuppliesKernel covers the scoped bootable-kernel check: a direct
-// kernel image (installed or not), an rpm kernel, a kernel meta whose closure supplies
-// an image, and the rejection of a non-kernel replacement even with a foreign kernel.
-func TestReplaceKernelSuppliesKernel(t *testing.T) {
+// TestReplacementKernelImages covers the concrete-kernel resolver: a direct kernel
+// image (installed or not), an rpm kernel, a kernel meta whose closure supplies an
+// image, the rejection of a non-kernel replacement even with a foreign kernel, and the
+// glob cases — a wildcard matched to a single concrete kernel, an over-broad wildcard
+// matching several (ambiguous), and a wildcard that matches only a userspace package.
+func TestReplacementKernelImages(t *testing.T) {
 	kimg := []ResolvedPackage{{Name: "linux-image-6.11.0-1004-oem"}}
+	twoKernels := []ResolvedPackage{
+		{Name: "linux-image-6.11.0-1004-oem"},
+		{Name: "linux-image-6.11.0-1005-oem"},
+	}
+	headersOnly := []ResolvedPackage{{Name: "kernel-headers"}}
+	// A real meta closure commonly contains an intermediary image-alias package
+	// (e.g. "linux-image-oem-24.04") ALONGSIDE the concrete image it depends on
+	// (e.g. "linux-image-6.11.0-1004-oem"). Both match the "linux-image" prefix,
+	// so only the concrete one must be reported — the alias must not also count
+	// as a second, spurious "replacement kernel".
+	metaWithAlias := []ResolvedPackage{
+		{Name: "linux-image-oem-24.04"},
+		{Name: "linux-image-6.11.0-1004-oem"},
+	}
+	// An exact request can itself name a flavor alias (e.g. "linux-image-generic")
+	// rather than a meta package: it must resolve to the concrete image it depends on
+	// the same way a glob/meta request does, not be treated as a distinct package.
+	genericAlias := []ResolvedPackage{
+		{Name: "linux-image-generic"},
+		{Name: "linux-image-6.8.0-40-generic"},
+	}
+	baseline := baselineVersionIndex([]BaselinePackage{
+		installedDeb("linux-image-6.8.0-40-generic", "6.8.0-40"),
+	})
+	// A same-flavor upgrade: the old kernel is still in the baseline (not yet removed)
+	// while the new one has already been resolved. Both match "linux-image-*-oem", but
+	// only the resolved one must be reported — the baseline must not be consulted
+	// once resolution/closure already supplied a concrete match.
+	baselineSameFlavor := baselineVersionIndex([]BaselinePackage{
+		installedDeb("linux-image-6.8.0-40-oem", "6.8.0-40"),
+	})
+	// rpmutils.ResolveWildcardPackageConflicts canonicalizes an RPM glob match
+	// down to its base package name (e.g. an artifact matching "kernel-[0-9]*"
+	// resolves to the plain ResolvedPackage.Name "kernel"), so the resolved set
+	// never carries the version text the glob pattern targeted.
+	rpmGlobCanonical := []ResolvedPackage{{Name: "kernel"}}
 	cases := []struct {
 		name        string
 		replacement string
 		resolved    []ResolvedPackage
 		closure     []ResolvedPackage
-		want        bool
+		sliceA      map[string]BaselinePackage
+		want        []string
 	}{
-		{"direct kernel image in ToInstall", "linux-image-6.11.0-1004-oem", kimg, nil, true},
-		{"direct kernel image already installed (empty ToInstall)", "linux-image-6.8.0-40-generic", nil, nil, true},
-		{"rpm kernel", "kernel", nil, nil, true},
-		{"kernel meta with image in closure", "linux-oem-24.04", nil, kimg, true},
-		{"kernel meta without any image", "linux-oem-24.04", nil, nil, false},
-		{"non-kernel with foreign kernel in ToInstall", "curl", kimg, nil, false},
-		{"empty replacement", "", kimg, nil, false},
+		{"direct kernel image in ToInstall", "linux-image-6.11.0-1004-oem", kimg, nil, nil, []string{"linux-image-6.11.0-1004-oem"}},
+		{"direct kernel image already installed (empty ToInstall)", "linux-image-6.8.0-40-generic", nil, nil, nil, []string{"linux-image-6.8.0-40-generic"}},
+		{"rpm kernel", "kernel", nil, nil, nil, []string{"kernel"}},
+		{"kernel meta with image in closure", "linux-oem-24.04", nil, kimg, nil, []string{"linux-image-6.11.0-1004-oem"}},
+		{"kernel meta without any image", "linux-oem-24.04", nil, nil, nil, nil},
+		{"kernel meta with image-alias and concrete image both in closure", "linux-oem-24.04", nil, metaWithAlias, nil, []string{"linux-image-6.11.0-1004-oem"}},
+		{"non-kernel with foreign kernel in ToInstall", "curl", kimg, nil, nil, nil},
+		{"empty replacement", "", kimg, nil, nil, nil},
+		{"glob matches one concrete kernel", "linux-image-*-oem", kimg, nil, nil, []string{"linux-image-6.11.0-1004-oem"}},
+		{"glob matches several kernels", "linux-image-*-oem", twoKernels, nil, nil, []string{"linux-image-6.11.0-1004-oem", "linux-image-6.11.0-1005-oem"}},
+		{"glob matches only userspace package", "kernel-headers*", headersOnly, nil, nil, nil},
+		{"glob matches already-installed kernel via baseline", "linux-image-6.8.0-*", nil, nil, baseline, []string{"linux-image-6.8.0-40-generic"}},
+		{"glob same-flavor upgrade not made ambiguous by old baseline kernel", "linux-image-*-oem", kimg, nil, baselineSameFlavor, []string{"linux-image-6.11.0-1004-oem"}},
+		{"rpm glob canonicalizes to base package name", "kernel-[0-9]*", rpmGlobCanonical, nil, nil, []string{"kernel"}},
+		{"invalid glob syntax matches nothing", "kernel-[", rpmGlobCanonical, nil, nil, nil},
+		{"exact flavor alias resolves to its concrete dependency", "linux-image-generic", nil, genericAlias, nil, []string{"linux-image-6.8.0-40-generic"}},
+		{"glob matching only a flavor alias resolves to its concrete dependency", "linux-image-[g]eneric", nil, genericAlias, nil, []string{"linux-image-6.8.0-40-generic"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := replaceKernelSuppliesKernel(tc.replacement, tc.resolved, tc.closure); got != tc.want {
-				t.Errorf("replaceKernelSuppliesKernel(%q) = %v, want %v", tc.replacement, got, tc.want)
+			got := replacementKernelImages(tc.replacement, tc.resolved, tc.closure, tc.sliceA)
+			if len(got) != len(tc.want) {
+				t.Fatalf("replacementKernelImages(%q) = %v, want %v", tc.replacement, got, tc.want)
+			}
+			for i := range tc.want {
+				if got[i] != tc.want[i] {
+					t.Errorf("replacementKernelImages(%q)[%d] = %q, want %q", tc.replacement, i, got[i], tc.want[i])
+				}
 			}
 		})
+	}
+}
+
+// TestMatchReplacementRequest_RpmCanonicalFallback covers the fallback
+// matchReplacementRequest applies when direct glob matching fails: a name
+// exactly equal to the glob's literal prefix (trailing "-" trimmed) is still
+// accepted, since that is what RPM wildcard resolution canonicalizes a
+// version-specific match down to. The fallback is exact-equality only, so it
+// must not turn a glob into an over-broad match.
+func TestMatchReplacementRequest_RpmCanonicalFallback(t *testing.T) {
+	cases := []struct {
+		name    string
+		request string
+		pkg     string
+		want    bool
+	}{
+		{"canonical base name accepted", "kernel-[0-9]*", "kernel", true},
+		{"direct glob match still works", "kernel-[0-9]*", "kernel-5.14.0-570.19.1.el9_6.x86_64", true},
+		{"unrelated package not accepted", "kernel-[0-9]*", "kernel-headers", false},
+		{"unrelated package curl not accepted", "kernel-[0-9]*", "curl", false},
+		{"no-dash prefix: exact base name accepted", "kernel*", "kernel", true},
+		{"non-glob request has no fallback", "kernel", "kernel-core", false},
+		{"invalid glob syntax matches nothing, even the canonical fallback name", "kernel-[", "kernel", false},
+		{"literal text after the wildcard disqualifies the fallback", "kernel*headers", "kernel", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := matchReplacementRequest(c.request, c.pkg); got != c.want {
+				t.Errorf("matchReplacementRequest(%q, %q) = %v, want %v", c.request, c.pkg, got, c.want)
+			}
+		})
+	}
+}
+
+// TestKernelImagesIn_FiltersImageAliasWhenConcreteImagePresent confirms an
+// intermediary "linux-image-<flavor>" alias (e.g. "linux-image-oem-24.04") is
+// dropped from the result when a concrete, per-build image is also present in
+// the resolved sets, so a valid meta-driven swap is never reported as matching
+// two "replacement kernels".
+func TestKernelImagesIn_FiltersImageAliasWhenConcreteImagePresent(t *testing.T) {
+	got := kernelImagesIn([]ResolvedPackage{
+		{Name: "linux-image-oem-24.04"},
+		{Name: "linux-image-6.11.0-1004-oem"},
+	})
+	want := []string{"linux-image-6.11.0-1004-oem"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("kernelImagesIn = %v, want %v", got, want)
+	}
+}
+
+// TestKernelImagesIn_AliasOnlyFallsBack confirms that when the ONLY
+// "linux-image"-prefixed match is an alias (no concrete image present anywhere),
+// it is still returned rather than filtered down to an empty, falsely-ambiguous
+// result.
+func TestKernelImagesIn_AliasOnlyFallsBack(t *testing.T) {
+	got := kernelImagesIn([]ResolvedPackage{{Name: "linux-image-generic"}})
+	want := []string{"linux-image-generic"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("kernelImagesIn = %v, want %v", got, want)
+	}
+}
+
+// TestIsLinuxImageMetaAlias covers the flavor-alias vs. concrete-image
+// distinction kernelImagesIn relies on.
+func TestIsLinuxImageMetaAlias(t *testing.T) {
+	cases := []struct {
+		name string
+		want bool
+	}{
+		{"linux-image-generic", true},
+		{"linux-image-oem-24.04", true},
+		{"linux-image-lowlatency", true},
+		{"linux-image-6.11.0-1004-oem", false},
+		{"linux-image-6.8.0-40-generic", false},
+		{"linux-image-unsigned-6.17.0-1017-oem", false}, // Ubuntu unsigned variant of a concrete image
+		{"kernel", false},                               // no "linux-image-" prefix at all
+		{"kernel-core", false},                          // rpm: no alias tier, never treated as one
+		{"linux-image-", true},                          // degenerate: empty flavor, not concrete
+	}
+	for _, c := range cases {
+		if got := isLinuxImageMetaAlias(c.name); got != c.want {
+			t.Errorf("isLinuxImageMetaAlias(%q) = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// TestEvaluatePreflight_KernelReplacementAmbiguousGlob confirms an over-broad glob
+// that resolves to several bootable kernels is blocked (ruleReplaceKernelAmbig) with
+// the matched kernels surfaced, and authorizes no baseline kernel removals.
+func TestEvaluatePreflight_KernelReplacementAmbiguousGlob(t *testing.T) {
+	report := EvaluatePreflight(PreflightInput{
+		Family: PackageManagerAPT,
+		Baseline: []BaselinePackage{
+			installedDeb("linux-image-6.8.0-40-generic", "6.8.0-40"),
+			installedDeb("linux-image-generic", "6.8.0.40"),
+		},
+		Resolved: []ResolvedPackage{
+			{Name: "linux-image-6.11.0-1004-oem", Version: "6.11.0-1004", Arch: "amd64"},
+			{Name: "linux-image-6.11.0-1005-oem", Version: "6.11.0-1005", Arch: "amd64"},
+		},
+		Policy: config.OverlayPolicy{
+			PackageOperation: config.OverlayPackageOpAdditiveAndUpgrade,
+			AllowUpgrade:     true,
+			ReplaceKernel:    &config.ReplaceKernel{Package: "linux-image-*-oem"},
+		},
+	})
+	found := false
+	for _, v := range report.Violations {
+		if v.Rule == ruleReplaceKernelAmbig {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("an ambiguous glob must be blocked with ruleReplaceKernelAmbig, got %+v", report.Violations)
+	}
+	if len(report.ReplacementKernels) != 2 {
+		t.Errorf("expected both matched kernels surfaced, got %v", report.ReplacementKernels)
+	}
+	if len(report.ToRemove) != 0 {
+		t.Errorf("an ambiguous replacement must authorize no baseline kernel removals, got %v", report.ToRemove)
+	}
+}
+
+// TestEvaluatePreflight_KernelReplacementAdditionalPackageAddsSecondKernel confirms
+// that an additionalPackages entry (or any other requested package) independently
+// resolving to a second bootable kernel image is blocked with ruleReplaceKernelAmbig,
+// even though replaceKernel.package itself resolves to exactly one kernel.
+func TestEvaluatePreflight_KernelReplacementAdditionalPackageAddsSecondKernel(t *testing.T) {
+	report := EvaluatePreflight(PreflightInput{
+		Family: PackageManagerAPT,
+		Baseline: []BaselinePackage{
+			installedDeb("linux-image-6.8.0-40-generic", "6.8.0-40"),
+		},
+		Resolved: []ResolvedPackage{
+			{Name: "linux-image-6.11.0-1004-oem", Version: "6.11.0-1004", Arch: "amd64"},
+			// Smuggled in via additionalPackages (or an unrelated systemConfig entry):
+			// a second, unrelated bootable kernel image.
+			{Name: "linux-image-6.12.0-1-generic", Version: "6.12.0-1", Arch: "amd64"},
+		},
+		Policy: config.OverlayPolicy{
+			PackageOperation: config.OverlayPackageOpAdditiveAndUpgrade,
+			AllowUpgrade:     true,
+			ReplaceKernel: &config.ReplaceKernel{
+				Package:            "linux-image-6.11.0-1004-oem",
+				AdditionalPackages: []string{"linux-image-6.12.0-1-generic"},
+			},
+		},
+	})
+	found := false
+	for _, v := range report.Violations {
+		if v.Rule == ruleReplaceKernelAmbig {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("a second bootable kernel introduced alongside the replacement must be blocked with ruleReplaceKernelAmbig, got %+v", report.Violations)
+	}
+	if len(report.ReplacementKernels) != 1 || report.ReplacementKernels[0] != "linux-image-6.11.0-1004-oem" {
+		t.Errorf("replaceKernel.package alone must still resolve to exactly its own kernel, got %v", report.ReplacementKernels)
+	}
+	if !report.Blocked {
+		t.Errorf("a second bootable kernel introduced alongside the replacement must block the build")
+	}
+}
+
+// TestEvaluatePreflight_KernelReplacementRpmCoreCompanion confirms an rpm "kernel"
+// request that resolves alongside its "kernel-core" companion (same NEVRA — the
+// actual bootable image the "kernel" tracking package depends on) authorizes BOTH
+// packages' install/upgrade and is not misread as installing a second, independent
+// kernel.
+func TestEvaluatePreflight_KernelReplacementRpmCoreCompanion(t *testing.T) {
+	report := EvaluatePreflight(PreflightInput{
+		Family: PackageManagerDNF,
+		Baseline: []BaselinePackage{
+			{Name: "kernel", Version: "5.14.0-503.el9", Arch: "x86_64"},
+			{Name: "kernel-core", Version: "5.14.0-503.el9", Arch: "x86_64"},
+		},
+		Resolved: []ResolvedPackage{
+			{Name: "kernel", Version: "5.14.0-570.19.1.el9", Arch: "x86_64"},
+			{Name: "kernel-core", Version: "5.14.0-570.19.1.el9", Arch: "x86_64"},
+		},
+		Policy: config.OverlayPolicy{
+			PackageOperation: config.OverlayPackageOpAdditiveAndUpgrade,
+			AllowUpgrade:     true,
+			ReplaceKernel:    &config.ReplaceKernel{Package: "kernel"},
+		},
+	})
+	for _, v := range report.Violations {
+		if v.Rule == ruleReplaceKernelAmbig || v.Rule == ruleReplaceKernelInvalid {
+			t.Fatalf("kernel-core companion must not be treated as a second kernel, got violation %+v", v)
+		}
+	}
+	if report.Blocked {
+		t.Fatalf("a same-build kernel/kernel-core upgrade must not be blocked, got %+v", report.Violations)
+	}
+	for _, a := range report.Actions {
+		if a.Package == "kernel" || a.Package == "kernel-core" {
+			if !a.KernelReplacement {
+				t.Errorf("action for %q must be authorized as part of the kernel replacement, got %+v", a.Package, a)
+			}
+		}
+	}
+}
+
+// TestEvaluatePreflight_KernelReplacementSameVersionNotCompanionOnAPT confirms the
+// rpm kernel/kernel-core same-version companion exemption does NOT extend to APT
+// (or to any non-rpm-kernel-component name): a distinct image installed alongside
+// the chosen replacement that merely happens to share its version string (e.g. two
+// flavors built in the same round) is still a second, independently requested
+// kernel and must be blocked with ruleReplaceKernelAmbig.
+func TestEvaluatePreflight_KernelReplacementSameVersionNotCompanionOnAPT(t *testing.T) {
+	report := EvaluatePreflight(PreflightInput{
+		Family: PackageManagerAPT,
+		Baseline: []BaselinePackage{
+			installedDeb("linux-image-6.8.0-40-oem", "6.8.0-40"),
+		},
+		Resolved: []ResolvedPackage{
+			{Name: "linux-image-6.11.0-1004-oem", Version: "6.11.0-1004", Arch: "amd64"},
+			// A distinct, independently requested (e.g. via additionalPackages) kernel
+			// image that coincidentally shares the chosen replacement's version.
+			{Name: "linux-image-6.11.0-1004-generic", Version: "6.11.0-1004", Arch: "amd64"},
+		},
+		Policy: config.OverlayPolicy{
+			PackageOperation: config.OverlayPackageOpAdditiveAndUpgrade,
+			AllowUpgrade:     true,
+			ReplaceKernel: &config.ReplaceKernel{
+				Package:            "linux-image-6.11.0-1004-oem",
+				AdditionalPackages: []string{"linux-image-6.11.0-1004-generic"},
+			},
+		},
+	})
+	found := false
+	for _, v := range report.Violations {
+		if v.Rule == ruleReplaceKernelAmbig {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("a same-version but distinct APT kernel image must still be blocked with ruleReplaceKernelAmbig, got %+v", report.Violations)
+	}
+	if !report.Blocked {
+		t.Errorf("a second, independently requested kernel image must block the build even when its version coincides with the replacement's")
+	}
+}
+
+// TestEvaluatePreflight_KernelReplacementExactAlias confirms an exact
+// replaceKernel.package request naming a Debian flavor alias (e.g.
+// "linux-image-generic") resolves to its concrete per-build dependency instead of
+// being compared as a distinct package, so it is not falsely reported as
+// installing a second bootable kernel.
+func TestEvaluatePreflight_KernelReplacementExactAlias(t *testing.T) {
+	report := EvaluatePreflight(PreflightInput{
+		Family: PackageManagerAPT,
+		Baseline: []BaselinePackage{
+			installedDeb("linux-image-6.8.0-39-generic", "6.8.0-39"),
+			installedDeb("linux-image-generic", "6.8.0.39.38"),
+		},
+		Resolved: []ResolvedPackage{
+			{Name: "linux-image-generic", Version: "6.8.0.40.44", Arch: "amd64"},
+			{Name: "linux-image-6.8.0-40-generic", Version: "6.8.0-40", Arch: "amd64"},
+		},
+		Policy: config.OverlayPolicy{
+			PackageOperation: config.OverlayPackageOpAdditiveAndUpgrade,
+			AllowUpgrade:     true,
+			ReplaceKernel:    &config.ReplaceKernel{Package: "linux-image-generic"},
+		},
+	})
+	for _, v := range report.Violations {
+		if v.Rule == ruleReplaceKernelAmbig {
+			t.Fatalf("the alias's own concrete dependency must not be treated as a second kernel, got violation %+v", v)
+		}
+	}
+	if len(report.ReplacementKernels) != 1 || report.ReplacementKernels[0] != "linux-image-6.8.0-40-generic" {
+		t.Errorf("exact alias request must resolve to its concrete image, got %v", report.ReplacementKernels)
+	}
+}
+
+// TestEvaluatePreflight_KernelReplacementGlob confirms a wildcard that resolves to a
+// single concrete kernel drives the swap exactly like the equivalent exact name.
+func TestEvaluatePreflight_KernelReplacementGlob(t *testing.T) {
+	report := EvaluatePreflight(PreflightInput{
+		Family: PackageManagerAPT,
+		Baseline: []BaselinePackage{
+			installedDeb("linux-image-6.8.0-40-generic", "6.8.0-40"),
+			installedDeb("linux-image-generic", "6.8.0.40"),
+			installedDeb("linux-modules-6.8.0-40-generic", "6.8.0-40"),
+		},
+		Resolved: []ResolvedPackage{
+			{Name: "linux-image-6.11.0-1004-oem", Version: "6.11.0-1004", Arch: "amd64"},
+		},
+		Policy: config.OverlayPolicy{
+			PackageOperation: config.OverlayPackageOpAdditiveAndUpgrade,
+			AllowUpgrade:     true,
+			ReplaceKernel:    &config.ReplaceKernel{Package: "linux-image-*-oem"},
+		},
+	})
+	if report.Blocked {
+		t.Fatalf("a glob resolving to one kernel must not be blocked, violations=%+v", report.Violations)
+	}
+	if len(report.ReplacementKernels) != 1 || report.ReplacementKernels[0] != "linux-image-6.11.0-1004-oem" {
+		t.Errorf("expected the concrete resolved kernel, got %v", report.ReplacementKernels)
+	}
+	if len(report.ToRemove) == 0 {
+		t.Errorf("the baseline kernel family should be removed for a valid swap, got none")
 	}
 }
 
@@ -1167,5 +1526,40 @@ func TestPreflight_NilGuards(t *testing.T) {
 	}
 	if _, err := Preflight(&BaselineInfo{PackageManager: PackageManagerAPT}, nil, nil, nil); err == nil {
 		t.Error("expected error for nil plan")
+	}
+}
+
+// TestPreflight_ReplaceKernelRejectedOnNonGrub2 confirms replaceKernel fails fast,
+// before any simulate/install work is attempted, on a baseline whose bootloader is
+// not grub2 — including a UKI baseline (detectBootloader reports "uki" for a
+// /boot/efi/EFI/Linux layout, distinct from "grub2"/"systemd-boot"). A kernel swap
+// only ever regenerates the GRUB config, so it is unsafe/unsupported anywhere else.
+func TestPreflight_ReplaceKernelRejectedOnNonGrub2(t *testing.T) {
+	plan := &ResolutionPlan{ToInstall: []ResolvedPackage{{Name: "linux-image-6.11.0-1004-oem", Version: "6.11.0-1004", Arch: "amd64"}}}
+	policy := &config.OverlayPolicy{
+		PackageOperation: config.OverlayPackageOpAdditiveAndUpgrade,
+		ReplaceKernel:    &config.ReplaceKernel{Package: "linux-image-6.11.0-1004-oem"},
+	}
+
+	for _, bootloader := range []string{"uki", "systemd-boot", "unknown", ""} {
+		t.Run(bootloader, func(t *testing.T) {
+			info := &BaselineInfo{OS: "ubuntu", Arch: "amd64", PackageManager: PackageManagerAPT, Bootloader: bootloader}
+			report, err := Preflight(info, nil, plan, policy)
+			if err == nil {
+				t.Fatalf("expected replaceKernel to be rejected on bootloader %q, got nil error", bootloader)
+			}
+			if !strings.Contains(err.Error(), "grub2") {
+				t.Errorf("error = %v, want it to mention grub2", err)
+			}
+			if report != nil {
+				t.Errorf("expected no report on the fail-fast path, got %+v", report)
+			}
+		})
+	}
+
+	// A GRUB2 baseline is unaffected.
+	info := &BaselineInfo{OS: "ubuntu", Arch: "amd64", PackageManager: PackageManagerAPT, Bootloader: "grub2"}
+	if _, err := Preflight(info, nil, plan, policy); err != nil {
+		t.Errorf("replaceKernel on a grub2 baseline must not be rejected by the bootloader guard: %v", err)
 	}
 }

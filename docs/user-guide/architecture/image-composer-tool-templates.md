@@ -319,8 +319,10 @@ RAW, or the complete SBOM vs the baseline SBOM — see
 > into the baseline root, the initramfs is regenerated for the added packages,
 > the template's [`systemConfig.configurations`](#systemconfigconfigurations)
 > commands and [`systemConfig.additionalFiles`](#systemconfigadditionalfiles) are
-> applied, and an optional grow-only resize can enlarge the image to a larger
-> `disk.size`. Existing baseline packages are not removed unless
+> applied, and a grow-only resize — unconditionally expanding to `disk.size`
+> first, then auto-sizing further from the resolved packages' installed-size
+> metadata, capped at `disk.maxSize` when set — can enlarge the image to fit
+> them. Existing baseline packages are not removed unless
 > [`overlayPolicy.allowPackageRemoval`](#overlaypolicy) is enabled, which permits a
 > conflict-driven removal of a baseline package a to-install package conflicts
 > with. The installed bootloader binary and the ESP are never modified regardless
@@ -338,9 +340,13 @@ RAW, or the complete SBOM vs the baseline SBOM — see
 > pipeline reads disk/bootloader/kernel geometry from the detected baseline, not
 > from the template, so the effective overlay template is exactly what you declare
 > (folded through any `extends:` chain) with nothing inherited from the OS default.
-> In particular, an overlay template that omits `disk.size` keeps the baseline's
-> size — it does not pick up the default's `disk.size`, which against a larger
-> baseline would otherwise be rejected as a shrink.
+> In particular, an overlay template that omits `disk.size` does not pick up the
+> default's `disk.size`. Resize always expands to `disk.size` first (when it is
+> set and larger than the baseline) with no separate opt-in, then auto-sizes
+> further from the resolved packages' installed-size needs — but only when
+> `disk.maxSize` is also set; without it, growth does not extend beyond
+> `disk.size` (or the raw baseline, if `disk.size` is also unset); see the
+> **Sizing** note below.
 >
 > **Unsupported systemConfig sections.** Because overlay mode does not re-run the
 > boot/system-provisioning stages, the following `systemConfig` sections cannot be
@@ -366,17 +372,41 @@ RAW, or the complete SBOM vs the baseline SBOM — see
 > `shell`, and `passwordMaxAge`. The login shell is always set to `/bin/bash`, so
 > a service account cannot yet be pinned to `/usr/sbin/nologin` via the template.
 >
-> **Sizing:** Adding packages does **not** auto-grow the image, and the overlay
-> preserves the baseline disk layout by default. Growing the image is opt-in: it
-> requires **both** a `disk.size` larger than the baseline **and**
-> `overlayPolicy.allowDiskResize: true`. When `disk.size` is larger but
-> `allowDiskResize` is not set, the build fails early with a clear message rather
-> than silently resizing the baseline. The resize is grow-only and keyed solely
-> on `disk.size` (compared to the baseline's current size), not on how much space
-> the added packages need. If the baseline root is near-full, set `disk.size`
-> larger than the baseline image and enable `allowDiskResize` to make room;
-> otherwise the package install step fails with a "no space left on device"
-> error (the failure message points back here).
+> **Sizing:** Growing the image needs no opt-in — `disk.size`/`disk.maxSize`
+> are themselves the explicit consent. When `disk.size` is set and larger than
+> the baseline, the resize unconditionally expands to it first (a `disk.size`
+> at or below the baseline is already satisfied and is a no-op, never an
+> error). Package-driven growth **beyond** that floor requires `disk.maxSize`
+> to be set: without it, growth does not extend past `disk.size` (or the raw
+> baseline, if `disk.size` is also unset), regardless of how much room the
+> packages being installed need. When `disk.maxSize` **is** set, the tool
+> **auto-sizes** the further growth: it estimates the space the packages need —
+> summing each package's reported installed size (Debian `Installed-Size`, RPM
+> `<size installed=…>`) with a conservative overhead factor and margin —
+> measures the baseline's real free space (crediting the headroom the
+> `disk.size` expand itself adds), and grows the image only by the shortfall
+> (rounded up), capped at `disk.maxSize`. `disk.maxSize` must always be greater
+> than `disk.size`, and requires `disk.size` to also be set — both are rejected
+> up front as an invalid configuration otherwise. A configured `disk.maxSize`
+> smaller than the resulting `disk.size` floor is likewise rejected up front as
+> an impossible constraint. If the computed need exceeds `disk.maxSize`, the
+> tool caps at it and logs a warning (the install may then hit "no space left
+> on device") — the same outcome as when `disk.maxSize` is unset entirely and
+> the packages need more than the floor provides.
+>
+> If no package reports a size (missing metadata), the tool falls back to
+> `disk.maxSize` (or, with no ceiling, stops at the `disk.size` floor). Resize is
+> grow-only and never shrinks the image.
+>
+> **Partial metadata is not treated as complete.** When some (but not all)
+> resolved packages report a size, summing only the known ones would understate
+> the real need. The tool does not auto-size from that partial estimate: with
+> `disk.maxSize` set, it grows straight to that ceiling instead (skipping the
+> free-space measurement) and logs a warning that the estimate was incomplete;
+> with `disk.maxSize` unset, the build fails up front with an actionable error
+> asking you to set one. The measured-shortfall auto-sizing described above,
+> capped at `disk.maxSize`, only applies when every resolved package reports a
+> size (or none does) — and, as always, only when `disk.maxSize` is set at all.
 >
 > **Resize constraints.** The grow-only resize extends the **last** partition on
 > the disk and its filesystem in place. It is rejected (before any disk mutation,
@@ -418,9 +448,8 @@ top-level peer of `baseline` and may **only** be set when `baseline.mode` is
 | `conflictPolicy` | string | No | `fail` (default), `allow-explicit` | How a package conflict detected during preflight is handled. `fail` aborts the build; `allow-explicit` permits a conflict only when the conflicting package was explicitly requested |
 | `kernelCmdline` | string | No | — | Optional kernel command-line override applied to the overlaid image (full-line replacement of `GRUB_CMDLINE_LINUX` on a GRUB2 baseline). Must not contain a double quote, dollar sign, backtick, backslash, or newline |
 | `grubDefault` | string | No | — | Optional `GRUB_DEFAULT` override (pins the default boot menu entry, e.g. the Ubuntu submenu path `Advanced options for Ubuntu>Ubuntu, with Linux <ver>`). Only applied on a GRUB2 baseline. Same character restrictions as `kernelCmdline` |
-| `allowDiskResize` | boolean | No | `false` (default), `true` | Permit growing the baseline image to satisfy a larger `disk.size`. Overlay mode preserves the baseline disk layout by default; when `false`, a `disk.size` larger than the baseline is rejected with an error. Resize is always grow-only and never shrinks the image |
 | `allowPackageRemoval` | boolean | No | `false` (default), `true` | Permit removing a baseline package that a to-install package conflicts with (e.g. installing `dracut`, which conflicts with `initramfs-tools`). When `false` (the default) such a conflict fails the build; when `true`, the conflicting baseline package is removed before install. **Only valid with `packageOperation: additive-and-upgrade`** — removal is more invasive than an in-place upgrade, so it is rejected under the default `additive-only`. Bootloader and bootable-kernel packages are never removed regardless of this flag (to swap the kernel, use `replaceKernel`) |
-| `replaceKernel` | object | No | `{ package: <name> }` | Replace the baseline kernel: install the named kernel package and remove the baseline kernel family (image + meta + modules + headers) so the image ships **only** the new kernel, then regenerate the GRUB menu to default to it. The ESP and bootloader binary are never touched (no `grub-install`, no Secure Boot re-signing). **Only valid with `packageOperation: additive-and-upgrade`**; does **not** require `allowPackageRemoval` (it self-authorizes its own kernel-family removals). See the note below |
+| `replaceKernel` | object | No | `{ package: <name>, additionalPackages: [...], enableExtraModules: <string>, version: <string> }` | Replace the baseline kernel: install the named kernel package (plus any `additionalPackages`, e.g. the matching headers) and remove the baseline kernel family (image + meta + modules + headers) so the image ships **only** the new kernel, then regenerate the GRUB menu to default to it. The ESP and bootloader binary are never touched (no `grub-install`, no Secure Boot re-signing). **Only valid with `packageOperation: additive-and-upgrade`**; does **not** require `allowPackageRemoval` (it self-authorizes its own kernel-family removals). See the note below |
 
 > **`additive-and-upgrade` scope.** Upgrades apply only to the package set: a
 > package already installed in the baseline may be replaced by a newer version
@@ -488,14 +517,31 @@ plus `allowPackageRemoval: true`) to it.
 > swap** instead:
 >
 > 1. the named replacement kernel is resolved from the configured repositories and
->    installed (like any other overlay package);
-> 2. the baseline kernel **family** — the bootable image plus its meta-package,
+>    installed (like any other overlay package). The `package` value accepts the same
+>    glob wildcards as an ordinary `systemConfig` package (`*`, `?`, `[...]`), so you
+>    can write `linux-image-*-oem` instead of pinning an exact version. The pattern must
+>    resolve to **exactly one** bootable kernel image: a value that matches no kernel
+>    (a typo, or a userspace-only package) or several kernels (an over-broad glob)
+>    fails preflight, which lists what it matched so you can narrow it;
+> 2. any `additionalPackages` (e.g. the matching `linux-headers-*` package) are
+>    resolved and installed alongside `package`, following the same rules as
+>    `package` itself;
+> 3. the baseline kernel **family** — the bootable image plus its meta-package,
 >    modules, and headers (e.g. `linux-image-6.8.0-40-generic`,
 >    `linux-image-generic`, `linux-modules-*`, `linux-headers-*`) — is auto-detected
->    and removed, so the emitted image ships **only** the new kernel;
-> 3. the GRUB config is regenerated so the removed kernel's menu entry is dropped
+>    and removed, so the emitted image ships **only** the new kernel and whatever
+>    `additionalPackages` you named;
+> 4. the GRUB config is regenerated so the removed kernel's menu entry is dropped
 >    and `GRUB_DEFAULT` points at the new kernel (auto-pinned to `"0"` when you do
 >    not set `grubDefault` explicitly).
+>
+> `enableExtraModules` (space-separated driver modules, e.g. `"intel_vpu uas"`)
+> mirrors `systemConfig.kernel.enableExtraModules` but is scoped to the
+> replacement kernel: the named modules are forced into its regenerated
+> initramfs (`dracut --add-drivers`, or an `/etc/initramfs-tools/modules` entry
+> on an `initramfs-tools` baseline). `version` is descriptive only — it is never
+> used to resolve or install packages, only surfaced for reporting (e.g. the
+> compose summary).
 >
 > Only the GRUB **config** on the writable root is updated — the ESP and the
 > bootloader binary are never touched (no `grub-install`), matching the overlay
@@ -508,8 +554,9 @@ plus `allowPackageRemoval: true`) to it.
 > self-authorizes **only** its own kernel-family removals, if it orphans an
 > unrelated non-kernel baseline package (for example a DKMS module bound to the
 > removed kernel's modules/headers) the build fails **closed** unless you *also*
-> enable `allowPackageRemoval`. A `replaceKernel` set
-> on a non-GRUB2 baseline is a hard error. Userspace kernel-adjacent packages
+> enable `allowPackageRemoval`. A `replaceKernel` set on a non-GRUB2 baseline
+> (including a UKI baseline) is a hard error, raised at preflight before any
+> package is installed or removed. Userspace kernel-adjacent packages
 > (`linux-libc-dev`, `linux-tools-common`, rpm `kernel-headers`/`kernel-devel`) are
 > **not** removed.
 
@@ -528,6 +575,13 @@ overlayPolicy:
   # auto-pinned to the new kernel unless grubDefault is set below.
   replaceKernel:
     package: linux-image-6.11.0-1004-oem
+    # Optional: further kernel-family packages to install alongside package.
+    additionalPackages:
+      - linux-headers-6.11.0-1004-oem
+    # Optional: driver modules forced into the replacement kernel's initramfs.
+    enableExtraModules: "intel_vpu uas"
+    # Optional: descriptive only, never used to resolve/install packages.
+    version: "6.11.0-1004-oem"
 
   # Optional: the exact command line the new kernel boots with.
   # kernelCmdline: "quiet splash"
@@ -550,7 +604,8 @@ boot and ext4 root partitions).
 |-------|------|----------|-------------|
 | `name` | string | **Yes** (schema) | Disk configuration name (e.g., `"Default_Raw"`) |
 | `path` | string | No | Disk device path (used by live installer, e.g., `/dev/sda`) |
-| `size` | string | No | Disk size. Accepts: `"4GiB"`, `"8GB"`, `"4096 MiB"` |
+| `size` | string | No | Disk size. Accepts: `"4GiB"`, `"8GB"`. In create mode this is the exact disk size; in overlay mode the resize unconditionally expands the baseline to this size first (see the overlay **Sizing** note) |
+| `maxSize` | string | No | Overlay-mode-only ceiling on further, package-driven growth beyond `disk.size` (e.g., `"16GiB"`). Must be greater than `disk.size`, and requires `disk.size` to also be set (see the overlay **Sizing** note) |
 | `partitionTableType` | string | No | `gpt` or `mbr` |
 | `artifacts` | artifact[] | No | Output formats and optional compression |
 | `partitions` | partition[] | No | Partition layout definitions |

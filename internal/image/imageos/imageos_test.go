@@ -446,6 +446,28 @@ func TestGetDebPkgInstallList(t *testing.T) {
 	t.Logf("DEB package ordering: %v", result)
 }
 
+// TestGetDebPkgInstallListPrefersResolvedKernel confirms the install list uses the
+// concrete ResolvedKernelPackages (persisted for the installer ISO) over the raw
+// KernelPkgList glob, and falls back to KernelPkgList when none is recorded.
+func TestGetDebPkgInstallListPrefersResolvedKernel(t *testing.T) {
+	withResolved := &config.ImageTemplate{
+		KernelPkgList:          []string{"linux-image-generic*"},
+		ResolvedKernelPackages: []string{"linux-image-generic-7.0"},
+	}
+	got := getDebPkgInstallList(withResolved)
+	if len(got) != 1 || got[0] != "linux-image-generic-7.0" {
+		t.Fatalf("expected [linux-image-generic-7.0], got %v", got)
+	}
+
+	fallback := &config.ImageTemplate{
+		KernelPkgList: []string{"linux-image-amd64"},
+	}
+	got = getDebPkgInstallList(fallback)
+	if len(got) != 1 || got[0] != "linux-image-amd64" {
+		t.Fatalf("expected fallback [linux-image-amd64], got %v", got)
+	}
+}
+
 // TestInstallInitrd tests the InstallInitrd method with mocked dependencies
 func TestInstallInitrd(t *testing.T) {
 	// Set up mock executor

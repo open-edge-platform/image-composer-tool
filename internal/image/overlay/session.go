@@ -268,7 +268,7 @@ func (b *Builder) Build() error {
 	// mounted (resize2fs/xfs_growfs both grow online) and the loop device is
 	// already attached from Preprocess, so growing here is safe.
 	if err := b.timeStage("Resize", func() error {
-		if rerr := builderResizeFn(b.template, b.ctx, b.layout); rerr != nil {
+		if rerr := builderResizeFn(b.template, b.ctx, b.layout, b.plan); rerr != nil {
 			return fmt.Errorf("overlay build: resize failed: %w", rerr)
 		}
 		return nil
@@ -337,7 +337,7 @@ func (b *Builder) Build() error {
 	// boot-relevant PACKAGE was installed and the file would never be baked in.
 	forceRegen := b.hasPreInitramfsAdditionalFiles()
 	if err := b.timeStage("Boot Regeneration", func() error {
-		if berr := builderRegenBootFn(b.info, b.layout.RootMount, installed, b.plan, forceRegen); berr != nil {
+		if berr := builderRegenBootFn(b.template, b.info, b.layout.RootMount, installed, b.plan, forceRegen); berr != nil {
 			return fmt.Errorf("overlay build: boot regeneration failed: %w", berr)
 		}
 		return nil

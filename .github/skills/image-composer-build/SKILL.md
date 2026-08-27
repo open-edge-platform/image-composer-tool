@@ -186,7 +186,7 @@ gunzip -t <artifact>.gz
 
 4. **Missing template fields** — if the YAML omits required fields (e.g., `partitionTableType` for raw, `kernel.version` for package resolution), the tool errors with `field X is required`. Read the error and add the missing field.
 
-5. **Kernel version not available** — templates pin a specific kernel version (e.g., `"6.12.74"` for Debian 13). If the distro's repos don't carry that exact version, the build fails. Fallback: use a kernel package glob like `linux-image-amd64` or `linux-image-generic*` and adjust the version field to a known-good value.
+5. **Kernel version not available** — templates pin a specific kernel version (e.g., `"6.12.74"` for Debian 13). If the distro's repos don't carry that exact version, the build fails. Fallback: use a kernel package glob like `linux-image-amd64` or `linux-image-generic*` and adjust the version field to a known-good value. When a kernel glob matches several kernels, the build installs the newest and logs a warning listing every match, so pin an exact metapackage if you need a specific one.
 
 6. **Artifact collision** — the tool may refuse to overwrite existing output. Clean up old artifacts first:
    ```bash

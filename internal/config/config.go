@@ -3,10 +3,12 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -46,13 +48,22 @@ type DiskSelectionPolicy struct {
 }
 
 type DiskConfig struct {
-	Name               string              `yaml:"name"`
-	Path               string              `yaml:"path"` // Path to the disk device (e.g., /dev/sda), used by live installer
-	SelectionPolicy    DiskSelectionPolicy `yaml:"selectionPolicy,omitempty"`
-	Artifacts          []ArtifactInfo      `yaml:"artifacts"`
-	Size               string              `yaml:"size"`
-	PartitionTableType string              `yaml:"partitionTableType"`
-	Partitions         []PartitionInfo     `yaml:"partitions"`
+	Name            string              `yaml:"name"`
+	Path            string              `yaml:"path"` // Path to the disk device (e.g., /dev/sda), used by live installer
+	SelectionPolicy DiskSelectionPolicy `yaml:"selectionPolicy,omitempty"`
+	Artifacts       []ArtifactInfo      `yaml:"artifacts"`
+	// Size is an exact disk size in create mode. In overlay mode the resize
+	// unconditionally expands the baseline to this size first (grow-only; never
+	// shrinks), before any package-driven growth is considered.
+	Size string `yaml:"size"`
+	// MaxSize is an overlay-mode-only ceiling: once the baseline has been expanded
+	// to Size, the resize may grow further to fit the packages being installed,
+	// but never past MaxSize. Package-driven growth beyond Size requires MaxSize
+	// to be set; unset, growth does not extend beyond Size. When set, it must
+	// always be greater than Size, and requires Size to also be set.
+	MaxSize            string          `yaml:"maxSize,omitempty"`
+	PartitionTableType string          `yaml:"partitionTableType"`
+	Partitions         []PartitionInfo `yaml:"partitions"`
 	// ExtendLastPartitionToFillDisk forces the final partition's end to "0"
 	// (consume all remaining disk space) when enabled.
 	ExtendLastPartitionToFillDisk bool `yaml:"extendLastPartitionToFillDisk,omitempty"`
@@ -159,12 +170,6 @@ type OverlayPolicy struct {
 	// default boot target when it is not the entry GRUB would auto-select.
 	GrubDefault string `yaml:"grubDefault,omitempty"`
 
-	// AllowDiskResize gates whether an overlay build may grow the baseline image
-	// to satisfy a larger disk.size. Overlay mode preserves the baseline layout by
-	// default, so a disk.size larger than the baseline is rejected unless the user
-	// opts in here. It never permits shrinking; resize stays grow-only.
-	AllowDiskResize bool `yaml:"allowDiskResize,omitempty"`
-
 	// AllowPackageRemoval gates whether an overlay build may remove a baseline
 	// package that a to-install package conflicts with (e.g. installing dracut,
 	// which Conflicts: initramfs-tools). It defaults to false: overlay mode is
@@ -216,14 +221,36 @@ type OverlayPolicy struct {
 }
 
 // ReplaceKernel names the replacement kernel for an overlay kernel swap (see
-// OverlayPolicy.ReplaceKernel). Only the replacement package is specified; the
-// baseline kernel packages to remove are auto-detected from the baseline
-// inventory (the kernel family minus the replacement kernel's own closure), so a
-// caller cannot leave the swap half-applied with a stale partial remove list.
+// OverlayPolicy.ReplaceKernel). The baseline kernel packages to remove are
+// auto-detected from the baseline inventory (the kernel family minus the
+// replacement kernel's own closure), so a caller cannot leave the swap
+// half-applied with a stale partial remove list.
 type ReplaceKernel struct {
 	// Package is the replacement kernel image package to install, resolved from the
 	// configured repositories (e.g. "linux-image-6.11.0-1004-oem"). Required.
 	Package string `yaml:"package"`
+
+	// AdditionalPackages names further kernel-family packages to install alongside
+	// Package (e.g. the matching "linux-headers-*" package). Each entry is appended
+	// to the overlay's requested package set exactly like Package, so it flows
+	// through the same resolve -> download -> closure -> ToInstall path and is
+	// preflighted as an ActionAdd; a stale baseline package sharing its kernel-family
+	// prefix (e.g. old headers) is swept by the existing kernel-replacement removal
+	// logic without any special-casing, since that logic's keep-set already spans
+	// the full resolved closure.
+	AdditionalPackages []string `yaml:"additionalPackages,omitempty"`
+
+	// EnableExtraModules lists driver modules (space-separated, e.g. "intel_vpu
+	// uas") to force into the replacement kernel's initramfs, mirroring
+	// systemConfig.kernel.enableExtraModules but scoped to the replacement kernel
+	// swap. Passed to the baseline's initramfs generator (dracut --add-drivers or an
+	// initramfs-tools /etc/initramfs-tools/modules entry).
+	EnableExtraModules string `yaml:"enableExtraModules,omitempty"`
+
+	// Version is descriptive only (mirrors systemConfig.kernel.version): it is
+	// never fed into the resolver or the package manager, only surfaced for
+	// reporting (e.g. the compose API summary).
+	Version string `yaml:"version,omitempty"`
 }
 
 // ImageTemplate represents the YAML image template structure
@@ -245,8 +272,14 @@ type ImageTemplate struct {
 	FullPkgList         []string                `yaml:"-"`
 	FullPkgListBom      []ospackage.PackageInfo `yaml:"-"`
 	SBOMPackageMetadata []ospackage.PackageInfo `yaml:"sbomPackageMetadata,omitempty"`
-	DotFilePath         string                  `yaml:"-"`
-	DotSystemOnly       bool                    `yaml:"-"`
+	// ResolvedKernelPackages holds the concrete kernel package names a build
+	// resolved from systemConfig.kernel.packages (a glob is narrowed to the single
+	// selected kernel). It is serialized so an installer ISO's separate
+	// live-installer process installs exactly that kernel instead of re-expanding
+	// the glob against apt.
+	ResolvedKernelPackages []string `yaml:"resolvedKernelPackages,omitempty"`
+	DotFilePath            string   `yaml:"-"`
+	DotSystemOnly          bool     `yaml:"-"`
 	// InspectEnabled toggles post-build image inspection for overlay builds. It is
 	// driven by the CLI --inspect/--no-inspect flags (default on) rather than YAML,
 	// so it is excluded from serialization. Consumed by the overlay postprocess
@@ -1364,6 +1397,78 @@ func (pr *PackageRepository) ValidatePackageRepository() error {
 	return nil
 }
 
+// diskSizeSuffixes/diskSizeSuffixBytes mirror imagedisc.TranslateSizeStrToBytes's unit
+// table (KiB/MiB/GiB and their K/M/G, KB/MB/GB variants) purely to validate
+// disk.maxSize > disk.size at template-validation time. config cannot import
+// internal/image/imagedisc, which itself imports config, so the byte parsing
+// needed for this one cross-field check is duplicated here rather than shared.
+var (
+	diskSizeSuffixes    = []string{"KiB", "MiB", "GiB", "K", "M", "G", "KB", "MB", "GB"}
+	diskSizeSuffixBytes = []uint64{1024, 1048576, 1073741824, 1024, 1048576, 1073741824, 1000, 1000000, 1000000000}
+	diskSizePattern     = regexp.MustCompile(`^(\d+)(.*)$`)
+)
+
+// parseDiskSizeBytes parses a disk.size/disk.maxSize string (e.g. "8GiB") into bytes.
+// field names the value in error messages.
+func parseDiskSizeBytes(field, s string) (uint64, error) {
+	match := diskSizePattern.FindStringSubmatch(s)
+	if len(match) != 3 {
+		return 0, fmt.Errorf("%s %q: size format incorrect", field, s)
+	}
+	num, err := strconv.ParseUint(match[1], 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s %q: %w", field, s, err)
+	}
+	for i, suf := range diskSizeSuffixes {
+		if match[2] == suf {
+			unit := diskSizeSuffixBytes[i]
+			// The build-time parser (resolveSizeBytes) narrows to int64, so match its
+			// MaxInt64 ceiling here rather than the wider MaxUint64.
+			if num > math.MaxInt64/unit {
+				return 0, fmt.Errorf("%s %q: size overflows the supported range", field, s)
+			}
+			return num * unit, nil
+		}
+	}
+	return 0, fmt.Errorf("%s %q: size suffix %q not recognized", field, s, match[2])
+}
+
+// validateDiskMaxSize enforces disk.maxSize's overlay-mode invariants: it requires
+// disk.size to also be set, and must parse to a byte value strictly greater than
+// disk.size. Both values are parsed and compared numerically here (not just
+// presence-checked) so an invalid template fails `image-composer-tool validate`
+// at the validation boundary rather than only once a build reaches the mounted
+// resize stage. disk.size's format is validated independently of disk.maxSize
+// being set, so a malformed disk.size (with no maxSize) is also caught here
+// instead of only failing later in ResizeBaseline.
+func validateDiskMaxSize(disk DiskConfig) error {
+	size := strings.TrimSpace(disk.Size)
+	var sizeBytes uint64
+	if size != "" {
+		var err error
+		sizeBytes, err = parseDiskSizeBytes("disk.size", size)
+		if err != nil {
+			return err
+		}
+	}
+
+	maxSize := strings.TrimSpace(disk.MaxSize)
+	if maxSize == "" {
+		return nil
+	}
+	if size == "" {
+		return fmt.Errorf("disk.maxSize requires disk.size to also be set")
+	}
+	maxSizeBytes, err := parseDiskSizeBytes("disk.maxSize", maxSize)
+	if err != nil {
+		return err
+	}
+	if maxSizeBytes <= sizeBytes {
+		return fmt.Errorf("disk.maxSize (%d bytes) must be greater than disk.size (%d bytes)", maxSizeBytes, sizeBytes)
+	}
+	return nil
+}
+
 // validateBaseline enforces cross-field rules that the JSON schema cannot express:
 // mode/source coupling, format restrictions, and overlay policy invariants.
 // overlayPolicy is a top-level peer to baseline (per the image-extension ADR),
@@ -1382,9 +1487,21 @@ func (t *ImageTemplate) validateBaseline() error {
 		if t.OverlayPolicy != nil {
 			return fmt.Errorf("overlayPolicy must not be set when baseline.mode is %q", BaselineModeCreate)
 		}
+		// A template with `extends` set may be inheriting `baseline.mode: overlay`
+		// from a parent layer without redeclaring it here, so this layer's own
+		// (defaulted) create-mode determination is not yet authoritative — defer
+		// the disk.maxSize rejection to the final, folded template instead of
+		// rejecting a valid overlay child mid-chain (see LoadAndMergeTemplate,
+		// which re-validates both the overlay and create-mode merge results).
+		if strings.TrimSpace(t.Disk.MaxSize) != "" && strings.TrimSpace(t.Extends) == "" {
+			return fmt.Errorf("disk.maxSize is only supported when baseline.mode is %q", BaselineModeOverlay)
+		}
 	case BaselineModeOverlay:
 		if t.Baseline.Source == nil {
 			return fmt.Errorf("baseline: source is required when mode is %q", BaselineModeOverlay)
+		}
+		if err := validateDiskMaxSize(t.Disk); err != nil {
+			return err
 		}
 		if err := t.Baseline.Source.Validate(); err != nil {
 			return err
@@ -1619,6 +1736,29 @@ func (s *BaselineSource) Validate() error {
 	return nil
 }
 
+// kernelModulesPattern allowlists overlayPolicy.replaceKernel.enableExtraModules:
+// module names and the spaces separating them, nothing else. Each module must
+// start with an alphanumeric character or underscore so a leading "-" (e.g.
+// "-n") can never be mistaken for an option by a downstream command consuming it.
+var kernelModulesPattern = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*( [A-Za-z0-9_][A-Za-z0-9_.-]*)*$`)
+
+// validateKernelPackageName rejects whitespace and shell metacharacters in a
+// replaceKernel package name (Package or an AdditionalPackages entry): the name
+// seeds the resolver and is passed to the package manager (dpkg/rpm) inside the
+// baseline chroot, so a malformed name must never reach a command line. The glob
+// wildcards the resolver itself understands (`*`, `?`, `[...]`) are intentionally
+// NOT rejected, so a replacement kernel can be specified with the same wildcard
+// syntax as any other systemConfig package; the swap logic tolerates a globbed
+// name (kernel-family detection is prefix-based and the removal set is derived
+// from the resolved concrete packages). A real kernel package name never needs
+// the rejected characters.
+func validateKernelPackageName(field, name string) error {
+	if strings.ContainsAny(name, " \t\r\n\"'`$\\;&|<>(){}!") {
+		return fmt.Errorf("%s %q must not contain whitespace or shell metacharacters (glob wildcards *, ?, and [...] are allowed)", field, name)
+	}
+	return nil
+}
+
 func (p *OverlayPolicy) validate() error {
 	op := p.PackageOperation
 	if op == "" {
@@ -1655,12 +1795,25 @@ func (p *OverlayPolicy) validate() error {
 		if pkg == "" {
 			return fmt.Errorf("overlayPolicy.replaceKernel.package must be set")
 		}
-		// The package name seeds the resolver and is passed to the package manager
-		// (dpkg/rpm) inside the baseline chroot, so reject whitespace and shell
-		// metacharacters up front rather than letting a malformed name reach a
-		// command line. A real kernel package name never needs any of these.
-		if strings.ContainsAny(pkg, " \t\n\"'`$\\;&|<>(){}*?!") {
-			return fmt.Errorf("overlayPolicy.replaceKernel.package %q must not contain whitespace or shell metacharacters", pkg)
+		if err := validateKernelPackageName("overlayPolicy.replaceKernel.package", pkg); err != nil {
+			return err
+		}
+		for _, ap := range p.ReplaceKernel.AdditionalPackages {
+			ap = strings.TrimSpace(ap)
+			if ap == "" {
+				return fmt.Errorf("overlayPolicy.replaceKernel.additionalPackages entries must not be empty")
+			}
+			if err := validateKernelPackageName("overlayPolicy.replaceKernel.additionalPackages", ap); err != nil {
+				return err
+			}
+		}
+		// EnableExtraModules is interpolated into the baseline's initramfs-generator
+		// command (dracut --add-drivers, or an initramfs-tools modules file entry), so
+		// it is validated by allowlist rather than denylist: module names and the
+		// spaces separating them are the only content it ever needs.
+		if em := p.ReplaceKernel.EnableExtraModules; em != "" && !kernelModulesPattern.MatchString(em) {
+			return fmt.Errorf("overlayPolicy.replaceKernel.enableExtraModules %q must contain only module names "+
+				"(letters, digits, underscore, dot, dash) separated by spaces", em)
 		}
 		if op != OverlayPackageOpAdditiveAndUpgrade {
 			return fmt.Errorf("overlayPolicy.replaceKernel requires packageOperation %q (got %q)",

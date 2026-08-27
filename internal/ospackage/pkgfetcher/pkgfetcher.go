@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	urlpkg "net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -110,6 +111,8 @@ func downloadWithRetry(ctx context.Context, client *http.Client, url, destPath s
 			cancel()
 			return fmt.Errorf("build request: %w", reqErr)
 		}
+		req.Header.Set("Cache-Control", "no-cache")
+		req.Header.Set("Pragma", "no-cache")
 		resp, err := client.Do(req)
 		if err != nil {
 			cancel()
@@ -290,7 +293,11 @@ func FetchPackages(ctx context.Context, urls []string, destDir string, workers i
 					}
 					continue
 				}
-				name := path.Base(url)
+				parsedURL, parseErr := urlpkg.Parse(url)
+				if parseErr != nil || parsedURL.Path == "" {
+					parsedURL = &urlpkg.URL{Path: strings.SplitN(url, "?", 2)[0]}
+				}
+				name := path.Base(parsedURL.Path)
 
 				// update description to current file
 				bar.Describe(name)

@@ -128,7 +128,7 @@ metadata:
 
 image:
   name: ubuntu24-robotics-hw-overlay-base
-  version: "24.04"
+  version: "24.04.1"
 
 target:
   os: ubuntu
@@ -177,20 +177,22 @@ baseline:
 overlayPolicy:
   packageOperation: additive-and-upgrade
   conflictPolicy: fail
-  # Explicit consent to grow the baseline to the disk.size below. Without this
-  # the build fails rather than resizing the vendor image implicitly.
-  allowDiskResize: true
 
 # -----------------------------------------------------------------------------
 # Output: a qcow2 artifact. The overlay emits a RAW copy, then the Convert
 # Artifacts stage produces every format listed here. Canonical's cloud image is
-# ~3.5GiB provisioned; 24GiB leaves room for this layer plus whatever a child
-# overlays on top (the full ROS 2 desktop stack is large). Resize is grow-only
-# and needs BOTH a larger disk.size AND allowDiskResize above.
+# ~3.5GiB provisioned; disk.size below is a floor the resize unconditionally
+# expands the baseline to first (no opt-in needed), sized for this layer alone
+# (verified: this base build stops at exactly 24GiB, no further growth needed).
+# disk.maxSize gives a child template — layering the full ROS 2 desktop stack on
+# top — room to auto-grow further: package-driven growth beyond disk.size always
+# requires disk.maxSize to be set, so a child inheriting only disk.size here
+# would otherwise be capped at 24GiB with no room for its own added packages.
 # -----------------------------------------------------------------------------
 disk:
   name: overlay-disk
   size: 24GiB
+  maxSize: 40GiB
   artifacts:
     - type: qcow2
 
@@ -235,6 +237,11 @@ systemConfig:
     # ── Intel NPU (Neural Processing Unit) drivers ───────────────────
     - intel-level-zero-npu
     - intel-driver-compiler-npu
+    # Keep ECI's patched systemd/libudev pair coherent. The LLVM SPIR-V runtime
+    # is required by ECI's Intel OpenCL driver and is present in Ubuntu universe.
+    - systemd
+    - udev
+    - libllvmspirvlib14_14.0.8-1~ubuntu0.24.04.1
 
     # ── Intel RealSense camera (DKMS builds against the baseline kernel) ──
     - linux-headers-generic
@@ -344,6 +351,17 @@ systemConfig:
 # every descendant. See the header note for why they cannot be split.
 # -----------------------------------------------------------------------------
 packageRepositories:
+  # Ubuntu universe supplies libllvmspirvlib14, required by Intel OpenCL.
+  - codename: "noble"
+    url: "http://archive.ubuntu.com/ubuntu"
+    pkey: "/usr/share/keyrings/ubuntu-archive-keyring.gpg"
+    component: "main universe"
+
+  - codename: "noble-updates"
+    url: "http://archive.ubuntu.com/ubuntu"
+    pkey: "/usr/share/keyrings/ubuntu-archive-keyring.gpg"
+    component: "main universe"
+
   # ROS 2 Jazzy repository (needed by children; declared here for the codename rule)
   - codename: "noble"
     url: "http://packages.ros.org/ros2/ubuntu"

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
 
@@ -92,7 +93,12 @@ var bootRelevantPathPrefixes = []string{
 // dracut module or initramfs-tools hook delivered purely through additionalFiles,
 // with no boot-relevant PACKAGE installed) must still be baked into the initramfs,
 // which the package-manifest-based gate cannot see.
-func RegenerateBoot(info *BaselineInfo, rootMount string, installed *InstallResult, plan *ResolutionPlan, forceRegen bool) (err error) {
+//
+// When overlayPolicy.replaceKernel.enableExtraModules is set, its driver modules
+// are forced into the regenerated initramfs (dracut --add-drivers, or an
+// initramfs-tools /etc/initramfs-tools/modules entry) — mirroring create mode's
+// systemConfig.kernel.enableExtraModules, scoped to the replacement kernel swap.
+func RegenerateBoot(template *config.ImageTemplate, info *BaselineInfo, rootMount string, installed *InstallResult, plan *ResolutionPlan, forceRegen bool) (err error) {
 	if info == nil {
 		return fmt.Errorf("overlay boot regen: baseline info cannot be nil")
 	}
@@ -100,9 +106,29 @@ func RegenerateBoot(info *BaselineInfo, rootMount string, installed *InstallResu
 		return fmt.Errorf("overlay boot regen: baseline root mount path cannot be empty")
 	}
 
+	// A non-empty enableExtraModules must always be baked into the initramfs, so it
+	// is read here — before the two "nothing changed" gates below — and folded into
+	// forceRegen exactly like a stage:pre-initramfs additionalFiles entry. Without
+	// this, a removal-only swap (the requested kernel already installed, so
+	// installed.Installed is empty) or a swap whose artifacts the manifest-based
+	// gate reads as non-boot-relevant would skip regeneration and silently drop the
+	// requested modules.
+	extraModules := ""
+	if template != nil && template.OverlayPolicy != nil && template.OverlayPolicy.ReplaceKernel != nil {
+		extraModules = strings.TrimSpace(template.OverlayPolicy.ReplaceKernel.EnableExtraModules)
+	}
+	forceReason := ""
+	switch {
+	case forceRegen:
+		forceReason = "a stage:pre-initramfs additionalFiles entry was copied"
+	case extraModules != "":
+		forceRegen = true
+		forceReason = "overlayPolicy.replaceKernel.enableExtraModules is set"
+	}
+
 	// Nothing was added (or the install was skipped): no initramfs change needed —
-	// unless a pre-initramfs additionalFiles entry was copied, which the generator
-	// must still bake in.
+	// unless forceRegen is set (see forceReason above), which the generator must
+	// still honor.
 	if !forceRegen && (installed == nil || installed.Skipped || len(installed.Installed) == 0) {
 		log.Infof("Overlay boot regen: no packages added, skipping initramfs regeneration")
 		return nil
@@ -112,14 +138,14 @@ func RegenerateBoot(info *BaselineInfo, rootMount string, installed *InstallResu
 	// the boot-time initramfs cannot have changed, so regeneration is unnecessary
 	// (and on an ESP/BLS baseline would fail on the read-only ESP). The gate fails
 	// safe — an unreadable manifest regenerates rather than risk a stale initramfs.
-	// forceRegen bypasses it: a pre-initramfs additionalFiles entry is boot-relevant
+	// forceRegen bypasses it: its reason (see forceReason above) is boot-relevant
 	// content the package manifests do not reflect.
 	if !forceRegen && !overlayAddedBootRelevantContent(info.PackageManager, plan) {
 		log.Infof("Overlay boot regen: no kernel modules, firmware, or initramfs hooks added; skipping initramfs regeneration")
 		return nil
 	}
 	if forceRegen {
-		log.Infof("Overlay boot regen: pre-initramfs additionalFiles present; regenerating initramfs so they take effect")
+		log.Infof("Overlay boot regen: %s; regenerating initramfs so it takes effect", forceReason)
 	}
 
 	// Reject a package-manager family overlay does not support before probing.
@@ -139,17 +165,38 @@ func RegenerateBoot(info *BaselineInfo, rootMount string, installed *InstallResu
 	}
 	// No known generator in the baseline. For an ordinary build this is a clean
 	// no-op (some minimal images legitimately have none). But when forceRegen is set
-	// a stage: pre-initramfs file was copied specifically to be baked into the
-	// initramfs — silently succeeding would let the build claim the staged file took
-	// effect when it did not, so fail with an actionable error instead.
+	// (see forceReason above) — a stage:pre-initramfs file was copied, or
+	// enableExtraModules was requested — silently succeeding would let the build
+	// claim that content took effect when it did not, so fail with an actionable
+	// error instead.
 	if !found {
 		if forceRegen {
-			return fmt.Errorf("overlay boot regen: a stage:pre-initramfs additionalFiles entry requires initramfs regeneration, "+
-				"but no supported generator (%s) is present in the baseline; install one (e.g. dracut or initramfs-tools) or remove the pre-initramfs entry",
-				knownInitramfsToolNames())
+			return fmt.Errorf("overlay boot regen: %s, which requires initramfs regeneration, but no supported generator "+
+				"(%s) is present in the baseline; install one (e.g. dracut or initramfs-tools)",
+				forceReason, knownInitramfsToolNames())
 		}
 		log.Warnf("Overlay boot regen: no supported initramfs generator (%s) present in baseline; skipping initramfs regeneration", knownInitramfsToolNames())
 		return nil
+	}
+
+	if extraModules != "" {
+		switch tool {
+		case "dracut":
+			// dracut accepts the space-separated module list directly via --add-drivers.
+			cmd = fmt.Sprintf("%s --add-drivers %s", cmd, shell.QuoteArg(extraModules))
+		case "update-initramfs":
+			// initramfs-tools has no equivalent flag: each module is appended to its
+			// modules config file, which update-initramfs -u picks up on the next run.
+			log.Infof("Overlay boot regen: adding modules to initramfs-tools config: %s", extraModules)
+			for _, mod := range strings.Fields(extraModules) {
+				// printf (not echo) avoids leading-dash arguments being misread as options
+				// by shell-dependent echo implementations.
+				appendCmd := fmt.Sprintf("printf '%%s\\n' %s >> /etc/initramfs-tools/modules", shell.QuoteArg(mod))
+				if _, aerr := bootRegenExec(appendCmd, rootMount); aerr != nil {
+					return fmt.Errorf("overlay boot regen: failed to add module %q to /etc/initramfs-tools/modules: %w", mod, aerr)
+				}
+			}
+		}
 	}
 
 	// Mount the pseudo-filesystems for the generator and tear them down after; the

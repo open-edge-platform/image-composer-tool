@@ -132,7 +132,11 @@
         },
         "size": {
           "type": "string",
-          "description": "Size of the disk (e.g., '4GiB', '8GB')"
+          "description": "Size of the disk (e.g., '4GiB', '8GB'). In create mode this is the exact disk size. In overlay mode the resize unconditionally expands the baseline to this size first (grow-only), before any package-driven growth."
+        },
+        "maxSize": {
+          "type": "string",
+          "description": "Overlay-mode-only ceiling (e.g., '8GiB', '16GB'). Once the baseline has been expanded to disk.size, the resize may grow further to fit the packages being installed, but never past this value. Package-driven growth beyond disk.size requires maxSize to be set; unset, growth does not extend beyond disk.size. Must always be greater than disk.size when set, and requires disk.size to also be set."
         },
         "partitionTableType": {
           "type": "string",
@@ -593,11 +597,6 @@
           "type": "string",
           "description": "Optional GRUB_DEFAULT override applied to the overlaid image (pins the default boot menu entry, e.g. an Ubuntu submenu path). Only applied on a GRUB2 baseline. The value is written into a shell-sourced /etc/default/grub assignment, so it must not contain a double quote, dollar sign, backtick, backslash, or newline."
         },
-        "allowDiskResize": {
-          "type": "boolean",
-          "description": "Permit growing the baseline image to satisfy a larger disk.size. Overlay mode preserves the baseline disk layout by default; when false (the default) a disk.size larger than the baseline is rejected. Resize is always grow-only and never shrinks the image.",
-          "default": false
-        },
         "allowPackageRemoval": {
           "type": "boolean",
           "description": "Permit removing a baseline package that a to-install package conflicts with (e.g. installing dracut, which conflicts with initramfs-tools). Overlay mode is additive by default; when false (the default) such a conflict fails the build. When true, the conflicting baseline package is removed before install. Bootloader and bootable-kernel packages are never removed regardless of this flag. Only valid with packageOperation 'additive-and-upgrade' — removal is more invasive than an in-place upgrade, so it may not be enabled under the default 'additive-only'.",
@@ -609,9 +608,27 @@
           "properties": {
             "package": {
               "type": "string",
-              "description": "The replacement kernel image package to install, resolved from the configured repositories (e.g. 'linux-image-6.11.0-1004-oem').",
+              "description": "The replacement kernel image package to install, resolved from the configured repositories (e.g. 'linux-image-6.11.0-1004-oem'). Glob wildcards ('*', '?', '[...]') are accepted, matching the syntax used for ordinary systemConfig packages (e.g. 'linux-image-*-oem').",
               "minLength": 1,
-              "pattern": "^[A-Za-z0-9][A-Za-z0-9._+:-]*$"
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9+_.:~*?\\[\\]-]*$"
+            },
+            "additionalPackages": {
+              "type": "array",
+              "description": "Further kernel-family packages to install alongside 'package' (e.g. the matching headers package). Each entry follows the same resolve/preflight path as 'package', so a stale baseline package sharing its kernel-family prefix (e.g. old headers) is removed as part of the swap.",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9+_.:~*?\\[\\]-]*$"
+              }
+            },
+            "enableExtraModules": {
+              "type": "string",
+              "description": "Driver modules (space-separated, e.g. 'intel_vpu uas') to force into the replacement kernel's initramfs. Only module names and separating spaces are accepted; each module must start with an alphanumeric character or underscore.",
+              "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*( [A-Za-z0-9_][A-Za-z0-9_.-]*)*$"
+            },
+            "version": {
+              "type": "string",
+              "description": "Descriptive-only kernel version tag; never used to resolve or install packages, only surfaced for reporting."
             }
           },
           "required": ["package"],
@@ -759,6 +776,11 @@
           "description": "Optional SBOM package metadata preserved for installer-time SBOM generation",
           "items": { "type": "object", "additionalProperties": true }
         },
+        "resolvedKernelPackages": {
+          "type": "array",
+          "description": "Concrete kernel package names resolved at build time, preserved so an installer ISO installs the same kernel",
+          "items": { "type": "string" }
+        },
         "packageRepositories": {
           "type": "array",
           "description": "Additional package repositories",
@@ -860,6 +882,11 @@
           "type": "array",
           "description": "Optional SBOM package metadata preserved for installer-time SBOM generation",
           "items": { "type": "object", "additionalProperties": true }
+        },
+        "resolvedKernelPackages": {
+          "type": "array",
+          "description": "Concrete kernel package names resolved at build time, preserved so an installer ISO installs the same kernel",
+          "items": { "type": "string" }
         },
         "packageRepositories": {
           "type": "array",

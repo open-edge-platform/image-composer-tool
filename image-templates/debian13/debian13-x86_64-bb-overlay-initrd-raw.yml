@@ -77,7 +77,7 @@ metadata:
 
 image:
   name: debian13-bb-overlay-base
-  version: "13.0"
+  version: "13.0.1"
 
 target:
   os: debian
@@ -102,13 +102,16 @@ baseline:
 
 # -----------------------------------------------------------------------------
 # Output: a qcow2 artifact. The overlay emits a RAW copy, then the Convert
-# Artifacts stage produces every format listed here. The disk is grown to leave
-# room for whatever a child template overlays on top; resize is grow-only and
-# requires BOTH a disk.size larger than the baseline AND allowDiskResize below.
+# Artifacts stage produces every format listed here. disk.size is a floor the
+# resize always expands the baseline to first (no opt-in needed); the tool then
+# auto-sizes further growth from the resolved packages' installed-size metadata
+# to leave room for whatever a child template overlays on top, capped at
+# disk.maxSize — the final image may end up smaller than 8GiB.
 # -----------------------------------------------------------------------------
 disk:
   name: overlay-disk
-  size: 8GiB
+  size: 4GiB
+  maxSize: 8GiB
   artifacts:
     - type: qcow2
 
@@ -134,8 +137,6 @@ disk:
 overlayPolicy:
   packageOperation: additive-and-upgrade
   conflictPolicy: fail
-  # Explicit consent to grow the baseline to the 8GiB disk.size above.
-  allowDiskResize: true
   # Permit removing a baseline package a to-install package conflicts with. Needed
   # because dracut conflicts with the baseline's initramfs-tools; see note above.
   # Requires packageOperation: additive-and-upgrade (set above).
