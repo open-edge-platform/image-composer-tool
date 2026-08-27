@@ -307,6 +307,105 @@ func TestVerifyRelease(t *testing.T) {
 	}
 }
 
+// TestVerifyRelease_RejectsUntrustedSigner is a regression test for a fail-open
+// bypass: a binary detached signature from a key absent from the trusted
+// keyring used to be accepted (return true, nil) instead of rejected, because
+// the "unknown entity" error from go-crypto was treated as a soft warning. An
+// attacker able to serve their own Release file and sign it with a key of
+// their choosing could get it accepted outright. Verification must fail
+// closed for both armored and binary signatures from an untrusted key.
+func TestVerifyRelease_RejectsUntrustedSigner(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Build the "trusted" key from one entity so the private key used to sign
+	// below matches the public key written to keyPath (generateArmoredTestKey
+	// would produce an unrelated key pair).
+	trustedEntity, err := openpgp.NewEntity("Trusted Signer", "test", "trusted@example.invalid", nil)
+	if err != nil {
+		t.Fatalf("NewEntity: %v", err)
+	}
+	var trustedPub bytes.Buffer
+	pubWriter, err := armor.Encode(&trustedPub, openpgp.PublicKeyType, nil)
+	if err != nil {
+		t.Fatalf("armor.Encode: %v", err)
+	}
+	if err := trustedEntity.Serialize(pubWriter); err != nil {
+		t.Fatalf("trustedEntity.Serialize: %v", err)
+	}
+	if err := pubWriter.Close(); err != nil {
+		t.Fatalf("armor close: %v", err)
+	}
+	keyPath := filepath.Join(tempDir, "trusted.pub")
+	if err := os.WriteFile(keyPath, trustedPub.Bytes(), 0644); err != nil {
+		t.Fatalf("Failed to write trusted key: %v", err)
+	}
+
+	attackerEntity, err := openpgp.NewEntity("Attacker", "test", "attacker@example.invalid", nil)
+	if err != nil {
+		t.Fatalf("NewEntity: %v", err)
+	}
+
+	releaseContent := []byte("Suite: stable\n")
+	relPath := filepath.Join(tempDir, "Release")
+	if err := os.WriteFile(relPath, releaseContent, 0644); err != nil {
+		t.Fatalf("Failed to write Release file: %v", err)
+	}
+
+	t.Run("binary signature from untrusted key is rejected", func(t *testing.T) {
+		var sig bytes.Buffer
+		if err := openpgp.DetachSign(&sig, attackerEntity, bytes.NewReader(releaseContent), nil); err != nil {
+			t.Fatalf("DetachSign: %v", err)
+		}
+		sigPath := filepath.Join(tempDir, "Release.gpg")
+		if err := os.WriteFile(sigPath, sig.Bytes(), 0644); err != nil {
+			t.Fatalf("Failed to write signature: %v", err)
+		}
+
+		ok, err := VerifyRelease(relPath, sigPath, keyPath)
+		if ok || err == nil {
+			t.Fatalf("expected untrusted binary signature to be rejected, got ok=%v err=%v", ok, err)
+		}
+		if !strings.Contains(err.Error(), "signature verification failed") {
+			t.Fatalf("expected a signature verification error, got: %v", err)
+		}
+	})
+
+	t.Run("armored signature from untrusted key is rejected", func(t *testing.T) {
+		var sig bytes.Buffer
+		if err := openpgp.ArmoredDetachSign(&sig, attackerEntity, bytes.NewReader(releaseContent), nil); err != nil {
+			t.Fatalf("ArmoredDetachSign: %v", err)
+		}
+		sigPath := filepath.Join(tempDir, "Release.asc")
+		if err := os.WriteFile(sigPath, sig.Bytes(), 0644); err != nil {
+			t.Fatalf("Failed to write signature: %v", err)
+		}
+
+		ok, err := VerifyRelease(relPath, sigPath, keyPath)
+		if ok || err == nil {
+			t.Fatalf("expected untrusted armored signature to be rejected, got ok=%v err=%v", ok, err)
+		}
+		if !strings.Contains(err.Error(), "signature verification failed") {
+			t.Fatalf("expected a signature verification error, got: %v", err)
+		}
+	})
+
+	t.Run("signature from the trusted key is accepted", func(t *testing.T) {
+		var sig bytes.Buffer
+		if err := openpgp.DetachSign(&sig, trustedEntity, bytes.NewReader(releaseContent), nil); err != nil {
+			t.Fatalf("DetachSign: %v", err)
+		}
+		sigPath := filepath.Join(tempDir, "Release.trusted.gpg")
+		if err := os.WriteFile(sigPath, sig.Bytes(), 0644); err != nil {
+			t.Fatalf("Failed to write signature: %v", err)
+		}
+
+		ok, err := VerifyRelease(relPath, sigPath, keyPath)
+		if !ok || err != nil {
+			t.Fatalf("expected trusted signature to be accepted, got ok=%v err=%v", ok, err)
+		}
+	})
+}
+
 // TestVerifyDEBs tests the VerifyDEBs function
 func TestVerifyDEBs(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "verify_debs_test")
