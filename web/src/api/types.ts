@@ -107,6 +107,10 @@ export interface PackageRepo {
   description?: string
   enabledByDefault: boolean
   priority?: number
+  // Whether the repo defines any "frequently used" packages, i.e. whether a
+  // curated search can return anything for it. The list itself stays
+  // server-side; this only says whether the toggle is worth offering.
+  hasCuratedPackages?: boolean
 }
 
 export interface PackageRepoList {

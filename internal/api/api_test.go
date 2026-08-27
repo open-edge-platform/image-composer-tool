@@ -405,6 +405,41 @@ func TestHandleListPackageRepos(t *testing.T) {
 	}
 }
 
+// hasCuratedPackages is always emitted, and reports true for at least the base
+// repos. The client hides its "Show frequently used" toggle on a false, so a nil
+// would read as "no curated packages" for every repo and hide it everywhere.
+func TestHandleListPackageReposReportsCuratedAvailability(t *testing.T) {
+	s, _ := newTestServer(t)
+	out := s.getRepos(t, "")
+	curated := 0
+	for _, r := range out.Repos {
+		if r.HasCuratedPackages == nil {
+			t.Errorf("repo %q: hasCuratedPackages not serialized", r.Id)
+			continue
+		}
+		if *r.HasCuratedPackages {
+			curated++
+		}
+	}
+	if curated == 0 {
+		t.Error("no repo reports curated packages; want at least the base repos")
+	}
+}
+
+// The curated list itself stays server-side: the browser sends curated=true and
+// the server filters, so publishing the names would be a second source of truth
+// the UI could silently disagree with.
+func TestHandleListPackageReposOmitsTheCuratedList(t *testing.T) {
+	s, _ := newTestServer(t)
+	rr := s.do(httptest.NewRequest(http.MethodGet, "/api/v1/package-repos", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	if body := rr.Body.String(); strings.Contains(body, "curatedPackages\"") {
+		t.Error("response carries the curatedPackages list; want only the hasCuratedPackages flag")
+	}
+}
+
 func TestHandleListPackageReposOSFilter(t *testing.T) {
 	s, _ := newTestServer(t)
 	all := s.getRepos(t, "")

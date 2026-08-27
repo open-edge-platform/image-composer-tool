@@ -43,10 +43,11 @@ export function PackageRepoBrowser({ repos, activeRepo, onActiveRepo, os }: Pack
     <>
       <p className="mb-3 text-sm text-slate-500">
         Enable a repository with its checkbox, then click it to browse. Browsing
-        starts on the repo&apos;s full catalog (loaded in pages of 100); check
-        &quot;Show frequently used&quot; to narrow the list to its curated picks.
-        The &quot;Select all&quot; checkbox above the list adds everything
-        currently shown to your selection, and removes it again when unchecked.
+        starts on the repo&apos;s full catalog (loaded in pages of 100); where a
+        repository offers curated picks, check &quot;Show frequently used&quot; to
+        narrow the list to them. The &quot;Select all&quot; checkbox above the
+        list adds everything currently shown to your selection, and removes it
+        again when unchecked.
       </p>
       <div className="grid grid-cols-[240px_minmax(0,1fr)] overflow-hidden rounded-lg border border-slate-200">
         <div
@@ -247,15 +248,21 @@ function RepoPane({ repo, enabled, os }: { repo: PackageRepo; enabled: boolean; 
         </p>
       ) : (
         <>
-          <label className="mb-2 flex items-center gap-1.5 text-[12px] text-slate-600">
-            <input
-              type="checkbox"
-              checked={frequentOnly}
-              onChange={(e) => setFrequentOnly(e.target.checked)}
-              className="h-[13px] w-[13px] accent-[#0071c5]"
-            />
-            Show frequently used
-          </label>
+          {/* Only offered where the catalog defines curated picks for this
+              repo. Elsewhere the toggle could only ever empty the list, which
+              reads as the feature being broken rather than as "this repo has
+              no curated picks". */}
+          {repo.hasCuratedPackages && (
+            <label className="mb-2 flex items-center gap-1.5 text-[12px] text-slate-600">
+              <input
+                type="checkbox"
+                checked={frequentOnly}
+                onChange={(e) => setFrequentOnly(e.target.checked)}
+                className="h-[13px] w-[13px] accent-[#0071c5]"
+              />
+              Show frequently used
+            </label>
+          )}
           {error ? (
             <p className="px-5 py-12 text-center text-[13px] text-red-600">{error}</p>
           ) : hits.length === 0 ? (

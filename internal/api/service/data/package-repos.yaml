@@ -33,9 +33,11 @@
 #                     picker but is not yet searchable.
 #   curatedPackages   hand-picked "frequently used" package names for this repo;
 #                     what the browse pane's "Show frequently used" toggle narrows
-#                     the list to. Omitted or empty means the toggle has nothing to
-#                     narrow to — the browse pane then shows an empty state rather
-#                     than falling back to the full catalog.
+#                     the list to. Every name must actually exist in the repo's
+#                     index — a name that doesn't simply never appears, which reads
+#                     as the toggle being broken. Omitted or empty means the repo
+#                     has no curated picks and the browse pane hides the toggle
+#                     entirely, rather than offering one that yields nothing.
 #
 # Where a template omits `component`, the value here is `main` — that is what
 # generateAptSourcesContent in internal/config/apt_sources.go substitutes, so
@@ -168,6 +170,15 @@ repos:
     description: ROS 2 Jazzy Jalisco robotics middleware, tooling and message packages.
     enabledByDefault: false
     os: [ubuntu24]
+    # The metapackages a ROS 2 image usually starts from, rather than any of the
+    # ~8400 individual message/driver packages behind them.
+    curatedPackages:
+      - ros-dev-tools
+      - ros-jazzy-desktop
+      - ros-jazzy-navigation2
+      - ros-jazzy-ros-base
+      - ros-jazzy-rviz2
+      - ros-jazzy-slam-toolbox
     index:
       - codename: noble
         component: main
@@ -233,6 +244,13 @@ repos:
     enabledByDefault: false
     priority: 2000
     os: [ubuntu24]
+    curatedPackages:
+      - ethtool
+      - ffmpeg
+      - gstreamer1.0-plugins-bad
+      - gstreamer1.0-vaapi
+      - intel-gmmlib
+      - intel-media-va-driver-non-free
     index:
       - codename: noble
         component: multimedia main non-free kernels
@@ -243,6 +261,14 @@ repos:
     description: Intel client GPU compute runtime and media driver packages.
     enabledByDefault: false
     os: [ubuntu24]
+    curatedPackages:
+      - intel-media-va-driver-non-free
+      - intel-opencl-icd
+      - libze-intel-gpu1
+      - libze1
+      - linux-image-intel
+      - vainfo
+      - xpu-smi
     index:
       - codename: noble
         component: main
@@ -255,6 +281,12 @@ repos:
     description: Intel RealSense depth-camera SDK, DKMS kernel modules and tools.
     enabledByDefault: false
     os: [ubuntu24]
+    curatedPackages:
+      - librealsense2
+      - librealsense2-dev
+      - librealsense2-dkms
+      - librealsense2-udev-rules
+      - librealsense2-utils
     index:
       - codename: noble
         component: main
@@ -276,6 +308,14 @@ repos:
     description: Gazebo Harmonic physics simulator and its OSRF dependencies.
     enabledByDefault: false
     os: [ubuntu24]
+    # The release metapackages, not the per-library gz-jetty-* components.
+    curatedPackages:
+      - gz-harmonic
+      - gz-ionic
+      - gz-jetty
+      - gz-jetty-gui
+      - gz-jetty-sim
+      - gz-jetty-tools
     index:
       - codename: noble
         component: main
@@ -287,6 +327,12 @@ repos:
     enabledByDefault: false
     priority: 500
     os: [ubuntu24]
+    curatedPackages:
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-ce
+      - docker-ce-cli
+      - docker-compose-plugin
     index:
       - codename: noble
         component: stable
@@ -301,6 +347,10 @@ repos:
     # Debian-family target. Publishes an uncompressed Packages only, which the
     # fetcher falls back to after Packages.gz and .xz.
     os: [ubuntu24, debian13, ubuntu26-server]
+    curatedPackages:
+      - firefox
+      - firefox-esr
+      - mozillavpn
     index:
       - codename: mozilla
         component: main
@@ -312,6 +362,12 @@ repos:
     description: Docker Community Edition engine, CLI and containerd packages.
     enabledByDefault: false
     os: [debian13]
+    curatedPackages:
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-ce
+      - docker-ce-cli
+      - docker-compose-plugin
     index:
       # trixie is Debian 13's own suite; bookworm here served Debian 12
       # packages to a Debian 13 target.
@@ -325,6 +381,12 @@ repos:
     enabledByDefault: false
     priority: 500
     os: [ubuntu26-server]
+    curatedPackages:
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-ce
+      - docker-ce-cli
+      - docker-compose-plugin
     index:
       - codename: resolute
         component: stable
@@ -335,6 +397,17 @@ repos:
     description: Open Source Robotics Foundation simulator packages.
     enabledByDefault: false
     os: [ubuntu26-server]
+    # The resolute suite carries the gz-jetty components rather than the
+    # gz-harmonic/gz-jetty release metapackages the noble suite offers.
+    curatedPackages:
+      - gz-jetty-common
+      - gz-jetty-fuel-tools
+      - gz-jetty-math
+      - gz-jetty-msgs
+      - gz-jetty-physics
+      - gz-jetty-sdformat
+      - gz-jetty-tools
+      - gz-jetty-transport
     index:
       - codename: resolute
         component: main
@@ -345,6 +418,13 @@ repos:
     description: ROS 2 Lyrical, the distribution built for Ubuntu 26.04.
     enabledByDefault: false
     os: [ubuntu26-server]
+    # Lyrical publishes no navigation2 metapackage yet, unlike Jazzy.
+    curatedPackages:
+      - ros-dev-tools
+      - ros-lyrical-desktop
+      - ros-lyrical-ros-base
+      - ros-lyrical-rviz2
+      - ros-lyrical-slam-toolbox
     index:
       - codename: resolute
         component: main

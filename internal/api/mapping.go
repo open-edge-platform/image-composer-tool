@@ -92,13 +92,20 @@ func fromPackageRepoList(repos []service.PackageRepo) httpapi.PackageRepoList {
 	out := httpapi.PackageRepoList{Repos: make([]httpapi.PackageRepo, len(repos))}
 	for i, r := range repos {
 		priority := r.Priority
+		// Only whether the repo has curated packages is published, not which —
+		// the filtering stays server-side behind `curated=true`. Without the
+		// flag a client cannot tell "no curated picks defined" from "curated
+		// search returned nothing", so it would have to offer a toggle that
+		// yields an empty list.
+		hasCurated := len(r.CuratedPackages) > 0
 		out.Repos[i] = httpapi.PackageRepo{
-			Id:               r.ID,
-			DisplayName:      r.DisplayName,
-			Url:              r.URL,
-			Description:      optStr(r.Description),
-			EnabledByDefault: r.EnabledByDefault,
-			Priority:         &priority,
+			Id:                 r.ID,
+			DisplayName:        r.DisplayName,
+			Url:                r.URL,
+			Description:        optStr(r.Description),
+			EnabledByDefault:   r.EnabledByDefault,
+			Priority:           &priority,
+			HasCuratedPackages: &hasCurated,
 		}
 	}
 	return out

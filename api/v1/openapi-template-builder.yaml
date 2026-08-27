@@ -764,6 +764,14 @@ components:
           type: integer
           default: 500
           description: "Repository priority (higher number = preferred when packages exist in multiple repos). Default 500."
+        hasCuratedPackages:
+          type: boolean
+          description: >
+            Whether this repository defines any hand-picked "frequently used"
+            packages, i.e. whether `curated=true` on /packages/search can return
+            anything for it. The list itself stays server-side; only this flag is
+            published, so a client can hide a curation control that would yield
+            nothing rather than offering a dead toggle.
 
     PackageRepoList:
       type: object
