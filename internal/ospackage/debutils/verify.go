@@ -244,10 +244,6 @@ func VerifyRelease(relPath string, relSignPath string, pKeyPath string) (bool, e
 		)
 
 		if err != nil {
-			if strings.Contains(err.Error(), "unknown entity") || strings.Contains(err.Error(), "signature made by unknown entity") {
-				log.Warnf("Signature verification failed due to unknown entity, but allowing: %v", err)
-				return true, nil
-			}
 			return false, fmt.Errorf("signature verification failed (tried both armored and binary): %w", err)
 		}
 	}
