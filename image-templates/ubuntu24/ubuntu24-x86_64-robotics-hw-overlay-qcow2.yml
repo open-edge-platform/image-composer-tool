@@ -47,7 +47,7 @@
 # sources. The child therefore declares none and inherits this list intact.
 #
 # -----------------------------------------------------------------------------
-# BUILD HOST REQUIREMENT (disk.size below triggers the overlay resize path)
+# BUILD HOST REQUIREMENT (allowDiskResize below triggers the overlay resize path)
 # -----------------------------------------------------------------------------
 # Growing the baseline needs `growpart` (cloud-guest-utils), plus `sgdisk`
 # (gdisk), `resize2fs` (e2fsprogs) and `losetup`/`partx` (util-linux).
@@ -177,20 +177,22 @@ baseline:
 overlayPolicy:
   packageOperation: additive-and-upgrade
   conflictPolicy: fail
-  # Explicit consent to grow the baseline to the disk.size below. Without this
-  # the build fails rather than resizing the vendor image implicitly.
+  # Explicit consent to auto-size the grow from the resolved packages' installed
+  # sizes, capped at the disk.size below. Without this the build fails rather
+  # than resizing the vendor image implicitly.
   allowDiskResize: true
 
 # -----------------------------------------------------------------------------
 # Output: a qcow2 artifact. The overlay emits a RAW copy, then the Convert
 # Artifacts stage produces every format listed here. Canonical's cloud image is
-# ~3.5GiB provisioned; 64GiB leaves room for this layer plus whatever a child
-# overlays on top (the full ROS 2 desktop stack is large). Resize is grow-only
-# and needs BOTH a larger disk.size AND allowDiskResize above.
+# ~3.5GiB provisioned; disk.size below is a ceiling (not an exact target) on the
+# auto-sized grow, leaving room for this layer plus whatever a child overlays on
+# top (the full ROS 2 desktop stack is large) — the final image may end up
+# smaller than 24GiB. Resize needs allowDiskResize above; disk.size is optional.
 # -----------------------------------------------------------------------------
 disk:
   name: overlay-disk
-  size: 64GiB
+  size: 24GiB
   artifacts:
     - type: qcow2
 

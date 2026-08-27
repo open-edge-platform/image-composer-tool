@@ -6,7 +6,7 @@ package confirmview
 import (
 	"testing"
 
-	"github.com/gdamore/tcell"
+	"github.com/gdamore/tcell/v2"
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/rivo/tview"
 )

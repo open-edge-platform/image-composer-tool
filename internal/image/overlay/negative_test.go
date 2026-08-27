@@ -256,23 +256,22 @@ func (e *stringError) Error() string { return e.s }
 // without the allowDiskResize opt-in must name that opt-in.
 func TestNegative_ResizeShrink(t *testing.T) {
 	current := int64(100 << 20)
-	p := writeSizedFile(t, current)
 
 	tests := []struct {
 		name           string
-		target         string
+		targetBytes    int64
 		allowResize    bool
 		wantSubstrings []string
 	}{
 		{
 			name:           "shrink is rejected",
-			target:         "50MiB",
+			targetBytes:    50 << 20,
 			allowResize:    false,
 			wantSubstrings: []string{"shrink not supported", "grow-only"},
 		},
 		{
 			name:           "grow without opt-in is rejected",
-			target:         "200MiB",
+			targetBytes:    200 << 20,
 			allowResize:    false,
 			wantSubstrings: []string{"allowDiskResize"},
 		},
@@ -280,7 +279,7 @@ func TestNegative_ResizeShrink(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := planResize(p, tt.target, tt.allowResize)
+			_, err := planResize(current, tt.targetBytes, tt.allowResize)
 			assertActionableError(t, err, tt.wantSubstrings...)
 		})
 	}

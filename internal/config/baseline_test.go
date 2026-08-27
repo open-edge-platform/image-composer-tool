@@ -256,6 +256,34 @@ func TestValidateBaseline(t *testing.T) {
 	}
 }
 
+// TestValidateBaselineDiskSizing confirms disk.size validates in both modes: an
+// exact size in create mode, an auto-size ceiling in overlay mode.
+func TestValidateBaselineDiskSizing(t *testing.T) {
+	tests := []struct {
+		name     string
+		baseline *Baseline
+		disk     DiskConfig
+	}{
+		{
+			name:     "overlay with size is allowed",
+			baseline: &Baseline{Mode: BaselineModeOverlay, Source: &BaselineSource{Path: "/tmp/u.raw"}},
+			disk:     DiskConfig{Size: "24GiB"},
+		},
+		{
+			name: "create mode allows size",
+			disk: DiskConfig{Size: "24GiB"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpl := &ImageTemplate{Baseline: tt.baseline, Disk: tt.disk}
+			if err := tmpl.validateBaseline(); err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+		})
+	}
+}
+
 // TestValidateOverlaySystemConfig confirms that an overlay-mode template is
 // rejected when it sets any systemConfig section the overlay pipeline cannot
 // apply (hostname, network, initramfs, kernel, immutability, fde, bootloader),

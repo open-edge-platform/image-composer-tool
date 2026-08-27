@@ -17,6 +17,7 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -266,7 +267,21 @@ func matchesPackageFilter(pkgName string, filter []string) bool {
 	return false
 }
 
+// rpmParsedMetadataCacheVersion is the schema version of the on-disk parsed RPM
+// metadata cache. Bump it whenever the parsed shape changes so a cache written by
+// an older binary is treated as a miss and re-parsed, rather than silently
+// returning records missing the new data. A pre-versioning cache unmarshals
+// Version as the zero value, which never matches a bumped constant, so it is
+// correctly treated as stale too.
+// v1: PackageInfo.InstalledSizeBytes is now parsed from <size installed=…> and
+// feeds overlay auto-sizing.
+// v2: PackageInfo.HasInstalledSize is now parsed alongside InstalledSizeBytes to
+// distinguish an explicit zero footprint from a missing size; a v1 cache would
+// report every package as HasInstalledSize=false (treated as unknown).
+const rpmParsedMetadataCacheVersion = 2
+
 type rpmParsedMetadataCache struct {
+	Version     int                     `json:"version"`
 	MetadataURL string                  `json:"metadata_url"`
 	Packages    []ospackage.PackageInfo `json:"packages"`
 }
@@ -291,6 +306,7 @@ func loadRPMParsedMetadataCache(cacheFile string) (*rpmParsedMetadataCache, erro
 
 func saveRPMParsedMetadataCache(cacheFile, metadataURL string, pkgs []ospackage.PackageInfo) error {
 	cache := rpmParsedMetadataCache{
+		Version:     rpmParsedMetadataCacheVersion,
 		MetadataURL: metadataURL,
 		Packages:    pkgs,
 	}
@@ -367,11 +383,11 @@ func rpmMetadataCacheDir(baseURL string) (string, error) {
 // ParseRepositoryMetadata parses the repodata/primary.xml(.gz/.zst) file from a given base URL.
 // If packageFilter is non-empty, only packages matching the filter (by name prefix) will be included.
 // It also caches the downloaded and uncompressed XML files for debugging purposes.
-func ParseRepositoryMetadata(baseURL, gzHref string, packageFilter []string) ([]ospackage.PackageInfo, error) {
+func ParseRepositoryMetadata(baseURL, metadataHref string, packageFilter []string) ([]ospackage.PackageInfo, error) {
 	log := logger.Logger()
 	cacheEnabled := !system.IsLiveInstallerExecution()
 
-	fullURL := strings.TrimRight(baseURL, "/") + "/" + strings.TrimLeft(gzHref, "/")
+	fullURL := strings.TrimRight(baseURL, "/") + "/" + strings.TrimLeft(metadataHref, "/")
 	log.Infof("Fetching and parsing repository metadata from %s", fullURL)
 
 	// Keep metadata cache under persistent cache-dir so rebuilds can run offline.
@@ -392,41 +408,124 @@ func ParseRepositoryMetadata(baseURL, gzHref string, packageFilter []string) ([]
 
 	// Offline-first behavior: if parsed metadata is cached for this exact metadata URL,
 	// return it immediately without any network operation.
+	staleMetadataURLMatches := false
 	if xmlCacheDir != "" {
 		parsedCacheFile := filepath.Join(xmlCacheDir, "primary.parsed.json")
 		cached, cacheErr := loadRPMParsedMetadataCache(parsedCacheFile)
-		if cacheErr == nil && cached.MetadataURL == fullURL {
+		if cacheErr == nil && cached.MetadataURL == fullURL && cached.Version == rpmParsedMetadataCacheVersion {
 			log.Infof("Using cached RPM metadata for %s", fullURL)
 			return filterRPMPackages(cached.Packages, packageFilter), nil
 		}
+		// A stale (version-mismatched) cache whose MetadataURL still matches fullURL
+		// confirms this exact URL was fetched before, which is the only safe
+		// evidence for trusting a legacy, baseURL-only-keyed raw cache below (that
+		// key alone can't tell two hrefs of the same repo apart).
+		staleMetadataURLMatches = cacheErr == nil && cached.MetadataURL == fullURL
 		if cacheErr != nil && !os.IsNotExist(cacheErr) {
 			log.Warnf("Failed to load cached RPM metadata %s: %v", parsedCacheFile, cacheErr)
 		}
 	}
 
-	client := network.NewSecureHTTPClient()
-	// First, fetch compressed XML with retry on transient failures
-	compressedData, err := fetchURLWithRetry(runctx.Context(), client, fullURL, "repository metadata")
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch compressed metadata: %w", err)
-	}
-
-	// Save the original compressed file
+	// A stale/missing parsed cache may still have raw metadata cached from an
+	// earlier run (saved below via saveOriginalXML): reparse that offline instead
+	// of forcing a network fetch, so a parsed-cache version bump alone does not
+	// break an otherwise warm offline rebuild. Only fetch over the network when no
+	// usable raw metadata is cached.
+	var compressedData []byte
+	var err error
+	migratingLegacyRaw := false
+	fromCache := false
 	if xmlCacheDir != "" {
-		saveOriginalXML(xmlCacheDir, gzHref, baseURL, compressedData)
+		raw, rawErr := findLatestCachedRawMetadata(xmlCacheDir, metadataHref, fullURL)
+		if rawErr != nil && os.IsNotExist(rawErr) && staleMetadataURLMatches {
+			// Nothing under the current (fullURL-keyed) name, but a binary built
+			// before that key existed may have cached it under the legacy
+			// baseURL-only name. Trust it only because staleMetadataURLMatches
+			// already confirmed this fullURL is what was actually fetched.
+			if legacyRaw, legacyErr := findLatestCachedRawMetadata(xmlCacheDir, metadataHref, baseURL); legacyErr == nil {
+				raw, rawErr = legacyRaw, nil
+				migratingLegacyRaw = true
+			}
+		}
+		if rawErr == nil {
+			log.Infof("Reparsing cached raw RPM metadata for %s (parsed cache stale or missing)", fullURL)
+			compressedData = raw
+			fromCache = true
+		} else if !os.IsNotExist(rawErr) {
+			log.Warnf("Failed to check for cached raw RPM metadata: %v", rawErr)
+		}
 	}
 
+	// A cache-sourced file that fails to decompress/parse (e.g. truncated by an
+	// interrupted earlier write) must not abort an otherwise-online build: treat
+	// it as a cache miss and fall through to a real fetch below, rather than
+	// trusting it as authoritative just because it was found.
+	var infos []ospackage.PackageInfo
+	var rawXML []byte
+	if fromCache {
+		infos, rawXML, err = decodeAndParsePrimaryXML(compressedData, metadataHref, baseURL)
+		if err != nil {
+			log.Warnf("Cached raw RPM metadata for %s failed to parse (%v); treating it as a cache miss and "+
+				"fetching over the network", fullURL, err)
+			compressedData, fromCache, migratingLegacyRaw = nil, false, false
+		}
+	}
+
+	if !fromCache {
+		client := network.NewSecureHTTPClient()
+		compressedData, err = fetchURLWithRetry(runctx.Context(), client, fullURL, "repository metadata")
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch compressed metadata: %w", err)
+		}
+
+		// Save the original compressed file
+		if xmlCacheDir != "" {
+			saveOriginalXML(xmlCacheDir, metadataHref, fullURL, compressedData)
+		}
+
+		infos, rawXML, err = decodeAndParsePrimaryXML(compressedData, metadataHref, baseURL)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse fetched repository metadata: %w", err)
+		}
+	} else if migratingLegacyRaw && xmlCacheDir != "" {
+		// Migrate the legacy-keyed raw file to the current key so future lookups
+		// no longer need the legacy fallback.
+		saveOriginalXML(xmlCacheDir, metadataHref, fullURL, compressedData)
+	}
+
+	// Save the uncompressed XML file
+	if xmlCacheDir != "" {
+		saveUncompressedXML(xmlCacheDir, metadataHref, fullURL, rawXML)
+
+		parsedCacheFile := filepath.Join(xmlCacheDir, "primary.parsed.json")
+		if saveErr := saveRPMParsedMetadataCache(parsedCacheFile, fullURL, infos); saveErr != nil {
+			log.Warnf("Failed to save RPM parsed metadata cache %s: %v", parsedCacheFile, saveErr)
+		}
+	}
+
+	return filterRPMPackages(infos, packageFilter), nil
+}
+
+// decodeAndParsePrimaryXML decompresses compressedData (gzip or zstd, chosen by
+// metadataHref's extension) and parses it as a repodata primary.xml document,
+// returning the resolved packages and the raw decompressed XML (kept for the
+// on-disk debug copy). baseURL resolves each package's <location href=...> into
+// an absolute download URL. Returns an error on a corrupt/truncated input —
+// callers sourcing compressedData from a raw-metadata cache should treat that as
+// a cache miss and retry over the network rather than aborting the build.
+func decodeAndParsePrimaryXML(compressedData []byte, metadataHref, baseURL string) ([]ospackage.PackageInfo, []byte, error) {
 	var gr io.ReadCloser
-	ext := strings.ToLower(filepath.Ext(gzHref))
+	var err error
+	ext := strings.ToLower(filepath.Ext(metadataHref))
 	reader := bytes.NewReader(compressedData)
 	switch ext {
 	case ".gz":
 		gr, err = gzip.NewReader(reader)
 
 	case ".zst":
-		zstDecoder, err := zstd.NewReader(reader)
-		if err != nil {
-			return nil, err
+		zstDecoder, zerr := zstd.NewReader(reader)
+		if zerr != nil {
+			return nil, nil, zerr
 		}
 		gr = zstDecoder.IOReadCloser()
 
@@ -435,7 +534,7 @@ func ParseRepositoryMetadata(baseURL, gzHref string, packageFilter []string) ([]
 	}
 
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer gr.Close()
 
@@ -455,7 +554,7 @@ func ParseRepositoryMetadata(baseURL, gzHref string, packageFilter []string) ([]
 		if err == io.EOF {
 			break
 		} else if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		switch elem := tok.(type) {
@@ -644,6 +743,22 @@ func ParseRepositoryMetadata(baseURL, gzHref string, packageFilter []string) ([]
 					}
 				}
 
+			case "size":
+				// <size package=".." installed=".." archive=".."/> — the installed
+				// attribute is the uncompressed on-disk footprint in bytes. It is a
+				// self-closing element (no CharData). A malformed value is treated as
+				// "unknown" (HasInstalledSize stays false): it only feeds an overlay
+				// disk-size estimate.
+				for _, attr := range elem.Attr {
+					if attr.Name.Local == "installed" {
+						if n, perr := strconv.ParseInt(attr.Value, 10, 64); perr == nil && n >= 0 && curInfo != nil {
+							curInfo.InstalledSizeBytes = n
+							curInfo.HasInstalledSize = true
+						}
+						break
+					}
+				}
+
 			case "checksum":
 				// primary.xml checksum for the rpm payload (outside <format>)
 				cs := ospackage.Checksum{}
@@ -681,17 +796,7 @@ func ParseRepositoryMetadata(baseURL, gzHref string, packageFilter []string) ([]
 		}
 	}
 
-	// Save the uncompressed XML file
-	if xmlCacheDir != "" {
-		saveUncompressedXML(xmlCacheDir, gzHref, baseURL, xmlBuffer.Bytes())
-
-		parsedCacheFile := filepath.Join(xmlCacheDir, "primary.parsed.json")
-		if saveErr := saveRPMParsedMetadataCache(parsedCacheFile, fullURL, infos); saveErr != nil {
-			log.Warnf("Failed to save RPM parsed metadata cache %s: %v", parsedCacheFile, saveErr)
-		}
-	}
-
-	return filterRPMPackages(infos, packageFilter), nil
+	return infos, xmlBuffer.Bytes(), nil
 }
 
 // FetchPrimaryURL downloads repomd.xml and returns the href of the primary metadata.
@@ -1120,17 +1225,77 @@ func generateRPMMetadataDir(baseURL string) string {
 	return fmt.Sprintf("%s_%s_%s_rpm", repoId, arch, urlHashStr)
 }
 
-// saveOriginalXML saves the original compressed XML file to cache directory
-func saveOriginalXML(xmlCacheDir, gzHref, baseURL string, data []byte) {
+// findLatestCachedRawMetadata locates the most recently saved raw (compressed)
+// primary XML matching metadataHref and hashKey, keyed the same way
+// saveOriginalXML names its files. The caller normally passes fullURL as
+// hashKey (matching saveOriginalXML, so a repomd href change can't match raw
+// content cached under a different path that happens to share the same
+// basename); it may also pass the legacy baseURL-only key to look up raw
+// metadata saved by a binary built before the fullURL key existed, but only
+// once independently confirmed safe (see the staleMetadataURLMatches check in
+// ParseRepositoryMetadata) — that legacy key alone can't tell two hrefs of the
+// same repo apart. Returns an os.ErrNotExist-wrapped error when none is cached.
+func findLatestCachedRawMetadata(xmlCacheDir, metadataHref, hashKey string) ([]byte, error) {
+	urlHash := sha256.Sum256([]byte(hashKey))
+	urlHashStr := hex.EncodeToString(urlHash[:])[:8]
+	ext := filepath.Ext(metadataHref)
+	baseFilename := strings.TrimSuffix(filepath.Base(metadataHref), ext)
+
+	matches, err := filepath.Glob(filepath.Join(xmlCacheDir, fmt.Sprintf("%s_%s_*%s", baseFilename, urlHashStr, ext)))
+	if err != nil {
+		return nil, err
+	}
+	if len(matches) == 0 {
+		return nil, os.ErrNotExist
+	}
+	// Filenames embed a lexically-sortable timestamp ("2006-01-02_15-04-05"), so
+	// the last sorted match is the most recently cached raw file.
+	sort.Strings(matches)
+	return os.ReadFile(matches[len(matches)-1])
+}
+
+// pruneOldCachedFiles removes every previously cached file matching
+// baseFilename_urlHash_*ext (the same naming scheme saveOriginalXML and
+// saveUncompressedXML use) except keepPath, so each (metadataHref, hashKey,
+// ext) key retains at most one cached file on disk instead of growing one
+// timestamped file per fetch/reparse without bound.
+func pruneOldCachedFiles(xmlCacheDir, metadataHref, hashKey, ext, keepPath string) {
+	log := logger.Logger()
+	urlHash := sha256.Sum256([]byte(hashKey))
+	urlHashStr := hex.EncodeToString(urlHash[:])[:8]
+	baseFilename := strings.TrimSuffix(filepath.Base(metadataHref), filepath.Ext(metadataHref))
+
+	matches, err := filepath.Glob(filepath.Join(xmlCacheDir, fmt.Sprintf("%s_%s_*%s", baseFilename, urlHashStr, ext)))
+	if err != nil {
+		log.Warnf("Failed to enumerate old cached metadata files for pruning: %v", err)
+		return
+	}
+	for _, m := range matches {
+		if m == keepPath {
+			continue
+		}
+		if rmErr := os.Remove(m); rmErr != nil {
+			log.Warnf("Failed to prune old cached metadata file %s: %v", m, rmErr)
+		}
+	}
+}
+
+// saveOriginalXML saves the original compressed XML file to cache directory,
+// then prunes any other cached file for the same key so the cache holds at
+// most one raw file per (metadataHref, fullURL) pair.
+func saveOriginalXML(xmlCacheDir, metadataHref, fullURL string, data []byte) {
 	log := logger.Logger()
 
-	// Generate filename from URL and timestamp
-	urlHash := sha256.Sum256([]byte(baseURL))
+	// Generate filename from the full metadata URL and timestamp. Hashing fullURL
+	// (not just baseURL) keeps this keyed the same way findLatestCachedRawMetadata
+	// looks it up: a repomd href change must not match a differently-sourced file
+	// that happens to share the same basename.
+	urlHash := sha256.Sum256([]byte(fullURL))
 	urlHashStr := hex.EncodeToString(urlHash[:])[:8]
 	timestamp := time.Now().Format("2006-01-02_15-04-05")
 
-	baseFilename := strings.TrimSuffix(filepath.Base(gzHref), filepath.Ext(gzHref))
-	filename := fmt.Sprintf("%s_%s_%s%s", baseFilename, urlHashStr, timestamp, filepath.Ext(gzHref))
+	baseFilename := strings.TrimSuffix(filepath.Base(metadataHref), filepath.Ext(metadataHref))
+	filename := fmt.Sprintf("%s_%s_%s%s", baseFilename, urlHashStr, timestamp, filepath.Ext(metadataHref))
 
 	filePath := filepath.Join(xmlCacheDir, filename)
 	if err := os.WriteFile(filePath, data, 0644); err != nil {
@@ -1139,18 +1304,21 @@ func saveOriginalXML(xmlCacheDir, gzHref, baseURL string, data []byte) {
 	}
 
 	log.Infof("Saved original XML file: %s", filePath)
+	pruneOldCachedFiles(xmlCacheDir, metadataHref, fullURL, filepath.Ext(metadataHref), filePath)
 }
 
-// saveUncompressedXML saves the uncompressed XML content to cache directory
-func saveUncompressedXML(xmlCacheDir, gzHref, baseURL string, xmlData []byte) {
+// saveUncompressedXML saves the uncompressed XML content to cache directory,
+// then prunes any other cached debug copy for the same key.
+func saveUncompressedXML(xmlCacheDir, metadataHref, fullURL string, xmlData []byte) {
 	log := logger.Logger()
 
-	// Generate filename from URL and timestamp
-	urlHash := sha256.Sum256([]byte(baseURL))
+	// Generate filename from the full metadata URL and timestamp (see
+	// saveOriginalXML for why fullURL, not just baseURL, is hashed).
+	urlHash := sha256.Sum256([]byte(fullURL))
 	urlHashStr := hex.EncodeToString(urlHash[:])[:8]
 	timestamp := time.Now().Format("2006-01-02_15-04-05")
 
-	baseFilename := strings.TrimSuffix(filepath.Base(gzHref), filepath.Ext(gzHref))
+	baseFilename := strings.TrimSuffix(filepath.Base(metadataHref), filepath.Ext(metadataHref))
 	filename := fmt.Sprintf("%s_%s_%s.xml", baseFilename, urlHashStr, timestamp)
 
 	filePath := filepath.Join(xmlCacheDir, filename)
@@ -1160,4 +1328,5 @@ func saveUncompressedXML(xmlCacheDir, gzHref, baseURL string, xmlData []byte) {
 	}
 
 	log.Infof("Saved uncompressed XML file: %s", filePath)
+	pruneOldCachedFiles(xmlCacheDir, metadataHref, fullURL, ".xml", filePath)
 }

@@ -286,8 +286,10 @@ Two more consequences of the same merge order, both load-bearing:
   repositories and the child declares none. Three of them share the codename
   `noble`; splitting them across layers would collapse them (see trap 2 above).
 
-Growing a vendor baseline needs `overlayPolicy.allowDiskResize: true` *and* a
-`disk.size` larger than the baseline. The resize path also needs a build host with
+Growing a vendor baseline needs `overlayPolicy.allowDiskResize: true`. The tool
+auto-sizes the grow from the packages being installed; `disk.size`, if set, acts
+as a **ceiling** on that grow (omit it to auto-size with no cap). The
+resize path also needs a build host with
 util-linux ≥ 2.38 (Ubuntu 24.04+): it reads partition start sectors via
 `lsblk -o PATH,START,TYPE`, and the `START` column does not exist on older hosts —
 Ubuntu 22.04 fails with `lsblk: unknown column: START,TYPE`.

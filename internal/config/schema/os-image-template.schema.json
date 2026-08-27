@@ -132,7 +132,7 @@
         },
         "size": {
           "type": "string",
-          "description": "Size of the disk (e.g., '4GiB', '8GB')"
+          "description": "Size of the disk (e.g., '4GiB', '8GB'). In create mode this is the exact disk size. In overlay mode, with overlayPolicy.allowDiskResize, it instead acts as an auto-size ceiling: the resize grows the baseline only as far as the added packages need, capped at this value."
         },
         "partitionTableType": {
           "type": "string",
@@ -595,7 +595,7 @@
         },
         "allowDiskResize": {
           "type": "boolean",
-          "description": "Permit growing the baseline image to satisfy a larger disk.size. Overlay mode preserves the baseline disk layout by default; when false (the default) a disk.size larger than the baseline is rejected. Resize is always grow-only and never shrinks the image.",
+          "description": "Permit growing the baseline image to fit the packages being installed. Overlay mode preserves the baseline disk layout by default. When true, the resize is auto-sized from the resolved packages' installed-size metadata, capped at disk.size when it is set (unset disk.size auto-sizes with no cap). When false (the default), a grow required to fit the packages is rejected. Resize is always grow-only and never shrinks the image.",
           "default": false
         },
         "allowPackageRemoval": {

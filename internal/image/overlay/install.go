@@ -1066,9 +1066,11 @@ func rpmNameArch(nevra string) string {
 // when the failure was caused by the baseline root filling up, or "" otherwise.
 // The install backends fold the package manager's captured output (which carries
 // the "No space left on device" ENOSPC diagnostic) into the error they return, so
-// the hint keys off that text. Overlay mode never auto-grows the image to fit the
-// added packages — resize is a separate, grow-only step keyed on disk.size — so a
-// full baseline is a configuration problem the hint points the user at directly.
+// the hint keys off that text. With overlayPolicy.allowDiskResize, the resize
+// stage auto-sizes the grow from the resolved packages' installed-size metadata,
+// capped at disk.size when it is set — so this failure means either resize is not
+// enabled, the ceiling was reached, or no package reported a size to size the grow
+// from at all.
 func diskSpaceHint(installErr error) string {
 	if installErr == nil {
 		return ""
@@ -1079,6 +1081,7 @@ func diskSpaceHint(installErr error) string {
 		return ""
 	}
 	return "\n  hint: the baseline root filesystem ran out of space while installing the added " +
-		"package(s). Overlay mode does not auto-grow the image to fit new packages; set disk.size " +
-		"in the template larger than the baseline image to make room, then rebuild."
+		"package(s). Enable overlayPolicy.allowDiskResize to auto-size the grow from the packages' " +
+		"installed sizes, raise or remove a disk.size ceiling that capped the grow short, or use a " +
+		"baseline with more free space, then rebuild."
 }

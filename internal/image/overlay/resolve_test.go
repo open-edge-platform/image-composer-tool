@@ -1152,16 +1152,18 @@ func TestBuildResolutionPlan_CarriesPackageMetadata(t *testing.T) {
 	// emitting a degraded entry (missing supplier/checksum/description).
 	closure := []ospackage.PackageInfo{
 		{
-			Name:        "tree",
-			PkgName:     "tree",
-			Type:        "deb",
-			Version:     "2.1.1-2ubuntu3",
-			Arch:        "amd64",
-			URL:         "http://archive.ubuntu.com/ubuntu/pool/universe/t/tree/tree_2.1.1-2ubuntu3_amd64.deb",
-			Description: "displays an indented directory tree",
-			Origin:      "Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>",
-			License:     "GPL-2.0",
-			Checksums:   []ospackage.Checksum{{Algorithm: "SHA256", Value: "deadbeef"}},
+			Name:               "tree",
+			PkgName:            "tree",
+			Type:               "deb",
+			Version:            "2.1.1-2ubuntu3",
+			Arch:               "amd64",
+			URL:                "http://archive.ubuntu.com/ubuntu/pool/universe/t/tree/tree_2.1.1-2ubuntu3_amd64.deb",
+			Description:        "displays an indented directory tree",
+			Origin:             "Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>",
+			License:            "GPL-2.0",
+			Checksums:          []ospackage.Checksum{{Algorithm: "SHA256", Value: "deadbeef"}},
+			InstalledSizeBytes: 2097152,
+			HasInstalledSize:   true,
 		},
 	}
 
@@ -1184,5 +1186,11 @@ func TestBuildResolutionPlan_CarriesPackageMetadata(t *testing.T) {
 	}
 	if len(got.Checksums) != 1 || got.Checksums[0].Value != "deadbeef" {
 		t.Errorf("checksums not carried into ToInstall: %+v", got.Checksums)
+	}
+	// Guards the only bridge between repo parsing and overlay auto-sizing: if this
+	// assignment is ever dropped, auto-sizing silently falls back to the disk.size
+	// ceiling instead of failing loudly.
+	if got.InstalledSizeBytes != 2097152 || !got.HasInstalledSize {
+		t.Errorf("InstalledSizeBytes/HasInstalledSize not carried into ToInstall: %+v", got)
 	}
 }
