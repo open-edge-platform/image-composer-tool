@@ -53,9 +53,14 @@ func armoredDetachSign(t *testing.T, entity *openpgp.Entity, data []byte) []byte
 // sig, leaving the armor structure (headers, line breaks, CRC line) intact so
 // the corruption is in the signature data itself rather than in something
 // armor.Decode would reject outright.
+//
+// Operates on a copy: bytes.Split's slices alias the input's backing array, so
+// flipping a byte through one of them would corrupt the caller's own signature
+// — which the parallel subtests share, making the valid-signature case fail
+// depending on which subtest happened to run first.
 func tamperArmoredSignature(t *testing.T, sig []byte) []byte {
 	t.Helper()
-	lines := bytes.Split(sig, []byte("\n"))
+	lines := bytes.Split(append([]byte(nil), sig...), []byte("\n"))
 	for i, line := range lines {
 		if len(line) == 0 || line[0] == '-' || line[0] == '=' {
 			continue
