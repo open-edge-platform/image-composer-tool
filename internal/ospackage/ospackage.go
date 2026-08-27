@@ -18,6 +18,17 @@ type PackageInfo struct {
 	Files            []string // list of files in this package (rpm:files)
 	PkgName          string   // name of the package
 	Breaks           []string // deb Breaks: field terms (raw "name (op ver)" strings)
+	// InstalledSizeBytes is the estimated on-disk footprint of the package once
+	// unpacked, in bytes (deb Installed-Size × 1024, rpm <size installed=…>).
+	// Meaningful only when HasInstalledSize is true — the repository metadata may
+	// legitimately report a real zero footprint, which is not the same as not
+	// reporting a size at all. Used to estimate the disk space an overlay build
+	// needs before growing the baseline.
+	InstalledSizeBytes int64
+	// HasInstalledSize reports whether the repository metadata included a parsable
+	// installed size for this package. False for a missing, malformed, or
+	// overflow-guarded value; InstalledSizeBytes is meaningless when false.
+	HasInstalledSize bool
 }
 
 // Checksum holds the algorithm and value of a checksum.

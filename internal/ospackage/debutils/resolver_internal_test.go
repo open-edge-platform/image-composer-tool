@@ -247,6 +247,73 @@ func parseFixtureMetadata(t *testing.T, baseURL, buildPath string) []ospackage.P
 	return pkgs
 }
 
+// TestParseRepositoryMetadata_InstalledSize confirms the Debian Installed-Size
+// field (in KiB) is parsed into PackageInfo.InstalledSizeBytes (bytes; used to
+// auto-size an overlay disk grow), and that a stanza without it reports 0.
+func TestParseRepositoryMetadata_InstalledSize(t *testing.T) {
+	buildPath := filepath.Join(t.TempDir(), "repo_main")
+	if err := os.MkdirAll(buildPath, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	stanzas := "Package: sized\nVersion: 1.0\nArchitecture: amd64\nInstalled-Size: 2048\n" +
+		"Filename: pool/main/s/sized/sized_1.0_amd64.deb\n\n" +
+		"Package: nosize\nVersion: 1.0\nArchitecture: amd64\n" +
+		"Filename: pool/main/n/nosize/nosize_1.0_amd64.deb\n\n" +
+		"Package: huge\nVersion: 1.0\nArchitecture: amd64\nInstalled-Size: 9223372036854775807\n" +
+		"Filename: pool/main/h/huge/huge_1.0_amd64.deb\n\n" +
+		"Package: zerosize\nVersion: 1.0\nArchitecture: amd64\nInstalled-Size: 0\n" +
+		"Filename: pool/main/z/zerosize/zerosize_1.0_amd64.deb\n\n"
+
+	pkggzPath := filepath.Join(buildPath, "Packages.gz")
+	pkgFile, err := os.Create(pkggzPath)
+	if err != nil {
+		t.Fatalf("create Packages.gz: %v", err)
+	}
+	gzWriter := gzip.NewWriter(pkgFile)
+	if _, err := gzWriter.Write([]byte(stanzas)); err != nil {
+		t.Fatalf("write gzip: %v", err)
+	}
+	if err := gzWriter.Close(); err != nil {
+		t.Fatalf("close gzip: %v", err)
+	}
+	if err := pkgFile.Close(); err != nil {
+		t.Fatalf("close file: %v", err)
+	}
+
+	checksum, err := computeFileSHA256(pkggzPath)
+	if err != nil {
+		t.Fatalf("checksum: %v", err)
+	}
+	releaseContent := fmt.Sprintf("SHA256:\n %s 1 main/binary-amd64/Packages.gz\n", checksum)
+	if err := os.WriteFile(filepath.Join(buildPath, "Release"), []byte(releaseContent), 0o644); err != nil {
+		t.Fatalf("write Release: %v", err)
+	}
+
+	pkgs := parseFixtureMetadata(t, "http://example.invalid:1/", buildPath)
+	got := map[string]int64{}
+	hasSize := map[string]bool{}
+	for _, p := range pkgs {
+		got[p.Name] = p.InstalledSizeBytes
+		hasSize[p.Name] = p.HasInstalledSize
+	}
+	if want := int64(2048 * 1024); got["sized"] != want || !hasSize["sized"] {
+		t.Errorf("sized InstalledSizeBytes/HasInstalledSize = %d/%v, want %d/true", got["sized"], hasSize["sized"], want)
+	}
+	if got["nosize"] != 0 || hasSize["nosize"] {
+		t.Errorf("nosize InstalledSizeBytes/HasInstalledSize = %d/%v, want 0/false (no Installed-Size)", got["nosize"], hasSize["nosize"])
+	}
+	// A KiB value whose ×1024 conversion would overflow int64 must be treated as
+	// unknown, not silently wrapped negative.
+	if got["huge"] != 0 || hasSize["huge"] {
+		t.Errorf("huge InstalledSizeBytes/HasInstalledSize = %d/%v, want 0/false (overflow guarded)", got["huge"], hasSize["huge"])
+	}
+	// An explicit "Installed-Size: 0" is a real, reported footprint — distinct from
+	// a stanza that omits the field entirely — and must be marked known.
+	if got["zerosize"] != 0 || !hasSize["zerosize"] {
+		t.Errorf("zerosize InstalledSizeBytes/HasInstalledSize = %d/%v, want 0/true (confirmed zero footprint)", got["zerosize"], hasSize["zerosize"])
+	}
+}
+
 func TestParseRepositoryMetadata_ParsedCacheBypassForLoopback(t *testing.T) {
 	tests := []struct {
 		name        string

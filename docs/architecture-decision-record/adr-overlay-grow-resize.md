@@ -4,6 +4,17 @@
 **Date**: 2026-07-14
 **Updated**: 2026-07-16 — hardening story implemented (non-last-partition guard,
 LVM-specific rejection, resize tool pre-flight check, xfs marked best-effort).
+**Updated**: 2026-08-21 — added an **auto-size** path alongside the exact
+`disk.size` target: a new, mutually-exclusive `disk.maxSize` grows the baseline
+only as far as the resolved packages need (installed-size metadata measured
+against the baseline's real free space), capped at that ceiling. `disk.size`
+keeps its exact-size meaning. This supersedes the original "keyed solely on
+`disk.size`" sizing and the rejection of auto-sizing (see Alternatives).
+**Updated**: 2026-08-26 — `disk.maxSize` removed; `disk.size` is now the single
+disk-sizing field. In overlay mode it is always an auto-size **ceiling**
+(the grow target is computed from the resolved packages' installed-size
+metadata, capped at `disk.size` when set), not an exact target. `disk.size`
+keeps its exact-size meaning in create mode.
 **Authors**: Image Composer Tool Team
 **Technical Area**: Image Composition / Overlay
 **Parent ADR**: [Baseline Image Overlay and ISO Composition Boundaries](adr-image-extension.md)
@@ -37,8 +48,10 @@ implementation story tracked in JIRA.
 
 ## Context
 
-- Overlay adds packages but does **not** auto-grow the image. Sizing is keyed
-  solely on `disk.size` vs. the baseline's current size.
+- Overlay adds packages and can grow the image. Sizing is auto-computed from the
+  resolved packages' installed-size metadata against the baseline's real free
+  space, capped at `disk.size` when it is set (2026-08-26; previously `disk.size`
+  gave an exact target and a separate `disk.maxSize` was the ceiling).
 - Without headroom the install step fails with "no space left on device".
 - The parent ADR lists "Resize the disk image where supported" and "Grow
   supported filesystems" as in-scope Phase-1 capabilities, and "Shrinking images
@@ -84,6 +97,15 @@ Semantics:
 - `disk.size` unset **or** ≤ baseline → no-op (resize never needed; opt-in not required).
 - `disk.size` > baseline **and** `allowDiskResize: false` (default) → **hard error** with remediation text.
 - `disk.size` > baseline **and** `allowDiskResize: true` → grow.
+
+> **Superseded 2026-08-21 — auto-size added, then 2026-08-26 — unified on
+> `disk.size`.** Under `allowDiskResize: true`, the grow target is always
+> computed from the resolved packages' installed-size metadata measured against the
+> baseline's real free space, capped at `disk.size` when it is set (grow freely when
+> it is unset). `disk.size` is therefore a **ceiling** in overlay mode, not an exact
+> target — it keeps its original exact-size meaning only in create mode. A grow
+> that a computed target requires without `allowDiskResize` still hard-errors, as
+> above. See the 2026-08-26 update note and Alternatives.
 
 The schema uses `additionalProperties: false`, so the flag must be declared in
 `OverlayPolicy` in both the Go struct and `os-image-template.schema.json`.
@@ -272,8 +294,16 @@ default-off `allowDiskResize` flag (safe: default is no resize).
 
 - **`overlayPolicy.resize` sub-object** (parent ADR sketch): rejected for v1 —
   `growFilesystems: false` has no useful semantics; a single boolean is clearer.
-- **Auto-size from package footprint**: rejected — non-deterministic, hides real
-  disk sizing from the template; resize stays keyed on explicit `disk.size`.
+- **Auto-size from package footprint**: originally rejected as non-deterministic,
+  but **adopted 2026-08-21** as the grow-target computation. In overlay mode the
+  input is deterministic given the resolved plan and the baseline: the estimate
+  sums the packages' repo-reported installed sizes (Debian `Installed-Size`, RPM
+  `<size installed=…>`) with a fixed overhead factor and margin, and measures the
+  baseline's real free space. It was initially exposed as a separate,
+  mutually-exclusive `disk.maxSize` ceiling field, alongside an exact-target
+  `disk.size`; **2026-08-26** dropped `disk.maxSize` and unified on `disk.size` as
+  the single field, acting as a ceiling on the auto-sized grow in overlay mode. See
+  the 2026-08-26 update note.
 - **`parted`/`sfdisk` instead of `growpart`**: rejected — more sector math, more
   failure surface, for no gain over the purpose-built tool.
 - **Always allow grow when `disk.size` larger** (original behavior): rejected —

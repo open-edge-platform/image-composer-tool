@@ -102,9 +102,11 @@ baseline:
 
 # -----------------------------------------------------------------------------
 # Output: a qcow2 artifact. The overlay emits a RAW copy, then the Convert
-# Artifacts stage produces every format listed here. The disk is grown to leave
-# room for whatever a child template overlays on top; resize is grow-only and
-# requires BOTH a disk.size larger than the baseline AND allowDiskResize below.
+# Artifacts stage produces every format listed here. With allowDiskResize below,
+# the tool auto-sizes the grow from the resolved packages' installed-size
+# metadata to leave room for whatever a child template overlays on top; disk.size
+# is an optional ceiling on that auto-sized grow, not an exact target — the final
+# image may end up smaller than 8GiB.
 # -----------------------------------------------------------------------------
 disk:
   name: overlay-disk
@@ -134,7 +136,7 @@ disk:
 overlayPolicy:
   packageOperation: additive-and-upgrade
   conflictPolicy: fail
-  # Explicit consent to grow the baseline to the 8GiB disk.size above.
+  # Explicit consent to auto-size the grow, capped at the 8GiB disk.size above.
   allowDiskResize: true
   # Permit removing a baseline package a to-install package conflicts with. Needed
   # because dracut conflicts with the baseline's initramfs-tools; see note above.
