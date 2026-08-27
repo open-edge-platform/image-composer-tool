@@ -124,7 +124,9 @@
 
 **Fixed**
 
-- Templates in subdirectories are now discovered: template scanning walked only the top level of the templates directory and skipped subdirectories, which would have hidden every template from the AI/RAG index once templates were grouped into per-distribution directories. The scan is now recursive, as are the `image-composer-*` Copilot skill scripts.
+- `fix(debian13)`: drop stale kernel version pins from Debian 13 OS defaults: Debian 13 repositories no longer provide kernel version `6.12.74`, so inherited ISO, initrd, and raw configurations failed during package resolution. Removing the pin lets the `linux-image-amd64` metapackage select the current repository kernel.
+
+- Templates in subdirectories are now discovered: template scanning walked only the top level of the templates directory and skipped subdirectories, which would have hidden every template from the AI/RAG index and the web UI template list once templates were grouped into per-distribution directories. The scan is now recursive, as are the `image-composer-*` Copilot skill scripts.
 
 - `elxr-cloud-amd64.yml` additional files were silently dropped: the template referenced `files/etc/...` while the files ship in `elxr-cloud-amd64/files/etc/...`, so all four `additionalFiles` entries failed to resolve and were skipped with a warning rather than being copied into the image.
 
