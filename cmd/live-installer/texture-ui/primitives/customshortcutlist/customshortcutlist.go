@@ -460,7 +460,16 @@ func (l *List) Draw(screen tcell.Screen) {
 			}
 
 			for bx := 0; bx < textWidth; bx++ {
-				m, c, style, _ := screen.GetContent(x+bx, y)
+				content, style, _ := screen.Get(x+bx, y)
+				runes := []rune(content)
+				var m rune
+				var c []rune
+				if len(runes) > 0 {
+					m = runes[0]
+					c = runes[1:]
+				} else {
+					m = ' '
+				}
 				fg, _, _ := style.Decompose()
 				if fg == l.mainTextColor {
 					fg = l.selectedTextColor
