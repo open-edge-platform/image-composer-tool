@@ -9,8 +9,13 @@ SPDX-License-Identifier: Apache-2.0
 **Date**: 2026-08-04
 **Authors**: ICT Team
 **Technical Area**: AI/ML, Web UI, Package Management
-**Depends on**: [adr-template-enriched-rag.md](adr-template-enriched-rag.md), [adr-web-ui-tech-stack.md](adr-web-ui-tech-stack.md)
+**Depends on**: [adr-template-enriched-rag.md](adr-template-enriched-rag.md)
 **Related**: [adr-dep-analyzer.md](adr-dep-analyzer.md)
+
+> **Note**: The web UI and its `internal/api`/`api/v1` backend were moved off
+> `main` onto the `feature/web-ui` branch. Every endpoint, file, and code path
+> referenced below (`internal/api/...`, `api/v1/openapi-template-builder.yaml`,
+> `/api/v1/...`) lives on that branch, not `main`.
 
 ---
 
@@ -438,14 +443,14 @@ until the vector index is warm. Second and later starts are cache reads.
 ## UI design
 
 The full interaction is implemented and clickable in
-[web/prototype/template-builder.html](../../web/prototype/template-builder.html)
+`web/prototype/template-builder.html` (maintained on the `feature/web-ui` branch)
 (Advanced → Packages). It is a functioning prototype with a simulated backend,
 not a static mockup.
 
 ### Layout
 
 **The prototype is the layout reference.** Open
-[web/prototype/template-builder.html](../../web/prototype/template-builder.html)
+`web/prototype/template-builder.html` (maintained on the `feature/web-ui` branch)
 and go to Advanced, then Repositories & Packages. Everything described below is
 live there.
 

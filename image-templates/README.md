@@ -47,8 +47,7 @@ from minimal to robotics. See [COMPOSITION.md](./COMPOSITION.md).
 
 Filenames still carry the full `<dist>-<arch>-<purpose>-<imageType>.yml`
 convention, so a name remains unambiguous when it appears on its own — in a
-build script, a bug report, or `internal/api/data/manifest.yaml`. See
-[CONVENTIONS.md](./CONVENTIONS.md).
+build script or a bug report. See [CONVENTIONS.md](./CONVENTIONS.md).
 
 ## Choosing a starting point
 

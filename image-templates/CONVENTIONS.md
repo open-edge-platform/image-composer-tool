@@ -40,7 +40,7 @@ documentation for no functional gain.
 
 The filename repeats the distribution that the directory already carries. That
 is on purpose: a bare filename still identifies a template unambiguously in a
-build script, a grep, a bug report, or `internal/api/data/manifest.yaml`.
+build script, a grep, or a bug report.
 
 ## Required content
 
@@ -111,4 +111,4 @@ change a `config/osv/` default, check every template that relies on it.
    [the architecture guide](../docs/user-guide/architecture/architecture.md).
 
 Note that template discovery walks this tree recursively, so a new directory is
-picked up automatically by the AI/RAG index and the web UI.
+picked up automatically by the AI/RAG index.
