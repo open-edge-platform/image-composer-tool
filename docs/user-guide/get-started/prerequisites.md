@@ -73,7 +73,7 @@ sudo apt --fix-broken install
 
 ## util-linux (lsblk) and e2fsprogs (resize2fs)
 
-Overlay-mode disk resize (`overlayPolicy.allowDiskResize`) requires `lsblk`
+Overlay-mode disk resize (`disk.size` / `disk.maxSize`) requires `lsblk`
 from **util-linux >= 2.38** (it reads partition start sectors via
 `lsblk -o PATH,START,TYPE`) and a `resize2fs` build new enough to grow the
 baseline's filesystem. Ubuntu 22.04 ships util-linux 2.37 and e2fsprogs

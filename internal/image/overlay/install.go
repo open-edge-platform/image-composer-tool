@@ -260,9 +260,10 @@ func InstallOverlayPackages(info *BaselineInfo, rootMount string, plan *Resoluti
 		}); err != nil {
 			// A "no space left on device" failure here means the baseline root filled up
 			// while unpacking the added packages. Overlay mode does not auto-grow the
-			// image to fit the packages (resize is a later, grow-only step keyed purely
-			// on disk.size), so surface an actionable hint pointing at disk.size rather
-			// than leaving the user with an opaque dpkg/rpm ENOSPC diagnostic.
+			// image to fit the packages here (resize is a separate, earlier grow-only
+			// step keyed on disk.size/disk.maxSize), so surface an actionable hint
+			// pointing at those fields rather than leaving the user with an opaque
+			// dpkg/rpm ENOSPC diagnostic.
 			return nil, fmt.Errorf("overlay install failed for %d package(s) using %s: %w%s",
 				len(items), info.PackageManager, err, diskSpaceHint(err))
 		}
@@ -1066,11 +1067,11 @@ func rpmNameArch(nevra string) string {
 // when the failure was caused by the baseline root filling up, or "" otherwise.
 // The install backends fold the package manager's captured output (which carries
 // the "No space left on device" ENOSPC diagnostic) into the error they return, so
-// the hint keys off that text. With overlayPolicy.allowDiskResize, the resize
-// stage auto-sizes the grow from the resolved packages' installed-size metadata,
-// capped at disk.size when it is set — so this failure means either resize is not
-// enabled, the ceiling was reached, or no package reported a size to size the grow
-// from at all.
+// the hint keys off that text. The resize stage always expands the baseline to
+// disk.size first, then auto-sizes further growth from the resolved packages'
+// installed-size metadata, capped at disk.maxSize when it is set — so this
+// failure means the disk.maxSize ceiling was reached, or no package reported a
+// size to size the grow from at all.
 func diskSpaceHint(installErr error) string {
 	if installErr == nil {
 		return ""
@@ -1081,7 +1082,6 @@ func diskSpaceHint(installErr error) string {
 		return ""
 	}
 	return "\n  hint: the baseline root filesystem ran out of space while installing the added " +
-		"package(s). Enable overlayPolicy.allowDiskResize to auto-size the grow from the packages' " +
-		"installed sizes, raise or remove a disk.size ceiling that capped the grow short, or use a " +
-		"baseline with more free space, then rebuild."
+		"package(s). Raise disk.size or disk.maxSize (disk.maxSize must be greater than disk.size) to let the " +
+		"overlay grow further, or use a baseline with more free space, then rebuild."
 }

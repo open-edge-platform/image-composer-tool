@@ -52,7 +52,7 @@ extends: "debian13-x86_64-bb-overlay-initrd-raw.yml"
 
 image:
   name: debian13-bb-graphics
-  version: "13.0"
+  version: "13.0.1"
 
 target:                 # must match the parent template's target
   os: debian

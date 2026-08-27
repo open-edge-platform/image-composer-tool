@@ -101,7 +101,7 @@ extends: "ubuntu24-x86_64-robotics-hw-overlay-qcow2.yml"
 
 image:
   name: ubuntu24-robotics-jazzy-overlay
-  version: "24.04"
+  version: "24.04.1"
 
 target:                 # must match the parent template's target
   os: ubuntu

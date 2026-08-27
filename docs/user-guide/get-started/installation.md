@@ -216,7 +216,7 @@ Downloads and installs Debian packages to initialize a chroot.
 
 ### util-linux (lsblk) and e2fsprogs (resize2fs)
 
-Required for overlay-mode disk resize (`overlayPolicy.allowDiskResize`);
+Required for overlay-mode disk resize (`disk.size` / `disk.maxSize`);
 not needed for `create`-mode builds.
 
 - **Ubuntu 24.04+**: Already ships util-linux >= 2.38 and a compatible

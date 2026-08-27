@@ -132,7 +132,11 @@
         },
         "size": {
           "type": "string",
-          "description": "Size of the disk (e.g., '4GiB', '8GB'). In create mode this is the exact disk size. In overlay mode, with overlayPolicy.allowDiskResize, it instead acts as an auto-size ceiling: the resize grows the baseline only as far as the added packages need, capped at this value."
+          "description": "Size of the disk (e.g., '4GiB', '8GB'). In create mode this is the exact disk size. In overlay mode the resize unconditionally expands the baseline to this size first (grow-only), before any package-driven growth."
+        },
+        "maxSize": {
+          "type": "string",
+          "description": "Overlay-mode-only ceiling (e.g., '8GiB', '16GB'). Once the baseline has been expanded to disk.size, the resize may grow further to fit the packages being installed, but never past this value. Package-driven growth beyond disk.size requires maxSize to be set; unset, growth does not extend beyond disk.size. Must always be greater than disk.size when set, and requires disk.size to also be set."
         },
         "partitionTableType": {
           "type": "string",
@@ -592,11 +596,6 @@
         "grubDefault": {
           "type": "string",
           "description": "Optional GRUB_DEFAULT override applied to the overlaid image (pins the default boot menu entry, e.g. an Ubuntu submenu path). Only applied on a GRUB2 baseline. The value is written into a shell-sourced /etc/default/grub assignment, so it must not contain a double quote, dollar sign, backtick, backslash, or newline."
-        },
-        "allowDiskResize": {
-          "type": "boolean",
-          "description": "Permit growing the baseline image to fit the packages being installed. Overlay mode preserves the baseline disk layout by default. When true, the resize is auto-sized from the resolved packages' installed-size metadata, capped at disk.size when it is set (unset disk.size auto-sizes with no cap). When false (the default), a grow required to fit the packages is rejected. Resize is always grow-only and never shrinks the image.",
-          "default": false
         },
         "allowPackageRemoval": {
           "type": "boolean",

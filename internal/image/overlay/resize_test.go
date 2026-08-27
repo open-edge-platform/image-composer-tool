@@ -27,7 +27,7 @@ func writeSizedFile(t *testing.T, n int64) string {
 }
 
 func TestPlanResize_NoTargetSkips(t *testing.T) {
-	plan, err := planResize(1<<20, 0, false)
+	plan, err := planResize(1<<20, 0)
 	if err != nil {
 		t.Fatalf("planResize: %v", err)
 	}
@@ -38,7 +38,7 @@ func TestPlanResize_NoTargetSkips(t *testing.T) {
 
 func TestPlanResize_EqualSkips(t *testing.T) {
 	// 100 MiB current, target exactly 100 MiB: a legitimate no-op, not a shrink.
-	plan, err := planResize(100<<20, 100<<20, false)
+	plan, err := planResize(100<<20, 100<<20)
 	if err != nil {
 		t.Fatalf("planResize(100MiB): %v", err)
 	}
@@ -55,7 +55,7 @@ func TestPlanResize_EqualSkips(t *testing.T) {
 // message rather than a silent no-op (which would mislead the user into thinking
 // the image was shrunk).
 func TestPlanResize_SmallerErrorsAsShrinkUnsupported(t *testing.T) {
-	_, err := planResize(100<<20, 50<<20, false)
+	_, err := planResize(100<<20, 50<<20)
 	if err == nil {
 		t.Fatal("expected an error when the requested size is smaller than the baseline")
 	}
@@ -68,7 +68,7 @@ func TestPlanResize_SmallerErrorsAsShrinkUnsupported(t *testing.T) {
 }
 
 func TestPlanResize_LargerGrows(t *testing.T) {
-	plan, err := planResize(100<<20, 200<<20, true)
+	plan, err := planResize(100<<20, 200<<20)
 	if err != nil {
 		t.Fatalf("planResize: %v", err)
 	}
@@ -77,19 +77,6 @@ func TestPlanResize_LargerGrows(t *testing.T) {
 	}
 	if plan.CurrentBytes != 100<<20 || plan.TargetBytes != 200<<20 {
 		t.Errorf("bytes = current %d target %d, want 100MiB/200MiB", plan.CurrentBytes, plan.TargetBytes)
-	}
-}
-
-// A grow that is required (target larger than baseline) but not opted into must be
-// a hard error, not a silent resize — overlay preserves the baseline layout unless
-// the template explicitly allows growing it.
-func TestPlanResize_LargerWithoutOptInErrors(t *testing.T) {
-	_, err := planResize(100<<20, 200<<20, false)
-	if err == nil {
-		t.Fatal("expected error when a grow is required but allowDiskResize is false")
-	}
-	if !strings.Contains(err.Error(), "allowDiskResize") {
-		t.Errorf("error should name the allowDiskResize opt-in; got: %v", err)
 	}
 }
 
@@ -151,8 +138,7 @@ func TestResizeBaseline_GrowRunsExpectedSequence(t *testing.T) {
 
 	p := writeSizedFile(t, 100<<20)
 	tmpl := &config.ImageTemplate{
-		Disk:          config.DiskConfig{Size: "200MiB"},
-		OverlayPolicy: &config.OverlayPolicy{AllowDiskResize: true},
+		Disk: config.DiskConfig{Size: "200MiB"},
 	}
 	ctx := &Context{BaselineCopyPath: p, LoopDevPath: "/dev/loop0"}
 	layout := &Layout{RootDevice: "/dev/loop0p2", RootFSType: "ext4", RootMount: "/mnt/root", PartitionTable: partitionTableGPT}
@@ -207,9 +193,9 @@ func TestResizeBaseline_NoGrowRunsNothing(t *testing.T) {
 	}
 }
 
-// A disk.size ceiling smaller than the baseline is an impossible constraint and
-// must fail the resize up front, before any disk mutation.
-func TestResizeBaseline_ShrinkErrorsAndRunsNothing(t *testing.T) {
+// A disk.size at or below the baseline is already satisfied and must be a
+// no-op — not a rejected shrink, since the floor is trivially met.
+func TestResizeBaseline_SizeBelowBaselineRunsNothing(t *testing.T) {
 	origExec := resizeExec
 	defer func() { resizeExec = origExec }()
 	ran := false
@@ -220,47 +206,11 @@ func TestResizeBaseline_ShrinkErrorsAndRunsNothing(t *testing.T) {
 	ctx := &Context{BaselineCopyPath: p, LoopDevPath: "/dev/loop0"}
 	layout := &Layout{RootDevice: "/dev/loop0p2", RootFSType: "ext4", RootMount: "/mnt/root"}
 
-	err := ResizeBaseline(tmpl, ctx, layout, nil)
-	if err == nil {
-		t.Fatal("expected a shrink to be rejected")
-	}
-	if !strings.Contains(err.Error(), "smaller than the baseline image") {
-		t.Errorf("error should name the disk.size ceiling as smaller than the baseline; got: %v", err)
+	if err := ResizeBaseline(tmpl, ctx, layout, nil); err != nil {
+		t.Fatalf("ResizeBaseline: %v", err)
 	}
 	if ran {
-		t.Error("a rejected shrink must run no commands (fail before any disk mutation)")
-	}
-}
-
-func TestResizeBaseline_GrowWithoutOptInErrorsAndRunsNothing(t *testing.T) {
-	origExec := resizeExec
-	defer func() { resizeExec = origExec }()
-	ran := false
-	resizeExec = func(string) (string, error) { ran = true; return "", nil }
-
-	p := writeSizedFile(t, 100<<20)
-	// Larger target but no OverlayPolicy opt-in: must error before touching the disk.
-	tmpl := &config.ImageTemplate{Disk: config.DiskConfig{Size: "200MiB"}}
-	ctx := &Context{BaselineCopyPath: p, LoopDevPath: "/dev/loop0"}
-	layout := &Layout{RootDevice: "/dev/loop0p2", RootFSType: "ext4", RootMount: "/mnt/root", PartitionTable: partitionTableGPT}
-
-	err := ResizeBaseline(tmpl, ctx, layout, nil)
-	if err == nil {
-		t.Fatal("expected ResizeBaseline to error when a grow is required but not opted into")
-	}
-	if !strings.Contains(err.Error(), "allowDiskResize") {
-		t.Errorf("error should name the allowDiskResize opt-in; got: %v", err)
-	}
-	if ran {
-		t.Error("no resize commands must run when the grow is rejected")
-	}
-	// The backing file must be untouched (not grown) when the resize is rejected.
-	fi, err := os.Stat(p)
-	if err != nil {
-		t.Fatalf("stat baseline file: %v", err)
-	}
-	if fi.Size() != 100<<20 {
-		t.Errorf("backing file size = %d, want %d (must not grow on rejection)", fi.Size(), 100<<20)
+		t.Error("a disk.size already satisfied by the baseline must run no commands (no resize needed)")
 	}
 }
 
@@ -282,8 +232,7 @@ func TestResizeBaseline_XFSUsesGrowfsByMount(t *testing.T) {
 
 	p := writeSizedFile(t, 100<<20)
 	tmpl := &config.ImageTemplate{
-		Disk:          config.DiskConfig{Size: "200MiB"},
-		OverlayPolicy: &config.OverlayPolicy{AllowDiskResize: true},
+		Disk: config.DiskConfig{Size: "200MiB"},
 	}
 	ctx := &Context{BaselineCopyPath: p, LoopDevPath: "/dev/loop0"}
 	layout := &Layout{RootDevice: "/dev/loop0p1", RootFSType: "xfs", RootMount: "/mnt/root", PartitionTable: partitionTableDOS}
@@ -358,8 +307,7 @@ func TestResizeBaseline_RejectsNonLastRootPartition(t *testing.T) {
 
 	p := writeSizedFile(t, 100<<20)
 	tmpl := &config.ImageTemplate{
-		Disk:          config.DiskConfig{Size: "200MiB"},
-		OverlayPolicy: &config.OverlayPolicy{AllowDiskResize: true},
+		Disk: config.DiskConfig{Size: "200MiB"},
 	}
 	ctx := &Context{BaselineCopyPath: p, LoopDevPath: "/dev/loop0"}
 	layout := &Layout{RootDevice: "/dev/loop0p2", RootFSType: "ext4", RootMount: "/mnt/root", PartitionTable: partitionTableGPT}
@@ -401,8 +349,7 @@ func TestResizeBaseline_RejectsWhenToolMissing(t *testing.T) {
 
 	p := writeSizedFile(t, 100<<20)
 	tmpl := &config.ImageTemplate{
-		Disk:          config.DiskConfig{Size: "200MiB"},
-		OverlayPolicy: &config.OverlayPolicy{AllowDiskResize: true},
+		Disk: config.DiskConfig{Size: "200MiB"},
 	}
 	ctx := &Context{BaselineCopyPath: p, LoopDevPath: "/dev/loop0"}
 	layout := &Layout{RootDevice: "/dev/loop0p2", RootFSType: "ext4", RootMount: "/mnt/root", PartitionTable: partitionTableGPT}
@@ -628,24 +575,25 @@ func planWithKnownSizes(sizes ...int64) *ResolutionPlan {
 }
 
 func TestComputeOverlayTarget_NoMetadataFallsBackToCeiling(t *testing.T) {
-	// Auto-size, no per-package sizes: fall back to the disk.size ceiling.
-	got, err := computeOverlayTarget(planWithSizes(0, 0), 100<<20, "/mnt/root", "300MiB")
+	// Auto-size, no per-package sizes: fall back to the disk.maxSize ceiling.
+	got, err := computeOverlayTarget(planWithSizes(0, 0), 100<<20, "/mnt/root", "", "300MiB")
 	if err != nil {
 		t.Fatalf("computeOverlayTarget: %v", err)
 	}
 	if got != 300<<20 {
 		t.Errorf("no-metadata target = %d, want ceiling %d", got, 300<<20)
 	}
-	// And 0 (no resize) when disk.size is also unset.
-	if got, err := computeOverlayTarget(nil, 100<<20, "/mnt/root", ""); err != nil || got != 0 {
-		t.Errorf("no-metadata, no-ceiling = (%d, %v), want (0, nil)", got, err)
+	// With neither disk.size nor disk.maxSize set, no metadata means no basis to
+	// grow at all: the target is just current (a planResize no-op).
+	if got, err := computeOverlayTarget(nil, 100<<20, "/mnt/root", "", ""); err != nil || got != 100<<20 {
+		t.Errorf("no-metadata, no-ceiling = (%d, %v), want (%d, nil)", got, err, 100<<20)
 	}
 }
 
 func TestComputeOverlayTarget_EnoughFreeSpaceNoGrow(t *testing.T) {
 	// Plenty of free space for the estimated install → target stays at current.
 	stubOverlayFree(t, 10<<30)
-	got, err := computeOverlayTarget(planWithSizes(100<<20), 1<<30, "/mnt/root", "8GiB")
+	got, err := computeOverlayTarget(planWithSizes(100<<20), 1<<30, "/mnt/root", "", "8GiB")
 	if err != nil {
 		t.Fatalf("computeOverlayTarget: %v", err)
 	}
@@ -654,13 +602,32 @@ func TestComputeOverlayTarget_EnoughFreeSpaceNoGrow(t *testing.T) {
 	}
 }
 
-func TestComputeOverlayTarget_ShortfallGrows(t *testing.T) {
+// Without disk.maxSize, package-driven growth never extends beyond the current
+// baseline (or disk.size, if set), however large the shortfall — growth beyond
+// the floor requires that explicit consent.
+func TestComputeOverlayTarget_ShortfallWithoutMaxSizeStaysAtFloor(t *testing.T) {
+	stubOverlayFree(t, 0)
+	current := int64(1 << 30) // 1 GiB
+	sum := int64(500 << 20)
+	got, err := computeOverlayTarget(planWithSizes(sum), current, "/mnt/root", "", "")
+	if err != nil {
+		t.Fatalf("computeOverlayTarget: %v", err)
+	}
+	if got != current {
+		t.Errorf("shortfall target without disk.maxSize = %d, want current %d (capped at the floor)", got, current)
+	}
+}
+
+// The same shortfall, but with disk.maxSize set large enough to cover it: the
+// tool auto-sizes the grow exactly as before, now gated on that explicit
+// ceiling.
+func TestComputeOverlayTarget_ShortfallGrowsWithMaxSize(t *testing.T) {
 	// 500 MiB of packages, ~0 free: required = 500MiB*1.30 + 512MiB margin = 1162 MiB,
 	// shortfall ~= required (free 0), target = current + roundUp(shortfall).
 	stubOverlayFree(t, 0)
 	current := int64(1 << 30) // 1 GiB
 	sum := int64(500 << 20)
-	got, err := computeOverlayTarget(planWithSizes(sum), current, "/mnt/root", "")
+	got, err := computeOverlayTarget(planWithSizes(sum), current, "/mnt/root", "", "8GiB")
 	if err != nil {
 		t.Fatalf("computeOverlayTarget: %v", err)
 	}
@@ -674,13 +641,51 @@ func TestComputeOverlayTarget_ShortfallGrows(t *testing.T) {
 	}
 }
 
+// disk.size is expanded to first, unconditionally; with disk.maxSize also set,
+// package-driven growth then measures against that floor (crediting the
+// headroom the expand itself adds), not the pre-expand baseline.
+func TestComputeOverlayTarget_SizeFloorExpandsFirst(t *testing.T) {
+	stubOverlayFree(t, 0)
+	current := int64(100 << 20)
+	floor := int64(1 << 30)
+	sum := int64(400 << 20)
+	got, err := computeOverlayTarget(planWithSizes(sum), current, "/mnt/root", "1GiB", "8GiB")
+	if err != nil {
+		t.Fatalf("computeOverlayTarget: %v", err)
+	}
+	required := sum*overlayInstallOverheadNum/overlayInstallOverheadDen + overlayInstallMarginBytes
+	want := floor + roundUpToMiB(required-(floor-current))
+	if got != want {
+		t.Errorf("floor-expand target = %d, want %d", got, want)
+	}
+	if got <= floor {
+		t.Errorf("target %d must exceed the disk.size floor %d when a shortfall remains", got, floor)
+	}
+}
+
+// Without disk.maxSize, the disk.size floor expand still happens unconditionally,
+// but package-driven growth beyond it does not — the target stops at the floor
+// even though the packages need more room.
+func TestComputeOverlayTarget_SizeFloorWithoutMaxSizeCapsThere(t *testing.T) {
+	stubOverlayFree(t, 0)
+	current := int64(100 << 20)
+	floor := int64(1 << 30)
+	got, err := computeOverlayTarget(planWithSizes(400<<20), current, "/mnt/root", "1GiB", "")
+	if err != nil {
+		t.Fatalf("computeOverlayTarget: %v", err)
+	}
+	if got != floor {
+		t.Errorf("target without disk.maxSize = %d, want the disk.size floor %d", got, floor)
+	}
+}
+
 func TestComputeOverlayTarget_CapsAtCeiling(t *testing.T) {
 	// A large install with no free space would need far more than the ceiling; the
-	// target must be capped at disk.size (and may then be insufficient — that is
-	// the user's declared cap).
+	// target must be capped at disk.maxSize (and may then be insufficient — that
+	// is the user's declared cap).
 	stubOverlayFree(t, 0)
 	current := int64(1 << 30)
-	got, err := computeOverlayTarget(planWithSizes(5<<30), current, "/mnt/root", "1200MiB")
+	got, err := computeOverlayTarget(planWithSizes(5<<30), current, "/mnt/root", "", "1200MiB")
 	if err != nil {
 		t.Fatalf("computeOverlayTarget: %v", err)
 	}
@@ -690,42 +695,69 @@ func TestComputeOverlayTarget_CapsAtCeiling(t *testing.T) {
 }
 
 func TestComputeOverlayTarget_InvalidSize(t *testing.T) {
-	if _, err := computeOverlayTarget(planWithSizes(1<<20), 1<<20, "/mnt/root", "not-a-size"); err == nil {
-		t.Fatal("expected error for an unparseable disk.size ceiling")
+	if _, err := computeOverlayTarget(planWithSizes(1<<20), 1<<20, "/mnt/root", "not-a-size", ""); err == nil {
+		t.Fatal("expected error for an unparseable disk.size")
+	}
+	if _, err := computeOverlayTarget(planWithSizes(1<<20), 1<<20, "/mnt/root", "", "not-a-size"); err == nil {
+		t.Fatal("expected error for an unparseable disk.maxSize")
 	}
 }
 
-// A disk.size ceiling smaller than the baseline is an impossible constraint and
-// must be rejected up front, regardless of whether package metadata is present.
-func TestComputeOverlayTarget_CeilingBelowBaselineRejected(t *testing.T) {
-	_, err := computeOverlayTarget(nil, 200<<20, "/mnt/root", "100MiB")
+// disk.maxSize must always be greater than disk.size.
+func TestComputeOverlayTarget_MaxSizeMustExceedSize(t *testing.T) {
+	_, err := computeOverlayTarget(nil, 100<<20, "/mnt/root", "200MiB", "200MiB")
 	if err == nil {
-		t.Fatal("expected error for a disk.size ceiling smaller than the baseline")
+		t.Fatal("expected error when disk.maxSize equals disk.size")
 	}
-	if !strings.Contains(err.Error(), "smaller than the baseline image") {
-		t.Errorf("error should name the baseline mismatch; got: %v", err)
+	if !strings.Contains(err.Error(), "disk.maxSize") || !strings.Contains(err.Error(), "greater than disk.size") {
+		t.Errorf("error should name the disk.maxSize > disk.size rule; got: %v", err)
+	}
+	if _, err := computeOverlayTarget(nil, 100<<20, "/mnt/root", "200MiB", "150MiB"); err == nil {
+		t.Fatal("expected error when disk.maxSize is smaller than disk.size")
 	}
 }
 
-// disk.size: "0MiB" is an explicitly configured (if useless) ceiling, distinct
-// from leaving disk.size unset — it must be rejected the same as any other
-// ceiling smaller than the baseline, not silently treated as "no ceiling".
-func TestComputeOverlayTarget_ExplicitZeroCeilingRejected(t *testing.T) {
-	if _, err := computeOverlayTarget(nil, 200<<20, "/mnt/root", "0MiB"); err == nil {
-		t.Fatal("expected error for an explicit disk.size: 0MiB smaller than the baseline")
+// A disk.size at or below the baseline is already satisfied and is a no-op,
+// not an error — the floor is trivially met.
+func TestComputeOverlayTarget_SizeBelowBaselineIsNoOp(t *testing.T) {
+	got, err := computeOverlayTarget(nil, 200<<20, "/mnt/root", "100MiB", "")
+	if err != nil {
+		t.Fatalf("computeOverlayTarget: %v", err)
 	}
-	// An unset (empty) ceiling is not the same thing: no metadata + no ceiling is a
-	// legitimate no-resize, not an error.
-	got, err := computeOverlayTarget(nil, 200<<20, "/mnt/root", "")
-	if err != nil || got != 0 {
-		t.Errorf("unset ceiling = (%d, %v), want (0, nil)", got, err)
+	if got != 200<<20 {
+		t.Errorf("size-below-baseline target = %d, want current %d (no-op)", got, 200<<20)
+	}
+}
+
+// disk.size: "0MiB" is an explicitly configured (if useless) floor, and an
+// unset disk.size behaves identically — both are already satisfied by any
+// baseline and are a no-op, never an error.
+func TestComputeOverlayTarget_ExplicitZeroSizeIsNoOp(t *testing.T) {
+	if got, err := computeOverlayTarget(nil, 200<<20, "/mnt/root", "0MiB", ""); err != nil || got != 200<<20 {
+		t.Errorf("explicit disk.size: 0MiB = (%d, %v), want (%d, nil)", got, err, 200<<20)
+	}
+	got, err := computeOverlayTarget(nil, 200<<20, "/mnt/root", "", "")
+	if err != nil || got != 200<<20 {
+		t.Errorf("unset size = (%d, %v), want (%d, nil)", got, err, 200<<20)
+	}
+}
+
+// disk.maxSize smaller than the baseline (once the disk.size floor is applied)
+// is an impossible constraint and must be rejected up front.
+func TestComputeOverlayTarget_MaxSizeBelowFloorRejected(t *testing.T) {
+	_, err := computeOverlayTarget(nil, 300<<20, "/mnt/root", "", "200MiB")
+	if err == nil {
+		t.Fatal("expected error for a disk.maxSize smaller than the disk.size floor")
+	}
+	if !strings.Contains(err.Error(), "disk.maxSize") || !strings.Contains(err.Error(), "smaller than the disk.size floor") {
+		t.Errorf("error should name disk.maxSize as smaller than the disk.size floor; got: %v", err)
 	}
 }
 
 // Summing resolved packages' installed sizes must fail closed on overflow rather
 // than silently wrap negative and misread as "nothing to install".
 func TestComputeOverlayTarget_SumOverflowRejected(t *testing.T) {
-	if _, err := computeOverlayTarget(planWithSizes(math.MaxInt64, 1), 1<<20, "/mnt/root", ""); err == nil {
+	if _, err := computeOverlayTarget(planWithSizes(math.MaxInt64, 1), 1<<20, "/mnt/root", "", ""); err == nil {
 		t.Fatal("expected error when summing package sizes overflows int64")
 	}
 }
@@ -733,7 +765,7 @@ func TestComputeOverlayTarget_SumOverflowRejected(t *testing.T) {
 // Scaling the summed installed size by the overhead factor must also fail closed
 // on overflow.
 func TestComputeOverlayTarget_ScaleOverflowRejected(t *testing.T) {
-	if _, err := computeOverlayTarget(planWithSizes(math.MaxInt64), 1<<20, "/mnt/root", ""); err == nil {
+	if _, err := computeOverlayTarget(planWithSizes(math.MaxInt64), 1<<20, "/mnt/root", "", ""); err == nil {
 		t.Fatal("expected error when scaling the estimated install size overflows int64")
 	}
 }
@@ -753,17 +785,17 @@ func TestEstimateRequiredBytes_RoundsUp(t *testing.T) {
 }
 
 // When some (but not all) packages report a size, summing only the known ones
-// understates the real need. With no disk.size ceiling to fall back on, that
+// understates the real need. With no disk.maxSize ceiling to fall back on, that
 // incomplete estimate must fail closed rather than silently under-provision.
 func TestComputeOverlayTarget_PartialUnknownSizeNoCeilingErrors(t *testing.T) {
-	if _, err := computeOverlayTarget(planWithSizes(500<<20, 0), 1<<30, "/mnt/root", ""); err == nil {
+	if _, err := computeOverlayTarget(planWithSizes(500<<20, 0), 1<<30, "/mnt/root", "", ""); err == nil {
 		t.Fatal("expected error when some packages report no installed-size metadata and no ceiling is set")
 	}
 }
 
-// The same partial-metadata case, but with a disk.size ceiling set: grow straight
-// to the ceiling (the safer, user-declared cap) instead of the incomplete
-// estimate, and without even measuring free space.
+// The same partial-metadata case, but with a disk.maxSize ceiling set: grow
+// straight to the ceiling (the safer, user-declared cap) instead of the
+// incomplete estimate, and without even measuring free space.
 func TestComputeOverlayTarget_PartialUnknownSizeFallsBackToCeiling(t *testing.T) {
 	orig := overlayFreeBytesFn
 	t.Cleanup(func() { overlayFreeBytesFn = orig })
@@ -771,7 +803,7 @@ func TestComputeOverlayTarget_PartialUnknownSizeFallsBackToCeiling(t *testing.T)
 		t.Fatal("partial-metadata fallback to the ceiling must not measure free space")
 		return 0, nil
 	}
-	got, err := computeOverlayTarget(planWithSizes(500<<20, 0), 1<<30, "/mnt/root", "2GiB")
+	got, err := computeOverlayTarget(planWithSizes(500<<20, 0), 1<<30, "/mnt/root", "", "2GiB")
 	if err != nil {
 		t.Fatalf("computeOverlayTarget: %v", err)
 	}
@@ -781,10 +813,10 @@ func TestComputeOverlayTarget_PartialUnknownSizeFallsBackToCeiling(t *testing.T)
 }
 
 // A resolved plan known to have nothing left to install (e.g. every requested
-// package is already present) must never grow the image, even with a disk.size
-// ceiling set — the ceiling caps an auto-sized grow, it does not itself request
-// one. Distinct from a nil plan (no information), which still falls back to the
-// ceiling.
+// package is already present) must never grow the image beyond the disk.size
+// floor, even with a disk.maxSize ceiling set — the ceiling caps an auto-sized
+// grow, it does not itself request one. Distinct from a nil plan (no
+// information), which still falls back to the ceiling.
 func TestComputeOverlayTarget_EmptyPlanNeverGrows(t *testing.T) {
 	orig := overlayFreeBytesFn
 	t.Cleanup(func() { overlayFreeBytesFn = orig })
@@ -793,7 +825,7 @@ func TestComputeOverlayTarget_EmptyPlanNeverGrows(t *testing.T) {
 		return 0, nil
 	}
 	current := int64(1 << 30)
-	got, err := computeOverlayTarget(&ResolutionPlan{}, current, "/mnt/root", "8GiB")
+	got, err := computeOverlayTarget(&ResolutionPlan{}, current, "/mnt/root", "", "8GiB")
 	if err != nil {
 		t.Fatalf("computeOverlayTarget: %v", err)
 	}
@@ -809,7 +841,7 @@ func TestComputeOverlayTarget_EmptyPlanNeverGrows(t *testing.T) {
 func TestComputeOverlayTarget_ConfirmedZeroSizeIsNotUnknown(t *testing.T) {
 	stubOverlayFree(t, 10<<30)
 	current := int64(1 << 30)
-	got, err := computeOverlayTarget(planWithKnownSizes(0), current, "/mnt/root", "")
+	got, err := computeOverlayTarget(planWithKnownSizes(0), current, "/mnt/root", "", "")
 	if err != nil {
 		t.Fatalf("computeOverlayTarget: %v", err)
 	}
@@ -824,7 +856,7 @@ func TestComputeOverlayTarget_ConfirmedZeroSizeIsNotUnknown(t *testing.T) {
 // unknown.
 func TestComputeOverlayTarget_ConfirmedZeroDoesNotTriggerIncompleteFallback(t *testing.T) {
 	stubOverlayFree(t, 0)
-	if _, err := computeOverlayTarget(planWithKnownSizes(500<<20, 0), 1<<30, "/mnt/root", ""); err != nil {
+	if _, err := computeOverlayTarget(planWithKnownSizes(500<<20, 0), 1<<30, "/mnt/root", "", ""); err != nil {
 		t.Errorf("computeOverlayTarget: %v (a confirmed-zero package must not be treated as incomplete metadata)", err)
 	}
 }
