@@ -41,14 +41,6 @@ export function PackageRepoBrowser({ repos, activeRepo, onActiveRepo, os }: Pack
 
   return (
     <>
-      <p className="mb-3 text-sm text-slate-500">
-        Enable a repository with its checkbox, then click it to browse. Browsing
-        starts on the repo&apos;s full catalog (loaded in pages of 100); where a
-        repository offers curated picks, check &quot;Show frequently used&quot; to
-        narrow the list to them. The &quot;Select all&quot; checkbox above the
-        list adds everything currently shown to your selection, and removes it
-        again when unchecked.
-      </p>
       <div className="grid grid-cols-[240px_minmax(0,1fr)] overflow-hidden rounded-lg border border-slate-200">
         <div
           role="group"
@@ -74,6 +66,14 @@ export function PackageRepoBrowser({ repos, activeRepo, onActiveRepo, os }: Pack
           {active ? <RepoPane repo={active} enabled={isEnabled(active)} os={os} /> : <RepoPaneEmpty />}
         </div>
       </div>
+      <p className="mt-2 text-sm text-slate-500">
+        Enable a repository with its checkbox, then click it to browse. Browsing
+        starts on the repo&apos;s full catalog (loaded in pages of 100); where a
+        repository offers curated picks, check &quot;Show frequently used&quot; to
+        narrow the list to them. The &quot;Select all&quot; checkbox above the
+        list adds everything currently shown to your selection, and removes it
+        again when unchecked.
+      </p>
     </>
   )
 }

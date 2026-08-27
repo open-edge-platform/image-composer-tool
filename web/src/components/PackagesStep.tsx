@@ -288,77 +288,83 @@ function PackageSearch({ os, repos }: { os: string; repos: PackageRepo[] }) {
   }
 
   return (
-    <div ref={containerRef} className="relative mb-4">
-      <input
-        type="text"
-        value={query}
-        onChange={(e) => {
-          setQuery(e.target.value)
-          setOpen(true)
-        }}
-        onFocus={() => setOpen(true)}
-        onBlur={(e) => {
-          // Guards against closing before a click inside the dropdown (e.g. a
-          // version chip) registers — a setTimeout-based delay would instead
-          // race that click.
-          if (containerRef.current?.contains(e.relatedTarget as Node)) return
-          setOpen(false)
-        }}
-        placeholder="Search packages across all repositories…"
-        className="w-full rounded border border-slate-300 px-3 py-2 text-sm focus:border-[#0071c5] focus:outline-none"
-      />
-      {open && (
-        <div className="absolute z-10 mt-1 max-h-[360px] w-full overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
-          {query.trim().length < 2 ? (
-            <p className="px-3 py-4 text-center text-[12px] text-slate-500">
-              Type at least 2 characters to search.
-            </p>
-          ) : error ? (
-            <p className="px-3 py-4 text-center text-[12px] text-red-600">{error}</p>
-          ) : (
-            <>
-              {/* Hits render while the stream is still open, so a slow
-                  repository never hides what the fast ones already found. */}
-              {results.map((hit) => (
-                <PackageRow
-                  key={`${hit.repository}:${hit.name}`}
-                  name={hit.name}
-                  version={hit.version}
-                  description={hit.description}
-                  repoLabel={labelFor(hit.repository)}
-                  showRepo
-                  versions={versionsOf(hit)}
-                  repoLabelFor={labelFor}
-                  selection={addedPackages.find((p) => p.name === hit.name)}
-                  onToggle={(checked) => (checked ? pick(hit, hit.repository, '') : removePackage(hit.name))}
-                  onChooseVersion={(v) => add(hit, v.repository, v.version)}
-                />
-              ))}
-              {loading ? (
-                <p className="px-3 py-2 text-center text-[11px] text-slate-500">
-                  {results.length > 0 ? 'Searching more repositories…' : 'Searching…'}
-                </p>
-              ) : results.length === 0 ? (
-                <p className="px-3 py-4 text-center text-[12px] text-slate-500">
-                  No matching packages{partialNote(outcome) ? ' yet' : ''}.
-                  {partialNote(outcome) && (
-                    <span className="mt-1 block text-[11px] text-slate-400">
-                      {partialNote(outcome)}
-                    </span>
-                  )}
-                </p>
-              ) : (
-                partialNote(outcome) && (
-                  <p className="border-t border-slate-100 px-3 py-2 text-[11px] text-slate-400">
-                    {partialNote(outcome)}
+    <>
+      <div ref={containerRef} className="relative">
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => {
+            setQuery(e.target.value)
+            setOpen(true)
+          }}
+          onFocus={() => setOpen(true)}
+          onBlur={(e) => {
+            // Guards against closing before a click inside the dropdown (e.g. a
+            // version chip) registers — a setTimeout-based delay would instead
+            // race that click.
+            if (containerRef.current?.contains(e.relatedTarget as Node)) return
+            setOpen(false)
+          }}
+          placeholder="Search packages across all repositories…"
+          className="w-full rounded border border-slate-300 px-3 py-2 text-sm focus:border-[#0071c5] focus:outline-none"
+        />
+        {open && (
+          <div className="absolute z-10 mt-1 max-h-[360px] w-full overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
+            {query.trim().length < 2 ? (
+              <p className="px-3 py-4 text-center text-[12px] text-slate-500">
+                Type at least 2 characters to search.
+              </p>
+            ) : error ? (
+              <p className="px-3 py-4 text-center text-[12px] text-red-600">{error}</p>
+            ) : (
+              <>
+                {/* Hits render while the stream is still open, so a slow
+                    repository never hides what the fast ones already found. */}
+                {results.map((hit) => (
+                  <PackageRow
+                    key={`${hit.repository}:${hit.name}`}
+                    name={hit.name}
+                    version={hit.version}
+                    description={hit.description}
+                    repoLabel={labelFor(hit.repository)}
+                    showRepo
+                    versions={versionsOf(hit)}
+                    repoLabelFor={labelFor}
+                    selection={addedPackages.find((p) => p.name === hit.name)}
+                    onToggle={(checked) => (checked ? pick(hit, hit.repository, '') : removePackage(hit.name))}
+                    onChooseVersion={(v) => add(hit, v.repository, v.version)}
+                  />
+                ))}
+                {loading ? (
+                  <p className="px-3 py-2 text-center text-[11px] text-slate-500">
+                    {results.length > 0 ? 'Searching more repositories…' : 'Searching…'}
                   </p>
-                )
-              )}
-            </>
-          )}
-        </div>
-      )}
-    </div>
+                ) : results.length === 0 ? (
+                  <p className="px-3 py-4 text-center text-[12px] text-slate-500">
+                    No matching packages{partialNote(outcome) ? ' yet' : ''}.
+                    {partialNote(outcome) && (
+                      <span className="mt-1 block text-[11px] text-slate-400">
+                        {partialNote(outcome)}
+                      </span>
+                    )}
+                  </p>
+                ) : (
+                  partialNote(outcome) && (
+                    <p className="border-t border-slate-100 px-3 py-2 text-[11px] text-slate-400">
+                      {partialNote(outcome)}
+                    </p>
+                  )
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </div>
+      <p className="mb-4 mt-1.5 text-sm text-slate-500">
+        Search across all repositories. Pick &quot;Latest&quot; or a specific
+        version to add it.
+      </p>
+    </>
   )
 }
 
