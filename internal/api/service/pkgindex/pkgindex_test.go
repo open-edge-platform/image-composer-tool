@@ -4,8 +4,10 @@
 package pkgindex
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -427,6 +429,59 @@ func TestRepoKeyDistinguishesEveryField(t *testing.T) {
 		if v.key() == base.key() {
 			t.Errorf("%s does not affect the cache key: %q", field, v.key())
 		}
+	}
+}
+
+// A body at exactly the cap reads through untouched; one byte more fails the
+// read. Truncating instead would hand the parser a short-but-well-formed index
+// and produce a partial package list indistinguishable from a complete one.
+// Constructed directly rather than through newLimitedBody so the cap can be a
+// few bytes instead of maxIndexBytes' 256 MB.
+func TestLimitedBodyFailsClosedBeyondTheCap(t *testing.T) {
+	t.Parallel()
+	const limit = 64
+	tests := []struct {
+		name    string
+		size    int
+		wantErr bool
+	}{
+		{"exactly at the cap", limit, false},
+		{"one byte over the cap", limit + 1, true},
+		{"far over the cap", limit * 10, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			payload := bytes.Repeat([]byte("x"), tc.size)
+			lb := &limitedBody{body: io.NopCloser(bytes.NewReader(payload)), left: limit + 1}
+			got, err := io.ReadAll(lb)
+			if tc.wantErr {
+				if !errors.Is(err, errIndexTooLarge) {
+					t.Fatalf("err = %v, want errIndexTooLarge", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ReadAll: %v", err)
+			}
+			if len(got) != tc.size {
+				t.Errorf("read %d bytes, want the whole %d", len(got), tc.size)
+			}
+		})
+	}
+}
+
+// The cap logic above is exercised with a small limit, so this pins the
+// constructor to the real one: a cap quietly raised, lowered or left unset
+// would otherwise not show up in any test.
+func TestNewLimitedBodyCapsAtMaxIndexBytes(t *testing.T) {
+	t.Parallel()
+	lb, ok := newLimitedBody(io.NopCloser(bytes.NewReader(nil))).(*limitedBody)
+	if !ok {
+		t.Fatal("newLimitedBody did not return a *limitedBody")
+	}
+	if want := int64(maxIndexBytes) + 1; lb.left != want {
+		t.Errorf("left = %d, want %d (maxIndexBytes plus the probe byte)", lb.left, want)
 	}
 }
 

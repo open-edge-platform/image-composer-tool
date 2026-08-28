@@ -107,18 +107,43 @@ func decompress(url string, r io.ReadCloser) (io.ReadCloser, error) {
 	}
 }
 
+// errIndexTooLarge marks a body that ran past maxIndexBytes. Exceeding the cap
+// fails the read rather than truncating it: io.LimitReader signals the cap with
+// EOF, which a parser cannot tell apart from a genuine end of body, so an
+// oversized index would be parsed as a complete — but silently short — package
+// list. A partial catalog presented as the whole one is worse than no catalog.
+var errIndexTooLarge = errors.New("index exceeds the size cap")
+
 // limitedBody bounds how much of a response body is read while still closing
 // the underlying body, which io.LimitReader alone discards.
 type limitedBody struct {
-	io.Reader
 	body io.ReadCloser
+	// Bytes still permitted, plus one probe byte: delivering that extra byte
+	// is what proves the body is over the cap rather than exactly at it.
+	left int64
 }
 
 func newLimitedBody(body io.ReadCloser) io.ReadCloser {
-	return limitedBody{Reader: io.LimitReader(body, maxIndexBytes), body: body}
+	return &limitedBody{body: body, left: maxIndexBytes + 1}
 }
 
-func (l limitedBody) Close() error { return l.body.Close() }
+func (l *limitedBody) Read(p []byte) (int, error) {
+	if l.left <= 0 {
+		return 0, fmt.Errorf("%w of %d bytes", errIndexTooLarge, int64(maxIndexBytes))
+	}
+	if int64(len(p)) > l.left {
+		p = p[:l.left]
+	}
+	n, err := l.body.Read(p)
+	l.left -= int64(n)
+	if l.left <= 0 {
+		// The probe byte was consumed, so more remained than the cap allows.
+		return n, fmt.Errorf("%w of %d bytes", errIndexTooLarge, int64(maxIndexBytes))
+	}
+	return n, err
+}
+
+func (l *limitedBody) Close() error { return l.body.Close() }
 
 // closeFunc adapts a plain release function to io.Closer, for decompressors
 // whose Close returns no error.
