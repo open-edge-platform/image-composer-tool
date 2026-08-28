@@ -122,6 +122,12 @@ interface SearchOutcome {
   repos: number
   failed: number
   truncated: boolean
+  // Set when the stream broke before its `done` event, which is the only
+  // message carrying real counts. The client cannot derive them: a `hits` event
+  // arrives only from a repository that matched something, so counting those
+  // would report far fewer repositories than were actually searched. An
+  // interrupted outcome therefore reports no numbers at all.
+  interrupted?: boolean
 }
 
 // versionsOf normalises a hit's version list, tolerating a backend that
@@ -240,7 +246,7 @@ function PackageSearch({ os, repos }: { os: string; repos: PackageRepo[] }) {
           // Keep what already arrived rather than replacing it with an error:
           // a stream that dies partway still found real packages.
           setLoading(false)
-          setOutcome({ repos: byRepo.size, failed: 0, truncated: true })
+          setOutcome({ repos: 0, failed: 0, truncated: false, interrupted: true })
           return
         }
         // Nothing arrived, so fall back to the non-streaming endpoint. It is
@@ -373,6 +379,12 @@ function PackageSearch({ os, repos }: { os: string; repos: PackageRepo[] }) {
 // when every repository reported.
 function partialNote(outcome: SearchOutcome | null): string | null {
   if (!outcome) return null
+  // No counts are known for an interrupted stream, so none are quoted — a
+  // number derived from the batches that happened to arrive would understate
+  // what was searched and read as authoritative.
+  if (outcome.interrupted) {
+    return 'The search was interrupted before every repository reported — these results may be incomplete.'
+  }
   const parts: string[] = []
   if (outcome.failed > 0) {
     parts.push(`${outcome.failed} of ${outcome.repos} repositories unreachable`)
