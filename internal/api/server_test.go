@@ -96,8 +96,7 @@ func TestNewServer(t *testing.T) {
 
 // TestServerStartAndShutdown verifies the Start and Shutdown lifecycle.
 // It binds to port 0 (OS-assigned) so the test does not conflict with
-// other services, starts the server in a goroutine, issues a health
-// check, then gracefully shuts down.
+// other services, starts the server in a goroutine, then gracefully shuts down.
 func TestServerStartAndShutdown(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "lifecycle-test-*")
 	if err != nil {
