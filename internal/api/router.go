@@ -19,6 +19,7 @@ func NewRouter(s *Server) http.Handler {
 	// ── Templates ───────────────────────────────────────────────────────
 	mux.HandleFunc("GET /api/v1/templates", handleListTemplates(s))
 	mux.HandleFunc("GET /api/v1/templates/{name}", handleGetTemplate(s))
+	mux.HandleFunc("POST /api/v1/templates/validate", handleValidate(s))
 
 	// ── Sessions ─────────────────────────────────────────────────────────
 	mux.HandleFunc("POST /api/v1/sessions", handleCreateSession(s))
@@ -32,7 +33,6 @@ func NewRouter(s *Server) http.Handler {
 	// mux.HandleFunc("POST /api/v1/templates", handleCreateTemplate(s))
 	// mux.HandleFunc("PUT /api/v1/templates/{name}", handleUpdateTemplate(s))
 	// mux.HandleFunc("DELETE /api/v1/templates/{name}", handleDeleteTemplate(s))
-	mux.HandleFunc("POST /api/v1/templates/validate", handleValidate(s))
 
 	// ── Future: Builds ──────────────────────────────────────────────────
 	// mux.HandleFunc("POST /api/v1/builds", handleStartBuild(s))
