@@ -1,33 +1,33 @@
-import { useState, useRef, useEffect } from 'react';
-import { useSSE } from './useSSE';
+import { useEffect } from 'react';
 import { useSession } from './SessionContext';
+import { useChatContext } from './ChatContext';
+import { useEditor } from './EditorContext';
 
 export function useChat() {
-  const [messages, setMessages] = useState([]);
-  const [error, setError] = useState(null);
-  const [isStreaming, setIsStreaming] = useState(false);
-  
-  // Active stream state
-  const [streamBuffer, setStreamBuffer] = useState('');
-  const [activeSearchResults, setActiveSearchResults] = useState([]);
-  const activeSearchResultsRef = useRef([]);
+  const {
+    messages, setMessages,
+    error, setError,
+    isStreaming, setIsStreaming,
+    streamBuffer, setStreamBuffer,
+    activeSearchResults, setActiveSearchResults,
+    activeSearchResultsRef,
+    startStream,
+    resetChat: contextReset,
+  } = useChatContext();
 
-  const { startStream } = useSSE();
   const { sessionId, ensureSession, clearSession } = useSession();
+  const { setEditorValue } = useEditor();
 
   // Clear messages if session is cleared from elsewhere (e.g. Sidebar)
   useEffect(() => {
     if (sessionId === null) {
-      setMessages([]);
-      setError(null);
-      setStreamBuffer('');
-      setActiveSearchResults([]);
-      activeSearchResultsRef.current = [];
+      contextReset();
     }
-  }, [sessionId]);
+  }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const resetChat = () => {
     clearSession();
+    // contextReset() will be called by the useEffect above when sessionId becomes null
   };
 
   const handleSubmit = async (query) => {
@@ -43,6 +43,8 @@ export function useChat() {
     try {
       const sessionId = await ensureSession();
       
+      let currentBuffer = '';
+
       startStream(query, sessionId, {
         onSearchResults: (data) => {
           const results = data.results || [];
@@ -50,7 +52,9 @@ export function useChat() {
           activeSearchResultsRef.current = results;
         },
         onToken: (data) => {
-          setStreamBuffer((prev) => prev + data.content);
+          currentBuffer += data.content;
+          setStreamBuffer(currentBuffer);
+          setEditorValue(currentBuffer);
         },
         onError: (err) => {
           setError(err);
@@ -68,6 +72,10 @@ export function useChat() {
               isRefinement: prev.length > 1
             }
           ]);
+          // Auto-sync: push the latest generated YAML into the Editor context
+          if (data.yaml) {
+            setEditorValue(data.yaml);
+          }
           setStreamBuffer('');
           setActiveSearchResults([]);
           activeSearchResultsRef.current = [];
@@ -75,7 +83,7 @@ export function useChat() {
         }
       });
     } catch (err) {
-      setError({ message: 'Failed to create session. Please try again.' });
+      setError({ message: err.message || 'Failed to create session. Please try again.' });
       setIsStreaming(false);
     }
   };

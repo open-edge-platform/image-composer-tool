@@ -19,14 +19,14 @@ func TestGetTemplatePathTraversal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	// Plant a "secret" YAML file one level above the templates directory.
 	secret := filepath.Join(filepath.Dir(tmpDir), "trav-secret.yml")
 	if err := os.WriteFile(secret, []byte("image:\n  name: SECRET\n"), 0o644); err != nil {
 		t.Fatalf("failed to write secret file: %v", err)
 	}
-	defer os.Remove(secret)
+	defer func() { _ = os.Remove(secret) }()
 
 	config := ai.DefaultConfig()
 	config.Provider = ai.ProviderOllama

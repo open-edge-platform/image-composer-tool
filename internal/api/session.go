@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 )
 
 // SessionConfig holds session-related settings.
@@ -237,6 +239,7 @@ func (sm *SessionManager) startCleanup() {
 			sm.mu.Lock()
 			for id, session := range sm.sessions {
 				if time.Since(session.LastActiveAt) > sm.config.Timeout {
+					logger.Logger().Infof("Session %s expired due to inactivity", id)
 					delete(sm.sessions, id)
 				}
 			}

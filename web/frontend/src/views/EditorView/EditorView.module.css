@@ -1,0 +1,114 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-md) var(--space-lg);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.title {
+  margin: 0;
+  font-size: 1.25rem;
+  color: var(--color-text-primary);
+}
+
+.statusBar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: 0.85rem;
+}
+
+.validating {
+  color: var(--color-text-secondary);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.statusValid {
+  color: var(--color-accent-secondary);
+  font-weight: 600;
+}
+
+.statusInvalid {
+  color: var(--color-accent-danger);
+  font-weight: 600;
+}
+
+.editorWrapper {
+  flex: 1;
+  overflow: hidden;
+}
+
+.codeMirror {
+  height: 100%;
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+}
+
+.codeMirror :global(.cm-editor) {
+  height: 100%;
+  background-color: var(--color-bg-primary);
+}
+
+.codeMirror :global(.cm-gutters) {
+  background-color: var(--color-bg-secondary);
+  border-right: 1px solid var(--color-border-subtle);
+}
+
+.errorPanel {
+  max-height: 200px;
+  overflow-y: auto;
+  border-top: 2px solid var(--color-accent-danger);
+  background-color: var(--color-bg-secondary);
+}
+
+.errorPanelHeader {
+  padding: var(--space-sm) var(--space-md);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-accent-danger);
+  background-color: var(--color-bg-tertiary);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.errorList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.errorItem {
+  display: flex;
+  gap: var(--space-md);
+  padding: var(--space-xs) var(--space-md);
+  font-size: 0.8rem;
+  border-bottom: 1px solid var(--color-border-subtle);
+  transition: background-color var(--transition-fast);
+}
+
+.errorItem:hover {
+  background-color: var(--color-bg-elevated);
+}
+
+.errorPath {
+  color: var(--color-accent-warning);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  min-width: 120px;
+}
+
+.errorMessage {
+  color: var(--color-text-primary);
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}

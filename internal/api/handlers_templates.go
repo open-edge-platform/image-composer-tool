@@ -1,11 +1,17 @@
 package api
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"strings"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/ai/template"
+	"github.com/open-edge-platform/image-composer-tool/internal/config/validate"
+	"github.com/santhosh-tekuri/jsonschema/v5"
+	"gopkg.in/yaml.v3"
 )
 
 // templateListResponse matches the OpenAPI response for GET /api/v1/templates.
@@ -19,6 +25,20 @@ type templateListResponse struct {
 type templateDetailResponse struct {
 	templateInfoJSON
 	YAML string `json:"yaml"`
+}
+
+type templateValidateRequest struct {
+	YAML string `json:"yaml"`
+}
+
+type validationResult struct {
+	Valid  bool              `json:"valid"`
+	Errors []validationError `json:"errors"`
+}
+
+type validationError struct {
+	Path    string `json:"path"`
+	Message string `json:"message"`
 }
 
 // handleListTemplates returns a summary list of all templates.
@@ -144,4 +164,113 @@ func convertTemplateInfo(t *template.TemplateInfo) templateInfoJSON {
 	}
 
 	return info
+}
+
+func handleValidate(s *Server) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req templateValidateRequest
+		if !decodeJSON(w, r, &req) {
+			return
+		}
+
+		if req.YAML == "" {
+			respondJSON(w, http.StatusOK, validationResult{
+				Valid:  false,
+				Errors: []validationError{{Path: "/", Message: "YAML content is required"}},
+			})
+			return
+		}
+
+		var yamlDoc interface{}
+		if err := yaml.Unmarshal([]byte(req.YAML), &yamlDoc); err != nil {
+			respondJSON(w, http.StatusOK, validationResult{
+				Valid:  false,
+				Errors: []validationError{{Path: "/", Message: "Invalid YAML syntax: " + err.Error()}},
+			})
+			return
+		}
+
+		jsonBytes, err := json.Marshal(convertYAMLToJSONCompatible(yamlDoc))
+		if err != nil {
+			respondJSON(w, http.StatusOK, validationResult{
+				Valid:  false,
+				Errors: []validationError{{Path: "/", Message: "Failed to convert YAML to JSON: " + err.Error()}},
+			})
+			return
+		}
+
+		if err := validate.ValidateUserTemplateJSON(jsonBytes); err != nil {
+			errors := extractValidationErrors(err)
+			respondJSON(w, http.StatusOK, validationResult{
+				Valid:  false,
+				Errors: errors,
+			})
+			return
+		}
+
+		respondJSON(w, http.StatusOK, validationResult{
+			Valid:  true,
+			Errors: []validationError{},
+		})
+	}
+}
+
+func extractValidationErrors(err error) []validationError {
+	var ve *jsonschema.ValidationError
+	if !errors.As(err, &ve) {
+		return []validationError{{Path: "/", Message: err.Error()}}
+	}
+
+	var result []validationError
+	collectErrors(ve, &result)
+
+	if len(result) == 0 {
+		result = append(result, validationError{
+			Path:    ve.InstanceLocation,
+			Message: ve.Message,
+		})
+	}
+	return result
+}
+
+func collectErrors(ve *jsonschema.ValidationError, result *[]validationError) {
+	if len(ve.Causes) == 0 {
+		path := ve.InstanceLocation
+		if path == "" {
+			path = "/"
+		}
+		*result = append(*result, validationError{
+			Path:    path,
+			Message: ve.Message,
+		})
+		return
+	}
+	for _, cause := range ve.Causes {
+		collectErrors(cause, result)
+	}
+}
+
+func convertYAMLToJSONCompatible(v interface{}) interface{} {
+	switch val := v.(type) {
+	case map[string]interface{}:
+		result := make(map[string]interface{}, len(val))
+		for k, v := range val {
+			result[k] = convertYAMLToJSONCompatible(v)
+		}
+		return result
+	case map[interface{}]interface{}:
+		result := make(map[string]interface{}, len(val))
+		for k, v := range val {
+			result[fmt.Sprintf("%v", k)] = convertYAMLToJSONCompatible(v)
+		}
+		return result
+	case []interface{}:
+		result := make([]interface{}, len(val))
+		for i, v := range val {
+			result[i] = convertYAMLToJSONCompatible(v)
+		}
+		return result
+	default:
+		return v
+	}
 }

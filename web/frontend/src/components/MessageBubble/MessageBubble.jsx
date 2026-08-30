@@ -1,9 +1,21 @@
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useEditor } from '../../hooks/EditorContext';
 import styles from './MessageBubble.module.css';
 import { StreamingYaml } from '../StreamingYaml/StreamingYaml';
 import { SearchResultCard } from '../SearchResultCard/SearchResultCard';
 
 export function MessageBubble({ message }) {
+  const navigate = useNavigate();
+  const { setEditorValue } = useEditor();
+
+  const handleApplyToEditor = () => {
+    if (message.yaml) {
+      setEditorValue(message.yaml);
+      navigate('/editor');
+    }
+  };
+
   const isUser = message.role === 'user';
   
   return (
@@ -24,7 +36,11 @@ export function MessageBubble({ message }) {
         )}
 
         {!isUser && message.yaml && (
-          <StreamingYaml yaml={message.yaml} isStreaming={false} />
+          <StreamingYaml 
+            yaml={message.yaml} 
+            isStreaming={false} 
+            onOpenInEditor={handleApplyToEditor}
+          />
         )}
       </div>
     </div>
