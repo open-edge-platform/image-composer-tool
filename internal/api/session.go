@@ -237,13 +237,18 @@ func (sm *SessionManager) startCleanup() {
 		select {
 		case <-ticker.C:
 			sm.mu.Lock()
+			var expiredIDs []string
 			for id, session := range sm.sessions {
 				if time.Since(session.LastActiveAt) > sm.config.Timeout {
-					logger.Logger().Infof("Session %s expired due to inactivity", id)
+					expiredIDs = append(expiredIDs, id)
 					delete(sm.sessions, id)
 				}
 			}
 			sm.mu.Unlock()
+
+			for _, id := range expiredIDs {
+				logger.Logger().Infof("Session %s expired due to inactivity", id)
+			}
 		case <-sm.stopCh:
 			return
 		}

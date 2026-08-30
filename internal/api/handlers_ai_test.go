@@ -317,7 +317,9 @@ func TestQueryWithSessionAndRefinement(t *testing.T) {
 	handler.ServeHTTP(rrGet2, reqGet2)
 
 	var finalSession Session
-	_ = json.Unmarshal(rrGet2.Body.Bytes(), &finalSession)
+	if err := json.Unmarshal(rrGet2.Body.Bytes(), &finalSession); err != nil {
+		t.Fatalf("failed to decode get-session response: %v", err)
+	}
 	if len(finalSession.History) != 4 {
 		t.Errorf("expected 4 messages in history, got %d", len(finalSession.History))
 	}
