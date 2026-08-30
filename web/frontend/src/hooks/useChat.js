@@ -23,7 +23,7 @@ export function useChat() {
     if (sessionId === null) {
       contextReset();
     }
-  }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sessionId, contextReset]);
 
   const resetChat = () => {
     clearSession();

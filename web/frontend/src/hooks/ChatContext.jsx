@@ -31,7 +31,7 @@ export function ChatProvider({ children }) {
     }
   }, []);
 
-  const resetChat = () => {
+  const resetChat = useCallback(() => {
     stopStream();
     setMessages([]);
     setError(null);
@@ -39,7 +39,7 @@ export function ChatProvider({ children }) {
     setStreamBuffer('');
     setActiveSearchResults([]);
     activeSearchResultsRef.current = [];
-  };
+  }, [stopStream]);
 
   return (
     <ChatContext.Provider value={{
