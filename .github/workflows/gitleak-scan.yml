@@ -22,12 +22,6 @@ jobs:
           scan-scope: "all"
           source: "./"
           version: "8.28.0"
-          baseline_path: "./ci/gitleaks_baselines/image-composer-tool-gitleaks.json"
           report_format: "sarif"
           redact: "true"
           exit_code_on_leak: "1"
-      - name: Fail on gitleaks findings
-        if: steps.gitleaks.outputs.exit_code != '0'
-        run: |
-          echo "::error::Gitleaks detected potential secrets. See SARIF in Security tab."
-          exit 1
