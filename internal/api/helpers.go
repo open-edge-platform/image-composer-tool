@@ -93,12 +93,21 @@ func respondError(w http.ResponseWriter, statusCode int, code, message string, d
 		details = map[string]any{}
 	}
 
+	reqID := generateRequestID()
+
+	// Log the error server-side using the project logger.
+	if statusCode >= 500 {
+		logger.Logger().Errorf("[%s] HTTP %d: %s - %s", reqID, statusCode, code, message)
+	} else if statusCode >= 400 {
+		logger.Logger().Warnf("[%s] HTTP %d: %s - %s", reqID, statusCode, code, message)
+	}
+
 	resp := ErrorResponse{
 		Error: ErrorDetail{
 			Code:      code,
 			Message:   message,
 			Details:   details,
-			RequestID: generateRequestID(),
+			RequestID: reqID,
 		},
 	}
 

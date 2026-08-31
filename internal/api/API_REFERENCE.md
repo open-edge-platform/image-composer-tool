@@ -1,5 +1,5 @@
 # API Package Reference
-NOTE: This is a temporary file to just get rough idea and reference about what the temporary structure of the project backend looks like. This is not a final source of truth reference document and may contain minor errors-NB
+
 
 This document serves as a reference for the `internal/api` package, which provides the HTTP web server layer for the Image Composer Tool. It explains the purpose of each file, how they coordinate to handle requests, and the current development status.
 
@@ -39,7 +39,7 @@ When a user or web browser sends a request, the files coordinate in the followin
 
 ## What is Done (Phases 1-3)
 
-NOTE: Some edge cases still do not work or need refinement-NB
+
 
 The core scaffolding, AI functionality, streaming, and session management have been completed. The following features are fully implemented and functional, organized by phase:
 
@@ -63,14 +63,3 @@ The core scaffolding, AI functionality, streaming, and session management have b
 
 ---
 
-## ⏳ What is Yet To Be Done (Future Phases)
-
-The API is built in phases according to the Architecture Decision Record (ADR). The following features are scheduled for future implementation:
-
-*   **Phase 4: Template CRUD Operations**
-    *   Add endpoints to create, modify, validate, and delete template files over the API (`POST /api/v1/templates`, `PUT /api/v1/templates/{name}`, etc.).
-*   **Phase 5: Remote Builds**
-    *   Implement Build Manager.
-    *   Add endpoints to trigger (`POST /api/v1/builds`), monitor (`GET /api/v1/builds/{id}`), and stream logs (`GET /api/v1/builds/{id}/logs`) for `sudo osbuild` processes.
-*   **CLI Configuration Integration**
-    *   Update `serve_cmd.go` to merge the global `image-composer-tool.yml` configuration (so that properties like `chat_model` set by the user are respected by the web server).

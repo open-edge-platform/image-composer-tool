@@ -10,6 +10,7 @@ import (
 
 	"github.com/open-edge-platform/image-composer-tool/internal/ai/provider"
 	"github.com/open-edge-platform/image-composer-tool/internal/ai/rag"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 )
 
 // isProviderUnavailable reports whether err (or anything it wraps) indicates
@@ -362,6 +363,11 @@ func writeSSEEvent(w http.ResponseWriter, flusher http.Flusher, eventType string
 	if err != nil {
 		return fmt.Errorf("failed to marshal SSE data: %w", err)
 	}
+
+	if eventType == "error" {
+		logger.Logger().Errorf("SSE Stream Error: %v", data)
+	}
+
 	_, err = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, jsonData)
 	if err != nil {
 		return fmt.Errorf("failed to write SSE event: %w", err)

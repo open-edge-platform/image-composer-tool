@@ -27,3 +27,29 @@
   0%, 100% { opacity: 1; }
   50% { opacity: 0; }
 }
+
+.actionWrapper {
+  margin-top: var(--space-md);
+  display: flex;
+  justify-content: flex-end;
+  border-top: 1px solid var(--color-border-subtle);
+  padding-top: var(--space-sm);
+}
+
+.actionBtn {
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-xs) var(--space-md);
+  font-family: var(--font-sans);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: background-color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.actionBtn:hover {
+  background: var(--color-accent-primary);
+  color: #fff;
+  border-color: var(--color-accent-primary);
+}

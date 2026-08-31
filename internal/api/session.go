@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 )
 
 // SessionConfig holds session-related settings.
@@ -235,12 +237,18 @@ func (sm *SessionManager) startCleanup() {
 		select {
 		case <-ticker.C:
 			sm.mu.Lock()
+			var expiredIDs []string
 			for id, session := range sm.sessions {
 				if time.Since(session.LastActiveAt) > sm.config.Timeout {
+					expiredIDs = append(expiredIDs, id)
 					delete(sm.sessions, id)
 				}
 			}
 			sm.mu.Unlock()
+
+			for _, id := range expiredIDs {
+				logger.Logger().Infof("Session %s expired due to inactivity", id)
+			}
 		case <-sm.stopCh:
 			return
 		}
