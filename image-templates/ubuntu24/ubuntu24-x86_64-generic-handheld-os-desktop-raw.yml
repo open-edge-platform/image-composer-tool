@@ -122,12 +122,10 @@ systemConfig:
   # Handheld additions — unioned with the base's package set at merge time.
   packages:
     - curl
-    # libssl-dev hard-depends on "libssl3t64 (= <its own version>)". The resolver
-    # resolves the transitive libssl3t64 (pulled in by many base packages) to the
-    # -updates build 3.0.13-0ubuntu3.12, so libssl-dev must be pinned to the same
-    # -updates version or the exact "=" dep conflicts. Do NOT also list libssl3t64
-    # explicitly — that routes it through a path that stages the GA build instead.
-    - libssl-dev_3.0.13-0ubuntu3.12
+    # Use the repository-resolved libssl-dev version instead of an exact pin.
+    # The previous exact version pin went stale and caused package resolution
+    # failures once that version disappeared from the configured repositories.
+    - libssl-dev
     # Docker CE engine (pre-installed, disabled by default; cloud-init enables on first boot)
     - docker-ce
     - docker-ce-cli
