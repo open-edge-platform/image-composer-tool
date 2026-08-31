@@ -121,7 +121,6 @@ systemConfig:
 
   # Per-field override: the parent's cmdline is kept, the GPU driver pinned.
   kernel:
-    version: "6.12"
     cmdline: "console=ttyS0,115200 console=tty0 loglevel=7 i915.force_probe=*"
     packages:
-      - kernel-drivers-gpu-6.12.55
+      - kernel-drivers-gpu
