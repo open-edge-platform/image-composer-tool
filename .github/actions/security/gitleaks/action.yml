@@ -202,9 +202,9 @@ runs:
           exit 1
         fi
         echo "exit_code=$STATUS" >> "$GITHUB_OUTPUT"
-        # Don't hard-fail the job; let the caller decide based on outputs.exit_code
         if [[ "$STATUS" -ne 0 ]]; then
-          echo "::warning::Gitleaks detected leaks (exit code $STATUS)"
+          echo "::error::Gitleaks detected leaks (exit code $STATUS)"
+          exit "$STATUS"
         fi
 
     - name: Upload report artifact

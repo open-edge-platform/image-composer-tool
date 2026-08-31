@@ -13,13 +13,21 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 #v7.0.1
         with:
-          persist-credentials: true
+          persist-credentials: false
+          fetch-depth: 0
       - name: Run Gitleaks scan
+        id: gitleaks
         uses: ./.github/actions/security/gitleaks
         with:
           scan-scope: "all"
           source: "./"
           version: "8.28.0"
-          config_path: "./ci/gitleaks_baselines/image-composer-tool-gitleaks.sarif"
+          baseline_path: "./ci/gitleaks_baselines/image-composer-tool-gitleaks.json"
           report_format: "sarif"
           redact: "true"
+          exit_code_on_leak: "1"
+      - name: Fail on gitleaks findings
+        if: steps.gitleaks.outputs.exit_code != '0'
+        run: |
+          echo "::error::Gitleaks detected potential secrets. See SARIF in Security tab."
+          exit 1
