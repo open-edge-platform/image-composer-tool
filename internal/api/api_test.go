@@ -170,6 +170,68 @@ func TestHandleComposeSuccess(t *testing.T) {
 	}
 }
 
+// Packages and repos posted to /templates/compose must reach the resolved
+// template, and the delta/base views must be published alongside it so the
+// Review pane can show what the selection contributed.
+func TestHandleComposeWithPackages(t *testing.T) {
+	s, _ := newTestServer(t)
+	body := `{"vertical":"robotics","sku":"amr","platform":"wcl","os":"ubuntu24","imageType":"iso",` +
+		`"packages":["htop","curl_8.5.0-2ubuntu10.13"],"repos":["docker-ce-ubuntu"]}`
+	rr := s.do(httptest.NewRequest(http.MethodPost, "/api/v1/templates/compose", strings.NewReader(body)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rr.Code, rr.Body)
+	}
+	var resp httpapi.ComposeResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !strings.Contains(resp.Yaml, "htop") {
+		t.Errorf("resolved YAML missing a selected package:\n%s", resp.Yaml)
+	}
+	if resp.DeltaYaml == nil || *resp.DeltaYaml == "" {
+		t.Error("deltaYaml not published for a selection with packages")
+	} else if !strings.Contains(*resp.DeltaYaml, "download.docker.com") {
+		t.Errorf("delta missing the enabled repository:\n%s", *resp.DeltaYaml)
+	}
+	if resp.BaseYaml == nil || *resp.BaseYaml == "" {
+		t.Error("baseYaml not published for a selection with packages")
+	}
+}
+
+// A package name the template schema would reject is a client error, refused
+// before any delta is written.
+func TestHandleComposeRejectsInvalidPackage(t *testing.T) {
+	s, _ := newTestServer(t)
+	body := `{"vertical":"robotics","sku":"amr","platform":"wcl","os":"ubuntu24","imageType":"iso",` +
+		`"packages":["curl; rm -rf /"]}`
+	rr := s.do(httptest.NewRequest(http.MethodPost, "/api/v1/templates/compose", strings.NewReader(body)))
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body: %s)", rr.Code, rr.Body)
+	}
+}
+
+// A build posted with packages but no imageName must still generate a delta —
+// the override gate tested imageName alone before, which would have dropped the
+// picks silently.
+func TestHandleStartBuildWithPackagesOnly(t *testing.T) {
+	s, _ := newTestServer(t)
+	body := `{"compose":{"vertical":"robotics","sku":"amr","platform":"wcl","os":"ubuntu24",` +
+		`"imageType":"iso","packages":["htop"]}}`
+	rr := s.do(httptest.NewRequest(http.MethodPost, "/api/v1/builds", strings.NewReader(body)))
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 (body: %s)", rr.Code, rr.Body)
+	}
+	var acc httpapi.BuildAccepted
+	if err := json.Unmarshal(rr.Body.Bytes(), &acc); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	h, ok := s.svc.Build(acc.BuildId)
+	if !ok {
+		t.Fatalf("build %s not tracked", acc.BuildId)
+	}
+	<-h.Done()
+}
+
 func TestHandleComposeErrors(t *testing.T) {
 	s, _ := newTestServer(t)
 	cases := []struct {
@@ -402,6 +464,49 @@ func TestHandleListPackageRepos(t *testing.T) {
 			t.Errorf("repos not ordered by descending priority at %d: %d then %d",
 				i, *out.Repos[i-1].Priority, *out.Repos[i].Priority)
 		}
+	}
+}
+
+// hasSigningKey is always emitted, and true for every optional repo the catalog
+// ships. The client warns on a false, so a nil would read as "unsigned" and warn
+// on every repository.
+func TestHandleListPackageReposReportsSigningKey(t *testing.T) {
+	s, _ := newTestServer(t)
+	out := s.getRepos(t, "")
+	seen := map[string]bool{}
+	for _, r := range out.Repos {
+		if r.HasSigningKey == nil {
+			t.Errorf("repo %q: hasSigningKey not serialized", r.Id)
+			continue
+		}
+		seen[r.Id] = *r.HasSigningKey
+		// Every optional repo carries a pkey.
+		if !r.EnabledByDefault && !*r.HasSigningKey {
+			t.Errorf("optional repo %q reports no signing key", r.Id)
+		}
+	}
+	// The Ubuntu base repos are never given a pkey — toTemplateRepos skips base
+	// repos entirely, so one would never be used — but they do carry a local
+	// GPGKeyPath the picker's own search verifies against, so they must still
+	// report true rather than warn the user about a verification gap they don't
+	// have.
+	for _, id := range []string{"ubuntu-noble-base", "ubuntu-resolute-base"} {
+		if !seen[id] {
+			t.Errorf("base repo %q reports no signing key despite its local keyring", id)
+		}
+	}
+}
+
+// The key URL stays server-side for the same reason the curated list does: the
+// client needs only to know whether to warn.
+func TestHandleListPackageReposOmitsTheKeyURL(t *testing.T) {
+	s, _ := newTestServer(t)
+	rr := s.do(httptest.NewRequest(http.MethodGet, "/api/v1/package-repos", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	if body := rr.Body.String(); strings.Contains(body, "pkey") {
+		t.Error("response carries the pkey URL; want only the hasSigningKey flag")
 	}
 }
 

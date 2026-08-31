@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"sigs.k8s.io/yaml"
 )
@@ -90,7 +91,29 @@ type PackageRepo struct {
 	// browser sends a curated=true query flag and the server does the
 	// filtering, rather than shipping the list itself.
 	CuratedPackages []string `json:"curatedPackages,omitempty"`
+	// PKey is the GPG signing-key URL written as this repository's `pkey` when
+	// enabling it emits a packageRepositories entry (toTemplateRepos). It is a
+	// URL a build fetches, which is what config.PackageRepository.PKey expects
+	// — deliberately a separate field from GPGKeyPath, which is a *local* path
+	// pkgindex reads to verify a search. A repo may legitimately have one and
+	// not the other: the Ubuntu base repos carry the local archive keyring but
+	// need no pkey (their repos come from the providerconfigs), while a
+	// third-party repo has a published key URL and no local keyring.
+	//
+	// Empty means the catalog knows no key for this repository, so a template
+	// enabling it fetches packages unverified. Kept out of the wire type like
+	// the fields above; only the derived hasSigningKey flag is published.
+	PKey string `json:"pkey,omitempty"`
 }
+
+// HasSigningKey reports whether this repository's packages are ever fetched
+// with signature verification: either PKey (a build verifies the enabled
+// packageRepositories entry) or GPGKeyPath (the picker's own search already
+// verifies the repo's Release against a local keyring, as the Ubuntu base
+// repos do). A repo can have either, both, or neither — see PKey's comment
+// for why the two are independent — but the browser only needs to know
+// whether verification happens by some means, not which one.
+func (r PackageRepo) HasSigningKey() bool { return r.PKey != "" || r.GPGKeyPath != "" }
 
 // Repository types recognised in the catalog. Empty defaults to repoTypeDeb.
 const (
@@ -138,6 +161,85 @@ func (s *Service) PackageRepos(osID string) []PackageRepo {
 		return out[i].ID < out[j].ID
 	})
 	return out
+}
+
+// toTemplateRepos maps enabled catalog repo ids to the packageRepositories
+// entries a generated delta declares, so a package picked from a repository the
+// matched template doesn't already configure can still resolve at build time.
+//
+// Only repos offered for osID are mapped, and only optional ones: a repo the
+// catalog marks EnabledByDefault is the target's base repository, already
+// supplied by the per-OS providerconfigs, so re-declaring it in the template
+// would duplicate configuration the build already has. An id the catalog
+// doesn't know, or one with no index metadata to derive a codename from, is
+// skipped rather than emitted half-formed — the UI can only produce ids it was
+// served, so a mismatch means a stale client, not a user error worth failing on.
+//
+// Order follows PackageRepos (priority-descending, id tie-broken) so the emitted
+// block is deterministic for a given selection.
+func (s *Service) toTemplateRepos(osID string, ids []string) []config.PackageRepository {
+	if len(ids) == 0 {
+		return nil
+	}
+	want := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		want[id] = true
+	}
+	var out []config.PackageRepository
+	for _, r := range s.PackageRepos(osID) {
+		if !want[r.ID] || r.EnabledByDefault {
+			continue
+		}
+		if repo, ok := r.templateRepo(); ok {
+			out = append(out, repo)
+		}
+	}
+	return out
+}
+
+// templateRepo renders one catalog repo as a template packageRepositories
+// entry. Reports false when the repo carries no index metadata, since without a
+// codename there is no suite for a deb build to read.
+//
+// Every optional repo in the catalog publishes exactly one index, so the first
+// is the whole story; a repo that grows a second would need its own entry per
+// index, which is why this returns one value rather than silently using [0] of
+// several.
+func (r PackageRepo) templateRepo() (config.PackageRepository, bool) {
+	if len(r.Index) == 0 {
+		return config.PackageRepository{}, false
+	}
+	idx := r.Index[0]
+	url := idx.URL
+	if url == "" {
+		url = r.URL
+	}
+	repo := config.PackageRepository{
+		URL:  url,
+		PKey: r.PKey,
+	}
+	// An rpm repository is addressed by base URL alone: it publishes one
+	// repodata/ per URL, with no suite or component to name. Codename still
+	// carries the catalog id there, because the build path uses it as the
+	// repository's display name (config.getRepositoryName) and as the dnf repo
+	// id, and an empty one would render as a bare URL in build logs.
+	if r.Type == repoTypeRPM {
+		repo.Codename = r.ID
+		return repo, true
+	}
+	if idx.Codename == "" {
+		return config.PackageRepository{}, false
+	}
+	repo.Codename = idx.Codename
+	repo.Component = idx.Component
+	// Only a raised priority is worth emitting: defaultRepoPriority is what a
+	// build applies to an entry that declares none (normalizeRepositoryPriorities
+	// in internal/config), so writing it out states the default as though it
+	// were a choice.
+	if r.Priority != 0 && r.Priority != defaultRepoPriority {
+		repo.Priority = r.Priority
+	}
+	return repo, true
 }
 
 // appliesTo reports whether the repo is offered for a target OS id. A repo with

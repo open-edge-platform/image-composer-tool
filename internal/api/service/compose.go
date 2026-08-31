@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sort"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 )
 
 // Selection is the set of UI choices that identify one combination, plus any
@@ -26,6 +28,24 @@ type Selection struct {
 	// ImageName overrides the matched template's image.name. Empty means
 	// "not overridden".
 	ImageName string
+
+	// Packages are the Advanced tab's selected packages, emitted into the
+	// generated delta's systemConfig.packages. A pinned pick carries the
+	// `name_version` form the package resolvers match (debutils/resolver.go,
+	// rpmutils/helper.go); a bare name floats to whatever the repository
+	// publishes. Like ImageName, it takes no part in findTemplate's lookup.
+	Packages []string
+	// Repos are catalog repository ids the user enabled, emitted into the
+	// delta's packageRepositories so a package picked from a repository the
+	// matched template doesn't configure can still resolve. Also lookup-neutral.
+	Repos []string
+}
+
+// hasOverrides reports whether the selection asks for anything beyond the
+// matched template, i.e. whether a delta has to be generated at all. Without
+// any, the curated template is resolved directly and no file is written.
+func (s Selection) hasOverrides() bool {
+	return s.ImageName != "" || len(s.Packages) > 0 || len(s.Repos) > 0
 }
 
 // ComposeSummary is the human-readable summary shown in the Review panel and
@@ -59,6 +79,19 @@ type ComposeResult struct {
 	Template string // resolved template filename (the curated parent, even when overridden)
 	YAML     string // the resolved final template — what a build from this selection would run
 	Summary  ComposeSummary
+	// DeltaYAML is the generated extends delta, verbatim — only what this
+	// selection overrode. Empty when the selection carries no overrides, since
+	// no delta is generated then.
+	DeltaYAML string
+	// BaseYAML is the curated parent resolved *without* this selection's
+	// overrides: what YAML would have been had nothing been overridden. Lets a
+	// caller show the baseline beside the delta that modifies it. Empty when
+	// there are no overrides, because YAML already is the base.
+	BaseYAML string
+	// PinConflicts names packages requested at a pinned version whose name the
+	// base template already lists unpinned. The merge unions package lists and
+	// cannot drop the parent's entry, so both survive into YAML. Advisory only.
+	PinConflicts []string
 }
 
 // Compose resolves the selections to a template, applies any Advanced-mode
@@ -78,6 +111,9 @@ func (s *Service) Compose(sel Selection) (*ComposeResult, error) {
 			"vertical, platform, os, and imageType are required")
 	}
 	if err := ValidateImageName(sel.ImageName); err != nil {
+		return nil, newError(http.StatusBadRequest, "BAD_REQUEST", err.Error())
+	}
+	if err := ValidatePackages(sel.Packages); err != nil {
 		return nil, newError(http.StatusBadRequest, "BAD_REQUEST", err.Error())
 	}
 
@@ -108,13 +144,15 @@ func (s *Service) Compose(sel Selection) (*ComposeResult, error) {
 	}
 
 	resolvePath := path
-	if sel.ImageName != "" {
-		deltaPath, cleanup, derr := s.deltaForOverride(tmpl, path, sel)
+	var deltaYAML string
+	if sel.hasOverrides() {
+		deltaPath, data, cleanup, derr := s.deltaForOverride(tmpl, path, sel)
 		if derr != nil {
 			return nil, newError(http.StatusInternalServerError, "TEMPLATE_INVALID", derr.Error())
 		}
 		defer cleanup()
 		resolvePath = deltaPath
+		deltaYAML = string(data)
 	}
 
 	// Parse+merge (reuses ICT's own logic) for both the summary and the
@@ -133,11 +171,63 @@ func (s *Service) Compose(sel Selection) (*ComposeResult, error) {
 			"resolved template failed to marshal: "+err.Error())
 	}
 
-	return &ComposeResult{
-		Template: tmpl,
-		YAML:     string(yamlBytes),
-		Summary:  buildComposeSummary(sel, merged),
-	}, nil
+	res := &ComposeResult{
+		Template:  tmpl,
+		YAML:      string(yamlBytes),
+		Summary:   buildComposeSummary(sel, merged),
+		DeltaYAML: deltaYAML,
+	}
+
+	// With overrides in play, resolve the curated parent a second time so the
+	// caller can show the baseline beside the delta and attribute the difference
+	// to the user's own choices. Skipped when there are no overrides, because
+	// YAML above already *is* the base — and a failure here is not worth failing
+	// the compose over: the resolved template is the answer, the baseline is
+	// context.
+	if sel.hasOverrides() {
+		if base, berr := config.LoadAndMergeTemplate(path); berr == nil {
+			if baseBytes, merr := config.MarshalTemplateYAML(config.RedactSensitiveData(base)); merr == nil {
+				res.BaseYAML = string(baseBytes)
+			}
+			res.PinConflicts = pinConflicts(sel.Packages, base.SystemConfig.Packages)
+		} else {
+			logger.Logger().Warnf("compose: baseline resolve of %s failed, omitting base view: %v", tmpl, berr)
+		}
+	}
+	return res, nil
+}
+
+// pinConflicts names the requested packages that are pinned to a version while
+// the base template already lists the same package unpinned. The extends merge
+// unions package lists and cannot remove the parent's entry, so both survive
+// into the resolved template and the resolver may install either.
+//
+// Reported rather than rejected or silently dropped: rejecting would fail the
+// Review pane for a common pick (the curated templates list dozens of packages
+// users browse straight into), and dropping would discard the version the user
+// explicitly asked for.
+func pinConflicts(requested, basePackages []string) []string {
+	if len(requested) == 0 || len(basePackages) == 0 {
+		return nil
+	}
+	base := make(map[string]bool, len(basePackages))
+	for _, p := range basePackages {
+		base[p] = true
+	}
+	var out []string
+	for _, entry := range requested {
+		if !isPinned(entry) {
+			continue
+		}
+		// Only an *unpinned* parent entry conflicts. A parent already pinned to
+		// the same version dedups on the exact string, and one pinned to a
+		// different version is a collision the parent authored deliberately.
+		if base[packageName(entry)] {
+			out = append(out, entry)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // deltaForOverride loads the curated parent's image/target info, renders a
@@ -152,16 +242,24 @@ func (s *Service) Compose(sel Selection) (*ComposeResult, error) {
 //
 // Split out of Compose so StartBuild's build-time delta generation
 // (builds.go) can share the exact same rendering path.
-func (s *Service) deltaForOverride(parentTmpl, parentPath string, sel Selection) (path string, cleanup func(), err error) {
+//
+// The rendered bytes are returned alongside the path so Compose can publish the
+// delta for review without reading back the file it just wrote.
+func (s *Service) deltaForOverride(parentTmpl, parentPath string, sel Selection) (
+	path string, data []byte, cleanup func(), err error) {
 	parent, err := config.LoadTemplate(parentPath, false)
 	if err != nil {
-		return "", nil, fmt.Errorf("loading parent template: %w", err)
+		return "", nil, nil, fmt.Errorf("loading parent template: %w", err)
 	}
-	data, err := buildDelta(parentTmpl, parent.Image, parent.Target, sel)
+	data, err = buildDelta(parentTmpl, parent.Image, parent.Target, sel, s.toTemplateRepos(sel.OS, sel.Repos))
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
-	return s.writeDelta(data)
+	written, cleanup, err := s.writeDelta(data)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	return written, data, cleanup, nil
 }
 
 // buildComposeSummary constructs a ComposeSummary from a selection and a merged

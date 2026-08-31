@@ -31,6 +31,18 @@
 #                       arch        manifest arches this index serves; omitted = all
 #                     Omitting `index` entirely means the repo is offered in the
 #                     picker but is not yet searchable.
+#   pkey              GPG signing-key URL written as this repo's `pkey` when
+#                     enabling it emits a `packageRepositories` entry into a
+#                     generated Advanced-mode delta. Every value here is the key
+#                     an authored template already uses for the same repository,
+#                     so a delta verifies against exactly what a hand-written
+#                     build would. Distinct from `gpgKeyPath`: this is a URL a
+#                     build fetches, that is a local file a package search
+#                     reads. Omitted on the base OS repos, which a delta never
+#                     re-declares — the providerconfigs already configure them.
+#                     A repo with no pkey is still selectable, but its packages
+#                     are fetched unverified and /package-repos reports
+#                     hasSigningKey:false so the UI can say so.
 #   curatedPackages   hand-picked "frequently used" package names for this repo;
 #                     what the browse pane's "Show frequently used" toggle narrows
 #                     the list to. Every name must actually exist in the repo's
@@ -169,6 +181,7 @@ repos:
     url: http://packages.ros.org/ros2/ubuntu
     description: ROS 2 Jazzy Jalisco robotics middleware, tooling and message packages.
     enabledByDefault: false
+    pkey: https://raw.githubusercontent.com/ros/rosdistro/master/ros.key
     os: [ubuntu24]
     # The metapackages a ROS 2 image usually starts from, rather than any of the
     # ~8400 individual message/driver packages behind them.
@@ -189,6 +202,7 @@ repos:
     description: Real-time and industrial packages — systemd with ETF/TAPRIO, PCL and FLANN built against oneAPI.
     enabledByDefault: false
     priority: 1000
+    pkey: https://eci.intel.com/repos/gpg-keys/GPG-PUB-KEY-INTEL-ECI.gpg
     os: [ubuntu24]
     index:
       - codename: isar
@@ -200,6 +214,7 @@ repos:
     description: AMR robotics stack; overrides ECI where both provide a package.
     enabledByDefault: false
     priority: 1001
+    pkey: https://eci.intel.com/repos/gpg-keys/GPG-PUB-KEY-INTEL-ECI.gpg
     os: [ubuntu24]
     index:
       - codename: amr
@@ -210,6 +225,7 @@ repos:
     url: https://apt.repos.intel.com/openvino/2025
     description: OpenVINO inference engine runtime and development packages.
     enabledByDefault: false
+    pkey: https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
     os: [ubuntu24]
     index:
       - codename: ubuntu24
@@ -220,6 +236,7 @@ repos:
     url: https://apt.repos.intel.com/oneapi
     description: Intel oneAPI runtime libraries — compilers, OpenCL and math kernels.
     enabledByDefault: false
+    pkey: https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
     # Offered to every target: the "all" codename is distribution-neutral, so
     # one index serves Ubuntu and Debian alike.
     os: [ubuntu24, debian13, ubuntu26-server]
@@ -232,6 +249,7 @@ repos:
     url: https://apt.repos.intel.com/edgeai/dlstreamer/ubuntu24
     description: Deep Learning Streamer media analytics pipeline framework.
     enabledByDefault: false
+    pkey: https://apt.repos.intel.com/edgeai/dlstreamer/GPG-PUB-KEY-INTEL-DLS.gpg
     os: [ubuntu24]
     index:
       - codename: ubuntu24
@@ -243,6 +261,7 @@ repos:
     description: Intel-tuned kernels, multimedia and firmware packages.
     enabledByDefault: false
     priority: 2000
+    pkey: https://download.01.org/intel-linux-overlay/ubuntu/E6FA98203588250569758E97D176E3162086EE4C.gpg
     os: [ubuntu24]
     curatedPackages:
       - ethtool
@@ -260,6 +279,7 @@ repos:
     url: https://ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu
     description: Intel client GPU compute runtime and media driver packages.
     enabledByDefault: false
+    pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x0C0E6AF955CE463C03FC51574D098D70AFBE5E1F"
     os: [ubuntu24]
     curatedPackages:
       - intel-media-va-driver-non-free
@@ -280,6 +300,7 @@ repos:
     url: https://librealsense.realsenseai.com/Debian/apt-repo
     description: Intel RealSense depth-camera SDK, DKMS kernel modules and tools.
     enabledByDefault: false
+    pkey: https://librealsense.realsenseai.com/Debian/librealsenseai.asc
     os: [ubuntu24]
     curatedPackages:
       - librealsense2
@@ -297,6 +318,7 @@ repos:
     description: Intel RealSense SDK from the original intel.com host, still used by some templates.
     enabledByDefault: false
     priority: 500
+    pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xFB0B24895113F120"
     os: [ubuntu24]
     index:
       - codename: noble
@@ -307,6 +329,7 @@ repos:
     url: https://packages.osrfoundation.org/gazebo/ubuntu-stable
     description: Gazebo Harmonic physics simulator and its OSRF dependencies.
     enabledByDefault: false
+    pkey: https://packages.osrfoundation.org/gazebo.gpg
     os: [ubuntu24]
     # The release metapackages, not the per-library gz-jetty-* components.
     curatedPackages:
@@ -326,6 +349,7 @@ repos:
     description: Docker Community Edition engine, CLI and containerd packages.
     enabledByDefault: false
     priority: 500
+    pkey: https://download.docker.com/linux/ubuntu/gpg
     os: [ubuntu24]
     curatedPackages:
       - containerd.io
@@ -343,6 +367,7 @@ repos:
     description: Mozilla-built Firefox and Thunderbird packages.
     enabledByDefault: false
     priority: 1000
+    pkey: https://packages.mozilla.org/apt/repo-signing-key.gpg
     # Distribution-neutral, like oneAPI: a single "mozilla" suite serves every
     # Debian-family target. Publishes an uncompressed Packages only, which the
     # fetcher falls back to after Packages.gz and .xz.
@@ -361,6 +386,7 @@ repos:
     url: https://download.docker.com/linux/debian
     description: Docker Community Edition engine, CLI and containerd packages.
     enabledByDefault: false
+    pkey: https://download.docker.com/linux/debian/gpg
     os: [debian13]
     curatedPackages:
       - containerd.io
@@ -380,6 +406,7 @@ repos:
     description: Docker Community Edition engine, CLI and containerd packages.
     enabledByDefault: false
     priority: 500
+    pkey: https://download.docker.com/linux/ubuntu/gpg
     os: [ubuntu26-server]
     curatedPackages:
       - containerd.io
@@ -396,6 +423,7 @@ repos:
     url: https://packages.osrfoundation.org/gazebo/ubuntu-stable
     description: Open Source Robotics Foundation simulator packages.
     enabledByDefault: false
+    pkey: https://packages.osrfoundation.org/gazebo.gpg
     os: [ubuntu26-server]
     # The resolute suite carries the gz-jetty components rather than the
     # gz-harmonic/gz-jetty release metapackages the noble suite offers.
@@ -417,6 +445,7 @@ repos:
     url: http://packages.ros.org/ros2/ubuntu
     description: ROS 2 Lyrical, the distribution built for Ubuntu 26.04.
     enabledByDefault: false
+    pkey: https://raw.githubusercontent.com/ros/rosdistro/master/ros.key
     os: [ubuntu26-server]
     # Lyrical publishes no navigation2 metapackage yet, unlike Jazzy.
     curatedPackages:

@@ -117,11 +117,9 @@ func convertBinaryGPGToAscii(binaryData []byte) ([]byte, error) {
 // detached signature first and falling back to binary — apt repositories
 // publish both Release.gpg (binary, historically) and InRelease (armored,
 // inline), and mirrors are inconsistent about which detached form they serve
-// as Release.gpg. A signature made by a key absent from keyring is treated as
-// a pass rather than a failure: apt repositories in practice attach signatures
-// from a rotating set of subkeys, not all of which a vendor's published
-// keyring lists, and failing verification for a merely-unrecognised signer
-// would fail closed a signature that no active threat model shows as forged.
+// as Release.gpg. A signature made by a key absent from keyring is rejected:
+// the keyring is the trust anchor for the repo, and accepting an unrecognised
+// signer defeats verification entirely for the http-only repos that rely on it.
 func verifyRelease(release, sig, keyring []byte) error {
 	keyringBytes := keyring
 	if isBinaryGPGKey(keyringBytes) {
@@ -142,10 +140,6 @@ func verifyRelease(release, sig, keyring []byte) error {
 
 	_, err = openpgp.CheckDetachedSignature(entities, bytes.NewReader(release), bytes.NewReader(sig), &packet.Config{})
 	if err != nil {
-		if strings.Contains(err.Error(), "unknown entity") || strings.Contains(err.Error(), "signature made by unknown entity") {
-			log.Warnf("pkgindex: Release signature made by an unrecognised key, allowing: %v", err)
-			return nil
-		}
 		return fmt.Errorf("verify Release signature (tried armored and binary): %w", err)
 	}
 	return nil

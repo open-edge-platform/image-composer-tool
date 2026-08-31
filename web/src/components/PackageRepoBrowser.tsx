@@ -27,6 +27,12 @@ export function PackageRepoBrowser({ repos, activeRepo, onActiveRepo, os }: Pack
   const setRepoEnabled = useStore((s) => s.setRepoEnabled)
   const active = repos.find((r) => r.id === activeRepo)
 
+  // Base repos are always enabled and can't be turned off, so they belong at
+  // the top of the rail rather than wherever their priority happens to land
+  // them among the optional repos. Stable sort keeps the server's
+  // priority-descending order within each group.
+  const railRepos = [...repos].sort((a, b) => Number(b.enabledByDefault) - Number(a.enabledByDefault))
+
   // A repo the catalog marks enabledByDefault is the target's base repository:
   // every build reads it, so it cannot be turned off.
   const isEnabled = (r: PackageRepo) => r.enabledByDefault || enabledRepos.includes(r.id)
@@ -47,7 +53,7 @@ export function PackageRepoBrowser({ repos, activeRepo, onActiveRepo, os }: Pack
           aria-label="Package repositories"
           className="max-h-[480px] overflow-y-auto border-r border-slate-200 bg-slate-50"
         >
-          {repos.map((r) => (
+          {railRepos.map((r) => (
             <RepoRailRow
               key={r.id}
               repo={r}
@@ -238,6 +244,16 @@ function RepoPane({ repo, enabled, os }: { repo: PackageRepo; enabled: boolean; 
         </p>
         {repo.description && (
           <p className="mt-1 text-xs text-slate-600">{repo.description}</p>
+        )}
+        {/* True for every repository the catalog verifies by some means — a
+            signing-key URL a build checks, or (for the Ubuntu base repos) a
+            local keyring the picker's own search already checks against —
+            so this normally stays hidden. */}
+        {repo.hasSigningKey === false && (
+          <p className="mt-1 text-[11px] font-medium text-amber-700">
+            No signing key is configured for this repository — its packages are
+            fetched without verifying the repository&apos;s signature.
+          </p>
         )}
       </div>
       {!enabled ? (

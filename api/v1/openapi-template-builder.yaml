@@ -772,6 +772,16 @@ components:
             anything for it. The list itself stays server-side; only this flag is
             published, so a client can hide a curation control that would yield
             nothing rather than offering a dead toggle.
+        hasSigningKey:
+          type: boolean
+          description: >
+            Whether this repository's packages are ever fetched with signature
+            verification, by either of two independent means: a template that
+            enables it carries a `pkey`, so a build verifies it; or the catalog
+            already verifies its Release against a local keyring when the
+            picker searches it. When false, neither applies and a client
+            should say so rather than leave it implicit. Neither the key URL
+            nor the keyring path is published; only this flag is.
 
     PackageRepoList:
       type: object
@@ -872,6 +882,38 @@ components:
             "not overridden" — the matched template's own name is used.
           pattern: '^[a-zA-Z0-9]([a-zA-Z0-9\-_]*[a-zA-Z0-9])?$'
           maxLength: 64
+        packages:
+          type: array
+          description: |
+            Packages the Advanced tab's Packages step selected, emitted into the
+            generated delta's `systemConfig.packages`. A pinned version uses the
+            `name_version` form the package resolver matches (e.g.
+            `curl_8.5.0-2ubuntu10.13`); a bare name floats to whatever the
+            repository publishes. The pattern matches the template schema's own
+            constraint on `systemConfig.packages` items.
+
+            Because the extends merge unions package lists, a pinned entry whose
+            name the matched template already lists unpinned leaves both entries
+            in the resolved template — see `pinConflicts` on the response.
+          maxItems: 256
+          uniqueItems: true
+          items:
+            type: string
+            pattern: '^[A-Za-z0-9][A-Za-z0-9+_.:~*?\[\]-]*$'
+            maxLength: 256
+        repos:
+          type: array
+          description: |
+            Repository ids (as published by GET /package-repos) the user enabled.
+            Each maps to a `packageRepositories` entry in the generated delta, so
+            a package picked from a repository the matched template doesn't
+            already configure can still resolve at build time. Repositories the
+            catalog marks `enabledByDefault` need not be listed — they come from
+            the per-OS providerconfigs.
+          maxItems: 64
+          uniqueItems: true
+          items:
+            type: string
 
     ComposeSummary:
       type: object
@@ -944,6 +986,30 @@ components:
             The resolved final template — what building this same request would
             run. Identical to the matched template's own `resolve --full` output
             when no overrides are set.
+        deltaYaml:
+          type: string
+          description: |
+            The generated `extends` delta, verbatim — only the overrides this
+            request asked for, over a reference to the matched template. Empty
+            when the request carries no overrides, in which case the matched
+            template is resolved directly and no delta is generated.
+        baseYaml:
+          type: string
+          description: |
+            The matched template resolved *without* this request's overrides —
+            i.e. what `yaml` would have been had nothing been overridden. Lets a
+            client show the curated baseline beside the delta that modifies it,
+            so the difference is attributable to the user's own choices.
+        pinConflicts:
+          type: array
+          description: |
+            Packages requested at a pinned version whose name the matched
+            template already lists unpinned. The extends merge unions package
+            lists and cannot remove the parent's entry, so both end up in the
+            resolved template and the resolver may install either. Advisory
+            only: the compose still succeeds.
+          items:
+            type: string
         summary:
           $ref: "#/components/schemas/ComposeSummary"
 

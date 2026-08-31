@@ -49,6 +49,17 @@ func armoredDetachSign(t *testing.T, entity *openpgp.Entity, data []byte) []byte
 	return buf.Bytes()
 }
 
+// binaryDetachSign produces the non-armored detached signature form apt
+// historically serves as Release.gpg, distinct from InRelease's armored form.
+func binaryDetachSign(t *testing.T, entity *openpgp.Entity, data []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := openpgp.DetachSign(&buf, entity, bytes.NewReader(data), nil); err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	return buf.Bytes()
+}
+
 // tamperArmoredSignature flips one base64 character in the armored body of
 // sig, leaving the armor structure (headers, line breaks, CRC line) intact so
 // the corruption is in the signature data itself rather than in something
@@ -130,6 +141,20 @@ func TestVerifyRelease(t *testing.T) {
 		t.Parallel()
 		if err := verifyRelease(release, sig, []byte("not a key at all")); err == nil {
 			t.Fatal("want an error for an unparseable keyring")
+		}
+	})
+
+	t.Run("binary signature from an unrecognised key fails closed", func(t *testing.T) {
+		t.Parallel()
+		// Release.gpg is historically a binary (not armored) detached signature,
+		// which is the form that reaches openpgp.CheckDetachedSignature rather than
+		// CheckArmoredDetachedSignature. A signer absent from the keyring must be
+		// rejected, not accepted with a warning: the keyring is the trust anchor
+		// for the repo.
+		_, otherKey := testKeyPair(t)
+		binSig := binaryDetachSign(t, entity, release)
+		if err := verifyRelease(release, binSig, otherKey); err == nil {
+			t.Fatal("want an error for a binary signature made by a key absent from the keyring")
 		}
 	})
 }

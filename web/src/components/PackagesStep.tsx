@@ -16,7 +16,7 @@ interface PackagesStepProps {
   active: boolean
 }
 
-// PackagesStep is the wizard's "Repositories & Packages" step: which
+// PackagesStep is the wizard's "Choose Packages to Compose" step: which
 // repositories the target offers and which are enabled, a cross-repository
 // package search, per-repository browsing, and the running list of added
 // packages.
@@ -58,17 +58,12 @@ export function PackagesStep({ os, active }: PackagesStepProps) {
 
   return (
     <div>
-      <h2 className="mb-1 text-lg font-bold text-[#00285a]">Repositories &amp; Packages</h2>
+      <h2 className="mb-1 text-lg font-bold text-[#00285a]">Choose Packages to Compose</h2>
       <p className="mb-3 text-sm text-slate-500">
         Choose which package repositories to pull from, then search or browse
-        for packages to add.
+        for packages to add. What you select appears in the Review step&apos;s
+        template and is installed by the build.
       </p>
-      <p className="mb-5 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-        Repository toggles and package selections are UI state in this update —
-        they aren't sent to the compose request yet, so the Review step's YAML
-        won't change.
-      </p>
-
       {error && <div className="mb-3 rounded bg-red-50 p-3 text-sm text-red-700">{error}</div>}
 
       {!error && !os && (

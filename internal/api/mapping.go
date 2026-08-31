@@ -38,6 +38,12 @@ func toSelection(r httpapi.ComposeRequest) service.Selection {
 	if r.ImageName != nil {
 		sel.ImageName = *r.ImageName
 	}
+	if r.Packages != nil {
+		sel.Packages = *r.Packages
+	}
+	if r.Repos != nil {
+		sel.Repos = *r.Repos
+	}
 	return sel
 }
 
@@ -98,6 +104,10 @@ func fromPackageRepoList(repos []service.PackageRepo) httpapi.PackageRepoList {
 		// search returned nothing", so it would have to offer a toggle that
 		// yields an empty list.
 		hasCurated := len(r.CuratedPackages) > 0
+		// Likewise only whether a signing key is known, not the key URL. A
+		// client needs the flag to say plainly that enabling this repo means
+		// fetching its packages unverified; it has no use for the URL itself.
+		hasKey := r.HasSigningKey()
 		out.Repos[i] = httpapi.PackageRepo{
 			Id:                 r.ID,
 			DisplayName:        r.DisplayName,
@@ -106,6 +116,7 @@ func fromPackageRepoList(repos []service.PackageRepo) httpapi.PackageRepoList {
 			EnabledByDefault:   r.EnabledByDefault,
 			Priority:           &priority,
 			HasCuratedPackages: &hasCurated,
+			HasSigningKey:      &hasKey,
 		}
 	}
 	return out
@@ -174,12 +185,22 @@ func fromSummary(s *service.ComposeSummary) *httpapi.ComposeSummary {
 	}
 }
 
+// fromComposeResult maps the compose outcome onto the contract type. deltaYaml,
+// baseYaml and pinConflicts are omitempty in the spec, so a selection with no
+// overrides sends none of them rather than three empty values.
 func fromComposeResult(r *service.ComposeResult) httpapi.ComposeResponse {
-	return httpapi.ComposeResponse{
-		Template: r.Template,
-		Yaml:     r.YAML,
-		Summary:  *fromSummary(&r.Summary),
+	out := httpapi.ComposeResponse{
+		Template:  r.Template,
+		Yaml:      r.YAML,
+		Summary:   *fromSummary(&r.Summary),
+		DeltaYaml: optStr(r.DeltaYAML),
+		BaseYaml:  optStr(r.BaseYAML),
 	}
+	if len(r.PinConflicts) > 0 {
+		conflicts := r.PinConflicts
+		out.PinConflicts = &conflicts
+	}
+	return out
 }
 
 // fromValidationResult maps the service's structured validation result onto the

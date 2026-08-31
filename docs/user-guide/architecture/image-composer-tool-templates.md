@@ -1107,7 +1107,7 @@ full behavior across a chain:
 | `baseline` / `overlayPolicy` | Non-nil child pointer replaces the parent value |
 | `disk` | Wholesale replacement when the child provides a non-empty disk config |
 | `systemConfig.name` / `.description` / `.hostname` / `.initramfs.template` | Non-empty child overrides |
-| `systemConfig.packages` | **Additive union, deduplicated**; each level's packages are appended in chain order and de-duplicated |
+| `systemConfig.packages` | **Additive union, deduplicated**; each level's packages are appended in chain order and de-duplicated. Deduplication is by exact string, so a child pinning `pkg_1.2` does **not** replace a parent's unpinned `pkg` — both entries survive (see [What the Packages Step Contributes](#what-the-packages-step-contributes)) |
 | `systemConfig.users` | Merged by `name`: same-name entries are field-level merged; new users included (slice order not guaranteed to be stable across runs) |
 | `systemConfig.additionalFiles` | Merged by `final` destination path: same target overrides; new files included (slice order not guaranteed to be stable across runs) |
 | `systemConfig.configurations` | **Additive concat**: appended in chain order (root first, leaf last), no deduplication |
@@ -1219,16 +1219,19 @@ for the full CLI reference.
 
 ### Advanced Mode's Use of Extends
 
-The web UI's Advanced tab applies its Image Name override by generating a
-small `extends` delta over the matched curated template, rather than rewriting
-the curated file or inventing a separate override mechanism. For a selection
+The web UI's Advanced tab applies its overrides — the Image Name, the selected
+packages, and the enabled package repositories — by generating a small
+`extends` delta over the matched curated template, rather than rewriting the
+curated file or inventing a separate override mechanism. For a selection
 with an override, `POST /templates/compose` and `POST /builds` both:
 
 1. Look up the matched curated template via the manifest, exactly as Basic
    mode does.
 2. Generate a delta (`extends: <curated template>`, restating `image`/`target`
-   with the override applied) and write it into the templates directory under
-   a server-generated name (`.ict-adv-<uuid>.yml`, gitignored).
+   with the override applied, plus `systemConfig.packages` and
+   `packageRepositories` for whatever the Packages step selected) and write it
+   into the templates directory under a server-generated name
+   (`.ict-adv-<uuid>.yml`, gitignored).
 3. Resolve or build that delta instead of the curated file.
 4. Remove the generated delta once it is no longer needed — immediately after
    a compose response, or once a build finishes (a self-contained copy of the
@@ -1246,6 +1249,42 @@ fully resolved template, equivalent to running `resolve --full` against
 whichever file (curated or delta) was actually resolved. This guarantees the
 template shown in the Review step and the template a build runs are always the
 same file, merged the same way.
+
+#### What the Packages Step Contributes
+
+A package the Packages step selects is emitted as a `systemConfig.packages`
+entry. A pinned version uses the `name_version` form the package resolvers
+match (`curl_8.5.0-2ubuntu10.13`, epoch included where the repository publishes
+one); an unpinned pick is the bare name and floats to whatever the repository
+publishes at build time. Entries are emitted sorted, so the same set of picks
+always renders the same delta regardless of the order they were clicked in.
+
+Each **enabled** repository is emitted as a `packageRepositories` entry, so a
+package picked from a repository the curated template does not already
+configure can still be resolved. The entry's `codename`, `url` and `component`
+come from the catalog's index metadata and its `pkey` from the catalog's
+`pkey` field, which holds the same signing-key URL the authored templates use
+for that repository. Repositories the catalog marks `enabledByDefault` are
+**not** emitted: they are each target's base repository, already supplied by
+the per-OS `providerconfigs/`, so re-declaring them would duplicate
+configuration the build already has.
+
+> **Pinning a package the curated template already lists.** Per the merge table
+> above, `systemConfig.packages` is an **additive union** — a child layer cannot
+> remove a parent's entry. So pinning a version for a package the curated
+> template already lists unpinned leaves **both** entries in the resolved
+> template (`curl` and `curl_8.5.0-2ubuntu10.13`), and the resolver may install
+> either. `POST /templates/compose` reports these on `pinConflicts` and the
+> Review step names them, rather than presenting the resolved template as
+> unambiguous. To let the curated template's entry decide, choose "Latest" for
+> that package.
+
+Because the delta is a template in its own right, the Review step can show it
+directly: `POST /templates/compose` returns `deltaYaml` (the generated delta
+verbatim), `baseYaml` (the curated template resolved *without* the overrides)
+and `yaml` (the two merged — what the build runs), which the Review step
+presents as "Your changes", "Base template" and "Resolved". A selection with no
+overrides generates no delta, so only `yaml` is returned.
 
 See [ADR: Advanced mode template modification via
 extends](../../architecture-decision-record/adr-web-ui-advanced-mode-extends.md)
@@ -1271,11 +1310,24 @@ for `aarch64`. Each index entry may therefore override the repository's base
 `generateAptSourcesContent` applies when writing a build's apt sources — so a
 search reads the same component a build installs from.
 
+Each optional entry also carries a `pkey`: the signing-key URL written into the
+`packageRepositories` entry a generated delta emits when the user enables that
+repository (see [What the Packages Step
+Contributes](#what-the-packages-step-contributes)). The value is the same key
+URL the authored templates already use for that repository, so an
+Advanced-mode build verifies against exactly what a hand-written one would. It
+is distinct from `gpgKeyPath`, which is a *local* keyring file a package
+*search* reads. `GET /package-repos` publishes only a `hasSigningKey` flag, not
+the URL; a repository with no key is still selectable, but the picker states
+that its packages are fetched without verifying the repository's signature.
+
 Because the catalog duplicates information, unit tests assert the mirroring
 holds in both directions: every repository a manifest-reachable template or
 providerconfig declares must be covered by a catalog index. Adding a repository
 to a template therefore fails the build until it is catalogued too, rather than
 silently producing a package picker that cannot find that repository's packages.
+A further test requires every optional entry to carry a `pkey`, so a new
+repository cannot quietly start producing unverified builds.
 
 Repositories for target OSes the manifest does not offer are deliberately
 absent; the picker can never query them. They should be added alongside the

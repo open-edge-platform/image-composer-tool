@@ -52,11 +52,11 @@ func TestBuildDeltaDeterministicAndValid(t *testing.T) {
 	parentTarget := config.TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
 	sel := Selection{ImageName: "my-custom-name"}
 
-	data1, err := buildDelta("robotics.yml", parentImage, parentTarget, sel)
+	data1, err := buildDelta("robotics.yml", parentImage, parentTarget, sel, nil)
 	if err != nil {
 		t.Fatalf("buildDelta: %v", err)
 	}
-	data2, err := buildDelta("robotics.yml", parentImage, parentTarget, sel)
+	data2, err := buildDelta("robotics.yml", parentImage, parentTarget, sel, nil)
 	if err != nil {
 		t.Fatalf("buildDelta (second call): %v", err)
 	}
@@ -89,7 +89,7 @@ func TestBuildDeltaNoOverrideKeepsParentName(t *testing.T) {
 	parentImage := config.ImageInfo{Name: "robotics-jazzy-ubuntu24", Version: "24.04"}
 	parentTarget := config.TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
 
-	data, err := buildDelta("robotics.yml", parentImage, parentTarget, Selection{})
+	data, err := buildDelta("robotics.yml", parentImage, parentTarget, Selection{}, nil)
 	if err != nil {
 		t.Fatalf("buildDelta: %v", err)
 	}
@@ -257,7 +257,7 @@ func TestArchiveAndCleanupDeltaArchivesAndRemovesDelta(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadTemplate(parent): %v", err)
 	}
-	data, err := buildDelta("robotics.yml", parent.Image, parent.Target, Selection{ImageName: "my-custom-name"})
+	data, err := buildDelta("robotics.yml", parent.Image, parent.Target, Selection{ImageName: "my-custom-name"}, nil)
 	if err != nil {
 		t.Fatalf("buildDelta: %v", err)
 	}

@@ -51,6 +51,14 @@ export interface ComposeRequest {
   // just empty) means "not overridden" — the backend resolves the curated
   // template directly rather than generating an override delta for it.
   imageName?: string
+  // Packages picked in the Packages step, already encoded (see encodePackage in
+  // store.ts): a bare name floats to whatever the repo publishes, `name_version`
+  // pins that exact version. Emitted into the delta's systemConfig.packages.
+  packages?: string[]
+  // Repository ids the user enabled. Each becomes a packageRepositories entry in
+  // the delta, so a package from a repo the curated template doesn't configure
+  // can still resolve. Base repos (enabledByDefault) need not be sent.
+  repos?: string[]
 }
 
 export interface ComposeSummary {
@@ -78,6 +86,17 @@ export interface ComposeResponse {
   template: string
   yaml: string
   summary: ComposeSummary
+  // The generated extends delta, verbatim — only what this request overrode.
+  // Absent when nothing was overridden, since no delta is generated then.
+  deltaYaml?: string
+  // The curated template resolved *without* this request's overrides, so the
+  // baseline can be shown beside the delta that modifies it. Absent when there
+  // are no overrides, because `yaml` already is the base.
+  baseYaml?: string
+  // Packages requested at a pinned version whose name the curated template
+  // already lists unpinned. The extends merge unions package lists and cannot
+  // drop the parent's entry, so both survive into `yaml`. Advisory only.
+  pinConflicts?: string[]
 }
 
 // One issue from POST /templates/validate: a schema/semantic problem tied to a
@@ -111,6 +130,11 @@ export interface PackageRepo {
   // curated search can return anything for it. The list itself stays
   // server-side; this only says whether the toggle is worth offering.
   hasCuratedPackages?: boolean
+  // Whether the catalog knows a GPG signing-key URL for this repo. When false,
+  // enabling it emits a packageRepositories entry with no key, so a build
+  // fetches its packages without verifying the repo's signature. The key URL
+  // itself stays server-side; this only says whether to warn.
+  hasSigningKey?: boolean
 }
 
 export interface PackageRepoList {
