@@ -6,6 +6,8 @@ import type { ComposeRequest, ComposeResponse } from '../api/types'
 import { Select } from './Select'
 import { PackagesStep } from './PackagesStep'
 import { Input } from './Input'
+import { DiskStep } from './DiskStep'
+import { parseDiskFromYaml } from '../lib/disk'
 
 // How long to wait after the last keystroke in Image Name before re-composing.
 // Each compose call with an override generates and deletes a server-side file
@@ -78,6 +80,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   const seedImageName = useStore((s) => s.seedImageName)
   const addedPackages = useStore((s) => s.addedPackages)
   const enabledRepos = useStore((s) => s.enabledRepos)
+  const seedDisk = useStore((s) => s.seedDisk)
 
   const [step, setStep] = useState(0)
   const [composed, setComposed] = useState<ComposeResponse | null>(null)
@@ -146,9 +149,13 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
         if (!cancelled) {
           setComposed(r)
           setLoading(false)
-          // Seed the editable image name from the resolved template (no-op once
-          // the user has edited — guarded by the *Edited flag in the store).
+          // Seed the editable image name and disk layout from the resolved
+          // template (both no-ops once the user has edited — guarded by the
+          // *Edited flags in the store). The disk block is read out of the
+          // resolved YAML because the compose summary only carries aggregates
+          // (size/count/table), not the partition list the Disk step edits.
           seedImageName(r.summary.imageName)
+          seedDisk(parseDiskFromYaml(r.yaml))
         }
       })
       .catch((e) => {
@@ -269,14 +276,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
 
         {step === 1 && <PackagesStep os={selection.os} active={active} />}
 
-        {step === 2 && (
-          <div>
-            <h2 className="mb-1 text-lg font-bold text-[#00285a]">Disk Layout</h2>
-            <p className="text-sm text-slate-500">
-              Disk and partition editing will arrive in a later update.
-            </p>
-          </div>
-        )}
+        {step === 2 && <DiskStep />}
 
         {step === 3 && (
           <div>
