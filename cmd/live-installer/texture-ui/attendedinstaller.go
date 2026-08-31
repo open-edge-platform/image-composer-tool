@@ -145,20 +145,26 @@ func (ai *AttendedInstaller) Run() (template *config.ImageTemplate, installation
 	return
 }
 
+// nextPage and previousPage are only ever invoked from within tview's own
+// event-loop goroutine (button Selected handlers, SetInputCapture), so they
+// must run synchronously: QueueUpdateDraw queues the update onto a buffered
+// channel, then blocks waiting for a completion signal that only the event
+// loop sends after dequeuing and running it — a signal that can never arrive
+// if the caller IS that same event-loop goroutine, since it can't get back
+// to its own dequeue loop while blocked waiting on itself (deadlock).
+// Dispatching via a new goroutine instead let concurrent presses race, each
+// reading ai.currentView at whatever value it happened to be when they ran
+// and skipping views.
 func (ai *AttendedInstaller) nextPage() {
-	ai.app.QueueUpdateDraw(func() {
-		if err := ai.switchToView(ai.currentView + 1); err != nil {
-			log.Panicf("Failed to go to next page: %v", err)
-		}
-	})
+	if err := ai.switchToView(ai.currentView + 1); err != nil {
+		log.Panicf("Failed to go to next page: %v", err)
+	}
 }
 
 func (ai *AttendedInstaller) previousPage() {
-	ai.app.QueueUpdateDraw(func() {
-		if err := ai.switchToView(ai.currentView - 1); err != nil {
-			log.Panicf("Failed to go to previous page: %v", err)
-		}
-	})
+	if err := ai.switchToView(ai.currentView - 1); err != nil {
+		log.Panicf("Failed to go to previous page: %v", err)
+	}
 }
 
 func (ai *AttendedInstaller) switchToView(newView int) (err error) {
@@ -222,9 +228,8 @@ func (ai *AttendedInstaller) globalInputCapture(event *tcell.EventKey) *tcell.Ev
 	switch event.Key() {
 	case tcell.KeyCtrlC:
 		event = nil
-		ai.app.QueueUpdateDraw(func() {
-			ai.quit()
-		})
+		// Called synchronously from the event loop; see nextPage.
+		ai.quit()
 	}
 
 	return event
