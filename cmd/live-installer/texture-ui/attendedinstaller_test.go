@@ -11,6 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gdamore/tcell/v2"
+	"github.com/rivo/tview"
+
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
@@ -660,4 +663,178 @@ func TestAttendedInstaller_InstallationError(t *testing.T) {
 	if ai.installationError != testError {
 		t.Errorf("expected installationError to be %v, got %v", testError, ai.installationError)
 	}
+}
+
+// waitForEventLoop polls the running event loop (safely, via QueueUpdateDraw,
+// since AttendedInstaller's fields are otherwise only touched from that
+// goroutine) until check() returns true or timeout elapses. If a single poll
+// doesn't come back within 200ms, the event loop is treated as deadlocked.
+// Once waitForEventLoop returns with deadlocked=false, any state check()
+// captured is safe to read directly: the channel receive happens-after the
+// last execution of check() on the event-loop goroutine.
+func waitForEventLoop(app *tview.Application, timeout time.Duration, check func() bool) (deadlocked bool) {
+	deadline := time.Now().Add(timeout)
+	for {
+		result := make(chan bool, 1)
+		go app.QueueUpdateDraw(func() {
+			result <- check()
+		})
+
+		select {
+		case ok := <-result:
+			if ok || time.Now().After(deadline) {
+				return false
+			}
+		case <-time.After(200 * time.Millisecond):
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestAttendedInstaller_NextPage_NoDeadlockNoRace is a regression test
+// guarding against reintroducing an async dispatch (e.g. QueueUpdateDraw,
+// with or without a wrapping `go`) in nextPage(), previousPage(), or the
+// Ctrl+C handler. QueueUpdateDraw queues the update onto a buffered channel,
+// then blocks waiting for a completion signal that only the event loop sends
+// after dequeuing and running it. Calling it synchronously from within
+// tview's own event-loop goroutine (a button's Selected handler, or
+// SetInputCapture) previously deadlocked the whole TUI on the very first
+// keypress, since that goroutine can never get back to its own dequeue loop
+// to send itself the completion signal it's blocked waiting for.
+//
+// All three must instead run their logic synchronously and directly: they're
+// only ever invoked from within that event-loop goroutine, so no marshaling
+// is needed, and doing it synchronously also guarantees each keypress is
+// fully processed (including updating ai.currentView) before the next queued
+// key event is handled at all -- eliminating any window where a second rapid
+// keypress could read a not-yet-updated ai.currentView. This test exercises
+// all three paths independently against a real tview.Application event loop.
+func TestAttendedInstaller_NextPage_NoDeadlockNoRace(t *testing.T) {
+	ai := newRunningAttendedInstaller(t)
+	var view int
+
+	t.Run("Next", func(t *testing.T) {
+		// Two Enters back-to-back with no synchronization in between must both
+		// avoid hanging and land deterministically on view 2 (one view
+		// advanced per Enter).
+		ai.app.QueueEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+		ai.app.QueueEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+
+		const wantView = 2 // installerview(0) -> diskview(1) -> hostnameview(2)
+		if deadlocked := waitForEventLoop(ai.app, 2*time.Second, func() bool {
+			view = ai.currentView
+			return view == wantView
+		}); deadlocked {
+			t.Fatal("event loop appears deadlocked after Next presses: QueueUpdateDraw did not return")
+		}
+		if view != wantView {
+			t.Fatalf("expected view %d after two Enters, got %d (view skipped or under-advanced)", wantView, view)
+		}
+		// Confirm DiskView's own Next handler actually ran
+		// (mustUpdateConfiguration), not just that the final view number
+		// happens to match: a regression that races the two Enters could
+		// otherwise still land on view 2 while skipping this required side
+		// effect.
+		if ai.template.Disk.Path == "" {
+			t.Fatal("expected DiskView's Next button to set template.Disk.Path via mustUpdateConfiguration, but it is empty")
+		}
+	})
+
+	t.Run("GoBack", func(t *testing.T) {
+		// previousPage: select "Go Back" (index 0) and confirm it also runs
+		// without deadlocking.
+		ai.app.QueueEvent(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone))
+		ai.app.QueueEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+
+		const wantView = 1 // hostnameview(2) -> diskview(1)
+		if deadlocked := waitForEventLoop(ai.app, 2*time.Second, func() bool {
+			view = ai.currentView
+			return view == wantView
+		}); deadlocked {
+			t.Fatal("event loop appears deadlocked after Go Back: QueueUpdateDraw did not return")
+		}
+		if view != wantView {
+			t.Fatalf("expected view %d after Go Back, got %d", wantView, view)
+		}
+	})
+
+	t.Run("CtrlC", func(t *testing.T) {
+		// Confirm the handler also runs without deadlocking, observed via the
+		// exit-confirmation modal being shown (pauseCustomInput set).
+		ai.app.QueueEvent(tcell.NewEventKey(tcell.KeyCtrlC, 0, tcell.ModCtrl))
+
+		var pausedForQuit bool
+		if deadlocked := waitForEventLoop(ai.app, 2*time.Second, func() bool {
+			pausedForQuit = ai.pauseCustomInput
+			return pausedForQuit
+		}); deadlocked {
+			t.Fatal("event loop appears deadlocked after Ctrl+C: QueueUpdateDraw did not return")
+		}
+		if !pausedForQuit {
+			t.Fatal("expected Ctrl+C to show the exit confirmation (pauseCustomInput=true)")
+		}
+	})
+}
+
+// newRunningAttendedInstaller builds an AttendedInstaller with a mocked lsblk
+// shell executor and starts its real tview.Application event loop against a
+// simulation screen, for tests that need to drive real key input. Cleanup
+// stops the app and bounds the wait for the run goroutine to exit: Stop()
+// cannot unblock a genuinely deadlocked event loop, so waiting unconditionally
+// would hang the test until the suite-level timeout instead of reporting the
+// leak.
+func newRunningAttendedInstaller(t *testing.T) *AttendedInstaller {
+	t.Helper()
+
+	template := &config.ImageTemplate{
+		Image: config.ImageInfo{
+			Name:    "test-image",
+			Version: "1.0",
+		},
+		Target: config.TargetInfo{
+			OS:   "azure-linux",
+			Dist: "3.0",
+			Arch: "x86_64",
+		},
+		SystemConfig: config.SystemConfig{
+			Bootloader: config.Bootloader{
+				BootType: "efi",
+			},
+		},
+	}
+
+	originalExecutor := shell.Default
+	t.Cleanup(func() { shell.Default = originalExecutor })
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: "lsblk", Output: LsblkOutput, Error: nil},
+	})
+
+	installFunc := func(template *config.ImageTemplate, configDir, localRepo string) error {
+		return nil
+	}
+
+	ai, err := New(template, "/tmp/config", "/tmp/repo", installFunc)
+	if err != nil {
+		t.Fatalf("New() returned error: %v", err)
+	}
+
+	ai.app.SetScreen(tcell.NewSimulationScreen(""))
+	appDone := make(chan struct{})
+	go func() {
+		defer close(appDone)
+		if runErr := ai.app.Run(); runErr != nil {
+			t.Errorf("app.Run() returned error: %v", runErr)
+		}
+	}()
+	t.Cleanup(func() {
+		ai.app.Stop()
+		select {
+		case <-appDone:
+		case <-time.After(2 * time.Second):
+			t.Error("app.Run() goroutine did not exit after Stop(); event loop likely still deadlocked (leaking goroutine)")
+		}
+	})
+
+	return ai
 }
