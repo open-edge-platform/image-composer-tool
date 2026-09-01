@@ -533,7 +533,7 @@ func loadRPMRawMetadataCache(xmlCacheDir, gzHref, metadataID string, primary rpm
 		return nil, dataPath, fmt.Errorf("invalid rpm raw metadata cache %s: %w", metaPath, err)
 	}
 	if cache.MetadataID != metadataID {
-		return nil, dataPath, fmt.Errorf("rpm raw metadata cache URL mismatch in %s", metaPath)
+		return nil, dataPath, fmt.Errorf("rpm raw metadata cache identity mismatch in %s", metaPath)
 	}
 	if primary.Href != "" && !cache.Primary.matches(primary) {
 		return nil, dataPath, fmt.Errorf("rpm raw metadata cache primary reference mismatch in %s", metaPath)
@@ -1283,14 +1283,30 @@ func extractPrimaryReferenceFromRepomdData(repomdData []byte) (rpmPrimaryReferen
 				}
 			case "checksum":
 				primary.ChecksumType = attrValue(le.Attr, "type")
-				primary.Checksum = readElementText(dec)
+				text, err := readElementText(dec)
+				if err != nil {
+					return rpmPrimaryReference{}, fmt.Errorf("read primary checksum: %w", err)
+				}
+				primary.Checksum = text
 			case "open-checksum":
 				primary.OpenChecksumType = attrValue(le.Attr, "type")
-				primary.OpenChecksum = readElementText(dec)
+				text, err := readElementText(dec)
+				if err != nil {
+					return rpmPrimaryReference{}, fmt.Errorf("read primary open-checksum: %w", err)
+				}
+				primary.OpenChecksum = text
 			case "size":
-				primary.Size = parseInt64Text(readElementText(dec))
+				text, err := readElementText(dec)
+				if err != nil {
+					return rpmPrimaryReference{}, fmt.Errorf("read primary size: %w", err)
+				}
+				primary.Size = parseInt64Text(text)
 			case "open-size":
-				primary.OpenSize = parseInt64Text(readElementText(dec))
+				text, err := readElementText(dec)
+				if err != nil {
+					return rpmPrimaryReference{}, fmt.Errorf("read primary open-size: %w", err)
+				}
+				primary.OpenSize = parseInt64Text(text)
 			}
 		}
 	}
@@ -1307,17 +1323,17 @@ func attrValue(attrs []xml.Attr, name string) string {
 	return ""
 }
 
-func readElementText(dec *xml.Decoder) string {
+func readElementText(dec *xml.Decoder) (string, error) {
 	for {
 		tok, err := dec.Token()
 		if err != nil {
-			return ""
+			return "", err
 		}
 		if cd, ok := tok.(xml.CharData); ok {
-			return strings.TrimSpace(string(cd))
+			return strings.TrimSpace(string(cd)), nil
 		}
 		if _, ok := tok.(xml.EndElement); ok {
-			return ""
+			return "", nil
 		}
 	}
 }
