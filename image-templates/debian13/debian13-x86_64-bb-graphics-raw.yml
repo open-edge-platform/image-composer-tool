@@ -52,7 +52,7 @@ extends: "debian13-x86_64-bb-overlay-initrd-raw.yml"
 
 image:
   name: debian13-bb-graphics
-  version: "13.0.1"
+  version: "13.0.2"
 
 target:                 # must match the parent template's target
   os: debian
@@ -67,8 +67,9 @@ systemConfig:
   # ---------------------------------------------------------------------------
   # Graphics packages — merged ADDITIVELY on top of the base. Enough of an
   # X/Mesa stack to run GUI desktop apps: xserver-xorg pulls the video drivers,
-  # Mesa provides GL/Vulkan, fonts + GTK cover rendering, and firmware-* covers
-  # common GPUs (loaded by the base's custom initrd, which is regenerated there).
+  # Mesa provides GL/Vulkan, fonts + GTK cover rendering, and firmware-sof-signed
+  # covers the audio DSP firmware the base's Intel GPU firmware packages don't
+  # include (GPU firmware itself comes from the base's firmware-intel-graphics).
   #
   # Do NOT add a `baseline:` or `overlayPolicy:` block here — inheriting them
   # from the parent is what keeps these packages ADDITIVE to the base.
@@ -89,9 +90,11 @@ systemConfig:
     # Fonts + rendering so GUI apps display correctly
     - fonts-dejavu-core
     - libgtk-3-0
-    # GPU firmware the graphics stack / initrd may load at boot
-    - firmware-linux
-    - firmware-misc-nonfree
+    # GPU firmware is provided by the base's firmware-intel-graphics /
+    # firmware-intel-misc packages. Audio DSP firmware (e.g. SOF firmware for
+    # Meteor Lake/Arrow Lake, intel/sof-ipc4/arl/sof-arl.ri) ships in a separate
+    # package the base does not need, so add it here for the desktop's audio.
+    - firmware-sof-signed
     # Display manager + GNOME session — turns the backend X/Mesa stack into a
     # graphical login. gdm3 is the GNOME Display Manager; gnome-session provides
     # the session gdm launches; gnome-shell is that session's compositor and is
