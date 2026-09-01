@@ -133,7 +133,15 @@ func TestClearRPMMetadataCache(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(metaDir) })
 
-	for _, name := range []string{"primary.parsed.json", "primary.location.json"} {
+	for _, name := range []string{
+		"primary.parsed.json",
+		"primary.location.json",
+		"repomd.xml",
+		"primary_aaaaaaaaaaaaaaaa.cache.json",
+		"primary_aaaaaaaaaaaaaaaa.gz",
+		"primary_bbbbbbbbbbbbbbbb.zst",
+		"primary_cccccccccccccccc.xml",
+	} {
 		if err := os.WriteFile(filepath.Join(metaDir, name), []byte("{}"), 0644); err != nil {
 			t.Fatalf("failed to write %s: %v", name, err)
 		}
@@ -148,7 +156,15 @@ func TestClearRPMMetadataCache(t *testing.T) {
 		t.Fatalf("clearRPMPackageCache() unexpected error: %v", err)
 	}
 
-	for _, name := range []string{"primary.parsed.json", "primary.location.json"} {
+	for _, name := range []string{
+		"primary.parsed.json",
+		"primary.location.json",
+		"repomd.xml",
+		"primary_aaaaaaaaaaaaaaaa.cache.json",
+		"primary_aaaaaaaaaaaaaaaa.gz",
+		"primary_bbbbbbbbbbbbbbbb.zst",
+		"primary_cccccccccccccccc.xml",
+	} {
 		f := filepath.Join(metaDir, name)
 		if _, statErr := os.Stat(f); !os.IsNotExist(statErr) {
 			t.Errorf("expected %s to be removed after cache clear", name)

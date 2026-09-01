@@ -137,6 +137,19 @@ Metadata caching is bypassed entirely for `localhost`/loopback repository URLs
 (a local mirror is assumed to be under active development) and during live-installer
 execution.
 
+RPM repositories use the same cache contract under
+`cache/rpm-metadata/{repo-id}_{arch}_{repo-hash}_rpm/`. The cache stores a stable
+`repomd.xml`, the resolved primary metadata location in `primary.location.json`,
+the compressed primary metadata payload keyed by the exact `repodata/primary.xml.*`
+href, and the parsed package index in `primary.parsed.json`. Cache manifests store
+hashed metadata identities rather than repository URLs. On a complete cache hit,
+RPM builds read `repomd.xml`, resolve the primary href locally, verify cached `.gz`
+or `.zst` primary metadata against the checksum and size published by `repomd.xml`,
+parse that metadata, and reuse cached RPM payloads without contacting the repository.
+Metadata files that are used for offline builds are written through temporary files,
+synced, and atomically renamed into place so partial writes do not become valid cache
+entries.
+
 ### Package Cache Organization
 
 The package cache is organized by provider to ensure each unique package is stored only once:
