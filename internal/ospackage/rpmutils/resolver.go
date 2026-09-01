@@ -458,7 +458,7 @@ func fetchRPMRawMetadata(
 		if saveErr := saveRPMRawMetadataCache(xmlCacheDir, gzHref, metadataID, primary, compressedData); saveErr != nil {
 			log.Warnf("Failed to save RPM primary metadata cache for %s; offline cache incomplete: %v", redactURLForLog(baseURL), saveErr)
 		}
-		saveOriginalXML(xmlCacheDir, gzHref, baseURL, compressedData)
+		saveOriginalXML(xmlCacheDir, gzHref, fullURL, compressedData)
 		cachePath, _ = rpmRawMetadataCachePaths(xmlCacheDir, gzHref)
 	}
 

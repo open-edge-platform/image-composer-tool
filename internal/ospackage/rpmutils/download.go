@@ -678,6 +678,7 @@ func clearRPMMetadataCache() {
 			"primary.parsed.json",
 			"primary.location.json",
 			"repomd.xml",
+			"repomd_*.xml",
 			"primary_*.cache.json",
 			"primary_*.gz",
 			"primary_*.zst",

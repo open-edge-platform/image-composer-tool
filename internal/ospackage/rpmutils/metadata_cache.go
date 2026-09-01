@@ -89,7 +89,7 @@ func rpmMetadataID(baseURL, metadataHref string) string {
 func redactURLForLog(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil {
-		return rawURL
+		return "<redacted-url>"
 	}
 	u.User = nil
 	u.RawQuery = ""

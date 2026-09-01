@@ -1426,6 +1426,15 @@ func TestRPMMetadataOnlinePopulateThenOfflineRawCacheReuse(t *testing.T) {
 			t.Fatalf("stable primary cache %s missing: %v", path, err)
 		}
 	}
+	fullURLRawHash := sha256.Sum256([]byte(server.URL + "/" + primaryHref))
+	fullURLRawPattern := fmt.Sprintf("primary.xml_%s_*.gz", hex.EncodeToString(fullURLRawHash[:])[:8])
+	fullURLRawMatches, err := filepath.Glob(filepath.Join(cacheDir, fullURLRawPattern))
+	if err != nil {
+		t.Fatalf("glob fullURL raw metadata cache: %v", err)
+	}
+	if len(fullURLRawMatches) != 1 {
+		t.Fatalf("fullURL-keyed raw cache matches = %v, want 1", fullURLRawMatches)
+	}
 	if atomic.LoadInt32(&requestCount) != 2 {
 		t.Fatalf("online request count = %d, want 2", atomic.LoadInt32(&requestCount))
 	}
@@ -1621,6 +1630,9 @@ func TestRPMMetadataCacheDoesNotPersistOrFormatCredentials(t *testing.T) {
 		if strings.Contains(redacted, secret) {
 			t.Fatalf("redacted URL %q still contains secret fragment %q", redacted, secret)
 		}
+	}
+	if got := redactURLForLog("%zz://user:secret-token@example.invalid/repo?token=abc123#frag"); got != "<redacted-url>" {
+		t.Fatalf("redactURLForLog() malformed URL = %q, want placeholder", got)
 	}
 }
 
