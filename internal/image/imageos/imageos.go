@@ -1178,6 +1178,19 @@ func updateImageNetwork(installRoot string, template *config.ImageTemplate) erro
 		return nil
 	}
 
+	// cloud-init owns network configuration (via its own netplan/networkd
+	// renderer stage) when installed and no explicit backend is configured
+	// here. Auto-enabling systemd-networkd in that case races cloud-init for
+	// the interface at boot and can leave /etc/netplan empty. cloud-init may
+	// be requested directly or pulled in transitively by a meta-package (e.g.
+	// ubuntu-cloud-minimal), so template.SystemConfig.Packages alone is not
+	// sufficient — also check the installed root for cloud-init's executable.
+	if template.SystemConfig.Network.Backend == "" &&
+		(hasPackage(template.SystemConfig.Packages, "cloud-init") || cloudInitInstalled(installRoot)) {
+		log.Debugf("cloud-init is installed and no network backend is configured; skipping systemd-networkd auto-enable")
+		return nil
+	}
+
 	unitFilePath := filepath.Join(installRoot, "lib", "systemd", "system", "systemd-networkd.service")
 	if _, err := os.Stat(unitFilePath); os.IsNotExist(err) {
 		log.Warnf("systemd-networkd is not installed in %s, skipping enable", installRoot)
@@ -1188,6 +1201,35 @@ func updateImageNetwork(installRoot string, template *config.ImageTemplate) erro
 		return fmt.Errorf("failed to enable systemd-networkd: %w", err)
 	}
 	return nil
+}
+
+// hasPackage reports whether name appears in pkgs, ignoring any pinned
+// version suffix (e.g. "cloud-init" matches both "cloud-init" and
+// "cloud-init_24.4-0ubuntu1") and matching glob entries (e.g. "cloud-init*").
+func hasPackage(pkgs []string, name string) bool {
+	for _, pkg := range pkgs {
+		base, _, _ := strings.Cut(strings.TrimSpace(pkg), "_")
+		if base == name {
+			return true
+		}
+		if ok, err := filepath.Match(base, name); err == nil && ok {
+			return true
+		}
+	}
+	return false
+}
+
+// cloudInitInstalled reports whether cloud-init's own executable is present
+// under installRoot, which is true whenever the cloud-init package ends up
+// installed — including when it arrives transitively through a meta-package
+// dependency that template.SystemConfig.Packages does not list directly.
+// This checks the installed executable rather than a config path such as
+// /etc/cloud/cloud.cfg, since some default configs (e.g. EMT3's
+// default-raw-x86_64.yml) drop a cloud-init config file via additionalFiles
+// on images that never install the cloud-init package.
+func cloudInitInstalled(installRoot string) bool {
+	_, err := os.Stat(filepath.Join(installRoot, "usr", "bin", "cloud-init"))
+	return err == nil
 }
 
 func addImageIDFile(installRoot string, template *config.ImageTemplate) error {
