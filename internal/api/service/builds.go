@@ -686,15 +686,18 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 	if perr != nil {
 		return "", "", fmt.Errorf("resolving template path: %w", perr) // server-side (bad manifest)
 	}
-	if c.ImageName == "" {
+	if !c.hasOverrides() {
 		return full, tmpl, nil
 	}
 	// StartBuild can be posted directly, bypassing /templates/compose, so the
-	// override must be validated here too rather than trusting a prior compose.
+	// overrides must be validated here too rather than trusting a prior compose.
 	if verr := ValidateImageName(c.ImageName); verr != nil {
 		return "", "", fmt.Errorf("%w: %v", errBadBuildRequest, verr)
 	}
-	deltaPath, _, derr := s.deltaForOverride(tmpl, full, *c)
+	if verr := ValidatePackages(c.Packages); verr != nil {
+		return "", "", fmt.Errorf("%w: %v", errBadBuildRequest, verr)
+	}
+	deltaPath, _, _, derr := s.deltaForOverride(tmpl, full, *c)
 	if derr != nil {
 		return "", "", fmt.Errorf("generating override template: %w", derr) // server-side
 	}

@@ -17,10 +17,12 @@ info:
     types in `web/src/api/types.ts` mirror it.
 
     Not every endpoint is modelled as a JSON operation here. The build-log stream
-    (`GET /builds/{id}/logs`) is Server-Sent Events, and the template / log-file /
-    artifact downloads return files, so they are hand-written handlers outside the
-    generated `ServerInterface` and documented with `text/event-stream` /
-    `application/octet-stream` response bodies rather than JSON schemas.
+    (`GET /builds/{id}/logs`) and the package-search stream
+    (`GET /packages/search/stream`) are Server-Sent Events, and the template /
+    log-file / artifact downloads return files, so they are hand-written handlers
+    outside the generated `ServerInterface` and documented with
+    `text/event-stream` / `application/octet-stream` response bodies rather than
+    JSON schemas.
   version: 3.0.0
   contact:
     name: ICT Team
@@ -116,18 +118,15 @@ paths:
         Supports prefix matching. Used by the package search autocomplete
         in the Advanced tab's Packages step.
 
-        NOT YET IMPLEMENTED — returns 501 NOT_IMPLEMENTED until the search
-        backend lands. That 501 is a temporary stub, not part of this contract:
-        it is deliberately undocumented in `responses` below so clients cannot
-        code against a status that disappears on implementation.
+        Omitting `q` browses a repository's catalog instead of searching it —
+        the `limit`/`offset` pair pages through the result either way.
       parameters:
         - name: q
           in: query
-          required: true
           schema:
             type: string
             minLength: 2
-          description: Search query (package name prefix)
+          description: Search query (package name prefix). Omit to browse.
         - name: os
           in: query
           required: true
@@ -150,8 +149,24 @@ paths:
           schema:
             type: integer
             default: 20
-            maximum: 50
+            maximum: 100
           description: Max results to return
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+          description: Number of matching results to skip, for paging
+        - name: curated
+          in: query
+          schema:
+            type: boolean
+            default: false
+          description: >
+            When true, narrow results to each matched repository's hand-picked
+            "frequently used" packages instead of its full catalog. A matched
+            repository with none defined then contributes nothing, rather than
+            falling back to its full catalog.
       responses:
         "200":
           description: Matching packages
@@ -167,6 +182,84 @@ paths:
                 $ref: "#/components/schemas/Error"
         "500":
           description: Server error searching packages
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /packages/search/stream:
+    get:
+      tags: [Packages]
+      operationId: streamPackageSearch
+      summary: Search packages across repositories (Server-Sent Events)
+      description: |
+        The same cross-repository search as `GET /packages/search`, but each
+        repository's matches are emitted as soon as that repository responds
+        instead of after every one has. A search fans out over the whole
+        catalog, so one unreachable mirror would otherwise set the latency of
+        the entire request — reaching its TCP dial timeout while results
+        already gathered from reachable repositories sit unsent.
+
+        Unlike the JSON endpoint this is not paginated: there is no `offset`,
+        and `limit` caps each repository's contribution rather than the merged
+        list. Clients merge, dedupe and rank the batches as they arrive. The
+        JSON endpoint remains the right choice for paging one known repository.
+
+        The stream closes after a fixed budget even if some repositories have
+        not answered; `done.truncated` reports that, and `done.failed` counts
+        repositories that reported an error. Nothing is retried.
+
+        This is a hand-written streaming handler, not part of the generated
+        `ServerInterface` — oapi-codegen does not model `text/event-stream`
+        cleanly. Event types:
+          - `hits`      `{"repo": "<id>", "packages": [PackageSearchResult, ...]}`
+          - `repoError` `{"repo": "<id>", "message": "<err>"}`
+          - `done`      `{"repos": <n>, "failed": <n>, "truncated": <bool>}`
+
+        There is deliberately no `error` event: `EventSource` already delivers
+        transport failures under that name, so a server-sent event of the same
+        name cannot be told apart from a dropped connection.
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+            minLength: 2
+          description: Search query (package name prefix). Omit to browse.
+        - name: os
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Target OS distribution ID (e.g., ubuntu24)
+        - name: repos
+          in: query
+          style: form
+          explode: true
+          schema:
+            type: array
+            items:
+              type: string
+          description: Filter by enabled repository IDs
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+          description: Max results per repository (not a total across the stream)
+      responses:
+        "200":
+          description: SSE stream of per-repository search results
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "400":
+          description: |
+            Invalid or missing query parameters. Returned as JSON before the
+            stream starts, since a status cannot be changed once SSE headers
+            and a body have been written.
           content:
             application/json:
               schema:
@@ -671,6 +764,24 @@ components:
           type: integer
           default: 500
           description: "Repository priority (higher number = preferred when packages exist in multiple repos). Default 500."
+        hasCuratedPackages:
+          type: boolean
+          description: >
+            Whether this repository defines any hand-picked "frequently used"
+            packages, i.e. whether `curated=true` on /packages/search can return
+            anything for it. The list itself stays server-side; only this flag is
+            published, so a client can hide a curation control that would yield
+            nothing rather than offering a dead toggle.
+        hasSigningKey:
+          type: boolean
+          description: >
+            Whether this repository's packages are ever fetched with signature
+            verification, by either of two independent means: a template that
+            enables it carries a `pkey`, so a build verifies it; or the catalog
+            already verifies its Release against a local keyring when the
+            picker searches it. When false, neither applies and a client
+            should say so rather than leave it implicit. Neither the key URL
+            nor the keyring path is published; only this flag is.
 
     PackageRepoList:
       type: object
@@ -683,7 +794,11 @@ components:
 
     PackageSearchResult:
       type: object
-      description: One package search hit.
+      description: |
+        One package, with every version of it the search found. A package is
+        reported once no matter how many indexes carry it — a Debian-style
+        repository publishes the release, -updates and -security suites
+        separately, so the same package routinely exists at several versions.
       required: [name, version, repository]
       properties:
         name:
@@ -692,13 +807,38 @@ components:
         version:
           type: string
           example: "27.1.1"
-          description: Latest available version
+          description: |
+            The newest available version, and the one used when a package is
+            added without pinning. Always equal to `versions[0].version`.
         description:
           type: string
           example: Docker Community Edition
         repository:
           type: string
           example: docker-ce-stable
+          description: ID of the repository providing `version`.
+        versions:
+          type: array
+          description: |
+            Every version found, newest first, each with the repository that
+            provides it — pinning a version therefore also selects a
+            repository. Ordering uses the target's native version comparison
+            (Debian or RPM), not string ordering, so `1:9.6p1-3ubuntu13.9`
+            correctly outranks `1:9.6p1-3ubuntu13.7`.
+          items:
+            $ref: "#/components/schemas/PackageVersion"
+
+    PackageVersion:
+      type: object
+      description: One available version of a package, and where it comes from.
+      required: [version, repository]
+      properties:
+        version:
+          type: string
+          example: "1:9.6p1-3ubuntu13.9"
+        repository:
+          type: string
+          example: ubuntu-noble-base
 
     PackageSearchResults:
       type: object
@@ -742,6 +882,38 @@ components:
             "not overridden" — the matched template's own name is used.
           pattern: '^[a-zA-Z0-9]([a-zA-Z0-9\-_]*[a-zA-Z0-9])?$'
           maxLength: 64
+        packages:
+          type: array
+          description: |
+            Packages the Advanced tab's Packages step selected, emitted into the
+            generated delta's `systemConfig.packages`. A pinned version uses the
+            `name_version` form the package resolver matches (e.g.
+            `curl_8.5.0-2ubuntu10.13`); a bare name floats to whatever the
+            repository publishes. The pattern matches the template schema's own
+            constraint on `systemConfig.packages` items.
+
+            Because the extends merge unions package lists, a pinned entry whose
+            name the matched template already lists unpinned leaves both entries
+            in the resolved template — see `pinConflicts` on the response.
+          maxItems: 256
+          uniqueItems: true
+          items:
+            type: string
+            pattern: '^[A-Za-z0-9][A-Za-z0-9+_.:~*?\[\]-]*$'
+            maxLength: 256
+        repos:
+          type: array
+          description: |
+            Repository ids (as published by GET /package-repos) the user enabled.
+            Each maps to a `packageRepositories` entry in the generated delta, so
+            a package picked from a repository the matched template doesn't
+            already configure can still resolve at build time. Repositories the
+            catalog marks `enabledByDefault` need not be listed — they come from
+            the per-OS providerconfigs.
+          maxItems: 64
+          uniqueItems: true
+          items:
+            type: string
 
     ComposeSummary:
       type: object
@@ -814,6 +986,30 @@ components:
             The resolved final template — what building this same request would
             run. Identical to the matched template's own `resolve --full` output
             when no overrides are set.
+        deltaYaml:
+          type: string
+          description: |
+            The generated `extends` delta, verbatim — only the overrides this
+            request asked for, over a reference to the matched template. Empty
+            when the request carries no overrides, in which case the matched
+            template is resolved directly and no delta is generated.
+        baseYaml:
+          type: string
+          description: |
+            The matched template resolved *without* this request's overrides —
+            i.e. what `yaml` would have been had nothing been overridden. Lets a
+            client show the curated baseline beside the delta that modifies it,
+            so the difference is attributable to the user's own choices.
+        pinConflicts:
+          type: array
+          description: |
+            Packages requested at a pinned version whose name the matched
+            template already lists unpinned. The extends merge unions package
+            lists and cannot remove the parent's entry, so both end up in the
+            resolved template and the resolver may install either. Advisory
+            only: the compose still succeeds.
+          items:
+            type: string
         summary:
           $ref: "#/components/schemas/ComposeSummary"
 

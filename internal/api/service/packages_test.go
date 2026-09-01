@@ -4,159 +4,378 @@
 package service
 
 import (
+	"bytes"
+	"compress/gzip"
+	"context"
+	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
+	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/open-edge-platform/image-composer-tool/internal/api/service/pkgindex"
 )
 
-// packagesTestService is newTestService plus a robotics.yml overwritten with
-// templateWithPackagesAndRepo, so ListPackageRepos/SearchPackages have a
-// populated packageRepositories/allowPackages to work with.
-func packagesTestService(t *testing.T) *Service {
+// gzipPackages compresses stanzas the way apt publishes Packages.gz.
+func gzipPackages(t *testing.T, stanzas string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w := gzip.NewWriter(&buf)
+	if _, err := w.Write([]byte(stanzas)); err != nil {
+		t.Fatalf("gzip write: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("gzip close: %v", err)
+	}
+	return buf.Bytes()
+}
+
+// jazzyStanzas is a two-package deb index for the ros2-jazzy fixture repo.
+const jazzyStanzas = `Package: ros-jazzy-demo-nodes-cpp
+Version: 0.33.0-1
+Architecture: amd64
+Description: ROS 2 demo nodes in C++
+
+Package: ros-jazzy-rviz2
+Version: 14.1.4-1
+Architecture: amd64
+Description: ROS 2 3D visualization tool
+
+`
+
+// debFixtureServer serves a single Packages.gz for one (codename, component,
+// arch) deb index, so SearchPackages has something real to fan out to.
+func debFixtureServer(t *testing.T, codename, component, arch, stanzas string) *httptest.Server {
+	t.Helper()
+	path := fmt.Sprintf("/dists/%s/%s/binary-%s/Packages.gz", codename, component, arch)
+	body := gzipPackages(t, stanzas)
+	mux := http.NewServeMux()
+	mux.HandleFunc(path, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(body)
+	})
+	return httptest.NewServer(mux)
+}
+
+// newSearchTestService is newTestService with its catalog and pkgindex cache
+// replaced, so a test controls exactly which repos/indexes a search fans out
+// to and which HTTP client it fetches them through.
+func newSearchTestService(t *testing.T, repos []PackageRepo, client *http.Client) *Service {
 	t.Helper()
 	s := newTestService(t)
-	if err := os.WriteFile(filepath.Join(s.cfg.TemplatesDir, "robotics.yml"), []byte(templateWithPackagesAndRepo), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	s.repos = repos
+	s.pkgindexCache = pkgindex.New(pkgindex.Config{Client: client})
 	return s
 }
 
-func robotics() TemplateQuery {
-	return TemplateQuery{Vertical: "robotics", SKU: "amr", Platform: "wcl", OS: "ubuntu24", ImageType: "iso"}
+// jazzyRepo returns a one-repo, one-index catalog pointing at srv, with no
+// arch pinned on the index so resolution goes through archesForOS("ubuntu24")
+// -> "x86_64" -> debArch -> "amd64", exercising that translation.
+func jazzyRepo(url string) []PackageRepo {
+	return []PackageRepo{{
+		ID: "ros2-jazzy", DisplayName: "ROS 2 Jazzy", URL: url,
+		Index: []RepoIndex{{Codename: "noble", Component: "main"}},
+	}}
 }
 
-func TestListPackageRepos(t *testing.T) {
-	s := packagesTestService(t)
+func TestSearchPackagesBrowseAndQuery(t *testing.T) {
+	srv := debFixtureServer(t, "noble", "main", "amd64", jazzyStanzas)
+	defer srv.Close()
+	s := newSearchTestService(t, jazzyRepo(srv.URL), srv.Client())
 
-	repos, err := s.ListPackageRepos(robotics())
+	hits, total, err := s.SearchPackages(context.Background(), "ubuntu24", "", nil, 0, 0, false)
 	if err != nil {
-		t.Fatalf("ListPackageRepos: %v", err)
-	}
-	if len(repos) != 1 {
-		t.Fatalf("repos = %+v, want exactly the template's own single entry", repos)
-	}
-	if repos[0].ID != "test-repo" || repos[0].DisplayName != "test-repo" {
-		t.Errorf("repo identity = %+v, want id/displayName derived from codename", repos[0])
-	}
-	if repos[0].URL != "https://example.com/repo" {
-		t.Errorf("repo URL = %q, want the template's own url", repos[0].URL)
-	}
-}
-
-func TestListPackageReposErrors(t *testing.T) {
-	s := packagesTestService(t)
-	cases := []struct {
-		name string
-		q    TemplateQuery
-		want int
-	}{
-		{"missing fields", TemplateQuery{Vertical: "robotics"}, http.StatusBadRequest},
-		{"no match", TemplateQuery{Vertical: "robotics", Platform: "ptl", OS: "ubuntu24", ImageType: "iso"}, http.StatusBadRequest},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			_, err := s.ListPackageRepos(c.q)
-			assertServiceError(t, err, c.want)
-		})
-	}
-}
-
-func TestSearchPackages(t *testing.T) {
-	s := packagesTestService(t)
-
-	hits, total, err := s.SearchPackages(robotics(), "ba", nil, 0)
-	if err != nil {
-		t.Fatalf("SearchPackages: %v", err)
-	}
-	if total != 2 {
-		t.Fatalf("total = %d, want 2 (bar, baz-dev)", total)
-	}
-	if len(hits) != 2 || hits[0].Name != "bar" || hits[1].Name != "baz-dev" {
-		t.Fatalf("hits = %+v, want [bar baz-dev] sorted", hits)
-	}
-	for _, h := range hits {
-		if h.Version != "latest" {
-			t.Errorf("hit %q version = %q, want latest (no package-index integration)", h.Name, h.Version)
-		}
-		if h.RepoID != "test-repo" {
-			t.Errorf("hit %q repo id = %q, want test-repo", h.Name, h.RepoID)
-		}
-	}
-}
-
-func TestSearchPackagesRepoFilter(t *testing.T) {
-	s := packagesTestService(t)
-
-	// A filter naming an unrelated repo id must exclude every hit, even though
-	// the query itself matches.
-	hits, total, err := s.SearchPackages(robotics(), "ba", []string{"other-repo"}, 0)
-	if err != nil {
-		t.Fatalf("SearchPackages: %v", err)
-	}
-	if total != 0 || len(hits) != 0 {
-		t.Fatalf("hits = %+v total = %d, want none (repo filter excludes the only repo)", hits, total)
-	}
-
-	hits, total, err = s.SearchPackages(robotics(), "ba", []string{"test-repo"}, 0)
-	if err != nil {
-		t.Fatalf("SearchPackages: %v", err)
+		t.Fatalf("browse: %v", err)
 	}
 	if total != 2 || len(hits) != 2 {
-		t.Fatalf("hits = %+v total = %d, want 2 (matching repo filter)", hits, total)
+		t.Fatalf("got %d hits (total %d), want 2", len(hits), total)
 	}
-}
 
-func TestSearchPackagesLimit(t *testing.T) {
-	s := packagesTestService(t)
-
-	hits, total, err := s.SearchPackages(robotics(), "ba", nil, 1)
+	hits, total, err = s.SearchPackages(context.Background(), "ubuntu24", "ros-jazzy-rviz", nil, 0, 0, false)
 	if err != nil {
-		t.Fatalf("SearchPackages: %v", err)
+		t.Fatalf("query: %v", err)
 	}
-	if total != 2 {
-		t.Errorf("total = %d, want 2 (unaffected by limit)", total)
+	if total != 1 || len(hits) != 1 || hits[0].Name != "ros-jazzy-rviz2" {
+		t.Fatalf("got %+v (total %d), want exactly ros-jazzy-rviz2", hits, total)
 	}
-	if len(hits) != 1 {
-		t.Fatalf("hits = %+v, want capped to limit 1", hits)
+	if hits[0].RepoID != "ros2-jazzy" || hits[0].Version != "14.1.4-1" {
+		t.Errorf("got repo %q version %q, want ros2-jazzy / 14.1.4-1", hits[0].RepoID, hits[0].Version)
 	}
 }
 
 func TestSearchPackagesQueryTooShort(t *testing.T) {
-	s := packagesTestService(t)
-
-	_, _, err := s.SearchPackages(robotics(), "b", nil, 0)
-	code, _ := assertServiceError(t, err, http.StatusBadRequest)
-	if code != "BAD_REQUEST" {
-		t.Errorf("code = %q, want BAD_REQUEST", code)
-	}
-}
-
-func TestSearchPackagesNoMatchCombination(t *testing.T) {
-	s := packagesTestService(t)
-
-	_, _, err := s.SearchPackages(TemplateQuery{Vertical: "robotics", Platform: "ptl", OS: "ubuntu24", ImageType: "iso"}, "ba", nil, 0)
+	s := newSearchTestService(t, nil, http.DefaultClient)
+	_, _, err := s.SearchPackages(context.Background(), "ubuntu24", "a", nil, 0, 0, false)
 	assertServiceError(t, err, http.StatusBadRequest)
 }
 
-const templateWithPackagesAndRepo = `image:
-  name: robotics-test
-  version: "1.0"
-target:
-  os: ubuntu
-  dist: ubuntu24
-  arch: x86_64
-  imageType: iso
-disk:
-  name: disk0
-  size: 5GB
-systemConfig:
-  hostname: robotics
-packageRepositories:
-  - codename: test-repo
-    pkey: https://example.com/repo.key
-    url: https://example.com/repo
-    allowPackages:
-      - bar
-      - baz-dev
-`
+func TestSearchPackagesUnknownOS(t *testing.T) {
+	srv := debFixtureServer(t, "noble", "main", "amd64", jazzyStanzas)
+	defer srv.Close()
+	s := newSearchTestService(t, jazzyRepo(srv.URL), srv.Client())
+
+	hits, total, err := s.SearchPackages(context.Background(), "not-a-real-os", "", nil, 0, 0, false)
+	if err != nil {
+		t.Fatalf("unknown os: %v", err)
+	}
+	if total != 0 || len(hits) != 0 {
+		t.Fatalf("got %d hits, want 0 for an unknown os", len(hits))
+	}
+}
+
+func TestSearchPackagesRepoFilter(t *testing.T) {
+	srv := debFixtureServer(t, "noble", "main", "amd64", jazzyStanzas)
+	defer srv.Close()
+	repos := jazzyRepo(srv.URL)
+	repos = append(repos, PackageRepo{ID: "other-repo", DisplayName: "Other", URL: srv.URL})
+	s := newSearchTestService(t, repos, srv.Client())
+
+	hits, _, err := s.SearchPackages(context.Background(), "ubuntu24", "", []string{"other-repo"}, 0, 0, false)
+	if err != nil {
+		t.Fatalf("SearchPackages: %v", err)
+	}
+	if len(hits) != 0 {
+		t.Fatalf("got %d hits from a repo filter naming only the indexless repo, want 0", len(hits))
+	}
+}
+
+func TestSearchPackagesPagination(t *testing.T) {
+	srv := debFixtureServer(t, "noble", "main", "amd64", jazzyStanzas)
+	defer srv.Close()
+	s := newSearchTestService(t, jazzyRepo(srv.URL), srv.Client())
+
+	hits, total, err := s.SearchPackages(context.Background(), "ubuntu24", "", nil, 1, 1, false)
+	if err != nil {
+		t.Fatalf("SearchPackages: %v", err)
+	}
+	if total != 2 || len(hits) != 1 {
+		t.Fatalf("got %d hits (total %d), want 1 hit of 2", len(hits), total)
+	}
+	// Sorted by name: ros-jazzy-demo-nodes-cpp, then ros-jazzy-rviz2. offset=1
+	// skips the first.
+	if hits[0].Name != "ros-jazzy-rviz2" {
+		t.Errorf("got %q at offset 1, want ros-jazzy-rviz2", hits[0].Name)
+	}
+}
+
+func TestSearchPackagesLookupFailureSkipsRepo(t *testing.T) {
+	good := debFixtureServer(t, "noble", "main", "amd64", jazzyStanzas)
+	defer good.Close()
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer bad.Close()
+
+	repos := jazzyRepo(good.URL)
+	repos = append(repos, PackageRepo{
+		ID: "broken-repo", DisplayName: "Broken", URL: bad.URL,
+		Index: []RepoIndex{{Codename: "noble", Component: "main"}},
+	})
+	s := newSearchTestService(t, repos, good.Client())
+
+	hits, total, err := s.SearchPackages(context.Background(), "ubuntu24", "", nil, 0, 0, false)
+	if err != nil {
+		t.Fatalf("a broken repo should not fail the whole search: %v", err)
+	}
+	if total != 2 || len(hits) != 2 {
+		t.Fatalf("got %d hits (total %d), want the good repo's 2 despite the broken one", len(hits), total)
+	}
+}
+
+func TestSearchPackagesRepoWithNoIndexIsSkipped(t *testing.T) {
+	s := newSearchTestService(t, []PackageRepo{{ID: "no-index", DisplayName: "No Index", URL: "http://example.invalid"}},
+		http.DefaultClient)
+	hits, total, err := s.SearchPackages(context.Background(), "ubuntu24", "", nil, 0, 0, false)
+	if err != nil {
+		t.Fatalf("SearchPackages: %v", err)
+	}
+	if total != 0 || len(hits) != 0 {
+		t.Fatalf("got %d hits, want 0 for a repo with no Index entries", len(hits))
+	}
+}
+
+func TestSearchPackagesCuratedOnlyNarrowsToTheCuratedList(t *testing.T) {
+	srv := debFixtureServer(t, "noble", "main", "amd64", jazzyStanzas)
+	defer srv.Close()
+	repos := jazzyRepo(srv.URL)
+	repos[0].CuratedPackages = []string{"ros-jazzy-rviz2"}
+	s := newSearchTestService(t, repos, srv.Client())
+
+	hits, total, err := s.SearchPackages(context.Background(), "ubuntu24", "", nil, 0, 0, true)
+	if err != nil {
+		t.Fatalf("SearchPackages: %v", err)
+	}
+	if total != 1 || len(hits) != 1 || hits[0].Name != "ros-jazzy-rviz2" {
+		t.Fatalf("got %+v (total %d), want exactly the curated ros-jazzy-rviz2", hits, total)
+	}
+}
+
+func TestSearchPackagesCuratedOnlyEmptyListYieldsNoResults(t *testing.T) {
+	// A matched repo with no CuratedPackages must contribute nothing to a
+	// curated search, not silently fall back to its full catalog.
+	srv := debFixtureServer(t, "noble", "main", "amd64", jazzyStanzas)
+	defer srv.Close()
+	s := newSearchTestService(t, jazzyRepo(srv.URL), srv.Client())
+
+	hits, total, err := s.SearchPackages(context.Background(), "ubuntu24", "", nil, 0, 0, true)
+	if err != nil {
+		t.Fatalf("SearchPackages: %v", err)
+	}
+	if total != 0 || len(hits) != 0 {
+		t.Fatalf("got %d hits (total %d), want 0 for a repo with no curated packages", len(hits), total)
+	}
+}
+
+func TestDedupAndFilterGroupsVersions(t *testing.T) {
+	// A Debian-style repository publishes release, -updates and -security as
+	// separate indexes, so the same package arrives several times at different
+	// versions. They must collapse into one hit offering every version.
+	deb := func(string) bool { return false }
+	results := []lookupResult{
+		{repoID: "noble", entries: []pkgindex.Entry{
+			{Name: "curl", Version: "8.5.0-2ubuntu10.9", Description: "transfer a URL"},
+			{Name: "vim", Version: "2.0"},
+			{Name: "nginx", Version: "1.0~rc1"},
+		}},
+		{repoID: "noble", entries: []pkgindex.Entry{
+			{Name: "curl", Version: "8.5.0-2ubuntu10.13"},
+			{Name: "curl", Version: "8.5.0-2ubuntu10.9"}, // duplicate, must not repeat
+			{Name: "vim", Version: "1:1.0"},
+			{Name: "nginx", Version: "1.0"},
+		}},
+	}
+
+	hits := dedupAndFilter(results, "", deb)
+	if len(hits) != 3 {
+		t.Fatalf("got %d hits, want 3 (one per package name): %+v", len(hits), hits)
+	}
+
+	byName := map[string]PackageSearchHit{}
+	for _, h := range hits {
+		byName[h.Name] = h
+	}
+
+	curl := byName["curl"]
+	if len(curl.Versions) != 2 {
+		t.Errorf("curl has %d versions, want 2: %+v", len(curl.Versions), curl.Versions)
+	}
+	if curl.Version != curl.Versions[0].Version || curl.RepoID != curl.Versions[0].RepoID {
+		t.Errorf("hit fields %q/%q do not mirror Versions[0] %+v", curl.Version, curl.RepoID, curl.Versions[0])
+	}
+	if curl.Description != "transfer a URL" {
+		t.Errorf("description = %q; a later suite's empty one overwrote it", curl.Description)
+	}
+
+	// Each case inverts under plain string comparison, so these pin the
+	// ordering to the target's real version rules rather than to byte order.
+	for _, tc := range []struct{ name, wantNewest, why string }{
+		{"curl", "8.5.0-2ubuntu10.13", "numeric segments: 13 > 9, but \"...10.9\" > \"...10.13\" as strings"},
+		{"vim", "1:1.0", "an epoch outranks a higher upstream version"},
+		{"nginx", "1.0", "a tilde sorts before its release, so 1.0 > 1.0~rc1"},
+	} {
+		if got := byName[tc.name].Versions[0].Version; got != tc.wantNewest {
+			t.Errorf("%s newest = %q, want %q (%s)", tc.name, got, tc.wantNewest, tc.why)
+		}
+	}
+}
+
+func TestDedupAndFilterVersionsCarryTheirRepo(t *testing.T) {
+	// The same package from two repositories: pinning a version has to pick
+	// the repository that actually provides it.
+	deb := func(string) bool { return false }
+	results := []lookupResult{
+		{repoID: "ubuntu-noble-base", entries: []pkgindex.Entry{{Name: "gz-harmonic", Version: "8.8.2-1~noble"}}},
+		{repoID: "gazebo", entries: []pkgindex.Entry{{Name: "gz-harmonic", Version: "8.9.0-1~noble"}}},
+	}
+	hits := dedupAndFilter(results, "", deb)
+	if len(hits) != 1 {
+		t.Fatalf("got %d hits, want 1", len(hits))
+	}
+	got := hits[0].Versions
+	if len(got) != 2 {
+		t.Fatalf("got %d versions, want 2: %+v", len(got), got)
+	}
+	if got[0].Version != "8.9.0-1~noble" || got[0].RepoID != "gazebo" {
+		t.Errorf("newest = %+v, want 8.9.0-1~noble from gazebo", got[0])
+	}
+	if got[1].RepoID != "ubuntu-noble-base" {
+		t.Errorf("older version lost its repository: %+v", got[1])
+	}
+}
+
+func TestSearchPackagesLimitCountsPackagesNotVersions(t *testing.T) {
+	// `limit` must page over packages; counting versions would silently return
+	// fewer packages than asked for whenever any of them had an update.
+	deb := func(string) bool { return false }
+	results := []lookupResult{
+		{repoID: "noble", entries: []pkgindex.Entry{
+			{Name: "aaa", Version: "1.0"}, {Name: "aaa", Version: "1.1"},
+			{Name: "bbb", Version: "2.0"}, {Name: "bbb", Version: "2.1"},
+			{Name: "ccc", Version: "3.0"},
+		}},
+	}
+	hits := dedupAndFilter(results, "", deb)
+	if len(hits) != 3 {
+		t.Fatalf("got %d hits, want 3 packages", len(hits))
+	}
+	if got := paginate(hits, 0, 2); len(got) != 2 {
+		t.Errorf("paginate returned %d, want 2 packages", len(got))
+	}
+}
+
+func TestArchesToFetchNarrowsToTheTarget(t *testing.T) {
+	// A catalog entry lists an arch per publishing host (Ubuntu serves x86_64
+	// from archive.ubuntu.com and aarch64 from ports.ubuntu.com). Only the
+	// target's own arch is worth fetching.
+	tests := []struct {
+		name      string
+		idxArches []string
+		osArches  []string
+		want      []string
+	}{
+		{"narrows to the target's arch", []string{"x86_64", "aarch64"}, []string{"x86_64"}, []string{"x86_64"}},
+		{"drops an index the target cannot use", []string{"aarch64"}, []string{"x86_64"}, nil},
+		{"no declared arch means every arch the OS builds", nil, []string{"x86_64"}, []string{"x86_64"}},
+		{"unknown OS keeps the index's own arches", []string{"x86_64", "aarch64"}, nil, []string{"x86_64", "aarch64"}},
+		{"a matching multi-arch target keeps both", []string{"x86_64", "aarch64"}, []string{"x86_64", "aarch64"}, []string{"x86_64", "aarch64"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := archesToFetch(tc.idxArches, tc.osArches)
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("got %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+func TestPlanLookupsSkipsTheWrongArch(t *testing.T) {
+	// End to end through planLookups: the aarch64 half of a two-host repo must
+	// not be planned for an x86_64 target, and the deb arch name is translated.
+	s := &Service{manifest: &Manifest{Targets: []Target{{ID: "ubuntu24", Arch: "x86_64"}}}}
+	repos := []PackageRepo{{
+		ID: "ubuntu-noble-base", URL: "http://archive.ubuntu.com/ubuntu", Type: repoTypeDeb,
+		Index: []RepoIndex{
+			{Codename: "noble", Component: "main universe", Arch: []string{"x86_64"}},
+			{URL: "http://ports.ubuntu.com/ubuntu-ports", Codename: "noble",
+				Component: "main universe", Arch: []string{"aarch64"}},
+		},
+	}}
+
+	got := s.planLookups("ubuntu24", repos)
+	if len(got) != 2 {
+		t.Fatalf("planned %d lookups, want 2 (main+universe for x86_64 only): %+v", len(got), got)
+	}
+	for _, lk := range got {
+		if lk.repo.Arch != "amd64" {
+			t.Errorf("planned arch %q, want amd64", lk.repo.Arch)
+		}
+		if strings.Contains(lk.repo.URL, "ports.ubuntu.com") {
+			t.Errorf("planned an aarch64 host for an x86_64 target: %s", lk.repo.URL)
+		}
+	}
+}

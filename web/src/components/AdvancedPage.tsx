@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useStore, cascadingOptions } from '../store'
+import { useStore, cascadingOptions, encodePackage } from '../store'
 import type { Selection } from '../store'
 import { api } from '../api/client'
 import type { ComposeRequest, ComposeResponse } from '../api/types'
 import { Select } from './Select'
-import { RepoPicker } from './RepoPicker'
+import { PackagesStep } from './PackagesStep'
 import { Input } from './Input'
 
 // How long to wait after the last keystroke in Image Name before re-composing.
@@ -19,6 +19,47 @@ const IMAGE_NAME_DEBOUNCE_MS = 400
 // remaining steps host the resolved-template preview and placeholders for work
 // that lands in later tasks.
 const STEPS = ['Target', 'Packages', 'Disk', 'Review'] as const
+
+// The template views the Review step can show.
+type TemplateView = 'delta' | 'base' | 'resolved'
+
+// templateViews lists the views available for a compose result, most specific
+// to the user's own choices first.
+//
+// Delta and Base exist only when something was overridden: with no overrides no
+// delta is generated, and the resolved template *is* the base, so offering
+// either would show the same bytes under two names.
+function templateViews(
+  composed: ComposeResponse | null,
+): { key: TemplateView; label: string; yaml: string; hint: string }[] {
+  if (!composed) return []
+  const out: { key: TemplateView; label: string; yaml: string; hint: string }[] = []
+  if (composed.deltaYaml) {
+    out.push({
+      key: 'delta',
+      label: 'Your changes',
+      yaml: composed.deltaYaml,
+      hint: `Only what Advanced mode adds, as a template extending ${composed.template}. This is the file the build resolves.`,
+    })
+  }
+  if (composed.baseYaml) {
+    out.push({
+      key: 'base',
+      label: 'Base template',
+      yaml: composed.baseYaml,
+      hint: `${composed.template} on its own, without your changes.`,
+    })
+  }
+  out.push({
+    key: 'resolved',
+    label: out.length ? 'Resolved' : 'Generated YAML',
+    yaml: composed.yaml,
+    hint: out.length
+      ? 'The two above merged — the complete template this build runs.'
+      : '',
+  })
+  return out
+}
 
 interface AdvancedPageProps {
   active: boolean
@@ -35,6 +76,8 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   const imageNameEdited = useStore((s) => s.imageNameEdited)
   const setImageName = useStore((s) => s.setImageName)
   const seedImageName = useStore((s) => s.seedImageName)
+  const addedPackages = useStore((s) => s.addedPackages)
+  const enabledRepos = useStore((s) => s.enabledRepos)
 
   const [step, setStep] = useState(0)
   const [composed, setComposed] = useState<ComposeResponse | null>(null)
@@ -57,13 +100,28 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     return () => clearTimeout(t)
   }, [imageName])
 
+  // Package picks are encoded once here, and memoised on the encoded strings
+  // rather than on addedPackages itself: the store hands back a new array on
+  // every selection change, and comparing the joined encoding means re-pinning a
+  // package to the version it already had doesn't trigger a recompose.
+  const packagesKey = useMemo(() => addedPackages.map(encodePackage).sort().join('\n'), [addedPackages])
+  const reposKey = useMemo(() => [...enabledRepos].sort().join('\n'), [enabledRepos])
+
   // The request the backend actually resolves against: the cascade selection,
-  // plus the image name override — only once the user has edited it, and only
-  // the settled (debounced) value, so an in-progress edit doesn't compose
-  // against a half-typed name.
+  // plus the Advanced-mode overrides. The image name is sent only once the user
+  // has edited it, and only the settled (debounced) value, so an in-progress
+  // edit doesn't compose against a half-typed name. Packages and repos need no
+  // debounce of their own — each arrives from a discrete click, not a keystroke.
   const composeReq: ComposeRequest = useMemo(
-    () => ({ ...selection, imageName: imageNameEdited ? debouncedImageName : undefined }),
-    [selection, imageNameEdited, debouncedImageName],
+    () => ({
+      ...selection,
+      imageName: imageNameEdited ? debouncedImageName : undefined,
+      // Omitted rather than sent empty, so a selection with nothing added is
+      // "no override" and the backend resolves the curated template directly.
+      packages: packagesKey ? packagesKey.split('\n') : undefined,
+      repos: reposKey ? reposKey.split('\n') : undefined,
+    }),
+    [selection, imageNameEdited, debouncedImageName, packagesKey, reposKey],
   )
 
   // Entering Advanced always lands on the first step, mirroring the prototype's
@@ -134,14 +192,28 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     }
   }
 
-  const copyYaml = () => composed && navigator.clipboard.writeText(composed.yaml)
+  // Which of the template views the Review step is showing. Deliberately not
+  // reset per compose: an override compose fires on a debounce, so resetting
+  // would yank the user back off "Resolved" every time they touched the image
+  // name. A view that stops existing (the last override was removed) falls back
+  // to the first available one instead.
+  const [view, setView] = useState<TemplateView>('delta')
+  const views = templateViews(composed)
+  const shownView = views.find((v) => v.key === view) ?? views[0]
+  const shownYaml = shownView?.yaml ?? ''
+
+  const copyYaml = () => shownYaml && navigator.clipboard.writeText(shownYaml)
 
   const exportYaml = () => {
-    if (!composed) return
-    const blob = new Blob([composed.yaml], { type: 'text/yaml' })
+    if (!composed || !shownYaml) return
+    const blob = new Blob([shownYaml], { type: 'text/yaml' })
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
-    a.download = composed.template || `${imageName || 'image'}.yml`
+    // The delta is a distinct artifact from the resolved template — exporting
+    // both under the curated parent's name would produce two different files
+    // that claim to be the same one.
+    const base = composed.template || `${imageName || 'image'}.yml`
+    a.download = shownView?.key === 'delta' ? base.replace(/(\.ya?ml)?$/i, '.delta.yml') : base
     a.click()
     URL.revokeObjectURL(a.href)
   }
@@ -176,7 +248,15 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
         ))}
       </div>
 
-      <div className="mx-auto max-w-3xl rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+      {/* The Packages step holds a 240px rail plus a 300px selected-packages
+          rail beside the package pane, which is cramped at the 3xl the
+          single-column steps use. */}
+      <div
+        className={
+          'mx-auto rounded-lg border border-slate-200 bg-white p-6 shadow-sm ' +
+          (step === 1 ? 'max-w-6xl' : 'max-w-3xl')
+        }
+      >
         {step === 0 && (
           <TargetStep
             opts={opts}
@@ -187,16 +267,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
           />
         )}
 
-        {step === 1 && (
-          <div>
-            <h2 className="mb-1 text-lg font-bold text-[#00285a]">Repositories &amp; Packages</h2>
-            <p className="mb-5 text-sm text-slate-500">
-              Choose which package repositories to pull from. Package search and
-              selection will arrive in a later update.
-            </p>
-            <RepoPicker os={selection.os} active={active} />
-          </div>
-        )}
+        {step === 1 && <PackagesStep os={selection.os} active={active} />}
 
         {step === 2 && (
           <div>
@@ -211,7 +282,9 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
           <div>
             <h2 className="mb-1 text-lg font-bold text-[#00285a]">Review Image Configuration</h2>
             <p className="mb-5 text-sm text-slate-500">
-              Review the pre-authored template this combination resolves to.
+              Review the template this combination resolves to. Where you changed
+              something, your changes are shown separately from the pre-authored
+              template they extend.
             </p>
             {error && (
               <div className="mb-3 rounded bg-red-50 p-3 text-sm text-red-700">{error}</div>
@@ -242,10 +315,57 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
                   </table>
                 </div>
 
-                {/* Section 2: Generated YAML — the resolved template, verbatim. */}
+                {/* Pinned a version for a package the curated template already
+                    lists? Both entries survive the merge, so say so rather than
+                    letting the resolved YAML look like a duplicate bug. */}
+                {composed.pinConflicts && composed.pinConflicts.length > 0 && (
+                  <div className="mb-4 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                    <span className="font-semibold">
+                      {composed.pinConflicts.length === 1
+                        ? 'One pinned package is also provided by the base template'
+                        : `${composed.pinConflicts.length} pinned packages are also provided by the base template`}
+                      :
+                    </span>{' '}
+                    {composed.pinConflicts.join(', ')}. Template inheritance combines
+                    package lists rather than replacing them, so the base
+                    template&apos;s own unpinned entry stays alongside your pinned
+                    one and the build may install either version. Choose
+                    &quot;Latest&quot; for these packages to leave the base
+                    template&apos;s entry to decide.
+                  </div>
+                )}
+
+                {/* Section 2: the template, in up to three views. Delta is what
+                    Advanced mode contributed, Base the curated template it
+                    extends, Resolved the merge of the two — which is what a
+                    build actually runs. Only Resolved exists when nothing has
+                    been overridden. */}
                 <div className="rounded-lg border border-slate-200 bg-white">
-                  <div className="flex items-center justify-between border-b border-slate-200 px-4 py-2">
-                    <span className="text-sm font-semibold text-[#00285a]">Generated YAML</span>
+                  <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-2">
+                    {views.length > 1 ? (
+                      <div className="flex gap-1" role="tablist" aria-label="Template view">
+                        {views.map((v) => (
+                          <button
+                            key={v.key}
+                            type="button"
+                            role="tab"
+                            aria-selected={v.key === shownView?.key}
+                            onClick={() => setView(v.key)}
+                            title={v.hint}
+                            className={
+                              'rounded-md px-2.5 py-1 text-xs font-semibold transition-colors ' +
+                              (v.key === shownView?.key
+                                ? 'bg-[#0071c5] text-white'
+                                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900')
+                            }
+                          >
+                            {v.label}
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-sm font-semibold text-[#00285a]">Generated YAML</span>
+                    )}
                     <button
                       type="button"
                       onClick={copyYaml}
@@ -255,8 +375,13 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
                       Copy
                     </button>
                   </div>
+                  {shownView?.hint && (
+                    <p className="border-b border-slate-100 bg-slate-50 px-4 py-1.5 text-[11px] text-slate-500">
+                      {shownView.hint}
+                    </p>
+                  )}
                   <pre className="max-h-[60vh] overflow-auto px-4 py-3 font-mono text-xs leading-relaxed text-slate-700">
-                    {composed.yaml}
+                    {shownYaml}
                   </pre>
                 </div>
 

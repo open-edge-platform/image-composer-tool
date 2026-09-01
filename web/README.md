@@ -213,6 +213,27 @@ If the UI shows *"Failed to load configuration: 500 Internal Server Error"*, the
 backend is not up: Vite reports a refused proxy connection as a 500. Check
 terminal 1, not the browser.
 
+### Package search finds nothing in the Intel repositories
+
+On a network whose only route out is an HTTP proxy, a `no_proxy` containing
+`.intel.com` makes the package picker skip several repositories and take about
+30 seconds to say so. The catalog's Intel-hosted repositories —
+`eci.intel.com`, `amrdocs.intel.com`, `apt.repos.intel.com`,
+`librealsense.intel.com` — are served from public CDNs rather than the internal
+network, so a blanket `.intel.com` bypass sends them direct, where there is no
+route, and each one waits out its full connect timeout before failing.
+
+Drop the blanket entry, keeping genuinely internal hosts direct:
+
+```bash
+export no_proxy="localhost,127.0.0.0/8,192.168.0.0/16,172.16.0.0/12,10.0.0.0/8,gnai.intel.com"
+export NO_PROXY="$no_proxy"
+sudo -E ./build/image-composer-tool serve --sudo   # -E keeps the environment
+```
+
+`sudo` drops the environment without `-E`, which is the usual reason an
+otherwise-correct proxy setup still fails.
+
 ## Type checking
 
 ```bash

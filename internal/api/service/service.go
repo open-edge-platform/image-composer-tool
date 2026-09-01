@@ -16,6 +16,10 @@
 // layer should return, modelled by *Error. Re-deriving those from a private
 // error taxonomy would add a mapping table in the transport layer without
 // making this package any less coupled to the fact that its caller speaks HTTP.
+//
+// SearchPackages is the one exception to "no network I/O": it reads package
+// indexes over HTTP through pkgindexCache, which owns its own caching and
+// concurrency so this package doesn't have to.
 package service
 
 import (
@@ -23,6 +27,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+
+	"github.com/open-edge-platform/image-composer-tool/internal/api/service/pkgindex"
 )
 
 // Config holds the service's runtime configuration.
@@ -35,6 +41,9 @@ type Config struct {
 	// PackageReposPath is an optional repository-catalog file; empty uses the
 	// embedded copy.
 	PackageReposPath string
+	// PkgIndex tunes the package-index cache SearchPackages reads through. A
+	// zero value is usable; see pkgindex.Config for its defaults.
+	PkgIndex pkgindex.Config
 }
 
 // Service holds the API's dependencies and shared state.
@@ -45,6 +54,9 @@ type Service struct {
 	// construction. Read-only after New, so it needs no lock.
 	repos   []PackageRepo
 	tracker *buildTracker
+	// pkgindexCache reads and caches the package indexes SearchPackages
+	// searches. Built once at construction; safe for concurrent use.
+	pkgindexCache *pkgindex.Cache
 
 	// buildMu serializes compose starts so at most one build runs at a time.
 	// activeBuildID names the in-flight build (empty when idle). The slot is held
@@ -112,7 +124,13 @@ func New(cfg Config) (*Service, error) {
 	if cfg.WorkDir == "" {
 		cfg.WorkDir = "webui-workspace"
 	}
-	svc := &Service{cfg: cfg, manifest: m, repos: repos, tracker: newBuildTracker()}
+	svc := &Service{
+		cfg:           cfg,
+		manifest:      m,
+		repos:         repos,
+		tracker:       newBuildTracker(),
+		pkgindexCache: pkgindex.New(cfg.PkgIndex),
+	}
 	svc.signalGroup = svc.signalCancel
 	return svc, nil
 }

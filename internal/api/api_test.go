@@ -4,8 +4,10 @@
 package api
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
-	"io"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -168,6 +170,68 @@ func TestHandleComposeSuccess(t *testing.T) {
 	}
 }
 
+// Packages and repos posted to /templates/compose must reach the resolved
+// template, and the delta/base views must be published alongside it so the
+// Review pane can show what the selection contributed.
+func TestHandleComposeWithPackages(t *testing.T) {
+	s, _ := newTestServer(t)
+	body := `{"vertical":"robotics","sku":"amr","platform":"wcl","os":"ubuntu24","imageType":"iso",` +
+		`"packages":["htop","curl_8.5.0-2ubuntu10.13"],"repos":["docker-ce-ubuntu"]}`
+	rr := s.do(httptest.NewRequest(http.MethodPost, "/api/v1/templates/compose", strings.NewReader(body)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rr.Code, rr.Body)
+	}
+	var resp httpapi.ComposeResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !strings.Contains(resp.Yaml, "htop") {
+		t.Errorf("resolved YAML missing a selected package:\n%s", resp.Yaml)
+	}
+	if resp.DeltaYaml == nil || *resp.DeltaYaml == "" {
+		t.Error("deltaYaml not published for a selection with packages")
+	} else if !strings.Contains(*resp.DeltaYaml, "download.docker.com") {
+		t.Errorf("delta missing the enabled repository:\n%s", *resp.DeltaYaml)
+	}
+	if resp.BaseYaml == nil || *resp.BaseYaml == "" {
+		t.Error("baseYaml not published for a selection with packages")
+	}
+}
+
+// A package name the template schema would reject is a client error, refused
+// before any delta is written.
+func TestHandleComposeRejectsInvalidPackage(t *testing.T) {
+	s, _ := newTestServer(t)
+	body := `{"vertical":"robotics","sku":"amr","platform":"wcl","os":"ubuntu24","imageType":"iso",` +
+		`"packages":["curl; rm -rf /"]}`
+	rr := s.do(httptest.NewRequest(http.MethodPost, "/api/v1/templates/compose", strings.NewReader(body)))
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body: %s)", rr.Code, rr.Body)
+	}
+}
+
+// A build posted with packages but no imageName must still generate a delta —
+// the override gate tested imageName alone before, which would have dropped the
+// picks silently.
+func TestHandleStartBuildWithPackagesOnly(t *testing.T) {
+	s, _ := newTestServer(t)
+	body := `{"compose":{"vertical":"robotics","sku":"amr","platform":"wcl","os":"ubuntu24",` +
+		`"imageType":"iso","packages":["htop"]}}`
+	rr := s.do(httptest.NewRequest(http.MethodPost, "/api/v1/builds", strings.NewReader(body)))
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 (body: %s)", rr.Code, rr.Body)
+	}
+	var acc httpapi.BuildAccepted
+	if err := json.Unmarshal(rr.Body.Bytes(), &acc); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	h, ok := s.svc.Build(acc.BuildId)
+	if !ok {
+		t.Fatalf("build %s not tracked", acc.BuildId)
+	}
+	<-h.Done()
+}
+
 func TestHandleComposeErrors(t *testing.T) {
 	s, _ := newTestServer(t)
 	cases := []struct {
@@ -212,38 +276,87 @@ func TestHandleComposeInvalidTemplate(t *testing.T) {
 	}
 }
 
-// --- advanced-mode stubs (contract-only; replaced in later PRs) ---
+// --- package search ---
 
-// The remaining Advanced-mode endpoint is wired to the generated interface but
-// not yet implemented — it returns 501 with the standard error envelope. This
-// guards the contract-only behavior; the PR that implements it deletes this test.
-// (POST /templates/validate and GET /package-repos are implemented — see
-// TestHandleValidateTemplate and TestHandleListPackageRepos.)
-func TestHandleAdvancedStubsNotImplemented(t *testing.T) {
-	s, _ := newTestServer(t)
-	cases := []struct {
-		name, method, path, body string
-	}{
-		{"packages-search", http.MethodGet, "/api/v1/packages/search?q=doc&os=ubuntu24", ""},
+// packagesFixtureServer serves a single Packages.gz for the noble/main/amd64
+// deb index, so a real /packages/search request has something to fetch.
+func packagesFixtureServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	stanza := "Package: ros-jazzy-rviz2\nVersion: 14.1.4-1\nArchitecture: amd64\n" +
+		"Description: ROS 2 3D visualization tool\n\n"
+	if _, err := gz.Write([]byte(stanza)); err != nil {
+		t.Fatalf("gzip write: %v", err)
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			var body io.Reader
-			if c.body != "" {
-				body = strings.NewReader(c.body)
-			}
-			rr := s.do(httptest.NewRequest(c.method, c.path, body))
-			if rr.Code != http.StatusNotImplemented {
-				t.Fatalf("status = %d, want 501 (body: %s)", rr.Code, rr.Body)
-			}
-			var eb httpapi.Error
-			if err := json.Unmarshal(rr.Body.Bytes(), &eb); err != nil {
-				t.Fatalf("error decode: %v", err)
-			}
-			if eb.Error.Code != "NOT_IMPLEMENTED" || eb.Error.Message == "" {
-				t.Errorf("error envelope = %+v, want code NOT_IMPLEMENTED with message", eb.Error)
-			}
-		})
+	if err := gz.Close(); err != nil {
+		t.Fatalf("gzip close: %v", err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/dists/noble/main/binary-amd64/Packages.gz", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(buf.Bytes())
+	})
+	return httptest.NewServer(mux)
+}
+
+// TestHandleSearchPackages exercises GET /packages/search end to end — decode,
+// service, pkgindex fetch, and response mapping — through a fixture repo
+// catalog and a local httptest index server. This replaces the earlier 501
+// stub test, which only asserted the endpoint was wired, not that it worked.
+func TestHandleSearchPackages(t *testing.T) {
+	fixture := packagesFixtureServer(t)
+	defer fixture.Close()
+
+	reposYAML := fmt.Sprintf(`repos:
+  - id: ros2-jazzy
+    displayName: ROS 2 Jazzy
+    url: %s
+    index:
+      - codename: noble
+        component: main
+`, fixture.URL)
+	reposPath := filepath.Join(t.TempDir(), "package-repos.yaml")
+	if err := os.WriteFile(reposPath, []byte(reposYAML), 0o644); err != nil {
+		t.Fatalf("write repos fixture: %v", err)
+	}
+
+	manifest := `targets:
+  - {id: ubuntu24, displayName: "Ubuntu 24.04", os: ubuntu, arch: x86_64}
+`
+	mpath := filepath.Join(t.TempDir(), "manifest.yaml")
+	if err := os.WriteFile(mpath, []byte(manifest), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	srv, err := New(Config{TemplatesDir: t.TempDir(), ManifestPath: mpath, PackageReposPath: reposPath})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	rr := srv.do(httptest.NewRequest(http.MethodGet, "/api/v1/packages/search?os=ubuntu24&q=ros", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rr.Code, rr.Body)
+	}
+	var out httpapi.PackageSearchResults
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out.Packages) != 1 || out.Packages[0].Name != "ros-jazzy-rviz2" {
+		t.Fatalf("got %+v, want exactly ros-jazzy-rviz2", out.Packages)
+	}
+	if out.Packages[0].Repository != "ros2-jazzy" || out.Packages[0].Version != "14.1.4-1" {
+		t.Errorf("got repo %q version %q, want ros2-jazzy / 14.1.4-1",
+			out.Packages[0].Repository, out.Packages[0].Version)
+	}
+}
+
+// A query below the minimum length is a 400, surfaced through the real handler
+// and its error envelope — not just the service layer.
+func TestHandleSearchPackagesQueryTooShort(t *testing.T) {
+	s, _ := newTestServer(t)
+	rr := s.do(httptest.NewRequest(http.MethodGet, "/api/v1/packages/search?os=ubuntu24&q=a", nil))
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body: %s)", rr.Code, rr.Body)
 	}
 }
 
@@ -351,6 +464,84 @@ func TestHandleListPackageRepos(t *testing.T) {
 			t.Errorf("repos not ordered by descending priority at %d: %d then %d",
 				i, *out.Repos[i-1].Priority, *out.Repos[i].Priority)
 		}
+	}
+}
+
+// hasSigningKey is always emitted, and true for every optional repo the catalog
+// ships. The client warns on a false, so a nil would read as "unsigned" and warn
+// on every repository.
+func TestHandleListPackageReposReportsSigningKey(t *testing.T) {
+	s, _ := newTestServer(t)
+	out := s.getRepos(t, "")
+	seen := map[string]bool{}
+	for _, r := range out.Repos {
+		if r.HasSigningKey == nil {
+			t.Errorf("repo %q: hasSigningKey not serialized", r.Id)
+			continue
+		}
+		seen[r.Id] = *r.HasSigningKey
+		// Every optional repo carries a pkey.
+		if !r.EnabledByDefault && !*r.HasSigningKey {
+			t.Errorf("optional repo %q reports no signing key", r.Id)
+		}
+	}
+	// The Ubuntu base repos are never given a pkey — toTemplateRepos skips base
+	// repos entirely, so one would never be used — but they do carry a local
+	// GPGKeyPath the picker's own search verifies against, so they must still
+	// report true rather than warn the user about a verification gap they don't
+	// have.
+	for _, id := range []string{"ubuntu-noble-base", "ubuntu-resolute-base"} {
+		if !seen[id] {
+			t.Errorf("base repo %q reports no signing key despite its local keyring", id)
+		}
+	}
+}
+
+// The key URL stays server-side for the same reason the curated list does: the
+// client needs only to know whether to warn.
+func TestHandleListPackageReposOmitsTheKeyURL(t *testing.T) {
+	s, _ := newTestServer(t)
+	rr := s.do(httptest.NewRequest(http.MethodGet, "/api/v1/package-repos", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	if body := rr.Body.String(); strings.Contains(body, "pkey") {
+		t.Error("response carries the pkey URL; want only the hasSigningKey flag")
+	}
+}
+
+// hasCuratedPackages is always emitted, and reports true for at least the base
+// repos. The client hides its "Show frequently used" toggle on a false, so a nil
+// would read as "no curated packages" for every repo and hide it everywhere.
+func TestHandleListPackageReposReportsCuratedAvailability(t *testing.T) {
+	s, _ := newTestServer(t)
+	out := s.getRepos(t, "")
+	curated := 0
+	for _, r := range out.Repos {
+		if r.HasCuratedPackages == nil {
+			t.Errorf("repo %q: hasCuratedPackages not serialized", r.Id)
+			continue
+		}
+		if *r.HasCuratedPackages {
+			curated++
+		}
+	}
+	if curated == 0 {
+		t.Error("no repo reports curated packages; want at least the base repos")
+	}
+}
+
+// The curated list itself stays server-side: the browser sends curated=true and
+// the server filters, so publishing the names would be a second source of truth
+// the UI could silently disagree with.
+func TestHandleListPackageReposOmitsTheCuratedList(t *testing.T) {
+	s, _ := newTestServer(t)
+	rr := s.do(httptest.NewRequest(http.MethodGet, "/api/v1/package-repos", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	if body := rr.Body.String(); strings.Contains(body, "curatedPackages\"") {
+		t.Error("response carries the curatedPackages list; want only the hasCuratedPackages flag")
 	}
 }
 

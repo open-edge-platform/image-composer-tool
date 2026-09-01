@@ -3,16 +3,18 @@
 #
 # Catalog of package repositories offered by the ICT Web UI Advanced tab.
 #
-# This is presentation metadata for the repository picker: it gives each repo a
-# human label, a description, and a default toggle state. It is NOT the build
-# configuration — the repos a build actually uses come from the template's
-# `packageRepositories:` block and the per-OS `providerconfigs/`. The URLs here
-# mirror those sources so the picker offers real, tested repositories.
+# The presentation fields give each repo a human label, a description, and a
+# default toggle state. This is NOT the build configuration — the repos a build
+# actually uses come from the template's `packageRepositories:` block and the
+# per-OS `providerconfigs/`. The entries here mirror those two sources so the
+# picker only ever offers real, tested repositories; repos_test.go asserts that
+# mirroring holds, so a template gaining a repo fails the build until it is
+# listed here too.
 #
 # Fields:
 #   id                stable identifier; what the UI and /packages/search send back
 #   displayName       label shown in the picker
-#   url               repository base URL (informational in the UI)
+#   url               repository base URL; also the default for each index entry
 #   description       one-line explanation of what the repo provides
 #   enabledByDefault  seeds the toggle; true for each target's base OS repo
 #   priority          higher wins when a package exists in several repos.
@@ -20,15 +22,92 @@
 #                     authored templates set it, so the picker matches a real build.
 #   os                target ids (manifest `targets[].id`) this repo applies to.
 #                     Omitted means it applies to every target.
+#   type              "deb" (default) or "rpm"; selects the index layout.
+#   index             the package indexes a search reads for this repo. One entry
+#                     per (host, suite, arch) that has its own index:
+#                       url         overrides the repo url for this index only
+#                       codename    deb suite (the dists/ path segment)
+#                       component   space-separated, as in the providerconfigs
+#                       arch        manifest arches this index serves; omitted = all
+#                     Omitting `index` entirely means the repo is offered in the
+#                     picker but is not yet searchable.
+#   pkey              GPG signing-key URL written as this repo's `pkey` when
+#                     enabling it emits a `packageRepositories` entry into a
+#                     generated Advanced-mode delta. Every value here is the key
+#                     an authored template already uses for the same repository,
+#                     so a delta verifies against exactly what a hand-written
+#                     build would. Distinct from `gpgKeyPath`: this is a URL a
+#                     build fetches, that is a local file a package search
+#                     reads. Omitted on the base OS repos, which a delta never
+#                     re-declares — the providerconfigs already configure them.
+#                     A repo with no pkey is still selectable, but its packages
+#                     are fetched unverified and /package-repos reports
+#                     hasSigningKey:false so the UI can say so.
+#   curatedPackages   hand-picked "frequently used" package names for this repo;
+#                     what the browse pane's "Show frequently used" toggle narrows
+#                     the list to. Every name must actually exist in the repo's
+#                     index — a name that doesn't simply never appears, which reads
+#                     as the toggle being broken. Omitted or empty means the repo
+#                     has no curated picks and the browse pane hides the toggle
+#                     entirely, rather than offering one that yields nothing.
+#
+# Where a template omits `component`, the value here is `main` — that is what
+# generateAptSourcesContent in internal/config/apt_sources.go substitutes, so
+# the search reads exactly the component a build would install from.
+#
+# Only the manifest's own targets are listed. The repos under
+# config/osv/{azure-linux,edge-microvisor-toolkit,redhat-compatible-distro,
+# wind-river-elxr}/ and their templates are intentionally absent: no manifest
+# combination targets them, so the picker can never query them. Add them
+# alongside the manifest target that makes them reachable.
 
 repos:
   # ── Base OS repositories: always on, one per target ──────────────────
+  #
+  # Each base repo spans three suites (release, -security, -updates). Ubuntu
+  # splits them across two hosts and serves arm64 from a third, so its index
+  # list is longer than the others; Debian serves every suite and arch from
+  # deb.debian.org.
   - id: ubuntu-noble-base
     displayName: Ubuntu 24.04 Base (noble)
     url: http://archive.ubuntu.com/ubuntu
     description: Ubuntu 24.04 LTS main, restricted, universe and multiverse components.
     enabledByDefault: true
     os: [ubuntu24]
+    gpgKeyPath: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+    curatedPackages:
+      - build-essential
+      - ca-certificates
+      - curl
+      - network-manager
+      - openssh-server
+      - python3
+      - sudo
+      - systemd
+      - vim
+    index:
+      - codename: noble
+        component: main restricted universe multiverse
+        arch: [x86_64]
+      - codename: noble-updates
+        component: main restricted universe multiverse
+        arch: [x86_64]
+      - url: http://security.ubuntu.com/ubuntu
+        codename: noble-security
+        component: main restricted universe multiverse
+        arch: [x86_64]
+      - url: http://ports.ubuntu.com/ubuntu-ports
+        codename: noble
+        component: main restricted universe multiverse
+        arch: [aarch64]
+      - url: http://ports.ubuntu.com/ubuntu-ports
+        codename: noble-updates
+        component: main restricted universe multiverse
+        arch: [aarch64]
+      - url: http://ports.ubuntu.com/ubuntu-ports
+        codename: noble-security
+        component: main restricted universe multiverse
+        arch: [aarch64]
 
   - id: ubuntu-resolute-base
     displayName: Ubuntu 26.04 Base (resolute)
@@ -36,6 +115,40 @@ repos:
     description: Ubuntu 26.04 main, restricted, universe and multiverse components.
     enabledByDefault: true
     os: [ubuntu26-server]
+    gpgKeyPath: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+    curatedPackages:
+      - build-essential
+      - ca-certificates
+      - curl
+      - network-manager
+      - openssh-server
+      - python3
+      - sudo
+      - systemd
+      - vim
+    index:
+      - codename: resolute
+        component: main restricted universe multiverse
+        arch: [x86_64]
+      - codename: resolute-updates
+        component: main restricted universe multiverse
+        arch: [x86_64]
+      - url: http://security.ubuntu.com/ubuntu
+        codename: resolute-security
+        component: main restricted universe multiverse
+        arch: [x86_64]
+      - url: http://ports.ubuntu.com/ubuntu-ports
+        codename: resolute
+        component: main restricted universe multiverse
+        arch: [aarch64]
+      - url: http://ports.ubuntu.com/ubuntu-ports
+        codename: resolute-updates
+        component: main restricted universe multiverse
+        arch: [aarch64]
+      - url: http://ports.ubuntu.com/ubuntu-ports
+        codename: resolute-security
+        component: main restricted universe multiverse
+        arch: [aarch64]
 
   - id: debian-trixie-base
     displayName: Debian 13 Base (trixie)
@@ -43,6 +156,24 @@ repos:
     description: Debian 13 main, contrib, non-free and non-free-firmware components.
     enabledByDefault: true
     os: [debian13]
+    curatedPackages:
+      - build-essential
+      - ca-certificates
+      - curl
+      - network-manager
+      - openssh-server
+      - python3
+      - sudo
+      - systemd
+      - vim
+    index:
+      - codename: trixie
+        component: main contrib non-free non-free-firmware
+      - codename: trixie-updates
+        component: main contrib non-free non-free-firmware
+      - url: http://deb.debian.org/debian-security
+        codename: trixie-security
+        component: main contrib non-free non-free-firmware
 
   # ── Optional repositories for Ubuntu 24.04 targets ───────────────────
   - id: ros2-jazzy
@@ -50,7 +181,20 @@ repos:
     url: http://packages.ros.org/ros2/ubuntu
     description: ROS 2 Jazzy Jalisco robotics middleware, tooling and message packages.
     enabledByDefault: false
+    pkey: https://raw.githubusercontent.com/ros/rosdistro/master/ros.key
     os: [ubuntu24]
+    # The metapackages a ROS 2 image usually starts from, rather than any of the
+    # ~8400 individual message/driver packages behind them.
+    curatedPackages:
+      - ros-dev-tools
+      - ros-jazzy-desktop
+      - ros-jazzy-navigation2
+      - ros-jazzy-ros-base
+      - ros-jazzy-rviz2
+      - ros-jazzy-slam-toolbox
+    index:
+      - codename: noble
+        component: main
 
   - id: intel-eci
     displayName: Intel Edge Controls for Industrial (ECI)
@@ -58,7 +202,11 @@ repos:
     description: Real-time and industrial packages — systemd with ETF/TAPRIO, PCL and FLANN built against oneAPI.
     enabledByDefault: false
     priority: 1000
+    pkey: https://eci.intel.com/repos/gpg-keys/GPG-PUB-KEY-INTEL-ECI.gpg
     os: [ubuntu24]
+    index:
+      - codename: isar
+        component: main
 
   - id: intel-amr
     displayName: Intel Autonomous Mobile Robots (AMR)
@@ -66,21 +214,46 @@ repos:
     description: AMR robotics stack; overrides ECI where both provide a package.
     enabledByDefault: false
     priority: 1001
+    pkey: https://eci.intel.com/repos/gpg-keys/GPG-PUB-KEY-INTEL-ECI.gpg
     os: [ubuntu24]
+    index:
+      - codename: amr
+        component: main
 
   - id: intel-openvino
     displayName: Intel OpenVINO 2025
     url: https://apt.repos.intel.com/openvino/2025
     description: OpenVINO inference engine runtime and development packages.
     enabledByDefault: false
+    pkey: https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
     os: [ubuntu24]
+    index:
+      - codename: ubuntu24
+        component: main
+
+  - id: intel-oneapi
+    displayName: Intel oneAPI
+    url: https://apt.repos.intel.com/oneapi
+    description: Intel oneAPI runtime libraries — compilers, OpenCL and math kernels.
+    enabledByDefault: false
+    pkey: https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
+    # Offered to every target: the "all" codename is distribution-neutral, so
+    # one index serves Ubuntu and Debian alike.
+    os: [ubuntu24, debian13, ubuntu26-server]
+    index:
+      - codename: all
+        component: main
 
   - id: intel-dlstreamer
     displayName: Intel DL Streamer
     url: https://apt.repos.intel.com/edgeai/dlstreamer/ubuntu24
     description: Deep Learning Streamer media analytics pipeline framework.
     enabledByDefault: false
+    pkey: https://apt.repos.intel.com/edgeai/dlstreamer/GPG-PUB-KEY-INTEL-DLS.gpg
     os: [ubuntu24]
+    index:
+      - codename: ubuntu24
+        component: main
 
   - id: intel-linux-overlay
     displayName: Intel Linux Overlay
@@ -88,19 +261,199 @@ repos:
     description: Intel-tuned kernels, multimedia and firmware packages.
     enabledByDefault: false
     priority: 2000
+    pkey: https://download.01.org/intel-linux-overlay/ubuntu/E6FA98203588250569758E97D176E3162086EE4C.gpg
     os: [ubuntu24]
+    curatedPackages:
+      - ethtool
+      - ffmpeg
+      - gstreamer1.0-plugins-bad
+      - gstreamer1.0-vaapi
+      - intel-gmmlib
+      - intel-media-va-driver-non-free
+    index:
+      - codename: noble
+        component: multimedia main non-free kernels
 
   - id: intel-graphics
     displayName: Intel Graphics (kobuk-team)
     url: https://ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu
     description: Intel client GPU compute runtime and media driver packages.
     enabledByDefault: false
+    pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x0C0E6AF955CE463C03FC51574D098D70AFBE5E1F"
     os: [ubuntu24]
+    curatedPackages:
+      - intel-media-va-driver-non-free
+      - intel-opencl-icd
+      - libze-intel-gpu1
+      - libze1
+      - linux-image-intel
+      - vainfo
+      - xpu-smi
+    index:
+      - codename: noble
+        component: main
+
+  # Intel is moving RealSense to realsenseai.com; both hosts are still
+  # referenced by templates in this repo, so both are offered.
+  - id: librealsense
+    displayName: Intel RealSense (RealSense AI)
+    url: https://librealsense.realsenseai.com/Debian/apt-repo
+    description: Intel RealSense depth-camera SDK, DKMS kernel modules and tools.
+    enabledByDefault: false
+    pkey: https://librealsense.realsenseai.com/Debian/librealsenseai.asc
+    os: [ubuntu24]
+    curatedPackages:
+      - librealsense2
+      - librealsense2-dev
+      - librealsense2-dkms
+      - librealsense2-udev-rules
+      - librealsense2-utils
+    index:
+      - codename: noble
+        component: main
+
+  - id: librealsense-intel
+    displayName: Intel RealSense (legacy intel.com host)
+    url: https://librealsense.intel.com/Debian/apt-repo
+    description: Intel RealSense SDK from the original intel.com host, still used by some templates.
+    enabledByDefault: false
+    priority: 500
+    pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xFB0B24895113F120"
+    os: [ubuntu24]
+    index:
+      - codename: noble
+        component: main
+
+  - id: gazebo
+    displayName: Gazebo (OSRF)
+    url: https://packages.osrfoundation.org/gazebo/ubuntu-stable
+    description: Gazebo Harmonic physics simulator and its OSRF dependencies.
+    enabledByDefault: false
+    pkey: https://packages.osrfoundation.org/gazebo.gpg
+    os: [ubuntu24]
+    # The release metapackages, not the per-library gz-jetty-* components.
+    curatedPackages:
+      - gz-harmonic
+      - gz-ionic
+      - gz-jetty
+      - gz-jetty-gui
+      - gz-jetty-sim
+      - gz-jetty-tools
+    index:
+      - codename: noble
+        component: main
+
+  - id: docker-ce-ubuntu
+    displayName: Docker CE (Ubuntu)
+    url: https://download.docker.com/linux/ubuntu
+    description: Docker Community Edition engine, CLI and containerd packages.
+    enabledByDefault: false
+    priority: 500
+    pkey: https://download.docker.com/linux/ubuntu/gpg
+    os: [ubuntu24]
+    curatedPackages:
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-ce
+      - docker-ce-cli
+      - docker-compose-plugin
+    index:
+      - codename: noble
+        component: stable
+
+  - id: mozilla-apt
+    displayName: Mozilla
+    url: https://packages.mozilla.org/apt
+    description: Mozilla-built Firefox and Thunderbird packages.
+    enabledByDefault: false
+    priority: 1000
+    pkey: https://packages.mozilla.org/apt/repo-signing-key.gpg
+    # Distribution-neutral, like oneAPI: a single "mozilla" suite serves every
+    # Debian-family target. Publishes an uncompressed Packages only, which the
+    # fetcher falls back to after Packages.gz and .xz.
+    os: [ubuntu24, debian13, ubuntu26-server]
+    curatedPackages:
+      - firefox
+      - firefox-esr
+      - mozillavpn
+    index:
+      - codename: mozilla
+        component: main
 
   # ── Optional repositories for Debian 13 targets ──────────────────────
   - id: docker-ce
-    displayName: Docker CE
+    displayName: Docker CE (Debian)
     url: https://download.docker.com/linux/debian
     description: Docker Community Edition engine, CLI and containerd packages.
     enabledByDefault: false
+    pkey: https://download.docker.com/linux/debian/gpg
     os: [debian13]
+    curatedPackages:
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-ce
+      - docker-ce-cli
+      - docker-compose-plugin
+    index:
+      # trixie is Debian 13's own suite; bookworm here served Debian 12
+      # packages to a Debian 13 target.
+      - codename: trixie
+        component: stable
+
+  - id: docker-ce-ubuntu-resolute
+    displayName: Docker CE (Ubuntu)
+    url: https://download.docker.com/linux/ubuntu
+    description: Docker Community Edition engine, CLI and containerd packages.
+    enabledByDefault: false
+    priority: 500
+    pkey: https://download.docker.com/linux/ubuntu/gpg
+    os: [ubuntu26-server]
+    curatedPackages:
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-ce
+      - docker-ce-cli
+      - docker-compose-plugin
+    index:
+      - codename: resolute
+        component: stable
+
+  - id: gazebo-resolute
+    displayName: Gazebo (OSRF)
+    url: https://packages.osrfoundation.org/gazebo/ubuntu-stable
+    description: Open Source Robotics Foundation simulator packages.
+    enabledByDefault: false
+    pkey: https://packages.osrfoundation.org/gazebo.gpg
+    os: [ubuntu26-server]
+    # The resolute suite carries the gz-jetty components rather than the
+    # gz-harmonic/gz-jetty release metapackages the noble suite offers.
+    curatedPackages:
+      - gz-jetty-common
+      - gz-jetty-fuel-tools
+      - gz-jetty-math
+      - gz-jetty-msgs
+      - gz-jetty-physics
+      - gz-jetty-sdformat
+      - gz-jetty-tools
+      - gz-jetty-transport
+    index:
+      - codename: resolute
+        component: main
+
+  - id: ros2-lyrical
+    displayName: ROS 2 Lyrical
+    url: http://packages.ros.org/ros2/ubuntu
+    description: ROS 2 Lyrical, the distribution built for Ubuntu 26.04.
+    enabledByDefault: false
+    pkey: https://raw.githubusercontent.com/ros/rosdistro/master/ros.key
+    os: [ubuntu26-server]
+    # Lyrical publishes no navigation2 metapackage yet, unlike Jazzy.
+    curatedPackages:
+      - ros-dev-tools
+      - ros-lyrical-desktop
+      - ros-lyrical-ros-base
+      - ros-lyrical-rviz2
+      - ros-lyrical-slam-toolbox
+    index:
+      - codename: resolute
+        component: main

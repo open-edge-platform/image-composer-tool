@@ -11,6 +11,22 @@ export interface Selection {
   imageType: string
 }
 
+// A package the user added in the Packages step. `version` is '' for a
+// floating "latest" pick, or a specific version string when pinned.
+export interface AddedPackage {
+  name: string
+  version: string
+  repo: string
+}
+
+// Encodes a package pick for the boundary where a single string is needed
+// (e.g. a future compose request field). Kept as a record + this encoder,
+// rather than encoding at rest, so nothing has to parse `name_version` back
+// apart — rpm names may themselves contain `_`.
+export function encodePackage(p: AddedPackage): string {
+  return p.version ? `${p.name}_${p.version}` : p.name
+}
+
 interface AppState {
   manifest: Manifest | null
   selection: Selection
@@ -19,12 +35,32 @@ interface AppState {
   // imageName and, once the user types, `imageNameEdited` guards it from reseeds.
   imageName: string
   imageNameEdited: boolean
+  // Repos the user turned on in the Packages step. A repo the catalog marks
+  // enabledByDefault is always on and is never listed here — its toggle renders
+  // disabled. Kept out of `Selection` for the same reason imageName is: the
+  // compose request has no field for it.
+  enabledRepos: string[]
+  // Packages the user added in the Packages step. Kept out of `Selection` for
+  // the same reason: the compose request has no field for it yet.
+  addedPackages: AddedPackage[]
   setManifest: (m: Manifest) => void
   setField: (key: keyof Selection, value: string) => void
   // User-typed image name (marks it edited so seedImageName stops overwriting it).
   setImageName: (value: string) => void
   // Default image name from the resolved template; ignored once the user edits.
   seedImageName: (value: string) => void
+  // Disabling a repo also drops any packages added from it — a disabled repo's
+  // packages have nowhere to resolve from at compose time.
+  setRepoEnabled: (repo: string, on: boolean) => void
+  // Upserts by name: adding a package already present (e.g. re-pinning its
+  // version) replaces the existing entry rather than duplicating it.
+  setPackage: (p: AddedPackage) => void
+  removePackage: (name: string) => void
+  // Batch forms of setPackage/removePackage for "Select all": one state
+  // update for the whole list instead of one per package.
+  setPackages: (pkgs: AddedPackage[]) => void
+  removePackages: (names: string[]) => void
+  clearPackages: () => void
 }
 
 const emptySelection: Selection = {
@@ -41,10 +77,40 @@ export const useStore = create<AppState>((set) => ({
   selection: emptySelection,
   imageName: '',
   imageNameEdited: false,
+  enabledRepos: [],
+  addedPackages: [],
   setManifest: (m) => set({ manifest: m }),
   setImageName: (value) => set({ imageName: value, imageNameEdited: true }),
   seedImageName: (value) =>
     set((state) => (state.imageNameEdited ? {} : { imageName: value })),
+  setRepoEnabled: (repo, on) =>
+    set((state) => ({
+      enabledRepos: on
+        ? state.enabledRepos.includes(repo)
+          ? state.enabledRepos
+          : [...state.enabledRepos, repo]
+        : state.enabledRepos.filter((r) => r !== repo),
+      ...(on ? {} : { addedPackages: state.addedPackages.filter((p) => p.repo !== repo) }),
+    })),
+  setPackage: (p) =>
+    set((state) => ({
+      addedPackages: [...state.addedPackages.filter((x) => x.name !== p.name), p],
+    })),
+  removePackage: (name) =>
+    set((state) => ({
+      addedPackages: state.addedPackages.filter((p) => p.name !== name),
+    })),
+  setPackages: (pkgs) =>
+    set((state) => {
+      const names = new Set(pkgs.map((p) => p.name))
+      return { addedPackages: [...state.addedPackages.filter((x) => !names.has(x.name)), ...pkgs] }
+    }),
+  removePackages: (names) =>
+    set((state) => {
+      const drop = new Set(names)
+      return { addedPackages: state.addedPackages.filter((p) => !drop.has(p.name)) }
+    }),
+  clearPackages: () => set({ addedPackages: [] }),
   setField: (key, value) =>
     set((state) => {
       const selection = { ...state.selection, [key]: value }
@@ -80,7 +146,22 @@ export const useStore = create<AppState>((set) => ({
       }
       // Any selection change resolves to a (possibly) different template, so let
       // the image name re-track the new default until edited again.
-      return { selection, imageNameEdited: false }
+      //
+      // Enabled repos and added packages are dropped only when the target OS
+      // actually changes, because repo ids (and the packages resolved from
+      // them) are scoped to a target — keeping them would leave an ubuntu24
+      // repo/package enabled under a Debian target. Unlike imageName, which
+      // re-seeds itself from the next compose response, there is no server-side
+      // default to fall back to, so empty is the only sane value. Comparing the
+      // post-cascade os (autoFillCascade above may refill it with the same
+      // value) means a SKU or platform tweak within one OS keeps the user's
+      // toggles.
+      const osChanged = selection.os !== state.selection.os
+      return {
+        selection,
+        imageNameEdited: false,
+        ...(osChanged ? { enabledRepos: [], addedPackages: [] } : {}),
+      }
     }),
 }))
 

@@ -104,10 +104,35 @@ func (s *Server) ListPackageRepos(w http.ResponseWriter, _ *http.Request, params
 
 // SearchPackages handles GET /packages/search.
 //
-// Not yet implemented: contract-only for now (see ListPackageRepos). The package
-// search logic lands in a later PR. Returns 501 until then.
-func (s *Server) SearchPackages(w http.ResponseWriter, _ *http.Request, _ httpapi.SearchPackagesParams) {
-	writeError(w, http.StatusNotImplemented, "NOT_IMPLEMENTED", "package search is not yet implemented")
+// Omitting `q` browses a repository's catalog instead of searching it — the
+// `limit`/`offset` pair pages through the result either way.
+func (s *Server) SearchPackages(w http.ResponseWriter, r *http.Request, params httpapi.SearchPackagesParams) {
+	var query string
+	if params.Q != nil {
+		query = *params.Q
+	}
+	var repos []string
+	if params.Repos != nil {
+		repos = *params.Repos
+	}
+	limit := 0
+	if params.Limit != nil {
+		limit = *params.Limit
+	}
+	offset := 0
+	if params.Offset != nil {
+		offset = *params.Offset
+	}
+	curated := false
+	if params.Curated != nil {
+		curated = *params.Curated
+	}
+	hits, total, err := s.svc.SearchPackages(r.Context(), params.Os, query, repos, limit, offset, curated)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, fromPackageSearchResults(query, hits, total))
 }
 
 // ValidateTemplate handles POST /templates/validate.
