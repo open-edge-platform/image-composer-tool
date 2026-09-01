@@ -77,7 +77,7 @@ metadata:
 
 image:
   name: debian13-bb-overlay-base
-  version: "13.0.1"
+  version: "13.0.2"
 
 target:
   os: debian
@@ -221,18 +221,25 @@ systemConfig:
     - lshw
     - lsof
     - strace
-    # Firmware the base / initrd may load at boot
-    - firmware-linux-free
-    - firmware-misc-nonfree
+    # Firmware the base / initrd may load at boot. firmware-linux-free /
+    # firmware-misc-nonfree are the old monolithic packages; trixie splits Intel
+    # firmware out into these dedicated packages (same set the
+    # image-templates/debian13-x86_64-bb-raw.yml / bb-dracut-raw.yml templates use)
+    # — without firmware-intel-graphics the iGPU's GuC/HuC firmware (e.g.
+    # i915/mtl_guc_*.bin on Meteor Lake/Arrow Lake) is missing on real hardware,
+    # wedging the GPU.
+    - firmware-intel-graphics
+    - firmware-intel-misc
+    - firmware-iwlwifi
 
   # ---------------------------------------------------------------------------
   # Custom dracut module (91hello) for Bayonne Bridge early-boot requirements.
   #
-  # These are the SAME module files the create-mode sibling
-  # debian13-x86_64-bb-dracut-raw.yml uses, dropped into the dracut module tree
-  # at /usr/lib/dracut/modules.d/91hello. Overlay now applies additionalFiles, so
-  # the module is delivered declaratively rather than via base64-encoded config
-  # commands as before.
+  # These are the SAME module files the create-mode
+  # image-templates/debian13-x86_64-bb-dracut-raw.yml uses, dropped into the
+  # dracut module tree at /usr/lib/dracut/modules.d/91hello. Overlay now applies
+  # additionalFiles, so the module is delivered declaratively rather than via
+  # base64-encoded config commands as before.
   #
   # stage: pre-initramfs is REQUIRED. It copies these files BEFORE the overlay's
   # Boot Regeneration stage runs, so the module is present in the dracut tree when

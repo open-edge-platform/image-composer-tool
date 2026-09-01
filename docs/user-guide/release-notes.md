@@ -14,6 +14,8 @@
 
 **Fixed**
 
+- Debian 13 Bayonne Bridge templates shipped the old monolithic `firmware-linux(-free)`/`firmware-misc-nonfree` packages, so real hardware failed to load the iGPU's GuC firmware at boot (`i915: GuC firmware ... fetch failed -ENOENT`, wedging the GPU) and the graphics child template was missing `firmware-sof-signed`, so SOF audio DSP firmware also failed to load (`failed to load intel/sof-ipc4/arl/sof-arl.ri`, no audio). The overlay base now installs Trixie's split Intel firmware packages (`firmware-intel-graphics`, `firmware-intel-misc`, `firmware-iwlwifi`) matching every other debian13 template, and the graphics child adds `firmware-sof-signed`.
+
 - Attended installer TUI froze on the very first "Next"/"Go Back"/Ctrl+C press: page navigation and the exit-confirmation prompt called `tview`'s `QueueUpdateDraw` synchronously from within the UI's own event-loop goroutine, which deadlocks since that call blocks waiting for the same goroutine to service it. Navigation now runs directly and synchronously, since it's already invoked from that goroutine.
 
 ## Version 2026.1
