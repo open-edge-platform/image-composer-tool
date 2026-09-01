@@ -457,24 +457,6 @@ func parsedMetadataCacheMatches(cache *rpmParsedMetadataCache, metadataID string
 	return cache.Primary.matches(primary)
 }
 
-func loadRPMPrimaryLocationCache(cacheFile string) (string, error) {
-	data, err := os.ReadFile(cacheFile)
-	if err != nil {
-		return "", err
-	}
-
-	var cache rpmPrimaryLocationCache
-	if err := json.Unmarshal(data, &cache); err != nil {
-		return "", fmt.Errorf("invalid rpm primary location cache: %w", err)
-	}
-
-	if cache.PrimaryHref == "" {
-		return "", fmt.Errorf("empty primary href in cache")
-	}
-
-	return cache.PrimaryHref, nil
-}
-
 func saveRPMPrimaryLocationCache(cacheFile string, primary rpmPrimaryReference) error {
 	cache := rpmPrimaryLocationCache{PrimaryHref: primary.Href, Primary: primary}
 
@@ -1169,14 +1151,6 @@ func fetchPrimaryReference(repomdURL string) (rpmPrimaryReference, error) {
 	return primary, nil
 }
 
-func loadPrimaryLocationFromCachedRepomd(xmlCacheDir string) (string, error) {
-	primary, err := loadPrimaryReferenceFromCachedRepomd(xmlCacheDir)
-	if err != nil {
-		return "", err
-	}
-	return primary.Href, nil
-}
-
 func loadPrimaryReferenceFromCachedRepomd(xmlCacheDir string) (rpmPrimaryReference, error) {
 	stablePath := filepath.Join(xmlCacheDir, "repomd.xml")
 	if data, err := os.ReadFile(stablePath); err == nil {
@@ -1209,14 +1183,6 @@ func loadPrimaryReferenceFromCachedRepomd(xmlCacheDir string) (rpmPrimaryReferen
 	}
 
 	return rpmPrimaryReference{}, fmt.Errorf("failed to parse primary location from cached repomd files")
-}
-
-func extractPrimaryLocationFromRepomdData(repomdData []byte) (string, error) {
-	primary, err := extractPrimaryReferenceFromRepomdData(repomdData)
-	if err != nil {
-		return "", err
-	}
-	return primary.Href, nil
 }
 
 func extractPrimaryReferenceFromRepomdData(repomdData []byte) (rpmPrimaryReference, error) {
