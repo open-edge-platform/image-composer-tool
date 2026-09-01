@@ -648,7 +648,8 @@ func seedCorruptRPMRawMetadataCache(t *testing.T, baseURL string, primary rpmPri
 	if err := writeFileAtomic(filepath.Join(cacheDir, "repomd.xml"), testRepomdWithPrimary(primary), 0644); err != nil {
 		t.Fatalf("failed to seed repomd cache: %v", err)
 	}
-	dataPath, metaPath := rpmRawMetadataCachePaths(cacheDir, primary.Href)
+	dataPath := rpmRawMetadataPayloadPath(cacheDir, primary.Href, primary)
+	_, metaPath := rpmRawMetadataCachePaths(cacheDir, primary.Href)
 	if err := writeFileAtomic(dataPath, data, 0644); err != nil {
 		t.Fatalf("failed to seed corrupt raw metadata: %v", err)
 	}
@@ -1420,11 +1421,20 @@ func TestRPMMetadataOnlinePopulateThenOfflineRawCacheReuse(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(cacheDir, "repomd.xml")); err != nil {
 		t.Fatalf("stable repomd cache missing: %v", err)
 	}
-	dataPath, metaPath := rpmRawMetadataCachePaths(cacheDir, primaryHref)
-	for _, path := range []string{dataPath, metaPath} {
-		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("stable primary cache %s missing: %v", path, err)
-		}
+	_, metaPath := rpmRawMetadataCachePaths(cacheDir, primaryHref)
+	if _, err := os.Stat(metaPath); err != nil {
+		t.Fatalf("stable primary cache manifest %s missing: %v", metaPath, err)
+	}
+	metaData, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("read stable primary cache manifest: %v", err)
+	}
+	var rawCache rpmRawMetadataCache
+	if err := json.Unmarshal(metaData, &rawCache); err != nil {
+		t.Fatalf("unmarshal stable primary cache manifest: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(cacheDir, rawCache.DataFile)); err != nil {
+		t.Fatalf("stable primary cache payload %s missing: %v", rawCache.DataFile, err)
 	}
 	fullURLRawHash := sha256.Sum256([]byte(server.URL + "/" + primaryHref))
 	fullURLRawPattern := fmt.Sprintf("primary.xml_%s_*.gz", hex.EncodeToString(fullURLRawHash[:])[:8])
@@ -1662,8 +1672,10 @@ func TestRPMRawMetadataConcurrentWritersKeepCoherentCache(t *testing.T) {
 
 	baseURL := "https://repo.example.invalid/base"
 	primaryHref := "repodata/primary.xml.gz"
-	data := compressGzip(t, testPrimaryXML("bash"))
-	primary := primaryRefForData(primaryHref, data)
+	dataA := compressGzip(t, testPrimaryXML("bash"))
+	primaryA := primaryRefForData(primaryHref, dataA)
+	dataB := compressGzip(t, testPrimaryXML("coreutils"))
+	primaryB := primaryRefForData(primaryHref, dataB)
 	cacheDir, err := rpmMetadataCacheDir(baseURL)
 	if err != nil {
 		t.Fatalf("rpmMetadataCacheDir() error = %v", err)
@@ -1676,10 +1688,14 @@ func TestRPMRawMetadataConcurrentWritersKeepCoherentCache(t *testing.T) {
 	errCh := make(chan error, 20)
 	for i := 0; i < 20; i++ {
 		wg.Add(1)
-		go func() {
+		go func(i int) {
 			defer wg.Done()
-			errCh <- saveRPMRawMetadataCache(cacheDir, primaryHref, rpmMetadataID(baseURL, primaryHref), primary, data)
-		}()
+			if i%2 == 0 {
+				errCh <- saveRPMRawMetadataCache(cacheDir, primaryHref, rpmMetadataID(baseURL, primaryHref), primaryA, dataA)
+				return
+			}
+			errCh <- saveRPMRawMetadataCache(cacheDir, primaryHref, rpmMetadataID(baseURL, primaryHref), primaryB, dataB)
+		}(i)
 	}
 	wg.Wait()
 	close(errCh)
@@ -1689,12 +1705,21 @@ func TestRPMRawMetadataConcurrentWritersKeepCoherentCache(t *testing.T) {
 		}
 	}
 
-	got, _, err := loadRPMRawMetadataCache(cacheDir, primaryHref, rpmMetadataID(baseURL, primaryHref), primary)
+	_, metaPath := rpmRawMetadataCachePaths(cacheDir, primaryHref)
+	metaData, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("read raw metadata manifest after concurrent writes: %v", err)
+	}
+	var cache rpmRawMetadataCache
+	if err := json.Unmarshal(metaData, &cache); err != nil {
+		t.Fatalf("unmarshal raw metadata manifest after concurrent writes: %v", err)
+	}
+	got, _, err := loadRPMRawMetadataCache(cacheDir, primaryHref, rpmMetadataID(baseURL, primaryHref), cache.Primary)
 	if err != nil {
 		t.Fatalf("loadRPMRawMetadataCache() after concurrent writes error = %v", err)
 	}
-	if !bytes.Equal(got, data) {
-		t.Fatalf("cached data differs after concurrent writes")
+	if !bytes.Equal(got, dataA) && !bytes.Equal(got, dataB) {
+		t.Fatalf("cached data does not match any concurrently written revision")
 	}
 }
 

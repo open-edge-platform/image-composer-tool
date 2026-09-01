@@ -255,6 +255,22 @@ func rpmRawMetadataCachePaths(xmlCacheDir, metadataHref string) (string, string)
 	return filepath.Join(xmlCacheDir, dataFile), filepath.Join(xmlCacheDir, metaFile)
 }
 
+func rpmRawMetadataPayloadPath(xmlCacheDir, metadataHref string, primary rpmPrimaryReference) string {
+	dataPath, _ := rpmRawMetadataCachePaths(xmlCacheDir, metadataHref)
+	if !primary.hasIntegrity() {
+		return dataPath
+	}
+
+	hrefHash := sha256.Sum256([]byte(metadataHref))
+	checksumHash := sha256.Sum256([]byte(strings.ToUpper(primary.ChecksumType) + ":" + strings.ToLower(primary.Checksum)))
+	ext := strings.ToLower(filepath.Ext(metadataHref))
+	if ext == "" {
+		ext = ".xml"
+	}
+	dataFile := fmt.Sprintf("primary_%s_%s%s", hex.EncodeToString(hrefHash[:])[:16], hex.EncodeToString(checksumHash[:])[:16], ext)
+	return filepath.Join(xmlCacheDir, dataFile)
+}
+
 func loadRPMRawMetadataCache(xmlCacheDir, metadataHref, metadataID string, primary rpmPrimaryReference) ([]byte, string, error) {
 	dataPath, metaPath := rpmRawMetadataCachePaths(xmlCacheDir, metadataHref)
 	metaData, err := os.ReadFile(metaPath)
@@ -296,7 +312,8 @@ func saveRPMRawMetadataCache(xmlCacheDir, metadataHref, metadataID string, prima
 		return fmt.Errorf("refusing to cache invalid RPM primary metadata: %w", err)
 	}
 
-	dataPath, metaPath := rpmRawMetadataCachePaths(xmlCacheDir, metadataHref)
+	dataPath := rpmRawMetadataPayloadPath(xmlCacheDir, metadataHref, primary)
+	_, metaPath := rpmRawMetadataCachePaths(xmlCacheDir, metadataHref)
 	if err := writeFileAtomic(dataPath, data, 0644); err != nil {
 		return fmt.Errorf("failed to write rpm raw metadata %s: %w", dataPath, err)
 	}
