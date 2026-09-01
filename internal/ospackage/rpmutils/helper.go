@@ -34,6 +34,8 @@ func normalizeRepositoryPriority(priority int) int {
 
 func getRepositoryPriority(packageURL string) int {
 	normalizedPkgURL := strings.TrimRight(packageURL, "/")
+
+	matched := false
 	highestPriority := defaultRepoPriority
 
 	for _, repo := range UserRepo {
@@ -44,9 +46,16 @@ func getRepositoryPriority(packageURL string) int {
 
 		if normalizedPkgURL == repoURL || strings.HasPrefix(normalizedPkgURL, repoURL+"/") {
 			repoPriority := normalizeRepositoryPriority(repo.Priority)
-			if repoPriority > highestPriority {
+			// The first match sets the baseline regardless of its value, so a
+			// configured priority below the base repository's default (e.g. a
+			// repo explicitly ranked below base) is preserved rather than
+			// clamped up to defaultRepoPriority. Later matches (a package URL
+			// matching more than one configured repo) still take the highest
+			// among themselves.
+			if !matched || repoPriority > highestPriority {
 				highestPriority = repoPriority
 			}
+			matched = true
 		}
 	}
 
