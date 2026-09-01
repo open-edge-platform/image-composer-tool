@@ -1,10 +1,10 @@
 # =============================================================================
 # Debian 13 ("Trixie") CHILD template — add graphics packages via `extends`
-# Bayonne Bridge Project — GUI desktop variant
+# GUI desktop variant
 # =============================================================================
 #
 # This template demonstrates the EXTENDS feature: it inherits the Debian 13
-# Bayonne Bridge base (Debian 13 qcow2 input + custom initrd + qcow2 output) and
+# base (Debian 13 qcow2 input + custom initrd + qcow2 output) and
 # adds the graphics packages plus the display-manager configuration needed to
 # boot into a GUI desktop. It does NOT declare a baseline or an overlay policy
 # of its own — those come from the parent.
@@ -26,13 +26,13 @@
 # AI-searchable metadata for template discovery
 metadata:
   description: >-
-    Debian 13 (Trixie) Bayonne Bridge GUI variant — extends the Debian 13 base and
+    Debian 13 (Trixie) GUI variant — extends the Debian 13 base and
     adds graphics packages (Xorg, Mesa/Vulkan, fonts, GPU firmware) so the composed
     qcow2 supports graphical desktop applications. Demonstrates the extends feature.
   use_cases:
     - Add GUI/graphics support to the Debian 13 base via template inheritance
     - Demonstrate the extends feature adding packages onto a base template
-    - Compose a Debian 13 desktop-capable qcow2 for Bayonne Bridge
+    - Compose a Debian 13 desktop-capable qcow2
   keywords:
     - extends
     - inheritance
@@ -43,7 +43,6 @@ metadata:
     - graphics
     - desktop
     - gui
-    - bayonne-bridge
 
 # Inherit the base (baseline source, policy, disk/qcow2 output, and the custom
 # initrd). Resolved relative to this file's directory. The parent's target must
@@ -62,7 +61,7 @@ target:                 # must match the parent template's target
 
 systemConfig:
   name: graphics
-  description: Debian 13 Bayonne Bridge GUI variant — graphics stack added via extends
+  description: Debian 13 GUI variant — graphics stack added via extends
 
   # ---------------------------------------------------------------------------
   # Graphics packages — merged ADDITIVELY on top of the base. Enough of an
