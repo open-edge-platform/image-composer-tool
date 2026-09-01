@@ -1,4 +1,4 @@
-# ADR: Advanced Mode Disk Step — Size-Oriented Editing over Computed Offsets
+# ADR: Advanced Mode Disk Step — Two Editing Modes over One Partition Model
 
 **Status**: Proposed (for team discussion)
 **Date**: 2026-08-31
@@ -9,10 +9,15 @@
 
 ## Summary
 
-The Advanced tab's Disk step edits `disk` in a **size-oriented** model — one size
-per partition — and computes the schema's `start`/`end` offsets from it. The
-output-format control (`disk.artifacts[]`) lives on this step, not on the Target
-step's Image Type dropdown.
+The Advanced tab's Disk step edits `disk` through **one model with two editing
+modes**: *size-based*, where a size per partition drives contiguous `start`/`end`
+offsets, and *offset-based*, where the schema's offset strings are typed directly
+and sizes are derived. Size-based is the default and the safe mode; offset-based
+exists for layouts size-based cannot express. Switching converts in place, so
+neither is lossy.
+
+The output-format control (`disk.artifacts[]`) lives on this step, not on the
+Target step's Image Type dropdown.
 
 ---
 
@@ -58,31 +63,57 @@ produce templates the schema rejects.
 
 ## Decision
 
-1. **Size-oriented UI, computed offsets.** The edit model stores `sizeMiB` per
-   partition (`null` = "use the rest of the disk"). `computeOffsets()` lays the
-   partitions out contiguously from the template's own first start offset, and
-   emits `end: "0"` for the rest partition. The computed `start`/`end` are shown
-   read-only on every row, so the translation is visible rather than hidden.
+1. **One model, two editing modes.** Every partition carries both a `sizeMiB`
+   and the schema's `start`/`end` strings. `layoutMode` decides which side is
+   authoritative:
 
-2. **The first start offset is carried, not hardcoded.** Every template starts
+   | Mode | Authoritative | Derived | Contiguity |
+   |---|---|---|---|
+   | `size` (default) | `sizeMiB` (`null` = rest of disk) | `start`/`end` | guaranteed — never stored, so it cannot be broken |
+   | `offset` | `start`/`end` (`"0"` = rest of disk) | size per partition | the user's responsibility; gaps and overlaps are reported |
+
+   In size mode `computeOffsets()` lays the partitions out contiguously from the
+   template's own first start offset. In offset mode it returns what was typed,
+   untouched. Both modes show the derived side read-only on every row, so the
+   translation is always visible rather than hidden.
+
+2. **`setLayoutMode()` converts in place, so neither mode is lossy.** Leaving
+   size mode writes the computed offsets down; leaving offset mode derives sizes
+   (and the first start offset) from whatever the user ended up with. An
+   unedited layout emits byte-identical YAML in either mode.
+
+3. **The first start offset is carried, not hardcoded.** Every template starts
    at `1MiB`, but the value is read from the seed so an unedited layout re-emits
    byte-identical offsets.
 
-3. **`disk.artifacts[]` is edited on the Disk step.** It is a `Disk` property,
+4. **`disk.artifacts[]` is edited on the Disk step.** It is a `Disk` property,
    and it is where QCOW2/VHD/VMDK output actually comes from.
 
-4. **Seed by parsing the resolved template client-side.** `POST /templates/compose`
+5. **Seed by parsing the resolved template client-side.** `POST /templates/compose`
    already returns the fully merged template (`resolve --full` equivalent). The
    step reads `disk` out of that YAML rather than adding a typed `disk` object to
    the compose response — no contract change, and the same parser/emitter serves
    the client-side template generation the Review step will need.
 
-5. **Loader rules are mirrored client-side, not just schema rules.**
+6. **Loader rules are mirrored client-side, not just schema rules.**
    `extendLastPartitionToFillDisk` is rejected by
    `internal/config/validate/validate.go` for `imageType: iso`, and for `raw`
    unless the last partition is the rootfs. Those checks are not in the JSON
    schema, so a disk block can be schema-clean and still be refused before a
    build starts. The step reports them inline.
+
+7. **Gaps and overlaps are warnings, not errors.** A gap is legal — the schema
+   and the builder both accept it, and it is occasionally deliberate, which is
+   the whole reason offset mode exists. An overlap is almost always a mistake,
+   but the tool will still attempt it, so blocking it in the UI would be the UI
+   inventing a rule the builder does not have.
+
+8. **Every schema field round-trips, whether or not it is prominent.** The
+   partition row shows `name`/`fsLabel`/`fsType`/size/`mountPoint`/`start`/`end`;
+   `id`, `index`, `type`, `typeUUID`, `mountOptions` and `flags` sit behind a
+   per-row details toggle. `Disk.path` and `Disk.selectionPolicy` are read and
+   re-emitted but not editable — they select a *target disk* for the live
+   installer, which is not what an image-composition step configures.
 
 ---
 
@@ -90,23 +121,26 @@ produce templates the schema rejects.
 
 **Good**
 
-- Resize, insert, remove and reorder are single actions; offsets can never drift
-  out of sync because they are derived, not stored.
-- A seeded layout round-trips exactly, so "no edits" produces the template's own
-  offsets and a reviewer sees only real changes in a diff.
+- In size mode, resize/insert/remove/reorder are single actions and offsets
+  cannot drift out of sync, because they are derived rather than stored.
+- Offset mode covers what size mode cannot express (deliberate gaps, or matching
+  an existing layout offset-for-offset) without weakening the default.
+- A seeded layout round-trips exactly in either mode, so "no edits" produces the
+  template's own offsets and a reviewer sees only real changes in a diff.
 - The QCOW2 requirement is satisfied on the field that actually implements it.
 
 **Trade-offs**
 
-- **Non-contiguous layouts cannot be expressed.** Deliberate gaps between
-  partitions are not representable in a size-oriented model. No template in this
-  repository uses one; if that changes, the step needs an escape hatch to raw
-  offsets.
-- **The "rest" partition must stay last.** Its `end: "0"` gives the partition
-  after it no offset to start from. Adding a partition inserts *before* a
-  trailing rest partition, and reordering across it is blocked.
+- **Two modes are two states to test and to explain.** Mitigated by the
+  conversion being total in both directions and covered by unit tests, but it is
+  strictly more surface than a single mode.
+- **The "rest" partition must stay last in both modes.** Its `end: "0"` gives the
+  partition after it no offset to start from. Adding a partition inserts *before*
+  a trailing rest partition, and reordering across it is blocked.
 - **Sizes are whole MiB.** Offsets are rounded up, never down, so a rounded
   partition can never start inside its predecessor.
+- **Offset mode can produce an overlapping layout.** By design — it is warned
+  about, not prevented. A user who wants the guardrail should stay in size mode.
 - Duplicating the loader's auto-expand rules in TypeScript means they can drift
   from the Go implementation. They are covered by unit tests naming the Go
   source, and `POST /templates/validate` remains the authority.
@@ -115,10 +149,16 @@ produce templates the schema rejects.
 
 ## Alternatives considered
 
-**Edit `start`/`end` directly.** No translation layer, and non-contiguous
-layouts stay expressible. Rejected: it puts the contiguity invariant on the
-user, and every insert or resize becomes a manual recomputation of everything
-below it.
+**Size-oriented only.** The original decision, and what this PR first shipped.
+Simpler, one state, and adequate for every template in this repository — all of
+which are contiguous. Superseded because it makes deliberate gaps and
+offset-for-offset reproduction of an existing layout impossible to express, with
+no escape hatch short of hand-editing the exported YAML.
+
+**Offset-only — edit `start`/`end` directly and nothing else.** No translation
+layer at all. Rejected as the sole mode: it puts the contiguity invariant on the
+user, so every insert or resize becomes a manual recomputation of everything
+below it. It survives as the non-default mode.
 
 **Add a `size` field to the partition schema.** Would let the UI store what it
 displays. Rejected: it duplicates information already carried by `start`/`end`,

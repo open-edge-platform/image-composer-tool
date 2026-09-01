@@ -257,11 +257,13 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
 
       {/* The Packages step holds a 240px rail plus a 300px selected-packages
           rail beside the package pane, which is cramped at the 3xl the
-          single-column steps use. */}
+          single-column steps use. The Disk step needs the width for its
+          eight-column partition table (name/label/fs/size/mount/start/end
+          plus row actions). */}
       <div
         className={
           'mx-auto rounded-lg border border-slate-200 bg-white p-6 shadow-sm ' +
-          (step === 1 ? 'max-w-6xl' : 'max-w-3xl')
+          (step === 1 ? 'max-w-6xl' : step === 2 ? 'max-w-5xl' : 'max-w-3xl')
         }
       >
         {step === 0 && (

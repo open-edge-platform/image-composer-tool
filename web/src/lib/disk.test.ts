@@ -9,6 +9,8 @@ import {
   diskYamlFragment,
   newPartition,
   parseDiskFromYaml,
+  partitionSizeMiB,
+  setLayoutMode,
   suggestedSize,
   toDiskConfig,
   usedMiB,
@@ -98,6 +100,154 @@ describe('seeding', () => {
   })
 })
 
+describe('partition index', () => {
+  // Regression: `index` was not read or written, so a template that set one had
+  // it silently dropped on the way through the editor. No template in this repo
+  // uses it (the Go field is `*int` with omitempty), which is exactly why it
+  // needs a test rather than being caught by the golden round-trip.
+  it('round-trips a partition index', () => {
+    const withIndex = minimalPtlPvRaw.replace('- name: EFI', '- name: EFI\n          index: 1')
+    const model = seed(withIndex)
+    expect(model.partitions.map((p) => p.index)).toEqual([1, null, null])
+    expect(partitionsOf(diskYamlFragment(model))[0].index).toBe(1)
+  })
+
+  it('omits index when unset rather than emitting null', () => {
+    expect(partitionsOf(diskYamlFragment(seed(minimalPtlPvRaw)))[0]).not.toHaveProperty('index')
+  })
+})
+
+describe('layout modes', () => {
+  it('seeds in size mode', () => {
+    expect(seed(minimalPtlPvRaw).layoutMode).toBe('size')
+  })
+
+  it('carries the template offsets verbatim for offset mode to start from', () => {
+    const model = seed(minimalPtlPvRaw)
+    expect(model.partitions.map((p) => [p.start, p.end])).toEqual([
+      ['1MiB', '1025MiB'],
+      ['1025MiB', '3073MiB'],
+      ['3073MiB', '0'],
+    ])
+  })
+
+  it('emits identical YAML in either mode when nothing is edited', () => {
+    const sized = seed(minimalPtlPvRaw)
+    expect(diskYamlFragment(setLayoutMode(sized, 'offset'))).toBe(diskYamlFragment(sized))
+  })
+
+  it('writes the computed offsets down when switching to offset mode', () => {
+    const model = seed(minimalPtlPvRaw)
+    model.partitions[0].sizeMiB = 512
+    const offset = setLayoutMode(model, 'offset')
+    expect(offset.partitions.map((p) => [p.start, p.end])).toEqual([
+      ['1MiB', '513MiB'],
+      ['513MiB', '2561MiB'],
+      ['2561MiB', '0'],
+    ])
+  })
+
+  it('derives sizes back from hand-edited offsets when switching to size mode', () => {
+    const offset = setLayoutMode(seed(minimalPtlPvRaw), 'offset')
+    offset.partitions[0] = { ...offset.partitions[0], start: '2MiB', end: '1026MiB' }
+    offset.partitions[1] = { ...offset.partitions[1], start: '1026MiB', end: '5122MiB' }
+    const sized = setLayoutMode(offset, 'size')
+    expect(sized.partitions.map((p) => p.sizeMiB)).toEqual([1024, 4096, null])
+    // The first start offset is picked up too, so re-emitting reproduces it.
+    expect(sized.firstStartMiB).toBe(2)
+    expect(computeOffsets(sized)[0]).toEqual({ start: '2MiB', end: '1026MiB' })
+  })
+
+  it('keeps a partition size when its offsets do not parse', () => {
+    const offset = setLayoutMode(seed(minimalPtlPvRaw), 'offset')
+    offset.partitions[1] = { ...offset.partitions[1], end: 'oops' }
+    expect(setLayoutMode(offset, 'size').partitions[1].sizeMiB).toBe(2048)
+  })
+
+  it('emits hand-typed offsets untouched, gaps and all', () => {
+    const offset = setLayoutMode(seed(minimalPtlPvRaw), 'offset')
+    // Deliberate 1024MiB gap after the first partition.
+    offset.partitions[1] = { ...offset.partitions[1], start: '2049MiB', end: '4097MiB' }
+    const emitted = partitionsOf(diskYamlFragment(offset))
+    expect(emitted.map((p) => [p.start, p.end])).toEqual([
+      ['1MiB', '1025MiB'],
+      ['2049MiB', '4097MiB'],
+      ['3073MiB', '0'],
+    ])
+  })
+
+  it('reports the size a partition derives from its offsets', () => {
+    const offset = setLayoutMode(seed(minimalPtlPvRaw), 'offset')
+    expect(partitionSizeMiB(offset, 0)).toBe(1024)
+    expect(partitionSizeMiB(offset, 2)).toBeNull() // rest of disk
+    offset.partitions[0] = { ...offset.partitions[0], end: 'nope' }
+    expect(partitionSizeMiB(offset, 0)).toBeUndefined()
+  })
+
+  it('measures used space as the high-water mark in offset mode', () => {
+    const offset = setLayoutMode(seed(minimalPtlPvRaw), 'offset')
+    // Summing spans would report 3072 and miss the gap entirely.
+    offset.partitions[1] = { ...offset.partitions[1], start: '2049MiB', end: '4097MiB' }
+    offset.partitions[2] = { ...offset.partitions[2], start: '4097MiB' }
+    expect(usedMiB(offset)).toBe(4097)
+  })
+})
+
+describe('offset-mode validation', () => {
+  const offsetSeed = () => setLayoutMode(seed(minimalPtlPvRaw), 'offset')
+
+  it('accepts the seeded layout', () => {
+    expect(validateDisk(offsetSeed(), { imageType: 'raw' })).toEqual({ errors: [], warnings: [] })
+  })
+
+  it('warns about a gap without blocking it', () => {
+    const model = offsetSeed()
+    model.partitions[1] = { ...model.partitions[1], start: '2049MiB' }
+    const { errors, warnings } = validateDisk(model, { imageType: 'raw' })
+    expect(errors).toEqual([])
+    expect(warnings).toContain('Gap of 1024 MiB between partitions 1 and 2.')
+  })
+
+  it('warns about an overlap', () => {
+    const model = offsetSeed()
+    model.partitions[1] = { ...model.partitions[1], start: '513MiB' }
+    expect(validateDisk(model, { imageType: 'raw' }).warnings).toContain(
+      'Partitions 1 and 2 overlap by 512 MiB.',
+    )
+  })
+
+  it('rejects offsets that are not valid sizes', () => {
+    const model = offsetSeed()
+    model.partitions[0] = { ...model.partitions[0], end: 'later' }
+    expect(validateDisk(model, { imageType: 'raw' }).errors.join(' ')).toMatch(
+      /offsets that are not valid sizes/,
+    )
+  })
+
+  it('rejects a partition that ends at or before it starts', () => {
+    const model = offsetSeed()
+    model.partitions[0] = { ...model.partitions[0], start: '1025MiB', end: '1025MiB' }
+    expect(validateDisk(model, { imageType: 'raw' }).errors).toContain(
+      'Partition 1 (EFI) ends at or before it starts.',
+    )
+  })
+
+  it('still rejects an interior "rest" partition', () => {
+    const model = offsetSeed()
+    model.partitions[0] = { ...model.partitions[0], end: '0' }
+    expect(validateDisk(model, { imageType: 'raw' }).errors).toContain(
+      'Only the last partition can use the remaining disk space.',
+    )
+  })
+
+  it('slots a new partition into the gap before the rest partition', () => {
+    const model = offsetSeed()
+    const partitions = appendPartition(model, { ...newPartition(), id: 'data', sizeMiB: 1024 })
+    expect(partitions.map((p) => p.id)).toEqual(['EFI', 'SWAP', 'data', 'ROOT'])
+    expect([partitions[2].start, partitions[2].end]).toEqual(['3073MiB', '4097MiB'])
+  })
+})
+
 describe('computeOffsets', () => {
   it('lays partitions out contiguously from the first start', () => {
     const model = seed(minimalPtlPvRaw)
@@ -150,7 +300,7 @@ describe('computeOffsets', () => {
   // one before it and the browser showed two partitions overlapping.
   it('keeps a "rest" partition last when a partition is added', () => {
     const model = seed(minimalPtlPvRaw)
-    model.partitions = appendPartition(model.partitions, {
+    model.partitions = appendPartition(model, {
       ...newPartition(),
       id: 'data',
       sizeMiB: 1024,
@@ -168,7 +318,7 @@ describe('computeOffsets', () => {
   it('appends normally when no partition takes the remainder', () => {
     const model = seed(minimalPtlPvRaw)
     model.partitions[2].sizeMiB = 8192
-    model.partitions = appendPartition(model.partitions, { ...newPartition(), id: 'data' })
+    model.partitions = appendPartition(model, { ...newPartition(), id: 'data' })
     expect(model.partitions.map((p) => p.id)).toEqual(['EFI', 'SWAP', 'ROOT', 'data'])
   })
 

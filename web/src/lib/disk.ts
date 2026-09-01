@@ -30,6 +30,21 @@ export const COMPRESSION_TYPES = ['gz', 'gzip', 'xz', 'zstd', 'bz2'] as const
 
 export type PartitionTableType = (typeof PARTITION_TABLE_TYPES)[number]
 
+// How the partition table is edited.
+//
+//  - 'size'   — one size per partition; start/end are derived contiguously.
+//               Safe default: the invariant that each start equals the previous
+//               end cannot be broken, because it is never stored.
+//  - 'offset' — start/end are typed directly, exactly as the schema stores them.
+//               Sizes become derived. Gaps and overlaps become possible, so they
+//               are reported rather than prevented.
+//
+// Switching converts the current layout in place (`setLayoutMode`), so neither
+// mode is lossy: the model always carries both sizeMiB and start/end, and the
+// mode only decides which side is authoritative.
+export const LAYOUT_MODES = ['size', 'offset'] as const
+export type LayoutMode = (typeof LAYOUT_MODES)[number]
+
 // First partition's start offset. Every template in this repo starts at 1MiB
 // (the conventional gap for the partition table itself); it is carried on the
 // model rather than hardcoded so an unedited template re-emits byte-identical
@@ -40,6 +55,9 @@ export interface PartitionModel {
   // Stable identity for React lists and reordering. Client-only — never emitted.
   key: string
   id: string
+  // Partition index (sdX). Optional in the schema and unused by every template
+  // in this repo, but carried so a template that sets one round-trips.
+  index: number | null
   name: string
   type: string
   typeUUID: string
@@ -48,8 +66,13 @@ export interface PartitionModel {
   mountPoint: string
   mountOptions: string
   flags: string[]
-  // Size in MiB, or null for "use the rest of the disk" (emitted as end: "0").
+  // Authoritative in 'size' mode: size in MiB, or null for "use the rest of the
+  // disk" (emitted as end: "0").
   sizeMiB: number | null
+  // Authoritative in 'offset' mode: the schema's own offset strings. Seeded
+  // verbatim from the template, and kept in step with sizeMiB by setLayoutMode.
+  start: string
+  end: string
 }
 
 export interface ArtifactModel {
@@ -59,6 +82,8 @@ export interface ArtifactModel {
 }
 
 export interface DiskModel {
+  // Which side of the size/offset pair the user is editing. Seeded to 'size'.
+  layoutMode: LayoutMode
   name: string
   // Empty when the resolved template sets none. ISO templates legitimately do —
   // never invent a default here, or the UI would silently add a disk size the
@@ -85,6 +110,7 @@ export function newPartition(): PartitionModel {
   return {
     key: nextKey('part'),
     id: '',
+    index: null,
     name: '',
     type: '',
     typeUUID: '',
@@ -94,6 +120,8 @@ export function newPartition(): PartitionModel {
     mountOptions: '',
     flags: [],
     sizeMiB: 1024,
+    start: '',
+    end: '',
   }
 }
 
@@ -106,15 +134,29 @@ export function newArtifact(): ArtifactModel {
 // appending blindly would push the rest partition into the middle — where its
 // end of "0" leaves the partition after it with no offset to start from, and
 // the computed layout overlaps.
+//
+// In 'offset' mode the new partition also needs offsets: it is slotted into the
+// gap it is displacing, starting where its predecessor ended. That is a
+// starting point to edit, not a guarantee — the partition after it is not moved,
+// so an overlap is likely and validateDisk will say so.
 export function appendPartition(
-  partitions: PartitionModel[],
+  model: DiskModel,
   next: PartitionModel = newPartition(),
 ): PartitionModel[] {
-  const last = partitions.length - 1
-  if (last >= 0 && partitions[last].sizeMiB === null) {
-    return [...partitions.slice(0, last), next, partitions[last]]
+  const parts = model.partitions
+  const last = parts.length - 1
+  const insertAt = last >= 0 && isRest(model, last) ? last : parts.length
+
+  if (model.layoutMode === 'offset') {
+    const prevEnd = insertAt > 0 ? parseMiB(parts[insertAt - 1].end) : null
+    const startMiB = prevEnd ?? model.firstStartMiB
+    next = {
+      ...next,
+      start: `${startMiB}MiB`,
+      end: `${startMiB + (next.sizeMiB ?? 1024)}MiB`,
+    }
   }
-  return [...partitions, next]
+  return [...parts.slice(0, insertAt), next, ...parts.slice(insertAt)]
 }
 
 // --- Seeding from the resolved template -------------------------------------
@@ -146,6 +188,9 @@ export function diskFromObject(d: Record<string, unknown>): DiskModel {
   const table = str(d.partitionTableType).toLowerCase()
 
   return {
+    // Seeded size-oriented: the safe mode, and the one the templates are
+    // effectively written in (every layout in this repo is contiguous).
+    layoutMode: 'size',
     name: str(d.name),
     size: str(d.size),
     maxSize: str(d.maxSize),
@@ -180,6 +225,7 @@ function partitionFromObject(p: Record<string, unknown>): PartitionModel {
   return {
     key: nextKey('part'),
     id: str(p.id),
+    index: typeof p.index === 'number' ? p.index : null,
     name: str(p.name),
     type: str(p.type),
     typeUUID: str(p.typeUUID),
@@ -189,6 +235,10 @@ function partitionFromObject(p: Record<string, unknown>): PartitionModel {
     mountOptions: str(p.mountOptions),
     flags: Array.isArray(p.flags) ? p.flags.map(str) : [],
     sizeMiB,
+    // Kept verbatim so 'offset' mode starts from exactly what the template said,
+    // not from a value round-tripped through MiB.
+    start: str(p.start),
+    end,
   }
 }
 
@@ -204,15 +254,26 @@ export interface Offsets {
 // builder forces its end to "0" (internal/config/config.go), so the preview has
 // to agree or it would show something that isn't what gets built.
 export function isRest(model: DiskModel, index: number): boolean {
-  const last = index === model.partitions.length - 1
-  if (last && model.extendLastPartitionToFillDisk) return true
-  return model.partitions[index].sizeMiB === null
+  const p = model.partitions[index]
+  if (index === model.partitions.length - 1 && model.extendLastPartitionToFillDisk) return true
+  if (model.layoutMode === 'offset') return p.end === '' || parseSize(p.end) === 0
+  return p.sizeMiB === null
 }
 
-// computeOffsets lays the partitions out contiguously from firstStartMiB, so
-// each start is the previous end. Mirrors how every template in image-templates
-// is written.
+// computeOffsets returns the start/end pair each partition will be emitted with.
+//
+// In 'size' mode the partitions are laid out contiguously from firstStartMiB, so
+// each start is the previous end — mirroring how every template in
+// image-templates is written. In 'offset' mode the user's own strings are
+// returned untouched; whether they are contiguous is up to them, and
+// validateDisk reports gaps and overlaps.
 export function computeOffsets(model: DiskModel): Offsets[] {
+  if (model.layoutMode === 'offset') {
+    return model.partitions.map((p, i) => ({
+      start: p.start,
+      end: isRest(model, i) ? '0' : p.end,
+    }))
+  }
   let cursor = model.firstStartMiB
   return model.partitions.map((p, i) => {
     const start = `${cursor}MiB`
@@ -222,9 +283,62 @@ export function computeOffsets(model: DiskModel): Offsets[] {
   })
 }
 
-// usedMiB is the space the fixed-size partitions occupy, including the leading
-// gap. Drives the "fits on the disk" check and the space summary.
+// partitionSizeMiB is the size to display for a partition: the stored value in
+// 'size' mode, and the span between the offsets in 'offset' mode. null means
+// "the rest of the disk", and undefined means the offsets don't parse.
+export function partitionSizeMiB(model: DiskModel, index: number): number | null | undefined {
+  if (isRest(model, index)) return null
+  const p = model.partitions[index]
+  if (model.layoutMode === 'size') return p.sizeMiB
+  const start = parseMiB(p.start)
+  const end = parseMiB(p.end)
+  if (start === null || end === null) return undefined
+  return end - start
+}
+
+// setLayoutMode switches which side of the size/offset pair is authoritative,
+// converting the layout in place so nothing is lost either way: leaving 'size'
+// writes the computed offsets down, and leaving 'offset' derives sizes from
+// whatever offsets the user ended up with.
+export function setLayoutMode(model: DiskModel, mode: LayoutMode): DiskModel {
+  if (mode === model.layoutMode) return model
+
+  if (mode === 'offset') {
+    const offsets = computeOffsets(model)
+    return {
+      ...model,
+      layoutMode: 'offset',
+      partitions: model.partitions.map((p, i) => ({ ...p, ...offsets[i] })),
+    }
+  }
+
+  // offset -> size. A partition whose offsets don't parse keeps its previous
+  // size rather than collapsing to zero.
+  const firstStart = model.partitions.length > 0 ? parseMiB(model.partitions[0].start) : null
+  return {
+    ...model,
+    layoutMode: 'size',
+    firstStartMiB: firstStart ?? model.firstStartMiB,
+    partitions: model.partitions.map((p, i) => {
+      if (isRest(model, i)) return { ...p, sizeMiB: null }
+      const span = partitionSizeMiB({ ...model, layoutMode: 'offset' }, i)
+      return { ...p, sizeMiB: span === undefined ? p.sizeMiB : span }
+    }),
+  }
+}
+
+// usedMiB is the space the layout occupies up to the start of the "rest"
+// partition (or the end of the last one), including the leading gap. Drives the
+// "fits on the disk" check and the space summary.
 export function usedMiB(model: DiskModel): number {
+  if (model.layoutMode === 'offset') {
+    // Offsets are absolute, so the high-water mark is the answer — summing
+    // spans would ignore gaps and double-count overlaps.
+    return model.partitions.reduce((high, p, i) => {
+      const edge = isRest(model, i) ? parseMiB(p.start) : parseMiB(p.end)
+      return Math.max(high, edge ?? 0)
+    }, 0)
+  }
   return model.partitions.reduce(
     (total, p, i) => (isRest(model, i) ? total : total + (p.sizeMiB ?? 0)),
     model.firstStartMiB,
@@ -260,6 +374,7 @@ export function toDiskConfig(model: DiskModel): Record<string, unknown> {
       // real differences.
       const out: Record<string, unknown> = {}
       if (p.id) out.id = p.id
+      if (p.index !== null) out.index = p.index
       if (p.name) out.name = p.name
       if (p.type) out.type = p.type
       if (p.typeUUID) out.typeUUID = p.typeUUID
@@ -310,22 +425,34 @@ export function validateDisk(model: DiskModel, ctx: DiskContext = {}): DiskIssue
 
   // Only the final partition can consume the remaining space: an interior
   // "rest" leaves every partition after it with no start offset.
+  const lastIndex = model.partitions.length - 1
   const restIndexes = model.partitions
     .map((_, i) => i)
-    .filter((i) => model.partitions[i].sizeMiB === null)
-  const lastIndex = model.partitions.length - 1
+    .filter((i) => (model.layoutMode === 'offset' ? parseSize(model.partitions[i].end) === 0 : model.partitions[i].sizeMiB === null))
   if (restIndexes.some((i) => i !== lastIndex)) {
     errors.push('Only the last partition can use the remaining disk space.')
   }
 
   model.partitions.forEach((p, i) => {
-    if (!isRest(model, i) && (p.sizeMiB === null || p.sizeMiB <= 0)) {
-      errors.push(`Partition ${i + 1}${p.id ? ` (${p.id})` : ''} needs a size greater than zero.`)
+    const label = `Partition ${i + 1}${p.id || p.name ? ` (${p.id || p.name})` : ''}`
+    if (!isRest(model, i)) {
+      const span = partitionSizeMiB(model, i)
+      if (span === undefined) {
+        errors.push(`${label} has offsets that are not valid sizes (for example 1MiB).`)
+      } else if (span === null || span <= 0) {
+        errors.push(
+          model.layoutMode === 'offset'
+            ? `${label} ends at or before it starts.`
+            : `${label} needs a size greater than zero.`,
+        )
+      }
     }
     if (!p.id && !p.name) {
       warnings.push(`Partition ${i + 1} has no id or name.`)
     }
   })
+
+  warnings.push(...contiguityWarnings(model))
 
   const sizeBytes = parseSize(model.size)
   if (model.size && sizeBytes === null) {
@@ -366,6 +493,30 @@ export function validateDisk(model: DiskModel, ctx: DiskContext = {}): DiskIssue
   }
 
   return { errors, warnings }
+}
+
+// contiguityWarnings reports gaps and overlaps between consecutive partitions.
+//
+// Only reachable in 'offset' mode — 'size' mode derives the offsets and cannot
+// produce either. Warnings, not errors: a gap is legal (the schema and the
+// builder both accept it) and is occasionally deliberate, whereas an overlap is
+// almost always a mistake but is still something the tool will attempt.
+function contiguityWarnings(model: DiskModel): string[] {
+  if (model.layoutMode !== 'offset') return []
+
+  const out: string[] = []
+  for (let i = 1; i < model.partitions.length; i++) {
+    const prevEnd = parseMiB(model.partitions[i - 1].end)
+    const start = parseMiB(model.partitions[i].start)
+    // An interior "rest" partition is already a hard error; don't pile on.
+    if (prevEnd === null || start === null || isRest(model, i - 1)) continue
+    if (start > prevEnd) {
+      out.push(`Gap of ${start - prevEnd} MiB between partitions ${i} and ${i + 1}.`)
+    } else if (start < prevEnd) {
+      out.push(`Partitions ${i} and ${i + 1} overlap by ${prevEnd - start} MiB.`)
+    }
+  }
+  return out
 }
 
 // autoExpandErrors mirrors validateAutoExpandLastPartitionConstraints in
