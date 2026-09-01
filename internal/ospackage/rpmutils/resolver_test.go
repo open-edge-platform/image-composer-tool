@@ -1349,6 +1349,61 @@ func TestFetchPrimaryURL_UsesCachedRepomdWhenPrimaryLocationMissing(t *testing.T
 	}
 }
 
+func TestFetchPrimaryURL_DoesNotCacheMalformedRepomd(t *testing.T) {
+	setRPMMetadataTestCache(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<repomd><data type="primary">`))
+	}))
+	defer server.Close()
+
+	_, err := FetchPrimaryURL(server.URL + "/repodata/repomd.xml")
+	if err == nil {
+		t.Fatalf("expected malformed repomd fetch to fail")
+	}
+
+	cacheDir, err := rpmMetadataCacheDir(server.URL)
+	if err != nil {
+		t.Fatalf("rpmMetadataCacheDir() error = %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(cacheDir, "repomd.xml")); !os.IsNotExist(statErr) {
+		t.Fatalf("malformed repomd.xml was published to stable cache, stat error: %v", statErr)
+	}
+}
+
+func TestFetchPrimaryURL_PrefersStableRepomdOverStaleLocationCache(t *testing.T) {
+	setRPMMetadataTestCache(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	cacheDir, err := rpmMetadataCacheDir(server.URL)
+	if err != nil {
+		t.Fatalf("rpmMetadataCacheDir() error = %v", err)
+	}
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		t.Fatalf("failed to create cache dir: %v", err)
+	}
+	newPrimary := rpmPrimaryReference{Href: "repodata/new-primary.xml.gz"}
+	if err := writeFileAtomic(filepath.Join(cacheDir, "repomd.xml"), testRepomdWithPrimary(newPrimary), 0644); err != nil {
+		t.Fatalf("failed to seed stable repomd cache: %v", err)
+	}
+	oldPrimary := rpmPrimaryReference{Href: "repodata/old-primary.xml.gz"}
+	if err := saveRPMPrimaryLocationCache(filepath.Join(cacheDir, "primary.location.json"), oldPrimary); err != nil {
+		t.Fatalf("failed to seed stale primary location cache: %v", err)
+	}
+
+	href, err := FetchPrimaryURL(server.URL + "/repodata/repomd.xml")
+	if err != nil {
+		t.Fatalf("FetchPrimaryURL() should use stable repomd cache: %v", err)
+	}
+	if href != newPrimary.Href {
+		t.Fatalf("FetchPrimaryURL() href = %q, want stable repomd href %q", href, newPrimary.Href)
+	}
+}
+
 func TestRPMMetadataCacheHitUsesRawPrimaryWithoutHTTP(t *testing.T) {
 	setRPMMetadataTestCache(t)
 

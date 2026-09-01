@@ -788,17 +788,17 @@ func fetchPrimaryReference(repomdURL string) (rpmPrimaryReference, error) {
 	}
 	if xmlCacheDir != "" {
 		primaryLocationCacheFile := filepath.Join(xmlCacheDir, "primary.location.json")
-		if cachedPrimary, cacheErr := loadRPMPrimaryReferenceCache(primaryLocationCacheFile); cacheErr == nil {
-			log.Infof("Using cached primary metadata location for %s", redactURLForLog(baseURL))
-			return cachedPrimary, nil
-		}
-
 		if repomdCachedPrimary, repomdCacheErr := loadPrimaryReferenceFromCachedRepomd(xmlCacheDir); repomdCacheErr == nil {
 			if saveErr := saveRPMPrimaryLocationCache(primaryLocationCacheFile, repomdCachedPrimary); saveErr != nil {
 				log.Warnf("Failed to save primary location cache %s; offline cache incomplete: %v", primaryLocationCacheFile, saveErr)
 			}
 			log.Infof("Using primary metadata location from cached repomd for %s", redactURLForLog(baseURL))
 			return repomdCachedPrimary, nil
+		}
+
+		if cachedPrimary, cacheErr := loadRPMPrimaryReferenceCache(primaryLocationCacheFile); cacheErr == nil {
+			log.Infof("Using cached primary metadata location for %s", redactURLForLog(baseURL))
+			return cachedPrimary, nil
 		}
 	}
 
@@ -808,16 +808,13 @@ func fetchPrimaryReference(repomdURL string) (rpmPrimaryReference, error) {
 		return rpmPrimaryReference{}, err
 	}
 
-	if xmlCacheDir != "" {
-		saveRepomdXMLCache(xmlCacheDir, baseURL, repomdData)
-	}
-
 	primary, err := extractPrimaryReferenceFromRepomdData(repomdData)
 	if err != nil {
 		return rpmPrimaryReference{}, fmt.Errorf("parsing primary location from %s: %w", redactURLForLog(repomdURL), err)
 	}
 
 	if xmlCacheDir != "" {
+		saveRepomdXMLCache(xmlCacheDir, baseURL, repomdData)
 		primaryLocationCacheFile := filepath.Join(xmlCacheDir, "primary.location.json")
 		if saveErr := saveRPMPrimaryLocationCache(primaryLocationCacheFile, primary); saveErr != nil {
 			log.Warnf("Failed to save primary location cache %s; offline cache incomplete: %v", primaryLocationCacheFile, saveErr)
