@@ -1,6 +1,6 @@
 # =============================================================================
 # Debian 13 ("Trixie") BASE overlay template  —  custom dracut initrd  (qcow2)
-# Bayonne Bridge Project base image
+# Base image
 # =============================================================================
 #
 # Composes a deployable Debian 13 qcow2 from the OFFICIAL Debian 13 generic cloud
@@ -10,7 +10,7 @@
 #   * overlays a general-purpose base package set (diagnostics, editors,
 #     networking, boot firmware) additively onto the cloud image,
 #   * switches the initramfs generator to DRACUT and injects a custom dracut
-#     module (91hello) tailored to Bayonne Bridge early-boot needs,
+#     module (91hello) tailored to early-boot needs,
 #   * preserves base-image immutability (overlay copies the baseline and layers
 #     onto the copy; the source image is never modified in place), and
 #   * emits a validated, versioned qcow2 artifact.
@@ -50,7 +50,7 @@
 # AI-searchable metadata for template discovery
 metadata:
   description: >-
-    Debian 13 (Trixie) Bayonne Bridge BASE overlay template — overlay an official
+    Debian 13 (Trixie) BASE overlay template — overlay an official
     Debian 13 generic cloud qcow2 with a general-purpose base package set
     (diagnostics, editors, networking, boot firmware), switch the initramfs
     generator to dracut and inject a custom dracut module (91hello), emitting a
@@ -58,7 +58,7 @@ metadata:
   use_cases:
     - Compose a deployable Debian 13 qcow2 from the official Debian 13 cloud image
     - Overlay base diagnostic/networking/editor packages onto a Debian 13 cloud image
-    - Inject a custom dracut initrd module for Bayonne Bridge boot requirements
+    - Inject a custom dracut initrd module for boot requirements
     - Replace the baseline's initramfs-tools generator with dracut in an overlay
     - Provide an extensible Debian 13 overlay base for downstream images to extend
   keywords:
@@ -71,7 +71,6 @@ metadata:
     - initrd
     - initramfs
     - dracut
-    - bayonne-bridge
     - base-template
     - extends
 
@@ -152,7 +151,7 @@ overlayPolicy:
 
 systemConfig:
   name: overlay
-  description: Debian 13 Bayonne Bridge base — overlaid base packages + custom dracut initrd
+  description: Debian 13 base — overlaid base packages + custom dracut initrd
   # ---------------------------------------------------------------------------
   # Login account. This BASE bakes NO credential of its own. In MODE A the
   # bring-up script turns ON password SSH, but sshd has nothing to log into until
@@ -233,7 +232,7 @@ systemConfig:
     - firmware-iwlwifi
 
   # ---------------------------------------------------------------------------
-  # Custom dracut module (91hello) for Bayonne Bridge early-boot requirements.
+  # Custom dracut module (91hello) for early-boot requirements.
   #
   # These are the SAME module files the create-mode
   # image-templates/debian13-x86_64-bb-dracut-raw.yml uses, dropped into the
