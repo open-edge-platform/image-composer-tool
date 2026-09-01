@@ -115,6 +115,39 @@ produce templates the schema rejects.
    re-emitted but not editable — they select a *target disk* for the live
    installer, which is not what an image-composition step configures.
 
+9. **Field validation is transcribed from the Go implementation, not the JSON
+   schema.** The schema types nearly every Disk and Partition field as an
+   unconstrained `string`; the real allowlists are in the builder. They are
+   collected in `web/src/lib/diskrules.ts`, each with the file and line it came
+   from, and split by consequence — a value that fails the build is an error and
+   a closed dropdown, a value that degrades quietly is a warning:
+
+   | Field | Rule | Source | UI |
+   |---|---|---|---|
+   | `fsType` | `fat32 fat16 vfat ext2 ext3 ext4 xfs linux-swap` | `imagedisc.go:728,763` | dropdown; error |
+   | `start`/`end` | `"0"`, or integer + `KiB MiB GiB K M G KB MB GB` — exact case, no decimals, no bare bytes, no TiB | `imagedisc.go:329` `VerifyFileSize` | error |
+   | `disk.size`/`maxSize` | same suffix table, no `"0"` | `config.go:1405`, `validate.go:257` | error |
+   | `artifacts[].type` | `raw qcow2 vhd vhdx vmdk vdi` (RAW), `tar` (WSL2) | `imageconvert.go:246`, `wsl2maker.go:106` | dropdown; error |
+   | `artifacts[].compression` | `gz xz zstd` (RAW), `gz`/`gzip` required (WSL2) | `compression.go:58`, `wsl2maker.go:117` | dropdown; error |
+   | partition `type` | 15 names in `partitionTypeNameToGUID` | `imagedisc.go:98` | dropdown; **warning** |
+   | `typeUUID` | GPT GUID or 4-hex sgdisk code | `imagedisc.go:812`, `config.go:439` | warning |
+   | `flags` | `esp grub bios_grub bios-grub boot dmroot` | `imagedisc.go:79` | warning |
+
+   **Two of the schema's own enums are wider than the implementation**, and the
+   UI offers the intersection rather than the schema's list, because a value the
+   schema permits and the builder then refuses is a trap:
+   `artifacts[].type` includes `tar`, which `convertImageFile` has no case for;
+   `artifacts[].compression` includes `gzip` and `bz2`, neither of which
+   `compression.CompressFile` implements. (Conversely `CompressFile` implements
+   `tar.gz`/`tar.xz`, which the schema rejects.) **Reconciling the schema with
+   the implementation is a separate change** — this ADR only records that the UI
+   does not propagate the mismatch.
+
+10. **Artifact options depend on `target.imageType`.** RAW and overlay run the
+    qemu-img pipeline; WSL2 takes a different path that *requires* exactly one
+    `tar` + `gz` artifact; ISO and IMG never call `ConvertImageFile` at all, so
+    the step says the list is ignored rather than offering a dead control.
+
 ---
 
 ## Consequences

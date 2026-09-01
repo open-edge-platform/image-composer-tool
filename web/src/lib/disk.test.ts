@@ -386,10 +386,34 @@ describe('validateDisk', () => {
     expect(validateDisk({ ...base, maxSize: '64GiB' }).errors).toEqual([])
   })
 
-  it('rejects an unparseable size', () => {
-    expect(validateDisk({ ...seed(minimalPtlPvRaw), size: 'big' }).errors.join(' ')).toMatch(
-      /is not a valid size/,
-    )
+  // disk.size / disk.maxSize go through the same suffix table as the partition
+  // offsets (config.go:1405 and validate/validate.go:257, both mirroring
+  // imagedisc.TranslateSizeStrToBytes). lib/size.ts's parser is deliberately
+  // looser than that, so these have to be checked against the strict rule.
+  it.each(['big', '1.5GiB', '32gib', '1TiB', '34359738368', '32 GiB'])(
+    'rejects disk size %s, which the builder would refuse',
+    (size) => {
+      expect(validateDisk({ ...seed(minimalPtlPvRaw), size }).errors.join(' ')).toMatch(
+        /is not a size the builder accepts/,
+      )
+    },
+  )
+
+  // Asserted against the format rule only: a well-formed size can still be too
+  // small for the partitions, which is a separate error.
+  it.each(['32GiB', '4096MiB', '8GB', '512KiB', '32G', '4M'])(
+    'accepts the format of disk size %s',
+    (size) => {
+      expect(validateDisk({ ...seed(minimalPtlPvRaw), size }).errors.join(' ')).not.toMatch(
+        /is not a size the builder accepts/,
+      )
+    },
+  )
+
+  it('applies the same rule to maxSize', () => {
+    expect(
+      validateDisk({ ...seed(minimalPtlPvRaw), maxSize: '1.5TiB' }).errors.join(' '),
+    ).toMatch(/Max size "1\.5TiB" is not a size the builder accepts/)
   })
 
   // These rules live in the template loader, not the JSON schema

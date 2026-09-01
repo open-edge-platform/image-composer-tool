@@ -4,8 +4,6 @@
 import { useMemo, useState } from 'react'
 import { useStore } from '../store'
 import {
-  ARTIFACT_TYPES,
-  COMPRESSION_TYPES,
   PARTITION_TABLE_TYPES,
   appendPartition,
   computeOffsets,
@@ -19,6 +17,14 @@ import {
   validateDisk,
 } from '../lib/disk'
 import type { DiskModel, LayoutMode, PartitionModel, PartitionTableType } from '../lib/disk'
+import {
+  FS_TYPES,
+  PARTITION_FLAGS,
+  PARTITION_TYPES,
+  artifactOptions,
+  artifactSupport,
+  isSwap,
+} from '../lib/diskrules'
 import { MIB, SIZE_UNITS, amountOf, formatSize, parseSize, unitOf } from '../lib/size'
 import type { SizeUnit } from '../lib/size'
 
@@ -50,17 +56,22 @@ const CHIP_BASE =
 const CHIP_ON = 'border-[#0071c5] bg-[#e6f2fa] text-[#0071c5]'
 const CHIP_OFF = 'border-slate-300 text-slate-600 hover:border-slate-400'
 
+// Placeholders carry the expected *format*, not the field name — the field name
+// is already in the column heading — so they read as a worked example. Kept a
+// shade lighter than the real value so an example is never mistaken for input.
 const FIELD =
-  'w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm text-[#00285a] disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400 focus:border-[#0071c5] focus:outline-none focus:ring-1 focus:ring-[#0071c5]'
+  'w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm text-[#00285a] placeholder:font-normal placeholder:text-slate-300 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400 focus:border-[#0071c5] focus:outline-none focus:ring-1 focus:ring-[#0071c5]'
 const LABEL = 'mb-1 block text-sm font-semibold text-[#00285a]'
 const COL_HEAD = 'text-[11px] font-semibold uppercase tracking-wide text-slate-400'
 const DERIVED = 'truncate px-1 font-mono text-xs text-slate-400'
 const ICON_BTN =
   'rounded border border-slate-300 px-1.5 py-0.5 text-xs text-slate-500 hover:border-slate-400 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-30'
 
-// One grid for the header and every row, so the columns line up.
+// One grid for the header and every row, so the columns line up. The FS column
+// is fixed wide enough for "linux-swap", the longest value in FS_TYPES, since a
+// clipped filesystem name is ambiguous ("linux-s" could be several things).
 const ROW_GRID =
-  'grid grid-cols-[minmax(84px,1fr)_minmax(78px,1fr)_82px_146px_minmax(88px,1fr)_98px_98px_auto] items-center gap-2'
+  'grid grid-cols-[minmax(84px,1fr)_minmax(72px,0.9fr)_112px_146px_minmax(84px,1fr)_94px_94px_auto] items-center gap-2'
 
 const MODE_LABELS: Record<LayoutMode, string> = {
   size: 'Size-based (contiguous)',
@@ -155,6 +166,7 @@ export function DiskStep() {
         <input
           id="disk-name"
           type="text"
+          placeholder="Default_ISO"
           className={FIELD}
           value={disk.name}
           onChange={(e) => patch({ name: e.target.value })}
@@ -224,6 +236,7 @@ export function DiskStep() {
           <input
             id="disk-max-size"
             type="text"
+            placeholder="64GiB"
             className={`${FIELD} w-[200px]`}
             value={disk.maxSize}
             onChange={(e) => patch({ maxSize: e.target.value })}
@@ -348,6 +361,7 @@ export function DiskStep() {
 
       <ArtifactsSection
         artifacts={disk.artifacts}
+        imageType={imageType}
         onChange={(artifacts) => patch({ artifacts })}
       />
 
@@ -457,7 +471,7 @@ function PartitionRow({
         <input
           type="text"
           aria-label={`Partition ${index + 1} name`}
-          placeholder="name"
+          placeholder="ROOT"
           className={FIELD}
           value={labelsById ? p.id : p.name}
           onChange={(e) =>
@@ -467,18 +481,19 @@ function PartitionRow({
         <input
           type="text"
           aria-label={`Partition ${index + 1} filesystem label`}
-          placeholder="fsLabel"
+          placeholder="cloudimg-rootfs"
           className={FIELD}
           value={p.fsLabel}
           onChange={(e) => onChange({ fsLabel: e.target.value })}
         />
-        <input
-          type="text"
-          aria-label={`Partition ${index + 1} filesystem`}
-          placeholder="fsType"
-          className={FIELD}
+        {/* diskPartitionCreate rejects an unlisted fsType outright
+            (imagedisc.go:763), so this is a closed set, not free text. */}
+        <Choice
+          ariaLabel={`Partition ${index + 1} filesystem type`}
           value={p.fsType}
-          onChange={(e) => onChange({ fsType: e.target.value })}
+          options={FS_TYPES}
+          placeholder="select…"
+          onChange={(v) => onChange({ fsType: v })}
         />
 
         {mode === 'size' ? (
@@ -515,7 +530,9 @@ function PartitionRow({
         <input
           type="text"
           aria-label={`Partition ${index + 1} mount point`}
-          placeholder="mountPoint"
+          // A swap partition has no real mount point; the templates write "none"
+          // (imageos.go:487 keys the swap path off fsType, not the mount point).
+          placeholder={isSwap(p.fsType) ? 'none' : '/boot/efi'}
           className={FIELD}
           value={p.mountPoint}
           onChange={(e) => onChange({ mountPoint: e.target.value })}
@@ -534,7 +551,7 @@ function PartitionRow({
             <input
               type="text"
               aria-label={`Partition ${index + 1} end`}
-              placeholder="513MiB"
+              placeholder="513MiB or 0"
               className={FIELD}
               value={rest ? '0' : p.end}
               disabled={rest}
@@ -605,37 +622,51 @@ function PartitionRow({
             label="id"
             value={p.id}
             rowKey={p.key}
+            placeholder="ROOT"
             onChange={(v) => onChange({ id: v })}
           />
           <LabelledField
             label="index"
             value={p.index === null ? '' : String(p.index)}
             rowKey={p.key}
-            placeholder="auto"
+            placeholder="1 (sdX number, optional)"
             onChange={(v) => onChange({ index: v.trim() === '' ? null : Number(v) })}
           />
-          <LabelledField
-            label="type"
-            value={p.type}
-            rowKey={p.key}
-            onChange={(v) => onChange({ type: v })}
-          />
+          <div>
+            <span className="mb-0.5 block text-xs text-slate-400">type</span>
+            {/* An unknown type is not an error: sgdisk simply never receives -t
+                and the partition falls back to a default (imagedisc.go:814
+                discards the lookup error). Offered as a list so that does not
+                happen by accident. */}
+            <Choice
+              ariaLabel={`Partition ${index + 1} type`}
+              value={p.type}
+              options={PARTITION_TYPES}
+              placeholder="not set"
+              allowEmpty
+              emptyLabel="not set (default type)"
+              onChange={(v) => onChange({ type: v })}
+            />
+          </div>
           <LabelledField
             label="typeUUID"
             value={p.typeUUID}
             rowKey={p.key}
+            placeholder="4f68bce3-…-fbcaf984b709 or 8300"
             onChange={(v) => onChange({ typeUUID: v })}
           />
           <LabelledField
             label="mountOptions"
             value={p.mountOptions}
             rowKey={p.key}
+            placeholder="defaults"
             onChange={(v) => onChange({ mountOptions: v })}
           />
           <LabelledField
             label="flags (comma separated)"
             value={p.flags.join(', ')}
             rowKey={p.key}
+            placeholder={PARTITION_FLAGS.slice(0, 3).join(', ')}
             onChange={(v) =>
               onChange({ flags: v.split(',').map((f) => f.trim()).filter((f) => f !== '') })
             }
@@ -650,6 +681,56 @@ function PartitionRow({
 // mode — the schema's own sentinel.
 function restPatch(mode: LayoutMode): Partial<PartitionModel> {
   return mode === 'size' ? { sizeMiB: null } : { end: '0' }
+}
+
+// Choice is a select over the values the builder accepts, with two properties a
+// bare <select> would not have:
+//
+//  - An unset value shows the placeholder as a disabled first option, so the
+//    expected format is visible before anything is chosen (a select has no
+//    placeholder attribute).
+//  - A value the list does not contain is appended and marked, rather than
+//    silently rendering as blank. A template can legitimately carry a value this
+//    build of the UI does not know about, and dropping it on sight would be
+//    worse than showing it.
+function Choice({
+  ariaLabel,
+  value,
+  options,
+  placeholder,
+  allowEmpty = false,
+  emptyLabel,
+  onChange,
+}: {
+  ariaLabel: string
+  value: string
+  options: readonly string[]
+  placeholder: string
+  // When empty is a legal value (compression on the disk path), the blank option
+  // is selectable and labelled; otherwise it is a disabled prompt.
+  allowEmpty?: boolean
+  emptyLabel?: string
+  onChange: (v: string) => void
+}) {
+  const unknown = value !== '' && !options.includes(value)
+  return (
+    <select
+      aria-label={ariaLabel}
+      className={`${FIELD} ${value === '' || unknown ? 'text-slate-400' : ''}`}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+    >
+      <option value="" disabled={!allowEmpty}>
+        {allowEmpty ? (emptyLabel ?? placeholder) : placeholder}
+      </option>
+      {options.map((o) => (
+        <option key={o} value={o} className="text-[#00285a]">
+          {o}
+        </option>
+      ))}
+      {unknown && <option value={value}>{value} (not recognised)</option>}
+    </select>
+  )
 }
 
 function LabelledField({
@@ -690,75 +771,101 @@ function LabelledField({
 // controls how the image is built, which is a different axis.
 function ArtifactsSection({
   artifacts,
+  imageType,
   onChange,
 }: {
   artifacts: DiskModel['artifacts']
+  imageType: string
   onChange: (next: DiskModel['artifacts']) => void
 }) {
+  // Only the combinations this image type can actually build. The schema's enums
+  // are wider than the implementation on both axes — `tar` has no conversion
+  // case and `gzip`/`bz2` have no compressor — so offering the schema's lists
+  // verbatim would hand the user a build failure. See lib/diskrules.ts.
+  const support = artifactSupport(imageType)
+  const { types, compressions, compressionRequired } = artifactOptions(imageType)
+
+  const patch = (i: number, next: Partial<DiskModel['artifacts'][number]>) =>
+    onChange(artifacts.map((x, j) => (j === i ? { ...x, ...next } : x)))
+
   return (
     <div className="mb-4">
       <span className={LABEL}>Output Artifacts</span>
       <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-        {artifacts.length === 0 ? (
+        {support === 'ignored' ? (
           <p className="py-2 text-center text-sm text-slate-400">
-            No output artifacts — the builder writes its default format.
+            {imageType.toUpperCase()} images do not run the artifact pipeline — the image type
+            writes its own output.
           </p>
         ) : (
-          artifacts.map((a, i) => (
-            <div key={a.key} className="mb-2 flex items-center gap-2">
-              <select
-                aria-label={`Artifact ${i + 1} format`}
-                className={`${FIELD} w-[140px]`}
-                value={a.type}
-                onChange={(e) =>
-                  onChange(artifacts.map((x, j) => (j === i ? { ...x, type: e.target.value } : x)))
-                }
-              >
-                {ARTIFACT_TYPES.map((t) => (
-                  <option key={t} value={t}>
-                    {t}
-                  </option>
-                ))}
-              </select>
-              <select
-                aria-label={`Artifact ${i + 1} compression`}
-                className={`${FIELD} w-[160px]`}
-                value={a.compression}
-                onChange={(e) =>
-                  onChange(
-                    artifacts.map((x, j) => (j === i ? { ...x, compression: e.target.value } : x)),
-                  )
-                }
-              >
-                <option value="">no compression</option>
-                {COMPRESSION_TYPES.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                className={ICON_BTN}
-                title="Remove artifact"
-                onClick={() => onChange(artifacts.filter((_, j) => j !== i))}
-              >
-                ✕
-              </button>
-            </div>
-          ))
+          <>
+            {artifacts.length > 0 && (
+              <div className="flex gap-2 px-1 pb-1">
+                <span className={`${COL_HEAD} w-[140px]`}>Format</span>
+                <span className={`${COL_HEAD} w-[160px]`}>Compression</span>
+              </div>
+            )}
+            {artifacts.length === 0 ? (
+              <p className="py-2 text-center text-sm text-slate-400">
+                {compressionRequired
+                  ? 'None yet — a WSL2 image needs one tar artifact with gz compression.'
+                  : 'No output artifacts — the builder writes its default format.'}
+              </p>
+            ) : (
+              artifacts.map((a, i) => (
+                <div key={a.key} className="mb-2 flex items-center gap-2">
+                  <div className="w-[140px]">
+                    <Choice
+                      ariaLabel={`Artifact ${i + 1} format`}
+                      value={a.type}
+                      options={types}
+                      placeholder="select…"
+                      onChange={(v) => patch(i, { type: v })}
+                    />
+                  </div>
+                  <div className="w-[160px]">
+                    <Choice
+                      ariaLabel={`Artifact ${i + 1} compression`}
+                      value={a.compression}
+                      options={compressions}
+                      placeholder={compressionRequired ? 'required' : 'none'}
+                      // Only the disk path treats compression as optional; wsl2
+                      // rejects an artifact without it.
+                      allowEmpty={!compressionRequired}
+                      emptyLabel="no compression"
+                      onChange={(v) => patch(i, { compression: v })}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    className={ICON_BTN}
+                    title="Remove artifact"
+                    onClick={() => onChange(artifacts.filter((_, j) => j !== i))}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))
+            )}
+            <button
+              type="button"
+              onClick={() =>
+                onChange([
+                  ...artifacts,
+                  { ...newArtifact(), type: types[0], compression: compressionRequired ? compressions[0] : '' },
+                ])
+              }
+              className="mt-1 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-[#00285a] hover:border-slate-400 hover:bg-slate-100"
+            >
+              + Add Artifact
+            </button>
+          </>
         )}
-        <button
-          type="button"
-          onClick={() => onChange([...artifacts, newArtifact()])}
-          className="mt-1 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-[#00285a] hover:border-slate-400 hover:bg-slate-100"
-        >
-          + Add Artifact
-        </button>
       </div>
       <p className="mt-1 text-xs text-slate-400">
         Converts the finished image to another container format. QCOW2, VHD, VMDK and the rest
-        live here, not in the image type.
+        live here, not in the image type. Only the formats and compressions this image type can
+        actually produce are offered.
       </p>
     </div>
   )

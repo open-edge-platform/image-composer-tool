@@ -12,21 +12,39 @@
 // than component state:
 //
 //  1. Sizes vs. offsets. The schema stores `start`/`end` offsets per partition;
-//     there is no per-partition `size` field. Editing offsets by hand means the
-//     user has to keep them contiguous, so the UI is size-oriented and the
-//     offsets are computed. `end: "0"` means "rest of the disk".
+//     there is no per-partition `size` field. Keeping offsets contiguous by hand
+//     is work, so size mode holds a size per partition and derives the offsets;
+//     offset mode does the reverse. `end: "0"` means "rest of the disk".
 //  2. Full template vs. user template. The merged YAML spells out every key,
 //     including empty ones (`path: ""`, `typeUUID: ""`, `artifacts: []`) because
 //     the Go structs carry no `omitempty`. Emitting those back would put noise
 //     into a user template, so toDiskConfig drops anything empty.
+//
+// What counts as a *valid* value for each field lives in ./diskrules.ts, which
+// transcribes the Go implementation's allowlists — the JSON schema types nearly
+// every Disk and Partition field as an unconstrained string.
 
 import yaml from 'js-yaml'
 import { MIB, formatSize, parseMiB, parseSize } from './size'
+import {
+  FS_TYPES,
+  OFFSET_SUFFIXES,
+  PARTITION_FLAGS,
+  PARTITION_TYPES,
+  PARTITION_TYPE_GUIDS,
+  artifactOptions,
+  artifactSupport,
+  isValidDiskSize,
+  isValidOffset,
+  isValidTypeUUID,
+} from './diskrules'
 
-// Enumerated by the schema ($defs.Disk / $defs.Disk.artifacts.items).
+// Enumerated by the schema ($defs.Disk.partitionTableType), and the one Disk
+// enum the implementation agrees with. The artifact type/compression enums are
+// *not* re-exported here on purpose: the schema's versions include values the
+// builder cannot produce, so lib/diskrules.ts owns those and there is only one
+// place to look.
 export const PARTITION_TABLE_TYPES = ['gpt', 'mbr'] as const
-export const ARTIFACT_TYPES = ['raw', 'qcow2', 'vhd', 'vhdx', 'vmdk', 'vdi', 'tar'] as const
-export const COMPRESSION_TYPES = ['gz', 'gzip', 'xz', 'zstd', 'bz2'] as const
 
 export type PartitionTableType = (typeof PARTITION_TABLE_TYPES)[number]
 
@@ -450,13 +468,23 @@ export function validateDisk(model: DiskModel, ctx: DiskContext = {}): DiskIssue
     if (!p.id && !p.name) {
       warnings.push(`Partition ${i + 1} has no id or name.`)
     }
+    const { errors: fe, warnings: fw } = partitionFieldIssues(model, i, label)
+    errors.push(...fe)
+    warnings.push(...fw)
   })
 
   warnings.push(...contiguityWarnings(model))
+  const artifacts = artifactIssues(model, ctx)
+  errors.push(...artifacts.errors)
+  warnings.push(...artifacts.warnings)
 
+  // The builder's own suffix table, not lib/size.ts's looser parser: a value
+  // like "1.5TiB" or "32gib" parses here and is refused at build time.
   const sizeBytes = parseSize(model.size)
-  if (model.size && sizeBytes === null) {
-    errors.push(`Disk size "${model.size}" is not a valid size (for example 32GiB).`)
+  if (model.size && !isValidDiskSize(model.size)) {
+    errors.push(
+      `Disk size "${model.size}" is not a size the builder accepts. Use a whole number and one of ${OFFSET_SUFFIXES.join(', ')} — exact case, no decimals.`,
+    )
   }
   if (sizeBytes !== null && model.partitions.length > 0) {
     const used = usedMiB(model)
@@ -470,8 +498,10 @@ export function validateDisk(model: DiskModel, ctx: DiskContext = {}): DiskIssue
   // internal/config validateDiskMaxSize: maxSize requires size, and must exceed it.
   const maxBytes = parseSize(model.maxSize)
   if (model.maxSize) {
-    if (maxBytes === null) {
-      errors.push(`Max size "${model.maxSize}" is not a valid size (for example 64GiB).`)
+    if (!isValidDiskSize(model.maxSize) || maxBytes === null) {
+      errors.push(
+        `Max size "${model.maxSize}" is not a size the builder accepts. Use a whole number and one of ${OFFSET_SUFFIXES.join(', ')} — exact case, no decimals.`,
+      )
     } else if (sizeBytes === null) {
       errors.push('Max size requires a disk size to be set.')
     } else if (maxBytes <= sizeBytes) {
@@ -481,9 +511,6 @@ export function validateDisk(model: DiskModel, ctx: DiskContext = {}): DiskIssue
 
   errors.push(...autoExpandErrors(model, ctx))
 
-  model.artifacts.forEach((a, i) => {
-    if (!a.type) errors.push(`Output artifact ${i + 1} needs a format.`)
-  })
 
   // Not an error — the builder can produce an image without an explicit
   // artifact list (ISO templates carry none) — but worth saying out loud when
@@ -491,6 +518,118 @@ export function validateDisk(model: DiskModel, ctx: DiskContext = {}): DiskIssue
   if (model.partitions.length === 0) {
     warnings.push('No partitions are defined.')
   }
+
+  return { errors, warnings }
+}
+
+// partitionFieldIssues checks the per-field rules the builder enforces. The JSON
+// schema types all of these as plain strings, so without this the first sign of
+// a bad value is a failed build. See lib/diskrules.ts for where each rule
+// comes from, and which of them fail hard versus degrade quietly.
+function partitionFieldIssues(model: DiskModel, i: number, label: string): DiskIssues {
+  const p = model.partitions[i]
+  const errors: string[] = []
+  const warnings: string[] = []
+
+  // Hard: diskPartitionCreate rejects an unlisted fsType outright.
+  if (!p.fsType) {
+    errors.push(`${label} needs a filesystem type.`)
+  } else if (!(FS_TYPES as readonly string[]).includes(p.fsType)) {
+    errors.push(`${label} has an unsupported filesystem "${p.fsType}". Use one of ${FS_TYPES.join(', ')}.`)
+  }
+
+  // Hard: VerifyFileSize is stricter than it looks — integers only, exact-case
+  // suffix, no bare byte counts. Only reachable in offset mode, since size mode
+  // generates the offsets itself.
+  if (model.layoutMode === 'offset') {
+    for (const [field, value] of [
+      ['Start', p.start],
+      ['End', isRest(model, i) ? '0' : p.end],
+    ] as const) {
+      if (!isValidOffset(value)) {
+        errors.push(
+          `${label}: ${field} "${value}" is not a size the builder accepts. ` +
+            `Use a whole number and one of ${OFFSET_SUFFIXES.join(', ')} — exact case, no decimals${field === 'End' ? ', or 0 for the rest of the disk' : ''}.`,
+        )
+      }
+    }
+  }
+
+  // Soft: an unknown partition type means sgdisk is never given -t, so the
+  // partition silently gets a default type instead of the intended one.
+  if (p.type && !(PARTITION_TYPES as readonly string[]).includes(p.type)) {
+    warnings.push(
+      `${label} has an unrecognised type "${p.type}"; the partition type will be left at the default.`,
+    )
+  }
+
+  // Soft: sgdisk validates the value, but not until build time.
+  if (p.typeUUID && !isValidTypeUUID(p.typeUUID)) {
+    warnings.push(
+      `${label} has a typeUUID that is neither a GUID nor a 4-digit sgdisk code: "${p.typeUUID}".`,
+    )
+  }
+  // typeUUID wins over type (imagedisc.go:812), so a mismatch is a silent
+  // override rather than a conflict the build would report.
+  const expected = PARTITION_TYPE_GUIDS[p.type]
+  if (p.typeUUID && expected && p.typeUUID.toLowerCase() !== expected.toLowerCase()) {
+    warnings.push(
+      `${label}: typeUUID does not match type "${p.type}" (${expected}); the typeUUID is used.`,
+    )
+  }
+
+  for (const flag of p.flags) {
+    if (!(PARTITION_FLAGS as readonly string[]).includes(flag)) {
+      warnings.push(`${label} has an unrecognised flag "${flag}"; it will be ignored.`)
+    }
+  }
+
+  return { errors, warnings }
+}
+
+// artifactIssues checks disk.artifacts[] against the pipeline the image type
+// actually runs. The schema's enums are wider than the implementation on both
+// axes (see lib/diskrules.ts), and the image type decides which set applies.
+function artifactIssues(model: DiskModel, ctx: DiskContext): DiskIssues {
+  const errors: string[] = []
+  const warnings: string[] = []
+  const imageType = ctx.imageType ?? ''
+  const support = artifactSupport(imageType)
+  const { types, compressions, compressionRequired } = artifactOptions(imageType)
+
+  if (support === 'ignored') {
+    if (model.artifacts.length > 0) {
+      warnings.push(
+        `Output artifacts are ignored for ${imageType.toUpperCase()} images — the artifact pipeline only runs for RAW and WSL2.`,
+      )
+    }
+    return { errors, warnings }
+  }
+
+  if (support === 'wsl2' && model.artifacts.length === 0) {
+    errors.push('A WSL2 image needs exactly one tar artifact with gz compression.')
+  }
+  if (support === 'wsl2' && model.artifacts.length > 1) {
+    warnings.push('A WSL2 image uses only the first artifact; the rest are ignored.')
+  }
+
+  model.artifacts.forEach((a, i) => {
+    const label = `Output artifact ${i + 1}`
+    if (!a.type) {
+      errors.push(`${label} needs a format.`)
+    } else if (!types.includes(a.type)) {
+      errors.push(
+        `${label}: ${imageType.toUpperCase() || 'this'} images cannot be written as "${a.type}". Use ${types.join(', ')}.`,
+      )
+    }
+    if (!a.compression) {
+      if (compressionRequired) errors.push(`${label} needs compression (${compressions.join(' or ')}).`)
+    } else if (!compressions.includes(a.compression)) {
+      errors.push(
+        `${label}: "${a.compression}" compression is not implemented for ${imageType.toUpperCase() || 'this'} images. Use ${compressions.join(', ')}.`,
+      )
+    }
+  })
 
   return { errors, warnings }
 }
