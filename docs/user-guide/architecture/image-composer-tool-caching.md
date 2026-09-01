@@ -133,7 +133,7 @@ refresh is staged in a temporary directory and moved into place only once every
 file has arrived, so a failed or interrupted refresh cannot leave a partial
 `Release` behind and break a working offline build.
 
-Metadata caching is bypassed entirely for `localhost`/loopback repository URLs
+DEB metadata caching is bypassed entirely for `localhost`/loopback repository URLs
 (a local mirror is assumed to be under active development) and during live-installer
 execution.
 
@@ -148,7 +148,7 @@ or `.zst` primary metadata against the checksum and size published by `repomd.xm
 parse that metadata, and reuse cached RPM payloads without contacting the repository.
 Metadata files that are used for offline builds are written through temporary files,
 synced, and atomically renamed into place so partial writes do not become valid cache
-entries.
+entries. RPM metadata caching is only bypassed during live-installer execution.
 
 ### Package Cache Organization
 

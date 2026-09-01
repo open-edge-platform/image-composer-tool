@@ -374,9 +374,14 @@ func writeFileAtomic(filePath string, data []byte, perm os.FileMode) error {
 		}
 	}()
 
-	if _, err := tmp.Write(data); err != nil {
+	n, err := tmp.Write(data)
+	if err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("write temporary cache file: %w", err)
+	}
+	if n != len(data) {
+		_ = tmp.Close()
+		return fmt.Errorf("write temporary cache file: short write: wrote %d of %d bytes", n, len(data))
 	}
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
