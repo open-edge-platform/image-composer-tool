@@ -7,7 +7,7 @@ import { Select } from './Select'
 import { PackagesStep } from './PackagesStep'
 import { Input } from './Input'
 import { DiskStep } from './DiskStep'
-import { parseDiskFromYaml, toDiskConfig } from '../lib/disk'
+import { parseDiskFromYaml, toDiskConfig, validateDisk } from '../lib/disk'
 
 // How long to wait after the last keystroke in Image Name before re-composing.
 // Each compose call with an override generates and deletes a server-side file
@@ -132,11 +132,22 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     () => (diskEdited && disk ? JSON.stringify(toDiskConfig(disk)) : ''),
     [diskEdited, disk],
   )
+  // A layout the Disk step has already flagged is never sent. The server would
+  // reject it with the same complaint the step is showing inline, so posting it
+  // buys a round trip and a second, redundant error banner. Holding the previous
+  // key instead means the Review pane keeps showing the last good resolve while
+  // the user fixes the field, rather than flicking back to the un-overridden
+  // template and implying their edits were discarded.
+  const diskInvalid = useMemo(
+    () => !!disk && validateDisk(disk, { imageType: selection.imageType }).errors.length > 0,
+    [disk, selection.imageType],
+  )
   const [debouncedDiskKey, setDebouncedDiskKey] = useState(diskKey)
   useEffect(() => {
+    if (diskInvalid) return
     const t = setTimeout(() => setDebouncedDiskKey(diskKey), DISK_DEBOUNCE_MS)
     return () => clearTimeout(t)
-  }, [diskKey])
+  }, [diskKey, diskInvalid])
 
   // The request the backend actually resolves against: the cascade selection,
   // plus the Advanced-mode overrides. The image name is sent only once the user
@@ -204,6 +215,13 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
 
   const onBuild = async () => {
     if (!complete) return
+    // Unlike a compose, a build cannot fall back to the last good layout: it has
+    // to run what is on screen or nothing. Say so rather than posting a request
+    // the server will reject.
+    if (diskInvalid) {
+      setError('Fix the errors on the Disk step before composing.')
+      return
+    }
     try {
       setBusy(true)
       setError(null)
