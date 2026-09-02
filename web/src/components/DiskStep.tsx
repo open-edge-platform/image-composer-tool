@@ -47,9 +47,12 @@ import type { SizeUnit } from '../lib/size'
 // `disk.artifacts[]` — a Disk property, and the place ICT actually produces
 // QCOW2/VHD/VMDK output (target.imageType does not offer those).
 //
-// Nothing here reaches a build yet: the model is client-side only until the
-// Review step generates a full template. The YAML preview at the bottom is what
-// this step contributes to that, shown so the output is reviewable today.
+// The edited model is sent as `disk` on the compose/build request once the user
+// touches it, and the backend emits it into the generated extends delta — so
+// what this step shows is what gets built. The preview at the bottom is that
+// exact block. An unedited model is not sent at all: it round-trips to the
+// template's own disk block, so sending it would generate a delta that changes
+// nothing while making the Review pane claim an override.
 
 const CHIP_BASE =
   'cursor-pointer select-none rounded-md border px-3.5 py-1.5 text-[13px] font-medium transition-colors'
@@ -386,8 +389,9 @@ export function DiskStep() {
         )}
       </div>
       <p className="mt-2 text-xs text-slate-400">
-        Preview only. The Review step still composes from the pre-authored template; sending an
-        edited disk layout to a build arrives with client-side template generation.
+        {diskEdited
+          ? 'This block is sent with the compose and the build — the Review step resolves it, and it is what gets built.'
+          : 'Matches the resolved template. Edit anything above and this block is sent with the compose and the build.'}
       </p>
     </div>
   )

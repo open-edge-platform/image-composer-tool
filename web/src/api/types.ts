@@ -59,6 +59,15 @@ export interface ComposeRequest {
   // the delta, so a package from a repo the curated template doesn't configure
   // can still resolve. Base repos (enabledByDefault) need not be sent.
   repos?: string[]
+  // The Disk step's edited disk block, emitted into the delta's `disk`.
+  // Omitted (not just empty) means "not overridden".
+  //
+  // Must be the COMPLETE block, not a diff: the extends merge replaces `disk`
+  // wholesale (internal/config/merge.go) rather than merging field by field the
+  // way it unions package lists, so a partial block would drop whatever it
+  // omits — the parent's whole partition table included. toDiskConfig() emits a
+  // complete block because the model is seeded from the resolved template.
+  disk?: Record<string, unknown>
 }
 
 export interface ComposeSummary {

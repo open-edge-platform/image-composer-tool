@@ -127,6 +127,13 @@ type deltaTemplate struct {
 	// PackageRepositories is safe to reuse from config: its fields carry
 	// omitempty except Codename and PKey, both of which a delta always sets.
 	PackageRepositories []config.PackageRepository `yaml:"packageRepositories,omitempty"`
+	// Disk is the request's own override, emitted verbatim. Unlike the fields
+	// above there is nothing to merge with the parent's: the extends merge
+	// replaces disk wholesale (config/merge.go), so the override has to be the
+	// complete block and the delta simply restates it. DiskOverride carries
+	// omitempty throughout, so an unset field is omitted rather than emitted
+	// zero-valued.
+	Disk *DiskOverride `yaml:"disk,omitempty"`
 }
 
 // deltaSystemConfig is the only systemConfig a delta ever declares. Advanced
@@ -174,6 +181,7 @@ func buildDelta(parentTemplate string, parentImage config.ImageInfo, parentTarge
 		sort.Strings(pkgs)
 		d.SystemConfig = &deltaSystemConfig{Packages: pkgs}
 	}
+	d.Disk = sel.Disk
 	data, err := yaml.Marshal(d)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling delta template: %w", err)

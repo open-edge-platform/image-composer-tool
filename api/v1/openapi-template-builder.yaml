@@ -914,6 +914,178 @@ components:
           uniqueItems: true
           items:
             type: string
+        disk:
+          $ref: '#/components/schemas/DiskOverride'
+
+    DiskOverride:
+      type: object
+      description: |
+        A complete replacement for the matched template's `disk` block, as edited
+        by the Advanced tab's Disk step. Omitted means "not overridden".
+
+        **This must be the complete block, not a diff.** `extends` merging
+        replaces `disk` wholesale rather than merging field by field
+        (internal/config/merge.go: `if !isEmptyDiskConfig(userTemplate.Disk)`),
+        unlike `systemConfig`, where package lists are unioned. A partial block
+        would therefore drop everything it omitted — including the parent's
+        entire partition table. The UI satisfies this by seeding from the
+        resolved template and editing in place.
+
+        Field constraints here mirror what the builder accepts, which is
+        narrower than the template schema in several places (the schema types
+        most of these as unconstrained strings). Values that only *degrade* a
+        build rather than failing it — an unrecognised partition `type`, for
+        instance — are left loose here and reported as warnings, so a template
+        carrying one can still round-trip.
+      required: [name]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          description: Required by the template schema ($defs.Disk.required).
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+          maxLength: 128
+        path:
+          type: string
+          description: |
+            Target disk device for the live installer. Empty enables
+            policy-based selection via `selectionPolicy`. Carried through
+            unchanged from the matched template; the Disk step does not edit it.
+          pattern: '^(|/dev/[A-Za-z0-9/._-]+)$'
+          maxLength: 256
+        selectionPolicy:
+          type: object
+          description: |
+            Policy-based disk selection, used when `path` is empty. Carried
+            through unchanged from the matched template; the Disk step does not
+            edit it.
+          additionalProperties: false
+          properties:
+            strategy:
+              type: string
+              enum: [first, largest, fastest]
+            excludeRemovable:
+              type: boolean
+            requireEmpty:
+              type: boolean
+        size:
+          type: string
+          description: |
+            Exact disk size in create mode; a grow-only floor in overlay mode.
+            The suffix set is the builder's own (imagedisc.go sizeSuffixesList)
+            and is stricter than it looks: whole numbers only, exact case, no
+            bare byte counts, no TiB.
+          pattern: '^\d+(KiB|MiB|GiB|K|M|G|KB|MB|GB)$'
+          maxLength: 32
+        maxSize:
+          type: string
+          description: |
+            Overlay-mode-only ceiling. Must be greater than `size`, and requires
+            `size` to be set; both rules are enforced by the template loader.
+          pattern: '^\d+(KiB|MiB|GiB|K|M|G|KB|MB|GB)$'
+          maxLength: 32
+        partitionTableType:
+          type: string
+          enum: [gpt, mbr]
+        extendLastPartitionToFillDisk:
+          type: boolean
+          description: |
+            Forces the last partition's end to "0". Rejected by the template
+            loader for `imageType: iso`, and for `raw` unless the last partition
+            is the rootfs (`mountPoint: /`).
+        artifacts:
+          type: array
+          description: |
+            Output formats the finished image is converted to. This is the axis
+            QCOW2/VHD/VMDK live on; `target.imageType` controls how the image is
+            built and is separate.
+
+            Which values are legal depends on the image type: RAW and overlay
+            run the qemu-img pipeline (`raw`/`qcow2`/`vhd`/`vhdx`/`vmdk`/`vdi`,
+            optional `gz`/`xz`/`zstd`), WSL2 requires exactly one `tar` + `gz`,
+            and ISO/IMG never run the pipeline at all. `bz2` is absent because
+            no compressor implements it, despite the template schema listing it.
+          maxItems: 8
+          items:
+            type: object
+            required: [type]
+            additionalProperties: false
+            properties:
+              type:
+                type: string
+                enum: [raw, qcow2, vhd, vhdx, vmdk, vdi, tar]
+              compression:
+                type: string
+                enum: [gz, gzip, xz, zstd]
+        partitions:
+          type: array
+          description: |
+            The partition table, in on-disk order. `start`/`end` are absolute
+            offsets, not sizes; an `end` of "0" means "the rest of the disk" and
+            is only valid on the last entry.
+          maxItems: 32
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              id:
+                type: string
+                maxLength: 64
+              index:
+                type: integer
+                minimum: 1
+                maximum: 128
+              name:
+                type: string
+                maxLength: 64
+              type:
+                type: string
+                description: |
+                  Partition type name (`esp`, `linux-root-amd64`, …). Left as a
+                  free string rather than an enum: an unrecognised value makes
+                  the builder fall back to a default type instead of failing
+                  (imagedisc.go discards the lookup error), so rejecting one
+                  here would be stricter than the build and would stop a
+                  template that carries it from round-tripping.
+                maxLength: 64
+              typeUUID:
+                type: string
+                description: |
+                  GPT type GUID, or one of sgdisk's short hex codes ("8300").
+                  Passed through to `sgdisk -t`, which is the arbiter.
+                maxLength: 64
+              fsType:
+                type: string
+                description: |
+                  Enumerated because this one is a hard failure: the builder
+                  rejects anything else outright (imagedisc.go diskPartitionCreate).
+                enum: [fat32, fat16, vfat, ext2, ext3, ext4, xfs, linux-swap]
+              fsLabel:
+                type: string
+                maxLength: 64
+              start:
+                type: string
+                pattern: '^(0|\d+(KiB|MiB|GiB|K|M|G|KB|MB|GB))$'
+                maxLength: 32
+              end:
+                type: string
+                pattern: '^(0|\d+(KiB|MiB|GiB|K|M|G|KB|MB|GB))$'
+                maxLength: 32
+              mountPoint:
+                type: string
+                description: |
+                  Mount path, or "none" for a partition that is not mounted
+                  (what the templates write for swap).
+                maxLength: 256
+              mountOptions:
+                type: string
+                maxLength: 256
+              flags:
+                type: array
+                maxItems: 8
+                items:
+                  type: string
+                  maxLength: 32
 
     ComposeSummary:
       type: object

@@ -148,6 +148,34 @@ produce templates the schema rejects.
     `tar` + `gz` artifact; ISO and IMG never call `ConvertImageFile` at all, so
     the step says the list is ignored rather than offering a dead control.
 
+11. **The override reaches a build through the existing `extends` delta**, not a
+    new mechanism. `ComposeRequest` gains a `disk` object; `buildDelta` emits it
+    as the delta's `disk` block, alongside the `image`, `systemConfig.packages`
+    and `packageRepositories` the same delta already carries
+    ([`adr-web-ui-advanced-mode-extends.md`](adr-web-ui-advanced-mode-extends.md)).
+    So the Review step's "Your changes" view, the resolved template, and the
+    built image are one file, merged one way.
+
+    Two consequences follow from the wholesale-replace semantics in (1):
+
+    - **The wire type carries the complete block**, including `path` and
+      `selectionPolicy`, which the step does not edit. They are read from the
+      resolved template and sent back unchanged, because omitting them would
+      delete them — `image-templates/ubuntu24/ubuntu24-x86_64-minimal-unattended-iso.yml`
+      is a real template that sets both.
+    - **An unedited layout is not sent at all.** It round-trips to the parent's
+      own disk block, so sending it would generate a delta that changes nothing
+      while making the Review pane report an override.
+
+12. **The override is validated in Go, not by the OpenAPI spec.** Nothing
+    validates request bodies against the spec at runtime — the handlers decode
+    straight into the generated structs — so the spec's `pattern`, `enum`,
+    `maxLength` and `additionalProperties: false` are documentation. The typed
+    decode drops unknown keys by construction; everything else is enforced by
+    `service.ValidateDisk`, which both `Compose` and `resolveBuildTemplate` call.
+    The build path validates independently rather than trusting a prior compose,
+    matching what `ValidateImageName`/`ValidatePackages` already do.
+
 ---
 
 ## Consequences

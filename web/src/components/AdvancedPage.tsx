@@ -7,7 +7,7 @@ import { Select } from './Select'
 import { PackagesStep } from './PackagesStep'
 import { Input } from './Input'
 import { DiskStep } from './DiskStep'
-import { parseDiskFromYaml } from '../lib/disk'
+import { parseDiskFromYaml, toDiskConfig } from '../lib/disk'
 
 // How long to wait after the last keystroke in Image Name before re-composing.
 // Each compose call with an override generates and deletes a server-side file
@@ -15,6 +15,12 @@ import { parseDiskFromYaml } from '../lib/disk'
 // keystroke. Build itself never waits on this — it always sends whatever is
 // currently typed.
 const IMAGE_NAME_DEBOUNCE_MS = 400
+
+// The disk override is debounced for the same reason as the image name, and by
+// the same amount: the Disk step's fields include free text (disk name, mount
+// points, hand-typed offsets), so an undebounced override would write and delete
+// a server-side delta file on every keystroke.
+const DISK_DEBOUNCE_MS = 400
 
 // The Advanced tab is a wizard, mirroring the prototype's step flow. Only the
 // first step (Target / "Choose Image Configuration") is built out today; the
@@ -81,6 +87,8 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   const addedPackages = useStore((s) => s.addedPackages)
   const enabledRepos = useStore((s) => s.enabledRepos)
   const seedDisk = useStore((s) => s.seedDisk)
+  const disk = useStore((s) => s.disk)
+  const diskEdited = useStore((s) => s.diskEdited)
 
   const [step, setStep] = useState(0)
   const [composed, setComposed] = useState<ComposeResponse | null>(null)
@@ -110,6 +118,26 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   const packagesKey = useMemo(() => addedPackages.map(encodePackage).sort().join('\n'), [addedPackages])
   const reposKey = useMemo(() => [...enabledRepos].sort().join('\n'), [enabledRepos])
 
+  // Serialised for the same reason packages are keyed on their joined encoding:
+  // the model is a fresh object on every edit, so memoising on it directly would
+  // recompose on every keystroke. The JSON of the *emitted* block is the right
+  // key — it ignores model fields that never reach the template (React row keys,
+  // the layout mode, the derived side of the size/offset pair), so switching
+  // between size- and offset-based editing does not trigger a recompose.
+  //
+  // Sent only once the user has edited: an unedited model round-trips to the
+  // template's own disk block, so sending it would generate a delta that changes
+  // nothing while making the Review pane claim an override.
+  const diskKey = useMemo(
+    () => (diskEdited && disk ? JSON.stringify(toDiskConfig(disk)) : ''),
+    [diskEdited, disk],
+  )
+  const [debouncedDiskKey, setDebouncedDiskKey] = useState(diskKey)
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedDiskKey(diskKey), DISK_DEBOUNCE_MS)
+    return () => clearTimeout(t)
+  }, [diskKey])
+
   // The request the backend actually resolves against: the cascade selection,
   // plus the Advanced-mode overrides. The image name is sent only once the user
   // has edited it, and only the settled (debounced) value, so an in-progress
@@ -123,8 +151,9 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
       // "no override" and the backend resolves the curated template directly.
       packages: packagesKey ? packagesKey.split('\n') : undefined,
       repos: reposKey ? reposKey.split('\n') : undefined,
+      disk: debouncedDiskKey ? JSON.parse(debouncedDiskKey) : undefined,
     }),
-    [selection, imageNameEdited, debouncedImageName, packagesKey, reposKey],
+    [selection, imageNameEdited, debouncedImageName, packagesKey, reposKey, debouncedDiskKey],
   )
 
   // Entering Advanced always lands on the first step, mirroring the prototype's
@@ -178,12 +207,18 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     try {
       setBusy(true)
       setError(null)
-      // Build always sends whatever is currently typed, not the debounced value
-      // the Review preview is showing — a discrete action shouldn't wait on a
-      // typing pause.
+      // Spread composeReq rather than rebuilding from `selection`, so every
+      // override reaches the build. Rebuilding listed only imageName, which
+      // silently dropped the Packages step's picks (and would have dropped the
+      // disk layout too) from every Advanced build.
+      //
+      // The two debounced fields are then re-read live: a discrete action
+      // shouldn't wait on a typing pause, so the build gets whatever is
+      // currently on screen rather than the value the Review preview settled on.
       const buildReq: ComposeRequest = {
-        ...selection,
+        ...composeReq,
         imageName: imageNameEdited ? imageName : undefined,
+        disk: diskEdited && disk ? toDiskConfig(disk) : undefined,
       }
       // Re-compose against buildReq (the current, non-debounced image name)
       // right before starting the build, so the logged YAML matches what the
