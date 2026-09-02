@@ -683,6 +683,9 @@ func clearRPMMetadataCache() {
 			"primary_*.gz",
 			"primary_*.zst",
 			"primary_*.xml",
+			"primary_*_*.gz",
+			"primary_*_*.zst",
+			"primary_*_*.xml",
 		} {
 			files, globErr := filepath.Glob(filepath.Join(metaDir, pattern))
 			if globErr != nil {

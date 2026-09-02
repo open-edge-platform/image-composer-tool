@@ -262,11 +262,15 @@ func rpmRawMetadataCachePaths(xmlCacheDir, metadataHref string) (string, string)
 	return filepath.Join(xmlCacheDir, dataFile), filepath.Join(xmlCacheDir, metaFile)
 }
 
-func extractMetadataExtension(metadataHref string) string {
-	basePath := metadataHref
-	if idx := strings.IndexAny(basePath, "?#"); idx != -1 {
-		basePath = basePath[:idx]
+func normalizeMetadataHref(metadataHref string) string {
+	if idx := strings.IndexAny(metadataHref, "?#"); idx != -1 {
+		return metadataHref[:idx]
 	}
+	return metadataHref
+}
+
+func extractMetadataExtension(metadataHref string) string {
+	basePath := normalizeMetadataHref(metadataHref)
 	ext := strings.ToLower(filepath.Ext(basePath))
 	if ext == "" {
 		ext = ".xml"
@@ -664,8 +668,9 @@ func saveOriginalXML(xmlCacheDir, metadataHref, fullURL string, data []byte) {
 	urlHashStr := hex.EncodeToString(urlHash[:])[:8]
 	timestamp := time.Now().Format("2006-01-02_15-04-05")
 
-	baseFilename := strings.TrimSuffix(filepath.Base(metadataHref), filepath.Ext(metadataHref))
-	filename := fmt.Sprintf("%s_%s_%s%s", baseFilename, urlHashStr, timestamp, filepath.Ext(metadataHref))
+	normalizedHref := normalizeMetadataHref(metadataHref)
+	baseFilename := strings.TrimSuffix(filepath.Base(normalizedHref), filepath.Ext(normalizedHref))
+	filename := fmt.Sprintf("%s_%s_%s%s", baseFilename, urlHashStr, timestamp, filepath.Ext(normalizedHref))
 
 	filePath := filepath.Join(xmlCacheDir, filename)
 	if err := os.WriteFile(filePath, data, 0644); err != nil {
@@ -674,7 +679,7 @@ func saveOriginalXML(xmlCacheDir, metadataHref, fullURL string, data []byte) {
 	}
 
 	log.Infof("Saved original XML file: %s", filePath)
-	pruneOldCachedFiles(xmlCacheDir, metadataHref, fullURL, filepath.Ext(metadataHref), filePath)
+	pruneOldCachedFiles(xmlCacheDir, normalizedHref, fullURL, filepath.Ext(normalizedHref), filePath)
 }
 
 func saveUncompressedXML(xmlCacheDir, metadataHref, fullURL string, xmlData []byte) {
@@ -683,7 +688,8 @@ func saveUncompressedXML(xmlCacheDir, metadataHref, fullURL string, xmlData []by
 	urlHashStr := hex.EncodeToString(urlHash[:])[:8]
 	timestamp := time.Now().Format("2006-01-02_15-04-05")
 
-	baseFilename := strings.TrimSuffix(filepath.Base(metadataHref), filepath.Ext(metadataHref))
+	normalizedHref := normalizeMetadataHref(metadataHref)
+	baseFilename := strings.TrimSuffix(filepath.Base(normalizedHref), filepath.Ext(normalizedHref))
 	filename := fmt.Sprintf("%s_%s_%s.xml", baseFilename, urlHashStr, timestamp)
 
 	filePath := filepath.Join(xmlCacheDir, filename)
@@ -693,5 +699,5 @@ func saveUncompressedXML(xmlCacheDir, metadataHref, fullURL string, xmlData []by
 	}
 
 	log.Infof("Saved uncompressed XML file: %s", filePath)
-	pruneOldCachedFiles(xmlCacheDir, metadataHref, fullURL, ".xml", filePath)
+	pruneOldCachedFiles(xmlCacheDir, normalizedHref, fullURL, ".xml", filePath)
 }
