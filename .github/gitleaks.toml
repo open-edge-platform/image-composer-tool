@@ -1,0 +1,6 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Allowlist legacy leaked key in historical commit"
+commits = ["f76968d4c8c8202f04ff5c3d8be395e797239d18"]

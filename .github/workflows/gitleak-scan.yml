@@ -22,6 +22,7 @@ jobs:
           scan-scope: "all"
           source: "./"
           version: "8.28.0"
+          config_path: ".github/gitleaks.toml"
           report_format: "sarif"
           redact: "true"
           exit_code_on_leak: "1"
