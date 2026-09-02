@@ -65,16 +65,26 @@ const CHIP_OFF = 'border-slate-300 text-slate-600 hover:border-slate-400'
 const FIELD =
   'w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm text-[#00285a] placeholder:font-normal placeholder:text-slate-300 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400 focus:border-[#0071c5] focus:outline-none focus:ring-1 focus:ring-[#0071c5]'
 const LABEL = 'mb-1 block text-sm font-semibold text-[#00285a]'
-const COL_HEAD = 'text-[11px] font-semibold uppercase tracking-wide text-slate-400'
-const DERIVED = 'truncate px-1 font-mono text-xs text-slate-400'
+// px-[9px] on both is where an input's own text sits (1px border + px-2), so a
+// heading, an input value and a read-only derived value all start on the same
+// vertical line whichever one a cell happens to hold.
+const COL_HEAD = 'px-[9px] text-[11px] font-semibold uppercase tracking-wide text-slate-400'
+const DERIVED = 'truncate px-[9px] font-mono text-xs text-slate-400'
 const ICON_BTN =
   'rounded border border-slate-300 px-1.5 py-0.5 text-xs text-slate-500 hover:border-slate-400 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-30'
 
-// One grid for the header and every row, so the columns line up. The FS column
-// is fixed wide enough for "linux-swap", the longest value in FS_TYPES, since a
-// clipped filesystem name is ambiguous ("linux-s" could be several things).
+// One grid for the header and every row, so the columns line up. Two things
+// this has to get right:
+//
+//  - The FS track is fixed wide enough for "linux-swap", the longest value in
+//    FS_TYPES; a clipped filesystem name is ambiguous ("linux-s" could be
+//    several things).
+//  - The actions track is a fixed width, not `auto`. The header's actions cell
+//    is empty, so `auto` collapsed it to zero there and handed the freed space
+//    to the 1fr tracks — the header and the rows then resolved different column
+//    widths, drifting further apart the further right you looked.
 const ROW_GRID =
-  'grid grid-cols-[minmax(84px,1fr)_minmax(72px,0.9fr)_112px_146px_minmax(84px,1fr)_94px_94px_auto] items-center gap-2'
+  'grid grid-cols-[minmax(84px,1fr)_minmax(72px,0.9fr)_112px_146px_minmax(84px,1fr)_94px_94px_112px] items-center gap-2'
 
 const MODE_LABELS: Record<LayoutMode, string> = {
   size: 'Size-based (contiguous)',
@@ -293,7 +303,7 @@ export function DiskStep() {
             <p className="py-2 text-center text-sm text-slate-400">No partitions defined.</p>
           ) : (
             <>
-              <div className={`${ROW_GRID} px-2 pb-1`}>
+              <div className={`${ROW_GRID} border border-transparent p-2 pb-1`}>
                 <span className={COL_HEAD}>Name</span>
                 <span className={COL_HEAD}>Label</span>
                 <span className={COL_HEAD}>FS</span>
