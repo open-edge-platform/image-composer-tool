@@ -3,7 +3,6 @@ package rpmutils
 import (
 	"bytes"
 	"fmt"
-	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -330,8 +329,6 @@ func createTempGPGKeyFiles(gpgKeyURLs []string) (keyPaths []string, cleanup func
 	var tempFiles []*os.File
 	var filePaths []string
 
-	client := network.NewSecureHTTPClient()
-
 	// Download and create temp files for each GPG key
 	for i, gpgKeyURL := range gpgKeyURLs {
 
@@ -343,25 +340,13 @@ func createTempGPGKeyFiles(gpgKeyURLs []string) (keyPaths []string, cleanup func
 		// Check if the GPG key URL is a binary file (ends with .gpg or .bin)
 		isBinary := strings.HasSuffix(strings.ToLower(gpgKeyURL), ".gpg") || strings.HasSuffix(strings.ToLower(gpgKeyURL), ".bin")
 
-		resp, err := client.Get(gpgKeyURL)
+		keyBytes, err := config.GetCachedOrDownloadGPGKey(gpgKeyURL)
 		if err != nil {
-			// Cleanup any files created so far
 			for _, f := range tempFiles {
 				f.Close()
 				os.Remove(f.Name())
 			}
 			return nil, nil, fmt.Errorf("fetch GPG key %s: %w", gpgKeyURL, err)
-		}
-
-		keyBytes, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			// Cleanup any files created so far
-			for _, f := range tempFiles {
-				f.Close()
-				os.Remove(f.Name())
-			}
-			return nil, nil, fmt.Errorf("read GPG key body from %s: %w", gpgKeyURL, err)
 		}
 
 		// If it's a binary GPG key, we need to handle it differently

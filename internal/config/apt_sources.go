@@ -394,7 +394,7 @@ func (t *ImageTemplate) downloadAndAddGPGKeys(repos []PackageRepository) error {
 			}
 		} else {
 			// For URLs, prefer persistent cache and download only on cache miss
-			keyData, err = getCachedOrDownloadGPGKey(repo.PKey)
+			keyData, err = GetCachedOrDownloadGPGKey(repo.PKey)
 			if err != nil {
 				return fmt.Errorf("failed to download GPG key from %s: %w", repo.PKey, err)
 			}
@@ -432,8 +432,8 @@ func (t *ImageTemplate) downloadAndAddGPGKeys(repos []PackageRepository) error {
 	return nil
 }
 
-// gpgKeyCacheFilePath returns the persistent cache path for a repository GPG key URL.
-func gpgKeyCacheFilePath(keyURL string) (string, error) {
+// GPGKeyCacheFilePath returns the persistent cache path for a repository GPG key URL.
+func GPGKeyCacheFilePath(keyURL string) (string, error) {
 	cacheDir, err := CacheDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve cache directory: %w", err)
@@ -450,11 +450,11 @@ func gpgKeyCacheFilePath(keyURL string) (string, error) {
 	return filepath.Join(gpgCacheDir, fmt.Sprintf("%s.gpg", hashHex)), nil
 }
 
-// getCachedOrDownloadGPGKey loads a key from persistent cache, downloading only on cache miss.
-func getCachedOrDownloadGPGKey(keyURL string) ([]byte, error) {
+// GetCachedOrDownloadGPGKey loads a key from persistent cache, downloading only on cache miss.
+func GetCachedOrDownloadGPGKey(keyURL string) ([]byte, error) {
 	log := logger.Logger()
 
-	cacheFilePath, err := gpgKeyCacheFilePath(keyURL)
+	cacheFilePath, err := GPGKeyCacheFilePath(keyURL)
 	if err == nil {
 		if cachedData, readErr := os.ReadFile(cacheFilePath); readErr == nil {
 			log.Infof("Using cached GPG key (%d bytes) for %s", len(cachedData), keyURL)
