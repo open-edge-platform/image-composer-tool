@@ -157,10 +157,11 @@ func TestClearRPMMetadataCache(t *testing.T) {
 		t.Fatalf("clearRPMPackageCache() unexpected error: %v", err)
 	}
 
+	// repomd.xml and primary.location.json are the authoritative manifests
+	// established by FetchPrimaryURL at Init(); they must survive metadata
+	// clearing so that a subsequent offline rebuild can reuse the cache.
 	for _, name := range []string{
 		"primary.parsed.json",
-		"primary.location.json",
-		"repomd.xml",
 		"repomd_aaaaaaaa_2000-01-01_00-00-00.xml",
 		"primary_aaaaaaaaaaaaaaaa.cache.json",
 		"primary_aaaaaaaaaaaaaaaa.gz",
@@ -170,6 +171,16 @@ func TestClearRPMMetadataCache(t *testing.T) {
 		f := filepath.Join(metaDir, name)
 		if _, statErr := os.Stat(f); !os.IsNotExist(statErr) {
 			t.Errorf("expected %s to be removed after cache clear", name)
+		}
+	}
+
+	for _, name := range []string{
+		"repomd.xml",
+		"primary.location.json",
+	} {
+		f := filepath.Join(metaDir, name)
+		if _, statErr := os.Stat(f); statErr != nil {
+			t.Errorf("expected %s to be preserved after cache clear (offline manifest), got: %v", name, statErr)
 		}
 	}
 }

@@ -674,10 +674,12 @@ func clearRPMMetadataCache() {
 			continue
 		}
 
+		// repomd.xml and primary.location.json are the authoritative manifests
+		// established by FetchPrimaryURL at Init(); deleting them breaks
+		// subsequent offline rebuilds because Init() runs before any network
+		// operation and cannot re-populate them without network access.
 		for _, pattern := range []string{
 			"primary.parsed.json",
-			"primary.location.json",
-			"repomd.xml",
 			"repomd_*.xml",
 			"primary_*.cache.json",
 			"primary_*.gz",

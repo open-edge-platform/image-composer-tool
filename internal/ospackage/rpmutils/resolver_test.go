@@ -1874,3 +1874,113 @@ func TestDownloadPackagesCompleteUsesMetadataAndPackageCachesWithoutHTTP(t *test
 		t.Fatalf("HTTP requests = %d, want 0", atomic.LoadInt32(&requestCount))
 	}
 }
+
+// TestClearRPMMetadataCachePreservesOfflineManifests reproduces the flow that
+// broke offline rebuilds: a first-ever online build populates repomd.xml and
+// primary.location.json via FetchPrimaryURL at Init, then handleRPMCacheRetry
+// clears the metadata cache before retrying the download. If those two
+// manifests are removed by clearRPMMetadataCache, the next Init on the offline
+// rebuild cannot resolve the primary reference without HTTP and the build fails.
+func TestClearRPMMetadataCachePreservesOfflineManifests(t *testing.T) {
+	cacheRoot := setRPMMetadataTestCache(t)
+
+	origRepoCfg := RepoCfg
+	t.Cleanup(func() { RepoCfg = origRepoCfg })
+
+	baseURL := "https://example.invalid/repo"
+	RepoCfg = RepoConfig{URL: baseURL}
+
+	cacheDir := filepath.Join(cacheRoot, "rpm-metadata", generateRPMMetadataDir(baseURL))
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		t.Fatalf("mkdir cache dir: %v", err)
+	}
+
+	primaryHref := "repodata/primary.xml.gz"
+	if err := writeFileAtomic(filepath.Join(cacheDir, "repomd.xml"), testRepomd(primaryHref), 0644); err != nil {
+		t.Fatalf("seed repomd.xml: %v", err)
+	}
+	if err := saveRPMPrimaryLocationCache(filepath.Join(cacheDir, "primary.location.json"), rpmPrimaryReference{Href: primaryHref}); err != nil {
+		t.Fatalf("seed primary.location.json: %v", err)
+	}
+	for _, name := range []string{
+		"primary.parsed.json",
+		"primary_aaaaaaaaaaaaaaaa.gz",
+		"primary_aaaaaaaaaaaaaaaa.cache.json",
+	} {
+		if err := os.WriteFile(filepath.Join(cacheDir, name), []byte("{}"), 0644); err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
+	}
+
+	clearRPMMetadataCache()
+
+	for _, name := range []string{"repomd.xml", "primary.location.json"} {
+		if _, err := os.Stat(filepath.Join(cacheDir, name)); err != nil {
+			t.Fatalf("clearRPMMetadataCache() removed offline manifest %s: %v", name, err)
+		}
+	}
+	for _, name := range []string{
+		"primary.parsed.json",
+		"primary_aaaaaaaaaaaaaaaa.gz",
+		"primary_aaaaaaaaaaaaaaaa.cache.json",
+	} {
+		if _, err := os.Stat(filepath.Join(cacheDir, name)); !os.IsNotExist(err) {
+			t.Fatalf("clearRPMMetadataCache() left stale artifact %s (err=%v)", name, err)
+		}
+	}
+}
+
+// TestFetchPrimaryURL_UsesPreservedManifestsAfterClearRetry simulates the full
+// online-with-clear then offline scenario end-to-end: build A populates the
+// cache, the retry path clears the parsed/payload artifacts, then the network
+// is severed and build B loads the primary reference purely from the preserved
+// repomd.xml manifest.
+func TestFetchPrimaryURL_UsesPreservedManifestsAfterClearRetry(t *testing.T) {
+	cacheRoot := setRPMMetadataTestCache(t)
+
+	origRepoCfg := RepoCfg
+	t.Cleanup(func() { RepoCfg = origRepoCfg })
+
+	primaryHref := "repodata/primary.xml.gz"
+	var requestCount int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requestCount, 1)
+		switch r.URL.Path {
+		case "/repodata/repomd.xml":
+			_, _ = w.Write(testRepomd(primaryHref))
+		case "/repodata/primary.xml.gz":
+			_, _ = w.Write(compressGzip(t, testPrimaryXML("bash")))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+
+	RepoCfg = RepoConfig{URL: server.URL}
+
+	if _, err := FetchPrimaryURL(server.URL + "/repodata/repomd.xml"); err != nil {
+		t.Fatalf("online FetchPrimaryURL: %v", err)
+	}
+	if _, err := ParseRepositoryMetadata(server.URL, primaryHref, nil); err != nil {
+		t.Fatalf("online ParseRepositoryMetadata: %v", err)
+	}
+
+	cacheDir := filepath.Join(cacheRoot, "rpm-metadata", generateRPMMetadataDir(server.URL))
+	if _, err := os.Stat(filepath.Join(cacheDir, "repomd.xml")); err != nil {
+		t.Fatalf("expected repomd.xml populated after online build: %v", err)
+	}
+
+	clearRPMMetadataCache()
+
+	server.Close()
+
+	href, err := FetchPrimaryURL(server.URL + "/repodata/repomd.xml")
+	if err != nil {
+		t.Fatalf("offline FetchPrimaryURL after clear should use preserved repomd: %v", err)
+	}
+	if href != primaryHref {
+		t.Fatalf("offline href = %q, want %q", href, primaryHref)
+	}
+	if atomic.LoadInt32(&requestCount) != 2 {
+		t.Fatalf("HTTP requests = %d, want still 2 (offline reused preserved cache)", atomic.LoadInt32(&requestCount))
+	}
+}
