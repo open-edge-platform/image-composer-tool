@@ -1649,6 +1649,7 @@ func TestRPMParsedCacheSourceMismatchUsesVerifiedRawMetadata(t *testing.T) {
 	goodData := compressGzip(t, testPrimaryXML("bash"))
 	cacheDir := seedRPMRawMetadataCache(t, server.URL, primaryHref, goodData)
 	parsedFromOtherSource := rpmParsedMetadataCache{
+		Version:    rpmParsedMetadataCacheVersion,
 		MetadataID: rpmMetadataID(server.URL, primaryHref),
 		Primary:    primaryRefForData(primaryHref, compressGzip(t, testPrimaryXML("coreutils"))),
 		Packages:   []ospackage.PackageInfo{{Name: "coreutils", PkgName: "coreutils", Type: "rpm"}},
