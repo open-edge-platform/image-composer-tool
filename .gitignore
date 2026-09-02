@@ -2,6 +2,7 @@
 build/
 downloads/
 builds/
+benchmark-logs/
 # Ignore cache directories anywhere (root runtime cache and provider test
 # caches), but keep the internal/cache source package tracked.
 cache/
