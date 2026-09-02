@@ -903,6 +903,32 @@ func TestResolveMultiCandidates_RepoPriorityBelowBaseLosesToBase(t *testing.T) {
 	}
 }
 
+// TestSelectByPriorityThenRepo_AllCandidatesBelowSentinelDoesNotPanic is a
+// regression test: selectByPriorityThenRepo used to seed its winner tracking
+// with a fixed highestPriority = -1 sentinel. Once getRepositoryPriority
+// stopped clamping configured priorities up to the base default, a repository
+// could legitimately be configured below -1 (e.g. -1000), so no candidate
+// would ever satisfy ">" or "==" against the sentinel, leaving
+// highestPriorityCandidates empty and panicking on the final index access.
+func TestSelectByPriorityThenRepo_AllCandidatesBelowSentinelDoesNotPanic(t *testing.T) {
+	origUserRepo := UserRepo
+	defer func() { UserRepo = origUserRepo }()
+
+	UserRepo = []config.PackageRepository{
+		{URL: "https://example.com/below-sentinel", Priority: -1000},
+	}
+
+	candidates := []ospackage.PackageInfo{
+		{Name: "pkg", Version: "1.0", URL: "https://example.com/below-sentinel/pkg-1.0.rpm"},
+		{Name: "pkg", Version: "2.0", URL: "https://example.com/below-sentinel/pkg-2.0.rpm"},
+	}
+
+	result := selectByPriorityThenRepo("https://example.com/below-sentinel/", candidates)
+	if result.Version != "2.0" {
+		t.Errorf("selectByPriorityThenRepo() = version %q, want %q", result.Version, "2.0")
+	}
+}
+
 // TestExtractBaseRequirementAdvanced tests advanced cases for the extractBaseRequirement function
 func TestExtractBaseRequirementAdvanced(t *testing.T) {
 	tests := []struct {

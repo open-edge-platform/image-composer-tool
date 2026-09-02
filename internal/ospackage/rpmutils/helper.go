@@ -63,10 +63,15 @@ func getRepositoryPriority(packageURL string) int {
 }
 
 func selectByPriorityThenRepo(parentBase string, candidates []ospackage.PackageInfo) ospackage.PackageInfo {
-	highestPriority := -1
-	highestPriorityCandidates := make([]ospackage.PackageInfo, 0, len(candidates))
+	// Callers only reach this with a non-empty slice; seed the winner from the
+	// first candidate rather than a fixed -1 sentinel, since a configured
+	// repository priority can now be arbitrarily negative (see
+	// getRepositoryPriority) and would otherwise never be recorded as a
+	// winner, leaving highestPriorityCandidates empty.
+	highestPriority := getRepositoryPriority(candidates[0].URL)
+	highestPriorityCandidates := []ospackage.PackageInfo{candidates[0]}
 
-	for _, candidate := range candidates {
+	for _, candidate := range candidates[1:] {
 		candidatePriority := getRepositoryPriority(candidate.URL)
 		if candidatePriority > highestPriority {
 			highestPriority = candidatePriority
