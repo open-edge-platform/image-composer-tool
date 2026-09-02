@@ -755,6 +755,15 @@ func decodeAndParsePrimaryXML(compressedData []byte, metadataHref, baseURL strin
 	return infos, xmlBuffer.Bytes(), nil
 }
 
+// FetchPrimaryReference fetches the primary metadata reference from repomd.xml,
+// returning the complete reference including checksum, size, and other metadata.
+// This preserves integrity information that is discarded by FetchPrimaryURL.
+func FetchPrimaryReference(repomdURL string) (rpmPrimaryReference, error) {
+	return fetchPrimaryReference(repomdURL)
+}
+
+// FetchPrimaryURL fetches the primary metadata URL from repomd.xml.
+// Deprecated: Use FetchPrimaryReference to preserve checksum and size information.
 func FetchPrimaryURL(repomdURL string) (string, error) {
 	primary, err := fetchPrimaryReference(repomdURL)
 	if err != nil {

@@ -70,6 +70,14 @@ func (ref rpmPrimaryReference) hasIntegrity() bool {
 	return ref.ChecksumType != "" && ref.Checksum != ""
 }
 
+func (ref rpmPrimaryReference) isPartialChecksum() bool {
+	return (ref.ChecksumType != "" && ref.Checksum == "") || (ref.ChecksumType == "" && ref.Checksum != "")
+}
+
+func (ref rpmPrimaryReference) isPartialOpenChecksum() bool {
+	return (ref.OpenChecksumType != "" && ref.OpenChecksum == "") || (ref.OpenChecksumType == "" && ref.OpenChecksum != "")
+}
+
 func (ref rpmPrimaryReference) matches(other rpmPrimaryReference) bool {
 	if ref.Href != other.Href {
 		return false
@@ -94,6 +102,7 @@ func redactURLForLog(rawURL string) string {
 	u.User = nil
 	u.RawQuery = ""
 	u.Fragment = ""
+	u.Opaque = ""
 	return u.String()
 }
 
@@ -108,6 +117,7 @@ func redactErrorURL(err error, rawURL string) error {
 		redacted.User = nil
 		redacted.RawQuery = ""
 		redacted.Fragment = ""
+		redacted.Opaque = ""
 		message = strings.ReplaceAll(message, u.String(), redacted.String())
 	}
 	return fmt.Errorf("%s", message)
@@ -246,13 +256,22 @@ func loadRPMPrimaryReferenceCache(cacheFile string) (rpmPrimaryReference, error)
 func rpmRawMetadataCachePaths(xmlCacheDir, metadataHref string) (string, string) {
 	hrefHash := sha256.Sum256([]byte(metadataHref))
 	hrefHashStr := hex.EncodeToString(hrefHash[:])[:16]
-	ext := strings.ToLower(filepath.Ext(metadataHref))
-	if ext == "" {
-		ext = ".xml"
-	}
+	ext := extractMetadataExtension(metadataHref)
 	dataFile := fmt.Sprintf("primary_%s%s", hrefHashStr, ext)
 	metaFile := fmt.Sprintf("primary_%s.cache.json", hrefHashStr)
 	return filepath.Join(xmlCacheDir, dataFile), filepath.Join(xmlCacheDir, metaFile)
+}
+
+func extractMetadataExtension(metadataHref string) string {
+	basePath := metadataHref
+	if idx := strings.IndexAny(basePath, "?#"); idx != -1 {
+		basePath = basePath[:idx]
+	}
+	ext := strings.ToLower(filepath.Ext(basePath))
+	if ext == "" {
+		ext = ".xml"
+	}
+	return ext
 }
 
 func rpmRawMetadataPayloadPath(xmlCacheDir, metadataHref string, primary rpmPrimaryReference) string {
@@ -263,10 +282,7 @@ func rpmRawMetadataPayloadPath(xmlCacheDir, metadataHref string, primary rpmPrim
 
 	hrefHash := sha256.Sum256([]byte(metadataHref))
 	checksumHash := sha256.Sum256([]byte(strings.ToUpper(primary.ChecksumType) + ":" + strings.ToLower(primary.Checksum)))
-	ext := strings.ToLower(filepath.Ext(metadataHref))
-	if ext == "" {
-		ext = ".xml"
-	}
+	ext := extractMetadataExtension(metadataHref)
 	dataFile := fmt.Sprintf("primary_%s_%s%s", hex.EncodeToString(hrefHash[:])[:16], hex.EncodeToString(checksumHash[:])[:16], ext)
 	return filepath.Join(xmlCacheDir, dataFile)
 }
@@ -442,6 +458,12 @@ func extractPrimaryReferenceFromRepomdData(repomdData []byte) (rpmPrimaryReferen
 				if primary.Href == "" {
 					return rpmPrimaryReference{}, fmt.Errorf("primary location not found in repomd.xml")
 				}
+				if primary.isPartialChecksum() {
+					return rpmPrimaryReference{}, fmt.Errorf("malformed repomd: partial checksum (type=%q, value=%q)", primary.ChecksumType, primary.Checksum)
+				}
+				if primary.isPartialOpenChecksum() {
+					return rpmPrimaryReference{}, fmt.Errorf("malformed repomd: partial open-checksum (type=%q, value=%q)", primary.OpenChecksumType, primary.OpenChecksum)
+				}
 				primary.ChecksumType = strings.ToUpper(primary.ChecksumType)
 				primary.OpenChecksumType = strings.ToUpper(primary.OpenChecksumType)
 				return primary, nil
@@ -517,7 +539,7 @@ func readElementText(dec *xml.Decoder) (string, error) {
 
 func parseInt64Text(value string) int64 {
 	parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
-	if err != nil {
+	if err != nil || parsed < 0 {
 		return 0
 	}
 	return parsed
@@ -525,7 +547,7 @@ func parseInt64Text(value string) int64 {
 
 func verifyRPMPrimaryBytes(data []byte, primary rpmPrimaryReference) error {
 	if primary.Size > 0 && int64(len(data)) != primary.Size {
-		return fmt.Errorf("size mismatch for %s: got %d, want %d", primary.Href, len(data), primary.Size)
+		return fmt.Errorf("size mismatch: got %d, want %d", len(data), primary.Size)
 	}
 	if !primary.hasIntegrity() {
 		return nil
@@ -536,7 +558,7 @@ func verifyRPMPrimaryBytes(data []byte, primary rpmPrimaryReference) error {
 		return err
 	}
 	if !strings.EqualFold(digest, primary.Checksum) {
-		return fmt.Errorf("checksum mismatch for %s: got %s, want %s", primary.Href, digest, primary.Checksum)
+		return fmt.Errorf("checksum mismatch: got %s, want %s", digest, primary.Checksum)
 	}
 	return nil
 }
