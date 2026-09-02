@@ -487,6 +487,7 @@ func importOnlineFileToRepo(srcPath, repoPath string) (int, error) {
 				return 0, fmt.Errorf("failed to read zip entry %s: %w", zipFile.Name, err)
 			}
 
+			// lgtm[go/zipslip] -- dstPath validated by archiveEntryDestinationPath above
 			dstFile, err := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 			if err != nil {
 				srcFile.Close()
@@ -540,6 +541,7 @@ func extractDebsFromTarReader(tarReader *tar.Reader, repoPath string) (int, erro
 		if err != nil {
 			return 0, fmt.Errorf("failed to validate tar entry %s: %w", header.Name, err)
 		}
+		// lgtm[go/zipslip] -- dstPath validated by archiveEntryDestinationPath above
 		dstFile, err := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 		if err != nil {
 			return 0, fmt.Errorf("failed to create output file %s: %w", dstPath, err)
