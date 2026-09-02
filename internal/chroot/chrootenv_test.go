@@ -451,6 +451,14 @@ func TestChrootEnv_CleanupChrootEnv_ErrorPaths(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(userBinDir, "bash"), []byte("test\n"), 0644); err != nil {
 		t.Errorf("Cannot create test file: %v", err)
 	}
+	devDir := filepath.Join(tempDir, "dev")
+	if err := os.MkdirAll(devDir, 0755); err != nil {
+		t.Skipf("Cannot create dev directory: %v", err)
+		return
+	}
+	if err := os.WriteFile(filepath.Join(devDir, "null"), nil, 0666); err != nil {
+		t.Errorf("Cannot create dev/null placeholder: %v", err)
+	}
 	// Simulate stopGPG error
 	if err := chrootEnv.CleanupChrootEnv("os", "dist", "arch"); err == nil {
 		t.Errorf("expected error for stopGPG fail, got nil")

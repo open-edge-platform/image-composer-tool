@@ -548,6 +548,14 @@ func TestStopGPGComponents(t *testing.T) {
 				t.Fatalf("Failed to create bash file: %v", err)
 			}
 
+			devNullPath := filepath.Join(chrootPath, "dev", "null")
+			if err := os.MkdirAll(filepath.Dir(devNullPath), 0755); err != nil {
+				t.Fatalf("Failed to create dev directory: %v", err)
+			}
+			if err := os.WriteFile(devNullPath, nil, 0666); err != nil {
+				t.Fatalf("Failed to create dev/null placeholder: %v", err)
+			}
+
 			err := system.StopGPGComponents(chrootPath)
 
 			if tt.expectError {
@@ -569,6 +577,36 @@ func TestStopGPGComponents_BashAvailability(t *testing.T) {
 	err := system.StopGPGComponents("/any/chroot")
 	if err != nil {
 		t.Errorf("Expected no error when Bash is not available, got: %v", err)
+	}
+}
+
+// TestStopGPGComponents_DevNullMissing reproduces the offline-rebuild cleanup
+// failure: RPM installer's success path unmounts sysfs (including /dev),
+// then chrootenv.CleanupChrootEnv calls StopGPGComponents again on the same
+// chroot root. Without a working /dev/null, gpgconf aborts with
+// "Fatal: failed to open '/dev/null'". Since components were already stopped
+// under the earlier live-/dev call, StopGPGComponents must treat this case
+// as an idempotent no-op instead of failing the whole build cleanup.
+func TestStopGPGComponents_DevNullMissing(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: "gpgconf", Output: "", Error: fmt.Errorf("gpgconf must not be invoked when /dev/null is missing")},
+	})
+
+	chrootPath := t.TempDir()
+
+	bashPath := filepath.Join(chrootPath, "usr", "bin", "bash")
+	if err := os.MkdirAll(filepath.Dir(bashPath), 0700); err != nil {
+		t.Fatalf("Failed to create bash directory: %v", err)
+	}
+	if err := os.WriteFile(bashPath, []byte("#!/bin/bash\n"), 0700); err != nil {
+		t.Fatalf("Failed to create bash file: %v", err)
+	}
+
+	if err := system.StopGPGComponents(chrootPath); err != nil {
+		t.Fatalf("StopGPGComponents() should skip gracefully when /dev/null is missing, got error: %v", err)
 	}
 }
 

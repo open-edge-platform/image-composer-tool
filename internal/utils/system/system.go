@@ -134,6 +134,18 @@ func StopGPGComponents(chrootPath string) error {
 		return nil
 	}
 
+	// gpgconf aborts with "Fatal: failed to open '/dev/null'" if the chroot's
+	// /dev bind mount has already been torn down (for example when an earlier
+	// StopGPGComponents call ran under a live /dev and the subsequent
+	// UmountSysfs on the success path removed it). Treat that as an idempotent
+	// no-op instead of failing the whole cleanup.
+	if chrootPath != shell.HostPath {
+		if _, err := os.Stat(filepath.Join(chrootPath, "dev", "null")); err != nil {
+			log.Debugf("/dev/null not available in chroot environment %s, skipping GPG components stop", chrootPath)
+			return nil
+		}
+	}
+
 	cmdExist, err := shell.IsCommandExist("gpgconf", chrootPath)
 	if err != nil {
 		return fmt.Errorf("failed to check if gpgconf command exists in chroot environment: %w", err)
