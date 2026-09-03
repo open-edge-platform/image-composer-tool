@@ -666,6 +666,75 @@ func TestResolveTopPackageConflictsKernelVersionPrefixMatch(t *testing.T) {
 	}
 }
 
+// TestGetRepositoryPriority is a regression test for a priority clamp bug:
+// getRepositoryPriority seeded its accumulator with defaultRepoPriority (500)
+// and only ever raised it, so any configured repository priority below 500
+// was silently promoted to 500 instead of losing to the base repository as
+// documented (docs/architecture/image-composer-tool-multi-repo-support.md,
+// Priority Rule 1).
+func TestGetRepositoryPriority(t *testing.T) {
+	tests := []struct {
+		name         string
+		packageURL   string
+		userRepos    []config.PackageRepository
+		expectedPrio int
+	}{
+		{
+			name:         "no matching repo falls back to base default",
+			packageURL:   "https://example.com/unlisted/pkg.rpm",
+			userRepos:    []config.PackageRepository{{URL: "https://example.com/repo", Priority: 100}},
+			expectedPrio: defaultRepoPriority,
+		},
+		{
+			name:         "matched repo with priority below base is not clamped up",
+			packageURL:   "https://example.com/repo/pkg.rpm",
+			userRepos:    []config.PackageRepository{{URL: "https://example.com/repo", Priority: 100}},
+			expectedPrio: 100,
+		},
+		{
+			name:         "matched repo with negative priority is not clamped up",
+			packageURL:   "https://example.com/repo/pkg.rpm",
+			userRepos:    []config.PackageRepository{{URL: "https://example.com/repo", Priority: -1000}},
+			expectedPrio: -1000,
+		},
+		{
+			name:         "matched repo with priority above base still wins",
+			packageURL:   "https://example.com/repo/pkg.rpm",
+			userRepos:    []config.PackageRepository{{URL: "https://example.com/repo", Priority: 900}},
+			expectedPrio: 900,
+		},
+		{
+			name:         "unset (zero) priority normalizes to base default",
+			packageURL:   "https://example.com/repo/pkg.rpm",
+			userRepos:    []config.PackageRepository{{URL: "https://example.com/repo"}},
+			expectedPrio: defaultRepoPriority,
+		},
+		{
+			name:       "multiple matching repos take the highest among the matches",
+			packageURL: "https://example.com/repo/pkg.rpm",
+			userRepos: []config.PackageRepository{
+				{URL: "https://example.com/repo", Priority: 100},
+				{URL: "https://example.com/repo", Priority: 200},
+			},
+			expectedPrio: 200,
+		},
+	}
+
+	origUserRepo := UserRepo
+	defer func() { UserRepo = origUserRepo }()
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			UserRepo = tt.userRepos
+
+			got := getRepositoryPriority(tt.packageURL)
+			if got != tt.expectedPrio {
+				t.Errorf("getRepositoryPriority(%q) = %d, want %d", tt.packageURL, got, tt.expectedPrio)
+			}
+		})
+	}
+}
+
 func TestResolveMultiCandidates(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -758,8 +827,7 @@ func TestResolveMultiCandidates(t *testing.T) {
 			},
 			userRepos: []config.PackageRepository{
 				{URL: "https://example.com/repo1"},
-				{URL: "https://example.com/repo2"},
-			},
+				{URL: "https://example.com/repo2"}},
 			expectedName: "candidate1",
 			expectError:  false,
 		},
@@ -792,6 +860,72 @@ func TestResolveMultiCandidates(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestResolveMultiCandidates_RepoPriorityBelowBaseLosesToBase is a regression
+// test for the reported priority-clamp bug: a partner repository explicitly
+// configured below the base repository's implicit priority (500) must lose
+// to base, per Priority Rule 1 in
+// docs/architecture/image-composer-tool-multi-repo-support.md. Both
+// candidates share the same package name (an update to the same base-OS
+// package), so the assertion is on Version/URL rather than Name.
+func TestResolveMultiCandidates_RepoPriorityBelowBaseLosesToBase(t *testing.T) {
+	origUserRepo := UserRepo
+	defer func() { UserRepo = origUserRepo }()
+
+	UserRepo = []config.PackageRepository{
+		{URL: "https://example.com/parent-repo", Priority: 700},
+		{URL: "https://example.com/partner", Priority: 100},
+	}
+
+	parentPkg := ospackage.PackageInfo{URL: "https://example.com/parent-repo/parent.rpm"}
+	candidates := []ospackage.PackageInfo{
+		// findAllCandidates sorts candidates highest-version-first before
+		// resolveMultiCandidates ever sees them, and the tie-break in
+		// selectByPriorityThenRepo falls through to candidates[0] when
+		// nothing shares the parent's repo base. Match that ordering here so
+		// this test actually exercises the priority comparison rather than
+		// passing by list-order coincidence.
+		// Explicitly configured below base; must not be promoted to a tie with it.
+		{Name: "nano", Version: "9999.0", URL: "https://example.com/partner/nano-9999.0.rpm"},
+		// No matching UserRepo entry, so this takes the implicit base priority (500).
+		{Name: "nano", Version: "6.4", URL: "https://example.com/base/nano-6.4.rpm"},
+	}
+
+	result, err := resolveMultiCandidates(parentPkg, candidates)
+	if err != nil {
+		t.Fatalf("resolveMultiCandidates() unexpected error: %v", err)
+	}
+	if result.Version != "6.4" {
+		t.Errorf("resolveMultiCandidates() selected version %q from %q, want the base repository's %q",
+			result.Version, result.URL, "6.4")
+	}
+}
+
+// TestSelectByPriorityThenRepo_AllCandidatesBelowSentinelDoesNotPanic is a
+// regression test: selectByPriorityThenRepo used to seed its winner tracking
+// with a fixed highestPriority = -1 sentinel. Once getRepositoryPriority
+// stopped clamping configured priorities up to the base default, a repository
+// could legitimately be configured below -1 (e.g. -1000), so no candidate
+// would ever satisfy ">" or "==" against the sentinel, leaving
+// highestPriorityCandidates empty and panicking on the final index access.
+func TestSelectByPriorityThenRepo_AllCandidatesBelowSentinelDoesNotPanic(t *testing.T) {
+	origUserRepo := UserRepo
+	defer func() { UserRepo = origUserRepo }()
+
+	UserRepo = []config.PackageRepository{
+		{URL: "https://example.com/below-sentinel", Priority: -1000},
+	}
+
+	candidates := []ospackage.PackageInfo{
+		{Name: "pkg", Version: "1.0", URL: "https://example.com/below-sentinel/pkg-1.0.rpm"},
+		{Name: "pkg", Version: "2.0", URL: "https://example.com/below-sentinel/pkg-2.0.rpm"},
+	}
+
+	result := selectByPriorityThenRepo("https://example.com/below-sentinel/", candidates)
+	if result.Version != "2.0" {
+		t.Errorf("selectByPriorityThenRepo() = version %q, want %q", result.Version, "2.0")
 	}
 }
 
