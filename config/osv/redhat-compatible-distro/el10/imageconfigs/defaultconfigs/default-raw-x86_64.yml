@@ -11,7 +11,7 @@ target:
 packageRepositories:
   - codename: "CentOS-Stream-10-AppStream"
     url: "https://mirror.stream.centos.org/10-stream/AppStream/x86_64/os"
-    pkey: "https://www.centos.org/keys/RPM-GPG-KEY-centosofficial-SHA256"  
+    pkey: "https://www.centos.org/keys/RPM-GPG-KEY-CentOS-Official-SHA256"  
     
 disk:
   name: Default_Raw # 1:1 mapping to the systemConfigs name

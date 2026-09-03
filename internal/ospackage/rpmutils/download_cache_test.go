@@ -133,7 +133,16 @@ func TestClearRPMMetadataCache(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(metaDir) })
 
-	for _, name := range []string{"primary.parsed.json", "primary.location.json"} {
+	for _, name := range []string{
+		"primary.parsed.json",
+		"primary.location.json",
+		"repomd.xml",
+		"repomd_aaaaaaaa_2000-01-01_00-00-00.xml",
+		"primary_aaaaaaaaaaaaaaaa.cache.json",
+		"primary_aaaaaaaaaaaaaaaa.gz",
+		"primary_bbbbbbbbbbbbbbbb.zst",
+		"primary_cccccccccccccccc.xml",
+	} {
 		if err := os.WriteFile(filepath.Join(metaDir, name), []byte("{}"), 0644); err != nil {
 			t.Fatalf("failed to write %s: %v", name, err)
 		}
@@ -148,10 +157,30 @@ func TestClearRPMMetadataCache(t *testing.T) {
 		t.Fatalf("clearRPMPackageCache() unexpected error: %v", err)
 	}
 
-	for _, name := range []string{"primary.parsed.json", "primary.location.json"} {
+	// repomd.xml and primary.location.json are the authoritative manifests
+	// established by FetchPrimaryURL at Init(); they must survive metadata
+	// clearing so that a subsequent offline rebuild can reuse the cache.
+	for _, name := range []string{
+		"primary.parsed.json",
+		"repomd_aaaaaaaa_2000-01-01_00-00-00.xml",
+		"primary_aaaaaaaaaaaaaaaa.cache.json",
+		"primary_aaaaaaaaaaaaaaaa.gz",
+		"primary_bbbbbbbbbbbbbbbb.zst",
+		"primary_cccccccccccccccc.xml",
+	} {
 		f := filepath.Join(metaDir, name)
 		if _, statErr := os.Stat(f); !os.IsNotExist(statErr) {
 			t.Errorf("expected %s to be removed after cache clear", name)
+		}
+	}
+
+	for _, name := range []string{
+		"repomd.xml",
+		"primary.location.json",
+	} {
+		f := filepath.Join(metaDir, name)
+		if _, statErr := os.Stat(f); statErr != nil {
+			t.Errorf("expected %s to be preserved after cache clear (offline manifest), got: %v", name, statErr)
 		}
 	}
 }

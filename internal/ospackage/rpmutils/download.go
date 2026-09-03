@@ -3,7 +3,6 @@ package rpmutils
 import (
 	"bytes"
 	"fmt"
-	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -63,7 +62,7 @@ func ConfigureKernelSelection(kernelPackages []string, kernelVersion string) {
 
 func Packages() ([]ospackage.PackageInfo, error) {
 	log := logger.Logger()
-	log.Infof("fetching packages from %s", RepoCfg.URL)
+	log.Infof("fetching packages from %s", redactURLForLog(RepoCfg.URL))
 
 	packages, err := ParseRepositoryMetadata(RepoCfg.URL, GzHref, nil)
 	if err != nil {
@@ -234,13 +233,13 @@ func UserPackages() ([]ospackage.PackageInfo, error) {
 	for _, rpItx := range userRepo {
 		repoMetaDataURL := GetRepoMetaDataURL(rpItx.URL, metadataXmlPath)
 		if repoMetaDataURL == "" {
-			log.Errorf("invalid repo metadata URL: %s/%s, skipping", rpItx.URL, metadataXmlPath)
+			log.Errorf("invalid repo metadata URL: %s/%s, skipping", redactURLForLog(rpItx.URL), metadataXmlPath)
 			continue
 		}
 
 		primaryXmlURL, err := FetchPrimaryURL(repoMetaDataURL)
 		if err != nil {
-			return nil, fmt.Errorf("fetching %s URL failed: %w", repoMetaDataURL, err)
+			return nil, fmt.Errorf("fetching %s URL failed: %w", redactURLForLog(repoMetaDataURL), err)
 		}
 
 		userPkgs, err := ParseRepositoryMetadata(rpItx.URL, primaryXmlURL, rpItx.AllowPackages)
@@ -330,8 +329,6 @@ func createTempGPGKeyFiles(gpgKeyURLs []string) (keyPaths []string, cleanup func
 	var tempFiles []*os.File
 	var filePaths []string
 
-	client := network.NewSecureHTTPClient()
-
 	// Download and create temp files for each GPG key
 	for i, gpgKeyURL := range gpgKeyURLs {
 
@@ -343,25 +340,13 @@ func createTempGPGKeyFiles(gpgKeyURLs []string) (keyPaths []string, cleanup func
 		// Check if the GPG key URL is a binary file (ends with .gpg or .bin)
 		isBinary := strings.HasSuffix(strings.ToLower(gpgKeyURL), ".gpg") || strings.HasSuffix(strings.ToLower(gpgKeyURL), ".bin")
 
-		resp, err := client.Get(gpgKeyURL)
+		keyBytes, err := config.GetCachedOrDownloadGPGKey(gpgKeyURL)
 		if err != nil {
-			// Cleanup any files created so far
 			for _, f := range tempFiles {
 				f.Close()
 				os.Remove(f.Name())
 			}
 			return nil, nil, fmt.Errorf("fetch GPG key %s: %w", gpgKeyURL, err)
-		}
-
-		keyBytes, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			// Cleanup any files created so far
-			for _, f := range tempFiles {
-				f.Close()
-				os.Remove(f.Name())
-			}
-			return nil, nil, fmt.Errorf("read GPG key body from %s: %w", gpgKeyURL, err)
 		}
 
 		// If it's a binary GPG key, we need to handle it differently
@@ -656,9 +641,9 @@ func configuredRPMRepoURLs() []string {
 	return urls
 }
 
-// clearRPMMetadataCache removes primary.parsed.json and primary.location.json
+// clearRPMMetadataCache removes functional RPM repository metadata cache entries
 // from the metadata cache directory derived from the configured repo URL so that
-// repository metadata is re-fetched on the next run.
+// repository metadata is re-fetched and re-verified on the next run.
 func clearRPMMetadataCache() {
 	log := logger.Logger()
 
@@ -670,25 +655,44 @@ func clearRPMMetadataCache() {
 	for _, repoURL := range repoURLs {
 		metaDir, err := rpmMetadataCacheDir(repoURL)
 		if err != nil {
-			log.Warnf("failed to resolve RPM metadata cache directory for %s: %v", repoURL, err)
+			log.Warnf("failed to resolve RPM metadata cache directory for %s: %v", redactURLForLog(repoURL), err)
 			continue
 		}
 
-		for _, name := range []string{"primary.parsed.json", "primary.location.json"} {
-			f := filepath.Join(metaDir, name)
-			if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
-				log.Warnf("failed to remove RPM metadata cache %s: %v", f, err)
+		// repomd.xml and primary.location.json are the authoritative manifests
+		// established by FetchPrimaryURL at Init(); deleting them breaks
+		// subsequent offline rebuilds because Init() runs before any network
+		// operation and cannot re-populate them without network access.
+		for _, pattern := range []string{
+			"primary.parsed.json",
+			"repomd_*.xml",
+			"primary_*.cache.json",
+			"primary_*.gz",
+			"primary_*.zst",
+			"primary_*.xml",
+			"primary_*_*.gz",
+			"primary_*_*.zst",
+			"primary_*_*.xml",
+		} {
+			files, globErr := filepath.Glob(filepath.Join(metaDir, pattern))
+			if globErr != nil {
+				log.Warnf("failed to glob RPM metadata cache %s: %v", pattern, globErr)
 				continue
 			}
-			log.Infof("removed RPM metadata cache: %s", f)
+			for _, f := range files {
+				if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
+					log.Warnf("failed to remove RPM metadata cache %s: %v", f, err)
+					continue
+				}
+				log.Infof("removed RPM metadata cache: %s", f)
+			}
 		}
 	}
 }
 
 // clearRPMPackageCache removes all .rpm files from cacheDir and invalidates
-// the repository metadata cache (primary.parsed.json, primary.location.json)
-// so that a full re-download including fresh repository metadata is performed
-// on the next run.
+// functional repository metadata cache files so that a full re-download including
+// fresh repository metadata is performed on the next run.
 func clearRPMPackageCache(cacheDir string) error {
 	log := logger.Logger()
 	pattern := filepath.Join(cacheDir, "*.rpm")

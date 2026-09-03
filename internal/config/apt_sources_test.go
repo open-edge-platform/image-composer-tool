@@ -774,14 +774,14 @@ func TestGPGKeyCacheFilePath_StableForSameURL(t *testing.T) {
 
 	keyURL := "https://example.com/keys/repo-key.gpg"
 
-	path1, err := gpgKeyCacheFilePath(keyURL)
+	path1, err := GPGKeyCacheFilePath(keyURL)
 	if err != nil {
-		t.Fatalf("gpgKeyCacheFilePath failed: %v", err)
+		t.Fatalf("GPGKeyCacheFilePath failed: %v", err)
 	}
 
-	path2, err := gpgKeyCacheFilePath(keyURL)
+	path2, err := GPGKeyCacheFilePath(keyURL)
 	if err != nil {
-		t.Fatalf("gpgKeyCacheFilePath failed on second call: %v", err)
+		t.Fatalf("GPGKeyCacheFilePath failed on second call: %v", err)
 	}
 
 	if path1 != path2 {
@@ -803,18 +803,18 @@ func TestGetCachedOrDownloadGPGKey_UsesCacheOnHit(t *testing.T) {
 	keyURL := "https://invalid.example.test/non-routable-key.gpg"
 	want := []byte("cached-key-data")
 
-	cachePath, err := gpgKeyCacheFilePath(keyURL)
+	cachePath, err := GPGKeyCacheFilePath(keyURL)
 	if err != nil {
-		t.Fatalf("gpgKeyCacheFilePath failed: %v", err)
+		t.Fatalf("GPGKeyCacheFilePath failed: %v", err)
 	}
 
 	if err := os.WriteFile(cachePath, want, 0644); err != nil {
 		t.Fatalf("failed to seed cached key: %v", err)
 	}
 
-	got, err := getCachedOrDownloadGPGKey(keyURL)
+	got, err := GetCachedOrDownloadGPGKey(keyURL)
 	if err != nil {
-		t.Fatalf("getCachedOrDownloadGPGKey should use cache hit, got error: %v", err)
+		t.Fatalf("GetCachedOrDownloadGPGKey should use cache hit, got error: %v", err)
 	}
 
 	if string(got) != string(want) {
