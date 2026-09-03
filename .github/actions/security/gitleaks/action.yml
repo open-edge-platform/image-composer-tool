@@ -183,6 +183,7 @@ runs:
           --report-format "$INPUT_FORMAT"
           --report-path "$REPORT_FILE"
           --exit-code "$INPUT_EXIT_CODE"
+          --log-opts="HEAD"
         )
         [[ -n "${NO_GIT:-}" ]] && CMD+=( "$NO_GIT" )
         [[ "$INPUT_REDACT" == "true" ]] && CMD+=( --redact )
@@ -202,9 +203,8 @@ runs:
           exit 1
         fi
         echo "exit_code=$STATUS" >> "$GITHUB_OUTPUT"
-        # Don't hard-fail the job; let the caller decide based on outputs.exit_code
         if [[ "$STATUS" -ne 0 ]]; then
-          echo "::warning::Gitleaks detected leaks (exit code $STATUS)"
+          echo "::error::Gitleaks detected leaks (exit code $STATUS)"
         fi
 
     - name: Upload report artifact
@@ -222,3 +222,10 @@ runs:
       uses: github/codeql-action/upload-sarif@1b549b9259bda1cb5ddde3b41741a82a2d15a841  # v3.28.8
       with:
         sarif_file: ${{ steps.run-gitleaks.outputs.report_path }}
+
+    - name: Fail on gitleaks findings
+      if: steps.run-gitleaks.outputs.exit_code != '0'
+      shell: bash
+      run: |
+        echo "::error::Gitleaks detected leaks. SARIF uploaded to Security tab."
+        exit 1
