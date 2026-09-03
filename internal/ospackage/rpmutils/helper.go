@@ -34,6 +34,8 @@ func normalizeRepositoryPriority(priority int) int {
 
 func getRepositoryPriority(packageURL string) int {
 	normalizedPkgURL := strings.TrimRight(packageURL, "/")
+
+	matched := false
 	highestPriority := defaultRepoPriority
 
 	for _, repo := range UserRepo {
@@ -44,9 +46,16 @@ func getRepositoryPriority(packageURL string) int {
 
 		if normalizedPkgURL == repoURL || strings.HasPrefix(normalizedPkgURL, repoURL+"/") {
 			repoPriority := normalizeRepositoryPriority(repo.Priority)
-			if repoPriority > highestPriority {
+			// The first match sets the baseline regardless of its value, so a
+			// configured priority below the base repository's default (e.g. a
+			// repo explicitly ranked below base) is preserved rather than
+			// clamped up to defaultRepoPriority. Later matches (a package URL
+			// matching more than one configured repo) still take the highest
+			// among themselves.
+			if !matched || repoPriority > highestPriority {
 				highestPriority = repoPriority
 			}
+			matched = true
 		}
 	}
 
@@ -54,10 +63,15 @@ func getRepositoryPriority(packageURL string) int {
 }
 
 func selectByPriorityThenRepo(parentBase string, candidates []ospackage.PackageInfo) ospackage.PackageInfo {
-	highestPriority := -1
-	highestPriorityCandidates := make([]ospackage.PackageInfo, 0, len(candidates))
+	// Callers only reach this with a non-empty slice; seed the winner from the
+	// first candidate rather than a fixed -1 sentinel, since a configured
+	// repository priority can now be arbitrarily negative (see
+	// getRepositoryPriority) and would otherwise never be recorded as a
+	// winner, leaving highestPriorityCandidates empty.
+	highestPriority := getRepositoryPriority(candidates[0].URL)
+	highestPriorityCandidates := []ospackage.PackageInfo{candidates[0]}
 
-	for _, candidate := range candidates {
+	for _, candidate := range candidates[1:] {
 		candidatePriority := getRepositoryPriority(candidate.URL)
 		if candidatePriority > highestPriority {
 			highestPriority = candidatePriority
