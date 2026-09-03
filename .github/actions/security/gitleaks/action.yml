@@ -183,6 +183,7 @@ runs:
           --report-format "$INPUT_FORMAT"
           --report-path "$REPORT_FILE"
           --exit-code "$INPUT_EXIT_CODE"
+          --log-opts="HEAD"
         )
         [[ -n "${NO_GIT:-}" ]] && CMD+=( "$NO_GIT" )
         [[ "$INPUT_REDACT" == "true" ]] && CMD+=( --redact )
