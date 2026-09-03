@@ -6,6 +6,8 @@ import type { ComposeRequest, ComposeResponse } from '../api/types'
 import { Select } from './Select'
 import { PackagesStep } from './PackagesStep'
 import { Input } from './Input'
+import { DiskStep } from './DiskStep'
+import { parseDiskFromYaml, toDiskConfig, validateDisk } from '../lib/disk'
 
 // How long to wait after the last keystroke in Image Name before re-composing.
 // Each compose call with an override generates and deletes a server-side file
@@ -13,6 +15,12 @@ import { Input } from './Input'
 // keystroke. Build itself never waits on this — it always sends whatever is
 // currently typed.
 const IMAGE_NAME_DEBOUNCE_MS = 400
+
+// The disk override is debounced for the same reason as the image name, and by
+// the same amount: the Disk step's fields include free text (disk name, mount
+// points, hand-typed offsets), so an undebounced override would write and delete
+// a server-side delta file on every keystroke.
+const DISK_DEBOUNCE_MS = 400
 
 // The Advanced tab is a wizard, mirroring the prototype's step flow. Only the
 // first step (Target / "Choose Image Configuration") is built out today; the
@@ -78,6 +86,9 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   const seedImageName = useStore((s) => s.seedImageName)
   const addedPackages = useStore((s) => s.addedPackages)
   const enabledRepos = useStore((s) => s.enabledRepos)
+  const seedDisk = useStore((s) => s.seedDisk)
+  const disk = useStore((s) => s.disk)
+  const diskEdited = useStore((s) => s.diskEdited)
 
   const [step, setStep] = useState(0)
   const [composed, setComposed] = useState<ComposeResponse | null>(null)
@@ -107,6 +118,37 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   const packagesKey = useMemo(() => addedPackages.map(encodePackage).sort().join('\n'), [addedPackages])
   const reposKey = useMemo(() => [...enabledRepos].sort().join('\n'), [enabledRepos])
 
+  // Serialised for the same reason packages are keyed on their joined encoding:
+  // the model is a fresh object on every edit, so memoising on it directly would
+  // recompose on every keystroke. The JSON of the *emitted* block is the right
+  // key — it ignores model fields that never reach the template (React row keys,
+  // the layout mode, the derived side of the size/offset pair), so switching
+  // between size- and offset-based editing does not trigger a recompose.
+  //
+  // Sent only once the user has edited: an unedited model round-trips to the
+  // template's own disk block, so sending it would generate a delta that changes
+  // nothing while making the Review pane claim an override.
+  const diskKey = useMemo(
+    () => (diskEdited && disk ? JSON.stringify(toDiskConfig(disk)) : ''),
+    [diskEdited, disk],
+  )
+  // A layout the Disk step has already flagged is never sent. The server would
+  // reject it with the same complaint the step is showing inline, so posting it
+  // buys a round trip and a second, redundant error banner. Holding the previous
+  // key instead means the Review pane keeps showing the last good resolve while
+  // the user fixes the field, rather than flicking back to the un-overridden
+  // template and implying their edits were discarded.
+  const diskInvalid = useMemo(
+    () => !!disk && validateDisk(disk, { imageType: selection.imageType }).errors.length > 0,
+    [disk, selection.imageType],
+  )
+  const [debouncedDiskKey, setDebouncedDiskKey] = useState(diskKey)
+  useEffect(() => {
+    if (diskInvalid) return
+    const t = setTimeout(() => setDebouncedDiskKey(diskKey), DISK_DEBOUNCE_MS)
+    return () => clearTimeout(t)
+  }, [diskKey, diskInvalid])
+
   // The request the backend actually resolves against: the cascade selection,
   // plus the Advanced-mode overrides. The image name is sent only once the user
   // has edited it, and only the settled (debounced) value, so an in-progress
@@ -120,8 +162,9 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
       // "no override" and the backend resolves the curated template directly.
       packages: packagesKey ? packagesKey.split('\n') : undefined,
       repos: reposKey ? reposKey.split('\n') : undefined,
+      disk: debouncedDiskKey ? JSON.parse(debouncedDiskKey) : undefined,
     }),
-    [selection, imageNameEdited, debouncedImageName, packagesKey, reposKey],
+    [selection, imageNameEdited, debouncedImageName, packagesKey, reposKey, debouncedDiskKey],
   )
 
   // Entering Advanced always lands on the first step, mirroring the prototype's
@@ -146,9 +189,13 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
         if (!cancelled) {
           setComposed(r)
           setLoading(false)
-          // Seed the editable image name from the resolved template (no-op once
-          // the user has edited — guarded by the *Edited flag in the store).
+          // Seed the editable image name and disk layout from the resolved
+          // template (both no-ops once the user has edited — guarded by the
+          // *Edited flags in the store). The disk block is read out of the
+          // resolved YAML because the compose summary only carries aggregates
+          // (size/count/table), not the partition list the Disk step edits.
           seedImageName(r.summary.imageName)
+          seedDisk(parseDiskFromYaml(r.yaml))
         }
       })
       .catch((e) => {
@@ -168,15 +215,28 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
 
   const onBuild = async () => {
     if (!complete) return
+    // Unlike a compose, a build cannot fall back to the last good layout: it has
+    // to run what is on screen or nothing. Say so rather than posting a request
+    // the server will reject.
+    if (diskInvalid) {
+      setError('Fix the errors on the Disk step before composing.')
+      return
+    }
     try {
       setBusy(true)
       setError(null)
-      // Build always sends whatever is currently typed, not the debounced value
-      // the Review preview is showing — a discrete action shouldn't wait on a
-      // typing pause.
+      // Spread composeReq rather than rebuilding from `selection`, so every
+      // override reaches the build. Rebuilding listed only imageName, which
+      // silently dropped the Packages step's picks (and would have dropped the
+      // disk layout too) from every Advanced build.
+      //
+      // The two debounced fields are then re-read live: a discrete action
+      // shouldn't wait on a typing pause, so the build gets whatever is
+      // currently on screen rather than the value the Review preview settled on.
       const buildReq: ComposeRequest = {
-        ...selection,
+        ...composeReq,
         imageName: imageNameEdited ? imageName : undefined,
+        disk: diskEdited && disk ? toDiskConfig(disk) : undefined,
       }
       // Re-compose against buildReq (the current, non-debounced image name)
       // right before starting the build, so the logged YAML matches what the
@@ -250,11 +310,13 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
 
       {/* The Packages step holds a 240px rail plus a 300px selected-packages
           rail beside the package pane, which is cramped at the 3xl the
-          single-column steps use. */}
+          single-column steps use. The Disk step needs the width for its
+          eight-column partition table (name/label/fs/size/mount/start/end
+          plus row actions). */}
       <div
         className={
           'mx-auto rounded-lg border border-slate-200 bg-white p-6 shadow-sm ' +
-          (step === 1 ? 'max-w-6xl' : 'max-w-3xl')
+          (step === 1 ? 'max-w-6xl' : step === 2 ? 'max-w-5xl' : 'max-w-3xl')
         }
       >
         {step === 0 && (
@@ -269,14 +331,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
 
         {step === 1 && <PackagesStep os={selection.os} active={active} />}
 
-        {step === 2 && (
-          <div>
-            <h2 className="mb-1 text-lg font-bold text-[#00285a]">Disk Layout</h2>
-            <p className="text-sm text-slate-500">
-              Disk and partition editing will arrive in a later update.
-            </p>
-          </div>
-        )}
+        {step === 2 && <DiskStep />}
 
         {step === 3 && (
           <div>

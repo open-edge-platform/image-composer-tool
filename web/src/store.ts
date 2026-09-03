@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { Manifest, Combination } from './api/types'
+import type { DiskModel } from './lib/disk'
 
 // Selection state for the Basic tab.
 export interface Selection {
@@ -43,6 +44,16 @@ interface AppState {
   // Packages the user added in the Packages step. Kept out of `Selection` for
   // the same reason: the compose request has no field for it yet.
   addedPackages: AddedPackage[]
+  // Advanced-tab disk edit model, seeded from the resolved template's disk block
+  // and edited client-side from there. Null until the first compose resolves (or
+  // after a selection change, which invalidates the previous template's layout).
+  // Same seed-until-edited contract as imageName above.
+  disk: DiskModel | null
+  diskEdited: boolean
+  // The last layout seeded from a compose, kept aside so "Reset to template
+  // defaults" has something to restore. Without it, resetting would blank the
+  // step until the next compose, and a compose only fires on a selection change.
+  diskSeed: DiskModel | null
   setManifest: (m: Manifest) => void
   setField: (key: keyof Selection, value: string) => void
   // User-typed image name (marks it edited so seedImageName stops overwriting it).
@@ -61,6 +72,12 @@ interface AppState {
   setPackages: (pkgs: AddedPackage[]) => void
   removePackages: (names: string[]) => void
   clearPackages: () => void
+  // User edit to the disk layout (marks it edited so seedDisk stops overwriting it).
+  setDisk: (value: DiskModel) => void
+  // Disk layout from the resolved template; ignored once the user edits.
+  seedDisk: (value: DiskModel | null) => void
+  // Drop the user's edits so the next compose reseeds from the template.
+  resetDisk: () => void
 }
 
 const emptySelection: Selection = {
@@ -79,6 +96,9 @@ export const useStore = create<AppState>((set) => ({
   imageNameEdited: false,
   enabledRepos: [],
   addedPackages: [],
+  disk: null,
+  diskEdited: false,
+  diskSeed: null,
   setManifest: (m) => set({ manifest: m }),
   setImageName: (value) => set({ imageName: value, imageNameEdited: true }),
   seedImageName: (value) =>
@@ -111,6 +131,15 @@ export const useStore = create<AppState>((set) => ({
       return { addedPackages: state.addedPackages.filter((p) => !drop.has(p.name)) }
     }),
   clearPackages: () => set({ addedPackages: [] }),
+  setDisk: (value) => set({ disk: value, diskEdited: true }),
+  seedDisk: (value) =>
+    // A compose that resolves to a template with no disk block leaves whatever
+    // is on screen alone rather than blanking the step. The seed is recorded
+    // even when the user has edited, so Reset always has a target.
+    set((state) =>
+      value === null ? {} : state.diskEdited ? { diskSeed: value } : { disk: value, diskSeed: value },
+    ),
+  resetDisk: () => set((state) => ({ disk: state.diskSeed, diskEdited: false })),
   setField: (key, value) =>
     set((state) => {
       const selection = { ...state.selection, [key]: value }
@@ -156,10 +185,20 @@ export const useStore = create<AppState>((set) => ({
       // post-cascade os (autoFillCascade above may refill it with the same
       // value) means a SKU or platform tweak within one OS keeps the user's
       // toggles.
+      //
+      // The disk layout is dropped on *any* selection change, unlike repos and
+      // packages: it is not a user pick scoped to a target, it is a copy of the
+      // matched template's own partition table, and a SKU or platform tweak can
+      // resolve to a different template. It is cleared outright rather than just
+      // unflagged, because leaving the previous template's partitions on screen
+      // until the next compose lands would show a layout that no longer applies.
       const osChanged = selection.os !== state.selection.os
       return {
         selection,
         imageNameEdited: false,
+        disk: null,
+        diskEdited: false,
+        diskSeed: null,
         ...(osChanged ? { enabledRepos: [], addedPackages: [] } : {}),
       }
     }),

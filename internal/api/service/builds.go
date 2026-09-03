@@ -697,6 +697,9 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 	if verr := ValidatePackages(c.Packages); verr != nil {
 		return "", "", fmt.Errorf("%w: %v", errBadBuildRequest, verr)
 	}
+	if verr := ValidateDisk(c.Disk, c.ImageType); verr != nil {
+		return "", "", fmt.Errorf("%w: %v", errBadBuildRequest, verr)
+	}
 	deltaPath, _, _, derr := s.deltaForOverride(tmpl, full, *c)
 	if derr != nil {
 		return "", "", fmt.Errorf("generating override template: %w", derr) // server-side

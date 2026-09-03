@@ -39,13 +39,17 @@ type Selection struct {
 	// delta's packageRepositories so a package picked from a repository the
 	// matched template doesn't configure can still resolve. Also lookup-neutral.
 	Repos []string
+	// Disk replaces the matched template's disk block wholesale, as edited by
+	// the Advanced tab's Disk step. Nil means "not overridden". Lookup-neutral
+	// like the fields above.
+	Disk *DiskOverride
 }
 
 // hasOverrides reports whether the selection asks for anything beyond the
 // matched template, i.e. whether a delta has to be generated at all. Without
 // any, the curated template is resolved directly and no file is written.
 func (s Selection) hasOverrides() bool {
-	return s.ImageName != "" || len(s.Packages) > 0 || len(s.Repos) > 0
+	return s.ImageName != "" || len(s.Packages) > 0 || len(s.Repos) > 0 || s.Disk != nil
 }
 
 // ComposeSummary is the human-readable summary shown in the Review panel and
@@ -114,6 +118,9 @@ func (s *Service) Compose(sel Selection) (*ComposeResult, error) {
 		return nil, newError(http.StatusBadRequest, "BAD_REQUEST", err.Error())
 	}
 	if err := ValidatePackages(sel.Packages); err != nil {
+		return nil, newError(http.StatusBadRequest, "BAD_REQUEST", err.Error())
+	}
+	if err := ValidateDisk(sel.Disk, sel.ImageType); err != nil {
 		return nil, newError(http.StatusBadRequest, "BAD_REQUEST", err.Error())
 	}
 

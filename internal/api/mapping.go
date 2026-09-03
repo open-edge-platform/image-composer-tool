@@ -44,7 +44,82 @@ func toSelection(r httpapi.ComposeRequest) service.Selection {
 	if r.Repos != nil {
 		sel.Repos = *r.Repos
 	}
+	sel.Disk = toDiskOverride(r.Disk)
 	return sel
+}
+
+// toDiskOverride converts the generated disk override to the service type.
+// oapi-codegen renders the nested arrays as anonymous structs, so the copy is
+// spelled out rather than being a type conversion. Values are copied as-is —
+// validation is the service's job (service.ValidateDisk), since nothing checks
+// a request body against the spec at runtime.
+func toDiskOverride(d *httpapi.DiskOverride) *service.DiskOverride {
+	if d == nil {
+		return nil
+	}
+	out := &service.DiskOverride{
+		Name:    d.Name,
+		Path:    derefStr(d.Path),
+		Size:    derefStr(d.Size),
+		MaxSize: derefStr(d.MaxSize),
+	}
+	if d.PartitionTableType != nil {
+		out.PartitionTableType = string(*d.PartitionTableType)
+	}
+	if d.ExtendLastPartitionToFillDisk != nil {
+		out.ExtendLastPartitionToFillDisk = *d.ExtendLastPartitionToFillDisk
+	}
+	if p := d.SelectionPolicy; p != nil {
+		pol := &service.DiskPolicyOverride{
+			ExcludeRemovable: p.ExcludeRemovable,
+			RequireEmpty:     p.RequireEmpty,
+		}
+		if p.Strategy != nil {
+			pol.Strategy = string(*p.Strategy)
+		}
+		out.SelectionPolicy = pol
+	}
+	if d.Artifacts != nil {
+		for _, a := range *d.Artifacts {
+			art := service.DiskArtifactOverride{Type: string(a.Type)}
+			if a.Compression != nil {
+				art.Compression = string(*a.Compression)
+			}
+			out.Artifacts = append(out.Artifacts, art)
+		}
+	}
+	if d.Partitions != nil {
+		for _, p := range *d.Partitions {
+			part := service.DiskPartitionOverride{
+				ID:           derefStr(p.Id),
+				Index:        p.Index,
+				Name:         derefStr(p.Name),
+				Type:         derefStr(p.Type),
+				TypeUUID:     derefStr(p.TypeUUID),
+				FsLabel:      derefStr(p.FsLabel),
+				Start:        derefStr(p.Start),
+				End:          derefStr(p.End),
+				MountPoint:   derefStr(p.MountPoint),
+				MountOptions: derefStr(p.MountOptions),
+			}
+			if p.FsType != nil {
+				part.FsType = string(*p.FsType)
+			}
+			if p.Flags != nil {
+				part.Flags = *p.Flags
+			}
+			out.Partitions = append(out.Partitions, part)
+		}
+	}
+	return out
+}
+
+// derefStr is optStr's inverse: nil becomes "".
+func derefStr(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 func toBuildRequest(r httpapi.BuildRequest) service.BuildRequest {
