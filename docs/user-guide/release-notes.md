@@ -2,27 +2,123 @@
 
 ## Version 2026.2
 
-**August 19, 2026**
+**Release Date**: September 9, 2026
 
-**New**
+**New**:
 
-- Kernel wildcard now installs a single kernel: a `systemConfig.kernel.packages` entry that uses a glob (for example `linux-image-generic*`) previously matched every `linux-image-generic*` metapackage in the Ubuntu 24 repositories and silently installed several kernels (6.8 GA plus 6.11/6.14/6.17/7.0 HWE tracks) in the same image. The build now installs only the **newest** matched kernel and logs a warning listing every match, so a template using a broad glob still boots with a single, up-to-date kernel; pin an exact metapackage in `systemConfig.kernel.packages` to install a different one. Explicitly listing multiple exact kernel packages is unchanged — the selection only applies to a single glob pattern that resolves to multiple kernels. The behavior applies to the Debian-family providers (Ubuntu, eLxr, Debian 13).
+1. **Overlay feature**
 
-- Overlay auto-sized disk grow (`disk.size` / `disk.maxSize`): Overlay builds can now **size the disk from the packages being installed** instead of requiring an exact size up front. `disk.size` is an unconditional floor — when set larger than the baseline, the resize always expands to it first, with no opt-in required (a `disk.size` at or below the baseline is simply a no-op). Package-driven growth **beyond** that floor requires `disk.maxSize` to be set: without it, growth never extends past `disk.size` (or the raw baseline, if `disk.size` is also unset), no matter how much room the packages need. When `disk.maxSize` is set, the tool estimates the further space the resolved packages need (summing each package's repo-reported installed size — Debian `Installed-Size`, RPM `<size installed=…>` — with a conservative overhead factor and a fixed margin), measures the baseline's **real** free space, and grows the image only by the shortfall, never past `disk.maxSize` (which must be greater than `disk.size`, and requires `disk.size` to also be set). The final image may be smaller than `disk.maxSize`; if the computed need exceeds it (or if `disk.maxSize` is unset entirely) the tool caps at the ceiling/floor and warns (the install may then hit "no space left on device"). When no package reports a size, auto-sizing falls back to `disk.maxSize` (or stops at the `disk.size` floor when it too is unset). Resize remains grow-only and never shrinks the image.
+   The overlay feature enables composition of a final system image by installing
+   additional packages on top of an existing RAW or QCOW2 base image, rather
+   than building an image entirely from scratch. It is supported for
+   Ubuntu 24.04 and Debian 13 images.
 
-- Overlay kernel replacement (`overlayPolicy.replaceKernel`): Overlay builds on a GRUB2 baseline can now **swap the kernel** rather than only adding one alongside the baseline's. Setting `overlayPolicy.replaceKernel.package: <kernel-package>` installs the named kernel (resolved from the configured repositories, and the value may use the same glob wildcards — `*`, `?`, `[...]` — as an ordinary `systemConfig` package, e.g. `linux-image-*-oem`) and removes the baseline kernel **family** — the bootable image plus its meta-package, modules, and headers (`linux-image-*`, `linux-image-generic`, `linux-modules-*`, `linux-headers-*`; rpm `kernel`/`kernel-core`/`kernel-modules`) — so the emitted image ships **only** the new kernel. `replaceKernel.additionalPackages` (a list, same rules as `package`) installs further kernel-family packages alongside it — typically the matching `linux-headers-*` — following the same resolve/removal path. `replaceKernel.enableExtraModules` (space-separated module names, mirroring `systemConfig.kernel.enableExtraModules`) forces driver modules into the replacement kernel's regenerated initramfs (`dracut --add-drivers`, or an `initramfs-tools` modules-file entry). `replaceKernel.version` is descriptive only, surfaced in the compose API summary. The removal set is auto-detected from the baseline inventory (userspace packages such as `linux-libc-dev`, `linux-tools-common`, and rpm `kernel-headers`/`kernel-devel` are kept) and removed as one batch so no kernel package is left orphaned. The GRUB config is then regenerated so the removed kernel's menu entry is dropped and `GRUB_DEFAULT` points at the new kernel (auto-pinned to `"0"` unless `overlayPolicy.grubDefault` is set). Only the GRUB **config** on the writable root changes — the ESP and the bootloader binary are never touched (`grub-install` is never run), preserving the overlay read-only-ESP contract; on a Secure Boot baseline the new kernel may be unsigned (sign it out of band). `replaceKernel` requires `packageOperation: additive-and-upgrade` and, being self-authorizing for its kernel-family removals, does **not** require `allowPackageRemoval`; it is a hard error — raised at preflight, before any package is installed or removed — on a non-GRUB2 baseline (including a UKI baseline). See [`image-templates/ubuntu24/ubuntu24-x86_64-overlay-replace-kernel-raw.yml`](https://github.com/open-edge-platform/image-composer-tool/blob/main/image-templates/ubuntu24/ubuntu24-x86_64-overlay-replace-kernel-raw.yml) for an example. This supersedes the previous restriction (see 2026.1) that in-place kernel-image replacement was always blocked.
+   - **Key benefits**:
 
-**Fixed**
+     - **Significantly reduced build time:** Composing a full image from scratch
+       by listing all packages can take approximately 1.5 hours. Using an existing
+       base image and applying only the delta packages reduces composition time
+       to approximately 8 minutes.
+     - **Upgrade and additive operations only:** Package additions and upgrades
+       are supported. Removing packages from the base image is not supported
+       in this release.
+     - **Root filesystem resize:** The root filesystem is resized to accommodate
+       newly installed packages based on user inputs for the maximum allowed root
+       filesystem size and maximum disk size.
 
-- Debian 13 Bayonne Bridge templates shipped the old monolithic `firmware-linux(-free)`/`firmware-misc-nonfree` packages, so real hardware failed to load the iGPU's GuC firmware at boot (`i915: GuC firmware ... fetch failed -ENOENT`, wedging the GPU) and the graphics child template was missing `firmware-sof-signed`, so SOF audio DSP firmware also failed to load (`failed to load intel/sof-ipc4/arl/sof-arl.ri`, no audio). The overlay base now installs Trixie's split Intel firmware packages (`firmware-intel-graphics`, `firmware-intel-misc`, `firmware-iwlwifi`) matching every other debian13 template, and the graphics child adds `firmware-sof-signed`.
+   - **Base Image Access for Overlay Composition**
 
-- Attended installer TUI froze on the very first "Next"/"Go Back"/Ctrl+C press: page navigation and the exit-confirmation prompt called `tview`'s `QueueUpdateDraw` synchronously from within the UI's own event-loop goroutine, which deadlocks since that call blocks waiting for the same goroutine to service it. Navigation now runs directly and synchronously, since it's already invoked from that goroutine.
+     Base images can be accessed through the following methods:
+
+     - **URL:** The base image is fetched directly from a remote location.
+     - **Local file path:** The base image is referenced from a directory on
+       the host system.
+
+   - **Supported Base Image Types**
+
+     | Base image type | Format |
+     | --- | --- |
+     | Canonical cloud images | QCOW2 |
+     | Existing BKC (Best Known Configuration) images | RAW |
+     | ICT-composed images | RAW |
+
+   - **Additional benefits include**:
+
+     - Significantly reduced overall image composition time by eliminating the
+       need to resolve and install a full package list from scratch.
+     - Simplified template creation by requiring only delta packages instead of a
+       comprehensive list of all packages.
+
+   ICT continues to fully support composing minimal images from scratch for all
+   POR (Plan of Record) OS distributions.
+
+2. **Post-boot root filesystem (Rootfs) resize**
+
+   Support has been added to grow the root filesystem after the first boot on
+   the target device. This allows the image to remain at a minimal size during
+   distribution and storage, with the filesystem expanding as needed upon boot.
+
+3. **Template extensions: multi-level support**
+
+   ICT now supports multi-level template extensions, enabling modular and
+   layered composition of system images.
+
+   **Benefits include**:
+
+   - Cleaner separation of concerns through layered templates.
+   - Easier collaboration across teams.
+   - Reduced maintenance overhead.
+   - Simplified debugging of template configurations.
+
+4. **Debian 13 with custom initrd and graphical desktop environment**
+
+   Debian 13 images can now use a customized initrd, providing greater
+   flexibility in early boot configuration. The images can also boot into a
+   graphical desktop environment with GDM over X11.
+
+5. **Full Disk Encryption (FDE) for RAW images**
+
+   This release supports selectively encrypting disk partitions in RAW images
+   with user-specified passphrases in the user template for encryption and
+   decryption. Sealing encryption keys in a TPM is not supported.
+
+6. **Image composition for WSL environments**
+
+   The tool can now compose Ubuntu images compatible with WSL environments.
+
+**Validated hardware**:
+
+- **Target platform**: Panther Lake (PTL)
+
+- **Reference Templates**:
+
+  | Feature | Reference template |
+  | --- | --- |
+  | Overlay and root filesystem resize | `ubuntu24-x86_64-overlay-raw.yml` in `image-templates/ubuntu24/` |
+  | Post-boot root filesystem resize | `ubuntu24-x86_64-minimal-raw-expand-partition.yml` in `image-templates/ubuntu24/` |
+  | Template extensions | `ubuntu24-x86_64-extends-example-raw.yml` and `ubuntu24-x86_64-minimal-raw.yml` in `image-templates/ubuntu24/` |
+  | Debian 13 custom initrd with overlay | `debian13-x86_64-bb-graphics-raw.yml` and `debian13-x86_64-bb-overlay-initrd-raw.yml` in `image-templates/debian13/` |
+  | Debian 13 monolithic robotics | `debian13-x86_64-bb-dracut-raw.yml` in `image-templates/debian13/` |
+  | Ubuntu 24 robotics templates | `ubuntu24-x86_64-robotics-hw-overlay-qcow2.yml`, `ubuntu24-x86_64-robotics-jazzy-overlay-extends.yml`, and `ubuntu24-x86_64-robotics-jazzy-iso.yml` in `image-templates/ubuntu24/` |
+
+**Known Issues**:
+
+- **Custom partition layouts with the overlay feature are not supported**:
+
+  The tool does not support user-specified disk partition layouts in the output
+  image. The base image partitions are passed through to the RAW or QCOW2 output image.
+
+- **SBOM generation for base images without an embedded SBOM**:
+
+  If the base image does not contain an embedded Software Bill of Materials (SBOM),
+  the resulting image generates an SBOM only for the additionally installed
+  packages. Packages from the base image are not included in the SBOM output.
 
 ## Version 2026.1
 
-**June 17, 2026**
+**Release Date**: June 17, 2026
 
-**New**
+**New**:
 
 - Overlay cascade removal of orphaned reverse-dependencies: When `overlayPolicy.allowPackageRemoval` is enabled, a conflict-driven removal that orphans an unrelated baseline package (one that only `Depends:` on the removed package — for example the Debian cloud image's `cloud-initramfs-growroot` depending on `initramfs-tools`) is now resolved automatically instead of failing the build. The post-install dependency audit becomes a bounded cascade: each baseline package that is broken *after* a removal but was whole *before* it is itself removed, transitively, until the package manager's own check (`apt-get check` / `dnf check`) reports the dependency tree is whole again. The package manager's audit is the ground truth, so a dependency that an alternative still satisfies is never mistaken for breakage and nothing is over-removed. The cascade still fails **closed**: if resolving the breakage would require removing a bootloader/kernel-image package or a package the overlay is installing, the build fails. Cascade removals are folded into the preflight report's approved removals, surfaced on `InstallResult.CascadeRemoved`, and reflected in the OVERLAY PACKAGE STATISTICS summary and the complete SBOM. The behavior is entirely gated by the existing `allowPackageRemoval` flag — there is no new schema field, and with the flag off a removal that would orphan another package still fails the build.
 
@@ -74,7 +170,7 @@
 
 - DKMS module installation: Package resolution now uses a target-name-aware candidate filter (`filterCandidatesByPriorityWithTarget`) that prefers exact-name matches over Provides virtual package matches, preventing kernel packages that provide a DKMS module name from being selected instead of the actual DKMS package.
 
-**Improved**
+**Improved**:
 
 - RPM package cache: `DownloadPackagesComplete` now checks for a valid local cache before contacting the repository. If all required packages are present, no network request is made. Only the missing packages are re-fetched, preserving existing cached files.
 
@@ -128,7 +224,7 @@
 
 - Templates composed with `extends` instead of duplication: Several templates now inherit a base template rather than restating it. `emt3-x86_64-emf-raw.yml` and `emt3-x86_64-dlstreamer.yml` extend `emt3-x86_64-edge-raw.yml`, and `emt3-x86_64-emf-rt-raw.yml` extends `emt3-x86_64-emf-raw.yml`. This removes a 41-package block that had been copied verbatim into four EMT3 templates. Each derived template was verified with `resolve --full` to produce the same functional fields as before. Note that because package lists are a union with no removal syntax, a derived template also installs its parent's packages. And because the three EMT3 templates now inherit `emt3-x86_64-edge-raw.yml`, they also inherit its three sample repositories (`company-internal`, `dev-tools`, `intel-openvino`), so `emf-raw` and `emf-rt-raw` resolve to three repositories where they previously declared none and `dlstreamer` resolves to six rather than three. Those entries are inert — their URLs are the literal placeholder `<URL>`, which `rpmutils` skips before fetching, and EMT3 is RPM-based so apt-source generation never runs for it — so the built image is unchanged. Each of the three templates notes this in its header.
 
-**Fixed**
+**Fixed**:
 
 - `fix(debian13)`: drop stale kernel version pins from Debian 13 OS defaults: Debian 13 repositories no longer provide kernel version `6.12.74`, so inherited ISO, initrd, and raw configurations (x86_64 and aarch64) failed during package resolution. Removing the pin lets each architecture's kernel metapackage — `linux-image-amd64` on x86_64 and `linux-image-arm64` on aarch64 — select the current repository kernel.
 
@@ -166,7 +262,7 @@
 
 - `fix(scripts)`: remove Intel-internal proxy from repository configuration (#561): An Intel-internal proxy URL was hardcoded in repository configuration, causing failures in external environments.
 
-**Known Issues**
+**Known Issues**:
 
 - Unattended ISO installer is a first-pass implementation: The unattended installer (`ubuntu24-x86_64-minimal-unattended-iso.yml`) does not yet support all advanced partition layouts (e.g., `LVM`, `LUKS`). Complex partition schemes must use the attended installer or a custom startup script.
 
@@ -176,9 +272,9 @@
 
 ## Version 1.0
 
-**December 12, 2025**
+**Release Date**: December 12, 2025
 
-**Features**
+**Features**:
 
 - Support for building OS images with Intel® specific OOT Kernel packages.
 - Support for building Wind River eLxr 12 images.
@@ -201,7 +297,7 @@
   in user space of the OS distribution.
 - Support for composing the OS images to include ECG Sample Apps.
 
-**Known Issues/Opens**
+**Known Issues/Opens**:
 
 - Installation from ISO images on NVMe SSD and via USB is not functional on
   RPL platforms.
