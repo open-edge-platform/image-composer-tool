@@ -1,9 +1,10 @@
 # AI-searchable metadata for template discovery
 metadata:
-  description: Debian 13 minimal raw image with initrd hello hook via dracut-core (GRUB)
+  description: Debian 13 raw image with initrd hello hook via dracut-core (GRUB) and a GNOME/X11 desktop
   use_cases:
     - Validating custom dracut module scripts on Debian GRUB raw images
     - Lightweight Debian with early-boot initrd marker
+    - Booting into a GNOME-on-Xorg desktop session (GDM login)
   keywords:
     - bb
     - dracut
@@ -13,6 +14,10 @@ metadata:
     - debian
     - grub
     - raw
+    - gnome
+    - x11
+    - gdm
+    - desktop
 
 image:
   name: bb-os-image-debian-dracut
@@ -115,6 +120,29 @@ systemConfig:
     - vim-tiny
     - whiptail
     - zstd
+    # ---------------------------------------------------------------------------
+    # X11 graphics stack. See the additionalFiles/configurations below for why
+    # X11 (not Wayland) — Debian 13's gnome-session ships no X11 session file,
+    # so gnome-xorg.desktop below supplies the missing launcher rather than a
+    # package providing it.
+    # ---------------------------------------------------------------------------
+    - xserver-xorg
+    - xserver-xorg-video-all
+    - xserver-xorg-input-all
+    - xinit
+    - x11-xserver-utils
+    - x11-utils
+    - libgl1-mesa-dri
+    - libglx-mesa0
+    - mesa-utils
+    - mesa-vulkan-drivers
+    - fonts-dejavu-core
+    - libgtk-3-0
+    - gdm3
+    - gnome-session
+    - gnome-shell
+    - gnome-terminal
+    - gnome-software
 
   additionalFiles:
     - local: additionalfiles/debian13-bb-dracut/modules.d/91hello/module-setup.sh
@@ -123,12 +151,37 @@ systemConfig:
       final: /usr/lib/dracut/modules.d/91hello/hello.sh
     - local: additionalfiles/debian13-bb-dracut/modules.d/91hello/initqueue-sample.sh
       final: /usr/lib/dracut/modules.d/91hello/initqueue-sample.sh
+    # X11, not Wayland — Debian 13's gnome-session ships Wayland-only;
+    # gnome-shell's X11 backend still works, it's just missing the xsessions
+    # launcher, supplied below. The dconf override below also disables a
+    # known Mutter click-coordinate-mapping bug (see 00-mutter for detail).
+    - local: additionalfiles/debian13-bb-graphics-x11/usr/share/xsessions/gnome-xorg.desktop
+      final: /usr/share/xsessions/gnome-xorg.desktop
+    - local: additionalfiles/debian13-bb-graphics-mutter/etc/dconf/profile/user
+      final: /etc/dconf/profile/user
+    - local: additionalfiles/debian13-bb-graphics-mutter/etc/dconf/db/local.d/00-mutter
+      final: /etc/dconf/db/local.d/00-mutter
+    - local: additionalfiles/debian13-bb-graphics-mutter/etc/systemd/system/dconf-update-mutter.service
+      final: /etc/systemd/system/dconf-update-mutter.service
 
   configurations:
     - cmd: 'mkdir -p /etc/dracut.conf.d && echo ''add_dracutmodules+=" hello "'' > /etc/dracut.conf.d/91hello.conf'
     - cmd: "chmod 755 /usr/lib/dracut/modules.d/91hello/module-setup.sh /usr/lib/dracut/modules.d/91hello/hello.sh /usr/lib/dracut/modules.d/91hello/initqueue-sample.sh"
     - cmd: "printf 'Package: systemd-boot systemd-boot-efi\\nPin: release *\\nPin-Priority: -1\\n' > /etc/apt/preferences.d/no-systemd-boot"
     - cmd: "dpkg --purge --force-all systemd-boot systemd-boot-efi 2>/dev/null || true"
+    # Graphical login: gdm3 is WantedBy=graphical.target, so the default target
+    # must switch from multi-user.target or gdm never starts.
+    - cmd: 'systemctl set-default graphical.target'
+    - cmd: 'systemctl enable gdm3'
+    # Force GDM to X11-only via its own conffile toggle, not by deleting
+    # gnome-session's Wayland .desktop files: those are plain package data,
+    # so unattended-upgrades could restore them on a later gnome-session
+    # upgrade, but /etc/gdm3/daemon.conf is a dpkg conffile and this edit
+    # survives that upgrade. (Debian 13's gdm3 48.0-2 renamed the old
+    # custom.conf to daemon.conf.)
+    - cmd: "sed -i 's/^#WaylandEnable=false/WaylandEnable=false/' /etc/gdm3/daemon.conf"
+    # Enable the first-boot dconf compile unit delivered by additionalFiles above.
+    - cmd: 'systemctl enable dconf-update-mutter.service'
 
   kernel:
     cmdline: "console=ttyS0,115200 console=tty0 loglevel=7 rd.debug rd.info"

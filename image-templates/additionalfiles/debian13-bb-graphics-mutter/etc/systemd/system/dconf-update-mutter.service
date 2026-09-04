@@ -1,0 +1,15 @@
+[Unit]
+Description=Compile dconf system database (disables buggy Mutter experimental features)
+ConditionPathExists=/etc/dconf/db/local.d/00-mutter
+# Order before gdm.service so the compiled db exists before any session starts.
+# Safe: this unit does not call back into gdm/graphical.target, so it cannot
+# form the kind of ordering cycle bare-metal-bringup.service hit with ssh.service.
+Before=gdm.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/dconf update
+
+[Install]
+WantedBy=multi-user.target

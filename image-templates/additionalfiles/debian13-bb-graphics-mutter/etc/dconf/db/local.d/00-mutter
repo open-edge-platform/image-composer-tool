@@ -1,0 +1,11 @@
+# Debian 13's gnome-shell/mutter (48.x) enables 'scale-monitor-framebuffer' and
+# 'xwayland-native-scaling' by default. Both are experimental and have known
+# pointer/click coordinate-mapping bugs (cursor renders in one place, clicks
+# register elsewhere) for Xwayland-composited content — reproduced both under
+# QEMU and on real hardware. Disabling them reverts Mutter to its stable
+# pointer-mapping path. This template boots into the GNOME-on-Xorg session
+# instead (see gnome-xorg.desktop) — Debian 13 ships no X11 session launcher
+# of its own, so this template supplies one and disables Wayland at the GDM
+# level (WaylandEnable=false in /etc/gdm3/custom.conf).
+[org/gnome/mutter]
+experimental-features=@as []
