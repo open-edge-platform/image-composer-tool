@@ -8,7 +8,7 @@ require (
 	github.com/diskfs/go-diskfs v1.9.4
 	github.com/gdamore/tcell/v2 v2.13.10
 	github.com/google/uuid v1.6.0
-	github.com/klauspost/compress v1.19.2
+	github.com/klauspost/compress v1.20.0
 	github.com/muesli/crunchy v0.4.0
 	github.com/rivo/tview v0.42.0
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
