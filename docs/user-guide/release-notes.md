@@ -6,7 +6,53 @@
 
 **New**:
 
-1. **Overlay feature**
+1. **Overlay kernel replacement** (`overlayPolicy.replaceKernel`)
+
+   Overlay builds on a GRUB2 baseline can now **swap the kernel** rather than
+   only adding one alongside the baseline's. The functionality depends on the
+   following settings:
+
+   - `overlayPolicy.replaceKernel.package: <kernel-package>` installs the named
+     kernel (resolved from the configured repositories, and the value may use
+     the same glob wildcards — `*`, `?`, `[...]` — as an ordinary `systemConfig`
+     package, e.g. `linux-image-*-oem`) and removes the baseline kernel
+     **family** — the bootable image plus its meta-package, modules, and headers
+     (`linux-image-*`, `linux-image-generic`, `linux-modules-*`,
+     `linux-headers-*`; rpm `kernel`/`kernel-core`/`kernel-modules`) — so the
+     emitted image ships **only** the new kernel.
+
+   - `replaceKernel.additionalPackages` (a list, same rules as `package`)
+     installs further kernel-family packages alongside it — typically the
+     matching `linux-headers-*` — following the same resolve/removal path.
+   -`replaceKernel.enableExtraModules` (space-separated module names, mirroring
+     `systemConfig.kernel.enableExtraModules`) forces driver modules into the
+     replacement kernel's regenerated initramfs (`dracut --add-drivers`, or an
+     `initramfs-tools` modules-file entry).
+   - `replaceKernel.version` is descriptive only, surfaced in the compose API
+     summary.
+
+   The removal set is auto-detected from the baseline inventory
+   (userspace packages such as `linux-libc-dev`, `linux-tools-common`, and
+   rpm `kernel-headers`/`kernel-devel` are kept) and removed as one batch so
+   no kernel package is left orphaned.
+
+   The GRUB config is then regenerated so the removed kernel's menu entry is
+   dropped and `GRUB_DEFAULT` points at the new kernel (auto-pinned to `"0"`
+   unless `overlayPolicy.grubDefault` is set). Only the GRUB **config** on the
+   writable root changes — the ESP and the bootloader binary are never touched
+   (`grub-install` is never run), preserving the overlay read-only-ESP
+   contract; on a Secure Boot baseline the new kernel may be unsigned
+   (sign it out of band). `replaceKernel` requires
+   `packageOperation: additive-and-upgrade` and, being self-authorizing for its
+   kernel-family removals, does **not** require `allowPackageRemoval`; it is a
+   hard error — raised at preflight, before any package is installed or
+   removed — on a non-GRUB2 baseline (including a UKI baseline).
+
+   See [`image-templates/ubuntu24/ubuntu24-x86_64-overlay-replace-kernel-raw.yml`](https://github.com/open-edge-platform/image-composer-tool/blob/main/image-templates/ubuntu24/ubuntu24-x86_64-overlay-replace-kernel-raw.yml)
+   for an example. This supersedes the previous restriction (see 2026.1)
+   that in-place kernel-image replacement was always blocked.
+
+2. **Overlay feature**
 
    The overlay feature enables composition of a final system image by installing
    additional packages on top of an existing RAW or QCOW2 base image, rather
@@ -52,13 +98,13 @@
    ICT continues to fully support composing minimal images from scratch for all
    POR (Plan of Record) OS distributions.
 
-2. **Post-boot root filesystem (Rootfs) resize**
+3. **Post-boot root filesystem (rootfs) resize**
 
    Support has been added to grow the root filesystem after the first boot on
    the target device. This allows the image to remain at a minimal size during
    distribution and storage, with the filesystem expanding as needed upon boot.
 
-3. **Template extensions: multi-level support**
+4. **Template extensions: multi-level support**
 
    ICT now supports multi-level template extensions, enabling modular and
    layered composition of system images.
@@ -70,19 +116,19 @@
    - Reduced maintenance overhead.
    - Simplified debugging of template configurations.
 
-4. **Debian 13 with custom initrd and graphical desktop environment**
+5. **Debian 13 with custom initrd and graphical desktop environment**
 
    Debian 13 images can now use a customized initrd, providing greater
    flexibility in early boot configuration. The images can also boot into a
    graphical desktop environment with GDM over X11.
 
-5. **Full Disk Encryption (FDE) for RAW images**
+6. **Full Disk Encryption (FDE) for RAW images**
 
    This release supports selectively encrypting disk partitions in RAW images
    with user-specified passphrases in the user template for encryption and
    decryption. Sealing encryption keys in a TPM is not supported.
 
-6. **Image composition for WSL environments**
+7. **Image composition for WSL environments**
 
    The tool can now compose Ubuntu images compatible with WSL environments.
 
