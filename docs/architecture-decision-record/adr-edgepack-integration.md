@@ -546,8 +546,8 @@ behavior.
 
 ## References
 
-- EdgePack package manifest: `data/edgepacks-template.yml`
-- EdgePack APT integration: `edgepack_shared/install_logic.py`
+- EdgePack package manifest (external EdgePack repo): `edgepacks-template.yml`
+- EdgePack APT integration logic (external EdgePack repo): `edgepack_shared/install_logic.py`
 - Current Noble repository: (internal)
 - `intel-edge-base-standard` 1.0~noble14 Debian control metadata
 - `intel-edge-graphics-core` 1.0~noble11 Debian control metadata
