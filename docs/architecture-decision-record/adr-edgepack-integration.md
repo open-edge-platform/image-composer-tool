@@ -329,7 +329,7 @@ Retaining a private module-signing key in a deployed image is a deliberate
 security trade-off. Possession of a trusted module-signing private key can
 allow an attacker with sufficient local privilege to sign a malicious kernel
 module that the platform may then accept under Secure Boot. Therefore,
-`retain_signing_identity: true` must not be treated a safe implementation
+`retain_signing_identity: true` must not be treated as a safe implementation
 detail.
 
 - The private key must never be embedded directly in the YAML manifest, package
