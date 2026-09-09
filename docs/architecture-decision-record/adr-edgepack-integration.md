@@ -2,7 +2,7 @@
 
 **Status**: Proposed
 **Date**: 2026-09-08
-**Updated**: 2026-09-08 — Integration EdgePack & Secure Boot to ICT
+**Updated**: 2026-09-08 — Integrating EdgePack & Secure Boot into ICT
 **Authors**: ICT Team
 **Technical Area**: OS image composition, Ubuntu packaging, kernel modules, DKMS
 
