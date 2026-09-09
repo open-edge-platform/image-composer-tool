@@ -122,6 +122,12 @@
    flexibility in early boot configuration. The images can also boot into a
    graphical desktop environment with GDM over X11.
 
+   `debian13-x86_64-bb-dracut-raw.yml` also ships a sample first-boot
+   systemd oneshot unit (`first-boot-sample.service`): a script that runs
+   once, on the device's first boot only, gated by a marker file, with its
+   message mirrored to the journal, a log file, `dmesg`, and the serial
+   console.
+
 6. **Full Disk Encryption (FDE) for RAW images**
 
    This release supports selectively encrypting disk partitions in RAW images
