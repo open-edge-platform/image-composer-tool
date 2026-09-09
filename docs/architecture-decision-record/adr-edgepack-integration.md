@@ -13,7 +13,7 @@
 Integrate EdgePack into ICT images as an APT-managed package set layered on a
 validated Ubuntu release, architecture, and kernel ABI. The base package for
 this integration is `intel-edge-base-standard`. For the initial image,
-os-image-composer will build and install all required EdgePack DKMS modules
+ICT will build and install all required EdgePack DKMS modules
 **during composition** for the image's **explicit target kernel**, not
 implicitly for the composer's running kernel. First boot will verify and load
 the already-built modules; it will not normally compile them.
