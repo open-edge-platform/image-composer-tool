@@ -126,7 +126,9 @@ Rename `debian13-bb` in `local` paths to match your folder name. Keep the `**fin
 If you want the same early-boot marker behavior using dracut modules instead of initramfs-tools hooks, use
 [debian13-x86_64-bb-dracut-raw.yml](https://github.com/open-edge-platform/image-composer-tool/blob/main/image-templates/debian13-x86_64-bb-dracut-raw.yml).
 
-This variant keeps the same Debian 13 + GRUB + raw image target but changes how content is added to initrd:
+This variant keeps the same Debian 13 + GRUB + raw image target but changes how content is added to initrd.
+The shipped template also layers on a GNOME/X11 desktop (GDM login) — the table below covers only the
+initrd-handling difference between the two routes, not the full package set.
 
 | Area | `debian13-x86_64-bb-raw.yml` (initramfs-tools) | `debian13-x86_64-bb-dracut-raw.yml` (dracut) |
 | ---- | ----------------------------------------------- | --------------------------------------------- |
