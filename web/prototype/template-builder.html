@@ -262,33 +262,70 @@ body {
 .checkbox-card-title { font-weight: 600; font-size: 13px; }
 .checkbox-card-packages { font-size: 12px; color: var(--text-muted); margin-top: 3px; margin-left: 26px; }
 
-/* ── Use-Case Bundles (curated, cross-repo, all-or-none) ── */
-.bundles-header { display: flex; align-items: center; justify-content: space-between; cursor: pointer; user-select: none; }
-.bundles-header-label { display: flex; align-items: center; gap: 8px; margin: 0; cursor: pointer; }
-/* Standard disclosure caret: points right when collapsed, rotates down when
-   expanded. Sits next to the title so the section reads as expandable at a
-   glance (the right-hand Show/Hide text alone was too easy to miss). */
-.bundles-caret { display: inline-block; font-size: 12px; color: var(--text); transition: transform 0.15s ease; }
-.bundles-caret.expanded { transform: rotate(90deg); }
-.bundles-toggle-icon { font-size: 11px; color: var(--text-muted); }
-.bundle-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
-.bundle-card { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; cursor: pointer; transition: all 0.15s; }
-.bundle-card:hover { border-color: #94a3b8; }
-.bundle-card.partial { border-color: #bfdbfe; }
-.bundle-card.applied { border-color: var(--primary); background: var(--primary-light); }
-.bundle-card-top { display: flex; align-items: center; gap: 8px; }
-.bundle-check {
-  width: 18px; height: 18px; border-radius: 50%; flex-shrink: 0;
-  border: 1px solid var(--border); background: #fff;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 12px; font-weight: 700; color: var(--text-muted);
+/* ── Browse tabs (Edge Pack / Repositories) ──
+   The two browse surfaces are alternatives, not a stack: only one is useful at
+   a time and each is tall, so tabbing them keeps the selected rail beside
+   whichever is open instead of pushing it down the page. The tab is also the
+   disclosure — it replaced a collapsible Show/Hide header. */
+.pkg-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 14px; }
+.pkg-tab {
+  border: none; background: none; font-family: inherit; font-size: 13px; font-weight: 600;
+  color: var(--text-muted); padding: 9px 16px; cursor: pointer;
+  border-bottom: 2px solid transparent; margin-bottom: -1px; transition: color 0.15s;
 }
-.bundle-card.applied .bundle-check { background: var(--primary); color: #fff; border-color: var(--primary); }
-.bundle-card.partial .bundle-check { color: var(--primary); border-color: var(--primary); }
-.bundle-name { font-weight: 600; font-size: 13px; }
-.bundle-desc { font-size: 11px; color: var(--text-muted); margin-top: 5px; line-height: 1.4; }
-.bundle-meta { font-size: 11px; color: var(--primary); margin-top: 7px; }
-.bundle-card.partial .bundle-meta { color: var(--warning); }
+.pkg-tab:hover { color: var(--text); background: #f8fafc; }
+.pkg-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+.pkg-tab:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+
+/* ── Edge Pack (pack → domain → package) ── */
+.edge-pack { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.edge-pack-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 14px; background: #f8fafc; border-bottom: 1px solid var(--border);
+}
+.edge-pack-title { display: flex; align-items: center; gap: 9px; font-size: 13px; font-weight: 700; cursor: pointer; margin: 0; }
+.edge-pack-title input[type="checkbox"] { accent-color: var(--primary); width: 16px; height: 16px; }
+.edge-pack-sub { font-weight: 500; font-size: 11px; color: var(--text-muted); }
+.edge-pack-count { font-size: 11px; color: var(--text-muted); flex-shrink: 0; }
+.edge-pack-count.has-sel { color: var(--primary); font-weight: 600; }
+.edge-pack-common {
+  display: flex; flex-direction: column; gap: 8px;
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px 14px; margin-bottom: 10px; background: #fbfdff;
+}
+.edge-pack-common-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-muted); }
+.edge-pack-common-options { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.edge-pack-common-hint { margin: 0; font-size: 11px; color: var(--text-muted); }
+.runtime-option { display: flex; align-items: center; gap: 7px; border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 12px; cursor: pointer; background: var(--surface); }
+.runtime-option input[type="checkbox"] { accent-color: var(--primary); width: 14px; height: 14px; }
+.runtime-option.selected { border-color: var(--primary); background: var(--primary-light); }
+.runtime-option.disabled { cursor: not-allowed; opacity: 0.55; }
+.runtime-option-name { font-weight: 600; }
+.runtime-option-note { color: var(--text-muted); }
+.edge-pack-title input[type="checkbox"]:disabled,
+.domain-card-top input[type="checkbox"]:disabled { cursor: not-allowed; opacity: 0.4; }
+.domain-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; padding: 12px 14px; }
+.domain-card { border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; background: var(--surface); cursor: pointer; transition: all 0.15s; }
+.domain-card:hover { border-color: #94a3b8; }
+.domain-card.unavailable { opacity: 0.55; }
+.domain-card.unavailable .domain-name { color: var(--text-muted); }
+/* Highlight means "this is the group you are looking at" — it belongs to the
+   clicked card, NOT to the checkbox. Ticking the box adds packages and moves
+   the counts; it deliberately leaves the tint and the list alone, so the two
+   actions on a card never get confused for each other. The open card and the
+   list below it are one unit; the tint + ring is what ties them together. */
+.domain-card.active { border-color: var(--primary); background: var(--primary-light); box-shadow: 0 0 0 2px rgba(0,113,197,0.3); }
+.domain-card:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.domain-card-top { display: flex; align-items: center; gap: 8px; }
+.domain-card-top input[type="checkbox"] { accent-color: var(--primary); width: 15px; height: 15px; flex-shrink: 0; cursor: pointer; }
+.domain-name { font-size: 13px; font-weight: 600; }
+.domain-card.active .domain-name { color: var(--primary); }
+.domain-count { font-size: 11px; color: var(--text-muted); margin: 5px 0 0 23px; }
+.domain-count.has-sel { color: var(--primary); font-weight: 600; }
+.domain-drill { border-top: 1px solid var(--border); padding: 10px 14px 12px; background: #fbfdff; }
+.domain-drill-header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+.domain-drill-title { font-size: 13px; font-weight: 700; }
+.domain-drill-desc { font-size: 11px; color: var(--text-muted); }
 
 /* ── Packages step: main column + full-height selected rail ── */
 .packages-layout { display: grid; grid-template-columns: 1fr 300px; gap: 20px; align-items: start; }
@@ -362,6 +399,20 @@ body {
   padding: 12px 14px; font-size: 13px; font-weight: 700; color: var(--text);
   border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 8px;
 }
+/* Sits below the count rather than beside it: the header row is already
+   name + Clear, and at 300px a third control would crowd both. */
+.selected-col-subhead {
+  display: flex; align-items: center; gap: 6px; padding: 7px 14px;
+  border-bottom: 1px solid var(--border); font-size: 11px; color: var(--text-muted);
+}
+.group-by-select {
+  flex: 1; min-width: 0; padding: 3px 6px; font-size: 11px; color: var(--text);
+  border: 1px solid var(--border); border-radius: 4px; background: var(--surface); cursor: pointer;
+}
+.group-by-select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 2px rgba(0,113,197,0.12); }
+/* Only rendered when the active grouping actually double-lists something, so
+   the count mismatch is explained at the moment it appears and not before. */
+.selected-note { font-size: 10px; color: var(--text-muted); line-height: 1.4; padding: 6px 12px 0; }
 .selected-col-body { padding: 6px 10px 10px; overflow-y: auto; flex: 1; }
 .selected-group-label {
   font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-muted);
@@ -582,6 +633,7 @@ body {
 .steps-progress {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 4px;
   padding: 16px 24px;
   overflow-x: auto;
@@ -589,24 +641,48 @@ body {
   margin: 0 auto;
 }
 
-.step-dot {
-  width: 28px;
-  height: 28px;
+/* Each step is a pill carrying its number (or a check once done) AND its name:
+   the number alone made you count dots to work out where you were. */
+.step-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 16px 5px 6px;
+  border: none;
+  border-radius: 999px;
+  background: #e8eef5;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.2s;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.step-pill:hover { filter: brightness(0.97); }
+.step-pill.active { background: var(--primary); color: #ffffff; }
+.step-pill.completed { background: var(--success); color: #ffffff; }
+
+/* The badge keeps a light background on every state so the number/check reads
+   at the same weight whether the pill behind it is tinted or not. */
+.step-badge {
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 11px;
-  font-weight: 600;
-  background: #e2e8f0;
+  font-weight: 700;
+  background: #d3deea;
   color: var(--text-muted);
-  cursor: pointer;
-  transition: all 0.2s;
   flex-shrink: 0;
 }
 
-.step-dot.active { background: var(--primary); color: white; }
-.step-dot.completed { background: var(--success); color: white; }
+.step-pill.active .step-badge { background: #ffffff; color: var(--primary); }
+.step-pill.completed .step-badge { background: #ffffff; color: var(--success); }
 
 .step-line { height: 2px; width: 24px; background: #e2e8f0; flex-shrink: 0; }
 .step-line.completed { background: var(--success); }
@@ -825,26 +901,50 @@ const MANIFEST = {
   verticals: [
     { id: 'retail',   displayName: 'Retail Edge' },
     { id: 'robotics', displayName: 'Robotics' },
-    { id: 'fed-aero', displayName: 'Fed Aero' }
+    { id: 'fed-aero', displayName: 'Fed Aero' },
+    { id: 'generic',  displayName: 'Generic' }
   ],
   skus: [
     { id: 'desktop-virtualization',     displayName: 'Desktop Virtualization' },
     { id: 'robotics-jazzy-ubuntu24',    displayName: 'Autonomous Mobile Robots (AMR)' },
     { id: 'edge-node-infra-bkc',        displayName: 'Edge Node Infrastructure Blueprint BKC' },
     { id: 'generic-handheld-blueprint', displayName: 'Generic Handheld Blueprint' },
-    { id: 'drone-image-bkc',            displayName: 'Drone Image - From BKC Team' }
+    { id: 'drone-image-bkc',            displayName: 'Drone Image - From BKC Team' },
+    { id: 'non-realtime',               displayName: 'Non-Realtime' },
+    { id: 'realtime',                   displayName: 'Realtime' }
   ],
   platforms: [
     { id: 'arl', displayName: 'ARL (Arrow Lake)' },
     { id: 'wcl', displayName: 'WCL (Wildcat Lake)' },
-    { id: 'ptl', displayName: 'PTL (Panther Lake)' }
+    { id: 'ptl', displayName: 'PTL (Panther Lake)' },
+    { id: 'nvl', displayName: 'NVL (Nova Lake)' }
   ],
   targets: [
-    { id: 'debian13',       displayName: 'Debian 13',            os: 'debian', arch: 'x86_64' },
-    { id: 'ubuntu24',       displayName: 'Ubuntu 24.04',         os: 'ubuntu', arch: 'x86_64' },
-    { id: 'ubuntu26-server', displayName: 'Ubuntu 26.04 Server', os: 'ubuntu', arch: 'x86_64' }
+    { id: 'debian13',       displayName: 'Debian 13',                    os: 'debian', arch: 'x86_64' },
+    { id: 'ubuntu24',       displayName: 'Ubuntu 24.04',                 os: 'ubuntu', arch: 'x86_64' },
+    { id: 'ubuntu26',       displayName: 'Ubuntu 26.04',                 os: 'ubuntu', arch: 'x86_64' },
+    { id: 'ubuntu26-server', displayName: 'Ubuntu 26.04 Server',        os: 'ubuntu', arch: 'x86_64' },
+    { id: 'azl3',           displayName: 'Azure Linux 3',                os: 'azure-linux', arch: 'x86_64' },
+    { id: 'elxr13',         displayName: 'Wind River eLxr 13',           os: 'wind-river-elxr', arch: 'x86_64' },
+    { id: 'emt3',           displayName: 'Edge Microvisor Toolkit 3',    os: 'edge-microvisor-toolkit', arch: 'x86_64' }
   ]
 };
+
+// Generic is flexible by design: every SKU pairs with every platform and OS
+// below, all fully composable (reusing the generic-handheld template/summary)
+// rather than marked "coming soon" like the other verticals' planned combos.
+const GENERIC_SKUS = ['non-realtime', 'realtime'];
+const GENERIC_PLATFORMS = ['arl', 'wcl', 'ptl', 'nvl'];
+const GENERIC_OSES = ['debian13', 'ubuntu24', 'ubuntu26', 'azl3', 'elxr13', 'emt3'];
+const GENERIC_COMBINATIONS = GENERIC_SKUS.flatMap(sku =>
+  GENERIC_PLATFORMS.flatMap(platform =>
+    GENERIC_OSES.map(os => ({
+      vertical: 'generic', sku, platform, os, imageType: 'raw',
+      template: 'generic-handheld-os-template.yml'
+    }))
+  )
+);
+MANIFEST.combinations = MANIFEST.combinations.concat(GENERIC_COMBINATIONS);
 
 // Compose summaries, keyed by template file. This is what POST /api/v1/compose returns
 // in `summary`. Transcribed from the real templates in image-templates/ so the
@@ -927,7 +1027,52 @@ const PACKAGE_DB = [
   // ── Intel RealSense ──
   { name: 'librealsense2-dkms', desc: 'RealSense kernel modules (DKMS)', repo: 'realsense', version: '1.3.32-0ubuntu1', curated: true },
   { name: 'librealsense2', desc: 'RealSense SDK (pinned)', repo: 'realsense', version: '2.56.5-0~realsense.17055', versions: ['2.56.5-0~realsense.17055', '2.55.1-0~realsense.16630'], curated: true },
+
+  // ── Edge Pack ──
+  // `pack`/`domains` are pure metadata: these carry a normal `repo` like every
+  // other package, so they still appear in the repository browser and a pick
+  // made in either place shows up in the other (one selection list underneath).
+  // `domains` is a LIST — a package can belong to more than one domain (e.g. the
+  // media runtime is part of both Media and Graphics), so domain membership is
+  // many-to-many while `repo` stays exactly one.
+  // Base runtime packages are common to every domain rather than belonging to
+  // one (`common: true`, no `domains`) — real-time has no package build or
+  // qualified SKU yet, so it's flagged `realtime: true` and stays unselectable.
+  { name: 'intel-edge-base-standard', desc: 'Common Edge Pack base packages (non-real-time)', repo: 'intel-eci', version: '3.1.0-0intel1', curated: true, pack: 'edge-pack', common: true },
+  { name: 'intel-edge-base-realtime', desc: 'Common Edge Pack base packages (real-time) — not yet available', repo: 'intel-eci', version: '3.1.0-0intel1', curated: true, pack: 'edge-pack', common: true, realtime: true },
+  { name: 'intel-edge-media-ffmpeg', desc: 'FFmpeg built with Intel hardware acceleration', repo: 'intel-eci', version: '7.1-0intel1', curated: true, pack: 'edge-pack', domains: ['media'] },
+  { name: 'intel-edge-media-gst', desc: 'GStreamer plugins for Intel hardware transcode', repo: 'intel-eci', version: '1.24.9-0intel1', curated: true, pack: 'edge-pack', domains: ['media'] },
+  { name: 'intel-edge-npu', desc: 'Intel NPU driver stack and Level Zero runtime', repo: 'intel-eci', version: '1.15.1-0intel1', versions: ['1.15.1-0intel1', '1.13.0-0intel1'], curated: true, pack: 'edge-pack', domains: ['npu'] },
+  { name: 'intel-edge-manageability', desc: 'Edge Manageability Framework agent and provisioning', repo: 'intel-eci', version: '3.0.2-0intel1', curated: true, pack: 'edge-pack', domains: ['manageability'] },
 ];
+
+// Edge Pack: a two-level catalog grouping (pack → domain → package). Partial
+// selection is the normal case — you can take the whole pack, one domain, or a
+// single package out of a domain. Membership lives on PACKAGE_DB entries
+// (`pack`/`domains`), so this only names and orders the domains; there is no
+// second copy of the package list. Domains overlap: the per-domain counts can
+// sum to more than the pack total, which is why the pack total is always
+// computed over unique packages rather than by adding the domains up.
+// `requiresDist`, when present, lists the target.dist values (see
+// MANIFEST.targets) a domain is published for — e.g. NPU ships only for the
+// Noble (Ubuntu 24.04) EdgePack suite, not Resolute (Ubuntu 26.04). Domains
+// without it have no OS restriction.
+const EDGE_PACK = {
+  id: 'edge-pack',
+  name: 'Edge Pack',
+  desc: 'Intel Edge capabilities, grouped by domain',
+  domains: [
+    { id: 'media',         name: 'Media',         desc: 'Hardware transcode via FFmpeg and GStreamer.' },
+    { id: 'npu',           name: 'NPU',           desc: 'Neural Processing Unit driver stack.', requiresDist: ['ubuntu24'] },
+    { id: 'manageability', name: 'Manageability', desc: 'Edge Manageability Framework agent.' }
+  ]
+};
+
+// A domain not published for the current target OS is shown but locked, same
+// treatment as the base-runtime gate — distinct reason, same visual language.
+function edgePackDomainAvailable(d) {
+  return !d.requiresDist || d.requiresDist.includes(advState.template.target.dist);
+}
 
 // Repository catalog, the provenance grouping dimension. These are exactly the
 // `packageRepositories` from the robotics-jazzy ISO template, plus the always-on
@@ -947,32 +1092,6 @@ const REPO_DB = [
 
 // Packages whose repo id isn't in REPO_DB are bucketed here so nothing is hidden.
 const OTHER_REPO = { id: '__other', name: 'Other / Uncategorized', url: 'Packages not tied to a listed repository' };
-
-// Use-case bundles: curated, cross-repo, all-or-none package sets. Each bundle
-// pulls packages from SEVERAL repos (e.g. RealSense from the RealSense repo +
-// ROS 2 repo + Ubuntu base), which is exactly the shape of the robotics-jazzy
-// template. Applying adds every package and enables their repos; un-applying
-// removes exactly that set. `packages` are PACKAGE_DB names; repos are derived.
-const BUNDLE_DB = [
-  { id: 'ros2-desktop', name: 'ROS 2 Jazzy Desktop', icon: '🤖',
-    desc: 'Full ROS 2 Jazzy desktop with the Intel oneAPI runtime it depends on.',
-    packages: ['ros-jazzy-desktop', 'intel-oneapi-runtime-compilers', 'intel-oneapi-runtime-compilers-common', 'intel-oneapi-runtime-opencl'] },
-  { id: 'openvino-inference', name: 'OpenVINO Inference', icon: '🧠',
-    desc: 'Intel OpenVINO 2025 with ROS 2 nodes and Intel GPU Level Zero acceleration.',
-    packages: ['openvino', 'ros-jazzy-openvino-node', 'ros-jazzy-openvino-wrapper-lib', 'libze1', 'libze-intel-gpu1'] },
-  { id: 'realsense-camera', name: 'RealSense Camera', icon: '📷',
-    desc: 'Intel RealSense depth-camera SDK + DKMS modules + ROS 2 integration.',
-    packages: ['librealsense2-dkms', 'librealsense2', 'ros-jazzy-librealsense2', 'linux-headers-generic'] },
-  { id: 'amr-robotics', name: 'AMR Robotics', icon: '🚗',
-    desc: 'Intel Robotics SDK and collaborative SLAM from the Intel AMR repository.',
-    packages: ['ros-jazzy-robotics-sdk', 'ros-jazzy-collab-slam-lze'] },
-  { id: 'intel-npu', name: 'Intel NPU', icon: '⚡',
-    desc: 'Intel NPU (Neural Processing Unit) Level Zero runtime and driver compiler.',
-    packages: ['intel-level-zero-npu', 'intel-driver-compiler-npu'] },
-  { id: 'gazebo-sim', name: 'Gazebo Simulation', icon: '🌐',
-    desc: 'Gazebo Harmonic physics simulator.',
-    packages: ['gz-harmonic'] },
-];
 
 // ═══════════════════════════════════════════════════════════════
 // NAVIGATION
@@ -1173,7 +1292,7 @@ function renderBasic() {
 // name/version, which follow from the selection but are not part of it.
 //
 // Packages are untouched here, so moving between panes never disturbs
-// selections, bundles, or pins.
+// selections or pins.
 function applySelectionToAdvanced() {
   const opts = cascadingOptions(state);
   const s = (opts.matched && TEMPLATE_SUMMARIES[opts.matched.template]) || {};
@@ -1236,8 +1355,6 @@ const advState = {
     packages: ['cloud-init', 'rsyslog'],
     // Repos the user has enabled (base repo is implicitly always on).
     enabledRepos: ['ubuntu-main'],
-    // Use-case bundles the user has applied (ids into BUNDLE_DB).
-    bundles: [],
   }
 };
 
@@ -1248,7 +1365,17 @@ const advState = {
 //  - pageStart:      per-repo index of the first full-catalog row currently
 //                    rendered; the pane shows a fixed-width window starting
 //                    here, moved by the Prev/Next buttons
-const pkgGroupsUI = { activeRepo: 'ubuntu-main', frequentOnly: false, pageStart: {}, expandedVersionRows: {}, bundlesCollapsed: true };
+//  - activeDomain:   Edge Pack domain whose packages are drilled into below the
+//                    card grid ('' = no card open)
+//  - selectedGroupBy: how the right-hand selected list is grouped. Defaults to
+//                    repository: it is the axis that reaches the YAML, it is
+//                    one-per-package, and it cannot double-list anything.
+//  - packagesTab:    which browse surface is showing. The selected rail lives
+//                    outside the tabs, so it stays put as you switch.
+const pkgGroupsUI = {
+  activeRepo: 'ubuntu-main', frequentOnly: false, pageStart: {}, expandedVersionRows: {},
+  activeDomain: '', selectedGroupBy: 'repo', packagesTab: 'edge-pack'
+};
 // Width of the full-catalog window. Fixed rather than cumulative: paging deep
 // into a 60k-package repo never puts more than this many rows in the DOM.
 const PAGE_SIZE = 100;
@@ -1348,11 +1475,6 @@ function toggleVersionList(baseName) {
   renderAdvStepContent();
 }
 
-function toggleBundlesCollapsed() {
-  pkgGroupsUI.bundlesCollapsed = !pkgGroupsUI.bundlesCollapsed;
-  renderAdvStepContent();
-}
-
 // Escapes a value for safe interpolation into an inline onclick="...('value')"
 // handler: JS-string-escape first, then HTML-attribute-escape the result.
 function escapeJsAttr(str) {
@@ -1392,21 +1514,48 @@ function renderVersionChips(name, versions, handler) {
   return html;
 }
 
+// One package row, used by both browse surfaces — the repository pane and the
+// Edge Pack drill-in — so a package offers the same checkbox, version chips and
+// provenance line wherever it is reached from.
+function renderPackageRow(p) {
+  const selected = isBaseSelected(p.name);
+  const pinnedVersion = selectionPinnedVersion(selectedEntryForBase(p.name));
+  const versionLabel = pinnedVersion || 'Latest';
+  const repoName = (REPO_DB.find(r => r.id === p.repo) || OTHER_REPO).name;
+  return `<label class="pkg-row ${selected ? 'selected' : ''}" title="${escapeHtml(p.desc || '')}" onclick="event.stopPropagation()">
+    <input type="checkbox" ${selected ? 'checked' : ''} onchange="togglePackage('${escapeJsAttr(p.name)}',this.checked)">
+    <span class="pkg-row-main">
+      <span class="pkg-row-top">
+        <span class="pkg-row-name">${escapeHtml(p.name)}</span>
+        <span class="pkg-row-version">${escapeHtml(versionLabel)}</span>
+      </span>
+      <span class="pkg-row-repo">${escapeHtml(repoName)}</span>
+      <span class="pkg-row-versions">${renderVersionChips(p.name, packageVersions(p), 'choosePackageVersion')}</span>
+    </span>
+  </label>`;
+}
+
+function advGoToStep(i) {
+  advState.currentStep = i;
+  renderAdvSteps();
+  renderAdvStepContent();
+}
+
+// Labelled pills rather than bare numbered dots: the step's name is the part
+// you navigate by, and a completed step swaps its number for a check.
 function renderAdvSteps() {
   const container = document.getElementById('adv-steps-progress');
-  container.innerHTML = '';
-  ADV_STEPS.forEach((step, i) => {
-    const dot = document.createElement('div');
-    dot.className = 'step-dot' + (i === advState.currentStep ? ' active' : '') + (i < advState.currentStep ? ' completed' : '');
-    dot.textContent = i < advState.currentStep ? '✓' : (i + 1);
-    dot.onclick = () => { advState.currentStep = i; renderAdvSteps(); renderAdvStepContent(); };
-    container.appendChild(dot);
-    if (i < ADV_STEPS.length - 1) {
-      const line = document.createElement('div');
-      line.className = 'step-line' + (i < advState.currentStep ? ' completed' : '');
-      container.appendChild(line);
-    }
-  });
+  container.innerHTML = ADV_STEPS.map((step, i) => {
+    const done = i < advState.currentStep;
+    const active = i === advState.currentStep;
+    const pill = `<button type="button" class="step-pill ${active ? 'active' : ''} ${done ? 'completed' : ''}"
+        ${active ? 'aria-current="step"' : ''} onclick="advGoToStep(${i})">
+        <span class="step-badge" aria-hidden="true">${done ? '&#10003;' : i + 1}</span>
+        <span class="step-label">${step.label}</span>
+      </button>`;
+    const line = i < ADV_STEPS.length - 1 ? `<div class="step-line ${done ? 'completed' : ''}"></div>` : '';
+    return pill + line;
+  }).join('');
 }
 
 function renderAdvStepContent() {
@@ -1426,9 +1575,6 @@ function renderAdvStepContent() {
         ${renderSelectionFields(cascadingOptions(state), 'adv-select')}
         <p class="form-hint">These are the same options the Basic tab offers; whichever pane you change, both stay in step.</p>
         <hr style="border:none;border-top:1px solid var(--border);margin:24px 0;">
-        <!-- Image Type completes the same cascade. Basic auto-fills it and keeps
-             it hidden; Advanced exposes it, but from the identical option list. -->
-        ${selectionSelect(IMAGE_TYPE_FIELD, cascadingOptions(state), 'adv-select')}
         <div class="form-group">
           <label class="form-label" for="adv-image-name">Image Name</label>
           <input class="form-input" id="adv-image-name" value="${escapeHtml(t.image.name)}"
@@ -1438,7 +1584,7 @@ function renderAdvStepContent() {
       break;
 
     case 'disk':
-      html += `<h2>${step.icon} Disk Layout</h2>
+      html += `<h2>${step.icon} Choose Disk Layout</h2>
         <p class="step-desc">Configure disk size, partition table, and partitions.</p>
         <div class="form-group">
           <label class="form-label">Disk Size</label>
@@ -1471,27 +1617,16 @@ function renderAdvStepContent() {
       break;
 
     case 'packages':
-      html += `<h2>${step.icon} Repositories &amp; Packages</h2>
-        <p class="step-desc">Apply a use-case bundle, search for a package, or browse repositories. Your selections collect on the right.</p>
+      html += `<h2>${step.icon} Choose Packages to Compose</h2>
+        <p class="step-desc">Search for a package, or browse the Edge Pack and repositories. Your selections collect on the right and stay there as you switch tabs.</p>
 
         <div class="packages-layout">
           <div class="packages-main">
+            <!-- Search sits above the tabs, not inside one: it looks across
+                 every repository, so it is the path that works when you do not
+                 know which surface a package lives on. -->
             <div class="form-group">
-              <div class="bundles-header" role="button" tabindex="0" aria-expanded="${!pkgGroupsUI.bundlesCollapsed}" onclick="toggleBundlesCollapsed()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleBundlesCollapsed();}">
-                <label class="form-label bundles-header-label">
-                  <span class="bundles-caret ${pkgGroupsUI.bundlesCollapsed ? '' : 'expanded'}" aria-hidden="true">&#9656;</span>
-                  Use-Case Bundles
-                </label>
-                <span class="bundles-toggle-icon">${pkgGroupsUI.bundlesCollapsed ? 'Show' : 'Hide'}</span>
-              </div>
-              ${pkgGroupsUI.bundlesCollapsed ? '' : `
-                <div class="bundle-grid" style="margin-top:10px;">${renderBundles()}</div>
-                <p class="form-hint">Bundles are all-or-none: applying one adds every package it needs (across repositories) and enables their repos. Un-apply to remove exactly that set.</p>
-              `}
-            </div>
-
-            <div class="form-group">
-              <label class="form-label">Search Packages</label>
+              <label class="form-label" for="pkg-search">Search Packages</label>
               <div class="pkg-search-container">
                 <input class="pkg-search-input" id="pkg-search" placeholder="Start typing a package name..." oninput="onPackageSearch(this.value)" onfocus="onPackageSearch(this.value)" onblur="setTimeout(()=>closePkgDropdown(),200)">
                 <div class="pkg-search-dropdown" id="pkg-dropdown"></div>
@@ -1499,13 +1634,19 @@ function renderAdvStepContent() {
               <p class="form-hint">Search across all repositories. Pick "Latest" or a specific version to add it.</p>
             </div>
 
-            <div class="form-group" style="margin-bottom:0;">
-              <label class="form-label">Browse Repositories</label>
-              <div class="pkg-browser">
-                <div class="repo-rail">${renderRepoRail()}</div>
-                <div class="repo-pane">${renderRepoPane()}</div>
-              </div>
-              <p class="form-hint">Enable a repository with its checkbox, then click it to browse. Browsing starts on the repo's full catalog (loaded in pages of ${PAGE_SIZE}); check “Show frequently used” to narrow the list to its curated picks. The “Select all” checkbox above the list adds everything currently shown to your selection, and removes it again when unchecked.</p>
+            ${renderPackageTabs()}
+            <div class="pkg-tabpanel" role="tabpanel" id="panel-${pkgGroupsUI.packagesTab}"
+                 aria-labelledby="tab-${pkgGroupsUI.packagesTab}">
+              ${pkgGroupsUI.packagesTab === 'edge-pack' ? `
+                ${renderEdgePack()}
+                <p class="form-hint">Selection is not all-or-none: tick the header checkbox for the whole Edge Pack, a domain's checkbox for everything in that domain, or click a domain to see its packages and pick them individually. These packages also appear under their repository on the Repositories tab — it is the same selection either way.</p>
+              ` : `
+                <div class="pkg-browser">
+                  <div class="repo-rail">${renderRepoRail()}</div>
+                  <div class="repo-pane">${renderRepoPane()}</div>
+                </div>
+                <p class="form-hint">Enable a repository with its checkbox, then click it to browse. Browsing starts on the repo's full catalog (loaded in pages of ${PAGE_SIZE}); check “Show frequently used” to narrow the list to its curated picks. The “Select all” checkbox above the list adds everything currently shown to your selection, and removes it again when unchecked.</p>
+              `}
             </div>
           </div>
 
@@ -1526,7 +1667,7 @@ function renderAdvStepContent() {
             <tr><td style="padding:6px 0;font-weight:600;">OS</td><td>${labelFor(MANIFEST.targets, t.target.dist)} (${t.target.dist}) / ${t.target.arch}</td></tr>
             <tr><td style="padding:6px 0;font-weight:600;">Image Type</td><td>${t.target.imageType.toUpperCase()}</td></tr>
             <tr><td style="padding:6px 0;font-weight:600;">Disk</td><td>${t.disk.size}, ${t.disk.partitionTableType.toUpperCase()}, ${t.disk.partitions.length} partitions</td></tr>
-            <tr><td style="padding:6px 0;font-weight:600;">Packages</td><td>${t.packages.length} packages${t.bundles.length ? ` (${t.bundles.length} bundle${t.bundles.length > 1 ? 's' : ''})` : ''}</td></tr>
+            <tr><td style="padding:6px 0;font-weight:600;">Packages</td><td>${t.packages.length} packages${edgePackReviewNote()}</td></tr>
           </table>
         </div>
         <div class="yaml-preview" style="margin-top:0;">
@@ -1549,6 +1690,7 @@ function renderAdvStepContent() {
   </div></div>`;
 
   container.innerHTML = html;
+  applyEdgePackIndeterminate();
   updateAdvancedYaml();
 }
 
@@ -1578,61 +1720,252 @@ function buildPackageGroups() {
   return groups;
 }
 
-// ── Use-case bundles ──────────────────────────────────────────────
-// A bundle is "applied" when every package it lists is currently selected;
-// "partial" when some but not all are (e.g. the user removed one by hand).
-function bundleState(bundle) {
-  const sel = advState.template.packages;
-  const selectedBases = new Set(sel.map(selectionBaseName));
-  const have = bundle.packages.filter(p => selectedBases.has(p)).length;
-  if (have === bundle.packages.length) return 'applied';
-  if (have > 0) return 'partial';
-  return 'none';
+// ── Edge Pack ──────────────────────────────────────────────────────
+// Selection state is DERIVED from the package list on every render (never
+// stored), so removing one package from the right rail immediately shows its
+// domain as partial and the pack as partial — there is no second copy of the
+// truth that could drift out of step.
+function edgePackDomainPackages(domainId) {
+  return PACKAGE_DB.filter(p => p.pack === EDGE_PACK.id && (p.domains || []).includes(domainId));
 }
 
-function renderBundles() {
-  return BUNDLE_DB.map(b => {
-    const st = bundleState(b);
-    const repos = [...new Set(b.packages.map(p => (PACKAGE_DB.find(x => x.name === p) || {}).repo).filter(Boolean))];
-    const repoNames = repos.map(id => (REPO_DB.find(r => r.id === id) || {}).name || id);
-    const mark = st === 'applied' ? '&#10003;' : (st === 'partial' ? '&#8226;' : '&#43;');
-    const meta = st === 'applied'
-      ? `${b.packages.length} packages added`
-      : st === 'partial'
-        ? `partially selected &middot; click to complete`
-        : `${b.packages.length} packages &middot; ${repoNames.length} repo${repoNames.length > 1 ? 's' : ''}`;
-    return `<div class="bundle-card ${st === 'applied' ? 'applied' : st === 'partial' ? 'partial' : ''}" onclick="toggleBundle('${b.id}')" title="${repoNames.join(', ')}">
-      <div class="bundle-card-top">
-        <span class="bundle-check">${mark}</span>
-        <span class="bundle-name">${b.icon} ${b.name}</span>
+// Every domain a package belongs to, in EDGE_PACK.domains order.
+function packageDomains(pkg) {
+  if (!pkg || pkg.pack !== EDGE_PACK.id) return [];
+  return EDGE_PACK.domains.filter(d => (pkg.domains || []).includes(d.id));
+}
+
+// All domain packages (excludes the common base runtime packages below) — this
+// is the scope of the pack-level "Domains" checkbox and its count.
+function edgePackAllDomainPackages() {
+  return PACKAGE_DB.filter(p => p.pack === EDGE_PACK.id && (p.domains || []).length > 0);
+}
+
+// The base runtime packages, common to every domain rather than owned by one.
+function edgePackCommonPackages() {
+  return PACKAGE_DB.filter(p => p.pack === EDGE_PACK.id && p.common);
+}
+
+function edgePackPackages() {
+  return PACKAGE_DB.filter(p => p.pack === EDGE_PACK.id);
+}
+
+// → { selected, total, state: 'none' | 'partial' | 'full' }
+function groupSelectionState(pkgs) {
+  const selected = pkgs.filter(p => isBaseSelected(p.name)).length;
+  const state = selected === 0 ? 'none' : selected === pkgs.length ? 'full' : 'partial';
+  return { selected, total: pkgs.length, state };
+}
+
+// Already-selected packages are skipped rather than re-set, so a version the
+// user pinned by hand survives a pack- or domain-level "select all".
+function applyGroupSelection(pkgs, on) {
+  pkgs.forEach(p => {
+    if (on) { if (!isBaseSelected(p.name)) setPackageSelection(p.name, 'latest'); }
+    else { clearPackageSelection(p.name); }
+  });
+}
+
+function setGroupSelected(pkgs, on) {
+  applyGroupSelection(pkgs, on);
+  renderAdvStepContent(); // re-renders and refreshes the YAML preview
+}
+
+const EDGE_PACK_BASE_STANDARD = 'intel-edge-base-standard';
+
+// Every domain's packages run on top of a base runtime, so a domain cannot be
+// selected until one is — today that means Standard, the only base with a
+// shipped package and a qualified SKU. Base runtime stays a plain, independent
+// checkbox rather than something domains flip on for you: unchecking a domain
+// never unchecks it back off.
+function edgePackBaseSelected() {
+  return isBaseSelected(EDGE_PACK_BASE_STANDARD);
+}
+
+function toggleEdgePackAll(on) {
+  if (on && !edgePackBaseSelected()) return;
+  applyGroupSelection(edgePackAllDomainPackages(), on);
+  renderAdvStepContent();
+}
+
+function toggleEdgePackDomain(domainId, on) {
+  const domain = EDGE_PACK.domains.find(d => d.id === domainId);
+  if (on && (!edgePackBaseSelected() || !edgePackDomainAvailable(domain))) return;
+  // Checking a domain's own checkbox also opens it, so the packages it just
+  // selected are visible; the pack-level "Domains" checkbox above leaves
+  // whatever (if anything) is open alone.
+  if (on) { pkgGroupsUI.activeDomain = domainId; }
+  applyGroupSelection(edgePackDomainPackages(domainId), on);
+  renderAdvStepContent();
+}
+
+// The base runtime checkboxes sit above the domain grid and can also be set
+// directly, independent of any domain selection.
+function toggleEdgePackCommon(name, on) {
+  if (on) { if (!isBaseSelected(name)) setPackageSelection(name, 'latest'); }
+  else { clearPackageSelection(name); }
+  renderAdvStepContent();
+}
+
+// Selecting a domain card lists its packages; clicking the open card again
+// closes the list, so it never becomes a panel you cannot dismiss. This is
+// separate from the card's checkbox, which only adds or removes packages.
+function setActiveDomain(domainId) {
+  pkgGroupsUI.activeDomain = pkgGroupsUI.activeDomain === domainId ? '' : domainId;
+  renderAdvStepContent();
+}
+
+// ── Browse tabs ────────────────────────────────────────────────────
+const PACKAGE_TABS = [
+  { id: 'edge-pack', label: 'Edge Pack' },
+  { id: 'repos', label: 'Repositories' }
+];
+
+function renderPackageTabs() {
+  return `<div class="pkg-tabs" role="tablist" aria-label="Browse packages by">
+    ${PACKAGE_TABS.map(t => {
+      const active = pkgGroupsUI.packagesTab === t.id;
+      return `<button type="button" class="pkg-tab ${active ? 'active' : ''}" role="tab"
+        id="tab-${t.id}" aria-selected="${active}" aria-controls="panel-${t.id}"
+        tabindex="${active ? '0' : '-1'}"
+        onclick="setPackagesTab('${t.id}')" onkeydown="packagesTabKey(event,'${t.id}')">${t.label}</button>`;
+    }).join('')}
+  </div>`;
+}
+
+// Focus follows the tab so keyboard users land on the control they just moved
+// to; harmless on a mouse click, which already focused it.
+function setPackagesTab(id) {
+  pkgGroupsUI.packagesTab = id;
+  renderAdvStepContent();
+  const el = document.getElementById('tab-' + id);
+  if (el) el.focus();
+}
+
+// Arrow keys move between tabs, as expected of a tablist; only the active tab
+// is in the tab order (see tabindex above), so Tab itself leaves the strip.
+function packagesTabKey(event, id) {
+  if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
+  event.preventDefault();
+  const i = PACKAGE_TABS.findIndex(t => t.id === id);
+  const step = event.key === 'ArrowRight' ? 1 : PACKAGE_TABS.length - 1;
+  setPackagesTab(PACKAGE_TABS[(i + step) % PACKAGE_TABS.length].id);
+}
+
+function renderEdgePack() {
+  const pack = groupSelectionState(edgePackAllDomainPackages());
+  const countLabel = pack.selected
+    ? `${pack.selected} of ${pack.total} packages selected`
+    : `${pack.total} packages in ${EDGE_PACK.domains.length} domains`;
+
+  // Base runtime is its own section above the Edge Pack card, not a row inside
+  // it: it is a prerequisite for every domain, not one more thing the pack
+  // groups. It is a plain, independent checkbox — checking/unchecking a domain
+  // never touches it — but domains stay locked until it is set, since every
+  // domain's packages need a base runtime under them. Real-time has no
+  // shipped package or qualified SKU yet, so it's shown but disabled.
+  const standardSelected = edgePackBaseSelected();
+  const common = `<div class="edge-pack-common">
+      <div class="edge-pack-common-label">Base Runtime</div>
+      <div class="edge-pack-common-options">
+        <label class="runtime-option ${standardSelected ? 'selected' : ''}">
+          <input type="checkbox" ${standardSelected ? 'checked' : ''}
+                 onchange="toggleEdgePackCommon('${EDGE_PACK_BASE_STANDARD}',this.checked)">
+          <span class="runtime-option-name">Standard</span>
+        </label>
+        <label class="runtime-option disabled" title="Real-time packages and a qualified SKU are not available yet">
+          <input type="checkbox" disabled>
+          <span class="runtime-option-name">Real-time</span>
+          <span class="runtime-option-note">not yet available</span>
+        </label>
       </div>
-      <div class="bundle-desc">${b.desc}</div>
-      <div class="bundle-meta">${meta}</div>
+      ${!standardSelected ? `<p class="edge-pack-common-hint">Select a base runtime to enable domain selection below.</p>` : ''}
+    </div>`;
+
+  const header = `<div class="edge-pack-header">
+      <label class="edge-pack-title">
+        <input type="checkbox" id="edge-pack-all" ${pack.state === 'full' ? 'checked' : ''}
+               ${standardSelected ? '' : 'disabled'}
+               onchange="toggleEdgePackAll(this.checked)">
+        <span>Domains</span>
+        <span class="edge-pack-sub">${EDGE_PACK.desc}</span>
+      </label>
+      <span class="edge-pack-count ${pack.selected ? 'has-sel' : ''}">${countLabel}</span>
+    </div>`;
+
+  // Two actions per card, kept apart:
+  //  - clicking the card selects the group → highlights it and lists its
+  //    packages below (stopPropagation on the checkbox keeps the box out of it)
+  //  - ticking the checkbox only adds/removes that domain's packages
+  // The name is a plain span rather than a <label> so clicking it opens the
+  // card instead of silently toggling the checkbox. The checkbox (but not the
+  // card, so its packages can still be browsed) is disabled until a base
+  // runtime is selected.
+  const cards = EDGE_PACK.domains.map(d => {
+    const st = groupSelectionState(edgePackDomainPackages(d.id));
+    const open = pkgGroupsUI.activeDomain === d.id;
+    const available = edgePackDomainAvailable(d);
+    const count = !available
+      ? `Not available on ${labelFor(MANIFEST.targets, advState.template.target.dist)}`
+      : st.selected
+        ? `${st.selected} of ${st.total} selected`
+        : `${st.total} package${st.total === 1 ? '' : 's'}`;
+    const cardTitle = available ? d.desc : `${d.desc} Not published for ${labelFor(MANIFEST.targets, advState.template.target.dist)}.`;
+    return `<div class="domain-card ${open ? 'active' : ''} ${available ? '' : 'unavailable'}" title="${escapeHtml(cardTitle)}"
+      role="button" tabindex="0" aria-expanded="${open}" onclick="setActiveDomain('${d.id}')"
+      onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();setActiveDomain('${d.id}');}">
+      <div class="domain-card-top">
+        <input type="checkbox" id="edge-domain-${d.id}" ${st.state === 'full' ? 'checked' : ''}
+               ${standardSelected && available ? '' : 'disabled'}
+               aria-label="Select all ${escapeHtml(d.name)} packages"
+               onclick="event.stopPropagation()"
+               onchange="toggleEdgePackDomain('${d.id}',this.checked)">
+        <span class="domain-name">${escapeHtml(d.name)}</span>
+      </div>
+      <div class="domain-count ${st.selected ? 'has-sel' : ''}">${count}</div>
     </div>`;
   }).join('');
+
+  // The package list sits below the whole grid rather than inside a card: the
+  // grid wraps to several columns, so an in-card list would shove its
+  // neighbours around. The selected card stays highlighted (see
+  // .domain-card.active) to tie the list back to the group it belongs to.
+  let drill = '';
+  const active = EDGE_PACK.domains.find(d => d.id === pkgGroupsUI.activeDomain);
+  if (active) {
+    const pkgs = edgePackDomainPackages(active.id);
+    drill = `<div class="domain-drill">
+      <div class="domain-drill-header">
+        <span class="domain-drill-title">${escapeHtml(active.name)}</span>
+        <span class="domain-drill-desc">${escapeHtml(active.desc)}</span>
+      </div>
+      ${pkgs.map(renderPackageRow).join('')}
+    </div>`;
+  }
+
+  return `${common}<div class="edge-pack">${header}<div class="domain-grid">${cards}</div>${drill}</div>`;
 }
 
-// Apply = add every package + enable their repos + record the bundle.
-// Un-apply (or complete a partial) toggles toward "fully applied":
-//  - not fully applied  → apply all
-//  - fully applied      → remove exactly this bundle's packages
-function toggleBundle(id) {
-  const t = advState.template;
-  const bundle = BUNDLE_DB.find(b => b.id === id);
-  if (!bundle) return;
-  if (bundleState(bundle) === 'applied') {
-    t.packages = t.packages.filter(p => !bundle.packages.includes(selectionBaseName(p)));
-    t.bundles = t.bundles.filter(b => b !== id);
-  } else {
-    const selectedBases = new Set(t.packages.map(selectionBaseName));
-    bundle.packages.forEach(name => {
-      if (!selectedBases.has(name)) t.packages.push(name);
-      const pkg = PACKAGE_DB.find(x => x.name === name);
-      if (pkg && !t.enabledRepos.includes(pkg.repo)) t.enabledRepos.push(pkg.repo);
-    });
-    if (!t.bundles.includes(id)) t.bundles.push(id);
-  }
-  renderAdvStepContent();
+// Review line for the pack: the exported YAML is a flat package list, so this
+// says which domains those packages came from rather than implying the pack is
+// a unit the template records.
+function edgePackReviewNote() {
+  const domains = EDGE_PACK.domains.filter(d => groupSelectionState(edgePackDomainPackages(d.id)).selected > 0);
+  if (!domains.length) return '';
+  const pack = groupSelectionState(edgePackPackages());
+  return ` &middot; ${pack.selected} from ${EDGE_PACK.name} (${domains.map(d => d.name).join(', ')})`;
+}
+
+// Checkboxes cannot express "some" in markup, so the mixed state is applied to
+// the live nodes after each render.
+function applyEdgePackIndeterminate() {
+  const packBox = document.getElementById('edge-pack-all');
+  if (!packBox) return; // not on the packages step, or the section is collapsed
+  packBox.indeterminate = groupSelectionState(edgePackAllDomainPackages()).state === 'partial';
+  EDGE_PACK.domains.forEach(d => {
+    const box = document.getElementById('edge-domain-' + d.id);
+    if (box) box.indeterminate = groupSelectionState(edgePackDomainPackages(d.id)).state === 'partial';
+  });
 }
 
 // ── Two-pane repository browser ────────────────────────────────────
@@ -1696,23 +2029,7 @@ function renderRepoPane() {
     return header() + `<div class="pane-empty">This repository is disabled.<br>Enable it with the checkbox on the left to pick from its ${total.toLocaleString()} packages.</div>`;
   }
 
-  const row = p => {
-    const selected = isBaseSelected(p.name);
-    const pinnedVersion = selectionPinnedVersion(selectedEntryForBase(p.name));
-    const versionLabel = pinnedVersion || 'Latest';
-    const repoName = (REPO_DB.find(r => r.id === p.repo) || OTHER_REPO).name;
-    return `<label class="pkg-row ${selected ? 'selected' : ''}" title="${p.desc || ''}" onclick="event.stopPropagation()">
-      <input type="checkbox" ${selected ? 'checked' : ''} onchange="togglePackage('${p.name}',this.checked)">
-      <span class="pkg-row-main">
-        <span class="pkg-row-top">
-          <span class="pkg-row-name">${p.name}</span>
-          <span class="pkg-row-version">${versionLabel}</span>
-        </span>
-        <span class="pkg-row-repo">${repoName}</span>
-        <span class="pkg-row-versions">${renderVersionChips(p.name, packageVersions(p), 'choosePackageVersion')}</span>
-      </span>
-    </label>`;
-  };
+  const row = renderPackageRow;
 
   const frequentOnly = pkgGroupsUI.frequentOnly;
   const pageRows = visibleRepoRows(repo.id);
@@ -1849,47 +2166,113 @@ function scrollPkgListToTop() {
   if (list) list.scrollTop = 0;
 }
 
-// Right column: the final selected-package list, grouped by source repo, each
-// removable. This is the single source of truth for what goes into the image.
+// Right column: the final selected-package list, each entry removable. This is
+// the single source of truth for what goes into the image.
+//
+// The grouping is the user's choice (see SELECTED_GROUP_BY) because repo and
+// domain are not interchangeable axes: `repo` is where a package comes from and
+// is one-per-package, `domains` is a many-to-many label. Domain grouping
+// therefore has to list a two-domain package under both of its domains, which
+// no single fixed grouping could do without the counts looking wrong — hence
+// the explicit mode plus the note that explains it.
+const SELECTED_GROUP_BY = [
+  { id: 'repo', label: 'Repository' },
+  { id: 'domain', label: 'Domain' },
+  { id: 'none', label: 'None (flat list)' }
+];
+
+function setSelectedGroupBy(mode) {
+  pkgGroupsUI.selectedGroupBy = mode;
+  renderAdvStepContent();
+}
+
+function repoIdOfSelection(name) {
+  const p = PACKAGE_DB.find(x => x.name === selectionBaseName(name));
+  if (p) return p.repo;
+  const m = REPO_DB.find(r => name.startsWith(r.id + '-pkg-'));
+  return m ? m.id : '__other';
+}
+
+// → [{ label, items }] in display order. Only `domain` can repeat an item.
+function groupSelections(selections, mode) {
+  if (mode === 'none') {
+    return [{ label: '', items: selections.slice().sort((a, b) => selectionBaseName(a).localeCompare(selectionBaseName(b))) }];
+  }
+
+  if (mode === 'domain') {
+    const groups = EDGE_PACK.domains.map(d => ({
+      label: `${EDGE_PACK.name} &middot; ${escapeHtml(d.name)}`,
+      items: selections.filter(n => {
+        const p = PACKAGE_DB.find(x => x.name === selectionBaseName(n));
+        return p && (p.domains || []).includes(d.id);
+      })
+    })).filter(g => g.items.length);
+    // Everything without a domain still has to appear — the panel is the
+    // complete build list, not just the pack's slice of it.
+    const rest = selections.filter(n => {
+      const p = PACKAGE_DB.find(x => x.name === selectionBaseName(n));
+      return !p || !(p.domains || []).length;
+    });
+    if (rest.length) groups.push({ label: 'No domain', items: rest });
+    return groups;
+  }
+
+  const byRepo = {};
+  selections.forEach(n => { (byRepo[repoIdOfSelection(n)] ||= []).push(n); });
+  return [...REPO_DB.map(r => r.id), '__other']
+    .filter(id => byRepo[id])
+    .map(id => ({ label: escapeHtml((REPO_DB.find(r => r.id === id) || OTHER_REPO).name), items: byRepo[id] }));
+}
+
 function renderSelectedColumn() {
   const t = advState.template;
-  const repoOf = name => {
-    const p = PACKAGE_DB.find(x => x.name === selectionBaseName(name));
-    if (p) return p.repo;
-    const m = REPO_DB.find(r => name.startsWith(r.id + '-pkg-'));
-    return m ? m.id : '__other';
-  };
-  const nameOf = id => (REPO_DB.find(r => r.id === id) || OTHER_REPO).name;
+  const mode = pkgGroupsUI.selectedGroupBy;
 
   const header = `<div class="selected-col-header">
       <span>Selected packages (${t.packages.length})</span>
       ${t.packages.length ? `<button class="link-btn" onclick="clearAllPackages()">Clear</button>` : ''}
+    </div>
+    <div class="selected-col-subhead">
+      <label for="selected-group-by">Group by</label>
+      <select class="group-by-select" id="selected-group-by" onchange="setSelectedGroupBy(this.value)">
+        ${SELECTED_GROUP_BY.map(o => `<option value="${o.id}" ${mode === o.id ? 'selected' : ''}>${o.label}</option>`).join('')}
+      </select>
     </div>`;
 
   if (!t.packages.length) {
-    return header + `<div class="selected-col-body"><div class="selected-empty">Nothing selected yet.<br>Apply a bundle or pick packages from a repository.</div></div>`;
+    return header + `<div class="selected-col-body"><div class="selected-empty">Nothing selected yet.<br>Pick an Edge Pack domain or packages from a repository.</div></div>`;
   }
 
-  // Group selected packages by repo, preserving REPO_DB order.
-  const byRepo = {};
-  t.packages.forEach(n => { (byRepo[repoOf(n)] ||= []).push(n); });
-  const orderedIds = [...REPO_DB.map(r => r.id), '__other'].filter(id => byRepo[id]);
+  const groups = groupSelections(t.packages, mode);
+  // A package in two domains is listed under each, so the group counts add up
+  // to more than the header count. Say so, but only when it actually happens.
+  const listed = groups.reduce((n, g) => n + g.items.length, 0);
+  const note = mode === 'domain' && listed > t.packages.length
+    ? `<div class="selected-note">Packages in more than one domain are listed under each, so the group counts add up to more than ${t.packages.length}.</div>`
+    : '';
 
-  const body = orderedIds.map(id => `
-    <div class="selected-group-label">${nameOf(id)} (${byRepo[id].length})</div>
-    ${byRepo[id].map(n => `<div class="selected-item">
-      <span class="selected-item-name" title="${n}">${selectionBaseName(n)}</span>
-      <span class="selected-mode ${selectionPinnedVersion(n) ? 'pinned' : ''}">${selectionPinnedVersion(n) ? `pinned ${selectionPinnedVersion(n)}` : 'latest'}</span>
-      <span class="selected-item-x" onclick="advRemovePackage('${n}')" title="Remove">&times;</span>
-    </div>`).join('')}
+  const item = n => {
+    const pkg = PACKAGE_DB.find(x => x.name === selectionBaseName(n));
+    const domains = packageDomains(pkg).map(d => d.name).join(', ');
+    const tip = [n, (REPO_DB.find(r => r.id === repoIdOfSelection(n)) || OTHER_REPO).name, domains]
+      .filter(Boolean).join(' · ');
+    return `<div class="selected-item">
+      <span class="selected-item-name" title="${escapeHtml(tip)}">${escapeHtml(selectionBaseName(n))}</span>
+      <span class="selected-mode ${selectionPinnedVersion(n) ? 'pinned' : ''}">${selectionPinnedVersion(n) ? `pinned ${escapeHtml(selectionPinnedVersion(n))}` : 'latest'}</span>
+      <span class="selected-item-x" onclick="advRemovePackage('${escapeJsAttr(n)}')" title="Remove">&times;</span>
+    </div>`;
+  };
+
+  const body = groups.map(g => `
+    ${g.label ? `<div class="selected-group-label">${g.label} (${g.items.length})</div>` : ''}
+    ${g.items.map(item).join('')}
   `).join('');
 
-  return header + `<div class="selected-col-body">${body}</div>`;
+  return header + note + `<div class="selected-col-body">${body}</div>`;
 }
 
 function clearAllPackages() {
   advState.template.packages = [];
-  advState.template.bundles = [];
   renderAdvStepContent();
 }
 
