@@ -170,11 +170,11 @@ Thorough testing is crucial to maintain project stability. Ensure that you:
 - All feature and fix PRs target `main` directly; there is no separate
   development branch to rebase onto.
 - `main` is expected to build and pass CI at all times.
-- Ahead of each quarterly release, a short-lived `release-vX.Y` branch is
-  cut from `main` for final validation. Only release-blocking fixes are
-  cherry-picked into it; `main` keeps accepting new feature work in
-  parallel.
-- Releases are tagged on the release branch (e.g. `vX.Y.0`), and any
+- Ahead of each quarterly release, a short-lived `release-YYYY.Q` branch
+  (e.g. `release-2026.3`) is cut from `main` for final validation. Only
+  release-blocking fixes are cherry-picked into it; `main` keeps
+  accepting new feature work in parallel.
+- Releases are tagged on the release branch (e.g. `2026.3.0`), and any
   fixes made there are merged back into `main`.
 - If you need your change included in an upcoming release, note this in
   your pull request description; maintainers will flag it for
