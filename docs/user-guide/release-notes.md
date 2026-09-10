@@ -157,6 +157,10 @@
 
 - `fix(imagedisc)`: bound sfdisk calls and detach stale loop devices before reattach: `createPartitionTable`'s `sfdisk` calls had no execution timeout, so a wedged `sfdisk` (e.g. blocked behind a stale loop-device handle from a hard-killed prior build) could hang a build indefinitely. Both `sfdisk` invocations are now bounded to a 30s context so a hang fails fast into the existing retry-with-force path instead of blocking forever. Loop-device attach is also now idempotent: before `losetup`, any existing loop device already bound to the same backing file (including one whose backing file was since deleted) is detached first, removing the actual trigger that could wedge the kernel's partition-table re-read on a freshly attached device.
 
+- Ubuntu cloud-init images fought systemd-networkd for interface ownership at first boot: `updateImageNetwork()` unconditionally ran `systemctl enable systemd-networkd` whenever the unit was present and no `network.backend` was configured, even for images that install `cloud-init` and rely on it to own network rendering. Combined with the OS-default `dhcp.network` drop-in every Ubuntu ISO build inherits, this left a statically-DHCP-configured `systemd-networkd` racing cloud-init for the interface, leaving `/etc/netplan` unpopulated. The auto-enable is now skipped when `cloud-init` is among the installed packages (matched literally, version-pinned, or via a glob such as `cloud-init*`) and no explicit `network.backend` is set; behavior for images that don't install cloud-init is unchanged.
+
+- Attended installer TUI froze on the very first "Next"/"Go Back"/Ctrl+C press: page navigation and the exit-confirmation prompt called `tview`'s `QueueUpdateDraw` synchronously from within the UI's own event-loop goroutine, which deadlocks since that call blocks waiting for the same goroutine to service it. Navigation now runs directly and synchronously, since it's already invoked from that goroutine.
+
 **Known Issues**:
 
 - **Custom partition layouts with the overlay feature are not supported**:
