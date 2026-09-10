@@ -233,6 +233,37 @@ This tutorial uses a **dracut module + template-declared files** approach, which
 In short: both methods can place a script in initrd, but the module-based method used here is preferred for
 declarative, version-controlled image builds in ICT.
 
+---
+
+## Running a script once, on the full OS's first boot (not initrd)
+
+The routes above run a script **inside initrd**, before the real root filesystem takes over. If you instead want a
+script that runs once, after the device has switched to the installed OS, on its **first boot only**, use a systemd
+oneshot unit gated by a marker file instead of a dracut module.
+
+**Full working example:** `image-templates/debian13-x86_64-bb-dracut-raw.yml` with
+`image-templates/additionalfiles/debian13-bb-dracut/usr/local/sbin/first-boot-sample.sh` and
+`.../etc/systemd/system/first-boot-sample.service`.
+
+```yaml
+  additionalFiles:
+    - local: additionalfiles/debian13-bb-dracut/usr/local/sbin/first-boot-sample.sh
+      final: /usr/local/sbin/first-boot-sample.sh
+    - local: additionalfiles/debian13-bb-dracut/etc/systemd/system/first-boot-sample.service
+      final: /etc/systemd/system/first-boot-sample.service
+
+  configurations:
+    - cmd: "chmod 755 /usr/local/sbin/first-boot-sample.sh"
+    - cmd: 'systemctl enable first-boot-sample.service'
+```
+
+The unit's `ConditionPathExists=!/var/lib/first-boot-sample.done` skips `ExecStart` once the marker file exists;
+`ExecStartPost` creates that marker after a successful run. The unit stays `WantedBy=multi-user.target` on every
+boot (so it evaluates the condition each time), but the script itself only ever executes once. This is preferred
+over having the script disable its own unit, which races with `RemainAfterExit=yes`.
+
+To see the message on the serial console / `dmesg`, not just `journalctl`, the script mirrors it to `/dev/kmsg`
+(this template's kernel cmdline sets `console=ttyS0,115200`) and the unit sets `StandardOutput=journal+console`.
 
 ---
 

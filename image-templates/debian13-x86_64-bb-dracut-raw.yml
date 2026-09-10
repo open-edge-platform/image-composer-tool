@@ -5,6 +5,7 @@ metadata:
     - Validating custom dracut module scripts on Debian GRUB raw images
     - Lightweight Debian with early-boot initrd marker
     - Booting into a GNOME-on-Xorg desktop session (GDM login)
+    - Running a one-time setup script on the device's first boot
   keywords:
     - bb
     - dracut
@@ -18,10 +19,12 @@ metadata:
     - x11
     - gdm
     - desktop
+    - first-boot
+    - oneshot
 
 image:
   name: bb-os-image-debian-dracut
-  version: "13.0"
+  version: "13.1"
 
 target:
   os: debian
@@ -163,6 +166,12 @@ systemConfig:
       final: /etc/dconf/db/local.d/00-mutter
     - local: additionalfiles/debian13-bb-graphics-mutter/etc/systemd/system/dconf-update-mutter.service
       final: /etc/systemd/system/dconf-update-mutter.service
+    # Sample script that runs once on the device's first boot only (see
+    # first-boot-sample.service's ConditionPathExists marker file).
+    - local: additionalfiles/debian13-bb-dracut/usr/local/sbin/first-boot-sample.sh
+      final: /usr/local/sbin/first-boot-sample.sh
+    - local: additionalfiles/debian13-bb-dracut/etc/systemd/system/first-boot-sample.service
+      final: /etc/systemd/system/first-boot-sample.service
 
   configurations:
     - cmd: 'mkdir -p /etc/dracut.conf.d && echo ''add_dracutmodules+=" hello "'' > /etc/dracut.conf.d/91hello.conf'
@@ -182,6 +191,8 @@ systemConfig:
     - cmd: "sed -i 's/^#WaylandEnable=false/WaylandEnable=false/' /etc/gdm3/daemon.conf"
     # Enable the first-boot dconf compile unit delivered by additionalFiles above.
     - cmd: 'systemctl enable dconf-update-mutter.service'
+    - cmd: "chmod 755 /usr/local/sbin/first-boot-sample.sh"
+    - cmd: 'systemctl enable first-boot-sample.service'
 
   kernel:
     cmdline: "console=ttyS0,115200 console=tty0 loglevel=7 rd.debug rd.info"
