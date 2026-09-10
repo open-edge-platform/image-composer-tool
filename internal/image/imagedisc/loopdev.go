@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -32,6 +33,164 @@ func NewLoopDev() *LoopDev {
 	return &LoopDev{}
 }
 
+// deletedBackFileSuffix is the annotation losetup appends to "back-file" in
+// its JSON output when a loop device's backing file was removed from disk
+// while the device stayed attached.
+const deletedBackFileSuffix = " (deleted)"
+
+// canonicalImagePath resolves imagePath to the absolute, symlink-resolved
+// form losetup itself reports for an attached device's back-file, so string
+// comparison against back-file is meaningful regardless of whether the
+// caller passed a relative path or a path through a symlink. imagePath is
+// expected to exist by the time detachStaleLoopDevices runs (loopSetupCreate
+// is only reached after the backing file has been created or, for
+// AttachImageToLoopDev, after its existence has already been verified), so a
+// resolution failure here falls back to the absolute path rather than the
+// literal (possibly relative) input.
+func canonicalImagePath(imagePath string) string {
+	abs, err := filepath.Abs(imagePath)
+	if err != nil {
+		return filepath.Clean(imagePath)
+	}
+	if resolved, err := evalSymlinks(abs); err == nil {
+		return resolved
+	}
+	return abs
+}
+
+// resolveBackFile interprets a losetup "back-file" value, distinguishing
+// losetup's own deletedBackFileSuffix annotation from a literal filename
+// that happens to end in the same text. It reports ok=false when that can't
+// be determined safely, so the caller skips the device rather than risk
+// detaching an unrelated one.
+func resolveBackFile(backFile string) (path string, ok bool) {
+	if !strings.HasSuffix(backFile, deletedBackFileSuffix) {
+		return filepath.Clean(backFile), true
+	}
+
+	// The suffix is only losetup's annotation if the literal suffixed path
+	// does not itself exist; if it exists, some other error occurs while
+	// checking (e.g. a permission problem), don't guess.
+	switch _, err := os.Stat(backFile); {
+	case err == nil:
+		return filepath.Clean(backFile), true
+	case os.IsNotExist(err):
+		return filepath.Clean(strings.TrimSuffix(backFile, deletedBackFileSuffix)), true
+	default:
+		return "", false
+	}
+}
+
+// loopDeviceHasActiveMount reports whether name, or any of its partitions,
+// is currently mounted. A back-file match only proves a device was once
+// attached to imagePath — it does not prove the device is abandoned, since a
+// concurrent process (another inspect/build against the same image path)
+// could be actively using it right now. Detaching — and, via
+// LoopSetupDelete's disableSwapPartitions, running swapoff on — a live,
+// mounted device out from under that process would be destructive, so such
+// devices are left alone. A lookup failure is treated as "mounted" so the
+// caller fails safe (skips) rather than guesses.
+func loopDeviceHasActiveMount(name string) bool {
+	cmd := fmt.Sprintf("lsblk -o NAME,MOUNTPOINT %s -J", name)
+	output, err := shell.ExecCmd(cmd, true, shell.HostPath, nil)
+	if err != nil {
+		log.Debugf("could not determine mount state for loop device %s: %v", name, err)
+		return true
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		log.Debugf("failed to parse lsblk output for loop device %s: %v", name, err)
+		return true
+	}
+
+	return hasNonEmptyMountpoint(result)
+}
+
+// hasNonEmptyMountpoint recursively searches lsblk's parsed JSON tree for a
+// non-blank "mountpoint" value.
+func hasNonEmptyMountpoint(data interface{}) bool {
+	switch v := data.(type) {
+	case map[string]interface{}:
+		if mp, ok := v["mountpoint"].(string); ok && strings.TrimSpace(mp) != "" {
+			return true
+		}
+		for _, val := range v {
+			if hasNonEmptyMountpoint(val) {
+				return true
+			}
+		}
+	case []interface{}:
+		for _, item := range v {
+			if hasNonEmptyMountpoint(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// detachStaleLoopDevices finds any loop device already bound to imagePath's
+// backing file — including one whose backing file has since been deleted
+// (losetup reports the back-file as "<path> (deleted)") — and detaches it,
+// returning the device paths it successfully detached. A build that is
+// killed hard enough to skip Go-side cleanup entirely (kill -9, OOM, a
+// host/WSL restart) leaks its loop device; a stale device left pointing at
+// the same image path can then wedge the kernel's partition-table re-read on
+// the fresh device a later build attaches for that same path. This is
+// best-effort: enumeration or detach failures are logged and otherwise
+// ignored so a transient lsblk/losetup hiccup never fails the build outright
+// (the bounded execSfdiskBounded retry path in createPartitionTable is the
+// hard backstop if a stale device slips through anyway). The "name" field is
+// validated against canonicalLoopDevPath before use, the same way
+// loopSetupCreate validates losetup's own output, since it is passed on to
+// LoopSetupDelete and interpolated into privileged shell commands there. A
+// matching back-file alone does not prove a device is abandoned rather than
+// in active use by a concurrent process, so a device with an active
+// mountpoint is left alone (see loopDeviceHasActiveMount).
+func detachStaleLoopDevices(loopDev *LoopDev, imagePath string) []string {
+	cleanPath := canonicalImagePath(imagePath)
+
+	devices, err := LoopDevGetInfoAll()
+	if err != nil {
+		log.Debugf("could not enumerate existing loop devices before attaching %s: %v", imagePath, err)
+		return nil
+	}
+
+	var detached []string
+	for _, dev := range devices {
+		name, ok := dev["name"].(string)
+		if !ok || !canonicalLoopDevPath.MatchString(name) {
+			log.Debugf("Ignoring loop device with unexpected name format %q while scanning for devices bound to %s", name, imagePath)
+			continue
+		}
+		backFileRaw, ok := dev["back-file"].(string)
+		if !ok {
+			continue
+		}
+		backFile, ok := resolveBackFile(backFileRaw)
+		if !ok {
+			log.Debugf("Skipping loop device %s: could not determine whether back-file %q is stale", name, backFileRaw)
+			continue
+		}
+		if backFile != cleanPath {
+			continue
+		}
+		if loopDeviceHasActiveMount(name) {
+			log.Warnf("Loop device %s matches the backing file for %s but has an active mountpoint; leaving it attached rather than risk disrupting a live user", name, imagePath)
+			continue
+		}
+
+		log.Warnf("Found stale loop device %s already attached to %s from a prior run; detaching before reattaching", name, imagePath)
+		if detachErr := loopDev.LoopSetupDelete(name); detachErr != nil {
+			log.Warnf("Failed to detach stale loop device %s bound to %s: %v", name, imagePath, detachErr)
+			continue
+		}
+		detached = append(detached, name)
+	}
+	return detached
+}
+
 // loopSetupCreate attaches imagePath as a loop device with partition scanning
 // (losetup -fP) and returns the canonical device path plus an unregister
 // closure. When a runctx.Coordinator is bound, the returned closure removes
@@ -49,6 +208,8 @@ func NewLoopDev() *LoopDev {
 //
 // When no coordinator is bound the closure is a no-op.
 func loopSetupCreate(imagePath string) (string, func(), error) {
+	detachStaleLoopDevices(&LoopDev{}, imagePath)
+
 	// losetup runs with sudo through a bash -c string. Single-quote the path so
 	// bash performs no expansion on it: strconv.Quote uses double quotes, inside
 	// which $(...), ${...} and backticks still expand, so a crafted work-dir or

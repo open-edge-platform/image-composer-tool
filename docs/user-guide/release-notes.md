@@ -122,6 +122,12 @@
    flexibility in early boot configuration. The images can also boot into a
    graphical desktop environment with GDM over X11.
 
+   `debian13-x86_64-bb-dracut-raw.yml` also ships a sample first-boot
+   systemd oneshot unit (`first-boot-sample.service`): a script that runs
+   once, on the device's first boot only, gated by a marker file, with its
+   message mirrored to the journal, a log file, `dmesg`, and the serial
+   console.
+
 6. **Full Disk Encryption (FDE) for RAW images**
 
    This release supports selectively encrypting disk partitions in RAW images
@@ -146,6 +152,10 @@
   | Debian 13 custom initrd with overlay | `debian13-x86_64-bb-graphics-raw.yml` and `debian13-x86_64-bb-overlay-initrd-raw.yml` in `image-templates/debian13/` |
   | Debian 13 monolithic robotics | `debian13-x86_64-bb-dracut-raw.yml` in `image-templates/debian13/` |
   | Ubuntu 24 robotics templates | `ubuntu24-x86_64-robotics-hw-overlay-qcow2.yml`, `ubuntu24-x86_64-robotics-jazzy-overlay-extends.yml`, and `ubuntu24-x86_64-robotics-jazzy-iso.yml` in `image-templates/ubuntu24/` |
+
+**Fixed**:
+
+- `fix(imagedisc)`: bound sfdisk calls and detach stale loop devices before reattach: `createPartitionTable`'s `sfdisk` calls had no execution timeout, so a wedged `sfdisk` (e.g. blocked behind a stale loop-device handle from a hard-killed prior build) could hang a build indefinitely. Both `sfdisk` invocations are now bounded to a 30s context so a hang fails fast into the existing retry-with-force path instead of blocking forever. Loop-device attach is also now idempotent: before `losetup`, any existing loop device already bound to the same backing file (including one whose backing file was since deleted) is detached first, removing the actual trigger that could wedge the kernel's partition-table re-read on a freshly attached device.
 
 **Known Issues**:
 
@@ -264,7 +274,7 @@
 
 - Network schema validation: IPv4/IPv6 CIDR addresses, gateway addresses, and nameservers in `systemConfig.network` are now validated against typed formats in the JSON schema; DHCP and static addresses cannot be combined on the same interface.
 
-- Debian 13 Bayonne Bridge graphics template ships a desktop terminal and GUI installer: The `debian13-x86_64-bb-graphics-raw.yml` template now adds `gnome-terminal` and `gnome-software` on top of its GNOME desktop stack (`gdm3` + `gnome-session` + `gnome-shell`). Previously the composed desktop had no terminal application in the Activities overview and no graphical way to browse or install packages, because `gnome-shell`/`gnome-session` do not pull those in (only the larger `gnome-core`/`gnome` metapackages do). Both packages merge additively under the template's inherited `additive-and-upgrade` overlay policy; the CLI `apt` is unchanged and already present.
+- Debian 13 graphics template ships a desktop terminal and GUI installer: The `debian13-x86_64-bb-graphics-raw.yml` template now adds `gnome-terminal` and `gnome-software` on top of its GNOME desktop stack (`gdm3` + `gnome-session` + `gnome-shell`). Previously the composed desktop had no terminal application in the Activities overview and no graphical way to browse or install packages, because `gnome-shell`/`gnome-session` do not pull those in (only the larger `gnome-core`/`gnome` metapackages do). Both packages merge additively under the template's inherited `additive-and-upgrade` overlay policy; the CLI `apt` is unchanged and already present.
 
 - Image templates grouped by distribution: `image-templates/` is now organized into one subdirectory per `target.dist` (`azl3/`, `debian13/`, `el10/`, `elxr12/`, `elxr13/`, `emt3/`, `ubuntu24/`, `ubuntu26/`) instead of a single flat listing of 60 files. Filenames are unchanged, so `image-templates/ubuntu24-x86_64-minimal-raw.yml` becomes `image-templates/ubuntu24/ubuntu24-x86_64-minimal-raw.yml`. **If you reference a template by path in a script or automation, add the distribution directory.** Templates packaged into the `.deb` under `/usr/share/ict/examples/` gain the same subdirectories. Distribution is the grouping used because an `extends:` chain must be siblings in one directory and must share `os`/`dist`/`arch`/`imageType`, so a distribution directory can never split a valid chain. New guides ship alongside the templates: `image-templates/README.md` (catalog), `COMPOSITION.md` (`extends:` and overlay mode) and `CONVENTIONS.md` (naming), plus a `README.md` per distribution.
 
