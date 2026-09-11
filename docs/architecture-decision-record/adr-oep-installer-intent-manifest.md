@@ -151,7 +151,7 @@ The installation intent contract shall:
 - Initially support native packages, Python requirements, and container images
 - Represent environment or containment scope where the same package may exist
   in multiple locations
-- Distinguish direct requests from resolved or observed dependencies
+- Distinguish direct requests from resolved dependencies
 - Indicate completeness and provide machine-readable warnings or reasons when
   metadata is incomplete
 - Produce stable ordering and deterministic output for identical inputs
