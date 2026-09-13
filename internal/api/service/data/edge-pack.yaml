@@ -1,0 +1,100 @@
+# SPDX-FileCopyrightText: (C) 2026 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+#
+# Edge Pack: the capability grouping offered by the ICT Web UI Advanced tab's
+# Packages step, alongside the repository browser.
+#
+# The two surfaces group the SAME packages along different axes. A repository
+# answers "where does this come from"; a domain answers "what does this let the
+# image do". Both write into one selection list, so a package picked on either
+# shows as picked on the other — see internal/api/service/data/package-repos.yaml
+# for the repository side.
+#
+# This is NOT build configuration. Nothing here becomes a template field: a
+# selected Edge Pack package reaches a build exactly as a package picked from the
+# repository browser does, as a `systemConfig.packages` entry in the generated
+# Advanced-mode delta. The pack, its domains and its base runtimes are
+# presentation structure only, and no template records that a package arrived by
+# way of a domain.
+#
+# Fields:
+#   id                 stable identifier for the pack
+#   displayName        label shown on the Edge Pack tab
+#   description        one-line explanation, shown beside the pack checkbox
+#   repo               the package-repos.yaml repo id every package below
+#                      resolves from. One repo for the whole pack: these are
+#                      published together, and binding per-package would invite a
+#                      catalog where half the pack silently has nowhere to
+#                      resolve from. edgepack_test.go asserts this id exists.
+#   baseRuntimes       the runtime flavours a domain's packages run on top of.
+#                      Common to every domain rather than owned by one, which is
+#                      why they are listed here and not under `domains`. No
+#                      domain can be selected until one is chosen; deselecting a
+#                      domain never deselects the runtime.
+#     id               stable identifier
+#     displayName      label shown in the Base Runtime selector
+#     package          the package name selecting this runtime adds
+#     available        false shows the option but leaves it unselectable.
+#                      Omitted means true.
+#     unavailableReason  why it is unselectable; shown to the user. Required
+#                      when available is false — an option greyed out with no
+#                      stated reason reads as a bug rather than as a decision.
+#   domains            the capability groups, in display order.
+#     id               stable identifier
+#     displayName      label shown on the domain card
+#     description      one-line explanation of the capability
+#     os               target ids (manifest `targets[].id`) this domain is
+#                      published for. Omitted means every target. A domain the
+#                      current target does not support is still shown, locked,
+#                      with the reason stated — hiding it would make a domain
+#                      that exists elsewhere look like it does not exist at all.
+#     packages         package names in this domain. A name may appear in more
+#                      than one domain (membership is many-to-many, e.g. a media
+#                      runtime shared with a future Graphics domain), so the
+#                      per-domain counts can sum to more than the pack total.
+#                      The pack total is always computed over unique names.
+#
+# The package names below are the EdgePack Noble breakdown documented in
+# docs/architecture-decision-record/adr-edgepack-integration.md. They are bound
+# to `intel-eci` because the EdgePack repository itself is not yet published
+# publicly; when it is, add it to package-repos.yaml and repoint `repo` here.
+# That is a one-line change — nothing in the UI or the API is repo-specific.
+
+pack:
+  id: edge-pack
+  displayName: Edge Pack
+  description: Intel Edge capabilities, grouped by domain
+  repo: intel-eci
+
+  baseRuntimes:
+    - id: standard
+      displayName: Standard
+      package: intel-edge-base-standard
+    - id: realtime
+      displayName: Real-time
+      package: intel-edge-base-realtime
+      available: false
+      unavailableReason: Real-time packages and a qualified SKU are not available yet
+
+  domains:
+    - id: media
+      displayName: Media
+      description: Hardware transcode via FFmpeg and GStreamer.
+      packages:
+        - intel-edge-media-ffmpeg
+        - intel-edge-media-gst
+
+    # NPU is published only for the Noble EdgePack suite, so it is withheld on
+    # every other target rather than offered and then failing to resolve.
+    - id: npu
+      displayName: NPU
+      description: Neural Processing Unit driver stack and Level Zero runtime.
+      os: [ubuntu24]
+      packages:
+        - intel-edge-npu
+
+    - id: manageability
+      displayName: Manageability
+      description: Edge Manageability Framework agent and provisioning.
+      packages:
+        - intel-edge-manageability
