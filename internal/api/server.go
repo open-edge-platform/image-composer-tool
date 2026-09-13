@@ -32,6 +32,9 @@ type Config struct {
 	// PackageReposPath is an optional repository-catalog file; empty uses the
 	// embedded copy.
 	PackageReposPath string
+	// EdgePackPath is an optional Edge Pack catalog file; empty uses the
+	// embedded copy.
+	EdgePackPath string
 }
 
 // Server holds the HTTP server's dependencies: its listen address and the
@@ -52,6 +55,7 @@ func New(cfg Config) (*Server, error) {
 		ManifestPath: cfg.ManifestPath,
 
 		PackageReposPath: cfg.PackageReposPath,
+		EdgePackPath:     cfg.EdgePackPath,
 	})
 	if err != nil {
 		return nil, err

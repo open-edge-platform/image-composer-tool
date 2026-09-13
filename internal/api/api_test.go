@@ -360,6 +360,178 @@ func TestHandleSearchPackagesQueryTooShort(t *testing.T) {
 	}
 }
 
+// --- edge pack ---
+
+// TestHandleGetEdgePack exercises GET /edge-pack end to end against a local
+// index server, so the version-resolution path is really run rather than only
+// the catalog structure. The fixture repo publishes ros-jazzy-rviz2, which the
+// pack's Media domain claims — so a resolved package must come back carrying
+// that version, and the unresolvable one alongside it must come back anyway.
+func TestHandleGetEdgePack(t *testing.T) {
+	fixture := packagesFixtureServer(t)
+	defer fixture.Close()
+
+	reposYAML := fmt.Sprintf(`repos:
+  - id: test-repo
+    displayName: Test Repo
+    url: %s
+    os: [ubuntu24]
+    index:
+      - codename: noble
+        component: main
+`, fixture.URL)
+	packYAML := `pack:
+  id: edge-pack
+  displayName: Edge Pack
+  repo: test-repo
+  baseRuntimes:
+    - {id: standard, displayName: Standard, package: ros-jazzy-rviz2}
+  domains:
+    - {id: media, displayName: Media, packages: [ros-jazzy-rviz2, absent-package]}
+    - {id: npu, displayName: NPU, os: [ubuntu24], packages: [ros-jazzy-rviz2]}
+`
+	dir := t.TempDir()
+	reposPath := filepath.Join(dir, "package-repos.yaml")
+	packPath := filepath.Join(dir, "edge-pack.yaml")
+	manifestPath := filepath.Join(dir, "manifest.yaml")
+	manifest := `targets:
+  - {id: ubuntu24, displayName: "Ubuntu 24.04", os: ubuntu, arch: x86_64}
+  - {id: debian13, displayName: "Debian 13", os: debian, arch: x86_64}
+`
+	for path, body := range map[string]string{
+		reposPath: reposYAML, packPath: packYAML, manifestPath: manifest,
+	} {
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+
+	srv, err := New(Config{
+		TemplatesDir:     t.TempDir(),
+		ManifestPath:     manifestPath,
+		PackageReposPath: reposPath,
+		EdgePackPath:     packPath,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	rr := srv.do(httptest.NewRequest(http.MethodGet, "/api/v1/edge-pack?os=ubuntu24", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rr.Code, rr.Body)
+	}
+	var out httpapi.EdgePack
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !out.RepoAvailable || out.Repo != "test-repo" {
+		t.Errorf("repo = %q available = %v, want test-repo / true", out.Repo, out.RepoAvailable)
+	}
+	if len(out.Domains) != 2 {
+		t.Fatalf("got %d domains, want 2", len(out.Domains))
+	}
+	media := out.Domains[0]
+	if len(media.Packages) != 2 {
+		t.Fatalf("media has %d packages, want 2", len(media.Packages))
+	}
+	// Resolved from the index: name, version and the version list all present.
+	if media.Packages[0].Version == nil || *media.Packages[0].Version != "14.1.4-1" {
+		t.Errorf("resolved package version = %v, want 14.1.4-1", media.Packages[0].Version)
+	}
+	if media.Packages[0].Versions == nil || len(*media.Packages[0].Versions) == 0 {
+		t.Error("resolved package carries no versions list")
+	}
+	// Not in the index: still reported, so the domain doesn't look half-empty,
+	// but with version omitted rather than emitted blank.
+	if media.Packages[1].Name != "absent-package" {
+		t.Errorf("second package = %q, want absent-package", media.Packages[1].Name)
+	}
+	if media.Packages[1].Version != nil {
+		t.Errorf("unresolved package reports a version: %v", *media.Packages[1].Version)
+	}
+}
+
+// A domain restricted to another target comes back reported-but-unavailable
+// with a reason, rather than dropped — the UI shows it locked.
+func TestHandleGetEdgePackOSGating(t *testing.T) {
+	srv := edgePackTestServer(t)
+
+	rr := srv.do(httptest.NewRequest(http.MethodGet, "/api/v1/edge-pack?os=debian13", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rr.Code, rr.Body)
+	}
+	var out httpapi.EdgePack
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var npu *httpapi.EdgePackDomain
+	for i := range out.Domains {
+		if out.Domains[i].Id == "npu" {
+			npu = &out.Domains[i]
+		}
+	}
+	if npu == nil {
+		t.Fatal("npu domain dropped instead of reported unavailable")
+	}
+	if npu.Available {
+		t.Error("npu available on a target it is not published for")
+	}
+	if npu.UnavailableReason == nil || *npu.UnavailableReason == "" {
+		t.Error("unavailable domain states no reason")
+	}
+}
+
+// An `os` the manifest doesn't offer is a 404 through the real error envelope.
+func TestHandleGetEdgePackUnknownTarget(t *testing.T) {
+	srv := edgePackTestServer(t)
+	rr := srv.do(httptest.NewRequest(http.MethodGet, "/api/v1/edge-pack?os=no-such-os", nil))
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (body: %s)", rr.Code, rr.Body)
+	}
+}
+
+// edgePackTestServer builds a Server over an index-less repo catalog, so the
+// pack resolves its structure without reaching for any index — these tests are
+// about gating and error mapping, not version lookup.
+func edgePackTestServer(t *testing.T) *Server {
+	t.Helper()
+	dir := t.TempDir()
+	files := map[string]string{
+		"package-repos.yaml": `repos:
+  - {id: test-repo, displayName: Test Repo, url: "https://example.com/repo", os: [ubuntu24]}
+`,
+		"edge-pack.yaml": `pack:
+  id: edge-pack
+  displayName: Edge Pack
+  repo: test-repo
+  baseRuntimes:
+    - {id: standard, displayName: Standard, package: base-standard}
+  domains:
+    - {id: media, displayName: Media, packages: [media-pkg]}
+    - {id: npu, displayName: NPU, os: [ubuntu24], packages: [npu-pkg]}
+`,
+		"manifest.yaml": `targets:
+  - {id: ubuntu24, displayName: "Ubuntu 24.04", os: ubuntu, arch: x86_64}
+  - {id: debian13, displayName: "Debian 13", os: debian, arch: x86_64}
+`,
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	srv, err := New(Config{
+		TemplatesDir:     t.TempDir(),
+		ManifestPath:     filepath.Join(dir, "manifest.yaml"),
+		PackageReposPath: filepath.Join(dir, "package-repos.yaml"),
+		EdgePackPath:     filepath.Join(dir, "edge-pack.yaml"),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return srv
+}
+
 // --- validate template ---
 
 // A valid template returns 200 with valid=true and no errors.
