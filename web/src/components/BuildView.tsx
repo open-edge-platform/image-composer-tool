@@ -371,7 +371,7 @@ export function BuildView({
                     <table className="w-full">
                       <tbody>
                         {([
-                          ['Vertical', details.summary.vertical],
+                          ['Use Case', details.summary.vertical],
                           details.summary.sku ? ['SKU', details.summary.sku] : null,
                           ['Platform', details.summary.platform],
                           ['OS', details.summary.os],

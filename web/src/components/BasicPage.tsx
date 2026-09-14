@@ -101,15 +101,15 @@ export function BasicPage({
     <div className="mx-auto max-w-screen-2xl px-10 py-8">
       <h1 className="mb-1 text-2xl font-bold text-[#00285a]">Choose Image Configuration</h1>
       <p className="mb-5 text-sm text-slate-500">
-        Select a targeted vertical, SKU, and platform. Pre-configured defaults are applied
+        Select a use case, SKU, and platform. Pre-configured defaults are applied
         based on your selection.
       </p>
 
       <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
         <div className="w-full max-w-xl rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <Select
-            label="Targeted Vertical"
-            placeholder="-- Select Vertical --"
+            label="Use Case"
+            placeholder="-- Select Use Case --"
             value={selection.vertical}
             options={opts.verticals}
             onChange={(v) => setSel('vertical', v)}

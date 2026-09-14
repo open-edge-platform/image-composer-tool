@@ -787,7 +787,7 @@ body {
 <div class="view active" id="view-basic">
   <div class="page-container">
     <h1 class="page-title">Choose Image Configuration</h1>
-    <p class="page-desc">Select a targeted vertical, SKU, and platform. Pre-configured defaults are applied based on your selection.</p>
+    <p class="page-desc">Select a use case, SKU, and platform. Pre-configured defaults are applied based on your selection.</p>
 
     <!-- Selectors on the left, configuration summary on the right. Both are
          rendered by renderBasic() from the manifest (see MANIFEST). -->
@@ -1204,7 +1204,7 @@ function setField(key, value) {
 // AdvancedPage both read `selection` and `cascadingOptions` from the one
 // zustand store (web/src/components/AdvancedPage.tsx).
 const SELECTION_FIELDS = [
-  { field: 'vertical', label: 'Targeted Vertical', placeholder: '-- Select Vertical --', optsKey: 'verticals', disabled: () => false },
+  { field: 'vertical', label: 'Use Case', placeholder: '-- Select Use Case --', optsKey: 'verticals', disabled: () => false },
   { field: 'sku', label: 'SKU', placeholder: '-- Select SKU --', optsKey: 'skus', disabled: () => !state.vertical },
   { field: 'platform', label: 'Platform', placeholder: '-- Select Platform --', optsKey: 'platforms', disabled: opts => !state.sku && opts.skus.length > 0 },
   { field: 'os', label: 'Operating System', placeholder: '-- Select Operating System --', optsKey: 'oses', disabled: () => !state.platform },
@@ -1567,7 +1567,7 @@ function renderAdvStepContent() {
   switch(step.id) {
     case 'target':
       html += `<h2>Choose Image Configuration</h2>
-        <p class="step-desc">Select a targeted vertical, SKU, and platform. Pre-configured defaults will be applied based on your selection.</p>
+        <p class="step-desc">Select a use case, SKU, and platform. Pre-configured defaults will be applied based on your selection.</p>
         <!-- Rendered by the same renderSelectionFields() the Basic tab uses, from
              the same manifest-derived option lists, writing to the same state
              object. Basic and Advanced therefore offer identical choices, and a
@@ -1661,7 +1661,7 @@ function renderAdvStepContent() {
         <div style="background:#f8fafc;border:1px solid var(--border);border-radius:6px;padding:16px;margin-bottom:16px;">
           <table style="width:100%;font-size:13px;border-collapse:collapse;">
             <tr><td style="padding:6px 0;font-weight:600;width:120px;">Image</td><td>${t.image.name} v${t.image.version}</td></tr>
-            <tr><td style="padding:6px 0;font-weight:600;">Vertical</td><td>${t.target.vertical ? labelFor(MANIFEST.verticals, t.target.vertical) : 'not set'}</td></tr>
+            <tr><td style="padding:6px 0;font-weight:600;">Use Case</td><td>${t.target.vertical ? labelFor(MANIFEST.verticals, t.target.vertical) : 'not set'}</td></tr>
             <tr><td style="padding:6px 0;font-weight:600;">SKU</td><td>${t.target.sku ? labelFor(MANIFEST.skus, t.target.sku) : 'not set'}</td></tr>
             <tr><td style="padding:6px 0;font-weight:600;">Platform</td><td>${t.target.platform ? labelFor(MANIFEST.platforms, t.target.platform) : 'not set'}</td></tr>
             <tr><td style="padding:6px 0;font-weight:600;">OS</td><td>${labelFor(MANIFEST.targets, t.target.dist)} (${t.target.dist}) / ${t.target.arch}</td></tr>

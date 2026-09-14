@@ -519,13 +519,13 @@ function TargetStep({
     <div>
       <h2 className="mb-1 text-lg font-bold text-[#00285a]">Choose Image Configuration</h2>
       <p className="mb-5 text-sm text-slate-500">
-        Select a targeted vertical, SKU, and platform. Pre-configured defaults are
+        Select a use case, SKU, and platform. Pre-configured defaults are
         applied based on your selection.
       </p>
 
       <Select
-        label="Targeted Vertical"
-        placeholder="-- Select Vertical --"
+        label="Use Case"
+        placeholder="-- Select Use Case --"
         value={selection.vertical}
         options={opts.verticals}
         onChange={(v) => setSel('vertical', v)}
