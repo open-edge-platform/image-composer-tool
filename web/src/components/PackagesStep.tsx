@@ -142,6 +142,7 @@ export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
                 <EdgePackBrowser
                   pack={edgePack}
                   repoLabel={repoLabelFor(edgePack.repo)}
+                  repoLabelFor={repoLabelFor}
                   targetLabel={targetLabel}
                 />
               ) : (

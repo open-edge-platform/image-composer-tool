@@ -100,11 +100,14 @@ func TestLoadEdgePackEmbedded(t *testing.T) {
 	}
 }
 
-// Drift guard: the pack's repository must exist in the repository catalog, and
-// every domain's OS restriction must name a real manifest target. Neither
-// mistake fails loudly at runtime — a bad repo id yields a pack whose packages
-// silently have nowhere to resolve from, and a misspelled target withholds a
-// domain everywhere — so they are caught here instead.
+// Drift guard: every repository and target the pack names must exist, and a
+// domain's prerequisite repositories must actually be offered on the targets the
+// domain claims. None of these mistakes fails loudly at runtime — a bad repo id
+// yields a pack whose packages silently have nowhere to resolve from, a
+// misspelled target withholds a domain everywhere, and a prerequisite that is
+// not offered where the domain says it is published makes the domain
+// permanently unselectable with a reason that reads as a server problem — so
+// they are caught here instead.
 func TestEmbeddedEdgePackReferencesAreReal(t *testing.T) {
 	spec, err := loadEdgePack("")
 	if err != nil {
@@ -119,17 +122,35 @@ func TestEmbeddedEdgePackReferencesAreReal(t *testing.T) {
 		t.Fatalf("loadManifest: %v", err)
 	}
 
-	known := make(map[string]bool, len(repos))
+	known := make(map[string]PackageRepo, len(repos))
 	for _, r := range repos {
-		known[r.ID] = true
+		known[r.ID] = r
 	}
-	if !known[spec.Repo] {
+	if _, ok := known[spec.Repo]; !ok {
 		t.Errorf("edge pack names repo %q, which data/package-repos.yaml does not define", spec.Repo)
 	}
 	for _, d := range spec.Domains {
 		for _, osID := range d.OS {
 			if !m.knowsTargetOS(osID) {
 				t.Errorf("domain %q restricts to target %q, which the manifest does not offer", d.ID, osID)
+			}
+		}
+		for _, id := range d.RequiresRepos {
+			repo, ok := known[id]
+			if !ok {
+				t.Errorf("domain %q requires repo %q, which data/package-repos.yaml does not define",
+					d.ID, id)
+				continue
+			}
+			// Only the targets the domain names: a domain with no OS list is
+			// legitimately unavailable where a prerequisite is not offered, and
+			// says so. One that claims a target and cannot be selected there is
+			// a catalog contradiction.
+			for _, osID := range d.OS {
+				if !repo.appliesTo(osID) {
+					t.Errorf("domain %q is published for %q but requires repo %q, which is not offered there",
+						d.ID, osID, id)
+				}
 			}
 		}
 	}
@@ -176,6 +197,157 @@ func TestEdgePackDomainOSGating(t *testing.T) {
 				t.Error("unrestricted domain media reported unavailable")
 			}
 		})
+	}
+}
+
+// A pack whose npu domain needs a repository beyond the pack's own, published
+// for one target only — the shape the real catalog has, where the NPU
+// metapackage depends on a GPU runtime the pack repository does not carry.
+const testPackWithPrereq = `
+pack:
+  id: edge-pack
+  displayName: Edge Pack
+  repo: test-repo
+  baseRuntimes:
+    - id: standard
+      displayName: Standard
+      package: base-standard
+  domains:
+    - id: media
+      displayName: Media
+      packages: [media-ffmpeg]
+    - id: npu
+      displayName: NPU
+      requiresRepos: [prereq-repo]
+      packages: [npu-driver]
+`
+
+const testPrereqRepos = `
+repos:
+  - id: test-repo
+    displayName: Test Repo
+    url: https://example.com/repo
+    enabledByDefault: false
+    os: [ubuntu24, ubuntu26-server]
+  - id: prereq-repo
+    displayName: Prereq Repo
+    url: https://example.com/prereq
+    enabledByDefault: false
+    os: [ubuntu24]
+`
+
+// A domain is unselectable where a repository it depends on is not offered.
+// Reporting it available there would let the user pick it and only discover at
+// build time that its dependencies cannot resolve, so the block happens here and
+// the reason names the repository by its display name — the label the user sees
+// on the Repositories tab.
+func TestEdgePackDomainRequiresRepos(t *testing.T) {
+	svc := edgePackService(t, testPackWithPrereq, testPrereqRepos, "ubuntu24", "ubuntu26-server")
+
+	cases := []struct {
+		osID      string
+		available bool
+		// Fragments the reason must name: the missing repository and the target.
+		reasonHas []string
+	}{
+		{osID: "ubuntu24", available: true},
+		{osID: "ubuntu26-server", available: false, reasonHas: []string{"Prereq Repo", "ubuntu26-server"}},
+	}
+	for _, c := range cases {
+		t.Run(c.osID, func(t *testing.T) {
+			pack, err := svc.EdgePack(context.Background(), c.osID)
+			if err != nil {
+				t.Fatalf("EdgePack: %v", err)
+			}
+			npu := domainByID(t, pack, "npu")
+			if npu.Available != c.available {
+				t.Errorf("npu available = %v, want %v (reason %q)",
+					npu.Available, c.available, npu.UnavailableReason)
+			}
+			for _, want := range c.reasonHas {
+				if !strings.Contains(npu.UnavailableReason, want) {
+					t.Errorf("reason %q does not name %q", npu.UnavailableReason, want)
+				}
+			}
+			// Published whether or not the domain is selectable: the client
+			// enables these repositories itself when the domain is picked, so it
+			// needs the ids, not just the verdict.
+			if len(npu.RequiresRepos) != 1 || npu.RequiresRepos[0] != "prereq-repo" {
+				t.Errorf("requiresRepos = %v, want [prereq-repo]", npu.RequiresRepos)
+			}
+			// A domain needing nothing extra carries nothing extra — the field is
+			// absent rather than empty-but-present for the common case.
+			if media := domainByID(t, pack, "media"); len(media.RequiresRepos) != 0 {
+				t.Errorf("media requiresRepos = %v, want none", media.RequiresRepos)
+			}
+			// The pack's own repository is offered on both targets, so a missing
+			// prerequisite must not be mistaken for the pack being unavailable.
+			if !pack.RepoAvailable {
+				t.Error("pack reported unavailable, but its own repo is offered here")
+			}
+		})
+	}
+}
+
+// A missing prerequisite is reported as such, but a target that does not publish
+// the domain at all is reported first: no repository change would unlock it, so
+// naming one would send the user after a fix that cannot work.
+func TestEdgePackDomainUnpublishedBeatsMissingRepo(t *testing.T) {
+	const pack = `
+pack:
+  id: edge-pack
+  displayName: Edge Pack
+  repo: test-repo
+  baseRuntimes:
+    - id: standard
+      displayName: Standard
+      package: base-standard
+  domains:
+    - id: npu
+      displayName: NPU
+      os: [ubuntu24]
+      requiresRepos: [prereq-repo]
+      packages: [npu-driver]
+`
+	svc := edgePackService(t, pack, testPrereqRepos, "ubuntu24", "ubuntu26-server")
+	got, err := svc.EdgePack(context.Background(), "ubuntu26-server")
+	if err != nil {
+		t.Fatalf("EdgePack: %v", err)
+	}
+	npu := domainByID(t, got, "npu")
+	if npu.Available {
+		t.Fatal("npu reported available on a target that does not publish it")
+	}
+	if !strings.Contains(npu.UnavailableReason, "Not published") {
+		t.Errorf("reason %q does not lead with the domain being unpublished", npu.UnavailableReason)
+	}
+	if strings.Contains(npu.UnavailableReason, "Prereq Repo") {
+		t.Errorf("reason %q blames a repository for a domain that is not published here",
+			npu.UnavailableReason)
+	}
+}
+
+// An empty requiresRepos entry would resolve to no repository and drop the
+// prerequisite silently, which is the failure the field exists to prevent — so
+// the catalog is rejected at load rather than serving a domain that cannot build.
+func TestLoadEdgePackRejectsEmptyRequiresRepo(t *testing.T) {
+	const pack = `
+pack:
+  id: edge-pack
+  displayName: Edge Pack
+  repo: test-repo
+  baseRuntimes:
+    - id: standard
+      displayName: Standard
+      package: base-standard
+  domains:
+    - id: npu
+      displayName: NPU
+      requiresRepos: [""]
+      packages: [npu-driver]
+`
+	if _, err := loadEdgePack(writeEdgePack(t, pack)); err == nil {
+		t.Fatal("loadEdgePack accepted an empty requiresRepos entry")
 	}
 }
 

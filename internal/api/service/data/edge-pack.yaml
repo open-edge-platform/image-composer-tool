@@ -48,6 +48,14 @@
 #                      current target does not support is still shown, locked,
 #                      with the reason stated — hiding it would make a domain
 #                      that exists elsewhere look like it does not exist at all.
+#     requiresRepos    extra package-repos.yaml repo ids this domain's packages
+#                      need on top of `repo`, enabled alongside it when the
+#                      domain is selected. For a metapackage whose dependencies
+#                      live in a repository the pack itself does not carry, so a
+#                      template that selects it can still resolve. A domain is
+#                      reported unavailable when any of these is not offered for
+#                      the target: it could be selected, but the result would
+#                      not build. edgepack_test.go asserts these ids exist.
 #     packages         package names in this domain. A name may appear in more
 #                      than one domain (membership is many-to-many, e.g. a media
 #                      runtime shared with a future Graphics domain), so the
@@ -79,22 +87,32 @@ pack:
   domains:
     - id: media
       displayName: Media
-      description: Hardware transcode via FFmpeg and GStreamer.
+      description: FFmpeg and GStreamer built with Intel GPU support.
       packages:
         - intel-edge-media-ffmpeg
         - intel-edge-media-gst
 
     # NPU is published only for the Noble EdgePack suite, so it is withheld on
     # every other target rather than offered and then failing to resolve.
+    #
+    # It also needs the Intel graphics PPA alongside the pack's own repository:
+    # the NPU packages depend on the client GPU compute runtime published there,
+    # not in the pack repo. Naming it here rather than leaving it to the user is
+    # what keeps a template that selects NPU resolvable — see requiresRepos.
+    #
+    # Deliberately NOT describing what the metapackage pulls in: those Depends
+    # are owned by its Debian control file, and restating them here would
+    # be a second, silently drifting copy.
     - id: npu
       displayName: NPU
-      description: Neural Processing Unit driver stack and Level Zero runtime.
+      description: Neural Processing Unit enablement.
       os: [ubuntu24]
+      requiresRepos: [intel-graphics]
       packages:
         - intel-edge-npu
 
     - id: manageability
       displayName: Manageability
-      description: Edge Manageability Framework agent and provisioning.
+      description: Intel vPro manageability.
       packages:
         - intel-edge-manageability

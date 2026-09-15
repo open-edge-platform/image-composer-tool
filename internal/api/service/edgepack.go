@@ -58,7 +58,12 @@ type edgePackDomainSpec struct {
 	DisplayName string   `json:"displayName"`
 	Description string   `json:"description"`
 	OS          []string `json:"os,omitempty"`
-	Packages    []string `json:"packages"`
+	// RequiresRepos names repo ids this domain needs in addition to the pack's
+	// own. A metapackage can depend on packages published somewhere the pack
+	// repository does not carry, and selecting it without that repository
+	// produces a template that cannot resolve at build time.
+	RequiresRepos []string `json:"requiresRepos,omitempty"`
+	Packages      []string `json:"packages"`
 }
 
 // appliesTo reports whether the domain is published for a target OS id. A
@@ -115,12 +120,18 @@ type EdgePackDomain struct {
 	ID          string
 	DisplayName string
 	Description string
-	// Available false means this target does not publish the domain. The
-	// domain is still reported so the UI can show it locked with a reason,
-	// rather than silently omitting a capability that exists elsewhere.
+	// Available false means this target cannot select the domain — either it
+	// does not publish it, or a repository the domain needs is not offered
+	// here. The domain is still reported so the UI can show it locked with a
+	// reason, rather than silently omitting a capability that exists elsewhere.
 	Available         bool
 	UnavailableReason string
-	Packages          []EdgePackPackage
+	// RequiresRepos are repo ids to enable alongside the pack's own when this
+	// domain is selected. Published to the browser because enabling a
+	// repository is a client-side action here, exactly as it is when a search
+	// hit is picked.
+	RequiresRepos []string
+	Packages      []EdgePackPackage
 }
 
 // EdgePackPackage is one package in the pack, with whatever the repository
@@ -152,7 +163,12 @@ func (s *Service) EdgePack(ctx context.Context, osID string) (*EdgePack, error) 
 			fmt.Sprintf("unknown target os %q", osID))
 	}
 	spec := s.edgePack
-	repos := filterReposByID(s.PackageRepos(osID), []string{spec.Repo})
+	// The whole offered set, not just the pack's own repo: a domain can require
+	// repositories beyond it, and whether those are offered here decides
+	// whether the domain can be selected at all.
+	offered := s.PackageRepos(osID)
+	repos := filterReposByID(offered, []string{spec.Repo})
+	offeredIDs := repoIDSet(offered)
 	meta := s.edgePackMetadata(ctx, osID, repos)
 
 	out := &EdgePack{
@@ -172,26 +188,63 @@ func (s *Service) EdgePack(ctx context.Context, osID string) (*EdgePack, error) 
 		})
 	}
 	for _, d := range spec.Domains {
+		available, reason := s.domainAvailability(d, osID, offeredIDs)
 		out.Domains = append(out.Domains, EdgePackDomain{
 			ID:                d.ID,
 			DisplayName:       d.DisplayName,
 			Description:       d.Description,
-			Available:         d.appliesTo(osID),
-			UnavailableReason: s.domainUnavailableReason(d, osID),
+			Available:         available,
+			UnavailableReason: reason,
+			RequiresRepos:     d.RequiresRepos,
 			Packages:          meta.packagesFor(d.Packages),
 		})
 	}
 	return out, nil
 }
 
-// domainUnavailableReason names the target the domain is withheld on, so the
-// UI states a reason rather than showing a card greyed out for no stated
-// cause. Empty when the domain is available.
-func (s *Service) domainUnavailableReason(d edgePackDomainSpec, osID string) string {
-	if d.appliesTo(osID) {
-		return ""
+// domainAvailability decides whether a target can select a domain, and says why
+// not when it cannot, so the UI states a cause rather than showing a card greyed
+// out for no stated reason. The reason is empty when the domain is available.
+//
+// Two independent blocks, reported in this order: the catalog may not publish
+// the domain for this target at all, or a repository the domain's packages
+// depend on may not be offered here. The second is a hard block rather than a
+// warning — the domain would select cleanly and then emit a template that
+// cannot resolve at build time, which is the worse failure of the two because
+// it surfaces long after the choice was made.
+func (s *Service) domainAvailability(d edgePackDomainSpec, osID string, offered map[string]bool) (bool, string) {
+	if !d.appliesTo(osID) {
+		return false, fmt.Sprintf("Not published for %s", s.targetLabel(osID))
 	}
-	return fmt.Sprintf("Not published for %s", s.targetLabel(osID))
+	for _, id := range d.RequiresRepos {
+		if !offered[id] {
+			return false, fmt.Sprintf("Needs the %s repository, which is not offered for %s",
+				s.repoLabel(id), s.targetLabel(osID))
+		}
+	}
+	return true, ""
+}
+
+// repoIDSet indexes a repo list by id, for membership tests.
+func repoIDSet(repos []PackageRepo) map[string]bool {
+	set := make(map[string]bool, len(repos))
+	for _, r := range repos {
+		set[r.ID] = true
+	}
+	return set
+}
+
+// repoLabel renders a repo id as its display name. It searches the whole
+// catalog rather than the target's offered subset, because the id it is asked
+// about is typically one that is NOT offered here — that being the reason it
+// needs naming.
+func (s *Service) repoLabel(id string) string {
+	for _, r := range s.repos {
+		if r.ID == id {
+			return r.DisplayName
+		}
+	}
+	return id
 }
 
 // targetLabel renders a target id as its manifest display name, falling back to
@@ -381,6 +434,15 @@ func validateEdgePackDomains(p edgePackSpec) error {
 		for j, n := range d.Packages {
 			if n == "" {
 				return fmt.Errorf("edge pack %q: domain %q: package %d is empty", p.ID, d.ID, j)
+			}
+		}
+		for j, id := range d.RequiresRepos {
+			// An empty id would resolve to no repository and silently drop the
+			// prerequisite, which is precisely the failure requiresRepos exists to
+			// prevent. Whether the id names a real repo is asserted by the drift
+			// guard, as it is for the pack's own repo.
+			if id == "" {
+				return fmt.Errorf("edge pack %q: domain %q: requiresRepos %d is empty", p.ID, d.ID, j)
 			}
 		}
 	}

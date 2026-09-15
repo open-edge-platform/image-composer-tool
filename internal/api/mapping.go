@@ -23,6 +23,16 @@ func optStr(s string) *string {
 	return &s
 }
 
+// optStrs returns nil for an empty slice, else a pointer to it. Omitting rather
+// than emitting `[]` keeps "the server has nothing to say here" distinct from
+// "the server says the list is empty" for clients that check presence.
+func optStrs(v []string) *[]string {
+	if len(v) == 0 {
+		return nil
+	}
+	return &v
+}
+
 // --- inbound: generated request types -> service types ---
 
 func toSelection(r httpapi.ComposeRequest) service.Selection {
@@ -228,6 +238,7 @@ func fromEdgePack(p *service.EdgePack) httpapi.EdgePack {
 			Description:       optStr(d.Description),
 			Available:         d.Available,
 			UnavailableReason: optStr(d.UnavailableReason),
+			RequiresRepos:     optStrs(d.RequiresRepos),
 			Packages:          fromEdgePackPackages(d.Packages),
 		}
 	}

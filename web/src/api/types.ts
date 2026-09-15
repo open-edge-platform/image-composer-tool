@@ -216,11 +216,17 @@ export interface EdgePackDomain {
   id: string
   displayName: string
   description?: string
-  // False when this target doesn't publish the domain. It is still sent, so the
+  // False when this target can't select the domain — it doesn't publish it, or
+  // a repository in requiresRepos isn't offered here. It is still sent, so the
   // UI shows it locked with the reason rather than hiding a capability that
   // exists on other targets.
   available: boolean
   unavailableReason?: string
+  // Repository ids to enable alongside the pack's own when this domain is
+  // picked. A metapackage can depend on packages published somewhere the pack
+  // repository doesn't carry, and selecting it without that repository yields a
+  // template that can't resolve at build time.
+  requiresRepos?: string[]
   // A package can belong to more than one domain, so per-domain counts can sum
   // to more than the pack's distinct total — count unique names, never the sum.
   packages: EdgePackPackage[]
