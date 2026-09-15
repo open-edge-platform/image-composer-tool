@@ -13,6 +13,7 @@ import {
   groupSelectionState,
   groupToggleMode,
   isSelected,
+  reposToEnable,
   strandedPackages,
   toAddedPackages,
   versionsOf,
@@ -24,6 +25,9 @@ interface EdgePackBrowserProps {
   // Display name for the pack's repository, for the "adds to <repo>" note and
   // the version-chip tooltips — the pack knows the repo id, not its label.
   repoLabel: string
+  // Label lookup for any other repository id, for naming a domain's
+  // prerequisite repositories. The pack carries ids; only the step knows labels.
+  repoLabelFor: (id: string) => string
   // Label for the currently selected target, used when the pack's repository
   // isn't offered here at all.
   targetLabel: string
@@ -36,7 +40,12 @@ interface EdgePackBrowserProps {
 // the store's addedPackages on each render (see lib/edgepack.ts), which is what
 // keeps this tab and the repository browser showing one shared truth — remove a
 // package from the right-hand rail and its domain drops to partial immediately.
-export function EdgePackBrowser({ pack, repoLabel, targetLabel }: EdgePackBrowserProps) {
+export function EdgePackBrowser({
+  pack,
+  repoLabel,
+  repoLabelFor,
+  targetLabel,
+}: EdgePackBrowserProps) {
   // Which domain's package list is expanded, if any. Purely presentational, so
   // it is local state rather than store state — it must not survive a target
   // change the way a selection does.
@@ -52,23 +61,31 @@ export function EdgePackBrowser({ pack, repoLabel, targetLabel }: EdgePackBrowse
 
   // Adding a package is a statement of interest in its repository, exactly as
   // it is in the search dropdown — without this the package would have nowhere
-  // to resolve from at build time.
-  const ensureRepoEnabled = () => {
-    if (!enabledRepos.includes(pack.repo)) setRepoEnabled(pack.repo, true)
+  // to resolve from at build time. The domains the selection touches are named
+  // because a domain can need repositories beyond the pack's own: enabling only
+  // the pack repo would leave its metapackage's dependencies unresolvable.
+  //
+  // Enabling only, never disabling: a repository may have been switched on for
+  // reasons this tab knows nothing about, and clearing a domain must not take it
+  // away from the rest of the template.
+  const ensureReposEnabled = (domains: EdgePackDomain[]) => {
+    for (const id of reposToEnable(pack, domains)) {
+      if (!enabledRepos.includes(id)) setRepoEnabled(id, true)
+    }
   }
 
-  const addGroup = (packages: EdgePackPackage[]) => {
+  const addGroup = (packages: EdgePackPackage[], domains: EdgePackDomain[]) => {
     const toAdd = toAddedPackages(pack, packages, addedPackages)
     if (toAdd.length > 0) setPackages(toAdd)
-    ensureRepoEnabled()
+    ensureReposEnabled(domains)
   }
 
   const removeGroup = (packages: EdgePackPackage[]) => {
     removePackages(packages.map((p) => p.name))
   }
 
-  const setGroup = (packages: EdgePackPackage[], on: boolean) =>
-    on ? addGroup(packages) : removeGroup(packages)
+  const setGroup = (packages: EdgePackPackage[], on: boolean, domains: EdgePackDomain[]) =>
+    on ? addGroup(packages, domains) : removeGroup(packages)
 
   const gated = !canSelectDomains(pack, addedPackages)
 
@@ -127,7 +144,7 @@ export function EdgePackBrowser({ pack, repoLabel, targetLabel }: EdgePackBrowse
               // The mode decides the action, not the checkbox's own new value:
               // a gated group that holds packages must empty on click even
               // though clicking an unchecked box reports `checked === true`.
-              onChange={() => setGroup(domainPackages, packMode === 'add')}
+              onChange={() => setGroup(domainPackages, packMode === 'add', pack.domains)}
               className="h-[15px] w-[15px] shrink-0 accent-[#0071c5] disabled:cursor-not-allowed"
             />
             <span className="text-[13px] font-bold text-[#00285a]">Domains</span>
@@ -164,7 +181,7 @@ export function EdgePackBrowser({ pack, repoLabel, targetLabel }: EdgePackBrowse
                 // selected are visible. The pack checkbox above deliberately
                 // leaves whatever is open alone.
                 if (on) setOpenDomain(d.id)
-                setGroup(d.packages, on)
+                setGroup(d.packages, on, [d])
               }}
             />
           ))}
@@ -184,6 +201,17 @@ export function EdgePackBrowser({ pack, repoLabel, targetLabel }: EdgePackBrowse
                   <span className="text-[11px] text-slate-500">{d.description}</span>
                 )}
               </div>
+              {/* Stated up front, because picking a package here switches on a
+                  repository the user never asked for. It is not optional — the
+                  packages below depend on what it publishes — but it is a change
+                  to the template's repository list, so it is said rather than
+                  done quietly. */}
+              {d.requiresRepos && d.requiresRepos.length > 0 && (
+                <p className="mb-1.5 text-[11px] text-slate-500">
+                  Also enables {d.requiresRepos.map(repoLabelFor).join(', ')} — where the
+                  packages these depend on are published.
+                </p>
+              )}
               {d.packages.map((p) => (
                 <PackageRow
                   key={p.name}
@@ -193,7 +221,7 @@ export function EdgePackBrowser({ pack, repoLabel, targetLabel }: EdgePackBrowse
                   repoLabel={repoLabel}
                   showRepo={false}
                   versions={versionsOf(p, pack.repo)}
-                  repoLabelFor={() => repoLabel}
+                  repoLabelFor={repoLabelFor}
                   selection={addedPackages.find((x) => x.name === p.name)}
                   // Locked only while the package is NOT selected. The gate
                   // stops a package being added without a base runtime; it must
@@ -210,7 +238,7 @@ export function EdgePackBrowser({ pack, repoLabel, targetLabel }: EdgePackBrowse
                       return
                     }
                     setPackage({ name: p.name, version: '', repo: pack.repo })
-                    ensureRepoEnabled()
+                    ensureReposEnabled([d])
                   }}
                   onChooseVersion={(v) => {
                     // An unresolved package has no repository on its chips, so
@@ -221,7 +249,7 @@ export function EdgePackBrowser({ pack, repoLabel, targetLabel }: EdgePackBrowse
                       version: v.version,
                       repo: v.repository || pack.repo,
                     })
-                    ensureRepoEnabled()
+                    ensureReposEnabled([d])
                   }}
                 />
               ))}

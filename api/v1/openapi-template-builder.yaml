@@ -931,16 +931,30 @@ components:
           example: NPU
         description:
           type: string
-          example: Neural Processing Unit driver stack and Level Zero runtime.
+          example: Neural Processing Unit enablement.
         available:
           type: boolean
           description: |
-            Whether this target publishes the domain. An unavailable domain is
-            still reported, with `unavailableReason` set, so it can be shown
-            locked rather than silently dropped.
+            Whether this target can select the domain — false when it does not
+            publish the domain, or when a repository named in `requiresRepos` is
+            not offered here. An unavailable domain is still reported, with
+            `unavailableReason` set, so it can be shown locked rather than
+            silently dropped.
         unavailableReason:
           type: string
           example: Not published for Ubuntu 26.04
+        requiresRepos:
+          type: array
+          description: |
+            Repository ids to enable alongside the pack's own `repo` when this
+            domain is selected. A metapackage can depend on packages published
+            somewhere the pack repository does not carry, and selecting it
+            without that repository yields a template that cannot resolve at
+            build time. Enabling a repository is a client-side action, exactly
+            as it is when a search hit is picked, so the ids are published here.
+          items:
+            type: string
+          example: [intel-graphics]
         packages:
           type: array
           description: |

@@ -149,6 +149,24 @@ export function strandedPackages(pack: EdgePack, added: AddedPackage[]): string[
     .filter((n) => isSelected(added, n))
 }
 
+// reposToEnable is every repository id a selection in these domains needs
+// enabled: the pack's own, plus whatever the domains declare on top of it.
+//
+// The pack repo is always included because every pack package resolves from it.
+// The extras exist because a domain's metapackage can depend on packages
+// published elsewhere — enabling the pack repo alone would produce a template
+// that cannot resolve at build time. Deduplicated and in a stable order, so two
+// domains naming the same prerequisite enable it once.
+export function reposToEnable(pack: EdgePack, domains: EdgePackDomain[]): string[] {
+  const ids = [pack.repo]
+  for (const d of domains) {
+    for (const id of d.requiresRepos ?? []) {
+      if (!ids.includes(id)) ids.push(id)
+    }
+  }
+  return ids
+}
+
 // toAddedPackages turns pack packages into store records at the repository the
 // pack resolves from, skipping any already selected.
 //

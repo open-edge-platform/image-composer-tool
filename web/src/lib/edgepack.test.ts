@@ -18,6 +18,7 @@ import {
   groupSelectionState,
   groupToggleMode,
   isSelected,
+  reposToEnable,
   selectedBaseRuntime,
   strandedPackages,
   toAddedPackages,
@@ -56,12 +57,15 @@ const pack: EdgePack = {
       displayName: 'NPU',
       available: false,
       unavailableReason: 'Not published for Ubuntu 26.04',
+      requiresRepos: ['intel-graphics'],
       packages: [{ name: 'npu-driver' }],
     },
     {
+      // Names the same prerequisite as NPU, so the dedup is exercised.
       id: 'graphics',
       displayName: 'Graphics',
       available: true,
+      requiresRepos: ['intel-graphics'],
       packages: [{ name: 'shared-runtime', version: '1.0' }],
     },
   ],
@@ -201,6 +205,26 @@ describe('strandedPackages', () => {
 
   it('ignores selections that are not pack domain packages', () => {
     expect(strandedPackages(pack, add('unrelated'))).toEqual([])
+  })
+})
+
+describe('reposToEnable', () => {
+  it('always includes the pack repo, which every package resolves from', () => {
+    expect(reposToEnable(pack, [media])).toEqual(['intel-eci'])
+  })
+
+  it('adds a domain prerequisite, so its dependencies can resolve', () => {
+    // Without this the NPU metapackage would be selected with only the pack
+    // repository enabled, and the build would fail resolving its dependencies.
+    expect(reposToEnable(pack, [npu])).toEqual(['intel-eci', 'intel-graphics'])
+  })
+
+  it('names a shared prerequisite once', () => {
+    expect(reposToEnable(pack, pack.domains)).toEqual(['intel-eci', 'intel-graphics'])
+  })
+
+  it('needs nothing beyond the pack repo for no domains at all', () => {
+    expect(reposToEnable(pack, [])).toEqual(['intel-eci'])
   })
 })
 
