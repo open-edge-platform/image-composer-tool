@@ -1,313 +1,286 @@
-# ADR: Generate an OEP Installation Intent Manifest
+# ADR: Integrate OEP Installer Profiles Through a Solution-Owned DEB Dependency Interface
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-11
 - **Decision owners:** OEP Installer and Image Composition Tool (ICT) teams
 
 ## Context
 
-ICT composes ready-to-use operating-system images. It installs the packages that
-form the base image and may invoke the OEP Installer to add software selected
-through OEP profiles and components.
+ICT composes ready-to-use operating-system images. Solutions selected through
+the WebUI are represented by OEP Installer profiles, which may require Debian
+packages in addition to software installed and configured by `oep-installer`.
 
 An OEP profile may introduce several kinds of software:
 
-- Debian or RPM packages installed through the native package manager or from
-  local package files
+- Debian packages installed through the native package manager
 - Python distributions installed into one or more Python environments
 - Container images pulled directly or referenced through Compose
 - Other artifacts such as models, archives, source repositories, configuration,
   and generated files
 
-ICT must generate an accurate SPDX Software Bill of Materials (SBOM) for the
-completed image. Today, the OEP Installer does not expose a stable,
-machine-readable description of the artifacts a selected profile intends to
-install. Inferring that information from shell modules or human-readable
-dry-run output is unreliable because artifact names and versions may be
-computed dynamically, installation paths may contain conditional branches, and
-some references may not exist until installation has begun.
+The required Debian packages must be present in the image before first boot.
+ICT already owns native package installation during composition and performs
+full dependency resolution. Installing those packages through ICT also ensures
+that an `apt install` of the same dependencies by `oep-installer` is a no-op
+when it runs against an ICT-generated image.
 
-The OEP Installer already owns profile expansion, component dependency
-resolution, and the association between components and the top-level artifacts
-they request. ICT owns the completed image, final-state inspection, and
-generation of the authoritative SBOM.
+The integration does not make ICT responsible for installing or inventorying
+all software associated with an OEP profile. `oep-installer` continues to run
+on first boot for solution content such as `~/oep-apps`, containers, models,
+Python environments, and other non-DEB artifacts. It runs as the user created
+from the image template and requires network connectivity at first boot.
 
-An explicit contract is therefore required between the two systems.
+The SBOM boundary follows the composition boundary. ICT generates SBOM entries
+only for Debian packages that it installs and embeds in the image, including
+the dependency closure resolved during composition. Software installed later
+by `oep-installer` is not included in the ICT-generated SBOM. Extending
+inventory or SBOM coverage to those artifacts would require a separate
+interface from `oep-installer` and is outside this decision.
+
+Two integration approaches were considered:
+
+1. ICT owns a mapping from WebUI solution and SKU selections to curated ICT
+   templates and their required Debian packages.
+2. The solution owns a minimal interface that returns the Debian package
+   requirements for a selected OEP Installer profile, and ICT consumes that
+   list through its standard composition flow.
 
 ## Decision
 
-The OEP Installer shall expose a versioned, machine-readable **installation
-intent manifest** describing:
+Adopt **Option 2: a solution-owned dependency interface**.
 
-- The profiles or components originally requested
-- The complete set of components produced by profile and dependency expansion
-- The top-level software artifacts requested by each component
-- The target environment or containment scope for each artifact, where
-  applicable
-- Whether the manifest is complete and any known reasons for incomplete
-  metadata
+The solution shall expose a minimal, machine-readable command or API that
+returns the Debian packages required by a selected `oep-installer` profile.
+The dependency query must use the same profile definitions and package
+selection logic as installation so that it remains the source of truth for the
+profile's requirements.
 
-The manifest describes **installation intent**, not the final installed state,
-and is not itself an SPDX SBOM.
+ICT shall consume the returned package list and add it to the standard image
+composition flow. ICT remains responsible for repository configuration,
+package installation, full transitive dependency resolution, and recording the
+Debian packages actually embedded in the image in its SPDX SBOM.
 
-ICT shall consume this manifest, execute or coordinate installation, inspect the
-resulting system and contained artifacts, and generate the authoritative SPDX
-SBOM from the observed state. This includes resolving installed versions,
-transitive dependencies, immutable container identities, and containment
-relationships.
+After the composed image boots, `oep-installer` shall run for the selected
+profile under the user defined by the image template. It may retain its
+existing Debian package installation logic; packages already installed by ICT
+will be satisfied and require no further installation. The installer remains
+responsible for the rest of the solution software and requires network access
+at first boot.
 
-JSON shall be the canonical interchange format. The contract shall use a
-versioned schema so the OEP Installer and ICT can evolve independently. A
-human-readable rendering may be provided, but automated consumers shall rely on
-the JSON contract.
+The initial interface is intentionally limited to Debian package requirements.
+It is not a general installation-intent manifest and does not describe Python
+packages, container images, models, source repositories, or other first-boot
+artifacts.
 
-## Roles and Responsibilities
+## Integration Flow
 
 ```mermaid
 flowchart LR
-    subgraph OEP["OEP Installer"]
-    Profile["Selected OEP profile"]
-    Resolve["Expand profile and dependencies"]
-    Profile --> Resolve
-        Resolve --> Intent["Installation intent manifest"]
-        Intent --> Install["Run OEP installer"]
-    end
+    Selection["WebUI solution / SKU selection"]
+    Profile["Selected OEP Installer profile"]
+    Query["Query solution-owned DEB dependency interface"]
+    Compose["ICT standard composition flow"]
+    Resolve["Resolve and install complete DEB dependency set"]
+    SBOM["Generate SBOM for DEBs embedded by ICT"]
+    Boot["Boot composed image"]
+    Install["Run oep-installer profile as template-defined user"]
+    Content["Install remaining solution content over network"]
 
-    subgraph ICT["Image Composition Tool"]
-        Install --> Inspect["Inspect composed image"]
-        Inspect --> Debian["dpkg inventory and dependency graph"]
-        Inspect --> Python["Installed Python metadata"]
-        Inspect --> Images["SBOM per container digest"]
-        Debian --> SPDX["Authoritative SPDX SBOM"]
-        Python --> SPDX
-        Images --> SPDX
-    end
+    Selection --> Profile --> Query --> Compose --> Resolve --> SBOM --> Boot
+    Boot --> Install --> Content
+    Profile --> Install
 ```
 
-The diagram shows the principal ownership boundary. ICT may invoke external
-package resolvers and scanners, but it remains responsible for the final result
-and its provenance.
+## Roles and Responsibilities
 
-### OEP Installer
+### Solution and OEP Installer
 
-The OEP Installer is responsible for:
+The solution team is responsible for:
 
-- Expanding requested profiles and component dependencies using the same
-  semantics as installation
-- Declaring the top-level artifacts requested by each resolved component
-- Preserving attribution from requested profile to component to artifact
-- Identifying relevant target environments, such as a native Python environment
-  or container
-- Reporting conditional, unresolved, or installation-time-only artifacts as
-  incomplete metadata
-- Producing deterministic output without installing, pulling, cloning, or
-  downloading artifacts
-- Excluding credentials, tokens, and other sensitive runtime configuration
+- Owning the Debian package requirements for each profile
+- Exposing those requirements through a stable, machine-readable command or
+  API
+- Deriving the dependency response from the same source used by installation
+- Returning deterministic results for the same profile and solution version
+- Maintaining the first-boot behavior for non-DEB solution software
+- Running `oep-installer` under the template-defined user after first boot
 
-The OEP Installer is not responsible for resolving the complete native-package
-dependency graph, scanning container contents, inventorying the completed
-filesystem, or constructing the final SPDX graph.
+The solution interface declares direct Debian package requirements. It is not
+responsible for resolving the complete transitive Debian dependency graph or
+generating the image SBOM.
 
 ### Image Composition Tool
 
 ICT is responsible for:
 
-- Declaring or retaining attribution for software it installs independently of
-  the OEP Installer
-- Validating the installation intent manifest against a supported schema
-  version
-- Running the OEP Installer with the same resolved request represented by the
-  manifest
-- Inspecting the completed native filesystem and installed Python environments
-- Determining installed package versions, architectures, and transitive
+- Passing the selected profile to the solution-owned dependency interface
+- Validating and consuming the returned Debian package list
+- Adding the requested packages to the standard composition flow
+- Resolving and installing the complete Debian dependency set
+- Failing composition clearly when requirements cannot be queried, resolved,
+  or installed
+- Generating the SPDX SBOM for Debian packages installed and embedded during
+  composition
+- Configuring the selected profile to run through `oep-installer` at first boot
+  under the template-defined user
+
+ICT does not maintain solution-specific dependency mappings and does not own
+the installation, inspection, or SBOM generation for software added by
+`oep-installer` after first boot.
+
+## Interface Requirements
+
+The dependency interface shall:
+
+- Accept an unambiguous profile identifier
+- Return only direct Debian package requirements; ICT resolves transitive
   dependencies
-- Resolving container references to immutable digests and obtaining an SBOM for
-  each unique image
-- Preserving containment boundaries between the native system, Python
-  environments, and individual containers
-- Combining declared intent and observed state into the authoritative SPDX SBOM
-- Recording the tools, versions, timestamps, and other provenance used to
-  generate the SBOM
+- Use a stable, machine-readable representation
+- Be versioned so incompatible changes can be detected
+- Produce deterministic output without installing packages or changing the
+  host
+- Distinguish a valid profile with no Debian requirements from an unknown or
+  invalid profile
+- Return actionable errors for unsupported profiles or failed resolution
 
-A before-and-after inventory may be used as supporting evidence, but it does not
-replace explicit attribution of top-level requests to OEP components.
+The exact command, transport, and response schema shall be defined in a
+separate interface specification. A simple CLI that emits versioned JSON is
+sufficient for the initial implementation.
 
-### Artifact ownership
+## Options Considered
 
-| Artifact class | OEP Installer provides | ICT establishes for the final SBOM |
+### Option 1: ICT-owned mapping
+
+ICT would map each WebUI solution and SKU selection to a curated template and
+an ICT-maintained Debian package manifest. The solution team could continue to
+provide its existing `oep-installer` profiles without adding a dependency-query
+interface.
+
+This option is easier for the solution team in the short term, but it makes ICT
+partly responsible for every solution's packaging definition. Every profile or
+dependency change would require coordinated updates to ICT mappings or
+templates. The duplicated package definition could drift from the installer
+profile, and implementation and debugging costs would grow with every solution,
+vBU, SKU, and profile combination.
+
+### Option 2: Solution-owned dependency interface
+
+The solution exposes a small command or API that returns the Debian package
+requirements for a selected profile. ICT consumes that list generically and
+installs the packages through its existing composition flow.
+
+This option requires a small implementation commitment from the solution team,
+but preserves a clear ownership boundary: the solution owns its requirements,
+while ICT owns image composition and Debian package resolution. It avoids
+duplicated package definitions, lowers the risk of drift, supports standard
+platform templates, and scales without adding solution-specific mappings to
+ICT.
+
+### Comparison
+
+| Vector | Option 1: ICT-owned mapping | Option 2: solution-owned dependency interface |
 | --- | --- | --- |
-| Native DEB/RPM | Directly requested package and component attribution | Installed version, architecture, dependency closure, and native-system scope |
-| Native Python | Direct requirement, installer, environment, and component attribution | Resolved and installed distributions within the named environment |
-| Container image | Image reference, origin, and component attribution | Immutable digest and container-specific SBOM |
-| Other artifact | Identity or locator, type, checksum if known, and attribution | Observed identity, containment, and available producer or generated SBOM |
+| Flow | WebUI selection -> ICT maps solution/SKU to a curated template -> first boot runs `oep-installer <profile>` | WebUI selection -> ICT queries the selected solution/profile for required DEBs -> ICT adds them to the standard composition flow -> first boot runs `oep-installer <profile>` |
+| ICT implementation effort | Higher. ICT creates and maintains mappings and templates for every solution/SKU. | Lower. ICT implements one generic mechanism to consume a DEB dependency list. |
+| Coupling | Tight. ICT must know each solution's package requirements. | Loose. The solution owns and exposes its requirements. |
+| Change management | Poorer. DEB dependency changes require coordinated ICT updates. | Better. Dependency changes are reflected through the solution-provided interface. |
+| Risk of drift | Higher. The ICT mapping and `oep-installer` profile can get out of sync. | Lower. Dependency information comes from the solution/profile definition. |
+| Standard platform templates | Harder. The model tends toward solution-specific ICT templates. | Cleaner. A standard platform template is augmented with dynamically queried packages. |
+| DEB installation | ICT installs packages during composition from its maintained manifest. | ICT installs packages during composition from the solution-returned dependency list. |
+| DEB SBOM coverage | Yes, for DEBs actually installed and embedded by ICT. | Yes, for DEBs actually installed and embedded by ICT. |
+| Non-DEB SBOM coverage | No. Content installed later by `oep-installer` is outside the ICT SBOM. | No. The same limitation applies unless `oep-installer` later provides separate inventory or SBOM metadata. |
+| First-boot dependency | `oep-installer` still runs for `~/oep-apps`, containers, models, and other solution content. | Same. |
+| Network required at first boot | Yes. | Yes. |
+| Ownership boundary | Blurred. ICT effectively owns part of each solution's packaging definition. | Clear. The solution owns requirements; ICT owns composition. |
+| Scalability across vBUs/SKUs | Poorer. Maintenance grows with every profile/SKU combination. | Better. The generic interface scales across profiles. |
+| Failure and debugging model | More complex. Teams must determine whether the ICT mapping or installer profile is wrong. | Cleaner. The dependency query and installer profile remain solution-owned. |
+| Near-term team effort | Little or no new solution-team work, but recurring work moves to ICT. | A small solution-team CLI/API addition reduces long-term work and coordination. |
 
-## Contract Requirements
+## Rationale for Rejecting Option 1
 
-The installation intent contract shall:
+Option 1 is rejected because its short-term convenience does not justify the
+long-term ownership and maintenance costs. In particular, it would:
 
-- Be versioned and machine-readable
-- Represent requested targets, resolved components, artifacts, and component
-  attribution
-- Initially support native packages, Python requirements, and container images
-- Represent environment or containment scope where the same package may exist
-  in multiple locations
-- Distinguish direct requests from resolved dependencies
-- Indicate completeness and provide machine-readable warnings or reasons when
-  metadata is incomplete
-- Produce stable ordering and deterministic output for identical inputs
-- Be generated without side effects or access to installation credentials
-- Work for both the source-tree CLI and the rendered, self-contained CLI
+- Couple ICT to the package details of each solution and SKU
+- Duplicate dependency definitions across ICT and `oep-installer`
+- Require coordinated ICT changes whenever a solution changes its DEBs
+- Create a persistent risk that ICT mappings drift from installer profiles
+- Encourage solution-specific templates instead of reusable platform templates
+- Scale implementation, maintenance, and debugging effort with every new
+  profile combination
 
-The normative schema and detailed command-line interface shall be maintained as
-a separate interface specification. Incompatible contract changes require a new
-major schema version.
+These are structural costs rather than temporary implementation costs. Option
+2 places the dependency definition with the team that can keep it correct while
+allowing ICT to remain a generic image composer.
 
-## Illustrative Manifest
+## SBOM Scope
 
-The following example is non-normative and illustrates the minimum concepts
-rather than prescribing the final schema:
+The ICT-generated SPDX SBOM covers the set of Debian packages that ICT actually
+composes into the image. This includes packages directly returned by the
+solution interface and any transitive Debian dependencies installed by ICT.
 
-```json
-{
-  "schemaVersion": "1.0.0",
-  "kind": "oep-installation-intent",
-  "complete": true,
-  "request": {
-    "targets": ["inferencing"]
-  },
-  "components": [
-    { "name": "openvino" }
-  ],
-  "artifacts": [
-    {
-      "type": "debian-package",
-      "name": "openvino-2026.3.0",
-      "scope": "native",
-      "requestedBy": "openvino"
-    },
-    {
-      "type": "python-requirement",
-      "requirement": "openvino-genai==2026.3.0",
-      "environment": "openvino-genai",
-      "requestedBy": "openvino"
-    },
-    {
-      "type": "container-image",
-      "reference": "registry.example/inference-service:1.4.0",
-      "requestedBy": "openvino"
-    }
-  ],
-  "warnings": []
-}
-```
-
-The manifest records a container tag when that is all the installer knows. ICT
-resolves the tag to an immutable digest and generates or consumes an SBOM for
-that digest.
-
-## SPDX Composition Principles
-
-The final SBOM shall be based on the composed image and resolved artifacts, not
-on declarations alone.
-
-- Native packages are represented in the native-system scope.
-- Packages within each container remain associated with that container image.
-- Python distributions remain associated with their installation environment.
-- Identical package names in different scopes are not flattened into a single
-  ambiguous inventory.
-- The image-level SPDX document may reference subordinate container SBOM
-  documents instead of physically merging all components into one file,
-  provided the relationships and immutable identities are preserved.
-
-This structure allows a vulnerability or license finding to be traced to the
-native image, a specific Python environment, or a specific container digest.
+The SBOM does not claim coverage for software installed by `oep-installer` at
+first boot, including Python distributions, containers, models, cloned source,
+archives, generated content, or other non-DEB artifacts. It also does not infer
+such content from the selected profile. Consumers must not interpret the ICT
+SBOM as a complete inventory of the system after first-boot installation.
 
 ## Consequences
 
 ### Benefits
 
-- ICT no longer parses installer implementation details or human-oriented
-  output.
-- Requested profiles, expanded components, and top-level artifacts remain
-  attributable.
-- The authoritative SBOM reflects resolved and observed software.
-- Artifact and containment boundaries remain visible for vulnerability and
-  license analysis.
-- The versioned contract allows the OEP Installer and ICT to evolve
-  independently.
-- ICT remains an image composer and SBOM aggregator rather than taking ownership
-  of every artifact installation mechanism.
+- The solution remains the source of truth for profile-specific dependencies.
+- ICT gains a generic integration that does not encode solution/SKU knowledge.
+- Debian packages and their dependency closure are installed before first boot.
+- Existing package installation in `oep-installer` remains compatible and
+  becomes a no-op for packages already present.
+- The SBOM has a precise, observable boundary based on what ICT composes.
+- Standard platform templates remain reusable across solutions.
+- Package requirement changes do not require synchronized ICT template edits.
 
 ### Costs and risks
 
-- Existing OEP components require metadata and ongoing maintenance.
-- Declared intent may drift from install behavior unless both paths share
-  resolution logic and are tested together.
-- Some artifacts are conditional or discoverable only during installation, so
-  completeness must be represented honestly.
-- ICT still requires ecosystem-specific inspection or scanning for native
-  packages, Python environments, containers, and future artifact types.
-- Consumers must handle supported schema versions and reject incompatible ones.
+- The solution team must implement and maintain the dependency command or API.
+- ICT composition depends on the interface being available and compatible.
+- The query and installation paths could still drift if the solution does not
+  derive both from the same definitions and test them together.
+- The ICT-generated SBOM is intentionally incomplete for the post-first-boot
+  system because it excludes software installed later by `oep-installer`.
+- First-boot installation still depends on network availability and executes
+  with the permissions of the template-defined user.
 
 ## Alternatives Considered
 
-### Parse installer shell modules
+### Parse installer implementation or dry-run output
 
-Rejected. Computed values, conditional branches, helper functions, and shell
-evaluation make static extraction unreliable and unsafe.
+Rejected. Shell implementation details and human-readable output are not a
+stable dependency contract. Computed values, conditional branches, and output
+format changes make this approach unreliable.
 
-### Treat dry-run output as the contract
+### Have ICT infer first-boot artifacts
 
-Rejected. Dry-run output is intended for people, does not provide stable
-structured metadata, and may not execute the logic required to determine
-artifact identities.
+Rejected. ICT does not install or observe the final state of first-boot
+solution content during composition. Inferring Python packages, containers,
+models, or other artifacts from a profile would broaden ICT ownership and still
+would not produce an authoritative post-installation inventory.
 
-### Generate SPDX directly in the OEP Installer
+### Require a complete installation-intent manifest
 
-Rejected. The installer knows requested artifacts but does not own the complete
-filesystem, the final dependency graph, container contents, or composition
-provenance. This would either produce an incomplete SBOM or duplicate ICT
-responsibilities.
-
-### Infer all OEP changes from system snapshots
-
-Rejected as the sole mechanism. Snapshots provide useful evidence but lose the
-relationship between profiles, components, and the top-level artifacts that
-caused each change. They may also capture unrelated concurrent changes.
-
-### Maintain static manifests per profile
-
-Rejected. Static profile manifests duplicate dependency expansion and component
-version-selection logic, creating a second source of truth.
-
-## Implementation Guidance
-
-The following guidance is intentionally non-normative:
-
-- Reuse the installer's existing profile and component dependency resolution.
-- Keep artifact metadata close to the component logic that selects versions.
-- Centralize validation, stable ordering, deduplication, and JSON serialization.
-- Generate metadata through side-effect-free providers; do not perform
-  installation or network operations while producing the manifest.
-- Compare installation intent with post-install inspection in representative
-  integration tests.
-- During migration, allow incomplete manifests with explicit warnings;
-  introduce strict enforcement after coverage is complete.
-- Keep the full JSON Schema, CLI options, provider API, resolver commands, test
-  matrix, and migration mechanics in a separate interface and implementation
-  design.
+Rejected for this integration. A manifest covering every artifact class would
+substantially enlarge the interface and ICT's inspection responsibilities. The
+current requirement is satisfied by exposing only the Debian packages needed
+during composition. Broader inventory or SBOM coverage can be considered in a
+separate decision.
 
 ## Adoption
 
-1. Approve this responsibility boundary and contract direction with the OEP
-  Installer and ICT owners.
-2. Define and review the normative JSON Schema and CLI contract in a separate
-  interface specification.
-3. Implement an initial vertical slice covering one native package, one Python
-  environment, and one container image.
-4. Validate ICT correlation, inspection, containment, and SPDX generation end
-  to end.
-5. Add metadata for remaining components while explicitly reporting incomplete
-  coverage.
-6. Require installation-intent metadata for new components and enable strict
-  coverage checks when migration is complete.
+1. Define the versioned command or API and its machine-readable response.
+2. Implement the solution-side dependency query from the same profile data used
+   by `oep-installer`.
+3. Add an ICT integration that validates the response and supplies the returned
+   packages to the standard composition flow.
+4. Test a representative profile end to end, including transitive dependency
+   resolution, SBOM inclusion, and first-boot execution.
+5. Verify that repeated package installation by `oep-installer` is a no-op on
+   the composed image and that remaining first-boot content installs under the
+  template-defined user with network connectivity.
