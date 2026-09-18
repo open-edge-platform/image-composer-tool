@@ -25,6 +25,13 @@ interface PackageRowProps {
   onChooseVersion: (v: PackageVersion) => void
   // Renders a repository ID as its display name, for the chip tooltips.
   repoLabelFor: (repoId: string) => string
+  // Blocks selecting this row, with `disabledReason` as its tooltip. Used by
+  // the Edge Pack tab, where a package cannot be picked until a base runtime is
+  // chosen. Version chips are disabled alongside the checkbox: choosing a
+  // version is a form of selecting, so leaving them live would offer a way past
+  // the gate.
+  disabled?: boolean
+  disabledReason?: string
 }
 
 // PackageRow is the shared package row used by both the repo browse pane and
@@ -40,16 +47,25 @@ export function PackageRow({
   onToggle,
   onChooseVersion,
   repoLabelFor,
+  disabled = false,
+  disabledReason,
 }: PackageRowProps) {
   const checked = selection != null
 
   return (
-    <label className="flex cursor-pointer items-start gap-2.5 border-b border-slate-100 px-3 py-2.5 last:border-b-0 hover:bg-[#eef4fb]">
+    <label
+      title={disabled ? disabledReason : undefined}
+      className={
+        'flex items-start gap-2.5 border-b border-slate-100 px-3 py-2.5 last:border-b-0 ' +
+        (disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-[#eef4fb]')
+      }
+    >
       <input
         type="checkbox"
         checked={checked}
+        disabled={disabled}
         onChange={(e) => onToggle(e.target.checked)}
-        className="mt-0.5 h-[15px] w-[15px] shrink-0 accent-[#0071c5]"
+        className="mt-0.5 h-[15px] w-[15px] shrink-0 accent-[#0071c5] disabled:cursor-not-allowed"
       />
       <span className="min-w-0 flex-1">
         <span className="flex flex-wrap items-baseline gap-1.5">
@@ -69,6 +85,7 @@ export function PackageRow({
           pinned={selection?.version}
           onChoose={onChooseVersion}
           repoLabelFor={repoLabelFor}
+          disabled={disabled}
         />
       </span>
     </label>
@@ -85,15 +102,23 @@ function VersionChips({
   pinned,
   onChoose,
   repoLabelFor,
+  disabled,
 }: {
   versions: PackageVersion[]
   pinned: string | undefined
   onChoose: (v: PackageVersion) => void
   repoLabelFor: (repoId: string) => string
+  disabled: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
   const hidden = versions.length - DEFAULT_VISIBLE_VERSIONS
   const shown = expanded ? versions : versions.slice(0, DEFAULT_VISIBLE_VERSIONS)
+
+  // A package the Edge Pack catalog names but whose repository index could not
+  // be read has no versions at all. Offering a bare "Latest" chip there would
+  // point at nothing the client can name, so the whole strip is omitted — the
+  // row's own checkbox still adds the package, which is what Latest means.
+  if (versions.length === 0) return null
 
   // Chips live inside the row's <label>, so a click must be stopped from also
   // toggling the checkbox.
@@ -106,6 +131,7 @@ function VersionChips({
     <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
       <button
         type="button"
+        disabled={disabled}
         onClick={(e) => {
           stop(e)
           onChoose({ version: '', repository: versions[0]?.repository ?? '' })
@@ -118,6 +144,7 @@ function VersionChips({
         <button
           key={`${v.repository} ${v.version}`}
           type="button"
+          disabled={disabled}
           title={`${v.version} from ${repoLabelFor(v.repository)}`}
           onClick={(e) => {
             stop(e)
@@ -147,6 +174,7 @@ function VersionChips({
 function chipClass(active: boolean): string {
   return (
     'rounded-full px-2 py-0.5 font-mono text-[11px] font-medium ' +
+    'disabled:cursor-not-allowed disabled:hover:bg-[#e6f2fa] ' +
     (active ? 'bg-[#0071c5] text-white' : 'bg-[#e6f2fa] text-[#0071c5] hover:bg-[#d3e9f8]')
   )
 }

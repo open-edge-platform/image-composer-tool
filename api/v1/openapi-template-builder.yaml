@@ -108,6 +108,63 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /edge-pack:
+    get:
+      tags: [Packages]
+      operationId: getEdgePack
+      summary: Get the Edge Pack capability grouping
+      description: |
+        Returns Edge Pack — the Advanced tab's capability-oriented grouping over
+        a subset of the packages `/package-repos` and `/packages/search` already
+        offer, arranged as pack → domain → package.
+
+        This is presentation metadata, the same as `/package-repos`, and is not
+        build configuration. A package selected by way of a domain reaches a
+        build exactly as one picked from the repository browser does — as a
+        `systemConfig.packages` entry in the generated Advanced-mode delta. No
+        template field records that a package arrived through a domain.
+
+        Every domain the catalog defines is reported, whether or not this target
+        publishes it: an unsupported domain comes back with `available: false`
+        and an `unavailableReason`, so a client can show it locked with the
+        reason stated rather than omit a capability that exists on other
+        targets. The same applies to a base runtime that has no shipped package
+        yet.
+
+        Version metadata is best-effort. When the pack's repository index is
+        unreachable, packages are still returned with their names and no
+        `version`/`versions` — they remain selectable at the repository's latest,
+        which is what an unpinned pick means anyway.
+      parameters:
+        - name: os
+          in: query
+          schema:
+            type: string
+          description: |
+            Target OS to report the pack for, matching an OS the manifest offers
+            — a `targets[].id` or a `combinations[].os` (e.g. `ubuntu24`). This
+            is what decides each domain's `available`. Omit to report every
+            domain as available.
+      responses:
+        "200":
+          description: The Edge Pack grouping for this target
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EdgePack"
+        "404":
+          description: The `os` is not a target the manifest offers
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Server error loading the Edge Pack catalog
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /packages/search:
     get:
       tags: [Packages]
@@ -791,6 +848,151 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/PackageRepo"
+
+    EdgePack:
+      type: object
+      description: |
+        The Edge Pack capability grouping as offered for one target. Domains
+        group packages by what they let an image do, where a repository groups
+        them by where they come from; both write into one selection, so a
+        package picked on either surface is picked on both.
+      required: [id, displayName, repo, repoAvailable, baseRuntimes, domains]
+      properties:
+        id:
+          type: string
+          example: edge-pack
+        displayName:
+          type: string
+          example: Edge Pack
+        description:
+          type: string
+          example: Intel Edge capabilities, grouped by domain
+        repo:
+          type: string
+          example: intel-eci
+          description: |
+            ID of the `/package-repos` repository every package in the pack
+            resolves from. Selecting a package should enable this repository,
+            the same way picking a search hit enables the repository it came
+            from — otherwise the package has nowhere to resolve at build time.
+        repoAvailable:
+          type: boolean
+          description: |
+            Whether `repo` is offered for this target at all. False means the
+            pack cannot be used here, and a client should say so rather than
+            render an empty domain grid that reads as a failure.
+        baseRuntimes:
+          type: array
+          description: |
+            The runtime flavours a domain's packages run on top of. Common to
+            every domain rather than owned by one, which is why they are listed
+            here and not under a domain. No domain can be selected until one is
+            chosen; deselecting a domain never deselects the runtime.
+          items:
+            $ref: "#/components/schemas/EdgePackBaseRuntime"
+        domains:
+          type: array
+          items:
+            $ref: "#/components/schemas/EdgePackDomain"
+
+    EdgePackBaseRuntime:
+      type: object
+      description: One runtime flavour the pack's domains can be built on.
+      required: [id, displayName, package, available]
+      properties:
+        id:
+          type: string
+          example: standard
+        displayName:
+          type: string
+          example: Standard
+        package:
+          $ref: "#/components/schemas/EdgePackPackage"
+        available:
+          type: boolean
+          description: |
+            False means shown but unselectable — a flavour with no shipped
+            package or qualified hardware yet. `unavailableReason` is always
+            populated when this is false.
+        unavailableReason:
+          type: string
+          example: Real-time packages and a qualified SKU are not available yet
+
+    EdgePackDomain:
+      type: object
+      description: One capability group within the pack.
+      required: [id, displayName, available, packages]
+      properties:
+        id:
+          type: string
+          example: npu
+        displayName:
+          type: string
+          example: NPU
+        description:
+          type: string
+          example: Neural Processing Unit enablement.
+        available:
+          type: boolean
+          description: |
+            Whether this target can select the domain — false when it does not
+            publish the domain, or when a repository named in `requiresRepos` is
+            not offered here. An unavailable domain is still reported, with
+            `unavailableReason` set, so it can be shown locked rather than
+            silently dropped.
+        unavailableReason:
+          type: string
+          example: Not published for Ubuntu 26.04
+        requiresRepos:
+          type: array
+          description: |
+            Repository ids to enable alongside the pack's own `repo` when this
+            domain is selected. A metapackage can depend on packages published
+            somewhere the pack repository does not carry, and selecting it
+            without that repository yields a template that cannot resolve at
+            build time. Enabling a repository is a client-side action, exactly
+            as it is when a search hit is picked, so the ids are published here.
+          items:
+            type: string
+          example: [intel-graphics]
+        packages:
+          type: array
+          description: |
+            The domain's packages, in catalog order. A package may belong to
+            more than one domain, so per-domain counts can sum to more than the
+            number of distinct packages in the pack — count unique names, not
+            the sum of the domains.
+          items:
+            $ref: "#/components/schemas/EdgePackPackage"
+
+    EdgePackPackage:
+      type: object
+      description: |
+        One package in the pack, with whatever the repository index could tell
+        us about it.
+      required: [name]
+      properties:
+        name:
+          type: string
+          example: intel-edge-npu
+        description:
+          type: string
+          example: Intel NPU driver stack and Level Zero runtime
+        version:
+          type: string
+          example: "1.15.1-0intel1"
+          description: |
+            The newest available version. Empty when the pack's repository
+            index was unreachable or does not carry the package; the package is
+            still selectable, at whatever the repository publishes.
+        versions:
+          type: array
+          description: |
+            Every version found, newest first — the same shape and ordering
+            rules as `PackageSearchResult.versions`, so a pack package pins
+            exactly as a searched one does. Empty when no index answered.
+          items:
+            $ref: "#/components/schemas/PackageVersion"
 
     PackageSearchResult:
       type: object

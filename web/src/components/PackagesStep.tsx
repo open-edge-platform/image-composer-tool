@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { api } from '../api/client'
-import type { PackageRepo, PackageSearchResult, PackageVersion } from '../api/types'
+import type { EdgePack, PackageRepo, PackageSearchResult, PackageVersion } from '../api/types'
+import { EdgePackBrowser } from './EdgePackBrowser'
 import { PackageRepoBrowser } from './PackageRepoBrowser'
 import { PackageRow } from './PackageRow'
 import { SelectedPackages } from './SelectedPackages'
@@ -16,18 +17,41 @@ interface PackagesStepProps {
   active: boolean
 }
 
+// The two browsing surfaces over one selection. Edge Pack groups packages by
+// what they let an image do, Repositories by where they come from; a package
+// picked on either is picked on both, because both write into the same
+// addedPackages list.
+const TABS = [
+  { id: 'edge-pack', label: 'Edge Pack' },
+  { id: 'repos', label: 'Repositories' },
+] as const
+
+type TabID = (typeof TABS)[number]['id']
+
 // PackagesStep is the wizard's "Choose Packages to Compose" step: which
 // repositories the target offers and which are enabled, a cross-repository
-// package search, per-repository browsing, and the running list of added
-// packages.
+// package search, the Edge Pack and per-repository browsing surfaces, and the
+// running list of added packages.
 export function PackagesStep({ os, active }: PackagesStepProps) {
   const [repos, setRepos] = useState<PackageRepo[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [activeRepo, setActiveRepo] = useState('')
+  // undefined while in flight, null once it is known there is no Edge Pack to
+  // show. The two are kept apart so the tab can say "loading" rather than
+  // "unavailable" for the moment before the response lands. A failed fetch
+  // degrades this step to the Repositories tab rather than blanking it, so it
+  // is not raised into `error` — that would hide the whole step.
+  const [edgePack, setEdgePack] = useState<EdgePack | null | undefined>(undefined)
+  // Tab choice is local state: selections live in the store, so switching tabs
+  // cannot disturb them. Edge Pack leads because a capability is the question
+  // most users arrive with; provenance is the follow-up.
+  const [tab, setTab] = useState<TabID>('edge-pack')
+  const manifest = useStore((s) => s.manifest)
 
   useEffect(() => {
     if (!os) {
       setRepos(null)
+      setEdgePack(undefined)
       setError(null)
       setActiveRepo('')
       return
@@ -36,6 +60,7 @@ export function PackagesStep({ os, active }: PackagesStepProps) {
 
     setError(null)
     setRepos(null)
+    setEdgePack(undefined)
     let cancelled = false
     api
       .listPackageRepos(os)
@@ -51,10 +76,25 @@ export function PackagesStep({ os, active }: PackagesStepProps) {
         if (cancelled) return
         setError((e as Error).message)
       })
+    // Fetched alongside the repos rather than on first showing the tab, so the
+    // domain counts are right the moment the step opens. A backend that
+    // predates /edge-pack 404s here, which is why this failure is swallowed
+    // into "no Edge Pack" instead of failing the step.
+    api
+      .getEdgePack(os)
+      .then((p) => {
+        if (!cancelled) setEdgePack(p)
+      })
+      .catch(() => {
+        if (!cancelled) setEdgePack(null)
+      })
     return () => {
       cancelled = true
     }
   }, [active, os])
+
+  const targetLabel = manifest?.targets.find((t) => t.id === os)?.displayName ?? os
+  const repoLabelFor = (id: string) => repos?.find((r) => r.id === id)?.displayName ?? id
 
   return (
     <div>
@@ -91,17 +131,92 @@ export function PackagesStep({ os, active }: PackagesStepProps) {
         // travel room — it scrolls away with the content at short viewports.
         <div className="grid grid-cols-[1fr_300px] items-start gap-5">
           <div>
+            {/* Search sits above the tabs rather than inside one: it looks
+                across every repository, so it is the path that works when you
+                don't know which surface a package lives on. */}
             <PackageSearch os={os} repos={repos} />
-            <PackageRepoBrowser
-              repos={repos}
-              activeRepo={activeRepo}
-              onActiveRepo={setActiveRepo}
-              os={os}
-            />
+            <BrowseTabs tab={tab} onTab={setTab} />
+            <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
+              {tab === 'repos' ? (
+                <PackageRepoBrowser
+                  repos={repos}
+                  activeRepo={activeRepo}
+                  onActiveRepo={setActiveRepo}
+                  os={os}
+                />
+              ) : edgePack ? (
+                <EdgePackBrowser
+                  pack={edgePack}
+                  repoLabel={repoLabelFor(edgePack.repo)}
+                  repoLabelFor={repoLabelFor}
+                  targetLabel={targetLabel}
+                />
+              ) : (
+                <p className="rounded-lg border border-dashed border-slate-300 px-4 py-10 text-center text-sm text-slate-400">
+                  {edgePack === undefined
+                    ? 'Loading Edge Pack…'
+                    : 'Edge Pack is unavailable. Use the Repositories tab to pick packages.'}
+                </p>
+              )}
+            </div>
           </div>
           <SelectedPackages repos={repos} />
         </div>
       )}
+    </div>
+  )
+}
+
+// BrowseTabs switches between the two browsing surfaces. Both tabs are always
+// offered, including while Edge Pack is still loading — a tab strip that grows
+// a tab a moment after the step opens would move the Repositories tab out from
+// under a click already on its way to it.
+//
+// Only the active tab is in the tab order, with the arrow keys moving between
+// them, as expected of a tablist; Tab itself therefore leaves the strip rather
+// than walking through every tab.
+function BrowseTabs({ tab, onTab }: { tab: TabID; onTab: (t: TabID) => void }) {
+  const move = (from: TabID, key: string) => {
+    if (key !== 'ArrowRight' && key !== 'ArrowLeft') return
+    const i = TABS.findIndex((t) => t.id === from)
+    const step = key === 'ArrowRight' ? 1 : TABS.length - 1
+    const next = TABS[(i + step) % TABS.length].id
+    onTab(next)
+    // Focus follows the selection so a keyboard user lands on the control they
+    // just moved to. Harmless on a mouse click, which already focused it.
+    document.getElementById(`tab-${next}`)?.focus()
+  }
+
+  return (
+    <div role="tablist" aria-label="Browse packages by" className="mb-3 flex gap-1 border-b border-slate-200">
+      {TABS.map((t) => {
+        const activeTab = t.id === tab
+        return (
+          <button
+            key={t.id}
+            type="button"
+            role="tab"
+            id={`tab-${t.id}`}
+            aria-selected={activeTab}
+            aria-controls={`panel-${t.id}`}
+            tabIndex={activeTab ? 0 : -1}
+            onClick={() => onTab(t.id)}
+            onKeyDown={(e) => {
+              if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return
+              e.preventDefault()
+              move(t.id, e.key)
+            }}
+            className={
+              '-mb-px border-b-2 px-3.5 py-2 text-[13px] font-semibold ' +
+              (activeTab
+                ? 'border-[#0071c5] text-[#0071c5]'
+                : 'border-transparent text-slate-500 hover:text-slate-700')
+            }
+          >
+            {t.label}
+          </button>
+        )
+      })}
     </div>
   )
 }
