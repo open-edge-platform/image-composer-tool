@@ -1,0 +1,121 @@
+# SPDX-FileCopyrightText: (C) 2026 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+#
+# Manifest for the ICT Web UI Basic tab.
+#
+# Each `combinations` entry maps one UI selection (vertical/sku/platform/os/imageType)
+# to a pre-authored, tested template in image-templates/. The backend looks the
+# template up and returns/builds it verbatim — it never synthesizes one.
+#
+# `verticals`, `platforms`, and `targets` supply the display labels the UI uses to
+# populate its dropdowns. The UI derives valid cascading options from `combinations`.
+#
+# A combination with an empty `template` is a planned-but-not-yet-ready selection:
+# the UI still lists it (so the supported matrix is exhaustive) but grays it out
+# and prevents it from being selected or built until a template is authored.
+
+combinations:
+  - vertical: retail
+    sku: desktop-virtualization
+    platform: arl
+    os: debian13
+    imageType: iso
+    template: debian13-x86_64-desktop-virtualization-iso.yml
+
+  - vertical: robotics
+    sku: robotics-jazzy-ubuntu24
+    platform: wcl
+    os: ubuntu24
+    imageType: iso
+    template: ubuntu24-x86_64-robotics-jazzy-iso.yml
+
+  # Planned, no template yet — the UI grays this out (not buildable).
+  - vertical: robotics
+    sku: robotics-jazzy-ubuntu24
+    platform: ptl
+    os: ubuntu24
+    imageType: iso
+    template: ""
+
+  - vertical: fed-aero
+    sku: edge-node-infra-bkc
+    platform: ptl
+    os: ubuntu24
+    imageType: raw
+    template: ubuntu24-x86_64-minimal-ptl-pv-raw.yml
+
+  - vertical: fed-aero
+    sku: generic-handheld-blueprint
+    platform: ptl
+    os: ubuntu24
+    imageType: raw
+    template: ubuntu24/generic-handheld-os-template.yml
+
+  # Planned, no template yet — the UI grays this out (not buildable).
+  - vertical: fed-aero
+    sku: drone-image-bkc
+    platform: ptl
+    os: ubuntu26-server
+    imageType: raw
+    template: ""
+
+  # ── EXAMPLE (commented): adding a new platform that is not yet enabled ──
+  # To surface a planned-but-not-ready *platform* (grayed out in the Platform
+  # dropdown), add (1) a combination that references it with an empty template
+  # and (2) a matching `platforms:` label entry (see the commented block below).
+  # Uncomment both to see a grayed Platform option under Fed Aero → Edge Node
+  # Infrastructure Blueprint BKC. When the template is authored, drop the empty
+  # `template: ""` and point it at the real file to enable the platform.
+  #
+  # - vertical: fed-aero
+  #   sku: edge-node-infra-bkc
+  #   platform: nvl
+  #   os: ubuntu24
+  #   imageType: raw
+  #   template: ""
+
+verticals:
+  - id: retail
+    displayName: Retail Edge
+  - id: robotics
+    displayName: Robotics
+  - id: fed-aero
+    displayName: Fed Aero
+
+skus:
+  - id: desktop-virtualization
+    displayName: Desktop Virtualization
+  - id: robotics-jazzy-ubuntu24
+    displayName: Autonomous Mobile Robots (AMR)
+  - id: edge-node-infra-bkc
+    displayName: Edge Node Infrastructure Blueprint BKC
+  - id: generic-handheld-blueprint
+    displayName: Generic Handheld Blueprint
+  - id: drone-image-bkc
+    displayName: Drone Image - From BKC Team
+
+platforms:
+  - id: arl
+    displayName: ARL (Arrow Lake)
+  - id: wcl
+    displayName: WCL (Wildcat Lake)
+  - id: ptl
+    displayName: PTL (Panther Lake)
+  # EXAMPLE (commented): label for the not-yet-enabled platform above. A missing
+  # label makes the dropdown fall back to the raw id ("nvl"), so add one here.
+  # - id: nvl
+  #   displayName: NVL (Nova Lake)
+
+targets:
+  - id: debian13
+    displayName: Debian 13
+    os: debian
+    arch: x86_64
+  - id: ubuntu24
+    displayName: Ubuntu 24.04
+    os: ubuntu
+    arch: x86_64
+  - id: ubuntu26-server
+    displayName: Ubuntu 26.04 Server
+    os: ubuntu
+    arch: x86_64

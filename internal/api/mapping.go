@@ -1,0 +1,403 @@
+// SPDX-FileCopyrightText: (C) 2026 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
+package api
+
+import (
+	"time"
+
+	httpapi "github.com/open-edge-platform/image-composer-tool/internal/api/http"
+	"github.com/open-edge-platform/image-composer-tool/internal/api/service"
+)
+
+// This file maps the service layer's plain domain types to the generated
+// OpenAPI contract types (internal/api/http) and back. Keeping the conversions
+// here leaves the handlers thin and the service free of HTTP/contract types.
+
+// optStr returns nil for an empty string, else a pointer to it — for optional
+// (omitempty) string fields in the generated types.
+func optStr(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+// --- inbound: generated request types -> service types ---
+
+func toSelection(r httpapi.ComposeRequest) service.Selection {
+	sel := service.Selection{
+		Vertical:  r.Vertical,
+		Platform:  r.Platform,
+		OS:        r.Os,
+		ImageType: r.ImageType,
+	}
+	if r.Sku != nil {
+		sel.SKU = *r.Sku
+	}
+	if r.ImageName != nil {
+		sel.ImageName = *r.ImageName
+	}
+	if r.Packages != nil {
+		sel.Packages = *r.Packages
+	}
+	if r.Repos != nil {
+		sel.Repos = *r.Repos
+	}
+	sel.Disk = toDiskOverride(r.Disk)
+	return sel
+}
+
+// toDiskOverride converts the generated disk override to the service type.
+// oapi-codegen renders the nested arrays as anonymous structs, so the copy is
+// spelled out rather than being a type conversion. Values are copied as-is —
+// validation is the service's job (service.ValidateDisk), since nothing checks
+// a request body against the spec at runtime.
+func toDiskOverride(d *httpapi.DiskOverride) *service.DiskOverride {
+	if d == nil {
+		return nil
+	}
+	out := &service.DiskOverride{
+		Name:    d.Name,
+		Path:    derefStr(d.Path),
+		Size:    derefStr(d.Size),
+		MaxSize: derefStr(d.MaxSize),
+	}
+	if d.PartitionTableType != nil {
+		out.PartitionTableType = string(*d.PartitionTableType)
+	}
+	if d.ExtendLastPartitionToFillDisk != nil {
+		out.ExtendLastPartitionToFillDisk = *d.ExtendLastPartitionToFillDisk
+	}
+	if p := d.SelectionPolicy; p != nil {
+		pol := &service.DiskPolicyOverride{
+			ExcludeRemovable: p.ExcludeRemovable,
+			RequireEmpty:     p.RequireEmpty,
+		}
+		if p.Strategy != nil {
+			pol.Strategy = string(*p.Strategy)
+		}
+		out.SelectionPolicy = pol
+	}
+	if d.Artifacts != nil {
+		for _, a := range *d.Artifacts {
+			art := service.DiskArtifactOverride{Type: string(a.Type)}
+			if a.Compression != nil {
+				art.Compression = string(*a.Compression)
+			}
+			out.Artifacts = append(out.Artifacts, art)
+		}
+	}
+	if d.Partitions != nil {
+		for _, p := range *d.Partitions {
+			part := service.DiskPartitionOverride{
+				ID:           derefStr(p.Id),
+				Index:        p.Index,
+				Name:         derefStr(p.Name),
+				Type:         derefStr(p.Type),
+				TypeUUID:     derefStr(p.TypeUUID),
+				FsLabel:      derefStr(p.FsLabel),
+				Start:        derefStr(p.Start),
+				End:          derefStr(p.End),
+				MountPoint:   derefStr(p.MountPoint),
+				MountOptions: derefStr(p.MountOptions),
+			}
+			if p.FsType != nil {
+				part.FsType = string(*p.FsType)
+			}
+			if p.Flags != nil {
+				part.Flags = *p.Flags
+			}
+			out.Partitions = append(out.Partitions, part)
+		}
+	}
+	return out
+}
+
+// derefStr is optStr's inverse: nil becomes "".
+func derefStr(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+func toBuildRequest(r httpapi.BuildRequest) service.BuildRequest {
+	req := service.BuildRequest{}
+	if r.Compose != nil {
+		sel := toSelection(*r.Compose)
+		req.Compose = &sel
+	}
+	if r.Yaml != nil {
+		req.YAML = *r.Yaml
+	}
+	return req
+}
+
+// --- outbound: service types -> generated response types ---
+
+func fromManifest(m *service.Manifest) httpapi.Manifest {
+	out := httpapi.Manifest{
+		Combinations: make([]httpapi.Combination, len(m.Combinations)),
+		Verticals:    fromOptions(m.Verticals),
+		Skus:         fromOptions(m.SKUs),
+		Platforms:    fromOptions(m.Platforms),
+		Targets:      make([]httpapi.Target, len(m.Targets)),
+	}
+	for i, c := range m.Combinations {
+		out.Combinations[i] = httpapi.Combination{
+			Vertical:  c.Vertical,
+			Sku:       optStr(c.SKU),
+			Platform:  c.Platform,
+			Os:        c.OS,
+			ImageType: c.ImageType,
+			Template:  c.Template,
+		}
+	}
+	for i, t := range m.Targets {
+		out.Targets[i] = httpapi.Target{
+			Id:          t.ID,
+			DisplayName: t.DisplayName,
+			Os:          t.OS,
+			Arch:        t.Arch,
+		}
+	}
+	return out
+}
+
+// fromPackageRepoList maps the repository catalog to the wire type. Priority is
+// always populated by the service (unset entries get the default), so it is
+// emitted rather than omitted — the UI shows it, and a missing value would read
+// as "no priority" instead of "the default".
+func fromPackageRepoList(repos []service.PackageRepo) httpapi.PackageRepoList {
+	out := httpapi.PackageRepoList{Repos: make([]httpapi.PackageRepo, len(repos))}
+	for i, r := range repos {
+		priority := r.Priority
+		// Only whether the repo has curated packages is published, not which —
+		// the filtering stays server-side behind `curated=true`. Without the
+		// flag a client cannot tell "no curated picks defined" from "curated
+		// search returned nothing", so it would have to offer a toggle that
+		// yields an empty list.
+		hasCurated := len(r.CuratedPackages) > 0
+		// Likewise only whether a signing key is known, not the key URL. A
+		// client needs the flag to say plainly that enabling this repo means
+		// fetching its packages unverified; it has no use for the URL itself.
+		hasKey := r.HasSigningKey()
+		out.Repos[i] = httpapi.PackageRepo{
+			Id:                 r.ID,
+			DisplayName:        r.DisplayName,
+			Url:                r.URL,
+			Description:        optStr(r.Description),
+			EnabledByDefault:   r.EnabledByDefault,
+			Priority:           &priority,
+			HasCuratedPackages: &hasCurated,
+			HasSigningKey:      &hasKey,
+		}
+	}
+	return out
+}
+
+// fromPackageSearchResults maps a search's hits to the wire type. Repository
+// is the hit's RepoID — the same id the `repos` filter param and
+// /package-repos both use, so a client can round-trip one into the other.
+func fromPackageSearchResults(query string, hits []service.PackageSearchHit, total int) httpapi.PackageSearchResults {
+	return httpapi.PackageSearchResults{
+		Packages: fromPackageSearchHits(hits),
+		Query:    query,
+		Total:    total,
+	}
+}
+
+// fromPackageSearchHits maps hits to the wire type. Shared with the SSE search
+// stream, so a package looks identical however it reached the client.
+func fromPackageSearchHits(hits []service.PackageSearchHit) []httpapi.PackageSearchResult {
+	out := make([]httpapi.PackageSearchResult, len(hits))
+	for i, h := range hits {
+		versions := make([]httpapi.PackageVersion, len(h.Versions))
+		for j, v := range h.Versions {
+			versions[j] = httpapi.PackageVersion{Version: v.Version, Repository: v.RepoID}
+		}
+		out[i] = httpapi.PackageSearchResult{
+			Name:        h.Name,
+			Version:     h.Version,
+			Description: optStr(h.Description),
+			Repository:  h.RepoID,
+			Versions:    &versions,
+		}
+	}
+	return out
+}
+
+func fromOptions(opts []service.Option) []httpapi.Option {
+	out := make([]httpapi.Option, len(opts))
+	for i, o := range opts {
+		out[i] = httpapi.Option{Id: o.ID, DisplayName: o.DisplayName}
+	}
+	return out
+}
+
+func fromSummary(s *service.ComposeSummary) *httpapi.ComposeSummary {
+	if s == nil {
+		return nil
+	}
+	return &httpapi.ComposeSummary{
+		Vertical:       s.Vertical,
+		Sku:            s.SKU,
+		Platform:       s.Platform,
+		Os:             s.OS,
+		ImageType:      s.ImageType,
+		ImageName:      s.ImageName,
+		ImageVersion:   s.ImageVersion,
+		Description:    s.Description,
+		Architecture:   s.Architecture,
+		KernelVersion:  s.KernelVersion,
+		PackageCount:   s.PackageCount,
+		DiskSize:       s.DiskSize,
+		PartitionCount: s.PartitionCount,
+		PartitionTable: s.PartitionTable,
+		Hostname:       s.Hostname,
+		BaseImage:      optStr(s.BaseImage),
+	}
+}
+
+// fromComposeResult maps the compose outcome onto the contract type. deltaYaml,
+// baseYaml and pinConflicts are omitempty in the spec, so a selection with no
+// overrides sends none of them rather than three empty values.
+func fromComposeResult(r *service.ComposeResult) httpapi.ComposeResponse {
+	out := httpapi.ComposeResponse{
+		Template:  r.Template,
+		Yaml:      r.YAML,
+		Summary:   *fromSummary(&r.Summary),
+		DeltaYaml: optStr(r.DeltaYAML),
+		BaseYaml:  optStr(r.BaseYAML),
+	}
+	if len(r.PinConflicts) > 0 {
+		conflicts := r.PinConflicts
+		out.PinConflicts = &conflicts
+	}
+	return out
+}
+
+// fromValidationResult maps the service's structured validation result onto the
+// contract type. errors/warnings are omitempty in the spec, so empty slices map
+// to nil rather than []; valid is required, so it is always sent.
+func fromValidationResult(r *service.ValidationResult) httpapi.ValidationResponse {
+	return httpapi.ValidationResponse{
+		Valid:    r.Valid,
+		Errors:   fromValidationIssues(r.Errors),
+		Warnings: fromValidationIssues(r.Warnings),
+	}
+}
+
+func fromValidationIssues(issues []service.ValidationIssue) *[]httpapi.ValidationIssue {
+	if len(issues) == 0 {
+		return nil
+	}
+	out := make([]httpapi.ValidationIssue, len(issues))
+	for i, iss := range issues {
+		out[i] = httpapi.ValidationIssue{
+			Path:     iss.Path,
+			Message:  iss.Message,
+			Severity: httpapi.ValidationIssueSeverity(iss.Severity),
+		}
+	}
+	return &out
+}
+
+func fromBuildAccepted(a *service.BuildAccepted) httpapi.BuildAccepted {
+	return httpapi.BuildAccepted{
+		BuildId: a.BuildID,
+		Status:  httpapi.BuildStatus(a.Status),
+		LogsUrl: a.LogsURL,
+	}
+}
+
+func fromArtifact(a service.Artifact) httpapi.Artifact {
+	return httpapi.Artifact{
+		Name: a.Name,
+		Type: httpapi.ArtifactType(a.Type),
+		Path: a.Path,
+		Size: optStr(a.Size),
+	}
+}
+
+// optArtifacts returns nil for an empty slice (the field is omitempty in the
+// contract: a successful build lists its outputs at /artifacts, and only a
+// failed/cancelled one reports partials here).
+func optArtifacts(arts []service.Artifact) *[]httpapi.Artifact {
+	if len(arts) == 0 {
+		return nil
+	}
+	out := fromArtifacts(arts)
+	return &out
+}
+
+func fromArtifacts(arts []service.Artifact) []httpapi.Artifact {
+	out := make([]httpapi.Artifact, len(arts))
+	for i, a := range arts {
+		out[i] = fromArtifact(a)
+	}
+	return out
+}
+
+// fromResidual maps the service's teardown-residue warning onto the contract
+// type. nil in, nil out — a build with no residue carries no warning.
+func fromResidual(r *service.ResidualIssue) *httpapi.ResidualIssue {
+	if r == nil {
+		return nil
+	}
+	return &httpapi.ResidualIssue{
+		Kind:   httpapi.ResidualIssueKind(r.Kind),
+		Detail: r.Detail,
+	}
+}
+
+func fromCancelAccepted(c *service.CancelAccepted) httpapi.CancelAccepted {
+	return httpapi.CancelAccepted{
+		BuildId:  c.BuildID,
+		Status:   httpapi.CancelAcceptedStatus(c.Status),
+		Residual: fromResidual(c.Residual),
+	}
+}
+
+func fromArtifactList(l *service.ArtifactList) httpapi.ArtifactList {
+	return httpapi.ArtifactList{
+		BuildId:   l.BuildID,
+		Status:    httpapi.BuildStatus(l.Status),
+		Artifacts: fromArtifacts(l.Artifacts),
+	}
+}
+
+func fromBuildDetails(d *service.BuildDetails) httpapi.BuildDetails {
+	return httpapi.BuildDetails{
+		BuildId:     d.BuildID,
+		Status:      httpapi.BuildStatus(d.Status),
+		Command:     d.Command,
+		Template:    d.Template,
+		TemplateUrl: d.TemplateURL,
+		WorkDir:     d.WorkDir,
+		CacheDir:    d.CacheDir,
+		Summary:     fromSummary(d.Summary),
+		HasLogFile:  d.HasLogFile,
+		ErrMsg:      optStr(d.ErrMsg),
+		Artifacts:   optArtifacts(d.Artifacts),
+		Residual:    fromResidual(d.Residual),
+	}
+}
+
+func fromHistory(items []service.HistoryItem, serverTime time.Time) httpapi.BuildList {
+	out := httpapi.BuildList{
+		Builds:     make([]httpapi.HistoryItem, len(items)),
+		ServerTime: serverTime.UTC().Truncate(time.Millisecond),
+	}
+	for i, it := range items {
+		out.Builds[i] = httpapi.HistoryItem{
+			Id:        it.ID,
+			Status:    httpapi.BuildStatus(it.Status),
+			Template:  it.Template,
+			CreatedAt: it.CreatedAt,
+			Summary:   fromSummary(it.Summary),
+		}
+	}
+	return out
+}

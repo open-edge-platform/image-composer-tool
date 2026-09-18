@@ -53,6 +53,7 @@ golang-base:
     COPY config/ ./config
     COPY image-templates/ ./image-templates
     COPY scripts/ ./scripts
+    COPY api/ ./api
     RUN chmod +x ./scripts/*.sh || true
 
 version-info:
@@ -137,6 +138,27 @@ lint:
     COPY . /work
     RUN --mount=type=cache,target=/root/.cache \
         golangci-lint run ./...
+
+# generate re-runs `go generate` (oapi-codegen for the web API contract) and
+# fails if the committed generated code is stale — i.e. the OpenAPI spec was
+# edited without regenerating internal/api/http/gen.go. The generator is pinned
+# via the `tool` directive in go.mod, so this uses the module-locked version.
+# Run `go generate ./internal/api/http` locally after editing the spec.
+generate:
+    FROM +golang-base
+    WORKDIR /work
+    COPY . /work
+    # Snapshot the committed file, regenerate, and diff. A mismatch means the
+    # OpenAPI spec was edited without regenerating — fail with the diff so CI
+    # catches contract drift.
+    RUN cp internal/api/http/gen.go /tmp/gen.go.committed && \
+        go generate ./internal/api/http && \
+        if ! diff -u /tmp/gen.go.committed internal/api/http/gen.go; then \
+            echo "ERROR: internal/api/http/gen.go is out of date." >&2; \
+            echo "Run 'go generate ./internal/api/http' and commit the result." >&2; \
+            exit 1; \
+        fi
+    SAVE ARTIFACT internal/api/http/gen.go AS LOCAL ./internal/api/http/gen.go
 
 test:
     FROM +golang-base
