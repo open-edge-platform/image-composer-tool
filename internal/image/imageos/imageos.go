@@ -257,6 +257,12 @@ func (imageOs *ImageOs) InstallImageOs(diskPathIdMap map[string]string) (version
 		// Don't fail the build if symlink fix fails, just warn as some distros may not need it
 		log.Warnf("Failed to fix kernel symlinks: %v (continuing anyway)", err)
 	}
+
+	if err = buildDkmsModules(imageOs.installRoot, imageOs.template); err != nil {
+		err = fmt.Errorf("failed to build dkms modules: %w", err)
+		return
+	}
+
 	if err = imageboot.EnsureDepmodForBootKernels(imageOs.installRoot); err != nil {
 		err = fmt.Errorf("failed to prepare kernel module dependencies: %w", err)
 		return

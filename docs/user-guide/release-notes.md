@@ -138,6 +138,14 @@
 
    The tool can now compose Ubuntu images compatible with WSL environments.
 
+8. **Intel EdgePack platform-enablement template**
+
+   Adds `ubuntu24-x86_64-edgepack-raw.yml`, demonstrating native support for
+   Intel's EdgePack platform-enablement packages (Panther Lake / Wildcat Lake)
+   via `packageRepositories` and `systemConfig.packages`, with a
+   `configurations` step that rebuilds DKMS modules against the installed
+   target kernel rather than the chroot's build-host kernel.
+
 **Validated hardware**:
 
 - **Target platform**: Panther Lake (PTL)
@@ -152,10 +160,14 @@
   | Debian 13 custom initrd with overlay | `debian13-x86_64-bb-graphics-raw.yml` and `debian13-x86_64-bb-overlay-initrd-raw.yml` in `image-templates/debian13/` |
   | Debian 13 monolithic robotics | `debian13-x86_64-bb-dracut-raw.yml` in `image-templates/debian13/` |
   | Ubuntu 24 robotics templates | `ubuntu24-x86_64-robotics-hw-overlay-qcow2.yml`, `ubuntu24-x86_64-robotics-jazzy-overlay-extends.yml`, and `ubuntu24-x86_64-robotics-jazzy-iso.yml` in `image-templates/ubuntu24/` |
+  | Intel EdgePack platform enablement | `ubuntu24-x86_64-edgepack-raw.yml` in `image-templates/ubuntu24/` |
 
 **Fixed**:
 
 - `fix(imagedisc)`: bound sfdisk calls and detach stale loop devices before reattach: `createPartitionTable`'s `sfdisk` calls had no execution timeout, so a wedged `sfdisk` (e.g. blocked behind a stale loop-device handle from a hard-killed prior build) could hang a build indefinitely. Both `sfdisk` invocations are now bounded to a 30s context so a hang fails fast into the existing retry-with-force path instead of blocking forever. Loop-device attach is also now idempotent: before `losetup`, any existing loop device already bound to the same backing file (including one whose backing file was since deleted) is detached first, removing the actual trigger that could wedge the kernel's partition-table re-read on a freshly attached device.
+- `fix(debutils)`: support APT repositories that publish only a combined `InRelease` file instead of a detached `Release`/`Release.gpg` pair. Builds against such repositories (including EdgePack's public repository) previously failed to fetch metadata; the format is now auto-detected and verified either way, and offline rebuilds correctly keep using the previously detected format instead of reverting to the missing classic files.
+- `fix(debutils)`: correctly resolve dependencies on a versioned virtual `Provides:` (e.g. Debian's Qt6 ABI-pinning packages) by comparing against the version the provider actually declares for that capability, not the provider's own unrelated package version. An unversioned `Provides:` no longer incorrectly satisfies a versioned dependency either.
+- `fix(shell)`: `configurations` commands containing multi-line scripts or shell metacharacters (`$()`, backticks, `$var`) now reach the chroot unmodified instead of having their whitespace collapsed or being partially expanded by the outer shell before execution.
 
 **Known Issues**:
 

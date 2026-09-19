@@ -244,6 +244,21 @@ func redactSensitiveSystemConfig(config SystemConfig) SystemConfig {
 		redacted.FDE.PassphraseFile = "[REDACTED]"
 	}
 
+	// Redact dkms secure boot signing key/cert paths (sensitive file paths that
+	// could reveal security setup), same treatment as the immutability keys above.
+	if config.Dkms.SecureBoot.SigningKeyPath != "" {
+		redacted.Dkms.SecureBoot.SigningKeyPath = "[REDACTED]"
+	}
+	if config.Dkms.SecureBoot.SigningCertPath != "" {
+		redacted.Dkms.SecureBoot.SigningCertPath = "[REDACTED]"
+	}
+	if config.Dkms.SecureBoot.TargetKeyPath != "" {
+		redacted.Dkms.SecureBoot.TargetKeyPath = "[REDACTED]"
+	}
+	if config.Dkms.SecureBoot.TargetCertPath != "" {
+		redacted.Dkms.SecureBoot.TargetCertPath = "[REDACTED]"
+	}
+
 	return redacted
 }
 
@@ -313,6 +328,15 @@ func mergeSystemConfig(defaultConfig, userConfig SystemConfig) SystemConfig {
 	// Merge kernel config
 	merged.Kernel = mergeKernelConfig(defaultConfig.Kernel, userConfig.Kernel)
 
+	// Merge dkms config - only if user provided some dkms configuration
+	if !userConfig.Dkms.wasProvided {
+		// User didn't provide any dkms config, keep default
+		merged.Dkms = defaultConfig.Dkms
+	} else {
+		// User provided some dkms config, merge it
+		merged.Dkms = mergeDkmsConfig(defaultConfig.Dkms, userConfig.Dkms)
+	}
+
 	return merged
 }
 
@@ -334,6 +358,54 @@ func mergeImmutabilityConfig(defaultImmutability, userImmutability ImmutabilityC
 
 	if userImmutability.SecureBootDBCer != "" {
 		merged.SecureBootDBCer = userImmutability.SecureBootDBCer
+	}
+
+	return merged
+}
+
+// mergeDkmsConfig merges dkms configurations including secure boot settings
+func mergeDkmsConfig(defaultDkms, userDkms Dkms) Dkms {
+	merged := defaultDkms // Start with default
+
+	// User provided dkms config, so merge all fields
+	merged.Enabled = userDkms.Enabled
+
+	// Modules is a full replace, not an append - mirrors mergeKernelConfig's
+	// handling of Kernel.Packages.
+	if len(userDkms.Modules) > 0 {
+		merged.Modules = userDkms.Modules
+	}
+
+	if !userDkms.SecureBoot.wasProvided {
+		merged.SecureBoot = defaultDkms.SecureBoot
+	} else {
+		merged.SecureBoot = mergeDkmsSecureBoot(defaultDkms.SecureBoot, userDkms.SecureBoot)
+	}
+
+	return merged
+}
+
+// mergeDkmsSecureBoot merges dkms secure boot signing configurations
+func mergeDkmsSecureBoot(defaultSecureBoot, userSecureBoot DkmsSecureBoot) DkmsSecureBoot {
+	merged := defaultSecureBoot // Start with default
+
+	// User provided secure boot config, so merge all fields
+	merged.Enabled = userSecureBoot.Enabled
+
+	if userSecureBoot.SigningKeyPath != "" {
+		merged.SigningKeyPath = userSecureBoot.SigningKeyPath
+	}
+	if userSecureBoot.SigningCertPath != "" {
+		merged.SigningCertPath = userSecureBoot.SigningCertPath
+	}
+
+	merged.RetainSigningIdentity = userSecureBoot.RetainSigningIdentity
+
+	if userSecureBoot.TargetKeyPath != "" {
+		merged.TargetKeyPath = userSecureBoot.TargetKeyPath
+	}
+	if userSecureBoot.TargetCertPath != "" {
+		merged.TargetCertPath = userSecureBoot.TargetCertPath
 	}
 
 	return merged
@@ -625,7 +697,8 @@ func isEmptySystemConfig(config SystemConfig) bool {
 		len(config.Packages) == 0 &&
 		len(config.AdditionalFiles) == 0 &&
 		len(config.Configurations) == 0 &&
-		isEmptyKernelConfig(config.Kernel)
+		isEmptyKernelConfig(config.Kernel) &&
+		!config.Dkms.wasProvided
 }
 
 func isEmptyBootloader(bootloader Bootloader) bool {

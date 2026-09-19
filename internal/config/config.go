@@ -326,6 +326,26 @@ type ImmutabilityConfig struct {
 	wasProvided     bool   `yaml:"-"`                         // Internal flag to track if section was provided
 }
 
+// DkmsSecureBoot holds Secure Boot signing configuration for DKMS-built kernel modules.
+type DkmsSecureBoot struct {
+	Enabled               bool   `yaml:"enabled"`                         // Enabled: whether built modules must be signed for UEFI Secure Boot (default: false)
+	SigningKeyPath        string `yaml:"signingKeyPath,omitempty"`        // SigningKeyPath: private key used to sign built modules
+	SigningCertPath       string `yaml:"signingCertPath,omitempty"`       // SigningCertPath: certificate corresponding to the signing key
+	RetainSigningIdentity bool   `yaml:"retainSigningIdentity,omitempty"` // RetainSigningIdentity: copy the signing key/cert into the image for future on-target DKMS rebuilds
+	TargetKeyPath         string `yaml:"targetKeyPath,omitempty"`         // TargetKeyPath: in-image path the signing key is copied to when RetainSigningIdentity is true
+	TargetCertPath        string `yaml:"targetCertPath,omitempty"`        // TargetCertPath: in-image path the signing certificate is copied to when RetainSigningIdentity is true
+	wasProvided           bool   `yaml:"-"`                               // Internal flag to track if section was provided
+}
+
+// Dkms holds configuration for building vendor DKMS kernel modules against the
+// image's target kernel (never the chroot build host's) during composition.
+type Dkms struct {
+	Enabled     bool           `yaml:"enabled"`           // Enabled: whether ICT builds/verifies DKMS modules during composition (default: false)
+	Modules     []string       `yaml:"modules,omitempty"` // Modules: optional "name/version" assertion list; if empty, all registered modules are verified
+	SecureBoot  DkmsSecureBoot `yaml:"secureBoot,omitempty"`
+	wasProvided bool           `yaml:"-"` // Internal flag to track if section was provided
+}
+
 // UserConfig holds the user configuration
 type UserConfig struct {
 	Name           string   `yaml:"name"`                     // Name: username for the user account
@@ -388,6 +408,7 @@ type SystemConfig struct {
 	AdditionalFiles []AdditionalFileInfo `yaml:"additionalFiles"`
 	Configurations  []ConfigurationInfo  `yaml:"configurations"`
 	Kernel          KernelConfig         `yaml:"kernel"`
+	Dkms            Dkms                 `yaml:"dkms,omitempty"`
 }
 
 // AdditionalFile stage markers control WHEN an overlay build copies an
@@ -1165,6 +1186,31 @@ func (ic *ImmutabilityConfig) HasSecureBootDBCer() bool {
 	return ic.SecureBootDBCer != ""
 }
 
+// GetDkms returns the dkms configuration (ImageTemplate method)
+func (t *ImageTemplate) GetDkms() Dkms {
+	return t.SystemConfig.Dkms
+}
+
+// IsDkmsEnabled returns whether DKMS module building is enabled (ImageTemplate method)
+func (t *ImageTemplate) IsDkmsEnabled() bool {
+	return t.SystemConfig.Dkms.Enabled
+}
+
+// GetDkms returns the dkms configuration (SystemConfig method)
+func (sc *SystemConfig) GetDkms() Dkms {
+	return sc.Dkms
+}
+
+// IsDkmsEnabled returns whether DKMS module building is enabled (SystemConfig method)
+func (sc *SystemConfig) IsDkmsEnabled() bool {
+	return sc.Dkms.Enabled
+}
+
+// HasDkmsSecureBoot returns whether Secure Boot signing is enabled for DKMS-built modules
+func (d *Dkms) HasDkmsSecureBoot() bool {
+	return d.SecureBoot.Enabled
+}
+
 // GetUsers returns the user configurations from systemConfig
 func (t *ImageTemplate) GetUsers() []UserConfig {
 	return t.SystemConfig.Users
@@ -1355,6 +1401,44 @@ func (i *ImmutabilityConfig) UnmarshalYAML(unmarshal func(interface{}) error) er
 // WasProvided returns true if the immutability section was explicitly defined in YAML
 func (i *ImmutabilityConfig) WasProvided() bool {
 	return i.wasProvided
+}
+
+// UnmarshalYAML implements yaml.Unmarshaler to track if the dkms section was provided
+func (d *Dkms) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	// Use a type alias to avoid infinite recursion
+	type alias Dkms
+	temp := (*alias)(d)
+
+	if err := unmarshal(temp); err != nil {
+		return err
+	}
+
+	d.wasProvided = true // Mark that this section was explicitly provided in YAML
+	return nil
+}
+
+// WasProvided returns true if the dkms section was explicitly defined in YAML
+func (d *Dkms) WasProvided() bool {
+	return d.wasProvided
+}
+
+// UnmarshalYAML implements yaml.Unmarshaler to track if the dkms.secureBoot section was provided
+func (sb *DkmsSecureBoot) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	// Use a type alias to avoid infinite recursion
+	type alias DkmsSecureBoot
+	temp := (*alias)(sb)
+
+	if err := unmarshal(temp); err != nil {
+		return err
+	}
+
+	sb.wasProvided = true // Mark that this section was explicitly provided in YAML
+	return nil
+}
+
+// WasProvided returns true if the dkms.secureBoot section was explicitly defined in YAML
+func (sb *DkmsSecureBoot) WasProvided() bool {
+	return sb.wasProvided
 }
 
 func (t *ImageTemplate) validatePackageRepositories() error {
@@ -1577,6 +1661,12 @@ func (t *ImageTemplate) validateOverlaySystemConfig() error {
 	}
 	if !isEmptyBootloader(sc.Bootloader) {
 		offending = append(offending, "bootloader")
+	}
+	// Same both-signals detection as immutability above: dkms.enabled/modules/
+	// secureBoot set programmatically must still be caught even if wasProvided
+	// (a YAML-only marker) is false.
+	if sc.Dkms.wasProvided || sc.Dkms.Enabled || len(sc.Dkms.Modules) > 0 || sc.Dkms.SecureBoot.Enabled {
+		offending = append(offending, "dkms")
 	}
 
 	if len(offending) == 0 {

@@ -439,6 +439,95 @@
       },
       "additionalProperties": false
     },
+    "DkmsSecureBoot": {
+      "type": "object",
+      "description": "Secure Boot signing configuration for DKMS-built kernel modules",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether built modules must be signed for UEFI Secure Boot",
+          "default": false
+        },
+        "signingKeyPath": {
+          "type": "string",
+          "minLength": 1,
+          "allOf": [
+            { "pattern": "^(?:\\$\\{[A-Za-z0-9_]+\\}|(?:[A-Za-z0-9_./-]|\\$\\{[A-Za-z0-9_]+\\})+\\.(?:key|pem))$" },
+            { "not": { "pattern": "\\.\\." } }
+          ]
+        },
+        "signingCertPath": {
+          "type": "string",
+          "minLength": 1,
+          "allOf": [
+            { "pattern": "^(?:\\$\\{[A-Za-z0-9_]+\\}|(?:[A-Za-z0-9_./-]|\\$\\{[A-Za-z0-9_]+\\})+\\.(?:crt|pem))$" },
+            { "not": { "pattern": "\\.\\." } }
+          ]
+        },
+        "retainSigningIdentity": {
+          "type": "boolean",
+          "description": "Copy the signing key/cert into the image for future on-target DKMS rebuilds",
+          "default": false
+        },
+        "targetKeyPath": {
+          "type": "string",
+          "minLength": 1,
+          "allOf": [
+            { "pattern": "^(?:\\$\\{[A-Za-z0-9_]+\\}|(?:[A-Za-z0-9_./-]|\\$\\{[A-Za-z0-9_]+\\})+\\.(?:key|pem))$" },
+            { "not": { "pattern": "\\.\\." } }
+          ]
+        },
+        "targetCertPath": {
+          "type": "string",
+          "minLength": 1,
+          "allOf": [
+            { "pattern": "^(?:\\$\\{[A-Za-z0-9_]+\\}|(?:[A-Za-z0-9_./-]|\\$\\{[A-Za-z0-9_]+\\})+\\.(?:crt|pem))$" },
+            { "not": { "pattern": "\\.\\." } }
+          ]
+        }
+      },
+      "required": ["enabled"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": { "enabled": { "const": true } },
+            "required": ["enabled"]
+          },
+          "then": {
+            "required": ["signingKeyPath", "signingCertPath"]
+          }
+        },
+        {
+          "if": {
+            "properties": { "retainSigningIdentity": { "const": true } },
+            "required": ["retainSigningIdentity"]
+          },
+          "then": {
+            "required": ["targetKeyPath", "targetCertPath"]
+          }
+        }
+      ]
+    },
+    "Dkms": {
+      "type": "object",
+      "description": "Build and verify vendor DKMS kernel modules against the image's target kernel during composition",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether ICT builds/verifies DKMS modules during composition",
+          "default": false
+        },
+        "modules": {
+          "type": "array",
+          "description": "Optional \"name/version\" assertion list; if empty, all registered modules are verified",
+          "items": { "type": "string", "pattern": "^[A-Za-z0-9_.+-]+/[A-Za-z0-9_.+~-]+$" }
+        },
+        "secureBoot": { "$ref": "#/$defs/DkmsSecureBoot" }
+      },
+      "required": ["enabled"],
+      "additionalProperties": false
+    },
     "SystemConfig": {
       "type": "object",
       "description": "System configuration object",
@@ -484,7 +573,8 @@
           "description": "Array of shell commands to execute during system configuration",
           "items": { "type": "object", "additionalProperties": true }
         },
-        "kernel": { "$ref": "#/$defs/Kernel" }
+        "kernel": { "$ref": "#/$defs/Kernel" },
+        "dkms": { "$ref": "#/$defs/Dkms" }
       },
       "additionalProperties": false
     },

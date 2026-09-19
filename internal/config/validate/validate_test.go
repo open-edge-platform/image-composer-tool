@@ -1604,6 +1604,91 @@ systemConfig:
 	}
 }
 
+func TestDkmsSecureBootEnabledRequiresSigningKeyAndCert(t *testing.T) {
+	base := `image:
+  name: dkms-test
+  version: "1.0.0"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+systemConfig:
+  name: test
+  dkms:
+    enabled: true
+    secureBoot:
+      enabled: true
+`
+
+	toJSON := func(t *testing.T, y string) []byte {
+		var raw interface{}
+		if err := yaml.Unmarshal([]byte(y), &raw); err != nil {
+			t.Fatalf("yaml parse: %v", err)
+		}
+		out, err := json.Marshal(raw)
+		if err != nil {
+			t.Fatalf("json marshal: %v", err)
+		}
+		return out
+	}
+
+	validYAML := base + `      signingKeyPath: "/run/secrets/edgepack/signing.key"
+      signingCertPath: "/run/secrets/edgepack/signing.crt"
+`
+	if err := ValidateImageTemplateJSON(toJSON(t, validYAML)); err != nil {
+		t.Fatalf("expected valid dkms secure boot template to pass, got: %v", err)
+	}
+
+	if err := ValidateImageTemplateJSON(toJSON(t, base)); err == nil {
+		t.Fatal("expected validation to fail when secureBoot.enabled is true without signingKeyPath/signingCertPath")
+	}
+}
+
+func TestDkmsSecureBootRetainSigningIdentityRequiresTargetPaths(t *testing.T) {
+	base := `image:
+  name: dkms-test
+  version: "1.0.0"
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+systemConfig:
+  name: test
+  dkms:
+    enabled: true
+    secureBoot:
+      enabled: true
+      signingKeyPath: "/run/secrets/edgepack/signing.key"
+      signingCertPath: "/run/secrets/edgepack/signing.crt"
+      retainSigningIdentity: true
+`
+
+	toJSON := func(t *testing.T, y string) []byte {
+		var raw interface{}
+		if err := yaml.Unmarshal([]byte(y), &raw); err != nil {
+			t.Fatalf("yaml parse: %v", err)
+		}
+		out, err := json.Marshal(raw)
+		if err != nil {
+			t.Fatalf("json marshal: %v", err)
+		}
+		return out
+	}
+
+	validYAML := base + `      targetKeyPath: "/var/lib/edgepack/secureboot/signing.key"
+      targetCertPath: "/var/lib/edgepack/secureboot/signing.crt"
+`
+	if err := ValidateImageTemplateJSON(toJSON(t, validYAML)); err != nil {
+		t.Fatalf("expected valid retainSigningIdentity template to pass, got: %v", err)
+	}
+
+	if err := ValidateImageTemplateJSON(toJSON(t, base)); err == nil {
+		t.Fatal("expected validation to fail when retainSigningIdentity is true without targetKeyPath/targetCertPath")
+	}
+}
+
 // overlayDiskSizeTemplate renders a minimal overlay template with the given
 // disk.size/disk.maxSize values (either may be omitted).
 func overlayDiskSizeTemplate(size, maxSize string) string {

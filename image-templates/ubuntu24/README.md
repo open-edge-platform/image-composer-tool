@@ -1,6 +1,6 @@
 # Ubuntu 24.04 templates
 
-`target.dist: ubuntu24` — 26 templates.
+`target.dist: ubuntu24` — 29 templates.
 
 | Template | Arch | Type | Purpose | CI |
 |---|---|---|---|---|
@@ -18,9 +18,12 @@
 | [`ubuntu24-x86_64-dkms-demo.yml`](./ubuntu24-x86_64-dkms-demo.yml) | x86_64 | raw | DKMS driver demo | — |
 | [`ubuntu24-x86_64-dlstreamer.yml`](./ubuntu24-x86_64-dlstreamer.yml) | x86_64 | raw | AI media / DL Streamer | yes |
 | [`ubuntu24-x86_64-edge-raw.yml`](./ubuntu24-x86_64-edge-raw.yml) | x86_64 | raw | edge | yes |
+| [`ubuntu24-x86_64-edgepack-raw.yml`](./ubuntu24-x86_64-edgepack-raw.yml) | x86_64 | raw | Intel EdgePack (PTL/WCL) platform enablement | — |
 | [`ubuntu24-x86_64-extends-example-raw.yml`](./ubuntu24-x86_64-extends-example-raw.yml) <br>*extends `ubuntu24-x86_64-minimal-raw.yml`* | x86_64 | raw | extends demo | — |
 | [`ubuntu24-x86_64-fde-raw.yml`](./ubuntu24-x86_64-fde-raw.yml) | x86_64 | raw | full-disk encryption | — |
+| [`ubuntu24-x86_64-generic-handheld-os-desktop-raw.yml`](./ubuntu24-x86_64-generic-handheld-os-desktop-raw.yml) <br>*extends `ubuntu24-x86_64-minimal-ptl-pv-desktop-base-raw.yml`* | x86_64 | raw | handheld desktop | — |
 | [`ubuntu24-x86_64-minimal-desktop-raw.yml`](./ubuntu24-x86_64-minimal-desktop-raw.yml) | x86_64 | raw | desktop | — |
+| [`ubuntu24-x86_64-minimal-ptl-pv-desktop-base-raw.yml`](./ubuntu24-x86_64-minimal-ptl-pv-desktop-base-raw.yml) | x86_64 | raw | PTL PV desktop base / extends parent | — |
 | [`ubuntu24-x86_64-minimal-raw-expand-partition.yml`](./ubuntu24-x86_64-minimal-raw-expand-partition.yml) | x86_64 | raw | partition expansion | — |
 | [`ubuntu24-x86_64-minimal-raw.yml`](./ubuntu24-x86_64-minimal-raw.yml) | x86_64 | raw | minimal | yes |
 | [`ubuntu24-x86_64-mozilla-apt-raw.yml`](./ubuntu24-x86_64-mozilla-apt-raw.yml) | x86_64 | raw | Mozilla APT regression | — |
@@ -34,6 +37,7 @@
 ## Inheritance
 
 - `ubuntu24-x86_64-extends-example-raw.yml` extends `ubuntu24-x86_64-minimal-raw.yml`
+- `ubuntu24-x86_64-generic-handheld-os-desktop-raw.yml` extends `ubuntu24-x86_64-minimal-ptl-pv-desktop-base-raw.yml`
 
 **Robotics on top of a vendor cloud image** — overlay + extends composed together:
 
@@ -51,7 +55,7 @@ Run `image-composer-tool resolve <template> --full` to see the merged result.
 
 ## CI coverage
 
-6 of 25 templates here are built on every pull request (via `scripts/build_*.sh`). The others are schema-validated only, so build them locally before opening a PR.
+6 of 29 templates here are built on every pull request (via `scripts/build_*.sh`). The others are schema-validated only, so build them locally before opening a PR.
 
 ---
 

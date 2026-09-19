@@ -300,6 +300,70 @@ func TestMergeImmutabilityConfig(t *testing.T) {
 	}
 }
 
+func TestMergeDkmsConfig(t *testing.T) {
+	defaultDkms := Dkms{
+		Enabled: true,
+		Modules: []string{"default-module/1.0"},
+	}
+
+	userDkms := Dkms{
+		Enabled: false,
+		Modules: []string{"user-module/2.0"}, // full replace, not append
+	}
+
+	merged := mergeDkmsConfig(defaultDkms, userDkms)
+
+	if merged.Enabled != false {
+		t.Errorf("expected enabled to be false, got %t", merged.Enabled)
+	}
+	if len(merged.Modules) != 1 || merged.Modules[0] != "user-module/2.0" {
+		t.Errorf("expected modules to be replaced with user's list, got %v", merged.Modules)
+	}
+}
+
+func TestMergeDkmsConfig_EmptyUserModulesPreservesDefault(t *testing.T) {
+	defaultDkms := Dkms{Enabled: true, Modules: []string{"default-module/1.0"}}
+	userDkms := Dkms{Enabled: true} // Modules not set
+
+	merged := mergeDkmsConfig(defaultDkms, userDkms)
+
+	if len(merged.Modules) != 1 || merged.Modules[0] != "default-module/1.0" {
+		t.Errorf("expected default modules to be preserved, got %v", merged.Modules)
+	}
+}
+
+func TestMergeDkmsSecureBoot(t *testing.T) {
+	defaultSecureBoot := DkmsSecureBoot{
+		Enabled:         true,
+		SigningKeyPath:  "/default/signing.key",
+		SigningCertPath: "/default/signing.crt",
+	}
+
+	userSecureBoot := DkmsSecureBoot{
+		Enabled:               true,
+		SigningKeyPath:        "/user/signing.key", // Override
+		RetainSigningIdentity: true,
+		TargetKeyPath:         "/var/lib/edgepack/signing.key",
+		TargetCertPath:        "/var/lib/edgepack/signing.crt",
+		// SigningCertPath not set - should keep default
+	}
+
+	merged := mergeDkmsSecureBoot(defaultSecureBoot, userSecureBoot)
+
+	if merged.SigningKeyPath != "/user/signing.key" {
+		t.Errorf("expected user signing key to override, got '%s'", merged.SigningKeyPath)
+	}
+	if merged.SigningCertPath != "/default/signing.crt" {
+		t.Errorf("expected default signing cert to be preserved, got '%s'", merged.SigningCertPath)
+	}
+	if !merged.RetainSigningIdentity {
+		t.Error("expected retainSigningIdentity to be true")
+	}
+	if merged.TargetKeyPath != "/var/lib/edgepack/signing.key" {
+		t.Errorf("expected user target key path, got '%s'", merged.TargetKeyPath)
+	}
+}
+
 func TestMergeAdditionalFiles(t *testing.T) {
 	defaultFiles := []AdditionalFileInfo{
 		{Local: "/default/file1", Final: "/etc/file1"},

@@ -155,6 +155,54 @@ func TestMergeSystemConfigWithSecureBoot(t *testing.T) {
 	}
 }
 
+func TestMergeSystemConfigWithDkms(t *testing.T) {
+	defaultConfig := SystemConfig{
+		Name:     "default",
+		Dkms:     Dkms{Enabled: false, Modules: []string{"default-module/1.0"}},
+		Packages: []string{"base-package"},
+	}
+
+	userConfig := SystemConfig{
+		Name: "user",
+		Dkms: Dkms{
+			Enabled:     true,
+			Modules:     []string{"vendor-module/1.2"},
+			wasProvided: true, // Mark as explicitly provided
+		},
+		Packages: []string{"user-package"},
+	}
+
+	merged := mergeSystemConfig(defaultConfig, userConfig)
+
+	if !merged.Dkms.Enabled {
+		t.Errorf("expected merged dkms to be enabled")
+	}
+	if len(merged.Dkms.Modules) != 1 || merged.Dkms.Modules[0] != "vendor-module/1.2" {
+		t.Errorf("expected user dkms modules to replace default, got %v", merged.Dkms.Modules)
+	}
+}
+
+func TestMergeSystemConfigWithDkms_NotProvidedKeepsDefault(t *testing.T) {
+	defaultConfig := SystemConfig{
+		Name: "default",
+		Dkms: Dkms{Enabled: true, Modules: []string{"default-module/1.0"}},
+	}
+
+	userConfig := SystemConfig{
+		Name: "user",
+		// Dkms not set at all - wasProvided stays false
+	}
+
+	merged := mergeSystemConfig(defaultConfig, userConfig)
+
+	if !merged.Dkms.Enabled {
+		t.Errorf("expected default dkms.enabled to be preserved when user did not provide dkms")
+	}
+	if len(merged.Dkms.Modules) != 1 || merged.Dkms.Modules[0] != "default-module/1.0" {
+		t.Errorf("expected default dkms modules to be preserved, got %v", merged.Dkms.Modules)
+	}
+}
+
 func TestLoadYAMLTemplateWithImmutability(t *testing.T) {
 	// Create a temporary YAML file with immutability configuration under systemConfig
 	yamlContent := `image:
@@ -210,6 +258,67 @@ systemConfig:
 	// Test direct access to systemConfig immutability
 	if !template.SystemConfig.IsImmutabilityEnabled() {
 		t.Errorf("expected systemConfig immutability to be enabled, got %t", template.SystemConfig.IsImmutabilityEnabled())
+	}
+}
+
+func TestLoadYAMLTemplateWithDkms(t *testing.T) {
+	// Create a temporary YAML file with a dkms configuration under systemConfig
+	yamlContent := `image:
+  name: ubuntu24-x86_64-edgepack
+  version: "1.0.0"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+
+systemConfig:
+  name: edgepack-demo
+  description: Default yml configuration for dkms-enabled image
+  packages:
+    - openssh-server
+  dkms:
+    enabled: true
+    modules:
+      - edge-gfx/1.0
+      - edge-edac/1.0
+`
+
+	tmpFile, err := os.CreateTemp("", "test-*.yml")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	if err := tmpFile.Chmod(0600); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpFile.Name())
+		return
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString(yamlContent); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	// Test loading
+	template, err := LoadTemplate(tmpFile.Name(), true)
+	if err != nil {
+		t.Fatalf("failed to load YAML template: %v", err)
+	}
+
+	if !template.IsDkmsEnabled() {
+		t.Errorf("expected dkms to be enabled, got %t", template.IsDkmsEnabled())
+	}
+
+	modules := template.GetDkms().Modules
+	if len(modules) != 2 || modules[0] != "edge-gfx/1.0" || modules[1] != "edge-edac/1.0" {
+		t.Errorf("expected dkms modules to be loaded from YAML, got %v", modules)
+	}
+
+	// Test direct access to systemConfig dkms
+	if !template.SystemConfig.IsDkmsEnabled() {
+		t.Errorf("expected systemConfig dkms to be enabled, got %t", template.SystemConfig.IsDkmsEnabled())
 	}
 }
 
@@ -4821,6 +4930,67 @@ func TestWasProvided(t *testing.T) {
 				t.Errorf("WasProvided() = %v, want %v", result, tt.expected)
 			}
 		})
+	}
+}
+
+func TestDkmsWasProvided(t *testing.T) {
+	tests := []struct {
+		name     string
+		dkms     *Dkms
+		expected bool
+	}{
+		{name: "Was provided - true", dkms: &Dkms{wasProvided: true}, expected: true},
+		{name: "Was not provided - false", dkms: &Dkms{wasProvided: false}, expected: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.dkms.WasProvided()
+			if result != tt.expected {
+				t.Errorf("WasProvided() = %v, want %v", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestDkmsSecureBootWasProvided(t *testing.T) {
+	tests := []struct {
+		name       string
+		secureBoot *DkmsSecureBoot
+		expected   bool
+	}{
+		{name: "Was provided - true", secureBoot: &DkmsSecureBoot{wasProvided: true}, expected: true},
+		{name: "Was not provided - false", secureBoot: &DkmsSecureBoot{wasProvided: false}, expected: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.secureBoot.WasProvided()
+			if result != tt.expected {
+				t.Errorf("WasProvided() = %v, want %v", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestGetDkmsAccessors(t *testing.T) {
+	dkms := Dkms{
+		Enabled: true,
+		SecureBoot: DkmsSecureBoot{
+			Enabled: true,
+		},
+	}
+	template := &ImageTemplate{SystemConfig: SystemConfig{Dkms: dkms}}
+
+	if !template.IsDkmsEnabled() {
+		t.Error("expected IsDkmsEnabled() to be true")
+	}
+	got := template.GetDkms()
+	if !got.HasDkmsSecureBoot() {
+		t.Error("expected HasDkmsSecureBoot() to be true")
+	}
+	if !template.SystemConfig.IsDkmsEnabled() {
+		t.Error("expected SystemConfig.IsDkmsEnabled() to be true")
 	}
 }
 
