@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { useStore } from '../store'
+import { useStore, confirmRepoRelease } from '../store'
 import { api } from '../api/client'
 import type { PackageRepo, PackageSearchResult, PackageVersion } from '../api/types'
 import { PackageRepoBrowser } from './PackageRepoBrowser'
 import { PackageRow } from './PackageRow'
 import { SelectedPackages } from './SelectedPackages'
+import { BaseTemplatePackages } from './BaseTemplatePackages'
+import { useBaseLock, ensureBaseVersions, type BaseLock } from '../lib/baseLock'
 
 interface PackagesStepProps {
   // Target OS id (a manifest `targets[].id`, e.g. "ubuntu24"). Empty until the
@@ -14,22 +16,23 @@ interface PackagesStepProps {
   // True only while the Advanced tab is visible. Both tab pages stay mounted, so
   // the fetch is gated on this to keep a hidden page from issuing requests.
   active: boolean
+  // The matched template's own package list (ComposeResponse.basePackages),
+  // fetched by AdvancedPage's compose call. Empty until that call resolves.
+  basePackages: string[]
 }
 
 // PackagesStep is the wizard's "Choose Packages to Compose" step: which
 // repositories the target offers and which are enabled, a cross-repository
 // package search, per-repository browsing, and the running list of added
 // packages.
-export function PackagesStep({ os, active }: PackagesStepProps) {
+export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
   const [repos, setRepos] = useState<PackageRepo[] | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [activeRepo, setActiveRepo] = useState('')
 
   useEffect(() => {
     if (!os) {
       setRepos(null)
       setError(null)
-      setActiveRepo('')
       return
     }
     if (!active) return
@@ -42,10 +45,6 @@ export function PackagesStep({ os, active }: PackagesStepProps) {
       .then((r) => {
         if (cancelled) return
         setRepos(r.repos)
-        // Open on the target's base repository rather than the first row. The
-        // API orders by descending priority, so the base repo (priority 500) is
-        // usually last — starting at repos[0] would open on a disabled pane.
-        setActiveRepo(r.repos.find((x) => x.enabledByDefault)?.id ?? r.repos[0]?.id ?? '')
       })
       .catch((e) => {
         if (cancelled) return
@@ -55,6 +54,8 @@ export function PackagesStep({ os, active }: PackagesStepProps) {
       cancelled = true
     }
   }, [active, os])
+
+  const baseLock = useBaseLock(os, repos, basePackages)
 
   return (
     <div>
@@ -91,15 +92,13 @@ export function PackagesStep({ os, active }: PackagesStepProps) {
         // travel room — it scrolls away with the content at short viewports.
         <div className="grid grid-cols-[1fr_300px] items-start gap-5">
           <div>
-            <PackageSearch os={os} repos={repos} />
-            <PackageRepoBrowser
-              repos={repos}
-              activeRepo={activeRepo}
-              onActiveRepo={setActiveRepo}
-              os={os}
-            />
+            <PackageSearch os={os} repos={repos} baseLock={baseLock} />
+            <PackageRepoBrowser repos={repos} os={os} baseLock={baseLock} />
           </div>
-          <SelectedPackages repos={repos} />
+          <div className="sticky top-4 flex flex-col gap-3">
+            <BaseTemplatePackages packages={basePackages} />
+            <SelectedPackages repos={repos} />
+          </div>
         </div>
       )}
     </div>
@@ -109,6 +108,9 @@ export function PackagesStep({ os, active }: PackagesStepProps) {
 // How many hits each repository contributes, and how many the dropdown shows
 // once they are merged.
 const SEARCH_LIMIT = 8
+
+// How many past queries the search dropdown's "Recent searches" list keeps.
+const HISTORY_LIMIT = 8
 
 // SearchOutcome is the stream's terminal `done` event: how many repositories
 // were searched, how many reported an error, and whether the stream was cut
@@ -183,13 +185,17 @@ function mergeHits(
 // Results stream in per repository rather than arriving all at once: a search
 // fans out over the whole catalog, and an unreachable mirror would otherwise
 // hold up hits already found elsewhere until it hit its dial timeout.
-function PackageSearch({ os, repos }: { os: string; repos: PackageRepo[] }) {
+function PackageSearch({ os, repos, baseLock }: { os: string; repos: PackageRepo[]; baseLock: BaseLock }) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<PackageSearchResult[]>([])
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [outcome, setOutcome] = useState<SearchOutcome | null>(null)
+  // Past queries that actually ran, most recent first, offered when the
+  // input is focused empty. Session-only by design — there's no need to
+  // persist a search history across reloads.
+  const [history, setHistory] = useState<string[]>([])
   const containerRef = useRef<HTMLDivElement>(null)
   const addedPackages = useStore((s) => s.addedPackages)
   const setPackage = useStore((s) => s.setPackage)
@@ -210,6 +216,10 @@ function PackageSearch({ os, repos }: { os: string; repos: PackageRepo[] }) {
     setResults([])
     let es: EventSource | null = null
     const debounce = setTimeout(() => {
+      // Recorded here, not on every keystroke: the debounce only fires once
+      // the user actually pauses on a query, which is what "searched for X"
+      // should mean.
+      setHistory((h) => [q, ...h.filter((x) => x !== q)].slice(0, HISTORY_LIMIT))
       // Batches arrive per repository. Merging here (rather than showing them
       // grouped) keeps the dropdown ranked by name as it fills in, so a hit
       // doesn't jump around as later repositories report.
@@ -263,34 +273,58 @@ function PackageSearch({ os, repos }: { os: string; repos: PackageRepo[] }) {
     }
   }, [query, os, repos])
 
+  // Resolve default-repo versions for any locked, unpinned result as it
+  // renders, so its "current" chip can be marked once that lands.
+  useEffect(() => {
+    ensureBaseVersions(baseLock, results.map((r) => r.name))
+  }, [results, baseLock])
+
   const labelFor = (repoId: string) => repos.find((r) => r.id === repoId)?.displayName ?? repoId
   const isEnabled = (repoId: string) => {
     const r = repos.find((x) => x.id === repoId)
     return r?.enabledByDefault || enabledRepos.includes(repoId)
   }
+  const isBaseRepo = (repoId: string) => repos.find((r) => r.id === repoId)?.enabledByDefault ?? false
 
   // Adding a package is a statement of interest in its repo, so it's brought
   // into the enabled set even if the user never touched that repo's checkbox.
   // The repo comes from the chosen version, not the row: pinning an older
-  // version can select a different repository than the newest one came from.
+  // version can select a different repository than the newest one came from
+  // — if it does, and nothing else needs the one it's leaving, confirm
+  // before dropping that repo too (it might have been checked by hand).
+  //
+  // Picking any version (not just ticking the row's checkbox) is treated as
+  // a finished decision and closes the dropdown, matching how a single
+  // click elsewhere already would.
   const add = (hit: PackageSearchResult, repo: string, version: string) => {
-    setPackage({ name: hit.name, version, repo })
+    const previous = addedPackages.find((p) => p.name === hit.name)
+    const opts =
+      previous && previous.repo !== repo
+        ? { releaseRepo: confirmRepoRelease(addedPackages, labelFor, [hit.name], isBaseRepo) }
+        : undefined
+    setPackage({ name: hit.name, version, repo }, opts)
     if (!isEnabled(repo)) setRepoEnabled(repo, true)
-  }
-
-  // Ticking the checkbox is a finished decision, so the dropdown gets out of
-  // the way. Choosing a version is not: the point of showing several is to let
-  // one be compared against another, which a dropdown that vanishes on the
-  // first click makes impossible.
-  const pick = (hit: PackageSearchResult, repo: string, version: string) => {
-    add(hit, repo, version)
     setQuery('')
     setOpen(false)
   }
 
   return (
     <>
-      <div ref={containerRef} className="relative">
+      <div
+        ref={containerRef}
+        className="relative"
+        onBlur={(e) => {
+          // Attached to the whole dropdown, not just the input: clicking a
+          // version chip moves focus to that chip's button (deliberately,
+          // so the dropdown stays open for comparing versions), so the input
+          // is no longer the focused element afterward. An onBlur on the
+          // input alone would then miss a later click elsewhere entirely,
+          // since it fires on whatever's actually focused. This fires
+          // whenever focus leaves the container for good, wherever it was.
+          if (e.currentTarget.contains(e.relatedTarget as Node)) return
+          setOpen(false)
+        }}
+      >
         <input
           type="text"
           value={query}
@@ -299,43 +333,66 @@ function PackageSearch({ os, repos }: { os: string; repos: PackageRepo[] }) {
             setOpen(true)
           }}
           onFocus={() => setOpen(true)}
-          onBlur={(e) => {
-            // Guards against closing before a click inside the dropdown (e.g. a
-            // version chip) registers — a setTimeout-based delay would instead
-            // race that click.
-            if (containerRef.current?.contains(e.relatedTarget as Node)) return
-            setOpen(false)
-          }}
           placeholder="Search packages across all repositories…"
           className="w-full rounded border border-slate-300 px-3 py-2 text-sm focus:border-[#0071c5] focus:outline-none"
         />
         {open && (
           <div className="absolute z-10 mt-1 max-h-[360px] w-full overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
             {query.trim().length < 2 ? (
-              <p className="px-3 py-4 text-center text-[12px] text-slate-500">
-                Type at least 2 characters to search.
-              </p>
+              history.length > 0 ? (
+                <div className="py-1">
+                  <p className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                    Recent searches
+                  </p>
+                  {history.map((h) => (
+                    <button
+                      key={h}
+                      type="button"
+                      onClick={() => setQuery(h)}
+                      className="block w-full px-3 py-1.5 text-left text-[13px] text-slate-700 hover:bg-[#eef4fb]"
+                    >
+                      {h}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="px-3 py-4 text-center text-[12px] text-slate-500">
+                  Type at least 2 characters to search.
+                </p>
+              )
             ) : error ? (
               <p className="px-3 py-4 text-center text-[12px] text-red-600">{error}</p>
             ) : (
               <>
                 {/* Hits render while the stream is still open, so a slow
                     repository never hides what the fast ones already found. */}
-                {results.map((hit) => (
-                  <PackageRow
-                    key={`${hit.repository}:${hit.name}`}
-                    name={hit.name}
-                    version={hit.version}
-                    description={hit.description}
-                    repoLabel={labelFor(hit.repository)}
-                    showRepo
-                    versions={versionsOf(hit)}
-                    repoLabelFor={labelFor}
-                    selection={addedPackages.find((p) => p.name === hit.name)}
-                    onToggle={(checked) => (checked ? pick(hit, hit.repository, '') : removePackage(hit.name))}
-                    onChooseVersion={(v) => add(hit, v.repository, v.version)}
-                  />
-                ))}
+                {results.map((hit) => {
+                  const lock = baseLock.info(hit.name)
+                  return (
+                    <PackageRow
+                      key={`${hit.repository}:${hit.name}`}
+                      name={hit.name}
+                      version={hit.version}
+                      description={hit.description}
+                      versions={versionsOf(hit)}
+                      repoLabelFor={labelFor}
+                      selection={addedPackages.find((p) => p.name === hit.name)}
+                      locked={lock.locked}
+                      currentVersion={lock.currentVersion}
+                      currentIsFloating={lock.currentIsFloating}
+                      onToggle={(checked) => {
+                        if (checked) {
+                          add(hit, hit.repository, '')
+                          return
+                        }
+                        removePackage(hit.name, {
+                          releaseRepo: confirmRepoRelease(addedPackages, labelFor, [hit.name], isBaseRepo),
+                        })
+                      }}
+                      onChooseVersion={(v) => add(hit, v.repository, v.version)}
+                    />
+                  )
+                })}
                 {loading ? (
                   <p className="px-3 py-2 text-center text-[11px] text-slate-500">
                     {results.length > 0 ? 'Searching more repositories…' : 'Searching…'}

@@ -106,6 +106,11 @@ export interface ComposeResponse {
   // already lists unpinned. The extends merge unions package lists and cannot
   // drop the parent's entry, so both survive into `yaml`. Advisory only.
   pinConflicts?: string[]
+  // The matched template's own package list, before this request's overrides
+  // are applied. Present even when the request carries no overrides, so the
+  // Packages step can show "already included" packages alongside whatever
+  // the user is adding.
+  basePackages?: string[]
 }
 
 // One issue from POST /templates/validate: a schema/semantic problem tied to a

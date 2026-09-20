@@ -329,7 +329,9 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
           />
         )}
 
-        {step === 1 && <PackagesStep os={selection.os} active={active} />}
+        {step === 1 && (
+          <PackagesStep os={selection.os} active={active} basePackages={composed?.basePackages ?? []} />
+        )}
 
         {step === 2 && <DiskStep />}
 

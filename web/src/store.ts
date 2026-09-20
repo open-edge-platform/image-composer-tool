@@ -28,6 +28,66 @@ export function encodePackage(p: AddedPackage): string {
   return p.version ? `${p.name}_${p.version}` : p.name
 }
 
+export interface PackageMutationOptions {
+  // Whether losing a package's repo dependency should also drop that repo
+  // from enabledRepos once nothing else needs it. Defaults to true. Callers
+  // that might be releasing a repo the user checked deliberately (rather
+  // than one this same flow enabled implicitly on their behalf) should
+  // compute this via confirmRepoRelease first rather than hardcoding it —
+  // see that function's comment.
+  releaseRepo?: boolean
+}
+
+// orphanedRepos reports which repos among `namesToRemove`'s current
+// bindings would end up with nothing left depending on them if those names
+// were removed from addedPackages. Modeling a re-pin as "remove the old
+// name" and calling this with `addedPackages` from before the update is
+// exactly right: the entry being re-pinned no longer counts toward its old
+// repo's dependents, and whatever it's changing to is unaffected here (that
+// repo gets enabled, or was already, elsewhere).
+export function orphanedRepos(addedPackages: AddedPackage[], namesToRemove: string[]): string[] {
+  const removing = new Set(namesToRemove)
+  const affectedRepos = new Set(
+    addedPackages.filter((p) => removing.has(p.name)).map((p) => p.repo),
+  )
+  const remaining = addedPackages.filter((p) => !removing.has(p.name))
+  const stillNeeded = new Set(remaining.map((p) => p.repo))
+  return [...affectedRepos].filter((r) => !stillNeeded.has(r))
+}
+
+// confirmRepoRelease decides whether a removal or re-pin that's about to
+// orphan one or more repos should actually uncheck them. A repo can be
+// checked because the user deliberately browsed it, not merely because
+// something happened to be added from it, so losing its last dependent
+// package shouldn't silently uncheck it without asking — unlike enabling a
+// repo (a clear statement of interest either way), *disabling* one drops
+// real state (any other packages it might gain later start from scratch),
+// which is worth a confirmation. Returns true immediately, no prompt, when
+// nothing would actually be orphaned — the overwhelmingly common case.
+//
+// isBaseRepo excludes a target's always-on repo(s) from that check
+// entirely: enabledRepos never lists one to begin with (its checkbox stays
+// checked via `enabledByDefault`, not membership), so "uncheck this too?"
+// would be both meaningless (nothing to uncheck) and confusing (the base
+// template needs it regardless of what's added).
+export function confirmRepoRelease(
+  addedPackages: AddedPackage[],
+  repoLabelFor: (repo: string) => string,
+  namesToRemove: string[],
+  isBaseRepo: (repo: string) => boolean = () => false,
+): boolean {
+  const repos = orphanedRepos(addedPackages, namesToRemove).filter((r) => !isBaseRepo(r))
+  if (repos.length === 0) return true
+  const plural = repos.length > 1
+  const list = repos.map(repoLabelFor).join(', ')
+  // Bare confirm(), not window.confirm — identical in a real browser, but
+  // lets a test stub it without needing a DOM environment.
+  return confirm(
+    `No other selected package will use ${plural ? 'these repositories' : 'this repository'} anymore: ` +
+      `${list}. Uncheck ${plural ? 'them' : 'it'} too?`,
+  )
+}
+
 interface AppState {
   manifest: Manifest | null
   selection: Selection
@@ -65,12 +125,12 @@ interface AppState {
   setRepoEnabled: (repo: string, on: boolean) => void
   // Upserts by name: adding a package already present (e.g. re-pinning its
   // version) replaces the existing entry rather than duplicating it.
-  setPackage: (p: AddedPackage) => void
-  removePackage: (name: string) => void
+  setPackage: (p: AddedPackage, opts?: PackageMutationOptions) => void
+  removePackage: (name: string, opts?: PackageMutationOptions) => void
   // Batch forms of setPackage/removePackage for "Select all": one state
   // update for the whole list instead of one per package.
   setPackages: (pkgs: AddedPackage[]) => void
-  removePackages: (names: string[]) => void
+  removePackages: (names: string[], opts?: PackageMutationOptions) => void
   clearPackages: () => void
   // User edit to the disk layout (marks it edited so seedDisk stops overwriting it).
   setDisk: (value: DiskModel) => void
@@ -112,25 +172,61 @@ export const useStore = create<AppState>((set) => ({
         : state.enabledRepos.filter((r) => r !== repo),
       ...(on ? {} : { addedPackages: state.addedPackages.filter((p) => p.repo !== repo) }),
     })),
-  setPackage: (p) =>
-    set((state) => ({
-      addedPackages: [...state.addedPackages.filter((x) => x.name !== p.name), p],
-    })),
-  removePackage: (name) =>
-    set((state) => ({
-      addedPackages: state.addedPackages.filter((p) => p.name !== name),
-    })),
+  // Re-pinning to a different repo can leave the one it just left with
+  // nothing depending on it anymore — dropped the same way disabling that
+  // repo manually would already drop this package, just from the other
+  // side of the relationship. A repo the user enabled by hand with nothing
+  // added from it yet is never touched: this only fires as a consequence of
+  // a package actually moving away from a repo, never as an ambient sweep.
+  setPackage: (p, opts) =>
+    set((state) => {
+      const previous = state.addedPackages.find((x) => x.name === p.name)
+      const addedPackages = [...state.addedPackages.filter((x) => x.name !== p.name), p]
+      if (opts?.releaseRepo === false) return { addedPackages }
+      return {
+        addedPackages,
+        enabledRepos: releaseIfOrphaned(state.enabledRepos, previous, addedPackages),
+      }
+    }),
+  removePackage: (name, opts) =>
+    set((state) => {
+      const removed = state.addedPackages.find((p) => p.name === name)
+      const addedPackages = state.addedPackages.filter((p) => p.name !== name)
+      if (opts?.releaseRepo === false) return { addedPackages }
+      return {
+        addedPackages,
+        enabledRepos: releaseIfOrphaned(state.enabledRepos, removed, addedPackages),
+      }
+    }),
   setPackages: (pkgs) =>
     set((state) => {
       const names = new Set(pkgs.map((p) => p.name))
+      // A bulk add ("Select all") only ever grows the set, so nothing it
+      // replaces can be left without a repo to drop.
       return { addedPackages: [...state.addedPackages.filter((x) => !names.has(x.name)), ...pkgs] }
     }),
-  removePackages: (names) =>
+  removePackages: (names, opts) =>
     set((state) => {
       const drop = new Set(names)
-      return { addedPackages: state.addedPackages.filter((p) => !drop.has(p.name)) }
+      const addedPackages = state.addedPackages.filter((p) => !drop.has(p.name))
+      if (opts?.releaseRepo === false) return { addedPackages }
+      const removedRepos = new Set(
+        state.addedPackages.filter((p) => drop.has(p.name)).map((p) => p.repo),
+      )
+      const stillNeeded = new Set(addedPackages.map((p) => p.repo))
+      return {
+        addedPackages,
+        enabledRepos: state.enabledRepos.filter((r) => !removedRepos.has(r) || stillNeeded.has(r)),
+      }
     }),
-  clearPackages: () => set({ addedPackages: [] }),
+  clearPackages: () =>
+    set((state) => {
+      const usedRepos = new Set(state.addedPackages.map((p) => p.repo))
+      return {
+        addedPackages: [],
+        enabledRepos: state.enabledRepos.filter((r) => !usedRepos.has(r)),
+      }
+    }),
   setDisk: (value) => set({ disk: value, diskEdited: true }),
   seedDisk: (value) =>
     // A compose that resolves to a template with no disk block leaves whatever
@@ -203,6 +299,23 @@ export const useStore = create<AppState>((set) => ({
       }
     }),
 }))
+
+// releaseIfOrphaned drops `changed`'s previous repo from enabledRepos when
+// nothing in `remaining` still references it. `changed` is the entry as it
+// was before the update being applied (undefined if it's a brand new pick,
+// which can't orphan anything); `remaining` is addedPackages after that
+// update. Used by both a re-pin (repo moves) and a removal (repo drops out
+// entirely) — in a removal, `changed` and the one entry missing from
+// `remaining` are the same thing.
+function releaseIfOrphaned(
+  enabledRepos: string[],
+  changed: AddedPackage | undefined,
+  remaining: AddedPackage[],
+): string[] {
+  if (!changed) return enabledRepos
+  if (remaining.some((p) => p.repo === changed.repo)) return enabledRepos
+  return enabledRepos.filter((r) => r !== changed.repo)
+}
 
 // autoFillCascade mutates `selection`, setting each empty downstream field to the
 // first option available for the current upstream choices. Walks the cascade in
