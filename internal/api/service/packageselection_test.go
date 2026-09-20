@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -385,6 +386,9 @@ func TestComposeWithPackages(t *testing.T) {
 	if strings.Contains(res.BaseYAML, "htop") {
 		t.Errorf("BaseYAML carries a selected package; it must be the parent alone:\n%s", res.BaseYAML)
 	}
+	if want := []string{"curl", "vim"}; !slices.Equal(res.BasePackages, want) {
+		t.Errorf("BasePackages = %v, want %v (the parent's own list, not the selection)", res.BasePackages, want)
+	}
 
 	assertNoLeakedDeltas(t, s.cfg.TemplatesDir)
 }
@@ -456,7 +460,9 @@ func TestComposeUnpinnedDuplicateIsNotAConflict(t *testing.T) {
 }
 
 // With no overrides at all there is no delta, so neither the delta nor the
-// baseline view is published — the resolved YAML already is the base.
+// baseline YAML view is published — the resolved YAML already is the base.
+// BasePackages is the exception: it is populated unconditionally so a caller
+// can show "already included" packages before the user has added anything.
 func TestComposeWithoutOverridesPublishesNoDeltaOrBase(t *testing.T) {
 	s := newPackageTestService(t)
 
@@ -472,6 +478,9 @@ func TestComposeWithoutOverridesPublishesNoDeltaOrBase(t *testing.T) {
 	}
 	if len(res.PinConflicts) != 0 {
 		t.Errorf("PinConflicts = %v, want none with no overrides", res.PinConflicts)
+	}
+	if want := []string{"curl", "vim"}; !slices.Equal(res.BasePackages, want) {
+		t.Errorf("BasePackages = %v, want %v even with no overrides", res.BasePackages, want)
 	}
 }
 

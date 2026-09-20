@@ -1182,6 +1182,15 @@ components:
             only: the compose still succeeds.
           items:
             type: string
+        basePackages:
+          type: array
+          description: |
+            The matched template's own package list, before this request's
+            overrides are applied. Present even when the request carries no
+            overrides, so a client can show "already included" packages
+            alongside whatever the user is adding.
+          items:
+            type: string
         summary:
           $ref: "#/components/schemas/ComposeSummary"
 
