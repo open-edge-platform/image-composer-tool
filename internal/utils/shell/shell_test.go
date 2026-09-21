@@ -389,7 +389,18 @@ func TestQuoteArgNeutralizesExpansion(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available; skipping shell-expansion check")
 	}
-	for _, in := range []string{"$(echo pwned)", "`echo pwned`", "${PATH}", "a'b'c"} {
+	// Multi-line script with nested double-quoted command substitutions, the
+	// shape that broke strconv.Quote (a Go string-literal escaper, not a
+	// POSIX shell one) when used to embed a custom-configuration script for
+	// `bash -c`: it turns real newlines into the literal two-character
+	// sequence \n, which bash inside double quotes does not convert back,
+	// and its escaping of nested "..." does not survive re-parsing across
+	// $(...) boundaries — producing "unexpected EOF while looking for
+	// matching `\"'" instead of running the script.
+	multilineScript := "set -e\n" +
+		`target_kernel="$(basename "$(ls -d /lib/modules/*-generic | sort -V | tail -1)")"` + "\n" +
+		`echo "$target_kernel"` + "\n"
+	for _, in := range []string{"$(echo pwned)", "`echo pwned`", "${PATH}", "a'b'c", multilineScript} {
 		cmd := exec.Command("bash", "-c", "printf %s "+shell.QuoteArg(in))
 		out, err := cmd.Output()
 		if err != nil {
