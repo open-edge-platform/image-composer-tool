@@ -68,7 +68,7 @@ export function PackageRepoBrowser({ repos, os, baseLock }: PackageRepoBrowserPr
       <p className="mt-2 text-sm text-slate-500">
         Check a repository to pull packages from it — the list on the right
         merges every checked repository&apos;s catalog, paged 100 at a time,
-        showing which repositories publish each package. Check &quot;Search
+        showing which repositories publish each package. Check &quot;Browse
         all repositories&quot; to browse the whole catalog instead, even
         repositories you haven&apos;t checked — picking a package from one
         checks it for you, the same as the search box above already does.
@@ -419,7 +419,7 @@ function MergedPane({
               onChange={(e) => setBrowseAllRepos(e.target.checked)}
               className="h-[13px] w-[13px] accent-[#0071c5]"
             />
-            Search all repositories
+            Browse all repositories
           </label>
         )}
         {hasCuratedPackages && !selectedOnly && (
