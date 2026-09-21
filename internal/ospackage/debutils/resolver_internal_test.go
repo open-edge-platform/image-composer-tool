@@ -492,6 +492,60 @@ func TestParseRepositoryMetadata_InstalledSize(t *testing.T) {
 	}
 }
 
+// TestParseRepositoryMetadata_ParsesVersionedProvides is a regression test
+// for the production Packages-stanza parser: every other ProvidesVer test
+// constructs PackageInfo manually, so a parser regression here would leave
+// real repository packages with an empty ProvidesVer while those resolver
+// tests kept passing. Confirms a real "Provides: qt6-base-abi (= 6.4.2)"
+// line ends up in both Provides (cleaned name) and ProvidesVer (raw
+// versioned term).
+func TestParseRepositoryMetadata_ParsesVersionedProvides(t *testing.T) {
+	buildPath := filepath.Join(t.TempDir(), "repo_main")
+	if err := os.MkdirAll(buildPath, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	stanza := "Package: libqt6core6t64\nVersion: 6.4.2+dfsg-21.1build5\nArchitecture: amd64\n" +
+		"Provides: qt6-base-abi (= 6.4.2)\n" +
+		"Filename: pool/universe/q/qt6-base/libqt6core6t64_6.4.2+dfsg-21.1build5_amd64.deb\n\n"
+
+	pkggzPath := filepath.Join(buildPath, "Packages.gz")
+	pkgFile, err := os.Create(pkggzPath)
+	if err != nil {
+		t.Fatalf("create Packages.gz: %v", err)
+	}
+	gzWriter := gzip.NewWriter(pkgFile)
+	if _, err := gzWriter.Write([]byte(stanza)); err != nil {
+		t.Fatalf("write gzip: %v", err)
+	}
+	if err := gzWriter.Close(); err != nil {
+		t.Fatalf("close gzip: %v", err)
+	}
+	if err := pkgFile.Close(); err != nil {
+		t.Fatalf("close file: %v", err)
+	}
+
+	checksum, err := computeFileSHA256(pkggzPath)
+	if err != nil {
+		t.Fatalf("checksum: %v", err)
+	}
+	releaseContent := fmt.Sprintf("SHA256:\n %s 1 main/binary-amd64/Packages.gz\n", checksum)
+	if err := os.WriteFile(filepath.Join(buildPath, "Release"), []byte(releaseContent), 0o644); err != nil {
+		t.Fatalf("write Release: %v", err)
+	}
+
+	pkgs := parseFixtureMetadata(t, "http://example.invalid:1/", buildPath)
+	if len(pkgs) != 1 {
+		t.Fatalf("expected exactly one package, got %d: %+v", len(pkgs), pkgs)
+	}
+	pkg := pkgs[0]
+	if len(pkg.Provides) != 1 || pkg.Provides[0] != "qt6-base-abi" {
+		t.Errorf("Provides = %v, want [qt6-base-abi]", pkg.Provides)
+	}
+	if len(pkg.ProvidesVer) != 1 || pkg.ProvidesVer[0] != "qt6-base-abi (= 6.4.2)" {
+		t.Errorf("ProvidesVer = %v, want [qt6-base-abi (= 6.4.2)]", pkg.ProvidesVer)
+	}
+}
+
 func TestParseRepositoryMetadata_ParsedCacheBypassForLoopback(t *testing.T) {
 	tests := []struct {
 		name        string

@@ -751,3 +751,64 @@ func TestPerformanceWithLargePackageSet(t *testing.T) {
 		t.Errorf("Resolution took too long: %v", elapsed)
 	}
 }
+
+// TestVersionedProvidesSatisfiesDependency is a regression test for a false
+// "conflicting package dependencies" error: a package whose own Version
+// differs from the version it declares in a Provides: line (e.g. Debian's
+// Qt6 "qt6-base-abi" ABI-pinning virtual package) must still satisfy an
+// exact-version dependency on that virtual name, checked against the
+// *provided* version, not the provider's own Version.
+//
+// Reproduces the real Ubuntu noble universe package libqt6core6t64, which
+// Provides "qt6-base-abi (= 6.4.2)" at its own Version
+// "6.4.2+dfsg-21.1build5", required by two separate consumers (mirroring
+// libqt6gui6t64 and another Qt6 module) each Depends-ing on
+// "qt6-base-abi (= 6.4.2)". The first consumer resolves qt6-base-abi fresh
+// (exercising resolveMultiCandidates); the second encounters it already
+// resolved (exercising the "already resolved, check conflict" path) — real
+// apt/dpkg accepts both without issue.
+func TestVersionedProvidesSatisfiesDependency(t *testing.T) {
+	all := []ospackage.PackageInfo{
+		{
+			Name:        "libqt6core6t64",
+			Version:     "6.4.2+dfsg-21.1build5",
+			URL:         "http://archive.ubuntu.com/ubuntu/pool/universe/q/qt6-base/libqt6core6t64_6.4.2+dfsg-21.1build5_amd64.deb",
+			Provides:    []string{"qt6-base-abi"},
+			ProvidesVer: []string{"qt6-base-abi (= 6.4.2)"},
+		},
+		{
+			Name:        "libqt6gui6t64",
+			Version:     "6.4.2+dfsg-21.1build5",
+			URL:         "http://archive.ubuntu.com/ubuntu/pool/universe/q/qt6-base/libqt6gui6t64_6.4.2+dfsg-21.1build5_amd64.deb",
+			Requires:    []string{"qt6-base-abi"},
+			RequiresVer: []string{"qt6-base-abi (= 6.4.2)"},
+		},
+		{
+			Name:        "libqt6widgets6t64",
+			Version:     "6.4.2+dfsg-21.1build5",
+			URL:         "http://archive.ubuntu.com/ubuntu/pool/universe/q/qt6-base/libqt6widgets6t64_6.4.2+dfsg-21.1build5_amd64.deb",
+			Requires:    []string{"qt6-base-abi"},
+			RequiresVer: []string{"qt6-base-abi (= 6.4.2)"},
+		},
+	}
+
+	req := []ospackage.PackageInfo{
+		{Name: "libqt6gui6t64", Version: "6.4.2+dfsg-21.1build5"},
+		{Name: "libqt6widgets6t64", Version: "6.4.2+dfsg-21.1build5"},
+	}
+
+	result, err := debutils.ResolveDependencies(req, all)
+	if err != nil {
+		t.Fatalf("expected the versioned Provides to satisfy both dependents, got error: %v", err)
+	}
+
+	names := map[string]bool{}
+	for _, pkg := range result {
+		names[pkg.Name] = true
+	}
+	for _, want := range []string{"libqt6gui6t64", "libqt6widgets6t64", "libqt6core6t64"} {
+		if !names[want] {
+			t.Errorf("expected %s in the resolved set, got %+v", want, result)
+		}
+	}
+}

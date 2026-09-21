@@ -30,6 +30,12 @@ type VersionConstraint struct {
 	Op          string
 	Ver         string
 	Alternative string // Alternative package name for constraints like "logsave | e2fsprogs (<< 1.45.3-1~)"
+	// AlternativeTerms is the "|"-joined RAW alternative terms (name plus its
+	// own version constraint, e.g. "e2fsprogs (<< 1.45.3-1~)"), unlike
+	// Alternative which only carries cleaned names. Needed whenever deciding
+	// an OR edge is satisfied requires checking the alternative's OWN version
+	// constraint, not just its presence.
+	AlternativeTerms string
 }
 
 func isGlobPattern(pattern string) bool {
@@ -126,7 +132,11 @@ func GenerateDot(pkgs []ospackage.PackageInfo, file string, pkgSources map[strin
 // v4: PackageInfo.HasInstalledSize is now parsed alongside InstalledSizeBytes to
 // distinguish an explicit zero footprint from a missing size; a v3 cache would
 // report every package as HasInstalledSize=false (treated as unknown).
-const parsedPackageCacheVersion = 4
+// v5: PackageInfo.ProvidesVer is now parsed from Provides: (mirroring Breaks); a
+// v4 cache would report every package's ProvidesVer as empty, so a version
+// constraint on a virtual capability would fall back to comparing against the
+// provider's own Version instead of what it actually declares for that name.
+const parsedPackageCacheVersion = 5
 
 // inReleaseSentinel is passed as releaseSign to ParseRepositoryMetadata to
 // mean "releaseFile is a combined InRelease file, not a detached signature
@@ -616,6 +626,17 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 				}
 			}
 		case "Provides":
+			// Provides forbids "|" alternatives per Debian policy, like Breaks, so
+			// each comma term is a single package. Keep the raw terms too (as
+			// ProvidesVer, mirroring Breaks) so a versioned dependency on a virtual
+			// name can be checked against the version this package actually
+			// declares for it, not against this package's own Version.
+			for _, term := range strings.Split(val, ",") {
+				if term = strings.TrimSpace(term); term != "" {
+					pkg.ProvidesVer = append(pkg.ProvidesVer, term)
+				}
+			}
+
 			// Split provides by comma and trim spaces, remove version constraints
 			deps := strings.Split(val, ",")
 			for i := range deps {
@@ -962,6 +983,21 @@ func ResolveDependencies(requested []ospackage.PackageInfo, all []ospackage.Pack
 	}
 	neededSet := make(map[string]struct{})
 	resolvedDeps := make(map[string]ospackage.PackageInfo) // Track resolved dependencies for conflict detection
+	// depVersionConstraints accumulates every version constraint any processed
+	// parent has placed on a given dependency name, not just the one currently
+	// being checked. A constraint-driven replacement (below) must be checked
+	// against this full history: filtering only against the CURRENT parent's
+	// constraint could pick a candidate that satisfies the parent triggering
+	// the check while breaking an earlier parent's already-satisfied (and
+	// otherwise unrevisited) requirement on the same name.
+	depVersionConstraints := make(map[string][]VersionConstraint)
+	// requiredDepNames records every dependency name actually traversed as a
+	// real Requires edge (including an OR edge's resolved alternative), as
+	// opposed to rememberResolvedDependency's own-name bookkeeping alias it
+	// sets for EVERY selected provider whether or not anything ever depended
+	// on that name directly. packageStillRequired must only treat the former
+	// as evidence a package is independently needed.
+	requiredDepNames := make(map[string]struct{})
 	// seedByName holds the explicitly requested packages (the resolution seed) keyed
 	// by name. It lets an OR-dependency prefer an alternative the caller already asked
 	// for, even before that alternative has been dequeued into neededSet/resolvedDeps,
@@ -970,6 +1006,52 @@ func ResolveDependencies(requested []ospackage.PackageInfo, all []ospackage.Pack
 	for _, pi := range requested {
 		seedByName[pi.Name] = pi
 	}
+	// selectedVersionsLookup returns every version name is already selected
+	// under (as a resolved dependency, a requested seed, or via either's
+	// Provides:) — potentially more than one, since different selected
+	// packages can Provide the same virtual name at different versions. An
+	// empty-string entry means "selected but concrete version unknown". A nil
+	// slice means name is not selected at all. Shared by the OR-dependency
+	// skip decision below and the stale-OR-edge constraint skip in the
+	// replacement path further down: callers must check the constraint
+	// against EVERY returned version, not just the first — collapsing to one
+	// arbitrary match (e.g. by stopping at the first Provides: hit found
+	// while ranging over a map) can miss a DIFFERENT selected provider that
+	// actually satisfies the alternative's own version constraint.
+	selectedVersionsLookup := func(name string) []string {
+		var versions []string
+		add := func(p ospackage.PackageInfo) {
+			ver, _ := versionForDependency(p, name)
+			versions = append(versions, ver)
+		}
+		if p, ok := resolvedDeps[name]; ok {
+			add(p)
+		}
+		if p, ok := seedByName[name]; ok {
+			add(p)
+		}
+		for _, p := range resolvedDeps {
+			for _, provided := range p.Provides {
+				if CleanDependencyName(provided) == name {
+					add(p)
+				}
+			}
+		}
+		for _, p := range seedByName {
+			for _, provided := range p.Provides {
+				if CleanDependencyName(provided) == name {
+					add(p)
+				}
+			}
+		}
+		if len(versions) == 0 {
+			if _, ok := neededSet[name]; ok {
+				versions = append(versions, "")
+			}
+		}
+		return versions
+	}
+
 	queue := make([]ospackage.PackageInfo, 0, len(requested))
 	for _, pi := range requested {
 		if pi.Version != "" {
@@ -1020,34 +1102,18 @@ func ResolveDependencies(requested []ospackage.PackageInfo, all []ospackage.Pack
 			// driver even though the non-free one was requested). Only the requested
 			// seed and already-resolved packages count as "selected"; the baseline is
 			// not visible to this repo-only resolver.
-			if alternativeAlreadySelected(cur.RequiresVer, depName, func(name string) (string, bool) {
-				if p, ok := resolvedDeps[name]; ok {
-					return p.Version, true
+			if alternativeAlreadySelected(cur.RequiresVer, depName, selectedVersionsLookup) {
+				// depName itself was never pulled in for this edge — the alternative
+				// that actually satisfied it is the genuine dependency, not depName.
+				// Recording depName here would let an obsolete alias (rememberResolvedDependency's
+				// own-name bookkeeping under depName, from some unrelated earlier
+				// resolution) masquerade as "still required" by this edge.
+				for _, alt := range satisfiedAlternativeNames(cur.RequiresVer, depName, selectedVersionsLookup) {
+					requiredDepNames[alt] = struct{}{}
 				}
-				if p, ok := seedByName[name]; ok {
-					return p.Version, true
-				}
-				for _, p := range resolvedDeps {
-					for _, provided := range p.Provides {
-						if CleanDependencyName(provided) == name {
-							return "", true
-						}
-					}
-				}
-				for _, p := range seedByName {
-					for _, provided := range p.Provides {
-						if CleanDependencyName(provided) == name {
-							return "", true
-						}
-					}
-				}
-				if _, ok := neededSet[name]; ok {
-					return "", true
-				}
-				return "", false
-			}) {
 				continue
 			}
+			requiredDepNames[depName] = struct{}{}
 			if resolvedPkg, seen := resolvedDeps[depName]; seen {
 				// Dependency already resolved - check for version conflicts
 
@@ -1067,48 +1133,82 @@ func ResolveDependencies(requested []ospackage.PackageInfo, all []ospackage.Pack
 							directConstraints = append(directConstraints, constraint)
 						}
 					}
-					versionConstraints = directConstraints
-					hasVersionConstraint = len(directConstraints) > 0
+					// hasDirectDependency cannot tell a truly bare dependency apart
+					// from depName merely being an OR term's own first alternative
+					// (both put depName in Requires). Decide per original dependency
+					// term, not from whether depName is a first alternative anywhere:
+					// strip alternative-tagged constraints when depName is NOT its OR
+					// term's own first alternative, OR when depName ALSO appears as a
+					// separate bare, mandatory term. In "logsave | e2fsprogs (<< X)"
+					// with e2fsprogs also a bare Requires entry, e2fsprogs is
+					// unconditionally required regardless of that unrelated OR clause,
+					// so its constraint must not apply. Likewise "Depends: foo,
+					// foo (= 1) | bar": foo is mandatory unconditionally, so the OR
+					// term's "= 1" pin must not be enforced against the mandatory foo
+					// (that edge is satisfiable via bar). Only for a pure OR term like
+					// "libfoo-abi (= 3) | fallback", where libfoo-abi is the term's own
+					// first alternative and not independently mandatory, is its pin
+					// enforced when selecting its providers.
+					if !isOwnFirstAlternative(cur.RequiresVer, depName) || hasBareMandatoryTerm(cur.RequiresVer, depName) {
+						versionConstraints = directConstraints
+						hasVersionConstraint = len(directConstraints) > 0
+					}
+				}
+
+				// The strip above only concerns whether resolvedPkg should be
+				// REPLACED for the bare mandatory term. When depName is ALSO an OR
+				// term's own first alternative (e.g. "Depends: foo, foo (= 1) |
+				// bar"), that OR term is a genuinely separate edge that the bare
+				// term's mandatory presence does not satisfy on its own — apt still
+				// requires foo (= 1) OR bar. Check each such edge independently and
+				// pull in its alternative when neither resolvedPkg nor an already
+				// selected alternative satisfies it, instead of silently treating
+				// the edge as met.
+				if isDirect && isOwnFirstAlternative(cur.RequiresVer, depName) && hasBareMandatoryTerm(cur.RequiresVer, depName) {
+					var missing bool
+					queue, missing = resolveUnmetOwnOREdges(cur, resolvedPkg, depName, all, selectedVersionsLookup,
+						queue, resolvedDeps, requiredDepNames, depVersionConstraints, &parentChildPairs)
+					gotMissingPkg = gotMissingPkg || missing
 				}
 
 				if hasVersionConstraint {
+					// Record these constraints for depName so a future replacement
+					// decision (for this or another parent) considers the full
+					// accumulated history, not just whichever parent is being
+					// checked at that moment.
+					depVersionConstraints[depName] = append(depVersionConstraints[depName], versionConstraints...)
+
 					var requiredVer string
 					var requiredDep string
 					// Check if the already-resolved package satisfies the version constraints
 					constraintsSatisfied := true
 					for _, constraint := range versionConstraints {
-						// Check if main package satisfies constraint
+						// Check if main package satisfies constraint. resolvedPkg is only
+						// ONE of possibly several already-selected providers of depName — a
+						// virtual capability can be independently satisfied by more than one
+						// real package (each pulled in via a different OR term naming the
+						// same first alternative) — so every version depName is currently
+						// selected under is checked, not just resolvedPkg's own, or a
+						// DIFFERENT already-satisfied edge on the same virtual name would be
+						// wrongly reported as a conflict.
 						mainSatisfied := false
 						if constraint.Op != "" && constraint.Ver != "" {
-							cmp, err := CompareDebianVersions(resolvedPkg.Version, constraint.Ver)
-							if err == nil {
-								switch constraint.Op {
-								case "=":
-									mainSatisfied = (cmp == 0)
-								case "<<", "<":
-									mainSatisfied = (cmp < 0)
-								case "<=":
-									mainSatisfied = (cmp <= 0)
-								case ">>", ">":
-									mainSatisfied = (cmp > 0)
-								case ">=":
-									mainSatisfied = (cmp >= 0)
+							for _, ver := range selectedVersionsLookup(depName) {
+								if ver != "" && debVersionSatisfies(ver, constraint.Op, constraint.Ver) {
+									mainSatisfied = true
+									break
 								}
 							}
 						}
 
-						// If main package doesn't satisfy and we have alternatives, check them
+						// If main package doesn't satisfy and we have alternatives, check them —
+						// using AlternativeTerms (raw, versioned terms) rather than the bare
+						// cleaned names in Alternative, so an alternative's OWN version
+						// constraint (e.g. "bar (>= 2)") is actually evaluated instead of
+						// treating any selected version of it as satisfying.
 						alternativeSatisfied := false
-						if !mainSatisfied && constraint.Alternative != "" {
-							alternatives := strings.Split(constraint.Alternative, "|")
-							for _, altName := range alternatives {
-								altName = strings.TrimSpace(altName)
-								if _, altSeen := resolvedDeps[altName]; altSeen {
-									// Alternative package is resolved, check if it satisfies (no version constraint for alternatives)
-									alternativeSatisfied = true
-									break
-								}
-							}
+						if !mainSatisfied && constraint.AlternativeTerms != "" {
+							_, alternativeSatisfied = edgeSatisfyingAlternative(strings.Split(constraint.AlternativeTerms, "|"), selectedVersionsLookup)
 						}
 
 						if !mainSatisfied && !alternativeSatisfied {
@@ -1120,47 +1220,80 @@ func ResolveDependencies(requested []ospackage.PackageInfo, all []ospackage.Pack
 					}
 
 					if !constraintsSatisfied {
-						// Check if replacement is allowed - if current constraint has exact version (=)
-						// and resolved package has different version, this is a conflict
-						hasExactVersionConstraint := false
-						for _, constraint := range versionConstraints {
-							if constraint.Op == "=" {
-								hasExactVersionConstraint = true
-								break
-							}
-						}
-
-						// Before throwing error, check if there's a higher priority candidate available
-						// But only allow replacement if we don't have an exact version conflict
+						// Before throwing error, check if there's a higher priority candidate
+						// available. Always filter against every constraint any processed
+						// parent has recorded for depName (not just cur's, and regardless of
+						// whether any of them is exact): a candidate that makes it through
+						// this filter by definition satisfies every exact pin too, so gating
+						// the search itself on "is any recorded constraint exact" would reject
+						// perfectly valid replacements (e.g. an earlier ">= 1.0" plus a new
+						// "= 2.0" both accepting version 2.0) before ever looking for one.
 						candidates := findAllCandidates(depName, all)
 
-						if len(candidates) > 0 && !hasExactVersionConstraint {
-							// Find candidates that satisfy the version constraint
+						if len(candidates) > 0 {
+							// Find candidates that satisfy EVERY constraint any processed
+							// parent has placed on depName, not just cur's — otherwise the
+							// replacement could satisfy cur while silently breaking an
+							// earlier parent's already-verified requirement.
 							var satisfyingCandidates []ospackage.PackageInfo
 							for _, candidate := range candidates {
 								candidateSatisfies := true
-								for _, constraint := range versionConstraints {
+								for _, constraint := range depVersionConstraints[depName] {
 									if constraint.Op != "" && constraint.Ver != "" {
-										cmp, err := CompareDebianVersions(candidate.Version, constraint.Ver)
-										if err == nil {
-											satisfied := false
-											switch constraint.Op {
-											case "=":
-												satisfied = (cmp == 0)
-											case "<<", "<":
-												satisfied = (cmp < 0)
-											case "<=":
-												satisfied = (cmp <= 0)
-											case ">>", ">":
-												satisfied = (cmp > 0)
-											case ">=":
-												satisfied = (cmp >= 0)
-											}
-											if !satisfied {
-												candidateSatisfies = false
-												break
+										// A constraint recorded from an OR edge (e.g. "foo (= 1) |
+										// bar (>= 2)") is obsolete once that edge is satisfied by a
+										// DIFFERENT, already-selected alternative — the parent it
+										// came from no longer needs depName's specific version,
+										// so enforcing it here would report phantom conflicts
+										// against unrelated later requirements. Uses AlternativeTerms
+										// (the raw, versioned terms) so the alternative's OWN version
+										// constraint is actually checked, and the same provider-aware
+										// selectedVersionsLookup as the OR-dependency skip decision
+										// above, so a virtual capability satisfied via Provides: (not
+										// just a package selected under its own name) is recognized
+										// too, across EVERY selected provider of that name rather than
+										// an arbitrary single match.
+										if constraint.AlternativeTerms != "" && edgeSatisfiedByOtherAlternative(strings.Split(constraint.AlternativeTerms, "|"), selectedVersionsLookup) {
+											continue
+										}
+										if ver, ok := versionForDependency(candidate, depName); ok && debVersionSatisfies(ver, constraint.Op, constraint.Ver) {
+											continue
+										}
+										// The candidate itself doesn't meet this constraint. When it
+										// came from an OR edge, that edge can still be satisfied by
+										// resolving its OWN fallback alternative instead of depName —
+										// the edge's fallback was only unselected so far because
+										// depName itself used to satisfy it directly; apt's "|"
+										// semantics don't require every future replacement of depName
+										// to keep meeting a pin that merely existed to satisfy that
+										// edge, as long as the edge is met some other way. Actually
+										// queuing the resolved fallback happens once, after the final
+										// replacement candidate is committed to below — not here,
+										// since this loop only evaluates whether THIS candidate is
+										// acceptable.
+										if constraint.AlternativeTerms != "" {
+											if _, _, _, bridgeable := bridgeableOREdge(cur, reconstructOREdgeTerm(depName, constraint), all, selectedVersionsLookup); bridgeable {
+												continue
 											}
 										}
+										candidateSatisfies = false
+										break
+									}
+								}
+								// A candidate satisfying depName's own constraints can still
+								// violate a genuine constraint some OTHER parent placed
+								// directly on the candidate's OWN real-package name — e.g. a
+								// newer "provider" version chosen here to satisfy a virtual
+								// capability, when an earlier parent pinned "provider (= 1)"
+								// directly. Two versions of the SAME package name cannot
+								// coexist in the closure, so this must be rejected at
+								// selection time (forcing either a different candidate or a
+								// genuine conflict below) rather than relying on
+								// packageStillRequired, which can only keep-or-drop the OLD
+								// package and cannot un-pick an already-chosen replacement.
+								if candidateSatisfies && candidate.Name != depName {
+									if !aliasVersionCovered(candidate, candidate.Name, depVersionConstraints[candidate.Name]) {
+										candidateSatisfies = false
 									}
 								}
 								if candidateSatisfies {
@@ -1170,7 +1303,7 @@ func ResolveDependencies(requested []ospackage.PackageInfo, all []ospackage.Pack
 
 							if len(satisfyingCandidates) > 0 {
 								// Pick the best candidate using the resolver
-								newCandidate, err := resolveMultiCandidates(cur, satisfyingCandidates)
+								newCandidate, err := resolveMultiCandidates(cur, depName, satisfyingCandidates)
 								if err == nil {
 									// The resolved package violates a version constraint
 									// required by the current package. A candidate that
@@ -1182,18 +1315,89 @@ func ResolveDependencies(requested []ospackage.PackageInfo, all []ospackage.Pack
 										newCandidate.Name, newCandidate.Version,
 										cur.Name, cur.Version)
 
-									// Remove old package from result and neededSet
-									delete(neededSet, resolvedPkg.Name)
-									for i, pkg := range result {
-										if pkg.Name == resolvedPkg.Name && pkg.Version == resolvedPkg.Version {
-											result = append(result[:i], result[i+1:]...)
-											break
+									// A same-name replacement (a version bump of the SAME real
+									// package) cannot keep the old version around for an alias
+									// newCandidate fails to cover: only one version of a given
+									// package name can exist in the closure, so the later-queued
+									// newCandidate is skipped via neededSet and the OLD,
+									// constraint-violating version is silently retained. When the
+									// old version uniquely satisfies a still-required capability
+									// that newCandidate cannot (e.g. keeping provider v1 for
+									// "old-capability (= 1)" while provider v2 is needed for
+									// "shared-abi (>= 2)"), the two requirements are genuinely
+									// unsatisfiable by a single package name — surface a conflict
+									// rather than shipping a version that violates one of them.
+									if alias, conflict := uncoveredAliasOnSameNameReplacement(resolvedPkg, newCandidate, resolvedDeps, depName, requiredDepNames, depVersionConstraints); conflict {
+										return nil, fmt.Errorf("conflicting package dependencies: cannot replace %s_%s with %s_%s to satisfy %q because the older version is still required for %q",
+											resolvedPkg.Name, resolvedPkg.Version, newCandidate.Name, newCandidate.Version, depName, alias)
+									}
+
+									// The old package may still independently satisfy an explicit
+									// seed, or another already-established resolvedDeps alias
+									// (e.g. a different capability it also Provides) that
+									// newCandidate does not cover. Removing it outright would
+									// silently break that earlier, unrelated requirement without
+									// ever re-resolving it, so only drop it from the closure when
+									// nothing else still needs it — otherwise both packages are
+									// kept, and only depName's own resolution is repointed.
+									if _, isSeed := seedByName[resolvedPkg.Name]; isSeed && resolvedPkg.Name == newCandidate.Name {
+										// Keep the seed's own tracked version in sync with the
+										// replacement: otherwise selectedVersionsLookup would keep
+										// reporting the ALREADY-SUPERSEDED requested version as
+										// still selected (e.g. a later "foo | bar (= 1)" edge could
+										// be wrongly skipped off a stale bar = 1 seed entry after
+										// bar was actually replaced with bar = 2).
+										seedByName[resolvedPkg.Name] = newCandidate
+									}
+									if !packageStillRequired(resolvedPkg, depName, resolvedDeps, newCandidate, requiredDepNames, seedByName, depVersionConstraints) {
+										// Remove old package from result and neededSet
+										delete(neededSet, resolvedPkg.Name)
+										for i, pkg := range result {
+											if pkg.Name == resolvedPkg.Name && pkg.Version == resolvedPkg.Version {
+												result = append(result[:i], result[i+1:]...)
+												break
+											}
 										}
+
+										// The old package may still be sitting unprocessed in queue
+										// (resolvedDeps is populated at queue-time, not dequeue-time).
+										// Drop any queued copy, and clean up resolvedDeps aliases that
+										// pointed at the old package: depName is repointed below, but
+										// any OTHER alias (the old package's own name, or another
+										// virtual name only it Provides) must be dropped rather than
+										// repointed, since newCandidate may not satisfy that alias at
+										// all — leaving it pointed at the old package's replacement
+										// would make a later direct dependency on that alias wrongly
+										// appear pre-resolved instead of triggering fresh resolution.
+										queue = replaceQueuedAndAliasedDependency(queue, resolvedDeps, resolvedPkg, newCandidate, depVersionConstraints)
+									}
+
+									// A recorded OR-edge constraint that newCandidate itself doesn't
+									// meet, and that no already-selected alternative satisfies
+									// either, is exactly why newCandidate was let through above:
+									// bridgeableOREdge found its fallback resolvable. Commit that
+									// resolution now — resolve and queue the fallback for real — or
+									// the "|" it came from would silently go unsatisfied.
+									for _, constraint := range depVersionConstraints[depName] {
+										if constraint.Op == "" || constraint.Ver == "" || constraint.AlternativeTerms == "" {
+											continue
+										}
+										if ver, ok := versionForDependency(newCandidate, depName); ok && debVersionSatisfies(ver, constraint.Op, constraint.Ver) {
+											continue
+										}
+										reqVer := reconstructOREdgeTerm(depName, constraint)
+										altName, altCandidate, needsQueue, bridged := bridgeableOREdge(cur, reqVer, all, selectedVersionsLookup)
+										if !bridged || !needsQueue {
+											continue
+										}
+										log.Infof("Successfully resolved alternative %q version %q for OR edge %q left unmet by replacing %s with %s_%s",
+											altName, altCandidate.Version, reqVer, depName, newCandidate.Name, newCandidate.Version)
+										queue = queueResolvedAlternative(cur, reqVer, altName, altCandidate, queue, resolvedDeps, requiredDepNames, depVersionConstraints, &parentChildPairs)
 									}
 
 									// Add new candidate to queue and resolvedDeps
 									queue = append(queue, newCandidate)
-									resolvedDeps[depName] = newCandidate
+									rememberResolvedDependency(resolvedDeps, depName, newCandidate)
 									AddParentChildPair(cur, newCandidate, &parentChildPairs)
 									continue
 								}
@@ -1207,49 +1411,99 @@ func ResolveDependencies(requested []ospackage.PackageInfo, all []ospackage.Pack
 
 			candidates := findAllCandidates(depName, all)
 			if len(candidates) >= 1 {
+				// Record cur's constraints on depName so a later replacement
+				// decision for this same dependency (triggered by a different
+				// parent) sees this parent's requirement too, not just its own.
+				if vcs, hasVC := extractVersionRequirement(cur.RequiresVer, depName); hasVC {
+					depVersionConstraints[depName] = append(depVersionConstraints[depName], vcs...)
+				}
 				// Pick the candidate using the resolver and add it to the queue
-				chosenCandidate, err := resolveMultiCandidates(cur, candidates)
+				chosenCandidate, err := resolveMultiCandidates(cur, depName, candidates)
 				if err != nil {
-					gotMissingPkg = true
-					AddParentMissingChildPair(cur, depName+"(missing)", &parentChildPairs)
-					log.Warnf("failed to resolve multiple candidates for dependency %q of package %q: %v", depName, cur.Name, err)
+					// depName has candidates, but none satisfy its own (first
+					// alternative) version constraint — e.g. "libfoo-abi (= 3) |
+					// fallback" with only libfoo-abi (= 2) available. This can also
+					// happen because resolveMultiCandidates aggregates EVERY
+					// RequiresVer term naming depName first into one candidate
+					// search, which fails whenever two such terms pin mutually
+					// exclusive versions even though each is individually
+					// satisfiable (e.g. "foo (= 1) | bar, foo (= 2) | baz" with foo
+					// (= 1) available: foo (= 1) satisfies the first term directly,
+					// and only the second needs its fallback baz). Resolve every
+					// raw term independently instead of failing outright.
+					chosen, alternatives, okAll := resolveDependencyTermsIndependently(cur, depName, candidates, all)
+					for _, res := range alternatives {
+						log.Infof("Successfully resolved alternative %q version %q for %q (no primary candidate satisfied its constraint)", res.Name, res.Package.Version, depName)
+						// Scope to res.ReqVer (the one OR term that selected this
+						// alternative), not every cur.RequiresVer term naming res.Name —
+						// otherwise a different, already-satisfied OR edge that happens
+						// to share this alternative's name would wrongly contribute its
+						// own constraint here too.
+						if altVCs, hasAltVC := extractVersionRequirement([]string{res.ReqVer}, res.Name); hasAltVC {
+							depVersionConstraints[res.Name] = append(depVersionConstraints[res.Name], altVCs...)
+						}
+						requiredDepNames[res.Name] = struct{}{}
+						queue = append(queue, res.Package)
+						rememberResolvedDependency(resolvedDeps, res.Name, res.Package)
+						AddParentChildPair(cur, res.Package, &parentChildPairs)
+					}
+					if chosen != nil {
+						log.Infof("Successfully resolved %q version %q to satisfy its own bare/first-alternative term(s)", depName, chosen.Version)
+						requiredDepNames[depName] = struct{}{}
+						queue = append(queue, *chosen)
+						rememberResolvedDependency(resolvedDeps, depName, *chosen)
+						AddParentChildPair(cur, *chosen, &parentChildPairs)
+					}
+					if !okAll {
+						gotMissingPkg = true
+						AddParentMissingChildPair(cur, depName+"(missing)", &parentChildPairs)
+						log.Warnf("failed to resolve multiple candidates for dependency %q of package %q: %v", depName, cur.Name, err)
+					}
 					continue
 				}
 				queue = append(queue, chosenCandidate)
 				rememberResolvedDependency(resolvedDeps, depName, chosenCandidate) // Track resolved dependency
 				AddParentChildPair(cur, chosenCandidate, &parentChildPairs)
+				// depName being both bare-mandatory and an OR term's own first
+				// alternative means resolveMultiCandidates above picked
+				// chosenCandidate with that OR term's version pin stripped (the
+				// bare term alone justifies picking it); the OR term is a separate
+				// edge that must still be checked against chosenCandidate.
+				if isOwnFirstAlternative(cur.RequiresVer, depName) && hasBareMandatoryTerm(cur.RequiresVer, depName) {
+					var missing bool
+					queue, missing = resolveUnmetOwnOREdges(cur, chosenCandidate, depName, all, selectedVersionsLookup,
+						queue, resolvedDeps, requiredDepNames, depVersionConstraints, &parentChildPairs)
+					gotMissingPkg = gotMissingPkg || missing
+				}
 				continue
 			} else {
-				// No candidates for primary dependency, check for alternatives
-				versionConstraints, _ := extractVersionRequirement(cur.RequiresVer, depName)
-				alternativeResolved := false
-				for _, constraint := range versionConstraints {
-					if constraint.Alternative != "" {
-						alternatives := strings.Split(constraint.Alternative, "|")
-						for _, altName := range alternatives {
-							altName = strings.TrimSpace(altName)
-							altCandidates := findAllCandidates(altName, all)
-							if len(altCandidates) >= 1 {
-								chosenCandidate, err := resolveMultiCandidates(cur, altCandidates)
-								if err == nil {
-									log.Infof("Successfully resolved alternative %q version %q for missing dependency %q", altName, chosenCandidate.Version, depName)
-									queue = append(queue, chosenCandidate)
-									rememberResolvedDependency(resolvedDeps, altName, chosenCandidate) // Track resolved alternative dependency
-									AddParentChildPair(cur, chosenCandidate, &parentChildPairs)
-									alternativeResolved = true
-									break
-								} else {
-									log.Warnf("Failed to resolve alternative %q for %q: %v", altName, depName, err)
-								}
-							}
+				// No candidates for primary dependency at all — depName can only
+				// be satisfied via OR terms' alternatives; bare terms naming
+				// depName cannot be satisfied by anything, and are reported below.
+				_, alternatives, okAll := resolveDependencyTermsIndependently(cur, depName, nil, all)
+				if len(alternatives) > 0 {
+					for _, res := range alternatives {
+						log.Infof("Successfully resolved alternative %q version %q for missing dependency %q", res.Name, res.Package.Version, depName)
+						// Record res.Name's own constraint(s) before registering it:
+						// constraint.Alternative only carries alternative NAMES
+						// (CleanDependencyName strips any version), so its own
+						// version requirement — the one resolveMultiCandidates just
+						// used internally to pick res.Package — has to be
+						// re-extracted here too, or a later replacement of this
+						// alternative would only ever see ITS OWN constraint, never
+						// this parent's. Scope to res.ReqVer, not every cur.RequiresVer
+						// term naming res.Name, so an unrelated OR edge sharing this
+						// alternative's name can't leak its own constraint in here.
+						if altVCs, hasAltVC := extractVersionRequirement([]string{res.ReqVer}, res.Name); hasAltVC {
+							depVersionConstraints[res.Name] = append(depVersionConstraints[res.Name], altVCs...)
 						}
-						if alternativeResolved {
-							break
-						}
+						requiredDepNames[res.Name] = struct{}{}
+						queue = append(queue, res.Package)
+						rememberResolvedDependency(resolvedDeps, res.Name, res.Package) // Track resolved alternative dependency
+						AddParentChildPair(cur, res.Package, &parentChildPairs)
 					}
 				}
-
-				if !alternativeResolved {
+				if !okAll {
 					log.Warnf("no candidates found for dependency %q of package %q", depName, cur.Name)
 					gotMissingPkg = true
 					AddParentMissingChildPair(cur, depName+"(missing)", &parentChildPairs)
@@ -1861,6 +2115,169 @@ func rememberResolvedDependency(resolvedDeps map[string]ospackage.PackageInfo, k
 	resolvedDeps[pkg.Name] = pkg
 }
 
+// packageStillRequired reports whether resolvedPkg must remain in the
+// resolved closure independent of depName — the dependency currently being
+// replaced with newCandidate — because it is still the resolvedDeps value for
+// some OTHER dependency name that newCandidate does not also satisfy (its own
+// name, or a capability newCandidate Provides). A provider satisfying two
+// unrelated capabilities must not be dropped from the result just because a
+// stricter constraint on ONE of those capabilities forces a replacement for
+// it — the other, already-established requirement was never re-resolved and
+// would otherwise silently end up unsatisfied. A seed's own VERSION can still
+// be legitimately replaced by constraint resolution (e.g. a later dependency
+// pinning it below the originally requested version) when newCandidate keeps
+// the SAME name; only a replacement that switches to a DIFFERENTLY named
+// package is blocked for a seed, since the user explicitly asked for that
+// package by name and it must not silently disappear from the closure just
+// because some other capability it happens to also provide got reassigned.
+//
+// requiredDepNames distinguishes a genuine dependency edge from
+// rememberResolvedDependency's own-name bookkeeping alias, which it sets for
+// EVERY selected provider regardless of whether anything ever actually
+// depended on that name directly — without this check, a virtual capability
+// replaced by a differently-named provider would always look "independently
+// required" via its own stale bookkeeping alias, defeating replacement
+// entirely.
+func packageStillRequired(resolvedPkg ospackage.PackageInfo, depName string, resolvedDeps map[string]ospackage.PackageInfo, newCandidate ospackage.PackageInfo, requiredDepNames map[string]struct{}, seedByName map[string]ospackage.PackageInfo, depVersionConstraints map[string][]VersionConstraint) bool {
+	if _, isSeed := seedByName[resolvedPkg.Name]; isSeed && resolvedPkg.Name != newCandidate.Name {
+		return true
+	}
+	newProvides := make(map[string]struct{}, len(newCandidate.Provides))
+	for _, p := range newCandidate.Provides {
+		newProvides[CleanDependencyName(p)] = struct{}{}
+	}
+	for k, v := range resolvedDeps {
+		if k == depName {
+			continue
+		}
+		if v.Name != resolvedPkg.Name || v.Version != resolvedPkg.Version {
+			continue
+		}
+		if k == newCandidate.Name {
+			// Safe unconditionally: the candidate-filtering search that chose
+			// newCandidate already rejected any candidate whose own real name
+			// violates a genuine accumulated constraint (see the
+			// aliasVersionCovered check next to depVersionConstraints[candidate.Name]),
+			// so newCandidate is guaranteed to satisfy its own-name alias here.
+			continue
+		}
+		if _, covered := newProvides[k]; covered && aliasVersionCovered(newCandidate, k, depVersionConstraints[k]) {
+			continue
+		}
+		if _, genuine := requiredDepNames[k]; !genuine {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// uncoveredAliasOnSameNameReplacement reports the first genuine virtual alias
+// that resolvedPkg satisfies but newCandidate does not, when both share the
+// same real package name. Because only one version of a given package name can
+// exist in the closure, such an alias cannot be preserved by keeping resolvedPkg
+// alongside newCandidate: they would collide on Name, the later-queued
+// newCandidate is skipped via neededSet, and the OLD, constraint-violating
+// version is silently retained. A non-empty alias therefore signals a genuine
+// conflict the caller must surface rather than a package that can coexist.
+// Aliases newCandidate covers by name AND version (aliasVersionCovered), the
+// shared real name itself, and depName (repointed to newCandidate by the
+// caller) are not conflicts. Only aliases in requiredDepNames count — a
+// convenience-key alias nothing genuinely requested is not a real requirement.
+func uncoveredAliasOnSameNameReplacement(resolvedPkg, newCandidate ospackage.PackageInfo, resolvedDeps map[string]ospackage.PackageInfo, depName string, requiredDepNames map[string]struct{}, depVersionConstraints map[string][]VersionConstraint) (string, bool) {
+	if resolvedPkg.Name != newCandidate.Name {
+		return "", false
+	}
+	newProvides := make(map[string]struct{}, len(newCandidate.Provides))
+	for _, p := range newCandidate.Provides {
+		newProvides[CleanDependencyName(p)] = struct{}{}
+	}
+	for k, v := range resolvedDeps {
+		if k == depName || k == newCandidate.Name {
+			continue
+		}
+		if v.Name != resolvedPkg.Name || v.Version != resolvedPkg.Version {
+			continue
+		}
+		if _, genuine := requiredDepNames[k]; !genuine {
+			continue
+		}
+		if _, covered := newProvides[k]; covered && aliasVersionCovered(newCandidate, k, depVersionConstraints[k]) {
+			continue
+		}
+		return k, true
+	}
+	return "", false
+}
+
+// aliasVersionCovered reports whether newCandidate actually satisfies every
+// accumulated version constraint recorded for alias, not just whether
+// newCandidate provides alias BY NAME. A name-only match is not enough: e.g.
+// an earlier parent pinning "old-only-capability (= 1)" is not covered by a
+// replacement that also provides "old-only-capability" but only at "= 2". An
+// alias with no recorded constraints is covered by name alone, since nothing
+// ever pinned a specific version on it.
+func aliasVersionCovered(newCandidate ospackage.PackageInfo, alias string, constraints []VersionConstraint) bool {
+	for _, c := range constraints {
+		if c.Op == "" || c.Ver == "" {
+			continue
+		}
+		ver, ok := versionForDependency(newCandidate, alias)
+		if !ok {
+			return false
+		}
+		if !debVersionSatisfies(ver, c.Op, c.Ver) {
+			return false
+		}
+	}
+	return true
+}
+
+// replaceQueuedAndAliasedDependency returns queue with every not-yet-processed
+// entry for old (matched by Name+Version) removed. It also cleans up
+// resolvedDeps aliases that pointed at old (rememberResolvedDependency can
+// register a package under multiple keys — its own name plus whatever virtual
+// name it was queued to satisfy): an alias newCandidate genuinely still
+// satisfies (its own name, or a capability it also Provides AT A VERSION that
+// satisfies every accumulated constraint on that alias, per
+// aliasVersionCovered) is repointed at newCandidate; every other alias is
+// removed rather than repointed, since newCandidate may not satisfy it at all
+// — leaving a stale alias pointed at an unrelated (or version-incompatible)
+// replacement would make a later direct dependency on that name wrongly
+// appear pre-resolved instead of triggering fresh resolution. Only call this
+// once packageStillRequired has confirmed old is safe to fully remove from
+// the closure. The caller is responsible for (re)registering depName itself
+// afterward.
+func replaceQueuedAndAliasedDependency(queue []ospackage.PackageInfo, resolvedDeps map[string]ospackage.PackageInfo, old, newCandidate ospackage.PackageInfo, depVersionConstraints map[string][]VersionConstraint) []ospackage.PackageInfo {
+	filtered := make([]ospackage.PackageInfo, 0, len(queue))
+	for _, q := range queue {
+		if q.Name == old.Name && q.Version == old.Version {
+			continue
+		}
+		filtered = append(filtered, q)
+	}
+
+	newProvides := make(map[string]struct{}, len(newCandidate.Provides))
+	for _, p := range newCandidate.Provides {
+		newProvides[CleanDependencyName(p)] = struct{}{}
+	}
+	for k, v := range resolvedDeps {
+		if v.Name != old.Name || v.Version != old.Version {
+			continue
+		}
+		if k == newCandidate.Name {
+			resolvedDeps[k] = newCandidate
+			continue
+		}
+		if _, ok := newProvides[k]; ok && aliasVersionCovered(newCandidate, k, depVersionConstraints[k]) {
+			resolvedDeps[k] = newCandidate
+			continue
+		}
+		delete(resolvedDeps, k)
+	}
+	return filtered
+}
+
 // Helper function to resolve multiple candidates by picking the last one
 // extractRepoBase extracts the Debian repo base URL (everything up to /pool/)
 func extractRepoBase(rawURL string) (string, error) {
@@ -1880,19 +2297,349 @@ func extractRepoBase(rawURL string) (string, error) {
 	return base, nil
 }
 
+// alternativeResolution pairs an OR-edge's resolved alternative name with the
+// package chosen to satisfy it. ReqVer is the single raw RequiresVer term that
+// produced this alternative, so callers can extract that edge's own version
+// constraint without picking up constraints from any other term that also
+// happens to name the same alternative.
+type alternativeResolution struct {
+	Name    string
+	Package ospackage.PackageInfo
+	ReqVer  string
+}
+
+// resolveAlternativeForTerm tries one raw OR term's remaining alternatives (in
+// order) and returns the first one resolveMultiCandidates can actually satisfy.
+func resolveAlternativeForTerm(cur ospackage.PackageInfo, reqVer string, all []ospackage.PackageInfo) (altName string, chosen ospackage.PackageInfo, ok bool) {
+	log := logger.Logger()
+	alts := strings.Split(reqVer, "|")
+	if len(alts) < 2 {
+		return "", ospackage.PackageInfo{}, false
+	}
+	// resolveMultiCandidates aggregates version constraints for an alternative
+	// name from every RequiresVer term of the parent it's given, but this OR
+	// edge must be resolved independently of any other term that happens to
+	// name the same alternative (e.g. "foo | bar (= 1), baz | bar (= 2)") — so
+	// scope the parent it sees down to just this one term.
+	termParent := cur
+	termParent.RequiresVer = []string{reqVer}
+	for _, alt := range alts[1:] {
+		name := CleanDependencyName(strings.TrimSpace(alt))
+		if name == "" {
+			continue
+		}
+		altCandidates := findAllCandidates(name, all)
+		if len(altCandidates) == 0 {
+			continue
+		}
+		candidate, err := resolveMultiCandidates(termParent, name, altCandidates)
+		if err == nil {
+			return name, candidate, true
+		}
+		log.Warnf("Failed to resolve alternative %q for term %q: %v", name, reqVer, err)
+	}
+	return "", ospackage.PackageInfo{}, false
+}
+
+// termConstraintSatisfiedByCandidate reports whether candidate satisfies the
+// version constraint (if any) that raw RequiresVer term reqVer's own first
+// alternative places on depName. An unversioned first alternative is
+// satisfied by mere presence.
+func termConstraintSatisfiedByCandidate(reqVer, depName string, candidate ospackage.PackageInfo) bool {
+	alts := strings.Split(reqVer, "|")
+	name, op, ver := splitAltNameConstraint(strings.TrimSpace(alts[0]))
+	if name != depName {
+		return false
+	}
+	if op == "" || ver == "" {
+		return true
+	}
+	candidateVer, ok := versionForDependency(candidate, depName)
+	return ok && debVersionSatisfies(candidateVer, op, ver)
+}
+
+// findSatisfyingCandidate returns the first of candidates that satisfies the
+// version constraint (if any) reqVer's own first alternative places on
+// depName, per termConstraintSatisfiedByCandidate.
+func findSatisfyingCandidate(reqVer, depName string, candidates []ospackage.PackageInfo) (ospackage.PackageInfo, bool) {
+	for _, candidate := range candidates {
+		if termConstraintSatisfiedByCandidate(reqVer, depName, candidate) {
+			return candidate, true
+		}
+	}
+	return ospackage.PackageInfo{}, false
+}
+
+// resolveDependencyTermsIndependently resolves every raw RequiresVer term
+// whose own first alternative cleans to depName, INDEPENDENTLY of the others —
+// used when the aggregated resolveMultiCandidates call for depName fails
+// because it requires ONE candidate to satisfy every such term simultaneously,
+// which is impossible when two terms pin mutually exclusive exact versions
+// (e.g. "foo (= 1) | bar, foo (= 2) | baz"), even though each term
+// individually may be satisfiable (foo (= 1) directly; baz as (= 2)'s
+// fallback) — and when depName has no candidates at all. A bare (non-OR) term
+// has no alternative to fall back to: it can only be satisfied by SOME
+// candidate meeting ALL bare terms at once, since only one version of
+// depName can exist in the closure, so bare terms are resolved first and
+// jointly, before OR terms (which can each independently fall back) are
+// checked against whatever candidate the bare terms settled on.
+//
+// "Only one version can exist in the closure" holds for a REAL package name,
+// but depName is often virtual (findAllCandidates only returns Provides-based
+// candidates when no package is literally named depName): two DIFFERENTLY
+// NAMED real packages can independently provide different versions of the
+// same virtual capability and coexist, e.g. "virtual (= 1) | missing-a" and
+// "virtual (= 2) | missing-b" satisfied by two distinct providers. So once
+// chosen is fixed to a candidate whose Name differs from depName (a virtual
+// resolution, not depName's own real package), a later OR term that chosen
+// doesn't satisfy is not necessarily unmet — every candidate is searched
+// again for one that satisfies THAT term independently, and a match under a
+// different real Name is recorded as its own alternativeResolution rather
+// than overwriting chosen. Only when chosen.Name == depName (a genuine single
+// real package) does failing to satisfy a later term fall straight to the
+// alternative fallback, since no other candidate could take its place.
+//
+// Returns the depName candidate to adopt (nil if depName itself is not needed to satisfy
+// anything), the alternatives resolved for unmet OR terms, and whether every
+// term could be satisfied one way or another.
+func resolveDependencyTermsIndependently(cur ospackage.PackageInfo, depName string, candidates []ospackage.PackageInfo, all []ospackage.PackageInfo) (chosen *ospackage.PackageInfo, alternatives []alternativeResolution, ok bool) {
+	ok = true
+
+	var bareReqVers []string
+	sawTerm := false
+	for _, reqVer := range cur.RequiresVer {
+		alts := strings.Split(reqVer, "|")
+		if CleanDependencyName(strings.TrimSpace(alts[0])) != depName {
+			continue
+		}
+		sawTerm = true
+		if len(alts) == 1 {
+			bareReqVers = append(bareReqVers, reqVer)
+		}
+	}
+	// cur.Requires and cur.RequiresVer are populated in lockstep by the real
+	// parser, but a hand-built PackageInfo (tests, or any other caller) may
+	// only set Requires. Without this, a depName with no matching RequiresVer
+	// term at all would look like it has nothing to satisfy and be silently
+	// treated as resolved.
+	if !sawTerm && hasDirectDependency(cur.Requires, depName) {
+		bareReqVers = append(bareReqVers, depName)
+	}
+	if len(bareReqVers) > 0 {
+		for _, candidate := range candidates {
+			satisfiesAllBare := true
+			for _, reqVer := range bareReqVers {
+				if !termConstraintSatisfiedByCandidate(reqVer, depName, candidate) {
+					satisfiesAllBare = false
+					break
+				}
+			}
+			if satisfiesAllBare {
+				c := candidate
+				chosen = &c
+				break
+			}
+		}
+		if chosen == nil {
+			ok = false // mandatory bare term(s) unsatisfiable by any candidate
+		}
+	}
+
+	for _, reqVer := range cur.RequiresVer {
+		alts := strings.Split(reqVer, "|")
+		if len(alts) < 2 || CleanDependencyName(strings.TrimSpace(alts[0])) != depName {
+			continue
+		}
+
+		resolvedDirect := false
+		if chosen != nil && termConstraintSatisfiedByCandidate(reqVer, depName, *chosen) {
+			// Whichever candidate an earlier term already fixed chosen to also
+			// satisfies this edge directly.
+			resolvedDirect = true
+		} else if chosen == nil || chosen.Name != depName {
+			// depName is not yet fixed, or is virtual (chosen is just one
+			// incidental provider fixed for a DIFFERENT edge, under some other
+			// real Name) — a different real package can independently provide
+			// another version of the same virtual capability and coexist, so
+			// search every candidate for one that satisfies THIS edge, instead
+			// of only *chosen. (When chosen.Name == depName — a genuine single
+			// real package — and it didn't satisfy the edge above, no other
+			// candidate could either, since only one version of a real package
+			// can exist in the closure; that case falls straight through to
+			// the alternative fallback below.)
+			if satisfying, found := findSatisfyingCandidate(reqVer, depName, candidates); found {
+				if chosen == nil {
+					chosen = &satisfying
+					resolvedDirect = true
+				} else if satisfying.Name != chosen.Name {
+					alternatives = append(alternatives, alternativeResolution{Name: depName, Package: satisfying, ReqVer: reqVer})
+					resolvedDirect = true
+				}
+				// else: same real package as chosen but an incompatible
+				// version — only one version of it can exist in the closure,
+				// so this edge still isn't satisfied; fall through below.
+			}
+		}
+		if resolvedDirect {
+			continue
+		}
+
+		if altName, altCandidate, resolvedOK := resolveAlternativeForTerm(cur, reqVer, all); resolvedOK {
+			alternatives = append(alternatives, alternativeResolution{Name: altName, Package: altCandidate, ReqVer: reqVer})
+			continue
+		}
+		ok = false
+	}
+	return chosen, alternatives, ok
+}
+
+// orEdgeSatisfied reports whether the OR term reqVer (whose own first
+// alternative must clean to a name resolvedPkg is resolved under) is already
+// satisfied — either because resolvedPkg's own version meets the first
+// alternative's version pin (an unversioned first alternative is satisfied by
+// mere presence), or because another alternative of the same edge is already
+// selected (selectedVersions) and meets its own constraint.
+func orEdgeSatisfied(reqVer string, resolvedPkg ospackage.PackageInfo, selectedVersions func(string) []string) bool {
+	alts := strings.Split(reqVer, "|")
+	if len(alts) < 2 {
+		return true
+	}
+	name, op, ver := splitAltNameConstraint(strings.TrimSpace(alts[0]))
+	if op == "" || ver == "" {
+		return true
+	}
+	if resVer, ok := versionForDependency(resolvedPkg, name); ok && debVersionSatisfies(resVer, op, ver) {
+		return true
+	}
+	return edgeSatisfiedByOtherAlternative(alts[1:], selectedVersions)
+}
+
+// resolveUnmetOwnOREdges checks, for every raw RequiresVer term whose own first
+// alternative cleans to depName, whether that OR edge is satisfied by
+// resolvedPkg (the package just picked/kept for depName) or another already
+// selected alternative — and if not, resolves and queues that edge's own
+// alternative. Needed because when depName is BOTH a bare mandatory term and an
+// OR term's own first alternative, the OR term's version pin is deliberately
+// stripped from candidate selection/replacement decisions (the bare term makes
+// depName mandatory regardless of that pin), which must not silently drop the
+// separate OR edge itself — apt still requires it to be met, by depName's own
+// version or by pulling in its alternative. Returns the (possibly grown) queue
+// and whether any edge's alternative could not be resolved.
+func resolveUnmetOwnOREdges(cur, resolvedPkg ospackage.PackageInfo, depName string, all []ospackage.PackageInfo, selectedVersions func(string) []string,
+	queue []ospackage.PackageInfo, resolvedDeps map[string]ospackage.PackageInfo, requiredDepNames map[string]struct{},
+	depVersionConstraints map[string][]VersionConstraint, parentChildPairs *[][]ospackage.PackageInfo) ([]ospackage.PackageInfo, bool) {
+	log := logger.Logger()
+	gotMissing := false
+	for _, reqVer := range cur.RequiresVer {
+		alts := strings.Split(reqVer, "|")
+		if len(alts) < 2 || CleanDependencyName(alts[0]) != depName {
+			continue
+		}
+		if orEdgeSatisfied(reqVer, resolvedPkg, selectedVersions) {
+			continue
+		}
+		if altName, altCandidate, ok := resolveAlternativeForTerm(cur, reqVer, all); ok {
+			log.Infof("Successfully resolved alternative %q version %q for OR edge %q (mandatory %q=%q does not satisfy this edge)",
+				altName, altCandidate.Version, reqVer, depName, resolvedPkg.Version)
+			queue = queueResolvedAlternative(cur, reqVer, altName, altCandidate, queue, resolvedDeps, requiredDepNames, depVersionConstraints, parentChildPairs)
+		} else {
+			gotMissing = true
+			AddParentMissingChildPair(cur, depName+"(missing)", parentChildPairs)
+			log.Warnf("failed to resolve unsatisfied OR edge %q of package %q (mandatory %q=%q does not satisfy it)",
+				reqVer, cur.Name, depName, resolvedPkg.Version)
+		}
+	}
+	return queue, gotMissing
+}
+
+// queueResolvedAlternative records altCandidate as the package chosen to
+// satisfy an OR edge whose raw term is reqVer, mirroring the bookkeeping a
+// direct dependency resolution performs: constrains altName by reqVer's own
+// version (scoped to this one term, so an unrelated edge sharing the same
+// alternative name can't leak its own constraint in here), marks it genuinely
+// required, queues it for processing, and records the parent-child edge.
+func queueResolvedAlternative(cur ospackage.PackageInfo, reqVer, altName string, altCandidate ospackage.PackageInfo, queue []ospackage.PackageInfo,
+	resolvedDeps map[string]ospackage.PackageInfo, requiredDepNames map[string]struct{}, depVersionConstraints map[string][]VersionConstraint,
+	parentChildPairs *[][]ospackage.PackageInfo) []ospackage.PackageInfo {
+	if altVCs, hasAltVC := extractVersionRequirement([]string{reqVer}, altName); hasAltVC {
+		depVersionConstraints[altName] = append(depVersionConstraints[altName], altVCs...)
+	}
+	requiredDepNames[altName] = struct{}{}
+	queue = append(queue, altCandidate)
+	rememberResolvedDependency(resolvedDeps, altName, altCandidate)
+	AddParentChildPair(cur, altCandidate, parentChildPairs)
+	return queue
+}
+
+// reconstructOREdgeTerm rebuilds the raw "depName (op ver) | alt1 | alt2..."
+// OR term that a VersionConstraint recorded in depVersionConstraints was
+// extracted from. VersionConstraint.AlternativeTerms only stores the OTHER
+// alternatives (extractVersionRequirement deliberately excludes depName's own
+// term when building it), so it cannot be handed to resolveAlternativeForTerm
+// directly — that function expects the FULL term, including depName's own
+// leading alternative, and only skips it internally.
+func reconstructOREdgeTerm(depName string, constraint VersionConstraint) string {
+	return fmt.Sprintf("%s (%s %s) | %s", depName, constraint.Op, constraint.Ver, constraint.AlternativeTerms)
+}
+
+// bridgeableOREdge reports whether the OR edge whose raw term is reqVer (e.g.
+// "foo (= 1) | bar (>= 2)", see reconstructOREdgeTerm) can still be considered
+// met when depName's own resolution no longer satisfies the edge's first
+// alternative's pin — either because a DIFFERENT alternative is already
+// selected (needsQueue=false: the edge is already satisfied, nothing further
+// to do), or because a fresh candidate for that alternative can be resolved
+// right now (needsQueue=true: the caller must actually queue altCandidate
+// under altName to make good on this bridge). Returns ok=false when neither
+// holds, meaning the edge's pin genuinely conflicts and cannot be bridged.
+func bridgeableOREdge(cur ospackage.PackageInfo, reqVer string, all []ospackage.PackageInfo, selectedVersions func(string) []string) (altName string, altCandidate ospackage.PackageInfo, needsQueue, ok bool) {
+	alts := strings.Split(reqVer, "|")
+	if len(alts) < 2 {
+		return "", ospackage.PackageInfo{}, false, false
+	}
+	if name, satisfied := edgeSatisfyingAlternative(alts[1:], selectedVersions); satisfied {
+		return name, ospackage.PackageInfo{}, false, true
+	}
+	if name, candidate, resolved := resolveAlternativeForTerm(cur, reqVer, all); resolved {
+		return name, candidate, true, true
+	}
+	return "", ospackage.PackageInfo{}, false, false
+}
+
+// satisfiedAlternativeNames returns, for every OR term whose first alternative
+// cleans to depName, the name of whichever OTHER alternative already
+// satisfies that edge (per edgeSatisfyingAlternative). Used alongside
+// alternativeAlreadySelected: when it reports depName skippable, THIS records
+// which alternative(s) actually satisfied the edge(s) as the genuine
+// dependency, since depName itself was never pulled in.
+func satisfiedAlternativeNames(reqVers []string, depName string, selectedVersions func(string) []string) []string {
+	var names []string
+	for _, reqVer := range reqVers {
+		alts := strings.Split(reqVer, "|")
+		if len(alts) < 2 || CleanDependencyName(alts[0]) != depName {
+			continue
+		}
+		if name, ok := edgeSatisfyingAlternative(alts[1:], selectedVersions); ok {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
 // alternativeAlreadySelected reports whether the OR-dependency edge whose first
 // (default) alternative is depName has any OTHER alternative that is already
 // selected AND satisfies that alternative's version constraint. It scans the raw
 // Depends terms (reqVers) for the term whose first "|"-alternative cleans to
-// depName, then checks every remaining alternative of that term. selectedVersion
-// returns the version chosen for a name and whether it is selected at all (an
-// empty version means "selected but concrete version unknown"). A versioned
-// alternative counts as satisfied only when the selected version is known and
-// meets the constraint; an unversioned alternative is satisfied by mere presence.
+// depName, then checks every remaining alternative of that term. selectedVersions
+// returns every version name is selected under (possibly more than one, since
+// different selected packages can Provide the same virtual name at different
+// versions); an empty-string entry means "selected but concrete version
+// unknown", and a nil/empty slice means not selected at all. A versioned
+// alternative counts as satisfied when ANY returned version meets its
+// constraint; an unversioned alternative is satisfied by mere presence.
 // Single-alternative terms and terms belonging to a different edge are ignored.
 // This implements apt's rule that an already-installed/selected alternative
 // satisfies the edge, so the first alternative should not be pulled in.
-func alternativeAlreadySelected(reqVers []string, depName string, selectedVersion func(string) (string, bool)) bool {
+func alternativeAlreadySelected(reqVers []string, depName string, selectedVersions func(string) []string) bool {
 	edgeFound := false
 	for _, reqVer := range reqVers {
 		alts := strings.Split(reqVer, "|")
@@ -1913,7 +2660,7 @@ func alternativeAlreadySelected(reqVers []string, depName string, selectedVersio
 		// Distinct edges can share the same first alternative (e.g. "a | b, a | c"); the
 		// first is skippable only if EVERY such edge is already met by another selected
 		// alternative — otherwise depName is still needed to satisfy the unmet edge.
-		if !edgeSatisfiedByOtherAlternative(alts[1:], selectedVersion) {
+		if !edgeSatisfiedByOtherAlternative(alts[1:], selectedVersions) {
 			return false
 		}
 	}
@@ -1924,24 +2671,38 @@ func alternativeAlreadySelected(reqVers []string, depName string, selectedVersio
 // alternatives is already selected and (when the alternative is versioned) meets
 // its version constraint. An unknown selected version is treated conservatively as
 // NOT satisfying, so the first alternative is still taken.
-func edgeSatisfiedByOtherAlternative(alts []string, selectedVersion func(string) (string, bool)) bool {
+func edgeSatisfiedByOtherAlternative(alts []string, selectedVersions func(string) []string) bool {
+	_, ok := edgeSatisfyingAlternative(alts, selectedVersions)
+	return ok
+}
+
+// edgeSatisfyingAlternative returns the name of the first of an OR-edge's
+// non-first alternatives that is already selected and (when versioned) meets
+// its version constraint, and true if one was found. Checks EVERY version
+// selectedVersions returns for a given alternative name — not just one — since
+// different selected packages can Provide the same virtual name at different
+// versions, and collapsing to an arbitrary single match (e.g. the first hit
+// while ranging over a map) could miss a different selected provider that
+// actually satisfies the constraint. Mirrors edgeSatisfiedByOtherAlternative
+// but also reports WHICH alternative satisfied the edge, so a caller can
+// record that name (rather than the unpulled first alternative) as the one
+// genuinely depended upon.
+func edgeSatisfyingAlternative(alts []string, selectedVersions func(string) []string) (string, bool) {
 	for _, alt := range alts {
 		name, op, ver := splitAltNameConstraint(alt)
 		if name == "" {
 			continue
 		}
-		selVer, ok := selectedVersion(name)
-		if !ok {
-			continue // this alternative is not selected
-		}
-		if op == "" || ver == "" {
-			return true // unversioned alternative: presence satisfies it
-		}
-		if selVer != "" && debVersionSatisfies(selVer, op, ver) {
-			return true
+		for _, selVer := range selectedVersions(name) {
+			if op == "" || ver == "" {
+				return name, true // unversioned alternative: any selected instance satisfies it
+			}
+			if selVer != "" && debVersionSatisfies(selVer, op, ver) {
+				return name, true
+			}
 		}
 	}
-	return false
+	return "", false
 }
 
 // splitAltNameConstraint parses one OR-dependency alternative ("e2fsprogs (<< 1.45)")
@@ -1990,11 +2751,81 @@ func debVersionSatisfies(candidate, op, ver string) bool {
 	return false
 }
 
+// versionForDependency returns the version of pkg to check against a
+// constraint on depName, and whether a usable version exists at all: pkg's
+// own Version when depName is pkg's real name, or the version pkg's
+// Provides: line declares for depName when depName is a virtual capability
+// pkg only provides (e.g. libqt6core6t64 declares "Provides: qt6-base-abi (=
+// 6.4.2)" at a different version than its own package Version).
+//
+// Returns ok=false when pkg provides depName with no version at all (e.g.
+// "Provides: foo") — per Debian policy an unversioned Provides never
+// satisfies a versioned dependency, so callers must treat this as
+// unsatisfied rather than falling back to pkg's own, unrelated Version.
+func versionForDependency(pkg ospackage.PackageInfo, depName string) (string, bool) {
+	if pkg.Name == depName {
+		return pkg.Version, true
+	}
+	if constraints, ok := extractVersionRequirement(pkg.ProvidesVer, depName); ok {
+		for _, c := range constraints {
+			if c.Ver != "" {
+				return c.Ver, true
+			}
+		}
+	}
+	return "", false
+}
+
 // hasDirectDependency checks if a dependency appears as a direct requirement (not in alternatives)
 func hasDirectDependency(requires []string, depName string) bool {
 	for _, req := range requires {
 		cleanReq := CleanDependencyName(req)
 		if cleanReq == depName {
+			return true
+		}
+	}
+	return false
+}
+
+// isOwnFirstAlternative reports whether depName is the designated FIRST
+// alternative of at least one OR term in reqVers (e.g. "libfoo-abi (= 3) |
+// fallback" for depName "libfoo-abi") — as opposed to only appearing as a
+// LATER, fallback-only alternative of a term whose first alternative is some
+// OTHER name (e.g. "logsave | e2fsprogs (<< X)" for depName "e2fsprogs").
+// hasDirectDependency alone cannot make this distinction, since Requires
+// always keeps only the OR term's first alternative name regardless of
+// position — this refines that check for whether an alternative-tagged
+// version constraint on depName is genuinely depName's own pin (keep it) or
+// just an unrelated OR clause's fallback option that happens to co-occur
+// with depName being separately, unconditionally required (ignore it).
+func isOwnFirstAlternative(reqVers []string, depName string) bool {
+	for _, reqVer := range reqVers {
+		alts := strings.Split(reqVer, "|")
+		if len(alts) < 2 {
+			continue
+		}
+		if CleanDependencyName(alts[0]) == depName {
+			return true
+		}
+	}
+	return false
+}
+
+// hasBareMandatoryTerm reports whether depName appears as a standalone (non-OR)
+// mandatory term in reqVers — e.g. the "foo" in "Depends: foo, foo (= 1) | bar".
+// Such a term requires depName unconditionally, so any version pin carried by a
+// SEPARATE OR term that merely lists depName as its first alternative does not
+// constrain the mandatory copy (that OR edge is independently satisfiable by its
+// other alternative). A bare term may itself carry a direct version pin
+// (e.g. "foo (>= 1)"); that pin is preserved separately as a non-alternative
+// constraint, so treating the term as mandatory here does not lose it.
+func hasBareMandatoryTerm(reqVers []string, depName string) bool {
+	for _, reqVer := range reqVers {
+		alts := strings.Split(reqVer, "|")
+		if len(alts) != 1 {
+			continue
+		}
+		if CleanDependencyName(alts[0]) == depName {
 			return true
 		}
 	}
@@ -2060,16 +2891,18 @@ func extractVersionRequirement(reqVers []string, depName string) ([]VersionConst
 
 					if op != "" && ver != "" {
 						// Collect alternative package names (all alternatives except the current one)
-						var altNames []string
+						var altNames, altTerms []string
 						for j, altPkg := range alternatives {
 							if j != i {
 								altNames = append(altNames, strings.TrimSpace(CleanDependencyName(altPkg)))
+								altTerms = append(altTerms, strings.TrimSpace(altPkg))
 							}
 						}
 						constraint := VersionConstraint{
-							Op:          op,
-							Ver:         ver,
-							Alternative: strings.Join(altNames, "|"),
+							Op:               op,
+							Ver:              ver,
+							Alternative:      strings.Join(altNames, "|"),
+							AlternativeTerms: strings.Join(altTerms, "|"),
 						}
 						constraints = append(constraints, constraint)
 						found = true
@@ -2079,14 +2912,16 @@ func extractVersionRequirement(reqVers []string, depName string) ([]VersionConst
 				// No version constraint, but we have alternatives
 				if len(alternatives) > 1 {
 					// Collect alternative package names (all alternatives except the current one)
-					var altNames []string
+					var altNames, altTerms []string
 					for j, altPkg := range alternatives {
 						if j != i {
 							altNames = append(altNames, strings.TrimSpace(CleanDependencyName(altPkg)))
+							altTerms = append(altTerms, strings.TrimSpace(altPkg))
 						}
 					}
 					constraint := VersionConstraint{
-						Alternative: strings.Join(altNames, "|"),
+						Alternative:      strings.Join(altNames, "|"),
+						AlternativeTerms: strings.Join(altTerms, "|"),
 					}
 					constraints = append(constraints, constraint)
 				}
@@ -2112,7 +2947,7 @@ func matchesRepoBase(parentBase []string, candidateBase string) bool {
 	return false
 }
 
-func resolveMultiCandidates(parentPkg ospackage.PackageInfo, candidates []ospackage.PackageInfo) (ospackage.PackageInfo, error) {
+func resolveMultiCandidates(parentPkg ospackage.PackageInfo, depName string, candidates []ospackage.PackageInfo) (ospackage.PackageInfo, error) {
 	// Filter out blocked packages (priority < 0) first
 	// All candidates should have the same name here, so no need for target-aware filtering
 	candidates = filterCandidatesByPriority(candidates)
@@ -2148,11 +2983,12 @@ func resolveMultiCandidates(parentPkg ospackage.PackageInfo, candidates []ospack
 	/////////////////////////////////////
 	//A: if version is specified
 	/////////////////////////////////////
-	// All candidates have the same .Name, so just use candidates[0].Name for version extraction
+	// depName is the dependency actually being resolved, which may be a virtual
+	// name none of the candidates are named after (they only Provides: it), so
+	// it's passed in rather than inferred from candidates[0].Name.
 	var versionConstraints []VersionConstraint
 	hasVersionConstraint := false
 	if len(candidates) > 0 {
-		depName := candidates[0].Name
 		isDirect := hasDirectDependency(parentPkg.Requires, depName)
 
 		versionConstraints, hasVersionConstraint = extractVersionRequirement(parentPkg.RequiresVer, depName)
@@ -2165,8 +3001,20 @@ func resolveMultiCandidates(parentPkg ospackage.PackageInfo, candidates []ospack
 					directConstraints = append(directConstraints, constraint)
 				}
 			}
-			versionConstraints = directConstraints
-			hasVersionConstraint = len(directConstraints) > 0
+			// See the identical guard in the main resolution loop: decide per
+			// original dependency term, not from whether depName is a first
+			// alternative anywhere. Strip alternative-tagged constraints when
+			// depName is NOT its OR term's own first alternative, OR when depName
+			// also appears as a separate bare, mandatory term — so a genuinely
+			// bare depName that merely co-occurs in an unrelated OR clause (e.g.
+			// "logsave | e2fsprogs (<< X)", or "Depends: foo, foo (= 1) | bar")
+			// ignores that clause's constraint, while a pure OR term like
+			// "libfoo-abi (= 3) | fallback" still enforces libfoo-abi's own pin
+			// when selecting its providers.
+			if !isOwnFirstAlternative(parentPkg.RequiresVer, depName) || hasBareMandatoryTerm(parentPkg.RequiresVer, depName) {
+				versionConstraints = directConstraints
+				hasVersionConstraint = len(directConstraints) > 0
+			}
 		}
 	}
 
@@ -2187,20 +3035,8 @@ func resolveMultiCandidates(parentPkg ospackage.PackageInfo, candidates []ospack
 				// Check if main package (candidate) satisfies constraint
 				mainSatisfied := false
 				if constraint.Op != "" && constraint.Ver != "" {
-					cmp, err := CompareDebianVersions(candidate.Version, constraint.Ver)
-					if err == nil {
-						switch constraint.Op {
-						case "=":
-							mainSatisfied = (cmp == 0)
-						case "<<", "<":
-							mainSatisfied = (cmp < 0)
-						case "<=":
-							mainSatisfied = (cmp <= 0)
-						case ">>", ">":
-							mainSatisfied = (cmp > 0)
-						case ">=":
-							mainSatisfied = (cmp >= 0)
-						}
+					if ver, ok := versionForDependency(candidate, depName); ok {
+						mainSatisfied = debVersionSatisfies(ver, constraint.Op, constraint.Ver)
 					}
 				} else {
 					// No version constraint, satisfied by default
