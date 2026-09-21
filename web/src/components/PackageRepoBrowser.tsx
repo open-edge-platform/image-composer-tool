@@ -417,7 +417,10 @@ function MergedPane({
     <>
       <div className="mb-2 flex flex-wrap items-center gap-4 text-[12px] text-slate-600">
         {!selectedOnly && (
-          <label className="flex items-center gap-1.5">
+          <label
+            className="flex items-center gap-1.5"
+            title="Makes packages from every repository available to browse, not just checked ones. A repository is only checked on the left once you actually pick a package from it."
+          >
             <input
               type="checkbox"
               checked={browseAllRepos}
