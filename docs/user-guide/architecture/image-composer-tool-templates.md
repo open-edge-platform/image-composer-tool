@@ -693,6 +693,12 @@ packageRepositories:
     pkey: "[trusted=yes]"
 ```
 
+For Debian-based (APT) repositories, the tool auto-detects whether the repo
+publishes a classic split `Release` + detached `Release.gpg` pair or a
+combined `InRelease` file (Release content with the signature embedded, as
+published by `aptly`-based repositories that don't also serve a separate
+`Release.gpg`). No extra template configuration is needed for either case.
+
 See [Multiple Package Repository Support](./image-composer-tool-multi-repo-support.md)
 for detailed configuration guidance.
 

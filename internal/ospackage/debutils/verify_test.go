@@ -12,6 +12,7 @@ import (
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
+	"github.com/ProtonMail/go-crypto/openpgp/clearsign"
 )
 
 // TestVerifyPackagegz tests the VerifyPackagegz function
@@ -402,6 +403,114 @@ func TestVerifyRelease_RejectsUntrustedSigner(t *testing.T) {
 		ok, err := VerifyRelease(relPath, sigPath, keyPath)
 		if !ok || err != nil {
 			t.Fatalf("expected trusted signature to be accepted, got ok=%v err=%v", ok, err)
+		}
+	})
+}
+
+// clearsignInRelease wraps releaseContent in a clearsigned InRelease-shaped
+// message signed by signer, and writes it to path.
+func clearsignInRelease(t *testing.T, path string, signer *openpgp.Entity, releaseContent []byte) {
+	t.Helper()
+	var buf bytes.Buffer
+	w, err := clearsign.Encode(&buf, signer.PrivateKey, nil)
+	if err != nil {
+		t.Fatalf("clearsign.Encode: %v", err)
+	}
+	if _, err := w.Write(releaseContent); err != nil {
+		t.Fatalf("writing clearsign body: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("closing clearsign writer: %v", err)
+	}
+	if err := os.WriteFile(path, buf.Bytes(), 0644); err != nil {
+		t.Fatalf("writing InRelease file: %v", err)
+	}
+}
+
+// TestVerifyInRelease exercises the combined clearsigned InRelease path:
+// happy path, [trusted=yes] bypass (plaintext still extracted, no key
+// needed), rejection of a signature from a key outside the trusted keyring,
+// and a malformed/non-clearsigned input.
+func TestVerifyInRelease(t *testing.T) {
+	tempDir := t.TempDir()
+	releaseContent := []byte("Suite: stable\nCodename: noble\n")
+
+	trustedEntity, err := openpgp.NewEntity("Trusted Signer", "test", "trusted@example.invalid", nil)
+	if err != nil {
+		t.Fatalf("NewEntity: %v", err)
+	}
+	var trustedPub bytes.Buffer
+	pubWriter, err := armor.Encode(&trustedPub, openpgp.PublicKeyType, nil)
+	if err != nil {
+		t.Fatalf("armor.Encode: %v", err)
+	}
+	if err := trustedEntity.Serialize(pubWriter); err != nil {
+		t.Fatalf("trustedEntity.Serialize: %v", err)
+	}
+	if err := pubWriter.Close(); err != nil {
+		t.Fatalf("armor close: %v", err)
+	}
+	keyPath := filepath.Join(tempDir, "trusted.pub")
+	if err := os.WriteFile(keyPath, trustedPub.Bytes(), 0644); err != nil {
+		t.Fatalf("Failed to write trusted key: %v", err)
+	}
+
+	attackerEntity, err := openpgp.NewEntity("Attacker", "test", "attacker@example.invalid", nil)
+	if err != nil {
+		t.Fatalf("NewEntity: %v", err)
+	}
+
+	t.Run("signature from the trusted key is accepted", func(t *testing.T) {
+		inReleasePath := filepath.Join(tempDir, "InRelease.trusted")
+		clearsignInRelease(t, inReleasePath, trustedEntity, releaseContent)
+
+		plaintext, err := VerifyInRelease(inReleasePath, keyPath)
+		if err != nil {
+			t.Fatalf("expected trusted signature to be accepted, got err=%v", err)
+		}
+		if !bytes.Equal(plaintext, releaseContent) {
+			t.Fatalf("expected extracted plaintext %q, got %q", releaseContent, plaintext)
+		}
+	})
+
+	t.Run("signature from an untrusted key is rejected", func(t *testing.T) {
+		inReleasePath := filepath.Join(tempDir, "InRelease.untrusted")
+		clearsignInRelease(t, inReleasePath, attackerEntity, releaseContent)
+
+		_, err := VerifyInRelease(inReleasePath, keyPath)
+		if err == nil {
+			t.Fatalf("expected untrusted signature to be rejected, got no error")
+		}
+		if !strings.Contains(err.Error(), "InRelease signature verification failed") {
+			t.Fatalf("expected an InRelease verification error, got: %v", err)
+		}
+	})
+
+	t.Run("[trusted=yes] skips verification but still extracts plaintext", func(t *testing.T) {
+		inReleasePath := filepath.Join(tempDir, "InRelease.anyone")
+		clearsignInRelease(t, inReleasePath, attackerEntity, releaseContent)
+
+		plaintext, err := VerifyInRelease(inReleasePath, "[trusted=yes]")
+		if err != nil {
+			t.Fatalf("expected [trusted=yes] to bypass verification, got err=%v", err)
+		}
+		if !bytes.Equal(plaintext, releaseContent) {
+			t.Fatalf("expected extracted plaintext %q, got %q", releaseContent, plaintext)
+		}
+	})
+
+	t.Run("malformed input is rejected", func(t *testing.T) {
+		inReleasePath := filepath.Join(tempDir, "InRelease.malformed")
+		if err := os.WriteFile(inReleasePath, []byte("Suite: stable\n"), 0644); err != nil {
+			t.Fatalf("Failed to write malformed InRelease file: %v", err)
+		}
+
+		_, err := VerifyInRelease(inReleasePath, keyPath)
+		if err == nil {
+			t.Fatalf("expected malformed InRelease to be rejected, got no error")
+		}
+		if !strings.Contains(err.Error(), "not a valid clearsigned message") {
+			t.Fatalf("expected a clearsign parse error, got: %v", err)
 		}
 	})
 }

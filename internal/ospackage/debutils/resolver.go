@@ -128,6 +128,11 @@ func GenerateDot(pkgs []ospackage.PackageInfo, file string, pkgSources map[strin
 // report every package as HasInstalledSize=false (treated as unknown).
 const parsedPackageCacheVersion = 4
 
+// inReleaseSentinel is passed as releaseSign to ParseRepositoryMetadata to
+// mean "releaseFile is a combined InRelease file, not a detached signature
+// pair" — see BuildRepoConfigs (download.go) and isInRelease below.
+const inReleaseSentinel = "[inrelease]"
+
 // packageMetadataCache stores parsed package metadata keyed by the Packages.gz SHA256
 // checksum recorded in the Release file. A matching checksum means the upstream
 // repository has not changed, so we can skip downloading, decompressing, and re-parsing.
@@ -319,6 +324,16 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 	pbkeyIsURL := false
 	isTrustedRepo := pbGPGKey == "[trusted=yes]"
 
+	// releaseSign == inReleaseSentinel means releaseFile is a combined
+	// InRelease file (Release content + embedded signature) rather than a
+	// plain Release paired with a detached Release.gpg. Some aptly-published
+	// repos only serve InRelease, so BuildRepoConfigs signals that case this
+	// way. This can't just be an empty releaseSign: some callers (e.g. local
+	// trusted repos in LocalUserPackages) already pass "" to mean "no
+	// detached signature to fetch, nothing else implied" for a plain
+	// Release file, so a distinct sentinel avoids colliding with that.
+	isInRelease := releaseSign == inReleaseSentinel
+
 	if strings.HasPrefix(pbGPGKey, "http://") || strings.HasPrefix(pbGPGKey, "https://") {
 		pbkeyIsURL = true
 	} else {
@@ -328,16 +343,34 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 	var metaLocalFiles []string
 	var metaURLList []string
 
-	if isTrustedRepo {
-		// For trusted repos, skip Release.gpg and GPG key download
+	switch {
+	case isTrustedRepo:
+		// For trusted repos, skip Release.gpg/InRelease signature and GPG key download
 		metaLocalFiles = []string{localReleaseFile}
 		metaURLList = []string{releaseFile}
-	} else if pbkeyIsURL {
+	case isInRelease && pbkeyIsURL:
+		metaLocalFiles = []string{localReleaseFile, localPBGPGKey}
+		metaURLList = []string{releaseFile, pbGPGKey}
+	case isInRelease:
+		metaLocalFiles = []string{localReleaseFile}
+		metaURLList = []string{releaseFile}
+	case pbkeyIsURL:
 		metaLocalFiles = []string{localReleaseFile, localReleaseSign, localPBGPGKey}
 		metaURLList = []string{releaseFile, releaseSign, pbGPGKey}
-	} else {
+	default:
 		metaLocalFiles = []string{localReleaseFile, localReleaseSign}
 		metaURLList = []string{releaseFile, releaseSign}
+	}
+
+	// checkableReleaseFile always holds a plain Release body: the classic
+	// Release file as-is, or (for InRelease repos) the plaintext extracted
+	// from InRelease once verified below. Downstream Release parsing
+	// (warnIfReleaseExpired, findChecksumInRelease) reads this, never
+	// localReleaseFile directly, so it never has to deal with the
+	// clearsign wrapper.
+	checkableReleaseFile := localReleaseFile
+	if isInRelease {
+		checkableReleaseFile = localReleaseFile + ".plain"
 	}
 
 	// Re-fetch the Release file every online run so the cache is validated rather
@@ -357,6 +390,25 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 			break
 		}
 	}
+	// The plaintext derived from InRelease is not fetched over the network
+	// (metaLocalFiles/metaURLList only cover it), so its absence has to be
+	// checked separately: a cache holding the raw InRelease file but missing
+	// its extracted plaintext (e.g. from a cache written before this derived
+	// file existed) has everything needed to derive it locally, so do that
+	// instead of forcing a refresh — which would be fatal for an otherwise
+	// usable offline build. Only fall back to requiring a refresh if the
+	// cached InRelease file itself is missing or fails to verify.
+	if isInRelease {
+		if _, err := os.Stat(checkableReleaseFile); err != nil {
+			if plaintext, verifyErr := VerifyInRelease(localReleaseFile, localPBGPGKey); verifyErr == nil {
+				if writeErr := os.WriteFile(checkableReleaseFile, plaintext, 0644); writeErr != nil {
+					haveLocalMeta = false
+				}
+			} else {
+				haveLocalMeta = false
+			}
+		}
+	}
 
 	refreshed, refreshErr := refreshRepoMetadata(pkgMetaDir, metaLocalFiles, metaURLList)
 	switch {
@@ -367,7 +419,7 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 		log.Warnf("Could not refresh metadata for %s (%v); continuing with previously "+
 			"downloaded metadata, which may name package versions the repository no "+
 			"longer serves", baseURL, refreshErr)
-		warnIfReleaseExpired(localReleaseFile, baseURL)
+		warnIfReleaseExpired(checkableReleaseFile, baseURL)
 	default:
 		log.Infof("Refreshed metadata files for %s", baseURL)
 	}
@@ -375,12 +427,22 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 	// Verify the release file whenever it came off the network this run; metadata
 	// we could not refresh was verified when it was originally fetched.
 	if refreshed {
-		relVryResult, err := VerifyRelease(localReleaseFile, localReleaseSign, localPBGPGKey)
-		if err != nil {
-			return nil, fmt.Errorf("failed to verify release file: %w", err)
-		}
-		if !relVryResult {
-			return nil, fmt.Errorf("release file verification failed")
+		if isInRelease {
+			plaintext, err := VerifyInRelease(localReleaseFile, localPBGPGKey)
+			if err != nil {
+				return nil, fmt.Errorf("failed to verify InRelease file: %w", err)
+			}
+			if err := os.WriteFile(checkableReleaseFile, plaintext, 0644); err != nil {
+				return nil, fmt.Errorf("failed to write extracted Release plaintext: %w", err)
+			}
+		} else {
+			relVryResult, err := VerifyRelease(localReleaseFile, localReleaseSign, localPBGPGKey)
+			if err != nil {
+				return nil, fmt.Errorf("failed to verify release file: %w", err)
+			}
+			if !relVryResult {
+				return nil, fmt.Errorf("release file verification failed")
+			}
 		}
 	} else {
 		log.Debugf("Skipping release file verification (using cached offline files)")
@@ -402,7 +464,7 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 	// Retrieve the expected SHA256 for Packages.gz from the Release file.
 	// This serves as the authoritative cache key for the download cache.
 	pkgPathSrch := fmt.Sprintf("%s/binary-%s/%s", component, arch, metadataFileName(pkggz))
-	expectedChecksum, err := findChecksumInRelease(localReleaseFile, "SHA256", pkgPathSrch)
+	expectedChecksum, err := findChecksumInRelease(checkableReleaseFile, "SHA256", pkgPathSrch)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get checksum from Release file: %w", err)
 	}
@@ -450,7 +512,7 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 	}
 
 	// Authoritative checksum verification after download
-	pkggzVryResult, err := VerifyPackagegz(localReleaseFile, localPkggzFile, arch, component)
+	pkggzVryResult, err := VerifyPackagegz(checkableReleaseFile, localPkggzFile, arch, component)
 	if err != nil {
 		return nil, fmt.Errorf("failed to verify pkg file: %w", err)
 	}
