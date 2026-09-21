@@ -42,6 +42,11 @@ export function PackageRepoBrowser({ repos, os, baseLock }: PackageRepoBrowserPr
 
   return (
     <>
+      <p className="mb-2 text-[11px] font-medium text-amber-700">
+        Only checked repositories are used when resolving packages at build
+        time — checking or unchecking one can change what an unpinned pick
+        resolves to.
+      </p>
       <div className="grid grid-cols-[240px_minmax(0,1fr)] overflow-hidden rounded-lg border border-slate-200">
         <div
           role="group"
