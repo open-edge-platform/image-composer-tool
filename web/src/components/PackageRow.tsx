@@ -36,6 +36,13 @@ interface PackageRowProps {
   // just as redundant a pick as currentVersion's chip — the template
   // already floats to whatever's newest.
   currentIsFloating?: boolean
+  // Offered only by the "Show only selected" review panel, for a row that's
+  // unpinned (a locked-but-floating template entry, or a floating user
+  // pick) and hasn't been checked against the currently-checked repos yet.
+  // Fires a real lookup so the row can show what it actually resolves to
+  // today instead of a bare "Latest".
+  onResolve?: () => void
+  resolving?: boolean
 }
 
 // PackageRow is the shared package row used by both the repo browse pane and
@@ -52,9 +59,11 @@ export function PackageRow({
   locked,
   currentVersion,
   currentIsFloating,
+  onResolve,
+  resolving,
 }: PackageRowProps) {
   const checked = locked || selection != null
-  const repoNames = [...new Set(versions.map((v) => v.repository))].map(repoLabelFor)
+  const repoNames = [...new Set(versions.map((v) => v.repository).filter(Boolean))].map(repoLabelFor)
   // An override only ever exists on a locked row once the user has
   // explicitly picked a version — the template's own inclusion never
   // becomes a real addedPackages entry on its own.
@@ -94,7 +103,7 @@ export function PackageRow({
             {name}
           </span>
           <span className="font-mono text-[11px] text-slate-500">
-            {locked && currentVersion ? currentVersion : version}
+            {locked && currentVersion ? currentVersion : version || 'latest'}
           </span>
           {repoNames.length > 0 && (
             <span className="text-[11px] text-slate-400">via {repoNames.join(', ')}</span>
@@ -129,6 +138,20 @@ export function PackageRow({
               </span>
             )}
           </span>
+        )}
+        {onResolve && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              onResolve()
+            }}
+            disabled={resolving}
+            className="mt-1 block text-[11px] font-medium text-[#0071c5] hover:underline disabled:cursor-wait disabled:text-slate-400 disabled:no-underline"
+          >
+            {resolving ? 'Resolving…' : 'Resolve version'}
+          </button>
         )}
       </span>
     </label>
@@ -177,18 +200,36 @@ function VersionChips({
     e.stopPropagation()
   }
 
+  // Nothing to attribute an override to without at least one real repository
+  // — true for an unpinned row the "Show only selected" panel hasn't
+  // resolved yet (versions is empty there by design), and would also catch
+  // the caller's own empty-versions fallback synthesizing a single entry
+  // with a real version but no repository.
+  const noRepoKnown = versions.every((v) => !v.repository)
+  // Floating and not yet known to differ from a specific version (either
+  // there's no currentVersion to compare against, or nothing's pinned at
+  // all) reads as "Latest" being the row's actual current state, not just
+  // its default — worth highlighting the same way an explicit pin would be.
+  const latestIsCurrent = pinned === '' || (currentIsFloating === true && currentVersion === undefined)
+
   return (
     <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
       <button
         type="button"
-        disabled={currentIsFloating}
-        title={currentIsFloating ? "Already the template's own (unpinned) choice" : undefined}
+        disabled={currentIsFloating || noRepoKnown}
+        title={
+          noRepoKnown
+            ? 'Resolve this package to enable picking a version'
+            : currentIsFloating
+              ? "Already the template's own (unpinned) choice"
+              : undefined
+        }
         onClick={(e) => {
           stop(e)
-          if (currentIsFloating) return
+          if (currentIsFloating || noRepoKnown) return
           onChoose({ version: '', repository: versions[0]?.repository ?? '' })
         }}
-        className={chipClass(pinned === '', currentIsFloating)}
+        className={chipClass({ active: latestIsCurrent, disabled: currentIsFloating || noRepoKnown })}
       >
         Latest
       </button>
@@ -219,7 +260,7 @@ function VersionChips({
               if (isRedundant) return
               onChoose(v)
             }}
-            className={chipClass(pinned === v.version, isRedundant, isCurrent)}
+            className={chipClass({ active: pinned === v.version, disabled: isRedundant, redundant: isRedundant, ring: isCurrent })}
           >
             {v.version}
           </button>
@@ -241,13 +282,33 @@ function VersionChips({
   )
 }
 
-function chipClass(active: boolean, redundant?: boolean, current?: boolean): string {
+// active: a real selection (or, for Latest, the row's actual current
+// floating state) — full blue fill. disabled: not clickable; on an active
+// chip this dims the same blue rather than switching to grey, since the
+// information it's conveying is still true, just not actionable right now
+// (e.g. Latest already being the template's own choice). redundant is a
+// stronger, separate case — a chip that could never do anything regardless
+// of active/disabled (the template already pins this exact version itself)
+// — grey, ignoring every other flag. ring flags "this is what the row
+// currently resolves to" on a chip that's neither active nor redundant.
+function chipClass({
+  active = false,
+  disabled = false,
+  redundant = false,
+  ring = false,
+}: {
+  active?: boolean
+  disabled?: boolean
+  redundant?: boolean
+  ring?: boolean
+}): string {
   if (redundant) {
     return 'rounded-full px-2 py-0.5 font-mono text-[11px] font-medium bg-slate-200 text-slate-500 cursor-not-allowed ring-1 ring-slate-300'
   }
   const base = 'rounded-full px-2 py-0.5 font-mono text-[11px] font-medium '
-  if (active) return base + 'bg-[#0071c5] text-white'
-  // Still a normal, clickable chip — the ring just flags "this happens to
-  // be what's in effect today" without implying it can't be pinned.
-  return base + 'bg-[#e6f2fa] text-[#0071c5] hover:bg-[#d3e9f8]' + (current ? ' ring-1 ring-[#0071c5]' : '')
+  const fill = active ? 'bg-[#0071c5] text-white' : 'bg-[#e6f2fa] text-[#0071c5]'
+  const hover = disabled || active ? '' : ' hover:bg-[#d3e9f8]'
+  const cursor = disabled ? ' cursor-not-allowed opacity-70' : ''
+  const ringClass = !active && ring ? ' ring-1 ring-[#0071c5]' : ''
+  return base + fill + hover + cursor + ringClass
 }

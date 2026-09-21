@@ -30,6 +30,12 @@ export interface BaseLock {
   // Kicks off a lookup for an unpinned locked name's default-repo version if
   // one isn't already resolved or in flight. Safe to call redundantly.
   ensureResolved: (name: string) => void
+  // Every concrete (non-glob) name the template's own package list carries,
+  // pinned or bare. A glob entry (e.g. "libva*") isn't included — there's no
+  // way to enumerate its matches without a full catalog scan, which is
+  // exactly the cost the "review what's already in the template" list
+  // (PackageRepoBrowser's "Show only selected") is meant to avoid.
+  concreteNames: string[]
 }
 
 // useBaseLock answers "is this row already in the matched template, and at
@@ -110,7 +116,12 @@ export function useBaseLock(os: string, repos: PackageRepo[] | null, basePackage
       })
   }
 
-  return { info, ensureResolved }
+  const concreteNames = useMemo(
+    () => [...pinned.keys(), ...bareNames],
+    [pinned, bareNames],
+  )
+
+  return { info, ensureResolved, concreteNames }
 }
 
 // ensureBaseVersions kicks off a default-repo lookup for every rendered row
