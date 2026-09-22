@@ -251,35 +251,47 @@ the same signing identity is available for future on-target DKMS rebuilds.
 ### Signing policy in the image manifest
 
 The image manifest should carry a signing **policy and references to key
-material**, not inline private-key contents. A representative schema is:
+material**, not inline private-key contents. This should extend the existing
+`systemConfig` object instead of introducing a vendor-specific top-level
+`edgePack` namespace. A representative schema is:
 
 ```yaml
-edgepack:
+systemConfig:
+  # Existing kernel configuration: pin the exact image kernel and headers.
   kernel:
-    package: linux-image-<target-kernel>
-    headers: linux-headers-<target-kernel>
-    release: <target-kernel>
+    version: <target-kernel>
+    packages:
+      - linux-image-<target-kernel>
+      - linux-headers-<target-kernel>
+  # EdgePack remains package content, not a separate configuration namespace.
+  packages:
+    - intel-edge-base-standard
+  # Proposed generic extension to systemConfig for any DKMS-based package set.
   dkms:
-    build_during_composition: true
-    secure_boot:
+    buildDuringComposition: true
+    secureBoot:
       enabled: true
       # Supplied to the composer through a protected secret/file mechanism.
       # Do not embed PEM/DER private-key data directly in this YAML.
-      signing_private_key: /run/secrets/edgepack/module-signing.key
-      signing_certificate: /run/secrets/edgepack/module-signing.crt
+      signingPrivateKey: /run/secrets/dkms/module-signing.key
+      signingCertificate: /run/secrets/dkms/module-signing.crt
       # Copy the signing identity into the resulting image so future
       # target-side DKMS builds can sign modules after kernel updates.
-      retain_signing_identity: true
-      target_private_key_path: /var/lib/edgepack/secureboot/module-signing.key
-      target_certificate_path: /var/lib/edgepack/secureboot/module-signing.crt
+      retainSigningIdentity: true
+      targetPrivateKeyPath: /var/lib/dkms/secureboot/module-signing.key
+      targetCertificatePath: /var/lib/dkms/secureboot/module-signing.crt
       # How the corresponding certificate becomes trusted by Secure Boot.
-      trust_mode: pre_enrolled_mok
+      trustMode: pre_enrolled_mok
 ```
 
-The exact field names are an ICT interface decision, but the semantics should be
-explicit: the manifest selects the signing policy, identifies the key and
-certificate supplied to the build environment, and states whether the private
-key is intentionally retained in the target image for future DKMS servicing.
+`systemConfig.kernel` and `systemConfig.packages` already exist in the ICT
+template schema. `systemConfig.dkms` is the proposed generic extension; its
+policy applies to any selected package set that installs DKMS modules, including
+EdgePack. The exact nested field names remain an ICT interface decision, but the
+semantics should be explicit: the manifest selects the signing policy,
+identifies the key and certificate supplied to the build environment, and
+states whether the private key is intentionally retained in the target image
+for future DKMS servicing.
 
 ### Initial image composition
 
@@ -294,7 +306,7 @@ For the initial image, the composer will:
   DKMS state.
 7. Verify that the corresponding signing certificate will be trusted by the
   target Secure Boot policy.
-8. If `retain_signing_identity: true`, copy the signing key and certificate
+8. If `retainSigningIdentity: true`, copy the signing key and certificate
   into the target filesystem using the configured paths and restrictive
   permissions.
 
@@ -329,7 +341,7 @@ Retaining a private module-signing key in a deployed image is a deliberate
 security trade-off. Possession of a trusted module-signing private key can
 allow an attacker with sufficient local privilege to sign a malicious kernel
 module that the platform may then accept under Secure Boot. Therefore,
-`retain_signing_identity: true` must not be treated as a safe implementation
+`retainSigningIdentity: true` must not be treated as a safe implementation
 detail.
 
 - The private key must never be embedded directly in the YAML manifest, package
@@ -341,7 +353,7 @@ detail.
 - The signing certificate may be public, but the private key must not be exposed
   through diagnostics, crash bundles, or support tooling.
 - Images that do not require on-target DKMS rebuilds should set
-  `retain_signing_identity: false` and remove the private key after composition.
+  `retainSigningIdentity: false` and remove the private key after composition.
 - A product requiring stronger key protection should use a device-specific or
   hardware-backed signing identity rather than shipping the same reusable
   private key in every image.
@@ -477,7 +489,7 @@ The following is required for every source-based DKMS package:
 | `make`, `dpkg-dev`, `patch`, `kmod` | Required | Required for target-side HWE builds | Common DKMS build and module-management infrastructure. |
 | Target `linux-image` and module tree | Required | Required | Establishes `/lib/modules/<kernel>` and the kernel against which modules are installed. |
 | `depmod`/`modinfo` from `kmod` | Required | Required | Generates dependency maps and validates module metadata. |
-| Signing key, certificate, and signing tools | Required when Secure Boot signing is enabled | Required only when target-side signed DKMS rebuilds are supported | The manifest references protected build-time key material. The private key is copied into the final image only when `retain_signing_identity: true`; otherwise it remains build-time-only. |
+| Signing key, certificate, and signing tools | Required when Secure Boot signing is enabled | Required only when target-side signed DKMS rebuilds are supported | The manifest references protected build-time key material. The private key is copied into the final image only when `retainSigningIdentity: true`; otherwise it remains build-time-only. |
 | Initramfs tooling | If modules enter initramfs | Required | Regenerates the target initramfs after module installation. |
 
 Ubuntu's `dkms` package declares much of the generic compiler toolchain, but it
@@ -533,6 +545,9 @@ behavior.
   target-side HWE upgrades.
 - First boot must report a clear health failure if an expected module cannot be
   loaded; it must not silently start an unbounded background compilation.
+- At manifest-parse time, when Secure Boot signing is enabled, require non-empty
+  signing private-key and certificate references. Reject the manifest before
+  composition if either field is absent or blank.
 - When Secure Boot signing is enabled, fail composition if any expected module
   is unsigned or signed by an identity other than the manifest-selected
   certificate.
