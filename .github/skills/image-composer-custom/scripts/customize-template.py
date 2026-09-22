@@ -82,7 +82,7 @@ def list_base_templates():
                     desc = meta["description"]
                 elif data.get("systemConfig", {}).get("description"):
                     desc = data["systemConfig"]["description"]
-        except (OSError, yaml.YAMLError, AttributeError, TypeError) as err:
+        except (OSError, UnicodeError, yaml.YAMLError, AttributeError, TypeError) as err:
             print(f"WARNING: Could not read metadata from {f}: {err}", file=sys.stderr)
         if desc:
             print(f"  {name:<55s} {desc}")
@@ -111,7 +111,7 @@ def list_user_templates():
                     desc = meta["description"]
                 elif data.get("systemConfig", {}).get("description"):
                     desc = data["systemConfig"]["description"]
-        except (OSError, yaml.YAMLError, AttributeError, TypeError) as err:
+        except (OSError, UnicodeError, yaml.YAMLError, AttributeError, TypeError) as err:
             print(f"WARNING: Could not read metadata from {f}: {err}", file=sys.stderr)
         custom_packages = ""
         try:
@@ -122,7 +122,7 @@ def list_user_templates():
             custom_count = len(extra) - base_packages
             if custom_count > 0:
                 custom_packages = f" (+{custom_count} custom pkgs)"
-        except (OSError, yaml.YAMLError, AttributeError, TypeError) as err:
+        except (OSError, UnicodeError, yaml.YAMLError, AttributeError, TypeError) as err:
             print(f"WARNING: Could not estimate package count for {f}: {err}", file=sys.stderr)
         print(f"  {f.name:<55s} {desc}{custom_packages}")
     print()
@@ -241,8 +241,8 @@ def build_image(output_name):
         return False
 
     tool_path = (cwd / "image-composer-tool").resolve()
-    if not tool_path.is_file():
-        print(f"ERROR: image-composer-tool binary not found: {tool_path}")
+    if not tool_path.is_file() or not os.access(tool_path, os.X_OK):
+        print(f"ERROR: image-composer-tool binary is missing or not executable: {tool_path}")
         return False
 
     output_path = output_path.resolve()
