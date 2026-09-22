@@ -31,7 +31,9 @@ Examples:
 import os
 import sys
 import argparse
-import subprocess
+import shlex
+import shutil
+import subprocess  # nosec B404
 import yaml
 from pathlib import Path
 
@@ -80,8 +82,8 @@ def list_base_templates():
                     desc = meta["description"]
                 elif data.get("systemConfig", {}).get("description"):
                     desc = data["systemConfig"]["description"]
-        except Exception:
-            pass
+        except (OSError, yaml.YAMLError, AttributeError, TypeError) as err:
+            print(f"WARNING: Could not read metadata from {f}: {err}", file=sys.stderr)
         if desc:
             print(f"  {name:<55s} {desc}")
         else:
@@ -109,8 +111,8 @@ def list_user_templates():
                     desc = meta["description"]
                 elif data.get("systemConfig", {}).get("description"):
                     desc = data["systemConfig"]["description"]
-        except Exception:
-            pass
+        except (OSError, yaml.YAMLError, AttributeError, TypeError) as err:
+            print(f"WARNING: Could not read metadata from {f}: {err}", file=sys.stderr)
         custom_packages = ""
         try:
             with open(f) as fh:
@@ -120,8 +122,8 @@ def list_user_templates():
             custom_count = len(extra) - base_packages
             if custom_count > 0:
                 custom_packages = f" (+{custom_count} custom pkgs)"
-        except Exception:
-            pass
+        except (OSError, yaml.YAMLError, AttributeError, TypeError) as err:
+            print(f"WARNING: Could not estimate package count for {f}: {err}", file=sys.stderr)
         print(f"  {f.name:<55s} {desc}{custom_packages}")
     print()
 
@@ -232,15 +234,27 @@ def build_image(output_name):
         print(f"ERROR: Template not found: {output_path}")
         return False
 
-    cwd = Path.cwd()
-    build_cmd = f"cd {cwd} && sudo -E ./image-composer-tool build {output_path}"
+    cwd = Path.cwd().resolve()
+    sudo_path = shutil.which("sudo")
+    if not sudo_path:
+        print("ERROR: sudo executable not found in PATH")
+        return False
+
+    tool_path = (cwd / "image-composer-tool").resolve()
+    if not tool_path.is_file():
+        print(f"ERROR: image-composer-tool binary not found: {tool_path}")
+        return False
+
+    output_path = output_path.resolve()
+    build_args = [sudo_path, "-E", str(tool_path), "build", str(output_path)]
+    build_cmd = " ".join(shlex.quote(arg) for arg in build_args)
 
     print(f"\nBuilding: {output_path.name}")
     print(f"Command: {build_cmd}")
     print()
 
-    result = subprocess.run(
-        ["sudo", "-E", str(cwd / "image-composer-tool"), "build", str(output_path)],
+    result = subprocess.run(  # nosec B603
+        build_args,
         cwd=str(cwd),
         capture_output=False,
     )
