@@ -277,6 +277,8 @@ systemConfig:
       signingCertificate: /run/secrets/dkms/module-signing.crt
       # Copy the signing identity into the resulting image so future
       # target-side DKMS builds can sign modules after kernel updates.
+      # Reusing this key across a fleet creates a fleet-wide compromise risk:
+      # exposure on one device may enable trusted malicious modules on all devices.
       retainSigningIdentity: true
       targetPrivateKeyPath: /var/lib/dkms/secureboot/module-signing.key
       targetCertificatePath: /var/lib/dkms/secureboot/module-signing.crt
