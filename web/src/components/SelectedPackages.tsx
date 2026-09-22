@@ -7,8 +7,7 @@ interface SelectedPackagesProps {
 
 // SelectedPackages is the right rail: everything the user has added so far,
 // grouped by the repository it came from, with a per-item remove and a
-// clear-all. Stickiness is handled by the caller (PackagesStep.tsx), which
-// stacks this alongside BaseTemplatePackages in one sticky column.
+// clear-all. Stickiness is handled by the caller (PackagesStep.tsx).
 export function SelectedPackages({ repos }: SelectedPackagesProps) {
   const addedPackages = useStore((s) => s.addedPackages)
   const removePackage = useStore((s) => s.removePackage)

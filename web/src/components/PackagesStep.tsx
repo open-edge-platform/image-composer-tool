@@ -5,7 +5,6 @@ import type { PackageRepo, PackageSearchResult, PackageVersion } from '../api/ty
 import { PackageRepoBrowser } from './PackageRepoBrowser'
 import { PackageRow } from './PackageRow'
 import { SelectedPackages } from './SelectedPackages'
-import { BaseTemplatePackages } from './BaseTemplatePackages'
 import { useBaseLock, ensureBaseVersions, type BaseLock } from '../lib/baseLock'
 
 interface PackagesStepProps {
@@ -96,7 +95,6 @@ export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
             <PackageRepoBrowser repos={repos} os={os} baseLock={baseLock} />
           </div>
           <div className="sticky top-4 flex flex-col gap-3">
-            <BaseTemplatePackages packages={basePackages} />
             <SelectedPackages repos={repos} />
           </div>
         </div>
