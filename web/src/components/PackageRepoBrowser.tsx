@@ -505,6 +505,13 @@ function MergedPane({
           <div className="rounded border border-slate-100">
             {displayRows.map((h) => {
               const lock = baseLock.info(h.name)
+              // baseLock's own currentVersion only ever comes from the
+              // default-repo lookup (never run in the "Show only selected"
+              // panel — see the ensureBaseVersions effect above), so once a
+              // row has been live-resolved against the currently-checked
+              // repos, that fresher comparison is what should decide which
+              // chip is "current," not a value that's permanently absent here.
+              const currentVersion = liveResolved[h.name]?.version ?? lock.currentVersion
               return (
                 <PackageRow
                   key={h.name}
@@ -515,7 +522,7 @@ function MergedPane({
                   repoLabelFor={repoLabelFor}
                   selection={addedPackages.find((p) => p.name === h.name)}
                   locked={lock.locked}
-                  currentVersion={lock.currentVersion}
+                  currentVersion={currentVersion}
                   currentIsFloating={lock.currentIsFloating}
                   onToggle={(checked) => {
                     if (checked) {
