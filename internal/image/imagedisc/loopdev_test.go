@@ -42,6 +42,7 @@ func TestLoopSetupCreate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+				{Pattern: "losetup -l --json", Output: `{"loopdevices":[]}`, Error: nil},
 				{Pattern: "losetup --direct-io=on --show -f -P", Output: tt.output, Error: tt.cmdErr},
 			})
 
@@ -64,6 +65,189 @@ func TestLoopSetupCreate(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDetachStaleLoopDevices(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	t.Run("no devices attached", func(t *testing.T) {
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+			{Pattern: "losetup -l --json", Output: `{"loopdevices":[]}`},
+		})
+		got := detachStaleLoopDevices(&LoopDev{}, "/tmp/test.raw")
+		if len(got) != 0 {
+			t.Fatalf("expected no detached devices, got %v", got)
+		}
+	})
+
+	t.Run("non-matching back-file is left alone", func(t *testing.T) {
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+			{Pattern: "losetup -l --json", Output: `{"loopdevices":[{"name":"/dev/loop98","back-file":"/tmp/other.raw"}]}`},
+		})
+		got := detachStaleLoopDevices(&LoopDev{}, "/tmp/test.raw")
+		if len(got) != 0 {
+			t.Fatalf("expected no detached devices, got %v", got)
+		}
+	})
+
+	t.Run("back-file whitespace is preserved, not trimmed", func(t *testing.T) {
+		// A blanket TrimSpace would incorrectly normalize this distinct,
+		// whitespace-suffixed backing file into a false match against imagePath.
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+			{Pattern: "losetup -l --json", Output: `{"loopdevices":[{"name":"/dev/loop95","back-file":"/tmp/test.raw "}]}`},
+		})
+		got := detachStaleLoopDevices(&LoopDev{}, "/tmp/test.raw")
+		if len(got) != 0 {
+			t.Fatalf("expected back-file with trailing whitespace not to match a distinct path, got %v", got)
+		}
+	})
+
+	t.Run("stale device with deleted back-file is detached", func(t *testing.T) {
+		// Both paths live under t.TempDir() rather than a hardcoded /tmp path
+		// so the test doesn't depend on nothing at that literal host path
+		// existing: resolveBackFile explicitly stats the suffixed back-file.
+		dir := t.TempDir()
+		imgPath := filepath.Join(dir, "test.raw")
+		deletedBackFile := imgPath + deletedBackFileSuffix
+
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+			{Pattern: "losetup -l --json", Output: fmt.Sprintf(`{"loopdevices":[{"name":"/dev/loop97","back-file":%q}]}`, deletedBackFile)},
+			{Pattern: `lsblk -o NAME,MOUNTPOINT /dev/loop97 -J`, Output: `{"blockdevices":[{"name":"loop97","mountpoint":null}]}`},
+			// LoopSetupDelete's disableSwapPartitions scan; mock it (no swap
+			// partitions) so the test stays hermetic.
+			{Pattern: `lsblk -o NAME,FSTYPE /dev/loop97 -J`, Output: `{"blockdevices":[]}`},
+			{Pattern: "losetup -d /dev/loop97", Output: ""},
+		})
+		got := detachStaleLoopDevices(&LoopDev{}, imgPath)
+		if len(got) != 1 || got[0] != "/dev/loop97" {
+			t.Fatalf("expected [/dev/loop97] detached, got %v", got)
+		}
+	})
+
+	t.Run("actively mounted device is left attached", func(t *testing.T) {
+		// A matching back-file alone doesn't prove the device is abandoned:
+		// a concurrent process could be actively using it. An active
+		// mountpoint on any partition must block the detach.
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+			{Pattern: "losetup -l --json", Output: `{"loopdevices":[{"name":"/dev/loop91","back-file":"/tmp/test.raw"}]}`},
+			{Pattern: `lsblk -o NAME,MOUNTPOINT /dev/loop91 -J`, Output: `{"blockdevices":[{"name":"loop91","children":[{"name":"loop91p1","mountpoint":"/mnt/live-build"}]}]}`},
+		})
+		got := detachStaleLoopDevices(&LoopDev{}, "/tmp/test.raw")
+		if len(got) != 0 {
+			t.Fatalf("expected an actively mounted device not to be detached, got %v", got)
+		}
+	})
+
+	t.Run("mount-state lookup failure causes device to be skipped", func(t *testing.T) {
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+			{Pattern: "losetup -l --json", Output: `{"loopdevices":[{"name":"/dev/loop90","back-file":"/tmp/test.raw"}]}`},
+			{Pattern: `lsblk -o NAME,MOUNTPOINT /dev/loop90 -J`, Error: fmt.Errorf("lsblk failed")},
+		})
+		got := detachStaleLoopDevices(&LoopDev{}, "/tmp/test.raw")
+		if len(got) != 0 {
+			t.Fatalf("expected device to be skipped when mount state can't be determined, got %v", got)
+		}
+	})
+
+	t.Run("relative image path matches an absolute back-file", func(t *testing.T) {
+		dir := t.TempDir()
+		imgPath := filepath.Join(dir, "test.raw")
+		if err := os.WriteFile(imgPath, []byte("x"), 0600); err != nil {
+			t.Fatalf("failed to create test image: %v", err)
+		}
+		resolvedImgPath, err := filepath.EvalSymlinks(imgPath)
+		if err != nil {
+			t.Fatalf("failed to resolve test image path: %v", err)
+		}
+
+		origWD, err := os.Getwd()
+		if err != nil {
+			t.Fatalf("failed to get working directory: %v", err)
+		}
+		if err := os.Chdir(dir); err != nil {
+			t.Fatalf("failed to chdir into %s: %v", dir, err)
+		}
+		defer func() { _ = os.Chdir(origWD) }()
+
+		// losetup reports back-file as the canonical absolute path even
+		// though the caller (loopSetupCreate) may pass a relative one.
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+			{Pattern: "losetup -l --json", Output: fmt.Sprintf(`{"loopdevices":[{"name":"/dev/loop94","back-file":%q}]}`, resolvedImgPath)},
+			{Pattern: `lsblk -o NAME,MOUNTPOINT /dev/loop94 -J`, Output: `{"blockdevices":[{"name":"loop94","mountpoint":null}]}`},
+			{Pattern: `lsblk -o NAME,FSTYPE /dev/loop94 -J`, Output: `{"blockdevices":[]}`},
+			{Pattern: "losetup -d /dev/loop94", Output: ""},
+		})
+
+		got := detachStaleLoopDevices(&LoopDev{}, "test.raw")
+		if len(got) != 1 || got[0] != "/dev/loop94" {
+			t.Fatalf("expected [/dev/loop94] detached via relative-path match, got %v", got)
+		}
+	})
+
+	t.Run("literal filename ending in the deleted suffix is preserved when it exists", func(t *testing.T) {
+		dir := t.TempDir()
+		weirdPath := filepath.Join(dir, "test.raw (deleted)")
+		if err := os.WriteFile(weirdPath, []byte("x"), 0600); err != nil {
+			t.Fatalf("failed to create test file: %v", err)
+		}
+
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+			{Pattern: "losetup -l --json", Output: fmt.Sprintf(`{"loopdevices":[{"name":"/dev/loop93","back-file":%q}]}`, weirdPath)},
+		})
+
+		// imagePath is the file without the suffix: a distinct, real file
+		// from weirdPath. The literal " (deleted)"-suffixed back-file exists
+		// on disk, so it must not be treated as losetup's annotation and
+		// must not match imagePath.
+		got := detachStaleLoopDevices(&LoopDev{}, filepath.Join(dir, "test.raw"))
+		if len(got) != 0 {
+			t.Fatalf("expected literal back-file not to match a distinct path, got %v", got)
+		}
+	})
+
+	t.Run("non-not-exist stat error causes device to be skipped", func(t *testing.T) {
+		dir := t.TempDir()
+		regularFile := filepath.Join(dir, "notadir")
+		if err := os.WriteFile(regularFile, []byte("x"), 0600); err != nil {
+			t.Fatalf("failed to create file: %v", err)
+		}
+		// A parent path component is a regular file, not a directory, so
+		// stat fails with ENOTDIR rather than "not exist".
+		badPath := filepath.Join(regularFile, "test.raw (deleted)")
+
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+			{Pattern: "losetup -l --json", Output: fmt.Sprintf(`{"loopdevices":[{"name":"/dev/loop92","back-file":%q}]}`, badPath)},
+		})
+
+		got := detachStaleLoopDevices(&LoopDev{}, "/tmp/test.raw")
+		if len(got) != 0 {
+			t.Fatalf("expected device with an unresolvable back-file to be skipped, got %v", got)
+		}
+	})
+
+	t.Run("detach failure is logged and not reported as detached", func(t *testing.T) {
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+			{Pattern: "losetup -l --json", Output: `{"loopdevices":[{"name":"/dev/loop96","back-file":"/tmp/test.raw"}]}`},
+			{Pattern: `lsblk -o NAME,MOUNTPOINT /dev/loop96 -J`, Output: `{"blockdevices":[{"name":"loop96","mountpoint":null}]}`},
+			{Pattern: `lsblk -o NAME,FSTYPE /dev/loop96 -J`, Output: `{"blockdevices":[]}`},
+			{Pattern: "losetup -d /dev/loop96", Error: fmt.Errorf("detach failed")},
+		})
+		got := detachStaleLoopDevices(&LoopDev{}, "/tmp/test.raw")
+		if len(got) != 0 {
+			t.Fatalf("expected no successfully detached devices, got %v", got)
+		}
+	})
+
+	t.Run("enumeration failure is non-fatal", func(t *testing.T) {
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+			{Pattern: "losetup -l --json", Error: fmt.Errorf("losetup failed")},
+		})
+		got := detachStaleLoopDevices(&LoopDev{}, "/tmp/test.raw")
+		if len(got) != 0 {
+			t.Fatalf("expected no detached devices, got %v", got)
+		}
+	})
 }
 
 func TestLoopSetupCreateEmptyRawDisk(t *testing.T) {
@@ -170,6 +354,7 @@ func TestAttachImageToLoopDev(t *testing.T) {
 	t.Run("success returns partitions", func(t *testing.T) {
 		img := makeImage(t)
 		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+			{Pattern: "losetup -l --json", Output: `{"loopdevices":[]}`},
 			{Pattern: "losetup --direct-io=on --show -f -P", Output: "/dev/loop6\n"},
 			{Pattern: `lsblk -prno NAME '/dev/loop6'`, Output: "/dev/loop6\n/dev/loop6p1\n"},
 		})
@@ -190,6 +375,7 @@ func TestAttachImageToLoopDev(t *testing.T) {
 	t.Run("detaches on partition enumeration failure", func(t *testing.T) {
 		img := makeImage(t)
 		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+			{Pattern: "losetup -l --json", Output: `{"loopdevices":[]}`},
 			{Pattern: "losetup --direct-io=on --show -f -P", Output: "/dev/loop5\n"},
 			{Pattern: `lsblk -prno NAME '/dev/loop5'`, Error: fmt.Errorf("lsblk failed")},
 			// Cleanup (LoopSetupDelete -> disableSwapPartitions) runs this lsblk
@@ -207,6 +393,7 @@ func TestAttachImageToLoopDev(t *testing.T) {
 	t.Run("surfaces detach failure alongside enumeration failure", func(t *testing.T) {
 		img := makeImage(t)
 		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+			{Pattern: "losetup -l --json", Output: `{"loopdevices":[]}`},
 			{Pattern: "losetup --direct-io=on --show -f -P", Output: "/dev/loop2\n"},
 			{Pattern: `lsblk -prno NAME '/dev/loop2'`, Error: fmt.Errorf("lsblk failed")},
 			// swapoff scan during detach is best-effort; mock its lsblk (no swap
@@ -382,6 +569,7 @@ Disklabel type: gpt`
 		// Use shell mocks for all external commands touched in this path.
 		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
 			{Pattern: "sudo fallocate -l 1MiB", Output: "", Error: nil},
+			{Pattern: "sudo losetup -l --json", Output: `{"loopdevices":[]}`, Error: nil},
 			{Pattern: "sudo losetup --direct-io=on --show -f -P", Output: "/dev/loop7\n", Error: nil},
 			{Pattern: "sudo fdisk -l /dev/loop7", Output: gptDiskInfo, Error: nil},
 			{Pattern: "sudo cat /sys/block/loop7/queue/hw_sector_size", Output: "512", Error: nil},

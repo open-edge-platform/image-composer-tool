@@ -2,6 +2,7 @@ package imagedisc
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/mount"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/runctx"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/slice"
 )
@@ -206,14 +208,51 @@ func verifyPartitionTableLabel(diskPath, expectedLabel string) (bool, error) {
 	return strings.TrimSpace(actualLabel) == expectedLabel, nil
 }
 
+// errSfdiskTimeout marks an execSfdiskBounded failure caused specifically by
+// its own bounded timeout elapsing — not sfdisk's exit status, not the
+// parent (build-level) context being cancelled (e.g. Ctrl+C), and not the
+// parent's own deadline expiring at the same moment. A SIGTERM'd
+// bash/sudo/sfdisk process group surfaces as a plain "signal: terminated"
+// exec error with no trace of the context in its chain (shell.ExecCmd never
+// returns context.DeadlineExceeded itself), so callers cannot distinguish a
+// timeout from any other command failure without this wrapper. Classifying a
+// parent cancellation or parent-deadline expiry as errSfdiskTimeout would
+// route it into createPartitionTable's busy-disk release/retry branch
+// instead of propagating it, potentially masking it with a release error.
+var errSfdiskTimeout = errors.New("sfdisk timed out")
+
+// execSfdiskBounded runs an sfdisk-invoking cmdStr under a bounded context
+// instead of the ambient (potentially unbounded) build context. sfdisk can
+// wedge indefinitely if the kernel's partition-table re-read blocks behind a
+// stale handle on the same device (loopSetupCreate's stale-device detach
+// guards against the usual trigger for that). Without a bound here,
+// createPartitionTable's surrounding retry-with-elapsed-time loops never get
+// a chance to observe the elapsed time, because the blocking call itself
+// never returns. Cancelling ctx sends SIGTERM to the whole bash/sudo/sfdisk
+// process group (see shell.applyExecAttrs), which unsticks it deterministically.
+func execSfdiskBounded(cmdStr string, timeout time.Duration, sudo bool) (string, error) {
+	parentCtx := runctx.Context()
+	ctx, cancel := context.WithTimeout(parentCtx, timeout)
+	defer cancel()
+	restore := shell.SetContext(ctx)
+	defer restore()
+	output, err := shell.ExecCmd(cmdStr, sudo, shell.HostPath, nil)
+	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) && parentCtx.Err() == nil {
+		return output, fmt.Errorf("%w: %w", errSfdiskTimeout, err)
+	}
+	return output, err
+}
+
 func createPartitionTable(diskPath, partitionTableType string) (string, error) {
+	const maxRetryDuration = 30 * time.Second
+
 	label := "dos"
 	if partitionTableType == "gpt" {
 		label = "gpt"
 	}
 
 	cmdStr := fmt.Sprintf("echo 'label: %s' | sudo sfdisk %s", label, diskPath)
-	cmdOutput, err := shell.ExecCmd(cmdStr, false, shell.HostPath, nil)
+	cmdOutput, err := execSfdiskBounded(cmdStr, maxRetryDuration, false)
 	if err == nil {
 		verified, verifyErr := verifyPartitionTableLabel(diskPath, label)
 		if verifyErr != nil {
@@ -228,18 +267,21 @@ func createPartitionTable(diskPath, partitionTableType string) (string, error) {
 	}
 
 	trimmedOutput := strings.TrimSpace(cmdOutput)
-	if err != nil && !isDiskInUsePartitioningOutput(trimmedOutput) {
+	timedOut := errors.Is(err, errSfdiskTimeout)
+	if err != nil && !isDiskInUsePartitioningOutput(trimmedOutput) && !timedOut {
 		return cmdOutput, err
 	}
 
 	if err != nil {
-		log.Warnf("Disk %s reported busy during %s partition table creation; releasing disk and retrying with force", diskPath, partitionTableType)
+		if timedOut {
+			log.Warnf("sfdisk timed out creating %s partition table on %s; releasing disk and retrying with force", partitionTableType, diskPath)
+		} else {
+			log.Warnf("Disk %s reported busy during %s partition table creation; releasing disk and retrying with force", diskPath, partitionTableType)
+		}
 		if releaseErr := releaseDiskForPartitioning(diskPath); releaseErr != nil {
 			return cmdOutput, fmt.Errorf("failed to release busy disk %s before retry: %w", diskPath, releaseErr)
 		}
 	}
-
-	const maxRetryDuration = 30 * time.Second
 
 	// Part 1: Wipe disk and verify it's actually wiped (with retry and timeout)
 	partStartTime := time.Now()
@@ -277,7 +319,7 @@ func createPartitionTable(diskPath, partitionTableType string) (string, error) {
 	partStartTime = time.Now()
 	for {
 		var retryOutput string
-		retryOutput, err = shell.ExecCmd(fmt.Sprintf("echo 'label: %s' | sudo sfdisk --force --wipe always %s", label, diskPath), true, shell.HostPath, nil)
+		retryOutput, err = execSfdiskBounded(fmt.Sprintf("echo 'label: %s' | sudo sfdisk --force --wipe always %s", label, diskPath), maxRetryDuration, true)
 		cmdOutput = retryOutput
 		if err != nil {
 			return retryOutput, err

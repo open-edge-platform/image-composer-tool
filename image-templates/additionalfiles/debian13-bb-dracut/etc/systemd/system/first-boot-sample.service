@@ -1,0 +1,17 @@
+[Unit]
+Description=Sample script that runs once, on first boot only
+# Skip ExecStart once the marker exists; the unit itself is still WantedBy
+# every boot so it stays a lightweight no-op after the first run instead of
+# needing to disable itself (self-disabling a systemd unit from within its
+# own ExecStart is racy with RemainAfterExit=yes).
+ConditionPathExists=!/var/lib/first-boot-sample.done
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/first-boot-sample.sh
+ExecStartPost=/bin/sh -c 'mkdir -p /var/lib && touch /var/lib/first-boot-sample.done'
+StandardOutput=journal+console
+
+[Install]
+WantedBy=multi-user.target

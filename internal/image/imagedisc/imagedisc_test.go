@@ -1,13 +1,17 @@
 package imagedisc
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/runctx"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
 
@@ -769,6 +773,160 @@ func TestGetPartUUID(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestExecSfdiskBoundedTimeout exercises execSfdiskBounded against the real
+// executor (not a mock, which returns instantly and never lets the bound
+// context's deadline actually elapse) so a genuinely blocking command is
+// cancelled promptly and classified as errSfdiskTimeout, and the ambient
+// shell context is restored afterward rather than left cancelled.
+func TestExecSfdiskBoundedTimeout(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+	shell.Default = &shell.DefaultExecutor{}
+
+	start := time.Now()
+	_, err := execSfdiskBounded("sleep 5", 200*time.Millisecond, false)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected error from a command that outlives its bound context")
+	}
+	if !errors.Is(err, errSfdiskTimeout) {
+		t.Fatalf("expected errSfdiskTimeout in the error chain, got %v", err)
+	}
+	if elapsed >= 4*time.Second {
+		t.Fatalf("expected the bounded context to cancel the command promptly, took %v", elapsed)
+	}
+
+	// The ambient shell context must be restored once execSfdiskBounded
+	// returns: a subsequent unbounded command should run to completion
+	// rather than inherit the now-expired deadline.
+	restoreStart := time.Now()
+	if _, err := shell.ExecCmd("sleep 1", false, shell.HostPath, nil); err != nil {
+		t.Fatalf("expected ambient shell context to be restored after execSfdiskBounded, got %v", err)
+	}
+	if time.Since(restoreStart) < 900*time.Millisecond {
+		t.Fatalf("expected sleep 1 to run under a restored, unbounded context")
+	}
+}
+
+// TestExecSfdiskBoundedParentCancellationNotClassifiedAsTimeout ensures a
+// Ctrl+C-style cancellation of the parent (build-level) context propagates
+// as an ordinary error rather than being misclassified as errSfdiskTimeout,
+// which would otherwise route it into createPartitionTable's busy-disk
+// release/retry branch instead of letting the cancellation surface. Rather
+// than a fixed sleep (which races cancellation against process start on a
+// loaded runner and may never exercise killing a live process), the command
+// touches a marker file right after it starts; the test waits for that file
+// before cancelling, so cancellation always lands on a running process.
+func TestExecSfdiskBoundedParentCancellationNotClassifiedAsTimeout(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+	shell.Default = &shell.DefaultExecutor{}
+
+	parentCtx, cancelParent := context.WithCancel(context.Background())
+	restoreRun := runctx.SetContext(parentCtx)
+	defer restoreRun()
+
+	startedFile := filepath.Join(t.TempDir(), "started")
+	cmdStr := fmt.Sprintf("touch %s && sleep 5", startedFile)
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := execSfdiskBounded(cmdStr, 10*time.Second, false)
+		errCh <- err
+	}()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if _, statErr := os.Stat(startedFile); statErr == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for command to start (marker file %s never appeared)", startedFile)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancelParent()
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("expected error when the parent context is cancelled")
+		}
+		if errors.Is(err, errSfdiskTimeout) {
+			t.Fatalf("parent cancellation must not be classified as errSfdiskTimeout, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("execSfdiskBounded did not return within 5s of parent cancellation")
+	}
+}
+
+// TestExecSfdiskBoundedParentDeadlineNotClassifiedAsTimeout ensures that when
+// the parent (build-level) context's own deadline expires — not
+// execSfdiskBounded's 30s bound — the failure is not classified as
+// errSfdiskTimeout, which would otherwise route a build-level timeout into
+// createPartitionTable's busy-disk release/retry branch and potentially mask
+// it with a release error instead of propagating it.
+func TestExecSfdiskBoundedParentDeadlineNotClassifiedAsTimeout(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+	shell.Default = &shell.DefaultExecutor{}
+
+	parentCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	restoreRun := runctx.SetContext(parentCtx)
+	defer restoreRun()
+
+	_, err := execSfdiskBounded("sleep 5", 10*time.Second, false)
+	if err == nil {
+		t.Fatal("expected error when the parent context's own deadline expires")
+	}
+	if errors.Is(err, errSfdiskTimeout) {
+		t.Fatalf("parent deadline expiry must not be classified as the helper's own errSfdiskTimeout, got %v", err)
+	}
+}
+
+// TestCreatePartitionTableRoutesTimeoutToForceRetry covers the failure mode
+// Copilot flagged: a timed-out initial sfdisk call must be classified the
+// same way as sfdisk reporting the disk busy, so it falls into the existing
+// release-and-retry-with-force path instead of returning immediately.
+func TestCreatePartitionTableRoutesTimeoutToForceRetry(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	diskPath := "/dev/sda"
+	// No partition entries and a matching "Disklabel type: gpt" line so this
+	// single fixture satisfies both the Part 1 wipe-verification check (no
+	// partitions left) and the Part 2 label-verification check (label matches).
+	fdiskInfo := `Disk /dev/sda: 1 GiB, 1073741824 bytes, 2097152 sectors
+Units: sectors of 1 * 512 = 512 bytes
+Sector size (logical/physical): 512 bytes / 4096 bytes
+Disklabel type: gpt
+Disk identifier: ABCD1234`
+
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		// Initial sfdisk call: simulate execSfdiskBounded classifying the
+		// failure as a timeout rather than sfdisk's own exit status. The
+		// pipe is escaped so this doesn't also match the --force retry
+		// command below via regex alternation.
+		{Pattern: `echo 'label: gpt' \| sudo sfdisk /dev/sda$`, Error: errSfdiskTimeout},
+		// releaseDiskForPartitioning: disk with no partitions or mountpoint,
+		// so no umount/swapoff calls are needed before the sync.
+		{Pattern: "lsblk /dev/sda --json", Output: `{"blockdevices":[{"name":"sda","path":"/dev/sda","type":"disk"}]}`},
+		{Pattern: "sudo sync", Output: ""},
+		// Part 1: wipe and verify (fdiskInfo reports no partitions).
+		{Pattern: "sudo wipefs -a -f /dev/sda", Output: ""},
+		{Pattern: "sudo fdisk -l /dev/sda", Output: fdiskInfo},
+		// Part 2: forced sfdisk succeeds, verification confirms the gpt label.
+		{Pattern: `echo 'label: gpt' \| sudo sfdisk --force --wipe always /dev/sda`, Output: ""},
+		{Pattern: "sudo partx -u /dev/sda", Output: ""},
+	})
+
+	if _, err := createPartitionTable(diskPath, "gpt"); err != nil {
+		t.Fatalf("expected timeout to route into the retry-with-force path and succeed, got %v", err)
 	}
 }
 
