@@ -1,4 +1,4 @@
-import { useStore, type AddedPackage } from '../store'
+import { useStore, confirmRepoRelease, type AddedPackage } from '../store'
 import type { PackageRepo } from '../api/types'
 
 interface SelectedPackagesProps {
@@ -7,14 +7,14 @@ interface SelectedPackagesProps {
 
 // SelectedPackages is the right rail: everything the user has added so far,
 // grouped by the repository it came from, with a per-item remove and a
-// clear-all. Sticky (not fixed — this app's nav is static) so it stays
-// visible while the left pane scrolls through a long package list.
+// clear-all. Stickiness is handled by the caller (PackagesStep.tsx).
 export function SelectedPackages({ repos }: SelectedPackagesProps) {
   const addedPackages = useStore((s) => s.addedPackages)
   const removePackage = useStore((s) => s.removePackage)
   const clearPackages = useStore((s) => s.clearPackages)
 
   const labelFor = (repoId: string) => repos.find((r) => r.id === repoId)?.displayName ?? repoId
+  const isBaseRepo = (repoId: string) => repos.find((r) => r.id === repoId)?.enabledByDefault ?? false
 
   const groups = new Map<string, AddedPackage[]>()
   for (const p of addedPackages) {
@@ -25,7 +25,7 @@ export function SelectedPackages({ repos }: SelectedPackagesProps) {
   const repoIds = [...groups.keys()].sort((a, b) => labelFor(a).localeCompare(labelFor(b)))
 
   return (
-    <div className="sticky top-4 rounded-lg border border-slate-200 bg-white">
+    <div className="rounded-lg border border-slate-200 bg-white">
       <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2.5">
         <span className="text-[13px] font-bold text-[#00285a]">
           Selected ({addedPackages.length})
@@ -69,7 +69,11 @@ export function SelectedPackages({ repos }: SelectedPackagesProps) {
                   </span>
                   <button
                     type="button"
-                    onClick={() => removePackage(p.name)}
+                    onClick={() =>
+                      removePackage(p.name, {
+                        releaseRepo: confirmRepoRelease(addedPackages, labelFor, [p.name], isBaseRepo),
+                      })
+                    }
                     aria-label={`Remove ${p.name}`}
                     className="shrink-0 text-slate-400 hover:text-red-600"
                   >

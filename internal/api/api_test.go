@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -195,6 +196,9 @@ func TestHandleComposeWithPackages(t *testing.T) {
 	}
 	if resp.BaseYaml == nil || *resp.BaseYaml == "" {
 		t.Error("baseYaml not published for a selection with packages")
+	}
+	if resp.BasePackages != nil && slices.Contains(*resp.BasePackages, "htop") {
+		t.Errorf("basePackages = %v, must not carry the selected package", *resp.BasePackages)
 	}
 }
 

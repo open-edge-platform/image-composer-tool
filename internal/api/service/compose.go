@@ -96,6 +96,12 @@ type ComposeResult struct {
 	// base template already lists unpinned. The merge unions package lists and
 	// cannot drop the parent's entry, so both survive into YAML. Advisory only.
 	PinConflicts []string
+	// BasePackages is the curated template's own systemConfig.packages list —
+	// what it ships before this selection's overrides are applied. Populated
+	// unconditionally (unlike BaseYAML/PinConflicts), so a caller can show
+	// "already included" packages even before the user has added anything of
+	// their own.
+	BasePackages []string
 }
 
 // Compose resolves the selections to a template, applies any Advanced-mode
@@ -183,6 +189,9 @@ func (s *Service) Compose(sel Selection) (*ComposeResult, error) {
 		YAML:      string(yamlBytes),
 		Summary:   buildComposeSummary(sel, merged),
 		DeltaYAML: deltaYAML,
+		// With no overrides, merged *is* the base template — set here so it's
+		// still correct if the overrides branch below skips the second resolve.
+		BasePackages: merged.SystemConfig.Packages,
 	}
 
 	// With overrides in play, resolve the curated parent a second time so the
@@ -197,6 +206,7 @@ func (s *Service) Compose(sel Selection) (*ComposeResult, error) {
 				res.BaseYAML = string(baseBytes)
 			}
 			res.PinConflicts = pinConflicts(sel.Packages, base.SystemConfig.Packages)
+			res.BasePackages = base.SystemConfig.Packages
 		} else {
 			logger.Logger().Warnf("compose: baseline resolve of %s failed, omitting base view: %v", tmpl, berr)
 		}

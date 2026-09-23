@@ -260,9 +260,10 @@ func fromSummary(s *service.ComposeSummary) *httpapi.ComposeSummary {
 	}
 }
 
-// fromComposeResult maps the compose outcome onto the contract type. deltaYaml,
-// baseYaml and pinConflicts are omitempty in the spec, so a selection with no
-// overrides sends none of them rather than three empty values.
+// fromComposeResult maps the compose outcome onto the contract type. deltaYaml
+// and pinConflicts are omitempty in the spec, so a selection with no overrides
+// sends neither. basePackages and baseYaml are also omitempty, but
+// basePackages is populated regardless of overrides (see ComposeResult).
 func fromComposeResult(r *service.ComposeResult) httpapi.ComposeResponse {
 	out := httpapi.ComposeResponse{
 		Template:  r.Template,
@@ -274,6 +275,10 @@ func fromComposeResult(r *service.ComposeResult) httpapi.ComposeResponse {
 	if len(r.PinConflicts) > 0 {
 		conflicts := r.PinConflicts
 		out.PinConflicts = &conflicts
+	}
+	if len(r.BasePackages) > 0 {
+		basePackages := r.BasePackages
+		out.BasePackages = &basePackages
 	}
 	return out
 }
