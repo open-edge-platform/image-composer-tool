@@ -424,46 +424,10 @@ func createTempGPGKeyFiles(gpgKeyURLs []string) (keyPaths []string, cleanup func
 func Validate(destDir string) error {
 	log := logger.Logger()
 
-	localRepoRPMNames := make(map[string]struct{})
-	for _, userRepo := range UserRepo {
-		if userRepo.Path == "" {
-			continue
-		}
-
-		localRPMs, err := filepath.Glob(filepath.Join(userRepo.Path, "*.rpm"))
-		if err != nil {
-			return fmt.Errorf("glob local repo RPMs in %s: %w", userRepo.Path, err)
-		}
-
-		for _, rpmPath := range localRPMs {
-			localRepoRPMNames[filepath.Base(rpmPath)] = struct{}{}
-		}
-	}
-
 	rpmPattern := filepath.Join(destDir, "*.rpm")
 	rpmPaths, err := filepath.Glob(rpmPattern)
 	if err != nil {
 		return fmt.Errorf("glob %q: %w", rpmPattern, err)
-	}
-
-	verifiableRPMPaths := make([]string, 0, len(rpmPaths))
-	skippedLocalRPMs := 0
-	for _, rpmPath := range rpmPaths {
-		if _, isLocal := localRepoRPMNames[filepath.Base(rpmPath)]; isLocal {
-			skippedLocalRPMs++
-			continue
-		}
-
-		verifiableRPMPaths = append(verifiableRPMPaths, rpmPath)
-	}
-
-	if skippedLocalRPMs > 0 {
-		log.Infof("skipping verification for %d local-repo RPM(s)", skippedLocalRPMs)
-	}
-
-	if len(rpmPaths) > 0 && len(verifiableRPMPaths) == 0 {
-		log.Info("no non-local RPMs to verify")
-		return nil
 	}
 
 	// Collect all GPG key URLs (could be from RepoCfg and UserRepo)
@@ -474,12 +438,8 @@ func Validate(destDir string) error {
 		gpgKeyURLs = append(gpgKeyURLs, splitGPGKeyURLs(RepoCfg.GPGKey)...)
 	}
 
-	// Add user repo GPG keys
+	// Add user repo GPG keys, including local repos, so their RPMs can still verify
 	for _, userRepo := range UserRepo {
-		if userRepo.Path != "" {
-			continue
-		}
-
 		// Collect keys from both PKey (string) and PKeys (array)
 		var userKeys []string
 
@@ -529,7 +489,7 @@ func Validate(destDir string) error {
 	}
 
 	start := time.Now()
-	results := VerifyAll(verifiableRPMPaths, gpgKeyPaths, 4)
+	results := VerifyAll(rpmPaths, gpgKeyPaths, 4)
 	log.Infof("RPM verification took %s", time.Since(start))
 
 	// Check results
