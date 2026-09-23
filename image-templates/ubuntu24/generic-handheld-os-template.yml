@@ -1,3 +1,4 @@
+---
 # SPDX-FileCopyrightText: (C) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 
@@ -45,7 +46,7 @@ disk:
       typeUUID: 0657fd6d-a4ab-43c4-84e5-0933c84b4f4f
       fsType: linux-swap
       start: 1025MiB
-      end: 3073MiB
+      end: 5121MiB
       mountPoint: none
       mountOptions: sw
       flags: []
@@ -56,7 +57,7 @@ disk:
       # Standard Linux root filesystem GUID for x86_64
       typeUUID: 4f68bce3-e8cd-4db1-96e7-fbcaf984b709
       fsType: ext4
-      start: 3073MiB
+      start: 5121MiB
       end: "0"
       mountPoint: /
       mountOptions: defaults
@@ -64,65 +65,53 @@ disk:
 
 # Additional package repositories for this image
 packageRepositories:
-
   # Intel overlay repository (aligned with installer script)
-  - codename: "noble"
-    url: "https://download.01.org/intel-linux-overlay/ubuntu"
-    pkey: "https://download.01.org/intel-linux-overlay/ubuntu/E6FA98203588250569758E97D176E3162086EE4C.gpg"
-    component: "multimedia main non-free kernels"
+  - codename: "noble/snapshots/2026_S_REL3-meta-data-fix"
+    url: "https://download.01.org/edge-linux-overlay/ubuntu"
+    pkey: "https://download.01.org/edge-linux-overlay/ubuntu/9C63745D2A211728B8CE98C5F84B1B6A704E41B2.gpg"
+    component: "main non-free multimedia kernels"
     priority: 2000
     allowPackages:
-      - libigfxcmrt-dev
       - libigfxcmrt7
-      - vim
-      - ocl-icd-libopencl1
       - curl
-      - openssh-server
-      - net-tools
       - gir1.2-gst-plugins-bad-1.0
-      - gir1.2-gst-plugins-base-1.0
       - gir1.2-gstreamer-1.0
-      - gir1.2-gst-rtsp-server-1.0
-      - gstreamer1.0-alsa
-      - gstreamer1.0-gl
-      - gstreamer1.0-gtk3
-      - gstreamer1.0-opencv
       - gstreamer1.0-plugins-bad
-      - gstreamer1.0-plugins-bad-apps
-      - gstreamer1.0-plugins-base
-      - gstreamer1.0-plugins-base-apps
       - gstreamer1.0-plugins-good
-      - gstreamer1.0-plugins-ugly
+      - gstreamer1.0-plugins-base
       - gstreamer1.0-pulseaudio
-      - gstreamer1.0-qt5
-      - gstreamer1.0-rtsp
-      - gstreamer1.0-tools
-      - gstreamer1.0-x
-      - intel-media-va-driver
-      - libdrm-amdgpu1
-      - libdrm-common
-      - libdrm-dev
-      - libdrm-intel1
-      - libdrm-nouveau2
-      - libdrm-radeon1
-      - libdrm-tests
-      - libdrm2
-      - libgstrtspserver-1.0-dev
-      - libgstrtspserver-1.0-0
-      - libgstreamer-gl1.0-0
-      - libgstreamer-opencv1.0-0
-      - libgstreamer-plugins-bad1.0-0
-      - libgstreamer-plugins-bad1.0-dev
-      - libgstreamer-plugins-base1.0-0
-      - libgstreamer-plugins-base1.0-dev
-      - libgstreamer-plugins-good1.0-0
+      # base gstreamer libs (pulled in as deps of the plugins above; the
+      # overlay ships 1.26.x while stock noble only has 1.24.x, so they must
+      # be allowed from the overlay to satisfy the >=1.26 version constraints)
       - libgstreamer1.0-0
-      - libgstreamer1.0-dev
-      - libigdgmm-dev
+      - libgstreamer-gl1.0-0
+      - libgstreamer-plugins-base1.0-0
+      - libgstreamer-plugins-bad1.0-0
       - libigdgmm12
+      # ----- Intel GPU Compute Stack (compute-runtime, IGC, Level Zero) -----
+      # Remove these to disable: OpenCL / Level Zero GPU compute
+      #
+      # All 7 are served by the INTERNAL repo (component: internal) and are newer
+      # than the GitHub release .debs that used to be dpkg -i'd in
+      # `configurations:` (that block is now commented out — see it for the
+      # version comparison and why re-enabling it would break the stack).
+      #
+      # These names are also listed under systemConfig.packages: allowPackages
+      # only PERMITS a package to come from this repo, packages: is what actually
+      # installs it. Both lists are needed. Keep the two in sync.
+      #
+      # Bare names on purpose — ICT matches allowPackages against the bare
+      # package name, so a "name=version" entry here would match nothing. This
+      # repo's priority: 2000 is what makes its build win over the Ubuntu
+      # archive, so no version pin is needed.
+      #
+      # To change the stack version: bump the repo `url:` above (the build-id
+      # path). To drop the stack: delete these 7 from BOTH lists. To go back to
+      # the GitHub .debs: delete them from both lists first, then uncomment the
+      # gpu-packages block in `configurations:`.
+      #
+
       - libmfx-gen1.2
-      - libtpms-dev
-      - libtpms0
       - libva-dev
       - libva-drm2
       - libva-glx2
@@ -138,121 +127,22 @@ packageRepositories:
       - libwayland-egl1
       - libwayland-server0
       - linux-firmware
-      - mesa-utils
-      - mesa-vdpau-drivers
       - mesa-vulkan-drivers
-      - libvpl-dev
-      - libvpl-tools
-      - libmfx-gen-dev
-      - onevpl-tools
-      - ovmf
-      - ovmf-ia32
-      - qemu-block-extra
-      - qemu-guest-agent
-      - qemu-system
-      - qemu-system-arm
-      - qemu-system-common
-      - qemu-system-data
-      - qemu-system-gui
-      - qemu-system-mips
-      - qemu-system-misc
-      - qemu-system-ppc
-      - qemu-system-s390x
-      - qemu-system-sparc
-      - qemu-system-x86
-      - qemu-user
-      - qemu-user-binfmt
-      - qemu-utils
       - va-driver-all
       - vainfo
       - weston
-      - xserver-xorg-core
-      - libvirt0
-      - libvirt-clients
-      - libvirt-daemon
-      - libvirt-daemon-config-network
-      - libvirt-daemon-config-nwfilter
-      - libvirt-daemon-driver-lxc
-      - libvirt-daemon-driver-qemu
-      - libvirt-daemon-driver-storage-gluster
-      - libvirt-daemon-driver-storage-iscsi-direct
-      - libvirt-daemon-driver-storage-rbd
-      - libvirt-daemon-driver-storage-zfs
-      - libvirt-daemon-driver-vbox
-      - libvirt-daemon-driver-xen
-      - libvirt-daemon-system
-      - libvirt-daemon-system-systemd
-      - libvirt-dev
-      - libvirt-doc
-      - libvirt-login-shell
-      - libvirt-sanlock
-      - libvirt-wireshark
-      - libnss-libvirt
-      - swtpm
-      - swtpm-tools
-      - bmap-tools
-      - adb
-      - autoconf
-      - automake
-      - libtool
-      - cmake
-      - g++
-      - gcc
-      - git
-      - intel-gpu-tools
-      - libssl-dev
-      - make
-      - mosquitto
-      - mosquitto-clients
-      - build-essential
-      - apt-transport-https
-      - default-jre
-      - docker-compose
       - ffmpeg
-      - git-lfs
-      - gnuplot
-      - lbzip2
-      - libglew-dev
-      - libglm-dev
-      - libsdl2-dev
-      - mc
-      - openssl
-      - pciutils
-      - python3-pandas
-      - python3-pip
-      - python3-seaborn
-      - terminator
-      - wmctrl
       - wayland-protocols
-      - gdbserver
-      - iperf3
-      - msr-tools
-      - powertop
       - linuxptp
-      - lsscsi
-      - tpm2-tools
-      - tpm2-abrmd
-      - binutils
-      - cifs-utils
-      - i2c-tools
-      - xdotool
-      - gnupg
-      - lsb-release
-      - qemu-system-modules-opengl
-      - socat
-      - virt-viewer
-      - spice-client-gtk
       - util-linux-extra
       - dbus-x11
       - sg3-utils
-      - rpm
       - linux-headers-6.18-intel
       - linux-image-6.18-intel
+      - libllvm18
+      - libdebuginfod1t64
       # overlay dependencies
       - libvpl2
-      - libspice-client-glib-2.0-8
-      - libspice-client-gtk-3.0-5
-      - spice-client-glib-usb-acl-helper
       - libavcodec62
       - libavformat62
       - libavutil60
@@ -261,10 +151,8 @@ packageRepositories:
       - libswresample6
       - libswscale9
       - libweston-10-0
-      - xnest
-      - xvfb
       - dnsmasq-base
-      # additional PTL packages
+      # additional Panther Lake packages
       - xdp-tools
       - rpc-go
       - lms
@@ -272,7 +160,28 @@ packageRepositories:
       - libxdp-dev
       - libxdp1
       - intel-media-va-driver-non-free
-      - spice-client-gtk
+      # Power and Thermal daemons for power and perfromance management
+      # - intel-lpmd
+      - thermald
+      # -- Performance & Profiling Tools ------------------------------------------
+      - linux-kbuild-6.18.38
+      - linux-config-6.18
+      - linux-bpf-dev
+      - linux-intel-bpftool
+      - linux-intel-misc-tools
+      - linux-intel-perf
+      - linux-intel-cpupower
+      - linux-intel-rtla
+      - linux-intel-usbip
+      - libcpupower-intel-dev
+      - libcpupower-intel1
+      - linux-intel-hyperv-daemons
+      - linux-intel-sdsi
+      - linux-doc-6.18
+      - linux-doc-intel
+      - linux-source-6.18
+      - linux-source-intel
+
   # ----- OpenVINO -----
   - codename: "ubuntu24"
     url: "https://apt.repos.intel.com/openvino/2025"
@@ -302,11 +211,54 @@ packageRepositories:
     pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xFB0B24895113F120"
     component: "main"
     priority: 500
+    allowPackages:
+      # Intel RealSense SDK
+      # Remove these to disable: RealSense depth camera runtime and tools
+      - librealsense2 # Core SDK runtime library
+      - librealsense2-utils # CLI tools: rs-enumerate-devices, rs-depth, rs-color, rs-fw-update
+      - librealsense2-dev # SDK headers (needed to build custom RealSense apps)
+      - librealsense2-dkms
+      - librealsense2-gl
+
+  # ----- Mozilla Team PPA (Firefox .deb, avoids Ubuntu's snap-transitional package) -----
+  - codename: "noble"
+    url: "https://ppa.launchpadcontent.net/mozillateam/ppa/ubuntu"
+    pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x0AB215679C571D1C8325275B9BDB3D89CE49EC21"
+    component: "main"
+    priority: 1001
+    allowPackages:
+      - firefox
+  # Intel ECI repository (aligned with eci.intel.com setup instructions)
+  - codename: "isar"
+    url: "https://eci.intel.com/repos/noble"
+    pkey: "https://eci.intel.com/repos/gpg-keys/GPG-PUB-KEY-INTEL-ECI.gpg"
+    component: "main"
+    priority: 600
+    allowPackages:
+      - libcamhal-ipu75xa0
+      - libcamhal-ipu75xa
+      - libcamera-tools
+      - libcamhal-common
+      - libcamhal0
+      # camera HAL dependency tree (ipu75xa imaging algorithm libs)
+      # - libcamhal*
+      - libia-*-ipu75xa0
+      # GStreamer icamerasrc plugin (Recommends of libcamhal0, not auto-pulled)
+      - gstreamer1.0-icamera
+      - libgsticamerainterface-1.0-1
+      # MIPI GMSL deserializer DKMS module (builds on first boot via dkms autoinstall)
+      - intel-mipi-gmsl-dkms
+      # v4l-utils >= 1.30 required by intel-mipi-gmsl-dkms (Ubuntu archive only has 1.26)
+      - v4l-utils
+      - libv4l-0t64
+      - libv4l2rds0t64
+      - libv4lconvert0t64
 
 systemConfig:
   name: minimal
-  description: Minimal desktop ubuntu image for PTL
+  description: Minimal desktop ubuntu image for Panther Lake
   hostname: minimal-desktop-ubuntu
+
   bootloader:
     bootType: efi
     provider: grub
@@ -315,37 +267,32 @@ systemConfig:
     enabled: false # default is true
 
   packages:
-    - libssl3t64
+    - vim
+    - ocl-icd-libopencl1
+    - openssh-server
+    - net-tools
+    - libdrm-amdgpu1
+    - libdrm-common
+    - libdrm-dev
+    - libdrm-intel1
+    - libdrm-nouveau2
+    - libdrm-radeon1
+    - libdrm2
     - bluez
     - bsdutils
-    - cloud-utils
     - debianutils
     - diffutils
     - findutils
     - grep
     - grub-efi-amd64-signed
     - gzip
-    - ibus-table-cangjie-big
-    - ibus-table-cangjie3
-    - ibus-table-cangjie5
-    - init
     - language-pack-en
     - language-pack-en-base
     - language-pack-gnome-en
     - language-pack-gnome-en-base
     - libattr1
-    - libchewing3
-    - libchewing3-data
-    - libm17n-0
-    - libmarisa0
-    - libopencc-data
     - va-driver-all
-    - libopencc1.1
-    - libotf1
-    - libpinyin-data
-    - libpinyin15
     - linux-base
-    - m17n-db
     - mawk
     - ncurses-base
     - ncurses-bin
@@ -354,11 +301,8 @@ systemConfig:
     - ubuntu-desktop-minimal
     - ubuntu-minimal
     - ubuntu-standard
-    - ubuntu-wallpapers
-    - wbritish
     - gdm3
     - systemd
-    - openssh-server
     - systemd-resolved
     - util-linux
     - udev
@@ -368,7 +312,7 @@ systemConfig:
     - grub-efi-amd64
     - grub-efi-amd64-bin
     - efibootmgr
-    # PTL network stack
+    # Panther Lake network stack
     - libbpf1
     - curl
     - wget
@@ -377,45 +321,17 @@ systemConfig:
     - iproute2
     - network-manager
     - libtbb12
-    # PTL packages
-    - libigfxcmrt-dev
+    # Panther Lake packages
     - libigfxcmrt7
-    - vim
     - nano
-    - ocl-icd-libopencl1
-    - net-tools
     - gir1.2-gst-plugins-bad-1.0
-    - gir1.2-gst-plugins-base-1.0
     - gir1.2-gstreamer-1.0
-    - gir1.2-gst-rtsp-server-1.0
-    - gstreamer1.0-alsa
-    - gstreamer1.0-gl
-    - gstreamer1.0-gtk3
-    - gstreamer1.0-opencv
     - gstreamer1.0-plugins-bad
-    - gstreamer1.0-plugins-bad-apps
-    - gstreamer1.0-plugins-base
-    - gstreamer1.0-plugins-base-apps
     - gstreamer1.0-plugins-good
-    - gstreamer1.0-plugins-ugly
     - gstreamer1.0-pulseaudio
-    - gstreamer1.0-qt5
-    - gstreamer1.0-rtsp
-    - gstreamer1.0-tools
-    - gstreamer1.0-x
-    - libgstrtspserver-1.0-dev
-    - libgstrtspserver-1.0-0
-    - libgstreamer-gl1.0-0
-    - libgstreamer-opencv1.0-0
-    - libgstreamer-plugins-bad1.0-0
-    - libgstreamer-plugins-bad1.0-dev
-    - libgstreamer-plugins-base1.0-0
-    - libgstreamer-plugins-base1.0-dev
-    - libgstreamer-plugins-good1.0-0
-    - libgstreamer1.0-0
-    - libgstreamer1.0-dev
-    - libigdgmm-dev
     - libigdgmm12
+    - intel-gpu-tools
+
     - libmfx-gen1.2
     - libtpms-dev
     - libtpms0
@@ -435,72 +351,20 @@ systemConfig:
     - libwayland-server0
     - linux-firmware
     - mesa-utils
-    - libvpl-dev
-    - libvpl-tools
-    - libmfx-gen-dev
-    - onevpl-tools
-    - ovmf
-    - ovmf-ia32
-    - qemu-block-extra
-    - qemu-guest-agent
-    - qemu-system
-    - qemu-system-arm
-    - qemu-system-common
-    - qemu-system-data
-    - qemu-system-gui
-    - qemu-system-mips
-    - qemu-system-misc
-    - qemu-system-ppc
-    - qemu-system-s390x
-    - qemu-system-sparc
-    - qemu-system-x86
-    - qemu-user
-    - qemu-user-binfmt
-    - qemu-utils
     - vainfo
     - weston
     - xserver-xorg-core
-    - libvirt0
-    - libvirt-clients
-    - libvirt-daemon
-    - libvirt-daemon-config-network
-    - libvirt-daemon-config-nwfilter
-    - libvirt-daemon-driver-lxc
-    - libvirt-daemon-driver-qemu
-    - libvirt-daemon-driver-storage-gluster
-    - libvirt-daemon-driver-storage-iscsi-direct
-    - libvirt-daemon-driver-storage-rbd
-    - libvirt-daemon-driver-storage-zfs
-    - libvirt-daemon-driver-vbox
-    - libvirt-daemon-driver-xen
-    - libvirt-daemon-system
-    - libvirt-daemon-system-systemd
-    - libvirt-dev
-    - libvirt-doc
-    - libvirt-login-shell
+    - usb-modeswitch
+    - v4l-utils
     - libvirt-sanlock
-    - libvirt-wireshark
-    - libnss-libvirt
-    - swtpm
-    - swtpm-tools
-    - bmap-tools
-    - adb
-    - autoconf
-    - automake
-    - libtool
     - cmake
-    - g++
-    - gcc
     - git
-    - intel-gpu-tools
-    - libssl3
     - libssl-dev
     - make
     - mosquitto
     - mosquitto-clients
     - build-essential
     - apt-transport-https
-    - default-jre
     # Docker CE engine (pre-installed, disabled by default; cloud-init enables on first boot)
     - docker-ce
     - docker-ce-cli
@@ -509,45 +373,24 @@ systemConfig:
     - docker-compose-plugin
     - ffmpeg
     - git-lfs
-    - gnuplot
-    - lbzip2
     - libglew-dev
     - libglm-dev
     - libsdl2-dev
     - mc
     - openssl
     - pciutils
-    - python3-pandas
     - python3-pip
-    - python3-seaborn
-    - terminator
-    - wmctrl
     - wayland-protocols
-    - gdbserver
-    - iperf3
     - msr-tools
-    - powertop
     - linuxptp
     - lsscsi
-    - tpm2-tools
-    - tpm2-abrmd
-    - binutils
-    - cifs-utils
     - i2c-tools
-    - xdotool
     - gnupg
     - lsb-release
-    - qemu-system-modules-opengl
     - socat
-    - virt-viewer
     - rpm
     # additional packages
     - tcpdump
-    - usb-modeswitch
-    - fwupd
-    - clinfo
-    - xvfb
-    - xnest
     - mesa-vulkan-drivers
     - xdp-tools
     - rpc-go
@@ -556,58 +399,112 @@ systemConfig:
     - libxdp-dev
     - libxdp1
     - intel-media-va-driver-non-free
-    - spice-client-gtk
+    - firefox
     - firmware-sof-signed
-    - libdrm-tests
     - cloud-init
     - chrony
     - sg3-utils
     - util-linux-extra
+    - linux-headers-6.18-intel
+    - linux-image-6.18-intel
     # -- Performance & Profiling Tools ------------------------------------------
-    # Runtime deps for the Intel mainline-tracking 6.18 kernel tooling .debs
-    # (linux-perf, linux-kbuild, linux-misc-tools, rtla)
+    - linux-kbuild-6.18.38
+    - linux-config-6.18
+    - linux-bpf-dev
+    - linux-intel-bpftool
+    - linux-intel-misc-tools
+    - linux-intel-perf
+    - linux-intel-cpupower
+    - linux-intel-rtla
+    - linux-intel-usbip
+    - libcpupower-intel-dev
+    - libcpupower-intel1
+    - linux-intel-hyperv-daemons
+    - linux-intel-sdsi
+    - linux-doc-6.18
+    - linux-doc-intel
+    - linux-source-6.18
+    - linux-source-intel
+    # Dependencies of the above, all from the Ubuntu archive so no allowPackages
+    # entry: pahole for linux-kbuild, libjs-sphinxdoc for linux-doc, binutils and
+    # xz-utils for linux-source (it ships /usr/src/linux-source-6.18.tar.xz).
+    - libllvm18
     - pahole
+    - libjs-sphinxdoc
+    - binutils
     - libconfig9
     - libbabeltrace1
     - libdebuginfod1t64
-    - libopencsd1
-    - libtracefs1
-    # Intel Performance Counter Monitor - CPU/uncore/PCIe counters
-    - pcm
+    - clinfo
+    - powertop
     # Multi-purpose CPU / memory / I/O benchmark
     - sysbench
     # CPU, memory, I/O and device stress & benchmark suite
     - stress-ng
     # Flexible I/O tester for storage benchmarking
     - fio
-    # OpenGL / GPU benchmark (glmark2)
-    - glmark2
     # -- Intel AI / Media Stack -------------------------------------------------
-    # Intel OpenVINO Runtime & Toolkit (latest 2025.x via apt)
-    - openvino
     # oneVPL runtime - H.264 / HEVC / AV1 HW encode & decode via VA-API
     - libvpl2
-    # oneAPI oneDNN - runtime library + development headers for custom kernels
-    - intel-oneapi-dnnl
-    - intel-oneapi-dnnl-devel
     # Intel RealSense SDK
     - librealsense2-dkms
     - librealsense2
     - librealsense2-utils
     - librealsense2-dev
     - librealsense2-gl
+    - dkms
+    # Libcamera Framework
+    # Remove these to disable: libcamera support for CSI / USB cameras (V4L2 pipeline)
+    # Provides: cam utility (camera enumeration + capture), GStreamer libcamerasrc element
+    # Verify: cam --list (lists detected cameras)
+    # Note: libcamera-apps (libcamera-hello) is RPi-specific; cam from libcamera-tools
+    # is the standard cross-platform tool available in Ubuntu 24.04 repos
+    # libcamera0t64 not listed: pulled automatically as dependency of libcamera-tools
+    - libcamera-tools        # 'cam' utility: enumerate and capture from libcamera devices
+    - gstreamer1.0-libcamera # GStreamer libcamerasrc element (pipeline integration)
+    # Power and Thermal daamons for power and perfromance management
+    # - intel-lpmd
+    - thermald
+    # Intel ECI Camera HAL
+    # Remove these to disable: Intel IPU camera support
+    - libcamhal-ipu75xa0
+    - libcamhal-ipu75xa
+    - libcamhal-common
+    - libcamhal0
+    # camera HAL dependency tree (ipu75xa imaging algorithm libs)
+    - libia-*-ipu75xa0
+    - gstreamer1.0-icamera
+    - libgsticamerainterface-1.0-1
+    # MIPI GMSL deserializer DKMS module (builds on first boot via dkms autoinstall)
+    - intel-mipi-gmsl-dkms
+
+    # intel-lpmd v0.1.0 build dependencies (source build in configurations section)
+    # These are installed by ICT (network available) so they're present in chroot.
+    # Purged after the build in the configurations cleanup step.
+    - autoconf
+    - automake
+    - autoconf-archive
+    - libtool
+    - gtk-doc-tools
+    - libdbus-1-dev
+    - libglib2.0-dev
+    - libxml2-dev
+    - libnl-3-dev
+    - libnl-genl-3-dev
+    - libsystemd-dev
+    - libupower-glib-dev
 
   additionalFiles:
     - local: ../additionalfiles/ptl/01-network-manager-all.yaml
       final: /etc/netplan/01-network-manager-all.yaml
 
   kernel:
+    version: "260717t053932z-r2"
     cmdline: "xe.max_vfs=7 xe.force_probe=* modprobe.blacklist=i915 udmabuf.list_limit=8192 console=tty0 console=ttyS0,115200n8"
     enableExtraModules: "intel_vpu uas"
     packages:
-        - linux-image-6.18-intel*
-        - linux-headers-6.18-intel*
-
+      - linux-image-6.18-intel_260717t053932z-r2
+      - linux-headers-6.18-intel_260717t053932z-r2
   users:
     - name: user
       password: ""               # Do not commit real credentials; set at deploy time
@@ -628,39 +525,117 @@ systemConfig:
     # so later apt steps cannot re-pull it.
     - cmd: "printf 'Package: systemd-boot systemd-boot-efi\\nPin: release *\\nPin-Priority: -1\\n' > /etc/apt/preferences.d/no-systemd-boot"
     - cmd: "dpkg --purge --force-all systemd-boot systemd-boot-efi 2>/dev/null || true"
-    # Install Intel Graphics Compiler and compute runtime packages for PTL
-    - cmd: "mkdir -p /tmp/gpu-packages"
-    - cmd: "wget -q https://github.com/intel/intel-graphics-compiler/releases/download/v2.28.4/intel-igc-core-2_2.28.4+20760_amd64.deb -O /tmp/gpu-packages/intel-igc-core-2_2.28.4+20760_amd64.deb"
-    - cmd: "wget -q https://github.com/intel/intel-graphics-compiler/releases/download/v2.28.4/intel-igc-opencl-2_2.28.4+20760_amd64.deb -O /tmp/gpu-packages/intel-igc-opencl-2_2.28.4+20760_amd64.deb"
-    - cmd: "wget -q https://github.com/intel/compute-runtime/releases/download/26.05.37020.3/intel-ocloc_26.05.37020.3-0_amd64.deb -O /tmp/gpu-packages/intel-ocloc_26.05.37020.3-0_amd64.deb"
-    - cmd: "wget -q https://github.com/intel/compute-runtime/releases/download/26.05.37020.3/intel-opencl-icd_26.05.37020.3-0_amd64.deb -O /tmp/gpu-packages/intel-opencl-icd_26.05.37020.3-0_amd64.deb"
-    - cmd: "wget -q https://github.com/intel/compute-runtime/releases/download/26.05.37020.3/libze-intel-gpu1_26.05.37020.3-0_amd64.deb -O /tmp/gpu-packages/libze-intel-gpu1_26.05.37020.3-0_amd64.deb"
-    - cmd: "wget -q https://github.com/oneapi-src/level-zero/releases/download/v1.22.4/level-zero_1.22.4+u24.04_amd64.deb -O /tmp/gpu-packages/level-zero_1.22.4+u24.04_amd64.deb"
-    - cmd: "wget -q https://github.com/oneapi-src/level-zero/releases/download/v1.22.4/level-zero-devel_1.22.4+u24.04_amd64.deb -O /tmp/gpu-packages/level-zero-devel_1.22.4+u24.04_amd64.deb"
 
+    # ----- Intel GPU Compute Stack (wget from GitHub releases) -----
+    # Intel-graphics-compiler Version: v2.38.2
+    # GPU compute-runtime Version: 26.27.39122.11
+    # Level-zero Version: v1.32.0
+    # Security: each .deb is sha256-verified before install (CWE-494 mitigation)
+    - cmd: "mkdir -p /tmp/gpu-packages"
+    - cmd: "wget -q https://github.com/intel/intel-graphics-compiler/releases/download/v2.38.2/intel-igc-core-2_2.38.2+22051_amd64.deb -O /tmp/gpu-packages/intel-igc-core-2_2.38.2+22051_amd64.deb && echo '3dbcbe4e716d62e9bd43a4a476d724cf772b4581dbcdd096d70df382e7ccad7e  /tmp/gpu-packages/intel-igc-core-2_2.38.2+22051_amd64.deb' | sha256sum -c - || exit 1"
+    - cmd: "wget -q https://github.com/intel/intel-graphics-compiler/releases/download/v2.38.2/intel-igc-opencl-2_2.38.2+22051_amd64.deb -O /tmp/gpu-packages/intel-igc-opencl-2_2.38.2+22051_amd64.deb && echo 'e265d191590efd5491bfbbd148c144fdd40aea51e0b57f8651130d2da20b8186  /tmp/gpu-packages/intel-igc-opencl-2_2.38.2+22051_amd64.deb' | sha256sum -c - || exit 1"
+    - cmd: "wget -q https://github.com/intel/compute-runtime/releases/download/26.27.39122.11/intel-ocloc_26.27.39122.11-0_amd64.deb -O /tmp/gpu-packages/intel-ocloc_26.27.39122.11-0_amd64.deb && echo '794a77217b3fd4c3f1381c2bb2c3c11a7f81e338b55b8a11e6c3b5070d138f98  /tmp/gpu-packages/intel-ocloc_26.27.39122.11-0_amd64.deb' | sha256sum -c - || exit 1"
+    - cmd: "wget -q https://github.com/intel/compute-runtime/releases/download/26.27.39122.11/intel-opencl-icd_26.27.39122.11-0_amd64.deb -O /tmp/gpu-packages/intel-opencl-icd_26.27.39122.11-0_amd64.deb && echo '6e447a783c99fb5634df298c135a81165be07db98672df96cdf413d22f3e6ac4  /tmp/gpu-packages/intel-opencl-icd_26.27.39122.11-0_amd64.deb' | sha256sum -c - || exit 1"
+    - cmd: "wget -q https://github.com/intel/compute-runtime/releases/download/26.27.39122.11/libze-intel-gpu1_26.27.39122.11-0_amd64.deb -O /tmp/gpu-packages/libze-intel-gpu1_26.27.39122.11-0_amd64.deb && echo '58420df60d4bf8ac79aba03f7de1b8b60a93e995b18142391077ff735ce7b74b  /tmp/gpu-packages/libze-intel-gpu1_26.27.39122.11-0_amd64.deb' | sha256sum -c - || exit 1"
+    - cmd: "wget -q https://github.com/oneapi-src/level-zero/releases/download/v1.32.0/libze1_1.32.0%2Bu24.04_amd64.deb -O /tmp/gpu-packages/libze1_1.32.0+u24.04_amd64.deb && echo '3c846af24f84a89150f6a4c6adcb4ea4ebef74dc119fe44f4e269bfaa72c7ba6  /tmp/gpu-packages/libze1_1.32.0+u24.04_amd64.deb' | sha256sum -c - || exit 1"
+    - cmd: "wget -q https://github.com/oneapi-src/level-zero/releases/download/v1.32.0/libze-dev_1.32.0%2Bu24.04_amd64.deb -O /tmp/gpu-packages/libze-dev_1.32.0+u24.04_amd64.deb && echo '4b783ed5fb937a55a7a0f3a8bc66af252f362e82476ebc0304da36173c9f2eb8  /tmp/gpu-packages/libze-dev_1.32.0+u24.04_amd64.deb' | sha256sum -c - || exit 1"
     - cmd: "find /tmp/gpu-packages -maxdepth 1 -type f -name '*.deb' | xargs -r dpkg -i; apt-get install -y --fix-broken || true"
-    # Install NPU driver for PTL
+    - cmd: "rm -rf /tmp/gpu-packages"
+
+    # Install NPU driver for Panther Lake
+    # Version: v1.35.0.20260722-29947505341 (from GitHub releases, public)
+    # Security: sha256-verified before extraction (CWE-494 mitigation)
     - cmd: "dpkg --purge --force-remove-reinstreq intel-driver-compiler-npu intel-fw-npu intel-level-zero-npu intel-level-zero-npu-dbgsym 2>/dev/null || true"
     - cmd: "mkdir -p /tmp/npu-driver"
-    - cmd: "cd /tmp/npu-driver && wget -q https://github.com/intel/linux-npu-driver/releases/download/v1.32.0/linux-npu-driver-v1.32.0.20260402-23905121947-ubuntu2404.tar.gz -O /tmp/npu-driver/linux-npu-driver-v1.32.0.20260402-23905121947-ubuntu2404.tar.gz"
-    - cmd: "cd /tmp/npu-driver && tar -xf linux-npu-driver-v1.32.0.20260402-23905121947-ubuntu2404.tar.gz"
+    - cmd: "cd /tmp/npu-driver && wget -q https://github.com/intel/linux-npu-driver/releases/download/v1.35.0/linux-npu-driver-v1.35.0.20260722-29947505341-ubuntu2404.tar.gz -O /tmp/npu-driver/linux-npu-driver-v1.35.0.20260722-29947505341-ubuntu2404.tar.gz && echo '398343e53fdac6023ad0856ef88bb6011b1e12447a112be55e85e27ef7f96c66  /tmp/npu-driver/linux-npu-driver-v1.35.0.20260722-29947505341-ubuntu2404.tar.gz' | sha256sum -c - || exit 1"
+    - cmd: "cd /tmp/npu-driver && tar -xf linux-npu-driver-v1.35.0.20260722-29947505341-ubuntu2404.tar.gz"
     - cmd: "find /tmp/npu-driver -name '*.deb' -print0 | xargs -0 dpkg -i"
-    # Install linux-tools packages from flat repo directory
-    - cmd: "mkdir -p /tmp/linux-tools"
-    - cmd: "wget -q https://download.01.org/intel-linux-overlay/ubuntu/linux-tools/bpftool_7.7.0+6.18.23-intel+260427T075939Z_amd64.deb -O /tmp/linux-tools/bpftool.deb"
-    - cmd: "wget -q https://download.01.org/intel-linux-overlay/ubuntu/linux-tools/hyperv-daemons_6.18.23-intel+260427T075939Z_amd64.deb -O /tmp/linux-tools/hyperv-daemons.deb"
-    - cmd: "wget -q https://download.01.org/intel-linux-overlay/ubuntu/linux-tools/intel-sdsi_6.18.23-intel+260427T075939Z_amd64.deb -O /tmp/linux-tools/intel-sdsi.deb"
-    - cmd: "wget -q https://download.01.org/intel-linux-overlay/ubuntu/linux-tools/libcpupower1_6.18.23-intel+260427T075939Z_amd64.deb -O /tmp/linux-tools/libcpupower1.deb"
-    - cmd: "wget -q https://download.01.org/intel-linux-overlay/ubuntu/linux-tools/libcpupower-dev_6.18.23-intel+260427T075939Z_amd64.deb -O /tmp/linux-tools/libcpupower-dev.deb"
-    - cmd: "wget -q https://download.01.org/intel-linux-overlay/ubuntu/linux-tools/linux-bpf-dev_6.18.23-intel+260427T075939Z_amd64.deb -O /tmp/linux-tools/linux-bpf-dev.deb"
-    - cmd: "wget -q https://download.01.org/intel-linux-overlay/ubuntu/linux-tools/linux-config-6.18_6.18.23-intel+260427T075939Z_amd64.deb -O /tmp/linux-tools/linux-config-6.18.deb"
-    - cmd: "wget -q https://download.01.org/intel-linux-overlay/ubuntu/linux-tools/linux-cpupower_6.18.23-intel+260427T075939Z_amd64.deb -O /tmp/linux-tools/linux-cpupower.deb"
-    - cmd: "wget -q https://download.01.org/intel-linux-overlay/ubuntu/linux-tools/linux-kbuild-6.18.23-intel+260427T075939Z_6.18.23-intel+260427T075939Z_amd64.deb -O /tmp/linux-tools/linux-kbuild.deb"
-    - cmd: "wget -q https://download.01.org/intel-linux-overlay/ubuntu/linux-tools/linux-misc-tools_6.18.23-intel+260427T075939Z_amd64.deb -O /tmp/linux-tools/linux-misc-tools.deb"
-    - cmd: "wget -q https://download.01.org/intel-linux-overlay/ubuntu/linux-tools/linux-perf_6.18.23-intel+260427T075939Z_amd64.deb -O /tmp/linux-tools/linux-perf.deb"
-    - cmd: "wget -q https://download.01.org/intel-linux-overlay/ubuntu/linux-tools/rtla_6.18.23-intel+260427T075939Z_amd64.deb -O /tmp/linux-tools/rtla.deb"
-    - cmd: "wget -q https://download.01.org/intel-linux-overlay/ubuntu/linux-tools/usbip_2.0+6.18.23-intel+260427T075939Z_amd64.deb -O /tmp/linux-tools/usbip.deb"
-    - cmd: "find /tmp/linux-tools -maxdepth 1 -type f -name '*.deb' | xargs -r dpkg -i; apt-get install -y --fix-broken -o Dpkg::Options::=\"--force-overwrite\""
+
+    # --- Canonical names for the internal kernel tools ---------------------------
+    # The linux-intel-* packages install their binaries with an `-intel` suffix
+    # (bpftool-intel, perf-intel, ...), so plain `bpftool`, `perf` are not on PATH.
+    # Symlink the unsuffixed names into /usr/local/{bin,sbin}, which PATH searches
+    # before /usr/bin and /usr/sbin, so the internal build always wins and dpkg
+    # never overwrites the links. Same treatment for the tools that already have
+    # canonical names but land in /usr/sbin only, and for man pages, completions,
+    # the cpupower unit and the kbuild dir. Every link is guarded so an uninstalled
+    # package is skipped, and -f keeps re-runs idempotent.
+    # misc-tools, hyperv-daemons and sdsi already install canonical names;
+    # libcpupower-intel1/-dev use the standard soname. Nothing needed for those.
+    - cmd: "mkdir -p /usr/local/bin /usr/local/sbin"
+    - cmd: "[ -x /usr/sbin/bpftool-intel ] && ln -sf /usr/sbin/bpftool-intel /usr/local/sbin/bpftool || true"
+    - cmd: "[ -x /usr/bin/perf-intel ] && ln -sf /usr/bin/perf-intel /usr/local/bin/perf || true"
+    - cmd: "[ -x /usr/bin/cpupower-intel ] && ln -sf /usr/bin/cpupower-intel /usr/local/bin/cpupower || true"
+    - cmd: "[ -x /usr/bin/rtla-intel ] && ln -sf /usr/bin/rtla-intel /usr/local/bin/rtla || true"
+    - cmd: "[ -x /usr/sbin/usbip-intel ] && ln -sf /usr/sbin/usbip-intel /usr/local/sbin/usbip || true"
+    - cmd: "[ -x /usr/sbin/usbipd-intel ] && ln -sf /usr/sbin/usbipd-intel /usr/local/sbin/usbipd || true"
+    # sbin tools, also in bin for non-root shells whose PATH omits sbin
+    - cmd: "[ -x /usr/sbin/bpftool-intel ] && ln -sf /usr/sbin/bpftool-intel /usr/local/bin/bpftool || true"
+    - cmd: "[ -x /usr/sbin/usbip-intel ] && ln -sf /usr/sbin/usbip-intel /usr/local/bin/usbip || true"
+    # rtla ships these as symlinks to "rtla", which it never installs — dangling
+    # as shipped. rtla dispatches on argv[0], so point them at rtla-intel.
+    - cmd: "[ -x /usr/bin/rtla-intel ] && for t in hwnoise osnoise timerlat; do ln -sf /usr/bin/rtla-intel /usr/local/bin/$t; done || true"
+    - cmd: "for t in turbostat intel-speed-select x86_energy_perf_policy; do [ -x /usr/sbin/$t ] && ln -sf /usr/sbin/$t /usr/local/bin/$t || true; done"
+    - cmd: "[ -x /usr/sbin/intel_pstate_tracer.py ] && ln -sf /usr/sbin/intel_pstate_tracer.py /usr/local/bin/intel_pstate_tracer || true"
+    - cmd: "[ -f /usr/share/bash-completion/completions/bpftool-intel ] && ln -sf /usr/share/bash-completion/completions/bpftool-intel /usr/share/bash-completion/completions/bpftool || true"
+    - cmd: "[ -f /usr/share/bash-completion/completions/perf-intel ] && ln -sf /usr/share/bash-completion/completions/perf-intel /usr/share/bash-completion/completions/perf || true"
+    - cmd: 'for f in /usr/share/man/man1/{perf,rtla,bpftool,cpupower}-intel*.1.gz; do [ -e "$f" ] || continue; b=$(basename "$f"); n=$(echo "$b" | sed ''s/-intel//''); [ "$b" = "$n" ] || ln -sf "$f" "/usr/share/man/man1/$n"; done; true'
+    - cmd: "[ -f /usr/lib/systemd/system/cpupower-intel.service ] && ln -sf /usr/lib/systemd/system/cpupower-intel.service /etc/systemd/system/cpupower.service || true"
+    # out-of-tree builds look for /lib/modules/$(uname -r)/build
+    - cmd: '[ -d /usr/lib/linux-kbuild-6.18.38 ] && for k in /lib/modules/*-intel/build; do [ -e "$k" ] || ln -sf /usr/lib/linux-kbuild-6.18.38 "$k"; done || true'
+    # Report what resolved, so a missing tool is visible in the build log.
+    - cmd: 'for t in bpftool perf cpupower rtla hwnoise osnoise timerlat usbip usbipd turbostat intel-speed-select x86_energy_perf_policy intel_pstate_tracer tmon thermometer bootconfig intel_sdsi hv_kvp_daemon; do p=$(command -v $t 2>/dev/null || true); echo "kernel-tool symlink: $t -> ${p:-MISSING} $(readlink -f ${p:-/nonexistent} 2>/dev/null || true)"; done'
+    # A dangling link is worse than a missing one, so fail the build on it.
+    - cmd: 'for l in /usr/local/bin/* /usr/local/sbin/*; do [ -L "$l" ] && [ ! -e "$l" ] && echo "ERROR: dangling symlink $l -> $(readlink $l)" && exit 1; done; true'
+
+    # --- Panther Lake audio enablement (Intel SOF / I2S + HDMI-in codec) ---
+    # Step 1: Blacklist legacy HD-audio modules so the DSP/SOF stack is used
+    - cmd: "printf 'blacklist snd_hda_intel\nblacklist snd_hda_core\n' > /etc/modprobe.d/blacklist_hda.conf"
+    # Step 2: ALSA/SOF options for the I2S audio codec
+    - cmd: "printf 'options snd_sof_intel_hda_common sof_use_tplg_nhlt=1\noptions snd_intel_dspcfg dsp_driver=3\n' > /etc/modprobe.d/alsa.conf"
+    # Step 3: SOF firmware (signed) for Panther Lake
+    # Security: sha256-verified after download (CWE-494 mitigation)
+    - cmd: "mkdir -p /lib/firmware/intel/sof-ipc4/ptl"
+    - cmd: "wget -O /lib/firmware/intel/sof-ipc4/ptl/sof-ptl-openmodules.ri https://raw.githubusercontent.com/thesofproject/sof-bin/main/v2.13.x/sof-ipc4-v2.13/ptl/intel-signed/sof-ptl-openmodules.ri && echo '0bc5c1942918e86f84b9a7e97efb7e82b9aad2891398927780d5afd433128f3f  /lib/firmware/intel/sof-ipc4/ptl/sof-ptl-openmodules.ri' | sha256sum -c - || exit 1"
+    - cmd: "wget -O /lib/firmware/intel/sof-ipc4/ptl/sof-ptl.ri https://raw.githubusercontent.com/thesofproject/sof-bin/main/v2.13.x/sof-ipc4-v2.13/ptl/intel-signed/sof-ptl.ri && echo 'ace80f314159034a2372c229a2a45443499649f6e747a63c7f2644464d399eba  /lib/firmware/intel/sof-ipc4/ptl/sof-ptl.ri' | sha256sum -c - || exit 1"
+    # Step 4: SOF topology files. Both are fetched; the kernel loads the one
+    #         matching the detected codec. Drop whichever you don't need.
+    - cmd: "mkdir -p /lib/firmware/intel/sof-ace-tplg"
+    # SoundWire codec (ALC722-CG / rt722)
+    - cmd: "wget -O /lib/firmware/intel/sof-ace-tplg/sof-ptl-rt722.tplg https://raw.githubusercontent.com/thesofproject/sof-bin/main/v2.13.x/sof-ipc4-tplg-v2.13/sof-ptl-rt722.tplg && echo 'fedb1f01b91b14335cca4bc5d89992f224687e633455ca7c6f0b5c00fc9cac2d  /lib/firmware/intel/sof-ace-tplg/sof-ptl-rt722.tplg' | sha256sum -c - || exit 1"
+    # HD audio codec via DSP
+    - cmd: "wget -O /lib/firmware/intel/sof-ace-tplg/sof-hda-generic.tplg https://raw.githubusercontent.com/thesofproject/sof-bin/main/v2.13.x/sof-ipc4-tplg-v2.13/sof-hda-generic.tplg && echo 'd2a6128569c980c39ecc48ab81ce253a9a3160f46e9ba843d7b056293388ee24  /lib/firmware/intel/sof-ace-tplg/sof-hda-generic.tplg' | sha256sum -c - || exit 1"
+
+    # --- intel-lpmd v0.1.0 (source build in chroot) ---
+    # Build from source because the packaged 0.1.0 deb targets 25.10 (needs libnl
+    # >= 3.11, libxml2-16, glibc >= 2.42) while noble has 3.7.0 / libxml2.so.2 / 2.39.
+    # Build dependencies are in the packages: list (resolved by ICT with network).
+    # Step 1: Download intel-lpmd v0.1.0 source tarball (sha256-verified)
+    - cmd: "mkdir -p /tmp/intel-lpmd && wget -q https://github.com/intel/intel-lpmd/archive/refs/tags/v0.1.0.tar.gz -O /tmp/intel-lpmd/v0.1.0.tar.gz && echo 'e5de3dd4ec9496430b3e3c31e69830cc8e974f7a0d0e8bf4e3c1d5cf5834f8ed  /tmp/intel-lpmd/v0.1.0.tar.gz' | sha256sum -c - || exit 1"
+    # Step 2: Extract source
+    - cmd: "cd /tmp/intel-lpmd && tar -xf v0.1.0.tar.gz"
+    # Step 3: Build and install (prefix=/usr so binaries land in /usr/sbin, unit in /usr/lib/systemd/system)
+    - cmd: "cd /tmp/intel-lpmd/intel-lpmd-0.1.0 && ./autogen.sh prefix=/usr --localstatedir=/var --sysconfdir=/etc && make -j$(nproc) && make install"
+    # Step 4: Verify installation
+    - cmd: "test -x /usr/sbin/intel_lpmd && test -f /usr/lib/systemd/system/intel_lpmd.service"
+    # Step 5: Enable intel_lpmd service for multi-user target
+    - cmd: "mkdir -p /etc/systemd/system/multi-user.target.wants && ln -sf /usr/lib/systemd/system/intel_lpmd.service /etc/systemd/system/multi-user.target.wants/intel_lpmd.service"
+    # Step 6: Clean up source and purge build-only dependencies (no network needed)
+    - cmd: "rm -rf /tmp/intel-lpmd && dpkg --purge --force-depends autoconf automake autoconf-archive libtool gtk-doc-tools libdbus-1-dev libxml2-dev libnl-3-dev libnl-genl-3-dev libsystemd-dev libupower-glib-dev 2>/dev/null || true"
+
+    # --- intel-pcm v202604 (source build in chroot) ---
+    # Build from source to use the latest security patches and Panther Lake/PCIe metric updates.
+    # Build dependencies (git, build-essential, cmake) must be pre-installed in the environment.
+    # Security: pinned to commit hash (tag 202604) to prevent tag-repoint attacks
+    - cmd: "git clone --recursive https://github.com/intel/pcm.git /tmp/pcm && cd /tmp/pcm && git checkout abb6bce87cc2ed23d6677541ebcfc47ca769d1ed"
+    - cmd: "mkdir -p /tmp/pcm/build"
+    - cmd: "cd /tmp/pcm/build && cmake .. -DCMAKE_BUILD_TYPE=Release && make -j$(nproc)"
+    - cmd: "cd /tmp/pcm/build && cp -r bin/* /usr/local/bin/"
+    - cmd: "test -x /usr/local/bin/pcm"
+    - cmd: "rm -rf /tmp/pcm"
+    - cmd: "echo 'msr' > /etc/modules-load.d/intel-pcm.conf"
+
+
     # ----------------------------------------------------------------------------------
     # Pre-install K3s and Docker CE (both disabled by default)
     # On first boot, cloud-init reads host_type from /etc/cloud/config-file and
@@ -669,10 +644,20 @@ systemConfig:
     #   host_type=container   ? systemctl disable k3s, enable --now docker
     # See additionalfiles/ptl/edge-provisioning.cfg for the cloud-init runcmd.
     # ----------------------------------------------------------------------------------
-    # Pre-install K3s binary and service (network available during build)
-    - cmd: "curl -sfL https://get.k3s.io | INSTALL_K3S_SKIP_ENABLE=true INSTALL_K3S_SKIP_START=true INSTALL_K3S_EXEC='server --disable=traefik' sh - 2>&1 || echo Warning: K3s pre-install failed"
+
+    # --- Kubernetes tools (kubectl / kubelet / kubeadm) ---
+    - cmd: "curl -fsSL --max-time 120 --retry 3 https://raw.githubusercontent.com/k3s-io/k3s/5aed4d7beddeb3e67120da477c876ac9efd70318/install.sh -o /tmp/k3s-install.sh"
+    - cmd: "echo '46177d4c99440b4c0311b67233823a8e8a2fc09693f6c89af1a7161e152fbfad  /tmp/k3s-install.sh' | sha256sum -c - || exit 1"
+    - cmd: "INSTALL_K3S_SKIP_ENABLE=true INSTALL_K3S_SKIP_START=true INSTALL_K3S_EXEC='server --disable=traefik' bash /tmp/k3s-install.sh 2>&1 || echo Warning: K3s pre-install failed"
+    - cmd: "rm -f /tmp/k3s-install.sh"
     # Ensure both services are disabled by default; cloud-init activates the right one
     - cmd: "systemctl disable k3s 2>/dev/null || true"
     - cmd: "systemctl disable docker 2>/dev/null || true"
+
     # Pre-create docker data-root and daemon config (avoids first-boot delay)
-    - cmd: "mkdir -p /opt/docker-data /etc/docker && echo '{\"data-root\": \"/opt/docker-data\"}' > /etc/docker/daemon.json"
+    - cmd: 'mkdir -p /opt/docker-data /etc/docker && echo ''{"data-root": "/opt/docker-data"}'' > /etc/docker/daemon.json'
+    # ----------------------------------------------------------------------------------
+    # Remove ICT-generated ubuntu-noble.list — duplicates the Ubuntu 24.04 native
+    # ubuntu.sources (DEB822 format)
+    # ----------------------------------------------------------------------------------
+    - cmd: "rm -f /etc/apt/sources.list.d/ubuntu-noble.list"
