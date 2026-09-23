@@ -153,6 +153,22 @@ The server binds `127.0.0.1` by default (localhost only). Useful flags:
 | `--manifest` | embedded | Path to a manifest YAML to read from disk (live-editable, no rebuild) |
 | `--work-dir` | `webui-workspace` | Base dir for per-compose work/output |
 
+#### Changing what the Basic tab offers
+
+The Basic tab's selections come from `internal/api/service/data/manifest.yaml`,
+which is embedded into the binary at build time — editing it needs a `go build`
+to take effect. To iterate without rebuilding, copy it somewhere and pass
+`--manifest`:
+
+```bash
+cp internal/api/service/data/manifest.yaml /tmp/my-manifest.yaml
+./build/image-composer-tool serve --sudo --manifest /tmp/my-manifest.yaml
+```
+
+That file is read from disk on startup, so editing it and restarting `serve` is
+enough. Template paths inside a manifest are relative to `--templates-dir`
+(default `image-templates/`), so both flags must point at the same tree.
+
 ### 5. Open the UI
 
 - **Local machine:** browse to <http://localhost:8080>.

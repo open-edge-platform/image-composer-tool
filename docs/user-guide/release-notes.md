@@ -1,5 +1,13 @@
 # Release Notes: Image Composer Tool
 
+## Version 2026.3
+
+**Release Date**: TBD
+
+**New**:
+
+- Fed Aero host-OS blueprints in the Web UI Basic tab. The two generic host-OS templates from [`edge-node-infrastructure-blueprint`](https://github.com/open-edge-platform/edge-node-infrastructure-blueprint/tree/release-2026.2.0/infrastructure/host-os/ict) `release-2026.2.0` are now vendored into `image-templates/ubuntu24/` and selectable from the Basic tab: `generic-handheld-os-template.yml` (handheld/desktop) and `generic-companion-os-server-template.yml` (companion OS server). Both target Panther Lake on Ubuntu 24.04 and build a `raw` image. Both are wired into the shipped Basic-tab manifest (`internal/api/service/data/manifest.yaml`) under the Fed Aero vertical, so they are available out of the box with no extra configuration. **The `Edge Node Infrastructure Blueprint BKC` SKU has been removed from the Fed Aero vertical**, so Fed Aero now offers exactly these two blueprints on Ubuntu 24.04 (the grayed-out `Drone Image - From BKC Team` placeholder on Ubuntu 26.04 Server is unchanged). Its template, `ubuntu24-x86_64-minimal-ptl-pv-raw.yml`, remains in `image-templates/` and can still be built directly from the CLI — only the Basic-tab entry is gone. Note that `generic-handheld-os-template.yml` was **updated in place** to the `release-2026.2.0` revision — its swap partition grows from 3073MiB to 5121MiB, and it now installs the 6.18 Intel kernel and media stack from a pinned snapshot of the Intel edge overlay (`download.01.org/edge-linux-overlay`) instead of the rolling `intel-linux-overlay` suite, so images built from it differ from earlier releases. Upstream ships `<USERNAME>`/`<PASSWORD>` placeholders in both templates' `users:` block; these are filled with this repo's convention (`user`, empty password, set at deploy time) so the templates validate and build as shipped — set real credentials before deploying. The Advanced tab's repository picker gains the two repositories these blueprints introduce: the pinned Intel edge overlay snapshot and the Ubuntu MozillaTeam PPA.
+
 ## Version 2026.2
 
 **Release Date**: September 9, 2026

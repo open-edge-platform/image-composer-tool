@@ -274,6 +274,49 @@ repos:
       - codename: noble
         component: multimedia main non-free kernels
 
+  # The Fed Aero blueprints pin a dated SNAPSHOT of the overlay rather than the
+  # rolling `noble` suite above, so the image they build stays reproducible as
+  # upstream moves. It is a separate entry because the snapshot path is part of
+  # the suite (the dists/ segment), not the URL — searching `noble` would read a
+  # different package set than these templates install from.
+  - id: intel-edge-linux-overlay-snapshot
+    displayName: Intel Edge Linux Overlay (2026 S REL3 snapshot)
+    url: https://download.01.org/edge-linux-overlay/ubuntu
+    description: Pinned snapshot of the Intel edge overlay — 6.18 Intel kernel, media stack and firmware.
+    enabledByDefault: false
+    priority: 2000
+    pkey: https://download.01.org/edge-linux-overlay/ubuntu/9C63745D2A211728B8CE98C5F84B1B6A704E41B2.gpg
+    os: [ubuntu24]
+    curatedPackages:
+      - ffmpeg
+      - intel-media-va-driver-non-free
+      - libvpl2
+      - linux-headers-6.18-intel
+      - linux-image-6.18-intel
+      - thermald
+      - vainfo
+    index:
+      - codename: noble/snapshots/2026_S_REL3-meta-data-fix
+        component: main non-free multimedia kernels
+
+  # Distinct from `mozilla-apt` (packages.mozilla.org): this is the Ubuntu
+  # MozillaTeam PPA, which is what the Fed Aero blueprints use to get a real
+  # Firefox .deb instead of noble's snap transitional package.
+  - id: mozillateam-ppa
+    displayName: Mozilla Team PPA (Ubuntu)
+    url: https://ppa.launchpadcontent.net/mozillateam/ppa/ubuntu
+    description: MozillaTeam PPA build of Firefox as a native .deb, bypassing the snap transitional package.
+    enabledByDefault: false
+    priority: 1001
+    pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x0AB215679C571D1C8325275B9BDB3D89CE49EC21"
+    os: [ubuntu24]
+    curatedPackages:
+      - firefox
+      - firefox-esr
+    index:
+      - codename: noble
+        component: main
+
   - id: intel-graphics
     displayName: Intel Graphics (kobuk-team)
     url: https://ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu
