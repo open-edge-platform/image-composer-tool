@@ -36,18 +36,17 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e #v7.0.0
         with:
-          go-version: '1.25'
+          go-version: '1.26'
 
       - name: Install golangci-lint
         run: |
-          GOBIN="$PWD/bin" go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.2
-          ./bin/golangci-lint version
-          ./bin/golangci-lint version | grep -q 'built with go1.25' || {
-            echo "golangci-lint binary is not built with Go 1.25." >&2
+          go version | grep -q 'go1.26' || {
+            echo "Go 1.26 is required." >&2
             exit 1
           }
+          GOBIN="$PWD/bin" go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.2
+          ./bin/golangci-lint version
           echo "$PWD/bin" >> $GITHUB_PATH
 
       - name: Run golangci-lint
         run: golangci-lint run ./...
-
