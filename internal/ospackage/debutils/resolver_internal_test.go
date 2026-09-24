@@ -1,12 +1,17 @@
 package debutils
 
 import (
+	"bytes"
 	"compress/gzip"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ProtonMail/go-crypto/openpgp"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 )
@@ -396,7 +401,12 @@ func TestRefreshRepoMetadata_FailureLeavesExistingFilesIntact(t *testing.T) {
 	}
 
 	// "Release" is not a URL, so the fetch fails on every attempt.
-	refreshed, err := refreshRepoMetadata(dir, []string{release}, []string{"Release"})
+	refreshed, err := refreshRepoMetadata(
+		dir,
+		[]string{release},
+		[]string{"Release"},
+		func(string) error { return nil },
+	)
 	if err == nil {
 		t.Fatal("refreshRepoMetadata succeeded, want an error for an unfetchable URL")
 	}
@@ -420,6 +430,95 @@ func TestRefreshRepoMetadata_FailureLeavesExistingFilesIntact(t *testing.T) {
 	for _, e := range entries {
 		if e.IsDir() && strings.HasPrefix(e.Name(), ".meta-refresh-") {
 			t.Errorf("staging directory %s was left behind", e.Name())
+		}
+	}
+}
+
+func TestRefreshRepoMetadata_VerifiesBeforeCommit(t *testing.T) {
+	dir := t.TempDir()
+	releasePath := filepath.Join(dir, "Release")
+	signPath := filepath.Join(dir, "Release.gpg")
+	keyPath := filepath.Join(dir, "repo.gpg")
+
+	entity, err := openpgp.NewEntity("Repository", "test", "repo@example.invalid", nil)
+	if err != nil {
+		t.Fatalf("creating signing entity: %v", err)
+	}
+	originalRelease := []byte("Suite: stable\n")
+	var signature bytes.Buffer
+	if err := openpgp.DetachSign(&signature, entity, bytes.NewReader(originalRelease), nil); err != nil {
+		t.Fatalf("signing Release: %v", err)
+	}
+	var publicKey bytes.Buffer
+	if err := entity.Serialize(&publicKey); err != nil {
+		t.Fatalf("serializing public key: %v", err)
+	}
+
+	originalFiles := map[string][]byte{
+		releasePath: originalRelease,
+		signPath:    signature.Bytes(),
+		keyPath:     publicKey.Bytes(),
+	}
+	for path, contents := range originalFiles {
+		if err := os.WriteFile(path, contents, 0o644); err != nil {
+			t.Fatalf("writing %s: %v", filepath.Base(path), err)
+		}
+	}
+
+	tamperedRelease := []byte("Suite: attacker-controlled\n")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		responses := map[string][]byte{
+			"Release":     tamperedRelease,
+			"Release.gpg": signature.Bytes(),
+			"repo.gpg":    publicKey.Bytes(),
+		}
+		response, ok := responses[filepath.Base(r.URL.Path)]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		if _, err := w.Write(response); err != nil {
+			t.Errorf("writing response for %s: %v", r.URL.Path, err)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	localFiles := []string{releasePath, signPath, keyPath}
+	urls := []string{
+		server.URL + "/Release",
+		server.URL + "/Release.gpg",
+		server.URL + "/repo.gpg",
+	}
+	verify := func(stageDir string) error {
+		verified, verifyErr := VerifyRelease(
+			filepath.Join(stageDir, "Release"),
+			filepath.Join(stageDir, "Release.gpg"),
+			filepath.Join(stageDir, "repo.gpg"),
+		)
+		if verifyErr != nil {
+			return verifyErr
+		}
+		if !verified {
+			return fmt.Errorf("release verification failed")
+		}
+		return nil
+	}
+
+	refreshed, err := refreshRepoMetadata(dir, localFiles, urls, verify)
+	if err == nil {
+		t.Fatal("refreshRepoMetadata succeeded with a tampered Release")
+	}
+	if refreshed {
+		t.Error("refreshRepoMetadata reported unverified metadata as refreshed")
+	}
+
+	for path, want := range originalFiles {
+		got, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatalf("reading %s after rejected refresh: %v", filepath.Base(path), readErr)
+		}
+		if !bytes.Equal(got, want) {
+			t.Errorf("%s changed after rejected refresh", filepath.Base(path))
 		}
 	}
 }

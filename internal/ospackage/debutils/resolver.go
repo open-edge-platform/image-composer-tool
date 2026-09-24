@@ -177,15 +177,15 @@ func metadataFileName(raw string) string {
 	return filepath.Base(raw)
 }
 
-// refreshRepoMetadata re-downloads the repository metadata files (Release, its
-// signature, and the archive key where applicable) into pkgMetaDir.
+// refreshRepoMetadata re-downloads and verifies repository metadata before
+// installing it into pkgMetaDir.
 //
 // The download is staged in a sibling temporary directory and moved into place
-// only after every file has arrived, so an interrupted or failed refresh cannot
-// leave pkgMetaDir holding a partial Release — which would fail signature
-// verification and break an otherwise working offline build. Returns whether the
-// files were replaced; on error the existing files are untouched.
-func refreshRepoMetadata(pkgMetaDir string, localFiles, urls []string) (bool, error) {
+// only after every file has arrived and verify accepts the staged set. Returns
+// whether the files were replaced; on error the existing files are untouched.
+func refreshRepoMetadata(
+	pkgMetaDir string, localFiles, urls []string, verify func(stageDir string) error,
+) (bool, error) {
 	stageDir, err := os.MkdirTemp(pkgMetaDir, ".meta-refresh-")
 	if err != nil {
 		return false, fmt.Errorf("creating metadata staging directory: %w", err)
@@ -207,6 +207,10 @@ func refreshRepoMetadata(pkgMetaDir string, localFiles, urls []string) (bool, er
 		if fi, statErr := os.Stat(staged); statErr != nil || fi.Size() == 0 {
 			return false, fmt.Errorf("refreshed metadata is missing or empty: %s", metadataFileName(f))
 		}
+	}
+
+	if err := verify(stageDir); err != nil {
+		return false, fmt.Errorf("verifying refreshed metadata: %w", err)
 	}
 
 	for _, f := range localFiles {
@@ -358,7 +362,26 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 		}
 	}
 
-	refreshed, refreshErr := refreshRepoMetadata(pkgMetaDir, metaLocalFiles, metaURLList)
+	verifyStagedMetadata := func(stageDir string) error {
+		stagedRelease := filepath.Join(stageDir, metadataFileName(localReleaseFile))
+		stagedReleaseSign := filepath.Join(stageDir, metadataFileName(localReleaseSign))
+		stagedPBGPGKey := localPBGPGKey
+		if pbkeyIsURL {
+			stagedPBGPGKey = filepath.Join(stageDir, metadataFileName(localPBGPGKey))
+		}
+
+		verified, err := VerifyRelease(stagedRelease, stagedReleaseSign, stagedPBGPGKey)
+		if err != nil {
+			return fmt.Errorf("failed to verify release file: %w", err)
+		}
+		if !verified {
+			return fmt.Errorf("release file verification failed")
+		}
+		return nil
+	}
+
+	refreshed, refreshErr := refreshRepoMetadata(
+		pkgMetaDir, metaLocalFiles, metaURLList, verifyStagedMetadata)
 	switch {
 	case refreshErr != nil && !haveLocalMeta:
 		// Nothing cached to fall back to, so this is fatal — as it was before.
@@ -372,17 +395,8 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 		log.Infof("Refreshed metadata files for %s", baseURL)
 	}
 
-	// Verify the release file whenever it came off the network this run; metadata
-	// we could not refresh was verified when it was originally fetched.
-	if refreshed {
-		relVryResult, err := VerifyRelease(localReleaseFile, localReleaseSign, localPBGPGKey)
-		if err != nil {
-			return nil, fmt.Errorf("failed to verify release file: %w", err)
-		}
-		if !relVryResult {
-			return nil, fmt.Errorf("release file verification failed")
-		}
-	} else {
+	// Refreshed metadata was verified before it entered the persistent cache.
+	if !refreshed {
 		log.Debugf("Skipping release file verification (using cached offline files)")
 	}
 
