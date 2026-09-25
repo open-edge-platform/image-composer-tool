@@ -1,6 +1,6 @@
 module github.com/open-edge-platform/image-composer-tool
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/ProtonMail/go-crypto v1.4.1
@@ -8,7 +8,7 @@ require (
 	github.com/diskfs/go-diskfs v1.9.4
 	github.com/gdamore/tcell/v2 v2.13.10
 	github.com/google/uuid v1.6.0
-	github.com/klauspost/compress v1.19.2
+	github.com/klauspost/compress v1.20.0
 	github.com/muesli/crunchy v0.4.0
 	github.com/rivo/tview v0.42.0
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
@@ -16,7 +16,7 @@ require (
 	github.com/schollz/progressbar/v3 v3.19.1
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
-	github.com/ulikunitz/xz v0.5.16
+	github.com/ulikunitz/xz v0.5.17
 	go.uber.org/zap v1.28.0
 	gopkg.in/yaml.v3 v3.0.1
 	sigs.k8s.io/yaml v1.6.0
@@ -43,7 +43,7 @@ require (
 	github.com/xrash/smetrics v0.0.0-20170218160415-a3153f7040e9 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
-	golang.org/x/crypto v0.55.0 // indirect
+	golang.org/x/crypto v0.56.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/term v0.45.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
