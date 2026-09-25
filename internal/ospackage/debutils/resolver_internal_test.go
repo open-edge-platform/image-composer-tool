@@ -533,6 +533,8 @@ func TestRefreshRepoMetadata_VerifiesBeforeCommit(t *testing.T) {
 // re-fetches (landing on a synced pair) must recover without the caller
 // treating it as a hard failure.
 func TestRefreshRepoMetadataWithRetry_RecoversFromTransientMismatch(t *testing.T) {
+	originalDelay := metadataRefreshRetryDelay
+	t.Cleanup(func() { metadataRefreshRetryDelay = originalDelay })
 	metadataRefreshRetryDelay = time.Millisecond
 
 	dir := t.TempDir()
@@ -572,6 +574,8 @@ func TestRefreshRepoMetadataWithRetry_RecoversFromTransientMismatch(t *testing.T
 // fails the build after the bounded attempts are exhausted, rather than
 // silently falling back to unverified metadata.
 func TestRefreshRepoMetadataWithRetry_PersistentFailureStillErrors(t *testing.T) {
+	originalDelay := metadataRefreshRetryDelay
+	t.Cleanup(func() { metadataRefreshRetryDelay = originalDelay })
 	metadataRefreshRetryDelay = time.Millisecond
 
 	dir := t.TempDir()
