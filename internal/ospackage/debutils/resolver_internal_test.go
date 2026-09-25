@@ -9,7 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 
@@ -520,5 +522,92 @@ func TestRefreshRepoMetadata_VerifiesBeforeCommit(t *testing.T) {
 		if !bytes.Equal(got, want) {
 			t.Errorf("%s changed after rejected refresh", filepath.Base(path))
 		}
+	}
+}
+
+// TestRefreshRepoMetadataWithRetry_RecoversFromTransientMismatch is a
+// regression test for CI jobs that failed when a mirror served Release and
+// Release.gpg from backend nodes that had briefly fallen out of sync: the
+// first fetch pairs a stale signature with the current Release, so
+// verification fails even though the repository itself is fine. A retry that
+// re-fetches (landing on a synced pair) must recover without the caller
+// treating it as a hard failure.
+func TestRefreshRepoMetadataWithRetry_RecoversFromTransientMismatch(t *testing.T) {
+	metadataRefreshRetryDelay = time.Millisecond
+
+	dir := t.TempDir()
+	release := filepath.Join(dir, "Release")
+	const original = "SHA256:\n deadbeef 1 main/binary-amd64/Packages.gz\n"
+	if err := os.WriteFile(release, []byte(original), 0644); err != nil {
+		t.Fatalf("writing Release: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("Suite: stable\n"))
+	}))
+	t.Cleanup(server.Close)
+
+	var verifyCalls atomic.Int32
+	verify := func(string) error {
+		if verifyCalls.Add(1) < 2 {
+			return fmt.Errorf("simulated transient mirror signature mismatch")
+		}
+		return nil
+	}
+
+	refreshed, err := refreshRepoMetadataWithRetry(dir, []string{release}, []string{server.URL + "/Release"}, verify)
+	if err != nil {
+		t.Fatalf("refreshRepoMetadataWithRetry did not recover from a transient mismatch: %v", err)
+	}
+	if !refreshed {
+		t.Error("expected refreshed=true once the retry succeeds")
+	}
+	if verifyCalls.Load() < 2 {
+		t.Errorf("expected a retry after the first verification failure, got %d verify call(s)", verifyCalls.Load())
+	}
+}
+
+// TestRefreshRepoMetadataWithRetry_PersistentFailureStillErrors ensures a
+// verification failure that never clears (not a transient mismatch) still
+// fails the build after the bounded attempts are exhausted, rather than
+// silently falling back to unverified metadata.
+func TestRefreshRepoMetadataWithRetry_PersistentFailureStillErrors(t *testing.T) {
+	metadataRefreshRetryDelay = time.Millisecond
+
+	dir := t.TempDir()
+	release := filepath.Join(dir, "Release")
+	const original = "SHA256:\n deadbeef 1 main/binary-amd64/Packages.gz\n"
+	if err := os.WriteFile(release, []byte(original), 0644); err != nil {
+		t.Fatalf("writing Release: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("Suite: stable\n"))
+	}))
+	t.Cleanup(server.Close)
+
+	var verifyCalls atomic.Int32
+	verify := func(string) error {
+		verifyCalls.Add(1)
+		return fmt.Errorf("persistently untrusted signature")
+	}
+
+	refreshed, err := refreshRepoMetadataWithRetry(dir, []string{release}, []string{server.URL + "/Release"}, verify)
+	if err == nil {
+		t.Fatal("refreshRepoMetadataWithRetry succeeded for a persistent failure, want an error")
+	}
+	if refreshed {
+		t.Error("expected refreshed=false after every attempt fails")
+	}
+	if verifyCalls.Load() != maxMetadataRefreshAttempts {
+		t.Errorf("expected %d verify calls, got %d", maxMetadataRefreshAttempts, verifyCalls.Load())
+	}
+
+	got, readErr := os.ReadFile(release)
+	if readErr != nil {
+		t.Fatalf("reading Release after persistent failure: %v", readErr)
+	}
+	if string(got) != original {
+		t.Errorf("Release was modified despite persistent verification failure:\n got %q\nwant %q", got, original)
 	}
 }
