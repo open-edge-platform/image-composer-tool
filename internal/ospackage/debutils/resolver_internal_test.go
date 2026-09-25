@@ -254,10 +254,183 @@ func parseFixtureMetadata(t *testing.T, baseURL, buildPath string) []ospackage.P
 	return pkgs
 }
 
-// TestParseRepositoryMetadata_InReleaseOnly exercises the combined InRelease
-// path end-to-end: a repository that serves only InRelease (no detached
-// Release.gpg, as aptly-published repos do) must still resolve and verify
-// via a real HTTP fetch, not just the offline cache fallback the other
+// TestParseRepositoryMetadata_InstalledSize confirms the Debian Installed-Size
+// field (in KiB) is parsed into PackageInfo.InstalledSizeBytes (bytes; used to
+// auto-size an overlay disk grow), and that a stanza without it reports 0.
+func TestParseRepositoryMetadata_InstalledSize(t *testing.T) {
+	buildPath := filepath.Join(t.TempDir(), "repo_main")
+	if err := os.MkdirAll(buildPath, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	stanzas := "Package: sized\nVersion: 1.0\nArchitecture: amd64\nInstalled-Size: 2048\n" +
+		"Filename: pool/main/s/sized/sized_1.0_amd64.deb\n\n" +
+		"Package: nosize\nVersion: 1.0\nArchitecture: amd64\n" +
+		"Filename: pool/main/n/nosize/nosize_1.0_amd64.deb\n\n" +
+		"Package: huge\nVersion: 1.0\nArchitecture: amd64\nInstalled-Size: 9223372036854775807\n" +
+		"Filename: pool/main/h/huge/huge_1.0_amd64.deb\n\n" +
+		"Package: zerosize\nVersion: 1.0\nArchitecture: amd64\nInstalled-Size: 0\n" +
+		"Filename: pool/main/z/zerosize/zerosize_1.0_amd64.deb\n\n"
+
+	pkggzPath := filepath.Join(buildPath, "Packages.gz")
+	pkgFile, err := os.Create(pkggzPath)
+	if err != nil {
+		t.Fatalf("create Packages.gz: %v", err)
+	}
+	gzWriter := gzip.NewWriter(pkgFile)
+	if _, err := gzWriter.Write([]byte(stanzas)); err != nil {
+		t.Fatalf("write gzip: %v", err)
+	}
+	if err := gzWriter.Close(); err != nil {
+		t.Fatalf("close gzip: %v", err)
+	}
+	if err := pkgFile.Close(); err != nil {
+		t.Fatalf("close file: %v", err)
+	}
+
+	checksum, err := computeFileSHA256(pkggzPath)
+	if err != nil {
+		t.Fatalf("checksum: %v", err)
+	}
+	releaseContent := fmt.Sprintf("SHA256:\n %s 1 main/binary-amd64/Packages.gz\n", checksum)
+	if err := os.WriteFile(filepath.Join(buildPath, "Release"), []byte(releaseContent), 0o644); err != nil {
+		t.Fatalf("write Release: %v", err)
+	}
+
+	pkgs := parseFixtureMetadata(t, "http://example.invalid:1/", buildPath)
+	got := map[string]int64{}
+	hasSize := map[string]bool{}
+	for _, p := range pkgs {
+		got[p.Name] = p.InstalledSizeBytes
+		hasSize[p.Name] = p.HasInstalledSize
+	}
+	if want := int64(2048 * 1024); got["sized"] != want || !hasSize["sized"] {
+		t.Errorf("sized InstalledSizeBytes/HasInstalledSize = %d/%v, want %d/true", got["sized"], hasSize["sized"], want)
+	}
+	if got["nosize"] != 0 || hasSize["nosize"] {
+		t.Errorf("nosize InstalledSizeBytes/HasInstalledSize = %d/%v, want 0/false (no Installed-Size)", got["nosize"], hasSize["nosize"])
+	}
+	// A KiB value whose ×1024 conversion would overflow int64 must be treated as
+	// unknown, not silently wrapped negative.
+	if got["huge"] != 0 || hasSize["huge"] {
+		t.Errorf("huge InstalledSizeBytes/HasInstalledSize = %d/%v, want 0/false (overflow guarded)", got["huge"], hasSize["huge"])
+	}
+	// An explicit "Installed-Size: 0" is a real, reported footprint — distinct from
+	// a stanza that omits the field entirely — and must be marked known.
+	if got["zerosize"] != 0 || !hasSize["zerosize"] {
+		t.Errorf("zerosize InstalledSizeBytes/HasInstalledSize = %d/%v, want 0/true (confirmed zero footprint)", got["zerosize"], hasSize["zerosize"])
+	}
+}
+
+func TestParseRepositoryMetadata_ParsedCacheBypassForLoopback(t *testing.T) {
+	tests := []struct {
+		name        string
+		baseURL     string
+		expectedPkg string
+	}{
+		// A cache whose checksum matches the Release is served without re-parsing.
+		{name: "non-loopback uses parsed cache", baseURL: "http://example.com:123", expectedPkg: "cached-package"},
+		{name: "localhost bypasses parsed cache", baseURL: "http://localhost:123", expectedPkg: "live-package"},
+		{name: "127001 bypasses parsed cache", baseURL: "http://127.0.0.1:123", expectedPkg: "live-package"},
+		{name: "ipv6 loopback bypasses parsed cache", baseURL: "http://[::1]:123", expectedPkg: "live-package"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buildPath := newMetadataFixture(t, "")
+			pkgs := parseFixtureMetadata(t, tt.baseURL, buildPath)
+			if pkgs[0].Name != tt.expectedPkg {
+				t.Errorf("first package name = %q, want %q", pkgs[0].Name, tt.expectedPkg)
+			}
+		})
+	}
+}
+
+// A parse cache keyed to an index the repository has replaced must be discarded,
+// not served. Serving it pins every later build to package versions that may
+// already be deleted from the pool, which surfaces only as a 404 on a single
+// .deb — the failure this whole validation path exists to prevent.
+func TestParseRepositoryMetadata_StaleParsedCacheIsRejected(t *testing.T) {
+	buildPath := newMetadataFixture(t, "checksum-from-a-superseded-index")
+
+	pkgs := parseFixtureMetadata(t, "http://example.com:123", buildPath)
+
+	if pkgs[0].Name != "live-package" {
+		t.Errorf("first package name = %q, want %q (stale cache must be re-parsed, not reused)",
+			pkgs[0].Name, "live-package")
+	}
+}
+
+// Having re-parsed a stale cache, the new result must be written back keyed to
+// the current checksum — otherwise every subsequent build repeats the download
+// and parse, and the cache never converges.
+func TestParseRepositoryMetadata_RewritesStaleParsedCache(t *testing.T) {
+	buildPath := newMetadataFixture(t, "checksum-from-a-superseded-index")
+	cacheFile := filepath.Join(buildPath, "packages.parsed.json")
+
+	parseFixtureMetadata(t, "http://example.com:123", buildPath)
+
+	updated, err := loadParsedPackageCache(cacheFile)
+	if err != nil {
+		t.Fatalf("loading rewritten cache: %v", err)
+	}
+	wantChecksum, err := computeFileSHA256(filepath.Join(buildPath, "Packages.gz"))
+	if err != nil {
+		t.Fatalf("computing Packages.gz checksum: %v", err)
+	}
+	if !strings.EqualFold(updated.Checksum, wantChecksum) {
+		t.Errorf("rewritten cache checksum = %q, want %q", updated.Checksum, wantChecksum)
+	}
+	if len(updated.Packages) == 0 || updated.Packages[0].Name != "live-package" {
+		t.Errorf("rewritten cache packages = %+v, want the freshly parsed live-package", updated.Packages)
+	}
+
+	// And the rewritten cache is now considered current: a second run serves it.
+	pkgs := parseFixtureMetadata(t, "http://example.com:123", buildPath)
+	if pkgs[0].Name != "live-package" {
+		t.Errorf("second run first package = %q, want %q", pkgs[0].Name, "live-package")
+	}
+}
+
+// A failed refresh must leave the existing metadata usable: an offline build has
+// nothing else to fall back to, so a partially-written Release would turn a
+// working offline build into a verification failure.
+func TestRefreshRepoMetadata_FailureLeavesExistingFilesIntact(t *testing.T) {
+	dir := t.TempDir()
+	release := filepath.Join(dir, "Release")
+	const original = "SHA256:\n deadbeef 1 main/binary-amd64/Packages.gz\n"
+	if err := os.WriteFile(release, []byte(original), 0644); err != nil {
+		t.Fatalf("writing Release: %v", err)
+	}
+
+	// "Release" is not a URL, so the fetch fails on every attempt.
+	refreshed, err := refreshRepoMetadata(dir, []string{release}, []string{"Release"})
+	if err == nil {
+		t.Fatal("refreshRepoMetadata succeeded, want an error for an unfetchable URL")
+	}
+	if refreshed {
+		t.Error("refreshRepoMetadata reported files replaced despite failing")
+	}
+
+	got, readErr := os.ReadFile(release)
+	if readErr != nil {
+		t.Fatalf("reading Release after failed refresh: %v", readErr)
+	}
+	if string(got) != original {
+		t.Errorf("Release was modified by a failed refresh:\n got %q\nwant %q", got, original)
+	}
+
+	// The staging directory must not be left behind either.
+	entries, dirErr := os.ReadDir(dir)
+	if dirErr != nil {
+		t.Fatalf("reading metadata dir: %v", dirErr)
+	}
+	for _, e := range entries {
+		if e.IsDir() && strings.HasPrefix(e.Name(), ".meta-refresh-") {
+			t.Errorf("staging directory %s was left behind", e.Name())
+		}
+	}
+}
+
 // fixtures in this file rely on.
 func TestParseRepositoryMetadata_InReleaseOnly(t *testing.T) {
 	signer, err := openpgp.NewEntity("Repo Signer", "test", "signer@example.invalid", nil)
@@ -428,76 +601,7 @@ func TestParseRepositoryMetadata_DerivesPlaintextFromCachedInReleaseOffline(t *t
 // TestParseRepositoryMetadata_InstalledSize confirms the Debian Installed-Size
 // field (in KiB) is parsed into PackageInfo.InstalledSizeBytes (bytes; used to
 // auto-size an overlay disk grow), and that a stanza without it reports 0.
-func TestParseRepositoryMetadata_InstalledSize(t *testing.T) {
-	buildPath := filepath.Join(t.TempDir(), "repo_main")
-	if err := os.MkdirAll(buildPath, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	stanzas := "Package: sized\nVersion: 1.0\nArchitecture: amd64\nInstalled-Size: 2048\n" +
-		"Filename: pool/main/s/sized/sized_1.0_amd64.deb\n\n" +
-		"Package: nosize\nVersion: 1.0\nArchitecture: amd64\n" +
-		"Filename: pool/main/n/nosize/nosize_1.0_amd64.deb\n\n" +
-		"Package: huge\nVersion: 1.0\nArchitecture: amd64\nInstalled-Size: 9223372036854775807\n" +
-		"Filename: pool/main/h/huge/huge_1.0_amd64.deb\n\n" +
-		"Package: zerosize\nVersion: 1.0\nArchitecture: amd64\nInstalled-Size: 0\n" +
-		"Filename: pool/main/z/zerosize/zerosize_1.0_amd64.deb\n\n"
 
-	pkggzPath := filepath.Join(buildPath, "Packages.gz")
-	pkgFile, err := os.Create(pkggzPath)
-	if err != nil {
-		t.Fatalf("create Packages.gz: %v", err)
-	}
-	gzWriter := gzip.NewWriter(pkgFile)
-	if _, err := gzWriter.Write([]byte(stanzas)); err != nil {
-		t.Fatalf("write gzip: %v", err)
-	}
-	if err := gzWriter.Close(); err != nil {
-		t.Fatalf("close gzip: %v", err)
-	}
-	if err := pkgFile.Close(); err != nil {
-		t.Fatalf("close file: %v", err)
-	}
-
-	checksum, err := computeFileSHA256(pkggzPath)
-	if err != nil {
-		t.Fatalf("checksum: %v", err)
-	}
-	releaseContent := fmt.Sprintf("SHA256:\n %s 1 main/binary-amd64/Packages.gz\n", checksum)
-	if err := os.WriteFile(filepath.Join(buildPath, "Release"), []byte(releaseContent), 0o644); err != nil {
-		t.Fatalf("write Release: %v", err)
-	}
-
-	pkgs := parseFixtureMetadata(t, "http://example.invalid:1/", buildPath)
-	got := map[string]int64{}
-	hasSize := map[string]bool{}
-	for _, p := range pkgs {
-		got[p.Name] = p.InstalledSizeBytes
-		hasSize[p.Name] = p.HasInstalledSize
-	}
-	if want := int64(2048 * 1024); got["sized"] != want || !hasSize["sized"] {
-		t.Errorf("sized InstalledSizeBytes/HasInstalledSize = %d/%v, want %d/true", got["sized"], hasSize["sized"], want)
-	}
-	if got["nosize"] != 0 || hasSize["nosize"] {
-		t.Errorf("nosize InstalledSizeBytes/HasInstalledSize = %d/%v, want 0/false (no Installed-Size)", got["nosize"], hasSize["nosize"])
-	}
-	// A KiB value whose ×1024 conversion would overflow int64 must be treated as
-	// unknown, not silently wrapped negative.
-	if got["huge"] != 0 || hasSize["huge"] {
-		t.Errorf("huge InstalledSizeBytes/HasInstalledSize = %d/%v, want 0/false (overflow guarded)", got["huge"], hasSize["huge"])
-	}
-	// An explicit "Installed-Size: 0" is a real, reported footprint — distinct from
-	// a stanza that omits the field entirely — and must be marked known.
-	if got["zerosize"] != 0 || !hasSize["zerosize"] {
-		t.Errorf("zerosize InstalledSizeBytes/HasInstalledSize = %d/%v, want 0/true (confirmed zero footprint)", got["zerosize"], hasSize["zerosize"])
-	}
-}
-
-// TestParseRepositoryMetadata_ParsesVersionedProvides is a regression test
-// for the production Packages-stanza parser: every other ProvidesVer test
-// constructs PackageInfo manually, so a parser regression here would leave
-// real repository packages with an empty ProvidesVer while those resolver
-// tests kept passing. Confirms a real "Provides: qt6-base-abi (= 6.4.2)"
-// line ends up in both Provides (cleaned name) and ProvidesVer (raw
 // versioned term).
 func TestParseRepositoryMetadata_ParsesVersionedProvides(t *testing.T) {
 	buildPath := filepath.Join(t.TempDir(), "repo_main")
@@ -543,115 +647,5 @@ func TestParseRepositoryMetadata_ParsesVersionedProvides(t *testing.T) {
 	}
 	if len(pkg.ProvidesVer) != 1 || pkg.ProvidesVer[0] != "qt6-base-abi (= 6.4.2)" {
 		t.Errorf("ProvidesVer = %v, want [qt6-base-abi (= 6.4.2)]", pkg.ProvidesVer)
-	}
-}
-
-func TestParseRepositoryMetadata_ParsedCacheBypassForLoopback(t *testing.T) {
-	tests := []struct {
-		name        string
-		baseURL     string
-		expectedPkg string
-	}{
-		// A cache whose checksum matches the Release is served without re-parsing.
-		{name: "non-loopback uses parsed cache", baseURL: "http://example.com:123", expectedPkg: "cached-package"},
-		{name: "localhost bypasses parsed cache", baseURL: "http://localhost:123", expectedPkg: "live-package"},
-		{name: "127001 bypasses parsed cache", baseURL: "http://127.0.0.1:123", expectedPkg: "live-package"},
-		{name: "ipv6 loopback bypasses parsed cache", baseURL: "http://[::1]:123", expectedPkg: "live-package"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			buildPath := newMetadataFixture(t, "")
-			pkgs := parseFixtureMetadata(t, tt.baseURL, buildPath)
-			if pkgs[0].Name != tt.expectedPkg {
-				t.Errorf("first package name = %q, want %q", pkgs[0].Name, tt.expectedPkg)
-			}
-		})
-	}
-}
-
-// A parse cache keyed to an index the repository has replaced must be discarded,
-// not served. Serving it pins every later build to package versions that may
-// already be deleted from the pool, which surfaces only as a 404 on a single
-// .deb — the failure this whole validation path exists to prevent.
-func TestParseRepositoryMetadata_StaleParsedCacheIsRejected(t *testing.T) {
-	buildPath := newMetadataFixture(t, "checksum-from-a-superseded-index")
-
-	pkgs := parseFixtureMetadata(t, "http://example.com:123", buildPath)
-
-	if pkgs[0].Name != "live-package" {
-		t.Errorf("first package name = %q, want %q (stale cache must be re-parsed, not reused)",
-			pkgs[0].Name, "live-package")
-	}
-}
-
-// Having re-parsed a stale cache, the new result must be written back keyed to
-// the current checksum — otherwise every subsequent build repeats the download
-// and parse, and the cache never converges.
-func TestParseRepositoryMetadata_RewritesStaleParsedCache(t *testing.T) {
-	buildPath := newMetadataFixture(t, "checksum-from-a-superseded-index")
-	cacheFile := filepath.Join(buildPath, "packages.parsed.json")
-
-	parseFixtureMetadata(t, "http://example.com:123", buildPath)
-
-	updated, err := loadParsedPackageCache(cacheFile)
-	if err != nil {
-		t.Fatalf("loading rewritten cache: %v", err)
-	}
-	wantChecksum, err := computeFileSHA256(filepath.Join(buildPath, "Packages.gz"))
-	if err != nil {
-		t.Fatalf("computing Packages.gz checksum: %v", err)
-	}
-	if !strings.EqualFold(updated.Checksum, wantChecksum) {
-		t.Errorf("rewritten cache checksum = %q, want %q", updated.Checksum, wantChecksum)
-	}
-	if len(updated.Packages) == 0 || updated.Packages[0].Name != "live-package" {
-		t.Errorf("rewritten cache packages = %+v, want the freshly parsed live-package", updated.Packages)
-	}
-
-	// And the rewritten cache is now considered current: a second run serves it.
-	pkgs := parseFixtureMetadata(t, "http://example.com:123", buildPath)
-	if pkgs[0].Name != "live-package" {
-		t.Errorf("second run first package = %q, want %q", pkgs[0].Name, "live-package")
-	}
-}
-
-// A failed refresh must leave the existing metadata usable: an offline build has
-// nothing else to fall back to, so a partially-written Release would turn a
-// working offline build into a verification failure.
-func TestRefreshRepoMetadata_FailureLeavesExistingFilesIntact(t *testing.T) {
-	dir := t.TempDir()
-	release := filepath.Join(dir, "Release")
-	const original = "SHA256:\n deadbeef 1 main/binary-amd64/Packages.gz\n"
-	if err := os.WriteFile(release, []byte(original), 0644); err != nil {
-		t.Fatalf("writing Release: %v", err)
-	}
-
-	// "Release" is not a URL, so the fetch fails on every attempt.
-	refreshed, err := refreshRepoMetadata(dir, []string{release}, []string{"Release"})
-	if err == nil {
-		t.Fatal("refreshRepoMetadata succeeded, want an error for an unfetchable URL")
-	}
-	if refreshed {
-		t.Error("refreshRepoMetadata reported files replaced despite failing")
-	}
-
-	got, readErr := os.ReadFile(release)
-	if readErr != nil {
-		t.Fatalf("reading Release after failed refresh: %v", readErr)
-	}
-	if string(got) != original {
-		t.Errorf("Release was modified by a failed refresh:\n got %q\nwant %q", got, original)
-	}
-
-	// The staging directory must not be left behind either.
-	entries, dirErr := os.ReadDir(dir)
-	if dirErr != nil {
-		t.Fatalf("reading metadata dir: %v", dirErr)
-	}
-	for _, e := range entries {
-		if e.IsDir() && strings.HasPrefix(e.Name(), ".meta-refresh-") {
-			t.Errorf("staging directory %s was left behind", e.Name())
-		}
 	}
 }
