@@ -555,7 +555,10 @@ func TestValidate(t *testing.T) {
 	}
 }
 
-func TestValidateSkipsLocalRepoRPMs(t *testing.T) {
+// TestValidateDoesNotSkipCollidingLocalRepoFilenames guards against CWE-347: an RPM
+// downloaded into destDir must not be exempted from signature verification merely
+// because its filename matches an RPM found in a configured local repository path.
+func TestValidateDoesNotSkipCollidingLocalRepoFilenames(t *testing.T) {
 	originalRepoCfg := rpmutils.RepoCfg
 	originalUserRepo := rpmutils.UserRepo
 	defer func() {
@@ -563,17 +566,25 @@ func TestValidateSkipsLocalRepoRPMs(t *testing.T) {
 		rpmutils.UserRepo = originalUserRepo
 	}()
 
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte("dummy-gpg-key-content"))
+	}))
+	defer server.Close()
+
 	destDir := t.TempDir()
 	localRepoDir := t.TempDir()
 
-	localRPMName := "dummyapp-1.0.0-1.x86_64.rpm"
-	destRPMPath := filepath.Join(destDir, localRPMName)
-	localRPMPath := filepath.Join(localRepoDir, localRPMName)
+	// A malicious/unsigned RPM lands in destDir under the same filename as a
+	// legitimate local-repo RPM.
+	collidingRPMName := "dummyapp-1.0.0-1.x86_64.rpm"
+	destRPMPath := filepath.Join(destDir, collidingRPMName)
+	localRPMPath := filepath.Join(localRepoDir, collidingRPMName)
 
-	if err := os.WriteFile(destRPMPath, []byte("unsigned local rpm"), 0644); err != nil {
+	if err := os.WriteFile(destRPMPath, []byte("unsigned rpm"), 0644); err != nil {
 		t.Fatalf("failed to create destination RPM: %v", err)
 	}
-	if err := os.WriteFile(localRPMPath, []byte("unsigned local rpm"), 0644); err != nil {
+	if err := os.WriteFile(localRPMPath, []byte("legitimate signed rpm"), 0644); err != nil {
 		t.Fatalf("failed to create local repo RPM: %v", err)
 	}
 
@@ -581,12 +592,16 @@ func TestValidateSkipsLocalRepoRPMs(t *testing.T) {
 	rpmutils.UserRepo = []config.PackageRepository{
 		{
 			Path: localRepoDir,
-			PKey: "[trusted=yes]",
+			PKey: server.URL,
 		},
 	}
 
-	if err := rpmutils.Validate(destDir); err != nil {
-		t.Fatalf("Validate should skip local repo RPM verification, got: %v", err)
+	err := rpmutils.Validate(destDir)
+	if err == nil {
+		t.Fatal("Validate should not skip signature verification for a filename that collides with a local repo RPM")
+	}
+	if !strings.Contains(err.Error(), "failed verification") {
+		t.Errorf("expected a verification failure, got: %v", err)
 	}
 }
 

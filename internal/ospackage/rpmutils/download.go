@@ -35,6 +35,17 @@ type RepoConfig struct {
 	GPGKey       string
 }
 
+// repoOrigin associates a repository's actual package-download base URL with
+// the raw GPG key value(s) configured for it (each entry may be a real key
+// URL or the "[trusted=yes]" sentinel). ValidateOrigins uses it to scope a
+// repository's "[trusted=yes]" opt-out to only the RPMs that were actually
+// downloaded from that repository, instead of applying it to every
+// downloaded RPM regardless of where it came from.
+type repoOrigin struct {
+	baseURL string
+	keys    []string
+}
+
 var (
 	RepoCfg        RepoConfig
 	GzHref         string
@@ -45,7 +56,25 @@ var (
 
 	isRPMPackageCacheOutdatedFunc = isRPMPackageCacheOutdated
 	clearRPMMetadataCacheFunc     = clearRPMMetadataCache
+
+	// localRepoOrigins is populated by LocalUserPackages with the actual URL
+	// each Path-based user repository's packages were served (and therefore
+	// downloaded) from. That URL is generated fresh on every call — e.g. an
+	// ephemeral local HTTP server — so it cannot be reconstructed from
+	// UserRepo alone the way a remote repository's own configured URL can.
+	localRepoOrigins []repoOrigin
 )
+
+// repoRawKeys merges a repository's single PKey and PKeys list into one
+// ordered slice of raw GPG key values (URLs or the "[trusted=yes]" sentinel).
+func repoRawKeys(pkey string, pkeys []string) []string {
+	var keys []string
+	if pkey != "" {
+		keys = append(keys, splitGPGKeyURLs(pkey)...)
+	}
+	keys = append(keys, pkeys...)
+	return keys
+}
 
 // ConfigureKernelSelection sets the kernel package requests and version used
 // during top-level package matching.
@@ -78,6 +107,8 @@ func Packages() ([]ospackage.PackageInfo, error) {
 func LocalUserPackages() ([]ospackage.PackageInfo, func(), error) {
 	log := logger.Logger()
 	log.Infof("fetching packages from local user package list")
+
+	localRepoOrigins = nil
 
 	var allLocalPackages []ospackage.PackageInfo
 	var cleanups []func()
@@ -137,6 +168,11 @@ func LocalUserPackages() ([]ospackage.PackageInfo, func(), error) {
 			cleanups = append(cleanups, serverCleanup)
 			repoURL = tempURL
 		}
+
+		localRepoOrigins = append(localRepoOrigins, repoOrigin{
+			baseURL: repoURL,
+			keys:    repoRawKeys(repo.PKey, repo.PKeys),
+		})
 
 		repomdURL := repoURL + "/repodata/repomd.xml"
 		primaryXmlURL, err := FetchPrimaryURL(repomdURL)
@@ -421,49 +457,38 @@ func createTempGPGKeyFiles(gpgKeyURLs []string) (keyPaths []string, cleanup func
 	return filePaths, cleanup, nil
 }
 
+// Validate verifies GPG signatures on every downloaded RPM in destDir. Every
+// RPM is checked against the union of all configured repositories' keys — it
+// passes if it validates against any one of them — and a repository whose
+// keys are all "[trusted=yes]" only skips verification if every configured
+// repository is trusted, since without knowing which RPM came from which
+// repository there is no safe way to scope the opt-out further.
+//
+// Prefer ValidateOrigins when the mapping from downloaded filename to source
+// URL is known (i.e. right after downloading), since it scopes each
+// repository's "[trusted=yes]" opt-out to only that repository's own RPMs.
 func Validate(destDir string) error {
-	log := logger.Logger()
+	return validateUnion(destDir)
+}
 
-	localRepoRPMNames := make(map[string]struct{})
-	for _, userRepo := range UserRepo {
-		if userRepo.Path == "" {
-			continue
-		}
-
-		localRPMs, err := filepath.Glob(filepath.Join(userRepo.Path, "*.rpm"))
-		if err != nil {
-			return fmt.Errorf("glob local repo RPMs in %s: %w", userRepo.Path, err)
-		}
-
-		for _, rpmPath := range localRPMs {
-			localRepoRPMNames[filepath.Base(rpmPath)] = struct{}{}
+// allKeysTrusted reports whether every raw key value in keys is the
+// "[trusted=yes]" sentinel.
+func allKeysTrusted(keys []string) bool {
+	for _, k := range keys {
+		if k != "[trusted=yes]" {
+			return false
 		}
 	}
+	return len(keys) > 0
+}
+
+func validateUnion(destDir string) error {
+	log := logger.Logger()
 
 	rpmPattern := filepath.Join(destDir, "*.rpm")
 	rpmPaths, err := filepath.Glob(rpmPattern)
 	if err != nil {
 		return fmt.Errorf("glob %q: %w", rpmPattern, err)
-	}
-
-	verifiableRPMPaths := make([]string, 0, len(rpmPaths))
-	skippedLocalRPMs := 0
-	for _, rpmPath := range rpmPaths {
-		if _, isLocal := localRepoRPMNames[filepath.Base(rpmPath)]; isLocal {
-			skippedLocalRPMs++
-			continue
-		}
-
-		verifiableRPMPaths = append(verifiableRPMPaths, rpmPath)
-	}
-
-	if skippedLocalRPMs > 0 {
-		log.Infof("skipping verification for %d local-repo RPM(s)", skippedLocalRPMs)
-	}
-
-	if len(rpmPaths) > 0 && len(verifiableRPMPaths) == 0 {
-		log.Info("no non-local RPMs to verify")
-		return nil
 	}
 
 	// Collect all GPG key URLs (could be from RepoCfg and UserRepo)
@@ -474,22 +499,9 @@ func Validate(destDir string) error {
 		gpgKeyURLs = append(gpgKeyURLs, splitGPGKeyURLs(RepoCfg.GPGKey)...)
 	}
 
-	// Add user repo GPG keys
+	// Add user repo GPG keys, including local repos, so their RPMs can still verify
 	for _, userRepo := range UserRepo {
-		if userRepo.Path != "" {
-			continue
-		}
-
-		// Collect keys from both PKey (string) and PKeys (array)
-		var userKeys []string
-
-		if userRepo.PKey != "" {
-			userKeys = append(userKeys, splitGPGKeyURLs(userRepo.PKey)...)
-		}
-		if len(userRepo.PKeys) > 0 {
-			userKeys = append(userKeys, userRepo.PKeys...)
-		}
-
+		userKeys := repoRawKeys(userRepo.PKey, userRepo.PKeys)
 		if len(userKeys) == 0 {
 			return fmt.Errorf("no GPG key URL configured for user repo: %s", userRepo.URL)
 		}
@@ -502,14 +514,7 @@ func Validate(destDir string) error {
 	}
 
 	// If every configured key is the [trusted=yes] sentinel, skip RPM signature verification.
-	allTrusted := true
-	for _, url := range gpgKeyURLs {
-		if url != "[trusted=yes]" {
-			allTrusted = false
-			break
-		}
-	}
-	if allTrusted {
+	if allKeysTrusted(gpgKeyURLs) {
 		log.Infof("all repositories are marked [trusted=yes], skipping RPM signature verification")
 		return nil
 	}
@@ -529,7 +534,7 @@ func Validate(destDir string) error {
 	}
 
 	start := time.Now()
-	results := VerifyAll(verifiableRPMPaths, gpgKeyPaths, 4)
+	results := VerifyAll(rpmPaths, gpgKeyPaths, 4)
 	log.Infof("RPM verification took %s", time.Since(start))
 
 	// Check results
@@ -541,6 +546,119 @@ func Validate(destDir string) error {
 	log.Info("all RPMs verified successfully")
 
 	return nil
+}
+
+// ValidateOrigins is like Validate, but scopes verification — and any
+// "[trusted=yes]" opt-out — to the repository each RPM actually came from.
+//
+// fileOrigins maps a downloaded RPM's filename in destDir to the URL it was
+// fetched from. repos records, for every configured repository, the base URL
+// its packages were served from and its raw GPG key value(s) (see
+// repoOrigin). An RPM is assigned to the repo whose baseURL is the longest
+// matching prefix of its source URL; a repo's RPMs are only exempted from
+// verification if that specific repo's keys are all "[trusted=yes]".
+//
+// An RPM whose origin can't be determined — fileOrigins has no entry for it,
+// or no repo's baseURL matches — falls back to the same union-of-all-keys
+// check Validate uses, so an unrecognized origin can never be silently
+// exempted from verification.
+func ValidateOrigins(destDir string, fileOrigins map[string]string, repos []repoOrigin) error {
+	log := logger.Logger()
+
+	if len(fileOrigins) == 0 || len(repos) == 0 {
+		return validateUnion(destDir)
+	}
+
+	rpmPattern := filepath.Join(destDir, "*.rpm")
+	rpmPaths, err := filepath.Glob(rpmPattern)
+	if err != nil {
+		return fmt.Errorf("glob %q: %w", rpmPattern, err)
+	}
+	if len(rpmPaths) == 0 {
+		log.Warn("no RPMs found to verify")
+		return nil
+	}
+
+	var allKeys []string
+	for _, r := range repos {
+		allKeys = append(allKeys, r.keys...)
+	}
+	if len(allKeys) == 0 {
+		return fmt.Errorf("no GPG keys configured for verification")
+	}
+
+	type verifyGroup struct {
+		keys  []string
+		trust bool
+		files []string
+	}
+	// -1 is the fallback group, used for any RPM whose owning repo could not
+	// be determined from fileOrigins/repos.
+	groups := map[int]*verifyGroup{
+		-1: {keys: allKeys},
+	}
+
+	for _, rpmPath := range rpmPaths {
+		idx := -1
+		if url, known := fileOrigins[filepath.Base(rpmPath)]; known {
+			idx = matchRepoOrigin(url, repos)
+		}
+
+		g, ok := groups[idx]
+		if !ok {
+			g = &verifyGroup{keys: repos[idx].keys, trust: allKeysTrusted(repos[idx].keys)}
+			groups[idx] = g
+		}
+		g.files = append(g.files, rpmPath)
+	}
+
+	for _, g := range groups {
+		if len(g.files) == 0 {
+			continue
+		}
+		if g.trust {
+			log.Infof("skipping RPM signature verification for %d package(s) from a "+
+				"[trusted=yes] repository", len(g.files))
+			continue
+		}
+		if len(g.keys) == 0 {
+			return fmt.Errorf("no GPG keys configured for verification")
+		}
+
+		gpgKeyPaths, cleanup, err := createTempGPGKeyFiles(g.keys)
+		if err != nil {
+			return fmt.Errorf("failed to create temp GPG key files: %w", err)
+		}
+
+		start := time.Now()
+		results := VerifyAll(g.files, gpgKeyPaths, 4)
+		log.Infof("RPM verification took %s", time.Since(start))
+		cleanup()
+
+		for _, r := range results {
+			if !r.OK {
+				return fmt.Errorf("RPM %s failed verification: %v", r.Path, r.Error)
+			}
+		}
+	}
+
+	log.Info("all RPMs verified successfully")
+	return nil
+}
+
+// matchRepoOrigin returns the index into repos whose baseURL is the longest
+// matching prefix of url, or -1 if none match.
+func matchRepoOrigin(url string, repos []repoOrigin) int {
+	best, bestLen := -1, 0
+	for i, r := range repos {
+		if r.baseURL == "" || !strings.HasPrefix(url, r.baseURL) {
+			continue
+		}
+		if len(r.baseURL) > bestLen {
+			best, bestLen = i, len(r.baseURL)
+		}
+	}
+	return best
 }
 
 func splitGPGKeyURLs(value string) []string {
@@ -884,8 +1002,28 @@ func downloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSour
 	}
 	log.Info("All downloads complete")
 
-	// Verify downloaded packages
-	if err := Validate(destDir); err != nil {
+	// Verify downloaded packages, scoping any "[trusted=yes]" opt-out to only
+	// the repository each RPM was actually downloaded from.
+	fileOrigins := make(map[string]string, len(urls))
+	for i, u := range urls {
+		fileOrigins[downloadPkgList[i]] = u
+	}
+
+	var origins []repoOrigin
+	if RepoCfg.URL != "" {
+		origins = append(origins, repoOrigin{baseURL: RepoCfg.URL, keys: repoRawKeys(RepoCfg.GPGKey, nil)})
+	}
+	for _, repo := range UserRepo {
+		if repo.Path != "" {
+			// Recorded in localRepoOrigins with the URL it was actually served
+			// from, which LocalUserPackages generates fresh on every call.
+			continue
+		}
+		origins = append(origins, repoOrigin{baseURL: repo.URL, keys: repoRawKeys(repo.PKey, repo.PKeys)})
+	}
+	origins = append(origins, localRepoOrigins...)
+
+	if err := ValidateOrigins(destDir, fileOrigins, origins); err != nil {
 		return downloadPkgList, nil, fmt.Errorf("verification failed: %v", err)
 	}
 
