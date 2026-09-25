@@ -9,7 +9,7 @@ require (
 	github.com/gdamore/tcell/v2 v2.13.10
 	github.com/getkin/kin-openapi v0.149.0
 	github.com/google/uuid v1.6.0
-	github.com/klauspost/compress v1.19.2
+	github.com/klauspost/compress v1.20.0
 	github.com/muesli/crunchy v0.4.0
 	github.com/oapi-codegen/runtime v1.7.0
 	github.com/rivo/tview v0.42.0
@@ -18,7 +18,7 @@ require (
 	github.com/schollz/progressbar/v3 v3.19.1
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
-	github.com/ulikunitz/xz v0.5.16
+	github.com/ulikunitz/xz v0.5.17
 	go.uber.org/zap v1.28.0
 	golang.org/x/sync v0.22.0
 	gopkg.in/yaml.v3 v3.0.1
