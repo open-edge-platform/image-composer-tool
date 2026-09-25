@@ -2,8 +2,10 @@ package imageos
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
@@ -76,6 +78,15 @@ func buildDkmsModulesForKernel(installRoot, kernelVersion string, dkms config.Dk
 		return err
 	}
 
+	// verifyDkmsModulesInstalled only confirms each SOURCE reports installed;
+	// this additionally confirms every module each built source declares
+	// actually compiled, closing the gap where a source reports installed while
+	// one of its modules silently failed to build (most relevant when
+	// dkms.Modules is unset and the install check only requires "at least one").
+	if err := verifyDkmsModulesBuilt(installRoot, kernelVersion); err != nil {
+		return err
+	}
+
 	if dkms.SecureBoot.Enabled {
 		if err := signDkmsModules(installRoot, kernelVersion, dkms); err != nil {
 			return err
@@ -125,6 +136,112 @@ func verifyDkmsModulesInstalled(statusOutput string, expected []string, kernelVe
 			strings.Join(missing, ", "), kernelVersion)
 	}
 	return nil
+}
+
+var builtModuleNameRe = regexp.MustCompile(`BUILT_MODULE_NAME(?:\[[0-9]+\])?="([^"]+)"`)
+
+// verifyDkmsModulesBuilt fails the build if any module a DKMS source declares
+// (BUILT_MODULE_NAME in its dkms.conf) did not actually compile for
+// kernelVersion. verifyDkmsModulesInstalled only checks that each source
+// reports "installed", but a source can report installed while one of its
+// modules silently failed to build (dkms installs whatever built). This walks
+// every source built for the kernel and confirms each declared module produced
+// a .ko in the dkms build tree. A module that built but was not copied into
+// /lib/modules (a dkms install choice, e.g. it also ships in-tree) still counts
+// as built.
+func verifyDkmsModulesBuilt(installRoot, kernelVersion string) error {
+	// /var/lib/dkms/<source>/<version>/<kernelVersion> exists once a source has
+	// been built for that kernel.
+	kernelDirs, err := filepath.Glob(
+		filepath.Join(installRoot, "var", "lib", "dkms", "*", "*", kernelVersion))
+	if err != nil {
+		return fmt.Errorf("failed to scan dkms build tree: %w", err)
+	}
+	for _, kernelDir := range kernelDirs {
+		versionDir := filepath.Dir(kernelDir)
+		version := filepath.Base(versionDir)
+		source := filepath.Base(filepath.Dir(versionDir))
+
+		conf := filepath.Join(installRoot, "usr", "src", source+"-"+version, "dkms.conf")
+		content, err := os.ReadFile(conf)
+		if err != nil {
+			return fmt.Errorf("failed to read dkms.conf for %s/%s: %w", source, version, err)
+		}
+		declared := dkmsBuiltModuleNames(string(content))
+		if len(declared) == 0 {
+			continue
+		}
+
+		built := builtKoModuleNames(kernelDir)
+		if missing := missingBuiltModules(declared, built); len(missing) > 0 {
+			return fmt.Errorf("dkms source %s/%s: module(s) %s did not build for kernel %s",
+				source, version, strings.Join(missing, ", "), kernelVersion)
+		}
+		log.Infof("DKMS source %s/%s: all %d declared module(s) built for kernel %s",
+			source, version, len(declared), kernelVersion)
+	}
+	return nil
+}
+
+// dkmsBuiltModuleNames extracts the BUILT_MODULE_NAME values from a dkms.conf,
+// handling both the indexed (BUILT_MODULE_NAME[0]="x") and plain
+// (BUILT_MODULE_NAME="x") forms.
+func dkmsBuiltModuleNames(dkmsConf string) []string {
+	var names []string
+	for _, m := range builtModuleNameRe.FindAllStringSubmatch(dkmsConf, -1) {
+		if name := strings.TrimSpace(m[1]); name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// builtKoModuleNames returns the module name of every compiled object anywhere
+// under a source's per-kernel dkms build tree (the .ko may sit under an arch
+// subdirectory), with the .ko and any compression suffix stripped.
+func builtKoModuleNames(kernelDir string) []string {
+	var names []string
+	_ = filepath.WalkDir(kernelDir, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if strings.Contains(d.Name(), ".ko") {
+			names = append(names, koModuleName(d.Name()))
+		}
+		return nil
+	})
+	return names
+}
+
+// koModuleName strips a kernel object filename down to its module name,
+// dropping the .ko and any compression suffix (.ko, .ko.zst, .ko.xz, .ko.gz).
+func koModuleName(fileName string) string {
+	for _, suffix := range []string{".zst", ".xz", ".gz"} {
+		fileName = strings.TrimSuffix(fileName, suffix)
+	}
+	return strings.TrimSuffix(fileName, ".ko")
+}
+
+// missingBuiltModules returns the declared modules with no matching compiled
+// object. dkms and the kernel spell '-' and '_' inconsistently between a
+// BUILT_MODULE_NAME and the produced .ko, so matching compares both on a
+// '_'-normalized form.
+func missingBuiltModules(declared, builtKoNames []string) []string {
+	built := map[string]bool{}
+	for _, name := range builtKoNames {
+		built[normalizeModuleName(name)] = true
+	}
+	var missing []string
+	for _, d := range declared {
+		if !built[normalizeModuleName(d)] {
+			missing = append(missing, d)
+		}
+	}
+	return missing
+}
+
+func normalizeModuleName(name string) string {
+	return strings.ReplaceAll(name, "-", "_")
 }
 
 // signDkmsModules signs every built .ko for kernelVersion with the manifest's
