@@ -226,6 +226,42 @@ func refreshRepoMetadata(
 	return true, nil
 }
 
+// maxMetadataRefreshAttempts bounds the retry in refreshRepoMetadataWithRetry,
+// and metadataRefreshRetryDelay is the pause between attempts. The delay is a
+// var, not a const, so tests can shrink it instead of sleeping for real.
+const maxMetadataRefreshAttempts = 3
+
+var metadataRefreshRetryDelay = 2 * time.Second
+
+// refreshRepoMetadataWithRetry retries refreshRepoMetadata (fetch + verify) a
+// bounded number of times before giving up. Some CDN-backed mirrors serve
+// Release and Release.gpg from backend nodes that have briefly fallen out of
+// sync with each other, producing a signature mismatch that a subsequent
+// fetch — likely landing on a different backend node — typically resolves
+// within moments, without a human having to re-run CI. A persistent failure
+// still returns the last error after the attempts are exhausted, so the
+// existing haveLocalMeta-based fallback in ParseRepositoryMetadata is
+// unaffected.
+func refreshRepoMetadataWithRetry(
+	pkgMetaDir string, localFiles, urls []string, verify func(stageDir string) error,
+) (refreshed bool, err error) {
+	for attempt := 1; attempt <= maxMetadataRefreshAttempts; attempt++ {
+		refreshed, err = refreshRepoMetadata(pkgMetaDir, localFiles, urls, verify)
+		if err == nil {
+			return refreshed, nil
+		}
+		if attempt == maxMetadataRefreshAttempts {
+			break
+		}
+
+		logger.Logger().Warnf(
+			"refreshing repo metadata failed on attempt %d/%d (%v); retrying, since this "+
+				"is often a transient mirror sync issue", attempt, maxMetadataRefreshAttempts, err)
+		time.Sleep(metadataRefreshRetryDelay)
+	}
+	return refreshed, err
+}
+
 // warnIfReleaseExpired logs when a Release file we could not refresh has passed
 // its Valid-Until. Debian sets that field precisely to bound how long a mirror
 // snapshot should be trusted, and past it the recorded package versions are
@@ -380,7 +416,7 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 		return nil
 	}
 
-	refreshed, refreshErr := refreshRepoMetadata(
+	refreshed, refreshErr := refreshRepoMetadataWithRetry(
 		pkgMetaDir, metaLocalFiles, metaURLList, verifyStagedMetadata)
 	switch {
 	case refreshErr != nil && !haveLocalMeta:
