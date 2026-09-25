@@ -290,6 +290,54 @@ func TestGetFullCmdStr_Chroot(t *testing.T) {
 	}
 }
 
+func TestGetFullCmdStr_Dkms(t *testing.T) {
+	tempDir := t.TempDir()
+
+	sbinDir := filepath.Join(tempDir, "usr", "sbin")
+	if err := os.MkdirAll(sbinDir, 0755); err != nil {
+		t.Fatalf("Failed to create usr/sbin dir: %v", err)
+	}
+	dkmsPath := filepath.Join(sbinDir, "dkms")
+	if err := os.WriteFile(dkmsPath, []byte("fake dkms"), 0755); err != nil {
+		t.Fatalf("Failed to create fake dkms: %v", err)
+	}
+
+	cmd := "dkms status -k 6.14.0-generic"
+	fullCmd, err := shell.GetFullCmdStr(cmd, false, tempDir, nil)
+	if err != nil {
+		t.Fatalf("GetFullCmdStr failed to resolve dkms: %v", err)
+	}
+
+	expectedSubStr := "chroot " + tempDir + " /usr/sbin/dkms"
+	if !strings.Contains(fullCmd, expectedSubStr) {
+		t.Errorf("Expected command to contain '%s', got: %s", expectedSubStr, fullCmd)
+	}
+}
+
+func TestGetFullCmdStr_Modinfo(t *testing.T) {
+	tempDir := t.TempDir()
+
+	sbinDir := filepath.Join(tempDir, "sbin")
+	if err := os.MkdirAll(sbinDir, 0755); err != nil {
+		t.Fatalf("Failed to create sbin dir: %v", err)
+	}
+	modinfoPath := filepath.Join(sbinDir, "modinfo")
+	if err := os.WriteFile(modinfoPath, []byte("fake modinfo"), 0755); err != nil {
+		t.Fatalf("Failed to create fake modinfo: %v", err)
+	}
+
+	cmd := "modinfo -F signer /lib/modules/6.14.0-generic/updates/dkms/edge_gfx.ko"
+	fullCmd, err := shell.GetFullCmdStr(cmd, false, tempDir, nil)
+	if err != nil {
+		t.Fatalf("GetFullCmdStr failed to resolve modinfo: %v", err)
+	}
+
+	expectedSubStr := "chroot " + tempDir + " /sbin/modinfo"
+	if !strings.Contains(fullCmd, expectedSubStr) {
+		t.Errorf("Expected command to contain '%s', got: %s", expectedSubStr, fullCmd)
+	}
+}
+
 func TestIsBashAvailable_Chroot(t *testing.T) {
 	tempDir := t.TempDir()
 
@@ -389,7 +437,18 @@ func TestQuoteArgNeutralizesExpansion(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available; skipping shell-expansion check")
 	}
-	for _, in := range []string{"$(echo pwned)", "`echo pwned`", "${PATH}", "a'b'c"} {
+	// Multi-line script with nested double-quoted command substitutions, the
+	// shape that broke strconv.Quote (a Go string-literal escaper, not a
+	// POSIX shell one) when used to embed a custom-configuration script for
+	// `bash -c`: it turns real newlines into the literal two-character
+	// sequence \n, which bash inside double quotes does not convert back,
+	// and its escaping of nested "..." does not survive re-parsing across
+	// $(...) boundaries — producing "unexpected EOF while looking for
+	// matching `\"'" instead of running the script.
+	multilineScript := "set -e\n" +
+		`target_kernel="$(basename "$(ls -d /lib/modules/*-generic | sort -V | tail -1)")"` + "\n" +
+		`echo "$target_kernel"` + "\n"
+	for _, in := range []string{"$(echo pwned)", "`echo pwned`", "${PATH}", "a'b'c", multilineScript} {
 		cmd := exec.Command("bash", "-c", "printf %s "+shell.QuoteArg(in))
 		out, err := cmd.Output()
 		if err != nil {

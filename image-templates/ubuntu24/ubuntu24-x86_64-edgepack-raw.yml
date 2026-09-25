@@ -1,0 +1,144 @@
+# AI-searchable metadata for template discovery
+#
+# Demonstrates native ICT support for "EdgePack" — Intel's platform-enablement
+# package set for Panther Lake (PTL) and Wildcat Lake (WCL) — as an ordinary
+# ICT template: an extra signed/trusted APT repository, a package list, and a
+# typed systemConfig.dkms section. No bespoke installer, TUI, or hand-written
+# shell script required.
+metadata:
+  description: Ubuntu 24.04 raw image with Intel EdgePack platform-enablement packages (Panther Lake / Wildcat Lake) installed via native ICT repository and package support
+  use_cases:
+    - Intel Panther Lake (PTL) / Wildcat Lake (WCL) edge platforms
+    - Graphics, media and NPU-enabled Ubuntu edge images
+    - Reference template for layering vendor APT repositories via packageRepositories
+  keywords:
+    - edgepack
+    - intel-edge-base-standard
+    - ptl
+    - wcl
+    - dkms
+    - ubuntu
+    - edge
+
+image:
+  name: edgepack-os-image-ubuntu
+  version: "24.04"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+
+disk:
+  name: EdgePack_Raw # 1:1 mapping to the systemConfigs name
+  artifacts:
+    - type: raw # image file format, valid value [raw, vhd, vhdx, qcow2, vmdk, vdi]
+      compression: gz
+  size: 6GiB
+  partitionTableType: gpt
+  partitions:
+    - id: boot
+      type: esp
+      flags:
+        - esp
+        - boot
+      start: 1MiB
+      end: 513MiB
+      fsType: fat32
+      mountPoint: /boot/efi
+      mountOptions: umask=0077
+
+    - id: rootfs
+      type: linux-root-amd64
+      start: 513MiB
+      end: "0"
+      fsType: ext4
+      mountPoint: /
+      mountOptions: defaults
+
+# EdgePack ships from a per-suite APT repository (suite name follows the host
+# Ubuntu release: noble for 24.04, resolute for 26.04) plus, for the NPU
+# add-on only, a separate signed prerequisite repository.
+packageRepositories:
+  # EdgePack base/add-on packages, public signed repository.
+  - codename: "noble"
+    url: "https://apt.repos.intel.com/edgepack"
+    pkey: "https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB"
+    component: "stable"
+
+  # NPU prerequisite snapshot repository, required only because
+  # intel-edge-npu is selected below. Public Launchpad snapshot; safe to use
+  # as-is, but pin/update the snapshot timestamp per EdgePack release notes.
+  - codename: "noble"
+    url: "https://snapshot.ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu/20260606T100000Z"
+    pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x0c0e6af955ce463c03fc51574d098d70afbe5e1f"
+    component: "main"
+
+systemConfig:
+  name: edgepack-demo
+  description: Ubuntu 24.04 (noble) image with the EdgePack base metapackage and optional add-ons for PTL/WCL
+
+  bootloader:
+    bootType: efi
+    provider: grub
+
+  immutability:
+    enabled: false # kept simple for this showcase; EdgePack itself has no immutability requirement
+
+  packages:
+    - ubuntu-minimal
+    - grub-efi-amd64-signed
+    - initramfs-tools
+    - grub2-common
+    - grub-pc-bin
+    - grub-efi-amd64
+    - grub-efi-amd64-bin
+    - systemd
+    - openssh-server
+    - systemd-resolved
+    - systemd-timesyncd
+    # ── EdgePack: mandatory base (core graphics/media + platform-enablement DKMS drivers) ──
+    - intel-edge-base-standard
+    # ── EdgePack: optional add-ons, shown enabled here for demonstration ──
+    - intel-edge-media-ffmpeg # FFmpeg with Intel GPU support
+    - intel-edge-media-gst # GStreamer with Intel GPU support
+    - intel-edge-manageability # vPRO manageability
+    - intel-edge-npu # NPU enablement; Noble-only, needs the prerequisite repo below
+    # intel-edge-base-realtime is the alternative base profile but is currently
+    # disabled for all OS variants upstream, so it is intentionally omitted here.
+
+  kernel:
+    cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
+    packages:
+      - linux-image-generic-hwe-24.04
+      - linux-headers-generic-hwe-24.04
+
+  # intel-edge-base-standard pulls in EdgePack's DKMS driver sources
+  # (edge-gfx-dkms, edge-edac-dkms, edge-issei-dkms) transitively. ICT builds
+  # them explicitly with `-k <target-kernel>` (never the chroot's `uname -r`,
+  # which a package's own postinst/dkms.conf trigger would otherwise use).
+  #
+  # `modules` is left unset here: without it, ICT runs `dkms autoinstall` for
+  # every module the installed packages registered and only asserts that at
+  # least one built successfully - no need to know DKMS's internal module/
+  # version identifiers up front. To assert specific modules instead (fail the
+  # build if any of *these* aren't installed), list them as "name/version",
+  # e.g. "edge-gfx/1.0" - find the real name/version by installing the
+  # package once and running `dkms status`, or by reading its
+  # /usr/src/<pkg>-<version>/dkms.conf (PACKAGE_NAME/PACKAGE_VERSION); it is
+  # not always the Debian package name with "-dkms" dropped.
+  dkms:
+    enabled: true
+    # Secure Boot signing for the built modules. Left disabled in this sample
+    # since it needs a real signing key/cert; enable and point at your
+    # organization's key material to sign modules and, optionally, retain the
+    # signing identity in the image for future on-target DKMS rebuilds after
+    # an HWE kernel update.
+    # secureBoot:
+    #   enabled: true
+    #   signingKeyPath: /run/secrets/edgepack/module-signing.key
+    #   signingCertPath: /run/secrets/edgepack/module-signing.crt
+    #   retainSigningIdentity: true
+    #   targetKeyPath: /var/lib/edgepack/secureboot/module-signing.key
+    #   targetCertPath: /var/lib/edgepack/secureboot/module-signing.crt

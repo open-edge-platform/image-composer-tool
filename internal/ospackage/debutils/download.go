@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -654,6 +655,112 @@ func repoMetadataBuildPath(id, baseURL, codename, arch, component, packageListUR
 	return filepath.Join(config.TempDir(), "builds", fmt.Sprintf("%s_%s_%x_%s", id, arch, digest[:6], component))
 }
 
+// resolveReleaseURLs decides between the classic split Release/Release.gpg
+// pair and a combined InRelease file, the way GetPackagesNames (zip.go)
+// probes for Packages.gz/.xz/Packages: some aptly-published repositories
+// only serve InRelease (Release content with the signature embedded) and
+// never publish a separate detached Release.gpg.
+//
+// Deliberately probes fresh (probeExistenceWithOfflineFallback, not
+// checkFileExists) rather than trusting the persistent URL-existence cache
+// as a short-circuit: unlike a specific Packages.gz's presence, which format
+// a repository publishes is a repository-wide choice that can change over
+// the repository's lifetime (e.g. migrating to InRelease-only), so treating
+// a stale cached verdict as authoritative could permanently hide that
+// change. The cache is still consulted, but only as a fallback for when a
+// probe gets no response at all (offline), so an offline rebuild of a
+// previously InRelease-only repo doesn't misdetect "no network" as "not
+// found" and fall back to the now-absent classic files.
+//
+// A single probe's error (e.g. a transient 5xx with no cached verdict) does
+// not abort resolution early: the other format may still be reachable, so
+// every remaining probe is still attempted, and an error is only returned
+// once none of them yielded a usable or cached verdict.
+//
+// A releaseSignURL of inReleaseSentinel signals ParseRepositoryMetadata to
+// treat releaseFileURL as a combined InRelease file rather than a
+// detached-signature pair.
+func resolveReleaseURLs(baseURL, codename, releaseNm string) (releaseFileURL, releaseSignURL string, err error) {
+	classicRelease := fmt.Sprintf("%s/dists/%s/%s", baseURL, codename, releaseNm)
+	classicSign := classicRelease + ".gpg"
+
+	// Placeholder/unset URLs aren't reachable; leave the classic URLs as-is
+	// so the existing "fail connecting to repository" error path fires later.
+	if baseURL == "<URL>" || baseURL == "" {
+		return classicRelease, classicSign, nil
+	}
+
+	// A probe error here (e.g. a transient 5xx on just this one URL, with no
+	// cached verdict to fall back on) must not abort the whole resolution:
+	// the OTHER format may still be healthy (e.g. Release.gpg 500s while
+	// InRelease answers 200). Keep trying every remaining probe and only
+	// fail once none of them produced a usable or cached verdict.
+	var probeErrs []error
+
+	signExists, err := probeExistenceWithOfflineFallback(classicSign)
+	if err != nil {
+		probeErrs = append(probeErrs, fmt.Errorf("error checking file existence at %s: %w", classicSign, err))
+	} else if signExists {
+		// A cached/orphaned Release.gpg with no Release behind it is not a
+		// usable classic pair (e.g. the repo migrated to InRelease-only and
+		// only the signature happens to still resolve) — require both
+		// members before committing to the classic split format, so this
+		// case correctly falls through to the InRelease probe below instead.
+		releaseExists, err := probeExistenceWithOfflineFallback(classicRelease)
+		if err != nil {
+			probeErrs = append(probeErrs, fmt.Errorf("error checking file existence at %s: %w", classicRelease, err))
+		} else if releaseExists {
+			return classicRelease, classicSign, nil
+		}
+	}
+
+	inRelease := fmt.Sprintf("%s/dists/%s/InRelease", baseURL, codename)
+	inReleaseExists, err := probeExistenceWithOfflineFallback(inRelease)
+	if err != nil {
+		probeErrs = append(probeErrs, fmt.Errorf("error checking file existence at %s: %w", inRelease, err))
+	} else if inReleaseExists {
+		return inRelease, inReleaseSentinel, nil
+	}
+
+	if len(probeErrs) > 0 {
+		// Don't abort here: a fresh/offline probe can fail for reasons
+		// probeURL doesn't recognize as "no response" (e.g. "network is
+		// unreachable" isn't in its offline-error allowlist, so it surfaces
+		// as a real error with no cached verdict to fall back on instead of
+		// status 0) even when a valid classic Release/package index cache
+		// already exists on disk from before this format-detection code
+		// existed. Log and fall through to the classic URLs so
+		// ParseRepositoryMetadata's own offline cache fallback still gets a
+		// chance; a genuinely broken/typo'd repo surfaces its error there
+		// (or at actual fetch time) instead.
+		logger.Logger().Warnf("could not confirm repo format for %s/dists/%s via probing: %v; falling back to classic Release/Release.gpg URLs", baseURL, codename, errors.Join(probeErrs...))
+	}
+
+	// Neither found; keep the classic URLs so a genuinely broken/typo'd
+	// repo still surfaces today's error instead of being misclassified.
+	return classicRelease, classicSign, nil
+}
+
+// probeExistenceWithOfflineFallback probes url fresh so a format migration is
+// picked up whenever there's real connectivity (any 2xx/4xx response always
+// overrides and refreshes the cached verdict), but falls back to the last
+// cached verdict when the probe can't produce an authoritative answer: no
+// response at all (status 0, e.g. offline), or a server error (5xx, which
+// probeURLExistence reports as a non-nil err) — a transient outage should not
+// misreport "not found" or abort a build that a cached verdict could still
+// serve.
+func probeExistenceWithOfflineFallback(url string) (bool, error) {
+	found, status, err := probeURLExistence(url)
+	if status == 0 || err != nil {
+		if cached, ok := getURLExistenceFromCache(url); ok {
+			return cached, nil
+		}
+		return false, err
+	}
+	saveURLExistenceToCache(url, found)
+	return found, nil
+}
+
 // BuildRepoConfigs converts Repository entries to RepoConfig format
 func BuildRepoConfigs(userRepoList []Repository, arch string) ([]RepoConfig, error) {
 	log := logger.Logger()
@@ -670,6 +777,10 @@ func BuildRepoConfigs(userRepoList []Repository, arch string) ([]RepoConfig, err
 		if strings.TrimSpace(component) == "" {
 			component = "main"
 		}
+		releaseFileURL, releaseSignURL, err := resolveReleaseURLs(baseURL, codename, releaseNm)
+		if err != nil {
+			return nil, fmt.Errorf("resolving release files: %w, baseURL %s codename %s", err, baseURL, codename)
+		}
 		for _, componentName := range slice.SplitBySpace(component) {
 			for _, localArch := range strings.Split(archs, ",") {
 				package_list_url, err := GetPackagesNames(baseURL, codename, localArch, componentName)
@@ -683,8 +794,8 @@ func BuildRepoConfigs(userRepoList []Repository, arch string) ([]RepoConfig, err
 				log.Debugf("found package metadata: baseURL %s codename %s localArch %s componentName %s", baseURL, codename, localArch, componentName)
 				repo := RepoConfig{
 					PkgList:       package_list_url,
-					ReleaseFile:   fmt.Sprintf("%s/dists/%s/%s", baseURL, codename, releaseNm),
-					ReleaseSign:   fmt.Sprintf("%s/dists/%s/%s.gpg", baseURL, codename, releaseNm),
+					ReleaseFile:   releaseFileURL,
+					ReleaseSign:   releaseSignURL,
 					PkgPrefix:     baseURL,
 					Name:          id,
 					GPGCheck:      true,
@@ -863,6 +974,34 @@ func checkFileExists(url string) (bool, error) {
 		return exists, nil
 	}
 
+	found, status, err := probeURLExistence(url)
+	if err != nil {
+		return false, err
+	}
+
+	// Only record a verdict the server actually gave. A status of 0 means the
+	// probe never got a response (a network error mapped to absence above), and
+	// persisting that would pin a reachable repository to "missing" for every
+	// later run off the on-disk cache.
+	if status != 0 {
+		saveURLExistenceToCache(url, found)
+	}
+	return found, nil
+}
+
+// probeURLExistence issues a fresh existence check for url (HEAD, falling
+// back to a ranged GET for servers that reject HEAD) without itself
+// consulting or updating the persistent on-disk cache — that's left to the
+// two callers, which consult the cache at different points: checkFileExists
+// checks the cache first and treats a hit as an authoritative shortcut that
+// skips probing entirely, while probeExistenceWithOfflineFallback (used by
+// resolveReleaseURLs) always probes first and only falls back to the cache
+// afterward, when the probe itself couldn't produce an authoritative answer
+// (offline or a 5xx). The latter is deliberate: unlike a specific Packages.gz
+// file, a repository's Release.gpg-vs-InRelease publication format can
+// change between builds, so a stale cached verdict must never be trusted as
+// a shortcut, only as a last resort.
+func probeURLExistence(url string) (bool, int, error) {
 	found, status, err := probeURL(url, http.MethodHead)
 
 	// A HEAD rejection is not proof of absence. Some CDN-backed APT mirrors
@@ -882,18 +1021,7 @@ func checkFileExists(url string) (bool, error) {
 		log.Debugf("HEAD %s returned %d; retrying with a ranged GET", url, status)
 		found, status, err = probeURL(url, http.MethodGet)
 	}
-	if err != nil {
-		return false, err
-	}
-
-	// Only record a verdict the server actually gave. A status of 0 means the
-	// probe never got a response (a network error mapped to absence above), and
-	// persisting that would pin a reachable repository to "missing" for every
-	// later run off the on-disk cache.
-	if status != 0 {
-		saveURLExistenceToCache(url, found)
-	}
-	return found, nil
+	return found, status, err
 }
 
 // headRejectedStatus reports whether a status means "this server would not

@@ -120,6 +120,10 @@ func ValidateImageTemplateJSON(data []byte) error {
 		return err
 	}
 
+	if err := validateDkmsSecureBootConstraints(data); err != nil {
+		return err
+	}
+
 	if _, err := validateDiskMaxSizeConstraints(data); err != nil {
 		return err
 	}
@@ -143,6 +147,10 @@ func ValidateUserTemplateJSON(data []byte) error {
 	}
 
 	if err := validateFDEConstraints(data); err != nil {
+		return err
+	}
+
+	if err := validateDkmsSecureBootConstraints(data); err != nil {
 		return err
 	}
 
@@ -244,6 +252,51 @@ func validateFDEConstraints(data []byte) error {
 	passphraseFile, _ := fde["passphraseFile"].(string)
 	if strings.TrimSpace(passphraseFile) == "" {
 		return fmt.Errorf("systemConfig.fde.passphraseFile is required when fde.enabled is true")
+	}
+
+	return nil
+}
+
+// validateDkmsSecureBootConstraints ensures a manifest that asks for Secure Boot
+// signing of DKMS-built modules actually supplies the key/cert needed to do it,
+// and that retaining the signing identity in the image names where to put it.
+// The same rules exist in os-image-template.schema.json; this check mirrors
+// validateFDEConstraints as defense-in-depth after schema validation.
+func validateDkmsSecureBootConstraints(data []byte) error {
+	var doc map[string]interface{}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return fmt.Errorf("invalid JSON for dkms secure boot validation: %w", err)
+	}
+
+	systemConfig, _ := doc["systemConfig"].(map[string]interface{})
+	if systemConfig == nil {
+		return nil
+	}
+
+	dkms, _ := systemConfig["dkms"].(map[string]interface{})
+	if dkms == nil {
+		return nil
+	}
+
+	secureBoot, _ := dkms["secureBoot"].(map[string]interface{})
+	if secureBoot == nil {
+		return nil
+	}
+
+	if enabled, _ := secureBoot["enabled"].(bool); enabled {
+		signingKeyPath, _ := secureBoot["signingKeyPath"].(string)
+		signingCertPath, _ := secureBoot["signingCertPath"].(string)
+		if strings.TrimSpace(signingKeyPath) == "" || strings.TrimSpace(signingCertPath) == "" {
+			return fmt.Errorf("systemConfig.dkms.secureBoot.signingKeyPath and signingCertPath are required when dkms.secureBoot.enabled is true")
+		}
+	}
+
+	if retain, _ := secureBoot["retainSigningIdentity"].(bool); retain {
+		targetKeyPath, _ := secureBoot["targetKeyPath"].(string)
+		targetCertPath, _ := secureBoot["targetCertPath"].(string)
+		if strings.TrimSpace(targetKeyPath) == "" || strings.TrimSpace(targetCertPath) == "" {
+			return fmt.Errorf("systemConfig.dkms.secureBoot.targetKeyPath and targetCertPath are required when dkms.secureBoot.retainSigningIdentity is true")
+		}
 	}
 
 	return nil

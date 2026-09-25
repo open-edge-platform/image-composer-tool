@@ -96,6 +96,66 @@ func TestAddImageConfigs(t *testing.T) {
 	})
 }
 
+// recordingExecutor captures the exact command string handed to ExecCmd,
+// bypassing shell.MockExecutor's pattern matching so a test can assert the
+// literal built command rather than just that some pattern matched it.
+type recordingExecutor struct {
+	cmds []string
+}
+
+func (r *recordingExecutor) ExecCmd(cmdStr string, _ bool, _ string, _ []string) (string, error) {
+	r.cmds = append(r.cmds, cmdStr)
+	return "", nil
+}
+
+func (r *recordingExecutor) ExecCmdSilent(cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error) {
+	return r.ExecCmd(cmdStr, sudo, chrootPath, envVal)
+}
+
+func (r *recordingExecutor) ExecCmdWithStream(cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error) {
+	return r.ExecCmd(cmdStr, sudo, chrootPath, envVal)
+}
+
+func (r *recordingExecutor) ExecCmdWithInput(_ string, cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error) {
+	return r.ExecCmd(cmdStr, sudo, chrootPath, envVal)
+}
+
+// TestAddImageConfigs_PreservesMultilineScriptWithMetacharacters is a
+// regression test for using strconv.Quote instead of shell.QuoteArg to embed
+// configInfo.Cmd: strconv.Quote both lets bash prematurely expand
+// $(...)/backticks/$var while parsing the outer chroot command, and does not
+// survive the script's real newlines round-tripping through the allowlist
+// verifier. TestAddImageConfigs's broad `chroot .*/bin/bash -c` mock pattern
+// would still pass even if this reverted to strconv.Quote, so this asserts
+// the exact opaque argument built instead.
+func TestAddImageConfigs_PreservesMultilineScriptWithMetacharacters(t *testing.T) {
+	originalExecutor := shell.Default
+	t.Cleanup(func() { shell.Default = originalExecutor })
+
+	rec := &recordingExecutor{}
+	shell.Default = rec
+
+	installRoot := "/wd/mnt/root"
+	script := "set -e\nif [ -z \"$(cmd)\" ]; then\n  echo `oops`\nfi"
+	template := &config.ImageTemplate{
+		SystemConfig: config.SystemConfig{
+			Configurations: []config.ConfigurationInfo{{Cmd: script}},
+		},
+	}
+
+	if err := addImageConfigs(installRoot, template); err != nil {
+		t.Fatalf("addImageConfigs() err = %v", err)
+	}
+
+	if len(rec.cmds) != 1 {
+		t.Fatalf("expected 1 chroot command, got %d: %v", len(rec.cmds), rec.cmds)
+	}
+	want := fmt.Sprintf("chroot %s /bin/bash -c %s", shell.QuoteArg(installRoot), shell.QuoteArg(script))
+	if rec.cmds[0] != want {
+		t.Errorf("chroot command = %q, want exact opaque argument %q", rec.cmds[0], want)
+	}
+}
+
 func TestUpdateRootfsConfigMinimal(t *testing.T) {
 	originalExecutor := shell.Default
 	t.Cleanup(func() { shell.Default = originalExecutor })

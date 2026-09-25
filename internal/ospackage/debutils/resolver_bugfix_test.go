@@ -210,3 +210,70 @@ func TestAlternativeAlreadySelected_HonoursVersionConstraint(t *testing.T) {
 		t.Error("edge reported unsatisfied, but the selected e2fsprogs version meets the alternative's constraint")
 	}
 }
+
+// TestResolveMultiCandidates_PicksProviderByProvidedVersion covers the fix for
+// resolveMultiCandidates deriving its version-constraint lookup key from
+// candidates[0].Name instead of the real (possibly virtual) dependency name:
+// when a parent has an exact-version constraint on a virtual capability that
+// several different real packages Provide at different declared versions,
+// the candidate whose *provided* version matches must be chosen — not
+// whichever the constraint lookup happened to match by the providers' own,
+// unrelated package names/versions.
+func TestResolveMultiCandidates_PicksProviderByProvidedVersion(t *testing.T) {
+	parent := ospackage.PackageInfo{
+		Name:        "consumer",
+		Version:     "1.0",
+		RequiresVer: []string{"libfoo-abi (= 3.0)"},
+		URL:         "http://example.com/pool/main/c/consumer/consumer_1.0_amd64.deb",
+	}
+	providerOld := ospackage.PackageInfo{
+		Name:        "libfoo-old",
+		Version:     "9.9.9", // deliberately "newer"-looking own version, but provides the WRONG abi version
+		Provides:    []string{"libfoo-abi"},
+		ProvidesVer: []string{"libfoo-abi (= 2.0)"},
+		URL:         "http://example.com/pool/main/l/libfoo-old/libfoo-old_9.9.9_amd64.deb",
+	}
+	providerNew := ospackage.PackageInfo{
+		Name:        "libfoo-new",
+		Version:     "1.0.0", // deliberately "older"-looking own version, but provides the correct abi version
+		Provides:    []string{"libfoo-abi"},
+		ProvidesVer: []string{"libfoo-abi (= 3.0)"},
+		URL:         "http://example.com/pool/main/l/libfoo-new/libfoo-new_1.0.0_amd64.deb",
+	}
+
+	chosen, err := resolveMultiCandidates(parent, "libfoo-abi", []ospackage.PackageInfo{providerOld, providerNew})
+	if err != nil {
+		t.Fatalf("expected a candidate satisfying libfoo-abi (= 3.0), got error: %v", err)
+	}
+	if chosen.Name != "libfoo-new" {
+		t.Errorf("chosen provider = %q, want %q (the one actually providing libfoo-abi = 3.0)", chosen.Name, "libfoo-new")
+	}
+}
+
+// TestResolveMultiCandidates_UnversionedProvideDoesNotSatisfyVersionedDep is a
+// regression test: per Debian policy, an unversioned Provides (e.g. plain
+// "Provides: libfoo-abi", no "(= X)") never satisfies a versioned dependency,
+// even when the providing package's own Version would numerically pass the
+// constraint. versionForDependency must report "no usable version" for this
+// case rather than falling back to the provider's own, unrelated Version.
+func TestResolveMultiCandidates_UnversionedProvideDoesNotSatisfyVersionedDep(t *testing.T) {
+	parent := ospackage.PackageInfo{
+		Name:        "consumer",
+		Version:     "1.0",
+		RequiresVer: []string{"libfoo-abi (>= 2.0)"},
+		URL:         "http://example.com/pool/main/c/consumer/consumer_1.0_amd64.deb",
+	}
+	// Own Version (9.9.9) would satisfy ">= 2.0" numerically, but the
+	// Provides: line for libfoo-abi carries no version at all.
+	unversionedProvider := ospackage.PackageInfo{
+		Name:        "libfoo-unversioned",
+		Version:     "9.9.9",
+		Provides:    []string{"libfoo-abi"},
+		ProvidesVer: []string{"libfoo-abi"},
+		URL:         "http://example.com/pool/main/l/libfoo-unversioned/libfoo-unversioned_9.9.9_amd64.deb",
+	}
+
+	if _, err := resolveMultiCandidates(parent, "libfoo-abi", []ospackage.PackageInfo{unversionedProvider}); err == nil {
+		t.Fatal("expected an unversioned Provides to fail to satisfy a versioned dependency, got no error")
+	}
+}

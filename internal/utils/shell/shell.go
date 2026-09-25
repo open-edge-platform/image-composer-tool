@@ -158,6 +158,7 @@ var commandMap = map[string][]string{
 	"dirname":            {"/usr/bin/dirname"},
 	"debugfs":            {"/usr/sbin/debugfs", "/usr/bin/debugfs", "/sbin/debugfs"},
 	"depmod":             {"/usr/sbin/depmod", "/sbin/depmod"},
+	"dkms":               {"/usr/sbin/dkms", "/usr/bin/dkms"},
 	"dnf":                {"/usr/bin/dnf"},
 	"dpkg":               {"/usr/bin/dpkg"},
 	"dpkg-divert":        {"/usr/bin/dpkg-divert"},
@@ -196,6 +197,7 @@ var commandMap = map[string][]string{
 	"mkfs":               {"/usr/sbin/mkfs"},
 	"mkswap":             {"/usr/sbin/mkswap"},
 	"mktemp":             {"/usr/bin/mktemp"},
+	"modinfo":            {"/sbin/modinfo", "/usr/sbin/modinfo"},
 	"mount":              {"/usr/bin/mount"},
 	"opkg":               {"/usr/bin/opkg"},
 	"parted":             {"/usr/sbin/parted"},
@@ -462,7 +464,17 @@ func findSeparatorOutsideQuotes(cmd string, sep string) int {
 			continue
 		}
 
-		if cmd[i] == '\\' {
+		// Backslash escaping only applies outside single quotes: POSIX shells
+		// give backslash no special meaning at all inside single quotes (the
+		// only way out is a literal closing quote), so treating it as an
+		// escape unconditionally desynchronizes the quote-state tracking for
+		// whatever follows. This matters for QuoteArg's own output: its
+		// close-quote/backslash/quote/quote/reopen-quote sequence relies on
+		// the backslash at that point being outside any quote, and a
+		// backslash the caller's own script places just before an embedded
+		// quote (still inside the outer single-quoted region at that point)
+		// must not be treated as an escape either.
+		if cmd[i] == '\\' && !inSingleQuote {
 			escaped = true
 			continue
 		}
@@ -488,7 +500,12 @@ func findSeparatorOutsideQuotes(cmd string, sep string) int {
 func verifyCmdWithFullPath(cmd, chrootPath string) (string, error) {
 	var ignoreStr string
 	var err error
-	separators := []string{"&&", ";", "|", "||"}
+	// "\n" is a separator too: an unquoted newline terminates a shell statement
+	// just like ";" does, so a payload like "allowed\nunallowlisted" must not
+	// skip verification of the second line. A newline INSIDE a quoted argument
+	// (e.g. a multi-line bash -c '<script>' payload) is unaffected here since
+	// findSeparatorOutsideQuotes only matches occurrences outside quotes.
+	separators := []string{"&&", ";", "|", "||", "\n"}
 
 	// If the command is 'sed' or 'echo', we need to ignore the string content
 	if strings.HasPrefix(cmd, "sed ") {
@@ -534,24 +551,39 @@ func verifyCmdWithFullPath(cmd, chrootPath string) (string, error) {
 		return updatedCmdStr, nil
 	}
 
-	fields := strings.Fields(cmd)
-	if len(fields) == 0 {
+	// Resolve only the leading command-name token to its full/allowlisted path,
+	// leaving everything after it untouched: cmd's tail may be a quoted argument
+	// (e.g. a bash -c '<script>' payload) whose internal whitespace — including
+	// real newlines a multi-line script needs as statement separators for
+	// if/then/fi, for/do/done, etc. — must survive byte-for-byte. Reassembling
+	// via strings.Fields/strings.Join (as this used to) is blind to quoting and
+	// collapses any such whitespace run to a single space, corrupting the script.
+	trimmedCmd := strings.TrimLeft(cmd, " \t\n\r\v\f")
+	idx := strings.IndexAny(trimmedCmd, " \t\n\r\v\f")
+	var bin, rest string
+	if idx == -1 {
+		bin, rest = trimmedCmd, ""
+	} else {
+		bin, rest = trimmedCmd[:idx], trimmedCmd[idx:]
+	}
+	if bin == "" {
 		return cmd, nil
 	}
-	bin := fields[0]
+
+	var resolvedBin string
 	fullPathList, ok := commandMap[bin]
 	if ok {
 		var foundPath bool = false
 		for _, fullPath := range fullPathList {
 			if fullPath == bin {
 				// This handles shell built-in commands like 'cd' and 'command'
-				fields[0] = bin
+				resolvedBin = bin
 				foundPath = true
 				break
 			}
 			fullHostPath := filepath.Join(chrootPath, fullPath)
 			if _, err := os.Stat(fullHostPath); err == nil {
-				fields[0] = fullPath
+				resolvedBin = fullPath
 				foundPath = true
 				break
 			}
@@ -564,7 +596,7 @@ func verifyCmdWithFullPath(cmd, chrootPath string) (string, error) {
 		return "", fmt.Errorf("command %s not found in commandMap", bin)
 	}
 
-	updatedCmdStr := strings.Join(fields, " ")
+	updatedCmdStr := resolvedBin + rest
 	if ignoreStr != "" && ignoreStr != "<ignored>" {
 		updatedCmdStr = strings.ReplaceAll(updatedCmdStr, "<ignored>", ignoreStr)
 	}

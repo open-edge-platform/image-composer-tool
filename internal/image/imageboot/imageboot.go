@@ -258,24 +258,40 @@ func getKernelVersionFromBoot(installRoot string) (string, error) {
 	return "", fmt.Errorf("kernel image not found in %s", kernelDir)
 }
 
-// EnsureDepmodForBootKernels runs depmod for each vmlinuz-* found under /boot when
-// modules.dep is missing. Kernel package postinst often skips depmod in the ICT chroot
-// because initramfs generators are temporarily diverted during apt install.
-func EnsureDepmodForBootKernels(installRoot string) error {
+// ListInstalledKernelVersions returns the kernel versions installed in the
+// target rootfs, derived from /boot/vmlinuz-* entries. This reads the
+// installed rootfs directly rather than any provider-populated template
+// field, so it works the same way regardless of which provider (deb or rpm)
+// installed the kernel package.
+func ListInstalledKernelVersions(installRoot string) ([]string, error) {
 	bootDir := filepath.Join(installRoot, "boot")
 	entries, err := os.ReadDir(bootDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return nil, nil
 		}
-		return fmt.Errorf("list boot directory: %w", err)
+		return nil, fmt.Errorf("list boot directory: %w", err)
 	}
+	var versions []string
 	for _, entry := range entries {
 		name := entry.Name()
 		if !strings.HasPrefix(name, "vmlinuz-") {
 			continue
 		}
-		kernelVersion := strings.TrimPrefix(name, "vmlinuz-")
+		versions = append(versions, strings.TrimPrefix(name, "vmlinuz-"))
+	}
+	return versions, nil
+}
+
+// EnsureDepmodForBootKernels runs depmod for each vmlinuz-* found under /boot when
+// modules.dep is missing. Kernel package postinst often skips depmod in the ICT chroot
+// because initramfs generators are temporarily diverted during apt install.
+func EnsureDepmodForBootKernels(installRoot string) error {
+	kernelVersions, err := ListInstalledKernelVersions(installRoot)
+	if err != nil {
+		return err
+	}
+	for _, kernelVersion := range kernelVersions {
 		if err := ensureKernelModuleDependencies(installRoot, kernelVersion); err != nil {
 			return err
 		}
