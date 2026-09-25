@@ -116,6 +116,20 @@ const (
 	maxPartIndex      = 128
 )
 
+// hasDotDotSegment reports whether p contains a literal ".." path component
+// (e.g. "/dev/../etc"). diskPathRe's character class allows "." and "/" for
+// legitimate nested paths like /dev/disk/by-id/..., so it cannot by itself
+// reject traversal out of /dev; this catches it explicitly before the path is
+// handed to privileged image-building code as the install disk.
+func hasDotDotSegment(p string) bool {
+	for _, seg := range strings.Split(p, "/") {
+		if seg == ".." {
+			return true
+		}
+	}
+	return false
+}
+
 // ValidateDisk reports whether d is a legal disk override for imageType. A nil
 // override is valid (not overridden).
 //
@@ -157,7 +171,7 @@ func validateDiskTop(d *DiskOverride) error {
 	case !diskNameRe.MatchString(d.Name):
 		return fmt.Errorf("disk name %q must match %s", d.Name, diskNameRe.String())
 	}
-	if len(d.Path) > maxDiskFieldLen || !diskPathRe.MatchString(d.Path) {
+	if len(d.Path) > maxDiskFieldLen || !diskPathRe.MatchString(d.Path) || hasDotDotSegment(d.Path) {
 		return fmt.Errorf("disk path %q must be empty or a /dev device path", d.Path)
 	}
 	for field, v := range map[string]string{"size": d.Size, "maxSize": d.MaxSize} {

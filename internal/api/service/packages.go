@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -323,25 +322,11 @@ func (s *Service) planLookups(osID string, repos []PackageRepo) []repoLookup {
 		if repoType == "" {
 			repoType = repoTypeDeb
 		}
-		gpgKeyPath := verifiableGPGKeyPath(r.GPGKeyPath)
 		for _, idx := range r.Index {
-			lookups = append(lookups, indexLookups(r, idx, repoType, gpgKeyPath, osArches)...)
+			lookups = append(lookups, indexLookups(r, idx, repoType, r.GPGKeyPath, osArches)...)
 		}
 	}
 	return lookups
-}
-
-// verifiableGPGKeyPath returns path if it names a file that exists on disk,
-// else "" — a configured-but-missing key silently falls back to unverified
-// rather than failing every lookup for that repo.
-func verifiableGPGKeyPath(path string) string {
-	if path == "" {
-		return ""
-	}
-	if _, err := os.Stat(path); err != nil {
-		return ""
-	}
-	return path
 }
 
 // indexLookups expands one RepoIndex into its component pkgindex.Repo lookups.

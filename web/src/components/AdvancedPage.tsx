@@ -162,9 +162,9 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
       // "no override" and the backend resolves the curated template directly.
       packages: packagesKey ? packagesKey.split('\n') : undefined,
       repos: reposKey ? reposKey.split('\n') : undefined,
-      disk: debouncedDiskKey ? JSON.parse(debouncedDiskKey) : undefined,
+      disk: diskEdited && debouncedDiskKey ? JSON.parse(debouncedDiskKey) : undefined,
     }),
-    [selection, imageNameEdited, debouncedImageName, packagesKey, reposKey, debouncedDiskKey],
+    [selection, imageNameEdited, debouncedImageName, packagesKey, reposKey, diskEdited, debouncedDiskKey],
   )
 
   // Entering Advanced always lands on the first step, mirroring the prototype's

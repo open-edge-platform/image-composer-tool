@@ -213,6 +213,7 @@ function PackageSearch({ os, repos, baseLock }: { os: string; repos: PackageRepo
     setLoading(true)
     setResults([])
     let es: EventSource | null = null
+    let cancelled = false
     const debounce = setTimeout(() => {
       // Recorded here, not on every keystroke: the debounce only fires once
       // the user actually pauses on a query, which is what "searched for X"
@@ -257,13 +258,22 @@ function PackageSearch({ os, repos, baseLock }: { os: string; repos: PackageRepo
         // route or a proxy that buffers text/event-stream.
         api
           .searchPackages({ q, os, limit: SEARCH_LIMIT })
-          .then((r) => setResults(r.packages))
-          .catch((e) => setError((e as Error).message))
-          .finally(() => setLoading(false))
+          .then((r) => {
+            if (cancelled) return
+            setResults(r.packages)
+          })
+          .catch((e) => {
+            if (cancelled) return
+            setError((e as Error).message)
+          })
+          .finally(() => {
+            if (!cancelled) setLoading(false)
+          })
       })
     }, 300)
     return () => {
       clearTimeout(debounce)
+      cancelled = true
       // Closing the stream is what actually cancels a superseded keystroke;
       // without it the server keeps fanning out across every repository for a
       // query the user has already replaced.

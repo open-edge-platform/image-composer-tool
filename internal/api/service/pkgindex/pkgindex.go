@@ -214,8 +214,11 @@ func New(cfg Config) *Cache {
 
 // key identifies a repository index. Arch is included because a deb repository
 // serves a separate index per architecture, and an rpm URL is arch-templated.
+// GPGKeyPath is included too: it is part of the trust policy, so a lookup made
+// without a usable key must not be able to serve a later, differently-keyed
+// lookup its unverified cached data.
 func (r Repo) key() string {
-	return strings.Join([]string{r.Type, r.URL, r.Codename, r.Component, r.Arch}, "|")
+	return strings.Join([]string{r.Type, r.URL, r.Codename, r.Component, r.Arch, r.GPGKeyPath}, "|")
 }
 
 // Lookup returns the packages r offers, reading the index over the network on a

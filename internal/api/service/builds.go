@@ -329,9 +329,11 @@ func (s *Service) StartBuild(req BuildRequest) (*BuildAccepted, error) {
 
 	// A compose selection carrying an override resolved to a generated delta
 	// (resolveBuildTemplate), not the curated file directly — remember that so
-	// finish() knows to archive+clean it up.
+	// finish() knows to archive+clean it up. Must mirror resolveBuildTemplate's
+	// own hasOverrides() check: a template resolved without overrides is the
+	// curated file, and finish() must not delete that.
 	var deltaPath string
-	if req.Compose != nil && req.Compose.ImageName != "" {
+	if req.Compose != nil && req.Compose.hasOverrides() {
 		deltaPath = templatePath
 	}
 
