@@ -21,7 +21,7 @@ func TestEmbeddedSpecIsValid(t *testing.T) {
 		t.Fatalf("embedded spec invalid: %v", err)
 	}
 	// Sanity-check that the JSON operations we rely on are present.
-	for _, p := range []string{"/manifest", "/templates/compose", "/templates/validate", "/package-repos", "/packages/search", "/packages/search/stream", "/builds", "/builds/{id}/details", "/builds/{id}/artifacts", "/builds/{id}/cancel"} {
+	for _, p := range []string{"/manifest", "/templates/compose", "/templates/validate", "/package-repos", "/edge-pack", "/packages/search", "/packages/search/stream", "/builds", "/builds/{id}/details", "/builds/{id}/artifacts", "/builds/{id}/cancel"} {
 		if swagger.Paths.Find(p) == nil {
 			t.Errorf("spec missing path %q", p)
 		}
@@ -41,6 +41,7 @@ func (stubServer) GetManifest(http.ResponseWriter, *http.Request)               
 func (stubServer) ComposeTemplate(http.ResponseWriter, *http.Request)                          {}
 func (stubServer) ValidateTemplate(http.ResponseWriter, *http.Request)                         {}
 func (stubServer) ListPackageRepos(http.ResponseWriter, *http.Request, ListPackageReposParams) {}
+func (stubServer) GetEdgePack(http.ResponseWriter, *http.Request, GetEdgePackParams)           {}
 func (stubServer) SearchPackages(http.ResponseWriter, *http.Request, SearchPackagesParams)     {}
 
 // TestHandlerFromMuxRegistersRoutes verifies the generated registration wires
