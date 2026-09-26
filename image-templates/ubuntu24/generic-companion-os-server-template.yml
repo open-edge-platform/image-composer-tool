@@ -1,0 +1,1014 @@
+---
+# SPDX-FileCopyrightText: (C) 2026 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+
+image:
+  name: minimal-ubuntu-server
+  version: "24.04"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+
+# Disk layout and output artifact definition
+disk:
+  name: minimal-ubuntu-server
+  artifacts:
+    - type: raw
+      compression: gz
+  size: 32GiB
+  # TODO optimise size
+  partitionTableType: gpt
+  partitions:
+    # EFI system partition
+    - id: EFI
+      name: EFI
+      type: esp
+      typeUUID: c12a7328-f81f-11d2-ba4b-00a0c93ec93b
+      fsType: vfat
+      fsLabel: UEFI
+      start: 1MiB
+      end: 1025MiB
+      mountPoint: /boot/efi
+      mountOptions: defaults
+      flags:
+        - boot
+        - esp
+    # Swap partition
+    - id: SWAP
+      name: SWAP
+      type: linux-swap
+      typeUUID: 0657fd6d-a4ab-43c4-84e5-0933c84b4f4f
+      fsType: linux-swap
+      start: 1025MiB
+      end: 5073MiB
+      mountPoint: none
+      mountOptions: sw
+      flags: []
+    # Root filesystem
+    - id: ROOT
+      name: ROOT
+      type: linux-root-amd64
+      typeUUID: 4f68bce3-e8cd-4db1-96e7-fbcaf984b709
+      fsType: ext4
+      start: 5073MiB
+      end: "0"
+      mountPoint: /
+      mountOptions: defaults
+      flags: []
+
+# Additional package repositories for this image
+packageRepositories:
+  - codename: "noble/snapshots/2026_S_REL3-meta-data-fix"
+    url: "https://download.01.org/edge-linux-overlay/ubuntu"
+    pkey: "https://download.01.org/edge-linux-overlay/ubuntu/9C63745D2A211728B8CE98C5F84B1B6A704E41B2.gpg"
+    component: "main non-free multimedia kernels"
+    priority: 2000
+    allowPackages:
+    # Intel GPU Runtime
+    # Remove these to disable: Intel GPU compute & memory management
+      - libigfxcmrt7
+      - libigdgmm12
+
+
+    # Intel VA-API Drivers
+    # Remove these to disable: Intel specific hardware video acceleration drivers
+      - intel-media-va-driver
+      - intel-media-va-driver-non-free
+
+    # VA-API (Video Acceleration API)
+    # Remove these to disable: hardware video decode/encode via VA-API
+      - libva-dev
+      - libva-drm2
+      - libva-glx2
+      - libva-wayland2
+      - libva-x11-2
+      - libva2
+      - va-driver-all
+      - vainfo
+
+    # Intel VPL / oneVPL (Video Processing Library)
+    # Remove these to disable: Intel oneVPL hardware video processing pipeline
+      - libmfx-gen1.2
+      # overaly dependency for libvpl-dev
+      - libvpl2
+
+    # Mesa Vulkan Drivers
+    # Remove these to disable: Vulkan GPU rendering
+      - mesa-vulkan-drivers
+
+
+    # System / Firmware
+    # Remove these to disable: Linux firmware blobs
+      - linux-firmware # must
+
+    # XDP / eBPF High-Speed Networking
+    # Remove these to disable: XDP express data path networking
+      - xdp-tools
+      - libxdp-dev
+      - libxdp1
+      - iproute2
+
+    # Intel Management & TEE Stack
+    # Remove these to disable: Intel ME, LMS service, TEE access
+      - rpc-go
+      - lms
+      - metee
+
+    # Intel Kernel & Tools
+    # Remove these to disable: Intel-optimized 6.18 kernel with headers and tools
+    #
+    # Every package the internal repo publishes for the 6.18 line. Tools are named
+    # `linux-intel-<tool>`, not `linux-<tool>-6.18-intel` — same spellings as
+    # installer.sh:474. Keep this list in sync with systemConfig.packages; an entry
+    # there but not here silently falls back to the Ubuntu archive build.
+    # Revisit the whole block if this template moves off 6.18.
+      - linux-headers-6.18-intel # must
+      - linux-image-6.18-intel # must
+      - linux-kbuild-6.18.38
+      - linux-config-6.18
+      - linux-intel-bpftool
+      - linux-intel-misc-tools
+      - linux-intel-perf
+      - linux-intel-cpupower
+      - linux-intel-rtla
+      - linux-intel-usbip
+      - libcpupower-intel-dev
+      - libcpupower-intel1
+      - linux-intel-hyperv-daemons
+      - linux-intel-sdsi
+    # Kernel docs and source tree, ~362MB installed. The -intel packages are
+    # 10KB wrappers that only Depend on the real ones, so all four go together.
+      - linux-doc-6.18
+      - linux-doc-intel
+      - linux-source-6.18
+      - linux-source-intel
+      # - linux-bpf-dev # not in the internal repo; comes from noble-updates
+
+    # Wayland Libraries (overlay version 1.23.0 required by mesa-vulkan-drivers)
+    # Remove these to disable: Wayland display protocol libraries
+      - libwayland-client0
+      - libwayland-server0
+      - libwayland-cursor0
+      - libwayland-dev
+      - libwayland-egl1
+      - libwayland-egl-backend-dev
+      - libwayland-bin
+      - libwayland-doc
+      - wayland-protocols
+
+    # GStreamer Multimedia Framework (overlay builds)
+    # Remove these to disable: GStreamer pipeline, plugins, RTSP server
+      - libgstreamer1.0-0
+      - gstreamer1.0-tools
+      - gstreamer1.0-plugins-bad
+      - gstreamer1.0-plugins-base
+      # pin point to internal repository for gstreamer1.0-plugins-good , cant remove requried by bad and pulseaudio plguins
+      - gstreamer1.0-plugins-good
+      - gstreamer1.0-pulseaudio
+      - libgstreamer1.0-dev
+      - libgstreamer-gl1.0-0
+      - libgstreamer-plugins-bad1.0-0
+      - libgstreamer-plugins-base1.0-0
+      - gir1.2-gst-plugins-bad-1.0
+      - gir1.2-gstreamer-1.0
+
+
+    # FFmpeg (overlay build) and its libraries
+    # Remove these to disable: multimedia encoding/decoding/streaming
+      - ffmpeg
+      - libavcodec62
+      - libavdevice62
+      - libavfilter11
+      - libavformat62
+      - libavutil60
+      - libswresample6
+      - libswscale9
+
+     # - intel-lpmd
+
+
+    # LinuxPTP (Precision Time Protocol)
+    # Remove these to disable: IEEE 1588 PTP clock synchronization
+      - linuxptp
+
+
+  # ----- OpenVINO -----
+  - codename: "ubuntu24"
+    url: "https://apt.repos.intel.com/openvino/2025"
+    pkey: "https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB"
+  # ----- Intel oneAPI (oneDNN / Base Toolkit) -----
+  - codename: "all"
+    url: "https://apt.repos.intel.com/oneapi"
+    pkey: "https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB"
+    component: "main"
+    priority: 500
+
+  # Docker CE official repository
+  - codename: "noble"
+    url: "https://download.docker.com/linux/ubuntu"
+    pkey: "https://download.docker.com/linux/ubuntu/gpg"
+    component: "stable"
+    priority: 500
+
+
+  # ----- Intel RealSense SDK -----
+  # ref: https://docs.ros.org/en/iron/p/librealsense2/user_docs/distribution_linux.html
+  # TODO: the key ID below is hardcoded; need to find a better way to handle dynamic key discovery
+  #       in the packageRepositories section (ICT does not support shell substitution here).
+  # To get the current key ID if the build fails with NO_PUBKEY, run:
+  #   curl -sSf "https://librealsense.intel.com/Debian/apt-repo/dists/$(lsb_release -cs)/InRelease" \
+  #     | gpg --status-fd 1 --verify 2>/dev/null | grep "NO_PUBKEY" | awk '{print $3}'
+  # Then update the key ID in the pkey URL below.
+  - codename: "noble"
+    url: "https://librealsense.intel.com/Debian/apt-repo"
+    pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xFB0B24895113F120"
+    component: "main"
+    priority: 500
+    allowPackages:
+    # Intel RealSense SDK
+    # Remove these to disable: RealSense depth camera runtime and tools
+      - librealsense2          # Core SDK runtime library
+      - librealsense2-utils    # CLI tools: rs-enumerate-devices, rs-depth, rs-color, rs-fw-update
+      - librealsense2-dev      # SDK headers (needed to build custom RealSense apps)
+      - librealsense2-dkms
+      - librealsense2-gl
+
+  # ----- Mozilla Team PPA (Firefox .deb, avoids Ubuntu's snap-transitional package) -----
+  - codename: "noble"
+    url: "https://ppa.launchpadcontent.net/mozillateam/ppa/ubuntu"
+    pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x0AB215679C571D1C8325275B9BDB3D89CE49EC21"
+    component: "main"
+    priority: 1001
+
+  # Intel ECI repository (aligned with eci.intel.com setup instructions)
+  # apt equivalent: deb [signed-by=...] https://eci.intel.com/repos/noble isar main
+  # NOTE: [trusted=yes] workaround — the GPG key and Release signature are valid
+  # (verified externally with gpg), but ICT's Go openpgp library fails to verify
+  # this particular binary key format. Revert to the pkey URL once ICT is fixed:
+  #   pkey: "https://eci.intel.com/repos/gpg-keys/GPG-PUB-KEY-INTEL-ECI.gpg"
+  - codename: "isar"
+    url: "https://eci.intel.com/repos/noble"
+    pkey: "https://eci.intel.com/repos/gpg-keys/GPG-PUB-KEY-INTEL-ECI.gpg"
+    component: "main"
+    priority: 600
+    allowPackages:
+      - libcamhal-ipu75xa0
+      - libcamhal-ipu75xa
+      - libcamera-tools
+      - libcamhal-common
+      - libcamhal0
+      # camera HAL dependency tree (ipu75xa imaging algorithm libs)
+      # - libcamhal*
+      - libia-*-ipu75xa0
+      # GStreamer icamerasrc plugin (Recommends of libcamhal0, not auto-pulled)
+      - gstreamer1.0-icamera
+      - libgsticamerainterface-1.0-1
+      # MIPI GMSL deserializer DKMS module (builds on first boot via dkms autoinstall)
+      - intel-mipi-gmsl-dkms
+      # v4l-utils >= 1.30 required by intel-mipi-gmsl-dkms (Ubuntu archive only has 1.26)
+      - v4l-utils
+      - libv4l-0t64
+      - libv4l2rds0t64
+      - libv4lconvert0t64
+
+
+systemConfig:
+  name: minimal-ubuntu-server
+  description: Ubuntu 24.04 server image with Intel packages from Ubuntu archive and overlay
+  hostname: minimal-server-ubuntu
+  immutability:
+    enabled: false
+
+  bootloader:
+    bootType: efi
+    provider: grub
+
+  packages:
+    # Core System
+    # Remove these to disable: essential system binaries, shell, coreutils
+      - base-files # must
+      - bash # must
+      - bsdutils # must
+      - coreutils # must
+      - dash # must
+      - debianutils # must
+      - diffutils # must
+      - findutils # must
+      - grep # must
+      - gzip # must
+      - hostname # must
+      - init # must
+      - login # must
+      - mawk # must
+      - ncurses-base # must
+      - ncurses-bin # must
+      - sed # must
+      - systemd # must
+      - util-linux # must
+      - libattr1
+
+
+    # Ubuntu Meta-packages
+    # Remove these to disable: Ubuntu server essentials meta-package
+      - ubuntu-server-minimal # must
+
+    # Kernel
+    # Remove these to disable: generic Ubuntu kernel, firmware, initramfs
+      - linux-firmware # must
+      - linux-base # must
+      - initramfs-tools # must
+
+    # Bootloader (EFI / GRUB)
+    # Remove these to disable: EFI boot, GRUB bootloader, Secure Boot shim
+      - grub-efi-amd64 # must
+      - grub-efi-amd64-signed # must
+      - grub-efi-amd64-bin # must
+      - grub-pc-bin
+      - grub2-common # must
+      - shim-signed # must
+      - efibootmgr # must
+
+    # Networking
+    # Remove these to disable: IP configuration, DNS, firewall, download tools
+      - iproute2 # must
+      - isc-dhcp-client # must
+      - iputils-ping
+      - netplan.io # must
+      - network-manager
+      - libbluetooth3
+      - networkd-dispatcher
+      - systemd-resolved # must
+      - net-tools
+      - ethtool
+      - curl
+      - wget
+      - ca-certificates # must
+      - dns-root-data
+      - dnsutils
+      - ufw
+      - bridge-utils # required, libvirt creates virbr0 bridge for virtual networks
+      - dnsmasq-base # required, libvirt uses dnsmasq for DHCP/DNS on virtual networks
+      - wireless-regdb # optional, WiFi regulatory compliance database
+
+    # SSH
+    # Remove these to disable: remote SSH access
+      - openssh-server # must
+
+    # mDNS / Service Discovery
+    # Remove these to disable: mDNS hostname.local discovery via Avahi
+      - avahi-daemon # required for mDNS hostname.local discovery (BSP feature)
+      - avahi-utils
+      - libavahi-client3
+      - libavahi-common-data
+      - libavahi-common3
+      - libavahi-core7
+      - libavahi-glib1
+      - libnss-mdns # required, NSS module enabling .local hostname resolution via Avahi
+
+    # Intel RealSense Camera
+    # Requires: Intel RealSense repository (packageRepositories section above)
+    # Hardware: USB3 connection; udev rules auto-installed by librealsense2 postinst
+    # Verify: rs-enumerate-devices
+      - librealsense2          # Core SDK runtime
+      - librealsense2-utils    # CLI tools (rs-enumerate-devices, rs-depth, rs-color)
+      - librealsense2-dev      # SDK headers for custom application development
+      - librealsense2-dkms
+      - librealsense2-gl
+      - dkms
+    # Libcamera Framework
+    # Remove these to disable: libcamera support for CSI / USB cameras (V4L2 pipeline)
+    # Provides: cam utility (camera enumeration + capture), GStreamer libcamerasrc element
+    # Verify: cam --list (lists detected cameras)
+    # Note: libcamera-apps (libcamera-hello) is RPi-specific; cam from libcamera-tools
+    #       is the standard cross-platform tool available in Ubuntu 24.04 repos
+      # libcamera0t64 not listed: pulled automatically as dependency of libcamera-tools
+      - libcamera-tools        # 'cam' utility: enumerate and capture from libcamera devices
+      - gstreamer1.0-libcamera # GStreamer libcamerasrc element (pipeline integration)
+
+    # Package Management
+    # Remove these to disable: APT package manager, GPG verification, PPA support
+      - apt # must
+      - apt-transport-https
+      - apt-utils
+      - gpgv # must
+      - gnupg
+      - software-properties-common
+
+    # System Services
+    # Remove these to disable: time sync, logging, cron, auto-updates, snap, D-Bus
+      # - systemd-timesyncd
+      - chrony
+      - rsyslog
+      - cron
+      - logrotate
+      - unattended-upgrades
+      - snapd
+      - dbus # must
+      - udev # must
+      - polkitd
+
+    # Storage and Filesystem
+    # Remove these to disable: LVM, RAID, filesystem tools, partitioning
+      - lvm2
+      - mdadm
+      - xfsprogs
+      - e2fsprogs # must
+      - dosfstools # must
+      - parted
+      - gdisk
+      - mount # must
+      - thin-provisioning-tools # optional, LVM thin provisioning (used by Docker devicemapper and libvirt)
+
+    # Cloud and Provisioning
+    # Remove these to disable: cloud-init based provisioning
+      - cloud-init
+
+
+    # Security
+    # Remove these to disable: AppArmor, OpenSSL
+      - apparmor
+      - openssl # must
+
+
+    # Performance and Monitoring
+    # Remove these to disable: system performance monitoring tools
+      - htop
+      # - tmon
+      # - sysstat
+      # - iotop
+      # - dstat
+
+    # Diagnostics and Utilities
+    # Remove these to disable: text editor, hardware/network diagnostic tools
+      - vim
+      - tcpdump
+      - nano
+
+      # - less
+      # - man-db
+      # - lsb-release
+      # - pciutils
+      # - usbutils
+      # - lshw
+      # - dmidecode
+      # - hdparm
+      # - smartmontools
+      # - strace
+      # - iperf3
+      # - traceroute
+      # - mtr-tiny
+      # - socat
+      - sysbench
+      - stress-ng
+      - fio
+      - powertop
+      - usb-modeswitch
+      - v4l-utils
+      - libllvm18
+      - libdebuginfod1t64
+
+
+    # Compression and Archiving
+    # Remove these to disable: tar, xz, bzip2, zip archive support
+      # - tar
+      - xz-utils # required by linux-source-6.18
+      # - bzip2
+      - unzip # optional, extract ZIP archives
+      # - zip
+      - lzop # optional, LZO compression utility
+      - pigz # optional, parallel gzip for faster compression
+      - zstd # optional, fast Zstandard compression/decompression
+      - xxd # optional, hex dump and reverse utility
+
+    # Language and Locale
+    # Remove these to disable: locale and language pack support
+      # - locales
+      # - language-pack-en
+
+    # Diagnostics and Hardware Tools
+    # Remove these to disable: hardware/storage info, sensors, PCI/USB inspection
+      - pciutils
+      - lsscsi
+      - sg3-utils
+      - lm-sensors
+      - msr-tools
+      - i2c-tools
+      - util-linux-extra
+      - lsb-release
+      - cpu-checker # optional, checks KVM/hardware virtualization capability
+      - hwdata # optional, hardware identification database (PCI/USB IDs)
+      - read-edid # optional, read EDID/MCCS data from display monitors
+
+    # Miscellaneous Server Utilities
+    # Remove these to disable: sudo, process tools, revision control, terminal multiplexers
+      - sudo # must
+      - lsof
+      - psmisc
+      - at
+      - bc
+      - file
+      - patch
+      - rsync
+      - screen
+      - tmux
+      - git
+      - git-lfs
+      - mc
+
+
+    # Intel GPU Runtime
+    # Remove these to disable: Intel GPU compute & memory management
+      - libigfxcmrt7
+      - libigdgmm12
+      - intel-gpu-tools
+      - ocl-icd-libopencl1
+
+
+    # Mesa Vulkan Drivers
+    # Remove these to disable: Vulkan GPU rendering
+      - mesa-vulkan-drivers
+      - mesa-utils
+
+
+    # VA-API (Video Acceleration API)
+    # Remove these to disable: hardware video decode/encode via VA-API
+      - libva-dev
+      - libva-drm2
+      - libva-glx2
+      - libva-wayland2
+      - libva-x11-2
+      - libva2
+      - va-driver-all
+      - vainfo
+
+    # Intel VA-API Drivers
+    # Remove these to disable: Intel specific hardware video acceleration drivers
+      - intel-media-va-driver
+      - intel-media-va-driver-non-free
+
+    # Intel VPL / oneVPL (Video Processing Library)
+    # Remove these to disable: Intel oneVPL hardware video processing pipeline
+      - libvpl2
+      - libmfx-gen1.2
+
+
+    # DRM Libraries
+    # Remove these to disable: Direct Rendering Manager userspace libraries
+      - libdrm-amdgpu1
+      - libdrm-common
+      - libdrm-dev
+      - libdrm-intel1
+      - libdrm-nouveau2
+      - libdrm-radeon1
+      - libdrm2
+
+    # XDP / eBPF High-Speed Networking
+    # Remove these to disable: XDP express data path networking
+      - xdp-tools
+      - libxdp-dev
+      - libxdp1
+
+    # Intel Management & TEE Stack
+    # Remove these to disable: Intel ME, LMS service, TEE access
+      - rpc-go
+      - lms
+      - metee
+
+    # Audio (Intel SOF)
+    # Remove these to disable: Intel SOF audio firmware
+      - firmware-sof-signed # must
+
+    # ALSA Audio Utilities
+    # Remove these to disable: ALSA userspace tools and audio mixing/playback
+      - alsa-utils
+      - libasound2t64
+      - libatopology2t64
+      - libfftw3-single3
+      - libsamplerate0
+      - alsa-topology-conf # optional, ALSA topology configuration files for SOF/DSP audio
+      - alsa-ucm-conf # optional, ALSA Use Case Manager configs for audio hardware profiles
+
+
+    # Docker CE Engine
+    # Remove these to disable: Docker container runtime
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
+
+    # Required for k3s/docker networking
+      - iptables
+      - conntrack
+      - socat
+      - open-iscsi
+      - libip4tc2
+      - libxtables12
+      - libmnl0
+      - libnfnetlink0
+      - libnftnl11
+      - nftables
+      - libseccomp2
+      - libc6
+      - libsystemd0
+
+    # Required for provisioning scripts
+      - jq
+
+
+    # Wayland Libraries (overlay version 1.23.0 required by mesa-vulkan-drivers)
+    # Remove these to disable: Wayland display protocol libraries
+      - libwayland-client0
+      - libwayland-server0
+      - libwayland-cursor0
+      - libwayland-dev
+      - libwayland-egl1
+      - libwayland-egl-backend-dev
+      - libwayland-bin
+      - libwayland-doc
+      - wayland-protocols
+
+    # Intel Kernel & Tools
+    # Remove these to disable: Intel-optimized 6.18 kernel with headers and tools
+    # Names must match the allowPackages block above. Aliases for the -intel
+    # suffixed binaries are created in configurations: below.
+      - linux-headers-6.18-intel
+      - linux-image-6.18-intel
+      - linux-kbuild-6.18.38
+      - linux-config-6.18
+      - linux-bpf-dev
+      - linux-intel-bpftool
+      - linux-intel-misc-tools
+      - linux-intel-perf
+      - linux-intel-cpupower
+      - linux-intel-rtla
+      - linux-intel-usbip
+      - libcpupower-intel-dev
+      - libcpupower-intel1
+      - linux-intel-hyperv-daemons
+      - linux-intel-sdsi
+      - linux-doc-6.18
+      - linux-doc-intel
+      - linux-source-6.18
+      - linux-source-intel
+    # Dependencies of the above, all from the Ubuntu archive so no allowPackages
+    # entry: pahole for linux-kbuild, libjs-sphinxdoc for linux-doc, binutils and
+    # xz-utils for linux-source (it ships /usr/src/linux-source-6.18.tar.xz).
+      - pahole
+      - libjs-sphinxdoc
+      - binutils
+
+    # Boot Configuration Utilities
+    # Remove these to disable: bootconfig inspection and generation tooling
+      # TODO- bootconfig
+
+      - clinfo # optional, OpenCL platform and device enumeration tool (GPU verification)
+
+    # Intel NPU driver dependency
+    # The NPU driver (installed later from GitHub in the configurations section)
+    # needs this library to work. Without it, the intel-driver-compiler-npu package
+    # cannot be set up and 'dpkg -i' would fail with "depends on libtbb12".
+    # We list it here so it's already present before the NPU .deb files are installed.
+      - libtbb12 # Threading Building Blocks runtime — required by intel-driver-compiler-npu
+
+    # GStreamer Multimedia Framework
+    # Remove these to disable: GStreamer pipeline, plugins, RTSP server
+      - libgstreamer1.0-0
+      - gstreamer1.0-tools
+      - gstreamer1.0-plugins-base
+      - gstreamer1.0-pulseaudio
+      - libgstreamer1.0-dev
+      - libgstreamer-gl1.0-0
+      - gstreamer1.0-plugins-bad
+      - libgstreamer-plugins-bad1.0-0
+      - libgstreamer-plugins-base1.0-0
+      - gir1.2-gst-plugins-bad-1.0
+      - gir1.2-gstreamer-1.0
+
+
+    # FFmpeg Multimedia
+    # Remove these to disable: multimedia encoding/decoding/streaming
+      - ffmpeg
+      - libavcodec62
+      - libavdevice62
+      - libavfilter11
+      - libavformat62
+      - libavutil60
+      - libswresample6
+      - libswscale9
+
+    # QEMU/KVM Virtualization
+    # Remove these to disable: QEMU/KVM virtual machine emulation
+      - qemu-block-extra
+      - qemu-guest-agent
+      - qemu-system
+      - qemu-system-arm
+      - qemu-system-common
+      - qemu-system-data
+      - qemu-system-gui
+      - qemu-system-mips
+      - qemu-system-misc
+      - qemu-system-modules-opengl
+      - qemu-system-ppc
+      - qemu-system-s390x
+      - qemu-system-sparc
+      - qemu-system-x86
+      - qemu-user
+      - qemu-user-binfmt
+      - qemu-utils
+      - libspice-client-glib-2.0-8
+      - libspice-client-gtk-3.0-5
+      - spice-client-glib-usb-acl-helper
+      - spice-client-gtk
+
+
+    # Libvirt Virtualization Management
+    # Remove these to disable: libvirt daemon, drivers, and management tools
+      - libvirt-sanlock
+      - libtpms0
+      - libtpms-dev
+
+
+    # LinuxPTP (Precision Time Protocol)
+    # Remove these to disable: IEEE 1588 PTP clock synchronization
+      - linuxptp
+
+    # Build Tools & Development
+    # Remove these to disable: compilers, build systems, development headers
+      - build-essential
+      - make
+      - cmake
+      - libglew-dev
+      - libglm-dev
+      - libsdl2-dev
+      - pkg-config # optional, queries installed library compiler/linker flags
+      - python3-dev # optional, Python 3 development headers for building C extensions
+      - manpages # optional, Linux system call and library reference manual pages
+      - manpages-dev # optional, developer-oriented manual pages (section 2/3)
+
+    # intel-lpmd v0.1.0 build dependencies (source build in configurations section)
+    # These are installed by ICT (network available) so they're present in chroot.
+    # Purged after the build in the configurations cleanup step.
+      - autoconf
+      - automake
+      - autoconf-archive
+      - libtool
+      - gtk-doc-tools
+      - libdbus-1-dev
+      - libglib2.0-dev
+      - libxml2-dev
+      - libnl-3-dev
+      - libnl-genl-3-dev
+      - libsystemd-dev
+      - libupower-glib-dev
+
+    # Android Debug Bridge
+    # Remove these to disable: ADB for Android device interaction
+
+
+    # MQTT Messaging
+    # Remove these to disable: Mosquitto MQTT broker and clients
+      - mosquitto
+      - mosquitto-clients
+
+    # Python Data Science
+    # Remove these to disable: Python data analysis and visualization
+      - python3-pip
+
+      - python3-cpuinfo # optional, CPU feature detection library
+      - python3-rich # optional, rich text and formatting in the terminal
+      - python3-systemd # optional, Python bindings for systemd journal/daemon
+      - python3-tables # optional, HDF5 hierarchical data format library
+      - python3-odf # optional, OpenDocument format (ODS/ODT) read/write library
+      - python3-openpyxl # optional, read/write Excel 2010 XLSX/XLSM files
+      - python3-netifaces
+
+
+    # RPM Package Utilities
+    # Remove these to disable: RPM package management tools
+      - rpm
+
+
+    # Sound / Audio Libraries
+    # Remove these to disable: audio codec library
+      - libsndfile1 # for silver test, can be removed
+
+
+    # for Bluetooth
+    # Remove these to disable: Bluetooth support and tools
+    # BSP test errors without these: 'bluetoothctl: command not found', 'rfkill: command not found'
+      - bluez    # Bluetooth stack: bluetoothctl, hciconfig, btmon, bluetooth daemon
+      - rfkill   # RF kill switch tool: required by bt.py test (rfkill unblock bluetooth)
+
+    # Firmware & CPU Microcode
+    # Remove these to disable: CPU microcode security updates
+      - intel-microcode # optional, Intel CPU microcode updates (important for security)
+      - iucode-tool # optional, Intel processor microcode update tool
+
+    # Power Management
+    # Remove these to disable: system power and thermal management
+      # - intel-lpmd
+      - thermald # optional, Intel thermal management daemon (prevents CPU throttling)
+      - upower # optional, power management interface daemon (battery/AC status)
+
+       # Intel ECI Camera HAL
+    # Remove these to disable: Intel IPU camera support
+      - libcamhal-ipu75xa0
+      - libcamhal-ipu75xa
+      - libcamhal-common
+      - libcamhal0
+      # camera HAL dependency tree (ipu75xa imaging algorithm libs)
+
+      - libia-*-ipu75xa0
+      - gstreamer1.0-icamera
+      - libgsticamerainterface-1.0-1
+      # MIPI GMSL deserializer DKMS module (builds on first boot via dkms autoinstall)
+      - intel-mipi-gmsl-dkms
+
+  additionalFiles:
+    - local: ../additionalfiles/ptl/01-network-manager-all.yaml
+      final: /etc/netplan/01-network-manager-all.yaml
+
+
+  kernel:
+    version: "260717t053932z-r2"
+    cmdline: "xe.max_vfs=7 xe.force_probe=* modprobe.blacklist=i915 udmabuf.list_limit=8192 console=tty0 console=ttyS0,115200n8"
+    enableExtraModules: "intel_vpu uas"
+    packages:
+      - linux-image-6.18-intel_260717t053932z-r2
+      - linux-headers-6.18-intel_260717t053932z-r2
+  users:
+    - name: user
+      password: ""               # Do not commit real credentials; set at deploy time
+      # password: "<HASHED_PASSWORD>"  # Uncomment and replace with a sha512 hash in real config
+      groups: ["sudo", "video", "render", "audio"]
+      hash_algo: sha512
+  configurations:
+    # ----------------------------------------------------------------------------------
+    # Cloud-init: restrict to NoCloud datasource only
+    # ----------------------------------------------------------------------------------
+    - cmd: "mkdir -p /etc/cloud/cloud.cfg.d"
+    - cmd: "printf 'datasource_list: [NoCloud, None]\\n' > /etc/cloud/cloud.cfg.d/99-datasource.cfg"
+    # Mask systemd-networkd-wait-online — NetworkManager-wait-online already provides network-online.target
+    - cmd: "systemctl mask systemd-networkd-wait-online.service"
+    # Purge systemd-boot — installed transitively. GRUB is the actual bootloader, so systemd-boot
+    # is unused — but its postinst (`bootctl install`) fails inside the chroot. Force-purge to recover, then pin to -1
+    # so later apt steps cannot re-pull it.
+    - cmd: "printf 'Package: systemd-boot systemd-boot-efi\\nPin: release *\\nPin-Priority: -1\\n' > /etc/apt/preferences.d/no-systemd-boot"
+    - cmd: "dpkg --purge --force-all systemd-boot systemd-boot-efi 2>/dev/null || true"
+
+
+    # ----- Intel GPU Compute Stack (wget from GitHub releases) -----
+    # Intel-graphics-compiler Version: v2.38.2
+    # GPU compute-runtime Version: 26.27.39122.11
+    # Level-zero Version: v1.32.0
+    # Security: each .deb is sha256-verified before install (CWE-494 mitigation)
+    - cmd: "mkdir -p /tmp/gpu-packages"
+    - cmd: "wget -q https://github.com/intel/intel-graphics-compiler/releases/download/v2.38.2/intel-igc-core-2_2.38.2+22051_amd64.deb -O /tmp/gpu-packages/intel-igc-core-2_2.38.2+22051_amd64.deb && echo '3dbcbe4e716d62e9bd43a4a476d724cf772b4581dbcdd096d70df382e7ccad7e  /tmp/gpu-packages/intel-igc-core-2_2.38.2+22051_amd64.deb' | sha256sum -c - || exit 1"
+    - cmd: "wget -q https://github.com/intel/intel-graphics-compiler/releases/download/v2.38.2/intel-igc-opencl-2_2.38.2+22051_amd64.deb -O /tmp/gpu-packages/intel-igc-opencl-2_2.38.2+22051_amd64.deb && echo 'e265d191590efd5491bfbbd148c144fdd40aea51e0b57f8651130d2da20b8186  /tmp/gpu-packages/intel-igc-opencl-2_2.38.2+22051_amd64.deb' | sha256sum -c - || exit 1"
+    - cmd: "wget -q https://github.com/intel/compute-runtime/releases/download/26.27.39122.11/intel-ocloc_26.27.39122.11-0_amd64.deb -O /tmp/gpu-packages/intel-ocloc_26.27.39122.11-0_amd64.deb && echo '794a77217b3fd4c3f1381c2bb2c3c11a7f81e338b55b8a11e6c3b5070d138f98  /tmp/gpu-packages/intel-ocloc_26.27.39122.11-0_amd64.deb' | sha256sum -c - || exit 1"
+    - cmd: "wget -q https://github.com/intel/compute-runtime/releases/download/26.27.39122.11/intel-opencl-icd_26.27.39122.11-0_amd64.deb -O /tmp/gpu-packages/intel-opencl-icd_26.27.39122.11-0_amd64.deb && echo '6e447a783c99fb5634df298c135a81165be07db98672df96cdf413d22f3e6ac4  /tmp/gpu-packages/intel-opencl-icd_26.27.39122.11-0_amd64.deb' | sha256sum -c - || exit 1"
+    - cmd: "wget -q https://github.com/intel/compute-runtime/releases/download/26.27.39122.11/libze-intel-gpu1_26.27.39122.11-0_amd64.deb -O /tmp/gpu-packages/libze-intel-gpu1_26.27.39122.11-0_amd64.deb && echo '58420df60d4bf8ac79aba03f7de1b8b60a93e995b18142391077ff735ce7b74b  /tmp/gpu-packages/libze-intel-gpu1_26.27.39122.11-0_amd64.deb' | sha256sum -c - || exit 1"
+    - cmd: "wget -q https://github.com/oneapi-src/level-zero/releases/download/v1.32.0/libze1_1.32.0%2Bu24.04_amd64.deb -O /tmp/gpu-packages/libze1_1.32.0+u24.04_amd64.deb && echo '3c846af24f84a89150f6a4c6adcb4ea4ebef74dc119fe44f4e269bfaa72c7ba6  /tmp/gpu-packages/libze1_1.32.0+u24.04_amd64.deb' | sha256sum -c - || exit 1"
+    - cmd: "wget -q https://github.com/oneapi-src/level-zero/releases/download/v1.32.0/libze-dev_1.32.0%2Bu24.04_amd64.deb -O /tmp/gpu-packages/libze-dev_1.32.0+u24.04_amd64.deb && echo '4b783ed5fb937a55a7a0f3a8bc66af252f362e82476ebc0304da36173c9f2eb8  /tmp/gpu-packages/libze-dev_1.32.0+u24.04_amd64.deb' | sha256sum -c - || exit 1"
+    - cmd: "find /tmp/gpu-packages -maxdepth 1 -type f -name '*.deb' | xargs -r dpkg -i; apt-get install -y --fix-broken || true"
+    - cmd: "rm -rf /tmp/gpu-packages"
+
+    # Install NPU driver for Panther Lake
+
+    # Version: v1.35.0.20260722-29947505341 (from GitHub releases, public)
+    # Security: sha256-verified before extraction (CWE-494 mitigation)
+    - cmd: "dpkg --purge --force-remove-reinstreq intel-driver-compiler-npu intel-fw-npu intel-level-zero-npu intel-level-zero-npu-dbgsym 2>/dev/null || true"
+    - cmd: "mkdir -p /tmp/npu-driver"
+    - cmd: "cd /tmp/npu-driver && wget -q https://github.com/intel/linux-npu-driver/releases/download/v1.35.0/linux-npu-driver-v1.35.0.20260722-29947505341-ubuntu2404.tar.gz -O /tmp/npu-driver/linux-npu-driver-v1.35.0.20260722-29947505341-ubuntu2404.tar.gz && echo '398343e53fdac6023ad0856ef88bb6011b1e12447a112be55e85e27ef7f96c66  /tmp/npu-driver/linux-npu-driver-v1.35.0.20260722-29947505341-ubuntu2404.tar.gz' | sha256sum -c - || exit 1"
+    - cmd: "cd /tmp/npu-driver && tar -xf linux-npu-driver-v1.35.0.20260722-29947505341-ubuntu2404.tar.gz"
+    - cmd: "find /tmp/npu-driver -name '*.deb' -print0 | xargs -0 dpkg -i"
+
+    # --- Canonical names for the internal kernel tools ---------------------------
+    # The linux-intel-* packages install their binaries with an `-intel` suffix
+    # (bpftool-intel, perf-intel, ...), so plain `bpftool`, `perf` are not on PATH.
+    # Symlink the unsuffixed names into /usr/local/{bin,sbin}, which PATH searches
+    # before /usr/bin and /usr/sbin, so the internal build always wins and dpkg
+    # never overwrites the links. Same treatment for the tools that already have
+    # canonical names but land in /usr/sbin only, and for man pages, completions,
+    # the cpupower unit and the kbuild dir. Every link is guarded so an uninstalled
+    # package is skipped, and -f keeps re-runs idempotent.
+    # misc-tools, hyperv-daemons and sdsi already install canonical names;
+    # libcpupower-intel1/-dev use the standard soname. Nothing needed for those.
+    - cmd: "mkdir -p /usr/local/bin /usr/local/sbin"
+    - cmd: "[ -x /usr/sbin/bpftool-intel ] && ln -sf /usr/sbin/bpftool-intel /usr/local/sbin/bpftool || true"
+    - cmd: "[ -x /usr/bin/perf-intel ] && ln -sf /usr/bin/perf-intel /usr/local/bin/perf || true"
+    - cmd: "[ -x /usr/bin/cpupower-intel ] && ln -sf /usr/bin/cpupower-intel /usr/local/bin/cpupower || true"
+    - cmd: "[ -x /usr/bin/rtla-intel ] && ln -sf /usr/bin/rtla-intel /usr/local/bin/rtla || true"
+    - cmd: "[ -x /usr/sbin/usbip-intel ] && ln -sf /usr/sbin/usbip-intel /usr/local/sbin/usbip || true"
+    - cmd: "[ -x /usr/sbin/usbipd-intel ] && ln -sf /usr/sbin/usbipd-intel /usr/local/sbin/usbipd || true"
+    # sbin tools, also in bin for non-root shells whose PATH omits sbin
+    - cmd: "[ -x /usr/sbin/bpftool-intel ] && ln -sf /usr/sbin/bpftool-intel /usr/local/bin/bpftool || true"
+    - cmd: "[ -x /usr/sbin/usbip-intel ] && ln -sf /usr/sbin/usbip-intel /usr/local/bin/usbip || true"
+    # rtla ships these as symlinks to "rtla", which it never installs — dangling
+    # as shipped. rtla dispatches on argv[0], so point them at rtla-intel.
+    - cmd: "[ -x /usr/bin/rtla-intel ] && for t in hwnoise osnoise timerlat; do ln -sf /usr/bin/rtla-intel /usr/local/bin/$t; done || true"
+    - cmd: "for t in turbostat intel-speed-select x86_energy_perf_policy; do [ -x /usr/sbin/$t ] && ln -sf /usr/sbin/$t /usr/local/bin/$t || true; done"
+    - cmd: "[ -x /usr/sbin/intel_pstate_tracer.py ] && ln -sf /usr/sbin/intel_pstate_tracer.py /usr/local/bin/intel_pstate_tracer || true"
+    - cmd: "[ -f /usr/share/bash-completion/completions/bpftool-intel ] && ln -sf /usr/share/bash-completion/completions/bpftool-intel /usr/share/bash-completion/completions/bpftool || true"
+    - cmd: "[ -f /usr/share/bash-completion/completions/perf-intel ] && ln -sf /usr/share/bash-completion/completions/perf-intel /usr/share/bash-completion/completions/perf || true"
+    - cmd: "for f in /usr/share/man/man1/{perf,rtla,bpftool,cpupower}-intel*.1.gz; do [ -e \"$f\" ] || continue; b=$(basename \"$f\"); n=$(echo \"$b\" | sed 's/-intel//'); [ \"$b\" = \"$n\" ] || ln -sf \"$f\" \"/usr/share/man/man1/$n\"; done; true"
+    - cmd: "[ -f /usr/lib/systemd/system/cpupower-intel.service ] && ln -sf /usr/lib/systemd/system/cpupower-intel.service /etc/systemd/system/cpupower.service || true"
+    # out-of-tree builds look for /lib/modules/$(uname -r)/build
+    - cmd: "[ -d /usr/lib/linux-kbuild-6.18.38 ] && for k in /lib/modules/*-intel/build; do [ -e \"$k\" ] || ln -sf /usr/lib/linux-kbuild-6.18.38 \"$k\"; done || true"
+    # Report what resolved, so a missing tool is visible in the build log.
+    - cmd: "for t in bpftool perf cpupower rtla hwnoise osnoise timerlat usbip usbipd turbostat intel-speed-select x86_energy_perf_policy intel_pstate_tracer tmon thermometer bootconfig intel_sdsi hv_kvp_daemon; do p=$(command -v $t 2>/dev/null || true); echo \"kernel-tool symlink: $t -> ${p:-MISSING} $(readlink -f ${p:-/nonexistent} 2>/dev/null || true)\"; done"
+    # A dangling link is worse than a missing one, so fail the build on it.
+    - cmd: "for l in /usr/local/bin/* /usr/local/sbin/*; do [ -L \"$l\" ] && [ ! -e \"$l\" ] && echo \"ERROR: dangling symlink $l -> $(readlink $l)\" && exit 1; done; true"
+
+    # --- Panther Lake audio enablement (Intel SOF / I2S + HDMI-in codec) ---
+    # Step 1: Blacklist legacy HD-audio modules so the DSP/SOF stack is used
+    - cmd: "printf 'blacklist snd_hda_intel\nblacklist snd_hda_core\n' > /etc/modprobe.d/blacklist_hda.conf"
+    # Step 2: ALSA/SOF options for the I2S audio codec
+    - cmd: "printf 'options snd_sof_intel_hda_common sof_use_tplg_nhlt=1\noptions snd_intel_dspcfg dsp_driver=3\n' > /etc/modprobe.d/alsa.conf"
+    # Step 3: SOF firmware (signed) for Panther Lake
+    # Security: sha256-verified after download (CWE-494 mitigation)
+    - cmd: "mkdir -p /lib/firmware/intel/sof-ipc4/ptl"
+    - cmd: "wget -O /lib/firmware/intel/sof-ipc4/ptl/sof-ptl-openmodules.ri https://raw.githubusercontent.com/thesofproject/sof-bin/main/v2.13.x/sof-ipc4-v2.13/ptl/intel-signed/sof-ptl-openmodules.ri && echo '0bc5c1942918e86f84b9a7e97efb7e82b9aad2891398927780d5afd433128f3f  /lib/firmware/intel/sof-ipc4/ptl/sof-ptl-openmodules.ri' | sha256sum -c - || exit 1"
+    - cmd: "wget -O /lib/firmware/intel/sof-ipc4/ptl/sof-ptl.ri https://raw.githubusercontent.com/thesofproject/sof-bin/main/v2.13.x/sof-ipc4-v2.13/ptl/intel-signed/sof-ptl.ri && echo 'ace80f314159034a2372c229a2a45443499649f6e747a63c7f2644464d399eba  /lib/firmware/intel/sof-ipc4/ptl/sof-ptl.ri' | sha256sum -c - || exit 1"
+    # Step 4: SOF topology files. Both are fetched; the kernel loads the one
+    #         matching the detected codec. Drop whichever you don't need.
+    - cmd: "mkdir -p /lib/firmware/intel/sof-ace-tplg"
+    # SoundWire codec (ALC722-CG / rt722)
+    - cmd: "wget -O /lib/firmware/intel/sof-ace-tplg/sof-ptl-rt722.tplg https://raw.githubusercontent.com/thesofproject/sof-bin/main/v2.13.x/sof-ipc4-tplg-v2.13/sof-ptl-rt722.tplg && echo 'fedb1f01b91b14335cca4bc5d89992f224687e633455ca7c6f0b5c00fc9cac2d  /lib/firmware/intel/sof-ace-tplg/sof-ptl-rt722.tplg' | sha256sum -c - || exit 1"
+    # HD audio codec via DSP
+    - cmd: "wget -O /lib/firmware/intel/sof-ace-tplg/sof-hda-generic.tplg https://raw.githubusercontent.com/thesofproject/sof-bin/main/v2.13.x/sof-ipc4-tplg-v2.13/sof-hda-generic.tplg && echo 'd2a6128569c980c39ecc48ab81ce253a9a3160f46e9ba843d7b056293388ee24  /lib/firmware/intel/sof-ace-tplg/sof-hda-generic.tplg' | sha256sum -c - || exit 1"
+
+    # --- intel-lpmd v0.1.0 (source build in chroot) ---
+    # Build from source because the packaged 0.1.0 deb targets 25.10 (needs libnl
+    # >= 3.11, libxml2-16, glibc >= 2.42) while noble has 3.7.0 / libxml2.so.2 / 2.39.
+    # Build dependencies are in the packages: list (resolved by ICT with network).
+    # Step 1: Download intel-lpmd v0.1.0 source tarball (sha256-verified)
+    - cmd: "mkdir -p /tmp/intel-lpmd && wget -q https://github.com/intel/intel-lpmd/archive/refs/tags/v0.1.0.tar.gz -O /tmp/intel-lpmd/v0.1.0.tar.gz && echo 'e5de3dd4ec9496430b3e3c31e69830cc8e974f7a0d0e8bf4e3c1d5cf5834f8ed  /tmp/intel-lpmd/v0.1.0.tar.gz' | sha256sum -c - || exit 1"
+    # Step 2: Extract source
+    - cmd: "cd /tmp/intel-lpmd && tar -xf v0.1.0.tar.gz"
+    # Step 3: Build and install (prefix=/usr so binaries land in /usr/sbin, unit in /usr/lib/systemd/system)
+    - cmd: "cd /tmp/intel-lpmd/intel-lpmd-0.1.0 && ./autogen.sh prefix=/usr --localstatedir=/var --sysconfdir=/etc && make -j$(nproc) && make install"
+    # Step 4: Verify installation
+    - cmd: "test -x /usr/sbin/intel_lpmd && test -f /usr/lib/systemd/system/intel_lpmd.service"
+    # Step 5: Enable intel_lpmd service for multi-user target
+    - cmd: "mkdir -p /etc/systemd/system/multi-user.target.wants && ln -sf /usr/lib/systemd/system/intel_lpmd.service /etc/systemd/system/multi-user.target.wants/intel_lpmd.service"
+    # Step 6: Clean up source and purge build-only dependencies (no network needed)
+    - cmd: "rm -rf /tmp/intel-lpmd && dpkg --purge --force-depends autoconf automake autoconf-archive libtool gtk-doc-tools libdbus-1-dev libxml2-dev libnl-3-dev libnl-genl-3-dev libsystemd-dev libupower-glib-dev 2>/dev/null || true"
+
+    # --- intel-pcm v202604 (source build in chroot) ---
+    # Build from source to use the latest security patches and Panther Lake/PCIe metric updates.
+    # Build dependencies (git, build-essential, cmake) must be pre-installed in the environment.
+    # Security: pinned to commit hash (tag 202604) to prevent tag-repoint attacks
+    - cmd: "git clone --recursive https://github.com/intel/pcm.git /tmp/pcm && cd /tmp/pcm && git checkout abb6bce87cc2ed23d6677541ebcfc47ca769d1ed"
+    - cmd: "mkdir -p /tmp/pcm/build"
+    - cmd: "cd /tmp/pcm/build && cmake .. -DCMAKE_BUILD_TYPE=Release && make -j$(nproc)"
+    - cmd: "cd /tmp/pcm/build && cp -r bin/* /usr/local/bin/"
+    - cmd: "test -x /usr/local/bin/pcm"
+    - cmd: "rm -rf /tmp/pcm"
+    - cmd: "echo 'msr' > /etc/modules-load.d/intel-pcm.conf"
+
+# ----------------------------------------------------------------------------------
+    # Pre-install K3s and Docker CE (both disabled by default)
+    # On first boot, cloud-init reads host_type from /etc/cloud/config-file and
+    # enables the correct service:
+    #   host_type=kubernetes  ? systemctl enable --now k3s + copies kubeconfig
+    #   host_type=container   ? systemctl disable k3s, enable --now docker
+    # See additionalfiles/ptl/edge-provisioning.cfg for the cloud-init runcmd.
+    # ----------------------------------------------------------------------------------
+
+  # --- Kubernetes tools (kubectl / kubelet / kubeadm) ---
+    - cmd: "curl -fsSL --max-time 120 --retry 3 https://raw.githubusercontent.com/k3s-io/k3s/5aed4d7beddeb3e67120da477c876ac9efd70318/install.sh -o /tmp/k3s-install.sh"
+    - cmd: "echo '46177d4c99440b4c0311b67233823a8e8a2fc09693f6c89af1a7161e152fbfad  /tmp/k3s-install.sh' | sha256sum -c - || exit 1"
+    - cmd: "INSTALL_K3S_SKIP_ENABLE=true INSTALL_K3S_SKIP_START=true INSTALL_K3S_EXEC='server --disable=traefik' bash /tmp/k3s-install.sh 2>&1 || echo Warning: K3s pre-install failed"
+    - cmd: "rm -f /tmp/k3s-install.sh"
+    # Ensure both services are disabled by default; cloud-init activates the right one
+    - cmd: "systemctl disable k3s 2>/dev/null || true"
+    - cmd: "systemctl disable docker 2>/dev/null || true"
+
+    # Pre-create docker data-root and daemon config (avoids first-boot delay)
+    - cmd: "mkdir -p /opt/docker-data /etc/docker && echo '{\"data-root\": \"/opt/docker-data\"}' > /etc/docker/daemon.json"
+    # ----------------------------------------------------------------------------------
+    # Remove ICT-generated ubuntu-noble.list — duplicates the Ubuntu 24.04 native
+    # ubuntu.sources (DEB822 format)
+    # ----------------------------------------------------------------------------------
+    - cmd: "rm -f /etc/apt/sources.list.d/ubuntu-noble.list"
+
+
+    # --- Enable SSH service at boot ---
+    # Direct symlink – equivalent to 'systemctl enable ssh' but works in plain chroot
+    - cmd: "mkdir -p /etc/systemd/system/multi-user.target.wants && ln -sf /lib/systemd/system/ssh.service /etc/systemd/system/multi-user.target.wants/ssh.service"
+
+    # --- mDNS: enable Avahi and prevent systemd-resolved from conflicting ---
+    # avahi-daemon handles hostname.local resolution; systemd-resolved must not
+    # also claim mDNS or the two will conflict on the same multicast address.
+    # libnss-mdns postinst adds 'mdns4_minimal' to /etc/nsswitch.conf automatically.
+    # Direct symlinks – equivalent to 'systemctl enable avahi-daemon' in plain chroot
+    - cmd: "mkdir -p /etc/systemd/system/multi-user.target.wants && ln -sf /lib/systemd/system/avahi-daemon.service /etc/systemd/system/multi-user.target.wants/avahi-daemon.service"
+    - cmd: "mkdir -p /etc/systemd/system/sockets.target.wants && ln -sf /lib/systemd/system/avahi-daemon.socket /etc/systemd/system/sockets.target.wants/avahi-daemon.socket"
+    - cmd: "mkdir -p /etc/systemd/resolved.conf.d && printf '[Resolve]\nMulticastDNS=no\n' > /etc/systemd/resolved.conf.d/no-mdns.conf"
+
+
