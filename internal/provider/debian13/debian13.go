@@ -346,6 +346,9 @@ func (p *debian13) installHostDependency() error {
 		"debian-keyring":    "debian-archive-keyring", // For Debian repository GPG keys
 		"bootctl":           "systemd-boot-efi",       // For bootctl on Debian/Ubuntu hosts
 		"dpkg-scanpackages": "dpkg-dev",               // For scanning Package index on Ubuntu host
+		"zstd":              "zstd",                   // For installer payload compression
+		"xz":                "xz-utils",               // For installer payload compression
+		"gzip":              "gzip",                   // For installer payload compression
 	}
 	hostPkgManager, err := system.GetHostOsPkgManager()
 	if err != nil {

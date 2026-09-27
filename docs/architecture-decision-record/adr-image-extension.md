@@ -2,7 +2,9 @@
 
 **Status**: Proposed  
 **Date**: 2026-05-21  
-**Updated**: N/A  
+**Updated**: 2026-09-27 - clarified that generic ISO remastering exclusion does not
+cover ICT's own installer-payload ISO flow (see
+[adr-installer-payload-iso.md](adr-installer-payload-iso.md))  
 **Authors**: Image Composer Tool Team  
 **Technical Area**: Image Composition / Provisioning
 
@@ -169,6 +171,16 @@ Therefore, “add a package to an ISO” is ambiguous. It may mean:
 These operations are not portable across ISO formats.
 
 Generic ISO remastering is out of scope.
+
+**Updated**: This exclusion governs remastering a third-party vendor ISO -
+unpacking a distro's official installer media, rewriting its squashfs and
+manifests, re-signing. It does not cover ICT authoring its own ISO from scratch
+with its own installer, which the tool already does. `systemConfig.installerPayload`
+(see
+[adr-installer-payload-iso.md](adr-installer-payload-iso.md)) extends that
+existing ICT-owned ISO installer flow to carry and deploy a pre-built raw disk
+image instead of reinstalling packages on target; it remasters nothing, since
+the payload is an artifact ICT itself produced during the same build.
 
 Distro-specific ISO remastering may be added later only through explicit adapters.
 

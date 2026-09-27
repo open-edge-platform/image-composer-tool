@@ -3347,6 +3347,103 @@ func TestSetupFirstBootLastPartitionAutoExpandProceedsWhenConditionsMet(t *testi
 	}
 }
 
+func writeSSHHostKeyRegenAssets(t *testing.T, configDir string) {
+	t.Helper()
+	assetDir := filepath.Join(configDir, "osv", "common", "imageconfigs", "firstboot")
+	if err := os.MkdirAll(assetDir, 0755); err != nil {
+		t.Fatalf("failed to create asset dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(assetDir, "ict-regenerate-ssh-host-keys.sh"), []byte("#!/bin/sh\n"), 0644); err != nil {
+		t.Fatalf("failed to write script asset: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(assetDir, "ict-regenerate-ssh-host-keys.service"), []byte("[Unit]\n"), 0644); err != nil {
+		t.Fatalf("failed to write service asset: %v", err)
+	}
+}
+
+func TestConfigureFirstBootSSHHostKeyRegenProceedsWhenConditionsMet(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+	originalConfigDir := config.Global().ConfigDir
+	defer func() { config.Global().ConfigDir = originalConfigDir }()
+
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: ".*cp.*", Output: "", Error: nil},
+		{Pattern: ".*mkdir.*", Output: "", Error: nil},
+		{Pattern: ".*chmod 0755.*ict-regenerate-ssh-host-keys\\.sh.*", Output: "", Error: nil},
+		{Pattern: ".*systemctl enable --root=.*ict-regenerate-ssh-host-keys\\.service.*", Output: "", Error: nil},
+	})
+
+	configDir, err := os.MkdirTemp("", "imageos_sshregen_cfg_test_*")
+	if err != nil {
+		t.Fatalf("failed to create config dir: %v", err)
+	}
+	defer os.RemoveAll(configDir)
+	writeSSHHostKeyRegenAssets(t, configDir)
+	config.Global().ConfigDir = configDir
+
+	installRoot, err := os.MkdirTemp("", "imageos_sshregen_install_test_*")
+	if err != nil {
+		t.Fatalf("failed to create install root: %v", err)
+	}
+	defer os.RemoveAll(installRoot)
+
+	template := createTestImageTemplate()
+	template.Target.ImageType = "iso"
+	template.SystemConfig.InstallerPayload = &config.InstallerPayload{Enabled: true}
+
+	if err := configureFirstBootSSHHostKeyRegen(installRoot, template); err != nil {
+		t.Fatalf("configureFirstBootSSHHostKeyRegen returned error: %v", err)
+	}
+}
+
+func TestConfigureFirstBootSSHHostKeyRegenSkipsWhenNotInstallerPayload(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	installRoot, err := os.MkdirTemp("", "imageos_sshregen_skip_test_*")
+	if err != nil {
+		t.Fatalf("failed to create install root: %v", err)
+	}
+	defer os.RemoveAll(installRoot)
+
+	template := createTestImageTemplate()
+
+	if err := configureFirstBootSSHHostKeyRegen(installRoot, template); err != nil {
+		t.Fatalf("configureFirstBootSSHHostKeyRegen returned error: %v", err)
+	}
+
+	scriptPath := filepath.Join(installRoot, "usr", "local", "sbin", "ict-regenerate-ssh-host-keys.sh")
+	if _, statErr := os.Stat(scriptPath); !os.IsNotExist(statErr) {
+		t.Fatalf("script should not be generated when not in installer payload mode")
+	}
+}
+
+func TestConfigureFirstBootSSHHostKeyRegenSkipsWhenResetInstanceIdentityDisabled(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	installRoot, err := os.MkdirTemp("", "imageos_sshregen_skip_reset_test_*")
+	if err != nil {
+		t.Fatalf("failed to create install root: %v", err)
+	}
+	defer os.RemoveAll(installRoot)
+
+	disabled := false
+	template := createTestImageTemplate()
+	template.Target.ImageType = "iso"
+	template.SystemConfig.InstallerPayload = &config.InstallerPayload{Enabled: true, ResetInstanceIdentity: &disabled}
+
+	if err := configureFirstBootSSHHostKeyRegen(installRoot, template); err != nil {
+		t.Fatalf("configureFirstBootSSHHostKeyRegen returned error: %v", err)
+	}
+
+	scriptPath := filepath.Join(installRoot, "usr", "local", "sbin", "ict-regenerate-ssh-host-keys.sh")
+	if _, statErr := os.Stat(scriptPath); !os.IsNotExist(statErr) {
+		t.Fatalf("script should not be generated when resetInstanceIdentity is disabled")
+	}
+}
+
 // TestBuildImageUKI tests the buildImageUKI function
 func TestBuildImageUKI(t *testing.T) {
 	// Set up mock executor

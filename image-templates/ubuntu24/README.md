@@ -1,12 +1,13 @@
 # Ubuntu 24.04 templates
 
-`target.dist: ubuntu24` — 26 templates.
+`target.dist: ubuntu24` — 27 templates.
 
 | Template | Arch | Type | Purpose | CI |
 |---|---|---|---|---|
 | [`ubuntu24-x86_64-minimal-initrd.yml`](./ubuntu24-x86_64-minimal-initrd.yml) | x86_64 | img | minimal | — |
 | [`ubuntu24-x86_64-minimal-iso.yml`](./ubuntu24-x86_64-minimal-iso.yml) | x86_64 | iso | minimal | yes |
 | [`ubuntu24-x86_64-minimal-unattended-iso.yml`](./ubuntu24-x86_64-minimal-unattended-iso.yml) | x86_64 | iso | unattended installer | yes |
+| [`ubuntu24-x86_64-installer-payload-iso.yml`](./ubuntu24-x86_64-installer-payload-iso.yml) | x86_64 | iso | unattended installer payload | — |
 | [`ubuntu24-aarch64-edge-raw.yml`](./ubuntu24-aarch64-edge-raw.yml) | aarch64 | raw | edge | — |
 | [`ubuntu24-aarch64-minimal-raw.yml`](./ubuntu24-aarch64-minimal-raw.yml) | aarch64 | raw | minimal | yes |
 | [`ubuntu24-aarch64-minimal-uki.yml`](./ubuntu24-aarch64-minimal-uki.yml) | aarch64 | raw | unified kernel image | — |

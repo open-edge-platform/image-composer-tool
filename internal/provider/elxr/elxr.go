@@ -250,6 +250,9 @@ func (p *eLxr) installHostDependency() error {
 		"bootctl":           "systemd-boot-efi", // For bootctl on Ubuntu hosts
 		"arch-test":         "arch-test",        // Required by mmdebstrap for foreign-architecture bootstrap
 		"qemu-user-static":  "qemu-user-static", // For cross-architecture binary execution support
+		"zstd":              "zstd",             // For installer payload compression
+		"xz":                "xz-utils",         // For installer payload compression
+		"gzip":              "gzip",             // For installer payload compression
 	}
 	hostPkgManager, err := system.GetHostOsPkgManager()
 	if err != nil {

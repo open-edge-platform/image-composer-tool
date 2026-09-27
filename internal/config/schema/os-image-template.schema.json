@@ -439,6 +439,26 @@
       },
       "additionalProperties": false
     },
+    "InstallerPayload": {
+      "type": "object",
+      "description": "Switches an ISO build from deploy-by-package-install to deploy-by-raw-image-write. Only valid when target.imageType is 'iso'.",
+      "properties": {
+        "enabled": { "type": "boolean", "description": "Whether the ISO deploys a pre-built raw disk image instead of installing packages on the target" },
+        "compression": {
+          "type": "string",
+          "description": "Compression applied to the raw payload on the ISO",
+          "enum": ["zstd", "xz", "gz", "none"],
+          "default": "zstd"
+        },
+        "resetInstanceIdentity": {
+          "type": "boolean",
+          "description": "Whether live-installer clears machine-id, SSH host keys, and the systemd random seed after writing the payload so each deployed instance regenerates its own identity on first boot",
+          "default": true
+        }
+      },
+      "required": ["enabled"],
+      "additionalProperties": false
+    },
     "SystemConfig": {
       "type": "object",
       "description": "System configuration object",
@@ -484,7 +504,8 @@
           "description": "Array of shell commands to execute during system configuration",
           "items": { "type": "object", "additionalProperties": true }
         },
-        "kernel": { "$ref": "#/$defs/Kernel" }
+        "kernel": { "$ref": "#/$defs/Kernel" },
+        "installerPayload": { "$ref": "#/$defs/InstallerPayload" }
       },
       "additionalProperties": false
     },
@@ -860,6 +881,28 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "target": {
+                "properties": {
+                  "imageType": { "not": { "const": "iso" } }
+                },
+                "required": ["imageType"]
+              }
+            },
+            "required": ["target"]
+          },
+          "then": {
+            "properties": {
+              "systemConfig": {
+                "properties": {
+                  "installerPayload": false
+                }
+              }
+            }
+          }
         }
       ]
     },
@@ -962,6 +1005,28 @@
                       }
                     }
                   }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "target": {
+                "properties": {
+                  "imageType": { "not": { "const": "iso" } }
+                },
+                "required": ["imageType"]
+              }
+            },
+            "required": ["target"]
+          },
+          "then": {
+            "properties": {
+              "systemConfig": {
+                "properties": {
+                  "installerPayload": false
                 }
               }
             }

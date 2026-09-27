@@ -313,6 +313,12 @@ func mergeSystemConfig(defaultConfig, userConfig SystemConfig) SystemConfig {
 	// Merge kernel config
 	merged.Kernel = mergeKernelConfig(defaultConfig.Kernel, userConfig.Kernel)
 
+	// installerPayload has no default-layer equivalent; a user-provided value
+	// always wins outright rather than being field-merged.
+	if userConfig.InstallerPayload != nil {
+		merged.InstallerPayload = userConfig.InstallerPayload
+	}
+
 	return merged
 }
 
@@ -967,6 +973,9 @@ func LoadAndMergeTemplate(templatePath string) (*ImageTemplate, error) {
 		if err := userMerged.validateBaseline(); err != nil {
 			return nil, fmt.Errorf("merged overlay template is invalid: %w", err)
 		}
+		if err := userMerged.validateInstallerPayload(); err != nil {
+			return nil, fmt.Errorf("merged overlay template is invalid: %w", err)
+		}
 		if err := userMerged.validateUsers(); err != nil {
 			return nil, fmt.Errorf("merged overlay template is invalid: %w", err)
 		}
@@ -987,6 +996,9 @@ func LoadAndMergeTemplate(templatePath string) (*ImageTemplate, error) {
 		if err := userMerged.validateBaseline(); err != nil {
 			return nil, fmt.Errorf("merged template is invalid: %w", err)
 		}
+		if err := userMerged.validateInstallerPayload(); err != nil {
+			return nil, fmt.Errorf("merged template is invalid: %w", err)
+		}
 		return userMerged, nil
 	}
 
@@ -1003,6 +1015,9 @@ func LoadAndMergeTemplate(templatePath string) (*ImageTemplate, error) {
 	// parent). foldChain always clears Extends, so this is the authoritative,
 	// final-mode check for a genuine create-mode build.
 	if err := mergedTemplate.validateBaseline(); err != nil {
+		return nil, fmt.Errorf("merged template is invalid: %w", err)
+	}
+	if err := mergedTemplate.validateInstallerPayload(); err != nil {
 		return nil, fmt.Errorf("merged template is invalid: %w", err)
 	}
 

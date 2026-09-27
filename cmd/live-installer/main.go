@@ -86,13 +86,15 @@ Use 'live-installer --help' to see available params.`,
 
 	rootCmd.Flags().BoolVarP(&attendedInstaller, "attended", "a", false, "Enable UI for user input during installation")
 	rootCmd.Flags().StringVarP(&config, "config", "c", "", "Template yaml file path")
-	rootCmd.Flags().StringVarP(&repo, "repo", "r", "", "Local package cache directory")
+	// --repo is not marked required here: it is only needed for the package-reinstall
+	// install path. In installer-payload mode (systemConfig.installerPayload.enabled)
+	// live-installer writes a pre-built raw image instead and never touches a
+	// package cache, so unattendedInstall/attendedInstall enforce it conditionally
+	// once the template has been loaded.
+	rootCmd.Flags().StringVarP(&repo, "repo", "r", "", "Local package cache directory (required unless the template enables installerPayload mode)")
 
 	if err := rootCmd.MarkFlagRequired("config"); err != nil {
 		log.Fatalf("Failed to mark 'config' flag as required: %v", err)
-	}
-	if err := rootCmd.MarkFlagRequired("repo"); err != nil {
-		log.Fatalf("Failed to mark 'repo' flag as required: %v", err)
 	}
 
 	return rootCmd

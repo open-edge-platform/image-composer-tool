@@ -1,9 +1,7 @@
 package isomaker
 
 import (
-	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,11 +10,14 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/chroot"
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/config/manifest"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/imagedisc"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/imageos"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/initrdmaker"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/rawmaker"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/file"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/slice"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
 
@@ -31,6 +32,13 @@ type IsoMaker struct {
 	ChrootEnv     chroot.ChrootEnvInterface
 	ImageOs       imageos.ImageOsInterface
 	InitrdMaker   initrdmaker.InitrdMakerInterface
+	RawMaker      rawmaker.RawMakerInterface // nil unless systemConfig.installerPayload.enabled
+
+	// Populated by buildPayloadRaw; paths of the staged payload files in
+	// ImageBuildDir/payload/, grafted onto the ISO by payloadGraftPathspecs.
+	payloadCompressedPath string
+	payloadManifestPath   string
+	payloadSBOMPath       string
 }
 
 const IsoLabel = "ICT_CDROM"
@@ -86,6 +94,12 @@ func (isoMaker *IsoMaker) Init() error {
 func (isoMaker *IsoMaker) BuildIsoImage() (err error) {
 
 	log.Infof("Building ISO image for: %s", isoMaker.template.GetImageName())
+
+	if isoMaker.template.IsInstallerPayloadMode() {
+		if err := isoMaker.buildPayloadRaw(); err != nil {
+			return fmt.Errorf("failed to build installer payload: %w", err)
+		}
+	}
 
 	if err := isoMaker.buildInitrd(isoMaker.template); err != nil {
 		return fmt.Errorf("failed to build initrd image: %w", err)
@@ -173,6 +187,10 @@ func (isoMaker *IsoMaker) getInitrdTemplate(template *config.ImageTemplate) (*co
 // met before starting expensive operations. Call this early (before provider init
 // or package download) to fail fast on missing files like live-installer.
 func ValidateISOPrerequisites(template *config.ImageTemplate) error {
+	if err := ValidateAdditionalFiles(template); err != nil {
+		return fmt.Errorf("main template prerequisites not met: %w", err)
+	}
+
 	initrdTemplateFilePath, err := template.GetInitramfsTemplate()
 	if err != nil {
 		return fmt.Errorf("failed to resolve initramfs template: %w", err)
@@ -183,7 +201,290 @@ func ValidateISOPrerequisites(template *config.ImageTemplate) error {
 		return fmt.Errorf("failed to load initrd template for validation: %w", err)
 	}
 
-	return ValidateAdditionalFiles(initrdTemplate)
+	if err := ValidateAdditionalFiles(initrdTemplate); err != nil {
+		return fmt.Errorf("initrd template prerequisites not met: %w", err)
+	}
+
+	if template.IsInstallerPayloadMode() {
+		if err := validateInstallerPayloadPrerequisites(template, initrdTemplate); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// rpmFamilyOS names the target.os values whose package manager is rpm-based
+// (dnf/tdnf/yum), matching the per-provider host-dependency maps in
+// internal/provider/{azl,emt,rcd}. Every other target.os (ubuntu, debian,
+// wind-river-elxr) is apt-based.
+var rpmFamilyOS = map[string]bool{
+	"azure-linux":              true,
+	"edge-microvisor-toolkit":  true,
+	"redhat-compatible-distro": true,
+}
+
+// payloadDecompressorPackage returns the package that must be present in the
+// initrd rootfs to decompress systemConfig.installerPayload.compression at
+// deploy time. "none" needs no decompressor since dd reads the raw image
+// directly. The xz package is named differently across package managers
+// (xz-utils on apt, xz on rpm), so it is resolved per target.os rather than
+// hard-coded to one family.
+func payloadDecompressorPackage(targetOS, compression string) string {
+	switch compression {
+	case config.PayloadCompressionZstd:
+		return "zstd"
+	case config.PayloadCompressionXz:
+		if rpmFamilyOS[targetOS] {
+			return "xz"
+		}
+		return "xz-utils"
+	case config.PayloadCompressionGz:
+		return "gzip"
+	default:
+		return ""
+	}
+}
+
+// validateInstallerPayloadPrerequisites checks the payload-mode-specific
+// prerequisites that the JSON schema and validateInstallerPayload (a pure
+// config-level check) cannot: disk.size must be set (rawmaker needs it and the
+// ISO OS defaults do not supply one), the initrd must actually boot the
+// unattended installer path, the initrd rootfs must carry the decompressor
+// package for the configured compression, and there must be enough free
+// space to hold the payload raw and compressed copies side-by-side.
+func validateInstallerPayloadPrerequisites(template, initrdTemplate *config.ImageTemplate) error {
+	diskCfg := template.GetDiskConfig()
+	if strings.TrimSpace(diskCfg.Size) == "" {
+		return fmt.Errorf("systemConfig.installerPayload requires disk.size to be set")
+	}
+
+	rawSizeBytes, err := imagedisc.TranslateSizeStrToBytes(diskCfg.Size)
+	if err != nil {
+		return fmt.Errorf("invalid disk.size %q for installer payload: %w", diskCfg.Size, err)
+	}
+
+	if err := validateInstallerPayloadInitrd(initrdTemplate); err != nil {
+		return err
+	}
+
+	compression := template.PayloadCompression()
+	if decompressorPkg := payloadDecompressorPackage(template.Target.OS, compression); decompressorPkg != "" {
+		if !slice.Contains(initrdTemplate.GetPackages(), decompressorPkg) {
+			return fmt.Errorf("systemConfig.installerPayload.compression %q requires package %q in the initrd template",
+				compression, decompressorPkg)
+		}
+	}
+
+	if err := validateInstallerPayloadDiskLayout(diskCfg, template.ResetInstanceIdentity()); err != nil {
+		return err
+	}
+
+	if err := validateInstallerPayloadDeployTools(template.Target.OS, diskCfg, initrdTemplate); err != nil {
+		return err
+	}
+
+	workDir, err := config.WorkDir()
+	if err != nil {
+		return fmt.Errorf("failed to resolve work directory for installer payload disk space check: %w", err)
+	}
+	// Three payload-sized copies can coexist in the workspace at once: the
+	// raw image, its compressed copy (graft-pointed, not further copied, but
+	// no smaller than the raw image when compression is "none"), and the
+	// final .iso itself, which xorriso writes as a new file embedding that
+	// compressed copy. Size for the worst case since the actual compressed
+	// size isn't known until compression runs.
+	requiredBytes := int64(rawSizeBytes) * 3
+	if err := file.CheckDiskSpace(workDir, requiredBytes, 0.1); err != nil {
+		return fmt.Errorf("installer payload disk space check failed: %w", err)
+	}
+
+	// Growth of the end: "0" partition (required by validateInstallerPayloadDiskLayout
+	// below) is mandatory - there is no way to opt out of installer-side growth -
+	// and dm-verity's hash tree cannot tolerate the root partition/filesystem
+	// changing after the build, so the two are never compatible; reject rather
+	// than warn.
+	if template.IsImmutabilityEnabled() {
+		return fmt.Errorf("systemConfig.installerPayload is not supported with systemConfig.immutability enabled: " +
+			"dm-verity root protection is incompatible with installer-side partition/filesystem growth")
+	}
+
+	return nil
+}
+
+// attendedInstallerStartupScript is the fixed root startupScript wired by the
+// repo's attended initrd templates (e.g. default-initrd-x86_64.yml) via
+// config/general/isolinux/attendedinstaller.
+const attendedInstallerStartupScript = "/root/attendedinstaller"
+
+// unattendedInstallerStartupScript is the fixed root startupScript wired by
+// the repo's unattended initrd templates (e.g.
+// default-initrd-unattended-x86_64.yml) via
+// config/general/isolinux/unattendedinstaller - the only entry point that
+// actually invokes live-installer's unattended path, which is in turn the
+// only path that runs deployInstallerPayload (cmd/live-installer/main.go).
+const unattendedInstallerStartupScript = "/root/unattendedinstaller"
+
+// validateInstallerPayloadInitrd requires an initrd template that boots
+// straight into live-installer's unattended path. A negative check (merely
+// rejecting the known attended script) is not enough: an initrd with no root
+// startup script, or an unrelated one, would build and boot successfully
+// without ever invoking live-installer, so the payload would never be
+// deployed and attendedInstall's own installerPayload rejection
+// (cmd/live-installer/install.go) would never even be reached.
+func validateInstallerPayloadInitrd(initrdTemplate *config.ImageTemplate) error {
+	for _, u := range initrdTemplate.GetUsers() {
+		if u.Name != "root" {
+			continue
+		}
+		if u.StartupScript != unattendedInstallerStartupScript {
+			return fmt.Errorf("systemConfig.installerPayload requires an unattended initrd template: "+
+				"this initrd's root startupScript is %q, but only %q boots live-installer's unattended path",
+				u.StartupScript, unattendedInstallerStartupScript)
+		}
+		return nil
+	}
+	return fmt.Errorf("systemConfig.installerPayload requires an unattended initrd template: "+
+		"no root user with startupScript %q is configured", unattendedInstallerStartupScript)
+}
+
+// deployToolPackage names the additional package (beyond util-linux and the
+// OS-specific sfdisk provider, see sfdiskProvidingPackage) that must be
+// present in the initrd rootfs to grow the growable partition's filesystem
+// at deploy time. Unlike the xz decompressor, these package names are
+// already used identically across every provider's own default initrd
+// config in this repo (e2fsprogs and xfsprogs are the same literal package
+// name on both apt- and rpm-based providers here), so no per-OS resolution
+// is needed.
+var deployToolPackage = map[string]string{
+	"ext2": "e2fsprogs",
+	"ext3": "e2fsprogs",
+	"ext4": "e2fsprogs",
+	"xfs":  "xfsprogs",
+}
+
+// sfdiskProvidingPackage names the package that ships sfdisk for targetOS.
+// util-linux still bundles sfdisk on rpm-based distros, but Debian-family
+// util-linux split sfdisk (and fdisk/cfdisk) out into the separate "fdisk"
+// package, so a Debian-family initrd with only util-linux has lsblk/wipefs/
+// partx/mkswap but not sfdisk.
+func sfdiskProvidingPackage(targetOS string) string {
+	if rpmFamilyOS[targetOS] {
+		return "util-linux"
+	}
+	return "fdisk"
+}
+
+// validateInstallerPayloadDeployTools checks that the initrd rootfs carries
+// every package live-installer's deploy path unconditionally needs
+// (util-linux, for lsblk/wipefs/partx/mkswap, plus the OS-specific sfdisk
+// provider) plus whichever resize tool the disk layout's growable partition
+// requires, so a custom or non-Ubuntu initrd that only added the
+// decompressor package still fails template validation instead of failing
+// after the target disk has already been overwritten. Called after
+// validateInstallerPayloadDiskLayout, which guarantees diskCfg has exactly
+// one growable partition with a supported fsType. dd, sync (coreutils) and
+// udevadm (systemd) are not checked: they are part of every base rootfs this
+// repo builds, not an optional package a template could omit.
+func validateInstallerPayloadDeployTools(targetOS string, diskCfg config.DiskConfig, initrdTemplate *config.ImageTemplate) error {
+	initrdPackages := initrdTemplate.GetPackages()
+	if !slice.Contains(initrdPackages, "util-linux") {
+		return fmt.Errorf("systemConfig.installerPayload deploy requires package %q "+
+			"(lsblk/wipefs/partx/mkswap) in the initrd template", "util-linux")
+	}
+
+	if sfdiskPkg := sfdiskProvidingPackage(targetOS); !slice.Contains(initrdPackages, sfdiskPkg) {
+		return fmt.Errorf("systemConfig.installerPayload deploy requires package %q (sfdisk) in the initrd template for target.os %q",
+			sfdiskPkg, targetOS)
+	}
+
+	for i := range diskCfg.Partitions {
+		p := &diskCfg.Partitions[i]
+		if strings.TrimSpace(p.End) != "0" {
+			continue
+		}
+		fsType := strings.ToLower(strings.TrimSpace(p.FsType))
+		if pkg, ok := deployToolPackage[fsType]; ok && !slice.Contains(initrdPackages, pkg) {
+			return fmt.Errorf("systemConfig.installerPayload growing a %q partition at deploy time requires package %q "+
+				"in the initrd template", p.FsType, pkg)
+		}
+		break
+	}
+
+	return nil
+}
+
+// growableFsTypes are the only fsTypes resizeFilesystem
+// (cmd/live-installer/deploy.go) actually grows post-write. Any other fsType
+// on the growable partition (fat32/fat16/vfat, btrfs, or unknown) would
+// silently no-op there, reporting a successful deploy with an unexpanded
+// filesystem.
+var growableFsTypes = []string{"ext2", "ext3", "ext4", "xfs", "linux-swap", "swap"}
+
+// identityRelevantMountPointPrefixes are the top-level directories
+// resetIdentityFiles (cmd/live-installer/deploy.go) edits directly on the
+// single partition it mounts at "/": etc/machine-id, etc/ssh/ssh_host_*,
+// var/lib/dbus/machine-id, var/lib/systemd/random-seed. A layout with a
+// separate partition mounted at or under one of these would leave those
+// files untouched on the actual target while resetInstanceIdentity reports
+// success.
+var identityRelevantMountPointPrefixes = []string{"/etc", "/var"}
+
+func isIdentityRelevantMountPoint(mountPoint string) bool {
+	mountPoint = strings.TrimSpace(mountPoint)
+	for _, prefix := range identityRelevantMountPointPrefixes {
+		if mountPoint == prefix || strings.HasPrefix(mountPoint, prefix+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// validateInstallerPayloadDiskLayout rejects disk layouts that live-installer's
+// deploy path cannot safely apply. Each of these currently fails only after
+// the payload has already been written to the target disk (silently, for MBR
+// growth, or via a downstream command error for the rest), so catching them
+// here means a bad template fails before any target disk write is attempted.
+func validateInstallerPayloadDiskLayout(diskCfg config.DiskConfig, resetInstanceIdentity bool) error {
+	if strings.ToLower(strings.TrimSpace(diskCfg.PartitionTableType)) != imagedisc.PartitionTableTypeGpt {
+		return fmt.Errorf("systemConfig.installerPayload requires disk.partitionTableType %q: "+
+			"MBR payload disks are not grown to fill the target disk", imagedisc.PartitionTableTypeGpt)
+	}
+
+	var growable *config.PartitionInfo
+	hasRoot := false
+	for i := range diskCfg.Partitions {
+		p := &diskCfg.Partitions[i]
+		if strings.EqualFold(p.Type, "linux-lvm") {
+			return fmt.Errorf("systemConfig.installerPayload does not support LVM partitions (partition %q): "+
+				"live-installer cannot grow or mount an LVM logical volume", p.ID)
+		}
+		if strings.TrimSpace(p.End) == "0" {
+			growable = p
+		}
+		if p.MountPoint == "/" {
+			hasRoot = true
+		} else if resetInstanceIdentity && isIdentityRelevantMountPoint(p.MountPoint) {
+			return fmt.Errorf("systemConfig.installerPayload.resetInstanceIdentity requires machine-id, SSH host keys, "+
+				"and the systemd random seed to live on the root partition, but partition %q mounts %q separately",
+				p.ID, p.MountPoint)
+		}
+	}
+
+	if growable == nil {
+		return fmt.Errorf(`systemConfig.installerPayload requires a partition with end: "0" to grow into the target disk`)
+	}
+	growableFsType := strings.ToLower(strings.TrimSpace(growable.FsType))
+	if !slice.Contains(growableFsTypes, growableFsType) {
+		return fmt.Errorf("systemConfig.installerPayload does not support growing a %q partition (partition %q): "+
+			"only %v are grown", growable.FsType, growable.ID, growableFsTypes)
+	}
+
+	if resetInstanceIdentity && !hasRoot {
+		return fmt.Errorf(`systemConfig.installerPayload.resetInstanceIdentity requires a partition with mountPoint: "/"`)
+	}
+
+	return nil
 }
 
 // ValidateAdditionalFiles checks that all additional files referenced in the
@@ -206,22 +507,12 @@ func ValidateAdditionalFiles(template *config.ImageTemplate) error {
 			continue
 		}
 
-		var lastErr error
-		found := false
-		for _, tmplPath := range template.PathList {
-			candidatePath := filepath.Join(filepath.Dir(tmplPath), fileInfo.Local)
-			if err := checkFileExists(candidatePath); err == nil {
-				found = true
-				break
-			} else if !errors.Is(err, fs.ErrNotExist) {
-				lastErr = err
-			}
-		}
+		candidatePath, found := config.ResolveTemplateRelativePath(template.PathList, fileInfo.Local)
 		if !found {
-			if lastErr != nil {
-				return fmt.Errorf("cannot access additional file %s: %w", fileInfo.Local, lastErr)
-			}
 			return liveInstallerHintOrError(fileInfo.Local, fileInfo.Final, nil)
+		}
+		if err := checkFileExists(candidatePath); err != nil {
+			return liveInstallerHintOrError(fileInfo.Local, fileInfo.Final, err)
 		}
 	}
 	return nil
@@ -281,9 +572,19 @@ func (isoMaker *IsoMaker) copyConfigFilesToIso(template *config.ImageTemplate, i
 	var PathUpdatedList []config.AdditionalFileInfo
 	additionalFiles := template.GetAdditionalFileInfo()
 	if len(additionalFiles) != 0 {
+		seenBasenames := make(map[string]string, len(additionalFiles))
 		for _, fileInfo := range additionalFiles {
 			srcFile := fileInfo.Local
 			srcFileName := filepath.Base(srcFile)
+			// mergeAdditionalFiles keys by Final path, so the same Local source
+			// intentionally installed at two different Final destinations is a
+			// valid, supported pattern - only two *different* sources sharing a
+			// basename would actually clobber each other's staged copy.
+			if prior, exists := seenBasenames[srcFileName]; exists && prior != srcFile {
+				return fmt.Errorf("additional files %s and %s both resolve to basename %q on the ISO; "+
+					"rename one to avoid clobbering the other", prior, srcFile, srcFileName)
+			}
+			seenBasenames[srcFileName] = srcFile
 			newPath := fmt.Sprintf("../additionalfiles/%s", srcFileName)
 			dstFile := filepath.Join(osvConfigDestDir, "imageconfigs", "additionalfiles", srcFileName)
 			if err := file.CopyFile(srcFile, dstFile, "-p", true); err != nil {
@@ -349,15 +650,33 @@ func (isoMaker *IsoMaker) createIso(template *config.ImageTemplate, initrdRootfs
 
 	log.Infof("Creating ISO image...")
 
+	// In payload mode, rawmaker's ImageOs and isoMaker's ImageOs share the
+	// same systemConfig.name and therefore the same installRoot
+	// (imageos.NewImageOs). Staging the ISO tree there would let
+	// cleanIsoInstallRoot's rm -rf race the payload raw build's own mount
+	// point, so stage into a derived sibling directory instead.
 	installRoot := isoMaker.ImageOs.GetInstallRoot()
+	isoRoot := installRoot
+	if template.IsInstallerPayloadMode() {
+		isoRoot = installRoot + "-isoroot"
+		// A previous build attempt may have failed before cleanIsoInstallRoot
+		// ran, leaving stale files under isoRoot that a template change no
+		// longer produces. Clear it so every build starts from an empty tree.
+		if err := os.RemoveAll(isoRoot); err != nil {
+			return fmt.Errorf("failed to clear stale ISO staging root %s: %w", isoRoot, err)
+		}
+		if err := os.MkdirAll(isoRoot, 0755); err != nil {
+			return fmt.Errorf("failed to create ISO staging root %s: %w", isoRoot, err)
+		}
+	}
 	imageName := template.GetImageName()
 
 	log.Infof("Creating ISO image: %s", isoFilePath)
 
 	// Create standard ISO directory structure
-	isoBootPath := filepath.Join(installRoot, "boot")
-	isoEfiPath := filepath.Join(installRoot, "EFI", "BOOT")
-	isoImagesPath := filepath.Join(installRoot, "images")
+	isoBootPath := filepath.Join(isoRoot, "boot")
+	isoEfiPath := filepath.Join(isoRoot, "EFI", "BOOT")
+	isoImagesPath := filepath.Join(isoRoot, "images")
 
 	dirs := []string{
 		isoBootPath,
@@ -385,76 +704,130 @@ func (isoMaker *IsoMaker) createIso(template *config.ImageTemplate, initrdRootfs
 
 	// Copy config files to ISO
 	log.Infof("Copying config files to ISO...")
-	if err := isoMaker.copyConfigFilesToIso(template, installRoot); err != nil {
+	if err := isoMaker.copyConfigFilesToIso(template, isoRoot); err != nil {
 		return fmt.Errorf("failed to copy config files to ISO: %w", err)
 	}
 
-	// Copy image packages to ISO
-	log.Infof("Copying image packages to ISO...")
-	if err := isoMaker.copyImagePkgsToIso(template, installRoot); err != nil {
-		return fmt.Errorf("failed to copy image packages to ISO: %w", err)
+	// Copy image packages to ISO. Skipped in payload mode: live-installer's
+	// deploy path writes the payload raw image directly and never calls
+	// InstallImageOs, so a cache-repo of every resolved .deb is dead weight.
+	if !template.IsInstallerPayloadMode() {
+		log.Infof("Copying image packages to ISO...")
+		if err := isoMaker.copyImagePkgsToIso(template, isoRoot); err != nil {
+			return fmt.Errorf("failed to copy image packages to ISO: %w", err)
+		}
 	}
 
 	// Create GRUB config for EFI boot
-	if err := createGrubCfg(installRoot, imageName); err != nil {
+	if err := createGrubCfg(isoRoot, imageName); err != nil {
 		return fmt.Errorf("failed to create GRUB configuration: %w", err)
 	}
 
 	// Copy GRUB files to ISO boot path
 	log.Infof("Copying GRUB files to ISO boot path...")
-	if err := copyGrubFilesToGrubPath(initrdRootfsPath, installRoot); err != nil {
+	if err := copyGrubFilesToGrubPath(initrdRootfsPath, isoRoot); err != nil {
 		return fmt.Errorf("failed to copy GRUB files to ISO boot path: %w", err)
 	}
 
 	log.Infof("Creating EFI FAT image...")
-	efiFatImgPath, err := createEfiFatImage(template, initrdRootfsPath, installRoot)
+	efiFatImgPath, err := createEfiFatImage(template, initrdRootfsPath, isoRoot)
 	if err != nil {
 		return fmt.Errorf("failed to create EFI FAT image: %w", err)
 	}
-	efiFatImgRelPath := strings.TrimPrefix(efiFatImgPath, installRoot)
+	efiFatImgRelPath := strings.TrimPrefix(efiFatImgPath, isoRoot)
 
 	log.Infof("Creating image for Bios boot...")
-	biosImgRelPath, err := createBiosImage(template, initrdRootfsPath, installRoot)
+	biosImgRelPath, err := createBiosImage(template, initrdRootfsPath, isoRoot)
 	if err != nil {
 		return fmt.Errorf("failed to create BIOS image: %w", err)
 	}
 
 	// Create ISO image with xorriso
 	log.Infof("Creating ISO image with xorriso...")
-	var xorrisoCmd string
-	if biosImgRelPath != "" {
-		// Support both BIOS and UEFI boot mode
-		log.Infof("Creating hybrid ISO for both BIOS and UEFI boot modes...")
-		biosImgRelDir := filepath.Dir(biosImgRelPath)
-		xorrisoCmd = fmt.Sprintf("xorriso -as mkisofs -graft-points -r -J -l -b %s", biosImgRelPath)
-		xorrisoCmd += " -no-emul-boot -boot-load-size 4 -boot-info-table --grub2-boot-info"
-		xorrisoCmd += fmt.Sprintf(" --grub2-mbr %s", filepath.Join(installRoot, biosImgRelDir, "boot_hybrid.img"))
-		xorrisoCmd += fmt.Sprintf(" -eltorito-alt-boot -e %s -no-emul-boot", efiFatImgRelPath)
-		xorrisoCmd += fmt.Sprintf(" -append_partition 2 0xef %s -appended_part_as_gpt", efiFatImgPath)
-		xorrisoCmd += fmt.Sprintf(" -r %s --sort-weight 0 / --sort-weight 1 /boot", installRoot)
-		xorrisoCmd += fmt.Sprintf(" -volid \"%s\" --protective-msdos-label -o \"%s\" \"%s\"",
-			IsoLabel, isoFilePath, installRoot)
-	} else {
-		// Support only UEFI boot mode
-		log.Infof("Creating ISO for UEFI boot mode only...")
-		xorrisoCmd = fmt.Sprintf("xorriso -as mkisofs -graft-points -r -J -l --efi-boot %s", efiFatImgPath)
-		xorrisoCmd += " -efi-boot-part --efi-boot-image --protective-msdos-label"
-		xorrisoCmd += fmt.Sprintf(" -r %s --sort-weight 0 / --sort-weight 1 /boot", installRoot)
-		xorrisoCmd += fmt.Sprintf(" -volid \"%s\" -o \"%s\" \"%s\"",
-			IsoLabel, isoFilePath, installRoot)
+	var graftPathspecs []string
+	if template.IsInstallerPayloadMode() {
+		graftPathspecs = isoMaker.payloadGraftPathspecs()
 	}
+	xorrisoCmd := buildXorrisoCommand(xorrisoArgs{
+		isoRoot:          isoRoot,
+		isoFilePath:      isoFilePath,
+		isoLabel:         IsoLabel,
+		biosImgRelPath:   biosImgRelPath,
+		efiFatImgRelPath: efiFatImgRelPath,
+		efiFatImgPath:    efiFatImgPath,
+		graftPathspecs:   graftPathspecs,
+	})
 
 	if _, err := shell.ExecCmdWithStream(xorrisoCmd, true, shell.HostPath, nil); err != nil {
 		log.Errorf("Failed to create ISO image: %v", err)
 		return fmt.Errorf("failed to create ISO image: %w", err)
 	}
 
-	if err := cleanIsoInstallRoot(installRoot); err != nil {
+	if err := cleanIsoInstallRoot(isoRoot); err != nil {
 		return fmt.Errorf("failed to clean up ISO install root: %w", err)
 	}
 
 	log.Infof("ISO creation completed successfully")
 	return nil
+}
+
+// xorrisoArgs holds the inputs to buildXorrisoCommand. Kept as a struct
+// (config-struct convention for >4-5 params) and separated from createIso so
+// the command-string assembly is unit-testable without any I/O.
+type xorrisoArgs struct {
+	isoRoot          string
+	isoFilePath      string
+	isoLabel         string
+	biosImgRelPath   string
+	efiFatImgRelPath string
+	efiFatImgPath    string
+	// graftPathspecs are extra "iso_path=local_path" pathspecs appended after
+	// the staging tree, e.g. for files (like the installer payload) that live
+	// outside isoRoot and should be included by reference rather than copied
+	// into the staging tree first.
+	graftPathspecs []string
+}
+
+// buildXorrisoCommand assembles the xorriso command line for either a hybrid
+// BIOS+UEFI ISO (when biosImgRelPath is set) or a UEFI-only ISO. Both forms
+// pass -iso-level 3 to lift the ISO9660 single-file 4 GiB cap - required once
+// an installer payload raw image is grafted onto the ISO.
+func buildXorrisoCommand(a xorrisoArgs) string {
+	var cmd string
+	if a.biosImgRelPath != "" {
+		// Support both BIOS and UEFI boot mode
+		biosImgRelDir := filepath.Dir(a.biosImgRelPath)
+		cmd = fmt.Sprintf("xorriso -as mkisofs -graft-points -r -J -l -b %s", a.biosImgRelPath)
+		cmd += " -no-emul-boot -boot-load-size 4 -boot-info-table --grub2-boot-info"
+		cmd += fmt.Sprintf(" --grub2-mbr %s", filepath.Join(a.isoRoot, biosImgRelDir, "boot_hybrid.img"))
+		cmd += fmt.Sprintf(" -eltorito-alt-boot -e %s -no-emul-boot", a.efiFatImgRelPath)
+		cmd += fmt.Sprintf(" -append_partition 2 0xef %s -appended_part_as_gpt", a.efiFatImgPath)
+		cmd += " -iso-level 3"
+		cmd += fmt.Sprintf(" -r %s --sort-weight 0 / --sort-weight 1 /boot", a.isoRoot)
+		for _, pathspec := range a.graftPathspecs {
+			// pathspec's local-path half is rooted under the configurable work
+			// directory, so quote the whole "iso_path=local_path" token rather
+			// than assume it is shell-safe.
+			cmd += " " + shell.QuoteArg(pathspec)
+		}
+		cmd += fmt.Sprintf(" -volid \"%s\" --protective-msdos-label -o \"%s\" \"%s\"",
+			a.isoLabel, a.isoFilePath, a.isoRoot)
+	} else {
+		// Support only UEFI boot mode
+		cmd = fmt.Sprintf("xorriso -as mkisofs -graft-points -r -J -l --efi-boot %s", a.efiFatImgPath)
+		cmd += " -efi-boot-part --efi-boot-image --protective-msdos-label"
+		cmd += " -iso-level 3"
+		cmd += fmt.Sprintf(" -r %s --sort-weight 0 / --sort-weight 1 /boot", a.isoRoot)
+		for _, pathspec := range a.graftPathspecs {
+			// pathspec's local-path half is rooted under the configurable work
+			// directory, so quote the whole "iso_path=local_path" token rather
+			// than assume it is shell-safe.
+			cmd += " " + shell.QuoteArg(pathspec)
+		}
+		cmd += fmt.Sprintf(" -volid \"%s\" -o \"%s\" \"%s\"",
+			a.isoLabel, a.isoFilePath, a.isoRoot)
+	}
+	return cmd
 }
 
 func copyKernelToIsoImagesPath(initrdRootfsPath, isoImagesPath string) error {

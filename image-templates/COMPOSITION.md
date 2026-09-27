@@ -70,6 +70,14 @@ commands, and there is currently no way to factor that out.
 Together these two rules are why this directory is grouped by distribution: any
 grouping drawn from `{os, dist, arch, imageType}` can never split a chain.
 
+> If what you actually want is "the deployed system described once, produced as
+> both a raw image and an ISO that installs it," you don't need a `-raw` /
+> `-iso` pair at all: set `systemConfig.installerPayload.enabled: true` on a
+> single `imageType: iso` template. One build emits both artifacts. See
+> [`systemConfig.installerPayload`](../docs/user-guide/architecture/image-composer-tool-templates.md#systemconfiginstallerpayload).
+
+
+
 ### How layers combine
 
 Chains are single-inheritance and linear: `root → … → leaf`, no diamonds. The OS

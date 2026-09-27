@@ -85,7 +85,15 @@ stty -echo
 # Disable kernel messages on the current terminal
 dmesg -D
 
-if live-installer --config "$TEMPLATE_DUMP_YAML" --repo "$CACHE_REPO"; then
+# cache-repo is only present for a package-reinstall ISO; an installer-payload
+# ISO carries a pre-built raw image instead and never populates cache-repo.
+if [[ -d "$CACHE_REPO" ]]; then
+    REPO_ARGS=(--repo "$CACHE_REPO")
+else
+    REPO_ARGS=()
+fi
+
+if live-installer --config "$TEMPLATE_DUMP_YAML" "${REPO_ARGS[@]}"; then
     installerExitCode=0
 else
     installerExitCode=$?

@@ -443,6 +443,16 @@ func unattendedInstall(templateFile, localRepo string) error {
 	hydrateSBOMMetadataForInstaller(template)
 	log.Infof("Loaded template: %s (type: %s)", template.Image.Name, template.Target.ImageType)
 
+	if template.IsInstallerPayloadMode() {
+		// configDir is <isoRoot>/config (see the five-level climb above); the
+		// payload/ directory isomaker grafted onto the ISO is its sibling.
+		isoRoot := filepath.Dir(configDir)
+		return deployInstallerPayload(template, isoRoot)
+	}
+
+	if localRepo == "" {
+		return fmt.Errorf("--repo is required for package-based installs (template does not enable installerPayload mode)")
+	}
 	return install(template, configDir, localRepo)
 }
 
@@ -460,6 +470,13 @@ func attendedInstall(templateFile, localRepo string) (installationQuit bool, err
 	}
 	hydrateSBOMMetadataForInstaller(template)
 	log.Infof("Loaded template: %s (type: %s)", template.Image.Name, template.Target.ImageType)
+
+	if template.IsInstallerPayloadMode() {
+		return false, fmt.Errorf("attended installation does not support installerPayload mode; run unattended")
+	}
+	if localRepo == "" {
+		return false, fmt.Errorf("--repo is required for package-based installs")
+	}
 
 	attendedInstaller, err := attendedinstaller.New(template, configDir, localRepo, install)
 	if err != nil {

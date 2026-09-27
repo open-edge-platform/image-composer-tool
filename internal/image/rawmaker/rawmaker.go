@@ -18,17 +18,19 @@ import (
 )
 
 type RawMakerInterface interface {
-	Init() error          // Initialize with stored template
-	BuildRawImage() error // Build raw image using stored template
+	Init() error                 // Initialize with stored template
+	BuildRawImage() error        // Build raw image using stored template
+	GetRawImageFilePath() string // Path of the built raw image, valid after BuildRawImage succeeds
 }
 
 type RawMaker struct {
-	template      *config.ImageTemplate
-	ImageBuildDir string
-	ChrootEnv     chroot.ChrootEnvInterface
-	LoopDev       imagedisc.LoopDevInterface
-	ImageOs       imageos.ImageOsInterface
-	ImageConvert  imageconvert.ImageConvertInterface
+	template         *config.ImageTemplate
+	ImageBuildDir    string
+	ChrootEnv        chroot.ChrootEnvInterface
+	LoopDev          imagedisc.LoopDevInterface
+	ImageOs          imageos.ImageOsInterface
+	ImageConvert     imageconvert.ImageConvertInterface
+	RawImageFilePath string
 }
 
 var log = logger.Logger()
@@ -57,6 +59,12 @@ func NewRawMaker(chrootEnv chroot.ChrootEnvInterface, template *config.ImageTemp
 		ImageOs:      imageOs, // Already template-aware
 		ImageConvert: imageconvert.NewImageConvert(),
 	}, nil
+}
+
+// GetRawImageFilePath returns the path of the built raw image. It is only
+// valid after BuildRawImage has returned successfully.
+func (rawMaker *RawMaker) GetRawImageFilePath() string {
+	return rawMaker.RawImageFilePath
 }
 
 func (rawMaker *RawMaker) Init() error {
@@ -177,6 +185,7 @@ func (rawMaker *RawMaker) BuildRawImage() error {
 		rawMaker.cleanupImageFileOnError(imageFile)
 		return fmt.Errorf("failed to rename image file: %w", err)
 	}
+	rawMaker.RawImageFilePath = finalImagePath
 	rawMaker.template.FinishPureImageBuildTimer()
 
 	pureImageBuildDuration := rawMaker.template.GetPureImageBuildDuration()

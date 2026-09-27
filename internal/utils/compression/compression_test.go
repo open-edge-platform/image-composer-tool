@@ -75,7 +75,7 @@ func TestDecompressFile(t *testing.T) {
 			decompressType: "gz",
 			sudo:           false,
 			mockCommands: []shell.MockCommand{
-				{Pattern: "gzip -d -c /tmp/test/file.gz > /tmp/output/file", Output: "", Error: nil},
+				{Pattern: "gzip -d -c '/tmp/test/file.gz' > '/tmp/output/file'", Output: "", Error: nil},
 			},
 			expectError: false,
 		},
@@ -86,7 +86,7 @@ func TestDecompressFile(t *testing.T) {
 			decompressType: "gz",
 			sudo:           true,
 			mockCommands: []shell.MockCommand{
-				{Pattern: "gzip -d -c /tmp/test/file.gz > /tmp/output/file", Output: "", Error: nil},
+				{Pattern: "gzip -d -c '/tmp/test/file.gz' > '/tmp/output/file'", Output: "", Error: nil},
 			},
 			expectError: false,
 		},
@@ -97,7 +97,7 @@ func TestDecompressFile(t *testing.T) {
 			decompressType: "xz",
 			sudo:           false,
 			mockCommands: []shell.MockCommand{
-				{Pattern: "xz -d -c /tmp/test/file.xz > /tmp/output/file", Output: "", Error: nil},
+				{Pattern: "xz -d -c '/tmp/test/file.xz' > '/tmp/output/file'", Output: "", Error: nil},
 			},
 			expectError: false,
 		},
@@ -108,7 +108,7 @@ func TestDecompressFile(t *testing.T) {
 			decompressType: "xz",
 			sudo:           true,
 			mockCommands: []shell.MockCommand{
-				{Pattern: "xz -d -c /tmp/test/file.xz > /tmp/output/file", Output: "", Error: nil},
+				{Pattern: "xz -d -c '/tmp/test/file.xz' > '/tmp/output/file'", Output: "", Error: nil},
 			},
 			expectError: false,
 		},
@@ -119,7 +119,7 @@ func TestDecompressFile(t *testing.T) {
 			decompressType: "zstd",
 			sudo:           false,
 			mockCommands: []shell.MockCommand{
-				{Pattern: "zstd -d -c /tmp/test/file.zst > /tmp/output/file", Output: "", Error: nil},
+				{Pattern: "zstd -d -c '/tmp/test/file.zst' > '/tmp/output/file'", Output: "", Error: nil},
 			},
 			expectError: false,
 		},
@@ -130,7 +130,7 @@ func TestDecompressFile(t *testing.T) {
 			decompressType: "zstd",
 			sudo:           true,
 			mockCommands: []shell.MockCommand{
-				{Pattern: "zstd -d -c /tmp/test/file.zst > /tmp/output/file", Output: "", Error: nil},
+				{Pattern: "zstd -d -c '/tmp/test/file.zst' > '/tmp/output/file'", Output: "", Error: nil},
 			},
 			expectError: false,
 		},
@@ -163,7 +163,7 @@ func TestDecompressFile(t *testing.T) {
 			decompressType: "gz",
 			sudo:           false,
 			mockCommands: []shell.MockCommand{
-				{Pattern: "gzip -d -c /tmp/test/file.gz > /tmp/output/file", Output: "", Error: fmt.Errorf("gzip command failed")},
+				{Pattern: "gzip -d -c '/tmp/test/file.gz' > '/tmp/output/file'", Output: "", Error: fmt.Errorf("gzip command failed")},
 			},
 			expectError:   true,
 			expectedError: "gzip command failed",
@@ -256,7 +256,7 @@ func TestCompressFile(t *testing.T) {
 			compressType: "gz",
 			sudo:         false,
 			mockCommands: []shell.MockCommand{
-				{Pattern: "gzip -c /tmp/test/file.txt > /tmp/output/file.gz", Output: "", Error: nil},
+				{Pattern: "gzip -c '/tmp/test/file.txt' > '/tmp/output/file.gz'", Output: "", Error: nil},
 			},
 			expectError: false,
 		},
@@ -267,7 +267,7 @@ func TestCompressFile(t *testing.T) {
 			compressType: "gz",
 			sudo:         true,
 			mockCommands: []shell.MockCommand{
-				{Pattern: "gzip -c /tmp/test/file.txt > /tmp/output/file.gz", Output: "", Error: nil},
+				{Pattern: "gzip -c '/tmp/test/file.txt' > '/tmp/output/file.gz'", Output: "", Error: nil},
 			},
 			expectError: false,
 		},
@@ -278,7 +278,7 @@ func TestCompressFile(t *testing.T) {
 			compressType: "xz",
 			sudo:         false,
 			mockCommands: []shell.MockCommand{
-				{Pattern: "xz -z -c /tmp/test/file.txt > /tmp/output/file.xz", Output: "", Error: nil},
+				{Pattern: "xz -z -c '/tmp/test/file.txt' > '/tmp/output/file.xz'", Output: "", Error: nil},
 			},
 			expectError: false,
 		},
@@ -289,7 +289,7 @@ func TestCompressFile(t *testing.T) {
 			compressType: "xz",
 			sudo:         true,
 			mockCommands: []shell.MockCommand{
-				{Pattern: "xz -z -c /tmp/test/file.txt > /tmp/output/file.xz", Output: "", Error: nil},
+				{Pattern: "xz -z -c '/tmp/test/file.txt' > '/tmp/output/file.xz'", Output: "", Error: nil},
 			},
 			expectError: false,
 		},
@@ -300,7 +300,7 @@ func TestCompressFile(t *testing.T) {
 			compressType: "zstd",
 			sudo:         false,
 			mockCommands: []shell.MockCommand{
-				{Pattern: "zstd --threads=0 -f -o /tmp/output/file.zst /tmp/test/file.txt", Output: "", Error: nil},
+				{Pattern: "zstd --threads=0 -f -o '/tmp/output/file.zst' '/tmp/test/file.txt'", Output: "", Error: nil},
 			},
 			expectError: false,
 		},
@@ -311,7 +311,7 @@ func TestCompressFile(t *testing.T) {
 			compressType: "zstd",
 			sudo:         true,
 			mockCommands: []shell.MockCommand{
-				{Pattern: "zstd --threads=0 -f -o /tmp/output/file.zst /tmp/test/file.txt", Output: "", Error: nil},
+				{Pattern: "zstd --threads=0 -f -o '/tmp/output/file.zst' '/tmp/test/file.txt'", Output: "", Error: nil},
 			},
 			expectError: false,
 		},
@@ -344,7 +344,7 @@ func TestCompressFile(t *testing.T) {
 			compressType: "gz",
 			sudo:         false,
 			mockCommands: []shell.MockCommand{
-				{Pattern: "gzip -c /tmp/test/file.txt > /tmp/output/file.gz", Output: "", Error: fmt.Errorf("gzip command failed")},
+				{Pattern: "gzip -c '/tmp/test/file.txt' > '/tmp/output/file.gz'", Output: "", Error: fmt.Errorf("gzip command failed")},
 			},
 			expectError:   true,
 			expectedError: "gzip command failed",
@@ -393,7 +393,7 @@ func TestCompressFolder(t *testing.T) {
 			compressType: "tar.xz",
 			sudo:         false,
 			mockCommands: []shell.MockCommand{
-				{Pattern: "tar -cJf /tmp/output/archive.tar.xz -C /tmp/test/folder .", Output: "", Error: nil},
+				{Pattern: "tar -cJf '/tmp/output/archive.tar.xz' -C '/tmp/test/folder' .", Output: "", Error: nil},
 			},
 			expectError: false,
 		},
@@ -405,7 +405,7 @@ func TestCompressFolder(t *testing.T) {
 			sudo:         true,
 			mockCommands: []shell.MockCommand{
 				{Pattern: "mkdir -p --", Output: "", Error: nil},
-				{Pattern: "tar -cJf /tmp/output/archive.tar.xz -C /tmp/test/folder .", Output: "", Error: nil},
+				{Pattern: "tar -cJf '/tmp/output/archive.tar.xz' -C '/tmp/test/folder' .", Output: "", Error: nil},
 			},
 			expectError: false,
 		},
@@ -416,7 +416,7 @@ func TestCompressFolder(t *testing.T) {
 			compressType: "tar.gz",
 			sudo:         false,
 			mockCommands: []shell.MockCommand{
-				{Pattern: "tar -czf /tmp/output/archive.tar.gz -C /tmp/test/folder .", Output: "", Error: nil},
+				{Pattern: "tar -czf '/tmp/output/archive.tar.gz' -C '/tmp/test/folder' .", Output: "", Error: nil},
 			},
 			expectError: false,
 		},
@@ -428,7 +428,7 @@ func TestCompressFolder(t *testing.T) {
 			sudo:         true,
 			mockCommands: []shell.MockCommand{
 				{Pattern: "mkdir -p --", Output: "", Error: nil},
-				{Pattern: "tar -czf /tmp/output/archive.tar.gz -C /tmp/test/folder .", Output: "", Error: nil},
+				{Pattern: "tar -czf '/tmp/output/archive.tar.gz' -C '/tmp/test/folder' .", Output: "", Error: nil},
 			},
 			expectError: false,
 		},
@@ -449,7 +449,7 @@ func TestCompressFolder(t *testing.T) {
 			compressType: "tar.xz",
 			sudo:         false,
 			mockCommands: []shell.MockCommand{
-				{Pattern: "tar -cJf /tmp/output/archive.tar.xz -C /tmp/test/folder .", Output: "", Error: fmt.Errorf("tar command failed")},
+				{Pattern: "tar -cJf '/tmp/output/archive.tar.xz' -C '/tmp/test/folder' .", Output: "", Error: fmt.Errorf("tar command failed")},
 			},
 			expectError:   true,
 			expectedError: "tar command failed",
@@ -461,7 +461,7 @@ func TestCompressFolder(t *testing.T) {
 			compressType: "tar.gz",
 			sudo:         false,
 			mockCommands: []shell.MockCommand{
-				{Pattern: "tar -czf /tmp/output/archive.tar.gz -C /tmp/test/folder .", Output: "", Error: fmt.Errorf("tar command failed")},
+				{Pattern: "tar -czf '/tmp/output/archive.tar.gz' -C '/tmp/test/folder' .", Output: "", Error: fmt.Errorf("tar command failed")},
 			},
 			expectError:   true,
 			expectedError: "tar command failed",
@@ -653,7 +653,7 @@ func TestSudoStringGeneration(t *testing.T) {
 			// Test tar operations
 			if tt.functionType == "tar" {
 				mockCommands := []shell.MockCommand{
-					{Pattern: fmt.Sprintf("cd /tmp && %s tar", strings.TrimSpace(tt.expectedPrefix)), Output: "", Error: nil},
+					{Pattern: fmt.Sprintf("cd '/tmp' && %s tar", strings.TrimSpace(tt.expectedPrefix)), Output: "", Error: nil},
 				}
 				shell.Default = shell.NewMockExecutor(mockCommands)
 
@@ -667,9 +667,9 @@ func TestSudoStringGeneration(t *testing.T) {
 			if tt.functionType == "single" {
 				var expectedPattern string
 				if tt.sudo {
-					expectedPattern = "gzip -d -c /tmp/test.gz > /tmp/output"
+					expectedPattern = "gzip -d -c '/tmp/test.gz' > '/tmp/output'"
 				} else {
-					expectedPattern = "gzip -d -c /tmp/test.gz > /tmp/output"
+					expectedPattern = "gzip -d -c '/tmp/test.gz' > '/tmp/output'"
 				}
 
 				mockCommands := []shell.MockCommand{
@@ -842,9 +842,9 @@ func TestAllCompressionTypes(t *testing.T) {
 			var expectedPattern string
 			switch compType {
 			case "tar.xz":
-				expectedPattern = "tar -cJf /output.tar.xz -C /tmp/folder ."
+				expectedPattern = "tar -cJf '/output.tar.xz' -C '/tmp/folder' ."
 			case "tar.gz":
-				expectedPattern = "tar -czf /output.tar.gz -C /tmp/folder ."
+				expectedPattern = "tar -czf '/output.tar.gz' -C '/tmp/folder' ."
 			}
 
 			mockCommands := []shell.MockCommand{

@@ -247,6 +247,9 @@ func (p *RCD) installHostDependency() error {
 		"xorriso":      "xorriso",     // For ISO image creation
 		"grub-mkimage": "grub-common", // For ISO image UEFI Grub binary creation
 		"sbsign":       "sbsigntool",  // For the UKI image creation
+		"zstd":         "zstd",        // For installer payload compression
+		"xz":           "xz-utils",    // For installer payload compression (host tool install is apt-based, see qemu-utils/grub-common above)
+		"gzip":         "gzip",        // For installer payload compression
 	}
 	hostPkgManager, err := system.GetHostOsPkgManager()
 	if err != nil {

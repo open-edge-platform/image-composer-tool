@@ -1,5 +1,23 @@
 # Release Notes: Image Composer Tool
 
+## Unreleased
+
+**New**:
+
+1. **Unattended payload ISO** (`systemConfig.installerPayload`)
+
+   An ISO template can now deploy a pre-built raw disk image to target
+   hardware instead of reinstalling packages on target. Set
+   `systemConfig.installerPayload.enabled: true` on an `imageType: iso`
+   template; ICT builds the described system as a raw image internally,
+   compresses it onto the ISO with a sha256 manifest, and the live installer
+   verifies, writes, grows the last partition to fill the target disk, resets
+   machine identity, and reboots — no package resolution on target, and no
+   local package cache (`--repo`) required. One build emits both the `.iso`
+   and a standalone bootable `.raw` of the same system. See
+   [Unattended Payload ISO Tutorial](./get-started/unattended-payload-iso.md)
+   and [ADR: Unattended Payload ISO](../architecture-decision-record/adr-installer-payload-iso.md).
+
 ## Version 2026.2
 
 **Release Date**: September 9, 2026

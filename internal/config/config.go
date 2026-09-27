@@ -312,6 +312,29 @@ type Initramfs struct {
 	Template string `yaml:"template"` // Template: path to the initramfs configuration template file
 }
 
+// Compression algorithms accepted for installerPayload.compression.
+const (
+	PayloadCompressionZstd = "zstd"
+	PayloadCompressionXz   = "xz"
+	PayloadCompressionGz   = "gz"
+	PayloadCompressionNone = "none"
+)
+
+// InstallerPayload switches an ISO build from deploy-by-package-install to
+// deploy-by-raw-image-write. The enclosing systemConfig and disk blocks already
+// describe the deployed system exactly as they do for a package-install ISO
+// today; this block only changes HOW that system reaches the target, not WHAT
+// is deployed. Only valid when target.imageType is "iso".
+type InstallerPayload struct {
+	Enabled     bool   `yaml:"enabled"`
+	Compression string `yaml:"compression,omitempty"` // zstd (default) | xz | gz | none
+	// ResetInstanceIdentity controls whether the installer clears machine-id, SSH
+	// host keys, and the systemd random seed after writing the payload so every
+	// deployed instance regenerates its own identity on first boot. Defaults to
+	// true; nil means "unset", not "false".
+	ResetInstanceIdentity *bool `yaml:"resetInstanceIdentity,omitempty"`
+}
+
 type Bootloader struct {
 	BootType string `yaml:"bootType"` // BootType: type of bootloader (e.g., "efi", "legacy")
 	Provider string `yaml:"provider"` // Provider: bootloader provider (e.g., "grub2", "systemd-boot")
@@ -375,19 +398,20 @@ type FDEConfig struct {
 
 // SystemConfig represents a system configuration within the template
 type SystemConfig struct {
-	Name            string               `yaml:"name"`
-	Description     string               `yaml:"description"`
-	Initramfs       Initramfs            `yaml:"initramfs,omitempty"`
-	HostName        string               `yaml:"hostname,omitempty"`
-	Immutability    ImmutabilityConfig   `yaml:"immutability,omitempty"`
-	FDE             FDEConfig            `yaml:"fde,omitempty"`
-	Users           []UserConfig         `yaml:"users,omitempty"`
-	Bootloader      Bootloader           `yaml:"bootloader"`
-	Network         NetworkConfig        `yaml:"network,omitempty"`
-	Packages        []string             `yaml:"packages"`
-	AdditionalFiles []AdditionalFileInfo `yaml:"additionalFiles"`
-	Configurations  []ConfigurationInfo  `yaml:"configurations"`
-	Kernel          KernelConfig         `yaml:"kernel"`
+	Name             string               `yaml:"name"`
+	Description      string               `yaml:"description"`
+	Initramfs        Initramfs            `yaml:"initramfs,omitempty"`
+	HostName         string               `yaml:"hostname,omitempty"`
+	Immutability     ImmutabilityConfig   `yaml:"immutability,omitempty"`
+	FDE              FDEConfig            `yaml:"fde,omitempty"`
+	Users            []UserConfig         `yaml:"users,omitempty"`
+	Bootloader       Bootloader           `yaml:"bootloader"`
+	Network          NetworkConfig        `yaml:"network,omitempty"`
+	Packages         []string             `yaml:"packages"`
+	AdditionalFiles  []AdditionalFileInfo `yaml:"additionalFiles"`
+	Configurations   []ConfigurationInfo  `yaml:"configurations"`
+	Kernel           KernelConfig         `yaml:"kernel"`
+	InstallerPayload *InstallerPayload    `yaml:"installerPayload,omitempty"`
 }
 
 // AdditionalFile stage markers control WHEN an overlay build copies an
@@ -532,6 +556,10 @@ func parseYAMLTemplate(data []byte, validateFull bool) (*ImageTemplate, error) {
 	}
 
 	if err := template.validateBaseline(); err != nil {
+		return nil, err
+	}
+
+	if err := template.validateInstallerPayload(); err != nil {
 		return nil, err
 	}
 
@@ -862,7 +890,7 @@ func (t *ImageTemplate) GetAdditionalFileInfo() []AdditionalFileInfo {
 					log.Warnf("Cannot resolve relative additional file path without template file context: %+v",
 						t.SystemConfig.AdditionalFiles[i])
 				} else {
-					candidatePath, found := resolveTemplateRelativePath(t.PathList, t.SystemConfig.AdditionalFiles[i].Local)
+					candidatePath, found := ResolveTemplateRelativePath(t.PathList, t.SystemConfig.AdditionalFiles[i].Local)
 					if found {
 						newFileInfo := AdditionalFileInfo{
 							Local: candidatePath,
@@ -881,11 +909,11 @@ func (t *ImageTemplate) GetAdditionalFileInfo() []AdditionalFileInfo {
 	return PathUpdatedList
 }
 
-// resolveTemplateRelativePath resolves a relative path against each template path
+// ResolveTemplateRelativePath resolves a relative path against each template path
 // and each of its ancestor directories. This lets nested templates reference
 // shared assets from a parent template directory (for example,
 // image-templates/additionalfiles).
-func resolveTemplateRelativePath(templatePaths []string, relativePath string) (string, bool) {
+func ResolveTemplateRelativePath(templatePaths []string, relativePath string) (string, bool) {
 	cleanRelativePath := filepath.Clean(relativePath)
 
 	for _, templatePath := range templatePaths {
@@ -1533,6 +1561,44 @@ func (t *ImageTemplate) validateBaseline() error {
 	return nil
 }
 
+// validateInstallerPayload enforces cross-field rules for installerPayload that
+// the JSON schema cannot express. Like validateBaseline, a layer with `extends`
+// set may be inheriting target.imageType from a parent it has not yet merged
+// with, so the imageType restriction is only authoritative once Extends is
+// empty (i.e. on the final, folded template).
+func (t *ImageTemplate) validateInstallerPayload() error {
+	payload := t.SystemConfig.InstallerPayload
+	if payload == nil {
+		return nil
+	}
+
+	if t.Target.ImageType != "iso" && strings.TrimSpace(t.Extends) == "" {
+		return fmt.Errorf("systemConfig.installerPayload is only supported when target.imageType is %q (got %q)",
+			"iso", t.Target.ImageType)
+	}
+
+	if payload.Enabled && t.Baseline != nil && t.Baseline.Mode == BaselineModeOverlay {
+		return fmt.Errorf("systemConfig.installerPayload is not supported with baseline.mode %q", BaselineModeOverlay)
+	}
+
+	// LUKS-encrypted payloads are unsupported: live-installer's growth and
+	// identity-reset steps mount the deployed partition directly and would
+	// otherwise fail after the irreversible disk write has already happened.
+	if payload.Enabled && t.SystemConfig.FDE.Enabled {
+		return fmt.Errorf("systemConfig.installerPayload is not supported with systemConfig.fde.enabled")
+	}
+
+	switch payload.Compression {
+	case "", PayloadCompressionZstd, PayloadCompressionXz, PayloadCompressionGz, PayloadCompressionNone:
+		// valid
+	default:
+		return fmt.Errorf("systemConfig.installerPayload.compression %q not supported: must be one of %q, %q, %q, %q",
+			payload.Compression, PayloadCompressionZstd, PayloadCompressionXz, PayloadCompressionGz, PayloadCompressionNone)
+	}
+
+	return nil
+}
+
 // validateOverlaySystemConfig rejects systemConfig sections that an overlay build
 // cannot apply. Overlay mode layers packages, users, configurations, and
 // additional files onto an already-provisioned baseline image; it does not re-run
@@ -1851,4 +1917,32 @@ func (p *OverlayPolicy) validate() error {
 // IsOverlayMode reports whether the template requests overlay-mode baseline.
 func (t *ImageTemplate) IsOverlayMode() bool {
 	return t.Baseline != nil && t.Baseline.Mode == BaselineModeOverlay
+}
+
+// IsInstallerPayloadMode reports whether this ISO template deploys a pre-built
+// raw disk image (written block-for-block by live-installer) rather than
+// re-installing packages onto the target.
+func (t *ImageTemplate) IsInstallerPayloadMode() bool {
+	return t.Target.ImageType == "iso" &&
+		t.SystemConfig.InstallerPayload != nil &&
+		t.SystemConfig.InstallerPayload.Enabled
+}
+
+// PayloadCompression returns the configured installerPayload compression
+// algorithm, defaulting to zstd.
+func (t *ImageTemplate) PayloadCompression() string {
+	if t.SystemConfig.InstallerPayload == nil || t.SystemConfig.InstallerPayload.Compression == "" {
+		return PayloadCompressionZstd
+	}
+	return t.SystemConfig.InstallerPayload.Compression
+}
+
+// ResetInstanceIdentity reports whether live-installer should clear machine-id,
+// SSH host keys, and the systemd random seed after writing the payload.
+// Defaults to true.
+func (t *ImageTemplate) ResetInstanceIdentity() bool {
+	if t.SystemConfig.InstallerPayload == nil || t.SystemConfig.InstallerPayload.ResetInstanceIdentity == nil {
+		return true
+	}
+	return *t.SystemConfig.InstallerPayload.ResetInstanceIdentity
 }

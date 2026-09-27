@@ -38,6 +38,7 @@ For a conceptual overview of how templates fit into the build pipeline, see
       - [`systemConfig.fde`](#systemconfigfde)
       - [`systemConfig.users[]`](#systemconfigusers)
       - [`systemConfig.initramfs`](#systemconfiginitramfs)
+      - [`systemConfig.installerPayload`](#systemconfiginstallerpayload)
       - [`systemConfig.additionalFiles[]`](#systemconfigadditionalfiles)
       - [`systemConfig.configurations[]`](#systemconfigconfigurations)
   - [Template Merge Behavior](#template-merge-behavior)
@@ -619,6 +620,11 @@ Each entry defines one output format:
 | `type` | string | **Yes** | `raw`, `qcow2`, `vhd`, `vhdx`, `vmdk`, `vdi`, `tar` | Output image format |
 | `compression` | string | No | `gz`, `gzip`, `xz`, `zstd`, `bz2` | Compression to apply |
 
+> **Installer payload mode:** when `systemConfig.installerPayload.enabled` is
+> `true` (ISO builds only), `disk.artifacts` is ignored — the payload is always
+> emitted as a raw image alongside the ISO. See
+> [`systemConfig.installerPayload`](#systemconfiginstallerpayload).
+
 #### `disk.partitions[]`
 
 Each entry defines one partition:
@@ -715,6 +721,7 @@ user templates (as defaults already provide a complete base).
 | `immutability` | object | No | dm-verity / Secure Boot configuration |
 | `users` | user[] | No | User account definitions |
 | `initramfs` | object | No | Initramfs config (ISO/initrd builds) |
+| `installerPayload` | object | No | Deploy-by-raw-image mode for ISO builds (see below) |
 | `additionalFiles` | file[] | No | Extra files to copy into the image |
 | `configurations` | cmd[] | No | Shell commands to run during build |
 
@@ -918,6 +925,56 @@ Used for ISO and initrd builds. Points to the initramfs configuration template.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `template` | string | **Yes** (when section present) | Path to the initramfs config template file |
+
+#### `systemConfig.installerPayload`
+
+Switches an `imageType: iso` build from *deploy-by-package-install* to
+*deploy-by-raw-image-write*. The rest of the template — `systemConfig.packages`,
+`kernel`, `users`, `disk` — is unchanged in meaning: it describes the system
+that ends up on the target disk either way. In payload mode, ICT builds that
+system as a raw disk image internally (chaining the same logic used for a
+`raw` build), compresses it onto the ISO with a sha256 manifest, and the live
+installer writes it directly to the target disk instead of reinstalling
+packages.
+
+| Field | Type | Required | Valid Values | Description |
+|-------|------|----------|--------------|-------------|
+| `enabled` | bool | **Yes** | `true`, `false` | Turns on payload mode. Only valid when `target.imageType` is `iso` |
+| `compression` | string | No | `zstd` (default), `xz`, `gz`, `none` | Compression applied to the payload raw image before it is grafted onto the ISO |
+| `resetInstanceIdentity` | bool | No | `true` (default), `false` | Whether the installer clears `/etc/machine-id`, D-Bus machine-id, SSH host keys, and the systemd random seed on the target disk before first boot, so every deployed unit gets a fresh identity instead of cloning the build host's |
+
+```yaml
+target:
+  imageType: iso
+systemConfig:
+  installerPayload:
+    enabled: true
+    compression: zstd
+```
+
+Constraints and consequences:
+
+- **`imageType: iso` only.** The schema rejects this block on any other
+  `target.imageType`.
+- **`disk.artifacts[]` is ignored** in payload mode (a warning is logged): the
+  payload is always a raw image, retained alongside the ISO rather than
+  converted to another format.
+- **The build emits two artifacts from one invocation**: the wrapped `.iso`,
+  and a standalone bootable `.raw` of the same system (useful for testing the
+  payload directly in a VM without going through the installer).
+- **Incompatible with `systemConfig.immutability`** (dm-verity). The installer
+  grows the last partition and its filesystem to fill the target disk before
+  first boot, which would invalidate a dm-verity hash tree, and there is no
+  way to opt out of that growth. Validation **rejects** templates that enable
+  both.
+- **`--repo` becomes optional** for `live-installer` when deploying a payload
+  ISO — there is nothing to reinstall, so no local package cache is needed on
+  target.
+
+See [ADR: Unattended Payload ISO](../../architecture-decision-record/adr-installer-payload-iso.md)
+for the full design rationale, and
+[Unattended Payload ISO Tutorial](../get-started/unattended-payload-iso.md) for
+an end-to-end walkthrough.
 
 #### `systemConfig.additionalFiles[]`
 

@@ -1,0 +1,13 @@
+[Unit]
+Description=One-time regeneration of missing SSH host keys on first boot
+After=local-fs.target
+Before=ssh.service sshd.service
+ConditionPathExists=!/var/lib/image-composer-tool/ssh-host-keys-regenerated
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ict-regenerate-ssh-host-keys.sh
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target

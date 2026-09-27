@@ -215,6 +215,23 @@ func TestValidateAdditionalFiles(t *testing.T) {
 			errorMsg:    "go build -buildmode=pie",
 		},
 		{
+			// The old implementation only checked filepath.Dir(tmplPath) for
+			// each entry in template.PathList; it could not find a file that
+			// only exists in an ancestor of the template's own directory.
+			// ResolveTemplateRelativePath walks all ancestors, so this must
+			// now succeed.
+			name: "relative_path_resolved_via_ancestor_directory",
+			template: &config.ImageTemplate{
+				PathList: []string{filepath.Join(tempDir, "defaultconfigs", "nested", "template.yml")},
+				SystemConfig: config.SystemConfig{
+					AdditionalFiles: []config.AdditionalFileInfo{
+						{Local: "attendedinstaller", Final: "/root/attendedinstaller"},
+					},
+				},
+			},
+			expectError: false,
+		},
+		{
 			name: "relative_directory_as_file",
 			template: &config.ImageTemplate{
 				PathList: []string{templatePath},

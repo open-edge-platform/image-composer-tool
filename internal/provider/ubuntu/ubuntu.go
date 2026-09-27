@@ -350,6 +350,9 @@ func (p *ubuntu) installHostDependency() error {
 		"ubuntu-keyring":    "ubuntu-keyring",   // For Ubuntu repository GPG keys
 		"bootctl":           "systemd-boot-efi", // For bootctl on Ubuntu hosts
 		"dpkg-scanpackages": "dpkg-dev",         // For DEB repository metadata creation
+		"zstd":              "zstd",             // For installer payload compression
+		"xz":                "xz-utils",         // For installer payload compression
+		"gzip":              "gzip",             // For installer payload compression
 	}
 	hostPkgManager, err := system.GetHostOsPkgManager()
 	if err != nil {

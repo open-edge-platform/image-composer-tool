@@ -1848,6 +1848,165 @@ func TestIsExternallyAttachedInstallDisk(t *testing.T) {
 	}
 }
 
+func TestPartitionDevicePath(t *testing.T) {
+	tests := []struct {
+		name         string
+		diskPath     string
+		partitionNum int
+		want         string
+	}{
+		{name: "loop_device_gets_p_infix", diskPath: "/dev/loop0", partitionNum: 1, want: "/dev/loop0p1"},
+		{name: "nvme_device_gets_p_infix", diskPath: "/dev/nvme0n1", partitionNum: 2, want: "/dev/nvme0n1p2"},
+		{name: "plain_disk_gets_no_infix", diskPath: "/dev/sda", partitionNum: 3, want: "/dev/sda3"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := PartitionDevicePath(tt.diskPath, tt.partitionNum); got != tt.want {
+				t.Errorf("PartitionDevicePath(%q, %d) = %q, want %q", tt.diskPath, tt.partitionNum, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveExistingPartitions(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	espPartition := config.PartitionInfo{ID: "esp", Type: "esp"}
+	rootPartition := config.PartitionInfo{ID: "root", Type: "linux-root-amd64"}
+	swapPartition := config.PartitionInfo{ID: "swap", Type: "linux-swap"}
+
+	tests := []struct {
+		name         string
+		diskPath     string
+		partitions   []config.PartitionInfo
+		mockCommands []shell.MockCommand
+		expectError  bool
+		want         map[string]string
+	}{
+		{
+			name:       "esp_matched_by_guid_rest_positional",
+			diskPath:   "/dev/sda",
+			partitions: []config.PartitionInfo{espPartition, rootPartition},
+			mockCommands: []shell.MockCommand{
+				{Pattern: "lsblk -ndo NAME", Output: "sda\n", Error: nil},
+				{Pattern: "lsblk -ln", Output: `{"blockdevices":[` +
+					`{"name":"sda","parttype":""},` +
+					`{"name":"sda1","parttype":"c12a7328-f81f-11d2-ba4b-00a0c93ec93b"},` +
+					`{"name":"sda2","parttype":"0fc63daf-8483-4772-8e79-3d69d8477de4"}` +
+					`]}`, Error: nil},
+			},
+			want: map[string]string{
+				"esp":  "/dev/sda1",
+				"root": "/dev/sda2",
+			},
+		},
+		{
+			name:       "esp_guid_out_of_order_still_matched",
+			diskPath:   "/dev/sda",
+			partitions: []config.PartitionInfo{espPartition, rootPartition, swapPartition},
+			mockCommands: []shell.MockCommand{
+				{Pattern: "lsblk -ndo NAME", Output: "sda\n", Error: nil},
+				{Pattern: "lsblk -ln", Output: `{"blockdevices":[` +
+					`{"name":"sda","parttype":""},` +
+					`{"name":"sda1","parttype":"0fc63daf-8483-4772-8e79-3d69d8477de4"},` +
+					`{"name":"sda2","parttype":"c12a7328-f81f-11d2-ba4b-00a0c93ec93b"},` +
+					`{"name":"sda3","parttype":"0657fd6d-a4ab-43c4-84e5-0933c84b4f4f"}` +
+					`]}`, Error: nil},
+			},
+			want: map[string]string{
+				"esp":  "/dev/sda2",
+				"root": "/dev/sda1",
+				"swap": "/dev/sda3",
+			},
+		},
+		{
+			name:       "no_guid_match_falls_back_to_positional_for_all",
+			diskPath:   "/dev/sda",
+			partitions: []config.PartitionInfo{espPartition, rootPartition},
+			mockCommands: []shell.MockCommand{
+				{Pattern: "lsblk -ndo NAME", Output: "sda\n", Error: nil},
+				{Pattern: "lsblk -ln", Output: `{"blockdevices":[` +
+					`{"name":"sda","parttype":""},` +
+					`{"name":"sda1","parttype":""},` +
+					`{"name":"sda2","parttype":""}` +
+					`]}`, Error: nil},
+			},
+			want: map[string]string{
+				"esp":  "/dev/sda1",
+				"root": "/dev/sda2",
+			},
+		},
+		{
+			name:       "disk_by_id_alias_still_skips_disk_row",
+			diskPath:   "/dev/disk/by-id/wwn-0x5000c500a1b2c3d4",
+			partitions: []config.PartitionInfo{espPartition, rootPartition},
+			mockCommands: []shell.MockCommand{
+				{Pattern: "lsblk -ndo NAME", Output: "sda\n", Error: nil},
+				{Pattern: "lsblk -ln", Output: `{"blockdevices":[` +
+					`{"name":"sda","parttype":""},` +
+					`{"name":"sda1","parttype":"c12a7328-f81f-11d2-ba4b-00a0c93ec93b"},` +
+					`{"name":"sda2","parttype":"0fc63daf-8483-4772-8e79-3d69d8477de4"}` +
+					`]}`, Error: nil},
+			},
+			want: map[string]string{
+				"esp":  "/dev/sda1",
+				"root": "/dev/sda2",
+			},
+		},
+		{
+			name:       "fewer_devices_than_template_partitions_errors",
+			diskPath:   "/dev/sda",
+			partitions: []config.PartitionInfo{espPartition, rootPartition, swapPartition},
+			mockCommands: []shell.MockCommand{
+				{Pattern: "lsblk -ndo NAME", Output: "sda\n", Error: nil},
+				{Pattern: "lsblk -ln", Output: `{"blockdevices":[` +
+					`{"name":"sda","parttype":""},` +
+					`{"name":"sda1","parttype":"c12a7328-f81f-11d2-ba4b-00a0c93ec93b"}` +
+					`]}`, Error: nil},
+			},
+			expectError: true,
+		},
+		{
+			name:       "lsblk_command_failure_errors",
+			diskPath:   "/dev/sda",
+			partitions: []config.PartitionInfo{espPartition},
+			mockCommands: []shell.MockCommand{
+				{Pattern: "lsblk", Output: "", Error: fmt.Errorf("lsblk failed")},
+			},
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			shell.Default = shell.NewMockExecutor(tt.mockCommands)
+
+			got, err := ResolveExistingPartitions(tt.diskPath, tt.partitions)
+
+			if tt.expectError {
+				if err == nil {
+					t.Fatalf("expected error, got none")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %d resolved partitions, want %d: %v", len(got), len(tt.want), got)
+			}
+			for id, wantDev := range tt.want {
+				if gotDev := got[id]; gotDev != wantDev {
+					t.Errorf("partition %q: got device %q, want %q", id, gotDev, wantDev)
+				}
+			}
+		})
+	}
+}
+
 func TestBootPartitionConfig(t *testing.T) {
 	tests := []struct {
 		name               string

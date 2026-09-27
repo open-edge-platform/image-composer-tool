@@ -1,0 +1,150 @@
+# AI-searchable metadata for template discovery
+metadata:
+  description: Ubuntu 24.04 unattended installer ISO carrying a pre-built custom software stack raw image
+  use_cases:
+    - Unattended bare metal deployment of a pre-built system image
+    - Fleet provisioning where target hardware must not resolve packages itself
+    - Automatic install target selection
+  keywords:
+    - iso
+    - ubuntu
+    - unattended
+    - installer
+    - installer-payload
+
+# This template is derived from ubuntu24-x86_64-minimal-unattended-iso.yml. The
+# only functional delta is systemConfig.installerPayload below: everything else
+# (packages, kernel, disk layout, network, users) already describes the
+# deployed system exactly as it does for a normal unattended ISO - payload mode
+# only changes *how* that system reaches the target (a pre-built raw image
+# written block-for-block, instead of package-by-package installation).
+
+image:
+  name: os-image-ubuntu-unattended-payload
+  version: "24.04"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: iso # Image type, valid value: [raw, iso].
+
+disk:
+  name: Installer_Payload_ISO
+  # Keep path empty to enable policy-based disk selection at install time.
+  path: ""
+  # Required in installer-payload mode: rawmaker builds the payload image at
+  # this size before it is compressed onto the ISO. Size to the deployed
+  # stack's on-disk footprint plus headroom; live-installer grows the root
+  # partition to fill whatever target disk is actually selected.
+  size: 20GiB
+  selectionPolicy:
+    strategy: largest
+    excludeRemovable: true
+    requireEmpty: true # Only consider disks that do not have existing partitions.
+  partitionTableType: gpt # Partition table type, valid value: [gpt, mbr]
+  partitions:
+    - id: boot
+      type: esp
+      flags:
+        - esp
+        - boot
+      start: 1MiB
+      end: 513MiB
+      fsType: fat32
+      mountPoint: /boot/efi
+
+    - id: rootfs
+      type: linux-root-amd64
+      start: 513MiB
+      end: "0" # 0 means use the rest of the disk space
+      fsType: ext4
+      mountPoint: /
+
+systemConfig:
+  # The only new block relative to the reference unattended ISO template.
+  # enabled: true switches isomaker from "build initrd + package cache-repo,
+  # let live-installer reinstall packages on target" to "build a raw image
+  # from this same template, compress it, and let live-installer write it to
+  # the target disk". compression defaults to zstd if omitted.
+  installerPayload:
+    enabled: true
+    compression: zstd
+
+  initramfs:
+    template: default-initrd-unattended-x86_64.yml
+
+  kernel:
+    cmdline: "console=ttyS0,115200 console=tty0 loglevel=7 systemd.log_level=debug"
+    # placeholder: pin to the deployed stack's tuned kernel package/version, e.g.:
+    # packages:
+    #   - linux-image-<stack-kernel-version>
+    # version: "<stack-kernel-version>"
+
+  hostname: ubuntu24-installer-payload
+
+  # Declarative network configuration
+  network:
+    backend: systemd-networkd
+    interfaces:
+      # Primary interface with DHCP
+      - name: enp1s0
+        dhcp4: true
+
+      # Secondary interface with static IP
+      - name: enp2s0
+        addresses:
+          - "10.0.0.100/24"
+        routes:
+          - to: default
+            via: "10.0.0.1"
+        nameservers:
+          - "8.8.8.8"
+          - "8.8.4.4"
+
+  users:
+    # root's startupScript is deliberately NOT set here: this systemConfig
+    # describes the deployed system itself (rawmaker builds the payload raw
+    # image from it), not the installer environment. The installer environment
+    # gets /root/unattendedinstaller from the separate initrd template
+    # (systemConfig.initramfs.template below) instead - setting it here would
+    # make every root login on the deployed target re-launch the ISO
+    # installer script, which fails trying to mount installation media that
+    # no longer exists.
+    - name: root
+    - name: admin
+      # Generate a SHA-512 password hash from CLI and paste it into `password`.
+      # Example (recommended):
+      #   openssl passwd -6
+      # Example (explicit salt):
+      #   openssl passwd -6 -salt "$(openssl rand -base64 12)"
+      # Example resulting value format:
+      #   password: "$6$<salt>$<hash>"
+      # hash_algo: sha512
+      groups:
+        - sudo
+      sudo: true
+      shell: /bin/bash
+      home: /home/admin
+
+  # placeholder: the deployed stack's own packages (applications/runtime deps,
+  # middleware, drivers, services) go here. No package names are invented in
+  # this sample - fill this list in, optionally backed by a private .deb repo
+  # added under packageRepositories below.
+  packages:
+    - ubuntu-minimal
+    # - <stack-runtime-package>
+    # - <stack-middleware-package>
+    # - <stack-service-package>
+
+  # placeholder: additional stack files (weights, licences, unit files) that
+  # aren't packaged as .debs, e.g.:
+  # additionalFiles:
+  #   - local: ../../custom-stack/models/weights.bin
+  #     final: /opt/custom-stack/models/weights.bin
+
+# placeholder: point at a private package repo if the stack ships its own
+# .debs rather than pulling from the standard Ubuntu archive. packageRepositories
+# is a top-level field, a peer of systemConfig, not a systemConfig child.
+# packageRepositories:
+#   - path: ../../custom-stack/debs

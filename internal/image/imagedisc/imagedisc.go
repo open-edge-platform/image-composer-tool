@@ -455,6 +455,17 @@ func CreateRawFile(filePath string, fileSize string, sudo bool) error {
 	return nil
 }
 
+// PartitionDevicePath returns the device path of partition number
+// partitionNum on diskPath, applying the "p"-infix naming convention used by
+// partitioned loop and NVMe devices (e.g. "/dev/nvme0n1p1"), matching plain
+// numeric suffixes (e.g. "/dev/sda1") for everything else.
+func PartitionDevicePath(diskPath string, partitionNum int) string {
+	if strings.Contains(diskPath, "loop") || strings.Contains(diskPath, "nvme") {
+		return fmt.Sprintf("%sp%d", diskPath, partitionNum)
+	}
+	return fmt.Sprintf("%s%d", diskPath, partitionNum)
+}
+
 func GetDiskNameFromDiskPath(diskPath string) (string, error) {
 	re := regexp.MustCompile(`^/dev/(.*)`)
 	match := re.FindStringSubmatch(diskPath)
@@ -944,12 +955,7 @@ func diskPartitionCreate(
 	}
 
 	// Format partition
-	var diskPartDev string
-	if strings.Contains(diskPath, "loop") || strings.Contains(diskPath, "nvme") {
-		diskPartDev = fmt.Sprintf("%sp%d", diskPath, partitionNum)
-	} else {
-		diskPartDev = fmt.Sprintf("%s%d", diskPath, partitionNum)
-	}
+	diskPartDev := PartitionDevicePath(diskPath, partitionNum)
 
 	if partitionInfo.FsType == "fat32" || partitionInfo.FsType == "fat16" || partitionInfo.FsType == "vfat" {
 		var fatTypeFlag string
@@ -1676,6 +1682,168 @@ func isReadOnlyISO(devicePath string) bool {
 		}
 	}
 	return false
+}
+
+type existingPartitionsOutput struct {
+	BlockDevices []existingPartitionInfo `json:"blockdevices"`
+}
+
+type existingPartitionInfo struct {
+	Name     string `json:"name"`
+	PartType string `json:"parttype"`
+}
+
+// ResolveExistingPartitions maps every partition in partitionsList to its
+// already-created device path on diskPath. It exists for the installer
+// payload deploy path, which writes a pre-partitioned raw image directly to
+// the target block device and so never calls DiskPartitionsCreate there —
+// there is no partIDDiskDevMap coming out of a partitioning step to reuse.
+//
+// The ESP is matched by its well-known GPT type GUID, which survives
+// regardless of on-disk ordering. Every other partition (and the ESP itself,
+// if no device reports the GUID) is matched positionally in template
+// declaration order, since a plain data partition has no other durable
+// per-ID identifier to key off of without re-partitioning.
+// canonicalDiskDeviceName resolves diskPath to the kernel device name (e.g.
+// "sda") lsblk reports in its NAME column, regardless of whether diskPath is
+// a canonical /dev/sdX path or an alias such as /dev/disk/by-id/....
+func canonicalDiskDeviceName(diskPath string) (string, error) {
+	cmd := fmt.Sprintf("lsblk -ndo NAME %s", shell.QuoteArg(diskPath))
+	output, err := shell.ExecCmd(cmd, true, shell.HostPath, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve canonical device name for %s: %w", diskPath, err)
+	}
+	name := strings.TrimSpace(output)
+	if name == "" {
+		return "", fmt.Errorf("lsblk returned an empty device name for %s", diskPath)
+	}
+	return name, nil
+}
+
+// CanonicalDiskPath resolves diskPath (which may be a canonical /dev/sdX path
+// or an alias such as /dev/disk/by-id/...) to the canonical /dev/<name> path
+// lsblk reports, so callers can compare it against SystemBlockDevices'
+// DevicePath and pass a single, consistent path to every downstream disk
+// command instead of the alias the user or selection policy produced.
+func CanonicalDiskPath(diskPath string) (string, error) {
+	name, err := canonicalDiskDeviceName(diskPath)
+	if err != nil {
+		return "", err
+	}
+	return "/dev/" + name, nil
+}
+
+func ResolveExistingPartitions(diskPath string, partitionsList []config.PartitionInfo) (map[string]string, error) {
+	cmd := fmt.Sprintf("lsblk -ln --json -o NAME,PARTTYPE %s", shell.QuoteArg(diskPath))
+	rawOutput, err := shell.ExecCmd(cmd, true, shell.HostPath, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute lsblk command for %s: %w", diskPath, err)
+	}
+
+	var output existingPartitionsOutput
+	if rawOutput != "" {
+		if err := json.Unmarshal([]byte(rawOutput), &output); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal lsblk output for %s: %w", diskPath, err)
+		}
+	}
+
+	// GetDiskNameFromDiskPath only strips a "/dev/" prefix, so an alias like
+	// /dev/disk/by-id/... does not match the "sdX"-style NAME lsblk reports
+	// for the same disk below. Resolve the canonical kernel device name
+	// through lsblk itself instead, so the disk's own row is reliably
+	// skipped regardless of which path form diskPath takes.
+	diskName, err := canonicalDiskDeviceName(diskPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve disk name for %s: %w", diskPath, err)
+	}
+
+	var partitionDevices []string
+	var partitionTypes []string
+	for _, dev := range output.BlockDevices {
+		if dev.Name == diskName {
+			continue // the disk row itself, not one of its partitions
+		}
+		partitionDevices = append(partitionDevices, fmt.Sprintf("/dev/%s", dev.Name))
+		partitionTypes = append(partitionTypes, strings.ToLower(strings.TrimSpace(dev.PartType)))
+	}
+
+	if len(partitionDevices) < len(partitionsList) {
+		return nil, fmt.Errorf("found %d existing partitions on %s, need %d per template",
+			len(partitionDevices), diskPath, len(partitionsList))
+	}
+
+	espGUID, err := PartitionTypeStrToGUID("esp")
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve esp type GUID: %w", err)
+	}
+
+	espDevIdx := -1
+	for devIdx, devType := range partitionTypes {
+		if devType == espGUID {
+			espDevIdx = devIdx
+			break
+		}
+	}
+
+	matched := make([]bool, len(partitionDevices))
+	result := make(map[string]string, len(partitionsList))
+
+	if espDevIdx >= 0 {
+		for _, partitionInfo := range partitionsList {
+			if partitionInfo.Type == "esp" {
+				result[partitionInfo.ID] = partitionDevices[espDevIdx]
+				matched[espDevIdx] = true
+				break
+			}
+		}
+	}
+
+	// Partitions with an explicit index pin to that physical partition number
+	// rather than declaration order, since a valid layout's indexed non-ESP
+	// partitions need not be listed in physical order. Resolve these first so
+	// the positional fallback below only fills the partitions that have none.
+	partitionNumberPattern := regexp.MustCompile(`(\d+)$`)
+	devIdxByPartNum := make(map[int]int, len(partitionDevices))
+	for devIdx, devPath := range partitionDevices {
+		if m := partitionNumberPattern.FindStringSubmatch(devPath); len(m) == 2 {
+			if n, convErr := strconv.Atoi(m[1]); convErr == nil {
+				devIdxByPartNum[n] = devIdx
+			}
+		}
+	}
+	for _, partitionInfo := range partitionsList {
+		if partitionInfo.Index == nil {
+			continue
+		}
+		if _, done := result[partitionInfo.ID]; done {
+			continue
+		}
+		idx, ok := devIdxByPartNum[*partitionInfo.Index]
+		if !ok || matched[idx] {
+			return nil, fmt.Errorf("no existing partition numbered %d on %s for template partition %q (index)",
+				*partitionInfo.Index, diskPath, partitionInfo.ID)
+		}
+		result[partitionInfo.ID] = partitionDevices[idx]
+		matched[idx] = true
+	}
+
+	devIdx := 0
+	for _, partitionInfo := range partitionsList {
+		if _, done := result[partitionInfo.ID]; done {
+			continue
+		}
+		for devIdx < len(partitionDevices) && matched[devIdx] {
+			devIdx++
+		}
+		if devIdx >= len(partitionDevices) {
+			return nil, fmt.Errorf("no existing partition left on %s for template partition %q", diskPath, partitionInfo.ID)
+		}
+		result[partitionInfo.ID] = partitionDevices[devIdx]
+		matched[devIdx] = true
+		devIdx++
+	}
+
+	return result, nil
 }
 
 // BootPartitionConfig returns the partition flags and mount point that should be used

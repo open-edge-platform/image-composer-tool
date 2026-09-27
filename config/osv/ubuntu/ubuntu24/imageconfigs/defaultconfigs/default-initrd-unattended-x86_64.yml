@@ -42,6 +42,14 @@ systemConfig:
     - systemd-boot
     - grub-pc-bin
     - grub-efi-amd64-bin
+    - zstd
+    - xz-utils
+    - gzip
+    - e2fsprogs
+    - xfsprogs
+    - util-linux
+    - fdisk
+    - parted
 
 
   additionalFiles:

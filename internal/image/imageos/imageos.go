@@ -1048,6 +1048,9 @@ func updateRootfsConfig(installRoot string, template *config.ImageTemplate) erro
 	if err := configureFirstBootLastPartitionAutoExpand(installRoot, template); err != nil {
 		return fmt.Errorf("failed to configure first-boot partition auto-expand: %w", err)
 	}
+	if err := configureFirstBootSSHHostKeyRegen(installRoot, template); err != nil {
+		return fmt.Errorf("failed to configure first-boot ssh host key regeneration: %w", err)
+	}
 	if err := updateImageUsrGroup(installRoot, template); err != nil {
 		return fmt.Errorf("failed to update image user/group: %w", err)
 	}
@@ -1075,6 +1078,9 @@ func updateImageConfig(installRoot string, diskPathIdMap map[string]string, temp
 	}
 	if err := configureFirstBootLastPartitionAutoExpand(installRoot, template); err != nil {
 		return fmt.Errorf("failed to configure first-boot partition auto-expand: %w", err)
+	}
+	if err := configureFirstBootSSHHostKeyRegen(installRoot, template); err != nil {
+		return fmt.Errorf("failed to configure first-boot ssh host key regeneration: %w", err)
 	}
 	if err := updateImageUsrGroup(installRoot, template); err != nil {
 		return fmt.Errorf("failed to update image user/group: %w", err)
@@ -1277,6 +1283,67 @@ func configureFirstBootLastPartitionAutoExpand(installRoot string, template *con
 	enableCmd := "systemctl enable --root=\"" + installRoot + "\" " + serviceName
 	if _, err := shell.ExecCmd(enableCmd, true, shell.HostPath, nil); err != nil {
 		return fmt.Errorf("failed to enable first-boot partition auto-expand service: %w", err)
+	}
+
+	return nil
+}
+
+// configureFirstBootSSHHostKeyRegen installs a one-shot systemd service that
+// runs "ssh-keygen -A" (which only fills in missing key types) on first boot.
+// It is only needed for installerPayload deploys with resetInstanceIdentity
+// enabled: live-installer's resetInstanceIdentity (cmd/live-installer/deploy.go)
+// deletes the payload build host's baked-in ssh_host_* keys from the deployed
+// target so every clone doesn't share the same identity, but nothing else on
+// Debian/Ubuntu regenerates them at boot (only openssh-server's postinst runs
+// ssh-keygen -A, once, at package-install time). Modeled on
+// configureFirstBootLastPartitionAutoExpand above.
+func configureFirstBootSSHHostKeyRegen(installRoot string, template *config.ImageTemplate) error {
+	// Deliberately not template.IsInstallerPayloadMode(): this runs against
+	// buildPayloadRaw's synthesized raw-flavored copy of the ISO template
+	// (isomaker.synthesizeRawTemplate), whose Target.ImageType is "raw", so
+	// IsInstallerPayloadMode's imageType:"iso" check is always false there.
+	// systemConfig.installerPayload itself carries over unchanged, so check it
+	// directly instead.
+	if template == nil {
+		return nil
+	}
+	payload := template.SystemConfig.InstallerPayload
+	if payload == nil || !payload.Enabled || !template.ResetInstanceIdentity() {
+		return nil
+	}
+
+	configDir, err := config.ConfigDir()
+	if err != nil {
+		return fmt.Errorf("failed to get config dir: %w", err)
+	}
+	assetDir := filepath.Join(configDir, "osv", "common", "imageconfigs", "firstboot")
+
+	scriptSrc := filepath.Join(assetDir, "ict-regenerate-ssh-host-keys.sh")
+	serviceSrc := filepath.Join(assetDir, "ict-regenerate-ssh-host-keys.service")
+	if _, err := os.Stat(scriptSrc); err != nil {
+		return fmt.Errorf("first-boot ssh host key regeneration script asset is missing: %w", err)
+	}
+	if _, err := os.Stat(serviceSrc); err != nil {
+		return fmt.Errorf("first-boot ssh host key regeneration service asset is missing: %w", err)
+	}
+
+	scriptDst := filepath.Join(installRoot, "usr", "local", "sbin", "ict-regenerate-ssh-host-keys.sh")
+	serviceDst := filepath.Join(installRoot, "etc", "systemd", "system", "ict-regenerate-ssh-host-keys.service")
+	if err := file.CopyFile(scriptSrc, scriptDst, "-p", true); err != nil {
+		return fmt.Errorf("failed to copy first-boot ssh host key regeneration script: %w", err)
+	}
+	if err := file.CopyFile(serviceSrc, serviceDst, "-p", true); err != nil {
+		return fmt.Errorf("failed to copy first-boot ssh host key regeneration service: %w", err)
+	}
+
+	serviceName := "ict-regenerate-ssh-host-keys.service"
+	if _, err := shell.ExecCmd("chmod 0755 "+shell.QuoteArg(scriptDst), true, shell.HostPath, nil); err != nil {
+		return fmt.Errorf("failed to set permissions for first-boot ssh host key regeneration script: %w", err)
+	}
+
+	enableCmd := "systemctl enable --root=\"" + installRoot + "\" " + serviceName
+	if _, err := shell.ExecCmd(enableCmd, true, shell.HostPath, nil); err != nil {
+		return fmt.Errorf("failed to enable first-boot ssh host key regeneration service: %w", err)
 	}
 
 	return nil
