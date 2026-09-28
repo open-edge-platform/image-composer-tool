@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     version="1.1" width="900" height="600" viewBox="-10 -10 920 620">
+  <defs>
+    <marker id="arrowA" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#d97706"/></marker>
+    <marker id="arrowT" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#0d9488"/></marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="450" y="30" text-anchor="middle" font-family="Inter, sans-serif" font-size="20" font-weight="700" fill="#334155">ICT Web UI - Tech Stack Architecture</text>
+
+  <!-- ═══ FRONTEND LAYER ═══ -->
+  <rect x="20" y="55" width="860" height="200" rx="12" fill="#eef2ff" stroke="#6366f1" stroke-width="2"/>
+  <text x="40" y="80" font-family="Inter, sans-serif" font-size="14" font-weight="700" fill="#4f46e5">FRONTEND (web/)</text>
+
+  <!-- React -->
+  <rect x="50" y="95" width="140" height="60" rx="8" fill="#ffffff" stroke="#818cf8" stroke-width="1.5"/>
+  <text x="120" y="122" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" font-weight="600" fill="#334155">React 18</text>
+  <text x="120" y="140" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#64748b">TypeScript SPA</text>
+
+  <!-- Vite -->
+  <rect x="210" y="95" width="140" height="60" rx="8" fill="#ffffff" stroke="#818cf8" stroke-width="1.5"/>
+  <text x="280" y="122" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" font-weight="600" fill="#334155">Vite 6</text>
+  <text x="280" y="140" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#64748b">Build + HMR</text>
+
+  <!-- Shadcn/ui -->
+  <rect x="370" y="95" width="140" height="60" rx="8" fill="#ffffff" stroke="#818cf8" stroke-width="1.5"/>
+  <text x="440" y="122" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" font-weight="600" fill="#334155">Shadcn/ui</text>
+  <text x="440" y="140" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#64748b">Radix + Tailwind</text>
+
+  <!-- Zustand -->
+  <rect x="530" y="95" width="140" height="60" rx="8" fill="#ffffff" stroke="#818cf8" stroke-width="1.5"/>
+  <text x="600" y="122" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" font-weight="600" fill="#334155">Zustand</text>
+  <text x="600" y="140" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#64748b">UI State</text>
+
+  <!-- CodeMirror -->
+  <rect x="690" y="95" width="180" height="60" rx="8" fill="#ffffff" stroke="#818cf8" stroke-width="1.5"/>
+  <text x="780" y="122" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" font-weight="600" fill="#334155">CodeMirror 6</text>
+  <text x="780" y="140" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#64748b">YAML Preview (read-only)</text>
+
+  <!-- UI Views Row -->
+  <rect x="50" y="175" width="200" height="55" rx="8" fill="#e0e7ff" stroke="#6366f1" stroke-width="1"/>
+  <text x="150" y="198" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" font-weight="600" fill="#4338ca">Basic Tab</text>
+  <text x="150" y="215" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#6366f1">Vertical/SKU/Platform/OS</text>
+
+  <rect x="270" y="175" width="200" height="55" rx="8" fill="#e0e7ff" stroke="#6366f1" stroke-width="1"/>
+  <text x="370" y="198" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" font-weight="600" fill="#4338ca">Advanced Tab</text>
+  <text x="370" y="215" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#6366f1">Packages, disk + YAML preview</text>
+
+  <rect x="490" y="175" width="200" height="55" rx="8" fill="#e0e7ff" stroke="#6366f1" stroke-width="1"/>
+  <text x="590" y="198" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" font-weight="600" fill="#4338ca">Build Image Tab</text>
+  <text x="590" y="215" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#6366f1">Logs (SSE), artifacts</text>
+
+  <rect x="710" y="175" width="160" height="55" rx="8" fill="#e0e7ff" stroke="#6366f1" stroke-width="1"/>
+  <text x="790" y="198" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" font-weight="600" fill="#4338ca">Artifacts</text>
+  <text x="790" y="215" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#6366f1">Image + SBOM</text>
+
+  <!-- ═══ COMMUNICATION LAYER ═══ -->
+  <rect x="20" y="270" width="860" height="50" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+  <text x="450" y="295" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" font-weight="600" fill="#92400e">REST (fetch) + SSE (EventSource)  |  OpenAPI 3.0 Contract  |  Type Generation (oapi-codegen + openapi-typescript)</text>
+  <text x="450" y="312" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#b45309">api/v1/openapi-template-builder.yaml = Source of Truth</text>
+
+  <!-- ═══ BACKEND LAYER ═══ -->
+  <rect x="20" y="335" width="860" height="190" rx="12" fill="#f0fdfa" stroke="#0d9488" stroke-width="2"/>
+  <text x="40" y="360" font-family="Inter, sans-serif" font-size="14" font-weight="700" fill="#0f766e">BACKEND (Go single binary)</text>
+
+  <!-- net/http -->
+  <rect x="50" y="375" width="150" height="60" rx="8" fill="#ffffff" stroke="#5eead4" stroke-width="1.5"/>
+  <text x="125" y="402" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" font-weight="600" fill="#334155">net/http</text>
+  <text x="125" y="420" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#64748b">Go 1.22+ ServeMux</text>
+
+  <!-- internal/api -->
+  <rect x="220" y="375" width="150" height="60" rx="8" fill="#ffffff" stroke="#5eead4" stroke-width="1.5"/>
+  <text x="295" y="402" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" font-weight="600" fill="#334155">internal/api/</text>
+  <text x="295" y="420" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#64748b">Handlers + SSE</text>
+
+  <!-- Manifest -->
+  <rect x="390" y="375" width="150" height="60" rx="8" fill="#ffffff" stroke="#5eead4" stroke-width="1.5"/>
+  <text x="465" y="402" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" font-weight="600" fill="#334155">manifest.yaml</text>
+  <text x="465" y="420" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#64748b">Combination &#8594; template</text>
+
+  <!-- ICT adapter -->
+  <rect x="560" y="375" width="150" height="60" rx="8" fill="#ffffff" stroke="#5eead4" stroke-width="1.5"/>
+  <text x="635" y="402" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" font-weight="600" fill="#334155">ICT Adapter</text>
+  <text x="635" y="420" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#64748b">os/exec build</text>
+
+  <!-- embed.FS -->
+  <rect x="730" y="375" width="120" height="60" rx="8" fill="#ffffff" stroke="#5eead4" stroke-width="1.5"/>
+  <text x="790" y="402" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" font-weight="600" fill="#334155">embed.FS</text>
+  <text x="790" y="420" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#64748b">Serves SPA</text>
+
+  <!-- Backend endpoints row -->
+  <rect x="50" y="455" width="190" height="50" rx="8" fill="#ccfbf1" stroke="#0d9488" stroke-width="1"/>
+  <text x="145" y="475" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" font-weight="600" fill="#0f766e">Options endpoints</text>
+  <text x="145" y="492" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#0d9488">/verticals, /platforms, /targets</text>
+
+  <rect x="255" y="455" width="190" height="50" rx="8" fill="#ccfbf1" stroke="#0d9488" stroke-width="1"/>
+  <text x="350" y="475" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" font-weight="600" fill="#0f766e">/templates/compose</text>
+  <text x="350" y="492" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#0d9488">Returns matched template</text>
+
+  <rect x="460" y="455" width="190" height="50" rx="8" fill="#ccfbf1" stroke="#0d9488" stroke-width="1"/>
+  <text x="555" y="475" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" font-weight="600" fill="#0f766e">/builds/* endpoints</text>
+  <text x="555" y="492" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#0d9488">Trigger + SSE logs + artifacts</text>
+
+  <rect x="665" y="455" width="185" height="50" rx="8" fill="#ccfbf1" stroke="#0d9488" stroke-width="1"/>
+  <text x="757" y="475" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" font-weight="600" fill="#0f766e">/packages/search</text>
+  <text x="757" y="492" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#0d9488">Autocomplete (Advanced)</text>
+
+  <!-- ═══ DEV TOOLING LAYER ═══ -->
+  <rect x="20" y="540" width="860" height="60" rx="12" fill="#fff1f2" stroke="#e11d48" stroke-width="2"/>
+  <text x="40" y="563" font-family="Inter, sans-serif" font-size="14" font-weight="700" fill="#be123c">DEV TOOLING</text>
+
+  <rect x="120" y="565" width="90" height="22" rx="4" fill="#ffffff" stroke="#fb7185" stroke-width="1"/>
+  <text x="165" y="580" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" font-weight="500" fill="#be123c">pnpm</text>
+
+  <rect x="225" y="565" width="90" height="22" rx="4" fill="#ffffff" stroke="#fb7185" stroke-width="1"/>
+  <text x="270" y="580" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" font-weight="500" fill="#be123c">Vitest</text>
+
+  <rect x="330" y="565" width="100" height="22" rx="4" fill="#ffffff" stroke="#fb7185" stroke-width="1"/>
+  <text x="380" y="580" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" font-weight="500" fill="#be123c">Playwright</text>
+
+  <rect x="445" y="565" width="130" height="22" rx="4" fill="#ffffff" stroke="#fb7185" stroke-width="1"/>
+  <text x="510" y="580" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" font-weight="500" fill="#be123c">ESLint + Prettier</text>
+
+  <rect x="590" y="565" width="110" height="22" rx="4" fill="#ffffff" stroke="#fb7185" stroke-width="1"/>
+  <text x="645" y="580" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" font-weight="500" fill="#be123c">oapi-codegen</text>
+
+  <rect x="715" y="565" width="110" height="22" rx="4" fill="#ffffff" stroke="#fb7185" stroke-width="1"/>
+  <text x="770" y="580" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" font-weight="500" fill="#be123c">air (hot-reload)</text>
+
+  <!-- Connection arrows -->
+  <line x1="450" y1="255" x2="450" y2="270" stroke="#d97706" stroke-width="2" marker-end="url(#arrowA)"/>
+  <line x1="450" y1="320" x2="450" y2="335" stroke="#0d9488" stroke-width="2" marker-end="url(#arrowT)"/>
+</svg>
