@@ -70,7 +70,16 @@ func IsOutput(name string) bool {
 // isSBOM matches the SPDX manifests ICT writes: create mode emits
 // "spdx_manifest_<deb|rpm>_<image>_<timestamp>.json" and overlay mode emits
 // "<image>.delta.spdx.json" / "<image>.complete.spdx.json".
+//
+// Every SBOM the tool produces is SPDX JSON, so the .json extension is required
+// as well as the name marker. Without it the build directory's own plumbing
+// would be mislabelled an SBOM — "sbom-metadata.yaml", the installer's package
+// metadata sidecar written alongside template-dump.yaml, is the case that
+// forced this.
 func isSBOM(lower string) bool {
+	if !strings.HasSuffix(lower, ".json") {
+		return false
+	}
 	return strings.Contains(lower, "sbom") || strings.Contains(lower, "spdx")
 }
 
