@@ -464,9 +464,11 @@ func createTempGPGKeyFiles(gpgKeyURLs []string) (keyPaths []string, cleanup func
 // repository is trusted, since without knowing which RPM came from which
 // repository there is no safe way to scope the opt-out further.
 //
-// Prefer ValidateOrigins when the mapping from downloaded filename to source
-// URL is known (i.e. right after downloading), since it scopes each
+// The production download path uses ValidateOrigins, which scopes each
 // repository's "[trusted=yes]" opt-out to only that repository's own RPMs.
+// Validate is intentionally retained as the exported entry point for the
+// union check when no per-file origin mapping is available, and is the path
+// the black-box rpmutils_test suite exercises directly.
 func Validate(destDir string) error {
 	return validateUnion(destDir)
 }
@@ -587,23 +589,34 @@ func ValidateOrigins(destDir string, fileOrigins map[string]string, repos []repo
 		return fmt.Errorf("no GPG keys configured for verification")
 	}
 
-	type verifyGroup struct {
-		keys  []string
-		trust bool
-		files []string
-	}
-	// -1 is the fallback group, used for any RPM whose owning repo could not
-	// be determined from fileOrigins/repos.
+	return verifyGroups(groupRPMsByOrigin(rpmPaths, fileOrigins, repos, allKeys))
+}
+
+// verifyGroup is a set of RPMs sharing one GPG-verification policy: verify
+// against keys, or skip when trust is set (the owning repo opted out via
+// "[trusted=yes]").
+type verifyGroup struct {
+	keys  []string
+	trust bool
+	files []string
+}
+
+// groupRPMsByOrigin buckets rpmPaths by the repository each RPM came from,
+// using fileOrigins (filename→source URL) and repos. An RPM whose owning repo
+// can't be determined lands in the fallback group (index -1), which verifies
+// against allKeys — the union of every repo's keys — so an unrecognized origin
+// is never silently exempted.
+func groupRPMsByOrigin(
+	rpmPaths []string, fileOrigins map[string]string, repos []repoOrigin, allKeys []string,
+) map[int]*verifyGroup {
 	groups := map[int]*verifyGroup{
 		-1: {keys: allKeys},
 	}
-
 	for _, rpmPath := range rpmPaths {
 		idx := -1
 		if url, known := fileOrigins[filepath.Base(rpmPath)]; known {
 			idx = matchRepoOrigin(url, repos)
 		}
-
 		g, ok := groups[idx]
 		if !ok {
 			g = &verifyGroup{keys: repos[idx].keys, trust: allKeysTrusted(repos[idx].keys)}
@@ -611,7 +624,14 @@ func ValidateOrigins(destDir string, fileOrigins map[string]string, repos []repo
 		}
 		g.files = append(g.files, rpmPath)
 	}
+	return groups
+}
 
+// verifyGroups verifies each non-empty group's RPMs against that group's keys,
+// skipping any group whose repository opted out via "[trusted=yes]". It returns
+// the first verification failure encountered, or nil if every group passes.
+func verifyGroups(groups map[int]*verifyGroup) error {
+	log := logger.Logger()
 	for _, g := range groups {
 		if len(g.files) == 0 {
 			continue
@@ -641,7 +661,6 @@ func ValidateOrigins(destDir string, fileOrigins map[string]string, repos []repo
 			}
 		}
 	}
-
 	log.Info("all RPMs verified successfully")
 	return nil
 }
