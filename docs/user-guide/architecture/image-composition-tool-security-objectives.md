@@ -33,3 +33,13 @@ mechanism, potentially improving edge node security by supporting secure boot.
 The ICT tool allows you to customize the partition layout,
 including optionally encrypting root partitions, customizing partition sizes,
 and adding partitions for security.
+
+## 5. Web UI Package Search Verification
+
+The web UI's package picker (`GET /packages/search`) verifies a repository's
+`Release` metadata against a local GPG keyring when the repository catalog
+supplies one that exists on disk. Every other repository family is searched
+unverified because it has no genuine local trust anchor available today —
+its signing key is fetched from a remote URL, is an rpm repository signed with
+a same-origin key rather than a separately trusted keyring, or has no key
+configured at all.
