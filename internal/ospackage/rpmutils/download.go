@@ -680,6 +680,48 @@ func matchRepoOrigin(url string, repos []repoOrigin) int {
 	return best
 }
 
+// buildRepoOrigins assembles the per-repository provenance used to scope RPM
+// verification: each repository's package base URL and its raw GPG key value(s).
+// Local repositories (repo.Path != "") come from localRepoOrigins, recorded with
+// the URL LocalUserPackages actually served them from.
+func buildRepoOrigins() []repoOrigin {
+	var origins []repoOrigin
+	if RepoCfg.URL != "" {
+		origins = append(origins, repoOrigin{baseURL: RepoCfg.URL, keys: repoRawKeys(RepoCfg.GPGKey, nil)})
+	}
+	for _, repo := range UserRepo {
+		if repo.Path != "" {
+			continue
+		}
+		origins = append(origins, repoOrigin{baseURL: repo.URL, keys: repoRawKeys(repo.PKey, repo.PKeys)})
+	}
+	return append(origins, localRepoOrigins...)
+}
+
+// purgeTrustedCachedRPMs deletes any cached file whose package will be served
+// this run by a "[trusted=yes]" repository. FetchPackages skips existing
+// non-empty files, so a stale cached file sharing the basename would inherit the
+// trust opt-out and skip verification (CWE-347). Dropping it forces a fresh
+// download, so the opt-out only covers bytes actually fetched from that
+// repository this run. urls and filenames are index-aligned by the caller.
+func purgeTrustedCachedRPMs(destDir string, urls, filenames []string, repos []repoOrigin) {
+	log := logger.Logger()
+	for i, u := range urls {
+		idx := matchRepoOrigin(u, repos)
+		if idx < 0 || !allKeysTrusted(repos[idx].keys) {
+			continue
+		}
+		cached := filepath.Join(destDir, filenames[i])
+		if err := os.Remove(cached); err != nil {
+			if !os.IsNotExist(err) {
+				log.Warnf("could not drop cached %s before trusted re-download: %v", filenames[i], err)
+			}
+			continue
+		}
+		log.Infof("dropped cached %s so it is re-downloaded from its [trusted=yes] source", filenames[i])
+	}
+}
+
 func splitGPGKeyURLs(value string) []string {
 	parts := strings.FieldsFunc(value, func(r rune) bool {
 		return r == ',' || r == '\n' || r == '\r'
@@ -1014,6 +1056,12 @@ func downloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSour
 		return downloadPkgList, nil, fmt.Errorf("creating cache directory %s: %v", absDestDir, err)
 	}
 
+	// Per-repository provenance scopes the "[trusted=yes]" opt-out during
+	// verification. It is built before download because trusted packages must be
+	// force-refreshed first (see purgeTrustedCachedRPMs).
+	origins := buildRepoOrigins()
+	purgeTrustedCachedRPMs(absDestDir, urls, downloadPkgList, origins)
+
 	// Download packages using configured workers and cache directory
 	log.Infof("Downloading %d packages to %s using %d workers", len(urls), absDestDir, config.Workers())
 	if err := pkgfetcher.FetchPackages(runctx.Context(), urls, absDestDir, config.Workers()); err != nil {
@@ -1027,20 +1075,6 @@ func downloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSour
 	for i, u := range urls {
 		fileOrigins[downloadPkgList[i]] = u
 	}
-
-	var origins []repoOrigin
-	if RepoCfg.URL != "" {
-		origins = append(origins, repoOrigin{baseURL: RepoCfg.URL, keys: repoRawKeys(RepoCfg.GPGKey, nil)})
-	}
-	for _, repo := range UserRepo {
-		if repo.Path != "" {
-			// Recorded in localRepoOrigins with the URL it was actually served
-			// from, which LocalUserPackages generates fresh on every call.
-			continue
-		}
-		origins = append(origins, repoOrigin{baseURL: repo.URL, keys: repoRawKeys(repo.PKey, repo.PKeys)})
-	}
-	origins = append(origins, localRepoOrigins...)
 
 	if err := ValidateOrigins(destDir, fileOrigins, origins); err != nil {
 		return downloadPkgList, nil, fmt.Errorf("verification failed: %v", err)

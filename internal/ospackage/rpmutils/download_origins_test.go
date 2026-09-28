@@ -128,3 +128,45 @@ func TestValidateOriginsAllTrustedSkipsVerification(t *testing.T) {
 		t.Fatalf("expected [trusted=yes] repo's own RPM to skip verification, got: %v", err)
 	}
 }
+
+// TestPurgeTrustedCachedRPMsForcesTrustedRedownload is a regression test for the
+// cached-artifact bypass: FetchPackages skips existing files, so a stale cached
+// RPM sharing a basename with a package now served by a [trusted=yes] repo would
+// inherit the opt-out and skip verification (CWE-347). purgeTrustedCachedRPMs
+// must delete the cached file for the trusted package (forcing a fresh download)
+// while leaving cached files for signed or unrecognized origins untouched.
+func TestPurgeTrustedCachedRPMsForcesTrustedRedownload(t *testing.T) {
+	destDir := t.TempDir()
+
+	trusted := "trusted-1.0-1.x86_64.rpm"
+	signed := "signed-1.0-1.x86_64.rpm"
+	unknown := "unknown-1.0-1.x86_64.rpm"
+	for _, name := range []string{trusted, signed, unknown} {
+		if err := os.WriteFile(filepath.Join(destDir, name), []byte("stale bytes"), 0644); err != nil {
+			t.Fatalf("seeding cached %s: %v", name, err)
+		}
+	}
+
+	urls := []string{
+		"http://trusted.local/repo/" + trusted,
+		"http://signed.local/repo/" + signed,
+		"http://elsewhere.local/repo/" + unknown,
+	}
+	filenames := []string{trusted, signed, unknown}
+	repos := []repoOrigin{
+		{baseURL: "http://trusted.local/repo/", keys: []string{"[trusted=yes]"}},
+		{baseURL: "http://signed.local/repo/", keys: []string{"https://signed.local/key.asc"}},
+	}
+
+	purgeTrustedCachedRPMs(destDir, urls, filenames, repos)
+
+	if _, err := os.Stat(filepath.Join(destDir, trusted)); !os.IsNotExist(err) {
+		t.Errorf("expected cached %s to be removed so it is re-downloaded from its [trusted=yes] source, stat err=%v", trusted, err)
+	}
+	if _, err := os.Stat(filepath.Join(destDir, signed)); err != nil {
+		t.Errorf("cached RPM from a signed repo must be kept (it is verified), got stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(destDir, unknown)); err != nil {
+		t.Errorf("cached RPM with an unrecognized origin must be kept (it falls back to verification), got stat err=%v", err)
+	}
+}
