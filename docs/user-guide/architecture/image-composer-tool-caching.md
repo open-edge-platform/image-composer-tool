@@ -9,6 +9,8 @@ The ICT implements sophisticated caching mechanisms to significantly improve bui
   - [Overview of Caching Mechanisms](#overview-of-caching-mechanisms)
   - [Package Caching](#package-caching)
     - [How Package Caching Works](#how-package-caching-works)
+    - [Repository Metadata Caching](#repository-metadata-caching)
+    - [Web UI Package Index Cache](#web-ui-package-index-cache)
     - [Package Cache Organization](#package-cache-organization)
     - [Package Cache Benefits](#package-cache-benefits)
   - [Chroot Environment Reuse](#chroot-environment-reuse)
@@ -136,6 +138,87 @@ file has arrived, so a failed or interrupted refresh cannot leave a partial
 Metadata caching is bypassed entirely for `localhost`/loopback repository URLs
 (a local mirror is assumed to be under active development) and during live-installer
 execution.
+
+### Web UI Package Index Cache
+
+The web UI's package picker reads repository indexes through a **separate,
+in-memory cache** (`internal/api/service/pkgindex`). It shares no state and no
+files with the build-path metadata cache described above.
+
+| | Build path | Web UI picker |
+|---|---|---|
+| Stored | on disk, under `tmp/builds/` | in memory only |
+| Invalidation | `Release` SHA256 checksum | time-to-live, 6 hours by default (2 minutes for a failed fetch) |
+| Retained | indefinitely | 128 indexes or 600,000 packages, whichever binds first |
+| Kept per package | full metadata: dependencies, checksums, file lists | name, version, architecture, one-line summary |
+
+The two are kept apart deliberately:
+
+- **The build path's cache lives in a root-owned directory.** Builds run under
+  `sudo`, so `tmp/builds/` is typically owned by root, while `serve` runs as an
+  ordinary user and could neither read nor rewrite it.
+- **The picker needs far less data.** It renders four fields per package, so it
+  keeps only those. Ubuntu noble `universe` for amd64 is a useful yardstick:
+  64,755 packages, a 69 MB uncompressed index that the build path stores as a
+  64 MB `packages.parsed.json`, against 13.5 MB held as picker entries.
+- **Concurrent HTTP requests must not corrupt each other.** The build-path
+  parsers are driven by package-level mutable state and are not safe to call
+  from several requests at once.
+
+Both retention limits are needed because index sizes vary by two orders of
+magnitude — noble `main` holds 6,099 packages where `universe` holds 64,755 — so
+a count of indexes alone is not a memory bound. The package budget caps the cache
+at roughly 130 MB. An index that alone exceeds the budget is still kept rather
+than dropped and refetched on every request.
+
+The index count is sized against the whole catalog rather than one repository.
+A catalog repository expands to one index per (suite, component, architecture),
+so `ubuntu-noble-base` alone is 12 and a target's full repository set is around
+50. A cap below that evicts an index the next request needs: browsing a
+repository straight after a cross-repository search re-downloaded tens of
+megabytes that were already in memory.
+
+Only the target's own architecture is fetched. A catalog entry commonly lists
+one architecture per publishing host — Ubuntu serves x86_64 from
+`archive.ubuntu.com` and aarch64 from `ports.ubuntu.com` — and an index the
+selected target cannot install from is never requested.
+
+Requests for the same index are **coalesced**: when several browser requests need
+one repository at the same time, the first fetches it and the rest wait for that
+result, so a repository is never downloaded more than once concurrently. The
+fetch itself runs detached from whichever request started it, and each waiter
+still honours its own deadline. That split matters because the package-search
+stream is cancelled on every keystroke: were the download bound to the request
+that began it, abandoning that request would hand a cancellation to every other
+request waiting on the same index. Instead the download finishes and warms the
+cache for the next keystroke. Nothing in this cache is written to disk, so it is
+empty after every `serve` restart and needs no clean-up.
+
+**Failed fetches are cached too, briefly** — two minutes by default, against six
+hours for a successful one. A search fans out across every repository the target
+offers, so without this an unreachable mirror is redialled on every keystroke and
+costs its full TCP dial timeout each time. The short lifetime is deliberate: it
+exists to stop a dead mirror being retried within one search session, not to
+remember an outage, so a repository that comes back is picked up within minutes.
+Failures are held separately from parsed indexes rather than as a variant of
+them, because the two retention limits above bound *memory*: a remembered failure
+holds no packages, and letting it consume one of the 24 index slots would let a
+handful of dead mirrors evict real indexes.
+
+**GPG verification is conditional, per repository.** A repository whose catalog
+entry names a local keyring path fetches and verifies that repository's
+`Release`/`Release.gpg`, and checks the fetched index's checksum against
+`Release`, before the index is searched. A repository with no configured
+keyring, or one whose configured keyring path doesn't exist on disk, is
+searched unverified rather than failing the request — the same tolerance the
+cache already applies to a fetch error. Today only the Ubuntu base repositories
+(`ubuntu-noble-base`, `ubuntu-resolute-base`) carry a genuine local trust
+anchor, the archive keyring apt itself installs at
+`/usr/share/keyrings/ubuntu-archive-keyring.gpg`; every other catalog entry is
+unverified by design, not oversight. A failed verification drops that
+repository's contribution to the search results and logs a warning rather than
+failing the whole request, so one broken or tampered mirror can't take down
+search for every other repository.
 
 ### Package Cache Organization
 
