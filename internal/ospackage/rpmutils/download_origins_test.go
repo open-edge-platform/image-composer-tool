@@ -158,7 +158,9 @@ func TestPurgeTrustedCachedRPMsForcesTrustedRedownload(t *testing.T) {
 		{baseURL: "http://signed.local/repo/", keys: []string{"https://signed.local/key.asc"}},
 	}
 
-	purgeTrustedCachedRPMs(destDir, urls, filenames, repos)
+	if err := purgeTrustedCachedRPMs(destDir, urls, filenames, repos); err != nil {
+		t.Fatalf("purgeTrustedCachedRPMs returned an unexpected error: %v", err)
+	}
 
 	if _, err := os.Stat(filepath.Join(destDir, trusted)); !os.IsNotExist(err) {
 		t.Errorf("expected cached %s to be removed so it is re-downloaded from its [trusted=yes] source, stat err=%v", trusted, err)
@@ -168,5 +170,31 @@ func TestPurgeTrustedCachedRPMsForcesTrustedRedownload(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(destDir, unknown)); err != nil {
 		t.Errorf("cached RPM with an unrecognized origin must be kept (it falls back to verification), got stat err=%v", err)
+	}
+}
+
+// TestPurgeTrustedCachedRPMsFailsWhenCacheCannotBeRemoved is a regression test
+// for the review comment that a removal failure must be fatal: if the stale
+// cached file cannot be deleted, FetchPackages would skip the download and the
+// old bytes would inherit the [trusted=yes] opt-out, so the helper must return
+// an error rather than continue.
+func TestPurgeTrustedCachedRPMsFailsWhenCacheCannotBeRemoved(t *testing.T) {
+	destDir := t.TempDir()
+
+	trusted := "trusted-1.0-1.x86_64.rpm"
+	// A non-empty directory at the cached path makes os.Remove fail with a
+	// non-IsNotExist error, standing in for any undeletable cache entry.
+	if err := os.MkdirAll(filepath.Join(destDir, trusted, "child"), 0755); err != nil {
+		t.Fatalf("seeding undeletable cache entry: %v", err)
+	}
+
+	urls := []string{"http://trusted.local/repo/" + trusted}
+	filenames := []string{trusted}
+	repos := []repoOrigin{
+		{baseURL: "http://trusted.local/repo/", keys: []string{"[trusted=yes]"}},
+	}
+
+	if err := purgeTrustedCachedRPMs(destDir, urls, filenames, repos); err == nil {
+		t.Fatal("expected an error when a trusted repo's cached file cannot be removed")
 	}
 }

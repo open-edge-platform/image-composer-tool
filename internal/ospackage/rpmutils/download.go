@@ -703,8 +703,10 @@ func buildRepoOrigins() []repoOrigin {
 // non-empty files, so a stale cached file sharing the basename would inherit the
 // trust opt-out and skip verification (CWE-347). Dropping it forces a fresh
 // download, so the opt-out only covers bytes actually fetched from that
-// repository this run. urls and filenames are index-aligned by the caller.
-func purgeTrustedCachedRPMs(destDir string, urls, filenames []string, repos []repoOrigin) {
+// repository this run. A removal failure is fatal: leaving the stale file would
+// reopen the bypass, so the caller must not fetch. urls and filenames are
+// index-aligned by the caller.
+func purgeTrustedCachedRPMs(destDir string, urls, filenames []string, repos []repoOrigin) error {
 	log := logger.Logger()
 	for i, u := range urls {
 		idx := matchRepoOrigin(u, repos)
@@ -712,14 +714,16 @@ func purgeTrustedCachedRPMs(destDir string, urls, filenames []string, repos []re
 			continue
 		}
 		cached := filepath.Join(destDir, filenames[i])
-		if err := os.Remove(cached); err != nil {
-			if !os.IsNotExist(err) {
-				log.Warnf("could not drop cached %s before trusted re-download: %v", filenames[i], err)
-			}
-			continue
+		switch err := os.Remove(cached); {
+		case err == nil:
+			log.Infof("dropped cached %s so it is re-downloaded from its [trusted=yes] source", filenames[i])
+		case os.IsNotExist(err):
+			// Nothing cached; the fresh download will fetch it.
+		default:
+			return fmt.Errorf("removing cached %s for trusted re-download: %w", filenames[i], err)
 		}
-		log.Infof("dropped cached %s so it is re-downloaded from its [trusted=yes] source", filenames[i])
 	}
+	return nil
 }
 
 func splitGPGKeyURLs(value string) []string {
@@ -1060,7 +1064,9 @@ func downloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSour
 	// verification. It is built before download because trusted packages must be
 	// force-refreshed first (see purgeTrustedCachedRPMs).
 	origins := buildRepoOrigins()
-	purgeTrustedCachedRPMs(absDestDir, urls, downloadPkgList, origins)
+	if err := purgeTrustedCachedRPMs(absDestDir, urls, downloadPkgList, origins); err != nil {
+		return downloadPkgList, nil, fmt.Errorf("preparing trusted-repository downloads: %w", err)
+	}
 
 	// Download packages using configured workers and cache directory
 	log.Infof("Downloading %d packages to %s using %d workers", len(urls), absDestDir, config.Workers())
