@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/artifact"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 )
 
@@ -49,7 +51,7 @@ func isTerminal(s BuildStatus) bool {
 // Artifact describes one output file (image or SBOM).
 type Artifact struct {
 	Name string `json:"name"`
-	Type string `json:"type"` // "image" | "sbom"
+	Type string `json:"type"` // "image" | "sbom" | "unknown" (see internal/utils/artifact)
 	Path string `json:"path"`
 	Size string `json:"size,omitempty"` // human-readable, e.g. "1.13 GB" (from ICT output)
 }
@@ -140,6 +142,10 @@ func (b *build) snapshot() Result {
 	defer b.mu.Unlock()
 	arts := make([]Artifact, len(b.artifacts))
 	copy(arts, b.artifacts)
+	// Ordered at this read boundary rather than where each list is built, so it
+	// holds for every consumer — including a past build reconstructed from a
+	// meta.json that was written before this ordering existed.
+	sortArtifacts(arts)
 	return Result{Status: b.status, Artifacts: arts, ErrMsg: b.errMsg, LogFile: b.LogFile, Residual: b.residual}
 }
 
@@ -1085,6 +1091,26 @@ func parseArtifacts(logs []string) []Artifact {
 	return out
 }
 
+// sortArtifacts puts the images the user asked for first and the SBOM last,
+// leaving anything unclassified in between so an SBOM is the final row whatever
+// else the build emitted. Applied by snapshot(), so a live completion and a
+// reloaded history build list outputs in the same order rather than inheriting
+// ICT's log order in one and the directory walk's alphabetical order in the
+// other. The sort is stable, so each source's own order survives within a group.
+func sortArtifacts(arts []Artifact) {
+	rank := func(a Artifact) int {
+		switch artifact.Type(a.Type) {
+		case artifact.TypeImage:
+			return 0
+		case artifact.TypeSBOM:
+			return 2
+		default:
+			return 1
+		}
+	}
+	slices.SortStableFunc(arts, func(a, b Artifact) int { return rank(a) - rank(b) })
+}
+
 // extractPath returns the trailing absolute path on a log line, or "".
 func extractPath(line string) string {
 	// Logger lines are tab-separated: "<ts>\t<LEVEL>\t<source:line>\t<message>".
@@ -1101,17 +1127,20 @@ func extractPath(line string) string {
 	return line
 }
 
-// classifyArtifact labels an output file as "sbom" or "image" by name.
+// classifyArtifact labels an output file by name. It reports whatever the shared
+// rules recognise and "unknown" for anything else — this path scrapes ICT's log
+// text, so it must report a line it cannot place rather than assume it is an image.
 func classifyArtifact(name string) string {
-	lower := strings.ToLower(name)
-	if strings.Contains(lower, "sbom") || strings.Contains(lower, "spdx") {
-		return "sbom"
-	}
-	return "image"
+	return string(artifact.Classify(name))
 }
 
 // discoverArtifacts scans the build work dir for image + SBOM outputs. Used as a
-// fallback when ICT's artifact block cannot be parsed from the logs.
+// fallback when ICT's artifact block cannot be parsed from the logs, and to
+// surface partial outputs after a failed or cancelled compose.
+//
+// Unlike classifyArtifact this drops what it cannot recognise: it walks the whole
+// work dir, which holds the chroot and every intermediate the build touched, so
+// reporting unclassified files here would bury the real outputs.
 func discoverArtifacts(workDir string) []Artifact {
 	var out []Artifact
 	_ = filepath.WalkDir(workDir, func(path string, d os.DirEntry, err error) error {
@@ -1119,22 +1148,15 @@ func discoverArtifacts(workDir string) []Artifact {
 			return nil
 		}
 		name := d.Name()
-		lower := strings.ToLower(name)
-		var typ string
-		switch {
-		case strings.Contains(lower, "sbom") || strings.HasSuffix(lower, ".spdx.json"):
-			typ = "sbom"
-		case strings.HasSuffix(lower, ".raw"), strings.HasSuffix(lower, ".raw.gz"),
-			strings.HasSuffix(lower, ".iso"), strings.HasSuffix(lower, ".qcow2"):
-			typ = "image"
-		default:
+		typ := artifact.Classify(name)
+		if typ == artifact.TypeUnknown {
 			return nil
 		}
 		size := ""
 		if fi, statErr := d.Info(); statErr == nil {
 			size = humanSize(fi.Size())
 		}
-		out = append(out, Artifact{Name: name, Type: typ, Path: path, Size: size})
+		out = append(out, Artifact{Name: name, Type: string(typ), Path: path, Size: size})
 		return nil
 	})
 	return out
