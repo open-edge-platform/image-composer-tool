@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -668,5 +669,47 @@ func TestRefreshRepoMetadataWithRetry_PersistentFailureStillErrors(t *testing.T)
 	}
 	if string(got) != original {
 		t.Errorf("Release was modified despite persistent verification failure:\n got %q\nwant %q", got, original)
+	}
+}
+
+// TestRefreshRepoMetadataWithRetry_DialsFreshConnectionPerAttempt confirms the
+// retry loop drops pooled keep-alive connections between attempts, so each
+// attempt opens a new connection instead of reusing the one that just served a
+// mismatched Release/Release.gpg pair. Without CloseIdleConnections the shared
+// secure client would reuse the pooled connection to the same backend, and the
+// server would observe a single connection across all attempts.
+func TestRefreshRepoMetadataWithRetry_DialsFreshConnectionPerAttempt(t *testing.T) {
+	originalDelay := metadataRefreshRetryDelay
+	t.Cleanup(func() { metadataRefreshRetryDelay = originalDelay })
+	metadataRefreshRetryDelay = time.Millisecond
+
+	dir := t.TempDir()
+	release := filepath.Join(dir, "Release")
+	if err := os.WriteFile(release, []byte("Suite: stable\n"), 0644); err != nil {
+		t.Fatalf("writing Release: %v", err)
+	}
+
+	var newConns atomic.Int32
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("Suite: stable\n"))
+	}))
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			newConns.Add(1)
+		}
+	}
+	server.Start()
+	t.Cleanup(server.Close)
+
+	// Fail verify on every attempt so all maxMetadataRefreshAttempts run and
+	// each re-fetches from the server.
+	verify := func(string) error { return fmt.Errorf("simulated persistent mismatch") }
+
+	_, _ = refreshRepoMetadataWithRetry(dir, []string{release}, []string{server.URL + "/Release"}, verify)
+
+	if got := newConns.Load(); got < maxMetadataRefreshAttempts {
+		t.Errorf("expected a fresh connection per attempt (>= %d), got %d; "+
+			"retries may be reusing pooled connections to the same backend",
+			maxMetadataRefreshAttempts, got)
 	}
 }

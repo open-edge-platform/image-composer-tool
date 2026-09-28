@@ -21,6 +21,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/pkgfetcher"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/network"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/runctx"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
@@ -237,11 +238,20 @@ var metadataRefreshRetryDelay = 2 * time.Second
 // bounded number of times before giving up. Some CDN-backed mirrors serve
 // Release and Release.gpg from backend nodes that have briefly fallen out of
 // sync with each other, producing a signature mismatch that a subsequent
-// fetch — likely landing on a different backend node — typically resolves
-// within moments, without a human having to re-run CI. A persistent failure
-// still returns the last error after the attempts are exhausted, so the
-// existing haveLocalMeta-based fallback in ParseRepositoryMetadata is
-// unaffected.
+// fetch typically resolves within moments, without a human having to re-run
+// CI.
+//
+// Between attempts it drops the shared secure client's pooled keep-alive
+// connections. FetchPackages fetches through network.GetSecureHTTPClient(), a
+// process-wide singleton with keep-alives on; without this a retry landing
+// only metadataRefreshRetryDelay later would reuse the same TCP/TLS connection
+// to the same CDN backend and re-fetch the identical mismatched pair. Forcing
+// a fresh dial lets the CDN route the retry to a different, self-consistent
+// backend node, which is what actually clears the transient mismatch.
+//
+// A persistent failure still returns the last error after the attempts are
+// exhausted, so the existing haveLocalMeta-based fallback in
+// ParseRepositoryMetadata is unaffected.
 func refreshRepoMetadataWithRetry(
 	pkgMetaDir string, localFiles, urls []string, verify func(stageDir string) error,
 ) (refreshed bool, err error) {
@@ -257,6 +267,10 @@ func refreshRepoMetadataWithRetry(
 		logger.Logger().Warnf(
 			"refreshing repo metadata failed on attempt %d/%d (%v); retrying, since this "+
 				"is often a transient mirror sync issue", attempt, maxMetadataRefreshAttempts, err)
+		// Drop pooled keep-alive connections so the next attempt dials fresh
+		// and the CDN can route it to a different backend node, rather than
+		// reusing the connection that just served the mismatched pair.
+		network.GetSecureHTTPClient().CloseIdleConnections()
 		time.Sleep(metadataRefreshRetryDelay)
 	}
 	return refreshed, err
