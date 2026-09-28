@@ -362,15 +362,8 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 		}
 	}
 
-	verifyStagedMetadata := func(stageDir string) error {
-		stagedRelease := filepath.Join(stageDir, metadataFileName(localReleaseFile))
-		stagedReleaseSign := filepath.Join(stageDir, metadataFileName(localReleaseSign))
-		stagedPBGPGKey := localPBGPGKey
-		if pbkeyIsURL {
-			stagedPBGPGKey = filepath.Join(stageDir, metadataFileName(localPBGPGKey))
-		}
-
-		verified, err := VerifyRelease(stagedRelease, stagedReleaseSign, stagedPBGPGKey)
+	verifyReleaseFiles := func(release, releaseSign, pbKey string) error {
+		verified, err := VerifyRelease(release, releaseSign, pbKey)
 		if err != nil {
 			return fmt.Errorf("failed to verify release file: %w", err)
 		}
@@ -380,6 +373,16 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 		return nil
 	}
 
+	verifyStagedMetadata := func(stageDir string) error {
+		stagedRelease := filepath.Join(stageDir, metadataFileName(localReleaseFile))
+		stagedReleaseSign := filepath.Join(stageDir, metadataFileName(localReleaseSign))
+		stagedPBGPGKey := localPBGPGKey
+		if pbkeyIsURL {
+			stagedPBGPGKey = filepath.Join(stageDir, metadataFileName(localPBGPGKey))
+		}
+		return verifyReleaseFiles(stagedRelease, stagedReleaseSign, stagedPBGPGKey)
+	}
+
 	refreshed, refreshErr := refreshRepoMetadata(
 		pkgMetaDir, metaLocalFiles, metaURLList, verifyStagedMetadata)
 	switch {
@@ -387,6 +390,16 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 		// Nothing cached to fall back to, so this is fatal — as it was before.
 		return nil, fmt.Errorf("failed to fetch critical repo config packages: %w", refreshErr)
 	case refreshErr != nil:
+		// A refresh that fails mid-rename can leave the on-disk set mixed (e.g. a
+		// fresh Release.gpg beside a stale Release), so re-verify the persistent
+		// set before trusting it rather than assuming it is still the consistent
+		// copy a previous refresh committed. Trusted repos carry no signature to
+		// check and their single-file rename can't be partial, so they are exempt.
+		if !isTrustedRepo {
+			if verifyErr := verifyReleaseFiles(localReleaseFile, localReleaseSign, localPBGPGKey); verifyErr != nil {
+				return nil, fmt.Errorf("refresh for %s failed and the cached metadata no longer verifies: %w", baseURL, verifyErr)
+			}
+		}
 		log.Warnf("Could not refresh metadata for %s (%v); continuing with previously "+
 			"downloaded metadata, which may name package versions the repository no "+
 			"longer serves", baseURL, refreshErr)

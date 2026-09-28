@@ -522,3 +522,58 @@ func TestRefreshRepoMetadata_VerifiesBeforeCommit(t *testing.T) {
 		}
 	}
 }
+
+// TestParseRepositoryMetadata_FallbackReverifiesPersistentSet is a regression
+// test for the review comment that a failed refresh must not proceed on an
+// unverified on-disk set. A partial rename in refreshRepoMetadata can leave
+// Release and Release.gpg mismatched; when the subsequent refresh fails, the
+// fallback must re-verify the persistent set and refuse to use it when it no
+// longer agrees, instead of parsing it.
+func TestParseRepositoryMetadata_FallbackReverifiesPersistentSet(t *testing.T) {
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "repo.gpg")
+
+	entity, err := openpgp.NewEntity("Repository", "test", "repo@example.invalid", nil)
+	if err != nil {
+		t.Fatalf("creating signing entity: %v", err)
+	}
+	var publicKey bytes.Buffer
+	if err := entity.Serialize(&publicKey); err != nil {
+		t.Fatalf("serializing public key: %v", err)
+	}
+	if err := os.WriteFile(keyPath, publicKey.Bytes(), 0o644); err != nil {
+		t.Fatalf("writing key: %v", err)
+	}
+
+	// Persist a Release that disagrees with its signature, standing in for a
+	// mixed set left behind by a partial rename.
+	var signature bytes.Buffer
+	if err := openpgp.DetachSign(&signature, entity, bytes.NewReader([]byte("Suite: signed\n")), nil); err != nil {
+		t.Fatalf("signing: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "Release"), []byte("Suite: tampered\n"), 0o644); err != nil {
+		t.Fatalf("writing Release: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "Release.gpg"), signature.Bytes(), 0o644); err != nil {
+		t.Fatalf("writing Release.gpg: %v", err)
+	}
+
+	// A 404 makes the refresh fail fast (FetchPackages does not retry 404), so
+	// the fallback runs against the persistent, mismatched set.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	t.Cleanup(server.Close)
+
+	_, err = ParseRepositoryMetadata(
+		server.URL+"/", "Packages.gz",
+		server.URL+"/Release", server.URL+"/Release.gpg",
+		keyPath, dir, "amd64", nil,
+	)
+	if err == nil {
+		t.Fatal("expected an error: the persistent metadata does not verify and must not be used")
+	}
+	if !strings.Contains(err.Error(), "no longer verifies") {
+		t.Errorf("expected a re-verification error, got: %v", err)
+	}
+}
