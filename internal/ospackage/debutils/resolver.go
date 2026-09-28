@@ -3,6 +3,7 @@ package debutils
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -211,7 +212,7 @@ func refreshRepoMetadata(
 	}
 
 	if err := verify(stageDir); err != nil {
-		return false, fmt.Errorf("verifying refreshed metadata: %w", err)
+		return false, fmt.Errorf("%w: %w", errMetadataVerify, err)
 	}
 
 	for _, f := range localFiles {
@@ -234,12 +235,19 @@ const maxMetadataRefreshAttempts = 3
 
 var metadataRefreshRetryDelay = 2 * time.Second
 
-// refreshRepoMetadataWithRetry retries refreshRepoMetadata (fetch + verify) a
-// bounded number of times before giving up. Some CDN-backed mirrors serve
-// Release and Release.gpg from backend nodes that have briefly fallen out of
-// sync with each other, producing a signature mismatch that a subsequent
-// fetch typically resolves within moments, without a human having to re-run
-// CI.
+// errMetadataVerify marks a refresh that failed signature/metadata verification
+// — the only failure class refreshRepoMetadataWithRetry retries, since a re-fetch
+// from a freshly synced mirror node can clear it. Download, filesystem, and
+// cancellation errors are returned unwrapped and are not retried.
+var errMetadataVerify = errors.New("verifying refreshed metadata")
+
+// refreshRepoMetadataWithRetry retries refreshRepoMetadata a bounded number of
+// times, but only when it fails signature/metadata verification
+// (errMetadataVerify). Some CDN-backed mirrors serve Release and Release.gpg
+// from backend nodes that have briefly fallen out of sync with each other,
+// producing a signature mismatch that a subsequent fetch typically resolves
+// within moments, without a human having to re-run CI. Download, filesystem,
+// and cancellation errors are deterministic here and returned immediately.
 //
 // Between attempts it drops the shared secure client's pooled keep-alive
 // connections. FetchPackages fetches through network.GetSecureHTTPClient(), a
@@ -259,6 +267,13 @@ func refreshRepoMetadataWithRetry(
 		refreshed, err = refreshRepoMetadata(pkgMetaDir, localFiles, urls, verify)
 		if err == nil {
 			return refreshed, nil
+		}
+		// Retry only a verification mismatch: a re-fetch may land on a freshly
+		// synced mirror node. Download, filesystem, and cancellation errors are
+		// deterministic here (FetchPackages already does its own HTTP retries),
+		// so propagate them immediately without consuming the retry budget.
+		if !errors.Is(err, errMetadataVerify) || runctx.Context().Err() != nil {
+			return refreshed, err
 		}
 		if attempt == maxMetadataRefreshAttempts {
 			break

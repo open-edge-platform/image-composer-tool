@@ -705,11 +705,60 @@ func TestRefreshRepoMetadataWithRetry_DialsFreshConnectionPerAttempt(t *testing.
 	// each re-fetches from the server.
 	verify := func(string) error { return fmt.Errorf("simulated persistent mismatch") }
 
-	_, _ = refreshRepoMetadataWithRetry(dir, []string{release}, []string{server.URL + "/Release"}, verify)
+	refreshed, err := refreshRepoMetadataWithRetry(dir, []string{release}, []string{server.URL + "/Release"}, verify)
+	if err == nil {
+		t.Fatal("expected an error after every verification attempt fails")
+	}
+	if refreshed {
+		t.Error("expected refreshed=false when every attempt fails verification")
+	}
 
 	if got := newConns.Load(); got < maxMetadataRefreshAttempts {
 		t.Errorf("expected a fresh connection per attempt (>= %d), got %d; "+
 			"retries may be reusing pooled connections to the same backend",
 			maxMetadataRefreshAttempts, got)
+	}
+}
+
+// TestRefreshRepoMetadataWithRetry_DoesNotRetryFetchErrors confirms only a
+// verification mismatch is retried. A deterministic fetch failure (HTTP 404,
+// which FetchPackages does not itself retry) must return immediately without
+// consuming the retry budget or running verify.
+func TestRefreshRepoMetadataWithRetry_DoesNotRetryFetchErrors(t *testing.T) {
+	originalDelay := metadataRefreshRetryDelay
+	t.Cleanup(func() { metadataRefreshRetryDelay = originalDelay })
+	metadataRefreshRetryDelay = time.Millisecond
+
+	dir := t.TempDir()
+	release := filepath.Join(dir, "Release")
+	if err := os.WriteFile(release, []byte("Suite: stable\n"), 0644); err != nil {
+		t.Fatalf("writing Release: %v", err)
+	}
+
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	t.Cleanup(server.Close)
+
+	var verifyCalls atomic.Int32
+	verify := func(string) error {
+		verifyCalls.Add(1)
+		return nil
+	}
+
+	refreshed, err := refreshRepoMetadataWithRetry(dir, []string{release}, []string{server.URL + "/Release"}, verify)
+	if err == nil {
+		t.Fatal("expected an error for a non-verify (fetch) failure")
+	}
+	if refreshed {
+		t.Error("expected refreshed=false on a fetch failure")
+	}
+	if got := requests.Load(); got != 1 {
+		t.Errorf("a non-verify error must not be retried: expected exactly 1 fetch, got %d", got)
+	}
+	if got := verifyCalls.Load(); got != 0 {
+		t.Errorf("verify must not run when the fetch fails, got %d call(s)", got)
 	}
 }
