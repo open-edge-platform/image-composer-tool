@@ -286,7 +286,16 @@ func refreshRepoMetadataWithRetry(
 		// and the CDN can route it to a different backend node, rather than
 		// reusing the connection that just served the mismatched pair.
 		network.GetSecureHTTPClient().CloseIdleConnections()
-		time.Sleep(metadataRefreshRetryDelay)
+
+		// Cancel-aware backoff: a SIGINT/SIGTERM during the wait aborts promptly
+		// instead of blocking for the full delay before the next fetch sees it.
+		timer := time.NewTimer(metadataRefreshRetryDelay)
+		select {
+		case <-runctx.Context().Done():
+			timer.Stop()
+			return refreshed, fmt.Errorf("metadata refresh cancelled during retry backoff: %w", runctx.Context().Err())
+		case <-timer.C:
+		}
 	}
 	return refreshed, err
 }

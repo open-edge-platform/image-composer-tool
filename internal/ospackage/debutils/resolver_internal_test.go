@@ -3,6 +3,7 @@ package debutils
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/runctx"
 )
 
 func TestIsGlobPattern(t *testing.T) {
@@ -760,5 +762,52 @@ func TestRefreshRepoMetadataWithRetry_DoesNotRetryFetchErrors(t *testing.T) {
 	}
 	if got := verifyCalls.Load(); got != 0 {
 		t.Errorf("verify must not run when the fetch fails, got %d call(s)", got)
+	}
+}
+
+// TestRefreshRepoMetadataWithRetry_BackoffIsCancellable is a regression test for
+// the review comment that the retry backoff must observe context cancellation.
+// With the run context cancelled mid-backoff, the helper must return promptly
+// instead of sleeping out the full delay before the next fetch notices.
+func TestRefreshRepoMetadataWithRetry_BackoffIsCancellable(t *testing.T) {
+	originalDelay := metadataRefreshRetryDelay
+	t.Cleanup(func() { metadataRefreshRetryDelay = originalDelay })
+	// Long enough that an unbroken sleep would dominate the elapsed time.
+	metadataRefreshRetryDelay = 2 * time.Second
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	restore := runctx.SetContext(ctx)
+	t.Cleanup(restore)
+
+	dir := t.TempDir()
+	release := filepath.Join(dir, "Release")
+	if err := os.WriteFile(release, []byte("Suite: stable\n"), 0644); err != nil {
+		t.Fatalf("writing Release: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("Suite: stable\n"))
+	}))
+	t.Cleanup(server.Close)
+
+	// A verification mismatch drives the loop into the backoff; cancel while it
+	// is waiting.
+	verify := func(string) error { return fmt.Errorf("simulated transient mismatch") }
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	_, err := refreshRepoMetadataWithRetry(dir, []string{release}, []string{server.URL + "/Release"}, verify)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected an error when the run context is cancelled during backoff")
+	}
+	if elapsed >= time.Second {
+		t.Errorf("backoff ignored cancellation: returned after %s, want prompt cancellation (delay was %s)",
+			elapsed, metadataRefreshRetryDelay)
 	}
 }
