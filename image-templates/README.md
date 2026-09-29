@@ -26,9 +26,9 @@ Templates are grouped by the distribution they target — the value of
 | [`azl3/`](./azl3/) | Azure Linux 3 | 6 | 5 |
 | [`elxr13/`](./elxr13/) | Wind River eLxr 13 (26.04) | 5 | 4 |
 | [`el10/`](./el10/) | Red Hat compatible 10 | 2 | 0 |
-| [`ubuntu26/`](./ubuntu26/) | Ubuntu 26.04 | 1 | 0 |
+| [`ubuntu26/`](./ubuntu26/) | Ubuntu 26.04 | 2 | 0 |
 | _(root)_ | root-level templates | 6 | 0 |
-| | **Total** | **63** | **24** |
+| | **Total** | **64** | **24** |
 
 The `_(root)_` row counts templates that live directly under `image-templates/`
 rather than in a distribution subdirectory.
