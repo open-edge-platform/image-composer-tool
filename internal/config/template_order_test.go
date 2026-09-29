@@ -62,7 +62,7 @@ func topLevelKeys(t *testing.T, data []byte) []string {
 	return keys
 }
 
-// TestTemplateMetadataRoundTrips guards the discovery block every curated
+// TestTemplateMetadataRoundTrips guards the discovery block the curated
 // template opens with: it has no effect on a build, so nothing else would notice
 // it being dropped — but a resolved template that silently loses its parent's
 // description is not the template the user authored.
@@ -94,6 +94,86 @@ func TestTemplateMetadataRoundTrips(t *testing.T) {
 	}
 	if round.Metadata == nil || round.Metadata.Description != tpl.Metadata.Description {
 		t.Errorf("metadata did not survive marshal round-trip: %+v", round.Metadata)
+	}
+}
+
+// TestTemplateMetadataDoesNotInherit covers the merge contract stated in
+// image-templates/COMPOSITION.md: metadata is read per file, so a layer gets
+// whatever it declares and nothing when it declares none. MergeConfigurations
+// starts from a copy of the parent, so this only holds because the assignment
+// is unconditional — a guard would silently reintroduce inheritance.
+func TestTemplateMetadataDoesNotInherit(t *testing.T) {
+	parent := &ImageTemplate{
+		Metadata: &TemplateMetadata{
+			Description: "parent description",
+			UseCases:    []string{"parent use case"},
+			Keywords:    []string{"parent"},
+		},
+	}
+
+	t.Run("child_without_metadata_emits_none", func(t *testing.T) {
+		merged, err := MergeConfigurations(&ImageTemplate{}, parent)
+		if err != nil {
+			t.Fatalf("merge: %v", err)
+		}
+		if merged.Metadata != nil {
+			t.Errorf("metadata = %+v, want nil — a child that declares none inherits none", merged.Metadata)
+		}
+	})
+
+	t.Run("child_with_metadata_replaces_parent", func(t *testing.T) {
+		child := &ImageTemplate{Metadata: &TemplateMetadata{Description: "child description"}}
+		merged, err := MergeConfigurations(child, parent)
+		if err != nil {
+			t.Fatalf("merge: %v", err)
+		}
+		if merged.Metadata == nil || merged.Metadata.Description != "child description" {
+			t.Fatalf("description = %+v, want the child's", merged.Metadata)
+		}
+		// Replacement is whole-block, so fields the child omitted are empty
+		// rather than filled in from the parent.
+		if len(merged.Metadata.UseCases) != 0 || len(merged.Metadata.Keywords) != 0 {
+			t.Errorf("use_cases=%v keywords=%v, want both empty — the block is replaced, not merged",
+				merged.Metadata.UseCases, merged.Metadata.Keywords)
+		}
+	})
+
+	t.Run("parent_metadata_survives_when_no_child_layer", func(t *testing.T) {
+		// A single template resolved against an OS default (which carries no
+		// metadata) keeps its own block: it is the user layer here.
+		merged, err := MergeConfigurations(parent, &ImageTemplate{})
+		if err != nil {
+			t.Fatalf("merge: %v", err)
+		}
+		if merged.Metadata == nil || merged.Metadata.Description != "parent description" {
+			t.Errorf("metadata = %+v, want the declaring template's own", merged.Metadata)
+		}
+	})
+}
+
+// TestTemplateMetadataDoesNotInheritThroughChain is the same contract through
+// the real extends fold rather than a single merge, since that is what a
+// template with `extends` actually goes through.
+func TestTemplateMetadataDoesNotInheritThroughChain(t *testing.T) {
+	grandparent := &ImageTemplate{Metadata: &TemplateMetadata{Description: "grandparent"}}
+	middle := &ImageTemplate{}
+	leaf := &ImageTemplate{}
+
+	merged, err := foldChain(grandparent, []*ImageTemplate{middle, leaf})
+	if err != nil {
+		t.Fatalf("foldChain: %v", err)
+	}
+	if merged.Metadata != nil {
+		t.Errorf("metadata = %+v, want nil — neither layer above the base declared one", merged.Metadata)
+	}
+
+	leafWithOwn := &ImageTemplate{Metadata: &TemplateMetadata{Description: "leaf"}}
+	merged, err = foldChain(grandparent, []*ImageTemplate{middle, leafWithOwn})
+	if err != nil {
+		t.Fatalf("foldChain: %v", err)
+	}
+	if merged.Metadata == nil || merged.Metadata.Description != "leaf" {
+		t.Errorf("metadata = %+v, want the leaf's own", merged.Metadata)
 	}
 }
 

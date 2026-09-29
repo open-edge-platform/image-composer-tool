@@ -253,11 +253,15 @@ type ReplaceKernel struct {
 	Version string `yaml:"version,omitempty"`
 }
 
-// TemplateMetadata is the AI-searchable discovery block every curated template
-// opens with ($defs.Metadata in the schema). It is descriptive only — nothing in
-// the build reads it — but it is carried through load/merge/marshal so a
-// generated or resolved template keeps the block its parent declared instead of
-// dropping it on the way out.
+// TemplateMetadata is the AI-searchable discovery block most curated templates
+// open with ($defs.Metadata in the schema; it is optional, and a number of
+// shipped templates declare none). It is descriptive only — nothing in the build
+// reads it — but it is carried through load/merge/marshal so a resolved template
+// keeps the block its own file declared instead of dropping it on the way out.
+//
+// It does not inherit: a child that declares none resolves to none. See
+// MergeConfigurations and the "metadata does not inherit" note in
+// image-templates/COMPOSITION.md.
 type TemplateMetadata struct {
 	Description string   `yaml:"description,omitempty"`
 	UseCases    []string `yaml:"use_cases,omitempty"`

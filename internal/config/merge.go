@@ -101,13 +101,15 @@ func MergeConfigurations(userTemplate, defaultTemplate *ImageTemplate) (*ImageTe
 		}
 	}
 
-	// Metadata is descriptive-only discovery text, so it is taken whole from
-	// whichever template declares it rather than merged field by field — a child
-	// that describes itself replaces its parent's description, and one that says
-	// nothing inherits the parent's via the struct copy above.
-	if userTemplate.Metadata != nil {
-		mergedTemplate.Metadata = userTemplate.Metadata
-	}
+	// Metadata does not inherit: it is whatever this layer declares, and nothing
+	// when it declares none. The assignment is unconditional for that reason —
+	// the struct copy above carries the parent's block, and leaving it in place
+	// would make a child that never described itself claim its parent's
+	// description. A child is a different image, so the parent's words would
+	// misdescribe it; and the block feeds discovery and search, which read it
+	// per file rather than from the merged result. See "metadata does not
+	// inherit" in image-templates/COMPOSITION.md.
+	mergedTemplate.Metadata = userTemplate.Metadata
 
 	// Override with user-specified values
 	// Image section - always use user values if provided
