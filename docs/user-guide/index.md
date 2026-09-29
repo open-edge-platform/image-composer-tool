@@ -47,6 +47,7 @@ See the [Quick Start guide](./get-started/quick-start.md) to build your first im
 | [Custom Initrd Script](./configuration/configure-custom-initrd-script.md)       | Debian 13 GRUB initramfs-tools initrd hook |
 | [Bare-Metal Networking + SSH](./configuration/configure-baremetal-network-ssh.md) | DHCP + SSH for a Debian 13 overlay on bare metal |
 | [Multiple Repos](./configuration/configure-multiple-package-repositories.md)      | Using multiple package repositories      |
+| [Unattended ISO Installer](./get-started/unattended-iso-provisioning.md)         | Hands-free install with users, SSH keys, proxy, cloud-init, and boot-time provisioning |
 
 ## Get Help
 
@@ -74,6 +75,7 @@ Prerequisites <./get-started/prerequisites.md>
 Installation <./get-started/installation.md>
 Usage Guide <./get-started/usage-guide.md>
 AI Template Generation (RAG) <./get-started/ai-template-generation.md>
+Unattended ISO Installer <./get-started/unattended-iso-provisioning.md>
 
 :::
 

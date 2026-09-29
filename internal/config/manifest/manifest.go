@@ -313,7 +313,7 @@ func buildSPDXPackage(pkg ospackage.PackageInfo) SPDXPackage {
 		Name:             pkg.Name,
 		Type:             pkg.Type,
 		VersionInfo:      pkg.Version,
-		DownloadLocation: pkg.URL,
+		DownloadLocation: fallbackToDefault(redactURL(pkg.URL), "NOASSERTION"),
 		FilesAnalyzed:    false,
 		LicenseDeclared:  fallbackToDefault(pkg.License, "NOASSERTION"),
 		LicenseConcluded: "NOASSERTION",

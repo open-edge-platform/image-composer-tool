@@ -1,0 +1,8 @@
+#cloud-config
+# Sample cloud-init user-data for the Base Platform Image.
+# Replace with the infrastructure bootstrap the deployment needs.
+write_files:
+  - path: /var/lib/image-composer-tool/cloud-init-applied
+    content: |
+      Applied by cloud-init on first boot.
+    permissions: "0644"
