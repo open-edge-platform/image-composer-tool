@@ -253,16 +253,37 @@ type ReplaceKernel struct {
 	Version string `yaml:"version,omitempty"`
 }
 
-// ImageTemplate represents the YAML image template structure
+// TemplateMetadata is the AI-searchable discovery block most curated templates
+// open with ($defs.Metadata in the schema; it is optional, and a number of
+// shipped templates declare none). It is descriptive only — nothing in the build
+// reads it — but it is carried through load/merge/marshal so a resolved template
+// keeps the block its own file declared instead of dropping it on the way out.
+//
+// It does not inherit: a child that declares none resolves to none. See
+// MergeConfigurations and the "metadata does not inherit" note in
+// image-templates/COMPOSITION.md.
+type TemplateMetadata struct {
+	Description string   `yaml:"description,omitempty"`
+	UseCases    []string `yaml:"use_cases,omitempty"`
+	Keywords    []string `yaml:"keywords,omitempty"`
+}
+
+// ImageTemplate represents the YAML image template structure.
+//
+// Field order here is the emitted YAML's key order, and it deliberately matches
+// the order the curated templates in image-templates/ are authored in
+// (metadata → image → target → … → systemConfig) so a resolved or generated
+// template reads like a hand-written one.
 type ImageTemplate struct {
+	Metadata            *TemplateMetadata   `yaml:"metadata,omitempty"`
 	Extends             string              `yaml:"extends,omitempty"`
 	Image               ImageInfo           `yaml:"image"`
 	Target              TargetInfo          `yaml:"target"`
 	Baseline            *Baseline           `yaml:"baseline,omitempty"`
 	OverlayPolicy       *OverlayPolicy      `yaml:"overlayPolicy,omitempty"`
+	PackageRepositories []PackageRepository `yaml:"packageRepositories,omitempty"`
 	Disk                DiskConfig          `yaml:"disk,omitempty"`
 	SystemConfig        SystemConfig        `yaml:"systemConfig"`
-	PackageRepositories []PackageRepository `yaml:"packageRepositories,omitempty"`
 
 	// Explicitly excluded from YAML serialization/deserialization
 	PathList            []string                `yaml:"-"`
