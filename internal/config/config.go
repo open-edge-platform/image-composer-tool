@@ -253,16 +253,33 @@ type ReplaceKernel struct {
 	Version string `yaml:"version,omitempty"`
 }
 
-// ImageTemplate represents the YAML image template structure
+// TemplateMetadata is the AI-searchable discovery block the curated templates
+// open with ($defs.Metadata in the schema). It is descriptive only — nothing in
+// the build reads it — but it is carried through load/merge/marshal so a
+// generated or resolved template keeps the block its parent declared instead of
+// dropping it on the way out.
+type TemplateMetadata struct {
+	Description string   `yaml:"description,omitempty"`
+	UseCases    []string `yaml:"use_cases,omitempty"`
+	Keywords    []string `yaml:"keywords,omitempty"`
+}
+
+// ImageTemplate represents the YAML image template structure.
+//
+// Field order here is the emitted YAML's key order, and it deliberately matches
+// how the curated templates in image-templates/ are authored (metadata → image
+// → target → … → systemConfig) so a resolved or generated template reads like a
+// hand-written one.
 type ImageTemplate struct {
+	Metadata            *TemplateMetadata   `yaml:"metadata,omitempty"`
 	Extends             string              `yaml:"extends,omitempty"`
 	Image               ImageInfo           `yaml:"image"`
 	Target              TargetInfo          `yaml:"target"`
 	Baseline            *Baseline           `yaml:"baseline,omitempty"`
 	OverlayPolicy       *OverlayPolicy      `yaml:"overlayPolicy,omitempty"`
+	PackageRepositories []PackageRepository `yaml:"packageRepositories,omitempty"`
 	Disk                DiskConfig          `yaml:"disk,omitempty"`
 	SystemConfig        SystemConfig        `yaml:"systemConfig"`
-	PackageRepositories []PackageRepository `yaml:"packageRepositories,omitempty"`
 
 	// Explicitly excluded from YAML serialization/deserialization
 	PathList            []string                `yaml:"-"`

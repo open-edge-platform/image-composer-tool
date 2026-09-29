@@ -4,6 +4,7 @@
 import { useMemo, useState } from 'react'
 import { useStore } from '../store'
 import {
+  PARTITION_TABLE_DISABLED,
   PARTITION_TABLE_TYPES,
   appendPartition,
   computeOffsets,
@@ -41,11 +42,16 @@ import type { SizeUnit } from '../lib/size'
 //    the schema has `start`/`end` offsets. Both are editable here, one at a time
 //    (see LAYOUT_MODES in lib/disk.ts) — size-based derives the offsets and
 //    keeps them contiguous, offset-based lets them be typed directly.
-//  - MBR is offered, because the schema allows it.
+//  - MBR is shown but not selectable. The schema and the builder both allow it,
+//    but no shipped template uses it, so it is locked with that reason rather
+//    than hidden — a template already declaring it still shows its real value
+//    (see PARTITION_TABLE_DISABLED in lib/disk.ts).
 //
-// The Output Artifacts section has no prototype counterpart. It is
+// The Output Artefacts section has no prototype counterpart. It is
 // `disk.artifacts[]` — a Disk property, and the place ICT actually produces
-// QCOW2/VHD/VMDK output (target.imageType does not offer those).
+// QCOW2/VHD/VMDK output (target.imageType does not offer those). Note the
+// section is titled with the British spelling used throughout the UI, while the
+// YAML key it edits keeps the schema's `artifacts`.
 //
 // The edited model is sent as `disk` on the compose/build request once the user
 // touches it, and the backend emits it into the generated extends delta — so
@@ -58,6 +64,7 @@ const CHIP_BASE =
   'cursor-pointer select-none rounded-md border px-3.5 py-1.5 text-[13px] font-medium transition-colors'
 const CHIP_ON = 'border-[#0071c5] bg-[#e6f2fa] text-[#0071c5]'
 const CHIP_OFF = 'border-slate-300 text-slate-600 hover:border-slate-400'
+const CHIP_LOCKED = 'cursor-not-allowed border-slate-200 bg-slate-50 text-slate-400'
 
 // Placeholders carry the expected *format*, not the field name — the field name
 // is already in the column heading — so they read as a worked example. Kept a
@@ -263,18 +270,29 @@ export function DiskStep() {
       <div className="mb-4">
         <span className={LABEL}>Partition Table</span>
         <div className="flex flex-wrap gap-2">
-          {PARTITION_TABLE_TYPES.map((t) => (
-            <button
-              key={t}
-              type="button"
-              aria-pressed={disk.partitionTableType === t}
-              onClick={() => patch({ partitionTableType: t as PartitionTableType })}
-              className={`${CHIP_BASE} ${disk.partitionTableType === t ? CHIP_ON : CHIP_OFF}`}
-            >
-              {t.toUpperCase()}
-            </button>
-          ))}
+          {PARTITION_TABLE_TYPES.map((t) => {
+            const selected = disk.partitionTableType === t
+            // A locked type stays clickable only while it is the template's own
+            // current value — the user can move away from it but not back.
+            const lockedReason = selected ? undefined : PARTITION_TABLE_DISABLED[t]
+            return (
+              <button
+                key={t}
+                type="button"
+                disabled={lockedReason !== undefined}
+                title={lockedReason}
+                aria-pressed={selected}
+                onClick={() => patch({ partitionTableType: t as PartitionTableType })}
+                className={`${CHIP_BASE} ${selected ? CHIP_ON : lockedReason ? CHIP_LOCKED : CHIP_OFF}`}
+              >
+                {t.toUpperCase()}
+              </button>
+            )
+          })}
         </div>
+        {PARTITION_TABLE_DISABLED[disk.partitionTableType] === undefined && (
+          <p className="mt-1 text-xs text-slate-400">{PARTITION_TABLE_DISABLED.mbr}</p>
+        )}
       </div>
 
       <div className="mb-4">
@@ -804,11 +822,11 @@ function ArtifactsSection({
 
   return (
     <div className="mb-4">
-      <span className={LABEL}>Output Artifacts</span>
+      <span className={LABEL}>Output Artefacts</span>
       <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
         {support === 'ignored' ? (
           <p className="py-2 text-center text-sm text-slate-400">
-            {imageType.toUpperCase()} images do not run the artifact pipeline — the image type
+            {imageType.toUpperCase()} images do not run the artefact pipeline — the image type
             writes its own output.
           </p>
         ) : (
@@ -822,15 +840,15 @@ function ArtifactsSection({
             {artifacts.length === 0 ? (
               <p className="py-2 text-center text-sm text-slate-400">
                 {compressionRequired
-                  ? 'None yet — a WSL2 image needs one tar artifact with gz compression.'
-                  : 'No output artifacts — the builder writes its default format.'}
+                  ? 'None yet — a WSL2 image needs one tar artefact with gz compression.'
+                  : 'No output artefacts — the builder writes its default format.'}
               </p>
             ) : (
               artifacts.map((a, i) => (
                 <div key={a.key} className="mb-2 flex items-center gap-2">
                   <div className="w-[140px]">
                     <Choice
-                      ariaLabel={`Artifact ${i + 1} format`}
+                      ariaLabel={`Artefact ${i + 1} format`}
                       value={a.type}
                       options={types}
                       placeholder="select…"
@@ -839,7 +857,7 @@ function ArtifactsSection({
                   </div>
                   <div className="w-[160px]">
                     <Choice
-                      ariaLabel={`Artifact ${i + 1} compression`}
+                      ariaLabel={`Artefact ${i + 1} compression`}
                       value={a.compression}
                       options={compressions}
                       placeholder={compressionRequired ? 'required' : 'none'}
@@ -853,7 +871,7 @@ function ArtifactsSection({
                   <button
                     type="button"
                     className={ICON_BTN}
-                    title="Remove artifact"
+                    title="Remove artefact"
                     onClick={() => onChange(artifacts.filter((_, j) => j !== i))}
                   >
                     ✕
