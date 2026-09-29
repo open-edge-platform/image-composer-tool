@@ -1,6 +1,6 @@
 # Ubuntu 24.04 templates
 
-`target.dist: ubuntu24` — 26 templates.
+`target.dist: ubuntu24` — 27 templates.
 
 | Template | Arch | Type | Purpose | CI |
 |---|---|---|---|---|
@@ -11,7 +11,8 @@
 | [`ubuntu24-aarch64-minimal-raw.yml`](./ubuntu24-aarch64-minimal-raw.yml) | aarch64 | raw | minimal | yes |
 | [`ubuntu24-aarch64-minimal-uki.yml`](./ubuntu24-aarch64-minimal-uki.yml) | aarch64 | raw | unified kernel image | — |
 | [`ubuntu24-aarch64-server-cloud.yml`](./ubuntu24-aarch64-server-cloud.yml) | aarch64 | raw | cloud server | — |
-| [`generic-handheld-os-template.yml`](./generic-handheld-os-template.yml) | x86_64 | raw | handheld / desktop | — |
+| [`generic-handheld-os-template.yml`](./generic-handheld-os-template.yml) <br>*Fed Aero blueprint* | x86_64 | raw | handheld / desktop | — |
+| [`generic-companion-os-server-template.yml`](./generic-companion-os-server-template.yml) <br>*Fed Aero blueprint* | x86_64 | raw | companion OS server | — |
 | [`robotics-demo-ubuntu24-x86_64.yml`](./robotics-demo-ubuntu24-x86_64.yml) | x86_64 | raw | robotics / ROS 2 | — |
 | [`ubuntu-minimal-cloud-amd64.yml`](./ubuntu-minimal-cloud-amd64.yml) | x86_64 | raw | cloud | — |
 | [`ubuntu24-server-cloud-amd64.yml`](./ubuntu24-server-cloud-amd64.yml) | x86_64 | raw | cloud server | — |
@@ -48,6 +49,24 @@ entirely from scratch. `ubuntu24-x86_64-overlay-raw.yml` demonstrates overlay mo
 its own.
 
 Run `image-composer-tool resolve <template> --full` to see the merged result.
+
+## Fed Aero blueprints
+
+`generic-handheld-os-template.yml` and `generic-companion-os-server-template.yml`
+are vendored from [`edge-node-infrastructure-blueprint`](https://github.com/open-edge-platform/edge-node-infrastructure-blueprint/tree/release-2026.2.0/infrastructure/host-os/ict)
+at tag `release-2026.2.0`. They are upstream verbatim except for the `users:`
+block: upstream ships `<USERNAME>`/`<PASSWORD>` placeholders, which are filled
+here with `user` and an empty password (set at deploy time) so the templates pass
+schema validation and stay buildable.
+
+Both target Panther Lake and pull the 6.18 Intel kernel from a pinned snapshot of
+the Intel edge overlay, so re-syncing them from upstream means re-checking
+`internal/api/service/data/package-repos.yaml` for new repositories — see the
+drift guard in `internal/api/service/repos_test.go`.
+
+Both are reachable from the web UI's Basic tab under Fed Aero — see the
+`fed-aero` combinations in
+[`internal/api/service/data/manifest.yaml`](../../internal/api/service/data/manifest.yaml).
 
 ## CI coverage
 
