@@ -9,7 +9,7 @@ require (
 	github.com/gdamore/tcell/v2 v2.13.10
 	github.com/getkin/kin-openapi v0.149.0
 	github.com/google/uuid v1.6.0
-	github.com/klauspost/compress v1.20.0
+	github.com/klauspost/compress v1.20.1
 	github.com/muesli/crunchy v0.4.0
 	github.com/oapi-codegen/runtime v1.7.0
 	github.com/rivo/tview v0.42.0
