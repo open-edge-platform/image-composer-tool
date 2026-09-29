@@ -1,0 +1,3 @@
+# Public SSH keys for the "admin" user, one per line.
+# Replace this comment with real keys (e.g. the contents of ~/.ssh/id_ed25519.pub),
+# or add keys at build time with: --ssh-authorized-key admin=/path/to/key.pub

@@ -1,9 +1,9 @@
 package isomaker
 
 import (
-	"errors"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -88,6 +88,12 @@ func (isoMaker *IsoMaker) BuildIsoImage() (err error) {
 
 	log.Infof("Building ISO image for: %s", isoMaker.template.GetImageName())
 
+	// The installer creates these accounts on the target; fail now rather than
+	// emit an ISO whose every installation stops at the missing credential.
+	if err := config.ValidateUserCredentials(isoMaker.template.SystemConfig.Users); err != nil {
+		return err
+	}
+
 	if err := isoMaker.buildInitrd(isoMaker.template); err != nil {
 		return fmt.Errorf("failed to build initrd image: %w", err)
 	}
@@ -101,16 +107,29 @@ func (isoMaker *IsoMaker) BuildIsoImage() (err error) {
 	ImageName := fmt.Sprintf("%s-%s", isoMaker.template.GetImageName(), versionInfo)
 	isoFilePath := filepath.Join(isoMaker.ImageBuildDir, fmt.Sprintf("%s.iso", ImageName))
 
+	sbomName, err := isoMaker.writeTargetSBOM()
+	if err != nil {
+		return err
+	}
+	composition, err := isoMaker.buildCompositionManifest(filepath.Base(isoFilePath), sbomName)
+	if err != nil {
+		return fmt.Errorf("failed to build composition manifest: %w", err)
+	}
+
 	initrdRootfsPath := isoMaker.InitrdMaker.GetInitrdRootfsPath()
 	initrdFilePath := isoMaker.InitrdMaker.GetInitrdFilePath()
 	if err := isoMaker.createIso(isoMaker.template, initrdRootfsPath, initrdFilePath, isoFilePath); err != nil {
 		return fmt.Errorf("failed to create ISO image: %w", err)
 	}
 
-	// Copy SBOM to image build directory
+	compositionPath := filepath.Join(isoMaker.ImageBuildDir, manifest.CompositionManifestFileName(ImageName))
+	if err := manifest.WriteCompositionManifest(composition, compositionPath); err != nil {
+		return err
+	}
+
+	// The composition manifest references this SBOM, so it must be retained.
 	if err := manifest.CopySBOMToImageBuildDir(isoMaker.ImageBuildDir); err != nil {
-		log.Warnf("Failed to copy SBOM to image build directory: %v", err)
-		// Don't fail the build if SBOM copy fails, just log warning
+		return fmt.Errorf("failed to copy SBOM to image build directory: %w", err)
 	}
 
 	isoMaker.template.FinishPureImageBuildTimer()
@@ -174,6 +193,12 @@ func (isoMaker *IsoMaker) getInitrdTemplate(template *config.ImageTemplate) (*co
 // met before starting expensive operations. Call this early (before provider init
 // or package download) to fail fast on missing files like live-installer.
 func ValidateISOPrerequisites(template *config.ImageTemplate) error {
+	// The ISO template's own additionalFiles land on the installed system; a
+	// missing one would otherwise be dropped with only a warning at build time.
+	if err := ValidateAdditionalFiles(template); err != nil {
+		return err
+	}
+
 	initrdTemplateFilePath, err := template.GetInitramfsTemplate()
 	if err != nil {
 		return fmt.Errorf("failed to resolve initramfs template: %w", err)
@@ -207,22 +232,14 @@ func ValidateAdditionalFiles(template *config.ImageTemplate) error {
 			continue
 		}
 
-		var lastErr error
-		found := false
-		for _, tmplPath := range template.PathList {
-			candidatePath := filepath.Join(filepath.Dir(tmplPath), fileInfo.Local)
-			if err := checkFileExists(candidatePath); err == nil {
-				found = true
-				break
-			} else if !errors.Is(err, fs.ErrNotExist) {
-				lastErr = err
-			}
-		}
+		// Use the same ancestor-walk resolution as the build, so validation is
+		// never stricter than GetAdditionalFileInfo.
+		candidatePath, found := config.ResolveTemplateRelativePath(template.PathList, fileInfo.Local)
 		if !found {
-			if lastErr != nil {
-				return fmt.Errorf("cannot access additional file %s: %w", fileInfo.Local, lastErr)
-			}
 			return liveInstallerHintOrError(fileInfo.Local, fileInfo.Final, nil)
+		}
+		if err := checkFileExists(candidatePath); err != nil {
+			return fmt.Errorf("cannot access additional file %s: %w", fileInfo.Local, err)
 		}
 	}
 	return nil
@@ -282,11 +299,19 @@ func (isoMaker *IsoMaker) copyConfigFilesToIso(template *config.ImageTemplate, i
 	var PathUpdatedList []config.AdditionalFileInfo
 	additionalFiles := template.GetAdditionalFileInfo()
 	if len(additionalFiles) != 0 {
+		isoNames := make(map[string]string, len(additionalFiles))
 		for _, fileInfo := range additionalFiles {
 			srcFile := fileInfo.Local
-			srcFileName := filepath.Base(srcFile)
-			newPath := fmt.Sprintf("../additionalfiles/%s", srcFileName)
-			dstFile := filepath.Join(osvConfigDestDir, "imageconfigs", "additionalfiles", srcFileName)
+			relName := isoAdditionalFileName(fileInfo.Local, fileInfo.Final)
+			// Directory destinations can normalise onto another entry's name;
+			// a second, different source would silently replace the first.
+			if prev, ok := isoNames[relName]; ok && prev != srcFile {
+				return fmt.Errorf("additional files %s and %s both map to %s on the ISO; "+
+					"give them distinct destinations", prev, srcFile, relName)
+			}
+			isoNames[relName] = srcFile
+			newPath := "../additionalfiles/" + relName
+			dstFile := filepath.Join(osvConfigDestDir, "imageconfigs", "additionalfiles", relName)
 			if err := file.CopyFile(srcFile, dstFile, "-p", true); err != nil {
 				log.Errorf("Failed to copy additional file %s to image: %v", srcFile, err)
 				return fmt.Errorf("failed to copy additional file %s to image: %w", srcFile, err)
@@ -300,6 +325,7 @@ func (isoMaker *IsoMaker) copyConfigFilesToIso(template *config.ImageTemplate, i
 		}
 	}
 	template.SystemConfig.AdditionalFiles = PathUpdatedList
+	rewriteProvisioningSourcesForISO(template)
 
 	// Dump updated template to ISO. The per-package SBOM metadata the installer
 	// needs travels in a sidecar rather than inside this file, so the dump stays
@@ -352,6 +378,41 @@ func takeSBOMMetadata(template *config.ImageTemplate) []ospackage.PackageInfo {
 	}
 	template.SBOMPackageMetadata = nil
 	return pkgs
+}
+
+// rewriteProvisioningSourcesForISO replaces the build-host paths that the
+// provisioning sections still reference with what the installer can use. Their
+// files already travel on the ISO as additionalFiles (see
+// config.lowerProvisioningInputs), so the dump shipped on the ISO must not
+// expose build-host directories: script sources point at the on-ISO copy,
+// cloud-init file paths and SSH key files (already inlined) are dropped.
+func rewriteProvisioningSourcesForISO(template *config.ImageTemplate) {
+	sc := &template.SystemConfig
+	for i := range sc.Provisioning.Scripts {
+		script := &sc.Provisioning.Scripts[i]
+		script.Local = "../additionalfiles/" + isoAdditionalFileName(script.Local, script.Final)
+	}
+	sc.CloudInit.UserDataFile = ""
+	sc.CloudInit.MetaDataFile = ""
+	sc.CloudInit.NetworkConfigFile = ""
+	sc.CloudInit.ConfigFiles = nil
+	for i := range sc.Users {
+		sc.Users[i].SSHAuthorizedKeysFiles = nil
+	}
+}
+
+// isoAdditionalFileName returns where an additional file is stored on the
+// ISO, relative to its additionalfiles directory: a directory derived from
+// the file's cleaned in-image destination, holding the file under its source
+// basename. The installer copies the staged file to the destination with cp,
+// so keeping the basename preserves cp's directory semantics ("final: /etc"
+// yields /etc/<basename>, exactly as in a raw build), while the per-
+// destination directory stops files that share a basename from overwriting
+// each other. A hash names the directory because one destination may be
+// another's parent ("/etc" and "/etc/motd"), which a mirrored tree cannot hold.
+func isoAdditionalFileName(local, final string) string {
+	sum := sha256.Sum256([]byte(filepath.Clean("/" + final)))
+	return hex.EncodeToString(sum[:6]) + "/" + filepath.Base(local)
 }
 
 func (isoMaker *IsoMaker) copyImagePkgsToIso(template *config.ImageTemplate, installRoot string) error {
@@ -459,28 +520,18 @@ func (isoMaker *IsoMaker) createIso(template *config.ImageTemplate, initrdRootfs
 
 	// Create ISO image with xorriso
 	log.Infof("Creating ISO image with xorriso...")
-	var xorrisoCmd string
 	if biosImgRelPath != "" {
-		// Support both BIOS and UEFI boot mode
 		log.Infof("Creating hybrid ISO for both BIOS and UEFI boot modes...")
-		biosImgRelDir := filepath.Dir(biosImgRelPath)
-		xorrisoCmd = fmt.Sprintf("xorriso -as mkisofs -graft-points -r -J -l -b %s", biosImgRelPath)
-		xorrisoCmd += " -no-emul-boot -boot-load-size 4 -boot-info-table --grub2-boot-info"
-		xorrisoCmd += fmt.Sprintf(" --grub2-mbr %s", filepath.Join(installRoot, biosImgRelDir, "boot_hybrid.img"))
-		xorrisoCmd += fmt.Sprintf(" -eltorito-alt-boot -e %s -no-emul-boot", efiFatImgRelPath)
-		xorrisoCmd += fmt.Sprintf(" -append_partition 2 0xef %s -appended_part_as_gpt", efiFatImgPath)
-		xorrisoCmd += fmt.Sprintf(" -r %s --sort-weight 0 / --sort-weight 1 /boot", installRoot)
-		xorrisoCmd += fmt.Sprintf(" -volid \"%s\" --protective-msdos-label -o \"%s\" \"%s\"",
-			IsoLabel, isoFilePath, installRoot)
 	} else {
-		// Support only UEFI boot mode
 		log.Infof("Creating ISO for UEFI boot mode only...")
-		xorrisoCmd = fmt.Sprintf("xorriso -as mkisofs -graft-points -r -J -l --efi-boot %s", efiFatImgPath)
-		xorrisoCmd += " -efi-boot-part --efi-boot-image --protective-msdos-label"
-		xorrisoCmd += fmt.Sprintf(" -r %s --sort-weight 0 / --sort-weight 1 /boot", installRoot)
-		xorrisoCmd += fmt.Sprintf(" -volid \"%s\" -o \"%s\" \"%s\"",
-			IsoLabel, isoFilePath, installRoot)
 	}
+	xorrisoCmd := buildXorrisoCommand(xorrisoArgs{
+		installRoot:      installRoot,
+		isoFilePath:      isoFilePath,
+		efiFatImgPath:    efiFatImgPath,
+		efiFatImgRelPath: efiFatImgRelPath,
+		biosImgRelPath:   biosImgRelPath,
+	})
 
 	if _, err := shell.ExecCmdWithStream(xorrisoCmd, true, shell.HostPath, nil); err != nil {
 		log.Errorf("Failed to create ISO image: %v", err)
@@ -493,6 +544,42 @@ func (isoMaker *IsoMaker) createIso(template *config.ImageTemplate, initrdRootfs
 
 	log.Infof("ISO creation completed successfully")
 	return nil
+}
+
+// xorrisoArgs holds the paths needed to assemble the xorriso command line.
+// An empty biosImgRelPath selects the UEFI-only layout.
+type xorrisoArgs struct {
+	installRoot      string
+	isoFilePath      string
+	efiFatImgPath    string
+	efiFatImgRelPath string
+	biosImgRelPath   string
+}
+
+// buildXorrisoCommand assembles the xorriso command line. It does no I/O so
+// the exact invocation can be unit-tested. -iso-level 3 lifts the ISO9660
+// 4 GiB single-file limit, so large additional files (e.g. source archives)
+// can be carried on the ISO.
+func buildXorrisoCommand(args xorrisoArgs) string {
+	q := shell.QuoteArg
+	var cmd string
+	if args.biosImgRelPath != "" {
+		biosImgRelDir := filepath.Dir(args.biosImgRelPath)
+		cmd = fmt.Sprintf("xorriso -as mkisofs -iso-level 3 -graft-points -r -J -l -b %s", q(args.biosImgRelPath))
+		cmd += " -no-emul-boot -boot-load-size 4 -boot-info-table --grub2-boot-info"
+		cmd += fmt.Sprintf(" --grub2-mbr %s", q(filepath.Join(args.installRoot, biosImgRelDir, "boot_hybrid.img")))
+		cmd += fmt.Sprintf(" -eltorito-alt-boot -e %s -no-emul-boot", q(args.efiFatImgRelPath))
+		cmd += fmt.Sprintf(" -append_partition 2 0xef %s -appended_part_as_gpt", q(args.efiFatImgPath))
+		cmd += fmt.Sprintf(" -r %s --sort-weight 0 / --sort-weight 1 /boot", q(args.installRoot))
+		cmd += fmt.Sprintf(" -volid %s --protective-msdos-label -o %s %s",
+			q(IsoLabel), q(args.isoFilePath), q(args.installRoot))
+		return cmd
+	}
+	cmd = fmt.Sprintf("xorriso -as mkisofs -iso-level 3 -graft-points -r -J -l --efi-boot %s", q(args.efiFatImgPath))
+	cmd += " -efi-boot-part --efi-boot-image --protective-msdos-label"
+	cmd += fmt.Sprintf(" -r %s --sort-weight 0 / --sort-weight 1 /boot", q(args.installRoot))
+	cmd += fmt.Sprintf(" -volid %s -o %s %s", q(IsoLabel), q(args.isoFilePath), q(args.installRoot))
+	return cmd
 }
 
 func copyKernelToIsoImagesPath(initrdRootfsPath, isoImagesPath string) error {

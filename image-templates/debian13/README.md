@@ -1,17 +1,19 @@
 # Debian 13 templates
 
-`target.dist: debian13` — 4 templates.
+`target.dist: debian13` — 6 templates.
 
 | Template | Arch | Type | Purpose | CI |
 |---|---|---|---|---|
 | [`debian13-x86_64-minimal-initrd.yml`](./debian13-x86_64-minimal-initrd.yml) | x86_64 | img | minimal | — |
 | [`debian13-x86_64-minimal-iso.yml`](./debian13-x86_64-minimal-iso.yml) | x86_64 | iso | minimal | — |
+| [`debian13-x86_64-bb-graphics-raw.yml`](./debian13-x86_64-bb-graphics-raw.yml) | x86_64 | raw | graphics desktop (extends the overlay base) | — |
+| [`debian13-x86_64-bb-overlay-initrd-raw.yml`](./debian13-x86_64-bb-overlay-initrd-raw.yml) | x86_64 | raw | overlay base with custom initrd | — |
 | [`debian13-aarch64-minimal-raw.yml`](./debian13-aarch64-minimal-raw.yml) | aarch64 | raw | minimal | — |
 | [`debian13-x86_64-minimal-raw.yml`](./debian13-x86_64-minimal-raw.yml) | x86_64 | raw | minimal | — |
 
 ## CI coverage
 
-0 of 4 templates here are built on every pull request (via `scripts/build_*.sh`). The others are schema-validated only, so build them locally before opening a PR.
+0 of 6 templates here are built on every pull request (via `scripts/build_*.sh`). The others are schema-validated only, so build them locally before opening a PR.
 
 ---
 

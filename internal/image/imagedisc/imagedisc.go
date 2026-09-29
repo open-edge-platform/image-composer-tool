@@ -743,6 +743,109 @@ func getSectorOffsetFromSize(diskName, sizeStr string) (uint64, error) {
 	return 0, fmt.Errorf("size %s is not aligned to physical block size %d", sizeStr, physicalBlockSize)
 }
 
+// endRelativeAlignBytes aligns end-relative boundaries down to 1 MiB, the
+// same granularity the partition start offsets in templates use.
+const endRelativeAlignBytes = 1024 * 1024
+
+// parseBoundary validates a partition start/end and reports whether it is
+// measured back from the end of the disk (for example "-16GiB").
+func parseBoundary(raw string) (sizeStr string, fromEnd bool, err error) {
+	raw = strings.TrimSpace(raw)
+	fromEnd = strings.HasPrefix(raw, "-")
+	sizeStr, err = VerifyFileSize(strings.TrimPrefix(raw, "-"))
+	if err != nil || !fromEnd {
+		return sizeStr, fromEnd, err
+	}
+	if bytes, err := TranslateSizeStrToBytes(sizeStr); err != nil {
+		return "", fromEnd, err
+	} else if bytes == 0 {
+		return "", fromEnd, fmt.Errorf("end-relative boundary %q must be greater than zero", raw)
+	}
+	return sizeStr, fromEnd, nil
+}
+
+// boundarySector converts a partition start/end into a sector number. A
+// value such as "-16GiB" is measured back from the end of the disk, so a
+// partition can end a fixed distance before the end of whatever disk the
+// installer selected; the following partition then starts at the same
+// "-16GiB" and can use end "0".
+func boundarySector(diskName, sizeStr string, fromEnd bool) (uint64, error) {
+	if !fromEnd {
+		return getSectorOffsetFromSize(diskName, sizeStr)
+	}
+	offsetBytes, err := TranslateSizeStrToBytes(sizeStr)
+	if err != nil {
+		return 0, err
+	}
+	diskBytes, err := diskSizeBytes(diskName)
+	if err != nil {
+		return 0, err
+	}
+	hwSectorSize, err := DiskGetHwSectorSize(diskName)
+	if err != nil {
+		return 0, err
+	}
+	return endRelativeSector(diskBytes, offsetBytes, uint64(hwSectorSize))
+}
+
+// partitionSectors resolves a partition's start sector and inclusive end
+// sector (0 meaning "to the end of the disk") exactly as partition creation
+// does, so the pre-destructive layout check and the real run cannot disagree.
+func partitionSectors(diskName string, p config.PartitionInfo) (start, end uint64, err error) {
+	// "0" is the disk start/end sentinel; parseBoundary trims its input, so
+	// compare the trimmed value or " 0" would be resolved as sector 0 and
+	// underflow when the end sector is decremented.
+	if strings.TrimSpace(p.Start) != "0" {
+		size, fromEnd, err := parseBoundary(p.Start)
+		if err != nil {
+			return 0, 0, fmt.Errorf("invalid start %q: %w", p.Start, err)
+		}
+		if start, err = boundarySector(diskName, size, fromEnd); err != nil {
+			return 0, 0, fmt.Errorf("start sector: %w", err)
+		}
+	}
+	if strings.TrimSpace(p.End) != "0" {
+		size, fromEnd, err := parseBoundary(p.End)
+		if err != nil {
+			return 0, 0, fmt.Errorf("invalid end %q: %w", p.End, err)
+		}
+		if end, err = boundarySector(diskName, size, fromEnd); err != nil {
+			return 0, 0, fmt.Errorf("end sector: %w", err)
+		}
+		if end == 0 {
+			return 0, 0, fmt.Errorf("end %q resolves to the start of the disk", p.End)
+		}
+		end--
+	}
+	return start, end, nil
+}
+
+func endRelativeSector(diskBytes, offsetBytes, sectorSize uint64) (uint64, error) {
+	if sectorSize == 0 {
+		return 0, fmt.Errorf("invalid sector size 0")
+	}
+	if offsetBytes == 0 || offsetBytes >= diskBytes {
+		return 0, fmt.Errorf("end-relative offset -%d bytes does not fit on a %d-byte disk",
+			offsetBytes, diskBytes)
+	}
+	pos := (diskBytes - offsetBytes) / endRelativeAlignBytes * endRelativeAlignBytes
+	return pos / sectorSize, nil
+}
+
+// diskSizeBytes returns the size of a whole disk. /sys/block/<name>/size is
+// world-readable and always in 512-byte units, independent of sector size.
+func diskSizeBytes(diskName string) (uint64, error) {
+	data, err := readFile(filepath.Join("/sys/block", diskName, "size"))
+	if err != nil {
+		return 0, fmt.Errorf("failed to get size of disk %s: %w", diskName, err)
+	}
+	sectors, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse size of disk %s: %w", diskName, err)
+	}
+	return sectors * 512, nil
+}
+
 func PartitionTypeStrToGUID(partitionTypeStr string) (string, error) {
 	if guid, ok := partitionTypeNameToGUID[partitionTypeStr]; ok {
 		return guid, nil
@@ -791,12 +894,12 @@ func diskPartitionCreate(
 
 	log.Infof(fmt.Sprintf("Creating partition %d on disk %s for %s", partitionNum, diskPath, partitionName))
 
-	startSizeStr, err := VerifyFileSize(partitionInfo.Start)
+	startSizeStr, _, err := parseBoundary(partitionInfo.Start)
 	if err != nil {
 		log.Errorf("Invalid start size %s for partition %d: %v", partitionInfo.Start, partitionNum, err)
 		return "", fmt.Errorf("invalid start size %s for partition %d: %w", partitionInfo.Start, partitionNum, err)
 	}
-	endSizeStr, err := VerifyFileSize(partitionInfo.End)
+	endSizeStr, _, err := parseBoundary(partitionInfo.End)
 	if err != nil {
 		log.Errorf("Invalid end size %s for partition %d: %v", partitionInfo.End, partitionNum, err)
 		return "", fmt.Errorf("invalid end size %s for partition %d: %w", partitionInfo.End, partitionNum, err)
@@ -813,26 +916,10 @@ func diskPartitionCreate(
 		return "", fmt.Errorf("failed to get disk name from path: %s", diskPath)
 	}
 
-	var startSector uint64
-	if partitionInfo.Start == "0" {
-		startSector = 0
-	} else {
-		startSector, err = getSectorOffsetFromSize(diskName, startSizeStr)
-		if err != nil {
-			log.Errorf("Failed to calculate start sector for partition %d on disk %s: %v", partitionNum, diskPath, err)
-			return "", fmt.Errorf("failed to calculate start sector for partition %d on disk %s: %w", partitionNum, diskPath, err)
-		}
-	}
-	var endSector uint64
-	if partitionInfo.End == "0" {
-		endSector = 0
-	} else {
-		endSector, err = getSectorOffsetFromSize(diskName, endSizeStr)
-		if err != nil {
-			log.Errorf("Failed to calculate end sector for partition %d on disk %s: %v", partitionNum, diskPath, err)
-			return "", fmt.Errorf("failed to calculate end sector for partition %d on disk %s: %w", partitionNum, diskPath, err)
-		}
-		endSector--
+	startSector, endSector, err := partitionSectors(diskName, partitionInfo)
+	if err != nil {
+		log.Errorf("Failed to calculate sectors for partition %d on disk %s: %v", partitionNum, diskPath, err)
+		return "", fmt.Errorf("failed to calculate sectors for partition %d on disk %s: %w", partitionNum, diskPath, err)
 	}
 
 	if partitionType == "logical" {
@@ -944,12 +1031,7 @@ func diskPartitionCreate(
 	}
 
 	// Format partition
-	var diskPartDev string
-	if strings.Contains(diskPath, "loop") || strings.Contains(diskPath, "nvme") {
-		diskPartDev = fmt.Sprintf("%sp%d", diskPath, partitionNum)
-	} else {
-		diskPartDev = fmt.Sprintf("%s%d", diskPath, partitionNum)
-	}
+	diskPartDev := partitionDevicePath(diskPath, partitionNum)
 
 	if partitionInfo.FsType == "fat32" || partitionInfo.FsType == "fat16" || partitionInfo.FsType == "vfat" {
 		var fatTypeFlag string
@@ -1055,6 +1137,12 @@ func diskPartitionDelete(diskPath string, partitionNum int) error {
 
 func DiskPartitionsCreate(diskPath string, partitionsList []config.PartitionInfo, partitionTableType string) (map[string]string, error) {
 	partIDDiskDevMap := make(map[string]string)
+
+	// Check the layout fits before anything destructive: end-relative offsets
+	// are only resolved against the real disk size.
+	if err := checkEndRelativeLayoutFits(diskPath, partitionsList); err != nil {
+		return nil, err
+	}
 
 	partitionExist, err := IsDiskPartitionExist(diskPath)
 	if err != nil {
@@ -1321,7 +1409,12 @@ func SystemBlockDevices() (systemDevices []SystemBlockDevice, err error) {
 func ResolveInstallDiskPath(diskConfig config.DiskConfig) (string, error) {
 	if diskConfig.Path != "" {
 		log.Infof("Disk selection bypassed by explicit path: %s", diskConfig.Path)
-		return diskConfig.Path, nil
+		diskPath := canonicalDiskPath(diskConfig.Path)
+		if isPartitionDevice(diskPath) {
+			return "", fmt.Errorf("target disk %s is a partition; specify the whole disk (for example %s)",
+				diskConfig.Path, "/dev/sda or /dev/nvme0n1")
+		}
+		return diskPath, nil
 	}
 
 	if _, settleErr := shell.ExecCmd("udevadm settle --timeout=10", true, shell.HostPath, nil); settleErr != nil {
@@ -1402,30 +1495,150 @@ type diskCandidateEvaluation struct {
 	Reasons []string
 }
 
+// partitionDevicePath returns the kernel node of a partition. The kernel
+// separates the number with "p" whenever the disk name ends in a digit
+// (nvme0n1p2, mmcblk0p2, loop0p2, nbd0p2) and appends it directly otherwise
+// (sda2, vda2).
+func partitionDevicePath(diskPath string, partitionNum int) string {
+	if last := diskPath[len(diskPath)-1]; last >= '0' && last <= '9' {
+		return fmt.Sprintf("%sp%d", diskPath, partitionNum)
+	}
+	return fmt.Sprintf("%s%d", diskPath, partitionNum)
+}
+
+// canonicalDiskPath resolves a /dev/disk/by-* symlink to its kernel device
+// node, since partition device names are derived from the disk path
+// (diskPath+"1"). Other paths are returned unchanged.
+func canonicalDiskPath(diskPath string) string {
+	resolved, err := evalSymlinks(diskPath)
+	if err != nil || !strings.HasPrefix(resolved, "/dev/") || resolved == diskPath {
+		return diskPath
+	}
+	log.Infof("Resolved target disk %s to %s", diskPath, resolved)
+	return resolved
+}
+
+// isPartitionDevice reports whether the block device is a partition, which
+// sysfs marks with a "partition" attribute that whole disks do not have.
+func isPartitionDevice(devPath string) bool {
+	_, err := readFile(filepath.Join("/sys/class/block", filepath.Base(devPath), "partition"))
+	return err == nil
+}
+
+// PartitionNumber returns the kernel partition number of a partition device
+// (for example 2 for /dev/nvme0n1p2) from sysfs, without parsing its name.
+func PartitionNumber(partPath string) (string, error) {
+	data, err := readFile(filepath.Join("/sys/class/block", filepath.Base(partPath), "partition"))
+	if err != nil {
+		return "", fmt.Errorf("cannot determine partition number of %s: %w", partPath, err)
+	}
+	num := strings.TrimSpace(string(data))
+	if num == "" || strings.Trim(num, "0123456789") != "" {
+		return "", fmt.Errorf("unexpected partition number %q for %s", num, partPath)
+	}
+	return num, nil
+}
+
 func requiredInstallDiskBytes(partitions []config.PartitionInfo) (uint64, error) {
-	var required uint64
+	// Absolute boundaries set a floor directly; end-relative ones ("-20GiB")
+	// reserve that much space after the last absolute boundary.
+	var maxAbsolute, maxEndRelative uint64
 	for _, partition := range partitions {
-		endRaw := strings.TrimSpace(fmt.Sprintf("%v", partition.End))
-		if endRaw == "" || endRaw == "0" {
-			continue
-		}
-
-		endSize, err := VerifyFileSize(partition.End)
-		if err != nil {
-			return 0, fmt.Errorf("partition %q has invalid end size %q: %w", partition.ID, endRaw, err)
-		}
-
-		endBytes, err := TranslateSizeStrToBytes(endSize)
-		if err != nil {
-			return 0, fmt.Errorf("partition %q has invalid end size %q: %w", partition.ID, endRaw, err)
-		}
-
-		if endBytes > required {
-			required = endBytes
+		for _, raw := range []string{partition.Start, partition.End} {
+			if raw = strings.TrimSpace(raw); raw == "" || raw == "0" {
+				continue
+			}
+			size, fromEnd, err := parseBoundary(raw)
+			if err != nil {
+				return 0, fmt.Errorf("partition %q has invalid boundary %q: %w", partition.ID, raw, err)
+			}
+			bytes, err := TranslateSizeStrToBytes(size)
+			if err != nil {
+				return 0, fmt.Errorf("partition %q has invalid boundary %q: %w", partition.ID, raw, err)
+			}
+			if fromEnd {
+				maxEndRelative = max(maxEndRelative, bytes)
+			} else {
+				maxAbsolute = max(maxAbsolute, bytes)
+			}
 		}
 	}
 
-	return required, nil
+	if maxEndRelative > 0 {
+		// Leave at least one aligned unit between the absolute and the
+		// end-relative regions, so the partition spanning them is not empty.
+		maxEndRelative += endRelativeAlignBytes
+	}
+	return maxAbsolute + maxEndRelative, nil
+}
+
+// checkEndRelativeLayoutFits validates a layout with end-relative boundaries
+// ("-20GiB") against the real disk before anything destructive runs: the
+// disk must meet the layout minimum, and every partition, resolved against
+// the disk size, must have start before end and must not overlap the one
+// before it. Absolute layouts are sized by disk.size (raw) or the disk
+// selection floor and are not checked here.
+func checkEndRelativeLayoutFits(diskPath string, partitions []config.PartitionInfo) error {
+	if !hasEndRelativeBoundary(partitions) {
+		return nil
+	}
+	required, err := requiredInstallDiskBytes(partitions)
+	if err != nil {
+		return err
+	}
+	diskName, err := GetDiskNameFromDiskPath(diskPath)
+	if err != nil {
+		return err
+	}
+	size, err := diskSizeBytes(diskName)
+	if err != nil {
+		return err
+	}
+	if size < required {
+		return fmt.Errorf("disk %s (%d bytes) is too small for the partition layout (needs at least %d bytes)",
+			diskPath, size, required)
+	}
+	hwSectorSize, err := DiskGetHwSectorSize(diskName)
+	if err != nil {
+		return err
+	}
+	if hwSectorSize <= 0 {
+		return fmt.Errorf("invalid sector size %d for disk %s", hwSectorSize, diskPath)
+	}
+	lastSector := size/uint64(hwSectorSize) - 1
+
+	// Sectors are resolved by partitionSectors, the same code partition
+	// creation uses, so rounding to the physical block size cannot make a
+	// layout that passes here fail after the disk has been wiped.
+	var prevEnd uint64
+	for i, p := range partitions {
+		start, end, err := partitionSectors(diskName, p)
+		if err != nil {
+			return fmt.Errorf("partition %q: %w", p.ID, err)
+		}
+		if strings.TrimSpace(p.End) == "0" {
+			end = lastSector
+		}
+		if start > end {
+			return fmt.Errorf("partition %q: start %q must be before end %q on disk %s", p.ID, p.Start, p.End, diskPath)
+		}
+		if i > 0 && start <= prevEnd {
+			return fmt.Errorf("partition %q overlaps the partition before it on disk %s", p.ID, diskPath)
+		}
+		prevEnd = end
+	}
+	return nil
+}
+
+func hasEndRelativeBoundary(partitions []config.PartitionInfo) bool {
+	for _, p := range partitions {
+		for _, raw := range []string{p.Start, p.End} {
+			if strings.HasPrefix(strings.TrimSpace(raw), "-") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func evaluateInstallDiskCandidates(
