@@ -656,10 +656,11 @@ func readFileFromExtPartitionImage(partitionFilePath, filePath string) ([]byte, 
 		normalizedPath = "/" + normalizedPath
 	}
 
-	// This path reaches a debugfs -R command via bash -c; reject a basename
-	// with shell/debugfs metacharacters rather than execute it (CWE-78).
-	if !safeSBOMFileName.MatchString(path.Base(normalizedPath)) {
-		return nil, fmt.Errorf("refusing to read unsafe file name from image: %q", path.Base(normalizedPath))
+	// The whole path (not just the basename) is interpolated into a debugfs -R
+	// command run via bash -c, so validate every component and reject shell/debugfs
+	// metacharacters rather than execute them (CWE-78).
+	if !safeSBOMFilePath.MatchString(normalizedPath) || !safeSBOMFileName.MatchString(path.Base(normalizedPath)) {
+		return nil, fmt.Errorf("refusing to read unsafe file path from image: %q", normalizedPath)
 	}
 
 	dumpCmd := fmt.Sprintf("debugfs -R 'dump %s %s' %s", normalizedPath, outFilePath, partitionFilePath)

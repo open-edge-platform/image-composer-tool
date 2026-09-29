@@ -1481,6 +1481,7 @@ func TestValidatePackageFileName(t *testing.T) {
 	}{
 		{name: "normal rpm", input: "bash-5.1-8.el9.x86_64.rpm", wantErr: false},
 		{name: "tilde and plus", input: "gcc-c++-11.2.0~rc1-1.noarch.rpm", wantErr: false},
+		{name: "epoch colon", input: "epoch-package-1:1.0-1.azl3.x86_64.rpm", wantErr: false},
 		{name: "empty", input: "", wantErr: true},
 		{name: "dot", input: ".", wantErr: true},
 		{name: "missing suffix", input: "bash-5.1-8.el9.x86_64", wantErr: true},

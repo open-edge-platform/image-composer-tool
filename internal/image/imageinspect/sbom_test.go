@@ -357,16 +357,24 @@ func TestPickSBOMFileNameFromNames_RejectsShellMetacharacters(t *testing.T) {
 
 // TestReadFileFromExtPartitionImage_RejectsUnsafeName ensures the debugfs sink
 // refuses a filename with shell/debugfs metacharacters before building or
-// running any command (CWE-78).
+// running any command (CWE-78). It covers metacharacters both in the basename
+// and in a directory component (the full path is interpolated into debugfs -R).
 func TestReadFileFromExtPartitionImage_RejectsUnsafeName(t *testing.T) {
-	malicious := "/usr/share/sbom/spdx_manifest';touch MARKER;echo 'x.json"
-
-	_, err := readFileFromExtPartitionImage("/nonexistent/partition.img", malicious)
-	if err == nil {
-		t.Fatalf("expected an error for an unsafe file name")
+	cases := map[string]string{
+		"unsafe basename":  "/usr/share/sbom/spdx_manifest';touch MARKER;echo 'x.json",
+		"unsafe directory": "/unsafe';touch MARKER;'/spdx_manifest.json",
 	}
-	if !strings.Contains(err.Error(), "unsafe file name") {
-		t.Fatalf("expected refusal error, got: %v", err)
+
+	for name, malicious := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := readFileFromExtPartitionImage("/nonexistent/partition.img", malicious)
+			if err == nil {
+				t.Fatalf("expected an error for an unsafe file path")
+			}
+			if !strings.Contains(err.Error(), "unsafe file path") {
+				t.Fatalf("expected refusal error, got: %v", err)
+			}
+		})
 	}
 }
 

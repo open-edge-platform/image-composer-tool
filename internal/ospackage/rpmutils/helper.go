@@ -40,7 +40,7 @@ func validatePackageFileName(name string) error {
 	for _, r := range name {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-		case r == '.' || r == '_' || r == '+' || r == '~' || r == '-':
+		case r == '.' || r == '_' || r == '+' || r == '~' || r == '-' || r == ':':
 		default:
 			return fmt.Errorf("package file name %q contains disallowed character %q", name, r)
 		}

@@ -663,3 +663,82 @@ func TestInstallRpmPkg_QuotesMaliciousFileName(t *testing.T) {
 		t.Fatal("no 'rpm -i ... --root' command was captured")
 	}
 }
+
+// backendSplitExecutor reports different RPM DB backends for the host and the
+// chroot so updateRpmDB proceeds past its early-return and builds the --justdb
+// install command. It records every command so the test can assert quoting.
+type backendSplitExecutor struct{ cmds []string }
+
+func (e *backendSplitExecutor) run(cmdStr, chrootPath string) (string, error) {
+	e.cmds = append(e.cmds, cmdStr)
+	switch {
+	case strings.Contains(cmdStr, "rpm -E"):
+		if chrootPath == shell.HostPath {
+			return "sqlite", nil
+		}
+		return "ndb", nil
+	case strings.Contains(cmdStr, "rpm -q -l"):
+		return "/etc/pki/rpm-gpg/RPM-GPG-KEY-test", nil
+	default:
+		return "", nil
+	}
+}
+
+func (e *backendSplitExecutor) ExecCmd(cmdStr string, _ bool, chrootPath string, _ []string) (string, error) {
+	return e.run(cmdStr, chrootPath)
+}
+
+func (e *backendSplitExecutor) ExecCmdSilent(cmdStr string, _ bool, chrootPath string, _ []string) (string, error) {
+	return e.run(cmdStr, chrootPath)
+}
+
+func (e *backendSplitExecutor) ExecCmdWithStream(cmdStr string, _ bool, chrootPath string, _ []string) (string, error) {
+	return e.run(cmdStr, chrootPath)
+}
+
+func (e *backendSplitExecutor) ExecCmdWithInput(_ string, cmdStr string, _ bool, chrootPath string, _ []string) (string, error) {
+	return e.run(cmdStr, chrootPath)
+}
+
+// TestUpdateRpmDB_QuotesJustdbFileName covers the second CWE-78 sink: when the
+// host and chroot RPM DB backends differ, updateRpmDB reinstalls each package
+// with `rpm -i --justdb`. The repository-controlled basename must be shell-quoted
+// there too. The backend-split executor forces that path (which the sqlite/sqlite
+// capturing executor skips) so both sinks are exercised.
+func TestUpdateRpmDB_QuotesJustdbFileName(t *testing.T) {
+	installer := rpm.NewRpmInstaller()
+	tempDir := t.TempDir()
+
+	chrootEnvPath := filepath.Join(tempDir, "chroot")
+	chrootPkgCacheDir := filepath.Join(tempDir, "cache")
+	if err := os.MkdirAll(chrootPkgCacheDir, 0700); err != nil {
+		t.Fatalf("Failed to create cache directory: %v", err)
+	}
+
+	malicious := "evil';touch pwned;'.rpm"
+	if err := os.WriteFile(filepath.Join(chrootPkgCacheDir, malicious), []byte("x"), 0644); err != nil {
+		t.Fatalf("Failed to create malicious package fixture: %v", err)
+	}
+
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+	capExec := &backendSplitExecutor{}
+	shell.Default = capExec
+
+	// The final GPG/cleanup behavior is irrelevant; we only assert --justdb quoting.
+	_ = installer.InstallRpmPkg("azure-linux", chrootEnvPath, chrootPkgCacheDir, []string{malicious})
+
+	want := shell.QuoteArg(filepath.Join("/packages", malicious))
+	var found bool
+	for _, c := range capExec.cmds {
+		if strings.Contains(c, "--justdb") {
+			found = true
+			if !strings.Contains(c, want) {
+				t.Errorf("--justdb command did not shell-quote the package path.\n cmd: %s\nwant substring: %s", c, want)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no 'rpm -i ... --justdb' command was captured")
+	}
+}
