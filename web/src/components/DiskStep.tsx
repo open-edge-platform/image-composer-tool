@@ -4,6 +4,7 @@
 import { useMemo, useState } from 'react'
 import { useStore } from '../store'
 import {
+  PARTITION_TABLE_DISABLED,
   PARTITION_TABLE_TYPES,
   appendPartition,
   computeOffsets,
@@ -41,7 +42,10 @@ import type { SizeUnit } from '../lib/size'
 //    the schema has `start`/`end` offsets. Both are editable here, one at a time
 //    (see LAYOUT_MODES in lib/disk.ts) — size-based derives the offsets and
 //    keeps them contiguous, offset-based lets them be typed directly.
-//  - MBR is offered, because the schema allows it.
+//  - MBR is shown but not selectable. The schema and the builder both allow it,
+//    but it is not enabled yet, so it is locked with that reason rather than
+//    hidden — a template that already declares it still shows its real value
+//    (see PARTITION_TABLE_DISABLED in lib/disk.ts).
 //
 // The Output Artifacts section has no prototype counterpart. It is
 // `disk.artifacts[]` — a Disk property, and the place ICT actually produces
@@ -58,6 +62,7 @@ const CHIP_BASE =
   'cursor-pointer select-none rounded-md border px-3.5 py-1.5 text-[13px] font-medium transition-colors'
 const CHIP_ON = 'border-[#0071c5] bg-[#e6f2fa] text-[#0071c5]'
 const CHIP_OFF = 'border-slate-300 text-slate-600 hover:border-slate-400'
+const CHIP_LOCKED = 'cursor-not-allowed border-slate-200 bg-slate-50 text-slate-400'
 
 // Placeholders carry the expected *format*, not the field name — the field name
 // is already in the column heading — so they read as a worked example. Kept a
@@ -263,18 +268,32 @@ export function DiskStep() {
       <div className="mb-4">
         <span className={LABEL}>Partition Table</span>
         <div className="flex flex-wrap gap-2">
-          {PARTITION_TABLE_TYPES.map((t) => (
-            <button
-              key={t}
-              type="button"
-              aria-pressed={disk.partitionTableType === t}
-              onClick={() => patch({ partitionTableType: t as PartitionTableType })}
-              className={`${CHIP_BASE} ${disk.partitionTableType === t ? CHIP_ON : CHIP_OFF}`}
-            >
-              {t.toUpperCase()}
-            </button>
-          ))}
+          {PARTITION_TABLE_TYPES.map((t) => {
+            const selected = disk.partitionTableType === t
+            // A disabled type stays clickable-looking only while it is the
+            // template's own current value, which the user can move away from
+            // but not return to.
+            const lockedReason = selected ? undefined : PARTITION_TABLE_DISABLED[t]
+            return (
+              <button
+                key={t}
+                type="button"
+                disabled={lockedReason !== undefined}
+                title={lockedReason}
+                aria-pressed={selected}
+                onClick={() => patch({ partitionTableType: t as PartitionTableType })}
+                className={`${CHIP_BASE} ${selected ? CHIP_ON : lockedReason ? CHIP_LOCKED : CHIP_OFF}`}
+              >
+                {t.toUpperCase()}
+              </button>
+            )
+          })}
         </div>
+        {PARTITION_TABLE_DISABLED[disk.partitionTableType] === undefined && (
+          <p className="mt-1 text-xs text-slate-400">
+            {PARTITION_TABLE_DISABLED.mbr}
+          </p>
+        )}
       </div>
 
       <div className="mb-4">

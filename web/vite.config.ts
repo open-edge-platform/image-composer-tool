@@ -1,4 +1,6 @@
-import { defineConfig } from 'vite'
+// defineConfig comes from vitest/config (not vite) so the `test` block below is
+// type-checked; it is the same helper, re-exported with the test options added.
+import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
@@ -24,5 +26,12 @@ export default defineConfig({
   build: {
     // Emit into dist/ for embedding into the Go binary via embed.FS.
     outDir: 'dist',
+  },
+  test: {
+    // Component tests render into jsdom; the pure-logic tests (lib/*.test.ts)
+    // do not need it but are unaffected by it.
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: ['./src/test/setup.ts'],
   },
 })

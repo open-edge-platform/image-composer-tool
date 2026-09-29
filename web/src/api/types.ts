@@ -182,17 +182,91 @@ export interface PackageSearchResults {
   packages: PackageSearchResult[]
 }
 
+// The Edge Pack grouping for one target (from GET /edge-pack): the same
+// packages the repository browser offers, arranged by what they let an image do
+// rather than by where they come from. Both surfaces write into one selection.
+export interface EdgePack {
+  id: string
+  displayName: string
+  description?: string
+  // The PackageRepo id every package in the pack resolves from. Selecting a
+  // package must enable this repo, exactly as picking a search hit enables the
+  // repo it came from — otherwise the package cannot resolve at build time.
+  repo: string
+  // False when `repo` isn't offered for this target at all, i.e. the pack can't
+  // be used here. The UI says so rather than rendering an empty domain grid.
+  repoAvailable: boolean
+  // The runtime flavours a domain's packages sit on top of. Common to every
+  // domain rather than owned by one, which is why they're listed here and not
+  // per-domain. No domain is selectable until one is chosen.
+  baseRuntimes: EdgePackBaseRuntime[]
+  domains: EdgePackDomain[]
+}
+
+export interface EdgePackBaseRuntime {
+  id: string
+  displayName: string
+  package: EdgePackPackage
+  // False means shown but unselectable; unavailableReason always says why.
+  available: boolean
+  unavailableReason?: string
+}
+
+export interface EdgePackDomain {
+  id: string
+  displayName: string
+  description?: string
+  // False when this target can't select the domain — it doesn't publish it, or
+  // a repository in requiresRepos isn't offered here. It is still sent, so the
+  // UI shows it locked with the reason rather than hiding a capability that
+  // exists on other targets.
+  available: boolean
+  unavailableReason?: string
+  // Repository ids to enable alongside the pack's own when this domain is
+  // picked. A metapackage can depend on packages published somewhere the pack
+  // repository doesn't carry, and selecting it without that repository yields a
+  // template that can't resolve at build time.
+  requiresRepos?: string[]
+  // A package can belong to more than one domain, so per-domain counts can sum
+  // to more than the pack's distinct total — count unique names, never the sum.
+  packages: EdgePackPackage[]
+}
+
+export interface EdgePackPackage {
+  name: string
+  description?: string
+  // Absent when the pack's repository index was unreachable or doesn't carry
+  // the package. The package stays selectable at "latest", which is what an
+  // unpinned pick means anyway — only the version chips are lost.
+  version?: string
+  versions?: PackageVersion[]
+}
+
 export interface BuildAccepted {
   buildId: string
   status: string
   logsUrl: string
 }
 
+// One build output. type is whatever the server reported (the ArtifactType enum
+// in api/v1/openapi-template-builder.yaml) and is displayed verbatim — the UI
+// must never infer it from the file name, or an SBOM reads as an image. 'unknown'
+// is the server's own label for an output it could not classify; a server newer
+// than this bundle can also send a type not in this union, which is why
+// artifactTypeLabel below falls back to showing the raw string.
 export interface Artifact {
   name: string
-  type: 'image' | 'sbom'
+  type: 'image' | 'sbom' | 'unknown' | (string & {})
   path: string
   size?: string
+}
+
+// artifactTypeLabel renders an artifact's type for display. Unrecognised and
+// missing types are surfaced rather than defaulted to IMAGE, so a new server-side
+// artifact type is visibly unclassified instead of silently mislabelled.
+export function artifactTypeLabel(type: string | undefined): string {
+  const t = (type ?? '').trim()
+  return t === '' ? 'UNKNOWN' : t.toUpperCase()
 }
 
 // Teardown-residue warning surfaced when a cancelled/failed build may have left
