@@ -3,13 +3,13 @@ module github.com/open-edge-platform/image-composer-tool
 go 1.26.0
 
 require (
-	github.com/ProtonMail/go-crypto v1.4.1
+	github.com/ProtonMail/go-crypto v1.5.1
 	github.com/bendahl/uinput v1.7.0
 	github.com/diskfs/go-diskfs v1.9.4
 	github.com/gdamore/tcell/v2 v2.13.10
 	github.com/getkin/kin-openapi v0.149.0
 	github.com/google/uuid v1.6.0
-	github.com/klauspost/compress v1.20.0
+	github.com/klauspost/compress v1.20.1
 	github.com/muesli/crunchy v0.4.0
 	github.com/oapi-codegen/runtime v1.7.0
 	github.com/rivo/tview v0.42.0
