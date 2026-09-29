@@ -278,12 +278,22 @@
           "name": { "type": "string", "description": "Username for the user account", "pattern": "^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,31}$" },
           "password": { "type": "string", "description": "Plain text password (discouraged for security)" },
           "hash_algo": { "type": "string", "description": "Hash algorithm (e.g., sha512, bcrypt)" },
-          "passwordMaxAge": { "type": "integer", "description": "Maximum password age in days" },
+          "passwordMaxAge": { "type": "integer", "minimum": 1, "description": "Maximum password age in days; omit for no limit" },
           "startupScript": { "type": "string", "description": "Shell/script to run on login", "pattern": "^(/[^:\\s]*)?$" },
           "groups": { "type": "array", "items": { "type": "string", "pattern": "^(?:<[A-Za-z0-9_]+>|[a-zA-Z0-9_][a-zA-Z0-9._-]{0,31})$" }, "description": "Additional groups" },
           "sudo": { "type": "boolean", "description": "Grant sudo permissions" },
           "home": { "type": "string", "description": "Home directory path" },
-          "shell": { "type": "string", "description": "Login shell" }
+          "shell": { "type": "string", "description": "Login shell" },
+          "sshAuthorizedKeys": {
+            "type": "array",
+            "description": "Public key lines written to the user's ~/.ssh/authorized_keys",
+            "items": { "type": "string", "minLength": 1, "pattern": "^[^\\r\\n]+$" }
+          },
+          "sshAuthorizedKeysFiles": {
+            "type": "array",
+            "description": "Host files (relative to the template) whose public key lines are added to sshAuthorizedKeys",
+            "items": { "type": "string", "minLength": 1 }
+          }
         },
         "required": ["name"],
         "additionalProperties": false
@@ -306,7 +316,65 @@
       "description": "Bootloader configuration",
       "properties": {
         "bootType": { "type": "string", "enum": ["efi", "legacy"] },
-        "provider": { "type": "string", "enum": ["grub", "grub2", "systemd-boot"] }
+        "provider": { "type": "string", "enum": ["grub", "grub2", "systemd-boot"] },
+        "bootEntryPolicy": {
+          "type": "string",
+          "enum": ["preserve", "exclusive"],
+          "description": "Live installer only: 'preserve' (default) puts the installed OS first in the firmware BootOrder and keeps the existing BootOrder after it; 'exclusive' leaves only the installed OS in BootOrder. Existing boot entries are kept, except entries labelled exactly 'ICT' from an earlier install, which are replaced"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Proxy": {
+      "type": "object",
+      "description": "Proxy settings persisted into the deployed system (/etc/environment, apt, systemd services)",
+      "properties": {
+        "httpProxy": { "type": "string", "description": "HTTP_PROXY URL, e.g. http://proxy.example.com:3128" },
+        "httpsProxy": { "type": "string", "description": "HTTPS_PROXY URL" },
+        "ftpProxy": { "type": "string", "description": "FTP_PROXY URL" },
+        "noProxy": { "type": "string", "description": "NO_PROXY comma-separated hosts, domains, or CIDRs" }
+      },
+      "additionalProperties": false
+    },
+    "Provisioning": {
+      "type": "object",
+      "description": "Boot-time provisioning scripts run by generated systemd units",
+      "properties": {
+        "scripts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "local", "final"],
+            "properties": {
+              "name": { "type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$", "description": "Identifier used in the unit name ict-provision-<order>-<name>.service" },
+              "local": { "type": "string", "minLength": 1, "description": "Path to the script on the host, relative to the template" },
+              "final": { "type": "string", "pattern": "^/[A-Za-z0-9._@%+/-]*[A-Za-z0-9._@%+-]$", "description": "Absolute in-image file path of the script (letters, digits, and ._@%+-)" },
+              "stage": { "type": "string", "enum": ["first-boot", "every-boot"], "default": "first-boot", "description": "first-boot runs once; every-boot runs on each boot" },
+              "order": { "type": "integer", "minimum": 0, "description": "Execution order; lower runs first" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "CloudInit": {
+      "type": "object",
+      "description": "Install cloud-init and seed it with NoCloud data",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "userDataFile": { "type": "string", "description": "Host path of the user-data file" },
+        "metaDataFile": { "type": "string", "description": "Host path of the meta-data file; generated when omitted" },
+        "networkConfigFile": { "type": "string", "description": "Host path of the network-config file" },
+        "configFiles": { "type": "array", "items": { "type": "string", "minLength": 1 }, "description": "Host paths copied into /etc/cloud/cloud.cfg.d" }
+      },
+      "additionalProperties": false
+    },
+    "AptPolicy": {
+      "type": "object",
+      "description": "Restrict which packageRepositories may upgrade installed packages on the deployed system. Distribution archives are not restricted; they stop upgrading only when immutability is enabled",
+      "properties": {
+        "upgradeAllowedRepos": { "type": "array", "items": { "type": "string", "minLength": 1 }, "description": "packageRepositories ids or codenames allowed to upgrade packages; an explicit empty list allows all (and resets an inherited list)" }
       },
       "additionalProperties": false
     },
@@ -601,7 +669,11 @@
           "items": { "type": "object", "additionalProperties": true }
         },
         "kernel": { "$ref": "#/$defs/Kernel" },
-        "dkms": { "$ref": "#/$defs/Dkms" }
+        "dkms": { "$ref": "#/$defs/Dkms" },
+        "proxy": { "$ref": "#/$defs/Proxy" },
+        "provisioning": { "$ref": "#/$defs/Provisioning" },
+        "cloudInit": { "$ref": "#/$defs/CloudInit" },
+        "aptPolicy": { "$ref": "#/$defs/AptPolicy" }
       },
       "additionalProperties": false
     },

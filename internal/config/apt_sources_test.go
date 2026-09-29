@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -175,6 +176,7 @@ func TestIsDEBBasedTarget(t *testing.T) {
 		expected bool
 	}{
 		{"ubuntu", true},
+		{"debian", true},
 		{"elxr", true},
 		{"azl", false},
 		{"emt", false},
@@ -415,6 +417,24 @@ func TestGenerateAptSourcesFromRepositories_PathOnlyRepo(t *testing.T) {
 	}
 }
 
+func TestGenerateAptSourcesRejectsScriptOwnedDestination(t *testing.T) {
+	template := &ImageTemplate{
+		Target: TargetInfo{OS: "ubuntu"},
+		PackageRepositories: []PackageRepository{
+			{ID: "test-repo", Codename: "noble", URL: "https://example.com/repo", Component: "main"},
+		},
+		SystemConfig: SystemConfig{
+			Provisioning: ProvisioningConfig{Scripts: []ProvisioningScript{
+				{Name: "s", Local: "/tmp/s.sh", Final: "/etc/apt/sources.list.d/package-repositories.list"},
+			}},
+		},
+	}
+	err := template.GenerateAptSourcesFromRepositories()
+	if err == nil || !strings.Contains(err.Error(), "generates") {
+		t.Errorf("err = %v, want script/generated file collision", err)
+	}
+}
+
 func TestAddUniqueAdditionalFile(t *testing.T) {
 	template := &ImageTemplate{
 		SystemConfig: SystemConfig{
@@ -470,6 +490,16 @@ func TestExtractOriginFromURL(t *testing.T) {
 			expected: "apt.repos.intel.com",
 		},
 		{
+			name:     "uppercase scheme",
+			url:      "HTTPS://Repo.Example.com/apt",
+			expected: "repo.example.com",
+		},
+		{
+			name:     "scheme-looking text after the authority is not a scheme",
+			url:      "example.com/redirect?u=http://other.example",
+			expected: "example.com",
+		},
+		{
 			name:     "URL without protocol",
 			url:      "example.com/repo/path",
 			expected: "example.com",
@@ -477,6 +507,21 @@ func TestExtractOriginFromURL(t *testing.T) {
 		{
 			name:     "URL with port",
 			url:      "https://repo.example.com:8080/path",
+			expected: "repo.example.com:8080",
+		},
+		{
+			name:     "URL with query and no path",
+			url:      "https://repo.example.com?channel=stable",
+			expected: "repo.example.com",
+		},
+		{
+			name:     "URL with fragment after port",
+			url:      "https://repo.example.com:8080#frag",
+			expected: "repo.example.com:8080",
+		},
+		{
+			name:     "URL with credentials",
+			url:      "https://user:token@repo.example.com:8080/path",
 			expected: "repo.example.com:8080",
 		},
 		{
@@ -819,5 +864,105 @@ func TestGetCachedOrDownloadGPGKey_UsesCacheOnHit(t *testing.T) {
 
 	if string(got) != string(want) {
 		t.Errorf("cache hit returned wrong key data: got %q want %q", string(got), string(want))
+	}
+}
+
+func TestGenerateAptPreferencesAppliesAptPolicy(t *testing.T) {
+	repos := []PackageRepository{
+		{ID: "stack", Codename: "stack", URL: "https://ppa.example.com/stack", Priority: 990},
+		{ID: "vendor", Codename: "vendor", URL: "https://vendor.example.com:8443/apt", Priority: 990},
+		{ID: "blocked", Codename: "blocked", URL: "https://blocked.example.com/apt", Priority: -10},
+		{ID: "unset", Codename: "unset", URL: "https://unset.example.com/apt"},
+		{ID: "low", Codename: "low", URL: "https://low.example.com/apt", Priority: 10},
+	}
+	tests := []struct {
+		name      string
+		immutable bool
+		allowed   []string
+		want      map[string]int // origin -> Pin-Priority
+	}{
+		{"no policy keeps priorities", false, nil,
+			map[string]int{"ppa.example.com": 990, "vendor.example.com:8443": 990}},
+		{"unlisted repo cannot upgrade", false, []string{"stack"},
+			map[string]int{"ppa.example.com": 990, "vendor.example.com:8443": NoUpgradePinPriority,
+				"blocked.example.com": -10, "unset.example.com": NoUpgradePinPriority, "low.example.com": 10}},
+		{"immutable pins every repo", true, []string{"stack"},
+			map[string]int{"ppa.example.com": NoUpgradePinPriority, "vendor.example.com:8443": NoUpgradePinPriority,
+				"blocked.example.com": -10}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpl := &ImageTemplate{
+				PackageRepositories: repos,
+				SystemConfig: SystemConfig{
+					Immutability: ImmutabilityConfig{Enabled: tt.immutable},
+					AptPolicy:    AptPolicy{UpgradeAllowedRepos: tt.allowed},
+				},
+			}
+			if err := tmpl.generateAptPreferencesFromRepositories(); err != nil {
+				t.Fatalf("generateAptPreferencesFromRepositories: %v", err)
+			}
+			got := map[string]int{}
+			for _, f := range tmpl.SystemConfig.AdditionalFiles {
+				data, err := os.ReadFile(filepath.Join(TempDir(), filepath.Base(f.Local)))
+				if err != nil {
+					t.Fatalf("reading %s: %v", f.Local, err)
+				}
+				var origin string
+				var prio int
+				for _, line := range strings.Split(string(data), "\n") {
+					if v, ok := strings.CutPrefix(line, "Pin: origin "); ok {
+						origin = v
+					}
+					if v, ok := strings.CutPrefix(line, "Pin-Priority: "); ok {
+						n, err := strconv.Atoi(v)
+						if err != nil {
+							t.Fatalf("bad Pin-Priority %q: %v", v, err)
+						}
+						prio = n
+					}
+				}
+				got[origin] = prio
+			}
+			for origin, want := range tt.want {
+				if got[origin] != want {
+					t.Errorf("origin %s priority = %d, want %d (all: %v)", origin, got[origin], want, got)
+				}
+			}
+		})
+	}
+}
+
+func TestGenerateAptSourcesAppliesAptPolicyForDebian(t *testing.T) {
+	tmpl := &ImageTemplate{
+		Target: TargetInfo{OS: "debian"},
+		PackageRepositories: []PackageRepository{
+			{ID: "stack", Codename: "stack", URL: "https://ppa.example.com/stack", Priority: 990},
+			{ID: "vendor", Codename: "vendor", URL: "https://vendor.example.com/apt", Priority: 990},
+		},
+		SystemConfig: SystemConfig{AptPolicy: AptPolicy{UpgradeAllowedRepos: []string{"stack"}}},
+	}
+	if err := tmpl.GenerateAptSourcesFromRepositories(); err != nil {
+		t.Fatalf("GenerateAptSourcesFromRepositories: %v", err)
+	}
+	var sources, vendorPin bool
+	for _, f := range tmpl.SystemConfig.AdditionalFiles {
+		if f.Final == "/etc/apt/sources.list.d/package-repositories.list" {
+			sources = true
+		}
+		if !strings.HasPrefix(f.Final, "/etc/apt/preferences.d/") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(TempDir(), filepath.Base(f.Local)))
+		if err != nil {
+			t.Fatalf("reading %s: %v", f.Local, err)
+		}
+		if strings.Contains(string(data), "origin vendor.example.com") &&
+			strings.Contains(string(data), "Pin-Priority: "+strconv.Itoa(NoUpgradePinPriority)) {
+			vendorPin = true
+		}
+	}
+	if !sources || !vendorPin {
+		t.Errorf("Debian must get sources (%v) and a no-upgrade pin for the unlisted repository (%v)", sources, vendorPin)
 	}
 }

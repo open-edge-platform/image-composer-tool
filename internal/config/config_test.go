@@ -1982,18 +1982,30 @@ func TestMergeUserConfigPreHashedPassword(t *testing.T) {
 	}
 
 	// User provides pre-hashed password (starts with $)
+	hash := "$6$saltsalt$" + strings.Repeat("aB0./", 17) + "x"
 	userUser := UserConfig{
 		Name:     "testuser",
-		Password: "$6$salt$hashedpassword",
+		Password: hash,
 	}
 
 	merged := mergeUserConfig(defaultUser, userUser)
 
-	if merged.Password != "$6$salt$hashedpassword" {
+	if merged.Password != hash {
 		t.Errorf("expected pre-hashed password, got '%s'", merged.Password)
 	}
 	if merged.HashAlgo != "" {
 		t.Errorf("expected empty hash algo for pre-hashed password, got '%s'", merged.HashAlgo)
+	}
+}
+
+// A truncated "$..." value is plaintext, so the requested algorithm must
+// survive the merge and hash it instead of it being set as a literal password.
+func TestMergeUserConfigTruncatedHashKeepsAlgo(t *testing.T) {
+	merged := mergeUserConfig(
+		UserConfig{Name: "u"},
+		UserConfig{Name: "u", Password: "$6$salt", HashAlgo: "sha512"})
+	if merged.HashAlgo != "sha512" {
+		t.Errorf("hash algo = %q, want sha512 for a truncated hash", merged.HashAlgo)
 	}
 }
 

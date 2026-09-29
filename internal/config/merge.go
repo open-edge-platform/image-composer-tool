@@ -347,6 +347,8 @@ func mergeSystemConfig(defaultConfig, userConfig SystemConfig) SystemConfig {
 		merged.Dkms = mergeDkmsConfig(defaultConfig.Dkms, userConfig.Dkms)
 	}
 
+	mergeProvisioningSections(&merged, defaultConfig, userConfig)
+
 	return merged
 }
 
@@ -519,8 +521,9 @@ func mergeUserConfig(defaultUser, userUser UserConfig) UserConfig {
 			merged.HashAlgo = userUser.HashAlgo
 		}
 
-		// Special case: if user provides pre-hashed password, clear hash_algo
-		if strings.HasPrefix(userUser.Password, "$") {
+		// Special case: if user provides a complete pre-hashed password, clear
+		// hash_algo. A truncated "$..." value is plaintext and keeps it.
+		if IsCryptHash(userUser.Password) {
 			merged.HashAlgo = ""
 		}
 	} else if userUser.HashAlgo != "" {
@@ -545,6 +548,13 @@ func mergeUserConfig(defaultUser, userUser UserConfig) UserConfig {
 	// Merge groups
 	if len(userUser.Groups) > 0 {
 		merged.Groups = mergeStringSlices(defaultUser.Groups, userUser.Groups)
+	}
+	if len(userUser.SSHAuthorizedKeys) > 0 {
+		merged.SSHAuthorizedKeys = mergeStringSlices(defaultUser.SSHAuthorizedKeys, userUser.SSHAuthorizedKeys)
+	}
+	if len(userUser.SSHAuthorizedKeysFiles) > 0 {
+		merged.SSHAuthorizedKeysFiles = mergeStringSlices(defaultUser.SSHAuthorizedKeysFiles,
+			userUser.SSHAuthorizedKeysFiles)
 	}
 
 	// Override sudo setting
@@ -586,6 +596,9 @@ func mergeBootloader(defaultBootloader, userBootloader Bootloader) Bootloader {
 	}
 	if userBootloader.Provider != "" {
 		merged.Provider = userBootloader.Provider
+	}
+	if userBootloader.BootEntryPolicy != "" {
+		merged.BootEntryPolicy = userBootloader.BootEntryPolicy
 	}
 
 	return merged
@@ -708,11 +721,12 @@ func isEmptySystemConfig(config SystemConfig) bool {
 		len(config.AdditionalFiles) == 0 &&
 		len(config.Configurations) == 0 &&
 		isEmptyKernelConfig(config.Kernel) &&
-		!config.Dkms.wasProvided
+		!config.Dkms.wasProvided &&
+		!hasProvisioningSections(config)
 }
 
 func isEmptyBootloader(bootloader Bootloader) bool {
-	return bootloader.BootType == "" && bootloader.Provider == ""
+	return bootloader.BootType == "" && bootloader.Provider == "" && bootloader.BootEntryPolicy == ""
 }
 
 func isEmptyNetworkConfig(network NetworkConfig) bool {
@@ -1053,6 +1067,9 @@ func LoadAndMergeTemplate(templatePath string) (*ImageTemplate, error) {
 		if err := userMerged.validateUsers(); err != nil {
 			return nil, fmt.Errorf("merged overlay template is invalid: %w", err)
 		}
+		if err := userMerged.lowerSSHKeyFiles(); err != nil {
+			return nil, fmt.Errorf("merged overlay template is invalid: %w", err)
+		}
 		return userMerged, nil
 	}
 
@@ -1068,6 +1085,9 @@ func LoadAndMergeTemplate(templatePath string) (*ImageTemplate, error) {
 		log.Info("Proceeding without default configuration")
 		userMerged.Extends = ""
 		if err := userMerged.validateBaseline(); err != nil {
+			return nil, fmt.Errorf("merged template is invalid: %w", err)
+		}
+		if err := userMerged.finalizeProvisioning(); err != nil {
 			return nil, fmt.Errorf("merged template is invalid: %w", err)
 		}
 		return userMerged, nil
@@ -1086,6 +1106,9 @@ func LoadAndMergeTemplate(templatePath string) (*ImageTemplate, error) {
 	// parent). foldChain always clears Extends, so this is the authoritative,
 	// final-mode check for a genuine create-mode build.
 	if err := mergedTemplate.validateBaseline(); err != nil {
+		return nil, fmt.Errorf("merged template is invalid: %w", err)
+	}
+	if err := mergedTemplate.finalizeProvisioning(); err != nil {
 		return nil, fmt.Errorf("merged template is invalid: %w", err)
 	}
 

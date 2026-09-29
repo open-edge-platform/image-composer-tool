@@ -3,7 +3,6 @@ package debutils
 import (
 	"bufio"
 	"bytes"
-	"crypto/sha256"
 	"fmt"
 	"io"
 	"os"
@@ -16,6 +15,7 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
 	"github.com/ProtonMail/go-crypto/openpgp/clearsign"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/file"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"github.com/schollz/progressbar/v3"
 )
@@ -433,17 +433,7 @@ func getChecksumByName(pkgChecksum map[string]string, deb string) string {
 
 // computeFileSHA256 computes the SHA256 checksum of the given file.
 func computeFileSHA256(path string) (string, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-
-	hasher := sha256.New()
-	if _, err := io.Copy(hasher, file); err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%x", hasher.Sum(nil)), nil
+	return file.SHA256(path)
 }
 
 // FindChecksumInRelease parses the Release file and returns the checksum for the given file and checksum type.

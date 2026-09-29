@@ -29,7 +29,8 @@ func NewDebInstaller() *DebInstaller {
 	return &DebInstaller{}
 }
 
-func normalizeDebArch(targetArch string) (string, error) {
+// NormalizeDebArch maps a target architecture to its Debian name (amd64, arm64).
+func NormalizeDebArch(targetArch string) (string, error) {
 	switch targetArch {
 	case "amd64", "x86_64":
 		return "amd64", nil
@@ -129,7 +130,7 @@ func (debInstaller *DebInstaller) UpdateLocalDebRepo(repoPath, targetArch string
 		return fmt.Errorf("repository path cannot be empty")
 	}
 
-	normalizedArch, err := normalizeDebArch(targetArch)
+	normalizedArch, err := NormalizeDebArch(targetArch)
 	if err != nil {
 		return err
 	}

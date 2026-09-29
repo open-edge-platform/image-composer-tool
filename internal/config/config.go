@@ -336,6 +336,12 @@ type Initramfs struct {
 type Bootloader struct {
 	BootType string `yaml:"bootType"` // BootType: type of bootloader (e.g., "efi", "legacy")
 	Provider string `yaml:"provider"` // Provider: bootloader provider (e.g., "grub2", "systemd-boot")
+	// BootEntryPolicy controls the firmware boot order the live installer
+	// writes: "preserve" (default) puts the installed OS first and keeps the
+	// existing BootOrder after it; "exclusive" leaves only the installed OS in
+	// BootOrder. Boot entries themselves are kept, except earlier entries
+	// labelled exactly ICT, which are replaced.
+	BootEntryPolicy string `yaml:"bootEntryPolicy,omitempty"`
 }
 
 // ImmutabilityConfig holds the immutability configuration
@@ -378,6 +384,11 @@ type UserConfig struct {
 	Sudo           bool     `yaml:"sudo,omitempty"`           // Sudo: whether to grant sudo permissions
 	Home           string   `yaml:"home,omitempty"`           // Home: custom home directory path
 	Shell          string   `yaml:"shell,omitempty"`          // Shell: login shell (e.g., /bin/bash, /bin/zsh)
+	// SSHAuthorizedKeys: public key lines written to ~/.ssh/authorized_keys
+	SSHAuthorizedKeys []string `yaml:"sshAuthorizedKeys,omitempty"`
+	// SSHAuthorizedKeysFiles: host files whose public key lines are read at
+	// template load time and appended to SSHAuthorizedKeys
+	SSHAuthorizedKeysFiles []string `yaml:"sshAuthorizedKeysFiles,omitempty"`
 }
 
 // NetworkRoute represents a static route entry
@@ -430,6 +441,10 @@ type SystemConfig struct {
 	Configurations  []ConfigurationInfo  `yaml:"configurations"`
 	Kernel          KernelConfig         `yaml:"kernel"`
 	Dkms            Dkms                 `yaml:"dkms,omitempty"`
+	Proxy           ProxyConfig          `yaml:"proxy,omitempty"`
+	Provisioning    ProvisioningConfig   `yaml:"provisioning,omitempty"`
+	CloudInit       CloudInitConfig      `yaml:"cloudInit,omitempty"`
+	AptPolicy       AptPolicy            `yaml:"aptPolicy,omitempty"`
 }
 
 // AdditionalFile stage markers control WHEN an overlay build copies an
@@ -516,6 +531,7 @@ func LoadTemplate(path string, validateFull bool) (*ImageTemplate, error) {
 	if err := resolveFDEPassphrase(template, path); err != nil {
 		return nil, err
 	}
+	resolveProvisioningPaths(template, path)
 
 	// Store the template path info
 	canonicalPath, absErr := filepath.Abs(path)
@@ -578,6 +594,10 @@ func parseYAMLTemplate(data []byte, validateFull bool) (*ImageTemplate, error) {
 	}
 
 	if err := template.validateUsers(); err != nil {
+		return nil, err
+	}
+
+	if err := template.validateProvisioning(); err != nil {
 		return nil, err
 	}
 
@@ -904,7 +924,8 @@ func (t *ImageTemplate) GetAdditionalFileInfo() []AdditionalFileInfo {
 					log.Warnf("Cannot resolve relative additional file path without template file context: %+v",
 						t.SystemConfig.AdditionalFiles[i])
 				} else {
-					candidatePath, found := resolveTemplateRelativePath(t.PathList, t.SystemConfig.AdditionalFiles[i].Local)
+					candidatePath, found := ResolveTemplateRelativePath(t.PathList,
+						t.SystemConfig.AdditionalFiles[i].Local)
 					if found {
 						newFileInfo := AdditionalFileInfo{
 							Local: candidatePath,
@@ -923,11 +944,11 @@ func (t *ImageTemplate) GetAdditionalFileInfo() []AdditionalFileInfo {
 	return PathUpdatedList
 }
 
-// resolveTemplateRelativePath resolves a relative path against each template path
+// ResolveTemplateRelativePath resolves a relative path against each template path
 // and each of its ancestor directories. This lets nested templates reference
 // shared assets from a parent template directory (for example,
 // image-templates/additionalfiles).
-func resolveTemplateRelativePath(templatePaths []string, relativePath string) (string, bool) {
+func ResolveTemplateRelativePath(templatePaths []string, relativePath string) (string, bool) {
 	cleanRelativePath := filepath.Clean(relativePath)
 
 	for _, templatePath := range templatePaths {
@@ -1689,6 +1710,20 @@ func (t *ImageTemplate) validateOverlaySystemConfig() error {
 	if sc.Dkms.wasProvided || sc.Dkms.Enabled || len(sc.Dkms.Modules) > 0 || sc.Dkms.SecureBoot.Enabled {
 		offending = append(offending, "dkms")
 	}
+	// These sections are applied by the create-mode configuration step,
+	// which an overlay build does not run.
+	if !sc.Proxy.IsEmpty() {
+		offending = append(offending, "proxy")
+	}
+	if len(sc.Provisioning.Scripts) > 0 {
+		offending = append(offending, "provisioning")
+	}
+	if !sc.CloudInit.isEmpty() {
+		offending = append(offending, "cloudInit")
+	}
+	if !sc.AptPolicy.isEmpty() {
+		offending = append(offending, "aptPolicy")
+	}
 
 	if len(offending) == 0 {
 		return nil
@@ -1760,6 +1795,16 @@ func (t *ImageTemplate) validateUsers() error {
 		}
 		if u.StartupScript != "" && !isConfinedImagePath(u.StartupScript) {
 			invalidScripts = append(invalidScripts, fmt.Sprintf("%q", u.StartupScript))
+		}
+		if u.PasswordMaxAge < 0 {
+			return fmt.Errorf("invalid systemConfig.users entry %q: passwordMaxAge must be a positive number of days "+
+				"(omit it for no limit)", u.Name)
+		}
+		for _, p := range []string{u.Shell, u.Home} {
+			if p != "" && (!isConfinedImagePath(p) || strings.ContainsAny(p, " \t")) {
+				return fmt.Errorf("invalid systemConfig.users entry %q: shell and home must be clean absolute "+
+					"in-image paths without spaces, \":\" or \"..\" (got %q)", u.Name, p)
+			}
 		}
 	}
 	if len(invalidNames) > 0 {

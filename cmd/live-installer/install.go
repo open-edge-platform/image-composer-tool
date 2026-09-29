@@ -341,79 +341,11 @@ func updateBootOrder(template *config.ImageTemplate, diskPathIdMap map[string]st
 		return fmt.Errorf("failed to create new boot entry: %w", err)
 	}
 
+	if err := setBootOrder(template.GetBootEntryPolicy()); err != nil {
+		return fmt.Errorf("failed to set boot order: %w", err)
+	}
+
 	log.Infof("Boot order updated successfully")
-
-	return nil
-}
-
-func removeOldBootEntries() error {
-	// Entries created by previous runs of installer should be removed.
-	// Do NOT remove entries for other OSes or hardware recovery tools.
-	output, err := shell.ExecCmd("efibootmgr", true, shell.HostPath, nil)
-	if err != nil {
-		log.Errorf("Failed to list existing boot entries: %v", err)
-		return fmt.Errorf("failed to list existing boot entries: %w", err)
-	}
-
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "Boot") && strings.Contains(line, "*") {
-			// Extract bootnum and label
-			parts := strings.Fields(line)
-			if len(parts) < 2 {
-				continue
-			}
-			bootnum := parts[0][4:8] // Boot0001 -> 0001
-			label := strings.Join(parts[1:], " ")
-			if strings.Contains(label, "ICT") {
-				log.Infof("Removing old boot entry: %s (%s)", bootnum, label)
-				cmdStr := fmt.Sprintf("efibootmgr --delete-bootnum --bootnum %s", bootnum)
-				if _, err := shell.ExecCmd(cmdStr, true, shell.HostPath, nil); err != nil {
-					log.Errorf("Failed to remove boot entry %s: %v", bootnum, err)
-					return fmt.Errorf("failed to remove boot entry %s: %w", bootnum, err)
-				}
-				log.Infof("Successfully removed boot entry: %s", bootnum)
-			}
-		}
-	}
-	return nil
-}
-
-func createNewBootEntry(template *config.ImageTemplate, diskPathIdMap map[string]string) error {
-	diskConfig := template.GetDiskConfig()
-	diskPath := diskConfig.Path
-	if diskPath == "" {
-		return fmt.Errorf("no target disk path specified in the template")
-	}
-	var bootPartPath string
-	for diskId, diskPartPath := range diskPathIdMap {
-		for _, partition := range diskConfig.Partitions {
-			if partition.ID == diskId {
-				if partition.MountPoint == "/boot/efi" {
-					bootPartPath = diskPartPath
-					break
-				}
-			}
-		}
-	}
-	if bootPartPath == "" {
-		return fmt.Errorf("no EFI boot partition found in the disk partitions")
-	}
-
-	partNum := strings.TrimPrefix(bootPartPath, diskPath)
-	if partNum[0] == 'p' {
-		partNum = partNum[1:]
-	}
-
-	log.Infof("Creating new boot entry for disk %s partition %s", diskPath, partNum)
-	cmdStr := fmt.Sprintf("efibootmgr --create --disk %s --part %s", diskPath, partNum)
-	cmdStr += " --loader /EFI/BOOT/bootx64.efi"
-	cmdStr += " --label 'ICT' --verbose"
-
-	if _, err := shell.ExecCmdWithStream(cmdStr, true, shell.HostPath, nil); err != nil {
-		log.Errorf("Failed to create new boot entry: %v", err)
-		return fmt.Errorf("failed to create new boot entry: %w", err)
-	}
 
 	return nil
 }

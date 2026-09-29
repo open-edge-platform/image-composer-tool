@@ -53,9 +53,9 @@ systemConfig:
       final: /usr/lib/systemd/system/getty@.service
     - local: ../additionalfiles/serial-getty@.service
       final: /usr/lib/systemd/system/serial-getty@.service
-    - local: ../../../../../../general/isolinux/attendedinstaller
+    - local: ../../../../../general/isolinux/attendedinstaller
       final: /root/attendedinstaller
-    - local: ../../../../../../../build/live-installer
+    - local: ../../../../../../build/live-installer
       final: /usr/bin/live-installer
 
   users:

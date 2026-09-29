@@ -1,12 +1,13 @@
 # Ubuntu 24.04 templates
 
-`target.dist: ubuntu24` — 30 templates.
+`target.dist: ubuntu24` — 31 templates.
 
 | Template | Arch | Type | Purpose | CI |
 |---|---|---|---|---|
 | [`ubuntu24-x86_64-minimal-initrd.yml`](./ubuntu24-x86_64-minimal-initrd.yml) | x86_64 | img | minimal | — |
 | [`ubuntu24-x86_64-minimal-iso.yml`](./ubuntu24-x86_64-minimal-iso.yml) | x86_64 | iso | minimal | yes |
 | [`ubuntu24-x86_64-minimal-unattended-iso.yml`](./ubuntu24-x86_64-minimal-unattended-iso.yml) | x86_64 | iso | unattended installer | yes |
+| [`ubuntu24-x86_64-fedaero-base-iso.yml`](./ubuntu24-x86_64-fedaero-base-iso.yml) <br>*Fed Aero base platform* | x86_64 | iso | unattended installer with users, SSH keys, cloud-init, provisioning (HWE kernel) | — |
 | [`ubuntu24-aarch64-edge-raw.yml`](./ubuntu24-aarch64-edge-raw.yml) | aarch64 | raw | edge | — |
 | [`ubuntu24-aarch64-minimal-raw.yml`](./ubuntu24-aarch64-minimal-raw.yml) | aarch64 | raw | minimal | yes |
 | [`ubuntu24-aarch64-minimal-uki.yml`](./ubuntu24-aarch64-minimal-uki.yml) | aarch64 | raw | unified kernel image | — |
