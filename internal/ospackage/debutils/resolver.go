@@ -3,6 +3,7 @@ package debutils
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -21,6 +22,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/pkgfetcher"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/network"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/runctx"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
@@ -210,7 +212,7 @@ func refreshRepoMetadata(
 	}
 
 	if err := verify(stageDir); err != nil {
-		return false, fmt.Errorf("verifying refreshed metadata: %w", err)
+		return false, fmt.Errorf("%w: %w", errMetadataVerify, err)
 	}
 
 	for _, f := range localFiles {
@@ -224,6 +226,78 @@ func refreshRepoMetadata(
 		}
 	}
 	return true, nil
+}
+
+// maxMetadataRefreshAttempts bounds the retry in refreshRepoMetadataWithRetry,
+// and metadataRefreshRetryDelay is the pause between attempts. The delay is a
+// var, not a const, so tests can shrink it instead of sleeping for real.
+const maxMetadataRefreshAttempts = 3
+
+var metadataRefreshRetryDelay = 2 * time.Second
+
+// errMetadataVerify marks a refresh that failed signature/metadata verification
+// — the only failure class refreshRepoMetadataWithRetry retries, since a re-fetch
+// from a freshly synced mirror node can clear it. Download, filesystem, and
+// cancellation errors are returned unwrapped and are not retried.
+var errMetadataVerify = errors.New("verifying refreshed metadata")
+
+// refreshRepoMetadataWithRetry retries refreshRepoMetadata a bounded number of
+// times, but only when it fails signature/metadata verification
+// (errMetadataVerify). Some CDN-backed mirrors serve Release and Release.gpg
+// from backend nodes that have briefly fallen out of sync with each other,
+// producing a signature mismatch that a subsequent fetch typically resolves
+// within moments, without a human having to re-run CI. Download, filesystem,
+// and cancellation errors are deterministic here and returned immediately.
+//
+// Between attempts it drops the shared secure client's pooled keep-alive
+// connections. FetchPackages fetches through network.GetSecureHTTPClient(), a
+// process-wide singleton with keep-alives on; without this a retry landing
+// only metadataRefreshRetryDelay later would reuse the same TCP/TLS connection
+// to the same CDN backend and re-fetch the identical mismatched pair. Forcing
+// a fresh dial lets the CDN route the retry to a different, self-consistent
+// backend node, which is what actually clears the transient mismatch.
+//
+// A persistent failure still returns the last error after the attempts are
+// exhausted, so the existing haveLocalMeta-based fallback in
+// ParseRepositoryMetadata is unaffected.
+func refreshRepoMetadataWithRetry(
+	pkgMetaDir string, localFiles, urls []string, verify func(stageDir string) error,
+) (refreshed bool, err error) {
+	for attempt := 1; attempt <= maxMetadataRefreshAttempts; attempt++ {
+		refreshed, err = refreshRepoMetadata(pkgMetaDir, localFiles, urls, verify)
+		if err == nil {
+			return refreshed, nil
+		}
+		// Retry only a verification mismatch: a re-fetch may land on a freshly
+		// synced mirror node. Download, filesystem, and cancellation errors are
+		// deterministic here (FetchPackages already does its own HTTP retries),
+		// so propagate them immediately without consuming the retry budget.
+		if !errors.Is(err, errMetadataVerify) || runctx.Context().Err() != nil {
+			return refreshed, err
+		}
+		if attempt == maxMetadataRefreshAttempts {
+			break
+		}
+
+		logger.Logger().Warnf(
+			"refreshing repo metadata failed on attempt %d/%d (%v); retrying, since this "+
+				"is often a transient mirror sync issue", attempt, maxMetadataRefreshAttempts, err)
+		// Drop pooled keep-alive connections so the next attempt dials fresh
+		// and the CDN can route it to a different backend node, rather than
+		// reusing the connection that just served the mismatched pair.
+		network.GetSecureHTTPClient().CloseIdleConnections()
+
+		// Cancel-aware backoff: a SIGINT/SIGTERM during the wait aborts promptly
+		// instead of blocking for the full delay before the next fetch sees it.
+		timer := time.NewTimer(metadataRefreshRetryDelay)
+		select {
+		case <-runctx.Context().Done():
+			timer.Stop()
+			return refreshed, fmt.Errorf("metadata refresh cancelled during retry backoff: %w", runctx.Context().Err())
+		case <-timer.C:
+		}
+	}
+	return refreshed, err
 }
 
 // warnIfReleaseExpired logs when a Release file we could not refresh has passed
@@ -383,7 +457,7 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 		return verifyReleaseFiles(stagedRelease, stagedReleaseSign, stagedPBGPGKey)
 	}
 
-	refreshed, refreshErr := refreshRepoMetadata(
+	refreshed, refreshErr := refreshRepoMetadataWithRetry(
 		pkgMetaDir, metaLocalFiles, metaURLList, verifyStagedMetadata)
 	switch {
 	case refreshErr != nil && !haveLocalMeta:

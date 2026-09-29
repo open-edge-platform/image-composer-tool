@@ -3,17 +3,22 @@ package debutils
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/runctx"
 )
 
 func TestIsGlobPattern(t *testing.T) {
@@ -575,5 +580,234 @@ func TestParseRepositoryMetadata_FallbackReverifiesPersistentSet(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no longer verifies") {
 		t.Errorf("expected a re-verification error, got: %v", err)
+	}
+}
+
+// TestRefreshRepoMetadataWithRetry_RecoversFromTransientMismatch is a
+// regression test for CI jobs that failed when a mirror served Release and
+// Release.gpg from backend nodes that had briefly fallen out of sync: the
+// first fetch pairs a stale signature with the current Release, so
+// verification fails even though the repository itself is fine. A retry that
+// re-fetches (landing on a synced pair) must recover without the caller
+// treating it as a hard failure.
+func TestRefreshRepoMetadataWithRetry_RecoversFromTransientMismatch(t *testing.T) {
+	originalDelay := metadataRefreshRetryDelay
+	t.Cleanup(func() { metadataRefreshRetryDelay = originalDelay })
+	metadataRefreshRetryDelay = time.Millisecond
+
+	dir := t.TempDir()
+	release := filepath.Join(dir, "Release")
+	const original = "SHA256:\n deadbeef 1 main/binary-amd64/Packages.gz\n"
+	if err := os.WriteFile(release, []byte(original), 0644); err != nil {
+		t.Fatalf("writing Release: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("Suite: stable\n"))
+	}))
+	t.Cleanup(server.Close)
+
+	var verifyCalls atomic.Int32
+	verify := func(string) error {
+		if verifyCalls.Add(1) < 2 {
+			return fmt.Errorf("simulated transient mirror signature mismatch")
+		}
+		return nil
+	}
+
+	refreshed, err := refreshRepoMetadataWithRetry(dir, []string{release}, []string{server.URL + "/Release"}, verify)
+	if err != nil {
+		t.Fatalf("refreshRepoMetadataWithRetry did not recover from a transient mismatch: %v", err)
+	}
+	if !refreshed {
+		t.Error("expected refreshed=true once the retry succeeds")
+	}
+	if verifyCalls.Load() < 2 {
+		t.Errorf("expected a retry after the first verification failure, got %d verify call(s)", verifyCalls.Load())
+	}
+}
+
+// TestRefreshRepoMetadataWithRetry_PersistentFailureStillErrors ensures a
+// verification failure that never clears (not a transient mismatch) still
+// fails the build after the bounded attempts are exhausted, rather than
+// silently falling back to unverified metadata.
+func TestRefreshRepoMetadataWithRetry_PersistentFailureStillErrors(t *testing.T) {
+	originalDelay := metadataRefreshRetryDelay
+	t.Cleanup(func() { metadataRefreshRetryDelay = originalDelay })
+	metadataRefreshRetryDelay = time.Millisecond
+
+	dir := t.TempDir()
+	release := filepath.Join(dir, "Release")
+	const original = "SHA256:\n deadbeef 1 main/binary-amd64/Packages.gz\n"
+	if err := os.WriteFile(release, []byte(original), 0644); err != nil {
+		t.Fatalf("writing Release: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("Suite: stable\n"))
+	}))
+	t.Cleanup(server.Close)
+
+	var verifyCalls atomic.Int32
+	verify := func(string) error {
+		verifyCalls.Add(1)
+		return fmt.Errorf("persistently untrusted signature")
+	}
+
+	refreshed, err := refreshRepoMetadataWithRetry(dir, []string{release}, []string{server.URL + "/Release"}, verify)
+	if err == nil {
+		t.Fatal("refreshRepoMetadataWithRetry succeeded for a persistent failure, want an error")
+	}
+	if refreshed {
+		t.Error("expected refreshed=false after every attempt fails")
+	}
+	if verifyCalls.Load() != maxMetadataRefreshAttempts {
+		t.Errorf("expected %d verify calls, got %d", maxMetadataRefreshAttempts, verifyCalls.Load())
+	}
+
+	got, readErr := os.ReadFile(release)
+	if readErr != nil {
+		t.Fatalf("reading Release after persistent failure: %v", readErr)
+	}
+	if string(got) != original {
+		t.Errorf("Release was modified despite persistent verification failure:\n got %q\nwant %q", got, original)
+	}
+}
+
+// TestRefreshRepoMetadataWithRetry_DialsFreshConnectionPerAttempt confirms the
+// retry loop drops pooled keep-alive connections between attempts, so each
+// attempt opens a new connection instead of reusing the one that just served a
+// mismatched Release/Release.gpg pair. Without CloseIdleConnections the shared
+// secure client would reuse the pooled connection to the same backend, and the
+// server would observe a single connection across all attempts.
+func TestRefreshRepoMetadataWithRetry_DialsFreshConnectionPerAttempt(t *testing.T) {
+	originalDelay := metadataRefreshRetryDelay
+	t.Cleanup(func() { metadataRefreshRetryDelay = originalDelay })
+	metadataRefreshRetryDelay = time.Millisecond
+
+	dir := t.TempDir()
+	release := filepath.Join(dir, "Release")
+	if err := os.WriteFile(release, []byte("Suite: stable\n"), 0644); err != nil {
+		t.Fatalf("writing Release: %v", err)
+	}
+
+	var newConns atomic.Int32
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("Suite: stable\n"))
+	}))
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			newConns.Add(1)
+		}
+	}
+	server.Start()
+	t.Cleanup(server.Close)
+
+	// Fail verify on every attempt so all maxMetadataRefreshAttempts run and
+	// each re-fetches from the server.
+	verify := func(string) error { return fmt.Errorf("simulated persistent mismatch") }
+
+	refreshed, err := refreshRepoMetadataWithRetry(dir, []string{release}, []string{server.URL + "/Release"}, verify)
+	if err == nil {
+		t.Fatal("expected an error after every verification attempt fails")
+	}
+	if refreshed {
+		t.Error("expected refreshed=false when every attempt fails verification")
+	}
+
+	if got := newConns.Load(); got < maxMetadataRefreshAttempts {
+		t.Errorf("expected a fresh connection per attempt (>= %d), got %d; "+
+			"retries may be reusing pooled connections to the same backend",
+			maxMetadataRefreshAttempts, got)
+	}
+}
+
+// TestRefreshRepoMetadataWithRetry_DoesNotRetryFetchErrors confirms only a
+// verification mismatch is retried. A deterministic fetch failure (HTTP 404,
+// which FetchPackages does not itself retry) must return immediately without
+// consuming the retry budget or running verify.
+func TestRefreshRepoMetadataWithRetry_DoesNotRetryFetchErrors(t *testing.T) {
+	originalDelay := metadataRefreshRetryDelay
+	t.Cleanup(func() { metadataRefreshRetryDelay = originalDelay })
+	metadataRefreshRetryDelay = time.Millisecond
+
+	dir := t.TempDir()
+	release := filepath.Join(dir, "Release")
+	if err := os.WriteFile(release, []byte("Suite: stable\n"), 0644); err != nil {
+		t.Fatalf("writing Release: %v", err)
+	}
+
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	t.Cleanup(server.Close)
+
+	var verifyCalls atomic.Int32
+	verify := func(string) error {
+		verifyCalls.Add(1)
+		return nil
+	}
+
+	refreshed, err := refreshRepoMetadataWithRetry(dir, []string{release}, []string{server.URL + "/Release"}, verify)
+	if err == nil {
+		t.Fatal("expected an error for a non-verify (fetch) failure")
+	}
+	if refreshed {
+		t.Error("expected refreshed=false on a fetch failure")
+	}
+	if got := requests.Load(); got != 1 {
+		t.Errorf("a non-verify error must not be retried: expected exactly 1 fetch, got %d", got)
+	}
+	if got := verifyCalls.Load(); got != 0 {
+		t.Errorf("verify must not run when the fetch fails, got %d call(s)", got)
+	}
+}
+
+// TestRefreshRepoMetadataWithRetry_BackoffIsCancellable is a regression test for
+// the review comment that the retry backoff must observe context cancellation.
+// With the run context cancelled mid-backoff, the helper must return promptly
+// instead of sleeping out the full delay before the next fetch notices.
+func TestRefreshRepoMetadataWithRetry_BackoffIsCancellable(t *testing.T) {
+	originalDelay := metadataRefreshRetryDelay
+	t.Cleanup(func() { metadataRefreshRetryDelay = originalDelay })
+	// Long enough that an unbroken sleep would dominate the elapsed time.
+	metadataRefreshRetryDelay = 2 * time.Second
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	restore := runctx.SetContext(ctx)
+	t.Cleanup(restore)
+
+	dir := t.TempDir()
+	release := filepath.Join(dir, "Release")
+	if err := os.WriteFile(release, []byte("Suite: stable\n"), 0644); err != nil {
+		t.Fatalf("writing Release: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("Suite: stable\n"))
+	}))
+	t.Cleanup(server.Close)
+
+	// A verification mismatch drives the loop into the backoff; cancel while it
+	// is waiting.
+	verify := func(string) error { return fmt.Errorf("simulated transient mismatch") }
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	_, err := refreshRepoMetadataWithRetry(dir, []string{release}, []string{server.URL + "/Release"}, verify)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected an error when the run context is cancelled during backoff")
+	}
+	if elapsed >= time.Second {
+		t.Errorf("backoff ignored cancellation: returned after %s, want prompt cancellation (delay was %s)",
+			elapsed, metadataRefreshRetryDelay)
 	}
 }
