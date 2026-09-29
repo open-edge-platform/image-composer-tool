@@ -43,8 +43,8 @@ import type { SizeUnit } from '../lib/size'
 //    (see LAYOUT_MODES in lib/disk.ts) — size-based derives the offsets and
 //    keeps them contiguous, offset-based lets them be typed directly.
 //  - MBR is shown but not selectable. The schema and the builder both allow it,
-//    but no shipped template uses it, so it is locked with that reason rather
-//    than hidden — a template already declaring it still shows its real value
+//    but it is not enabled yet, so it is locked with that reason rather than
+//    hidden — a template that already declares it still shows its real value
 //    (see PARTITION_TABLE_DISABLED in lib/disk.ts).
 //
 // The Output Artefacts section has no prototype counterpart. It is
@@ -272,8 +272,9 @@ export function DiskStep() {
         <div className="flex flex-wrap gap-2">
           {PARTITION_TABLE_TYPES.map((t) => {
             const selected = disk.partitionTableType === t
-            // A locked type stays clickable only while it is the template's own
-            // current value — the user can move away from it but not back.
+            // A disabled type stays clickable-looking only while it is the
+            // template's own current value, which the user can move away from
+            // but not return to.
             const lockedReason = selected ? undefined : PARTITION_TABLE_DISABLED[t]
             return (
               <button
@@ -291,7 +292,9 @@ export function DiskStep() {
           })}
         </div>
         {PARTITION_TABLE_DISABLED[disk.partitionTableType] === undefined && (
-          <p className="mt-1 text-xs text-slate-400">{PARTITION_TABLE_DISABLED.mbr}</p>
+          <p className="mt-1 text-xs text-slate-400">
+            {PARTITION_TABLE_DISABLED.mbr}
+          </p>
         )}
       </div>
 

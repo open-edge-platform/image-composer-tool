@@ -101,14 +101,6 @@ func MergeConfigurations(userTemplate, defaultTemplate *ImageTemplate) (*ImageTe
 		}
 	}
 
-	// Metadata is descriptive-only discovery text, so it is taken whole from
-	// whichever template declares it rather than merged field by field — a child
-	// that describes itself replaces its parent's description, and one that says
-	// nothing inherits the parent's via the struct copy above.
-	if userTemplate.Metadata != nil {
-		mergedTemplate.Metadata = userTemplate.Metadata
-	}
-
 	// Override with user-specified values
 	// Image section - always use user values if provided
 	if userTemplate.Image.Name != "" {

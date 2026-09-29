@@ -13,8 +13,8 @@ import {
 import type { PartitionTableType } from '../lib/disk'
 
 // A minimal stand-in for the step's chip row, built from the same exports the
-// component renders from. It keeps the assertions on the rule rather than on the
-// surrounding step, which needs the whole store to mount.
+// component renders from. It keeps the assertions on the rule rather than on
+// the surrounding step, which needs the whole store to mount.
 function PartitionTableChips({ current }: { current: PartitionTableType }) {
   return (
     <div>

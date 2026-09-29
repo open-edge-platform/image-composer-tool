@@ -48,12 +48,13 @@ export const PARTITION_TABLE_TYPES = ['gpt', 'mbr'] as const
 
 export type PartitionTableType = (typeof PARTITION_TABLE_TYPES)[number]
 
-// Table types that the schema and the builder both accept but that are not
-// offered for selection, each with the reason shown on the disabled control.
-// Kept visible-but-disabled rather than hidden: a template that already
-// declares one still renders its real value instead of silently reading as GPT.
+// Table types that are in the schema but not offered for selection, each with
+// the reason shown on the disabled control. Kept visible-but-disabled rather
+// than hidden, matching how the Packages step handles an unavailable choice: a
+// template that already declares one still renders its real value honestly
+// instead of silently reading as GPT.
 export const PARTITION_TABLE_DISABLED: Partial<Record<PartitionTableType, string>> = {
-  mbr: 'MBR is not validated — every shipped template uses GPT. Author the template by hand to use it.',
+  mbr: 'MBR is not yet enabled.',
 }
 
 // isPartitionTableSelectable reports whether the user may switch to a table type.
