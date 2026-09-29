@@ -1097,6 +1097,15 @@ func parseArtifacts(logs []string) []Artifact {
 // reloaded history build list outputs in the same order rather than inheriting
 // ICT's log order in one and the directory walk's alphabetical order in the
 // other. The sort is stable, so each source's own order survives within a group.
+//
+// It ranks on the recorded type and deliberately does not re-derive it from the
+// name. A build recorded before this change carries whatever the old classifier
+// decided — so an old history entry can still list a working file as an image —
+// and reclassifying on read would repair that at the cost of the invariant this
+// whole change rests on: the type is what the build recorded, never what a later
+// reader infers. That also keeps a finished build's reported types from shifting
+// underneath it whenever the classifier is extended. A re-run records the
+// corrected list; the stale entry is left as the history it is.
 func sortArtifacts(arts []Artifact) {
 	rank := func(a Artifact) int {
 		switch artifact.Type(a.Type) {
