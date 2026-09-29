@@ -138,10 +138,19 @@ func TestParseArtifactsUnclassifiedIsNotImage(t *testing.T) {
 // TestDiscoverArtifactsRealBuildDirectory covers the directory-scan fallback
 // against the names a real build leaves behind. It must find the SBOM under its
 // actual name (spdx_manifest_*.json — which the old ".spdx.json" suffix rule
-// missed entirely, dropping the SBOM) and must not report the chroot's working
-// files. See TestDiscoverArtifacts in service_test.go for the nested-layout case.
+// missed entirely, dropping the SBOM), must not report the chroot's working
+// files, and must not reach outside the imagebuild subtree — the chroot holds a
+// copy of the SBOM and can hold stray images, which only their location
+// distinguishes from real outputs.
+// See TestDiscoverArtifacts in service_test.go for the nested-layout case.
 func TestDiscoverArtifactsRealBuildDirectory(t *testing.T) {
-	dir := t.TempDir()
+	work := t.TempDir()
+	// The real layout: outputs under <providerId>/imagebuild/<systemConfigName>,
+	// with the chroot the build ran in as a sibling of imagebuild.
+	dir := filepath.Join(work, "ubuntu-ubuntu26-x86_64", "imagebuild", "minimal")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatalf("mkdir imagebuild: %v", err)
+	}
 	files := []string{
 		"minimal-os-image-ubuntu-26.04.raw.gz",
 		"spdx_manifest_deb_minimal-os-image-ubuntu_20260707_165343.json",
@@ -155,8 +164,26 @@ func TestDiscoverArtifactsRealBuildDirectory(t *testing.T) {
 			t.Fatalf("write %s: %v", name, err)
 		}
 	}
+	// Files of exactly the right shape in the wrong place: the SBOM copied into
+	// the image filesystem at /usr/share/sbom, and an .iso an installed package
+	// shipped. Neither is an output of this build.
+	chrootSBOM := filepath.Join(work, "ubuntu-ubuntu26-x86_64", "chrootenv", "usr", "share", "sbom")
+	if err := os.MkdirAll(chrootSBOM, 0o750); err != nil {
+		t.Fatalf("mkdir chroot sbom: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(chrootSBOM,
+		"spdx_manifest_deb_minimal-os-image-ubuntu_20260707_165343.json"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write chroot sbom: %v", err)
+	}
+	chrootISO := filepath.Join(work, "ubuntu-ubuntu26-x86_64", "chrootenv", "var", "cache")
+	if err := os.MkdirAll(chrootISO, 0o750); err != nil {
+		t.Fatalf("mkdir chroot cache: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(chrootISO, "netboot.iso"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write chroot iso: %v", err)
+	}
 
-	got := discoverArtifacts(dir)
+	got := discoverArtifacts(work)
 	want := map[string]string{
 		"minimal-os-image-ubuntu-26.04.raw.gz":                           "image",
 		"spdx_manifest_deb_minimal-os-image-ubuntu_20260707_165343.json": "sbom",

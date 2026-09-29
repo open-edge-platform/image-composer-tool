@@ -1108,6 +1108,15 @@ func parseArtifacts(logs []string) []Artifact {
 // reloaded history build list outputs in the same order rather than inheriting
 // ICT's log order in one and the directory walk's alphabetical order in the
 // other. The sort is stable, so each source's own order survives within a group.
+//
+// It ranks on the recorded type and deliberately does not re-derive it from the
+// name. A build recorded before this change carries whatever the old classifier
+// decided — so an old history entry can still list a working file as an image —
+// and reclassifying on read would repair that at the cost of the invariant this
+// whole change rests on: the type is what the build recorded, never what a later
+// reader infers. That also keeps a finished build's reported types from shifting
+// underneath it whenever the classifier is extended. A re-run records the
+// corrected list; the stale entry is left as the history it is.
 func sortArtifacts(arts []Artifact) {
 	rank := func(a Artifact) int {
 		switch artifact.Type(a.Type) {
@@ -1145,17 +1154,41 @@ func classifyArtifact(name string) string {
 	return string(artifact.Classify(name))
 }
 
+// imageBuildDirName is the directory every image-maker writes its outputs into,
+// as <workDir>/<providerId>/imagebuild/<systemConfigName>/ — see rawmaker,
+// isomaker, initrdmaker, wsl2maker and overlayImageBuildDir, which all build
+// that same path.
+const imageBuildDirName = "imagebuild"
+
 // discoverArtifacts scans the build work dir for image + SBOM outputs. Used as a
 // fallback when ICT's artifact block cannot be parsed from the logs, and to
 // surface partial outputs after a failed or cancelled compose.
 //
-// Unlike classifyArtifact this drops what it cannot recognise: it walks the whole
-// work dir, which holds the chroot and every intermediate the build touched, so
-// reporting unclassified files here would bury the real outputs.
+// The search is confined to the imagebuild subtrees rather than the whole work
+// dir. The work dir also holds the chroot the build ran in, and the chroot
+// contains files that look exactly like outputs: the SBOM is copied into the
+// image filesystem at /usr/share/sbom, so an unrestricted walk reported that
+// inner copy as a second SBOM, and any .iso or .raw an installed package happens
+// to ship as an image. Both are real files of the right shape in the wrong
+// place, so no name rule can exclude them — only the location can.
+//
+// Unlike classifyArtifact this also drops what it cannot recognise: reporting
+// unclassified files from a directory scan would bury the real outputs.
 func discoverArtifacts(workDir string) []Artifact {
 	var out []Artifact
 	_ = filepath.WalkDir(workDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			// Prune anything that is neither an imagebuild subtree nor on the way
+			// to one, so the chroot is never descended into at all.
+			if !onImageBuildPath(workDir, path) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !underImageBuildDir(workDir, path) {
 			return nil
 		}
 		name := d.Name()
@@ -1171,6 +1204,43 @@ func discoverArtifacts(workDir string) []Artifact {
 		return nil
 	})
 	return out
+}
+
+// onImageBuildPath reports whether dir is an imagebuild directory, inside one,
+// or shallow enough to still be an ancestor of one. It is what lets the walk
+// reach <workDir>/<providerId>/imagebuild without descending into the sibling
+// chroot directories at the same depth.
+func onImageBuildPath(workDir, dir string) bool {
+	rel, err := filepath.Rel(workDir, dir)
+	if err != nil {
+		return false
+	}
+	if rel == "." {
+		return true
+	}
+	segs := strings.Split(rel, string(filepath.Separator))
+	for _, s := range segs {
+		if s == imageBuildDirName {
+			return true
+		}
+	}
+	// Not yet at an imagebuild directory: keep walking only while we are still
+	// above the depth one appears at (<providerId>/imagebuild).
+	return len(segs) < 2
+}
+
+// underImageBuildDir reports whether a file sits inside an imagebuild subtree.
+func underImageBuildDir(workDir, file string) bool {
+	rel, err := filepath.Rel(workDir, filepath.Dir(file))
+	if err != nil {
+		return false
+	}
+	for _, s := range strings.Split(rel, string(filepath.Separator)) {
+		if s == imageBuildDirName {
+			return true
+		}
+	}
+	return false
 }
 
 // humanSize formats a byte count as a short human-readable string, choosing the

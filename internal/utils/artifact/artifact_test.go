@@ -39,6 +39,14 @@ func TestClassify(t *testing.T) {
 		{"overlay complete sidecar", "edge-1.0.complete.spdx.json", artifact.TypeSBOM},
 		{"sbom marker", "image-sbom.json", artifact.TypeSBOM},
 
+		// An image whose own name carries an SBOM marker is still an image: the
+		// marker alone is not enough, the file has to be SPDX JSON.
+		{"image named for its sbom", "robotics-sbom.raw.gz", artifact.TypeImage},
+		{"iso named for its sbom", "robotics-sbom.iso", artifact.TypeImage},
+		{"image with spdx in the name", "my-spdx-image.raw", artifact.TypeImage},
+		{"sbom of an image named for its sbom",
+			"spdx_manifest_deb_robotics-sbom_20260707_165343.json", artifact.TypeSBOM},
+
 		// Working files a chroot leaves in the build directory. These are the
 		// names the web UI used to report as IMAGE.
 		{"chroot bashrc", "bash.bashrc", artifact.TypeUnknown},
