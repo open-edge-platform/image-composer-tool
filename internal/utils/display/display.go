@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/artifact"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 )
 
@@ -20,7 +21,7 @@ func PrintImageDirectorySummary(
 
 	log.Infof("Checking for image artifacts in: %s", imageBuildDir)
 
-	// List all files in the directory (excluding SBOM)
+	// List all files in the directory (SBOMs included — they are filtered below)
 	files, err := os.ReadDir(imageBuildDir)
 	if err != nil {
 		log.Warnf("Unable to read image build directory %s: %v", imageBuildDir, err)
@@ -29,13 +30,16 @@ func PrintImageDirectorySummary(
 
 	log.Infof("Found %d total entries in directory", len(files))
 
-	// Collect all files (including SBOM)
+	// Collect the build outputs (images and SBOMs), skipping the working files a
+	// chroot leaves behind — bash.bashrc, debconf.conf, debian_version and the
+	// like are not artifacts, and listing them here also fed them to the web UI,
+	// which parses this block.
 	var imageFiles []string
 	for _, file := range files {
 		name := file.Name()
 		log.Infof("Checking file: %s (isDir=%v)", name, file.IsDir())
 
-		if file.IsDir() {
+		if file.IsDir() || !artifact.IsOutput(name) {
 			continue
 		}
 		imageFiles = append(imageFiles, name)
