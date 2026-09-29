@@ -244,6 +244,92 @@ func normalizeModuleName(name string) string {
 	return strings.ReplaceAll(name, "-", "_")
 }
 
+// installedDkmsModules returns every built module file under modulesDir,
+// whatever compression form dkms installed it in - plain ".ko", or compressed
+// ".ko.xz"/".ko.zst"/".ko.gz" (all supported natively by modern kernel/dkms
+// setups). Secure Boot signing must cover ALL of them, not just an
+// uncompressed-only glob, or a compressed install would leave some modules
+// unsigned.
+func installedDkmsModules(modulesDir string) ([]string, error) {
+	entries, err := os.ReadDir(modulesDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list dkms modules dir %s: %w", modulesDir, err)
+	}
+	var kos []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.Contains(e.Name(), ".ko") {
+			continue
+		}
+		kos = append(kos, filepath.Join(modulesDir, e.Name()))
+	}
+	return kos, nil
+}
+
+// moduleCompressionSuffix returns the compression suffix of a module path
+// (".xz", ".zst", ".gz"), or "" if it is an uncompressed ".ko".
+func moduleCompressionSuffix(koPath string) string {
+	for _, suffix := range []string{".xz", ".zst", ".gz"} {
+		if strings.HasSuffix(koPath, ".ko"+suffix) {
+			return suffix
+		}
+	}
+	return ""
+}
+
+// decompressDkmsModule decompresses a module in place (chrootKoPath includes
+// the compression suffix, e.g. "foo.ko.xz") so sign-file can operate on the
+// raw ELF object.
+func decompressDkmsModule(installRoot, chrootKoPath, suffix string) error {
+	cmd, err := moduleDecompressCmd(chrootKoPath, suffix)
+	if err != nil {
+		return err
+	}
+	if _, err := shell.ExecCmd(cmd, true, installRoot, nil); err != nil {
+		return fmt.Errorf("failed to decompress dkms module %s for signing: %w", chrootKoPath, err)
+	}
+	return nil
+}
+
+// recompressDkmsModule restores a module to its original compressed form
+// (chrootPlainPath has the compression suffix already stripped, e.g. "foo.ko")
+// after signing.
+func recompressDkmsModule(installRoot, chrootPlainPath, suffix string) error {
+	cmd, err := moduleCompressCmd(chrootPlainPath, suffix)
+	if err != nil {
+		return err
+	}
+	if _, err := shell.ExecCmd(cmd, true, installRoot, nil); err != nil {
+		return fmt.Errorf("failed to recompress dkms module %s after signing: %w", chrootPlainPath, err)
+	}
+	return nil
+}
+
+func moduleDecompressCmd(chrootKoPath, suffix string) (string, error) {
+	switch suffix {
+	case ".xz":
+		return fmt.Sprintf("xz -d %s", shell.QuoteArg(chrootKoPath)), nil
+	case ".zst":
+		return fmt.Sprintf("zstd -d --rm %s", shell.QuoteArg(chrootKoPath)), nil
+	case ".gz":
+		return fmt.Sprintf("gunzip %s", shell.QuoteArg(chrootKoPath)), nil
+	default:
+		return "", fmt.Errorf("unsupported dkms module compression suffix %q", suffix)
+	}
+}
+
+func moduleCompressCmd(chrootPlainPath, suffix string) (string, error) {
+	switch suffix {
+	case ".xz":
+		return fmt.Sprintf("xz %s", shell.QuoteArg(chrootPlainPath)), nil
+	case ".zst":
+		return fmt.Sprintf("zstd --rm %s", shell.QuoteArg(chrootPlainPath)), nil
+	case ".gz":
+		return fmt.Sprintf("gzip %s", shell.QuoteArg(chrootPlainPath)), nil
+	default:
+		return "", fmt.Errorf("unsupported dkms module compression suffix %q", suffix)
+	}
+}
+
 // signDkmsModules signs every built .ko for kernelVersion with the manifest's
 // configured signing key/cert, verifies each is signed, and - if requested -
 // retains the signing identity in the image for future on-target rebuilds.
@@ -260,12 +346,12 @@ func signDkmsModules(installRoot, kernelVersion string, dkms config.Dkms) error 
 	}
 
 	modulesDir := filepath.Join(installRoot, "lib", "modules", kernelVersion, "updates", "dkms")
-	kos, err := filepath.Glob(filepath.Join(modulesDir, "*.ko"))
+	kos, err := installedDkmsModules(modulesDir)
 	if err != nil {
-		return fmt.Errorf("failed to list built dkms modules: %w", err)
+		return err
 	}
 	if len(kos) == 0 {
-		return fmt.Errorf("no built .ko files found under %s to sign", modulesDir)
+		return fmt.Errorf("no built dkms module files found under %s to sign", modulesDir)
 	}
 
 	// Stage the signing key/cert inside the chroot only for the duration of
@@ -304,7 +390,24 @@ func signDkmsModules(installRoot, kernelVersion string, dkms config.Dkms) error 
 	}
 
 	for _, ko := range kos {
+		// sign-file operates on the raw ELF object. A module DKMS installed
+		// compressed (.ko.xz/.ko.zst/.ko.gz, as modern kernel/DKMS setups
+		// support) must be decompressed before signing and recompressed after,
+		// or signing would silently fail to find an ELF object, or leave the
+		// actually-shipped compressed file unsigned.
+		suffix := moduleCompressionSuffix(ko)
+		signTarget := strings.TrimSuffix(ko, suffix)
+
 		chrootKo, err := chrootRelative(ko, installRoot)
+		if err != nil {
+			return err
+		}
+		if suffix != "" {
+			if err := decompressDkmsModule(installRoot, chrootKo, suffix); err != nil {
+				return err
+			}
+		}
+		chrootSignTarget, err := chrootRelative(signTarget, installRoot)
 		if err != nil {
 			return err
 		}
@@ -316,9 +419,9 @@ func signDkmsModules(installRoot, kernelVersion string, dkms config.Dkms) error 
 		// through untouched, same as addImageConfigs's existing cmd hook.
 		signCmd := fmt.Sprintf("chroot %s %s sha512 %s %s %s",
 			shell.QuoteArg(installRoot), shell.QuoteArg(chrootSignFile),
-			shell.QuoteArg(chrootKey), shell.QuoteArg(chrootCert), shell.QuoteArg(chrootKo))
+			shell.QuoteArg(chrootKey), shell.QuoteArg(chrootCert), shell.QuoteArg(chrootSignTarget))
 		if _, err := shell.ExecCmd(signCmd, true, shell.HostPath, nil); err != nil {
-			return fmt.Errorf("failed to sign dkms module %s: %w", filepath.Base(ko), err)
+			return fmt.Errorf("failed to sign dkms module %s: %w", filepath.Base(signTarget), err)
 		}
 
 		// MVP verification: confirm a signer identity is present at all.
@@ -326,9 +429,15 @@ func signDkmsModules(installRoot, kernelVersion string, dkms config.Dkms) error 
 		// would need parsing the cert (e.g. via openssl) - left as a
 		// follow-up rather than silently skipped.
 		signerOutput, err := shell.ExecCmdWithStream(
-			fmt.Sprintf("modinfo -F signer %s", shell.QuoteArg(chrootKo)), true, installRoot, nil)
+			fmt.Sprintf("modinfo -F signer %s", shell.QuoteArg(chrootSignTarget)), true, installRoot, nil)
 		if err != nil || strings.TrimSpace(signerOutput) == "" {
-			return fmt.Errorf("dkms module %s is unsigned after signing attempt", filepath.Base(ko))
+			return fmt.Errorf("dkms module %s is unsigned after signing attempt", filepath.Base(signTarget))
+		}
+
+		if suffix != "" {
+			if err := recompressDkmsModule(installRoot, chrootSignTarget, suffix); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -343,8 +452,12 @@ func signDkmsModules(installRoot, kernelVersion string, dkms config.Dkms) error 
 
 // retainSigningIdentity copies the signing key/cert into the image so a
 // future on-target DKMS rebuild (e.g. after an HWE kernel update) can still
-// produce Secure-Boot-trusted modules. Per review discussion on the EdgePack
-// ADR, ICT does not attempt per-device key uniqueness here - a shared
+// produce Secure-Boot-trusted modules, and configures dkms itself to use them
+// automatically: without also wiring /etc/dkms/framework.conf's
+// mok_signing_key/mok_certificate (the mechanism dkms's own build path and
+// common.postinst consult), the retained key/cert would just be inert file
+// material a future rebuild never actually uses. Per review discussion on the
+// EdgePack ADR, ICT does not attempt per-device key uniqueness here - a shared
 // signing key's fleet-wide blast radius is treated as an OS-level file
 // permission/authorization concern, not something this schema can solve.
 func retainSigningIdentity(installRoot string, sb config.DkmsSecureBoot) error {
@@ -363,7 +476,57 @@ func retainSigningIdentity(installRoot string, sb config.DkmsSecureBoot) error {
 	if _, err := shell.ExecCmd(fmt.Sprintf("chmod 600 %s", shell.QuoteArg(targetKey)), true, shell.HostPath, nil); err != nil {
 		return fmt.Errorf("failed to lock down retained dkms signing key: %w", err)
 	}
+	if err := configureDkmsAutoSigning(installRoot, sb); err != nil {
+		return err
+	}
 	return nil
+}
+
+// configureDkmsAutoSigning writes (or updates) mok_signing_key/mok_certificate
+// in the image's /etc/dkms/framework.conf to point at the just-retained
+// key/cert. This is the standard mechanism dkms itself reads to automatically
+// sign modules it builds later - including a future on-target rebuild
+// triggered by an HWE kernel update - with no further action from ICT at that
+// point. Idempotent: re-running (e.g. a template rebuild) updates the existing
+// entries in place rather than duplicating them.
+func configureDkmsAutoSigning(installRoot string, sb config.DkmsSecureBoot) error {
+	frameworkConf := filepath.Join(installRoot, "etc", "dkms", "framework.conf")
+	if err := os.MkdirAll(filepath.Dir(frameworkConf), 0755); err != nil {
+		return fmt.Errorf("failed to create /etc/dkms for framework.conf: %w", err)
+	}
+
+	existing, err := os.ReadFile(frameworkConf)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to read existing dkms framework.conf: %w", err)
+	}
+
+	var lines []string
+	if len(existing) > 0 {
+		lines = strings.Split(strings.TrimRight(string(existing), "\n"), "\n")
+	}
+	lines = setFrameworkConfVar(lines, "mok_signing_key", sb.TargetKeyPath)
+	lines = setFrameworkConfVar(lines, "mok_certificate", sb.TargetCertPath)
+
+	content := strings.Join(lines, "\n") + "\n"
+	if err := os.WriteFile(frameworkConf, []byte(content), 0644); err != nil {
+		return fmt.Errorf("failed to write dkms framework.conf: %w", err)
+	}
+	return nil
+}
+
+// setFrameworkConfVar replaces an existing "key=value" line in a
+// framework.conf-style file (in place, preserving line order), or appends a
+// new key=value line if key is not already present.
+func setFrameworkConfVar(lines []string, key, value string) []string {
+	assignment := key + "=" + value
+	prefix := key + "="
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), prefix) {
+			lines[i] = assignment
+			return lines
+		}
+	}
+	return append(lines, assignment)
 }
 
 // locateSignFile finds the kernel's scripts/sign-file tool inside the

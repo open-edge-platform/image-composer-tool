@@ -162,9 +162,9 @@
 
    Adds `ubuntu24-x86_64-edgepack-raw.yml`, demonstrating native support for
    Intel's EdgePack platform-enablement packages (Panther Lake / Wildcat Lake)
-   via `packageRepositories` and `systemConfig.packages`, with a
-   `configurations` step that rebuilds DKMS modules against the installed
-   target kernel rather than the chroot's build-host kernel.
+   via `packageRepositories`, `systemConfig.packages`, and the new typed
+   `systemConfig.dkms` section, which builds and verifies DKMS modules against
+   the installed target kernel rather than the chroot's build-host kernel.
 
 **Validated hardware**:
 

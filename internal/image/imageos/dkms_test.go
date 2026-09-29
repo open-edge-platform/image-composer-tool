@@ -4,7 +4,10 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
+
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
 )
 
 func TestSplitDkmsModule(t *testing.T) {
@@ -250,5 +253,143 @@ func TestChrootRelative(t *testing.T) {
 
 	if _, err := chrootRelative("/etc/passwd", installRoot); err == nil {
 		t.Fatal("expected an error for a path outside installRoot")
+	}
+}
+
+func TestModuleCompressionSuffix(t *testing.T) {
+	tests := map[string]string{
+		"/mods/mei.ko":           "",
+		"/mods/mei.ko.xz":        ".xz",
+		"/mods/mei.ko.zst":       ".zst",
+		"/mods/mei.ko.gz":        ".gz",
+		"/mods/virtio-gpu.ko":    "",
+		"/mods/virtio-gpu.ko.xz": ".xz",
+	}
+	for path, want := range tests {
+		if got := moduleCompressionSuffix(path); got != want {
+			t.Errorf("moduleCompressionSuffix(%q) = %q, want %q", path, got, want)
+		}
+	}
+}
+
+func TestModuleDecompressAndCompressCmd(t *testing.T) {
+	tests := []struct {
+		suffix     string
+		wantDecomp string
+		wantRecomp string
+		wantErr    bool
+	}{
+		{suffix: ".xz", wantDecomp: "xz -d 'foo.ko.xz'", wantRecomp: "xz 'foo.ko'"},
+		{suffix: ".zst", wantDecomp: "zstd -d --rm 'foo.ko.zst'", wantRecomp: "zstd --rm 'foo.ko'"},
+		{suffix: ".gz", wantDecomp: "gunzip 'foo.ko.gz'", wantRecomp: "gzip 'foo.ko'"},
+		{suffix: ".unsupported", wantErr: true},
+	}
+	for _, tt := range tests {
+		decompPath := "foo.ko" + tt.suffix
+		gotDecomp, err := moduleDecompressCmd(decompPath, tt.suffix)
+		if tt.wantErr {
+			if err == nil {
+				t.Errorf("moduleDecompressCmd(%q): expected error", tt.suffix)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("moduleDecompressCmd(%q): unexpected error: %v", tt.suffix, err)
+		}
+		if gotDecomp != tt.wantDecomp {
+			t.Errorf("moduleDecompressCmd(%q) = %q, want %q", tt.suffix, gotDecomp, tt.wantDecomp)
+		}
+
+		gotRecomp, err := moduleCompressCmd("foo.ko", tt.suffix)
+		if err != nil {
+			t.Fatalf("moduleCompressCmd(%q): unexpected error: %v", tt.suffix, err)
+		}
+		if gotRecomp != tt.wantRecomp {
+			t.Errorf("moduleCompressCmd(%q) = %q, want %q", tt.suffix, gotRecomp, tt.wantRecomp)
+		}
+	}
+}
+
+func TestInstalledDkmsModules(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"mei.ko", "xe.ko.zst", "igen6_edac.ko.xz", "notes.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("stub"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := installedDkmsModules(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("installedDkmsModules returned %d files, want 3: %v", len(got), got)
+	}
+}
+
+func TestSetFrameworkConfVar(t *testing.T) {
+	t.Run("appends when absent", func(t *testing.T) {
+		got := setFrameworkConfVar(nil, "mok_signing_key", "/etc/dkms/keys/signing.key")
+		want := []string{"mok_signing_key=/etc/dkms/keys/signing.key"}
+		if len(got) != 1 || got[0] != want[0] {
+			t.Errorf("setFrameworkConfVar = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("replaces existing in place", func(t *testing.T) {
+		lines := []string{
+			"mok_signing_key=/old/key",
+			"mok_certificate=/etc/dkms/keys/signing.crt",
+		}
+		got := setFrameworkConfVar(lines, "mok_signing_key", "/new/key")
+		want := []string{
+			"mok_signing_key=/new/key",
+			"mok_certificate=/etc/dkms/keys/signing.crt",
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("setFrameworkConfVar[%d] = %q, want %q", i, got[i], want[i])
+			}
+		}
+	})
+}
+
+func TestConfigureDkmsAutoSigning(t *testing.T) {
+	installRoot := t.TempDir()
+	sb := config.DkmsSecureBoot{
+		TargetKeyPath:  "/etc/dkms/keys/signing.key",
+		TargetCertPath: "/etc/dkms/keys/signing.crt",
+	}
+
+	if err := configureDkmsAutoSigning(installRoot, sb); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	content, err := os.ReadFile(filepath.Join(installRoot, "etc", "dkms", "framework.conf"))
+	if err != nil {
+		t.Fatalf("failed to read framework.conf: %v", err)
+	}
+	got := string(content)
+	if !strings.Contains(got, "mok_signing_key=/etc/dkms/keys/signing.key") {
+		t.Errorf("framework.conf missing mok_signing_key entry: %q", got)
+	}
+	if !strings.Contains(got, "mok_certificate=/etc/dkms/keys/signing.crt") {
+		t.Errorf("framework.conf missing mok_certificate entry: %q", got)
+	}
+
+	// Re-running with a different key path updates in place rather than
+	// duplicating the entry.
+	sb.TargetKeyPath = "/etc/dkms/keys/other.key"
+	if err := configureDkmsAutoSigning(installRoot, sb); err != nil {
+		t.Fatalf("unexpected error on second run: %v", err)
+	}
+	content, err = os.ReadFile(filepath.Join(installRoot, "etc", "dkms", "framework.conf"))
+	if err != nil {
+		t.Fatalf("failed to re-read framework.conf: %v", err)
+	}
+	got = string(content)
+	if strings.Count(got, "mok_signing_key=") != 1 {
+		t.Errorf("expected exactly one mok_signing_key= entry after re-running, got: %q", got)
+	}
+	if !strings.Contains(got, "mok_signing_key=/etc/dkms/keys/other.key") {
+		t.Errorf("framework.conf did not update mok_signing_key in place: %q", got)
 	}
 }

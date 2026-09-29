@@ -259,9 +259,13 @@ func validateFDEConstraints(data []byte) error {
 
 // validateDkmsSecureBootConstraints ensures a manifest that asks for Secure Boot
 // signing of DKMS-built modules actually supplies the key/cert needed to do it,
-// and that retaining the signing identity in the image names where to put it.
-// The same rules exist in os-image-template.schema.json; this check mirrors
-// validateFDEConstraints as defense-in-depth after schema validation.
+// that retaining the signing identity in the image names where to put it, and
+// that each nested feature's parent is actually enabled — secureBoot.enabled
+// requires dkms.enabled, and retainSigningIdentity requires secureBoot.enabled
+// — so a manifest can't silently ask for signing/retention that buildDkmsModules
+// never performs because the parent feature is off. The same rules exist in
+// os-image-template.schema.json; this check mirrors validateFDEConstraints as
+// defense-in-depth after schema validation.
 func validateDkmsSecureBootConstraints(data []byte) error {
 	var doc map[string]interface{}
 	if err := json.Unmarshal(data, &doc); err != nil {
@@ -283,7 +287,12 @@ func validateDkmsSecureBootConstraints(data []byte) error {
 		return nil
 	}
 
+	dkmsEnabled, _ := dkms["enabled"].(bool)
+
 	if enabled, _ := secureBoot["enabled"].(bool); enabled {
+		if !dkmsEnabled {
+			return fmt.Errorf("systemConfig.dkms.secureBoot.enabled requires systemConfig.dkms.enabled to also be true")
+		}
 		signingKeyPath, _ := secureBoot["signingKeyPath"].(string)
 		signingCertPath, _ := secureBoot["signingCertPath"].(string)
 		if strings.TrimSpace(signingKeyPath) == "" || strings.TrimSpace(signingCertPath) == "" {
@@ -292,6 +301,9 @@ func validateDkmsSecureBootConstraints(data []byte) error {
 	}
 
 	if retain, _ := secureBoot["retainSigningIdentity"].(bool); retain {
+		if enabled, _ := secureBoot["enabled"].(bool); !enabled {
+			return fmt.Errorf("systemConfig.dkms.secureBoot.retainSigningIdentity requires systemConfig.dkms.secureBoot.enabled to also be true")
+		}
 		targetKeyPath, _ := secureBoot["targetKeyPath"].(string)
 		targetCertPath, _ := secureBoot["targetCertPath"].(string)
 		if strings.TrimSpace(targetKeyPath) == "" || strings.TrimSpace(targetCertPath) == "" {

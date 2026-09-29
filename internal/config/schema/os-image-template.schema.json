@@ -506,6 +506,16 @@
           "then": {
             "required": ["targetKeyPath", "targetCertPath"]
           }
+        },
+        {
+          "if": {
+            "properties": { "retainSigningIdentity": { "const": true } },
+            "required": ["retainSigningIdentity"]
+          },
+          "then": {
+            "properties": { "enabled": { "const": true } },
+            "required": ["enabled"]
+          }
         }
       ]
     },
@@ -526,7 +536,24 @@
         "secureBoot": { "$ref": "#/$defs/DkmsSecureBoot" }
       },
       "required": ["enabled"],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "secureBoot": {
+                "properties": { "enabled": { "const": true } },
+                "required": ["enabled"]
+              }
+            },
+            "required": ["secureBoot"]
+          },
+          "then": {
+            "properties": { "enabled": { "const": true } },
+            "required": ["enabled"]
+          }
+        }
+      ]
     },
     "SystemConfig": {
       "type": "object",

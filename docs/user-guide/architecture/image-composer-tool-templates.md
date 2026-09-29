@@ -36,6 +36,7 @@ For a conceptual overview of how templates fit into the build pipeline, see
       - [`systemConfig.network`](#systemconfignetwork)
       - [`systemConfig.immutability`](#systemconfigimmutability)
       - [`systemConfig.fde`](#systemconfigfde)
+      - [`systemConfig.dkms`](#systemconfigdkms)
       - [`systemConfig.users[]`](#systemconfigusers)
       - [`systemConfig.initramfs`](#systemconfiginitramfs)
       - [`systemConfig.additionalFiles[]`](#systemconfigadditionalfiles)
@@ -890,6 +891,66 @@ systemConfig:
 
 See [Configure Full-Disk Encryption](../configuration/configure-fde.md) for a
 complete guide, including usage with dm-verity immutability.
+
+#### `systemConfig.dkms`
+
+Builds and verifies vendor DKMS kernel modules against the image's installed
+target kernel during composition — always with an explicit `-k <kernel-version>`,
+since a package's own postinst/dkms.conf trigger would otherwise key off
+`uname -r`, which inside the build chroot reports the build host's kernel, not
+the one just installed. ICT verifies both that every requested module reports
+`installed` in `dkms status`, and that every module the source's own `dkms.conf`
+declares (`BUILT_MODULE_NAME`) actually compiled — a source can report installed
+while one of its modules silently failed to build.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `enabled` | bool | **Yes** | Whether ICT builds/verifies DKMS modules during composition |
+| `modules` | string[] | No | Optional `"name/version"` assertion list (e.g. `edge-gfx-dkms/7.0` — the actual dkms.conf `PACKAGE_NAME`/`PACKAGE_VERSION`, not a guessed/stripped name). If empty, every module DKMS has registered is built via `dkms autoinstall` and verified |
+| `secureBoot` | object | No | Sign built modules for UEFI Secure Boot; see below |
+
+**`systemConfig.dkms.secureBoot`**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `enabled` | bool | **Yes** (when section present) | Sign built modules for UEFI Secure Boot. Requires `systemConfig.dkms.enabled: true` |
+| `signingKeyPath` | string | Conditional | Private key (`.key` or `.pem`) used to sign built modules. Required when `enabled: true` |
+| `signingCertPath` | string | Conditional | Certificate (`.crt` or `.pem`) matching the signing key. Required when `enabled: true` |
+| `retainSigningIdentity` | bool | No | Copy the signing key/cert into the image so a future on-target DKMS rebuild (e.g. after an HWE kernel update) can still produce Secure-Boot-trusted modules. Requires `secureBoot.enabled: true` |
+| `targetKeyPath` | string | Conditional | In-image path the signing key is copied to. Required when `retainSigningIdentity: true` |
+| `targetCertPath` | string | Conditional | In-image path the signing certificate is copied to. Required when `retainSigningIdentity: true` |
+
+> **Note:** `secureBoot.enabled` requires `dkms.enabled: true`, and
+> `retainSigningIdentity: true` requires `secureBoot.enabled: true` — both are
+> rejected by schema and semantic validation otherwise. When retained, ICT also
+> writes `mok_signing_key`/`mok_certificate` into the image's
+> `/etc/dkms/framework.conf`, the standard mechanism `dkms` itself consults to
+> auto-sign future builds — not just inert key material.
+>
+> Per the EdgePack ADR, ICT does not attempt per-device key uniqueness: a shared
+> signing key's fleet-wide blast radius is treated as an OS-level file
+> permission/authorization concern, not something this schema solves.
+
+```yaml
+systemConfig:
+  dkms:
+    enabled: true
+    secureBoot:
+      enabled: true
+      signingKeyPath: /path/to/signing.key
+      signingCertPath: /path/to/signing.crt
+      retainSigningIdentity: true
+      targetKeyPath: /etc/dkms/keys/signing.key
+      targetCertPath: /etc/dkms/keys/signing.crt
+```
+
+**Merge semantics:** `enabled` and `secureBoot.enabled`/`retainSigningIdentity`
+are full overwrites (the user value always wins, even to turn a default `true`
+back to `false`); `modules` is a full replace when non-empty (mirrors
+`systemConfig.kernel.packages`), not an append; the other `secureBoot` string
+fields (`signingKeyPath`, `signingCertPath`, `targetKeyPath`, `targetCertPath`)
+are only overwritten when the user supplies a non-empty value, otherwise the
+default is kept.
 
 #### `systemConfig.users[]`
 

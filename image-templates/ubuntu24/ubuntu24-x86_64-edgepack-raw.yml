@@ -110,9 +110,18 @@ systemConfig:
 
   kernel:
     cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
+    # Pinned to the exact kernel image/headers validated against the EdgePack
+    # DKMS module set below, per the EdgePack ADR's requirement for an exact
+    # validated kernel/header/EdgePack compatibility tuple: a floating
+    # metapackage (linux-image-generic-hwe-24.04) can move to a newer kernel
+    # ABI whenever Canonical publishes one, independently of this template or
+    # the live EdgePack repository, combining an unvalidated kernel with the
+    # current vendor modules and risking a DKMS compilation failure or a
+    # non-reproducible build. Bump this pin only alongside a fresh DKMS
+    # build/verify pass against the packageRepositories entries below.
     packages:
-      - linux-image-generic-hwe-24.04
-      - linux-headers-generic-hwe-24.04
+      - linux-image-7.0.0-34-generic
+      - linux-headers-7.0.0-34-generic
 
   # intel-edge-base-standard pulls in EdgePack's DKMS driver sources
   # (edge-gfx-dkms, edge-edac-dkms, edge-issei-dkms) transitively. ICT builds
@@ -124,10 +133,13 @@ systemConfig:
   # least one built successfully - no need to know DKMS's internal module/
   # version identifiers up front. To assert specific modules instead (fail the
   # build if any of *these* aren't installed), list them as "name/version",
-  # e.g. "edge-gfx/1.0" - find the real name/version by installing the
-  # package once and running `dkms status`, or by reading its
-  # /usr/src/<pkg>-<version>/dkms.conf (PACKAGE_NAME/PACKAGE_VERSION); it is
-  # not always the Debian package name with "-dkms" dropped.
+  # e.g. "edge-gfx-dkms/7.0" - this is the actual dkms.conf PACKAGE_NAME/
+  # PACKAGE_VERSION for EdgePack (confirmed against real `dkms status`
+  # output), which for EdgePack happens to match its Debian package name
+  # verbatim, "-dkms" suffix included; for other vendors, don't assume the
+  # suffix is stripped by convention - find the real name/version by
+  # installing the package once and running `dkms status`, or by reading its
+  # /usr/src/<pkg>-<version>/dkms.conf.
   dkms:
     enabled: true
     # Secure Boot signing for the built modules. Left disabled in this sample
