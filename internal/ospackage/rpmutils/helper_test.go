@@ -1473,6 +1473,35 @@ func TestGenerateSPDXFileNameConsistency(t *testing.T) {
 	}
 }
 
+func TestValidatePackageFileName(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{name: "normal rpm", input: "bash-5.1-8.el9.x86_64.rpm", wantErr: false},
+		{name: "tilde and plus", input: "gcc-c++-11.2.0~rc1-1.noarch.rpm", wantErr: false},
+		{name: "empty", input: "", wantErr: true},
+		{name: "dot", input: ".", wantErr: true},
+		{name: "missing suffix", input: "bash-5.1-8.el9.x86_64", wantErr: true},
+		{name: "path traversal", input: "../etc/passwd.rpm", wantErr: true},
+		{name: "slash", input: "sub/dir/pkg.rpm", wantErr: true},
+		{name: "semicolon injection", input: "pkg;touch owned.rpm", wantErr: true},
+		{name: "single quote injection", input: "pkg';rm -rf /;'.rpm", wantErr: true},
+		{name: "space", input: "pkg name.rpm", wantErr: true},
+		{name: "command substitution", input: "pkg$(id).rpm", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validatePackageFileName(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validatePackageFileName(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestIsBinaryGPGKey(t *testing.T) {
 	tests := []struct {
 		name   string

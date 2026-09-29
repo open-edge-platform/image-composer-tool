@@ -868,8 +868,12 @@ func downloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSour
 	// Extract URLs
 	urls := make([]string, len(sorted_pkgs))
 	for i, pkg := range sorted_pkgs {
+		pkgFileName := path.Base(pkg.URL)
+		if err := validatePackageFileName(pkgFileName); err != nil {
+			return downloadPkgList, nil, fmt.Errorf("rejecting package from %q: %w", pkg.URL, err)
+		}
 		urls[i] = pkg.URL
-		downloadPkgList = append(downloadPkgList, path.Base(pkg.URL))
+		downloadPkgList = append(downloadPkgList, pkgFileName)
 	}
 
 	// Ensure dest directory exists

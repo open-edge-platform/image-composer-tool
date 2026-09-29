@@ -588,3 +588,78 @@ func TestInstallRpmPkg_MultiplePackages(t *testing.T) {
 		t.Errorf("Expected successful installation of multiple packages or GPG component error, got: %v", err)
 	}
 }
+
+// capturingExecutor records every command string it is asked to run and returns
+// canned output so an install flow completes without executing anything.
+type capturingExecutor struct{ cmds []string }
+
+func (e *capturingExecutor) record(cmdStr string) (string, error) {
+	e.cmds = append(e.cmds, cmdStr)
+	switch {
+	case strings.Contains(cmdStr, "rpm -E"):
+		return "sqlite", nil
+	case strings.Contains(cmdStr, "rpm -q -l"):
+		return "/etc/pki/rpm-gpg/RPM-GPG-KEY-test", nil
+	default:
+		return "", nil
+	}
+}
+
+func (e *capturingExecutor) ExecCmd(cmdStr string, _ bool, _ string, _ []string) (string, error) {
+	return e.record(cmdStr)
+}
+
+func (e *capturingExecutor) ExecCmdSilent(cmdStr string, _ bool, _ string, _ []string) (string, error) {
+	return e.record(cmdStr)
+}
+
+func (e *capturingExecutor) ExecCmdWithStream(cmdStr string, _ bool, _ string, _ []string) (string, error) {
+	return e.record(cmdStr)
+}
+
+func (e *capturingExecutor) ExecCmdWithInput(_ string, cmdStr string, _ bool, _ string, _ []string) (string, error) {
+	return e.record(cmdStr)
+}
+
+// TestInstallRpmPkg_QuotesMaliciousFileName is the CWE-78 regression test: a
+// package basename derived from repository metadata that carries shell syntax
+// must reach the rpm install command shell-quoted, so it cannot break out and
+// run attacker commands on the build host.
+func TestInstallRpmPkg_QuotesMaliciousFileName(t *testing.T) {
+	installer := rpm.NewRpmInstaller()
+	tempDir := t.TempDir()
+
+	chrootEnvPath := filepath.Join(tempDir, "chroot")
+	chrootPkgCacheDir := filepath.Join(tempDir, "cache")
+	if err := os.MkdirAll(chrootPkgCacheDir, 0700); err != nil {
+		t.Fatalf("Failed to create cache directory: %v", err)
+	}
+
+	malicious := "evil';touch pwned;'.rpm"
+	if err := os.WriteFile(filepath.Join(chrootPkgCacheDir, malicious), []byte("x"), 0644); err != nil {
+		t.Fatalf("Failed to create malicious package fixture: %v", err)
+	}
+
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+	capExec := &capturingExecutor{}
+	shell.Default = capExec
+
+	// Final GPG/stop-component behavior is irrelevant here; we only assert the
+	// install command quoting, so the returned error is intentionally ignored.
+	_ = installer.InstallRpmPkg("azure-linux", chrootEnvPath, chrootPkgCacheDir, []string{malicious})
+
+	want := shell.QuoteArg(filepath.Join(chrootPkgCacheDir, malicious))
+	var found bool
+	for _, c := range capExec.cmds {
+		if strings.Contains(c, "rpm -i") && strings.Contains(c, "--root") {
+			found = true
+			if !strings.Contains(c, want) {
+				t.Errorf("install command did not shell-quote the package path.\n cmd: %s\nwant substring: %s", c, want)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no 'rpm -i ... --root' command was captured")
+	}
+}

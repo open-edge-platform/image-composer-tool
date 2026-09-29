@@ -334,6 +334,42 @@ func TestPickSBOMFileNameFromNames_NoJSON(t *testing.T) {
 	}
 }
 
+// TestPickSBOMFileNameFromNames_RejectsShellMetacharacters is a CWE-78
+// regression test: an SBOM basename carrying shell/debugfs metacharacters (ext
+// filesystems permit quotes and semicolons) must never be selected, since the
+// name is later interpolated into a debugfs command run via bash -c.
+func TestPickSBOMFileNameFromNames_RejectsShellMetacharacters(t *testing.T) {
+	malicious := "spdx_manifest';cd ..;cd etc;cat shadow > MARKER;echo 'x.json"
+	names := []string{malicious, "spdx_manifest_ok.json"}
+
+	got, ok := pickSBOMFileNameFromNames(names)
+	if !ok {
+		t.Fatalf("expected the benign SBOM to be selected")
+	}
+	if got != "spdx_manifest_ok.json" {
+		t.Fatalf("expected benign name to win, got %q", got)
+	}
+
+	if _, ok := pickSBOMFileNameFromNames([]string{malicious}); ok {
+		t.Fatalf("expected no selection when only a malicious name is present")
+	}
+}
+
+// TestReadFileFromExtPartitionImage_RejectsUnsafeName ensures the debugfs sink
+// refuses a filename with shell/debugfs metacharacters before building or
+// running any command (CWE-78).
+func TestReadFileFromExtPartitionImage_RejectsUnsafeName(t *testing.T) {
+	malicious := "/usr/share/sbom/spdx_manifest';touch MARKER;echo 'x.json"
+
+	_, err := readFileFromExtPartitionImage("/nonexistent/partition.img", malicious)
+	if err == nil {
+		t.Fatalf("expected an error for an unsafe file name")
+	}
+	if !strings.Contains(err.Error(), "unsafe file name") {
+		t.Fatalf("expected refusal error, got: %v", err)
+	}
+}
+
 func TestPickSBOMFileNameFromFS_PrefersSPDXManifest(t *testing.T) {
 	tmp := t.TempDir()
 	spdxFile := filepath.Join(tmp, "spdx_manifest_pkg.json")
