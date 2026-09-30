@@ -3,7 +3,12 @@
 
 import { useState } from 'react'
 import { useStore } from '../store'
-import type { EdgePack, EdgePackDomain, EdgePackPackage } from '../api/types'
+import type {
+  EdgePack,
+  EdgePackBaseRuntime,
+  EdgePackDomain,
+  EdgePackPackage,
+} from '../api/types'
 import {
   addableDomainPackages,
   allDomainPackages,
@@ -133,7 +138,7 @@ export function EdgePackBrowser({
 
   return (
     <>
-      <BaseRuntimeSelector pack={pack} />
+      <BaseRuntimeSelector pack={pack} repoLabelFor={repoLabelFor} />
 
       <div className="overflow-hidden rounded-lg border border-slate-200">
         {/* Pack-level select-all. Its scope is the domains only — the base
@@ -302,7 +307,13 @@ export function EdgePackBrowser({
 // groups. Each runtime is a plain, independent checkbox — checking or clearing a
 // domain never touches it — but the domains stay locked until one is set,
 // because a domain's packages need a runtime underneath them.
-function BaseRuntimeSelector({ pack }: { pack: EdgePack }) {
+function BaseRuntimeSelector({
+  pack,
+  repoLabelFor,
+}: {
+  pack: EdgePack
+  repoLabelFor: (id: string) => string
+}) {
   const addedPackages = useStore((s) => s.addedPackages)
   const setPackage = useStore((s) => s.setPackage)
   const removePackage = useStore((s) => s.removePackage)
@@ -316,17 +327,32 @@ function BaseRuntimeSelector({ pack }: { pack: EdgePack }) {
   // has already taken and misreport a selection that cannot build as inert.
   const stranded = strandedPackages(pack, addedPackages)
 
-  const toggle = (name: string, on: boolean) => {
+  const toggle = (runtime: EdgePackBaseRuntime, on: boolean) => {
     if (!on) {
       // Enabling-only, as in the domain grid: clearing the runtime must leave
       // the pack's repository enabled for whatever else is still selected
       // from it.
-      removePackage(name, { releaseRepo: false })
+      removePackage(runtime.package.name, { releaseRepo: false })
       return
     }
-    setPackage({ name, version: '', repo: pack.repo })
-    if (!enabledRepos.includes(pack.repo)) setRepoEnabled(pack.repo, true)
+    setPackage({ name: runtime.package.name, version: '', repo: pack.repo })
+    // The runtime's own prerequisites as well as the pack repo: the base
+    // metapackage pulls in profiles whose dependencies are published
+    // elsewhere, so enabling only the pack repo would emit a template that
+    // cannot resolve at build time.
+    for (const id of reposToEnable(pack, [runtime])) {
+      if (!enabledRepos.includes(id)) setRepoEnabled(id, true)
+    }
   }
+
+  // The prerequisites of the runtimes a user could actually pick, named once
+  // above the chips rather than on each: an unavailable runtime's prerequisites
+  // are not something any click here can enable, and with a single runtime
+  // carrying them a per-chip note would just repeat itself.
+  const prereqRepos = reposToEnable(
+    pack,
+    pack.baseRuntimes.filter((r) => r.available),
+  ).filter((id) => id !== pack.repo)
 
   return (
     <div className="mb-3 rounded-lg border border-slate-200 bg-white px-3.5 py-3">
@@ -353,7 +379,7 @@ function BaseRuntimeSelector({ pack }: { pack: EdgePack }) {
                 type="checkbox"
                 checked={checked}
                 disabled={!r.available}
-                onChange={(e) => toggle(r.package.name, e.target.checked)}
+                onChange={(e) => toggle(r, e.target.checked)}
                 className="h-[14px] w-[14px] accent-[#0071c5] disabled:cursor-not-allowed"
               />
               {r.displayName}
@@ -372,6 +398,18 @@ function BaseRuntimeSelector({ pack }: { pack: EdgePack }) {
           )
         })}
       </div>
+      {/* Said before anything is picked, for the same reason the expanded
+          domain says its own: choosing a runtime switches on a repository the
+          user never asked for. It is not optional — what the base metapackage
+          pulls in depends on what that repository publishes — but it is a
+          change to the template's repository list, so it is stated rather than
+          done quietly. */}
+      {prereqRepos.length > 0 && (
+        <p className="mt-1.5 text-[11px] text-slate-500">
+          Also enables {prereqRepos.map(repoLabelFor).join(', ')} — where the packages
+          the base runtime pulls in are published.
+        </p>
+      )}
       {/* Stated rather than left to be inferred from the greyed-out domains —
           a locked control with no reason reads as a broken one. */}
       {!anySelected && (
