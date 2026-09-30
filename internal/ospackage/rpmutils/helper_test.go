@@ -1482,6 +1482,7 @@ func TestValidatePackageFileName(t *testing.T) {
 		{name: "normal rpm", input: "bash-5.1-8.el9.x86_64.rpm", wantErr: false},
 		{name: "tilde and plus", input: "gcc-c++-11.2.0~rc1-1.noarch.rpm", wantErr: false},
 		{name: "epoch colon", input: "epoch-package-1:1.0-1.azl3.x86_64.rpm", wantErr: false},
+		{name: "caret in version", input: "pkg-1.0^20240101gitabc-1.x86_64.rpm", wantErr: false},
 		{name: "empty", input: "", wantErr: true},
 		{name: "dot", input: ".", wantErr: true},
 		{name: "missing suffix", input: "bash-5.1-8.el9.x86_64", wantErr: true},
@@ -1500,6 +1501,26 @@ func TestValidatePackageFileName(t *testing.T) {
 				t.Errorf("validatePackageFileName(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// TestPackageFileNameFromURL_DecodesPath verifies the derived basename matches
+// what pkgfetcher writes to disk: the URL path is decoded (e.g. %2B -> +) so a
+// percent-encoded package name is not wrongly rejected by validation.
+func TestPackageFileNameFromURL_DecodesPath(t *testing.T) {
+	cases := map[string]string{
+		"https://repo.example/pkgs/gcc-c%2B%2B-1.0-1.x86_64.rpm": "gcc-c++-1.0-1.x86_64.rpm",
+		"https://repo.example/pkgs/bash-5.1-8.el9.x86_64.rpm":    "bash-5.1-8.el9.x86_64.rpm",
+		"https://repo.example/pkgs/pkg-1.0.rpm?token=abc":        "pkg-1.0.rpm",
+	}
+
+	for rawURL, want := range cases {
+		if got := packageFileNameFromURL(rawURL); got != want {
+			t.Errorf("packageFileNameFromURL(%q) = %q, want %q", rawURL, got, want)
+		}
+		if err := validatePackageFileName(packageFileNameFromURL(rawURL)); err != nil {
+			t.Errorf("decoded name from %q should validate, got: %v", rawURL, err)
+		}
 	}
 }
 

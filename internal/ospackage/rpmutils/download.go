@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -767,6 +768,17 @@ func handleRPMCacheRetry(
 	return pkgs, infos, true, err
 }
 
+// packageFileNameFromURL derives the on-disk basename the fetcher writes for a
+// package URL, decoding the path exactly as pkgfetcher does so validation sees
+// the same name that lands on disk (e.g. %2B -> +), not the still-encoded URL.
+func packageFileNameFromURL(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Path == "" {
+		return path.Base(strings.SplitN(rawURL, "?", 2)[0])
+	}
+	return path.Base(parsed.Path)
+}
+
 func downloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSources map[string]config.PackageSource, systemRootsOnly bool, retriedAfterMetadataClear bool) ([]string, []ospackage.PackageInfo, error) {
 	var downloadPkgList []string
 
@@ -868,7 +880,7 @@ func downloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSour
 	// Extract URLs
 	urls := make([]string, len(sorted_pkgs))
 	for i, pkg := range sorted_pkgs {
-		pkgFileName := path.Base(pkg.URL)
+		pkgFileName := packageFileNameFromURL(pkg.URL)
 		if err := validatePackageFileName(pkgFileName); err != nil {
 			return downloadPkgList, nil, fmt.Errorf("rejecting package from %q: %w", pkg.URL, err)
 		}
