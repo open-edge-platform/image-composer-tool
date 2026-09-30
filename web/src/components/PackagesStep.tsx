@@ -32,6 +32,9 @@ const TABS = [
 
 type TabID = (typeof TABS)[number]['id']
 
+// The id of the single rendered tabpanel, shared by both tabs' aria-controls.
+const PANEL_ID = 'packages-browse-panel'
+
 // PackagesStep is the wizard's "Choose Packages to Compose" step: which
 // repositories the target offers and which are enabled, a cross-repository
 // package search, the Edge Pack and per-repository browsing surfaces, and the
@@ -135,7 +138,12 @@ export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
                 don't know which surface a package lives on. */}
             <PackageSearch os={os} repos={repos} baseLock={baseLock} />
             <BrowseTabs tab={tab} onTab={setTab} />
-            <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
+            {/* One panel id for both tabs, not one per tab. Only the active
+                panel is rendered, so a per-tab id would leave every inactive
+                tab's aria-controls pointing at an element that does not exist.
+                aria-labelledby still tracks the active tab, which is the part
+                that genuinely changes. */}
+            <div role="tabpanel" id={PANEL_ID} aria-labelledby={`tab-${tab}`}>
               {tab === 'repos' ? (
                 <PackageRepoBrowser repos={repos} os={os} baseLock={baseLock} />
               ) : edgePack ? (
@@ -194,7 +202,7 @@ function BrowseTabs({ tab, onTab }: { tab: TabID; onTab: (t: TabID) => void }) {
             role="tab"
             id={`tab-${t.id}`}
             aria-selected={activeTab}
-            aria-controls={`panel-${t.id}`}
+            aria-controls={PANEL_ID}
             tabIndex={activeTab ? 0 : -1}
             onClick={() => onTab(t.id)}
             onKeyDown={(e) => {

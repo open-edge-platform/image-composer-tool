@@ -51,18 +51,34 @@ export function domainPackageNames(domain: EdgePackDomain): string[] {
 
 // allDomainPackages is every package reachable through a domain, deduplicated.
 //
-// This is the scope of the pack-level checkbox and its count. Domains overlap —
-// a package can belong to more than one — so this is a union, never a
-// concatenation: summing the domains would report more packages than the pack
-// actually contains.
+// This is what the pack-level checkbox may CLEAR, which is deliberately wider
+// than what it may add — see addableDomainPackages. Domains overlap — a package
+// can belong to more than one — so this is a union, never a concatenation:
+// summing the domains would report more packages than the pack actually
+// contains.
 //
 // Base runtime packages are deliberately excluded. They are a prerequisite for
 // the domains rather than part of them, and the pack checkbox must not select
 // or clear a runtime the user chose independently.
 export function allDomainPackages(pack: EdgePack): EdgePackPackage[] {
+  return unionPackages(pack.domains)
+}
+
+// addableDomainPackages is every package the pack-level checkbox may ADD: the
+// union over the domains this target actually publishes.
+//
+// An unavailable domain renders its own checkbox locked, so the pack-level
+// control must not become a way around that gate — ticking "Domains" would
+// otherwise put packages into the template that the domain's own checkbox
+// refuses to add, and that no repository offered here publishes.
+export function addableDomainPackages(pack: EdgePack): EdgePackPackage[] {
+  return unionPackages(pack.domains.filter((d) => d.available))
+}
+
+function unionPackages(domains: EdgePackDomain[]): EdgePackPackage[] {
   const seen = new Set<string>()
   const out: EdgePackPackage[] = []
-  for (const d of pack.domains) {
+  for (const d of domains) {
     for (const p of d.packages) {
       if (seen.has(p.name)) continue
       seen.add(p.name)
@@ -77,8 +93,15 @@ export function allDomainPackages(pack: EdgePack): EdgePackPackage[] {
 // rather than asserting that: the runtimes are ordinary packages, so nothing
 // stops the repository browser from adding a second one, and the gate below
 // only cares whether some runtime is under the domains.
+//
+// Unavailable runtimes do not count. They are ordinary packages too, so the
+// Repositories tab and the search dropdown can add one even though this tab
+// renders its checkbox disabled — and if that satisfied the gate, the
+// shown-but-locked Real-time option would unlock every domain from the other
+// surface. Availability is a property of the target, so a runtime that is not
+// published for it cannot be underneath anything the build produces.
 export function selectedBaseRuntime(pack: EdgePack, added: AddedPackage[]) {
-  return pack.baseRuntimes.find((r) => isSelected(added, r.package.name))
+  return pack.baseRuntimes.find((r) => r.available && isSelected(added, r.package.name))
 }
 
 // canSelectDomains gates every domain checkbox and every drill-in package
@@ -137,6 +160,30 @@ export type ToggleMode = 'add' | 'clear' | 'locked'
 export function groupToggleMode(selectable: boolean, state: GroupState): ToggleMode {
   if (selectable) return state === 'full' ? 'clear' : 'add'
   return state === 'none' ? 'locked' : 'clear'
+}
+
+// packToggleMode decides the pack-level checkbox's action. It cannot reuse
+// groupToggleMode because adding and clearing have different scopes there:
+// the control may only add what the domains' own checkboxes would allow
+// (addable), but it must be able to clear anything already selected
+// (clearable), which is a wider set.
+//
+// The two diverge whenever a domain is unavailable for this target. Its
+// packages can still be selected — through the Repositories tab, or before the
+// target was changed to one that does not publish the domain — and a control
+// that could select them but not deselect them would strand exactly the way
+// the domain-level gate exists to prevent. So 'add' is offered only while
+// something addable remains, and 'clear' covers the whole union.
+//
+// 'locked' therefore means nothing to add AND nothing to remove, not merely
+// that the gate is shut.
+export function packToggleMode(
+  selectable: boolean,
+  addable: GroupSelection,
+  clearable: GroupSelection,
+): ToggleMode {
+  if (selectable && addable.total > 0 && addable.state !== 'full') return 'add'
+  return clearable.state === 'none' ? 'locked' : 'clear'
 }
 
 // strandedPackages is every domain package selected with no base runtime under

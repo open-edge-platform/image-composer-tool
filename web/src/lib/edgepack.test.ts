@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest'
 import type { EdgePack } from '../api/types'
 import type { AddedPackage } from '../store'
 import {
+  addableDomainPackages,
   allDomainPackages,
   canSelectDomains,
   domainLockReason,
@@ -18,6 +19,7 @@ import {
   groupSelectionState,
   groupToggleMode,
   isSelected,
+  packToggleMode,
   reposToEnable,
   selectedBaseRuntime,
   strandedPackages,
@@ -298,5 +300,110 @@ describe('versionsOf', () => {
 
   it('offers no chips for a package the index never resolved', () => {
     expect(versionsOf({ name: 'x' }, 'intel-eci')).toEqual([])
+  })
+})
+
+describe('the base-runtime gate and unavailable runtimes', () => {
+  // Real-time is shown but disabled on this tab. It is still an ordinary
+  // package, so the Repositories tab and the search dropdown can add it — and
+  // if that counted as a runtime, the disabled option would unlock every
+  // domain from the other surface.
+  it('does not accept an unavailable runtime as the selected one', () => {
+    expect(selectedBaseRuntime(pack, add('base-realtime'))).toBeUndefined()
+    expect(canSelectDomains(pack, add('base-realtime'))).toBe(false)
+  })
+
+  it('still accepts the available runtime', () => {
+    expect(selectedBaseRuntime(pack, add('base-standard'))?.id).toBe('standard')
+    expect(canSelectDomains(pack, add('base-standard'))).toBe(true)
+  })
+
+  it('leaves domains locked when only the unavailable runtime is selected', () => {
+    expect(domainSelectable(pack, media, add('base-realtime'))).toBe(false)
+    expect(domainLockReason(pack, media, add('base-realtime'))).toBe('Select a base runtime first')
+  })
+
+  it('counts domain packages as stranded under an unavailable runtime', () => {
+    // They would reach the build with nothing underneath them, which is the
+    // exact condition the warning exists to report.
+    expect(strandedPackages(pack, add('base-realtime', 'media-ffmpeg'))).toEqual(['media-ffmpeg'])
+  })
+})
+
+describe('addableDomainPackages', () => {
+  it('omits an unavailable domain, which the pack checkbox must not add', () => {
+    expect(addableDomainPackages(pack).map((p) => p.name)).toEqual([
+      'media-ffmpeg',
+      'shared-runtime',
+    ])
+  })
+
+  it('still counts the unavailable domain as clearable', () => {
+    // allDomainPackages is the wider set: what is already selected has to
+    // remain removable however it got there.
+    expect(allDomainPackages(pack).map((p) => p.name)).toContain('npu-driver')
+  })
+
+  it('deduplicates a package two available domains share', () => {
+    const names = addableDomainPackages(pack).map((p) => p.name)
+    expect(names.filter((n) => n === 'shared-runtime')).toHaveLength(1)
+  })
+})
+
+describe('packToggleMode', () => {
+  const state = (names: string[], added: AddedPackage[]) => groupSelectionState(names, added)
+  const addable = (added: AddedPackage[]) =>
+    state(addableDomainPackages(pack).map((p) => p.name), added)
+  const clearable = (added: AddedPackage[]) =>
+    state(allDomainPackages(pack).map((p) => p.name), added)
+  const mode = (selectable: boolean, added: AddedPackage[]) =>
+    packToggleMode(selectable, addable(added), clearable(added))
+
+  it('is locked while the gate is shut and nothing is selected', () => {
+    expect(mode(false, [])).toBe('locked')
+  })
+
+  it('adds once a runtime is chosen', () => {
+    expect(mode(true, [])).toBe('add')
+  })
+
+  it('reaches full on the addable set alone, without the unavailable domain', () => {
+    // The unselectable npu-driver must not hold the count below full forever;
+    // otherwise the checkbox is stuck at mixed no matter what the user clicks.
+    const all = add('media-ffmpeg', 'shared-runtime')
+    expect(addable(all).state).toBe('full')
+    expect(mode(true, all)).toBe('clear')
+  })
+
+  it('still offers add while an available domain has anything left to select', () => {
+    // Selecting only the unavailable domain's package does not exhaust the
+    // addable set — Media is still there — so this is an 'add', not a 'clear'.
+    expect(mode(true, add('base-standard', 'npu-driver'))).toBe('add')
+  })
+
+  it('clears rather than locks when no domain here is selectable at all', () => {
+    // Reachable by selecting NPU and then switching to a target that publishes
+    // none of the domains. Nothing can be added, but the leftover selection
+    // must not become permanent — that is the stranding the domain-level gate
+    // exists to avoid, arrived at from the other direction.
+    const noneAvailable: EdgePack = {
+      ...pack,
+      domains: pack.domains.map((d) => ({ ...d, available: false })),
+    }
+    const added = add('base-standard', 'npu-driver')
+    const a = groupSelectionState(addableDomainPackages(noneAvailable).map((p) => p.name), added)
+    const c = groupSelectionState(allDomainPackages(noneAvailable).map((p) => p.name), added)
+    expect(a.total).toBe(0)
+    expect(packToggleMode(true, a, c)).toBe('clear')
+    // And genuinely locked once that leftover is gone.
+    const empty = groupSelectionState(
+      allDomainPackages(noneAvailable).map((p) => p.name),
+      add('base-standard'),
+    )
+    expect(packToggleMode(true, a, empty)).toBe('locked')
+  })
+
+  it('clears a stranded selection even while the gate is shut', () => {
+    expect(mode(false, add('media-ffmpeg'))).toBe('clear')
   })
 })

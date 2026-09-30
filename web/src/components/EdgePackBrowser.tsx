@@ -5,6 +5,7 @@ import { useState } from 'react'
 import { useStore } from '../store'
 import type { EdgePack, EdgePackDomain, EdgePackPackage } from '../api/types'
 import {
+  addableDomainPackages,
   allDomainPackages,
   canSelectDomains,
   domainLockReason,
@@ -13,6 +14,7 @@ import {
   groupSelectionState,
   groupToggleMode,
   isSelected,
+  packToggleMode,
   reposToEnable,
   strandedPackages,
   toAddedPackages,
@@ -80,8 +82,16 @@ export function EdgePackBrowser({
     ensureReposEnabled(domains)
   }
 
+  // releaseRepo: false is the other half of ensureReposEnabled's enabling-only
+  // contract. Without it the store drops any repository the removed packages
+  // were the last users of, so clearing a domain here would silently untick a
+  // repository the user had enabled on the Repositories tab for reasons this
+  // tab knows nothing about — and the pack's own repo along with it.
   const removeGroup = (packages: EdgePackPackage[]) => {
-    removePackages(packages.map((p) => p.name))
+    removePackages(
+      packages.map((p) => p.name),
+      { releaseRepo: false },
+    )
   }
 
   const setGroup = (packages: EdgePackPackage[], on: boolean, domains: EdgePackDomain[]) =>
@@ -101,12 +111,25 @@ export function EdgePackBrowser({
     )
   }
 
-  const domainPackages = allDomainPackages(pack)
+  // Two scopes, not one: the pack checkbox adds only what the domains' own
+  // checkboxes would add, but clears anything selected under any domain. See
+  // packToggleMode.
+  const addablePackages = addableDomainPackages(pack)
+  const clearablePackages = allDomainPackages(pack)
+  const addableDomains = pack.domains.filter((d) => d.available)
+  // The count reports the addable set, so "n of m packages selected" reaches
+  // "all" when everything this target can select is selected. Counting the
+  // unavailable domains' packages in `m` would leave a total that is
+  // unreachable by any sequence of clicks, and the checkbox stuck at mixed.
   const packState = groupSelectionState(
-    domainPackages.map((p) => p.name),
+    addablePackages.map((p) => p.name),
     addedPackages,
   )
-  const packMode = groupToggleMode(!gated, packState.state)
+  const clearState = groupSelectionState(
+    clearablePackages.map((p) => p.name),
+    addedPackages,
+  )
+  const packMode = packToggleMode(!gated, packState, clearState)
 
   return (
     <>
@@ -144,7 +167,11 @@ export function EdgePackBrowser({
               // The mode decides the action, not the checkbox's own new value:
               // a gated group that holds packages must empty on click even
               // though clicking an unchecked box reports `checked === true`.
-              onChange={() => setGroup(domainPackages, packMode === 'add', pack.domains)}
+              onChange={() =>
+                packMode === 'add'
+                  ? addGroup(addablePackages, addableDomains)
+                  : removeGroup(clearablePackages)
+              }
               className="h-[15px] w-[15px] shrink-0 accent-[#0071c5] disabled:cursor-not-allowed"
             />
             <span className="text-[13px] font-bold text-[#00285a]">Domains</span>
@@ -160,7 +187,7 @@ export function EdgePackBrowser({
           >
             {packState.selected
               ? `${packState.selected} of ${packState.total} packages selected`
-              : `${packState.total} packages in ${pack.domains.length} domains`}
+              : `${packState.total} packages in ${addableDomains.length} domains`}
           </span>
         </div>
 
@@ -232,7 +259,10 @@ export function EdgePackBrowser({
                   disabledReason={domainLockReason(pack, d, addedPackages) ?? undefined}
                   onToggle={(checked) => {
                     if (!checked) {
-                      removePackage(p.name)
+                      // Enabling-only, as above: unticking one package must not
+                      // switch off the repository the rest of the tab resolves
+                      // from.
+                      removePackage(p.name, { releaseRepo: false })
                       return
                     }
                     setPackage({ name: p.name, version: '', repo: pack.repo })
@@ -287,7 +317,10 @@ function BaseRuntimeSelector({ pack }: { pack: EdgePack }) {
 
   const toggle = (name: string, on: boolean) => {
     if (!on) {
-      removePackage(name)
+      // Enabling-only, as in the domain grid: clearing the runtime must leave
+      // the pack's repository enabled for whatever else is still selected
+      // from it.
+      removePackage(name, { releaseRepo: false })
       return
     }
     setPackage({ name, version: '', repo: pack.repo })
@@ -323,8 +356,16 @@ function BaseRuntimeSelector({ pack }: { pack: EdgePack }) {
                 className="h-[14px] w-[14px] accent-[#0071c5] disabled:cursor-not-allowed"
               />
               {r.displayName}
+              {/* The reason is rendered, not left to the title attribute. A
+                  disabled input is not keyboard-focusable and a tooltip is
+                  unreachable by touch and unreliable for assistive technology,
+                  so a title-only explanation is no explanation for the users
+                  most likely to be stopped by the lock. The domain cards below
+                  already state theirs visibly; this matches them. */}
               {!r.available && (
-                <span className="text-[11px] italic text-slate-400">not yet available</span>
+                <span className="text-[11px] italic text-slate-400">
+                  {r.unavailableReason ?? 'not yet available'}
+                </span>
               )}
             </label>
           )
@@ -385,6 +426,11 @@ function DomainCard({
       title={domain.description}
       onClick={onToggleOpen}
       onKeyDown={(e) => {
+        // Only the card's own key events. The checkbox inside it stops click
+        // propagation, but a key event bubbles too: without this, Space on the
+        // focused checkbox would reach the preventDefault below, cancelling its
+        // native toggle and expanding the card instead of ticking the domain.
+        if (e.target !== e.currentTarget) return
         if (e.key !== 'Enter' && e.key !== ' ') return
         e.preventDefault()
         onToggleOpen()
