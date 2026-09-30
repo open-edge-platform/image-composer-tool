@@ -34,7 +34,7 @@ func validatePackageFileName(name string) error {
 	if strings.Contains(name, "..") {
 		return fmt.Errorf("package file name %q must not contain %q", name, "..")
 	}
-	if !strings.HasSuffix(strings.ToLower(name), ".rpm") {
+	if !strings.HasSuffix(name, ".rpm") {
 		return fmt.Errorf("package file name %q must end in .rpm", name)
 	}
 	for _, r := range name {
