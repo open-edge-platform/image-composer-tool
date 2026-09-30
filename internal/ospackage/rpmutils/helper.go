@@ -25,6 +25,29 @@ import (
 
 const defaultRepoPriority = 500
 
+// validatePackageFileName rejects repository-controlled RPM basenames that
+// carry path separators or shell metacharacters before they reach rpm -i (CWE-78).
+func validatePackageFileName(name string) error {
+	if name == "" || name == "." || name == ".." {
+		return fmt.Errorf("invalid package file name %q", name)
+	}
+	if strings.Contains(name, "..") {
+		return fmt.Errorf("package file name %q must not contain %q", name, "..")
+	}
+	if !strings.HasSuffix(name, ".rpm") {
+		return fmt.Errorf("package file name %q must end in .rpm", name)
+	}
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '.' || r == '_' || r == '+' || r == '~' || r == '-' || r == ':' || r == '^':
+		default:
+			return fmt.Errorf("package file name %q contains disallowed character %q", name, r)
+		}
+	}
+	return nil
+}
+
 func normalizeRepositoryPriority(priority int) int {
 	if priority == 0 {
 		return defaultRepoPriority
