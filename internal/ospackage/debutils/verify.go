@@ -14,6 +14,7 @@ import (
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
+	"github.com/ProtonMail/go-crypto/openpgp/clearsign"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"github.com/schollz/progressbar/v3"
@@ -170,19 +171,18 @@ func VerifyPackagegz(relPath string, pkggzPath string, arch string, component st
 	return true, nil
 }
 
-func VerifyRelease(relPath string, relSignPath string, pKeyPath string) (bool, error) {
+// readGPGKeyBytes reads pKeyPath from disk, converting a binary key to ASCII
+// armor first if needed. Shared by VerifyRelease (detached signature) and
+// VerifyInRelease (clearsigned); parsing into a keyring is left to the
+// caller, deliberately, so VerifyRelease can keep reading the Release/
+// signature files before spending effort parsing the key.
+func readGPGKeyBytes(pKeyPath string) ([]byte, error) {
 	log := logger.Logger()
-
-	//ignore verification if trusted=yes
-	if pKeyPath == "[trusted=yes]" {
-		log.Infof("Repository marked (%s) as [trusted=yes], skipping Release file signature verification", relPath)
-		return true, nil
-	}
 
 	// Read the public key
 	keyringBytes, err := os.ReadFile(pKeyPath)
 	if err != nil {
-		return false, fmt.Errorf("failed to read public key: %w", err)
+		return nil, fmt.Errorf("failed to read public key: %w", err)
 	}
 
 	// Check if the key file is a binary GPG key and convert if needed
@@ -197,6 +197,22 @@ func VerifyRelease(relPath string, relSignPath string, pKeyPath string) (bool, e
 		}
 	} else {
 		log.Infof("GPG key data appears to be ASCII armored already or is a standard key format")
+	}
+	return keyringBytes, nil
+}
+
+func VerifyRelease(relPath string, relSignPath string, pKeyPath string) (bool, error) {
+	log := logger.Logger()
+
+	//ignore verification if trusted=yes
+	if pKeyPath == "[trusted=yes]" {
+		log.Infof("Repository marked (%s) as [trusted=yes], skipping Release file signature verification", relPath)
+		return true, nil
+	}
+
+	keyringBytes, err := readGPGKeyBytes(pKeyPath)
+	if err != nil {
+		return false, err
 	}
 
 	// Read the Release file and its signature
@@ -250,6 +266,50 @@ func VerifyRelease(relPath string, relSignPath string, pKeyPath string) (bool, e
 
 	log.Infof("Release file verified successfully")
 	return true, nil
+}
+
+// VerifyInRelease verifies a combined InRelease file (clearsigned: Release
+// content wrapped in a single PGP-signed message, as published by aptly-based
+// repositories that don't also publish a detached Release.gpg) and returns
+// the extracted plaintext Release body.
+//
+// Decoding is separate from verification: even a [trusted=yes] repo needs the
+// plaintext extracted so downstream Release parsing (checksum lookups,
+// Valid-Until checks) always sees a plain Release body, regardless of
+// whether the signature itself gets checked.
+func VerifyInRelease(inReleasePath string, pKeyPath string) ([]byte, error) {
+	log := logger.Logger()
+
+	raw, err := os.ReadFile(inReleasePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read InRelease file: %w", err)
+	}
+
+	block, _ := clearsign.Decode(raw)
+	if block == nil {
+		return nil, fmt.Errorf("failed to parse InRelease file: not a valid clearsigned message")
+	}
+
+	if pKeyPath == "[trusted=yes]" {
+		log.Infof("Repository marked (%s) as [trusted=yes], skipping InRelease signature verification", inReleasePath)
+		return block.Plaintext, nil
+	}
+
+	keyringBytes, err := readGPGKeyBytes(pKeyPath)
+	if err != nil {
+		return nil, err
+	}
+	keyring, err := parseKeyring(keyringBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse public key: %w", err)
+	}
+
+	if _, err := block.VerifySignature(openpgp.EntityList(keyring), &packet.Config{}); err != nil {
+		return nil, fmt.Errorf("InRelease signature verification failed: %w", err)
+	}
+
+	log.Infof("InRelease file verified successfully")
+	return block.Plaintext, nil
 }
 
 // VerifyAll takes a slice of DEB file paths, verifies each one in parallel,
