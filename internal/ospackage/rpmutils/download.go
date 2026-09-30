@@ -779,6 +779,21 @@ func packageFileNameFromURL(rawURL string) string {
 	return path.Base(parsed.Path)
 }
 
+// buildDownloadList derives each package's on-disk filename and rejects any that
+// is not a plain RPM basename before it can reach the rpm install sinks (CWE-78).
+func buildDownloadList(pkgs []ospackage.PackageInfo) (urls, downloadPkgList []string, err error) {
+	urls = make([]string, len(pkgs))
+	for i, pkg := range pkgs {
+		name := packageFileNameFromURL(pkg.URL)
+		if verr := validatePackageFileName(name); verr != nil {
+			return nil, nil, fmt.Errorf("rejecting package from %q: %w", pkg.URL, verr)
+		}
+		urls[i] = pkg.URL
+		downloadPkgList = append(downloadPkgList, name)
+	}
+	return urls, downloadPkgList, nil
+}
+
 func downloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSources map[string]config.PackageSource, systemRootsOnly bool, retriedAfterMetadataClear bool) ([]string, []ospackage.PackageInfo, error) {
 	var downloadPkgList []string
 
@@ -877,16 +892,12 @@ func downloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSour
 		}
 	}
 
-	// Extract URLs
-	urls := make([]string, len(sorted_pkgs))
-	for i, pkg := range sorted_pkgs {
-		pkgFileName := packageFileNameFromURL(pkg.URL)
-		if err := validatePackageFileName(pkgFileName); err != nil {
-			return downloadPkgList, nil, fmt.Errorf("rejecting package from %q: %w", pkg.URL, err)
-		}
-		urls[i] = pkg.URL
-		downloadPkgList = append(downloadPkgList, pkgFileName)
+	// Extract URLs, rejecting any package whose on-disk filename is unsafe.
+	urls, validated, buildErr := buildDownloadList(sorted_pkgs)
+	if buildErr != nil {
+		return downloadPkgList, nil, buildErr
 	}
+	downloadPkgList = validated
 
 	// Ensure dest directory exists
 	if err := os.MkdirAll(absDestDir, 0755); err != nil {

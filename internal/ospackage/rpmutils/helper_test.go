@@ -1524,6 +1524,33 @@ func TestPackageFileNameFromURL_DecodesPath(t *testing.T) {
 	}
 }
 
+// TestBuildDownloadList covers the validation gate used by downloadPackagesComplete:
+// a package whose on-disk filename carries shell metacharacters is rejected before
+// download, while valid packages produce their decoded on-disk names.
+func TestBuildDownloadList(t *testing.T) {
+	malicious := []ospackage.PackageInfo{
+		{URL: "https://repo.example/pkgs/evil';touch pwned;'.rpm"},
+	}
+	if _, _, err := buildDownloadList(malicious); err == nil {
+		t.Fatal("expected buildDownloadList to reject an unsafe package filename")
+	}
+
+	valid := []ospackage.PackageInfo{
+		{URL: "https://repo.example/pkgs/bash-5.1-8.el9.x86_64.rpm"},
+		{URL: "https://repo.example/pkgs/gcc-c%2B%2B-1.0-1.x86_64.rpm"},
+	}
+	urls, names, err := buildDownloadList(valid)
+	if err != nil {
+		t.Fatalf("valid packages should not be rejected: %v", err)
+	}
+	if len(urls) != 2 || len(names) != 2 {
+		t.Fatalf("expected 2 urls/names, got %d/%d", len(urls), len(names))
+	}
+	if names[1] != "gcc-c++-1.0-1.x86_64.rpm" {
+		t.Errorf("expected decoded on-disk name, got %q", names[1])
+	}
+}
+
 func TestIsBinaryGPGKey(t *testing.T) {
 	tests := []struct {
 		name   string

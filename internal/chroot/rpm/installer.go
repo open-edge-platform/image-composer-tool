@@ -192,7 +192,8 @@ func importGpgKeys(targetOs string, chrootEnvBuildPath string) error {
 	if output != "" {
 		gpgKeys := strings.Split(output, "\n")
 		log.Infof("Importing GPG key: " + gpgKeys[0])
-		cmdStr = "rpm --import " + gpgKeys[0]
+		// gpgKeys[0] is a path from a repo package's file list; quote it for bash -c.
+		cmdStr = "rpm --import " + shell.QuoteArg(gpgKeys[0])
 		_, err = shell.ExecCmd(cmdStr, false, chrootEnvBuildPath, nil)
 		if err != nil {
 			log.Errorf("Failed to import GPG key: %v", err)

@@ -742,3 +742,75 @@ func TestUpdateRpmDB_QuotesJustdbFileName(t *testing.T) {
 		t.Fatal("no 'rpm -i ... --justdb' command was captured")
 	}
 }
+
+// gpgImportExecutor returns a malicious GPG key path (as if listed by a hostile
+// repo package) and matching backends so updateRpmDB short-circuits, letting the
+// flow reach importGpgKeys.
+type gpgImportExecutor struct{ cmds []string }
+
+func (e *gpgImportExecutor) run(cmdStr string) (string, error) {
+	e.cmds = append(e.cmds, cmdStr)
+	switch {
+	case strings.Contains(cmdStr, "rpm -E"):
+		return "sqlite", nil
+	case strings.Contains(cmdStr, "rpm -q -l"):
+		return "/etc/pki/rpm-gpg/evil';touch pwned;'", nil
+	default:
+		return "", nil
+	}
+}
+
+func (e *gpgImportExecutor) ExecCmd(cmdStr string, _ bool, _ string, _ []string) (string, error) {
+	return e.run(cmdStr)
+}
+
+func (e *gpgImportExecutor) ExecCmdSilent(cmdStr string, _ bool, _ string, _ []string) (string, error) {
+	return e.run(cmdStr)
+}
+
+func (e *gpgImportExecutor) ExecCmdWithStream(cmdStr string, _ bool, _ string, _ []string) (string, error) {
+	return e.run(cmdStr)
+}
+
+func (e *gpgImportExecutor) ExecCmdWithInput(_ string, cmdStr string, _ bool, _ string, _ []string) (string, error) {
+	return e.run(cmdStr)
+}
+
+// TestImportGpgKeys_QuotesKeyPath is a CWE-78 regression test for the GPG import
+// sink: the key path comes from a repo package's file list, so it must be
+// shell-quoted before reaching the `rpm --import` command run via bash -c.
+func TestImportGpgKeys_QuotesKeyPath(t *testing.T) {
+	installer := rpm.NewRpmInstaller()
+	tempDir := t.TempDir()
+
+	chrootEnvPath := filepath.Join(tempDir, "chroot")
+	chrootPkgCacheDir := filepath.Join(tempDir, "cache")
+	if err := os.MkdirAll(chrootPkgCacheDir, 0700); err != nil {
+		t.Fatalf("Failed to create cache directory: %v", err)
+	}
+	pkg := "pkg-1.0-1.x86_64.rpm"
+	if err := os.WriteFile(filepath.Join(chrootPkgCacheDir, pkg), []byte("x"), 0644); err != nil {
+		t.Fatalf("Failed to create package fixture: %v", err)
+	}
+
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+	capExec := &gpgImportExecutor{}
+	shell.Default = capExec
+
+	_ = installer.InstallRpmPkg("azure-linux", chrootEnvPath, chrootPkgCacheDir, []string{pkg})
+
+	want := shell.QuoteArg("/etc/pki/rpm-gpg/evil';touch pwned;'")
+	var found bool
+	for _, c := range capExec.cmds {
+		if strings.Contains(c, "rpm --import") {
+			found = true
+			if !strings.Contains(c, want) {
+				t.Errorf("rpm --import command did not shell-quote the key path.\n cmd: %s\nwant substring: %s", c, want)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no 'rpm --import' command was captured")
+	}
+}
