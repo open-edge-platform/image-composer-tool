@@ -892,7 +892,7 @@ function ArtifactsSection({
               }
               className="mt-1 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-[#00285a] hover:border-slate-400 hover:bg-slate-100"
             >
-              + Add Artifact
+              + Add Artefact
             </button>
           </>
         )}

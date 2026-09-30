@@ -100,12 +100,22 @@ export function BuildView({
     let es: EventSource | null = null
     let closed = false // set on unmount so a reconnect isn't scheduled after teardown
 
+    // Re-read the build's details on every terminal outcome. It is what makes the
+    // log-file link appear, but it also matters for the template row: an
+    // Advanced-mode build starts out pointing at the generated `extends` delta,
+    // and the server archives that delta and deletes it when the build concludes
+    // — on failure and cancellation as much as on success. Without a refresh the
+    // row would keep offering the pre-finish path, which no longer exists.
+    const refreshDetails = () => {
+      api.buildDetails(buildId).then(setDetails).catch(() => {})
+    }
+
     const finishSuccess = () => {
       setStatus('success')
       setPhase('done')
       onStatusChange('success')
       // Refresh details/artifacts so the log-file link + artifact list appear.
-      api.buildDetails(buildId).then(setDetails).catch(() => {})
+      refreshDetails()
       api.buildArtifacts(buildId).then(setArtifacts).catch(() => {})
     }
     const finishFailed = (msg?: string, arts?: Artifact[], res?: ResidualIssue) => {
@@ -114,6 +124,7 @@ export function BuildView({
       if (arts && arts.length > 0) setArtifacts(arts)
       if (res) setResidual(res)
       onStatusChange('failed')
+      refreshDetails()
     }
     // Report 'cancelled' rather than 'idle': the parent needs the real terminal
     // state to refresh the history row and to show the cancelled nav indicator.
@@ -123,6 +134,7 @@ export function BuildView({
       if (arts && arts.length > 0) setArtifacts(arts)
       if (res) setResidual(res)
       onStatusChange('cancelled')
+      refreshDetails()
     }
 
     const connect = () => {
@@ -200,7 +212,7 @@ export function BuildView({
   const copyLogs = () => navigator.clipboard.writeText(logs.join('\n'))
   const copyPath = (path: string) => navigator.clipboard.writeText(path)
 
-  // Rows of the artefacts table: the build's own outputs, then the template it
+  // Rows of the artefacts table: the build's own outputs, plus the template it
   // ran against. The template is not something the build produced, but it is
   // what the build is reproducible from, so it is offered beside the outputs
   // rather than tucked into the details panel. It keeps its own download
@@ -222,7 +234,12 @@ export function BuildView({
     href: `/api/v1/builds/${buildId}/artifacts/${encodeURIComponent(a.name)}`,
   }))
   if (details?.template) {
-    artifactRows.push({
+    // The server hands the outputs over already ordered, images first and the
+    // SBOM last. The template goes in ahead of the first SBOM rather than at the
+    // end, so the SBOM stays the final row it is everywhere else; with no SBOM
+    // among the outputs the template lands last on its own.
+    const firstSbom = artifactRows.findIndex((r) => r.type === 'sbom')
+    artifactRows.splice(firstSbom === -1 ? artifactRows.length : firstSbom, 0, {
       key: `template:${details.template}`,
       name: details.template,
       type: 'template',

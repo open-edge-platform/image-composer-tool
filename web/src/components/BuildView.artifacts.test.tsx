@@ -266,11 +266,21 @@ describe('BuildView template row', () => {
     expect(downloadHrefOf(DETAILS.template)).toBe(DETAILS.templateUrl)
   })
 
-  it('appends the template after the build outputs', async () => {
+  // The SBOM is the table's last row wherever it appears; the template slots in
+  // ahead of it rather than displacing it.
+  it('lists the template after the images and before the SBOM', async () => {
     await renderBuildView(false)
 
     await screen.findByText(DETAILS.template)
-    expect(rowNames()).toEqual([IMAGE_ARTIFACT.name, SBOM_ARTIFACT.name, DETAILS.template])
+    expect(rowNames()).toEqual([IMAGE_ARTIFACT.name, DETAILS.template, SBOM_ARTIFACT.name])
+  })
+
+  it('puts the template last when the build produced no SBOM', async () => {
+    buildArtifacts.mockResolvedValue([IMAGE_ARTIFACT])
+    await renderBuildView(false)
+
+    await screen.findByText(DETAILS.template)
+    expect(rowNames()).toEqual([IMAGE_ARTIFACT.name, DETAILS.template])
   })
 
   // A build whose outputs were cleaned up, or one that failed before producing
@@ -321,6 +331,50 @@ describe('BuildView template row', () => {
     // artifact row's Name cell.
     expect(screen.queryByText('Template')).toBeNull()
     expect(screen.getAllByText(DETAILS.template)).toHaveLength(1)
+  })
+})
+
+// An Advanced-mode build runs against a generated `extends` delta in the
+// templates dir. The server archives that delta into the build root and deletes
+// it when the build concludes — at every terminal outcome, not just success — so
+// the live view has to re-read the details on each of them or the template row
+// keeps offering a path that is gone.
+describe('BuildView template row after a terminal outcome', () => {
+  const DELTA_PATH = '/var/tmp/ict/templates/.generated-abc.yml'
+  const ARCHIVED = { ...DETAILS, templatePath: '/var/tmp/ict/builds/abc/template.yml' }
+
+  beforeEach(() => {
+    vi.stubGlobal('EventSource', FakeEventSource)
+    FakeEventSource.last = null
+    logFileText.mockResolvedValue('')
+    buildArtifacts.mockResolvedValue([])
+    // Mount reads the pre-finish delta path; every later read gets the archive.
+    buildDetails.mockResolvedValueOnce({ ...DETAILS, templatePath: DELTA_PATH })
+    buildDetails.mockResolvedValue(ARCHIVED)
+  })
+
+  // Drives a live build to a terminal outcome over the SSE error channel, which
+  // is how the server reports both failure and cancellation.
+  async function finishWith(payload: Record<string, unknown>) {
+    await renderBuildView(true)
+    await waitFor(() => expect(FakeEventSource.last).not.toBeNull())
+    await act(async () => {
+      FakeEventSource.last!.listeners.get('error')?.({
+        data: JSON.stringify(payload),
+      } as MessageEvent)
+    })
+  }
+
+  it('repoints the template at the archived copy after a failure', async () => {
+    await finishWith({ status: 'failed', message: 'build failed' })
+
+    await waitFor(() => expect(cellsOf(DETAILS.template)[3]).toBe(ARCHIVED.templatePath))
+  })
+
+  it('repoints the template at the archived copy after a cancellation', async () => {
+    await finishWith({ status: 'cancelled' })
+
+    await waitFor(() => expect(cellsOf(DETAILS.template)[3]).toBe(ARCHIVED.templatePath))
   })
 })
 
