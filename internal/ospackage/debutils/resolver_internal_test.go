@@ -774,6 +774,8 @@ func TestRefreshRepoMetadataWithRetry_DoesNotRetryFetchErrors(t *testing.T) {
 func TestRefreshRepoMetadataWithRetry_BackoffIsCancellable(t *testing.T) {
 	originalDelay := metadataRefreshRetryDelay
 	t.Cleanup(func() { metadataRefreshRetryDelay = originalDelay })
+	originalWait := metadataRefreshWait
+	t.Cleanup(func() { metadataRefreshWait = originalWait })
 	// Long enough that an unbroken sleep would dominate the elapsed time.
 	metadataRefreshRetryDelay = 2 * time.Second
 
@@ -793,11 +795,14 @@ func TestRefreshRepoMetadataWithRetry_BackoffIsCancellable(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	// A verification mismatch drives the loop into the backoff; cancel while it
-	// is waiting.
+	backoffEntered := make(chan struct{})
 	verify := func(string) error { return fmt.Errorf("simulated transient mismatch") }
+	metadataRefreshWait = func(time.Duration) <-chan time.Time {
+		close(backoffEntered)
+		return make(chan time.Time)
+	}
 	go func() {
-		time.Sleep(100 * time.Millisecond)
+		<-backoffEntered
 		cancel()
 	}()
 
@@ -891,11 +896,9 @@ func TestParseRepositoryMetadata_InReleaseOnly(t *testing.T) {
 
 // TestParseRepositoryMetadata_DerivesPlaintextFromCachedInReleaseOffline is a
 // regression test for the offline-cache-recovery branch: a cache holding a
-// valid InRelease file and a matching Packages.gz, but missing the derived
-// ".plain" file (e.g. written by a run that predates that derived-plaintext
-// cache), must still parse successfully by deriving the plaintext locally
-// from the cached InRelease — not force a network refresh that fails when the
-// repository is unreachable.
+// valid InRelease file and a matching Packages.gz must derive the plaintext
+// locally when it is missing or stale, rather than parse stale data after a
+// refresh failure.
 func TestParseRepositoryMetadata_DerivesPlaintextFromCachedInReleaseOffline(t *testing.T) {
 	signer, err := openpgp.NewEntity("Repo Signer", "test", "signer@example.invalid", nil)
 	if err != nil {
@@ -949,6 +952,9 @@ func TestParseRepositoryMetadata_DerivesPlaintextFromCachedInReleaseOffline(t *t
 	if err := os.WriteFile(filepath.Join(buildPath, "InRelease"), inRelease.Bytes(), 0644); err != nil {
 		t.Fatalf("seed InRelease: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(buildPath, "InRelease.plain"), []byte("stale Release\n"), 0644); err != nil {
+		t.Fatalf("seed stale InRelease.plain: %v", err)
+	}
 	if err := os.WriteFile(filepath.Join(buildPath, "Packages.gz"), pkggzBuf.Bytes(), 0644); err != nil {
 		t.Fatalf("seed Packages.gz: %v", err)
 	}
@@ -975,8 +981,12 @@ func TestParseRepositoryMetadata_DerivesPlaintextFromCachedInReleaseOffline(t *t
 		t.Fatalf("expected exactly the edgepack-demo package, got %+v", pkgs)
 	}
 
-	if _, err := os.Stat(filepath.Join(buildPath, "InRelease.plain")); err != nil {
-		t.Errorf("expected InRelease.plain to be derived locally from the cached InRelease, stat error: %v", err)
+	plaintext, err := os.ReadFile(filepath.Join(buildPath, "InRelease.plain"))
+	if err != nil {
+		t.Fatalf("reading regenerated InRelease.plain: %v", err)
+	}
+	if !bytes.Contains(plaintext, []byte(releaseContent)) {
+		t.Errorf("InRelease.plain was not regenerated from verified InRelease: %q", plaintext)
 	}
 }
 

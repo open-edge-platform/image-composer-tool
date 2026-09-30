@@ -26,6 +26,13 @@ func TestMatchRepoOriginPicksLongestPrefix(t *testing.T) {
 	}
 }
 
+func TestPackageFileNameFromURLIgnoresQuery(t *testing.T) {
+	got := packageFileNameFromURL("https://repo.example/pkg.rpm?token=secret")
+	if got != "pkg.rpm" {
+		t.Errorf("packageFileNameFromURL returned %q, want %q", got, "pkg.rpm")
+	}
+}
+
 func TestRepoRawKeysMergesPKeyAndPKeys(t *testing.T) {
 	got := repoRawKeys("https://a/key.asc, https://b/key.asc", []string{"https://c/key.asc"})
 	want := []string{"https://a/key.asc", "https://b/key.asc", "https://c/key.asc"}

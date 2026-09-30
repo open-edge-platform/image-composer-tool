@@ -244,6 +244,10 @@ const maxMetadataRefreshAttempts = 3
 
 var metadataRefreshRetryDelay = 2 * time.Second
 
+var metadataRefreshWait = func(delay time.Duration) <-chan time.Time {
+	return time.After(delay)
+}
+
 // errMetadataVerify marks a refresh that failed signature/metadata verification
 // — the only failure class refreshRepoMetadataWithRetry retries, since a re-fetch
 // from a freshly synced mirror node can clear it. Download, filesystem, and
@@ -298,12 +302,10 @@ func refreshRepoMetadataWithRetry(
 
 		// Cancel-aware backoff: a SIGINT/SIGTERM during the wait aborts promptly
 		// instead of blocking for the full delay before the next fetch sees it.
-		timer := time.NewTimer(metadataRefreshRetryDelay)
 		select {
 		case <-runctx.Context().Done():
-			timer.Stop()
 			return refreshed, fmt.Errorf("metadata refresh cancelled during retry backoff: %w", runctx.Context().Err())
-		case <-timer.C:
+		case <-metadataRefreshWait(metadataRefreshRetryDelay):
 		}
 	}
 	return refreshed, err
@@ -540,6 +542,15 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 		if !isTrustedRepo {
 			if verifyErr := verifyReleaseFiles(localReleaseFile, localReleaseSign, localPBGPGKey); verifyErr != nil {
 				return nil, fmt.Errorf("refresh for %s failed and the cached metadata no longer verifies: %w", baseURL, verifyErr)
+			}
+			if isInRelease {
+				plaintext, verifyErr := VerifyInRelease(localReleaseFile, localPBGPGKey)
+				if verifyErr != nil {
+					return nil, fmt.Errorf("refresh for %s verified InRelease but could not extract plaintext: %w", baseURL, verifyErr)
+				}
+				if writeErr := os.WriteFile(checkableReleaseFile, plaintext, 0644); writeErr != nil {
+					return nil, fmt.Errorf("refresh for %s verified InRelease but could not update plaintext: %w", baseURL, writeErr)
+				}
 			}
 		}
 		log.Warnf("Could not refresh metadata for %s (%v); continuing with previously "+

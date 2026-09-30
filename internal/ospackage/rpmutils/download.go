@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -839,6 +840,14 @@ func configuredRPMRepoURLs() []string {
 	return urls
 }
 
+func packageFileNameFromURL(rawURL string) string {
+	parsedURL, err := url.Parse(rawURL)
+	if err == nil && parsedURL.Path != "" {
+		return path.Base(parsedURL.Path)
+	}
+	return path.Base(strings.SplitN(rawURL, "?", 2)[0])
+}
+
 // clearRPMMetadataCache removes primary.parsed.json and primary.location.json
 // from the metadata cache directory derived from the configured repo URL so that
 // repository metadata is re-fetched on the next run.
@@ -1052,7 +1061,7 @@ func downloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSour
 	urls := make([]string, len(sorted_pkgs))
 	for i, pkg := range sorted_pkgs {
 		urls[i] = pkg.URL
-		downloadPkgList = append(downloadPkgList, path.Base(pkg.URL))
+		downloadPkgList = append(downloadPkgList, packageFileNameFromURL(pkg.URL))
 	}
 
 	// Ensure dest directory exists
