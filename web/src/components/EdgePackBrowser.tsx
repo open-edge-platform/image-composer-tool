@@ -187,7 +187,8 @@ export function EdgePackBrowser({
           >
             {packState.selected
               ? `${packState.selected} of ${packState.total} packages selected`
-              : `${packState.total} packages in ${addableDomains.length} domains`}
+              : `${packState.total} package${packState.total === 1 ? '' : 's'} ` +
+                `in ${addableDomains.length} domain${addableDomains.length === 1 ? '' : 's'}`}
           </span>
         </div>
 
