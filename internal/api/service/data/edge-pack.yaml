@@ -63,16 +63,16 @@
 #                      The pack total is always computed over unique names.
 #
 # The package names below are the EdgePack Noble breakdown documented in
-# docs/architecture-decision-record/adr-edgepack-integration.md. They are bound
-# to `intel-eci` because the EdgePack repository itself is not yet published
-# publicly; when it is, add it to package-repos.yaml and repoint `repo` here.
-# That is a one-line change — nothing in the UI or the API is repo-specific.
+# docs/architecture-decision-record/adr-edgepack-integration.md. They resolve
+# from `edgepack`, the public signed repository at apt.repos.intel.com/edgepack
+# that ubuntu24-x86_64-edgepack-raw.yml also installs from — so a pack selection
+# and a hand-authored build pull the same packages from the same place.
 
 pack:
   id: edge-pack
   displayName: Edge Pack
   description: Intel Edge capabilities, grouped by domain
-  repo: intel-eci
+  repo: edgepack
 
   baseRuntimes:
     - id: standard

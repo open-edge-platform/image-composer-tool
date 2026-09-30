@@ -7,6 +7,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -151,6 +152,76 @@ func TestEmbeddedEdgePackReferencesAreReal(t *testing.T) {
 					t.Errorf("domain %q is published for %q but requires repo %q, which is not offered there",
 						d.ID, osID, id)
 				}
+			}
+		}
+	}
+}
+
+// The pack must resolve from the repository the authored EdgePack template
+// installs from.
+//
+// TestEmbeddedEdgePackReferencesAreReal only asserts `pack.repo` names an entry
+// that exists, and TestEmbeddedCatalogCoversTemplateRepos only walks templates
+// the manifest maps — which this one is not, being an Advanced-mode reference
+// rather than a Basic-tab combination. Between those two the binding was
+// unchecked, and it drifted: the catalog pointed at `intel-eci`, a real
+// repository that does not carry the intel-edge-* metapackages. Nothing failed,
+// because compose resolves templates without fetching packages, so the
+// mismatch would have surfaced only as an unresolvable package an entire build
+// later. Comparing against the template closes that gap the same way the
+// manifest-driven test does for every other repo.
+func TestEmbeddedEdgePackRepoMirrorsAuthoredTemplate(t *testing.T) {
+	t.Parallel()
+	spec, err := loadEdgePack("")
+	if err != nil {
+		t.Fatalf("loadEdgePack: %v", err)
+	}
+	repos, err := loadPackageRepos("")
+	if err != nil {
+		t.Fatalf("loadPackageRepos: %v", err)
+	}
+
+	var packRepo *PackageRepo
+	for i := range repos {
+		if repos[i].ID == spec.Repo {
+			packRepo = &repos[i]
+			break
+		}
+	}
+	if packRepo == nil {
+		t.Fatalf("edge pack names repo %q, which data/package-repos.yaml does not define", spec.Repo)
+	}
+	// Without a key the generated delta declares the repository unverified, and
+	// every Edge Pack package would be fetched unauthenticated.
+	if packRepo.PKey == "" {
+		t.Errorf("pack repo %q has no pkey, so Edge Pack packages would be fetched unverified", spec.Repo)
+	}
+
+	// Tests run in the package dir; the templates live at the repo root.
+	tmpl := filepath.Join("..", "..", "..", "image-templates", "ubuntu24",
+		"ubuntu24-x86_64-edgepack-raw.yml")
+	byTarget := catalogRefs(t, repos)
+
+	// At least one of the template's repositories must be the pack's own. Not
+	// all of them: the template also adds the NPU prerequisite graphics PPA,
+	// which is a separate catalog entry the pack reaches via requiresRepos.
+	var owners []string
+	for _, ref := range templateRepos(t, tmpl) {
+		if id, ok := byTarget["ubuntu24"][ref]; ok {
+			owners = append(owners, id)
+		}
+	}
+	if !slices.Contains(owners, spec.Repo) {
+		t.Errorf("pack repo is %q, but no repository %s installs from maps to it (matched: %v).\n"+
+			"The pack and the authored template must read the same index.",
+			spec.Repo, filepath.Base(tmpl), owners)
+	}
+
+	for _, d := range spec.Domains {
+		for _, osID := range d.OS {
+			if !packRepo.appliesTo(osID) {
+				t.Errorf("domain %q is published for %q but the pack repo %q is not offered there",
+					d.ID, osID, spec.Repo)
 			}
 		}
 	}
