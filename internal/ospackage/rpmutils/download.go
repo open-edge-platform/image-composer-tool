@@ -840,14 +840,6 @@ func configuredRPMRepoURLs() []string {
 	return urls
 }
 
-func packageFileNameFromURL(rawURL string) string {
-	parsedURL, err := url.Parse(rawURL)
-	if err == nil && parsedURL.Path != "" {
-		return path.Base(parsedURL.Path)
-	}
-	return path.Base(strings.SplitN(rawURL, "?", 2)[0])
-}
-
 // clearRPMMetadataCache removes primary.parsed.json and primary.location.json
 // from the metadata cache directory derived from the configured repo URL so that
 // repository metadata is re-fetched on the next run.
@@ -959,6 +951,32 @@ func handleRPMCacheRetry(
 	return pkgs, infos, true, err
 }
 
+// packageFileNameFromURL derives the on-disk basename the fetcher writes for a
+// package URL, decoding the path exactly as pkgfetcher does so validation sees
+// the same name that lands on disk (e.g. %2B -> +), not the still-encoded URL.
+func packageFileNameFromURL(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Path == "" {
+		return path.Base(strings.SplitN(rawURL, "?", 2)[0])
+	}
+	return path.Base(parsed.Path)
+}
+
+// buildDownloadList derives each package's on-disk filename and rejects any that
+// is not a plain RPM basename before it can reach the rpm install sinks (CWE-78).
+func buildDownloadList(pkgs []ospackage.PackageInfo) (urls, downloadPkgList []string, err error) {
+	urls = make([]string, len(pkgs))
+	for i, pkg := range pkgs {
+		name := packageFileNameFromURL(pkg.URL)
+		if verr := validatePackageFileName(name); verr != nil {
+			return nil, nil, fmt.Errorf("rejecting package from %q: %w", pkg.URL, verr)
+		}
+		urls[i] = pkg.URL
+		downloadPkgList = append(downloadPkgList, name)
+	}
+	return urls, downloadPkgList, nil
+}
+
 func downloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSources map[string]config.PackageSource, systemRootsOnly bool, retriedAfterMetadataClear bool) ([]string, []ospackage.PackageInfo, error) {
 	var downloadPkgList []string
 
@@ -1057,12 +1075,12 @@ func downloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSour
 		}
 	}
 
-	// Extract URLs
-	urls := make([]string, len(sorted_pkgs))
-	for i, pkg := range sorted_pkgs {
-		urls[i] = pkg.URL
-		downloadPkgList = append(downloadPkgList, packageFileNameFromURL(pkg.URL))
+	// Extract URLs, rejecting any package whose on-disk filename is unsafe.
+	urls, validated, buildErr := buildDownloadList(sorted_pkgs)
+	if buildErr != nil {
+		return downloadPkgList, nil, buildErr
 	}
+	downloadPkgList = validated
 
 	// Ensure dest directory exists
 	if err := os.MkdirAll(absDestDir, 0755); err != nil {

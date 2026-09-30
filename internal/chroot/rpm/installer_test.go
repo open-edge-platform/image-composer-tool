@@ -588,3 +588,229 @@ func TestInstallRpmPkg_MultiplePackages(t *testing.T) {
 		t.Errorf("Expected successful installation of multiple packages or GPG component error, got: %v", err)
 	}
 }
+
+// capturingExecutor records every command string it is asked to run and returns
+// canned output so an install flow completes without executing anything.
+type capturingExecutor struct{ cmds []string }
+
+func (e *capturingExecutor) record(cmdStr string) (string, error) {
+	e.cmds = append(e.cmds, cmdStr)
+	switch {
+	case strings.Contains(cmdStr, "rpm -E"):
+		return "sqlite", nil
+	case strings.Contains(cmdStr, "rpm -q -l"):
+		return "/etc/pki/rpm-gpg/RPM-GPG-KEY-test", nil
+	default:
+		return "", nil
+	}
+}
+
+func (e *capturingExecutor) ExecCmd(cmdStr string, _ bool, _ string, _ []string) (string, error) {
+	return e.record(cmdStr)
+}
+
+func (e *capturingExecutor) ExecCmdSilent(cmdStr string, _ bool, _ string, _ []string) (string, error) {
+	return e.record(cmdStr)
+}
+
+func (e *capturingExecutor) ExecCmdWithStream(cmdStr string, _ bool, _ string, _ []string) (string, error) {
+	return e.record(cmdStr)
+}
+
+func (e *capturingExecutor) ExecCmdWithInput(_ string, cmdStr string, _ bool, _ string, _ []string) (string, error) {
+	return e.record(cmdStr)
+}
+
+// TestInstallRpmPkg_QuotesMaliciousFileName is the CWE-78 regression test: a
+// package basename derived from repository metadata that carries shell syntax
+// must reach the rpm install command shell-quoted, so it cannot break out and
+// run attacker commands on the build host.
+func TestInstallRpmPkg_QuotesMaliciousFileName(t *testing.T) {
+	installer := rpm.NewRpmInstaller()
+	tempDir := t.TempDir()
+
+	chrootEnvPath := filepath.Join(tempDir, "chroot")
+	chrootPkgCacheDir := filepath.Join(tempDir, "cache")
+	if err := os.MkdirAll(chrootPkgCacheDir, 0700); err != nil {
+		t.Fatalf("Failed to create cache directory: %v", err)
+	}
+
+	malicious := "evil';touch pwned;'.rpm"
+	if err := os.WriteFile(filepath.Join(chrootPkgCacheDir, malicious), []byte("x"), 0644); err != nil {
+		t.Fatalf("Failed to create malicious package fixture: %v", err)
+	}
+
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+	capExec := &capturingExecutor{}
+	shell.Default = capExec
+
+	// Final GPG/stop-component behavior is irrelevant here; we only assert the
+	// install command quoting, so the returned error is intentionally ignored.
+	_ = installer.InstallRpmPkg("azure-linux", chrootEnvPath, chrootPkgCacheDir, []string{malicious})
+
+	want := shell.QuoteArg(filepath.Join(chrootPkgCacheDir, malicious))
+	var found bool
+	for _, c := range capExec.cmds {
+		if strings.Contains(c, "rpm -i") && strings.Contains(c, "--root") {
+			found = true
+			if !strings.Contains(c, want) {
+				t.Errorf("install command did not shell-quote the package path.\n cmd: %s\nwant substring: %s", c, want)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no 'rpm -i ... --root' command was captured")
+	}
+}
+
+// backendSplitExecutor reports different RPM DB backends for the host and the
+// chroot so updateRpmDB proceeds past its early-return and builds the --justdb
+// install command. It records every command so the test can assert quoting.
+type backendSplitExecutor struct{ cmds []string }
+
+func (e *backendSplitExecutor) run(cmdStr, chrootPath string) (string, error) {
+	e.cmds = append(e.cmds, cmdStr)
+	switch {
+	case strings.Contains(cmdStr, "rpm -E"):
+		if chrootPath == shell.HostPath {
+			return "sqlite", nil
+		}
+		return "ndb", nil
+	case strings.Contains(cmdStr, "rpm -q -l"):
+		return "/etc/pki/rpm-gpg/RPM-GPG-KEY-test", nil
+	default:
+		return "", nil
+	}
+}
+
+func (e *backendSplitExecutor) ExecCmd(cmdStr string, _ bool, chrootPath string, _ []string) (string, error) {
+	return e.run(cmdStr, chrootPath)
+}
+
+func (e *backendSplitExecutor) ExecCmdSilent(cmdStr string, _ bool, chrootPath string, _ []string) (string, error) {
+	return e.run(cmdStr, chrootPath)
+}
+
+func (e *backendSplitExecutor) ExecCmdWithStream(cmdStr string, _ bool, chrootPath string, _ []string) (string, error) {
+	return e.run(cmdStr, chrootPath)
+}
+
+func (e *backendSplitExecutor) ExecCmdWithInput(_ string, cmdStr string, _ bool, chrootPath string, _ []string) (string, error) {
+	return e.run(cmdStr, chrootPath)
+}
+
+// TestUpdateRpmDB_QuotesJustdbFileName covers the second CWE-78 sink: when the
+// host and chroot RPM DB backends differ, updateRpmDB reinstalls each package
+// with `rpm -i --justdb`. The repository-controlled basename must be shell-quoted
+// there too. The backend-split executor forces that path (which the sqlite/sqlite
+// capturing executor skips) so both sinks are exercised.
+func TestUpdateRpmDB_QuotesJustdbFileName(t *testing.T) {
+	installer := rpm.NewRpmInstaller()
+	tempDir := t.TempDir()
+
+	chrootEnvPath := filepath.Join(tempDir, "chroot")
+	chrootPkgCacheDir := filepath.Join(tempDir, "cache")
+	if err := os.MkdirAll(chrootPkgCacheDir, 0700); err != nil {
+		t.Fatalf("Failed to create cache directory: %v", err)
+	}
+
+	malicious := "evil';touch pwned;'.rpm"
+	if err := os.WriteFile(filepath.Join(chrootPkgCacheDir, malicious), []byte("x"), 0644); err != nil {
+		t.Fatalf("Failed to create malicious package fixture: %v", err)
+	}
+
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+	capExec := &backendSplitExecutor{}
+	shell.Default = capExec
+
+	// The final GPG/cleanup behavior is irrelevant; we only assert --justdb quoting.
+	_ = installer.InstallRpmPkg("azure-linux", chrootEnvPath, chrootPkgCacheDir, []string{malicious})
+
+	want := shell.QuoteArg(filepath.Join("/packages", malicious))
+	var found bool
+	for _, c := range capExec.cmds {
+		if strings.Contains(c, "--justdb") {
+			found = true
+			if !strings.Contains(c, want) {
+				t.Errorf("--justdb command did not shell-quote the package path.\n cmd: %s\nwant substring: %s", c, want)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no 'rpm -i ... --justdb' command was captured")
+	}
+}
+
+// gpgImportExecutor returns a malicious GPG key path (as if listed by a hostile
+// repo package) and matching backends so updateRpmDB short-circuits, letting the
+// flow reach importGpgKeys.
+type gpgImportExecutor struct{ cmds []string }
+
+func (e *gpgImportExecutor) run(cmdStr string) (string, error) {
+	e.cmds = append(e.cmds, cmdStr)
+	switch {
+	case strings.Contains(cmdStr, "rpm -E"):
+		return "sqlite", nil
+	case strings.Contains(cmdStr, "rpm -q -l"):
+		return "/etc/pki/rpm-gpg/evil';touch pwned;'", nil
+	default:
+		return "", nil
+	}
+}
+
+func (e *gpgImportExecutor) ExecCmd(cmdStr string, _ bool, _ string, _ []string) (string, error) {
+	return e.run(cmdStr)
+}
+
+func (e *gpgImportExecutor) ExecCmdSilent(cmdStr string, _ bool, _ string, _ []string) (string, error) {
+	return e.run(cmdStr)
+}
+
+func (e *gpgImportExecutor) ExecCmdWithStream(cmdStr string, _ bool, _ string, _ []string) (string, error) {
+	return e.run(cmdStr)
+}
+
+func (e *gpgImportExecutor) ExecCmdWithInput(_ string, cmdStr string, _ bool, _ string, _ []string) (string, error) {
+	return e.run(cmdStr)
+}
+
+// TestImportGpgKeys_QuotesKeyPath is a CWE-78 regression test for the GPG import
+// sink: the key path comes from a repo package's file list, so it must be
+// shell-quoted before reaching the `rpm --import` command run via bash -c.
+func TestImportGpgKeys_QuotesKeyPath(t *testing.T) {
+	installer := rpm.NewRpmInstaller()
+	tempDir := t.TempDir()
+
+	chrootEnvPath := filepath.Join(tempDir, "chroot")
+	chrootPkgCacheDir := filepath.Join(tempDir, "cache")
+	if err := os.MkdirAll(chrootPkgCacheDir, 0700); err != nil {
+		t.Fatalf("Failed to create cache directory: %v", err)
+	}
+	pkg := "pkg-1.0-1.x86_64.rpm"
+	if err := os.WriteFile(filepath.Join(chrootPkgCacheDir, pkg), []byte("x"), 0644); err != nil {
+		t.Fatalf("Failed to create package fixture: %v", err)
+	}
+
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+	capExec := &gpgImportExecutor{}
+	shell.Default = capExec
+
+	_ = installer.InstallRpmPkg("azure-linux", chrootEnvPath, chrootPkgCacheDir, []string{pkg})
+
+	want := shell.QuoteArg("/etc/pki/rpm-gpg/evil';touch pwned;'")
+	var found bool
+	for _, c := range capExec.cmds {
+		if strings.Contains(c, "rpm --import") {
+			found = true
+			if !strings.Contains(c, want) {
+				t.Errorf("rpm --import command did not shell-quote the key path.\n cmd: %s\nwant substring: %s", c, want)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no 'rpm --import' command was captured")
+	}
+}
