@@ -315,8 +315,14 @@ func (s *Service) edgePackMetadata(ctx context.Context, osID string, repos []Pac
 // edgePackNameSet is every package name the pack references, base runtimes
 // included. A name in two domains appears once — this is also what makes the
 // pack-level count a count of unique packages rather than a sum of domains.
+//
+// Empty for a Service built without a catalog, so a caller that only asks
+// "is this an Edge Pack package" gets a clean "no" rather than a panic.
 func (s *Service) edgePackNameSet() map[string]bool {
 	set := make(map[string]bool)
+	if s.edgePack == nil {
+		return set
+	}
 	for _, r := range s.edgePack.BaseRuntimes {
 		set[r.Package] = true
 	}
