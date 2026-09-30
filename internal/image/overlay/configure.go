@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
@@ -86,18 +85,13 @@ func RunOverlayConfigurations(template *config.ImageTemplate, rootMount string) 
 		if cmdStr == "" {
 			continue
 		}
-		// Wrap the user command in a chroot + bash -c, quoting the whole command as a
-		// single argument (strconv.Quote) so it is handed to bash opaquely — the
-		// command allowlist only validates the outer `chroot`, matching create mode.
-		// rootMount is single-quoted (shell.QuoteArg) so any shell metacharacter in the
-		// workspace path is neutralized at the final `bash -c`. Note this does NOT make
-		// the path whitespace-safe: the allowlist verifier re-tokenizes the command with
-		// strings.Fields (not quote-aware) and collapses internal whitespace runs, so a
-		// path with tabs or repeated spaces would be corrupted. The overlay workspace
-		// path is tool-derived and carries no such whitespace, so this is not a concern
-		// in practice; the quoting here is defense-in-depth against metacharacters, not a
-		// promise of arbitrary-whitespace support.
-		chrootCmd := fmt.Sprintf("chroot %s /bin/bash -c %s", shell.QuoteArg(rootMount), strconv.Quote(cmdStr))
+		// Wrap the user command in a chroot + bash -c, both rootMount and cmdStr
+		// single-quoted (shell.QuoteArg) so each reaches bash as one opaque argument —
+		// the command allowlist only validates the outer `chroot`, matching create
+		// mode. Single quotes, not strconv.Quote/double quotes: double quotes still
+		// let bash expand $(...), backticks and $var inside cmdStr, and don't survive
+		// a multi-line script's real newlines being embedded that way either.
+		chrootCmd := fmt.Sprintf("chroot %s /bin/bash -c %s", shell.QuoteArg(rootMount), shell.QuoteArg(cmdStr))
 		out, cerr := configExecFn(chrootCmd, true, shell.HostPath, nil)
 		if cerr != nil {
 			return fmt.Errorf("overlay configure: configuration command failed: %q: %w%s", cmdStr, cerr, formatCommandOutput(out))

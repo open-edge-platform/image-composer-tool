@@ -132,10 +132,16 @@ Gazebo, RealSense). Split them across layers and two package sources disappear
 with no error. **Keep a repository set in one layer**, and check the result with
 `resolve --full` whenever you move one.
 
-**3. `metadata` does not inherit.** It is valid in the schema, but there is no
-corresponding field on `ImageTemplate`, so it is discarded at parse time. It
-feeds template discovery and search, read per file. Every template needs its own
-`metadata` block, including children.
+**3. `metadata` does not inherit.** A template's own block is preserved through
+resolution and appears in `resolve --full` output, but a child that declares
+none gets none — the parent's is not carried down. It feeds template discovery
+and search, read per file, and a child is a different image, so the parent's
+description would misdescribe it. Every template needs its own `metadata` block,
+including children.
+
+(Before the `metadata` field existed on `ImageTemplate`, the block was discarded
+at parse time and never reached the resolved output at all. It now round-trips;
+what has not changed is that it does not inherit.)
 
 **4. `disk` is all-or-nothing.** Providing any `disk` in a child replaces the
 parent's block entirely rather than merging field by field. To change only the

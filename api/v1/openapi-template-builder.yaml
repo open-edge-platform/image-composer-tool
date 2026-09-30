@@ -1522,7 +1522,13 @@ components:
           example: ubuntu24-robotics-amr.raw.gz
         type:
           type: string
-          enum: [image, sbom]
+          enum: [image, sbom, unknown]
+          description: >
+            Kind of output. `image` is a disk or optical image, `sbom` a software
+            bill of materials. `unknown` is reported for an output the server
+            cannot classify — clients must render it as-is rather than defaulting
+            it to `image`, so a format added to ICT later is visibly unclassified
+            instead of silently mislabelled.
         path:
           type: string
         size:

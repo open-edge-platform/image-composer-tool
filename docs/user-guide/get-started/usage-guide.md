@@ -240,10 +240,14 @@ Check a template for errors before starting a build:
 
 Print the merged template YAML to stdout — useful for debugging templates that
 use `extends:` or for previewing exactly what the tool will build. Sensitive
-fields (user passwords, `systemConfig.users[*].hash_algo`, and the secure boot
+fields (user passwords, `systemConfig.users[*].hash_algo`, the secure boot
 signing paths `systemConfig.immutability.secureBootDBKey`,
 `systemConfig.immutability.secureBootDBCrt`, and
-`systemConfig.immutability.secureBootDBCer`) are always redacted in the output:
+`systemConfig.immutability.secureBootDBCer`, and the DKMS secure boot signing
+paths `systemConfig.dkms.secureBoot.signingKeyPath`,
+`systemConfig.dkms.secureBoot.signingCertPath`,
+`systemConfig.dkms.secureBoot.targetKeyPath`, and
+`systemConfig.dkms.secureBoot.targetCertPath`) are always redacted in the output:
 
 ```bash
 # Chain-merge only, without OS defaults

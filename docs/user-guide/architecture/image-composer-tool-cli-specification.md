@@ -275,6 +275,10 @@ Sensitive fields are always redacted in the output:
 - `systemConfig.immutability.secureBootDBKey`
 - `systemConfig.immutability.secureBootDBCrt`
 - `systemConfig.immutability.secureBootDBCer`
+- `systemConfig.dkms.secureBoot.signingKeyPath`
+- `systemConfig.dkms.secureBoot.signingCertPath`
+- `systemConfig.dkms.secureBoot.targetKeyPath`
+- `systemConfig.dkms.secureBoot.targetCertPath`
 
 The output is safe to paste into an issue or a code review.
 

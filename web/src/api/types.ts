@@ -248,11 +248,25 @@ export interface BuildAccepted {
   logsUrl: string
 }
 
+// One build output. type is whatever the server reported (the ArtifactType enum
+// in api/v1/openapi-template-builder.yaml) and is displayed verbatim — the UI
+// must never infer it from the file name, or an SBOM reads as an image. 'unknown'
+// is the server's own label for an output it could not classify; a server newer
+// than this bundle can also send a type not in this union, which is why
+// artifactTypeLabel below falls back to showing the raw string.
 export interface Artifact {
   name: string
-  type: 'image' | 'sbom'
+  type: 'image' | 'sbom' | 'unknown' | (string & {})
   path: string
   size?: string
+}
+
+// artifactTypeLabel renders an artifact's type for display. Unrecognised and
+// missing types are surfaced rather than defaulted to IMAGE, so a new server-side
+// artifact type is visibly unclassified instead of silently mislabelled.
+export function artifactTypeLabel(type: string | undefined): string {
+  const t = (type ?? '').trim()
+  return t === '' ? 'UNKNOWN' : t.toUpperCase()
 }
 
 // Teardown-residue warning surfaced when a cancelled/failed build may have left
