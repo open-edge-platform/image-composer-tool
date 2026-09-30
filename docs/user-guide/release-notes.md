@@ -6,6 +6,14 @@
 
 **New**:
 
+- **Fixed**: the Web UI Artifacts table reported every build output as type `IMAGE`, including the SBOM and files that are not build outputs at all. Two causes, both server-side — the table itself always displayed whatever type the API sent. The API's log parser fell back to `image` for any file it did not recognise, so a chroot's leftovers in the image build directory (`bash.bashrc`, `debconf.conf`, `debian_version`, `UPLOAD-MANIFEST.txt`) were listed as images; and its directory scanner, used for history builds and for partial outputs after a failed or cancelled compose, looked for SBOMs ending in `.spdx.json` and so missed the `spdx_manifest_<deb|rpm>_<image>_<timestamp>.json` file ICT actually writes — dropping the SBOM from those views entirely. Both now share one set of naming rules (`internal/utils/artifact`), covering every image format the builder emits (`raw`, `img`, `iso`, `qcow2`, `vhd`, `vhdx`, `vmdk`, `vdi`, `tar`, with optional `gz`/`xz`/`zstd` compression) and both SBOM naming conventions (the create-mode manifest and the overlay `.delta.spdx.json` / `.complete.spdx.json` sidecars). **An output that matches no rule is now reported as `unknown` rather than guessed to be an image** — `unknown` is a new value on the `Artifact.type` enum in the API contract, so a client that handles only `image` and `sbom` should expect it. Separately, the CLI's "Generated Artifacts" summary listed every file in the image build directory; it now lists only the images and SBOMs, which is also what the web API parses.
+
+- **Fixed**: the Web UI Artifacts table listed outputs in whatever order they came off disk, so the SBOM appeared wherever its filename happened to sort. Images are now listed first and the SBOM last. Ordering is applied when a build is read rather than when its artifact list is built, so it also holds for a past build whose recorded order predates this change, and the live completion view and a reloaded history build agree.
+
+- **Changed**: MBR is no longer selectable in the Advanced tab's Disk Layout step, and the chip now reads "MBR is not yet enabled." It is shown locked rather than hidden, so a template that already declares `partitionTableType: mbr` still displays its real value — it can be moved to GPT, but not back. The schema and the builder both still accept MBR, so a hand-authored template is unaffected.
+
+- **Fixed**: a template's `metadata` block was dropped from its resolved output. The AI-searchable discovery text (`description`, `use_cases`, `keywords`) that most curated templates open with — it is optional, and a number of shipped templates declare none — never reached `resolve --full` or the Web UI's resolved view, because the template struct had no field for it. It now round-trips through load, merge and marshal. **It still does not inherit**: a child that declares no `metadata` resolves to none rather than adopting its parent's, since the block is read per file for discovery and a child is a different image than its parent describes; a child that declares its own replaces the parent's whole block rather than merging it field by field. Top-level keys are also emitted in the order the curated templates are authored in (`metadata` → `image` → `target` → … → `systemConfig`), where previously `systemConfig` was followed by `packageRepositories` and `metadata` was absent entirely, so a resolved template now reads like a hand-written one.
+
 - Fed Aero host-OS blueprints in the Web UI Basic tab. The two generic host-OS templates from [`edge-node-infrastructure-blueprint`](https://github.com/open-edge-platform/edge-node-infrastructure-blueprint/tree/release-2026.2.0/infrastructure/host-os/ict) `release-2026.2.0` are now vendored into `image-templates/ubuntu24/` and selectable from the Basic tab: `generic-handheld-os-template.yml` (handheld/desktop) and `generic-companion-os-server-template.yml` (companion OS server). Both target Panther Lake on Ubuntu 24.04 and build a `raw` image. Both are wired into the shipped Basic-tab manifest (`internal/api/service/data/manifest.yaml`) under the Fed Aero vertical, so they are available out of the box with no extra configuration. **The `Edge Node Infrastructure Blueprint BKC` SKU has been removed from the Fed Aero vertical**, so Fed Aero now offers exactly these two blueprints on Ubuntu 24.04 (the grayed-out `Drone Image - From BKC Team` placeholder on Ubuntu 26.04 Server is unchanged). Its template, `ubuntu24-x86_64-minimal-ptl-pv-raw.yml`, remains in `image-templates/` and can still be built directly from the CLI — only the Basic-tab entry is gone. Note that `generic-handheld-os-template.yml` was **updated in place** to the `release-2026.2.0` revision — its swap partition grows from 3073MiB to 5121MiB, and it now installs the 6.18 Intel kernel and media stack from a pinned snapshot of the Intel edge overlay (`download.01.org/edge-linux-overlay`) instead of the rolling `intel-linux-overlay` suite, so images built from it differ from earlier releases. Upstream ships `<USERNAME>`/`<PASSWORD>` placeholders in both templates' `users:` block; these are filled with this repo's convention (`user`, empty password, set at deploy time) so the templates validate and build as shipped — set real credentials before deploying. The Advanced tab's repository picker gains the two repositories these blueprints introduce: the pinned Intel edge overlay snapshot and the Ubuntu MozillaTeam PPA.
 
 ## Version 2026.2
@@ -150,6 +158,14 @@
 
    The tool can now compose Ubuntu images compatible with WSL environments.
 
+8. **Intel EdgePack platform-enablement template**
+
+   Adds `ubuntu24-x86_64-edgepack-raw.yml`, demonstrating native support for
+   Intel's EdgePack platform-enablement packages (Panther Lake / Wildcat Lake)
+   via `packageRepositories`, `systemConfig.packages`, and the new typed
+   `systemConfig.dkms` section, which builds and verifies DKMS modules against
+   the installed target kernel rather than the chroot's build-host kernel.
+
 **Validated hardware**:
 
 - **Target platform**: Panther Lake (PTL)
@@ -164,10 +180,14 @@
   | Debian 13 custom initrd with overlay | `debian13-x86_64-bb-graphics-raw.yml` and `debian13-x86_64-bb-overlay-initrd-raw.yml` in `image-templates/debian13/` |
   | Debian 13 monolithic robotics | `debian13-x86_64-bb-dracut-raw.yml` in `image-templates/debian13/` |
   | Ubuntu 24 robotics templates | `ubuntu24-x86_64-robotics-hw-overlay-qcow2.yml`, `ubuntu24-x86_64-robotics-jazzy-overlay-extends.yml`, and `ubuntu24-x86_64-robotics-jazzy-iso.yml` in `image-templates/ubuntu24/` |
+  | Intel EdgePack platform enablement | `ubuntu24-x86_64-edgepack-raw.yml` in `image-templates/ubuntu24/` |
 
 **Fixed**:
 
 - `fix(imagedisc)`: bound sfdisk calls and detach stale loop devices before reattach: `createPartitionTable`'s `sfdisk` calls had no execution timeout, so a wedged `sfdisk` (e.g. blocked behind a stale loop-device handle from a hard-killed prior build) could hang a build indefinitely. Both `sfdisk` invocations are now bounded to a 30s context so a hang fails fast into the existing retry-with-force path instead of blocking forever. Loop-device attach is also now idempotent: before `losetup`, any existing loop device already bound to the same backing file (including one whose backing file was since deleted) is detached first, removing the actual trigger that could wedge the kernel's partition-table re-read on a freshly attached device.
+- `fix(debutils)`: support APT repositories that publish only a combined `InRelease` file instead of a detached `Release`/`Release.gpg` pair. Builds against such repositories (including EdgePack's public repository) previously failed to fetch metadata; the format is now auto-detected and verified either way, and offline rebuilds correctly keep using the previously detected format instead of reverting to the missing classic files.
+- `fix(debutils)`: correctly resolve dependencies on a versioned virtual `Provides:` (e.g. Debian's Qt6 ABI-pinning packages) by comparing against the version the provider actually declares for that capability, not the provider's own unrelated package version. An unversioned `Provides:` no longer incorrectly satisfies a versioned dependency either.
+- `fix(shell)`: `configurations` commands containing multi-line scripts or shell metacharacters (`$()`, backticks, `$var`) now reach the chroot unmodified instead of having their whitespace collapsed or being partially expanded by the outer shell before execution.
 
 **Known Issues**:
 

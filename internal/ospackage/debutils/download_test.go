@@ -2,11 +2,13 @@ package debutils
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
@@ -475,6 +477,364 @@ func TestBuildRepoConfigs_UsesCachedPackageListOffline(t *testing.T) {
 	}
 	if len(configs) == 0 {
 		t.Fatalf("expected repo configs from cached run")
+	}
+}
+
+// TestBuildRepoConfigs_DetectsInReleaseOnlyRepo covers a repository that
+// serves only InRelease (no detached Release.gpg), as aptly-published repos
+// do — BuildRepoConfigs must fall back to InRelease and signal that to
+// ParseRepositoryMetadata via the inReleaseSentinel ReleaseSign value.
+func TestBuildRepoConfigs_DetectsInReleaseOnlyRepo(t *testing.T) {
+	resetURLExistenceCacheForTest(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/dists/stable/main/binary-amd64/Packages.gz":
+			w.WriteHeader(http.StatusOK)
+		case "/dists/stable/InRelease":
+			w.WriteHeader(http.StatusOK)
+		default:
+			// Includes /dists/stable/Release.gpg, which this repo doesn't publish.
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	repos := []Repository{{
+		ID:       "inrelease-repo",
+		Codename: "stable",
+		URL:      server.URL,
+		PKey:     "dummy-key",
+	}}
+
+	configs, err := BuildRepoConfigs(repos, "amd64")
+	if err != nil {
+		t.Fatalf("BuildRepoConfigs failed: %v", err)
+	}
+	if len(configs) == 0 {
+		t.Fatalf("expected at least one repo config")
+	}
+	for _, cfg := range configs {
+		if cfg.ReleaseSign != inReleaseSentinel {
+			t.Errorf("expected ReleaseSign %q, got %q", inReleaseSentinel, cfg.ReleaseSign)
+		}
+		wantReleaseFile := server.URL + "/dists/stable/InRelease"
+		if cfg.ReleaseFile != wantReleaseFile {
+			t.Errorf("expected ReleaseFile %q, got %q", wantReleaseFile, cfg.ReleaseFile)
+		}
+	}
+}
+
+// TestBuildRepoConfigs_PrefersClassicReleaseSignWhenAvailable is the
+// no-regression companion: when a repo does publish a detached Release.gpg,
+// BuildRepoConfigs must keep using the classic split pair, not InRelease.
+func TestBuildRepoConfigs_PrefersClassicReleaseSignWhenAvailable(t *testing.T) {
+	resetURLExistenceCacheForTest(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/dists/stable/main/binary-amd64/Packages.gz":
+			w.WriteHeader(http.StatusOK)
+		case "/dists/stable/Release":
+			w.WriteHeader(http.StatusOK)
+		case "/dists/stable/Release.gpg":
+			w.WriteHeader(http.StatusOK)
+		default:
+			// Includes /dists/stable/InRelease, deliberately not served here.
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	repos := []Repository{{
+		ID:       "classic-repo",
+		Codename: "stable",
+		URL:      server.URL,
+		PKey:     "dummy-key",
+	}}
+
+	configs, err := BuildRepoConfigs(repos, "amd64")
+	if err != nil {
+		t.Fatalf("BuildRepoConfigs failed: %v", err)
+	}
+	if len(configs) == 0 {
+		t.Fatalf("expected at least one repo config")
+	}
+	for _, cfg := range configs {
+		wantReleaseFile := server.URL + "/dists/stable/Release"
+		wantReleaseSign := wantReleaseFile + ".gpg"
+		if cfg.ReleaseFile != wantReleaseFile {
+			t.Errorf("expected ReleaseFile %q, got %q", wantReleaseFile, cfg.ReleaseFile)
+		}
+		if cfg.ReleaseSign != wantReleaseSign {
+			t.Errorf("expected ReleaseSign %q, got %q", wantReleaseSign, cfg.ReleaseSign)
+		}
+	}
+}
+
+// TestBuildRepoConfigs_OrphanedReleaseSignFallsBackToInRelease is a
+// regression test for declaring the classic split format available just
+// because Release.gpg alone resolves: a repository that migrated to
+// InRelease-only can still have an orphaned/cached Release.gpg with no
+// Release behind it (e.g. a stale mirror artifact), which must not be
+// mistaken for a usable classic pair. Both members are required before
+// committing to the classic format; otherwise the InRelease probe below must
+// still run.
+func TestBuildRepoConfigs_OrphanedReleaseSignFallsBackToInRelease(t *testing.T) {
+	resetURLExistenceCacheForTest(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/dists/stable/main/binary-amd64/Packages.gz":
+			w.WriteHeader(http.StatusOK)
+		case "/dists/stable/Release.gpg":
+			w.WriteHeader(http.StatusOK) // orphaned: no Release behind it
+		case "/dists/stable/InRelease":
+			w.WriteHeader(http.StatusOK)
+		default:
+			// Includes /dists/stable/Release, deliberately not served here.
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	repos := []Repository{{
+		ID:       "orphaned-sign-repo",
+		Codename: "stable",
+		URL:      server.URL,
+		PKey:     "dummy-key",
+	}}
+
+	configs, err := BuildRepoConfigs(repos, "amd64")
+	if err != nil {
+		t.Fatalf("BuildRepoConfigs failed: %v", err)
+	}
+	if len(configs) == 0 {
+		t.Fatalf("expected at least one repo config")
+	}
+	for _, cfg := range configs {
+		if cfg.ReleaseSign != inReleaseSentinel {
+			t.Errorf("expected an orphaned Release.gpg to fall back to InRelease, got ReleaseSign = %q", cfg.ReleaseSign)
+		}
+	}
+}
+
+// TestBuildRepoConfigs_OfflineRebuildKeepsInReleaseFormat is a regression test:
+// a fresh probe that gets no response at all (offline) must not be treated as
+// "file not found", or an offline rebuild of a previously InRelease-only repo
+// would wrongly fall back to the now-unreachable classic Release.gpg URLs
+// instead of the cached InRelease verdict.
+func TestBuildRepoConfigs_OfflineRebuildKeepsInReleaseFormat(t *testing.T) {
+	resetURLExistenceCacheForTest(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/dists/stable/main/binary-amd64/Packages.gz":
+			w.WriteHeader(http.StatusOK)
+		case "/dists/stable/InRelease":
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	serverURL := server.URL
+
+	repos := []Repository{{
+		ID:       "inrelease-repo",
+		Codename: "stable",
+		URL:      serverURL,
+		PKey:     "dummy-key",
+	}}
+
+	// Online run: detects and caches the InRelease-only format.
+	configs, err := BuildRepoConfigs(repos, "amd64")
+	if err != nil {
+		t.Fatalf("online BuildRepoConfigs failed: %v", err)
+	}
+	if len(configs) == 0 || configs[0].ReleaseSign != inReleaseSentinel {
+		t.Fatalf("expected online run to detect InRelease, got configs: %+v", configs)
+	}
+
+	server.Close()
+
+	// Offline run against the same (now unreachable) URL: probes get no
+	// response (status 0), which must fall back to the cached InRelease
+	// verdict rather than misreporting "not found" and reverting to the
+	// classic Release.gpg pair.
+	configs, err = BuildRepoConfigs(repos, "amd64")
+	if err != nil {
+		t.Fatalf("offline BuildRepoConfigs failed: %v", err)
+	}
+	if len(configs) == 0 {
+		t.Fatalf("expected at least one repo config from the offline run")
+	}
+	for _, cfg := range configs {
+		if cfg.ReleaseSign != inReleaseSentinel {
+			t.Errorf("offline run reverted to classic format: ReleaseSign = %q, want %q", cfg.ReleaseSign, inReleaseSentinel)
+		}
+	}
+}
+
+// TestBuildRepoConfigs_ServerErrorFallsBackToCachedFormat is a regression
+// test: a transient 5xx from the release-format probes is not an
+// authoritative existence verdict either (same as a status-0/offline probe),
+// so it must fall back to the cached format instead of aborting the whole
+// build.
+func TestBuildRepoConfigs_ServerErrorFallsBackToCachedFormat(t *testing.T) {
+	resetURLExistenceCacheForTest(t)
+
+	var serveErrors atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveErrors.Load() {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		switch r.URL.Path {
+		case "/dists/stable/main/binary-amd64/Packages.gz":
+			w.WriteHeader(http.StatusOK)
+		case "/dists/stable/InRelease":
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	repos := []Repository{{
+		ID:       "inrelease-repo",
+		Codename: "stable",
+		URL:      server.URL,
+		PKey:     "dummy-key",
+	}}
+
+	// Online run: detects and caches the InRelease-only format.
+	configs, err := BuildRepoConfigs(repos, "amd64")
+	if err != nil {
+		t.Fatalf("first BuildRepoConfigs failed: %v", err)
+	}
+	if len(configs) == 0 || configs[0].ReleaseSign != inReleaseSentinel {
+		t.Fatalf("expected first run to detect InRelease, got configs: %+v", configs)
+	}
+
+	// Simulate a transient repository outage: both probes now answer 5xx.
+	serveErrors.Store(true)
+
+	configs, err = BuildRepoConfigs(repos, "amd64")
+	if err != nil {
+		t.Fatalf("BuildRepoConfigs during a transient 5xx outage should fall back to the cached format, got error: %v", err)
+	}
+	if len(configs) == 0 {
+		t.Fatalf("expected at least one repo config during the 5xx outage")
+	}
+	for _, cfg := range configs {
+		if cfg.ReleaseSign != inReleaseSentinel {
+			t.Errorf("5xx outage reverted to classic format: ReleaseSign = %q, want %q", cfg.ReleaseSign, inReleaseSentinel)
+		}
+	}
+}
+
+// TestBuildRepoConfigs_ClassicSignErrorStillDetectsHealthyInRelease is a
+// regression test: a transient 5xx on the classic Release.gpg probe, with NO
+// cached verdict yet (first-ever probe of this repository), must not abort
+// resolution before the InRelease probe is even attempted — if InRelease is
+// actually healthy, it must still be selected.
+func TestBuildRepoConfigs_ClassicSignErrorStillDetectsHealthyInRelease(t *testing.T) {
+	resetURLExistenceCacheForTest(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/dists/stable/main/binary-amd64/Packages.gz":
+			w.WriteHeader(http.StatusOK)
+		case "/dists/stable/Release.gpg":
+			w.WriteHeader(http.StatusInternalServerError) // transient outage, no cache entry yet
+		case "/dists/stable/InRelease":
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	repos := []Repository{{
+		ID:       "inrelease-repo",
+		Codename: "stable",
+		URL:      server.URL,
+		PKey:     "dummy-key",
+	}}
+
+	configs, err := BuildRepoConfigs(repos, "amd64")
+	if err != nil {
+		t.Fatalf("expected the healthy InRelease probe to be used despite the Release.gpg 500, got error: %v", err)
+	}
+	if len(configs) == 0 {
+		t.Fatalf("expected at least one repo config")
+	}
+	for _, cfg := range configs {
+		if cfg.ReleaseSign != inReleaseSentinel {
+			t.Errorf("expected InRelease to be selected despite the Release.gpg probe error, got ReleaseSign = %q", cfg.ReleaseSign)
+		}
+	}
+}
+
+// TestBuildRepoConfigs_ProbeErrorWithNoCacheFallsBackToClassicURLs is a
+// regression test: when BOTH release-format probes fail with a real error
+// (not a status-0/nil-err offline condition probeURL recognizes, e.g. a
+// connection reset) and there is no cached verdict yet (first-ever probe of
+// this repository, as happens when this format-detection code runs for the
+// first time against a repo built before it existed), BuildRepoConfigs must
+// not abort — it should fall back to the classic Release/Release.gpg URLs so
+// ParseRepositoryMetadata's own offline cache fallback still gets a chance.
+func TestBuildRepoConfigs_ProbeErrorWithNoCacheFallsBackToClassicURLs(t *testing.T) {
+	resetURLExistenceCacheForTest(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/dists/stable/Release.gpg", "/dists/stable/InRelease":
+			// Force a real error (not the offline-error allowlist in probeURL,
+			// which recognizes eof/timeout/connection refused/no such
+			// host/context deadline exceeded as "not found") by resetting the
+			// TCP connection instead of responding.
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				t.Fatal("ResponseWriter does not support hijacking")
+			}
+			conn, _, err := hj.Hijack()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tcpConn, ok := conn.(*net.TCPConn); ok {
+				_ = tcpConn.SetLinger(0)
+			}
+			conn.Close()
+		case "/dists/stable/main/binary-amd64/Packages.gz":
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	repos := []Repository{{
+		ID:       "broken-probe-repo",
+		Codename: "stable",
+		URL:      server.URL,
+		PKey:     "dummy-key",
+	}}
+
+	configs, err := BuildRepoConfigs(repos, "amd64")
+	if err != nil {
+		t.Fatalf("expected BuildRepoConfigs to fall back to classic URLs instead of aborting when release-format probes error with no cached verdict, got error: %v", err)
+	}
+	if len(configs) == 0 {
+		t.Fatalf("expected at least one repo config")
+	}
+	for _, cfg := range configs {
+		if cfg.ReleaseSign == inReleaseSentinel {
+			t.Errorf("expected the classic fallback (not InRelease) when the probes themselves errored, got ReleaseSign = %q", cfg.ReleaseSign)
+		}
+		if cfg.ReleaseFile == "" || cfg.ReleaseSign == "" {
+			t.Errorf("expected classic Release/Release.gpg URLs to be preserved as a fallback, got ReleaseFile=%q ReleaseSign=%q", cfg.ReleaseFile, cfg.ReleaseSign)
+		}
 	}
 }
 

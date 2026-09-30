@@ -12,6 +12,7 @@ type PackageInfo struct {
 	URL              string // download URL
 	Checksums        []Checksum
 	Provides         []string // capabilities this package provides (rpm:entry names)
+	ProvidesVer      []string // raw Provides: field terms (deb "name (op ver)" strings), mirrors Breaks
 	Requires         []string // capabilities this package requires
 	RequiresVer      []string // version constraints for the required capabilities
 	RequiresPkgNames []string // canonical package names of dependencies (extracted from Requires)

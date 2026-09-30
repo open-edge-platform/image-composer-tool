@@ -1,13 +1,20 @@
 package debutils
 
 import (
+	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/ProtonMail/go-crypto/openpgp"
+	"github.com/ProtonMail/go-crypto/openpgp/armor"
+	"github.com/ProtonMail/go-crypto/openpgp/clearsign"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 )
 
@@ -421,5 +428,224 @@ func TestRefreshRepoMetadata_FailureLeavesExistingFilesIntact(t *testing.T) {
 		if e.IsDir() && strings.HasPrefix(e.Name(), ".meta-refresh-") {
 			t.Errorf("staging directory %s was left behind", e.Name())
 		}
+	}
+}
+
+// fixtures in this file rely on.
+func TestParseRepositoryMetadata_InReleaseOnly(t *testing.T) {
+	signer, err := openpgp.NewEntity("Repo Signer", "test", "signer@example.invalid", nil)
+	if err != nil {
+		t.Fatalf("NewEntity: %v", err)
+	}
+	var pubKey bytes.Buffer
+	pubWriter, err := armor.Encode(&pubKey, openpgp.PublicKeyType, nil)
+	if err != nil {
+		t.Fatalf("armor.Encode: %v", err)
+	}
+	if err := signer.Serialize(pubWriter); err != nil {
+		t.Fatalf("signer.Serialize: %v", err)
+	}
+	if err := pubWriter.Close(); err != nil {
+		t.Fatalf("armor close: %v", err)
+	}
+	keyPath := filepath.Join(t.TempDir(), "signer.pub")
+	if err := os.WriteFile(keyPath, pubKey.Bytes(), 0644); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+
+	packagesContent := "Package: edgepack-demo\nVersion: 1.0\nArchitecture: amd64\n" +
+		"Filename: pool/main/e/edgepack-demo/edgepack-demo_1.0_amd64.deb\n\n"
+	var pkggzBuf bytes.Buffer
+	gzWriter := gzip.NewWriter(&pkggzBuf)
+	if _, err := gzWriter.Write([]byte(packagesContent)); err != nil {
+		t.Fatalf("write gzip: %v", err)
+	}
+	if err := gzWriter.Close(); err != nil {
+		t.Fatalf("close gzip: %v", err)
+	}
+	pkggzChecksum := fmt.Sprintf("%x", sha256.Sum256(pkggzBuf.Bytes()))
+
+	releaseContent := fmt.Sprintf("SHA256:\n %s 1 main/binary-amd64/Packages.gz\n", pkggzChecksum)
+	var inRelease bytes.Buffer
+	clearsignWriter, err := clearsign.Encode(&inRelease, signer.PrivateKey, nil)
+	if err != nil {
+		t.Fatalf("clearsign.Encode: %v", err)
+	}
+	if _, err := clearsignWriter.Write([]byte(releaseContent)); err != nil {
+		t.Fatalf("write InRelease body: %v", err)
+	}
+	if err := clearsignWriter.Close(); err != nil {
+		t.Fatalf("close clearsign writer: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/dists/noble/InRelease", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(inRelease.Bytes())
+	})
+	mux.HandleFunc("/dists/noble/main/binary-amd64/Packages.gz", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(pkggzBuf.Bytes())
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	buildPath := t.TempDir()
+	pkgs, err := ParseRepositoryMetadata(
+		server.URL,
+		server.URL+"/dists/noble/main/binary-amd64/Packages.gz",
+		server.URL+"/dists/noble/InRelease",
+		inReleaseSentinel,
+		keyPath,
+		buildPath,
+		"amd64",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("ParseRepositoryMetadata returned error: %v", err)
+	}
+	if len(pkgs) != 1 || pkgs[0].Name != "edgepack-demo" {
+		t.Fatalf("expected exactly the edgepack-demo package, got %+v", pkgs)
+	}
+}
+
+// TestParseRepositoryMetadata_DerivesPlaintextFromCachedInReleaseOffline is a
+// regression test for the offline-cache-recovery branch: a cache holding a
+// valid InRelease file and a matching Packages.gz, but missing the derived
+// ".plain" file (e.g. written by a run that predates that derived-plaintext
+// cache), must still parse successfully by deriving the plaintext locally
+// from the cached InRelease — not force a network refresh that fails when the
+// repository is unreachable.
+func TestParseRepositoryMetadata_DerivesPlaintextFromCachedInReleaseOffline(t *testing.T) {
+	signer, err := openpgp.NewEntity("Repo Signer", "test", "signer@example.invalid", nil)
+	if err != nil {
+		t.Fatalf("NewEntity: %v", err)
+	}
+	var pubKey bytes.Buffer
+	pubWriter, err := armor.Encode(&pubKey, openpgp.PublicKeyType, nil)
+	if err != nil {
+		t.Fatalf("armor.Encode: %v", err)
+	}
+	if err := signer.Serialize(pubWriter); err != nil {
+		t.Fatalf("signer.Serialize: %v", err)
+	}
+	if err := pubWriter.Close(); err != nil {
+		t.Fatalf("armor close: %v", err)
+	}
+	keyPath := filepath.Join(t.TempDir(), "signer.pub")
+	if err := os.WriteFile(keyPath, pubKey.Bytes(), 0644); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+
+	packagesContent := "Package: edgepack-demo\nVersion: 1.0\nArchitecture: amd64\n" +
+		"Filename: pool/main/e/edgepack-demo/edgepack-demo_1.0_amd64.deb\n\n"
+	var pkggzBuf bytes.Buffer
+	gzWriter := gzip.NewWriter(&pkggzBuf)
+	if _, err := gzWriter.Write([]byte(packagesContent)); err != nil {
+		t.Fatalf("write gzip: %v", err)
+	}
+	if err := gzWriter.Close(); err != nil {
+		t.Fatalf("close gzip: %v", err)
+	}
+	pkggzChecksum := fmt.Sprintf("%x", sha256.Sum256(pkggzBuf.Bytes()))
+
+	releaseContent := fmt.Sprintf("SHA256:\n %s 1 main/binary-amd64/Packages.gz\n", pkggzChecksum)
+	var inRelease bytes.Buffer
+	clearsignWriter, err := clearsign.Encode(&inRelease, signer.PrivateKey, nil)
+	if err != nil {
+		t.Fatalf("clearsign.Encode: %v", err)
+	}
+	if _, err := clearsignWriter.Write([]byte(releaseContent)); err != nil {
+		t.Fatalf("write InRelease body: %v", err)
+	}
+	if err := clearsignWriter.Close(); err != nil {
+		t.Fatalf("close clearsign writer: %v", err)
+	}
+
+	// Seed the cache directory as if a previous run had already fetched and
+	// verified InRelease and Packages.gz, but predates the derived ".plain"
+	// cache file — conspicuously absent here.
+	buildPath := t.TempDir()
+	if err := os.WriteFile(filepath.Join(buildPath, "InRelease"), inRelease.Bytes(), 0644); err != nil {
+		t.Fatalf("seed InRelease: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(buildPath, "Packages.gz"), pkggzBuf.Bytes(), 0644); err != nil {
+		t.Fatalf("seed Packages.gz: %v", err)
+	}
+
+	// The repository itself is unreachable, so any refresh attempt must fail
+	// and ParseRepositoryMetadata must fall back entirely to the seeded cache.
+	server := httptest.NewServer(http.NotFoundHandler())
+	server.Close()
+
+	pkgs, err := ParseRepositoryMetadata(
+		server.URL,
+		server.URL+"/dists/noble/main/binary-amd64/Packages.gz",
+		server.URL+"/dists/noble/InRelease",
+		inReleaseSentinel,
+		keyPath,
+		buildPath,
+		"amd64",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("ParseRepositoryMetadata returned error: %v", err)
+	}
+	if len(pkgs) != 1 || pkgs[0].Name != "edgepack-demo" {
+		t.Fatalf("expected exactly the edgepack-demo package, got %+v", pkgs)
+	}
+
+	if _, err := os.Stat(filepath.Join(buildPath, "InRelease.plain")); err != nil {
+		t.Errorf("expected InRelease.plain to be derived locally from the cached InRelease, stat error: %v", err)
+	}
+}
+
+// TestParseRepositoryMetadata_InstalledSize confirms the Debian Installed-Size
+// field (in KiB) is parsed into PackageInfo.InstalledSizeBytes (bytes; used to
+// auto-size an overlay disk grow), and that a stanza without it reports 0.
+
+// versioned term).
+func TestParseRepositoryMetadata_ParsesVersionedProvides(t *testing.T) {
+	buildPath := filepath.Join(t.TempDir(), "repo_main")
+	if err := os.MkdirAll(buildPath, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	stanza := "Package: libqt6core6t64\nVersion: 6.4.2+dfsg-21.1build5\nArchitecture: amd64\n" +
+		"Provides: qt6-base-abi (= 6.4.2)\n" +
+		"Filename: pool/universe/q/qt6-base/libqt6core6t64_6.4.2+dfsg-21.1build5_amd64.deb\n\n"
+
+	pkggzPath := filepath.Join(buildPath, "Packages.gz")
+	pkgFile, err := os.Create(pkggzPath)
+	if err != nil {
+		t.Fatalf("create Packages.gz: %v", err)
+	}
+	gzWriter := gzip.NewWriter(pkgFile)
+	if _, err := gzWriter.Write([]byte(stanza)); err != nil {
+		t.Fatalf("write gzip: %v", err)
+	}
+	if err := gzWriter.Close(); err != nil {
+		t.Fatalf("close gzip: %v", err)
+	}
+	if err := pkgFile.Close(); err != nil {
+		t.Fatalf("close file: %v", err)
+	}
+
+	checksum, err := computeFileSHA256(pkggzPath)
+	if err != nil {
+		t.Fatalf("checksum: %v", err)
+	}
+	releaseContent := fmt.Sprintf("SHA256:\n %s 1 main/binary-amd64/Packages.gz\n", checksum)
+	if err := os.WriteFile(filepath.Join(buildPath, "Release"), []byte(releaseContent), 0o644); err != nil {
+		t.Fatalf("write Release: %v", err)
+	}
+
+	pkgs := parseFixtureMetadata(t, "http://example.invalid:1/", buildPath)
+	if len(pkgs) != 1 {
+		t.Fatalf("expected exactly one package, got %d: %+v", len(pkgs), pkgs)
+	}
+	pkg := pkgs[0]
+	if len(pkg.Provides) != 1 || pkg.Provides[0] != "qt6-base-abi" {
+		t.Errorf("Provides = %v, want [qt6-base-abi]", pkg.Provides)
+	}
+	if len(pkg.ProvidesVer) != 1 || pkg.ProvidesVer[0] != "qt6-base-abi (= 6.4.2)" {
+		t.Errorf("ProvidesVer = %v, want [qt6-base-abi (= 6.4.2)]", pkg.ProvidesVer)
 	}
 }

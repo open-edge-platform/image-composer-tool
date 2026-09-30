@@ -7,6 +7,7 @@ import type {
   ComposeRequest,
   ResidualIssue,
 } from '../api/types'
+import { artifactTypeLabel } from '../api/types'
 import { BuildProgress } from './BuildProgress'
 
 interface BuildViewProps {
@@ -521,7 +522,7 @@ export function BuildView({
               {artifacts.map((a) => (
                 <tr key={a.path} className="border-b border-slate-200">
                   <td className="px-3 py-2 font-mono text-xs">{a.name}</td>
-                  <td className="px-3 py-2 uppercase">{a.type}</td>
+                  <td className="px-3 py-2">{artifactTypeLabel(a.type)}</td>
                   <td className="px-3 py-2 whitespace-nowrap text-slate-600">{a.size || '—'}</td>
                   <td className="px-3 py-2">
                     {/* Click path (or hover copy icon) to copy to clipboard */}
