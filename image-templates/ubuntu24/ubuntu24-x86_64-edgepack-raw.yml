@@ -93,7 +93,7 @@ systemConfig:
     - intel-edge-manageability # vPRO manageability
     # intel-edge-base-realtime is the alternative base profile but is currently
     # disabled for all OS variants upstream, so it is intentionally omitted here.
-    # ── Requested by the platform validation team ──
+    # ── Required for the platform minimal template ──
     - curl
     - util-linux-extra
     - sg3-utils

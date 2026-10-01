@@ -94,7 +94,7 @@ systemConfig:
     - intel-edge-media-ffmpeg # FFmpeg with Intel GPU support
     - intel-edge-media-gst # GStreamer with Intel GPU support
     - intel-edge-manageability # vPRO manageability
-    # ── Requested by the platform validation team ──
+    # ── Required for the platform minimal template ──
     - util-linux-extra
     - libllvm18
     - libdebuginfod1t64
