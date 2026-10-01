@@ -8,7 +8,7 @@ import type {
   ResidualIssue,
 } from '../api/types'
 import { artifactTypeLabel } from '../api/types'
-import { BuildProgress } from './BuildProgress'
+import { BuildProgress, PHASE_DONE, PHASE_INITIAL } from './BuildProgress'
 
 interface BuildViewProps {
   buildId: string
@@ -52,7 +52,7 @@ export function BuildView({
   const [cancelError, setCancelError] = useState<string>('')
   const [details, setDetails] = useState<BuildDetails | null>(null)
   const [detailsOpen, setDetailsOpen] = useState(false)
-  const [phase, setPhase] = useState<string>('preparing')
+  const [phase, setPhase] = useState<string>(PHASE_INITIAL)
   const [install, setInstall] = useState<{ done: number; total: number }>({ done: 0, total: 0 })
   const logRef = useRef<HTMLDivElement>(null)
 
@@ -65,7 +65,7 @@ export function BuildView({
     setCancelError('')
     setDetails(null)
     setDetailsOpen(false)
-    setPhase(isActive ? 'preparing' : 'done')
+    setPhase(isActive ? PHASE_INITIAL : PHASE_DONE)
     setInstall({ done: 0, total: 0 })
 
     // Fetch the command + resolved template paths for the troubleshoot panel.
@@ -101,7 +101,7 @@ export function BuildView({
 
     const finishSuccess = () => {
       setStatus('success')
-      setPhase('done')
+      setPhase(PHASE_DONE)
       onStatusChange('success')
       // Refresh details/artifacts so the log-file link + artifact list appear.
       api.buildDetails(buildId).then(setDetails).catch(() => {})
@@ -137,10 +137,10 @@ export function BuildView({
       })
       es.addEventListener('phase', (e) => {
         const data = JSON.parse((e as MessageEvent).data)
-        // 'done' is owned by the terminal complete/error handlers; honouring it
-        // from the stream would light the whole stepper green while the badge
+        // PHASE_DONE is owned by the terminal complete/error handlers; honouring
+        // it from the stream would light the whole stepper green while the badge
         // still says "Composing...".
-        if (data.phase && data.phase !== 'done') setPhase(data.phase)
+        if (data.phase && data.phase !== PHASE_DONE) setPhase(data.phase)
         setInstall({ done: data.installDone ?? 0, total: data.installTotal ?? 0 })
       })
       es.addEventListener('complete', (e) => {
