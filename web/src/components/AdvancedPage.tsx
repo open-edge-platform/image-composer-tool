@@ -28,47 +28,6 @@ const DISK_DEBOUNCE_MS = 400
 // that lands in later tasks.
 const STEPS = ['Target', 'Packages', 'Disk', 'Review'] as const
 
-// The template views the Review step can show.
-type TemplateView = 'delta' | 'base' | 'resolved'
-
-// templateViews lists the views available for a compose result, most specific
-// to the user's own choices first.
-//
-// Delta and Base exist only when something was overridden: with no overrides no
-// delta is generated, and the resolved template *is* the base, so offering
-// either would show the same bytes under two names.
-function templateViews(
-  composed: ComposeResponse | null,
-): { key: TemplateView; label: string; yaml: string; hint: string }[] {
-  if (!composed) return []
-  const out: { key: TemplateView; label: string; yaml: string; hint: string }[] = []
-  if (composed.deltaYaml) {
-    out.push({
-      key: 'delta',
-      label: 'Your changes',
-      yaml: composed.deltaYaml,
-      hint: `Only what Advanced mode adds, as a template extending ${composed.template}. This is the file the build resolves.`,
-    })
-  }
-  if (composed.baseYaml) {
-    out.push({
-      key: 'base',
-      label: 'Base template',
-      yaml: composed.baseYaml,
-      hint: `${composed.template} on its own, without your changes.`,
-    })
-  }
-  out.push({
-    key: 'resolved',
-    label: out.length ? 'Resolved' : 'Generated YAML',
-    yaml: composed.yaml,
-    hint: out.length
-      ? 'The two above merged — the complete template this build runs.'
-      : '',
-  })
-  return out
-}
-
 interface AdvancedPageProps {
   active: boolean
   onBuildStarted: (buildId: string) => void
@@ -252,28 +211,22 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     }
   }
 
-  // Which of the template views the Review step is showing. Deliberately not
-  // reset per compose: an override compose fires on a debounce, so resetting
-  // would yank the user back off "Resolved" every time they touched the image
-  // name. A view that stops existing (the last override was removed) falls back
-  // to the first available one instead.
-  const [view, setView] = useState<TemplateView>('delta')
-  const views = templateViews(composed)
-  const shownView = views.find((v) => v.key === view) ?? views[0]
-  const shownYaml = shownView?.yaml ?? ''
+  // Empty until something is overridden: with no overrides no delta is
+  // generated, and the build runs the curated template unchanged.
+  const deltaYaml = composed?.deltaYaml ?? ''
 
-  const copyYaml = () => shownYaml && navigator.clipboard.writeText(shownYaml)
+  const copyYaml = () => deltaYaml && navigator.clipboard.writeText(deltaYaml)
 
   const exportYaml = () => {
-    if (!composed || !shownYaml) return
-    const blob = new Blob([shownYaml], { type: 'text/yaml' })
+    if (!composed || !deltaYaml) return
+    const blob = new Blob([deltaYaml], { type: 'text/yaml' })
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
-    // The delta is a distinct artifact from the resolved template — exporting
-    // both under the curated parent's name would produce two different files
-    // that claim to be the same one.
+    // The delta is a distinct artifact from the template it extends — exporting
+    // it under the curated parent's name would produce two different files that
+    // claim to be the same one.
     const base = composed.template || `${imageName || 'image'}.yml`
-    a.download = shownView?.key === 'delta' ? base.replace(/(\.ya?ml)?$/i, '.delta.yml') : base
+    a.download = base.replace(/(\.ya?ml)?$/i, '.delta.yml')
     a.click()
     URL.revokeObjectURL(a.href)
   }
@@ -339,9 +292,9 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
           <div>
             <h2 className="mb-1 text-lg font-bold text-[#00285a]">Review Image Configuration</h2>
             <p className="mb-5 text-sm text-slate-500">
-              Review the template this combination resolves to. Where you changed
-              something, your changes are shown separately from the pre-authored
-              template they extend.
+              Review what this combination will compose. The template below is
+              only what you changed, as a delta extending the pre-authored
+              template it is based on.
             </p>
             {error && (
               <div className="mb-3 rounded bg-red-50 p-3 text-sm text-red-700">{error}</div>
@@ -392,61 +345,49 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
                   </div>
                 )}
 
-                {/* Section 2: the template, in up to three views. Delta is what
-                    Advanced mode contributed, Base the curated template it
-                    extends, Resolved the merge of the two — which is what a
-                    build actually runs. Only Resolved exists when nothing has
-                    been overridden. */}
+                {/* Section 2: the delta alone — only what Advanced mode
+                    contributed. The curated parent it extends and the merge of
+                    the two are deliberately not shown. */}
                 <div className="rounded-lg border border-slate-200 bg-white">
                   <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-2">
-                    {views.length > 1 ? (
-                      <div className="flex gap-1" role="tablist" aria-label="Template view">
-                        {views.map((v) => (
-                          <button
-                            key={v.key}
-                            type="button"
-                            role="tab"
-                            aria-selected={v.key === shownView?.key}
-                            onClick={() => setView(v.key)}
-                            title={v.hint}
-                            className={
-                              'rounded-md px-2.5 py-1 text-xs font-semibold transition-colors ' +
-                              (v.key === shownView?.key
-                                ? 'bg-[#0071c5] text-white'
-                                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900')
-                            }
-                          >
-                            {v.label}
-                          </button>
-                        ))}
-                      </div>
-                    ) : (
-                      <span className="text-sm font-semibold text-[#00285a]">Generated YAML</span>
+                    <span className="text-sm font-semibold text-[#00285a]">Your changes</span>
+                    {deltaYaml && (
+                      <button
+                        type="button"
+                        onClick={copyYaml}
+                        title="Copy YAML to clipboard"
+                        className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                      >
+                        Copy
+                      </button>
                     )}
-                    <button
-                      type="button"
-                      onClick={copyYaml}
-                      title="Copy YAML to clipboard"
-                      className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-                    >
-                      Copy
-                    </button>
                   </div>
-                  {shownView?.hint && (
-                    <p className="border-b border-slate-100 bg-slate-50 px-4 py-1.5 text-[11px] text-slate-500">
-                      {shownView.hint}
+                  {deltaYaml ? (
+                    <>
+                      <p className="border-b border-slate-100 bg-slate-50 px-4 py-1.5 text-[11px] text-slate-500">
+                        Only what Advanced mode adds, as a template extending{' '}
+                        {composed.template}. This is the file the build resolves.
+                      </p>
+                      <pre className="max-h-[60vh] overflow-auto px-4 py-3 font-mono text-xs leading-relaxed text-slate-700">
+                        {deltaYaml}
+                      </pre>
+                    </>
+                  ) : (
+                    <p className="px-4 py-3 text-xs text-slate-500">
+                      No changes yet — this build runs {composed.template} as-is.
+                      Edit the image name, packages, repositories, or disk layout
+                      and your delta appears here.
                     </p>
                   )}
-                  <pre className="max-h-[60vh] overflow-auto px-4 py-3 font-mono text-xs leading-relaxed text-slate-700">
-                    {shownYaml}
-                  </pre>
                 </div>
 
                 <div className="mt-4 flex flex-wrap items-center gap-3">
                   <button
                     type="button"
                     onClick={exportYaml}
-                    className="rounded-md border border-slate-300 bg-white px-5 py-2.5 font-semibold text-[#00285a] hover:border-slate-400 hover:bg-slate-50"
+                    disabled={!deltaYaml}
+                    title={deltaYaml ? undefined : 'Nothing overridden yet, so there is no delta to export'}
+                    className="rounded-md border border-slate-300 bg-white px-5 py-2.5 font-semibold text-[#00285a] hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Export YAML
                   </button>

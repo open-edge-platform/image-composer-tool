@@ -162,6 +162,16 @@ func verifyDkmsModulesBuilt(installRoot, kernelVersion string) error {
 		version := filepath.Base(versionDir)
 		source := filepath.Base(filepath.Dir(versionDir))
 
+		// "original_module" is not a real source version: when a DKMS-built
+		// module displaces one already in the kernel tree (e.g. igen6_edac,
+		// xe, virtio-gpu, mei* are all in-tree upstream), dkms backs up the
+		// displaced module here so it can be restored on a later `dkms
+		// remove`. It has no corresponding /usr/src/<source>-<version> or
+		// dkms.conf to check against.
+		if version == "original_module" {
+			continue
+		}
+
 		conf := filepath.Join(installRoot, "usr", "src", source+"-"+version, "dkms.conf")
 		content, err := os.ReadFile(conf)
 		if err != nil {
