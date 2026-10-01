@@ -8,11 +8,20 @@ import (
 	"io"
 	"os"
 	"path"
+	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config/manifest"
 )
+
+// safeSBOMFileName allows only SBOM basenames that are inert to the shell and
+// the debugfs -R parser, since the name is later handed to debugfs (CWE-78).
+var safeSBOMFileName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*\.[Jj][Ss][Oo][Nn]$`)
+
+// safeSBOMFilePath allows only absolute paths whose every component is inert to
+// the shell and debugfs; the sink interpolates the whole path, not just the base.
+var safeSBOMFilePath = regexp.MustCompile(`^(?:/[A-Za-z0-9._-]+)+$`)
 
 func inspectSBOMFromImageRaw(img io.ReaderAt, pt PartitionTableSummary) SBOMSummary {
 	summary := SBOMSummary{Format: "spdx"}
@@ -239,6 +248,11 @@ func pickSBOMFileNameFromNames(fileNames []string) (string, bool) {
 
 		lowerName := strings.ToLower(name)
 		if !strings.HasSuffix(lowerName, ".json") {
+			continue
+		}
+
+		// Reject shell/debugfs metacharacters before a name can reach debugfs (CWE-78).
+		if !safeSBOMFileName.MatchString(name) {
 			continue
 		}
 
