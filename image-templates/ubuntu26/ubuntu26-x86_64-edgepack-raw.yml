@@ -75,6 +75,7 @@ systemConfig:
 
   packages:
     - ubuntu-minimal
+    - ubuntu-standard
     - ubuntu-desktop-minimal
     - grub-efi-amd64-signed
     - initramfs-tools
