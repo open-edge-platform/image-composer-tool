@@ -23,6 +23,16 @@ func optStr(s string) *string {
 	return &s
 }
 
+// optStrs returns nil for an empty slice, else a pointer to it. Omitting rather
+// than emitting `[]` keeps "the server has nothing to say here" distinct from
+// "the server says the list is empty" for clients that check presence.
+func optStrs(v []string) *[]string {
+	if len(v) == 0 {
+		return nil
+	}
+	return &v
+}
+
 // --- inbound: generated request types -> service types ---
 
 func toSelection(r httpapi.ComposeRequest) service.Selection {
@@ -193,6 +203,73 @@ func fromPackageRepoList(repos []service.PackageRepo) httpapi.PackageRepoList {
 			HasCuratedPackages: &hasCurated,
 			HasSigningKey:      &hasKey,
 		}
+	}
+	return out
+}
+
+// fromEdgePack maps the resolved Edge Pack to the wire type.
+//
+// Every domain is emitted, available or not — the service already decided which
+// this target supports, and a client needs the unavailable ones to show them
+// locked with a reason rather than drop them silently.
+func fromEdgePack(p *service.EdgePack) httpapi.EdgePack {
+	out := httpapi.EdgePack{
+		Id:            p.ID,
+		DisplayName:   p.DisplayName,
+		Description:   optStr(p.Description),
+		Repo:          p.Repo,
+		RepoAvailable: p.RepoAvailable,
+		BaseRuntimes:  make([]httpapi.EdgePackBaseRuntime, len(p.BaseRuntimes)),
+		Domains:       make([]httpapi.EdgePackDomain, len(p.Domains)),
+	}
+	for i, r := range p.BaseRuntimes {
+		out.BaseRuntimes[i] = httpapi.EdgePackBaseRuntime{
+			Id:                r.ID,
+			DisplayName:       r.DisplayName,
+			Package:           fromEdgePackPackage(r.Package),
+			Available:         r.Available,
+			UnavailableReason: optStr(r.UnavailableReason),
+		}
+	}
+	for i, d := range p.Domains {
+		out.Domains[i] = httpapi.EdgePackDomain{
+			Id:                d.ID,
+			DisplayName:       d.DisplayName,
+			Description:       optStr(d.Description),
+			Available:         d.Available,
+			UnavailableReason: optStr(d.UnavailableReason),
+			RequiresRepos:     optStrs(d.RequiresRepos),
+			Packages:          fromEdgePackPackages(d.Packages),
+		}
+	}
+	return out
+}
+
+func fromEdgePackPackages(pkgs []service.EdgePackPackage) []httpapi.EdgePackPackage {
+	out := make([]httpapi.EdgePackPackage, len(pkgs))
+	for i, p := range pkgs {
+		out[i] = fromEdgePackPackage(p)
+	}
+	return out
+}
+
+// fromEdgePackPackage maps one pack package. Version and Versions are omitted
+// rather than emitted empty when the index could not be read: the client treats
+// their absence as "no pinnable versions known" and offers the package at
+// latest, where an empty `versions: []` would read as "this package has no
+// versions at all".
+func fromEdgePackPackage(p service.EdgePackPackage) httpapi.EdgePackPackage {
+	out := httpapi.EdgePackPackage{
+		Name:        p.Name,
+		Description: optStr(p.Description),
+		Version:     optStr(p.Version),
+	}
+	if len(p.Versions) > 0 {
+		versions := make([]httpapi.PackageVersion, len(p.Versions))
+		for i, v := range p.Versions {
+			versions[i] = httpapi.PackageVersion{Version: v.Version, Repository: v.RepoID}
+		}
+		out.Versions = &versions
 	}
 	return out
 }

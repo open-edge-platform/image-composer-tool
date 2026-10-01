@@ -21,6 +21,7 @@ var (
 	serveSudo         bool
 	serveManifest     string
 	servePackageRepos string
+	serveEdgePack     string
 	servePrintSudoers bool
 )
 
@@ -74,6 +75,11 @@ image builds via the image-composer-tool binary with streaming build logs.`,
 		"Path to a package-repository catalog YAML to read from disk (live-editable, "+
 			"no rebuild). Backs the Advanced tab's repository picker. When empty, the "+
 			"catalog embedded at build time is used.")
+	serveCmd.Flags().StringVar(&serveEdgePack, "edge-pack", "",
+		"Path to an Edge Pack catalog YAML to read from disk (live-editable, no "+
+			"rebuild). Backs the Advanced tab's Edge Pack tab, which groups a subset "+
+			"of the repository packages by capability domain. When empty, the catalog "+
+			"embedded at build time is used.")
 	serveCmd.Flags().BoolVar(&servePrintSudoers, "print-sudoers", false,
 		"Print the scoped sudoers drop-in required for `--sudo` cancellation and "+
 			"artifact reads, then exit. The rules are generated for the current user, "+
@@ -108,6 +114,7 @@ func executeServe(cmd *cobra.Command, args []string) error {
 		ManifestPath: serveManifest,
 
 		PackageReposPath: servePackageRepos,
+		EdgePackPath:     serveEdgePack,
 	})
 	if err != nil {
 		return err
