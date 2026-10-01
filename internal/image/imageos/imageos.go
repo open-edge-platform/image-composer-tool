@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -258,6 +257,12 @@ func (imageOs *ImageOs) InstallImageOs(diskPathIdMap map[string]string) (version
 		// Don't fail the build if symlink fix fails, just warn as some distros may not need it
 		log.Warnf("Failed to fix kernel symlinks: %v (continuing anyway)", err)
 	}
+
+	if err = buildDkmsModules(imageOs.installRoot, imageOs.template); err != nil {
+		err = fmt.Errorf("failed to build dkms modules: %w", err)
+		return
+	}
+
 	if err = imageboot.EnsureDepmodForBootKernels(imageOs.installRoot); err != nil {
 		err = fmt.Errorf("failed to prepare kernel module dependencies: %w", err)
 		return
@@ -1305,9 +1310,22 @@ func addImageConfigs(installRoot string, template *config.ImageTemplate) error {
 	}
 
 	for _, configInfo := range customConfigs {
-		cmdStr := configInfo.Cmd
-		// Use chroot to execute commands in the image context with proper shell
-		chrootCmd := fmt.Sprintf("chroot %s /bin/bash -c %s", installRoot, strconv.Quote(cmdStr))
+		// TrimSpace to match overlay/configure.go's RunOverlayConfigurations:
+		// YAML block scalars (cmd: |) carry a trailing newline that would
+		// otherwise make create-mode and overlay-mode wrap the same template
+		// differently.
+		cmdStr := strings.TrimSpace(configInfo.Cmd)
+		if cmdStr == "" {
+			continue
+		}
+		// Use chroot to execute commands in the image context with proper shell.
+		// Both installRoot and cmdStr are single-quoted (shell.QuoteArg), not
+		// strconv.Quote/double-quoted: double quotes still let bash expand
+		// $(...), backticks and $var inside the script, which both runs those
+		// prematurely while building this command line and can corrupt/unbalance
+		// the quoting of a multi-line script; single-quoting installRoot also
+		// guards against whitespace/metacharacters in the path itself.
+		chrootCmd := fmt.Sprintf("chroot %s /bin/bash -c %s", shell.QuoteArg(installRoot), shell.QuoteArg(cmdStr))
 		if _, err := shell.ExecCmd(chrootCmd, true, shell.HostPath, nil); err != nil {
 			log.Errorf("Failed to execute custom configuration cmd %s: %v", configInfo.Cmd, err)
 			return fmt.Errorf("failed to execute custom configuration cmd %s: %w", configInfo.Cmd, err)

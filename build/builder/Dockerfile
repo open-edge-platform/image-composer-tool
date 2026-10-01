@@ -86,6 +86,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     systemd-ukify \
     binfmt-support \
     \
+    # DKMS kernel module build/verify tooling
+    dkms \
+    \
     # image / disk creation
     qemu-utils \
     qemu-system-x86 \

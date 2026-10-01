@@ -1473,6 +1473,85 @@ func TestGenerateSPDXFileNameConsistency(t *testing.T) {
 	}
 }
 
+func TestValidatePackageFileName(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{name: "normal rpm", input: "bash-5.1-8.el9.x86_64.rpm", wantErr: false},
+		{name: "tilde and plus", input: "gcc-c++-11.2.0~rc1-1.noarch.rpm", wantErr: false},
+		{name: "epoch colon", input: "epoch-package-1:1.0-1.azl3.x86_64.rpm", wantErr: false},
+		{name: "caret in version", input: "pkg-1.0^20240101gitabc-1.x86_64.rpm", wantErr: false},
+		{name: "uppercase suffix", input: "unsigned.RPM", wantErr: true},
+		{name: "empty", input: "", wantErr: true},
+		{name: "dot", input: ".", wantErr: true},
+		{name: "missing suffix", input: "bash-5.1-8.el9.x86_64", wantErr: true},
+		{name: "path traversal", input: "../etc/passwd.rpm", wantErr: true},
+		{name: "slash", input: "sub/dir/pkg.rpm", wantErr: true},
+		{name: "semicolon injection", input: "pkg;touch owned.rpm", wantErr: true},
+		{name: "single quote injection", input: "pkg';rm -rf /;'.rpm", wantErr: true},
+		{name: "space", input: "pkg name.rpm", wantErr: true},
+		{name: "command substitution", input: "pkg$(id).rpm", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validatePackageFileName(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validatePackageFileName(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestPackageFileNameFromURL_DecodesPath verifies the derived basename matches
+// what pkgfetcher writes to disk: the URL path is decoded (e.g. %2B -> +) so a
+// percent-encoded package name is not wrongly rejected by validation.
+func TestPackageFileNameFromURL_DecodesPath(t *testing.T) {
+	cases := map[string]string{
+		"https://repo.example/pkgs/gcc-c%2B%2B-1.0-1.x86_64.rpm": "gcc-c++-1.0-1.x86_64.rpm",
+		"https://repo.example/pkgs/bash-5.1-8.el9.x86_64.rpm":    "bash-5.1-8.el9.x86_64.rpm",
+		"https://repo.example/pkgs/pkg-1.0.rpm?token=abc":        "pkg-1.0.rpm",
+	}
+
+	for rawURL, want := range cases {
+		if got := packageFileNameFromURL(rawURL); got != want {
+			t.Errorf("packageFileNameFromURL(%q) = %q, want %q", rawURL, got, want)
+		}
+		if err := validatePackageFileName(packageFileNameFromURL(rawURL)); err != nil {
+			t.Errorf("decoded name from %q should validate, got: %v", rawURL, err)
+		}
+	}
+}
+
+// TestBuildDownloadList covers the validation gate used by downloadPackagesComplete:
+// a package whose on-disk filename carries shell metacharacters is rejected before
+// download, while valid packages produce their decoded on-disk names.
+func TestBuildDownloadList(t *testing.T) {
+	malicious := []ospackage.PackageInfo{
+		{URL: "https://repo.example/pkgs/evil';touch pwned;'.rpm"},
+	}
+	if _, _, err := buildDownloadList(malicious); err == nil {
+		t.Fatal("expected buildDownloadList to reject an unsafe package filename")
+	}
+
+	valid := []ospackage.PackageInfo{
+		{URL: "https://repo.example/pkgs/bash-5.1-8.el9.x86_64.rpm"},
+		{URL: "https://repo.example/pkgs/gcc-c%2B%2B-1.0-1.x86_64.rpm"},
+	}
+	urls, names, err := buildDownloadList(valid)
+	if err != nil {
+		t.Fatalf("valid packages should not be rejected: %v", err)
+	}
+	if len(urls) != 2 || len(names) != 2 {
+		t.Fatalf("expected 2 urls/names, got %d/%d", len(urls), len(names))
+	}
+	if names[1] != "gcc-c++-1.0-1.x86_64.rpm" {
+		t.Errorf("expected decoded on-disk name, got %q", names[1])
+	}
+}
+
 func TestIsBinaryGPGKey(t *testing.T) {
 	tests := []struct {
 		name   string

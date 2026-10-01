@@ -1,14 +1,26 @@
 package debutils
 
 import (
+	"bytes"
 	"compress/gzip"
+	"context"
+	"crypto/sha256"
 	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/ProtonMail/go-crypto/openpgp"
+	"github.com/ProtonMail/go-crypto/openpgp/armor"
+	"github.com/ProtonMail/go-crypto/openpgp/clearsign"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/runctx"
 )
 
 func TestIsGlobPattern(t *testing.T) {
@@ -396,7 +408,12 @@ func TestRefreshRepoMetadata_FailureLeavesExistingFilesIntact(t *testing.T) {
 	}
 
 	// "Release" is not a URL, so the fetch fails on every attempt.
-	refreshed, err := refreshRepoMetadata(dir, []string{release}, []string{"Release"})
+	refreshed, err := refreshRepoMetadata(
+		dir,
+		[]string{release},
+		[]string{"Release"},
+		func(string) error { return nil },
+	)
 	if err == nil {
 		t.Fatal("refreshRepoMetadata succeeded, want an error for an unfetchable URL")
 	}
@@ -421,5 +438,606 @@ func TestRefreshRepoMetadata_FailureLeavesExistingFilesIntact(t *testing.T) {
 		if e.IsDir() && strings.HasPrefix(e.Name(), ".meta-refresh-") {
 			t.Errorf("staging directory %s was left behind", e.Name())
 		}
+	}
+}
+
+func TestRefreshRepoMetadata_VerifiesBeforeCommit(t *testing.T) {
+	dir := t.TempDir()
+	releasePath := filepath.Join(dir, "Release")
+	signPath := filepath.Join(dir, "Release.gpg")
+	keyPath := filepath.Join(dir, "repo.gpg")
+
+	entity, err := openpgp.NewEntity("Repository", "test", "repo@example.invalid", nil)
+	if err != nil {
+		t.Fatalf("creating signing entity: %v", err)
+	}
+	originalRelease := []byte("Suite: stable\n")
+	var signature bytes.Buffer
+	if err := openpgp.DetachSign(&signature, entity, bytes.NewReader(originalRelease), nil); err != nil {
+		t.Fatalf("signing Release: %v", err)
+	}
+	var publicKey bytes.Buffer
+	if err := entity.Serialize(&publicKey); err != nil {
+		t.Fatalf("serializing public key: %v", err)
+	}
+
+	originalFiles := map[string][]byte{
+		releasePath: originalRelease,
+		signPath:    signature.Bytes(),
+		keyPath:     publicKey.Bytes(),
+	}
+	for path, contents := range originalFiles {
+		if err := os.WriteFile(path, contents, 0o644); err != nil {
+			t.Fatalf("writing %s: %v", filepath.Base(path), err)
+		}
+	}
+
+	tamperedRelease := []byte("Suite: attacker-controlled\n")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		responses := map[string][]byte{
+			"Release":     tamperedRelease,
+			"Release.gpg": signature.Bytes(),
+			"repo.gpg":    publicKey.Bytes(),
+		}
+		response, ok := responses[filepath.Base(r.URL.Path)]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		if _, err := w.Write(response); err != nil {
+			t.Errorf("writing response for %s: %v", r.URL.Path, err)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	localFiles := []string{releasePath, signPath, keyPath}
+	urls := []string{
+		server.URL + "/Release",
+		server.URL + "/Release.gpg",
+		server.URL + "/repo.gpg",
+	}
+	verify := func(stageDir string) error {
+		verified, verifyErr := VerifyRelease(
+			filepath.Join(stageDir, "Release"),
+			filepath.Join(stageDir, "Release.gpg"),
+			filepath.Join(stageDir, "repo.gpg"),
+		)
+		if verifyErr != nil {
+			return verifyErr
+		}
+		if !verified {
+			return fmt.Errorf("release verification failed")
+		}
+		return nil
+	}
+
+	refreshed, err := refreshRepoMetadata(dir, localFiles, urls, verify)
+	if err == nil {
+		t.Fatal("refreshRepoMetadata succeeded with a tampered Release")
+	}
+	if refreshed {
+		t.Error("refreshRepoMetadata reported unverified metadata as refreshed")
+	}
+
+	for path, want := range originalFiles {
+		got, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatalf("reading %s after rejected refresh: %v", filepath.Base(path), readErr)
+		}
+		if !bytes.Equal(got, want) {
+			t.Errorf("%s changed after rejected refresh", filepath.Base(path))
+		}
+	}
+}
+
+// TestParseRepositoryMetadata_FallbackReverifiesPersistentSet is a regression
+// test for the review comment that a failed refresh must not proceed on an
+// unverified on-disk set. A partial rename in refreshRepoMetadata can leave
+// Release and Release.gpg mismatched; when the subsequent refresh fails, the
+// fallback must re-verify the persistent set and refuse to use it when it no
+// longer agrees, instead of parsing it.
+func TestParseRepositoryMetadata_FallbackReverifiesPersistentSet(t *testing.T) {
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "repo.gpg")
+
+	entity, err := openpgp.NewEntity("Repository", "test", "repo@example.invalid", nil)
+	if err != nil {
+		t.Fatalf("creating signing entity: %v", err)
+	}
+	var publicKey bytes.Buffer
+	if err := entity.Serialize(&publicKey); err != nil {
+		t.Fatalf("serializing public key: %v", err)
+	}
+	if err := os.WriteFile(keyPath, publicKey.Bytes(), 0o644); err != nil {
+		t.Fatalf("writing key: %v", err)
+	}
+
+	// Persist a Release that disagrees with its signature, standing in for a
+	// mixed set left behind by a partial rename.
+	var signature bytes.Buffer
+	if err := openpgp.DetachSign(&signature, entity, bytes.NewReader([]byte("Suite: signed\n")), nil); err != nil {
+		t.Fatalf("signing: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "Release"), []byte("Suite: tampered\n"), 0o644); err != nil {
+		t.Fatalf("writing Release: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "Release.gpg"), signature.Bytes(), 0o644); err != nil {
+		t.Fatalf("writing Release.gpg: %v", err)
+	}
+
+	// A 404 makes the refresh fail fast (FetchPackages does not retry 404), so
+	// the fallback runs against the persistent, mismatched set.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	t.Cleanup(server.Close)
+
+	_, err = ParseRepositoryMetadata(
+		server.URL+"/", "Packages.gz",
+		server.URL+"/Release", server.URL+"/Release.gpg",
+		keyPath, dir, "amd64", nil,
+	)
+	if err == nil {
+		t.Fatal("expected an error: the persistent metadata does not verify and must not be used")
+	}
+	if !strings.Contains(err.Error(), "no longer verifies") {
+		t.Errorf("expected a re-verification error, got: %v", err)
+	}
+}
+
+// TestRefreshRepoMetadataWithRetry_RecoversFromTransientMismatch is a
+// regression test for CI jobs that failed when a mirror served Release and
+// Release.gpg from backend nodes that had briefly fallen out of sync: the
+// first fetch pairs a stale signature with the current Release, so
+// verification fails even though the repository itself is fine. A retry that
+// re-fetches (landing on a synced pair) must recover without the caller
+// treating it as a hard failure.
+func TestRefreshRepoMetadataWithRetry_RecoversFromTransientMismatch(t *testing.T) {
+	originalDelay := metadataRefreshRetryDelay
+	t.Cleanup(func() { metadataRefreshRetryDelay = originalDelay })
+	metadataRefreshRetryDelay = time.Millisecond
+
+	dir := t.TempDir()
+	release := filepath.Join(dir, "Release")
+	const original = "SHA256:\n deadbeef 1 main/binary-amd64/Packages.gz\n"
+	if err := os.WriteFile(release, []byte(original), 0644); err != nil {
+		t.Fatalf("writing Release: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("Suite: stable\n"))
+	}))
+	t.Cleanup(server.Close)
+
+	var verifyCalls atomic.Int32
+	verify := func(string) error {
+		if verifyCalls.Add(1) < 2 {
+			return fmt.Errorf("simulated transient mirror signature mismatch")
+		}
+		return nil
+	}
+
+	refreshed, err := refreshRepoMetadataWithRetry(dir, []string{release}, []string{server.URL + "/Release"}, verify)
+	if err != nil {
+		t.Fatalf("refreshRepoMetadataWithRetry did not recover from a transient mismatch: %v", err)
+	}
+	if !refreshed {
+		t.Error("expected refreshed=true once the retry succeeds")
+	}
+	if verifyCalls.Load() < 2 {
+		t.Errorf("expected a retry after the first verification failure, got %d verify call(s)", verifyCalls.Load())
+	}
+}
+
+// TestRefreshRepoMetadataWithRetry_PersistentFailureStillErrors ensures a
+// verification failure that never clears (not a transient mismatch) still
+// fails the build after the bounded attempts are exhausted, rather than
+// silently falling back to unverified metadata.
+func TestRefreshRepoMetadataWithRetry_PersistentFailureStillErrors(t *testing.T) {
+	originalDelay := metadataRefreshRetryDelay
+	t.Cleanup(func() { metadataRefreshRetryDelay = originalDelay })
+	metadataRefreshRetryDelay = time.Millisecond
+
+	dir := t.TempDir()
+	release := filepath.Join(dir, "Release")
+	const original = "SHA256:\n deadbeef 1 main/binary-amd64/Packages.gz\n"
+	if err := os.WriteFile(release, []byte(original), 0644); err != nil {
+		t.Fatalf("writing Release: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("Suite: stable\n"))
+	}))
+	t.Cleanup(server.Close)
+
+	var verifyCalls atomic.Int32
+	verify := func(string) error {
+		verifyCalls.Add(1)
+		return fmt.Errorf("persistently untrusted signature")
+	}
+
+	refreshed, err := refreshRepoMetadataWithRetry(dir, []string{release}, []string{server.URL + "/Release"}, verify)
+	if err == nil {
+		t.Fatal("refreshRepoMetadataWithRetry succeeded for a persistent failure, want an error")
+	}
+	if refreshed {
+		t.Error("expected refreshed=false after every attempt fails")
+	}
+	if verifyCalls.Load() != maxMetadataRefreshAttempts {
+		t.Errorf("expected %d verify calls, got %d", maxMetadataRefreshAttempts, verifyCalls.Load())
+	}
+
+	got, readErr := os.ReadFile(release)
+	if readErr != nil {
+		t.Fatalf("reading Release after persistent failure: %v", readErr)
+	}
+	if string(got) != original {
+		t.Errorf("Release was modified despite persistent verification failure:\n got %q\nwant %q", got, original)
+	}
+}
+
+// TestRefreshRepoMetadataWithRetry_DialsFreshConnectionPerAttempt confirms the
+// retry loop drops pooled keep-alive connections between attempts, so each
+// attempt opens a new connection instead of reusing the one that just served a
+// mismatched Release/Release.gpg pair. Without CloseIdleConnections the shared
+// secure client would reuse the pooled connection to the same backend, and the
+// server would observe a single connection across all attempts.
+func TestRefreshRepoMetadataWithRetry_DialsFreshConnectionPerAttempt(t *testing.T) {
+	originalDelay := metadataRefreshRetryDelay
+	t.Cleanup(func() { metadataRefreshRetryDelay = originalDelay })
+	metadataRefreshRetryDelay = time.Millisecond
+
+	dir := t.TempDir()
+	release := filepath.Join(dir, "Release")
+	if err := os.WriteFile(release, []byte("Suite: stable\n"), 0644); err != nil {
+		t.Fatalf("writing Release: %v", err)
+	}
+
+	var newConns atomic.Int32
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("Suite: stable\n"))
+	}))
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			newConns.Add(1)
+		}
+	}
+	server.Start()
+	t.Cleanup(server.Close)
+
+	// Fail verify on every attempt so all maxMetadataRefreshAttempts run and
+	// each re-fetches from the server.
+	verify := func(string) error { return fmt.Errorf("simulated persistent mismatch") }
+
+	refreshed, err := refreshRepoMetadataWithRetry(dir, []string{release}, []string{server.URL + "/Release"}, verify)
+	if err == nil {
+		t.Fatal("expected an error after every verification attempt fails")
+	}
+	if refreshed {
+		t.Error("expected refreshed=false when every attempt fails verification")
+	}
+
+	if got := newConns.Load(); got < maxMetadataRefreshAttempts {
+		t.Errorf("expected a fresh connection per attempt (>= %d), got %d; "+
+			"retries may be reusing pooled connections to the same backend",
+			maxMetadataRefreshAttempts, got)
+	}
+}
+
+// TestRefreshRepoMetadataWithRetry_DoesNotRetryFetchErrors confirms only a
+// verification mismatch is retried. A deterministic fetch failure (HTTP 404,
+// which FetchPackages does not itself retry) must return immediately without
+// consuming the retry budget or running verify.
+func TestRefreshRepoMetadataWithRetry_DoesNotRetryFetchErrors(t *testing.T) {
+	originalDelay := metadataRefreshRetryDelay
+	t.Cleanup(func() { metadataRefreshRetryDelay = originalDelay })
+	metadataRefreshRetryDelay = time.Millisecond
+
+	dir := t.TempDir()
+	release := filepath.Join(dir, "Release")
+	if err := os.WriteFile(release, []byte("Suite: stable\n"), 0644); err != nil {
+		t.Fatalf("writing Release: %v", err)
+	}
+
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	t.Cleanup(server.Close)
+
+	var verifyCalls atomic.Int32
+	verify := func(string) error {
+		verifyCalls.Add(1)
+		return nil
+	}
+
+	refreshed, err := refreshRepoMetadataWithRetry(dir, []string{release}, []string{server.URL + "/Release"}, verify)
+	if err == nil {
+		t.Fatal("expected an error for a non-verify (fetch) failure")
+	}
+	if refreshed {
+		t.Error("expected refreshed=false on a fetch failure")
+	}
+	if got := requests.Load(); got != 1 {
+		t.Errorf("a non-verify error must not be retried: expected exactly 1 fetch, got %d", got)
+	}
+	if got := verifyCalls.Load(); got != 0 {
+		t.Errorf("verify must not run when the fetch fails, got %d call(s)", got)
+	}
+}
+
+// TestRefreshRepoMetadataWithRetry_BackoffIsCancellable is a regression test for
+// the review comment that the retry backoff must observe context cancellation.
+// With the run context cancelled mid-backoff, the helper must return promptly
+// instead of sleeping out the full delay before the next fetch notices.
+func TestRefreshRepoMetadataWithRetry_BackoffIsCancellable(t *testing.T) {
+	originalDelay := metadataRefreshRetryDelay
+	t.Cleanup(func() { metadataRefreshRetryDelay = originalDelay })
+	originalWait := metadataRefreshWait
+	t.Cleanup(func() { metadataRefreshWait = originalWait })
+	// Long enough that an unbroken sleep would dominate the elapsed time.
+	metadataRefreshRetryDelay = 2 * time.Second
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	restore := runctx.SetContext(ctx)
+	t.Cleanup(restore)
+
+	dir := t.TempDir()
+	release := filepath.Join(dir, "Release")
+	if err := os.WriteFile(release, []byte("Suite: stable\n"), 0644); err != nil {
+		t.Fatalf("writing Release: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("Suite: stable\n"))
+	}))
+	t.Cleanup(server.Close)
+
+	backoffEntered := make(chan struct{})
+	verify := func(string) error { return fmt.Errorf("simulated transient mismatch") }
+	metadataRefreshWait = func(time.Duration) <-chan time.Time {
+		close(backoffEntered)
+		return make(chan time.Time)
+	}
+	go func() {
+		<-backoffEntered
+		cancel()
+	}()
+
+	start := time.Now()
+	_, err := refreshRepoMetadataWithRetry(dir, []string{release}, []string{server.URL + "/Release"}, verify)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected an error when the run context is cancelled during backoff")
+	}
+	if elapsed >= time.Second {
+		t.Errorf("backoff ignored cancellation: returned after %s, want prompt cancellation (delay was %s)",
+			elapsed, metadataRefreshRetryDelay)
+	}
+}
+
+func TestParseRepositoryMetadata_InReleaseOnly(t *testing.T) {
+	signer, err := openpgp.NewEntity("Repo Signer", "test", "signer@example.invalid", nil)
+	if err != nil {
+		t.Fatalf("NewEntity: %v", err)
+	}
+	var pubKey bytes.Buffer
+	pubWriter, err := armor.Encode(&pubKey, openpgp.PublicKeyType, nil)
+	if err != nil {
+		t.Fatalf("armor.Encode: %v", err)
+	}
+	if err := signer.Serialize(pubWriter); err != nil {
+		t.Fatalf("signer.Serialize: %v", err)
+	}
+	if err := pubWriter.Close(); err != nil {
+		t.Fatalf("armor close: %v", err)
+	}
+	keyPath := filepath.Join(t.TempDir(), "signer.pub")
+	if err := os.WriteFile(keyPath, pubKey.Bytes(), 0644); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+
+	packagesContent := "Package: edgepack-demo\nVersion: 1.0\nArchitecture: amd64\n" +
+		"Filename: pool/main/e/edgepack-demo/edgepack-demo_1.0_amd64.deb\n\n"
+	var pkggzBuf bytes.Buffer
+	gzWriter := gzip.NewWriter(&pkggzBuf)
+	if _, err := gzWriter.Write([]byte(packagesContent)); err != nil {
+		t.Fatalf("write gzip: %v", err)
+	}
+	if err := gzWriter.Close(); err != nil {
+		t.Fatalf("close gzip: %v", err)
+	}
+	pkggzChecksum := fmt.Sprintf("%x", sha256.Sum256(pkggzBuf.Bytes()))
+
+	releaseContent := fmt.Sprintf("SHA256:\n %s 1 main/binary-amd64/Packages.gz\n", pkggzChecksum)
+	var inRelease bytes.Buffer
+	clearsignWriter, err := clearsign.Encode(&inRelease, signer.PrivateKey, nil)
+	if err != nil {
+		t.Fatalf("clearsign.Encode: %v", err)
+	}
+	if _, err := clearsignWriter.Write([]byte(releaseContent)); err != nil {
+		t.Fatalf("write InRelease body: %v", err)
+	}
+	if err := clearsignWriter.Close(); err != nil {
+		t.Fatalf("close clearsign writer: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/dists/noble/InRelease", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(inRelease.Bytes())
+	})
+	mux.HandleFunc("/dists/noble/main/binary-amd64/Packages.gz", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(pkggzBuf.Bytes())
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	buildPath := t.TempDir()
+	pkgs, err := ParseRepositoryMetadata(
+		server.URL,
+		server.URL+"/dists/noble/main/binary-amd64/Packages.gz",
+		server.URL+"/dists/noble/InRelease",
+		inReleaseSentinel,
+		keyPath,
+		buildPath,
+		"amd64",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("ParseRepositoryMetadata returned error: %v", err)
+	}
+	if len(pkgs) != 1 || pkgs[0].Name != "edgepack-demo" {
+		t.Fatalf("expected exactly the edgepack-demo package, got %+v", pkgs)
+	}
+}
+
+// TestParseRepositoryMetadata_DerivesPlaintextFromCachedInReleaseOffline is a
+// regression test for the offline-cache-recovery branch: a cache holding a
+// valid InRelease file and a matching Packages.gz must derive the plaintext
+// locally when it is missing or stale, rather than parse stale data after a
+// refresh failure.
+func TestParseRepositoryMetadata_DerivesPlaintextFromCachedInReleaseOffline(t *testing.T) {
+	signer, err := openpgp.NewEntity("Repo Signer", "test", "signer@example.invalid", nil)
+	if err != nil {
+		t.Fatalf("NewEntity: %v", err)
+	}
+	var pubKey bytes.Buffer
+	pubWriter, err := armor.Encode(&pubKey, openpgp.PublicKeyType, nil)
+	if err != nil {
+		t.Fatalf("armor.Encode: %v", err)
+	}
+	if err := signer.Serialize(pubWriter); err != nil {
+		t.Fatalf("signer.Serialize: %v", err)
+	}
+	if err := pubWriter.Close(); err != nil {
+		t.Fatalf("armor close: %v", err)
+	}
+	keyPath := filepath.Join(t.TempDir(), "signer.pub")
+	if err := os.WriteFile(keyPath, pubKey.Bytes(), 0644); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+
+	packagesContent := "Package: edgepack-demo\nVersion: 1.0\nArchitecture: amd64\n" +
+		"Filename: pool/main/e/edgepack-demo/edgepack-demo_1.0_amd64.deb\n\n"
+	var pkggzBuf bytes.Buffer
+	gzWriter := gzip.NewWriter(&pkggzBuf)
+	if _, err := gzWriter.Write([]byte(packagesContent)); err != nil {
+		t.Fatalf("write gzip: %v", err)
+	}
+	if err := gzWriter.Close(); err != nil {
+		t.Fatalf("close gzip: %v", err)
+	}
+	pkggzChecksum := fmt.Sprintf("%x", sha256.Sum256(pkggzBuf.Bytes()))
+
+	releaseContent := fmt.Sprintf("SHA256:\n %s 1 main/binary-amd64/Packages.gz\n", pkggzChecksum)
+	var inRelease bytes.Buffer
+	clearsignWriter, err := clearsign.Encode(&inRelease, signer.PrivateKey, nil)
+	if err != nil {
+		t.Fatalf("clearsign.Encode: %v", err)
+	}
+	if _, err := clearsignWriter.Write([]byte(releaseContent)); err != nil {
+		t.Fatalf("write InRelease body: %v", err)
+	}
+	if err := clearsignWriter.Close(); err != nil {
+		t.Fatalf("close clearsign writer: %v", err)
+	}
+
+	// Seed the cache directory as if a previous run had already fetched and
+	// verified InRelease and Packages.gz, but predates the derived ".plain"
+	// cache file — conspicuously absent here.
+	buildPath := t.TempDir()
+	if err := os.WriteFile(filepath.Join(buildPath, "InRelease"), inRelease.Bytes(), 0644); err != nil {
+		t.Fatalf("seed InRelease: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(buildPath, "InRelease.plain"), []byte("stale Release\n"), 0644); err != nil {
+		t.Fatalf("seed stale InRelease.plain: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(buildPath, "Packages.gz"), pkggzBuf.Bytes(), 0644); err != nil {
+		t.Fatalf("seed Packages.gz: %v", err)
+	}
+
+	// The repository itself is unreachable, so any refresh attempt must fail
+	// and ParseRepositoryMetadata must fall back entirely to the seeded cache.
+	server := httptest.NewServer(http.NotFoundHandler())
+	server.Close()
+
+	pkgs, err := ParseRepositoryMetadata(
+		server.URL,
+		server.URL+"/dists/noble/main/binary-amd64/Packages.gz",
+		server.URL+"/dists/noble/InRelease",
+		inReleaseSentinel,
+		keyPath,
+		buildPath,
+		"amd64",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("ParseRepositoryMetadata returned error: %v", err)
+	}
+	if len(pkgs) != 1 || pkgs[0].Name != "edgepack-demo" {
+		t.Fatalf("expected exactly the edgepack-demo package, got %+v", pkgs)
+	}
+
+	plaintext, err := os.ReadFile(filepath.Join(buildPath, "InRelease.plain"))
+	if err != nil {
+		t.Fatalf("reading regenerated InRelease.plain: %v", err)
+	}
+	if !bytes.Contains(plaintext, []byte(releaseContent)) {
+		t.Errorf("InRelease.plain was not regenerated from verified InRelease: %q", plaintext)
+	}
+}
+
+// TestParseRepositoryMetadata_InstalledSize confirms the Debian Installed-Size
+// field (in KiB) is parsed into PackageInfo.InstalledSizeBytes (bytes; used to
+// auto-size an overlay disk grow), and that a stanza without it reports 0.
+
+// versioned term).
+func TestParseRepositoryMetadata_ParsesVersionedProvides(t *testing.T) {
+	buildPath := filepath.Join(t.TempDir(), "repo_main")
+	if err := os.MkdirAll(buildPath, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	stanza := "Package: libqt6core6t64\nVersion: 6.4.2+dfsg-21.1build5\nArchitecture: amd64\n" +
+		"Provides: qt6-base-abi (= 6.4.2)\n" +
+		"Filename: pool/universe/q/qt6-base/libqt6core6t64_6.4.2+dfsg-21.1build5_amd64.deb\n\n"
+
+	pkggzPath := filepath.Join(buildPath, "Packages.gz")
+	pkgFile, err := os.Create(pkggzPath)
+	if err != nil {
+		t.Fatalf("create Packages.gz: %v", err)
+	}
+	gzWriter := gzip.NewWriter(pkgFile)
+	if _, err := gzWriter.Write([]byte(stanza)); err != nil {
+		t.Fatalf("write gzip: %v", err)
+	}
+	if err := gzWriter.Close(); err != nil {
+		t.Fatalf("close gzip: %v", err)
+	}
+	if err := pkgFile.Close(); err != nil {
+		t.Fatalf("close file: %v", err)
+	}
+
+	checksum, err := computeFileSHA256(pkggzPath)
+	if err != nil {
+		t.Fatalf("checksum: %v", err)
+	}
+	releaseContent := fmt.Sprintf("SHA256:\n %s 1 main/binary-amd64/Packages.gz\n", checksum)
+	if err := os.WriteFile(filepath.Join(buildPath, "Release"), []byte(releaseContent), 0o644); err != nil {
+		t.Fatalf("write Release: %v", err)
+	}
+
+	pkgs := parseFixtureMetadata(t, "http://example.invalid:1/", buildPath)
+	if len(pkgs) != 1 {
+		t.Fatalf("expected exactly one package, got %d: %+v", len(pkgs), pkgs)
+	}
+	pkg := pkgs[0]
+	if len(pkg.Provides) != 1 || pkg.Provides[0] != "qt6-base-abi" {
+		t.Errorf("Provides = %v, want [qt6-base-abi]", pkg.Provides)
+	}
+	if len(pkg.ProvidesVer) != 1 || pkg.ProvidesVer[0] != "qt6-base-abi (= 6.4.2)" {
+		t.Errorf("ProvidesVer = %v, want [qt6-base-abi (= 6.4.2)]", pkg.ProvidesVer)
 	}
 }

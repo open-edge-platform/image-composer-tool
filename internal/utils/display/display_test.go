@@ -87,6 +87,69 @@ func TestPrintImageDirectorySummary_WithArtifacts(t *testing.T) {
 	}
 }
 
+// TestPrintImageDirectorySummary_SkipsWorkingFiles guards the artifact list this
+// block advertises: a chroot leaves its own files in the build directory, and the
+// web UI parses these bullet lines, so listing them here surfaced bash.bashrc and
+// debian_version as build artifacts in the UI.
+func TestPrintImageDirectorySummary_SkipsWorkingFiles(t *testing.T) {
+	dir := t.TempDir()
+	outputs := []string{
+		"minimal-os-image-ubuntu-26.04.raw.gz",
+		"spdx_manifest_deb_minimal-os-image-ubuntu_20260707_165343.json",
+	}
+	workingFiles := []string{
+		"bash.bashrc", "debconf.conf", "debian_version",
+		"bindresvport.blacklist", "chrootpkgs-pkgCache.dot", "UPLOAD-MANIFEST.txt",
+	}
+
+	for _, name := range append(append([]string{}, outputs...), workingFiles...) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("data"), 0o644); err != nil {
+			t.Fatalf("failed to write %s: %v", name, err)
+		}
+	}
+
+	logs := captureLogs(t, func() {
+		display.PrintImageDirectorySummary(dir, "raw")
+	})
+
+	// Only the summary block matters: the per-file "Checking file:" debug lines
+	// above it mention every entry by design.
+	summary := logs
+	if i := strings.Index(logs, "Generated Artifacts"); i >= 0 {
+		summary = logs[i:]
+	}
+
+	for _, name := range outputs {
+		if !strings.Contains(summary, name) {
+			t.Errorf("expected output %s to be listed, got: %s", name, summary)
+		}
+	}
+	for _, name := range workingFiles {
+		if strings.Contains(summary, name) {
+			t.Errorf("working file %s must not be listed as an artifact, got: %s", name, summary)
+		}
+	}
+}
+
+// TestPrintImageDirectorySummary_OnlyWorkingFiles ensures a directory holding no
+// real outputs reports none, rather than advertising the chroot's leftovers.
+func TestPrintImageDirectorySummary_OnlyWorkingFiles(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"bash.bashrc", "debian_version"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("data"), 0o644); err != nil {
+			t.Fatalf("failed to write %s: %v", name, err)
+		}
+	}
+
+	logs := captureLogs(t, func() {
+		display.PrintImageDirectorySummary(dir, "raw")
+	})
+
+	if !strings.Contains(logs, "No artifacts found") {
+		t.Fatalf("expected no artifact warning, got: %s", logs)
+	}
+}
+
 func TestPrintImageBuildingTiming_NoVisibleRows(t *testing.T) {
 	logs := captureLogs(t, func() {
 		display.PrintImageBuildingTiming("raw", 0, 0, 0, 0, 0, 0, 0)

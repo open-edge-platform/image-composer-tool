@@ -77,6 +77,46 @@ func TestRunOverlayConfigurations_RunsCommandsInChroot(t *testing.T) {
 	}
 }
 
+// TestRunOverlayConfigurations_PreservesMultilineScript is a regression test
+// for using strconv.Quote (Go string-literal escaping) instead of
+// shell.QuoteArg (POSIX single-quote wrapping) to embed configInfo.Cmd: the
+// former both lets bash prematurely expand $(...)/backticks/$var inside the
+// script while parsing the outer command, and does not survive the script's
+// real newlines round-tripping through the allowlist verifier. A multi-line
+// script must reach the chroot command with its newlines intact.
+func TestRunOverlayConfigurations_PreservesMultilineScript(t *testing.T) {
+	origMount, origUmount := mountSysfs, umountSysfs
+	origExec := configExecFn
+	defer func() {
+		mountSysfs, umountSysfs = origMount, origUmount
+		configExecFn = origExec
+	}()
+
+	mountSysfs = func(string) error { return nil }
+	umountSysfs = func(string) error { return nil }
+
+	var gotCmds []string
+	configExecFn = func(cmdStr string, _ bool, _ string, _ []string) (string, error) {
+		gotCmds = append(gotCmds, cmdStr)
+		return "", nil
+	}
+
+	// configInfo.Cmd is TrimSpace'd before quoting, so assert against the
+	// trimmed shape rather than any leading/trailing whitespace.
+	script := "set -e\nif [ -z \"$X\" ]; then\n  echo empty\nfi"
+	tmpl := overlayConfigTemplate(script + "\n")
+	if err := RunOverlayConfigurations(tmpl, "/wd/mnt/root"); err != nil {
+		t.Fatalf("RunOverlayConfigurations: %v", err)
+	}
+
+	if len(gotCmds) != 1 {
+		t.Fatalf("expected 1 chroot command, got %d: %v", len(gotCmds), gotCmds)
+	}
+	if !strings.Contains(gotCmds[0], script) {
+		t.Errorf("chroot command did not carry the script with newlines intact:\ngot:    %q\nwanted to contain: %q", gotCmds[0], script)
+	}
+}
+
 func TestRunOverlayConfigurations_UnmountsOnCommandFailure(t *testing.T) {
 	origMount, origUmount := mountSysfs, umountSysfs
 	origExec := configExecFn
