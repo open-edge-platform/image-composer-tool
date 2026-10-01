@@ -930,9 +930,35 @@ func TestDetectPhase(t *testing.T) {
 	if got := DetectPhase(logs); got != "installing" {
 		t.Errorf("phase = %q, want installing", got)
 	}
-	// Terminal marker.
-	if got := DetectPhase([]string{"2026 INFO image build completed successfully"}); got != "done" {
-		t.Errorf("done phase = %q, want done", got)
+	// Regression: sub-stage completion lines ("Raw"/"ISO"/"Initrd image build
+	// completed successfully") and the top-level one must NOT reach "done" —
+	// compression and teardown still follow. "done" comes from terminal status.
+	//
+	// Each line is appended to the log context it really occurs in (install has
+	// run and artifact assembly is under way), so the assertion is that the phase
+	// stays exactly "generating" — not merely "anything but done", which a line
+	// matching no marker at all would also satisfy.
+	generating := []string{
+		"2026 INFO Image package installation...",
+		"2026 INFO Image installation post-processing...",
+	}
+	if got := DetectPhase(generating); got != "generating" {
+		t.Fatalf("generating prefix phase = %q, want generating", got)
+	}
+	for _, line := range []string{
+		"2026 INFO image build completed successfully",
+		"2026 INFO Raw image build completed successfully: /out/disk.raw",
+		"2026 INFO ISO image build completed successfully: /out/disk.iso",
+		"2026 INFO Initrd image build completed successfully: /out/initrd",
+	} {
+		if got := DetectPhase(append(generating, line)); got != "generating" {
+			t.Errorf("DetectPhase(... + %q) = %q, want generating", line, got)
+		}
+	}
+	// The compression that follows those lines is the real tail of the image
+	// stage, and keeps the stepper on "generating" rather than ending it.
+	if got := DetectPhase(append(generating, "2026 INFO Compressing image file /out/disk.raw")); got != "generating" {
+		t.Errorf("compression phase = %q, want generating", got)
 	}
 	// Resolve/download → the merged "packages" phase (RPM wording too).
 	if got := DetectPhase([]string{"2026 INFO resolving dependencies for 100 RPMs"}); got != "packages" {
