@@ -18,15 +18,20 @@ import (
 // completion; meta.json records its path in LogFile so past builds can offer it
 // for download alongside their configuration summary and artifacts.
 type buildMeta struct {
-	ID        string          `json:"id"`
-	Status    string          `json:"status"`
-	Template  string          `json:"template"`
-	Command   string          `json:"command"`
-	CreatedAt time.Time       `json:"createdAt"`
-	Summary   *ComposeSummary `json:"summary,omitempty"`
-	Artifacts []Artifact      `json:"artifacts,omitempty"`
-	ErrMsg    string          `json:"errMsg,omitempty"`
-	LogFile   string          `json:"logFile,omitempty"`
+	ID       string `json:"id"`
+	Status   string `json:"status"`
+	Template string `json:"template"`
+	// TemplatePath is the on-disk template the build ran against. Persisted so a
+	// build reconstructed after a restart can still serve it for download and
+	// report its location — without it TemplateFile() had nothing to resolve, and
+	// the template download 404'd for every past build.
+	TemplatePath string          `json:"templatePath,omitempty"`
+	Command      string          `json:"command"`
+	CreatedAt    time.Time       `json:"createdAt"`
+	Summary      *ComposeSummary `json:"summary,omitempty"`
+	Artifacts    []Artifact      `json:"artifacts,omitempty"`
+	ErrMsg       string          `json:"errMsg,omitempty"`
+	LogFile      string          `json:"logFile,omitempty"`
 	// Residual outlives the process on purpose: leftover mounts and loop devices
 	// survive a server restart, so the remediation hint must too.
 	Residual *ResidualIssue `json:"residual,omitempty"`
@@ -46,16 +51,17 @@ func (b *build) writeMeta() error {
 	}
 	res := b.snapshot()
 	m := buildMeta{
-		ID:        b.ID,
-		Status:    string(res.Status),
-		Template:  b.Template,
-		Command:   b.Command,
-		CreatedAt: b.CreatedAt,
-		Summary:   b.Summary,
-		Artifacts: res.Artifacts,
-		ErrMsg:    res.ErrMsg,
-		LogFile:   res.LogFile,
-		Residual:  res.Residual,
+		ID:           b.ID,
+		Status:       string(res.Status),
+		Template:     b.Template,
+		TemplatePath: res.TemplatePath,
+		Command:      b.Command,
+		CreatedAt:    b.CreatedAt,
+		Summary:      b.Summary,
+		Artifacts:    res.Artifacts,
+		ErrMsg:       res.ErrMsg,
+		LogFile:      res.LogFile,
+		Residual:     res.Residual,
 	}
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
@@ -75,22 +81,42 @@ func buildFromMeta(rootDir string, m buildMeta) *build {
 	close(done)
 	status, errMsg := reconcileInterrupted(BuildStatus(m.Status), m.ErrMsg)
 	b := &build{
-		ID:        m.ID,
-		RootDir:   rootDir,
-		WorkDir:   filepath.Join(rootDir, "work"),
-		CacheDir:  filepath.Join(rootDir, "cache"),
-		Template:  m.Template,
-		Command:   m.Command,
-		Summary:   m.Summary,
-		CreatedAt: m.CreatedAt,
-		LogFile:   m.LogFile,
-		done:      done,
-		status:    status,
-		artifacts: m.Artifacts,
-		errMsg:    errMsg,
-		residual:  m.Residual,
+		ID:           m.ID,
+		RootDir:      rootDir,
+		WorkDir:      filepath.Join(rootDir, "work"),
+		CacheDir:     filepath.Join(rootDir, "cache"),
+		Template:     m.Template,
+		TemplatePath: templatePathFromMeta(rootDir, m),
+		Command:      m.Command,
+		Summary:      m.Summary,
+		CreatedAt:    m.CreatedAt,
+		LogFile:      m.LogFile,
+		done:         done,
+		status:       status,
+		artifacts:    m.Artifacts,
+		errMsg:       errMsg,
+		residual:     m.Residual,
 	}
 	return b
+}
+
+// templatePathFromMeta resolves the template path for a reconstructed build.
+//
+// meta.json records it directly for anything written since that field existed.
+// An older record has it empty, so fall back to the archived copy an
+// override build leaves at <root>/template.yml. A build against a curated
+// template has no archive and keeps an empty path, which TemplateFile() then
+// reports as "no template recorded" — the honest answer, since the curated file
+// it ran against may since have moved or changed.
+func templatePathFromMeta(rootDir string, m buildMeta) string {
+	if m.TemplatePath != "" {
+		return m.TemplatePath
+	}
+	archived := filepath.Join(rootDir, "template.yml")
+	if fileExists(archived) {
+		return archived
+	}
+	return ""
 }
 
 // reconcileInterrupted maps a persisted non-terminal status to a terminal one.
@@ -219,18 +245,19 @@ func (s *Service) ListBuilds() []HistoryItem {
 // in its collapsible "Build details" panel: the exact command, the resolved
 // template, and the per-build work/cache directories.
 type BuildDetails struct {
-	BuildID     string
-	Status      BuildStatus
-	Command     string
-	Template    string
-	TemplateURL string
-	WorkDir     string
-	CacheDir    string
-	Summary     *ComposeSummary
-	HasLogFile  bool // a downloadable log file exists on disk
-	ErrMsg      string
-	Artifacts   []Artifact     // partial outputs on fail/cancel (with on-disk path)
-	Residual    *ResidualIssue // teardown-residue warning for manual remediation
+	BuildID      string
+	Status       BuildStatus
+	Command      string
+	Template     string
+	TemplateURL  string
+	TemplatePath string // on-disk path of the template this build ran against
+	WorkDir      string
+	CacheDir     string
+	Summary      *ComposeSummary
+	HasLogFile   bool // a downloadable log file exists on disk
+	ErrMsg       string
+	Artifacts    []Artifact     // partial outputs on fail/cancel (with on-disk path)
+	Residual     *ResidualIssue // teardown-residue warning for manual remediation
 }
 
 // BuildDetails returns the command and paths for a build so the UI can show
@@ -243,18 +270,19 @@ func (s *Service) BuildDetails(id string) (*BuildDetails, error) {
 	}
 	res := b.snapshot()
 	return &BuildDetails{
-		BuildID:     id,
-		Status:      res.Status,
-		Command:     b.Command,
-		Template:    b.Template,
-		TemplateURL: "/api/v1/builds/" + id + "/template",
-		WorkDir:     b.WorkDir,
-		CacheDir:    b.CacheDir,
-		Summary:     b.Summary,
-		HasLogFile:  res.LogFile != "" && fileExists(res.LogFile),
-		ErrMsg:      res.ErrMsg,
-		Artifacts:   res.Artifacts,
-		Residual:    res.Residual,
+		BuildID:      id,
+		Status:       res.Status,
+		Command:      b.Command,
+		Template:     b.Template,
+		TemplateURL:  "/api/v1/builds/" + id + "/template",
+		TemplatePath: res.TemplatePath,
+		WorkDir:      b.WorkDir,
+		CacheDir:     b.CacheDir,
+		Summary:      b.Summary,
+		HasLogFile:   res.LogFile != "" && fileExists(res.LogFile),
+		ErrMsg:       res.ErrMsg,
+		Artifacts:    res.Artifacts,
+		Residual:     res.Residual,
 	}, nil
 }
 

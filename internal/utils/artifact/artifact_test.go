@@ -57,6 +57,10 @@ func TestClassify(t *testing.T) {
 		{"upload manifest", "UPLOAD-MANIFEST.txt", artifact.TypeUnknown},
 		{"overlay inspect report", "edge-1.0.inspect.txt", artifact.TypeUnknown},
 		{"template dump", "template-dump.yaml", artifact.TypeUnknown},
+		// The installer's package-metadata sidecar. It is named such that a
+		// marker-only SBOM rule would mislabel it, and it is plumbing rather
+		// than an output the user asked for.
+		{"installer sbom sidecar", "sbom-metadata.yaml", artifact.TypeUnknown},
 		{"version-like suffix", "libfoo-1.0", artifact.TypeUnknown},
 		{"empty", "", artifact.TypeUnknown},
 

@@ -12,15 +12,46 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
 
+// writeSidecar puts an SBOM metadata sidecar beside a template path and returns
+// that template path.
+func writeSidecar(t *testing.T, pkgs []ospackage.PackageInfo) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := config.WriteSBOMMetadataSidecar(filepath.Join(dir, config.SBOMMetadataFileName), pkgs); err != nil {
+		t.Fatalf("writing sidecar: %v", err)
+	}
+	return filepath.Join(dir, "template-dump.yaml")
+}
+
 func TestHydrateSBOMMetadataForInstaller(t *testing.T) {
-	t.Run("copies_sbom_metadata_when_full_bom_is_empty", func(t *testing.T) {
+	t.Run("reads_sbom_metadata_from_sidecar", func(t *testing.T) {
+		templateFile := writeSidecar(t, []ospackage.PackageInfo{
+			{Name: "pkg-a", Type: "deb", Version: "1.0.0", URL: "https://example.test/pkg-a.deb"},
+		})
+
+		template := &config.ImageTemplate{}
+		hydrateSBOMMetadataForInstaller(template, templateFile)
+
+		if len(template.FullPkgListBom) != 1 {
+			t.Fatalf("expected FullPkgListBom to be hydrated with 1 package, got %d", len(template.FullPkgListBom))
+		}
+		if template.FullPkgListBom[0].Name != "pkg-a" {
+			t.Fatalf("expected hydrated package name pkg-a, got %s", template.FullPkgListBom[0].Name)
+		}
+		if template.FullPkgListBom[0].URL != "https://example.test/pkg-a.deb" {
+			t.Fatalf("sidecar lost per-package metadata: %+v", template.FullPkgListBom[0])
+		}
+	})
+
+	// An ISO built before the sidecar existed carries the same payload inline.
+	t.Run("falls_back_to_inline_metadata_when_no_sidecar", func(t *testing.T) {
 		template := &config.ImageTemplate{
 			SBOMPackageMetadata: []ospackage.PackageInfo{
 				{Name: "pkg-a", Type: "deb", Version: "1.0.0", URL: "https://example.test/pkg-a.deb"},
 			},
 		}
 
-		hydrateSBOMMetadataForInstaller(template)
+		hydrateSBOMMetadataForInstaller(template, filepath.Join(t.TempDir(), "template-dump.yaml"))
 
 		if len(template.FullPkgListBom) != 1 {
 			t.Fatalf("expected FullPkgListBom to be hydrated with 1 package, got %d", len(template.FullPkgListBom))
@@ -30,7 +61,27 @@ func TestHydrateSBOMMetadataForInstaller(t *testing.T) {
 		}
 	})
 
+	t.Run("sidecar_wins_over_inline_metadata", func(t *testing.T) {
+		templateFile := writeSidecar(t, []ospackage.PackageInfo{
+			{Name: "from-sidecar", Type: "deb", Version: "2.0.0"},
+		})
+		template := &config.ImageTemplate{
+			SBOMPackageMetadata: []ospackage.PackageInfo{
+				{Name: "from-inline", Type: "deb", Version: "1.0.0"},
+			},
+		}
+
+		hydrateSBOMMetadataForInstaller(template, templateFile)
+
+		if len(template.FullPkgListBom) != 1 || template.FullPkgListBom[0].Name != "from-sidecar" {
+			t.Fatalf("expected sidecar metadata to win, got %+v", template.FullPkgListBom)
+		}
+	})
+
 	t.Run("does_not_override_existing_full_bom", func(t *testing.T) {
+		templateFile := writeSidecar(t, []ospackage.PackageInfo{
+			{Name: "from-sidecar", Type: "deb", Version: "3.0.0"},
+		})
 		template := &config.ImageTemplate{
 			FullPkgListBom: []ospackage.PackageInfo{
 				{Name: "existing", Type: "deb", Version: "2.0.0"},
@@ -40,7 +91,7 @@ func TestHydrateSBOMMetadataForInstaller(t *testing.T) {
 			},
 		}
 
-		hydrateSBOMMetadataForInstaller(template)
+		hydrateSBOMMetadataForInstaller(template, templateFile)
 
 		if len(template.FullPkgListBom) != 1 {
 			t.Fatalf("expected existing FullPkgListBom length to remain 1, got %d", len(template.FullPkgListBom))
@@ -51,7 +102,7 @@ func TestHydrateSBOMMetadataForInstaller(t *testing.T) {
 	})
 
 	t.Run("nil_template_is_noop", func(t *testing.T) {
-		hydrateSBOMMetadataForInstaller(nil)
+		hydrateSBOMMetadataForInstaller(nil, "")
 	})
 }
 
