@@ -4,6 +4,8 @@
 package service
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -48,6 +50,158 @@ func TestParseArtifacts(t *testing.T) {
 		}
 		if !strings.HasSuffix(got[i].Path, wnt.Name) {
 			t.Errorf("artifact[%d] path %q does not end with name %q", i, got[i].Path, wnt.Name)
+		}
+	}
+}
+
+// TestSnapshotOrdersSBOMLast pins the order the API serves: images first, SBOM
+// last. It goes through snapshot() because that is where the ordering is
+// applied — which is what makes it hold for a past build reconstructed from a
+// meta.json recorded in some other order, as the input here is.
+func TestSnapshotOrdersSBOMLast(t *testing.T) {
+	b := &build{ID: "s1", done: make(chan struct{})}
+	b.finish(StatusSuccess, []Artifact{
+		{Name: "spdx_manifest_deb_ubuntu_20260707_165343.json", Type: "sbom", Path: "/b/sbom.json"},
+		{Name: "ubuntu24-robotics-amr.raw.gz", Type: "image", Path: "/b/a.raw.gz"},
+		{Name: "UPLOAD-MANIFEST.txt", Type: "unknown", Path: "/b/u.txt"},
+		{Name: "ubuntu24-robotics-amr.vhdx", Type: "image", Path: "/b/a.vhdx"},
+	}, "")
+
+	got := b.snapshot().Artifacts
+	wantOrder := []string{
+		"ubuntu24-robotics-amr.raw.gz",
+		"ubuntu24-robotics-amr.vhdx",
+		"UPLOAD-MANIFEST.txt",
+		"spdx_manifest_deb_ubuntu_20260707_165343.json",
+	}
+	if len(got) != len(wantOrder) {
+		t.Fatalf("expected %d artifacts, got %d: %+v", len(wantOrder), len(got), got)
+	}
+	for i, want := range wantOrder {
+		if got[i].Name != want {
+			t.Errorf("artifact[%d] = %q, want %q (full order: %+v)", i, got[i].Name, want, got)
+		}
+	}
+	if last := got[len(got)-1]; last.Type != "sbom" {
+		t.Errorf("last artifact type = %q, want %q", last.Type, "sbom")
+	}
+}
+
+// TestSortArtifactsIsStable checks the within-group guarantee: reordering only
+// moves artifacts between groups, so the source's own ordering of two images is
+// not shuffled.
+func TestSortArtifactsIsStable(t *testing.T) {
+	arts := []Artifact{
+		{Name: "z-second.iso", Type: "image"},
+		{Name: "sbom.spdx.json", Type: "sbom"},
+		{Name: "a-third.iso", Type: "image"},
+	}
+	sortArtifacts(arts)
+
+	want := []string{"z-second.iso", "a-third.iso", "sbom.spdx.json"}
+	for i, w := range want {
+		if arts[i].Name != w {
+			t.Errorf("artifact[%d] = %q, want %q (full: %+v)", i, arts[i].Name, w, arts)
+		}
+	}
+}
+
+// TestParseArtifactsUnclassifiedIsNotImage covers a bullet line this parser
+// cannot place — an older ICT, or one whose summary lists working files. Such a
+// line must be reported as "unknown", never guessed to be an image.
+func TestParseArtifactsUnclassifiedIsNotImage(t *testing.T) {
+	logs := []string{
+		`2026-07-07T16:54:30.684Z	INFO	display/display.go:79	    • debian13-x86_64-desktop-virtualization-13.0.iso (966.42 MB)`,
+		`2026-07-07T16:54:30.684Z	INFO	display/display.go:80	      /var/tmp/ict/builds/abc/imagebuild/debian13-x86_64-desktop-virtualization-13.0.iso`,
+		`2026-07-07T16:54:30.684Z	INFO	display/display.go:79	    • UPLOAD-MANIFEST.txt (3.81 kB)`,
+		`2026-07-07T16:54:30.684Z	INFO	display/display.go:80	      /var/tmp/ict/builds/abc/imagebuild/UPLOAD-MANIFEST.txt`,
+		`2026-07-07T16:54:30.684Z	INFO	display/display.go:79	    • debian_version (5 B)`,
+		`2026-07-07T16:54:30.684Z	INFO	display/display.go:80	      /var/tmp/ict/builds/abc/imagebuild/debian_version`,
+	}
+
+	got := parseArtifacts(logs)
+	want := map[string]string{
+		"debian13-x86_64-desktop-virtualization-13.0.iso": "image",
+		"UPLOAD-MANIFEST.txt":                             "unknown",
+		"debian_version":                                  "unknown",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d artifacts, got %d: %+v", len(want), len(got), got)
+	}
+	for _, a := range got {
+		if want[a.Name] != a.Type {
+			t.Errorf("artifact %q type = %q, want %q", a.Name, a.Type, want[a.Name])
+		}
+	}
+}
+
+// TestDiscoverArtifactsRealBuildDirectory covers the directory-scan fallback
+// against the names a real build leaves behind. It must find the SBOM under its
+// actual name (spdx_manifest_*.json — which the old ".spdx.json" suffix rule
+// missed entirely, dropping the SBOM), must not report the chroot's working
+// files, and must not reach outside the imagebuild subtree — the chroot holds a
+// copy of the SBOM and can hold stray images, which only their location
+// distinguishes from real outputs.
+// See TestDiscoverArtifacts in service_test.go for the nested-layout case.
+func TestDiscoverArtifactsRealBuildDirectory(t *testing.T) {
+	work := t.TempDir()
+	// The real layout: outputs under <providerId>/imagebuild/<systemConfigName>,
+	// with the chroot the build ran in as a sibling of imagebuild.
+	dir := filepath.Join(work, "ubuntu-ubuntu26-x86_64", "imagebuild", "minimal")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatalf("mkdir imagebuild: %v", err)
+	}
+	files := []string{
+		"minimal-os-image-ubuntu-26.04.raw.gz",
+		"spdx_manifest_deb_minimal-os-image-ubuntu_20260707_165343.json",
+		"bash.bashrc",
+		"debconf.conf",
+		"debian_version",
+		"chrootpkgs-pkgCache.dot",
+	}
+	for _, name := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	// Files of exactly the right shape in the wrong place: the SBOM copied into
+	// the image filesystem at /usr/share/sbom, and an .iso an installed package
+	// shipped. Neither is an output of this build.
+	chrootSBOM := filepath.Join(work, "ubuntu-ubuntu26-x86_64", "chrootenv", "usr", "share", "sbom")
+	if err := os.MkdirAll(chrootSBOM, 0o750); err != nil {
+		t.Fatalf("mkdir chroot sbom: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(chrootSBOM,
+		"spdx_manifest_deb_minimal-os-image-ubuntu_20260707_165343.json"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write chroot sbom: %v", err)
+	}
+	chrootISO := filepath.Join(work, "ubuntu-ubuntu26-x86_64", "chrootenv", "var", "cache")
+	if err := os.MkdirAll(chrootISO, 0o750); err != nil {
+		t.Fatalf("mkdir chroot cache: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(chrootISO, "netboot.iso"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write chroot iso: %v", err)
+	}
+
+	got := discoverArtifacts(work)
+	want := map[string]string{
+		"minimal-os-image-ubuntu-26.04.raw.gz":                           "image",
+		"spdx_manifest_deb_minimal-os-image-ubuntu_20260707_165343.json": "sbom",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d artifacts, got %d: %+v", len(want), len(got), got)
+	}
+	for _, a := range got {
+		wantType, ok := want[a.Name]
+		if !ok {
+			t.Errorf("unexpected artifact %q (a build working file is not an output)", a.Name)
+			continue
+		}
+		if a.Type != wantType {
+			t.Errorf("artifact %q type = %q, want %q", a.Name, a.Type, wantType)
+		}
+		if a.Path != filepath.Join(dir, a.Name) {
+			t.Errorf("artifact %q path = %q, want %q", a.Name, a.Path, filepath.Join(dir, a.Name))
 		}
 	}
 }
