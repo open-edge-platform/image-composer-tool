@@ -930,9 +930,18 @@ func TestDetectPhase(t *testing.T) {
 	if got := DetectPhase(logs); got != "installing" {
 		t.Errorf("phase = %q, want installing", got)
 	}
-	// Terminal marker.
-	if got := DetectPhase([]string{"2026 INFO image build completed successfully"}); got != "done" {
-		t.Errorf("done phase = %q, want done", got)
+	// Regression: sub-stage completion lines ("Raw"/"ISO"/"Initrd image build
+	// completed successfully") and the top-level one must NOT reach "done" —
+	// compression and teardown still follow. "done" comes from terminal status.
+	for _, line := range []string{
+		"2026 INFO image build completed successfully",
+		"2026 INFO Raw image build completed successfully: /out/disk.raw",
+		"2026 INFO ISO image build completed successfully: /out/disk.iso",
+		"2026 INFO Initrd image build completed successfully: /out/initrd",
+	} {
+		if got := DetectPhase([]string{line}); got == "done" {
+			t.Errorf("DetectPhase(%q) = done, want a non-terminal phase", line)
+		}
 	}
 	// Resolve/download → the merged "packages" phase (RPM wording too).
 	if got := DetectPhase([]string{"2026 INFO resolving dependencies for 100 RPMs"}); got != "packages" {

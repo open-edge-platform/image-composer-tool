@@ -137,7 +137,10 @@ export function BuildView({
       })
       es.addEventListener('phase', (e) => {
         const data = JSON.parse((e as MessageEvent).data)
-        if (data.phase) setPhase(data.phase)
+        // 'done' is owned by the terminal complete/error handlers; honouring it
+        // from the stream would light the whole stepper green while the badge
+        // still says "Composing...".
+        if (data.phase && data.phase !== 'done') setPhase(data.phase)
         setInstall({ done: data.installDone ?? 0, total: data.installTotal ?? 0 })
       })
       es.addEventListener('complete', (e) => {
