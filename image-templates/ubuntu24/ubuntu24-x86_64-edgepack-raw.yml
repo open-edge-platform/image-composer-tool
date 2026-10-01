@@ -93,6 +93,60 @@ systemConfig:
     - intel-edge-manageability # vPRO manageability
     # intel-edge-base-realtime is the alternative base profile but is currently
     # disabled for all OS variants upstream, so it is intentionally omitted here.
+    # ── Requested by the platform validation team ──
+    - curl
+    - util-linux-extra
+    - sg3-utils
+    - libllvm18
+    - libdebuginfod1t64
+    - dnsmasq-base
+    - xdp-tools
+    - firefox
+    - vim
+    - net-tools
+    - bluez
+    - language-pack-en
+    - language-pack-en-base
+    - language-pack-gnome-en
+    - language-pack-gnome-en-base
+    - shim-signed
+    - network-manager
+    - nano
+    - usb-modeswitch
+    - libvirt-sanlock
+    - cmake
+    - git
+    - libssl-dev
+    - build-essential
+    - apt-transport-https
+    - git-lfs
+    - libglew-dev
+    - libglm-dev
+    - libsdl2-dev
+    - mc
+    - python3-pip
+    - wayland-protocols
+    - msr-tools
+    - lsscsi
+    - i2c-tools
+    - socat
+    - rpm
+    - tcpdump
+    - cloud-init
+    - fio
+    - autoconf
+    - automake
+    - autoconf-archive
+    - libtool
+    - gtk-doc-tools
+    - libdbus-1-dev
+    - libxml2-dev
+    - libnl-3-dev
+    - libnl-genl-3-dev
+    - libsystemd-dev
+    - libupower-glib-dev
+    - python3-cffi
+    - python3.12-venv
 
   kernel:
     cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
