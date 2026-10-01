@@ -35,7 +35,15 @@ const pack: EdgePack = {
   repo: 'intel-eci',
   repoAvailable: true,
   baseRuntimes: [
-    { id: 'standard', displayName: 'Standard', available: true, package: { name: 'base-standard' } },
+    {
+      id: 'standard',
+      displayName: 'Standard',
+      available: true,
+      // As in the shipped catalog: the base metapackage pulls in the NPU
+      // profile, whose dependencies the pack repository does not carry.
+      requiresRepos: ['intel-graphics'],
+      package: { name: 'base-standard' },
+    },
     {
       id: 'realtime',
       displayName: 'Real-time',
@@ -78,6 +86,7 @@ const add = (...names: string[]): AddedPackage[] =>
 
 const media = pack.domains[0]
 const npu = pack.domains[1]
+const standard = pack.baseRuntimes[0]
 
 describe('groupSelectionState', () => {
   it('reports none / partial / full as the selection fills in', () => {
@@ -225,7 +234,21 @@ describe('reposToEnable', () => {
     expect(reposToEnable(pack, pack.domains)).toEqual(['intel-eci', 'intel-graphics'])
   })
 
-  it('needs nothing beyond the pack repo for no domains at all', () => {
+  it('adds a base runtime prerequisite, which no domain need be selected for', () => {
+    // The standard base metapackage pulls in the NPU, IPU and
+    // compute-essentials profiles itself, so a template that selects nothing
+    // but the runtime still needs the repository their dependencies come from.
+    expect(reposToEnable(pack, [standard])).toEqual(['intel-eci', 'intel-graphics'])
+  })
+
+  it('names a prerequisite shared by a runtime and a domain once', () => {
+    expect(reposToEnable(pack, [standard, ...pack.domains])).toEqual([
+      'intel-eci',
+      'intel-graphics',
+    ])
+  })
+
+  it('needs nothing beyond the pack repo for no selection at all', () => {
     expect(reposToEnable(pack, [])).toEqual(['intel-eci'])
   })
 })

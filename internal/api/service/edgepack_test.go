@@ -156,6 +156,53 @@ func TestEmbeddedEdgePackReferencesAreReal(t *testing.T) {
 	}
 }
 
+// The same drift guard for the base runtimes' prerequisites, which need their
+// own reach test: a runtime has no OS list, so its reach is the pack
+// repository's. Wherever the pack is offered, every repository its runtimes
+// require must be offered too — miss that and the pack reports itself available
+// on a target where every runtime, and so every domain beneath them, is locked.
+func TestEmbeddedEdgePackRuntimeReposAreReal(t *testing.T) {
+	spec, err := loadEdgePack("")
+	if err != nil {
+		t.Fatalf("loadEdgePack: %v", err)
+	}
+	repos, err := loadPackageRepos("")
+	if err != nil {
+		t.Fatalf("loadPackageRepos: %v", err)
+	}
+	m, err := loadManifest("")
+	if err != nil {
+		t.Fatalf("loadManifest: %v", err)
+	}
+
+	known := make(map[string]PackageRepo, len(repos))
+	for _, r := range repos {
+		known[r.ID] = r
+	}
+	// A pack repo the catalog does not define is reported by the guard above;
+	// here it would only produce a second copy of the same failure.
+	packRepo, ok := known[spec.Repo]
+	if !ok {
+		t.Skipf("edge pack names repo %q, which data/package-repos.yaml does not define", spec.Repo)
+	}
+	for _, rt := range spec.BaseRuntimes {
+		for _, id := range rt.RequiresRepos {
+			repo, found := known[id]
+			if !found {
+				t.Errorf("base runtime %q requires repo %q, which data/package-repos.yaml does not define",
+					rt.ID, id)
+				continue
+			}
+			for _, tgt := range m.Targets {
+				if packRepo.appliesTo(tgt.ID) && !repo.appliesTo(tgt.ID) {
+					t.Errorf("base runtime %q requires repo %q, which is not offered for %q where the pack is",
+						rt.ID, id, tgt.ID)
+				}
+			}
+		}
+	}
+}
+
 // A domain the target does not publish is reported, not dropped — the UI needs
 // the row to show it locked — and it carries a reason naming that target.
 func TestEdgePackDomainOSGating(t *testing.T) {
@@ -377,6 +424,118 @@ func TestEdgePackBaseRuntimes(t *testing.T) {
 	}
 }
 
+// A pack whose standard runtime needs a repository beyond the pack's own,
+// published for one target only — the shape the real catalog has, where the base
+// metapackage pulls in the NPU profile whose GPU-compute dependencies the pack
+// repository does not carry.
+const testPackRuntimePrereq = `
+pack:
+  id: edge-pack
+  displayName: Edge Pack
+  repo: test-repo
+  baseRuntimes:
+    - id: standard
+      displayName: Standard
+      package: base-standard
+      requiresRepos: [prereq-repo]
+    - id: plain
+      displayName: Plain
+      package: base-plain
+  domains:
+    - id: media
+      displayName: Media
+      packages: [media-ffmpeg]
+`
+
+// A runtime is unselectable where a repository it depends on is not offered, for
+// the same reason a domain is: it would select cleanly and fail to resolve a
+// build later. This gate is the wider of the two — every domain sits on a
+// runtime — so the reason names the repository by the label the user sees.
+func TestEdgePackBaseRuntimeRequiresRepos(t *testing.T) {
+	svc := edgePackService(t, testPackRuntimePrereq, testPrereqRepos, "ubuntu24", "ubuntu26-server")
+
+	cases := []struct {
+		osID      string
+		available bool
+		reasonHas []string
+	}{
+		{osID: "ubuntu24", available: true},
+		{osID: "ubuntu26-server", available: false, reasonHas: []string{"Prereq Repo", "ubuntu26-server"}},
+	}
+	for _, c := range cases {
+		t.Run(c.osID, func(t *testing.T) {
+			pack, err := svc.EdgePack(context.Background(), c.osID)
+			if err != nil {
+				t.Fatalf("EdgePack: %v", err)
+			}
+			std, plain := pack.BaseRuntimes[0], pack.BaseRuntimes[1]
+			if std.Available != c.available {
+				t.Errorf("standard available = %v, want %v (reason %q)",
+					std.Available, c.available, std.UnavailableReason)
+			}
+			for _, want := range c.reasonHas {
+				if !strings.Contains(std.UnavailableReason, want) {
+					t.Errorf("reason %q does not name %q", std.UnavailableReason, want)
+				}
+			}
+			// Published whether or not the runtime is selectable: the client
+			// enables the repository itself when the runtime is picked, so it
+			// needs the id, not just the verdict.
+			if len(std.RequiresRepos) != 1 || std.RequiresRepos[0] != "prereq-repo" {
+				t.Errorf("requiresRepos = %v, want [prereq-repo]", std.RequiresRepos)
+			}
+			// A runtime needing nothing extra is untouched by another's
+			// prerequisite, and carries no empty-but-present field.
+			if !plain.Available || len(plain.RequiresRepos) != 0 {
+				t.Errorf("plain runtime = %+v, want available with no requiresRepos", plain)
+			}
+		})
+	}
+}
+
+// A runtime the catalog does not ship yet says so even when a repository it
+// names is also absent: no repository change would make a package that is not
+// published selectable, so naming one would send the user after a fix that
+// cannot work. Mirrors TestEdgePackDomainUnpublishedBeatsMissingRepo.
+func TestEdgePackBaseRuntimeUnshippedBeatsMissingRepo(t *testing.T) {
+	const pack = `
+pack:
+  id: edge-pack
+  displayName: Edge Pack
+  repo: test-repo
+  baseRuntimes:
+    - id: standard
+      displayName: Standard
+      package: base-standard
+    - id: realtime
+      displayName: Real-time
+      package: base-realtime
+      requiresRepos: [prereq-repo]
+      available: false
+      unavailableReason: not shipped yet
+  domains:
+    - id: media
+      displayName: Media
+      packages: [media-ffmpeg]
+`
+	svc := edgePackService(t, pack, testPrereqRepos, "ubuntu24", "ubuntu26-server")
+	got, err := svc.EdgePack(context.Background(), "ubuntu26-server")
+	if err != nil {
+		t.Fatalf("EdgePack: %v", err)
+	}
+	rt := got.BaseRuntimes[1]
+	if rt.Available {
+		t.Fatal("runtime reported available though the catalog does not ship it")
+	}
+	if !strings.Contains(rt.UnavailableReason, "not shipped yet") {
+		t.Errorf("reason %q does not lead with the runtime being unshipped", rt.UnavailableReason)
+	}
+	if strings.Contains(rt.UnavailableReason, "Prereq Repo") {
+		t.Errorf("reason %q blames a repository for a runtime that does not exist yet",
+			rt.UnavailableReason)
+	}
+}
+
 // The pack's package set counts a name once however many domains claim it, so
 // a shared package cannot inflate the pack total.
 func TestEdgePackNameSetDeduplicates(t *testing.T) {
@@ -522,6 +681,13 @@ func TestLoadEdgePackRejectsInvalid(t *testing.T) {
 				"  baseRuntimes:\n    - {id: s, displayName: S, package: pkg}\n" +
 				"  domains:\n    - {id: d, displayName: D, packages: []}\n",
 			want: "no packages",
+		},
+		{
+			name: "empty runtime requiresRepos entry",
+			body: "pack:\n  id: p\n  displayName: X\n  repo: r\n" +
+				"  baseRuntimes:\n    - {id: s, displayName: S, package: pkg, requiresRepos: [\"\"]}\n" +
+				"  domains:\n    - {id: d, displayName: D, packages: [a]}\n",
+			want: "requiresRepos 0 is empty",
 		},
 		{
 			name: "duplicate domain id",

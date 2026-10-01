@@ -210,6 +210,10 @@ export interface EdgePackBaseRuntime {
   // False means shown but unselectable; unavailableReason always says why.
   available: boolean
   unavailableReason?: string
+  // Repository ids to enable alongside the pack's own when this runtime is
+  // selected — the runtime metapackage pulls in profiles whose dependencies the
+  // pack repository does not carry. Same contract as EdgePackDomain's.
+  requiresRepos?: string[]
 }
 
 export interface EdgePackDomain {
