@@ -1,13 +1,13 @@
 # AI-searchable metadata for template discovery
 metadata:
-  description: Ubuntu 24.04 raw image with Intel EdgePack platform-enablement packages (Panther Lake / Wildcat Lake) installed via native ICT repository and package support
+  description: Ubuntu 24.04 minimal server raw image with Intel EdgePack platform-enablement packages (Panther Lake / Wildcat Lake) installed via native ICT repository and package support
   use_cases:
-    - Intel Panther Lake (PTL) / Wildcat Lake (WCL) edge platforms
-    - Graphics, media and manageability-enabled Ubuntu edge images
-    - Reference template for layering vendor APT repositories via packageRepositories
+    - Intel Panther Lake (PTL) / Wildcat Lake (WCL) headless edge/companion servers
+    - Minimal Ubuntu server base plus EdgePack, with no use-case-specific provisioning
   keywords:
     - edgepack
     - intel-edge-base-standard
+    - server
     - ptl
     - wcl
     - dkms
@@ -15,7 +15,7 @@ metadata:
     - edge
 
 image:
-  name: edgepack-os-image-ubuntu
+  name: edgepack-server-os-image-ubuntu
   version: "24.04"
 
 target:
@@ -25,7 +25,7 @@ target:
   imageType: raw
 
 disk:
-  name: EdgePack_Raw # 1:1 mapping to the systemConfigs name
+  name: EdgePack_Server_Raw # 1:1 mapping to the systemConfigs name
   artifacts:
     - type: raw # image file format, valid value [raw, vhd, vhdx, qcow2, vmdk, vdi]
       compression: gz
@@ -61,8 +61,8 @@ packageRepositories:
     component: "stable"
 
 systemConfig:
-  name: edgepack-demo
-  description: Ubuntu 24.04 (noble) image with the EdgePack base metapackage and optional add-ons for PTL/WCL
+  name: edgepack-server-demo
+  description: Ubuntu 24.04 (noble) minimal server image with the EdgePack base metapackage and media/manageability add-ons
 
   bootloader:
     bootType: efi
@@ -72,9 +72,12 @@ systemConfig:
     enabled: false # kept simple for this showcase; EdgePack itself has no immutability requirement
 
   packages:
-    - ubuntu-minimal
-    - ubuntu-standard
-    - ubuntu-desktop-minimal
+    # systemConfig.packages merges additively with the raw-image defaults,
+    # which already include ubuntu-minimal. Adding ubuntu-server-minimal (and
+    # omitting ubuntu-standard/ubuntu-desktop-minimal) is what distinguishes a
+    # "server" image from a desktop one in this repo's own reference
+    # blueprints, with no desktop/GUI stack pulled in.
+    - ubuntu-server-minimal
     - grub-efi-amd64-signed
     - initramfs-tools
     - grub2-common
@@ -85,14 +88,12 @@ systemConfig:
     - openssh-server
     - systemd-resolved
     - systemd-timesyncd
-    # ── EdgePack: mandatory base (core graphics/media + NPU/IPU + platform-enablement DKMS drivers) ──
+    # ── EdgePack: mandatory base (core graphics/media + platform-enablement DKMS drivers) ──
     - intel-edge-base-standard
-    # ── EdgePack: optional add-ons, shown enabled here for demonstration ──
+    # ── EdgePack: optional add-ons ──
     - intel-edge-media-ffmpeg # FFmpeg with Intel GPU support
     - intel-edge-media-gst # GStreamer with Intel GPU support
     - intel-edge-manageability # vPRO manageability
-    # intel-edge-base-realtime is the alternative base profile but is currently
-    # disabled for all OS variants upstream, so it is intentionally omitted here.
 
   kernel:
     cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"

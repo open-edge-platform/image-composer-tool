@@ -3,6 +3,7 @@ package debutils
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -21,6 +22,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/pkgfetcher"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/network"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/runctx"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
@@ -186,15 +188,15 @@ func metadataFileName(raw string) string {
 	return filepath.Base(raw)
 }
 
-// refreshRepoMetadata re-downloads the repository metadata files (Release, its
-// signature, and the archive key where applicable) into pkgMetaDir.
+// refreshRepoMetadata re-downloads and verifies repository metadata before
+// installing it into pkgMetaDir.
 //
 // The download is staged in a sibling temporary directory and moved into place
-// only after every file has arrived, so an interrupted or failed refresh cannot
-// leave pkgMetaDir holding a partial Release — which would fail signature
-// verification and break an otherwise working offline build. Returns whether the
-// files were replaced; on error the existing files are untouched.
-func refreshRepoMetadata(pkgMetaDir string, localFiles, urls []string) (bool, error) {
+// only after every file has arrived and verify accepts the staged set. Returns
+// whether the files were replaced; on error the existing files are untouched.
+func refreshRepoMetadata(
+	pkgMetaDir string, localFiles, urls []string, verify func(stageDir string) error,
+) (bool, error) {
 	stageDir, err := os.MkdirTemp(pkgMetaDir, ".meta-refresh-")
 	if err != nil {
 		return false, fmt.Errorf("creating metadata staging directory: %w", err)
@@ -218,6 +220,10 @@ func refreshRepoMetadata(pkgMetaDir string, localFiles, urls []string) (bool, er
 		}
 	}
 
+	if err := verify(stageDir); err != nil {
+		return false, fmt.Errorf("%w: %w", errMetadataVerify, err)
+	}
+
 	for _, f := range localFiles {
 		staged := filepath.Join(stageDir, metadataFileName(f))
 		if err := os.Rename(staged, f); err != nil {
@@ -229,6 +235,80 @@ func refreshRepoMetadata(pkgMetaDir string, localFiles, urls []string) (bool, er
 		}
 	}
 	return true, nil
+}
+
+// maxMetadataRefreshAttempts bounds the retry in refreshRepoMetadataWithRetry,
+// and metadataRefreshRetryDelay is the pause between attempts. The delay is a
+// var, not a const, so tests can shrink it instead of sleeping for real.
+const maxMetadataRefreshAttempts = 3
+
+var metadataRefreshRetryDelay = 2 * time.Second
+
+var metadataRefreshWait = func(delay time.Duration) <-chan time.Time {
+	return time.After(delay)
+}
+
+// errMetadataVerify marks a refresh that failed signature/metadata verification
+// — the only failure class refreshRepoMetadataWithRetry retries, since a re-fetch
+// from a freshly synced mirror node can clear it. Download, filesystem, and
+// cancellation errors are returned unwrapped and are not retried.
+var errMetadataVerify = errors.New("verifying refreshed metadata")
+
+// refreshRepoMetadataWithRetry retries refreshRepoMetadata a bounded number of
+// times, but only when it fails signature/metadata verification
+// (errMetadataVerify). Some CDN-backed mirrors serve Release and Release.gpg
+// from backend nodes that have briefly fallen out of sync with each other,
+// producing a signature mismatch that a subsequent fetch typically resolves
+// within moments, without a human having to re-run CI. Download, filesystem,
+// and cancellation errors are deterministic here and returned immediately.
+//
+// Between attempts it drops the shared secure client's pooled keep-alive
+// connections. FetchPackages fetches through network.GetSecureHTTPClient(), a
+// process-wide singleton with keep-alives on; without this a retry landing
+// only metadataRefreshRetryDelay later would reuse the same TCP/TLS connection
+// to the same CDN backend and re-fetch the identical mismatched pair. Forcing
+// a fresh dial lets the CDN route the retry to a different, self-consistent
+// backend node, which is what actually clears the transient mismatch.
+//
+// A persistent failure still returns the last error after the attempts are
+// exhausted, so the existing haveLocalMeta-based fallback in
+// ParseRepositoryMetadata is unaffected.
+func refreshRepoMetadataWithRetry(
+	pkgMetaDir string, localFiles, urls []string, verify func(stageDir string) error,
+) (refreshed bool, err error) {
+	for attempt := 1; attempt <= maxMetadataRefreshAttempts; attempt++ {
+		refreshed, err = refreshRepoMetadata(pkgMetaDir, localFiles, urls, verify)
+		if err == nil {
+			return refreshed, nil
+		}
+		// Retry only a verification mismatch: a re-fetch may land on a freshly
+		// synced mirror node. Download, filesystem, and cancellation errors are
+		// deterministic here (FetchPackages already does its own HTTP retries),
+		// so propagate them immediately without consuming the retry budget.
+		if !errors.Is(err, errMetadataVerify) || runctx.Context().Err() != nil {
+			return refreshed, err
+		}
+		if attempt == maxMetadataRefreshAttempts {
+			break
+		}
+
+		logger.Logger().Warnf(
+			"refreshing repo metadata failed on attempt %d/%d (%v); retrying, since this "+
+				"is often a transient mirror sync issue", attempt, maxMetadataRefreshAttempts, err)
+		// Drop pooled keep-alive connections so the next attempt dials fresh
+		// and the CDN can route it to a different backend node, rather than
+		// reusing the connection that just served the mismatched pair.
+		network.GetSecureHTTPClient().CloseIdleConnections()
+
+		// Cancel-aware backoff: a SIGINT/SIGTERM during the wait aborts promptly
+		// instead of blocking for the full delay before the next fetch sees it.
+		select {
+		case <-runctx.Context().Done():
+			return refreshed, fmt.Errorf("metadata refresh cancelled during retry backoff: %w", runctx.Context().Err())
+		case <-metadataRefreshWait(metadataRefreshRetryDelay):
+		}
+	}
+	return refreshed, err
 }
 
 // warnIfReleaseExpired logs when a Release file we could not refresh has passed
@@ -414,12 +494,65 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 		}
 	}
 
-	refreshed, refreshErr := refreshRepoMetadata(pkgMetaDir, metaLocalFiles, metaURLList)
+	verifyReleaseFiles := func(release, releaseSign, pbKey string) error {
+		if isInRelease {
+			if _, err := VerifyInRelease(release, pbKey); err != nil {
+				return fmt.Errorf("failed to verify InRelease file: %w", err)
+			}
+			return nil
+		}
+		verified, err := VerifyRelease(release, releaseSign, pbKey)
+		if err != nil {
+			return fmt.Errorf("failed to verify release file: %w", err)
+		}
+		if !verified {
+			return fmt.Errorf("release file verification failed")
+		}
+		return nil
+	}
+
+	verifyStagedMetadata := func(stageDir string) error {
+		stagedRelease := filepath.Join(stageDir, metadataFileName(localReleaseFile))
+		stagedReleaseSign := filepath.Join(stageDir, metadataFileName(localReleaseSign))
+		stagedPBGPGKey := localPBGPGKey
+		if pbkeyIsURL {
+			stagedPBGPGKey = filepath.Join(stageDir, metadataFileName(localPBGPGKey))
+		}
+		if isInRelease {
+			if _, err := VerifyInRelease(stagedRelease, stagedPBGPGKey); err != nil {
+				return fmt.Errorf("failed to verify InRelease file: %w", err)
+			}
+			return nil
+		}
+		return verifyReleaseFiles(stagedRelease, stagedReleaseSign, stagedPBGPGKey)
+	}
+
+	refreshed, refreshErr := refreshRepoMetadataWithRetry(
+		pkgMetaDir, metaLocalFiles, metaURLList, verifyStagedMetadata)
 	switch {
 	case refreshErr != nil && !haveLocalMeta:
 		// Nothing cached to fall back to, so this is fatal — as it was before.
 		return nil, fmt.Errorf("failed to fetch critical repo config packages: %w", refreshErr)
 	case refreshErr != nil:
+		// A refresh that fails mid-rename can leave the on-disk set mixed (e.g. a
+		// fresh Release.gpg beside a stale Release), so re-verify the persistent
+		// set before trusting it rather than assuming it is still the consistent
+		// copy a previous refresh committed. Trusted repos carry no signature to
+		// check and their single-file rename can't be partial, so they are exempt.
+		if !isTrustedRepo {
+			if verifyErr := verifyReleaseFiles(localReleaseFile, localReleaseSign, localPBGPGKey); verifyErr != nil {
+				return nil, fmt.Errorf("refresh for %s failed and the cached metadata no longer verifies: %w", baseURL, verifyErr)
+			}
+			if isInRelease {
+				plaintext, verifyErr := VerifyInRelease(localReleaseFile, localPBGPGKey)
+				if verifyErr != nil {
+					return nil, fmt.Errorf("refresh for %s verified InRelease but could not extract plaintext: %w", baseURL, verifyErr)
+				}
+				if writeErr := os.WriteFile(checkableReleaseFile, plaintext, 0644); writeErr != nil {
+					return nil, fmt.Errorf("refresh for %s verified InRelease but could not update plaintext: %w", baseURL, writeErr)
+				}
+			}
+		}
 		log.Warnf("Could not refresh metadata for %s (%v); continuing with previously "+
 			"downloaded metadata, which may name package versions the repository no "+
 			"longer serves", baseURL, refreshErr)
