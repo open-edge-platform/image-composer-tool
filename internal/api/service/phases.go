@@ -44,6 +44,13 @@ var phaseNames = map[buildPhase]string{
 // at the authoritative "Installing package X/Y" marker. "Building image:" is
 // the START of the image stage, so it is deliberately NOT a generating marker —
 // generating is only genuine artifact assembly that always follows install.
+//
+// phaseDone has NO marker on purpose. Sub-stage loggers emit lines such as
+// "Raw/ISO/Initrd image build completed successfully", which all contain the
+// top-level completion wording while real work (compression, SBOM copy,
+// teardown) is still running — matching them lit the whole stepper green while
+// the build was still composing. "done" is emitted only from the build's
+// terminal status; see handleBuildLogs in internal/api/sse.go.
 var phaseMarkers = []struct {
 	phase   buildPhase
 	substrs []string
@@ -51,12 +58,12 @@ var phaseMarkers = []struct {
 	{phasePreparing, []string{"loaded image template", "merged configuration", "repositories for package download"}},
 	{phasePackages, []string{"resolving dependencies for", "fetching packages from user package list", "downloading", "packages to", "all downloads complete", "chroot environment build completed successfully", "packages for chroot environment"}},
 	{phaseInstalling, []string{"image package installation", "installing package "}},
-	{phaseGenerating, []string{"installation post-processing", "copying sbom", "creating iso", "iso creation completed", "creating image for bios"}},
-	{phaseDone, []string{"image build completed successfully"}},
+	{phaseGenerating, []string{"installation post-processing", "copying sbom", "creating iso", "iso creation completed", "creating image for bios", "compressing image file"}},
 }
 
 // DetectPhase returns the id of the furthest phase reached across all log lines.
-// Defaults to "preparing" before any marker appears.
+// Defaults to "preparing" before any marker appears. It never returns "done":
+// completion is a property of the build's terminal status, not of its logs.
 func DetectPhase(logs []string) string {
 	reached := phasePreparing
 	for _, line := range logs {
