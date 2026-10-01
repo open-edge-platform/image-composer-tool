@@ -75,7 +75,7 @@ Both are reachable from the web UI's Basic tab under Fed Aero — see the
 
 ## CI coverage
 
-6 of 30 templates here are built on every pull request (via `scripts/build_*.sh`). The others are schema-validated only, so build them locally before opening a PR.
+6 of 31 templates here are built on every pull request (via `scripts/build_*.sh`). The others are schema-validated only, so build them locally before opening a PR.
 
 ---
 

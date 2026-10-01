@@ -52,9 +52,9 @@ disk:
       mountOptions: defaults
 
 # EdgePack ships from a per-suite APT repository (suite name follows the host
-# Ubuntu release; resolute here). Only one repository is needed: the NPU
-# profile, which needs a separate prerequisite repository, is not available
-# on this release yet (see the packages list below).
+# Ubuntu release; resolute here). Only one repository is needed: NPU, IPU and
+# edge-compute-essentials enablement is carried by intel-edge-base-standard
+# itself, so no separate NPU package or prerequisite repository is required.
 packageRepositories:
   # EdgePack base/add-on packages, public signed repository.
   - codename: "resolute"

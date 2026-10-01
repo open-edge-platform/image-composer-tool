@@ -72,9 +72,11 @@ systemConfig:
     enabled: false # kept simple for this showcase; EdgePack itself has no immutability requirement
 
   packages:
-    # ubuntu-server-minimal instead of ubuntu-minimal: this is what
-    # distinguishes a "server" image from a desktop one in this repo's own
-    # reference blueprints, with no desktop/GUI stack pulled in.
+    # systemConfig.packages merges additively with the raw-image defaults,
+    # which already include ubuntu-minimal. Adding ubuntu-server-minimal (and
+    # omitting ubuntu-standard/ubuntu-desktop-minimal) is what distinguishes a
+    # "server" image from a desktop one in this repo's own reference
+    # blueprints, with no desktop/GUI stack pulled in.
     - ubuntu-server-minimal
     - grub-efi-amd64-signed
     - initramfs-tools
