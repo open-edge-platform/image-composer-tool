@@ -58,8 +58,8 @@ disk:
       mountOptions: defaults
 
 # EdgePack ships from a per-suite APT repository (suite name follows the host
-# Ubuntu release: noble for 24.04, resolute for 26.04) plus, for the NPU
-# add-on only, a separate signed prerequisite repository.
+# Ubuntu release: noble for 24.04, resolute for 26.04) plus a separate signed
+# prerequisite repository the base metapackage's NPU profile resolves from.
 packageRepositories:
   # EdgePack base/add-on packages, public signed repository.
   - codename: "noble"
@@ -67,9 +67,11 @@ packageRepositories:
     pkey: "https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB"
     component: "stable"
 
-  # NPU prerequisite snapshot repository, required only because
-  # intel-edge-npu is selected below. Public Launchpad snapshot; safe to use
-  # as-is, but pin/update the snapshot timestamp per EdgePack release notes.
+  # NPU prerequisite snapshot repository, required by the base metapackage
+  # below: intel-edge-base-standard pulls in the NPU profile, whose client GPU
+  # compute runtime is published here rather than in the EdgePack repository.
+  # Public Launchpad snapshot; safe to use as-is, but pin/update the snapshot
+  # timestamp per EdgePack release notes.
   - codename: "noble"
     url: "https://snapshot.ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu/20260606T100000Z"
     pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x0c0e6af955ce463c03fc51574d098d70afbe5e1f"
@@ -98,13 +100,17 @@ systemConfig:
     - openssh-server
     - systemd-resolved
     - systemd-timesyncd
-    # ── EdgePack: mandatory base (core graphics/media + platform-enablement DKMS drivers) ──
+    # ── EdgePack: mandatory base ──
+    # Core graphics/media, the platform-enablement DKMS drivers, and the NPU
+    # (intel-edge-npu), IPU (intel-edge-ipu) and edge-compute-essentials
+    # profiles, all pulled in transitively. None of those three is listed
+    # separately: naming a package the base already installs adds nothing but a
+    # second place to keep in step with the metapackage.
     - intel-edge-base-standard
     # ── EdgePack: optional add-ons, shown enabled here for demonstration ──
     - intel-edge-media-ffmpeg # FFmpeg with Intel GPU support
     - intel-edge-media-gst # GStreamer with Intel GPU support
     - intel-edge-manageability # vPRO manageability
-    - intel-edge-npu # NPU enablement; Noble-only, needs the prerequisite repo below
     # intel-edge-base-realtime is the alternative base profile but is currently
     # disabled for all OS variants upstream, so it is intentionally omitted here.
 

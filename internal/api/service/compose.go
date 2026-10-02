@@ -268,7 +268,7 @@ func (s *Service) deltaForOverride(parentTmpl, parentPath string, sel Selection)
 	if err != nil {
 		return "", nil, nil, fmt.Errorf("loading parent template: %w", err)
 	}
-	data, err = buildDelta(parentTmpl, parent.Image, parent.Target, sel, s.toTemplateRepos(sel.OS, sel.Repos))
+	data, err = buildDelta(parentTmpl, parent.Image, parent.Target, sel, s.toTemplateRepos(sel.OS, sel.Repos), s.edgePackNameSet())
 	if err != nil {
 		return "", nil, nil, err
 	}

@@ -229,6 +229,7 @@ func fromEdgePack(p *service.EdgePack) httpapi.EdgePack {
 			Package:           fromEdgePackPackage(r.Package),
 			Available:         r.Available,
 			UnavailableReason: optStr(r.UnavailableReason),
+			RequiresRepos:     optStrs(r.RequiresRepos),
 		}
 	}
 	for i, d := range p.Domains {

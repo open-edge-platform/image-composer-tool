@@ -216,7 +216,7 @@ func TestBuildDeltaEmitsDiskVerbatim(t *testing.T) {
 	parentTarget := config.TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
 
 	data, err := buildDelta("parent.yml", parentImage, parentTarget,
-		Selection{Disk: rawDisk()}, nil)
+		Selection{Disk: rawDisk()}, nil, nil)
 	if err != nil {
 		t.Fatalf("buildDelta: %v", err)
 	}
@@ -249,7 +249,7 @@ func TestBuildDeltaWithoutDiskOmitsTheBlock(t *testing.T) {
 	data, err := buildDelta("parent.yml",
 		config.ImageInfo{Name: "img", Version: "1.0.0"},
 		config.TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"},
-		Selection{ImageName: "renamed"}, nil)
+		Selection{ImageName: "renamed"}, nil, nil)
 	if err != nil {
 		t.Fatalf("buildDelta: %v", err)
 	}

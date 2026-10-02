@@ -42,6 +42,11 @@ type edgePackRuntimeSpec struct {
 	ID          string `json:"id"`
 	DisplayName string `json:"displayName"`
 	Package     string `json:"package"`
+	// RequiresRepos names repo ids this runtime needs in addition to the pack's
+	// own, for the same reason the domain field of the same name exists: the
+	// runtime metapackage pulls in profiles whose dependencies are published
+	// somewhere the pack repository does not carry.
+	RequiresRepos []string `json:"requiresRepos,omitempty"`
 	// Available is a pointer so an omitted key means "available" rather than
 	// the zero value's "unavailable" — the common case must not have to be
 	// spelled out on every entry.
@@ -110,9 +115,15 @@ type EdgePackBaseRuntime struct {
 	DisplayName string
 	Package     EdgePackPackage
 	// Available false means shown but unselectable, with UnavailableReason
-	// always populated to say why.
+	// always populated to say why. False either because the catalog marks the
+	// flavour as not shipped yet, or because a repository it needs is not
+	// offered for this target.
 	Available         bool
 	UnavailableReason string
+	// RequiresRepos are repo ids to enable alongside the pack's own when this
+	// runtime is selected, published to the browser for the same reason the
+	// domains' are: enabling a repository is a client-side action here.
+	RequiresRepos []string
 }
 
 // EdgePackDomain is one capability group.
@@ -179,12 +190,14 @@ func (s *Service) EdgePack(ctx context.Context, osID string) (*EdgePack, error) 
 		RepoAvailable: len(repos) > 0,
 	}
 	for _, r := range spec.BaseRuntimes {
+		available, reason := s.runtimeAvailability(r, osID, offeredIDs)
 		out.BaseRuntimes = append(out.BaseRuntimes, EdgePackBaseRuntime{
 			ID:                r.ID,
 			DisplayName:       r.DisplayName,
 			Package:           meta.packageFor(r.Package),
-			Available:         r.isAvailable(),
-			UnavailableReason: r.UnavailableReason,
+			Available:         available,
+			UnavailableReason: reason,
+			RequiresRepos:     r.RequiresRepos,
 		})
 	}
 	for _, d := range spec.Domains {
@@ -216,13 +229,44 @@ func (s *Service) domainAvailability(d edgePackDomainSpec, osID string, offered 
 	if !d.appliesTo(osID) {
 		return false, fmt.Sprintf("Not published for %s", s.targetLabel(osID))
 	}
-	for _, id := range d.RequiresRepos {
+	if reason := s.missingRepoReason(d.RequiresRepos, osID, offered); reason != "" {
+		return false, reason
+	}
+	return true, ""
+}
+
+// runtimeAvailability decides whether a target can select a base runtime, and
+// says why not when it cannot. The mirror of domainAvailability, including its
+// ordering: the catalog not shipping the flavour at all is reported ahead of a
+// missing prerequisite, because no repository being offered would make a
+// package that does not exist selectable.
+//
+// A runtime is blocked by a missing prerequisite for the same reason a domain
+// is — its metapackage pulls in profiles published elsewhere, so it would
+// select cleanly and then emit a template that cannot resolve at build time.
+// Every domain sits on a runtime, so this gate is the wider of the two: a
+// runtime locked here locks the whole pack for that target.
+func (s *Service) runtimeAvailability(r edgePackRuntimeSpec, osID string, offered map[string]bool) (bool, string) {
+	if !r.isAvailable() {
+		return false, r.UnavailableReason
+	}
+	if reason := s.missingRepoReason(r.RequiresRepos, osID, offered); reason != "" {
+		return false, reason
+	}
+	return true, ""
+}
+
+// missingRepoReason names the first required repository a target does not
+// offer, or returns "" when every one of them is offered. The reason is phrased
+// for display: a control greyed out with no cause reads as a bug.
+func (s *Service) missingRepoReason(requires []string, osID string, offered map[string]bool) string {
+	for _, id := range requires {
 		if !offered[id] {
-			return false, fmt.Sprintf("Needs the %s repository, which is not offered for %s",
+			return fmt.Sprintf("Needs the %s repository, which is not offered for %s",
 				s.repoLabel(id), s.targetLabel(osID))
 		}
 	}
-	return true, ""
+	return ""
 }
 
 // repoIDSet indexes a repo list by id, for membership tests.
@@ -315,8 +359,14 @@ func (s *Service) edgePackMetadata(ctx context.Context, osID string, repos []Pac
 // edgePackNameSet is every package name the pack references, base runtimes
 // included. A name in two domains appears once — this is also what makes the
 // pack-level count a count of unique packages rather than a sum of domains.
+//
+// Empty for a Service built without a catalog, so a caller that only asks
+// "is this an Edge Pack package" gets a clean "no" rather than a panic.
 func (s *Service) edgePackNameSet() map[string]bool {
 	set := make(map[string]bool)
+	if s.edgePack == nil {
+		return set
+	}
 	for _, r := range s.edgePack.BaseRuntimes {
 		set[r.Package] = true
 	}
@@ -402,6 +452,16 @@ func validateEdgePackRuntimes(p edgePackSpec) error {
 			return fmt.Errorf("edge pack %q: base runtime %q: unavailable with no unavailableReason", p.ID, r.ID)
 		}
 		seen[r.ID] = true
+		for j, id := range r.RequiresRepos {
+			// The same trap as on a domain: an empty id resolves to no
+			// repository and silently drops the prerequisite that requiresRepos
+			// exists to guarantee. Whether the id names a real repo is asserted
+			// by the drift guard in edgepack_test.go.
+			if id == "" {
+				return fmt.Errorf("edge pack %q: base runtime %q: requiresRepos %d is empty",
+					p.ID, r.ID, j)
+			}
+		}
 		if r.isAvailable() {
 			available++
 		}

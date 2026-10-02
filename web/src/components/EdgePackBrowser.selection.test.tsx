@@ -18,7 +18,13 @@ const pack: EdgePack = {
   repo: 'intel-eci',
   repoAvailable: true,
   baseRuntimes: [
-    { id: 'standard', displayName: 'Standard', available: true, package: { name: 'base-standard' } },
+    {
+      id: 'standard',
+      displayName: 'Standard',
+      available: true,
+      requiresRepos: ['intel-graphics'],
+      package: { name: 'base-standard' },
+    },
     {
       id: 'realtime',
       displayName: 'Real-time',
@@ -141,6 +147,41 @@ describe('keyboard on a domain card', () => {
     fireEvent.keyDown(card, { key: 'Enter', code: 'Enter' })
 
     expect(card.getAttribute('aria-expanded')).toBe('true')
+  })
+})
+
+describe('the base runtime and its prerequisite repositories', () => {
+  it('enables the runtime prerequisite alongside the pack repository', () => {
+    // The base metapackage pulls in profiles published elsewhere, so a
+    // selection of nothing but the runtime still has to switch that repository
+    // on — otherwise the build fails resolving what the base installs.
+    render(browser())
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /Standard/ }))
+
+    expect(useStore.getState().enabledRepos).toEqual(
+      expect.arrayContaining(['intel-eci', 'intel-graphics']),
+    )
+  })
+
+  it('leaves the prerequisite enabled after the runtime is unticked', () => {
+    // Enabling-only, as everywhere else on this tab: the repository may have
+    // been switched on from the Repositories tab for something this tab cannot
+    // see.
+    useStore.setState({
+      addedPackages: [{ name: 'base-standard', version: '', repo: 'intel-eci' }],
+      enabledRepos: ['intel-eci', 'intel-graphics'],
+    })
+    render(browser())
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /Standard/ }))
+
+    expect(useStore.getState().enabledRepos).toContain('intel-graphics')
+  })
+
+  it('names the prerequisite before anything is picked', () => {
+    render(browser())
+    expect(screen.getByText(/Also enables intel-graphics/)).toBeTruthy()
   })
 })
 

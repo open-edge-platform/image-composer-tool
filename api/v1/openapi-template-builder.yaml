@@ -912,11 +912,25 @@ components:
           type: boolean
           description: |
             False means shown but unselectable — a flavour with no shipped
-            package or qualified hardware yet. `unavailableReason` is always
-            populated when this is false.
+            package or qualified hardware yet, or one whose `requiresRepos` are
+            not offered for this target. `unavailableReason` is always populated
+            when this is false.
         unavailableReason:
           type: string
           example: Real-time packages and a qualified SKU are not available yet
+        requiresRepos:
+          type: array
+          description: |
+            Repository ids to enable alongside the pack's own `repo` when this
+            runtime is selected. The runtime metapackage pulls in profiles whose
+            dependencies are published somewhere the pack repository does not
+            carry, and selecting it without those repositories yields a template
+            that cannot resolve at build time. Same contract as
+            `EdgePackDomain.requiresRepos`, and the wider of the two: every
+            domain sits on a runtime.
+          items:
+            type: string
+          example: [intel-graphics]
 
     EdgePackDomain:
       type: object
@@ -925,13 +939,13 @@ components:
       properties:
         id:
           type: string
-          example: npu
+          example: media
         displayName:
           type: string
-          example: NPU
+          example: Media
         description:
           type: string
-          example: Neural Processing Unit enablement.
+          example: FFmpeg and GStreamer built with Intel GPU support.
         available:
           type: boolean
           description: |
@@ -974,13 +988,13 @@ components:
       properties:
         name:
           type: string
-          example: intel-edge-npu
+          example: intel-edge-media-gst
         description:
           type: string
-          example: Intel NPU driver stack and Level Zero runtime
+          example: GStreamer plugins built with Intel GPU support
         version:
           type: string
-          example: "1.15.1-0intel1"
+          example: "1.24.9-0intel1"
           description: |
             The newest available version. Empty when the pack's repository
             index was unreachable or does not carry the package; the package is

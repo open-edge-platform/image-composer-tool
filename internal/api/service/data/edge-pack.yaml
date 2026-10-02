@@ -34,6 +34,14 @@
 #     id               stable identifier
 #     displayName      label shown in the Base Runtime selector
 #     package          the package name selecting this runtime adds
+#     requiresRepos    extra package-repos.yaml repo ids this runtime's package
+#                      needs on top of `repo`, enabled alongside it when the
+#                      runtime is selected. Same contract as the domain field of
+#                      the same name below, for the same reason: the runtime
+#                      metapackage pulls in profiles whose dependencies live in a
+#                      repository the pack itself does not carry, and a runtime
+#                      is reported unavailable when one of these is not offered
+#                      for the target. edgepack_test.go asserts these ids exist.
 #     available        false shows the option but leaves it unselectable.
 #                      Omitted means true.
 #     unavailableReason  why it is unselectable; shown to the user. Required
@@ -75,15 +83,36 @@ pack:
   repo: edgepack
 
   baseRuntimes:
+    # The standard base is more than graphics and media: it pulls in the NPU
+    # (intel-edge-npu), IPU (intel-edge-ipu) and edge-compute-essentials
+    # profiles as well. None of those is a domain below, because none of them is
+    # a choice — they arrive with the runtime, and offering them as domains would
+    # invite a user to untick a capability the base installs regardless.
+    #
+    # It is also why the Intel graphics PPA is a prerequisite of the runtime
+    # rather than of a domain: the NPU packages inside the base depend on the
+    # client GPU compute runtime published there, not in the pack repo. Naming it
+    # here is what keeps a template that selects nothing but the base resolvable
+    # — see requiresRepos.
+    #
+    # Deliberately NOT enumerating the rest of what the metapackage pulls in:
+    # those Depends are owned by its Debian control file, and restating them here
+    # would be a second, silently drifting copy.
     - id: standard
       displayName: Standard
       package: intel-edge-base-standard
+      requiresRepos: [intel-graphics]
     - id: realtime
       displayName: Real-time
       package: intel-edge-base-realtime
       available: false
       unavailableReason: Real-time packages and a qualified SKU are not available yet
 
+  # Only the capabilities a user can genuinely decline are domains. Everything
+  # the standard base installs on its own — NPU, IPU, edge-compute-essentials,
+  # the graphics and media cores — is deliberately absent: a domain is a choice,
+  # and presenting a mandatory capability as one would let it be unticked in the
+  # UI while the base metapackage installed it anyway.
   domains:
     - id: media
       displayName: Media
@@ -91,25 +120,6 @@ pack:
       packages:
         - intel-edge-media-ffmpeg
         - intel-edge-media-gst
-
-    # NPU is published only for the Noble EdgePack suite, so it is withheld on
-    # every other target rather than offered and then failing to resolve.
-    #
-    # It also needs the Intel graphics PPA alongside the pack's own repository:
-    # the NPU packages depend on the client GPU compute runtime published there,
-    # not in the pack repo. Naming it here rather than leaving it to the user is
-    # what keeps a template that selects NPU resolvable — see requiresRepos.
-    #
-    # Deliberately NOT describing what the metapackage pulls in: those Depends
-    # are owned by its Debian control file, and restating them here would
-    # be a second, silently drifting copy.
-    - id: npu
-      displayName: NPU
-      description: Neural Processing Unit enablement.
-      os: [ubuntu24]
-      requiresRepos: [intel-graphics]
-      packages:
-        - intel-edge-npu
 
     - id: manageability
       displayName: Manageability
