@@ -111,7 +111,6 @@ systemConfig:
     - language-pack-gnome-en-base
     - python3-netifaces
     - shim-signed
-    - gdm3
     - wget
     - cron
     - network-manager

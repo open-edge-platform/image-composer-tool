@@ -109,7 +109,6 @@ systemConfig:
     - language-pack-gnome-en
     - language-pack-gnome-en-base
     - shim-signed
-    - gdm3
     - wget
     - cron
     - network-manager
