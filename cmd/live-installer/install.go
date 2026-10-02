@@ -418,12 +418,33 @@ func createNewBootEntry(template *config.ImageTemplate, diskPathIdMap map[string
 	return nil
 }
 
-func hydrateSBOMMetadataForInstaller(template *config.ImageTemplate) {
-	if template == nil {
+// hydrateSBOMMetadataForInstaller restores the per-package SBOM metadata the
+// installed system's SPDX document is built from. FullPkgListBom is not
+// serialized, so after loading template-dump.yaml it is empty and has to be
+// refilled from what the ISO carries.
+//
+// templateFile is the template that was just loaded; the metadata sidecar sits
+// beside it. An ISO built before the sidecar existed carries the same payload
+// inline in the template's sbomPackageMetadata field instead, so that is tried
+// second — without it, such an ISO would silently fall back to a names-only
+// inventory and emit a thinner SBOM than the image it was built from.
+func hydrateSBOMMetadataForInstaller(template *config.ImageTemplate, templateFile string) {
+	if template == nil || len(template.FullPkgListBom) > 0 {
 		return
 	}
 
-	if len(template.FullPkgListBom) == 0 && len(template.SBOMPackageMetadata) > 0 {
+	sidecarPath := filepath.Join(filepath.Dir(templateFile), config.SBOMMetadataFileName)
+	pkgs, err := config.ReadSBOMMetadataSidecar(sidecarPath)
+	if err != nil {
+		log.Warnf("Failed to read SBOM metadata sidecar %s: %v", sidecarPath, err)
+	}
+	if len(pkgs) > 0 {
+		template.FullPkgListBom = pkgs
+		return
+	}
+
+	if len(template.SBOMPackageMetadata) > 0 {
+		log.Infof("No SBOM metadata sidecar found; using the template's inline metadata")
 		template.FullPkgListBom = template.SBOMPackageMetadata
 	}
 }
@@ -440,7 +461,7 @@ func unattendedInstall(templateFile, localRepo string) error {
 	if err != nil {
 		return fmt.Errorf("failed to load template: %w", err)
 	}
-	hydrateSBOMMetadataForInstaller(template)
+	hydrateSBOMMetadataForInstaller(template, templateFile)
 	log.Infof("Loaded template: %s (type: %s)", template.Image.Name, template.Target.ImageType)
 
 	return install(template, configDir, localRepo)
@@ -458,7 +479,7 @@ func attendedInstall(templateFile, localRepo string) (installationQuit bool, err
 	if err != nil {
 		return false, fmt.Errorf("failed to load template: %w", err)
 	}
-	hydrateSBOMMetadataForInstaller(template)
+	hydrateSBOMMetadataForInstaller(template, templateFile)
 	log.Infof("Loaded template: %s (type: %s)", template.Image.Name, template.Target.ImageType)
 
 	attendedInstaller, err := attendedinstaller.New(template, configDir, localRepo, install)
