@@ -261,7 +261,6 @@ func TestBuildDeltaEnablesDkmsForEdgePackSelection(t *testing.T) {
 		"intel-edge-media-ffmpeg",
 		"intel-edge-media-gst",
 		"intel-edge-manageability",
-		"intel-edge-npu",
 	}}
 	data, err := buildDelta("robotics.yml", img, tgt, sel, nil, names)
 	if err != nil {
