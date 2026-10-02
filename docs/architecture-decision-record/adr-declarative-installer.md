@@ -2,7 +2,10 @@
 
 **Status**: Proposed
 **Date**: 2026-04-17
-**Updated**: N/A
+**Updated**: 2026-09-29 — cloud-init injection, proxy, and SSH keys are implemented
+as described in [ADR: Provisioning Settings for the Unattended ISO Installer](./adr-unattended-iso-provisioning.md),
+with two deviations from this proposal: the proxy is `systemConfig.proxy` (not
+`systemConfig.network.proxy`), and the NoCloud seed is `/var/lib/cloud/seed/nocloud/`.
 **Authors**: OS Image Composer Team
 **Technical Area**: Provisioning / Live Installer / Security
 

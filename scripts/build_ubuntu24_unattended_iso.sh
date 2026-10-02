@@ -138,11 +138,18 @@ build_ubuntu24_unattended_iso_image() {
   cd "$WORKING_DIR"
   echo "Current working directory: $(pwd)"
 
+  # The template's admin user has sudo access but no credential, and the build
+  # rejects that. A throwaway key, used only by this test, satisfies it.
+  test_key_dir=$(mktemp -d)
+  ssh-keygen -q -t ed25519 -N "" -C ict-unattended-test -f "$test_key_dir/id_ed25519"
+
   # Temporarily disable exit on error for the build command to capture output
   set +e
-  output=$(sudo -S ./build/image-composer-tool build image-templates/ubuntu24/ubuntu24-x86_64-minimal-unattended-iso.yml 2>&1)
+  output=$(sudo -S ./build/image-composer-tool build --ssh-authorized-key "admin=$test_key_dir/id_ed25519.pub" \
+    image-templates/ubuntu24/ubuntu24-x86_64-minimal-unattended-iso.yml 2>&1)
   build_exit_code=$?
   set -e
+  rm -rf "$test_key_dir"
 
   # Check for the success message in the output
   if [ $build_exit_code -eq 0 ] && echo "$output" | grep -q "image build completed successfully"; then

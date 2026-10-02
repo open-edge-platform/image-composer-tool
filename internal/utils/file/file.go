@@ -1,8 +1,11 @@
 package file
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -311,4 +314,22 @@ func CheckDiskSpace(dir string, requiredBytes int64, safetyMarginPercent float64
 	}
 
 	return nil
+}
+
+// SHA256 returns the hex-encoded SHA-256 digest of a file's content.
+func SHA256(path string) (digest string, err error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		if cerr := f.Close(); cerr != nil && err == nil {
+			digest, err = "", fmt.Errorf("closing %s: %w", path, cerr)
+		}
+	}()
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, f); err != nil {
+		return "", fmt.Errorf("reading %s: %w", path, err)
+	}
+	return hex.EncodeToString(hasher.Sum(nil)), nil
 }

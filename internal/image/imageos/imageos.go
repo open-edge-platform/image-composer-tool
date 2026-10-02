@@ -17,6 +17,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/image/imageboot"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/imagedisc"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/imagenetwork"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/imageprovision"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/imagesecure"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/imagesign"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
@@ -1065,8 +1066,16 @@ func updateRootfsConfig(installRoot string, template *config.ImageTemplate) erro
 	if err := createResolvConfSymlink(installRoot, template); err != nil {
 		return fmt.Errorf("failed to create resolv.conf: %w", err)
 	}
+	if err := applyProvisioningConfig(installRoot, template); err != nil {
+		return err
+	}
 	if err := addImageConfigs(installRoot, template); err != nil {
 		return fmt.Errorf("failed to execute customized configurations to image: %w", err)
+	}
+	// Written last: the deployment-site proxy must not apply to the build-time
+	// configurations[] commands, which run with the build host's network.
+	if err := imageprovision.WriteProxyConfig(installRoot, template.SystemConfig.Proxy); err != nil {
+		return fmt.Errorf("failed to configure proxy: %w", err)
 	}
 	return nil
 }
@@ -1096,8 +1105,16 @@ func updateImageConfig(installRoot string, diskPathIdMap map[string]string, temp
 	if err := createResolvConfSymlink(installRoot, template); err != nil {
 		return fmt.Errorf("failed to create resolv.conf: %w", err)
 	}
+	if err := applyProvisioningConfig(installRoot, template); err != nil {
+		return err
+	}
 	if err := addImageConfigs(installRoot, template); err != nil {
 		return fmt.Errorf("failed to execute customized configurations to image: %w", err)
+	}
+	// Written last: the deployment-site proxy must not apply to the build-time
+	// configurations[] commands, which run with the build host's network.
+	if err := imageprovision.WriteProxyConfig(installRoot, template.SystemConfig.Proxy); err != nil {
+		return fmt.Errorf("failed to configure proxy: %w", err)
 	}
 	return nil
 }
@@ -1160,6 +1177,25 @@ func updateImageHostname(installRoot string, template *config.ImageTemplate) err
 			log.Errorf("Failed to set permissions for hostname file %s: %v", hostnameFilePath, err)
 			return fmt.Errorf("failed to set permissions for hostname file %s: %w", hostnameFilePath, err)
 		}
+	}
+	return nil
+}
+
+// applyProvisioningConfig writes the deployed-system cloud-init, provisioning
+// unit, and APT policy settings. It runs after additionalFiles (which carry
+// the scripts and cloud-init seed) and before configurations[].cmd, so
+// template commands can still adjust the result.
+func applyProvisioningConfig(installRoot string, template *config.ImageTemplate) error {
+	sc := template.SystemConfig
+	if err := imageprovision.ConfigureCloudInit(installRoot, sc.CloudInit, sc.HostName); err != nil {
+		return fmt.Errorf("failed to configure cloud-init: %w", err)
+	}
+	scripts := template.SortedProvisioningScripts()
+	if err := imageprovision.ConfigureProvisioningScripts(installRoot, scripts); err != nil {
+		return fmt.Errorf("failed to configure provisioning scripts: %w", err)
+	}
+	if err := imageprovision.WriteAptPolicy(installRoot, template); err != nil {
+		return fmt.Errorf("failed to configure apt upgrade policy: %w", err)
 	}
 	return nil
 }
@@ -1337,83 +1373,65 @@ func addImageConfigs(installRoot string, template *config.ImageTemplate) error {
 }
 
 func updateImageFstab(installRoot string, diskPathIdMap map[string]string, template *config.ImageTemplate) error {
-	const (
-		rootfsMountPoint = "/"
-		defaultOptions   = "defaults"
-		swapOptions      = "sw"
-		defaultDump      = "0"
-		disablePass      = "0"
-		rootPass         = "1"
-		defaultPass      = "2"
-	)
 	log.Infof("Updating fstab for image: %s", template.GetImageName())
 	fstabFullPath := filepath.Join(installRoot, "etc", "fstab")
-	diskInfo := template.GetDiskConfig()
-	partitions := diskInfo.Partitions
-	for diskId, diskPath := range diskPathIdMap {
-		for _, partition := range partitions {
-			if partition.ID == diskId {
-				// Get the partition UUID and mount point
-				partUUID, err := imagedisc.GetPartUUID(diskPath)
-				if err != nil {
-					return fmt.Errorf("failed to get partition UUID for %s: %w", diskPath, err)
-				}
-				mountId := fmt.Sprintf("PARTUUID=%s", partUUID)
-				mountPoint := partition.MountPoint
-
-				// FDE-encrypted non-root partitions become LUKS containers, so
-				// their raw PARTUUID no longer resolves to a mountable filesystem.
-				// They are unlocked via /etc/crypttab into /dev/mapper/<id> at
-				// boot, so mount that mapper instead. The root volume is wired
-				// separately through the kernel command line.
-				if template.IsFDEEnabled() && template.IsFDEPartition(partition.ID) &&
-					mountPoint != rootfsMountPoint {
-					mountId = filepath.Join("/dev/mapper", partition.ID)
-				}
-
-				// Get the filesystem type
-				var fsType, options, pass string
-				if partition.FsType == "fat16" || partition.FsType == "fat32" {
-					fsType = "vfat"
-				} else {
-					fsType = partition.FsType
-				}
-
-				// Get the mount options
-				options = defaultOptions
-				if partition.MountOptions != "" {
-					options = partition.MountOptions
-				}
-
-				// Get the default dump and pass values
-				pass = defaultPass
-				if mountPoint == rootfsMountPoint {
-					pass = rootPass
-				}
-
-				if isSwapFsType(fsType) {
-					fsType = "swap"
-					if strings.TrimSpace(mountPoint) == "" {
-						mountPoint = "none"
-					}
-
-					// For swap partitions, set the options accordingly
-					options = swapOptions
-					pass = disablePass // No pass value for swap
-				}
-
-				newEntry := fmt.Sprintf("%v %v %v %v %v %v\n",
-					mountId, mountPoint, fsType, options, defaultDump, pass)
-				log.Debugf("Adding fstab entry: %s", newEntry)
-				err = file.Append(newEntry, fstabFullPath)
-				if err != nil {
-					log.Errorf("Failed to append fstab entry for %s: %v", mountPoint, err)
-					return fmt.Errorf("failed to append fstab entry for %s: %w", mountPoint, err)
-				}
-			}
+	// Iterate in template order so the generated fstab is deterministic.
+	for _, partition := range template.GetDiskConfig().Partitions {
+		diskPath, ok := diskPathIdMap[partition.ID]
+		if !ok {
+			continue
+		}
+		mountPoint := strings.TrimSpace(partition.MountPoint)
+		if !isSwapFsType(partition.FsType) && (mountPoint == "" || mountPoint == "none") {
+			// An unmounted data/application partition needs no fstab entry;
+			// writing one with an empty mount point would corrupt fstab.
+			log.Debugf("Partition %s has no mount point, skipping fstab entry", partition.ID)
+			continue
+		}
+		partUUID, err := imagedisc.GetPartUUID(diskPath)
+		if err != nil {
+			return fmt.Errorf("failed to get partition UUID for %s: %w", diskPath, err)
+		}
+		mountId := fmt.Sprintf("PARTUUID=%s", partUUID)
+		// FDE-encrypted non-root partitions become LUKS containers, so
+		// their raw PARTUUID no longer resolves to a mountable filesystem.
+		// They are unlocked via /etc/crypttab into /dev/mapper/<id> at
+		// boot, so mount that mapper instead. The root volume is wired
+		// separately through the kernel command line.
+		if template.IsFDEEnabled() && template.IsFDEPartition(partition.ID) && mountPoint != "/" {
+			mountId = filepath.Join("/dev/mapper", partition.ID)
+		}
+		newEntry := fstabEntry(mountId, mountPoint, partition)
+		log.Debugf("Adding fstab entry: %s", newEntry)
+		if err := file.Append(newEntry, fstabFullPath); err != nil {
+			log.Errorf("Failed to append fstab entry for %s: %v", mountPoint, err)
+			return fmt.Errorf("failed to append fstab entry for %s: %w", mountPoint, err)
 		}
 	}
 	return nil
+}
+
+// fstabEntry formats one fstab line for a partition.
+func fstabEntry(mountId, mountPoint string, partition config.PartitionInfo) string {
+	fsType := partition.FsType
+	if fsType == "fat16" || fsType == "fat32" {
+		fsType = "vfat"
+	}
+	options := "defaults"
+	if partition.MountOptions != "" {
+		options = partition.MountOptions
+	}
+	pass := "2"
+	if mountPoint == "/" {
+		pass = "1"
+	}
+	if isSwapFsType(fsType) {
+		fsType, options, pass = "swap", "sw", "0"
+		if mountPoint == "" {
+			mountPoint = "none"
+		}
+	}
+	return fmt.Sprintf("%v %v %v %v %v %v\n", mountId, mountPoint, fsType, options, "0", pass)
 }
 
 func createResolvConfSymlink(installRoot string, template *config.ImageTemplate) error {
@@ -2085,17 +2103,12 @@ func createUser(installRoot string, template *config.ImageTemplate) error {
 	for _, user := range template.SystemConfig.Users {
 		log.Infof("Creating user: %s", user.Name)
 
-		// Create the user with useradd command
-		// -m creates home directory, -s sets shell
-		cmd := fmt.Sprintf("useradd -m -s /bin/bash %s", user.Name)
-		output, err := shell.ExecCmdSilent(cmd, true, installRoot, nil)
-		if err != nil {
-			if strings.Contains(output, "already exists") {
-				log.Warnf("User %s already exists", user.Name)
-			} else {
-				log.Errorf("Failed to create user %s: output: %s, err: %v", user.Name, output, err)
-				return fmt.Errorf("failed to create user %s: output: %s, err: %w", user.Name, output, err)
-			}
+		if err := config.ValidateUserCredentials([]config.UserConfig{user}); err != nil {
+			return err
+		}
+
+		if err := addOrUpdateUserAccount(installRoot, user); err != nil {
+			return err
 		}
 
 		// Set password if provided
@@ -2103,13 +2116,12 @@ func createUser(installRoot string, template *config.ImageTemplate) error {
 			if err := setUserPassword(installRoot, user); err != nil {
 				return fmt.Errorf("failed to set password for user %s: %w", user.Name, err)
 			}
-		} else {
-			cmd := fmt.Sprintf("passwd -d %s", user.Name)
-			if _, err := shell.ExecCmd(cmd, true, installRoot, nil); err != nil {
-				log.Errorf("Failed to delete password for user %s: %v", user.Name, err)
-				return fmt.Errorf("failed to delete password for user %s: %w", user.Name, err)
-			}
-			log.Debugf("Deleted password for user %s (no password set)", user.Name)
+		} else if err := clearUserPassword(installRoot, user); err != nil {
+			return err
+		}
+
+		if err := setPasswordMaxAge(installRoot, user); err != nil {
+			return err
 		}
 
 		// Collect requested groups and auto-add sudo groups when needed
@@ -2138,9 +2150,95 @@ func createUser(installRoot string, template *config.ImageTemplate) error {
 			}
 		}
 
+		if err := imageprovision.WriteAuthorizedKeys(installRoot, user); err != nil {
+			return fmt.Errorf("failed to install SSH authorized keys for user %s: %w", user.Name, err)
+		}
+
 		log.Infof("User %s created successfully", user.Name)
 	}
 
+	if err := imageprovision.WriteKeyOnlySudoers(installRoot, template.SystemConfig.Users); err != nil {
+		return fmt.Errorf("failed to configure sudo for key-only users: %w", err)
+	}
+	return nil
+}
+
+// clearUserPassword handles an account with no password in the template. An
+// account with SSH authorized keys is locked (`passwd -l`), so it is
+// reachable only through those keys. Any other account has its password
+// deleted, which allows a passwordless local login.
+func clearUserPassword(installRoot string, user config.UserConfig) error {
+	if len(user.SSHAuthorizedKeys) > 0 {
+		cmd := fmt.Sprintf("passwd -l %s", user.Name)
+		if _, err := shell.ExecCmd(cmd, true, installRoot, nil); err != nil {
+			return fmt.Errorf("failed to lock password for user %s: %w", user.Name, err)
+		}
+		log.Debugf("Locked password for user %s (SSH key login only)", user.Name)
+		return nil
+	}
+	cmd := fmt.Sprintf("passwd -d %s", user.Name)
+	if _, err := shell.ExecCmd(cmd, true, installRoot, nil); err != nil {
+		log.Errorf("Failed to delete password for user %s: %v", user.Name, err)
+		return fmt.Errorf("failed to delete password for user %s: %w", user.Name, err)
+	}
+	log.Debugf("Deleted password for user %s (no password set)", user.Name)
+	return nil
+}
+
+// setPasswordMaxAge applies passwordMaxAge when the template sets it. An explicit
+// 0 means no limit and runs `passwd -x -1`, so it also overrides a finite
+// PASS_MAX_DAYS that the image's login defaults or an existing account carry.
+func setPasswordMaxAge(installRoot string, user config.UserConfig) error {
+	if user.PasswordMaxAge == nil {
+		return nil
+	}
+	days := *user.PasswordMaxAge
+	if days == 0 {
+		days = -1
+	}
+	cmd := fmt.Sprintf("passwd -x %d %s", days, user.Name)
+	if _, err := shell.ExecCmd(cmd, true, installRoot, nil); err != nil {
+		return fmt.Errorf("failed to set password max age for user %s: %w", user.Name, err)
+	}
+	return nil
+}
+
+// defaultUserShell is the login shell used when the template sets none.
+const defaultUserShell = "/bin/bash"
+
+// addOrUpdateUserAccount creates the account with the configured shell and
+// home directory. An account that already exists in the image (for example
+// root) keeps its home, but gets the configured shell.
+func addOrUpdateUserAccount(installRoot string, user config.UserConfig) error {
+	loginShell := defaultUserShell
+	if user.Shell != "" {
+		loginShell = user.Shell
+	}
+	cmd := fmt.Sprintf("useradd -m -s %s", shell.QuoteArg(loginShell))
+	if user.Home != "" {
+		cmd += " -d " + shell.QuoteArg(user.Home)
+	}
+	cmd += " " + user.Name
+	output, err := shell.ExecCmdSilent(cmd, true, installRoot, nil)
+	if err == nil {
+		return nil
+	}
+	if !strings.Contains(output, "already exists") {
+		log.Errorf("Failed to create user %s: output: %s, err: %v", user.Name, output, err)
+		return fmt.Errorf("failed to create user %s: output: %s, err: %w", user.Name, output, err)
+	}
+	log.Warnf("User %s already exists", user.Name)
+	if user.Home != "" {
+		log.Warnf("Keeping the existing home directory of user %s; home %s is only applied to new accounts",
+			user.Name, user.Home)
+	}
+	if user.Shell == "" {
+		return nil
+	}
+	usermodCmd := fmt.Sprintf("usermod -s %s %s", shell.QuoteArg(user.Shell), user.Name)
+	if _, err := shell.ExecCmd(usermodCmd, true, installRoot, nil); err != nil {
+		return fmt.Errorf("failed to set shell for existing user %s: %w", user.Name, err)
+	}
 	return nil
 }
 
@@ -2203,12 +2301,15 @@ func defaultSudoGroups(template *config.ImageTemplate) []string {
 
 // Helper function to set user password based on hash algorithm
 func setUserPassword(installRoot string, user config.UserConfig) error {
-	// Check if password is already hashed or needs hashing
-	if user.HashAlgo != "" {
+	// A complete crypt(3) hash is set as-is, whatever hash_algo says. With
+	// hash_algo unset this matters: mergeUserConfig clears hash_algo for
+	// "$..." values, and feeding the hash to passwd would make it the literal
+	// password. Anything that is not a complete hash is treated as plaintext.
+	preHashed := config.IsCryptHash(user.Password)
+	if user.HashAlgo != "" || preHashed {
 		log.Debugf("Setting password with hash algorithm %s for user %s", user.HashAlgo, user.Name)
 
-		// Check if password is already in hashed format (starts with $)
-		if strings.HasPrefix(user.Password, "$") {
+		if preHashed {
 			// Password is already hashed, use usermod to set it directly. The hash is
 			// template-supplied data, so quote it to keep shell metacharacters inert.
 			usermodCmd := fmt.Sprintf("usermod -p %s %s", shell.QuoteArg(user.Password), user.Name)
@@ -2378,15 +2479,21 @@ func replacePasswdShell(content, name, shellPath string) (string, error) {
 	return strings.Join(lines, "\n"), nil
 }
 
+// SBOMFileName returns the SPDX file name for an image of the given package type.
+func SBOMFileName(pkgType, imageName string) string {
+	if pkgType == "deb" {
+		return debutils.GenerateSPDXFileName(imageName)
+	}
+	return rpmutils.GenerateSPDXFileName(imageName)
+}
+
 func (imageOs *ImageOs) generateSBOM(installRoot string, template *config.ImageTemplate) (string, error) {
 	pkgType := imageOs.chrootEnv.GetTargetOsPkgType()
-	sBomFNm := rpmutils.GenerateSPDXFileName(template.GetImageName())
 	cmd := "rpm -qa"
 	if pkgType == "deb" {
 		cmd = "dpkg -l | awk '/^ii/ {print $2}'"
-		sBomFNm = debutils.GenerateSPDXFileName(template.GetImageName())
 	}
-	manifest.DefaultSPDXFile = sBomFNm
+	manifest.DefaultSPDXFile = SBOMFileName(pkgType, template.GetImageName())
 
 	result, err := shell.ExecCmd(cmd, true, installRoot, nil)
 	if err != nil {

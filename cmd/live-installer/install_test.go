@@ -323,10 +323,10 @@ func TestInstall_MissingConfigDir(t *testing.T) {
 	}
 }
 
-func TestRemoveOldBootEntries_NoEfibootmgr(t *testing.T) {
+func TestOldBootEntries_NoEfibootmgr(t *testing.T) {
 	// This test checks if the function handles missing efibootmgr gracefully
 	// The test may fail if efibootmgr is not available (expected behavior)
-	err := removeOldBootEntries()
+	_, err := oldBootEntries()
 
 	// We accept both success (if efibootmgr exists) or a specific error
 	if err != nil {

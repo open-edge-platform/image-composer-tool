@@ -13,6 +13,14 @@ import (
 
 func intPtr(v int) *int { return &v }
 
+// derefInt returns the pointed-to value, or nil, for readable failure messages.
+func derefInt(p *int) any {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
 func TestMergeStringSlices(t *testing.T) {
 	defaultSlice := []string{"a", "b", "c"}
 	userSlice := []string{"c", "d", "e"}
@@ -409,7 +417,7 @@ func TestTemplateHelperMethodsWithUsers(t *testing.T) {
 			Description: "Test configuration",
 			Users: []UserConfig{
 				{Name: "testuser", Password: "testpass", HashAlgo: "sha512", Sudo: true},
-				{Name: "admin", Password: "$6$test$hash", Groups: []string{"wheel"}, PasswordMaxAge: 365},
+				{Name: "admin", Password: "$6$test$hash", Groups: []string{"wheel"}, PasswordMaxAge: intPtr(365)},
 			},
 			Packages: []string{"package1", "package2"},
 			Kernel: KernelConfig{
@@ -456,8 +464,8 @@ func TestTemplateHelperMethodsWithUsers(t *testing.T) {
 	if adminUser == nil {
 		t.Errorf("expected to find admin user via systemConfig")
 	} else {
-		if adminUser.PasswordMaxAge != 365 {
-			t.Errorf("expected admin passwordMaxAge to be 365, got %d", adminUser.PasswordMaxAge)
+		if adminUser.PasswordMaxAge == nil || *adminUser.PasswordMaxAge != 365 {
+			t.Errorf("expected admin passwordMaxAge to be 365, got %v", derefInt(adminUser.PasswordMaxAge))
 		}
 	}
 }
@@ -476,7 +484,7 @@ func TestMergeSystemConfigWithUsers(t *testing.T) {
 		Name: "user",
 		Users: []UserConfig{
 			{Name: "newuser", Password: "newpass", HashAlgo: "bcrypt"},
-			{Name: "shared", Password: "usershared", HashAlgo: "sha512", Groups: []string{"user", "admin"}, PasswordMaxAge: 180},
+			{Name: "shared", Password: "usershared", HashAlgo: "sha512", Groups: []string{"user", "admin"}, PasswordMaxAge: intPtr(180)},
 		},
 		Packages: []string{"user-package"},
 	}
@@ -506,8 +514,8 @@ func TestMergeSystemConfigWithUsers(t *testing.T) {
 		if sharedUser.HashAlgo != "sha512" {
 			t.Errorf("expected shared user hash algo 'sha512', got '%s'", sharedUser.HashAlgo)
 		}
-		if sharedUser.PasswordMaxAge != 180 {
-			t.Errorf("expected shared user password max age 180, got %d", sharedUser.PasswordMaxAge)
+		if sharedUser.PasswordMaxAge == nil || *sharedUser.PasswordMaxAge != 180 {
+			t.Errorf("expected shared user password max age 180, got %v", derefInt(sharedUser.PasswordMaxAge))
 		}
 		if len(sharedUser.Groups) != 3 { // default, user, admin merged
 			t.Errorf("expected 3 merged groups for shared user, got %d", len(sharedUser.Groups))
@@ -1821,7 +1829,7 @@ func TestUserConfigValidation(t *testing.T) {
 					Name:           "testuser",
 					Password:       "testpass",
 					HashAlgo:       "sha512",
-					PasswordMaxAge: 90,
+					PasswordMaxAge: intPtr(90),
 					StartupScript:  "/home/testuser/startup.sh",
 					Groups:         []string{"users", "docker"},
 					Sudo:           true,
@@ -1838,8 +1846,8 @@ func TestUserConfigValidation(t *testing.T) {
 	}
 
 	user := users[0]
-	if user.PasswordMaxAge != 90 {
-		t.Errorf("expected password max age 90, got %d", user.PasswordMaxAge)
+	if user.PasswordMaxAge == nil || *user.PasswordMaxAge != 90 {
+		t.Errorf("expected password max age 90, got %v", derefInt(user.PasswordMaxAge))
 	}
 	if user.StartupScript != "/home/testuser/startup.sh" {
 		t.Errorf("expected startup script '/home/testuser/startup.sh', got '%s'", user.StartupScript)
@@ -1926,7 +1934,7 @@ func TestMergeUserConfigBasicFields(t *testing.T) {
 		Name:           "testuser",
 		Password:       "defaultpass",
 		HashAlgo:       "sha256",
-		PasswordMaxAge: 90,
+		PasswordMaxAge: intPtr(90),
 		StartupScript:  "/default/script.sh",
 		Groups:         []string{"default-group"},
 		Sudo:           false,
@@ -1938,7 +1946,7 @@ func TestMergeUserConfigBasicFields(t *testing.T) {
 		Name:           "testuser",
 		Password:       "newpass",
 		HashAlgo:       "sha512",
-		PasswordMaxAge: 180,
+		PasswordMaxAge: intPtr(180),
 		StartupScript:  "/user/script.sh",
 		Groups:         []string{"user-group", "admin"},
 		Sudo:           true,
@@ -1954,8 +1962,8 @@ func TestMergeUserConfigBasicFields(t *testing.T) {
 	if merged.HashAlgo != "sha512" {
 		t.Errorf("expected hash algo 'sha512', got '%s'", merged.HashAlgo)
 	}
-	if merged.PasswordMaxAge != 180 {
-		t.Errorf("expected password max age 180, got %d", merged.PasswordMaxAge)
+	if merged.PasswordMaxAge == nil || *merged.PasswordMaxAge != 180 {
+		t.Errorf("expected password max age 180, got %v", derefInt(merged.PasswordMaxAge))
 	}
 	if merged.StartupScript != "/user/script.sh" {
 		t.Errorf("expected startup script '/user/script.sh', got '%s'", merged.StartupScript)
@@ -1982,18 +1990,30 @@ func TestMergeUserConfigPreHashedPassword(t *testing.T) {
 	}
 
 	// User provides pre-hashed password (starts with $)
+	hash := "$6$saltsalt$" + strings.Repeat("aB0./", 17) + "x"
 	userUser := UserConfig{
 		Name:     "testuser",
-		Password: "$6$salt$hashedpassword",
+		Password: hash,
 	}
 
 	merged := mergeUserConfig(defaultUser, userUser)
 
-	if merged.Password != "$6$salt$hashedpassword" {
+	if merged.Password != hash {
 		t.Errorf("expected pre-hashed password, got '%s'", merged.Password)
 	}
 	if merged.HashAlgo != "" {
 		t.Errorf("expected empty hash algo for pre-hashed password, got '%s'", merged.HashAlgo)
+	}
+}
+
+// A truncated "$..." value is plaintext, so the requested algorithm must
+// survive the merge and hash it instead of it being set as a literal password.
+func TestMergeUserConfigTruncatedHashKeepsAlgo(t *testing.T) {
+	merged := mergeUserConfig(
+		UserConfig{Name: "u"},
+		UserConfig{Name: "u", Password: "$6$salt", HashAlgo: "sha512"})
+	if merged.HashAlgo != "sha512" {
+		t.Errorf("hash algo = %q, want sha512 for a truncated hash", merged.HashAlgo)
 	}
 }
 

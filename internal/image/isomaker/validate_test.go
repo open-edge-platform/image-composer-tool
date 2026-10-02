@@ -215,6 +215,20 @@ func TestValidateAdditionalFiles(t *testing.T) {
 			errorMsg:    "go build -buildmode=pie",
 		},
 		{
+			// A file next to an ancestor of the template dir must resolve, exactly
+			// as GetAdditionalFileInfo resolves it at build time.
+			name: "relative_path_resolves_via_ancestor_dir",
+			template: &config.ImageTemplate{
+				PathList: []string{templatePath},
+				SystemConfig: config.SystemConfig{
+					AdditionalFiles: []config.AdditionalFileInfo{
+						{Local: "attendedinstaller", Final: "/root/attendedinstaller"},
+					},
+				},
+			},
+			expectError: false,
+		},
+		{
 			name: "relative_directory_as_file",
 			template: &config.ImageTemplate{
 				PathList: []string{templatePath},
