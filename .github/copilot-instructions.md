@@ -16,6 +16,9 @@
 6. **Stay in scope.** No drive-by refactors, no new comments/docstrings on code you didn't change, no new abstractions for one-off use.
 7. **Update docs in the same PR** when behavior changes (see [Documentation](#documentation)).
 8. **Never bypass safety gates.** No `--no-verify`, no `git push --force`, no skipping tests. Confirm with the user before destructive or shared-system actions.
+9. **Keep PRs small.** For multi-step features, work on a `feature/<name>` branch and land
+   small, independently reviewable PRs (≤500 LOC) against it rather than one large PR —
+   see [Git Commits & PRs](#git-commits--prs).
 
 ---
 
@@ -201,6 +204,17 @@ If no docs need updating, **say so explicitly in the PR description**.
 - Sign commits: `git commit -S`.
 - **Conventional commits**: `type(scope): description` (`feat`, `fix`, `docs`, `test`, `refactor`, `chore`, `build`, `ci`, `perf`).
 - Branch prefixes: `feature/`, `fix/`, `docs/`, `refactor/`.
+- **Keep PRs small — target ≤500 LOC changed.** For anything larger than a single focused
+  change, do not accumulate it into one PR. Instead:
+  1. Create a `feature/<name>` branch off `main` for the overall effort.
+  2. Break the work into independent, reviewable increments and open a separate small PR
+     for each one **against the feature branch** (not `main`).
+  3. Once all increments are merged into the feature branch and it is validated, open one
+     final PR merging `feature/<name>` into `main`.
+  - This applies especially to AI-assisted work: do not let agent output snowball into a
+    single giant PR just because it was fast to generate. Stop and split the work into
+    separate commits/PRs once a logical unit is complete, even mid-task.
+  - Exception: a small, genuinely atomic fix/feature can go straight to `main` as usual.
 - **Use `.github/PULL_REQUEST_TEMPLATE.md`** for every PR.
 - **Do not** add AI co-author trailers (e.g. `Co-authored-by: Copilot …`) unless the repo explicitly asks for them.
 - **Do not** reference JIRA ticket IDs, internal chat threads, or session/conversation
@@ -233,6 +247,7 @@ This single file is loaded into every chat. Keep it lean — path-specific and w
 - **`.github/hooks/*.json`** — Deterministic lifecycle hooks (not just guidance). Existing:
   - [block-dangerous-git.json](hooks/block-dangerous-git.json) — denies `git push --force`, `--no-verify`, `git reset --hard`
   - [post-edit-checks.json](hooks/post-edit-checks.json) — flags `gofmt` drift on edited `.go` files and schema-validates edited `image-templates/**/*.yml`
+  - [pr-size-warning.json](hooks/pr-size-warning.json) — asks for confirmation before `git push` when the branch diff vs `main` exceeds ~500 LOC
 - **`.github/agents/*.agent.md`** — Custom agent personas with restricted tool sets, selectable from the agent picker or delegated to as subagents. Existing:
   - [reviewer.agent.md](agents/reviewer.agent.md) — read-only code review
   - [provider-scaffolder.agent.md](agents/provider-scaffolder.agent.md) — new/extended OS providers
