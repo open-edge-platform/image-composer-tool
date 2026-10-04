@@ -375,18 +375,19 @@ func fromArtifactList(l *service.ArtifactList) httpapi.ArtifactList {
 
 func fromBuildDetails(d *service.BuildDetails) httpapi.BuildDetails {
 	return httpapi.BuildDetails{
-		BuildId:     d.BuildID,
-		Status:      httpapi.BuildStatus(d.Status),
-		Command:     d.Command,
-		Template:    d.Template,
-		TemplateUrl: d.TemplateURL,
-		WorkDir:     d.WorkDir,
-		CacheDir:    d.CacheDir,
-		Summary:     fromSummary(d.Summary),
-		HasLogFile:  d.HasLogFile,
-		ErrMsg:      optStr(d.ErrMsg),
-		Artifacts:   optArtifacts(d.Artifacts),
-		Residual:    fromResidual(d.Residual),
+		BuildId:      d.BuildID,
+		Status:       httpapi.BuildStatus(d.Status),
+		Command:      d.Command,
+		Template:     d.Template,
+		TemplateUrl:  d.TemplateURL,
+		TemplatePath: optStr(d.TemplatePath),
+		WorkDir:      d.WorkDir,
+		CacheDir:     d.CacheDir,
+		Summary:      fromSummary(d.Summary),
+		HasLogFile:   d.HasLogFile,
+		ErrMsg:       optStr(d.ErrMsg),
+		Artifacts:    optArtifacts(d.Artifacts),
+		Residual:     fromResidual(d.Residual),
 	}
 }
 

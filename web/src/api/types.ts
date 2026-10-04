@@ -308,6 +308,9 @@ export interface BuildDetails {
   command: string
   template: string
   templateUrl: string
+  // On-disk path of the template this build ran against — the archived resolved
+  // copy for an Advanced-mode build, the curated template otherwise.
+  templatePath?: string
   workDir: string
   cacheDir: string
   summary?: ComposeSummary
