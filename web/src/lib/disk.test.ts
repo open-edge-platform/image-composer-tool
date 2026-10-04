@@ -463,7 +463,7 @@ describe('validateDisk', () => {
   it('rejects an artifact with no format', () => {
     const model = seed(minimalPtlPvRaw)
     model.artifacts = [{ key: 'a', type: '', compression: 'gz' }]
-    expect(validateDisk(model).errors).toContain('Output artifact 1 needs a format.')
+    expect(validateDisk(model).errors).toContain('Output artefact 1 needs a format.')
   })
 })
 

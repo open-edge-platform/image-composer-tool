@@ -73,10 +73,11 @@ func IsOutput(name string) bool {
 //
 // Every SBOM the tool produces is SPDX JSON, so the .json extension is required
 // as well as the name marker. Matching the marker anywhere in the basename
-// misclassified a real image whose own name contains it: `image.name` accepts
-// ordinary hyphenated names, so `robotics-sbom` emits `robotics-sbom.raw.gz` —
-// reported as an SBOM, and sorted into the SBOM group, rather than as the image
-// it is.
+// misclassified two different things: a real image whose own name contains it
+// (`image.name` accepts ordinary hyphenated names, so `robotics-sbom` emits
+// `robotics-sbom.raw.gz`, reported as an SBOM and sorted into the SBOM group),
+// and the build directory's own plumbing — "sbom-metadata.yaml", the
+// installer's package metadata sidecar written alongside template-dump.yaml.
 func isSBOM(lower string) bool {
 	if !strings.HasSuffix(lower, ".json") {
 		return false

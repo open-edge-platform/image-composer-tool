@@ -170,7 +170,7 @@ describe('artifact combinations', () => {
   it('requires an artifact for wsl2', () => {
     const model = parseDiskFromYaml(roboticsJazzyIso)!
     expect(validateDisk(model, { imageType: 'wsl2' }).errors).toContain(
-      'A WSL2 image needs exactly one tar artifact with gz compression.',
+      'A WSL2 image needs exactly one tar artefact with gz compression.',
     )
   })
 

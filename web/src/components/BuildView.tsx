@@ -8,7 +8,7 @@ import type {
   ResidualIssue,
 } from '../api/types'
 import { artifactTypeLabel } from '../api/types'
-import { BuildProgress } from './BuildProgress'
+import { BuildProgress, PHASE_DONE, PHASE_INITIAL } from './BuildProgress'
 
 interface BuildViewProps {
   buildId: string
@@ -52,7 +52,7 @@ export function BuildView({
   const [cancelError, setCancelError] = useState<string>('')
   const [details, setDetails] = useState<BuildDetails | null>(null)
   const [detailsOpen, setDetailsOpen] = useState(false)
-  const [phase, setPhase] = useState<string>('preparing')
+  const [phase, setPhase] = useState<string>(PHASE_INITIAL)
   const [install, setInstall] = useState<{ done: number; total: number }>({ done: 0, total: 0 })
   const logRef = useRef<HTMLDivElement>(null)
 
@@ -65,11 +65,12 @@ export function BuildView({
     setCancelError('')
     setDetails(null)
     setDetailsOpen(false)
-    setPhase(isActive ? 'preparing' : 'done')
+    setPhase(isActive ? PHASE_INITIAL : PHASE_DONE)
     setInstall({ done: 0, total: 0 })
 
-    // Fetch the command + resolved template paths for the troubleshoot panel.
-    // Best-effort: a failure here shouldn't disrupt the log stream.
+    // Fetch the configuration summary for the details panel and the template
+    // name/path for its row in the artefacts table. Best-effort: a failure here
+    // shouldn't disrupt the log stream.
     api.buildDetails(buildId).then(setDetails).catch(() => {})
 
     // A history build (not active) doesn't stream logs — pull its final status,
@@ -99,12 +100,22 @@ export function BuildView({
     let es: EventSource | null = null
     let closed = false // set on unmount so a reconnect isn't scheduled after teardown
 
+    // Re-read the build's details on every terminal outcome. It is what makes the
+    // log-file link appear, but it also matters for the template row: an
+    // Advanced-mode build starts out pointing at the generated `extends` delta,
+    // and the server archives that delta and deletes it when the build concludes
+    // — on failure and cancellation as much as on success. Without a refresh the
+    // row would keep offering the pre-finish path, which no longer exists.
+    const refreshDetails = () => {
+      api.buildDetails(buildId).then(setDetails).catch(() => {})
+    }
+
     const finishSuccess = () => {
       setStatus('success')
-      setPhase('done')
+      setPhase(PHASE_DONE)
       onStatusChange('success')
       // Refresh details/artifacts so the log-file link + artifact list appear.
-      api.buildDetails(buildId).then(setDetails).catch(() => {})
+      refreshDetails()
       api.buildArtifacts(buildId).then(setArtifacts).catch(() => {})
     }
     const finishFailed = (msg?: string, arts?: Artifact[], res?: ResidualIssue) => {
@@ -113,6 +124,7 @@ export function BuildView({
       if (arts && arts.length > 0) setArtifacts(arts)
       if (res) setResidual(res)
       onStatusChange('failed')
+      refreshDetails()
     }
     // Report 'cancelled' rather than 'idle': the parent needs the real terminal
     // state to refresh the history row and to show the cancelled nav indicator.
@@ -122,6 +134,7 @@ export function BuildView({
       if (arts && arts.length > 0) setArtifacts(arts)
       if (res) setResidual(res)
       onStatusChange('cancelled')
+      refreshDetails()
     }
 
     const connect = () => {
@@ -137,7 +150,10 @@ export function BuildView({
       })
       es.addEventListener('phase', (e) => {
         const data = JSON.parse((e as MessageEvent).data)
-        if (data.phase) setPhase(data.phase)
+        // PHASE_DONE is owned by the terminal complete/error handlers; honouring
+        // it from the stream would light the whole stepper green while the badge
+        // still says "Composing...".
+        if (data.phase && data.phase !== PHASE_DONE) setPhase(data.phase)
         setInstall({ done: data.installDone ?? 0, total: data.installTotal ?? 0 })
       })
       es.addEventListener('complete', (e) => {
@@ -198,7 +214,42 @@ export function BuildView({
 
   const copyLogs = () => navigator.clipboard.writeText(logs.join('\n'))
   const copyPath = (path: string) => navigator.clipboard.writeText(path)
-  const copyCommand = () => details && navigator.clipboard.writeText(details.command)
+
+  // Rows of the artefacts table: the build's own outputs, plus the template it
+  // ran against. The template is not something the build produced, but it is
+  // what the build is reproducible from, so it is offered beside the outputs
+  // rather than tucked into the details panel. It keeps its own download
+  // endpoint because it lives outside the work dir, which is the only tree the
+  // by-name artifact download will resolve a path in.
+  const artifactRows: {
+    key: string
+    name: string
+    type: string
+    size?: string
+    path?: string
+    href: string
+  }[] = artifacts.map((a) => ({
+    key: a.path,
+    name: a.name,
+    type: a.type,
+    size: a.size,
+    path: a.path,
+    href: `/api/v1/builds/${buildId}/artifacts/${encodeURIComponent(a.name)}`,
+  }))
+  if (details?.template) {
+    // The server hands the outputs over already ordered, images first and the
+    // SBOM last. The template goes in ahead of the first SBOM rather than at the
+    // end, so the SBOM stays the final row it is everywhere else; with no SBOM
+    // among the outputs the template lands last on its own.
+    const firstSbom = artifactRows.findIndex((r) => r.type === 'sbom')
+    artifactRows.splice(firstSbom === -1 ? artifactRows.length : firstSbom, 0, {
+      key: `template:${details.template}`,
+      name: details.template,
+      type: 'template',
+      path: details.templatePath,
+      href: api.templateUrl(buildId),
+    })
+  }
 
   // The selection this build was started from, echoed back by the server in its
   // summary. Retry submits this rather than the current Basic-tab selection, so
@@ -347,10 +398,14 @@ export function BuildView({
         </div>
       )}
 
-      {/* Collapsible troubleshoot panel: the exact command, the resolved template
-          (downloadable), and the per-build work/cache directories. Collapsed by
-          default so it doesn't compete with the log for space. */}
-      {details && (
+      {/* Collapsible panel describing what was composed: the cascade selection
+          and the resolved image configuration. Collapsed by default so it
+          doesn't compete with the log for space. The template this build ran
+          against is listed in the artifacts table below instead.
+          Rendered only when there is a summary to show — a YAML-submitted build
+          has none, and an expandable that opens onto nothing is worse than no
+          expandable. */}
+      {details?.summary && (
         <div className="mb-2 rounded-md border border-slate-200 bg-slate-50">
           <button
             className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-slate-600 hover:bg-slate-100"
@@ -359,7 +414,7 @@ export function BuildView({
           >
             <span className="text-slate-400">{detailsOpen ? '▼' : '▶'}</span>
             Compose details
-            <span className="font-normal text-slate-400">— command, template, paths</span>
+            <span className="font-normal text-slate-400">— your selection, image configuration</span>
           </button>
           {detailsOpen && (
             <div className="space-y-4 border-t border-slate-200 px-3 py-3 text-xs">
@@ -411,37 +466,6 @@ export function BuildView({
                 </div>
               )}
 
-              {/* Command */}
-              <div>
-                <div className="mb-1 flex items-center gap-2">
-                  <span className="font-semibold text-slate-600">Command</span>
-                  <button
-                    className="ml-auto flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-0.5 text-[11px] text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-                    title="Copy command to clipboard"
-                    onClick={copyCommand}
-                  >
-                    <CopyIcon className="h-3.5 w-3.5" />
-                    Copy
-                  </button>
-                </div>
-                <pre className="overflow-x-auto rounded bg-[#00285a] p-2 font-mono text-[11px] leading-relaxed text-slate-100">
-                  {details.command}
-                </pre>
-              </div>
-
-              {/* Template */}
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-slate-600">Template</span>
-                <span className="font-mono text-slate-700">{details.template}</span>
-                <a
-                  className="rounded p-1 text-slate-500 hover:bg-slate-200 hover:text-slate-700"
-                  href={api.templateUrl(buildId)}
-                  download={details.template}
-                  title="Download template"
-                >
-                  <DownloadIcon className="h-4 w-4" />
-                </a>
-              </div>
             </div>
           )}
         </div>
@@ -497,10 +521,10 @@ export function BuildView({
         </div>
       </div>
 
-      {artifacts.length > 0 && (
+      {artifactRows.length > 0 && (
         <div className="mt-4">
           <h3 className="mb-2 text-sm font-semibold text-[#00285a]">
-            {status === 'failed' || status === 'cancelled' ? 'Partial artifacts' : 'Artifacts'}
+            {status === 'failed' || status === 'cancelled' ? 'Partial artefacts' : 'Artefacts'}
           </h3>
           {(status === 'failed' || status === 'cancelled') && (
             <p className="mb-2 text-xs text-slate-500">
@@ -519,27 +543,31 @@ export function BuildView({
               </tr>
             </thead>
             <tbody>
-              {artifacts.map((a) => (
-                <tr key={a.path} className="border-b border-slate-200">
+              {artifactRows.map((a) => (
+                <tr key={a.key} className="border-b border-slate-200">
                   <td className="px-3 py-2 font-mono text-xs">{a.name}</td>
                   <td className="px-3 py-2">{artifactTypeLabel(a.type)}</td>
                   <td className="px-3 py-2 whitespace-nowrap text-slate-600">{a.size || '—'}</td>
                   <td className="px-3 py-2">
                     {/* Click path (or hover copy icon) to copy to clipboard */}
-                    <button
-                      className="group flex max-w-full items-center gap-1.5 text-left font-mono text-xs text-slate-500 hover:text-slate-800"
-                      title="Click to copy path"
-                      onClick={() => copyPath(a.path)}
-                    >
-                      <span className="break-all">{a.path}</span>
-                      <CopyIcon className="h-3.5 w-3.5 shrink-0 opacity-0 transition group-hover:opacity-100" />
-                    </button>
+                    {a.path ? (
+                      <button
+                        className="group flex max-w-full items-center gap-1.5 text-left font-mono text-xs text-slate-500 hover:text-slate-800"
+                        title="Click to copy path"
+                        onClick={() => copyPath(a.path as string)}
+                      >
+                        <span className="break-all">{a.path}</span>
+                        <CopyIcon className="h-3.5 w-3.5 shrink-0 opacity-0 transition group-hover:opacity-100" />
+                      </button>
+                    ) : (
+                      <span className="font-mono text-xs text-slate-400">—</span>
+                    )}
                   </td>
                   <td className="px-3 py-2 text-right">
                     <a
                       className="inline-flex rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
-                      title="Download artifact"
-                      href={`/api/v1/builds/${buildId}/artifacts/${encodeURIComponent(a.name)}`}
+                      title="Download artefact"
+                      href={a.href}
                       download={a.name}
                     >
                       <DownloadIcon className="h-4 w-4" />
