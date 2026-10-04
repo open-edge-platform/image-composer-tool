@@ -14,6 +14,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/config/manifest"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/imageos"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/initrdmaker"
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/file"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
@@ -299,21 +300,58 @@ func (isoMaker *IsoMaker) copyConfigFilesToIso(template *config.ImageTemplate, i
 		}
 	}
 	template.SystemConfig.AdditionalFiles = PathUpdatedList
-	template.SBOMPackageMetadata = template.FullPkgListBom
 
-	// Dump updated template to ISO
+	// Dump updated template to ISO. The per-package SBOM metadata the installer
+	// needs travels in a sidecar rather than inside this file, so the dump stays
+	// a readable template instead of a template followed by thousands of lines
+	// of package records.
+	sbomMetadata := takeSBOMMetadata(template)
+
+	defaultConfigsDir := filepath.Join(osvConfigDestDir, "imageconfigs", "defaultconfigs")
 	templateDumpFilePath := filepath.Join(isoMaker.ImageBuildDir, "template-dump.yaml")
 	if err := template.SaveUpdatedConfigFile(templateDumpFilePath); err != nil {
 		log.Errorf("Failed to dump updated template to file: %v", err)
 		return fmt.Errorf("failed to dump updated template to file: %w", err)
 	}
-	templateDestFilePath := filepath.Join(osvConfigDestDir, "imageconfigs", "defaultconfigs", "template-dump.yaml")
+	templateDestFilePath := filepath.Join(defaultConfigsDir, "template-dump.yaml")
 	if err := file.CopyFile(templateDumpFilePath, templateDestFilePath, "--preserve=mode", true); err != nil {
 		log.Errorf("Failed to copy template dump file to iso root: %v", err)
 		return fmt.Errorf("failed to copy template dump file to iso root: %w", err)
 	}
 
+	sbomMetaSrcPath := filepath.Join(isoMaker.ImageBuildDir, config.SBOMMetadataFileName)
+	if err := config.WriteSBOMMetadataSidecar(sbomMetaSrcPath, sbomMetadata); err != nil {
+		log.Errorf("Failed to write SBOM metadata sidecar: %v", err)
+		return fmt.Errorf("failed to write SBOM metadata sidecar: %w", err)
+	}
+	sbomMetaDestPath := filepath.Join(defaultConfigsDir, config.SBOMMetadataFileName)
+	if err := file.CopyFile(sbomMetaSrcPath, sbomMetaDestPath, "--preserve=mode", true); err != nil {
+		log.Errorf("Failed to copy SBOM metadata sidecar to iso root: %v", err)
+		return fmt.Errorf("failed to copy SBOM metadata sidecar to iso root: %w", err)
+	}
+
 	return nil
+}
+
+// takeSBOMMetadata moves the per-package SBOM metadata off the template and
+// returns it for the sidecar, leaving the template dump a plain template.
+//
+// sbomPackageMetadata is still a template field, so a build whose input already
+// carries the block inline — rebuilding from a template-dump.yaml written by an
+// earlier release, say — would have it written straight back out and the dump
+// would be thousands of lines long despite the sidecar also being written.
+// Clearing it is what keeps the dump short in that case.
+//
+// The inline block is also the payload of last resort: FullPkgListBom is not
+// serialized, so loading such a template leaves it empty and the block is the
+// only copy of the metadata left to hand to the sidecar.
+func takeSBOMMetadata(template *config.ImageTemplate) []ospackage.PackageInfo {
+	pkgs := template.FullPkgListBom
+	if len(pkgs) == 0 {
+		pkgs = template.SBOMPackageMetadata
+	}
+	template.SBOMPackageMetadata = nil
+	return pkgs
 }
 
 func (isoMaker *IsoMaker) copyImagePkgsToIso(template *config.ImageTemplate, installRoot string) error {

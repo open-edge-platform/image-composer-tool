@@ -11,12 +11,21 @@ interface BuildProgressProps {
   failed?: boolean
 }
 
+// The terminal phase id. Exported because it is the one phase the stream does
+// NOT own: the server derives every other phase from the build log, but "done"
+// is set only from the build's terminal status (see BuildView), so both sides of
+// that rule compare against this constant rather than a repeated literal.
+export const PHASE_DONE = 'done'
+
+// Initial phase id, before any log marker has been matched.
+export const PHASE_INITIAL = 'preparing'
+
 const PHASES: { id: string; label: string }[] = [
-  { id: 'preparing', label: 'Preparing' },
+  { id: PHASE_INITIAL, label: 'Preparing' },
   { id: 'packages', label: 'Resolving & downloading packages' },
   { id: 'installing', label: 'Installing packages' },
   { id: 'generating', label: 'Generating image' },
-  { id: 'done', label: 'Done' },
+  { id: PHASE_DONE, label: 'Done' },
 ]
 
 export function BuildProgress({ phase, install, failed }: BuildProgressProps) {
@@ -27,8 +36,8 @@ export function BuildProgress({ phase, install, failed }: BuildProgressProps) {
       <ol className="flex flex-wrap items-center gap-y-3">
         {PHASES.map((p, i) => {
           const done = i < current
-          const active = i === current && phase !== 'done'
-          const complete = phase === 'done' && i === PHASES.length - 1
+          const active = i === current && phase !== PHASE_DONE
+          const complete = phase === PHASE_DONE && i === PHASES.length - 1
           const isFailed = failed && i === current
 
           const circle = isFailed

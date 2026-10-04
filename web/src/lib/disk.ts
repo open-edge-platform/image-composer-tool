@@ -614,21 +614,23 @@ function artifactIssues(model: DiskModel, ctx: DiskContext): DiskIssues {
   if (support === 'ignored') {
     if (model.artifacts.length > 0) {
       warnings.push(
-        `Output artifacts are ignored for ${imageType.toUpperCase()} images — the artifact pipeline only runs for RAW and WSL2.`,
+        `Output artefacts are ignored for ${imageType.toUpperCase()} images — the artefact pipeline only runs for RAW and WSL2.`,
       )
     }
     return { errors, warnings }
   }
 
   if (support === 'wsl2' && model.artifacts.length === 0) {
-    errors.push('A WSL2 image needs exactly one tar artifact with gz compression.')
+    errors.push('A WSL2 image needs exactly one tar artefact with gz compression.')
   }
   if (support === 'wsl2' && model.artifacts.length > 1) {
-    warnings.push('A WSL2 image uses only the first artifact; the rest are ignored.')
+    warnings.push('A WSL2 image uses only the first artefact; the rest are ignored.')
   }
 
+  // Displayed alongside the Output Artefacts rows, so it is spelled the way that
+  // section's heading is. The template key it edits stays `artifacts:`.
   model.artifacts.forEach((a, i) => {
-    const label = `Output artifact ${i + 1}`
+    const label = `Output artefact ${i + 1}`
     if (!a.type) {
       errors.push(`${label} needs a format.`)
     } else if (!types.includes(a.type)) {

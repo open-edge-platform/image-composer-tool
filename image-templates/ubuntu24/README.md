@@ -1,6 +1,6 @@
 # Ubuntu 24.04 templates
 
-`target.dist: ubuntu24` — 30 templates.
+`target.dist: ubuntu24` — 31 templates.
 
 | Template | Arch | Type | Purpose | CI |
 |---|---|---|---|---|
@@ -20,6 +20,7 @@
 | [`ubuntu24-x86_64-dlstreamer.yml`](./ubuntu24-x86_64-dlstreamer.yml) | x86_64 | raw | AI media / DL Streamer | yes |
 | [`ubuntu24-x86_64-edge-raw.yml`](./ubuntu24-x86_64-edge-raw.yml) | x86_64 | raw | edge | yes |
 | [`ubuntu24-x86_64-edgepack-raw.yml`](./ubuntu24-x86_64-edgepack-raw.yml) | x86_64 | raw | Intel EdgePack (PTL/WCL) platform enablement | — |
+| [`ubuntu24-x86_64-edgepack-server-raw.yml`](./ubuntu24-x86_64-edgepack-server-raw.yml) | x86_64 | raw | minimal Intel EdgePack (PTL/WCL) server | — |
 | [`ubuntu24-x86_64-extends-example-raw.yml`](./ubuntu24-x86_64-extends-example-raw.yml) <br>*extends `ubuntu24-x86_64-minimal-raw.yml`* | x86_64 | raw | extends demo | — |
 | [`ubuntu24-x86_64-fde-raw.yml`](./ubuntu24-x86_64-fde-raw.yml) | x86_64 | raw | full-disk encryption | — |
 | [`ubuntu24-x86_64-generic-handheld-os-desktop-raw.yml`](./ubuntu24-x86_64-generic-handheld-os-desktop-raw.yml) <br>*extends `ubuntu24-x86_64-minimal-ptl-pv-desktop-base-raw.yml`* | x86_64 | raw | handheld desktop | — |
@@ -74,7 +75,7 @@ Both are reachable from the web UI's Basic tab under Fed Aero — see the
 
 ## CI coverage
 
-6 of 29 templates here are built on every pull request (via `scripts/build_*.sh`). The others are schema-validated only, so build them locally before opening a PR.
+6 of 31 templates here are built on every pull request (via `scripts/build_*.sh`). The others are schema-validated only, so build them locally before opening a PR.
 
 ---
 

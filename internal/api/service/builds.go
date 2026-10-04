@@ -131,6 +131,10 @@ type Result struct {
 	ErrMsg    string
 	LogFile   string
 	Residual  *ResidualIssue
+	// TemplatePath is included in the snapshot because finish() repoints it at
+	// the archived resolved template under b.mu; reading it off the struct from
+	// a handler would race a concurrently finishing build.
+	TemplatePath string
 }
 
 // snapshot returns the build's current status, artifacts, error, and log-file
@@ -146,7 +150,14 @@ func (b *build) snapshot() Result {
 	// holds for every consumer — including a past build reconstructed from a
 	// meta.json that was written before this ordering existed.
 	sortArtifacts(arts)
-	return Result{Status: b.status, Artifacts: arts, ErrMsg: b.errMsg, LogFile: b.LogFile, Residual: b.residual}
+	return Result{
+		Status:       b.status,
+		Artifacts:    arts,
+		ErrMsg:       b.errMsg,
+		LogFile:      b.LogFile,
+		Residual:     b.residual,
+		TemplatePath: b.TemplatePath,
+	}
 }
 
 // buildTracker holds all builds for the process lifetime.

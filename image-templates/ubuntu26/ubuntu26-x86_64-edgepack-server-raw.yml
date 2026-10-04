@@ -1,13 +1,13 @@
 # AI-searchable metadata for template discovery
 metadata:
-  description: Ubuntu 24.04 raw image with Intel EdgePack platform-enablement packages (Panther Lake / Wildcat Lake) installed via native ICT repository and package support
+  description: Ubuntu 26.04 minimal server raw image with Intel EdgePack platform-enablement packages (Panther Lake / Wildcat Lake) installed via native ICT repository and package support
   use_cases:
-    - Intel Panther Lake (PTL) / Wildcat Lake (WCL) edge platforms
-    - Graphics, media and manageability-enabled Ubuntu edge images
-    - Reference template for layering vendor APT repositories via packageRepositories
+    - Intel Panther Lake (PTL) / Wildcat Lake (WCL) headless edge/companion servers
+    - Minimal Ubuntu server base plus EdgePack, with no use-case-specific provisioning
   keywords:
     - edgepack
     - intel-edge-base-standard
+    - server
     - ptl
     - wcl
     - dkms
@@ -15,17 +15,17 @@ metadata:
     - edge
 
 image:
-  name: edgepack-os-image-ubuntu
-  version: "24.04"
+  name: edgepack-server-os-image-ubuntu
+  version: "26.04"
 
 target:
   os: ubuntu
-  dist: ubuntu24
+  dist: ubuntu26
   arch: x86_64
   imageType: raw
 
 disk:
-  name: EdgePack_Raw # 1:1 mapping to the systemConfigs name
+  name: EdgePack_Server_Raw # 1:1 mapping to the systemConfigs name
   artifacts:
     - type: raw # image file format, valid value [raw, vhd, vhdx, qcow2, vmdk, vdi]
       compression: gz
@@ -52,17 +52,17 @@ disk:
       mountOptions: defaults
 
 # EdgePack ships from a per-suite APT repository (suite name follows the host
-# Ubuntu release; noble here).
+# Ubuntu release; resolute here).
 packageRepositories:
   # EdgePack base/add-on packages, public signed repository.
-  - codename: "noble"
+  - codename: "resolute"
     url: "https://apt.repos.intel.com/edgepack"
     pkey: "https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB"
     component: "stable"
 
 systemConfig:
-  name: edgepack-demo
-  description: Ubuntu 24.04 (noble) image with the EdgePack base metapackage and optional add-ons for PTL/WCL
+  name: edgepack-server-demo
+  description: Ubuntu 26.04 (resolute) minimal server image with the EdgePack base metapackage and media/manageability add-ons
 
   bootloader:
     bootType: efi
@@ -72,9 +72,12 @@ systemConfig:
     enabled: false # kept simple for this showcase; EdgePack itself has no immutability requirement
 
   packages:
-    - ubuntu-minimal
-    - ubuntu-standard
-    - ubuntu-desktop-minimal
+    # systemConfig.packages merges additively with the raw-image defaults,
+    # which already include ubuntu-minimal. Adding ubuntu-server-minimal (and
+    # omitting ubuntu-standard/ubuntu-desktop-minimal) is what distinguishes a
+    # "server" image from a desktop one in this repo's own reference
+    # blueprints, with no desktop/GUI stack pulled in.
+    - ubuntu-server-minimal
     - grub-efi-amd64-signed
     - initramfs-tools
     - grub2-common
@@ -87,16 +90,13 @@ systemConfig:
     - systemd-timesyncd
     # ── EdgePack: mandatory base (core graphics/media + NPU/IPU + platform-enablement DKMS drivers) ──
     - intel-edge-base-standard
-    # ── EdgePack: optional add-ons, shown enabled here for demonstration ──
+    # ── EdgePack: optional add-ons ──
     - intel-edge-media-ffmpeg # FFmpeg with Intel GPU support
     - intel-edge-media-gst # GStreamer with Intel GPU support
     - intel-edge-manageability # vPRO manageability
-    # intel-edge-base-realtime is the alternative base profile but is currently
-    # disabled for all OS variants upstream, so it is intentionally omitted here.
     # ── Required for the platform minimal template ──
-    - curl
     - util-linux-extra
-    - sg3-utils
+    - dbus-x11
     - libllvm18
     - libdebuginfod1t64
     - dnsmasq-base
@@ -109,7 +109,10 @@ systemConfig:
     - language-pack-en-base
     - language-pack-gnome-en
     - language-pack-gnome-en-base
+    - python3-netifaces
     - shim-signed
+    - wget
+    - cron
     - network-manager
     - nano
     - usb-modeswitch
@@ -117,7 +120,6 @@ systemConfig:
     - cmake
     - git
     - libssl-dev
-    - build-essential
     - apt-transport-https
     - git-lfs
     - libglew-dev
@@ -132,7 +134,6 @@ systemConfig:
     - socat
     - rpm
     - tcpdump
-    - cloud-init
     - fio
     - autoconf
     - automake
@@ -140,10 +141,8 @@ systemConfig:
     - libtool
     - gtk-doc-tools
     - libdbus-1-dev
-    - libxml2-dev
     - libnl-3-dev
     - libnl-genl-3-dev
-    - libsystemd-dev
     - libupower-glib-dev
     - python3-cffi
     - python3.12-venv
@@ -151,12 +150,12 @@ systemConfig:
   kernel:
     cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
     # Floating HWE metapackage: tracks the latest kernel Canonical publishes
-    # for 24.04. DKMS builds the modules above against whatever kernel this
+    # for 26.04. DKMS builds the modules above against whatever kernel this
     # resolves to, both at image build time and again on-target after an HWE
     # kernel update.
     packages:
-      - linux-image-generic-hwe-24.04
-      - linux-headers-generic-hwe-24.04
+      - linux-image-generic-hwe-26.04
+      - linux-headers-generic-hwe-26.04
 
   # intel-edge-base-standard pulls in EdgePack's DKMS driver sources
   # transitively. ICT builds them explicitly with `-k <target-kernel>` (never
@@ -170,7 +169,7 @@ systemConfig:
     # since it needs a real signing key/cert; enable and point at your
     # organization's key material to sign modules and, optionally, retain the
     # signing identity in the image for future on-target DKMS rebuilds after
-    # an HWE kernel update.
+    # a kernel update.
     # secureBoot:
     #   enabled: true
     #   signingKeyPath: /run/secrets/edgepack/module-signing.key

@@ -47,9 +47,11 @@ import type { SizeUnit } from '../lib/size'
 //    hidden — a template that already declares it still shows its real value
 //    (see PARTITION_TABLE_DISABLED in lib/disk.ts).
 //
-// The Output Artifacts section has no prototype counterpart. It is
+// The Output Artefacts section has no prototype counterpart. It is
 // `disk.artifacts[]` — a Disk property, and the place ICT actually produces
-// QCOW2/VHD/VMDK output (target.imageType does not offer those).
+// QCOW2/VHD/VMDK output (target.imageType does not offer those). Note the
+// section is titled with the British spelling used throughout the UI, while the
+// YAML key it edits keeps the schema's `artifacts`.
 //
 // The edited model is sent as `disk` on the compose/build request once the user
 // touches it, and the backend emits it into the generated extends delta — so
@@ -823,11 +825,11 @@ function ArtifactsSection({
 
   return (
     <div className="mb-4">
-      <span className={LABEL}>Output Artifacts</span>
+      <span className={LABEL}>Output Artefacts</span>
       <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
         {support === 'ignored' ? (
           <p className="py-2 text-center text-sm text-slate-400">
-            {imageType.toUpperCase()} images do not run the artifact pipeline — the image type
+            {imageType.toUpperCase()} images do not run the artefact pipeline — the image type
             writes its own output.
           </p>
         ) : (
@@ -841,15 +843,15 @@ function ArtifactsSection({
             {artifacts.length === 0 ? (
               <p className="py-2 text-center text-sm text-slate-400">
                 {compressionRequired
-                  ? 'None yet — a WSL2 image needs one tar artifact with gz compression.'
-                  : 'No output artifacts — the builder writes its default format.'}
+                  ? 'None yet — a WSL2 image needs one tar artefact with gz compression.'
+                  : 'No output artefacts — the builder writes its default format.'}
               </p>
             ) : (
               artifacts.map((a, i) => (
                 <div key={a.key} className="mb-2 flex items-center gap-2">
                   <div className="w-[140px]">
                     <Choice
-                      ariaLabel={`Artifact ${i + 1} format`}
+                      ariaLabel={`Artefact ${i + 1} format`}
                       value={a.type}
                       options={types}
                       placeholder="select…"
@@ -858,7 +860,7 @@ function ArtifactsSection({
                   </div>
                   <div className="w-[160px]">
                     <Choice
-                      ariaLabel={`Artifact ${i + 1} compression`}
+                      ariaLabel={`Artefact ${i + 1} compression`}
                       value={a.compression}
                       options={compressions}
                       placeholder={compressionRequired ? 'required' : 'none'}
@@ -872,7 +874,7 @@ function ArtifactsSection({
                   <button
                     type="button"
                     className={ICON_BTN}
-                    title="Remove artifact"
+                    title="Remove artefact"
                     onClick={() => onChange(artifacts.filter((_, j) => j !== i))}
                   >
                     ✕
@@ -890,7 +892,7 @@ function ArtifactsSection({
               }
               className="mt-1 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-[#00285a] hover:border-slate-400 hover:bg-slate-100"
             >
-              + Add Artifact
+              + Add Artefact
             </button>
           </>
         )}

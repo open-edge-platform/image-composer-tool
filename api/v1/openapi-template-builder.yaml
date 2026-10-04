@@ -1371,6 +1371,13 @@ components:
         templateUrl:
           type: string
           description: Download URL for the resolved template
+        templatePath:
+          type: string
+          description: >
+            On-disk path of the template this build ran against — the archived,
+            fully-resolved copy for an Advanced-mode build, or the curated
+            template itself otherwise. Present so the UI can list the template
+            alongside the build's other outputs.
         workDir:
           type: string
         cacheDir:
