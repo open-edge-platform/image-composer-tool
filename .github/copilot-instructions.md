@@ -248,6 +248,7 @@ This single file is loaded into every chat. Keep it lean — path-specific and w
   - [block-dangerous-git.json](hooks/block-dangerous-git.json) — denies `git push --force`, `--no-verify`, `git reset --hard`
   - [post-edit-checks.json](hooks/post-edit-checks.json) — flags `gofmt` drift on edited `.go` files and schema-validates edited `image-templates/**/*.yml`
   - [pr-size-warning.json](hooks/pr-size-warning.json) — asks for confirmation before `git push` when the branch diff vs `main` exceeds ~500 LOC
+- **`.claude/settings.json`** — wires the same scripts from `.github/hooks/scripts/` into Claude Code's own hook format (`.github/hooks/*.json` is GHCP-only; Claude Code doesn't read it) so behavior stays identical across both tools. See [CLAUDE.md](../CLAUDE.md#hooks).
 - **`.github/agents/*.agent.md`** — Custom agent personas with restricted tool sets, selectable from the agent picker or delegated to as subagents. Existing:
   - [reviewer.agent.md](agents/reviewer.agent.md) — read-only code review
   - [provider-scaffolder.agent.md](agents/provider-scaffolder.agent.md) — new/extended OS providers
