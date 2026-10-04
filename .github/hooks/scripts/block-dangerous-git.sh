@@ -11,7 +11,7 @@ if [[ -z "$command_text" ]]; then
 fi
 
 deny_reason=""
-if [[ "$command_text" =~ push[[:space:]]+(--force|-f)([[:space:]]|$) || "$command_text" =~ push[[:space:]]+.*--force-with-lease ]]; then
+if [[ "$command_text" == *"push"* && "$command_text" =~ (^|[[:space:]])(--force|--force-with-lease|-f)([[:space:]=]|$) ]]; then
   deny_reason="git push --force is not allowed; see copilot-instructions.md Git Commits & PRs"
 elif [[ "$command_text" == *"--no-verify"* ]]; then
   deny_reason="--no-verify bypasses commit/push hooks and is not allowed"
