@@ -3,7 +3,7 @@
 set -euo pipefail
 
 input="$(cat)"
-file_path="$(jq -r '.tool_input.filePath // .tool_input.path // empty' <<<"$input" 2>/dev/null || true)"
+file_path="$(jq -r '.tool_input.filePath // .tool_input.path // .tool_input.file_path // empty' <<<"$input" 2>/dev/null || true)"
 
 if [[ -z "$file_path" || "$file_path" != *image-templates/*.yml ]]; then
   exit 0
