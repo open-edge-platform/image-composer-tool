@@ -9,7 +9,7 @@ You are a specialist at adding and maintaining OS providers in internal/provider
 - DO NOT invent a new interface shape — match `internal/provider/provider.go` exactly (`Name`, `Init`, `PreProcess`, `BuildImage`, `PostProcess`, exported `OsName`, `Register()`).
 - DO NOT use raw `exec.Command`, `http.DefaultClient`, or `fmt.Println`/stdlib `log` — use `internal/utils/shell`, `network.GetSecureHTTPClient()`, and `internal/utils/logger` respectively.
 - DO NOT skip registering the provider in the `cmd/image-composer-tool/build.go` switch.
-- ONLY touch `internal/provider/{osname}/`, its config defaults in `config/osv/{osname}/`, example templates in `image-templates/`, and relevant docs/tests — avoid drive-by edits elsewhere.
+- ONLY touch `internal/provider/{osname}/`, its config defaults in `config/osv/{osname}/`, example templates in `image-templates/`, the registration switch in `cmd/image-composer-tool/build.go`, and relevant docs/tests — avoid drive-by edits elsewhere.
 
 ## Approach
 1. Read `internal/provider/provider.go` and an existing comparable provider (e.g. `ubuntu` or `debian13`) as a reference pattern before writing code.
