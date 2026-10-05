@@ -1,15 +1,9 @@
 # AI-searchable metadata for template discovery
-#
-# Demonstrates native ICT support for "EdgePack" — Intel's platform-enablement
-# package set for Panther Lake (PTL) and Wildcat Lake (WCL) — as an ordinary
-# ICT template: an extra signed/trusted APT repository, a package list, and a
-# typed systemConfig.dkms section. No bespoke installer, TUI, or hand-written
-# shell script required.
 metadata:
   description: Ubuntu 24.04 raw image with Intel EdgePack platform-enablement packages (Panther Lake / Wildcat Lake) installed via native ICT repository and package support
   use_cases:
     - Intel Panther Lake (PTL) / Wildcat Lake (WCL) edge platforms
-    - Graphics, media and NPU-enabled Ubuntu edge images
+    - Graphics, media and manageability-enabled Ubuntu edge images
     - Reference template for layering vendor APT repositories via packageRepositories
   keywords:
     - edgepack
@@ -90,6 +84,8 @@ systemConfig:
 
   packages:
     - ubuntu-minimal
+    - ubuntu-standard
+    - ubuntu-desktop-minimal
     - grub-efi-amd64-signed
     - initramfs-tools
     - grub2-common
@@ -113,39 +109,77 @@ systemConfig:
     - intel-edge-manageability # vPRO manageability
     # intel-edge-base-realtime is the alternative base profile but is currently
     # disabled for all OS variants upstream, so it is intentionally omitted here.
+    # ── Required for the platform minimal template ──
+    - curl
+    - util-linux-extra
+    - sg3-utils
+    - libllvm18
+    - libdebuginfod1t64
+    - dnsmasq-base
+    - xdp-tools
+    - firefox
+    - vim
+    - net-tools
+    - bluez
+    - language-pack-en
+    - language-pack-en-base
+    - language-pack-gnome-en
+    - language-pack-gnome-en-base
+    - shim-signed
+    - network-manager
+    - nano
+    - usb-modeswitch
+    - libvirt-sanlock
+    - cmake
+    - git
+    - libssl-dev
+    - build-essential
+    - apt-transport-https
+    - git-lfs
+    - libglew-dev
+    - libglm-dev
+    - libsdl2-dev
+    - mc
+    - python3-pip
+    - wayland-protocols
+    - msr-tools
+    - lsscsi
+    - i2c-tools
+    - socat
+    - rpm
+    - tcpdump
+    - cloud-init
+    - fio
+    - autoconf
+    - automake
+    - autoconf-archive
+    - libtool
+    - gtk-doc-tools
+    - libdbus-1-dev
+    - libxml2-dev
+    - libnl-3-dev
+    - libnl-genl-3-dev
+    - libsystemd-dev
+    - libupower-glib-dev
+    - python3-cffi
+    - python3.12-venv
 
   kernel:
     cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
-    # Pinned to the exact kernel image/headers validated against the EdgePack
-    # DKMS module set below, per the EdgePack ADR's requirement for an exact
-    # validated kernel/header/EdgePack compatibility tuple: a floating
-    # metapackage (linux-image-generic-hwe-24.04) can move to a newer kernel
-    # ABI whenever Canonical publishes one, independently of this template or
-    # the live EdgePack repository, combining an unvalidated kernel with the
-    # current vendor modules and risking a DKMS compilation failure or a
-    # non-reproducible build. Bump this pin only alongside a fresh DKMS
-    # build/verify pass against the packageRepositories entries below.
+    # Floating HWE metapackage: tracks the latest kernel Canonical publishes
+    # for 24.04. DKMS builds the modules above against whatever kernel this
+    # resolves to, both at image build time and again on-target after an HWE
+    # kernel update.
     packages:
-      - linux-image-7.0.0-34-generic
-      - linux-headers-7.0.0-34-generic
+      - linux-image-generic-hwe-24.04
+      - linux-headers-generic-hwe-24.04
 
   # intel-edge-base-standard pulls in EdgePack's DKMS driver sources
-  # (edge-gfx-dkms, edge-edac-dkms, edge-issei-dkms) transitively. ICT builds
-  # them explicitly with `-k <target-kernel>` (never the chroot's `uname -r`,
-  # which a package's own postinst/dkms.conf trigger would otherwise use).
-  #
-  # `modules` is left unset here: without it, ICT runs `dkms autoinstall` for
-  # every module the installed packages registered and only asserts that at
-  # least one built successfully - no need to know DKMS's internal module/
-  # version identifiers up front. To assert specific modules instead (fail the
-  # build if any of *these* aren't installed), list them as "name/version",
-  # e.g. "edge-gfx-dkms/7.0" - this is the actual dkms.conf PACKAGE_NAME/
-  # PACKAGE_VERSION for EdgePack (confirmed against real `dkms status`
-  # output), which for EdgePack happens to match its Debian package name
-  # verbatim, "-dkms" suffix included; for other vendors, don't assume the
-  # suffix is stripped by convention - find the real name/version by
-  # installing the package once and running `dkms status`, or by reading its
-  # /usr/src/<pkg>-<version>/dkms.conf.
+  # transitively. ICT builds them explicitly with `-k <target-kernel>` (never
+  # the chroot's `uname -r`). `modules` is left unset: ICT runs `dkms
+  # autoinstall` and only asserts that at least one module built. To require
+  # specific modules instead, list them as "name/version" (e.g.
+  # "edge-gfx-dkms/7.0", matching dkms.conf's PACKAGE_NAME/PACKAGE_VERSION).
   dkms:
     enabled: true
     # Secure Boot signing for the built modules. Left disabled in this sample

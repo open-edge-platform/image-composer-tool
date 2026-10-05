@@ -220,6 +220,22 @@ func TestVerifyDkmsModulesBuilt(t *testing.T) {
 			t.Fatalf("expected no error for empty dkms tree, got: %v", err)
 		}
 	})
+
+	t.Run("original_module backup of a displaced in-tree module is ignored", func(t *testing.T) {
+		root := t.TempDir()
+		makeDkmsSource(t, root, "edge-edac-dkms", "7.0", kernel,
+			[]string{"igen6_edac"}, []string{"igen6_edac"})
+		// dkms backs up the in-tree module it displaced under a pseudo-version
+		// "original_module" directory with no matching /usr/src source; this
+		// must not be mistaken for a real, unverifiable built source.
+		backupDir := filepath.Join(root, "var", "lib", "dkms", "edge-edac-dkms", "original_module", kernel, "x86_64", "module")
+		if err := os.MkdirAll(backupDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := verifyDkmsModulesBuilt(root, kernel); err != nil {
+			t.Fatalf("expected original_module backup dir to be ignored, got error: %v", err)
+		}
+	})
 }
 
 func TestKernelAbiFromVersion(t *testing.T) {

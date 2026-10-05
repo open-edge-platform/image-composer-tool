@@ -57,6 +57,16 @@ Build and test locally before opening a pull request:
 If Earthly is unavailable, fall back to `go build ./...`, `go test ./...`,
 and `golangci-lint run`.
 
+### AI coding agent setup
+
+If you use GitHub Copilot, Claude Code, or a similar agent against this repo, it already
+picks up project conventions from [AGENTS.md](AGENTS.md) /
+[.github/copilot-instructions.md](.github/copilot-instructions.md) automatically. That
+setup also includes path-scoped rules in `.github/instructions/`, reusable task prompts in
+`.github/prompts/`, enforcement hooks in `.github/hooks/`, and selectable personas (e.g.
+read-only reviewer, security auditor) in `.github/agents/`. No action is needed to use
+them, but see those directories if you want to extend or add to them.
+
 ## How to Contribute
 
 ### Contribute Code Changes
