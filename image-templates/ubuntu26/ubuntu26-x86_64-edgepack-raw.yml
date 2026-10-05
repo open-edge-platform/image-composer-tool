@@ -29,7 +29,8 @@ disk:
   artifacts:
     - type: raw # image file format, valid value [raw, vhd, vhdx, qcow2, vmdk, vdi]
       compression: gz
-  size: 6GiB
+  # edge-gfx-dkms (xe.ko) build objects overflow 6GiB on 26.04.
+  size: 12GiB
   partitionTableType: gpt
   partitions:
     - id: boot
