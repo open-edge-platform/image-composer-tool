@@ -110,6 +110,7 @@ func (imageOs *ImageOs) InstallRootfs() (installRoot, versionInfo string, err er
 
 	log.Infof("Image package installation...")
 	if err = imageOs.installImagePkgs(imageOs.installRoot, imageOs.template); err != nil {
+		imageOs.preserveDkmsMakeLogs()
 		err = fmt.Errorf("failed to install image packages: %w", err)
 		return
 	}
@@ -172,6 +173,7 @@ func (imageOs *ImageOs) InstallInitrd() (installRoot, versionInfo string, err er
 
 	log.Infof("Image package installation...")
 	if err = imageOs.installImagePkgs(imageOs.installRoot, imageOs.template); err != nil {
+		imageOs.preserveDkmsMakeLogs()
 		err = fmt.Errorf("failed to install image packages: %w", err)
 		return
 	}
@@ -259,6 +261,7 @@ func (imageOs *ImageOs) InstallImageOs(diskPathIdMap map[string]string) (version
 	}
 
 	if err = buildDkmsModules(imageOs.installRoot, imageOs.template); err != nil {
+		imageOs.preserveDkmsMakeLogs()
 		err = fmt.Errorf("failed to build dkms modules: %w", err)
 		return
 	}
@@ -323,6 +326,25 @@ func (imageOs *ImageOs) InstallImageOs(diskPathIdMap map[string]string) (version
 	}
 
 	return
+}
+
+func (imageOs *ImageOs) preserveDkmsMakeLogs() {
+	if !imageOs.template.GetDkms().Enabled {
+		return
+	}
+
+	dkmsLogDir := filepath.Join(
+		filepath.Dir(imageOs.chrootEnv.GetChrootEnvRoot()),
+		"imagebuild",
+		filepath.Base(imageOs.template.GetSystemConfigName()),
+		"dkms-logs",
+	)
+	copiedLogs, err := copyDkmsMakeLogs(imageOs.installRoot, dkmsLogDir)
+	if err != nil {
+		log.Errorf("Failed to preserve DKMS make.log files: %v", err)
+	} else if copiedLogs == 0 {
+		log.Warnf("No DKMS make.log files found under %s", filepath.Join(imageOs.installRoot, "var", "lib", "dkms"))
+	}
 }
 
 func (imageOs *ImageOs) initRootfsForDeb(installRoot string) error {
