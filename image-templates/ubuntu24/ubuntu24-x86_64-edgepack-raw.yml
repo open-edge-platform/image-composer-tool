@@ -166,13 +166,11 @@ systemConfig:
 
   kernel:
     cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
-    # Floating HWE metapackage: tracks the latest kernel Canonical publishes
-    # for 24.04. DKMS builds the modules above against whatever kernel this
-    # resolves to, both at image build time and again on-target after an HWE
-    # kernel update.
+    # Pinned EdgePack-validated kernel. DKMS builds the modules above against
+    # this exact kernel, both at image build time and again on-target.
     packages:
-      - linux-image-generic-hwe-24.04
-      - linux-headers-generic-hwe-24.04
+      - linux-image-7.0.0-34-generic
+      - linux-headers-7.0.0-34-generic
 
   # intel-edge-base-standard pulls in EdgePack's DKMS driver sources
   # transitively. ICT builds them explicitly with `-k <target-kernel>` (never
