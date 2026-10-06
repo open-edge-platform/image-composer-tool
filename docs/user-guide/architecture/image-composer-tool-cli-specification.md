@@ -191,7 +191,7 @@ sudo -E image-composer-tool build \
   --http-proxy http://proxy.example.com:3128 --https-proxy http://proxy.example.com:3128 \
   --no-proxy localhost,127.0.0.1,.example.com \
   --ssh-authorized-key admin=$HOME/.ssh/id_ed25519.pub \
-  image-templates/ubuntu24/ubuntu24-x86_64-base-platform-iso.yml
+  image-templates/ubuntu24/ubuntu24-x86_64-edgepack-unattended-iso.yml
 ```
 
 **ISO build artifacts:** besides the `.iso`, an ISO build writes the SPDX SBOM

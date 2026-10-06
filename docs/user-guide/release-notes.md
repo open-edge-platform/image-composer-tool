@@ -58,8 +58,13 @@
   - `build` flags `--disk-strategy`, `--hostname`,
     `--http-proxy`, `--https-proxy`, `--ftp-proxy`, `--no-proxy`, and
     `--ssh-authorized-key USER=FILE` override the matching template fields.
-  - New templates `ubuntu24-x86_64-base-platform-iso.yml` (Ubuntu 24.04 with the
-    latest HWE kernel) and `ubuntu26-x86_64-base-platform-iso.yml`, and a
+  - New unattended ISO templates `ubuntu24-x86_64-edgepack-unattended-iso.yml`,
+    `ubuntu24-x86_64-edgepack-server-unattended-iso.yml`,
+    `ubuntu26-x86_64-edgepack-unattended-iso.yml` and
+    `ubuntu26-x86_64-edgepack-server-unattended-iso.yml`. Each installs the
+    package set, EdgePack repository and DKMS modules of the matching
+    `*-edgepack[-server]-raw.yml` template, with the kernel pinned to 7.0.0-34
+    because `edge-gfx-dkms` 7.0 does not build against 7.0.0-38, and a
     `default-initrd-unattended-x86_64.yml` installer environment for Ubuntu 26.04.
 
 - **Changed**: `systemConfig.users[].shell`, `home`, and `passwordMaxAge` are now
@@ -76,10 +81,9 @@
   `ubuntu24-x86_64-minimal-unattended-iso.yml`,
   `generic-handheld-os-template.yml`,
   `generic-companion-os-server-template.yml` and
-  `ubuntu24-x86_64-generic-handheld-os-desktop-raw.yml`. The new
-  `ubuntu24-x86_64-base-platform-iso.yml` and
-  `ubuntu26-x86_64-base-platform-iso.yml` need one as well, because their
-  `admin.pub` holds only comments. For any of them, set `password`, or build
+  `ubuntu24-x86_64-generic-handheld-os-desktop-raw.yml`. The
+  four new `*-edgepack[-server]-unattended-iso.yml` templates need one as well,
+  because their `admin.pub` holds only comments. For any of them, set `password`, or build
   with `--ssh-authorized-key USER=FILE`.
 
 - **Fixed**: `packageRepositories` are now turned into apt sources and
