@@ -16,7 +16,7 @@ metadata:
 
 image:
   name: edgepack-server-os-image-ubuntu
-  version: "26.04"
+  version: "26.04.1"
 
 target:
   os: ubuntu
