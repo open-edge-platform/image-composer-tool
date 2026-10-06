@@ -1,0 +1,139 @@
+# AI-searchable metadata for template discovery
+metadata:
+  description: Base Platform Image for Ubuntu 24.04 (HWE kernel) as an unattended ISO installer
+  use_cases:
+    - Hands-free bare metal installation of the Base Platform Image
+    - Automatic target disk selection with a fixed data and swap layout
+    - First-boot provisioning with cloud-init and provisioning scripts
+  keywords:
+    - iso
+    - ubuntu
+    - unattended
+    - installer
+    - platform
+    - enib
+    - cloud-init
+    - provisioning
+
+image:
+  name: base-platform-ubuntu24
+  version: "24.04"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: iso
+
+disk:
+  name: Base_Platform_ISO
+  # Empty path: the installer picks the target disk with selectionPolicy.
+  # Set a device (e.g. /dev/nvme0n1) to pin it.
+  path: ""
+  selectionPolicy:
+    strategy: largest
+    excludeRemovable: true
+    requireEmpty: true
+  partitionTableType: gpt
+  partitions:
+    - id: boot
+      type: esp
+      flags:
+        - esp
+        - boot
+      start: 1MiB
+      end: 513MiB
+      fsType: fat32
+      mountPoint: /boot/efi
+      mountOptions: umask=0077
+
+    # Root fills the selected disk except the last 20 GiB, whatever the disk size.
+    # A negative offset is measured back from the end of the disk.
+    - id: rootfs
+      type: linux-root-amd64
+      start: 513MiB
+      end: "-20GiB"
+      fsType: ext4
+      mountPoint: /
+
+    - id: data
+      type: linux
+      start: "-20GiB"
+      end: "-4GiB"
+      fsType: ext4
+      mountPoint: /data
+      mountOptions: defaults,nofail
+
+    - id: swap
+      type: linux-swap
+      start: "-4GiB"
+      end: "0"
+      fsType: linux-swap
+
+systemConfig:
+  initramfs:
+    template: default-initrd-unattended-x86_64.yml
+
+  hostname: base-platform
+
+  bootloader:
+    # preserve: installed OS boots first, existing firmware entries are kept after it.
+    bootEntryPolicy: preserve
+
+  kernel:
+    cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
+    # Latest Ubuntu 24.04 HWE kernel (what "24.04.5" means for this image).
+    packages:
+      - linux-image-generic-hwe-24.04
+
+  packages:
+    - openssh-server
+    - sudo
+    # Platform software stack packages go here.
+
+  users:
+    - name: admin
+      # A sudo user needs a credential: the build fails without a password or an
+      # SSH key. With only SSH keys the password is locked (key login only) and
+      # the user gets passwordless sudo, since there is no password to ask for.
+      # Generate a SHA-512 hash with `openssl passwd -6` and paste it here:
+      # password: "$6$<salt>$<hash>"
+      groups:
+        - sudo
+      sudo: true
+      shell: /bin/bash
+      home: /home/admin
+      # Keys can be listed inline (sshAuthorizedKeys) or read from files at build time.
+      sshAuthorizedKeysFiles:
+        - additionalfiles/base-platform/admin.pub
+
+  # Uncomment to persist a proxy into the deployed system (/etc/environment,
+  # apt, and every systemd service). Also settable with --http-proxy etc.
+  # proxy:
+  #   httpProxy: http://proxy.example.com:3128
+  #   httpsProxy: http://proxy.example.com:3128
+  #   ftpProxy: http://proxy.example.com:3128
+  #   noProxy: localhost,127.0.0.1,.example.com
+
+  cloudInit:
+    enabled: true
+    userDataFile: additionalfiles/base-platform/user-data
+
+  provisioning:
+    scripts:
+      - name: platform-bootstrap
+        local: additionalfiles/base-platform/10-platform-bootstrap.sh
+        final: /usr/local/sbin/platform-bootstrap.sh
+        stage: first-boot
+        order: 10
+
+  # Uncomment once packageRepositories lists the platform PPAs, to allow only
+  # those repositories (plus the Ubuntu archives) to upgrade packages.
+  # aptPolicy:
+  #   upgradeAllowedRepos:
+  #     - platform-stack
+
+  # Developer source archives and other artifacts are copied with additionalFiles.
+  # additionalFiles:
+  #   - local: additionalfiles/base-platform/platform-src.tar.gz
+  #     final: /opt/platform/src/platform-src.tar.gz

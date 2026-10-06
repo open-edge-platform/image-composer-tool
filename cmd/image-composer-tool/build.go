@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/cache"
@@ -60,6 +61,15 @@ var (
 	inspectImage  bool   = false // --inspect: write a post-build inspection report to an artifact file (default off)
 	cveCheck      bool   = false // --cve-check: enable CVE analysis from the CLI
 	baselineImage string = ""    // --baseline-image: override baseline.source.path from the template
+
+	// Composition override flags; each overrides the matching template field.
+	diskStrategy string
+	hostname     string
+	httpProxy    string
+	httpsProxy   string
+	ftpProxy     string
+	noProxy      string
+	sshKeyFlags  []string // --ssh-authorized-key USER=FILE, repeatable
 )
 
 // createBuildCommand creates the build subcommand
@@ -95,6 +105,17 @@ The template file must be in YAML format following the image template schema.`,
 		"Write a post-build inspection report (partition layout, filesystem, bootloader, SBOM) of the overlay image to a .inspect.txt file alongside the emitted image in the build artifacts directory (default off; nothing is written and console output is unchanged when unset)")
 	buildCmd.Flags().BoolVar(&cveCheck, "cve-check", false, "Enable CVE analysis of the built image")
 	buildCmd.Flags().StringVar(&baselineImage, "baseline-image", "", "Override baseline.source.path from the template (overlay mode)")
+
+	// Composition overrides for interactive use.
+	buildCmd.Flags().StringVar(&diskStrategy, "disk-strategy", "",
+		"Override disk.selectionPolicy.strategy (first, largest, fastest)")
+	buildCmd.Flags().StringVar(&hostname, "hostname", "", "Override systemConfig.hostname")
+	buildCmd.Flags().StringVar(&httpProxy, "http-proxy", "", "Override systemConfig.proxy.httpProxy")
+	buildCmd.Flags().StringVar(&httpsProxy, "https-proxy", "", "Override systemConfig.proxy.httpsProxy")
+	buildCmd.Flags().StringVar(&ftpProxy, "ftp-proxy", "", "Override systemConfig.proxy.ftpProxy")
+	buildCmd.Flags().StringVar(&noProxy, "no-proxy", "", "Override systemConfig.proxy.noProxy (comma-separated)")
+	buildCmd.Flags().StringArrayVar(&sshKeyFlags, "ssh-authorized-key", nil,
+		"Add SSH public keys from FILE for an existing template user, as USER=FILE (repeatable)")
 
 	return buildCmd
 }
@@ -255,6 +276,9 @@ func executeBuild(cmd *cobra.Command, args []string) error {
 	// Apply overlay-mode CLI flags onto the loaded template. CLI values take
 	// precedence over template values.
 	if err := applyOverlayFlagOverrides(cmd, template); err != nil {
+		return err
+	}
+	if err := applyCompositionFlagOverrides(cmd, template); err != nil {
 		return err
 	}
 
@@ -481,6 +505,43 @@ func applyOverlayFlagOverrides(cmd *cobra.Command, template *config.ImageTemplat
 			return fmt.Errorf("invalid --baseline-image override: %w", err)
 		}
 		logger.Logger().Infof("Overriding baseline image path with %s", baselineImage)
+	}
+	return nil
+}
+
+// proxyFlagOverride returns a pointer to value only when the flag was set on
+// the command line, so an explicit empty value (for example an empty --no-proxy)
+// can clear a template setting while an unset flag leaves it alone.
+func proxyFlagOverride(cmd *cobra.Command, name string, value *string) *string {
+	if !cmd.Flags().Changed(name) {
+		return nil
+	}
+	v := *value
+	return &v
+}
+
+// applyCompositionFlagOverrides applies the composition override flags. CLI
+// values take precedence over template values; unset flags change nothing.
+func applyCompositionFlagOverrides(cmd *cobra.Command, template *config.ImageTemplate) error {
+	overrides := config.CompositionOverrides{
+		DiskStrategy: diskStrategy,
+		Hostname:     hostname,
+		Proxy: config.ProxyOverrides{
+			HTTPProxy:  proxyFlagOverride(cmd, "http-proxy", &httpProxy),
+			HTTPSProxy: proxyFlagOverride(cmd, "https-proxy", &httpsProxy),
+			FTPProxy:   proxyFlagOverride(cmd, "ftp-proxy", &ftpProxy),
+			NoProxy:    proxyFlagOverride(cmd, "no-proxy", &noProxy),
+		},
+	}
+	for _, flag := range sshKeyFlags {
+		user, file, ok := strings.Cut(flag, "=")
+		if !ok || user == "" || file == "" {
+			return fmt.Errorf("invalid --ssh-authorized-key %q: expected USER=FILE", flag)
+		}
+		overrides.SSHKeys = append(overrides.SSHKeys, config.SSHKeyOverride{User: user, File: file})
+	}
+	if err := template.ApplyCompositionOverrides(overrides); err != nil {
+		return fmt.Errorf("invalid command-line override: %w", err)
 	}
 	return nil
 }

@@ -2213,3 +2213,24 @@ func TestDiskPartitionCreate_SGDiskFailureWithOutput(t *testing.T) {
 		})
 	}
 }
+
+func TestPartitionDevicePath(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		disk string
+		num  int
+		want string
+	}{
+		{"/dev/sda", 2, "/dev/sda2"},
+		{"/dev/vdb", 1, "/dev/vdb1"},
+		{"/dev/nvme0n1", 3, "/dev/nvme0n1p3"},
+		{"/dev/mmcblk0", 2, "/dev/mmcblk0p2"},
+		{"/dev/loop7", 1, "/dev/loop7p1"},
+		{"/dev/nbd0", 1, "/dev/nbd0p1"},
+	}
+	for _, tt := range tests {
+		if got := partitionDevicePath(tt.disk, tt.num); got != tt.want {
+			t.Errorf("partitionDevicePath(%q, %d) = %q, want %q", tt.disk, tt.num, got, tt.want)
+		}
+	}
+}

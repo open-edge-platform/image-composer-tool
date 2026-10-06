@@ -82,6 +82,8 @@ systemConfig:
     - name: root
       startupScript: "/root/unattendedinstaller"
     - name: admin
+      # admin has sudo access, so the build requires a credential: set `password`
+      # below, or build with `--ssh-authorized-key admin=/path/to/key.pub`.
       # Generate a SHA-512 password hash from CLI and paste it into `password`.
       # Example (recommended):
       #   openssl passwd -6

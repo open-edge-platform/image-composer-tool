@@ -500,7 +500,7 @@ func TestMergeUserConfig(t *testing.T) {
 		HashAlgo:       "sha256",
 		Groups:         []string{"wheel", "users"},
 		Sudo:           false,
-		PasswordMaxAge: 365,
+		PasswordMaxAge: intPtr(365),
 	}
 
 	userUser := UserConfig{
@@ -528,8 +528,8 @@ func TestMergeUserConfig(t *testing.T) {
 	}
 
 	// Check preserved values
-	if merged.PasswordMaxAge != 365 {
-		t.Errorf("expected password max age 365, got %d", merged.PasswordMaxAge)
+	if merged.PasswordMaxAge == nil || *merged.PasswordMaxAge != 365 {
+		t.Errorf("expected password max age 365, got %v", derefInt(merged.PasswordMaxAge))
 	}
 
 	// Check merged groups (should contain all unique groups)
