@@ -32,8 +32,10 @@ func TestBasePlatformInstallerEnvironmentFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, path := range []string{
-		"../../../image-templates/ubuntu24/ubuntu24-x86_64-base-platform-iso.yml",
-		"../../../image-templates/ubuntu26/ubuntu26-x86_64-base-platform-iso.yml",
+		"../../../image-templates/ubuntu24/ubuntu24-x86_64-edgepack-unattended-iso.yml",
+		"../../../image-templates/ubuntu24/ubuntu24-x86_64-edgepack-server-unattended-iso.yml",
+		"../../../image-templates/ubuntu26/ubuntu26-x86_64-edgepack-unattended-iso.yml",
+		"../../../image-templates/ubuntu26/ubuntu26-x86_64-edgepack-server-unattended-iso.yml",
 	} {
 		t.Run(filepath.Base(path), func(t *testing.T) {
 			tmpl, err := config.LoadAndMergeTemplate(path)

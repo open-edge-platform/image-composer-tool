@@ -8,6 +8,8 @@
 
 - **Fixed**: the Web UI's Compose Status stepper turned every step green — including **Done** — while the compose was still running and the badge still read "Composing...". The phase is derived from the build log, and the `done` phase was matched on the substring `image build completed successfully`. That wording is emitted by the individual image makers too ("Raw image build completed successfully", and the ISO and initrd equivalents), and those lines are logged *before* image compression, the SBOM copy into the image filesystem, and chroot teardown — so the stepper claimed completion with minutes of work left. There is no longer any log marker for `done`: completion is taken only from the build's terminal status, so the stepper reaches **Done** exactly when the badge flips to Succeeded. `Compressing image file` was added as a **Generating image** marker instead, so the final stretch of a RAW build still advances the stepper. The Web UI also ignores a `done` phase arriving on the log stream, so a server emitting one cannot light the stepper early.
 
+- **Fixed**: the unattended installer's "Another unattended installer instance is already running" message misled anyone watching a console other than the one running the install, such as QEMU with `-nographic`. Every console starts the installer and only the first runs it. The others now say so and follow `/tmp/unattended-installer.log` until the installer finishes or fails, so a failure is visible on every console.
+
 - **Fixed**: the Web UI Artifacts table reported every build output as type `IMAGE`, including the SBOM and files that are not build outputs at all. Two causes, both server-side — the table itself always displayed whatever type the API sent. The API's log parser fell back to `image` for any file it did not recognise, so a chroot's leftovers in the image build directory (`bash.bashrc`, `debconf.conf`, `debian_version`, `UPLOAD-MANIFEST.txt`) were listed as images; and its directory scanner, used for history builds and for partial outputs after a failed or cancelled compose, looked for SBOMs ending in `.spdx.json` and so missed the `spdx_manifest_<deb|rpm>_<image>_<timestamp>.json` file ICT actually writes — dropping the SBOM from those views entirely. Both now share one set of naming rules (`internal/utils/artifact`), covering every image format the builder emits (`raw`, `img`, `iso`, `qcow2`, `vhd`, `vhdx`, `vmdk`, `vdi`, `tar`, with optional `gz`/`xz`/`zstd` compression) and both SBOM naming conventions (the create-mode manifest and the overlay `.delta.spdx.json` / `.complete.spdx.json` sidecars). **An output that matches no rule is now reported as `unknown` rather than guessed to be an image** — `unknown` is a new value on the `Artifact.type` enum in the API contract, so a client that handles only `image` and `sbom` should expect it. Separately, the CLI's "Generated Artifacts" summary listed every file in the image build directory; it now lists only the images and SBOMs, which is also what the web API parses.
 
 - **Fixed**: the Web UI Artifacts table listed outputs in whatever order they came off disk, so the SBOM appeared wherever its filename happened to sort. Images are now listed first and the SBOM last. Ordering is applied when a build is read rather than when its artifact list is built, so it also holds for a past build whose recorded order predates this change, and the live completion view and a reloaded history build agree.
@@ -58,8 +60,13 @@
   - `build` flags `--disk-strategy`, `--hostname`,
     `--http-proxy`, `--https-proxy`, `--ftp-proxy`, `--no-proxy`, and
     `--ssh-authorized-key USER=FILE` override the matching template fields.
-  - New templates `ubuntu24-x86_64-base-platform-iso.yml` (Ubuntu 24.04 with the
-    latest HWE kernel) and `ubuntu26-x86_64-base-platform-iso.yml`, and a
+  - New unattended ISO templates `ubuntu24-x86_64-edgepack-unattended-iso.yml`,
+    `ubuntu24-x86_64-edgepack-server-unattended-iso.yml`,
+    `ubuntu26-x86_64-edgepack-unattended-iso.yml` and
+    `ubuntu26-x86_64-edgepack-server-unattended-iso.yml`. Each installs the
+    package set, EdgePack repository and DKMS modules of the matching
+    `*-edgepack[-server]-raw.yml` template, with the kernel pinned to 7.0.0-34
+    because `edge-gfx-dkms` 7.0 does not build against 7.0.0-38, and a
     `default-initrd-unattended-x86_64.yml` installer environment for Ubuntu 26.04.
 
 - **Changed**: `systemConfig.users[].shell`, `home`, and `passwordMaxAge` are now
@@ -76,10 +83,9 @@
   `ubuntu24-x86_64-minimal-unattended-iso.yml`,
   `generic-handheld-os-template.yml`,
   `generic-companion-os-server-template.yml` and
-  `ubuntu24-x86_64-generic-handheld-os-desktop-raw.yml`. The new
-  `ubuntu24-x86_64-base-platform-iso.yml` and
-  `ubuntu26-x86_64-base-platform-iso.yml` need one as well, because their
-  `admin.pub` holds only comments. For any of them, set `password`, or build
+  `ubuntu24-x86_64-generic-handheld-os-desktop-raw.yml`. The
+  four new `*-edgepack[-server]-unattended-iso.yml` templates need one as well,
+  because their `admin.pub` holds only comments. For any of them, set `password`, or build
   with `--ssh-authorized-key USER=FILE`.
 
 - **Fixed**: `packageRepositories` are now turned into apt sources and
