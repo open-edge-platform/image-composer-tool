@@ -99,7 +99,7 @@ var (
 	// imagedisc.go sizeSuffixesList, enforced by VerifyFileSize's `^(\d+)(.*)$`:
 	// whole numbers only, exact case, no bare byte counts, no TiB.
 	diskSizeRe   = regexp.MustCompile(`^\d+(KiB|MiB|GiB|K|M|G|KB|MB|GB)$`)
-	diskOffsetRe = regexp.MustCompile(`^(0|\d+(KiB|MiB|GiB|K|M|G|KB|MB|GB))$`)
+	diskOffsetRe = regexp.MustCompile(`^(0|-?[1-9]\d*(KiB|MiB|GiB|K|M|G|KB|MB|GB))$`)
 	diskNameRe   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 	diskPathRe   = regexp.MustCompile(`^(|/dev/[A-Za-z0-9/._-]+)$`)
 )
@@ -213,9 +213,12 @@ func validateDiskPartition(p *DiskPartitionOverride, i int, last bool) error {
 		if v == "" {
 			continue
 		}
+		if field == "start" && v == "0" {
+			return fmt.Errorf("%s: start must be a non-zero offset", where)
+		}
 		if len(v) > maxDiskSizeLen || !diskOffsetRe.MatchString(v) {
-			return fmt.Errorf("%s: %s %q must be a whole number with one of "+
-				"KiB, MiB, GiB, K, M, G, KB, MB, GB (exact case, no decimals), or 0",
+			return fmt.Errorf("%s: %s %q must be a non-zero whole number, optionally negative, with one of "+
+				"KiB, MiB, GiB, K, M, G, KB, MB, GB (exact case, no decimals), or end may be 0",
 				where, field, v)
 		}
 	}

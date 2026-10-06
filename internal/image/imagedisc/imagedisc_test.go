@@ -930,6 +930,76 @@ Disk identifier: ABCD1234`
 	}
 }
 
+func TestValidatePartitionLayoutOrder(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		partitions []config.PartitionInfo
+		wantErr    string
+	}{
+		{
+			name: "accepts base platform layout",
+			partitions: []config.PartitionInfo{
+				{ID: "rootfs", Start: "1MiB", End: "-20GiB"},
+				{ID: "data", Start: "-20GiB", End: "-4GiB"},
+				{ID: "swap", Start: "-4GiB", End: "0"},
+			},
+		},
+		{
+			name: "rejects non-final rest of disk",
+			partitions: []config.PartitionInfo{
+				{ID: "rootfs", Start: "1MiB", End: "0"},
+				{ID: "data", Start: "-4GiB", End: "0"},
+			},
+			wantErr: "only valid on the last partition",
+		},
+		{
+			name: "rejects overlap",
+			partitions: []config.PartitionInfo{
+				{ID: "rootfs", Start: "1MiB", End: "-4GiB"},
+				{ID: "data", Start: "-5GiB", End: "0"},
+			},
+			wantErr: "overlaps the previous partition",
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := validatePartitionLayoutOrder(test.partitions)
+
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("validatePartitionLayoutOrder() error = %v, want containing %q", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validatePartitionLayoutOrder() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestDiskPartitionsCreateRejectsLayoutBeforeDiskAccess(t *testing.T) {
+	originalExecutor := shell.Default
+	t.Cleanup(func() { shell.Default = originalExecutor })
+	shell.Default = shell.NewMockExecutor(nil)
+	partitions := []config.PartitionInfo{
+		{ID: "rootfs", Start: "1MiB", End: "0"},
+		{ID: "data", Start: "2MiB", End: "3MiB"},
+	}
+
+	_, err := DiskPartitionsCreate("/dev/vda", partitions, "gpt")
+
+	if err == nil || !strings.Contains(err.Error(), "only valid on the last partition") {
+		t.Fatalf("DiskPartitionsCreate() error = %v, want pre-wipe layout error", err)
+	}
+}
+
 func TestDiskPartitionsCreate(t *testing.T) {
 	originalExecutor := shell.Default
 	defer func() { shell.Default = originalExecutor }()
@@ -1758,6 +1828,26 @@ func TestResolveInstallDiskPath(t *testing.T) {
 				t.Fatalf("expected %s, got %s", tt.expectPath, path)
 			}
 		})
+	}
+}
+
+func TestRequiredInstallDiskBytesWithEndRelativeOffsets(t *testing.T) {
+	t.Parallel()
+
+	partitions := []config.PartitionInfo{
+		{ID: "rootfs", Start: "1MiB", End: "-20GiB"},
+		{ID: "data", Start: "-20GiB", End: "-4GiB"},
+		{ID: "swap", Start: "-4GiB", End: "0"},
+	}
+
+	got, err := requiredInstallDiskBytes(partitions)
+
+	if err != nil {
+		t.Fatalf("requiredInstallDiskBytes() error = %v", err)
+	}
+	const want = uint64(20*1024*1024*1024 + 2*1024*1024)
+	if got != want {
+		t.Errorf("requiredInstallDiskBytes() = %d, want %d", got, want)
 	}
 }
 
