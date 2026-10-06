@@ -196,6 +196,25 @@ repos:
       - codename: noble
         component: main
 
+  # The repository the Edge Pack catalog resolves from (data/edge-pack.yaml
+  # `pack.repo`). Codename and component are the ones
+  # image-templates/ubuntu24/ubuntu24-x86_64-edgepack-raw.yml installs from, so
+  # a picker selection and a hand-authored build read the same index. EdgePack
+  # publishes one suite per host Ubuntu release (noble for 24.04, resolute for
+  # 26.04); only noble is listed because that is the only suite an authored
+  # template installs from today, and an index entry here is meant to mirror a
+  # real build rather than anticipate one.
+  - id: edgepack
+    displayName: Intel EdgePack
+    url: https://apt.repos.intel.com/edgepack
+    description: Intel platform-enablement packages for Panther Lake / Wildcat Lake — graphics, media, NPU and manageability, plus the DKMS driver sources they build.
+    enabledByDefault: false
+    pkey: https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
+    os: [ubuntu24]
+    index:
+      - codename: noble
+        component: stable
+
   - id: intel-eci
     displayName: Intel Edge Controls for Industrial (ECI)
     url: https://eci.intel.com/repos/noble

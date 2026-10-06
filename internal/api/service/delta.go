@@ -141,6 +141,22 @@ type deltaTemplate struct {
 // chain, so listing just the additions is enough.
 type deltaSystemConfig struct {
 	Packages []string `yaml:"packages,omitempty"`
+	// Dkms is emitted only when the selection includes an Edge Pack package.
+	// A pointer, not a value: config.Dkms's `enabled` is required by the
+	// schema, so a zero-valued block would emit `dkms: {enabled: false}` into
+	// every delta and override a parent template that had turned it on.
+	Dkms *deltaDkms `yaml:"dkms,omitempty"`
+}
+
+// deltaDkms is systemConfig.dkms as a delta declares it: the enable switch and
+// nothing else. `modules` is deliberately left unset — without it ICT runs
+// `dkms autoinstall` for every module the installed packages registered, which
+// is what an Edge Pack selection wants, since which DKMS sources the chosen
+// metapackages pull in is owned by their Debian control files and not by this
+// catalog. Secure Boot signing is likewise not declared: it needs real key
+// material, which the Web UI has no way to supply.
+type deltaDkms struct {
+	Enabled bool `yaml:"enabled"`
 }
 
 // buildDelta renders the extends delta for a selection against its curated
@@ -157,8 +173,13 @@ type deltaSystemConfig struct {
 // repos are the already-mapped packageRepositories entries for sel.Repos; the
 // mapping needs the catalog, which buildDelta deliberately does not reach for,
 // so the caller supplies them (see Service.toTemplateRepos).
+//
+// edgePackNames is the set of package names the Edge Pack catalog publishes
+// (Service.edgePackNameSet). Supplied by the caller for the same reason repos
+// are. A nil set simply means no selection is ever recognised as Edge Pack,
+// which is what the plain-package tests want.
 func buildDelta(parentTemplate string, parentImage config.ImageInfo, parentTarget config.TargetInfo,
-	sel Selection, repos []config.PackageRepository) ([]byte, error) {
+	sel Selection, repos []config.PackageRepository, edgePackNames map[string]bool) ([]byte, error) {
 	name := parentImage.Name
 	if sel.ImageName != "" {
 		name = sel.ImageName
@@ -180,6 +201,9 @@ func buildDelta(parentTemplate string, parentImage config.ImageInfo, parentTarge
 		copy(pkgs, sel.Packages)
 		sort.Strings(pkgs)
 		d.SystemConfig = &deltaSystemConfig{Packages: pkgs}
+		if selectsEdgePack(pkgs, edgePackNames) {
+			d.SystemConfig.Dkms = &deltaDkms{Enabled: true}
+		}
 	}
 	d.Disk = sel.Disk
 	data, err := yaml.Marshal(d)
@@ -194,6 +218,20 @@ func buildDelta(parentTemplate string, parentImage config.ImageInfo, parentTarge
 		return nil, fmt.Errorf("generated delta failed validation: %v", issues)
 	}
 	return data, nil
+}
+
+// selectsEdgePack reports whether any selected entry is an Edge Pack package.
+//
+// Compared on the package name alone, so a version-pinned pick
+// (`intel-edge-npu_1.2.3`) counts exactly as the unpinned one does — the pin
+// changes which build is installed, not whether it ships DKMS module sources.
+func selectsEdgePack(packages []string, edgePackNames map[string]bool) bool {
+	for _, entry := range packages {
+		if edgePackNames[packageName(entry)] {
+			return true
+		}
+	}
+	return false
 }
 
 // hasErrorIssue reports whether any issue is error-severity (warnings are

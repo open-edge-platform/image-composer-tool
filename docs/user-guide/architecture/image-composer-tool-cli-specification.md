@@ -21,6 +21,9 @@
       - [config show](#config-show)
     - [Version Command](#version-command)
     - [Install-Completion Command](#install-completion-command)
+    - [Serve Command](#serve-command)
+      - [Serving privileged builds](#serving-privileged-builds)
+      - [Data overrides](#data-overrides)
   - [Examples](#examples)
     - [Building an Image](#building-an-image)
     - [Managing Configuration](#managing-configuration)
@@ -657,6 +660,126 @@ Fish automatically loads completions from the standard location. Just restart yo
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 . $PROFILE
 ```
+
+### Serve Command
+
+Run the HTTP API that backs the ICT web UI, together with the frontend bundle
+embedded in the binary. The server reads the configuration manifest, resolves
+pre-authored templates, and triggers image builds by invoking the
+`image-composer-tool` binary, streaming the build logs back to the browser.
+
+```bash
+image-composer-tool serve [flags]
+```
+
+**Flags:**
+
+| Flag | Description |
+| ---- | ----------- |
+| `--host STRING` | Address to bind. Defaults to `127.0.0.1` (localhost only). Set `0.0.0.0` to expose the API on all interfaces — not recommended, because this API can trigger privileged builds. |
+| `--port, -p STRING` | Port to listen on. Default `8080`. |
+| `--templates-dir STRING` | Directory of pre-authored templates offered by the Basic tab. Default `image-templates`. |
+| `--ict-binary STRING` | Path to the `image-composer-tool` binary used for builds. When empty, auto-detects `./build/image-composer-tool`, then `./image-composer-tool`, then `$PATH`. |
+| `--work-dir STRING` | Base directory for per-build work and output directories. Default `webui-workspace`. |
+| `--sudo` | Run builds under `sudo -n`. ICT requires root for chroot and mount operations. Requires the scoped sudoers rules described below. |
+| `--print-sudoers` | Print the scoped sudoers drop-in required by `--sudo`, then exit without starting the server. |
+| `--manifest STRING` | Path to a manifest YAML to read from disk instead of the copy embedded at build time. |
+| `--package-repos STRING` | Path to a package-repository catalog YAML to read from disk instead of the copy embedded at build time. Backs the Advanced tab's repository picker. |
+| `--edge-pack STRING` | Path to an Edge Pack catalog YAML to read from disk instead of the copy embedded at build time. Backs the Advanced tab's Edge Pack picker. |
+
+**Description:**
+
+`serve` resolves `--templates-dir`, `--work-dir`, and the global configuration
+file relative to its working directory. Start it from the repository root;
+started from elsewhere, template selections fail with
+`matched template file not found on disk`.
+
+The server binds to localhost by default. The API can start privileged builds,
+so treat exposing it on a routable address as a deliberate decision rather than
+a convenience — it has no authentication of its own.
+
+#### Serving privileged builds
+
+Builds need root for chroot and mount operations. Either run the server as root
+on an isolated build host, in which case no extra setup is needed, or run it as
+an unprivileged service user with `--sudo` and three scoped, passwordless
+sudoers rules — build, cancel, and read:
+
+```text
+<svc-user> ALL=(root) NOPASSWD: /path/to/image-composer-tool build *
+<svc-user> ALL=(root) NOPASSWD: /usr/bin/kill -TERM -[0-9]*
+<svc-user> ALL=(root) NOPASSWD: /usr/bin/cat /path/to/workspace/builds/*
+```
+
+The `kill` rule lets the non-root server cancel a build by signalling the
+root-owned build process group; the `cat` rule lets it stream root-owned build
+artifacts back to the browser. Without them, cancellation and downloads fail
+across the `sudo` boundary. Do not grant the service blanket `sudo`.
+
+Do not hand-write the rules. `--print-sudoers` generates them for the current
+user and the resolved `--ict-binary` and `--work-dir`, resolving `kill` and
+`cat` against sudo's own `secure_path` — the same lookup sudo performs at
+runtime — so a locally installed `/usr/local/bin/kill` shadowing the distribution
+one cannot silently turn a hand-written rule into
+`sudo: a password is required`:
+
+```bash
+# Generate and install the drop-in
+image-composer-tool serve --print-sudoers | sudo tee /etc/sudoers.d/image-composer-tool-webui
+
+# Or generate, visudo-validate, and install in one step
+scripts/install-sudoers.sh
+```
+
+**Security:** the build process group id is not known ahead of time, so the
+`kill` rule grants the service user root `SIGTERM` — only `TERM` — to *any*
+process group. Accept this deliberately, or run the server as root on an
+isolated build host instead.
+
+#### Data overrides
+
+The manifest, the package-repository catalog, and the Edge Pack catalog are
+embedded in the binary at build time. Each has a flag that reads the file from
+disk instead, so the data can be edited and picked up by restarting `serve`
+rather than rebuilding the binary:
+
+| Flag | Overrides | Drives |
+| ---- | --------- | ------ |
+| `--manifest` | the embedded configuration manifest | OS targets, image types, and architectures offered by the UI |
+| `--package-repos` | `internal/api/service/data/package-repos.yaml` | the Advanced tab's repository picker and cross-repository package search |
+| `--edge-pack` | `internal/api/service/data/edge-pack.yaml` | the Advanced tab's Edge Pack picker, which groups a subset of the catalogued packages into capability domains |
+
+An override path that does not exist, or that fails validation, is reported at
+startup and the server does not start — a malformed catalog is not silently
+replaced by the embedded one.
+
+**Example:**
+
+```bash
+# Serve the web UI on localhost:8080, running builds as the current user
+image-composer-tool serve
+
+# Run builds under sudo -n, with the scoped rules installed
+image-composer-tool serve --sudo
+
+# Listen on a different port, with templates from a non-default directory
+image-composer-tool serve --port 9090 --templates-dir ./my-templates
+
+# Iterate on the package catalogs without rebuilding the binary
+image-composer-tool serve \
+  --package-repos ./internal/api/service/data/package-repos.yaml \
+  --edge-pack ./internal/api/service/data/edge-pack.yaml
+
+# Print the sudoers drop-in for a non-default binary and workspace, then exit
+image-composer-tool serve --print-sudoers \
+  --ict-binary /usr/local/bin/image-composer-tool \
+  --work-dir /var/lib/image-composer-tool/webui
+```
+
+See also:
+
+- [`web/README.md`](../../../web/README.md) — building the frontend bundle,
+  embedding it, and the hot-reload development loop.
 
 ## Examples
 

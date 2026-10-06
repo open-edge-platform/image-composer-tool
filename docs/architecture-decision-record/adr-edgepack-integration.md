@@ -77,14 +77,28 @@ The current Noble package breakdown is:
 
 | EdgePack package | Role | Important direct dependencies |
 | --- | --- | --- |
-| `intel-edge-base-standard` | Base non-realtime metapackage | `intel-edge-graphics-core`, `intel-edge-graphics-display`, `intel-edge-media-core`, `linux-firmware`, `edge-edac-dkms`, `edge-issei-dkms` |
+| `intel-edge-base-standard` | Base non-realtime metapackage | `intel-edge-graphics-core`, `intel-edge-graphics-display`, `intel-edge-media-core`, `intel-edge-npu`, `intel-edge-ipu`, `edge-compute-essentials`, `linux-firmware`, `edge-edac-dkms`, `edge-issei-dkms` |
 | `intel-edge-graphics-core` | Headless/core graphics userspace and driver | Mesa, `libdrm2`, `edge-gfx-dkms` |
 | `intel-edge-graphics-display` | Wayland, Mutter, Weston, and Xorg display stack | `intel-edge-graphics-core` and display-server packages |
 | `intel-edge-media-core` | VA-API, oneVPL, and media runtime | Graphics core/display, Intel media driver, VA-API, oneVPL |
 | `intel-edge-media-ffmpeg` | Optional FFmpeg profile | `intel-edge-media-core` and FFmpeg runtime/development packages |
 | `intel-edge-media-gst` | Optional GStreamer profile | `intel-edge-media-core` and GStreamer plugin/runtime/development packages |
-| `intel-edge-npu` | Optional NPU profile | NPU compiler, firmware, Level Zero NPU runtime; Noble also requires the configured Intel graphics snapshot repository |
+| `intel-edge-npu` | NPU profile, installed by the base metapackage | NPU compiler, firmware, Level Zero NPU runtime; Noble also requires the configured Intel graphics snapshot repository |
+| `intel-edge-ipu` | IPU profile, installed by the base metapackage | Not enumerated here — owned by the package's own Debian control metadata |
+| `edge-compute-essentials` | Compute-essentials profile, installed by the base metapackage | Not enumerated here — owned by the package's own Debian control metadata |
 | `intel-edge-manageability` | Optional vPRO manageability profile | `lms`, `rpc-go`, `edge-mei-dkms` |
+
+The NPU, IPU and compute-essentials profiles are **not optional**: an image that
+installs `intel-edge-base-standard` gets all three whether or not it names them,
+so listing them alongside the base is redundant rather than additive. Only the
+FFmpeg, GStreamer and manageability profiles are genuine choices on top of the
+base, which is what the Web UI's Edge Pack tab offers as domains — see
+`internal/api/service/data/edge-pack.yaml`.
+
+One consequence for repository inputs: because the NPU packages live inside the
+base, the Intel graphics snapshot repository they depend on is a prerequisite of
+the **base**, not of an optional profile. A template that installs nothing but
+`intel-edge-base-standard` still needs it configured.
 
 The base graphics dependency chain is:
 
@@ -143,8 +157,9 @@ The composition pipeline will:
   release.
 3. Install the common DKMS build infrastructure and any module-specific
   dependencies listed in the release manifest.
-4. Install `intel-edge-base-standard` and selected optional EdgePack profiles
-  into the target root.
+4. Install `intel-edge-base-standard` — which carries the graphics, media, NPU,
+  IPU and compute-essentials profiles — plus any of the optional FFmpeg,
+  GStreamer and manageability profiles the image selects, into the target root.
 5. Ensure package maintainer scripts do not compile for the composer kernel.
   EdgePack packages must either accept a composer-supplied target kernel and
   use it for all DKMS operations, or defer compilation until ICT invokes the

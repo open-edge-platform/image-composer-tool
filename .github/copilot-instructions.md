@@ -104,21 +104,11 @@ Coverage threshold is enforced and auto-ratcheted — see `.coverage-threshold`.
 ## UI Development (web/)
 
 The web UI (`web/`) is a React 19 + TypeScript + Vite + Tailwind frontend, embedded into
-the `image-composer-tool` Go binary via `//go:embed` and served by the `serve` subcommand
-(see [web/README.md](../web/README.md)).
+the `image-composer-tool` Go binary via `//go:embed` and served by the `serve` subcommand.
+Dev loop, type-check, browser verification, and full-embed-rebuild steps live in the
+scoped companion file.
 
-- **Dev loop**: run the backend and frontend separately for hot-reload — `go run
-  ./cmd/image-composer-tool serve --sudo` (Terminal 1) and `cd web && npm run dev`
-  (Terminal 2). Vite serves at `http://localhost:5173` and proxies `/api/v1` to `:8080`.
-- **Type check**: `cd web && npx tsc --noEmit` before declaring a frontend change done.
-- **Verify in a browser**: for any UI change, load it via the dev server (or the rebuilt
-  binary) and exercise the feature — passing `tsc`/tests does not confirm the UI actually
-  works. Check the golden path and obvious edge cases.
-- **Full embed rebuild** (needed to test through the real Go binary, not just Vite):
-  `(cd web && npm ci && npm run build)` → `rm -rf internal/webui/dist && cp -r web/dist
-  internal/webui/dist` → `go build -o ./build/image-composer-tool
-  ./cmd/image-composer-tool/`. Hard-refresh (Ctrl/Cmd+Shift+R) after restarting `serve`
-  to bypass the cached bundle.
+> Full conventions: [.github/instructions/web.instructions.md](instructions/web.instructions.md) (auto-applies to `web/**`).
 
 ---
 
@@ -237,9 +227,19 @@ This single file is loaded into every chat. Keep it lean — path-specific and w
   - [go-tests.instructions.md](instructions/go-tests.instructions.md) — `applyTo: "**/*_test.go"`
   - [provider.instructions.md](instructions/provider.instructions.md) — `applyTo: "internal/provider/**/*.go"`
   - [image-templates.instructions.md](instructions/image-templates.instructions.md) — `applyTo: "image-templates/**/*.yml"`
+  - [web.instructions.md](instructions/web.instructions.md) — `applyTo: "web/**"`
 - **`.github/prompts/*.prompt.md`** — Reusable task prompts. Existing:
   - [add-os-provider.prompt.md](prompts/add-os-provider.prompt.md)
-- **`.github/chatmodes/*.chatmode.md`** — Custom agent modes with restricted tool sets (e.g. a read-only "reviewer" mode). _Not yet added._
+- **`.github/hooks/*.json`** — Deterministic lifecycle hooks (not just guidance). Existing:
+  - [block-dangerous-git.json](hooks/block-dangerous-git.json) — denies `git push --force`, `--no-verify`, `git reset --hard`
+  - [post-edit-checks.json](hooks/post-edit-checks.json) — flags `gofmt` drift on edited `.go` files and schema-validates edited `image-templates/**/*.yml`
+- **`.github/agents/*.agent.md`** — Custom agent personas with restricted tool sets, selectable from the agent picker or delegated to as subagents. Existing:
+  - [reviewer.agent.md](agents/reviewer.agent.md) — read-only code review
+  - [provider-scaffolder.agent.md](agents/provider-scaffolder.agent.md) — new/extended OS providers
+  - [template-author.agent.md](agents/template-author.agent.md) — image template YAML authoring/validation
+  - [security-auditor.agent.md](agents/security-auditor.agent.md) — OWASP/secrets/convention audit
+  - [docs-updater.agent.md](agents/docs-updater.agent.md) — keeps the documentation matrix in sync
+  - [release-notes-writer.agent.md](agents/release-notes-writer.agent.md) — drafts release-notes.md entries
 - **`.vscode/mcp.json`** — Shared MCP servers (e.g. GitHub, fetch, container tooling) so every contributor's agent has the same capabilities. _Not yet added._
 - **`AGENTS.md`** (repo root) — mirrors a subset of these instructions for non-Copilot agents (Cursor, Claude Code, etc.). Keep [AGENTS.md](../AGENTS.md) and this file in sync.
 

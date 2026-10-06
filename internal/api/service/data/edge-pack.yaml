@@ -1,0 +1,128 @@
+# SPDX-FileCopyrightText: (C) 2026 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+#
+# Edge Pack: the capability grouping offered by the ICT Web UI Advanced tab's
+# Packages step, alongside the repository browser.
+#
+# The two surfaces group the SAME packages along different axes. A repository
+# answers "where does this come from"; a domain answers "what does this let the
+# image do". Both write into one selection list, so a package picked on either
+# shows as picked on the other — see internal/api/service/data/package-repos.yaml
+# for the repository side.
+#
+# This is NOT build configuration. Nothing here becomes a template field: a
+# selected Edge Pack package reaches a build exactly as a package picked from the
+# repository browser does, as a `systemConfig.packages` entry in the generated
+# Advanced-mode delta. The pack, its domains and its base runtimes are
+# presentation structure only, and no template records that a package arrived by
+# way of a domain.
+#
+# Fields:
+#   id                 stable identifier for the pack
+#   displayName        label shown on the Edge Pack tab
+#   description        one-line explanation, shown beside the pack checkbox
+#   repo               the package-repos.yaml repo id every package below
+#                      resolves from. One repo for the whole pack: these are
+#                      published together, and binding per-package would invite a
+#                      catalog where half the pack silently has nowhere to
+#                      resolve from. edgepack_test.go asserts this id exists.
+#   baseRuntimes       the runtime flavours a domain's packages run on top of.
+#                      Common to every domain rather than owned by one, which is
+#                      why they are listed here and not under `domains`. No
+#                      domain can be selected until one is chosen; deselecting a
+#                      domain never deselects the runtime.
+#     id               stable identifier
+#     displayName      label shown in the Base Runtime selector
+#     package          the package name selecting this runtime adds
+#     requiresRepos    extra package-repos.yaml repo ids this runtime's package
+#                      needs on top of `repo`, enabled alongside it when the
+#                      runtime is selected. Same contract as the domain field of
+#                      the same name below, for the same reason: the runtime
+#                      metapackage pulls in profiles whose dependencies live in a
+#                      repository the pack itself does not carry, and a runtime
+#                      is reported unavailable when one of these is not offered
+#                      for the target. edgepack_test.go asserts these ids exist.
+#     available        false shows the option but leaves it unselectable.
+#                      Omitted means true.
+#     unavailableReason  why it is unselectable; shown to the user. Required
+#                      when available is false — an option greyed out with no
+#                      stated reason reads as a bug rather than as a decision.
+#   domains            the capability groups, in display order.
+#     id               stable identifier
+#     displayName      label shown on the domain card
+#     description      one-line explanation of the capability
+#     os               target ids (manifest `targets[].id`) this domain is
+#                      published for. Omitted means every target. A domain the
+#                      current target does not support is still shown, locked,
+#                      with the reason stated — hiding it would make a domain
+#                      that exists elsewhere look like it does not exist at all.
+#     requiresRepos    extra package-repos.yaml repo ids this domain's packages
+#                      need on top of `repo`, enabled alongside it when the
+#                      domain is selected. For a metapackage whose dependencies
+#                      live in a repository the pack itself does not carry, so a
+#                      template that selects it can still resolve. A domain is
+#                      reported unavailable when any of these is not offered for
+#                      the target: it could be selected, but the result would
+#                      not build. edgepack_test.go asserts these ids exist.
+#     packages         package names in this domain. A name may appear in more
+#                      than one domain (membership is many-to-many, e.g. a media
+#                      runtime shared with a future Graphics domain), so the
+#                      per-domain counts can sum to more than the pack total.
+#                      The pack total is always computed over unique names.
+#
+# The package names below are the EdgePack Noble breakdown documented in
+# docs/architecture-decision-record/adr-edgepack-integration.md. They resolve
+# from `edgepack`, the public signed repository at apt.repos.intel.com/edgepack
+# that ubuntu24-x86_64-edgepack-raw.yml also installs from — so a pack selection
+# and a hand-authored build pull the same packages from the same place.
+
+pack:
+  id: edge-pack
+  displayName: Edge Pack
+  description: Intel Edge capabilities, grouped by domain
+  repo: edgepack
+
+  baseRuntimes:
+    # The standard base is more than graphics and media: it pulls in the NPU
+    # (intel-edge-npu), IPU (intel-edge-ipu) and edge-compute-essentials
+    # profiles as well. None of those is a domain below, because none of them is
+    # a choice — they arrive with the runtime, and offering them as domains would
+    # invite a user to untick a capability the base installs regardless.
+    #
+    # It is also why the Intel graphics PPA is a prerequisite of the runtime
+    # rather than of a domain: the NPU packages inside the base depend on the
+    # client GPU compute runtime published there, not in the pack repo. Naming it
+    # here is what keeps a template that selects nothing but the base resolvable
+    # — see requiresRepos.
+    #
+    # Deliberately NOT enumerating the rest of what the metapackage pulls in:
+    # those Depends are owned by its Debian control file, and restating them here
+    # would be a second, silently drifting copy.
+    - id: standard
+      displayName: Standard
+      package: intel-edge-base-standard
+      requiresRepos: [intel-graphics]
+    - id: realtime
+      displayName: Real-time
+      package: intel-edge-base-realtime
+      available: false
+      unavailableReason: Real-time packages and a qualified SKU are not available yet
+
+  # Only the capabilities a user can genuinely decline are domains. Everything
+  # the standard base installs on its own — NPU, IPU, edge-compute-essentials,
+  # the graphics and media cores — is deliberately absent: a domain is a choice,
+  # and presenting a mandatory capability as one would let it be unticked in the
+  # UI while the base metapackage installed it anyway.
+  domains:
+    - id: media
+      displayName: Media
+      description: FFmpeg and GStreamer built with Intel GPU support.
+      packages:
+        - intel-edge-media-ffmpeg
+        - intel-edge-media-gst
+
+    - id: manageability
+      displayName: Manageability
+      description: Intel vPro manageability.
+      packages:
+        - intel-edge-manageability
