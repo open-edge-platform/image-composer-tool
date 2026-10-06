@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import type { HistoryItem } from '../api/types'
+import { labelFor, useStore } from '../store'
+import type { HistoryItem, Manifest } from '../api/types'
 
 interface HistorySidebarProps {
   items: HistoryItem[]
@@ -9,13 +10,15 @@ interface HistorySidebarProps {
 }
 
 // Left-hand compose history list inside the Compose Image tab. Newest first;
-// each row shows a status dot, template name, and vertical · relative time.
+// each row shows a status dot and SKU, the rest of the selection as subtext, and
+// a relative time.
 export function HistorySidebar({
   items,
   selectedId,
   onSelect,
   clockOffsetMs = 0,
 }: HistorySidebarProps) {
+  const manifest = useStore((s) => s.manifest)
   const [nowMs, setNowMs] = useState(() => Date.now())
   useEffect(() => {
     if (items.length === 0) return
@@ -23,7 +26,7 @@ export function HistorySidebar({
     return () => clearInterval(t)
   }, [items.length])
   return (
-    <div className="w-64 shrink-0 border-r border-slate-200 pr-3">
+    <div className="w-72 shrink-0 border-r border-slate-200 pr-3">
       <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
         History
       </p>
@@ -31,41 +34,93 @@ export function HistorySidebar({
         <p className="text-xs text-slate-400">No composes yet.</p>
       ) : (
         <ul className="space-y-1">
-          {items.map((it) => (
-            <li key={it.id}>
-              <button
-                onClick={() => onSelect(it.id)}
-                className={
-                  'w-full rounded-md px-2 py-1.5 text-left text-xs transition ' +
-                  (it.id === selectedId
-                    ? 'bg-[#e6f2fa] text-[#00285a]'
-                    : 'hover:bg-slate-100 text-slate-700')
-                }
-              >
-                <div className="flex items-center gap-1.5">
-                  <StatusDot status={it.status} />
-                  <span className="truncate font-medium">{combinationLabel(it)}</span>
-                </div>
-                <div className="mt-0.5 pl-3 text-[11px] text-slate-400">
-                  {relativeTime(it.createdAt, nowMs + clockOffsetMs)}
-                </div>
-              </button>
-            </li>
-          ))}
+          {items.map((it) => {
+            const { title, details, tooltip } = rowLabels(it, manifest)
+            return (
+              <li key={it.id}>
+                <button
+                  onClick={() => onSelect(it.id)}
+                  title={tooltip}
+                  className={
+                    'w-full rounded-md px-2 py-1.5 text-left text-xs transition ' +
+                    (it.id === selectedId
+                      ? 'bg-[#e6f2fa] text-[#00285a]'
+                      : 'hover:bg-slate-100 text-slate-700')
+                  }
+                >
+                  <div className="flex items-center gap-1.5">
+                    <StatusDot status={it.status} />
+                    <span className="truncate font-medium">{title}</span>
+                  </div>
+                  {details && (
+                    <div className="mt-0.5 truncate pl-3 text-[11px] text-slate-400">
+                      {details}
+                    </div>
+                  )}
+                  <div className="mt-0.5 pl-3 text-[11px] text-slate-400">
+                    {relativeTime(it.createdAt, nowMs + clockOffsetMs)}
+                  </div>
+                </button>
+              </li>
+            )
+          })}
         </ul>
       )}
     </div>
   )
 }
 
-// combinationLabel summarizes the composed selection (vertical / platform / OS /
-// image type) for a history row, falling back to the template filename when no
-// summary is available (e.g. very old builds).
-function combinationLabel(it: HistoryItem): string {
+// rowLabels splits a history row's selection into a title and a subtext line.
+//
+// The SKU leads, because it is the one dimension the rest of the selection can be
+// identical across: the two Fed Aero blueprints share use case, platform, OS and
+// image type, so a label built from those alone made them indistinguishable.
+//
+// Values are the manifest's display names rather than the raw ids the server
+// records, so a row reads in the same vocabulary as the dropdowns that produced
+// it. labelFor falls back to the id when the manifest has not loaded yet or no
+// longer lists the value, so a row degrades to slugs rather than blanks.
+//
+// Both rendered lines truncate, hence `tooltip` carrying the full text.
+function rowLabels(
+  it: HistoryItem,
+  manifest: Manifest | null,
+): { title: string; details: string; tooltip: string } {
   const s = it.summary
-  if (!s) return it.template
-  const parts = [s.vertical, s.platform, s.os, s.imageType?.toUpperCase()].filter(Boolean)
-  return parts.join(' / ')
+  // No summary at all: an older record, or one whose template failed to merge.
+  if (!s) return { title: it.template, details: '', tooltip: it.template }
+
+  const vertical = labelFor(manifest?.verticals ?? [], s.vertical)
+  const imageType = s.imageType?.toUpperCase() ?? ''
+
+  // The platform is the one dimension the subtext abbreviates to its id: the
+  // manifest's display name glosses the codename ("PTL (Panther Lake)"), which
+  // is what a dropdown wants but costs a third of the row's width here — enough
+  // to truncate the image type away on the Fed Aero rows. The acronym already
+  // identifies the platform, and the tooltip below still carries the full name.
+  const platformShort = s.platform.toUpperCase()
+  const platform = labelFor(manifest?.platforms ?? [], s.platform)
+  const os = labelFor(manifest?.targets ?? [], s.os)
+
+  // SKU is optional — a vertical that offers only one combination records none.
+  // Promote the use case to the title there rather than leaving it empty.
+  const sku = s.sku ? labelFor(manifest?.skus ?? [], s.sku) : ''
+  const title = sku || vertical || it.template
+  const rest = sku
+    ? [vertical, platformShort, os, imageType]
+    : [platformShort, os, imageType]
+
+  const tooltip = [
+    sku && `SKU: ${sku}`,
+    vertical && `Use Case: ${vertical}`,
+    platform && `Platform: ${platform}`,
+    os && `OS: ${os}`,
+    imageType && `Image Type: ${imageType}`,
+  ]
+    .filter(Boolean)
+    .join('\n')
+
+  return { title, details: rest.filter(Boolean).join(' · '), tooltip }
 }
 
 // One dot per server-side build state. Cancelling and cancelled need their own
