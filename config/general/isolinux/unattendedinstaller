@@ -11,10 +11,42 @@ LOG_FILE="/tmp/unattended-installer.log"
 LOCK_DIR="/tmp/unattended-installer.lock"
 
 # Prevent multiple unattended installer instances from running at the same time.
+# Root logs in on every console (tty1 and the serial console), and each login
+# starts this script, so losing the lock is expected: the installer is running
+# on the other console. Follow its log until it finishes or fails, since this
+# console may be the one the user is watching (for example QEMU with -nographic).
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-    echo "Another unattended installer instance is already running. See the installer log at $LOG_FILE and then exit."
+    echo "The unattended installer is already running on another console. This is normal:"
+    echo "every console starts it, and only the first one runs it."
+    echo "Following its log ($LOG_FILE) until the installer finishes or fails."
+    echo "----------------------------------------------------------------"
+
+    # The winner records its PID and creates the log right after taking the lock.
+    winnerPid=""
+    for _ in {1..10}; do
+        winnerPid=$(cat "$LOCK_DIR/pid" 2>/dev/null || true)
+        [[ -n "$winnerPid" && -f "$LOG_FILE" ]] && break
+        sleep 1
+    done
+
+    if [[ -z "$winnerPid" || ! -f "$LOG_FILE" ]]; then
+        echo "(no output yet)"
+        exit 0
+    fi
+
+    tail -n 40 -f "$LOG_FILE" &
+    tailPid=$!
+    trap 'kill "$tailPid" 2>/dev/null || true' EXIT
+
+    # On failure the winner removes the lock and stays alive as an interactive
+    # shell, so end on either the lock going away or the winner exiting.
+    while [[ -d "$LOCK_DIR" ]] && kill -0 "$winnerPid" 2>/dev/null; do
+        sleep 1
+    done
+    sleep 1 # let tee flush the last lines before tail is stopped
     exit 0
 fi
+echo $$ > "$LOCK_DIR/pid"
 
 # Capture the full unattended run output for post-boot diagnostics.
 # tee keeps output visible on the console while persisting it to a file.
@@ -110,7 +142,7 @@ if [[ $installerExitCode -eq 0 ]]; then
 else
     echo "Unattended install failed with exit code $installerExitCode"
     echo "Installer log is available at $LOG_FILE"
-    rmdir "$LOCK_DIR" 2>/dev/null || true
+    rm -rf "$LOCK_DIR"
     # Restore direct console output before launching an interactive shell.
     exec 1>&3 2>&4
     exec /bin/bash -i
