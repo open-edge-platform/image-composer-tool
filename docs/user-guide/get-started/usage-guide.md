@@ -94,7 +94,7 @@ sudo -E ./image-composer-tool build --no-cache image-templates/azl3/azl3-x86_64-
 # Override composition settings for one build (disk strategy, hostname, proxy, SSH keys)
 sudo -E ./image-composer-tool build --disk-strategy largest --hostname edge-01 \
   --http-proxy http://proxy.example.com:3128 --ssh-authorized-key admin=$HOME/.ssh/id_ed25519.pub \
-  image-templates/ubuntu24/ubuntu24-x86_64-base-platform-iso.yml
+  image-templates/ubuntu24/ubuntu24-x86_64-edgepack-unattended-iso.yml
 ```
 
 Common flags: `--workers`, `--cache-dir`, `--work-dir`, `--no-cache`, `--verbose`,

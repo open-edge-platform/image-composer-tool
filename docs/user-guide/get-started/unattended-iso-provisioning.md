@@ -6,11 +6,16 @@ the OS from packages carried on the ISO, configures users, SSH keys, proxy,
 cloud-init, and boot-time provisioning, makes the installed disk the first boot
 device, and reboots.
 
-The worked example is the Base Platform template, available for
-Ubuntu 24.04 (latest HWE kernel) and Ubuntu 26.04:
+The worked examples are the Intel EdgePack unattended ISO templates. Each one
+installs the same package set as the matching EdgePack raw template, in a
+desktop and a headless server variant for Ubuntu 24.04 and Ubuntu 26.04. They
+pin kernel 7.0.0-34, because `edge-gfx-dkms` 7.0 does not build against the
+7.0.0-38 headers.
 
-- [`image-templates/ubuntu24/ubuntu24-x86_64-base-platform-iso.yml`](../../../image-templates/ubuntu24/ubuntu24-x86_64-base-platform-iso.yml)
-- [`image-templates/ubuntu26/ubuntu26-x86_64-base-platform-iso.yml`](../../../image-templates/ubuntu26/ubuntu26-x86_64-base-platform-iso.yml)
+| Variant | Ubuntu 24.04 | Ubuntu 26.04 |
+|---------|--------------|--------------|
+| Desktop | [`ubuntu24-x86_64-edgepack-unattended-iso.yml`](../../../image-templates/ubuntu24/ubuntu24-x86_64-edgepack-unattended-iso.yml) | [`ubuntu26-x86_64-edgepack-unattended-iso.yml`](../../../image-templates/ubuntu26/ubuntu26-x86_64-edgepack-unattended-iso.yml) |
+| Server | [`ubuntu24-x86_64-edgepack-server-unattended-iso.yml`](../../../image-templates/ubuntu24/ubuntu24-x86_64-edgepack-server-unattended-iso.yml) | [`ubuntu26-x86_64-edgepack-server-unattended-iso.yml`](../../../image-templates/ubuntu26/ubuntu26-x86_64-edgepack-server-unattended-iso.yml) |
 
 Field details are in the [Image Template Reference](../architecture/image-composer-tool-templates.md).
 
@@ -181,10 +186,10 @@ which are replaced once the new entry is in place.
 go build -buildmode=pie -o ./build/live-installer ./cmd/live-installer
 go build -o ./build/image-composer-tool ./cmd/image-composer-tool   # or: earthly +build
 
-./build/image-composer-tool validate --merged image-templates/ubuntu24/ubuntu24-x86_64-base-platform-iso.yml
+./build/image-composer-tool validate --merged image-templates/ubuntu24/ubuntu24-x86_64-edgepack-unattended-iso.yml
 sudo -E ./build/image-composer-tool build \
   --ssh-authorized-key "admin=$HOME/.ssh/id_ed25519.pub" \
-  image-templates/ubuntu24/ubuntu24-x86_64-base-platform-iso.yml
+  image-templates/ubuntu24/ubuntu24-x86_64-edgepack-unattended-iso.yml
 ```
 
 The shipped `additionalfiles/base-platform/admin.pub` contains only comments and
@@ -198,9 +203,9 @@ contains:
 
 | File | Content |
 |------|---------|
-| `base-platform-ubuntu24-24.04.iso` | The installer ISO |
+| `edgepack-os-image-ubuntu-unattended-24.04.iso` | The installer ISO |
 | `spdx_manifest_deb_*.json` | SPDX SBOM of the system the ISO installs |
-| `base-platform-ubuntu24-24.04.composition.json` | Composition manifest: base OS, base and template repositories, packages with versions and checksums, kernel, provisioning inputs, and every additional file with its SHA-256 |
+| `edgepack-os-image-ubuntu-unattended-24.04.composition.json` | Composition manifest: base OS, base and template repositories, packages with versions and checksums, kernel, provisioning inputs, and every additional file with its SHA-256 |
 | `template-dump.yaml` | The merged template the installer uses |
 
 The installed system also carries its own SBOM in `/usr/share/sbom/`.
