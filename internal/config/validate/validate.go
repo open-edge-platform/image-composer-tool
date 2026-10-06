@@ -29,7 +29,7 @@ var log = logger.Logger()
 
 var partitionOffsetPattern = regexp.MustCompile(`^(-?)([1-9][0-9]*)(KiB|MiB|GiB|K|M|G|KB|MB|GB)$`)
 
-var partitionOffsetMultipliers = map[string]uint64{
+var sizeUnitMultipliers = map[string]uint64{
 	"KiB": 1024,
 	"MiB": 1024 * 1024,
 	"GiB": 1024 * 1024 * 1024,
@@ -254,7 +254,7 @@ func parsePartitionOffset(value string) (partitionOffset, error) {
 	if err != nil {
 		return partitionOffset{}, fmt.Errorf("offset %q is too large", value)
 	}
-	multiplier := partitionOffsetMultipliers[match[3]]
+	multiplier := sizeUnitMultipliers[match[3]]
 	if number > ^uint64(0)/multiplier {
 		return partitionOffset{}, fmt.Errorf("offset %q is too large", value)
 	}
@@ -428,16 +428,10 @@ func validateDkmsSecureBootConstraints(data []byte) error {
 	return nil
 }
 
-// diskSizeSuffixes/diskSizeSuffixBytes/diskSizePattern mirror config.go's
-// parseDiskSizeBytes (itself mirroring imagedisc.TranslateSizeStrToBytes's unit
-// table). Duplicated here because this package validates raw JSON before it is
-// unmarshaled into config.ImageTemplate, and internal/config already imports
-// this package, so it cannot be imported back.
-var (
-	diskSizeSuffixes    = []string{"KiB", "MiB", "GiB", "K", "M", "G", "KB", "MB", "GB"}
-	diskSizeSuffixBytes = []uint64{1024, 1048576, 1073741824, 1024, 1048576, 1073741824, 1000, 1000000, 1000000000}
-	diskSizePattern     = regexp.MustCompile(`^(\d+)(.*)$`)
-)
+// diskSizePattern mirrors config.go's parseDiskSizeBytes syntax. The parser is
+// duplicated here because internal/config imports this package and cannot be
+// imported back.
+var diskSizePattern = regexp.MustCompile(`^(\d+)(.*)$`)
 
 // parseDiskSizeBytes parses a disk.size/disk.maxSize string (e.g. "8GiB") into
 // bytes, capped at math.MaxInt64 to match the int64 the build-time resize path
@@ -451,16 +445,14 @@ func parseDiskSizeBytes(field, s string) (uint64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("%s %q: %w", field, s, err)
 	}
-	for i, suf := range diskSizeSuffixes {
-		if match[2] == suf {
-			unit := diskSizeSuffixBytes[i]
-			if num > math.MaxInt64/unit {
-				return 0, fmt.Errorf("%s %q: size overflows the supported range", field, s)
-			}
-			return num * unit, nil
-		}
+	unit, ok := sizeUnitMultipliers[match[2]]
+	if !ok {
+		return 0, fmt.Errorf("%s %q: size suffix %q not recognized", field, s, match[2])
 	}
-	return 0, fmt.Errorf("%s %q: size suffix %q not recognized", field, s, match[2])
+	if num > math.MaxInt64/unit {
+		return 0, fmt.Errorf("%s %q: size overflows the supported range", field, s)
+	}
+	return num * unit, nil
 }
 
 // validateDiskMaxSizeConstraints enforces disk.maxSize's invariants against raw
