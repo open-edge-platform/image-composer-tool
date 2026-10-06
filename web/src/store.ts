@@ -344,7 +344,10 @@ function autoFillCascade(manifest: Manifest, selection: Selection): void {
 
 // --- Derived cascading option helpers (pure functions over the manifest) ---
 
-function labelFor(options: { id: string; displayName: string }[], id: string): string {
+// Exported so the history sidebar labels a past build's recorded ids through the
+// same table the dropdowns label the live selection with. Returns the id itself
+// for a value the manifest does not list — an old build's retired SKU, say.
+export function labelFor(options: { id: string; displayName: string }[], id: string): string {
   return options.find((o) => o.id === id)?.displayName ?? id
 }
 
