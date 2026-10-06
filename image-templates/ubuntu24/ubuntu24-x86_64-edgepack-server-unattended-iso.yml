@@ -1,10 +1,13 @@
 # AI-searchable metadata for template discovery
 metadata:
-  description: Ubuntu 24.04 minimal server raw image with Intel EdgePack platform-enablement packages (Panther Lake / Wildcat Lake) installed via native ICT repository and package support
+  description: Ubuntu 24.04 minimal server unattended ISO installer with Intel EdgePack platform-enablement packages (Panther Lake / Wildcat Lake) installed via native ICT repository and package support
   use_cases:
-    - Intel Panther Lake (PTL) / Wildcat Lake (WCL) headless edge/companion servers
-    - Minimal Ubuntu server base plus EdgePack, with no use-case-specific provisioning
+    - Hands-free bare metal installation of a headless Intel PTL/WCL edge/companion server
+    - Minimal Ubuntu server base plus EdgePack, provisioned with cloud-init and first-boot scripts
   keywords:
+    - iso
+    - unattended
+    - installer
     - edgepack
     - intel-edge-base-standard
     - server
@@ -12,24 +15,28 @@ metadata:
     - wcl
     - dkms
     - ubuntu
-    - edge
+    - cloud-init
+    - provisioning
 
 image:
-  name: edgepack-server-os-image-ubuntu
+  name: edgepack-server-os-image-ubuntu-unattended
   version: "24.04"
 
 target:
   os: ubuntu
   dist: ubuntu24
   arch: x86_64
-  imageType: raw
+  imageType: iso
 
 disk:
-  name: EdgePack_Server_Raw # 1:1 mapping to the systemConfigs name
-  artifacts:
-    - type: raw # image file format, valid value [raw, vhd, vhdx, qcow2, vmdk, vdi]
-      compression: gz
-  size: 6GiB
+  name: EdgePack_Server_ISO
+  # Empty path: the installer picks the target disk with selectionPolicy.
+  # Set a device (e.g. /dev/nvme0n1) to pin it.
+  path: ""
+  selectionPolicy:
+    strategy: largest
+    excludeRemovable: true
+    requireEmpty: true
   partitionTableType: gpt
   partitions:
     - id: boot
@@ -43,13 +50,28 @@ disk:
       mountPoint: /boot/efi
       mountOptions: umask=0077
 
+    # Root fills the selected disk except the last 20 GiB, whatever the disk size.
+    # A negative offset is measured back from the end of the disk.
     - id: rootfs
       type: linux-root-amd64
       start: 513MiB
-      end: "0"
+      end: "-20GiB"
       fsType: ext4
       mountPoint: /
-      mountOptions: defaults
+
+    - id: data
+      type: linux
+      start: "-20GiB"
+      end: "-4GiB"
+      fsType: ext4
+      mountPoint: /data
+      mountOptions: defaults,nofail
+
+    - id: swap
+      type: linux-swap
+      start: "-4GiB"
+      end: "0"
+      fsType: linux-swap
 
 # EdgePack ships from a per-suite APT repository (suite name follows the host
 # Ubuntu release; noble here).
@@ -61,18 +83,17 @@ packageRepositories:
     component: "stable"
 
 systemConfig:
-  name: edgepack-server-demo
-  description: Ubuntu 24.04 (noble) minimal server image with the EdgePack base metapackage and media/manageability add-ons
+  initramfs:
+    template: default-initrd-unattended-x86_64.yml
+
+  hostname: edgepack-server
 
   bootloader:
-    bootType: efi
-    provider: grub
-
-  immutability:
-    enabled: false # kept simple for this showcase; EdgePack itself has no immutability requirement
+    # preserve: installed OS boots first, existing firmware entries are kept after it.
+    bootEntryPolicy: preserve
 
   packages:
-    # systemConfig.packages merges additively with the raw-image defaults,
+    # systemConfig.packages merges additively with the image-type defaults,
     # which already include ubuntu-minimal. Adding ubuntu-server-minimal (and
     # omitting ubuntu-standard/ubuntu-desktop-minimal) is what distinguishes a
     # "server" image from a desktop one in this repo's own reference
@@ -147,12 +168,16 @@ systemConfig:
     - libsystemd-dev
     - libupower-glib-dev
     - python3-cffi
-    - python3-venv
+    - python3.12-venv
 
   kernel:
     cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
-    # Pinned EdgePack-validated kernel. DKMS builds the modules above against
-    # this exact kernel, both at image build time and again on-target.
+    # Pinned to 7.0.0-34. edge-gfx-dkms 7.0 does not build against the
+    # 7.0.0-38 headers: its xe_vsec.c uses the struct pci_dev form of the
+    # intel_vsec API, and 7.0.0-38 uses struct device. Installing exact
+    # package names also keeps a newer kernel from being pulled in, which
+    # DKMS would then fail to build for. Move to a newer kernel once
+    # EdgePack ships a driver that builds against it.
     packages:
       - linux-image-7.0.0-34-generic
       - linux-headers-7.0.0-34-generic
@@ -177,3 +202,50 @@ systemConfig:
     #   retainSigningIdentity: true
     #   targetKeyPath: /var/lib/edgepack/secureboot/module-signing.key
     #   targetCertPath: /var/lib/edgepack/secureboot/module-signing.crt
+
+  users:
+    - name: admin
+      # A sudo user needs a credential: the build fails without a password or an
+      # SSH key. With only SSH keys the password is locked (key login only) and
+      # the user gets passwordless sudo, since there is no password to ask for.
+      # Generate a SHA-512 hash with `openssl passwd -6` and paste it here:
+      # password: "$6$<salt>$<hash>"
+      groups:
+        - sudo
+      sudo: true
+      shell: /bin/bash
+      home: /home/admin
+      # Keys can be listed inline (sshAuthorizedKeys) or read from files at build time.
+      sshAuthorizedKeysFiles:
+        - additionalfiles/base-platform/admin.pub
+
+  # Uncomment to persist a proxy into the deployed system (/etc/environment,
+  # apt, and every systemd service). Also settable with --http-proxy etc.
+  # proxy:
+  #   httpProxy: http://proxy.example.com:3128
+  #   httpsProxy: http://proxy.example.com:3128
+  #   ftpProxy: http://proxy.example.com:3128
+  #   noProxy: localhost,127.0.0.1,.example.com
+
+  cloudInit:
+    enabled: true
+    userDataFile: additionalfiles/base-platform/user-data
+
+  provisioning:
+    scripts:
+      - name: platform-bootstrap
+        local: additionalfiles/base-platform/10-platform-bootstrap.sh
+        final: /usr/local/sbin/platform-bootstrap.sh
+        stage: first-boot
+        order: 10
+
+  # Uncomment once packageRepositories lists the platform PPAs, to allow only
+  # those repositories (plus the Ubuntu archives) to upgrade packages.
+  # aptPolicy:
+  #   upgradeAllowedRepos:
+  #     - platform-stack
+
+  # Developer source archives and other artifacts are copied with additionalFiles.
+  # additionalFiles:
+  #   - local: additionalfiles/base-platform/platform-src.tar.gz
+  #     final: /opt/platform/src/platform-src.tar.gz
