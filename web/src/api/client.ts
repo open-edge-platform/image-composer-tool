@@ -7,6 +7,7 @@ import type {
   ValidationResponse,
   PackageRepoList,
   PackageSearchResults,
+  EdgePack,
   BuildAccepted,
   BuildDetails,
   CancelAccepted,
@@ -64,6 +65,13 @@ export const api = {
     jsonFetch<PackageRepoList>(
       '/package-repos' + (os ? `?os=${encodeURIComponent(os)}` : ''),
     ),
+
+  // The Edge Pack capability grouping for a target: which domains it publishes,
+  // and which packages each contains. Unlike listPackageRepos, an `os` the
+  // manifest doesn't offer is a 404 rather than an empty result — there is one
+  // pack, so there's no empty collection to stand in for "unknown target".
+  getEdgePack: (os: string) =>
+    jsonFetch<EdgePack>('/edge-pack?os=' + encodeURIComponent(os)),
 
   // Search (or browse, when `q` is omitted) packages available for a target.
   // `repos` filters by repository IDs; `offset`/`limit` page a browse.

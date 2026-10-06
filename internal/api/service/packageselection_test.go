@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"gopkg.in/yaml.v3"
 )
 
 // templateWithPackages is a curated parent that already lists packages, so the
@@ -174,11 +175,11 @@ func TestBuildDeltaEmitsPackagesSorted(t *testing.T) {
 	clickOrder := Selection{Packages: []string{"htop", "curl", "build-essential"}}
 	otherOrder := Selection{Packages: []string{"build-essential", "htop", "curl"}}
 
-	a, err := buildDelta("robotics.yml", img, tgt, clickOrder, nil)
+	a, err := buildDelta("robotics.yml", img, tgt, clickOrder, nil, nil)
 	if err != nil {
 		t.Fatalf("buildDelta: %v", err)
 	}
-	b, err := buildDelta("robotics.yml", img, tgt, otherOrder, nil)
+	b, err := buildDelta("robotics.yml", img, tgt, otherOrder, nil, nil)
 	if err != nil {
 		t.Fatalf("buildDelta: %v", err)
 	}
@@ -200,7 +201,7 @@ func TestBuildDeltaOmitsEmptyBlocks(t *testing.T) {
 	img := config.ImageInfo{Name: "test-image", Version: "1.0"}
 	tgt := config.TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
 
-	data, err := buildDelta("robotics.yml", img, tgt, Selection{ImageName: "renamed"}, nil)
+	data, err := buildDelta("robotics.yml", img, tgt, Selection{ImageName: "renamed"}, nil, nil)
 	if err != nil {
 		t.Fatalf("buildDelta: %v", err)
 	}
@@ -220,7 +221,7 @@ func TestBuildDeltaEmitsPackageRepositories(t *testing.T) {
 		Component: "stable", PKey: "https://download.docker.com/linux/ubuntu/gpg",
 	}}
 
-	data, err := buildDelta("robotics.yml", img, tgt, Selection{Packages: []string{"docker-ce"}}, repos)
+	data, err := buildDelta("robotics.yml", img, tgt, Selection{Packages: []string{"docker-ce"}}, repos, nil)
 	if err != nil {
 		t.Fatalf("buildDelta: %v", err)
 	}
@@ -232,6 +233,123 @@ func TestBuildDeltaEmitsPackageRepositories(t *testing.T) {
 		if !strings.Contains(string(data), want) {
 			t.Errorf("delta missing %q:\n%s", want, data)
 		}
+	}
+}
+
+// --- Edge Pack DKMS ---
+
+// An Edge Pack selection ships vendor DKMS module sources, and those only build
+// against the image's target kernel if the template asks for it — so the delta
+// must turn systemConfig.dkms on by itself. There is no UI control for it: an
+// Edge Pack image with its modules unbuilt is not a configuration anyone would
+// choose deliberately.
+func TestBuildDeltaEnablesDkmsForEdgePackSelection(t *testing.T) {
+	t.Parallel()
+	img := config.ImageInfo{Name: "test-image", Version: "1.0"}
+	tgt := config.TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+	// The shipped catalog, not a fixture: this asserts the real Edge Pack
+	// package names reach the real emitter.
+	spec, err := loadEdgePack("")
+	if err != nil {
+		t.Fatalf("loadEdgePack: %v", err)
+	}
+	names := (&Service{edgePack: spec}).edgePackNameSet()
+
+	// Every Edge Pack package the UI can select, base runtime included.
+	sel := Selection{Packages: []string{
+		"intel-edge-base-standard",
+		"intel-edge-media-ffmpeg",
+		"intel-edge-media-gst",
+		"intel-edge-manageability",
+	}}
+	data, err := buildDelta("robotics.yml", img, tgt, sel, nil, names)
+	if err != nil {
+		t.Fatalf("buildDelta: %v", err)
+	}
+	for _, p := range sel.Packages {
+		if !names[p] {
+			t.Errorf("%q is not in the shipped Edge Pack catalog", p)
+		}
+	}
+
+	var got struct {
+		SystemConfig struct {
+			Dkms *struct {
+				Enabled bool     `yaml:"enabled"`
+				Modules []string `yaml:"modules"`
+			} `yaml:"dkms"`
+		} `yaml:"systemConfig"`
+	}
+	if err := yaml.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshaling delta: %v", err)
+	}
+	if got.SystemConfig.Dkms == nil {
+		t.Fatalf("delta has no systemConfig.dkms block:\n%s", data)
+	}
+	if !got.SystemConfig.Dkms.Enabled {
+		t.Errorf("systemConfig.dkms.enabled = false, want true:\n%s", data)
+	}
+	// Left unset on purpose: with no assertion list ICT autoinstalls whatever
+	// the selected metapackages registered, which is the only thing this
+	// catalog can honestly claim to know.
+	if len(got.SystemConfig.Dkms.Modules) != 0 {
+		t.Errorf("systemConfig.dkms.modules = %v, want unset", got.SystemConfig.Dkms.Modules)
+	}
+}
+
+// One Edge Pack package is enough — the base runtime alone already pulls in
+// DKMS sources transitively.
+func TestBuildDeltaEnablesDkmsForASingleEdgePackPackage(t *testing.T) {
+	t.Parallel()
+	img := config.ImageInfo{Name: "test-image", Version: "1.0"}
+	tgt := config.TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+	names := map[string]bool{"intel-edge-base-standard": true}
+
+	sel := Selection{Packages: []string{"curl", "intel-edge-base-standard", "htop"}}
+	data, err := buildDelta("robotics.yml", img, tgt, sel, nil, names)
+	if err != nil {
+		t.Fatalf("buildDelta: %v", err)
+	}
+	if !strings.Contains(string(data), "enabled: true") {
+		t.Errorf("delta does not enable dkms:\n%s", data)
+	}
+}
+
+// A pin names a build, not a different package, so it must be recognised the
+// same way — matching on the name alone rather than the whole entry.
+func TestBuildDeltaEnablesDkmsForPinnedEdgePackPackage(t *testing.T) {
+	t.Parallel()
+	img := config.ImageInfo{Name: "test-image", Version: "1.0"}
+	tgt := config.TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+	names := map[string]bool{"intel-edge-npu": true}
+
+	sel := Selection{Packages: []string{"intel-edge-npu_1.2.3-0intel1"}}
+	data, err := buildDelta("robotics.yml", img, tgt, sel, nil, names)
+	if err != nil {
+		t.Fatalf("buildDelta: %v", err)
+	}
+	if !strings.Contains(string(data), "dkms:") {
+		t.Errorf("a pinned Edge Pack package did not enable dkms:\n%s", data)
+	}
+}
+
+// Without an Edge Pack package there is nothing for DKMS to build, and emitting
+// the block anyway would overwrite a parent template that had turned it on —
+// the merge treats dkms.enabled as a full overwrite whenever the child declares
+// the section at all.
+func TestBuildDeltaOmitsDkmsForPlainPackages(t *testing.T) {
+	t.Parallel()
+	img := config.ImageInfo{Name: "test-image", Version: "1.0"}
+	tgt := config.TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
+	names := map[string]bool{"intel-edge-base-standard": true}
+
+	sel := Selection{Packages: []string{"curl", "htop"}}
+	data, err := buildDelta("robotics.yml", img, tgt, sel, nil, names)
+	if err != nil {
+		t.Fatalf("buildDelta: %v", err)
+	}
+	if strings.Contains(string(data), "dkms") {
+		t.Errorf("delta emits a dkms block for a selection with no Edge Pack package:\n%s", data)
 	}
 }
 

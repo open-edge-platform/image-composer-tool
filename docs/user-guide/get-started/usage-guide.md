@@ -19,6 +19,7 @@ command reference, see the
     - [Debugging an Extends Chain](#debugging-an-extends-chain)
   - [Configuration](#configuration)
   - [Operations Requiring Sudo](#operations-requiring-sudo)
+  - [Running the Web UI](#running-the-web-ui)
   - [Shell Completion](#shell-completion)
   - [Template Examples](#template-examples)
     - [Minimal Edge Device](#minimal-edge-device)
@@ -51,6 +52,7 @@ image-composer-tool resolve       # Print the merged template YAML for debugging
 image-composer-tool inspect       # Inspect a raw image's structure
 image-composer-tool compare       # Compare two images
 image-composer-tool ai            # AI-powered template generation (RAG)
+image-composer-tool serve         # Run the web UI backend API server
 image-composer-tool cache clean   # Manage cached artifacts
 image-composer-tool config        # Manage configuration (init, show)
 image-composer-tool version       # Display version info
@@ -328,6 +330,57 @@ environments, installing packages, and configuring bootloaders.
 
 Always run builds with `sudo -E` to preserve your environment variables
 (such as `$PATH` and proxy settings).
+
+## Running the Web UI
+
+`serve` starts the HTTP API behind the web UI and serves the frontend bundle
+embedded in the binary. Run it from the repository root — it resolves
+`--templates-dir`, `--work-dir`, and the configuration file relative to its
+working directory:
+
+```bash
+# Start on http://127.0.0.1:8080
+./image-composer-tool serve
+
+# Pick a different port
+./image-composer-tool serve --port 9090
+```
+
+Builds still need root. Run the server as root on an isolated build host, or
+run it as an unprivileged user with `--sudo` plus the scoped sudoers rules that
+let it cancel builds and read root-owned artifacts. Generate and install those
+rules rather than writing them by hand:
+
+```bash
+# Generate, visudo-validate, and install in one step
+scripts/install-sudoers.sh
+
+# Then run builds under sudo -n
+./image-composer-tool serve --sudo
+```
+
+The server binds to localhost by default and has no authentication of its own.
+Because the API can start privileged builds, exposing it with
+`--host 0.0.0.0` should be a deliberate decision, not a convenience.
+
+The OS manifest, the repository catalog, and the Edge Pack catalog are embedded
+at build time. To edit any of them and see the change after a restart instead of
+a rebuild, point the matching flag at a file on disk:
+
+```bash
+./image-composer-tool serve \
+  --package-repos ./internal/api/service/data/package-repos.yaml \
+  --edge-pack ./internal/api/service/data/edge-pack.yaml
+```
+
+A malformed or missing override file stops the server at startup rather than
+falling back to the embedded copy.
+
+For every flag, the sudoers rules in full, and their security implications, see
+the
+[Serve Command](../architecture/image-composer-tool-cli-specification.md#serve-command)
+reference. For building the frontend bundle and the hot-reload development loop,
+see [`web/README.md`](../../../web/README.md).
 
 ## Shell Completion
 

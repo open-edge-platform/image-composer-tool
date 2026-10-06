@@ -41,6 +41,9 @@ type Config struct {
 	// PackageReposPath is an optional repository-catalog file; empty uses the
 	// embedded copy.
 	PackageReposPath string
+	// EdgePackPath is an optional Edge Pack catalog file; empty uses the
+	// embedded copy.
+	EdgePackPath string
 	// PkgIndex tunes the package-index cache SearchPackages reads through. A
 	// zero value is usable; see pkgindex.Config for its defaults.
 	PkgIndex pkgindex.Config
@@ -52,8 +55,12 @@ type Service struct {
 	manifest *Manifest
 	// repos is the Advanced tab's repository catalog, loaded once at
 	// construction. Read-only after New, so it needs no lock.
-	repos   []PackageRepo
-	tracker *buildTracker
+	repos []PackageRepo
+	// edgePack is the Advanced tab's capability catalog, grouping a subset of
+	// `repos`' packages by domain. Loaded once at construction alongside repos
+	// and read-only after New, for the same reason.
+	edgePack *edgePackSpec
+	tracker  *buildTracker
 	// pkgindexCache reads and caches the package indexes SearchPackages
 	// searches. Built once at construction; safe for concurrent use.
 	pkgindexCache *pkgindex.Cache
@@ -109,6 +116,10 @@ func New(cfg Config) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	pack, err := loadEdgePack(cfg.EdgePackPath)
+	if err != nil {
+		return nil, err
+	}
 	if cfg.TemplatesDir == "" {
 		cfg.TemplatesDir = "image-templates"
 	}
@@ -128,6 +139,7 @@ func New(cfg Config) (*Service, error) {
 		cfg:           cfg,
 		manifest:      m,
 		repos:         repos,
+		edgePack:      pack,
 		tracker:       newBuildTracker(),
 		pkgindexCache: pkgindex.New(cfg.PkgIndex),
 	}

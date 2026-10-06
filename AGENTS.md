@@ -76,6 +76,21 @@ For path-scoped detail, see `.github/instructions/`:
 - [`go-tests.instructions.md`](.github/instructions/go-tests.instructions.md) — Go test conventions
 - [`provider.instructions.md`](.github/instructions/provider.instructions.md) — OS provider conventions
 - [`image-templates.instructions.md`](.github/instructions/image-templates.instructions.md) — YAML image template conventions
+- [`web.instructions.md`](.github/instructions/web.instructions.md) — web UI (`web/`) conventions
+
+Deterministic lifecycle hooks (enforcement, not just guidance) live in `.github/hooks/`:
+
+- [`block-dangerous-git.json`](.github/hooks/block-dangerous-git.json) — denies `git push --force`, `--no-verify`, `git reset --hard`
+- [`post-edit-checks.json`](.github/hooks/post-edit-checks.json) — flags `gofmt` drift and validates edited image templates
+
+Custom agent personas (restricted tool sets, selectable from the agent picker or delegated to as subagents) live in `.github/agents/`:
+
+- [`reviewer.agent.md`](.github/agents/reviewer.agent.md) — read-only code review
+- [`provider-scaffolder.agent.md`](.github/agents/provider-scaffolder.agent.md) — new/extended OS providers
+- [`template-author.agent.md`](.github/agents/template-author.agent.md) — image template YAML authoring/validation
+- [`security-auditor.agent.md`](.github/agents/security-auditor.agent.md) — OWASP/secrets/convention audit
+- [`docs-updater.agent.md`](.github/agents/docs-updater.agent.md) — keeps the documentation matrix in sync
+- [`release-notes-writer.agent.md`](.github/agents/release-notes-writer.agent.md) — drafts release-notes.md entries
 
 ---
 

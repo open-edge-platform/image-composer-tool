@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "type": "command",
+        "command": "./.github/hooks/scripts/post-go-fmt-check.sh",
+        "timeout": 15
+      },
+      {
+        "type": "command",
+        "command": "./.github/hooks/scripts/post-template-validate.sh",
+        "timeout": 15
+      }
+    ]
+  }
+}
