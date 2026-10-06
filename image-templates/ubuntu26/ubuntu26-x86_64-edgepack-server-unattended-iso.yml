@@ -109,8 +109,11 @@ systemConfig:
     - openssh-server
     - systemd-resolved
     - systemd-timesyncd
-    # ── EdgePack: mandatory base (core graphics/media + NPU/IPU + platform-enablement DKMS drivers) ──
+    # ── EdgePack base and explicit accelerator/compute packages ──
     - intel-edge-base-standard
+    - intel-edge-ipu
+    - intel-edge-npu
+    - intel-edge-compute-extra
     # ── EdgePack: optional add-ons ──
     - intel-edge-media-ffmpeg # FFmpeg with Intel GPU support
     - intel-edge-media-gst # GStreamer with Intel GPU support

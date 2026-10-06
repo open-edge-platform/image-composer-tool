@@ -53,9 +53,8 @@ disk:
       mountOptions: defaults
 
 # EdgePack ships from a per-suite APT repository (suite name follows the host
-# Ubuntu release; resolute here). Only one repository is needed: NPU, IPU and
-# edge-compute-essentials enablement is carried by intel-edge-base-standard
-# itself, so no separate NPU package or prerequisite repository is required.
+# Ubuntu release; resolute here). The base, accelerator, compute and media
+# packages below are all available from this repository.
 packageRepositories:
   # EdgePack base/add-on packages, public signed repository.
   - codename: "resolute"
@@ -88,8 +87,11 @@ systemConfig:
     - openssh-server
     - systemd-resolved
     - systemd-timesyncd
-    # ── EdgePack: mandatory base (core graphics/media + NPU/IPU + platform-enablement DKMS drivers) ──
+    # ── EdgePack base and explicit accelerator/compute packages ──
     - intel-edge-base-standard
+    - intel-edge-ipu
+    - intel-edge-npu
+    - intel-edge-compute-extra
     # ── EdgePack: optional add-ons, shown enabled here for demonstration ──
     - intel-edge-media-ffmpeg # FFmpeg with Intel GPU support
     - intel-edge-media-gst # GStreamer with Intel GPU support

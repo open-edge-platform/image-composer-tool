@@ -6,6 +6,8 @@
 
 **New**:
 
+- **Changed**: all eight Ubuntu 24.04 and 26.04 EdgePack raw and unattended ISO templates now explicitly install `intel-edge-ipu`, `intel-edge-npu`, and `intel-edge-compute-extra` alongside `intel-edge-base-standard`.
+
 - **Fixed**: the Web UI's Compose Status stepper turned every step green — including **Done** — while the compose was still running and the badge still read "Composing...". The phase is derived from the build log, and the `done` phase was matched on the substring `image build completed successfully`. That wording is emitted by the individual image makers too ("Raw image build completed successfully", and the ISO and initrd equivalents), and those lines are logged *before* image compression, the SBOM copy into the image filesystem, and chroot teardown — so the stepper claimed completion with minutes of work left. There is no longer any log marker for `done`: completion is taken only from the build's terminal status, so the stepper reaches **Done** exactly when the badge flips to Succeeded. `Compressing image file` was added as a **Generating image** marker instead, so the final stretch of a RAW build still advances the stepper. The Web UI also ignores a `done` phase arriving on the log stream, so a server emitting one cannot light the stepper early.
 
 - **Fixed**: the unattended installer's "Another unattended installer instance is already running" message misled anyone watching a console other than the one running the install, such as QEMU with `-nographic`. Every console starts the installer and only the first runs it. The others now say so and follow `/tmp/unattended-installer.log` until the installer finishes or fails, so a failure is visible on every console.
