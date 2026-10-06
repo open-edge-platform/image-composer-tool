@@ -153,12 +153,33 @@ func TestGetOSEnvirons(t *testing.T) {
 	}
 }
 
+func TestGetFullCmdStrQuotesProxyEnvironment(t *testing.T) {
+	t.Setenv("no_proxy", "localhost, x; touch /tmp/pwned")
+	t.Setenv("ftp_proxy", "it's")
+
+	cmd, err := shell.GetFullCmdStr("echo 'hi'", true, shell.HostPath, nil)
+	if err != nil {
+		t.Fatalf("GetFullCmdStr failed: %v", err)
+	}
+	for _, want := range []string{
+		`no_proxy='localhost, x; touch /tmp/pwned' `,
+		`ftp_proxy='it'\''s' `,
+	} {
+		if !strings.Contains(cmd, want) {
+			t.Errorf("command missing quoted assignment %q:\n%s", want, cmd)
+		}
+	}
+}
+
 func TestGetOSProxyEnvirons(t *testing.T) {
 	// Set some proxy env vars
-	os.Setenv("http_proxy", "http://proxy.example.com:8080")
-	os.Setenv("https_proxy", "http://proxy.example.com:8443")
-	defer os.Unsetenv("http_proxy")
-	defer os.Unsetenv("https_proxy")
+	// t.Setenv restores any pre-existing value when the test ends.
+	t.Setenv("http_proxy", "http://proxy.example.com:8080")
+	t.Setenv("https_proxy", "http://proxy.example.com:8443")
+	t.Setenv("no_proxy", "localhost,mirror.local")
+	t.Setenv("FTP_PROXY", "http://proxy.example.com:2121")
+	t.Setenv("HTTP_PROXY_PASSWORD", "secret")
+	t.Setenv("MY_NO_PROXY_SETTING", "x")
 
 	env := shell.GetOSProxyEnvirons()
 	if val, ok := env["http_proxy"]; !ok || val != "http://proxy.example.com:8080" {
@@ -166,6 +187,17 @@ func TestGetOSProxyEnvirons(t *testing.T) {
 	}
 	if val, ok := env["https_proxy"]; !ok || val != "http://proxy.example.com:8443" {
 		t.Errorf("Expected https_proxy to be set, got %v", val)
+	}
+	if val, ok := env["no_proxy"]; !ok || val != "localhost,mirror.local" {
+		t.Errorf("Expected no_proxy to be set, got %v", val)
+	}
+	if val, ok := env["FTP_PROXY"]; !ok || val != "http://proxy.example.com:2121" {
+		t.Errorf("Expected FTP_PROXY to be set, got %v", val)
+	}
+	for _, unrelated := range []string{"HTTP_PROXY_PASSWORD", "MY_NO_PROXY_SETTING"} {
+		if _, ok := env[unrelated]; ok {
+			t.Errorf("%s must not be forwarded as a proxy variable", unrelated)
+		}
 	}
 }
 

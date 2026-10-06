@@ -41,6 +41,10 @@ For a conceptual overview of how templates fit into the build pipeline, see
       - [`systemConfig.initramfs`](#systemconfiginitramfs)
       - [`systemConfig.additionalFiles[]`](#systemconfigadditionalfiles)
       - [`systemConfig.configurations[]`](#systemconfigconfigurations)
+      - [`systemConfig.proxy`](#systemconfigproxy)
+      - [`systemConfig.provisioning`](#systemconfigprovisioning)
+      - [`systemConfig.cloudInit`](#systemconfigcloudinit)
+      - [`systemConfig.aptPolicy`](#systemconfigaptpolicy)
   - [Template Merge Behavior](#template-merge-behavior)
   - [Template Extends (Inheritance)](#template-extends-inheritance)
     - [Syntax](#syntax)
@@ -368,10 +372,10 @@ RAW, or the complete SBOM vs the baseline SBOM — see
 > file delivered via `additionalFiles`, which are copied later in the overlay
 > pipeline.
 >
-> The following `systemConfig.users` fields are **not currently applied** (an
-> inherited create-mode limitation, in both create and overlay builds): `home`,
-> `shell`, and `passwordMaxAge`. The login shell is always set to `/bin/bash`, so
-> a service account cannot yet be pinned to `/usr/sbin/nologin` via the template.
+> `home`, `shell`, `passwordMaxAge`, and `sshAuthorizedKeys` are applied in
+> overlay builds exactly as in create mode (see
+> [`systemConfig.users[]`](#systemconfigusers)), so a service account can be
+> pinned to `/usr/sbin/nologin`.
 >
 > **Sizing:** Growing the image needs no opt-in — `disk.size`/`disk.maxSize`
 > are themselves the explicit consent. When `disk.size` is set and larger than
@@ -604,7 +608,7 @@ boot and ext4 root partitions).
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | **Yes** (schema) | Disk configuration name (e.g., `"Default_Raw"`) |
-| `path` | string | No | Disk device path (used by live installer, e.g., `/dev/sda`) |
+| `path` | string | No | Disk device path used by the live installer (e.g., `/dev/sda`, `/dev/disk/by-id/<id>`); must be a clean `/dev/...` path |
 | `size` | string | No | Disk size. Accepts: `"4GiB"`, `"8GB"`. In create mode this is the exact disk size; in overlay mode the resize unconditionally expands the baseline to this size first (see the overlay **Sizing** note) |
 | `maxSize` | string | No | Overlay-mode-only ceiling on further, package-driven growth beyond `disk.size` (e.g., `"16GiB"`). Must be greater than `disk.size`, and requires `disk.size` to also be set (see the overlay **Sizing** note) |
 | `partitionTableType` | string | No | `gpt` or `mbr` |
@@ -632,11 +636,52 @@ Each entry defines one partition:
 | `typeUUID` | string | GPT type GUID (e.g., `8300`) |
 | `fsType` | string | Filesystem type: `ext4`, `fat32`, `xfs`, etc. |
 | `fsLabel` | string | Filesystem label |
-| `start` | string | Start offset (e.g., `1MiB`, `513MiB`) |
-| `end` | string | End offset (`0` means rest of disk) |
+| `start` | string | Start offset (e.g., `1MiB`, `513MiB`). A negative value such as `-20GiB` is measured back from the end of the disk |
+| `end` | string | End offset (`0` means rest of disk). A negative value such as `-20GiB` ends the partition that far before the end of the disk |
 | `mountPoint` | string | Mount point (e.g., `/boot/efi`, `/`, `none`) |
 | `mountOptions` | string | Mount options (e.g., `defaults`, `umask=0077`) |
 | `flags` | string[] | Partition flags (e.g., `boot`, `esp`, `hidden`) |
+
+**Sizing partitions for disks of unknown size.** An unattended ISO installs
+onto whatever disk the selection policy picks, so absolute offsets cannot make
+root fill the disk when a fixed-size partition follows it. Use offsets measured
+from the end of the disk instead: the partition before the fixed-size one ends
+at `-<size>`, and the fixed-size one starts at the same `-<size>`. Both are
+aligned down to 1 MiB. The installer's disk-size check reserves the largest
+negative offset, plus 1 MiB, in addition to the largest absolute offset, and the
+installer checks the selected disk against that minimum before it wipes or
+partitions anything, and that every partition, resolved against the selected
+disk, starts before it ends and does not overlap the one before it.
+
+```yaml
+  partitions:
+    - id: rootfs            # fills the disk except the last 20 GiB
+      type: linux-root-amd64
+      start: 513MiB
+      end: "-20GiB"
+      fsType: ext4
+      mountPoint: /
+    - id: data              # fixed 16 GiB
+      type: linux
+      start: "-20GiB"
+      end: "-4GiB"
+      fsType: ext4
+      mountPoint: /data
+    - id: swap              # fixed 4 GiB at the end of the disk
+      type: linux-swap
+      start: "-4GiB"
+      end: "0"
+      fsType: linux-swap
+```
+
+End-relative offsets are template-file only for now: the web UI disk editor
+and the REST API's disk override accept absolute offsets and `0`, so a layout
+that uses `-<size>` must be edited in the template file.
+
+Every partition with a `mountPoint` (and every swap partition) gets an
+`/etc/fstab` entry keyed by `PARTUUID`, in template order. A non-swap partition
+without a `mountPoint` (or with `none`) is created and formatted but not added
+to fstab.
 
 **Example - raw disk with two partitions and two output formats:**
 
@@ -715,7 +760,7 @@ user templates (as defaults already provide a complete base).
 |-------|------|----------|-------------|
 | `name` | string | No | Configuration name |
 | `description` | string | No | Human-readable description |
-| `hostname` | string | No | System hostname |
+| `hostname` | string | No | System hostname (RFC 1123: letters, digits, inner hyphens, dot-separated) |
 | `packages` | string[] | No | Packages to install (additive with defaults) |
 | `kernel` | object | No | Kernel configuration |
 | `bootloader` | object | No | Bootloader configuration |
@@ -724,6 +769,10 @@ user templates (as defaults already provide a complete base).
 | `initramfs` | object | No | Initramfs config (ISO/initrd builds) |
 | `additionalFiles` | file[] | No | Extra files to copy into the image |
 | `configurations` | cmd[] | No | Shell commands to run during build |
+| `proxy` | object | No | Proxy settings persisted into the deployed system |
+| `provisioning` | object | No | Boot-time provisioning scripts |
+| `cloudInit` | object | No | Install and seed cloud-init |
+| `aptPolicy` | object | No | Restrict which repositories may upgrade packages |
 
 Package names must match: `^[A-Za-z0-9](?:[A-Za-z0-9+_.:~-]*[A-Za-z0-9+])?$`
 and must be unique within the list.
@@ -769,9 +818,19 @@ packageRepositories:
 |-------|------|--------------|-------------|
 | `bootType` | string | `efi`, `legacy` | Boot firmware type |
 | `provider` | string | `grub`, `grub2`, `systemd-boot` | Bootloader software |
+| `bootEntryPolicy` | string | `preserve` (default), `exclusive` | Live installer only: `preserve` puts the installed OS first and keeps the existing `BootOrder` after it; `exclusive` lists only the installed OS. Existing boot entries are kept, except entries labelled exactly `ICT` from an earlier install, which are replaced |
 
 Typical defaults: raw images use `efi` / `systemd-boot`; ISO images use
 `efi` / `grub`.
+
+After an EFI install, the live installer creates a firmware boot entry labelled
+`ICT` for the installed disk and sets `BootOrder` explicitly so the installed
+disk boots first. With `preserve`, the existing `BootOrder` (other operating
+systems, network boot, vendor tools) follows it unchanged; entries that were not
+in `BootOrder` stay out of it. With `exclusive`, `BootOrder` contains only the
+installed OS. No other boot entry is deleted, so every existing entry stays
+selectable from the firmware menu; only entries labelled exactly `ICT` (left by
+a previous install) are removed.
 
 #### `systemConfig.network`
 
@@ -957,24 +1016,36 @@ default is kept.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | **Yes** | Username |
-| `password` | string | No | Password (plain text or pre-hashed with `$` prefix) |
+| `password` | string | No | Password (plain text or pre-hashed with `$` prefix). Without one, the password is locked when the user has SSH keys (key login only) and deleted otherwise. A user with sudo access (`sudo: true`, or membership of the `sudo` or `wheel` group) and SSH keys but no password also gets passwordless sudo (`NOPASSWD`) in `/etc/sudoers.d/90-ict-key-only-admins`, because a locked password could never satisfy the default sudo prompt. Such a user, or the `root` account, with neither a password nor an SSH key is rejected at build time, so it cannot be left with an empty password; a `root` account with a `startupScript` (the installer environment's console account) is exempt |
 | `hash_algo` | string | No | Hash algorithm: `bcrypt`, `sha512`, `sha256`, `md5` (md5 is insecure — avoid in production) |
-| `passwordMaxAge` | int | No | Max password age in days |
+| `passwordMaxAge` | int | No | Max password age in days. `0` means no limit and overrides a value inherited through `extends`; omit it to inherit |
 | `startupScript` | string | No | Script to run on login |
 | `groups` | string[] | No | Additional groups |
 | `sudo` | bool | No | Grant sudo permissions |
-| `home` | string | No | Custom home directory |
-| `shell` | string | No | Login shell (e.g., `/bin/bash`) |
+| `home` | string | No | Custom home directory for a new account (absolute path). Not applied to an account that already exists in the image, such as `root`: its home is left unchanged and a warning is logged |
+| `shell` | string | No | Login shell (absolute path, default `/bin/bash`); also applied to accounts that already exist, such as `root` |
+| `sshAuthorizedKeys` | string[] | No | Public key lines (`[options] <type> <base64> [comment]`) written to `~/.ssh/authorized_keys`. Each line is parsed as sshd would parse it, so a malformed or truncated key, an unknown option, or a private key is rejected |
+| `sshAuthorizedKeysFiles` | string[] | No | Host files (absolute or template-relative) whose key lines are read at build time and added to `sshAuthorizedKeys`; blank lines and `#` comments are skipped |
+
+A value in `password` that is already a crypt(3) hash (`$6$…`, `$y$…`, …) is
+always set as-is, even without `hash_algo`. SSH keys are installed with the
+modes sshd requires: `~/.ssh` is `0700` and `authorized_keys` is `0600`, both
+owned by the user. Key-based login also needs `openssh-server` in
+`systemConfig.packages`; validation warns when it is missing.
 
 ```yaml
 systemConfig:
   users:
     - name: admin
-      password: "changeme"
+      password: "$6$<salt>$<hash>"   # from: openssl passwd -6
       sudo: true
       groups: [docker, wheel]
       shell: /bin/bash
-      - name: service-account
+      sshAuthorizedKeys:
+        - ssh-ed25519 AAAAC3Nza... admin@laptop
+      sshAuthorizedKeysFiles:
+        - keys/admin.pub
+    - name: service-account
       shell: /usr/sbin/nologin
 ```
 
@@ -1010,6 +1081,13 @@ systemConfig:
       stage: pre-initramfs
 ```
 
+> **Generated files (create mode):** a build fails if an entry installs to a file
+> that an enabled provisioning setting writes after the files are copied, since
+> the payload would be silently replaced: the proxy's apt and systemd files, the
+> immutable-image apt policy files, the cloud-init datasource file, the key-only
+> sudoers file, and the provisioning unit files and stamp directory.
+> `/etc/environment` is exempt because the proxy settings are merged into it.
+
 > **Overlay mode:** `additionalFiles` are honored in overlay builds, and each
 > entry's copy timing is controlled by its `stage` marker:
 >
@@ -1042,6 +1120,165 @@ systemConfig:
     - cmd: systemctl enable docker
     - cmd: echo "BuildDate=$(date)" >> /etc/image-info
 ```
+
+`configurations` run after the `provisioning`, `cloudInit`, and `aptPolicy`
+sections are applied, so a command can still adjust their result. The `proxy`
+section is written after `configurations`, so build-time commands such as
+`apt-get install` use the build host's network, not the deployment-site proxy.
+
+#### `systemConfig.proxy`
+
+Proxy settings persisted into the **deployed** system. The build itself uses
+the build host's `http_proxy`, `https_proxy`, `ftp_proxy`, and `no_proxy`
+environment; the unattended ISO installs offline from the package repository
+bundled on the ISO, so this section only affects the running system.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `httpProxy` | string | `HTTP_PROXY` URL (`http`, `https`, `socks5`, or `socks5h` scheme), without credentials |
+| `httpsProxy` | string | `HTTPS_PROXY` URL |
+| `ftpProxy` | string | `FTP_PROXY` URL |
+| `noProxy` | string | `NO_PROXY`: comma-separated hosts, domains, or CIDRs, no spaces |
+
+A layer that `extends` another replaces an inherited `proxy` section as a whole. An empty `proxy: {}` clears the inherited proxy.
+
+The values are written to:
+
+- `/etc/environment` — upper- and lower-case variables for login sessions;
+  existing proxy lines are replaced, other lines (such as `PATH`) are kept
+- `/etc/apt/apt.conf.d/95ict-proxy` — `Acquire::{http,https,ftp}::Proxy`;
+  plain host names in `noProxy` become `DIRECT` entries for http, https, and
+  (when `ftpProxy` is set) ftp; apt cannot express domain suffixes or CIDRs
+- `/etc/systemd/system.conf.d/90-ict-proxy.conf` — `DefaultEnvironment=` for
+  every systemd service, including cloud-init and the provisioning units
+
+Proxy URLs must not contain credentials (`http://user:password@proxy:3128` is
+rejected) or a query string or fragment (`http://proxy/?token=x`): the values land in world-readable files such as `/etc/environment`
+and in the template carried on the ISO. Use a proxy that authenticates the
+host, or supply credentials at deployment time (for example from a
+provisioning script or cloud-init).
+
+```yaml
+systemConfig:
+  proxy:
+    httpProxy: http://proxy.example.com:3128
+    httpsProxy: http://proxy.example.com:3128
+    noProxy: localhost,127.0.0.1,.example.com
+```
+
+The CLI flags `--http-proxy`, `--https-proxy`, `--ftp-proxy`, and `--no-proxy`
+override these fields.
+
+#### `systemConfig.provisioning`
+
+User scripts copied into the image and run by generated systemd units at boot.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `scripts[].name` | string | **Yes** | Identifier (`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$`), unique |
+| `scripts[].local` | string | **Yes** | Script on the host (absolute, or relative to the template) |
+| `scripts[].final` | string | **Yes** | Absolute in-image file path of letters, digits, and `._@%+-` (so it is safe in a systemd `ExecStart=`); the script is made executable. It may not equal, contain, or sit inside another script's `final` or a path image-composer-tool generates (for example `/etc/environment`, the apt sources file, or the cloud-init seed directory) |
+| `scripts[].stage` | string | No | `first-boot` (default) runs once; `every-boot` runs on each boot |
+| `scripts[].order` | int | No | Execution order, lower first; ties keep template order |
+
+Each script gets `ict-provision-<NNN>-<name>.service` (NNN is its position in
+execution order), started at boot by `ict-provision-start.service`. Units run after
+`network-online.target` and, when cloud-init is installed, after
+`cloud-final.service`, so a script can rely on the packages, users, and files
+cloud-init applies. Each unit is also after and requires the previous one, so a
+failed script stops the scripts after it. Output goes to the journal and console. A `first-boot` unit records success in
+`/var/lib/image-composer-tool/provisioned/<name>`; a failed script leaves no
+stamp and is retried on the next boot.
+
+```yaml
+systemConfig:
+  provisioning:
+    scripts:
+      - name: platform-bootstrap
+        local: files/bootstrap.sh
+        final: /usr/local/sbin/bootstrap.sh
+        order: 10
+      - name: health-report
+        local: files/health.sh
+        final: /usr/local/sbin/health.sh
+        stage: every-boot
+        order: 20
+```
+
+Scripts from every layer of an `extends` chain accumulate, and a script that
+reuses an inherited `name` replaces it. The other sections are replaced by the
+most specific layer that sets them.
+
+#### `systemConfig.cloudInit`
+
+Installs cloud-init and seeds it through the NoCloud datasource, which reads
+`/var/lib/cloud/seed/nocloud/` — no network metadata service or attached
+media is needed.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `enabled` | bool | Install and configure cloud-init (adds the `cloud-init` package). A layer that `extends` another can set `enabled: false` to turn off an inherited section |
+| `userDataFile` | string | Host path of the user-data; must start with `#cloud-config`, `#!`, or another cloud-init header |
+| `metaDataFile` | string | Host path of the meta-data. When omitted, a first-boot unit generates meta-data with a unique `instance-id` (and `local-hostname` from `systemConfig.hostname`) on each deployed system, so cloned raw images do not share an ID. An empty `#cloud-config` user-data is generated when `userDataFile` is omitted, because NoCloud needs both files |
+| `networkConfigFile` | string | Host path of a network-config file |
+| `configFiles` | string[] | Host paths copied into `/etc/cloud/cloud.cfg.d/` |
+
+The datasource is pinned with `/etc/cloud/cloud.cfg.d/90_ict_datasource.cfg`
+(`datasource_list: [ NoCloud, None ]`), so first boot does not wait for cloud
+metadata services. Setting both `networkConfigFile` and `systemConfig.network`
+produces a validation warning, because the two may conflict.
+
+```yaml
+systemConfig:
+  cloudInit:
+    enabled: true
+    userDataFile: files/user-data
+```
+
+#### `systemConfig.aptPolicy`
+
+Restricts which of the template's `packageRepositories` may upgrade installed
+packages on the deployed system (`ubuntu` and `debian` targets).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `upgradeAllowedRepos` | string[] | `packageRepositories` entries (by `id` or `codename`) that may upgrade packages. Every other configured repository is pinned below the installed version's priority, so its packages can still be installed but never upgrade an installed package. An explicit empty list (`[]`) means all repositories may upgrade, and resets a list inherited through `extends` |
+
+The distribution archives (`noble`, `noble-updates`, `noble-security`, …) are
+**not** restricted by this section, so the deployed system keeps receiving OS
+and security updates. They stop upgrading only when
+[`systemConfig.immutability`](#systemconfigimmutability) is enabled: then every
+archive and repository is pinned so nothing upgrades, and unattended-upgrades is
+given no origins.
+
+APT pins repositories by origin (host), so an allowed and a not-allowed
+repository on the same host (for example two PPAs on
+`ppa.launchpadcontent.net`) cannot be told apart; such a policy is rejected at
+validation. List both repositories, or neither.
+
+The policy is applied through the per-repository files ICT already writes to
+`/etc/apt/preferences.d/` (see [Priority Behavior](#priority-behavior)): a
+repository that may not upgrade gets `Pin-Priority: 50` there instead of its
+`priority`, unless its `priority` is already lower (a negative priority keeps
+the repository blocked). The `priority` still governs package selection at build time. On an
+immutable image, `/etc/apt/preferences.d/00-ict-apt-policy` pins the
+distribution archive and `/etc/apt/apt.conf.d/52ict-unattended-upgrades` clears
+the unattended-upgrades origins.
+
+```yaml
+packageRepositories:
+  - codename: platform-stack
+    url: https://ppa.example.com/platform/ubuntu
+    pkey: https://ppa.example.com/platform/key.gpg
+
+systemConfig:
+  aptPolicy:
+    upgradeAllowedRepos:
+      - platform-stack
+```
+
+Check the result on a deployed system with `apt-cache policy <package>` and
+`apt-get -s upgrade`.
 
 ## Package Repositories
 

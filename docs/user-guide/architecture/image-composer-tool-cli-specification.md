@@ -154,6 +154,15 @@ image-composer-tool build [flags] TEMPLATE_FILE
 | `--inspect` | Run a post-build inspection of the emitted overlay image and write the report to an artifact file (default: **off**). The report covers the partition layout, filesystem, bootloader, and SBOM of the finished image. It is written next to the emitted image in the build artifacts directory as `<image-name>-<version>.inspect.txt` (the image artifact's base name with a `.inspect.txt` extension); the console shows only a one-line pointer to that file, not the report itself. When the flag is unset, no inspection runs, no file is written, and console output is unchanged. |
 | `--cve-check` | Enable CVE analysis of the built image. **Not yet implemented** — passing this flag currently returns an error. |
 | `--baseline-image FILE` | Override `baseline.source.path` from the template (overlay mode only). CLI value takes precedence over the template. |
+| `--disk-strategy STRATEGY` | Override `disk.selectionPolicy.strategy`: `first`, `largest`, or `fastest`. This also clears the template's `disk.path`, which would otherwise take precedence. Create mode only. |
+| `--hostname NAME` | Override `systemConfig.hostname`. Create mode only. |
+| `--http-proxy URL`, `--https-proxy URL`, `--ftp-proxy URL` | Override `systemConfig.proxy.httpProxy`, `.httpsProxy`, `.ftpProxy`: the proxy persisted into the deployed system. A flag given an empty value (for example `--http-proxy ''`) clears the template's setting. Create mode only. |
+| `--no-proxy LIST` | Override `systemConfig.proxy.noProxy` (comma-separated, no spaces); `--no-proxy ''` clears it. Create mode only. |
+| `--ssh-authorized-key USER=FILE` | Add the public keys in `FILE` to `USER`'s `authorized_keys`. `USER` must be defined in `systemConfig.users`. Repeatable. |
+
+The composition override flags change only the fields they name; an unset flag
+leaves the template untouched. Overridden values are validated exactly like
+template values.
 
 **Example:**
 
@@ -178,7 +187,21 @@ sudo -E image-composer-tool build --inspect overlay-template.yml
 
 # Overlay build overriding the baseline image path
 sudo -E image-composer-tool build --baseline-image /images/base.raw overlay-template.yml
+
+# Unattended ISO for a site with a proxy, with an extra admin key
+sudo -E image-composer-tool build \
+  --disk-strategy fastest \
+  --http-proxy http://proxy.example.com:3128 --https-proxy http://proxy.example.com:3128 \
+  --no-proxy localhost,127.0.0.1,.example.com \
+  --ssh-authorized-key admin=$HOME/.ssh/id_ed25519.pub \
+  image-templates/ubuntu24/ubuntu24-x86_64-base-platform-iso.yml
 ```
+
+**ISO build artifacts:** besides the `.iso`, an ISO build writes the SPDX SBOM
+of the system the ISO installs (`spdx_manifest_*.json`), a composition manifest
+(`<image-name>-<version>.composition.json`) listing the base OS, repositories,
+packages with versions, kernel, and every additional file with its SHA-256, and
+the merged template (`template-dump.yaml`), all in the build output directory.
 
 **Note:** The build command typically requires sudo privileges for operations like creating loopback devices and mounting filesystems.
 

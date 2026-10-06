@@ -90,10 +90,17 @@ sudo -E ./image-composer-tool build --workers 16 --cache-dir /tmp/cache image-te
 
 # Build from scratch in throwaway cache/workspace dirs (removed after the build)
 sudo -E ./image-composer-tool build --no-cache image-templates/azl3/azl3-x86_64-edge-raw.yml
+
+# Override composition settings for one build (disk strategy, hostname, proxy, SSH keys)
+sudo -E ./image-composer-tool build --disk-strategy largest --hostname edge-01 \
+  --http-proxy http://proxy.example.com:3128 --ssh-authorized-key admin=$HOME/.ssh/id_ed25519.pub \
+  image-templates/ubuntu24/ubuntu24-x86_64-base-platform-iso.yml
 ```
 
 Common flags: `--workers`, `--cache-dir`, `--work-dir`, `--no-cache`, `--verbose`,
-`--dotfile`, `--config`, `--log-level`.
+`--dotfile`, `--config`, `--log-level`. Composition overrides: `--disk-strategy`,
+`--hostname`, `--http-proxy`, `--https-proxy`, `--ftp-proxy`,
+`--no-proxy`, `--ssh-authorized-key`.
 See the full
 [build flag reference](../architecture/image-composer-tool-cli-specification.md#build-command)
 for descriptions and additional flags like `--system-packages-only`.
@@ -116,6 +123,12 @@ The default `work_dir` depends on how you installed the tool:
 
 You can override it with `--work-dir` or by setting `work_dir` in your
 configuration file.
+
+An ISO build also leaves the SPDX SBOM of the installed system
+(`spdx_manifest_*.json`), a composition manifest
+(`<image-name>-<version>.composition.json`), and the merged template
+(`template-dump.yaml`) in this directory. See the
+[Unattended ISO Installer Tutorial](./unattended-iso-provisioning.md).
 
 ## Comparing Overlay Outputs
 
