@@ -44,6 +44,50 @@ func TestSplitDkmsModule(t *testing.T) {
 	}
 }
 
+func TestPreserveDkmsMakeLogs(t *testing.T) {
+	root := t.TempDir()
+	installRoot := filepath.Join(root, "chroot")
+	outputDir := filepath.Join(root, "imagebuild", "edgepack-demo", "dkms-logs")
+	logPath := filepath.Join(installRoot, "var", "lib", "dkms", "edge-gfx-dkms", "7.0",
+		"7.0.0-34-generic", "x86_64", "log", "make.log")
+	logContents := "make: *** [Makefile:123: modules] Error 2\n"
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		t.Fatalf("create DKMS log directory: %v", err)
+	}
+	if err := os.WriteFile(logPath, []byte(logContents), 0o644); err != nil {
+		t.Fatalf("write DKMS make.log: %v", err)
+	}
+
+	copied, err := copyDkmsMakeLogs(installRoot, outputDir)
+	if err != nil {
+		t.Fatalf("copyDkmsMakeLogs() error = %v", err)
+	}
+	if copied != 1 {
+		t.Fatalf("copyDkmsMakeLogs() copied %d files, want 1", copied)
+	}
+
+	outputPath := filepath.Join(outputDir, "edge-gfx-dkms", "7.0", "7.0.0-34-generic",
+		"x86_64", "log", "make.log")
+	got, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read preserved DKMS make.log: %v", err)
+	}
+	if string(got) != logContents {
+		t.Errorf("preserved make.log = %q, want %q", got, logContents)
+	}
+}
+
+func TestPreserveDkmsMakeLogs_MissingDkmsDirectory(t *testing.T) {
+	root := t.TempDir()
+	copied, err := copyDkmsMakeLogs(filepath.Join(root, "chroot"), filepath.Join(root, "logs"))
+	if err != nil {
+		t.Fatalf("copyDkmsMakeLogs() error = %v", err)
+	}
+	if copied != 0 {
+		t.Errorf("copyDkmsMakeLogs() copied %d files, want 0", copied)
+	}
+}
+
 func TestVerifyDkmsModulesInstalled(t *testing.T) {
 	statusOutput := "edge-gfx/1.0, 6.14.0-generic, x86_64: installed\n" +
 		"edge-edac/1.0, 6.14.0-generic, x86_64: installed\n" +

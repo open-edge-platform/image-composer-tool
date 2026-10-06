@@ -27,7 +27,7 @@ func (t *ImageTemplate) GenerateAptSourcesFromRepositories() error {
 		return nil
 	}
 
-	// Check if this is a DEB-based system (ubuntu, elxr)
+	// Check if this is a DEB-based system (ubuntu, debian, elxr)
 	if !isDEBBasedTarget(t.Target.OS) {
 		log.Debug("Not a DEB-based system, skipping apt sources generation")
 		return nil
@@ -59,7 +59,9 @@ func (t *ImageTemplate) GenerateAptSourcesFromRepositories() error {
 	}
 
 	// Add to existing additionalFiles (avoiding duplicates by final path)
-	t.addUniqueAdditionalFile(aptSourcesFile)
+	if err := t.addGeneratedAdditionalFile(aptSourcesFile); err != nil {
+		return err
+	}
 
 	log.Infof("Added apt sources file to additionalFiles: %s -> %s",
 		aptSourcesFile.Local, aptSourcesFile.Final)
@@ -79,7 +81,7 @@ func (t *ImageTemplate) GenerateAptSourcesFromRepositories() error {
 
 // isDEBBasedTarget checks if the target OS uses DEB packages
 func isDEBBasedTarget(targetOS string) bool {
-	debOSes := []string{"ubuntu", "elxr", "wind-river-elxr"}
+	debOSes := []string{"ubuntu", "debian", "elxr", "wind-river-elxr"}
 	for _, os := range debOSes {
 		if targetOS == os {
 			return true
@@ -205,6 +207,21 @@ func (t *ImageTemplate) addUniqueAdditionalFile(newFile AdditionalFileInfo) {
 	t.SystemConfig.AdditionalFiles = append(t.SystemConfig.AdditionalFiles, newFile)
 }
 
+// addGeneratedAdditionalFile adds a tool-generated file, refusing a destination
+// that a provisioning script owns, or that contains or sits inside it, so the
+// payload is not silently replaced and the copy cannot fail on a path that
+// would be both a file and a directory.
+func (t *ImageTemplate) addGeneratedAdditionalFile(f AdditionalFileInfo) error {
+	for _, s := range t.SystemConfig.Provisioning.Scripts {
+		if InImagePathsOverlap(s.Final, f.Final) {
+			return fmt.Errorf("systemConfig.provisioning.scripts %q: final %q collides with %q, a path the tool "+
+				"generates; choose another path", s.Name, s.Final, f.Final)
+		}
+	}
+	t.addUniqueAdditionalFile(f)
+	return nil
+}
+
 // generateAptPreferencesFromRepositories creates APT preferences files for all repositories
 func (t *ImageTemplate) generateAptPreferencesFromRepositories() error {
 	log := logger.Logger()
@@ -222,6 +239,12 @@ func (t *ImageTemplate) generateAptPreferencesFromRepositories() error {
 
 		// Generate preferences content
 		preferencesContent := generateAptPreferencesContent(origin, repo.Priority)
+		// A priority already below the no-upgrade pin (including negative,
+		// "never install") is stricter, so it is kept as configured. Zero is
+		// the unset default, which apt documents as undefined, so it is pinned.
+		if !t.repoMayUpgrade(repo) && (repo.Priority >= NoUpgradePinPriority || repo.Priority == 0) {
+			preferencesContent = generateNoUpgradePreferencesContent(origin)
+		}
 
 		// Create temporary preferences file
 		tempFile, err := createTempAptPreferencesFile(repo, preferencesContent)
@@ -238,7 +261,9 @@ func (t *ImageTemplate) generateAptPreferencesFromRepositories() error {
 			Final: fmt.Sprintf("/etc/apt/preferences.d/%s", filename),
 		}
 
-		t.addUniqueAdditionalFile(preferencesFile)
+		if err := t.addGeneratedAdditionalFile(preferencesFile); err != nil {
+			return err
+		}
 
 		log.Infof("Added apt preferences file for %s (priority %d): %s -> %s",
 			repo.ID, repo.Priority, preferencesFile.Local, preferencesFile.Final)
@@ -247,19 +272,35 @@ func (t *ImageTemplate) generateAptPreferencesFromRepositories() error {
 	return nil
 }
 
-// extractOriginFromURL extracts the domain/origin from a repository URL
+// extractOriginFromURL extracts the host (without port or credentials) that APT
+// matches `Pin: origin` against from a repository URL
 func extractOriginFromURL(url string) string {
-	// Remove protocol
-	url = strings.TrimPrefix(url, "https://")
-	url = strings.TrimPrefix(url, "http://")
-
-	// Extract domain (everything before the first slash)
-	parts := strings.Split(url, "/")
-	if len(parts) > 0 && parts[0] != "" {
-		return parts[0]
+	// Remove the scheme; URL schemes are case-insensitive ("HTTPS://host").
+	if i := strings.Index(url, "://"); i >= 0 && !strings.ContainsAny(url[:i], "/?#") {
+		url = url[i+len("://"):]
 	}
 
-	return ""
+	// The authority ends at the first slash, query, or fragment delimiter.
+	authority := url
+	if i := strings.IndexAny(url, "/?#"); i >= 0 {
+		authority = url[:i]
+	}
+	if authority == "" {
+		return ""
+	}
+	// APT origins are matched on the bare host, so drop any user:token@ and
+	// the port. DNS names are case-insensitive, so the host is lowercased to
+	// compare equal.
+	host := authority[strings.LastIndex(authority, "@")+1:]
+	if strings.HasPrefix(host, "[") {
+		// IPv6 literal: the port, if any, follows the closing bracket.
+		if i := strings.Index(host, "]"); i >= 0 {
+			host = host[:i+1]
+		}
+	} else if i := strings.Index(host, ":"); i >= 0 {
+		host = host[:i]
+	}
+	return strings.ToLower(host)
 }
 
 // generateAptPreferencesContent creates APT preferences file content with priority behavior comments
@@ -283,6 +324,19 @@ func generateAptPreferencesContent(origin string, priority int) string {
 	}
 
 	return fmt.Sprintf("%s\nPackage: *\nPin: origin %s\nPin-Priority: %d\n", comment, origin, priority)
+}
+
+// NoUpgradePinPriority keeps a version installable when the package is
+// absent but below an installed version's priority (100), so it never
+// upgrades an installed package.
+const NoUpgradePinPriority = 50
+
+// generateNoUpgradePreferencesContent pins a repository the deployed system
+// may install from but not upgrade from (systemConfig.aptPolicy or an
+// immutable image).
+func generateNoUpgradePreferencesContent(origin string) string {
+	return fmt.Sprintf("# Priority %d: installable, never upgrades (systemConfig.aptPolicy / immutability)\n"+
+		"Package: *\nPin: origin %s\nPin-Priority: %d\n", NoUpgradePinPriority, origin, NoUpgradePinPriority)
 }
 
 // generatePreferencesFilename creates a filename for the preferences file
@@ -424,7 +478,9 @@ func (t *ImageTemplate) downloadAndAddGPGKeys(repos []PackageRepository) error {
 			Final: keyFilename,
 		}
 
-		t.addUniqueAdditionalFile(gpgKeyFile)
+		if err := t.addGeneratedAdditionalFile(gpgKeyFile); err != nil {
+			return err
+		}
 
 		log.Infof("Added GPG key file to additionalFiles: %s -> %s", tempKeyFile, keyFilename)
 	}

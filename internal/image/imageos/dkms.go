@@ -1,6 +1,7 @@
 package imageos
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -40,6 +41,42 @@ func buildDkmsModules(installRoot string, template *config.ImageTemplate) error 
 		}
 	}
 	return nil
+}
+
+func copyDkmsMakeLogs(installRoot, outputDir string) (int, error) {
+	dkmsRoot := filepath.Join(installRoot, "var", "lib", "dkms")
+	if _, err := os.Stat(dkmsRoot); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("failed to access DKMS directory %s: %w", dkmsRoot, err)
+	}
+
+	copied := 0
+	err := filepath.WalkDir(dkmsRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return fmt.Errorf("failed to access DKMS path %s: %w", path, walkErr)
+		}
+		if entry.IsDir() || entry.Name() != "make.log" {
+			return nil
+		}
+
+		relativePath, err := filepath.Rel(dkmsRoot, path)
+		if err != nil {
+			return fmt.Errorf("failed to determine relative DKMS log path: %w", err)
+		}
+		outputPath := filepath.Join(outputDir, relativePath)
+		if err := file.CopyFile(path, outputPath, "", false); err != nil {
+			return fmt.Errorf("failed to preserve DKMS log %s: %w", path, err)
+		}
+		log.Infof("Preserved DKMS build log: %s", outputPath)
+		copied++
+		return nil
+	})
+	if err != nil {
+		return copied, fmt.Errorf("failed to preserve DKMS build logs: %w", err)
+	}
+	return copied, nil
 }
 
 func buildDkmsModulesForKernel(installRoot, kernelVersion string, dkms config.Dkms) error {

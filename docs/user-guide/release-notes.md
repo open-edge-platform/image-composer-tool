@@ -31,7 +31,87 @@
 
 - **Fixed**: `internal/image/imageos/dkms.go`'s post-build DKMS verification treated the `original_module` pseudo-version directory DKMS creates when it backs up an in-tree driver it displaced (e.g. `igen6_edac`, `xe`, `virtio-gpu`, `mei*` — all upstream in-tree on current Ubuntu kernels) as if it were a real built source, and failed the whole build looking for a nonexistent `dkms.conf` under it. Any DKMS-enabled template whose target kernel already ships an in-tree module of the same name — both EdgePack templates included — could hit this. `original_module` is now skipped when walking the DKMS build tree.
 
+- Unattended ISO provisioning settings. An `imageType: iso` template can now
+  install a fully configured system hands-free, applied identically by raw
+  builds and by the live installer. See the
+  [Unattended ISO Installer Tutorial](./get-started/unattended-iso-provisioning.md)
+  and [ADR: Provisioning Settings for the Unattended ISO Installer](../architecture-decision-record/adr-unattended-iso-provisioning.md).
+  - `systemConfig.users[].sshAuthorizedKeys` / `sshAuthorizedKeysFiles` install
+    SSH public keys with correct ownership and modes.
+  - `systemConfig.proxy` persists `HTTP_PROXY`, `HTTPS_PROXY`, `FTP_PROXY`, and
+    `NO_PROXY` into `/etc/environment`, apt, and the systemd default environment.
+  - `systemConfig.provisioning.scripts[]` runs user scripts from generated
+    systemd units at first boot or every boot, in a configured order.
+  - `systemConfig.cloudInit` installs cloud-init and seeds it through a pinned
+    NoCloud datasource.
+  - `systemConfig.aptPolicy.upgradeAllowedRepos` limits which template
+    repositories may upgrade installed packages. Ubuntu/Debian archives keep
+    upgrading unless the image is immutable, in which case nothing upgrades.
+  - `systemConfig.bootloader.bootEntryPolicy` (`preserve` or `exclusive`): the
+    installer now sets the firmware `BootOrder` explicitly with the installed
+    disk first.
+  - Partition `start`/`end` accept offsets from the end of the disk
+    (`end: "-20GiB"`), so root can fill a disk of any size while fixed-size data
+    or swap partitions follow it.
+  - ISO builds now keep the SPDX SBOM of the installed system and a
+    `<image>-<version>.composition.json` manifest next to the ISO.
+  - `build` flags `--disk-strategy`, `--hostname`,
+    `--http-proxy`, `--https-proxy`, `--ftp-proxy`, `--no-proxy`, and
+    `--ssh-authorized-key USER=FILE` override the matching template fields.
+  - New templates `ubuntu24-x86_64-base-platform-iso.yml` (Ubuntu 24.04 with the
+    latest HWE kernel) and `ubuntu26-x86_64-base-platform-iso.yml`, and a
+    `default-initrd-unattended-x86_64.yml` installer environment for Ubuntu 26.04.
+
+- **Changed**: `systemConfig.users[].shell`, `home`, and `passwordMaxAge` are now
+  applied; previously every account got `/bin/bash` and the default home. `home`
+  applies only to accounts the build creates: an account already in the image,
+  such as `root`, keeps its home. A
+  `password` that is a crypt(3) hash is always set as a hash, even without
+  `hash_algo`. `systemConfig.hostname` must be an RFC 1123 host name.
+  A user without a `password` but with SSH keys now has its password locked, so
+  it can log in only with those keys; if it also has sudo access (`sudo: true` or a `sudo`/`wheel` group), it is granted
+  passwordless sudo, since a locked password cannot answer the sudo prompt. Such a user with neither a
+  password nor an SSH key now fails the build instead of being created with an
+  empty password. Four shipped templates define such a user:
+  `ubuntu24-x86_64-minimal-unattended-iso.yml`,
+  `generic-handheld-os-template.yml`,
+  `generic-companion-os-server-template.yml` and
+  `ubuntu24-x86_64-generic-handheld-os-desktop-raw.yml`. The new
+  `ubuntu24-x86_64-base-platform-iso.yml` and
+  `ubuntu26-x86_64-base-platform-iso.yml` need one as well, because their
+  `admin.pub` holds only comments. For any of them, set `password`, or build
+  with `--ssh-authorized-key USER=FILE`.
+
+- **Fixed**: `packageRepositories` are now turned into apt sources and
+  preferences for `debian` targets, as they already were for Ubuntu and eLxr.
+  Previously the Debian provider requested this but the target check skipped
+  it, so `aptPolicy` and immutable pinning never applied to Debian images.
+
+- **Fixed**: generated `/etc/fstab` lists partitions in template order and skips
+  non-swap partitions without a mount point. Previously such a partition
+  produced a malformed fstab line.
+
+- **Changed**: the live installer removes only firmware boot entries labelled
+  exactly `ICT` (previously any label containing `ICT`), resolves
+  `/dev/disk/by-*` target paths to the kernel device, and uses the
+  architecture's removable EFI loader path (`BOOTAA64.EFI` on aarch64).
+
+- **Changed**: immutable Ubuntu and Debian images now include APT pins that stop
+  package upgrades. Build commands inherit the host's `no_proxy` and `ftp_proxy`
+  in addition to `http_proxy` and `https_proxy`.
+
+- **Changed**: ISO builds pass `-iso-level 3` to xorriso, so additional files
+  larger than 4 GiB can be carried on the ISO. Additional files are stored on
+  the ISO in a directory per in-image destination, under their source
+  basename, so two files with the same basename no longer overwrite each other
+  and a destination that is an existing directory (such as `/etc`) still
+  receives `/etc/<basename>` as in a raw build. ISO prerequisite validation now also checks the
+  ISO template's own `additionalFiles`, resolving relative paths exactly as the
+  build does.
+
 - Fed Aero host-OS blueprints in the Web UI Basic tab. The two generic host-OS templates from [`edge-node-infrastructure-blueprint`](https://github.com/open-edge-platform/edge-node-infrastructure-blueprint/tree/release-2026.2.0/infrastructure/host-os/ict) `release-2026.2.0` are now vendored into `image-templates/ubuntu24/` and selectable from the Basic tab: `generic-handheld-os-template.yml` (handheld/desktop) and `generic-companion-os-server-template.yml` (companion OS server). Both target Panther Lake on Ubuntu 24.04 and build a `raw` image. Both are wired into the shipped Basic-tab manifest (`internal/api/service/data/manifest.yaml`) under the Fed Aero vertical, so they are available out of the box with no extra configuration. **The `Edge Node Infrastructure Blueprint BKC` SKU has been removed from the Fed Aero vertical**, so Fed Aero now offers exactly these two blueprints on Ubuntu 24.04 (the grayed-out `Drone Image - From BKC Team` placeholder on Ubuntu 26.04 Server is unchanged). Its template, `ubuntu24-x86_64-minimal-ptl-pv-raw.yml`, remains in `image-templates/` and can still be built directly from the CLI — only the Basic-tab entry is gone. Note that `generic-handheld-os-template.yml` was **updated in place** to the `release-2026.2.0` revision — its swap partition grows from 3073MiB to 5121MiB, and it now installs the 6.18 Intel kernel and media stack from a pinned snapshot of the Intel edge overlay (`download.01.org/edge-linux-overlay`) instead of the rolling `intel-linux-overlay` suite, so images built from it differ from earlier releases. Upstream ships `<USERNAME>`/`<PASSWORD>` placeholders in both templates' `users:` block; these are filled with this repo's convention (`user`, empty password, set at deploy time) so the templates validate and build as shipped — set real credentials before deploying. The Advanced tab's repository picker gains the two repositories these blueprints introduce: the pinned Intel edge overlay snapshot and the Ubuntu MozillaTeam PPA.
+
+- **Changed**: when package installation or DKMS module builds fail in a DKMS-enabled image, ICT preserves available `make.log` files before cleaning up the chroot. Logs are saved under `imagebuild/<systemConfigName>/dkms-logs/`, retaining their DKMS subdirectory paths.
 
 ## Version 2026.2
 

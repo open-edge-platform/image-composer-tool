@@ -4120,7 +4120,7 @@ func TestSetUserPassword_Hashed(t *testing.T) {
 	installRoot := "/tmp/test-install-root"
 	user := config.UserConfig{
 		Name:     "testuser",
-		Password: "$6$xyz",
+		Password: testSHA512Hash,
 		HashAlgo: "sha512",
 	}
 	err := setUserPassword(installRoot, user)
@@ -4814,7 +4814,7 @@ func TestUserManagementEdgeCases(t *testing.T) {
 				},
 			},
 			mockCommands: []shell.MockCommand{
-				{Pattern: `useradd -m -s /bin/bash user1`, Output: "", Error: nil},
+				{Pattern: `useradd -m -s '/bin/bash' user1`, Output: "", Error: nil},
 				{Pattern: `passwd user1`, Output: "", Error: nil},
 				{Pattern: `getent group docker`, Output: "docker:x:999:", Error: nil},
 				{Pattern: `getent group audio`, Output: "audio:x:995:", Error: nil},
@@ -4822,7 +4822,7 @@ func TestUserManagementEdgeCases(t *testing.T) {
 				{Pattern: `usermod -aG .* user1`, Output: "", Error: nil},
 				{Pattern: `grep .*user1.* /etc/passwd`, Output: "user1:x:1000:1000::/home/user1:/bin/bash", Error: nil},
 				{Pattern: `grep .*user1.* /etc/shadow`, Output: "user1:$6$xyz:12345:0:99999:7:::", Error: nil},
-				{Pattern: `useradd -m -s /bin/bash user2`, Output: "", Error: nil},
+				{Pattern: `useradd -m -s '/bin/bash' user2`, Output: "", Error: nil},
 				{Pattern: `passwd user2`, Output: "", Error: nil},
 				{Pattern: `getent group video`, Output: "video:x:994:", Error: nil},
 				{Pattern: `usermod -aG .* user2`, Output: "", Error: nil},
@@ -4837,12 +4837,12 @@ func TestUserManagementEdgeCases(t *testing.T) {
 			users: []config.UserConfig{
 				{
 					Name:     "hashuser",
-					Password: "$6$alreadyhashed$xyz",
+					Password: testSHA512Hash,
 					HashAlgo: "sha512", // Should be ignored for pre-hashed
 				},
 			},
 			mockCommands: []shell.MockCommand{
-				{Pattern: `useradd -m -s /bin/bash hashuser`, Output: "", Error: nil},
+				{Pattern: `useradd -m -s '/bin/bash' hashuser`, Output: "", Error: nil},
 				{Pattern: `usermod -p .* hashuser`, Output: "", Error: nil},
 				{Pattern: `grep .*hashuser.* /etc/passwd`, Output: "hashuser:x:1000:1000::/home/hashuser:/bin/bash", Error: nil},
 				{Pattern: `grep .*hashuser.* /etc/shadow`, Output: "hashuser:$6$alreadyhashed$xyz:12345:0:99999:7:::", Error: nil},
@@ -4860,7 +4860,7 @@ func TestUserManagementEdgeCases(t *testing.T) {
 				},
 			},
 			mockCommands: []shell.MockCommand{
-				{Pattern: `useradd -m -s /bin/bash scriptuser`, Output: "", Error: nil},
+				{Pattern: `useradd -m -s '/bin/bash' scriptuser`, Output: "", Error: nil},
 				{Pattern: `passwd scriptuser`, Output: "", Error: nil},
 				{Pattern: `grep .*scriptuser.* /etc/passwd`, Output: "scriptuser:x:1000:1000::/home/scriptuser:/bin/bash", Error: nil},
 				{Pattern: `grep .*scriptuser.* /etc/shadow`, Output: "scriptuser:$6$xyz:12345:0:99999:7:::", Error: nil},

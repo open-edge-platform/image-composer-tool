@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -285,20 +286,40 @@ func GetOSEnvirons() map[string]string {
 	return environ
 }
 
-// GetOSProxyEnvirons retrieves HTTP and HTTPS proxy environment variables
+// GetOSProxyEnvirons retrieves the HTTP, HTTPS, and FTP proxy environment
+// variables and the no_proxy exclusion list, so build commands honour the
+// same proxy exceptions as the host (e.g. an internal package mirror).
 func GetOSProxyEnvirons() map[string]string {
 	osEnv := GetOSEnvirons()
 	proxyEnv := make(map[string]string)
 
-	// Extract http_proxy and https_proxy variables
+	// Match the variable names exactly (either case), so unrelated variables
+	// such as HTTP_PROXY_PASSWORD are never forwarded into build commands.
 	for key, value := range osEnv {
-		if strings.Contains(strings.ToLower(key), "http_proxy") ||
-			strings.Contains(strings.ToLower(key), "https_proxy") {
+		switch strings.ToLower(key) {
+		case "http_proxy", "https_proxy", "ftp_proxy", "no_proxy":
 			proxyEnv[key] = value
 		}
 	}
 
 	return proxyEnv
+}
+
+// proxyEnvAssignments renders proxy variables as "KEY='value' " prefixes for a
+// shell command line. Values come from the host environment, so they are
+// quoted: a no_proxy containing spaces or shell syntax stays data rather than
+// becoming part of a root-run command. Keys are sorted for a stable command.
+func proxyEnvAssignments(proxyEnv map[string]string) string {
+	keys := make([]string, 0, len(proxyEnv))
+	for key := range proxyEnv {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	for _, key := range keys {
+		b.WriteString(key + "=" + QuoteArg(proxyEnv[key]) + " ")
+	}
+	return b.String()
 }
 
 // IsBashAvailable checks if bash is available in the given chroot environment
@@ -648,11 +669,7 @@ func GetFullCmdStr(cmdStr string, sudo bool, chrootPath string, envVal []string)
 			return fullPathCmdStr, fmt.Errorf("chroot path %s does not exist", chrootPath)
 		}
 
-		proxyEnv := GetOSProxyEnvirons()
-
-		for key, value := range proxyEnv {
-			envValStr += key + "=" + value + " "
-		}
+		envValStr += proxyEnvAssignments(GetOSProxyEnvirons())
 
 		// chroot always requires elevation; sudoPrefix drops the redundant inner
 		// sudo when the process is already root (see sudoPrefix docstring).
@@ -664,11 +681,7 @@ func GetFullCmdStr(cmdStr string, sudo bool, chrootPath string, envVal []string)
 
 	} else {
 		if sudo {
-			proxyEnv := GetOSProxyEnvirons()
-
-			for key, value := range proxyEnv {
-				envValStr += key + "=" + value + " "
-			}
+			envValStr += proxyEnvAssignments(GetOSProxyEnvirons())
 
 			// sudoPrefix drops the redundant inner sudo when already root
 			// (see sudoPrefix docstring); otherwise elevates per command.
