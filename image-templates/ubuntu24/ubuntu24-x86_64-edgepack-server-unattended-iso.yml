@@ -121,14 +121,11 @@ systemConfig:
     - libdebuginfod1t64
     - dnsmasq-base
     - xdp-tools
-    - firefox
     - vim
     - net-tools
     - bluez
     - language-pack-en
     - language-pack-en-base
-    - language-pack-gnome-en
-    - language-pack-gnome-en-base
     - shim-signed
     - wget
     - cron
@@ -202,6 +199,13 @@ systemConfig:
     #   retainSigningIdentity: true
     #   targetKeyPath: /var/lib/edgepack/secureboot/module-signing.key
     #   targetCertPath: /var/lib/edgepack/secureboot/module-signing.crt
+
+  # Headless server: pin the default systemd target explicitly so this stays
+  # a console boot even if a package (now or in the future) transitively pulls
+  # in a display manager, which would otherwise flip default.target to
+  # graphical.target on install and strand the system at a failed GUI login.
+  configurations:
+    - cmd: "systemctl set-default multi-user.target"
 
   users:
     - name: admin
