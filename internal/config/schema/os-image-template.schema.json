@@ -156,8 +156,16 @@
               "typeUUID": { "type": "string", "description": "Partition type UUID" },
               "fsType": { "type": "string", "description": "Filesystem type" },
               "fsLabel": { "type": "string", "description": "Filesystem label" },
-              "start": { "type": "string", "description": "Partition start offset" },
-              "end": { "type": "string", "description": "Partition end offset (0 = rest of disk)" },
+              "start": {
+                "type": "string",
+                "description": "Partition start offset. Positive values are measured from the start of the disk; negative values are measured back from the end of the disk.",
+                "pattern": "^-?[1-9][0-9]*(KiB|MiB|GiB|K|M|G|KB|MB|GB)$"
+              },
+              "end": {
+                "type": "string",
+                "description": "Partition end offset. Positive values are measured from the start of the disk, negative values back from its end, and 0 consumes the rest of the disk (last partition only).",
+                "pattern": "^(0|-?[1-9][0-9]*(KiB|MiB|GiB|K|M|G|KB|MB|GB))$"
+              },
               "mountPoint": { "type": "string", "description": "Mount point path" },
               "mountOptions": { "type": "string", "description": "Mount options" },
               "flags": { "type": "array", "description": "Partition flags", "items": { "type": "string" } }

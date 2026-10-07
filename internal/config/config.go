@@ -496,8 +496,8 @@ type PartitionInfo struct {
 	TypeGUID     string   `yaml:"typeUUID"`        // TypeGUID: GPT type GUID for the partition (e.g., "8300" for Linux filesystem)
 	FsType       string   `yaml:"fsType"`          // FsType: filesystem type (e.g., "ext4", "xfs", etc.);
 	FsLabel      string   `yaml:"fsLabel"`         // FsLabel: filesystem label (e.g., "cloudimg-rootfs")
-	Start        string   `yaml:"start"`           // Start: start offset of the partition; can be a absolute size (e.g., "512MiB")
-	End          string   `yaml:"end"`             // End: end offset of the partition; can be a absolute size (e.g., "2GiB") or "0" for the end of the disk
+	Start        string   `yaml:"start"`           // Start: positive offsets are from disk start; negative offsets are from disk end
+	End          string   `yaml:"end"`             // End: signed offset using the same convention, or "0" for the end of the disk
 	MountPoint   string   `yaml:"mountPoint"`      // MountPoint: optional mount point for the partition (e.g., "/boot", "/rootfs")
 	MountOptions string   `yaml:"mountOptions"`    // MountOptions: optional mount options for the partition (e.g., "defaults", "noatime")
 }
