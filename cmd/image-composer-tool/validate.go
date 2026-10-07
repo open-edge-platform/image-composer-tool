@@ -54,7 +54,7 @@ func executeValidate(cmd *cobra.Command, args []string) error {
 		// let a template validate cleanly and only discover the missing credential
 		// deep into a build (or, worse, on deployed hardware).
 		if err := config.ValidateUserCredentials(mergedTemplate.SystemConfig.Users); err != nil {
-			return fmt.Errorf("validation failed: %w", err)
+			return fmt.Errorf("validation failed during user credential validation: %w", err)
 		}
 
 		log.Info("✓ Merged template validation passed")
