@@ -276,7 +276,7 @@ repos:
     pkey: https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
     # Offered to every target: the "all" codename is distribution-neutral, so
     # one index serves Ubuntu and Debian alike.
-    os: [ubuntu24, debian13, ubuntu26-server]
+    os: [ubuntu24, debian13, ubuntu26-server, ubuntu26]
     index:
       - codename: all
         component: main
@@ -468,7 +468,7 @@ repos:
     # Distribution-neutral, like oneAPI: a single "mozilla" suite serves every
     # Debian-family target. Publishes an uncompressed Packages only, which the
     # fetcher falls back to after Packages.gz and .xz.
-    os: [ubuntu24, debian13, ubuntu26-server]
+    os: [ubuntu24, debian13, ubuntu26-server, ubuntu26]
     curatedPackages:
       - firefox
       - firefox-esr
@@ -504,7 +504,7 @@ repos:
     enabledByDefault: false
     priority: 500
     pkey: https://download.docker.com/linux/ubuntu/gpg
-    os: [ubuntu26-server]
+    os: [ubuntu26-server, ubuntu26]
     curatedPackages:
       - containerd.io
       - docker-buildx-plugin
@@ -521,7 +521,7 @@ repos:
     description: Open Source Robotics Foundation simulator packages.
     enabledByDefault: false
     pkey: https://packages.osrfoundation.org/gazebo.gpg
-    os: [ubuntu26-server]
+    os: [ubuntu26-server, ubuntu26]
     # The resolute suite carries the gz-jetty components rather than the
     # gz-harmonic/gz-jetty release metapackages the noble suite offers.
     curatedPackages:
@@ -543,7 +543,7 @@ repos:
     description: ROS 2 Lyrical, the distribution built for Ubuntu 26.04.
     enabledByDefault: false
     pkey: https://raw.githubusercontent.com/ros/rosdistro/master/ros.key
-    os: [ubuntu26-server]
+    os: [ubuntu26-server, ubuntu26]
     # Lyrical publishes no navigation2 metapackage yet, unlike Jazzy.
     curatedPackages:
       - ros-dev-tools
