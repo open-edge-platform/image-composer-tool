@@ -298,6 +298,110 @@ systemConfig:
 	}
 }
 
+func TestValidateImageTemplateJSONPartitionOffsets(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		imageType  string
+		partitions string
+		wantErr    bool
+	}{
+		{
+			name:      "raw final partition uses rest of disk",
+			imageType: "raw",
+			partitions: `[
+{"id":"boot","start":"1MiB","end":"513MiB"},
+{"id":"root","start":"513MiB","end":"0"}]`,
+		},
+		{
+			name:      "ISO final partition uses rest of installation disk",
+			imageType: "iso",
+			partitions: `[
+{"id":"boot","start":"1MiB","end":"513MiB"},
+{"id":"root","start":"513MiB","end":"0"}]`,
+		},
+		{
+			name:       "end-relative start",
+			imageType:  "raw",
+			partitions: `[ {"id":"root","start":"-1MiB","end":"0"} ]`,
+		},
+		{
+			name:       "absolute start with end-relative end",
+			imageType:  "raw",
+			partitions: `[ {"id":"root","start":"1MiB","end":"-1GiB"} ]`,
+		},
+		{
+			name:      "multiple end-relative partitions",
+			imageType: "iso",
+			partitions: `[
+{"id":"root","start":"1MiB","end":"-20GiB"},
+{"id":"data","start":"-20GiB","end":"-4GiB"},
+{"id":"swap","start":"-4GiB","end":"0"}]`,
+		},
+		{
+			name:       "zero start",
+			imageType:  "raw",
+			partitions: `[ {"id":"root","start":"0","end":"1GiB"} ]`,
+			wantErr:    true,
+		},
+		{
+			name:      "non-final rest of disk",
+			imageType: "raw",
+			partitions: `[
+{"id":"boot","start":"1MiB","end":"0"},
+{"id":"root","start":"513MiB","end":"2GiB"}]`,
+			wantErr: true,
+		},
+		{
+			name:      "multiple rest of disk partitions",
+			imageType: "raw",
+			partitions: `[
+{"id":"boot","start":"1MiB","end":"0"},
+{"id":"root","start":"513MiB","end":"0"}]`,
+			wantErr: true,
+		},
+		{
+			name:       "end equals start",
+			imageType:  "raw",
+			partitions: `[ {"id":"root","start":"1GiB","end":"1GiB"} ]`,
+			wantErr:    true,
+		},
+		{
+			name:       "end precedes start",
+			imageType:  "raw",
+			partitions: `[ {"id":"root","start":"2GiB","end":"1GiB"} ]`,
+			wantErr:    true,
+		},
+		{
+			name:      "partition overlap",
+			imageType: "raw",
+			partitions: `[
+{"id":"boot","start":"1MiB","end":"513MiB"},
+{"id":"root","start":"512MiB","end":"0"}]`,
+			wantErr: true,
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			template := fmt.Sprintf(`{
+"image":{"name":"partition-offset-test","version":"1.0.0"},
+"target":{"os":"ubuntu","dist":"ubuntu24","arch":"x86_64","imageType":%q},
+"disk":{"name":"test","partitions":%s},
+"systemConfig":{}}`, test.imageType, test.partitions)
+
+			err := ValidateImageTemplateJSON([]byte(template))
+
+			if (err != nil) != test.wantErr {
+				t.Errorf("ValidateImageTemplateJSON() error = %v, wantErr %t", err, test.wantErr)
+			}
+		})
+	}
+}
+
 // TestAdditionalFilesRejectsUnknownKey guards the schema tightening: a misspelled
 // stage marker (e.g. "stgae") must FAIL validation rather than being silently
 // dropped by YAML unmarshalling and copied in the default post-initramfs pass —

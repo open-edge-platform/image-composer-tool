@@ -1138,6 +1138,10 @@ func diskPartitionDelete(diskPath string, partitionNum int) error {
 func DiskPartitionsCreate(diskPath string, partitionsList []config.PartitionInfo, partitionTableType string) (map[string]string, error) {
 	partIDDiskDevMap := make(map[string]string)
 
+	if err := validatePartitionLayoutOrder(partitionsList); err != nil {
+		return nil, fmt.Errorf("invalid partition layout for disk %s: %w", diskPath, err)
+	}
+
 	// Check the layout fits before anything destructive: end-relative offsets
 	// are only resolved against the real disk size.
 	if err := checkEndRelativeLayoutFits(diskPath, partitionsList); err != nil {
@@ -1570,6 +1574,67 @@ func requiredInstallDiskBytes(partitions []config.PartitionInfo) (uint64, error)
 		maxEndRelative += endRelativeAlignBytes
 	}
 	return maxAbsolute + maxEndRelative, nil
+}
+
+type partitionBoundary struct {
+	fromEnd bool
+	bytes   uint64
+}
+
+func validatePartitionLayoutOrder(partitions []config.PartitionInfo) error {
+	var previousEnd partitionBoundary
+	var havePreviousEnd bool
+	for i, partition := range partitions {
+		start, err := partitionBoundaryValue(partition.Start)
+		if err != nil {
+			return fmt.Errorf("partition %q has invalid start %q: %w", partition.ID, partition.Start, err)
+		}
+		if havePreviousEnd && boundariesOutOfOrder(previousEnd, start) {
+			return fmt.Errorf("partition %q overlaps the previous partition", partition.ID)
+		}
+
+		if strings.TrimSpace(partition.End) == "0" {
+			if i != len(partitions)-1 {
+				return fmt.Errorf("partition %q: end 0 (rest of disk) is only valid on the last partition", partition.ID)
+			}
+			continue
+		}
+		end, err := partitionBoundaryValue(partition.End)
+		if err != nil {
+			return fmt.Errorf("partition %q has invalid end %q: %w", partition.ID, partition.End, err)
+		}
+		if boundariesOutOfOrder(start, end) || start == end {
+			return fmt.Errorf("partition %q: end %q must be after start %q", partition.ID, partition.End, partition.Start)
+		}
+		previousEnd = end
+		havePreviousEnd = true
+	}
+	return nil
+}
+
+func partitionBoundaryValue(raw string) (partitionBoundary, error) {
+	if strings.TrimSpace(raw) == "0" {
+		return partitionBoundary{}, nil
+	}
+	size, fromEnd, err := parseBoundary(raw)
+	if err != nil {
+		return partitionBoundary{}, err
+	}
+	bytes, err := TranslateSizeStrToBytes(size)
+	if err != nil {
+		return partitionBoundary{}, err
+	}
+	return partitionBoundary{fromEnd: fromEnd, bytes: bytes}, nil
+}
+
+func boundariesOutOfOrder(left, right partitionBoundary) bool {
+	if left.fromEnd != right.fromEnd {
+		return false
+	}
+	if left.fromEnd {
+		return left.bytes < right.bytes
+	}
+	return left.bytes > right.bytes
 }
 
 // checkEndRelativeLayoutFits validates a layout with end-relative boundaries

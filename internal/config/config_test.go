@@ -4308,7 +4308,7 @@ func TestLoadTemplateFDEPassphraseFile(t *testing.T) {
 		"      fsType: ext4",
 		"      fsLabel: rootfs",
 		"      start: 1MiB",
-		"      end: 100%",
+		"      end: \"0\"",
 		"      mountPoint: /",
 		"systemConfig:",
 		"  name: test",
