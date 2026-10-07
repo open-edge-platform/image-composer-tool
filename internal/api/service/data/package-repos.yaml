@@ -373,6 +373,23 @@ repos:
       - codename: noble
         component: main
 
+  # ubuntu24-x86_64-edgepack-raw.yml installs the client GPU compute runtime
+  # from a pinned snapshot of the kobuk-team PPA rather than the rolling suite
+  # above, so the snapshot host and its timestamped path are a distinct index
+  # the picker would otherwise be unable to search. Kept as its own entry (same
+  # reasoning as the two librealsense hosts below) so `intel-graphics` keeps
+  # offering the rolling URL. Update the timestamp alongside the template's.
+  - id: intel-graphics-snapshot
+    displayName: Intel Graphics (kobuk-team, pinned snapshot)
+    url: https://snapshot.ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu/20260606T100000Z
+    description: Intel client GPU compute runtime from a pinned kobuk-team PPA snapshot, as installed by the EdgePack raw templates.
+    enabledByDefault: false
+    pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x0C0E6AF955CE463C03FC51574D098D70AFBE5E1F"
+    os: [ubuntu24]
+    index:
+      - codename: noble
+        component: main
+
   # Intel is moving RealSense to realsenseai.com; both hosts are still
   # referenced by templates in this repo, so both are offered.
   - id: librealsense
