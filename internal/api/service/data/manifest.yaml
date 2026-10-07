@@ -77,6 +77,66 @@ combinations:
   #   imageType: raw
   #   template: ""
 
+  # EdgePack platform-enablement unattended ISO installers. Both templates in
+  # each (sku, os) pair support Panther Lake and Wildcat Lake identically, so
+  # each pair gets one combination per platform, both pointing at the same
+  # template (same pattern as the robotics-jazzy-ubuntu24 sku above).
+  - vertical: platform-enablement
+    sku: edgepack
+    platform: ptl
+    os: ubuntu24
+    imageType: iso
+    template: ubuntu24/ubuntu24-x86_64-edgepack-unattended-iso.yml
+
+  - vertical: platform-enablement
+    sku: edgepack
+    platform: wcl
+    os: ubuntu24
+    imageType: iso
+    template: ubuntu24/ubuntu24-x86_64-edgepack-unattended-iso.yml
+
+  - vertical: platform-enablement
+    sku: edgepack-server
+    platform: ptl
+    os: ubuntu24
+    imageType: iso
+    template: ubuntu24/ubuntu24-x86_64-edgepack-server-unattended-iso.yml
+
+  - vertical: platform-enablement
+    sku: edgepack-server
+    platform: wcl
+    os: ubuntu24
+    imageType: iso
+    template: ubuntu24/ubuntu24-x86_64-edgepack-server-unattended-iso.yml
+
+  - vertical: platform-enablement
+    sku: edgepack
+    platform: ptl
+    os: ubuntu26
+    imageType: iso
+    template: ubuntu26/ubuntu26-x86_64-edgepack-unattended-iso.yml
+
+  - vertical: platform-enablement
+    sku: edgepack
+    platform: wcl
+    os: ubuntu26
+    imageType: iso
+    template: ubuntu26/ubuntu26-x86_64-edgepack-unattended-iso.yml
+
+  - vertical: platform-enablement
+    sku: edgepack-server
+    platform: ptl
+    os: ubuntu26
+    imageType: iso
+    template: ubuntu26/ubuntu26-x86_64-edgepack-server-unattended-iso.yml
+
+  - vertical: platform-enablement
+    sku: edgepack-server
+    platform: wcl
+    os: ubuntu26
+    imageType: iso
+    template: ubuntu26/ubuntu26-x86_64-edgepack-server-unattended-iso.yml
+
 verticals:
   - id: retail
     displayName: Retail Edge
@@ -84,6 +144,8 @@ verticals:
     displayName: Robotics
   - id: fed-aero
     displayName: Fed Aero
+  - id: platform-enablement
+    displayName: Platform Enablement
 
 skus:
   - id: desktop-virtualization
@@ -96,6 +158,10 @@ skus:
     displayName: Generic Companion OS Server Blueprint
   - id: drone-image-bkc
     displayName: Drone Image - From BKC Team
+  - id: edgepack
+    displayName: EdgePack (Full)
+  - id: edgepack-server
+    displayName: EdgePack Server
 
 platforms:
   - id: arl
@@ -120,5 +186,9 @@ targets:
     arch: x86_64
   - id: ubuntu26-server
     displayName: Ubuntu 26.04 Server
+    os: ubuntu
+    arch: x86_64
+  - id: ubuntu26
+    displayName: Ubuntu 26.04
     os: ubuntu
     arch: x86_64

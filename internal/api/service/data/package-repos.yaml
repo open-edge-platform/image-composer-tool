@@ -114,7 +114,7 @@ repos:
     url: http://archive.ubuntu.com/ubuntu
     description: Ubuntu 26.04 main, restricted, universe and multiverse components.
     enabledByDefault: true
-    os: [ubuntu26-server]
+    os: [ubuntu26-server, ubuntu26]
     gpgKeyPath: /usr/share/keyrings/ubuntu-archive-keyring.gpg
     curatedPackages:
       - build-essential
@@ -213,6 +213,24 @@ repos:
     os: [ubuntu24]
     index:
       - codename: noble
+        component: stable
+
+  # The ubuntu24-x86_64-edgepack-unattended-iso.yml and
+  # ubuntu26-x86_64-edgepack-*-unattended-iso.yml templates install EdgePack
+  # from the same repository but on ubuntu26 read its resolute suite, not
+  # noble. Kept as a separate entry from `edgepack` (the Edge Pack browser's
+  # `pack.repo`) rather than adding `ubuntu26` to its `os`, since that repo's
+  # baseRuntimes.standard also requires `intel-graphics`, which is not
+  # published for ubuntu26.
+  - id: edgepack-ubuntu26
+    displayName: Intel EdgePack (Ubuntu 26.04)
+    url: https://apt.repos.intel.com/edgepack
+    description: Intel platform-enablement packages for Panther Lake / Wildcat Lake — graphics, media, manageability and their DKMS drivers, from EdgePack's Ubuntu 26.04 suite.
+    enabledByDefault: false
+    pkey: https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
+    os: [ubuntu26]
+    index:
+      - codename: resolute
         component: stable
 
   - id: intel-eci
