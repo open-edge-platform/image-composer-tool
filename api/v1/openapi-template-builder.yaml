@@ -1132,6 +1132,73 @@ components:
             type: string
         disk:
           $ref: '#/components/schemas/DiskOverride'
+        credentials:
+          type: array
+          description: |
+            Logins for template users the template itself leaves without one.
+            Each entry names a user the matched template already declares — this
+            never creates an account — and supplies a password, an SSH public
+            key, or both; either satisfies the account on its own.
+
+            Needed because a template may deliberately ship a sudo account with
+            no credential (the curated unattended-ISO templates point at a
+            placeholder key file holding only comments). ICT refuses to build
+            such an image rather than leave the account with an empty password,
+            so without this the template is only buildable from the CLI, via
+            `--ssh-authorized-key`.
+
+            A supplied password is hashed before it is written anywhere, and is
+            redacted from the compose response, the archived template, and the
+            build log. See `credentials` on the response for which accounts need
+            one.
+          maxItems: 32
+          items:
+            $ref: '#/components/schemas/CredentialInput'
+
+    CredentialInput:
+      type: object
+      description: A login supplied for one user the matched template declares.
+      required: [user]
+      properties:
+        user:
+          type: string
+          description: |
+            Name of a user the matched template already declares. An unknown
+            name is rejected rather than creating the account.
+          pattern: '^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,31}$'
+        password:
+          type: string
+          description: |
+            Plain text, or a complete crypt(3) hash. Plain text is hashed
+            (SHA-512 crypt) before it reaches disk, so only the hash is ever
+            written to the generated delta.
+          maxLength: 256
+        sshAuthorizedKey:
+          type: string
+          description: |
+            One `authorized_keys` line ("[options] <type> <base64> [comment]"),
+            checked with the OpenSSH parser. A private key is rejected.
+          maxLength: 4096
+
+    CredentialRequirement:
+      type: object
+      description: |
+        One privileged account in the resolved template, and whether it has a
+        login yet. An account with `satisfied: false` blocks a build until a
+        matching `credentials` entry is supplied.
+      required: [user, sudo, satisfied]
+      properties:
+        user:
+          type: string
+        sudo:
+          type: boolean
+          description: Whether the account holds sudo access (directly or via an admin group).
+        satisfied:
+          type: boolean
+          description: |
+            False when the template leaves the account with neither a password
+            nor an SSH authorized key. A key file containing only comments
+            counts as no key.
 
     DiskOverride:
       type: object
@@ -1377,10 +1444,13 @@ components:
         deltaYaml:
           type: string
           description: |
-            The generated `extends` delta, verbatim — only the overrides this
-            request asked for, over a reference to the matched template. Empty
-            when the request carries no overrides, in which case the matched
-            template is resolved directly and no delta is generated.
+            The generated `extends` delta — only the overrides this request
+            asked for, over a reference to the matched template. Empty when the
+            request carries no overrides, in which case the matched template is
+            resolved directly and no delta is generated.
+
+            A password supplied in `credentials` is shown as `[REDACTED]` here;
+            the copy the build reads keeps the real hash.
         baseYaml:
           type: string
           description: |
@@ -1407,6 +1477,15 @@ components:
             alongside whatever the user is adding.
           items:
             type: string
+        credentials:
+          type: array
+          description: |
+            The privileged accounts in the resolved template, and whether each
+            has a login. Any entry with `satisfied: false` must be covered by a
+            `credentials` entry on the request before a build will start — the
+            build is rejected up front rather than failing partway through.
+          items:
+            $ref: "#/components/schemas/CredentialRequirement"
         summary:
           $ref: "#/components/schemas/ComposeSummary"
 
@@ -1451,6 +1530,13 @@ components:
         machine-checkable via minProperties/maxProperties rather than left as
         prose: a body with neither field, or with both, is invalid and the server
         rejects it with 400 `NO_MATCH`.
+
+        A build whose template leaves a privileged account with neither a
+        password nor an SSH key is rejected with 400 `CREDENTIALS_REQUIRED`
+        before anything is spawned — the builder would otherwise refuse it only
+        after populating the chroot. Supplying `compose.credentials` for the
+        accounts the compose response reports as unsatisfied makes the same
+        build succeed.
 
         `oneOf` would express this more idiomatically, but oapi-codegen turns a
         `oneOf` with sibling properties into a `json.RawMessage` union type with
