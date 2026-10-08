@@ -77,6 +77,75 @@ combinations:
   #   imageType: raw
   #   template: ""
 
+  # EdgePack platform-enablement images. Both templates in each (sku, os) pair
+  # support Panther Lake and Wildcat Lake identically, so each pair gets one
+  # combination per platform, both pointing at the same template (same pattern
+  # as the robotics-jazzy-ubuntu24 sku above).
+  #
+  # These point at the `-raw` templates, not the `-unattended-iso` ones beside
+  # them. The ISO templates declare a sudo-enabled `admin` user whose only
+  # credential is additionalfiles/base-platform/admin.pub, which ships with no
+  # keys in it — so isomaker's ValidateUserCredentials rejects the build, and
+  # the Basic tab has no way to supply `--ssh-authorized-key`. The raw
+  # templates define no users at all and are the pair already covered by
+  # .github/workflows/build-edgepack.yml. Move these to the ISO templates once
+  # a credential can be supplied through the build path.
+  - vertical: platform-enablement
+    sku: edgepack
+    platform: ptl
+    os: ubuntu24
+    imageType: raw
+    template: ubuntu24/ubuntu24-x86_64-edgepack-raw.yml
+
+  - vertical: platform-enablement
+    sku: edgepack
+    platform: wcl
+    os: ubuntu24
+    imageType: raw
+    template: ubuntu24/ubuntu24-x86_64-edgepack-raw.yml
+
+  - vertical: platform-enablement
+    sku: edgepack-server
+    platform: ptl
+    os: ubuntu24
+    imageType: raw
+    template: ubuntu24/ubuntu24-x86_64-edgepack-server-raw.yml
+
+  - vertical: platform-enablement
+    sku: edgepack-server
+    platform: wcl
+    os: ubuntu24
+    imageType: raw
+    template: ubuntu24/ubuntu24-x86_64-edgepack-server-raw.yml
+
+  - vertical: platform-enablement
+    sku: edgepack
+    platform: ptl
+    os: ubuntu26
+    imageType: raw
+    template: ubuntu26/ubuntu26-x86_64-edgepack-raw.yml
+
+  - vertical: platform-enablement
+    sku: edgepack
+    platform: wcl
+    os: ubuntu26
+    imageType: raw
+    template: ubuntu26/ubuntu26-x86_64-edgepack-raw.yml
+
+  - vertical: platform-enablement
+    sku: edgepack-server
+    platform: ptl
+    os: ubuntu26
+    imageType: raw
+    template: ubuntu26/ubuntu26-x86_64-edgepack-server-raw.yml
+
+  - vertical: platform-enablement
+    sku: edgepack-server
+    platform: wcl
+    os: ubuntu26
+    imageType: raw
+    template: ubuntu26/ubuntu26-x86_64-edgepack-server-raw.yml
+
 verticals:
   - id: retail
     displayName: Retail Edge
@@ -84,6 +153,8 @@ verticals:
     displayName: Robotics
   - id: fed-aero
     displayName: Fed Aero
+  - id: platform-enablement
+    displayName: Platform Enablement
 
 skus:
   - id: desktop-virtualization
@@ -96,6 +167,10 @@ skus:
     displayName: Generic Companion OS Server Blueprint
   - id: drone-image-bkc
     displayName: Drone Image - From BKC Team
+  - id: edgepack
+    displayName: EdgePack Minimal Desktop
+  - id: edgepack-server
+    displayName: EdgePack Minimal Server
 
 platforms:
   - id: arl
@@ -120,5 +195,9 @@ targets:
     arch: x86_64
   - id: ubuntu26-server
     displayName: Ubuntu 26.04 Server
+    os: ubuntu
+    arch: x86_64
+  - id: ubuntu26
+    displayName: Ubuntu 26.04
     os: ubuntu
     arch: x86_64

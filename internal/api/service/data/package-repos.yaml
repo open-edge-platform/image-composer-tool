@@ -114,7 +114,7 @@ repos:
     url: http://archive.ubuntu.com/ubuntu
     description: Ubuntu 26.04 main, restricted, universe and multiverse components.
     enabledByDefault: true
-    os: [ubuntu26-server]
+    os: [ubuntu26-server, ubuntu26]
     gpgKeyPath: /usr/share/keyrings/ubuntu-archive-keyring.gpg
     curatedPackages:
       - build-essential
@@ -215,6 +215,24 @@ repos:
       - codename: noble
         component: stable
 
+  # The ubuntu24-x86_64-edgepack-unattended-iso.yml and
+  # ubuntu26-x86_64-edgepack-*-unattended-iso.yml templates install EdgePack
+  # from the same repository but on ubuntu26 read its resolute suite, not
+  # noble. Kept as a separate entry from `edgepack` (the Edge Pack browser's
+  # `pack.repo`) rather than adding `ubuntu26` to its `os`, since that repo's
+  # baseRuntimes.standard also requires `intel-graphics`, which is not
+  # published for ubuntu26.
+  - id: edgepack-ubuntu26
+    displayName: Intel EdgePack (Ubuntu 26.04)
+    url: https://apt.repos.intel.com/edgepack
+    description: Intel platform-enablement packages for Panther Lake / Wildcat Lake — graphics, media, manageability and their DKMS drivers, from EdgePack's Ubuntu 26.04 suite.
+    enabledByDefault: false
+    pkey: https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
+    os: [ubuntu26]
+    index:
+      - codename: resolute
+        component: stable
+
   - id: intel-eci
     displayName: Intel Edge Controls for Industrial (ECI)
     url: https://eci.intel.com/repos/noble
@@ -258,7 +276,7 @@ repos:
     pkey: https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
     # Offered to every target: the "all" codename is distribution-neutral, so
     # one index serves Ubuntu and Debian alike.
-    os: [ubuntu24, debian13, ubuntu26-server]
+    os: [ubuntu24, debian13, ubuntu26-server, ubuntu26]
     index:
       - codename: all
         component: main
@@ -355,6 +373,23 @@ repos:
       - codename: noble
         component: main
 
+  # ubuntu24-x86_64-edgepack-raw.yml installs the client GPU compute runtime
+  # from a pinned snapshot of the kobuk-team PPA rather than the rolling suite
+  # above, so the snapshot host and its timestamped path are a distinct index
+  # the picker would otherwise be unable to search. Kept as its own entry (same
+  # reasoning as the two librealsense hosts below) so `intel-graphics` keeps
+  # offering the rolling URL. Update the timestamp alongside the template's.
+  - id: intel-graphics-snapshot
+    displayName: Intel Graphics (kobuk-team, pinned snapshot)
+    url: https://snapshot.ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu/20260606T100000Z
+    description: Intel client GPU compute runtime from a pinned kobuk-team PPA snapshot, as installed by the EdgePack raw templates.
+    enabledByDefault: false
+    pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x0C0E6AF955CE463C03FC51574D098D70AFBE5E1F"
+    os: [ubuntu24]
+    index:
+      - codename: noble
+        component: main
+
   # Intel is moving RealSense to realsenseai.com; both hosts are still
   # referenced by templates in this repo, so both are offered.
   - id: librealsense
@@ -433,7 +468,7 @@ repos:
     # Distribution-neutral, like oneAPI: a single "mozilla" suite serves every
     # Debian-family target. Publishes an uncompressed Packages only, which the
     # fetcher falls back to after Packages.gz and .xz.
-    os: [ubuntu24, debian13, ubuntu26-server]
+    os: [ubuntu24, debian13, ubuntu26-server, ubuntu26]
     curatedPackages:
       - firefox
       - firefox-esr
@@ -469,7 +504,7 @@ repos:
     enabledByDefault: false
     priority: 500
     pkey: https://download.docker.com/linux/ubuntu/gpg
-    os: [ubuntu26-server]
+    os: [ubuntu26-server, ubuntu26]
     curatedPackages:
       - containerd.io
       - docker-buildx-plugin
@@ -486,7 +521,7 @@ repos:
     description: Open Source Robotics Foundation simulator packages.
     enabledByDefault: false
     pkey: https://packages.osrfoundation.org/gazebo.gpg
-    os: [ubuntu26-server]
+    os: [ubuntu26-server, ubuntu26]
     # The resolute suite carries the gz-jetty components rather than the
     # gz-harmonic/gz-jetty release metapackages the noble suite offers.
     curatedPackages:
@@ -508,7 +543,7 @@ repos:
     description: ROS 2 Lyrical, the distribution built for Ubuntu 26.04.
     enabledByDefault: false
     pkey: https://raw.githubusercontent.com/ros/rosdistro/master/ros.key
-    os: [ubuntu26-server]
+    os: [ubuntu26-server, ubuntu26]
     # Lyrical publishes no navigation2 metapackage yet, unlike Jazzy.
     curatedPackages:
       - ros-dev-tools
