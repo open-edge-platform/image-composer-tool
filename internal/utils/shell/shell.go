@@ -250,15 +250,19 @@ var commandMap = map[string][]string{
 	"usermod":            {"/usr/sbin/usermod"},
 	"groups":             {"/usr/bin/groups"},
 	"passwd":             {"/usr/bin/passwd"},
-	"mv":                 {"/bin/mv"},
-	"grub-mkimage":       {"/usr/bin/grub-mkimage"},
-	"grub-install":       {"/usr/sbin/grub-install"},
-	"sbsign":             {"/usr/bin/sbsign"},
-	"systemctl":          {"/usr/bin/systemctl"},
-	"test":               {"/bin/test"},
-	"awk":                {"/usr/bin/awk"},
-	"update-initramfs":   {"/usr/sbin/update-initramfs", "/usr/bin/update-initramfs"},
-	"update-grub":        {"/usr/sbin/update-grub", "/usr/bin/update-grub"},
+	// openssl hashes account passwords (`openssl passwd -6`): in the chroot for
+	// a template's plain-text password, and on the host for one supplied through
+	// the Web UI, which must never reach disk unhashed.
+	"openssl":          {"/usr/bin/openssl", "/bin/openssl"},
+	"mv":               {"/bin/mv"},
+	"grub-mkimage":     {"/usr/bin/grub-mkimage"},
+	"grub-install":     {"/usr/sbin/grub-install"},
+	"sbsign":           {"/usr/bin/sbsign"},
+	"systemctl":        {"/usr/bin/systemctl"},
+	"test":             {"/bin/test"},
+	"awk":              {"/usr/bin/awk"},
+	"update-initramfs": {"/usr/sbin/update-initramfs", "/usr/bin/update-initramfs"},
+	"update-grub":      {"/usr/sbin/update-grub", "/usr/bin/update-grub"},
 	// Add more mappings as needed
 }
 

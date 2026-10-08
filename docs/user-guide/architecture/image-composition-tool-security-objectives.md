@@ -89,4 +89,38 @@ image or corrupt generated configuration:
 * The template carried on the ISO references provisioning inputs through
   their on-ISO copies; build-host paths of scripts, cloud-init files, and SSH
   key files are not included.
-* No command was added to the shell allowlist for these features.
+
+## 7. Credentials Supplied Through the Web UI
+
+A template may declare a privileged account with no password and no SSH key —
+the build is then refused rather than creating an account with an empty
+password. The Web UI can supply the missing credential (`credentials` on
+`POST /templates/compose` and `POST /builds`), which means an account password
+crosses the API. It is handled so the secret's lifetime is the build's:
+
+* The requirement is derived from the resolved template's own
+  `systemConfig.users`, and a supplied `user` must already be declared there.
+  A credential never creates an account, matching the CLI's
+  `--ssh-authorized-key` contract.
+* A password is hashed with SHA-512 crypt on the build host before it is
+  written anywhere, so the plain text exists only in memory. A value that is
+  already a crypt(3) hash is passed through rather than hashed again. The
+  password is fed to `openssl` on standard input, never as a command argument,
+  so it does not appear in the process table or in any logged command string.
+* The hash is carried in the generated `extends` delta, written `0600` and
+  removed when the build ends. It is redacted from the compose response (both
+  the resolved template and the delta view), from the archived template served
+  by `GET /builds/{id}/template`, and from the build record's command line.
+  The build log is not scrubbed; ICT's own account-creation path does not log
+  the value.
+* An SSH public key is validated with the OpenSSH `authorized_keys` parser,
+  limited to one key per entry, and rejected if it looks like a private key.
+  Public keys are not redacted, being public.
+* The server binds `127.0.0.1` by default and has no authentication, so a
+  password posted to it is exposed to any local process able to reach the
+  port. Binding it to a routable address (`--host`) sends credentials over an
+  unauthenticated, unencrypted channel and should not be combined with this
+  feature.
+* `openssl` was added to the shell allowlist for the hashing step. It was
+  already required by the in-chroot `hash_algo` path, which could not run
+  without it.

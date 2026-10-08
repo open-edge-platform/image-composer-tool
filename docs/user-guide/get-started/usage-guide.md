@@ -20,6 +20,7 @@ command reference, see the
   - [Configuration](#configuration)
   - [Operations Requiring Sudo](#operations-requiring-sudo)
   - [Running the Web UI](#running-the-web-ui)
+    - [Supplying a Credential for the Administrator Account](#supplying-a-credential-for-the-administrator-account)
   - [Shell Completion](#shell-completion)
   - [Template Examples](#template-examples)
     - [Minimal Edge Device](#minimal-edge-device)
@@ -375,6 +376,46 @@ a rebuild, point the matching flag at a file on disk:
 
 A malformed or missing override file stops the server at startup rather than
 falling back to the embedded copy.
+
+### Supplying a Credential for the Administrator Account
+
+Some templates deliberately ship a sudo account with no login of its own — the
+EdgePack unattended-ISO templates declare an `admin` user whose only credential
+is a placeholder `admin.pub` containing nothing but comments. ICT refuses to
+build such an image rather than create an account with an empty password:
+
+```text
+user admin has root or sudo access but no password or SSH authorized key
+```
+
+In the web UI, choosing one of these shows a **Credentials** section — on the
+Basic tab beneath the selection, and on the Advanced tab's Review step. Fill in
+either field for each account listed:
+
+* **Password** — typed in plain text and hashed before it is written anywhere.
+* **SSH public key** — paste a key or upload a `.pub` file.
+
+Either one on its own is enough. With only a key the account is created
+key-login-only, with passwordless sudo (there is no password to prompt for).
+The Compose button stays disabled until every listed account is answered, so
+the gap is caught before the build rather than minutes into it.
+
+The credential is used for that build alone: it is not saved in the browser, is
+cleared when the selection changes, and is redacted from the resolved template,
+the delta view, the archived template, and the build log.
+
+The CLI equivalent is `--ssh-authorized-key`, which takes a file path:
+
+```bash
+sudo ./image-composer-tool build \
+  --ssh-authorized-key admin=~/.ssh/id_ed25519.pub \
+  image-templates/ubuntu24/ubuntu24-x86_64-edgepack-unattended-iso.yml
+```
+
+To bake a credential into the template instead, set `sshAuthorizedKeys` on the
+user, or put real keys in the file `sshAuthorizedKeysFiles` points at. For a
+password, generate a hash with `openssl passwd -6` and set it as
+`password` — a complete crypt(3) hash is applied as-is and never re-hashed.
 
 For every flag, the sudoers rules in full, and their security implications, see
 the

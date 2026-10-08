@@ -328,6 +328,13 @@ func (s *Service) StartBuild(req BuildRequest) (*BuildAccepted, error) {
 	templatePath, templateName, err := s.resolveBuildTemplate(&req, workDir)
 	if err != nil {
 		s.releaseBuildSlot(id) // no child spawned; free the slot for the next start
+		// A missing login gets its own code: it is the one bad-request cause a
+		// client can act on mechanically, by prompting for a credential and
+		// retrying. Reporting it as NO_MATCH would say the selection matched no
+		// template, which is the opposite of what happened.
+		if errors.Is(err, errCredentialRequired) {
+			return nil, newError(http.StatusBadRequest, "CREDENTIALS_REQUIRED", err.Error())
+		}
 		if errors.Is(err, errBadBuildRequest) {
 			return nil, newError(http.StatusBadRequest, "NO_MATCH", err.Error())
 		}
@@ -675,6 +682,13 @@ func LogCancelSupport(sudo bool) {
 // other errors are treated as server-side (500).
 var errBadBuildRequest = errors.New("bad build request")
 
+// errCredentialRequired marks the one bad-request cause a client can resolve
+// on its own: the template leaves a privileged account with no login, and
+// supplying one in the request's `credentials` makes the same build succeed.
+// Wraps errBadBuildRequest so anything checking for a client error still
+// matches it.
+var errCredentialRequired = fmt.Errorf("%w: credential required", errBadBuildRequest)
+
 // resolveBuildTemplate returns the on-disk template path to build. For {yaml} it
 // writes the body to the work dir; for {compose} it looks up the manifest.
 //
@@ -691,6 +705,12 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 		if werr := os.WriteFile(p, []byte(req.YAML), 0o600); werr != nil {
 			return "", "", fmt.Errorf("writing template: %w", werr) // server-side
 		}
+		// A posted template can declare a credential-less sudo account just as a
+		// curated one can, and such a build always fails. Say so now rather than
+		// after the chroot is populated.
+		if verr := s.checkTemplateCredentials(p); verr != nil {
+			return "", "", verr
+		}
 		return p, "template.yml", nil
 	}
 	if req.Compose == nil {
@@ -706,6 +726,13 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 		return "", "", fmt.Errorf("resolving template path: %w", perr) // server-side (bad manifest)
 	}
 	if !c.hasOverrides() {
+		// Without a delta the curated template is built as-is, so this is the
+		// last chance to catch an account it leaves with no login. Checking here
+		// fails in milliseconds; the build itself would only reach the same
+		// check after the package download, minutes in.
+		if verr := s.checkTemplateCredentials(full); verr != nil {
+			return "", "", verr
+		}
 		return full, tmpl, nil
 	}
 	// StartBuild can be posted directly, bypassing /templates/compose, so the
@@ -719,13 +746,56 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 	if verr := ValidateDisk(c.Disk, c.ImageType); verr != nil {
 		return "", "", fmt.Errorf("%w: %v", errBadBuildRequest, verr)
 	}
+	// Credentials name users and carry a password to hash, so they are checked
+	// against the curated parent and rewritten before the delta is rendered.
+	if len(c.Credentials) > 0 {
+		parentMerged, perr := config.LoadAndMergeTemplate(full)
+		if perr != nil {
+			return "", "", fmt.Errorf("%w: %v", errBadBuildRequest, perr)
+		}
+		hashed, cerr := validateCredentials(c.Credentials, parentMerged)
+		if cerr != nil {
+			return "", "", fmt.Errorf("%w: %v", errBadBuildRequest, cerr)
+		}
+		// Copy rather than mutate: c points at the caller's request, which is
+		// also stored on the build record and would otherwise carry the hash.
+		withHashed := *c
+		withHashed.Credentials = hashed
+		c = &withHashed
+	}
 	deltaPath, _, _, derr := s.deltaForOverride(tmpl, full, *c)
 	if derr != nil {
 		return "", "", fmt.Errorf("generating override template: %w", derr) // server-side
 	}
+	if verr := s.checkTemplateCredentials(deltaPath); verr != nil {
+		return "", "", verr
+	}
 	// Display name stays the curated parent's, not the generated delta's — the
 	// history/build-details panels show what the user actually chose.
 	return deltaPath, tmpl, nil
+}
+
+// checkTemplateCredentials rejects a build whose template would create a
+// privileged account with an empty password.
+//
+// ICT already refuses such a build, but only once isomaker/imageos reaches
+// account creation — after the chroot is populated, which for the curated
+// unattended-ISO templates is several minutes of package downloads. Running
+// the same check up front turns that into an immediate, actionable error, and
+// is what lets those templates be offered in the UI at all: the caller is told
+// to supply a credential instead of watching a long build fail.
+//
+// A load failure is not reported as a credential problem — Compose and the
+// build itself both surface template errors with their own wording.
+func (s *Service) checkTemplateCredentials(templatePath string) error {
+	merged, err := config.LoadAndMergeTemplate(templatePath)
+	if err != nil {
+		return nil
+	}
+	if cerr := config.ValidateUserCredentials(merged.SystemConfig.Users); cerr != nil {
+		return fmt.Errorf("%w: %v", errCredentialRequired, cerr)
+	}
+	return nil
 }
 
 // buildCommand assembles the argv for an ICT build, prefixing sudo when

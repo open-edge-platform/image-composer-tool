@@ -195,6 +195,12 @@ func MergeConfigurations(userTemplate, defaultTemplate *ImageTemplate) (*ImageTe
 	return &mergedTemplate, nil
 }
 
+// RedactedValue replaces a sensitive field in a copy made for display or
+// logging. Exported so callers that redact a value this package never sees —
+// the API's generated delta, which carries a password hash — mark it the same
+// way a redacted template does.
+const RedactedValue = "[REDACTED]"
+
 // RedactSensitiveData returns a copy of the template with sensitive data redacted for
 // safe display or logging. The top-level ImageTemplate is shallow-copied and only
 // SystemConfig is deep-copied — via redactSensitiveSystemConfig, which replaces
@@ -225,11 +231,11 @@ func redactSensitiveSystemConfig(config SystemConfig) SystemConfig {
 			redactedUser := user
 			// Redact password if present
 			if user.Password != "" {
-				redactedUser.Password = "[REDACTED]"
+				redactedUser.Password = RedactedValue
 			}
 			// Redact hash algorithm to prevent revealing password security details
 			if user.HashAlgo != "" {
-				redactedUser.HashAlgo = "[REDACTED]"
+				redactedUser.HashAlgo = RedactedValue
 			}
 			redacted.Users[i] = redactedUser
 		}
