@@ -829,6 +829,65 @@ func TestValidateUserCredentials(t *testing.T) {
 	}
 }
 
+func TestIsPrivileged(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		user UserConfig
+		want bool
+	}{
+		{"sudo flag", UserConfig{Name: "admin", Sudo: true}, true},
+		{"sudo group", UserConfig{Name: "admin", Groups: []string{"sudo"}}, true},
+		{"wheel group", UserConfig{Name: "admin", Groups: []string{"wheel"}}, true},
+		{"root", UserConfig{Name: "root"}, true},
+		{"root with startup script", UserConfig{Name: "root", StartupScript: "/root/unattendedinstaller"}, false},
+		{"unprivileged", UserConfig{Name: "guest"}, false},
+		{"unprivileged group", UserConfig{Name: "guest", Groups: []string{"docker"}}, false},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tt.user.IsPrivileged(); got != tt.want {
+				t.Errorf("IsPrivileged() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNeedsCredential(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		user UserConfig
+		want bool
+	}{
+		{"privileged without credential", UserConfig{Name: "admin", Sudo: true}, true},
+		{"privileged with password", UserConfig{Name: "admin", Sudo: true, Password: "x"}, false},
+		{"privileged with key", UserConfig{Name: "admin", Sudo: true, SSHAuthorizedKeys: []string{testKey3}}, false},
+		{"unprivileged without credential", UserConfig{Name: "guest"}, false},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tt.user.NeedsCredential(); got != tt.want {
+				t.Errorf("NeedsCredential() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateSSHAuthorizedKey(t *testing.T) {
+	t.Parallel()
+	if err := ValidateSSHAuthorizedKey(testKey3); err != nil {
+		t.Errorf("ValidateSSHAuthorizedKey(valid key) error = %v, want nil", err)
+	}
+	if err := ValidateSSHAuthorizedKey("not a key"); err == nil {
+		t.Error("ValidateSSHAuthorizedKey(invalid) error = nil, want error")
+	}
+}
+
 func TestMergeProxyEmptySectionClearsInherited(t *testing.T) {
 	t.Parallel()
 	defaults := SystemConfig{Proxy: ProxyConfig{HTTPProxy: "http://parent:1", NoProxy: "localhost"}}

@@ -968,19 +968,50 @@ func IsValidUnixUserName(name string) bool {
 	return unixUserNameRe.MatchString(name)
 }
 
+// IsPrivileged reports whether the account is created with elevated rights:
+// sudo access, or the root account. A root account whose login shell is a
+// startupScript is exempt, being the installer environment's console account,
+// confined to running that script.
+//
+// Only a privileged account is required to carry a credential, so this is the
+// predicate both ValidateUserCredentials and the Web UI's prompt select on.
+func (u UserConfig) IsPrivileged() bool {
+	return u.HasSudoAccess() || (u.Name == "root" && u.StartupScript == "")
+}
+
+// NeedsCredential reports whether the account would be created with an empty
+// password: privileged, but carrying neither a password nor an SSH authorized
+// key.
+//
+// Exported so a caller that wants to *offer* a credential (the Web UI, via the
+// compose response) decides with the same rule that ValidateUserCredentials
+// rejects by, and the two can never disagree about which accounts need one.
+//
+// Only the inline SSHAuthorizedKeys count. By the time this runs,
+// lowerSSHKeyFiles has read every sshAuthorizedKeysFiles entry into that slice,
+// skipping blanks and comments — so a key file containing only comments
+// contributes nothing and the account still needs a credential.
+func (u UserConfig) NeedsCredential() bool {
+	return u.IsPrivileged() && u.Password == "" && len(u.SSHAuthorizedKeys) == 0
+}
+
 // ValidateUserCredentials rejects a privileged user that has neither a
 // password nor an SSH authorized key: such an account would be created with an
-// empty password. Privileged means sudo access or the root account. A root
-// account whose login shell is a startupScript is exempt: it is the installer
-// environment's console account, confined to running that script.
+// empty password.
 func ValidateUserCredentials(users []UserConfig) error {
 	for _, u := range users {
-		privileged := u.HasSudoAccess() || (u.Name == "root" && u.StartupScript == "")
-		if privileged && u.Password == "" && len(u.SSHAuthorizedKeys) == 0 {
+		if u.NeedsCredential() {
 			return fmt.Errorf("user %s has root or sudo access but no password or SSH authorized key; set password "+
 				"(or sshAuthorizedKeys/sshAuthorizedKeysFiles, or --ssh-authorized-key %s=FILE) so the "+
 				"account is not left with an empty password", u.Name, u.Name)
 		}
 	}
 	return nil
+}
+
+// ValidateSSHAuthorizedKey checks a single authorized_keys line supplied by a
+// caller outside this package (the Web UI posts one directly, rather than
+// pointing at a file the way --ssh-authorized-key does).
+func ValidateSSHAuthorizedKey(line string) error {
+	return validateSSHKeyLine(line)
 }

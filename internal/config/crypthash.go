@@ -1,8 +1,12 @@
 package config
 
 import (
+	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
+
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
 
 // cryptHashRes match complete crypt(3) hashes, not just an algorithm prefix,
@@ -47,4 +51,43 @@ func IsCryptHash(password string) bool {
 		}
 	}
 	return false
+}
+
+// HashPasswordForHost turns a caller-supplied password into a SHA-512 crypt
+// hash on the build host, leaving a value that is already a complete crypt(3)
+// hash untouched.
+//
+// This exists for credentials that arrive over the API: the Web UI collects a
+// plain-text password, and hashing it here means only the hash is ever written
+// to a generated delta, so the plain text lives in memory and nowhere else.
+// The in-chroot equivalent (imageos.hashPassword) cannot serve that purpose —
+// it is unexported and runs against an install root that does not exist yet
+// when a template is composed.
+//
+// The password is fed to openssl on stdin rather than interpolated into the
+// command, so it never appears in the process table or in any command string
+// the shell package logs.
+func HashPasswordForHost(password string) (string, error) {
+	if password == "" {
+		return "", fmt.Errorf("password is empty")
+	}
+	if IsCryptHash(password) {
+		return password, nil
+	}
+	// -stdin consumes a single line, so an embedded newline would silently
+	// truncate the password to its first line and hash the wrong value.
+	if strings.ContainsAny(password, "\r\n\x00") {
+		return "", fmt.Errorf("password must not contain line breaks or NUL bytes")
+	}
+	out, err := shell.ExecCmdWithInput(password+"\n", "openssl passwd -6 -stdin", false, shell.HostPath, nil)
+	if err != nil {
+		// The error from openssl can echo its input, so report only that the
+		// step failed and never wrap the underlying message.
+		return "", fmt.Errorf("hashing password failed")
+	}
+	hash := strings.TrimSpace(out)
+	if !IsCryptHash(hash) {
+		return "", fmt.Errorf("hashing password produced an unusable value")
+	}
+	return hash, nil
 }
