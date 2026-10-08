@@ -43,13 +43,122 @@ type Selection struct {
 	// the Advanced tab's Disk step. Nil means "not overridden". Lookup-neutral
 	// like the fields above.
 	Disk *DiskOverride
+	// Credentials supply a login for a template user the template itself leaves
+	// without one, emitted into the delta's systemConfig.users. The curated
+	// unattended-ISO templates deliberately ship a sudo account with a
+	// placeholder key file and no password, so without this they can only be
+	// built from the CLI via --ssh-authorized-key. Lookup-neutral.
+	Credentials []CredentialInput
+}
+
+// CredentialInput is a login the caller supplies for one existing template
+// user. Either field satisfies the account on its own, matching what
+// config.ValidateUserCredentials accepts.
+type CredentialInput struct {
+	// User must name a user the resolved template already declares; this never
+	// creates an account, matching --ssh-authorized-key's contract.
+	User string
+	// Password is accepted as plain text (what a browser form collects) or as a
+	// complete crypt(3) hash. Either way only a hash reaches the generated
+	// delta — see config.HashPasswordForHost.
+	Password string
+	// SSHAuthorizedKey is one authorized_keys line, validated with the same
+	// parser that checks the key files a template points at.
+	SSHAuthorizedKey string
+}
+
+// CredentialRequirement reports one template user the caller may supply a
+// login for, so the UI can prompt before a build instead of letting it fail
+// deep inside one.
+type CredentialRequirement struct {
+	User string
+	Sudo bool
+	// Satisfied is false when the template leaves this account with no password
+	// and no SSH key, which is what blocks a build.
+	Satisfied bool
 }
 
 // hasOverrides reports whether the selection asks for anything beyond the
 // matched template, i.e. whether a delta has to be generated at all. Without
 // any, the curated template is resolved directly and no file is written.
 func (s Selection) hasOverrides() bool {
-	return s.ImageName != "" || len(s.Packages) > 0 || len(s.Repos) > 0 || s.Disk != nil
+	return s.ImageName != "" || len(s.Packages) > 0 || len(s.Repos) > 0 ||
+		s.Disk != nil || len(s.Credentials) > 0
+}
+
+// credentialRequirements lists the privileged users of a merged template,
+// flagging those still without a credential.
+//
+// Must run on a merged, lowered template: lowerSSHKeyFiles has by then read
+// every sshAuthorizedKeysFiles entry into SSHAuthorizedKeys, so a key file
+// holding only comments correctly reads as unsatisfied — which is exactly the
+// case the curated EdgePack templates ship.
+func credentialRequirements(merged *config.ImageTemplate) []CredentialRequirement {
+	var out []CredentialRequirement
+	for _, u := range merged.SystemConfig.Users {
+		// Only privileged accounts are reported: an unprivileged one with no
+		// credential is legitimate and never blocks a build, so prompting for it
+		// would be noise. Uses the same predicate NeedsCredential is built on, so
+		// what is offered and what is required cannot diverge.
+		if !u.IsPrivileged() {
+			continue
+		}
+		out = append(out, CredentialRequirement{
+			User:      u.Name,
+			Sudo:      u.HasSudoAccess(),
+			Satisfied: !u.NeedsCredential(),
+		})
+	}
+	return out
+}
+
+// validateCredentials checks supplied credentials against the curated parent.
+// Returns the credentials with every password replaced by a crypt hash, so a
+// caller cannot accidentally emit the plain text.
+//
+// parent is the curated template as merged *without* these credentials, which
+// is what names the users available to attach one to.
+func validateCredentials(creds []CredentialInput, parent *config.ImageTemplate) ([]CredentialInput, error) {
+	if len(creds) == 0 {
+		return nil, nil
+	}
+	known := make(map[string]bool, len(parent.SystemConfig.Users))
+	for _, u := range parent.SystemConfig.Users {
+		known[u.Name] = true
+	}
+	seen := make(map[string]bool, len(creds))
+	out := make([]CredentialInput, 0, len(creds))
+	for _, c := range creds {
+		if c.User == "" {
+			return nil, fmt.Errorf("credential is missing a user name")
+		}
+		// Mirrors ApplyCompositionOverrides' wording for the equivalent CLI
+		// failure, so the same mistake reads the same way from either entry point.
+		if !known[c.User] {
+			return nil, fmt.Errorf("credential for user %q: no such user in systemConfig.users", c.User)
+		}
+		if seen[c.User] {
+			return nil, fmt.Errorf("credential for user %q: supplied more than once", c.User)
+		}
+		seen[c.User] = true
+		if c.Password == "" && c.SSHAuthorizedKey == "" {
+			return nil, fmt.Errorf("credential for user %q: supply a password, an SSH public key, or both", c.User)
+		}
+		if c.SSHAuthorizedKey != "" {
+			if err := config.ValidateSSHAuthorizedKey(c.SSHAuthorizedKey); err != nil {
+				return nil, fmt.Errorf("SSH public key for user %q: %w", c.User, err)
+			}
+		}
+		if c.Password != "" {
+			hashed, err := config.HashPasswordForHost(c.Password)
+			if err != nil {
+				return nil, fmt.Errorf("password for user %q: %w", c.User, err)
+			}
+			c.Password = hashed
+		}
+		out = append(out, c)
+	}
+	return out, nil
 }
 
 // ComposeSummary is the human-readable summary shown in the Review panel and
@@ -102,6 +211,10 @@ type ComposeResult struct {
 	// "already included" packages even before the user has added anything of
 	// their own.
 	BasePackages []string
+	// Credentials lists the privileged accounts of the resolved template and
+	// whether each has a login yet, so a caller can prompt for the missing ones
+	// rather than discovering the gap partway through a build.
+	Credentials []CredentialRequirement
 }
 
 // Compose resolves the selections to a template, applies any Advanced-mode
@@ -156,6 +269,23 @@ func (s *Service) Compose(sel Selection) (*ComposeResult, error) {
 			fmt.Sprintf("checking matched template file: %v", statErr))
 	}
 
+	// Credentials name users, so they have to be checked against the curated
+	// parent as merged *without* them — and the password hashed — before the
+	// delta that carries them is rendered. Only merged early when credentials
+	// are actually supplied, to keep the common path at one merge.
+	if len(sel.Credentials) > 0 {
+		parentMerged, perr := config.LoadAndMergeTemplate(path)
+		if perr != nil {
+			return nil, newError(http.StatusUnprocessableEntity, "TEMPLATE_INVALID",
+				"matched template failed to load/validate: "+perr.Error())
+		}
+		hashed, cerr := validateCredentials(sel.Credentials, parentMerged)
+		if cerr != nil {
+			return nil, newError(http.StatusBadRequest, "BAD_REQUEST", cerr.Error())
+		}
+		sel.Credentials = hashed
+	}
+
 	resolvePath := path
 	var deltaYAML string
 	if sel.hasOverrides() {
@@ -165,7 +295,11 @@ func (s *Service) Compose(sel Selection) (*ComposeResult, error) {
 		}
 		defer cleanup()
 		resolvePath = deltaPath
-		deltaYAML = string(data)
+		// Redacted, unlike the bytes written for the build: this string is
+		// returned to the caller and the Advanced tab renders it with Copy and
+		// Export, so a password hash in it would be on screen and in a
+		// downloaded file.
+		deltaYAML = redactDeltaYAML(data)
 	}
 
 	// Parse+merge (reuses ICT's own logic) for both the summary and the
@@ -192,6 +326,9 @@ func (s *Service) Compose(sel Selection) (*ComposeResult, error) {
 		// With no overrides, merged *is* the base template — set here so it's
 		// still correct if the overrides branch below skips the second resolve.
 		BasePackages: merged.SystemConfig.Packages,
+		// Reported from the resolved template, so a credential supplied in this
+		// same request shows as satisfied and the caller stops prompting.
+		Credentials: credentialRequirements(merged),
 	}
 
 	// With overrides in play, resolve the curated parent a second time so the
