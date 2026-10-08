@@ -44,6 +44,10 @@ func (e noSudoExecutor) ExecCmdWithInput(inputStr string, cmdStr string, sudo bo
 	return e.run(cmdStr, envVal, inputStr)
 }
 
+func (e noSudoExecutor) ExecCmdSilentWithInput(inputStr string, cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error) {
+	return e.run(cmdStr, envVal, inputStr)
+}
+
 func TestMain(m *testing.M) {
 	original := shell.Default
 	shell.Default = noSudoExecutor{}

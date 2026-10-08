@@ -621,6 +621,10 @@ func (e *capturingExecutor) ExecCmdWithInput(_ string, cmdStr string, _ bool, _ 
 	return e.record(cmdStr)
 }
 
+func (e *capturingExecutor) ExecCmdSilentWithInput(_ string, cmdStr string, _ bool, _ string, _ []string) (string, error) {
+	return e.record(cmdStr)
+}
+
 // TestInstallRpmPkg_QuotesMaliciousFileName is the CWE-78 regression test: a
 // package basename derived from repository metadata that carries shell syntax
 // must reach the rpm install command shell-quoted, so it cannot break out and
@@ -700,6 +704,10 @@ func (e *backendSplitExecutor) ExecCmdWithInput(_ string, cmdStr string, _ bool,
 	return e.run(cmdStr, chrootPath)
 }
 
+func (e *backendSplitExecutor) ExecCmdSilentWithInput(_ string, cmdStr string, _ bool, chrootPath string, _ []string) (string, error) {
+	return e.run(cmdStr, chrootPath)
+}
+
 // TestUpdateRpmDB_QuotesJustdbFileName covers the second CWE-78 sink: when the
 // host and chroot RPM DB backends differ, updateRpmDB reinstalls each package
 // with `rpm -i --justdb`. The repository-controlled basename must be shell-quoted
@@ -773,6 +781,10 @@ func (e *gpgImportExecutor) ExecCmdWithStream(cmdStr string, _ bool, _ string, _
 }
 
 func (e *gpgImportExecutor) ExecCmdWithInput(_ string, cmdStr string, _ bool, _ string, _ []string) (string, error) {
+	return e.run(cmdStr)
+}
+
+func (e *gpgImportExecutor) ExecCmdSilentWithInput(_ string, cmdStr string, _ bool, _ string, _ []string) (string, error) {
 	return e.run(cmdStr)
 }
 
