@@ -301,6 +301,10 @@
 - `fix(debutils)`: correctly resolve dependencies on a versioned virtual `Provides:` (e.g. Debian's Qt6 ABI-pinning packages) by comparing against the version the provider actually declares for that capability, not the provider's own unrelated package version. An unversioned `Provides:` no longer incorrectly satisfies a versioned dependency either.
 - `fix(shell)`: `configurations` commands containing multi-line scripts or shell metacharacters (`$()`, backticks, `$var`) now reach the chroot unmodified instead of having their whitespace collapsed or being partially expanded by the outer shell before execution.
 
+- Ubuntu cloud-init images fought systemd-networkd for interface ownership at first boot: `updateImageNetwork()` unconditionally ran `systemctl enable systemd-networkd` whenever the unit was present and no `network.backend` was configured, even for images that install `cloud-init` and rely on it to own network rendering. Combined with the OS-default `dhcp.network` drop-in every Ubuntu ISO build inherits, this left a statically-DHCP-configured `systemd-networkd` racing cloud-init for the interface, leaving `/etc/netplan` unpopulated. The auto-enable is now skipped when `cloud-init` is among the installed packages (matched literally, version-pinned, or via a glob such as `cloud-init*`) and no explicit `network.backend` is set; behavior for images that don't install cloud-init is unchanged.
+
+- Attended installer TUI froze on the very first "Next"/"Go Back"/Ctrl+C press: page navigation and the exit-confirmation prompt called `tview`'s `QueueUpdateDraw` synchronously from within the UI's own event-loop goroutine, which deadlocks since that call blocks waiting for the same goroutine to service it. Navigation now runs directly and synchronously, since it's already invoked from that goroutine.
+
 **Known Issues**:
 
 - **Custom partition layouts with the overlay feature are not supported**:

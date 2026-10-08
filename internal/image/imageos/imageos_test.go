@@ -1345,6 +1345,206 @@ func TestUpdateImageNetwork(t *testing.T) {
 	}
 }
 
+// TestHasPackage covers exact and version-pinned package name matching.
+func TestHasPackage(t *testing.T) {
+	testCases := []struct {
+		name     string
+		pkgs     []string
+		target   string
+		expected bool
+	}{
+		{"exact match", []string{"curl", "cloud-init"}, "cloud-init", true},
+		{"version pinned match", []string{"cloud-init_24.4-0ubuntu1"}, "cloud-init", true},
+		{"no match", []string{"curl", "wget"}, "cloud-init", false},
+		{"empty list", nil, "cloud-init", false},
+		{"prefix is not a match", []string{"cloud-init-extra"}, "cloud-init", false},
+		{"glob match", []string{"cloud-init*"}, "cloud-init", true},
+		{"glob no match", []string{"cloud-init*"}, "systemd", false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := hasPackage(tc.pkgs, tc.target); got != tc.expected {
+				t.Errorf("hasPackage(%v, %q) = %v, want %v", tc.pkgs, tc.target, got, tc.expected)
+			}
+		})
+	}
+}
+
+// TestUpdateImageNetworkSkipsSystemdNetworkdWithCloudInit verifies that
+// systemd-networkd is not auto-enabled when cloud-init is installed and no
+// explicit network backend is configured, since cloud-init owns network
+// configuration itself in that case.
+func TestUpdateImageNetworkSkipsSystemdNetworkdWithCloudInit(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	// Any systemctl enable call fails, so the test only passes if
+	// updateImageNetwork skips the call entirely for a cloud-init image.
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: "systemctl enable.*systemd-networkd", Output: "", Error: fmt.Errorf("systemctl should not be called")},
+	})
+
+	installRoot := t.TempDir()
+	unitDir := filepath.Join(installRoot, "lib", "systemd", "system")
+	if err := os.MkdirAll(unitDir, 0755); err != nil {
+		t.Fatalf("failed to create systemd unit dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(unitDir, "systemd-networkd.service"), []byte(""), 0644); err != nil {
+		t.Fatalf("failed to create systemd-networkd.service: %v", err)
+	}
+
+	template := createTestImageTemplate()
+	template.SystemConfig.Packages = []string{"cloud-init"}
+
+	if err := updateImageNetwork(installRoot, template); err != nil {
+		t.Errorf("updateImageNetwork should skip enabling systemd-networkd for a cloud-init image, got error: %v", err)
+	}
+}
+
+// TestUpdateImageNetworkEnablesSystemdNetworkdWithoutCloudInit verifies the
+// existing auto-enable behavior is unchanged for images that don't install
+// cloud-init.
+func TestUpdateImageNetworkEnablesSystemdNetworkdWithoutCloudInit(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	// Make the enable call fail with a sentinel error and assert it propagates,
+	// so the test actually proves the call was reached rather than merely
+	// tolerating both an invoked and a skipped call.
+	sentinelErr := fmt.Errorf("sentinel: systemctl enable was invoked")
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: "systemctl enable.*systemd-networkd", Output: "", Error: sentinelErr},
+	})
+
+	installRoot := t.TempDir()
+	unitDir := filepath.Join(installRoot, "lib", "systemd", "system")
+	if err := os.MkdirAll(unitDir, 0755); err != nil {
+		t.Fatalf("failed to create systemd unit dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(unitDir, "systemd-networkd.service"), []byte(""), 0644); err != nil {
+		t.Fatalf("failed to create systemd-networkd.service: %v", err)
+	}
+
+	template := createTestImageTemplate() // Packages do not include cloud-init.
+
+	err := updateImageNetwork(installRoot, template)
+	if err == nil || !strings.Contains(err.Error(), sentinelErr.Error()) {
+		t.Errorf("updateImageNetwork should still enable systemd-networkd when cloud-init is absent, got: %v", err)
+	}
+}
+
+// TestUpdateImageNetworkSkipsSystemdNetworkdWithTransitiveCloudInit verifies
+// that systemd-networkd auto-enable is skipped when cloud-init is installed
+// only transitively via a meta-package (e.g. ubuntu-cloud-minimal) that does
+// not appear literally in template.SystemConfig.Packages, by detecting
+// cloud-init's own executable in the installed root.
+func TestUpdateImageNetworkSkipsSystemdNetworkdWithTransitiveCloudInit(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: "systemctl enable.*systemd-networkd", Output: "", Error: fmt.Errorf("systemctl should not be called")},
+	})
+
+	installRoot := t.TempDir()
+	unitDir := filepath.Join(installRoot, "lib", "systemd", "system")
+	if err := os.MkdirAll(unitDir, 0755); err != nil {
+		t.Fatalf("failed to create systemd unit dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(unitDir, "systemd-networkd.service"), []byte(""), 0644); err != nil {
+		t.Fatalf("failed to create systemd-networkd.service: %v", err)
+	}
+
+	binDir := filepath.Join(installRoot, "usr", "bin")
+	if err := os.MkdirAll(binDir, 0755); err != nil {
+		t.Fatalf("failed to create usr/bin dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "cloud-init"), []byte(""), 0755); err != nil {
+		t.Fatalf("failed to create cloud-init executable: %v", err)
+	}
+
+	template := createTestImageTemplate()
+	// cloud-init is not listed directly; it arrives transitively via a
+	// meta-package such as ubuntu-cloud-minimal.
+	template.SystemConfig.Packages = []string{"ubuntu-cloud-minimal"}
+
+	if err := updateImageNetwork(installRoot, template); err != nil {
+		t.Errorf("updateImageNetwork should skip enabling systemd-networkd for a transitive cloud-init image, got error: %v", err)
+	}
+}
+
+// TestUpdateImageNetworkEnablesSystemdNetworkdWithCloudInitConfigFileOnly
+// verifies that a dropped /etc/cloud/cloud.cfg alone does not trigger the
+// skip: some default configs (e.g. EMT3's default-raw-x86_64.yml) copy a
+// cloud-init config file via additionalFiles on images that never install
+// the cloud-init package, and systemd-networkd must still be enabled there.
+func TestUpdateImageNetworkEnablesSystemdNetworkdWithCloudInitConfigFileOnly(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	sentinelErr := fmt.Errorf("sentinel: systemctl enable was invoked")
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: "systemctl enable.*systemd-networkd", Output: "", Error: sentinelErr},
+	})
+
+	installRoot := t.TempDir()
+	unitDir := filepath.Join(installRoot, "lib", "systemd", "system")
+	if err := os.MkdirAll(unitDir, 0755); err != nil {
+		t.Fatalf("failed to create systemd unit dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(unitDir, "systemd-networkd.service"), []byte(""), 0644); err != nil {
+		t.Fatalf("failed to create systemd-networkd.service: %v", err)
+	}
+
+	cloudDir := filepath.Join(installRoot, "etc", "cloud")
+	if err := os.MkdirAll(cloudDir, 0755); err != nil {
+		t.Fatalf("failed to create cloud-init config dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cloudDir, "cloud.cfg"), []byte(""), 0644); err != nil {
+		t.Fatalf("failed to create cloud.cfg: %v", err)
+	}
+
+	template := createTestImageTemplate() // Packages do not include cloud-init.
+
+	err := updateImageNetwork(installRoot, template)
+	if err == nil || !strings.Contains(err.Error(), sentinelErr.Error()) {
+		t.Errorf("updateImageNetwork should still enable systemd-networkd when only a config file is present without the cloud-init package, got: %v", err)
+	}
+}
+
+// TestUpdateImageNetworkEnablesSystemdNetworkdWithCloudInitAndExplicitBackend
+// verifies the cloud-init skip is limited to an unconfigured backend: with
+// cloud-init installed but an explicit "systemd-networkd" backend set, the
+// enable path must still be reached.
+func TestUpdateImageNetworkEnablesSystemdNetworkdWithCloudInitAndExplicitBackend(t *testing.T) {
+	originalExecutor := shell.Default
+	defer func() { shell.Default = originalExecutor }()
+
+	sentinelErr := fmt.Errorf("sentinel: systemctl enable was invoked")
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: "systemctl enable.*systemd-networkd", Output: "", Error: sentinelErr},
+	})
+
+	installRoot := t.TempDir()
+	unitDir := filepath.Join(installRoot, "lib", "systemd", "system")
+	if err := os.MkdirAll(unitDir, 0755); err != nil {
+		t.Fatalf("failed to create systemd unit dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(unitDir, "systemd-networkd.service"), []byte(""), 0644); err != nil {
+		t.Fatalf("failed to create systemd-networkd.service: %v", err)
+	}
+
+	template := createTestImageTemplate()
+	template.SystemConfig.Packages = []string{"cloud-init"}
+	template.SystemConfig.Network.Backend = "systemd-networkd"
+
+	err := updateImageNetwork(installRoot, template)
+	if err == nil || !strings.Contains(err.Error(), sentinelErr.Error()) {
+		t.Errorf("updateImageNetwork should still enable systemd-networkd when the backend is explicitly set, got: %v", err)
+	}
+}
+
 // TestPrepareVeritySetupValidation tests the validation logic in prepareVeritySetup
 func TestPrepareVeritySetupValidation(t *testing.T) {
 	testCases := []struct {
