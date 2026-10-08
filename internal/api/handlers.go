@@ -102,6 +102,25 @@ func (s *Server) ListPackageRepos(w http.ResponseWriter, _ *http.Request, params
 	writeJSON(w, http.StatusOK, fromPackageRepoList(s.svc.PackageRepos(osID)))
 }
 
+// GetEdgePack handles GET /edge-pack.
+//
+// Unlike ListPackageRepos, an unknown `os` is an error rather than an empty
+// result: there is one pack, not a list, so there is no empty collection to
+// return and pretending the pack has no domains would misreport it as
+// unsupported everywhere.
+func (s *Server) GetEdgePack(w http.ResponseWriter, r *http.Request, params httpapi.GetEdgePackParams) {
+	var osID string
+	if params.Os != nil {
+		osID = *params.Os
+	}
+	pack, err := s.svc.EdgePack(r.Context(), osID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, fromEdgePack(pack))
+}
+
 // SearchPackages handles GET /packages/search.
 //
 // Omitting `q` browses a repository's catalog instead of searching it — the

@@ -27,6 +27,20 @@ const (
 
 var log = logger.Logger()
 
+var partitionOffsetPattern = regexp.MustCompile(`^(-?)([1-9][0-9]*)(KiB|MiB|GiB|K|M|G|KB|MB|GB)$`)
+
+var sizeUnitMultipliers = map[string]uint64{
+	"KiB": 1024,
+	"MiB": 1024 * 1024,
+	"GiB": 1024 * 1024 * 1024,
+	"K":   1024,
+	"M":   1024 * 1024,
+	"G":   1024 * 1024 * 1024,
+	"KB":  1000,
+	"MB":  1000 * 1000,
+	"GB":  1000 * 1000 * 1000,
+}
+
 // registerImageTemplateFormats adds format checkers referenced by
 // os-image-template.schema.json. santhosh-tekuri/jsonschema does not ship
 // ipv4-cidr / ipv6-cidr, and draft 2020-12 only asserts formats when
@@ -116,6 +130,10 @@ func ValidateImageTemplateJSON(data []byte) error {
 		return err
 	}
 
+	if _, err := validateDiskPartitionConstraints(data); err != nil {
+		return err
+	}
+
 	if err := validateFDEConstraints(data); err != nil {
 		return err
 	}
@@ -146,6 +164,10 @@ func ValidateUserTemplateJSON(data []byte) error {
 		return err
 	}
 
+	if _, err := validateDiskPartitionConstraints(data); err != nil {
+		return err
+	}
+
 	if err := validateFDEConstraints(data); err != nil {
 		return err
 	}
@@ -159,6 +181,98 @@ func ValidateUserTemplateJSON(data []byte) error {
 	}
 
 	return nil
+}
+
+func validateDiskPartitionConstraints(data []byte) (string, error) {
+	var doc map[string]interface{}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return "disk.partitions", fmt.Errorf("invalid JSON for disk partition validation: %w", err)
+	}
+
+	disk, _ := doc["disk"].(map[string]interface{})
+	partitions, _ := disk["partitions"].([]interface{})
+	var previousEnd partitionOffset
+	var previousEndRaw string
+	var havePreviousEnd bool
+	for i, rawPartition := range partitions {
+		partition, _ := rawPartition.(map[string]interface{})
+		startRaw, hasStart := partition["start"].(string)
+		endRaw, hasEnd := partition["end"].(string)
+		if !hasStart || !hasEnd {
+			continue
+		}
+
+		start, err := parsePartitionOffset(startRaw)
+		if err != nil {
+			path := fmt.Sprintf("disk.partitions.%d.start", i)
+			return path, fmt.Errorf("%s is invalid: %w", path, err)
+		}
+		if havePreviousEnd && offsetsOutOfOrder(previousEnd, start) {
+			path := fmt.Sprintf("disk.partitions.%d.start", i)
+			return path, fmt.Errorf("%s overlaps the previous partition: start %q is before end %q",
+				path, startRaw, previousEndRaw)
+		}
+
+		if endRaw == "0" {
+			if i != len(partitions)-1 {
+				path := fmt.Sprintf("disk.partitions.%d.end", i)
+				return path, fmt.Errorf("%s may be 0 (rest of disk) only for the last partition", path)
+			}
+			havePreviousEnd = false
+			continue
+		}
+
+		end, err := parsePartitionOffset(endRaw)
+		if err != nil {
+			path := fmt.Sprintf("disk.partitions.%d.end", i)
+			return path, fmt.Errorf("%s is invalid: %w", path, err)
+		}
+		if offsetsOutOfOrder(start, end) || offsetsEqual(start, end) {
+			path := fmt.Sprintf("disk.partitions.%d.end", i)
+			return path, fmt.Errorf("%s must be greater than start %q", path, startRaw)
+		}
+		previousEnd = end
+		previousEndRaw = endRaw
+		havePreviousEnd = true
+	}
+
+	return "", nil
+}
+
+type partitionOffset struct {
+	fromEnd bool
+	bytes   uint64
+}
+
+func parsePartitionOffset(value string) (partitionOffset, error) {
+	match := partitionOffsetPattern.FindStringSubmatch(value)
+	if len(match) != 4 {
+		return partitionOffset{}, fmt.Errorf("offset %q must be a non-zero whole number with a supported unit", value)
+	}
+
+	number, err := strconv.ParseUint(match[2], 10, 64)
+	if err != nil {
+		return partitionOffset{}, fmt.Errorf("offset %q is too large", value)
+	}
+	multiplier := sizeUnitMultipliers[match[3]]
+	if number > ^uint64(0)/multiplier {
+		return partitionOffset{}, fmt.Errorf("offset %q is too large", value)
+	}
+	return partitionOffset{fromEnd: match[1] == "-", bytes: number * multiplier}, nil
+}
+
+func offsetsOutOfOrder(left, right partitionOffset) bool {
+	if left.fromEnd != right.fromEnd {
+		return false
+	}
+	if left.fromEnd {
+		return left.bytes < right.bytes
+	}
+	return left.bytes > right.bytes
+}
+
+func offsetsEqual(left, right partitionOffset) bool {
+	return left.fromEnd == right.fromEnd && left.bytes == right.bytes
 }
 
 // ValidateConfigJSON runs the config schema against data
@@ -314,16 +428,10 @@ func validateDkmsSecureBootConstraints(data []byte) error {
 	return nil
 }
 
-// diskSizeSuffixes/diskSizeSuffixBytes/diskSizePattern mirror config.go's
-// parseDiskSizeBytes (itself mirroring imagedisc.TranslateSizeStrToBytes's unit
-// table). Duplicated here because this package validates raw JSON before it is
-// unmarshaled into config.ImageTemplate, and internal/config already imports
-// this package, so it cannot be imported back.
-var (
-	diskSizeSuffixes    = []string{"KiB", "MiB", "GiB", "K", "M", "G", "KB", "MB", "GB"}
-	diskSizeSuffixBytes = []uint64{1024, 1048576, 1073741824, 1024, 1048576, 1073741824, 1000, 1000000, 1000000000}
-	diskSizePattern     = regexp.MustCompile(`^(\d+)(.*)$`)
-)
+// diskSizePattern mirrors config.go's parseDiskSizeBytes syntax. The parser is
+// duplicated here because internal/config imports this package and cannot be
+// imported back.
+var diskSizePattern = regexp.MustCompile(`^(\d+)(.*)$`)
 
 // parseDiskSizeBytes parses a disk.size/disk.maxSize string (e.g. "8GiB") into
 // bytes, capped at math.MaxInt64 to match the int64 the build-time resize path
@@ -337,16 +445,14 @@ func parseDiskSizeBytes(field, s string) (uint64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("%s %q: %w", field, s, err)
 	}
-	for i, suf := range diskSizeSuffixes {
-		if match[2] == suf {
-			unit := diskSizeSuffixBytes[i]
-			if num > math.MaxInt64/unit {
-				return 0, fmt.Errorf("%s %q: size overflows the supported range", field, s)
-			}
-			return num * unit, nil
-		}
+	unit, ok := sizeUnitMultipliers[match[2]]
+	if !ok {
+		return 0, fmt.Errorf("%s %q: size suffix %q not recognized", field, s, match[2])
 	}
-	return 0, fmt.Errorf("%s %q: size suffix %q not recognized", field, s, match[2])
+	if num > math.MaxInt64/unit {
+		return 0, fmt.Errorf("%s %q: size overflows the supported range", field, s)
+	}
+	return num * unit, nil
 }
 
 // validateDiskMaxSizeConstraints enforces disk.maxSize's invariants against raw

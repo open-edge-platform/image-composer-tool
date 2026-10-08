@@ -67,6 +67,9 @@ func ValidateUserTemplateIssues(data []byte) []Issue {
 	if err := validateAutoExpandLastPartitionConstraints(data, false); err != nil {
 		issues = append(issues, Issue{Path: "disk", Message: err.Error(), Severity: SeverityError})
 	}
+	if path, err := validateDiskPartitionConstraints(data); err != nil {
+		issues = append(issues, Issue{Path: path, Message: err.Error(), Severity: SeverityError})
+	}
 	if err := validateFDEConstraints(data); err != nil {
 		issues = append(issues, Issue{Path: "systemConfig.fde.passphraseFile", Message: err.Error(), Severity: SeverityError})
 	}

@@ -90,7 +90,12 @@ func TestValidateDiskPartitionFields(t *testing.T) {
 		{"fsType required", func(d *DiskOverride) { d.Partitions[0].FsType = "" }, "fsType is required"},
 		{"fsType unlisted", func(d *DiskOverride) { d.Partitions[0].FsType = "btrfs" }, "fsType \"btrfs\""},
 		{"start decimal", func(d *DiskOverride) { d.Partitions[0].Start = "1.5MiB" }, "start \"1.5MiB\""},
+		{"start zero", func(d *DiskOverride) { d.Partitions[0].Start = "0" }, "start must be a non-zero offset"},
 		{"end bare bytes", func(d *DiskOverride) { d.Partitions[0].End = "1048576" }, "end \"1048576\""},
+		{"negative offsets", func(d *DiskOverride) {
+			d.Partitions[1].Start = "-20GiB"
+			d.Partitions[1].End = "-4GiB"
+		}, ""},
 		// "0" is the rest-of-disk sentinel and only legal on the last entry.
 		{"interior rest", func(d *DiskOverride) { d.Partitions[0].End = "0" }, "only the last partition"},
 		{"last rest ok", func(d *DiskOverride) { d.Partitions[2].End = "0" }, ""},
@@ -216,7 +221,7 @@ func TestBuildDeltaEmitsDiskVerbatim(t *testing.T) {
 	parentTarget := config.TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"}
 
 	data, err := buildDelta("parent.yml", parentImage, parentTarget,
-		Selection{Disk: rawDisk()}, nil)
+		Selection{Disk: rawDisk()}, nil, nil)
 	if err != nil {
 		t.Fatalf("buildDelta: %v", err)
 	}
@@ -249,7 +254,7 @@ func TestBuildDeltaWithoutDiskOmitsTheBlock(t *testing.T) {
 	data, err := buildDelta("parent.yml",
 		config.ImageInfo{Name: "img", Version: "1.0.0"},
 		config.TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"},
-		Selection{ImageName: "renamed"}, nil)
+		Selection{ImageName: "renamed"}, nil, nil)
 	if err != nil {
 		t.Fatalf("buildDelta: %v", err)
 	}

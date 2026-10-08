@@ -43,6 +43,17 @@ interface PackageRowProps {
   // today instead of a bare "Latest".
   onResolve?: () => void
   resolving?: boolean
+  // Blocks selecting this row, with `disabledReason` as its tooltip. Used by
+  // the Edge Pack tab, where a package cannot be picked until a base runtime is
+  // chosen. Version chips are disabled alongside the checkbox: choosing a
+  // version is a form of selecting, so leaving them live would offer a way past
+  // the gate.
+  //
+  // Orthogonal to `locked`: that one is checked-and-permanent because the
+  // template already ships the package, this one is unselectable because a
+  // precondition has not been met. No surface passes both.
+  disabled?: boolean
+  disabledReason?: string
 }
 
 // PackageRow is the shared package row used by both the repo browse pane and
@@ -61,6 +72,8 @@ export function PackageRow({
   currentIsFloating,
   onResolve,
   resolving,
+  disabled = false,
+  disabledReason,
 }: PackageRowProps) {
   const checked = locked || selection != null
   const repoNames = [...new Set(versions.map((v) => v.repository).filter(Boolean))].map(repoLabelFor)
@@ -84,15 +97,20 @@ export function PackageRow({
 
   return (
     <label
+      title={disabled ? disabledReason : undefined}
       className={
-        'flex cursor-pointer items-start gap-2.5 border-b border-slate-100 px-3 py-2.5 last:border-b-0 ' +
-        (locked ? 'bg-slate-50' : 'hover:bg-[#eef4fb]')
+        'flex items-start gap-2.5 border-b border-slate-100 px-3 py-2.5 last:border-b-0 ' +
+        (disabled
+          ? 'cursor-not-allowed opacity-60'
+          : locked
+            ? 'cursor-pointer bg-slate-50'
+            : 'cursor-pointer hover:bg-[#eef4fb]')
       }
     >
       <input
         type="checkbox"
         checked={checked}
-        disabled={locked}
+        disabled={locked || disabled}
         onChange={(e) => onToggle(e.target.checked)}
         className="mt-0.5 h-[15px] w-[15px] shrink-0 accent-[#0071c5] disabled:cursor-not-allowed"
         title={locked ? "Already included by the matched template — this can't be unchecked" : undefined}
@@ -121,6 +139,7 @@ export function PackageRow({
           repoLabelFor={repoLabelFor}
           currentVersion={locked ? currentVersion : undefined}
           currentIsFloating={locked ? currentIsFloating : undefined}
+          disabled={disabled}
         />
         {locked && (
           <span className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px]">
@@ -175,6 +194,7 @@ function VersionChips({
   repoLabelFor,
   currentVersion,
   currentIsFloating,
+  disabled,
 }: {
   versions: PackageVersion[]
   pinned: string | undefined
@@ -182,6 +202,7 @@ function VersionChips({
   repoLabelFor: (repoId: string) => string
   currentVersion?: string
   currentIsFloating?: boolean
+  disabled: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
   const currentIdx = currentVersion !== undefined ? versions.findIndex((v) => v.version === currentVersion) : -1
@@ -192,6 +213,12 @@ function VersionChips({
     shown = [...shown, versions[currentIdx]]
   }
   const hidden = versions.length - shown.length
+
+  // A package the Edge Pack catalog names but whose repository index could not
+  // be read has no versions at all. Offering a bare "Latest" chip there would
+  // point at nothing the client can name, so the whole strip is omitted — the
+  // row's own checkbox still adds the package, which is what Latest means.
+  if (versions.length === 0) return null
 
   // Chips live inside the row's <label>, so a click must be stopped from also
   // toggling the checkbox.
@@ -216,7 +243,7 @@ function VersionChips({
     <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
       <button
         type="button"
-        disabled={currentIsFloating || noRepoKnown}
+        disabled={disabled || currentIsFloating || noRepoKnown}
         title={
           noRepoKnown
             ? 'Resolve this package to enable picking a version'
@@ -226,10 +253,13 @@ function VersionChips({
         }
         onClick={(e) => {
           stop(e)
-          if (currentIsFloating || noRepoKnown) return
+          if (disabled || currentIsFloating || noRepoKnown) return
           onChoose({ version: '', repository: versions[0]?.repository ?? '' })
         }}
-        className={chipClass({ active: latestIsCurrent, disabled: currentIsFloating || noRepoKnown })}
+        className={chipClass({
+          active: latestIsCurrent,
+          disabled: disabled || currentIsFloating || noRepoKnown,
+        })}
       >
         Latest
       </button>
@@ -247,7 +277,7 @@ function VersionChips({
           <button
             key={`${v.repository} ${v.version}`}
             type="button"
-            disabled={isRedundant}
+            disabled={disabled || isRedundant}
             title={
               isRedundant
                 ? `${v.version} from ${repoLabelFor(v.repository)} — already pinned by the template`
@@ -257,10 +287,15 @@ function VersionChips({
             }
             onClick={(e) => {
               stop(e)
-              if (isRedundant) return
+              if (disabled || isRedundant) return
               onChoose(v)
             }}
-            className={chipClass({ active: pinned === v.version, disabled: isRedundant, redundant: isRedundant, ring: isCurrent })}
+            className={chipClass({
+              active: pinned === v.version,
+              disabled: disabled || isRedundant,
+              redundant: isRedundant,
+              ring: isCurrent,
+            })}
           >
             {v.version}
           </button>

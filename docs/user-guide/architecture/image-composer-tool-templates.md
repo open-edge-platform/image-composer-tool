@@ -636,11 +636,15 @@ Each entry defines one partition:
 | `typeUUID` | string | GPT type GUID (e.g., `8300`) |
 | `fsType` | string | Filesystem type: `ext4`, `fat32`, `xfs`, etc. |
 | `fsLabel` | string | Filesystem label |
-| `start` | string | Start offset (e.g., `1MiB`, `513MiB`). A negative value such as `-20GiB` is measured back from the end of the disk |
-| `end` | string | End offset (`0` means rest of disk). A negative value such as `-20GiB` ends the partition that far before the end of the disk |
+| `start` | string | Non-zero offset from disk start, or a negative offset measured back from disk end |
+| `end` | string | Offset using the same convention, or `0` for the rest of the disk on the last partition |
 | `mountPoint` | string | Mount point (e.g., `/boot/efi`, `/`, `none`) |
 | `mountOptions` | string | Mount options (e.g., `defaults`, `umask=0077`) |
 | `flags` | string[] | Partition flags (e.g., `boot`, `esp`, `hidden`) |
+
+Offsets are non-zero whole numbers with one of these suffixes: `KiB`, `MiB`, `GiB`, `K`, `M`, `G`, `KB`, `MB`, or `GB`.
+Partitions may contain gaps, but they must be listed in disk order and must not overlap. Only the final partition may use
+`end: "0"`, so a layout cannot contain more than one rest-of-disk partition.
 
 **Sizing partitions for disks of unknown size.** An unattended ISO installs
 onto whatever disk the selection policy picks, so absolute offsets cannot make
@@ -674,9 +678,10 @@ disk, starts before it ends and does not overlap the one before it.
       fsType: linux-swap
 ```
 
-End-relative offsets are template-file only for now: the web UI disk editor
-and the REST API's disk override accept absolute offsets and `0`, so a layout
-that uses `-<size>` must be edited in the template file.
+Negative offsets are resolved after the target disk is selected. Mixed positive/negative overlap checks therefore occur
+when its size is known, but before the disk is wiped. An explicit `disk.path` bypasses policy-based selection but not this
+pre-wipe layout check. The same partitioning path serves raw builds and the ISO live installer. Offset resolution is
+position-based and does not depend on partition IDs or roles.
 
 Every partition with a `mountPoint` (and every swap partition) gets an
 `/etc/fstab` entry keyed by `PARTUUID`, in template order. A non-swap partition

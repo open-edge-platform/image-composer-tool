@@ -1038,11 +1038,14 @@ const PACKAGE_DB = [
   // Base runtime packages are common to every domain rather than belonging to
   // one (`common: true`, no `domains`) — real-time has no package build or
   // qualified SKU yet, so it's flagged `realtime: true` and stays unselectable.
-  { name: 'intel-edge-base-standard', desc: 'Common Edge Pack base packages (non-real-time)', repo: 'intel-eci', version: '3.1.0-0intel1', curated: true, pack: 'edge-pack', common: true },
+  { name: 'intel-edge-base-standard', desc: 'Common Edge Pack base packages (non-real-time) — includes the NPU, IPU and compute-essentials profiles', repo: 'intel-eci', version: '3.1.0-0intel1', curated: true, pack: 'edge-pack', common: true },
   { name: 'intel-edge-base-realtime', desc: 'Common Edge Pack base packages (real-time) — not yet available', repo: 'intel-eci', version: '3.1.0-0intel1', curated: true, pack: 'edge-pack', common: true, realtime: true },
   { name: 'intel-edge-media-ffmpeg', desc: 'FFmpeg built with Intel hardware acceleration', repo: 'intel-eci', version: '7.1-0intel1', curated: true, pack: 'edge-pack', domains: ['media'] },
   { name: 'intel-edge-media-gst', desc: 'GStreamer plugins for Intel hardware transcode', repo: 'intel-eci', version: '1.24.9-0intel1', curated: true, pack: 'edge-pack', domains: ['media'] },
-  { name: 'intel-edge-npu', desc: 'Intel NPU driver stack and Level Zero runtime', repo: 'intel-eci', version: '1.15.1-0intel1', versions: ['1.15.1-0intel1', '1.13.0-0intel1'], curated: true, pack: 'edge-pack', domains: ['npu'] },
+  // No `pack`/`domains`: the base metapackage above installs this, so it is not
+  // an Edge Pack choice. It stays in the repository browser, where a package
+  // that exists can still be found.
+  { name: 'intel-edge-npu', desc: 'Intel NPU driver stack and Level Zero runtime', repo: 'intel-eci', version: '1.15.1-0intel1', versions: ['1.15.1-0intel1', '1.13.0-0intel1'], curated: true },
   { name: 'intel-edge-manageability', desc: 'Edge Manageability Framework agent and provisioning', repo: 'intel-eci', version: '3.0.2-0intel1', curated: true, pack: 'edge-pack', domains: ['manageability'] },
 ];
 
@@ -1054,16 +1057,17 @@ const PACKAGE_DB = [
 // sum to more than the pack total, which is why the pack total is always
 // computed over unique packages rather than by adding the domains up.
 // `requiresDist`, when present, lists the target.dist values (see
-// MANIFEST.targets) a domain is published for — e.g. NPU ships only for the
-// Noble (Ubuntu 24.04) EdgePack suite, not Resolute (Ubuntu 26.04). Domains
-// without it have no OS restriction.
+// MANIFEST.targets) a domain is published for — a domain shipped only for the
+// Noble (Ubuntu 24.04) EdgePack suite and not Resolute (Ubuntu 26.04) names
+// `ubuntu24` here. Domains without it have no OS restriction.
+// Only the capabilities a user can decline are domains: NPU, IPU and
+// compute-essentials come with the base runtime, so they are not offered here.
 const EDGE_PACK = {
   id: 'edge-pack',
   name: 'Edge Pack',
   desc: 'Intel Edge capabilities, grouped by domain',
   domains: [
     { id: 'media',         name: 'Media',         desc: 'Hardware transcode via FFmpeg and GStreamer.' },
-    { id: 'npu',           name: 'NPU',           desc: 'Neural Processing Unit driver stack.', requiresDist: ['ubuntu24'] },
     { id: 'manageability', name: 'Manageability', desc: 'Edge Manageability Framework agent.' }
   ]
 };

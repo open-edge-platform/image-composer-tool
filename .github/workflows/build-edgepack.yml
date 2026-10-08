@@ -1,0 +1,94 @@
+name: Build EdgePack Images
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch or SHA to test (e.g. feature/x or a1b2c3)"
+        required: false
+  push:
+    branches:
+      - main
+    paths:
+      - 'image-templates/ubuntu24/ubuntu24-x86_64-edgepack*.yml'
+      - 'image-templates/ubuntu26/ubuntu26-x86_64-edgepack*.yml'
+      - 'config/osv/ubuntu/**'
+      - 'internal/provider/ubuntu/**'
+      - 'internal/image/imageos/**'
+      - 'internal/ospackage/debutils/**'
+      - 'internal/chroot/**'
+      - '.github/workflows/build-edgepack.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'image-templates/ubuntu24/ubuntu24-x86_64-edgepack*.yml'
+      - 'image-templates/ubuntu26/ubuntu26-x86_64-edgepack*.yml'
+      - 'config/osv/ubuntu/**'
+      - 'internal/provider/ubuntu/**'
+      - 'internal/image/imageos/**'
+      - 'internal/ospackage/debutils/**'
+      - 'internal/chroot/**'
+      - '.github/workflows/build-edgepack.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-edgepack:
+    name: ${{ matrix.template }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        template:
+          - image-templates/ubuntu24/ubuntu24-x86_64-edgepack-raw.yml
+          - image-templates/ubuntu24/ubuntu24-x86_64-edgepack-server-raw.yml
+          - image-templates/ubuntu26/ubuntu26-x86_64-edgepack-raw.yml
+          - image-templates/ubuntu26/ubuntu26-x86_64-edgepack-server-raw.yml
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 #v7.0.1
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+          persist-credentials: false
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tree jq systemd-ukify mmdebstrap systemd-boot
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e #v7.0.0
+        with:
+          go-version: stable
+
+      - name: Build image-composer-tool
+        run: go build ./cmd/image-composer-tool
+
+      - name: Validate template
+        env:
+          TEMPLATE: ${{ matrix.template }}
+        run: ./image-composer-tool validate "$TEMPLATE"
+
+      - name: Build image
+        env:
+          TEMPLATE: ${{ matrix.template }}
+        run: |
+          set +e
+          output=$(sudo ./image-composer-tool build "$TEMPLATE" 2>&1)
+          rc=$?
+          set -e
+          echo "$output"
+          if [ $rc -ne 0 ] || ! echo "$output" | grep -q "image build completed successfully"; then
+            echo "::error::EdgePack image build failed for $TEMPLATE"
+            exit 1
+          fi
+
+      - name: Upload missing-package report
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a #v7.0.1
+        with:
+          name: missing-packages-${{ strategy.job-index }}
+          path: builds/Missing_Requested_Packages_*.json
+          if-no-files-found: ignore
+          retention-days: 7

@@ -1,13 +1,14 @@
 # Ubuntu 24.04 templates
 
-`target.dist: ubuntu24` — 32 templates.
+`target.dist: ubuntu24` — 33 templates.
 
 | Template | Arch | Type | Purpose | CI |
 |---|---|---|---|---|
 | [`ubuntu24-x86_64-minimal-initrd.yml`](./ubuntu24-x86_64-minimal-initrd.yml) | x86_64 | img | minimal | — |
 | [`ubuntu24-x86_64-minimal-iso.yml`](./ubuntu24-x86_64-minimal-iso.yml) | x86_64 | iso | minimal | yes |
 | [`ubuntu24-x86_64-minimal-unattended-iso.yml`](./ubuntu24-x86_64-minimal-unattended-iso.yml) | x86_64 | iso | unattended installer | yes |
-| [`ubuntu24-x86_64-base-platform-iso.yml`](./ubuntu24-x86_64-base-platform-iso.yml) <br>*Base platform* | x86_64 | iso | unattended installer with users, SSH keys, cloud-init, provisioning (HWE kernel) | — |
+| [`ubuntu24-x86_64-edgepack-unattended-iso.yml`](./ubuntu24-x86_64-edgepack-unattended-iso.yml) | x86_64 | iso | unattended installer for Intel EdgePack (PTL/WCL) with users, SSH keys, cloud-init, provisioning | — |
+| [`ubuntu24-x86_64-edgepack-server-unattended-iso.yml`](./ubuntu24-x86_64-edgepack-server-unattended-iso.yml) | x86_64 | iso | unattended installer for a minimal Intel EdgePack (PTL/WCL) server | — |
 | [`ubuntu24-aarch64-edge-raw.yml`](./ubuntu24-aarch64-edge-raw.yml) | aarch64 | raw | edge | — |
 | [`ubuntu24-aarch64-minimal-raw.yml`](./ubuntu24-aarch64-minimal-raw.yml) | aarch64 | raw | minimal | yes |
 | [`ubuntu24-aarch64-minimal-uki.yml`](./ubuntu24-aarch64-minimal-uki.yml) | aarch64 | raw | unified kernel image | — |
@@ -76,7 +77,7 @@ Both are reachable from the web UI's Basic tab under Fed Aero — see the
 
 ## CI coverage
 
-6 of 32 templates here are built on every pull request (via `scripts/build_*.sh`). The others are schema-validated only, so build them locally before opening a PR.
+6 of 33 templates here are built on every pull request (via `scripts/build_*.sh`). The others are schema-validated only, so build them locally before opening a PR.
 
 ---
 
