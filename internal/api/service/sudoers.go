@@ -185,7 +185,10 @@ func (s SudoersSpec) Render() string {
 	b.WriteString("# (no rules needed) instead. See web/README.md.\n")
 	b.WriteString("#\n")
 	fmt.Fprintf(&b, "%s ALL=(root) NOPASSWD: %s build *\n", s.User, s.ICTPath)
-	fmt.Fprintf(&b, "%s ALL=(root) NOPASSWD: %s -TERM -[0-9]*\n", s.User, s.KillCmd)
+	// The `--` must be present: it is part of the argv the server actually runs
+	// (see killGroupArgs), and sudo matches the command line literally, so a rule
+	// without it rejects every cancel with "a password is required".
+	fmt.Fprintf(&b, "%s ALL=(root) NOPASSWD: %s -TERM -- -[0-9]*\n", s.User, s.KillCmd)
 	// cat is scoped to the builds subtree (sudo's `*` spans '/'), so the service
 	// user can read build artifacts but not arbitrary root-owned files.
 	fmt.Fprintf(&b, "%s ALL=(root) NOPASSWD: %s %s/*\n", s.User, s.CatCmd, s.BuildsDir)

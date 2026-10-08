@@ -707,7 +707,7 @@ sudoers rules — build, cancel, and read:
 
 ```text
 <svc-user> ALL=(root) NOPASSWD: /path/to/image-composer-tool build *
-<svc-user> ALL=(root) NOPASSWD: /usr/bin/kill -TERM -[0-9]*
+<svc-user> ALL=(root) NOPASSWD: /usr/bin/kill -TERM -- -[0-9]*
 <svc-user> ALL=(root) NOPASSWD: /usr/bin/cat /path/to/workspace/builds/*
 ```
 

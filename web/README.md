@@ -83,7 +83,7 @@ arbitrary root-owned files. Pass
 
 ```
 <svc-user> ALL=(root) NOPASSWD: /abs/path/image-composer-tool build *
-<svc-user> ALL=(root) NOPASSWD: /usr/bin/kill -TERM -[0-9]*
+<svc-user> ALL=(root) NOPASSWD: /usr/bin/kill -TERM -- -[0-9]*
 <svc-user> ALL=(root) NOPASSWD: /usr/bin/cat /abs/path/webui-workspace/builds/*
 ```
 
@@ -92,7 +92,7 @@ arbitrary root-owned files. Pass
 > **Cancellation & security posture.** The build runs as a root-owned process
 > group (so ICT can tear down its own mounts and loop devices on SIGTERM). The
 > server is non-root and cannot signal that group directly across the `sudo`
-> boundary, so **Cancel** delivers the signal as root via `sudo -n kill -TERM
+> boundary, so **Cancel** delivers the signal as root via `sudo -n kill -TERM --
 > -<pgid>`. The kill rule above authorizes that. Omit it and cancellation fails
 > with a *cancellation-failure* (the signal can't be delivered); the UI surfaces
 > that distinctly from a *cleanup-failure* (ICT ran but left residue).

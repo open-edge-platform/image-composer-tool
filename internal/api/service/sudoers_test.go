@@ -22,7 +22,7 @@ func TestSudoersSpecRender(t *testing.T) {
 	// rule is scoped to the builds subtree, where all artifacts live.
 	want := []string{
 		"ictsvc ALL=(root) NOPASSWD: /opt/ict/image-composer-tool build *",
-		"ictsvc ALL=(root) NOPASSWD: /usr/bin/kill -TERM -[0-9]*",
+		"ictsvc ALL=(root) NOPASSWD: /usr/bin/kill -TERM -- -[0-9]*",
 		"ictsvc ALL=(root) NOPASSWD: /usr/bin/cat /srv/ict-workspace/builds/*",
 	}
 	for _, w := range want {

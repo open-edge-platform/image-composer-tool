@@ -49,7 +49,7 @@ func TestExecuteServePrintSudoers(t *testing.T) {
 
 	for _, want := range []string{
 		"/opt/ict/image-composer-tool build *",
-		"kill -TERM -[0-9]*",
+		"kill -TERM -- -[0-9]*",
 		"/srv/ict-workspace/builds/*",
 	} {
 		if !strings.Contains(got, want) {

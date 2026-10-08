@@ -65,6 +65,92 @@ func TestClassifyExit(t *testing.T) {
 	}
 }
 
+// --- kill argv (the --sudo delivery path) ---
+
+// TestKillGroupArgsActuallySignalsTheGroup runs the exact argv the --sudo cancel
+// path hands to `sudo` against a real process group and asserts the group dies.
+//
+// This is deliberately an end-to-end exec against the real `kill` binary rather
+// than a string comparison, because the bug it guards against is invisible to
+// both: GNU coreutils `kill` reads a bare `-<pgid>` as a bundle of signal
+// options, is left with no pid operands, and **exits 0 having signalled
+// nothing**. Asserting on the argv or on the exit status would pass while
+// cancellation was completely inert in production. Only observing the target
+// actually die distinguishes the two.
+func TestKillGroupArgsActuallySignalsTheGroup(t *testing.T) {
+	killPath, err := exec.LookPath("kill")
+	if err != nil {
+		t.Skip("no kill binary on PATH")
+	}
+
+	// A child in its own process group, with a grandchild, so we prove the whole
+	// group is reached and not just the leader.
+	cmd := exec.Command("sh", "-c", "sleep 60 & sleep 60")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting the target group: %v", err)
+	}
+	pgid, err := syscall.Getpgid(cmd.Process.Pid)
+	if err != nil {
+		t.Fatalf("reading the target pgid: %v", err)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(-pgid, syscall.SIGKILL) })
+
+	// Reap the leader concurrently. Without this it lingers as a zombie, and a
+	// zombie is still a process-group member — so kill(-pgid, 0) below would keep
+	// reporting the group alive even after every member had been signalled.
+	waitCh := make(chan error, 1)
+	go func() { waitCh <- cmd.Wait() }()
+
+	args := killGroupArgs(pgid)
+	if out, err := exec.Command(killPath, args[1:]...).CombinedOutput(); err != nil {
+		t.Fatalf("%s %v: %v (%s)", killPath, args[1:], err, strings.TrimSpace(string(out)))
+	}
+
+	select {
+	case err := <-waitCh:
+		var ee *exec.ExitError
+		if !errors.As(err, &ee) {
+			t.Fatalf("group leader exited without being signalled: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("process group %d survived `%s %s` — the signal was never delivered "+
+			"(a bare -pgid without `--` is parsed as signal options and exits 0 silently)",
+			pgid, killPath, strings.Join(args[1:], " "))
+	}
+
+	// The leader is reaped; confirm the backgrounded grandchild went too, which is
+	// what proves the signal reached the whole group and not just the leader.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if err := syscall.Kill(-pgid, 0); err != nil {
+			break // group gone
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("process group %d still has live members after the TERM reached its leader", pgid)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// TestKillGroupArgsMatchesTheSudoersRule pins the argv against the generated
+// sudoers rule. sudo matches the command line literally, so if these drift the
+// rule stops authorizing the cancel and every cancel fails with "a password is
+// required" — a failure that only shows up on a live build, never in CI.
+func TestKillGroupArgsMatchesTheSudoersRule(t *testing.T) {
+	rule := SudoersSpec{User: "svc", ICTPath: "/opt/ict", KillCmd: "/usr/bin/kill",
+		CatCmd: "/usr/bin/cat", BuildsDir: "/var/ict/builds"}.Render()
+
+	// killGroupArgs[0] is the command; the rest must appear verbatim in the rule,
+	// with the concrete pgid replaced by the glob the rule uses.
+	args := killGroupArgs(12345)
+	wantArgs := strings.Replace(strings.Join(args[1:], " "), "-12345", "-[0-9]*", 1)
+	want := "/usr/bin/kill " + wantArgs
+	if !strings.Contains(rule, want) {
+		t.Fatalf("sudoers rule does not authorize the argv the server runs.\nwant to find: %q\nrule:\n%s", want, rule)
+	}
+}
+
 // --- signal-failure discrimination ---
 
 // signalCancel treats a failed `sudo -n kill` as delivered ONLY when the failure
@@ -97,7 +183,7 @@ func TestIsKillTargetGone(t *testing.T) {
 	realFailure := []string{
 		"sudo: a password is required",
 		"sudo: a terminal is required to read the password",
-		"Sorry, user svc is not allowed to execute '/usr/bin/kill -TERM -123' as root",
+		"Sorry, user svc is not allowed to execute '/usr/bin/kill -TERM -- -123' as root",
 		"sudo: no askpass program specified",
 		"sudo: kill: command not found",
 		"sudo: unable to execute /usr/bin/kill: No such file or directory",
