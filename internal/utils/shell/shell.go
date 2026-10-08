@@ -271,6 +271,7 @@ type Executor interface {
 	ExecCmdSilent(cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error)
 	ExecCmdWithStream(cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error)
 	ExecCmdWithInput(inputStr string, cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error)
+	ExecCmdSilentWithInput(inputStr string, cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error)
 }
 
 type DefaultExecutor struct{}
@@ -930,6 +931,31 @@ func (d *DefaultExecutor) ExecCmdWithInput(inputStr string, cmdStr string, sudo 
 	}
 }
 
+// ExecCmdSilentWithInput runs a command fed via stdin without logging its
+// output under any outcome.
+//
+// ExecCmdWithInput logs its output on both success (debug) and failure
+// (info), which is unsafe for a command whose output can itself be sensitive
+// (a password hash on success, or input echoed back in an error message on
+// failure, as openssl can do). Callers handling such commands must use this
+// instead and decide for themselves what, if anything, is safe to log.
+func (d *DefaultExecutor) ExecCmdSilentWithInput(inputStr string, cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error) {
+	fullCmdStr, err := GetFullCmdStr(cmdStr, sudo, chrootPath, envVal)
+	if err != nil {
+		return "", fmt.Errorf("failed to get full command string: %w", err)
+	}
+
+	cmd := exec.CommandContext(ctxOrBackground(), "bash", "-c", fullCmdStr)
+	applyExecAttrs(cmd)
+	cmd.Stdin = strings.NewReader(inputStr)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(output), fmt.Errorf("failed to exec command: %w", err)
+	}
+	return string(output), nil
+}
+
 // Convenience functions for backward compatibility
 func ExecCmd(cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error) {
 	return Default.ExecCmd(cmdStr, sudo, chrootPath, envVal)
@@ -945,4 +971,8 @@ func ExecCmdWithStream(cmdStr string, sudo bool, chrootPath string, envVal []str
 
 func ExecCmdWithInput(inputStr string, cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error) {
 	return Default.ExecCmdWithInput(inputStr, cmdStr, sudo, chrootPath, envVal)
+}
+
+func ExecCmdSilentWithInput(inputStr string, cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error) {
+	return Default.ExecCmdSilentWithInput(inputStr, cmdStr, sudo, chrootPath, envVal)
 }

@@ -66,7 +66,12 @@ func IsCryptHash(password string) bool {
 //
 // The password is fed to openssl on stdin rather than interpolated into the
 // command, so it never appears in the process table or in any command string
-// the shell package logs.
+// the shell package logs. The exec call itself is also never logged: a normal
+// shell.ExecCmdWithInput call logs its combined output on every outcome, which
+// would write the resulting hash to the debug log on success and, on failure,
+// whatever openssl wrote to stdout/stderr — which can echo the input it was
+// given. ExecCmdSilentWithInput logs nothing, so this function is the only
+// place that output ever reaches, and it reports only that hashing failed.
 func HashPasswordForHost(password string) (string, error) {
 	if password == "" {
 		return "", fmt.Errorf("password is empty")
@@ -79,10 +84,8 @@ func HashPasswordForHost(password string) (string, error) {
 	if strings.ContainsAny(password, "\r\n\x00") {
 		return "", fmt.Errorf("password must not contain line breaks or NUL bytes")
 	}
-	out, err := shell.ExecCmdWithInput(password+"\n", "openssl passwd -6 -stdin", false, shell.HostPath, nil)
+	out, err := shell.ExecCmdSilentWithInput(password+"\n", "openssl passwd -6 -stdin", false, shell.HostPath, nil)
 	if err != nil {
-		// The error from openssl can echo its input, so report only that the
-		// step failed and never wrap the underlying message.
 		return "", fmt.Errorf("hashing password failed")
 	}
 	hash := strings.TrimSpace(out)

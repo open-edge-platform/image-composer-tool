@@ -166,6 +166,9 @@ func (e fstabExecutor) ExecCmdWithStream(c string, _ bool, _ string, _ []string)
 func (e fstabExecutor) ExecCmdWithInput(_ string, c string, _ bool, _ string, _ []string) (string, error) {
 	return e.run(c)
 }
+func (e fstabExecutor) ExecCmdSilentWithInput(_ string, c string, _ bool, _ string, _ []string) (string, error) {
+	return e.run(c)
+}
 
 func TestUpdateImageFstabSkipsUnmountedAndKeepsOrder(t *testing.T) {
 	orig := shell.Default

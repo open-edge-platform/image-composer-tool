@@ -233,6 +233,10 @@ func (m *recordingMountExecutor) ExecCmdWithInput(inputStr string, cmdStr string
 	return m.ExecCmd(cmdStr, sudo, chrootPath, envVal)
 }
 
+func (m *recordingMountExecutor) ExecCmdSilentWithInput(inputStr string, cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error) {
+	return m.ExecCmd(cmdStr, sudo, chrootPath, envVal)
+}
+
 type cleanupCountMockChrootEnv struct {
 	MockChrootEnv
 	targetConfigDir string

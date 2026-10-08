@@ -135,6 +135,10 @@ func (e *scanpackagesExecutor) ExecCmdWithInput(inputStr string, cmdStr string, 
 	return e.ExecCmd(cmdStr, sudo, chrootPath, envVal)
 }
 
+func (e *scanpackagesExecutor) ExecCmdSilentWithInput(inputStr string, cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error) {
+	return e.ExecCmd(cmdStr, sudo, chrootPath, envVal)
+}
+
 // TestCreateTemporaryRepositorySuccess exercises the full happy path: DEB files are copied,
 // a Packages file is generated, Packages.gz and Release are created, an HTTP server is
 // started, and the server is verified to be reachable before returning.

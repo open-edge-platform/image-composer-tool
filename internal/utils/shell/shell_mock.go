@@ -110,3 +110,12 @@ func (m *MockExecutor) ExecCmdWithInput(inputStr string, cmdStr string, sudo boo
 		return output, err
 	}
 }
+
+func (m *MockExecutor) ExecCmdSilentWithInput(inputStr string, cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error) {
+	fallback2Default, output, err := m.execCmdOverride(cmdStr, sudo, chrootPath, envVal)
+	if fallback2Default {
+		return (&DefaultExecutor{}).ExecCmdSilentWithInput(inputStr, cmdStr, sudo, chrootPath, envVal)
+	} else {
+		return output, err
+	}
+}
