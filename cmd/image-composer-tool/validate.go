@@ -50,6 +50,13 @@ func executeValidate(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("validation failed during template loading and merging: %v", err)
 		}
 
+		// The installer creates these accounts on the target; fail now rather than
+		// let a template validate cleanly and only discover the missing credential
+		// deep into a build (or, worse, on deployed hardware).
+		if err := config.ValidateUserCredentials(mergedTemplate.SystemConfig.Users); err != nil {
+			return fmt.Errorf("validation failed during user credential validation: %w", err)
+		}
+
 		log.Info("✓ Merged template validation passed")
 		log.Infof("Template: %s (type: %s, os: %s/%s/%s)",
 			mergedTemplate.Image.Name,
