@@ -20,7 +20,7 @@ metadata:
 
 image:
   name: edgepack-server-os-image-ubuntu-unattended
-  version: "24.04"
+  version: "24.04.1"
 
 target:
   os: ubuntu
@@ -107,6 +107,7 @@ systemConfig:
     - grub-efi-amd64-bin
     - systemd
     - openssh-server
+    - netplan.io
     - systemd-resolved
     - systemd-timesyncd
     # ── EdgePack: mandatory base (core graphics/media + platform-enablement DKMS drivers) ──
@@ -234,6 +235,9 @@ systemConfig:
   cloudInit:
     enabled: true
     userDataFile: additionalfiles/base-platform/user-data
+    # DHCP by MAC address so a reserved lab IP survives re-flashing (the
+    # machine-id-derived DUID changes on every install).
+    networkConfigFile: additionalfiles/base-platform/network-config
 
   provisioning:
     scripts:
