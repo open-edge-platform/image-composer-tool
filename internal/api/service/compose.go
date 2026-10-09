@@ -218,10 +218,11 @@ type ComposeResult struct {
 	// "already included" packages even before the user has added anything of
 	// their own.
 	BasePackages []string
-	// Credentials lists every account of the resolved template subject to the
-	// credential rule and whether each has a login yet, so a caller can prompt
-	// for the missing ones rather than discovering the gap partway through a
-	// build.
+	// Credentials lists every account of the resolved template and whether each
+	// has a login yet. Accounts subject to the credential rule are marked
+	// Required; those exempt (confined to a startupScript) are marked optional.
+	// A caller can use this to prompt for missing credentials rather than
+	// discovering the gap partway through a build.
 	Credentials []CredentialRequirement
 }
 

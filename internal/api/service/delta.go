@@ -160,6 +160,10 @@ type deltaSystemConfig struct {
 // hash by the time it gets here (config.HashPasswordForHost), and
 // setUserPassword applies such a value with `usermod -p` as-is. Declaring an
 // algorithm would instead make it hash the hash.
+//
+// Sudo is intentionally omitted from credential deltas, since a credential
+// override (password/SSH key) should never modify privilege grants. The parent
+// template's Sudo setting is preserved during merge.
 type deltaUser struct {
 	Name              string   `yaml:"name"`
 	Password          string   `yaml:"password,omitempty"`

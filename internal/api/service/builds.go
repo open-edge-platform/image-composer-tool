@@ -764,10 +764,12 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 		withHashed.Credentials = hashed
 		c = &withHashed
 	}
-	deltaPath, _, _, derr := s.deltaForOverride(tmpl, full, *c)
+	deltaPath, _, cleanup, derr := s.deltaForOverride(tmpl, full, *c)
 	if derr != nil {
 		return "", "", fmt.Errorf("generating override template: %w", derr) // server-side
 	}
+	defer cleanup() // ensure generated delta is cleaned up even if credential check fails
+
 	if verr := s.checkTemplateCredentials(deltaPath); verr != nil {
 		return "", "", verr
 	}
