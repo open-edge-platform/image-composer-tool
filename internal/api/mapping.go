@@ -55,7 +55,26 @@ func toSelection(r httpapi.ComposeRequest) service.Selection {
 		sel.Repos = *r.Repos
 	}
 	sel.Disk = toDiskOverride(r.Disk)
+	sel.Credentials = toCredentials(r.Credentials)
 	return sel
+}
+
+// toCredentials converts supplied logins to the service type. Values are
+// copied as-is: validating them (and hashing the password) needs the resolved
+// template, which only the service has.
+func toCredentials(creds *[]httpapi.CredentialInput) []service.CredentialInput {
+	if creds == nil || len(*creds) == 0 {
+		return nil
+	}
+	out := make([]service.CredentialInput, 0, len(*creds))
+	for _, c := range *creds {
+		out = append(out, service.CredentialInput{
+			User:             c.User,
+			Password:         derefStr(c.Password),
+			SSHAuthorizedKey: derefStr(c.SshAuthorizedKey),
+		})
+	}
+	return out
 }
 
 // toDiskOverride converts the generated disk override to the service type.
@@ -357,6 +376,18 @@ func fromComposeResult(r *service.ComposeResult) httpapi.ComposeResponse {
 	if len(r.BasePackages) > 0 {
 		basePackages := r.BasePackages
 		out.BasePackages = &basePackages
+	}
+	if len(r.Credentials) > 0 {
+		creds := make([]httpapi.CredentialRequirement, 0, len(r.Credentials))
+		for _, c := range r.Credentials {
+			creds = append(creds, httpapi.CredentialRequirement{
+				User:      c.User,
+				Sudo:      c.Sudo,
+				Required:  c.Required,
+				Satisfied: c.Satisfied,
+			})
+		}
+		out.Credentials = &creds
 	}
 	return out
 }

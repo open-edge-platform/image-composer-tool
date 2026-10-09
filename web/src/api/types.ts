@@ -68,6 +68,34 @@ export interface ComposeRequest {
   // omits — the parent's whole partition table included. toDiskConfig() emits a
   // complete block because the model is seeded from the resolved template.
   disk?: Record<string, unknown>
+  // Logins for template users the template itself leaves without one. Emitted
+  // into the delta's systemConfig.users. Omitted means "none supplied".
+  credentials?: CredentialInput[]
+}
+
+// A login supplied for one user the curated template already declares. Either
+// field satisfies the account on its own; sending neither is rejected.
+export interface CredentialInput {
+  // Must name a user the template declares — this never creates an account.
+  user: string
+  // Plain text. The backend hashes it (SHA-512 crypt) before it reaches disk
+  // and redacts it from the compose response, so it is never echoed back.
+  password?: string
+  // One authorized_keys line, checked server-side with the OpenSSH parser.
+  sshAuthorizedKey?: string
+}
+
+// One account in the resolved template, and whether it has a login. Every
+// account is listed, not only privileged ones — a CredentialInput is accepted
+// for any of them. An entry with required: true and satisfied: false blocks a
+// build until a matching CredentialInput is supplied — the backend rejects
+// the build up front. A required: false entry may still optionally be given
+// one.
+export interface CredentialRequirement {
+  user: string
+  sudo: boolean
+  required: boolean
+  satisfied: boolean
 }
 
 export interface ComposeSummary {
@@ -111,6 +139,10 @@ export interface ComposeResponse {
   // Packages step can show "already included" packages alongside whatever
   // the user is adding.
   basePackages?: string[]
+  // The privileged accounts in the resolved template and whether each has a
+  // login. Any entry with satisfied: false must be covered by a credentials
+  // entry on the request before a build will start.
+  credentials?: CredentialRequirement[]
 }
 
 // One issue from POST /templates/validate: a schema/semantic problem tied to a
