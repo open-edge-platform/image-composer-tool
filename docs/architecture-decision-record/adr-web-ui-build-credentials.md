@@ -127,3 +127,22 @@ template it describes.
 ## References
 
 - [`adr-web-ui-advanced-mode-extends.md`](adr-web-ui-advanced-mode-extends.md)
+
+---
+
+## Addendum (2026-10-09): widened to every user, not just privileged ones
+
+The shared predicate originally required a credential only for a privileged
+account (sudo, or `root` with no `startupScript`). It is widened so that
+**every** account in `systemConfig.users` requires a password or SSH key
+unless it carries a `startupScript` — the installer-console exemption `root`
+already had. A standard, non-sudo user left with no login is just as
+unusable as a privileged one; privilege level was never actually the
+relevant distinction, only whether the account has a real login path.
+
+This does not change which templates fail today: every manifest-reachable
+template that declares real users already gives them sudo, so the widened
+rule is a no-op for them. It only closes the gap for a non-privileged user
+with no credential and no `startupScript` — previously reported by the
+compose response as optional, now reported as required, matching what
+`ValidateUserCredentials` rejects at build time.
