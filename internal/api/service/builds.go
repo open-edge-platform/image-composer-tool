@@ -683,8 +683,9 @@ func LogCancelSupport(sudo bool) {
 var errBadBuildRequest = errors.New("bad build request")
 
 // errCredentialRequired marks the one bad-request cause a client can resolve
-// on its own: the template leaves a privileged account with no login, and
-// supplying one in the request's `credentials` makes the same build succeed.
+// on its own: the template leaves an account subject to the credential rule
+// with no login, and supplying one in the request's `credentials` makes the
+// same build succeed.
 // Wraps errBadBuildRequest so anything checking for a client error still
 // matches it.
 var errCredentialRequired = fmt.Errorf("%w: credential required", errBadBuildRequest)
@@ -775,8 +776,8 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 	return deltaPath, tmpl, nil
 }
 
-// checkTemplateCredentials rejects a build whose template would create a
-// privileged account with an empty password.
+// checkTemplateCredentials rejects a build whose template would create an
+// account subject to the credential rule with an empty password.
 //
 // ICT already refuses such a build, but only once isomaker/imageos reaches
 // account creation — after the chroot is populated, which for the curated
