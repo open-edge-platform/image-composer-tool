@@ -19,7 +19,7 @@ metadata:
 
 image:
   name: edgepack-os-image-ubuntu-unattended
-  version: "26.04.1"
+  version: "26.04.2"
 
 target:
   os: ubuntu
@@ -208,6 +208,9 @@ systemConfig:
       # password: "$6$<salt>$<hash>"
       groups:
         - sudo
+        - video
+        - render
+        - audio
       sudo: true
       shell: /bin/bash
       home: /home/admin
