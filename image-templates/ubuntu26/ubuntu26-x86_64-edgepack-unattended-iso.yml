@@ -97,6 +97,7 @@ systemConfig:
     - ubuntu-minimal
     - ubuntu-standard
     - ubuntu-desktop-minimal
+    - ptyxis
     - grub-efi-amd64-signed
     - initramfs-tools
     - grub2-common
