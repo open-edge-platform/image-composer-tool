@@ -16,7 +16,7 @@ metadata:
 
 image:
   name: edgepack-os-image-ubuntu
-  version: "26.04"
+  version: "26.04.1"
 
 target:
   os: ubuntu
@@ -97,7 +97,6 @@ systemConfig:
     # ── Required for the platform minimal template ──
     - curl
     - util-linux-extra
-    - dbus-x11
     - sg3-utils
     - libllvm18
     - libdebuginfod1t64
