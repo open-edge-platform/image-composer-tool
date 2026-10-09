@@ -83,8 +83,8 @@ export function CredentialsStep({
           <h3 className="mb-1 text-sm font-semibold text-[#00285a]">Credentials required</h3>
           <p className="mb-3 text-xs text-slate-600">
             This image creates an administrator account with no login of its own. Set a password or
-            add an SSH public key so the account is not left with an empty password — either one is
-            enough. Fields marked <span className="text-red-600">*</span> are required.
+            add an SSH public key so the account is not left with an empty password. Either option
+            works.
           </p>
           {required.map((req) => (
             <CredentialFields
