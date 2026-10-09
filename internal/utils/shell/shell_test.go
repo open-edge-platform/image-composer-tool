@@ -370,6 +370,37 @@ func TestGetFullCmdStr_Modinfo(t *testing.T) {
 	}
 }
 
+// TestVerifyCmdWithFullPath_MergedUsr covers merged-/usr systems (e.g. Ubuntu
+// 26.04) that ship sbin tools only under /usr/bin.
+func TestVerifyCmdWithFullPath_MergedUsr(t *testing.T) {
+	tests := []struct {
+		cmd  string
+		want string
+	}{
+		{"chroot /mnt /bin/true", "/usr/bin/chroot /mnt /bin/true"},
+		{"useradd -m bob", "/usr/bin/useradd -m bob"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.cmd, func(t *testing.T) {
+			root := t.TempDir()
+			bin := strings.Fields(tt.want)[0]
+			if err := os.MkdirAll(filepath.Join(root, filepath.Dir(bin)), 0755); err != nil {
+				t.Fatalf("Failed to create dir: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(root, bin), []byte("fake"), 0755); err != nil {
+				t.Fatalf("Failed to create fake binary: %v", err)
+			}
+			got, err := shell.GetFullCmdStr(tt.cmd, false, root, nil)
+			if err != nil {
+				t.Fatalf("GetFullCmdStr failed: %v", err)
+			}
+			if !strings.Contains(got, tt.want) {
+				t.Errorf("Expected command to contain %q, got: %s", tt.want, got)
+			}
+		})
+	}
+}
+
 func TestIsBashAvailable_Chroot(t *testing.T) {
 	tempDir := t.TempDir()
 
