@@ -1183,22 +1183,32 @@ components:
     CredentialRequirement:
       type: object
       description: |
-        One privileged account in the resolved template, and whether it has a
-        login yet. An account with `satisfied: false` blocks a build until a
-        matching `credentials` entry is supplied.
-      required: [user, sudo, satisfied]
+        One account declared by the resolved template. Every account is
+        listed, not only privileged ones — a credential may be supplied for
+        any of them — but only a `required: true` account with
+        `satisfied: false` blocks a build until a matching `credentials`
+        entry is supplied.
+      required: [user, sudo, required, satisfied]
       properties:
         user:
           type: string
         sudo:
           type: boolean
           description: Whether the account holds sudo access (directly or via an admin group).
+        required:
+          type: boolean
+          description: |
+            True for a privileged account (sudo, or root with a normal login
+            shell) — the only kind a missing credential ever blocks a build
+            for. False for a standard account, which may still optionally be
+            given a password or SSH key.
         satisfied:
           type: boolean
           description: |
-            False when the template leaves the account with neither a password
-            nor an SSH authorized key. A key file containing only comments
-            counts as no key.
+            False when the account is `required` and the template leaves it
+            with neither a password nor an SSH authorized key. A key file
+            containing only comments counts as no key. Always true for a
+            non-required account.
 
     DiskOverride:
       type: object
@@ -1480,10 +1490,12 @@ components:
         credentials:
           type: array
           description: |
-            The privileged accounts in the resolved template, and whether each
-            has a login. Any entry with `satisfied: false` must be covered by a
-            `credentials` entry on the request before a build will start — the
-            build is rejected up front rather than failing partway through.
+            Every account in the resolved template, and whether each has a
+            login. A `required: true` entry with `satisfied: false` must be
+            covered by a `credentials` entry on the request before a build
+            will start — the build is rejected up front rather than failing
+            partway through. A `required: false` entry may still optionally
+            be given a password or SSH key.
           items:
             $ref: "#/components/schemas/CredentialRequirement"
         summary:

@@ -85,12 +85,16 @@ export interface CredentialInput {
   sshAuthorizedKey?: string
 }
 
-// One privileged account in the resolved template, and whether it has a login.
-// An entry with satisfied: false blocks a build until a matching
-// CredentialInput is supplied — the backend rejects the build up front.
+// One account in the resolved template, and whether it has a login. Every
+// account is listed, not only privileged ones — a CredentialInput is accepted
+// for any of them. An entry with required: true and satisfied: false blocks a
+// build until a matching CredentialInput is supplied — the backend rejects
+// the build up front. A required: false entry may still optionally be given
+// one.
 export interface CredentialRequirement {
   user: string
   sudo: boolean
+  required: boolean
   satisfied: boolean
 }
 

@@ -383,6 +383,7 @@ func fromComposeResult(r *service.ComposeResult) httpapi.ComposeResponse {
 			creds = append(creds, httpapi.CredentialRequirement{
 				User:      c.User,
 				Sudo:      c.Sudo,
+				Required:  c.Required,
 				Satisfied: c.Satisfied,
 			})
 		}
