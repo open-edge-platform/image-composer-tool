@@ -73,8 +73,16 @@ type CredentialInput struct {
 type CredentialRequirement struct {
 	User string
 	Sudo bool
-	// Satisfied is false when the template leaves this account with no password
-	// and no SSH key, which is what blocks a build.
+	// Required is true for a privileged account (config.UserConfig.IsPrivileged),
+	// the only kind a missing credential ever blocks a build for. A caller uses
+	// this to tell "must supply a login" from "may optionally add one" — an
+	// unprivileged entry is still listed (a standard user is just as eligible to
+	// receive an SSH key as a privileged one), but Required is always false for
+	// it since Satisfied is too.
+	Required bool
+	// Satisfied is false when the account is Required and the template leaves it
+	// with no password and no SSH key, which is what blocks a build. Always true
+	// for an unprivileged account: nothing about it ever blocks a build.
 	Satisfied bool
 }
 
@@ -86,8 +94,15 @@ func (s Selection) hasOverrides() bool {
 		s.Disk != nil || len(s.Credentials) > 0
 }
 
-// credentialRequirements lists the privileged users of a merged template,
-// flagging those still without a credential.
+// credentialRequirements lists every user of a merged template, flagging which
+// are privileged and, for those, whether they still need a credential.
+//
+// Every user is listed, not only privileged ones: a credential is still
+// accepted for a standard account (validateCredentials has no privilege
+// check), so the UI needs to know the account exists in order to offer an
+// optional SSH key for it. Only a Required account ever blocks a build —
+// that uses the same predicate NeedsCredential is built on, so what is
+// required here and what is enforced at build time cannot diverge.
 //
 // Must run on a merged, lowered template: lowerSSHKeyFiles has by then read
 // every sshAuthorizedKeysFiles entry into SSHAuthorizedKeys, so a key file
@@ -96,16 +111,10 @@ func (s Selection) hasOverrides() bool {
 func credentialRequirements(merged *config.ImageTemplate) []CredentialRequirement {
 	var out []CredentialRequirement
 	for _, u := range merged.SystemConfig.Users {
-		// Only privileged accounts are reported: an unprivileged one with no
-		// credential is legitimate and never blocks a build, so prompting for it
-		// would be noise. Uses the same predicate NeedsCredential is built on, so
-		// what is offered and what is required cannot diverge.
-		if !u.IsPrivileged() {
-			continue
-		}
 		out = append(out, CredentialRequirement{
 			User:      u.Name,
 			Sudo:      u.HasSudoAccess(),
+			Required:  u.IsPrivileged(),
 			Satisfied: !u.NeedsCredential(),
 		})
 	}

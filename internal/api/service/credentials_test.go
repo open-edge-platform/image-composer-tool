@@ -25,10 +25,13 @@ func templateWithUsers(users ...config.UserConfig) *config.ImageTemplate {
 	return &config.ImageTemplate{SystemConfig: config.SystemConfig{Users: users}}
 }
 
-// TestCredentialRequirements covers which accounts are reported and whether
-// each reads as satisfied. The unsatisfied sudo case is the one that matters
-// most: it is what the curated unattended-ISO templates ship, and reporting it
-// is what lets the UI prompt instead of letting a build fail minutes in.
+// TestCredentialRequirements covers which accounts are reported, which are
+// Required, and whether each reads as satisfied. The unsatisfied sudo case is
+// the one that matters most: it is what the curated unattended-ISO templates
+// ship, and reporting it is what lets the UI prompt instead of letting a build
+// fail minutes in. Every user is listed — including unprivileged ones, which
+// are never Required but may still optionally receive a credential — since
+// validateCredentials accepts one for any user in the template.
 func TestCredentialRequirements(t *testing.T) {
 	t.Parallel()
 
@@ -38,9 +41,9 @@ func TestCredentialRequirements(t *testing.T) {
 		want  []CredentialRequirement
 	}{
 		{
-			name:  "sudo user with no credential is unsatisfied",
+			name:  "sudo user with no credential is required and unsatisfied",
 			users: []config.UserConfig{sudoUser("admin")},
-			want:  []CredentialRequirement{{User: "admin", Sudo: true, Satisfied: false}},
+			want:  []CredentialRequirement{{User: "admin", Sudo: true, Required: true, Satisfied: false}},
 		},
 		{
 			// A template pointing at a key file holding only comments reaches
@@ -51,41 +54,43 @@ func TestCredentialRequirements(t *testing.T) {
 				Name: "admin", Sudo: true,
 				SSHAuthorizedKeysFiles: []string{"additionalfiles/base-platform/admin.pub"},
 			}},
-			want: []CredentialRequirement{{User: "admin", Sudo: true, Satisfied: false}},
+			want: []CredentialRequirement{{User: "admin", Sudo: true, Required: true, Satisfied: false}},
 		},
 		{
 			name: "inline SSH key satisfies",
 			users: []config.UserConfig{{
 				Name: "admin", Sudo: true, SSHAuthorizedKeys: []string{testPubKey},
 			}},
-			want: []CredentialRequirement{{User: "admin", Sudo: true, Satisfied: true}},
+			want: []CredentialRequirement{{User: "admin", Sudo: true, Required: true, Satisfied: true}},
 		},
 		{
 			name:  "password satisfies",
 			users: []config.UserConfig{{Name: "admin", Sudo: true, Password: "$6$salt$hash"}},
-			want:  []CredentialRequirement{{User: "admin", Sudo: true, Satisfied: true}},
+			want:  []CredentialRequirement{{User: "admin", Sudo: true, Required: true, Satisfied: true}},
 		},
 		{
 			name:  "sudo via admin group counts as privileged",
 			users: []config.UserConfig{{Name: "ops", Groups: []string{"wheel"}}},
-			want:  []CredentialRequirement{{User: "ops", Sudo: true, Satisfied: false}},
+			want:  []CredentialRequirement{{User: "ops", Sudo: true, Required: true, Satisfied: false}},
 		},
 		{
-			// Prompting for an account that cannot block a build would be noise.
-			name:  "unprivileged user is not reported",
+			// Listed so the UI can offer an optional SSH key, but never blocks a
+			// build: Required and Satisfied both reflect that.
+			name:  "unprivileged user is reported but not required",
 			users: []config.UserConfig{{Name: "guest"}},
-			want:  nil,
+			want:  []CredentialRequirement{{User: "guest", Sudo: false, Required: false, Satisfied: true}},
 		},
 		{
 			name:  "root is privileged without the sudo flag",
 			users: []config.UserConfig{{Name: "root"}},
-			want:  []CredentialRequirement{{User: "root", Sudo: false, Satisfied: false}},
+			want:  []CredentialRequirement{{User: "root", Sudo: false, Required: true, Satisfied: false}},
 		},
 		{
-			// The installer environment's console account, confined to its script.
-			name:  "root confined to a startup script is exempt",
+			// The installer environment's console account, confined to its script:
+			// still listed, but neither required nor satisfied-by-default implied.
+			name:  "root confined to a startup script is not required",
 			users: []config.UserConfig{{Name: "root", StartupScript: "/usr/bin/installer"}},
-			want:  nil,
+			want:  []CredentialRequirement{{User: "root", Sudo: false, Required: false, Satisfied: true}},
 		},
 	}
 
