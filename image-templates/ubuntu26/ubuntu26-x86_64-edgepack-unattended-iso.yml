@@ -19,7 +19,7 @@ metadata:
 
 image:
   name: edgepack-os-image-ubuntu-unattended
-  version: "26.04"
+  version: "26.04.2"
 
 target:
   os: ubuntu
@@ -97,6 +97,7 @@ systemConfig:
     - ubuntu-minimal
     - ubuntu-standard
     - ubuntu-desktop-minimal
+    - ptyxis
     - grub-efi-amd64-signed
     - initramfs-tools
     - grub2-common
@@ -116,7 +117,6 @@ systemConfig:
     # ── Required for the platform minimal template ──
     - curl
     - util-linux-extra
-    - dbus-x11
     - sg3-utils
     - libllvm18
     - libdebuginfod1t64
@@ -209,6 +209,9 @@ systemConfig:
       # password: "$6$<salt>$<hash>"
       groups:
         - sudo
+        - video
+        - render
+        - audio
       sudo: true
       shell: /bin/bash
       home: /home/admin

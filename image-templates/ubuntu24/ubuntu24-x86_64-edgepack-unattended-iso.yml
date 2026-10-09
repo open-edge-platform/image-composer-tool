@@ -19,7 +19,7 @@ metadata:
 
 image:
   name: edgepack-os-image-ubuntu-unattended
-  version: "24.04"
+  version: "24.04.1"
 
 target:
   os: ubuntu
@@ -95,6 +95,7 @@ systemConfig:
     - ubuntu-minimal
     - ubuntu-standard
     - ubuntu-desktop-minimal
+    - gnome-terminal
     - grub-efi-amd64-signed
     - initramfs-tools
     - grub2-common
@@ -210,6 +211,9 @@ systemConfig:
       # password: "$6$<salt>$<hash>"
       groups:
         - sudo
+        - video
+        - render
+        - audio
       sudo: true
       shell: /bin/bash
       home: /home/admin
