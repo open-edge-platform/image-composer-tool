@@ -768,9 +768,9 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 	if derr != nil {
 		return "", "", fmt.Errorf("generating override template: %w", derr) // server-side
 	}
-	defer cleanup() // ensure generated delta is cleaned up even if credential check fails
 
 	if verr := s.checkTemplateCredentials(deltaPath); verr != nil {
+		cleanup()
 		return "", "", verr
 	}
 	// Display name stays the curated parent's, not the generated delta's — the

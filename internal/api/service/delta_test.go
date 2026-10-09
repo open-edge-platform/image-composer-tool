@@ -247,6 +247,29 @@ func TestResolveBuildTemplateInvalidImageNameOverride(t *testing.T) {
 	assertNoLeakedDeltas(t, s.cfg.TemplatesDir)
 }
 
+func TestResolveBuildTemplateKeepsDeltaUntilBuildFinishes(t *testing.T) {
+	s := newTestService(t)
+	wd := t.TempDir()
+	request := &BuildRequest{Compose: &Selection{
+		Vertical: "robotics", SKU: "amr", Platform: "wcl", OS: "ubuntu24", ImageType: "iso",
+		ImageName: "custom-robotics-image",
+	}}
+
+	deltaPath, _, err := s.resolveBuildTemplate(request, wd)
+	if err != nil {
+		t.Fatalf("resolveBuildTemplate: %v", err)
+	}
+	if _, err := os.Stat(deltaPath); err != nil {
+		t.Fatalf("generated delta missing after resolveBuildTemplate returned: %v", err)
+	}
+
+	build := &build{RootDir: t.TempDir(), DeltaPath: deltaPath}
+	build.archiveAndCleanupDelta()
+	if _, err := os.Stat(deltaPath); !os.IsNotExist(err) {
+		t.Fatalf("generated delta still exists after build cleanup: err=%v", err)
+	}
+}
+
 // --- archiveAndCleanupDelta, exercised directly the way TestBuildArtifacts
 // exercises finish() — no real exec.Command involved ---
 
