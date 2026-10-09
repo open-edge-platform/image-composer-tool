@@ -20,7 +20,7 @@ metadata:
 
 image:
   name: edgepack-server-os-image-ubuntu-unattended
-  version: "24.04.1"
+  version: "24.04.2"
 
 target:
   os: ubuntu
@@ -217,6 +217,9 @@ systemConfig:
       # password: "$6$<salt>$<hash>"
       groups:
         - sudo
+        - video
+        - render
+        - audio
       sudo: true
       shell: /bin/bash
       home: /home/admin
