@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useStore, cascadingOptions } from '../store'
 import { api } from '../api/client'
-import type { ComposeResponse } from '../api/types'
+import type { ComposeResponse, CredentialInput } from '../api/types'
 import { Select } from './Select'
+import { CredentialsStep, credentialsComplete } from './CredentialsStep'
 
 interface BasicPageProps {
   onBuildStarted: (buildId: string) => void
@@ -31,6 +32,10 @@ export function BasicPage({
   // previous summary stays on screen during a refetch, so this only drives the
   // placeholder shown before the first one arrives.
   const [loadingSummary, setLoadingSummary] = useState(false)
+  // Logins for accounts the chosen template leaves without one. Deliberately
+  // component state rather than the shared store: the store is persisted, and a
+  // password must not outlive the build it was typed for.
+  const [credentials, setCredentials] = useState<CredentialInput[]>([])
 
   const opts = useMemo(
     () => (manifest ? cascadingOptions(manifest, selection) : null),
@@ -48,6 +53,9 @@ export function BasicPage({
       setLoadingSummary(false)
       return
     }
+    // A different template asks for different accounts, so anything typed for
+    // the previous one is dropped rather than silently sent with the new build.
+    setCredentials([])
     let cancelled = false
     setLoadingSummary(true)
     api
@@ -73,17 +81,24 @@ export function BasicPage({
 
   if (!manifest || !opts) return <div className="p-8">Loading…</div>
 
+  const requirements = review?.credentials ?? []
+  // The backend rejects a build whose template leaves an account without a
+  // login, so the button is gated on the same rule rather than letting the
+  // request fail.
+  const credentialsReady = credentialsComplete(requirements, credentials)
+
   const onBuild = async () => {
-    if (!complete) return
+    if (!complete || !credentialsReady) return
     try {
       setBusy(true)
       setError(null)
+      const req = { ...selection, credentials: credentials.length > 0 ? credentials : undefined }
       // Re-compose against the current selection right before starting the
       // build, so the logged YAML matches the request even if it changed
       // since the last auto-fetch (or that fetch is still in flight).
-      const fresh = await api.compose(selection)
+      const fresh = await api.compose(req)
       console.log('Composing image with template YAML:\n' + fresh.yaml)
-      const accepted = await api.startBuild(selection)
+      const accepted = await api.startBuild(req)
       onBuildStarted(accepted.buildId)
     } catch (e) {
       setError((e as Error).message)
@@ -106,52 +121,93 @@ export function BasicPage({
       </p>
 
       <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
-        <div className="w-full max-w-xl rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <Select
-            label="Use Case"
-            placeholder="-- Select Use Case --"
-            value={selection.vertical}
-            options={opts.verticals}
-            onChange={(v) => setSel('vertical', v)}
-          />
-          <Select
-            label="SKU"
-            placeholder="-- Select SKU --"
-            value={selection.sku}
-            options={opts.skus}
-            disabled={!selection.vertical}
-            onChange={(v) => setSel('sku', v)}
-          />
-          <Select
-            label="Platform"
-            placeholder="-- Select Platform --"
-            value={selection.platform}
-            options={opts.platforms}
-            disabled={!selection.sku && opts.skus.length > 0}
-            onChange={(v) => setSel('platform', v)}
-          />
-          <Select
-            label="Operating System"
-            placeholder="-- Select Operating System --"
-            value={selection.os}
-            options={opts.oses}
-            disabled={!selection.platform}
-            onChange={(v) => setSel('os', v)}
-          />
-          {/* Kernel selector appears only when the manifest offers kernel variants
-              (e.g. standard vs real-time) for the current selection. */}
-          {opts.kernels.length > 0 && (
+        {/* Dropdowns and the Compose/Edit actions share this column so the
+            buttons sit right under the selections regardless of how tall the
+            summary + credentials column on the right grows. */}
+        <div className="w-full max-w-xl">
+          <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <Select
-              label="Kernel"
-              placeholder="-- Select Kernel --"
-              value={selection.kernel}
-              options={opts.kernels}
-              disabled={!selection.os}
-              onChange={(v) => setSel('kernel', v)}
+              label="Use Case"
+              placeholder="-- Select Use Case --"
+              value={selection.vertical}
+              options={opts.verticals}
+              onChange={(v) => setSel('vertical', v)}
             />
-          )}
-          {/* Image Type (raw/iso) is auto-selected from the manifest for the
-              chosen combination and not shown in Basic mode. */}
+            <Select
+              label="SKU"
+              placeholder="-- Select SKU --"
+              value={selection.sku}
+              options={opts.skus}
+              disabled={!selection.vertical}
+              onChange={(v) => setSel('sku', v)}
+            />
+            <Select
+              label="Platform"
+              placeholder="-- Select Platform --"
+              value={selection.platform}
+              options={opts.platforms}
+              disabled={!selection.sku && opts.skus.length > 0}
+              onChange={(v) => setSel('platform', v)}
+            />
+            <Select
+              label="Operating System"
+              placeholder="-- Select Operating System --"
+              value={selection.os}
+              options={opts.oses}
+              disabled={!selection.platform}
+              onChange={(v) => setSel('os', v)}
+            />
+            {/* Kernel selector appears only when the manifest offers kernel variants
+                (e.g. standard vs real-time) for the current selection. */}
+            {opts.kernels.length > 0 && (
+              <Select
+                label="Kernel"
+                placeholder="-- Select Kernel --"
+                value={selection.kernel}
+                options={opts.kernels}
+                disabled={!selection.os}
+                onChange={(v) => setSel('kernel', v)}
+              />
+            )}
+            {/* Image Type (raw/iso) is auto-selected from the manifest for the
+                chosen combination and not shown in Basic mode. */}
+          </div>
+
+          {error && <div className="mt-3 rounded bg-red-50 p-3 text-sm text-red-700">{error}</div>}
+
+          <div className="mt-6 flex flex-wrap items-center gap-3">
+            <button
+              className="rounded-md bg-[#0071c5] px-5 py-2.5 font-semibold text-white hover:bg-[#00285a] disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={!complete || !credentialsReady || busy || buildInProgress}
+              onClick={onBuild}
+            >
+              {busy ? 'Starting…' : buildInProgress ? 'Composing…' : 'Compose Image'}
+            </button>
+            {/* Deliberately not gated on `complete` — the prototype lets you open
+                Advanced at any point and finish the selection there. */}
+            <button
+              type="button"
+              className="rounded-md border border-slate-300 bg-white px-5 py-2.5 font-semibold text-[#00285a] hover:border-slate-400 hover:bg-slate-50"
+              onClick={onEditInAdvanced}
+            >
+              Edit in Advanced
+            </button>
+            {!complete && !buildInProgress && (
+              <span className="text-sm text-slate-500">
+                Complete all selections to compose.
+              </span>
+            )}
+            {complete && !credentialsReady && !buildInProgress && (
+              <span className="text-sm text-amber-700">
+                Set a password or add an SSH public key to compose.
+              </span>
+            )}
+            {buildInProgress && (
+              <span className="text-sm text-amber-600">
+                A compose is already in progress. Switch to the Compose Image tab to monitor it.
+              </span>
+            )}
+          </div>
         </div>
 
         {/* Image configuration summary — always reflects the current selection
@@ -181,6 +237,14 @@ export function BasicPage({
                 </tbody>
               </table>
             </div>
+            <div className="mt-4 max-w-md">
+              <CredentialsStep
+                requirements={requirements}
+                credentials={credentials}
+                onChange={setCredentials}
+                disabled={busy || buildInProgress}
+              />
+            </div>
           </div>
         )}
 
@@ -192,37 +256,6 @@ export function BasicPage({
               Resolving template…
             </div>
           </div>
-        )}
-      </div>
-
-      {error && <div className="mt-3 rounded bg-red-50 p-3 text-sm text-red-700">{error}</div>}
-
-      <div className="mt-6 flex flex-wrap items-center gap-3">
-        <button
-          className="rounded-md bg-[#0071c5] px-5 py-2.5 font-semibold text-white hover:bg-[#00285a] disabled:cursor-not-allowed disabled:opacity-50"
-          disabled={!complete || busy || buildInProgress}
-          onClick={onBuild}
-        >
-          {busy ? 'Starting…' : buildInProgress ? 'Composing…' : 'Compose Image'}
-        </button>
-        {/* Deliberately not gated on `complete` — the prototype lets you open
-            Advanced at any point and finish the selection there. */}
-        <button
-          type="button"
-          className="rounded-md border border-slate-300 bg-white px-5 py-2.5 font-semibold text-[#00285a] hover:border-slate-400 hover:bg-slate-50"
-          onClick={onEditInAdvanced}
-        >
-          Edit in Advanced
-        </button>
-        {!complete && !buildInProgress && (
-          <span className="text-sm text-slate-500">
-            Complete all selections to compose.
-          </span>
-        )}
-        {buildInProgress && (
-          <span className="text-sm text-amber-600">
-            A compose is already in progress. Switch to the Compose Image tab to monitor it.
-          </span>
         )}
       </div>
     </div>

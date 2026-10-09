@@ -2,11 +2,12 @@ import { useEffect, useMemo, useState } from 'react'
 import { useStore, cascadingOptions, encodePackage } from '../store'
 import type { Selection } from '../store'
 import { api } from '../api/client'
-import type { ComposeRequest, ComposeResponse } from '../api/types'
+import type { ComposeRequest, ComposeResponse, CredentialInput } from '../api/types'
 import { Select } from './Select'
 import { PackagesStep } from './PackagesStep'
 import { Input } from './Input'
 import { DiskStep } from './DiskStep'
+import { CredentialsStep, credentialsComplete } from './CredentialsStep'
 import { parseDiskFromYaml, toDiskConfig, validateDisk } from '../lib/disk'
 
 // How long to wait after the last keystroke in Image Name before re-composing.
@@ -21,6 +22,11 @@ const IMAGE_NAME_DEBOUNCE_MS = 400
 // points, hand-typed offsets), so an undebounced override would write and delete
 // a server-side delta file on every keystroke.
 const DISK_DEBOUNCE_MS = 400
+
+// Credentials are debounced like the image name and disk block: the password
+// and key fields are free text, so an undebounced override would write and
+// delete a server-side delta file on every keystroke.
+const CREDENTIALS_DEBOUNCE_MS = 400
 
 // The Advanced tab is a wizard, mirroring the prototype's step flow. Only the
 // first step (Target / "Choose Image Configuration") is built out today; the
@@ -54,6 +60,10 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // Logins for accounts the resolved template leaves without one. Component
+  // state, not the shared store: the store is persisted and a password must not
+  // outlive the build it was typed for.
+  const [credentials, setCredentials] = useState<CredentialInput[]>([])
 
   const opts = useMemo(
     () => (manifest ? cascadingOptions(manifest, selection) : null),
@@ -74,6 +84,22 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   // rather than on addedPackages itself: the store hands back a new array on
   // every selection change, and comparing the joined encoding means re-pinning a
   // package to the version it already had doesn't trigger a recompose.
+  // Debounced for the same reason the image name is: a credential is typed, and
+  // every override compose writes and removes a server-side delta file. The
+  // build itself re-reads the live value, so nothing waits on a typing pause.
+  const [debouncedCredentials, setDebouncedCredentials] = useState<CredentialInput[]>([])
+  const credentialsKey = useMemo(() => JSON.stringify(credentials), [credentials])
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedCredentials(JSON.parse(credentialsKey)), CREDENTIALS_DEBOUNCE_MS)
+    return () => clearTimeout(t)
+  }, [credentialsKey])
+
+  // A different template asks for different accounts, so anything typed for the
+  // previous one is dropped rather than being sent with the next build.
+  useEffect(() => {
+    setCredentials([])
+  }, [selection])
+
   const packagesKey = useMemo(() => addedPackages.map(encodePackage).sort().join('\n'), [addedPackages])
   const reposKey = useMemo(() => [...enabledRepos].sort().join('\n'), [enabledRepos])
 
@@ -122,8 +148,10 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
       packages: packagesKey ? packagesKey.split('\n') : undefined,
       repos: reposKey ? reposKey.split('\n') : undefined,
       disk: diskEdited && debouncedDiskKey ? JSON.parse(debouncedDiskKey) : undefined,
+      credentials: debouncedCredentials.length > 0 ? debouncedCredentials : undefined,
     }),
-    [selection, imageNameEdited, debouncedImageName, packagesKey, reposKey, diskEdited, debouncedDiskKey],
+    [selection, imageNameEdited, debouncedImageName, packagesKey, reposKey, diskEdited,
+      debouncedDiskKey, debouncedCredentials],
   )
 
   // Entering Advanced always lands on the first step, mirroring the prototype's
@@ -172,8 +200,13 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     setError(null) // clear any stale compose error from the previous selection
   }
 
+  const requirements = composed?.credentials ?? []
+  // Same gate as Basic: the backend rejects a build whose template leaves an
+  // account without a login, so stop here rather than letting it fail.
+  const credentialsReady = credentialsComplete(requirements, credentials)
+
   const onBuild = async () => {
-    if (!complete) return
+    if (!complete || !credentialsReady) return
     // Unlike a compose, a build cannot fall back to the last good layout: it has
     // to run what is on screen or nothing. Say so rather than posting a request
     // the server will reject.
@@ -196,6 +229,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
         ...composeReq,
         imageName: imageNameEdited ? imageName : undefined,
         disk: diskEdited && disk ? toDiskConfig(disk) : undefined,
+        credentials: credentials.length > 0 ? credentials : undefined,
       }
       // Re-compose against buildReq (the current, non-debounced image name)
       // right before starting the build, so the logged YAML matches what the
@@ -325,6 +359,15 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
                   </table>
                 </div>
 
+                <div className="mb-4 max-w-xl">
+                  <CredentialsStep
+                    requirements={requirements}
+                    credentials={credentials}
+                    onChange={setCredentials}
+                    disabled={busy || buildInProgress}
+                  />
+                </div>
+
                 {/* Pinned a version for a package the curated template already
                     lists? Both entries survive the merge, so say so rather than
                     letting the resolved YAML look like a duplicate bug. */}
@@ -394,11 +437,16 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
                   <button
                     type="button"
                     onClick={onBuild}
-                    disabled={busy || buildInProgress}
+                    disabled={!credentialsReady || busy || buildInProgress}
                     className="rounded-md bg-[#0071c5] px-5 py-2.5 font-semibold text-white hover:bg-[#00285a] disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {busy ? 'Starting…' : buildInProgress ? 'Composing…' : 'Compose Image'}
                   </button>
+                  {!credentialsReady && !buildInProgress && (
+                    <span className="text-sm text-amber-700">
+                      Set a password or add an SSH public key to compose.
+                    </span>
+                  )}
                   {buildInProgress && (
                     <span className="text-sm text-amber-600">
                       A compose is already in progress. Switch to the Compose Image tab to monitor it.
