@@ -82,69 +82,65 @@ combinations:
   # combination per platform, both pointing at the same template (same pattern
   # as the robotics-jazzy-ubuntu24 sku above).
   #
-  # These point at the `-raw` templates, not the `-unattended-iso` ones beside
-  # them. The ISO templates declare a sudo-enabled `admin` user whose only
+  # The ISO templates declare a sudo-enabled `admin` user whose only
   # credential is additionalfiles/base-platform/admin.pub, which ships with no
-  # keys in it — so isomaker's ValidateUserCredentials rejects the build, and
-  # the Basic tab has no way to supply `--ssh-authorized-key`. The raw
-  # templates define no users at all and are the pair already covered by
-  # .github/workflows/build-edgepack.yml. Move these to the ISO templates once
-  # a credential can be supplied through the build path.
+  # keys in it. The Basic tab's credential prompt lets a caller supply
+  # `--ssh-authorized-key`/a password for `admin` at build time.
   - vertical: platform-enablement
     sku: edgepack
     platform: ptl
     os: ubuntu24
-    imageType: raw
-    template: ubuntu24/ubuntu24-x86_64-edgepack-raw.yml
+    imageType: iso
+    template: ubuntu24/ubuntu24-x86_64-edgepack-unattended-iso.yml
 
   - vertical: platform-enablement
     sku: edgepack
     platform: wcl
     os: ubuntu24
-    imageType: raw
-    template: ubuntu24/ubuntu24-x86_64-edgepack-raw.yml
+    imageType: iso
+    template: ubuntu24/ubuntu24-x86_64-edgepack-unattended-iso.yml
 
   - vertical: platform-enablement
     sku: edgepack-server
     platform: ptl
     os: ubuntu24
-    imageType: raw
-    template: ubuntu24/ubuntu24-x86_64-edgepack-server-raw.yml
+    imageType: iso
+    template: ubuntu24/ubuntu24-x86_64-edgepack-server-unattended-iso.yml
 
   - vertical: platform-enablement
     sku: edgepack-server
     platform: wcl
     os: ubuntu24
-    imageType: raw
-    template: ubuntu24/ubuntu24-x86_64-edgepack-server-raw.yml
+    imageType: iso
+    template: ubuntu24/ubuntu24-x86_64-edgepack-server-unattended-iso.yml
 
   - vertical: platform-enablement
     sku: edgepack
     platform: ptl
     os: ubuntu26
-    imageType: raw
-    template: ubuntu26/ubuntu26-x86_64-edgepack-raw.yml
+    imageType: iso
+    template: ubuntu26/ubuntu26-x86_64-edgepack-unattended-iso.yml
 
   - vertical: platform-enablement
     sku: edgepack
     platform: wcl
     os: ubuntu26
-    imageType: raw
-    template: ubuntu26/ubuntu26-x86_64-edgepack-raw.yml
+    imageType: iso
+    template: ubuntu26/ubuntu26-x86_64-edgepack-unattended-iso.yml
 
   - vertical: platform-enablement
     sku: edgepack-server
     platform: ptl
     os: ubuntu26
-    imageType: raw
-    template: ubuntu26/ubuntu26-x86_64-edgepack-server-raw.yml
+    imageType: iso
+    template: ubuntu26/ubuntu26-x86_64-edgepack-server-unattended-iso.yml
 
   - vertical: platform-enablement
     sku: edgepack-server
     platform: wcl
     os: ubuntu26
-    imageType: raw
-    template: ubuntu26/ubuntu26-x86_64-edgepack-server-raw.yml
+    imageType: iso
+    template: ubuntu26/ubuntu26-x86_64-edgepack-server-unattended-iso.yml
 
 verticals:
   - id: retail
