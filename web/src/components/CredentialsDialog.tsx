@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import type { CredentialInput, CredentialRequirement } from '../api/types'
 import { CredentialsStep } from './CredentialsStep'
 
@@ -27,14 +27,50 @@ export function CredentialsDialog({
   onCancel,
   onCompose,
 }: CredentialsDialogProps) {
+  const dialogRef = useRef<HTMLElement>(null)
+  const onCancelRef = useRef(onCancel)
+  onCancelRef.current = onCancel
+
   useEffect(() => {
     if (!open) return
+    const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const focusableSelector =
+      'a[href], button:not([disabled]), input:not([disabled]):not([type="file"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    const focusableElements = () =>
+      Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(focusableSelector) ?? [])
+
+    focusableElements()[0]?.focus()
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onCancel()
+      if (event.key === 'Escape') {
+        onCancelRef.current()
+        return
+      }
+      if (event.key !== 'Tab') return
+
+      const focusable = focusableElements()
+      if (focusable.length === 0) {
+        event.preventDefault()
+        dialogRef.current?.focus()
+        return
+      }
+
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      const active = document.activeElement
+      if (event.shiftKey && (active === first || !dialogRef.current?.contains(active))) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && (active === last || !dialogRef.current?.contains(active))) {
+        event.preventDefault()
+        first.focus()
+      }
     }
     window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [open, onCancel])
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      trigger?.focus()
+    }
+  }, [open])
 
   if (!open) return null
 
@@ -46,9 +82,11 @@ export function CredentialsDialog({
       }}
     >
       <section
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="credentials-dialog-title"
+        tabIndex={-1}
         className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-lg bg-white p-6 shadow-xl"
       >
         <div className="mb-4 flex items-start justify-between gap-4">
@@ -78,7 +116,11 @@ export function CredentialsDialog({
           disabled={busy || buildInProgress}
           showRequiredHeading={false}
         />
-        {error && <div className="mb-3 rounded bg-red-50 p-3 text-sm text-red-700">{error}</div>}
+        {error && (
+          <div role="alert" className="mb-3 rounded bg-red-50 p-3 text-sm text-red-700">
+            {error}
+          </div>
+        )}
         <div className="mt-5 flex justify-end gap-3">
           <button
             type="button"

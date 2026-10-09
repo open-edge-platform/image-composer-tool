@@ -264,9 +264,42 @@ func TestResolveBuildTemplateKeepsDeltaUntilBuildFinishes(t *testing.T) {
 	}
 
 	build := &build{RootDir: t.TempDir(), DeltaPath: deltaPath}
+	build.finish(StatusCancelled, nil, "cancel watchdog timed out")
+	if _, err := os.Stat(deltaPath); err != nil {
+		t.Fatalf("watchdog terminal transition removed delta before child exit: %v", err)
+	}
+
 	build.archiveAndCleanupDelta()
 	if _, err := os.Stat(deltaPath); !os.IsNotExist(err) {
 		t.Fatalf("generated delta still exists after build cleanup: err=%v", err)
+	}
+}
+
+func TestRunBuildFailedStartCleansDelta(t *testing.T) {
+	s := newTestService(t)
+	wd := t.TempDir()
+	request := &BuildRequest{Compose: &Selection{
+		Vertical: "robotics", SKU: "amr", Platform: "wcl", OS: "ubuntu24", ImageType: "iso",
+		ImageName: "custom-robotics-image",
+	}}
+	deltaPath, _, err := s.resolveBuildTemplate(request, wd)
+	if err != nil {
+		t.Fatalf("resolveBuildTemplate: %v", err)
+	}
+
+	root := t.TempDir()
+	workDir := filepath.Join(root, "work")
+	if err := os.Mkdir(workDir, 0o700); err != nil {
+		t.Fatalf("creating work directory: %v", err)
+	}
+	build := &build{
+		ID: "failed-start", RootDir: root, WorkDir: workDir, DeltaPath: deltaPath,
+		status: StatusNotStarted, done: make(chan struct{}),
+	}
+	s.runBuild(build, filepath.Join(t.TempDir(), "missing-ict"), []string{"build"})
+
+	if _, err := os.Stat(deltaPath); !os.IsNotExist(err) {
+		t.Fatalf("generated delta remains after failed cmd.Start: err=%v", err)
 	}
 }
 
