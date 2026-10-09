@@ -29,9 +29,8 @@ func templateWithUsers(users ...config.UserConfig) *config.ImageTemplate {
 // Required, and whether each reads as satisfied. The unsatisfied sudo case is
 // the one that matters most: it is what the curated unattended-ISO templates
 // ship, and reporting it is what lets the UI prompt instead of letting a build
-// fail minutes in. Every user is listed — including unprivileged ones, which
-// are never Required but may still optionally receive a credential — since
-// validateCredentials accepts one for any user in the template.
+// fail minutes in. Every user is listed, and every one is Required unless
+// confined to a startupScript — the only exemption the rule allows.
 func TestCredentialRequirements(t *testing.T) {
 	t.Parallel()
 
@@ -74,23 +73,26 @@ func TestCredentialRequirements(t *testing.T) {
 			want:  []CredentialRequirement{{User: "ops", Sudo: true, Required: true, Satisfied: false}},
 		},
 		{
-			// Listed so the UI can offer an optional SSH key, but never blocks a
-			// build: Required and Satisfied both reflect that.
-			name:  "unprivileged user is reported but not required",
+			name:  "standard user without credential is also required",
 			users: []config.UserConfig{{Name: "guest"}},
-			want:  []CredentialRequirement{{User: "guest", Sudo: false, Required: false, Satisfied: true}},
+			want:  []CredentialRequirement{{User: "guest", Sudo: false, Required: true, Satisfied: false}},
 		},
 		{
-			name:  "root is privileged without the sudo flag",
+			name:  "root without the sudo flag is required",
 			users: []config.UserConfig{{Name: "root"}},
 			want:  []CredentialRequirement{{User: "root", Sudo: false, Required: true, Satisfied: false}},
 		},
 		{
 			// The installer environment's console account, confined to its script:
 			// still listed, but neither required nor satisfied-by-default implied.
-			name:  "root confined to a startup script is not required",
+			name:  "a user confined to a startup script is not required",
 			users: []config.UserConfig{{Name: "root", StartupScript: "/usr/bin/installer"}},
 			want:  []CredentialRequirement{{User: "root", Sudo: false, Required: false, Satisfied: true}},
+		},
+		{
+			name:  "standard user confined to a startup script is not required",
+			users: []config.UserConfig{{Name: "guest", StartupScript: "/usr/bin/kiosk"}},
+			want:  []CredentialRequirement{{User: "guest", Sudo: false, Required: false, Satisfied: true}},
 		},
 	}
 

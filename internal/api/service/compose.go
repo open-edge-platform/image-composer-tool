@@ -73,16 +73,14 @@ type CredentialInput struct {
 type CredentialRequirement struct {
 	User string
 	Sudo bool
-	// Required is true for a privileged account (config.UserConfig.IsPrivileged),
-	// the only kind a missing credential ever blocks a build for. A caller uses
-	// this to tell "must supply a login" from "may optionally add one" — an
-	// unprivileged entry is still listed (a standard user is just as eligible to
-	// receive an SSH key as a privileged one), but Required is always false for
-	// it since Satisfied is too.
+	// Required is true for every account the credential rule applies to
+	// (config.UserConfig.CredentialRequired) — every user except one confined
+	// to a startupScript, which has no interactive login to protect. A caller
+	// uses this to tell "must supply a login" from "may optionally add one".
 	Required bool
 	// Satisfied is false when the account is Required and the template leaves it
 	// with no password and no SSH key, which is what blocks a build. Always true
-	// for an unprivileged account: nothing about it ever blocks a build.
+	// for an account the rule exempts: nothing about it ever blocks a build.
 	Satisfied bool
 }
 
@@ -95,14 +93,14 @@ func (s Selection) hasOverrides() bool {
 }
 
 // credentialRequirements lists every user of a merged template, flagging which
-// are privileged and, for those, whether they still need a credential.
+// the credential rule applies to and, for those, whether they still need one.
 //
-// Every user is listed, not only privileged ones: a credential is still
-// accepted for a standard account (validateCredentials has no privilege
-// check), so the UI needs to know the account exists in order to offer an
-// optional SSH key for it. Only a Required account ever blocks a build —
-// that uses the same predicate NeedsCredential is built on, so what is
-// required here and what is enforced at build time cannot diverge.
+// Every user is listed, including one the rule exempts: a credential is still
+// accepted for it (validateCredentials has no such exemption), so the UI
+// needs to know the account exists in order to offer an optional SSH key for
+// it. Only a Required account ever blocks a build — that uses the same
+// predicate NeedsCredential is built on, so what is required here and what is
+// enforced at build time cannot diverge.
 //
 // Must run on a merged, lowered template: lowerSSHKeyFiles has by then read
 // every sshAuthorizedKeysFiles entry into SSHAuthorizedKeys, so a key file
@@ -114,7 +112,7 @@ func credentialRequirements(merged *config.ImageTemplate) []CredentialRequiremen
 		out = append(out, CredentialRequirement{
 			User:      u.Name,
 			Sudo:      u.HasSudoAccess(),
-			Required:  u.IsPrivileged(),
+			Required:  u.CredentialRequired(),
 			Satisfied: !u.NeedsCredential(),
 		})
 	}
