@@ -563,8 +563,15 @@ func mergeUserConfig(defaultUser, userUser UserConfig) UserConfig {
 			userUser.SSHAuthorizedKeysFiles)
 	}
 
-	// Override sudo setting
-	merged.Sudo = userUser.Sudo
+	// Override sudo setting only if other non-credential fields are present. Credential
+	// deltas (password + SSH keys) should never modify privilege grants; they inherit
+	// sudo from the parent template. Only explicit user-config changes beyond
+	// login credentials should affect sudo.
+	hasNonCredentialChanges := (userUser.Home != "" || userUser.Shell != "" ||
+		userUser.StartupScript != "" || len(userUser.Groups) > 0)
+	if hasNonCredentialChanges {
+		merged.Sudo = userUser.Sudo
+	}
 
 	return merged
 }

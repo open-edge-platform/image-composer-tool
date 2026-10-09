@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/config/validate"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"gopkg.in/yaml.v3"
 )
 
@@ -146,6 +147,27 @@ type deltaSystemConfig struct {
 	// schema, so a zero-valued block would emit `dkms: {enabled: false}` into
 	// every delta and override a parent template that had turned it on.
 	Dkms *deltaDkms `yaml:"dkms,omitempty"`
+	// Users carries credentials for accounts the parent already declares. The
+	// merge matches on name and unions the key lists, so an entry here adds a
+	// login to the parent's user rather than replacing it.
+	Users []deltaUser `yaml:"users,omitempty"`
+}
+
+// deltaUser attaches a login to an account the parent template already
+// declares — name identifies that account and is never used to create one.
+//
+// hash_algo is deliberately absent: Password is always a complete crypt(3)
+// hash by the time it gets here (config.HashPasswordForHost), and
+// setUserPassword applies such a value with `usermod -p` as-is. Declaring an
+// algorithm would instead make it hash the hash.
+//
+// Sudo is intentionally omitted from credential deltas, since a credential
+// override (password/SSH key) should never modify privilege grants. The parent
+// template's Sudo setting is preserved during merge.
+type deltaUser struct {
+	Name              string   `yaml:"name"`
+	Password          string   `yaml:"password,omitempty"`
+	SSHAuthorizedKeys []string `yaml:"sshAuthorizedKeys,omitempty"`
 }
 
 // deltaDkms is systemConfig.dkms as a delta declares it: the enable switch and
@@ -205,6 +227,12 @@ func buildDelta(parentTemplate string, parentImage config.ImageInfo, parentTarge
 			d.SystemConfig.Dkms = &deltaDkms{Enabled: true}
 		}
 	}
+	if users := deltaUsers(sel.Credentials); len(users) > 0 {
+		if d.SystemConfig == nil {
+			d.SystemConfig = &deltaSystemConfig{}
+		}
+		d.SystemConfig.Users = users
+	}
 	d.Disk = sel.Disk
 	data, err := yaml.Marshal(d)
 	if err != nil {
@@ -218,6 +246,58 @@ func buildDelta(parentTemplate string, parentImage config.ImageInfo, parentTarge
 		return nil, fmt.Errorf("generated delta failed validation: %v", issues)
 	}
 	return data, nil
+}
+
+// deltaUsers renders validated credentials as delta user entries, sorted by
+// name for the same reason packages are: the same selection must always
+// produce the same bytes, so the Review pane's delta is diffable.
+//
+// Passwords are expected to arrive already hashed (validateCredentials does
+// it); this does not hash, so that a plain-text value can never be emitted by
+// a caller that skipped validation.
+func deltaUsers(creds []CredentialInput) []deltaUser {
+	if len(creds) == 0 {
+		return nil
+	}
+	out := make([]deltaUser, 0, len(creds))
+	for _, c := range creds {
+		u := deltaUser{Name: c.User, Password: c.Password}
+		if c.SSHAuthorizedKey != "" {
+			u.SSHAuthorizedKeys = []string{c.SSHAuthorizedKey}
+		}
+		out = append(out, u)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// redactDeltaYAML re-renders a generated delta with every password replaced,
+// for returning to a caller. The bytes written to disk for the build keep the
+// real value; only this display copy is scrubbed.
+//
+// Falls back to dropping the YAML entirely if it cannot be parsed back: an
+// unreadable delta is worth losing from the Review pane, a leaked credential
+// is not.
+func redactDeltaYAML(data []byte) string {
+	var d deltaTemplate
+	if err := yaml.Unmarshal(data, &d); err != nil {
+		logger.Logger().Warnf("compose: re-reading generated delta for redaction failed, omitting it: %v", err)
+		return ""
+	}
+	if d.SystemConfig == nil || len(d.SystemConfig.Users) == 0 {
+		return string(data)
+	}
+	for i := range d.SystemConfig.Users {
+		if d.SystemConfig.Users[i].Password != "" {
+			d.SystemConfig.Users[i].Password = config.RedactedValue
+		}
+	}
+	out, err := yaml.Marshal(d)
+	if err != nil {
+		logger.Logger().Warnf("compose: re-rendering redacted delta failed, omitting it: %v", err)
+		return ""
+	}
+	return string(out)
 }
 
 // selectsEdgePack reports whether any selected entry is an Edge Pack package.
