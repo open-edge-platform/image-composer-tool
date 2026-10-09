@@ -84,7 +84,7 @@ export function CredentialsStep({
           <p className="mb-3 text-xs text-slate-600">
             This image creates an administrator account with no login of its own. Set a password or
             add an SSH public key so the account is not left with an empty password — either one is
-            enough.
+            enough. Fields marked <span className="text-red-600">*</span> are required.
           </p>
           {required.map((req) => (
             <CredentialFields
@@ -144,6 +144,10 @@ function CredentialFields({ req, cred, disabled, onUpdate }: CredentialFieldsPro
     if (key) onUpdate({ sshAuthorizedKey: key })
   }
 
+  // A required account needs one of the two fields, not both — the asterisk
+  // marks the pair as a whole rather than either field individually.
+  const mark = req.required ? <span className="text-red-600"> *</span> : null
+
   return (
     <div className="mb-2 rounded border border-slate-200 bg-white p-3">
       <p className="mb-2 text-sm font-semibold text-[#00285a]">
@@ -152,6 +156,7 @@ function CredentialFields({ req, cred, disabled, onUpdate }: CredentialFieldsPro
       </p>
       <Input
         label="Password"
+        labelSuffix={mark}
         type="password"
         value={cred?.password ?? ''}
         placeholder="Leave empty to use an SSH key instead"
@@ -163,7 +168,7 @@ function CredentialFields({ req, cred, disabled, onUpdate }: CredentialFieldsPro
         htmlFor={`sshkey-${req.user}`}
         className="mb-1 block text-sm font-semibold text-[#00285a]"
       >
-        SSH public key
+        SSH public key{mark}
       </label>
       <textarea
         id={`sshkey-${req.user}`}

@@ -196,6 +196,14 @@ export function BasicPage({
                 </tbody>
               </table>
             </div>
+            <div className="mt-4 max-w-md">
+              <CredentialsStep
+                requirements={requirements}
+                credentials={credentials}
+                onChange={setCredentials}
+                disabled={busy || buildInProgress}
+              />
+            </div>
           </div>
         )}
 
@@ -209,17 +217,6 @@ export function BasicPage({
           </div>
         )}
       </div>
-
-      {complete && review && (
-        <div className="mt-4 max-w-xl">
-          <CredentialsStep
-            requirements={requirements}
-            credentials={credentials}
-            onChange={setCredentials}
-            disabled={busy || buildInProgress}
-          />
-        </div>
-      )}
 
       {error && <div className="mt-3 rounded bg-red-50 p-3 text-sm text-red-700">{error}</div>}
 

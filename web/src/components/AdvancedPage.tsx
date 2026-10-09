@@ -359,6 +359,15 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
                   </table>
                 </div>
 
+                <div className="mb-4 max-w-xl">
+                  <CredentialsStep
+                    requirements={requirements}
+                    credentials={credentials}
+                    onChange={setCredentials}
+                    disabled={busy || buildInProgress}
+                  />
+                </div>
+
                 {/* Pinned a version for a package the curated template already
                     lists? Both entries survive the merge, so say so rather than
                     letting the resolved YAML look like a duplicate bug. */}
@@ -413,15 +422,6 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
                       and your delta appears here.
                     </p>
                   )}
-                </div>
-
-                <div className="mt-4 max-w-xl">
-                  <CredentialsStep
-                    requirements={requirements}
-                    credentials={credentials}
-                    onChange={setCredentials}
-                    disabled={busy || buildInProgress}
-                  />
                 </div>
 
                 <div className="mt-4 flex flex-wrap items-center gap-3">

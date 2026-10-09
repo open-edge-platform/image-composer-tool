@@ -1,5 +1,10 @@
+import type { ReactNode } from 'react'
+
 interface InputProps {
   label: string
+  // Appended after the label — e.g. a required-field asterisk. Kept separate
+  // from `label` so the plain label text still drives the generated id.
+  labelSuffix?: ReactNode
   value: string
   placeholder?: string
   disabled?: boolean
@@ -12,13 +17,23 @@ interface InputProps {
   onChange: (value: string) => void
 }
 
-export function Input({ label, value, placeholder, disabled, type = 'text', hint, onChange }: InputProps) {
+export function Input({
+  label,
+  labelSuffix,
+  value,
+  placeholder,
+  disabled,
+  type = 'text',
+  hint,
+  onChange,
+}: InputProps) {
   const id = `input-${label.toLowerCase().replace(/\s+/g, '-')}`
   const hintId = hint ? `${id}-hint` : undefined
   return (
     <div className="mb-4">
       <label htmlFor={id} className="mb-1 block text-sm font-semibold text-[#00285a]">
         {label}
+        {labelSuffix}
       </label>
       <input
         id={id}

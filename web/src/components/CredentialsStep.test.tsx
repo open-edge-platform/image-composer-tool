@@ -103,20 +103,20 @@ describe('CredentialsStep', () => {
 
   it('masks the password field', () => {
     render(<CredentialsStep requirements={[needsOne]} credentials={[]} onChange={() => {}} />)
-    expect(screen.getByLabelText('Password').getAttribute('type')).toBe('password')
+    expect(screen.getByLabelText(/Password/).getAttribute('type')).toBe('password')
   })
 
   it('reports a typed password to the parent', () => {
     const onChange = vi.fn()
     render(<CredentialsStep requirements={[needsOne]} credentials={[]} onChange={onChange} />)
-    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
+    fireEvent.change(screen.getByLabelText(/Password/), { target: { value: 'hunter2' } })
     expect(onChange).toHaveBeenCalledWith([{ user: 'admin', password: 'hunter2' }])
   })
 
   it('trims a pasted key, which usually arrives with a trailing newline', () => {
     const onChange = vi.fn()
     render(<CredentialsStep requirements={[needsOne]} credentials={[]} onChange={onChange} />)
-    fireEvent.change(screen.getByLabelText('SSH public key'), { target: { value: `${key}\n` } })
+    fireEvent.change(screen.getByLabelText(/SSH public key/), { target: { value: `${key}\n` } })
     expect(onChange).toHaveBeenCalledWith([{ user: 'admin', sshAuthorizedKey: key }])
   })
 
@@ -129,7 +129,7 @@ describe('CredentialsStep', () => {
         onChange={onChange}
       />,
     )
-    fireEvent.change(screen.getByLabelText('Password'), { target: { value: '' } })
+    fireEvent.change(screen.getByLabelText(/Password/), { target: { value: '' } })
     // Sending an entry with nothing in it would be rejected by the backend.
     expect(onChange).toHaveBeenCalledWith([])
   })
@@ -143,14 +143,14 @@ describe('CredentialsStep', () => {
         onChange={onChange}
       />,
     )
-    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
+    fireEvent.change(screen.getByLabelText(/Password/), { target: { value: 'hunter2' } })
     expect(onChange).toHaveBeenCalledWith([{ user: 'admin', sshAuthorizedKey: key, password: 'hunter2' }])
   })
 
   it('accepts a password for a standard, non-required account too', () => {
     const onChange = vi.fn()
     render(<CredentialsStep requirements={[standardUser]} credentials={[]} onChange={onChange} />)
-    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
+    fireEvent.change(screen.getByLabelText(/Password/), { target: { value: 'hunter2' } })
     expect(onChange).toHaveBeenCalledWith([{ user: 'guest', password: 'hunter2' }])
   })
 })
