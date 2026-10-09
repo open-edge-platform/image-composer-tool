@@ -768,9 +768,9 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 	if derr != nil {
 		return "", "", fmt.Errorf("generating override template: %w", derr) // server-side
 	}
-	defer cleanup() // ensure generated delta is cleaned up even if credential check fails
 
 	if verr := s.checkTemplateCredentials(deltaPath); verr != nil {
+		cleanup()
 		return "", "", verr
 	}
 	// Display name stays the curated parent's, not the generated delta's — the
@@ -866,6 +866,7 @@ func (s *Service) runBuild(b *build, name string, cmdArgs []string) {
 
 	if err := cmd.Start(); err != nil {
 		b.appendLog(fmt.Sprintf("failed to start build: %v", err))
+		b.archiveAndCleanupDelta()
 		b.finish(StatusFailed, nil, err.Error())
 		_ = pw.Close()
 		_ = pr.Close()
@@ -921,6 +922,7 @@ func (s *Service) runBuild(b *build, name string, cmdArgs []string) {
 	}
 
 	waitErr := <-waitCh
+	b.archiveAndCleanupDelta()
 	if waitErr != nil {
 		// Classify the terminal state. A cancel was requested → the child was
 		// signalled, so map the signal-terminated / signal-code exits to cancelled;
@@ -966,7 +968,8 @@ func (s *Service) runBuild(b *build, name string, cmdArgs []string) {
 // It reports whether it recorded the terminal state. Recording is single-shot:
 // both runBuild's wait path and the cancel watchdog can conclude a build, and
 // whichever gets there first owns the outcome — so the watchdog can't relabel a
-// build that exited cleanly a moment earlier.
+// build that exited cleanly a moment earlier. Delta cleanup is deliberately
+// handled by runBuild only after the child exits (or fails to start).
 func (b *build) finish(status BuildStatus, arts []Artifact, errMsg string) bool {
 	b.mu.Lock()
 	if isTerminal(b.status) {
@@ -977,14 +980,6 @@ func (b *build) finish(status BuildStatus, arts []Artifact, errMsg string) bool 
 	b.artifacts = arts
 	b.errMsg = errMsg
 	b.mu.Unlock()
-
-	// finish() only reaches here once per build (the isTerminal guard above),
-	// so this is the single point at which a delta-backed build's generated
-	// file is archived and removed — regardless of terminal status, so a
-	// failed or cancelled override build doesn't leak a file into TemplatesDir.
-	if b.DeltaPath != "" {
-		b.archiveAndCleanupDelta()
-	}
 
 	// Persist logs to <root>/compose.log for later download.
 	if b.RootDir != "" {
@@ -1013,6 +1008,9 @@ func (b *build) finish(status BuildStatus, arts []Artifact, errMsg string) bool 
 // generated file must never be left behind), but TemplatePath is left as-is,
 // which then 404s on download exactly as an already-missing template would.
 func (b *build) archiveAndCleanupDelta() {
+	if b.DeltaPath == "" {
+		return
+	}
 	defer func() { _ = os.Remove(b.DeltaPath) }()
 
 	merged, err := config.LoadAndMergeTemplate(b.DeltaPath)
@@ -1032,7 +1030,13 @@ func (b *build) archiveAndCleanupDelta() {
 	}
 	b.mu.Lock()
 	b.TemplatePath = archivePath
+	terminal := isTerminal(b.status)
 	b.mu.Unlock()
+	if terminal {
+		if err := b.writeMeta(); err != nil {
+			logger.Logger().Warnf("build %s: writing archived template metadata: %v", b.ID, err)
+		}
+	}
 }
 
 // exitCode returns the process exit code carried by a cmd.Wait error, or -1 if

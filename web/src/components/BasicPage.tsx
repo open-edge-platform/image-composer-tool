@@ -3,7 +3,8 @@ import { useStore, cascadingOptions } from '../store'
 import { api } from '../api/client'
 import type { ComposeResponse, CredentialInput } from '../api/types'
 import { Select } from './Select'
-import { CredentialsStep, credentialsComplete } from './CredentialsStep'
+import { credentialsComplete } from './CredentialsStep'
+import { CredentialsDialog } from './CredentialsDialog'
 
 interface BasicPageProps {
   onBuildStarted: (buildId: string) => void
@@ -27,6 +28,7 @@ export function BasicPage({
 
   const [review, setReview] = useState<ComposeResponse | null>(null)
   const [busy, setBusy] = useState(false)
+  const [credentialsOpen, setCredentialsOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // True while the summary for a newly completed selection is in flight. The
   // previous summary stays on screen during a refetch, so this only drives the
@@ -82,6 +84,7 @@ export function BasicPage({
   if (!manifest || !opts) return <div className="p-8">Loading…</div>
 
   const requirements = review?.credentials ?? []
+  const hasCredentialFields = requirements.some((r) => (r.required && !r.satisfied) || !r.required)
   // The backend rejects a build whose template leaves an account without a
   // login, so the button is gated on the same rule rather than letting the
   // request fail.
@@ -99,6 +102,7 @@ export function BasicPage({
       const fresh = await api.compose(req)
       console.log('Composing image with template YAML:\n' + fresh.yaml)
       const accepted = await api.startBuild(req)
+      setCredentialsOpen(false)
       onBuildStarted(accepted.buildId)
     } catch (e) {
       setError((e as Error).message)
@@ -110,6 +114,14 @@ export function BasicPage({
   const setSel = (k: Parameters<typeof setField>[0], v: string) => {
     setField(k, v)
     setError(null) // clear any stale compose error from the previous selection
+  }
+
+  const onComposeClick = () => {
+    if (hasCredentialFields) {
+      setCredentialsOpen(true)
+      return
+    }
+    void onBuild()
   }
 
   return (
@@ -178,8 +190,8 @@ export function BasicPage({
           <div className="mt-6 flex flex-wrap items-center gap-3">
             <button
               className="rounded-md bg-[#0071c5] px-5 py-2.5 font-semibold text-white hover:bg-[#00285a] disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={!complete || !credentialsReady || busy || buildInProgress}
-              onClick={onBuild}
+              disabled={!complete || !review || loadingSummary || busy || buildInProgress}
+              onClick={onComposeClick}
             >
               {busy ? 'Starting…' : buildInProgress ? 'Composing…' : 'Compose Image'}
             </button>
@@ -195,11 +207,6 @@ export function BasicPage({
             {!complete && !buildInProgress && (
               <span className="text-sm text-slate-500">
                 Complete all selections to compose.
-              </span>
-            )}
-            {complete && !credentialsReady && !buildInProgress && (
-              <span className="text-sm text-amber-700">
-                Set a password or add an SSH public key to compose.
               </span>
             )}
             {buildInProgress && (
@@ -237,14 +244,6 @@ export function BasicPage({
                 </tbody>
               </table>
             </div>
-            <div className="mt-4 max-w-md">
-              <CredentialsStep
-                requirements={requirements}
-                credentials={credentials}
-                onChange={setCredentials}
-                disabled={busy || buildInProgress}
-              />
-            </div>
           </div>
         )}
 
@@ -258,6 +257,19 @@ export function BasicPage({
           </div>
         )}
       </div>
+
+      <CredentialsDialog
+        open={credentialsOpen}
+        requirements={requirements}
+        credentials={credentials}
+        onChange={setCredentials}
+        credentialsReady={credentialsReady}
+        busy={busy}
+        buildInProgress={buildInProgress}
+        error={error}
+        onCancel={() => setCredentialsOpen(false)}
+        onCompose={() => void onBuild()}
+      />
     </div>
   )
 }

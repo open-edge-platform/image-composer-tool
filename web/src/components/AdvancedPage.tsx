@@ -7,7 +7,8 @@ import { Select } from './Select'
 import { PackagesStep } from './PackagesStep'
 import { Input } from './Input'
 import { DiskStep } from './DiskStep'
-import { CredentialsStep, credentialsComplete } from './CredentialsStep'
+import { credentialsComplete } from './CredentialsStep'
+import { CredentialsDialog } from './CredentialsDialog'
 import { parseDiskFromYaml, toDiskConfig, validateDisk } from '../lib/disk'
 
 // How long to wait after the last keystroke in Image Name before re-composing.
@@ -60,6 +61,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [credentialsOpen, setCredentialsOpen] = useState(false)
   // Logins for accounts the resolved template leaves without one. Component
   // state, not the shared store: the store is persisted and a password must not
   // outlive the build it was typed for.
@@ -204,6 +206,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   // Same gate as Basic: the backend rejects a build whose template leaves an
   // account without a login, so stop here rather than letting it fail.
   const credentialsReady = credentialsComplete(requirements, credentials)
+  const hasCredentialFields = requirements.some((r) => (r.required && !r.satisfied) || !r.required)
 
   const onBuild = async () => {
     if (!complete || !credentialsReady) return
@@ -237,12 +240,25 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
       const fresh = await api.compose(buildReq)
       console.log('Composing image with template YAML:\n' + fresh.yaml)
       const accepted = await api.startBuild(buildReq)
+      setCredentialsOpen(false)
       onBuildStarted(accepted.buildId)
     } catch (e) {
       setError((e as Error).message)
     } finally {
       setBusy(false)
     }
+  }
+
+  const onComposeClick = () => {
+    if (diskInvalid) {
+      setError('Fix the errors on the Disk step before composing.')
+      return
+    }
+    if (hasCredentialFields) {
+      setCredentialsOpen(true)
+      return
+    }
+    void onBuild()
   }
 
   // Empty until something is overridden: with no overrides no delta is
@@ -359,15 +375,6 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
                   </table>
                 </div>
 
-                <div className="mb-4 max-w-xl">
-                  <CredentialsStep
-                    requirements={requirements}
-                    credentials={credentials}
-                    onChange={setCredentials}
-                    disabled={busy || buildInProgress}
-                  />
-                </div>
-
                 {/* Pinned a version for a package the curated template already
                     lists? Both entries survive the merge, so say so rather than
                     letting the resolved YAML look like a duplicate bug. */}
@@ -436,17 +443,12 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
                   </button>
                   <button
                     type="button"
-                    onClick={onBuild}
-                    disabled={!credentialsReady || busy || buildInProgress}
+                    onClick={onComposeClick}
+                    disabled={busy || buildInProgress}
                     className="rounded-md bg-[#0071c5] px-5 py-2.5 font-semibold text-white hover:bg-[#00285a] disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {busy ? 'Starting…' : buildInProgress ? 'Composing…' : 'Compose Image'}
                   </button>
-                  {!credentialsReady && !buildInProgress && (
-                    <span className="text-sm text-amber-700">
-                      Set a password or add an SSH public key to compose.
-                    </span>
-                  )}
                   {buildInProgress && (
                     <span className="text-sm text-amber-600">
                       A compose is already in progress. Switch to the Compose Image tab to monitor it.
@@ -487,6 +489,18 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
           )}
         </div>
       </div>
+      <CredentialsDialog
+        open={credentialsOpen}
+        requirements={requirements}
+        credentials={credentials}
+        onChange={setCredentials}
+        credentialsReady={credentialsReady}
+        busy={busy}
+        buildInProgress={buildInProgress}
+        error={error}
+        onCancel={() => setCredentialsOpen(false)}
+        onCompose={() => void onBuild()}
+      />
     </div>
   )
 }

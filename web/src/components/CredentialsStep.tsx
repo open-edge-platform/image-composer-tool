@@ -13,6 +13,7 @@ interface CredentialsStepProps {
   credentials: CredentialInput[]
   onChange: (credentials: CredentialInput[]) => void
   disabled?: boolean
+  showRequiredHeading?: boolean
 }
 
 // unmet returns the required accounts that still need a login — the ones
@@ -62,6 +63,7 @@ export function CredentialsStep({
   credentials,
   onChange,
   disabled,
+  showRequiredHeading = true,
 }: CredentialsStepProps) {
   const required = unmet(requirements)
   const offered = optional(requirements)
@@ -80,7 +82,9 @@ export function CredentialsStep({
     <>
       {required.length > 0 && (
         <section className="mb-4 rounded-md border border-amber-300 bg-amber-50 p-4">
-          <h3 className="mb-1 text-sm font-semibold text-[#00285a]">Credentials required</h3>
+          {showRequiredHeading && (
+            <h3 className="mb-1 text-sm font-semibold text-[#00285a]">Credentials required</h3>
+          )}
           <p className="mb-3 text-xs text-slate-600">
             This image creates an administrator account with no login of its own. Set a password or
             add an SSH public key so the account is not left with an empty password. Either option
