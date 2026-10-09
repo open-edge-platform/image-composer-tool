@@ -42,6 +42,10 @@ func (e *wireFDEBootTestExecutor) ExecCmdWithInput(inputStr string, cmdStr strin
 	return e.ExecCmd(cmdStr, sudo, chrootPath, envVal)
 }
 
+func (e *wireFDEBootTestExecutor) ExecCmdSilentWithInput(inputStr string, cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error) {
+	return e.ExecCmd(cmdStr, sudo, chrootPath, envVal)
+}
+
 func (e *wireFDEBootTestExecutor) dispatch(cmdStr string) (output string, handled bool, err error) {
 	switch {
 	case strings.Contains(cmdStr, "cryptsetup status"):

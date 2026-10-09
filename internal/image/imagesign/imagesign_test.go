@@ -59,6 +59,10 @@ func (c *CustomMockExecutor) ExecCmdWithInput(inputStr string, cmdStr string, su
 	return c.ExecCmd(cmdStr, sudo, chrootPath, envVal)
 }
 
+func (c *CustomMockExecutor) ExecCmdSilentWithInput(inputStr string, cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error) {
+	return c.ExecCmd(cmdStr, sudo, chrootPath, envVal)
+}
+
 func TestSignImage_ImmutabilityDisabled(t *testing.T) {
 	installRoot := t.TempDir()
 

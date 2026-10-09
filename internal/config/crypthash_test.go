@@ -61,3 +61,47 @@ func TestIsCryptHash(t *testing.T) {
 		}
 	}
 }
+
+func TestHashPasswordForHost(t *testing.T) {
+	t.Parallel()
+	t.Run("hashes plaintext", func(t *testing.T) {
+		t.Parallel()
+		got, err := HashPasswordForHost("correct horse battery staple")
+		if err != nil {
+			t.Fatalf("HashPasswordForHost() error = %v", err)
+		}
+		if !IsCryptHash(got) {
+			t.Errorf("HashPasswordForHost() = %q, want a crypt hash", got)
+		}
+		if strings.Contains(got, "correct horse battery staple") {
+			t.Errorf("HashPasswordForHost() leaked the plaintext: %q", got)
+		}
+	})
+
+	t.Run("passes an existing hash through unchanged", func(t *testing.T) {
+		t.Parallel()
+		got, err := HashPasswordForHost(testSHA512Hash)
+		if err != nil {
+			t.Fatalf("HashPasswordForHost() error = %v", err)
+		}
+		if got != testSHA512Hash {
+			t.Errorf("HashPasswordForHost() = %q, want %q unchanged", got, testSHA512Hash)
+		}
+	})
+
+	t.Run("rejects empty password", func(t *testing.T) {
+		t.Parallel()
+		if _, err := HashPasswordForHost(""); err == nil {
+			t.Error("HashPasswordForHost(\"\") error = nil, want error")
+		}
+	})
+
+	t.Run("rejects embedded line breaks", func(t *testing.T) {
+		t.Parallel()
+		for _, in := range []string{"pass\nword", "pass\rword", "pass\x00word"} {
+			if _, err := HashPasswordForHost(in); err == nil {
+				t.Errorf("HashPasswordForHost(%q) error = nil, want error", in)
+			}
+		}
+	})
+}

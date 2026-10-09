@@ -120,6 +120,10 @@ func (r *recordingExecutor) ExecCmdWithInput(_ string, cmdStr string, sudo bool,
 	return r.ExecCmd(cmdStr, sudo, chrootPath, envVal)
 }
 
+func (r *recordingExecutor) ExecCmdSilentWithInput(_ string, cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error) {
+	return r.ExecCmd(cmdStr, sudo, chrootPath, envVal)
+}
+
 // TestAddImageConfigs_PreservesMultilineScriptWithMetacharacters is a
 // regression test for using strconv.Quote instead of shell.QuoteArg to embed
 // configInfo.Cmd: strconv.Quote both lets bash prematurely expand

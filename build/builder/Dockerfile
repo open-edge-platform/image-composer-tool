@@ -72,6 +72,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     \
     # crypto / integrity
     cryptsetup-bin \
+    openssl \
     \
     # bootloader
     grub-common \
