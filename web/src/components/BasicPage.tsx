@@ -121,52 +121,93 @@ export function BasicPage({
       </p>
 
       <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
-        <div className="w-full max-w-xl rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <Select
-            label="Use Case"
-            placeholder="-- Select Use Case --"
-            value={selection.vertical}
-            options={opts.verticals}
-            onChange={(v) => setSel('vertical', v)}
-          />
-          <Select
-            label="SKU"
-            placeholder="-- Select SKU --"
-            value={selection.sku}
-            options={opts.skus}
-            disabled={!selection.vertical}
-            onChange={(v) => setSel('sku', v)}
-          />
-          <Select
-            label="Platform"
-            placeholder="-- Select Platform --"
-            value={selection.platform}
-            options={opts.platforms}
-            disabled={!selection.sku && opts.skus.length > 0}
-            onChange={(v) => setSel('platform', v)}
-          />
-          <Select
-            label="Operating System"
-            placeholder="-- Select Operating System --"
-            value={selection.os}
-            options={opts.oses}
-            disabled={!selection.platform}
-            onChange={(v) => setSel('os', v)}
-          />
-          {/* Kernel selector appears only when the manifest offers kernel variants
-              (e.g. standard vs real-time) for the current selection. */}
-          {opts.kernels.length > 0 && (
+        {/* Dropdowns and the Compose/Edit actions share this column so the
+            buttons sit right under the selections regardless of how tall the
+            summary + credentials column on the right grows. */}
+        <div className="w-full max-w-xl">
+          <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <Select
-              label="Kernel"
-              placeholder="-- Select Kernel --"
-              value={selection.kernel}
-              options={opts.kernels}
-              disabled={!selection.os}
-              onChange={(v) => setSel('kernel', v)}
+              label="Use Case"
+              placeholder="-- Select Use Case --"
+              value={selection.vertical}
+              options={opts.verticals}
+              onChange={(v) => setSel('vertical', v)}
             />
-          )}
-          {/* Image Type (raw/iso) is auto-selected from the manifest for the
-              chosen combination and not shown in Basic mode. */}
+            <Select
+              label="SKU"
+              placeholder="-- Select SKU --"
+              value={selection.sku}
+              options={opts.skus}
+              disabled={!selection.vertical}
+              onChange={(v) => setSel('sku', v)}
+            />
+            <Select
+              label="Platform"
+              placeholder="-- Select Platform --"
+              value={selection.platform}
+              options={opts.platforms}
+              disabled={!selection.sku && opts.skus.length > 0}
+              onChange={(v) => setSel('platform', v)}
+            />
+            <Select
+              label="Operating System"
+              placeholder="-- Select Operating System --"
+              value={selection.os}
+              options={opts.oses}
+              disabled={!selection.platform}
+              onChange={(v) => setSel('os', v)}
+            />
+            {/* Kernel selector appears only when the manifest offers kernel variants
+                (e.g. standard vs real-time) for the current selection. */}
+            {opts.kernels.length > 0 && (
+              <Select
+                label="Kernel"
+                placeholder="-- Select Kernel --"
+                value={selection.kernel}
+                options={opts.kernels}
+                disabled={!selection.os}
+                onChange={(v) => setSel('kernel', v)}
+              />
+            )}
+            {/* Image Type (raw/iso) is auto-selected from the manifest for the
+                chosen combination and not shown in Basic mode. */}
+          </div>
+
+          {error && <div className="mt-3 rounded bg-red-50 p-3 text-sm text-red-700">{error}</div>}
+
+          <div className="mt-6 flex flex-wrap items-center gap-3">
+            <button
+              className="rounded-md bg-[#0071c5] px-5 py-2.5 font-semibold text-white hover:bg-[#00285a] disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={!complete || !credentialsReady || busy || buildInProgress}
+              onClick={onBuild}
+            >
+              {busy ? 'Starting…' : buildInProgress ? 'Composing…' : 'Compose Image'}
+            </button>
+            {/* Deliberately not gated on `complete` — the prototype lets you open
+                Advanced at any point and finish the selection there. */}
+            <button
+              type="button"
+              className="rounded-md border border-slate-300 bg-white px-5 py-2.5 font-semibold text-[#00285a] hover:border-slate-400 hover:bg-slate-50"
+              onClick={onEditInAdvanced}
+            >
+              Edit in Advanced
+            </button>
+            {!complete && !buildInProgress && (
+              <span className="text-sm text-slate-500">
+                Complete all selections to compose.
+              </span>
+            )}
+            {complete && !credentialsReady && !buildInProgress && (
+              <span className="text-sm text-amber-700">
+                Set a password or add an SSH public key to compose.
+              </span>
+            )}
+            {buildInProgress && (
+              <span className="text-sm text-amber-600">
+                A compose is already in progress. Switch to the Compose Image tab to monitor it.
+              </span>
+            )}
+          </div>
         </div>
 
         {/* Image configuration summary — always reflects the current selection
@@ -215,42 +256,6 @@ export function BasicPage({
               Resolving template…
             </div>
           </div>
-        )}
-      </div>
-
-      {error && <div className="mt-3 rounded bg-red-50 p-3 text-sm text-red-700">{error}</div>}
-
-      <div className="mt-6 flex flex-wrap items-center gap-3">
-        <button
-          className="rounded-md bg-[#0071c5] px-5 py-2.5 font-semibold text-white hover:bg-[#00285a] disabled:cursor-not-allowed disabled:opacity-50"
-          disabled={!complete || !credentialsReady || busy || buildInProgress}
-          onClick={onBuild}
-        >
-          {busy ? 'Starting…' : buildInProgress ? 'Composing…' : 'Compose Image'}
-        </button>
-        {/* Deliberately not gated on `complete` — the prototype lets you open
-            Advanced at any point and finish the selection there. */}
-        <button
-          type="button"
-          className="rounded-md border border-slate-300 bg-white px-5 py-2.5 font-semibold text-[#00285a] hover:border-slate-400 hover:bg-slate-50"
-          onClick={onEditInAdvanced}
-        >
-          Edit in Advanced
-        </button>
-        {!complete && !buildInProgress && (
-          <span className="text-sm text-slate-500">
-            Complete all selections to compose.
-          </span>
-        )}
-        {complete && !credentialsReady && !buildInProgress && (
-          <span className="text-sm text-amber-700">
-            Set a password or add an SSH public key to compose.
-          </span>
-        )}
-        {buildInProgress && (
-          <span className="text-sm text-amber-600">
-            A compose is already in progress. Switch to the Compose Image tab to monitor it.
-          </span>
         )}
       </div>
     </div>
