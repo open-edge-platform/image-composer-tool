@@ -1,0 +1,13 @@
+# Sample cloud-init network-config (version 2) for the Base Platform Image.
+# DHCP on every wired interface, identified to the DHCP server by its MAC
+# address. Without `dhcp-identifier: mac` netplan/systemd-networkd sends a
+# DUID derived from /etc/machine-id, which is generated afresh on every
+# install, so a lab DHCP server holding a static reservation for the board's
+# MAC treats each re-flash as a new client and hands out a pool address.
+version: 2
+ethernets:
+  wired:
+    match:
+      name: "en*"
+    dhcp4: true
+    dhcp-identifier: mac
