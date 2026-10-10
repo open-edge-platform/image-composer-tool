@@ -236,7 +236,9 @@ func newMetadataFixture(t *testing.T, cacheChecksum string) string {
 		cacheChecksum = checksum
 	}
 	cachePkgs := []ospackage.PackageInfo{{Name: "cached-package", Version: "9.9.9", Type: "deb"}}
-	if err := saveParsedPackageCache(filepath.Join(buildPath, "packages.parsed.json"), cacheChecksum, cachePkgs); err != nil {
+	if err := saveParsedPackageCache(
+		filepath.Join(buildPath, "packages.parsed.json"), cacheChecksum, nil, cachePkgs,
+	); err != nil {
 		t.Fatalf("failed to write parsed package cache: %v", err)
 	}
 
@@ -271,6 +273,51 @@ func parseFixtureMetadata(t *testing.T, baseURL, buildPath string) []ospackage.P
 	return pkgs
 }
 
+// TestParseRepositoryMetadata_CacheIsKeyedByPackageFilter guards the parse
+// cache against being reused under a different allowPackages filter. The cache
+// stores the already-filtered package list, so a hit written under one filter
+// must not answer a request made with another, even though the repository's
+// Packages checksum is unchanged.
+func TestParseRepositoryMetadata_CacheIsKeyedByPackageFilter(t *testing.T) {
+	parse := func(t *testing.T, buildPath string, filter []string) []ospackage.PackageInfo {
+		t.Helper()
+		pkgs, err := ParseRepositoryMetadata("http://example.invalid:1/", "Packages.gz", "Release",
+			"Release.gpg", "[trusted=yes]", buildPath, "amd64", filter)
+		if err != nil {
+			t.Fatalf("ParseRepositoryMetadata returned error: %v", err)
+		}
+		return pkgs
+	}
+
+	t.Run("same filter reuses the cache", func(t *testing.T) {
+		buildPath := newMetadataFixture(t, "")
+		pkgs := parse(t, buildPath, nil)
+		if len(pkgs) != 1 || pkgs[0].Name != "cached-package" {
+			t.Fatalf("expected the cached package for an unchanged filter, got %+v", pkgs)
+		}
+	})
+
+	t.Run("different filter ignores the cache", func(t *testing.T) {
+		buildPath := newMetadataFixture(t, "")
+		pkgs := parse(t, buildPath, []string{"live-package"})
+		if len(pkgs) != 1 || pkgs[0].Name != "live-package" {
+			t.Fatalf("expected a fresh parse for a changed filter, got %+v", pkgs)
+		}
+	})
+
+	t.Run("the fresh parse is cached under its own filter", func(t *testing.T) {
+		buildPath := newMetadataFixture(t, "")
+		_ = parse(t, buildPath, []string{"live-package"})
+		cache, err := loadParsedPackageCache(filepath.Join(buildPath, "packages.parsed.json"))
+		if err != nil {
+			t.Fatalf("failed to reload parse cache: %v", err)
+		}
+		if !sameFilter(cache.Filter, []string{"live-package"}) {
+			t.Fatalf("cache recorded filter %v, want [live-package]", cache.Filter)
+		}
+	})
+}
+
 // TestFilenameWithLiteralPercentRoundTrip ties getFullUrl and debFileName
 // together: the URL requested for a Filename with a literal "%" must map back
 // to that same Filename's basename.
@@ -284,6 +331,33 @@ func TestFilenameWithLiteralPercentRoundTrip(t *testing.T) {
 	}
 	if got, want := debFileName(u), filepath.Base(filename); got != want {
 		t.Errorf("debFileName(getFullUrl(%q)) = %q, want %q", filename, got, want)
+	}
+}
+
+func TestSameFilter(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		a, b []string
+		want bool
+	}{
+		{"both empty", nil, []string{}, true},
+		{"same order", []string{"a", "b"}, []string{"a", "b"}, true},
+		{"different order", []string{"a", "b"}, []string{"b", "a"}, true},
+		{"duplicates ignored", []string{"a", "a"}, []string{"a"}, true},
+		{"subset", []string{"a"}, []string{"a", "b"}, false},
+		{"empty vs filtered", nil, []string{"a"}, false},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := sameFilter(tt.a, tt.b); got != tt.want {
+				t.Errorf("sameFilter(%v, %v) = %v, want %v", tt.a, tt.b, got, tt.want)
+			}
+		})
 	}
 }
 
