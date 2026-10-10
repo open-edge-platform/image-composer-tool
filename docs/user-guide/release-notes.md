@@ -139,6 +139,8 @@
 
 - **Fixed**: a package whose `Filename` in the repository index contains a literal `%` could not be downloaded. aptly, for example, lists `edge-gfx-dkms_7.0-260928T031409Z%2B1_all.deb` for a `+` in a version, and stores the file under exactly that name. ICT requested the name unchanged, so the server decoded `%2B` to `+` and answered 404, and the build failed after dependency resolution. ICT now percent-encodes the `%` the way `apt` does before requesting the file. Names with a plain `+`, and every other URL, are unchanged.
 
+- **Fixed**: changing a repository's `allowPackages` list had no effect until the build cache was deleted. The parsed package-metadata cache was keyed only by the repository index checksum, yet it stores the list already filtered by `allowPackages`, so a cache written under one allow list was reused under another for as long as the repository was unchanged. An allow list added after an unfiltered build was silently ignored. The cache now records the filter it was parsed with and is reused only when it matches; caches written by earlier versions are discarded and re-parsed once.
+
 ## Version 2026.2
 
 **Release Date**: September 9, 2026
