@@ -134,6 +134,18 @@ func TestGetFullUrl(t *testing.T) {
 			expected: "http://example.com/pool/main/curl.deb",
 		},
 		{
+			name:     "literal percent in a Filename is escaped like apt does",
+			filePath: "pool/unstable/e/edge-gfx-dkms/edge-gfx-dkms_7.0-260928T031409Z%2B1_all.deb",
+			baseUrl:  "http://example.com/repo",
+			expected: "http://example.com/repo/pool/unstable/e/edge-gfx-dkms/edge-gfx-dkms_7.0-260928T031409Z%252B1_all.deb",
+		},
+		{
+			name:     "plus sign in a Filename is left unchanged",
+			filePath: "pool/universe/o/onednn/libdnnl3.6_3.9.1+ds-2_amd64.deb",
+			baseUrl:  "http://example.com",
+			expected: "http://example.com/pool/universe/o/onednn/libdnnl3.6_3.9.1+ds-2_amd64.deb",
+		},
+		{
 			name:     "base URL trailing slash is trimmed before joining",
 			filePath: "pool/main/curl.deb",
 			baseUrl:  "http://example.com/",
@@ -257,6 +269,22 @@ func parseFixtureMetadata(t *testing.T, baseURL, buildPath string) []ospackage.P
 		t.Fatalf("expected at least one package, got none")
 	}
 	return pkgs
+}
+
+// TestFilenameWithLiteralPercentRoundTrip ties getFullUrl and debFileName
+// together: the URL requested for a Filename with a literal "%" must map back
+// to that same Filename's basename.
+func TestFilenameWithLiteralPercentRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	const filename = "pool/unstable/e/edge-gfx-dkms/edge-gfx-dkms_7.0-260928T031409Z%2B1_all.deb"
+	u, err := getFullUrl(filename, "http://example.com/repo")
+	if err != nil {
+		t.Fatalf("getFullUrl: %v", err)
+	}
+	if got, want := debFileName(u), filepath.Base(filename); got != want {
+		t.Errorf("debFileName(getFullUrl(%q)) = %q, want %q", filename, got, want)
+	}
 }
 
 // TestParseRepositoryMetadata_InstalledSize confirms the Debian Installed-Size

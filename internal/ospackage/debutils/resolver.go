@@ -1403,6 +1403,13 @@ func getFullUrl(filePath string, baseUrl string) (string, error) {
 		return filePath, nil
 	}
 
+	// A Filename field is a literal path, not an already-encoded URL path.
+	// Some repositories (e.g. aptly) publish names containing a literal "%"
+	// such as "pkg_1.0%2B1_all.deb"; apt percent-encodes the "%" when it
+	// builds the request, so do the same or the server decodes "%2B" to "+"
+	// and answers 404 for a file that is actually named with "%2B".
+	filePath = strings.ReplaceAll(filePath, "%", "%25")
+
 	// If not, construct the full URL using the base URL
 	fullURL := fmt.Sprintf("%s/%s", strings.TrimSuffix(baseUrl, "/"), filePath)
 	return fullURL, nil
