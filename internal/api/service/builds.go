@@ -819,7 +819,14 @@ func (s *Service) buildCommand(templatePath, workDir, cacheDir string) (name str
 	ictArgs := []string{"build", templatePath, "--work-dir", workDir, "--cache-dir", cacheDir}
 	if s.cfg.Sudo {
 		// -n: never prompt; fail fast if passwordless sudo isn't configured.
-		return "sudo", append([]string{"-n", s.cfg.ICTBinary}, ictArgs...)
+		// Set proxy bypass variables after sudo, which may replace the server's
+		// sanitized values with machine-level defaults.
+		return "sudo", append([]string{
+			"-n", "env",
+			"NO_PROXY=" + os.Getenv("NO_PROXY"),
+			"no_proxy=" + os.Getenv("no_proxy"),
+			s.cfg.ICTBinary,
+		}, ictArgs...)
 	}
 	return s.cfg.ICTBinary, ictArgs
 }

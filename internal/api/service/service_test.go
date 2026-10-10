@@ -355,6 +355,9 @@ func TestFinishFailure(t *testing.T) {
 // --- build command / template resolution (no real exec) ---
 
 func TestBuildCommand(t *testing.T) {
+	t.Setenv("NO_PROXY", "pgesclu22-02.png.intel.com,localhost,127.0.0.1")
+	t.Setenv("no_proxy", "pgesclu22-02.png.intel.com,localhost,127.0.0.1")
+
 	s := &Service{cfg: Config{ICTBinary: "/opt/ict"}}
 	name, args := s.buildCommand("/tmp/t.yml", "/tmp/wd", "/tmp/cd")
 	if name != "/opt/ict" || args[0] != "build" || args[1] != "/tmp/t.yml" {
@@ -366,7 +369,13 @@ func TestBuildCommand(t *testing.T) {
 
 	s.cfg.Sudo = true
 	name, args = s.buildCommand("/tmp/t.yml", "/tmp/wd", "/tmp/cd")
-	if name != "sudo" || args[0] != "-n" || args[1] != "/opt/ict" || args[2] != "build" {
+	wantPrefix := []string{
+		"-n", "env",
+		"NO_PROXY=pgesclu22-02.png.intel.com,localhost,127.0.0.1",
+		"no_proxy=pgesclu22-02.png.intel.com,localhost,127.0.0.1",
+		"/opt/ict", "build", "/tmp/t.yml",
+	}
+	if name != "sudo" || !slices.Equal(args[:len(wantPrefix)], wantPrefix) {
 		t.Fatalf("sudo cmd = %s %v", name, args)
 	}
 }

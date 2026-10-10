@@ -91,6 +91,29 @@ if [[ -f build/webui-serve.pid ]]; then
 fi
 
 echo "==> Starting server: ./build/image-composer-tool ${SERVE_ARGS[*]}"
+# Keep the internal EdgePack test repository direct while routing public Intel
+# repository requests through the configured HTTPS proxy.
+PUBLIC_REPO_HOST="apt.repos.intel.com"
+NO_PROXY_ENTRIES="${NO_PROXY:-},${no_proxy:-}"
+NO_PROXY=""
+IFS=',' read -r -a proxy_bypass_entries <<< "$NO_PROXY_ENTRIES"
+for proxy_bypass_entry in "${proxy_bypass_entries[@]}"; do
+    proxy_bypass_entry="${proxy_bypass_entry//[[:space:]]/}"
+    proxy_bypass_entry="${proxy_bypass_entry,,}"
+    normalized_bypass="${proxy_bypass_entry#\*.}"
+    normalized_bypass="${normalized_bypass#.}"
+    normalized_bypass="${normalized_bypass%:443}"
+    if [[ "$normalized_bypass" == "*" ||
+          "$PUBLIC_REPO_HOST" == "$normalized_bypass" ||
+          "$PUBLIC_REPO_HOST" == *".${normalized_bypass}" ]]; then
+        continue
+    fi
+    [[ -n "$proxy_bypass_entry" ]] || continue
+    NO_PROXY="${NO_PROXY:+${NO_PROXY},}${proxy_bypass_entry}"
+done
+NO_PROXY="${NO_PROXY:+${NO_PROXY},}pgesclu22-02.png.intel.com,localhost,127.0.0.1"
+export NO_PROXY
+export no_proxy="$NO_PROXY"
 setsid ./build/image-composer-tool "${SERVE_ARGS[@]}" >build/webui-serve.log 2>&1 &
 PID=$!
 echo "$PID" >build/webui-serve.pid
