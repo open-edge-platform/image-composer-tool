@@ -137,6 +137,8 @@
 
 - **Changed**: when package installation or DKMS module builds fail in a DKMS-enabled image, ICT preserves available `make.log` files before cleaning up the chroot. Logs are saved under `imagebuild/<systemConfigName>/dkms-logs/`, retaining their DKMS subdirectory paths.
 
+- **Fixed**: a package whose `Filename` in the repository index contains a literal `%` could not be downloaded. aptly, for example, lists `edge-gfx-dkms_7.0-260928T031409Z%2B1_all.deb` for a `+` in a version, and stores the file under exactly that name. ICT requested the name unchanged, so the server decoded `%2B` to `+` and answered 404, and the build failed after dependency resolution. ICT now percent-encodes the `%` the way `apt` does before requesting the file. Names with a plain `+`, and every other URL, are unchanged.
+
 ## Version 2026.2
 
 **Release Date**: September 9, 2026
