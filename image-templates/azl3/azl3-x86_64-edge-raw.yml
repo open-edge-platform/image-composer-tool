@@ -58,18 +58,27 @@ systemConfig:
     # secureBootDBCer: "<SECURE_BOOT_DB_CER_PATH>"
 
   # User Configuration
+  #
+  # Each sample user below points at a throwaway, no-such-private-key sample
+  # public key (image-templates/additionalfiles/azl3-sample/sample-ci.pub) so
+  # this template builds without an empty-password account; swap in a real
+  # password/key before using any of these users outside of CI.
   users:
     # Example: Pre-hashed password (production approach)
     - name: admin
       password: ""               # leave empty in sample
       # password: "<HASHED_PASSWORD>"  # Uncomment and replace in real config
       groups: ["<REQUIRED_GROUP>"]     # e.g., "wheel" for admin, "users" for non-admin
+      sshAuthorizedKeysFiles:
+        - additionalfiles/azl3-sample/sample-ci.pub
 
     # Example: Plain text with algorithm (development/testing only)
     - name: testuser
       password: ""               # Do not commit real plaintext passwords
       # password: "<PLAIN_PASSWORD>"
       hash_algo: "sha512"        # or org-approved algorithm
+      sshAuthorizedKeysFiles:
+        - additionalfiles/azl3-sample/sample-ci.pub
 
     # Example: Plain text with different algorithm (development/testing only)
     - name: secureuser
@@ -77,6 +86,8 @@ systemConfig:
       # password: "<PLAIN_PASSWORD>"
       hash_algo: "bcrypt"        # specify cost in production if supported
       # sudo: true                # Uncomment to grant admin rights
+      sshAuthorizedKeysFiles:
+        - additionalfiles/azl3-sample/sample-ci.pub
 
   # Package Configuration
   packages:
