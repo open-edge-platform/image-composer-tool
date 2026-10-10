@@ -395,7 +395,7 @@ func isDebPackageCacheOutdated(requiredPackages []string, cacheDir string) (bool
 		if pkg.Name == "" || pkg.URL == "" {
 			continue
 		}
-		base := filepath.Base(pkg.URL)
+		base := debFileName(pkg.URL)
 		if _, ok := cachedFileSet[base]; !ok {
 			continue
 		}
@@ -519,7 +519,7 @@ func debMetadataInfosByCachedFile() map[string]ospackage.PackageInfo {
 		if pkg.Name == "" || pkg.URL == "" {
 			continue
 		}
-		byFile[filepath.Base(pkg.URL)] = pkg
+		byFile[debFileName(pkg.URL)] = pkg
 	}
 	return byFile
 }
@@ -1170,7 +1170,7 @@ func Resolve(req []ospackage.PackageInfo, all []ospackage.PackageInfo) ([]ospack
 	log.Infof("need a total of %d DEBs (including dependencies)", len(needed))
 
 	for _, pkg := range needed {
-		log.Debugf("%s %s -> %s", pkg.Name, pkg.Version, filepath.Base(pkg.URL))
+		log.Debugf("%s %s -> %s", pkg.Name, pkg.Version, debFileName(pkg.URL))
 	}
 
 	// Adding full packages to the pkgChecksum list
@@ -1183,7 +1183,7 @@ func Resolve(req []ospackage.PackageInfo, all []ospackage.PackageInfo) ([]ospack
 			}
 		}
 		PkgChecksum = append(PkgChecksum, pkgChecksum{
-			Name:     filepath.Base(pkg.URL),
+			Name:     debFileName(pkg.URL),
 			Checksum: sha256,
 		})
 	}
@@ -1476,7 +1476,7 @@ func downloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSour
 	urls := make([]string, len(sorted_pkgs))
 	for i, pkg := range sorted_pkgs {
 		urls[i] = pkg.URL
-		downloadPkgList = append(downloadPkgList, filepath.Base(pkg.URL))
+		downloadPkgList = append(downloadPkgList, debFileName(pkg.URL))
 	}
 
 	// Ensure dest directory exists
