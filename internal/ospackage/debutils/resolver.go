@@ -1748,7 +1748,7 @@ func ResolveTopPackageConflicts(want string, all []ospackage.PackageInfo) (ospac
 	isKernelPackage := isKernelPackageRequest(want)
 	for _, pi := range all {
 		// 1) exact name and version matched with .deb filenamae, e.g. acct_7.6.4-5+b1_amd64
-		if filepath.Base(pi.URL) == want+".deb" {
+		if debFileName(pi.URL) == want+".deb" {
 			candidates = append(candidates, pi)
 			break
 		}

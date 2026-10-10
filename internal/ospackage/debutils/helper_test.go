@@ -746,3 +746,36 @@ func TestPrepareLocalRepositoryFilesLocalDirCopy(t *testing.T) {
 		t.Fatal("readme.txt should not have been copied into repo dir")
 	}
 }
+
+// TestDebFileName pins the cache filename derived from a package URL to the
+// one the downloader writes (the URL-decoded path), so a Filename containing a
+// literal "%" is found again after it has been fetched.
+func TestDebFileName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		url  string
+		want string
+	}{
+		{"plain", "http://example.com/pool/main/c/curl/curl_8.5.0_amd64.deb", "curl_8.5.0_amd64.deb"},
+		{
+			"plus sign",
+			"http://example.com/pool/universe/o/onednn/libdnnl3.6_3.9.1+ds-2_amd64.deb",
+			"libdnnl3.6_3.9.1+ds-2_amd64.deb",
+		},
+		{"escaped percent round-trips to the on-disk name",
+			"http://example.com/pool/e/edge-gfx-dkms/edge-gfx-dkms_7.0-260928T031409Z%252B1_all.deb",
+			"edge-gfx-dkms_7.0-260928T031409Z%2B1_all.deb"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := debFileName(tt.url); got != tt.want {
+				t.Errorf("debFileName(%q) = %q, want %q", tt.url, got, tt.want)
+			}
+		})
+	}
+}
