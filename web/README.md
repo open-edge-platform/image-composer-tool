@@ -82,10 +82,17 @@ arbitrary root-owned files. Pass
 <summary>Equivalent rules, for reference (what the generator emits)</summary>
 
 ```
-<svc-user> ALL=(root) NOPASSWD: /abs/path/image-composer-tool build *
+Cmnd_Alias ICT_BUILD = /abs/path/image-composer-tool build *
+Defaults!ICT_BUILD env_keep += "NO_PROXY no_proxy"
+<svc-user> ALL=(root) NOPASSWD: ICT_BUILD
 <svc-user> ALL=(root) NOPASSWD: /usr/bin/kill -TERM -[0-9]*
 <svc-user> ALL=(root) NOPASSWD: /usr/bin/cat /abs/path/webui-workspace/builds/*
 ```
+
+The build rule is named via a `Cmnd_Alias` so the scoped `env_keep` (needed to
+forward the server's sanitized `NO_PROXY`/`no_proxy` into privileged builds, see
+the release notes) applies to that command only — not to `kill` or `cat`, and
+not sudo's default `env_keep` for anything else.
 
 </details>
 

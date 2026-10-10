@@ -370,7 +370,7 @@ func TestBuildCommand(t *testing.T) {
 	s.cfg.Sudo = true
 	name, args = s.buildCommand("/tmp/t.yml", "/tmp/wd", "/tmp/cd")
 	wantPrefix := []string{
-		"-n", "env",
+		"-n",
 		"NO_PROXY=pgesclu22-02.png.intel.com,localhost,127.0.0.1",
 		"no_proxy=pgesclu22-02.png.intel.com,localhost,127.0.0.1",
 		"/opt/ict", "build", "/tmp/t.yml",
