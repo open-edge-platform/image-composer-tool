@@ -172,6 +172,9 @@ func parseSecurePath(out string) []string {
 //     scoped to the <work-dir>/builds subtree — not any path on the host
 //
 // Each is scoped to a single command; the service user gets no blanket sudo.
+// The build rule is named via a Cmnd_Alias so a command-scoped `env_keep` can
+// grant it NO_PROXY/no_proxy only — not the kill or cat rules, and not sudo's
+// default env_keep for anything else.
 func (s SudoersSpec) Render() string {
 	var b strings.Builder
 	b.WriteString("# image-composer-tool web UI (serve --sudo) — scoped passwordless sudo.\n")
@@ -184,7 +187,11 @@ func (s SudoersSpec) Render() string {
 	b.WriteString("# this deliberately, or run the server as root on an isolated build host\n")
 	b.WriteString("# (no rules needed) instead. See web/README.md.\n")
 	b.WriteString("#\n")
-	fmt.Fprintf(&b, "%s ALL=(root) NOPASSWD: %s build *\n", s.User, s.ICTPath)
+	fmt.Fprintf(&b, "Cmnd_Alias ICT_BUILD = %s build *\n", s.ICTPath)
+	// Lets the server forward its sanitized NO_PROXY/no_proxy into the build
+	// without granting SETENV (or any other env var) for this or any other rule.
+	b.WriteString("Defaults!ICT_BUILD env_keep += \"NO_PROXY no_proxy\"\n")
+	fmt.Fprintf(&b, "%s ALL=(root) NOPASSWD: ICT_BUILD\n", s.User)
 	fmt.Fprintf(&b, "%s ALL=(root) NOPASSWD: %s -TERM -[0-9]*\n", s.User, s.KillCmd)
 	// cat is scoped to the builds subtree (sudo's `*` spans '/'), so the service
 	// user can read build artifacts but not arbitrary root-owned files.

@@ -355,6 +355,9 @@ func TestFinishFailure(t *testing.T) {
 // --- build command / template resolution (no real exec) ---
 
 func TestBuildCommand(t *testing.T) {
+	t.Setenv("NO_PROXY", "internal.example.com,localhost,127.0.0.1")
+	t.Setenv("no_proxy", "internal.example.com,localhost,127.0.0.1")
+
 	s := &Service{cfg: Config{ICTBinary: "/opt/ict"}}
 	name, args := s.buildCommand("/tmp/t.yml", "/tmp/wd", "/tmp/cd")
 	if name != "/opt/ict" || args[0] != "build" || args[1] != "/tmp/t.yml" {
@@ -366,8 +369,31 @@ func TestBuildCommand(t *testing.T) {
 
 	s.cfg.Sudo = true
 	name, args = s.buildCommand("/tmp/t.yml", "/tmp/wd", "/tmp/cd")
-	if name != "sudo" || args[0] != "-n" || args[1] != "/opt/ict" || args[2] != "build" {
+	wantPrefix := []string{
+		"-n",
+		"NO_PROXY=internal.example.com,localhost,127.0.0.1",
+		"no_proxy=internal.example.com,localhost,127.0.0.1",
+		"/opt/ict", "build", "/tmp/t.yml",
+	}
+	if name != "sudo" || !slices.Equal(args[:len(wantPrefix)], wantPrefix) {
 		t.Fatalf("sudo cmd = %s %v", name, args)
+	}
+}
+
+// Hosts with no proxy configured must not gain an always-empty NO_PROXY=/
+// no_proxy= on the sudo command line: sudo rejects any NAME=value assignment
+// not covered by its sudoers env_keep rule, so an unconditional empty
+// assignment would break --sudo builds on every install that hasn't re-run
+// the sudoers generator for this change.
+func TestBuildCommandSudoOmitsEmptyProxyVars(t *testing.T) {
+	t.Setenv("NO_PROXY", "")
+	t.Setenv("no_proxy", "")
+
+	s := &Service{cfg: Config{ICTBinary: "/opt/ict", Sudo: true}}
+	name, args := s.buildCommand("/tmp/t.yml", "/tmp/wd", "/tmp/cd")
+	want := []string{"-n", "/opt/ict", "build", "/tmp/t.yml"}
+	if name != "sudo" || !slices.Equal(args[:len(want)], want) {
+		t.Fatalf("sudo cmd with no proxy configured = %s %v", name, args)
 	}
 }
 

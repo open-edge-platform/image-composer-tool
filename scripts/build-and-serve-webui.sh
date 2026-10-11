@@ -15,6 +15,11 @@
 #   --host HOST   Bind address (default: 127.0.0.1)
 #   --no-sudo     Skip --sudo (server will not be able to run real composes)
 #
+# Environment:
+#   EXTRA_NO_PROXY   Extra comma-separated hosts to always reach direct (e.g. an
+#                    internal test repository), appended to the normalized
+#                    NO_PROXY/no_proxy this script exports (see below).
+#
 # Any server left running from a previous invocation (tracked via
 # build/webui-serve.pid) is stopped right before the new one starts, so
 # re-running this script doesn't fail with "address already in use".
@@ -91,6 +96,37 @@ if [[ -f build/webui-serve.pid ]]; then
 fi
 
 echo "==> Starting server: ./build/image-composer-tool ${SERVE_ARGS[*]}"
+# Keep the public Intel repository behind the configured HTTPS proxy while
+# preserving every other NO_PROXY entry (including any internal host an
+# operator needs direct, which this script never hard-codes — set
+# EXTRA_NO_PROXY instead). Rebuilds NO_PROXY/no_proxy on every run.
+PUBLIC_REPO_HOST="apt.repos.intel.com"
+NO_PROXY_ENTRIES="${NO_PROXY:-},${no_proxy:-}"
+NO_PROXY=""
+IFS=',' read -r -a proxy_bypass_entries <<< "$NO_PROXY_ENTRIES"
+for proxy_bypass_entry in "${proxy_bypass_entries[@]}"; do
+    proxy_bypass_entry="${proxy_bypass_entry//[[:space:]]/}"
+    proxy_bypass_entry="${proxy_bypass_entry,,}"
+    normalized_bypass="${proxy_bypass_entry#\*.}"
+    normalized_bypass="${normalized_bypass#.}"
+    normalized_bypass="${normalized_bypass%:443}"
+    if [[ "$normalized_bypass" == "*" ||
+          "$PUBLIC_REPO_HOST" == "$normalized_bypass" ||
+          "$PUBLIC_REPO_HOST" == *".${normalized_bypass}" ]]; then
+        [[ -n "$proxy_bypass_entry" ]] && echo "    dropping NO_PROXY entry '${proxy_bypass_entry}': covers ${PUBLIC_REPO_HOST}, which must stay behind the proxy" >&2
+        continue
+    fi
+    [[ -n "$proxy_bypass_entry" ]] || continue
+    NO_PROXY="${NO_PROXY:+${NO_PROXY},}${proxy_bypass_entry}"
+done
+# localhost/127.0.0.1 are always direct regardless of the caller's NO_PROXY.
+NO_PROXY="${NO_PROXY:+${NO_PROXY},}localhost,127.0.0.1"
+# EXTRA_NO_PROXY: operator-supplied bypass hosts (e.g. an internal test
+# repository) this script has no business hard-coding.
+NO_PROXY="${NO_PROXY:+${NO_PROXY},}${EXTRA_NO_PROXY:-}"
+NO_PROXY="${NO_PROXY%,}"
+export NO_PROXY
+export no_proxy="$NO_PROXY"
 setsid ./build/image-composer-tool "${SERVE_ARGS[@]}" >build/webui-serve.log 2>&1 &
 PID=$!
 echo "$PID" >build/webui-serve.pid

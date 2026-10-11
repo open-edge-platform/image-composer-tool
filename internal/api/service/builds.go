@@ -819,7 +819,26 @@ func (s *Service) buildCommand(templatePath, workDir, cacheDir string) (name str
 	ictArgs := []string{"build", templatePath, "--work-dir", workDir, "--cache-dir", cacheDir}
 	if s.cfg.Sudo {
 		// -n: never prompt; fail fast if passwordless sudo isn't configured.
-		return "sudo", append([]string{"-n", s.cfg.ICTBinary}, ictArgs...)
+		// NAME=value assignments ahead of the command set the invoked process's
+		// environment directly; sudo strips them from the command it matches
+		// against the sudoers rule, so this still resolves to the scoped
+		// "<ICTPath> build *" rule (see sudoers.go's env_keep for these two
+		// variables, which is what lets sudo honor them without SETENV).
+		//
+		// Only forward a variable that's actually set: sudo rejects an
+		// unrecognized NAME=value assignment outright ("not allowed to set
+		// the following environment variables") unless the sudoers env_keep
+		// rule for it is installed, so an always-present empty NO_PROXY=
+		// would break every --sudo build on a host that has no proxy
+		// configured and hasn't re-run the sudoers generator for this rule.
+		sudoArgs := []string{"-n"}
+		if v := os.Getenv("NO_PROXY"); v != "" {
+			sudoArgs = append(sudoArgs, "NO_PROXY="+v)
+		}
+		if v := os.Getenv("no_proxy"); v != "" {
+			sudoArgs = append(sudoArgs, "no_proxy="+v)
+		}
+		return "sudo", append(append(sudoArgs, s.cfg.ICTBinary), ictArgs...)
 	}
 	return s.cfg.ICTBinary, ictArgs
 }

@@ -19,9 +19,13 @@ func TestSudoersSpecRender(t *testing.T) {
 	out := spec.Render()
 
 	// The three privileged operations, each scoped to a single command. The cat
-	// rule is scoped to the builds subtree, where all artifacts live.
+	// rule is scoped to the builds subtree, where all artifacts live. The build
+	// rule is named via a Cmnd_Alias so env_keep can scope NO_PROXY/no_proxy to
+	// it alone.
 	want := []string{
-		"ictsvc ALL=(root) NOPASSWD: /opt/ict/image-composer-tool build *",
+		"Cmnd_Alias ICT_BUILD = /opt/ict/image-composer-tool build *",
+		`Defaults!ICT_BUILD env_keep += "NO_PROXY no_proxy"`,
+		"ictsvc ALL=(root) NOPASSWD: ICT_BUILD",
 		"ictsvc ALL=(root) NOPASSWD: /usr/bin/kill -TERM -[0-9]*",
 		"ictsvc ALL=(root) NOPASSWD: /usr/bin/cat /srv/ict-workspace/builds/*",
 	}
@@ -37,10 +41,12 @@ func TestSudoersSpecRender(t *testing.T) {
 		t.Errorf("cat rule is unscoped (grants reading any path); want builds-scoped:\n%s", out)
 	}
 
-	// Every rule is NOPASSWD-scoped to root and to this user only.
+	// Every NOPASSWD rule is scoped to root and to this user only; the
+	// Cmnd_Alias/Defaults directives are not per-user rules and are checked above.
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "Cmnd_Alias") ||
+			strings.HasPrefix(line, "Defaults") {
 			continue
 		}
 		if !strings.HasPrefix(line, "ictsvc ALL=(root) NOPASSWD:") {
