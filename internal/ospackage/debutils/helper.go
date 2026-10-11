@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -379,6 +380,18 @@ func importDebsFromDir(srcDir, repoPath string) error {
 		}
 	}
 	return nil
+}
+
+// debFileName returns the name a package URL is stored under in the package
+// cache. The downloader (pkgfetcher) names the file after the URL-decoded
+// path, so every lookup must decode the same way: a URL ending in
+// "pkg_1.0%252B1_all.deb" is saved, and must be found again, as
+// "pkg_1.0%2B1_all.deb".
+func debFileName(rawURL string) string {
+	if parsed, err := url.Parse(rawURL); err == nil && parsed.Path != "" {
+		return path.Base(parsed.Path)
+	}
+	return filepath.Base(rawURL)
 }
 
 func filenameFromURL(rawURL string) (string, error) {
