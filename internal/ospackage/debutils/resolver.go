@@ -132,7 +132,10 @@ func GenerateDot(pkgs []ospackage.PackageInfo, file string, pkgSources map[strin
 // v4 cache would report every package's ProvidesVer as empty, so a version
 // constraint on a virtual capability would fall back to comparing against the
 // provider's own Version instead of what it actually declares for that name.
-const parsedPackageCacheVersion = 5
+// v6: the cache now records the package filter (allowPackages) it was parsed
+// with; a v5 cache has no such record, so it could be reused under a different
+// filter and return the wrong set of packages.
+const parsedPackageCacheVersion = 6
 
 // inReleaseSentinel is passed as releaseSign to ParseRepositoryMetadata to
 // mean "releaseFile is a combined InRelease file, not a detached signature
@@ -145,9 +148,35 @@ const inReleaseSentinel = "[inrelease]"
 // Version guards against reusing a cache written by an older parser (see
 // parsedPackageCacheVersion).
 type packageMetadataCache struct {
-	Version  int                     `json:"version"`
-	Checksum string                  `json:"checksum"`
+	Version  int    `json:"version"`
+	Checksum string `json:"checksum"`
+	// Filter is the package filter (allowPackages) the cached Packages were
+	// parsed with. Packages holds only the filtered result, so the cache is
+	// valid only for the same filter.
+	Filter   []string                `json:"filter,omitempty"`
 	Packages []ospackage.PackageInfo `json:"packages"`
+}
+
+// sameFilter reports whether two package filters select the same patterns,
+// ignoring order and duplicates.
+func sameFilter(a, b []string) bool {
+	set := func(f []string) map[string]struct{} {
+		m := make(map[string]struct{}, len(f))
+		for _, p := range f {
+			m[p] = struct{}{}
+		}
+		return m
+	}
+	sa, sb := set(a), set(b)
+	if len(sa) != len(sb) {
+		return false
+	}
+	for p := range sa {
+		if _, ok := sb[p]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func shouldBypassParsedPackageCache(baseURL string) bool {
@@ -172,8 +201,8 @@ func loadParsedPackageCache(cacheFile string) (*packageMetadataCache, error) {
 	return &cache, nil
 }
 
-func saveParsedPackageCache(cacheFile, checksum string, pkgs []ospackage.PackageInfo) error {
-	cache := packageMetadataCache{Version: parsedPackageCacheVersion, Checksum: checksum, Packages: pkgs}
+func saveParsedPackageCache(cacheFile, checksum string, filter []string, pkgs []ospackage.PackageInfo) error {
+	cache := packageMetadataCache{Version: parsedPackageCacheVersion, Checksum: checksum, Filter: filter, Packages: pkgs}
 	data, err := json.Marshal(cache)
 	if err != nil {
 		return fmt.Errorf("failed to marshal package cache: %w", err)
@@ -612,12 +641,16 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 	// repository has published a new index, so the cache is discarded and the
 	// metadata re-downloaded and re-parsed below.
 	if cached != nil {
-		if strings.EqualFold(cached.Checksum, expectedChecksum) {
+		if strings.EqualFold(cached.Checksum, expectedChecksum) && sameFilter(cached.Filter, packageFilter) {
 			log.Infof("Using cached package metadata for %s (checksum %s)", baseURL, cached.Checksum)
 			return cached.Packages, nil
 		}
-		log.Infof("Cached package metadata for %s is stale (cached checksum %s, repository now %s); re-parsing",
-			baseURL, cached.Checksum, expectedChecksum)
+		if strings.EqualFold(cached.Checksum, expectedChecksum) {
+			log.Infof("Cached package metadata for %s was parsed with a different package filter; re-parsing", baseURL)
+		} else {
+			log.Infof("Cached package metadata for %s is stale (cached checksum %s, repository now %s); re-parsing",
+				baseURL, cached.Checksum, expectedChecksum)
+		}
 	}
 
 	// --- Download cache check ---
@@ -828,7 +861,7 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 
 	// Persist the parsed result so future calls with the same checksum skip decompression/parsing.
 	if allowParsedCache {
-		if saveErr := saveParsedPackageCache(cacheFile, expectedChecksum, pkgs); saveErr != nil {
+		if saveErr := saveParsedPackageCache(cacheFile, expectedChecksum, packageFilter, pkgs); saveErr != nil {
 			log.Warnf("failed to save package metadata cache: %v", saveErr)
 		}
 	}
