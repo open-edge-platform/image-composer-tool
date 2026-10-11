@@ -263,11 +263,22 @@ build_azl3_immutable_raw_image() {
     exit 1
   fi
   
+  # The template's sample users (admin, testuser, secureuser) have no password
+  # or key, and the build rejects an account left with an empty login. A
+  # throwaway key, used only by this test, satisfies it for each of them.
+  test_key_dir=$(mktemp -d)
+  ssh-keygen -q -t ed25519 -N "" -C ict-azl3-immutable-test -f "$test_key_dir/id_ed25519"
+
   # Temporarily disable exit on error for the build command to capture output
   set +e
-  output=$( sudo -S ./build/image-composer-tool build image-templates/azl3/azl3-x86_64-edge-raw.yml 2>&1)
+  output=$( sudo -S ./build/image-composer-tool build \
+    --ssh-authorized-key "admin=$test_key_dir/id_ed25519.pub" \
+    --ssh-authorized-key "testuser=$test_key_dir/id_ed25519.pub" \
+    --ssh-authorized-key "secureuser=$test_key_dir/id_ed25519.pub" \
+    image-templates/azl3/azl3-x86_64-edge-raw.yml 2>&1)
   build_exit_code=$?
   set -e
+  rm -rf "$test_key_dir"
   
   # Check for the success message in the output
   if [ $build_exit_code -eq 0 ] && echo "$output" | grep -q "image build completed successfully"; then

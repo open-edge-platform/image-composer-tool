@@ -947,7 +947,9 @@ func TestLoadDebPackageInfosFromMetadataCache(t *testing.T) {
 		URL:     "https://repo.example/pool/bash_1.0_amd64.deb",
 		Type:    "deb",
 	}}
-	if err := saveParsedPackageCache(filepath.Join(dirDefault, "packages.parsed.json"), "sum-default", defaultPkgs); err != nil {
+	if err := saveParsedPackageCache(
+		filepath.Join(dirDefault, "packages.parsed.json"), "sum-default", nil, defaultPkgs,
+	); err != nil {
 		t.Fatalf("failed to write default metadata cache: %v", err)
 	}
 
@@ -957,7 +959,9 @@ func TestLoadDebPackageInfosFromMetadataCache(t *testing.T) {
 		URL:     "https://repo.example/pool/coreutils_9.0_amd64.deb",
 		Type:    "deb",
 	}}
-	if err := saveParsedPackageCache(filepath.Join(dirUser, "packages.parsed.json"), "sum-user", userPkgs); err != nil {
+	if err := saveParsedPackageCache(
+		filepath.Join(dirUser, "packages.parsed.json"), "sum-user", nil, userPkgs,
+	); err != nil {
 		t.Fatalf("failed to write user metadata cache: %v", err)
 	}
 
@@ -2638,7 +2642,9 @@ func TestBuildDebPackageInfosFromCache_EnrichesFromMetadata(t *testing.T) {
 			Checksums:   []ospackage.Checksum{{Algorithm: "SHA256", Value: "7074b6a2"}},
 		},
 	}
-	if err := saveParsedPackageCache(filepath.Join(buildPath, "packages.parsed.json"), "chk", metaPkgs); err != nil {
+	if err := saveParsedPackageCache(
+		filepath.Join(buildPath, "packages.parsed.json"), "chk", nil, metaPkgs,
+	); err != nil {
 		t.Fatalf("save parsed cache: %v", err)
 	}
 
