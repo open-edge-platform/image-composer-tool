@@ -23,6 +23,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/debutils"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/rpmutils"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/dnsseed"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/file"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/mount"
@@ -1085,14 +1086,20 @@ func updateRootfsConfig(installRoot string, template *config.ImageTemplate) erro
 	if err := addImageIDFile(installRoot, template); err != nil {
 		return fmt.Errorf("failed to add image ID file: %w", err)
 	}
-	if err := createResolvConfSymlink(installRoot, template); err != nil {
-		return fmt.Errorf("failed to create resolv.conf: %w", err)
-	}
 	if err := applyProvisioningConfig(installRoot, template); err != nil {
 		return err
 	}
-	if err := addImageConfigs(installRoot, template); err != nil {
-		return fmt.Errorf("failed to execute customized configurations to image: %w", err)
+	// Same ordering and DNS-seed contract as updateImageConfig above: seed an
+	// ephemeral resolver, run the custom configuration commands, restore, and only
+	// then decide the image's final resolv.conf.
+	restoreDNS := dnsseed.SeedEphemeral(installRoot)
+	configErr := addImageConfigs(installRoot, template)
+	restoreDNS()
+	if configErr != nil {
+		return fmt.Errorf("failed to execute customized configurations to image: %w", configErr)
+	}
+	if err := createResolvConfSymlink(installRoot, template); err != nil {
+		return fmt.Errorf("failed to create resolv.conf: %w", err)
 	}
 	// Written last: the deployment-site proxy must not apply to the build-time
 	// configurations[] commands, which run with the build host's network.
@@ -1124,14 +1131,27 @@ func updateImageConfig(installRoot string, diskPathIdMap map[string]string, temp
 	if err := updateImageFstab(installRoot, diskPathIdMap, template); err != nil {
 		return fmt.Errorf("failed to update image fstab: %w", err)
 	}
-	if err := createResolvConfSymlink(installRoot, template); err != nil {
-		return fmt.Errorf("failed to create resolv.conf: %w", err)
-	}
 	if err := applyProvisioningConfig(installRoot, template); err != nil {
 		return err
 	}
-	if err := addImageConfigs(installRoot, template); err != nil {
-		return fmt.Errorf("failed to execute customized configurations to image: %w", err)
+	// Give the rootfs a working resolver for the duration of the custom
+	// configuration commands, so a cmd that reaches the network directly (e.g.
+	// wget/curl) can resolve names. mmdebstrap leaves no /etc/resolv.conf at all, so
+	// without this glibc falls back to 127.0.0.1:53 and every lookup fails instantly
+	// — too fast for wget's own --tries/--waitretry to even engage.
+	//
+	// restoreDNS must run before createResolvConfSymlink below, which decides the
+	// image's final resolver configuration by testing whether /etc/resolv.conf
+	// exists; leaving the seeded file in place would suppress that. It therefore
+	// runs on the error path too, rather than via defer.
+	restoreDNS := dnsseed.SeedEphemeral(installRoot)
+	configErr := addImageConfigs(installRoot, template)
+	restoreDNS()
+	if configErr != nil {
+		return fmt.Errorf("failed to execute customized configurations to image: %w", configErr)
+	}
+	if err := createResolvConfSymlink(installRoot, template); err != nil {
+		return fmt.Errorf("failed to create resolv.conf: %w", err)
 	}
 	// Written last: the deployment-site proxy must not apply to the build-time
 	// configurations[] commands, which run with the build host's network.
