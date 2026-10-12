@@ -26,7 +26,9 @@ export function ImportedTemplateCard({
     .join(', ')
 
   const rows: ([string, string] | null)[] = [
-    ['Template', template.fileName],
+    ['Template', template.displayName],
+    // Only worth showing when it isn't already the row above.
+    template.fileName !== template.displayName ? ['Source file', template.fileName] : null,
     s.imageName
       ? ['Image', `${s.imageName}${s.imageVersion ? ` (v${s.imageVersion})` : ''}`]
       : null,

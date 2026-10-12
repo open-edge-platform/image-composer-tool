@@ -191,9 +191,9 @@ export function BasicPage({
         <div className="mb-5 rounded-lg border border-[#0071c5]/30 bg-blue-50 px-4 py-3 text-sm">
           <div className="flex flex-wrap items-center gap-3">
             <span className="font-semibold text-[#00285a]">Imported template:</span>
-            <span className="text-slate-700">{importedTemplate.fileName}</span>
-            {importedTemplate.summary.imageName && (
-              <span className="text-slate-500">({importedTemplate.summary.imageName})</span>
+            <span className="text-slate-700">{importedTemplate.displayName}</span>
+            {importedTemplate.fileName !== importedTemplate.displayName && (
+              <span className="text-slate-500">from {importedTemplate.fileName}</span>
             )}
             <div className="ml-auto flex gap-3">
               <button

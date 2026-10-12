@@ -38,14 +38,30 @@ export interface ImportedTemplateSummary {
 }
 
 export interface ImportedTemplate {
-  // Original file name, shown in the UI and used as the default when the
-  // template is later saved or re-exported.
+  // Original file name, kept so the user can tell which file they picked.
   fileName: string
+  // What this template is called throughout the UI. Mirrors the name the server
+  // records for the build (service.postedTemplateName), so the Basic tab and the
+  // build history don't label the same build differently.
+  displayName: string
   // Verbatim document text. Kept unparsed so the server sees exactly the bytes
   // the user supplied — re-emitting our parse would silently drop comments,
   // anchors, and any key this preview doesn't model.
   yaml: string
   summary: ImportedTemplateSummary
+}
+
+// imageNameRe mirrors the schema pattern for image.name, as transcribed in
+// service/delta.go. Only used to decide whether image.name is presentable as a
+// name; the server re-derives and re-checks it regardless.
+const imageNameRe = /^[a-zA-Z0-9]([a-zA-Z0-9\-_]*[a-zA-Z0-9])?$/
+const MAX_IMAGE_NAME_LEN = 64
+
+function displayNameFor(imageName: string, fileName: string): string {
+  if (imageName.length > 0 && imageName.length <= MAX_IMAGE_NAME_LEN && imageNameRe.test(imageName)) {
+    return imageName + '.yml'
+  }
+  return fileName
 }
 
 export class TemplateParseError extends Error {}
@@ -94,12 +110,14 @@ export function parseImportedTemplate(fileName: string, text: string): ImportedT
 
   const packages = Array.isArray(t.systemConfig?.packages) ? t.systemConfig.packages : []
   const partitions = Array.isArray(t.disk?.partitions) ? t.disk.partitions : []
+  const imageName = str(t.image?.name)
 
   return {
     fileName,
+    displayName: displayNameFor(imageName, fileName),
     yaml: text,
     summary: {
-      imageName: str(t.image?.name),
+      imageName,
       imageVersion: str(t.image?.version),
       description: str(t.systemConfig?.description),
       hostname: str(t.systemConfig?.hostname),
