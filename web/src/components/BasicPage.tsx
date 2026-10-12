@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useStore, cascadingOptions } from '../store'
 import { api } from '../api/client'
-import type { ComposeResponse, CredentialInput } from '../api/types'
+import type { ComposeResponse, CredentialInput, CredentialRequirement } from '../api/types'
 import { Select } from './Select'
 import { credentialsComplete } from './CredentialsStep'
 import { CredentialsDialog } from './CredentialsDialog'
@@ -43,6 +43,10 @@ export function BasicPage({
   // component state rather than the shared store: the store is persisted, and a
   // password must not outlive the build it was typed for.
   const [credentials, setCredentials] = useState<CredentialInput[]>([])
+  // Accounts the imported template declares, as the server resolved them at
+  // import time. Kept beside `credentials` rather than in the store for
+  // symmetry with the selection path, which reads them off the compose response.
+  const [importedRequirements, setImportedRequirements] = useState<CredentialRequirement[]>([])
 
   const opts = useMemo(
     () => (manifest ? cascadingOptions(manifest, selection) : null),
@@ -93,7 +97,9 @@ export function BasicPage({
   // complete document, so there is nothing to compose it against.
   const usingImport = importedTemplate !== null
 
-  const requirements = review?.credentials ?? []
+  // An imported template's accounts come from validating the document at import
+  // time; a selection's come from the compose response.
+  const requirements = usingImport ? importedRequirements : (review?.credentials ?? [])
   const hasCredentialFields = requirements.some((r) => (r.required && !r.satisfied) || !r.required)
   // The backend rejects a build whose template leaves an account without a
   // login, so the button is gated on the same rule rather than letting the
@@ -128,13 +134,18 @@ export function BasicPage({
 
   // Build the imported document as-is. Unlike the selection path there is no
   // compose step: the server takes the template verbatim, so the only
-  // client-side preparation already happened at import time.
+  // client-side preparation already happened at import time. Any logins the
+  // user supplied ride alongside it and are hashed server-side.
   const onBuildImported = async () => {
-    if (!importedTemplate) return
+    if (!importedTemplate || !credentialsReady) return
     try {
       setBusy(true)
       setError(null)
-      const accepted = await api.startBuildFromYaml(importedTemplate.yaml)
+      const accepted = await api.startBuildFromYaml(
+        importedTemplate.yaml,
+        credentials.length > 0 ? credentials : undefined,
+      )
+      setCredentialsOpen(false)
       onBuildStarted(accepted.buildId)
     } catch (e) {
       setError((e as Error).message)
@@ -144,15 +155,11 @@ export function BasicPage({
   }
 
   const onComposeClick = () => {
-    if (usingImport) {
-      void onBuildImported()
-      return
-    }
     if (hasCredentialFields) {
       setCredentialsOpen(true)
       return
     }
-    void onBuild()
+    void (usingImport ? onBuildImported() : onBuild())
   }
 
   return (
@@ -206,7 +213,12 @@ export function BasicPage({
               <button
                 type="button"
                 className="font-semibold text-slate-600 hover:underline"
-                onClick={() => setImportedTemplate(null)}
+                onClick={() => {
+                  setImportedTemplate(null)
+                  setImportedRequirements([])
+                  setCredentials([])
+                  setError(null)
+                }}
               >
                 Remove
               </button>
@@ -376,14 +388,19 @@ export function BasicPage({
         buildInProgress={buildInProgress}
         error={error}
         onCancel={() => setCredentialsOpen(false)}
-        onCompose={() => void onBuild()}
+        onCompose={() => void (usingImport ? onBuildImported() : onBuild())}
       />
 
       <ImportTemplateDialog
         open={importOpen}
         onCancel={() => setImportOpen(false)}
-        onImport={(t) => {
+        onImport={(t, reqs) => {
           setImportedTemplate(t)
+          setImportedRequirements(reqs)
+          // A different template asks for different accounts, so anything typed
+          // for the previous one is dropped rather than sent with this build.
+          setCredentials([])
+          setError(null)
           setImportOpen(false)
         }}
       />

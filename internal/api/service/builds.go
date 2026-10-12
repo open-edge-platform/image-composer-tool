@@ -282,10 +282,14 @@ func (b *build) setResidual(kind ResidualKind, detail string) {
 }
 
 // BuildRequest starts a build. It carries exactly one of Compose (Basic-tab
-// selections) or YAML (the complete edited template from the Advanced tab).
+// selections) or YAML (a complete template: the Advanced tab's edit, or an
+// imported document).
 type BuildRequest struct {
 	Compose *Selection
 	YAML    string
+	// Credentials supply logins for accounts YAML declares without one. Only
+	// meaningful with YAML — a Compose build carries its own in Selection.
+	Credentials []CredentialInput
 }
 
 // BuildAccepted is returned when a build is accepted and started.
@@ -355,10 +359,11 @@ func (s *Service) StartBuild(req BuildRequest) (*BuildAccepted, error) {
 	// A compose selection carrying an override resolved to a generated delta
 	// (resolveBuildTemplate), not the curated file directly — remember that so
 	// finish() knows to archive+clean it up. Must mirror resolveBuildTemplate's
-	// own hasOverrides() check: a template resolved without overrides is the
-	// curated file, and finish() must not delete that.
+	// own checks: a template resolved without overrides is the curated file (or
+	// the posted document), and finish() must not delete that.
 	var deltaPath string
-	if req.Compose != nil && req.Compose.hasOverrides() {
+	if (req.Compose != nil && req.Compose.hasOverrides()) ||
+		(req.YAML != "" && len(req.Credentials) > 0) {
 		deltaPath = templatePath
 	}
 
@@ -702,10 +707,27 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 	if req.YAML != "" && req.Compose != nil {
 		return "", "", fmt.Errorf("%w: provide either compose or yaml, not both", errBadBuildRequest)
 	}
+	// A compose build carries its logins inside the selection; accepting them
+	// here too would leave two sources for one thing and no rule for which wins.
+	if req.YAML == "" && len(req.Credentials) > 0 {
+		return "", "", fmt.Errorf("%w: credentials apply to yaml; a compose build carries them in compose.credentials", errBadBuildRequest)
+	}
 	if req.YAML != "" {
 		p := filepath.Join(workDir, "template.yml")
 		if werr := os.WriteFile(p, []byte(req.YAML), 0o600); werr != nil {
 			return "", "", fmt.Errorf("writing template: %w", werr) // server-side
+		}
+		name := postedTemplateName(req.YAML)
+		if len(req.Credentials) > 0 {
+			deltaPath, derr := s.credentialDeltaForPosted(p, workDir, req.Credentials)
+			if derr != nil {
+				return "", "", derr
+			}
+			if verr := s.checkTemplateCredentials(deltaPath); verr != nil {
+				_ = os.Remove(deltaPath)
+				return "", "", verr
+			}
+			return deltaPath, name, nil
 		}
 		// A posted template can declare a credential-less sudo account just as a
 		// curated one can, and such a build always fails. Say so now rather than
@@ -714,7 +736,7 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 			return "", "", verr
 		}
 		// On-disk name is fixed; only the display name follows the document.
-		return p, postedTemplateName(req.YAML), nil
+		return p, name, nil
 	}
 	if req.Compose == nil {
 		return "", "", fmt.Errorf("%w: provide either compose or yaml", errBadBuildRequest)
@@ -778,6 +800,49 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 	// Display name stays the curated parent's, not the generated delta's — the
 	// history/build-details panels show what the user actually chose.
 	return deltaPath, tmpl, nil
+}
+
+// credentialDeltaForPosted applies supplied logins to a posted template by
+// generating an `extends` delta beside it, and returns the delta's path.
+//
+// The credentials are not patched into the document itself. Going through the
+// normal extends merge is what makes an injected password behave: a template
+// that declares `hash_algo` for its placeholder would otherwise hash the hash,
+// whereas mergeUserConfig clears hash_algo when the child supplies a complete
+// crypt value. It also leaves the posted document on disk exactly as supplied,
+// so what the user sent is what gets built and downloaded.
+//
+// parentPath must already hold the posted document, and the delta is written
+// as its sibling so it satisfies resolveExtendsParentPath's containment guard.
+func (s *Service) credentialDeltaForPosted(parentPath, workDir string, creds []CredentialInput) (string, error) {
+	// Merged, so an account the document inherits from the OS defaults can be
+	// given a login too — validateCredentials rejects any name it can't see.
+	merged, err := config.LoadAndMergeTemplate(parentPath)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", errBadBuildRequest, err)
+	}
+	hashed, cerr := validateCredentials(creds, merged)
+	if cerr != nil {
+		return "", fmt.Errorf("%w: %v", errBadBuildRequest, cerr)
+	}
+	// The delta's image/target must match the document's own, not the merged
+	// result's: resolveExtendsChainFromLeaf compares child against parent as
+	// each is written, and the defaults a merge folds in are not in the parent.
+	parent, lerr := config.LoadTemplate(parentPath, false)
+	if lerr != nil {
+		return "", fmt.Errorf("%w: %v", errBadBuildRequest, lerr)
+	}
+	data, derr := buildDelta(filepath.Base(parentPath), parent.Image, parent.Target,
+		Selection{Credentials: hashed}, nil, nil)
+	if derr != nil {
+		return "", fmt.Errorf("generating credential template: %w", derr) // server-side
+	}
+	deltaPath := filepath.Join(workDir, "template-credentials.yml")
+	// 0600: this is the one file in the build that carries a password hash.
+	if werr := os.WriteFile(deltaPath, data, 0o600); werr != nil {
+		return "", fmt.Errorf("writing credential template: %w", werr) // server-side
+	}
+	return deltaPath, nil
 }
 
 // postedTemplateName derives the display name for a posted template from its

@@ -160,6 +160,10 @@ export interface ValidationResponse {
   valid: boolean
   errors?: ValidationIssue[]
   warnings?: ValidationIssue[]
+  // The accounts the template declares and whether each has a login, so an
+  // imported template can be prompted for before building. Absent means "not
+  // known" (invalid template, or it could not be resolved), never "no accounts".
+  credentials?: CredentialRequirement[]
 }
 
 // One repository the Advanced tab can enable/disable (from GET /package-repos).

@@ -3,7 +3,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
-import type { ValidationResponse } from '../api/types'
+import type { CredentialRequirement, ValidationResponse } from '../api/types'
 import { ImportedTemplateCard } from './ImportedTemplateCard'
 import {
   TEMPLATE_FILE_ACCEPT,
@@ -16,8 +16,15 @@ import {
 interface ImportTemplateDialogProps {
   open: boolean
   onCancel: () => void
-  onImport: (template: ImportedTemplate) => void
+  // requirements are the accounts the server resolved from the document, so the
+  // caller can prompt for a missing login instead of having the build rejected.
+  // Empty when the server could not resolve them.
+  onImport: (template: ImportedTemplate, requirements: CredentialRequirement[]) => void
 }
+
+// Paste mode re-validates as the user types, and validating resolves the
+// template server-side; this keeps that off every keystroke.
+const VALIDATE_DEBOUNCE_MS = 400
 
 // ImportTemplateDialog takes a template document from the user — dropped, picked
 // from disk, or pasted — parses it client-side, and shows what it found before
@@ -64,23 +71,26 @@ export function ImportTemplateDialog({ open, onCancel, onImport }: ImportTemplat
     }
     let cancelled = false
     setValidating(true)
-    api
-      .validateTemplate(yamlText)
-      .then((v) => {
-        if (cancelled) return
-        setValidation(v)
-        setValidating(false)
-      })
-      .catch((e) => {
-        if (cancelled) return
-        // The import isn't blocked on an unreachable validator — the build
-        // re-runs the same checks and would reject it there anyway.
-        setValidation(null)
-        setValidating(false)
-        setError(`Could not validate the template: ${(e as Error).message}`)
-      })
+    const timer = setTimeout(() => {
+      api
+        .validateTemplate(yamlText)
+        .then((v) => {
+          if (cancelled) return
+          setValidation(v)
+          setValidating(false)
+        })
+        .catch((e) => {
+          if (cancelled) return
+          // The import isn't blocked on an unreachable validator — the build
+          // re-runs the same checks and would reject it there anyway.
+          setValidation(null)
+          setValidating(false)
+          setError(`Could not validate the template: ${(e as Error).message}`)
+        })
+    }, VALIDATE_DEBOUNCE_MS)
     return () => {
       cancelled = true
+      clearTimeout(timer)
     }
   }, [yamlText])
 
@@ -256,7 +266,7 @@ export function ImportTemplateDialog({ open, onCancel, onImport }: ImportTemplat
             type="button"
             className="rounded-md bg-[#0071c5] px-4 py-2 font-semibold text-white hover:bg-[#00285a] disabled:cursor-not-allowed disabled:opacity-50"
             disabled={!parsed || validating || validation?.valid === false}
-            onClick={() => parsed && onImport(parsed)}
+            onClick={() => parsed && onImport(parsed, validation?.credentials ?? [])}
           >
             {validating ? 'Checking…' : 'Use Template'}
           </button>
@@ -280,6 +290,7 @@ function ValidationReport({
 
   const errors = validation.errors ?? []
   const warnings = validation.warnings ?? []
+  const needsLogin = (validation.credentials ?? []).filter((c) => c.required && !c.satisfied)
 
   return (
     <div className="mt-3 space-y-3">
@@ -313,6 +324,14 @@ function ValidationReport({
       )}
       {validation.valid && errors.length === 0 && warnings.length === 0 && (
         <p className="text-sm text-green-700">Template is valid.</p>
+      )}
+      {needsLogin.length > 0 && (
+        <p className="text-sm text-slate-600">
+          {needsLogin.length === 1 ? 'Account ' : 'Accounts '}
+          {needsLogin.map((c) => c.user).join(', ')}{' '}
+          {needsLogin.length === 1 ? 'has' : 'have'} no password or SSH key. You'll be asked for
+          one before composing.
+        </p>
       )}
     </div>
   )

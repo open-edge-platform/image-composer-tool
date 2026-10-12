@@ -6,9 +6,13 @@ package service
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/config/validate"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/security"
 
 	"sigs.k8s.io/yaml"
@@ -29,6 +33,11 @@ type ValidationResult struct {
 	Valid    bool
 	Errors   []ValidationIssue
 	Warnings []ValidationIssue
+	// Credentials lists the accounts the template declares and whether each has
+	// a login, so a caller can prompt before a build that would otherwise be
+	// rejected. Nil when the template is invalid or could not be resolved —
+	// "not known", never "no accounts".
+	Credentials []CredentialRequirement
 }
 
 // ValidateTemplate validates a complete template YAML and returns a structured,
@@ -74,7 +83,39 @@ func (s *Service) ValidateTemplate(templateYAML string) (*ValidationResult, erro
 		res.Valid = false
 		res.Errors = append(res.Errors, vi)
 	}
+	// Only for a template that would actually build: resolving one costs a merge
+	// against the OS defaults, and an invalid document has no accounts worth
+	// reporting — the errors above are what the caller needs to act on first.
+	if res.Valid {
+		res.Credentials = templateCredentialRequirements(templateYAML)
+	}
 	return res, nil
+}
+
+// templateCredentialRequirements resolves a posted template far enough to list
+// its accounts. Best-effort by design: a resolve failure yields nil rather than
+// an error, because this is advisory — the build re-runs the real check and
+// rejects a missing credential there regardless.
+//
+// The document has to reach the disk because the merge resolves `extends` and
+// key files by path; the temp copy is removed either way.
+func templateCredentialRequirements(templateYAML string) []CredentialRequirement {
+	dir, err := os.MkdirTemp("", "ict-validate-")
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+
+	path := filepath.Join(dir, "template.yml")
+	if werr := os.WriteFile(path, []byte(templateYAML), 0o600); werr != nil {
+		return nil
+	}
+	merged, merr := config.LoadAndMergeTemplate(path)
+	if merr != nil {
+		logger.Logger().Debugf("validate: resolving the template for its accounts failed: %v", merr)
+		return nil
+	}
+	return credentialRequirements(merged)
 }
 
 // yamlToJSONForValidation converts template YAML to the JSON bytes the schema

@@ -4,6 +4,7 @@ import type {
   Manifest,
   ComposeRequest,
   ComposeResponse,
+  CredentialInput,
   ValidationResponse,
   PackageRepoList,
   PackageSearchResults,
@@ -119,10 +120,17 @@ export const api = {
   // selection. The server writes it verbatim and builds it, so this is the path
   // for an imported template. Mutually exclusive with startBuild's `compose`:
   // sending both is rejected.
-  startBuildFromYaml: (yaml: string) =>
+  //
+  // `credentials` supply logins for accounts the document declares without one
+  // (POST /templates/validate reports which). The server applies them as a
+  // generated delta over the document, so the password is hashed before it
+  // reaches disk and the document itself is built as supplied.
+  startBuildFromYaml: (yaml: string, credentials?: CredentialInput[]) =>
     jsonFetch<BuildAccepted>('/builds', {
       method: 'POST',
-      body: JSON.stringify({ yaml }),
+      body: JSON.stringify(
+        credentials && credentials.length > 0 ? { yaml, credentials } : { yaml },
+      ),
     }),
 
   // Compose history, newest-first (merges live builds + on-disk meta records).

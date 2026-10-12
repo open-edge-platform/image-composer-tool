@@ -160,6 +160,7 @@ func toBuildRequest(r httpapi.BuildRequest) service.BuildRequest {
 	if r.Yaml != nil {
 		req.YAML = *r.Yaml
 	}
+	req.Credentials = toCredentials(r.Credentials)
 	return req
 }
 
@@ -378,16 +379,7 @@ func fromComposeResult(r *service.ComposeResult) httpapi.ComposeResponse {
 		out.BasePackages = &basePackages
 	}
 	if len(r.Credentials) > 0 {
-		creds := make([]httpapi.CredentialRequirement, 0, len(r.Credentials))
-		for _, c := range r.Credentials {
-			creds = append(creds, httpapi.CredentialRequirement{
-				User:      c.User,
-				Sudo:      c.Sudo,
-				Required:  c.Required,
-				Satisfied: c.Satisfied,
-			})
-		}
-		out.Credentials = &creds
+		out.Credentials = fromCredentialRequirements(r.Credentials)
 	}
 	return out
 }
@@ -396,11 +388,28 @@ func fromComposeResult(r *service.ComposeResult) httpapi.ComposeResponse {
 // contract type. errors/warnings are omitempty in the spec, so empty slices map
 // to nil rather than []; valid is required, so it is always sent.
 func fromValidationResult(r *service.ValidationResult) httpapi.ValidationResponse {
-	return httpapi.ValidationResponse{
+	out := httpapi.ValidationResponse{
 		Valid:    r.Valid,
 		Errors:   fromValidationIssues(r.Errors),
 		Warnings: fromValidationIssues(r.Warnings),
 	}
+	if len(r.Credentials) > 0 {
+		out.Credentials = fromCredentialRequirements(r.Credentials)
+	}
+	return out
+}
+
+func fromCredentialRequirements(reqs []service.CredentialRequirement) *[]httpapi.CredentialRequirement {
+	out := make([]httpapi.CredentialRequirement, 0, len(reqs))
+	for _, c := range reqs {
+		out = append(out, httpapi.CredentialRequirement{
+			User:      c.User,
+			Sudo:      c.Sudo,
+			Required:  c.Required,
+			Satisfied: c.Satisfied,
+		})
+	}
+	return &out
 }
 
 func fromValidationIssues(issues []service.ValidationIssue) *[]httpapi.ValidationIssue {

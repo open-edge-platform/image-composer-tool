@@ -1515,6 +1515,20 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ValidationIssue"
+        credentials:
+          type: array
+          description: |
+            The accounts the validated template declares, and whether each
+            already has a login — the same list a compose response carries,
+            for a template supplied directly rather than matched from a
+            selection. Lets a caller prompt for a missing credential before
+            building instead of having the build rejected.
+
+            Omitted when the template is invalid (there is nothing to resolve
+            accounts from) or when resolving it did not succeed. Absent is
+            therefore "not known", never "no accounts".
+          items:
+            $ref: "#/components/schemas/CredentialRequirement"
 
     ValidationIssue:
       type: object
@@ -1538,33 +1552,46 @@ components:
       description: |
         Start a build. Carries exactly one of `compose` or `yaml` — never a diff.
 
-        Exactly one of the two properties must be present. That constraint is
-        machine-checkable via minProperties/maxProperties rather than left as
-        prose: a body with neither field, or with both, is invalid and the server
-        rejects it with 400 `NO_MATCH`.
+        Exactly one of those two must be present; `credentials` is an optional
+        companion to `yaml`. The property-count bounds below can only express
+        "one or two properties", so the real rule — exactly one template
+        source, and `credentials` only alongside `yaml` — is enforced by the
+        server, which rejects a violation with 400 `NO_MATCH`. A `compose`
+        build carries its logins in `compose.credentials` instead.
 
         A build whose template leaves a privileged account with neither a
         password nor an SSH key is rejected with 400 `CREDENTIALS_REQUIRED`
         before anything is spawned — the builder would otherwise refuse it only
-        after populating the chroot. Supplying `compose.credentials` for the
-        accounts the compose response reports as unsatisfied makes the same
-        build succeed.
+        after populating the chroot. Supplying a credential for each account
+        reported unsatisfied (by the compose response, or by
+        `POST /templates/validate` for a posted template) makes the same build
+        succeed.
 
-        `oneOf` would express this more idiomatically, but oapi-codegen turns a
-        `oneOf` with sibling properties into a `json.RawMessage` union type with
-        custom (un)marshalling and two empty `interface{}` branch aliases —
-        generated noise around the hot request path, and oapi-codegen does not
-        enforce the constraint at runtime either way. The property-count form
-        validates identically for a two-property schema and keeps the generated
-        struct a plain pair of optional fields.
+        `oneOf` would express the template-source choice more idiomatically, but
+        oapi-codegen turns a `oneOf` with sibling properties into a
+        `json.RawMessage` union type with custom (un)marshalling and empty
+        `interface{}` branch aliases — generated noise around the hot request
+        path, and oapi-codegen does not enforce the constraint at runtime either
+        way. Keeping plain optional fields leaves the generated struct simple
+        and the enforcement in one place.
       minProperties: 1
-      maxProperties: 1
+      maxProperties: 2
       properties:
         compose:
           $ref: "#/components/schemas/ComposeRequest"
         yaml:
           type: string
           description: Complete template YAML (Advanced tab). Self-contained, not a delta.
+        credentials:
+          type: array
+          description: |
+            Logins for accounts the posted `yaml` declares without one. Valid
+            only with `yaml`; a `compose` build uses `compose.credentials`.
+            Applied as a generated `extends` delta over the posted document,
+            so the document itself is built exactly as supplied and only the
+            hashed password reaches disk.
+          items:
+            $ref: "#/components/schemas/CredentialInput"
 
     BuildAccepted:
       type: object
