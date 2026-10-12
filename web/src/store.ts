@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { Manifest, Combination } from './api/types'
 import type { DiskModel } from './lib/disk'
+import type { ImportedTemplate } from './lib/importedTemplate'
 
 // Selection state for the Basic tab.
 export interface Selection {
@@ -114,6 +115,10 @@ interface AppState {
   // defaults" has something to restore. Without it, resetting would blank the
   // step until the next compose, and a compose only fires on a selection change.
   diskSeed: DiskModel | null
+  // A template the user supplied via Import Template, or null when composing
+  // from the manifest selections. Holds the document verbatim plus the preview
+  // summary parsed from it; nothing else in the store is derived from it yet.
+  importedTemplate: ImportedTemplate | null
   setManifest: (m: Manifest) => void
   setField: (key: keyof Selection, value: string) => void
   // User-typed image name (marks it edited so seedImageName stops overwriting it).
@@ -138,6 +143,8 @@ interface AppState {
   seedDisk: (value: DiskModel | null) => void
   // Drop the user's edits so the next compose reseeds from the template.
   resetDisk: () => void
+  // Pass null to drop an imported template and go back to the selections.
+  setImportedTemplate: (t: ImportedTemplate | null) => void
 }
 
 const emptySelection: Selection = {
@@ -159,7 +166,9 @@ export const useStore = create<AppState>((set) => ({
   disk: null,
   diskEdited: false,
   diskSeed: null,
+  importedTemplate: null,
   setManifest: (m) => set({ manifest: m }),
+  setImportedTemplate: (t) => set({ importedTemplate: t }),
   setImageName: (value) => set({ imageName: value, imageNameEdited: true }),
   seedImageName: (value) =>
     set((state) => (state.imageNameEdited ? {} : { imageName: value })),

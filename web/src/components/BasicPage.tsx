@@ -5,6 +5,7 @@ import type { ComposeResponse, CredentialInput } from '../api/types'
 import { Select } from './Select'
 import { credentialsComplete } from './CredentialsStep'
 import { CredentialsDialog } from './CredentialsDialog'
+import { ImportTemplateDialog } from './ImportTemplateDialog'
 
 interface BasicPageProps {
   onBuildStarted: (buildId: string) => void
@@ -25,10 +26,13 @@ export function BasicPage({
   const manifest = useStore((s) => s.manifest)
   const selection = useStore((s) => s.selection)
   const setField = useStore((s) => s.setField)
+  const importedTemplate = useStore((s) => s.importedTemplate)
+  const setImportedTemplate = useStore((s) => s.setImportedTemplate)
 
   const [review, setReview] = useState<ComposeResponse | null>(null)
   const [busy, setBusy] = useState(false)
   const [credentialsOpen, setCredentialsOpen] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // True while the summary for a newly completed selection is in flight. The
   // previous summary stays on screen during a refetch, so this only drives the
@@ -126,11 +130,61 @@ export function BasicPage({
 
   return (
     <div className="mx-auto max-w-screen-2xl px-10 py-8">
-      <h1 className="mb-1 text-2xl font-bold text-[#00285a]">Choose Image Configuration</h1>
-      <p className="mb-5 text-sm text-slate-500">
-        Select a use case, SKU, and platform. Pre-configured defaults are applied
-        based on your selection.
-      </p>
+      <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="mb-1 text-2xl font-bold text-[#00285a]">Choose Image Configuration</h1>
+          <p className="text-sm text-slate-500">
+            Select a use case, SKU, and platform. Pre-configured defaults are applied
+            based on your selection — or import your own template.
+          </p>
+        </div>
+        <button
+          type="button"
+          className="flex items-center gap-2 rounded-md border-2 border-[#0071c5] bg-[#0071c5] px-5 py-2.5 font-semibold text-white shadow-sm hover:border-[#00285a] hover:bg-[#00285a]"
+          onClick={() => setImportOpen(true)}
+        >
+          <svg
+            aria-hidden="true"
+            viewBox="0 0 20 20"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="h-4 w-4"
+          >
+            <path d="M10 13V3m0 0L6.5 6.5M10 3l3.5 3.5" />
+            <path d="M3.5 12.5v2.5a1.5 1.5 0 0 0 1.5 1.5h10a1.5 1.5 0 0 0 1.5-1.5v-2.5" />
+          </svg>
+          Import Template
+        </button>
+      </div>
+
+      {importedTemplate && (
+        <div className="mb-5 flex flex-wrap items-center gap-3 rounded-lg border border-[#0071c5]/30 bg-blue-50 px-4 py-3 text-sm">
+          <span className="font-semibold text-[#00285a]">Imported template:</span>
+          <span className="text-slate-700">{importedTemplate.fileName}</span>
+          {importedTemplate.summary.imageName && (
+            <span className="text-slate-500">({importedTemplate.summary.imageName})</span>
+          )}
+          <div className="ml-auto flex gap-3">
+            <button
+              type="button"
+              className="font-semibold text-[#0071c5] hover:underline"
+              onClick={() => setImportOpen(true)}
+            >
+              Replace
+            </button>
+            <button
+              type="button"
+              className="font-semibold text-slate-600 hover:underline"
+              onClick={() => setImportedTemplate(null)}
+            >
+              Remove
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
         {/* Dropdowns and the Compose/Edit actions share this column so the
@@ -269,6 +323,15 @@ export function BasicPage({
         error={error}
         onCancel={() => setCredentialsOpen(false)}
         onCompose={() => void onBuild()}
+      />
+
+      <ImportTemplateDialog
+        open={importOpen}
+        onCancel={() => setImportOpen(false)}
+        onImport={(t) => {
+          setImportedTemplate(t)
+          setImportOpen(false)
+        }}
       />
     </div>
   )
