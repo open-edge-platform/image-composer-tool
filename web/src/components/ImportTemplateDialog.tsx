@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useEffect, useRef, useState } from 'react'
+import { api } from '../api/client'
+import type { ValidationResponse } from '../api/types'
 import {
   TEMPLATE_FILE_ACCEPT,
   TemplateParseError,
@@ -31,6 +33,10 @@ export function ImportTemplateDialog({ open, onCancel, onImport }: ImportTemplat
   const [pasted, setPasted] = useState('')
   const [parsed, setParsed] = useState<ImportedTemplate | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // Server verdict for `parsed`. The client parse only proves the document is
+  // YAML shaped like a template; this is what the build would actually enforce.
+  const [validation, setValidation] = useState<ValidationResponse | null>(null)
+  const [validating, setValidating] = useState(false)
 
   // Each opening starts from scratch: a template left over from a cancelled
   // import must not be silently re-applied by the next one.
@@ -41,7 +47,41 @@ export function ImportTemplateDialog({ open, onCancel, onImport }: ImportTemplat
     setPasted('')
     setParsed(null)
     setError(null)
+    setValidation(null)
+    setValidating(false)
   }, [open])
+
+  // Validate whatever is currently parsed. Keyed on the document text so a
+  // re-pick of the same file doesn't refetch, and guarded against out-of-order
+  // responses — pasting types a new document on every keystroke.
+  const yamlText = parsed?.yaml
+  useEffect(() => {
+    if (!yamlText) {
+      setValidation(null)
+      setValidating(false)
+      return
+    }
+    let cancelled = false
+    setValidating(true)
+    api
+      .validateTemplate(yamlText)
+      .then((v) => {
+        if (cancelled) return
+        setValidation(v)
+        setValidating(false)
+      })
+      .catch((e) => {
+        if (cancelled) return
+        // The import isn't blocked on an unreachable validator — the build
+        // re-runs the same checks and would reject it there anyway.
+        setValidation(null)
+        setValidating(false)
+        setError(`Could not validate the template: ${(e as Error).message}`)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [yamlText])
 
   useEffect(() => {
     if (!open) return
@@ -197,6 +237,8 @@ export function ImportTemplateDialog({ open, onCancel, onImport }: ImportTemplat
 
         {parsed && <ImportPreview template={parsed} />}
 
+        {parsed && <ValidationReport validating={validating} validation={validation} />}
+
         <div className="mt-5 flex justify-end gap-3">
           <button
             type="button"
@@ -208,13 +250,65 @@ export function ImportTemplateDialog({ open, onCancel, onImport }: ImportTemplat
           <button
             type="button"
             className="rounded-md bg-[#0071c5] px-4 py-2 font-semibold text-white hover:bg-[#00285a] disabled:cursor-not-allowed disabled:opacity-50"
-            disabled={!parsed}
+            disabled={!parsed || validating || validation?.valid === false}
             onClick={() => parsed && onImport(parsed)}
           >
-            Use Template
+            {validating ? 'Checking…' : 'Use Template'}
           </button>
         </div>
       </section>
+    </div>
+  )
+}
+
+function ValidationReport({
+  validating,
+  validation,
+}: {
+  validating: boolean
+  validation: ValidationResponse | null
+}) {
+  if (validating) {
+    return <p className="mt-3 text-sm text-slate-500">Validating against the server…</p>
+  }
+  if (!validation) return null
+
+  const errors = validation.errors ?? []
+  const warnings = validation.warnings ?? []
+
+  return (
+    <div className="mt-3 space-y-3">
+      {errors.length > 0 && (
+        <div role="alert" className="rounded bg-red-50 p-3 text-sm text-red-700">
+          <p className="font-semibold">
+            This template cannot be built ({errors.length} {errors.length === 1 ? 'error' : 'errors'}):
+          </p>
+          <ul className="mt-1.5 space-y-1">
+            {errors.map((i, n) => (
+              <li key={`${i.path}-${n}`}>
+                {i.path && <code className="font-semibold">{i.path}</code>} {i.message}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {warnings.length > 0 && (
+        <div className="rounded bg-amber-50 p-3 text-sm text-amber-800">
+          <p className="font-semibold">
+            {warnings.length} {warnings.length === 1 ? 'warning' : 'warnings'}:
+          </p>
+          <ul className="mt-1.5 space-y-1">
+            {warnings.map((i, n) => (
+              <li key={`${i.path}-${n}`}>
+                {i.path && <code className="font-semibold">{i.path}</code>} {i.message}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {validation.valid && errors.length === 0 && warnings.length === 0 && (
+        <p className="text-sm text-green-700">Template is valid.</p>
+      )}
     </div>
   )
 }
@@ -262,9 +356,6 @@ function ImportPreview({ template }: { template: ImportedTemplate }) {
             ))}
         </tbody>
       </table>
-      <p className="mt-3 text-[11px] text-slate-500">
-        The template is checked against the server when you compose it.
-      </p>
     </div>
   )
 }

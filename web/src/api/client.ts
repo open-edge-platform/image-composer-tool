@@ -115,6 +115,16 @@ export const api = {
       body: JSON.stringify({ compose: req }),
     }),
 
+  // Start a build from a complete template document rather than a manifest
+  // selection. The server writes it verbatim and builds it, so this is the path
+  // for an imported template. Mutually exclusive with startBuild's `compose`:
+  // sending both is rejected.
+  startBuildFromYaml: (yaml: string) =>
+    jsonFetch<BuildAccepted>('/builds', {
+      method: 'POST',
+      body: JSON.stringify({ yaml }),
+    }),
+
   // Compose history, newest-first (merges live builds + on-disk meta records).
   // Also returns the server↔browser clock offset for correcting elapsed-time labels.
   // Prefer serverTime from body (works through proxies/CORS); fall back to Date header.

@@ -52,9 +52,10 @@ export function BasicPage({
 
   // Auto-fetch the configuration summary whenever the selection is complete, so
   // it always reflects the current dropdowns (no manual "review" step). Guard
-  // against out-of-order responses with a cancel flag.
+  // against out-of-order responses with a cancel flag. An imported template is
+  // built verbatim, so there is no selection to summarise while one is active.
   useEffect(() => {
-    if (!active || !complete) {
+    if (!active || !complete || importedTemplate) {
       setReview(null)
       setLoadingSummary(false)
       return
@@ -83,9 +84,13 @@ export function BasicPage({
     return () => {
       cancelled = true
     }
-  }, [active, complete, selection])
+  }, [active, complete, selection, importedTemplate])
 
   if (!manifest || !opts) return <div className="p-8">Loading…</div>
+
+  // An imported template replaces the selections entirely: it is already a
+  // complete document, so there is nothing to compose it against.
+  const usingImport = importedTemplate !== null
 
   const requirements = review?.credentials ?? []
   const hasCredentialFields = requirements.some((r) => (r.required && !r.satisfied) || !r.required)
@@ -120,7 +125,28 @@ export function BasicPage({
     setError(null) // clear any stale compose error from the previous selection
   }
 
+  // Build the imported document as-is. Unlike the selection path there is no
+  // compose step: the server takes the template verbatim, so the only
+  // client-side preparation already happened at import time.
+  const onBuildImported = async () => {
+    if (!importedTemplate) return
+    try {
+      setBusy(true)
+      setError(null)
+      const accepted = await api.startBuildFromYaml(importedTemplate.yaml)
+      onBuildStarted(accepted.buildId)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const onComposeClick = () => {
+    if (usingImport) {
+      void onBuildImported()
+      return
+    }
     if (hasCredentialFields) {
       setCredentialsOpen(true)
       return
@@ -161,28 +187,33 @@ export function BasicPage({
       </div>
 
       {importedTemplate && (
-        <div className="mb-5 flex flex-wrap items-center gap-3 rounded-lg border border-[#0071c5]/30 bg-blue-50 px-4 py-3 text-sm">
-          <span className="font-semibold text-[#00285a]">Imported template:</span>
-          <span className="text-slate-700">{importedTemplate.fileName}</span>
-          {importedTemplate.summary.imageName && (
-            <span className="text-slate-500">({importedTemplate.summary.imageName})</span>
-          )}
-          <div className="ml-auto flex gap-3">
-            <button
-              type="button"
-              className="font-semibold text-[#0071c5] hover:underline"
-              onClick={() => setImportOpen(true)}
-            >
-              Replace
-            </button>
-            <button
-              type="button"
-              className="font-semibold text-slate-600 hover:underline"
-              onClick={() => setImportedTemplate(null)}
-            >
-              Remove
-            </button>
+        <div className="mb-5 rounded-lg border border-[#0071c5]/30 bg-blue-50 px-4 py-3 text-sm">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="font-semibold text-[#00285a]">Imported template:</span>
+            <span className="text-slate-700">{importedTemplate.fileName}</span>
+            {importedTemplate.summary.imageName && (
+              <span className="text-slate-500">({importedTemplate.summary.imageName})</span>
+            )}
+            <div className="ml-auto flex gap-3">
+              <button
+                type="button"
+                className="font-semibold text-[#0071c5] hover:underline"
+                onClick={() => setImportOpen(true)}
+              >
+                Replace
+              </button>
+              <button
+                type="button"
+                className="font-semibold text-slate-600 hover:underline"
+                onClick={() => setImportedTemplate(null)}
+              >
+                Remove
+              </button>
+            </div>
           </div>
+          <p className="mt-1.5 text-xs text-slate-600">
+            Composing builds this template as-is. Remove it to go back to the selections below.
+          </p>
         </div>
       )}
 
@@ -191,7 +222,13 @@ export function BasicPage({
             buttons sit right under the selections regardless of how tall the
             summary + credentials column on the right grows. */}
         <div className="w-full max-w-xl">
-          <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <div
+            className={
+              'rounded-lg border border-slate-200 bg-white p-5 shadow-sm ' +
+              (usingImport ? 'pointer-events-none opacity-40' : '')
+            }
+            aria-hidden={usingImport}
+          >
             <Select
               label="Use Case"
               placeholder="-- Select Use Case --"
@@ -244,10 +281,20 @@ export function BasicPage({
           <div className="mt-6 flex flex-wrap items-center gap-3">
             <button
               className="rounded-md bg-[#0071c5] px-5 py-2.5 font-semibold text-white hover:bg-[#00285a] disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={!complete || !review || loadingSummary || busy || buildInProgress}
+              disabled={
+                usingImport
+                  ? busy || buildInProgress
+                  : !complete || !review || loadingSummary || busy || buildInProgress
+              }
               onClick={onComposeClick}
             >
-              {busy ? 'Starting…' : buildInProgress ? 'Composing…' : 'Compose Image'}
+              {busy
+                ? 'Starting…'
+                : buildInProgress
+                  ? 'Composing…'
+                  : usingImport
+                    ? 'Compose Imported Image'
+                    : 'Compose Image'}
             </button>
             {/* Deliberately not gated on `complete` — the prototype lets you open
                 Advanced at any point and finish the selection there. */}
@@ -258,7 +305,7 @@ export function BasicPage({
             >
               Edit in Advanced
             </button>
-            {!complete && !buildInProgress && (
+            {!complete && !buildInProgress && !usingImport && (
               <span className="text-sm text-slate-500">
                 Complete all selections to compose.
               </span>
@@ -274,7 +321,7 @@ export function BasicPage({
         {/* Image configuration summary — always reflects the current selection
             (auto-fetched). "Your Selection" is intentionally omitted here since
             the dropdowns already show it; the Compose Image tab keeps it. */}
-        {complete && review && (
+        {!usingImport && complete && review && (
           <div className="flex-1 text-xs">
             <div className="max-w-md rounded-lg border border-slate-200 bg-slate-50 p-4">
               <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Image Configuration</p>
