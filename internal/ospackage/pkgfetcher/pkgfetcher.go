@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -22,6 +23,11 @@ import (
 const (
 	maxDownloadAttempts = 3
 	initialRetryBackoff = 500 * time.Millisecond
+	// A 429/502/503/504 means the server (or a gateway in front of it) is
+	// overloaded rather than failing at random (Launchpad's PPA snapshot host
+	// sheds load for minutes at a time), so once a download sees one it gets
+	// more attempts and much longer waits.
+	maxUnavailableAttempts = 6
 	// bodyIdleTimeout bounds the gap between successful reads of a response
 	// body. The shared client's ResponseHeaderTimeout only covers the wait for
 	// headers; once the body starts streaming, http has no read deadline, so a
@@ -31,6 +37,50 @@ const (
 	// progressing large package download is never killed.
 	bodyIdleTimeout = 60 * time.Second
 )
+
+// Variables rather than constants so tests can shorten them.
+var (
+	unavailableRetryBackoff    = 15 * time.Second
+	maxUnavailableRetryBackoff = 2 * time.Minute
+)
+
+// unavailableWait is the pause before the n-th retry (from 1) once the server
+// is unavailable: a doubling schedule from base, at least the server's
+// Retry-After, offset by the worker index so parallel downloads do not retry in
+// lockstep, and never more than limit.
+func unavailableWait(n, worker int, retryAfter, base, limit time.Duration) time.Duration {
+	wait := base
+	for i := 1; i < n && wait < limit; i++ {
+		wait *= 2
+	}
+	if retryAfter > wait {
+		wait = retryAfter
+	}
+	wait += time.Duration(worker) * time.Second
+	if wait > limit {
+		wait = limit
+	}
+	return wait
+}
+
+// parseRetryAfter reads a Retry-After header (delay-seconds or HTTP-date) and
+// returns 0 when it is absent, invalid, or already in the past.
+func parseRetryAfter(v string) time.Duration {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(v); err == nil {
+		if secs <= 0 {
+			return 0
+		}
+		return time.Duration(min(secs, 24*60*60)) * time.Second
+	}
+	if at, err := http.ParseTime(v); err == nil {
+		return max(time.Until(at), 0)
+	}
+	return 0
+}
 
 // idleTimeoutReader wraps an io.ReadCloser and, if no bytes arrive within idle,
 // cancels the request context so an in-flight Read is unblocked and a stalled
@@ -93,16 +143,33 @@ func shouldRetryHTTPStatus(statusCode int) bool {
 	}
 }
 
+// unavailableStatus reports whether a status says the server, or a gateway in
+// front of it, cannot serve right now rather than failing at random.
+func unavailableStatus(statusCode int) bool {
+	switch statusCode {
+	case http.StatusTooManyRequests,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
 func downloadWithRetry(ctx context.Context, client *http.Client, url, destPath string, threadcontext int) error {
 	log := logger.Logger()
 
 	var lastErr error
 	backoff := initialRetryBackoff
+	sawUnavailable := false
+	unavailableWaits := 0
 
-	for attempt := 1; attempt <= maxDownloadAttempts; attempt++ {
+	for attempt := 1; ; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("download cancelled before attempt %d: %w", attempt, err)
 		}
+		var retryAfter time.Duration
 		// Per-attempt cancellable context so the idle watchdog can tear down a
 		// stalled exchange without affecting the caller's ctx or later attempts.
 		reqCtx, cancel := context.WithCancel(ctx)
@@ -125,6 +192,10 @@ func downloadWithRetry(ctx context.Context, client *http.Client, url, destPath s
 				if resp.StatusCode != http.StatusOK {
 					if shouldRetryHTTPStatus(resp.StatusCode) {
 						lastErr = fmt.Errorf("transient status: %s", resp.Status)
+						if unavailableStatus(resp.StatusCode) {
+							sawUnavailable = true
+							retryAfter = parseRetryAfter(resp.Header.Get("Retry-After"))
+						}
 						return
 					}
 					lastErr = fmt.Errorf("bad status: %s", resp.Status)
@@ -175,25 +246,34 @@ func downloadWithRetry(ctx context.Context, client *http.Client, url, destPath s
 			}
 		}
 
-		if attempt == maxDownloadAttempts {
-			break
+		limit := maxDownloadAttempts
+		if sawUnavailable {
+			limit = maxUnavailableAttempts
+		}
+		if attempt >= limit {
+			return fmt.Errorf("download failed after %d attempts: %w", attempt, lastErr)
 		}
 
-		log.Warnf("download attempt %d/%d failed for %s: %v; retrying in %s", attempt, maxDownloadAttempts, url, lastErr, backoff)
+		wait := backoff
+		if sawUnavailable {
+			unavailableWaits++
+			wait = unavailableWait(unavailableWaits, threadcontext, retryAfter, unavailableRetryBackoff, maxUnavailableRetryBackoff)
+		} else {
+			backoff *= time.Duration(2 * (threadcontext + 1))
+		}
+
+		log.Warnf("download attempt %d/%d failed for %s: %v; retrying in %s", attempt, limit, url, lastErr, wait)
 		// Cancel-aware sleep: break out immediately on ctx cancel so a SIGINT
 		// during download does not have to wait for the retry backoff to
 		// elapse before the worker exits.
-		timer := time.NewTimer(backoff)
+		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
 			return fmt.Errorf("download cancelled during retry backoff: %w", ctx.Err())
 		case <-timer.C:
 		}
-		backoff *= time.Duration(2 * (threadcontext + 1))
 	}
-
-	return fmt.Errorf("download failed after %d attempts: %w", maxDownloadAttempts, lastErr)
 }
 
 // maxReportedFailures bounds the failure list in the returned error. A broken
