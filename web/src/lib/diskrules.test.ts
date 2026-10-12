@@ -33,6 +33,15 @@ describe('isValidOffset — imagedisc.go:329 VerifyFileSize', () => {
     expect(isValidOffset('0')).toBe(true)
   })
 
+  it('accepts a non-zero offset measured back from the end of the disk (parseBoundary)', () => {
+    expect(isValidOffset('-20GiB')).toBe(true)
+    expect(isValidOffset('-4096MiB')).toBe(true)
+    expect(isValidOffset('-0GiB')).toBe(false)
+    expect(isValidOffset('-1.5GiB')).toBe(false)
+    expect(isValidOffset('-')).toBe(false)
+    expect(isValidOffset('--4GiB')).toBe(false)
+  })
+
   it('is stricter than it looks — these all fail at build time', () => {
     // `^(\d+)(.*)$` puts everything after the leading digits into the suffix,
     // which then has to match the table exactly.

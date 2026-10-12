@@ -243,16 +243,9 @@ export function diskFromObject(d: Record<string, unknown>): DiskModel {
 
 function partitionFromObject(p: Record<string, unknown>): PartitionModel {
   const end = str(p.end)
-  // "0" is the schema's sentinel for "rest of the disk"; anything else is an
-  // absolute offset the size is derived from.
-  const rest = end === '' || parseSize(end) === 0
-  const startMiB = parseMiB(str(p.start))
-  const endMiB = parseMiB(end)
-
-  let sizeMiB: number | null = null
-  if (!rest && startMiB !== null && endMiB !== null) {
-    sizeMiB = Math.max(0, endMiB - startMiB)
-  }
+  // null ("rest of the disk") also covers offsets that don't parse.
+  const span = spanMiB(str(p.start), end)
+  const sizeMiB = typeof span === 'number' ? Math.max(0, span) : null
 
   return {
     key: nextKey('part'),
@@ -281,6 +274,39 @@ export interface Offsets {
   end: string
 }
 
+// fromEndMiB returns the distance of an offset measured back from the end of the
+// disk ("-20GiB", imagedisc.go parseBoundary), or null when value is not one.
+function fromEndMiB(value: string): number | null {
+  const v = value.trim()
+  if (!v.startsWith('-')) return null
+  const mib = parseMiB(v.slice(1))
+  return mib !== null && mib > 0 ? mib : null
+}
+
+// "0" is the schema's sentinel for the end of the disk.
+const isDiskEnd = (end: string): boolean => end === '' || parseSize(end) === 0
+
+// spanMiB is the size between start and end: null when it runs from an absolute
+// start into the end of the disk, so its size depends on the disk; undefined
+// when the offsets don't parse. A partition anchored to the end ("-4GiB" to "0")
+// has a fixed size.
+function spanMiB(start: string, end: string): number | null | undefined {
+  const startBack = fromEndMiB(start)
+  if (startBack !== null) {
+    const endBack = isDiskEnd(end) ? 0 : fromEndMiB(end)
+    return endBack === null ? undefined : startBack - endBack
+  }
+  if (isDiskEnd(end) || fromEndMiB(end) !== null) return null
+  const s = parseMiB(start)
+  const e = parseMiB(end)
+  return s === null || e === null ? undefined : e - s
+}
+
+// fromEndOffset writes a distance back from the end of the disk the way the
+// templates do: whole GiB where it can be.
+const fromEndOffset = (mib: number): string =>
+  mib % 1024 === 0 ? `-${mib / 1024}GiB` : `-${mib}MiB`
+
 // isRest reports whether a partition consumes the remaining disk. The last
 // partition is always "rest" when extendLastPartitionToFillDisk is set — the
 // builder forces its end to "0" (internal/config/config.go), so the preview has
@@ -296,9 +322,11 @@ export function isRest(model: DiskModel, index: number): boolean {
 //
 // In 'size' mode the partitions are laid out contiguously from firstStartMiB, so
 // each start is the previous end — mirroring how every template in
-// image-templates is written. In 'offset' mode the user's own strings are
-// returned untouched; whether they are contiguous is up to them, and
-// validateDisk reports gaps and overlaps.
+// image-templates is written. Partitions after the one using the remaining space
+// are laid out back from the end of the disk ("-20GiB"), as the EdgePack
+// templates are. In 'offset' mode the user's own strings are returned untouched;
+// whether they are contiguous is up to them, and validateDisk reports gaps and
+// overlaps.
 export function computeOffsets(model: DiskModel): Offsets[] {
   if (model.layoutMode === 'offset') {
     return model.partitions.map((p, i) => ({
@@ -306,10 +334,18 @@ export function computeOffsets(model: DiskModel): Offsets[] {
       end: isRest(model, i) ? '0' : p.end,
     }))
   }
+  const restAt = model.partitions.findIndex((_, i) => isRest(model, i))
+  let back =
+    restAt < 0 ? 0 : model.partitions.slice(restAt + 1).reduce((total, p) => total + (p.sizeMiB ?? 0), 0)
   let cursor = model.firstStartMiB
   return model.partitions.map((p, i) => {
+    if (restAt >= 0 && i > restAt) {
+      const start = fromEndOffset(back)
+      back -= p.sizeMiB ?? 0
+      return { start, end: back > 0 ? fromEndOffset(back) : '0' }
+    }
     const start = `${cursor}MiB`
-    if (isRest(model, i)) return { start, end: '0' }
+    if (i === restAt) return { start, end: back > 0 ? fromEndOffset(back) : '0' }
     cursor += p.sizeMiB ?? 0
     return { start, end: `${cursor}MiB` }
   })
@@ -319,13 +355,9 @@ export function computeOffsets(model: DiskModel): Offsets[] {
 // 'size' mode, and the span between the offsets in 'offset' mode. null means
 // "the rest of the disk", and undefined means the offsets don't parse.
 export function partitionSizeMiB(model: DiskModel, index: number): number | null | undefined {
-  if (isRest(model, index)) return null
   const p = model.partitions[index]
-  if (model.layoutMode === 'size') return p.sizeMiB
-  const start = parseMiB(p.start)
-  const end = parseMiB(p.end)
-  if (start === null || end === null) return undefined
-  return end - start
+  if (model.layoutMode === 'size') return isRest(model, index) ? null : p.sizeMiB
+  return spanMiB(p.start, isRest(model, index) ? '0' : p.end)
 }
 
 // setLayoutMode switches which side of the size/offset pair is authoritative,
@@ -352,7 +384,6 @@ export function setLayoutMode(model: DiskModel, mode: LayoutMode): DiskModel {
     layoutMode: 'size',
     firstStartMiB: firstStart ?? model.firstStartMiB,
     partitions: model.partitions.map((p, i) => {
-      if (isRest(model, i)) return { ...p, sizeMiB: null }
       const span = partitionSizeMiB({ ...model, layoutMode: 'offset' }, i)
       return { ...p, sizeMiB: span === undefined ? p.sizeMiB : span }
     }),
@@ -365,11 +396,16 @@ export function setLayoutMode(model: DiskModel, mode: LayoutMode): DiskModel {
 export function usedMiB(model: DiskModel): number {
   if (model.layoutMode === 'offset') {
     // Offsets are absolute, so the high-water mark is the answer — summing
-    // spans would ignore gaps and double-count overlaps.
-    return model.partitions.reduce((high, p, i) => {
-      const edge = isRest(model, i) ? parseMiB(p.start) : parseMiB(p.end)
-      return Math.max(high, edge ?? 0)
-    }, 0)
+    // spans would ignore gaps and double-count overlaps. Offsets measured back
+    // from the end reserve that much on top (imagedisc.go requiredInstallDiskBytes).
+    let high = 0
+    let back = 0
+    model.partitions.forEach((p, i) => {
+      const toEnd = isRest(model, i) || fromEndMiB(p.end) !== null
+      high = Math.max(high, (toEnd ? parseMiB(p.start) : parseMiB(p.end)) ?? 0)
+      back = Math.max(back, fromEndMiB(p.start) ?? 0, fromEndMiB(p.end) ?? 0)
+    })
+    return high + back
   }
   return model.partitions.reduce(
     (total, p, i) => (isRest(model, i) ? total : total + (p.sizeMiB ?? 0)),
@@ -455,14 +491,15 @@ export function validateDisk(model: DiskModel, ctx: DiskContext = {}): DiskIssue
   // schema: $defs.Disk.required = ["name"]
   if (!model.name.trim()) errors.push('Disk name is required.')
 
-  // Only the final partition can consume the remaining space: an interior
-  // "rest" leaves every partition after it with no start offset.
-  const lastIndex = model.partitions.length - 1
-  const restIndexes = model.partitions
-    .map((_, i) => i)
-    .filter((i) => (model.layoutMode === 'offset' ? parseSize(model.partitions[i].end) === 0 : model.partitions[i].sizeMiB === null))
-  if (restIndexes.some((i) => i !== lastIndex)) {
-    errors.push('Only the last partition can use the remaining disk space.')
+  if (model.layoutMode === 'offset') {
+    // end: "0" is the end of the disk, which only the last partition can reach.
+    const lastIndex = model.partitions.length - 1
+    if (model.partitions.some((p, i) => i !== lastIndex && parseSize(p.end) === 0)) {
+      errors.push('Only the last partition can use the remaining disk space.')
+    }
+  } else if (model.partitions.filter((_, i) => isRest(model, i)).length > 1) {
+    // Size mode places the partitions after the rest one back from the end of the disk.
+    errors.push('Only one partition can use the remaining disk space.')
   }
 
   model.partitions.forEach((p, i) => {
@@ -471,7 +508,7 @@ export function validateDisk(model: DiskModel, ctx: DiskContext = {}): DiskIssue
       const span = partitionSizeMiB(model, i)
       if (span === undefined) {
         errors.push(`${label} has offsets that are not valid sizes (for example 1MiB).`)
-      } else if (span === null || span <= 0) {
+      } else if (span !== null && span <= 0) {
         errors.push(
           model.layoutMode === 'offset'
             ? `${label} ends at or before it starts.`
@@ -661,6 +698,17 @@ function contiguityWarnings(model: DiskModel): string[] {
 
   const out: string[] = []
   for (let i = 1; i < model.partitions.length; i++) {
+    // Measured back from the end, so a gap is a start nearer the end than the previous end.
+    const prevBack = fromEndMiB(model.partitions[i - 1].end)
+    const startBack = fromEndMiB(model.partitions[i].start)
+    if (prevBack !== null && startBack !== null) {
+      if (startBack < prevBack) {
+        out.push(`Gap of ${prevBack - startBack} MiB between partitions ${i} and ${i + 1}.`)
+      } else if (startBack > prevBack) {
+        out.push(`Partitions ${i} and ${i + 1} overlap by ${startBack - prevBack} MiB.`)
+      }
+      continue
+    }
     const prevEnd = parseMiB(model.partitions[i - 1].end)
     const start = parseMiB(model.partitions[i].start)
     // An interior "rest" partition is already a hard error; don't pile on.
