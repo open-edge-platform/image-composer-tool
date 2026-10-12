@@ -409,10 +409,14 @@ func TestResolveBuildTemplate(t *testing.T) {
 		t.Fatalf("compose resolve = %q %q %v", path, name, err)
 	}
 
-	// yaml path -> writes template.yml into the work dir
+	// yaml path -> writes template.yml into the work dir, but displays the
+	// document's own image.name so the build doesn't read as "template.yml".
 	path, name, err = s.resolveBuildTemplate(&BuildRequest{YAML: "image:\n  name: x\n"}, wd)
-	if err != nil || name != "template.yml" {
+	if err != nil || name != "x.yml" {
 		t.Fatalf("yaml resolve = %q %q %v", path, name, err)
+	}
+	if !strings.HasSuffix(path, "template.yml") {
+		t.Errorf("yaml resolve path = %q, want the fixed on-disk template.yml", path)
 	}
 	if _, statErr := os.Stat(path); statErr != nil {
 		t.Fatalf("yaml template not written: %v", statErr)

@@ -6,6 +6,7 @@ import { Select } from './Select'
 import { credentialsComplete } from './CredentialsStep'
 import { CredentialsDialog } from './CredentialsDialog'
 import { ImportTemplateDialog } from './ImportTemplateDialog'
+import { ImportedTemplateCard } from './ImportedTemplateCard'
 
 interface BasicPageProps {
   onBuildStarted: (buildId: string) => void
@@ -321,6 +322,12 @@ export function BasicPage({
         {/* Image configuration summary — always reflects the current selection
             (auto-fetched). "Your Selection" is intentionally omitted here since
             the dropdowns already show it; the Compose Image tab keeps it. */}
+        {usingImport && (
+          <div className="flex-1">
+            <ImportedTemplateCard template={importedTemplate} />
+          </div>
+        )}
+
         {!usingImport && complete && review && (
           <div className="flex-1 text-xs">
             <div className="max-w-md rounded-lg border border-slate-200 bg-slate-50 p-4">
@@ -350,7 +357,7 @@ export function BasicPage({
 
         {/* First-load placeholder only: a refetch keeps the previous summary on
             screen rather than flashing this in between. */}
-        {complete && !review && loadingSummary && (
+        {!usingImport && complete && !review && loadingSummary && (
           <div className="flex-1 text-xs">
             <div className="max-w-md rounded-lg border border-dashed border-slate-300 p-4 text-center text-sm text-slate-400">
               Resolving template…

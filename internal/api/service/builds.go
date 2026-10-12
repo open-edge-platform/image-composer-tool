@@ -23,6 +23,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/artifact"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"gopkg.in/yaml.v3"
 )
 
 // BuildStatus is the lifecycle state of a build.
@@ -712,7 +713,8 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 		if verr := s.checkTemplateCredentials(p); verr != nil {
 			return "", "", verr
 		}
-		return p, "template.yml", nil
+		// On-disk name is fixed; only the display name follows the document.
+		return p, postedTemplateName(req.YAML), nil
 	}
 	if req.Compose == nil {
 		return "", "", fmt.Errorf("%w: provide either compose or yaml", errBadBuildRequest)
@@ -776,6 +778,31 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 	// Display name stays the curated parent's, not the generated delta's — the
 	// history/build-details panels show what the user actually chose.
 	return deltaPath, tmpl, nil
+}
+
+// postedTemplateName derives the display name for a posted template from its
+// own image.name, so a build reads as "minimal-desktop-ubuntu.yml" rather than
+// the fixed on-disk "template.yml". Falls back to that name whenever the
+// document doesn't offer a usable one.
+//
+// The result reaches a Content-Disposition filename on the template download,
+// so image.name is re-checked against the schema pattern here instead of
+// trusted: a posted document is written and built without being schema-
+// validated first, so nothing upstream guarantees the field is well-formed.
+func postedTemplateName(doc string) string {
+	const fallback = "template.yml"
+	var t struct {
+		Image struct {
+			Name string `yaml:"name"`
+		} `yaml:"image"`
+	}
+	if err := yaml.Unmarshal([]byte(doc), &t); err != nil {
+		return fallback
+	}
+	if ValidateImageName(t.Image.Name) != nil || t.Image.Name == "" {
+		return fallback
+	}
+	return t.Image.Name + ".yml"
 }
 
 // checkTemplateCredentials rejects a build whose template would create an

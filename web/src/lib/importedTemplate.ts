@@ -25,12 +25,14 @@ export interface ImportedTemplateSummary {
   imageName: string
   imageVersion: string
   description: string
+  hostname: string
   os: string
   dist: string
   architecture: string
   imageType: string
   extends: string
   packageCount: number
+  diskSize: string
   partitionTable: string
   partitionCount: number
 }
@@ -53,8 +55,8 @@ interface RawTemplate {
   image?: { name?: unknown; version?: unknown }
   target?: { os?: unknown; dist?: unknown; arch?: unknown; imageType?: unknown }
   extends?: unknown
-  systemConfig?: { description?: unknown; packages?: unknown }
-  disk?: { partitionTableType?: unknown; partitions?: unknown }
+  systemConfig?: { description?: unknown; hostname?: unknown; packages?: unknown }
+  disk?: { size?: unknown; partitionTableType?: unknown; partitions?: unknown }
 }
 
 function str(v: unknown): string {
@@ -100,12 +102,14 @@ export function parseImportedTemplate(fileName: string, text: string): ImportedT
       imageName: str(t.image?.name),
       imageVersion: str(t.image?.version),
       description: str(t.systemConfig?.description),
+      hostname: str(t.systemConfig?.hostname),
       os: str(t.target?.os),
       dist: str(t.target?.dist),
       architecture: str(t.target?.arch),
       imageType: str(t.target?.imageType),
       extends: str(t.extends),
       packageCount: packages.length,
+      diskSize: str(t.disk?.size),
       partitionTable: str(t.disk?.partitionTableType),
       partitionCount: partitions.length,
     },

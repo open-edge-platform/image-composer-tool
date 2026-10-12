@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
 import type { ValidationResponse } from '../api/types'
+import { ImportedTemplateCard } from './ImportedTemplateCard'
 import {
   TEMPLATE_FILE_ACCEPT,
   TemplateParseError,
@@ -235,7 +236,11 @@ export function ImportTemplateDialog({ open, onCancel, onImport }: ImportTemplat
           </div>
         )}
 
-        {parsed && <ImportPreview template={parsed} />}
+        {parsed && (
+          <div className="mt-4">
+            <ImportedTemplateCard template={parsed} heading="Imported Template" />
+          </div>
+        )}
 
         {parsed && <ValidationReport validating={validating} validation={validation} />}
 
@@ -309,53 +314,6 @@ function ValidationReport({
       {validation.valid && errors.length === 0 && warnings.length === 0 && (
         <p className="text-sm text-green-700">Template is valid.</p>
       )}
-    </div>
-  )
-}
-
-function ImportPreview({ template }: { template: ImportedTemplate }) {
-  const s = template.summary
-  const rows: ([string, string] | null)[] = [
-    ['File', template.fileName],
-    s.imageName
-      ? ['Image', `${s.imageName}${s.imageVersion ? ` (v${s.imageVersion})` : ''}`]
-      : null,
-    s.description ? ['Description', s.description] : null,
-    s.extends ? ['Extends', s.extends] : null,
-    s.os || s.dist ? ['Target', [s.dist, s.os].filter(Boolean).join(' / ')] : null,
-    s.architecture ? ['Architecture', s.architecture] : null,
-    s.imageType ? ['Image Type', s.imageType] : null,
-    s.packageCount ? ['Packages', `${s.packageCount} packages`] : null,
-    s.partitionCount || s.partitionTable
-      ? [
-          'Disk',
-          [
-            s.partitionTable ? s.partitionTable.toUpperCase() : '',
-            s.partitionCount ? `${s.partitionCount} partitions` : '',
-          ]
-            .filter(Boolean)
-            .join(', '),
-        ]
-      : null,
-  ]
-
-  return (
-    <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4 text-xs">
-      <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-        Imported Template
-      </p>
-      <table className="w-full">
-        <tbody>
-          {rows
-            .filter((r): r is [string, string] => r !== null)
-            .map(([k, v]) => (
-              <tr key={k}>
-                <td className="w-28 py-0.5 pr-3 font-semibold text-slate-500">{k}</td>
-                <td className="py-0.5 break-all text-slate-700">{v}</td>
-              </tr>
-            ))}
-        </tbody>
-      </table>
     </div>
   )
 }
