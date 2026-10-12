@@ -554,14 +554,7 @@ func recordCleanupError(outErr *error, cleanupErr error) {
 // backends attach dpkg/rpm's actual diagnostic to the otherwise opaque
 // "exit status 1" the streamed executor returns.
 func formatCommandOutput(out string) string {
-	out = strings.TrimSpace(out)
-	if out == "" {
-		return ""
-	}
-	// Indent every line by two spaces so the package-manager diagnostic reads as a
-	// distinct block beneath the one-line error rather than blending into it.
-	indented := "  " + strings.ReplaceAll(out, "\n", "\n  ")
-	return "\n" + indented
+	return shell.FormatCommandOutput(out)
 }
 
 // selectInstaller returns the installer backend for a package-manager family.
