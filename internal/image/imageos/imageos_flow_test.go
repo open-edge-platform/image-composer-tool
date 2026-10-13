@@ -7,6 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
+
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
@@ -79,6 +82,31 @@ func TestAddImageConfigs(t *testing.T) {
 		})
 		if err := addImageConfigs(installRoot, template); err != nil {
 			t.Fatalf("addImageConfigs() err = %v", err)
+		}
+	})
+
+	// A command can print secrets, so a successful one's output stays out of the
+	// default INFO log.
+	t.Run("successful output is logged at DEBUG only", func(t *testing.T) {
+		shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+			{Pattern: `chroot .*/bin/bash -c`, Output: "token=s3cret", Error: nil},
+		})
+		core, logs := observer.New(zap.DebugLevel)
+		orig := log
+		log = zap.New(core).Sugar()
+		t.Cleanup(func() { log = orig })
+
+		if err := addImageConfigs(installRoot, template); err != nil {
+			t.Fatalf("addImageConfigs() err = %v", err)
+		}
+		logged := logs.FilterMessageSnippet("s3cret").All()
+		if len(logged) == 0 {
+			t.Fatal("command output was not logged at all")
+		}
+		for _, e := range logged {
+			if e.Level != zap.DebugLevel {
+				t.Errorf("command output logged at %s, want DEBUG: %q", e.Level, e.Message)
+			}
 		}
 	})
 
