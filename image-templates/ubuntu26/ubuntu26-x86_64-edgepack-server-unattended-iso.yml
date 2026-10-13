@@ -88,6 +88,15 @@ systemConfig:
 
   hostname: edgepack-server
 
+  # Pin the network backend to netplan explicitly. Leaving this unset used to
+  # let ICT also enable systemd-networkd (its unit ships with the base systemd
+  # package regardless), which then raced NetworkManager/cloud-init's own
+  # netplan output for control of eth0: DHCP still succeeded and nmcli still
+  # showed "connected", but routing became inconsistent and outbound
+  # connectivity failed entirely.
+  network:
+    backend: netplan
+
   bootloader:
     # preserve: installed OS boots first, existing firmware entries are kept after it.
     bootEntryPolicy: preserve

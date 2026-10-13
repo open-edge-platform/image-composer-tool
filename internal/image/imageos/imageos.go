@@ -1235,9 +1235,17 @@ func updateImageNetwork(installRoot string, template *config.ImageTemplate) erro
 		return fmt.Errorf("failed to write declarative network config: %w", err)
 	}
 
-	// When netplan is the backend, netplan manages its own renderer —
-	// do not unconditionally enable systemd-networkd alongside it.
-	if template.SystemConfig.Network.Backend == "netplan" {
+	// Only enable systemd-networkd when the template explicitly opts into it
+	// as the network backend. Leaving Backend unset means the template did
+	// not ask ICT to manage networking at all, and the netplan backend
+	// manages its own renderer — in both cases systemd-networkd must not be
+	// unconditionally enabled, since the unit ships as part of the base
+	// systemd package and is almost always present. Enabling it regardless
+	// of backend makes it fight NetworkManager (or networkd's own default
+	// renderer) for the same interfaces, producing a DHCP lease on one or
+	// both managers with broken or duplicate routing and no real
+	// connectivity, even though the interface still shows "connected".
+	if template.SystemConfig.Network.Backend != "systemd-networkd" {
 		return nil
 	}
 
