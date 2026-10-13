@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useStore, cascadingOptions } from '../store'
 import { api } from '../api/client'
-import type { ComposeResponse, CredentialInput, CredentialRequirement } from '../api/types'
+import type { ComposeResponse, CredentialInput } from '../api/types'
 import { Select } from './Select'
 import { credentialsComplete } from './CredentialsStep'
 import { CredentialsDialog } from './CredentialsDialog'
@@ -28,6 +28,7 @@ export function BasicPage({
   const selection = useStore((s) => s.selection)
   const setField = useStore((s) => s.setField)
   const importedTemplate = useStore((s) => s.importedTemplate)
+  const importedRequirements = useStore((s) => s.importedRequirements)
   const setImportedTemplate = useStore((s) => s.setImportedTemplate)
 
   const [review, setReview] = useState<ComposeResponse | null>(null)
@@ -43,10 +44,6 @@ export function BasicPage({
   // component state rather than the shared store: the store is persisted, and a
   // password must not outlive the build it was typed for.
   const [credentials, setCredentials] = useState<CredentialInput[]>([])
-  // Accounts the imported template declares, as the server resolved them at
-  // import time. Kept beside `credentials` rather than in the store for
-  // symmetry with the selection path, which reads them off the compose response.
-  const [importedRequirements, setImportedRequirements] = useState<CredentialRequirement[]>([])
 
   const opts = useMemo(
     () => (manifest ? cascadingOptions(manifest, selection) : null),
@@ -215,7 +212,6 @@ export function BasicPage({
                 className="font-semibold text-slate-600 hover:underline"
                 onClick={() => {
                   setImportedTemplate(null)
-                  setImportedRequirements([])
                   setCredentials([])
                   setError(null)
                 }}
@@ -395,8 +391,7 @@ export function BasicPage({
         open={importOpen}
         onCancel={() => setImportOpen(false)}
         onImport={(t, reqs) => {
-          setImportedTemplate(t)
-          setImportedRequirements(reqs)
+          setImportedTemplate(t, reqs)
           // A different template asks for different accounts, so anything typed
           // for the previous one is dropped rather than sent with this build.
           setCredentials([])

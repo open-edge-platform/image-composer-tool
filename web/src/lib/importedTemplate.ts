@@ -48,6 +48,10 @@ export interface ImportedTemplate {
   // the user supplied — re-emitting our parse would silently drop comments,
   // anchors, and any key this preview doesn't model.
   yaml: string
+  // systemConfig.packages as written, each entry unsplit. A pinned entry is
+  // `name_version`, but rpm names may themselves contain `_`, so splitting one
+  // back apart is guesswork — the entry is carried whole and shown as-is.
+  packages: string[]
   summary: ImportedTemplateSummary
 }
 
@@ -116,6 +120,7 @@ export function parseImportedTemplate(fileName: string, text: string): ImportedT
     fileName,
     displayName: displayNameFor(imageName, fileName),
     yaml: text,
+    packages: packages.map(str).filter((p) => p !== ''),
     summary: {
       imageName,
       imageVersion: str(t.image?.version),

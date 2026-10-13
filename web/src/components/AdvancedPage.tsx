@@ -9,6 +9,8 @@ import { Input } from './Input'
 import { DiskStep } from './DiskStep'
 import { credentialsComplete } from './CredentialsStep'
 import { CredentialsDialog } from './CredentialsDialog'
+import { ImportTemplateDialog } from './ImportTemplateDialog'
+import { ImportedTemplateCard } from './ImportedTemplateCard'
 import { parseDiskFromYaml, toDiskConfig, validateDisk } from '../lib/disk'
 
 // How long to wait after the last keystroke in Image Name before re-composing.
@@ -55,6 +57,9 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   const seedDisk = useStore((s) => s.seedDisk)
   const disk = useStore((s) => s.disk)
   const diskEdited = useStore((s) => s.diskEdited)
+  const importedTemplate = useStore((s) => s.importedTemplate)
+  const importedRequirements = useStore((s) => s.importedRequirements)
+  const setImportedTemplate = useStore((s) => s.setImportedTemplate)
 
   const [step, setStep] = useState(0)
   const [composed, setComposed] = useState<ComposeResponse | null>(null)
@@ -62,6 +67,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [credentialsOpen, setCredentialsOpen] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
   // Logins for accounts the resolved template leaves without one. Component
   // state, not the shared store: the store is persisted and a password must not
   // outlive the build it was typed for.
@@ -197,12 +203,28 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
 
   if (!manifest || !opts) return <div className="p-8">Loading…</div>
 
+  // An imported template is a complete document: it is built as supplied rather
+  // than composed from the selections, so the steps describe it instead of
+  // driving it.
+  const usingImport = importedTemplate !== null
+
+  // The Packages step keys its repository list off a manifest target id, which
+  // an imported template has no selection to supply. Its own `target` names one:
+  // `dist` is the id the manifest uses, with `os` as the fallback for a document
+  // that only states the family.
+  const importedOs = importedTemplate
+    ? (manifest.targets.find((t) => t.id === importedTemplate.summary.dist)?.id ??
+      manifest.targets.find((t) => t.os === importedTemplate.summary.os)?.id ??
+      '')
+    : ''
+  const packagesOs = usingImport ? importedOs : selection.os
+
   const setSel = (k: keyof Selection, v: string) => {
     setField(k, v)
     setError(null) // clear any stale compose error from the previous selection
   }
 
-  const requirements = composed?.credentials ?? []
+  const requirements = usingImport ? importedRequirements : (composed?.credentials ?? [])
   // Same gate as Basic: the backend rejects a build whose template leaves an
   // account without a login, so stop here rather than letting it fail.
   const credentialsReady = credentialsComplete(requirements, credentials)
@@ -250,7 +272,9 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   }
 
   const onComposeClick = () => {
-    if (diskInvalid) {
+    // The disk model belongs to the selection path; an imported template is
+    // built as supplied, so nothing on that step gates it.
+    if (!usingImport && diskInvalid) {
       setError('Fix the errors on the Disk step before composing.')
       return
     }
@@ -258,7 +282,28 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
       setCredentialsOpen(true)
       return
     }
-    void onBuild()
+    void (usingImport ? onBuildImported() : onBuild())
+  }
+
+  // An imported template is posted as supplied — none of the wizard's overrides
+  // apply to it, since they are expressed as a delta over a matched template and
+  // an imported document was never matched to one.
+  const onBuildImported = async () => {
+    if (!importedTemplate || !credentialsReady) return
+    try {
+      setBusy(true)
+      setError(null)
+      const accepted = await api.startBuildFromYaml(
+        importedTemplate.yaml,
+        credentials.length > 0 ? credentials : undefined,
+      )
+      setCredentialsOpen(false)
+      onBuildStarted(accepted.buildId)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
   }
 
   // Empty until something is overridden: with no overrides no delta is
@@ -283,6 +328,65 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
 
   return (
     <div className="mx-auto max-w-screen-2xl px-10 py-8">
+      <div className="mb-5 flex justify-end">
+        <button
+          type="button"
+          className="flex items-center gap-2 rounded-md border-2 border-[#0071c5] bg-[#0071c5] px-5 py-2.5 font-semibold text-white shadow-sm hover:border-[#00285a] hover:bg-[#00285a]"
+          onClick={() => setImportOpen(true)}
+        >
+          <svg
+            aria-hidden="true"
+            viewBox="0 0 20 20"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="h-4 w-4"
+          >
+            <path d="M10 13V3m0 0L6.5 6.5M10 3l3.5 3.5" />
+            <path d="M3.5 12.5v2.5a1.5 1.5 0 0 0 1.5 1.5h10a1.5 1.5 0 0 0 1.5-1.5v-2.5" />
+          </svg>
+          Import Template
+        </button>
+      </div>
+
+      {importedTemplate && (
+        <div className="mb-5 rounded-lg border border-[#0071c5]/30 bg-blue-50 px-4 py-3 text-sm">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="font-semibold text-[#00285a]">Imported template:</span>
+            <span className="text-slate-700">{importedTemplate.displayName}</span>
+            {importedTemplate.fileName !== importedTemplate.displayName && (
+              <span className="text-slate-500">from {importedTemplate.fileName}</span>
+            )}
+            <div className="ml-auto flex gap-3">
+              <button
+                type="button"
+                className="font-semibold text-[#0071c5] hover:underline"
+                onClick={() => setImportOpen(true)}
+              >
+                Replace
+              </button>
+              <button
+                type="button"
+                className="font-semibold text-slate-600 hover:underline"
+                onClick={() => {
+                  setImportedTemplate(null)
+                  setCredentials([])
+                  setError(null)
+                }}
+              >
+                Remove
+              </button>
+            </div>
+          </div>
+          <p className="mt-1.5 text-xs text-slate-600">
+            Composing builds this template as supplied. The steps below describe it;
+            editing it here is not supported yet.
+          </p>
+        </div>
+      )}
+
       {/* Step progress indicator (matches the prototype's numbered dots + lines). */}
       <div className="mb-6 flex items-center justify-center gap-1">
         {STEPS.map((label, i) => (
@@ -333,7 +437,11 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
         )}
 
         {step === 1 && (
-          <PackagesStep os={selection.os} active={active} basePackages={composed?.basePackages ?? []} />
+          <PackagesStep
+            os={packagesOs}
+            active={active}
+            basePackages={composed?.basePackages ?? []}
+          />
         )}
 
         {step === 2 && <DiskStep />}
@@ -342,14 +450,33 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
           <div>
             <h2 className="mb-1 text-lg font-bold text-[#00285a]">Review Image Configuration</h2>
             <p className="mb-5 text-sm text-slate-500">
-              Review what this combination will compose. The template below is
-              only what you changed, as a delta extending the pre-authored
-              template it is based on.
+              {usingImport
+                ? 'Review the imported template. It is built exactly as supplied.'
+                : 'Review what this combination will compose. The template below is only what you changed, as a delta extending the pre-authored template it is based on.'}
             </p>
             {error && (
               <div className="mb-3 rounded bg-red-50 p-3 text-sm text-red-700">{error}</div>
             )}
-            {complete && composed ? (
+            {usingImport ? (
+              <>
+                <ImportedTemplateCard template={importedTemplate} />
+                <div className="mt-4 flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={onComposeClick}
+                    disabled={busy || buildInProgress}
+                    className="rounded-md bg-[#0071c5] px-5 py-2.5 font-semibold text-white hover:bg-[#00285a] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {busy ? 'Starting…' : buildInProgress ? 'Composing…' : 'Compose Imported Image'}
+                  </button>
+                  {buildInProgress && (
+                    <span className="text-sm text-amber-600">
+                      A compose is already in progress. Switch to the Compose Image tab to monitor it.
+                    </span>
+                  )}
+                </div>
+              </>
+            ) : complete && composed ? (
               <>
                 {/* Section 1: Review Image Configuration — the same summary shape
                     the Basic tab shows, so both panes agree on what will compose. */}
@@ -499,7 +626,20 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
         buildInProgress={buildInProgress}
         error={error}
         onCancel={() => setCredentialsOpen(false)}
-        onCompose={() => void onBuild()}
+        onCompose={() => void (usingImport ? onBuildImported() : onBuild())}
+      />
+
+      <ImportTemplateDialog
+        open={importOpen}
+        onCancel={() => setImportOpen(false)}
+        onImport={(t, reqs) => {
+          setImportedTemplate(t, reqs)
+          // A different template asks for different accounts, so anything typed
+          // for the previous one is dropped rather than sent with this build.
+          setCredentials([])
+          setError(null)
+          setImportOpen(false)
+        }}
       />
     </div>
   )

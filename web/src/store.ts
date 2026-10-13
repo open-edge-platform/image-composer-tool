@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Manifest, Combination } from './api/types'
+import type { Manifest, Combination, CredentialRequirement } from './api/types'
 import type { DiskModel } from './lib/disk'
 import type { ImportedTemplate } from './lib/importedTemplate'
 
@@ -119,6 +119,10 @@ interface AppState {
   // from the manifest selections. Holds the document verbatim plus the preview
   // summary parsed from it; nothing else in the store is derived from it yet.
   importedTemplate: ImportedTemplate | null
+  // The accounts that template declares, as the server resolved them at import
+  // time. Not a secret, unlike the logins typed for them — those stay in
+  // component state so they cannot outlive the build they were typed for.
+  importedRequirements: CredentialRequirement[]
   setManifest: (m: Manifest) => void
   setField: (key: keyof Selection, value: string) => void
   // User-typed image name (marks it edited so seedImageName stops overwriting it).
@@ -144,7 +148,7 @@ interface AppState {
   // Drop the user's edits so the next compose reseeds from the template.
   resetDisk: () => void
   // Pass null to drop an imported template and go back to the selections.
-  setImportedTemplate: (t: ImportedTemplate | null) => void
+  setImportedTemplate: (t: ImportedTemplate | null, requirements?: CredentialRequirement[]) => void
 }
 
 const emptySelection: Selection = {
@@ -167,8 +171,10 @@ export const useStore = create<AppState>((set) => ({
   diskEdited: false,
   diskSeed: null,
   importedTemplate: null,
+  importedRequirements: [],
   setManifest: (m) => set({ manifest: m }),
-  setImportedTemplate: (t) => set({ importedTemplate: t }),
+  setImportedTemplate: (t, requirements) =>
+    set({ importedTemplate: t, importedRequirements: t ? (requirements ?? []) : [] }),
   setImageName: (value) => set({ imageName: value, imageNameEdited: true }),
   seedImageName: (value) =>
     set((state) => (state.imageNameEdited ? {} : { imageName: value })),

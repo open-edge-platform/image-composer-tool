@@ -12,9 +12,12 @@ export function SelectedPackages({ repos }: SelectedPackagesProps) {
   const addedPackages = useStore((s) => s.addedPackages)
   const removePackage = useStore((s) => s.removePackage)
   const clearPackages = useStore((s) => s.clearPackages)
+  const importedTemplate = useStore((s) => s.importedTemplate)
 
   const labelFor = (repoId: string) => repos.find((r) => r.id === repoId)?.displayName ?? repoId
   const isBaseRepo = (repoId: string) => repos.find((r) => r.id === repoId)?.enabledByDefault ?? false
+
+  const imported = importedTemplate?.packages ?? []
 
   const groups = new Map<string, AddedPackage[]>()
   for (const p of addedPackages) {
@@ -24,12 +27,12 @@ export function SelectedPackages({ repos }: SelectedPackagesProps) {
   }
   const repoIds = [...groups.keys()].sort((a, b) => labelFor(a).localeCompare(labelFor(b)))
 
+  const total = imported.length + addedPackages.length
+
   return (
     <div className="rounded-lg border border-slate-200 bg-white">
       <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2.5">
-        <span className="text-[13px] font-bold text-[#00285a]">
-          Selected ({addedPackages.length})
-        </span>
+        <span className="text-[13px] font-bold text-[#00285a]">Selected ({total})</span>
         {addedPackages.length > 0 && (
           <button
             type="button"
@@ -40,10 +43,31 @@ export function SelectedPackages({ repos }: SelectedPackagesProps) {
           </button>
         )}
       </div>
-      {addedPackages.length === 0 ? (
+      {total === 0 ? (
         <p className="px-3 py-8 text-center text-[12px] text-slate-500">No packages added yet.</p>
       ) : (
         <div className="max-h-[520px] overflow-y-auto">
+          {imported.length > 0 && (
+            <div className="border-b border-slate-100 py-1.5">
+              <div className="px-3 pb-1 text-[10px] font-bold uppercase tracking-[0.5px] text-slate-400">
+                From {importedTemplate?.displayName}
+              </div>
+              {imported.map((name) => (
+                <div key={name} className="flex items-center gap-2 px-3 py-1">
+                  <span
+                    className="min-w-0 flex-1 truncate text-[12px] text-slate-700"
+                    title={name}
+                  >
+                    {name}
+                  </span>
+                </div>
+              ))}
+              <p className="px-3 pt-1 text-[11px] text-slate-500">
+                Declared by the imported template. Editing its package list is not
+                supported yet.
+              </p>
+            </div>
+          )}
           {repoIds.map((repoId) => (
             <div key={repoId} className="border-b border-slate-100 py-1.5 last:border-b-0">
               <div className="px-3 pb-1 text-[10px] font-bold uppercase tracking-[0.5px] text-slate-400">
