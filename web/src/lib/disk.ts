@@ -390,6 +390,10 @@ export function setLayoutMode(model: DiskModel, mode: LayoutMode): DiskModel {
   }
 }
 
+// The builder keeps 1 MiB between the absolute and end-relative regions so the
+// partition spanning them is not empty (imagedisc.go endRelativeAlignBytes).
+const END_REGION_GAP_MIB = 1
+
 // usedMiB is the space the layout occupies up to the start of the "rest"
 // partition (or the end of the last one), including the leading gap. Drives the
 // "fits on the disk" check and the space summary.
@@ -405,12 +409,16 @@ export function usedMiB(model: DiskModel): number {
       high = Math.max(high, (toEnd ? parseMiB(p.start) : parseMiB(p.end)) ?? 0)
       back = Math.max(back, fromEndMiB(p.start) ?? 0, fromEndMiB(p.end) ?? 0)
     })
-    return high + back
+    return back > 0 ? high + back + END_REGION_GAP_MIB : high
   }
-  return model.partitions.reduce(
-    (total, p, i) => (isRest(model, i) ? total : total + (p.sizeMiB ?? 0)),
-    model.firstStartMiB,
-  )
+  const restAt = model.partitions.findIndex((_, i) => isRest(model, i))
+  let back = 0
+  const used = model.partitions.reduce((total, p, i) => {
+    if (isRest(model, i)) return total
+    if (restAt >= 0 && i > restAt) back += p.sizeMiB ?? 0
+    return total + (p.sizeMiB ?? 0)
+  }, model.firstStartMiB)
+  return back > 0 ? used + END_REGION_GAP_MIB : used
 }
 
 // --- Emission ----------------------------------------------------------------

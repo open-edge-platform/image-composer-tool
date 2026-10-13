@@ -373,8 +373,17 @@ describe('end-relative offsets (EdgePack)', () => {
   })
 
   it('counts the space reserved at the end of the disk', () => {
-    expect(usedMiB(seed(edgepackIso))).toBe(1 + 512 + 16384 + 4096)
-    expect(usedMiB(setLayoutMode(seed(edgepackIso), 'offset'))).toBe(513 + 20480)
+    // The trailing 1 is the gap the builder keeps before the end-relative region.
+    expect(usedMiB(seed(edgepackIso))).toBe(1 + 512 + 16384 + 4096 + 1)
+    expect(usedMiB(setLayoutMode(seed(edgepackIso), 'offset'))).toBe(513 + 20480 + 1)
+  })
+
+  it('rejects a disk too small for the gap the builder keeps before the end region', () => {
+    const model = { ...seed(edgepackIso), size: '20993MiB' }
+    expect(validateDisk(model, { imageType: 'iso' }).errors).toContain(
+      'Partitions need 20994 MiB but the disk is 20993 MiB.',
+    )
+    expect(validateDisk({ ...model, size: '20994MiB' }, { imageType: 'iso' }).errors).toEqual([])
   })
 })
 
