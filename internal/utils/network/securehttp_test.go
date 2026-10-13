@@ -83,16 +83,17 @@ func TestResponseHeaderTimeoutSet(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		client *http.Client
+		want   time.Duration
 	}{
-		{"NewSecureHTTPClient", NewSecureHTTPClient()},
-		{"GetSecureHTTPClient", GetSecureHTTPClient()},
+		{"NewSecureHTTPClient", NewSecureHTTPClient(), responseHeaderTimeout},
+		{"GetSecureHTTPClient", GetSecureHTTPClient(), downloadResponseHeaderTimeout},
 	} {
 		tr, ok := tc.client.Transport.(*http.Transport)
 		if !ok {
 			t.Fatalf("%s: expected *http.Transport, got %T", tc.name, tc.client.Transport)
 		}
-		if tr.ResponseHeaderTimeout != responseHeaderTimeout {
-			t.Errorf("%s: ResponseHeaderTimeout = %v, want %v", tc.name, tr.ResponseHeaderTimeout, responseHeaderTimeout)
+		if tr.ResponseHeaderTimeout != tc.want {
+			t.Errorf("%s: ResponseHeaderTimeout = %v, want %v", tc.name, tr.ResponseHeaderTimeout, tc.want)
 		}
 	}
 }
