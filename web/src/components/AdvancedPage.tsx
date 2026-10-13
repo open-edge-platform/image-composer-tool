@@ -328,29 +328,6 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
 
   return (
     <div className="mx-auto max-w-screen-2xl px-10 py-8">
-      <div className="mb-5 flex justify-end">
-        <button
-          type="button"
-          className="flex items-center gap-2 rounded-md border-2 border-[#0071c5] bg-[#0071c5] px-5 py-2.5 font-semibold text-white shadow-sm hover:border-[#00285a] hover:bg-[#00285a]"
-          onClick={() => setImportOpen(true)}
-        >
-          <svg
-            aria-hidden="true"
-            viewBox="0 0 20 20"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="h-4 w-4"
-          >
-            <path d="M10 13V3m0 0L6.5 6.5M10 3l3.5 3.5" />
-            <path d="M3.5 12.5v2.5a1.5 1.5 0 0 0 1.5 1.5h10a1.5 1.5 0 0 0 1.5-1.5v-2.5" />
-          </svg>
-          Import Template
-        </button>
-      </div>
-
       {importedTemplate && (
         <div className="mb-5 rounded-lg border border-[#0071c5]/30 bg-blue-50 px-4 py-3 text-sm">
           <div className="flex flex-wrap items-center gap-3">
@@ -433,6 +410,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
             setSel={setSel}
             imageName={imageName}
             setImageName={setImageName}
+            onImport={() => setImportOpen(true)}
           />
         )}
 
@@ -653,16 +631,40 @@ function TargetStep({
   setSel,
   imageName,
   setImageName,
+  onImport,
 }: {
   opts: NonNullable<ReturnType<typeof cascadingOptions>>
   selection: Selection
   setSel: (k: keyof Selection, v: string) => void
   imageName: string
   setImageName: (v: string) => void
+  onImport: () => void
 }) {
   return (
     <div>
-      <h2 className="mb-1 text-lg font-bold text-[#00285a]">Choose Image Configuration</h2>
+      <div className="mb-1 flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-lg font-bold text-[#00285a]">Choose Image Configuration</h2>
+        <button
+          type="button"
+          onClick={onImport}
+          className="flex items-center gap-1.5 rounded-md border border-[#0071c5] px-3 py-1.5 text-xs font-semibold text-[#0071c5] hover:bg-[#0071c5] hover:text-white"
+        >
+          <svg
+            aria-hidden="true"
+            viewBox="0 0 20 20"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="h-3.5 w-3.5"
+          >
+            <path d="M10 13V3m0 0L6.5 6.5M10 3l3.5 3.5" />
+            <path d="M3.5 12.5v2.5a1.5 1.5 0 0 0 1.5 1.5h10a1.5 1.5 0 0 0 1.5-1.5v-2.5" />
+          </svg>
+          Import Template
+        </button>
+      </div>
       <p className="mb-5 text-sm text-slate-500">
         Select a use case, SKU, and platform. Pre-configured defaults are
         applied based on your selection.
