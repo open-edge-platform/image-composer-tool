@@ -1384,9 +1384,21 @@ func addImageConfigs(installRoot string, template *config.ImageTemplate) error {
 		// the quoting of a multi-line script; single-quoting installRoot also
 		// guards against whitespace/metacharacters in the path itself.
 		chrootCmd := fmt.Sprintf("chroot %s /bin/bash -c %s", shell.QuoteArg(installRoot), shell.QuoteArg(cmdStr))
-		if _, err := shell.ExecCmd(chrootCmd, true, shell.HostPath, nil); err != nil {
-			log.Errorf("Failed to execute custom configuration cmd %s: %v", configInfo.Cmd, err)
-			return fmt.Errorf("failed to execute custom configuration cmd %s: %w", configInfo.Cmd, err)
+		// Keep the command's output and attach it to the error. ExecCmd's error is
+		// only the exit status ("exit status 4"), which alone cannot distinguish a
+		// DNS failure from a proxy failure from a 404. Discarding it here left
+		// operators with nothing to go on. Mirrors overlay's RunOverlayConfigurations.
+		out, err := shell.ExecCmd(chrootCmd, true, shell.HostPath, nil)
+		if err != nil {
+			log.Errorf("Failed to execute custom configuration cmd %s: %v%s",
+				configInfo.Cmd, err, shell.FormatCommandOutput(out))
+			return fmt.Errorf("failed to execute custom configuration cmd %s: %w%s",
+				configInfo.Cmd, err, shell.FormatCommandOutput(out))
+		}
+		// DEBUG, not INFO: a command can print secrets, and a successful one's
+		// output is only wanted when asked for.
+		if strings.TrimSpace(out) != "" {
+			log.Debugf("Configuration cmd output for %s:%s", configInfo.Cmd, shell.FormatCommandOutput(out))
 		}
 		log.Debugf("Successfully executed custom configuration cmd: %s", configInfo.Cmd)
 	}
