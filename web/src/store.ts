@@ -123,6 +123,11 @@ interface AppState {
   // time. Not a secret, unlike the logins typed for them — those stay in
   // component state so they cannot outlive the build they were typed for.
   importedRequirements: CredentialRequirement[]
+  // Entries the user removed from the imported template's own package list.
+  // Removal cannot be expressed as an override — the extends merge unions
+  // package lists — so these are sent as `removePackages` and applied to the
+  // document itself before it is composed against.
+  removedBasePackages: string[]
   setManifest: (m: Manifest) => void
   setField: (key: keyof Selection, value: string) => void
   // User-typed image name (marks it edited so seedImageName stops overwriting it).
@@ -149,6 +154,8 @@ interface AppState {
   resetDisk: () => void
   // Pass null to drop an imported template and go back to the selections.
   setImportedTemplate: (t: ImportedTemplate | null, requirements?: CredentialRequirement[]) => void
+  // Drop (or restore) one of the imported template's own packages.
+  setBasePackageRemoved: (name: string, removed: boolean) => void
 }
 
 const emptySelection: Selection = {
@@ -158,6 +165,49 @@ const emptySelection: Selection = {
   os: '',
   kernel: '',
   imageType: '',
+}
+
+// selectionFromTemplate reads back as much of the cascade as an imported
+// template actually states.
+//
+// A template declares its target (`target.dist` is the id the manifest uses for
+// an OS, with `target.os` as the fallback) and its image type — but nothing
+// about a use case, SKU, or platform. Those are adopted only when exactly one
+// combination in the manifest matches what the template does state; with
+// several, picking one would be a guess presented as a fact, so the dropdowns
+// are left for the user.
+//
+// Nothing here affects what gets built: an imported template composes against
+// its own document. This only stops the Target step reading as empty for a
+// template that plainly names its target.
+export function selectionFromTemplate(
+  manifest: Manifest | null,
+  t: ImportedTemplate,
+): Partial<Selection> {
+  if (!manifest) return {}
+  const target =
+    manifest.targets.find((x) => x.id === t.summary.dist) ??
+    manifest.targets.find((x) => x.os === t.summary.os)
+  if (!target) return {}
+
+  const out: Partial<Selection> = { os: target.id }
+  if (t.summary.imageType) out.imageType = t.summary.imageType
+
+  const matches = manifest.combinations.filter(
+    (c) => c.os === target.id && (!out.imageType || c.imageType === out.imageType),
+  )
+  const first = matches[0]
+  const unambiguous =
+    first !== undefined &&
+    matches.every(
+      (c) => c.vertical === first.vertical && c.sku === first.sku && c.platform === first.platform,
+    )
+  if (unambiguous) {
+    out.vertical = first.vertical
+    out.sku = first.sku ?? ''
+    out.platform = first.platform
+  }
+  return out
 }
 
 export const useStore = create<AppState>((set) => ({
@@ -172,9 +222,30 @@ export const useStore = create<AppState>((set) => ({
   diskSeed: null,
   importedTemplate: null,
   importedRequirements: [],
+  removedBasePackages: [],
   setManifest: (m) => set({ manifest: m }),
+  // A different template has a different package list, so removals recorded
+  // against the previous one would silently apply to names that happen to match.
   setImportedTemplate: (t, requirements) =>
-    set({ importedTemplate: t, importedRequirements: t ? (requirements ?? []) : [] }),
+    set((state) => ({
+      importedTemplate: t,
+      importedRequirements: t ? (requirements ?? []) : [],
+      removedBasePackages: [],
+      // A new base template means a new image name and disk layout to seed
+      // from, so the guards that stop a reseed are cleared with it. Without
+      // this the fields keep showing the previous template's values.
+      imageNameEdited: false,
+      diskEdited: false,
+      ...(t ? { selection: { ...state.selection, ...selectionFromTemplate(state.manifest, t) } } : {}),
+    })),
+  setBasePackageRemoved: (name, removed) =>
+    set((state) => ({
+      removedBasePackages: removed
+        ? state.removedBasePackages.includes(name)
+          ? state.removedBasePackages
+          : [...state.removedBasePackages, name]
+        : state.removedBasePackages.filter((p) => p !== name),
+    })),
   setImageName: (value) => set({ imageName: value, imageNameEdited: true }),
   seedImageName: (value) =>
     set((state) => (state.imageNameEdited ? {} : { imageName: value })),

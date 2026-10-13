@@ -71,6 +71,15 @@ export interface ComposeRequest {
   // Logins for template users the template itself leaves without one. Emitted
   // into the delta's systemConfig.users. Omitted means "none supplied".
   credentials?: CredentialInput[]
+  // A complete template to compose against instead of matching the manifest:
+  // an imported template, which no combination maps to. With it set the five
+  // lookup fields carry no meaning; every override above still applies, which
+  // is what makes an imported template behave like a matched one.
+  baseYaml?: string
+  // Entries to drop from baseYaml's own systemConfig.packages. Not carried in
+  // the delta — the extends merge unions package lists and cannot subtract, so
+  // the server applies these to the document itself.
+  removePackages?: string[]
 }
 
 // A login supplied for one user the curated template already declares. Either

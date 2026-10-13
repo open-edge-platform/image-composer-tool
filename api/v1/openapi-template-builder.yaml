@@ -1079,6 +1079,12 @@ components:
         up the matching pre-authored template in the manifest; imageName never
         participates in that lookup — it is applied afterward, via a generated
         extends delta over the matched template.
+
+        `baseYaml` replaces that lookup with a document the caller supplies — an
+        imported template, which no combination maps to. With it set, the five
+        lookup fields carry no meaning and are not required; everything else
+        behaves identically, because the document simply takes the matched
+        template's place as the parent the overrides extend.
       required: [vertical, platform, os, imageType]
       properties:
         vertical:
@@ -1091,6 +1097,27 @@ components:
           type: string
         imageType:
           type: string
+        baseYaml:
+          type: string
+          description: |
+            A complete template to compose against instead of looking one up.
+            Omitted means "match the manifest" — the normal path.
+        removePackages:
+          type: array
+          description: |
+            Entries to drop from `baseYaml`'s own `systemConfig.packages`.
+
+            Unlike every other field here, this is not carried in the generated
+            delta: the extends merge unions package lists and can never subtract,
+            so removing a package the base document declares has to edit the
+            document itself. Only the listed entries are touched; the rest of the
+            document, comments included, is preserved. Ignored without
+            `baseYaml`, since a curated template is never edited in place.
+          maxItems: 1024
+          uniqueItems: true
+          items:
+            type: string
+            maxLength: 256
         imageName:
           type: string
           description: |

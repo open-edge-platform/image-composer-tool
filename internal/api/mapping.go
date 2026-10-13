@@ -54,6 +54,12 @@ func toSelection(r httpapi.ComposeRequest) service.Selection {
 	if r.Repos != nil {
 		sel.Repos = *r.Repos
 	}
+	if r.BaseYaml != nil {
+		sel.BaseYAML = *r.BaseYaml
+	}
+	if r.RemovePackages != nil {
+		sel.RemovePackages = *r.RemovePackages
+	}
 	sel.Disk = toDiskOverride(r.Disk)
 	sel.Credentials = toCredentials(r.Credentials)
 	return sel

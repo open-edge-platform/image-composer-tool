@@ -6,7 +6,7 @@
 // imported template already declares (shown so the rail isn't empty for an
 // import, but not a selection).
 
-import { act, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { SelectedPackages } from './SelectedPackages'
 import { useStore } from '../store'
@@ -32,7 +32,12 @@ const templateWith = (packages: string[]) =>
   )
 
 beforeEach(() => {
-  useStore.setState({ addedPackages: [], enabledRepos: [], importedTemplate: null })
+  useStore.setState({
+    addedPackages: [],
+    enabledRepos: [],
+    importedTemplate: null,
+    removedBasePackages: [],
+  })
 })
 
 describe('SelectedPackages', () => {
@@ -81,14 +86,50 @@ describe('SelectedPackages', () => {
     expect(screen.getByRole('button', { name: 'Clear' })).toBeTruthy()
   })
 
-  it('keeps an added package removable while an import is active', () => {
+  it('removes an imported package by recording it against the document', () => {
+    useStore.getState().setImportedTemplate(templateWith(['vim', 'bluez']))
+    render(<SelectedPackages repos={repos} />)
+
+    fireEvent.click(screen.getByLabelText('Remove bluez'))
+
+    // Recorded for the compose request, where it edits the document itself —
+    // the extends merge unions package lists and cannot subtract.
+    expect(useStore.getState().removedBasePackages).toEqual(['bluez'])
+    // And gone from the rail immediately, without waiting for a round trip.
+    expect(screen.queryByTitle('bluez')).toBeNull()
+    expect(screen.getByTitle('vim')).toBeTruthy()
+  })
+
+  it('drops removals recorded against a template that has been replaced', () => {
+    useStore.getState().setImportedTemplate(templateWith(['vim', 'bluez']))
+    render(<SelectedPackages repos={repos} />)
+    fireEvent.click(screen.getByLabelText('Remove bluez'))
+
+    act(() => useStore.getState().setImportedTemplate(templateWith(['bluez'])))
+    expect(useStore.getState().removedBasePackages).toEqual([])
+  })
+
+  // The user's own picks are the ones they are working with; the template's
+  // list is long and mostly static, so it sits underneath.
+  it('orders added packages above the template\u2019s own', () => {
+    useStore.getState().setImportedTemplate(templateWith(['vim']))
+    useStore.getState().setPackage({ name: 'htop', version: '', repo: 'base' })
+    render(<SelectedPackages repos={repos} />)
+
+    const rail = screen.getByText('Selected (2)').closest('div')!.parentElement!
+    const order = within(rail)
+      .getAllByTitle(/^(htop|vim)$/)
+      .map((e) => e.textContent)
+    expect(order).toEqual(['htop', 'vim'])
+  })
+
+  it('keeps both lists removable while an import is active', () => {
     useStore.getState().setImportedTemplate(templateWith(['vim']))
     useStore.getState().setPackage({ name: 'htop', version: '', repo: 'base' })
     render(<SelectedPackages repos={repos} />)
 
     expect(screen.getByLabelText('Remove htop')).toBeTruthy()
-    // The imported entry has no remove control of its own.
-    expect(screen.queryByLabelText('Remove vim')).toBeNull()
+    expect(screen.getByLabelText('Remove vim')).toBeTruthy()
   })
 
   it('still reports an empty rail when neither list has anything', () => {

@@ -221,7 +221,8 @@ export function BasicPage({
             </div>
           </div>
           <p className="mt-1.5 text-xs text-slate-600">
-            Composing builds this template as-is. Remove it to go back to the selections below.
+            Composing builds this template as supplied. Remove it to go back to the
+            selections below, or switch to Advanced to change it before building.
           </p>
         </div>
       )}

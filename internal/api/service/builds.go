@@ -80,7 +80,12 @@ type build struct {
 	// generated file behind and the download endpoint keeps working after it's
 	// gone. Empty for a build against a curated template directly.
 	DeltaPath string
-	done      chan struct{} // closed when the build finishes
+	// BasePath is set only for a build composed against a supplied document: the
+	// path that document was materialized to in TemplatesDir, so it can be
+	// removed once the build finishes. It is the delta's parent when there is
+	// one, so it has to outlive the build rather than the request that wrote it.
+	BasePath string
+	done     chan struct{} // closed when the build finishes
 
 	doneOnce sync.Once // guards close(done): both runBuild and the cancel watchdog can finish a build
 
@@ -290,6 +295,11 @@ type BuildRequest struct {
 	// Credentials supply logins for accounts YAML declares without one. Only
 	// meaningful with YAML — a Compose build carries its own in Selection.
 	Credentials []CredentialInput
+
+	// basePath is where resolveBuildTemplate materialized Compose.BaseYAML, read
+	// back by StartBuild so the build can remove it when it finishes. An output,
+	// not part of the request surface — which is why it is unexported.
+	basePath string
 }
 
 // BuildAccepted is returned when a build is accepted and started.
@@ -380,6 +390,7 @@ func (s *Service) StartBuild(req BuildRequest) (*BuildAccepted, error) {
 		Template:     templateName,
 		TemplatePath: templatePath,
 		DeltaPath:    deltaPath,
+		BasePath:     req.basePath,
 		Command:      name + " " + strings.Join(cmdArgs, " "),
 		Summary:      summary,
 		CreatedAt:    createdAt,
@@ -742,13 +753,28 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 		return "", "", fmt.Errorf("%w: provide either compose or yaml", errBadBuildRequest)
 	}
 	c := req.Compose
-	tmpl := s.manifest.findTemplate(c.Vertical, c.SKU, c.Platform, c.OS, c.ImageType)
-	if tmpl == "" {
-		return "", "", fmt.Errorf("%w: no template maps to the selected combination", errBadBuildRequest)
-	}
-	full, perr := safeTemplatePath(s.cfg.TemplatesDir, tmpl)
-	if perr != nil {
-		return "", "", fmt.Errorf("resolving template path: %w", perr) // server-side (bad manifest)
+	// A supplied document stands in for the manifest-matched template, exactly
+	// as in Compose. It is removed with the delta once the build finishes.
+	var tmpl, full string
+	if c.BaseYAML != "" {
+		name, path, _, merr := s.materializeBase(*c)
+		if merr != nil {
+			return "", "", fmt.Errorf("writing base template: %w", merr) // server-side
+		}
+		// Removed by the build, not here: it is the generated delta's parent and
+		// has to outlive this call for the whole build.
+		req.basePath = path
+		tmpl, full = name, path
+	} else {
+		tmpl = s.manifest.findTemplate(c.Vertical, c.SKU, c.Platform, c.OS, c.ImageType)
+		if tmpl == "" {
+			return "", "", fmt.Errorf("%w: no template maps to the selected combination", errBadBuildRequest)
+		}
+		var perr error
+		full, perr = safeTemplatePath(s.cfg.TemplatesDir, tmpl)
+		if perr != nil {
+			return "", "", fmt.Errorf("resolving template path: %w", perr) // server-side (bad manifest)
+		}
 	}
 	if !c.hasOverrides() {
 		// Without a delta the curated template is built as-is, so this is the
@@ -758,7 +784,7 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 		if verr := s.checkTemplateCredentials(full); verr != nil {
 			return "", "", verr
 		}
-		return full, tmpl, nil
+		return full, displayTemplateName(c, tmpl), nil
 	}
 	// StartBuild can be posted directly, bypassing /templates/compose, so the
 	// overrides must be validated here too rather than trusting a prior compose.
@@ -799,7 +825,18 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 	}
 	// Display name stays the curated parent's, not the generated delta's — the
 	// history/build-details panels show what the user actually chose.
-	return deltaPath, tmpl, nil
+	return deltaPath, displayTemplateName(c, tmpl), nil
+}
+
+// displayTemplateName is the name a build is listed under. For a manifest match
+// that is the curated template's own name; for a supplied document it is what
+// the document calls itself, since the on-disk name is a server-chosen scratch
+// name that would mean nothing to the caller.
+func displayTemplateName(sel *Selection, tmpl string) string {
+	if sel.BaseYAML != "" {
+		return postedTemplateName(sel.BaseYAML)
+	}
+	return tmpl
 }
 
 // credentialDeltaForPosted applies supplied logins to a posted template by
@@ -1119,6 +1156,11 @@ func (b *build) finish(status BuildStatus, arts []Artifact, errMsg string) bool 
 // generated file must never be left behind), but TemplatePath is left as-is,
 // which then 404s on download exactly as an already-missing template would.
 func (b *build) archiveAndCleanupDelta() {
+	// A materialized base document is generated the same way a delta is, and is
+	// removed whether or not a delta was layered over it.
+	if b.BasePath != "" {
+		defer func() { _ = os.Remove(b.BasePath) }()
+	}
 	if b.DeltaPath == "" {
 		return
 	}

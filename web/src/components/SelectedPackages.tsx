@@ -13,11 +13,17 @@ export function SelectedPackages({ repos }: SelectedPackagesProps) {
   const removePackage = useStore((s) => s.removePackage)
   const clearPackages = useStore((s) => s.clearPackages)
   const importedTemplate = useStore((s) => s.importedTemplate)
+  const removedBasePackages = useStore((s) => s.removedBasePackages)
+  const setBasePackageRemoved = useStore((s) => s.setBasePackageRemoved)
 
   const labelFor = (repoId: string) => repos.find((r) => r.id === repoId)?.displayName ?? repoId
   const isBaseRepo = (repoId: string) => repos.find((r) => r.id === repoId)?.enabledByDefault ?? false
 
-  const imported = importedTemplate?.packages ?? []
+  // Filtered here rather than read back off the next compose, so a removal
+  // leaves the list immediately instead of after a server round trip.
+  const imported = (importedTemplate?.packages ?? []).filter(
+    (p) => !removedBasePackages.includes(p),
+  )
 
   const groups = new Map<string, AddedPackage[]>()
   for (const p of addedPackages) {
@@ -47,27 +53,6 @@ export function SelectedPackages({ repos }: SelectedPackagesProps) {
         <p className="px-3 py-8 text-center text-[12px] text-slate-500">No packages added yet.</p>
       ) : (
         <div className="max-h-[520px] overflow-y-auto">
-          {imported.length > 0 && (
-            <div className="border-b border-slate-100 py-1.5">
-              <div className="px-3 pb-1 text-[10px] font-bold uppercase tracking-[0.5px] text-slate-400">
-                From {importedTemplate?.displayName}
-              </div>
-              {imported.map((name) => (
-                <div key={name} className="flex items-center gap-2 px-3 py-1">
-                  <span
-                    className="min-w-0 flex-1 truncate text-[12px] text-slate-700"
-                    title={name}
-                  >
-                    {name}
-                  </span>
-                </div>
-              ))}
-              <p className="px-3 pt-1 text-[11px] text-slate-500">
-                Declared by the imported template. Editing its package list is not
-                supported yet.
-              </p>
-            </div>
-          )}
           {repoIds.map((repoId) => (
             <div key={repoId} className="border-b border-slate-100 py-1.5 last:border-b-0">
               <div className="px-3 pb-1 text-[10px] font-bold uppercase tracking-[0.5px] text-slate-400">
@@ -107,6 +92,33 @@ export function SelectedPackages({ repos }: SelectedPackagesProps) {
               ))}
             </div>
           ))}
+          {/* Last: a newly picked package should land in view, and the
+              template's own list is the long, mostly-static one. */}
+          {imported.length > 0 && (
+            <div className="border-b border-slate-100 py-1.5 last:border-b-0">
+              <div className="px-3 pb-1 text-[10px] font-bold uppercase tracking-[0.5px] text-slate-400">
+                From {importedTemplate?.displayName}
+              </div>
+              {imported.map((name) => (
+                <div key={name} className="flex items-center justify-between gap-2 px-3 py-1">
+                  <span
+                    className="min-w-0 flex-1 truncate text-[12px] text-slate-700"
+                    title={name}
+                  >
+                    {name}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setBasePackageRemoved(name, true)}
+                    aria-label={`Remove ${name}`}
+                    className="shrink-0 text-slate-400 hover:text-red-600"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
