@@ -266,6 +266,8 @@ export interface EdgePack {
   // per-domain. No domain is selectable until one is chosen.
   baseRuntimes: EdgePackBaseRuntime[]
   domains: EdgePackDomain[]
+  // True when the server answered before the repository index arrived; ask again for the versions.
+  versionsPending?: boolean
 }
 
 export interface EdgePackBaseRuntime {
