@@ -209,12 +209,12 @@ describe('offset-mode validation', () => {
     expect(warnings).toContain('Gap of 1024 MiB between partitions 1 and 2.')
   })
 
-  it('warns about an overlap', () => {
+  it('rejects an overlap, which the builder would refuse', () => {
     const model = offsetSeed()
     model.partitions[1] = { ...model.partitions[1], start: '513MiB' }
-    expect(validateDisk(model, { imageType: 'raw' }).warnings).toContain(
-      'Partitions 1 and 2 overlap by 512 MiB.',
-    )
+    const { errors, warnings } = validateDisk(model, { imageType: 'raw' })
+    expect(errors).toContain('Partitions 1 and 2 overlap by 512 MiB.')
+    expect(warnings).not.toContain('Partitions 1 and 2 overlap by 512 MiB.')
   })
 
   it('rejects offsets that are not valid sizes', () => {
@@ -364,10 +364,10 @@ describe('end-relative offsets (EdgePack)', () => {
     expect(setLayoutMode(offset, 'size').partitions.map((p) => p.sizeMiB)).toEqual([512, null, 16384, 4096])
   })
 
-  it('reports an overlap between partitions measured from the end', () => {
+  it('rejects an overlap between partitions measured from the end', () => {
     const model = setLayoutMode(seed(edgepackIso), 'offset')
     model.partitions[3] = { ...model.partitions[3], start: '-6GiB' }
-    expect(validateDisk(model, { imageType: 'iso' }).warnings).toContain(
+    expect(validateDisk(model, { imageType: 'iso' }).errors).toContain(
       'Partitions 3 and 4 overlap by 2048 MiB.',
     )
   })

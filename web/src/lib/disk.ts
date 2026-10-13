@@ -524,7 +524,9 @@ export function validateDisk(model: DiskModel, ctx: DiskContext = {}): DiskIssue
     warnings.push(...fw)
   })
 
-  warnings.push(...contiguityWarnings(model))
+  const contiguity = contiguityIssues(model)
+  errors.push(...contiguity.errors)
+  warnings.push(...contiguity.warnings)
   const artifacts = artifactIssues(model, ctx)
   errors.push(...artifacts.errors)
   warnings.push(...artifacts.warnings)
@@ -687,25 +689,27 @@ function artifactIssues(model: DiskModel, ctx: DiskContext): DiskIssues {
   return { errors, warnings }
 }
 
-// contiguityWarnings reports gaps and overlaps between consecutive partitions.
+// contiguityIssues reports gaps and overlaps between consecutive partitions.
 //
 // Only reachable in 'offset' mode — 'size' mode derives the offsets and cannot
-// produce either. Warnings, not errors: a gap is legal (the schema and the
-// builder both accept it) and is occasionally deliberate, whereas an overlap is
-// almost always a mistake but is still something the tool will attempt.
-function contiguityWarnings(model: DiskModel): string[] {
-  if (model.layoutMode !== 'offset') return []
+// produce either. A gap is legal (the schema and the builder both accept it) and
+// occasionally deliberate, so it is a warning. An overlap is an error: the
+// builder rejects it before touching the disk (imagedisc.go
+// validatePartitionLayoutOrder), for absolute and end-relative offsets alike.
+function contiguityIssues(model: DiskModel): DiskIssues {
+  const errors: string[] = []
+  const warnings: string[] = []
+  if (model.layoutMode !== 'offset') return { errors, warnings }
 
-  const out: string[] = []
   for (let i = 1; i < model.partitions.length; i++) {
     // Measured back from the end, so a gap is a start nearer the end than the previous end.
     const prevBack = fromEndMiB(model.partitions[i - 1].end)
     const startBack = fromEndMiB(model.partitions[i].start)
     if (prevBack !== null && startBack !== null) {
       if (startBack < prevBack) {
-        out.push(`Gap of ${prevBack - startBack} MiB between partitions ${i} and ${i + 1}.`)
+        warnings.push(`Gap of ${prevBack - startBack} MiB between partitions ${i} and ${i + 1}.`)
       } else if (startBack > prevBack) {
-        out.push(`Partitions ${i} and ${i + 1} overlap by ${startBack - prevBack} MiB.`)
+        errors.push(`Partitions ${i} and ${i + 1} overlap by ${startBack - prevBack} MiB.`)
       }
       continue
     }
@@ -714,12 +718,12 @@ function contiguityWarnings(model: DiskModel): string[] {
     // An interior "rest" partition is already a hard error; don't pile on.
     if (prevEnd === null || start === null || isRest(model, i - 1)) continue
     if (start > prevEnd) {
-      out.push(`Gap of ${start - prevEnd} MiB between partitions ${i} and ${i + 1}.`)
+      warnings.push(`Gap of ${start - prevEnd} MiB between partitions ${i} and ${i + 1}.`)
     } else if (start < prevEnd) {
-      out.push(`Partitions ${i} and ${i + 1} overlap by ${prevEnd - start} MiB.`)
+      errors.push(`Partitions ${i} and ${i + 1} overlap by ${prevEnd - start} MiB.`)
     }
   }
-  return out
+  return { errors, warnings }
 }
 
 // autoExpandErrors mirrors validateAutoExpandLastPartitionConstraints in
