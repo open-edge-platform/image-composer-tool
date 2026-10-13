@@ -192,3 +192,35 @@ func TestDownloadWithRetry_HeaderTimeoutKeepsDefaultBudget(t *testing.T) {
 		t.Errorf("requests = %d, want %d", got, maxDownloadAttempts)
 	}
 }
+
+// The budget follows the latest failure: a 503 followed by header timeouts gets
+// the default three attempts, not the six the 503 alone would have earned.
+func TestDownloadWithRetry_BudgetFollowsLatestFailure(t *testing.T) {
+	var count int32
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&count, 1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		select {
+		case <-r.Context().Done():
+		case <-time.After(5 * time.Second):
+		}
+	}))
+	server.EnableHTTP2 = true
+	server.StartTLS()
+	t.Cleanup(server.Close)
+
+	transport := server.Client().Transport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = 50 * time.Millisecond
+	t.Cleanup(transport.CloseIdleConnections)
+	dest := filepath.Join(t.TempDir(), "pkg.deb")
+
+	err := downloadWithRetry(context.Background(), &http.Client{Transport: transport}, server.URL+"/pkg.deb", dest, 0)
+	if err == nil || !strings.Contains(err.Error(), "timeout awaiting response headers") {
+		t.Fatalf("err = %v, want a header timeout", err)
+	}
+	if got := atomic.LoadInt32(&count); got != maxDownloadAttempts {
+		t.Errorf("requests = %d, want %d", got, maxDownloadAttempts)
+	}
+}

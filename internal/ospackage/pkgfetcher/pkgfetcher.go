@@ -25,8 +25,8 @@ const (
 	initialRetryBackoff = 500 * time.Millisecond
 	// A 429/502/503/504 means the server (or a gateway in front of it) is
 	// overloaded rather than failing at random (Launchpad's PPA snapshot host
-	// sheds load for minutes at a time), so once a download sees one it gets
-	// more attempts and much longer waits.
+	// sheds load for minutes at a time), so while a download's latest failure is
+	// one of those it gets more attempts and much longer waits.
 	maxUnavailableAttempts = 6
 	// bodyIdleTimeout bounds the gap between successful reads of a response
 	// body. The shared client's ResponseHeaderTimeout only covers the wait for
@@ -162,13 +162,14 @@ func downloadWithRetry(ctx context.Context, client *http.Client, url, destPath s
 
 	var lastErr error
 	backoff := initialRetryBackoff
-	sawUnavailable := false
 	unavailableWaits := 0
 
 	for attempt := 1; ; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("download cancelled before attempt %d: %w", attempt, err)
 		}
+		// The attempt budget and the wait follow this attempt's failure, not any earlier one.
+		unavailable := false
 		var retryAfter time.Duration
 		// Per-attempt cancellable context so the idle watchdog can tear down a
 		// stalled exchange without affecting the caller's ctx or later attempts.
@@ -193,7 +194,7 @@ func downloadWithRetry(ctx context.Context, client *http.Client, url, destPath s
 					if shouldRetryHTTPStatus(resp.StatusCode) {
 						lastErr = fmt.Errorf("transient status: %s", resp.Status)
 						if unavailableStatus(resp.StatusCode) {
-							sawUnavailable = true
+							unavailable = true
 							retryAfter = parseRetryAfter(resp.Header.Get("Retry-After"))
 						}
 						return
@@ -247,7 +248,7 @@ func downloadWithRetry(ctx context.Context, client *http.Client, url, destPath s
 		}
 
 		limit := maxDownloadAttempts
-		if sawUnavailable {
+		if unavailable {
 			limit = maxUnavailableAttempts
 		}
 		if attempt >= limit {
@@ -255,7 +256,7 @@ func downloadWithRetry(ctx context.Context, client *http.Client, url, destPath s
 		}
 
 		wait := backoff
-		if sawUnavailable {
+		if unavailable {
 			unavailableWaits++
 			wait = unavailableWait(unavailableWaits, threadcontext, retryAfter, unavailableRetryBackoff, maxUnavailableRetryBackoff)
 		} else {
