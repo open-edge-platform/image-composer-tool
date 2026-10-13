@@ -10,11 +10,10 @@ import (
 // per command (a large template runs hundreds).
 var proxyReportOnce sync.Once
 
-// ProxyEnvNames returns the sorted NAMES of the proxy variables that will be
+// ProxyEnvNames returns the sorted NAMES of the given proxy variables, the ones
 // forwarded into chroot/sudo commands. Names only — the values routinely embed
 // credentials, and build.go deliberately redacts errors for the same reason.
-func ProxyEnvNames() []string {
-	proxyEnv := GetOSProxyEnvirons()
+func ProxyEnvNames(proxyEnv map[string]string) []string {
 	names := make([]string, 0, len(proxyEnv))
 	for key := range proxyEnv {
 		names = append(names, key)
@@ -23,17 +22,17 @@ func ProxyEnvNames() []string {
 	return names
 }
 
-// ReportProxyEnvOnce logs, once per process, which proxy variables the build will
-// forward into chrooted and sudo commands.
+// ReportProxyEnvOnce logs, once per process, which of the given proxy variables
+// the build forwards into chrooted and sudo commands.
 //
 // A build whose network egress requires a proxy fails in ways that look nothing like
 // a proxy problem: a direct connection to a public host returns NXDOMAIN or a reset
 // long before any retry logic engages, so the command reports a bare non-zero exit.
 // Stating the forwarded set up front makes "no proxy configured" visible at the top of
 // the log instead of inferrable only from a downstream symptom.
-func ReportProxyEnvOnce() {
+func ReportProxyEnvOnce(proxyEnv map[string]string) {
 	proxyReportOnce.Do(func() {
-		names := ProxyEnvNames()
+		names := ProxyEnvNames(proxyEnv)
 		if len(names) == 0 {
 			log.Info("No proxy environment variables set; chrooted and sudo commands will connect directly.")
 			return

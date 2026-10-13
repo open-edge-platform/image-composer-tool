@@ -43,7 +43,7 @@ func TestProxyEnvNames(t *testing.T) {
 		t.Setenv(kv[0], kv[1])
 	}
 
-	names := ProxyEnvNames()
+	names := ProxyEnvNames(GetOSProxyEnvirons())
 
 	joined := strings.Join(names, ",")
 	for _, want := range []string{"HTTPS_PROXY", "http_proxy", "NO_PROXY"} {
@@ -78,7 +78,7 @@ func TestProxyEnvNamesEmptyWhenUnset(t *testing.T) {
 		}
 	}
 
-	if names := ProxyEnvNames(); len(names) != 0 {
+	if names := ProxyEnvNames(GetOSProxyEnvirons()); len(names) != 0 {
 		t.Errorf("ProxyEnvNames() = %v, want empty when no proxy vars are set", names)
 	}
 }
@@ -90,8 +90,8 @@ func TestReportProxyEnvOnce(t *testing.T) {
 	t.Setenv("HTTPS_PROXY", "http://user:hunter2@proxy.example:912")
 	logs := observeLogs(t)
 
-	ReportProxyEnvOnce()
-	ReportProxyEnvOnce()
+	ReportProxyEnvOnce(GetOSProxyEnvirons())
+	ReportProxyEnvOnce(GetOSProxyEnvirons())
 
 	entries := logs.All()
 	if len(entries) != 1 {
@@ -108,7 +108,7 @@ func TestReportProxyEnvOnceWithoutProxy(t *testing.T) {
 	clearProxyEnv(t)
 	logs := observeLogs(t)
 
-	ReportProxyEnvOnce()
+	ReportProxyEnvOnce(GetOSProxyEnvirons())
 
 	entries := logs.All()
 	if len(entries) != 1 || entries[0].Level != zap.InfoLevel {

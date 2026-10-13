@@ -716,8 +716,9 @@ func GetFullCmdStr(cmdStr string, sudo bool, chrootPath string, envVal []string)
 			return fullPathCmdStr, fmt.Errorf("chroot path %s does not exist", chrootPath)
 		}
 
-		ReportProxyEnvOnce()
-		envValStr += proxyEnvAssignments(GetOSProxyEnvirons())
+		proxyEnv := GetOSProxyEnvirons()
+		ReportProxyEnvOnce(proxyEnv)
+		envValStr += proxyEnvAssignments(proxyEnv)
 
 		// chroot always requires elevation; sudoPrefix drops the redundant inner
 		// sudo when the process is already root (see sudoPrefix docstring).
@@ -729,8 +730,9 @@ func GetFullCmdStr(cmdStr string, sudo bool, chrootPath string, envVal []string)
 
 	} else {
 		if sudo {
-			ReportProxyEnvOnce()
-			envValStr += proxyEnvAssignments(GetOSProxyEnvirons())
+			proxyEnv := GetOSProxyEnvirons()
+			ReportProxyEnvOnce(proxyEnv)
+			envValStr += proxyEnvAssignments(proxyEnv)
 
 			// sudoPrefix drops the redundant inner sudo when already root
 			// (see sudoPrefix docstring); otherwise elevates per command.
