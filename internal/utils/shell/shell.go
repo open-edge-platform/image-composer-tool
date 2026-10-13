@@ -325,10 +325,31 @@ func GetOSProxyEnvirons() map[string]string {
 			proxyEnv[upper] = lowerVal
 		case hasUpper && !hasLower:
 			proxyEnv[lower] = upperVal
+		case !hasLower && !hasUpper:
+			// Only a mixed-case spelling (Http_Proxy), which few tools read.
+			if v, ok := caseVariant(proxyEnv, lower); ok {
+				proxyEnv[lower], proxyEnv[upper] = v, v
+			}
 		}
 	}
 
 	return proxyEnv
+}
+
+// caseVariant returns the value of a spelling of name in another case, taking
+// the first in sorted order so the result does not depend on map iteration.
+func caseVariant(env map[string]string, name string) (string, bool) {
+	var keys []string
+	for k := range env {
+		if strings.ToLower(k) == name {
+			keys = append(keys, k)
+		}
+	}
+	if len(keys) == 0 {
+		return "", false
+	}
+	sort.Strings(keys)
+	return env[keys[0]], true
 }
 
 // proxyEnvAssignments renders proxy variables as "KEY='value' " prefixes for a

@@ -190,6 +190,19 @@ func TestGetOSProxyEnvironsMirrorsCase(t *testing.T) {
 		}
 	})
 
+	t.Run("a mixed-case spelling fills both canonical ones", func(t *testing.T) {
+		clearProxyEnv(t)
+		t.Setenv("Https_Proxy", httpsVal)
+
+		got := GetOSProxyEnvirons()
+
+		for _, k := range []string{"https_proxy", "HTTPS_PROXY", "Https_Proxy"} {
+			if got[k] != httpsVal {
+				t.Errorf("proxyEnv[%q] = %q, want %q", k, got[k], httpsVal)
+			}
+		}
+	})
+
 	t.Run("both spellings set are left untouched", func(t *testing.T) {
 		clearProxyEnv(t)
 		t.Setenv("HTTPS_PROXY", httpsVal)
