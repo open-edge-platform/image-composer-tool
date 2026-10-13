@@ -309,13 +309,14 @@ func GetOSProxyEnvirons() map[string]string {
 
 	// Mirror each proxy setting into BOTH spellings. Tools disagree about which
 	// they read, and the disagreement is silent: GNU wget consults only the
-	// lowercase http_proxy/https_proxy and ignores the uppercase forms entirely,
-	// while Go's http.ProxyFromEnvironment accepts either. An environment that
-	// exports only HTTPS_PROXY therefore proxies ICT's own downloads correctly and
-	// sends a `wget` inside a configurations: block straight out to the internet,
-	// where a transparent middlebox terminates TLS and wget exits 4 without
-	// retrying. Copying the value across closes that gap for every consumer.
-	for _, lower := range []string{"http_proxy", "https_proxy", "no_proxy"} {
+	// lowercase http_proxy/https_proxy/ftp_proxy and ignores the uppercase forms
+	// entirely, while Go's http.ProxyFromEnvironment accepts either. An
+	// environment that exports only HTTPS_PROXY therefore proxies ICT's own
+	// downloads correctly and sends a `wget` inside a configurations: block
+	// straight out to the internet, where a transparent middlebox terminates TLS
+	// and wget exits 4 without retrying. Copying the value across closes that
+	// gap for every consumer.
+	for _, lower := range []string{"http_proxy", "https_proxy", "ftp_proxy", "no_proxy"} {
 		upper := strings.ToUpper(lower)
 		lowerVal, hasLower := proxyEnv[lower]
 		upperVal, hasUpper := proxyEnv[upper]

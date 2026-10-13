@@ -108,11 +108,13 @@ func clearProxyEnv(t *testing.T) {
 func TestGetOSProxyEnvironsMirrorsCase(t *testing.T) {
 	const httpsVal = "http://proxy.example:912"
 	const httpVal = "http://proxy.example:911"
+	const ftpVal = "http://proxy.example:2121"
 
 	t.Run("uppercase only is mirrored down", func(t *testing.T) {
 		clearProxyEnv(t)
 		t.Setenv("HTTP_PROXY", httpVal)
 		t.Setenv("HTTPS_PROXY", httpsVal)
+		t.Setenv("FTP_PROXY", ftpVal)
 		t.Setenv("NO_PROXY", "localhost")
 
 		got := GetOSProxyEnvirons()
@@ -120,6 +122,7 @@ func TestGetOSProxyEnvironsMirrorsCase(t *testing.T) {
 		for k, want := range map[string]string{
 			"HTTP_PROXY": httpVal, "http_proxy": httpVal,
 			"HTTPS_PROXY": httpsVal, "https_proxy": httpsVal,
+			"FTP_PROXY": ftpVal, "ftp_proxy": ftpVal,
 			"NO_PROXY": "localhost", "no_proxy": "localhost",
 		} {
 			if got[k] != want {
