@@ -102,6 +102,23 @@ func TestReportProxyEnvOnce(t *testing.T) {
 	}
 }
 
+// Most direct-connection hosts and CI runners have no proxy, so the summary says so
+// at INFO rather than warning on every build.
+func TestReportProxyEnvOnceWithoutProxy(t *testing.T) {
+	clearProxyEnv(t)
+	logs := observeLogs(t)
+
+	ReportProxyEnvOnce()
+
+	entries := logs.All()
+	if len(entries) != 1 || entries[0].Level != zap.InfoLevel {
+		t.Fatalf("entries = %v, want exactly one at INFO", entries)
+	}
+	if msg := entries[0].Message; !strings.Contains(msg, "connect directly") || strings.Contains(msg, "fail") {
+		t.Errorf("message = %q, want a neutral note that commands connect directly", msg)
+	}
+}
+
 // observeLogs routes the package logger to an in-memory observer and re-arms
 // proxyReportOnce, which an earlier test may already have spent.
 func observeLogs(t *testing.T) *observer.ObservedLogs {

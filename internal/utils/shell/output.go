@@ -7,7 +7,7 @@ import (
 )
 
 // proxyReportOnce keeps the proxy summary to a single line per build rather than one
-// per chrooted command (a large template runs hundreds).
+// per command (a large template runs hundreds).
 var proxyReportOnce sync.Once
 
 // ProxyEnvNames returns the sorted NAMES of the proxy variables that will be
@@ -24,7 +24,7 @@ func ProxyEnvNames() []string {
 }
 
 // ReportProxyEnvOnce logs, once per process, which proxy variables the build will
-// forward into chrooted commands.
+// forward into chrooted and sudo commands.
 //
 // A build whose network egress requires a proxy fails in ways that look nothing like
 // a proxy problem: a direct connection to a public host returns NXDOMAIN or a reset
@@ -35,11 +35,10 @@ func ReportProxyEnvOnce() {
 	proxyReportOnce.Do(func() {
 		names := ProxyEnvNames()
 		if len(names) == 0 {
-			log.Warn("No proxy environment variables set; chrooted commands will connect directly. " +
-				"Builds that must reach the public internet through a proxy will fail here.")
+			log.Info("No proxy environment variables set; chrooted and sudo commands will connect directly.")
 			return
 		}
-		log.Infof("Forwarding proxy environment into chrooted commands: %s", strings.Join(names, ", "))
+		log.Infof("Forwarding proxy environment into chrooted and sudo commands: %s", strings.Join(names, ", "))
 	})
 }
 
