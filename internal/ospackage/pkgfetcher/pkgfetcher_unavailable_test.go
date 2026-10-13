@@ -2,6 +2,7 @@ package pkgfetcher
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -112,8 +113,9 @@ func TestDownloadWithRetry_ServiceUnavailableGivesUp(t *testing.T) {
 	dest := filepath.Join(t.TempDir(), "pkg.deb")
 
 	err := downloadWithRetry(context.Background(), network.GetSecureHTTPClient(), server.URL+"/pkg.deb", dest, 0)
-	if err == nil || !strings.Contains(err.Error(), "after 6 attempts") {
-		t.Fatalf("err = %v, want failure after 6 attempts", err)
+	want := fmt.Sprintf("after %d attempts", maxUnavailableAttempts)
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %v, want failure %s", err, want)
 	}
 	if got := atomic.LoadInt32(count); got != maxUnavailableAttempts {
 		t.Errorf("requests = %d, want %d", got, maxUnavailableAttempts)
