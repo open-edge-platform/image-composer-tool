@@ -46,8 +46,8 @@ var (
 
 // unavailableWait is the pause before the n-th retry (from 1) once the server
 // is unavailable: a doubling schedule from base, at least the server's
-// Retry-After, offset by the worker index so parallel downloads do not retry in
-// lockstep, and never more than limit.
+// Retry-After, never more than limit, then offset by the worker index so
+// parallel downloads do not retry in lockstep, including once capped.
 func unavailableWait(n, worker int, retryAfter, base, limit time.Duration) time.Duration {
 	wait := base
 	for i := 1; i < n && wait < limit; i++ {
@@ -56,11 +56,10 @@ func unavailableWait(n, worker int, retryAfter, base, limit time.Duration) time.
 	if retryAfter > wait {
 		wait = retryAfter
 	}
-	wait += time.Duration(worker) * time.Second
 	if wait > limit {
 		wait = limit
 	}
-	return wait
+	return wait + time.Duration(worker)*time.Second
 }
 
 // parseRetryAfter reads a Retry-After header (delay-seconds or HTTP-date) and

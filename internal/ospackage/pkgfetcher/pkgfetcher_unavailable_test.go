@@ -37,9 +37,11 @@ func TestUnavailableWait(t *testing.T) {
 		{"capped", 4, 0, 0, 2 * time.Minute},
 		{"stays capped", 5, 0, 0, 2 * time.Minute},
 		{"worker offset", 1, 3, 0, 18 * time.Second},
+		{"worker offset kept at the cap", 5, 7, 0, 2*time.Minute + 7*time.Second},
 		{"retry-after above schedule", 1, 0, 90 * time.Second, 90 * time.Second},
 		{"retry-after below schedule", 3, 0, 5 * time.Second, 60 * time.Second},
 		{"retry-after capped", 1, 0, 10 * time.Minute, 2 * time.Minute},
+		{"retry-after at the cap keeps the worker offset", 1, 2, 2 * time.Minute, 2*time.Minute + 2*time.Second},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
