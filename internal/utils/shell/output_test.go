@@ -3,7 +3,11 @@ package shell
 import (
 	"os"
 	"strings"
+	"sync"
 	"testing"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestFormatCommandOutput(t *testing.T) {
@@ -79,11 +83,35 @@ func TestProxyEnvNamesEmptyWhenUnset(t *testing.T) {
 	}
 }
 
-// TestReportProxyEnvOnce asserts the summary is emitted at most once per process, so a
+// TestReportProxyEnvOnce asserts the summary is logged exactly once per process, so a
 // template with hundreds of chrooted commands does not repeat it per command.
 func TestReportProxyEnvOnce(t *testing.T) {
+	clearProxyEnv(t)
+	t.Setenv("HTTPS_PROXY", "http://user:hunter2@proxy.example:912")
+	logs := observeLogs(t)
+
 	ReportProxyEnvOnce()
-	ReportProxyEnvOnce() // must be a no-op, and must not panic
+	ReportProxyEnvOnce()
+
+	entries := logs.All()
+	if len(entries) != 1 {
+		t.Fatalf("logged %d entries, want exactly 1: %v", len(entries), entries)
+	}
+	if msg := entries[0].Message; !strings.Contains(msg, "HTTPS_PROXY") || strings.Contains(msg, "hunter2") {
+		t.Errorf("message = %q, want the variable names and never their values", msg)
+	}
+}
+
+// observeLogs routes the package logger to an in-memory observer and re-arms
+// proxyReportOnce, which an earlier test may already have spent.
+func observeLogs(t *testing.T) *observer.ObservedLogs {
+	t.Helper()
+	core, logs := observer.New(zap.DebugLevel)
+	orig := log
+	log = zap.New(core).Sugar()
+	proxyReportOnce = sync.Once{}
+	t.Cleanup(func() { log = orig })
+	return logs
 }
 
 // clearProxyEnv removes every proxy spelling so a case-mirroring case starts clean.
