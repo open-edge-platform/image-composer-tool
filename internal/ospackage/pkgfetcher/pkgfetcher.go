@@ -74,6 +74,7 @@ func parseRetryAfter(v string) time.Duration {
 		if secs <= 0 {
 			return 0
 		}
+		// Clamped so an absurd value cannot overflow time.Duration and read as short.
 		return time.Duration(min(secs, 24*60*60)) * time.Second
 	}
 	if at, err := http.ParseTime(v); err == nil {
@@ -253,6 +254,11 @@ func downloadWithRetry(ctx context.Context, client *http.Client, url, destPath s
 		}
 		if attempt >= limit {
 			return fmt.Errorf("download failed after %d attempts: %w", attempt, lastErr)
+		}
+		// Retrying sooner than the server asked is a guaranteed failure that only burns an attempt.
+		if retryAfter > maxUnavailableRetryBackoff {
+			return fmt.Errorf("download failed after %d attempts: %w (server asked to retry after %s, longer than the %s this fetcher waits)",
+				attempt, lastErr, retryAfter, maxUnavailableRetryBackoff)
 		}
 
 		wait := backoff

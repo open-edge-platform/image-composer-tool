@@ -120,6 +120,21 @@ func TestDownloadWithRetry_ServiceUnavailableGivesUp(t *testing.T) {
 	}
 }
 
+// A Retry-After beyond the longest wait would only be answered with another 503,
+// so the download gives up at once rather than spending its remaining attempts.
+func TestDownloadWithRetry_GivesUpWhenRetryAfterExceedsCap(t *testing.T) {
+	server, count := serveUnavailable(t, http.StatusServiceUnavailable, 1000, "600")
+	dest := filepath.Join(t.TempDir(), "pkg.deb")
+
+	err := downloadWithRetry(context.Background(), network.GetSecureHTTPClient(), server.URL+"/pkg.deb", dest, 0)
+	if err == nil || !strings.Contains(err.Error(), "retry after 10m0s") {
+		t.Fatalf("err = %v, want it to report the 10m0s Retry-After", err)
+	}
+	if got := atomic.LoadInt32(count); got != 1 {
+		t.Errorf("requests = %d, want 1", got)
+	}
+}
+
 func TestDownloadWithRetry_HonorsRetryAfter(t *testing.T) {
 	oldBase, oldLimit := unavailableRetryBackoff, maxUnavailableRetryBackoff
 	unavailableRetryBackoff, maxUnavailableRetryBackoff = time.Millisecond, 5*time.Second
