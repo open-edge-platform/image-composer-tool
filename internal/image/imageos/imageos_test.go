@@ -1349,6 +1349,61 @@ func TestUpdateImageNetwork(t *testing.T) {
 	}
 }
 
+// TestUpdateImageNetworkDoesNotEnableNetworkdUnlessRequested is a regression test:
+// systemd-networkd must only be enabled when the template explicitly selects it as
+// the network backend. The systemd-networkd unit ships as part of the base systemd
+// package and is present in virtually every image, so enabling it whenever the
+// backend is merely not "netplan" (including when no network config is specified
+// at all) makes it fight NetworkManager, or any distro-default renderer, for the
+// same interfaces: DHCP still succeeds and the interface still reports
+// "connected", but routing becomes broken or duplicated and outbound connectivity
+// fails.
+func TestUpdateImageNetworkDoesNotEnableNetworkdUnlessRequested(t *testing.T) {
+	originalExecutor := shell.Default
+	t.Cleanup(func() { shell.Default = originalExecutor })
+
+	enableErr := fmt.Errorf("systemd-networkd must not be enabled for this backend")
+	shell.Default = shell.NewMockExecutor([]shell.MockCommand{
+		{Pattern: `systemctl enable.*systemd-networkd`, Output: "", Error: enableErr},
+	})
+
+	testCases := []struct {
+		name        string
+		backend     string
+		expectError bool
+	}{
+		{name: "unset backend (no network config requested)", backend: "", expectError: false},
+		{name: "netplan backend", backend: "netplan", expectError: false},
+		{name: "systemd-networkd backend", backend: "systemd-networkd", expectError: true},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			installRoot := t.TempDir()
+			unitDir := filepath.Join(installRoot, "lib", "systemd", "system")
+			if err := os.MkdirAll(unitDir, 0755); err != nil {
+				t.Fatalf("failed to create unit dir: %v", err)
+			}
+			// systemd-networkd.service is bundled with the base systemd package,
+			// so it is present regardless of what the template requested.
+			if err := os.WriteFile(filepath.Join(unitDir, "systemd-networkd.service"), []byte(""), 0644); err != nil {
+				t.Fatalf("failed to create unit file: %v", err)
+			}
+
+			template := createTestImageTemplate()
+			template.SystemConfig.Network.Backend = tc.backend
+
+			err := updateImageNetwork(installRoot, template)
+			if tc.expectError && err == nil {
+				t.Errorf("backend %q: expected systemd-networkd to be enabled, but it was not", tc.backend)
+			}
+			if !tc.expectError && err != nil {
+				t.Errorf("backend %q: systemd-networkd must not be enabled, got error: %v", tc.backend, err)
+			}
+		})
+	}
+}
+
 // TestPrepareVeritySetupValidation tests the validation logic in prepareVeritySetup
 func TestPrepareVeritySetupValidation(t *testing.T) {
 	testCases := []struct {
