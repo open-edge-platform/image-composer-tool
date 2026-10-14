@@ -1181,6 +1181,87 @@ components:
           maxItems: 32
           items:
             $ref: '#/components/schemas/CredentialInput'
+        users:
+          type: array
+          description: |
+            Accounts to create that the matched template does not declare.
+            Unlike `credentials` — which only attaches a login to an account the
+            template already has — each entry here adds a new user to the
+            generated delta's `systemConfig.users`, with the same fields a
+            template may declare for one (groups, sudo, shell, home, startup
+            script, password ageing).
+
+            A name the template already declares is rejected: supply a
+            `credentials` entry for it instead, so an existing account's
+            privileges are never changed by accident. Every new account must
+            carry a password, an SSH public key, or both — the builder refuses
+            to create an account with an empty password.
+          maxItems: 32
+          items:
+            $ref: '#/components/schemas/NewUserInput'
+
+    NewUserInput:
+      type: object
+      description: |
+        A new account to create in the composed image. Mirrors the template
+        schema's `systemConfig.users` item, minus the fields that reference
+        host files (`sshAuthorizedKeysFiles`) or pre-hashed algorithms
+        (`hash_algo`), which a browser has no way to supply.
+      required: [user]
+      properties:
+        user:
+          type: string
+          description: |
+            Name of the account to create. Must not name a user the matched
+            template already declares — use `credentials` for those.
+          pattern: '^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,31}$'
+        password:
+          type: string
+          description: |
+            Plain text, or a complete crypt(3) hash. Plain text is hashed
+            (SHA-512 crypt) before it reaches disk. Required unless
+            `sshAuthorizedKey` is given.
+          maxLength: 256
+        sshAuthorizedKey:
+          type: string
+          description: |
+            One `authorized_keys` line, checked with the OpenSSH parser.
+            Required unless `password` is given.
+          maxLength: 4096
+        sudo:
+          type: boolean
+          description: Grant the account sudo access.
+        groups:
+          type: array
+          description: Additional groups the account is added to.
+          maxItems: 64
+          uniqueItems: true
+          items:
+            type: string
+            pattern: '^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,31}$'
+        shell:
+          type: string
+          description: Login shell, e.g. `/bin/bash`. Omitted means the OS default.
+          maxLength: 256
+        home:
+          type: string
+          description: Home directory path. Omitted means the OS default.
+          maxLength: 256
+        startupScript:
+          type: string
+          description: |
+            Absolute path to a script run on login. An account confined to one
+            has no interactive login, which is what exempts it from the
+            credential rule.
+          pattern: '^(/[^:\s]*)?$'
+          maxLength: 256
+        passwordMaxAge:
+          type: integer
+          description: |
+            Maximum password age in days (like `PASS_MAX_DAYS`). 0 means no
+            limit; omitted inherits the OS default.
+          minimum: 0
+          maximum: 99999
 
     CredentialInput:
       type: object
@@ -1579,12 +1660,13 @@ components:
       description: |
         Start a build. Carries exactly one of `compose` or `yaml` — never a diff.
 
-        Exactly one of those two must be present; `credentials` is an optional
-        companion to `yaml`. The property-count bounds below can only express
-        "one or two properties", so the real rule — exactly one template
-        source, and `credentials` only alongside `yaml` — is enforced by the
-        server, which rejects a violation with 400 `NO_MATCH`. A `compose`
-        build carries its logins in `compose.credentials` instead.
+        Exactly one of those two must be present; `credentials` and `users` are
+        optional companions to `yaml`. The property-count bounds below can only
+        express "one to three properties", so the real rule — exactly one
+        template source, and `credentials`/`users` only alongside `yaml` — is
+        enforced by the server, which rejects a violation with 400 `NO_MATCH`. A
+        `compose` build carries its logins in `compose.credentials` and its new
+        accounts in `compose.users` instead.
 
         A build whose template leaves a privileged account with neither a
         password nor an SSH key is rejected with 400 `CREDENTIALS_REQUIRED`
@@ -1602,7 +1684,7 @@ components:
         way. Keeping plain optional fields leaves the generated struct simple
         and the enforcement in one place.
       minProperties: 1
-      maxProperties: 2
+      maxProperties: 3
       properties:
         compose:
           $ref: "#/components/schemas/ComposeRequest"
@@ -1619,6 +1701,15 @@ components:
             hashed password reaches disk.
           items:
             $ref: "#/components/schemas/CredentialInput"
+        users:
+          type: array
+          description: |
+            Accounts to create in addition to those the posted `yaml` declares.
+            Valid only with `yaml`; a `compose` build uses `compose.users`.
+            Applied through the same generated `extends` delta the
+            `credentials` take, so the posted document is built as supplied.
+          items:
+            $ref: "#/components/schemas/NewUserInput"
 
     BuildAccepted:
       type: object

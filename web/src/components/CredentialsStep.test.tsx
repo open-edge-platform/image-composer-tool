@@ -80,6 +80,21 @@ describe('CredentialsStep', () => {
     expect(screen.queryByText('ops')).toBeNull()
   })
 
+  // Advanced sends the typed credentials with its preview compose, so the next
+  // response calls that account satisfied. The fields have to stay put, or they
+  // vanish from the open dialog the moment the password lands.
+  it('keeps asking about an account the caller has already supplied a login for', () => {
+    render(
+      <CredentialsStep
+        requirements={[{ ...needsOne, satisfied: true }]}
+        credentials={[{ user: 'admin', password: 'hunter2' }]}
+        onChange={() => {}}
+      />,
+    )
+    expect(screen.getByText('admin')).toBeTruthy()
+    expect(screen.getByDisplayValue('hunter2')).toBeTruthy()
+  })
+
   it('offers a standard account optionally, without blocking anything', () => {
     render(
       <CredentialsStep requirements={[standardUser]} credentials={[]} onChange={() => {}} />,

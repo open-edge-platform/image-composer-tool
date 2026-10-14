@@ -24,6 +24,24 @@ function unmet(requirements: CredentialRequirement[]): CredentialRequirement[] {
   return requirements.filter((r) => r.required && !r.satisfied)
 }
 
+// asked returns the required accounts whose fields are shown: the ones still
+// missing a login, plus any the caller has already supplied one for.
+//
+// The second case exists because Advanced sends the typed credentials with its
+// preview compose, so the next response reports that account as satisfied. Off
+// `unmet` alone the fields would then disappear from the open dialog the moment
+// the password landed, as if the entry had been discarded.
+function asked(
+  requirements: CredentialRequirement[],
+  credentials: CredentialInput[],
+): CredentialRequirement[] {
+  return requirements.filter(
+    (r) =>
+      r.required &&
+      (!r.satisfied || isSatisfiedBy(credentials.find((c) => c.user === r.user))),
+  )
+}
+
 // optional returns the non-required accounts — eligible for a credential
 // (validateCredentials has no privilege check) but never blocking a build, so
 // they are offered rather than demanded.
@@ -38,6 +56,17 @@ function isSatisfiedBy(cred: CredentialInput | undefined): boolean {
   return (cred.password ?? '').length > 0 || (cred.sshAuthorizedKey ?? '').length > 0
 }
 
+// missingCredentials names the accounts that still block a build, so a caller
+// can say which ones rather than only that something is missing.
+export function missingCredentials(
+  requirements: CredentialRequirement[],
+  credentials: CredentialInput[],
+): string[] {
+  return unmet(requirements)
+    .filter((r) => !isSatisfiedBy(credentials.find((c) => c.user === r.user)))
+    .map((r) => r.user)
+}
+
 // credentialsComplete reports whether every account that needs a login has
 // one. The caller gates its Build button on this so the user is stopped before
 // a build rather than minutes into one. Optional accounts never factor in —
@@ -46,9 +75,7 @@ export function credentialsComplete(
   requirements: CredentialRequirement[],
   credentials: CredentialInput[],
 ): boolean {
-  return unmet(requirements).every((r) =>
-    isSatisfiedBy(credentials.find((c) => c.user === r.user)),
-  )
+  return missingCredentials(requirements, credentials).length === 0
 }
 
 // CredentialsStep collects a password and/or SSH public key for the accounts a
@@ -65,7 +92,7 @@ export function CredentialsStep({
   disabled,
   showRequiredHeading = true,
 }: CredentialsStepProps) {
-  const required = unmet(requirements)
+  const required = asked(requirements, credentials)
   const offered = optional(requirements)
   if (required.length === 0 && offered.length === 0) return null
 
@@ -148,9 +175,14 @@ function CredentialFields({ req, cred, disabled, onUpdate }: CredentialFieldsPro
     if (key) onUpdate({ sshAuthorizedKey: key })
   }
 
-  // A required account needs one of the two fields, not both — the asterisk
-  // marks the pair as a whole rather than either field individually.
-  const mark = req.required ? <span className="text-red-600"> *</span> : null
+  // A required account needs one of the two fields, not both, so the mark sits
+  // on the pair rather than on either field — an asterisk on both would read as
+  // "fill in both".
+  const mark = req.required ? (
+    <p className="mb-2 text-xs font-semibold text-[#00285a]">
+      Set one of the following<span className="text-red-600"> *</span>
+    </p>
+  ) : null
 
   return (
     <div className="mb-2 rounded border border-slate-200 bg-white p-3">
@@ -158,9 +190,9 @@ function CredentialFields({ req, cred, disabled, onUpdate }: CredentialFieldsPro
         {req.user}
         {req.sudo && <span className="ml-2 text-xs font-normal text-slate-500">administrator</span>}
       </p>
+      {mark}
       <Input
         label="Password"
-        labelSuffix={mark}
         type="password"
         value={cred?.password ?? ''}
         placeholder="Leave empty to use an SSH key instead"
@@ -172,7 +204,7 @@ function CredentialFields({ req, cred, disabled, onUpdate }: CredentialFieldsPro
         htmlFor={`sshkey-${req.user}`}
         className="mb-1 block text-sm font-semibold text-[#00285a]"
       >
-        SSH public key{mark}
+        SSH public key
       </label>
       <textarea
         id={`sshkey-${req.user}`}

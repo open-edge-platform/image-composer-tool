@@ -154,19 +154,29 @@ type deltaSystemConfig struct {
 }
 
 // deltaUser attaches a login to an account the parent template already
-// declares — name identifies that account and is never used to create one.
+// declares, or declares a brand-new account. A name the parent knows
+// identifies that account; a name it does not know creates one, which is what
+// mergeUsers does with a child-only entry.
 //
 // hash_algo is deliberately absent: Password is always a complete crypt(3)
 // hash by the time it gets here (config.HashPasswordForHost), and
 // setUserPassword applies such a value with `usermod -p` as-is. Declaring an
 // algorithm would instead make it hash the hash.
 //
-// Sudo is intentionally omitted from credential deltas, since a credential
-// override (password/SSH key) should never modify privilege grants. The parent
-// template's Sudo setting is preserved during merge.
+// The non-credential fields are only ever set for a new account. For a
+// credential override they stay zero on purpose, since attaching a password or
+// SSH key must never modify a curated account's privileges or shell — and
+// mergeUserConfig keys "did the child change privileges?" off exactly these
+// fields being present.
 type deltaUser struct {
 	Name              string   `yaml:"name"`
 	Password          string   `yaml:"password,omitempty"`
+	PasswordMaxAge    *int     `yaml:"passwordMaxAge,omitempty"`
+	StartupScript     string   `yaml:"startupScript,omitempty"`
+	Groups            []string `yaml:"groups,omitempty"`
+	Sudo              bool     `yaml:"sudo,omitempty"`
+	Home              string   `yaml:"home,omitempty"`
+	Shell             string   `yaml:"shell,omitempty"`
 	SSHAuthorizedKeys []string `yaml:"sshAuthorizedKeys,omitempty"`
 }
 
@@ -227,7 +237,7 @@ func buildDelta(parentTemplate string, parentImage config.ImageInfo, parentTarge
 			d.SystemConfig.Dkms = &deltaDkms{Enabled: true}
 		}
 	}
-	if users := deltaUsers(sel.Credentials); len(users) > 0 {
+	if users := deltaUsers(sel.Credentials, sel.NewUsers); len(users) > 0 {
 		if d.SystemConfig == nil {
 			d.SystemConfig = &deltaSystemConfig{}
 		}
@@ -248,22 +258,38 @@ func buildDelta(parentTemplate string, parentImage config.ImageInfo, parentTarge
 	return data, nil
 }
 
-// deltaUsers renders validated credentials as delta user entries, sorted by
-// name for the same reason packages are: the same selection must always
-// produce the same bytes, so the Review pane's delta is diffable.
+// deltaUsers renders validated credentials and new accounts as delta user
+// entries, sorted by name for the same reason packages are: the same selection
+// must always produce the same bytes, so the Review pane's delta is diffable.
 //
-// Passwords are expected to arrive already hashed (validateCredentials does
-// it); this does not hash, so that a plain-text value can never be emitted by
-// a caller that skipped validation.
-func deltaUsers(creds []CredentialInput) []deltaUser {
-	if len(creds) == 0 {
+// Passwords are expected to arrive already hashed (validateCredentials and
+// validateNewUsers do it); this does not hash, so that a plain-text value can
+// never be emitted by a caller that skipped validation.
+func deltaUsers(creds []CredentialInput, newUsers []NewUserInput) []deltaUser {
+	if len(creds) == 0 && len(newUsers) == 0 {
 		return nil
 	}
-	out := make([]deltaUser, 0, len(creds))
+	out := make([]deltaUser, 0, len(creds)+len(newUsers))
 	for _, c := range creds {
 		u := deltaUser{Name: c.User, Password: c.Password}
 		if c.SSHAuthorizedKey != "" {
 			u.SSHAuthorizedKeys = []string{c.SSHAuthorizedKey}
+		}
+		out = append(out, u)
+	}
+	for _, n := range newUsers {
+		u := deltaUser{
+			Name:           n.User,
+			Password:       n.Password,
+			PasswordMaxAge: n.PasswordMaxAge,
+			StartupScript:  n.StartupScript,
+			Groups:         n.Groups,
+			Sudo:           n.Sudo,
+			Home:           n.Home,
+			Shell:          n.Shell,
+		}
+		if n.SSHAuthorizedKey != "" {
+			u.SSHAuthorizedKeys = []string{n.SSHAuthorizedKey}
 		}
 		out = append(out, u)
 	}

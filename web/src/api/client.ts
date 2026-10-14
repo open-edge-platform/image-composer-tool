@@ -5,6 +5,7 @@ import type {
   ComposeRequest,
   ComposeResponse,
   CredentialInput,
+  NewUserInput,
   ValidationResponse,
   PackageRepoList,
   PackageSearchResults,
@@ -122,15 +123,22 @@ export const api = {
   // sending both is rejected.
   //
   // `credentials` supply logins for accounts the document declares without one
-  // (POST /templates/validate reports which). The server applies them as a
-  // generated delta over the document, so the password is hashed before it
-  // reaches disk and the document itself is built as supplied.
-  startBuildFromYaml: (yaml: string, credentials?: CredentialInput[]) =>
+  // (POST /templates/validate reports which), and `users` add accounts the
+  // document does not declare. The server applies both as a generated delta
+  // over the document, so the password is hashed before it reaches disk and
+  // the document itself is built as supplied.
+  startBuildFromYaml: (
+    yaml: string,
+    credentials?: CredentialInput[],
+    users?: NewUserInput[],
+  ) =>
     jsonFetch<BuildAccepted>('/builds', {
       method: 'POST',
-      body: JSON.stringify(
-        credentials && credentials.length > 0 ? { yaml, credentials } : { yaml },
-      ),
+      body: JSON.stringify({
+        yaml,
+        ...(credentials && credentials.length > 0 ? { credentials } : {}),
+        ...(users && users.length > 0 ? { users } : {}),
+      }),
     }),
 
   // Compose history, newest-first (merges live builds + on-disk meta records).
