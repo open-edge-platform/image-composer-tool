@@ -294,7 +294,11 @@ export function ImportTemplateDialog({ open, onCancel, onImport }: ImportTemplat
           <button
             type="button"
             className="rounded-md bg-[#0071c5] px-4 py-2 font-semibold text-white hover:bg-[#00285a] disabled:cursor-not-allowed disabled:opacity-50"
-            disabled={!parsed || validating || validation?.valid === false}
+            // An affirmative verdict, not merely the absence of a negative one:
+            // a failed validation request leaves `validation` null, which would
+            // otherwise import a document the server never checked and defer
+            // every problem to the build.
+            disabled={!parsed || validating || !validation?.valid}
             onClick={() => parsed && onImport(parsed, validation?.credentials ?? [])}
           >
             {validating ? 'Checking…' : 'Use Template'}

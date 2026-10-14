@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"regexp"
 	"sort"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
@@ -49,6 +50,13 @@ type Selection struct {
 	// placeholder key file and no password, so without this they can only be
 	// built from the CLI via --ssh-authorized-key. Lookup-neutral.
 	Credentials []CredentialInput
+	// NewUsers are accounts the template does not declare, created by this
+	// selection. Credentials deliberately cannot do this (an unknown name is
+	// rejected there), so adding an account is a separate, explicit input: it
+	// carries the account's privileges and shell as well as its login, and must
+	// never be confused with attaching a password to a curated account.
+	// Lookup-neutral like the fields above.
+	NewUsers []NewUserInput
 
 	// BaseYAML composes against a caller-supplied document instead of a
 	// manifest-matched template: an imported template, which no combination maps
@@ -79,6 +87,31 @@ type CredentialInput struct {
 	SSHAuthorizedKey string
 }
 
+// NewUserInput is an account to create that the template does not declare.
+// Mirrors config.UserConfig minus the fields a browser cannot supply: a host
+// key-file path, and a hash algorithm (Password is hashed here).
+type NewUserInput struct {
+	// User is the account name. It must *not* name a user the resolved template
+	// already declares — that is what CredentialInput is for.
+	User string
+	// Password is accepted as plain text or as a complete crypt(3) hash, like
+	// CredentialInput.Password, and only a hash reaches the generated delta.
+	Password string
+	// SSHAuthorizedKey is one authorized_keys line.
+	SSHAuthorizedKey string
+	// Sudo grants the new account sudo access.
+	Sudo bool
+	// Groups are additional groups the account joins.
+	Groups []string
+	// Shell, Home and StartupScript mirror the same template fields; empty means
+	// "leave it to the OS default".
+	Shell         string
+	Home          string
+	StartupScript string
+	// PasswordMaxAge is the password ageing limit in days; nil inherits.
+	PasswordMaxAge *int
+}
+
 // CredentialRequirement reports one template user the caller may supply a
 // login for, so the UI can prompt before a build instead of letting it fail
 // deep inside one.
@@ -105,7 +138,7 @@ type CredentialRequirement struct {
 // adding a layer over it.
 func (s Selection) hasOverrides() bool {
 	return s.ImageName != "" || len(s.Packages) > 0 || len(s.Repos) > 0 ||
-		s.Disk != nil || len(s.Credentials) > 0
+		s.Disk != nil || len(s.Credentials) > 0 || len(s.NewUsers) > 0
 }
 
 // credentialRequirements lists every user of a merged template, flagging which
@@ -180,6 +213,91 @@ func validateCredentials(creds []CredentialInput, parent *config.ImageTemplate) 
 			c.Password = hashed
 		}
 		out = append(out, c)
+	}
+	return out, nil
+}
+
+// userNameRe mirrors the template schema's pattern for systemConfig.users
+// items' `name` (and for a group name, which has the same shape). Enforced
+// here as well as by the schema so a bad name is reported against the field
+// the user typed it into rather than as a generated-delta validation failure.
+var userNameRe = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,31}$`)
+
+// startupScriptRe mirrors the schema pattern for a user's startupScript: an
+// absolute path with no colon or whitespace, or empty.
+var startupScriptRe = regexp.MustCompile(`^(/[^:\s]*)?$`)
+
+// maxNewUsers bounds how many accounts one selection may add, matching the
+// OpenAPI maxItems. A request-size guard, not an image limit.
+const maxNewUsers = 32
+
+// validateNewUsers checks accounts the caller asked to create against the
+// curated parent. Returns them with every password replaced by a crypt hash,
+// for the same reason validateCredentials does.
+//
+// parent is the curated template merged *without* this request, which is what
+// says which names are already taken. A name it already declares is rejected
+// rather than merged into: the extends merge would quietly rewrite that
+// account's sudo grant, shell and home, so changing a curated account is not
+// something this path offers by accident.
+func validateNewUsers(users []NewUserInput, parent *config.ImageTemplate) ([]NewUserInput, error) {
+	if len(users) == 0 {
+		return nil, nil
+	}
+	if len(users) > maxNewUsers {
+		return nil, fmt.Errorf("too many new users: %d exceeds the limit of %d", len(users), maxNewUsers)
+	}
+	existing := make(map[string]bool, len(parent.SystemConfig.Users))
+	for _, u := range parent.SystemConfig.Users {
+		existing[u.Name] = true
+	}
+	seen := make(map[string]bool, len(users))
+	out := make([]NewUserInput, 0, len(users))
+	for _, u := range users {
+		switch {
+		case u.User == "":
+			return nil, fmt.Errorf("new user is missing a name")
+		case !userNameRe.MatchString(u.User):
+			return nil, fmt.Errorf("new user %q: name must match %s", u.User, userNameRe.String())
+		case existing[u.User]:
+			return nil, fmt.Errorf("new user %q: the template already declares this user; "+
+				"supply a credential for it instead of creating it", u.User)
+		case seen[u.User]:
+			return nil, fmt.Errorf("new user %q: supplied more than once", u.User)
+		}
+		seen[u.User] = true
+		if !startupScriptRe.MatchString(u.StartupScript) {
+			return nil, fmt.Errorf("new user %q: startup script must be an absolute path", u.User)
+		}
+		// Demanded for every account the credential rule applies to, which is
+		// every account except one confined to a startupScript — it has no
+		// interactive login to protect, and config.UserConfig.CredentialRequired
+		// exempts it, so demanding one here would make an account the template
+		// format allows impossible to create.
+		if u.StartupScript == "" && u.Password == "" && u.SSHAuthorizedKey == "" {
+			return nil, fmt.Errorf("new user %q: supply a password, an SSH public key, or both", u.User)
+		}
+		for _, g := range u.Groups {
+			if !userNameRe.MatchString(g) {
+				return nil, fmt.Errorf("new user %q: group %q must match %s", u.User, g, userNameRe.String())
+			}
+		}
+		if u.PasswordMaxAge != nil && *u.PasswordMaxAge < 0 {
+			return nil, fmt.Errorf("new user %q: password max age must not be negative", u.User)
+		}
+		if u.SSHAuthorizedKey != "" {
+			if err := config.ValidateSSHAuthorizedKey(u.SSHAuthorizedKey); err != nil {
+				return nil, fmt.Errorf("SSH public key for new user %q: %w", u.User, err)
+			}
+		}
+		if u.Password != "" {
+			hashed, err := config.HashPasswordForHost(u.Password)
+			if err != nil {
+				return nil, fmt.Errorf("password for new user %q: %w", u.User, err)
+			}
+			u.Password = hashed
+		}
+		out = append(out, u)
 	}
 	return out, nil
 }
@@ -310,11 +428,12 @@ func (s *Service) Compose(sel Selection) (*ComposeResult, error) {
 		}
 	}
 
-	// Credentials name users, so they have to be checked against the curated
-	// parent as merged *without* them — and the password hashed — before the
-	// delta that carries them is rendered. Only merged early when credentials
-	// are actually supplied, to keep the common path at one merge.
-	if len(sel.Credentials) > 0 {
+	// Credentials name existing users and new users must not collide with one,
+	// so both are checked against the curated parent as merged *without* them —
+	// and their passwords hashed — before the delta that carries them is
+	// rendered. Only merged early when one of them is actually supplied, to keep
+	// the common path at one merge.
+	if len(sel.Credentials) > 0 || len(sel.NewUsers) > 0 {
 		parentMerged, perr := config.LoadAndMergeTemplate(path)
 		if perr != nil {
 			return nil, newError(http.StatusUnprocessableEntity, "TEMPLATE_INVALID",
@@ -325,6 +444,11 @@ func (s *Service) Compose(sel Selection) (*ComposeResult, error) {
 			return nil, newError(http.StatusBadRequest, "BAD_REQUEST", cerr.Error())
 		}
 		sel.Credentials = hashed
+		created, uerr := validateNewUsers(sel.NewUsers, parentMerged)
+		if uerr != nil {
+			return nil, newError(http.StatusBadRequest, "BAD_REQUEST", uerr.Error())
+		}
+		sel.NewUsers = created
 	}
 
 	resolvePath := path

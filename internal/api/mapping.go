@@ -65,6 +65,7 @@ func toSelection(r httpapi.ComposeRequest) service.Selection {
 	}
 	sel.Disk = toDiskOverride(r.Disk)
 	sel.Credentials = toCredentials(r.Credentials)
+	sel.NewUsers = toNewUsers(r.Users)
 	return sel
 }
 
@@ -82,6 +83,35 @@ func toCredentials(creds *[]httpapi.CredentialInput) []service.CredentialInput {
 			Password:         derefStr(c.Password),
 			SSHAuthorizedKey: derefStr(c.SshAuthorizedKey),
 		})
+	}
+	return out
+}
+
+// toNewUsers converts accounts to create to the service type. Copied as-is for
+// the same reason toCredentials does: the checks that matter (name collisions
+// against the template, password hashing) need the resolved template.
+func toNewUsers(users *[]httpapi.NewUserInput) []service.NewUserInput {
+	if users == nil || len(*users) == 0 {
+		return nil
+	}
+	out := make([]service.NewUserInput, 0, len(*users))
+	for _, u := range *users {
+		n := service.NewUserInput{
+			User:             u.User,
+			Password:         derefStr(u.Password),
+			SSHAuthorizedKey: derefStr(u.SshAuthorizedKey),
+			Shell:            derefStr(u.Shell),
+			Home:             derefStr(u.Home),
+			StartupScript:    derefStr(u.StartupScript),
+			PasswordMaxAge:   u.PasswordMaxAge,
+		}
+		if u.Sudo != nil {
+			n.Sudo = *u.Sudo
+		}
+		if u.Groups != nil {
+			n.Groups = *u.Groups
+		}
+		out = append(out, n)
 	}
 	return out
 }
@@ -170,6 +200,7 @@ func toBuildRequest(r httpapi.BuildRequest) service.BuildRequest {
 		req.YAML = *r.Yaml
 	}
 	req.Credentials = toCredentials(r.Credentials)
+	req.NewUsers = toNewUsers(r.Users)
 	return req
 }
 

@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useStore, cascadingOptions } from '../store'
 import { api } from '../api/client'
-import type { ComposeResponse, CredentialInput } from '../api/types'
+import type { ComposeResponse, CredentialInput, NewUserInput } from '../api/types'
 import { Select } from './Select'
 import { credentialsComplete } from './CredentialsStep'
+import { newUsersValid } from './NewUsersSection'
 import { CredentialsDialog } from './CredentialsDialog'
 import { ImportTemplateDialog } from './ImportTemplateDialog'
 import { ImportedTemplateCard } from './ImportedTemplateCard'
@@ -44,6 +45,9 @@ export function BasicPage({
   // component state rather than the shared store: the store is persisted, and a
   // password must not outlive the build it was typed for.
   const [credentials, setCredentials] = useState<CredentialInput[]>([])
+  // Accounts the user asked to add on top of the template's own. Transient for
+  // the same reason credentials are: each entry carries a password.
+  const [newUsers, setNewUsers] = useState<NewUserInput[]>([])
 
   const opts = useMemo(
     () => (manifest ? cascadingOptions(manifest, selection) : null),
@@ -65,6 +69,7 @@ export function BasicPage({
     // A different template asks for different accounts, so anything typed for
     // the previous one is dropped rather than silently sent with the new build.
     setCredentials([])
+    setNewUsers([])
     let cancelled = false
     setLoadingSummary(true)
     api
@@ -97,18 +102,22 @@ export function BasicPage({
   // An imported template's accounts come from validating the document at import
   // time; a selection's come from the compose response.
   const requirements = usingImport ? importedRequirements : (review?.credentials ?? [])
-  const hasCredentialFields = requirements.some((r) => (r.required && !r.satisfied) || !r.required)
   // The backend rejects a build whose template leaves an account without a
   // login, so the button is gated on the same rule rather than letting the
-  // request fail.
-  const credentialsReady = credentialsComplete(requirements, credentials)
+  // request fail. An added account must be complete for the same reason.
+  const credentialsReady =
+    credentialsComplete(requirements, credentials) && newUsersValid(newUsers, requirements)
 
   const onBuild = async () => {
     if (!complete || !credentialsReady) return
     try {
       setBusy(true)
       setError(null)
-      const req = { ...selection, credentials: credentials.length > 0 ? credentials : undefined }
+      const req = {
+        ...selection,
+        credentials: credentials.length > 0 ? credentials : undefined,
+        users: newUsers.length > 0 ? newUsers : undefined,
+      }
       // Re-compose against the current selection right before starting the
       // build, so the logged YAML matches the request even if it changed
       // since the last auto-fetch (or that fetch is still in flight).
@@ -141,6 +150,7 @@ export function BasicPage({
       const accepted = await api.startBuildFromYaml(
         importedTemplate.yaml,
         credentials.length > 0 ? credentials : undefined,
+        newUsers.length > 0 ? newUsers : undefined,
       )
       setCredentialsOpen(false)
       onBuildStarted(accepted.buildId)
@@ -151,13 +161,10 @@ export function BasicPage({
     }
   }
 
-  const onComposeClick = () => {
-    if (hasCredentialFields) {
-      setCredentialsOpen(true)
-      return
-    }
-    void (usingImport ? onBuildImported() : onBuild())
-  }
+  // Composing always goes through the dialog: besides any missing logins, it is
+  // where accounts are added, which a template with nothing to ask for still
+  // needs to offer.
+  const onComposeClick = () => setCredentialsOpen(true)
 
   return (
     <div className="mx-auto max-w-screen-2xl px-10 py-8">
@@ -213,6 +220,7 @@ export function BasicPage({
                 onClick={() => {
                   setImportedTemplate(null)
                   setCredentials([])
+                  setNewUsers([])
                   setError(null)
                 }}
               >
@@ -235,9 +243,12 @@ export function BasicPage({
           <div
             className={
               'rounded-lg border border-slate-200 bg-white p-5 shadow-sm ' +
-              (usingImport ? 'pointer-events-none opacity-40' : '')
+              (usingImport ? 'opacity-40' : '')
             }
-            aria-hidden={usingImport}
+            // inert, not pointer-events-none plus aria-hidden: that pair left
+            // the selects tabbable while hiding them from assistive technology,
+            // so a keyboard user could still change controls that are not there.
+            inert={usingImport}
           >
             <Select
               label="Use Case"
@@ -380,6 +391,8 @@ export function BasicPage({
         requirements={requirements}
         credentials={credentials}
         onChange={setCredentials}
+        newUsers={newUsers}
+        onNewUsersChange={setNewUsers}
         credentialsReady={credentialsReady}
         busy={busy}
         buildInProgress={buildInProgress}
@@ -396,6 +409,7 @@ export function BasicPage({
           // A different template asks for different accounts, so anything typed
           // for the previous one is dropped rather than sent with this build.
           setCredentials([])
+          setNewUsers([])
           setError(null)
           setImportOpen(false)
         }}

@@ -265,6 +265,142 @@ func TestBuildDeltaCarriesCredentials(t *testing.T) {
 	}
 }
 
+// TestValidateNewUsersRejects covers the inputs that must not create an
+// account. The collision case is the important one: a name the template
+// already declares has to be refused, since merging into it would silently
+// rewrite a curated account's privileges.
+func TestValidateNewUsersRejects(t *testing.T) {
+	t.Parallel()
+
+	parent := templateWithUsers(sudoUser("admin"), config.UserConfig{Name: "guest"})
+
+	tests := []struct {
+		name    string
+		users   []NewUserInput
+		wantErr string
+	}{
+		{
+			name:    "missing name",
+			users:   []NewUserInput{{Password: "hunter2"}},
+			wantErr: "missing a name",
+		},
+		{
+			name:    "illegal name",
+			users:   []NewUserInput{{User: "-nope", Password: "hunter2"}},
+			wantErr: "name must match",
+		},
+		{
+			name:    "name the template already declares",
+			users:   []NewUserInput{{User: "admin", Password: "hunter2"}},
+			wantErr: "the template already declares this user",
+		},
+		{
+			name: "same new user twice",
+			users: []NewUserInput{
+				{User: "ops", SSHAuthorizedKey: testPubKey},
+				{User: "ops", SSHAuthorizedKey: testPubKey},
+			},
+			wantErr: "supplied more than once",
+		},
+		{
+			name:    "neither password nor key",
+			users:   []NewUserInput{{User: "ops"}},
+			wantErr: "supply a password, an SSH public key, or both",
+		},
+		{
+			name:    "illegal group",
+			users:   []NewUserInput{{User: "ops", SSHAuthorizedKey: testPubKey, Groups: []string{"bad group"}}},
+			wantErr: "must match",
+		},
+		{
+			name:    "relative startup script",
+			users:   []NewUserInput{{User: "ops", SSHAuthorizedKey: testPubKey, StartupScript: "kiosk.sh"}},
+			wantErr: "absolute path",
+		},
+		{
+			name:    "malformed SSH key",
+			users:   []NewUserInput{{User: "ops", SSHAuthorizedKey: "not-a-key"}},
+			wantErr: "not a valid OpenSSH public key line",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := validateNewUsers(tt.users, parent)
+			if err == nil {
+				t.Fatalf("validateNewUsers accepted %+v, want error", tt.users)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("error = %q, want it to contain %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestValidateNewUsersStartupScriptNeedsNoLogin covers the one account the
+// credential rule exempts (config.UserConfig.CredentialRequired): confined to
+// a startup script, it has no interactive login to protect. Demanding one
+// would make an account the template format allows impossible to create.
+func TestValidateNewUsersStartupScriptNeedsNoLogin(t *testing.T) {
+	t.Parallel()
+
+	users := []NewUserInput{{User: "kiosk", StartupScript: "/usr/local/bin/kiosk.sh"}}
+	got, err := validateNewUsers(users, templateWithUsers(sudoUser("admin")))
+	if err != nil {
+		t.Fatalf("validateNewUsers rejected a startup-script account: %v", err)
+	}
+	if len(got) != 1 || got[0].Password != "" || got[0].SSHAuthorizedKey != "" {
+		t.Errorf("got %+v, want the account passed through with no login", got)
+	}
+}
+
+// TestBuildDeltaCreatesUser confirms an added account reaches the delta with
+// the options the template schema allows for one, so the build creates it
+// rather than only giving it a login.
+func TestBuildDeltaCreatesUser(t *testing.T) {
+	t.Parallel()
+
+	maxAge := 90
+	sel := Selection{
+		NewUsers: []NewUserInput{{
+			User:             "operator",
+			Password:         "$6$salt$hash",
+			SSHAuthorizedKey: testPubKey,
+			Sudo:             true,
+			Groups:           []string{"docker"},
+			Shell:            "/bin/bash",
+			Home:             "/home/operator",
+			PasswordMaxAge:   &maxAge,
+		}},
+	}
+	data, err := buildDelta("parent.yml",
+		config.ImageInfo{Name: "img", Version: "1.0"},
+		config.TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "iso"},
+		sel, nil, nil)
+	if err != nil {
+		t.Fatalf("buildDelta: %v", err)
+	}
+
+	var d deltaTemplate
+	if err := yaml.Unmarshal(data, &d); err != nil {
+		t.Fatalf("generated delta is not parseable: %v", err)
+	}
+	if d.SystemConfig == nil || len(d.SystemConfig.Users) != 1 {
+		t.Fatalf("delta does not declare exactly one user: %s", data)
+	}
+	u := d.SystemConfig.Users[0]
+	if u.Name != "operator" || !u.Sudo || u.Shell != "/bin/bash" || u.Home != "/home/operator" {
+		t.Errorf("delta user = %+v, want the supplied account configuration", u)
+	}
+	if len(u.Groups) != 1 || u.Groups[0] != "docker" {
+		t.Errorf("delta groups = %v, want [docker]", u.Groups)
+	}
+	if u.PasswordMaxAge == nil || *u.PasswordMaxAge != maxAge {
+		t.Errorf("delta passwordMaxAge = %v, want %d", u.PasswordMaxAge, maxAge)
+	}
+}
+
 // TestRedactDeltaYAML covers the copy returned to the caller. The Advanced tab
 // renders it with Copy and Export, so a password hash in it would be on screen
 // and in a downloaded file.
@@ -327,8 +463,8 @@ func TestDeltaUsersSorted(t *testing.T) {
 	got := deltaUsers([]CredentialInput{
 		{User: "zoe", Password: "$6$a$b"},
 		{User: "admin", Password: "$6$c$d"},
-	})
-	if len(got) != 2 || got[0].Name != "admin" || got[1].Name != "zoe" {
+	}, []NewUserInput{{User: "newbie", Password: "$6$e$f"}})
+	if len(got) != 3 || got[0].Name != "admin" || got[1].Name != "newbie" || got[2].Name != "zoe" {
 		t.Errorf("deltaUsers = %+v, want sorted by name", got)
 	}
 }

@@ -295,6 +295,9 @@ type BuildRequest struct {
 	// Credentials supply logins for accounts YAML declares without one. Only
 	// meaningful with YAML — a Compose build carries its own in Selection.
 	Credentials []CredentialInput
+	// NewUsers are accounts to create alongside those YAML declares. Only
+	// meaningful with YAML, for the same reason Credentials is.
+	NewUsers []NewUserInput
 
 	// basePath is where resolveBuildTemplate materialized Compose.BaseYAML, read
 	// back by StartBuild so the build can remove it when it finishes. An output,
@@ -373,7 +376,7 @@ func (s *Service) StartBuild(req BuildRequest) (*BuildAccepted, error) {
 	// the posted document), and finish() must not delete that.
 	var deltaPath string
 	if (req.Compose != nil && req.Compose.hasOverrides()) ||
-		(req.YAML != "" && len(req.Credentials) > 0) {
+		(req.YAML != "" && (len(req.Credentials) > 0 || len(req.NewUsers) > 0)) {
 		deltaPath = templatePath
 	}
 
@@ -733,14 +736,17 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 	if req.YAML == "" && len(req.Credentials) > 0 {
 		return "", "", fmt.Errorf("%w: credentials apply to yaml; a compose build carries them in compose.credentials", errBadBuildRequest)
 	}
+	if req.YAML == "" && len(req.NewUsers) > 0 {
+		return "", "", fmt.Errorf("%w: users apply to yaml; a compose build carries them in compose.users", errBadBuildRequest)
+	}
 	if req.YAML != "" {
 		p := filepath.Join(workDir, "template.yml")
 		if werr := os.WriteFile(p, []byte(req.YAML), 0o600); werr != nil {
 			return "", "", fmt.Errorf("writing template: %w", werr) // server-side
 		}
 		name := postedTemplateName(req.YAML)
-		if len(req.Credentials) > 0 {
-			deltaPath, derr := s.credentialDeltaForPosted(p, workDir, req.Credentials)
+		if len(req.Credentials) > 0 || len(req.NewUsers) > 0 {
+			deltaPath, derr := s.credentialDeltaForPosted(p, workDir, req.Credentials, req.NewUsers)
 			if derr != nil {
 				return "", "", derr
 			}
@@ -808,9 +814,10 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 	if verr := ValidateDisk(c.Disk, c.ImageType); verr != nil {
 		return "", "", fmt.Errorf("%w: %v", errBadBuildRequest, verr)
 	}
-	// Credentials name users and carry a password to hash, so they are checked
+	// Credentials name users and carry a password to hash, and new accounts must
+	// not collide with a user the parent already declares, so both are checked
 	// against the curated parent and rewritten before the delta is rendered.
-	if len(c.Credentials) > 0 {
+	if len(c.Credentials) > 0 || len(c.NewUsers) > 0 {
 		parentMerged, perr := config.LoadAndMergeTemplate(full)
 		if perr != nil {
 			return "", "", fmt.Errorf("%w: %v", errBadBuildRequest, perr)
@@ -819,10 +826,15 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 		if cerr != nil {
 			return "", "", fmt.Errorf("%w: %v", errBadBuildRequest, cerr)
 		}
+		created, uerr := validateNewUsers(c.NewUsers, parentMerged)
+		if uerr != nil {
+			return "", "", fmt.Errorf("%w: %v", errBadBuildRequest, uerr)
+		}
 		// Copy rather than mutate: c points at the caller's request, which is
 		// also stored on the build record and would otherwise carry the hash.
 		withHashed := *c
 		withHashed.Credentials = hashed
+		withHashed.NewUsers = created
 		c = &withHashed
 	}
 	deltaPath, _, cleanup, derr := s.deltaForOverride(tmpl, full, *c)
@@ -850,8 +862,9 @@ func displayTemplateName(sel *Selection, tmpl string) string {
 	return tmpl
 }
 
-// credentialDeltaForPosted applies supplied logins to a posted template by
-// generating an `extends` delta beside it, and returns the delta's path.
+// credentialDeltaForPosted applies supplied logins, and any accounts to
+// create, to a posted template by generating an `extends` delta beside it, and
+// returns the delta's path.
 //
 // The credentials are not patched into the document itself. Going through the
 // normal extends merge is what makes an injected password behave: a template
@@ -862,7 +875,8 @@ func displayTemplateName(sel *Selection, tmpl string) string {
 //
 // parentPath must already hold the posted document, and the delta is written
 // as its sibling so it satisfies resolveExtendsParentPath's containment guard.
-func (s *Service) credentialDeltaForPosted(parentPath, workDir string, creds []CredentialInput) (string, error) {
+func (s *Service) credentialDeltaForPosted(parentPath, workDir string, creds []CredentialInput,
+	newUsers []NewUserInput) (string, error) {
 	// Merged, so an account the document inherits from the OS defaults can be
 	// given a login too — validateCredentials rejects any name it can't see.
 	merged, err := config.LoadAndMergeTemplate(parentPath)
@@ -873,6 +887,10 @@ func (s *Service) credentialDeltaForPosted(parentPath, workDir string, creds []C
 	if cerr != nil {
 		return "", fmt.Errorf("%w: %v", errBadBuildRequest, cerr)
 	}
+	created, uerr := validateNewUsers(newUsers, merged)
+	if uerr != nil {
+		return "", fmt.Errorf("%w: %v", errBadBuildRequest, uerr)
+	}
 	// The delta's image/target must match the document's own, not the merged
 	// result's: resolveExtendsChainFromLeaf compares child against parent as
 	// each is written, and the defaults a merge folds in are not in the parent.
@@ -881,7 +899,7 @@ func (s *Service) credentialDeltaForPosted(parentPath, workDir string, creds []C
 		return "", fmt.Errorf("%w: %v", errBadBuildRequest, lerr)
 	}
 	data, derr := buildDelta(filepath.Base(parentPath), parent.Image, parent.Target,
-		Selection{Credentials: hashed}, nil, nil)
+		Selection{Credentials: hashed, NewUsers: created}, nil, nil)
 	if derr != nil {
 		return "", fmt.Errorf("generating credential template: %w", derr) // server-side
 	}
