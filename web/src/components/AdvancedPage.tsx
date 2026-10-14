@@ -1,13 +1,20 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useStore, cascadingOptions, encodePackage } from '../store'
+import { useStore, cascadingOptions, encodePackage, selectionFromTemplate } from '../store'
 import type { Selection } from '../store'
 import { api } from '../api/client'
-import type { ComposeRequest, ComposeResponse, CredentialInput } from '../api/types'
+import type {
+  ComposeRequest,
+  ComposeResponse,
+  CredentialInput,
+  CredentialRequirement,
+  NewUserInput,
+} from '../api/types'
 import { Select } from './Select'
 import { PackagesStep } from './PackagesStep'
 import { Input } from './Input'
 import { DiskStep } from './DiskStep'
 import { credentialsComplete } from './CredentialsStep'
+import { newUsersValid } from './NewUsersSection'
 import { CredentialsDialog } from './CredentialsDialog'
 import { ImportTemplateDialog } from './ImportTemplateDialog'
 import { parseDiskFromYaml, toDiskConfig, validateDisk } from '../lib/disk'
@@ -72,6 +79,14 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   // state, not the shared store: the store is persisted and a password must not
   // outlive the build it was typed for.
   const [credentials, setCredentials] = useState<CredentialInput[]>([])
+  // The accounts the last successful compose reported. Held separately because
+  // the effect clears `composed` before each refetch: without this the
+  // credential fields would vanish from the open dialog the moment typing in it
+  // triggered a recompose, and the build would read as needing no login.
+  const [lastRequirements, setLastRequirements] = useState<CredentialRequirement[]>([])
+  // Accounts the user asked to add on top of the template's own, held for the
+  // same reason credentials are: each entry carries a password.
+  const [newUsers, setNewUsers] = useState<NewUserInput[]>([])
 
   const opts = useMemo(
     () => (manifest ? cascadingOptions(manifest, selection) : null),
@@ -102,10 +117,34 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     return () => clearTimeout(t)
   }, [credentialsKey])
 
+  // Accounts the resolved template declares, as the compose response reports
+  // them. An account this request creates comes back in that list too, so it is
+  // taken out again: left in, the name the user just added would read as
+  // "already taken" and block the build they are trying to start.
+  const composedRequirements = useMemo(
+    () =>
+      (composed?.credentials ?? []).filter((r) => !newUsers.some((u) => u.user === r.user)),
+    [composed, newUsers],
+  )
+
+  // Debounced like the credentials, and only once every entry is complete: a
+  // half-typed account is rejected by the backend, which would replace the
+  // Review pane with an error while the user is still filling the form in.
+  const [debouncedNewUsers, setDebouncedNewUsers] = useState<NewUserInput[]>([])
+  const newUsersKey = useMemo(() => JSON.stringify(newUsers), [newUsers])
+  const newUsersReady = newUsersValid(newUsers, composedRequirements)
+  useEffect(() => {
+    if (!newUsersReady) return
+    const t = setTimeout(() => setDebouncedNewUsers(JSON.parse(newUsersKey)), CREDENTIALS_DEBOUNCE_MS)
+    return () => clearTimeout(t)
+  }, [newUsersKey, newUsersReady])
+
   // A different template asks for different accounts, so anything typed for the
   // previous one is dropped rather than being sent with the next build.
   useEffect(() => {
     setCredentials([])
+    setNewUsers([])
+    setLastRequirements([])
   }, [selection])
 
   const packagesKey = useMemo(() => addedPackages.map(encodePackage).sort().join('\n'), [addedPackages])
@@ -170,9 +209,10 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
       repos: reposKey ? reposKey.split('\n') : undefined,
       disk: diskEdited && debouncedDiskKey ? JSON.parse(debouncedDiskKey) : undefined,
       credentials: debouncedCredentials.length > 0 ? debouncedCredentials : undefined,
+      users: debouncedNewUsers.length > 0 ? debouncedNewUsers : undefined,
     }),
     [selection, importedYaml, removedKey, imageNameEdited, debouncedImageName, packagesKey,
-      reposKey, diskEdited, debouncedDiskKey, debouncedCredentials],
+      reposKey, diskEdited, debouncedDiskKey, debouncedCredentials, debouncedNewUsers],
   )
 
   // Entering Advanced always lands on the first step, mirroring the prototype's
@@ -198,6 +238,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
         if (!cancelled) {
           setComposed(r)
           setLoading(false)
+          if (r.credentials) setLastRequirements(r.credentials)
           // Seed the editable image name and disk layout from the resolved
           // template (both no-ops once the user has edited — guarded by the
           // *Edited flags in the store). The disk block is read out of the
@@ -223,13 +264,13 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   const usingImport = importedTemplate !== null
 
   // The Packages step keys its repository list off a manifest target id, which
-  // an imported template has no selection to supply. Its own `target` names one:
-  // `dist` is the id the manifest uses, with `os` as the fallback for a document
-  // that only states the family.
+  // an imported template has no selection to supply. Its own `target` names
+  // one, resolved the same way the Target step resolves it: `dist` is the id
+  // the manifest uses, and the OS family only counts when it names exactly one
+  // target — three of them are `os: ubuntu`, so showing Ubuntu 24 repositories
+  // for a document that might target either Ubuntu 26 would be a guess.
   const importedOs = importedTemplate
-    ? (manifest.targets.find((t) => t.id === importedTemplate.summary.dist)?.id ??
-      manifest.targets.find((t) => t.os === importedTemplate.summary.os)?.id ??
-      '')
+    ? (selectionFromTemplate(manifest, importedTemplate).os ?? '')
     : ''
   const packagesOs = usingImport ? importedOs : selection.os
 
@@ -240,11 +281,16 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
 
   // Once the document has been composed, its own resolved accounts are the
   // authority — the import-time list only covers the gap before that lands.
-  const requirements = composed?.credentials ?? (usingImport ? importedRequirements : [])
+  const requirements = composed
+    ? composedRequirements
+    : lastRequirements.length > 0
+      ? lastRequirements
+      : usingImport
+        ? importedRequirements
+        : []
   // Same gate as Basic: the backend rejects a build whose template leaves an
   // account without a login, so stop here rather than letting it fail.
-  const credentialsReady = credentialsComplete(requirements, credentials)
-  const hasCredentialFields = requirements.some((r) => (r.required && !r.satisfied) || !r.required)
+  const credentialsReady = credentialsComplete(requirements, credentials) && newUsersReady
 
   const onBuild = async () => {
     if ((!complete && !usingImport) || !credentialsReady) return
@@ -271,6 +317,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
         imageName: imageNameEdited ? imageName : undefined,
         disk: diskEdited && disk ? toDiskConfig(disk) : undefined,
         credentials: credentials.length > 0 ? credentials : undefined,
+        users: newUsers.length > 0 ? newUsers : undefined,
       }
       // Re-compose against buildReq (the current, non-debounced image name)
       // right before starting the build, so the logged YAML matches what the
@@ -294,11 +341,9 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
       setError('Fix the errors on the Disk step before composing.')
       return
     }
-    if (hasCredentialFields) {
-      setCredentialsOpen(true)
-      return
-    }
-    void onBuild()
+    // Always through the dialog: besides any missing logins, it is where
+    // accounts are added, which a template with nothing to ask for still offers.
+    setCredentialsOpen(true)
   }
 
   // Empty until something is overridden: with no overrides no delta is
@@ -344,7 +389,14 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
                 className="font-semibold text-slate-600 hover:underline"
                 onClick={() => {
                   setImportedTemplate(null)
+                  // Everything typed for that template goes with it: the
+                  // accounts it declared are gone, and any user added on top
+                  // of them would otherwise be composed against the manifest
+                  // selection this returns to.
                   setCredentials([])
+                  setNewUsers([])
+                  setDebouncedNewUsers([])
+                  setLastRequirements([])
                   setError(null)
                 }}
               >
@@ -575,6 +627,8 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
         requirements={requirements}
         credentials={credentials}
         onChange={setCredentials}
+        newUsers={newUsers}
+        onNewUsersChange={setNewUsers}
         credentialsReady={credentialsReady}
         busy={busy}
         buildInProgress={buildInProgress}
@@ -591,6 +645,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
           // A different template asks for different accounts, so anything typed
           // for the previous one is dropped rather than sent with this build.
           setCredentials([])
+          setNewUsers([])
           setError(null)
           setImportOpen(false)
         }}
