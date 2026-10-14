@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useStore, cascadingOptions } from '../store'
 import { api } from '../api/client'
-import type { ComposeResponse, CredentialInput } from '../api/types'
+import type { ComposeResponse, CredentialInput, NewUserInput } from '../api/types'
 import { Select } from './Select'
 import { credentialsComplete } from './CredentialsStep'
+import { newUsersValid } from './NewUsersSection'
 import { CredentialsDialog } from './CredentialsDialog'
+import { ImportTemplateDialog } from './ImportTemplateDialog'
+import { ImportedTemplateCard } from './ImportedTemplateCard'
 
 interface BasicPageProps {
   onBuildStarted: (buildId: string) => void
@@ -25,10 +28,14 @@ export function BasicPage({
   const manifest = useStore((s) => s.manifest)
   const selection = useStore((s) => s.selection)
   const setField = useStore((s) => s.setField)
+  const importedTemplate = useStore((s) => s.importedTemplate)
+  const importedRequirements = useStore((s) => s.importedRequirements)
+  const setImportedTemplate = useStore((s) => s.setImportedTemplate)
 
   const [review, setReview] = useState<ComposeResponse | null>(null)
   const [busy, setBusy] = useState(false)
   const [credentialsOpen, setCredentialsOpen] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // True while the summary for a newly completed selection is in flight. The
   // previous summary stays on screen during a refetch, so this only drives the
@@ -38,6 +45,9 @@ export function BasicPage({
   // component state rather than the shared store: the store is persisted, and a
   // password must not outlive the build it was typed for.
   const [credentials, setCredentials] = useState<CredentialInput[]>([])
+  // Accounts the user asked to add on top of the template's own. Transient for
+  // the same reason credentials are: each entry carries a password.
+  const [newUsers, setNewUsers] = useState<NewUserInput[]>([])
 
   const opts = useMemo(
     () => (manifest ? cascadingOptions(manifest, selection) : null),
@@ -48,9 +58,10 @@ export function BasicPage({
 
   // Auto-fetch the configuration summary whenever the selection is complete, so
   // it always reflects the current dropdowns (no manual "review" step). Guard
-  // against out-of-order responses with a cancel flag.
+  // against out-of-order responses with a cancel flag. An imported template is
+  // built verbatim, so there is no selection to summarise while one is active.
   useEffect(() => {
-    if (!active || !complete) {
+    if (!active || !complete || importedTemplate) {
       setReview(null)
       setLoadingSummary(false)
       return
@@ -58,6 +69,7 @@ export function BasicPage({
     // A different template asks for different accounts, so anything typed for
     // the previous one is dropped rather than silently sent with the new build.
     setCredentials([])
+    setNewUsers([])
     let cancelled = false
     setLoadingSummary(true)
     api
@@ -79,29 +91,44 @@ export function BasicPage({
     return () => {
       cancelled = true
     }
-  }, [active, complete, selection])
+  }, [active, complete, selection, importedTemplate])
 
   if (!manifest || !opts) return <div className="p-8">Loading…</div>
 
-  const requirements = review?.credentials ?? []
-  const hasCredentialFields = requirements.some((r) => (r.required && !r.satisfied) || !r.required)
+  // An imported template replaces the selections entirely: it is already a
+  // complete document, so there is nothing to compose it against.
+  const usingImport = importedTemplate !== null
+
+  // An imported template's accounts come from validating the document at import
+  // time; a selection's come from the compose response.
+  const requirements = usingImport ? importedRequirements : (review?.credentials ?? [])
   // The backend rejects a build whose template leaves an account without a
   // login, so the button is gated on the same rule rather than letting the
-  // request fail.
-  const credentialsReady = credentialsComplete(requirements, credentials)
+  // request fail. An added account must be complete for the same reason.
+  const credentialsReady =
+    credentialsComplete(requirements, credentials) && newUsersValid(newUsers, requirements)
 
   const onBuild = async () => {
     if (!complete || !credentialsReady) return
     try {
       setBusy(true)
       setError(null)
-      const req = { ...selection, credentials: credentials.length > 0 ? credentials : undefined }
+      const req = {
+        ...selection,
+        credentials: credentials.length > 0 ? credentials : undefined,
+        users: newUsers.length > 0 ? newUsers : undefined,
+      }
       // Re-compose against the current selection right before starting the
       // build, so the logged YAML matches the request even if it changed
       // since the last auto-fetch (or that fetch is still in flight).
       const fresh = await api.compose(req)
       console.log('Composing image with template YAML:\n' + fresh.yaml)
       const accepted = await api.startBuild(req)
+      // The server has them now, and this page stays mounted while the Compose
+      // tab is shown, so a plain-text password would otherwise sit in memory
+      // and reappear in the dialog after the build.
+      setCredentials([])
+      setNewUsers([])
       setCredentialsOpen(false)
       onBuildStarted(accepted.buildId)
     } catch (e) {
@@ -116,28 +143,120 @@ export function BasicPage({
     setError(null) // clear any stale compose error from the previous selection
   }
 
-  const onComposeClick = () => {
-    if (hasCredentialFields) {
-      setCredentialsOpen(true)
-      return
+  // Build the imported document as-is. Unlike the selection path there is no
+  // compose step: the server takes the template verbatim, so the only
+  // client-side preparation already happened at import time. Any logins the
+  // user supplied ride alongside it and are hashed server-side.
+  const onBuildImported = async () => {
+    if (!importedTemplate || !credentialsReady) return
+    try {
+      setBusy(true)
+      setError(null)
+      const accepted = await api.startBuildFromYaml(
+        importedTemplate.yaml,
+        credentials.length > 0 ? credentials : undefined,
+        newUsers.length > 0 ? newUsers : undefined,
+      )
+      setCredentials([])
+      setNewUsers([])
+      setCredentialsOpen(false)
+      onBuildStarted(accepted.buildId)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
     }
-    void onBuild()
   }
+
+  // Composing always goes through the dialog: besides any missing logins, it is
+  // where accounts are added, which a template with nothing to ask for still
+  // needs to offer.
+  const onComposeClick = () => setCredentialsOpen(true)
 
   return (
     <div className="mx-auto max-w-screen-2xl px-10 py-8">
-      <h1 className="mb-1 text-2xl font-bold text-[#00285a]">Choose Image Configuration</h1>
-      <p className="mb-5 text-sm text-slate-500">
-        Select a use case, SKU, and platform. Pre-configured defaults are applied
-        based on your selection.
-      </p>
+      <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="mb-1 text-2xl font-bold text-[#00285a]">Choose Image Configuration</h1>
+          <p className="text-sm text-slate-500">
+            Select a use case, SKU, and platform. Pre-configured defaults are applied
+            based on your selection — or import your own template.
+          </p>
+        </div>
+        <button
+          type="button"
+          className="flex items-center gap-2 rounded-md border-2 border-[#0071c5] bg-[#0071c5] px-5 py-2.5 font-semibold text-white shadow-sm hover:border-[#00285a] hover:bg-[#00285a]"
+          onClick={() => setImportOpen(true)}
+        >
+          <svg
+            aria-hidden="true"
+            viewBox="0 0 20 20"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="h-4 w-4"
+          >
+            <path d="M10 13V3m0 0L6.5 6.5M10 3l3.5 3.5" />
+            <path d="M3.5 12.5v2.5a1.5 1.5 0 0 0 1.5 1.5h10a1.5 1.5 0 0 0 1.5-1.5v-2.5" />
+          </svg>
+          Import Template
+        </button>
+      </div>
+
+      {importedTemplate && (
+        <div className="mb-5 rounded-lg border border-[#0071c5]/30 bg-blue-50 px-4 py-3 text-sm">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="font-semibold text-[#00285a]">Imported template:</span>
+            <span className="text-slate-700">{importedTemplate.displayName}</span>
+            {importedTemplate.fileName !== importedTemplate.displayName && (
+              <span className="text-slate-500">from {importedTemplate.fileName}</span>
+            )}
+            <div className="ml-auto flex gap-3">
+              <button
+                type="button"
+                className="font-semibold text-[#0071c5] hover:underline"
+                onClick={() => setImportOpen(true)}
+              >
+                Replace
+              </button>
+              <button
+                type="button"
+                className="font-semibold text-slate-600 hover:underline"
+                onClick={() => {
+                  setImportedTemplate(null)
+                  setCredentials([])
+                  setNewUsers([])
+                  setError(null)
+                }}
+              >
+                Remove
+              </button>
+            </div>
+          </div>
+          <p className="mt-1.5 text-xs text-slate-600">
+            Composing builds this template as supplied. Remove it to go back to the
+            selections below, or switch to Advanced to change it before building.
+          </p>
+        </div>
+      )}
 
       <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
         {/* Dropdowns and the Compose/Edit actions share this column so the
             buttons sit right under the selections regardless of how tall the
             summary + credentials column on the right grows. */}
         <div className="w-full max-w-xl">
-          <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <div
+            className={
+              'rounded-lg border border-slate-200 bg-white p-5 shadow-sm ' +
+              (usingImport ? 'opacity-40' : '')
+            }
+            // inert, not pointer-events-none plus aria-hidden: that pair left
+            // the selects tabbable while hiding them from assistive technology,
+            // so a keyboard user could still change controls that are not there.
+            inert={usingImport}
+          >
             <Select
               label="Use Case"
               placeholder="-- Select Use Case --"
@@ -190,10 +309,20 @@ export function BasicPage({
           <div className="mt-6 flex flex-wrap items-center gap-3">
             <button
               className="rounded-md bg-[#0071c5] px-5 py-2.5 font-semibold text-white hover:bg-[#00285a] disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={!complete || !review || loadingSummary || busy || buildInProgress}
+              disabled={
+                usingImport
+                  ? busy || buildInProgress
+                  : !complete || !review || loadingSummary || busy || buildInProgress
+              }
               onClick={onComposeClick}
             >
-              {busy ? 'Starting…' : buildInProgress ? 'Composing…' : 'Compose Image'}
+              {busy
+                ? 'Starting…'
+                : buildInProgress
+                  ? 'Composing…'
+                  : usingImport
+                    ? 'Compose Imported Image'
+                    : 'Compose Image'}
             </button>
             {/* Deliberately not gated on `complete` — the prototype lets you open
                 Advanced at any point and finish the selection there. */}
@@ -204,7 +333,7 @@ export function BasicPage({
             >
               Edit in Advanced
             </button>
-            {!complete && !buildInProgress && (
+            {!complete && !buildInProgress && !usingImport && (
               <span className="text-sm text-slate-500">
                 Complete all selections to compose.
               </span>
@@ -220,7 +349,13 @@ export function BasicPage({
         {/* Image configuration summary — always reflects the current selection
             (auto-fetched). "Your Selection" is intentionally omitted here since
             the dropdowns already show it; the Compose Image tab keeps it. */}
-        {complete && review && (
+        {usingImport && (
+          <div className="flex-1">
+            <ImportedTemplateCard template={importedTemplate} />
+          </div>
+        )}
+
+        {!usingImport && complete && review && (
           <div className="flex-1 text-xs">
             <div className="max-w-md rounded-lg border border-slate-200 bg-slate-50 p-4">
               <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Image Configuration</p>
@@ -249,7 +384,7 @@ export function BasicPage({
 
         {/* First-load placeholder only: a refetch keeps the previous summary on
             screen rather than flashing this in between. */}
-        {complete && !review && loadingSummary && (
+        {!usingImport && complete && !review && loadingSummary && (
           <div className="flex-1 text-xs">
             <div className="max-w-md rounded-lg border border-dashed border-slate-300 p-4 text-center text-sm text-slate-400">
               Resolving template…
@@ -263,12 +398,28 @@ export function BasicPage({
         requirements={requirements}
         credentials={credentials}
         onChange={setCredentials}
+        newUsers={newUsers}
+        onNewUsersChange={setNewUsers}
         credentialsReady={credentialsReady}
         busy={busy}
         buildInProgress={buildInProgress}
         error={error}
         onCancel={() => setCredentialsOpen(false)}
-        onCompose={() => void onBuild()}
+        onCompose={() => void (usingImport ? onBuildImported() : onBuild())}
+      />
+
+      <ImportTemplateDialog
+        open={importOpen}
+        onCancel={() => setImportOpen(false)}
+        onImport={(t, reqs) => {
+          setImportedTemplate(t, reqs)
+          // A different template asks for different accounts, so anything typed
+          // for the previous one is dropped rather than sent with this build.
+          setCredentials([])
+          setNewUsers([])
+          setError(null)
+          setImportOpen(false)
+        }}
       />
     </div>
   )

@@ -36,11 +36,14 @@ func optStrs(v []string) *[]string {
 // --- inbound: generated request types -> service types ---
 
 func toSelection(r httpapi.ComposeRequest) service.Selection {
+	// The lookup fields are optional in the contract because a `baseYaml`
+	// request carries none of them; the service rejects a request that supplies
+	// neither, so an empty string here means "not supplied" rather than valid.
 	sel := service.Selection{
-		Vertical:  r.Vertical,
-		Platform:  r.Platform,
-		OS:        r.Os,
-		ImageType: r.ImageType,
+		Vertical:  derefStr(r.Vertical),
+		Platform:  derefStr(r.Platform),
+		OS:        derefStr(r.Os),
+		ImageType: derefStr(r.ImageType),
 	}
 	if r.Sku != nil {
 		sel.SKU = *r.Sku
@@ -54,8 +57,15 @@ func toSelection(r httpapi.ComposeRequest) service.Selection {
 	if r.Repos != nil {
 		sel.Repos = *r.Repos
 	}
+	if r.BaseYaml != nil {
+		sel.BaseYAML = *r.BaseYaml
+	}
+	if r.RemovePackages != nil {
+		sel.RemovePackages = *r.RemovePackages
+	}
 	sel.Disk = toDiskOverride(r.Disk)
 	sel.Credentials = toCredentials(r.Credentials)
+	sel.NewUsers = toNewUsers(r.Users)
 	return sel
 }
 
@@ -73,6 +83,35 @@ func toCredentials(creds *[]httpapi.CredentialInput) []service.CredentialInput {
 			Password:         derefStr(c.Password),
 			SSHAuthorizedKey: derefStr(c.SshAuthorizedKey),
 		})
+	}
+	return out
+}
+
+// toNewUsers converts accounts to create to the service type. Copied as-is for
+// the same reason toCredentials does: the checks that matter (name collisions
+// against the template, password hashing) need the resolved template.
+func toNewUsers(users *[]httpapi.NewUserInput) []service.NewUserInput {
+	if users == nil || len(*users) == 0 {
+		return nil
+	}
+	out := make([]service.NewUserInput, 0, len(*users))
+	for _, u := range *users {
+		n := service.NewUserInput{
+			User:             u.User,
+			Password:         derefStr(u.Password),
+			SSHAuthorizedKey: derefStr(u.SshAuthorizedKey),
+			Shell:            derefStr(u.Shell),
+			Home:             derefStr(u.Home),
+			StartupScript:    derefStr(u.StartupScript),
+			PasswordMaxAge:   u.PasswordMaxAge,
+		}
+		if u.Sudo != nil {
+			n.Sudo = *u.Sudo
+		}
+		if u.Groups != nil {
+			n.Groups = *u.Groups
+		}
+		out = append(out, n)
 	}
 	return out
 }
@@ -160,6 +199,8 @@ func toBuildRequest(r httpapi.BuildRequest) service.BuildRequest {
 	if r.Yaml != nil {
 		req.YAML = *r.Yaml
 	}
+	req.Credentials = toCredentials(r.Credentials)
+	req.NewUsers = toNewUsers(r.Users)
 	return req
 }
 
@@ -378,16 +419,7 @@ func fromComposeResult(r *service.ComposeResult) httpapi.ComposeResponse {
 		out.BasePackages = &basePackages
 	}
 	if len(r.Credentials) > 0 {
-		creds := make([]httpapi.CredentialRequirement, 0, len(r.Credentials))
-		for _, c := range r.Credentials {
-			creds = append(creds, httpapi.CredentialRequirement{
-				User:      c.User,
-				Sudo:      c.Sudo,
-				Required:  c.Required,
-				Satisfied: c.Satisfied,
-			})
-		}
-		out.Credentials = &creds
+		out.Credentials = fromCredentialRequirements(r.Credentials)
 	}
 	return out
 }
@@ -396,11 +428,28 @@ func fromComposeResult(r *service.ComposeResult) httpapi.ComposeResponse {
 // contract type. errors/warnings are omitempty in the spec, so empty slices map
 // to nil rather than []; valid is required, so it is always sent.
 func fromValidationResult(r *service.ValidationResult) httpapi.ValidationResponse {
-	return httpapi.ValidationResponse{
+	out := httpapi.ValidationResponse{
 		Valid:    r.Valid,
 		Errors:   fromValidationIssues(r.Errors),
 		Warnings: fromValidationIssues(r.Warnings),
 	}
+	if len(r.Credentials) > 0 {
+		out.Credentials = fromCredentialRequirements(r.Credentials)
+	}
+	return out
+}
+
+func fromCredentialRequirements(reqs []service.CredentialRequirement) *[]httpapi.CredentialRequirement {
+	out := make([]httpapi.CredentialRequirement, 0, len(reqs))
+	for _, c := range reqs {
+		out = append(out, httpapi.CredentialRequirement{
+			User:      c.User,
+			Sudo:      c.Sudo,
+			Required:  c.Required,
+			Satisfied: c.Satisfied,
+		})
+	}
+	return &out
 }
 
 func fromValidationIssues(issues []service.ValidationIssue) *[]httpapi.ValidationIssue {
