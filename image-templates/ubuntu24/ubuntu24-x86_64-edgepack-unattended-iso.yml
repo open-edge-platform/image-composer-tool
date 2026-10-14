@@ -262,6 +262,12 @@ systemConfig:
         stage: first-boot
         order: 20
 
+  # Force NetworkManager as the active netplan renderer so nmcli accurately
+  # reports interface state; see 01-network-manager-all.yaml itself for why.
+  additionalFiles:
+    - local: additionalfiles/base-platform/01-network-manager-all.yaml
+      final: /etc/netplan/01-network-manager-all.yaml
+
   # Developer source archives and other artifacts are copied with additionalFiles.
   # additionalFiles:
   #   - local: additionalfiles/base-platform/platform-src.tar.gz

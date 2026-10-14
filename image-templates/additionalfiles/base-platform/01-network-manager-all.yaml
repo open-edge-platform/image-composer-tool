@@ -1,0 +1,10 @@
+# Let NetworkManager manage all devices on this system. Without this,
+# cloud-init's generated netplan config falls back to netplan's default
+# renderer (systemd-networkd), which does configure the interface
+# correctly (DHCP succeeds, connectivity works), but then `nmcli device
+# status` reports it as "unmanaged" since NetworkManager correctly stays
+# out of the way of the interface networkd owns — confusing validation
+# tooling and operators that check `nmcli` for network health.
+network:
+  version: 2
+  renderer: NetworkManager
