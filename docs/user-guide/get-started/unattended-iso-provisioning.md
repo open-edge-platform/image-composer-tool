@@ -7,10 +7,10 @@ cloud-init, and boot-time provisioning, makes the installed disk the first boot
 device, and reboots.
 
 The worked examples are the Intel EdgePack unattended ISO templates. Each one
-installs the same package set as the matching EdgePack raw template, in a
-desktop and a headless server variant for Ubuntu 24.04 and Ubuntu 26.04. They
-pin kernel 7.0.0-34, because `edge-gfx-dkms` 7.0 does not build against the
-7.0.0-38 headers.
+installs the package set of the matching EdgePack raw template plus
+`acpica-tools`, in a desktop and a headless server variant for Ubuntu 24.04 and
+Ubuntu 26.04. They pin kernel 7.0.0-38, which `edge-gfx-dkms` 7.0 builds
+against; the raw templates still pin 7.0.0-34.
 
 | Variant | Ubuntu 24.04 | Ubuntu 26.04 |
 |---------|--------------|--------------|

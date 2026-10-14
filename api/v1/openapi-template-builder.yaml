@@ -1385,11 +1385,19 @@ components:
                 maxLength: 64
               start:
                 type: string
-                pattern: '^(0|\d+(KiB|MiB|GiB|K|M|G|KB|MB|GB))$'
+                description: |
+                  Where the partition begins: an offset from the start of the
+                  disk, or with a leading "-" measured back from its end
+                  ("-20GiB"). Must not be 0. Same rule as diskOffsetRe in
+                  internal/api/service/diskoverride.go.
+                pattern: '^(0|-?[1-9]\d*(KiB|MiB|GiB|K|M|G|KB|MB|GB))$'
                 maxLength: 32
               end:
                 type: string
-                pattern: '^(0|\d+(KiB|MiB|GiB|K|M|G|KB|MB|GB))$'
+                description: |
+                  Where the partition ends, written like start; 0 means the
+                  rest of the disk and is only valid on the last partition.
+                pattern: '^(0|-?[1-9]\d*(KiB|MiB|GiB|K|M|G|KB|MB|GB))$'
                 maxLength: 32
               mountPoint:
                 type: string

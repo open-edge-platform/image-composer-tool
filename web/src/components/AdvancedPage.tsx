@@ -280,6 +280,8 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
       console.log('Composing image with template YAML:\n' + fresh.yaml)
       const accepted = await api.startBuild(buildReq)
       setCredentialsOpen(false)
+      // Kept, they would mark the accounts satisfied and the next build would skip the prompt.
+      setCredentials([])
       onBuildStarted(accepted.buildId)
     } catch (e) {
       setError((e as Error).message)

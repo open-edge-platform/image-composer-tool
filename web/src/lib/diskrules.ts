@@ -52,9 +52,12 @@ export const OFFSET_SUFFIXES = ['KiB', 'MiB', 'GiB', 'K', 'M', 'G', 'KB', 'MB', 
 
 const OFFSET_RE = new RegExp(`^\\d+(${OFFSET_SUFFIXES.join('|')})$`)
 
-// isValidOffset reports whether VerifyFileSize would accept a start/end value.
+// isValidOffset reports whether VerifyFileSize would accept a start/end value,
+// including a non-zero one measured back from the end of the disk ("-20GiB",
+// imagedisc.go parseBoundary).
 export function isValidOffset(value: string): boolean {
-  return value === '0' || OFFSET_RE.test(value)
+  if (value === '0' || OFFSET_RE.test(value)) return true
+  return value.startsWith('-') && OFFSET_RE.test(value.slice(1)) && /[1-9]/.test(value)
 }
 
 // isValidDiskSize reports whether disk.size / disk.maxSize would parse. Same

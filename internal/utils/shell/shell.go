@@ -307,7 +307,49 @@ func GetOSProxyEnvirons() map[string]string {
 		}
 	}
 
+	// Mirror each proxy setting into BOTH spellings. Tools disagree about which
+	// they read, and the disagreement is silent: GNU wget consults only the
+	// lowercase http_proxy/https_proxy/ftp_proxy and ignores the uppercase forms
+	// entirely, while Go's http.ProxyFromEnvironment accepts either. An
+	// environment that exports only HTTPS_PROXY therefore proxies ICT's own
+	// downloads correctly and sends a `wget` inside a configurations: block
+	// straight out to the internet, where a transparent middlebox terminates TLS
+	// and wget exits 4 without retrying. Copying the value across closes that
+	// gap for every consumer.
+	for _, lower := range []string{"http_proxy", "https_proxy", "ftp_proxy", "no_proxy"} {
+		upper := strings.ToUpper(lower)
+		lowerVal, hasLower := proxyEnv[lower]
+		upperVal, hasUpper := proxyEnv[upper]
+		switch {
+		case hasLower && !hasUpper:
+			proxyEnv[upper] = lowerVal
+		case hasUpper && !hasLower:
+			proxyEnv[lower] = upperVal
+		case !hasLower && !hasUpper:
+			// Only a mixed-case spelling (Http_Proxy), which few tools read.
+			if v, ok := caseVariant(proxyEnv, lower); ok {
+				proxyEnv[lower], proxyEnv[upper] = v, v
+			}
+		}
+	}
+
 	return proxyEnv
+}
+
+// caseVariant returns the value of a spelling of name in another case, taking
+// the first in sorted order so the result does not depend on map iteration.
+func caseVariant(env map[string]string, name string) (string, bool) {
+	var keys []string
+	for k := range env {
+		if strings.ToLower(k) == name {
+			keys = append(keys, k)
+		}
+	}
+	if len(keys) == 0 {
+		return "", false
+	}
+	sort.Strings(keys)
+	return env[keys[0]], true
 }
 
 // proxyEnvAssignments renders proxy variables as "KEY='value' " prefixes for a
@@ -674,7 +716,9 @@ func GetFullCmdStr(cmdStr string, sudo bool, chrootPath string, envVal []string)
 			return fullPathCmdStr, fmt.Errorf("chroot path %s does not exist", chrootPath)
 		}
 
-		envValStr += proxyEnvAssignments(GetOSProxyEnvirons())
+		proxyEnv := GetOSProxyEnvirons()
+		ReportProxyEnvOnce(proxyEnv)
+		envValStr += proxyEnvAssignments(proxyEnv)
 
 		// chroot always requires elevation; sudoPrefix drops the redundant inner
 		// sudo when the process is already root (see sudoPrefix docstring).
@@ -686,7 +730,9 @@ func GetFullCmdStr(cmdStr string, sudo bool, chrootPath string, envVal []string)
 
 	} else {
 		if sudo {
-			envValStr += proxyEnvAssignments(GetOSProxyEnvirons())
+			proxyEnv := GetOSProxyEnvirons()
+			ReportProxyEnvOnce(proxyEnv)
+			envValStr += proxyEnvAssignments(proxyEnv)
 
 			// sudoPrefix drops the redundant inner sudo when already root
 			// (see sudoPrefix docstring); otherwise elevates per command.
