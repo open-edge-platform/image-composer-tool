@@ -172,6 +172,17 @@ func TestWithoutPackages(t *testing.T) {
 			t.Fatal("expected a parse error")
 		}
 	})
+
+	// The browser expands an alias and offers each package for removal, so
+	// returning the document unchanged would build the package the user
+	// removed. Editing the anchor instead would change every other use of it.
+	t.Run("an aliased package list is rejected rather than ignored", func(t *testing.T) {
+		t.Parallel()
+		doc := []byte("base: &base\n  - vim\n  - bluez\nsystemConfig:\n  packages: *base\n")
+		if _, err := withoutPackages(doc, []string{"bluez"}); err == nil {
+			t.Fatal("expected an aliased package list to be rejected")
+		}
+	})
 }
 
 func templatesDirEntries(t *testing.T, dir string) []string {

@@ -98,7 +98,8 @@ export function NewUsersSection({
       <p className="mb-3 text-xs text-slate-600">
         Create accounts the template does not already define. Fields marked{' '}
         <span className="font-semibold text-red-600">*</span> are required; a password and an SSH
-        public key count as one requirement, so either one on its own is enough.
+        public key count as one requirement, so either one on its own is enough. An account given
+        a startup script needs neither, since it has no interactive login.
       </p>
       {users.map((user, index) => (
         <NewUserFields
@@ -182,9 +183,17 @@ function NewUserFields({ index, user, error, disabled, onUpdate, onRemove }: New
       />
 
       {/* One of the two satisfies the account, so the mark sits on the pair:
-          an asterisk on both would read as "fill in both". */}
+          an asterisk on both would read as "fill in both". A startup-script
+          account needs neither, so the pair stops being required once one is
+          given — marking it would call a valid account incomplete. */}
       <p className="mb-2 mt-3 text-sm font-semibold text-[#00285a]">
-        Set one of the following<span className="text-red-600"> *</span>
+        {user.startupScript ? (
+          'Login (optional for a startup-script account)'
+        ) : (
+          <>
+            Set one of the following<span className="text-red-600"> *</span>
+          </>
+        )}
       </p>
       <label htmlFor={id('password')} className="mb-1 block text-sm font-semibold text-[#00285a]">
         Password

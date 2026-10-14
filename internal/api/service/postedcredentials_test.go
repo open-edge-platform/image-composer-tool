@@ -178,3 +178,35 @@ func TestValidateTemplateOmitsCredentialsWhenInvalid(t *testing.T) {
 		t.Errorf("credentials = %+v, want none for an invalid template", res.Credentials)
 	}
 }
+
+// TestValidateTemplateRejectsUnresolvable is what stops the import dialog
+// offering a document that passes the schema but cannot be merged — the same
+// merge a build runs. Without it the import succeeds and the build fails
+// minutes later on a file that was never there.
+func TestValidateTemplateRejectsUnresolvable(t *testing.T) {
+	s := newTestService(t)
+
+	// Schema-valid, but it points at a key file that does not exist beside it.
+	doc := "image:\n  name: img\n  version: \"1.0\"\n" +
+		"target:\n  os: ubuntu\n  dist: ubuntu24\n  arch: x86_64\n  imageType: iso\n" +
+		"systemConfig:\n  name: sc\n  users:\n    - name: admin\n" +
+		"      sshAuthorizedKeysFiles:\n        - ./missing-key.pub\n"
+
+	res, err := s.ValidateTemplate(doc)
+	if err != nil {
+		t.Fatalf("ValidateTemplate: %v", err)
+	}
+	if res.Valid {
+		t.Fatal("expected a template that cannot be resolved to be reported invalid")
+	}
+	if len(res.Errors) == 0 {
+		t.Fatal("expected an error issue explaining why it cannot be built")
+	}
+	// The loader's own message can quote template values, and the merge reads a
+	// template's FDE passphraseFile, so the issue must not carry it.
+	for _, e := range res.Errors {
+		if strings.Contains(e.Message, "missing-key.pub") {
+			t.Errorf("issue quotes the template back: %q", e.Message)
+		}
+	}
+}

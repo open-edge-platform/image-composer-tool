@@ -231,6 +231,19 @@ var startupScriptRe = regexp.MustCompile(`^(/[^:\s]*)?$`)
 // OpenAPI maxItems. A request-size guard, not an image limit.
 const maxNewUsers = 32
 
+// The remaining NewUserInput bounds the contract publishes. Nothing checks a
+// request body against the spec at runtime — the handlers only decode the
+// generated structs — so a value outside the published shape reaches here
+// unexamined unless this mirrors it, exactly as ValidateDisk does for the disk
+// override.
+const (
+	maxNewUserPasswordLen = 256
+	maxNewUserKeyLen      = 4096
+	maxNewUserPathLen     = 256
+	maxNewUserGroups      = 64
+	maxPasswordMaxAge     = 99999
+)
+
 // validateNewUsers checks accounts the caller asked to create against the
 // curated parent. Returns them with every password replaced by a crypt hash,
 // for the same reason validateCredentials does.
@@ -266,6 +279,21 @@ func validateNewUsers(users []NewUserInput, parent *config.ImageTemplate) ([]New
 			return nil, fmt.Errorf("new user %q: supplied more than once", u.User)
 		}
 		seen[u.User] = true
+		if len(u.Password) > maxNewUserPasswordLen {
+			return nil, fmt.Errorf("new user %q: password exceeds %d characters", u.User, maxNewUserPasswordLen)
+		}
+		if len(u.SSHAuthorizedKey) > maxNewUserKeyLen {
+			return nil, fmt.Errorf("new user %q: SSH public key exceeds %d characters", u.User, maxNewUserKeyLen)
+		}
+		for field, value := range map[string]string{
+			"login shell":    u.Shell,
+			"home directory": u.Home,
+			"startup script": u.StartupScript,
+		} {
+			if len(value) > maxNewUserPathLen {
+				return nil, fmt.Errorf("new user %q: %s exceeds %d characters", u.User, field, maxNewUserPathLen)
+			}
+		}
 		if !startupScriptRe.MatchString(u.StartupScript) {
 			return nil, fmt.Errorf("new user %q: startup script must be an absolute path", u.User)
 		}
@@ -277,13 +305,23 @@ func validateNewUsers(users []NewUserInput, parent *config.ImageTemplate) ([]New
 		if u.StartupScript == "" && u.Password == "" && u.SSHAuthorizedKey == "" {
 			return nil, fmt.Errorf("new user %q: supply a password, an SSH public key, or both", u.User)
 		}
+		if len(u.Groups) > maxNewUserGroups {
+			return nil, fmt.Errorf("new user %q: too many groups: %d exceeds the limit of %d",
+				u.User, len(u.Groups), maxNewUserGroups)
+		}
+		groups := make(map[string]bool, len(u.Groups))
 		for _, g := range u.Groups {
 			if !userNameRe.MatchString(g) {
 				return nil, fmt.Errorf("new user %q: group %q must match %s", u.User, g, userNameRe.String())
 			}
+			if groups[g] {
+				return nil, fmt.Errorf("new user %q: group %q listed more than once", u.User, g)
+			}
+			groups[g] = true
 		}
-		if u.PasswordMaxAge != nil && *u.PasswordMaxAge < 0 {
-			return nil, fmt.Errorf("new user %q: password max age must not be negative", u.User)
+		if u.PasswordMaxAge != nil && (*u.PasswordMaxAge < 0 || *u.PasswordMaxAge > maxPasswordMaxAge) {
+			return nil, fmt.Errorf("new user %q: password max age must be between 0 and %d days",
+				u.User, maxPasswordMaxAge)
 		}
 		if u.SSHAuthorizedKey != "" {
 			if err := config.ValidateSSHAuthorizedKey(u.SSHAuthorizedKey); err != nil {

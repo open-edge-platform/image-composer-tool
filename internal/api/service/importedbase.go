@@ -65,6 +65,14 @@ func withoutPackages(doc []byte, remove []string) ([]byte, error) {
 		return doc, nil
 	}
 	packages := mappingValue(mappingValue(root.Content[0], "systemConfig"), "packages")
+	// An alias (`packages: *base`) is a list the browser expands and offers for
+	// removal, but editing the anchor it points at would silently change every
+	// other use of it. Rejected rather than ignored: returning the document
+	// unchanged would build the package the user asked to remove.
+	if packages != nil && packages.Kind == yaml.AliasNode {
+		return nil, fmt.Errorf("systemConfig.packages is a YAML alias; " +
+			"removing a package from it would change every other use of that anchor")
+	}
 	if packages == nil || packages.Kind != yaml.SequenceNode {
 		return doc, nil
 	}
@@ -75,6 +83,9 @@ func withoutPackages(doc []byte, remove []string) ([]byte, error) {
 	}
 	kept := make([]*yaml.Node, 0, len(packages.Content))
 	for _, entry := range packages.Content {
+		// An aliased entry resolves to a scalar elsewhere in the document, so
+		// its own Value is empty and it can never match a name to drop. Kept as
+		// it is, which is what the user sees listed as "already included".
 		if entry.Kind == yaml.ScalarNode && drop[entry.Value] {
 			continue
 		}

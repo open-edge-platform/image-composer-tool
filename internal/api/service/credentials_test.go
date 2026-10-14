@@ -4,6 +4,7 @@
 package service
 
 import (
+	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
@@ -20,6 +21,8 @@ const testPubKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEFoaP9Qqm8uDNaok/P4QsOi
 func sudoUser(name string) config.UserConfig {
 	return config.UserConfig{Name: name, Sudo: true}
 }
+
+func ptr(v int) *int { return &v }
 
 func templateWithUsers(users ...config.UserConfig) *config.ImageTemplate {
 	return &config.ImageTemplate{SystemConfig: config.SystemConfig{Users: users}}
@@ -321,6 +324,53 @@ func TestValidateNewUsersRejects(t *testing.T) {
 			name:    "malformed SSH key",
 			users:   []NewUserInput{{User: "ops", SSHAuthorizedKey: "not-a-key"}},
 			wantErr: "not a valid OpenSSH public key line",
+		},
+		// Nothing checks a request body against the OpenAPI bounds at runtime, so
+		// each one has to be enforced here or a value outside the published
+		// contract reaches the generated delta.
+		{
+			name:    "password longer than the contract allows",
+			users:   []NewUserInput{{User: "ops", Password: strings.Repeat("a", 257)}},
+			wantErr: "password exceeds 256 characters",
+		},
+		{
+			name:    "SSH key longer than the contract allows",
+			users:   []NewUserInput{{User: "ops", SSHAuthorizedKey: strings.Repeat("a", 4097)}},
+			wantErr: "SSH public key exceeds 4096 characters",
+		},
+		{
+			name:    "home longer than the contract allows",
+			users:   []NewUserInput{{User: "ops", Password: "hunter2", Home: "/" + strings.Repeat("a", 256)}},
+			wantErr: "home directory exceeds 256 characters",
+		},
+		{
+			name: "too many groups",
+			users: []NewUserInput{{
+				User: "ops", Password: "hunter2",
+				Groups: func() []string {
+					g := make([]string, 65)
+					for i := range g {
+						g[i] = fmt.Sprintf("g%d", i)
+					}
+					return g
+				}(),
+			}},
+			wantErr: "too many groups",
+		},
+		{
+			name:    "duplicate group",
+			users:   []NewUserInput{{User: "ops", Password: "hunter2", Groups: []string{"docker", "docker"}}},
+			wantErr: "listed more than once",
+		},
+		{
+			name:    "password max age above the contract maximum",
+			users:   []NewUserInput{{User: "ops", Password: "hunter2", PasswordMaxAge: ptr(100000)}},
+			wantErr: "between 0 and 99999",
+		},
+		{
+			name:    "negative password max age",
+			users:   []NewUserInput{{User: "ops", Password: "hunter2", PasswordMaxAge: ptr(-1)}},
+			wantErr: "between 0 and 99999",
 		},
 	}
 

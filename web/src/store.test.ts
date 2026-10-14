@@ -111,6 +111,21 @@ describe('imported template slice', () => {
 
     expect(useStore.getState().selection).toEqual(before)
   })
+
+  // Packages and repositories are chosen for a target. A pick made for Debian
+  // is still sent with an imported Ubuntu template, where it may not resolve.
+  it('clears packages and repositories when the base template changes', () => {
+    useStore.setState({ addedPackages: [{ name: 'vim', version: '', repo: 'r' }], enabledRepos: ['r'] })
+
+    useStore.getState().setImportedTemplate(doc as never)
+    expect(useStore.getState().addedPackages).toEqual([])
+    expect(useStore.getState().enabledRepos).toEqual([])
+
+    useStore.setState({ addedPackages: [{ name: 'curl', version: '', repo: 'r' }], enabledRepos: ['r'] })
+    useStore.getState().setImportedTemplate(null)
+    expect(useStore.getState().addedPackages).toEqual([])
+    expect(useStore.getState().enabledRepos).toEqual([])
+  })
 })
 
 describe('package slice', () => {  beforeEach(() => {

@@ -7,7 +7,8 @@
 // Compose button from starting a build that is rejected immediately.
 
 import { describe, it, expect } from 'vitest'
-import { newUserError, newUsersValid } from './NewUsersSection'
+import { render, screen } from '@testing-library/react'
+import { newUserError, newUsersValid, NewUsersSection } from './NewUsersSection'
 import type { CredentialRequirement, NewUserInput } from '../api/types'
 
 const existing: CredentialRequirement[] = [
@@ -79,5 +80,26 @@ describe('newUsersValid', () => {
 
   it('is true for distinct, complete accounts', () => {
     expect(newUsersValid([valid, { user: 'kiosk', password: 'hunter2' }], existing)).toBe(true)
+  })
+})
+
+describe('NewUsersSection', () => {
+  // The gate accepts a startup-script account with no login, so marking the
+  // pair required would call a valid account incomplete.
+  it('stops marking the login required once a startup script is given', () => {
+    const { rerender } = render(
+      <NewUsersSection requirements={existing} users={[valid]} onChange={() => {}} />,
+    )
+    expect(screen.getByText(/Set one of the following/)).toBeTruthy()
+
+    rerender(
+      <NewUsersSection
+        requirements={existing}
+        users={[{ user: 'kiosk', startupScript: '/usr/local/bin/kiosk.sh' }]}
+        onChange={() => {}}
+      />,
+    )
+    expect(screen.queryByText(/Set one of the following/)).toBeNull()
+    expect(screen.getByText(/optional for a startup-script account/i)).toBeTruthy()
   })
 })

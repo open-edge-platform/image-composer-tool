@@ -124,6 +124,11 @@ export function BasicPage({
       const fresh = await api.compose(req)
       console.log('Composing image with template YAML:\n' + fresh.yaml)
       const accepted = await api.startBuild(req)
+      // The server has them now, and this page stays mounted while the Compose
+      // tab is shown, so a plain-text password would otherwise sit in memory
+      // and reappear in the dialog after the build.
+      setCredentials([])
+      setNewUsers([])
       setCredentialsOpen(false)
       onBuildStarted(accepted.buildId)
     } catch (e) {
@@ -152,6 +157,8 @@ export function BasicPage({
         credentials.length > 0 ? credentials : undefined,
         newUsers.length > 0 ? newUsers : undefined,
       )
+      setCredentials([])
+      setNewUsers([])
       setCredentialsOpen(false)
       onBuildStarted(accepted.buildId)
     } catch (e) {

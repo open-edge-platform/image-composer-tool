@@ -241,6 +241,11 @@ export const useStore = create<AppState>((set) => ({
       importedTemplate: t,
       importedRequirements: t ? (requirements ?? []) : [],
       removedBasePackages: [],
+      // Packages and repositories are scoped to a target: a package picked for
+      // Debian is still sent with an imported Ubuntu template, where it may not
+      // resolve. Cleared whenever the base changes, in either direction.
+      addedPackages: [],
+      enabledRepos: [],
       // A new base template means a new image name and disk layout to seed
       // from, so the guards that stop a reseed are cleared with it. Without
       // this the fields keep showing the previous template's values.
