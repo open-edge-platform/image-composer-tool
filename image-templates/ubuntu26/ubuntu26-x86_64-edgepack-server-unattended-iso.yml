@@ -20,7 +20,7 @@ metadata:
 
 image:
   name: edgepack-server-os-image-ubuntu-unattended
-  version: "26.04.2"
+  version: "26.04.3"
 
 target:
   os: ubuntu
@@ -88,6 +88,15 @@ systemConfig:
 
   hostname: edgepack-server
 
+  # Pin the network backend to netplan explicitly. Leaving this unset used to
+  # let ICT also enable systemd-networkd (its unit ships with the base systemd
+  # package regardless), which then raced NetworkManager/cloud-init's own
+  # netplan output for control of eth0: DHCP still succeeded and nmcli still
+  # showed "connected", but routing became inconsistent and outbound
+  # connectivity failed entirely.
+  network:
+    backend: netplan
+
   bootloader:
     # preserve: installed OS boots first, existing firmware entries are kept after it.
     bootEntryPolicy: preserve
@@ -148,6 +157,7 @@ systemConfig:
     - python3-pip
     - wayland-protocols
     - msr-tools
+    - acpica-tools
     - lsscsi
     - i2c-tools
     - socat
@@ -168,15 +178,16 @@ systemConfig:
 
   kernel:
     cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
-    # Pinned to 7.0.0-34. edge-gfx-dkms 7.0 does not build against the
-    # 7.0.0-38 headers: its xe_vsec.c uses the struct pci_dev form of the
-    # intel_vsec API, and 7.0.0-38 uses struct device. Installing exact
-    # package names also keeps a newer kernel from being pulled in, which
-    # DKMS would then fail to build for. Move to a newer kernel once
-    # EdgePack ships a driver that builds against it.
+    # Pinned to 7.0.0-38. edge-gfx-dkms 7.0 builds against these headers:
+    # its Makefile greps the installed intel_vsec.h to detect whether the
+    # kernel's intel_vsec API takes a struct pci_dev or a struct device,
+    # and defines XE_VSEC_DEVICE_API for xe_vsec.c accordingly (verified
+    # against the real 7.0.0-38 headers). Installing exact package names
+    # still keeps a newer kernel from being pulled in, which DKMS could
+    # fail to build for if a future kernel changes the API again.
     packages:
-      - linux-image-7.0.0-34-generic
-      - linux-headers-7.0.0-34-generic
+      - linux-image-7.0.0-38-generic
+      - linux-headers-7.0.0-38-generic
 
   # intel-edge-base-standard pulls in EdgePack's DKMS driver sources
   # transitively. ICT builds them explicitly with `-k <target-kernel>` (never
@@ -247,12 +258,6 @@ systemConfig:
         final: /usr/local/sbin/platform-bootstrap.sh
         stage: first-boot
         order: 10
-
-  # Uncomment once packageRepositories lists the platform PPAs, to allow only
-  # those repositories (plus the Ubuntu archives) to upgrade packages.
-  # aptPolicy:
-  #   upgradeAllowedRepos:
-  #     - platform-stack
 
   # Developer source archives and other artifacts are copied with additionalFiles.
   # additionalFiles:

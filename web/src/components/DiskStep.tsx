@@ -143,7 +143,14 @@ export function DiskStep() {
   const sizeAmount = amountOf(disk.size)
   const sizeBytes = parseSize(disk.size)
   const used = usedMiB(disk)
-  const hasRest = disk.partitions.some((_, i) => offsets[i]?.end === '0')
+  // The partition whose size depends on the disk, if any.
+  const restAt = disk.partitions.findIndex((_, i) => partitionSizeMiB(disk, i) === null)
+  const restNote =
+    restAt < 0
+      ? '.'
+      : restAt === disk.partitions.length - 1
+        ? '; the last partition takes the remainder.'
+        : `; partition ${restAt + 1} takes the remainder.`
   const isIso = imageType.toLowerCase() === 'iso'
   // A "rest of disk" partition has to stay last — its end of "0" leaves anything
   // after it with no offset to start from. Reordering is fenced off accordingly.
@@ -240,7 +247,7 @@ export function DiskStep() {
         </div>
         <p className="mt-1 text-xs text-slate-400">
           {disk.size
-            ? `Partitions use ${used} MiB of ${sizeBytes === null ? '?' : Math.floor(sizeBytes / MIB)} MiB${hasRest ? '; the last partition takes the remainder.' : '.'}`
+            ? `Partitions use ${used} MiB of ${sizeBytes === null ? '?' : Math.floor(sizeBytes / MIB)} MiB${restNote}`
             : 'The resolved template sets no disk size — ISO images size their own media. Leave it empty to keep it that way.'}
         </p>
       </div>
@@ -374,7 +381,7 @@ export function DiskStep() {
 
         <p className="mt-1 text-xs text-slate-400">
           {disk.layoutMode === 'size'
-            ? 'The schema stores start/end offsets, not sizes. Partitions are laid out contiguously from the first start offset, so Start and End are calculated for you.'
+            ? `The schema stores start/end offsets, not sizes. Partitions are laid out contiguously from the first start offset, so Start and End are calculated for you.${restAt >= 0 && restAt < disk.partitions.length - 1 ? ' Partitions after the one using the remaining space are placed back from the end of the disk.' : ''}`
             : 'Start and End are written to the template exactly as typed. Gaps and overlaps are reported but not corrected.'}
         </p>
 
@@ -558,7 +565,7 @@ function PartitionRow({
           </div>
         ) : (
           <span className={DERIVED} title="Derived from Start and End">
-            {rest ? 'rest' : sizeMiB === undefined ? '—' : `${sizeMiB} MiB`}
+            {sizeMiB === null ? 'rest' : sizeMiB === undefined ? '—' : `${sizeMiB} MiB`}
           </span>
         )}
 

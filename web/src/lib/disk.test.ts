@@ -7,6 +7,7 @@ import {
   appendPartition,
   computeOffsets,
   diskYamlFragment,
+  isRest,
   newPartition,
   parseDiskFromYaml,
   partitionSizeMiB,
@@ -17,7 +18,7 @@ import {
   validateDisk,
 } from './disk'
 import type { DiskModel } from './disk'
-import { ALL_FIXTURES, edgepackUnattendedIso, minimalPtlPvRaw, roboticsJazzyIso } from './fixtures'
+import { ALL_FIXTURES, edgepackIso, minimalPtlPvRaw, roboticsJazzyIso } from './fixtures'
 
 // Reads the partitions back out of an emitted disk block, so the round-trip
 // assertions compare offsets rather than YAML formatting.
@@ -208,12 +209,12 @@ describe('offset-mode validation', () => {
     expect(warnings).toContain('Gap of 1024 MiB between partitions 1 and 2.')
   })
 
-  it('warns about an overlap', () => {
+  it('rejects an overlap, which the builder would refuse', () => {
     const model = offsetSeed()
     model.partitions[1] = { ...model.partitions[1], start: '513MiB' }
-    expect(validateDisk(model, { imageType: 'raw' }).warnings).toContain(
-      'Partitions 1 and 2 overlap by 512 MiB.',
-    )
+    const { errors, warnings } = validateDisk(model, { imageType: 'raw' })
+    expect(errors).toContain('Partitions 1 and 2 overlap by 512 MiB.')
+    expect(warnings).not.toContain('Partitions 1 and 2 overlap by 512 MiB.')
   })
 
   it('rejects offsets that are not valid sizes', () => {
@@ -333,6 +334,59 @@ describe('computeOffsets', () => {
   })
 })
 
+describe('end-relative offsets (EdgePack)', () => {
+  it('gives only the partition spanning into the end region the remaining space', () => {
+    // Regression: rootfs, data and swap all seeded as "use remaining space".
+    const model = seed(edgepackIso)
+    expect(model.partitions.map((p) => p.sizeMiB)).toEqual([512, null, 16384, 4096])
+    expect(model.partitions.map((_, i) => isRest(model, i))).toEqual([false, true, false, false])
+    expect(validateDisk(model, { imageType: 'iso' }).errors).toEqual([])
+  })
+
+  it('keeps the partitions after the rest one anchored to the end when a size changes', () => {
+    const model = seed(edgepackIso)
+    model.partitions[2].sizeMiB = 8192
+    expect(computeOffsets(model)).toEqual([
+      { start: '1MiB', end: '513MiB' },
+      { start: '513MiB', end: '-12GiB' },
+      { start: '-12GiB', end: '-4GiB' },
+      { start: '-4GiB', end: '0' },
+    ])
+  })
+
+  it('switches modes without losing the layout', () => {
+    const sized = seed(edgepackIso)
+    const offset = setLayoutMode(sized, 'offset')
+    expect(diskYamlFragment(offset)).toBe(diskYamlFragment(sized))
+    expect(validateDisk(offset, { imageType: 'iso' })).toEqual({ errors: [], warnings: [] })
+    expect(partitionSizeMiB(offset, 1)).toBeNull()
+    expect(partitionSizeMiB(offset, 3)).toBe(4096)
+    expect(setLayoutMode(offset, 'size').partitions.map((p) => p.sizeMiB)).toEqual([512, null, 16384, 4096])
+  })
+
+  it('rejects an overlap between partitions measured from the end', () => {
+    const model = setLayoutMode(seed(edgepackIso), 'offset')
+    model.partitions[3] = { ...model.partitions[3], start: '-6GiB' }
+    expect(validateDisk(model, { imageType: 'iso' }).errors).toContain(
+      'Partitions 3 and 4 overlap by 2048 MiB.',
+    )
+  })
+
+  it('counts the space reserved at the end of the disk', () => {
+    // The trailing 1 is the gap the builder keeps before the end-relative region.
+    expect(usedMiB(seed(edgepackIso))).toBe(1 + 512 + 16384 + 4096 + 1)
+    expect(usedMiB(setLayoutMode(seed(edgepackIso), 'offset'))).toBe(513 + 20480 + 1)
+  })
+
+  it('rejects a disk too small for the gap the builder keeps before the end region', () => {
+    const model = { ...seed(edgepackIso), size: '20993MiB' }
+    expect(validateDisk(model, { imageType: 'iso' }).errors).toContain(
+      'Partitions need 20994 MiB but the disk is 20993 MiB.',
+    )
+    expect(validateDisk({ ...model, size: '20994MiB' }, { imageType: 'iso' }).errors).toEqual([])
+  })
+})
+
 describe('usedMiB / suggestedSize', () => {
   it('counts fixed partitions plus the leading gap, ignoring the rest partition', () => {
     expect(usedMiB(seed(minimalPtlPvRaw))).toBe(1 + 1024 + 2048)
@@ -351,47 +405,16 @@ describe('validateDisk', () => {
     }
   })
 
-  // Size mode would read each from-the-end partition as "rest of the disk" and
-  // then reject the layout for having three, which is what made this curated
-  // template look broken in a step that had only displayed it.
-  it('seeds a from-the-end layout in offset mode, with no size to show', () => {
-    const model = seed(edgepackUnattendedIso)
-    expect(model.layoutMode).toBe('offset')
-    expect(model.partitions.map((p) => p.end)).toEqual(['513MiB', '-20GiB', '-4GiB', '0'])
-    // boot is a plain pair; rootfs and data are sized by the disk, not the pair.
-    expect(partitionSizeMiB(model, 0)).toBe(512)
-    expect(partitionSizeMiB(model, 1)).toBeUndefined()
-    expect(partitionSizeMiB(model, 2)).toBeUndefined()
-    // Only the trailing partition is "rest".
-    expect(partitionSizeMiB(model, 3)).toBeNull()
-    expect(validateDisk(model).errors).toEqual([])
-  })
-
-  // validate.go:230 rejects an end that precedes its start, from-the-end
-  // offsets included, so the step has to see it rather than skip the pair.
-  it('rejects from-the-end offsets whose end precedes the start', () => {
-    const model = seed(edgepackUnattendedIso)
-    model.partitions[2].start = '-4GiB'
-    model.partitions[2].end = '-20GiB'
-    expect(validateDisk(model).errors.join(' ')).toMatch(/ends at or before it starts/)
-  })
-
-  it('rejects from-the-end offsets that are equal', () => {
-    const model = seed(edgepackUnattendedIso)
-    model.partitions[2].end = '-20GiB'
-    expect(validateDisk(model).errors.join(' ')).toMatch(/ends at or before it starts/)
-  })
-
   it('requires a disk name', () => {
     const model = { ...seed(minimalPtlPvRaw), name: '  ' }
     expect(validateDisk(model).errors).toContain('Disk name is required.')
   })
 
-  it('rejects a "rest" partition that is not last', () => {
+  it('rejects a second partition using the remaining space', () => {
     const model = seed(minimalPtlPvRaw)
     model.partitions[0].sizeMiB = null
     expect(validateDisk(model).errors).toContain(
-      'Only the last partition can use the remaining disk space.',
+      'Only one partition can use the remaining disk space.',
     )
   })
 

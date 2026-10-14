@@ -160,13 +160,9 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   // key instead means the Review pane keeps showing the last good resolve while
   // the user fixes the field, rather than flicking back to the un-overridden
   // template and implying their edits were discarded.
-  //
-  // Gated on diskEdited: an unedited model is seeded from the curated template
-  // and never sent, so a curated layout the step cannot represent (several
-  // "rest" partitions, say) must not block composing that template as-is.
   const diskInvalid = useMemo(
-    () => diskEdited && !!disk && validateDisk(disk, { imageType: selection.imageType }).errors.length > 0,
-    [diskEdited, disk, selection.imageType],
+    () => !!disk && validateDisk(disk, { imageType: selection.imageType }).errors.length > 0,
+    [disk, selection.imageType],
   )
   const [debouncedDiskKey, setDebouncedDiskKey] = useState(diskKey)
   useEffect(() => {
@@ -316,6 +312,8 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
       console.log('Composing image with template YAML:\n' + fresh.yaml)
       const accepted = await api.startBuild(buildReq)
       setCredentialsOpen(false)
+      // Kept, they would mark the accounts satisfied and the next build would skip the prompt.
+      setCredentials([])
       onBuildStarted(accepted.buildId)
     } catch (e) {
       setError((e as Error).message)

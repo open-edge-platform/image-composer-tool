@@ -1,8 +1,6 @@
 // SPDX-FileCopyrightText: (C) 2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { parseSize } from './size'
-
 // What the builder actually accepts in a `disk:` block.
 //
 // os-image-template.schema.json constrains almost none of this: every Disk and
@@ -50,67 +48,25 @@ export const FS_TYPES = [
 //   - a bare number is rejected (empty suffix is not in the list)
 //   - no TiB
 // "0" is special-cased before the regex and means "rest of the disk".
-//
-// A leading "-" is accepted: config.go:499 documents a negative offset as
-// measured back from the end of the disk, and the API's own override check
-// (service/diskoverride.go) accepts "optionally negative" the same way. The
-// curated EdgePack layouts are written this way.
 export const OFFSET_SUFFIXES = ['KiB', 'MiB', 'GiB', 'K', 'M', 'G', 'KB', 'MB', 'GB'] as const
 
-const OFFSET_RE = new RegExp(`^-?\\d+(${OFFSET_SUFFIXES.join('|')})$`)
+const OFFSET_RE = new RegExp(`^\\d+(${OFFSET_SUFFIXES.join('|')})$`)
 
-// isValidOffset reports whether VerifyFileSize would accept a start/end value.
+// isValidOffset reports whether VerifyFileSize would accept a start/end value,
+// including a non-zero one measured back from the end of the disk ("-20GiB",
+// imagedisc.go parseBoundary).
 export function isValidOffset(value: string): boolean {
-  return value === '0' || OFFSET_RE.test(value)
-}
-
-// isFromEndOffset reports whether an offset is measured back from the end of
-// the disk. Such a partition has no size until the disk does, so the step shows
-// and validates it as a pair of offsets rather than a span.
-export function isFromEndOffset(value: string): boolean {
-  return /^-\d/.test(value.trim())
-}
-
-// PartitionOffset is an offset as validate.go:241 models one: a magnitude plus
-// which end of the disk it is measured from. Two offsets are only comparable
-// when they share an origin.
-export interface PartitionOffset {
-  fromEnd: boolean
-  bytes: number
-}
-
-// parsePartitionOffset mirrors validate.go:246. Returns null for a value the
-// builder would reject, including "0" — the rest-of-disk sentinel, which the Go
-// side handles before it ever parses an offset.
-export function parsePartitionOffset(value: string): PartitionOffset | null {
-  if (!isValidOffset(value) || value === '0') return null
-  const m = /^(-?)(\d+[A-Za-z]+)$/.exec(value)
-  if (!m) return null
-  const bytes = parseSize(m[2])
-  return bytes === null ? null : { fromEnd: m[1] === '-', bytes }
-}
-
-// offsetsOutOfOrder mirrors validate.go:264. Offsets measured from opposite
-// ends are never out of order with each other: a from-start offset always
-// precedes a from-end one. Among from-end offsets the larger magnitude comes
-// first, since it sits further back from the end of the disk.
-export function offsetsOutOfOrder(left: PartitionOffset, right: PartitionOffset): boolean {
-  if (left.fromEnd !== right.fromEnd) return false
-  return left.fromEnd ? left.bytes < right.bytes : left.bytes > right.bytes
-}
-
-// offsetsEqual mirrors validate.go:274: same origin, same magnitude.
-export function offsetsEqual(left: PartitionOffset, right: PartitionOffset): boolean {
-  return left.fromEnd === right.fromEnd && left.bytes === right.bytes
+  if (value === '0' || OFFSET_RE.test(value)) return true
+  return value.startsWith('-') && OFFSET_RE.test(value.slice(1)) && /[1-9]/.test(value)
 }
 
 // isValidDiskSize reports whether disk.size / disk.maxSize would parse. Same
 // suffix table and same `^(\d+)(.*)$` pattern, transcribed three times on the Go
 // side already (config.go:1405, validate/validate.go:257, both mirroring
 // imagedisc.TranslateSizeStrToBytes) — but without VerifyFileSize's "0" case,
-// since a zero-byte disk is not a thing. A disk size is never negative.
+// since a zero-byte disk is not a thing.
 export function isValidDiskSize(value: string): boolean {
-  return /^\d/.test(value) && OFFSET_RE.test(value)
+  return OFFSET_RE.test(value)
 }
 
 // --- Artifacts ---------------------------------------------------------------

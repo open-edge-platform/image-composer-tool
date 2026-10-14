@@ -182,13 +182,11 @@ disk:
           mountOptions: defaults
 `
 
-// ubuntu24/ubuntu24-x86_64-edgepack-unattended-iso.yml
-//
-// The one curated layout written with from-the-end offsets: rootfs runs to
-// 20GiB before the end of the disk, data and swap carve up that tail. Kept as
-// a fixture because size mode cannot express it, so it is what proves the step
-// seeds offset mode instead of reading three partitions as "rest".
-export const edgepackUnattendedIso = `
+// ubuntu24/ubuntu24-x86_64-edgepack-unattended-iso.yml. The other three
+// platform-enablement templates (server, and both on ubuntu26) resolve to the
+// same partitions under a different disk name. Offsets measured back from the
+// end of the disk ("-20GiB") keep data and swap fixed while rootfs takes the rest.
+export const edgepackIso = `
 disk:
     name: EdgePack_ISO
     path: ""
@@ -253,5 +251,5 @@ export const ALL_FIXTURES: { name: string; yaml: string }[] = [
   { name: 'ubuntu24-x86_64-robotics-jazzy-iso.yml', yaml: roboticsJazzyIso },
   { name: 'ubuntu24-x86_64-minimal-ptl-pv-raw.yml', yaml: minimalPtlPvRaw },
   { name: 'ubuntu24/generic-handheld-os-template.yml', yaml: genericHandheldRaw },
-  { name: 'ubuntu24/ubuntu24-x86_64-edgepack-unattended-iso.yml', yaml: edgepackUnattendedIso },
+  { name: 'ubuntu24/ubuntu24-x86_64-edgepack-unattended-iso.yml', yaml: edgepackIso },
 ]
