@@ -2,12 +2,13 @@ import { useEffect, useMemo, useState } from 'react'
 import { useStore, cascadingOptions, encodePackage } from '../store'
 import type { Selection } from '../store'
 import { api } from '../api/client'
-import type { ComposeRequest, ComposeResponse, CredentialInput } from '../api/types'
+import type { ComposeRequest, ComposeResponse, CredentialInput, NewUserInput } from '../api/types'
 import { Select } from './Select'
 import { PackagesStep } from './PackagesStep'
 import { Input } from './Input'
 import { DiskStep } from './DiskStep'
 import { credentialsComplete } from './CredentialsStep'
+import { newUsersValid } from './NewUsersSection'
 import { CredentialsDialog } from './CredentialsDialog'
 import { ImportTemplateDialog } from './ImportTemplateDialog'
 import { parseDiskFromYaml, toDiskConfig, validateDisk } from '../lib/disk'
@@ -72,6 +73,9 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   // state, not the shared store: the store is persisted and a password must not
   // outlive the build it was typed for.
   const [credentials, setCredentials] = useState<CredentialInput[]>([])
+  // Accounts the user asked to add on top of the template's own. Transient for
+  // the same reason credentials are: each entry carries a password.
+  const [newUsers, setNewUsers] = useState<NewUserInput[]>([])
 
   const opts = useMemo(
     () => (manifest ? cascadingOptions(manifest, selection) : null),
@@ -106,6 +110,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   // previous one is dropped rather than being sent with the next build.
   useEffect(() => {
     setCredentials([])
+    setNewUsers([])
   }, [selection])
 
   const packagesKey = useMemo(() => addedPackages.map(encodePackage).sort().join('\n'), [addedPackages])
@@ -170,9 +175,10 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
       repos: reposKey ? reposKey.split('\n') : undefined,
       disk: diskEdited && debouncedDiskKey ? JSON.parse(debouncedDiskKey) : undefined,
       credentials: debouncedCredentials.length > 0 ? debouncedCredentials : undefined,
+      users: newUsers.length > 0 ? newUsers : undefined,
     }),
     [selection, importedYaml, removedKey, imageNameEdited, debouncedImageName, packagesKey,
-      reposKey, diskEdited, debouncedDiskKey, debouncedCredentials],
+      reposKey, diskEdited, debouncedDiskKey, debouncedCredentials, newUsers],
   )
 
   // Entering Advanced always lands on the first step, mirroring the prototype's
@@ -242,8 +248,10 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   // authority — the import-time list only covers the gap before that lands.
   const requirements = composed?.credentials ?? (usingImport ? importedRequirements : [])
   // Same gate as Basic: the backend rejects a build whose template leaves an
-  // account without a login, so stop here rather than letting it fail.
-  const credentialsReady = credentialsComplete(requirements, credentials)
+  // account without a login, so stop here rather than letting it fail. An added
+  // account must be complete for the same reason.
+  const credentialsReady =
+    credentialsComplete(requirements, credentials) && newUsersValid(newUsers, requirements)
   const hasCredentialFields = requirements.some((r) => (r.required && !r.satisfied) || !r.required)
 
   const onBuild = async () => {
@@ -271,6 +279,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
         imageName: imageNameEdited ? imageName : undefined,
         disk: diskEdited && disk ? toDiskConfig(disk) : undefined,
         credentials: credentials.length > 0 ? credentials : undefined,
+        users: newUsers.length > 0 ? newUsers : undefined,
       }
       // Re-compose against buildReq (the current, non-debounced image name)
       // right before starting the build, so the logged YAML matches what the
@@ -281,6 +290,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
       setCredentialsOpen(false)
       // Kept, they would mark the accounts satisfied and the next build would skip the prompt.
       setCredentials([])
+      setNewUsers([])
       onBuildStarted(accepted.buildId)
     } catch (e) {
       setError((e as Error).message)
@@ -575,6 +585,8 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
         requirements={requirements}
         credentials={credentials}
         onChange={setCredentials}
+        newUsers={newUsers}
+        onNewUsersChange={setNewUsers}
         credentialsReady={credentialsReady}
         busy={busy}
         buildInProgress={buildInProgress}
@@ -591,6 +603,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
           // A different template asks for different accounts, so anything typed
           // for the previous one is dropped rather than sent with this build.
           setCredentials([])
+          setNewUsers([])
           setError(null)
           setImportOpen(false)
         }}
