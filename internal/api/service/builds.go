@@ -85,7 +85,13 @@ type build struct {
 	// removed once the build finishes. It is the delta's parent when there is
 	// one, so it has to outlive the build rather than the request that wrote it.
 	BasePath string
-	done     chan struct{} // closed when the build finishes
+	// retry captures exactly what this build was resolved from, with any
+	// credential or new-user password already hashed, so RetryBuild can resubmit
+	// the identical request without asking the caller to look up and retype a
+	// login it already satisfied once. Set once in StartBuild; nil for a build
+	// reconstructed from disk history (an older record predates this field).
+	retry *retryInput
+	done  chan struct{} // closed when the build finishes
 
 	doneOnce sync.Once // guards close(done): both runBuild and the cancel watchdog can finish a build
 
@@ -312,6 +318,17 @@ type BuildAccepted struct {
 	LogsURL string
 }
 
+// retryInput is what StartBuild actually resolved a build from: a Compose
+// selection with any Credentials/NewUsers already hashed, or a posted YAML
+// document with its own already-hashed Credentials/NewUsers. Exactly one of
+// Compose or YAML is set, mirroring BuildRequest's own contract.
+type retryInput struct {
+	Compose     *Selection
+	YAML        string
+	Credentials []CredentialInput
+	NewUsers    []NewUserInput
+}
+
 // StartBuild resolves the template, starts an os/exec build, and returns a build
 // id. Client errors (bad input, no match) return a 400 *Error; server errors
 // (workspace creation, template write) return a 500 *Error.
@@ -343,7 +360,7 @@ func (s *Service) StartBuild(req BuildRequest) (*BuildAccepted, error) {
 
 	// Resolve the template path to build. Client errors (bad input, no match)
 	// return 400; server errors (e.g. writing the inline template) return 500.
-	templatePath, templateName, err := s.resolveBuildTemplate(&req, workDir)
+	templatePath, templateName, retry, err := s.resolveBuildTemplate(&req, workDir)
 	if err != nil {
 		s.releaseBuildSlot(id) // no child spawned; free the slot for the next start
 		// A missing login gets its own code: it is the one bad-request cause a
@@ -397,6 +414,7 @@ func (s *Service) StartBuild(req BuildRequest) (*BuildAccepted, error) {
 		Command:      name + " " + strings.Join(cmdArgs, " "),
 		Summary:      summary,
 		CreatedAt:    createdAt,
+		retry:        retry,
 		done:         make(chan struct{}),
 	}
 	s.tracker.add(b)
@@ -417,6 +435,38 @@ func (s *Service) StartBuild(req BuildRequest) (*BuildAccepted, error) {
 		Status:  b.snapshot().Status,
 		LogsURL: fmt.Sprintf("/api/v1/builds/%s/logs", id),
 	}, nil
+}
+
+// RetryBuild starts a fresh build from exactly what an earlier build (id) was
+// resolved from, credentials and new-user passwords included — both already
+// hashed, since retry re-validates rather than re-hashing (HashPasswordForHost
+// passes a complete crypt(3) hash through unchanged). This is what lets
+// "Retry compose" recover from a build that failed for a reason unrelated to
+// its configuration (a transient package-repo timeout, say) without asking the
+// caller to look up and retype a login it already supplied once.
+//
+// Returns a 404 *Error for an unknown build, and a 400 *Error for one that has
+// no retry record — a build reconstructed from a meta.json written before this
+// field existed.
+func (s *Service) RetryBuild(id string) (*BuildAccepted, error) {
+	b, ok := s.getBuild(id)
+	if !ok {
+		return nil, newError(http.StatusNotFound, "NOT_FOUND", "build not found")
+	}
+	if b.retry == nil {
+		return nil, newError(http.StatusBadRequest, "NO_RETRY_RECORD",
+			"this build predates retry support and cannot be retried directly; start a new compose instead")
+	}
+	req := BuildRequest{
+		YAML:        b.retry.YAML,
+		Credentials: b.retry.Credentials,
+		NewUsers:    b.retry.NewUsers,
+	}
+	if b.retry.Compose != nil {
+		sel := *b.retry.Compose
+		req.Compose = &sel
+	}
+	return s.StartBuild(req)
 }
 
 // CancelAccepted is the result of a successful cancel request. The build is now
@@ -717,7 +767,7 @@ var errCredentialRequired = fmt.Errorf("%w: credential required", errBadBuildReq
 // contract. Both-set is rejected rather than silently preferring one: the two
 // inputs can disagree, and picking a winner would build something the caller
 // didn't unambiguously ask for.
-func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path, name string, err error) {
+func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path, name string, retry *retryInput, err error) {
 	// A materialized base outlives this call only on the success path, where the
 	// build owns it. Every error return below has to remove it, or the document
 	// is left in the shared templates directory for good.
@@ -729,44 +779,45 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 		}
 	}()
 	if req.YAML != "" && req.Compose != nil {
-		return "", "", fmt.Errorf("%w: provide either compose or yaml, not both", errBadBuildRequest)
+		return "", "", nil, fmt.Errorf("%w: provide either compose or yaml, not both", errBadBuildRequest)
 	}
 	// A compose build carries its logins inside the selection; accepting them
 	// here too would leave two sources for one thing and no rule for which wins.
 	if req.YAML == "" && len(req.Credentials) > 0 {
-		return "", "", fmt.Errorf("%w: credentials apply to yaml; a compose build carries them in compose.credentials", errBadBuildRequest)
+		return "", "", nil, fmt.Errorf("%w: credentials apply to yaml; a compose build carries them in compose.credentials", errBadBuildRequest)
 	}
 	if req.YAML == "" && len(req.NewUsers) > 0 {
-		return "", "", fmt.Errorf("%w: users apply to yaml; a compose build carries them in compose.users", errBadBuildRequest)
+		return "", "", nil, fmt.Errorf("%w: users apply to yaml; a compose build carries them in compose.users", errBadBuildRequest)
 	}
 	if req.YAML != "" {
 		p := filepath.Join(workDir, "template.yml")
 		if werr := os.WriteFile(p, []byte(req.YAML), 0o600); werr != nil {
-			return "", "", fmt.Errorf("writing template: %w", werr) // server-side
+			return "", "", nil, fmt.Errorf("writing template: %w", werr) // server-side
 		}
 		name := postedTemplateName(req.YAML)
 		if len(req.Credentials) > 0 || len(req.NewUsers) > 0 {
-			deltaPath, derr := s.credentialDeltaForPosted(p, workDir, req.Credentials, req.NewUsers)
+			deltaPath, hashedCreds, hashedUsers, derr := s.credentialDeltaForPosted(p, workDir, req.Credentials, req.NewUsers)
 			if derr != nil {
-				return "", "", derr
+				return "", "", nil, derr
 			}
 			if verr := s.checkTemplateCredentials(deltaPath); verr != nil {
 				_ = os.Remove(deltaPath)
-				return "", "", verr
+				return "", "", nil, verr
 			}
-			return deltaPath, name, nil
+			retry = &retryInput{YAML: req.YAML, Credentials: hashedCreds, NewUsers: hashedUsers}
+			return deltaPath, name, retry, nil
 		}
 		// A posted template can declare a credential-less sudo account just as a
 		// curated one can, and such a build always fails. Say so now rather than
 		// after the chroot is populated.
 		if verr := s.checkTemplateCredentials(p); verr != nil {
-			return "", "", verr
+			return "", "", nil, verr
 		}
 		// On-disk name is fixed; only the display name follows the document.
-		return p, name, nil
+		return p, name, &retryInput{YAML: req.YAML}, nil
 	}
 	if req.Compose == nil {
-		return "", "", fmt.Errorf("%w: provide either compose or yaml", errBadBuildRequest)
+		return "", "", nil, fmt.Errorf("%w: provide either compose or yaml", errBadBuildRequest)
 	}
 	c := req.Compose
 	// A supplied document stands in for the manifest-matched template, exactly
@@ -775,7 +826,7 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 	if c.BaseYAML != "" {
 		name, path, cleanup, merr := s.materializeBase(*c)
 		if merr != nil {
-			return "", "", fmt.Errorf("writing base template: %w", merr) // server-side
+			return "", "", nil, fmt.Errorf("writing base template: %w", merr) // server-side
 		}
 		// Removed by the build, not here: it is the generated delta's parent and
 		// has to outlive this call for the whole build.
@@ -785,12 +836,12 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 	} else {
 		tmpl = s.manifest.findTemplate(c.Vertical, c.SKU, c.Platform, c.OS, c.ImageType)
 		if tmpl == "" {
-			return "", "", fmt.Errorf("%w: no template maps to the selected combination", errBadBuildRequest)
+			return "", "", nil, fmt.Errorf("%w: no template maps to the selected combination", errBadBuildRequest)
 		}
 		var perr error
 		full, perr = safeTemplatePath(s.cfg.TemplatesDir, tmpl)
 		if perr != nil {
-			return "", "", fmt.Errorf("resolving template path: %w", perr) // server-side (bad manifest)
+			return "", "", nil, fmt.Errorf("resolving template path: %w", perr) // server-side (bad manifest)
 		}
 	}
 	if !c.hasOverrides() {
@@ -799,20 +850,21 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 		// fails in milliseconds; the build itself would only reach the same
 		// check after the package download, minutes in.
 		if verr := s.checkTemplateCredentials(full); verr != nil {
-			return "", "", verr
+			return "", "", nil, verr
 		}
-		return full, displayTemplateName(c, tmpl), nil
+		sel := *c
+		return full, displayTemplateName(c, tmpl), &retryInput{Compose: &sel}, nil
 	}
 	// StartBuild can be posted directly, bypassing /templates/compose, so the
 	// overrides must be validated here too rather than trusting a prior compose.
 	if verr := ValidateImageName(c.ImageName); verr != nil {
-		return "", "", fmt.Errorf("%w: %v", errBadBuildRequest, verr)
+		return "", "", nil, fmt.Errorf("%w: %v", errBadBuildRequest, verr)
 	}
 	if verr := ValidatePackages(c.Packages); verr != nil {
-		return "", "", fmt.Errorf("%w: %v", errBadBuildRequest, verr)
+		return "", "", nil, fmt.Errorf("%w: %v", errBadBuildRequest, verr)
 	}
 	if verr := ValidateDisk(c.Disk, c.ImageType); verr != nil {
-		return "", "", fmt.Errorf("%w: %v", errBadBuildRequest, verr)
+		return "", "", nil, fmt.Errorf("%w: %v", errBadBuildRequest, verr)
 	}
 	// Credentials name users and carry a password to hash, and new accounts must
 	// not collide with a user the parent already declares, so both are checked
@@ -820,15 +872,15 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 	if len(c.Credentials) > 0 || len(c.NewUsers) > 0 {
 		parentMerged, perr := config.LoadAndMergeTemplate(full)
 		if perr != nil {
-			return "", "", fmt.Errorf("%w: %v", errBadBuildRequest, perr)
+			return "", "", nil, fmt.Errorf("%w: %v", errBadBuildRequest, perr)
 		}
 		hashed, cerr := validateCredentials(c.Credentials, parentMerged)
 		if cerr != nil {
-			return "", "", fmt.Errorf("%w: %v", errBadBuildRequest, cerr)
+			return "", "", nil, fmt.Errorf("%w: %v", errBadBuildRequest, cerr)
 		}
 		created, uerr := validateNewUsers(c.NewUsers, parentMerged)
 		if uerr != nil {
-			return "", "", fmt.Errorf("%w: %v", errBadBuildRequest, uerr)
+			return "", "", nil, fmt.Errorf("%w: %v", errBadBuildRequest, uerr)
 		}
 		// Copy rather than mutate: c points at the caller's request, which is
 		// also stored on the build record and would otherwise carry the hash.
@@ -839,16 +891,17 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 	}
 	deltaPath, _, cleanup, derr := s.deltaForOverride(tmpl, full, *c)
 	if derr != nil {
-		return "", "", fmt.Errorf("generating override template: %w", derr) // server-side
+		return "", "", nil, fmt.Errorf("generating override template: %w", derr) // server-side
 	}
 
 	if verr := s.checkTemplateCredentials(deltaPath); verr != nil {
 		cleanup()
-		return "", "", verr
+		return "", "", nil, verr
 	}
 	// Display name stays the curated parent's, not the generated delta's — the
 	// history/build-details panels show what the user actually chose.
-	return deltaPath, displayTemplateName(c, tmpl), nil
+	sel := *c
+	return deltaPath, displayTemplateName(c, tmpl), &retryInput{Compose: &sel}, nil
 }
 
 // displayTemplateName is the name a build is listed under. For a manifest match
@@ -876,39 +929,39 @@ func displayTemplateName(sel *Selection, tmpl string) string {
 // parentPath must already hold the posted document, and the delta is written
 // as its sibling so it satisfies resolveExtendsParentPath's containment guard.
 func (s *Service) credentialDeltaForPosted(parentPath, workDir string, creds []CredentialInput,
-	newUsers []NewUserInput) (string, error) {
+	newUsers []NewUserInput) (deltaPath string, hashedCreds []CredentialInput, hashedUsers []NewUserInput, err error) {
 	// Merged, so an account the document inherits from the OS defaults can be
 	// given a login too — validateCredentials rejects any name it can't see.
 	merged, err := config.LoadAndMergeTemplate(parentPath)
 	if err != nil {
-		return "", fmt.Errorf("%w: %v", errBadBuildRequest, err)
+		return "", nil, nil, fmt.Errorf("%w: %v", errBadBuildRequest, err)
 	}
 	hashed, cerr := validateCredentials(creds, merged)
 	if cerr != nil {
-		return "", fmt.Errorf("%w: %v", errBadBuildRequest, cerr)
+		return "", nil, nil, fmt.Errorf("%w: %v", errBadBuildRequest, cerr)
 	}
 	created, uerr := validateNewUsers(newUsers, merged)
 	if uerr != nil {
-		return "", fmt.Errorf("%w: %v", errBadBuildRequest, uerr)
+		return "", nil, nil, fmt.Errorf("%w: %v", errBadBuildRequest, uerr)
 	}
 	// The delta's image/target must match the document's own, not the merged
 	// result's: resolveExtendsChainFromLeaf compares child against parent as
 	// each is written, and the defaults a merge folds in are not in the parent.
 	parent, lerr := config.LoadTemplate(parentPath, false)
 	if lerr != nil {
-		return "", fmt.Errorf("%w: %v", errBadBuildRequest, lerr)
+		return "", nil, nil, fmt.Errorf("%w: %v", errBadBuildRequest, lerr)
 	}
 	data, derr := buildDelta(filepath.Base(parentPath), parent.Image, parent.Target,
 		Selection{Credentials: hashed, NewUsers: created}, nil, nil)
 	if derr != nil {
-		return "", fmt.Errorf("generating credential template: %w", derr) // server-side
+		return "", nil, nil, fmt.Errorf("generating credential template: %w", derr) // server-side
 	}
-	deltaPath := filepath.Join(workDir, "template-credentials.yml")
+	path := filepath.Join(workDir, "template-credentials.yml")
 	// 0600: this is the one file in the build that carries a password hash.
-	if werr := os.WriteFile(deltaPath, data, 0o600); werr != nil {
-		return "", fmt.Errorf("writing credential template: %w", werr) // server-side
+	if werr := os.WriteFile(path, data, 0o600); werr != nil {
+		return "", nil, nil, fmt.Errorf("writing credential template: %w", werr) // server-side
 	}
-	return deltaPath, nil
+	return path, hashed, created, nil
 }
 
 // postedTemplateName derives the display name for a posted template from its

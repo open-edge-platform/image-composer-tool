@@ -63,6 +63,23 @@ func (s *Server) CancelBuild(w http.ResponseWriter, _ *http.Request, id httpapi.
 	writeJSON(w, http.StatusAccepted, fromCancelAccepted(acc))
 }
 
+// handleRetryBuild handles POST /builds/{id}/retry: starts a fresh build from
+// exactly what the named build was resolved from (credentials and new-user
+// passwords included, already hashed), so a failure unrelated to the
+// configuration itself — a transient package-repo timeout, say — can be
+// retried without asking the caller to resupply a login it already satisfied.
+// Hand-written rather than generated: it isn't in the OpenAPI contract yet,
+// alongside the other build endpoints that don't fit it (sse.go, downloads.go).
+func (s *Server) handleRetryBuild(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	acc, err := s.svc.RetryBuild(id)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, fromBuildAccepted(acc))
+}
+
 // ListBuilds handles GET /builds.
 func (s *Server) ListBuilds(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, fromHistory(s.svc.ListBuilds(), time.Now().UTC()))

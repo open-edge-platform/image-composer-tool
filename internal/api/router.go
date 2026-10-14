@@ -31,13 +31,14 @@ func (s *Server) routes() *http.ServeMux {
 	httpapi.HandlerFromMuxWithBaseURL(s, mux, "/api/v1")
 
 	// Hand-written endpoints outside the generated JSON interface: the SSE log
-	// and package-search streams (text/event-stream) and file/binary downloads
-	// (YAML / text / octet-stream).
+	// and package-search streams (text/event-stream), file/binary downloads
+	// (YAML / text / octet-stream), and build retry (not yet in the contract).
 	mux.HandleFunc("GET /api/v1/packages/search/stream", s.handleSearchPackageStream)
 	mux.HandleFunc("GET /api/v1/builds/{id}/logs", s.handleBuildLogs)
 	mux.HandleFunc("GET /api/v1/builds/{id}/template", s.handleBuildTemplate)
 	mux.HandleFunc("GET /api/v1/builds/{id}/logfile", s.handleBuildLogFile)
 	mux.HandleFunc("GET /api/v1/builds/{id}/artifacts/{name}", s.handleBuildArtifactDownload)
+	mux.HandleFunc("POST /api/v1/builds/{id}/retry", s.handleRetryBuild)
 
 	// Web UI: serve the embedded SPA at the root. API routes above are more
 	// specific and take precedence in the mux. Only mounted when a real build is

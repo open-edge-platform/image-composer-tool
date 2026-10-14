@@ -166,6 +166,17 @@ export const api = {
       method: 'POST',
     }),
 
+  // Starts a fresh build from exactly what the named build was resolved from —
+  // credentials, added users, and every other override included — so a retry
+  // after a failure unrelated to the configuration (a transient package-repo
+  // timeout, say) doesn't need the caller to resupply a login it already
+  // satisfied once. Rejects with 400 for a build that predates retry support
+  // (an older history record with no retry data to resubmit).
+  retryBuild: (buildId: string) =>
+    jsonFetch<BuildAccepted>(`/builds/${buildId}/retry`, {
+      method: 'POST',
+    }),
+
   // Build command + resolved paths for the troubleshoot panel.
   buildDetails: (buildId: string) =>
     jsonFetch<BuildDetails>(`/builds/${buildId}/details`),

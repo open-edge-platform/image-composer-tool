@@ -205,7 +205,7 @@ func TestResolveBuildTemplateWithImageNameOverride(t *testing.T) {
 	s := newTestService(t)
 	wd := t.TempDir()
 
-	path, name, err := s.resolveBuildTemplate(&BuildRequest{Compose: &Selection{
+	path, name, _, err := s.resolveBuildTemplate(&BuildRequest{Compose: &Selection{
 		Vertical: "robotics", SKU: "amr", Platform: "wcl", OS: "ubuntu24", ImageType: "iso",
 		ImageName: "my-custom-name",
 	}}, wd)
@@ -236,7 +236,7 @@ func TestResolveBuildTemplateInvalidImageNameOverride(t *testing.T) {
 	s := newTestService(t)
 	wd := t.TempDir()
 
-	_, _, err := s.resolveBuildTemplate(&BuildRequest{Compose: &Selection{
+	_, _, _, err := s.resolveBuildTemplate(&BuildRequest{Compose: &Selection{
 		Vertical: "robotics", SKU: "amr", Platform: "wcl", OS: "ubuntu24", ImageType: "iso",
 		ImageName: "-leading-dash",
 	}}, wd)
@@ -255,7 +255,7 @@ func TestResolveBuildTemplateKeepsDeltaUntilBuildFinishes(t *testing.T) {
 		ImageName: "custom-robotics-image",
 	}}
 
-	deltaPath, _, err := s.resolveBuildTemplate(request, wd)
+	deltaPath, _, _, err := s.resolveBuildTemplate(request, wd)
 	if err != nil {
 		t.Fatalf("resolveBuildTemplate: %v", err)
 	}
@@ -282,7 +282,7 @@ func TestRunBuildFailedStartCleansDelta(t *testing.T) {
 		Vertical: "robotics", SKU: "amr", Platform: "wcl", OS: "ubuntu24", ImageType: "iso",
 		ImageName: "custom-robotics-image",
 	}}
-	deltaPath, _, err := s.resolveBuildTemplate(request, wd)
+	deltaPath, _, _, err := s.resolveBuildTemplate(request, wd)
 	if err != nil {
 		t.Fatalf("resolveBuildTemplate: %v", err)
 	}
