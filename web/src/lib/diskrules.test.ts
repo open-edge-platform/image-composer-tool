@@ -19,6 +19,9 @@ import {
   isValidOffset,
   isValidTypeUUID,
   isFromEndOffset,
+  offsetsEqual,
+  offsetsOutOfOrder,
+  parsePartitionOffset,
 } from './diskrules'
 import { parseDiskFromYaml, setLayoutMode, validateDisk } from './disk'
 import { ALL_FIXTURES, edgepackUnattendedIso, minimalPtlPvRaw, roboticsJazzyIso } from './fixtures'
@@ -44,6 +47,15 @@ describe('isValidOffset — imagedisc.go:329 VerifyFileSize', () => {
     expect(isFromEndOffset('0')).toBe(false)
   })
 
+  it('accepts every offset the curated from-the-end layout is written with', () => {
+    const model = parseDiskFromYaml(edgepackUnattendedIso)
+    if (!model) throw new Error('fixture did not parse')
+    for (const p of model.partitions) {
+      expect(isValidOffset(p.start), p.start).toBe(true)
+      expect(isValidOffset(p.end), p.end).toBe(true)
+    }
+  })
+
   it('is stricter than it looks — these all fail at build time', () => {
     // `^(\d+)(.*)$` puts everything after the leading digits into the suffix,
     // which then has to match the table exactly.
@@ -54,6 +66,43 @@ describe('isValidOffset — imagedisc.go:329 VerifyFileSize', () => {
     expect(isValidOffset('1TiB')).toBe(false) // no TiB in the table
     expect(isValidOffset('')).toBe(false)
     expect(isValidOffset('MiB')).toBe(false)
+  })
+})
+
+// validate.go:264/274. Two offsets only compare when measured from the same
+// end of the disk; among from-the-end offsets the larger magnitude comes first.
+describe('partition offset ordering', () => {
+  const at = (v: string) => {
+    const o = parsePartitionOffset(v)
+    if (!o) throw new Error(`${v} did not parse`)
+    return o
+  }
+
+  it('orders from-the-start offsets by magnitude', () => {
+    expect(offsetsOutOfOrder(at('513MiB'), at('1MiB'))).toBe(true)
+    expect(offsetsOutOfOrder(at('1MiB'), at('513MiB'))).toBe(false)
+  })
+
+  it('orders from-the-end offsets by reverse magnitude', () => {
+    // -20GiB sits further back from the end than -4GiB, so it comes first.
+    expect(offsetsOutOfOrder(at('-20GiB'), at('-4GiB'))).toBe(false)
+    expect(offsetsOutOfOrder(at('-4GiB'), at('-20GiB'))).toBe(true)
+  })
+
+  it('never calls offsets from opposite ends out of order', () => {
+    expect(offsetsOutOfOrder(at('513MiB'), at('-20GiB'))).toBe(false)
+    expect(offsetsOutOfOrder(at('-20GiB'), at('513MiB'))).toBe(false)
+  })
+
+  it('treats same-origin, same-magnitude offsets as equal', () => {
+    expect(offsetsEqual(at('-4GiB'), at('-4GiB'))).toBe(true)
+    expect(offsetsEqual(at('4GiB'), at('-4GiB'))).toBe(false)
+    expect(offsetsEqual(at('4GiB'), at('4096MiB'))).toBe(true)
+  })
+
+  it('does not parse the rest-of-disk sentinel as an offset', () => {
+    expect(parsePartitionOffset('0')).toBeNull()
+    expect(parsePartitionOffset('1.5GiB')).toBeNull()
   })
 })
 

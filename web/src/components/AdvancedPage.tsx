@@ -10,7 +10,6 @@ import { DiskStep } from './DiskStep'
 import { credentialsComplete } from './CredentialsStep'
 import { CredentialsDialog } from './CredentialsDialog'
 import { ImportTemplateDialog } from './ImportTemplateDialog'
-import { ImportedTemplateCard } from './ImportedTemplateCard'
 import { parseDiskFromYaml, toDiskConfig, validateDisk } from '../lib/disk'
 
 // How long to wait after the last keystroke in Image Name before re-composing.

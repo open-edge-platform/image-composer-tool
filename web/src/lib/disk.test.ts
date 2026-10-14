@@ -367,6 +367,21 @@ describe('validateDisk', () => {
     expect(validateDisk(model).errors).toEqual([])
   })
 
+  // validate.go:230 rejects an end that precedes its start, from-the-end
+  // offsets included, so the step has to see it rather than skip the pair.
+  it('rejects from-the-end offsets whose end precedes the start', () => {
+    const model = seed(edgepackUnattendedIso)
+    model.partitions[2].start = '-4GiB'
+    model.partitions[2].end = '-20GiB'
+    expect(validateDisk(model).errors.join(' ')).toMatch(/ends at or before it starts/)
+  })
+
+  it('rejects from-the-end offsets that are equal', () => {
+    const model = seed(edgepackUnattendedIso)
+    model.partitions[2].end = '-20GiB'
+    expect(validateDisk(model).errors.join(' ')).toMatch(/ends at or before it starts/)
+  })
+
   it('requires a disk name', () => {
     const model = { ...seed(minimalPtlPvRaw), name: '  ' }
     expect(validateDisk(model).errors).toContain('Disk name is required.')

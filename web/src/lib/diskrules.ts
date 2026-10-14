@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: (C) 2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
+import { parseSize } from './size'
+
 // What the builder actually accepts in a `disk:` block.
 //
 // os-image-template.schema.json constrains almost none of this: every Disk and
@@ -67,6 +69,39 @@ export function isValidOffset(value: string): boolean {
 // and validates it as a pair of offsets rather than a span.
 export function isFromEndOffset(value: string): boolean {
   return /^-\d/.test(value.trim())
+}
+
+// PartitionOffset is an offset as validate.go:241 models one: a magnitude plus
+// which end of the disk it is measured from. Two offsets are only comparable
+// when they share an origin.
+export interface PartitionOffset {
+  fromEnd: boolean
+  bytes: number
+}
+
+// parsePartitionOffset mirrors validate.go:246. Returns null for a value the
+// builder would reject, including "0" — the rest-of-disk sentinel, which the Go
+// side handles before it ever parses an offset.
+export function parsePartitionOffset(value: string): PartitionOffset | null {
+  if (!isValidOffset(value) || value === '0') return null
+  const m = /^(-?)(\d+[A-Za-z]+)$/.exec(value)
+  if (!m) return null
+  const bytes = parseSize(m[2])
+  return bytes === null ? null : { fromEnd: m[1] === '-', bytes }
+}
+
+// offsetsOutOfOrder mirrors validate.go:264. Offsets measured from opposite
+// ends are never out of order with each other: a from-start offset always
+// precedes a from-end one. Among from-end offsets the larger magnitude comes
+// first, since it sits further back from the end of the disk.
+export function offsetsOutOfOrder(left: PartitionOffset, right: PartitionOffset): boolean {
+  if (left.fromEnd !== right.fromEnd) return false
+  return left.fromEnd ? left.bytes < right.bytes : left.bytes > right.bytes
+}
+
+// offsetsEqual mirrors validate.go:274: same origin, same magnitude.
+export function offsetsEqual(left: PartitionOffset, right: PartitionOffset): boolean {
+  return left.fromEnd === right.fromEnd && left.bytes === right.bytes
 }
 
 // isValidDiskSize reports whether disk.size / disk.maxSize would parse. Same

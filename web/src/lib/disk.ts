@@ -37,6 +37,9 @@ import {
   isValidDiskSize,
   isValidOffset,
   isFromEndOffset,
+  offsetsEqual,
+  offsetsOutOfOrder,
+  parsePartitionOffset,
   isValidTypeUUID,
 } from './diskrules'
 
@@ -476,12 +479,20 @@ export function validateDisk(model: DiskModel, ctx: DiskContext = {}): DiskIssue
     const label = `Partition ${i + 1}${p.id || p.name ? ` (${p.id || p.name})` : ''}`
     if (!isRest(model, i)) {
       const span = partitionSizeMiB(model, i)
-      // A from-the-end offset is sized by the disk, not by the pair, so there is
-      // no span to check — the offsets themselves are validated below.
+      // A from-the-end offset is sized by the disk, not by the pair, so there
+      // is no span to measure. The ordering still has to hold, and validate.go
+      // checks it on the offsets themselves — so do the same rather than let
+      // "start: -4GiB, end: -20GiB" through unexamined.
       const fromEnd = isFromEndOffset(p.start) || isFromEndOffset(p.end)
-      if (span === undefined && !fromEnd) {
+      if (fromEnd) {
+        const start = parsePartitionOffset(p.start)
+        const end = parsePartitionOffset(p.end)
+        if (start && end && (offsetsOutOfOrder(start, end) || offsetsEqual(start, end))) {
+          errors.push(`${label} ends at or before it starts.`)
+        }
+      } else if (span === undefined) {
         errors.push(`${label} has offsets that are not valid sizes (for example 1MiB).`)
-      } else if (span !== undefined && (span === null || span <= 0)) {
+      } else if (span === null || span <= 0) {
         errors.push(
           model.layoutMode === 'offset'
             ? `${label} ends at or before it starts.`
