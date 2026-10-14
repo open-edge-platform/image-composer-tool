@@ -19,7 +19,7 @@ metadata:
 
 image:
   name: edgepack-os-image-ubuntu-unattended
-  version: "24.04.2"
+  version: "24.04.3"
 
 target:
   os: ubuntu
@@ -160,6 +160,10 @@ systemConfig:
     - acpica-tools
     - lsscsi
     - i2c-tools
+    # Required for Docker's bridge/NAT networking — install-docker.sh
+    # (first-boot provisioning) drops static Docker binaries with no apt
+    # dependency resolution, so dockerd needs iptables present already.
+    - iptables
     - socat
     - rpm
     - tcpdump
@@ -251,6 +255,12 @@ systemConfig:
         final: /usr/local/sbin/platform-bootstrap.sh
         stage: first-boot
         order: 10
+
+      - name: edge-node-infra-setup
+        local: additionalfiles/base-platform/20-edge-node-infra-setup.sh
+        final: /usr/local/sbin/edge-node-infra-setup.sh
+        stage: first-boot
+        order: 20
 
   # Developer source archives and other artifacts are copied with additionalFiles.
   # additionalFiles:
