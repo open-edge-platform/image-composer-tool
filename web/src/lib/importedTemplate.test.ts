@@ -56,8 +56,11 @@ describe('parseImportedTemplate', () => {
     expect(parseImportedTemplate('t.yml', text).yaml).toBe(text)
   })
 
-  it('accepts a delta template carrying only extends', () => {
-    expect(() => parseImportedTemplate('d.yml', 'extends: robotics.yml\n')).not.toThrow()
+  // Only the one file is uploaded, so a document that extends another would be
+  // built in a directory where its parent does not exist. Rejecting it here is
+  // what keeps "Use Template" from succeeding on a template that cannot build.
+  it('rejects a template that extends another, which is not uploaded with it', () => {
+    expect(() => parseImportedTemplate('d.yml', 'extends: robotics.yml\n')).toThrow(/extends another/)
   })
 
   it.each([

@@ -97,8 +97,37 @@ export function ImportTemplateDialog({ open, onCancel, onImport }: ImportTemplat
   useEffect(() => {
     if (!open) return
     const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    // Same focus entry and Tab wrapping as CredentialsDialog: without it the
+    // focus ring stays on the obscured page behind the modal.
+    const focusableSelector =
+      'a[href], button:not([disabled]), input:not([disabled]):not([type="file"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    const focusableElements = () =>
+      Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(focusableSelector) ?? [])
+
+    focusableElements()[0]?.focus()
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onCancelRef.current()
+      if (event.key === 'Escape') {
+        onCancelRef.current()
+        return
+      }
+      if (event.key !== 'Tab') return
+
+      const focusable = focusableElements()
+      if (focusable.length === 0) {
+        event.preventDefault()
+        dialogRef.current?.focus()
+        return
+      }
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      const active = document.activeElement
+      if (event.shiftKey && (active === first || !dialogRef.current?.contains(active))) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && (active === last || !dialogRef.current?.contains(active))) {
+        event.preventDefault()
+        first.focus()
+      }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => {

@@ -40,6 +40,19 @@ describe('selectionFromTemplate', () => {
     expect(got.os).toBe('debian13')
   })
 
+  // The shipped manifest has three ubuntu targets, so "os: ubuntu" alone names
+  // no one of them; adopting the first would be a guess presented as a fact.
+  it('states no target when the OS family matches more than one', () => {
+    const multi: Manifest = {
+      ...manifest,
+      targets: [
+        ...manifest.targets,
+        { id: 'ubuntu26', displayName: 'Ubuntu 26.04', os: 'ubuntu', arch: 'x86_64' },
+      ],
+    }
+    expect(selectionFromTemplate(multi, template('  os: ubuntu\n  imageType: raw\n'))).toEqual({})
+  })
+
   it('adopts the use case when exactly one combination matches', () => {
     const got = selectionFromTemplate(manifest, template('  os: ubuntu\n  dist: ubuntu24\n  imageType: raw\n'))
     expect(got.vertical).toBe('robotics')

@@ -718,6 +718,16 @@ var errCredentialRequired = fmt.Errorf("%w: credential required", errBadBuildReq
 // inputs can disagree, and picking a winner would build something the caller
 // didn't unambiguously ask for.
 func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path, name string, err error) {
+	// A materialized base outlives this call only on the success path, where the
+	// build owns it. Every error return below has to remove it, or the document
+	// is left in the shared templates directory for good.
+	var dropBase func()
+	defer func() {
+		if err != nil && dropBase != nil {
+			dropBase()
+			req.basePath = ""
+		}
+	}()
 	if req.YAML != "" && req.Compose != nil {
 		return "", "", fmt.Errorf("%w: provide either compose or yaml, not both", errBadBuildRequest)
 	}
@@ -763,12 +773,13 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 	// as in Compose. It is removed with the delta once the build finishes.
 	var tmpl, full string
 	if c.BaseYAML != "" {
-		name, path, _, merr := s.materializeBase(*c)
+		name, path, cleanup, merr := s.materializeBase(*c)
 		if merr != nil {
 			return "", "", fmt.Errorf("writing base template: %w", merr) // server-side
 		}
 		// Removed by the build, not here: it is the generated delta's parent and
 		// has to outlive this call for the whole build.
+		dropBase = cleanup
 		req.basePath = path
 		tmpl, full = name, path
 	} else {
@@ -1173,18 +1184,31 @@ func (b *build) finish(status BuildStatus, arts []Artifact, errMsg string) bool 
 // removed from TemplatesDir. On any failure the delta is still removed (the
 // generated file must never be left behind), but TemplatePath is left as-is,
 // which then 404s on download exactly as an already-missing template would.
+//
+// A build composed against a supplied document with no overrides has no delta,
+// only that document. It is archived too: it is removed below just the same, so
+// without an archive TemplatePath would point at a deleted file and the
+// download would 404 for a build that succeeded.
 func (b *build) archiveAndCleanupDelta() {
 	// A materialized base document is generated the same way a delta is, and is
 	// removed whether or not a delta was layered over it.
 	if b.BasePath != "" {
 		defer func() { _ = os.Remove(b.BasePath) }()
 	}
-	if b.DeltaPath == "" {
+	if b.DeltaPath != "" {
+		defer func() { _ = os.Remove(b.DeltaPath) }()
+	}
+	// Resolve whichever generated file the build ran: the delta when one was
+	// layered over the base, the base itself otherwise.
+	source := b.DeltaPath
+	if source == "" {
+		source = b.BasePath
+	}
+	if source == "" {
 		return
 	}
-	defer func() { _ = os.Remove(b.DeltaPath) }()
 
-	merged, err := config.LoadAndMergeTemplate(b.DeltaPath)
+	merged, err := config.LoadAndMergeTemplate(source)
 	if err != nil {
 		logger.Logger().Warnf("build %s: re-resolving delta template for archive failed", b.ID)
 		return
