@@ -123,6 +123,10 @@ interface AppState {
   // time. Not a secret, unlike the logins typed for them — those stay in
   // component state so they cannot outlive the build they were typed for.
   importedRequirements: CredentialRequirement[]
+  // The cascade as it stood before an import replaced it, so removing the
+  // import returns to the selections the user had rather than a hybrid of
+  // theirs and the document's target. Null when no import is active.
+  selectionBeforeImport: Selection | null
   // Entries the user removed from the imported template's own package list.
   // Removal cannot be expressed as an override — the extends merge unions
   // package lists — so these are sent as `removePackages` and applied to the
@@ -185,9 +189,14 @@ export function selectionFromTemplate(
   t: ImportedTemplate,
 ): Partial<Selection> {
   if (!manifest) return {}
+  // The family fallback only applies when it names one target. The manifest
+  // ships three with `os: ubuntu` (ubuntu24, ubuntu26-server, ubuntu26), so
+  // taking the first would present a guess as a fact — the very thing the
+  // combination match below refuses to do.
+  const byOS = manifest.targets.filter((x) => x.os === t.summary.os)
   const target =
     manifest.targets.find((x) => x.id === t.summary.dist) ??
-    manifest.targets.find((x) => x.os === t.summary.os)
+    (byOS.length === 1 ? byOS[0] : undefined)
   if (!target) return {}
 
   const out: Partial<Selection> = { os: target.id }
@@ -222,6 +231,7 @@ export const useStore = create<AppState>((set) => ({
   diskSeed: null,
   importedTemplate: null,
   importedRequirements: [],
+  selectionBeforeImport: null,
   removedBasePackages: [],
   setManifest: (m) => set({ manifest: m }),
   // A different template has a different package list, so removals recorded
@@ -236,7 +246,19 @@ export const useStore = create<AppState>((set) => ({
       // this the fields keep showing the previous template's values.
       imageNameEdited: false,
       diskEdited: false,
-      ...(t ? { selection: { ...state.selection, ...selectionFromTemplate(state.manifest, t) } } : {}),
+      // Importing overwrites the cascade with whatever the document states, so
+      // the selection it replaced is kept and put back when the import is
+      // removed. Otherwise removing one leaves a hybrid of the document's
+      // target and the user's previous use case.
+      ...(t
+        ? {
+            selectionBeforeImport: state.importedTemplate ? state.selectionBeforeImport : state.selection,
+            selection: { ...state.selection, ...selectionFromTemplate(state.manifest, t) },
+          }
+        : {
+            selectionBeforeImport: null,
+            ...(state.selectionBeforeImport ? { selection: state.selectionBeforeImport } : {}),
+          }),
     })),
   setBasePackageRemoved: (name, removed) =>
     set((state) => ({

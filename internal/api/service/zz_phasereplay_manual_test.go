@@ -32,6 +32,11 @@ func TestReplayLogPhases(t *testing.T) {
 			last = p
 		}
 	}
+	// A read error or an over-long line stops the scan early, which would
+	// otherwise print a final phase derived from a silently truncated log.
+	if err := sc.Err(); err != nil {
+		t.Fatalf("reading %s after %d lines: %v", path, len(lines), err)
+	}
 	fmt.Printf("final phase after %d lines: %s\n", len(lines), last)
 }
 

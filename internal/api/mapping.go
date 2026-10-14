@@ -36,11 +36,14 @@ func optStrs(v []string) *[]string {
 // --- inbound: generated request types -> service types ---
 
 func toSelection(r httpapi.ComposeRequest) service.Selection {
+	// The lookup fields are optional in the contract because a `baseYaml`
+	// request carries none of them; the service rejects a request that supplies
+	// neither, so an empty string here means "not supplied" rather than valid.
 	sel := service.Selection{
-		Vertical:  r.Vertical,
-		Platform:  r.Platform,
-		OS:        r.Os,
-		ImageType: r.ImageType,
+		Vertical:  derefStr(r.Vertical),
+		Platform:  derefStr(r.Platform),
+		OS:        derefStr(r.Os),
+		ImageType: derefStr(r.ImageType),
 	}
 	if r.Sku != nil {
 		sel.SKU = *r.Sku

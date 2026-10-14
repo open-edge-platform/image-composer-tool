@@ -1085,7 +1085,14 @@ components:
         lookup fields carry no meaning and are not required; everything else
         behaves identically, because the document simply takes the matched
         template's place as the parent the overrides extend.
-      required: [vertical, platform, os, imageType]
+
+        The `oneOf` below is how that choice is modelled: either the four lookup
+        fields are present, or `baseYaml` is. Spelling it as a top-level
+        `required` would force a generated client to invent dummy lookup values
+        for a document-only request, which the server does not read.
+      oneOf:
+        - required: [vertical, platform, os, imageType]
+        - required: [baseYaml]
       properties:
         vertical:
           type: string

@@ -112,7 +112,11 @@ func templateCredentialRequirements(templateYAML string) []CredentialRequirement
 	}
 	merged, merr := config.LoadAndMergeTemplate(path)
 	if merr != nil {
-		logger.Logger().Debugf("validate: resolving the template for its accounts failed: %v", merr)
+		// Deliberately without the error text: a load failure can quote template
+		// values, and a template's FDE passphraseFile is read during the merge,
+		// so the message is not safe to put in a log. The caller reports the
+		// same failure properly through the validation issues.
+		logger.Logger().Debugf("validate: resolving the template for its accounts failed")
 		return nil
 	}
 	return credentialRequirements(merged)
