@@ -36,6 +36,7 @@ import {
   artifactSupport,
   isValidDiskSize,
   isValidOffset,
+  isFromEndOffset,
   isValidTypeUUID,
 } from './diskrules'
 
@@ -218,11 +219,17 @@ export function diskFromObject(d: Record<string, unknown>): DiskModel {
   const firstStart = rawParts.length > 0 ? parseMiB(str(rawParts[0].start)) : null
 
   const table = str(d.partitionTableType).toLowerCase()
+  // A from-the-end offset has no size until the disk does, so size mode would
+  // read every such partition as "rest of the disk" and then reject the layout
+  // for having several. Offset mode keeps the template's own values instead.
+  const fromEnd = rawParts.some(
+    (p) => isFromEndOffset(str(p.start)) || isFromEndOffset(str(p.end)),
+  )
 
   return {
     // Seeded size-oriented: the safe mode, and the one the templates are
-    // effectively written in (every layout in this repo is contiguous).
-    layoutMode: 'size',
+    // effectively written in (every contiguous layout in this repo).
+    layoutMode: fromEnd ? 'offset' : 'size',
     name: str(d.name),
     size: str(d.size),
     maxSize: str(d.maxSize),
@@ -469,9 +476,12 @@ export function validateDisk(model: DiskModel, ctx: DiskContext = {}): DiskIssue
     const label = `Partition ${i + 1}${p.id || p.name ? ` (${p.id || p.name})` : ''}`
     if (!isRest(model, i)) {
       const span = partitionSizeMiB(model, i)
-      if (span === undefined) {
+      // A from-the-end offset is sized by the disk, not by the pair, so there is
+      // no span to check — the offsets themselves are validated below.
+      const fromEnd = isFromEndOffset(p.start) || isFromEndOffset(p.end)
+      if (span === undefined && !fromEnd) {
         errors.push(`${label} has offsets that are not valid sizes (for example 1MiB).`)
-      } else if (span === null || span <= 0) {
+      } else if (span !== undefined && (span === null || span <= 0)) {
         errors.push(
           model.layoutMode === 'offset'
             ? `${label} ends at or before it starts.`

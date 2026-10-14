@@ -182,9 +182,76 @@ disk:
           mountOptions: defaults
 `
 
+// ubuntu24/ubuntu24-x86_64-edgepack-unattended-iso.yml
+//
+// The one curated layout written with from-the-end offsets: rootfs runs to
+// 20GiB before the end of the disk, data and swap carve up that tail. Kept as
+// a fixture because size mode cannot express it, so it is what proves the step
+// seeds offset mode instead of reading three partitions as "rest".
+export const edgepackUnattendedIso = `
+disk:
+    name: EdgePack_ISO
+    path: ""
+    selectionPolicy:
+        strategy: largest
+        excludeRemovable: true
+        requireEmpty: true
+    artifacts: []
+    size: ""
+    partitionTableType: gpt
+    partitions:
+        - name: ""
+          id: boot
+          flags:
+            - esp
+            - boot
+          type: esp
+          typeUUID: ""
+          fsType: fat32
+          fsLabel: ""
+          start: 1MiB
+          end: 513MiB
+          mountPoint: /boot/efi
+          mountOptions: umask=0077
+        - name: ""
+          id: rootfs
+          flags: []
+          type: linux-root-amd64
+          typeUUID: ""
+          fsType: ext4
+          fsLabel: ""
+          start: 513MiB
+          end: -20GiB
+          mountPoint: /
+          mountOptions: ""
+        - name: ""
+          id: data
+          flags: []
+          type: linux
+          typeUUID: ""
+          fsType: ext4
+          fsLabel: ""
+          start: -20GiB
+          end: -4GiB
+          mountPoint: /data
+          mountOptions: defaults,nofail
+        - name: ""
+          id: swap
+          flags: []
+          type: linux-swap
+          typeUUID: ""
+          fsType: linux-swap
+          fsLabel: ""
+          start: -4GiB
+          end: "0"
+          mountPoint: ""
+          mountOptions: ""
+`
+
 export const ALL_FIXTURES: { name: string; yaml: string }[] = [
   { name: 'debian13-x86_64-desktop-virtualization-iso.yml', yaml: debianDesktopVirtIso },
   { name: 'ubuntu24-x86_64-robotics-jazzy-iso.yml', yaml: roboticsJazzyIso },
   { name: 'ubuntu24-x86_64-minimal-ptl-pv-raw.yml', yaml: minimalPtlPvRaw },
   { name: 'ubuntu24/generic-handheld-os-template.yml', yaml: genericHandheldRaw },
+  { name: 'ubuntu24/ubuntu24-x86_64-edgepack-unattended-iso.yml', yaml: edgepackUnattendedIso },
 ]

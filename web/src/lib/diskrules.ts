@@ -48,22 +48,34 @@ export const FS_TYPES = [
 //   - a bare number is rejected (empty suffix is not in the list)
 //   - no TiB
 // "0" is special-cased before the regex and means "rest of the disk".
+//
+// A leading "-" is accepted: config.go:499 documents a negative offset as
+// measured back from the end of the disk, and the API's own override check
+// (service/diskoverride.go) accepts "optionally negative" the same way. The
+// curated EdgePack layouts are written this way.
 export const OFFSET_SUFFIXES = ['KiB', 'MiB', 'GiB', 'K', 'M', 'G', 'KB', 'MB', 'GB'] as const
 
-const OFFSET_RE = new RegExp(`^\\d+(${OFFSET_SUFFIXES.join('|')})$`)
+const OFFSET_RE = new RegExp(`^-?\\d+(${OFFSET_SUFFIXES.join('|')})$`)
 
 // isValidOffset reports whether VerifyFileSize would accept a start/end value.
 export function isValidOffset(value: string): boolean {
   return value === '0' || OFFSET_RE.test(value)
 }
 
+// isFromEndOffset reports whether an offset is measured back from the end of
+// the disk. Such a partition has no size until the disk does, so the step shows
+// and validates it as a pair of offsets rather than a span.
+export function isFromEndOffset(value: string): boolean {
+  return /^-\d/.test(value.trim())
+}
+
 // isValidDiskSize reports whether disk.size / disk.maxSize would parse. Same
 // suffix table and same `^(\d+)(.*)$` pattern, transcribed three times on the Go
 // side already (config.go:1405, validate/validate.go:257, both mirroring
 // imagedisc.TranslateSizeStrToBytes) — but without VerifyFileSize's "0" case,
-// since a zero-byte disk is not a thing.
+// since a zero-byte disk is not a thing. A disk size is never negative.
 export function isValidDiskSize(value: string): boolean {
-  return OFFSET_RE.test(value)
+  return /^\d/.test(value) && OFFSET_RE.test(value)
 }
 
 // --- Artifacts ---------------------------------------------------------------

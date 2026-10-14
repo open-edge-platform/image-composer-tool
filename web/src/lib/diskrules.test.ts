@@ -18,9 +18,10 @@ import {
   isValidDiskSize,
   isValidOffset,
   isValidTypeUUID,
+  isFromEndOffset,
 } from './diskrules'
 import { parseDiskFromYaml, setLayoutMode, validateDisk } from './disk'
-import { ALL_FIXTURES, minimalPtlPvRaw, roboticsJazzyIso } from './fixtures'
+import { ALL_FIXTURES, edgepackUnattendedIso, minimalPtlPvRaw, roboticsJazzyIso } from './fixtures'
 
 describe('isValidOffset — imagedisc.go:329 VerifyFileSize', () => {
   it('accepts every suffix in sizeSuffixesList (imagedisc.go:96)', () => {
@@ -31,6 +32,16 @@ describe('isValidOffset — imagedisc.go:329 VerifyFileSize', () => {
 
   it('accepts "0", the rest-of-disk sentinel special-cased before the regex', () => {
     expect(isValidOffset('0')).toBe(true)
+  })
+
+  // config.go:499: a negative offset is measured back from the end of the disk.
+  // The curated EdgePack layouts are written this way.
+  it('accepts a from-the-end offset', () => {
+    expect(isValidOffset('-20GiB')).toBe(true)
+    expect(isValidOffset('-4GiB')).toBe(true)
+    expect(isFromEndOffset('-20GiB')).toBe(true)
+    expect(isFromEndOffset('513MiB')).toBe(false)
+    expect(isFromEndOffset('0')).toBe(false)
   })
 
   it('is stricter than it looks — these all fail at build time', () => {

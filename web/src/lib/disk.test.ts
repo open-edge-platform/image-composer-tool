@@ -17,7 +17,7 @@ import {
   validateDisk,
 } from './disk'
 import type { DiskModel } from './disk'
-import { ALL_FIXTURES, minimalPtlPvRaw, roboticsJazzyIso } from './fixtures'
+import { ALL_FIXTURES, edgepackUnattendedIso, minimalPtlPvRaw, roboticsJazzyIso } from './fixtures'
 
 // Reads the partitions back out of an emitted disk block, so the round-trip
 // assertions compare offsets rather than YAML formatting.
@@ -349,6 +349,22 @@ describe('validateDisk', () => {
     for (const { name, yaml: text } of ALL_FIXTURES) {
       expect({ name, ...validateDisk(seed(text)) }).toMatchObject({ errors: [] })
     }
+  })
+
+  // Size mode would read each from-the-end partition as "rest of the disk" and
+  // then reject the layout for having three, which is what made this curated
+  // template look broken in a step that had only displayed it.
+  it('seeds a from-the-end layout in offset mode, with no size to show', () => {
+    const model = seed(edgepackUnattendedIso)
+    expect(model.layoutMode).toBe('offset')
+    expect(model.partitions.map((p) => p.end)).toEqual(['513MiB', '-20GiB', '-4GiB', '0'])
+    // boot is a plain pair; rootfs and data are sized by the disk, not the pair.
+    expect(partitionSizeMiB(model, 0)).toBe(512)
+    expect(partitionSizeMiB(model, 1)).toBeUndefined()
+    expect(partitionSizeMiB(model, 2)).toBeUndefined()
+    // Only the trailing partition is "rest".
+    expect(partitionSizeMiB(model, 3)).toBeNull()
+    expect(validateDisk(model).errors).toEqual([])
   })
 
   it('requires a disk name', () => {
