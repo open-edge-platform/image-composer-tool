@@ -19,7 +19,7 @@ metadata:
 
 image:
   name: edgepack-os-image-ubuntu-unattended
-  version: "26.04.3"
+  version: "26.04.4"
 
 target:
   os: ubuntu
@@ -160,6 +160,10 @@ systemConfig:
     - acpica-tools
     - lsscsi
     - i2c-tools
+    # Required for Docker's bridge/NAT networking — install-docker.sh
+    # (first-boot provisioning) drops static Docker binaries with no apt
+    # dependency resolution, so dockerd needs iptables present already.
+    - iptables
     - socat
     - rpm
     - tcpdump
