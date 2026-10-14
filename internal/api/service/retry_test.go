@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"gopkg.in/yaml.v3"
 )
 
 // TestRetryBuildResubmitsHashedCredentials is the regression guard for the bug
@@ -48,9 +48,15 @@ systemConfig:
 	if err != nil {
 		t.Fatalf("StartBuild: %v", err)
 	}
-	// Free the slot: there is no real ict binary in a unit test, so the
-	// original build's background process is irrelevant — only the stored
-	// retry record is under test here.
+	// There is no real ict binary in a unit test, so the original build's
+	// background process is `/bin/true` — wait for it to finish (finish()
+	// archives its template and rewrites TemplatePath under b.mu) before
+	// touching anything else, then free the slot for the retry.
+	origBuild, ok := s.getBuild(acc.BuildID)
+	if !ok {
+		t.Fatalf("original build %s not tracked", acc.BuildID)
+	}
+	<-origBuild.done
 	s.releaseBuildSlot(acc.BuildID)
 
 	retryAcc, err := s.RetryBuild(acc.BuildID)
@@ -65,14 +71,66 @@ systemConfig:
 	if !ok {
 		t.Fatalf("retried build %s not tracked", retryAcc.BuildID)
 	}
-	merged, merr := config.LoadAndMergeTemplate(b.TemplatePath)
-	if merr != nil {
-		t.Fatalf("merging retried build's template: %v", merr)
+	// Wait for the retried build's own background process the same way, then
+	// read its archived path through snapshot() rather than the field directly
+	// — finish() rewrites TemplatePath under b.mu as it archives the delta.
+	// Read the raw YAML directly rather than through the config package's
+	// validating loaders: re-validating a flattened document against the full
+	// image-template schema is a merge-time concern unrelated to this test, and
+	// fails here only because a unit test has no config/osv tree to fill in
+	// bootloader defaults from.
+	<-b.done
+	data, rerr := os.ReadFile(b.snapshot().TemplatePath)
+	if rerr != nil {
+		t.Fatalf("reading retried build's template: %v", rerr)
 	}
-	for _, u := range merged.SystemConfig.Users {
-		if u.Name == "admin" && u.NeedsCredential() {
-			t.Error("retried build's admin account still needs a credential; the retry dropped it")
+	var doc struct {
+		SystemConfig struct {
+			Users []struct {
+				Name     string `yaml:"name"`
+				Password string `yaml:"password"`
+			} `yaml:"users"`
+		} `yaml:"systemConfig"`
+	}
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("parsing retried build's template: %v", err)
+	}
+	for _, u := range doc.SystemConfig.Users {
+		if u.Name == "admin" && u.Password == "" {
+			t.Error("retried build's admin account still has no password; the retry dropped the credential")
 		}
+	}
+}
+
+// TestRetryInputSurvivesMetaRoundTrip is the regression guard for a build
+// retried after a server restart: writeMeta/buildFromMeta did not carry the
+// retry record, so a build created with retry support still read back as
+// b.retry == nil and RetryBuild rejected it as predating that support.
+func TestRetryInputSurvivesMetaRoundTrip(t *testing.T) {
+	root := t.TempDir()
+	b := &build{
+		ID:      "rt1",
+		RootDir: root,
+		retry: &retryInput{
+			Compose: &Selection{Vertical: "robotics", SKU: "amr", Platform: "wcl", OS: "ubuntu24", ImageType: "iso"},
+		},
+		done: make(chan struct{}),
+	}
+	b.finish(StatusSuccess, nil, "")
+	if err := b.writeMeta(); err != nil {
+		t.Fatalf("writeMeta: %v", err)
+	}
+
+	s := newTestService(t)
+	reloaded, ok := loadMetaInto(t, s, root, "rt1")
+	if !ok {
+		t.Fatal("build could not be reconstructed from meta.json")
+	}
+	if reloaded.retry == nil || reloaded.retry.Compose == nil {
+		t.Fatal("retry record did not survive the meta.json round trip")
+	}
+	if reloaded.retry.Compose.Vertical != "robotics" {
+		t.Errorf("reconstructed retry.Compose.Vertical = %q, want robotics", reloaded.retry.Compose.Vertical)
 	}
 }
 
