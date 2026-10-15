@@ -282,6 +282,10 @@ func fromEdgePack(p *service.EdgePack) httpapi.EdgePack {
 		BaseRuntimes:  make([]httpapi.EdgePackBaseRuntime, len(p.BaseRuntimes)),
 		Domains:       make([]httpapi.EdgePackDomain, len(p.Domains)),
 	}
+	if p.VersionsPending {
+		pending := true
+		out.VersionsPending = &pending
+	}
 	for i, r := range p.BaseRuntimes {
 		out.BaseRuntimes[i] = httpapi.EdgePackBaseRuntime{
 			Id:                r.ID,

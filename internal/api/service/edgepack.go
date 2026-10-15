@@ -6,9 +6,11 @@ package service
 import (
 	"context"
 	"embed"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"sigs.k8s.io/yaml"
@@ -16,6 +18,9 @@ import (
 
 //go:embed data/edge-pack.yaml
 var edgePackFS embed.FS
+
+// edgePackVersionWait caps how long the pack waits for its repository index; a var so tests can shorten it.
+var edgePackVersionWait = 3 * time.Second
 
 // ── On-disk catalog ────────────────────────────────────────────────────────
 //
@@ -107,6 +112,8 @@ type EdgePack struct {
 	RepoAvailable bool
 	BaseRuntimes  []EdgePackBaseRuntime
 	Domains       []EdgePackDomain
+	// VersionsPending is true when the index was still loading at the deadline, so some packages lack versions.
+	VersionsPending bool
 }
 
 // EdgePackBaseRuntime is one runtime flavour a domain's packages run on top of.
@@ -167,7 +174,8 @@ type EdgePackPackage struct {
 //
 // Version resolution is best-effort by design: runLookups already treats an
 // unreachable index as "contributes nothing" rather than as a failure, so a
-// dead mirror costs the version chips, not the tab.
+// dead mirror costs the version chips, not the tab. It is bounded in time too:
+// a slow mirror is not waited on past edgePackVersionWait.
 func (s *Service) EdgePack(ctx context.Context, osID string) (*EdgePack, error) {
 	if osID != "" && !s.manifest.knowsTargetOS(osID) {
 		return nil, newError(http.StatusNotFound, "UNKNOWN_TARGET",
@@ -180,14 +188,15 @@ func (s *Service) EdgePack(ctx context.Context, osID string) (*EdgePack, error) 
 	offered := s.PackageRepos(osID)
 	repos := filterReposByID(offered, []string{spec.Repo})
 	offeredIDs := repoIDSet(offered)
-	meta := s.edgePackMetadata(ctx, osID, repos)
+	meta, pending := s.edgePackMetadata(ctx, osID, repos)
 
 	out := &EdgePack{
-		ID:            spec.ID,
-		DisplayName:   spec.DisplayName,
-		Description:   spec.Description,
-		Repo:          spec.Repo,
-		RepoAvailable: len(repos) > 0,
+		ID:              spec.ID,
+		DisplayName:     spec.DisplayName,
+		Description:     spec.Description,
+		Repo:            spec.Repo,
+		RepoAvailable:   len(repos) > 0,
+		VersionsPending: pending,
 	}
 	for _, r := range spec.BaseRuntimes {
 		available, reason := s.runtimeAvailability(r, osID, offeredIDs)
@@ -340,20 +349,26 @@ func (ix edgePackIndex) packageFor(name string) EdgePackPackage {
 // handful of names scattered through a repository of hundreds, and
 // SearchPackages clamps to maxSearchLimit before a name filter could be applied
 // — so the pack's entries would fall outside the first page and vanish.
-func (s *Service) edgePackMetadata(ctx context.Context, osID string, repos []PackageRepo) edgePackIndex {
-	ix := edgePackIndex{}
+//
+// pending reports that the wait hit edgePackVersionWait before every index
+// arrived. Cache.Lookup runs the fetch detached from this deadline, so it
+// carries on and warms the cache for the next request.
+func (s *Service) edgePackMetadata(ctx context.Context, osID string, repos []PackageRepo) (ix edgePackIndex, pending bool) {
+	ix = edgePackIndex{}
 	if len(repos) == 0 {
-		return ix
+		return ix, false
 	}
 	want := s.edgePackNameSet()
 	lookups := s.planLookups(osID, repos)
-	results := runLookups(ctx, s.pkgindexCache, lookups)
+	waitCtx, cancel := context.WithTimeout(ctx, edgePackVersionWait)
+	defer cancel()
+	results := runLookups(waitCtx, s.pkgindexCache, lookups)
 	for _, hit := range dedupAndFilter(results, "", rpmRepoSet(lookups)) {
 		if want[hit.Name] {
 			ix[hit.Name] = hit
 		}
 	}
-	return ix
+	return ix, errors.Is(waitCtx.Err(), context.DeadlineExceeded)
 }
 
 // edgePackNameSet is every package name the pack references, base runtimes
