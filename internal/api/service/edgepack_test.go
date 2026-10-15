@@ -5,10 +5,16 @@ package service
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/open-edge-platform/image-composer-tool/internal/api/service/pkgindex"
 )
 
 // writeEdgePack writes a pack catalog to a temp file and returns its path, for
@@ -714,6 +720,91 @@ func TestLoadEdgePackRejectsInvalid(t *testing.T) {
 func TestLoadEdgePackMissingFile(t *testing.T) {
 	if _, err := loadEdgePack(filepath.Join(t.TempDir(), "absent.yaml")); err == nil {
 		t.Fatal("missing file accepted")
+	}
+}
+
+// indexedPackService serves testPack from a test-repo whose one index is handler,
+// through a real index cache.
+func indexedPackService(t *testing.T, handler http.HandlerFunc) *Service {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/dists/noble/main/binary-amd64/Packages.gz", handler)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	catalog := testPackRepos + `    index:
+      - codename: noble
+        component: main
+`
+	catalog = strings.Replace(catalog, "https://example.com/repo", srv.URL, 1)
+	svc := edgePackService(t, testPack, catalog, "ubuntu24")
+	svc.manifest.Targets[0].Arch = "x86_64"
+	svc.pkgindexCache = pkgindex.New(pkgindex.Config{Client: srv.Client()})
+	return svc
+}
+
+func setEdgePackVersionWait(t *testing.T, d time.Duration) {
+	t.Helper()
+	old := edgePackVersionWait
+	edgePackVersionWait = d
+	t.Cleanup(func() { edgePackVersionWait = old })
+}
+
+// A stalled pack repository must not hold the tab: the pack comes back at the
+// deadline marked pending, and the fetch it left running serves the next call.
+func TestEdgePackDoesNotWaitForSlowIndex(t *testing.T) {
+	body := gzipPackages(t, "Package: media-ffmpeg\nVersion: 7.1-1\nArchitecture: amd64\nDescription: ffmpeg\n\n")
+	release := make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	svc := indexedPackService(t, func(w http.ResponseWriter, _ *http.Request) {
+		<-release
+		_, _ = w.Write(body)
+	})
+	// Registered after the server's cleanup, so it runs first and srv.Close is not left waiting on the handler.
+	t.Cleanup(unblock)
+
+	setEdgePackVersionWait(t, 50*time.Millisecond)
+	start := time.Now()
+	pack, err := svc.EdgePack(context.Background(), "ubuntu24")
+	if err != nil {
+		t.Fatalf("EdgePack: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("EdgePack waited %s for a stalled index", elapsed)
+	}
+	if !pack.VersionsPending {
+		t.Error("VersionsPending false while the index was still loading")
+	}
+	if v := domainByID(t, pack, "media").Packages[0].Version; v != "" {
+		t.Errorf("media-ffmpeg has version %q before its index arrived", v)
+	}
+
+	unblock()
+	setEdgePackVersionWait(t, 5*time.Second)
+	pack, err = svc.EdgePack(context.Background(), "ubuntu24")
+	if err != nil {
+		t.Fatalf("EdgePack after the index arrived: %v", err)
+	}
+	if pack.VersionsPending {
+		t.Error("VersionsPending still true once the index arrived")
+	}
+	if v := domainByID(t, pack, "media").Packages[0].Version; v != "7.1-1" {
+		t.Errorf("media-ffmpeg version = %q, want 7.1-1", v)
+	}
+}
+
+// A repository that fails outright is not pending: asking again would only
+// return the same cached failure.
+func TestEdgePackFailedIndexIsNotPending(t *testing.T) {
+	svc := indexedPackService(t, func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	})
+	pack, err := svc.EdgePack(context.Background(), "ubuntu24")
+	if err != nil {
+		t.Fatalf("EdgePack: %v", err)
+	}
+	if pack.VersionsPending {
+		t.Error("VersionsPending true for an index that failed")
 	}
 }
 
