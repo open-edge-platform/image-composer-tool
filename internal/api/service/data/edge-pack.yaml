@@ -22,10 +22,21 @@
 #   displayName        label shown on the Edge Pack tab
 #   description        one-line explanation, shown beside the pack checkbox
 #   repo               the package-repos.yaml repo id every package below
-#                      resolves from. One repo for the whole pack: these are
-#                      published together, and binding per-package would invite a
-#                      catalog where half the pack silently has nowhere to
-#                      resolve from. edgepack_test.go asserts this id exists.
+#                      resolves from by default. One repo for the whole pack:
+#                      these are published together, and binding per-package
+#                      would invite a catalog where half the pack silently has
+#                      nowhere to resolve from. edgepack_test.go asserts this id
+#                      exists.
+#   repoOverrides      resolves the pack to a DIFFERENT repo id on specific
+#                      targets, for packages published together but reached from
+#                      a distinct per-OS suite. The first entry whose `os` lists
+#                      the current target wins; no match falls back to `repo`.
+#       id             the package-repos.yaml repo id to use instead
+#       os             target ids (manifest `targets[].id`) this override
+#                      applies to. Required and non-empty — an override with no
+#                      `os` could never differ from just setting `repo` itself.
+#                      edgepack_test.go asserts the id exists and every os entry
+#                      is a real manifest target.
 #   baseRuntimes       the runtime flavours a domain's packages run on top of.
 #                      Common to every domain rather than owned by one, which is
 #                      why they are listed here and not under `domains`. No
@@ -35,13 +46,21 @@
 #     displayName      label shown in the Base Runtime selector
 #     package          the package name selecting this runtime adds
 #     requiresRepos    extra package-repos.yaml repo ids this runtime's package
-#                      needs on top of `repo`, enabled alongside it when the
-#                      runtime is selected. Same contract as the domain field of
-#                      the same name below, for the same reason: the runtime
-#                      metapackage pulls in profiles whose dependencies live in a
-#                      repository the pack itself does not carry, and a runtime
-#                      is reported unavailable when one of these is not offered
-#                      for the target. edgepack_test.go asserts these ids exist.
+#                      needs on top of the resolved pack repo, enabled alongside
+#                      it when the runtime is selected. Same contract as the
+#                      domain field of the same name below, for the same reason:
+#                      the runtime metapackage pulls in profiles whose
+#                      dependencies live in a repository the pack itself does
+#                      not carry, and a runtime is reported unavailable when one
+#                      of these is not offered for the target.
+#         id           the required package-repos.yaml repo id.
+#                      edgepack_test.go asserts it exists.
+#         os           target ids this requirement applies to. Omitted or empty
+#                      means every target the runtime reaches — most
+#                      requirements are platform-wide, not OS-specific, so this
+#                      must not have to be spelled out on every entry. Set it
+#                      only when the underlying dependency genuinely differs by
+#                      target, as with intel-graphics below.
 #     available        false shows the option but leaves it unselectable.
 #                      Omitted means true.
 #     unavailableReason  why it is unselectable; shown to the user. Required
@@ -81,6 +100,15 @@ pack:
   displayName: Edge Pack
   description: Intel Edge capabilities, grouped by domain
   repo: edgepack
+  # EdgePack publishes one suite per host Ubuntu release (noble for 24.04,
+  # resolute for 26.04). `edgepack-ubuntu26` is a distinct package-repos.yaml
+  # entry rather than an extra `os` on `repo` because, on ubuntu24, the standard
+  # runtime below also needs the Intel graphics PPA — a dependency that does not
+  # exist on ubuntu26, where intel-edge-base-standard carries its NPU/IPU
+  # enablement itself (see the requiresRepos `os` scoping below).
+  repoOverrides:
+    - id: edgepack-ubuntu26
+      os: [ubuntu26]
 
   baseRuntimes:
     # The standard base is more than graphics and media: it pulls in the NPU
@@ -90,10 +118,12 @@ pack:
     # invite a user to untick a capability the base installs regardless.
     #
     # It is also why the Intel graphics PPA is a prerequisite of the runtime
-    # rather than of a domain: the NPU packages inside the base depend on the
-    # client GPU compute runtime published there, not in the pack repo. Naming it
-    # here is what keeps a template that selects nothing but the base resolvable
-    # — see requiresRepos.
+    # rather than of a domain: on ubuntu24, the NPU packages inside the base
+    # depend on the client GPU compute runtime published there, not in the pack
+    # repo. Naming it here is what keeps a template that selects nothing but the
+    # base resolvable — see requiresRepos. Scoped to ubuntu24 only: on ubuntu26
+    # the same base metapackage carries that enablement itself, and the PPA has
+    # no 26.04 publication to require.
     #
     # Deliberately NOT enumerating the rest of what the metapackage pulls in:
     # those Depends are owned by its Debian control file, and restating them here
@@ -101,7 +131,9 @@ pack:
     - id: standard
       displayName: Standard
       package: intel-edge-base-standard
-      requiresRepos: [intel-graphics]
+      requiresRepos:
+        - id: intel-graphics
+          os: [ubuntu24]
     - id: realtime
       displayName: Real-time
       package: intel-edge-base-realtime
