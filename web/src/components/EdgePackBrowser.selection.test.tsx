@@ -11,6 +11,14 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { EdgePackBrowser } from './EdgePackBrowser'
 import { useStore } from '../store'
 import type { EdgePack } from '../api/types'
+import type { BaseLock } from '../lib/baseLock'
+
+// No template matched in these tests — nothing is locked.
+const noLock: BaseLock = {
+  info: () => ({ locked: false, currentIsFloating: false }),
+  ensureResolved: () => {},
+  concreteNames: [],
+}
 
 const pack: EdgePack = {
   id: 'edge-pack',
@@ -56,6 +64,7 @@ const browser = () => (
     repoLabel="Intel ECI"
     repoLabelFor={(id) => id}
     targetLabel="Ubuntu 24.04"
+    baseLock={noLock}
   />
 )
 

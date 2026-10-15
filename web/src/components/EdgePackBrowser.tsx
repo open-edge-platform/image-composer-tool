@@ -13,18 +13,20 @@ import {
   addableDomainPackages,
   allDomainPackages,
   canSelectDomains,
+  clearableNames,
   domainLockReason,
   domainPackageNames,
   domainSelectable,
   groupSelectionState,
   groupToggleMode,
-  isSelected,
+  isEffectivelySelected,
   packToggleMode,
   reposToEnable,
   strandedPackages,
   toAddedPackages,
   versionsOf,
 } from '../lib/edgepack'
+import type { BaseLock } from '../lib/baseLock'
 import { PackageRow } from './PackageRow'
 
 interface EdgePackBrowserProps {
@@ -38,6 +40,11 @@ interface EdgePackBrowserProps {
   // Label for the currently selected target, used when the pack's repository
   // isn't offered here at all.
   targetLabel: string
+  // Which of the pack's packages the matched template already carries, so a
+  // domain/runtime it already installs renders checked without anything in
+  // addedPackages — the same treatment PackageRepoBrowser already gives a
+  // single row via baseLock.
+  baseLock: BaseLock
 }
 
 // EdgePackBrowser is the Packages step's Edge Pack tab: the capability view over
@@ -52,6 +59,7 @@ export function EdgePackBrowser({
   repoLabel,
   repoLabelFor,
   targetLabel,
+  baseLock,
 }: EdgePackBrowserProps) {
   // Which domain's package list is expanded, if any. Purely presentational, so
   // it is local state rather than store state — it must not survive a target
@@ -82,7 +90,7 @@ export function EdgePackBrowser({
   }
 
   const addGroup = (packages: EdgePackPackage[], domains: EdgePackDomain[]) => {
-    const toAdd = toAddedPackages(pack, packages, addedPackages)
+    const toAdd = toAddedPackages(pack, packages, addedPackages, baseLock)
     if (toAdd.length > 0) setPackages(toAdd)
     ensureReposEnabled(domains)
   }
@@ -102,7 +110,7 @@ export function EdgePackBrowser({
   const setGroup = (packages: EdgePackPackage[], on: boolean, domains: EdgePackDomain[]) =>
     on ? addGroup(packages, domains) : removeGroup(packages)
 
-  const gated = !canSelectDomains(pack, addedPackages)
+  const gated = !canSelectDomains(pack, addedPackages, baseLock)
 
   if (!pack.repoAvailable) {
     return (
@@ -129,16 +137,24 @@ export function EdgePackBrowser({
   const packState = groupSelectionState(
     addablePackages.map((p) => p.name),
     addedPackages,
+    baseLock,
   )
-  const clearState = groupSelectionState(
+  // Addable: names this control may still add (neither already added nor
+  // locked in by the template). Clearable: names it may remove — real
+  // addedPackages entries only, since a template-locked name can't be
+  // unchecked. See packToggleMode.
+  const packAddableCount = addablePackages.filter(
+    (p) => !isEffectivelySelected(p.name, addedPackages, baseLock),
+  ).length
+  const packClearableCount = clearableNames(
     clearablePackages.map((p) => p.name),
     addedPackages,
-  )
-  const packMode = packToggleMode(!gated, packState, clearState)
+  ).length
+  const packMode = packToggleMode(!gated, packAddableCount, packClearableCount)
 
   return (
     <>
-      <BaseRuntimeSelector pack={pack} repoLabelFor={repoLabelFor} />
+      <BaseRuntimeSelector pack={pack} repoLabelFor={repoLabelFor} baseLock={baseLock} />
 
       <div className="overflow-hidden rounded-lg border border-slate-200">
         {/* Pack-level select-all. Its scope is the domains only — the base
@@ -207,6 +223,7 @@ export function EdgePackBrowser({
               key={d.id}
               pack={pack}
               domain={d}
+              baseLock={baseLock}
               open={openDomain === d.id}
               onToggleOpen={() => setOpenDomain(openDomain === d.id ? '' : d.id)}
               onSetSelected={(on) => {
@@ -245,7 +262,9 @@ export function EdgePackBrowser({
                   packages these depend on are published.
                 </p>
               )}
-              {d.packages.map((p) => (
+              {d.packages.map((p) => {
+                const lock = baseLock.info(p.name)
+                return (
                 <PackageRow
                   key={p.name}
                   name={p.name}
@@ -254,15 +273,21 @@ export function EdgePackBrowser({
                   versions={versionsOf(p, pack.repo)}
                   repoLabelFor={repoLabelFor}
                   selection={addedPackages.find((x) => x.name === p.name)}
-                  // Locked only while the package is NOT selected. The gate
-                  // stops a package being added without a base runtime; it must
-                  // not also trap one that is already selected, or removing the
-                  // runtime would leave a row that cannot be unticked here.
+                  locked={lock.locked}
+                  currentVersion={lock.currentVersion}
+                  currentIsFloating={lock.currentIsFloating}
+                  // Disabled-by-gate only while the package is NEITHER
+                  // explicitly selected NOR already in the matched template. The
+                  // gate stops a package being added without a base runtime; it
+                  // must not also trap one that's already selected (or removing
+                  // the runtime would leave a row that cannot be unticked here),
+                  // and a template-locked row already renders checked+disabled
+                  // via `locked` above, which takes priority.
                   disabled={
-                    !domainSelectable(pack, d, addedPackages) &&
-                    !isSelected(addedPackages, p.name)
+                    !domainSelectable(pack, d, addedPackages, baseLock) &&
+                    !isEffectivelySelected(p.name, addedPackages, baseLock)
                   }
-                  disabledReason={domainLockReason(pack, d, addedPackages) ?? undefined}
+                  disabledReason={domainLockReason(pack, d, addedPackages, baseLock) ?? undefined}
                   onToggle={(checked) => {
                     if (!checked) {
                       // Enabling-only, as above: unticking one package must not
@@ -286,7 +311,8 @@ export function EdgePackBrowser({
                     ensureReposEnabled([d])
                   }}
                 />
-              ))}
+                )
+              })}
             </div>
           ))}
       </div>
@@ -310,9 +336,11 @@ export function EdgePackBrowser({
 function BaseRuntimeSelector({
   pack,
   repoLabelFor,
+  baseLock,
 }: {
   pack: EdgePack
   repoLabelFor: (id: string) => string
+  baseLock: BaseLock
 }) {
   const addedPackages = useStore((s) => s.addedPackages)
   const setPackage = useStore((s) => s.setPackage)
@@ -320,12 +348,12 @@ function BaseRuntimeSelector({
   const setRepoEnabled = useStore((s) => s.setRepoEnabled)
   const enabledRepos = useStore((s) => s.enabledRepos)
 
-  const anySelected = canSelectDomains(pack, addedPackages)
+  const anySelected = canSelectDomains(pack, addedPackages, baseLock)
   // Non-empty only when the gate is shut and packages are selected anyway,
   // which is reachable by clearing a runtime after selecting a domain. Saying
   // "select a runtime to enable selection" there would describe a step the user
   // has already taken and misreport a selection that cannot build as inert.
-  const stranded = strandedPackages(pack, addedPackages)
+  const stranded = strandedPackages(pack, addedPackages, baseLock)
 
   const toggle = (runtime: EdgePackBaseRuntime, on: boolean) => {
     if (!on) {
@@ -361,11 +389,18 @@ function BaseRuntimeSelector({
       </div>
       <div className="mt-1.5 flex flex-wrap gap-2">
         {pack.baseRuntimes.map((r) => {
-          const checked = isSelected(addedPackages, r.package.name)
+          const locked = baseLock.info(r.package.name).locked
+          const checked = isEffectivelySelected(r.package.name, addedPackages, baseLock)
           return (
             <label
               key={r.id}
-              title={r.available ? r.package.name : r.unavailableReason}
+              title={
+                !r.available
+                  ? r.unavailableReason
+                  : locked
+                    ? "Already included by the matched template — this can't be unchecked"
+                    : r.package.name
+              }
               className={
                 'flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[13px] ' +
                 (!r.available
@@ -378,7 +413,7 @@ function BaseRuntimeSelector({
               <input
                 type="checkbox"
                 checked={checked}
-                disabled={!r.available}
+                disabled={!r.available || locked}
                 onChange={(e) => toggle(r, e.target.checked)}
                 className="h-[14px] w-[14px] accent-[#0071c5] disabled:cursor-not-allowed"
               />
@@ -393,6 +428,9 @@ function BaseRuntimeSelector({
                 <span className="text-[11px] italic text-slate-400">
                   {r.unavailableReason ?? 'not yet available'}
                 </span>
+              )}
+              {r.available && locked && (
+                <span className="text-[11px] italic text-slate-500">Already in template</span>
               )}
             </label>
           )
@@ -433,21 +471,26 @@ function BaseRuntimeSelector({
 function DomainCard({
   pack,
   domain,
+  baseLock,
   open,
   onToggleOpen,
   onSetSelected,
 }: {
   pack: EdgePack
   domain: EdgePackDomain
+  baseLock: BaseLock
   open: boolean
   onToggleOpen: () => void
   onSetSelected: (on: boolean) => void
 }) {
   const addedPackages = useStore((s) => s.addedPackages)
-  const state = groupSelectionState(domainPackageNames(domain), addedPackages)
-  const selectable = domainSelectable(pack, domain, addedPackages)
-  const mode = groupToggleMode(selectable, state.state)
-  const lockReason = domainLockReason(pack, domain, addedPackages)
+  const names = domainPackageNames(domain)
+  const state = groupSelectionState(names, addedPackages, baseLock)
+  const selectable = domainSelectable(pack, domain, addedPackages, baseLock)
+  const addableCount = names.filter((n) => !isEffectivelySelected(n, addedPackages, baseLock)).length
+  const clearableCount = clearableNames(names, addedPackages).length
+  const mode = groupToggleMode(selectable, addableCount, clearableCount)
+  const lockReason = domainLockReason(pack, domain, addedPackages, baseLock)
 
   // An unsupported domain says so where the count would go; that is the more
   // useful thing to know about it than how many packages it would have had.
@@ -493,7 +536,7 @@ function DomainCard({
           }}
           title={
             mode === 'locked'
-              ? (lockReason ?? undefined)
+              ? (lockReason ?? "Already included by the matched template — this can't be unchecked")
               : mode === 'clear' && !selectable
                 ? `Clear ${domain.displayName} — selected without a base runtime`
                 : undefined
