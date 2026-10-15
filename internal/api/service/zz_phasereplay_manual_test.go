@@ -32,6 +32,9 @@ func TestReplayLogPhases(t *testing.T) {
 			last = p
 		}
 	}
+	if err := sc.Err(); err != nil {
+		t.Fatalf("scanning %s: %v", path, err)
+	}
 	fmt.Printf("final phase after %d lines: %s\n", len(lines), last)
 }
 

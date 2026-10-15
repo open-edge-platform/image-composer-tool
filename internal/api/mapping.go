@@ -37,10 +37,10 @@ func optStrs(v []string) *[]string {
 
 func toSelection(r httpapi.ComposeRequest) service.Selection {
 	sel := service.Selection{
-		Vertical:  r.Vertical,
-		Platform:  r.Platform,
-		OS:        r.Os,
-		ImageType: r.ImageType,
+		Vertical:  derefStr(r.Vertical),
+		Platform:  derefStr(r.Platform),
+		OS:        derefStr(r.Os),
+		ImageType: derefStr(r.ImageType),
 	}
 	if r.Sku != nil {
 		sel.SKU = *r.Sku

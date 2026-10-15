@@ -105,10 +105,18 @@ export function parseImportedTemplate(fileName: string, text: string): ImportedT
   }
 
   const t = doc as RawTemplate
-  // `extends` alone is enough: a delta template carries nothing else.
-  if (!t.image && !t.target && !t.systemConfig && t.extends == null) {
+  // A document declaring `extends` depends on a relative parent file this
+  // import flow has no access to — even one that also carries its own image/
+  // target/systemConfig keys would build against the wrong (missing) parent
+  // if imported standalone.
+  if (t.extends != null) {
     throw new TemplateParseError(
-      'This file does not look like an image template — expected an `image`, `target`, `systemConfig`, or `extends` key.',
+      'This template extends another file and cannot be imported on its own. Import a complete, self-contained template instead.',
+    )
+  }
+  if (!t.image && !t.target && !t.systemConfig) {
+    throw new TemplateParseError(
+      'This file does not look like an image template — expected an `image`, `target`, or `systemConfig` key.',
     )
   }
 

@@ -56,8 +56,14 @@ describe('parseImportedTemplate', () => {
     expect(parseImportedTemplate('t.yml', text).yaml).toBe(text)
   })
 
-  it('accepts a delta template carrying only extends', () => {
-    expect(() => parseImportedTemplate('d.yml', 'extends: robotics.yml\n')).not.toThrow()
+  it('rejects a template that declares extends', () => {
+    expect(() => parseImportedTemplate('d.yml', 'extends: robotics.yml\n')).toThrow(TemplateParseError)
+  })
+
+  it('rejects extends even alongside other template keys', () => {
+    expect(() =>
+      parseImportedTemplate('d.yml', 'extends: robotics.yml\nimage:\n  name: x\n'),
+    ).toThrow(TemplateParseError)
   })
 
   it.each([

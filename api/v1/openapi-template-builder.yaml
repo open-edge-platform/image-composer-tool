@@ -1085,7 +1085,12 @@ components:
         lookup fields carry no meaning and are not required; everything else
         behaves identically, because the document simply takes the matched
         template's place as the parent the overrides extend.
-      required: [vertical, platform, os, imageType]
+
+        The real rule — vertical/platform/os/imageType are required unless
+        `baseYaml` is set — is a conditional OpenAPI 3.0.3 cannot express
+        without `oneOf` (see BuildRequest for why this schema avoids that), so
+        it is left undeclared here and enforced by the server, which rejects a
+        violation with 400.
       properties:
         vertical:
           type: string

@@ -757,14 +757,20 @@ func (s *Service) resolveBuildTemplate(req *BuildRequest, workDir string) (path,
 	// as in Compose. It is removed with the delta once the build finishes.
 	var tmpl, full string
 	if c.BaseYAML != "" {
-		name, path, _, merr := s.materializeBase(*c)
+		name, basePath, cleanupBase, merr := s.materializeBase(*c)
 		if merr != nil {
 			return "", "", fmt.Errorf("writing base template: %w", merr) // server-side
 		}
-		// Removed by the build, not here: it is the generated delta's parent and
-		// has to outlive this call for the whole build.
-		req.basePath = path
-		tmpl, full = name, path
+		// Removed by the build on success — req.basePath has to outlive this call
+		// for the whole build. On any error returned below, though, the build
+		// never starts to take over that cleanup, so remove it here instead.
+		defer func() {
+			if err != nil {
+				cleanupBase()
+			}
+		}()
+		req.basePath = basePath
+		tmpl, full = name, basePath
 	} else {
 		tmpl = s.manifest.findTemplate(c.Vertical, c.SKU, c.Platform, c.OS, c.ImageType)
 		if tmpl == "" {
@@ -1148,27 +1154,37 @@ func (b *build) finish(status BuildStatus, arts []Artifact, errMsg string) bool 
 	return true
 }
 
-// archiveAndCleanupDelta resolves a delta-backed build's generated extends
-// delta one final time, writes the fully-resolved, redacted result to
-// RootDir/template.yml, and repoints TemplatePath there — so the download
-// endpoint keeps serving a self-contained file after the delta itself is
-// removed from TemplatesDir. On any failure the delta is still removed (the
-// generated file must never be left behind), but TemplatePath is left as-is,
-// which then 404s on download exactly as an already-missing template would.
+// archiveAndCleanupDelta resolves a delta-backed or base-only build's
+// generated template one final time, writes the fully-resolved, redacted
+// result to RootDir/template.yml, and repoints TemplatePath there — so the
+// download endpoint keeps serving a self-contained file after the generated
+// file itself is removed from TemplatesDir. On any failure the generated
+// file is still removed (it must never be left behind), but TemplatePath is
+// left as-is, which then 404s on download exactly as an already-missing
+// template would.
 func (b *build) archiveAndCleanupDelta() {
 	// A materialized base document is generated the same way a delta is, and is
 	// removed whether or not a delta was layered over it.
 	if b.BasePath != "" {
 		defer func() { _ = os.Remove(b.BasePath) }()
 	}
-	if b.DeltaPath == "" {
+	// Prefer the delta (it already layers the base), but a base-only build
+	// (no overrides) still has a generated file that needs archiving before
+	// it's removed above — otherwise TemplatePath is left dangling.
+	generatedPath := b.DeltaPath
+	if generatedPath == "" {
+		generatedPath = b.BasePath
+	}
+	if generatedPath == "" {
 		return
 	}
-	defer func() { _ = os.Remove(b.DeltaPath) }()
+	if b.DeltaPath != "" {
+		defer func() { _ = os.Remove(b.DeltaPath) }()
+	}
 
-	merged, err := config.LoadAndMergeTemplate(b.DeltaPath)
+	merged, err := config.LoadAndMergeTemplate(generatedPath)
 	if err != nil {
-		logger.Logger().Warnf("build %s: re-resolving delta template for archive failed", b.ID)
+		logger.Logger().Warnf("build %s: re-resolving generated template for archive failed", b.ID)
 		return
 	}
 	data, err := config.MarshalTemplateYAML(config.RedactSensitiveData(merged))

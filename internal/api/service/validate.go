@@ -112,7 +112,10 @@ func templateCredentialRequirements(templateYAML string) []CredentialRequirement
 	}
 	merged, merr := config.LoadAndMergeTemplate(path)
 	if merr != nil {
-		logger.Logger().Debugf("validate: resolving the template for its accounts failed: %v", merr)
+		// Not %v-logged: a resolve failure can be an error wrapping the on-disk
+		// path of a systemConfig.fde.passphraseFile the merge tried to read,
+		// which CodeQL (rightly) flags as sensitive data reaching a log sink.
+		logger.Logger().Debug("validate: resolving the template for its accounts failed")
 		return nil
 	}
 	return credentialRequirements(merged)
