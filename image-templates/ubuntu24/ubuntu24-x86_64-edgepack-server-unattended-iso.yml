@@ -265,12 +265,6 @@ systemConfig:
         stage: first-boot
         order: 10
 
-      - name: edge-node-infra-setup
-        local: additionalfiles/base-platform/20-edge-node-infra-setup.sh
-        final: /usr/local/sbin/edge-node-infra-setup.sh
-        stage: first-boot
-        order: 20
-
   # Developer source archives and other artifacts are copied with additionalFiles.
   # additionalFiles:
   #   - local: additionalfiles/base-platform/platform-src.tar.gz
