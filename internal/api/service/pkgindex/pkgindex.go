@@ -311,6 +311,8 @@ func (c *Cache) load(ctx context.Context, r Repo) ([]Entry, error) {
 		entries, err = fetchRPM(ctx, c.client, r)
 	}
 	if err != nil {
+		log.Warnf("pkgindex: %s index %s %s %s %s failed after %s: %v",
+			r.Type, r.URL, r.Codename, r.Component, r.Arch, c.now().Sub(start).Round(time.Millisecond), err)
 		return nil, err
 	}
 	log.Debugf("pkgindex: %s index %s has %d packages (%s)",

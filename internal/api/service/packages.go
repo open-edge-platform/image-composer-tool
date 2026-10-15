@@ -441,6 +441,12 @@ func runLookups(ctx context.Context, cache *pkgindex.Cache, lookups []repoLookup
 		g.Go(func() error {
 			entries, err := cache.Lookup(ctx, lk.repo)
 			if err != nil {
+				// The caller stopped waiting; the fetch itself carries on and logs its own failure.
+				if ctx.Err() != nil {
+					logger.Logger().Debugf("pkgindex: stopped waiting for repo %s (%s %s %s %s): %v",
+						lk.repoID, lk.repo.Type, lk.repo.URL, lk.repo.Codename, lk.repo.Arch, err)
+					return nil
+				}
 				logger.Logger().Warnf("pkgindex: search lookup failed for repo %s (%s %s %s %s): %v",
 					lk.repoID, lk.repo.Type, lk.repo.URL, lk.repo.Codename, lk.repo.Arch, err)
 				return nil

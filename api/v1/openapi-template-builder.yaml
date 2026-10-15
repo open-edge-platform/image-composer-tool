@@ -134,7 +134,9 @@ paths:
         Version metadata is best-effort. When the pack's repository index is
         unreachable, packages are still returned with their names and no
         `version`/`versions` — they remain selectable at the repository's latest,
-        which is what an unpinned pick means anyway.
+        which is what an unpinned pick means anyway. The response waits only a
+        few seconds for a slow index; it then answers with `versionsPending`
+        set while the index keeps loading in the background.
       parameters:
         - name: os
           in: query
@@ -894,6 +896,12 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/EdgePackDomain"
+        versionsPending:
+          type: boolean
+          description: |
+            True when the pack repository's index was still loading and the
+            response did not wait for it. Every package is listed, but some
+            have no `version`/`versions` yet; ask again shortly to get them.
 
     EdgePackBaseRuntime:
       type: object

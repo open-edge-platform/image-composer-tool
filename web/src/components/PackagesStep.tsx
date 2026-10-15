@@ -35,6 +35,10 @@ type TabID = (typeof TABS)[number]['id']
 // The id of the single rendered tabpanel, shared by both tabs' aria-controls.
 const PANEL_ID = 'packages-browse-panel'
 
+// How often, and how many times, to re-ask for an Edge Pack whose versions were still loading.
+const EDGE_PACK_RETRY_MS = 5000
+const EDGE_PACK_RETRY_LIMIT = 24
+
 // PackagesStep is the wizard's "Choose Packages to Compose" step: which
 // repositories the target offers and which are enabled, a cross-repository
 // package search, the Edge Pack and per-repository browsing surfaces, and the
@@ -81,16 +85,26 @@ export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
     // domain counts are right the moment the step opens. A backend that
     // predates /edge-pack 404s here, which is why this failure is swallowed
     // into "no Edge Pack" instead of failing the step.
-    api
-      .getEdgePack(os)
-      .then((p) => {
-        if (!cancelled) setEdgePack(p)
-      })
-      .catch(() => {
-        if (!cancelled) setEdgePack(null)
-      })
+    let retryTimer: ReturnType<typeof setTimeout> | undefined
+    const loadEdgePack = (attempt: number) => {
+      api
+        .getEdgePack(os)
+        .then((p) => {
+          if (cancelled) return
+          setEdgePack(p)
+          if (p.versionsPending && attempt < EDGE_PACK_RETRY_LIMIT) {
+            retryTimer = setTimeout(() => loadEdgePack(attempt + 1), EDGE_PACK_RETRY_MS)
+          }
+        })
+        .catch(() => {
+          // A failed retry keeps the pack already on screen.
+          if (!cancelled && attempt === 0) setEdgePack(null)
+        })
+    }
+    loadEdgePack(0)
     return () => {
       cancelled = true
+      clearTimeout(retryTimer)
     }
   }, [active, os])
 
@@ -153,11 +167,11 @@ export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
                   repoLabelFor={repoLabelFor}
                   targetLabel={targetLabel}
                 />
+              ) : edgePack === undefined ? (
+                <EdgePackLoading />
               ) : (
                 <p className="rounded-lg border border-dashed border-slate-300 px-4 py-10 text-center text-sm text-slate-400">
-                  {edgePack === undefined
-                    ? 'Loading Edge Pack…'
-                    : 'Edge Pack is unavailable. Use the Repositories tab to pick packages.'}
+                  Edge Pack is unavailable. Use the Repositories tab to pick packages.
                 </p>
               )}
             </div>
@@ -167,6 +181,37 @@ export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+// EdgePackLoading holds the Edge Pack panel's place, in its shape, while the pack is fetched.
+function EdgePackLoading() {
+  return (
+    <div role="status" aria-live="polite" className="overflow-hidden rounded-lg border border-slate-200">
+      <div className="flex items-center gap-3 border-b border-slate-200 bg-slate-50 px-3.5 py-3">
+        <span
+          aria-hidden="true"
+          className="h-5 w-5 shrink-0 animate-spin rounded-full border-2 border-[#0071c5]/20 border-t-[#0071c5] motion-reduce:animate-none"
+        />
+        <div>
+          <p className="text-[13px] font-bold text-[#00285a]">Loading Edge Pack…</p>
+          <p className="text-[11px] text-slate-500">Gathering domains and package versions</p>
+        </div>
+      </div>
+      <div aria-hidden="true" className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-2.5 p-3.5">
+        {Array.from({ length: 6 }, (_, i) => (
+          <div
+            key={i}
+            style={{ animationDelay: `${i * 120}ms` }}
+            className="animate-pulse rounded-md border border-slate-200 bg-white p-3 motion-reduce:animate-none"
+          >
+            <div className="h-3 w-2/3 rounded bg-slate-200" />
+            <div className="mt-2.5 h-2 w-full rounded bg-slate-100" />
+            <div className="mt-1.5 h-2 w-4/5 rounded bg-slate-100" />
+          </div>
+        ))}
+      </div>
     </div>
   )
 }

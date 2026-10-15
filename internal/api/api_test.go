@@ -431,6 +431,9 @@ func TestHandleGetEdgePack(t *testing.T) {
 	if !out.RepoAvailable || out.Repo != "test-repo" {
 		t.Errorf("repo = %q available = %v, want test-repo / true", out.Repo, out.RepoAvailable)
 	}
+	if out.VersionsPending != nil {
+		t.Errorf("versionsPending = %v for an index that answered in time, want it omitted", *out.VersionsPending)
+	}
 	if len(out.Domains) != 2 {
 		t.Fatalf("got %d domains, want 2", len(out.Domains))
 	}
