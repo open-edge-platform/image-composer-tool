@@ -112,13 +112,18 @@ func (s *Server) Start(ctx context.Context) error {
 	case <-ctx.Done():
 	}
 
-	log.Infof("shutdown requested — draining connections (up to %s) and any in-flight build (up to %s)",
-		httpShutdownTimeout, buildDrainTimeout)
+	log.Infof("shutdown requested — draining connections (up to %s), then cancelling any in-flight build "+
+		"and waiting for its teardown (up to %s)", httpShutdownTimeout, buildDrainTimeout)
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), httpShutdownTimeout)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Warnf("HTTP server shutdown: %v", err)
 	}
+	// Signal before waiting. The build child runs in its own process group and
+	// never observes ctx, so without this the drain window is spent watching a
+	// compose that cannot finish in time, and the child is then killed along with
+	// the process — mid-chroot, with mounts and loop devices still held.
+	s.svc.CancelInFlightBuilds()
 	s.svc.WaitForInFlightBuilds(buildDrainTimeout)
 
 	if err := <-serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) {

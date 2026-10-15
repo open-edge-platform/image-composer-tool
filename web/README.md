@@ -141,16 +141,27 @@ not sudo's default `env_keep` for anything else.
 > process is still reading it) so the UI still has something usable even though
 > the underlying process may still be winding down in the background.
 >
-> **Container/orchestrator shutdown waits for an in-flight build to finish.**
-> On `SIGTERM` (e.g. `docker stop`, a Kubernetes pod eviction, or a rolling
-> update) `serve` stops accepting new connections, lets in-flight HTTP/SSE
-> requests drain for up to 10s, then gives any build still running up to 20s to
-> reach a terminal state and archive its merged template before the process
-> exits. This is best-effort: it only has as much time as the deployment's own
+> **Container/orchestrator shutdown cancels an in-flight build and waits for its
+> teardown.** On `SIGTERM` (e.g. `docker stop`, a Kubernetes pod eviction, or a
+> rolling update) `serve` stops accepting new connections, lets in-flight
+> HTTP/SSE requests drain for up to 10s, then **cancels any build still
+> running** and waits up to 20s for it to reach a terminal state and archive its
+> merged template before the process exits.
+>
+> The cancel is the point: a real compose takes minutes, so it would never
+> finish inside that window, and the build child — which runs in its own process
+> group and knows nothing about the server's shutdown — would otherwise keep
+> working until the orchestrator's `SIGKILL` cut it down mid-chroot, leaving
+> **mounted filesystems and attached loop devices behind on the host**.
+> Cancelling spends the window on ICT's own teardown instead. A build that is
+> still tearing down when the window closes is recorded as `cancelling`, the
+> same way a build orphaned by a restart is.
+>
+> This is best-effort: it only has as much time as the deployment's own
 > termination grace period allows (`terminationGracePeriodSeconds` in
 > Kubernetes, `docker stop -t`) before a `SIGKILL` cuts it short regardless.
-> Set that grace period comfortably above 30s if you want build archiving to
-> reliably survive a rolling deploy.
+> Set that grace period comfortably above 30s if you want teardown and archiving
+> to reliably survive a rolling deploy.
 
 ### 3. Build the frontend, embed it, and rebuild the binary
 

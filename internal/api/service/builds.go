@@ -655,13 +655,58 @@ func (s *Service) concludeStalledCancel(b *build) {
 func (s *Service) WaitForInFlightBuilds(timeout time.Duration) {
 	deadline := time.After(timeout)
 	for _, b := range s.tracker.all() {
-		if isTerminal(b.snapshot().Status) {
-			continue
-		}
+		// Wait on done even for a build that already reports terminal. finish()
+		// publishes the terminal status before it writes compose.log and the
+		// final meta.json, and done is closed only once those writes are through
+		// — so a build can be terminal and still mid-write. Skipping it here
+		// would let the process exit in that window and truncate its log or
+		// metadata. A build that finished long ago has a closed done channel, so
+		// waiting unconditionally costs nothing.
 		select {
 		case <-b.done:
 		case <-deadline:
 			return
+		}
+	}
+}
+
+// CancelInFlightBuilds requests cancellation of every build still running, so
+// each one's ICT child gets a chance to tear down its mounts and loop devices.
+//
+// Called from Server.Start on a shutdown signal, immediately before
+// WaitForInFlightBuilds. Waiting alone is not enough: a real compose runs for
+// minutes, so it would never conclude inside the drain window, and the child —
+// spawned into its own process group, holding no reference to the server's
+// context — would keep working until the process exits and the orchestrator's
+// SIGKILL took it down mid-chroot, leaving the host with mounted filesystems and
+// attached loop devices. Signalling first turns the drain window into teardown
+// time rather than dead waiting.
+//
+// The cancel watchdog is deliberately not started here: its grace period and
+// hard deadline both far exceed the drain window, and the process is exiting
+// regardless. A build that doesn't finish tearing down in time stays recorded as
+// cancelling — the same outcome a build orphaned by a restart already has.
+func (s *Service) CancelInFlightBuilds() {
+	log := logger.Logger()
+	for _, b := range s.tracker.all() {
+		transitioned, pgid := b.beginCancel()
+		if !transitioned {
+			continue // already terminal, or a cancel is already in flight
+		}
+		b.appendLog("• server is shutting down — signalling build to stop and clean up")
+		if pgid <= 0 {
+			continue // group not recorded yet; runBuild delivers the pending signal
+		}
+		if err := s.signalGroup(pgid); err != nil {
+			// Same classification as an interactive cancel: the signal never
+			// reached the group, so ICT may never start its teardown. Record it as
+			// a cancellation-failure so the build carries the reason, and warn
+			// rather than error — a refused signal is a host-configuration outcome
+			// (missing sudoers rule), not a bug worth a stack trace.
+			detail := fmt.Sprintf("failed to signal build process group %d on shutdown: %v", pgid, err)
+			b.setResidual(residualCancellation, detail)
+			b.appendLog("ERROR " + detail)
+			log.Warnf("build %s: %s", b.ID, detail)
 		}
 	}
 }
@@ -1315,8 +1360,15 @@ func (b *build) archiveMergedTemplate() {
 		logger.Logger().Warnf("build %s: marshaling archived template: %v", b.ID, err)
 		return
 	}
+	// Publish atomically. The archive is written more than once per build — once
+	// up front, then again when the build concludes (or when the cancel watchdog
+	// gives up) — and the download handler reads the published path without any
+	// coordination with those writes. Writing in place would truncate the file
+	// first, so a download landing mid-rewrite would be served empty or partial
+	// YAML under a 200. A rename over the path is atomic, so a reader sees either
+	// the previous archive or the new one, never a half-written file.
 	archivePath := filepath.Join(b.RootDir, "template.yml")
-	if err := os.WriteFile(archivePath, data, 0o600); err != nil {
+	if err := writeFileAtomic(archivePath, data, 0o600); err != nil {
 		logger.Logger().Warnf("build %s: writing archived template: %v", b.ID, err)
 		return
 	}
@@ -1329,6 +1381,41 @@ func (b *build) archiveMergedTemplate() {
 			logger.Logger().Warnf("build %s: writing archived template metadata: %v", b.ID, err)
 		}
 	}
+}
+
+// writeFileAtomic writes data to path by staging it in a temporary file in the
+// same directory and renaming that into place, so a concurrent reader of path
+// sees either the old contents or the new ones — never a truncated or
+// half-written file, as an in-place os.WriteFile would expose. Staging in the
+// target's own directory keeps the rename within one filesystem, which is what
+// makes it atomic.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) (err error) {
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("creating staged file: %w", err)
+	}
+	staged := tmp.Name()
+	defer func() {
+		if err != nil {
+			_ = os.Remove(staged) // leave no stray stage behind on failure
+		}
+	}()
+
+	if _, err = tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("writing staged file: %w", err)
+	}
+	if err = tmp.Close(); err != nil {
+		return fmt.Errorf("closing staged file: %w", err)
+	}
+	// CreateTemp always makes 0600; apply the caller's mode explicitly.
+	if err = os.Chmod(staged, perm); err != nil {
+		return fmt.Errorf("setting staged file mode: %w", err)
+	}
+	if err = os.Rename(staged, path); err != nil {
+		return fmt.Errorf("publishing staged file: %w", err)
+	}
+	return nil
 }
 
 // archiveAndCleanupDelta archives the merged template (see archiveMergedTemplate)
