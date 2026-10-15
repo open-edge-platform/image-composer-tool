@@ -63,6 +63,12 @@ describe('parseImportedTemplate', () => {
     expect(() => parseImportedTemplate('d.yml', 'extends: robotics.yml\n')).toThrow(/extends another/)
   })
 
+  it('rejects extends even alongside other template keys', () => {
+    expect(() =>
+      parseImportedTemplate('d.yml', 'extends: robotics.yml\nimage:\n  name: x\n'),
+    ).toThrow(TemplateParseError)
+  })
+
   it.each([
     ['empty', ''],
     ['not YAML', 'image:\n\tname: tabs-are-invalid\n'],
