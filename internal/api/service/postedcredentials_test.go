@@ -43,7 +43,7 @@ systemConfig:
 func TestResolveBuildTemplatePostedCredentialsRequired(t *testing.T) {
 	s := newTestService(t)
 
-	_, _, err := s.resolveBuildTemplate(&BuildRequest{YAML: postedTemplateWithSudoUser}, t.TempDir())
+	_, _, _, err := s.resolveBuildTemplate(&BuildRequest{YAML: postedTemplateWithSudoUser}, t.TempDir())
 	if err == nil {
 		t.Fatal("expected a credential-required rejection, got none")
 	}
@@ -61,7 +61,7 @@ func TestResolveBuildTemplatePostedCredentials(t *testing.T) {
 	s := newTestService(t)
 	wd := t.TempDir()
 
-	path, name, err := s.resolveBuildTemplate(&BuildRequest{
+	path, name, _, err := s.resolveBuildTemplate(&BuildRequest{
 		YAML:        postedTemplateWithSudoUser,
 		Credentials: []CredentialInput{{User: "user", Password: "correct horse battery staple"}},
 	}, wd)
@@ -123,7 +123,7 @@ func TestResolveBuildTemplatePostedCredentials(t *testing.T) {
 func TestResolveBuildTemplateCredentialsWithoutYAML(t *testing.T) {
 	s := newTestService(t)
 
-	_, _, err := s.resolveBuildTemplate(&BuildRequest{
+	_, _, _, err := s.resolveBuildTemplate(&BuildRequest{
 		Compose:     &Selection{Vertical: "robotics", SKU: "amr", Platform: "wcl", OS: "ubuntu24", ImageType: "iso"},
 		Credentials: []CredentialInput{{User: "admin", Password: "x"}},
 	}, t.TempDir())

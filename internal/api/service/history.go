@@ -35,6 +35,11 @@ type buildMeta struct {
 	// Residual outlives the process on purpose: leftover mounts and loop devices
 	// survive a server restart, so the remediation hint must too.
 	Residual *ResidualIssue `json:"residual,omitempty"`
+	// Retry is what this build was resolved from (credentials/new-user passwords
+	// already hashed), persisted so RetryBuild still works on a build reconstructed
+	// after a restart instead of reporting it as predating retry support. Written
+	// with the same 0600 meta.json carries everything else sensitive under.
+	Retry *retryInput `json:"retry,omitempty"`
 }
 
 // metaPath returns the meta.json path for a build root directory.
@@ -62,6 +67,7 @@ func (b *build) writeMeta() error {
 		ErrMsg:       res.ErrMsg,
 		LogFile:      res.LogFile,
 		Residual:     res.Residual,
+		Retry:        b.retry,
 	}
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
@@ -96,6 +102,7 @@ func buildFromMeta(rootDir string, m buildMeta) *build {
 		artifacts:    m.Artifacts,
 		errMsg:       errMsg,
 		residual:     m.Residual,
+		retry:        m.Retry,
 	}
 	return b
 }
