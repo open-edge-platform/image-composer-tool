@@ -5,7 +5,9 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -130,5 +132,83 @@ func TestStartWaitsForInFlightBuildOnShutdown(t *testing.T) {
 	}
 	if !strings.Contains(string(archived), "shutdown-test-name") {
 		t.Errorf("archived template does not reflect the override (got the raw delta, not the merged template):\n%s", archived)
+	}
+}
+
+// TestStartRefusesNewBuildsWhileDraining covers the admission half of the
+// shutdown path. Draining does not close the door on its own: http.Server's
+// Shutdown stops accepting new connections but lets active handlers run, and
+// abandons them when it times out rather than stopping them. A compose that
+// was still decoding its body or resolving its template at that moment would
+// otherwise spawn a child after shutdown had already snapshotted what to
+// cancel and wait for — a build nothing ever signals, killed with the process
+// mid-chroot while holding mounts and loop devices.
+//
+// The in-flight build is held open so Start is provably still inside its
+// shutdown sequence when the second compose is attempted.
+func TestStartRefusesNewBuildsWhileDraining(t *testing.T) {
+	sync := t.TempDir()
+	readyPath := filepath.Join(sync, "running")
+	releasePath := filepath.Join(sync, "release")
+	t.Cleanup(func() { _ = os.WriteFile(releasePath, nil, 0o600) })
+
+	srv, _ := newTestServerWithICT(t, fmt.Sprintf(blockingFakeICT, readyPath, releasePath))
+	srv.addr = "127.0.0.1:0"
+
+	compose := service.BuildRequest{Compose: &service.Selection{
+		Vertical: "robotics", SKU: "amr", Platform: "wcl", OS: "ubuntu24", ImageType: "iso",
+	}}
+	if _, err := srv.svc.StartBuild(compose); err != nil {
+		t.Fatalf("StartBuild: %v", err)
+	}
+	waitForFile(t, readyPath, 10*time.Second)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	startErr := make(chan error, 1)
+	go func() { startErr <- srv.Start(ctx) }()
+	cancel()
+
+	// Start is now draining and waiting on the held build. Poll until the
+	// rejection turns into the shutdown one: admission closes at the top of the
+	// shutdown sequence, so this must happen without releasing the build. Until
+	// then the slot is simply busy, which is a different (retryable) answer.
+	deadline := time.Now().Add(10 * time.Second)
+	var lastCode string
+	for time.Now().Before(deadline) {
+		_, err := srv.svc.StartBuild(compose)
+		if err == nil {
+			t.Fatal("a compose was admitted while the server was shutting down")
+		}
+		var svcErr *service.Error
+		if !errors.As(err, &svcErr) {
+			t.Fatalf("StartBuild error = %v, want a *service.Error", err)
+		}
+		lastCode = svcErr.Code
+		if svcErr.Code == "SERVER_SHUTTING_DOWN" {
+			if svcErr.Status != http.StatusServiceUnavailable {
+				t.Errorf("status = %d, want 503", svcErr.Status)
+			}
+			break
+		}
+		if svcErr.Code != "BUILD_IN_PROGRESS" {
+			t.Fatalf("unexpected rejection code %q (%v)", svcErr.Code, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if lastCode != "SERVER_SHUTTING_DOWN" {
+		t.Fatalf("builds were still being admitted during shutdown (last code %q)", lastCode)
+	}
+
+	// Let the held build finish so Start can return.
+	if err := os.WriteFile(releasePath, nil, 0o600); err != nil {
+		t.Fatalf("releasing fake build: %v", err)
+	}
+	select {
+	case err := <-startErr:
+		if err != nil {
+			t.Fatalf("Start returned error: %v", err)
+		}
+	case <-time.After(buildDrainTimeout + 10*time.Second):
+		t.Fatal("Start did not return after the build concluded")
 	}
 }

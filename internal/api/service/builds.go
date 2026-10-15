@@ -95,6 +95,14 @@ type build struct {
 
 	doneOnce sync.Once // guards close(done): both runBuild and the cancel watchdog can finish a build
 
+	// persistMu serializes the build's writes to compose.log and meta.json.
+	// Several paths persist the same build — the initial record, each template
+	// archive, the shutdown cancel path, and finish() — and the record each one
+	// writes is snapshotted while this is held, so writers cannot interleave or
+	// publish state older than one already on disk. Held only around the writes
+	// themselves and never with mu, so the two cannot deadlock.
+	persistMu sync.Mutex
+
 	mu        sync.Mutex
 	status    BuildStatus
 	logLines  []string // buffered log history for late log subscribers
@@ -340,10 +348,24 @@ func (s *Service) StartBuild(req BuildRequest) (*BuildAccepted, error) {
 	// failure), reject with 409 so a second compose can't race the teardown. The
 	// slot is released by runBuild only after the ICT child fully exits; on the
 	// error paths below we release it explicitly since no child was spawned.
-	if ok, activeID := s.tryAcquireBuildSlot(id); !ok {
+	//
+	// The same gate refuses starts once shutdown has closed admission, so a
+	// request that arrived just before the signal cannot spawn a child that the
+	// shutdown path has already finished cancelling and waiting for.
+	ok, activeID, closed := s.tryAcquireBuildSlot(id)
+	switch {
+	case closed:
+		return nil, newError(http.StatusServiceUnavailable, "SERVER_SHUTTING_DOWN",
+			"the server is shutting down and is not accepting new builds")
+	case !ok:
 		return nil, newError(http.StatusConflict, "BUILD_IN_PROGRESS",
 			fmt.Sprintf("a build is already in progress (%s); only one compose runs at a time", activeID))
 	}
+	// Setup is not instantaneous (it resolves the template and writes to disk),
+	// and until tracker.add runs below the build is invisible to the shutdown
+	// snapshots. Pair the claim with the matching close so shutdown can wait the
+	// gap out — on every path out of this function, spawned or not.
+	defer s.endBuildSetup()
 
 	buildRoot := filepath.Join(s.cfg.WorkDir, "builds", id)
 	workDir := filepath.Join(buildRoot, "work")
@@ -682,32 +704,56 @@ func (s *Service) WaitForInFlightBuilds(timeout time.Duration) {
 // attached loop devices. Signalling first turns the drain window into teardown
 // time rather than dead waiting.
 //
+// setupGrace bounds how long this waits for a start that is mid-setup to finish
+// registering its build before the tracker is snapshotted; see waitForBuildSetup
+// for why that wait exists at all. WaitForInFlightBuilds snapshots afterwards
+// and therefore inherits the same guarantee.
+//
 // The cancel watchdog is deliberately not started here: its grace period and
 // hard deadline both far exceed the drain window, and the process is exiting
 // regardless. A build that doesn't finish tearing down in time stays recorded as
-// cancelling — the same outcome a build orphaned by a restart already has.
-func (s *Service) CancelInFlightBuilds() {
+// cancelling — the same outcome a build orphaned by a restart already has. What
+// it does not keep is memory, so each cancelled build is persisted below.
+func (s *Service) CancelInFlightBuilds(setupGrace time.Duration) {
 	log := logger.Logger()
+	s.waitForBuildSetup(setupGrace)
 	for _, b := range s.tracker.all() {
 		transitioned, pgid := b.beginCancel()
 		if !transitioned {
 			continue // already terminal, or a cancel is already in flight
 		}
 		b.appendLog("• server is shutting down — signalling build to stop and clean up")
-		if pgid <= 0 {
-			continue // group not recorded yet; runBuild delivers the pending signal
+		// pgid == 0 means the child isn't spawned yet; beginCancel has recorded
+		// the request and runBuild delivers it as soon as it has a group (see
+		// setPgidCheckCancel), so there is nothing to signal here — but there is
+		// still state worth persisting below.
+		if pgid > 0 {
+			if err := s.signalGroup(pgid); err != nil {
+				// Same classification as an interactive cancel: the signal never
+				// reached the group, so ICT may never start its teardown. Record it as
+				// a cancellation-failure so the build carries the reason, and warn
+				// rather than error — a refused signal is a host-configuration outcome
+				// (missing sudoers rule), not a bug worth a stack trace.
+				detail := fmt.Sprintf("failed to signal build process group %d on shutdown: %v", pgid, err)
+				b.setResidual(residualCancellation, detail)
+				b.appendLog("ERROR " + detail)
+				log.Warnf("build %s: %s", b.ID, detail)
+			}
 		}
-		if err := s.signalGroup(pgid); err != nil {
-			// Same classification as an interactive cancel: the signal never
-			// reached the group, so ICT may never start its teardown. Record it as
-			// a cancellation-failure so the build carries the reason, and warn
-			// rather than error — a refused signal is a host-configuration outcome
-			// (missing sudoers rule), not a bug worth a stack trace.
-			detail := fmt.Sprintf("failed to signal build process group %d on shutdown: %v", pgid, err)
-			b.setResidual(residualCancellation, detail)
-			b.appendLog("ERROR " + detail)
-			log.Warnf("build %s: %s", b.ID, detail)
-		}
+		// Save what we know before the process exits. Everything above only
+		// mutates memory, and a build cancelled here may well never reach
+		// finish() — the drain window is short and no watchdog is running — so
+		// without this the cancellation, the reason a signal failed, and the log
+		// explaining both die with the process. The build would then be
+		// reconstructed after a restart as a generic interruption, hiding a
+		// cancellation-failure that points at a real misconfiguration and at
+		// mounts or loop devices still held on the host.
+		//
+		// The status stays non-terminal on purpose: the child may yet tear down
+		// and conclude properly inside the drain window, and finish() must remain
+		// the only thing that decides the outcome. If it does, its persist
+		// supersedes this one (see persist).
+		b.persist()
 	}
 }
 
@@ -1305,22 +1351,10 @@ func (b *build) finish(status BuildStatus, arts []Artifact, errMsg string) bool 
 	b.errMsg = errMsg
 	b.mu.Unlock()
 
-	// Persist logs to <root>/compose.log for later download.
-	if b.RootDir != "" {
-		logPath := filepath.Join(b.RootDir, "compose.log")
-		content := strings.Join(b.snapshotLogs(), "\n")
-		if err := os.WriteFile(logPath, []byte(content), 0o600); err != nil {
-			logger.Logger().Warnf("build %s: writing log file: %v", b.ID, err)
-		} else {
-			b.mu.Lock()
-			b.LogFile = logPath
-			b.mu.Unlock()
-		}
-	}
-
-	if err := b.writeMeta(); err != nil {
-		logger.Logger().Warnf("build %s: writing final meta: %v", b.ID, err)
-	}
+	// Publish the log and the final record as one serialized unit. Nothing that
+	// persists concurrently (the shutdown cancel path in particular) can
+	// overwrite this with an earlier view of the build — see persist.
+	b.persist()
 	return true
 }
 

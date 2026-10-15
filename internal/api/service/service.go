@@ -27,6 +27,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/api/service/pkgindex"
 )
@@ -72,6 +73,17 @@ type Service struct {
 	// mounts/loop devices from the previous one may still be tearing down.
 	buildMu       sync.Mutex
 	activeBuildID string
+	// admissionClosed is set once by CloseBuildAdmission at shutdown. It is read
+	// under buildMu by tryAcquireBuildSlot, which is the single gate every start
+	// passes through, so a start either claims the slot before admission closes
+	// or is rejected — never both.
+	admissionClosed bool
+	// setupDone is closed when the start currently holding the slot finishes its
+	// setup (i.e. has registered the build with the tracker, or bailed out). It
+	// is nil whenever no start is mid-setup. Shutdown waits on it so the
+	// cancel/wait snapshots cannot miss a build that was still being set up when
+	// the signal arrived.
+	setupDone chan struct{}
 
 	// signalGroup delivers SIGTERM to a build's process group. It defaults to
 	// signalCancel; tests override it to exercise the cancel paths without shelling
@@ -81,15 +93,81 @@ type Service struct {
 
 // tryAcquireBuildSlot claims the single-build slot for id. It returns false (and
 // the id currently holding the slot) if a build is already in flight, so the
-// caller can reject the concurrent start.
-func (s *Service) tryAcquireBuildSlot(id string) (ok bool, activeID string) {
+// caller can reject the concurrent start. closed reports that the server is
+// shutting down and is no longer admitting builds, which the caller must
+// distinguish from a busy slot: one is a transient conflict worth retrying, the
+// other means this process will never run the build.
+//
+// A successful claim also opens the setup window (see endBuildSetup): the build
+// exists only as a slot holder until StartBuild registers it with the tracker,
+// and shutdown must not snapshot the tracker while a start is in that gap.
+func (s *Service) tryAcquireBuildSlot(id string) (ok bool, activeID string, closed bool) {
 	s.buildMu.Lock()
 	defer s.buildMu.Unlock()
+	if s.admissionClosed {
+		return false, "", true
+	}
 	if s.activeBuildID != "" {
-		return false, s.activeBuildID
+		return false, s.activeBuildID, false
 	}
 	s.activeBuildID = id
-	return true, ""
+	s.setupDone = make(chan struct{})
+	return true, "", false
+}
+
+// endBuildSetup closes the setup window opened by tryAcquireBuildSlot. StartBuild
+// defers it, so it runs once the build is tracked and its goroutine is launched —
+// or once an error path has released the slot without spawning anything. Either
+// way, after this returns the start is no longer invisible to a tracker snapshot.
+func (s *Service) endBuildSetup() {
+	s.buildMu.Lock()
+	defer s.buildMu.Unlock()
+	if s.setupDone != nil {
+		close(s.setupDone)
+		s.setupDone = nil
+	}
+}
+
+// CloseBuildAdmission permanently stops this Service from admitting new builds.
+//
+// Called from Server.Start on a shutdown signal, before the HTTP server begins
+// draining. Draining alone does not close this door: http.Server.Shutdown stops
+// accepting new connections but lets in-flight handlers run to completion, and
+// it gives up on them when its timeout expires without stopping them. A
+// POST /builds that was still decoding its body or resolving its template at
+// that point would otherwise go on to spawn a child after shutdown had already
+// taken its cancellation snapshot — a build nothing would ever signal, left to
+// be killed with the process mid-chroot, holding mounts and loop devices.
+//
+// Closing admission is irreversible: the process is on its way out, so there is
+// no state to restore.
+func (s *Service) CloseBuildAdmission() {
+	s.buildMu.Lock()
+	defer s.buildMu.Unlock()
+	s.admissionClosed = true
+}
+
+// waitForBuildSetup blocks until the start currently mid-setup (if any) has
+// finished registering its build, or until timeout elapses.
+//
+// This closes the remaining gap between claiming the build slot and appearing in
+// the tracker. A start that won the race against CloseBuildAdmission is already
+// committed to spawning a child, so shutdown must let it become visible before
+// snapshotting the tracker — otherwise the very build we failed to shut out is
+// also the one we fail to cancel and fail to wait for. Bounded by timeout
+// because setup resolves templates and touches the filesystem, and a shutdown
+// path must not be able to block indefinitely on it.
+func (s *Service) waitForBuildSetup(timeout time.Duration) {
+	s.buildMu.Lock()
+	pending := s.setupDone
+	s.buildMu.Unlock()
+	if pending == nil {
+		return
+	}
+	select {
+	case <-pending:
+	case <-time.After(timeout):
+	}
 }
 
 // releaseBuildSlot frees the single-build slot. It is a no-op if id is not the
