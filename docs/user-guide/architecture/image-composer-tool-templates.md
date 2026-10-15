@@ -1543,9 +1543,15 @@ with an override, `POST /templates/compose` and `POST /builds` both:
    (`.ict-adv-<uuid>.yml`, gitignored).
 3. Resolve or build that delta instead of the curated file.
 4. Remove the generated delta once it is no longer needed — immediately after
-   a compose response, or once a build finishes (a self-contained copy of the
-   resolved template is archived to the build's directory first, so the
-   per-build template download keeps working after the delta is gone).
+   a compose response, or once the build's real child process has actually
+   exited (a self-contained, merged copy of the resolved template is archived
+   to the build's directory first, so the per-build template download keeps
+   working after the delta is gone). A build the server marks cancelled
+   because it didn't exit within the cancel hard deadline gets its merged copy
+   archived at that point too — so the download always serves the full
+   template, for every outcome — but the delta itself is left in place until
+   the real process is later confirmed to have exited, since a still-running
+   process may still have it open.
 
 The delta must live in the templates directory (or an ancestor of it) because
 of the path containment rule above — a parent must resolve at or below the

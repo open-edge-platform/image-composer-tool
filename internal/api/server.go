@@ -14,11 +14,29 @@
 package api
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"time"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/api/service"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+)
+
+// Shutdown grace windows, used when ctx is cancelled (see Start). Both are
+// best-effort: they bound how long Start takes to return, not what actually
+// happens to the build — a deployment's own termination grace period
+// (Kubernetes terminationGracePeriodSeconds, `docker stop -t`) is what
+// ultimately decides whether a SIGKILL cuts this short. Keep their sum below
+// that grace period so there's time left to exit cleanly after the wait.
+const (
+	// httpShutdownTimeout bounds how long Start waits for in-flight HTTP
+	// requests (including open SSE log streams) to finish after the listener
+	// stops accepting new connections.
+	httpShutdownTimeout = 10 * time.Second
+	// buildDrainTimeout bounds how long Start waits for an in-flight build to
+	// reach a terminal state (and archive its merged template) before giving up.
+	buildDrainTimeout = 20 * time.Second
 )
 
 // Config holds the server's runtime configuration.
@@ -63,8 +81,17 @@ func New(cfg Config) (*Server, error) {
 	return &Server{addr: cfg.Addr, svc: svc}, nil
 }
 
-// Start registers routes and blocks serving HTTP.
-func (s *Server) Start() error {
+// Start registers routes and serves HTTP until ctx is cancelled or the
+// listener fails.
+//
+// On cancellation (ctx is the signal-aware context main.go installs for
+// SIGINT/SIGTERM) it stops accepting new connections, gives in-flight HTTP
+// requests httpShutdownTimeout to finish, then gives any build still running
+// buildDrainTimeout to reach a terminal state — so a build that's mid-teardown
+// when a container orchestrator sends SIGTERM gets a real chance to merge and
+// archive its template (see archiveMergedTemplate/archiveAndCleanupDelta)
+// before the process exits, instead of being torn down with it.
+func (s *Server) Start(ctx context.Context) error {
 	log := logger.Logger()
 	handler := withMiddleware(s.routes())
 
@@ -75,5 +102,27 @@ func (s *Server) Start() error {
 	}
 	service.LogCancelSupport(s.svc.UseSudo())
 	log.Infof("ICT web UI API listening on %s", s.addr)
-	return srv.ListenAndServe()
+
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- srv.ListenAndServe() }()
+
+	select {
+	case err := <-serveErr:
+		return err
+	case <-ctx.Done():
+	}
+
+	log.Infof("shutdown requested — draining connections (up to %s) and any in-flight build (up to %s)",
+		httpShutdownTimeout, buildDrainTimeout)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), httpShutdownTimeout)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Warnf("HTTP server shutdown: %v", err)
+	}
+	s.svc.WaitForInFlightBuilds(buildDrainTimeout)
+
+	if err := <-serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }

@@ -149,6 +149,8 @@
 
 - **Fixed**: changing a repository's `allowPackages` list had no effect until the build cache was deleted. The parsed package-metadata cache was keyed only by the repository index checksum, yet it stores the list already filtered by `allowPackages`, so a cache written under one allow list was reused under another for as long as the repository was unchanged. An allow list added after an unfiltered build was silently ignored. The cache now records the filter it was parsed with and is reused only when it matches; caches written by earlier versions are discarded and re-parsed once.
 
+- **Fixed**: the Web UI's artifact column could serve the raw, unmerged per-build override delta instead of the full, self-contained template — specifically when a cancel request didn't complete within the 5-minute hard deadline, or when the server process received a shutdown signal (e.g. `docker stop`, a Kubernetes pod eviction) while a build was still in flight. Both paths now always produce the fully-resolved, merged template: a stalled cancel archives it immediately without deleting the still-possibly-open delta file on disk, and `serve` now waits (bounded, up to 20s) for an in-flight build to reach a terminal state on shutdown instead of exiting with it mid-merge. See `web/README.md` for the grace-period details.
+
 ## Version 2026.2
 
 **Release Date**: September 9, 2026

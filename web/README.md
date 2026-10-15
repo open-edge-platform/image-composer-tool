@@ -130,6 +130,27 @@ not sudo's default `env_keep` for anything else.
 > &`) or, better, a systemd unit — not as a foreground job in the SSH session you
 > also use to run `kill`/cancel commands.
 
+> **Every build outcome archives a complete, downloadable template — including a
+> stalled cancel.** The artifact column always serves the fully-resolved
+> template (the Advanced-mode selections merged into their curated parent), not
+> the raw per-build override delta, for success, ordinary failure, and
+> cancellation alike. If a build never exits within 5 minutes of a cancel
+> request, the server still archives the merged template at that point (without
+> deleting the delta on disk, in case the unresponsive process is still reading
+> it) so the UI has something usable even though the underlying process may
+> still be winding down in the background.
+>
+> **Container/orchestrator shutdown waits for an in-flight build to finish.**
+> On `SIGTERM` (e.g. `docker stop`, a Kubernetes pod eviction, or a rolling
+> update) `serve` stops accepting new connections, lets in-flight HTTP/SSE
+> requests drain for up to 10s, then gives any build still running up to 20s to
+> reach a terminal state and archive its merged template before the process
+> exits. This is best-effort: it only has as much time as the deployment's own
+> termination grace period allows (`terminationGracePeriodSeconds` in
+> Kubernetes, `docker stop -t`) before a `SIGKILL` cuts it short regardless.
+> Set that grace period comfortably above 30s if you want build archiving to
+> reliably survive a rolling deploy.
+
 ### 3. Build the frontend, embed it, and rebuild the binary
 
 Step 1 built a plain binary for the sudoers path. For the actual server you need

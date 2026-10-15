@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
 )
 
 // --- exit-code classification ---
@@ -609,6 +611,55 @@ func TestConcludeStalledCancelReleasesSlot(t *testing.T) {
 	}
 	if ok, active := s.tryAcquireBuildSlot("next"); !ok {
 		t.Fatalf("slot still held by %q; a wedged cancel must not block new composes", active)
+	}
+}
+
+// A build that never exits must still end up with the merged template archived
+// as its artifact, not the raw unmerged delta it was running against — this is
+// the regression test for the bug where concludeStalledCancel skipped the merge
+// step that every other terminal path performed. The delta file itself must
+// survive this (the real child's fate is unknown, so it isn't safe to delete
+// yet — see TestResolveBuildTemplateKeepsDeltaUntilBuildFinishes); only its
+// merged content, archived to a new file, is what the UI needs.
+func TestConcludeStalledCancelArchivesMergedTemplate(t *testing.T) {
+	s := newTestService(t)
+	curatedPath := filepath.Join(s.cfg.TemplatesDir, "robotics.yml")
+	parent, err := config.LoadTemplate(curatedPath, false)
+	if err != nil {
+		t.Fatalf("LoadTemplate(parent): %v", err)
+	}
+	data, err := buildDelta("robotics.yml", parent.Image, parent.Target, Selection{ImageName: "stalled-cancel-name"}, nil, nil)
+	if err != nil {
+		t.Fatalf("buildDelta: %v", err)
+	}
+	deltaPath, deltaCleanup, err := s.writeDelta(data)
+	if err != nil {
+		t.Fatalf("writeDelta: %v", err)
+	}
+	t.Cleanup(deltaCleanup) // no-op if archiveAndCleanupDelta already removed it
+
+	root := t.TempDir()
+	b := &build{
+		ID: "wedged-delta", RootDir: root, DeltaPath: deltaPath,
+		status: StatusCancelling, cancelRequested: true, pgid: 2 << 30, done: make(chan struct{}),
+	}
+	s.tracker.add(b)
+
+	s.concludeStalledCancel(b)
+
+	archivePath := filepath.Join(root, "template.yml")
+	archived, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatalf("archived template not written: %v", err)
+	}
+	if !strings.Contains(string(archived), "stalled-cancel-name") {
+		t.Errorf("archived template does not reflect the override (got the raw delta, not the merged template):\n%s", archived)
+	}
+	if snap := b.snapshot(); snap.TemplatePath != archivePath {
+		t.Errorf("TemplatePath = %q, want repointed to the archived copy %q", snap.TemplatePath, archivePath)
+	}
+	if _, err := os.Stat(deltaPath); err != nil {
+		t.Fatalf("delta file %q removed while the real child's fate is unknown: err=%v", deltaPath, err)
 	}
 }
 

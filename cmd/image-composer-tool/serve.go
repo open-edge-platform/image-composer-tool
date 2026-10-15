@@ -119,5 +119,5 @@ func executeServe(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	return srv.Start()
+	return srv.Start(cmd.Context())
 }

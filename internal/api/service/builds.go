@@ -607,6 +607,14 @@ func (s *Service) watchCancel(b *build) {
 // devices), the single-build slot is released so composing keeps working, and
 // b.done is closed to wake anything waiting on it.
 //
+// The build's own child process may still be running (that is exactly why the
+// hard deadline fired), so this archives the merged template for display
+// (archiveMergedTemplate) without deleting the delta/base file a still-live
+// process might have open — the matching deletion happens once runBuild's wait
+// path eventually confirms the real exit, whenever that is. If that wait path
+// got there first, archiveMergedTemplate becomes a harmless no-op (the source
+// file is already gone, and TemplatePath already points at its archive).
+//
 // finish is single-shot, so if the child exited between the deadline expiring and
 // this call, the wait path's classification stands and we touch nothing else.
 func (s *Service) concludeStalledCancel(b *build) {
@@ -616,9 +624,36 @@ func (s *Service) concludeStalledCancel(b *build) {
 	b.setResidual(residualCancellation, detail)
 	b.appendLog("ERROR " + detail)
 	logger.Logger().Errorf("build %s: %s", b.ID, detail)
+	b.archiveMergedTemplate()
 	if b.finish(StatusCancelled, discoverArtifacts(b.WorkDir), detail) {
 		s.releaseBuildSlot(b.ID)
 		b.closeDone()
+	}
+}
+
+// WaitForInFlightBuilds blocks until every currently-tracked build has reached
+// a terminal state (and therefore archived its merged template — see
+// archiveMergedTemplate/archiveAndCleanupDelta), or until timeout elapses,
+// whichever comes first.
+//
+// Called from Server.Start on a shutdown signal: a container orchestrator's
+// SIGTERM-then-SIGKILL grace period is the only window in which an in-flight
+// build's own termination handling (ICT's teardown, then our merge-and-archive
+// step) gets to run at all, so this gives it a bounded chance to do so before
+// the process exits. It cannot do anything about a build that outlives
+// timeout — that build is abandoned along with the rest of the process when
+// the caller returns.
+func (s *Service) WaitForInFlightBuilds(timeout time.Duration) {
+	deadline := time.After(timeout)
+	for _, b := range s.tracker.all() {
+		if isTerminal(b.snapshot().Status) {
+			continue
+		}
+		select {
+		case <-b.done:
+		case <-deadline:
+			return
+		}
 	}
 }
 
@@ -1198,8 +1233,13 @@ func (s *Service) runBuild(b *build, name string, cmdArgs []string) {
 // It reports whether it recorded the terminal state. Recording is single-shot:
 // both runBuild's wait path and the cancel watchdog can conclude a build, and
 // whichever gets there first owns the outcome — so the watchdog can't relabel a
-// build that exited cleanly a moment earlier. Delta cleanup is deliberately
-// handled by runBuild only after the child exits (or fails to start).
+// build that exited cleanly a moment earlier. Delta cleanup (removing the
+// generated file) is deliberately handled by runBuild only after the real child
+// exits — see archiveAndCleanupDelta vs archiveMergedTemplate below. A caller
+// that reaches a terminal state before that, like the cancel watchdog, must
+// still give the UI a correct merged-template artifact; it does so by calling
+// archiveMergedTemplate itself before finish, which is safe to do while the
+// real child's fate is still unknown.
 func (b *build) finish(status BuildStatus, arts []Artifact, errMsg string) bool {
 	b.mu.Lock()
 	if isTerminal(b.status) {
@@ -1230,27 +1270,20 @@ func (b *build) finish(status BuildStatus, arts []Artifact, errMsg string) bool 
 	return true
 }
 
-// archiveAndCleanupDelta resolves a delta-backed build's generated extends
-// delta one final time, writes the fully-resolved, redacted result to
-// RootDir/template.yml, and repoints TemplatePath there — so the download
-// endpoint keeps serving a self-contained file after the delta itself is
-// removed from TemplatesDir. On any failure the delta is still removed (the
-// generated file must never be left behind), but TemplatePath is left as-is,
-// which then 404s on download exactly as an already-missing template would.
+// archiveMergedTemplate resolves a delta-backed build's generated extends delta
+// (or materialized base document) into the fully-resolved, redacted template,
+// writes it to RootDir/template.yml, and repoints TemplatePath there — without
+// touching the source file on TemplatesDir.
 //
-// A build composed against a supplied document with no overrides has no delta,
-// only that document. It is archived too: it is removed below just the same, so
-// without an archive TemplatePath would point at a deleted file and the
-// download would 404 for a build that succeeded.
-func (b *build) archiveAndCleanupDelta() {
-	// A materialized base document is generated the same way a delta is, and is
-	// removed whether or not a delta was layered over it.
-	if b.BasePath != "" {
-		defer func() { _ = os.Remove(b.BasePath) }()
-	}
-	if b.DeltaPath != "" {
-		defer func() { _ = os.Remove(b.DeltaPath) }()
-	}
+// This is the subset of archiveAndCleanupDelta that is safe to run even when
+// the build's real child process may still be alive — the merge only reads
+// files, so it can't race a still-running process, but deleting the delta out
+// from under a process that might still have it open could. The cancel
+// watchdog (concludeStalledCancel) uses this directly, for exactly that reason,
+// so the UI gets a correct merged-template artifact immediately even though the
+// wedged process's fate is unknown; archiveAndCleanupDelta below performs the
+// matching deletion once runBuild's wait path confirms the real exit.
+func (b *build) archiveMergedTemplate() {
 	// Resolve whichever generated file the build ran: the delta when one was
 	// layered over the base, the base itself otherwise.
 	source := b.DeltaPath
@@ -1285,6 +1318,33 @@ func (b *build) archiveAndCleanupDelta() {
 			logger.Logger().Warnf("build %s: writing archived template metadata: %v", b.ID, err)
 		}
 	}
+}
+
+// archiveAndCleanupDelta archives the merged template (see archiveMergedTemplate)
+// and then removes the generated delta/base file from TemplatesDir — so the
+// download endpoint keeps serving a self-contained file after the delta itself
+// is gone. On any archive failure the delta is still removed (the generated
+// file must never be left behind), but TemplatePath is left as-is, which then
+// 404s on download exactly as an already-missing template would.
+//
+// A build composed against a supplied document with no overrides has no delta,
+// only that document. It is archived too: it is removed below just the same, so
+// without an archive TemplatePath would point at a deleted file and the
+// download would 404 for a build that succeeded.
+//
+// Called only from runBuild, after the real child process has been reaped by
+// cmd.Wait() (or failed to start) — never from the cancel watchdog, which
+// cannot confirm the child has actually exited; see archiveMergedTemplate.
+func (b *build) archiveAndCleanupDelta() {
+	// A materialized base document is generated the same way a delta is, and is
+	// removed whether or not a delta was layered over it.
+	if b.BasePath != "" {
+		defer func() { _ = os.Remove(b.BasePath) }()
+	}
+	if b.DeltaPath != "" {
+		defer func() { _ = os.Remove(b.DeltaPath) }()
+	}
+	b.archiveMergedTemplate()
 }
 
 // exitCode returns the process exit code carried by a cmd.Wait error, or -1 if
