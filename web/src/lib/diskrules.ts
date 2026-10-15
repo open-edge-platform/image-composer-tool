@@ -51,17 +51,22 @@ export const FS_TYPES = [
 //   - no TiB
 // "0" is special-cased before the regex and means "rest of the disk".
 //
-// A leading "-" is accepted: config.go:499 documents a negative offset as
-// measured back from the end of the disk, and the API's own override check
-// (service/diskoverride.go) accepts "optionally negative" the same way. The
-// curated EdgePack layouts are written this way.
+// A leading "-" is accepted for a non-zero magnitude: imagedisc.go's
+// parseBoundary strips it, runs VerifyFileSize on the remainder, and then
+// rejects a zero result ("end-relative boundary ... must be greater than
+// zero") — config.go:499 documents this as a negative offset measured back
+// from the end of the disk, and the curated EdgePack layouts are written
+// this way.
 export const OFFSET_SUFFIXES = ['KiB', 'MiB', 'GiB', 'K', 'M', 'G', 'KB', 'MB', 'GB'] as const
 
-const OFFSET_RE = new RegExp(`^-?\\d+(${OFFSET_SUFFIXES.join('|')})$`)
+const OFFSET_RE = new RegExp(`^\\d+(${OFFSET_SUFFIXES.join('|')})$`)
 
-// isValidOffset reports whether VerifyFileSize would accept a start/end value.
+// isValidOffset reports whether VerifyFileSize would accept a start/end value,
+// including a non-zero one measured back from the end of the disk ("-20GiB",
+// imagedisc.go parseBoundary).
 export function isValidOffset(value: string): boolean {
-  return value === '0' || OFFSET_RE.test(value)
+  if (value === '0' || OFFSET_RE.test(value)) return true
+  return value.startsWith('-') && OFFSET_RE.test(value.slice(1)) && /[1-9]/.test(value)
 }
 
 // isFromEndOffset reports whether an offset is measured back from the end of
@@ -108,9 +113,9 @@ export function offsetsEqual(left: PartitionOffset, right: PartitionOffset): boo
 // suffix table and same `^(\d+)(.*)$` pattern, transcribed three times on the Go
 // side already (config.go:1405, validate/validate.go:257, both mirroring
 // imagedisc.TranslateSizeStrToBytes) — but without VerifyFileSize's "0" case,
-// since a zero-byte disk is not a thing. A disk size is never negative.
+// since a zero-byte disk is not a thing.
 export function isValidDiskSize(value: string): boolean {
-  return /^\d/.test(value) && OFFSET_RE.test(value)
+  return OFFSET_RE.test(value)
 }
 
 // --- Artifacts ---------------------------------------------------------------

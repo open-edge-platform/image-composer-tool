@@ -71,6 +71,9 @@ export interface ComposeRequest {
   // Logins for template users the template itself leaves without one. Emitted
   // into the delta's systemConfig.users. Omitted means "none supplied".
   credentials?: CredentialInput[]
+  // Accounts to create that the template does not declare. Unlike credentials,
+  // these carry the account's full configuration (groups, sudo, shell, …).
+  users?: NewUserInput[]
   // A complete template to compose against instead of matching the manifest:
   // an imported template, which no combination maps to. With it set the five
   // lookup fields carry no meaning; every override above still applies, which
@@ -92,6 +95,23 @@ export interface CredentialInput {
   password?: string
   // One authorized_keys line, checked server-side with the OpenSSH parser.
   sshAuthorizedKey?: string
+}
+
+// An account to create that the template does not declare. The backend rejects
+// a name the template already has — a login for one of those is a
+// CredentialInput instead, so an existing account's privileges are never
+// changed by accident. Mirrors the template's own user fields, minus the ones
+// a browser cannot supply (host key-file paths, hash algorithm).
+export interface NewUserInput {
+  user: string
+  password?: string
+  sshAuthorizedKey?: string
+  sudo?: boolean
+  groups?: string[]
+  shell?: string
+  home?: string
+  startupScript?: string
+  passwordMaxAge?: number
 }
 
 // One account in the resolved template, and whether it has a login. Every

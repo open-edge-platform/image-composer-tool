@@ -97,6 +97,8 @@ export function ImportTemplateDialog({ open, onCancel, onImport }: ImportTemplat
   useEffect(() => {
     if (!open) return
     const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    // Same focus entry and Tab wrapping as CredentialsDialog: without it the
+    // focus ring stays on the obscured page behind the modal.
     const focusableSelector =
       'a[href], button:not([disabled]), input:not([disabled]):not([type="file"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
     const focusableElements = () =>
@@ -116,7 +118,6 @@ export function ImportTemplateDialog({ open, onCancel, onImport }: ImportTemplat
         dialogRef.current?.focus()
         return
       }
-
       const first = focusable[0]
       const last = focusable[focusable.length - 1]
       const active = document.activeElement
@@ -293,7 +294,11 @@ export function ImportTemplateDialog({ open, onCancel, onImport }: ImportTemplat
           <button
             type="button"
             className="rounded-md bg-[#0071c5] px-4 py-2 font-semibold text-white hover:bg-[#00285a] disabled:cursor-not-allowed disabled:opacity-50"
-            disabled={!parsed || validating || validation?.valid === false}
+            // An affirmative verdict, not merely the absence of a negative one:
+            // a failed validation request leaves `validation` null, which would
+            // otherwise import a document the server never checked and defer
+            // every problem to the build.
+            disabled={!parsed || validating || !validation?.valid}
             onClick={() => parsed && onImport(parsed, validation?.credentials ?? [])}
           >
             {validating ? 'Checking…' : 'Use Template'}

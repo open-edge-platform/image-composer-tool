@@ -3,7 +3,6 @@ import { api } from '../api/client'
 import {
   isActiveStatus,
   type BuildStatus,
-  type ComposeRequest,
   type HistoryItem,
 } from '../api/types'
 import { BuildView } from './BuildView'
@@ -13,9 +12,8 @@ interface BuildImagePageProps {
   // The active (most recently started) build, owned by App. Null until the
   // first compose of the session.
   buildId: string | null
-  // Starts a fresh compose from the given selection (the retried build's own,
-  // read back from the server — see App.onRetry).
-  onRetry: (req?: ComposeRequest) => Promise<void>
+  // Resubmits the named build's own resolved request (see App.onRetry).
+  onRetry: (retriedBuildId: string) => Promise<void>
   retrying: boolean
   // Why the last retry failed (e.g. a 409 while the previous build is still
   // tearing down), or null. Owned by App, which issues the start.

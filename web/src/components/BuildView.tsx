@@ -4,7 +4,6 @@ import type {
   Artifact,
   BuildDetails,
   BuildStatus,
-  ComposeRequest,
   ResidualIssue,
 } from '../api/types'
 import { artifactTypeLabel } from '../api/types'
@@ -12,10 +11,9 @@ import { BuildProgress, PHASE_DONE, PHASE_INITIAL } from './BuildProgress'
 
 interface BuildViewProps {
   buildId: string
-  // Starts a fresh compose from the given selection. This view passes the
-  // retried build's own recorded selection so a retry rebuilds that build's
-  // configuration, independent of what the Basic tab currently has selected.
-  onRetry: (req?: ComposeRequest) => Promise<void>
+  // Resubmits this build's own resolved request (credentials, added users, and
+  // every other override included) via POST /builds/{id}/retry.
+  onRetry: (buildId: string) => Promise<void>
   retrying: boolean
   // Why the last retry failed (owned by App, which issues the start), or null.
   retryError: string | null
@@ -251,20 +249,6 @@ export function BuildView({
     })
   }
 
-  // The selection this build was started from, echoed back by the server in its
-  // summary. Retry submits this rather than the current Basic-tab selection, so
-  // it works after a page refresh (which empties the un-persisted store) and
-  // rebuilds the configuration the user is actually looking at. Undefined when
-  // the build has no summary — an older record, or one whose template failed to
-  // merge — and onRetry then falls back to the store.
-  const retryRequest: ComposeRequest | undefined = details?.summary && {
-    vertical: details.summary.vertical,
-    sku: details.summary.sku,
-    platform: details.summary.platform,
-    os: details.summary.os,
-    imageType: details.summary.imageType,
-  }
-
   // Request cancellation. Optimistically flip to the cancelling transient so the
   // button disables immediately; the terminal state (cancelled/failed) normally
   // arrives over SSE.
@@ -311,7 +295,7 @@ export function BuildView({
           <button
             className="ml-auto rounded border border-[#0071c5] px-3 py-1 text-xs font-medium text-[#0071c5] hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
             disabled={retrying}
-            onClick={() => onRetry(retryRequest)}
+            onClick={() => onRetry(buildId)}
           >
             {retrying ? 'Starting…' : '↺ Retry compose'}
           </button>

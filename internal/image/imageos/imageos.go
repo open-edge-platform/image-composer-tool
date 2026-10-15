@@ -1235,9 +1235,17 @@ func updateImageNetwork(installRoot string, template *config.ImageTemplate) erro
 		return fmt.Errorf("failed to write declarative network config: %w", err)
 	}
 
-	// When netplan is the backend, netplan manages its own renderer —
-	// do not unconditionally enable systemd-networkd alongside it.
-	if template.SystemConfig.Network.Backend == "netplan" {
+	// Only enable systemd-networkd when the template explicitly opts into it
+	// as the network backend. Leaving Backend unset means the template did
+	// not ask ICT to manage networking at all, and the netplan backend
+	// manages its own renderer — in both cases systemd-networkd must not be
+	// unconditionally enabled, since the unit ships as part of the base
+	// systemd package and is almost always present. Enabling it regardless
+	// of backend makes it fight NetworkManager (or networkd's own default
+	// renderer) for the same interfaces, producing a DHCP lease on one or
+	// both managers with broken or duplicate routing and no real
+	// connectivity, even though the interface still shows "connected".
+	if template.SystemConfig.Network.Backend != "systemd-networkd" {
 		return nil
 	}
 
@@ -1384,9 +1392,21 @@ func addImageConfigs(installRoot string, template *config.ImageTemplate) error {
 		// the quoting of a multi-line script; single-quoting installRoot also
 		// guards against whitespace/metacharacters in the path itself.
 		chrootCmd := fmt.Sprintf("chroot %s /bin/bash -c %s", shell.QuoteArg(installRoot), shell.QuoteArg(cmdStr))
-		if _, err := shell.ExecCmd(chrootCmd, true, shell.HostPath, nil); err != nil {
-			log.Errorf("Failed to execute custom configuration cmd %s: %v", configInfo.Cmd, err)
-			return fmt.Errorf("failed to execute custom configuration cmd %s: %w", configInfo.Cmd, err)
+		// Keep the command's output and attach it to the error. ExecCmd's error is
+		// only the exit status ("exit status 4"), which alone cannot distinguish a
+		// DNS failure from a proxy failure from a 404. Discarding it here left
+		// operators with nothing to go on. Mirrors overlay's RunOverlayConfigurations.
+		out, err := shell.ExecCmd(chrootCmd, true, shell.HostPath, nil)
+		if err != nil {
+			log.Errorf("Failed to execute custom configuration cmd %s: %v%s",
+				configInfo.Cmd, err, shell.FormatCommandOutput(out))
+			return fmt.Errorf("failed to execute custom configuration cmd %s: %w%s",
+				configInfo.Cmd, err, shell.FormatCommandOutput(out))
+		}
+		// DEBUG, not INFO: a command can print secrets, and a successful one's
+		// output is only wanted when asked for.
+		if strings.TrimSpace(out) != "" {
+			log.Debugf("Configuration cmd output for %s:%s", configInfo.Cmd, shell.FormatCommandOutput(out))
 		}
 		log.Debugf("Successfully executed custom configuration cmd: %s", configInfo.Cmd)
 	}

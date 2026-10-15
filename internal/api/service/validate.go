@@ -5,6 +5,7 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -87,38 +88,62 @@ func (s *Service) ValidateTemplate(templateYAML string) (*ValidationResult, erro
 	// against the OS defaults, and an invalid document has no accounts worth
 	// reporting — the errors above are what the caller needs to act on first.
 	if res.Valid {
-		res.Credentials = templateCredentialRequirements(templateYAML)
+		creds, rerr := templateCredentialRequirements(templateYAML)
+		if rerr != nil {
+			// The merge is what a build runs, so a document the schema accepts but
+			// the loader cannot resolve — a missing relative sshAuthorizedKeysFiles,
+			// say — would otherwise be imported as valid and fail minutes into a
+			// build instead of in the dialog.
+			res.Valid = false
+			res.Errors = append(res.Errors, ValidationIssue{
+				Message:  "This template cannot be built as supplied: " + rerr.Error() + ".",
+				Severity: validate.SeverityError,
+			})
+			return res, nil
+		}
+		res.Credentials = creds
 	}
 	return res, nil
 }
 
+// errTemplateUnresolvable marks a document the schema accepts but the loader
+// cannot resolve. Deliberately a fixed message rather than the loader's own:
+// a merge failure can quote template values, and the merge reads a template's
+// FDE passphraseFile, so the underlying text is not safe to hand back.
+var errTemplateUnresolvable = errors.New(
+	"it could not be resolved against the OS defaults. A file it references " +
+		"(an `extends` parent or an sshAuthorizedKeysFiles entry, say) is not " +
+		"available here. Resolve it with `image-composer-tool resolve --full` " +
+		"and import the result")
+
 // templateCredentialRequirements resolves a posted template far enough to list
-// its accounts. Best-effort by design: a resolve failure yields nil rather than
-// an error, because this is advisory — the build re-runs the real check and
-// rejects a missing credential there regardless.
+// its accounts, and reports whether it resolves at all.
+//
+// The merge is what a build runs, so a document that fails it cannot build
+// either — the caller turns that into a validation error rather than offering
+// the template for import. An environment failure (no temp directory, say) is
+// not the template's fault and resolves to "no accounts known" instead.
 //
 // The document has to reach the disk because the merge resolves `extends` and
 // key files by path; the temp copy is removed either way.
-func templateCredentialRequirements(templateYAML string) []CredentialRequirement {
+func templateCredentialRequirements(templateYAML string) ([]CredentialRequirement, error) {
 	dir, err := os.MkdirTemp("", "ict-validate-")
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 
 	path := filepath.Join(dir, "template.yml")
 	if werr := os.WriteFile(path, []byte(templateYAML), 0o600); werr != nil {
-		return nil
+		return nil, nil
 	}
 	merged, merr := config.LoadAndMergeTemplate(path)
 	if merr != nil {
-		// Not %v-logged: a resolve failure can be an error wrapping the on-disk
-		// path of a systemConfig.fde.passphraseFile the merge tried to read,
-		// which CodeQL (rightly) flags as sensitive data reaching a log sink.
-		logger.Logger().Debug("validate: resolving the template for its accounts failed")
-		return nil
+		// Logged without its text for the same reason it is not returned.
+		logger.Logger().Debugf("validate: resolving the template for its accounts failed")
+		return nil, errTemplateUnresolvable
 	}
-	return credentialRequirements(merged)
+	return credentialRequirements(merged), nil
 }
 
 // yamlToJSONForValidation converts template YAML to the JSON bytes the schema

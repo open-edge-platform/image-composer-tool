@@ -123,16 +123,15 @@ interface AppState {
   // time. Not a secret, unlike the logins typed for them — those stay in
   // component state so they cannot outlive the build they were typed for.
   importedRequirements: CredentialRequirement[]
+  // The cascade as it stood before an import replaced it, so removing the
+  // import returns to the selections the user had rather than a hybrid of
+  // theirs and the document's target. Null when no import is active.
+  selectionBeforeImport: Selection | null
   // Entries the user removed from the imported template's own package list.
   // Removal cannot be expressed as an override — the extends merge unions
   // package lists — so these are sent as `removePackages` and applied to the
   // document itself before it is composed against.
   removedBasePackages: string[]
-  // The selection in effect just before the first import in a run of imports,
-  // so removing the import (or swapping to another one) can restore what the
-  // user had picked by hand instead of leaving the template-derived selection
-  // in place. Null when there is no import to fall back from.
-  preImportSelection: Selection | null
   setManifest: (m: Manifest) => void
   setField: (key: keyof Selection, value: string) => void
   // User-typed image name (marks it edited so seedImageName stops overwriting it).
@@ -190,13 +189,14 @@ export function selectionFromTemplate(
   t: ImportedTemplate,
 ): Partial<Selection> {
   if (!manifest) return {}
-  // A `dist` match is unambiguous by construction (it's the manifest's own id).
-  // A bare `os` match is not — multiple targets can share one OS family — so
-  // it's only trusted when exactly one target qualifies; otherwise which one
-  // is a guess this function isn't in a position to make.
-  const byDist = manifest.targets.find((x) => x.id === t.summary.dist)
-  const osMatches = manifest.targets.filter((x) => x.os === t.summary.os)
-  const target = byDist ?? (osMatches.length === 1 ? osMatches[0] : undefined)
+  // The family fallback only applies when it names one target. The manifest
+  // ships three with `os: ubuntu` (ubuntu24, ubuntu26-server, ubuntu26), so
+  // taking the first would present a guess as a fact — the very thing the
+  // combination match below refuses to do.
+  const byOS = manifest.targets.filter((x) => x.os === t.summary.os)
+  const target =
+    manifest.targets.find((x) => x.id === t.summary.dist) ??
+    (byOS.length === 1 ? byOS[0] : undefined)
   if (!target) return {}
 
   const out: Partial<Selection> = { os: target.id }
@@ -231,40 +231,40 @@ export const useStore = create<AppState>((set) => ({
   diskSeed: null,
   importedTemplate: null,
   importedRequirements: [],
+  selectionBeforeImport: null,
   removedBasePackages: [],
-  preImportSelection: null,
   setManifest: (m) => set({ manifest: m }),
   // A different template has a different package list, so removals recorded
   // against the previous one would silently apply to names that happen to match.
   setImportedTemplate: (t, requirements) =>
-    set((state) => {
-      if (t) {
-        return {
-          importedTemplate: t,
-          importedRequirements: requirements ?? [],
-          removedBasePackages: [],
-          // A new base template means a new image name and disk layout to seed
-          // from, so the guards that stop a reseed are cleared with it. Without
-          // this the fields keep showing the previous template's values.
-          imageNameEdited: false,
-          diskEdited: false,
-          // Only snapshot on the first import of a run: swapping from one
-          // import to another must not overwrite the pre-import snapshot with
-          // the first import's derived selection.
-          preImportSelection: state.importedTemplate ? state.preImportSelection : state.selection,
-          selection: { ...state.selection, ...selectionFromTemplate(state.manifest, t) },
-        }
-      }
-      return {
-        importedTemplate: null,
-        importedRequirements: [],
-        removedBasePackages: [],
-        imageNameEdited: false,
-        diskEdited: false,
-        selection: state.preImportSelection ?? state.selection,
-        preImportSelection: null,
-      }
-    }),
+    set((state) => ({
+      importedTemplate: t,
+      importedRequirements: t ? (requirements ?? []) : [],
+      removedBasePackages: [],
+      // Packages and repositories are scoped to a target: a package picked for
+      // Debian is still sent with an imported Ubuntu template, where it may not
+      // resolve. Cleared whenever the base changes, in either direction.
+      addedPackages: [],
+      enabledRepos: [],
+      // A new base template means a new image name and disk layout to seed
+      // from, so the guards that stop a reseed are cleared with it. Without
+      // this the fields keep showing the previous template's values.
+      imageNameEdited: false,
+      diskEdited: false,
+      // Importing overwrites the cascade with whatever the document states, so
+      // the selection it replaced is kept and put back when the import is
+      // removed. Otherwise removing one leaves a hybrid of the document's
+      // target and the user's previous use case.
+      ...(t
+        ? {
+            selectionBeforeImport: state.importedTemplate ? state.selectionBeforeImport : state.selection,
+            selection: { ...state.selection, ...selectionFromTemplate(state.manifest, t) },
+          }
+        : {
+            selectionBeforeImport: null,
+            ...(state.selectionBeforeImport ? { selection: state.selectionBeforeImport } : {}),
+          }),
+    })),
   setBasePackageRemoved: (name, removed) =>
     set((state) => ({
       removedBasePackages: removed

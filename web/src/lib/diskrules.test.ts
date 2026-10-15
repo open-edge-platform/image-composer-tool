@@ -24,7 +24,7 @@ import {
   parsePartitionOffset,
 } from './diskrules'
 import { parseDiskFromYaml, setLayoutMode, validateDisk } from './disk'
-import { ALL_FIXTURES, edgepackUnattendedIso, minimalPtlPvRaw, roboticsJazzyIso } from './fixtures'
+import { ALL_FIXTURES, edgepackIso, minimalPtlPvRaw, roboticsJazzyIso } from './fixtures'
 
 describe('isValidOffset — imagedisc.go:329 VerifyFileSize', () => {
   it('accepts every suffix in sizeSuffixesList (imagedisc.go:96)', () => {
@@ -48,12 +48,21 @@ describe('isValidOffset — imagedisc.go:329 VerifyFileSize', () => {
   })
 
   it('accepts every offset the curated from-the-end layout is written with', () => {
-    const model = parseDiskFromYaml(edgepackUnattendedIso)
+    const model = parseDiskFromYaml(edgepackIso)
     if (!model) throw new Error('fixture did not parse')
     for (const p of model.partitions) {
       expect(isValidOffset(p.start), p.start).toBe(true)
       expect(isValidOffset(p.end), p.end).toBe(true)
     }
+  })
+
+  it('accepts a non-zero offset measured back from the end of the disk (parseBoundary)', () => {
+    expect(isValidOffset('-20GiB')).toBe(true)
+    expect(isValidOffset('-4096MiB')).toBe(true)
+    expect(isValidOffset('-0GiB')).toBe(false)
+    expect(isValidOffset('-1.5GiB')).toBe(false)
+    expect(isValidOffset('-')).toBe(false)
+    expect(isValidOffset('--4GiB')).toBe(false)
   })
 
   it('is stricter than it looks — these all fail at build time', () => {

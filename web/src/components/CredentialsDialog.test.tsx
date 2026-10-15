@@ -71,4 +71,28 @@ describe('CredentialsDialog', () => {
 
     expect(screen.getByRole('alert').textContent).toBe('Build could not be started')
   })
+
+  // The account that blocks a build is usually scrolled out of view, so the
+  // reason has to be stated next to the button that is refusing to work.
+  it('names the account and the added user that block composing', () => {
+    render(
+      <CredentialsDialog
+        open
+        requirements={requirements}
+        credentials={[]}
+        onChange={() => {}}
+        newUsers={[{ user: 'tester' }]}
+        onNewUsersChange={() => {}}
+        credentialsReady={false}
+        busy={false}
+        buildInProgress={false}
+        error={null}
+        onCancel={() => {}}
+        onCompose={() => {}}
+      />,
+    )
+
+    expect(screen.getByText(/admin needs a password or an SSH public key/i)).toBeTruthy()
+    expect(screen.getByText(/New user tester: Set a password or add an SSH public key/i)).toBeTruthy()
+  })
 })

@@ -1,12 +1,17 @@
 import { useEffect, useRef } from 'react'
-import type { CredentialInput, CredentialRequirement } from '../api/types'
-import { CredentialsStep } from './CredentialsStep'
+import type { CredentialInput, CredentialRequirement, NewUserInput } from '../api/types'
+import { CredentialsStep, missingCredentials } from './CredentialsStep'
+import { NewUsersSection, newUserIssues } from './NewUsersSection'
 
 interface CredentialsDialogProps {
   open: boolean
   requirements: CredentialRequirement[]
   credentials: CredentialInput[]
   onChange: (credentials: CredentialInput[]) => void
+  // Accounts to create alongside the template's own. Omitting the handler hides
+  // the section entirely, for a caller that only collects logins.
+  newUsers?: NewUserInput[]
+  onNewUsersChange?: (users: NewUserInput[]) => void
   credentialsReady: boolean
   busy: boolean
   buildInProgress: boolean
@@ -20,6 +25,8 @@ export function CredentialsDialog({
   requirements,
   credentials,
   onChange,
+  newUsers,
+  onNewUsersChange,
   credentialsReady,
   busy,
   buildInProgress,
@@ -74,6 +81,16 @@ export function CredentialsDialog({
 
   if (!open) return null
 
+  // Named rather than counted: the account that blocks a build is often
+  // scrolled out of view, so "something is missing" leaves the user hunting
+  // for it.
+  const blockers = [
+    ...missingCredentials(requirements, credentials).map(
+      (user) => `${user} needs a password or an SSH public key.`,
+    ),
+    ...newUserIssues(newUsers ?? [], requirements),
+  ]
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4"
@@ -92,11 +109,11 @@ export function CredentialsDialog({
         <div className="mb-4 flex items-start justify-between gap-4">
           <div>
             <h2 id="credentials-dialog-title" className="text-lg font-semibold text-[#00285a]">
-              {credentialsReady ? 'Credentials' : 'Credentials required'}
+              {credentialsReady ? 'Users and credentials' : 'Credentials required'}
             </h2>
             <p className="mt-1 text-sm text-slate-600">
               {credentialsReady
-                ? 'Review or update credentials for this image.'
+                ? 'Review the logins for this image, and add any users you need.'
                 : 'Set a password or add an SSH public key before composing this image.'}
             </p>
           </div>
@@ -116,12 +133,30 @@ export function CredentialsDialog({
           disabled={busy || buildInProgress}
           showRequiredHeading={false}
         />
+        {onNewUsersChange && (
+          <NewUsersSection
+            requirements={requirements}
+            users={newUsers ?? []}
+            onChange={onNewUsersChange}
+            disabled={busy || buildInProgress}
+          />
+        )}
         {error && (
           <div role="alert" className="mb-3 rounded bg-red-50 p-3 text-sm text-red-700">
             {error}
           </div>
         )}
-        <div className="mt-5 flex justify-end gap-3">
+        {blockers.length > 0 && !busy && (
+          <div className="mb-3 rounded border border-amber-300 bg-amber-50 p-3 text-sm text-[#00285a]">
+            <p className="mb-1 font-semibold">Cannot compose yet:</p>
+            <ul className="list-disc pl-5">
+              {blockers.map((b) => (
+                <li key={b}>{b}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        <div className="mt-5 flex items-center justify-end gap-3">
           <button
             type="button"
             className="rounded-md border border-slate-300 bg-white px-4 py-2 font-semibold text-[#00285a] hover:bg-slate-50"

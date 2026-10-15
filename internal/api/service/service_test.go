@@ -402,7 +402,7 @@ func TestResolveBuildTemplate(t *testing.T) {
 	wd := t.TempDir()
 
 	// compose path -> manifest lookup
-	path, name, err := s.resolveBuildTemplate(&BuildRequest{Compose: &Selection{
+	path, name, _, err := s.resolveBuildTemplate(&BuildRequest{Compose: &Selection{
 		Vertical: "robotics", SKU: "amr", Platform: "wcl", OS: "ubuntu24", ImageType: "iso",
 	}}, wd)
 	if err != nil || name != "robotics.yml" || !strings.HasSuffix(path, "robotics.yml") {
@@ -411,7 +411,7 @@ func TestResolveBuildTemplate(t *testing.T) {
 
 	// yaml path -> writes template.yml into the work dir, but displays the
 	// document's own image.name so the build doesn't read as "template.yml".
-	path, name, err = s.resolveBuildTemplate(&BuildRequest{YAML: "image:\n  name: x\n"}, wd)
+	path, name, _, err = s.resolveBuildTemplate(&BuildRequest{YAML: "image:\n  name: x\n"}, wd)
 	if err != nil || name != "x.yml" {
 		t.Fatalf("yaml resolve = %q %q %v", path, name, err)
 	}
@@ -423,12 +423,12 @@ func TestResolveBuildTemplate(t *testing.T) {
 	}
 
 	// neither -> error
-	if _, _, err := s.resolveBuildTemplate(&BuildRequest{}, wd); err == nil {
+	if _, _, _, err := s.resolveBuildTemplate(&BuildRequest{}, wd); err == nil {
 		t.Fatal("expected error when neither compose nor yaml provided")
 	}
 	// both -> error. The contract says exactly one, so an ambiguous request is
 	// rejected rather than silently resolved in favour of one of the two.
-	_, _, err = s.resolveBuildTemplate(&BuildRequest{
+	_, _, _, err = s.resolveBuildTemplate(&BuildRequest{
 		YAML:    "image:\n  name: x\n",
 		Compose: &Selection{Vertical: "robotics", SKU: "amr", Platform: "wcl", OS: "ubuntu24", ImageType: "iso"},
 	}, wd)
@@ -439,7 +439,7 @@ func TestResolveBuildTemplate(t *testing.T) {
 		t.Errorf("both-fields err = %v, want errBadBuildRequest (400)", err)
 	}
 	// no match -> error
-	if _, _, err := s.resolveBuildTemplate(&BuildRequest{Compose: &Selection{
+	if _, _, _, err := s.resolveBuildTemplate(&BuildRequest{Compose: &Selection{
 		Vertical: "robotics", Platform: "ptl", OS: "ubuntu24", ImageType: "iso",
 	}}, wd); err == nil {
 		t.Fatal("expected error for unmatched combination")

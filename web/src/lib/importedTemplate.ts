@@ -105,13 +105,16 @@ export function parseImportedTemplate(fileName: string, text: string): ImportedT
   }
 
   const t = doc as RawTemplate
-  // A document declaring `extends` depends on a relative parent file this
-  // import flow has no access to — even one that also carries its own image/
-  // target/systemConfig keys would build against the wrong (missing) parent
-  // if imported standalone.
-  if (t.extends != null) {
+  // A document that extends another is rejected rather than imported: only this
+  // one file is uploaded, and the server writes it into a per-build directory
+  // where the relative parent does not exist. The schema would call it valid,
+  // so "Use Template" would succeed and the build would then fail on a parent
+  // it cannot resolve.
+  if (t.extends != null && String(t.extends).trim() !== '') {
     throw new TemplateParseError(
-      'This template extends another file and cannot be imported on its own. Import a complete, self-contained template instead.',
+      'This template extends another one, which is not uploaded with it. ' +
+        'Import a self-contained template, or resolve it first with ' +
+        '`image-composer-tool resolve --full`.',
     )
   }
   if (!t.image && !t.target && !t.systemConfig) {
