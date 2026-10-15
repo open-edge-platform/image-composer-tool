@@ -1544,14 +1544,15 @@ with an override, `POST /templates/compose` and `POST /builds` both:
 3. Resolve or build that delta instead of the curated file.
 4. Remove the generated delta once it is no longer needed — immediately after
    a compose response, or once the build's real child process has actually
-   exited (a self-contained, merged copy of the resolved template is archived
-   to the build's directory first, so the per-build template download keeps
-   working after the delta is gone). A build the server marks cancelled
-   because it didn't exit within the cancel hard deadline gets its merged copy
-   archived at that point too — so the download always serves the full
-   template, for every outcome — but the delta itself is left in place until
-   the real process is later confirmed to have exited, since a still-running
-   process may still have it open.
+   exited. A self-contained, merged copy of the resolved template is archived
+   to the build's directory *before the build is even started* — not just at
+   the end — so the per-build template download always serves the full
+   template from the moment the build is accepted, through every stage of
+   composing, and for every outcome (success, failure, cancellation, or a
+   cancel that misses its hard deadline). The delta itself is left on disk
+   until the real process is later confirmed to have exited, since a
+   still-running process may still have it open; only the archived copy, not
+   the live delta, backs the download in the meantime.
 
 The delta must live in the templates directory (or an ancestor of it) because
 of the path containment rule above — a parent must resolve at or below the

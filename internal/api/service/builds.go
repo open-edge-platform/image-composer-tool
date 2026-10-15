@@ -417,6 +417,15 @@ func (s *Service) StartBuild(req BuildRequest) (*BuildAccepted, error) {
 		retry:        retry,
 		done:         make(chan struct{}),
 	}
+
+	// Repoint TemplatePath at the merged, redacted archive before the build is
+	// ever observable (tracker.add/runBuild haven't run yet, so nothing else
+	// holds a reference to b): a client polling or downloading the artifact
+	// while the build is still running must see the full merged template, not
+	// the raw delta. archiveMergedTemplate no-ops when there's no delta/base
+	// override, and finish() re-archives from the same source at the end
+	// regardless, so this is safe for every build shape and outcome.
+	b.archiveMergedTemplate()
 	s.tracker.add(b)
 
 	// Persist the initial record so the build shows in history immediately (and
@@ -1278,11 +1287,13 @@ func (b *build) finish(status BuildStatus, arts []Artifact, errMsg string) bool 
 // This is the subset of archiveAndCleanupDelta that is safe to run even when
 // the build's real child process may still be alive — the merge only reads
 // files, so it can't race a still-running process, but deleting the delta out
-// from under a process that might still have it open could. The cancel
-// watchdog (concludeStalledCancel) uses this directly, for exactly that reason,
-// so the UI gets a correct merged-template artifact immediately even though the
-// wedged process's fate is unknown; archiveAndCleanupDelta below performs the
-// matching deletion once runBuild's wait path confirms the real exit.
+// from under a process that might still have it open could. StartBuild calls
+// this before the build even starts running, so the artifact is already
+// correct for the entire "composing" duration, not just once the build
+// concludes; the cancel watchdog (concludeStalledCancel) uses it again for the
+// same reason, so the UI keeps a correct merged-template artifact even though
+// a wedged process's fate is unknown. archiveAndCleanupDelta below performs
+// the matching deletion once runBuild's wait path confirms the real exit.
 func (b *build) archiveMergedTemplate() {
 	// Resolve whichever generated file the build ran: the delta when one was
 	// layered over the base, the base itself otherwise.

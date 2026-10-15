@@ -343,6 +343,53 @@ func TestArchiveAndCleanupDeltaArchivesAndRemovesDelta(t *testing.T) {
 	}
 }
 
+// TestStartBuildArchivesMergedTemplateImmediately is the regression guard for
+// an artifact-column bug: a build that is still composing (no terminal status
+// yet) showed the raw `.ict-adv-*.yml` delta stub instead of the merged
+// template, because TemplatePath pointed at the delta from StartBuild until
+// finish() archived it. StartBuild must repoint TemplatePath at the merged,
+// redacted archive before returning, so the artifact is correct for the
+// entire build — including while it's still running.
+func TestStartBuildArchivesMergedTemplateImmediately(t *testing.T) {
+	s := newTestService(t)
+
+	acc, err := s.StartBuild(BuildRequest{Compose: &Selection{
+		Vertical: "robotics", SKU: "amr", Platform: "wcl", OS: "ubuntu24", ImageType: "iso",
+		ImageName: "custom-robotics-image",
+	}})
+	if err != nil {
+		t.Fatalf("StartBuild: %v", err)
+	}
+
+	b, ok := s.getBuild(acc.BuildID)
+	if !ok {
+		t.Fatalf("build %s not tracked", acc.BuildID)
+	}
+	snap := b.snapshot()
+
+	archivePath := filepath.Join(b.RootDir, "template.yml")
+	if snap.TemplatePath != archivePath {
+		t.Errorf("TemplatePath = %q immediately after StartBuild, want already repointed to the merged archive %q",
+			snap.TemplatePath, archivePath)
+	}
+	archived, err := os.ReadFile(snap.TemplatePath)
+	if err != nil {
+		t.Fatalf("reading archived template: %v", err)
+	}
+	if !strings.Contains(string(archived), "custom-robotics-image") {
+		t.Errorf("archived template does not reflect the override:\n%s", archived)
+	}
+
+	// The delta itself must still be on disk, untouched, since the real child
+	// process hasn't confirmed exit yet — only finish() is allowed to remove it.
+	if _, err := os.Stat(b.DeltaPath); err != nil {
+		t.Errorf("delta file missing before build finished: %v", err)
+	}
+
+	<-b.done
+	s.releaseBuildSlot(acc.BuildID)
+}
+
 // assertNoLeakedDeltas fails the test if any generated delta file remains in
 // dir — the invariant every override path must uphold regardless of success
 // or failure.

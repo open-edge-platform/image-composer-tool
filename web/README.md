@@ -130,15 +130,16 @@ not sudo's default `env_keep` for anything else.
 > &`) or, better, a systemd unit — not as a foreground job in the SSH session you
 > also use to run `kill`/cancel commands.
 
-> **Every build outcome archives a complete, downloadable template — including a
-> stalled cancel.** The artifact column always serves the fully-resolved
-> template (the Advanced-mode selections merged into their curated parent), not
-> the raw per-build override delta, for success, ordinary failure, and
-> cancellation alike. If a build never exits within 5 minutes of a cancel
-> request, the server still archives the merged template at that point (without
-> deleting the delta on disk, in case the unresponsive process is still reading
-> it) so the UI has something usable even though the underlying process may
-> still be winding down in the background.
+> **The artifact column always serves the complete, merged template — from the
+> moment a build starts, through every outcome.** The server archives the
+> fully-resolved template (the Advanced-mode selections merged into their
+> curated parent) before the build even begins running, so the download never
+> serves the raw per-build override delta — not while composing, and not for
+> success, ordinary failure, cancellation, or a stalled cancel. If a build never
+> exits within 5 minutes of a cancel request, the server re-archives at that
+> point too (without deleting the delta on disk, in case the unresponsive
+> process is still reading it) so the UI still has something usable even though
+> the underlying process may still be winding down in the background.
 >
 > **Container/orchestrator shutdown waits for an in-flight build to finish.**
 > On `SIGTERM` (e.g. `docker stop`, a Kubernetes pod eviction, or a rolling
