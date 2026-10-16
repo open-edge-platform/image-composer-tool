@@ -130,6 +130,46 @@ not sudo's default `env_keep` for anything else.
 > &`) or, better, a systemd unit — not as a foreground job in the SSH session you
 > also use to run `kill`/cancel commands.
 
+> **The artifact column always serves the complete, merged template — from the
+> moment a build starts, through every outcome.** The server archives the
+> fully-resolved template (the Advanced-mode selections merged into their
+> curated parent) before the build even begins running, so the download never
+> serves the raw per-build override delta — not while composing, and not for
+> success, ordinary failure, cancellation, or a stalled cancel. If a build never
+> exits within 5 minutes of a cancel request, the server re-archives at that
+> point too (without deleting the delta on disk, in case the unresponsive
+> process is still reading it) so the UI still has something usable even though
+> the underlying process may still be winding down in the background.
+>
+> **Container/orchestrator shutdown cancels an in-flight build and waits for its
+> teardown.** On `SIGTERM` (e.g. `docker stop`, a Kubernetes pod eviction, or a
+> rolling update) `serve` stops admitting new builds, stops accepting new
+> connections, lets in-flight HTTP/SSE requests drain for up to 10s, then
+> **cancels any build still running** and waits up to 20s for it to reach a
+> terminal state and archive its merged template before the process exits.
+>
+> New builds are refused as soon as shutdown begins — a compose submitted from
+> this point on gets `503 SERVER_SHUTTING_DOWN` rather than being started on a
+> process that is about to exit and could not tear it down. Point the client at
+> the replacement instance and retry there.
+>
+> The cancel is the point: a real compose takes minutes, so it would never
+> finish inside that window, and the build child — which runs in its own process
+> group and knows nothing about the server's shutdown — would otherwise keep
+> working until the orchestrator's `SIGKILL` cut it down mid-chroot, leaving
+> **mounted filesystems and attached loop devices behind on the host**.
+> Cancelling spends the window on ICT's own teardown instead. A build that is
+> still tearing down when the window closes is recorded as `cancelling`, the
+> same way a build orphaned by a restart is — and that record, including any
+> reason the cancel signal failed, is written to disk before the process exits,
+> so it survives into the next instance's compose history.
+>
+> This is best-effort: it only has as much time as the deployment's own
+> termination grace period allows (`terminationGracePeriodSeconds` in
+> Kubernetes, `docker stop -t`) before a `SIGKILL` cuts it short regardless.
+> Set that grace period comfortably above 35s if you want teardown and archiving
+> to reliably survive a rolling deploy.
+
 ### 3. Build the frontend, embed it, and rebuild the binary
 
 Step 1 built a plain binary for the sudoers path. For the actual server you need

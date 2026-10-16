@@ -485,8 +485,29 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "409":
+          description: |
+            A build is already in progress (`BUILD_IN_PROGRESS`). Only one
+            compose runs at a time, and the slot stays held until the previous
+            build's process has fully exited, so its mounts and loop devices
+            cannot still be tearing down when the next one starts.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "500":
           description: Server error creating the build workspace or template
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: |
+            The server is shutting down and is no longer admitting builds
+            (`SERVER_SHUTTING_DOWN`). Admission closes before the HTTP server
+            drains, so a compose accepted here could not be signalled to tear
+            down before the process exits. Retry against the replacement
+            instance.
           content:
             application/json:
               schema:

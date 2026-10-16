@@ -9,7 +9,10 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
+
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 )
 
 // buildMeta is the persisted record written to <build-root>/meta.json. It lets
@@ -50,7 +53,24 @@ func metaPath(rootDir string) string {
 // writeMeta persists the build's current state to <root>/meta.json. Best-effort:
 // failures are returned for logging but never block a build. A build with no
 // RootDir has nowhere to persist, so this is a no-op in that case.
+//
+// Serialized with every other persist for this build (see persistMu) so
+// concurrent writers cannot interleave or land out of order.
 func (b *build) writeMeta() error {
+	b.persistMu.Lock()
+	defer b.persistMu.Unlock()
+	return b.writeMetaLocked()
+}
+
+// writeMetaLocked is writeMeta's body, for callers already holding persistMu.
+//
+// The record is snapshotted here rather than by the caller, under that same
+// lock, which is what keeps a late writer from publishing a stale record: a
+// persist that blocks while another completes re-reads the build on the way
+// through, so it can only ever write state at least as current as the write it
+// queued behind. That is what stops a shutdown snapshot from overwriting the
+// terminal record finish() just wrote.
+func (b *build) writeMetaLocked() error {
 	if b.RootDir == "" {
 		return nil
 	}
@@ -73,7 +93,45 @@ func (b *build) writeMeta() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(metaPath(b.RootDir), data, 0o600)
+	// Published atomically: the history endpoints read meta.json without
+	// coordinating with these writes, and an in-place rewrite would expose a
+	// truncated file as a corrupt record.
+	return writeFileAtomic(metaPath(b.RootDir), data, 0o600)
+}
+
+// writeLogLocked persists the build's buffered log lines to <root>/compose.log
+// and records the path on the build. Callers must hold persistMu.
+func (b *build) writeLogLocked() {
+	if b.RootDir == "" {
+		return
+	}
+	logPath := filepath.Join(b.RootDir, "compose.log")
+	content := strings.Join(b.snapshotLogs(), "\n")
+	if err := writeFileAtomic(logPath, []byte(content), 0o600); err != nil {
+		logger.Logger().Warnf("build %s: writing log file: %v", b.ID, err)
+		return
+	}
+	b.mu.Lock()
+	b.LogFile = logPath
+	b.mu.Unlock()
+}
+
+// persist writes the build's log buffer and metadata to disk as one serialized
+// unit, without changing its status.
+//
+// Used both by finish() to publish the final record and by the shutdown cancel
+// path to save diagnostics for a build that will never reach finish() — a build
+// the process is about to abandon still has a recorded cancellation and the
+// reason it failed, and both belong on disk before we exit. Because every
+// persist goes through the same lock and re-snapshots inside it, a shutdown
+// persist racing a normal completion cannot regress the record.
+func (b *build) persist() {
+	b.persistMu.Lock()
+	defer b.persistMu.Unlock()
+	b.writeLogLocked()
+	if err := b.writeMetaLocked(); err != nil {
+		logger.Logger().Warnf("build %s: writing meta: %v", b.ID, err)
+	}
 }
 
 // buildFromMeta reconstructs an in-memory build from a persisted meta record so

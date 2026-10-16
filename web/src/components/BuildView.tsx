@@ -125,12 +125,10 @@ export function BuildView({
       setLogs((prev) => [...prev, ...batch])
     }
 
-    // Re-read the build's details on every terminal outcome. It is what makes the
-    // log-file link appear, but it also matters for the template row: an
-    // Advanced-mode build starts out pointing at the generated `extends` delta,
-    // and the server archives that delta and deletes it when the build concludes
-    // — on failure and cancellation as much as on success. Without a refresh the
-    // row would keep offering the pre-finish path, which no longer exists.
+    // Re-read the build's details on every terminal outcome. The template row
+    // is already correct from the initial fetch — the server archives the
+    // merged template before StartBuild even returns — but this refresh is
+    // still what makes the log-file link appear once the build concludes.
     const refreshDetails = () => {
       api.buildDetails(buildId).then(setDetails).catch(() => {})
     }
