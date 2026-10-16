@@ -135,6 +135,17 @@ func TestEmbeddedEdgePackReferencesAreReal(t *testing.T) {
 	if _, ok := known[spec.Repo]; !ok {
 		t.Errorf("edge pack names repo %q, which data/package-repos.yaml does not define", spec.Repo)
 	}
+	for _, o := range spec.RepoOverrides {
+		if _, ok := known[o.ID]; !ok {
+			t.Errorf("edge pack repoOverrides names repo %q, which data/package-repos.yaml does not define", o.ID)
+		}
+		for _, osID := range o.OS {
+			if !m.knowsTargetOS(osID) {
+				t.Errorf("edge pack repoOverrides %q restricts to target %q, which the manifest does not offer",
+					o.ID, osID)
+			}
+		}
+	}
 	for _, d := range spec.Domains {
 		for _, osID := range d.OS {
 			if !m.knowsTargetOS(osID) {
@@ -163,10 +174,11 @@ func TestEmbeddedEdgePackReferencesAreReal(t *testing.T) {
 }
 
 // The same drift guard for the base runtimes' prerequisites, which need their
-// own reach test: a runtime has no OS list, so its reach is the pack
-// repository's. Wherever the pack is offered, every repository its runtimes
-// require must be offered too — miss that and the pack reports itself available
-// on a target where every runtime, and so every domain beneath them, is locked.
+// own reach test: a runtime has no OS list of its own, so its reach on a given
+// target is whatever repo the pack resolves to there. Wherever the pack is
+// offered, every repository its runtimes require there must be offered too —
+// miss that and the pack reports itself available on a target where every
+// runtime, and so every domain beneath them, is locked.
 func TestEmbeddedEdgePackRuntimeReposAreReal(t *testing.T) {
 	spec, err := loadEdgePack("")
 	if err != nil {
@@ -185,22 +197,25 @@ func TestEmbeddedEdgePackRuntimeReposAreReal(t *testing.T) {
 	for _, r := range repos {
 		known[r.ID] = r
 	}
-	// A pack repo the catalog does not define is reported by the guard above;
-	// here it would only produce a second copy of the same failure.
-	packRepo, ok := known[spec.Repo]
-	if !ok {
-		t.Skipf("edge pack names repo %q, which data/package-repos.yaml does not define", spec.Repo)
-	}
-	for _, rt := range spec.BaseRuntimes {
-		for _, id := range rt.RequiresRepos {
-			repo, found := known[id]
-			if !found {
-				t.Errorf("base runtime %q requires repo %q, which data/package-repos.yaml does not define",
-					rt.ID, id)
-				continue
-			}
-			for _, tgt := range m.Targets {
-				if packRepo.appliesTo(tgt.ID) && !repo.appliesTo(tgt.ID) {
+	for _, tgt := range m.Targets {
+		// A pack repo the catalog does not define is reported by the guard
+		// above; here it would only produce a second copy of the same failure.
+		packRepo, ok := known[spec.repoFor(tgt.ID)]
+		if !ok {
+			continue
+		}
+		if !packRepo.appliesTo(tgt.ID) {
+			continue
+		}
+		for _, rt := range spec.BaseRuntimes {
+			for _, id := range rt.requiresReposFor(tgt.ID) {
+				repo, found := known[id]
+				if !found {
+					t.Errorf("base runtime %q requires repo %q, which data/package-repos.yaml does not define",
+						rt.ID, id)
+					continue
+				}
+				if !repo.appliesTo(tgt.ID) {
 					t.Errorf("base runtime %q requires repo %q, which is not offered for %q where the pack is",
 						rt.ID, id, tgt.ID)
 				}
@@ -443,7 +458,8 @@ pack:
     - id: standard
       displayName: Standard
       package: base-standard
-      requiresRepos: [prereq-repo]
+      requiresRepos:
+        - id: prereq-repo
     - id: plain
       displayName: Plain
       package: base-plain
@@ -516,7 +532,8 @@ pack:
     - id: realtime
       displayName: Real-time
       package: base-realtime
-      requiresRepos: [prereq-repo]
+      requiresRepos:
+        - id: prereq-repo
       available: false
       unavailableReason: not shipped yet
   domains:
@@ -539,6 +556,92 @@ pack:
 	if strings.Contains(rt.UnavailableReason, "Prereq Repo") {
 		t.Errorf("reason %q blames a repository for a runtime that does not exist yet",
 			rt.UnavailableReason)
+	}
+}
+
+// A pack published from a different repository on one target, whose standard
+// runtime needs a prerequisite only on the other — the shape the real catalog
+// has for ubuntu24 (edgepack + intel-graphics) vs. ubuntu26 (edgepack-ubuntu26
+// alone).
+const testPackWithRepoOverride = `
+pack:
+  id: edge-pack
+  displayName: Edge Pack
+  repo: test-repo
+  repoOverrides:
+    - id: override-repo
+      os: [ubuntu26-server]
+  baseRuntimes:
+    - id: standard
+      displayName: Standard
+      package: base-standard
+      requiresRepos:
+        - id: prereq-repo
+          os: [ubuntu24]
+  domains:
+    - id: media
+      displayName: Media
+      packages: [media-ffmpeg]
+`
+
+const testOverrideRepos = `
+repos:
+  - id: test-repo
+    displayName: Test Repo
+    url: https://example.com/repo
+    enabledByDefault: false
+    os: [ubuntu24]
+  - id: override-repo
+    displayName: Override Repo
+    url: https://example.com/override
+    enabledByDefault: false
+    os: [ubuntu26-server]
+  - id: prereq-repo
+    displayName: Prereq Repo
+    url: https://example.com/prereq
+    enabledByDefault: false
+    os: [ubuntu24]
+`
+
+// On the override target, the pack resolves to the override repo and the
+// standard runtime is available without the base repo's prerequisite — it
+// does not even need prereq-repo to be offered there.
+func TestEdgePackRepoOverride(t *testing.T) {
+	svc := edgePackService(t, testPackWithRepoOverride, testOverrideRepos, "ubuntu24", "ubuntu26-server")
+
+	cases := []struct {
+		osID     string
+		wantRepo string
+		needs    []string
+	}{
+		{osID: "ubuntu24", wantRepo: "test-repo", needs: []string{"prereq-repo"}},
+		{osID: "ubuntu26-server", wantRepo: "override-repo", needs: nil},
+	}
+	for _, c := range cases {
+		t.Run(c.osID, func(t *testing.T) {
+			pack, err := svc.EdgePack(context.Background(), c.osID)
+			if err != nil {
+				t.Fatalf("EdgePack: %v", err)
+			}
+			if pack.Repo != c.wantRepo {
+				t.Errorf("repo = %q, want %q", pack.Repo, c.wantRepo)
+			}
+			if !pack.RepoAvailable {
+				t.Errorf("pack reported unavailable on %q, where its resolved repo is offered", c.osID)
+			}
+			std := pack.BaseRuntimes[0]
+			if !std.Available {
+				t.Errorf("standard runtime unavailable on %q: %s", c.osID, std.UnavailableReason)
+			}
+			if len(std.RequiresRepos) != len(c.needs) {
+				t.Errorf("requiresRepos = %v, want %v", std.RequiresRepos, c.needs)
+			}
+			for i, want := range c.needs {
+				if std.RequiresRepos[i] != want {
+					t.Errorf("requiresRepos[%d] = %q, want %q", i, std.RequiresRepos[i], want)
+				}
+			}
+		})
 	}
 }
 
@@ -691,7 +794,7 @@ func TestLoadEdgePackRejectsInvalid(t *testing.T) {
 		{
 			name: "empty runtime requiresRepos entry",
 			body: "pack:\n  id: p\n  displayName: X\n  repo: r\n" +
-				"  baseRuntimes:\n    - {id: s, displayName: S, package: pkg, requiresRepos: [\"\"]}\n" +
+				"  baseRuntimes:\n    - {id: s, displayName: S, package: pkg, requiresRepos: [{id: \"\"}]}\n" +
 				"  domains:\n    - {id: d, displayName: D, packages: [a]}\n",
 			want: "requiresRepos 0 is empty",
 		},
