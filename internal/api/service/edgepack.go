@@ -35,23 +35,59 @@ type edgePackCatalog struct {
 }
 
 type edgePackSpec struct {
-	ID           string                `json:"id"`
-	DisplayName  string                `json:"displayName"`
-	Description  string                `json:"description"`
-	Repo         string                `json:"repo"`
-	BaseRuntimes []edgePackRuntimeSpec `json:"baseRuntimes"`
-	Domains      []edgePackDomainSpec  `json:"domains"`
+	ID          string `json:"id"`
+	DisplayName string `json:"displayName"`
+	Description string `json:"description"`
+	Repo        string `json:"repo"`
+	// RepoOverrides resolves the pack to a different repo id on specific
+	// targets — see the file header comment for why this is a distinct repo id
+	// rather than an extra `os` on `repo`.
+	RepoOverrides []edgePackRepoOverride `json:"repoOverrides,omitempty"`
+	BaseRuntimes  []edgePackRuntimeSpec  `json:"baseRuntimes"`
+	Domains       []edgePackDomainSpec   `json:"domains"`
+}
+
+// edgePackRepoOverride names a repo id to use instead of the pack's own `repo`
+// on a specific set of targets.
+type edgePackRepoOverride struct {
+	ID string   `json:"id"`
+	OS []string `json:"os"`
+}
+
+// appliesTo reports whether the override names osID. Unlike
+// edgePackDomainSpec.appliesTo, an empty OS list never matches — an override
+// with no targets could never differ from just setting `repo` itself.
+func (o edgePackRepoOverride) appliesTo(osID string) bool {
+	for _, id := range o.OS {
+		if id == osID {
+			return true
+		}
+	}
+	return false
+}
+
+// repoFor resolves the repo id the pack reads from for osID: the first
+// override that names it, or the pack's own `repo` when none does.
+func (p edgePackSpec) repoFor(osID string) string {
+	for _, o := range p.RepoOverrides {
+		if o.appliesTo(osID) {
+			return o.ID
+		}
+	}
+	return p.Repo
 }
 
 type edgePackRuntimeSpec struct {
 	ID          string `json:"id"`
 	DisplayName string `json:"displayName"`
 	Package     string `json:"package"`
-	// RequiresRepos names repo ids this runtime needs in addition to the pack's
-	// own, for the same reason the domain field of the same name exists: the
-	// runtime metapackage pulls in profiles whose dependencies are published
-	// somewhere the pack repository does not carry.
-	RequiresRepos []string `json:"requiresRepos,omitempty"`
+	// RequiresRepos names repo ids this runtime needs in addition to the
+	// resolved pack repo, for the same reason the domain field of the same name
+	// exists: the runtime metapackage pulls in profiles whose dependencies are
+	// published somewhere the pack repository does not carry. Each requirement
+	// can itself be OS-scoped, unlike a domain's, because a runtime has no `os`
+	// of its own to narrow it within.
+	RequiresRepos []edgePackRepoRequirement `json:"requiresRepos,omitempty"`
 	// Available is a pointer so an omitted key means "available" rather than
 	// the zero value's "unavailable" — the common case must not have to be
 	// spelled out on every entry.
@@ -59,9 +95,45 @@ type edgePackRuntimeSpec struct {
 	UnavailableReason string `json:"unavailableReason,omitempty"`
 }
 
+// edgePackRepoRequirement names a repo id a runtime needs, optionally scoped to
+// specific targets.
+type edgePackRepoRequirement struct {
+	ID string `json:"id"`
+	// OS is the target ids this requirement applies to. Omitted or empty means
+	// every target the runtime reaches — most requirements are platform-wide,
+	// so this must not have to be spelled out on every entry.
+	OS []string `json:"os,omitempty"`
+}
+
+// appliesTo mirrors edgePackDomainSpec.appliesTo: an empty OS list means every
+// target, since most requirements are not OS-specific.
+func (req edgePackRepoRequirement) appliesTo(osID string) bool {
+	if osID == "" || len(req.OS) == 0 {
+		return true
+	}
+	for _, id := range req.OS {
+		if id == osID {
+			return true
+		}
+	}
+	return false
+}
+
 // isAvailable reports the runtime's availability, treating an omitted key as
 // available. See Available's comment for why it is a pointer.
 func (r edgePackRuntimeSpec) isAvailable() bool { return r.Available == nil || *r.Available }
+
+// requiresReposFor resolves the repo ids this runtime needs for osID, dropping
+// any requirement scoped away from it.
+func (r edgePackRuntimeSpec) requiresReposFor(osID string) []string {
+	var out []string
+	for _, req := range r.RequiresRepos {
+		if req.appliesTo(osID) {
+			out = append(out, req.ID)
+		}
+	}
+	return out
+}
 
 type edgePackDomainSpec struct {
 	ID          string   `json:"id"`
@@ -182,11 +254,12 @@ func (s *Service) EdgePack(ctx context.Context, osID string) (*EdgePack, error) 
 			fmt.Sprintf("unknown target os %q", osID))
 	}
 	spec := s.edgePack
+	repoID := spec.repoFor(osID)
 	// The whole offered set, not just the pack's own repo: a domain can require
 	// repositories beyond it, and whether those are offered here decides
 	// whether the domain can be selected at all.
 	offered := s.PackageRepos(osID)
-	repos := filterReposByID(offered, []string{spec.Repo})
+	repos := filterReposByID(offered, []string{repoID})
 	offeredIDs := repoIDSet(offered)
 	meta, pending := s.edgePackMetadata(ctx, osID, repos)
 
@@ -194,19 +267,20 @@ func (s *Service) EdgePack(ctx context.Context, osID string) (*EdgePack, error) 
 		ID:              spec.ID,
 		DisplayName:     spec.DisplayName,
 		Description:     spec.Description,
-		Repo:            spec.Repo,
+		Repo:            repoID,
 		RepoAvailable:   len(repos) > 0,
 		VersionsPending: pending,
 	}
 	for _, r := range spec.BaseRuntimes {
-		available, reason := s.runtimeAvailability(r, osID, offeredIDs)
+		needed := r.requiresReposFor(osID)
+		available, reason := s.runtimeAvailability(r, osID, needed, offeredIDs)
 		out.BaseRuntimes = append(out.BaseRuntimes, EdgePackBaseRuntime{
 			ID:                r.ID,
 			DisplayName:       r.DisplayName,
 			Package:           meta.packageFor(r.Package),
 			Available:         available,
 			UnavailableReason: reason,
-			RequiresRepos:     r.RequiresRepos,
+			RequiresRepos:     needed,
 		})
 	}
 	for _, d := range spec.Domains {
@@ -250,16 +324,20 @@ func (s *Service) domainAvailability(d edgePackDomainSpec, osID string, offered 
 // missing prerequisite, because no repository being offered would make a
 // package that does not exist selectable.
 //
+// needed is the runtime's requiresRepos already resolved for osID (see
+// requiresReposFor) — the caller's since the resolved list is also published to
+// the client, not just used for this verdict.
+//
 // A runtime is blocked by a missing prerequisite for the same reason a domain
 // is — its metapackage pulls in profiles published elsewhere, so it would
 // select cleanly and then emit a template that cannot resolve at build time.
 // Every domain sits on a runtime, so this gate is the wider of the two: a
 // runtime locked here locks the whole pack for that target.
-func (s *Service) runtimeAvailability(r edgePackRuntimeSpec, osID string, offered map[string]bool) (bool, string) {
+func (s *Service) runtimeAvailability(r edgePackRuntimeSpec, osID string, needed []string, offered map[string]bool) (bool, string) {
 	if !r.isAvailable() {
 		return false, r.UnavailableReason
 	}
-	if reason := s.missingRepoReason(r.RequiresRepos, osID, offered); reason != "" {
+	if reason := s.missingRepoReason(needed, osID, offered); reason != "" {
 		return false, reason
 	}
 	return true, ""
@@ -440,6 +518,14 @@ func validateEdgePack(p edgePackSpec) error {
 	case len(p.Domains) == 0:
 		return fmt.Errorf("edge pack %q: no domains", p.ID)
 	}
+	for i, o := range p.RepoOverrides {
+		switch {
+		case o.ID == "":
+			return fmt.Errorf("edge pack %q: repoOverrides %d: missing id", p.ID, i)
+		case len(o.OS) == 0:
+			return fmt.Errorf("edge pack %q: repoOverrides %q: missing os", p.ID, o.ID)
+		}
+	}
 	if err := validateEdgePackRuntimes(p); err != nil {
 		return err
 	}
@@ -467,12 +553,12 @@ func validateEdgePackRuntimes(p edgePackSpec) error {
 			return fmt.Errorf("edge pack %q: base runtime %q: unavailable with no unavailableReason", p.ID, r.ID)
 		}
 		seen[r.ID] = true
-		for j, id := range r.RequiresRepos {
+		for j, req := range r.RequiresRepos {
 			// The same trap as on a domain: an empty id resolves to no
 			// repository and silently drops the prerequisite that requiresRepos
 			// exists to guarantee. Whether the id names a real repo is asserted
 			// by the drift guard in edgepack_test.go.
-			if id == "" {
+			if req.ID == "" {
 				return fmt.Errorf("edge pack %q: base runtime %q: requiresRepos %d is empty",
 					p.ID, r.ID, j)
 			}
