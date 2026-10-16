@@ -107,6 +107,78 @@ describe('clearing a selection and the enabled repositories', () => {
   })
 })
 
+describe('clearing a group that mixes a template-locked package with an added one', () => {
+  // media-ffmpeg is locked in by the matched template; media-codec is the
+  // user's own pick, added alongside it in the same domain. A domain-level
+  // (or pack-level) "Clear" click must not touch the former.
+  const mixedPack: EdgePack = {
+    ...pack,
+    domains: [
+      {
+        id: 'media',
+        displayName: 'Media',
+        available: true,
+        packages: [{ name: 'media-ffmpeg', version: '7.1' }, { name: 'media-codec', version: '2.0' }],
+      },
+    ],
+  }
+
+  const lockOf = (names: string[]): BaseLock => ({
+    info: (name) => ({ locked: names.includes(name), currentIsFloating: false }),
+    ensureResolved: () => {},
+    concreteNames: names,
+  })
+
+  const render1 = (baseLock: BaseLock) =>
+    render(
+      <EdgePackBrowser
+        pack={mixedPack}
+        repoLabel="Intel ECI"
+        repoLabelFor={(id) => id}
+        targetLabel="Ubuntu 24.04"
+        baseLock={baseLock}
+      />,
+    )
+
+  it('leaves the locked package out of addedPackages after the domain checkbox clears the group', () => {
+    const baseLock = lockOf(['media-ffmpeg'])
+    useStore.setState({
+      addedPackages: [
+        { name: 'base-standard', version: '', repo: 'intel-eci' },
+        { name: 'media-codec', version: '', repo: 'intel-eci' },
+      ],
+      enabledRepos: ['intel-eci'],
+    })
+    render1(baseLock)
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Clear all Media packages' }))
+
+    const names = useStore.getState().addedPackages.map((p) => p.name)
+    expect(names).not.toContain('media-codec')
+    // media-ffmpeg was never in addedPackages — the template provides it — so
+    // the click cannot have written or removed anything for it either.
+    expect(names).not.toContain('media-ffmpeg')
+  })
+
+  it('leaves the locked package out of addedPackages after the pack-level checkbox clears everything', () => {
+    const baseLock = lockOf(['media-ffmpeg'])
+    useStore.setState({
+      addedPackages: [
+        { name: 'base-standard', version: '', repo: 'intel-eci' },
+        { name: 'media-codec', version: '', repo: 'intel-eci' },
+      ],
+      enabledRepos: ['intel-eci'],
+    })
+    render1(baseLock)
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /Domains/ }))
+
+    const names = useStore.getState().addedPackages.map((p) => p.name)
+    expect(names).not.toContain('media-codec')
+    expect(names).not.toContain('media-ffmpeg')
+  })
+})
+
 describe('the pack-level checkbox and unavailable domains', () => {
   it('adds only the domains this target publishes', () => {
     useStore.setState({
