@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"gopkg.in/yaml.v3"
@@ -341,6 +342,100 @@ func TestArchiveAndCleanupDeltaArchivesAndRemovesDelta(t *testing.T) {
 	if b.TemplatePath != archivePath {
 		t.Errorf("TemplatePath = %q, want repointed to the archived copy %q", b.TemplatePath, archivePath)
 	}
+}
+
+// blockingFakeICT reports that it is running, then holds the build open until
+// the test releases it — so assertions about a build that is still composing
+// run against that actual state. Verbs are %[1]s (ready) and %[2]s (release).
+const blockingFakeICT = `#!/bin/sh
+echo running > "%[1]s"
+while [ ! -f "%[2]s" ]; do sleep 0.05; done
+exit 0
+`
+
+// TestStartBuildArchivesMergedTemplateImmediately is the regression guard for
+// an artifact-column bug: a build that is still composing (no terminal status
+// yet) showed the raw `.ict-adv-*.yml` delta stub instead of the merged
+// template, because TemplatePath pointed at the delta from StartBuild until
+// finish() archived it. StartBuild must repoint TemplatePath at the merged,
+// redacted archive before returning, so the artifact is correct for the
+// entire build — including while it's still running.
+func TestStartBuildArchivesMergedTemplateImmediately(t *testing.T) {
+	s := newTestService(t)
+
+	// newTestService builds with /bin/true, which exits before the assertions
+	// below can run: archiveAndCleanupDelta would already have removed the
+	// delta, and the terminal re-archive would overlap the read of the archive.
+	// Hold the child open instead, so "still composing" is a real state here
+	// rather than something the scheduler decides.
+	sync := t.TempDir()
+	readyPath := filepath.Join(sync, "running")
+	releasePath := filepath.Join(sync, "release")
+	releaseBuild := func() { _ = os.WriteFile(releasePath, nil, 0o600) }
+	// Release on every exit path, including a failed assertion — otherwise the
+	// child spins and the deferred wait below never returns.
+	t.Cleanup(releaseBuild)
+
+	ictBin := filepath.Join(t.TempDir(), "fake-ict")
+	script := fmt.Sprintf(blockingFakeICT, readyPath, releasePath)
+	if err := os.WriteFile(ictBin, []byte(script), 0o755); err != nil {
+		t.Fatalf("writing fake ICT: %v", err)
+	}
+	s.cfg.ICTBinary = ictBin
+
+	acc, err := s.StartBuild(BuildRequest{Compose: &Selection{
+		Vertical: "robotics", SKU: "amr", Platform: "wcl", OS: "ubuntu24", ImageType: "iso",
+		ImageName: "custom-robotics-image",
+	}})
+	if err != nil {
+		t.Fatalf("StartBuild: %v", err)
+	}
+
+	b, ok := s.getBuild(acc.BuildID)
+	if !ok {
+		t.Fatalf("build %s not tracked", acc.BuildID)
+	}
+
+	// Wait until the child is up and blocked, so a child that failed to spawn
+	// (and so cleaned up its delta on the error path) can't pass as a build
+	// that is still composing.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(readyPath); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("fake build never started")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	snap := b.snapshot()
+
+	archivePath := filepath.Join(b.RootDir, "template.yml")
+	if snap.TemplatePath != archivePath {
+		t.Errorf("TemplatePath = %q immediately after StartBuild, want already repointed to the merged archive %q",
+			snap.TemplatePath, archivePath)
+	}
+	archived, err := os.ReadFile(snap.TemplatePath)
+	if err != nil {
+		t.Fatalf("reading archived template: %v", err)
+	}
+	if !strings.Contains(string(archived), "custom-robotics-image") {
+		t.Errorf("archived template does not reflect the override:\n%s", archived)
+	}
+
+	// The delta itself must still be on disk, untouched, since the real child
+	// process hasn't confirmed exit yet — only finish() is allowed to remove it.
+	if _, err := os.Stat(b.DeltaPath); err != nil {
+		t.Errorf("delta file missing before build finished: %v", err)
+	}
+
+	// Let the child exit and wait for the build to conclude, so the terminal
+	// re-archive and delta cleanup are done before the test tears its temp
+	// directories down. runBuild frees the build slot on its way out.
+	releaseBuild()
+	<-b.done
 }
 
 // assertNoLeakedDeltas fails the test if any generated delta file remains in

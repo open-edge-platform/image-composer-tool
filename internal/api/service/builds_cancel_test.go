@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/open-edge-platform/image-composer-tool/internal/config"
 )
 
 // --- exit-code classification ---
@@ -186,7 +188,7 @@ func TestRunBuildCancelClassifiesCancelledNoResidual(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.tracker.add(b)
-	if ok, _ := s.tryAcquireBuildSlot(b.ID); !ok {
+	if ok, _, _ := s.tryAcquireBuildSlot(b.ID); !ok {
 		t.Fatal("could not claim the build slot")
 	}
 
@@ -586,7 +588,7 @@ func TestConcludeStalledCancelReleasesSlot(t *testing.T) {
 	s := newTestService(t)
 	b := &build{ID: "wedged", status: StatusCancelling, cancelRequested: true, pgid: 2 << 30, done: make(chan struct{})}
 	s.tracker.add(b)
-	if ok, _ := s.tryAcquireBuildSlot(b.ID); !ok {
+	if ok, _, _ := s.tryAcquireBuildSlot(b.ID); !ok {
 		t.Fatal("could not occupy the build slot")
 	}
 
@@ -607,8 +609,57 @@ func TestConcludeStalledCancelReleasesSlot(t *testing.T) {
 	default:
 		t.Fatal("done not closed; SSE subscribers would hang")
 	}
-	if ok, active := s.tryAcquireBuildSlot("next"); !ok {
+	if ok, active, _ := s.tryAcquireBuildSlot("next"); !ok {
 		t.Fatalf("slot still held by %q; a wedged cancel must not block new composes", active)
+	}
+}
+
+// A build that never exits must still end up with the merged template archived
+// as its artifact, not the raw unmerged delta it was running against — this is
+// the regression test for the bug where concludeStalledCancel skipped the merge
+// step that every other terminal path performed. The delta file itself must
+// survive this (the real child's fate is unknown, so it isn't safe to delete
+// yet — see TestResolveBuildTemplateKeepsDeltaUntilBuildFinishes); only its
+// merged content, archived to a new file, is what the UI needs.
+func TestConcludeStalledCancelArchivesMergedTemplate(t *testing.T) {
+	s := newTestService(t)
+	curatedPath := filepath.Join(s.cfg.TemplatesDir, "robotics.yml")
+	parent, err := config.LoadTemplate(curatedPath, false)
+	if err != nil {
+		t.Fatalf("LoadTemplate(parent): %v", err)
+	}
+	data, err := buildDelta("robotics.yml", parent.Image, parent.Target, Selection{ImageName: "stalled-cancel-name"}, nil, nil)
+	if err != nil {
+		t.Fatalf("buildDelta: %v", err)
+	}
+	deltaPath, deltaCleanup, err := s.writeDelta(data)
+	if err != nil {
+		t.Fatalf("writeDelta: %v", err)
+	}
+	t.Cleanup(deltaCleanup) // no-op if archiveAndCleanupDelta already removed it
+
+	root := t.TempDir()
+	b := &build{
+		ID: "wedged-delta", RootDir: root, DeltaPath: deltaPath,
+		status: StatusCancelling, cancelRequested: true, pgid: 2 << 30, done: make(chan struct{}),
+	}
+	s.tracker.add(b)
+
+	s.concludeStalledCancel(b)
+
+	archivePath := filepath.Join(root, "template.yml")
+	archived, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatalf("archived template not written: %v", err)
+	}
+	if !strings.Contains(string(archived), "stalled-cancel-name") {
+		t.Errorf("archived template does not reflect the override (got the raw delta, not the merged template):\n%s", archived)
+	}
+	if snap := b.snapshot(); snap.TemplatePath != archivePath {
+		t.Errorf("TemplatePath = %q, want repointed to the archived copy %q", snap.TemplatePath, archivePath)
+	}
+	if _, err := os.Stat(deltaPath); err != nil {
+		t.Fatalf("delta file %q removed while the real child's fate is unknown: err=%v", deltaPath, err)
 	}
 }
 
@@ -624,7 +675,7 @@ func TestConcludeStalledCancelLosesRaceToWaitPath(t *testing.T) {
 		t.Fatal("setup: first finish should have recorded")
 	}
 	// A new build has since claimed the slot.
-	if ok, _ := s.tryAcquireBuildSlot("next"); !ok {
+	if ok, _, _ := s.tryAcquireBuildSlot("next"); !ok {
 		t.Fatal("setup: could not claim the slot for the next build")
 	}
 
@@ -633,7 +684,7 @@ func TestConcludeStalledCancelLosesRaceToWaitPath(t *testing.T) {
 	if snap := b.snapshot(); snap.ErrMsg != "" {
 		t.Fatalf("errMsg = %q, want empty (the wait path's clean outcome must stand)", snap.ErrMsg)
 	}
-	if ok, active := s.tryAcquireBuildSlot("third"); ok {
+	if ok, active, _ := s.tryAcquireBuildSlot("third"); ok {
 		t.Fatal("watchdog released a slot owned by another build")
 	} else if active != "next" {
 		t.Fatalf("slot holder = %q, want next", active)
@@ -644,10 +695,10 @@ func TestConcludeStalledCancelLosesRaceToWaitPath(t *testing.T) {
 
 func TestSingleBuildSlot(t *testing.T) {
 	s := newTestService(t)
-	if ok, _ := s.tryAcquireBuildSlot("a"); !ok {
+	if ok, _, _ := s.tryAcquireBuildSlot("a"); !ok {
 		t.Fatal("first acquire failed")
 	}
-	ok, active := s.tryAcquireBuildSlot("b")
+	ok, active, _ := s.tryAcquireBuildSlot("b")
 	if ok {
 		t.Fatal("second acquire succeeded while a build was active")
 	}
@@ -656,12 +707,12 @@ func TestSingleBuildSlot(t *testing.T) {
 	}
 	// Releasing a non-owner is a no-op; the slot stays held by "a".
 	s.releaseBuildSlot("b")
-	if ok, _ := s.tryAcquireBuildSlot("c"); ok {
+	if ok, _, _ := s.tryAcquireBuildSlot("c"); ok {
 		t.Fatal("acquire succeeded after a no-op release")
 	}
 	// The owner releases; the next build can start.
 	s.releaseBuildSlot("a")
-	if ok, _ := s.tryAcquireBuildSlot("c"); !ok {
+	if ok, _, _ := s.tryAcquireBuildSlot("c"); !ok {
 		t.Fatal("acquire failed after the owner released")
 	}
 }
@@ -669,7 +720,7 @@ func TestSingleBuildSlot(t *testing.T) {
 func TestStartBuildRejectsConcurrent(t *testing.T) {
 	s := newTestService(t)
 	// Occupy the slot as if a build were already running.
-	if ok, _ := s.tryAcquireBuildSlot("in-flight"); !ok {
+	if ok, _, _ := s.tryAcquireBuildSlot("in-flight"); !ok {
 		t.Fatal("could not occupy the build slot")
 	}
 
@@ -683,5 +734,249 @@ func TestStartBuildRejectsConcurrent(t *testing.T) {
 	// No second build should have been tracked.
 	if n := len(s.tracker.all()); n != 0 {
 		t.Fatalf("tracker has %d builds; a rejected start must not create one", n)
+	}
+}
+
+// --- shutdown admission + persistence ---
+
+// Once shutdown has closed admission, a compose that slipped past the HTTP
+// layer must be refused rather than started. A build admitted at this point
+// would be spawned after the shutdown path had already snapshotted what to
+// cancel and wait for, so nothing would ever signal it and it would be killed
+// with the process — mid-chroot, still holding mounts and loop devices.
+func TestStartBuildRejectedAfterAdmissionClosed(t *testing.T) {
+	s := newTestService(t)
+	s.CloseBuildAdmission()
+
+	_, err := s.StartBuild(BuildRequest{Compose: &Selection{
+		Vertical: "robotics", SKU: "amr", Platform: "wcl", OS: "ubuntu24", ImageType: "iso",
+	}})
+	code, _ := assertServiceError(t, err, http.StatusServiceUnavailable)
+	if code != "SERVER_SHUTTING_DOWN" {
+		t.Fatalf("code = %q, want SERVER_SHUTTING_DOWN", code)
+	}
+	// A refused start must leave no trace: no tracked build, and the slot free
+	// (a leaked slot would be invisible here but would 409 every later start).
+	if n := len(s.tracker.all()); n != 0 {
+		t.Fatalf("tracker has %d builds; a refused start must not create one", n)
+	}
+	if id := s.activeBuildID; id != "" {
+		t.Fatalf("build slot held by %q after a refused start", id)
+	}
+}
+
+// Closing admission must not disturb a build that is already running: shutdown
+// still has to cancel and drain it.
+func TestCloseBuildAdmissionLeavesRunningBuildAlone(t *testing.T) {
+	s := newTestService(t)
+	b := &build{ID: "run", status: StatusRunning, done: make(chan struct{})}
+	s.tracker.add(b)
+
+	s.CloseBuildAdmission()
+	s.CancelInFlightBuilds(time.Second)
+
+	if got := b.snapshot().Status; got != StatusCancelling {
+		t.Fatalf("status = %q, want cancelling — closing admission must not skip an in-flight build", got)
+	}
+}
+
+// A start that won the race against CloseBuildAdmission is already committed to
+// spawning a child, but it is invisible to the tracker until it finishes
+// setting up. Cancellation must wait that gap out, or the one build we failed
+// to shut out is also the one we fail to cancel.
+func TestCancelInFlightBuildsWaitsForSetupInProgress(t *testing.T) {
+	s := newTestService(t)
+	// Stand in for a StartBuild that has claimed the slot but not yet reached
+	// tracker.add — exactly the window the shutdown path has to account for.
+	if ok, _, _ := s.tryAcquireBuildSlot("setting-up"); !ok {
+		t.Fatal("could not claim the build slot")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.CancelInFlightBuilds(10 * time.Second)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("CancelInFlightBuilds snapshotted the tracker while a start was still mid-setup")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	// The start completes: the build becomes visible, then the setup window closes.
+	b := &build{ID: "setting-up", status: StatusRunning, done: make(chan struct{})}
+	s.tracker.add(b)
+	s.endBuildSetup()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("CancelInFlightBuilds did not return after setup finished")
+	}
+	if got := b.snapshot().Status; got != StatusCancelling {
+		t.Fatalf("status = %q, want cancelling — the build that finished setup must still be cancelled", got)
+	}
+}
+
+// The setup wait is a shutdown path, so it must be bounded: a start wedged in
+// setup cannot be allowed to hold the whole drain window open.
+func TestCancelInFlightBuildsSetupWaitIsBounded(t *testing.T) {
+	s := newTestService(t)
+	if ok, _, _ := s.tryAcquireBuildSlot("wedged"); !ok {
+		t.Fatal("could not claim the build slot")
+	}
+	// Never closed, mimicking a start stuck in setup.
+	t.Cleanup(s.endBuildSetup)
+
+	start := time.Now()
+	s.CancelInFlightBuilds(50 * time.Millisecond)
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("CancelInFlightBuilds blocked for %s; the setup wait must honour its grace", elapsed)
+	}
+}
+
+// A build cancelled on shutdown may never reach finish(): the drain window is
+// short and no watchdog runs for this path. Everything the cancel learns —
+// that it was cancelled, that the signal failed, and the log explaining both —
+// lives only in memory, so it must be persisted before the process exits.
+// Otherwise a restart reconstructs the build as a generic interruption and the
+// cancellation-failure, which points at a real misconfiguration and at mounts
+// still held on the host, is gone.
+func TestCancelInFlightBuildsPersistsDiagnostics(t *testing.T) {
+	s := newTestService(t)
+	s.signalGroup = func(int) error {
+		return fmt.Errorf("exit status 1: sudo: a password is required")
+	}
+	b := &build{
+		ID:      "shutdown-residual",
+		RootDir: filepath.Join(s.buildsRoot(), "shutdown-residual"),
+		status:  StatusRunning,
+		pgid:    2 << 30,
+		done:    make(chan struct{}),
+	}
+	if err := os.MkdirAll(b.RootDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s.tracker.add(b)
+
+	s.CancelInFlightBuilds(time.Second)
+
+	// Simulate the restart: a brand-new service over the same workspace, with
+	// nothing in memory, must recover the diagnostics from disk alone.
+	restarted := &Service{cfg: s.cfg, manifest: s.manifest, tracker: newBuildTracker()}
+	recovered, ok := restarted.getBuild("shutdown-residual")
+	if !ok {
+		t.Fatal("build was not persisted; nothing survived shutdown")
+	}
+	res := recovered.snapshot()
+	if res.Residual == nil || res.Residual.Kind != residualCancellation {
+		t.Fatalf("residual after restart = %+v, want cancellation-failure", res.Residual)
+	}
+	if !strings.Contains(res.Residual.Detail, "failed to signal build process group") {
+		t.Errorf("residual detail lost the reason: %q", res.Residual.Detail)
+	}
+	// The per-build log explaining the failure must be downloadable too.
+	if res.LogFile == "" {
+		t.Fatal("no log file recorded for a build cancelled on shutdown")
+	}
+	logged, err := os.ReadFile(res.LogFile)
+	if err != nil {
+		t.Fatalf("reading persisted log: %v", err)
+	}
+	for _, want := range []string{"server is shutting down", "failed to signal build process group"} {
+		if !strings.Contains(string(logged), want) {
+			t.Errorf("persisted log missing %q; got:\n%s", want, logged)
+		}
+	}
+}
+
+// The shutdown persist deliberately leaves the build non-terminal, so the child
+// can still tear down and conclude properly inside the drain window.
+func TestCancelInFlightBuildsPersistsWithoutMarkingTerminal(t *testing.T) {
+	s := newTestService(t)
+	s.signalGroup = func(int) error { return nil }
+	b := &build{
+		ID:      "still-running",
+		RootDir: filepath.Join(s.buildsRoot(), "still-running"),
+		status:  StatusRunning,
+		pgid:    2 << 30,
+		done:    make(chan struct{}),
+	}
+	if err := os.MkdirAll(b.RootDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s.tracker.add(b)
+
+	s.CancelInFlightBuilds(time.Second)
+
+	if got := b.snapshot().Status; got != StatusCancelling {
+		t.Fatalf("in-memory status = %q, want cancelling — only finish() may make a build terminal", got)
+	}
+	// finish() still owns the outcome afterwards.
+	if !b.finish(StatusSuccess, nil, "") {
+		t.Fatal("finish() was refused after a shutdown persist; the build was wrongly made terminal")
+	}
+}
+
+// A shutdown persist racing a normal completion must not regress the record.
+// Each persist re-reads the build under the persist lock, so one that queues
+// behind another publishes state at least as current as the write it waited
+// for — otherwise a shutdown snapshot taken while the build was still
+// cancelling could land after finish()'s final write and history would show a
+// cancelling build that actually succeeded.
+func TestPersistCannotOverwriteFinalRecord(t *testing.T) {
+	s := newTestService(t)
+	b := &build{
+		ID:      "race",
+		RootDir: filepath.Join(s.buildsRoot(), "race"),
+		status:  StatusCancelling,
+		done:    make(chan struct{}),
+	}
+	if err := os.MkdirAll(b.RootDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s.tracker.add(b)
+
+	// Pin the persist lock so the shutdown persist below is forced to queue
+	// behind a completion that happens while it is waiting — the exact
+	// interleaving that a snapshot taken too early would get wrong.
+	b.persistMu.Lock()
+
+	queued := make(chan struct{})
+	persisted := make(chan struct{})
+	go func() {
+		close(queued)
+		b.persist() // blocks on persistMu until the completion below is published
+		close(persisted)
+	}()
+	<-queued
+	// Give the goroutine time to actually block on the lock rather than merely
+	// having been scheduled.
+	time.Sleep(50 * time.Millisecond)
+
+	// The build completes and its final record is written while the shutdown
+	// persist is still queued.
+	b.mu.Lock()
+	b.status = StatusSuccess
+	b.mu.Unlock()
+	if err := b.writeMetaLocked(); err != nil {
+		t.Fatalf("writing final record: %v", err)
+	}
+	b.persistMu.Unlock()
+
+	select {
+	case <-persisted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("queued persist never completed")
+	}
+
+	restarted := &Service{cfg: s.cfg, manifest: s.manifest, tracker: newBuildTracker()}
+	recovered, ok := restarted.getBuild("race")
+	if !ok {
+		t.Fatal("build not persisted")
+	}
+	if got := recovered.snapshot().Status; got != StatusSuccess {
+		t.Fatalf("persisted status = %q, want success — a queued persist overwrote the final record", got)
 	}
 }

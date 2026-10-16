@@ -95,6 +95,14 @@ type build struct {
 
 	doneOnce sync.Once // guards close(done): both runBuild and the cancel watchdog can finish a build
 
+	// persistMu serializes the build's writes to compose.log and meta.json.
+	// Several paths persist the same build — the initial record, each template
+	// archive, the shutdown cancel path, and finish() — and the record each one
+	// writes is snapshotted while this is held, so writers cannot interleave or
+	// publish state older than one already on disk. Held only around the writes
+	// themselves and never with mu, so the two cannot deadlock.
+	persistMu sync.Mutex
+
 	mu        sync.Mutex
 	status    BuildStatus
 	logLines  []string // buffered log history for late log subscribers
@@ -340,10 +348,24 @@ func (s *Service) StartBuild(req BuildRequest) (*BuildAccepted, error) {
 	// failure), reject with 409 so a second compose can't race the teardown. The
 	// slot is released by runBuild only after the ICT child fully exits; on the
 	// error paths below we release it explicitly since no child was spawned.
-	if ok, activeID := s.tryAcquireBuildSlot(id); !ok {
+	//
+	// The same gate refuses starts once shutdown has closed admission, so a
+	// request that arrived just before the signal cannot spawn a child that the
+	// shutdown path has already finished cancelling and waiting for.
+	ok, activeID, closed := s.tryAcquireBuildSlot(id)
+	switch {
+	case closed:
+		return nil, newError(http.StatusServiceUnavailable, "SERVER_SHUTTING_DOWN",
+			"the server is shutting down and is not accepting new builds")
+	case !ok:
 		return nil, newError(http.StatusConflict, "BUILD_IN_PROGRESS",
 			fmt.Sprintf("a build is already in progress (%s); only one compose runs at a time", activeID))
 	}
+	// Setup is not instantaneous (it resolves the template and writes to disk),
+	// and until tracker.add runs below the build is invisible to the shutdown
+	// snapshots. Pair the claim with the matching close so shutdown can wait the
+	// gap out — on every path out of this function, spawned or not.
+	defer s.endBuildSetup()
 
 	buildRoot := filepath.Join(s.cfg.WorkDir, "builds", id)
 	workDir := filepath.Join(buildRoot, "work")
@@ -417,6 +439,15 @@ func (s *Service) StartBuild(req BuildRequest) (*BuildAccepted, error) {
 		retry:        retry,
 		done:         make(chan struct{}),
 	}
+
+	// Repoint TemplatePath at the merged, redacted archive before the build is
+	// ever observable (tracker.add/runBuild haven't run yet, so nothing else
+	// holds a reference to b): a client polling or downloading the artifact
+	// while the build is still running must see the full merged template, not
+	// the raw delta. archiveMergedTemplate no-ops when there's no delta/base
+	// override, and finish() re-archives from the same source at the end
+	// regardless, so this is safe for every build shape and outcome.
+	b.archiveMergedTemplate()
 	s.tracker.add(b)
 
 	// Persist the initial record so the build shows in history immediately (and
@@ -607,6 +638,14 @@ func (s *Service) watchCancel(b *build) {
 // devices), the single-build slot is released so composing keeps working, and
 // b.done is closed to wake anything waiting on it.
 //
+// The build's own child process may still be running (that is exactly why the
+// hard deadline fired), so this archives the merged template for display
+// (archiveMergedTemplate) without deleting the delta/base file a still-live
+// process might have open — the matching deletion happens once runBuild's wait
+// path eventually confirms the real exit, whenever that is. If that wait path
+// got there first, archiveMergedTemplate becomes a harmless no-op (the source
+// file is already gone, and TemplatePath already points at its archive).
+//
 // finish is single-shot, so if the child exited between the deadline expiring and
 // this call, the wait path's classification stands and we touch nothing else.
 func (s *Service) concludeStalledCancel(b *build) {
@@ -616,9 +655,105 @@ func (s *Service) concludeStalledCancel(b *build) {
 	b.setResidual(residualCancellation, detail)
 	b.appendLog("ERROR " + detail)
 	logger.Logger().Errorf("build %s: %s", b.ID, detail)
+	b.archiveMergedTemplate()
 	if b.finish(StatusCancelled, discoverArtifacts(b.WorkDir), detail) {
 		s.releaseBuildSlot(b.ID)
 		b.closeDone()
+	}
+}
+
+// WaitForInFlightBuilds blocks until every currently-tracked build has reached
+// a terminal state (and therefore archived its merged template — see
+// archiveMergedTemplate/archiveAndCleanupDelta), or until timeout elapses,
+// whichever comes first.
+//
+// Called from Server.Start on a shutdown signal: a container orchestrator's
+// SIGTERM-then-SIGKILL grace period is the only window in which an in-flight
+// build's own termination handling (ICT's teardown, then our merge-and-archive
+// step) gets to run at all, so this gives it a bounded chance to do so before
+// the process exits. It cannot do anything about a build that outlives
+// timeout — that build is abandoned along with the rest of the process when
+// the caller returns.
+func (s *Service) WaitForInFlightBuilds(timeout time.Duration) {
+	deadline := time.After(timeout)
+	for _, b := range s.tracker.all() {
+		// Wait on done even for a build that already reports terminal. finish()
+		// publishes the terminal status before it writes compose.log and the
+		// final meta.json, and done is closed only once those writes are through
+		// — so a build can be terminal and still mid-write. Skipping it here
+		// would let the process exit in that window and truncate its log or
+		// metadata. A build that finished long ago has a closed done channel, so
+		// waiting unconditionally costs nothing.
+		select {
+		case <-b.done:
+		case <-deadline:
+			return
+		}
+	}
+}
+
+// CancelInFlightBuilds requests cancellation of every build still running, so
+// each one's ICT child gets a chance to tear down its mounts and loop devices.
+//
+// Called from Server.Start on a shutdown signal, immediately before
+// WaitForInFlightBuilds. Waiting alone is not enough: a real compose runs for
+// minutes, so it would never conclude inside the drain window, and the child —
+// spawned into its own process group, holding no reference to the server's
+// context — would keep working until the process exits and the orchestrator's
+// SIGKILL took it down mid-chroot, leaving the host with mounted filesystems and
+// attached loop devices. Signalling first turns the drain window into teardown
+// time rather than dead waiting.
+//
+// setupGrace bounds how long this waits for a start that is mid-setup to finish
+// registering its build before the tracker is snapshotted; see waitForBuildSetup
+// for why that wait exists at all. WaitForInFlightBuilds snapshots afterwards
+// and therefore inherits the same guarantee.
+//
+// The cancel watchdog is deliberately not started here: its grace period and
+// hard deadline both far exceed the drain window, and the process is exiting
+// regardless. A build that doesn't finish tearing down in time stays recorded as
+// cancelling — the same outcome a build orphaned by a restart already has. What
+// it does not keep is memory, so each cancelled build is persisted below.
+func (s *Service) CancelInFlightBuilds(setupGrace time.Duration) {
+	log := logger.Logger()
+	s.waitForBuildSetup(setupGrace)
+	for _, b := range s.tracker.all() {
+		transitioned, pgid := b.beginCancel()
+		if !transitioned {
+			continue // already terminal, or a cancel is already in flight
+		}
+		b.appendLog("• server is shutting down — signalling build to stop and clean up")
+		// pgid == 0 means the child isn't spawned yet; beginCancel has recorded
+		// the request and runBuild delivers it as soon as it has a group (see
+		// setPgidCheckCancel), so there is nothing to signal here — but there is
+		// still state worth persisting below.
+		if pgid > 0 {
+			if err := s.signalGroup(pgid); err != nil {
+				// Same classification as an interactive cancel: the signal never
+				// reached the group, so ICT may never start its teardown. Record it as
+				// a cancellation-failure so the build carries the reason, and warn
+				// rather than error — a refused signal is a host-configuration outcome
+				// (missing sudoers rule), not a bug worth a stack trace.
+				detail := fmt.Sprintf("failed to signal build process group %d on shutdown: %v", pgid, err)
+				b.setResidual(residualCancellation, detail)
+				b.appendLog("ERROR " + detail)
+				log.Warnf("build %s: %s", b.ID, detail)
+			}
+		}
+		// Save what we know before the process exits. Everything above only
+		// mutates memory, and a build cancelled here may well never reach
+		// finish() — the drain window is short and no watchdog is running — so
+		// without this the cancellation, the reason a signal failed, and the log
+		// explaining both die with the process. The build would then be
+		// reconstructed after a restart as a generic interruption, hiding a
+		// cancellation-failure that points at a real misconfiguration and at
+		// mounts or loop devices still held on the host.
+		//
+		// The status stays non-terminal on purpose: the child may yet tear down
+		// and conclude properly inside the drain window, and finish() must remain
+		// the only thing that decides the outcome. If it does, its persist
+		// supersedes this one (see persist).
+		b.persist()
 	}
 }
 
@@ -1198,8 +1333,13 @@ func (s *Service) runBuild(b *build, name string, cmdArgs []string) {
 // It reports whether it recorded the terminal state. Recording is single-shot:
 // both runBuild's wait path and the cancel watchdog can conclude a build, and
 // whichever gets there first owns the outcome — so the watchdog can't relabel a
-// build that exited cleanly a moment earlier. Delta cleanup is deliberately
-// handled by runBuild only after the child exits (or fails to start).
+// build that exited cleanly a moment earlier. Delta cleanup (removing the
+// generated file) is deliberately handled by runBuild only after the real child
+// exits — see archiveAndCleanupDelta vs archiveMergedTemplate below. A caller
+// that reaches a terminal state before that, like the cancel watchdog, must
+// still give the UI a correct merged-template artifact; it does so by calling
+// archiveMergedTemplate itself before finish, which is safe to do while the
+// real child's fate is still unknown.
 func (b *build) finish(status BuildStatus, arts []Artifact, errMsg string) bool {
 	b.mu.Lock()
 	if isTerminal(b.status) {
@@ -1211,46 +1351,29 @@ func (b *build) finish(status BuildStatus, arts []Artifact, errMsg string) bool 
 	b.errMsg = errMsg
 	b.mu.Unlock()
 
-	// Persist logs to <root>/compose.log for later download.
-	if b.RootDir != "" {
-		logPath := filepath.Join(b.RootDir, "compose.log")
-		content := strings.Join(b.snapshotLogs(), "\n")
-		if err := os.WriteFile(logPath, []byte(content), 0o600); err != nil {
-			logger.Logger().Warnf("build %s: writing log file: %v", b.ID, err)
-		} else {
-			b.mu.Lock()
-			b.LogFile = logPath
-			b.mu.Unlock()
-		}
-	}
-
-	if err := b.writeMeta(); err != nil {
-		logger.Logger().Warnf("build %s: writing final meta: %v", b.ID, err)
-	}
+	// Publish the log and the final record as one serialized unit. Nothing that
+	// persists concurrently (the shutdown cancel path in particular) can
+	// overwrite this with an earlier view of the build — see persist.
+	b.persist()
 	return true
 }
 
-// archiveAndCleanupDelta resolves a delta-backed build's generated extends
-// delta one final time, writes the fully-resolved, redacted result to
-// RootDir/template.yml, and repoints TemplatePath there — so the download
-// endpoint keeps serving a self-contained file after the delta itself is
-// removed from TemplatesDir. On any failure the delta is still removed (the
-// generated file must never be left behind), but TemplatePath is left as-is,
-// which then 404s on download exactly as an already-missing template would.
+// archiveMergedTemplate resolves a delta-backed build's generated extends delta
+// (or materialized base document) into the fully-resolved, redacted template,
+// writes it to RootDir/template.yml, and repoints TemplatePath there — without
+// touching the source file on TemplatesDir.
 //
-// A build composed against a supplied document with no overrides has no delta,
-// only that document. It is archived too: it is removed below just the same, so
-// without an archive TemplatePath would point at a deleted file and the
-// download would 404 for a build that succeeded.
-func (b *build) archiveAndCleanupDelta() {
-	// A materialized base document is generated the same way a delta is, and is
-	// removed whether or not a delta was layered over it.
-	if b.BasePath != "" {
-		defer func() { _ = os.Remove(b.BasePath) }()
-	}
-	if b.DeltaPath != "" {
-		defer func() { _ = os.Remove(b.DeltaPath) }()
-	}
+// This is the subset of archiveAndCleanupDelta that is safe to run even when
+// the build's real child process may still be alive — the merge only reads
+// files, so it can't race a still-running process, but deleting the delta out
+// from under a process that might still have it open could. StartBuild calls
+// this before the build even starts running, so the artifact is already
+// correct for the entire "composing" duration, not just once the build
+// concludes; the cancel watchdog (concludeStalledCancel) uses it again for the
+// same reason, so the UI keeps a correct merged-template artifact even though
+// a wedged process's fate is unknown. archiveAndCleanupDelta below performs
+// the matching deletion once runBuild's wait path confirms the real exit.
+func (b *build) archiveMergedTemplate() {
 	// Resolve whichever generated file the build ran: the delta when one was
 	// layered over the base, the base itself otherwise.
 	source := b.DeltaPath
@@ -1271,8 +1394,15 @@ func (b *build) archiveAndCleanupDelta() {
 		logger.Logger().Warnf("build %s: marshaling archived template: %v", b.ID, err)
 		return
 	}
+	// Publish atomically. The archive is written more than once per build — once
+	// up front, then again when the build concludes (or when the cancel watchdog
+	// gives up) — and the download handler reads the published path without any
+	// coordination with those writes. Writing in place would truncate the file
+	// first, so a download landing mid-rewrite would be served empty or partial
+	// YAML under a 200. A rename over the path is atomic, so a reader sees either
+	// the previous archive or the new one, never a half-written file.
 	archivePath := filepath.Join(b.RootDir, "template.yml")
-	if err := os.WriteFile(archivePath, data, 0o600); err != nil {
+	if err := writeFileAtomic(archivePath, data, 0o600); err != nil {
 		logger.Logger().Warnf("build %s: writing archived template: %v", b.ID, err)
 		return
 	}
@@ -1285,6 +1415,68 @@ func (b *build) archiveAndCleanupDelta() {
 			logger.Logger().Warnf("build %s: writing archived template metadata: %v", b.ID, err)
 		}
 	}
+}
+
+// writeFileAtomic writes data to path by staging it in a temporary file in the
+// same directory and renaming that into place, so a concurrent reader of path
+// sees either the old contents or the new ones — never a truncated or
+// half-written file, as an in-place os.WriteFile would expose. Staging in the
+// target's own directory keeps the rename within one filesystem, which is what
+// makes it atomic.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) (err error) {
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("creating staged file: %w", err)
+	}
+	staged := tmp.Name()
+	defer func() {
+		if err != nil {
+			_ = os.Remove(staged) // leave no stray stage behind on failure
+		}
+	}()
+
+	if _, err = tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("writing staged file: %w", err)
+	}
+	if err = tmp.Close(); err != nil {
+		return fmt.Errorf("closing staged file: %w", err)
+	}
+	// CreateTemp always makes 0600; apply the caller's mode explicitly.
+	if err = os.Chmod(staged, perm); err != nil {
+		return fmt.Errorf("setting staged file mode: %w", err)
+	}
+	if err = os.Rename(staged, path); err != nil {
+		return fmt.Errorf("publishing staged file: %w", err)
+	}
+	return nil
+}
+
+// archiveAndCleanupDelta archives the merged template (see archiveMergedTemplate)
+// and then removes the generated delta/base file from TemplatesDir — so the
+// download endpoint keeps serving a self-contained file after the delta itself
+// is gone. On any archive failure the delta is still removed (the generated
+// file must never be left behind), but TemplatePath is left as-is, which then
+// 404s on download exactly as an already-missing template would.
+//
+// A build composed against a supplied document with no overrides has no delta,
+// only that document. It is archived too: it is removed below just the same, so
+// without an archive TemplatePath would point at a deleted file and the
+// download would 404 for a build that succeeded.
+//
+// Called only from runBuild, after the real child process has been reaped by
+// cmd.Wait() (or failed to start) — never from the cancel watchdog, which
+// cannot confirm the child has actually exited; see archiveMergedTemplate.
+func (b *build) archiveAndCleanupDelta() {
+	// A materialized base document is generated the same way a delta is, and is
+	// removed whether or not a delta was layered over it.
+	if b.BasePath != "" {
+		defer func() { _ = os.Remove(b.BasePath) }()
+	}
+	if b.DeltaPath != "" {
+		defer func() { _ = os.Remove(b.DeltaPath) }()
+	}
+	b.archiveMergedTemplate()
 }
 
 // exitCode returns the process exit code carried by a cmd.Wait error, or -1 if
