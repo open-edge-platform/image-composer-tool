@@ -315,6 +315,12 @@ type BuildAccepted struct {
 type retryInput struct {
 	Compose *Selection
 	YAML    string
+	// unsupported marks a record a server wrote from inputs this one no longer
+	// accepts — an imported document, or logins supplied with a posted one.
+	// Those decode away silently, and resubmitting what is left would build
+	// something else, so RetryBuild refuses it instead. Set when the record is
+	// read back from meta.json (see retryInput.UnmarshalJSON); never written.
+	unsupported bool
 }
 
 // StartBuild resolves the template, starts an os/exec build, and returns a build
@@ -456,7 +462,8 @@ func (s *Service) StartBuild(req BuildRequest) (*BuildAccepted, error) {
 //
 // Returns a 404 *Error for an unknown build, and a 400 *Error for one that has
 // no retry record — a build reconstructed from a meta.json written before this
-// field existed.
+// field existed — or one whose record names inputs this server no longer
+// accepts (see retryInput.UnmarshalJSON).
 func (s *Service) RetryBuild(id string) (*BuildAccepted, error) {
 	b, ok := s.getBuild(id)
 	if !ok {
@@ -465,6 +472,12 @@ func (s *Service) RetryBuild(id string) (*BuildAccepted, error) {
 	if b.retry == nil {
 		return nil, newError(http.StatusBadRequest, "NO_RETRY_RECORD",
 			"this build predates retry support and cannot be retried directly; start a new compose instead")
+	}
+	if b.retry.unsupported {
+		return nil, newError(http.StatusBadRequest, "RETRY_UNSUPPORTED",
+			"this build was composed from an imported template, or from logins supplied with a posted "+
+				"template; neither is accepted any more, so retrying it would build something else. "+
+				"Start a new compose instead")
 	}
 	req := BuildRequest{YAML: b.retry.YAML}
 	if b.retry.Compose != nil {
