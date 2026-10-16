@@ -9,6 +9,7 @@
 | [`ubuntu24-x86_64-minimal-unattended-iso.yml`](./ubuntu24-x86_64-minimal-unattended-iso.yml) | x86_64 | iso | unattended installer | yes |
 | [`ubuntu24-x86_64-edgepack-unattended-iso.yml`](./ubuntu24-x86_64-edgepack-unattended-iso.yml) | x86_64 | iso | unattended installer for Intel EdgePack (PTL/WCL) with users, SSH keys, cloud-init, provisioning | — |
 | [`ubuntu24-x86_64-edgepack-server-unattended-iso.yml`](./ubuntu24-x86_64-edgepack-server-unattended-iso.yml) | x86_64 | iso | unattended installer for a minimal Intel EdgePack (PTL/WCL) server | — |
+| [`ubuntu24-x86_64-edgepack-standard-only-unattended-iso.yml`](./ubuntu24-x86_64-edgepack-standard-only-unattended-iso.yml) | x86_64 | iso | demo: Intel EdgePack (PTL/WCL) Standard base runtime only, no domain add-ons | — |
 | [`ubuntu24-aarch64-edge-raw.yml`](./ubuntu24-aarch64-edge-raw.yml) | aarch64 | raw | edge | — |
 | [`ubuntu24-aarch64-minimal-raw.yml`](./ubuntu24-aarch64-minimal-raw.yml) | aarch64 | raw | minimal | yes |
 | [`ubuntu24-aarch64-minimal-uki.yml`](./ubuntu24-aarch64-minimal-uki.yml) | aarch64 | raw | unified kernel image | — |
