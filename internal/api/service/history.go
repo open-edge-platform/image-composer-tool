@@ -45,6 +45,54 @@ type buildMeta struct {
 	Retry *retryInput `json:"retry,omitempty"`
 }
 
+// UnmarshalJSON decodes a persisted retry record and flags one written by a
+// server that could resolve a build from inputs this one no longer accepts: an
+// imported document standing in for the manifest-matched template, or the
+// logins and accounts supplied alongside a posted one. Those fields are gone
+// from the request surface, so a plain decode drops them without a word — and
+// resubmitting what survives would not be a retry. A posted document would lose
+// the credential that satisfied it and be rejected; an imported one would fall
+// back to whatever curated template its leftover dropdown selection matches,
+// quietly building a different image than the one being retried.
+//
+// Only a field actually carrying something counts: these were written without
+// omitempty, so every record of this vintage has them present and empty.
+func (r *retryInput) UnmarshalJSON(data []byte) error {
+	// plain has no methods of its own, so decoding through it does not recurse.
+	type plain retryInput
+	if err := json.Unmarshal(data, (*plain)(r)); err != nil {
+		return err
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	// Written from Go field names: retryInput and Selection carry no json tags.
+	if carriesAny(raw, "Credentials", "NewUsers") {
+		r.unsupported = true
+	}
+	var compose map[string]json.RawMessage
+	if err := json.Unmarshal(raw["Compose"], &compose); err == nil {
+		if carriesAny(compose, "BaseYAML", "RemovePackages") {
+			r.unsupported = true
+		}
+	}
+	return nil
+}
+
+// carriesAny reports whether any of the named keys holds a value — anything but
+// absent, null, an empty string, or an empty list.
+func carriesAny(raw map[string]json.RawMessage, keys ...string) bool {
+	for _, k := range keys {
+		switch v := strings.TrimSpace(string(raw[k])); v {
+		case "", "null", `""`, "[]", "{}":
+		default:
+			return true
+		}
+	}
+	return false
+}
+
 // metaPath returns the meta.json path for a build root directory.
 func metaPath(rootDir string) string {
 	return filepath.Join(rootDir, "meta.json")

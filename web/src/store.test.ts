@@ -73,62 +73,8 @@ describe('disk slice', () => {
   })
 })
 
-// Importing overwrites the cascade with the document's own target, so removing
-// the import has to put back what the user had rather than leave a hybrid.
-describe('imported template slice', () => {
-  const doc = {
-    fileName: 't.yml',
-    displayName: 'img',
-    yaml: 'image:\n  name: img\n',
-    summary: { os: 'ubuntu', dist: 'ubuntu24', imageType: 'raw' },
-  }
-
+describe('package slice', () => {
   beforeEach(() => {
-    useStore.setState({
-      manifest: null,
-      importedTemplate: null,
-      selectionBeforeImport: null,
-      selection: { vertical: 'retail', sku: 'dv', platform: 'arl', os: 'debian13', kernel: '', imageType: 'iso' },
-    })
-  })
-
-  it('restores the previous selection when the import is removed', () => {
-    const before = useStore.getState().selection
-    useStore.getState().setImportedTemplate(doc as never)
-    useStore.setState({ selection: { ...before, vertical: 'robotics' } })
-
-    useStore.getState().setImportedTemplate(null)
-
-    expect(useStore.getState().selection).toEqual(before)
-    expect(useStore.getState().selectionBeforeImport).toBeNull()
-  })
-
-  it('keeps the original selection when one import replaces another', () => {
-    const before = useStore.getState().selection
-    useStore.getState().setImportedTemplate(doc as never)
-    useStore.getState().setImportedTemplate({ ...doc, displayName: 'other' } as never)
-    useStore.getState().setImportedTemplate(null)
-
-    expect(useStore.getState().selection).toEqual(before)
-  })
-
-  // Packages and repositories are chosen for a target. A pick made for Debian
-  // is still sent with an imported Ubuntu template, where it may not resolve.
-  it('clears packages and repositories when the base template changes', () => {
-    useStore.setState({ addedPackages: [{ name: 'vim', version: '', repo: 'r' }], enabledRepos: ['r'] })
-
-    useStore.getState().setImportedTemplate(doc as never)
-    expect(useStore.getState().addedPackages).toEqual([])
-    expect(useStore.getState().enabledRepos).toEqual([])
-
-    useStore.setState({ addedPackages: [{ name: 'curl', version: '', repo: 'r' }], enabledRepos: ['r'] })
-    useStore.getState().setImportedTemplate(null)
-    expect(useStore.getState().addedPackages).toEqual([])
-    expect(useStore.getState().enabledRepos).toEqual([])
-  })
-})
-
-describe('package slice', () => {  beforeEach(() => {
     useStore.setState({ addedPackages: [], enabledRepos: [] })
   })
 

@@ -74,15 +74,6 @@ export interface ComposeRequest {
   // Accounts to create that the template does not declare. Unlike credentials,
   // these carry the account's full configuration (groups, sudo, shell, …).
   users?: NewUserInput[]
-  // A complete template to compose against instead of matching the manifest:
-  // an imported template, which no combination maps to. With it set the five
-  // lookup fields carry no meaning; every override above still applies, which
-  // is what makes an imported template behave like a matched one.
-  baseYaml?: string
-  // Entries to drop from baseYaml's own systemConfig.packages. Not carried in
-  // the delta — the extends merge unions package lists and cannot subtract, so
-  // the server applies these to the document itself.
-  removePackages?: string[]
 }
 
 // A login supplied for one user the curated template already declares. Either
@@ -189,10 +180,6 @@ export interface ValidationResponse {
   valid: boolean
   errors?: ValidationIssue[]
   warnings?: ValidationIssue[]
-  // The accounts the template declares and whether each has a login, so an
-  // imported template can be prompted for before building. Absent means "not
-  // known" (invalid template, or it could not be resolved), never "no accounts".
-  credentials?: CredentialRequirement[]
 }
 
 // One repository the Advanced tab can enable/disable (from GET /package-repos).
