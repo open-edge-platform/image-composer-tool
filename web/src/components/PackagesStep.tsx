@@ -166,6 +166,7 @@ export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
                   repoLabel={repoLabelFor(edgePack.repo)}
                   repoLabelFor={repoLabelFor}
                   targetLabel={targetLabel}
+                  baseLock={baseLock}
                 />
               ) : edgePack === undefined ? (
                 <EdgePackLoading />
