@@ -1,7 +1,10 @@
 package config
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -158,6 +161,17 @@ func TestExtractGPGKeyFilename(t *testing.T) {
 			keyURL:   "https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB",
 			expected: "/etc/apt/trusted.gpg.d/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB.gpg",
 		},
+		{
+			// keyserver.ubuntu.com "pks/lookup" URLs all share the same last
+			// path segment ("lookup"); the query string's search= value (the
+			// requested key ID/fingerprint) is what actually identifies the
+			// key and must end up in the filename instead, both so the name
+			// is clean and so two different keys from this keyserver can't
+			// collide on the same destination file.
+			name:     "keyserver.ubuntu.com pks/lookup URL",
+			keyURL:   "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x0c0e6af955ce463c03fc51574d098d70afbe5e1f",
+			expected: "/etc/apt/trusted.gpg.d/0c0e6af955ce463c03fc51574d098d70afbe5e1f.gpg",
+		},
 	}
 
 	for _, tt := range tests {
@@ -167,6 +181,82 @@ func TestExtractGPGKeyFilename(t *testing.T) {
 				t.Errorf("Expected %q, got %q", tt.expected, result)
 			}
 		})
+	}
+}
+
+// TestExtractGPGKeyFilenameNoCollision guards the two-different-keyserver-URLs
+// case that a plain query-string-stripping fix would still get wrong: two
+// repositories using the same keyserver "pks/lookup" path but no (or an
+// unrecognized) search= parameter must still resolve to different filenames,
+// or the second one's key file would silently overwrite the first's.
+func TestExtractGPGKeyFilenameNoCollision(t *testing.T) {
+	a := extractGPGKeyFilename("https://keyserver.example.com/pks/lookup?op=get&options=mr&fingerprint=on")
+	b := extractGPGKeyFilename("https://keyserver.example.com/pks/lookup?op=get&options=mr&fingerprint=off")
+	if a == b {
+		t.Fatalf("expected different filenames for different keyserver URLs without a search= key ID, got %q for both", a)
+	}
+}
+
+// TestExtractGPGKeyFilenameEmptyCandidateNoCollision covers a bare query
+// string on the root path (no path segment at all to derive a name from):
+// extractGPGKeyFilename must still disambiguate these by URL, not just fall
+// through to the same generic default filename for every one of them.
+func TestExtractGPGKeyFilenameEmptyCandidateNoCollision(t *testing.T) {
+	a := extractGPGKeyFilename("https://keys.example.com/?id=A")
+	b := extractGPGKeyFilename("https://keys.example.com/?id=B")
+	if a == b {
+		t.Fatalf("expected different filenames for different empty-path-segment URLs, got %q for both", a)
+	}
+}
+
+// TestExtractGPGKeyFilenameNonHexSearchNoCollision covers a keyserver
+// "search=" value that is not a hex key ID/fingerprint (HKP also allows
+// searching by name or email): two such URLs sanitizing to the same string
+// must not collide, so only a recognized hex key ID/fingerprint skips the
+// disambiguating hash.
+func TestExtractGPGKeyFilenameNonHexSearchNoCollision(t *testing.T) {
+	a := extractGPGKeyFilename("https://keyserver.example.com/pks/lookup?op=get&search=alice%2Bbuild%40example.com")
+	b := extractGPGKeyFilename("https://keyserver.example.com/pks/lookup?op=get&search=alice-build%40example.com")
+	if a == b {
+		t.Fatalf("expected different filenames for different non-hex search values, got %q for both", a)
+	}
+}
+
+// TestExtractGPGKeyFilenameSanitizationNoCollision covers two query-free URLs
+// whose last path segments only differ in a character the filename
+// sanitizer rewrites to "-" (e.g. "+"): without hashing, both would sanitize
+// down to the identical "repo-signing.gpg" and the second key would silently
+// overwrite the first's file.
+func TestExtractGPGKeyFilenameSanitizationNoCollision(t *testing.T) {
+	a := extractGPGKeyFilename("https://keys.example.com/repo+signing.gpg")
+	b := extractGPGKeyFilename("https://keys.example.com/repo-signing.gpg")
+	if a == b {
+		t.Fatalf("expected different filenames for URLs that sanitize to the same base name, got %q for both", a)
+	}
+}
+
+// TestExtractGPGKeyFilenameEncodedSlashNoCollision covers a path segment
+// with a percent-encoded "/" ("%2F"): url.Parse decodes it in parsed.Path,
+// so splitting on the decoded path would treat it as a literal separator and
+// fold a distinct request path ("team%2Frelease.gpg") down to the same last
+// segment ("release.gpg") as an unrelated URL, silently overwriting its key.
+func TestExtractGPGKeyFilenameEncodedSlashNoCollision(t *testing.T) {
+	a := extractGPGKeyFilename("https://keys.example.com/team%2Frelease.gpg")
+	b := extractGPGKeyFilename("https://keys.example.com/release.gpg")
+	if a == b {
+		t.Fatalf("expected different filenames for an encoded-slash path and its decoded last segment, got %q for both", a)
+	}
+}
+
+// TestExtractGPGKeyFilenameTrailingSlashNoCollision covers a path and its
+// trailing-slash variant: both are distinct request paths that can serve
+// different keys, but naive trimming would collapse ".../release" and
+// ".../release/" onto the same last segment "release".
+func TestExtractGPGKeyFilenameTrailingSlashNoCollision(t *testing.T) {
+	a := extractGPGKeyFilename("https://keys.example.com/release")
+	b := extractGPGKeyFilename("https://keys.example.com/release/")
+	if a == b {
+		t.Fatalf("expected different filenames for a path and its trailing-slash variant, got %q for both", a)
 	}
 }
 
@@ -866,6 +956,30 @@ func TestGPGKeyCacheFilePath_StableForSameURL(t *testing.T) {
 	}
 }
 
+// testGPGPublicKey is a throwaway OpenPGP public key used only to exercise
+// code paths that now validate GPG key data (getCachedOrDownloadGPGKey,
+// downloadGPGKey): plain placeholder bytes no longer pass validation, so
+// tests that need "some valid-looking key data" use this instead.
+const testGPGPublicKey = `-----BEGIN PGP PUBLIC KEY BLOCK-----
+
+mQENBGrR3dcBCADq0OeOQGYT7Q45yCeD2z44TF4RAzinISEvmLEEpiDIvHwErbpO
+ETXxhV53mqqPC+Cay9EXuKCbkrf3+mRPh9d90E9Mzj8W429X5awL8wn5O0rvXOxo
+m/rAvnzJVvByPRRGYNnrepvF95K/l1QjZn3k7UXnuMP3CdmGQq8tm7lL8aLftoUu
+30zjkcLrjwZVeOpN25OZbGtqrpgoESDlwD3K0RCLt2ByfNDpzydI4cA8Blayr8m1
+41w8nFe85RePVXhZIjgQgvsatULKlFVt0wHOSy4rXz08WCwncwF7SHmpqYTbTeKx
+xCDOzCM8HKBEwO5p1awXlQMNo05Zs94Twx4LABEBAAG0G1Rlc3QgS2V5IDx0ZXN0
+QGV4YW1wbGUuY29tPokBVwQTAQoAQRYhBE1TFzCtj6Omk/S9Xoo1RHbnrfGlBQJq
+0d3XAhsDBQkAAVGABQsJCAcCAiICBhUKCQgLAgQWAgMBAh4HAheAAAoJEIo1RHbn
+rfGlCrsH/23SO6uq1s+jetQCanQZWbx/sn2J86ziq9EPyv50sqyiCFV//of7c+Gy
+v31ysCQrKWbgbb6cx/OXZW9Bc2+UxOel18gkQOEd9CArkrNK2BM9IolKUu4SEM54
+t9UPMv60q9SQHow1JAV5ywJzOXHlt+3M+BVLjqea/a8NiZ2VUipgl4MV6nGY3GiG
+9+OMlSiYpbmG3mAgjJPjX+sm8gES14NxZZb6IPO1oC7zkFmui/6/pjvbo/ZFwOcF
+PmpA3/f8d1A2aXPeok0h1ow5adOxRq4p0CWb9DVo6vFUlYfWPVSQXJ6g4bqYDkTx
+/NFv8LTmiUZyg8FDGZSkjI7GuLzVbN4=
+=xoVT
+-----END PGP PUBLIC KEY BLOCK-----
+`
+
 func TestGetCachedOrDownloadGPGKey_UsesCacheOnHit(t *testing.T) {
 	oldCacheDir := Global().CacheDir
 	Global().CacheDir = t.TempDir()
@@ -874,7 +988,7 @@ func TestGetCachedOrDownloadGPGKey_UsesCacheOnHit(t *testing.T) {
 	})
 
 	keyURL := "https://invalid.example.test/non-routable-key.gpg"
-	want := []byte("cached-key-data")
+	want := []byte(testGPGPublicKey)
 
 	cachePath, err := gpgKeyCacheFilePath(keyURL)
 	if err != nil {
@@ -892,6 +1006,115 @@ func TestGetCachedOrDownloadGPGKey_UsesCacheOnHit(t *testing.T) {
 
 	if string(got) != string(want) {
 		t.Errorf("cache hit returned wrong key data: got %q want %q", string(got), string(want))
+	}
+}
+
+// TestGetCachedOrDownloadGPGKey_InvalidCacheIsRefetched covers the bug this
+// validation fixes: a cache entry that isn't a real OpenPGP key (e.g. from a
+// past truncated/HTML-error download) must be treated as a cache miss, not
+// trusted and reused forever, and the re-download must actually replace it
+// on success. Uses a local httptest server (rather than a non-routable host)
+// so the test is isolated, fast, and can assert the success path: a request
+// was made, the returned bytes are the real key, and the poisoned cache file
+// was overwritten with them.
+func TestGetCachedOrDownloadGPGKey_InvalidCacheIsRefetched(t *testing.T) {
+	if _, err := exec.LookPath("gpg"); err != nil {
+		// Without gpg, validateGPGKeyData accepts any nonempty data (see
+		// TestValidateGPGKeyDataNoGPGFallback), so the seeded HTML below
+		// would pass as a cache hit instead of exercising this test's point.
+		t.Skip("gpg not available; cache validation falls back to accepting any nonempty data")
+	}
+
+	oldCacheDir := Global().CacheDir
+	Global().CacheDir = t.TempDir()
+	t.Cleanup(func() {
+		Global().CacheDir = oldCacheDir
+	})
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		_, _ = w.Write([]byte(testGPGPublicKey))
+	}))
+	defer server.Close()
+
+	keyURL := server.URL + "/non-routable-key.gpg"
+
+	cachePath, err := gpgKeyCacheFilePath(keyURL)
+	if err != nil {
+		t.Fatalf("gpgKeyCacheFilePath failed: %v", err)
+	}
+	if err := os.WriteFile(cachePath, []byte("<html>not a key</html>"), 0644); err != nil {
+		t.Fatalf("failed to seed cached key: %v", err)
+	}
+
+	// The invalid cache entry must be rejected, forcing a real re-download
+	// rather than silently returning the bad cached bytes.
+	got, err := getCachedOrDownloadGPGKey(keyURL)
+	if err != nil {
+		t.Fatalf("expected the invalid cache entry to be rejected and re-downloaded, got error: %v", err)
+	}
+	if requests != 1 {
+		t.Errorf("expected exactly one HTTP request to re-fetch the key, got %d", requests)
+	}
+	if string(got) != testGPGPublicKey {
+		t.Errorf("re-downloaded key data = %q, want %q", string(got), testGPGPublicKey)
+	}
+
+	cached, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatalf("failed to read cache file after refetch: %v", err)
+	}
+	if string(cached) != testGPGPublicKey {
+		t.Errorf("poisoned cache entry was not replaced: cache file = %q, want %q", string(cached), testGPGPublicKey)
+	}
+}
+
+func TestValidateGPGKeyData(t *testing.T) {
+	tests := []struct {
+		name        string
+		data        []byte
+		wantErr     bool
+		requiresGPG bool // needs gpg to actually parse/reject the data
+	}{
+		{name: "valid armored key", data: []byte(testGPGPublicKey), wantErr: false, requiresGPG: true},
+		{name: "empty", data: []byte(""), wantErr: true},
+		{name: "whitespace only", data: []byte("   \n\t  "), wantErr: true},
+		{name: "HTML error page", data: []byte("<html><body>503 Service Unavailable</body></html>"), wantErr: true, requiresGPG: true},
+		{name: "truncated garbage", data: []byte("not a key at all"), wantErr: true, requiresGPG: true},
+	}
+
+	gpgAvailable := true
+	if _, err := exec.LookPath("gpg"); err != nil {
+		gpgAvailable = false
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.requiresGPG && !gpgAvailable {
+				t.Skip("gpg not available; see TestValidateGPGKeyDataNoGPGFallback for the no-gpg behavior")
+			}
+			err := validateGPGKeyData(tt.data)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateGPGKeyData(%q) error = %v, wantErr %v", tt.name, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestValidateGPGKeyDataNoGPGFallback exercises the "gpg unavailable" branch
+// directly and portably: PATH is overridden so exec.LookPath("gpg") (the
+// only thing that decides this branch) fails regardless of whether this host
+// actually has gpg installed. Nonempty data must then be accepted outright;
+// empty data must still be rejected (that check runs before gpg is involved).
+func TestValidateGPGKeyDataNoGPGFallback(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	if err := validateGPGKeyData([]byte("not a key, but gpg isn't available to say so")); err != nil {
+		t.Errorf("expected nonempty data to be accepted when gpg is unavailable, got error: %v", err)
+	}
+	if err := validateGPGKeyData([]byte("")); err == nil {
+		t.Error("expected empty data to still be rejected even when gpg is unavailable")
 	}
 }
 

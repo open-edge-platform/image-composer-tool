@@ -175,6 +175,7 @@ var commandMap = map[string][]string{
 	"flock":              {"/usr/bin/flock"},
 	"fuser":              {"/usr/bin/fuser"},
 	"getent":             {"/usr/bin/getent"},
+	"gpg":                {"/usr/bin/gpg"},
 	"gpgconf":            {"/usr/bin/gpgconf"},
 	"groupadd":           {"/usr/sbin/groupadd", "/usr/bin/groupadd"},
 	"gunzip":             {"/usr/bin/gunzip"},
