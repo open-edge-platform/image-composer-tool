@@ -70,6 +70,30 @@ export function SelectedPackages({
   const baseIsUnresolved = (name: string) => !liveResolved[name] && baseVersionOf(name) === undefined
   const unresolvedBaseNames = baseOnlyNames.filter((name) => baseIsUnresolved(name) && !resolvingNames.has(name))
 
+  // Grouped the same way the added-packages section above is: by the
+  // repository the name actually resolves from. A live search hit (from
+  // resolving a floating entry) names its own repo; a pinned or
+  // not-yet-resolved entry's currentVersion was always checked against the
+  // default repo (see useBaseLock), so that's the only repo a resolved-but-
+  // not-live-searched name can be attributed to. Still-unresolved names have
+  // no repo to show yet and fall into a trailing, ungrouped bucket.
+  const defaultRepoId = repos.find((r) => r.enabledByDefault)?.id
+  const repoOf = (name: string): string | undefined =>
+    liveResolved[name]?.repository ?? (baseVersionOf(name) !== undefined ? defaultRepoId : undefined)
+  const baseGroups = new Map<string, string[]>()
+  const baseUngrouped: string[] = []
+  for (const name of baseOnlyNames) {
+    const repoId = repoOf(name)
+    if (!repoId) {
+      baseUngrouped.push(name)
+      continue
+    }
+    const list = baseGroups.get(repoId) ?? []
+    list.push(name)
+    baseGroups.set(repoId, list)
+  }
+  const baseRepoIds = [...baseGroups.keys()].sort((a, b) => labelFor(a).localeCompare(labelFor(b)))
+
   const groups = new Map<string, AddedPackage[]>()
   for (const p of addedPackages) {
     const list = groups.get(p.repo) ?? []
@@ -159,38 +183,42 @@ export function SelectedPackages({
                   </button>
                 )}
               </div>
-              {baseOnlyNames.map((name) => {
-                const version = baseVersionOf(name)
-                const floating = baseLock.info(name).currentIsFloating
-                return (
-                  <div key={name} className="flex items-center justify-between gap-2 px-3 py-1">
-                    <span className="min-w-0 flex-1 truncate text-[12px] text-slate-700" title={name}>
-                      {name}
-                    </span>
-                    {baseIsUnresolved(name) ? (
-                      <button
-                        type="button"
-                        onClick={() => resolveVersion(name)}
-                        disabled={resolvingNames.has(name)}
-                        className="shrink-0 text-[11px] font-medium text-[#0071c5] hover:underline disabled:cursor-wait disabled:text-slate-400 disabled:no-underline"
-                      >
-                        {resolvingNames.has(name) ? 'Resolving…' : 'Resolve'}
-                      </button>
-                    ) : (
-                      <span
-                        className="shrink-0 rounded-full bg-[#e6f2fa] px-1.5 py-0.5 font-mono text-[10px] font-medium text-[#0071c5]"
-                        title={
-                          floating
-                            ? `currently resolves to ${version} (unpinned)`
-                            : `pinned to ${version} by the template`
-                        }
-                      >
-                        {version}
-                      </span>
-                    )}
+              {baseRepoIds.map((repoId) => (
+                <div key={repoId}>
+                  <div className="px-3 pb-1 pt-1 text-[10px] font-bold uppercase tracking-[0.5px] text-slate-400">
+                    {labelFor(repoId)}
                   </div>
-                )
-              })}
+                  {baseGroups.get(repoId)!.map((name) => (
+                    <BaseOnlyRow
+                      key={name}
+                      name={name}
+                      version={baseVersionOf(name)}
+                      floating={baseLock.info(name).currentIsFloating}
+                      unresolved={baseIsUnresolved(name)}
+                      resolving={resolvingNames.has(name)}
+                      onResolve={() => resolveVersion(name)}
+                    />
+                  ))}
+                </div>
+              ))}
+              {baseUngrouped.length > 0 && (
+                <div>
+                  <div className="px-3 pb-1 pt-1 text-[10px] font-bold uppercase tracking-[0.5px] text-slate-400">
+                    Unresolved
+                  </div>
+                  {baseUngrouped.map((name) => (
+                    <BaseOnlyRow
+                      key={name}
+                      name={name}
+                      version={baseVersionOf(name)}
+                      floating={baseLock.info(name).currentIsFloating}
+                      unresolved={baseIsUnresolved(name)}
+                      resolving={resolvingNames.has(name)}
+                      onResolve={() => resolveVersion(name)}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
           )}
           {imported.length > 0 && (
@@ -219,6 +247,44 @@ export function SelectedPackages({
             </div>
           )}
         </div>
+      )}
+    </div>
+  )
+}
+
+interface BaseOnlyRowProps {
+  name: string
+  version: string | undefined
+  floating: boolean
+  unresolved: boolean
+  resolving: boolean
+  onResolve: () => void
+}
+
+function BaseOnlyRow({ name, version, floating, unresolved, resolving, onResolve }: BaseOnlyRowProps) {
+  return (
+    <div className="flex items-center justify-between gap-2 px-3 py-1">
+      <span className="min-w-0 flex-1 truncate text-[12px] text-slate-700" title={name}>
+        {name}
+      </span>
+      {unresolved ? (
+        <button
+          type="button"
+          onClick={onResolve}
+          disabled={resolving}
+          className="shrink-0 text-[11px] font-medium text-[#0071c5] hover:underline disabled:cursor-wait disabled:text-slate-400 disabled:no-underline"
+        >
+          {resolving ? 'Resolving…' : 'Resolve'}
+        </button>
+      ) : (
+        <span
+          className="shrink-0 rounded-full bg-[#e6f2fa] px-1.5 py-0.5 font-mono text-[10px] font-medium text-[#0071c5]"
+          title={
+            floating ? `currently resolves to ${version} (unpinned)` : `pinned to ${version} by the template`
+          }
+        >
+          {version}
+        </span>
       )}
     </div>
   )

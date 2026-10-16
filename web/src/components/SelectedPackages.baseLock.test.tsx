@@ -111,7 +111,7 @@ describe('SelectedPackages — already in template', () => {
 
   it('resolves a floating template package version on request', async () => {
     const baseLock = lockOf({ vim: { currentIsFloating: true } })
-    mockApi.searchPackages.mockResolvedValue({ packages: [{ name: 'vim', version: '9.1', repo: 'base' }], total: 1 })
+    mockApi.searchPackages.mockResolvedValue({ packages: [{ name: 'vim', version: '9.1', repository: 'base' }], total: 1 })
     render(<SelectedPackages repos={repos} os="ubuntu" baseLock={baseLock} />)
 
     await act(async () => {
@@ -125,7 +125,7 @@ describe('SelectedPackages — already in template', () => {
   it('bulk-resolves every unresolved template package', async () => {
     const baseLock = lockOf({ vim: { currentIsFloating: true }, bluez: { currentIsFloating: true } })
     mockApi.searchPackages.mockImplementation(({ q }: { q: string }) =>
-      Promise.resolve({ packages: [{ name: q, version: `${q}-v1`, repo: 'base' }], total: 1 }),
+      Promise.resolve({ packages: [{ name: q, version: `${q}-v1`, repository: 'base' }], total: 1 }),
     )
     render(<SelectedPackages repos={repos} os="ubuntu" baseLock={baseLock} />)
 
@@ -135,5 +135,47 @@ describe('SelectedPackages — already in template', () => {
 
     expect(screen.getByText('vim-v1')).toBeTruthy()
     expect(screen.getByText('bluez-v1')).toBeTruthy()
+  })
+})
+
+describe('SelectedPackages — already in template, grouped by repository', () => {
+  it('groups a pinned/default-repo package under the base repo header', () => {
+    const baseLock = lockOf({ vim: { currentVersion: '9.1' } })
+    render(<SelectedPackages repos={multiRepos} os="ubuntu" baseLock={baseLock} />)
+
+    const header = screen.getByText('Ubuntu Base')
+    expect(header).toBeTruthy()
+    expect(header.compareDocumentPosition(screen.getByTitle('vim')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('groups a resolved floating package under the repo it actually resolved from', async () => {
+    const baseLock = lockOf({ vim: { currentIsFloating: true } })
+    mockApi.searchPackages.mockResolvedValue({
+      packages: [{ name: 'vim', version: '9.1', repository: 'intel-eci' }],
+      total: 1,
+    })
+    render(<SelectedPackages repos={multiRepos} os="ubuntu" baseLock={baseLock} />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Resolve' }))
+    })
+
+    const header = screen.getByText('Intel ECI')
+    expect(header).toBeTruthy()
+    expect(header.compareDocumentPosition(screen.getByTitle('vim')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('puts a still-unresolved package under an "Unresolved" header rather than a repo name', () => {
+    const baseLock = lockOf({ vim: { currentIsFloating: true } })
+    render(<SelectedPackages repos={multiRepos} os="ubuntu" baseLock={baseLock} />)
+
+    expect(screen.getByText('Unresolved')).toBeTruthy()
+  })
+
+  it('omits the "Unresolved" header when nothing is unresolved', () => {
+    const baseLock = lockOf({ vim: { currentVersion: '9.1' } })
+    render(<SelectedPackages repos={multiRepos} os="ubuntu" baseLock={baseLock} />)
+
+    expect(screen.queryByText('Unresolved')).toBeNull()
   })
 })
