@@ -170,9 +170,13 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   // key instead means the Review pane keeps showing the last good resolve while
   // the user fixes the field, rather than flicking back to the un-overridden
   // template and implying their edits were discarded.
+  //
+  // Gated on diskEdited: an unedited model is seeded from the curated template
+  // and never sent, so a curated layout the step cannot represent must not
+  // block composing that template as-is.
   const diskInvalid = useMemo(
-    () => !!disk && validateDisk(disk, { imageType: selection.imageType }).errors.length > 0,
-    [disk, selection.imageType],
+    () => diskEdited && !!disk && validateDisk(disk, { imageType: selection.imageType }).errors.length > 0,
+    [diskEdited, disk, selection.imageType],
   )
   const [debouncedDiskKey, setDebouncedDiskKey] = useState(diskKey)
   useEffect(() => {

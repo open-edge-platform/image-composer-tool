@@ -34,6 +34,16 @@ type Status =
   | 'success'
   | 'failed'
 
+// Package resolution emits log lines in bursts of several hundred a second, and
+// the server buffers every one of them uncapped. Appending each arrival to state
+// as it lands would re-clean, re-reconcile and re-scroll the whole list once per
+// line — O(n) work per line over an unbounded n, which pegs the main thread hard
+// enough that clicks elsewhere in the view (the artefact download button among
+// them) never get dispatched while a compose is streaming. These two limits keep
+// the cost per burst bounded instead.
+export const LOG_FLUSH_MS = 100 // coalesce arrivals into ~10 state updates a second
+export const LOG_RENDER_LIMIT = 5000 // most recent lines kept in the DOM
+
 export function BuildView({
   buildId,
   onRetry,
@@ -89,7 +99,8 @@ export function BuildView({
           // Prefer the discovered artifact list; fall back to any partial outputs
           // recorded on the details (present after a fail/cancel).
           setArtifacts(arts.length > 0 ? arts : (d.artifacts ?? []))
-          if (logText) setLogs(logText.split('\n'))
+          // Cleaned here rather than at render, same as the streaming path.
+          if (logText) setLogs(logText.split('\n').map(cleanLine).filter((l) => l !== ''))
         })
         .catch(() => setStatus('failed'))
       return
@@ -97,6 +108,22 @@ export function BuildView({
 
     let es: EventSource | null = null
     let closed = false // set on unmount so a reconnect isn't scheduled after teardown
+
+    // Buffer arrivals and hand them to React a burst at a time. Lines are
+    // cleaned on the way in, so the render path never re-runs cleanLine over
+    // output that is already on screen.
+    let pending: string[] = []
+    let flushTimer: ReturnType<typeof setTimeout> | null = null
+    const flushLogs = () => {
+      if (flushTimer !== null) {
+        clearTimeout(flushTimer)
+        flushTimer = null
+      }
+      if (pending.length === 0) return
+      const batch = pending
+      pending = []
+      setLogs((prev) => [...prev, ...batch])
+    }
 
     // Re-read the build's details on every terminal outcome. The template row
     // is already correct from the initial fetch — the server archives the
@@ -139,10 +166,14 @@ export function BuildView({
 
       // A reconnect replays the full buffered log, so reset to avoid duplicates.
       setLogs([])
+      pending = []
 
       es.addEventListener('log', (e) => {
         const { message } = JSON.parse((e as MessageEvent).data)
-        setLogs((prev) => [...prev, message])
+        const clean = cleanLine(message)
+        if (clean === '') return // was pure ANSI/empty; never rendered anyway
+        pending.push(clean)
+        if (flushTimer === null) flushTimer = setTimeout(flushLogs, LOG_FLUSH_MS)
       })
       es.addEventListener('phase', (e) => {
         const data = JSON.parse((e as MessageEvent).data)
@@ -155,6 +186,7 @@ export function BuildView({
       es.addEventListener('complete', (e) => {
         const data = JSON.parse((e as MessageEvent).data)
         es?.close()
+        flushLogs() // the tail still buffered when the build concluded
         if (data.status === 'cancelled') {
           finishCancelled(data.artifacts, data.residual)
         } else {
@@ -165,6 +197,7 @@ export function BuildView({
       es.addEventListener('error', (e) => {
         const raw = (e as MessageEvent).data
         es?.close()
+        flushLogs() // the tail still buffered when the stream broke/failed
         if (raw) {
           // Server-sent terminal error: the build genuinely failed/cancelled. It
           // carries any partial artifacts and a residual-teardown warning too.
@@ -200,6 +233,7 @@ export function BuildView({
     return () => {
       closed = true
       es?.close()
+      if (flushTimer !== null) clearTimeout(flushTimer)
     }
   }, [buildId, isActive])
 
@@ -210,6 +244,13 @@ export function BuildView({
 
   const copyLogs = () => navigator.clipboard.writeText(logs.join('\n'))
   const copyPath = (path: string) => navigator.clipboard.writeText(path)
+
+  // Only the tail of a long log is kept in the DOM. Keys stay absolute to the
+  // full log rather than relative to the window, so appending a burst adds and
+  // drops rows at the window's edges instead of rewriting every row in place.
+  // Copy and the log-file download still carry the whole thing.
+  const hiddenLogCount = Math.max(0, logs.length - LOG_RENDER_LIMIT)
+  const visibleLogs = hiddenLogCount > 0 ? logs.slice(hiddenLogCount) : logs
 
   // Rows of the artefacts table: the build's own outputs, plus the template it
   // ran against. The template is not something the build produced, but it is
@@ -491,15 +532,18 @@ export function BuildView({
               {isActive ? 'Waiting for compose output…' : 'No log available for this compose.'}
             </div>
           )}
-          {logs.map((line, i) => {
-            const clean = cleanLine(line)
-            if (clean === '') return null
-            return (
-              <div key={i} className="whitespace-pre">
-                {clean}
-              </div>
-            )
-          })}
+          {hiddenLogCount > 0 && (
+            <div className="pb-2 text-slate-400">
+              … {hiddenLogCount.toLocaleString()} earlier{' '}
+              {hiddenLogCount === 1 ? 'line is' : 'lines are'} not shown — copy or
+              download the log for the full output.
+            </div>
+          )}
+          {visibleLogs.map((line, i) => (
+            <div key={hiddenLogCount + i} className="whitespace-pre">
+              {line}
+            </div>
+          ))}
         </div>
       </div>
 
