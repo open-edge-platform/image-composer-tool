@@ -21,6 +21,11 @@ const repos: PackageRepo[] = [
   { id: 'base', displayName: 'Ubuntu Base', url: 'http://example/base', enabledByDefault: true },
 ]
 
+const multiRepos: PackageRepo[] = [
+  { id: 'base', displayName: 'Ubuntu Base', url: 'http://example/base', enabledByDefault: true },
+  { id: 'intel-eci', displayName: 'Intel ECI', url: 'http://example/eci', enabledByDefault: false },
+]
+
 const lockOf = (names: Record<string, { currentVersion?: string; currentIsFloating?: boolean }>): BaseLock => ({
   info: (name) => ({ locked: name in names, currentIsFloating: false, ...names[name] }),
   ensureResolved: () => {},
@@ -65,6 +70,43 @@ describe('SelectedPackages — already in template', () => {
 
     expect(screen.queryByText('Already in template')).toBeNull()
     expect(screen.getByLabelText('Remove vim')).toBeTruthy()
+  })
+
+  it('Clear removes only explicitly-added packages, leaving template-locked ones in place', () => {
+    const baseLock = lockOf({ vim: { currentVersion: '9.1' } })
+    useStore.getState().setPackage({ name: 'media-ffmpeg', version: '', repo: 'base' })
+    const { rerender } = render(<SelectedPackages repos={repos} os="ubuntu" baseLock={baseLock} />)
+    expect(screen.getByText('Already in template')).toBeTruthy()
+    expect(screen.getByTitle('vim')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
+    rerender(<SelectedPackages repos={repos} os="ubuntu" baseLock={baseLock} />)
+
+    expect(screen.getByText('Already in template')).toBeTruthy()
+    expect(screen.getByTitle('vim')).toBeTruthy()
+    expect(screen.queryByTitle('media-ffmpeg')).toBeNull()
+  })
+
+  // Regression: a repo the matched template's own locked packages still need
+  // (not visible in addedPackages at all) used to be dropped from
+  // enabledRepos once the last explicitly-added package from it was removed.
+  it('Clear does not release a repo the matched template still locks', () => {
+    const baseLock = lockOf({ vim: { currentVersion: '9.1' } })
+    useStore.setState({ enabledRepos: ['intel-eci'] })
+    useStore.getState().setPackage({ name: 'media-ffmpeg', version: '', repo: 'intel-eci' })
+    render(
+      <SelectedPackages
+        repos={multiRepos}
+        os="ubuntu"
+        baseLock={baseLock}
+        lockedRepoIds={new Set(['intel-eci'])}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
+
+    expect(useStore.getState().addedPackages).toHaveLength(0)
+    expect(useStore.getState().enabledRepos).toContain('intel-eci')
   })
 
   it('resolves a floating template package version on request', async () => {

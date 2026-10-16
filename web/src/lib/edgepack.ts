@@ -265,6 +265,18 @@ export function reposToEnable(
   return ids
 }
 
+// templateLockedRepos is every repo id the matched template already needs
+// because it carries an Edge Pack base runtime or domain package on its own
+// — the repo-level counterpart to isEffectivelySelected's package-level
+// lock. Reuses reposToEnable so a locked domain's own prerequisites (e.g.
+// intel-graphics under Standard) are included, same as an explicit pick.
+export function templateLockedRepos(pack: EdgePack, baseLock: BaseLock): string[] {
+  const lockedRuntimes = pack.baseRuntimes.filter((r) => baseLock.info(r.package.name).locked)
+  const lockedDomains = pack.domains.filter((d) => d.packages.some((p) => baseLock.info(p.name).locked))
+  if (lockedRuntimes.length === 0 && lockedDomains.length === 0) return []
+  return reposToEnable(pack, [...lockedRuntimes, ...lockedDomains])
+}
+
 // toAddedPackages turns pack packages into store records at the repository the
 // pack resolves from, skipping any already selected or already carried by the
 // matched template.

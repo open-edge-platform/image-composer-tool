@@ -25,6 +25,7 @@ import {
   reposToEnable,
   selectedBaseRuntime,
   strandedPackages,
+  templateLockedRepos,
   toAddedPackages,
   versionsOf,
 } from './edgepack'
@@ -298,6 +299,34 @@ describe('reposToEnable', () => {
 
   it('needs nothing beyond the pack repo for no selection at all', () => {
     expect(reposToEnable(pack, [])).toEqual(['intel-eci'])
+  })
+})
+
+describe('templateLockedRepos', () => {
+  it('reports nothing when the template carries none of this pack’s packages', () => {
+    expect(templateLockedRepos(pack, noLock)).toEqual([])
+  })
+
+  it('includes the pack repo for a locked domain package', () => {
+    expect(templateLockedRepos(pack, lockOf('media-ffmpeg'))).toEqual(['intel-eci'])
+  })
+
+  it('includes a locked domain’s own prerequisite, same as an explicit pick', () => {
+    // shared-runtime belongs to NPU (unavailable, requires intel-graphics) and
+    // Graphics (available, requires intel-graphics) — either locks the same
+    // prerequisite.
+    expect(templateLockedRepos(pack, lockOf('shared-runtime'))).toEqual(['intel-eci', 'intel-graphics'])
+  })
+
+  it('includes a locked base runtime’s prerequisite', () => {
+    expect(templateLockedRepos(pack, lockOf('base-standard'))).toEqual(['intel-eci', 'intel-graphics'])
+  })
+
+  it('does not double-count a prerequisite shared by a locked runtime and a locked domain', () => {
+    expect(templateLockedRepos(pack, lockOf('base-standard', 'media-ffmpeg'))).toEqual([
+      'intel-eci',
+      'intel-graphics',
+    ])
   })
 })
 

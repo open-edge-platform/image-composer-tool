@@ -7,7 +7,10 @@ interface SelectedPackagesProps {
   repos: PackageRepo[]
   os?: string
   baseLock?: BaseLock
+  lockedRepoIds?: Set<string>
 }
+
+const noLockedRepos = new Set<string>()
 
 // Callers that have no matched template (or are pre-baseLock test setups)
 // can omit os/baseLock entirely — the "Already in template" section simply
@@ -21,7 +24,12 @@ const noBaseLock: BaseLock = {
 // SelectedPackages is the right rail: everything the user has added so far,
 // grouped by the repository it came from, with a per-item remove and a
 // clear-all. Stickiness is handled by the caller (PackagesStep.tsx).
-export function SelectedPackages({ repos, os = '', baseLock = noBaseLock }: SelectedPackagesProps) {
+export function SelectedPackages({
+  repos,
+  os = '',
+  baseLock = noBaseLock,
+  lockedRepoIds = noLockedRepos,
+}: SelectedPackagesProps) {
   const addedPackages = useStore((s) => s.addedPackages)
   const removePackage = useStore((s) => s.removePackage)
   const clearPackages = useStore((s) => s.clearPackages)
@@ -32,6 +40,7 @@ export function SelectedPackages({ repos, os = '', baseLock = noBaseLock }: Sele
 
   const labelFor = (repoId: string) => repos.find((r) => r.id === repoId)?.displayName ?? repoId
   const isBaseRepo = (repoId: string) => repos.find((r) => r.id === repoId)?.enabledByDefault ?? false
+  const isProtectedRepo = (repoId: string) => isBaseRepo(repoId) || lockedRepoIds.has(repoId)
 
   // Filtered here rather than read back off the next compose, so a removal
   // leaves the list immediately instead of after a server round trip.
@@ -78,7 +87,7 @@ export function SelectedPackages({ repos, os = '', baseLock = noBaseLock }: Sele
         {addedPackages.length > 0 && (
           <button
             type="button"
-            onClick={clearPackages}
+            onClick={() => clearPackages(lockedRepoIds)}
             className="text-[12px] font-medium text-[#0071c5] hover:underline"
           >
             Clear
@@ -116,7 +125,8 @@ export function SelectedPackages({ repos, os = '', baseLock = noBaseLock }: Sele
                     type="button"
                     onClick={() =>
                       removePackage(p.name, {
-                        releaseRepo: confirmRepoRelease(addedPackages, labelFor, [p.name], isBaseRepo),
+                        releaseRepo: confirmRepoRelease(addedPackages, labelFor, [p.name], isProtectedRepo),
+                        protectedRepos: lockedRepoIds,
                       })
                     }
                     aria-label={`Remove ${p.name}`}

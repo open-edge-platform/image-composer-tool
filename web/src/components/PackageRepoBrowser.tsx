@@ -13,7 +13,13 @@ interface PackageRepoBrowserProps {
   repos: PackageRepo[]
   os: string
   baseLock: BaseLock
+  // Repos the matched template already draws a package from (currently just
+  // Edge Pack's — see templateLockedRepos in lib/edgepack.ts). Treated the
+  // same as a base repo: checked and unable to be unchecked.
+  lockedRepoIds?: Set<string>
 }
+
+const noLockedRepos = new Set<string>()
 
 // PackageRepoBrowser is the two-pane repository browser: a rail of checkboxes
 // enabling/disabling repositories, and a pane listing the merged catalog of
@@ -27,19 +33,23 @@ interface PackageRepoBrowserProps {
 // behalf — the store doesn't distinguish the two. Every package mutation
 // here therefore runs through confirmRepoRelease before it could uncheck a
 // repo as a side effect, the same as the search dropdown does.
-export function PackageRepoBrowser({ repos, os, baseLock }: PackageRepoBrowserProps) {
+export function PackageRepoBrowser({ repos, os, baseLock, lockedRepoIds = noLockedRepos }: PackageRepoBrowserProps) {
   const enabledRepos = useStore((s) => s.enabledRepos)
   const setRepoEnabled = useStore((s) => s.setRepoEnabled)
 
-  // Base repos are always enabled and can't be turned off, so they belong at
-  // the top of the rail rather than wherever their priority happens to land
-  // them among the optional repos. Stable sort keeps the server's
-  // priority-descending order within each group.
-  const railRepos = [...repos].sort((a, b) => Number(b.enabledByDefault) - Number(a.enabledByDefault))
+  // A base repo or a template-locked one is always enabled and can't be
+  // turned off, so either belongs at the top of the rail rather than
+  // wherever its priority happens to land it among the optional repos.
+  // Stable sort keeps the server's priority-descending order within each
+  // group.
+  const alwaysOn = (r: PackageRepo) => r.enabledByDefault || lockedRepoIds.has(r.id)
+  const railRepos = [...repos].sort((a, b) => Number(alwaysOn(b)) - Number(alwaysOn(a)))
 
   // A repo the catalog marks enabledByDefault is the target's base repository:
-  // every build reads it, so it cannot be turned off.
-  const isEnabled = (r: PackageRepo) => r.enabledByDefault || enabledRepos.includes(r.id)
+  // every build reads it, so it cannot be turned off. A repo in
+  // lockedRepoIds is the same situation for a different reason: the matched
+  // template already draws a package from it.
+  const isEnabled = (r: PackageRepo) => alwaysOn(r) || enabledRepos.includes(r.id)
 
   return (
     <>
@@ -59,6 +69,7 @@ export function PackageRepoBrowser({ repos, os, baseLock }: PackageRepoBrowserPr
               key={r.id}
               repo={r}
               enabled={isEnabled(r)}
+              locked={lockedRepoIds.has(r.id)}
               onToggle={(on) => setRepoEnabled(r.id, on)}
             />
           ))}
@@ -68,7 +79,7 @@ export function PackageRepoBrowser({ repos, os, baseLock }: PackageRepoBrowserPr
           aria-label="Repository packages"
           className="max-h-[480px] overflow-y-auto px-[18px] py-3.5"
         >
-          <MergedPane repos={railRepos} isEnabled={isEnabled} os={os} baseLock={baseLock} />
+          <MergedPane repos={railRepos} isEnabled={isEnabled} os={os} baseLock={baseLock} lockedRepoIds={lockedRepoIds} />
         </div>
       </div>
       <p className="mt-2 text-sm text-slate-500">
@@ -96,22 +107,30 @@ export function PackageRepoBrowser({ repos, os, baseLock }: PackageRepoBrowserPr
 function RepoRailRow({
   repo,
   enabled,
+  locked,
   onToggle,
 }: {
   repo: PackageRepo
   enabled: boolean
+  locked: boolean
   onToggle: (on: boolean) => void
 }) {
+  const badge = repo.enabledByDefault ? 'Base — always on' : locked ? 'In template — always on' : null
+  const title = repo.enabledByDefault
+    ? 'Base repository — always enabled'
+    : locked
+      ? "Already in template — can't be unchecked"
+      : undefined
   return (
     <div className="flex items-center gap-2.5 border-b border-slate-100 px-3 py-2.5 hover:bg-[#eef4fb]">
       <input
         type="checkbox"
         id={`repo-${repo.id}`}
         checked={enabled}
-        disabled={repo.enabledByDefault}
+        disabled={repo.enabledByDefault || locked}
         onChange={(e) => onToggle(e.target.checked)}
         className="h-[15px] w-[15px] shrink-0 accent-[#0071c5] disabled:cursor-not-allowed"
-        title={repo.enabledByDefault ? 'Base repository — always enabled' : undefined}
+        title={title}
       />
       <label htmlFor={`repo-${repo.id}`} className="min-w-0 flex-1 cursor-pointer">
         <span
@@ -122,9 +141,7 @@ function RepoRailRow({
         >
           {repo.displayName}
         </span>
-        {repo.enabledByDefault && (
-          <span className="text-[11px] text-slate-500">Base — always on</span>
-        )}
+        {badge && <span className="text-[11px] text-slate-500">{badge}</span>}
       </label>
     </div>
   )
@@ -135,11 +152,13 @@ function MergedPane({
   isEnabled,
   os,
   baseLock,
+  lockedRepoIds,
 }: {
   repos: PackageRepo[]
   isEnabled: (r: PackageRepo) => boolean
   os: string
   baseLock: BaseLock
+  lockedRepoIds: Set<string>
 }) {
   const [hits, setHits] = useState<PackageSearchResult[]>([])
   const [total, setTotal] = useState(0)
@@ -189,6 +208,7 @@ function MergedPane({
   const hasCuratedPackages = curatedScope.some((r) => r.hasCuratedPackages)
   const repoLabelFor = (repoId: string) => repos.find((r) => r.id === repoId)?.displayName ?? repoId
   const isBaseRepo = (repoId: string) => repos.find((r) => r.id === repoId)?.enabledByDefault ?? false
+  const isProtectedRepo = (repoId: string) => isBaseRepo(repoId) || lockedRepoIds.has(repoId)
   // Adding a package (checkbox, a version chip, or bulk "Select all") from a
   // repo that isn't checked yet is a statement of interest in it, exactly
   // like picking a search-dropdown hit that isn't checked already enables
@@ -322,7 +342,10 @@ function MergedPane({
       new Set(toAdd.map((p) => p.repo)).forEach(ensureRepoEnabled)
     } else {
       const names = selectableHits.map((h) => h.name)
-      removePackages(names, { releaseRepo: confirmRepoRelease(addedPackages, repoLabelFor, names, isBaseRepo) })
+      removePackages(names, {
+        releaseRepo: confirmRepoRelease(addedPackages, repoLabelFor, names, isProtectedRepo),
+        protectedRepos: lockedRepoIds,
+      })
     }
   }
 
@@ -452,13 +475,19 @@ function MergedPane({
                       ensureRepoEnabled(h.repository)
                       return
                     }
-                    removePackage(h.name, { releaseRepo: confirmRepoRelease(addedPackages, repoLabelFor, [h.name], isBaseRepo) })
+                    removePackage(h.name, {
+                      releaseRepo: confirmRepoRelease(addedPackages, repoLabelFor, [h.name], isProtectedRepo),
+                      protectedRepos: lockedRepoIds,
+                    })
                   }}
                   onChooseVersion={(v) => {
                     const previous = addedPackages.find((p) => p.name === h.name)
                     const opts =
                       previous && previous.repo !== v.repository
-                        ? { releaseRepo: confirmRepoRelease(addedPackages, repoLabelFor, [h.name], isBaseRepo) }
+                        ? {
+                            releaseRepo: confirmRepoRelease(addedPackages, repoLabelFor, [h.name], isProtectedRepo),
+                            protectedRepos: lockedRepoIds,
+                          }
                         : undefined
                     setPackage({ name: h.name, version: v.version, repo: v.repository }, opts)
                     ensureRepoEnabled(v.repository)

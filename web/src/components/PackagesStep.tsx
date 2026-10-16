@@ -7,6 +7,7 @@ import { PackageRepoBrowser } from './PackageRepoBrowser'
 import { PackageRow } from './PackageRow'
 import { SelectedPackages } from './SelectedPackages'
 import { useBaseLock, ensureBaseVersions, type BaseLock } from '../lib/baseLock'
+import { templateLockedRepos } from '../lib/edgepack'
 
 interface PackagesStepProps {
   // Target OS id (a manifest `targets[].id`, e.g. "ubuntu24"). Empty until the
@@ -111,6 +112,10 @@ export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
   const baseLock = useBaseLock(os, repos, basePackages)
   const targetLabel = manifest?.targets.find((t) => t.id === os)?.displayName ?? os
   const repoLabelFor = (id: string) => repos?.find((r) => r.id === id)?.displayName ?? id
+  // Repos the matched template already draws an Edge Pack package from —
+  // these get the same "always on, can't uncheck" treatment the Repositories
+  // tab already gives the target's base repo.
+  const lockedRepoIds = new Set(edgePack ? templateLockedRepos(edgePack, baseLock) : [])
 
   return (
     <div>
@@ -150,7 +155,7 @@ export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
             {/* Search sits above the tabs rather than inside one: it looks
                 across every repository, so it is the path that works when you
                 don't know which surface a package lives on. */}
-            <PackageSearch os={os} repos={repos} baseLock={baseLock} />
+            <PackageSearch os={os} repos={repos} baseLock={baseLock} lockedRepoIds={lockedRepoIds} />
             <BrowseTabs tab={tab} onTab={setTab} />
             {/* One panel id for both tabs, not one per tab. Only the active
                 panel is rendered, so a per-tab id would leave every inactive
@@ -159,7 +164,7 @@ export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
                 that genuinely changes. */}
             <div role="tabpanel" id={PANEL_ID} aria-labelledby={`tab-${tab}`}>
               {tab === 'repos' ? (
-                <PackageRepoBrowser repos={repos} os={os} baseLock={baseLock} />
+                <PackageRepoBrowser repos={repos} os={os} baseLock={baseLock} lockedRepoIds={lockedRepoIds} />
               ) : edgePack ? (
                 <EdgePackBrowser
                   pack={edgePack}
@@ -178,7 +183,7 @@ export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
             </div>
           </div>
           <div className="sticky top-4 flex flex-col gap-3">
-            <SelectedPackages repos={repos} os={os} baseLock={baseLock} />
+            <SelectedPackages repos={repos} os={os} baseLock={baseLock} lockedRepoIds={lockedRepoIds} />
           </div>
         </div>
       )}
@@ -351,7 +356,17 @@ function mergeHits(
 // Results stream in per repository rather than arriving all at once: a search
 // fans out over the whole catalog, and an unreachable mirror would otherwise
 // hold up hits already found elsewhere until it hit its dial timeout.
-function PackageSearch({ os, repos, baseLock }: { os: string; repos: PackageRepo[]; baseLock: BaseLock }) {
+function PackageSearch({
+  os,
+  repos,
+  baseLock,
+  lockedRepoIds,
+}: {
+  os: string
+  repos: PackageRepo[]
+  baseLock: BaseLock
+  lockedRepoIds: Set<string>
+}) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<PackageSearchResult[]>([])
   const [open, setOpen] = useState(false)
@@ -461,6 +476,7 @@ function PackageSearch({ os, repos, baseLock }: { os: string; repos: PackageRepo
     return r?.enabledByDefault || enabledRepos.includes(repoId)
   }
   const isBaseRepo = (repoId: string) => repos.find((r) => r.id === repoId)?.enabledByDefault ?? false
+  const isProtectedRepo = (repoId: string) => isBaseRepo(repoId) || lockedRepoIds.has(repoId)
 
   // Adding a package is a statement of interest in its repo, so it's brought
   // into the enabled set even if the user never touched that repo's checkbox.
@@ -476,7 +492,10 @@ function PackageSearch({ os, repos, baseLock }: { os: string; repos: PackageRepo
     const previous = addedPackages.find((p) => p.name === hit.name)
     const opts =
       previous && previous.repo !== repo
-        ? { releaseRepo: confirmRepoRelease(addedPackages, labelFor, [hit.name], isBaseRepo) }
+        ? {
+            releaseRepo: confirmRepoRelease(addedPackages, labelFor, [hit.name], isProtectedRepo),
+            protectedRepos: lockedRepoIds,
+          }
         : undefined
     setPackage({ name: hit.name, version, repo }, opts)
     if (!isEnabled(repo)) setRepoEnabled(repo, true)
@@ -562,7 +581,8 @@ function PackageSearch({ os, repos, baseLock }: { os: string; repos: PackageRepo
                           return
                         }
                         removePackage(hit.name, {
-                          releaseRepo: confirmRepoRelease(addedPackages, labelFor, [hit.name], isBaseRepo),
+                          releaseRepo: confirmRepoRelease(addedPackages, labelFor, [hit.name], isProtectedRepo),
+                          protectedRepos: lockedRepoIds,
                         })
                       }}
                       onChooseVersion={(v) => add(hit, v.repository, v.version)}
