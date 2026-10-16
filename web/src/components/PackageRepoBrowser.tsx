@@ -4,6 +4,7 @@ import { api } from '../api/client'
 import type { PackageRepo, PackageSearchResult } from '../api/types'
 import { PackageRow } from './PackageRow'
 import { ensureBaseVersions, type BaseLock } from '../lib/baseLock'
+import { useVersionResolver } from '../lib/useVersionResolver'
 
 // Packages fetched per page when browsing the merged catalog (no query).
 const PAGE_SIZE = 100
@@ -79,13 +80,14 @@ export function PackageRepoBrowser({ repos, os, baseLock }: PackageRepoBrowserPr
         checks it for you, the same as the search box above already does.
         Where any relevant repository offers curated picks, check &quot;Show
         frequently used&quot; to narrow the list to them, or check
-        &quot;Show only selected&quot; to review everything already in this
-        build — what the matched template ships on its own, plus anything
-        you&apos;ve added. An unpinned entry there shows as &quot;Latest&quot;
-        until you resolve it (individually or all at once), since what it
-        actually resolves to can depend on which repositories end up checked.
-        The &quot;Select all&quot; checkbox adds everything on the current
-        page to your selection, and removes it again when unchecked.
+        &quot;Show only selected&quot; to review just what you&apos;ve
+        explicitly added here. What the matched template ships on its own
+        shows in the Selected panel on the right instead. An unpinned entry
+        in &quot;Show only selected&quot; shows as &quot;Latest&quot; until
+        you resolve it (individually or all at once), since what it actually
+        resolves to can depend on which repositories end up checked. The
+        &quot;Select all&quot; checkbox adds everything on the current page
+        to your selection, and removes it again when unchecked.
       </p>
     </>
   )
@@ -157,14 +159,6 @@ function MergedPane({
   // "browse what I've checked" unless asked otherwise. Meaningless (and
   // hidden) while reviewing selections, since that view isn't a fetch at all.
   const [browseAllRepos, setBrowseAllRepos] = useState(false)
-  // Real comparisons across currently-checked repos for an unpinned row in
-  // that review list (a base-template entry not yet overridden, or a
-  // floating user pick), fetched only on request — see resolveVersion.
-  // Keyed by name; cleared whenever the checked set changes, since a
-  // comparison made against a different set of repos no longer applies.
-  const [liveResolved, setLiveResolved] = useState<Record<string, PackageSearchResult>>({})
-  const [resolvingNames, setResolvingNames] = useState<Set<string>>(new Set())
-  const [bulkResolving, setBulkResolving] = useState(false)
   // 0-indexed current page. A catalog this large (tens of thousands of
   // packages) can't be browsed by accumulating "load more" pages — reaching
   // anything starting with a later letter would take hundreds of clicks — so
@@ -181,7 +175,8 @@ function MergedPane({
   const setRepoEnabled = useStore((s) => s.setRepoEnabled)
 
   const enabledRepoIds = repos.filter(isEnabled).map((r) => r.id)
-  const enabledIdsKey = enabledRepoIds.join(',')
+  const { liveResolved, resolvingNames, resolveVersion, resolveAll: resolveAllVersions, bulkResolving } =
+    useVersionResolver(os, enabledRepoIds)
   // What the merged catalog is actually fetched against — every repo when
   // browseAllRepos is on, otherwise just the checked ones. Kept separate
   // from enabledRepoIds: resolveVersion and the "already added" rows below
@@ -211,17 +206,6 @@ function MergedPane({
     setFrequentOnly(false)
     setPage(0)
   }, [fetchIdsKey])
-
-  // A live-resolved comparison is scoped to enabledRepoIds specifically (see
-  // fetchRepoIds above), so it's invalidated on that set changing, not on
-  // fetchIdsKey — it was only ever a snapshot against the repos checked at
-  // the time, not something that stays accurate as that set changes; better
-  // to drop it and let it be re-resolved than to leave a silently stale
-  // comparison on screen.
-  useEffect(() => {
-    setLiveResolved({})
-    setResolvingNames(new Set())
-  }, [enabledIdsKey])
 
   // The page-number input is free text while being edited (jumpToPage parses
   // it on Enter/blur), but should reflect the actual page whenever that
@@ -271,45 +255,12 @@ function MergedPane({
 
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
-  // Fires a real search against every currently-checked repo for one name,
-  // recording the result so its row can show a genuine comparison instead
-  // of a bare "Latest". Deliberately not run eagerly (unlike the default-repo
-  // lookup baseLock already does elsewhere) — the review list can carry the
-  // whole base template's worth of names, and checking every one of them
-  // against every checked repo just to open the panel would be the same
-  // "quick per row, expensive in bulk" cost the bulk button below exists to
-  // make an explicit choice about.
-  // Returns a promise that settles once the fetch does, so resolveAll (which
-  // fires one of these per unresolved row) can actually wait for all of them
-  // rather than just for their synchronous dispatch.
-  const resolveVersion = (name: string): Promise<void> => {
-    if (name in liveResolved || resolvingNames.has(name)) return Promise.resolve()
-    setResolvingNames((prev) => new Set(prev).add(name))
-    return api
-      .searchPackages({ os, repos: enabledRepoIds, q: name, limit: 20 })
-      .then((r) => {
-        const exact = r.packages.find((p) => p.name === name)
-        if (exact) setLiveResolved((prev) => ({ ...prev, [name]: exact }))
-      })
-      .catch(() => {
-        // Leave it unresolved on failure — resolveVersion's own in-progress
-        // guard lets a retry (another click) try again.
-      })
-      .finally(() => {
-        setResolvingNames((prev) => {
-          const next = new Set(prev)
-          next.delete(name)
-          return next
-        })
-      })
-  }
-
   // Already-picked packages relevant to the checked repos, synthesized
   // straight from the store rather than fetched — addedPackages only carries
   // name/version/repo, not description or sibling versions, which is fine
   // for a short review list. A floating pick (version === '') uses whatever
-  // was live-resolved for it, same as a base-only row below.
-  const addedRows: PackageSearchResult[] = addedPackages
+  // was live-resolved for it.
+  const selectedRows: PackageSearchResult[] = addedPackages
     .filter((p) => enabledRepoIds.includes(p.repo))
     .map((p) => {
       if (p.version === '' && liveResolved[p.name]) return liveResolved[p.name]
@@ -320,30 +271,7 @@ function MergedPane({
         versions: p.version ? [{ version: p.version, repository: p.repo }] : [],
       }
     })
-
-  // Base-template entries not already covered by an addedPackages entry
-  // above — reviewing "what's in this build" should include what the
-  // template ships on its own, not just what was explicitly picked. A pinned
-  // entry already has a real, unambiguous version; an unpinned one shows
-  // "Latest" (via an empty versions list — PackageRow's currentIsFloating
-  // handles the rest) until resolveVersion fills it in for real.
-  const addedNames = new Set(addedPackages.map((p) => p.name))
-  const baseOnlyRows: PackageSearchResult[] = baseLock.concreteNames
-    .filter((name) => !addedNames.has(name))
-    .map((name) => {
-      if (liveResolved[name]) return liveResolved[name]
-      const info = baseLock.info(name)
-      return {
-        name,
-        version: info.currentIsFloating ? '' : (info.currentVersion ?? ''),
-        repository: '',
-        versions: [],
-      }
-    })
-
-  const selectedRows: PackageSearchResult[] = [...baseOnlyRows, ...addedRows].sort((a, b) =>
-    a.name.localeCompare(b.name),
-  )
+    .sort((a, b) => a.name.localeCompare(b.name))
 
   const displayRows = selectedOnly ? selectedRows : hits
 
@@ -365,13 +293,7 @@ function MergedPane({
     ? selectedRows.filter((h) => isUnresolved(h) && !resolvingNames.has(h.name)).map((h) => h.name)
     : []
 
-  const resolveAll = () => {
-    if (unresolvedNames.length === 0) return
-    setBulkResolving(true)
-    Promise.allSettled(unresolvedNames.map((name) => resolveVersion(name))).finally(() => {
-      setBulkResolving(false)
-    })
-  }
+  const resolveAll = () => resolveAllVersions(unresolvedNames)
 
   const jumpToPage = () => {
     const n = parseInt(pageInput, 10)
