@@ -178,7 +178,7 @@ export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
             </div>
           </div>
           <div className="sticky top-4 flex flex-col gap-3">
-            <SelectedPackages repos={repos} />
+            <SelectedPackages repos={repos} os={os} baseLock={baseLock} />
           </div>
         </div>
       )}
