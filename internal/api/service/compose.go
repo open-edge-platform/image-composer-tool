@@ -57,18 +57,6 @@ type Selection struct {
 	// never be confused with attaching a password to a curated account.
 	// Lookup-neutral like the fields above.
 	NewUsers []NewUserInput
-
-	// BaseYAML composes against a caller-supplied document instead of a
-	// manifest-matched template: an imported template, which no combination maps
-	// to. Set, it replaces the lookup entirely and the five lookup fields are not
-	// required; everything downstream (delta, merge, summary) is unchanged,
-	// because the document simply takes the curated parent's place.
-	BaseYAML string
-	// RemovePackages drops entries from BaseYAML's own systemConfig.packages.
-	// Deletion is the one edit a delta cannot express — the extends merge unions
-	// package lists — so it is applied to the document itself. Ignored without
-	// BaseYAML: there is no document to edit.
-	RemovePackages []string
 }
 
 // CredentialInput is a login the caller supplies for one existing template
@@ -132,10 +120,6 @@ type CredentialRequirement struct {
 // hasOverrides reports whether the selection asks for anything beyond the
 // matched template, i.e. whether a delta has to be generated at all. Without
 // any, the curated template is resolved directly and no file is written.
-//
-// RemovePackages is deliberately absent: it edits the base document rather than
-// being carried in a delta, so it changes what the parent *is* instead of
-// adding a layer over it.
 func (s Selection) hasOverrides() bool {
 	return s.ImageName != "" || len(s.Packages) > 0 || len(s.Repos) > 0 ||
 		s.Disk != nil || len(s.Credentials) > 0 || len(s.NewUsers) > 0
@@ -410,10 +394,7 @@ type ComposeResult struct {
 // this exact selection would produce. Either way, this is the review path:
 // it never mutates the curated template on disk.
 func (s *Service) Compose(sel Selection) (*ComposeResult, error) {
-	// The lookup fields identify a curated template; a supplied document is
-	// already the thing they would have found.
-	if sel.BaseYAML == "" &&
-		(sel.Vertical == "" || sel.Platform == "" || sel.OS == "" || sel.ImageType == "") {
+	if sel.Vertical == "" || sel.Platform == "" || sel.OS == "" || sel.ImageType == "" {
 		return nil, newError(http.StatusBadRequest, "BAD_REQUEST",
 			"vertical, platform, os, and imageType are required")
 	}
@@ -427,43 +408,30 @@ func (s *Service) Compose(sel Selection) (*ComposeResult, error) {
 		return nil, newError(http.StatusBadRequest, "BAD_REQUEST", err.Error())
 	}
 
-	// Either the manifest names the parent template, or the caller supplied it.
-	// Everything from here on treats the two identically.
-	var tmpl, path string
-	if sel.BaseYAML != "" {
-		name, full, cleanup, merr := s.materializeBase(sel)
-		if merr != nil {
-			return nil, newError(http.StatusInternalServerError, "TEMPLATE_INVALID", merr.Error())
-		}
-		defer cleanup()
-		tmpl, path = name, full
-	} else {
-		tmpl = s.manifest.findTemplate(sel.Vertical, sel.SKU, sel.Platform, sel.OS, sel.ImageType)
-		if tmpl == "" {
-			return nil, newError(http.StatusBadRequest, "NO_MATCH",
-				"no template maps to the selected combination")
-		}
+	tmpl := s.manifest.findTemplate(sel.Vertical, sel.SKU, sel.Platform, sel.OS, sel.ImageType)
+	if tmpl == "" {
+		return nil, newError(http.StatusBadRequest, "NO_MATCH",
+			"no template maps to the selected combination")
+	}
 
-		var perr error
-		path, perr = safeTemplatePath(s.cfg.TemplatesDir, tmpl)
-		if perr != nil {
-			return nil, newError(http.StatusInternalServerError, "TEMPLATE_INVALID",
-				"manifest template path is invalid")
+	path, err := safeTemplatePath(s.cfg.TemplatesDir, tmpl)
+	if err != nil {
+		return nil, newError(http.StatusInternalServerError, "TEMPLATE_INVALID",
+			"manifest template path is invalid")
+	}
+	// A manifest entry pointing at a file that isn't on disk is a server-side
+	// configuration error, not "this template is invalid" — surface it as its
+	// own code/status rather than letting it fall through to the generic
+	// load/merge failure below. Distinguish "not found" from other stat
+	// failures (permissions, transient IO) so the latter isn't misreported as
+	// a missing file and its cause isn't lost.
+	if _, statErr := os.Stat(path); statErr != nil {
+		if os.IsNotExist(statErr) {
+			return nil, newError(http.StatusInternalServerError, "TEMPLATE_MISSING",
+				"matched template file not found on disk")
 		}
-		// A manifest entry pointing at a file that isn't on disk is a server-side
-		// configuration error, not "this template is invalid" — surface it as its
-		// own code/status rather than letting it fall through to the generic
-		// load/merge failure below. Distinguish "not found" from other stat
-		// failures (permissions, transient IO) so the latter isn't misreported as
-		// a missing file and its cause isn't lost.
-		if _, statErr := os.Stat(path); statErr != nil {
-			if os.IsNotExist(statErr) {
-				return nil, newError(http.StatusInternalServerError, "TEMPLATE_MISSING",
-					"matched template file not found on disk")
-			}
-			return nil, newError(http.StatusInternalServerError, "TEMPLATE_STAT_FAILED",
-				fmt.Sprintf("checking matched template file: %v", statErr))
-		}
+		return nil, newError(http.StatusInternalServerError, "TEMPLATE_STAT_FAILED",
+			fmt.Sprintf("checking matched template file: %v", statErr))
 	}
 
 	// Credentials name existing users and new users must not collide with one,
@@ -521,15 +489,8 @@ func (s *Service) Compose(sel Selection) (*ComposeResult, error) {
 			"resolved template failed to marshal: "+err.Error())
 	}
 
-	// A materialized document's on-disk name is a server-chosen scratch name;
-	// report what the document calls itself, which is what the caller recognises.
-	displayName := tmpl
-	if sel.BaseYAML != "" {
-		displayName = postedTemplateName(sel.BaseYAML)
-	}
-
 	res := &ComposeResult{
-		Template:  displayName,
+		Template:  tmpl,
 		YAML:      string(yamlBytes),
 		Summary:   buildComposeSummary(sel, merged),
 		DeltaYAML: deltaYAML,

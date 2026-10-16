@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useStore, cascadingOptions, encodePackage, selectionFromTemplate } from '../store'
+import { useStore, cascadingOptions, encodePackage } from '../store'
 import type { Selection } from '../store'
 import { api } from '../api/client'
 import type {
@@ -16,7 +16,6 @@ import { DiskStep } from './DiskStep'
 import { credentialsComplete } from './CredentialsStep'
 import { newUsersValid } from './NewUsersSection'
 import { CredentialsDialog } from './CredentialsDialog'
-import { ImportTemplateDialog } from './ImportTemplateDialog'
 import { parseDiskFromYaml, toDiskConfig, validateDisk } from '../lib/disk'
 
 // How long to wait after the last keystroke in Image Name before re-composing.
@@ -63,10 +62,6 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   const seedDisk = useStore((s) => s.seedDisk)
   const disk = useStore((s) => s.disk)
   const diskEdited = useStore((s) => s.diskEdited)
-  const importedTemplate = useStore((s) => s.importedTemplate)
-  const importedRequirements = useStore((s) => s.importedRequirements)
-  const setImportedTemplate = useStore((s) => s.setImportedTemplate)
-  const importedYaml = importedTemplate?.yaml ?? ''
 
   const [step, setStep] = useState(0)
   const [composed, setComposed] = useState<ComposeResponse | null>(null)
@@ -74,7 +69,6 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [credentialsOpen, setCredentialsOpen] = useState(false)
-  const [importOpen, setImportOpen] = useState(false)
   // Logins for accounts the resolved template leaves without one. Component
   // state, not the shared store: the store is persisted and a password must not
   // outlive the build it was typed for.
@@ -185,27 +179,14 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     return () => clearTimeout(t)
   }, [diskKey, diskInvalid])
 
-  const removedBasePackages = useStore((s) => s.removedBasePackages)
-
-  const removedKey = useMemo(
-    () => [...removedBasePackages].sort().join('\n'),
-    [removedBasePackages],
-  )
-
   // The request the backend actually resolves against: the cascade selection,
   // plus the Advanced-mode overrides. The image name is sent only once the user
   // has edited it, and only the settled (debounced) value, so an in-progress
   // edit doesn't compose against a half-typed name. Packages and repos need no
   // debounce of their own — each arrives from a discrete click, not a keystroke.
-  //
-  // An imported template rides along as `baseYaml`, which replaces the manifest
-  // lookup. Every override below then applies to it unchanged, which is what
-  // makes an imported template behave exactly like a matched one from here on.
   const composeReq: ComposeRequest = useMemo(
     () => ({
       ...selection,
-      baseYaml: importedYaml || undefined,
-      removePackages: importedYaml && removedKey ? removedKey.split('\n') : undefined,
       imageName: imageNameEdited ? debouncedImageName : undefined,
       // Omitted rather than sent empty, so a selection with nothing added is
       // "no override" and the backend resolves the curated template directly.
@@ -215,8 +196,8 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
       credentials: debouncedCredentials.length > 0 ? debouncedCredentials : undefined,
       users: debouncedNewUsers.length > 0 ? debouncedNewUsers : undefined,
     }),
-    [selection, importedYaml, removedKey, imageNameEdited, debouncedImageName, packagesKey,
-      reposKey, diskEdited, debouncedDiskKey, debouncedCredentials, debouncedNewUsers],
+    [selection, imageNameEdited, debouncedImageName, packagesKey, reposKey, diskEdited,
+      debouncedDiskKey, debouncedCredentials, debouncedNewUsers],
   )
 
   // Entering Advanced always lands on the first step, mirroring the prototype's
@@ -232,8 +213,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
     setError(null)
     setComposed(null)
     setLoading(false)
-    // A document composes on its own; a selection has to be complete first.
-    if (!active || (!importedYaml && !complete)) return
+    if (!active || !complete) return
     let cancelled = false
     setLoading(true)
     api
@@ -262,42 +242,24 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
 
   if (!manifest || !opts) return <div className="p-8">Loading…</div>
 
-  // An imported template is a complete document: it is built as supplied rather
-  // than composed from the selections, so the steps describe it instead of
-  // driving it.
-  const usingImport = importedTemplate !== null
-
-  // The Packages step keys its repository list off a manifest target id, which
-  // an imported template has no selection to supply. Its own `target` names
-  // one, resolved the same way the Target step resolves it: `dist` is the id
-  // the manifest uses, and the OS family only counts when it names exactly one
-  // target — three of them are `os: ubuntu`, so showing Ubuntu 24 repositories
-  // for a document that might target either Ubuntu 26 would be a guess.
-  const importedOs = importedTemplate
-    ? (selectionFromTemplate(manifest, importedTemplate).os ?? '')
-    : ''
-  const packagesOs = usingImport ? importedOs : selection.os
-
   const setSel = (k: keyof Selection, v: string) => {
     setField(k, v)
     setError(null) // clear any stale compose error from the previous selection
   }
 
-  // Once the document has been composed, its own resolved accounts are the
-  // authority — the import-time list only covers the gap before that lands.
+  // Once composed, the template's own resolved accounts are the authority; the
+  // last known list covers the gap while a recompose is in flight.
   const requirements = composed
     ? composedRequirements
     : lastRequirements.length > 0
       ? lastRequirements
-      : usingImport
-        ? importedRequirements
-        : []
+      : []
   // Same gate as Basic: the backend rejects a build whose template leaves an
   // account without a login, so stop here rather than letting it fail.
   const credentialsReady = credentialsComplete(requirements, credentials) && newUsersReady
 
   const onBuild = async () => {
-    if ((!complete && !usingImport) || !credentialsReady) return
+    if (!complete || !credentialsReady) return
     // Unlike a compose, a build cannot fall back to the last good layout: it has
     // to run what is on screen or nothing. Say so rather than posting a request
     // the server will reject.
@@ -372,49 +334,6 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
 
   return (
     <div className="mx-auto max-w-screen-2xl px-10 py-8">
-      {importedTemplate && (
-        <div className="mb-5 rounded-lg border border-[#0071c5]/30 bg-blue-50 px-4 py-3 text-sm">
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="font-semibold text-[#00285a]">Imported template:</span>
-            <span className="text-slate-700">{importedTemplate.displayName}</span>
-            {importedTemplate.fileName !== importedTemplate.displayName && (
-              <span className="text-slate-500">from {importedTemplate.fileName}</span>
-            )}
-            <div className="ml-auto flex gap-3">
-              <button
-                type="button"
-                className="font-semibold text-[#0071c5] hover:underline"
-                onClick={() => setImportOpen(true)}
-              >
-                Replace
-              </button>
-              <button
-                type="button"
-                className="font-semibold text-slate-600 hover:underline"
-                onClick={() => {
-                  setImportedTemplate(null)
-                  // Everything typed for that template goes with it: the
-                  // accounts it declared are gone, and any user added on top
-                  // of them would otherwise be composed against the manifest
-                  // selection this returns to.
-                  setCredentials([])
-                  setNewUsers([])
-                  setDebouncedNewUsers([])
-                  setLastRequirements([])
-                  setError(null)
-                }}
-              >
-                Remove
-              </button>
-            </div>
-          </div>
-          <p className="mt-1.5 text-xs text-slate-600">
-            The steps below edit this template. Your changes are applied over it as
-            a delta, exactly as they would be over a pre-authored one.
-          </p>
-        </div>
-      )}
-
       {/* Step progress indicator (matches the prototype's numbered dots + lines). */}
       <div className="mb-6 flex items-center justify-center gap-1">
         {STEPS.map((label, i) => (
@@ -461,16 +380,11 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
             setSel={setSel}
             imageName={imageName}
             setImageName={setImageName}
-            onImport={() => setImportOpen(true)}
           />
         )}
 
         {step === 1 && (
-          <PackagesStep
-            os={packagesOs}
-            active={active}
-            basePackages={composed?.basePackages ?? []}
-          />
+          <PackagesStep os={selection.os} active={active} basePackages={composed?.basePackages ?? []} />
         )}
 
         {step === 2 && <DiskStep />}
@@ -480,13 +394,13 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
             <h2 className="mb-1 text-lg font-bold text-[#00285a]">Review Image Configuration</h2>
             <p className="mb-5 text-sm text-slate-500">
               Review what this combination will compose. The template below is
-              only what you changed, as a delta extending the{' '}
-              {usingImport ? 'imported' : 'pre-authored'} template it is based on.
+              only what you changed, as a delta extending the pre-authored
+              template it is based on.
             </p>
             {error && (
               <div className="mb-3 rounded bg-red-50 p-3 text-sm text-red-700">{error}</div>
             )}
-            {(complete || usingImport) && composed ? (
+            {complete && composed ? (
               <>
                 {/* Section 1: Review Image Configuration — the same summary shape
                     the Basic tab shows, so both panes agree on what will compose. */}
@@ -593,7 +507,7 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
                   )}
                 </div>
               </>
-            ) : (complete || usingImport) && loading ? (
+            ) : complete && loading ? (
               <div className="rounded-lg border border-dashed border-slate-300 p-8 text-center text-sm text-slate-400">
                 Resolving template…
               </div>
@@ -640,20 +554,6 @@ export function AdvancedPage({ active, onBuildStarted, buildInProgress }: Advanc
         onCancel={() => setCredentialsOpen(false)}
         onCompose={() => void onBuild()}
       />
-
-      <ImportTemplateDialog
-        open={importOpen}
-        onCancel={() => setImportOpen(false)}
-        onImport={(t, reqs) => {
-          setImportedTemplate(t, reqs)
-          // A different template asks for different accounts, so anything typed
-          // for the previous one is dropped rather than sent with this build.
-          setCredentials([])
-          setNewUsers([])
-          setError(null)
-          setImportOpen(false)
-        }}
-      />
     </div>
   )
 }
@@ -666,40 +566,16 @@ function TargetStep({
   setSel,
   imageName,
   setImageName,
-  onImport,
 }: {
   opts: NonNullable<ReturnType<typeof cascadingOptions>>
   selection: Selection
   setSel: (k: keyof Selection, v: string) => void
   imageName: string
   setImageName: (v: string) => void
-  onImport: () => void
 }) {
   return (
     <div>
-      <div className="mb-1 flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-lg font-bold text-[#00285a]">Choose Image Configuration</h2>
-        <button
-          type="button"
-          onClick={onImport}
-          className="flex items-center gap-1.5 rounded-md bg-[#0071c5] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#00285a]"
-        >
-          <svg
-            aria-hidden="true"
-            viewBox="0 0 20 20"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="h-3.5 w-3.5"
-          >
-            <path d="M10 13V3m0 0L6.5 6.5M10 3l3.5 3.5" />
-            <path d="M3.5 12.5v2.5a1.5 1.5 0 0 0 1.5 1.5h10a1.5 1.5 0 0 0 1.5-1.5v-2.5" />
-          </svg>
-          Import Template
-        </button>
-      </div>
+      <h2 className="mb-1 text-lg font-bold text-[#00285a]">Choose Image Configuration</h2>
       <p className="mb-5 text-sm text-slate-500">
         Select a use case, SKU, and platform. Pre-configured defaults are
         applied based on your selection.
