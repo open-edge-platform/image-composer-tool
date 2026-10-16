@@ -134,6 +134,24 @@ combinations:
     imageType: iso
     template: ubuntu26/ubuntu26-x86_64-edgepack-server-unattended-iso.yml
 
+  # Demo SKU: installs only the Standard base runtime, no Media or
+  # Manageability add-ons — used to exercise the Web UI Advanced tab's Edge
+  # Pack "already in template" pre-check against a selection that locks in a
+  # base runtime but leaves every domain unselected.
+  - vertical: platform-enablement
+    sku: edgepack-standard-only
+    platform: ptl
+    os: ubuntu24
+    imageType: iso
+    template: ubuntu24/ubuntu24-x86_64-edgepack-standard-only-unattended-iso.yml
+
+  - vertical: platform-enablement
+    sku: edgepack-standard-only
+    platform: wcl
+    os: ubuntu24
+    imageType: iso
+    template: ubuntu24/ubuntu24-x86_64-edgepack-standard-only-unattended-iso.yml
+
 verticals:
   - id: retail
     displayName: Retail Edge
@@ -157,6 +175,8 @@ skus:
     displayName: EdgePack Minimal Desktop
   - id: edgepack-server
     displayName: EdgePack Minimal Server
+  - id: edgepack-standard-only
+    displayName: EdgePack Standard Base Only (Demo)
 
 platforms:
   - id: arl
