@@ -184,21 +184,23 @@ export type ToggleMode = 'add' | 'clear' | 'locked'
 // neither set, so a fully-locked group reports 'locked' even though its
 // checkbox renders checked.
 //
-// Clearing takes priority over the gate: the base-runtime gate blocks ADDING,
-// not clearing. Disabling the checkbox outright would strand a selection made
-// before the runtime was removed — the domain would render checked and
-// unclickable, and the packages it holds would reach the build with no
-// runtime beneath them, precisely the state the gate exists to prevent. So a
-// group with anything explicitly clearable can always be emptied, whatever
-// the gate says.
+// Adding takes priority while the gate is open and something addable remains —
+// an indeterminate group (some names already added, more still addable)
+// completes the selection first; clicking again then clears it. Only once
+// nothing is left to add does the gate stop mattering: the base-runtime gate
+// blocks ADDING, not clearing, so a gated group with anything explicitly
+// clearable can still be emptied. Disabling the checkbox outright in that case
+// would strand a selection made before the runtime was removed — the domain
+// would render checked and unclickable, and the packages it holds would reach
+// the build with no runtime beneath them, precisely the state the gate exists
+// to prevent.
 export function groupToggleMode(
   selectable: boolean,
   addableCount: number,
   clearableCount: number,
 ): ToggleMode {
-  if (clearableCount > 0) return 'clear'
   if (selectable && addableCount > 0) return 'add'
-  return 'locked'
+  return clearableCount > 0 ? 'clear' : 'locked'
 }
 
 // packToggleMode decides the pack-level checkbox's action. It cannot reuse

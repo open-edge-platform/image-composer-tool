@@ -34,19 +34,10 @@ export function SelectedPackages({
   const removePackage = useStore((s) => s.removePackage)
   const clearPackages = useStore((s) => s.clearPackages)
   const enabledRepos = useStore((s) => s.enabledRepos)
-  const importedTemplate = useStore((s) => s.importedTemplate)
-  const removedBasePackages = useStore((s) => s.removedBasePackages)
-  const setBasePackageRemoved = useStore((s) => s.setBasePackageRemoved)
 
   const labelFor = (repoId: string) => repos.find((r) => r.id === repoId)?.displayName ?? repoId
   const isBaseRepo = (repoId: string) => repos.find((r) => r.id === repoId)?.enabledByDefault ?? false
   const isProtectedRepo = (repoId: string) => isBaseRepo(repoId) || lockedRepoIds.has(repoId)
-
-  // Filtered here rather than read back off the next compose, so a removal
-  // leaves the list immediately instead of after a server round trip.
-  const imported = (importedTemplate?.packages ?? []).filter(
-    (p) => !removedBasePackages.includes(p),
-  )
 
   // What the matched template ships on its own, not already covered by an
   // explicit pick above — shown here by default rather than requiring the
@@ -102,12 +93,14 @@ export function SelectedPackages({
   }
   const repoIds = [...groups.keys()].sort((a, b) => labelFor(a).localeCompare(labelFor(b)))
 
-  const total = imported.length + addedPackages.length + baseOnlyNames.length
+  const total = addedPackages.length + baseOnlyNames.length
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white">
       <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2.5">
-        <span className="text-[13px] font-bold text-[#00285a]">Selected ({total})</span>
+        <span className="text-[13px] font-bold text-[#00285a]">
+          Selected ({total})
+        </span>
         {addedPackages.length > 0 && (
           <button
             type="button"
@@ -162,10 +155,6 @@ export function SelectedPackages({
               ))}
             </div>
           ))}
-          {/* After the user's own picks, before the imported-template list:
-              a newly picked package should land in view above this, and the
-              imported template's own list is the long, mostly-static one
-              that belongs last. */}
           {baseOnlyNames.length > 0 && (
             <div className="border-b border-slate-100 py-1.5 last:border-b-0">
               <div className="flex items-center justify-between gap-2 px-3 pb-1">
@@ -219,31 +208,6 @@ export function SelectedPackages({
                   ))}
                 </div>
               )}
-            </div>
-          )}
-          {imported.length > 0 && (
-            <div className="border-b border-slate-100 py-1.5 last:border-b-0">
-              <div className="px-3 pb-1 text-[10px] font-bold uppercase tracking-[0.5px] text-slate-400">
-                From {importedTemplate?.displayName}
-              </div>
-              {imported.map((name) => (
-                <div key={name} className="flex items-center justify-between gap-2 px-3 py-1">
-                  <span
-                    className="min-w-0 flex-1 truncate text-[12px] text-slate-700"
-                    title={name}
-                  >
-                    {name}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setBasePackageRemoved(name, true)}
-                    aria-label={`Remove ${name}`}
-                    className="shrink-0 text-slate-400 hover:text-red-600"
-                  >
-                    ×
-                  </button>
-                </div>
-              ))}
             </div>
           )}
         </div>

@@ -4,6 +4,7 @@
 package service
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -150,5 +151,93 @@ func TestRetryBuildRejectsUnknownOrLegacyBuild(t *testing.T) {
 	s.tracker.add(b)
 	if _, err := s.RetryBuild("legacy"); err == nil {
 		t.Fatal("expected an error retrying a build with no retry record")
+	}
+}
+
+// TestRetryBuildRejectsRecordFromARemovedFlow covers a meta.json written while
+// a build could also be resolved from an imported document, or from logins
+// posted with a template. Those inputs no longer exist, so the record decodes
+// without them — and resubmitting what is left would build something else: the
+// posted document loses the credential that satisfied it, and the imported one
+// falls back to whatever curated template its leftover selection matches. Both
+// are refused rather than retried.
+func TestRetryBuildRejectsRecordFromARemovedFlow(t *testing.T) {
+	cases := []struct {
+		name  string
+		retry string
+	}{
+		{
+			// A posted document with the logins that satisfied its accounts.
+			name: "posted template with credentials",
+			retry: `{"Compose":null,"YAML":"image:\n  name: x\n",` +
+				`"Credentials":[{"User":"admin","Password":"$6$abc$def"}],"NewUsers":null}`,
+		},
+		{
+			// An imported document standing in for the manifest match. The
+			// selection survives, which is exactly what makes this dangerous.
+			name: "imported template in the selection",
+			retry: `{"Compose":{"Vertical":"robotics","SKU":"amr","Platform":"wcl","OS":"ubuntu24",` +
+				`"ImageType":"iso","BaseYAML":"image:\n  name: imported\n"},"YAML":"","Credentials":null}`,
+		},
+		{
+			name: "removed packages on an imported template",
+			retry: `{"Compose":{"Vertical":"robotics","SKU":"amr","Platform":"wcl","OS":"ubuntu24",` +
+				`"ImageType":"iso","RemovePackages":["htop"]},"YAML":"","Credentials":null}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestService(t)
+			root := t.TempDir()
+			meta := `{"id":"legacy","status":"failed","template":"robotics.yml",` +
+				`"command":"ict build","createdAt":"2026-10-15T00:00:00Z","retry":` + tc.retry + `}`
+			if err := os.WriteFile(metaPath(root), []byte(meta), 0o600); err != nil {
+				t.Fatalf("writing meta: %v", err)
+			}
+
+			b, ok := loadMetaInto(t, s, root, "legacy")
+			if !ok {
+				t.Fatal("build could not be reconstructed from meta.json")
+			}
+			if b.retry == nil || !b.retry.unsupported {
+				t.Fatal("retry record from a removed flow was not flagged as unsupported")
+			}
+			_, err := s.RetryBuild("legacy")
+			if err == nil {
+				t.Fatal("expected an error retrying a build resolved from a removed flow")
+			}
+			var apiErr *Error
+			if !errors.As(err, &apiErr) || apiErr.Code != "RETRY_UNSUPPORTED" {
+				t.Fatalf("RetryBuild error = %v, want a RETRY_UNSUPPORTED *Error", err)
+			}
+		})
+	}
+}
+
+// TestRetryBuildAcceptsAnOrdinaryComposeRecord is the other half of the guard
+// above: a record carrying only the fields a request still has — including the
+// empty, no-omitempty remnants of the removed ones — stays retriable, so the
+// detection cannot quietly disable retry for every past build.
+func TestRetryBuildAcceptsAnOrdinaryComposeRecord(t *testing.T) {
+	s := newTestService(t)
+	root := t.TempDir()
+	meta := `{"id":"ordinary","status":"failed","template":"robotics.yml",` +
+		`"command":"ict build","createdAt":"2026-10-15T00:00:00Z","retry":` +
+		`{"Compose":{"Vertical":"robotics","SKU":"amr","Platform":"wcl","OS":"ubuntu24",` +
+		`"ImageType":"iso","BaseYAML":"","RemovePackages":[]},"YAML":"",` +
+		`"Credentials":null,"NewUsers":[]}}`
+	if err := os.WriteFile(metaPath(root), []byte(meta), 0o600); err != nil {
+		t.Fatalf("writing meta: %v", err)
+	}
+
+	b, ok := loadMetaInto(t, s, root, "ordinary")
+	if !ok {
+		t.Fatal("build could not be reconstructed from meta.json")
+	}
+	if b.retry == nil || b.retry.unsupported {
+		t.Fatal("an ordinary compose record was flagged as unsupported")
+	}
+	if b.retry.Compose == nil || b.retry.Compose.Vertical != "robotics" {
+		t.Fatalf("retry.Compose = %+v, want the persisted selection", b.retry.Compose)
 	}
 }

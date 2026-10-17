@@ -3,9 +3,7 @@
 
 // What the matched template ships on its own now surfaces in the rail by
 // default (previously only reachable via the browser's "Show only selected"
-// checkbox) — this file covers that section specifically, distinct from
-// SelectedPackages.imported.test.tsx which covers the unrelated
-// drag-drop-import feature.
+// checkbox) — this file covers that section specifically.
 
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -36,8 +34,6 @@ beforeEach(() => {
   useStore.setState({
     addedPackages: [],
     enabledRepos: [],
-    importedTemplate: null,
-    removedBasePackages: [],
   })
   mockApi.searchPackages.mockResolvedValue({ packages: [], total: 0 })
 })

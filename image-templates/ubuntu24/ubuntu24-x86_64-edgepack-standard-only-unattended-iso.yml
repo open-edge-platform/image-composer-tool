@@ -74,13 +74,24 @@ disk:
       fsType: linux-swap
 
 # EdgePack ships from a per-suite APT repository (suite name follows the host
-# Ubuntu release; noble here).
+# Ubuntu release; noble here) plus a separate signed prerequisite repository
+# the base metapackage's NPU profile resolves from.
 packageRepositories:
   # EdgePack base/add-on packages, public signed repository.
   - codename: "noble"
     url: "https://apt.repos.intel.com/edgepack"
     pkey: "https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB"
     component: "stable"
+
+  # NPU prerequisite snapshot repository, required by the base metapackage
+  # below: intel-edge-base-standard pulls in the NPU profile, whose client GPU
+  # compute runtime is published here rather than in the EdgePack repository.
+  # Public Launchpad snapshot; safe to use as-is, but pin/update the snapshot
+  # timestamp per EdgePack release notes.
+  - codename: "noble"
+    url: "https://snapshot.ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu/20260606T100000Z"
+    pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x0c0e6af955ce463c03fc51574d098d70afbe5e1f"
+    component: "main"
 
 systemConfig:
   initramfs:
