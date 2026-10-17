@@ -172,7 +172,35 @@ describe('SelectedPackages — already in template', () => {
     expect(screen.getByText('vim-v1')).toBeTruthy()
     expect(screen.getByText('bluez-v1')).toBeTruthy()
   })
+
+  // Regression: the shared live-resolver cache is keyed only by package
+  // name, with no notion of which selection a given result came from. A name
+  // resolved while floating must not leak into this row once the template's
+  // own entry is a pin instead — the pin resolves the same way regardless of
+  // checked repos and must never be second-guessed by a stale cache entry.
+  it('shows a pin\'s own version, not a stale live-resolved value cached under the same name', async () => {
+    mockApi.searchPackages.mockResolvedValue({
+      packages: [{ name: 'vim', version: '9.1-stale', repository: 'base' }],
+      total: 1,
+    })
+    const floatingLock = lockOf({ vim: { currentIsFloating: true } })
+    const { rerender } = render(<Selected repos={repos} os="ubuntu" baseLock={floatingLock} />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Resolve' }))
+    })
+    expect(screen.getByText('9.1-stale')).toBeTruthy()
+
+    // The template's own entry turns out to be a pin at a different version
+    // (e.g. the override that made it look floating was removed).
+    const pinnedLock = lockOf({ vim: { currentVersion: '9.0-pin' } })
+    rerender(<Selected repos={repos} os="ubuntu" baseLock={pinnedLock} />)
+
+    expect(screen.getByText('9.0-pin')).toBeTruthy()
+    expect(screen.queryByText('9.1-stale')).toBeNull()
+  })
 })
+
 
 describe('SelectedPackages — already in template, grouped by repository', () => {
   it('groups a pinned/default-repo package under the base repo header', () => {

@@ -172,6 +172,38 @@ describe('clicking a repository browses it, independent of its checkbox', () => 
 
     expect(useStore.getState().enabledRepos).not.toContain('docker')
   })
+
+  // Regression: Space on the rail row itself still browses it (keyboard
+  // parity with the row's own click), but the same Space bubbling up from
+  // the nested checkbox must not be hijacked into browsing instead — that
+  // would leave keyboard users with no way to toggle an optional repo.
+  it('does not browse the repo when Space is pressed on its checkbox', async () => {
+    render(<Browser repos={repos} os="ubuntu" baseLock={noLock} />)
+    await waitFor(() => expect(mockApi.searchPackages).toHaveBeenCalled())
+    mockApi.searchPackages.mockClear()
+
+    fireEvent.keyDown(screen.getByRole('checkbox', { name: 'Docker' }), { key: ' ' })
+
+    await waitFor(() =>
+      expect(mockApi.searchPackages).not.toHaveBeenCalledWith(
+        expect.objectContaining({ repos: ['docker'] }),
+      ),
+    )
+  })
+
+  it('browses the repo when Space is pressed on the rail row itself', async () => {
+    render(<Browser repos={repos} os="ubuntu" baseLock={noLock} />)
+    await waitFor(() => expect(mockApi.searchPackages).toHaveBeenCalled())
+    mockApi.searchPackages.mockClear()
+
+    fireEvent.keyDown(screen.getByRole('button', { name: /Docker/ }), { key: ' ' })
+
+    await waitFor(() =>
+      expect(mockApi.searchPackages).toHaveBeenCalledWith(
+        expect.objectContaining({ repos: ['docker'] }),
+      ),
+    )
+  })
 })
 
 describe('a package already selected from a different repository than the one being browsed', () => {

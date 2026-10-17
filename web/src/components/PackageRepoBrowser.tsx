@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useStore, confirmRepoRelease } from '../store'
 import { api } from '../api/client'
 import type { PackageRepo, PackageSearchResult } from '../api/types'
@@ -194,6 +194,12 @@ function RepoRailRow({
       aria-pressed={selected}
       onClick={onSelect}
       onKeyDown={(e) => {
+        // Guards against the nested checkbox: its own Space keydown bubbles
+        // up here too, and without this check preventDefault() would cancel
+        // the checkbox's native toggle and select the repository instead —
+        // keyboard users could never enable or disable one. Only handle the
+        // row div's own key, not ones from something inside it.
+        if (e.target !== e.currentTarget) return
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault()
           onSelect()
@@ -288,9 +294,29 @@ function MergedPane({
   // repo that isn't checked yet is a statement of interest in it, exactly
   // like picking a search-dropdown hit that isn't checked already enables
   // its repo — reachable whenever the browsed repo itself isn't checked.
-  const ensureRepoEnabled = (repoId: string) => {
-    if (!enabledRepoIds.includes(repoId)) setRepoEnabled(repoId, true)
+  // Returns whether this call is what enabled it, so a caller about to
+  // resolve a name against the newly-expanded scope knows to defer that
+  // lookup instead (see pendingResolveRef below).
+  const ensureRepoEnabled = (repoId: string): boolean => {
+    if (enabledRepoIds.includes(repoId)) return false
+    setRepoEnabled(repoId, true)
+    return true
   }
+  // Names (or, in the bulk "Select all" case, a batch of names) queued for an
+  // automatic resolve that enabled their own repo in the same action —
+  // `resolver` here still reflects the scope from before that enable (it's
+  // rebuilt in PackagesStep.tsx only once the store update that follows
+  // re-renders this tree), so resolving immediately would check against a
+  // scope missing the repo just turned on. Drained once a fresh `resolver`
+  // prop arrives from that re-render.
+  const pendingResolveRef = useRef<string[]>([])
+
+  useEffect(() => {
+    if (pendingResolveRef.current.length === 0) return
+    const names = pendingResolveRef.current
+    pendingResolveRef.current = []
+    resolveAllVersions(names)
+  }, [resolver])
 
   // The page number only makes sense against whatever's currently fetched,
   // so switching which repo is browsed starts back on page 1 rather than
@@ -371,8 +397,14 @@ function MergedPane({
         .filter((h) => !addedPackages.some((p) => p.name === h.name))
         .map((h) => ({ name: h.name, version: '', repo: h.repository }))
       setPackages(toAdd)
-      new Set(toAdd.map((p) => p.repo)).forEach(ensureRepoEnabled)
-      resolveAllVersions(toAdd.map((p) => p.name))
+      const newlyEnabledRepos = new Set<string>()
+      new Set(toAdd.map((p) => p.repo)).forEach((repoId) => {
+        if (ensureRepoEnabled(repoId)) newlyEnabledRepos.add(repoId)
+      })
+      const deferred = toAdd.filter((p) => newlyEnabledRepos.has(p.repo)).map((p) => p.name)
+      const immediate = toAdd.filter((p) => !newlyEnabledRepos.has(p.repo)).map((p) => p.name)
+      pendingResolveRef.current.push(...deferred)
+      resolveAllVersions(immediate)
     } else {
       const names = selectableHits.map((h) => h.name)
       removePackages(names, {
@@ -435,12 +467,15 @@ function MergedPane({
           <div className="rounded border border-slate-100">
             {hits.map((h) => {
               const lock = baseLock.info(h.name)
-              // baseLock's own currentVersion only ever comes from the
-              // default-repo lookup, so once a row has been live-resolved
-              // against the currently-checked repos, that fresher comparison
-              // is what should decide which chip is "current," not the
-              // narrower default-repo-only value.
-              const currentVersion = liveResolved[h.name]?.version ?? lock.currentVersion
+              // A pin resolves the same way regardless of which repos are
+              // checked, so it never consults the live-resolver cache —
+              // that cache is keyed only by name and can carry a stale
+              // answer from an unrelated floating pick of the same name.
+              // Only a floating entry's default-repo-only currentVersion is
+              // worth replacing with the fresher, cross-repo live result.
+              const currentVersion = lock.currentIsFloating
+                ? (liveResolved[h.name]?.version ?? lock.currentVersion)
+                : lock.currentVersion
               return (
                 <PackageRow
                   key={h.name}
@@ -458,12 +493,19 @@ function MergedPane({
                   onToggle={(checked) => {
                     if (checked) {
                       setPackage({ name: h.name, version: '', repo: h.repository })
-                      ensureRepoEnabled(h.repository)
                       // Picked from whichever repo was being browsed, but
                       // what it actually resolves to can depend on every
                       // other checked repo too — look that up right away
-                      // instead of leaving the pick as a bare "latest".
-                      resolveVersion(h.name)
+                      // instead of leaving the pick as a bare "latest". If
+                      // this pick just enabled its own repo, defer the
+                      // lookup until `resolver` reflects that (see
+                      // pendingResolveRef above) rather than checking it
+                      // against a scope that's one render behind.
+                      if (ensureRepoEnabled(h.repository)) {
+                        pendingResolveRef.current.push(h.name)
+                      } else {
+                        resolveVersion(h.name)
+                      }
                       return
                     }
                     removePackage(h.name, {
@@ -481,8 +523,14 @@ function MergedPane({
                           }
                         : undefined
                     setPackage({ name: h.name, version: v.version, repo: v.repository }, opts)
-                    ensureRepoEnabled(v.repository)
-                    if (v.version === '') resolveVersion(h.name)
+                    const newlyEnabled = ensureRepoEnabled(v.repository)
+                    if (v.version === '') {
+                      if (newlyEnabled) {
+                        pendingResolveRef.current.push(h.name)
+                      } else {
+                        resolveVersion(h.name)
+                      }
+                    }
                   }}
                   resolving={resolvingNames.has(h.name)}
                 />

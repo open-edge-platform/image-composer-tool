@@ -26,6 +26,7 @@ const noResolver: VersionResolver = {
   resolveVersion: () => Promise.resolve(),
   resolveAll: () => {},
   bulkResolving: false,
+  attemptedNames: new Set(),
 }
 
 const noLockedRepos = new Set<string>()
@@ -67,18 +68,19 @@ export function SelectedPackages({
   const addedNames = new Set(addedPackages.map((p) => p.name))
   const baseOnlyNames = baseLock.concreteNames.filter((name) => !addedNames.has(name)).sort()
 
-  const { liveResolved, resolvingNames, resolveVersion, resolveAll, bulkResolving } = resolver
+  const { liveResolved, resolvingNames, resolveVersion, resolveAll, bulkResolving, attemptedNames } = resolver
   const baseVersionOf = (name: string) => {
-    const live = liveResolved[name]?.version
-    if (live !== undefined) return live
-    // currentVersion comes only from the default repo (useBaseLock), which is
-    // correct for a pinned entry — a pin resolves the same way regardless of
-    // which repos are checked — but not for a floating one, which a checked
-    // optional repo can resolve differently. Falling back to it there would
-    // mark the entry resolved against a version it may not actually use,
-    // hiding the Resolve control before the real cross-repo lookup has run.
     const info = baseLock.info(name)
-    return info.currentIsFloating ? undefined : info.currentVersion
+    // A pin resolves the same way regardless of which repos are checked, so
+    // it never consults the shared live-resolver cache — that cache is keyed
+    // only by name, and can carry a stale answer from an unrelated floating
+    // pick of the same name (e.g. an override that was since removed). Only
+    // a floating entry, which a checked optional repo can resolve
+    // differently, looks there — and stays unresolved until it does, rather
+    // than falling back to the default-repo-only currentVersion useBaseLock
+    // supplies for it.
+    if (!info.currentIsFloating) return info.currentVersion
+    return liveResolved[name]?.version
   }
   const baseIsUnresolved = (name: string) => !liveResolved[name] && baseVersionOf(name) === undefined
   const unresolvedBaseNames = baseOnlyNames.filter((name) => baseIsUnresolved(name) && !resolvingNames.has(name))
@@ -101,7 +103,14 @@ export function SelectedPackages({
   // nobody asked for, so that list stays on the manual "Resolve (N)" button.
   const toResolveKey = [...unresolvedFloatingNames].sort().join(',')
   useEffect(() => {
-    if (toResolveKey) resolveAll(toResolveKey.split(','))
+    if (!toResolveKey) return
+    // Excludes a name a prior automatic attempt already failed on — without
+    // this, a failed name cycles back into toResolveKey on every render
+    // (unresolved again once resolvingNames clears it), retrying forever. A
+    // manual Resolve click still reaches it: resolveVersion's own guard only
+    // checks liveResolved/resolvingNames, not attemptedNames.
+    const names = toResolveKey.split(',').filter((name) => !attemptedNames.has(name))
+    if (names.length > 0) resolveAll(names)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- toResolveKey stands in for the name list
   }, [toResolveKey])
 
@@ -113,8 +122,14 @@ export function SelectedPackages({
   // not-live-searched name can be attributed to. Still-unresolved names have
   // no repo to show yet and fall into a trailing, ungrouped bucket.
   const defaultRepoId = repos.find((r) => r.enabledByDefault)?.id
-  const repoOf = (name: string): string | undefined =>
-    liveResolved[name]?.repository ?? (baseVersionOf(name) !== undefined ? defaultRepoId : undefined)
+  const repoOf = (name: string): string | undefined => {
+    // Same reasoning as baseVersionOf: a pin's repo is fixed by the pin
+    // itself, never by the (by-name-only, possibly stale) live cache.
+    if (!baseLock.info(name).currentIsFloating) {
+      return baseVersionOf(name) !== undefined ? defaultRepoId : undefined
+    }
+    return liveResolved[name]?.repository
+  }
   const baseGroups = new Map<string, string[]>()
   const baseUngrouped: string[] = []
   for (const name of baseOnlyNames) {
