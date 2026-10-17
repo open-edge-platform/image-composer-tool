@@ -207,8 +207,15 @@ describe('groupToggleMode', () => {
     expect(groupToggleMode(true, 1, 0)).toBe('add')
   })
 
-  it('clears a group with anything explicitly added, even if also addable', () => {
+  it('clears a group with nothing left to add but something explicitly added', () => {
     expect(groupToggleMode(true, 0, 2)).toBe('clear')
+  })
+
+  it('adds when the gate is open, even if the group also has something clearable', () => {
+    // E.g. Standard selected, FFmpeg already pinned in Media, GStreamer still
+    // addable: the indeterminate checkbox completes the selection first. The
+    // existing pin survives — only the addable names get added.
+    expect(groupToggleMode(true, 2, 1)).toBe('add')
   })
 
   it('locks an empty group when the gate is shut', () => {
