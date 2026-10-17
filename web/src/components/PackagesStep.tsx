@@ -7,6 +7,7 @@ import { PackageRepoBrowser } from './PackageRepoBrowser'
 import { PackageRow } from './PackageRow'
 import { SelectedPackages } from './SelectedPackages'
 import { useBaseLock, ensureBaseVersions, type BaseLock } from '../lib/baseLock'
+import { useVersionResolver, type VersionResolver } from '../lib/useVersionResolver'
 import { templateLockedRepos } from '../lib/edgepack'
 
 interface PackagesStepProps {
@@ -58,6 +59,7 @@ export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
   // most users arrive with; provenance is the follow-up.
   const [tab, setTab] = useState<TabID>('edge-pack')
   const manifest = useStore((s) => s.manifest)
+  const enabledRepos = useStore((s) => s.enabledRepos)
 
   useEffect(() => {
     if (!os) {
@@ -110,6 +112,15 @@ export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
   }, [active, os])
 
   const baseLock = useBaseLock(os, repos, basePackages)
+  // Every repo a build actually resolves against right now — the one set a
+  // floating pick's "what does this really resolve to" lookup must be
+  // checked against, regardless of which repo it was picked from or whether
+  // it's a new pick or something the matched template already ships
+  // unpinned. One instance, shared by both browsing surfaces and the
+  // Selected rail, so every surface reports the same answer for the same
+  // name instead of each keeping its own cache.
+  const enabledRepoIds = (repos ?? []).filter((r) => r.enabledByDefault || enabledRepos.includes(r.id)).map((r) => r.id)
+  const resolver = useVersionResolver(os, enabledRepoIds)
   const targetLabel = manifest?.targets.find((t) => t.id === os)?.displayName ?? os
   const repoLabelFor = (id: string) => repos?.find((r) => r.id === id)?.displayName ?? id
   // Repos the matched template already draws an Edge Pack package from —
@@ -155,7 +166,7 @@ export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
             {/* Search sits above the tabs rather than inside one: it looks
                 across every repository, so it is the path that works when you
                 don't know which surface a package lives on. */}
-            <PackageSearch os={os} repos={repos} baseLock={baseLock} lockedRepoIds={lockedRepoIds} />
+            <PackageSearch os={os} repos={repos} baseLock={baseLock} lockedRepoIds={lockedRepoIds} resolver={resolver} />
             <BrowseTabs tab={tab} onTab={setTab} />
             {/* One panel id for both tabs, not one per tab. Only the active
                 panel is rendered, so a per-tab id would leave every inactive
@@ -164,7 +175,7 @@ export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
                 that genuinely changes. */}
             <div role="tabpanel" id={PANEL_ID} aria-labelledby={`tab-${tab}`}>
               {tab === 'repos' ? (
-                <PackageRepoBrowser repos={repos} os={os} baseLock={baseLock} lockedRepoIds={lockedRepoIds} />
+                <PackageRepoBrowser repos={repos} os={os} baseLock={baseLock} lockedRepoIds={lockedRepoIds} resolver={resolver} />
               ) : edgePack ? (
                 <EdgePackBrowser
                   pack={edgePack}
@@ -183,7 +194,7 @@ export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
             </div>
           </div>
           <div className="sticky top-4 flex flex-col gap-3">
-            <SelectedPackages repos={repos} os={os} baseLock={baseLock} lockedRepoIds={lockedRepoIds} />
+            <SelectedPackages repos={repos} os={os} baseLock={baseLock} lockedRepoIds={lockedRepoIds} resolver={resolver} />
           </div>
         </div>
       )}
@@ -361,11 +372,13 @@ function PackageSearch({
   repos,
   baseLock,
   lockedRepoIds,
+  resolver,
 }: {
   os: string
   repos: PackageRepo[]
   baseLock: BaseLock
   lockedRepoIds: Set<string>
+  resolver: VersionResolver
 }) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<PackageSearchResult[]>([])
@@ -499,6 +512,10 @@ function PackageSearch({
         : undefined
     setPackage({ name: hit.name, version, repo }, opts)
     if (!isEnabled(repo)) setRepoEnabled(repo, true)
+    // A floating pick's displayed repo is just wherever it was picked from —
+    // kick off the real cross-repo lookup immediately so the Selected rail
+    // can show what it actually resolves to rather than a bare "latest".
+    if (version === '') resolver.resolveVersion(hit.name)
     setQuery('')
     setOpen(false)
   }
@@ -575,6 +592,8 @@ function PackageSearch({
                       locked={lock.locked}
                       currentVersion={lock.currentVersion}
                       currentIsFloating={lock.currentIsFloating}
+                      resolvedVersion={resolver.liveResolved[hit.name]?.version}
+                      resolvedRepo={resolver.liveResolved[hit.name]?.repository}
                       onToggle={(checked) => {
                         if (checked) {
                           add(hit, hit.repository, '')

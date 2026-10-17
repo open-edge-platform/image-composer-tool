@@ -7,10 +7,11 @@
 // lib/edgepack.ts) must get the same treatment, for the same reason: the
 // build already needs it, whether or not the user has touched this tab.
 
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { PackageRepoBrowser } from './PackageRepoBrowser'
 import { useStore } from '../store'
+import { useVersionResolver } from '../lib/useVersionResolver'
 import type { PackageRepo } from '../api/types'
 import type { BaseLock } from '../lib/baseLock'
 
@@ -21,6 +22,26 @@ const noLock: BaseLock = {
   info: () => ({ locked: false, currentIsFloating: false }),
   ensureResolved: () => {},
   concreteNames: [],
+}
+
+// PackageRepoBrowser no longer owns its own resolver — PackagesStep.tsx
+// lifts one shared useVersionResolver and passes it down. This wrapper
+// reproduces that lift for these tests, the same way the real caller does.
+function Browser({
+  repos,
+  os,
+  baseLock,
+  lockedRepoIds,
+}: {
+  repos: PackageRepo[]
+  os: string
+  baseLock: BaseLock
+  lockedRepoIds?: Set<string>
+}) {
+  const enabledRepos = useStore((s) => s.enabledRepos)
+  const enabledRepoIds = repos.filter((r) => r.enabledByDefault || enabledRepos.includes(r.id)).map((r) => r.id)
+  const resolver = useVersionResolver(os, enabledRepoIds)
+  return <PackageRepoBrowser repos={repos} os={os} baseLock={baseLock} resolver={resolver} lockedRepoIds={lockedRepoIds} />
 }
 
 const repos: PackageRepo[] = [
@@ -38,7 +59,7 @@ beforeEach(() => {
 describe('a repo the matched template already draws a package from', () => {
   it('renders checked and disabled, same as the base repo', () => {
     render(
-      <PackageRepoBrowser
+      <Browser
         repos={repos}
         os="ubuntu"
         baseLock={noLock}
@@ -54,7 +75,7 @@ describe('a repo the matched template already draws a package from', () => {
 
   it('is not written into enabledRepos — it is checked by lockedRepoIds alone', () => {
     render(
-      <PackageRepoBrowser
+      <Browser
         repos={repos}
         os="ubuntu"
         baseLock={noLock}
@@ -67,7 +88,7 @@ describe('a repo the matched template already draws a package from', () => {
 
   it('leaves an ordinary optional repo unchecked and enabled', () => {
     render(
-      <PackageRepoBrowser
+      <Browser
         repos={repos}
         os="ubuntu"
         baseLock={noLock}
@@ -82,7 +103,7 @@ describe('a repo the matched template already draws a package from', () => {
 
   it('sorts locked repos to the top, after the base repo', () => {
     render(
-      <PackageRepoBrowser
+      <Browser
         repos={repos}
         os="ubuntu"
         baseLock={noLock}
@@ -96,10 +117,113 @@ describe('a repo the matched template already draws a package from', () => {
   })
 
   it('defaults to no locked repos when the prop is omitted', () => {
-    render(<PackageRepoBrowser repos={repos} os="ubuntu" baseLock={noLock} />)
+    render(<Browser repos={repos} os="ubuntu" baseLock={noLock} />)
 
     const box = screen.getByRole('checkbox', { name: /Intel ECI/ }) as HTMLInputElement
     expect(box.checked).toBe(false)
     expect(box.disabled).toBe(false)
+  })
+})
+
+describe('clicking a repository browses it, independent of its checkbox', () => {
+  it('fetches the base repo by default, without any repo checked', async () => {
+    render(<Browser repos={repos} os="ubuntu" baseLock={noLock} />)
+
+    await waitFor(() =>
+      expect(mockApi.searchPackages).toHaveBeenCalledWith(
+        expect.objectContaining({ repos: ['base'] }),
+      ),
+    )
+  })
+
+  it('switches the fetched repo when a different rail row is clicked', async () => {
+    render(<Browser repos={repos} os="ubuntu" baseLock={noLock} />)
+    await waitFor(() => expect(mockApi.searchPackages).toHaveBeenCalled())
+    mockApi.searchPackages.mockClear()
+
+    fireEvent.click(screen.getByText('Docker'))
+
+    await waitFor(() =>
+      expect(mockApi.searchPackages).toHaveBeenCalledWith(
+        expect.objectContaining({ repos: ['docker'] }),
+      ),
+    )
+  })
+
+  it('does not change the browsed repo when only the checkbox is clicked', async () => {
+    render(<Browser repos={repos} os="ubuntu" baseLock={noLock} />)
+    await waitFor(() => expect(mockApi.searchPackages).toHaveBeenCalled())
+    mockApi.searchPackages.mockClear()
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Docker' }))
+
+    expect(useStore.getState().enabledRepos).toContain('docker')
+    await waitFor(() =>
+      expect(mockApi.searchPackages).not.toHaveBeenCalledWith(
+        expect.objectContaining({ repos: ['docker'] }),
+      ),
+    )
+  })
+
+  it('lets browsing an unchecked repo without affecting enabledRepos', () => {
+    render(<Browser repos={repos} os="ubuntu" baseLock={noLock} />)
+
+    fireEvent.click(screen.getByText('Docker'))
+
+    expect(useStore.getState().enabledRepos).not.toContain('docker')
+  })
+})
+
+describe('a package already selected from a different repository than the one being browsed', () => {
+  const multiRepos: PackageRepo[] = [
+    { id: 'base', displayName: 'Ubuntu Base', url: 'http://example/base', enabledByDefault: true },
+    { id: 'intel-eci', displayName: 'Intel ECI', url: 'http://example/eci', enabledByDefault: false },
+  ]
+
+  it('shows no active chip and a note naming the actual pin', async () => {
+    useStore.setState({ addedPackages: [{ name: 'vim', version: '9.1', repo: 'intel-eci' }] })
+    mockApi.searchPackages.mockResolvedValue({
+      packages: [{ name: 'vim', version: '9.0', repository: 'base', versions: [{ version: '9.0', repository: 'base' }] }],
+      total: 1,
+    })
+    render(<Browser repos={multiRepos} os="ubuntu" baseLock={noLock} />)
+
+    await screen.findByText('vim')
+    expect(screen.getByText(/Pinned to/)).toBeTruthy()
+    expect(screen.getByText('9.1')).toBeTruthy()
+    expect(screen.getByText('Intel ECI')).toBeTruthy()
+    const chip = screen.getByRole('button', { name: '9.0' })
+    expect(chip.className).not.toContain('bg-[#0071c5]')
+  })
+
+  it('shows the matching chip active once browsing the repo the pin actually came from', async () => {
+    useStore.setState({ addedPackages: [{ name: 'vim', version: '9.1', repo: 'intel-eci' }] })
+    mockApi.searchPackages.mockResolvedValue({
+      packages: [
+        { name: 'vim', version: '9.1', repository: 'intel-eci', versions: [{ version: '9.1', repository: 'intel-eci' }] },
+      ],
+      total: 1,
+    })
+    render(<Browser repos={multiRepos} os="ubuntu" baseLock={noLock} />)
+
+    fireEvent.click(screen.getByText('Intel ECI'))
+
+    await screen.findByText('vim')
+    expect(screen.queryByText(/Pinned to/)).toBeNull()
+    const chip = screen.getByRole('button', { name: '9.1' })
+    expect(chip.className).toContain('bg-[#0071c5]')
+  })
+
+  it('shows "Latest" as selected in every repo once picked as the unpinned choice', async () => {
+    useStore.setState({ addedPackages: [{ name: 'vim', version: '', repo: 'intel-eci' }] })
+    mockApi.searchPackages.mockResolvedValue({
+      packages: [{ name: 'vim', version: '9.0', repository: 'base', versions: [{ version: '9.0', repository: 'base' }] }],
+      total: 1,
+    })
+    render(<Browser repos={multiRepos} os="ubuntu" baseLock={noLock} />)
+
+    await screen.findByText('vim')
+    const latest = screen.getByRole('button', { name: 'Latest' })
+    expect(latest.className).toContain('bg-[#0071c5]')
   })
 })

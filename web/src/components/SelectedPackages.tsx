@@ -1,19 +1,37 @@
+import { useEffect } from 'react'
 import { useStore, confirmRepoRelease, type AddedPackage } from '../store'
 import type { PackageRepo } from '../api/types'
 import type { BaseLock } from '../lib/baseLock'
-import { useVersionResolver } from '../lib/useVersionResolver'
+import type { VersionResolver } from '../lib/useVersionResolver'
 
 interface SelectedPackagesProps {
   repos: PackageRepo[]
+  // No longer read here — version resolution now goes through the shared
+  // `resolver` prop, which already carries an os-scoped cache from
+  // PackagesStep.tsx. Kept optional so existing call sites (including tests)
+  // that still pass it don't need updating just for this.
   os?: string
   baseLock?: BaseLock
+  // Shared with the Repositories tab and the search dropdown (lifted in
+  // PackagesStep.tsx), so a floating pick's "what does this resolve to"
+  // answer is identical everywhere it's shown. Optional only for test setups
+  // that don't exercise resolution at all.
+  resolver?: VersionResolver
   lockedRepoIds?: Set<string>
+}
+
+const noResolver: VersionResolver = {
+  liveResolved: {},
+  resolvingNames: new Set(),
+  resolveVersion: () => Promise.resolve(),
+  resolveAll: () => {},
+  bulkResolving: false,
 }
 
 const noLockedRepos = new Set<string>()
 
 // Callers that have no matched template (or are pre-baseLock test setups)
-// can omit os/baseLock entirely — the "Already in template" section simply
+// can omit baseLock entirely — the "Already in template" section simply
 // has nothing to show.
 const noBaseLock: BaseLock = {
   info: () => ({ locked: false, currentIsFloating: false }),
@@ -26,14 +44,13 @@ const noBaseLock: BaseLock = {
 // clear-all. Stickiness is handled by the caller (PackagesStep.tsx).
 export function SelectedPackages({
   repos,
-  os = '',
   baseLock = noBaseLock,
+  resolver = noResolver,
   lockedRepoIds = noLockedRepos,
 }: SelectedPackagesProps) {
   const addedPackages = useStore((s) => s.addedPackages)
   const removePackage = useStore((s) => s.removePackage)
   const clearPackages = useStore((s) => s.clearPackages)
-  const enabledRepos = useStore((s) => s.enabledRepos)
   const importedTemplate = useStore((s) => s.importedTemplate)
   const removedBasePackages = useStore((s) => s.removedBasePackages)
   const setBasePackageRemoved = useStore((s) => s.setBasePackageRemoved)
@@ -59,16 +76,32 @@ export function SelectedPackages({
   const addedNames = new Set(addedPackages.map((p) => p.name))
   const baseOnlyNames = baseLock.concreteNames.filter((name) => !addedNames.has(name)).sort()
 
-  const enabledRepoIds = repos
-    .filter((r) => r.enabledByDefault || enabledRepos.includes(r.id))
-    .map((r) => r.id)
-  const { liveResolved, resolvingNames, resolveVersion, resolveAll, bulkResolving } = useVersionResolver(
-    os,
-    enabledRepoIds,
-  )
+  const { liveResolved, resolvingNames, resolveVersion, resolveAll, bulkResolving } = resolver
   const baseVersionOf = (name: string) => liveResolved[name]?.version ?? baseLock.info(name).currentVersion
   const baseIsUnresolved = (name: string) => !liveResolved[name] && baseVersionOf(name) === undefined
   const unresolvedBaseNames = baseOnlyNames.filter((name) => baseIsUnresolved(name) && !resolvingNames.has(name))
+
+  // An explicit floating pick (version === '') is exactly the same kind of
+  // unresolved name as a template-shipped one above — it just also carries
+  // the repo it was picked from, which is only a fallback for display until
+  // the live lookup lands with the repo it actually resolves from.
+  const floatingAdded = addedPackages.filter((p) => p.version === '')
+  const unresolvedFloatingNames = floatingAdded
+    .filter((p) => !liveResolved[p.name] && !resolvingNames.has(p.name))
+    .map((p) => p.name)
+
+  // Auto-resolve only names the user explicitly just picked — each one came
+  // from a single click (or MergedPane's/search's own already-explicit
+  // "Latest" pick), so the batch here is bounded by how many the user has
+  // actually added. baseOnlyNames below is a template's *entire* unpinned
+  // package list, which can run into the hundreds — auto-firing a lookup for
+  // all of them on every mount would flood a slow network with requests
+  // nobody asked for, so that list stays on the manual "Resolve (N)" button.
+  const toResolveKey = [...unresolvedFloatingNames].sort().join(',')
+  useEffect(() => {
+    if (toResolveKey) resolveAll(toResolveKey.split(','))
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- toResolveKey stands in for the name list
+  }, [toResolveKey])
 
   // Grouped the same way the added-packages section above is: by the
   // repository the name actually resolves from. A live search hit (from
@@ -94,11 +127,17 @@ export function SelectedPackages({
   }
   const baseRepoIds = [...baseGroups.keys()].sort((a, b) => labelFor(a).localeCompare(labelFor(b)))
 
+  // A pinned pick's repo is exact — it's part of the pin itself. A floating
+  // pick's stored repo is only ever where it happened to be picked from, so
+  // once the shared resolver knows where it actually resolves from, group it
+  // there instead — the same correction baseGroups already applies to
+  // template-shipped floating names above.
   const groups = new Map<string, AddedPackage[]>()
   for (const p of addedPackages) {
-    const list = groups.get(p.repo) ?? []
+    const repoId = p.version === '' ? (liveResolved[p.name]?.repository ?? p.repo) : p.repo
+    const list = groups.get(repoId) ?? []
     list.push(p)
-    groups.set(p.repo, list)
+    groups.set(repoId, list)
   }
   const repoIds = [...groups.keys()].sort((a, b) => labelFor(a).localeCompare(labelFor(b)))
 
@@ -122,54 +161,74 @@ export function SelectedPackages({
         <p className="px-3 py-8 text-center text-[12px] text-slate-500">No packages added yet.</p>
       ) : (
         <div className="max-h-[520px] overflow-y-auto">
-          {repoIds.map((repoId) => (
-            <div key={repoId} className="border-b border-slate-100 py-1.5 last:border-b-0">
-              <div className="px-3 pb-1 text-[10px] font-bold uppercase tracking-[0.5px] text-slate-400">
-                {labelFor(repoId)}
-              </div>
-              {groups.get(repoId)!.map((p) => (
-                <div key={p.name} className="flex items-center justify-between gap-2 px-3 py-1">
-                  <span
-                    className="min-w-0 flex-1 truncate text-[12px] text-slate-700"
-                    title={p.name}
-                  >
-                    {p.name}
-                  </span>
-                  <span
-                    className="shrink-0 rounded-full bg-[#e6f2fa] px-1.5 py-0.5 font-mono text-[10px] font-medium text-[#0071c5]"
-                    title={
-                      p.version
-                        ? `pinned to ${p.version} from ${labelFor(p.repo)}`
-                        : `follows the latest version ${labelFor(p.repo)} publishes`
-                    }
-                  >
-                    {p.version || 'latest'}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      removePackage(p.name, {
-                        releaseRepo: confirmRepoRelease(addedPackages, labelFor, [p.name], isProtectedRepo),
-                        protectedRepos: lockedRepoIds,
-                      })
-                    }
-                    aria-label={`Remove ${p.name}`}
-                    className="shrink-0 text-slate-400 hover:text-red-600"
-                  >
-                    ×
-                  </button>
-                </div>
-              ))}
-            </div>
-          ))}
           {/* After the user's own picks, before the imported-template list:
               a newly picked package should land in view above this, and the
               imported template's own list is the long, mostly-static one
-              that belongs last. */}
+              that belongs last. Each section gets its own tint — blue for
+              what the user is actively changing, neutral grey for what's
+              already there — so the two are distinguishable at a glance,
+              not just by their header text. */}
+          {addedPackages.length > 0 && (
+            <div className="border-b border-slate-100 bg-[#f4f9fd] py-1.5 last:border-b-0">
+              <div className="px-3 pb-1 text-[10px] font-bold uppercase tracking-[0.5px] text-[#0071c5]">
+                You are adding ({addedPackages.length})
+              </div>
+              {repoIds.map((repoId) => (
+                <div key={repoId}>
+                  <div className="px-3 pb-1 pt-1 text-[10px] font-bold uppercase tracking-[0.5px] text-[#0071c5]">
+                    {labelFor(repoId)}
+                  </div>
+                  {groups.get(repoId)!.map((p) => (
+                    <div key={p.name} className="flex items-center justify-between gap-2 px-3 py-1">
+                      <span
+                        className="min-w-0 flex-1 truncate text-[12px] text-[#0071c5]"
+                        title={p.name}
+                      >
+                        {p.name}
+                      </span>
+                      {p.version === '' ? (
+                        liveResolved[p.name] ? (
+                          <VersionBadge
+                            version={liveResolved[p.name].version}
+                            floating
+                            title={`currently resolves to ${liveResolved[p.name].version} from ${labelFor(liveResolved[p.name].repository)} (unpinned)`}
+                          />
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => resolveVersion(p.name)}
+                            disabled={resolvingNames.has(p.name)}
+                            className="shrink-0 text-[11px] font-medium text-[#0071c5] hover:underline disabled:cursor-wait disabled:text-slate-400 disabled:no-underline"
+                          >
+                            {resolvingNames.has(p.name) ? 'Resolving…' : 'Resolve'}
+                          </button>
+                        )
+                      ) : (
+                        <VersionBadge version={p.version} floating={false} title={`pinned to ${p.version} from ${labelFor(p.repo)}`} />
+                      )}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          removePackage(p.name, {
+                            releaseRepo: confirmRepoRelease(addedPackages, labelFor, [p.name], isProtectedRepo),
+                            protectedRepos: lockedRepoIds,
+                          })
+                        }
+                        aria-label={`Remove ${p.name}`}
+                        className="shrink-0 text-slate-400 hover:text-red-600"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
           {baseOnlyNames.length > 0 && (
-            <div className="border-b border-slate-100 py-1.5 last:border-b-0">
+            <div className="border-b border-slate-100 bg-slate-50 py-1.5 last:border-b-0">
               <div className="flex items-center justify-between gap-2 px-3 pb-1">
-                <span className="text-[10px] font-bold uppercase tracking-[0.5px] text-slate-400">
+                <span className="text-[10px] font-bold uppercase tracking-[0.5px] text-slate-500">
                   Already in template
                 </span>
                 {unresolvedBaseNames.length > 0 && (
@@ -277,15 +336,34 @@ function BaseOnlyRow({ name, version, floating, unresolved, resolving, onResolve
           {resolving ? 'Resolving…' : 'Resolve'}
         </button>
       ) : (
-        <span
-          className="shrink-0 rounded-full bg-[#e6f2fa] px-1.5 py-0.5 font-mono text-[10px] font-medium text-[#0071c5]"
-          title={
-            floating ? `currently resolves to ${version} (unpinned)` : `pinned to ${version} by the template`
-          }
-        >
-          {version}
-        </span>
+        <VersionBadge
+          version={version!}
+          floating={floating}
+          title={floating ? `currently resolves to ${version} (unpinned)` : `pinned to ${version} by the template`}
+        />
       )}
     </div>
+  )
+}
+
+// A pinned version and a "Latest" pick that currently happens to resolve to
+// the same-looking version string are easy to mistake for each other once
+// both render as a plain badge — the "latest" tag and dashed outline here are
+// the only visual difference, since the pin itself is otherwise identical: a
+// mono version number in a pill.
+function VersionBadge({ version, floating, title }: { version: string; floating: boolean; title: string }) {
+  return (
+    <span className="flex shrink-0 items-center gap-1">
+      {floating && <span className="text-[9px] font-semibold uppercase tracking-wide text-slate-400">latest</span>}
+      <span
+        className={
+          'rounded-full px-1.5 py-0.5 font-mono text-[10px] font-medium ' +
+          (floating ? 'border border-dashed border-[#0071c5] text-[#0071c5]' : 'bg-[#e6f2fa] text-[#0071c5]')
+        }
+        title={title}
+      >
+        {version}
+      </span>
+    </span>
   )
 }

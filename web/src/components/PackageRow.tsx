@@ -36,13 +36,22 @@ interface PackageRowProps {
   // just as redundant a pick as currentVersion's chip — the template
   // already floats to whatever's newest.
   currentIsFloating?: boolean
-  // Offered only by the "Show only selected" review panel, for a row that's
-  // unpinned (a locked-but-floating template entry, or a floating user
-  // pick) and hasn't been checked against the currently-checked repos yet.
-  // Fires a real lookup so the row can show what it actually resolves to
-  // today instead of a bare "Latest".
+  // Offered only by the Selected rail, for a row that's unpinned (a
+  // locked-but-floating template entry, or a floating user pick) and hasn't
+  // been checked against the currently-checked repos yet. Fires a real
+  // lookup so the row can show what it actually resolves to today instead
+  // of a bare "Latest".
   onResolve?: () => void
   resolving?: boolean
+  // What this row's name actually resolves to right now, checked against
+  // every currently-checked repository (not just the one this row happens
+  // to be shown from) — the shared live resolver's result. Distinct from
+  // currentVersion, which is the matched template's own pin and only ever
+  // set on a locked row; this applies to an explicit (non-locked) floating
+  // selection instead, which otherwise has no way to show what it's really
+  // about to resolve to.
+  resolvedVersion?: string
+  resolvedRepo?: string
   // Blocks selecting this row, with `disabledReason` as its tooltip. Used by
   // the Edge Pack tab, where a package cannot be picked until a base runtime is
   // chosen. Version chips are disabled alongside the checkbox: choosing a
@@ -72,6 +81,8 @@ export function PackageRow({
   currentIsFloating,
   onResolve,
   resolving,
+  resolvedVersion,
+  resolvedRepo,
   disabled = false,
   disabledReason,
 }: PackageRowProps) {
@@ -82,13 +93,28 @@ export function PackageRow({
   // becomes a real addedPackages entry on its own.
   const overridden = locked && selection != null
 
+  // Pinned to a specific version (not Latest) from a repository that isn't
+  // among this row's own versions at all — true whenever the package is
+  // being browsed from a different repository than the one it's actually
+  // pinned to. No chip here can represent that pin, so it needs its own
+  // note rather than silently looking unselected.
+  const pinnedElsewhere =
+    selection != null &&
+    selection.version !== '' &&
+    !versions.some((v) => v.repository === selection.repo && v.version === selection.version)
+
   // Clicking the chip that's already the current pick removes it via the
   // same path the checkbox uses, rather than re-adding the identical entry
   // (a no-op) and leaving the only way back "not selected" a trip to the
   // Selected rail. For a locked row this falls back to the template's own
-  // (unoverridden) state rather than removing anything real.
+  // (unoverridden) state rather than removing anything real. Latest is
+  // repo-agnostic on purpose — it isn't pinned to any one repository's
+  // version list, so a version match alone is enough regardless of which
+  // repo it's being re-clicked from.
   const chooseVersion = (v: PackageVersion) => {
-    if (selection && selection.version === v.version) {
+    const sameAsSelection =
+      selection != null && selection.version === v.version && (v.version === '' || selection.repo === v.repository)
+    if (sameAsSelection) {
       onToggle(false)
       return
     }
@@ -135,12 +161,25 @@ export function PackageRow({
         <VersionChips
           versions={versions}
           pinned={selection?.version}
+          pinnedRepo={selection?.repo}
           onChoose={chooseVersion}
           repoLabelFor={repoLabelFor}
           currentVersion={locked ? currentVersion : undefined}
           currentIsFloating={locked ? currentIsFloating : undefined}
           disabled={disabled}
         />
+        {pinnedElsewhere && (
+          <span className="mt-1.5 block text-[11px] text-slate-500">
+            Pinned to <span className="font-mono">{selection!.version}</span> from{' '}
+            {repoLabelFor(selection!.repo)} — picking a version here pins a different repository instead.
+          </span>
+        )}
+        {!locked && selection?.version === '' && resolvedVersion && (
+          <span className="mt-1.5 block text-[11px] text-slate-500">
+            Latest — currently resolves to <span className="font-mono">{resolvedVersion}</span>
+            {resolvedRepo && resolvedRepo !== selection.repo ? ` from ${repoLabelFor(resolvedRepo)}` : ''}.
+          </span>
+        )}
         {locked && (
           <span className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px]">
             <span className="font-medium text-slate-500">
@@ -190,6 +229,7 @@ export function PackageRow({
 function VersionChips({
   versions,
   pinned,
+  pinnedRepo,
   onChoose,
   repoLabelFor,
   currentVersion,
@@ -198,6 +238,10 @@ function VersionChips({
 }: {
   versions: PackageVersion[]
   pinned: string | undefined
+  // Which repository `pinned` actually came from. A specific-version chip
+  // only reads as selected when both match — two repositories can publish
+  // the same version string, and that isn't the same pin.
+  pinnedRepo: string | undefined
   onChoose: (v: PackageVersion) => void
   repoLabelFor: (repoId: string) => string
   currentVersion?: string
@@ -228,10 +272,10 @@ function VersionChips({
   }
 
   // Nothing to attribute an override to without at least one real repository
-  // — true for an unpinned row the "Show only selected" panel hasn't
-  // resolved yet (versions is empty there by design), and would also catch
-  // the caller's own empty-versions fallback synthesizing a single entry
-  // with a real version but no repository.
+  // — true for an unpinned row the Selected rail hasn't resolved yet
+  // (versions is empty there by design), and would also catch the caller's
+  // own empty-versions fallback synthesizing a single entry with a real
+  // version but no repository.
   const noRepoKnown = versions.every((v) => !v.repository)
   // Floating and not yet known to differ from a specific version (either
   // there's no currentVersion to compare against, or nothing's pinned at
@@ -291,7 +335,7 @@ function VersionChips({
               onChoose(v)
             }}
             className={chipClass({
-              active: pinned === v.version,
+              active: pinned === v.version && pinnedRepo === v.repository,
               disabled: disabled || isRedundant,
               redundant: isRedundant,
               ring: isCurrent,

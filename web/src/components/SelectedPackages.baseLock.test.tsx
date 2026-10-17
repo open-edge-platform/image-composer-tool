@@ -11,11 +11,33 @@ import { act, fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { SelectedPackages } from './SelectedPackages'
 import { useStore } from '../store'
+import { useVersionResolver } from '../lib/useVersionResolver'
 import type { PackageRepo } from '../api/types'
 import type { BaseLock } from '../lib/baseLock'
 
 const mockApi = vi.hoisted(() => ({ searchPackages: vi.fn() }))
 vi.mock('../api/client', () => ({ api: mockApi }))
+
+// SelectedPackages no longer owns its own resolver — PackagesStep.tsx lifts
+// one shared useVersionResolver and passes it down, so a floating pick
+// resolves the same way everywhere it's shown. This wrapper reproduces that
+// lift for these tests, the same way the real caller does.
+function Selected({
+  repos,
+  os,
+  baseLock,
+  lockedRepoIds,
+}: {
+  repos: PackageRepo[]
+  os: string
+  baseLock?: BaseLock
+  lockedRepoIds?: Set<string>
+}) {
+  const enabledRepos = useStore((s) => s.enabledRepos)
+  const enabledRepoIds = repos.filter((r) => r.enabledByDefault || enabledRepos.includes(r.id)).map((r) => r.id)
+  const resolver = useVersionResolver(os, enabledRepoIds)
+  return <SelectedPackages repos={repos} os={os} baseLock={baseLock} resolver={resolver} lockedRepoIds={lockedRepoIds} />
+}
 
 const repos: PackageRepo[] = [
   { id: 'base', displayName: 'Ubuntu Base', url: 'http://example/base', enabledByDefault: true },
@@ -39,13 +61,14 @@ beforeEach(() => {
     importedTemplate: null,
     removedBasePackages: [],
   })
+  mockApi.searchPackages.mockReset()
   mockApi.searchPackages.mockResolvedValue({ packages: [], total: 0 })
 })
 
 describe('SelectedPackages — already in template', () => {
   it('lists template packages by default, with no checkbox needed', () => {
     const baseLock = lockOf({ vim: { currentVersion: '9.1' }, bluez: { currentVersion: '5.77' } })
-    render(<SelectedPackages repos={repos} os="ubuntu" baseLock={baseLock} />)
+    render(<Selected repos={repos} os="ubuntu" baseLock={baseLock} />)
 
     expect(screen.getByText('Already in template')).toBeTruthy()
     expect(screen.getByTitle('vim')).toBeTruthy()
@@ -55,18 +78,18 @@ describe('SelectedPackages — already in template', () => {
 
   it('does not offer a remove control for a template-locked package', () => {
     const baseLock = lockOf({ vim: { currentVersion: '9.1' } })
-    render(<SelectedPackages repos={repos} os="ubuntu" baseLock={baseLock} />)
+    render(<Selected repos={repos} os="ubuntu" baseLock={baseLock} />)
 
     expect(screen.queryByLabelText('Remove vim')).toBeNull()
   })
 
   it('moves a package out of the template section once a version override adds it', () => {
     const baseLock = lockOf({ vim: { currentVersion: '9.1' } })
-    const { rerender } = render(<SelectedPackages repos={repos} os="ubuntu" baseLock={baseLock} />)
+    const { rerender } = render(<Selected repos={repos} os="ubuntu" baseLock={baseLock} />)
     expect(screen.getByText('Already in template')).toBeTruthy()
 
     act(() => useStore.getState().setPackage({ name: 'vim', version: '9.2', repo: 'base' }))
-    rerender(<SelectedPackages repos={repos} os="ubuntu" baseLock={baseLock} />)
+    rerender(<Selected repos={repos} os="ubuntu" baseLock={baseLock} />)
 
     expect(screen.queryByText('Already in template')).toBeNull()
     expect(screen.getByLabelText('Remove vim')).toBeTruthy()
@@ -75,12 +98,12 @@ describe('SelectedPackages — already in template', () => {
   it('Clear removes only explicitly-added packages, leaving template-locked ones in place', () => {
     const baseLock = lockOf({ vim: { currentVersion: '9.1' } })
     useStore.getState().setPackage({ name: 'media-ffmpeg', version: '', repo: 'base' })
-    const { rerender } = render(<SelectedPackages repos={repos} os="ubuntu" baseLock={baseLock} />)
+    const { rerender } = render(<Selected repos={repos} os="ubuntu" baseLock={baseLock} />)
     expect(screen.getByText('Already in template')).toBeTruthy()
     expect(screen.getByTitle('vim')).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
-    rerender(<SelectedPackages repos={repos} os="ubuntu" baseLock={baseLock} />)
+    rerender(<Selected repos={repos} os="ubuntu" baseLock={baseLock} />)
 
     expect(screen.getByText('Already in template')).toBeTruthy()
     expect(screen.getByTitle('vim')).toBeTruthy()
@@ -95,7 +118,7 @@ describe('SelectedPackages — already in template', () => {
     useStore.setState({ enabledRepos: ['intel-eci'] })
     useStore.getState().setPackage({ name: 'media-ffmpeg', version: '', repo: 'intel-eci' })
     render(
-      <SelectedPackages
+      <Selected
         repos={multiRepos}
         os="ubuntu"
         baseLock={baseLock}
@@ -109,10 +132,14 @@ describe('SelectedPackages — already in template', () => {
     expect(useStore.getState().enabledRepos).toContain('intel-eci')
   })
 
-  it('resolves a floating template package version on request', async () => {
+  it('resolves a floating template package version on request, not automatically', async () => {
     const baseLock = lockOf({ vim: { currentIsFloating: true } })
     mockApi.searchPackages.mockResolvedValue({ packages: [{ name: 'vim', version: '9.1', repository: 'base' }], total: 1 })
-    render(<SelectedPackages repos={repos} os="ubuntu" baseLock={baseLock} />)
+    render(<Selected repos={repos} os="ubuntu" baseLock={baseLock} />)
+
+    // A template's own unpinned package list can run into the hundreds —
+    // nothing here should be fetched until the user actually asks for it.
+    expect(mockApi.searchPackages).not.toHaveBeenCalled()
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Resolve' }))
@@ -122,12 +149,12 @@ describe('SelectedPackages — already in template', () => {
     expect(screen.getByText('9.1')).toBeTruthy()
   })
 
-  it('bulk-resolves every unresolved template package', async () => {
+  it('bulk-resolves every unresolved template package on request', async () => {
     const baseLock = lockOf({ vim: { currentIsFloating: true }, bluez: { currentIsFloating: true } })
     mockApi.searchPackages.mockImplementation(({ q }: { q: string }) =>
       Promise.resolve({ packages: [{ name: q, version: `${q}-v1`, repository: 'base' }], total: 1 }),
     )
-    render(<SelectedPackages repos={repos} os="ubuntu" baseLock={baseLock} />)
+    render(<Selected repos={repos} os="ubuntu" baseLock={baseLock} />)
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Resolve (2)' }))
@@ -141,7 +168,7 @@ describe('SelectedPackages — already in template', () => {
 describe('SelectedPackages — already in template, grouped by repository', () => {
   it('groups a pinned/default-repo package under the base repo header', () => {
     const baseLock = lockOf({ vim: { currentVersion: '9.1' } })
-    render(<SelectedPackages repos={multiRepos} os="ubuntu" baseLock={baseLock} />)
+    render(<Selected repos={multiRepos} os="ubuntu" baseLock={baseLock} />)
 
     const header = screen.getByText('Ubuntu Base')
     expect(header).toBeTruthy()
@@ -154,7 +181,7 @@ describe('SelectedPackages — already in template, grouped by repository', () =
       packages: [{ name: 'vim', version: '9.1', repository: 'intel-eci' }],
       total: 1,
     })
-    render(<SelectedPackages repos={multiRepos} os="ubuntu" baseLock={baseLock} />)
+    render(<Selected repos={multiRepos} os="ubuntu" baseLock={baseLock} />)
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Resolve' }))
@@ -167,14 +194,14 @@ describe('SelectedPackages — already in template, grouped by repository', () =
 
   it('puts a still-unresolved package under an "Unresolved" header rather than a repo name', () => {
     const baseLock = lockOf({ vim: { currentIsFloating: true } })
-    render(<SelectedPackages repos={multiRepos} os="ubuntu" baseLock={baseLock} />)
+    render(<Selected repos={multiRepos} os="ubuntu" baseLock={baseLock} />)
 
     expect(screen.getByText('Unresolved')).toBeTruthy()
   })
 
   it('omits the "Unresolved" header when nothing is unresolved', () => {
     const baseLock = lockOf({ vim: { currentVersion: '9.1' } })
-    render(<SelectedPackages repos={multiRepos} os="ubuntu" baseLock={baseLock} />)
+    render(<Selected repos={multiRepos} os="ubuntu" baseLock={baseLock} />)
 
     expect(screen.queryByText('Unresolved')).toBeNull()
   })

@@ -13,6 +13,8 @@ import { useEffect, useState } from 'react'
 import { api } from '../api/client'
 import type { PackageSearchResult } from '../api/types'
 
+export type VersionResolver = ReturnType<typeof useVersionResolver>
+
 export function useVersionResolver(os: string, repoIds: string[]) {
   const [liveResolved, setLiveResolved] = useState<Record<string, PackageSearchResult>>({})
   const [resolvingNames, setResolvingNames] = useState<Set<string>>(new Set())
