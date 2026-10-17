@@ -1,0 +1,33 @@
+# Copyright (C) 2025 Intel Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+build/
+install/
+log/
+__pycache__/
+*.pyc
+*.gv
+*.pdf
+run.logs
+
+# IDE
+.vscode/
+.venv/
+
+# Debian packaging artifacts
+*.dsc
+*.xz
+*.orig.tar.gz
+
+# Source extracts
+ros-jazzy-gz-ros2-control-1.2.17/
+
+# TF frame dumps
+frames_*
+*.gv
+*.pdf
+
+# TLS certificates and keys
+*.pem
+*.key
+*.crt

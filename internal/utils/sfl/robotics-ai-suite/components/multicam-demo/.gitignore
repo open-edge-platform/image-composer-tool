@@ -1,0 +1,15 @@
+# Copyright (C) 2025 Intel Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
+.vscode/
+build/
+log/
+
+*.so
+*.swp
+*.log
+tmp/
+src/__pycache__/
+tests/unittest/__pycache__/
+tests/fuzzing/__pycache__/

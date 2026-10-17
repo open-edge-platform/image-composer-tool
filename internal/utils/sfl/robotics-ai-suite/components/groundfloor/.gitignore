@@ -1,0 +1,34 @@
+# Copyright (C) 2025 Intel Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+
+__pycache__/
+*/__pycache__/*
+
+rosbag2*
+
+build/
+install/
+log/
+devel/
+
+debian/.debhelper/
+debian/debhelper*
+debian/ros-*
+debian/files
+
+*.log
+
+# IDE project specific files
+.idea
+*.code-workspace
+
+# Build artifacts
+*.buildinfo
+*.changes
+*.dsc
+*.tar.gz
+*-build-deps_*
+*.deb
+*.ddeb
+**/obj-x86_64-linux-gnu*
