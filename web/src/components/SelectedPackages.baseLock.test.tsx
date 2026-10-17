@@ -118,6 +118,19 @@ describe('SelectedPackages — already in template', () => {
     expect(screen.getByText('9.1')).toBeTruthy()
   })
 
+  // Regression: useBaseLock resolves a floating entry's version against the
+  // default repo only (to mark its chip disabled elsewhere), but that is not
+  // the cross-repository version this rail reports — a checked optional repo
+  // can resolve it differently. Treating the default-repo value as already
+  // resolved here would hide the Resolve control before the real lookup runs.
+  it('still offers Resolve for a floating package that already has a default-repo-only version', () => {
+    const baseLock = lockOf({ vim: { currentIsFloating: true, currentVersion: '9.0-default-only' } })
+    render(<SelectedPackages repos={repos} os="ubuntu" baseLock={baseLock} />)
+
+    expect(screen.queryByText('9.0-default-only')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Resolve' })).toBeTruthy()
+  })
+
   it('bulk-resolves every unresolved template package', async () => {
     const baseLock = lockOf({ vim: { currentIsFloating: true }, bluez: { currentIsFloating: true } })
     mockApi.searchPackages.mockImplementation(({ q }: { q: string }) =>

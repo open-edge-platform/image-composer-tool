@@ -57,7 +57,18 @@ export function SelectedPackages({
     os,
     enabledRepoIds,
   )
-  const baseVersionOf = (name: string) => liveResolved[name]?.version ?? baseLock.info(name).currentVersion
+  const baseVersionOf = (name: string) => {
+    const live = liveResolved[name]?.version
+    if (live !== undefined) return live
+    // currentVersion comes only from the default repo (useBaseLock), which is
+    // correct for a pinned entry — a pin resolves the same way regardless of
+    // which repos are checked — but not for a floating one, which a checked
+    // optional repo can resolve differently. Falling back to it there would
+    // mark the entry resolved against a version it may not actually use,
+    // hiding the Resolve control before the real cross-repo lookup has run.
+    const info = baseLock.info(name)
+    return info.currentIsFloating ? undefined : info.currentVersion
+  }
   const baseIsUnresolved = (name: string) => !liveResolved[name] && baseVersionOf(name) === undefined
   const unresolvedBaseNames = baseOnlyNames.filter((name) => baseIsUnresolved(name) && !resolvingNames.has(name))
 
