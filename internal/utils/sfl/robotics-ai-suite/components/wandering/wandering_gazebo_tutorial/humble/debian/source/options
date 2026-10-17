@@ -1,9 +1,0 @@
-tar-ignore=.git
-tar-ignore=.gitignore
-tar-ignore=.ci
-tar-ignore=ci
-tar-ignore=debian/*.tmpl
-tar-ignore=.pc
-tar-ignore=*.deb
-tar-ignore=*.changes
-tar-ignore=*.buildinfo

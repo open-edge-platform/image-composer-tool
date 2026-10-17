@@ -1,5 +1,0 @@
-bool enable_controller
-float64 robot_speed
-bool enable_safe_position
-bool enable_fullcycle
-bool enable_tracking_on_close_gripper 

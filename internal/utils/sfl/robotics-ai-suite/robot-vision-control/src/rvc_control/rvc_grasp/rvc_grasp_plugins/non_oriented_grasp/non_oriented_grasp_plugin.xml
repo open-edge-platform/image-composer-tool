@@ -1,5 +1,0 @@
-<library path="non_oriented_grasp">
-  <class type="RVCControl::NonOrientedGrasp" base_class_type="RVCControl::RVCGraspInterface">
-    <description>This is a grasp plugin.</description>
-  </class>
-</library>

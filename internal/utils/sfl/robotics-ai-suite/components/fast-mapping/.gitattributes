@@ -1,6 +1,0 @@
-# Copyright (C) 2025 Intel Corporation
-#
-# SPDX-License-Identifier: Apache-2.0
-
-# Enforce Unix-style line endings for all text files.
-* text=auto eol=lf
