@@ -51,19 +51,10 @@ export function SelectedPackages({
   const addedPackages = useStore((s) => s.addedPackages)
   const removePackage = useStore((s) => s.removePackage)
   const clearPackages = useStore((s) => s.clearPackages)
-  const importedTemplate = useStore((s) => s.importedTemplate)
-  const removedBasePackages = useStore((s) => s.removedBasePackages)
-  const setBasePackageRemoved = useStore((s) => s.setBasePackageRemoved)
 
   const labelFor = (repoId: string) => repos.find((r) => r.id === repoId)?.displayName ?? repoId
   const isBaseRepo = (repoId: string) => repos.find((r) => r.id === repoId)?.enabledByDefault ?? false
   const isProtectedRepo = (repoId: string) => isBaseRepo(repoId) || lockedRepoIds.has(repoId)
-
-  // Filtered here rather than read back off the next compose, so a removal
-  // leaves the list immediately instead of after a server round trip.
-  const imported = (importedTemplate?.packages ?? []).filter(
-    (p) => !removedBasePackages.includes(p),
-  )
 
   // What the matched template ships on its own, not already covered by an
   // explicit pick above — shown here by default rather than requiring the
@@ -77,7 +68,18 @@ export function SelectedPackages({
   const baseOnlyNames = baseLock.concreteNames.filter((name) => !addedNames.has(name)).sort()
 
   const { liveResolved, resolvingNames, resolveVersion, resolveAll, bulkResolving } = resolver
-  const baseVersionOf = (name: string) => liveResolved[name]?.version ?? baseLock.info(name).currentVersion
+  const baseVersionOf = (name: string) => {
+    const live = liveResolved[name]?.version
+    if (live !== undefined) return live
+    // currentVersion comes only from the default repo (useBaseLock), which is
+    // correct for a pinned entry — a pin resolves the same way regardless of
+    // which repos are checked — but not for a floating one, which a checked
+    // optional repo can resolve differently. Falling back to it there would
+    // mark the entry resolved against a version it may not actually use,
+    // hiding the Resolve control before the real cross-repo lookup has run.
+    const info = baseLock.info(name)
+    return info.currentIsFloating ? undefined : info.currentVersion
+  }
   const baseIsUnresolved = (name: string) => !liveResolved[name] && baseVersionOf(name) === undefined
   const unresolvedBaseNames = baseOnlyNames.filter((name) => baseIsUnresolved(name) && !resolvingNames.has(name))
 
@@ -141,12 +143,14 @@ export function SelectedPackages({
   }
   const repoIds = [...groups.keys()].sort((a, b) => labelFor(a).localeCompare(labelFor(b)))
 
-  const total = imported.length + addedPackages.length + baseOnlyNames.length
+  const total = addedPackages.length + baseOnlyNames.length
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white">
       <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2.5">
-        <span className="text-[13px] font-bold text-[#00285a]">Selected ({total})</span>
+        <span className="text-[13px] font-bold text-[#00285a]">
+          Selected ({total})
+        </span>
         {addedPackages.length > 0 && (
           <button
             type="button"
@@ -278,31 +282,6 @@ export function SelectedPackages({
                   ))}
                 </div>
               )}
-            </div>
-          )}
-          {imported.length > 0 && (
-            <div className="border-b border-slate-100 py-1.5 last:border-b-0">
-              <div className="px-3 pb-1 text-[10px] font-bold uppercase tracking-[0.5px] text-slate-400">
-                From {importedTemplate?.displayName}
-              </div>
-              {imported.map((name) => (
-                <div key={name} className="flex items-center justify-between gap-2 px-3 py-1">
-                  <span
-                    className="min-w-0 flex-1 truncate text-[12px] text-slate-700"
-                    title={name}
-                  >
-                    {name}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setBasePackageRemoved(name, true)}
-                    aria-label={`Remove ${name}`}
-                    className="shrink-0 text-slate-400 hover:text-red-600"
-                  >
-                    ×
-                  </button>
-                </div>
-              ))}
             </div>
           )}
         </div>

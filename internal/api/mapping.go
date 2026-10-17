@@ -36,14 +36,11 @@ func optStrs(v []string) *[]string {
 // --- inbound: generated request types -> service types ---
 
 func toSelection(r httpapi.ComposeRequest) service.Selection {
-	// The lookup fields are optional in the contract because a `baseYaml`
-	// request carries none of them; the service rejects a request that supplies
-	// neither, so an empty string here means "not supplied" rather than valid.
 	sel := service.Selection{
-		Vertical:  derefStr(r.Vertical),
-		Platform:  derefStr(r.Platform),
-		OS:        derefStr(r.Os),
-		ImageType: derefStr(r.ImageType),
+		Vertical:  r.Vertical,
+		Platform:  r.Platform,
+		OS:        r.Os,
+		ImageType: r.ImageType,
 	}
 	if r.Sku != nil {
 		sel.SKU = *r.Sku
@@ -56,12 +53,6 @@ func toSelection(r httpapi.ComposeRequest) service.Selection {
 	}
 	if r.Repos != nil {
 		sel.Repos = *r.Repos
-	}
-	if r.BaseYaml != nil {
-		sel.BaseYAML = *r.BaseYaml
-	}
-	if r.RemovePackages != nil {
-		sel.RemovePackages = *r.RemovePackages
 	}
 	sel.Disk = toDiskOverride(r.Disk)
 	sel.Credentials = toCredentials(r.Credentials)
@@ -199,8 +190,6 @@ func toBuildRequest(r httpapi.BuildRequest) service.BuildRequest {
 	if r.Yaml != nil {
 		req.YAML = *r.Yaml
 	}
-	req.Credentials = toCredentials(r.Credentials)
-	req.NewUsers = toNewUsers(r.Users)
 	return req
 }
 
@@ -423,7 +412,16 @@ func fromComposeResult(r *service.ComposeResult) httpapi.ComposeResponse {
 		out.BasePackages = &basePackages
 	}
 	if len(r.Credentials) > 0 {
-		out.Credentials = fromCredentialRequirements(r.Credentials)
+		creds := make([]httpapi.CredentialRequirement, 0, len(r.Credentials))
+		for _, c := range r.Credentials {
+			creds = append(creds, httpapi.CredentialRequirement{
+				User:      c.User,
+				Sudo:      c.Sudo,
+				Required:  c.Required,
+				Satisfied: c.Satisfied,
+			})
+		}
+		out.Credentials = &creds
 	}
 	return out
 }
@@ -432,28 +430,11 @@ func fromComposeResult(r *service.ComposeResult) httpapi.ComposeResponse {
 // contract type. errors/warnings are omitempty in the spec, so empty slices map
 // to nil rather than []; valid is required, so it is always sent.
 func fromValidationResult(r *service.ValidationResult) httpapi.ValidationResponse {
-	out := httpapi.ValidationResponse{
+	return httpapi.ValidationResponse{
 		Valid:    r.Valid,
 		Errors:   fromValidationIssues(r.Errors),
 		Warnings: fromValidationIssues(r.Warnings),
 	}
-	if len(r.Credentials) > 0 {
-		out.Credentials = fromCredentialRequirements(r.Credentials)
-	}
-	return out
-}
-
-func fromCredentialRequirements(reqs []service.CredentialRequirement) *[]httpapi.CredentialRequirement {
-	out := make([]httpapi.CredentialRequirement, 0, len(reqs))
-	for _, c := range reqs {
-		out = append(out, httpapi.CredentialRequirement{
-			User:      c.User,
-			Sudo:      c.Sudo,
-			Required:  c.Required,
-			Satisfied: c.Satisfied,
-		})
-	}
-	return &out
 }
 
 func fromValidationIssues(issues []service.ValidationIssue) *[]httpapi.ValidationIssue {

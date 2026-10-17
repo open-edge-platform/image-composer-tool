@@ -3,9 +3,7 @@
 
 // What the matched template ships on its own now surfaces in the rail by
 // default (previously only reachable via the browser's "Show only selected"
-// checkbox) — this file covers that section specifically, distinct from
-// SelectedPackages.imported.test.tsx which covers the unrelated
-// drag-drop-import feature.
+// checkbox) — this file covers that section specifically.
 
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -58,8 +56,6 @@ beforeEach(() => {
   useStore.setState({
     addedPackages: [],
     enabledRepos: [],
-    importedTemplate: null,
-    removedBasePackages: [],
   })
   mockApi.searchPackages.mockReset()
   mockApi.searchPackages.mockResolvedValue({ packages: [], total: 0 })
@@ -147,6 +143,19 @@ describe('SelectedPackages — already in template', () => {
 
     expect(mockApi.searchPackages).toHaveBeenCalledWith({ os: 'ubuntu', repos: ['base'], q: 'vim', limit: 20 })
     expect(screen.getByText('9.1')).toBeTruthy()
+  })
+
+  // Regression: useBaseLock resolves a floating entry's version against the
+  // default repo only (to mark its chip disabled elsewhere), but that is not
+  // the cross-repository version this rail reports — a checked optional repo
+  // can resolve it differently. Treating the default-repo value as already
+  // resolved here would hide the Resolve control before the real lookup runs.
+  it('still offers Resolve for a floating package that already has a default-repo-only version', () => {
+    const baseLock = lockOf({ vim: { currentIsFloating: true, currentVersion: '9.0-default-only' } })
+    render(<Selected repos={repos} os="ubuntu" baseLock={baseLock} />)
+
+    expect(screen.queryByText('9.0-default-only')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Resolve' })).toBeTruthy()
   })
 
   it('bulk-resolves every unresolved template package on request', async () => {
