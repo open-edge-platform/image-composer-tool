@@ -390,34 +390,6 @@ repos:
       - codename: noble
         component: main
 
-  # The Fed Aero Drone/Soldier System templates pin a later kobuk-team
-  # snapshot than `intel-graphics-snapshot` above, so it is a distinct entry
-  # (same reasoning: the snapshot path is part of the suite). ubuntu26 reads
-  # its own suite codename from the same timestamped path, so it gets its own
-  # entry rather than being added to this one's `os` (same pattern as
-  # `edgepack`/`edgepack-ubuntu26` below).
-  - id: intel-graphics-snapshot-fedaero
-    displayName: Intel Graphics (kobuk-team, Fed Aero snapshot)
-    url: https://snapshot.ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu/20260830T100000Z
-    description: Intel client GPU compute runtime from a pinned kobuk-team PPA snapshot, as installed by the Fed Aero Drone/Soldier System templates.
-    enabledByDefault: false
-    pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x0C0E6AF955CE463C03FC51574D098D70AFBE5E1F"
-    os: [ubuntu24]
-    index:
-      - codename: noble
-        component: main
-
-  - id: intel-graphics-snapshot-fedaero-ubuntu26
-    displayName: Intel Graphics (kobuk-team, Fed Aero snapshot, Ubuntu 26.04)
-    url: https://snapshot.ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu/20260830T100000Z
-    description: Intel client GPU compute runtime from a pinned kobuk-team PPA snapshot, as installed by the Fed Aero Drone/Soldier System templates on Ubuntu 26.04.
-    enabledByDefault: false
-    pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x0C0E6AF955CE463C03FC51574D098D70AFBE5E1F"
-    os: [ubuntu26]
-    index:
-      - codename: resolute
-        component: main
-
   # Intel is moving RealSense to realsenseai.com; both hosts are still
   # referenced by templates in this repo, so both are offered.
   - id: librealsense
