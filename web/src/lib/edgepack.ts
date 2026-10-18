@@ -13,6 +13,7 @@
 
 import type { EdgePack, EdgePackDomain, EdgePackPackage, PackageVersion } from '../api/types'
 import type { AddedPackage } from '../store'
+import type { BaseLock } from './baseLock'
 
 // GroupState is a group's selection state. 'partial' is what drives the
 // checkbox's indeterminate flag — markup cannot express "some", so it has to be
@@ -33,15 +34,37 @@ export function isSelected(added: AddedPackage[], name: string): boolean {
   return added.some((p) => p.name === name)
 }
 
-// groupSelectionState counts how many of a group's packages are selected.
-// Names are deduplicated first, so a package listed twice within a group (or
-// reached through two domains when the caller has merged them) is counted once
-// and cannot push `selected` past `total`.
-export function groupSelectionState(names: string[], added: AddedPackage[]): GroupSelection {
+// isEffectivelySelected is isSelected plus the matched template's own package
+// list: a name the template already carries reads as selected here even
+// though it was never written into addedPackages — the same "checked because
+// the template installs it" treatment PackageRow already gives a single row
+// via its `locked` prop (see lib/baseLock.ts).
+export function isEffectivelySelected(name: string, added: AddedPackage[], baseLock: BaseLock): boolean {
+  return baseLock.info(name).locked || isSelected(added, name)
+}
+
+// groupSelectionState counts how many of a group's packages are selected,
+// counting a template-locked name (see isEffectivelySelected) the same as an
+// explicit pick. Names are deduplicated first, so a package listed twice
+// within a group (or reached through two domains when the caller has merged
+// them) is counted once and cannot push `selected` past `total`.
+export function groupSelectionState(
+  names: string[],
+  added: AddedPackage[],
+  baseLock: BaseLock,
+): GroupSelection {
   const unique = [...new Set(names)]
-  const selected = unique.filter((n) => isSelected(added, n)).length
+  const selected = unique.filter((n) => isEffectivelySelected(n, added, baseLock)).length
   const state: GroupState = selected === 0 ? 'none' : selected === unique.length ? 'full' : 'partial'
   return { selected, total: unique.length, state }
+}
+
+// clearableNames is the subset of `names` an explicit "clear" action can
+// actually remove: real addedPackages entries only. A template-locked name is
+// excluded — it cannot be unchecked here, exactly as a single PackageRow's
+// locked checkbox cannot be unchecked.
+export function clearableNames(names: string[], added: AddedPackage[]): string[] {
+  return [...new Set(names)].filter((n) => isSelected(added, n))
 }
 
 // domainPackageNames is one domain's package names, in catalog order.
@@ -100,8 +123,8 @@ function unionPackages(domains: EdgePackDomain[]): EdgePackPackage[] {
 // shown-but-locked Real-time option would unlock every domain from the other
 // surface. Availability is a property of the target, so a runtime that is not
 // published for it cannot be underneath anything the build produces.
-export function selectedBaseRuntime(pack: EdgePack, added: AddedPackage[]) {
-  return pack.baseRuntimes.find((r) => r.available && isSelected(added, r.package.name))
+export function selectedBaseRuntime(pack: EdgePack, added: AddedPackage[], baseLock: BaseLock) {
+  return pack.baseRuntimes.find((r) => r.available && isEffectivelySelected(r.package.name, added, baseLock))
 }
 
 // canSelectDomains gates every domain checkbox and every drill-in package
@@ -111,8 +134,8 @@ export function selectedBaseRuntime(pack: EdgePack, added: AddedPackage[]) {
 // This is one-directional on purpose: choosing a runtime unlocks the domains,
 // but clearing a domain never clears the runtime. The runtime is an independent
 // choice the user made, not a side effect of the domain selection.
-export function canSelectDomains(pack: EdgePack, added: AddedPackage[]): boolean {
-  return selectedBaseRuntime(pack, added) != null
+export function canSelectDomains(pack: EdgePack, added: AddedPackage[], baseLock: BaseLock): boolean {
+  return selectedBaseRuntime(pack, added, baseLock) != null
 }
 
 // domainSelectable reports whether a domain can be selected right now, which
@@ -123,8 +146,9 @@ export function domainSelectable(
   pack: EdgePack,
   domain: EdgePackDomain,
   added: AddedPackage[],
+  baseLock: BaseLock,
 ): boolean {
-  return domain.available && canSelectDomains(pack, added)
+  return domain.available && canSelectDomains(pack, added, baseLock)
 }
 
 // domainLockReason explains why a domain cannot be selected, or null when it
@@ -135,62 +159,84 @@ export function domainLockReason(
   pack: EdgePack,
   domain: EdgePackDomain,
   added: AddedPackage[],
+  baseLock: BaseLock,
 ): string | null {
   if (!domain.available) {
     return domain.unavailableReason ?? 'Not published for the selected target'
   }
-  if (!canSelectDomains(pack, added)) {
+  if (!canSelectDomains(pack, added, baseLock)) {
     return 'Select a base runtime first'
   }
   return null
 }
 
-// ToggleMode is what a group's checkbox does when clicked right now. 'locked' is
-// the only state in which it is disabled.
+// ToggleMode is what a group's checkbox does when clicked right now. 'locked'
+// covers two different reasons a group cannot be toggled: nothing selected and
+// the gate shut, or everything in it already came from the matched template
+// (addable and clearable are both empty) — either way there's nothing a click
+// could do.
 export type ToggleMode = 'add' | 'clear' | 'locked'
 
-// groupToggleMode decides a group checkbox's action and whether it is operable.
+// groupToggleMode decides a group checkbox's action and whether it is operable,
+// from the two counts the caller already has: `addableCount` (names neither
+// template-locked nor already added) and `clearableCount` (names actually in
+// addedPackages — see clearableNames). A template-locked-only name is in
+// neither set, so a fully-locked group reports 'locked' even though its
+// checkbox renders checked.
 //
-// The base-runtime gate blocks ADDING, not clearing. Disabling the checkbox
-// outright would strand a selection made before the runtime was removed:
-// the domain would render checked and unclickable, and the packages it holds
-// would reach the build with no runtime beneath them — precisely the state the
-// gate exists to prevent. So a group that holds anything can always be emptied,
-// whatever the gate says.
-export function groupToggleMode(selectable: boolean, state: GroupState): ToggleMode {
-  if (selectable) return state === 'full' ? 'clear' : 'add'
-  return state === 'none' ? 'locked' : 'clear'
+// Adding takes priority while the gate is open and something addable remains —
+// an indeterminate group (some names already added, more still addable)
+// completes the selection first; clicking again then clears it. Only once
+// nothing is left to add does the gate stop mattering: the base-runtime gate
+// blocks ADDING, not clearing, so a gated group with anything explicitly
+// clearable can still be emptied. Disabling the checkbox outright in that case
+// would strand a selection made before the runtime was removed — the domain
+// would render checked and unclickable, and the packages it holds would reach
+// the build with no runtime beneath them, precisely the state the gate exists
+// to prevent.
+export function groupToggleMode(
+  selectable: boolean,
+  addableCount: number,
+  clearableCount: number,
+): ToggleMode {
+  if (selectable && addableCount > 0) return 'add'
+  return clearableCount > 0 ? 'clear' : 'locked'
 }
 
 // packToggleMode decides the pack-level checkbox's action. It cannot reuse
-// groupToggleMode because adding and clearing have different scopes there:
-// the control may only add what the domains' own checkboxes would allow
-// (addable), but it must be able to clear anything already selected
-// (clearable), which is a wider set.
+// groupToggleMode's call signature because adding and clearing have different
+// scopes there: the control may only add what the domains' own checkboxes
+// would allow (addable), but it must be able to clear anything already
+// selected (clearable), which is a wider set — so the caller passes counts
+// computed over two different name lists, not one.
 //
 // The two diverge whenever a domain is unavailable for this target. Its
 // packages can still be selected — through the Repositories tab, or before the
 // target was changed to one that does not publish the domain — and a control
 // that could select them but not deselect them would strand exactly the way
 // the domain-level gate exists to prevent. So 'add' is offered only while
-// something addable remains, and 'clear' covers the whole union.
+// something genuinely addable remains, and 'clear' covers anything explicitly
+// in addedPackages across the whole union.
 //
-// 'locked' therefore means nothing to add AND nothing to remove, not merely
-// that the gate is shut.
+// 'locked' therefore means nothing to add AND nothing to remove — including
+// when every addable package is already locked in by the matched template.
 export function packToggleMode(
   selectable: boolean,
-  addable: GroupSelection,
-  clearable: GroupSelection,
+  addableCount: number,
+  clearableCount: number,
 ): ToggleMode {
-  if (selectable && addable.total > 0 && addable.state !== 'full') return 'add'
-  return clearable.state === 'none' ? 'locked' : 'clear'
+  if (selectable && addableCount > 0) return 'add'
+  return clearableCount > 0 ? 'clear' : 'locked'
 }
 
 // strandedPackages is every domain package selected with no base runtime under
 // it, which is a selection that cannot build. Empty whenever a runtime is
-// chosen, so it doubles as the test of whether to warn at all.
-export function strandedPackages(pack: EdgePack, added: AddedPackage[]): string[] {
-  if (canSelectDomains(pack, added)) return []
+// chosen, so it doubles as the test of whether to warn at all. Deliberately
+// plain isSelected, not isEffectivelySelected: a template-locked package came
+// in via the base template, which is already a consistent, buildable state on
+// its own, so it is never reported as stranded.
+export function strandedPackages(pack: EdgePack, added: AddedPackage[], baseLock: BaseLock): string[] {
+  if (canSelectDomains(pack, added, baseLock)) return []
   return allDomainPackages(pack)
     .map((p) => p.name)
     .filter((n) => isSelected(added, n))
@@ -222,18 +268,24 @@ export function reposToEnable(
 }
 
 // toAddedPackages turns pack packages into store records at the repository the
-// pack resolves from, skipping any already selected.
+// pack resolves from, skipping any already selected or already carried by the
+// matched template.
 //
-// Skipping rather than overwriting is what lets a hand-pinned version survive a
-// domain-level "select all": re-adding the package would reset it to the
-// floating latest, silently discarding a deliberate choice.
+// Skipping an already-selected name is what lets a hand-pinned version survive
+// a domain-level "select all": re-adding the package would reset it to the
+// floating latest, silently discarding a deliberate choice. Skipping a
+// template-locked name keeps it out of addedPackages entirely — writing it in
+// would turn an implicit template inclusion into an explicit override the
+// user never asked for, and its checkbox is disabled precisely because
+// clicking it must not do that.
 export function toAddedPackages(
   pack: EdgePack,
   packages: EdgePackPackage[],
   added: AddedPackage[],
+  baseLock: BaseLock,
 ): AddedPackage[] {
   return packages
-    .filter((p) => !isSelected(added, p.name))
+    .filter((p) => !isEffectivelySelected(p.name, added, baseLock))
     .map((p) => ({ name: p.name, version: '', repo: pack.repo }))
 }
 
