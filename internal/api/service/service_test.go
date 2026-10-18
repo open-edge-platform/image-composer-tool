@@ -357,6 +357,14 @@ func TestFinishFailure(t *testing.T) {
 func TestBuildCommand(t *testing.T) {
 	t.Setenv("NO_PROXY", "internal.example.com,localhost,127.0.0.1")
 	t.Setenv("no_proxy", "internal.example.com,localhost,127.0.0.1")
+	// Isolate from any HTTP_PROXY/HTTPS_PROXY/FTP_PROXY set in the host's own
+	// environment (this test only asserts NO_PROXY/no_proxy forwarding).
+	t.Setenv("HTTP_PROXY", "")
+	t.Setenv("http_proxy", "")
+	t.Setenv("HTTPS_PROXY", "")
+	t.Setenv("https_proxy", "")
+	t.Setenv("FTP_PROXY", "")
+	t.Setenv("ftp_proxy", "")
 
 	s := &Service{cfg: Config{ICTBinary: "/opt/ict"}}
 	name, args := s.buildCommand("/tmp/t.yml", "/tmp/wd", "/tmp/cd")
@@ -366,16 +374,21 @@ func TestBuildCommand(t *testing.T) {
 	if !slices.Contains(args, "--cache-dir") || !slices.Contains(args, "/tmp/cd") {
 		t.Fatalf("missing --cache-dir in %v", args)
 	}
+	// The --no-proxy composition override is forwarded even without --sudo:
+	// it reaches systemConfig.proxy via a plain CLI flag, not a sudo env_keep.
+	if !slices.Contains(args, "--no-proxy") || !slices.Contains(args, "internal.example.com,localhost,127.0.0.1") {
+		t.Fatalf("missing --no-proxy override in %v", args)
+	}
 
 	s.cfg.Sudo = true
 	name, args = s.buildCommand("/tmp/t.yml", "/tmp/wd", "/tmp/cd")
-	wantPrefix := []string{
+	wantSudoPrefix := []string{
 		"-n",
 		"NO_PROXY=internal.example.com,localhost,127.0.0.1",
 		"no_proxy=internal.example.com,localhost,127.0.0.1",
 		"/opt/ict", "build", "/tmp/t.yml",
 	}
-	if name != "sudo" || !slices.Equal(args[:len(wantPrefix)], wantPrefix) {
+	if name != "sudo" || !slices.Equal(args[:len(wantSudoPrefix)], wantSudoPrefix) {
 		t.Fatalf("sudo cmd = %s %v", name, args)
 	}
 }
@@ -384,16 +397,52 @@ func TestBuildCommand(t *testing.T) {
 // no_proxy= on the sudo command line: sudo rejects any NAME=value assignment
 // not covered by its sudoers env_keep rule, so an unconditional empty
 // assignment would break --sudo builds on every install that hasn't re-run
-// the sudoers generator for this change.
+// the sudoers generator for this change. The same applies to the --no-proxy
+// (etc.) CLI overrides: an always-present empty value would needlessly clear
+// a template's own systemConfig.proxy.
 func TestBuildCommandSudoOmitsEmptyProxyVars(t *testing.T) {
 	t.Setenv("NO_PROXY", "")
 	t.Setenv("no_proxy", "")
+	t.Setenv("HTTP_PROXY", "")
+	t.Setenv("http_proxy", "")
+	t.Setenv("HTTPS_PROXY", "")
+	t.Setenv("https_proxy", "")
+	t.Setenv("FTP_PROXY", "")
+	t.Setenv("ftp_proxy", "")
 
 	s := &Service{cfg: Config{ICTBinary: "/opt/ict", Sudo: true}}
 	name, args := s.buildCommand("/tmp/t.yml", "/tmp/wd", "/tmp/cd")
 	want := []string{"-n", "/opt/ict", "build", "/tmp/t.yml"}
 	if name != "sudo" || !slices.Equal(args[:len(want)], want) {
 		t.Fatalf("sudo cmd with no proxy configured = %s %v", name, args)
+	}
+}
+
+// The server's own proxy environment must reach systemConfig.proxy via the
+// build's composition-override flags, not just the sudo env_keep forwarding
+// (which only affects the host-side build process's own network calls).
+func TestBuildCommandForwardsProxyFlags(t *testing.T) {
+	t.Setenv("HTTP_PROXY", "http://proxy.example.com:911")
+	t.Setenv("HTTPS_PROXY", "http://proxy.example.com:912")
+	t.Setenv("FTP_PROXY", "http://proxy.example.com:912")
+	t.Setenv("NO_PROXY", "")
+	t.Setenv("no_proxy", "")
+
+	s := &Service{cfg: Config{ICTBinary: "/opt/ict"}}
+	_, args := s.buildCommand("/tmp/t.yml", "/tmp/wd", "/tmp/cd")
+
+	for flag, want := range map[string]string{
+		"--http-proxy":  "http://proxy.example.com:911",
+		"--https-proxy": "http://proxy.example.com:912",
+		"--ftp-proxy":   "http://proxy.example.com:912",
+	} {
+		i := slices.Index(args, flag)
+		if i == -1 || i+1 >= len(args) || args[i+1] != want {
+			t.Fatalf("expected %s %s in %v", flag, want, args)
+		}
+	}
+	if slices.Contains(args, "--no-proxy") {
+		t.Fatalf("unset NO_PROXY must not add --no-proxy: %v", args)
 	}
 }
 

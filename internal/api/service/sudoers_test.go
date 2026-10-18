@@ -20,11 +20,11 @@ func TestSudoersSpecRender(t *testing.T) {
 
 	// The three privileged operations, each scoped to a single command. The cat
 	// rule is scoped to the builds subtree, where all artifacts live. The build
-	// rule is named via a Cmnd_Alias so env_keep can scope NO_PROXY/no_proxy to
+	// rule is named via a Cmnd_Alias so env_keep can scope the proxy variables to
 	// it alone.
 	want := []string{
 		"Cmnd_Alias ICT_BUILD = /opt/ict/image-composer-tool build *",
-		`Defaults!ICT_BUILD env_keep += "NO_PROXY no_proxy"`,
+		`Defaults!ICT_BUILD env_keep += "NO_PROXY no_proxy HTTP_PROXY http_proxy HTTPS_PROXY https_proxy FTP_PROXY ftp_proxy"`,
 		"ictsvc ALL=(root) NOPASSWD: ICT_BUILD",
 		"ictsvc ALL=(root) NOPASSWD: /usr/bin/kill -TERM -[0-9]*",
 		"ictsvc ALL=(root) NOPASSWD: /usr/bin/cat /srv/ict-workspace/builds/*",

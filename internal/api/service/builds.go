@@ -1012,17 +1012,44 @@ func (s *Service) checkTemplateCredentials(templatePath string) error {
 // single hard-coded `image-composer-tool build` invocation with no user-derived
 // arguments on the command line (selections are only manifest lookup keys) — so
 // the allowlist the shell package provides adds no safety here.
+// proxyEnvNames pairs each build composition-override flag with the
+// environment variable names (uppercase checked before lowercase) that
+// supply it from the serve process's own environment.
+var proxyEnvNames = []struct {
+	flag  string
+	names []string
+}{
+	{"--http-proxy", []string{"HTTP_PROXY", "http_proxy"}},
+	{"--https-proxy", []string{"HTTPS_PROXY", "https_proxy"}},
+	{"--ftp-proxy", []string{"FTP_PROXY", "ftp_proxy"}},
+	{"--no-proxy", []string{"NO_PROXY", "no_proxy"}},
+}
+
 func (s *Service) buildCommand(templatePath, workDir, cacheDir string) (name string, args []string) {
 	// Per-build --work-dir and --cache-dir keep each build's scratch and package
 	// cache isolated under the build root, so concurrent/repeat builds don't share
 	// (root-owned) state and cleanup is a single directory removal.
 	ictArgs := []string{"build", templatePath, "--work-dir", workDir, "--cache-dir", cacheDir}
+
+	// Forward the server's own proxy configuration into systemConfig.proxy so
+	// images built on a proxied network can still reach the network during
+	// first-boot provisioning. These flags unconditionally override whatever
+	// systemConfig.proxy a template sets (CLI wins over template, by design
+	// of applyCompositionFlagOverrides) — only passed when actually set, so
+	// a host with no proxy configured leaves every template's proxy block
+	// (or lack of one) untouched.
+	for _, p := range proxyEnvNames {
+		if v := firstEnv(p.names); v != "" {
+			ictArgs = append(ictArgs, p.flag, v)
+		}
+	}
+
 	if s.cfg.Sudo {
 		// -n: never prompt; fail fast if passwordless sudo isn't configured.
 		// NAME=value assignments ahead of the command set the invoked process's
 		// environment directly; sudo strips them from the command it matches
 		// against the sudoers rule, so this still resolves to the scoped
-		// "<ICTPath> build *" rule (see sudoers.go's env_keep for these two
+		// "<ICTPath> build *" rule (see sudoers.go's env_keep for these
 		// variables, which is what lets sudo honor them without SETENV).
 		//
 		// Only forward a variable that's actually set: sudo rejects an
@@ -1032,15 +1059,27 @@ func (s *Service) buildCommand(templatePath, workDir, cacheDir string) (name str
 		// would break every --sudo build on a host that has no proxy
 		// configured and hasn't re-run the sudoers generator for this rule.
 		sudoArgs := []string{"-n"}
-		if v := os.Getenv("NO_PROXY"); v != "" {
-			sudoArgs = append(sudoArgs, "NO_PROXY="+v)
-		}
-		if v := os.Getenv("no_proxy"); v != "" {
-			sudoArgs = append(sudoArgs, "no_proxy="+v)
+		for _, p := range proxyEnvNames {
+			for _, name := range p.names {
+				if v := os.Getenv(name); v != "" {
+					sudoArgs = append(sudoArgs, name+"="+v)
+				}
+			}
 		}
 		return "sudo", append(append(sudoArgs, s.cfg.ICTBinary), ictArgs...)
 	}
 	return s.cfg.ICTBinary, ictArgs
+}
+
+// firstEnv returns the value of the first set variable among names, checked
+// in order (uppercase before lowercase, matching the sudo env_keep order).
+func firstEnv(names []string) string {
+	for _, name := range names {
+		if v := os.Getenv(name); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // runBuild executes the ICT binary, streams its output into the build's log

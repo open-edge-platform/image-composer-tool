@@ -390,6 +390,68 @@ repos:
       - codename: noble
         component: main
 
+  # The Fed Aero Drone/Soldier System templates pin a later kobuk-team
+  # snapshot than `intel-graphics-snapshot` above, so it is a distinct entry
+  # (same reasoning: the snapshot path is part of the suite). ubuntu26 reads
+  # its own suite codename from the same timestamped path, so it gets its own
+  # entry rather than being added to this one's `os` (same pattern as
+  # `edgepack`/`edgepack-ubuntu26` below).
+  - id: intel-graphics-snapshot-fedaero
+    displayName: Intel Graphics (kobuk-team, Fed Aero snapshot)
+    url: https://snapshot.ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu/20260830T100000Z
+    description: Intel client GPU compute runtime from a pinned kobuk-team PPA snapshot, as installed by the Fed Aero Drone/Soldier System templates.
+    enabledByDefault: false
+    pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x0C0E6AF955CE463C03FC51574D098D70AFBE5E1F"
+    os: [ubuntu24]
+    index:
+      - codename: noble
+        component: main
+
+  - id: intel-graphics-snapshot-fedaero-ubuntu26
+    displayName: Intel Graphics (kobuk-team, Fed Aero snapshot, Ubuntu 26.04)
+    url: https://snapshot.ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu/20260830T100000Z
+    description: Intel client GPU compute runtime from a pinned kobuk-team PPA snapshot, as installed by the Fed Aero Drone/Soldier System templates on Ubuntu 26.04.
+    enabledByDefault: false
+    pkey: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x0C0E6AF955CE463C03FC51574D098D70AFBE5E1F"
+    os: [ubuntu26]
+    index:
+      - codename: resolute
+        component: main
+
+  # EdgePack-test: the pre-release Panther Lake / Wildcat Lake enablement feed
+  # the Fed Aero Drone/Soldier System templates install from (not yet on the
+  # `edgepack` production repo above). Split by host OS suite for the same
+  # reason as `edgepack`/`edgepack-ubuntu26`.
+  #
+  # pgesclu22-02.png.intel.com is an internal host: any build host (including
+  # CI/Jenkins executors) that builds a template referencing this repo must
+  # have it in NO_PROXY/no_proxy, or the corporate proxy will refuse/fail to
+  # route the apt fetch at build time. This is independent of the deployed
+  # image's own systemConfig.proxy, which only affects the running system.
+  - id: edgepack-test
+    displayName: Intel EdgePack (test feed)
+    url: http://pgesclu22-02.png.intel.com/edgepack-test
+    description: Pre-release Intel platform-enablement packages for Panther Lake / Wildcat Lake, as installed by the Fed Aero Drone/Soldier System templates.
+    enabledByDefault: false
+    priority: 1001
+    pkey: http://pgesclu22-02.png.intel.com/edgepack-test-publickey.asc
+    os: [ubuntu24]
+    index:
+      - codename: noble
+        component: unstable
+
+  - id: edgepack-test-ubuntu26
+    displayName: Intel EdgePack (test feed, Ubuntu 26.04)
+    url: http://pgesclu22-02.png.intel.com/edgepack-test
+    description: Pre-release Intel platform-enablement packages for Panther Lake / Wildcat Lake, as installed by the Fed Aero Drone/Soldier System templates on Ubuntu 26.04.
+    enabledByDefault: false
+    priority: 1001
+    pkey: http://pgesclu22-02.png.intel.com/edgepack-test-publickey.asc
+    os: [ubuntu26]
+    index:
+      - codename: resolute
+        component: unstable
+
   # Intel is moving RealSense to realsenseai.com; both hosts are still
   # referenced by templates in this repo, so both are offered.
   - id: librealsense
