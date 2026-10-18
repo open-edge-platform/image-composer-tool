@@ -152,15 +152,17 @@ export function PackageRepoBrowser({
         the one shown on this page would be a different pin, not the same
         package twice. Where the repository you&apos;re browsing offers
         curated picks, check &quot;Show frequently used&quot; above to
-        narrow the list to them. What the matched template ships on its own,
-        and everything you&apos;ve added across every checked repository,
-        shows in the Selected panel on the right instead. Picking
-        &quot;Latest&quot; looks up what it actually resolves to across
-        every checked repository right away — not just the one being
-        browsed — and shows a note naming the real version and repository
-        once that lookup lands. The &quot;Select all&quot; checkbox adds
-        everything on the current page to your selection, and removes it
-        again when unchecked.
+        narrow the list to them, or check &quot;Show only selected&quot; to
+        review just what you&apos;ve picked from this repository. What the
+        matched template ships on its own, and everything you&apos;ve added
+        across every checked repository, shows in the Selected panel on the
+        right instead. Picking &quot;Latest&quot; looks up what it actually
+        resolves to across every checked repository right away — not just
+        the one being browsed — and shows a note naming the real version and
+        repository once that lookup lands; an unresolved pick in &quot;Show
+        only selected&quot; can also be resolved individually or all at once.
+        The &quot;Select all&quot; checkbox adds everything on the current
+        page to your selection, and removes it again when unchecked.
       </p>
     </>
   )
@@ -269,6 +271,23 @@ function MergedPane({
   const [pageInput, setPageInput] = useState('1')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // When true, the network fetch below is skipped and the list shows what's
+  // already picked from the browsed repo instead — reviewing selections
+  // shouldn't depend on which page of a large catalog they happen to land
+  // on. Only makes sense against whichever repo is currently browsed, so
+  // switching repos resets it rather than carrying a review over that might
+  // show nothing for the new one.
+  const [selectedOnly, setSelectedOnly] = useState(false)
+  useEffect(() => {
+    setSelectedOnly(false)
+  }, [selectedRepo?.id])
+  // Toggling the review on or off leaves `page` wherever browsing the
+  // catalog last left it — without this, unchecking it refetches that same
+  // (possibly far-in) offset, which can legitimately come back empty even
+  // though the repo has plenty of packages on earlier pages.
+  useEffect(() => {
+    setPage(0)
+  }, [selectedOnly])
   const addedPackages = useStore((s) => s.addedPackages)
   const setPackage = useStore((s) => s.setPackage)
   const removePackage = useStore((s) => s.removePackage)
@@ -277,7 +296,7 @@ function MergedPane({
   const setRepoEnabled = useStore((s) => s.setRepoEnabled)
 
   const enabledRepoIds = repos.filter(isEnabled).map((r) => r.id)
-  const { liveResolved, resolvingNames, resolveVersion, resolveAll: resolveAllVersions } = resolver
+  const { liveResolved, resolvingNames, resolveVersion, resolveAll: resolveAllVersions, bulkResolving } = resolver
   // What the pane is actually fetched against — only the one repository
   // currently clicked in the rail, checked or not. Kept separate from
   // enabledRepoIds: resolveVersion and the "already added" rows below
@@ -334,8 +353,13 @@ function MergedPane({
 
   // Fetch one page of the browsed repository's catalog (or its curated
   // subset) whenever the browsed repo, the curation toggle, or the page
-  // changes.
+  // changes. Skipped while reviewing selections only — that view is built
+  // straight from the store below, no fetch needed.
   useEffect(() => {
+    if (selectedOnly) {
+      setLoading(false)
+      return
+    }
     setHits([])
     setError(null)
     if (fetchRepoIds.length === 0) {
@@ -363,15 +387,72 @@ function MergedPane({
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchIdsKey stands in for fetchRepoIds
-  }, [fetchIdsKey, os, frequentOnly, page])
+  }, [fetchIdsKey, os, frequentOnly, page, selectedOnly])
 
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
+  // Already-picked packages from the browsed repo, synthesized straight from
+  // the store rather than fetched — addedPackages only carries name/version/
+  // repo, not description or sibling versions, which is fine for a short
+  // review list. A floating pick (version === '') uses whatever was
+  // live-resolved for it.
+  const addedRows: PackageSearchResult[] = addedPackages
+    .filter((p) => p.repo === selectedRepo?.id)
+    .map((p) => {
+      if (p.version === '' && liveResolved[p.name]) return liveResolved[p.name]
+      return {
+        name: p.name,
+        version: p.version,
+        repository: p.repo,
+        versions: p.version ? [{ version: p.version, repository: p.repo }] : [],
+      }
+    })
+
+  // The base repo's own rows are mostly satisfied by the matched template
+  // directly (baseLock), never touching addedPackages at all — without
+  // these, "Show only selected" on the base repo would say nothing's picked
+  // even though every one of those names shows checked in the normal view.
+  // Only the base repo's own concrete names are considered: a locked name's
+  // currentVersion is specifically a default-repo lookup (see baseLock.ts),
+  // so it isn't meaningful attributed to any other repo.
+  const lockedRows: PackageSearchResult[] = selectedRepo?.enabledByDefault
+    ? baseLock.concreteNames
+        .filter((name) => !addedRows.some((r) => r.name === name))
+        .map((name) => {
+          const lock = baseLock.info(name)
+          return {
+            name,
+            version: lock.currentVersion ?? '',
+            repository: selectedRepo.id,
+            versions: lock.currentVersion ? [{ version: lock.currentVersion, repository: selectedRepo.id }] : [],
+          }
+        })
+    : []
+
+  const selectedRows: PackageSearchResult[] = [...addedRows, ...lockedRows].sort((a, b) =>
+    a.name.localeCompare(b.name),
+  )
+
+  const displayRows = selectedOnly ? selectedRows : hits
+
   // Resolve default-repo versions for any locked, unpinned row as it
-  // renders, so its "current" chip can be marked once that lands.
+  // renders, so its "current" chip can be marked once that lands. Skipped in
+  // the review list: there, an unpinned row deliberately starts at "Latest"
+  // rather than a default-repo guess — see resolveVersion above.
   useEffect(() => {
-    ensureBaseVersions(baseLock, hits.map((h) => h.name))
-  }, [hits, baseLock])
+    if (selectedOnly) return
+    ensureBaseVersions(baseLock, displayRows.map((h) => h.name))
+  }, [displayRows, baseLock, selectedOnly])
+
+  // Every row in the review list that's still just "Latest" — what the bulk
+  // button resolves, and how it reports its own count/label. versions is
+  // optional on the wire type (an older backend might omit it), so absent
+  // counts as unresolved too, not a type error waiting to happen.
+  const isUnresolved = (h: PackageSearchResult) => !h.versions?.length
+  const unresolvedNames = selectedOnly
+    ? selectedRows.filter((h) => isUnresolved(h) && !resolvingNames.has(h.name)).map((h) => h.name)
+    : []
+  const resolveAll = () => resolveAllVersions(unresolvedNames)
 
   const jumpToPage = () => {
     const n = parseInt(pageInput, 10)
@@ -426,7 +507,16 @@ function MergedPane({
   return (
     <>
       <div className="mb-2 flex flex-wrap items-center gap-4 text-[12px] text-slate-600">
-        {hits.length > 0 && (
+        <label className="flex items-center gap-1.5">
+          <input
+            type="checkbox"
+            checked={selectedOnly}
+            onChange={(e) => setSelectedOnly(e.target.checked)}
+            className="h-[13px] w-[13px] accent-[#0071c5]"
+          />
+          Show only selected
+        </label>
+        {!selectedOnly && hits.length > 0 && (
           <label className="flex items-center gap-1.5 font-medium">
             <input
               type="checkbox"
@@ -437,20 +527,34 @@ function MergedPane({
             Select all on this page
           </label>
         )}
+        {selectedOnly && unresolvedNames.length > 0 && (
+          <button
+            type="button"
+            onClick={resolveAll}
+            disabled={bulkResolving}
+            className="font-medium text-[#0071c5] hover:underline disabled:cursor-wait disabled:text-slate-400 disabled:no-underline"
+          >
+            {bulkResolving
+              ? 'Resolving versions — this may take a moment…'
+              : `Resolve versions (${unresolvedNames.length})`}
+          </button>
+        )}
       </div>
       {error ? (
         <p className="px-5 py-12 text-center text-[13px] text-red-600">{error}</p>
-      ) : hits.length === 0 ? (
+      ) : displayRows.length === 0 ? (
         <p className="px-5 py-12 text-center text-[13px] text-slate-500">
-          {loading
-            ? 'Loading packages…'
-            : frequentOnly
-              ? `No frequently used packages in ${repoLabelFor(selectedRepo?.id ?? '')}. Uncheck "Show frequently used" to browse all ${fullTotal}.`
-              : `No packages found in ${repoLabelFor(selectedRepo?.id ?? '')}.`}
+          {selectedOnly
+            ? `You haven't added any packages from ${repoLabelFor(selectedRepo?.id ?? '')} yet.`
+            : loading
+              ? 'Loading packages…'
+              : frequentOnly
+                ? `No frequently used packages in ${repoLabelFor(selectedRepo?.id ?? '')}. Uncheck "Show frequently used" to browse all ${fullTotal}.`
+                : `No packages found in ${repoLabelFor(selectedRepo?.id ?? '')}.`}
         </p>
       ) : (
         <>
-          {pageCount > 1 && (
+          {!selectedOnly && pageCount > 1 && (
             <Pager
               page={page}
               pageCount={pageCount}
@@ -465,17 +569,21 @@ function MergedPane({
             />
           )}
           <div className="rounded border border-slate-100">
-            {hits.map((h) => {
+            {displayRows.map((h) => {
               const lock = baseLock.info(h.name)
               // A pin resolves the same way regardless of which repos are
               // checked, so it never consults the live-resolver cache —
               // that cache is keyed only by name and can carry a stale
               // answer from an unrelated floating pick of the same name.
               // Only a floating entry's default-repo-only currentVersion is
-              // worth replacing with the fresher, cross-repo live result.
-              const currentVersion = lock.currentIsFloating
-                ? (liveResolved[h.name]?.version ?? lock.currentVersion)
-                : lock.currentVersion
+              // worth replacing with the fresher, cross-repo live result —
+              // never done in the review list, where an unpinned row
+              // deliberately starts at "Latest" rather than a default-repo
+              // guess (see the ensureBaseVersions effect above).
+              const currentVersion =
+                lock.currentIsFloating && !selectedOnly
+                  ? (liveResolved[h.name]?.version ?? lock.currentVersion)
+                  : lock.currentVersion
               return (
                 <PackageRow
                   key={h.name}
@@ -532,12 +640,13 @@ function MergedPane({
                       }
                     }
                   }}
+                  onResolve={selectedOnly && isUnresolved(h) ? () => resolveVersion(h.name) : undefined}
                   resolving={resolvingNames.has(h.name)}
                 />
               )
             })}
           </div>
-          {pageCount > 1 && (
+          {!selectedOnly && pageCount > 1 && (
             <Pager
               page={page}
               pageCount={pageCount}

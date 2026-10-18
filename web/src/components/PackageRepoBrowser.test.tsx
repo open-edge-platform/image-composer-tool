@@ -259,3 +259,40 @@ describe('a package already selected from a different repository than the one be
     expect(latest.className).toContain('bg-[#0071c5]')
   })
 })
+
+describe('"Show only selected"', () => {
+  it('refetches page 1 on uncheck instead of the stale page the catalog was left on', async () => {
+    useStore.setState({ addedPackages: [{ name: 'curl', version: '', repo: 'base' }] })
+    mockApi.searchPackages.mockResolvedValue({
+      packages: [{ name: 'zebra', version: '1.0', repository: 'base', versions: [{ version: '1.0', repository: 'base' }] }],
+      total: 250,
+    })
+    render(<Browser repos={repos} os="ubuntu" baseLock={noLock} />)
+
+    await screen.findByText('zebra')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Next' })[0])
+    await waitFor(() => expect(mockApi.searchPackages).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 100 })))
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Show only selected' }))
+    await screen.findByText('curl')
+
+    mockApi.searchPackages.mockClear()
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Show only selected' }))
+
+    await waitFor(() => expect(mockApi.searchPackages).toHaveBeenCalledWith(expect.objectContaining({ offset: 0 })))
+  })
+
+  it('includes template-locked packages when browsing the base repo', async () => {
+    const baseLockWithCurl: BaseLock = {
+      info: (name) => (name === 'curl' ? { locked: true, currentVersion: '8.5', currentIsFloating: false } : { locked: false, currentIsFloating: false }),
+      ensureResolved: () => {},
+      concreteNames: ['curl'],
+    }
+    mockApi.searchPackages.mockResolvedValue({ packages: [], total: 0 })
+    render(<Browser repos={repos} os="ubuntu" baseLock={baseLockWithCurl} />)
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Show only selected' }))
+
+    await screen.findByText('curl')
+  })
+})
