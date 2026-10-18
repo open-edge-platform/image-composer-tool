@@ -7,6 +7,7 @@ import { PackageRepoBrowser } from './PackageRepoBrowser'
 import { PackageRow } from './PackageRow'
 import { SelectedPackages } from './SelectedPackages'
 import { useBaseLock, ensureBaseVersions, type BaseLock } from '../lib/baseLock'
+import { useVersionResolver, type VersionResolver } from '../lib/useVersionResolver'
 import { templateLockedRepos } from '../lib/edgepack'
 
 interface PackagesStepProps {
@@ -58,6 +59,7 @@ export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
   // most users arrive with; provenance is the follow-up.
   const [tab, setTab] = useState<TabID>('edge-pack')
   const manifest = useStore((s) => s.manifest)
+  const enabledRepos = useStore((s) => s.enabledRepos)
 
   useEffect(() => {
     if (!os) {
@@ -114,8 +116,23 @@ export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
   const repoLabelFor = (id: string) => repos?.find((r) => r.id === id)?.displayName ?? id
   // Repos the matched template already draws an Edge Pack package from —
   // these get the same "always on, can't uncheck" treatment the Repositories
-  // tab already gives the target's base repo.
+  // tab already gives the target's base repo. Computed before enabledRepoIds
+  // below: a template-locked repo renders checked but deliberately never
+  // joins enabledRepos (see templateLockedRepos), so without this, a
+  // selection resolving only against one (e.g. intel-eci) would have it
+  // silently missing from the shared resolver's own checked-repo scope.
   const lockedRepoIds = new Set(edgePack ? templateLockedRepos(edgePack, baseLock) : [])
+  // Every repo a build actually resolves against right now — the one set a
+  // floating pick's "what does this really resolve to" lookup must be
+  // checked against, regardless of which repo it was picked from or whether
+  // it's a new pick or something the matched template already ships
+  // unpinned. One instance, shared by both browsing surfaces and the
+  // Selected rail, so every surface reports the same answer for the same
+  // name instead of each keeping its own cache.
+  const enabledRepoIds = (repos ?? [])
+    .filter((r) => r.enabledByDefault || enabledRepos.includes(r.id) || lockedRepoIds.has(r.id))
+    .map((r) => r.id)
+  const resolver = useVersionResolver(os, enabledRepoIds)
 
   return (
     <div>
@@ -155,7 +172,7 @@ export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
             {/* Search sits above the tabs rather than inside one: it looks
                 across every repository, so it is the path that works when you
                 don't know which surface a package lives on. */}
-            <PackageSearch os={os} repos={repos} baseLock={baseLock} lockedRepoIds={lockedRepoIds} />
+            <PackageSearch os={os} repos={repos} baseLock={baseLock} lockedRepoIds={lockedRepoIds} resolver={resolver} />
             <BrowseTabs tab={tab} onTab={setTab} />
             {/* One panel id for both tabs, not one per tab. Only the active
                 panel is rendered, so a per-tab id would leave every inactive
@@ -164,7 +181,7 @@ export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
                 that genuinely changes. */}
             <div role="tabpanel" id={PANEL_ID} aria-labelledby={`tab-${tab}`}>
               {tab === 'repos' ? (
-                <PackageRepoBrowser repos={repos} os={os} baseLock={baseLock} lockedRepoIds={lockedRepoIds} />
+                <PackageRepoBrowser repos={repos} os={os} baseLock={baseLock} lockedRepoIds={lockedRepoIds} resolver={resolver} />
               ) : edgePack ? (
                 <EdgePackBrowser
                   pack={edgePack}
@@ -183,7 +200,7 @@ export function PackagesStep({ os, active, basePackages }: PackagesStepProps) {
             </div>
           </div>
           <div className="sticky top-4 flex flex-col gap-3">
-            <SelectedPackages repos={repos} os={os} baseLock={baseLock} lockedRepoIds={lockedRepoIds} />
+            <SelectedPackages repos={repos} os={os} baseLock={baseLock} lockedRepoIds={lockedRepoIds} resolver={resolver} />
           </div>
         </div>
       )}
@@ -361,11 +378,13 @@ function PackageSearch({
   repos,
   baseLock,
   lockedRepoIds,
+  resolver,
 }: {
   os: string
   repos: PackageRepo[]
   baseLock: BaseLock
   lockedRepoIds: Set<string>
+  resolver: VersionResolver
 }) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<PackageSearchResult[]>([])
@@ -383,6 +402,20 @@ function PackageSearch({
   const removePackage = useStore((s) => s.removePackage)
   const setRepoEnabled = useStore((s) => s.setRepoEnabled)
   const enabledRepos = useStore((s) => s.enabledRepos)
+  // Names queued for an automatic resolve that enabled their own repo in the
+  // same click — `resolver` here still reflects the scope from before that
+  // enable (PackagesStep.tsx rebuilds it only once the store update that
+  // follows re-renders this tree), so calling resolveVersion synchronously
+  // would check against a scope missing the repo that was just turned on.
+  // Drained once a fresh `resolver` prop arrives from that re-render.
+  const pendingResolveRef = useRef<string[]>([])
+
+  useEffect(() => {
+    if (pendingResolveRef.current.length === 0) return
+    const names = pendingResolveRef.current
+    pendingResolveRef.current = []
+    names.forEach((name) => resolver.resolveVersion(name))
+  }, [resolver])
 
   useEffect(() => {
     const q = query.trim()
@@ -498,7 +531,21 @@ function PackageSearch({
           }
         : undefined
     setPackage({ name: hit.name, version, repo }, opts)
-    if (!isEnabled(repo)) setRepoEnabled(repo, true)
+    const repoNewlyEnabled = !isEnabled(repo)
+    if (repoNewlyEnabled) setRepoEnabled(repo, true)
+    // A floating pick's displayed repo is just wherever it was picked from —
+    // kick off the real cross-repo lookup immediately so the Selected rail
+    // can show what it actually resolves to rather than a bare "latest". If
+    // this pick just enabled its own repo, defer the lookup (see
+    // pendingResolveRef above) rather than checking it against a resolver
+    // scope that's one render behind.
+    if (version === '') {
+      if (repoNewlyEnabled) {
+        pendingResolveRef.current.push(hit.name)
+      } else {
+        resolver.resolveVersion(hit.name)
+      }
+    }
     setQuery('')
     setOpen(false)
   }
@@ -563,6 +610,13 @@ function PackageSearch({
                     repository never hides what the fast ones already found. */}
                 {results.map((hit) => {
                   const lock = baseLock.info(hit.name)
+                  // A pin never consults the live-resolver cache (see
+                  // PackageRepoBrowser.tsx) — only a floating entry's
+                  // default-repo-only currentVersion is worth replacing with
+                  // the fresher, cross-repo live result.
+                  const currentVersion = lock.currentIsFloating
+                    ? (resolver.liveResolved[hit.name]?.version ?? lock.currentVersion)
+                    : lock.currentVersion
                   return (
                     <PackageRow
                       key={`${hit.repository}:${hit.name}`}
@@ -573,8 +627,10 @@ function PackageSearch({
                       repoLabelFor={labelFor}
                       selection={addedPackages.find((p) => p.name === hit.name)}
                       locked={lock.locked}
-                      currentVersion={lock.currentVersion}
+                      currentVersion={currentVersion}
                       currentIsFloating={lock.currentIsFloating}
+                      resolvedVersion={resolver.liveResolved[hit.name]?.version}
+                      resolvedRepo={resolver.liveResolved[hit.name]?.repository}
                       onToggle={(checked) => {
                         if (checked) {
                           add(hit, hit.repository, '')
