@@ -83,16 +83,25 @@ arbitrary root-owned files. Pass
 
 ```
 Cmnd_Alias ICT_BUILD = /abs/path/image-composer-tool build *
-Defaults!ICT_BUILD env_keep += "NO_PROXY no_proxy"
+Defaults!ICT_BUILD env_keep += "NO_PROXY no_proxy HTTP_PROXY http_proxy HTTPS_PROXY https_proxy FTP_PROXY ftp_proxy"
 <svc-user> ALL=(root) NOPASSWD: ICT_BUILD
 <svc-user> ALL=(root) NOPASSWD: /usr/bin/kill -TERM -[0-9]*
 <svc-user> ALL=(root) NOPASSWD: /usr/bin/cat /abs/path/webui-workspace/builds/*
 ```
 
 The build rule is named via a `Cmnd_Alias` so the scoped `env_keep` (needed to
-forward the server's sanitized `NO_PROXY`/`no_proxy` into privileged builds, see
-the release notes) applies to that command only — not to `kill` or `cat`, and
-not sudo's default `env_keep` for anything else.
+forward the server's own proxy environment into privileged builds, see the
+release notes) applies to that command only — not to `kill` or `cat`, and not
+sudo's default `env_keep` for anything else.
+
+Every build the web UI runs also picks up `HTTP_PROXY`/`HTTPS_PROXY`/
+`FTP_PROXY`/`NO_PROXY` (or their lowercase forms) from the `serve` process's
+own environment and forwards them as `--http-proxy`/`--https-proxy`/
+`--ftp-proxy`/`--no-proxy`, so the built image's `systemConfig.proxy` matches
+whatever proxy `serve` itself runs behind — without editing any template.
+These flags **override** a template's own `systemConfig.proxy` block when
+set; start `serve` with a clean environment (no proxy vars) if a template's
+explicit proxy configuration must be preserved as-is.
 
 </details>
 

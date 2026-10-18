@@ -384,14 +384,16 @@ func (s *Service) StartBuild(req BuildRequest) (*BuildAccepted, error) {
 		return nil, newError(http.StatusInternalServerError, "TEMPLATE_RESOLVE", err.Error())
 	}
 
-	// Build the image summary. Best-effort: a merge failure here doesn't block
-	// the build (compose already validated the template; this is for display only).
+	// Best-effort merge: a failure here doesn't block the build (the child
+	// reports any real template error itself). It feeds the image summary
+	// (display only) and tells buildCommand whether this is an overlay-mode
+	// template, which rejects proxy composition overrides.
+	merged, mergeErr := config.LoadAndMergeTemplate(templatePath)
+	overlay := mergeErr == nil && merged.IsOverlayMode()
 	var summary *ComposeSummary
-	if req.Compose != nil {
-		if merged, err := config.LoadAndMergeTemplate(templatePath); err == nil {
-			sum := buildComposeSummary(*req.Compose, merged)
-			summary = &sum
-		}
+	if req.Compose != nil && mergeErr == nil {
+		sum := buildComposeSummary(*req.Compose, merged)
+		summary = &sum
 	}
 
 	// A compose selection carrying an override resolved to a generated delta
@@ -404,7 +406,10 @@ func (s *Service) StartBuild(req BuildRequest) (*BuildAccepted, error) {
 		deltaPath = templatePath
 	}
 
-	name, cmdArgs := s.buildCommand(templatePath, workDir, cacheDir)
+	// b.Command is redacted: it is persisted to history, logged, and streamed
+	// to the UI, and the forwarded proxy URLs may carry credentials. Only the
+	// raw cmdArgs reach exec.
+	name, cmdArgs := s.buildCommand(templatePath, workDir, cacheDir, overlay)
 	b := &build{
 		ID: id,
 		// not-started until runBuild's cmd.Start succeeds and records the process
@@ -417,7 +422,7 @@ func (s *Service) StartBuild(req BuildRequest) (*BuildAccepted, error) {
 		Template:     templateName,
 		TemplatePath: templatePath,
 		DeltaPath:    deltaPath,
-		Command:      name + " " + strings.Join(cmdArgs, " "),
+		Command:      redactedCommand(name, cmdArgs),
 		Summary:      summary,
 		CreatedAt:    createdAt,
 		retry:        retry,
@@ -1001,8 +1006,23 @@ func (s *Service) checkTemplateCredentials(templatePath string) error {
 	return nil
 }
 
+// proxyEnvNames pairs each build composition-override flag with the
+// environment variable names (uppercase checked before lowercase) that
+// supply it from the serve process's own environment.
+var proxyEnvNames = []struct {
+	flag  string
+	names []string
+}{
+	{"--http-proxy", []string{"HTTP_PROXY", "http_proxy"}},
+	{"--https-proxy", []string{"HTTPS_PROXY", "https_proxy"}},
+	{"--ftp-proxy", []string{"FTP_PROXY", "ftp_proxy"}},
+	{"--no-proxy", []string{"NO_PROXY", "no_proxy"}},
+}
+
 // buildCommand assembles the argv for an ICT build, prefixing sudo when
-// configured (ICT builds require root for chroot/mount operations).
+// configured (ICT builds require root for chroot/mount operations). overlay
+// reports whether the resolved template is an overlay-mode template, which
+// rejects proxy composition overrides.
 //
 // This intentionally uses os/exec directly rather than internal/utils/shell:
 // the shell package runs commands synchronously via `bash -c` and returns the
@@ -1012,17 +1032,38 @@ func (s *Service) checkTemplateCredentials(templatePath string) error {
 // single hard-coded `image-composer-tool build` invocation with no user-derived
 // arguments on the command line (selections are only manifest lookup keys) — so
 // the allowlist the shell package provides adds no safety here.
-func (s *Service) buildCommand(templatePath, workDir, cacheDir string) (name string, args []string) {
+func (s *Service) buildCommand(templatePath, workDir, cacheDir string, overlay bool) (name string, args []string) {
 	// Per-build --work-dir and --cache-dir keep each build's scratch and package
 	// cache isolated under the build root, so concurrent/repeat builds don't share
 	// (root-owned) state and cleanup is a single directory removal.
 	ictArgs := []string{"build", templatePath, "--work-dir", workDir, "--cache-dir", cacheDir}
+
+	// Forward the server's own proxy configuration into systemConfig.proxy so
+	// images built on a proxied network can still reach the network during
+	// first-boot provisioning. These flags unconditionally override whatever
+	// systemConfig.proxy a template sets (CLI wins over template, by design
+	// of applyCompositionFlagOverrides) — only passed when actually set, so
+	// a host with no proxy configured leaves every template's proxy block
+	// (or lack of one) untouched. Overlay-mode templates reject proxy
+	// overrides, so they get only the host-side environment forwarding below.
+	if !overlay {
+		for _, p := range proxyEnvNames {
+			v := firstEnv(p.names)
+			if p.flag == "--no-proxy" {
+				v = normalizeNoProxy(v)
+			}
+			if v != "" {
+				ictArgs = append(ictArgs, p.flag, v)
+			}
+		}
+	}
+
 	if s.cfg.Sudo {
 		// -n: never prompt; fail fast if passwordless sudo isn't configured.
 		// NAME=value assignments ahead of the command set the invoked process's
 		// environment directly; sudo strips them from the command it matches
 		// against the sudoers rule, so this still resolves to the scoped
-		// "<ICTPath> build *" rule (see sudoers.go's env_keep for these two
+		// "<ICTPath> build *" rule (see sudoers.go's env_keep for these
 		// variables, which is what lets sudo honor them without SETENV).
 		//
 		// Only forward a variable that's actually set: sudo rejects an
@@ -1032,15 +1073,101 @@ func (s *Service) buildCommand(templatePath, workDir, cacheDir string) (name str
 		// would break every --sudo build on a host that has no proxy
 		// configured and hasn't re-run the sudoers generator for this rule.
 		sudoArgs := []string{"-n"}
-		if v := os.Getenv("NO_PROXY"); v != "" {
-			sudoArgs = append(sudoArgs, "NO_PROXY="+v)
-		}
-		if v := os.Getenv("no_proxy"); v != "" {
-			sudoArgs = append(sudoArgs, "no_proxy="+v)
+		for _, p := range proxyEnvNames {
+			for _, name := range p.names {
+				if v := os.Getenv(name); v != "" {
+					sudoArgs = append(sudoArgs, name+"="+v)
+				}
+			}
 		}
 		return "sudo", append(append(sudoArgs, s.cfg.ICTBinary), ictArgs...)
 	}
 	return s.cfg.ICTBinary, ictArgs
+}
+
+// firstEnv returns the value of the first set variable among names, checked
+// in order (uppercase before lowercase, matching the sudo env_keep order).
+func firstEnv(names []string) string {
+	for _, name := range names {
+		if v := os.Getenv(name); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// normalizeNoProxy trims whitespace around each comma-separated entry and
+// drops empty ones: hosts commonly set NO_PROXY="localhost, 127.0.0.1", but
+// systemConfig.proxy.noProxy must not contain whitespace.
+func normalizeNoProxy(v string) string {
+	var entries []string
+	for _, e := range strings.Split(v, ",") {
+		if e = strings.TrimSpace(e); e != "" {
+			entries = append(entries, e)
+		}
+	}
+	return strings.Join(entries, ",")
+}
+
+// redactedCommand renders a build argv for display, logging, and build
+// history with credentials masked in proxy flag values and in sudo proxy
+// environment assignments. The unredacted argv is only ever passed to exec.
+func redactedCommand(name string, args []string) string {
+	out := make([]string, 0, len(args)+1)
+	out = append(out, name)
+	redactNext := false
+	for _, a := range args {
+		switch {
+		case redactNext:
+			a = redactProxyValue(a)
+			redactNext = false
+		case isProxyFlag(a):
+			redactNext = true
+		default:
+			if k, v, ok := strings.Cut(a, "="); ok && isProxyEnvName(k) {
+				a = k + "=" + redactProxyValue(v)
+			}
+		}
+		out = append(out, a)
+	}
+	return strings.Join(out, " ")
+}
+
+func isProxyFlag(a string) bool {
+	for _, p := range proxyEnvNames {
+		if p.flag == a {
+			return true
+		}
+	}
+	return false
+}
+
+func isProxyEnvName(k string) bool {
+	for _, p := range proxyEnvNames {
+		if slices.Contains(p.names, k) {
+			return true
+		}
+	}
+	return false
+}
+
+// redactProxyValue masks the userinfo of a proxy URL and drops any query or
+// fragment, either of which can carry credentials. It works on the raw string
+// rather than url.Parse so malformed or scheme-less values are masked too;
+// everything up to the last '@' is masked so a password containing '/', '?'
+// or '#' cannot leak.
+func redactProxyValue(v string) string {
+	start := 0
+	if i := strings.Index(v, "://"); i != -1 {
+		start = i + len("://")
+	}
+	if i := strings.LastIndex(v, "@"); i >= start {
+		v = v[:start] + "REDACTED" + v[i:]
+	}
+	if i := strings.IndexAny(v[start:], "?#"); i != -1 {
+		v = v[:start+i] + "?REDACTED"
+	}
+	return v
 }
 
 // runBuild executes the ICT binary, streams its output into the build's log
@@ -1061,7 +1188,8 @@ func (s *Service) runBuild(b *build, name string, cmdArgs []string) {
 	// from the repo root since ICT resolves config/osv/... relative to cwd. The
 	// per-build --work-dir/--cache-dir keep outputs isolated.
 	//
-	// Echo the exact command so the operator can reproduce it on the shell. This
+	// Echo the command (proxy credentials redacted) so the operator can
+	// reproduce it on the shell. This
 	// is both logged server-side and pushed as the first build-log line so it
 	// surfaces in the UI's Build page over SSE.
 	log.Infof("build %s command: %s", b.ID, b.Command)

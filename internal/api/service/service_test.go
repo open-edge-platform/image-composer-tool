@@ -357,25 +357,38 @@ func TestFinishFailure(t *testing.T) {
 func TestBuildCommand(t *testing.T) {
 	t.Setenv("NO_PROXY", "internal.example.com,localhost,127.0.0.1")
 	t.Setenv("no_proxy", "internal.example.com,localhost,127.0.0.1")
+	// Isolate from any HTTP_PROXY/HTTPS_PROXY/FTP_PROXY set in the host's own
+	// environment (this test only asserts NO_PROXY/no_proxy forwarding).
+	t.Setenv("HTTP_PROXY", "")
+	t.Setenv("http_proxy", "")
+	t.Setenv("HTTPS_PROXY", "")
+	t.Setenv("https_proxy", "")
+	t.Setenv("FTP_PROXY", "")
+	t.Setenv("ftp_proxy", "")
 
 	s := &Service{cfg: Config{ICTBinary: "/opt/ict"}}
-	name, args := s.buildCommand("/tmp/t.yml", "/tmp/wd", "/tmp/cd")
+	name, args := s.buildCommand("/tmp/t.yml", "/tmp/wd", "/tmp/cd", false)
 	if name != "/opt/ict" || args[0] != "build" || args[1] != "/tmp/t.yml" {
 		t.Fatalf("non-sudo cmd = %s %v", name, args)
 	}
 	if !slices.Contains(args, "--cache-dir") || !slices.Contains(args, "/tmp/cd") {
 		t.Fatalf("missing --cache-dir in %v", args)
 	}
+	// The --no-proxy composition override is forwarded even without --sudo:
+	// it reaches systemConfig.proxy via a plain CLI flag, not a sudo env_keep.
+	if !slices.Contains(args, "--no-proxy") || !slices.Contains(args, "internal.example.com,localhost,127.0.0.1") {
+		t.Fatalf("missing --no-proxy override in %v", args)
+	}
 
 	s.cfg.Sudo = true
-	name, args = s.buildCommand("/tmp/t.yml", "/tmp/wd", "/tmp/cd")
-	wantPrefix := []string{
+	name, args = s.buildCommand("/tmp/t.yml", "/tmp/wd", "/tmp/cd", false)
+	wantSudoPrefix := []string{
 		"-n",
 		"NO_PROXY=internal.example.com,localhost,127.0.0.1",
 		"no_proxy=internal.example.com,localhost,127.0.0.1",
 		"/opt/ict", "build", "/tmp/t.yml",
 	}
-	if name != "sudo" || !slices.Equal(args[:len(wantPrefix)], wantPrefix) {
+	if name != "sudo" || !slices.Equal(args[:len(wantSudoPrefix)], wantSudoPrefix) {
 		t.Fatalf("sudo cmd = %s %v", name, args)
 	}
 }
@@ -384,16 +397,187 @@ func TestBuildCommand(t *testing.T) {
 // no_proxy= on the sudo command line: sudo rejects any NAME=value assignment
 // not covered by its sudoers env_keep rule, so an unconditional empty
 // assignment would break --sudo builds on every install that hasn't re-run
-// the sudoers generator for this change.
+// the sudoers generator for this change. The same applies to the --no-proxy
+// (etc.) CLI overrides: an always-present empty value would needlessly clear
+// a template's own systemConfig.proxy.
 func TestBuildCommandSudoOmitsEmptyProxyVars(t *testing.T) {
 	t.Setenv("NO_PROXY", "")
 	t.Setenv("no_proxy", "")
+	t.Setenv("HTTP_PROXY", "")
+	t.Setenv("http_proxy", "")
+	t.Setenv("HTTPS_PROXY", "")
+	t.Setenv("https_proxy", "")
+	t.Setenv("FTP_PROXY", "")
+	t.Setenv("ftp_proxy", "")
 
 	s := &Service{cfg: Config{ICTBinary: "/opt/ict", Sudo: true}}
-	name, args := s.buildCommand("/tmp/t.yml", "/tmp/wd", "/tmp/cd")
+	name, args := s.buildCommand("/tmp/t.yml", "/tmp/wd", "/tmp/cd", false)
 	want := []string{"-n", "/opt/ict", "build", "/tmp/t.yml"}
 	if name != "sudo" || !slices.Equal(args[:len(want)], want) {
 		t.Fatalf("sudo cmd with no proxy configured = %s %v", name, args)
+	}
+}
+
+// The server's own proxy environment must reach systemConfig.proxy via the
+// build's composition-override flags, not just the sudo env_keep forwarding
+// (which only affects the host-side build process's own network calls).
+func TestBuildCommandForwardsProxyFlags(t *testing.T) {
+	t.Setenv("HTTP_PROXY", "http://proxy.example.com:911")
+	t.Setenv("HTTPS_PROXY", "http://proxy.example.com:912")
+	t.Setenv("FTP_PROXY", "http://proxy.example.com:912")
+	t.Setenv("NO_PROXY", "")
+	t.Setenv("no_proxy", "")
+
+	s := &Service{cfg: Config{ICTBinary: "/opt/ict"}}
+	_, args := s.buildCommand("/tmp/t.yml", "/tmp/wd", "/tmp/cd", false)
+
+	for flag, want := range map[string]string{
+		"--http-proxy":  "http://proxy.example.com:911",
+		"--https-proxy": "http://proxy.example.com:912",
+		"--ftp-proxy":   "http://proxy.example.com:912",
+	} {
+		i := slices.Index(args, flag)
+		if i == -1 || i+1 >= len(args) || args[i+1] != want {
+			t.Fatalf("expected %s %s in %v", flag, want, args)
+		}
+	}
+	if slices.Contains(args, "--no-proxy") {
+		t.Fatalf("unset NO_PROXY must not add --no-proxy: %v", args)
+	}
+}
+
+// Overlay-mode templates reject proxy composition overrides, so they must get
+// no --*-proxy flags; the host-side sudo env forwarding is still kept so the
+// build process itself can download through the proxy.
+func TestBuildCommandOverlayOmitsProxyFlags(t *testing.T) {
+	t.Setenv("HTTP_PROXY", "http://proxy.example.com:911")
+	t.Setenv("http_proxy", "")
+	t.Setenv("HTTPS_PROXY", "")
+	t.Setenv("https_proxy", "")
+	t.Setenv("FTP_PROXY", "")
+	t.Setenv("ftp_proxy", "")
+	t.Setenv("NO_PROXY", "localhost")
+	t.Setenv("no_proxy", "")
+
+	s := &Service{cfg: Config{ICTBinary: "/opt/ict", Sudo: true}}
+	name, args := s.buildCommand("/tmp/t.yml", "/tmp/wd", "/tmp/cd", true)
+
+	for _, flag := range []string{"--http-proxy", "--https-proxy", "--ftp-proxy", "--no-proxy"} {
+		if slices.Contains(args, flag) {
+			t.Fatalf("overlay build must not pass %s: %v", flag, args)
+		}
+	}
+	want := []string{"-n", "HTTP_PROXY=http://proxy.example.com:911", "NO_PROXY=localhost", "/opt/ict"}
+	if name != "sudo" || !slices.Equal(args[:len(want)], want) {
+		t.Fatalf("overlay sudo cmd = %s %v, want prefix %v", name, args, want)
+	}
+}
+
+// systemConfig.proxy.noProxy rejects whitespace, so the --no-proxy override
+// must be normalized while the host-side env assignment stays verbatim.
+func TestBuildCommandNormalizesNoProxy(t *testing.T) {
+	t.Setenv("HTTP_PROXY", "")
+	t.Setenv("http_proxy", "")
+	t.Setenv("HTTPS_PROXY", "")
+	t.Setenv("https_proxy", "")
+	t.Setenv("FTP_PROXY", "")
+	t.Setenv("ftp_proxy", "")
+	t.Setenv("NO_PROXY", " localhost, 127.0.0.1 ,,.example.com ")
+	t.Setenv("no_proxy", "")
+
+	s := &Service{cfg: Config{ICTBinary: "/opt/ict", Sudo: true}}
+	_, args := s.buildCommand("/tmp/t.yml", "/tmp/wd", "/tmp/cd", false)
+
+	i := slices.Index(args, "--no-proxy")
+	if i == -1 || i+1 >= len(args) || args[i+1] != "localhost,127.0.0.1,.example.com" {
+		t.Fatalf("expected normalized --no-proxy in %v", args)
+	}
+	if !slices.Contains(args, "NO_PROXY= localhost, 127.0.0.1 ,,.example.com ") {
+		t.Fatalf("host-side NO_PROXY must be forwarded unchanged: %v", args)
+	}
+}
+
+func TestNormalizeNoProxy(t *testing.T) {
+	t.Parallel()
+	tests := []struct{ in, want string }{
+		{"", ""},
+		{" , ,", ""},
+		{"localhost", "localhost"},
+		{"localhost, 127.0.0.1", "localhost,127.0.0.1"},
+		{"\tlocalhost ,\n10.0.0.0/8,", "localhost,10.0.0.0/8"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			t.Parallel()
+
+			got := normalizeNoProxy(tt.in)
+
+			if got != tt.want {
+				t.Errorf("normalizeNoProxy(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRedactProxyValue(t *testing.T) {
+	t.Parallel()
+	tests := []struct{ name, in, want string }{
+		{"no credentials", "http://proxy.example.com:3128", "http://proxy.example.com:3128"},
+		{"no proxy list", "localhost,127.0.0.1", "localhost,127.0.0.1"},
+		{"userinfo", "http://user:secret@proxy:3128", "http://REDACTED@proxy:3128"},
+		{"username only", "http://user@proxy:3128/", "http://REDACTED@proxy:3128/"},
+		{"no scheme", "user:secret@proxy:3128", "REDACTED@proxy:3128"},
+		{"password with slash and at", "http://u:a/b@c@proxy:3128", "http://REDACTED@proxy:3128"},
+		{"password with question mark", "http://u:p?x@proxy:3128", "http://REDACTED@proxy:3128"},
+		{"query token", "http://proxy:3128/?token=abc", "http://proxy:3128/?REDACTED"},
+		{"fragment", "http://proxy:3128#tok", "http://proxy:3128?REDACTED"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := redactProxyValue(tt.in)
+
+			if got != tt.want {
+				t.Errorf("redactProxyValue(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// The display/persisted command must never carry proxy credentials, in either
+// the --*-proxy flag values or the sudo NAME=value assignments.
+func TestRedactedCommandMasksProxyCredentials(t *testing.T) {
+	t.Setenv("HTTP_PROXY", "http://user:secret@proxy.example.com:3128")
+	t.Setenv("http_proxy", "http://user:secret@proxy.example.com:3128")
+	t.Setenv("HTTPS_PROXY", "")
+	t.Setenv("https_proxy", "")
+	t.Setenv("FTP_PROXY", "")
+	t.Setenv("ftp_proxy", "")
+	t.Setenv("NO_PROXY", "localhost")
+	t.Setenv("no_proxy", "")
+	s := &Service{cfg: Config{ICTBinary: "/opt/ict", Sudo: true}}
+	name, args := s.buildCommand("/tmp/t.yml", "/tmp/wd", "/tmp/cd", false)
+
+	got := redactedCommand(name, args)
+
+	if strings.Contains(got, "secret") || strings.Contains(got, "user:") {
+		t.Fatalf("redacted command leaks credentials: %s", got)
+	}
+	for _, want := range []string{
+		"HTTP_PROXY=http://REDACTED@proxy.example.com:3128",
+		"http_proxy=http://REDACTED@proxy.example.com:3128",
+		"--http-proxy http://REDACTED@proxy.example.com:3128",
+		"NO_PROXY=localhost",
+		"--no-proxy localhost",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("redacted command %q missing %q", got, want)
+		}
+	}
+	// The exec argv itself must stay unredacted.
+	if !slices.Contains(args, "http://user:secret@proxy.example.com:3128") {
+		t.Fatalf("exec argv was redacted: %v", args)
 	}
 }
 
