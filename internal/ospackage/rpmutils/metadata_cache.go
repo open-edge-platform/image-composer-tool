@@ -20,14 +20,15 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/filelock"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/runctx"
 )
 
 // rpmParsedMetadataCacheVersion is the schema version of the on-disk parsed RPM
@@ -515,15 +516,14 @@ func saveRPMRawMetadataCache(xmlCacheDir, metadataHref, metadataID string, prima
 
 	// Writing a payload, publishing the manifest and pruning must not interleave
 	// with another build doing the same: a pruner holding stale information about a
-	// payload could otherwise delete one a writer has just republished. Without the
-	// lock the payload and manifest are still written, which is safe on its own,
-	// but nothing is pruned.
+	// payload could otherwise delete one a writer has just republished, and a clear
+	// holding the lock could remove a payload before its manifest is written. When
+	// the lock cannot be taken nothing is written.
 	unlock, lockErr := lockRPMRawMetadata(xmlCacheDir, metadataHref)
 	if lockErr != nil {
-		logger.Logger().Warnf("Failed to lock the RPM primary metadata cache; superseded payloads are not pruned: %v", lockErr)
-	} else {
-		defer unlock()
+		return fmt.Errorf("cache RPM primary metadata: %w", lockErr)
 	}
+	defer unlock()
 
 	dataPath := rpmRawMetadataPayloadPath(xmlCacheDir, metadataHref, primary, data)
 	metaPath := rpmRawMetadataManifestPath(xmlCacheDir, metadataHref)
@@ -547,40 +547,43 @@ func saveRPMRawMetadataCache(xmlCacheDir, metadataHref, metadataID string, prima
 		return fmt.Errorf("failed to write rpm raw metadata cache %s: %w", metaPath, err)
 	}
 
-	if lockErr == nil {
-		pruneSupersededRawPayloads(xmlCacheDir, metadataHref, dataPath)
-	}
+	pruneSupersededRawPayloads(xmlCacheDir, metadataHref, dataPath)
 	return nil
 }
 
 func rpmRawMetadataLockPath(xmlCacheDir, metadataHref string) string {
 	hrefHash := sha256.Sum256([]byte(metadataHref))
-	return filepath.Join(xmlCacheDir, fmt.Sprintf("primary_%s.lock", hex.EncodeToString(hrefHash[:])[:16]))
+	return rpmRawMetadataLockPathForHash(xmlCacheDir, hex.EncodeToString(hrefHash[:])[:16])
+}
+
+func rpmRawMetadataLockPathForHash(xmlCacheDir, hrefHash string) string {
+	return filepath.Join(xmlCacheDir, fmt.Sprintf("primary_%s.lock", hrefHash))
+}
+
+// rawMetadataFileName matches the files the raw primary cache keeps per href: the
+// lock, the manifest, and the payloads. The first group is the href hash.
+var rawMetadataFileName = regexp.MustCompile(`^primary_([0-9a-f]{16})(?:\.lock|\.cache\.json|_[0-9a-f]{16}\.[A-Za-z0-9]+)$`)
+
+// rpmRawMetadataHrefHash returns the href hash a raw primary cache file name
+// carries, or "" if name is not one of those files.
+func rpmRawMetadataHrefHash(name string) string {
+	if m := rawMetadataFileName.FindStringSubmatch(name); m != nil {
+		return m[1]
+	}
+	return ""
 }
 
 // lockRPMRawMetadata takes an exclusive advisory lock on the raw metadata cache
 // of metadataHref, shared by every build using the same cache directory, and
 // returns the function that releases it.
 func lockRPMRawMetadata(xmlCacheDir, metadataHref string) (func(), error) {
-	lockPath := rpmRawMetadataLockPath(xmlCacheDir, metadataHref)
-	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0644)
-	if err != nil {
-		return nil, fmt.Errorf("open lock file %s: %w", lockPath, err)
-	}
-	for {
-		err = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX)
-		if err != syscall.EINTR {
-			break
-		}
-	}
-	if err != nil {
-		_ = lockFile.Close()
-		return nil, fmt.Errorf("lock %s: %w", lockPath, err)
-	}
-	return func() {
-		_ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
-		_ = lockFile.Close()
-	}, nil
+	return lockRPMRawMetadataFile(rpmRawMetadataLockPath(xmlCacheDir, metadataHref))
+}
+
+// lockRPMRawMetadataFile takes the exclusive lock on lockPath, giving up if the
+// build is cancelled while another build holds it.
+func lockRPMRawMetadataFile(lockPath string) (func(), error) {
+	return filelock.Lock(runctx.Context(), lockPath)
 }
 
 // rpmRawPayloadGracePeriod is how long a payload no longer named by the manifest
@@ -634,11 +637,15 @@ func rpmMetadataCacheDir(baseURL string) (string, error) {
 	return filepath.Join(cacheRoot, "rpm-metadata", generateRPMMetadataDir(baseURL)), nil
 }
 
-func saveRepomdXMLCache(xmlCacheDir, baseURL string, repomdData []byte) {
+// saveRepomdXMLCache caches repomd.xml under its stable name and a timestamped
+// one. It returns the error from writing the stable copy, the one later lookups
+// prefer, so a caller that needs it to be current can tell when it is not.
+func saveRepomdXMLCache(xmlCacheDir, baseURL string, repomdData []byte) error {
 	log := logger.Logger()
 	stablePath := filepath.Join(xmlCacheDir, "repomd.xml")
-	if writeErr := writeFileAtomic(stablePath, repomdData, 0644); writeErr != nil {
-		log.Warnf("Failed to save repomd.xml cache %s; offline cache incomplete: %v", stablePath, writeErr)
+	stableErr := writeFileAtomic(stablePath, repomdData, 0644)
+	if stableErr != nil {
+		log.Warnf("Failed to save repomd.xml cache %s; offline cache incomplete: %v", stablePath, stableErr)
 	}
 
 	urlHash := sha256.Sum256([]byte(baseURL))
@@ -651,6 +658,10 @@ func saveRepomdXMLCache(xmlCacheDir, baseURL string, repomdData []byte) {
 	} else {
 		log.Warnf("Failed to save repomd.xml file: %v", writeErr)
 	}
+	if stableErr != nil {
+		return fmt.Errorf("save %s: %w", stablePath, stableErr)
+	}
+	return nil
 }
 
 func loadPrimaryReferenceFromCachedRepomd(xmlCacheDir string) (rpmPrimaryReference, error) {
