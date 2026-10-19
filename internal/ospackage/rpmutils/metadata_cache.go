@@ -1,6 +1,10 @@
 package rpmutils
 
 import (
+	"bytes"
+	"encoding/xml"
+	"fmt"
+	"io"
 	"net/textproto"
 	"net/url"
 	"regexp"
@@ -8,6 +12,19 @@ import (
 	"strconv"
 	"strings"
 )
+
+type rpmPrimaryReference struct {
+	Href string
+	// ChecksumType is the repomd.xml checksum type in its canonical upper-case
+	// form (for example "SHA256"); repomd.xml itself usually spells it in
+	// lower case.
+	ChecksumType string
+	Checksum     string
+}
+
+func (ref rpmPrimaryReference) isPartialChecksum() bool {
+	return (ref.ChecksumType != "" && ref.Checksum == "") || (ref.ChecksumType == "" && ref.Checksum != "")
+}
 
 func redactURLForLog(rawURL string) string {
 	u, err := url.Parse(rawURL)
@@ -163,4 +180,115 @@ func redactErrorURL(err error, rawURL string) error {
 		return err
 	}
 	return &redactedError{msg: message, err: err}
+}
+
+func extractPrimaryReferenceFromRepomdData(repomdData []byte) (rpmPrimaryReference, error) {
+	dec := xml.NewDecoder(bytes.NewReader(repomdData))
+
+	// Walk the tokens looking for <data type="primary">
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return rpmPrimaryReference{}, err
+		}
+
+		se, ok := tok.(xml.StartElement)
+		if !ok || se.Name.Local != "data" {
+			continue
+		}
+
+		var isPrimary bool
+		for _, attr := range se.Attr {
+			if attr.Name.Local == "type" && attr.Value == "primary" {
+				isPrimary = true
+				break
+			}
+		}
+		if !isPrimary {
+			if err := dec.Skip(); err != nil {
+				return rpmPrimaryReference{}, fmt.Errorf("error skipping token: %w", err)
+			}
+			continue
+		}
+
+		primary := rpmPrimaryReference{}
+		for {
+			tok2, err := dec.Token()
+			if err != nil {
+				if err == io.EOF {
+					err = io.ErrUnexpectedEOF
+				}
+				return rpmPrimaryReference{}, fmt.Errorf("read primary data in repomd.xml: %w", err)
+			}
+
+			if ee, ok := tok2.(xml.EndElement); ok && ee.Name.Local == "data" {
+				if primary.Href == "" {
+					return rpmPrimaryReference{}, fmt.Errorf("primary location not found in repomd.xml")
+				}
+				if primary.isPartialChecksum() {
+					return rpmPrimaryReference{}, fmt.Errorf("malformed repomd: partial checksum (type=%q, value=%q)", primary.ChecksumType, primary.Checksum)
+				}
+				primary.ChecksumType = strings.ToUpper(primary.ChecksumType)
+				return primary, nil
+			}
+
+			le, ok := tok2.(xml.StartElement)
+			if !ok {
+				continue
+			}
+			switch le.Name.Local {
+			case "location":
+				for _, attr := range le.Attr {
+					if attr.Name.Local == "href" {
+						primary.Href = attr.Value
+					}
+				}
+			case "checksum":
+				primary.ChecksumType = attrValue(le.Attr, "type")
+				text, err := readElementText(dec)
+				if err != nil {
+					return rpmPrimaryReference{}, fmt.Errorf("read primary checksum: %w", err)
+				}
+				primary.Checksum = text
+			}
+		}
+	}
+
+	return rpmPrimaryReference{}, fmt.Errorf("primary location not found in repomd.xml")
+}
+
+func attrValue(attrs []xml.Attr, name string) string {
+	for _, attr := range attrs {
+		if attr.Name.Local == name {
+			return attr.Value
+		}
+	}
+	return ""
+}
+
+func readElementText(dec *xml.Decoder) (string, error) {
+	var text strings.Builder
+	depth := 0
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return "", err
+		}
+		switch t := tok.(type) {
+		case xml.CharData:
+			if depth == 0 {
+				text.Write(t)
+			}
+		case xml.StartElement:
+			depth++
+		case xml.EndElement:
+			if depth == 0 {
+				return strings.TrimSpace(text.String()), nil
+			}
+			depth--
+		}
+	}
 }

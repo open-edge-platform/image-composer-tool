@@ -1452,6 +1452,70 @@ func TestRedactErrorURL_QuotedForms(t *testing.T) {
 	}
 }
 
+func TestExtractPrimaryReference_RejectsMalformedPrimaryData(t *testing.T) {
+	tests := []struct {
+		name   string
+		repomd string
+	}{
+		{
+			name: "checksum type without value",
+			repomd: `<repomd><data type="primary"><checksum type="sha256"></checksum>` +
+				`<location href="repodata/primary.xml.gz"/></data></repomd>`,
+		},
+		{
+			name: "checksum value without type",
+			repomd: `<repomd><data type="primary"><checksum>abcdef</checksum>` +
+				`<location href="repodata/primary.xml.gz"/></data></repomd>`,
+		},
+		{
+			name:   "truncated inside primary data",
+			repomd: `<repomd><data type="primary"><location href="repodata/primary.xml.gz"/>`,
+		},
+		{
+			name:   "primary data without location",
+			repomd: `<repomd><data type="primary"><checksum type="sha256">abcdef</checksum></data></repomd>`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got, err := extractPrimaryReferenceFromRepomdData([]byte(tt.repomd)); err == nil {
+				t.Fatalf("extractPrimaryReferenceFromRepomdData() = %+v, want an error", got)
+			}
+		})
+	}
+}
+
+func TestExtractPrimaryReference_ReadsWholeChecksumText(t *testing.T) {
+	tests := []struct {
+		name     string
+		checksum string
+		want     string
+	}{
+		{name: "comment inside value", checksum: `abc<!-- note -->def`, want: "abcdef"},
+		{name: "whitespace before CDATA", checksum: " \n <![CDATA[abcdef]]>", want: "abcdef"},
+		{name: "plain value", checksum: ` abcdef `, want: "abcdef"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repomd := `<repomd><data type="primary"><checksum type="sha256">` + tt.checksum +
+				`</checksum><location href="repodata/primary.xml.gz"/></data></repomd>`
+			got, err := extractPrimaryReferenceFromRepomdData([]byte(repomd))
+			if err != nil {
+				t.Fatalf("extractPrimaryReferenceFromRepomdData() error = %v", err)
+			}
+			if got.Checksum != tt.want {
+				t.Fatalf("checksum = %q, want %q", got.Checksum, tt.want)
+			}
+			if got.ChecksumType != "SHA256" {
+				t.Fatalf("checksum type = %q, want canonical upper-case %q", got.ChecksumType, "SHA256")
+			}
+			if got.Href != "repodata/primary.xml.gz" {
+				t.Fatalf("href = %q, want %q", got.Href, "repodata/primary.xml.gz")
+			}
+		})
+	}
+}
+
 func TestRedactErrorURL_QueryContinuesPastRequestedURL(t *testing.T) {
 	rawURL := "https://example.invalid/repo?token=initial"
 	err := fmt.Errorf("unexpected redirect to %s&signature=redirectsecret#frag-secret", rawURL)
