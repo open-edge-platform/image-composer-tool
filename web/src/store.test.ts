@@ -159,6 +159,48 @@ describe('package slice', () => {
     useStore.getState().removePackages(['curl'], { releaseRepo: false })
     expect(useStore.getState().enabledRepos).toEqual(['repo-a', 'repo-b'])
   })
+
+  // protectedRepos covers a repo that a template's own locked packages still
+  // need, even though those packages never appear in addedPackages — so the
+  // ordinary "nothing left uses it" orphan check has no way to see that need
+  // on its own. Regression: a template-locked Edge Pack repo used to get
+  // dropped from enabledRepos (and from the compose request) once the last
+  // user-added package from it was removed, even though the matched template
+  // still required it.
+  it('keeps a protected repo enabled when removePackage would otherwise orphan it', () => {
+    useStore.setState({ enabledRepos: ['repo-a'] })
+    useStore.getState().setPackage({ name: 'curl', version: '', repo: 'repo-a' })
+    useStore.getState().removePackage('curl', { protectedRepos: new Set(['repo-a']) })
+    expect(useStore.getState().enabledRepos).toContain('repo-a')
+  })
+
+  it('keeps a protected repo enabled when setPackage re-pins away from it', () => {
+    useStore.setState({ enabledRepos: ['repo-a'] })
+    useStore.getState().setPackage({ name: 'curl', version: '1.0', repo: 'repo-a' })
+    useStore
+      .getState()
+      .setPackage({ name: 'curl', version: '2.0', repo: 'repo-b' }, { protectedRepos: new Set(['repo-a']) })
+    expect(useStore.getState().enabledRepos).toContain('repo-a')
+  })
+
+  it('keeps a protected repo enabled via bulk removePackages', () => {
+    useStore.setState({ enabledRepos: ['repo-a', 'repo-b'] })
+    useStore.getState().setPackages([
+      { name: 'curl', version: '', repo: 'repo-a' },
+      { name: 'wget', version: '', repo: 'repo-b' },
+    ])
+    useStore.getState().removePackages(['curl'], { protectedRepos: new Set(['repo-a']) })
+    expect(useStore.getState().enabledRepos).toEqual(['repo-a', 'repo-b'])
+  })
+
+  it('keeps a protected repo enabled via Clear', () => {
+    useStore.setState({ enabledRepos: ['repo-a'] })
+    useStore.getState().setPackage({ name: 'curl', version: '', repo: 'repo-a' })
+    useStore.getState().clearPackages(new Set(['repo-a']))
+    const { enabledRepos, addedPackages } = useStore.getState()
+    expect(addedPackages).toHaveLength(0)
+    expect(enabledRepos).toEqual(['repo-a'])
+  })
 })
 
 describe('orphanedRepos', () => {

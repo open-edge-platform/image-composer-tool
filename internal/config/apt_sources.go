@@ -7,13 +7,16 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/network"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/shell"
 )
 
 // GenerateAptSourcesFromRepositories creates an apt sources file from packageRepositories
@@ -146,26 +149,106 @@ func generateAptSourcesContent(repos []PackageRepository) string {
 	return strings.Join(sources, "\n")
 }
 
-// extractGPGKeyFilename extracts a reasonable filename for GPG key storage
+// gpgFilenameUnsafeRe matches characters that are unsafe or merely untidy in
+// a keyring filename (keyserver URLs in particular carry a query string, e.g.
+// "?op=get&search=0x...", which otherwise ends up verbatim in the filename).
+var gpgFilenameUnsafeRe = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
+
+// extractGPGKeyFilename extracts a reasonable filename for GPG key storage.
+// The query string (if any) is dropped from the candidate name and, for
+// keyserver "pks/lookup" URLs, replaced with the requested key ID/fingerprint
+// so the name stays both clean and unique: two repositories resolving to the
+// same last path segment (e.g. every keyserver.ubuntu.com key is
+// ".../pks/lookup") must not collide on the same destination filename, which
+// would silently make the later one overwrite the earlier one's key file.
 func extractGPGKeyFilename(keyURL string) string {
-	// Extract filename from URL first
-	parts := strings.Split(keyURL, "/")
-	if len(parts) > 0 {
-		filename := parts[len(parts)-1]
-		// Ensure it has .gpg extension
-		if !strings.HasSuffix(filename, ".gpg") {
-			filename = strings.TrimSuffix(filename, ".asc") + ".gpg"
+	candidate, needsDisambiguation := gpgKeyFilenameCandidate(keyURL)
+	if candidate == "" {
+		// No usable path segment (e.g. a bare query string on the root
+		// path, as a keyserver URL can be): still disambiguate below if
+		// needed, so two such URLs can't collide on this generic name.
+		if strings.Contains(keyURL, "intel") {
+			candidate = "intel-archive-keyring"
+		} else {
+			candidate = "package-repository"
 		}
-		return fmt.Sprintf("/etc/apt/trusted.gpg.d/%s", filename)
 	}
 
-	// For common patterns, provide reasonable defaults
-	if strings.Contains(keyURL, "intel") {
-		return "/etc/apt/trusted.gpg.d/intel-archive-keyring.gpg"
+	if !strings.HasSuffix(candidate, ".gpg") {
+		candidate = strings.TrimSuffix(candidate, ".asc") + ".gpg"
+	}
+	base := strings.TrimSuffix(candidate, ".gpg")
+	sanitizedBase := gpgFilenameUnsafeRe.ReplaceAllString(base, "-")
+	if sanitizedBase != base {
+		// Sanitization alone can introduce a collision even without a query
+		// string, e.g. "repo+signing.gpg" and "repo-signing.gpg" both
+		// sanitize to "repo-signing.gpg": disambiguate whenever the raw
+		// candidate had to be rewritten, not only when it carried a query.
+		needsDisambiguation = true
+	}
+	candidate = sanitizedBase + ".gpg"
+	// The path segment alone (e.g. "lookup") is not guaranteed unique
+	// across repositories when it came with a query string that wasn't a
+	// recognized "search=<key ID>"; disambiguate with a short hash of the
+	// full URL so two such repositories can't collide on one file.
+	if needsDisambiguation {
+		hash := sha256.Sum256([]byte(keyURL))
+		candidate = fmt.Sprintf("%s-%s.gpg", strings.TrimSuffix(candidate, ".gpg"), hex.EncodeToString(hash[:])[:8])
+	}
+	return fmt.Sprintf("/etc/apt/trusted.gpg.d/%s", candidate)
+}
+
+// gpgKeyIDRe matches a plain hexadecimal OpenPGP key ID or fingerprint: a
+// short ID (8 hex digits), long ID (16), or v4 fingerprint (40), with an
+// optional "0x" prefix. A keyserver "search=" value only identifies a single
+// key on its own when it is one of these — HKP also allows searching by
+// name or email, which does not.
+var gpgKeyIDRe = regexp.MustCompile(`^(?:0x)?[0-9A-Fa-f]{8}$|^(?:0x)?[0-9A-Fa-f]{16}$|^(?:0x)?[0-9A-Fa-f]{40}$`)
+
+// gpgKeyFilenameCandidate returns a base filename derived from keyURL (without
+// its query string) and whether that base name still needs disambiguating
+// (true unless it was already derived from a value, like a key fingerprint,
+// that uniquely identifies the key on its own). A keyserver
+// "pks/lookup?...search=<key ID>" URL uses the requested key ID/fingerprint
+// instead of the generic "lookup" path segment, since that is the part that
+// actually identifies the key; other "search=" values (HKP also allows name
+// or email searches) are not guaranteed unique and still get disambiguated.
+func gpgKeyFilenameCandidate(keyURL string) (string, bool) {
+	parsed, err := url.Parse(keyURL)
+	if err != nil || parsed.Path == "" {
+		// Not a parseable URL (or no path): fall back to the last "/"-separated
+		// segment of the raw string, same as before this function existed.
+		parts := strings.Split(keyURL, "/")
+		if len(parts) == 0 {
+			return "", false
+		}
+		return parts[len(parts)-1], strings.Contains(keyURL, "?")
 	}
 
-	// Default fallback
-	return "/etc/apt/trusted.gpg.d/package-repository.gpg"
+	if search := parsed.Query().Get("search"); strings.HasPrefix(parsed.Path, "/pks/lookup") && gpgKeyIDRe.MatchString(search) {
+		// Already unique: no disambiguation needed.
+		return strings.TrimPrefix(search, "0x"), false
+	}
+
+	// Split the escaped path, not the decoded Path: url.Parse decodes
+	// "%2F" in Path, so an encoded separator inside a single path segment
+	// would otherwise be treated as a literal "/" and two distinct request
+	// paths (e.g. ".../team%2Frelease.gpg" and ".../release.gpg") would
+	// both end up with the same last segment "release.gpg". Keeping it
+	// escaped leaves "%2F" in the candidate, where sanitization and (once
+	// it differs from the unsanitized form) hash disambiguation still
+	// apply.
+	escapedPath := strings.TrimPrefix(parsed.EscapedPath(), "/")
+	// A trailing slash is itself a distinct request path (".../release" vs
+	// ".../release/" can serve different keys) that plain trimming would
+	// otherwise erase, collapsing both onto the same last segment.
+	hasTrailingSlash := strings.HasSuffix(escapedPath, "/") && escapedPath != "/"
+	pathParts := strings.Split(strings.TrimSuffix(escapedPath, "/"), "/")
+	needsPathDisambiguation := parsed.RawQuery != "" || hasTrailingSlash
+	if len(pathParts) == 0 || pathParts[len(pathParts)-1] == "" {
+		return "", needsPathDisambiguation
+	}
+	return pathParts[len(pathParts)-1], needsPathDisambiguation
 }
 
 // createTempAptSourcesFile creates a temporary file with the apt sources content
@@ -513,8 +596,18 @@ func getCachedOrDownloadGPGKey(keyURL string) ([]byte, error) {
 	cacheFilePath, err := gpgKeyCacheFilePath(keyURL)
 	if err == nil {
 		if cachedData, readErr := os.ReadFile(cacheFilePath); readErr == nil {
-			log.Infof("Using cached GPG key (%d bytes) for %s", len(cachedData), keyURL)
-			return cachedData, nil
+			// A cache entry written before this validation existed (or
+			// corrupted since) must not be trusted blindly: that is exactly
+			// how one bad download (truncated response, HTML error page,
+			// proxy hiccup) used to get cached forever and silently poison
+			// every later build. Treat an invalid entry as a cache miss.
+			if validateErr := validateGPGKeyData(cachedData); validateErr != nil {
+				log.Warnf("Cached GPG key for %s at %s failed validation, re-downloading: %v",
+					keyURL, cacheFilePath, validateErr)
+			} else {
+				log.Infof("Using cached GPG key (%d bytes) for %s", len(cachedData), keyURL)
+				return cachedData, nil
+			}
 		}
 	} else {
 		// Cache path failures should not block build; fall back to direct download.
@@ -561,9 +654,48 @@ func downloadGPGKey(keyURL string) ([]byte, error) {
 		return nil, fmt.Errorf("failed to read GPG key data from %s: %w", keyURL, err)
 	}
 
+	// Reject anything that isn't an actual OpenPGP key here, before the
+	// caller (getCachedOrDownloadGPGKey) persists it: a transient bad
+	// response (truncated body, HTML error page) once cached would
+	// otherwise silently poison every later build using this key URL.
+	if err := validateGPGKeyData(keyData); err != nil {
+		return nil, fmt.Errorf("downloaded GPG key from %s is invalid: %w", keyURL, err)
+	}
+
 	log.Infof("Successfully downloaded GPG key (%d bytes) from %s", len(keyData), keyURL)
 
 	return keyData, nil
+}
+
+// validateGPGKeyData sanity-checks that keyData is an actual OpenPGP public
+// key (armored or binary), not empty, truncated, or an HTML/error response
+// from a flaky download or proxy. See downloadGPGKey and
+// getCachedOrDownloadGPGKey for why this must run before data is trusted or
+// cached.
+func validateGPGKeyData(keyData []byte) error {
+	if len(bytes.TrimSpace(keyData)) == 0 {
+		return fmt.Errorf("GPG key data is empty")
+	}
+
+	if _, err := exec.LookPath("gpg"); err != nil {
+		// gpg isn't available to validate with here; accept the data as-is
+		// rather than failing a step that doesn't otherwise need gpg.
+		return nil
+	}
+
+	// Routed through the shell package's executor (allowlisted commands,
+	// cancellation, process-group handling) rather than a raw exec.Command,
+	// same as HashPasswordForHost's use of ExecCmdSilentWithInput for stdin-fed
+	// commands whose output (an error can echo back the input) must not be
+	// logged unconditionally.
+	out, err := shell.ExecCmdSilentWithInput(string(keyData), "gpg --with-colons --show-keys", false, shell.HostPath, nil)
+	if err != nil {
+		return fmt.Errorf("not a valid OpenPGP key: %w", err)
+	}
+	if !strings.Contains(out, "pub:") {
+		return fmt.Errorf("data does not contain an OpenPGP public key")
+	}
+	return nil
 }
 
 // dearmorGPGKey converts ASCII-armored GPG key to binary format using gpg --dearmor

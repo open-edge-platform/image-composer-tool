@@ -36,6 +36,12 @@ export interface PackageMutationOptions {
   // compute this via confirmRepoRelease first rather than hardcoding it —
   // see that function's comment.
   releaseRepo?: boolean
+  // Repos that must stay in enabledRepos even if this removal would
+  // otherwise orphan them — e.g. a repo the matched template's own locked
+  // packages still need (see templateLockedRepos in lib/edgepack.ts). Those
+  // packages never appear in addedPackages, so the orphan check below has no
+  // way to see that need on its own; the caller passes it in instead.
+  protectedRepos?: Set<string>
 }
 
 // orphanedRepos reports which repos among `namesToRemove`'s current
@@ -65,11 +71,16 @@ export function orphanedRepos(addedPackages: AddedPackage[], namesToRemove: stri
 // which is worth a confirmation. Returns true immediately, no prompt, when
 // nothing would actually be orphaned — the overwhelmingly common case.
 //
-// isBaseRepo excludes a target's always-on repo(s) from that check
-// entirely: enabledRepos never lists one to begin with (its checkbox stays
-// checked via `enabledByDefault`, not membership), so "uncheck this too?"
-// would be both meaningless (nothing to uncheck) and confusing (the base
-// template needs it regardless of what's added).
+// isBaseRepo excludes a target's always-on repo(s) from that check — the
+// OS's own base repo, and the same for any repo a caller knows is locked by
+// the matched template (see templateLockedRepos in lib/edgepack.ts; pass a
+// predicate covering both). enabledRepos never lists either kind to begin
+// with (its checkbox stays checked some other way, not membership), so
+// "uncheck this too?" would be both meaningless (nothing to uncheck) and
+// confusing (the template needs it regardless of what's added) — and the
+// caller must still pass the same set as protectedRepos on the actual
+// mutation, since this only governs what gets asked about, not what
+// actually gets released.
 export function confirmRepoRelease(
   addedPackages: AddedPackage[],
   repoLabelFor: (repo: string) => string,
@@ -131,7 +142,9 @@ interface AppState {
   // update for the whole list instead of one per package.
   setPackages: (pkgs: AddedPackage[]) => void
   removePackages: (names: string[], opts?: PackageMutationOptions) => void
-  clearPackages: () => void
+  // protectedRepos: same meaning as PackageMutationOptions.protectedRepos —
+  // Clear has no per-name removal to attach it to, so it takes it directly.
+  clearPackages: (protectedRepos?: Set<string>) => void
   // User edit to the disk layout (marks it edited so seedDisk stops overwriting it).
   setDisk: (value: DiskModel) => void
   // Disk layout from the resolved template; ignored once the user edits.
@@ -185,7 +198,7 @@ export const useStore = create<AppState>((set) => ({
       if (opts?.releaseRepo === false) return { addedPackages }
       return {
         addedPackages,
-        enabledRepos: releaseIfOrphaned(state.enabledRepos, previous, addedPackages),
+        enabledRepos: releaseIfOrphaned(state.enabledRepos, previous, addedPackages, opts?.protectedRepos),
       }
     }),
   removePackage: (name, opts) =>
@@ -195,7 +208,7 @@ export const useStore = create<AppState>((set) => ({
       if (opts?.releaseRepo === false) return { addedPackages }
       return {
         addedPackages,
-        enabledRepos: releaseIfOrphaned(state.enabledRepos, removed, addedPackages),
+        enabledRepos: releaseIfOrphaned(state.enabledRepos, removed, addedPackages, opts?.protectedRepos),
       }
     }),
   setPackages: (pkgs) =>
@@ -214,17 +227,20 @@ export const useStore = create<AppState>((set) => ({
         state.addedPackages.filter((p) => drop.has(p.name)).map((p) => p.repo),
       )
       const stillNeeded = new Set(addedPackages.map((p) => p.repo))
+      const protectedRepos = opts?.protectedRepos
       return {
         addedPackages,
-        enabledRepos: state.enabledRepos.filter((r) => !removedRepos.has(r) || stillNeeded.has(r)),
+        enabledRepos: state.enabledRepos.filter(
+          (r) => !removedRepos.has(r) || stillNeeded.has(r) || protectedRepos?.has(r),
+        ),
       }
     }),
-  clearPackages: () =>
+  clearPackages: (protectedRepos) =>
     set((state) => {
       const usedRepos = new Set(state.addedPackages.map((p) => p.repo))
       return {
         addedPackages: [],
-        enabledRepos: state.enabledRepos.filter((r) => !usedRepos.has(r)),
+        enabledRepos: state.enabledRepos.filter((r) => !usedRepos.has(r) || protectedRepos?.has(r)),
       }
     }),
   setDisk: (value) => set({ disk: value, diskEdited: true }),
@@ -311,8 +327,10 @@ function releaseIfOrphaned(
   enabledRepos: string[],
   changed: AddedPackage | undefined,
   remaining: AddedPackage[],
+  protectedRepos?: Set<string>,
 ): string[] {
   if (!changed) return enabledRepos
+  if (protectedRepos?.has(changed.repo)) return enabledRepos
   if (remaining.some((p) => p.repo === changed.repo)) return enabledRepos
   return enabledRepos.filter((r) => r !== changed.repo)
 }
