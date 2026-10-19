@@ -3,11 +3,16 @@ package rpmutils
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/textproto"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1208,5 +1213,263 @@ func TestFetchPrimaryURL_UsesCachedRepomdWhenPrimaryLocationMissing(t *testing.T
 	}
 	if atomic.LoadInt32(&requestCount) != 1 {
 		t.Fatalf("expected no additional network requests when using cached repomd, got %d", atomic.LoadInt32(&requestCount))
+	}
+}
+
+func TestRedactURLForLog(t *testing.T) {
+	redacted := redactURLForLog("https://user:secret-token@example.invalid/repo?token=abc123#frag")
+	for _, secret := range []string{"user", "secret-token", "token=abc123", "frag"} {
+		if strings.Contains(redacted, secret) {
+			t.Fatalf("redacted URL %q still contains secret fragment %q", redacted, secret)
+		}
+	}
+	for _, malformed := range []string{
+		"%zz://user:secret-token@example.invalid/repo?token=abc123#frag",
+		"https:user:secret-token@example.invalid/repo",
+		"https//user:secret-token@example.invalid/repo",
+		"//user:secret-token@example.invalid/repo?token=abc123",
+	} {
+		if got := redactURLForLog(malformed); got != redactedURLPlaceholder {
+			t.Fatalf("redactURLForLog(%q) = %q, want placeholder", malformed, got)
+		}
+	}
+	err := redactErrorURL(fmt.Errorf("Get https:user:secret-token@example.invalid/repo: refused"), "https:user:secret-token@example.invalid/repo")
+	if strings.Contains(err.Error(), "secret-token") {
+		t.Fatalf("redactErrorURL() = %q, still contains the credential", err.Error())
+	}
+}
+
+func TestRedactErrorURL_PreservesCause(t *testing.T) {
+	rawURL := "https://alice:password@example.invalid/repo?token=abc123"
+	cause := &url.Error{Op: "Get", URL: rawURL, Err: context.DeadlineExceeded}
+
+	err := redactErrorURL(cause, rawURL)
+	for _, secret := range []string{"alice", "password", "abc123"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("error %q still contains %q", err.Error(), secret)
+		}
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("errors.Is(err, context.DeadlineExceeded) = false, want true")
+	}
+	var urlErr *url.Error
+	if !errors.As(err, &urlErr) || urlErr != cause {
+		t.Fatalf("errors.As(err, *url.Error) did not recover the original error")
+	}
+}
+
+func TestRedactErrorURL_JoinedErrors(t *testing.T) {
+	relative := "//alice:password@mirror.invalid/repo?token=abc123"
+	joined := errors.Join(
+		errors.New("first attempt failed"),
+		fmt.Errorf("second attempt: %w", &url.Error{Op: "Get", URL: relative, Err: context.DeadlineExceeded}),
+	)
+
+	err := redactErrorURL(joined, "https://example.invalid/repo")
+	for _, secret := range []string{"alice", "password", "abc123"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("error %q still contains %q", err.Error(), secret)
+		}
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("errors.Is(err, context.DeadlineExceeded) = false, want true")
+	}
+}
+
+func TestRedactErrorURL_ReturnsUnchangedErrorWhenNothingToRedact(t *testing.T) {
+	cause := errors.New("connection refused")
+	if got := redactErrorURL(cause, "https://example.invalid/repo"); got != cause {
+		t.Fatalf("redactErrorURL() = %v, want the original error returned as is", got)
+	}
+}
+
+func TestRedactErrorURL_KeepsQuotesAroundRedactedTarget(t *testing.T) {
+	err := fmt.Errorf(`parse "//alice:password@example.invalid/repo?token=abc123": invalid`)
+	got := redactErrorURL(err, "").Error()
+	if want := `parse "<redacted-url>": invalid`; got != want {
+		t.Fatalf("redactErrorURL() = %q, want %q", got, want)
+	}
+}
+
+func TestRedactErrorURL_ClientErrors(t *testing.T) {
+	assertRedacted := func(t *testing.T, err error, secrets ...string) {
+		t.Helper()
+		if err == nil {
+			t.Fatalf("expected an error")
+		}
+		for _, secret := range secrets {
+			if strings.Contains(err.Error(), secret) {
+				t.Fatalf("error %q still contains %q", err.Error(), secret)
+			}
+		}
+	}
+
+	t.Run("password masked by net/http", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+		addr := server.Listener.Addr().String()
+		server.Close()
+
+		rawURL := "http://alice:password@" + addr + "/repo?token=abc123"
+		_, err := http.Get(rawURL)
+		if err == nil || !strings.Contains(err.Error(), "alice:***@") {
+			t.Fatalf("expected a client error with a masked password, got %v", err)
+		}
+		assertRedacted(t, redactErrorURL(err, rawURL), "alice", "password", "abc123")
+	})
+
+	t.Run("malformed redirect target", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Location", "https://bob:redirectpass@mirror.invalid/%zz?token=redirectsecret")
+			w.WriteHeader(http.StatusFound)
+		}))
+		defer server.Close()
+
+		_, err := http.Get(server.URL + "/repo")
+		if err == nil || !strings.Contains(err.Error(), "redirectsecret") {
+			t.Fatalf("expected a malformed Location error naming the target, got %v", err)
+		}
+		assertRedacted(t, redactErrorURL(err, server.URL+"/repo"), "bob", "redirectpass", "redirectsecret")
+	})
+
+	t.Run("malformed relative redirect target", func(t *testing.T) {
+		for name, location := range map[string]string{
+			"path":              "/mirror/%zz?token=redirectsecret",
+			"protocol-relative": "//bob:redirectpass@mirror.invalid/%zz?token=redirectsecret",
+		} {
+			t.Run(name, func(t *testing.T) {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Location", location)
+					w.WriteHeader(http.StatusFound)
+				}))
+				defer server.Close()
+
+				_, err := http.Get(server.URL + "/repo")
+				if err == nil || !strings.Contains(err.Error(), "redirectsecret") {
+					t.Fatalf("expected a malformed Location error naming the target, got %v", err)
+				}
+				assertRedacted(t, redactErrorURL(err, server.URL+"/repo"), "bob", "redirectpass", "redirectsecret")
+			})
+		}
+	})
+
+	t.Run("malformed response header", func(t *testing.T) {
+		ln, listenErr := net.Listen("tcp", "127.0.0.1:0")
+		if listenErr != nil {
+			t.Fatalf("failed to listen: %v", listenErr)
+		}
+		defer ln.Close()
+		go func() {
+			conn, acceptErr := ln.Accept()
+			if acceptErr != nil {
+				return
+			}
+			defer conn.Close()
+			_, _ = conn.Read(make([]byte, 4096))
+			_, _ = conn.Write([]byte("HTTP/1.1 302 Found\r\nLocation: /mirror?token=redirectsecret\x00\r\n" +
+				"Content-Length: 0\r\n\r\n"))
+		}()
+
+		rawURL := "http://" + ln.Addr().String() + "/repo"
+		_, err := http.Get(rawURL)
+		if err == nil || !strings.Contains(err.Error(), "redirectsecret") {
+			t.Fatalf("expected a malformed header error naming the header value, got %v", err)
+		}
+		got := redactErrorURL(err, rawURL)
+		assertRedacted(t, got, "redirectsecret", "/mirror")
+		var protoErr textproto.ProtocolError
+		if !errors.As(got, &protoErr) {
+			t.Fatalf("redacted error %q no longer wraps the textproto.ProtocolError cause", got)
+		}
+	})
+
+	t.Run("redirect extending the requested URL", func(t *testing.T) {
+		var requests int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if atomic.AddInt32(&requests, 1) == 1 {
+				http.Redirect(w, r, r.URL.RequestURI()+"&signature=redirectsecret", http.StatusFound)
+				return
+			}
+			panic(http.ErrAbortHandler) // the redirected request fails in transport
+		}))
+		defer server.Close()
+
+		rawURL := server.URL + "/repo?token=initial"
+		_, err := http.Get(rawURL)
+		if err == nil || !strings.Contains(err.Error(), "redirectsecret") {
+			t.Fatalf("expected a transport error naming the redirect URL, got %v", err)
+		}
+		assertRedacted(t, redactErrorURL(err, rawURL), "redirectsecret", "token=initial")
+	})
+
+	t.Run("redirect target", func(t *testing.T) {
+		dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+		deadAddr := dead.Listener.Addr().String()
+		dead.Close()
+		redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "http://bob:hunter2@"+deadAddr+"/mirror?token=signed456", http.StatusFound)
+		}))
+		defer redirector.Close()
+
+		_, err := http.Get(redirector.URL + "/repo")
+		if err == nil || !strings.Contains(err.Error(), "signed456") {
+			t.Fatalf("expected a redirect failure naming the redirect target, got %v", err)
+		}
+		assertRedacted(t, redactErrorURL(err, redirector.URL+"/repo"), "bob", "hunter2", "signed456")
+	})
+}
+
+func TestFetchURLWithRetry_RedactsRequestBuildError(t *testing.T) {
+	_, err := fetchURLWithRetry(context.Background(), http.DefaultClient,
+		"https://alice:password@example.invalid/%zz?token=abc123", "repository metadata")
+	if err == nil {
+		t.Fatalf("expected a request build error")
+	}
+	for _, secret := range []string{"alice", "password", "abc123"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("error %q still contains %q", err.Error(), secret)
+		}
+	}
+}
+
+func TestRedactErrorURL_QuotedForms(t *testing.T) {
+	tests := map[string]string{
+		"newline in URL":     "https://alice:password@example.invalid/repo\n?token=abc123",
+		"quote in the query": `https://alice:password@example.invalid/repo?q="x"&token=abc123`,
+	}
+	for name, rawURL := range tests {
+		t.Run(name, func(t *testing.T) {
+			err := &url.Error{Op: "Get", URL: rawURL, Err: errors.New("connection refused")}
+			if !strings.Contains(err.Error(), "alice") {
+				t.Fatalf("test setup: %q should carry the credential", err.Error())
+			}
+			got := redactErrorURL(err, rawURL).Error()
+			for _, secret := range []string{"alice", "password", "abc123"} {
+				if strings.Contains(got, secret) {
+					t.Fatalf("redacted error %q still contains %q", got, secret)
+				}
+			}
+		})
+	}
+}
+
+func TestRedactErrorURL_QueryContinuesPastRequestedURL(t *testing.T) {
+	rawURL := "https://example.invalid/repo?token=initial"
+	err := fmt.Errorf("unexpected redirect to %s&signature=redirectsecret#frag-secret", rawURL)
+	got := redactErrorURL(err, rawURL).Error()
+	for _, secret := range []string{"initial", "redirectsecret", "frag-secret"} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("redacted error %q still contains %q", got, secret)
+		}
+	}
+}
+
+func TestRedactErrorURL_QuotedQueryContinuation(t *testing.T) {
+	rawURL := "https://example.invalid/repo?token=initial"
+	err := fmt.Errorf("Get %q: refused", rawURL+`&label="x"&signature=redirectsecret`)
+	got := redactErrorURL(err, rawURL).Error()
+	for _, secret := range []string{"initial", "redirectsecret"} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("redacted error %q still contains %q", got, secret)
+		}
 	}
 }
