@@ -1299,7 +1299,7 @@ func TestFetchPrimaryURL_PrefersStableRepomdOverStaleLocationCache(t *testing.T)
 		t.Fatalf("failed to seed stable repomd cache: %v", err)
 	}
 	oldPrimary := rpmPrimaryReference{Href: "repodata/old-primary.xml.gz"}
-	if err := saveRPMPrimaryLocationCache(filepath.Join(cacheDir, "primary.location.json"), oldPrimary.Href); err != nil {
+	if err := saveRPMPrimaryLocationCache(filepath.Join(cacheDir, "primary.location.json"), oldPrimary); err != nil {
 		t.Fatalf("failed to seed stale primary location cache: %v", err)
 	}
 
@@ -1626,6 +1626,174 @@ func TestWriteFileAtomic_ReportsDirectorySyncFailure(t *testing.T) {
 	err := writeFileAtomic(filepath.Join(dir, "repomd.xml"), []byte("data"), 0644)
 	if err == nil || !strings.Contains(err.Error(), "replaced but opening its directory") {
 		t.Fatalf("writeFileAtomic() error = %v, want directory open failure", err)
+	}
+}
+
+func TestLoadRPMPrimaryReferenceCache(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    rpmPrimaryReference
+		wantErr bool
+	}{
+		{
+			name:    "full reference",
+			content: `{"primary_href":"repodata/p.xml.gz","primary":{"href":"repodata/p.xml.gz","checksum_type":"SHA256","checksum":"abc"}}`,
+			want:    rpmPrimaryReference{Href: "repodata/p.xml.gz", ChecksumType: "SHA256", Checksum: "abc"},
+		},
+		{
+			name:    "legacy href only",
+			content: `{"primary_href":"repodata/p.xml.gz"}`,
+			want:    rpmPrimaryReference{Href: "repodata/p.xml.gz"},
+		},
+		{
+			name:    "reference without legacy href",
+			content: `{"primary":{"href":"repodata/p.xml.gz"}}`,
+			want:    rpmPrimaryReference{Href: "repodata/p.xml.gz"},
+		},
+		{
+			name:    "checksum type without value",
+			content: `{"primary_href":"repodata/p.xml.gz","primary":{"href":"repodata/p.xml.gz","checksum_type":"SHA256"}}`,
+			wantErr: true,
+		},
+		{
+			name:    "checksum value without type",
+			content: `{"primary_href":"repodata/p.xml.gz","primary":{"href":"repodata/p.xml.gz","checksum":"abc"}}`,
+			wantErr: true,
+		},
+		{
+			name:    "partial checksum without nested href",
+			content: `{"primary_href":"repodata/p.xml.gz","primary":{"checksum_type":"SHA256"}}`,
+			wantErr: true,
+		},
+		{
+			name:    "complete checksum without nested href",
+			content: `{"primary_href":"repodata/p.xml.gz","primary":{"checksum_type":"SHA256","checksum":"abc"}}`,
+			wantErr: true,
+		},
+		{
+			name:    "hrefs disagree",
+			content: `{"primary_href":"repodata/old.xml.gz","primary":{"href":"repodata/new.xml.gz"}}`,
+			wantErr: true,
+		},
+		{name: "no href", content: `{}`, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cacheFile := filepath.Join(t.TempDir(), "primary.location.json")
+			if err := os.WriteFile(cacheFile, []byte(tt.content), 0644); err != nil {
+				t.Fatalf("failed to write cache file: %v", err)
+			}
+			got, err := loadRPMPrimaryReferenceCache(cacheFile)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("loadRPMPrimaryReferenceCache() = %+v, want an error", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("loadRPMPrimaryReferenceCache() error = %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("loadRPMPrimaryReferenceCache() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFetchPrimaryReference_PreservesIntegrityFields(t *testing.T) {
+	want := rpmPrimaryReference{Href: "repodata/primary.xml.gz", ChecksumType: "SHA256", Checksum: "abc123"}
+
+	tests := []struct {
+		name         string
+		seed         func(t *testing.T, cacheDir string)
+		wantRequests int32
+	}{
+		{name: "network", seed: func(t *testing.T, cacheDir string) {}, wantRequests: 1},
+		{
+			name: "cached repomd",
+			seed: func(t *testing.T, cacheDir string) {
+				if err := writeFileAtomic(filepath.Join(cacheDir, "repomd.xml"), testRepomdWithPrimary(want), 0644); err != nil {
+					t.Fatalf("failed to seed repomd cache: %v", err)
+				}
+			},
+			wantRequests: 0,
+		},
+		{
+			name: "location cache only",
+			seed: func(t *testing.T, cacheDir string) {
+				if err := saveRPMPrimaryLocationCache(filepath.Join(cacheDir, "primary.location.json"), want); err != nil {
+					t.Fatalf("failed to seed location cache: %v", err)
+				}
+			},
+			wantRequests: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setRPMMetadataTestCache(t)
+
+			var requests int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				atomic.AddInt32(&requests, 1)
+				_, _ = w.Write(testRepomdWithPrimary(rpmPrimaryReference{Href: want.Href, ChecksumType: "sha256", Checksum: want.Checksum}))
+			}))
+			defer server.Close()
+
+			cacheDir, err := rpmMetadataCacheDir(server.URL)
+			if err != nil {
+				t.Fatalf("rpmMetadataCacheDir() error = %v", err)
+			}
+			if err := os.MkdirAll(cacheDir, 0755); err != nil {
+				t.Fatalf("failed to create cache dir: %v", err)
+			}
+			tt.seed(t, cacheDir)
+
+			got, err := FetchPrimaryReference(server.URL + "/repodata/repomd.xml")
+			if err != nil {
+				t.Fatalf("FetchPrimaryReference() error = %v", err)
+			}
+			if got != want {
+				t.Fatalf("FetchPrimaryReference() = %+v, want %+v", got, want)
+			}
+			if n := atomic.LoadInt32(&requests); n != tt.wantRequests {
+				t.Fatalf("HTTP requests = %d, want %d", n, tt.wantRequests)
+			}
+		})
+	}
+}
+
+func TestFetchPrimaryReference_ReadsLegacyLocationCache(t *testing.T) {
+	setRPMMetadataTestCache(t)
+
+	var requests int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	cacheDir, err := rpmMetadataCacheDir(server.URL)
+	if err != nil {
+		t.Fatalf("rpmMetadataCacheDir() error = %v", err)
+	}
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		t.Fatalf("failed to create cache dir: %v", err)
+	}
+	legacy := []byte(`{"primary_href":"repodata/legacy-primary.xml.gz"}`)
+	if err := os.WriteFile(filepath.Join(cacheDir, "primary.location.json"), legacy, 0644); err != nil {
+		t.Fatalf("failed to seed legacy location cache: %v", err)
+	}
+
+	got, err := FetchPrimaryReference(server.URL + "/repodata/repomd.xml")
+	if err != nil {
+		t.Fatalf("FetchPrimaryReference() error = %v", err)
+	}
+	if want := (rpmPrimaryReference{Href: "repodata/legacy-primary.xml.gz"}); got != want {
+		t.Fatalf("FetchPrimaryReference() = %+v, want %+v", got, want)
+	}
+	if n := atomic.LoadInt32(&requests); n != 0 {
+		t.Fatalf("HTTP requests = %d, want 0", n)
 	}
 }
 
