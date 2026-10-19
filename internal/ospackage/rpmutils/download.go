@@ -93,7 +93,7 @@ func ConfigureKernelSelection(kernelPackages []string, kernelVersion string) {
 
 func Packages() ([]ospackage.PackageInfo, error) {
 	log := logger.Logger()
-	log.Infof("fetching packages from %s", RepoCfg.URL)
+	log.Infof("fetching packages from %s", redactURLForLog(RepoCfg.URL))
 
 	packages, err := ParseRepositoryMetadata(RepoCfg.URL, GzHref, nil)
 	if err != nil {
@@ -271,13 +271,13 @@ func UserPackages() ([]ospackage.PackageInfo, error) {
 	for _, rpItx := range userRepo {
 		repoMetaDataURL := GetRepoMetaDataURL(rpItx.URL, metadataXmlPath)
 		if repoMetaDataURL == "" {
-			log.Errorf("invalid repo metadata URL: %s/%s, skipping", rpItx.URL, metadataXmlPath)
+			log.Errorf("invalid repo metadata URL: %s/%s, skipping", redactURLForLog(rpItx.URL), metadataXmlPath)
 			continue
 		}
 
 		primaryXmlURL, err := FetchPrimaryURL(repoMetaDataURL)
 		if err != nil {
-			return nil, fmt.Errorf("fetching %s URL failed: %w", repoMetaDataURL, err)
+			return nil, fmt.Errorf("fetching %s URL failed: %w", redactURLForLog(repoMetaDataURL), err)
 		}
 
 		userPkgs, err := ParseRepositoryMetadata(rpItx.URL, primaryXmlURL, rpItx.AllowPackages)
@@ -854,7 +854,7 @@ func clearRPMMetadataCache() {
 	for _, repoURL := range repoURLs {
 		metaDir, err := rpmMetadataCacheDir(repoURL)
 		if err != nil {
-			log.Warnf("failed to resolve RPM metadata cache directory for %s: %v", repoURL, err)
+			log.Warnf("failed to resolve RPM metadata cache directory for %s: %v", redactURLForLog(repoURL), err)
 			continue
 		}
 

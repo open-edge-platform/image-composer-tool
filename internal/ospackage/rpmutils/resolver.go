@@ -52,28 +52,29 @@ func shouldRetryMetadataStatus(statusCode int) bool {
 
 func fetchURLWithRetry(ctx context.Context, client *http.Client, targetURL, resourceName string) ([]byte, error) {
 	log := logger.Logger()
+	safeTargetURL := redactURLForLog(targetURL)
 
 	backoff := metadataRetryBackoff
 	var lastErr error
 
 	for attempt := 1; attempt <= metadataMaxDownloadAttempts; attempt++ {
 		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("GET %s cancelled before attempt %d: %w", targetURL, attempt, err)
+			return nil, fmt.Errorf("GET %s cancelled before attempt %d: %w", safeTargetURL, attempt, err)
 		}
 		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
 		if reqErr != nil {
-			return nil, fmt.Errorf("build request for %s: %w", targetURL, reqErr)
+			return nil, fmt.Errorf("build request for %s: %w", safeTargetURL, redactErrorURL(reqErr, targetURL))
 		}
 		resp, err := client.Do(req)
 		if err != nil {
-			lastErr = err
+			lastErr = redactErrorURL(err, targetURL)
 		} else {
 			if resp.StatusCode != http.StatusOK {
 				resp.Body.Close()
 				if shouldRetryMetadataStatus(resp.StatusCode) {
 					lastErr = fmt.Errorf("transient status: %s", resp.Status)
 				} else {
-					return nil, fmt.Errorf("GET %s: bad status: %s", targetURL, resp.Status)
+					return nil, fmt.Errorf("GET %s: bad status: %s", safeTargetURL, resp.Status)
 				}
 			} else {
 				body, readErr := io.ReadAll(resp.Body)
@@ -97,13 +98,13 @@ func fetchURLWithRetry(ctx context.Context, client *http.Client, targetURL, reso
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return nil, fmt.Errorf("GET %s cancelled during retry backoff: %w", targetURL, ctx.Err())
+			return nil, fmt.Errorf("GET %s cancelled during retry backoff: %w", safeTargetURL, ctx.Err())
 		case <-timer.C:
 		}
 		backoff *= 2
 	}
 
-	return nil, fmt.Errorf("GET %s failed after %d attempts: %w", targetURL, metadataMaxDownloadAttempts, lastErr)
+	return nil, fmt.Errorf("GET %s failed after %d attempts: %w", safeTargetURL, metadataMaxDownloadAttempts, lastErr)
 }
 
 // extractBaseRequirement takes a potentially complex requirement string
@@ -388,7 +389,7 @@ func ParseRepositoryMetadata(baseURL, metadataHref string, packageFilter []strin
 	cacheEnabled := !system.IsLiveInstallerExecution()
 
 	fullURL := strings.TrimRight(baseURL, "/") + "/" + strings.TrimLeft(metadataHref, "/")
-	log.Infof("Fetching and parsing repository metadata from %s", fullURL)
+	log.Infof("Fetching and parsing repository metadata from %s", redactURLForLog(fullURL))
 
 	// Keep metadata cache under persistent cache-dir so rebuilds can run offline.
 	xmlCacheDir := ""
@@ -413,7 +414,7 @@ func ParseRepositoryMetadata(baseURL, metadataHref string, packageFilter []strin
 		parsedCacheFile := filepath.Join(xmlCacheDir, "primary.parsed.json")
 		cached, cacheErr := loadRPMParsedMetadataCache(parsedCacheFile)
 		if cacheErr == nil && cached.MetadataURL == fullURL && cached.Version == rpmParsedMetadataCacheVersion {
-			log.Infof("Using cached RPM metadata for %s", fullURL)
+			log.Infof("Using cached RPM metadata for %s", redactURLForLog(fullURL))
 			return filterRPMPackages(cached.Packages, packageFilter), nil
 		}
 		// A stale (version-mismatched) cache whose MetadataURL still matches fullURL
@@ -448,7 +449,7 @@ func ParseRepositoryMetadata(baseURL, metadataHref string, packageFilter []strin
 			}
 		}
 		if rawErr == nil {
-			log.Infof("Reparsing cached raw RPM metadata for %s (parsed cache stale or missing)", fullURL)
+			log.Infof("Reparsing cached raw RPM metadata for %s (parsed cache stale or missing)", redactURLForLog(fullURL))
 			compressedData = raw
 			fromCache = true
 		} else if !os.IsNotExist(rawErr) {
@@ -827,7 +828,7 @@ func FetchPrimaryURL(repomdURL string) (string, error) {
 	if xmlCacheDir != "" {
 		primaryLocationCacheFile := filepath.Join(xmlCacheDir, "primary.location.json")
 		if cachedHref, cacheErr := loadRPMPrimaryLocationCache(primaryLocationCacheFile); cacheErr == nil {
-			log.Infof("Using cached primary metadata location for %s", baseURL)
+			log.Infof("Using cached primary metadata location for %s", redactURLForLog(baseURL))
 			return cachedHref, nil
 		}
 
@@ -835,7 +836,7 @@ func FetchPrimaryURL(repomdURL string) (string, error) {
 			if saveErr := saveRPMPrimaryLocationCache(primaryLocationCacheFile, repomdCachedHref); saveErr != nil {
 				log.Warnf("Failed to save primary location cache %s: %v", primaryLocationCacheFile, saveErr)
 			}
-			log.Infof("Using primary metadata location from cached repomd for %s", baseURL)
+			log.Infof("Using primary metadata location from cached repomd for %s", redactURLForLog(baseURL))
 			return repomdCachedHref, nil
 		}
 	}
@@ -862,7 +863,7 @@ func FetchPrimaryURL(repomdURL string) (string, error) {
 
 	href, err := extractPrimaryLocationFromRepomdData(repomdData)
 	if err != nil {
-		return "", fmt.Errorf("parsing primary location from %s: %w", repomdURL, err)
+		return "", fmt.Errorf("parsing primary location from %s: %w", redactURLForLog(repomdURL), err)
 	}
 
 	if xmlCacheDir != "" {
