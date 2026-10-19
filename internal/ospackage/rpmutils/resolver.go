@@ -861,10 +861,11 @@ func FetchPrimaryURL(repomdURL string) (string, error) {
 		}
 	}
 
-	href, err := extractPrimaryLocationFromRepomdData(repomdData)
+	primary, err := extractPrimaryReferenceFromRepomdData(repomdData)
 	if err != nil {
-		return "", fmt.Errorf("parsing primary location from %s: %w", redactURLForLog(repomdURL), err)
+		return "", fmt.Errorf("parsing primary reference from %s: %w", redactURLForLog(repomdURL), err)
 	}
+	href := primary.Href
 
 	if xmlCacheDir != "" {
 		primaryLocationCacheFile := filepath.Join(xmlCacheDir, "primary.location.json")
@@ -894,71 +895,13 @@ func loadPrimaryLocationFromCachedRepomd(xmlCacheDir string) (string, error) {
 			continue
 		}
 
-		href, parseErr := extractPrimaryLocationFromRepomdData(data)
+		primary, parseErr := extractPrimaryReferenceFromRepomdData(data)
 		if parseErr == nil {
-			return href, nil
+			return primary.Href, nil
 		}
 	}
 
-	return "", fmt.Errorf("failed to parse primary location from cached repomd files")
-}
-
-func extractPrimaryLocationFromRepomdData(repomdData []byte) (string, error) {
-	dec := xml.NewDecoder(bytes.NewReader(repomdData))
-
-	// Walk the tokens looking for <data type="primary">
-	for {
-		tok, err := dec.Token()
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return "", err
-		}
-
-		se, ok := tok.(xml.StartElement)
-		if !ok || se.Name.Local != "data" {
-			continue
-		}
-
-		var isPrimary bool
-		for _, attr := range se.Attr {
-			if attr.Name.Local == "type" && attr.Value == "primary" {
-				isPrimary = true
-				break
-			}
-		}
-		if !isPrimary {
-			if err := dec.Skip(); err != nil {
-				return "", fmt.Errorf("error skipping token: %w", err)
-			}
-			continue
-		}
-
-		for {
-			tok2, err := dec.Token()
-			if err != nil {
-				if err == io.EOF {
-					break
-				}
-				return "", err
-			}
-
-			if ee, ok := tok2.(xml.EndElement); ok && ee.Name.Local == "data" {
-				break
-			}
-
-			if le, ok := tok2.(xml.StartElement); ok && le.Name.Local == "location" {
-				for _, attr := range le.Attr {
-					if attr.Name.Local == "href" {
-						return attr.Value, nil
-					}
-				}
-			}
-		}
-	}
-
-	return "", fmt.Errorf("primary location not found in repomd.xml")
+	return "", fmt.Errorf("failed to parse primary reference from cached repomd files")
 }
 
 func GetRepoMetaDataURL(baseURL, repoMetaXmlPath string) string {
