@@ -7,7 +7,7 @@ require (
 	github.com/bendahl/uinput v1.7.0
 	github.com/diskfs/go-diskfs v1.9.4
 	github.com/gdamore/tcell/v2 v2.13.10
-	github.com/getkin/kin-openapi v0.149.0
+	github.com/getkin/kin-openapi v0.151.0
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.20.1
 	github.com/muesli/crunchy v0.4.0
