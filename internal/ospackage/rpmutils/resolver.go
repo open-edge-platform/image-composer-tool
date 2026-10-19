@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -269,58 +268,6 @@ func matchesPackageFilter(pkgName string, filter []string) bool {
 	return false
 }
 
-// rpmParsedMetadataCacheVersion is the schema version of the on-disk parsed RPM
-// metadata cache. Bump it whenever the parsed shape changes so a cache written by
-// an older binary is treated as a miss and re-parsed, rather than silently
-// returning records missing the new data. A pre-versioning cache unmarshals
-// Version as the zero value, which never matches a bumped constant, so it is
-// correctly treated as stale too.
-// v1: PackageInfo.InstalledSizeBytes is now parsed from <size installed=…> and
-// feeds overlay auto-sizing.
-// v2: PackageInfo.HasInstalledSize is now parsed alongside InstalledSizeBytes to
-// distinguish an explicit zero footprint from a missing size; a v1 cache would
-// report every package as HasInstalledSize=false (treated as unknown).
-const rpmParsedMetadataCacheVersion = 2
-
-type rpmParsedMetadataCache struct {
-	Version     int                     `json:"version"`
-	MetadataURL string                  `json:"metadata_url"`
-	Packages    []ospackage.PackageInfo `json:"packages"`
-}
-
-func loadRPMParsedMetadataCache(cacheFile string) (*rpmParsedMetadataCache, error) {
-	data, err := os.ReadFile(cacheFile)
-	if err != nil {
-		return nil, err
-	}
-
-	var cache rpmParsedMetadataCache
-	if err := json.Unmarshal(data, &cache); err != nil {
-		return nil, fmt.Errorf("invalid rpm metadata cache: %w", err)
-	}
-
-	return &cache, nil
-}
-
-func saveRPMParsedMetadataCache(cacheFile, metadataURL string, pkgs []ospackage.PackageInfo) error {
-	cache := rpmParsedMetadataCache{
-		Version:     rpmParsedMetadataCacheVersion,
-		MetadataURL: metadataURL,
-		Packages:    pkgs,
-	}
-
-	data, err := json.Marshal(cache)
-	if err != nil {
-		return fmt.Errorf("failed to marshal rpm metadata cache: %w", err)
-	}
-
-	if err := writeFileAtomic(cacheFile, data, 0600); err != nil {
-		return fmt.Errorf("failed to write rpm metadata cache: %w", err)
-	}
-
-	return nil
-}
-
 func filterRPMPackages(pkgs []ospackage.PackageInfo, packageFilter []string) []ospackage.PackageInfo {
 	if len(packageFilter) == 0 {
 		return pkgs
@@ -379,21 +326,22 @@ func ParseRepositoryMetadata(baseURL, metadataHref string, packageFilter []strin
 
 	primary := cachedPrimaryReferenceFor(xmlCacheDir, metadataHref)
 
-	// Offline-first behavior: if parsed metadata is cached for this exact metadata URL,
+	// Offline-first behavior: if parsed metadata is cached for this exact metadata identity,
 	// return it immediately without any network operation.
 	staleMetadataURLMatches := false
 	if xmlCacheDir != "" {
 		parsedCacheFile := filepath.Join(xmlCacheDir, "primary.parsed.json")
 		cached, cacheErr := loadRPMParsedMetadataCache(parsedCacheFile)
-		if cacheErr == nil && cached.MetadataURL == fullURL && cached.Version == rpmParsedMetadataCacheVersion {
+		if cacheErr == nil && parsedMetadataCacheMatches(cached, metadataID, primary) {
 			log.Infof("Using cached RPM metadata for %s", redactURLForLog(fullURL))
 			return filterRPMPackages(cached.Packages, packageFilter), nil
 		}
-		// A stale (version-mismatched) cache whose MetadataURL still matches fullURL
-		// confirms this exact URL was fetched before, which is the only safe
-		// evidence for trusting a legacy, baseURL-only-keyed raw cache below (that
-		// key alone can't tell two hrefs of the same repo apart).
-		staleMetadataURLMatches = cacheErr == nil && cached.MetadataURL == fullURL
+		// A stale (version-mismatched) cache that still names this exact URL, by
+		// the URL older builds stored or by the hashed identity newer ones store,
+		// confirms it was fetched before, which is the only safe evidence for
+		// trusting a legacy, baseURL-only-keyed raw cache below (that key alone
+		// can't tell two hrefs of the same repo apart).
+		staleMetadataURLMatches = cacheErr == nil && (cached.MetadataURL == fullURL || cached.MetadataID == metadataID)
 		if cacheErr != nil && !os.IsNotExist(cacheErr) {
 			log.Warnf("Failed to load cached RPM metadata %s: %v", parsedCacheFile, cacheErr)
 		}
@@ -442,7 +390,7 @@ func ParseRepositoryMetadata(baseURL, metadataHref string, packageFilter []strin
 		saveUncompressedXML(xmlCacheDir, metadataHref, fullURL, xmlData)
 
 		parsedCacheFile := filepath.Join(xmlCacheDir, "primary.parsed.json")
-		if saveErr := saveRPMParsedMetadataCache(parsedCacheFile, fullURL, infos); saveErr != nil {
+		if saveErr := saveRPMParsedMetadataCache(parsedCacheFile, metadataID, primary, infos); saveErr != nil {
 			log.Warnf("Failed to save RPM parsed metadata cache %s: %v", parsedCacheFile, saveErr)
 		}
 	}

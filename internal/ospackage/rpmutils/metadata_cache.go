@@ -24,8 +24,30 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 )
+
+// rpmParsedMetadataCacheVersion is the schema version of the on-disk parsed RPM
+// metadata cache. Bump it whenever the parsed shape changes so a cache written by
+// an older binary is treated as a miss and re-parsed, rather than silently
+// returning records missing the new data. A pre-versioning cache unmarshals
+// Version as the zero value, which never matches a bumped constant, so it is
+// correctly treated as stale too.
+// v1: PackageInfo.InstalledSizeBytes is now parsed from <size installed=...> and
+// feeds overlay auto-sizing.
+// v2: PackageInfo.HasInstalledSize is now parsed alongside InstalledSizeBytes to
+// distinguish an explicit zero footprint from a missing size; a v1 cache would
+// report every package as HasInstalledSize=false (treated as unknown).
+const rpmParsedMetadataCacheVersion = 2
+
+type rpmParsedMetadataCache struct {
+	Version     int                     `json:"version"`
+	MetadataURL string                  `json:"metadata_url,omitempty"`
+	MetadataID  string                  `json:"metadata_id"`
+	Primary     rpmPrimaryReference     `json:"primary"`
+	Packages    []ospackage.PackageInfo `json:"packages"`
+}
 
 type rpmPrimaryLocationCache struct {
 	PrimaryHref string              `json:"primary_href"`
@@ -276,6 +298,56 @@ func writeFileAtomic(filePath string, data []byte, perm os.FileMode) error {
 	}
 	cleanup = false
 	return nil
+}
+
+func loadRPMParsedMetadataCache(cacheFile string) (*rpmParsedMetadataCache, error) {
+	data, err := os.ReadFile(cacheFile)
+	if err != nil {
+		return nil, err
+	}
+
+	var cache rpmParsedMetadataCache
+	if err := json.Unmarshal(data, &cache); err != nil {
+		return nil, fmt.Errorf("invalid rpm metadata cache: %w", err)
+	}
+
+	return &cache, nil
+}
+
+func saveRPMParsedMetadataCache(cacheFile, metadataID string, primary rpmPrimaryReference, pkgs []ospackage.PackageInfo) error {
+	cache := rpmParsedMetadataCache{
+		Version:    rpmParsedMetadataCacheVersion,
+		MetadataID: metadataID,
+		Primary:    primary,
+		Packages:   pkgs,
+	}
+
+	data, err := json.Marshal(cache)
+	if err != nil {
+		return fmt.Errorf("failed to marshal rpm metadata cache: %w", err)
+	}
+
+	if err := writeFileAtomic(cacheFile, data, 0600); err != nil {
+		return fmt.Errorf("failed to write rpm metadata cache: %w", err)
+	}
+
+	return nil
+}
+
+// parsedMetadataCacheMatches reports whether cache may answer for metadataID: it
+// must have been written in the current format, for this identity, and from the
+// same primary reference as primary. primary always carries at least the href;
+// when no cached repomd.xml or location cache supplied more, a cache that
+// recorded a checksum or size does not match, and the caller falls back to the
+// verified raw metadata.
+func parsedMetadataCacheMatches(cache *rpmParsedMetadataCache, metadataID string, primary rpmPrimaryReference) bool {
+	if cache.Version != rpmParsedMetadataCacheVersion {
+		return false
+	}
+	if cache.MetadataID != metadataID {
+		return false
+	}
+	return cache.Primary.matches(primary)
 }
 
 func saveRPMPrimaryLocationCache(cacheFile string, primary rpmPrimaryReference) error {
