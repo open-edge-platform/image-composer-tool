@@ -317,7 +317,7 @@ func saveRPMParsedMetadataCache(cacheFile, metadataURL string, pkgs []ospackage.
 		return fmt.Errorf("failed to marshal rpm metadata cache: %w", err)
 	}
 
-	if err := os.WriteFile(cacheFile, data, 0600); err != nil {
+	if err := writeFileAtomic(cacheFile, data, 0600); err != nil {
 		return fmt.Errorf("failed to write rpm metadata cache: %w", err)
 	}
 
@@ -350,7 +350,7 @@ func saveRPMPrimaryLocationCache(cacheFile, href string) error {
 		return fmt.Errorf("failed to marshal rpm primary location cache: %w", err)
 	}
 
-	if err := os.WriteFile(cacheFile, data, 0644); err != nil {
+	if err := writeFileAtomic(cacheFile, data, 0644); err != nil {
 		return fmt.Errorf("failed to write rpm primary location cache: %w", err)
 	}
 
@@ -827,17 +827,17 @@ func FetchPrimaryURL(repomdURL string) (string, error) {
 	}
 	if xmlCacheDir != "" {
 		primaryLocationCacheFile := filepath.Join(xmlCacheDir, "primary.location.json")
-		if cachedHref, cacheErr := loadRPMPrimaryLocationCache(primaryLocationCacheFile); cacheErr == nil {
-			log.Infof("Using cached primary metadata location for %s", redactURLForLog(baseURL))
-			return cachedHref, nil
-		}
-
 		if repomdCachedHref, repomdCacheErr := loadPrimaryLocationFromCachedRepomd(xmlCacheDir); repomdCacheErr == nil {
 			if saveErr := saveRPMPrimaryLocationCache(primaryLocationCacheFile, repomdCachedHref); saveErr != nil {
-				log.Warnf("Failed to save primary location cache %s: %v", primaryLocationCacheFile, saveErr)
+				log.Warnf("Failed to save primary location cache %s; offline cache incomplete: %v", primaryLocationCacheFile, saveErr)
 			}
 			log.Infof("Using primary metadata location from cached repomd for %s", redactURLForLog(baseURL))
 			return repomdCachedHref, nil
+		}
+
+		if cachedHref, cacheErr := loadRPMPrimaryLocationCache(primaryLocationCacheFile); cacheErr == nil {
+			log.Infof("Using cached primary metadata location for %s", redactURLForLog(baseURL))
+			return cachedHref, nil
 		}
 	}
 
@@ -847,20 +847,6 @@ func FetchPrimaryURL(repomdURL string) (string, error) {
 		return "", err
 	}
 
-	// Save repomd.xml file using same pattern as debutils
-	if xmlCacheDir != "" {
-		urlHash := sha256.Sum256([]byte(baseURL))
-		urlHashStr := hex.EncodeToString(urlHash[:])[:8]
-		timestamp := time.Now().Format("2006-01-02_15-04-05")
-		filename := fmt.Sprintf("repomd_%s_%s.xml", urlHashStr, timestamp)
-		filePath := filepath.Join(xmlCacheDir, filename)
-		if writeErr := os.WriteFile(filePath, repomdData, 0644); writeErr == nil {
-			log.Infof("Saved repomd.xml file: %s", filePath)
-		} else {
-			log.Warnf("Failed to save repomd.xml file: %v", writeErr)
-		}
-	}
-
 	primary, err := extractPrimaryReferenceFromRepomdData(repomdData)
 	if err != nil {
 		return "", fmt.Errorf("parsing primary reference from %s: %w", redactURLForLog(repomdURL), err)
@@ -868,40 +854,14 @@ func FetchPrimaryURL(repomdURL string) (string, error) {
 	href := primary.Href
 
 	if xmlCacheDir != "" {
+		saveRepomdXMLCache(xmlCacheDir, baseURL, repomdData)
 		primaryLocationCacheFile := filepath.Join(xmlCacheDir, "primary.location.json")
 		if saveErr := saveRPMPrimaryLocationCache(primaryLocationCacheFile, href); saveErr != nil {
-			log.Warnf("Failed to save primary location cache %s: %v", primaryLocationCacheFile, saveErr)
+			log.Warnf("Failed to save primary location cache %s; offline cache incomplete: %v", primaryLocationCacheFile, saveErr)
 		}
 	}
 
 	return href, nil
-}
-
-func loadPrimaryLocationFromCachedRepomd(xmlCacheDir string) (string, error) {
-	pattern := filepath.Join(xmlCacheDir, "repomd_*.xml")
-	files, err := filepath.Glob(pattern)
-	if err != nil {
-		return "", fmt.Errorf("glob %q: %w", pattern, err)
-	}
-	if len(files) == 0 {
-		return "", fmt.Errorf("no cached repomd files found")
-	}
-
-	// Repomd cache file names include a sortable timestamp suffix.
-	sort.Strings(files)
-	for i := len(files) - 1; i >= 0; i-- {
-		data, readErr := os.ReadFile(files[i])
-		if readErr != nil {
-			continue
-		}
-
-		primary, parseErr := extractPrimaryReferenceFromRepomdData(data)
-		if parseErr == nil {
-			return primary.Href, nil
-		}
-	}
-
-	return "", fmt.Errorf("failed to parse primary reference from cached repomd files")
 }
 
 func GetRepoMetaDataURL(baseURL, repoMetaXmlPath string) string {
