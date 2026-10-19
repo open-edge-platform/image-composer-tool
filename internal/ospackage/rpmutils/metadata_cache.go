@@ -2,11 +2,14 @@ package rpmutils
 
 import (
 	"bytes"
+	"crypto/sha1"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"hash"
 	"io"
 	"net/textproto"
 	"net/url"
@@ -17,6 +20,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 )
@@ -31,12 +36,24 @@ type rpmPrimaryReference struct {
 	// ChecksumType is the repomd.xml checksum type in its canonical upper-case
 	// form (for example "SHA256"); repomd.xml itself usually spells it in
 	// lower case.
-	ChecksumType string `json:"checksum_type,omitempty"`
-	Checksum     string `json:"checksum,omitempty"`
+	ChecksumType     string `json:"checksum_type,omitempty"`
+	Checksum         string `json:"checksum,omitempty"`
+	Size             int64  `json:"size,omitempty"`
+	OpenChecksumType string `json:"open_checksum_type,omitempty"`
+	OpenChecksum     string `json:"open_checksum,omitempty"`
+	OpenSize         int64  `json:"open_size,omitempty"`
+}
+
+func (ref rpmPrimaryReference) hasIntegrity() bool {
+	return ref.ChecksumType != "" && ref.Checksum != ""
 }
 
 func (ref rpmPrimaryReference) isPartialChecksum() bool {
 	return (ref.ChecksumType != "" && ref.Checksum == "") || (ref.ChecksumType == "" && ref.Checksum != "")
+}
+
+func (ref rpmPrimaryReference) isPartialOpenChecksum() bool {
+	return (ref.OpenChecksumType != "" && ref.OpenChecksum == "") || (ref.OpenChecksumType == "" && ref.OpenChecksum != "")
 }
 
 func redactURLForLog(rawURL string) string {
@@ -389,7 +406,11 @@ func extractPrimaryReferenceFromRepomdData(repomdData []byte) (rpmPrimaryReferen
 				if primary.isPartialChecksum() {
 					return rpmPrimaryReference{}, fmt.Errorf("malformed repomd: partial checksum (type=%q, value=%q)", primary.ChecksumType, primary.Checksum)
 				}
+				if primary.isPartialOpenChecksum() {
+					return rpmPrimaryReference{}, fmt.Errorf("malformed repomd: partial open-checksum (type=%q, value=%q)", primary.OpenChecksumType, primary.OpenChecksum)
+				}
 				primary.ChecksumType = strings.ToUpper(primary.ChecksumType)
+				primary.OpenChecksumType = strings.ToUpper(primary.OpenChecksumType)
 				found, haveFound = primary, true
 				break
 			}
@@ -412,6 +433,35 @@ func extractPrimaryReferenceFromRepomdData(repomdData []byte) (rpmPrimaryReferen
 					return rpmPrimaryReference{}, fmt.Errorf("read primary checksum: %w", err)
 				}
 				primary.Checksum = text
+			case "open-checksum":
+				primary.OpenChecksumType = attrValue(le.Attr, "type")
+				text, err := readElementText(dec)
+				if err != nil {
+					return rpmPrimaryReference{}, fmt.Errorf("read primary open-checksum: %w", err)
+				}
+				primary.OpenChecksum = text
+			case "size":
+				text, err := readElementText(dec)
+				if err != nil {
+					return rpmPrimaryReference{}, fmt.Errorf("read primary size: %w", err)
+				}
+				if primary.Size, err = parseSizeText(text); err != nil {
+					return rpmPrimaryReference{}, fmt.Errorf("malformed repomd: primary size: %w", err)
+				}
+				// Size 0 doubles as "no size published" in rpmPrimaryReference, and
+				// no real primary file is empty, so refuse it rather than let it
+				// switch size verification off.
+				if primary.Size == 0 {
+					return rpmPrimaryReference{}, fmt.Errorf("malformed repomd: primary size is 0")
+				}
+			case "open-size":
+				text, err := readElementText(dec)
+				if err != nil {
+					return rpmPrimaryReference{}, fmt.Errorf("read primary open-size: %w", err)
+				}
+				if primary.OpenSize, err = parseSizeText(text); err != nil {
+					return rpmPrimaryReference{}, fmt.Errorf("malformed repomd: primary open-size: %w", err)
+				}
 			}
 		}
 	}
@@ -453,4 +503,205 @@ func readElementText(dec *xml.Decoder) (string, error) {
 			depth--
 		}
 	}
+}
+
+// parseSizeText parses a repomd.xml size element. A size that is not a
+// non-negative integer is an error rather than "no size", so malformed integrity
+// metadata cannot switch size verification off.
+func parseSizeText(value string) (int64, error) {
+	parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil || parsed < 0 {
+		return 0, fmt.Errorf("invalid size %q", strings.TrimSpace(value))
+	}
+	return parsed, nil
+}
+
+func verifyRPMPrimaryBytes(data []byte, primary rpmPrimaryReference) error {
+	if primary.Size > 0 && int64(len(data)) != primary.Size {
+		return fmt.Errorf("size mismatch: got %d, want %d", len(data), primary.Size)
+	}
+	if !primary.hasIntegrity() {
+		return nil
+	}
+
+	digest, err := digestBytes(primary.ChecksumType, data)
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(digest, primary.Checksum) {
+		return fmt.Errorf("checksum mismatch: got %s, want %s", digest, primary.Checksum)
+	}
+	return nil
+}
+
+func digestBytes(algorithm string, data []byte) (string, error) {
+	var h hash.Hash
+	switch strings.ToUpper(strings.TrimSpace(algorithm)) {
+	case "SHA", "SHA1", "SHA-1":
+		h = sha1.New()
+	case "SHA256", "SHA-256":
+		h = sha256.New()
+	case "SHA512", "SHA-512":
+		h = sha512.New()
+	default:
+		return "", fmt.Errorf("unsupported primary metadata checksum type %q", algorithm)
+	}
+	if _, err := h.Write(data); err != nil {
+		return "", fmt.Errorf("hash primary metadata: %w", err)
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// cachedPrimaryReferenceFor returns the integrity data cached for metadataHref,
+// from the cached repomd.xml or, when that is gone, the primary location cache,
+// or a reference holding only the href. Only data that describes metadataHref
+// itself is used: the cache may have moved on to a different primary file. A
+// repository may publish the href with a leading slash; the reference returned
+// always carries the slash-less form, like metadataHref.
+func cachedPrimaryReferenceFor(xmlCacheDir, metadataHref string) rpmPrimaryReference {
+	metadataHref = strings.TrimLeft(metadataHref, "/")
+	describes := func(cached rpmPrimaryReference) bool {
+		return strings.TrimLeft(cached.Href, "/") == metadataHref
+	}
+	if xmlCacheDir != "" {
+		if cached, err := loadPrimaryReferenceFromCachedRepomd(xmlCacheDir); err == nil && describes(cached) {
+			cached.Href = metadataHref
+			return cached
+		}
+		locationFile := filepath.Join(xmlCacheDir, "primary.location.json")
+		if cached, err := loadRPMPrimaryReferenceCache(locationFile); err == nil && describes(cached) {
+			cached.Href = metadataHref
+			return cached
+		}
+	}
+	return rpmPrimaryReference{Href: metadataHref}
+}
+
+// beforeLegacyMigrationPublish runs just before a legacy cache file is published
+// to its normalized name. Tests use it to interleave another cache writer.
+var beforeLegacyMigrationPublish = func(target string) {}
+
+// beforeCopyPublish runs once a copy is complete in its temporary file and just
+// before it is published. Tests use it to interrupt the copy.
+var beforeCopyPublish = func(tmpPath, target string) {}
+
+// linkFile creates newname as a hard link to oldname. Tests replace it to
+// simulate a filesystem without hard links.
+var linkFile = os.Link
+
+// renameNoReplace atomically renames oldpath to newpath and fails with an error
+// satisfying os.IsExist if newpath exists, so a file another build published is
+// never replaced. Filesystems that cannot do this fail with another error.
+// Tests replace it.
+var renameNoReplace = func(oldpath, newpath string) error {
+	err := unix.Renameat2(unix.AT_FDCWD, oldpath, unix.AT_FDCWD, newpath, unix.RENAME_NOREPLACE)
+	if err != nil {
+		return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: err}
+	}
+	return nil
+}
+
+// legacyCopyTempPrefix names the temporary files copyFileExclusive writes in the
+// target directory. No cache lookup pattern matches it.
+const legacyCopyTempPrefix = ".migrating-"
+
+// copyFileExclusive copies source to target with source's permissions. The copy
+// is written to a temporary file in target's directory and published only once
+// complete, so target is never visible partially written, even if the process
+// is killed mid-copy. Publication does not replace an existing target: it fails
+// with an error satisfying os.IsExist, so a file another build sharing the cache
+// has written is kept. It hard-links the finished copy; where the filesystem has
+// no hard links it renames the copy without replacing target. Where neither is
+// possible it fails with an error that does not satisfy os.IsExist, rather than
+// risk replacing a file written meanwhile.
+func copyFileExclusive(source, target string) error {
+	in, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	info, err := in.Stat()
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(target), legacyCopyTempPrefix+"*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	// After a rename the temporary name is already gone; otherwise it is either
+	// the partial copy of a failure or the spare name left by the hard link.
+	defer func() { _ = os.Remove(tmpPath) }()
+
+	if _, err = io.Copy(tmp, in); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err = tmp.Chmod(info.Mode().Perm()); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err = tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err = tmp.Close(); err != nil {
+		return err
+	}
+
+	beforeCopyPublish(tmpPath, target)
+	linkErr := linkFile(tmpPath, target)
+	if linkErr == nil || os.IsExist(linkErr) {
+		return linkErr
+	}
+	return renameNoReplace(tmpPath, target)
+}
+
+// migrateLegacyRPMMetadataDir moves cache files from the directory earlier
+// builds used for a repository URL with a trailing slash, whose name was derived
+// from the URL with the slash, into cacheDir, so a warm offline build survives
+// the directory name being normalized. Files keep their permissions, an existing
+// file is never overwritten, and a legacy file is removed once it has been moved
+// or found to exist already, so clearing the cache cannot bring an old index
+// back. The legacy directory goes with its last file; a file that could not be
+// moved stays, and the move is tried again on the next run. Everything moved is
+// verified again when it is read.
+//
+// A file is published by hard-linking it to its new name, or, where that is not
+// possible, by copying it (see copyFileExclusive). Both fail if another build
+// sharing the cache has created that name in the meantime, rather than
+// replacing the newer file, and a name that exists is always a complete file, so
+// the legacy source can be removed once the name is taken.
+func migrateLegacyRPMMetadataDir(baseURL, cacheDir string) {
+	log := logger.Logger()
+
+	legacyDir := filepath.Join(filepath.Dir(cacheDir), rpmMetadataDirName(baseURL))
+	if legacyDir == cacheDir {
+		return
+	}
+	entries, err := os.ReadDir(legacyDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() {
+			continue
+		}
+		source := filepath.Join(legacyDir, entry.Name())
+		target := filepath.Join(cacheDir, entry.Name())
+		beforeLegacyMigrationPublish(target)
+		linkErr := linkFile(source, target)
+		if linkErr == nil || os.IsExist(linkErr) {
+			// Linked, or the normalized directory already has the file.
+			_ = os.Remove(source)
+			continue
+		}
+		copyErr := copyFileExclusive(source, target)
+		if copyErr == nil || os.IsExist(copyErr) {
+			_ = os.Remove(source)
+			continue
+		}
+		log.Warnf("Failed to migrate legacy RPM metadata cache file for %s: %v", redactURLForLog(baseURL), copyErr)
+	}
+	_ = os.Remove(legacyDir) // only succeeds once empty
 }

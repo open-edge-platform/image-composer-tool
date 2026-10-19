@@ -550,7 +550,25 @@ func setRPMMetadataTestCache(t *testing.T) string {
 	return updatedCfg.CacheDir
 }
 
+func testPrimaryXML(packageName string) string {
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<metadata xmlns="http://linux.duke.edu/metadata/common" xmlns:rpm="http://linux.duke.edu/metadata/rpm" packages="1">
+  <package type="rpm">
+	<location href="%s-1.0-1.x86_64.rpm"/>
+    <name>%s</name>
+    <arch>x86_64</arch>
+    <version epoch="0" ver="1.0" rel="1"/>
+    <checksum type="sha256">abc</checksum>
+    <format><rpm:provides><rpm:entry name="%s"/></rpm:provides></format>
+  </package>
+</metadata>`, packageName, packageName, packageName)
+}
+
 func testRepomdWithPrimary(primary rpmPrimaryReference) []byte {
+	size := ""
+	if primary.Size > 0 {
+		size = fmt.Sprintf("\n    <size>%d</size>", primary.Size)
+	}
 	checksum := ""
 	if primary.Checksum != "" {
 		checksum = fmt.Sprintf("\n    <checksum type=\"%s\">%s</checksum>", primary.ChecksumType, primary.Checksum)
@@ -558,9 +576,19 @@ func testRepomdWithPrimary(primary rpmPrimaryReference) []byte {
 	return []byte(fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <repomd xmlns="http://linux.duke.edu/metadata/repo">
   <data type="primary">
-    <location href="%s"/>%s
+    <location href="%s"/>%s%s
   </data>
-</repomd>`, primary.Href, checksum))
+</repomd>`, primary.Href, checksum, size))
+}
+
+func primaryRefForData(primaryHref string, data []byte) rpmPrimaryReference {
+	sum := sha256.Sum256(data)
+	return rpmPrimaryReference{
+		Href:         primaryHref,
+		ChecksumType: "SHA256",
+		Checksum:     hex.EncodeToString(sum[:]),
+		Size:         int64(len(data)),
+	}
 }
 
 // TestMatchRequestedAdvanced tests advanced scenarios for MatchRequested function
@@ -1793,5 +1821,53 @@ func TestFetchPrimaryReference_ReadsLegacyLocationCache(t *testing.T) {
 	}
 	if n := atomic.LoadInt32(&requests); n != 0 {
 		t.Fatalf("HTTP requests = %d, want 0", n)
+	}
+}
+
+// Providers build the repomd URL as cfg.URL + "/" + "repodata/repomd.xml", so a
+// configured URL with a trailing slash made earlier builds cache the repomd
+// artifacts under the slash-keyed directory. An offline build after the upgrade
+// fetches the primary reference first and must find them there.
+func TestFetchThenParse_MigratesTrailingSlashCacheOffline(t *testing.T) {
+	cacheRoot := setRPMMetadataTestCache(t)
+
+	var requests int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	configuredURL := server.URL + "/"
+	legacyDir := filepath.Join(cacheRoot, "rpm-metadata", rpmMetadataDirName(configuredURL))
+	if err := os.MkdirAll(legacyDir, 0755); err != nil {
+		t.Fatalf("mkdir legacy dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyDir, "primary.location.json"), []byte(`{"primary_href":"primary.xml.gz"}`), 0644); err != nil {
+		t.Fatalf("seed legacy location cache: %v", err)
+	}
+	saveOriginalXML(legacyDir, "primary.xml.gz", configuredURL, compressGzip(t, testPrimaryXML("bash")))
+	staleCache := fmt.Sprintf(`{"version":%d,"metadata_url":%q,"packages":[{"PkgName":"stale-cached-package"}]}`,
+		rpmParsedMetadataCacheVersion-1, configuredURL+"primary.xml.gz")
+	if err := os.WriteFile(filepath.Join(legacyDir, "primary.parsed.json"), []byte(staleCache), 0600); err != nil {
+		t.Fatalf("seed stale parsed cache: %v", err)
+	}
+
+	href, err := FetchPrimaryURL(configuredURL + "/repodata/repomd.xml")
+	if err != nil {
+		t.Fatalf("FetchPrimaryURL() error = %v", err)
+	}
+	pkgs, err := ParseRepositoryMetadata(configuredURL, href, nil)
+	if err != nil {
+		t.Fatalf("ParseRepositoryMetadata() error = %v", err)
+	}
+	if len(pkgs) != 1 || pkgs[0].PkgName != "bash" {
+		t.Fatalf("packages = %+v, want bash", pkgs)
+	}
+	if n := atomic.LoadInt32(&requests); n != 0 {
+		t.Fatalf("HTTP requests = %d, want 0", n)
+	}
+	if _, err := os.Stat(legacyDir); !os.IsNotExist(err) {
+		t.Fatalf("legacy directory should be retired once migrated (err=%v)", err)
 	}
 }
