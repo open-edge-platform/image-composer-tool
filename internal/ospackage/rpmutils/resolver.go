@@ -5,8 +5,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -1175,81 +1173,4 @@ func findMatchingKeyInNeededSet(neededSet map[string]struct{}, depName string) (
 		}
 	}
 	return "", false
-}
-
-// pruneOldCachedFiles removes every previously cached file matching
-// baseFilename_urlHash_*ext (the same naming scheme saveOriginalXML and
-// saveUncompressedXML use) except keepPath, so each (metadataHref, hashKey,
-// ext) key retains at most one cached file on disk instead of growing one
-// timestamped file per fetch/reparse without bound.
-func pruneOldCachedFiles(xmlCacheDir, metadataHref, hashKey, ext, keepPath string) {
-	log := logger.Logger()
-	urlHash := sha256.Sum256([]byte(hashKey))
-	urlHashStr := hex.EncodeToString(urlHash[:])[:8]
-	baseFilename := strings.TrimSuffix(filepath.Base(metadataHref), filepath.Ext(metadataHref))
-
-	matches, err := filepath.Glob(filepath.Join(xmlCacheDir, fmt.Sprintf("%s_%s_*%s", baseFilename, urlHashStr, ext)))
-	if err != nil {
-		log.Warnf("Failed to enumerate old cached metadata files for pruning: %v", err)
-		return
-	}
-	for _, m := range matches {
-		if m == keepPath {
-			continue
-		}
-		if rmErr := os.Remove(m); rmErr != nil {
-			log.Warnf("Failed to prune old cached metadata file %s: %v", m, rmErr)
-		}
-	}
-}
-
-// saveOriginalXML saves the original compressed XML file to cache directory,
-// then prunes any other cached file for the same key so the cache holds at
-// most one raw file per (metadataHref, fullURL) pair.
-func saveOriginalXML(xmlCacheDir, metadataHref, fullURL string, data []byte) {
-	log := logger.Logger()
-
-	// Generate filename from the full metadata URL and timestamp. Hashing fullURL
-	// (not just baseURL) keeps this keyed the same way findLatestCachedRawMetadata
-	// looks it up: a repomd href change must not match a differently-sourced file
-	// that happens to share the same basename.
-	urlHash := sha256.Sum256([]byte(fullURL))
-	urlHashStr := hex.EncodeToString(urlHash[:])[:8]
-	timestamp := time.Now().Format("2006-01-02_15-04-05")
-
-	baseFilename := strings.TrimSuffix(filepath.Base(metadataHref), filepath.Ext(metadataHref))
-	filename := fmt.Sprintf("%s_%s_%s%s", baseFilename, urlHashStr, timestamp, filepath.Ext(metadataHref))
-
-	filePath := filepath.Join(xmlCacheDir, filename)
-	if err := os.WriteFile(filePath, data, 0644); err != nil {
-		log.Warnf("Failed to save original XML file %s: %v", filePath, err)
-		return
-	}
-
-	log.Infof("Saved original XML file: %s", filePath)
-	pruneOldCachedFiles(xmlCacheDir, metadataHref, fullURL, filepath.Ext(metadataHref), filePath)
-}
-
-// saveUncompressedXML saves the uncompressed XML content to cache directory,
-// then prunes any other cached debug copy for the same key.
-func saveUncompressedXML(xmlCacheDir, metadataHref, fullURL string, xmlData []byte) {
-	log := logger.Logger()
-
-	// Generate filename from the full metadata URL and timestamp (see
-	// saveOriginalXML for why fullURL, not just baseURL, is hashed).
-	urlHash := sha256.Sum256([]byte(fullURL))
-	urlHashStr := hex.EncodeToString(urlHash[:])[:8]
-	timestamp := time.Now().Format("2006-01-02_15-04-05")
-
-	baseFilename := strings.TrimSuffix(filepath.Base(metadataHref), filepath.Ext(metadataHref))
-	filename := fmt.Sprintf("%s_%s_%s.xml", baseFilename, urlHashStr, timestamp)
-
-	filePath := filepath.Join(xmlCacheDir, filename)
-	if err := os.WriteFile(filePath, xmlData, 0644); err != nil {
-		log.Warnf("Failed to save uncompressed XML file %s: %v", filePath, err)
-		return
-	}
-
-	log.Infof("Saved uncompressed XML file: %s", filePath)
-	pruneOldCachedFiles(xmlCacheDir, metadataHref, fullURL, ".xml", filePath)
 }
