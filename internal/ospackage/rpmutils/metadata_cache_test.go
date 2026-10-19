@@ -1,14 +1,18 @@
 package rpmutils
 
 import (
+	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func TestExtractPrimaryReferenceFromRepomdData(t *testing.T) {
@@ -420,6 +424,30 @@ func TestCopyFileExclusive(t *testing.T) {
 	}
 }
 
+func TestLoadRPMRawMetadataCache_DetectsSameSizeTamperingWithoutPublishedChecksum(t *testing.T) {
+	cacheDir := t.TempDir()
+	href := "repodata/primary.xml.gz"
+	id := rpmMetadataID("https://repo.example.invalid/base", href)
+	data := []byte("0123456789abcdef")
+	primary := rpmPrimaryReference{Href: href, Size: int64(len(data))}
+
+	if err := saveRPMRawMetadataCache(cacheDir, href, id, primary, data); err != nil {
+		t.Fatalf("saveRPMRawMetadataCache() error = %v", err)
+	}
+	if got, _, err := loadRPMRawMetadataCache(cacheDir, href, id, primary); err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("loadRPMRawMetadataCache() = %q, %v, want the saved payload", got, err)
+	}
+
+	payload := rpmRawMetadataPayloadPath(cacheDir, href, primary, data)
+	if err := os.WriteFile(payload, []byte("fedcba9876543210"), 0644); err != nil {
+		t.Fatalf("failed to overwrite payload: %v", err)
+	}
+	_, _, err := loadRPMRawMetadataCache(cacheDir, href, id, primary)
+	if err == nil || !strings.Contains(err.Error(), "content digest mismatch") {
+		t.Fatalf("loadRPMRawMetadataCache() error = %v, want a content digest mismatch", err)
+	}
+}
+
 func TestExtractPrimaryReference_RejectsMalformedSizes(t *testing.T) {
 	for _, tt := range []struct{ name, element string }{
 		{name: "non-numeric size", element: "<size>abc</size>"},
@@ -593,5 +621,269 @@ func TestMigrateLegacyRPMMetadataDir_KeepsLegacyWhenNoSafePublication(t *testing
 	leftovers, _ := filepath.Glob(filepath.Join(cacheDir, legacyCopyTempPrefix+"*"))
 	if len(leftovers) != 0 {
 		t.Fatalf("temporary copies left behind: %v", leftovers)
+	}
+}
+
+func TestRPMPrimaryReferenceMatches(t *testing.T) {
+	base := rpmPrimaryReference{
+		Href: "repodata/p.xml.gz", ChecksumType: "SHA256", Checksum: "abc", Size: 10,
+		OpenChecksumType: "SHA256", OpenChecksum: "def", OpenSize: 20,
+	}
+	tests := []struct {
+		name   string
+		mutate func(ref *rpmPrimaryReference)
+		want   bool
+	}{
+		{name: "identical", mutate: func(ref *rpmPrimaryReference) {}, want: true},
+		{name: "checksum case only", mutate: func(ref *rpmPrimaryReference) { ref.Checksum = "ABC"; ref.ChecksumType = "sha256" }, want: true},
+		{name: "href", mutate: func(ref *rpmPrimaryReference) { ref.Href = "repodata/q.xml.gz" }},
+		{name: "checksum", mutate: func(ref *rpmPrimaryReference) { ref.Checksum = "abd" }},
+		{name: "size", mutate: func(ref *rpmPrimaryReference) { ref.Size = 11 }},
+		{name: "open checksum", mutate: func(ref *rpmPrimaryReference) { ref.OpenChecksum = "deg" }},
+		{name: "open size", mutate: func(ref *rpmPrimaryReference) { ref.OpenSize = 21 }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			other := base
+			tt.mutate(&other)
+			if got := base.matches(other); got != tt.want {
+				t.Fatalf("matches() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+
+	// Without a published checksum, a size change must still be detected.
+	sizeOnly := rpmPrimaryReference{Href: "repodata/p.xml.gz", Size: 10}
+	if sizeOnly.matches(rpmPrimaryReference{Href: "repodata/p.xml.gz", Size: 11}) {
+		t.Fatalf("checksum-less references with different sizes must not match")
+	}
+}
+
+func TestLoadRPMRawMetadataCache_RejectsChangedOpenChecksum(t *testing.T) {
+	cacheDir := t.TempDir()
+	href := "repodata/primary.xml.gz"
+	data := compressGzip(t, testPrimaryXML("bash"))
+	primary := primaryRefForData(href, data)
+	primary.OpenChecksumType, primary.OpenChecksum = "SHA256", "aaaa"
+	if err := saveRPMRawMetadataCache(cacheDir, href, "id", primary, data); err != nil {
+		t.Fatalf("saveRPMRawMetadataCache() error = %v", err)
+	}
+
+	changed := primary
+	changed.OpenChecksum = "bbbb"
+	if _, _, err := loadRPMRawMetadataCache(cacheDir, href, "id", changed); err == nil ||
+		!strings.Contains(err.Error(), "primary reference mismatch") {
+		t.Fatalf("error = %v, want primary reference mismatch", err)
+	}
+	if _, _, err := loadRPMRawMetadataCache(cacheDir, href, "id", primary); err != nil {
+		t.Fatalf("matching reference should load: %v", err)
+	}
+}
+
+func TestLoadRPMRawMetadataCache_EmptyReferenceVerifiesManifestChecksum(t *testing.T) {
+	cacheDir := t.TempDir()
+	href := "repodata/primary.xml.gz"
+	data := compressGzip(t, testPrimaryXML("bash"))
+	primary := primaryRefForData(href, data)
+	if err := saveRPMRawMetadataCache(cacheDir, href, "id", primary, data); err != nil {
+		t.Fatalf("saveRPMRawMetadataCache() error = %v", err)
+	}
+	if _, _, err := loadRPMRawMetadataCache(cacheDir, href, "id", rpmPrimaryReference{}); err != nil {
+		t.Fatalf("intact payload should load: %v", err)
+	}
+
+	metaPath := rpmRawMetadataManifestPath(cacheDir, href)
+	var cache rpmRawMetadataCache
+	metaData, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	if err := json.Unmarshal(metaData, &cache); err != nil {
+		t.Fatalf("unmarshal manifest: %v", err)
+	}
+	dataPath := filepath.Join(cacheDir, cache.DataFile)
+	corrupt := bytes.Repeat([]byte{'x'}, len(data))
+	if err := os.WriteFile(dataPath, corrupt, 0644); err != nil {
+		t.Fatalf("corrupt payload: %v", err)
+	}
+
+	if _, _, err := loadRPMRawMetadataCache(cacheDir, href, "id", rpmPrimaryReference{}); err == nil ||
+		!strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("error = %v, want checksum mismatch for a corrupted payload", err)
+	}
+}
+
+func TestSaveRPMRawMetadataCache_PrunesSupersededPayloads(t *testing.T) {
+	cacheDir := t.TempDir()
+	href := "repodata/primary.xml.gz"
+	save := func(name string) string {
+		data := compressGzip(t, testPrimaryXML(name))
+		if err := saveRPMRawMetadataCache(cacheDir, href, "id", primaryRefForData(href, data), data); err != nil {
+			t.Fatalf("saveRPMRawMetadataCache(%s) error = %v", name, err)
+		}
+		metaPath := rpmRawMetadataManifestPath(cacheDir, href)
+		var manifest rpmRawMetadataCache
+		raw, err := os.ReadFile(metaPath)
+		if err != nil {
+			t.Fatalf("read manifest: %v", err)
+		}
+		if err := json.Unmarshal(raw, &manifest); err != nil {
+			t.Fatalf("unmarshal manifest: %v", err)
+		}
+		return filepath.Join(cacheDir, manifest.DataFile)
+	}
+	age := func(path string, d time.Duration) {
+		old := time.Now().Add(-d)
+		if err := os.Chtimes(path, old, old); err != nil {
+			t.Fatalf("chtimes %s: %v", path, err)
+		}
+	}
+
+	stale := save("bash")
+	age(stale, time.Hour)
+	recent := save("curl") // supersedes stale; stays referenced until it is superseded itself
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("an old superseded payload should be pruned (err=%v)", err)
+	}
+
+	current := save("coreutils") // supersedes recent, which is still inside the grace period
+	if _, err := os.Stat(recent); err != nil {
+		t.Fatalf("a recently superseded payload may still be in use and must be kept: %v", err)
+	}
+	if _, err := os.Stat(current); err != nil {
+		t.Fatalf("the current payload must be kept: %v", err)
+	}
+
+	// A payload for another href with the same extension is never touched.
+	otherData := compressGzip(t, testPrimaryXML("other"))
+	if err := saveRPMRawMetadataCache(cacheDir, "repodata/other.xml.gz", "id2", primaryRefForData("repodata/other.xml.gz", otherData), otherData); err != nil {
+		t.Fatalf("saveRPMRawMetadataCache(other) error = %v", err)
+	}
+	age(recent, time.Hour)
+	save("coreutils") // same revision again: nothing new is superseded except the aged one
+	if _, err := os.Stat(recent); !os.IsNotExist(err) {
+		t.Fatalf("a superseded payload past the grace period should be pruned (err=%v)", err)
+	}
+	if matches, _ := filepath.Glob(filepath.Join(cacheDir, "primary_*.gz")); len(matches) != 2 {
+		t.Fatalf("payloads left = %v, want the current payload and the other href's", matches)
+	}
+}
+
+// ageRawPayload backdates the payload saved for primary past the grace period.
+func ageRawPayload(t *testing.T, cacheDir, href string, primary rpmPrimaryReference, data []byte) string {
+	t.Helper()
+	path := rpmRawMetadataPayloadPath(cacheDir, href, primary, data)
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatalf("age %s: %v", path, err)
+	}
+	return path
+}
+
+// A reader can select a payload from the manifest just before a writer publishes
+// a newer revision and prunes it, however long the payload had been current. The
+// reader must answer for the revision that is current by then.
+func TestLoadRPMRawMetadataCache_PayloadPrunedAfterManifestRead(t *testing.T) {
+	cacheDir := t.TempDir()
+	href := "repodata/primary.xml.gz"
+	dataA := compressGzip(t, testPrimaryXML("bash"))
+	dataB := compressGzip(t, testPrimaryXML("coreutils"))
+	primaryA, primaryB := primaryRefForData(href, dataA), primaryRefForData(href, dataB)
+
+	if err := saveRPMRawMetadataCache(cacheDir, href, "id", primaryA, dataA); err != nil {
+		t.Fatalf("save A: %v", err)
+	}
+	payloadA := ageRawPayload(t, cacheDir, href, primaryA, dataA)
+
+	published := false
+	afterRawManifestRead = func() {
+		if published {
+			return
+		}
+		published = true
+		if err := saveRPMRawMetadataCache(cacheDir, href, "id", primaryB, dataB); err != nil {
+			t.Errorf("save B: %v", err)
+		}
+	}
+	t.Cleanup(func() { afterRawManifestRead = func() {} })
+
+	got, _, err := loadRPMRawMetadataCache(cacheDir, href, "id", rpmPrimaryReference{})
+	if err != nil {
+		t.Fatalf("loadRPMRawMetadataCache() error = %v", err)
+	}
+	if _, statErr := os.Stat(payloadA); !os.IsNotExist(statErr) {
+		t.Fatalf("test setup: the aged payload should have been pruned (err=%v)", statErr)
+	}
+	if !bytes.Equal(got, dataB) {
+		t.Fatalf("loaded the superseded revision, want the current one")
+	}
+}
+
+// A pruner can look at an old payload and, before removing it, have another
+// build republish the same revision. Saves of one href are serialized, so the
+// republished payload must still be there and the manifest must not dangle.
+func TestSaveRPMRawMetadataCache_PruneDoesNotRemoveRepublishedPayload(t *testing.T) {
+	cacheDir := t.TempDir()
+	href := "repodata/primary.xml.gz"
+	dataA := compressGzip(t, testPrimaryXML("bash"))
+	dataB := compressGzip(t, testPrimaryXML("coreutils"))
+	primaryA, primaryB := primaryRefForData(href, dataA), primaryRefForData(href, dataB)
+
+	if err := saveRPMRawMetadataCache(cacheDir, href, "id", primaryA, dataA); err != nil {
+		t.Fatalf("save A: %v", err)
+	}
+	payloadA := ageRawPayload(t, cacheDir, href, primaryA, dataA)
+
+	var republished sync.WaitGroup
+	beforeRawPayloadPrune = func(path string) {
+		if path != payloadA {
+			return
+		}
+		// The pruning save must still hold the href's lock, so a second
+		// descriptor cannot take it; this is what makes a concurrent republish
+		// wait for the removal below.
+		lockFile, err := os.OpenFile(rpmRawMetadataLockPath(cacheDir, href), os.O_RDWR, 0)
+		if err != nil {
+			t.Errorf("open lock file: %v", err)
+			return
+		}
+		defer lockFile.Close()
+		if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != syscall.EWOULDBLOCK {
+			t.Errorf("flock during prune = %v, want EWOULDBLOCK (lock not held)", err)
+		}
+		republished.Add(1)
+		go func() {
+			defer republished.Done()
+			if err := saveRPMRawMetadataCache(cacheDir, href, "id", primaryA, dataA); err != nil {
+				t.Errorf("republish A: %v", err)
+			}
+		}()
+	}
+	t.Cleanup(func() { beforeRawPayloadPrune = func(string) {} })
+
+	if err := saveRPMRawMetadataCache(cacheDir, href, "id", primaryB, dataB); err != nil {
+		t.Fatalf("save B: %v", err)
+	}
+	republished.Wait()
+
+	metaPath := rpmRawMetadataManifestPath(cacheDir, href)
+	metaData, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	var cache rpmRawMetadataCache
+	if err := json.Unmarshal(metaData, &cache); err != nil {
+		t.Fatalf("unmarshal manifest: %v", err)
+	}
+	got, _, err := loadRPMRawMetadataCache(cacheDir, href, "id", cache.Primary)
+	if err != nil {
+		t.Fatalf("manifest points at a payload that cannot be loaded: %v", err)
+	}
+	want := dataB
+	if cache.Primary.matches(primaryA) {
+		want = dataA
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("cached data does not belong to the revision recorded in the manifest")
 	}
 }

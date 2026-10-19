@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -16,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -1869,5 +1871,102 @@ func TestFetchThenParse_MigratesTrailingSlashCacheOffline(t *testing.T) {
 	}
 	if _, err := os.Stat(legacyDir); !os.IsNotExist(err) {
 		t.Fatalf("legacy directory should be retired once migrated (err=%v)", err)
+	}
+}
+
+func TestRPMRawMetadataCacheWriteFailureIsReported(t *testing.T) {
+	setRPMMetadataTestCache(t)
+
+	primaryHref := "repodata/primary.xml.gz"
+	data := compressGzip(t, testPrimaryXML("bash"))
+	primary := primaryRefForData(primaryHref, data)
+	cacheRoot := t.TempDir()
+	cacheDir := filepath.Join(cacheRoot, "not-a-directory")
+	if err := os.WriteFile(cacheDir, []byte("x"), 0644); err != nil {
+		t.Fatalf("failed to create file in place of cache directory: %v", err)
+	}
+
+	err := saveRPMRawMetadataCache(cacheDir, primaryHref, rpmMetadataID("https://example.invalid/repo", primaryHref), primary, data)
+	if err == nil {
+		t.Fatalf("expected cache write failure")
+	}
+	if !strings.Contains(err.Error(), "failed to write rpm raw metadata") {
+		t.Fatalf("error = %q, want raw metadata write context", err.Error())
+	}
+}
+
+func TestRPMRawMetadataConcurrentWritersKeepCoherentCache(t *testing.T) {
+	primaryHref := "repodata/primary.xml.gz"
+	dataA := compressGzip(t, testPrimaryXML("bash"))
+	dataB := compressGzip(t, testPrimaryXML("coreutils"))
+
+	tests := []struct {
+		name  string
+		refFn func(data []byte) rpmPrimaryReference
+	}{
+		{name: "checksum published", refFn: func(data []byte) rpmPrimaryReference { return primaryRefForData(primaryHref, data) }},
+		{name: "checksum not published", refFn: func(data []byte) rpmPrimaryReference {
+			return rpmPrimaryReference{Href: primaryHref, Size: int64(len(data))}
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setRPMMetadataTestCache(t)
+
+			baseURL := "https://repo.example.invalid/base"
+			primaryA, primaryB := tt.refFn(dataA), tt.refFn(dataB)
+			cacheDir, err := rpmMetadataCacheDir(baseURL)
+			if err != nil {
+				t.Fatalf("rpmMetadataCacheDir() error = %v", err)
+			}
+			if err := os.MkdirAll(cacheDir, 0755); err != nil {
+				t.Fatalf("failed to create cache dir: %v", err)
+			}
+
+			var wg sync.WaitGroup
+			errCh := make(chan error, 20)
+			for i := 0; i < 20; i++ {
+				wg.Add(1)
+				go func(i int) {
+					defer wg.Done()
+					if i%2 == 0 {
+						errCh <- saveRPMRawMetadataCache(cacheDir, primaryHref, rpmMetadataID(baseURL, primaryHref), primaryA, dataA)
+						return
+					}
+					errCh <- saveRPMRawMetadataCache(cacheDir, primaryHref, rpmMetadataID(baseURL, primaryHref), primaryB, dataB)
+				}(i)
+			}
+			wg.Wait()
+			close(errCh)
+			for err := range errCh {
+				if err != nil {
+					t.Fatalf("concurrent cache save failed: %v", err)
+				}
+			}
+
+			metaPath := rpmRawMetadataManifestPath(cacheDir, primaryHref)
+			metaData, err := os.ReadFile(metaPath)
+			if err != nil {
+				t.Fatalf("read raw metadata manifest after concurrent writes: %v", err)
+			}
+			var cache rpmRawMetadataCache
+			if err := json.Unmarshal(metaData, &cache); err != nil {
+				t.Fatalf("unmarshal raw metadata manifest after concurrent writes: %v", err)
+			}
+			got, _, err := loadRPMRawMetadataCache(cacheDir, primaryHref, rpmMetadataID(baseURL, primaryHref), cache.Primary)
+			if err != nil {
+				t.Fatalf("loadRPMRawMetadataCache() after concurrent writes error = %v", err)
+			}
+			// Without a published checksum the reference alone cannot tell the two
+			// revisions apart (same href, and possibly the same size), so identify
+			// the winner by the payload file the manifest names.
+			want := dataA
+			if cache.DataFile == filepath.Base(rpmRawMetadataPayloadPath(cacheDir, primaryHref, primaryB, dataB)) {
+				want = dataB
+			}
+			if !bytes.Equal(got, want) {
+				t.Fatalf("cached data does not belong to the revision recorded in the manifest")
+			}
+		})
 	}
 }

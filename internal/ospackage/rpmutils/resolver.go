@@ -459,6 +459,10 @@ func ParseRepositoryMetadata(baseURL, metadataHref string, packageFilter []strin
 
 		// Save the original compressed file
 		if xmlCacheDir != "" {
+			metadataID := rpmMetadataID(baseURL, metadataHref)
+			if saveErr := saveRPMRawMetadataCache(xmlCacheDir, metadataHref, metadataID, primary, compressedData); saveErr != nil {
+				log.Warnf("Failed to save RPM primary metadata cache for %s; offline cache incomplete: %v", redactURLForLog(baseURL), saveErr)
+			}
 			saveOriginalXML(xmlCacheDir, metadataHref, fullURL, compressedData)
 		}
 
