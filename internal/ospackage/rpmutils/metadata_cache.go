@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -20,13 +21,18 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 )
 
+type rpmPrimaryLocationCache struct {
+	PrimaryHref string              `json:"primary_href"`
+	Primary     rpmPrimaryReference `json:"primary"`
+}
+
 type rpmPrimaryReference struct {
-	Href string
+	Href string `json:"href"`
 	// ChecksumType is the repomd.xml checksum type in its canonical upper-case
 	// form (for example "SHA256"); repomd.xml itself usually spells it in
 	// lower case.
-	ChecksumType string
-	Checksum     string
+	ChecksumType string `json:"checksum_type,omitempty"`
+	Checksum     string `json:"checksum,omitempty"`
 }
 
 func (ref rpmPrimaryReference) isPartialChecksum() bool {
@@ -228,6 +234,50 @@ func writeFileAtomic(filePath string, data []byte, perm os.FileMode) error {
 	return nil
 }
 
+func saveRPMPrimaryLocationCache(cacheFile string, primary rpmPrimaryReference) error {
+	cache := rpmPrimaryLocationCache{PrimaryHref: primary.Href, Primary: primary}
+
+	data, err := json.Marshal(cache)
+	if err != nil {
+		return fmt.Errorf("failed to marshal rpm primary location cache: %w", err)
+	}
+
+	if err := writeFileAtomic(cacheFile, data, 0644); err != nil {
+		return fmt.Errorf("failed to write rpm primary location cache: %w", err)
+	}
+
+	return nil
+}
+
+func loadRPMPrimaryReferenceCache(cacheFile string) (rpmPrimaryReference, error) {
+	data, err := os.ReadFile(cacheFile)
+	if err != nil {
+		return rpmPrimaryReference{}, err
+	}
+
+	var cache rpmPrimaryLocationCache
+	if err := json.Unmarshal(data, &cache); err != nil {
+		return rpmPrimaryReference{}, fmt.Errorf("invalid rpm primary location cache %s: %w", cacheFile, err)
+	}
+	if cache.Primary.isPartialChecksum() {
+		return rpmPrimaryReference{}, fmt.Errorf("partial checksum in primary location cache %s", cacheFile)
+	}
+	if cache.Primary.Href == "" && cache.Primary.Checksum != "" {
+		return rpmPrimaryReference{}, fmt.Errorf("checksum without href in primary location cache %s", cacheFile)
+	}
+	if cache.Primary.Href != "" {
+		if cache.PrimaryHref != "" && cache.PrimaryHref != cache.Primary.Href {
+			return rpmPrimaryReference{}, fmt.Errorf("primary location cache %s disagrees with itself: primary_href %q, primary.href %q",
+				cacheFile, cache.PrimaryHref, cache.Primary.Href)
+		}
+		return cache.Primary, nil
+	}
+	if cache.PrimaryHref == "" {
+		return rpmPrimaryReference{}, fmt.Errorf("empty primary href in cache %s", cacheFile)
+	}
+	return rpmPrimaryReference{Href: cache.PrimaryHref}, nil
+}
+
 func saveRepomdXMLCache(xmlCacheDir, baseURL string, repomdData []byte) {
 	log := logger.Logger()
 	stablePath := filepath.Join(xmlCacheDir, "repomd.xml")
@@ -247,21 +297,21 @@ func saveRepomdXMLCache(xmlCacheDir, baseURL string, repomdData []byte) {
 	}
 }
 
-func loadPrimaryLocationFromCachedRepomd(xmlCacheDir string) (string, error) {
+func loadPrimaryReferenceFromCachedRepomd(xmlCacheDir string) (rpmPrimaryReference, error) {
 	stablePath := filepath.Join(xmlCacheDir, "repomd.xml")
 	if data, err := os.ReadFile(stablePath); err == nil {
 		if primary, parseErr := extractPrimaryReferenceFromRepomdData(data); parseErr == nil {
-			return primary.Href, nil
+			return primary, nil
 		}
 	}
 
 	pattern := filepath.Join(xmlCacheDir, "repomd_*.xml")
 	files, err := filepath.Glob(pattern)
 	if err != nil {
-		return "", fmt.Errorf("glob %q: %w", pattern, err)
+		return rpmPrimaryReference{}, fmt.Errorf("glob %q: %w", pattern, err)
 	}
 	if len(files) == 0 {
-		return "", fmt.Errorf("no cached repomd files found")
+		return rpmPrimaryReference{}, fmt.Errorf("no cached repomd files found")
 	}
 
 	// Repomd cache file names include a sortable timestamp suffix.
@@ -274,11 +324,11 @@ func loadPrimaryLocationFromCachedRepomd(xmlCacheDir string) (string, error) {
 
 		primary, parseErr := extractPrimaryReferenceFromRepomdData(data)
 		if parseErr == nil {
-			return primary.Href, nil
+			return primary, nil
 		}
 	}
 
-	return "", fmt.Errorf("failed to parse primary reference from cached repomd files")
+	return rpmPrimaryReference{}, fmt.Errorf("failed to parse primary reference from cached repomd files")
 }
 
 func extractPrimaryReferenceFromRepomdData(repomdData []byte) (rpmPrimaryReference, error) {

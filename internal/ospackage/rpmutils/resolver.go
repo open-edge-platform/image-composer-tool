@@ -287,10 +287,6 @@ type rpmParsedMetadataCache struct {
 	Packages    []ospackage.PackageInfo `json:"packages"`
 }
 
-type rpmPrimaryLocationCache struct {
-	PrimaryHref string `json:"primary_href"`
-}
-
 func loadRPMParsedMetadataCache(cacheFile string) (*rpmParsedMetadataCache, error) {
 	data, err := os.ReadFile(cacheFile)
 	if err != nil {
@@ -319,39 +315,6 @@ func saveRPMParsedMetadataCache(cacheFile, metadataURL string, pkgs []ospackage.
 
 	if err := writeFileAtomic(cacheFile, data, 0600); err != nil {
 		return fmt.Errorf("failed to write rpm metadata cache: %w", err)
-	}
-
-	return nil
-}
-
-func loadRPMPrimaryLocationCache(cacheFile string) (string, error) {
-	data, err := os.ReadFile(cacheFile)
-	if err != nil {
-		return "", err
-	}
-
-	var cache rpmPrimaryLocationCache
-	if err := json.Unmarshal(data, &cache); err != nil {
-		return "", fmt.Errorf("invalid rpm primary location cache: %w", err)
-	}
-
-	if cache.PrimaryHref == "" {
-		return "", fmt.Errorf("empty primary href in cache")
-	}
-
-	return cache.PrimaryHref, nil
-}
-
-func saveRPMPrimaryLocationCache(cacheFile, href string) error {
-	cache := rpmPrimaryLocationCache{PrimaryHref: href}
-
-	data, err := json.Marshal(cache)
-	if err != nil {
-		return fmt.Errorf("failed to marshal rpm primary location cache: %w", err)
-	}
-
-	if err := writeFileAtomic(cacheFile, data, 0644); err != nil {
-		return fmt.Errorf("failed to write rpm primary location cache: %w", err)
 	}
 
 	return nil
@@ -800,9 +763,25 @@ func decodeAndParsePrimaryXML(compressedData []byte, metadataHref, baseURL strin
 	return infos, xmlBuffer.Bytes(), nil
 }
 
-// FetchPrimaryURL downloads repomd.xml and returns the href of the primary metadata.
-// It also saves the repomd.xml file to cache for debugging purposes.
+// FetchPrimaryReference fetches the primary metadata reference from repomd.xml,
+// returning the complete reference: the location href plus its checksum type
+// and value. FetchPrimaryURL fetches and caches the same reference but returns
+// only its href, so callers that need to verify the download should use this.
+func FetchPrimaryReference(repomdURL string) (rpmPrimaryReference, error) {
+	return fetchPrimaryReference(repomdURL)
+}
+
+// FetchPrimaryURL fetches the primary metadata URL from repomd.xml.
+// Deprecated: Use FetchPrimaryReference to preserve checksum information.
 func FetchPrimaryURL(repomdURL string) (string, error) {
+	primary, err := fetchPrimaryReference(repomdURL)
+	if err != nil {
+		return "", err
+	}
+	return primary.Href, nil
+}
+
+func fetchPrimaryReference(repomdURL string) (rpmPrimaryReference, error) {
 	log := logger.Logger()
 	baseURL := strings.TrimSuffix(repomdURL, "/repodata/repomd.xml")
 	cacheEnabled := !system.IsLiveInstallerExecution()
@@ -827,41 +806,40 @@ func FetchPrimaryURL(repomdURL string) (string, error) {
 	}
 	if xmlCacheDir != "" {
 		primaryLocationCacheFile := filepath.Join(xmlCacheDir, "primary.location.json")
-		if repomdCachedHref, repomdCacheErr := loadPrimaryLocationFromCachedRepomd(xmlCacheDir); repomdCacheErr == nil {
-			if saveErr := saveRPMPrimaryLocationCache(primaryLocationCacheFile, repomdCachedHref); saveErr != nil {
+		if repomdCachedPrimary, repomdCacheErr := loadPrimaryReferenceFromCachedRepomd(xmlCacheDir); repomdCacheErr == nil {
+			if saveErr := saveRPMPrimaryLocationCache(primaryLocationCacheFile, repomdCachedPrimary); saveErr != nil {
 				log.Warnf("Failed to save primary location cache %s; offline cache incomplete: %v", primaryLocationCacheFile, saveErr)
 			}
 			log.Infof("Using primary metadata location from cached repomd for %s", redactURLForLog(baseURL))
-			return repomdCachedHref, nil
+			return repomdCachedPrimary, nil
 		}
 
-		if cachedHref, cacheErr := loadRPMPrimaryLocationCache(primaryLocationCacheFile); cacheErr == nil {
+		if cachedPrimary, cacheErr := loadRPMPrimaryReferenceCache(primaryLocationCacheFile); cacheErr == nil {
 			log.Infof("Using cached primary metadata location for %s", redactURLForLog(baseURL))
-			return cachedHref, nil
+			return cachedPrimary, nil
 		}
 	}
 
 	client := network.NewSecureHTTPClient()
 	repomdData, err := fetchURLWithRetry(runctx.Context(), client, repomdURL, "repomd.xml")
 	if err != nil {
-		return "", err
+		return rpmPrimaryReference{}, err
 	}
 
 	primary, err := extractPrimaryReferenceFromRepomdData(repomdData)
 	if err != nil {
-		return "", fmt.Errorf("parsing primary reference from %s: %w", redactURLForLog(repomdURL), err)
+		return rpmPrimaryReference{}, fmt.Errorf("parsing primary reference from %s: %w", redactURLForLog(repomdURL), err)
 	}
-	href := primary.Href
 
 	if xmlCacheDir != "" {
 		saveRepomdXMLCache(xmlCacheDir, baseURL, repomdData)
 		primaryLocationCacheFile := filepath.Join(xmlCacheDir, "primary.location.json")
-		if saveErr := saveRPMPrimaryLocationCache(primaryLocationCacheFile, href); saveErr != nil {
+		if saveErr := saveRPMPrimaryLocationCache(primaryLocationCacheFile, primary); saveErr != nil {
 			log.Warnf("Failed to save primary location cache %s; offline cache incomplete: %v", primaryLocationCacheFile, saveErr)
 		}
 	}
 
-	return href, nil
+	return primary, nil
 }
 
 func GetRepoMetaDataURL(baseURL, repoMetaXmlPath string) string {
