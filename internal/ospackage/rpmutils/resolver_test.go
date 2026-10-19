@@ -21,6 +21,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/klauspost/compress/zstd"
+
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/resolvertest"
@@ -538,6 +540,25 @@ func compressGzip(t *testing.T, content string) []byte {
 	return buf.Bytes()
 }
 
+func compressZstd(t *testing.T, content string) []byte {
+	t.Helper()
+
+	var buf bytes.Buffer
+	writer, err := zstd.NewWriter(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Write([]byte(content)); err != nil {
+		_ = writer.Close()
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	return buf.Bytes()
+}
+
 // setRPMMetadataTestCache points the process-wide config at a temporary cache
 // directory, so tests using it must not run in parallel.
 func setRPMMetadataTestCache(t *testing.T) string {
@@ -566,6 +587,10 @@ func testPrimaryXML(packageName string) string {
 </metadata>`, packageName, packageName, packageName)
 }
 
+func testRepomd(primaryHref string) []byte {
+	return testRepomdWithPrimary(rpmPrimaryReference{Href: primaryHref})
+}
+
 func testRepomdWithPrimary(primary rpmPrimaryReference) []byte {
 	size := ""
 	if primary.Size > 0 {
@@ -591,6 +616,65 @@ func primaryRefForData(primaryHref string, data []byte) rpmPrimaryReference {
 		Checksum:     hex.EncodeToString(sum[:]),
 		Size:         int64(len(data)),
 	}
+}
+
+func seedRPMRawMetadataCache(t *testing.T, baseURL, primaryHref string, data []byte) string {
+	t.Helper()
+	return seedRPMRawMetadataCacheWithPrimary(t, baseURL, primaryRefForData(primaryHref, data), data)
+}
+
+func seedRPMRawMetadataCacheWithPrimary(t *testing.T, baseURL string, primary rpmPrimaryReference, data []byte) string {
+	t.Helper()
+
+	cacheDir, err := rpmMetadataCacheDir(baseURL)
+	if err != nil {
+		t.Fatalf("rpmMetadataCacheDir() error = %v", err)
+	}
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		t.Fatalf("failed to create metadata cache dir: %v", err)
+	}
+	if err := writeFileAtomic(filepath.Join(cacheDir, "repomd.xml"), testRepomdWithPrimary(primary), 0644); err != nil {
+		t.Fatalf("failed to seed repomd cache: %v", err)
+	}
+	if err := saveRPMRawMetadataCache(cacheDir, primary.Href, rpmMetadataID(baseURL, primary.Href), primary, data); err != nil {
+		t.Fatalf("failed to seed raw metadata cache: %v", err)
+	}
+
+	return cacheDir
+}
+
+func seedCorruptRPMRawMetadataCache(t *testing.T, baseURL string, primary rpmPrimaryReference, data []byte) string {
+	t.Helper()
+
+	cacheDir, err := rpmMetadataCacheDir(baseURL)
+	if err != nil {
+		t.Fatalf("rpmMetadataCacheDir() error = %v", err)
+	}
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		t.Fatalf("failed to create metadata cache dir: %v", err)
+	}
+	if err := writeFileAtomic(filepath.Join(cacheDir, "repomd.xml"), testRepomdWithPrimary(primary), 0644); err != nil {
+		t.Fatalf("failed to seed repomd cache: %v", err)
+	}
+	dataPath := rpmRawMetadataPayloadPath(cacheDir, primary.Href, primary, data)
+	metaPath := rpmRawMetadataManifestPath(cacheDir, primary.Href)
+	if err := writeFileAtomic(dataPath, data, 0644); err != nil {
+		t.Fatalf("failed to seed corrupt raw metadata: %v", err)
+	}
+	cache := rpmRawMetadataCache{
+		MetadataID: rpmMetadataID(baseURL, primary.Href),
+		Primary:    primary,
+		DataFile:   filepath.Base(dataPath),
+	}
+	metaData, err := json.Marshal(cache)
+	if err != nil {
+		t.Fatalf("failed to marshal corrupt raw metadata manifest: %v", err)
+	}
+	if err := writeFileAtomic(metaPath, metaData, 0644); err != nil {
+		t.Fatalf("failed to seed corrupt raw metadata manifest: %v", err)
+	}
+
+	return cacheDir
 }
 
 // TestMatchRequestedAdvanced tests advanced scenarios for MatchRequested function
@@ -1075,7 +1159,7 @@ func TestParseRepositoryMetadata_MigratesLegacyRawCacheOffline(t *testing.T) {
 	}
 
 	// The raw file must now also exist under the current (fullURL-keyed) name.
-	if _, findErr := findLatestCachedRawMetadata(cacheDir, "primary.xml.gz", fullURL); findErr != nil {
+	if _, _, findErr := findLatestCachedRawMetadata(cacheDir, "primary.xml.gz", fullURL, ""); findErr != nil {
 		t.Errorf("expected the legacy raw cache to be migrated to the current key, lookup error: %v", findErr)
 	}
 }
@@ -1342,7 +1426,265 @@ func TestFetchPrimaryURL_PrefersStableRepomdOverStaleLocationCache(t *testing.T)
 	}
 }
 
+func TestRPMMetadataCacheHitUsesRawPrimaryWithoutHTTP(t *testing.T) {
+	setRPMMetadataTestCache(t)
+
+	var requestCount int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requestCount, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	primaryHref := "repodata/primary.xml.gz"
+	cacheDir := seedRPMRawMetadataCache(t, server.URL, primaryHref, compressGzip(t, testPrimaryXML("bash")))
+	if err := os.Remove(filepath.Join(cacheDir, "primary.parsed.json")); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("failed to remove parsed cache: %v", err)
+	}
+	if err := os.Remove(filepath.Join(cacheDir, "primary.location.json")); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("failed to remove location cache: %v", err)
+	}
+
+	href, err := FetchPrimaryURL(server.URL + "/repodata/repomd.xml")
+	if err != nil {
+		t.Fatalf("FetchPrimaryURL() from cached repomd error = %v", err)
+	}
+	if href != primaryHref {
+		t.Fatalf("FetchPrimaryURL() href = %q, want %q", href, primaryHref)
+	}
+
+	pkgs, err := ParseRepositoryMetadata(server.URL, href, nil)
+	if err != nil {
+		t.Fatalf("ParseRepositoryMetadata() from raw cache error = %v", err)
+	}
+	if len(pkgs) != 1 || pkgs[0].PkgName != "bash" {
+		t.Fatalf("cached packages = %+v, want bash", pkgs)
+	}
+	if atomic.LoadInt32(&requestCount) != 0 {
+		t.Fatalf("HTTP requests = %d, want 0", atomic.LoadInt32(&requestCount))
+	}
+}
+
+func TestRPMMetadataOnlinePopulateThenOfflineRawCacheReuse(t *testing.T) {
+	cacheRoot := setRPMMetadataTestCache(t)
+
+	var requestCount int32
+	primaryHref := "repodata/primary.xml.gz"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requestCount, 1)
+		switch r.URL.Path {
+		case "/repodata/repomd.xml":
+			_, _ = w.Write(testRepomd(primaryHref))
+		case "/repodata/primary.xml.gz":
+			_, _ = w.Write(compressGzip(t, testPrimaryXML("bash")))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+
+	href, err := FetchPrimaryURL(server.URL + "/repodata/repomd.xml")
+	if err != nil {
+		t.Fatalf("first FetchPrimaryURL() error = %v", err)
+	}
+	pkgs, err := ParseRepositoryMetadata(server.URL, href, nil)
+	if err != nil {
+		t.Fatalf("first ParseRepositoryMetadata() error = %v", err)
+	}
+	if len(pkgs) != 1 {
+		t.Fatalf("first package count = %d, want 1", len(pkgs))
+	}
+
+	cacheDir := filepath.Join(cacheRoot, "rpm-metadata", generateRPMMetadataDir(server.URL))
+	if _, err := os.Stat(filepath.Join(cacheDir, "repomd.xml")); err != nil {
+		t.Fatalf("stable repomd cache missing: %v", err)
+	}
+	metaPath := rpmRawMetadataManifestPath(cacheDir, primaryHref)
+	if _, err := os.Stat(metaPath); err != nil {
+		t.Fatalf("stable primary cache manifest %s missing: %v", metaPath, err)
+	}
+	metaData, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("read stable primary cache manifest: %v", err)
+	}
+	var rawCache rpmRawMetadataCache
+	if err := json.Unmarshal(metaData, &rawCache); err != nil {
+		t.Fatalf("unmarshal stable primary cache manifest: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(cacheDir, rawCache.DataFile)); err != nil {
+		t.Fatalf("stable primary cache payload %s missing: %v", rawCache.DataFile, err)
+	}
+	fullURLRawHash := sha256.Sum256([]byte(server.URL + "/" + primaryHref))
+	fullURLRawPattern := fmt.Sprintf("primary.xml_%s_*.gz", hex.EncodeToString(fullURLRawHash[:])[:8])
+	fullURLRawMatches, err := filepath.Glob(filepath.Join(cacheDir, fullURLRawPattern))
+	if err != nil {
+		t.Fatalf("glob fullURL raw metadata cache: %v", err)
+	}
+	if len(fullURLRawMatches) != 1 {
+		t.Fatalf("fullURL-keyed raw cache matches = %v, want 1", fullURLRawMatches)
+	}
+	if atomic.LoadInt32(&requestCount) != 2 {
+		t.Fatalf("online request count = %d, want 2", atomic.LoadInt32(&requestCount))
+	}
+
+	server.Close()
+	if err := os.Remove(filepath.Join(cacheDir, "primary.parsed.json")); err != nil {
+		t.Fatalf("failed to remove parsed cache: %v", err)
+	}
+
+	href, err = FetchPrimaryURL(server.URL + "/repodata/repomd.xml")
+	if err != nil {
+		t.Fatalf("offline FetchPrimaryURL() error = %v", err)
+	}
+	pkgs, err = ParseRepositoryMetadata(server.URL, href, nil)
+	if err != nil {
+		t.Fatalf("offline ParseRepositoryMetadata() error = %v", err)
+	}
+	if len(pkgs) != 1 || pkgs[0].PkgName != "bash" {
+		t.Fatalf("offline packages = %+v, want bash", pkgs)
+	}
+	if atomic.LoadInt32(&requestCount) != 2 {
+		t.Fatalf("offline request count = %d, want still 2", atomic.LoadInt32(&requestCount))
+	}
+}
+
+func TestRPMMetadataMissingPrimaryCacheFetchesOnline(t *testing.T) {
+	setRPMMetadataTestCache(t)
+
+	var requestCount int32
+	primaryHref := "repodata/primary.xml.gz"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requestCount, 1)
+		if r.URL.Path != "/repodata/primary.xml.gz" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write(compressGzip(t, testPrimaryXML("bash")))
+	}))
+	defer server.Close()
+
+	cacheDir, err := rpmMetadataCacheDir(server.URL)
+	if err != nil {
+		t.Fatalf("rpmMetadataCacheDir() error = %v", err)
+	}
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		t.Fatalf("failed to create cache dir: %v", err)
+	}
+	if err := writeFileAtomic(filepath.Join(cacheDir, "repomd.xml"), testRepomd(primaryHref), 0644); err != nil {
+		t.Fatalf("failed to seed repomd cache: %v", err)
+	}
+
+	href, err := FetchPrimaryURL(server.URL + "/repodata/repomd.xml")
+	if err != nil {
+		t.Fatalf("FetchPrimaryURL() error = %v", err)
+	}
+	pkgs, err := ParseRepositoryMetadata(server.URL, href, nil)
+	if err != nil {
+		t.Fatalf("ParseRepositoryMetadata() error = %v", err)
+	}
+	if len(pkgs) != 1 {
+		t.Fatalf("package count = %d, want 1", len(pkgs))
+	}
+	if atomic.LoadInt32(&requestCount) != 1 {
+		t.Fatalf("HTTP requests = %d, want 1 primary fetch", atomic.LoadInt32(&requestCount))
+	}
+}
+
+func TestRPMMetadataCorruptRawCacheRefreshesOnlineAndFailsOffline(t *testing.T) {
+	setRPMMetadataTestCache(t)
+
+	var requestCount int32
+	primaryHref := "repodata/primary.xml.gz"
+	goodData := compressGzip(t, testPrimaryXML("bash"))
+	primary := primaryRefForData(primaryHref, goodData)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requestCount, 1)
+		_, _ = w.Write(goodData)
+	}))
+
+	cacheDir := seedCorruptRPMRawMetadataCache(t, server.URL, primary, []byte("truncated gzip"))
+	pkgs, err := ParseRepositoryMetadata(server.URL, primaryHref, nil)
+	if err != nil {
+		t.Fatalf("ParseRepositoryMetadata() should refresh corrupt cache online: %v", err)
+	}
+	if len(pkgs) != 1 || pkgs[0].PkgName != "bash" {
+		t.Fatalf("refreshed packages = %+v, want bash", pkgs)
+	}
+	if atomic.LoadInt32(&requestCount) != 1 {
+		t.Fatalf("HTTP requests = %d, want 1 refresh", atomic.LoadInt32(&requestCount))
+	}
+
+	if err := os.Remove(filepath.Join(cacheDir, "primary.parsed.json")); err != nil {
+		t.Fatalf("failed to remove parsed cache: %v", err)
+	}
+	seedCorruptRPMRawMetadataCache(t, server.URL, primary, []byte("truncated gzip"))
+	// The online refresh also wrote a timestamped copy; damage it as well, so
+	// no intact copy is left to fall back to.
+	timestamped, globErr := filepath.Glob(filepath.Join(cacheDir, "primary.xml_*.gz"))
+	if globErr != nil || len(timestamped) == 0 {
+		t.Fatalf("timestamped copies = %v, err = %v, want at least one", timestamped, globErr)
+	}
+	for _, f := range timestamped {
+		if err := os.WriteFile(f, []byte("truncated gzip"), 0644); err != nil {
+			t.Fatalf("failed to damage %s: %v", f, err)
+		}
+	}
+	server.Close()
+
+	_, err = ParseRepositoryMetadata(server.URL, primaryHref, nil)
+	if err == nil {
+		t.Fatalf("expected corrupt offline metadata to fail")
+	}
+	if !strings.Contains(err.Error(), "invalid cache artifact") {
+		t.Fatalf("error = %q, want invalid cache artifact context", err.Error())
+	}
+}
+
+func TestRPMMetadataChecksumMismatchRejectsValidXMLCache(t *testing.T) {
+	setRPMMetadataTestCache(t)
+
+	var requestCount int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requestCount, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	primaryHref := "repodata/primary.xml.gz"
+	goodData := compressGzip(t, testPrimaryXML("bash"))
+	alteredData := compressGzip(t, testPrimaryXML("curl"))
+	primary := primaryRefForData(primaryHref, goodData)
+	primary.Size = 0
+	seedCorruptRPMRawMetadataCache(t, server.URL, primary, alteredData)
+
+	_, err := ParseRepositoryMetadata(server.URL, primaryHref, nil)
+	if err == nil {
+		t.Fatalf("expected checksum mismatch to reject cached primary metadata")
+	}
+	if !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("error = %q, want checksum mismatch context", err.Error())
+	}
+	if atomic.LoadInt32(&requestCount) == 0 {
+		t.Fatalf("expected online refresh attempt after checksum mismatch")
+	}
+}
+
 func TestRPMMetadataCacheDoesNotPersistOrFormatCredentials(t *testing.T) {
+	setRPMMetadataTestCache(t)
+
+	baseURL := "https://user:secret-token@example.invalid/repo"
+	primaryHref := "repodata/primary.xml.gz"
+	cacheDir := seedRPMRawMetadataCache(t, baseURL, primaryHref, compressGzip(t, testPrimaryXML("bash")))
+	metaPath := rpmRawMetadataManifestPath(cacheDir, primaryHref)
+	metaData, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("failed to read raw metadata manifest: %v", err)
+	}
+	for _, secret := range []string{"user", "secret-token"} {
+		if strings.Contains(string(metaData), secret) {
+			t.Fatalf("raw metadata manifest contains credential fragment %q: %s", secret, string(metaData))
+		}
+	}
+
 	redacted := redactURLForLog("https://user:secret-token@example.invalid/repo?token=abc123#frag")
 	for _, secret := range []string{"user", "secret-token", "token=abc123", "frag"} {
 		if strings.Contains(redacted, secret) {
@@ -1358,9 +1700,9 @@ func TestRPMMetadataCacheDoesNotPersistOrFormatCredentials(t *testing.T) {
 			t.Fatalf("redactURLForLog(%q) = %q, want placeholder", malformed, got)
 		}
 	}
-	err := redactErrorURL(fmt.Errorf("Get https:user:secret-token@example.invalid/repo: refused"), "https:user:secret-token@example.invalid/repo")
-	if strings.Contains(err.Error(), "secret-token") {
-		t.Fatalf("redactErrorURL() = %q, still contains the credential", err.Error())
+	redactedErr := redactErrorURL(fmt.Errorf("Get https:user:secret-token@example.invalid/repo: refused"), "https:user:secret-token@example.invalid/repo")
+	if strings.Contains(redactedErr.Error(), "secret-token") {
+		t.Fatalf("redactErrorURL() = %q, still contains the credential", redactedErr.Error())
 	}
 }
 
@@ -1730,6 +2072,41 @@ func TestLoadRPMPrimaryReferenceCache(t *testing.T) {
 	}
 }
 
+func TestFindLatestCachedRawMetadata_SkipsUnusableCopy(t *testing.T) {
+	dir := t.TempDir()
+	href := "repodata/primary.xml.gz"
+	fullURL := "https://repo.example.invalid/base/" + href
+	sum := sha256.Sum256([]byte(fullURL))
+	prefix := filepath.Join(dir, "primary.xml_"+hex.EncodeToString(sum[:])[:8]+"_")
+	older, newer := prefix+"2026-01-01_00-00-00.gz", prefix+"2026-02-01_00-00-00.gz"
+	for path, content := range map[string]string{older: "older", newer: "newer"} {
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("failed to write %s: %v", path, err)
+		}
+	}
+
+	for _, tt := range []struct {
+		name, skip, wantPath, wantData string
+	}{
+		{name: "nothing skipped", wantPath: newer, wantData: "newer"},
+		{name: "newest skipped", skip: newer, wantPath: older, wantData: "older"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			data, path, err := findLatestCachedRawMetadata(dir, href, fullURL, tt.skip)
+			if err != nil || path != tt.wantPath || string(data) != tt.wantData {
+				t.Fatalf("findLatestCachedRawMetadata() = %q, %q, %v, want %q, %q", data, path, err, tt.wantData, tt.wantPath)
+			}
+		})
+	}
+
+	if err := os.Remove(older); err != nil {
+		t.Fatalf("failed to remove %s: %v", older, err)
+	}
+	if _, _, err := findLatestCachedRawMetadata(dir, href, fullURL, newer); !os.IsNotExist(err) {
+		t.Fatalf("findLatestCachedRawMetadata() with only the skipped copy error = %v, want one satisfying os.IsNotExist", err)
+	}
+}
+
 func TestFetchPrimaryReference_PreservesIntegrityFields(t *testing.T) {
 	want := rpmPrimaryReference{Href: "repodata/primary.xml.gz", ChecksumType: "SHA256", Checksum: "abc123"}
 
@@ -1968,5 +2345,415 @@ func TestRPMRawMetadataConcurrentWritersKeepCoherentCache(t *testing.T) {
 				t.Fatalf("cached data does not belong to the revision recorded in the manifest")
 			}
 		})
+	}
+}
+
+func TestRPMMetadataRawCacheSupportsZstd(t *testing.T) {
+	setRPMMetadataTestCache(t)
+
+	var requestCount int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requestCount, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	primaryHref := "repodata/primary.xml.zst"
+	seedRPMRawMetadataCache(t, server.URL, primaryHref, compressZstd(t, testPrimaryXML("bash")))
+
+	pkgs, err := ParseRepositoryMetadata(server.URL, primaryHref, nil)
+	if err != nil {
+		t.Fatalf("ParseRepositoryMetadata() zstd cache error = %v", err)
+	}
+	if len(pkgs) != 1 || pkgs[0].PkgName != "bash" {
+		t.Fatalf("zstd cached packages = %+v, want bash", pkgs)
+	}
+	if atomic.LoadInt32(&requestCount) != 0 {
+		t.Fatalf("HTTP requests = %d, want 0", atomic.LoadInt32(&requestCount))
+	}
+}
+
+func TestRPMMetadataCacheSeparatesRepositoriesWithSameBasename(t *testing.T) {
+	setRPMMetadataTestCache(t)
+
+	repos := []struct {
+		baseURL string
+		pkgName string
+	}{
+		{baseURL: "https://repo.example.invalid/base", pkgName: "bash"},
+		{baseURL: "https://repo.example.invalid/updates", pkgName: "coreutils"},
+	}
+	primaryHref := "repodata/primary.xml.gz"
+	for _, repo := range repos {
+		seedRPMRawMetadataCache(t, repo.baseURL, primaryHref, compressGzip(t, testPrimaryXML(repo.pkgName)))
+	}
+
+	for _, repo := range repos {
+		pkgs, err := ParseRepositoryMetadata(repo.baseURL, primaryHref, nil)
+		if err != nil {
+			t.Fatalf("ParseRepositoryMetadata(%s) error = %v", repo.baseURL, err)
+		}
+		if len(pkgs) != 1 || pkgs[0].PkgName != repo.pkgName {
+			t.Fatalf("packages for %s = %+v, want %s", repo.baseURL, pkgs, repo.pkgName)
+		}
+	}
+}
+
+func TestDownloadPackagesCompleteUsesMetadataAndPackageCachesWithoutHTTP(t *testing.T) {
+	setRPMMetadataTestCache(t)
+
+	origRepoCfg := RepoCfg
+	origGzHref := GzHref
+	origUserRepo := UserRepo
+	t.Cleanup(func() {
+		RepoCfg = origRepoCfg
+		GzHref = origGzHref
+		UserRepo = origUserRepo
+	})
+
+	var requestCount int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requestCount, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	primaryHref := "repodata/primary.xml.gz"
+	seedRPMRawMetadataCache(t, server.URL, primaryHref, compressGzip(t, testPrimaryXML("bash")))
+	RepoCfg = RepoConfig{URL: server.URL}
+	GzHref = primaryHref
+	UserRepo = nil
+
+	pkgCacheDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(pkgCacheDir, "bash-1.0-1.x86_64.rpm"), []byte("cached rpm"), 0644); err != nil {
+		t.Fatalf("failed to seed RPM payload cache: %v", err)
+	}
+
+	downloaded, infos, err := DownloadPackagesComplete([]string{"bash"}, pkgCacheDir, "", nil, false)
+	if err != nil {
+		t.Fatalf("DownloadPackagesComplete() cache hit error = %v", err)
+	}
+	if len(downloaded) != 1 || downloaded[0] != "bash-1.0-1.x86_64.rpm" {
+		t.Fatalf("downloaded = %v, want cached bash rpm", downloaded)
+	}
+	if len(infos) != 1 || infos[0].Name != "bash" {
+		t.Fatalf("infos = %+v, want cached bash info", infos)
+	}
+	if atomic.LoadInt32(&requestCount) != 0 {
+		t.Fatalf("HTTP requests = %d, want 0", atomic.LoadInt32(&requestCount))
+	}
+}
+
+func TestParseRepositoryMetadata_UsesLocationCacheReferenceWithoutRepomd(t *testing.T) {
+	setRPMMetadataTestCache(t)
+
+	var requests int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	primaryHref := "repodata/primary.xml.gz"
+	data := compressGzip(t, testPrimaryXML("bash"))
+	cacheDir := seedRPMRawMetadataCache(t, server.URL, primaryHref, data)
+	// Only primary.location.json and the raw cache survive: no repomd.xml copy.
+	if err := os.Remove(filepath.Join(cacheDir, "repomd.xml")); err != nil {
+		t.Fatalf("failed to remove repomd cache: %v", err)
+	}
+	if err := saveRPMPrimaryLocationCache(filepath.Join(cacheDir, "primary.location.json"), primaryRefForData(primaryHref, data)); err != nil {
+		t.Fatalf("failed to seed location cache: %v", err)
+	}
+
+	pkgs, err := ParseRepositoryMetadata(server.URL, primaryHref, nil)
+	if err != nil {
+		t.Fatalf("ParseRepositoryMetadata() should reuse the raw cache via the location cache reference: %v", err)
+	}
+	if len(pkgs) != 1 || pkgs[0].PkgName != "bash" {
+		t.Fatalf("packages = %+v, want bash", pkgs)
+	}
+	if n := atomic.LoadInt32(&requests); n != 0 {
+		t.Fatalf("HTTP requests = %d, want 0", n)
+	}
+}
+
+func TestParseRepositoryMetadata_NamesInvalidLegacyCacheFile(t *testing.T) {
+	setRPMMetadataTestCache(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	baseURL := server.URL
+	server.Close() // the repository is unreachable, as in an offline build
+
+	primaryHref := "repodata/primary.xml.gz"
+	primary := primaryRefForData(primaryHref, compressGzip(t, testPrimaryXML("bash")))
+	cacheDir, err := rpmMetadataCacheDir(baseURL)
+	if err != nil {
+		t.Fatalf("rpmMetadataCacheDir() error = %v", err)
+	}
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		t.Fatalf("failed to create cache dir: %v", err)
+	}
+	if err := writeFileAtomic(filepath.Join(cacheDir, "repomd.xml"), testRepomdWithPrimary(primary), 0644); err != nil {
+		t.Fatalf("failed to seed repomd cache: %v", err)
+	}
+	// A timestamped copy, as written by older builds, whose content fails verification.
+	saveOriginalXML(cacheDir, primaryHref, baseURL+"/"+primaryHref, compressGzip(t, testPrimaryXML("curl")))
+	legacyFiles, err := filepath.Glob(filepath.Join(cacheDir, "primary.xml_*.gz"))
+	if err != nil || len(legacyFiles) != 1 {
+		t.Fatalf("legacy files = %v, err = %v, want exactly one", legacyFiles, err)
+	}
+
+	_, err = ParseRepositoryMetadata(baseURL, primaryHref, nil)
+	if err == nil || !strings.Contains(err.Error(), "invalid cache artifact "+legacyFiles[0]) {
+		t.Fatalf("error = %v, want it to name the damaged file %s", err, legacyFiles[0])
+	}
+}
+
+func TestParseRepositoryMetadata_FallsBackToTimestampedCopyWhenManifestIsCorrupt(t *testing.T) {
+	setRPMMetadataTestCache(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	baseURL := server.URL
+	server.Close() // offline
+
+	primaryHref := "repodata/primary.xml.gz"
+	data := compressGzip(t, testPrimaryXML("bash"))
+	cacheDir := seedRPMRawMetadataCache(t, baseURL, primaryHref, data)
+	// An intact timestamped copy, as written next to the manifest-backed cache.
+	saveOriginalXML(cacheDir, primaryHref, baseURL+"/"+primaryHref, data)
+	metaPath := rpmRawMetadataManifestPath(cacheDir, primaryHref)
+	if err := os.WriteFile(metaPath, []byte("not json"), 0644); err != nil {
+		t.Fatalf("failed to corrupt the manifest: %v", err)
+	}
+
+	pkgs, err := ParseRepositoryMetadata(baseURL, primaryHref, nil)
+	if err != nil {
+		t.Fatalf("ParseRepositoryMetadata() should use the intact timestamped copy: %v", err)
+	}
+	if len(pkgs) != 1 || pkgs[0].PkgName != "bash" {
+		t.Fatalf("packages = %+v, want bash", pkgs)
+	}
+}
+
+// Without a checksum or size in the primary reference, a manifest payload that
+// is damaged but was cached with a matching content digest is only caught when
+// it fails to decode. An intact timestamped copy must then be used, so an offline
+// rebuild does not fail.
+func TestParseRepositoryMetadata_DamagedManifestPayloadUsesTimestampedCopy(t *testing.T) {
+	setRPMMetadataTestCache(t)
+
+	var requests int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	baseURL := server.URL
+	href := "primary.xml.gz"
+	fullURL := baseURL + "/" + href
+	id := rpmMetadataID(baseURL, href)
+	primary := rpmPrimaryReference{Href: href}
+	good := compressGzip(t, testPrimaryXML("bash"))
+
+	cacheDir, err := rpmMetadataCacheDir(baseURL)
+	if err != nil {
+		t.Fatalf("rpmMetadataCacheDir() error = %v", err)
+	}
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		t.Fatalf("failed to create cache dir: %v", err)
+	}
+	// The cache helper records a digest of what it is given, so the malformed
+	// bytes pass the integrity check and only fail to decode.
+	if err := saveRPMRawMetadataCache(cacheDir, href, id, primary, []byte("damaged, but not empty")); err != nil {
+		t.Fatalf("saveRPMRawMetadataCache() error = %v", err)
+	}
+	saveOriginalXML(cacheDir, href, fullURL, good)
+
+	pkgs, err := ParseRepositoryMetadata(baseURL, href, nil)
+	if err != nil {
+		t.Fatalf("ParseRepositoryMetadata() error = %v", err)
+	}
+	if len(pkgs) != 1 || pkgs[0].PkgName != "bash" {
+		t.Fatalf("packages = %+v, want bash", pkgs)
+	}
+	if n := atomic.LoadInt32(&requests); n != 0 {
+		t.Fatalf("HTTP requests = %d, want 0", n)
+	}
+	if got, _, err := loadRPMRawMetadataCache(cacheDir, href, id, primary); err != nil || !bytes.Equal(got, good) {
+		t.Fatalf("the raw metadata cache was not repaired from the intact copy (err=%v)", err)
+	}
+}
+
+// A timestamped copy that fails verification must not stop an older copy that
+// matches the primary reference from being used, so an offline rebuild survives.
+func TestParseRepositoryMetadata_SkipsCorruptNewestTimestampedCopy(t *testing.T) {
+	setRPMMetadataTestCache(t)
+
+	var requests int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	baseURL := server.URL
+	href := "primary.xml.gz"
+	fullURL := baseURL + "/" + href
+	good := compressGzip(t, testPrimaryXML("bash"))
+	primary := primaryRefForData(href, good)
+
+	cacheDir, err := rpmMetadataCacheDir(baseURL)
+	if err != nil {
+		t.Fatalf("rpmMetadataCacheDir() error = %v", err)
+	}
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		t.Fatalf("failed to create cache dir: %v", err)
+	}
+	if err := writeFileAtomic(filepath.Join(cacheDir, "repomd.xml"), testRepomdWithPrimary(primary), 0644); err != nil {
+		t.Fatalf("failed to seed repomd cache: %v", err)
+	}
+	// No manifest: only timestamped copies, the newer of which is corrupt.
+	saveOriginalXML(cacheDir, href, fullURL, good)
+	_, saved, findErr := findLatestCachedRawMetadata(cacheDir, href, fullURL, "")
+	if findErr != nil {
+		t.Fatalf("test setup: no timestamped copy was saved: %v", findErr)
+	}
+	stem := saved[:len(saved)-len("_2006-01-02_15-04-05.gz")]
+	older := stem + "_2000-01-01_00-00-00.gz"
+	newer := stem + "_2999-01-01_00-00-00.gz"
+	if err := os.Rename(saved, older); err != nil {
+		t.Fatalf("failed to age the intact copy: %v", err)
+	}
+	if err := os.WriteFile(newer, []byte("truncated gzip"), 0644); err != nil {
+		t.Fatalf("failed to seed the corrupt copy: %v", err)
+	}
+
+	pkgs, err := ParseRepositoryMetadata(baseURL, href, nil)
+	if err != nil {
+		t.Fatalf("ParseRepositoryMetadata() should use the older intact copy: %v", err)
+	}
+	if len(pkgs) != 1 || pkgs[0].PkgName != "bash" {
+		t.Fatalf("packages = %+v, want bash", pkgs)
+	}
+	if n := atomic.LoadInt32(&requests); n != 0 {
+		t.Fatalf("HTTP requests = %d, want 0", n)
+	}
+}
+
+// With an href-only reference nothing but decoding catches a damaged copy. A
+// damaged manifest payload and a damaged newest timestamped copy must therefore
+// not stop an older intact copy from being used, or an offline rebuild fails.
+func TestParseRepositoryMetadata_SkipsUndecodableCopiesToIntactOlderCopy(t *testing.T) {
+	setRPMMetadataTestCache(t)
+
+	var requests int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	baseURL := server.URL
+	href := "primary.xml.gz"
+	fullURL := baseURL + "/" + href
+	id := rpmMetadataID(baseURL, href)
+	primary := rpmPrimaryReference{Href: href}
+	good := compressGzip(t, testPrimaryXML("bash"))
+
+	cacheDir, err := rpmMetadataCacheDir(baseURL)
+	if err != nil {
+		t.Fatalf("rpmMetadataCacheDir() error = %v", err)
+	}
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		t.Fatalf("failed to create cache dir: %v", err)
+	}
+	if err := saveRPMRawMetadataCache(cacheDir, href, id, primary, []byte("damaged manifest payload")); err != nil {
+		t.Fatalf("saveRPMRawMetadataCache() error = %v", err)
+	}
+	saveOriginalXML(cacheDir, href, fullURL, good)
+	_, saved, findErr := findLatestCachedRawMetadata(cacheDir, href, fullURL, "")
+	if findErr != nil {
+		t.Fatalf("test setup: no timestamped copy was saved: %v", findErr)
+	}
+	stem := saved[:len(saved)-len("_2006-01-02_15-04-05.gz")]
+	older := stem + "_2000-01-01_00-00-00.gz"
+	if err := os.Rename(saved, older); err != nil {
+		t.Fatalf("failed to age the intact copy: %v", err)
+	}
+	for _, name := range []string{"_2999-01-01_00-00-00.gz", "_2998-01-01_00-00-00.gz"} {
+		if err := os.WriteFile(stem+name, []byte("truncated gzip"), 0644); err != nil {
+			t.Fatalf("failed to seed the damaged copy: %v", err)
+		}
+	}
+
+	pkgs, err := ParseRepositoryMetadata(baseURL, href, nil)
+	if err != nil {
+		t.Fatalf("ParseRepositoryMetadata() should use the older intact copy: %v", err)
+	}
+	if len(pkgs) != 1 || pkgs[0].PkgName != "bash" {
+		t.Fatalf("packages = %+v, want bash", pkgs)
+	}
+	if n := atomic.LoadInt32(&requests); n != 0 {
+		t.Fatalf("HTTP requests = %d, want 0", n)
+	}
+}
+
+// When the timestamped copy exists but cannot be read, a failed refresh must say
+// which file was unusable and why.
+func TestParseRepositoryMetadata_UnreadableTimestampedCopyIsNamedInError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("file permissions are not enforced for root")
+	}
+	setRPMMetadataTestCache(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	baseURL := server.URL
+	href := "primary.xml.gz"
+	fullURL := baseURL + "/" + href
+	cacheDir, err := rpmMetadataCacheDir(baseURL)
+	if err != nil {
+		t.Fatalf("rpmMetadataCacheDir() error = %v", err)
+	}
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		t.Fatalf("failed to create cache dir: %v", err)
+	}
+	saveOriginalXML(cacheDir, href, fullURL, compressGzip(t, testPrimaryXML("bash")))
+	_, copyPath, _ := findLatestCachedRawMetadata(cacheDir, href, fullURL, "")
+	if copyPath == "" {
+		t.Fatalf("test setup: no timestamped copy was saved")
+	}
+	if err := os.Chmod(copyPath, 0); err != nil {
+		t.Fatalf("chmod %s: %v", copyPath, err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(copyPath, 0644) })
+
+	_, err = ParseRepositoryMetadata(baseURL, href, nil)
+	if err == nil {
+		t.Fatalf("expected an error: the refresh fails and the cached copy is unreadable")
+	}
+	if !strings.Contains(err.Error(), copyPath) || !strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("error = %q, want it to name %s and the permission error", err, copyPath)
+	}
+}
+
+func TestFetchRPMRawMetadata_ErrorNamesNoArtifactWithoutCachePath(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	href := "primary.xml.gz"
+	_, _, _, err := fetchRPMRawMetadata("", server.URL, href, "id", rpmPrimaryReference{Href: href},
+		server.URL+"/"+href, "", errors.New("boom"))
+	if err == nil {
+		t.Fatalf("expected a fetch error")
+	}
+	if !strings.Contains(err.Error(), "after an invalid cache artifact: ") || !strings.Contains(err.Error(), "(cache error: boom)") {
+		t.Fatalf("error = %q, want a clause without an empty artifact name and the cache error", err)
 	}
 }
