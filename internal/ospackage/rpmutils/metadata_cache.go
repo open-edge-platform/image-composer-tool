@@ -2,15 +2,22 @@ package rpmutils
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/xml"
 	"fmt"
 	"io"
 	"net/textproto"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 )
 
 type rpmPrimaryReference struct {
@@ -182,10 +189,122 @@ func redactErrorURL(err error, rawURL string) error {
 	return &redactedError{msg: message, err: err}
 }
 
+// writeFileAtomic replaces filePath with data through a synced temporary file in
+// the same directory, so readers see either the old or the new content and never
+// a truncated file. An error that mentions the file having been replaced means
+// the new content is already visible and only syncing the directory entry
+// failed, so it may not survive a crash.
+func writeFileAtomic(filePath string, data []byte, perm os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(filePath), "."+filepath.Base(filePath)+"-*")
+	if err != nil {
+		return fmt.Errorf("create temporary cache file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	n, err := tmp.Write(data)
+	if err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write temporary cache file: %w", err)
+	}
+	if n != len(data) {
+		_ = tmp.Close()
+		return fmt.Errorf("write temporary cache file: short write: wrote %d of %d bytes", n, len(data))
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("chmod temporary cache file: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("sync temporary cache file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temporary cache file: %w", err)
+	}
+	if err := os.Rename(tmpPath, filePath); err != nil {
+		return fmt.Errorf("replace cache file %s: %w", filePath, err)
+	}
+	dir, err := os.Open(filepath.Dir(filePath))
+	if err != nil {
+		return fmt.Errorf("cache file %s replaced but opening its directory to sync the rename failed: %w", filePath, err)
+	}
+	if syncErr := dir.Sync(); syncErr != nil {
+		_ = dir.Close()
+		return fmt.Errorf("cache file %s replaced but syncing directory %s failed: %w", filePath, filepath.Dir(filePath), syncErr)
+	}
+	if closeErr := dir.Close(); closeErr != nil {
+		return fmt.Errorf("cache file %s replaced but closing directory %s failed: %w", filePath, filepath.Dir(filePath), closeErr)
+	}
+	cleanup = false
+	return nil
+}
+
+func saveRepomdXMLCache(xmlCacheDir, baseURL string, repomdData []byte) {
+	log := logger.Logger()
+	stablePath := filepath.Join(xmlCacheDir, "repomd.xml")
+	if writeErr := writeFileAtomic(stablePath, repomdData, 0644); writeErr != nil {
+		log.Warnf("Failed to save repomd.xml cache %s; offline cache incomplete: %v", stablePath, writeErr)
+	}
+
+	urlHash := sha256.Sum256([]byte(baseURL))
+	urlHashStr := hex.EncodeToString(urlHash[:])[:8]
+	timestamp := time.Now().Format("2006-01-02_15-04-05")
+	filename := fmt.Sprintf("repomd_%s_%s.xml", urlHashStr, timestamp)
+	filePath := filepath.Join(xmlCacheDir, filename)
+	if writeErr := writeFileAtomic(filePath, repomdData, 0644); writeErr == nil {
+		log.Infof("Saved repomd.xml file: %s", filePath)
+	} else {
+		log.Warnf("Failed to save repomd.xml file: %v", writeErr)
+	}
+}
+
+func loadPrimaryLocationFromCachedRepomd(xmlCacheDir string) (string, error) {
+	stablePath := filepath.Join(xmlCacheDir, "repomd.xml")
+	if data, err := os.ReadFile(stablePath); err == nil {
+		if primary, parseErr := extractPrimaryReferenceFromRepomdData(data); parseErr == nil {
+			return primary.Href, nil
+		}
+	}
+
+	pattern := filepath.Join(xmlCacheDir, "repomd_*.xml")
+	files, err := filepath.Glob(pattern)
+	if err != nil {
+		return "", fmt.Errorf("glob %q: %w", pattern, err)
+	}
+	if len(files) == 0 {
+		return "", fmt.Errorf("no cached repomd files found")
+	}
+
+	// Repomd cache file names include a sortable timestamp suffix.
+	sort.Strings(files)
+	for i := len(files) - 1; i >= 0; i-- {
+		data, readErr := os.ReadFile(files[i])
+		if readErr != nil {
+			continue
+		}
+
+		primary, parseErr := extractPrimaryReferenceFromRepomdData(data)
+		if parseErr == nil {
+			return primary.Href, nil
+		}
+	}
+
+	return "", fmt.Errorf("failed to parse primary reference from cached repomd files")
+}
+
 func extractPrimaryReferenceFromRepomdData(repomdData []byte) (rpmPrimaryReference, error) {
 	dec := xml.NewDecoder(bytes.NewReader(repomdData))
 
-	// Walk the tokens looking for <data type="primary">
+	// Walk the whole document, so a response truncated after the primary entry
+	// is rejected rather than cached, and keep the first <data type="primary">.
+	var found rpmPrimaryReference
+	haveFound := false
 	for {
 		tok, err := dec.Token()
 		if err != nil {
@@ -197,6 +316,12 @@ func extractPrimaryReferenceFromRepomdData(repomdData []byte) (rpmPrimaryReferen
 
 		se, ok := tok.(xml.StartElement)
 		if !ok || se.Name.Local != "data" {
+			continue
+		}
+		if haveFound {
+			if err := dec.Skip(); err != nil {
+				return rpmPrimaryReference{}, fmt.Errorf("error skipping token: %w", err)
+			}
 			continue
 		}
 
@@ -232,7 +357,8 @@ func extractPrimaryReferenceFromRepomdData(repomdData []byte) (rpmPrimaryReferen
 					return rpmPrimaryReference{}, fmt.Errorf("malformed repomd: partial checksum (type=%q, value=%q)", primary.ChecksumType, primary.Checksum)
 				}
 				primary.ChecksumType = strings.ToUpper(primary.ChecksumType)
-				return primary, nil
+				found, haveFound = primary, true
+				break
 			}
 
 			le, ok := tok2.(xml.StartElement)
@@ -257,6 +383,9 @@ func extractPrimaryReferenceFromRepomdData(repomdData []byte) (rpmPrimaryReferen
 		}
 	}
 
+	if haveFound {
+		return found, nil
+	}
 	return rpmPrimaryReference{}, fmt.Errorf("primary location not found in repomd.xml")
 }
 
