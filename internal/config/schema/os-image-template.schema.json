@@ -370,6 +370,7 @@
                 "additionalProperties": { "type": "string", "pattern": "^[A-Za-z0-9._@%+:/=,-]{0,256}$" },
                 "description": "Environment variables set for the script (no spaces, quotes, $ or ; in values)"
               },
+              "timeoutSec": { "type": "integer", "minimum": 0, "description": "Fail the script's unit if it runs longer than this many seconds; 0 means no limit" },
               "rebootAfter": { "type": "boolean", "default": false, "description": "Reboot once the script has succeeded; first-boot scripts only, and only on the last script to run" }
             },
             "additionalProperties": false

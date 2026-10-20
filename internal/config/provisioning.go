@@ -80,6 +80,8 @@ type ProvisioningScript struct {
 	// shares with other templates (for example a deployment mode).
 	Args []string          `yaml:"args,omitempty"`
 	Env  map[string]string `yaml:"env,omitempty"`
+	// TimeoutSec fails the script's unit if it runs longer. Zero means no limit.
+	TimeoutSec int `yaml:"timeoutSec,omitempty"`
 	// RebootAfter reboots the system once the script has succeeded.
 	RebootAfter bool `yaml:"rebootAfter,omitempty"`
 }
@@ -491,8 +493,8 @@ func validateProvisioningScripts(scripts []ProvisioningScript) error {
 	return nil
 }
 
-// validateProvisioningScriptParams checks the args, env and rebootAfter of one
-// script. Values end up in a generated systemd unit.
+// validateProvisioningScriptParams checks the args, env, timeoutSec and
+// rebootAfter of one script. Values end up in a generated systemd unit.
 func validateProvisioningScriptParams(s ProvisioningScript) error {
 	for i, a := range s.Args {
 		if a == "" || !provisioningValueRe.MatchString(a) {
@@ -509,6 +511,9 @@ func validateProvisioningScriptParams(s ProvisioningScript) error {
 			return fmt.Errorf("systemConfig.provisioning.scripts %q: env %s must be at most 256 characters of "+
 				"letters, digits, and ._@%%+:/=,- (no spaces, quotes, $ or ;)", s.Name, k)
 		}
+	}
+	if s.TimeoutSec < 0 {
+		return fmt.Errorf("systemConfig.provisioning.scripts %q: timeoutSec must be >= 0", s.Name)
 	}
 	if s.RebootAfter && s.Stage == ProvisioningStageEveryBoot {
 		return fmt.Errorf("systemConfig.provisioning.scripts %q: rebootAfter needs stage %q; "+
