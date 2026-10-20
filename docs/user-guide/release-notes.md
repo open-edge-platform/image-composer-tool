@@ -83,6 +83,8 @@
     can be parameterised from the template with `args` (command-line
     arguments) and `env` (environment variables), limited with `timeoutSec`,
     and followed by a reboot with `rebootAfter`.
+    `systemConfig.provisioning.beforeLogin: true` runs the scripts before the
+    login prompt, so console and SSH logins (except root) wait until provisioning has finished.
   - `systemConfig.cloudInit` installs cloud-init and seeds it through a pinned
     NoCloud datasource.
   - `systemConfig.aptPolicy.upgradeAllowedRepos` limits which template

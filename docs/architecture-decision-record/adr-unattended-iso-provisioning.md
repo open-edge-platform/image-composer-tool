@@ -2,7 +2,7 @@
 
 **Status**: Accepted
 **Date**: 2026-09-29
-**Updated**: N/A
+**Updated**: 2026-10-20
 **Authors**: Image Composer Tool Team
 **Technical Area**: Provisioning / Live Installer / Templates
 
@@ -88,6 +88,25 @@ keeping the step testable without a chroot). It runs
 `cloud-final.service` when cloud-init runs and start at once when it does not,
 for example when it is disabled or `ds-identify` finds no datasource. Hooking the
 scripts under `cloud-final.service` instead would skip them in those cases.
+
+A consequence is that the login prompt appears while the scripts are still
+running. `systemConfig.provisioning.beforeLogin: true` is the opt-in alternative
+for provisioning that must finish first. The units then drop
+`After=cloud-final.service` (ordering a unit before `systemd-user-sessions.service`
+and after a unit that is after `multi-user.target` is the same cycle) for
+`After=cloud-config.service`, are ordered `Before=systemd-user-sessions.service`
+(which getty and the SSH login check wait for), and are wanted directly by
+`multi-user.target`, so no trigger unit is needed. The apt timers are ordered
+after the scripts so they cannot hold the dpkg lock. A script whose
+`timeoutSec` is unset or 0 gets a one-hour limit: a failed or timed-out script releases the
+login, and a first-boot script is retried on the next boot. Scripts that need
+what cloud-init applies in its final stage (packages, `runcmd`) must keep the
+default mode. A `rebootAfter` script queues its reboot after its stamp is
+written, which cancels the pending start of the login services, so the prompt
+never appears on the boot that provisions the system. The block is
+`/run/nologin`, which exempts root, so root can still log in during provisioning;
+ordering against the SSH units instead was rejected because their names differ
+per distribution and a missing unit is silently ignored.
 
 ### 6. End-relative partition offsets instead of a post-install resize
 

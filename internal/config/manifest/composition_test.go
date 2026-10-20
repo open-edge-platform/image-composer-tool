@@ -148,3 +148,40 @@ func TestCompositionScriptsRecordsArgsAndEnvNames(t *testing.T) {
 		t.Errorf("env values must not reach the manifest: %s", b)
 	}
 }
+
+func TestCompositionManifestRecordsBeforeLogin(t *testing.T) {
+	t.Parallel()
+	on, off := true, false
+	tests := []struct {
+		name        string
+		beforeLogin *bool
+		want        string
+	}{
+		{"enabled", &on, `"beforeLogin": true`},
+		{"explicit false", &off, `"beforeLogin": false`},
+		{"unset", nil, `"beforeLogin": false`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			tmpl := &config.ImageTemplate{SystemConfig: config.SystemConfig{
+				Provisioning: config.ProvisioningConfig{BeforeLogin: tt.beforeLogin},
+			}}
+			m, err := BuildCompositionManifest(tmpl, nil, "", "")
+			if err != nil {
+				t.Fatalf("BuildCompositionManifest: %v", err)
+			}
+			out := filepath.Join(t.TempDir(), "image.composition.json")
+			if err := WriteCompositionManifest(m, out); err != nil {
+				t.Fatalf("WriteCompositionManifest: %v", err)
+			}
+			data, err := os.ReadFile(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(data), tt.want) {
+				t.Errorf("manifest lacks %s:\n%s", tt.want, data)
+			}
+		})
+	}
+}
