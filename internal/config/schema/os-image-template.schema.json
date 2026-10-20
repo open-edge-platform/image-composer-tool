@@ -359,6 +359,17 @@
               "final": { "type": "string", "pattern": "^/[A-Za-z0-9._@%+/-]*[A-Za-z0-9._@%+-]$", "description": "Absolute in-image file path of the script (letters, digits, and ._@%+-)" },
               "stage": { "type": "string", "enum": ["first-boot", "every-boot"], "default": "first-boot", "description": "first-boot runs once; every-boot runs on each boot" },
               "order": { "type": "integer", "minimum": 0, "description": "Execution order; lower runs first" },
+              "args": {
+                "type": "array",
+                "items": { "type": "string", "pattern": "^[A-Za-z0-9._@%+:/=,-]{1,256}$" },
+                "description": "Command-line arguments passed to the script (no spaces, quotes, $ or ;)"
+              },
+              "env": {
+                "type": "object",
+                "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$" },
+                "additionalProperties": { "type": "string", "pattern": "^[A-Za-z0-9._@%+:/=,-]{0,256}$" },
+                "description": "Environment variables set for the script (no spaces, quotes, $ or ; in values)"
+              },
               "rebootAfter": { "type": "boolean", "default": false, "description": "Reboot once the script has succeeded; first-boot scripts only, and only on the last script to run" }
             },
             "additionalProperties": false

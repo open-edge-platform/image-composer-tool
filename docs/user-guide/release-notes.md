@@ -79,8 +79,10 @@
   - `systemConfig.proxy` persists `HTTP_PROXY`, `HTTPS_PROXY`, `FTP_PROXY`, and
     `NO_PROXY` into `/etc/environment`, apt, and the systemd default environment.
   - `systemConfig.provisioning.scripts[]` runs user scripts from generated
-    systemd units at first boot or every boot, in a configured order.
-    `rebootAfter` reboots the system once the last script has succeeded.
+    systemd units at first boot or every boot, in a configured order. A script
+    can be parameterised from the template with `args` (command-line
+    arguments) and `env` (environment variables); `rebootAfter` reboots the
+    system once the last script has succeeded.
   - `systemConfig.cloudInit` installs cloud-init and seeds it through a pinned
     NoCloud datasource.
   - `systemConfig.aptPolicy.upgradeAllowedRepos` limits which template

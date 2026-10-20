@@ -491,6 +491,28 @@ func TestRenderProvisioningUnitEscapesPercent(t *testing.T) {
 	}
 }
 
+func TestRenderProvisioningUnitArgsAndEnv(t *testing.T) {
+	t.Parallel()
+	unit := renderProvisioningUnit(config.ProvisioningScript{
+		Name:  "s",
+		Final: "/usr/local/sbin/s.sh",
+		Args:  []string{"--mode", "k3s", "100%"},
+		Env:   map[string]string{"B_VAR": "two", "A_VAR": "50%"},
+	}, "")
+	for _, want := range []string{
+		"Environment=\"A_VAR=50%%\"\nEnvironment=\"B_VAR=two\"\n", // sorted by name, % escaped
+		"ExecStart=/usr/local/sbin/s.sh --mode k3s 100%%\n",
+	} {
+		if !strings.Contains(unit, want) {
+			t.Errorf("unit missing %q:\n%s", want, unit)
+		}
+	}
+	plain := renderProvisioningUnit(config.ProvisioningScript{Name: "s", Final: "/usr/local/sbin/s.sh"}, "")
+	if strings.Contains(plain, "Environment=") || !strings.Contains(plain, "ExecStart=/usr/local/sbin/s.sh\n") {
+		t.Errorf("a script without args or env must render as before:\n%s", plain)
+	}
+}
+
 func TestRenderProvisioningUnitReboot(t *testing.T) {
 	t.Parallel()
 	unit := renderProvisioningUnit(config.ProvisioningScript{

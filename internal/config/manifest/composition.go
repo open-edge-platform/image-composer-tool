@@ -3,8 +3,10 @@ package manifest
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -85,11 +87,15 @@ type CompositionArtifact struct {
 }
 
 type CompositionScript struct {
-	Name        string `json:"name"`
-	Final       string `json:"final"`
-	Stage       string `json:"stage,omitempty"`
-	Order       int    `json:"order,omitempty"`
-	RebootAfter bool   `json:"rebootAfter,omitempty"`
+	Name  string `json:"name"`
+	Final string `json:"final"`
+	Stage string `json:"stage,omitempty"`
+	Order int    `json:"order,omitempty"`
+	// Args are recorded as written; for env only the names are, since
+	// variables are the more likely place for a credential.
+	Args        []string `json:"args,omitempty"`
+	EnvNames    []string `json:"envNames,omitempty"`
+	RebootAfter bool     `json:"rebootAfter,omitempty"`
 }
 
 type CompositionProvisioner struct {
@@ -214,6 +220,7 @@ func compositionScripts(scripts []config.ProvisioningScript) []CompositionScript
 	for _, s := range scripts {
 		out = append(out, CompositionScript{
 			Name: s.Name, Final: s.Final, Stage: s.Stage, Order: s.Order,
+			Args: s.Args, EnvNames: slices.Sorted(maps.Keys(s.Env)),
 			RebootAfter: s.RebootAfter,
 		})
 	}

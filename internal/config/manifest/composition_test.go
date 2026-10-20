@@ -131,10 +131,20 @@ func TestSPDXPackageRedactsDownloadLocation(t *testing.T) {
 	}
 }
 
-func TestCompositionScriptsRecordsRebootAfter(t *testing.T) {
+func TestCompositionScriptsRecordsArgsAndEnvNames(t *testing.T) {
 	t.Parallel()
-	got := compositionScripts([]config.ProvisioningScript{{Name: "s", Final: "/usr/local/sbin/s.sh", RebootAfter: true}})
-	if len(got) != 1 || !got[0].RebootAfter {
-		t.Errorf("rebootAfter not recorded: %+v", got)
+	got := compositionScripts([]config.ProvisioningScript{{
+		Name: "s", Final: "/usr/local/sbin/s.sh", Args: []string{"--mode", "k3s"},
+		Env: map[string]string{"B": "secret", "A": "1"}, RebootAfter: true,
+	}})
+	if len(got) != 1 || len(got[0].Args) != 2 || got[0].Args[1] != "k3s" ||
+		len(got[0].EnvNames) != 2 || got[0].EnvNames[0] != "A" || got[0].EnvNames[1] != "B" {
+		t.Errorf("args/env names not recorded in order: %+v", got)
+	}
+	if !got[0].RebootAfter {
+		t.Errorf("rebootAfter not recorded: %+v", got[0])
+	}
+	if b, _ := json.Marshal(got); strings.Contains(string(b), "secret") {
+		t.Errorf("env values must not reach the manifest: %s", b)
 	}
 }
