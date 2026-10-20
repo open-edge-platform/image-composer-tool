@@ -75,6 +75,8 @@ type ProvisioningScript struct {
 	Final string `yaml:"final"`           // in-image path of the script
 	Stage string `yaml:"stage,omitempty"` // first-boot (default) | every-boot
 	Order int    `yaml:"order,omitempty"` // lower runs first; ties keep template order
+	// RebootAfter reboots the system once the script has succeeded.
+	RebootAfter bool `yaml:"rebootAfter,omitempty"`
 }
 
 // ProvisioningConfig holds boot-time provisioning scripts.
@@ -468,6 +470,30 @@ func validateProvisioningScripts(scripts []ProvisioningScript) error {
 		if s.Order < 0 {
 			return fmt.Errorf("systemConfig.provisioning.scripts %q: order must be >= 0", s.Name)
 		}
+		if err := validateProvisioningScriptParams(s); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateProvisioningScriptParams checks the rebootAfter setting of one script.
+func validateProvisioningScriptParams(s ProvisioningScript) error {
+	if s.RebootAfter && s.Stage == ProvisioningStageEveryBoot {
+		return fmt.Errorf("systemConfig.provisioning.scripts %q: rebootAfter needs stage %q; "+
+			"an every-boot script would reboot on every boot", s.Name, ProvisioningStageFirstBoot)
+	}
+	return nil
+}
+
+// checkRebootAfterIsLast rejects a rebootAfter script that is not the last
+// one to run: the reboot would cut the later scripts off until the next boot.
+func checkRebootAfterIsLast(scripts []ProvisioningScript) error {
+	for i, s := range scripts {
+		if s.RebootAfter && i != len(scripts)-1 {
+			return fmt.Errorf("systemConfig.provisioning.scripts %q: rebootAfter is only allowed on the "+
+				"last script to run (it is followed by %q)", s.Name, scripts[len(scripts)-1].Name)
+		}
 	}
 	return nil
 }
@@ -570,6 +596,9 @@ func (t *ImageTemplate) validateMergedProvisioning() error {
 	if !policy.isEmpty() && !slice.Contains(AptPolicyTargetOS, t.Target.OS) {
 		return fmt.Errorf("systemConfig.aptPolicy is only supported for ubuntu and debian targets (got %q)",
 			t.Target.OS)
+	}
+	if err := checkRebootAfterIsLast(t.SortedProvisioningScripts()); err != nil {
+		return err
 	}
 	if t.hasSSHKeys() && !t.hasPackage("openssh-server") {
 		log.Warnf("sshAuthorizedKeys are configured but openssh-server is not in systemConfig.packages; " +

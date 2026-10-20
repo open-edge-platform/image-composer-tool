@@ -358,7 +358,8 @@
               "local": { "type": "string", "minLength": 1, "description": "Path to the script on the host, relative to the template" },
               "final": { "type": "string", "pattern": "^/[A-Za-z0-9._@%+/-]*[A-Za-z0-9._@%+-]$", "description": "Absolute in-image file path of the script (letters, digits, and ._@%+-)" },
               "stage": { "type": "string", "enum": ["first-boot", "every-boot"], "default": "first-boot", "description": "first-boot runs once; every-boot runs on each boot" },
-              "order": { "type": "integer", "minimum": 0, "description": "Execution order; lower runs first" }
+              "order": { "type": "integer", "minimum": 0, "description": "Execution order; lower runs first" },
+              "rebootAfter": { "type": "boolean", "default": false, "description": "Reboot once the script has succeeded; first-boot scripts only, and only on the last script to run" }
             },
             "additionalProperties": false
           }

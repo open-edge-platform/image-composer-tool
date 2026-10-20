@@ -110,6 +110,10 @@ func renderProvisioningUnit(script config.ProvisioningScript, after string) stri
 		fmt.Fprintf(&b, "ExecStartPost=/usr/bin/mkdir -p %s\n", StampDir)
 		fmt.Fprintf(&b, "ExecStartPost=/usr/bin/touch %s\n", stamp)
 	}
+	if script.RebootAfter {
+		// After the stamp: the reboot job is queued only once success is recorded.
+		b.WriteString("ExecStartPost=/usr/bin/systemctl reboot --no-block\n")
+	}
 	b.WriteString("StandardOutput=journal+console\nStandardError=journal+console\n")
 	return b.String()
 }

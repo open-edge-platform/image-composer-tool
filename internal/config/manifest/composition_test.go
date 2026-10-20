@@ -130,3 +130,11 @@ func TestSPDXPackageRedactsDownloadLocation(t *testing.T) {
 		t.Errorf("empty URL must be NOASSERTION, got %q", got)
 	}
 }
+
+func TestCompositionScriptsRecordsRebootAfter(t *testing.T) {
+	t.Parallel()
+	got := compositionScripts([]config.ProvisioningScript{{Name: "s", Final: "/usr/local/sbin/s.sh", RebootAfter: true}})
+	if len(got) != 1 || !got[0].RebootAfter {
+		t.Errorf("rebootAfter not recorded: %+v", got)
+	}
+}

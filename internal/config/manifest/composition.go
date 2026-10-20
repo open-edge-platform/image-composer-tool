@@ -85,10 +85,11 @@ type CompositionArtifact struct {
 }
 
 type CompositionScript struct {
-	Name  string `json:"name"`
-	Final string `json:"final"`
-	Stage string `json:"stage,omitempty"`
-	Order int    `json:"order,omitempty"`
+	Name        string `json:"name"`
+	Final       string `json:"final"`
+	Stage       string `json:"stage,omitempty"`
+	Order       int    `json:"order,omitempty"`
+	RebootAfter bool   `json:"rebootAfter,omitempty"`
 }
 
 type CompositionProvisioner struct {
@@ -211,7 +212,10 @@ func compositionArtifacts(files []config.AdditionalFileInfo) ([]CompositionArtif
 func compositionScripts(scripts []config.ProvisioningScript) []CompositionScript {
 	out := make([]CompositionScript, 0, len(scripts))
 	for _, s := range scripts {
-		out = append(out, CompositionScript{Name: s.Name, Final: s.Final, Stage: s.Stage, Order: s.Order})
+		out = append(out, CompositionScript{
+			Name: s.Name, Final: s.Final, Stage: s.Stage, Order: s.Order,
+			RebootAfter: s.RebootAfter,
+		})
 	}
 	return out
 }
