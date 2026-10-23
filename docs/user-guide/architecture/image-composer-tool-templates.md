@@ -1185,6 +1185,8 @@ User scripts copied into the image and run by generated systemd units at boot.
 | `scripts[].final` | string | **Yes** | Absolute in-image file path of letters, digits, and `._@%+-` (so it is safe in a systemd `ExecStart=`); the script is made executable. It may not equal, contain, or sit inside another script's `final` or a path image-composer-tool generates (for example `/etc/environment`, the apt sources file, or the cloud-init seed directory) |
 | `scripts[].stage` | string | No | `first-boot` (default) runs once; `every-boot` runs on each boot |
 | `scripts[].order` | int | No | Execution order, lower first; ties keep template order |
+| `scripts[].args` | list of string | No | Command-line arguments passed to the script. Each is 1-256 characters of letters, digits, and `._@%+:/=,-` (no spaces, quotes, `$`, or `;`, which systemd would interpret) |
+| `scripts[].env` | map of string | No | Environment variables set for the script. Names match `^[A-Za-z_][A-Za-z0-9_]{0,63}$`; values use the same allowed characters as `args` but may be empty (0-256 characters) |
 | `scripts[].rebootAfter` | bool | No | Reboot once the script has succeeded and its stamp is written (`systemctl reboot`). `first-boot` scripts only, and only on the last script to run, since the reboot would cut later scripts off until the next boot |
 
 Each script gets `ict-provision-<NNN>-<name>.service` (NNN is its position in
@@ -1209,10 +1211,18 @@ systemConfig:
         final: /usr/local/sbin/health.sh
         stage: every-boot
         order: 20
+        env:
+          REPORT_LEVEL: summary
 ```
 
+Do not put secrets in `args` or `env`. They are written into the generated unit
+file, which is world-readable inside the image, and `args` are also visible in
+the process list. The composition manifest records `args` as written and only
+the names of the `env` variables, never their values.
+
 Scripts from every layer of an `extends` chain accumulate, and a script that
-reuses an inherited `name` replaces it. The other sections are replaced by the
+reuses an inherited `name` replaces it as a whole, including its `args` and `env`,
+so a child layer that overrides a script restates them. The other sections are replaced by the
 most specific layer that sets them.
 
 #### `systemConfig.cloudInit`

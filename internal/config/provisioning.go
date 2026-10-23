@@ -75,6 +75,11 @@ type ProvisioningScript struct {
 	Final string `yaml:"final"`           // in-image path of the script
 	Stage string `yaml:"stage,omitempty"` // first-boot (default) | every-boot
 	Order int    `yaml:"order,omitempty"` // lower runs first; ties keep template order
+	// Args are passed to the script as command-line arguments and Env as
+	// environment variables, so a template can parameterise a script it
+	// shares with other templates (for example a deployment mode).
+	Args []string          `yaml:"args,omitempty"`
+	Env  map[string]string `yaml:"env,omitempty"`
 	// RebootAfter reboots the system once the script has succeeded.
 	RebootAfter bool `yaml:"rebootAfter,omitempty"`
 }
@@ -347,6 +352,15 @@ var scriptFinalRe = regexp.MustCompile(`^/[A-Za-z0-9._@%+/-]*[A-Za-z0-9._@%+-]$`
 // file name without escaping.
 var provisioningScriptNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$`)
 
+// provisioningEnvNameRe is a portable environment variable name.
+var provisioningEnvNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
+
+// provisioningValueRe keeps an argument or environment value safe to place in
+// a systemd unit: no whitespace, quotes, backslashes, $ (expanded by systemd)
+// or ; (an ExecStart separator). A literal % is allowed and escaped when the
+// unit is rendered.
+var provisioningValueRe = regexp.MustCompile(`^[A-Za-z0-9._@%+:/=,-]{0,256}$`)
+
 // validateProvisioning checks the provisioning sections of a single layer.
 // Values end up in generated files (/etc/environment, apt.conf.d, systemd
 // units), so anything that could break out of a line is rejected.
@@ -477,8 +491,25 @@ func validateProvisioningScripts(scripts []ProvisioningScript) error {
 	return nil
 }
 
-// validateProvisioningScriptParams checks the rebootAfter setting of one script.
+// validateProvisioningScriptParams checks the args, env and rebootAfter of one
+// script. Values end up in a generated systemd unit.
 func validateProvisioningScriptParams(s ProvisioningScript) error {
+	for i, a := range s.Args {
+		if a == "" || !provisioningValueRe.MatchString(a) {
+			return fmt.Errorf("systemConfig.provisioning.scripts %q: args[%d] must be 1-256 characters of "+
+				"letters, digits, and ._@%%+:/=,- (no spaces, quotes, $ or ;)", s.Name, i)
+		}
+	}
+	for k, v := range s.Env {
+		if !provisioningEnvNameRe.MatchString(k) {
+			return fmt.Errorf("systemConfig.provisioning.scripts %q: invalid env name %q: must match %s",
+				s.Name, k, provisioningEnvNameRe.String())
+		}
+		if !provisioningValueRe.MatchString(v) {
+			return fmt.Errorf("systemConfig.provisioning.scripts %q: env %s must be at most 256 characters of "+
+				"letters, digits, and ._@%%+:/=,- (no spaces, quotes, $ or ;)", s.Name, k)
+		}
+	}
 	if s.RebootAfter && s.Stage == ProvisioningStageEveryBoot {
 		return fmt.Errorf("systemConfig.provisioning.scripts %q: rebootAfter needs stage %q; "+
 			"an every-boot script would reboot on every boot", s.Name, ProvisioningStageFirstBoot)

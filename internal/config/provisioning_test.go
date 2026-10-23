@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -48,6 +49,9 @@ systemConfig:
         local: second.sh
         final: /usr/local/sbin/second.sh
         order: 20
+        args: ["--mode", "docker"]
+        env:
+          DEPLOYMENT_MODE: docker
         rebootAfter: true
       - name: first
         local: first.sh
@@ -82,8 +86,9 @@ func TestParseProvisioningSections(t *testing.T) {
 	if len(scripts) != 2 || scripts[0].Name != "first" || scripts[1].Name != "second" {
 		t.Errorf("SortedProvisioningScripts order = %+v", scripts)
 	}
-	if !scripts[1].RebootAfter {
-		t.Errorf("script rebootAfter not parsed: %+v", scripts[1])
+	if got := scripts[1]; !slices.Equal(got.Args, []string{"--mode", "docker"}) ||
+		got.Env["DEPLOYMENT_MODE"] != "docker" || len(got.Env) != 1 || !got.RebootAfter {
+		t.Errorf("script args/env not parsed: %+v", got)
 	}
 	if got := sc.AptPolicy.UpgradeAllowedRepos; len(got) != 1 || got[0] != "platform" {
 		t.Errorf("aptPolicy not parsed: %+v", sc.AptPolicy)
@@ -101,6 +106,9 @@ func TestProvisioningSchemaRejectsUnknownFields(t *testing.T) {
 		{"private key", "- " + testKey1 + " admin@example", "- \"-----BEGIN OPENSSH PRIVATE KEY-----\""},
 		{"invalid key blob", "- " + testKey1 + " admin@example", "- ssh-ed25519 not-a-key admin@example"},
 		{"invalid hostname", "hostname: platform", "hostname: \"edge: 01\""},
+		{"arg with a space", `args: ["--mode", "docker"]`, `args: ["--mode docker"]`},
+		{"env name with a dash", "DEPLOYMENT_MODE: docker", "DEPLOYMENT-MODE: docker"},
+		{"env value with a quote", "DEPLOYMENT_MODE: docker", "DEPLOYMENT_MODE: \"do'cker\""},
 		{"non-boolean rebootAfter", "rebootAfter: true", "rebootAfter: sometimes"},
 	}
 	for _, tt := range tests {
@@ -212,11 +220,23 @@ func TestValidateProvisioningScripts(t *testing.T) {
 		{"bad stage", func(s *ProvisioningScript) { s.Stage = "later" }, false, true},
 		{"negative order", func(s *ProvisioningScript) { s.Order = -1 }, false, true},
 		{"duplicate name", func(*ProvisioningScript) {}, true, true},
+		{"valid args and env", func(s *ProvisioningScript) {
+			s.Args = []string{"--mode", "k3s", "a=b,c"}
+			s.Env = map[string]string{"DEPLOYMENT_MODE": "k3s", "EMPTY": ""}
+		}, false, false},
+		{"empty arg", func(s *ProvisioningScript) { s.Args = []string{""} }, false, true},
+		{"arg with a space", func(s *ProvisioningScript) { s.Args = []string{"a b"} }, false, true},
+		{"arg with $", func(s *ProvisioningScript) { s.Args = []string{"$HOME"} }, false, true},
+		{"arg with ;", func(s *ProvisioningScript) { s.Args = []string{"a;b"} }, false, true},
+		{"env name with a dash", func(s *ProvisioningScript) { s.Env = map[string]string{"A-B": "x"} }, false, true},
+		{"env name starting with a digit", func(s *ProvisioningScript) { s.Env = map[string]string{"1A": "x"} }, false, true},
+		{"env value with a quote", func(s *ProvisioningScript) { s.Env = map[string]string{"A": `x"y`} }, false, true},
 		{"valid rebootAfter", func(s *ProvisioningScript) { s.RebootAfter = true }, false, false},
 		{"rebootAfter on an every-boot script", func(s *ProvisioningScript) {
 			s.Stage = ProvisioningStageEveryBoot
 			s.RebootAfter = true
 		}, false, true},
+		{"env value too long", func(s *ProvisioningScript) { s.Env = map[string]string{"A": strings.Repeat("x", 257)} }, false, true},
 	}
 	for _, tt := range tests {
 		tt := tt

@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
@@ -104,8 +106,13 @@ func renderProvisioningUnit(script config.ProvisioningScript, after string) stri
 		fmt.Fprintf(&b, "ConditionPathExists=!%s\n", stamp)
 	}
 	b.WriteString("\n[Service]\nType=oneshot\nRemainAfterExit=yes\n")
-	// systemd expands %-specifiers in ExecStart; escape literal percent signs.
-	fmt.Fprintf(&b, "ExecStart=%s\n", strings.ReplaceAll(script.Final, "%", "%%"))
+	// systemd expands %-specifiers in ExecStart and Environment; escape
+	// literal percent signs.
+	for _, k := range slices.Sorted(maps.Keys(script.Env)) {
+		fmt.Fprintf(&b, "Environment=\"%s=%s\"\n", k, strings.ReplaceAll(script.Env[k], "%", "%%"))
+	}
+	exec := strings.Join(append([]string{script.Final}, script.Args...), " ")
+	fmt.Fprintf(&b, "ExecStart=%s\n", strings.ReplaceAll(exec, "%", "%%"))
 	if firstBoot {
 		fmt.Fprintf(&b, "ExecStartPost=/usr/bin/mkdir -p %s\n", StampDir)
 		fmt.Fprintf(&b, "ExecStartPost=/usr/bin/touch %s\n", stamp)

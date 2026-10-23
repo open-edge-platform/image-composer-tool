@@ -132,11 +132,17 @@ system.
         final: /usr/local/sbin/platform-bootstrap.sh
         stage: first-boot     # or every-boot
         order: 10
+        env:                  # optional: parameters for a script shared by several templates
+          DEPLOYMENT_MODE: docker
+        args: ["--verbose"]   # optional: command-line arguments
 ```
 
 Each script runs from its own systemd unit
 (`ict-provision-<NNN>-<name>.service`) after the network is online, in `order`.
 A first-boot script that fails is retried on the next boot.
+
+`args` and `env` are written into that unit file, which any local user can
+read, so do not use them for secrets.
 
 ### Developer source archives and other artifacts
 
