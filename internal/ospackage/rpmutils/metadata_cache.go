@@ -643,7 +643,7 @@ func saveRepomdXMLCache(xmlCacheDir, baseURL string, repomdData []byte) {
 
 	urlHash := sha256.Sum256([]byte(baseURL))
 	urlHashStr := hex.EncodeToString(urlHash[:])[:8]
-	timestamp := time.Now().Format("2006-01-02_15-04-05")
+	timestamp := time.Now().Format(cacheTimestampLayout)
 	filename := fmt.Sprintf("repomd_%s_%s.xml", urlHashStr, timestamp)
 	filePath := filepath.Join(xmlCacheDir, filename)
 	if writeErr := writeFileAtomic(filePath, repomdData, 0644); writeErr == nil {
@@ -1109,24 +1109,144 @@ func findLatestCachedRawMetadata(xmlCacheDir, metadataHref, hashKey, skipPath st
 func listCachedRawMetadata(xmlCacheDir, metadataHref, hashKey string, skipPaths ...string) ([]string, error) {
 	urlHash := sha256.Sum256([]byte(hashKey))
 	urlHashStr := hex.EncodeToString(urlHash[:])[:8]
-	ext := filepath.Ext(metadataHref)
-	baseFilename := strings.TrimSuffix(filepath.Base(metadataHref), ext)
 
-	matches, err := filepath.Glob(filepath.Join(xmlCacheDir, fmt.Sprintf("%s_%s_*%s", baseFilename, urlHashStr, ext)))
-	if err != nil {
-		return nil, err
+	// Files are named from the href without its query string or fragment; fall
+	// back to the href as given for files written before that normalization.
+	hrefs := []string{normalizeMetadataHref(metadataHref)}
+	if hrefs[0] != metadataHref {
+		hrefs = append(hrefs, metadataHref)
 	}
-	// Filenames embed a lexically-sortable timestamp ("2006-01-02_15-04-05"), so
-	// the last sorted match is the most recently cached raw file.
-	sort.Strings(matches)
+	var matches []timestampedCacheFile
+	for _, href := range hrefs {
+		ext := filepath.Ext(href)
+		found, err := listTimestampedCacheFiles(xmlCacheDir, strings.TrimSuffix(filepath.Base(href), ext), urlHashStr, ext)
+		if err != nil {
+			return nil, err
+		}
+		matches = append(matches, found...)
+	}
+	// Both naming schemes can be present; the newest file wins, whichever scheme
+	// named it.
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].stamp != matches[j].stamp {
+			return matches[i].stamp < matches[j].stamp
+		}
+		return matches[i].path < matches[j].path
+	})
 	paths := make([]string, 0, len(matches))
 	for i := len(matches) - 1; i >= 0; i-- {
-		if !slices.Contains(skipPaths, matches[i]) {
-			paths = append(paths, matches[i])
+		if !slices.Contains(skipPaths, matches[i].path) {
+			paths = append(paths, matches[i].path)
 		}
 	}
 	if len(paths) == 0 {
 		return nil, os.ErrNotExist
 	}
 	return paths, nil
+}
+
+const cacheTimestampLayout = "2006-01-02_15-04-05"
+
+// timestampedCacheFile is a cached file named <base>_<hash>_<timestamp><ext>,
+// with its timestamp.
+type timestampedCacheFile struct {
+	path  string
+	stamp string
+}
+
+// listTimestampedCacheFiles lists the files in dir named
+// <base>_<hash>_<timestamp><ext>. The name is matched literally rather than as a
+// glob pattern, because the base name and extension come from a repository's
+// href and can contain pattern characters such as ? and [. Files whose timestamp
+// segment is not exactly a timestamp (a suffix such as _backup included) are not
+// cache entries and are left out, so they can neither be picked as the newest
+// copy nor pruned.
+func listTimestampedCacheFiles(dir, base, hash, ext string) ([]timestampedCacheFile, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	prefix := base + "_" + hash + "_"
+	var files []timestampedCacheFile
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || len(name) < len(prefix)+len(ext) || !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ext) {
+			continue
+		}
+		stamp := name[len(prefix) : len(name)-len(ext)]
+		if _, err := time.Parse(cacheTimestampLayout, stamp); err != nil {
+			continue
+		}
+		files = append(files, timestampedCacheFile{path: filepath.Join(dir, name), stamp: stamp})
+	}
+	return files, nil
+}
+
+// pruneOldCachedFiles removes cached files for metadataHref other than keepPath
+// whose extension is cacheExt. cacheExt is the extension of the cached files to
+// prune, which can differ from the href's own (an uncompressed .xml copy of a
+// .gz href), so the base name is derived from the href's extension and only the
+// file-name match uses cacheExt.
+func pruneOldCachedFiles(xmlCacheDir, metadataHref, hashKey, cacheExt, keepPath string) {
+	log := logger.Logger()
+	urlHash := sha256.Sum256([]byte(hashKey))
+	urlHashStr := hex.EncodeToString(urlHash[:])[:8]
+	baseFilename := strings.TrimSuffix(filepath.Base(metadataHref), filepath.Ext(metadataHref))
+
+	matches, err := listTimestampedCacheFiles(xmlCacheDir, baseFilename, urlHashStr, cacheExt)
+	if err != nil {
+		log.Warnf("Failed to enumerate old cached metadata files for pruning: %v", err)
+		return
+	}
+	for _, m := range matches {
+		if m.path == keepPath {
+			continue
+		}
+		if rmErr := os.Remove(m.path); rmErr != nil {
+			log.Warnf("Failed to prune old cached metadata file %s: %v", m.path, rmErr)
+		}
+	}
+}
+
+func saveOriginalXML(xmlCacheDir, metadataHref, fullURL string, data []byte) {
+	log := logger.Logger()
+	urlHash := sha256.Sum256([]byte(fullURL))
+	urlHashStr := hex.EncodeToString(urlHash[:])[:8]
+	timestamp := time.Now().Format(cacheTimestampLayout)
+
+	normalizedHref := normalizeMetadataHref(metadataHref)
+	baseFilename := strings.TrimSuffix(filepath.Base(normalizedHref), filepath.Ext(normalizedHref))
+	filename := fmt.Sprintf("%s_%s_%s%s", baseFilename, urlHashStr, timestamp, filepath.Ext(normalizedHref))
+
+	filePath := filepath.Join(xmlCacheDir, filename)
+	if err := os.WriteFile(filePath, data, 0644); err != nil {
+		log.Warnf("Failed to save original XML file %s: %v", filePath, err)
+		return
+	}
+
+	log.Infof("Saved original XML file: %s", filePath)
+	pruneOldCachedFiles(xmlCacheDir, normalizedHref, fullURL, filepath.Ext(normalizedHref), filePath)
+}
+
+func saveUncompressedXML(xmlCacheDir, metadataHref, fullURL string, xmlData []byte) {
+	log := logger.Logger()
+	urlHash := sha256.Sum256([]byte(fullURL))
+	urlHashStr := hex.EncodeToString(urlHash[:])[:8]
+	timestamp := time.Now().Format(cacheTimestampLayout)
+
+	normalizedHref := normalizeMetadataHref(metadataHref)
+	baseFilename := strings.TrimSuffix(filepath.Base(normalizedHref), filepath.Ext(normalizedHref))
+	filename := fmt.Sprintf("%s_%s_%s.xml", baseFilename, urlHashStr, timestamp)
+
+	filePath := filepath.Join(xmlCacheDir, filename)
+	if err := os.WriteFile(filePath, xmlData, 0644); err != nil {
+		log.Warnf("Failed to save uncompressed XML file %s: %v", filePath, err)
+		return
+	}
+
+	log.Infof("Saved uncompressed XML file: %s", filePath)
+	pruneOldCachedFiles(xmlCacheDir, normalizedHref, fullURL, ".xml", filePath)
 }

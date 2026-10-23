@@ -2,7 +2,10 @@ package rpmutils
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -885,5 +888,139 @@ func TestSaveRPMRawMetadataCache_PruneDoesNotRemoveRepublishedPayload(t *testing
 	}
 	if !bytes.Equal(got, want) {
 		t.Fatalf("cached data does not belong to the revision recorded in the manifest")
+	}
+}
+
+func TestSaveOriginalXML_IgnoresQueryAndFragmentInHref(t *testing.T) {
+	cacheDir := t.TempDir()
+	href := "repodata/primary.xml.gz?token=secret#frag"
+
+	saveOriginalXML(cacheDir, href, "https://example.invalid/repo/"+href, []byte("data"))
+
+	entries, err := os.ReadDir(cacheDir)
+	if err != nil {
+		t.Fatalf("failed to read cache dir: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("cache entries = %d, want 1", len(entries))
+	}
+	name := entries[0].Name()
+	if strings.ContainsAny(name, "?#") || !strings.HasSuffix(name, ".gz") {
+		t.Fatalf("cache file name %q should be derived from the href without query or fragment", name)
+	}
+}
+
+func TestFindLatestCachedRawMetadata_FindsFilesSavedForQueryHref(t *testing.T) {
+	cacheDir := t.TempDir()
+	href := "repodata/primary.xml.gz?token=secret#frag"
+	fullURL := "https://example.invalid/repo/" + href
+
+	saveOriginalXML(cacheDir, href, fullURL, []byte("current"))
+	got, _, err := findLatestCachedRawMetadata(cacheDir, href, fullURL, "")
+	if err != nil {
+		t.Fatalf("findLatestCachedRawMetadata() error = %v", err)
+	}
+	if string(got) != "current" {
+		t.Fatalf("found %q, want the file saved by saveOriginalXML", got)
+	}
+
+	// A file written before names were normalized embeds the raw href.
+	legacyDir := t.TempDir()
+	urlHash := sha256.Sum256([]byte(fullURL))
+	legacyName := fmt.Sprintf("primary.xml_%s_2000-01-01_00-00-00.gz?token=secret#frag", hex.EncodeToString(urlHash[:])[:8])
+	if err := os.WriteFile(filepath.Join(legacyDir, legacyName), []byte("legacy"), 0644); err != nil {
+		t.Fatalf("failed to write legacy file: %v", err)
+	}
+	got, _, err = findLatestCachedRawMetadata(legacyDir, href, fullURL, "")
+	if err != nil {
+		t.Fatalf("findLatestCachedRawMetadata() should still find a legacy-named file: %v", err)
+	}
+	if string(got) != "legacy" {
+		t.Fatalf("found %q, want the legacy file", got)
+	}
+}
+
+func TestFindLatestCachedRawMetadata_PicksNewestAcrossNamingSchemes(t *testing.T) {
+	href := "repodata/primary.xml.gz?token=secret#frag"
+	fullURL := "https://example.invalid/repo/" + href
+	urlHash := sha256.Sum256([]byte(fullURL))
+	hash := hex.EncodeToString(urlHash[:])[:8]
+
+	for _, tt := range []struct {
+		name, normalizedStamp, legacyStamp, want string
+	}{
+		{name: "legacy newer", normalizedStamp: "2000-01-01_00-00-00", legacyStamp: "2001-01-01_00-00-00", want: "legacy"},
+		{name: "normalized newer", normalizedStamp: "2001-01-01_00-00-00", legacyStamp: "2000-01-01_00-00-00", want: "normalized"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cacheDir := t.TempDir()
+			files := map[string]string{
+				fmt.Sprintf("primary.xml_%s_%s.gz", hash, tt.normalizedStamp):               "normalized",
+				fmt.Sprintf("primary.xml_%s_%s.gz?token=secret#frag", hash, tt.legacyStamp): "legacy",
+			}
+			for name, content := range files {
+				if err := os.WriteFile(filepath.Join(cacheDir, name), []byte(content), 0644); err != nil {
+					t.Fatalf("failed to write %s: %v", name, err)
+				}
+			}
+			got, _, err := findLatestCachedRawMetadata(cacheDir, href, fullURL, "")
+			if err != nil {
+				t.Fatalf("findLatestCachedRawMetadata() error = %v", err)
+			}
+			if string(got) != tt.want {
+				t.Fatalf("found %q, want the %s file", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFindLatestCachedRawMetadata_IgnoresFilesWithoutATimestamp(t *testing.T) {
+	cacheDir := t.TempDir()
+	href := "repodata/primary.xml.gz"
+	fullURL := "https://example.invalid/repo/" + href
+	hash := contentDigest([]byte(fullURL))[:8]
+
+	files := map[string]string{
+		fmt.Sprintf("primary.xml_%s_2000-01-01_00-00-00.gz", hash): "timestamped",
+		// Sorts after any timestamp, but is not a cache entry.
+		fmt.Sprintf("primary.xml_%s_zzz.gz", hash):        "not-a-copy",
+		fmt.Sprintf("primary.xml_%s_backup.gz", hash):     "not-a-copy",
+		fmt.Sprintf("primary.xml_%s_2000-13-45.gz", hash): "not-a-copy",
+		// A valid timestamp followed by a suffix is neither selected nor pruned.
+		fmt.Sprintf("primary.xml_%s_2999-01-01_00-00-00_backup.gz", hash): "not-a-copy",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(cacheDir, name), []byte(content), 0644); err != nil {
+			t.Fatalf("failed to write %s: %v", name, err)
+		}
+	}
+
+	got, _, err := findLatestCachedRawMetadata(cacheDir, href, fullURL, "")
+	if err != nil || string(got) != "timestamped" {
+		t.Fatalf("findLatestCachedRawMetadata() = %q, %v, want the timestamped copy", got, err)
+	}
+
+	saveOriginalXML(cacheDir, href, fullURL, []byte("fresh"))
+	for name, content := range files {
+		if content != "not-a-copy" {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(cacheDir, name)); err != nil {
+			t.Fatalf("%s was pruned although it is not a timestamped copy: %v", name, err)
+		}
+	}
+}
+
+func TestFindLatestCachedRawMetadata_DoesNotTreatHrefAsGlobPattern(t *testing.T) {
+	cacheDir := t.TempDir()
+	fullURL := "https://example.invalid/repo/repodata/primary.xml.gz"
+	saveOriginalXML(cacheDir, "repodata/primary.xml.gz", fullURL, []byte("primary"))
+
+	// A "*" in another href's name must not match the file cached for primary.xml.gz.
+	if _, _, err := findLatestCachedRawMetadata(cacheDir, "repodata/*.xml.gz", fullURL, ""); !os.IsNotExist(err) {
+		t.Fatalf("findLatestCachedRawMetadata() error = %v, want os.ErrNotExist", err)
+	}
+	if got, _, err := findLatestCachedRawMetadata(cacheDir, "repodata/primary.xml.gz", fullURL, ""); err != nil || string(got) != "primary" {
+		t.Fatalf("findLatestCachedRawMetadata() = %q, %v, want the cached primary file", got, err)
 	}
 }
