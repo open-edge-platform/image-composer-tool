@@ -351,7 +351,10 @@ func ParseRepositoryMetadata(baseURL, metadataHref string, packageFilter []strin
 	log := logger.Logger()
 	cacheEnabled := !system.IsLiveInstallerExecution()
 
-	fullURL := strings.TrimRight(baseURL, "/") + "/" + strings.TrimLeft(metadataHref, "/")
+	// The href names the same file with or without a leading slash, so settle on
+	// one form for the URL, the cache lookups and the integrity metadata alike.
+	metadataHref = strings.TrimLeft(metadataHref, "/")
+	fullURL := strings.TrimRight(baseURL, "/") + "/" + metadataHref
 	log.Infof("Fetching and parsing repository metadata from %s", redactURLForLog(fullURL))
 
 	// Keep metadata cache under persistent cache-dir so rebuilds can run offline.
@@ -365,10 +368,14 @@ func ParseRepositoryMetadata(baseURL, metadataHref string, packageFilter []strin
 		} else if err := os.MkdirAll(xmlCacheDir, 0755); err != nil {
 			log.Warnf("Failed to create XML cache directory: %v", err)
 			xmlCacheDir = "" // Disable caching if directory creation fails
+		} else {
+			migrateLegacyRPMMetadataDir(baseURL, xmlCacheDir)
 		}
 	} else {
 		log.Debugf("Bypassing RPM metadata cache in live-installer mode")
 	}
+
+	primary := cachedPrimaryReferenceFor(xmlCacheDir, metadataHref)
 
 	// Offline-first behavior: if parsed metadata is cached for this exact metadata URL,
 	// return it immediately without any network operation.
@@ -412,9 +419,14 @@ func ParseRepositoryMetadata(baseURL, metadataHref string, packageFilter []strin
 			}
 		}
 		if rawErr == nil {
-			log.Infof("Reparsing cached raw RPM metadata for %s (parsed cache stale or missing)", redactURLForLog(fullURL))
-			compressedData = raw
-			fromCache = true
+			if verifyErr := verifyRPMPrimaryBytes(raw, primary); verifyErr != nil {
+				log.Warnf("Cached raw RPM metadata for %s failed verification (%v); fetching over the network",
+					redactURLForLog(fullURL), verifyErr)
+			} else {
+				log.Infof("Reparsing cached raw RPM metadata for %s (parsed cache stale or missing)", redactURLForLog(fullURL))
+				compressedData = raw
+				fromCache = true
+			}
 		} else if !os.IsNotExist(rawErr) {
 			log.Warnf("Failed to check for cached raw RPM metadata: %v", rawErr)
 		}
@@ -440,6 +452,9 @@ func ParseRepositoryMetadata(baseURL, metadataHref string, packageFilter []strin
 		compressedData, err = fetchURLWithRetry(runctx.Context(), client, fullURL, "repository metadata")
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch compressed metadata: %w", err)
+		}
+		if err := verifyRPMPrimaryBytes(compressedData, primary); err != nil {
+			return nil, fmt.Errorf("verify downloaded RPM primary metadata for repository %s: %w", redactURLForLog(baseURL), err)
 		}
 
 		// Save the original compressed file
@@ -764,15 +779,16 @@ func decodeAndParsePrimaryXML(compressedData []byte, metadataHref, baseURL strin
 }
 
 // FetchPrimaryReference fetches the primary metadata reference from repomd.xml,
-// returning the complete reference: the location href plus its checksum type
-// and value. FetchPrimaryURL fetches and caches the same reference but returns
-// only its href, so callers that need to verify the download should use this.
+// returning the complete reference: the location href plus its checksum, size
+// and open-checksum metadata. FetchPrimaryURL fetches and caches the same
+// reference but returns only its href, so callers that need to verify the
+// download should use this.
 func FetchPrimaryReference(repomdURL string) (rpmPrimaryReference, error) {
 	return fetchPrimaryReference(repomdURL)
 }
 
 // FetchPrimaryURL fetches the primary metadata URL from repomd.xml.
-// Deprecated: Use FetchPrimaryReference to preserve checksum information.
+// Deprecated: Use FetchPrimaryReference to preserve checksum and size information.
 func FetchPrimaryURL(repomdURL string) (string, error) {
 	primary, err := fetchPrimaryReference(repomdURL)
 	if err != nil {
@@ -799,6 +815,10 @@ func fetchPrimaryReference(repomdURL string) (rpmPrimaryReference, error) {
 			if err := os.MkdirAll(xmlCacheDir, 0755); err != nil {
 				log.Warnf("Failed to create XML cache directory: %v", err)
 				xmlCacheDir = ""
+			} else {
+				// Providers append "/repodata/repomd.xml" to the configured URL, so a
+				// trailing slash reaches here and earlier builds cached under it.
+				migrateLegacyRPMMetadataDir(baseURL, xmlCacheDir)
 			}
 		}
 	} else {
@@ -1078,6 +1098,13 @@ func findMatchingKeyInNeededSet(neededSet map[string]struct{}, depName string) (
 // generateRPMMetadataDir creates a dynamic directory name for RPM metadata storage
 // following the same pattern as debutils: <repoId>_<arch>_<type>
 func generateRPMMetadataDir(baseURL string) string {
+	// A trailing slash must not select a different cache directory: the
+	// repomd.xml lookup strips it, so fetch and parse have to agree.
+	return rpmMetadataDirName(strings.TrimRight(baseURL, "/"))
+}
+
+// rpmMetadataDirName derives the directory name from baseURL exactly as given.
+func rpmMetadataDirName(baseURL string) string {
 	// Extract meaningful identifier from URL
 	urlHash := sha256.Sum256([]byte(baseURL))
 	urlHashStr := hex.EncodeToString(urlHash[:])[:8]
