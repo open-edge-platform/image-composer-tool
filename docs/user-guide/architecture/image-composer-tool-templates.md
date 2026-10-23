@@ -1185,6 +1185,7 @@ User scripts copied into the image and run by generated systemd units at boot.
 | `scripts[].final` | string | **Yes** | Absolute in-image file path of letters, digits, and `._@%+-` (so it is safe in a systemd `ExecStart=`); the script is made executable. It may not equal, contain, or sit inside another script's `final` or a path image-composer-tool generates (for example `/etc/environment`, the apt sources file, or the cloud-init seed directory) |
 | `scripts[].stage` | string | No | `first-boot` (default) runs once; `every-boot` runs on each boot |
 | `scripts[].order` | int | No | Execution order, lower first; ties keep template order |
+| `scripts[].rebootAfter` | bool | No | Reboot once the script has succeeded and its stamp is written (`systemctl reboot`). `first-boot` scripts only, and only on the last script to run, since the reboot would cut later scripts off until the next boot |
 
 Each script gets `ict-provision-<NNN>-<name>.service` (NNN is its position in
 execution order), started at boot by `ict-provision-start.service`. Units run after

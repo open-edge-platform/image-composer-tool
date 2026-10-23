@@ -491,6 +491,24 @@ func TestRenderProvisioningUnitEscapesPercent(t *testing.T) {
 	}
 }
 
+func TestRenderProvisioningUnitReboot(t *testing.T) {
+	t.Parallel()
+	unit := renderProvisioningUnit(config.ProvisioningScript{
+		Name: "s", Final: "/usr/local/sbin/s.sh", RebootAfter: true,
+	}, "")
+	if !strings.Contains(unit, "ExecStartPost=/usr/bin/systemctl reboot --no-block\n") {
+		t.Errorf("unit missing the reboot:\n%s", unit)
+	}
+	// The reboot must be queued only after success is recorded in the stamp.
+	if strings.Index(unit, "reboot --no-block") < strings.Index(unit, "touch "+StampDir+"/s") {
+		t.Errorf("reboot must come after the stamp is written:\n%s", unit)
+	}
+	plain := renderProvisioningUnit(config.ProvisioningScript{Name: "s", Final: "/usr/local/sbin/s.sh"}, "")
+	if strings.Contains(plain, "reboot") {
+		t.Errorf("no reboot unless requested:\n%s", plain)
+	}
+}
+
 func TestRenderAptProxySkipsUnrenderableNoProxy(t *testing.T) {
 	t.Parallel()
 	out := renderAptProxy(config.ProxyConfig{

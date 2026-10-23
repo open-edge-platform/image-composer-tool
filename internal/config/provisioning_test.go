@@ -48,6 +48,7 @@ systemConfig:
         local: second.sh
         final: /usr/local/sbin/second.sh
         order: 20
+        rebootAfter: true
       - name: first
         local: first.sh
         final: /usr/local/sbin/first.sh
@@ -81,6 +82,9 @@ func TestParseProvisioningSections(t *testing.T) {
 	if len(scripts) != 2 || scripts[0].Name != "first" || scripts[1].Name != "second" {
 		t.Errorf("SortedProvisioningScripts order = %+v", scripts)
 	}
+	if !scripts[1].RebootAfter {
+		t.Errorf("script rebootAfter not parsed: %+v", scripts[1])
+	}
 	if got := sc.AptPolicy.UpgradeAllowedRepos; len(got) != 1 || got[0] != "platform" {
 		t.Errorf("aptPolicy not parsed: %+v", sc.AptPolicy)
 	}
@@ -97,6 +101,7 @@ func TestProvisioningSchemaRejectsUnknownFields(t *testing.T) {
 		{"private key", "- " + testKey1 + " admin@example", "- \"-----BEGIN OPENSSH PRIVATE KEY-----\""},
 		{"invalid key blob", "- " + testKey1 + " admin@example", "- ssh-ed25519 not-a-key admin@example"},
 		{"invalid hostname", "hostname: platform", "hostname: \"edge: 01\""},
+		{"non-boolean rebootAfter", "rebootAfter: true", "rebootAfter: sometimes"},
 	}
 	for _, tt := range tests {
 		tt := tt
@@ -207,6 +212,11 @@ func TestValidateProvisioningScripts(t *testing.T) {
 		{"bad stage", func(s *ProvisioningScript) { s.Stage = "later" }, false, true},
 		{"negative order", func(s *ProvisioningScript) { s.Order = -1 }, false, true},
 		{"duplicate name", func(*ProvisioningScript) {}, true, true},
+		{"valid rebootAfter", func(s *ProvisioningScript) { s.RebootAfter = true }, false, false},
+		{"rebootAfter on an every-boot script", func(s *ProvisioningScript) {
+			s.Stage = ProvisioningStageEveryBoot
+			s.RebootAfter = true
+		}, false, true},
 	}
 	for _, tt := range tests {
 		tt := tt
@@ -222,6 +232,21 @@ func TestValidateProvisioningScripts(t *testing.T) {
 				t.Errorf("err = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestCheckRebootAfterIsLast(t *testing.T) {
+	t.Parallel()
+	a := ProvisioningScript{Name: "a"}
+	b := ProvisioningScript{Name: "b", RebootAfter: true}
+	if err := checkRebootAfterIsLast([]ProvisioningScript{a, b}); err != nil {
+		t.Errorf("rebootAfter on the last script must be accepted: %v", err)
+	}
+	if err := checkRebootAfterIsLast([]ProvisioningScript{b, a}); err == nil {
+		t.Error("rebootAfter on a script that is followed by another must be rejected")
+	}
+	if err := checkRebootAfterIsLast(nil); err != nil {
+		t.Errorf("no scripts: %v", err)
 	}
 }
 
